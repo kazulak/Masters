@@ -1,0 +1,3 @@
+[submodule "thesis/PIMutation_reconstruction/QuEST_implementation/external/QuEST"]
+	path = thesis/PIMutation_reconstruction/QuEST_implementation/external/QuEST
+	url = https://github.com/QuEST-Kit/QuEST.git

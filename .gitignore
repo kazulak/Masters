@@ -17,3 +17,18 @@ __pycache__/
 # Pliki generowane przez edytory
 .vscode/
 .idea/
+
+# 1. Ignore the 150+ QuEST build artifacts
+thesis/PIMutation_reconstruction/QuEST_implementation/external/QuEST/build/
+
+# 2. Ignore our own compiled executable
+thesis/PIMutation_reconstruction/QuEST_implementation/bin/
+
+# 3. Ignore our compiled object files
+thesis/PIMutation_reconstruction/QuEST_implementation/src/**/*.o
+thesis/PIMutation_reconstruction/QuEST_implementation/src/*.o
+
+# 4. Ignore Python virtual environments (if you use them later)
+.venv/
+__pycache__/
+
