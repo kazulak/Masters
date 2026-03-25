@@ -84,23 +84,26 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // Adjust allocation for Hidden Subgroup (requires 2n qubits)
-    int alloc_qubits = (strcmp(algo, "HS") == 0) ? 2 * n_qubits : n_qubits;
+    // NEW CODE (Strict Allocation):
+    if (strcmp(algo, "HS") == 0 && n_qubits % 2 != 0) {
+        printf("Error: HS algorithm requires an EVEN number of total allocated qubits.\n");
+        return 1;
+    }
 
-    if (alloc_qubits > 34) {
-        printf("WARNING: %d total qubits requires massive RAM (>256GB). May OOM.\n", alloc_qubits);
+    if (n_qubits > 34) {
+        printf("WARNING: %d total qubits requires massive RAM (>256GB). May OOM.\n", n_qubits);
     }
 
     // 2. Initialize QuEST Environment
     initQuESTEnv(); 
-    Qureg qubits = createQureg(alloc_qubits); // No longer requires passing 'env'
+    Qureg qubits = createQureg(n_qubits); // No longer requires passing 'env'
     initZeroState(qubits);
 
     printf("==========================================\n");
     printf("QuEST SOTA Baseline Runner\n");
     printf("Algorithm: %s\n", algo);
     printf("Input Qubits (n): %d\n", n_qubits);
-    printf("Allocated Qubits: %d\n", alloc_qubits);
+    printf("Allocated Qubits: %d\n", n_qubits);
     printf("==========================================\n");
 
     // 4. START PROFILING BOUNDARY

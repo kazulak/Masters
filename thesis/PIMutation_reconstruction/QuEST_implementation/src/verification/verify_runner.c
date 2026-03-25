@@ -79,19 +79,15 @@ void run_test_suite(const char* mode) {
 
     // Test HS
     if (run_all || strstr(mode, "HS") != NULL) {
-        // Remember HS allocates 2n qubits. 
-        // We must destroy the 4-qubit 'q' and make an 8-qubit one temporarily
-        destroyQureg(q);
-        q = createQureg(test_qubits * 2);
-        initZeroState(q);
+        if (test_qubits % 2 != 0) {
+            printf("Error: HS algorithm requires an EVEN number of total allocated qubits.\n");
+        } else {
+            initZeroState(q);
         
-        build_hs(q, test_qubits);
-        if (is_state_valid(q) && verify_hs(q, test_qubits)) passed++;
-        total++;
-        
-        // Revert back to the 4-qubit register for the next tests
-        destroyQureg(q);
-        q = createQureg(test_qubits);
+            build_hs(q, test_qubits);
+            if (is_state_valid(q) && verify_hs(q, test_qubits)) passed++;
+            total++;
+        }
     }
 
     // Test XOR
