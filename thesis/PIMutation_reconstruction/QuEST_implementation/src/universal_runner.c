@@ -32,6 +32,7 @@
 #include <omp.h>
 #include <quest.h>
 #include "profiling/rapl_energy.h"
+#include "verification/verify_runner.h" // <-- Add this include
 
 // Forward declarations for the circuit builders (we will write these next)
 extern void build_bb84(Qureg qubits, int n);
@@ -43,14 +44,16 @@ extern void build_xor(Qureg qubits, int n);
 extern void build_random(Qureg qubits, int n, int depth);
 
 void print_usage(const char* prog_name) {
-    printf("Usage: %s --algo <NAME> --qubits <N> [--depth <D>]\n", prog_name);
+    printf("Usage: %s --algo <NAME> --qubits <N> [--secret <STR>] [--depth <D>] [--verify]\n", prog_name);
     printf("Algorithms: BB84, BV, EDC, HS, QRNG, XOR, RANDOM\n");
+    printf("Example: %s --algo BV --qubits 16 --verify\n", prog_name);
 }
 
 int main(int argc, char** argv) {
     char* algo = NULL;
     int n_qubits = 0;
     int depth = 10; // Default for random
+    char* verify_mode = NULL; // Replaces 'bool run_verification = false;'
 
     // 1. Parse CLI Arguments
     for (int i = 1; i < argc; i++) {
@@ -60,7 +63,17 @@ int main(int argc, char** argv) {
             n_qubits = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--depth") == 0 && i + 1 < argc) {
             depth = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--verify") == 0 && i + 1 < argc) {
+            verify_mode = argv[++i]; 
         }
+    }
+
+    // 2. THE INTERCEPT (Your isolated, elegant design)
+    if (verify_mode != NULL) {
+        initQuESTEnv();              // Boot up just for testing
+        run_test_suite(verify_mode); // Run tests
+        finalizeQuESTEnv();          // Shut down
+        return 0;                    // Exit immediately
     }
 
     if (!algo || n_qubits <= 0) {
@@ -87,11 +100,8 @@ int main(int argc, char** argv) {
     printf("Allocated Qubits: %d\n", alloc_qubits);
     printf("==========================================\n");
 
-    // 3. Initialize Telemetry
-    init_energy_profiler();
-
     // 4. START PROFILING BOUNDARY
-    start_energy_profiling();
+    RaplState energy_state = start_energy_profiling();
     double start_time = omp_get_wtime();
 
     // 5. Routing Logic
@@ -112,7 +122,7 @@ int main(int argc, char** argv) {
 
     // 6. STOP PROFILING BOUNDARY
     double end_time = omp_get_wtime();
-    double joules = stop_energy_profiling();
+    double joules = stop_energy_profiling(energy_state);
 
     // 7. Output Clean Metrics
     printf("-> Execution Time (Comp.): %f seconds\n", end_time - start_time);

@@ -14,21 +14,27 @@ To facilitate both strict hardware benchmarking and general stress-testing, this
 * **The PIMutation Suite:** `BB84`, `BV`, `EDC`, `HS`, `QRNG`, `XOR`
 * **Randomized Benchmarking:** `RANDOM` (Generates arbitrary circuits to test average-case tensor contraction/state-vector limits).
 
-### Usage Examples:
-Execute the runner by specifying the algorithm and the number of qubits ($n$):
+### Compilation & Execution:
 
+To build the Universal Runner with SOTA hardware optimizations:
 ```bash
+# Clean previous builds
+make clean
+
+# Compile the suite
+make
+
 # Run the strict Bernstein-Vazirani benchmark for 32 qubits
-./quest_runner --algo BV --qubits 32
+./bin/quest_runner --algo BV --qubits 32
 
 # Run the Quantum Random Number Generator for 16 qubits
-./quest_runner --algo QRNG --qubits 16
+./bin/quest_runner --algo QRNG --qubits 16
 
 # Run an arbitrary randomized circuit with a specific gate depth
-./quest_runner --algo RANDOM --qubits 20 --depth 50
+./bin/quest_runner --algo RANDOM --qubits 20 --depth 50
 ```
 
 ## 3. Profiling Metrics
 To capture the true bottleneck of state-vector simulation, each benchmark strictly profiles:
 * **Execution Time (Compute):** Measured using `omp_get_wtime()`.
-* **Energy Consumption:** CPU energy footprint measured via Intel RAPL (Running Average Power Limit) registers during the compute phase.
+* **Energy Consumption:** CPU energy footprint measured via RAPL (Running Average Power Limit) registers during the compute phase.

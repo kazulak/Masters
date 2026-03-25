@@ -17,10 +17,15 @@ CFLAGS = -O3 -march=native -fopenmp -Wall -I./external/QuEST -I./external/QuEST/
 LDFLAGS = -L./external/QuEST/build -L./external/QuEST/build/quest -Wl,-rpath=$(shell pwd)/external/QuEST/build -Wl,-rpath=$(shell pwd)/external/QuEST/build/quest -lQuEST -lm -fopenmp -Wl,-z,muldefs
 SRC_DIR = src
 CIRC_DIR = $(SRC_DIR)/circuits
+VERIFY_DIR = $(SRC_DIR)/verification
+V_CIRC_DIR = $(VERIFY_DIR)/verify_circuits
 BIN_DIR = bin
 
 # Gather all C files
-SRCS = $(wildcard $(SRC_DIR)/*.c) $(wildcard $(CIRC_DIR)/*.c)
+SRCS = $(wildcard $(SRC_DIR)/*.c) \
+       $(wildcard $(CIRC_DIR)/*.c) \
+       $(wildcard $(VERIFY_DIR)/*.c) \
+       $(wildcard $(V_CIRC_DIR)/*.c)
 OBJS = $(SRCS:.c=.o)
 
 TARGET = $(BIN_DIR)/quest_runner

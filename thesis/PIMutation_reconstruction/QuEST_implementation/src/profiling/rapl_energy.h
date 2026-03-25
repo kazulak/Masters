@@ -35,48 +35,44 @@
 
 #define RAPL_PATH "/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj"
 
-static bool rapl_available = false;
-static uint64_t start_energy_uj = 0;
+// 1. Encapsulate the state
+typedef struct {
+    uint64_t start_uj;
+    bool is_available;
+} RaplState;
 
-static inline void init_energy_profiler() {
+// 2. Pure function to initialize and capture the start state
+static inline RaplState start_energy_profiling() {
+    RaplState state = {0, false};
+    
     FILE *file = fopen(RAPL_PATH, "r");
     if (file) {
-        rapl_available = true;
+        state.is_available = true;
+        if (fscanf(file, "%lu", &state.start_uj) != 1) {
+            state.start_uj = 0;
+        }
         fclose(file);
-        printf("[Telemetry] RAPL Energy interface detected.\n");
     } else {
-        rapl_available = false;
         printf("[Telemetry] WARNING: RAPL interface not found at %s.\n", RAPL_PATH);
-        printf("[Telemetry] Energy readings will report 0.0 Joules.\n");
-        printf("[Telemetry] Hint: You may need 'sudo' or to load the appropriate kernel module.\n");
     }
+    
+    return state;
 }
 
-static inline uint64_t read_energy_uj() {
-    if (!rapl_available) return 0;
+// 3. Pure function to calculate the delta based on the passed state
+static inline double stop_energy_profiling(RaplState state) {
+    if (!state.is_available) return 0.0;
     
     FILE *file = fopen(RAPL_PATH, "r");
-    if (!file) return 0;
+    if (!file) return 0.0;
     
-    uint64_t energy;
-    if (fscanf(file, "%lu", &energy) != 1) {
-        energy = 0;
+    uint64_t end_energy_uj = 0;
+    if (fscanf(file, "%lu", &end_energy_uj) != 1) {
+        end_energy_uj = 0;
     }
     fclose(file);
-    return energy;
-}
-
-static inline void start_energy_profiling() {
-    start_energy_uj = read_energy_uj();
-}
-
-static inline double stop_energy_profiling() {
-    uint64_t end_energy_uj = read_energy_uj();
     
-    // Handle unsigned integer wrap-around (rare but possible with MSRs)
-    uint64_t delta_uj = end_energy_uj - start_energy_uj;
-    
-    // Convert microjoules to Joules
+    uint64_t delta_uj = end_energy_uj - state.start_uj;
     return (double)delta_uj / 1000000.0;
 }
 
