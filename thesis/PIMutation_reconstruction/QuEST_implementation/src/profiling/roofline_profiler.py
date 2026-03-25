@@ -9,8 +9,8 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 EXEC_PATH = os.path.join(SCRIPT_DIR, "../../bin/quest_runner")
 OUTPUT_FILE = os.path.join(SCRIPT_DIR, "roofline_data.csv")
 
-ALGORITHMS = ["BB84", "BV", "EDC", "XOR"]
-QUBITS = 26 # 2GB State Vector - definitely hits RAM
+ALGORITHMS = ["BB84", "BV", "EDC", "HS", "QRNG", "XOR"]
+QUBITS = 18 # 2GB State Vector - definitely hits RAM
 
 TIME_REGEX = re.compile(r"Execution Time \(Comp\.\):\s+([0-9\.]+)\s+seconds")
 
