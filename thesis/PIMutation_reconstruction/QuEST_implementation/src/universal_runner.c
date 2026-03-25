@@ -44,9 +44,12 @@ extern void build_xor(Qureg qubits, int n);
 extern void build_random(Qureg qubits, int n, int depth);
 
 void print_usage(const char* prog_name) {
-    printf("Usage: %s --algo <NAME> --qubits <N> [--secret <STR>] [--depth <D>] [--verify]\n", prog_name);
-    printf("Algorithms: BB84, BV, EDC, HS, QRNG, XOR, RANDOM\n");
-    printf("Example: %s --algo BV --qubits 16 --verify\n", prog_name);
+    printf("Usage for Profiling:  %s --algo <NAME> --qubits <N> [--depth <D>]\n", prog_name);
+    printf("Usage for Testing:    %s --verify <MODE>\n", prog_name);
+    printf("Algorithms:           BB84, BV, EDC, HS, QRNG, XOR, RANDOM\n");
+    printf("Verify Modes:         FULL, BASE, or comma-separated (e.g., BV,BB84)\n");
+    printf("Example (Profile):    sudo %s --algo BV --qubits 26\n", prog_name);
+    printf("Example (Test):       %s --verify FULL\n", prog_name);
 }
 
 int main(int argc, char** argv) {
