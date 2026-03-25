@@ -13,8 +13,10 @@
 
 
 #include <quest.h>
-#include <stdio.h>
 
 void build_xor(Qureg qubits, int n) {
-    printf("XOR benchmark will go here.\n");
+    // Apply n-1 CNOT gates to simulate an XOR parity chain
+    for (int i = 0; i < n - 1; i++) {
+        applyControlledPauliX(qubits, i, i + 1);
+    }
 }

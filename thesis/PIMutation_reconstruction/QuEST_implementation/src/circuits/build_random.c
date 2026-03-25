@@ -16,8 +16,26 @@
 
 
 #include <quest.h>
-#include <stdio.h>
+#include <stdlib.h>
 
-void build_random(Qureg qubits, int n) {
-    printf("Random benchmark will go here.\n");
+void build_random(Qureg qubits, int n, int depth) {
+    // Set a fixed seed so your benchmarks are reproducible!
+    srand(42); 
+
+    for (int d = 0; d < depth; d++) {
+        for (int i = 0; i < n; i++) {
+            int gate_type = rand() % 3;
+            
+            if (gate_type == 0) {
+                applyHadamard(qubits, i);
+            } 
+            else if (gate_type == 1) {
+                applyPauliX(qubits, i);
+            } 
+            else if (gate_type == 2 && i < n - 1) {
+                // Apply a CNOT with the neighbor, if it's not the last qubit
+                applyControlledPauliX(qubits, i, i + 1);
+            }
+        }
+    }
 }

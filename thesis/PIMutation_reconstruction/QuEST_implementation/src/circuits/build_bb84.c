@@ -13,8 +13,11 @@
  */
 
 #include <quest.h>
-#include <stdio.h>
 
 void build_bb84(Qureg qubits, int n) {
-    printf("BB84 benchmark will go here.\n");
+// Apply 2n single-qubit gates (n Hadamards + n Pauli-X)
+    for (int i = 0; i < n; i++) {
+        applyHadamard(qubits, i);
+        applyPauliX(qubits, i);
+    }
 }
