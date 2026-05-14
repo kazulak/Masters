@@ -32,3 +32,11 @@ thesis/PIMutation_reconstruction/QuEST_implementation/src/*.o
 .venv/
 __pycache__/
 
+# Pliki SimplePIM
+bin/
+patched_spim/
+build/
+*.o
+*.so
+
+

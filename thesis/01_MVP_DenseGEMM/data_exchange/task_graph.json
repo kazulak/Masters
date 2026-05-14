@@ -1,0 +1,546 @@
+{
+  "meta": {
+    "n_initial_tensors": 8,
+    "n_tasks": 7,
+    "tile_rows": 16,
+    "tile_k": 256,
+    "tile_n": 64
+  },
+  "initial_tensors": [
+    {
+      "id": 0,
+      "key": "tensor_0",
+      "shape": [
+        2
+      ],
+      "labels": [
+        0
+      ],
+      "n_elements": 2,
+      "offset_real_bytes": 0,
+      "offset_imag_bytes": 16
+    },
+    {
+      "id": 1,
+      "key": "tensor_1",
+      "shape": [
+        2
+      ],
+      "labels": [
+        1
+      ],
+      "n_elements": 2,
+      "offset_real_bytes": 32,
+      "offset_imag_bytes": 48
+    },
+    {
+      "id": 2,
+      "key": "tensor_2",
+      "shape": [
+        2
+      ],
+      "labels": [
+        2
+      ],
+      "n_elements": 2,
+      "offset_real_bytes": 64,
+      "offset_imag_bytes": 80
+    },
+    {
+      "id": 3,
+      "key": "tensor_3",
+      "shape": [
+        2
+      ],
+      "labels": [
+        3
+      ],
+      "n_elements": 2,
+      "offset_real_bytes": 96,
+      "offset_imag_bytes": 112
+    },
+    {
+      "id": 4,
+      "key": "tensor_4",
+      "shape": [
+        2,
+        2
+      ],
+      "labels": [
+        0,
+        4
+      ],
+      "n_elements": 4,
+      "offset_real_bytes": 128,
+      "offset_imag_bytes": 160
+    },
+    {
+      "id": 5,
+      "key": "tensor_5",
+      "shape": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "labels": [
+        4,
+        1,
+        5,
+        6
+      ],
+      "n_elements": 16,
+      "offset_real_bytes": 192,
+      "offset_imag_bytes": 320
+    },
+    {
+      "id": 6,
+      "key": "tensor_6",
+      "shape": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "labels": [
+        6,
+        2,
+        7,
+        8
+      ],
+      "n_elements": 16,
+      "offset_real_bytes": 448,
+      "offset_imag_bytes": 576
+    },
+    {
+      "id": 7,
+      "key": "tensor_7",
+      "shape": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "labels": [
+        8,
+        3,
+        9,
+        10
+      ],
+      "n_elements": 16,
+      "offset_real_bytes": 704,
+      "offset_imag_bytes": 832
+    }
+  ],
+  "tasks": [
+    {
+      "task_id": 0,
+      "input_A_key": "tensor_0",
+      "input_B_key": "tensor_4",
+      "output_key": "result_0",
+      "einsum": "a,ae->e",
+      "shape_A": [
+        2
+      ],
+      "shape_B": [
+        2,
+        2
+      ],
+      "shape_out": [
+        2
+      ],
+      "labels_A": [
+        0
+      ],
+      "labels_B": [
+        0,
+        4
+      ],
+      "labels_out": [
+        4
+      ],
+      "free_A": [],
+      "contracted": [
+        0
+      ],
+      "free_B": [
+        4
+      ],
+      "m": 1,
+      "k": 2,
+      "n": 2,
+      "n_row_blocks": 1,
+      "n_col_blocks": 1,
+      "needs_k_tiling": false,
+      "is_final": false
+    },
+    {
+      "task_id": 1,
+      "input_A_key": "result_0",
+      "input_B_key": "tensor_7",
+      "output_key": "result_1",
+      "einsum": "e,idjk->eidjk",
+      "shape_A": [
+        2
+      ],
+      "shape_B": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "shape_out": [
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "labels_A": [
+        4
+      ],
+      "labels_B": [
+        8,
+        3,
+        9,
+        10
+      ],
+      "labels_out": [
+        4,
+        8,
+        3,
+        9,
+        10
+      ],
+      "free_A": [
+        4
+      ],
+      "contracted": [],
+      "free_B": [
+        8,
+        3,
+        9,
+        10
+      ],
+      "m": 2,
+      "k": 1,
+      "n": 16,
+      "n_row_blocks": 1,
+      "n_col_blocks": 1,
+      "needs_k_tiling": false,
+      "is_final": false
+    },
+    {
+      "task_id": 2,
+      "input_A_key": "result_1",
+      "input_B_key": "tensor_3",
+      "output_key": "result_2",
+      "einsum": "eijkd,d->eijk",
+      "shape_A": [
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "shape_B": [
+        2
+      ],
+      "shape_out": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "labels_A": [
+        4,
+        8,
+        3,
+        9,
+        10
+      ],
+      "labels_B": [
+        3
+      ],
+      "labels_out": [
+        4,
+        8,
+        9,
+        10
+      ],
+      "free_A": [
+        4,
+        8,
+        9,
+        10
+      ],
+      "contracted": [
+        3
+      ],
+      "free_B": [],
+      "m": 16,
+      "k": 2,
+      "n": 1,
+      "n_row_blocks": 1,
+      "n_col_blocks": 1,
+      "needs_k_tiling": false,
+      "is_final": false
+    },
+    {
+      "task_id": 3,
+      "input_A_key": "result_2",
+      "input_B_key": "tensor_2",
+      "output_key": "result_3",
+      "einsum": "eijk,c->eijkc",
+      "shape_A": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "shape_B": [
+        2
+      ],
+      "shape_out": [
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "labels_A": [
+        4,
+        8,
+        9,
+        10
+      ],
+      "labels_B": [
+        2
+      ],
+      "labels_out": [
+        4,
+        8,
+        9,
+        10,
+        2
+      ],
+      "free_A": [
+        4,
+        8,
+        9,
+        10
+      ],
+      "contracted": [],
+      "free_B": [
+        2
+      ],
+      "m": 16,
+      "k": 1,
+      "n": 2,
+      "n_row_blocks": 1,
+      "n_col_blocks": 1,
+      "needs_k_tiling": false,
+      "is_final": false
+    },
+    {
+      "task_id": 4,
+      "input_A_key": "result_3",
+      "input_B_key": "tensor_1",
+      "output_key": "result_4",
+      "einsum": "eijkc,b->eijkcb",
+      "shape_A": [
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "shape_B": [
+        2
+      ],
+      "shape_out": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "labels_A": [
+        4,
+        8,
+        9,
+        10,
+        2
+      ],
+      "labels_B": [
+        1
+      ],
+      "labels_out": [
+        4,
+        8,
+        9,
+        10,
+        2,
+        1
+      ],
+      "free_A": [
+        4,
+        8,
+        9,
+        10,
+        2
+      ],
+      "contracted": [],
+      "free_B": [
+        1
+      ],
+      "m": 32,
+      "k": 1,
+      "n": 2,
+      "n_row_blocks": 2,
+      "n_col_blocks": 1,
+      "needs_k_tiling": false,
+      "is_final": false
+    },
+    {
+      "task_id": 5,
+      "input_A_key": "result_4",
+      "input_B_key": "tensor_6",
+      "output_key": "result_5",
+      "einsum": "ejkbic,icgh->ejkbgh",
+      "shape_A": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "shape_B": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "shape_out": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "labels_A": [
+        4,
+        8,
+        9,
+        10,
+        2,
+        1
+      ],
+      "labels_B": [
+        6,
+        2,
+        7,
+        8
+      ],
+      "labels_out": [
+        4,
+        9,
+        10,
+        1,
+        6,
+        7
+      ],
+      "free_A": [
+        4,
+        9,
+        10,
+        1
+      ],
+      "contracted": [
+        8,
+        2
+      ],
+      "free_B": [
+        6,
+        7
+      ],
+      "m": 16,
+      "k": 4,
+      "n": 4,
+      "n_row_blocks": 1,
+      "n_col_blocks": 1,
+      "needs_k_tiling": false,
+      "is_final": false
+    },
+    {
+      "task_id": 6,
+      "input_A_key": "result_5",
+      "input_B_key": "tensor_5",
+      "output_key": "result_6",
+      "einsum": "jkhebg,ebgf->jkhf",
+      "shape_A": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "shape_B": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "shape_out": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "labels_A": [
+        4,
+        9,
+        10,
+        1,
+        6,
+        7
+      ],
+      "labels_B": [
+        4,
+        1,
+        5,
+        6
+      ],
+      "labels_out": [
+        9,
+        10,
+        7,
+        5
+      ],
+      "free_A": [
+        9,
+        10,
+        7
+      ],
+      "contracted": [
+        4,
+        1,
+        6
+      ],
+      "free_B": [
+        5
+      ],
+      "m": 8,
+      "k": 8,
+      "n": 2,
+      "n_row_blocks": 1,
+      "n_col_blocks": 1,
+      "needs_k_tiling": false,
+      "is_final": true
+    }
+  ]
+}
