@@ -18,7 +18,7 @@ int main() {
     // 2. Mnożenie!
     for (int i = 0; i < SIZE; i++) {
         printf("DPU (przed): %d ", cache[i]);
-        cache[i] = cache[i] * 2 + 1;
+        cache[i] = cache[i] * 10 + 1;
         printf("-> (po): %d\n", cache[i]);
     }
 

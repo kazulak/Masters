@@ -7,14 +7,32 @@
 # 3. Target 'quest_runner': Compile universal_runner.c and all files in src/circuits/*.c.
 # 4. Link: -lm (Math) and the QuEST library objects.
 
-# SCIENTIFIC OBJECTIVE: Guarantee SOTA Hardware Utilization
+# --- ARCHITECTURE PATHS ---
+# Assuming this Makefile is in thesis/PIMutation_reconstruction/QuEST_implementation
+# $(abspath ../..) resolves to the 'thesis/' root directory
+THESIS_ROOT := $(abspath ../../)
+EXTERN_DIR  := $(THESIS_ROOT)/extern
+QUEST_DIR   := $(EXTERN_DIR)/QuEST
+QUEST_BUILD := $(QUEST_DIR)/build
 
 CC = gcc
+
 # -O3: Max opt | -march=native: AVX2/AVX-512 | -fopenmp: Multithreading
-CFLAGS = -O3 -march=native -fopenmp -Wall -I./external/QuEST -I./external/QuEST/quest/include -I./external/QuEST/build -I./external/QuEST/build/quest/include
+# UPDATED: Now pointing to the shared extern/ directory using variables
+CFLAGS = -O3 -march=native -fopenmp -Wall \
+         -I$(QUEST_DIR) \
+         -I$(QUEST_DIR)/quest/include \
+         -I$(QUEST_BUILD) \
+         -I$(QUEST_BUILD)/quest/include
+
 # Link against the compiled QuEST library and standard math library
-# UPDATED: Added rpath so the executable knows where to find the .so file at runtime
-LDFLAGS = -L./external/QuEST/build -L./external/QuEST/build/quest -Wl,-rpath=$(shell pwd)/external/QuEST/build -Wl,-rpath=$(shell pwd)/external/QuEST/build/quest -lQuEST -lm -fopenmp -Wl,-z,muldefs
+# UPDATED: RPATH dynamically evaluates to the absolute path of the new extern location
+LDFLAGS = -L$(QUEST_BUILD) \
+          -L$(QUEST_BUILD)/quest \
+          -Wl,-rpath=$(QUEST_BUILD) \
+          -Wl,-rpath=$(QUEST_BUILD)/quest \
+          -lQuEST -lm -fopenmp -Wl,-z,muldefs
+
 SRC_DIR = src
 CIRC_DIR = $(SRC_DIR)/circuits
 VERIFY_DIR = $(SRC_DIR)/verification
@@ -42,5 +60,5 @@ $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(SRC_DIR)/*.o $(CIRC_DIR)/*.o
+	rm -f $(SRC_DIR)/*.o $(CIRC_DIR)/*.o $(VERIFY_DIR)/*.o $(V_CIRC_DIR)/*.o
 	rm -rf $(BIN_DIR)
