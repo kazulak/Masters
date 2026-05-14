@@ -1,3 +1,6 @@
 [submodule "thesis/PIMutation_reconstruction/QuEST_implementation/external/QuEST"]
-	path = thesis/PIMutation_reconstruction/QuEST_implementation/external/QuEST
+	path = thesis/extern/QuEST
 	url = https://github.com/QuEST-Kit/QuEST.git
+[submodule "thesis/extern/SimplePIM"]
+	path = thesis/extern/SimplePIM
+	url = https://github.com/CMU-SAFARI/SimplePIM.git
