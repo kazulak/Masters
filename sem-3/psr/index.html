@@ -1,0 +1,653 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Book AI Library - System Architecture POC</title>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net">
+  <style>
+    :root {
+      --bg: #f7f8fb;
+      --paper: #ffffff;
+      --text: #172033;
+      --muted: #596579;
+      --line: #d9dee8;
+      --teal-bg: #e1f5ee;
+      --teal: #0f6e56;
+      --purple-bg: #eeedfe;
+      --purple: #534ab7;
+      --amber-bg: #fdf3e3;
+      --amber: #b06b0a;
+      --coral-bg: #faece7;
+      --coral: #993c1d;
+      --blue-bg: #e8f1fb;
+      --blue: #1a5fa8;
+      --green-bg: #e7f7ed;
+      --green: #1f7a3f;
+      --shadow: 0 16px 40px rgba(23, 32, 51, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, "Segoe UI", Roboto, Arial, sans-serif;
+      line-height: 1.5;
+    }
+
+    .page {
+      width: min(1180px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 32px 0 56px;
+    }
+
+    header {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+      padding: 30px;
+      border-radius: 8px;
+    }
+
+    .eyebrow {
+      margin: 0 0 8px;
+      color: var(--purple);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1, h2, h3 {
+      margin: 0;
+      line-height: 1.15;
+      letter-spacing: 0;
+    }
+
+    h1 {
+      font-size: clamp(32px, 4vw, 54px);
+      max-width: 760px;
+    }
+
+    .subtitle {
+      margin: 16px 0 0;
+      color: var(--muted);
+      font-size: 17px;
+      max-width: 860px;
+    }
+
+    .stack {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 26px;
+      padding: 4px 9px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: #334155;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .pill.ok {
+      border-color: #b8dfc3;
+      background: var(--green-bg);
+      color: var(--green);
+    }
+
+    .requirements {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 22px;
+    }
+
+    .req {
+      min-height: 92px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfe;
+    }
+
+    .req strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 6px;
+    }
+
+    .req span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .section {
+      margin-top: 22px;
+      padding: 26px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    h2 {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+      font-size: 26px;
+    }
+
+    .num {
+      display: inline-grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      background: var(--purple-bg);
+      color: var(--purple);
+      font-size: 16px;
+      font-weight: 800;
+    }
+
+    .drawio, .callout {
+      margin: 14px 0;
+      padding: 14px;
+      border-left: 4px solid var(--purple);
+      background: #fafaff;
+      color: #384256;
+      border-radius: 0 8px 8px 0;
+      font-size: 14px;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 9px 14px;
+      margin: 16px 0;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfe;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 22px;
+      white-space: nowrap;
+    }
+
+    .lbox {
+      width: 16px;
+      height: 16px;
+      border-radius: 4px;
+      flex: 0 0 auto;
+    }
+
+    .diagram-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 10px;
+    }
+
+    .diagram-wrap svg {
+      min-width: 900px;
+      display: block;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 14px;
+      font-size: 14px;
+    }
+
+    th, td {
+      padding: 12px;
+      vertical-align: top;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+    }
+
+    th {
+      color: #344154;
+      background: #f4f6fb;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    td:first-child {
+      font-weight: 800;
+      color: #1d2940;
+      min-width: 150px;
+    }
+
+    code {
+      padding: 2px 5px;
+      border-radius: 5px;
+      background: #eef2f7;
+      color: #27364f;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 0.92em;
+    }
+
+    .event {
+      display: inline-block;
+      margin: 2px 4px 2px 0;
+      padding: 3px 7px;
+      border-radius: 999px;
+      border: 1px solid #e6bc72;
+      background: var(--amber-bg);
+      color: #7a4b08;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .mermaid-box {
+      overflow-x: auto;
+      margin-top: 14px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 14px;
+    }
+
+    .decision {
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfe;
+    }
+
+    .decision h3 {
+      margin-bottom: 8px;
+      font-size: 17px;
+    }
+
+    .decision p {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .timeline td:first-child {
+      width: 120px;
+      white-space: nowrap;
+    }
+
+    @media (max-width: 900px) {
+      .requirements, .split {
+        grid-template-columns: 1fr;
+      }
+
+      header, .section {
+        padding: 18px;
+      }
+
+      table {
+        display: block;
+        overflow-x: auto;
+        white-space: nowrap;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <p class="eyebrow">System Architecture Document · Proof of Concept · Cloud-native SOA on Microsoft Azure</p>
+      <h1>Book AI Library</h1>
+      <p class="subtitle">A POC architecture for an AI-assisted book recommendation platform using Azure Container Apps, PostgreSQL with pgvector, Azure Service Bus, and Azure OpenAI.</p>
+      <div class="stack">
+        <span class="pill ok">POC - extensible to production</span>
+        <span class="pill">Azure Container Apps</span>
+        <span class="pill">pgvector</span>
+        <span class="pill">Azure OpenAI</span>
+        <span class="pill">GitHub Actions</span>
+        <span class="pill">Bicep IaC</span>
+      </div>
+      <div class="requirements" aria-label="Requirements compliance strip">
+        <div class="req"><strong>✓ Mikroserwisy (min. 3 wezly)</strong><span>5 independent services plus frontend.</span></div>
+        <div class="req"><strong>✓ Komunikacja asynchroniczna</strong><span>Azure Service Bus topics: books and users.</span></div>
+        <div class="req"><strong>✓ Uslugi SaaS (chmura)</strong><span>Azure OpenAI, PostgreSQL, Service Bus, ACR.</span></div>
+        <div class="req"><strong>✓ Serverless / Kubernetes</strong><span>Azure Container Apps managed serverless Kubernetes.</span></div>
+        <div class="req"><strong>✓ Minimalny frontend</strong><span>Streamlit, replaceable with React/Next.js.</span></div>
+        <div class="req"><strong>✓ Infrastructure as Code</strong><span>Bicep modules and one main deployment file.</span></div>
+        <div class="req"><strong>✓ CI/CD</strong><span>GitHub Actions build, test, push, deploy.</span></div>
+        <div class="req"><strong>✓ Diagram architektury</strong><span>SVG component diagram, UML sequences, ERD.</span></div>
+      </div>
+    </header>
+
+    <section class="section" id="s1">
+      <h2><span class="num">1</span>Component Diagram</h2>
+      <div class="drawio">
+        <strong>draw.io reproduction:</strong>
+        Create three nested containers: outer dashed grey "Microsoft Azure", inner dashed purple "Azure Container Apps (serverless Kubernetes)", and a separate bottom band "Azure SaaS / Data layer". Place Frontend (teal), five service boxes (purple), Service Bus (amber), and Embedding worker (coral) inside ACA. Place PostgreSQL, Azure OpenAI, Log Analytics, and Container Registry in the data band. Add solid grey arrows for REST calls and amber arrows for async events.
+      </div>
+      <div class="legend">
+        <strong style="color:var(--text);font-size:12px">Legend:</strong>
+        <span class="legend-item"><span class="lbox" style="background:#E1F5EE;border:1px solid #0F6E56"></span>Frontend</span>
+        <span class="legend-item"><span class="lbox" style="background:#EEEDFE;border:1px solid #534AB7"></span>Container App service</span>
+        <span class="legend-item"><span class="lbox" style="background:#FDF3E3;border:1px solid #B06B0A"></span>Async messaging</span>
+        <span class="legend-item"><span class="lbox" style="background:#FAECE7;border:1px solid #993C1D"></span>Async worker</span>
+        <span class="legend-item"><span class="lbox" style="background:#E8F1FB;border:1px solid #1A5FA8"></span>Azure SaaS / data</span>
+        <span class="legend-item">--&gt; REST (sync)</span>
+        <span class="legend-item">- -&gt; Event (async)</span>
+      </div>
+      <div class="diagram-wrap">
+        <svg viewBox="0 0 960 450" width="100%" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Book AI Library component architecture">
+          <defs>
+            <marker id="arr-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M2 2L8 5L2 8" fill="none" stroke="#6B7280" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </marker>
+            <marker id="arr-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M2 2L8 5L2 8" fill="none" stroke="#B06B0A" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </marker>
+            <marker id="arr-coral" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M2 2L8 5L2 8" fill="none" stroke="#993C1D" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </marker>
+          </defs>
+          <rect x="5" y="5" width="950" height="438" rx="14" fill="none" stroke="#9CA3AF" stroke-width="1.2" stroke-dasharray="10 5"/>
+          <text x="870" y="26" font-size="12" fill="#9CA3AF" font-family="Inter,system-ui,sans-serif" font-weight="500">Microsoft Azure</text>
+          <rect x="18" y="28" width="830" height="312" rx="10" fill="#FAFAFF" stroke="#534AB7" stroke-width="1" stroke-dasharray="6 3"/>
+          <text x="28" y="46" font-size="11.5" fill="#534AB7" font-family="Inter,system-ui,sans-serif" font-weight="600">Azure Container Apps - serverless Kubernetes</text>
+          <text x="820" y="330" text-anchor="end" font-size="10" fill="#AFA9EC" font-family="Inter,system-ui,sans-serif">req: serverless / Kubernetes ok</text>
+          <rect x="860" y="30" width="86" height="22" rx="5" fill="#F3F4F6" stroke="#D1D5DB"/>
+          <text x="903" y="44" text-anchor="middle" font-size="10" fill="#374151" font-family="Inter,system-ui,sans-serif" font-weight="600">Bicep IaC ok</text>
+          <rect x="860" y="56" width="86" height="22" rx="5" fill="#F3F4F6" stroke="#D1D5DB"/>
+          <text x="903" y="70" text-anchor="middle" font-size="10" fill="#374151" font-family="Inter,system-ui,sans-serif" font-weight="600">GH Actions ok</text>
+          <rect x="358" y="55" width="222" height="46" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="1"/>
+          <text x="469" y="74" text-anchor="middle" font-size="13" fill="#085041" font-family="Inter,system-ui,sans-serif" font-weight="600">Frontend - Streamlit</text>
+          <text x="469" y="91" text-anchor="middle" font-size="11" fill="#0F6E56" font-family="Inter,system-ui,sans-serif">UI · calls mid-tier REST</text>
+          <rect x="26" y="118" width="162" height="46" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="1"/>
+          <text x="107" y="137" text-anchor="middle" font-size="12.5" fill="#3C3489" font-family="Inter,system-ui,sans-serif" font-weight="600">User profile svc</text>
+          <text x="107" y="154" text-anchor="middle" font-size="11" fill="#534AB7" font-family="Inter,system-ui,sans-serif">GET /me · POST /me/books</text>
+          <rect x="208" y="118" width="162" height="46" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="1"/>
+          <text x="289" y="137" text-anchor="middle" font-size="12.5" fill="#3C3489" font-family="Inter,system-ui,sans-serif" font-weight="600">Book catalog svc</text>
+          <text x="289" y="154" text-anchor="middle" font-size="11" fill="#534AB7" font-family="Inter,system-ui,sans-serif">POST /books · Open Library</text>
+          <rect x="390" y="118" width="186" height="46" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="1"/>
+          <text x="483" y="137" text-anchor="middle" font-size="12.5" fill="#3C3489" font-family="Inter,system-ui,sans-serif" font-weight="600">Recommendation svc</text>
+          <text x="483" y="154" text-anchor="middle" font-size="11" fill="#534AB7" font-family="Inter,system-ui,sans-serif">GET /recommendations</text>
+          <rect x="596" y="118" width="148" height="46" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="1"/>
+          <text x="670" y="137" text-anchor="middle" font-size="12.5" fill="#3C3489" font-family="Inter,system-ui,sans-serif" font-weight="600">LLM service</text>
+          <text x="670" y="154" text-anchor="middle" font-size="11" fill="#534AB7" font-family="Inter,system-ui,sans-serif">POST /v1/embed · generate</text>
+          <rect x="208" y="180" width="362" height="42" rx="8" fill="#FDF3E3" stroke="#B06B0A" stroke-width="1"/>
+          <text x="389" y="197" text-anchor="middle" font-size="13" fill="#78350F" font-family="Inter,system-ui,sans-serif" font-weight="600">Azure Service Bus</text>
+          <text x="389" y="213" text-anchor="middle" font-size="11" fill="#92400E" font-family="Inter,system-ui,sans-serif">topics: books · users (req: async communication ok)</text>
+          <rect x="208" y="244" width="178" height="46" rx="8" fill="#FAECE7" stroke="#993C1D" stroke-width="1"/>
+          <text x="297" y="263" text-anchor="middle" font-size="12.5" fill="#712B13" font-family="Inter,system-ui,sans-serif" font-weight="600">Embedding service</text>
+          <text x="297" y="280" text-anchor="middle" font-size="11" fill="#993C1D" font-family="Inter,system-ui,sans-serif">async worker · writes vectors</text>
+          <path d="M 430 101 L 120 118" fill="none" stroke="#6B7280" stroke-width="1.2" marker-end="url(#arr-gray)"/>
+          <text x="260" y="109" text-anchor="middle" font-size="10" fill="#9CA3AF" font-family="Inter,system-ui,sans-serif">REST</text>
+          <path d="M 508 101 L 490 118" fill="none" stroke="#6B7280" stroke-width="1.2" marker-end="url(#arr-gray)"/>
+          <path d="M 290 164 L 320 180" fill="none" stroke="#B06B0A" stroke-width="1.4" marker-end="url(#arr-amber)"/>
+          <text x="326" y="173" font-size="10" fill="#B06B0A" font-family="Inter,system-ui,sans-serif">BookCreated</text>
+          <path d="M 308 222 L 300 244" fill="none" stroke="#B06B0A" stroke-width="1.4" stroke-dasharray="5 3" marker-end="url(#arr-amber)"/>
+          <path d="M 386 267 L 386 308 L 670 308 L 670 164" fill="none" stroke="#6B7280" stroke-width="1.1" stroke-dasharray="4 3" marker-end="url(#arr-gray)"/>
+          <text x="540" y="320" text-anchor="middle" font-size="10" fill="#9CA3AF" font-family="Inter,system-ui,sans-serif">POST /v1/embed (REST, sync)</text>
+          <path d="M 208 265 L 170 265 L 170 195 L 208 195" fill="none" stroke="#993C1D" stroke-width="1.3" stroke-dasharray="5 3" marker-end="url(#arr-coral)"/>
+          <text x="130" y="235" text-anchor="middle" font-size="10" fill="#993C1D" font-family="Inter,system-ui,sans-serif" transform="rotate(-90,130,235)">BookEmbedded</text>
+          <path d="M 470 180 L 470 164" fill="none" stroke="#B06B0A" stroke-width="1.4" stroke-dasharray="5 3" marker-end="url(#arr-amber)"/>
+          <rect x="18" y="355" width="215" height="52" rx="8" fill="#E8F1FB" stroke="#1A5FA8" stroke-width="1"/>
+          <text x="125" y="376" text-anchor="middle" font-size="12.5" fill="#1E3A6E" font-family="Inter,system-ui,sans-serif" font-weight="600">PostgreSQL + pgvector</text>
+          <text x="125" y="393" text-anchor="middle" font-size="11" fill="#1A5FA8" font-family="Inter,system-ui,sans-serif">Azure DB · managed · SaaS ok</text>
+          <rect x="253" y="355" width="195" height="52" rx="8" fill="#E8F1FB" stroke="#1A5FA8" stroke-width="1"/>
+          <text x="350" y="376" text-anchor="middle" font-size="12.5" fill="#1E3A6E" font-family="Inter,system-ui,sans-serif" font-weight="600">Azure OpenAI</text>
+          <text x="350" y="393" text-anchor="middle" font-size="11" fill="#1A5FA8" font-family="Inter,system-ui,sans-serif">embeddings + generation · SaaS ok</text>
+          <rect x="468" y="355" width="196" height="52" rx="8" fill="#E8F1FB" stroke="#1A5FA8" stroke-width="1"/>
+          <text x="566" y="376" text-anchor="middle" font-size="12.5" fill="#1E3A6E" font-family="Inter,system-ui,sans-serif" font-weight="600">Log Analytics</text>
+          <text x="566" y="393" text-anchor="middle" font-size="11" fill="#1A5FA8" font-family="Inter,system-ui,sans-serif">central observability · SaaS ok</text>
+          <rect x="684" y="355" width="208" height="52" rx="8" fill="#E8F1FB" stroke="#1A5FA8" stroke-width="1"/>
+          <text x="788" y="376" text-anchor="middle" font-size="12.5" fill="#1E3A6E" font-family="Inter,system-ui,sans-serif" font-weight="600">Container Registry</text>
+          <text x="788" y="393" text-anchor="middle" font-size="11" fill="#1A5FA8" font-family="Inter,system-ui,sans-serif">Docker images · ACR · SaaS ok</text>
+          <line x1="107" y1="320" x2="107" y2="355" stroke="#D1D5DB" stroke-width="0.8" stroke-dasharray="3 3"/>
+          <line x1="289" y1="320" x2="330" y2="355" stroke="#D1D5DB" stroke-width="0.8" stroke-dasharray="3 3"/>
+          <line x1="566" y1="320" x2="566" y2="355" stroke="#D1D5DB" stroke-width="0.8" stroke-dasharray="3 3"/>
+          <text x="26" y="340" font-size="10" fill="#AFA9EC" font-family="Inter,system-ui,sans-serif">ACA boundary up; Azure SaaS / data layer down</text>
+        </svg>
+      </div>
+      <div class="callout">
+        <strong>JWT insertion point:</strong> a no-op middleware stub sits in User Profile Service. Activating real authentication requires enabling one decorator, with no changes to any other service. Azure APIM can be inserted in front of all ACA services via a DNS CNAME swap.
+      </div>
+    </section>
+
+    <section class="section" id="s2">
+      <h2><span class="num">2</span>Service Registry</h2>
+      <p>Each service is an independent deployable unit on Azure Container Apps with its own Dockerfile, health endpoint, and scaling rules. Services communicate over internal ACA DNS; only the frontend and Recommendation REST endpoint need public exposure.</p>
+      <table>
+        <thead><tr><th>Service</th><th>Runtime</th><th>Responsibilities</th><th>REST API</th><th>Events</th><th>Data owned</th></tr></thead>
+        <tbody>
+          <tr><td>Frontend</td><td>Streamlit; swap to React/Next.js</td><td>Render UI, call REST APIs, keep zero business logic.</td><td>-</td><td>-</td><td>Session state only</td></tr>
+          <tr><td>User Profile svc</td><td>FastAPI</td><td>User accounts and reading list CRUD. JWT stub is the future auth point.</td><td><code>GET /me</code><br><code>POST /me</code><br><code>POST /me/books</code><br><code>GET /me/books</code></td><td><span class="event">publishes UserBookAdded</span></td><td><code>users</code>, <code>reading_list</code></td></tr>
+          <tr><td>Book Catalog svc</td><td>FastAPI</td><td>Book metadata, ISBN/title dedupe, Open Library enrichment.</td><td><code>GET /books?query</code><br><code>POST /books</code><br><code>GET /books/{id}</code></td><td><span class="event">publishes BookCreated</span></td><td><code>books</code></td></tr>
+          <tr><td>Embedding svc</td><td>Python worker</td><td>Consumes book creation events, calls LLM Service for embeddings, writes vectors.</td><td>-</td><td><span class="event">subscribes BookCreated</span><span class="event">publishes BookEmbedded</span></td><td><code>book_embeddings</code></td></tr>
+          <tr><td>Recommendation svc</td><td>FastAPI</td><td>Consumes embedding and user events, precomputes three recommendation types, serves cached reads.</td><td><code>GET /recommendations?user_id&amp;type=similar|widen|mood</code></td><td><span class="event">subscribes BookEmbedded</span><span class="event">subscribes UserBookAdded</span></td><td><code>recommendations</code></td></tr>
+          <tr><td>LLM service</td><td>FastAPI</td><td>Infrastructure adapter for Azure OpenAI in prod or Ollama/Gemma in local dev.</td><td><code>POST /v1/embed</code><br><code>POST /v1/generate</code></td><td>-</td><td>No persistent data</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section" id="s3">
+      <h2><span class="num">3</span>PostgreSQL Data Model</h2>
+      <p>Single Azure Database for PostgreSQL Flexible Server with the pgvector extension. Services share one instance but own their tables via schema-level Postgres roles. The <code>book_embeddings.embedding</code> column uses <code>vector(1536)</code> for Azure OpenAI <code>text-embedding-3-small</code>.</p>
+      <p><strong>Key index:</strong> <code>CREATE INDEX ON book_embeddings USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);</code></p>
+      <div class="mermaid-box">
+        <pre class="mermaid">erDiagram
+  users ||--o{ reading_list : has
+  books ||--o{ reading_list : "listed in"
+  books ||--o{ book_embeddings : has
+  users ||--o{ recommendations : receives
+
+  users {
+    uuid id PK
+    varchar email "UNIQUE NOT NULL"
+    varchar display_name
+    timestamptz created_at
+    jsonb preferences "mood, genres"
+  }
+
+  books {
+    uuid id PK
+    varchar isbn
+    varchar title "NOT NULL"
+    varchar author
+    text description
+    text_arr genres
+    int published_year
+    timestamptz created_at
+  }
+
+  reading_list {
+    uuid id PK
+    uuid user_id FK
+    uuid book_id FK
+    timestamptz read_at
+    smallint rating "1-5, nullable"
+  }
+
+  book_embeddings {
+    uuid id PK
+    uuid book_id FK
+    vector embedding "vector(1536), IVFFlat index"
+    varchar model_version
+    timestamptz created_at
+  }
+
+  recommendations {
+    uuid id PK
+    uuid user_id FK
+    varchar type "similar | widen | mood"
+    uuid_arr book_ids "top-10 ordered"
+    jsonb explanations "LLM-generated text per book"
+    timestamptz computed_at
+  }</pre>
+      </div>
+    </section>
+
+    <section class="section" id="s4">
+      <h2><span class="num">4</span>Sequence Diagrams</h2>
+      <h3>4a - User adds a book</h3>
+      <p>The user gets a 200 OK before AI work begins. Embedding and recommendation computation happen asynchronously and do not block the UI.</p>
+      <div class="mermaid-box">
+        <pre class="mermaid">sequenceDiagram
+  autonumber
+  participant B as Browser
+  participant F as Frontend
+  participant U as User Profile svc
+  participant C as Book Catalog svc
+  participant S as Service Bus async
+  participant E as Embedding service
+  participant L as LLM service
+  participant R as Recommendation svc
+  B->>F: Add book "Dune"
+  F->>U: POST /me/books
+  U->>C: POST /books
+  C->>C: Enrich via Open Library API
+  C-->>S: BookCreated event
+  C-->>U: 202 Accepted
+  U-->>F: 200 OK {book_id}
+  F-->>B: Book added
+  Note over S,R: async boundary - all following work happens after user response
+  S-->>E: BookCreated delivered
+  E->>L: POST /v1/embed
+  L-->>E: vector[1536]
+  E->>E: write book_embeddings row
+  E-->>S: BookEmbedded event
+  S-->>R: BookEmbedded delivered
+  R->>R: 3 cosine-similarity queries and store recommendations</pre>
+      </div>
+      <h3 style="margin-top:18px">4b - User gets recommendations</h3>
+      <p>No LLM call on the hot path. Results are precomputed and stored. Target response time is p99 &lt; 100 ms.</p>
+      <div class="mermaid-box">
+        <pre class="mermaid">sequenceDiagram
+  autonumber
+  participant B as Browser
+  participant F as Frontend
+  participant R as Recommendation svc
+  participant P as PostgreSQL + pgvector
+  B->>F: Click "My recommendations"
+  F->>R: GET /recommendations?user_id&type=similar
+  R->>P: SELECT recommendations JOIN books WHERE user_id
+  P-->>R: rows: book_ids + explanations JSONB
+  R-->>F: 200 {books[], explanations[]}
+  F-->>B: Render recommendation cards
+  Note over R,P: no LLM call on the hot path</pre>
+      </div>
+    </section>
+
+    <section class="section" id="s5">
+      <h2><span class="num">5</span>Technology Choices</h2>
+      <table>
+        <thead><tr><th>Technology</th><th>Role</th><th>Requirement met</th><th>Justification</th></tr></thead>
+        <tbody>
+          <tr><td>Azure Container Apps</td><td>All services</td><td><span class="pill ok">serverless / K8s</span></td><td>Managed serverless Kubernetes with scale-to-zero and no cluster operations.</td></tr>
+          <tr><td>FastAPI + Python 3.11</td><td>Mid-tier services</td><td><span class="pill ok">microservices</span></td><td>Async-native, OpenAPI docs, strong Python AI ecosystem.</td></tr>
+          <tr><td>Azure Database for PostgreSQL</td><td>Primary database</td><td><span class="pill ok">SaaS cloud</span></td><td>Managed PaaS with pgvector support.</td></tr>
+          <tr><td>pgvector</td><td>ANN vector search</td><td><span class="pill">data layer</span></td><td>Cosine similarity inside PostgreSQL; enough for POC scale.</td></tr>
+          <tr><td>Azure Service Bus</td><td>Async messaging</td><td><span class="pill ok">async communication</span></td><td>Managed pub/sub with dead-letter queues.</td></tr>
+          <tr><td>Azure OpenAI</td><td>Embeddings and generation</td><td><span class="pill ok">SaaS / AI</span></td><td>Azure-hosted OpenAI API for 1536-dim embeddings and generated explanations.</td></tr>
+          <tr><td>Open Library API</td><td>Book metadata</td><td><span class="pill">external API</span></td><td>Free, no API key required, used only by Book Catalog.</td></tr>
+          <tr><td>Streamlit</td><td>Frontend UI</td><td><span class="pill ok">minimal frontend</span></td><td>Fastest path to a working UI; backend remains replaceable.</td></tr>
+          <tr><td>Bicep</td><td>Infrastructure as Code</td><td><span class="pill ok">IaC</span></td><td>Azure-native ARM abstraction with simple module boundaries.</td></tr>
+          <tr><td>GitHub Actions</td><td>CI/CD pipeline</td><td><span class="pill ok">CI/CD</span></td><td>Lint, test, build, push to ACR, update ACA.</td></tr>
+          <tr><td>Azure Container Registry</td><td>Image registry</td><td><span class="pill ok">SaaS cloud</span></td><td>Managed private registry for container images.</td></tr>
+          <tr><td>Azure Log Analytics</td><td>Observability</td><td><span class="pill">ops</span></td><td>Central ACA logs with no agent installation.</td></tr>
+          <tr><td>Ollama + Gemma 2B</td><td>Local dev LLM</td><td><span class="pill">dev only</span></td><td>Free local fallback hidden behind the LLM Service adapter.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section" id="s6">
+      <h2><span class="num">6</span>Trade-offs &amp; Evolution</h2>
+      <div class="split">
+        <article class="decision">
+          <h3>T1 - Shared PostgreSQL instance</h3>
+          <p><strong>Now:</strong> one Flexible Server with schema-level role isolation.</p>
+          <p><strong>Risk:</strong> one service can exhaust shared connections.</p>
+          <p><strong>Path:</strong> PgBouncer, read replica for Recommendation, then separate instances per service.</p>
+        </article>
+        <article class="decision">
+          <h3>T2 - Service Bus to Kafka</h3>
+          <p><strong>Now:</strong> publish/subscribe through a thin <code>MessageBus</code> abstraction.</p>
+          <p><strong>Risk:</strong> Standard tier retention and Kafka compatibility limits.</p>
+          <p><strong>Path:</strong> swap implementation to Event Hubs Kafka endpoint or aiokafka.</p>
+        </article>
+        <article class="decision">
+          <h3>T3 - Streamlit to React/Next.js</h3>
+          <p><strong>Now:</strong> Streamlit container with no business logic.</p>
+          <p><strong>Risk:</strong> limited custom UI and weak mobile experience.</p>
+          <p><strong>Path:</strong> add Next.js frontend, activate JWT validation, cut over DNS.</p>
+        </article>
+        <article class="decision">
+          <h3>Embedding dimension lock-in</h3>
+          <p><strong>Now:</strong> <code>vector(1536)</code> matches current embedding model.</p>
+          <p><strong>Risk:</strong> a different model dimension requires re-embedding.</p>
+          <p><strong>Mitigation:</strong> treat embeddings as invalidatable cache using <code>model_version</code>.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="s7">
+      <h2><span class="num">7</span>One-week POC Target</h2>
+      <table class="timeline">
+        <thead><tr><th>Day</th><th>Goal</th><th>Deliverable</th></tr></thead>
+        <tbody>
+          <tr><td>1-2</td><td>Contracts + infrastructure</td><td>Monorepo structure, OpenAPI stubs, Pydantic event models, DB migrations, Bicep provisioning.</td></tr>
+          <tr><td>2-3</td><td>LLM Service</td><td>Azure OpenAI + Ollama adapter, fallback logic, unit tests, container image.</td></tr>
+          <tr><td>3-4</td><td>Book Catalog + Embedding pipeline</td><td><code>POST /books</code> to Open Library to <code>BookCreated</code> to vector row to <code>BookEmbedded</code>.</td></tr>
+          <tr><td>4-5</td><td>Recommendation + User Profile</td><td>Cosine similarity queries, three recommendation types, reading list CRUD.</td></tr>
+          <tr><td>5-6</td><td>Streamlit frontend</td><td>Add book page, reading list page, three-tab recommendations page, mock mode.</td></tr>
+          <tr><td>6-7</td><td>CI/CD + smoke test</td><td>Deploy to Azure and verify add book to async recommendation response.</td></tr>
+        </tbody>
+      </table>
+      <div class="callout">
+        After week 1, the deployed POC accepts a book title and asynchronously produces a vector-based recommendation. The "widen horizons" and "mood-based" types, auth, and React migration can then be layered on without rearchitecting the system.
+      </div>
+    </section>
+  </main>
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: "base",
+      securityLevel: "loose",
+      themeVariables: {
+        primaryColor: "#eeedfe",
+        primaryBorderColor: "#534ab7",
+        primaryTextColor: "#172033",
+        lineColor: "#596579",
+        actorBorder: "#534ab7",
+        actorBkg: "#eeedfe",
+        noteBkgColor: "#fdf3e3",
+        noteBorderColor: "#b06b0a"
+      }
+    });
+  </script>
+</body>
+</html>

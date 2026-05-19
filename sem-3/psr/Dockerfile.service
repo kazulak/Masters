@@ -1,0 +1,15 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+ENV PYTHONPATH=/app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY shared ./shared
+COPY services ./services
+
+ARG SERVICE_PATH
+ENV SERVICE_PATH=${SERVICE_PATH}
+
+CMD ["sh", "-c", "uvicorn main:app --app-dir ${SERVICE_PATH}/app --host 0.0.0.0 --port ${PORT:-8000}"]
