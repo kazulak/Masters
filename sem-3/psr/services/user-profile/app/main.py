@@ -28,6 +28,9 @@ class AddBookRequest(BaseModel):
     description: str = ""
     genres: list[str] = Field(default_factory=list)
     published_year: int | None = None
+    source: str = "manual"
+    openlibrary_key: str | None = None
+    cover_url: str | None = None
     rating: int | None = Field(default=None, ge=1, le=5)
 
 

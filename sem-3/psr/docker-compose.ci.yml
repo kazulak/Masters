@@ -1,0 +1,89 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: book_ai_library
+      POSTGRES_USER: book_ai
+      POSTGRES_PASSWORD: book_ai_password
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U book_ai -d book_ai_library"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  llm-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.service
+      args:
+        SERVICE_PATH: services/llm-service
+    environment:
+      LLM_PROVIDER: deterministic
+    ports:
+      - "8005:8000"
+
+  book-catalog:
+    build:
+      context: .
+      dockerfile: Dockerfile.service
+      args:
+        SERVICE_PATH: services/book-catalog
+    environment:
+      DATABASE_URL: postgresql://book_ai:book_ai_password@postgres:5432/book_ai_library
+    ports:
+      - "8002:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  user-profile:
+    build:
+      context: .
+      dockerfile: Dockerfile.service
+      args:
+        SERVICE_PATH: services/user-profile
+    environment:
+      DATABASE_URL: postgresql://book_ai:book_ai_password@postgres:5432/book_ai_library
+      BOOK_CATALOG_URL: http://book-catalog:8000
+      DEFAULT_USER_ID: demo-user
+    ports:
+      - "8001:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      book-catalog:
+        condition: service_started
+
+  embedding-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.service
+      args:
+        SERVICE_PATH: services/embedding-worker
+    environment:
+      DATABASE_URL: postgresql://book_ai:book_ai_password@postgres:5432/book_ai_library
+      LLM_SERVICE_URL: http://llm-service:8000
+    ports:
+      - "8003:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      llm-service:
+        condition: service_started
+
+  recommendation:
+    build:
+      context: .
+      dockerfile: Dockerfile.service
+      args:
+        SERVICE_PATH: services/recommendation
+    environment:
+      DATABASE_URL: postgresql://book_ai:book_ai_password@postgres:5432/book_ai_library
+      DEFAULT_USER_ID: demo-user
+    ports:
+      - "8004:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy

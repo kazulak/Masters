@@ -10,8 +10,8 @@ from fastapi import FastAPI, Query
 
 from shared.config import DEFAULT_USER_ID
 from shared.events import pull
+from shared.repositories import candidate_books_by_vector
 from shared.storage import read_state, update_state
-from shared.text import average, cosine
 
 RECOMMENDATION_TYPES = ("similar", "widen", "mood")
 
@@ -20,22 +20,9 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _book_embeddings(state: dict) -> dict[str, list[float]]:
-    result = {}
-    for row in state["book_embeddings"].values():
-        result[row["book_id"]] = row["embedding"]
-    return result
-
-
 def _score_candidates(state: dict, user_id: str, rec_type: str) -> list[dict]:
-    embeddings = _book_embeddings(state)
     user_rows = [row for row in state["reading_list"].values() if row["user_id"] == user_id]
     owned_ids = {row["book_id"] for row in user_rows}
-    seed_vectors = [embeddings[book_id] for book_id in owned_ids if book_id in embeddings]
-    if not seed_vectors:
-        return []
-
-    profile = average(seed_vectors)
     read_genres = {
         genre
         for book_id in owned_ids
@@ -44,11 +31,9 @@ def _score_candidates(state: dict, user_id: str, rec_type: str) -> list[dict]:
     mood = state["users"].get(user_id, {}).get("preferences", {}).get("mood", "curious")
 
     scored = []
-    for book_id, vector in embeddings.items():
-        if book_id in owned_ids or book_id not in state["books"]:
-            continue
-        book = state["books"][book_id]
-        score = cosine(profile, vector)
+    for item in candidate_books_by_vector(user_id, limit=50):
+        book = item["book"]
+        score = item["score"]
         genres = set(book.get("genres", []))
         if rec_type == "widen" and genres and not genres.intersection(read_genres):
             score += 0.18
