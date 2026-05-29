@@ -60,6 +60,53 @@ def _deterministic_embed(text: str) -> EmbedResponse:
     )
 
 
+def _azure_openai_headers() -> dict[str, str]:
+    key = config.env("AZURE_OPENAI_API_KEY", config.AZURE_OPENAI_API_KEY)
+    if not key:
+        raise RuntimeError("AZURE_OPENAI_API_KEY is required for LLM_PROVIDER=azure-openai")
+    return {"api-key": key, "Content-Type": "application/json"}
+
+
+def _azure_openai_url(deployment: str, operation: str) -> str:
+    endpoint = config.env("AZURE_OPENAI_ENDPOINT", config.AZURE_OPENAI_ENDPOINT).rstrip("/")
+    api_version = config.env("AZURE_OPENAI_API_VERSION", config.AZURE_OPENAI_API_VERSION)
+    if not endpoint or not deployment:
+        raise RuntimeError("AZURE_OPENAI_ENDPOINT and deployment env vars are required for Azure OpenAI")
+    return f"{endpoint}/openai/deployments/{deployment}/{operation}?api-version={api_version}"
+
+
+def _azure_openai_embed(text: str) -> EmbedResponse:
+    deployment = config.env("AZURE_OPENAI_EMBED_DEPLOYMENT", config.AZURE_OPENAI_EMBED_DEPLOYMENT)
+    response = requests.post(
+        _azure_openai_url(deployment, "embeddings"),
+        headers=_azure_openai_headers(),
+        json={"input": text},
+        timeout=float(config.env("AZURE_OPENAI_TIMEOUT_SECONDS", "30")),
+    )
+    response.raise_for_status()
+    payload = response.json()
+    embedding = payload["data"][0]["embedding"]
+    return EmbedResponse(
+        embedding=embedding,
+        model_version=f"azure-openai:{deployment}:{len(embedding)}",
+        dimensions=len(embedding),
+    )
+
+
+def _azure_openai_generate(prompt: str) -> GenerateResponse:
+    deployment = config.env("AZURE_OPENAI_CHAT_DEPLOYMENT", config.AZURE_OPENAI_CHAT_DEPLOYMENT)
+    response = requests.post(
+        _azure_openai_url(deployment, "chat/completions"),
+        headers=_azure_openai_headers(),
+        json={"messages": [{"role": "user", "content": prompt}], "temperature": 0.2},
+        timeout=float(config.env("AZURE_OPENAI_TIMEOUT_SECONDS", "30")),
+    )
+    response.raise_for_status()
+    payload = response.json()
+    text = payload["choices"][0]["message"]["content"].strip()
+    return GenerateResponse(text=text, provider=f"azure-openai:{deployment}")
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "llm-service", "provider": config.env("LLM_PROVIDER", config.LLM_PROVIDER)}
@@ -68,6 +115,8 @@ def health() -> dict[str, str]:
 @app.post("/v1/embed", response_model=EmbedResponse)
 def embed(request: EmbedRequest) -> EmbedResponse:
     provider = config.env("LLM_PROVIDER", config.LLM_PROVIDER)
+    if provider == "azure-openai":
+        return _azure_openai_embed(request.text)
     if provider == "ollama":
         return _ollama_embed(request.text)
     if provider == "ollama-with-fallback":
@@ -81,6 +130,8 @@ def embed(request: EmbedRequest) -> EmbedResponse:
 @app.post("/v1/generate", response_model=GenerateResponse)
 def generate(request: GenerateRequest) -> GenerateResponse:
     provider = config.env("LLM_PROVIDER", config.LLM_PROVIDER)
+    if provider == "azure-openai":
+        return _azure_openai_generate(request.prompt)
     if provider.startswith("ollama"):
         generate_model = config.env("OLLAMA_GENERATE_MODEL", config.OLLAMA_GENERATE_MODEL)
         response = requests.post(

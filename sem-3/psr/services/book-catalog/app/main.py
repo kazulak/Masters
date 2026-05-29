@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from uuid import uuid4
-
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from shared.events import publish
 from shared.open_library import OpenLibraryBook, find_book, search_open_library
-from shared.storage import read_state, update_state
+from shared.repositories import count_books, get_book as repo_get_book, list_books, upsert_book
 from shared.text import normalize
 
 app = FastAPI(title="Book AI Library - Book Catalog Service", version="0.1.0")
@@ -56,10 +53,6 @@ def _from_open_library(book: OpenLibraryBook) -> BookCreate:
     )
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 def _dedupe_key(book: BookCreate) -> str:
     if book.openlibrary_key:
         return f"openlibrary:{normalize(book.openlibrary_key)}"
@@ -93,19 +86,7 @@ def _merge_with_open_library(payload: BookCreate) -> BookCreate:
 
 
 def _upsert_book(payload: BookCreate) -> dict:
-    def mutate(state: dict) -> dict:
-        key = _dedupe_key(payload)
-        for existing in state["books"].values():
-            if existing.get("dedupe_key") == key:
-                return {"book": existing, "created": False}
-
-        book_id = str(uuid4())
-        book = payload.model_dump()
-        book.update({"id": book_id, "created_at": _now(), "dedupe_key": key})
-        state["books"][book_id] = book
-        return {"book": book, "created": True}
-
-    result = update_state(mutate)
+    result = upsert_book(payload.model_dump(), _dedupe_key(payload))
     if result["created"]:
         publish("books", "BookCreated", {"book_id": result["book"]["id"]})
     return result
@@ -118,15 +99,7 @@ def health() -> dict[str, str]:
 
 @app.get("/books", response_model=list[Book])
 def search_books(query: str = Query(default="")) -> list[Book]:
-    state = read_state()
-    books = list(state["books"].values())
-    if not query:
-        return books
-    needle = normalize(query)
-    return [
-        book for book in books
-        if needle in normalize(book["title"]) or needle in normalize(book.get("author", ""))
-    ]
+    return [Book(**book) for book in list_books(query)]
 
 
 @app.get("/external/openlibrary/search", response_model=list[BookCreate])
@@ -139,7 +112,7 @@ def external_search(query: str = Query(min_length=1), limit: int = Query(default
 
 @app.get("/books/{book_id}", response_model=Book)
 def get_book(book_id: str) -> Book:
-    book = read_state()["books"].get(book_id)
+    book = repo_get_book(book_id)
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
     return Book(**book)
@@ -167,5 +140,5 @@ def seed_open_library(payload: SeedRequest) -> SeedResponse:
             else:
                 existing += 1
 
-    total = len(read_state()["books"])
+    total = count_books()
     return SeedResponse(imported=imported, existing=existing, total_catalog_size=total)

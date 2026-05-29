@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from uuid import uuid4
-
 import requests
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from shared.config import BOOK_CATALOG_URL, DEFAULT_USER_ID
 from shared.events import publish
-from shared.storage import read_state, update_state
+from shared.repositories import get_or_create_user, list_user_books, upsert_reading_list_entry, upsert_user
 
 app = FastAPI(title="Book AI Library - User Profile Service", version="0.1.0")
 
@@ -34,10 +31,6 @@ class AddBookRequest(BaseModel):
     rating: int | None = Field(default=None, ge=1, le=5)
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 def _current_user_id(x_user_id: str | None) -> str:
     return x_user_id or DEFAULT_USER_ID
 
@@ -50,37 +43,20 @@ def health() -> dict[str, str]:
 @app.get("/me", response_model=UserProfile)
 def get_me(x_user_id: str | None = Header(default=None)) -> UserProfile:
     user_id = _current_user_id(x_user_id)
-
-    def mutate(state: dict) -> dict:
-        user = state["users"].setdefault(
-            user_id,
-            UserProfile(id=user_id).model_dump() | {"created_at": _now()},
-        )
-        return user
-
-    return UserProfile(**update_state(mutate))
+    return UserProfile(**get_or_create_user(user_id, UserProfile(id=user_id).model_dump()))
 
 
 @app.post("/me", response_model=UserProfile)
 def upsert_me(profile: UserProfile, x_user_id: str | None = Header(default=None)) -> UserProfile:
     user_id = _current_user_id(x_user_id)
     profile.id = user_id
-
-    def mutate(state: dict) -> dict:
-        row = profile.model_dump() | {"created_at": state["users"].get(user_id, {}).get("created_at", _now())}
-        state["users"][user_id] = row
-        return row
-
-    return UserProfile(**update_state(mutate))
+    return UserProfile(**upsert_user(profile.model_dump()))
 
 
 @app.get("/me/books")
 def list_my_books(x_user_id: str | None = Header(default=None)) -> dict:
     user_id = _current_user_id(x_user_id)
-    state = read_state()
-    rows = [row for row in state["reading_list"].values() if row["user_id"] == user_id]
-    books = [state["books"][row["book_id"]] | {"rating": row.get("rating")} for row in rows if row["book_id"] in state["books"]]
-    return {"user_id": user_id, "books": books}
+    return {"user_id": user_id, "books": list_user_books(user_id)}
 
 
 @app.post("/me/books")
@@ -98,23 +74,7 @@ def add_my_book(payload: AddBookRequest, x_user_id: str | None = Header(default=
 
     book = response.json()
 
-    def mutate(state: dict) -> dict:
-        state["users"].setdefault(user_id, UserProfile(id=user_id).model_dump() | {"created_at": _now()})
-        for row in state["reading_list"].values():
-            if row["user_id"] == user_id and row["book_id"] == book["id"]:
-                row["rating"] = payload.rating
-                return row
-        row_id = str(uuid4())
-        row = {
-            "id": row_id,
-            "user_id": user_id,
-            "book_id": book["id"],
-            "read_at": _now(),
-            "rating": payload.rating,
-        }
-        state["reading_list"][row_id] = row
-        return row
-
-    row = update_state(mutate)
+    get_or_create_user(user_id, UserProfile(id=user_id).model_dump())
+    row = upsert_reading_list_entry(user_id, book["id"], payload.rating)
     publish("users", "UserBookAdded", {"user_id": user_id, "book_id": book["id"]})
     return {"user_id": user_id, "book": book, "reading_list_entry": row}
