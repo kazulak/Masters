@@ -2,6 +2,8 @@
 
 Book AI Library is a university POC for a cloud-native SOA book recommendation system. It currently runs locally as five FastAPI services plus a Streamlit frontend. The architecture document is [index.html](./index.html).
 
+For a teaching-style continuation plan with Azure, staging, local LLM, and next-step guidance, read [PROJECT_CONTINUATION_GUIDE.md](./PROJECT_CONTINUATION_GUIDE.md).
+
 ## Current Status
 
 Implemented and verified locally:
