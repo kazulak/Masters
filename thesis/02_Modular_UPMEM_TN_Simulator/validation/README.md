@@ -10,6 +10,8 @@ Responsibilities:
 - validate task graph schema assumptions;
 - test route fallback behavior;
 - test forced-route failure messages;
+- verify selected and rejected route records;
+- verify unsupported route-format pairs fail before execution;
 - keep small circuits fast enough for regular regression runs.
 
 Correctness checks should be run before performance experiments. Performance

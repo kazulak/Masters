@@ -37,9 +37,16 @@ MVP.
 Start with:
 
 - `02_Modular_UPMEM_TN_Simulator/README.md`
+- `02_Modular_UPMEM_TN_Simulator/docs/thesis_structure.md`
+- `02_Modular_UPMEM_TN_Simulator/docs/architecture.md`
 - `02_Modular_UPMEM_TN_Simulator/docs/literature_guidelines_mapping.md`
 - `02_Modular_UPMEM_TN_Simulator/docs/implementation_plan.md`
 
 The planning scaffold is intentionally documentation-only at this point. It records
 the architecture, steps, decisions, experiments, and unresolved ambiguities before
 the next implementation pass.
+
+Current committed direction: a TaskGraph-centered modular tensor-network runtime.
+The host owns planning, slicing, dispatch, validation, profiling, and reductions.
+The UPMEM backend is SimplePIM-first, with raw/custom dense, SparseP, heuristic,
+and collective providers selected per task.

@@ -10,6 +10,10 @@ Benchmark groups should include:
 - entanglement-heavy circuits;
 - sparse or diagonal-heavy circuits;
 - permutation-heavy circuits for heuristic routing.
+- synthetic density sweeps for SparseP threshold experiments;
+- multi-DPU sliced contractions for collective experiments;
+- paired tasks that can run through SimplePIM and raw UPMEM for provider
+  comparison.
 
 Every benchmark record should include:
 

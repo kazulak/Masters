@@ -8,6 +8,7 @@ Responsibilities:
 - quantize and dequantize;
 - define DPU transfer layout;
 - define accumulation type;
+- record scale scope and scale values;
 - report numerical error;
 - reject illegal route-format combinations.
 
@@ -19,5 +20,8 @@ Initial baseline:
 Candidate next formats:
 
 - fixed-point;
-- block-floating-point;
+- block-floating-point after fixed-point is stable;
 - library-backed integer or mixed-precision format if integration is practical.
+
+No DPU route may hide its numerical format. Any non-reference format must produce
+a validation record against CPU reference output.

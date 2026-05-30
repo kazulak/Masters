@@ -10,7 +10,9 @@ Responsibilities:
 - enforce tile and WRAM budgets;
 - launch kernels;
 - collect timing and byte counters;
-- perform host-mediated reductions and reshuffles.
+- perform host-mediated reductions and reshuffles;
+- expose naive host collectives before any PID-Comm-style provider;
+- keep route preparation timing separate from kernel timing.
 
 The runtime should not decide contraction paths. It executes the sized work units
 created by the planner and selected by the dispatcher.
