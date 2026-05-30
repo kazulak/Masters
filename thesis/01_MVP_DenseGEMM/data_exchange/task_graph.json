@@ -1,10 +1,39 @@
 {
+  "schema_version": "mvp-raw-dense-0.2",
   "meta": {
+    "mvp_role": "raw_upmem_dense_baseline",
+    "architecture_note": "Fast conference MVP retained as the raw UPMEM dense validation path for TaskGraphV2 replay.",
     "n_initial_tensors": 8,
     "n_tasks": 7,
     "tile_rows": 16,
     "tile_k": 256,
-    "tile_n": 64
+    "tile_n": 64,
+    "nr_tasklets": 8,
+    "planner": {
+      "name": "opt_einsum",
+      "optimize": "optimal",
+      "seed": 0
+    },
+    "default_route": "raw_upmem_dense",
+    "reference_route": "cpu_reference",
+    "data_format": {
+      "name": "complex_i8_tile_scaled",
+      "logical_dtype": "complex_f64",
+      "accumulator": "int32",
+      "scale_scope": "tile",
+      "complex_layout": "split_real_imag"
+    },
+    "route_contract": {
+      "can_execute": "implicit_dense_compatibility_check",
+      "estimate": "static_bytes_and_ops_in_task_graph",
+      "prepare": "host_pack_quantize_and_dpu_symbol_buffers",
+      "execute": "single_dpu_int8_gemm_tile_kernel"
+    },
+    "hardware_constraints": {
+      "dpu_count": 1,
+      "no_dynamic_inter_dpu_communication": true,
+      "wram_safe_bytes": 49152
+    }
   },
   "initial_tensors": [
     {
@@ -16,7 +45,24 @@
       "labels": [
         0
       ],
+      "logical_dtype": "complex_f64",
+      "structure": "dense",
+      "density_estimate": 0.5,
+      "nnz_estimate": 1,
+      "format": {
+        "name": "complex_f64_host",
+        "accumulator": "complex_f64",
+        "scale_scope": "none"
+      },
       "n_elements": 2,
+      "storage": {
+        "location": "host",
+        "kind": "host_binary_split_real_imag_f64",
+        "path": "data_exchange/tensor_data.bin",
+        "offset_real_bytes": 0,
+        "offset_imag_bytes": 16,
+        "byte_length": 32
+      },
       "offset_real_bytes": 0,
       "offset_imag_bytes": 16
     },
@@ -29,7 +75,24 @@
       "labels": [
         1
       ],
+      "logical_dtype": "complex_f64",
+      "structure": "dense",
+      "density_estimate": 0.5,
+      "nnz_estimate": 1,
+      "format": {
+        "name": "complex_f64_host",
+        "accumulator": "complex_f64",
+        "scale_scope": "none"
+      },
       "n_elements": 2,
+      "storage": {
+        "location": "host",
+        "kind": "host_binary_split_real_imag_f64",
+        "path": "data_exchange/tensor_data.bin",
+        "offset_real_bytes": 32,
+        "offset_imag_bytes": 48,
+        "byte_length": 32
+      },
       "offset_real_bytes": 32,
       "offset_imag_bytes": 48
     },
@@ -42,7 +105,24 @@
       "labels": [
         2
       ],
+      "logical_dtype": "complex_f64",
+      "structure": "dense",
+      "density_estimate": 0.5,
+      "nnz_estimate": 1,
+      "format": {
+        "name": "complex_f64_host",
+        "accumulator": "complex_f64",
+        "scale_scope": "none"
+      },
       "n_elements": 2,
+      "storage": {
+        "location": "host",
+        "kind": "host_binary_split_real_imag_f64",
+        "path": "data_exchange/tensor_data.bin",
+        "offset_real_bytes": 64,
+        "offset_imag_bytes": 80,
+        "byte_length": 32
+      },
       "offset_real_bytes": 64,
       "offset_imag_bytes": 80
     },
@@ -55,7 +135,24 @@
       "labels": [
         3
       ],
+      "logical_dtype": "complex_f64",
+      "structure": "dense",
+      "density_estimate": 0.5,
+      "nnz_estimate": 1,
+      "format": {
+        "name": "complex_f64_host",
+        "accumulator": "complex_f64",
+        "scale_scope": "none"
+      },
       "n_elements": 2,
+      "storage": {
+        "location": "host",
+        "kind": "host_binary_split_real_imag_f64",
+        "path": "data_exchange/tensor_data.bin",
+        "offset_real_bytes": 96,
+        "offset_imag_bytes": 112,
+        "byte_length": 32
+      },
       "offset_real_bytes": 96,
       "offset_imag_bytes": 112
     },
@@ -70,7 +167,24 @@
         0,
         4
       ],
+      "logical_dtype": "complex_f64",
+      "structure": "dense",
+      "density_estimate": 1.0,
+      "nnz_estimate": 4,
+      "format": {
+        "name": "complex_f64_host",
+        "accumulator": "complex_f64",
+        "scale_scope": "none"
+      },
       "n_elements": 4,
+      "storage": {
+        "location": "host",
+        "kind": "host_binary_split_real_imag_f64",
+        "path": "data_exchange/tensor_data.bin",
+        "offset_real_bytes": 128,
+        "offset_imag_bytes": 160,
+        "byte_length": 64
+      },
       "offset_real_bytes": 128,
       "offset_imag_bytes": 160
     },
@@ -89,7 +203,24 @@
         5,
         6
       ],
+      "logical_dtype": "complex_f64",
+      "structure": "dense",
+      "density_estimate": 0.25,
+      "nnz_estimate": 4,
+      "format": {
+        "name": "complex_f64_host",
+        "accumulator": "complex_f64",
+        "scale_scope": "none"
+      },
       "n_elements": 16,
+      "storage": {
+        "location": "host",
+        "kind": "host_binary_split_real_imag_f64",
+        "path": "data_exchange/tensor_data.bin",
+        "offset_real_bytes": 192,
+        "offset_imag_bytes": 320,
+        "byte_length": 256
+      },
       "offset_real_bytes": 192,
       "offset_imag_bytes": 320
     },
@@ -108,7 +239,24 @@
         7,
         8
       ],
+      "logical_dtype": "complex_f64",
+      "structure": "dense",
+      "density_estimate": 0.25,
+      "nnz_estimate": 4,
+      "format": {
+        "name": "complex_f64_host",
+        "accumulator": "complex_f64",
+        "scale_scope": "none"
+      },
       "n_elements": 16,
+      "storage": {
+        "location": "host",
+        "kind": "host_binary_split_real_imag_f64",
+        "path": "data_exchange/tensor_data.bin",
+        "offset_real_bytes": 448,
+        "offset_imag_bytes": 576,
+        "byte_length": 256
+      },
       "offset_real_bytes": 448,
       "offset_imag_bytes": 576
     },
@@ -127,7 +275,24 @@
         9,
         10
       ],
+      "logical_dtype": "complex_f64",
+      "structure": "dense",
+      "density_estimate": 0.25,
+      "nnz_estimate": 4,
+      "format": {
+        "name": "complex_f64_host",
+        "accumulator": "complex_f64",
+        "scale_scope": "none"
+      },
       "n_elements": 16,
+      "storage": {
+        "location": "host",
+        "kind": "host_binary_split_real_imag_f64",
+        "path": "data_exchange/tensor_data.bin",
+        "offset_real_bytes": 704,
+        "offset_imag_bytes": 832,
+        "byte_length": 256
+      },
       "offset_real_bytes": 704,
       "offset_imag_bytes": 832
     }
@@ -135,10 +300,18 @@
   "tasks": [
     {
       "task_id": 0,
+      "id": "task_0",
+      "op_kind": "contraction",
       "input_A_key": "tensor_0",
       "input_B_key": "tensor_4",
+      "input_tensor_ids": [
+        "tensor_0",
+        "tensor_4"
+      ],
       "output_key": "result_0",
+      "output_tensor_id": "result_0",
       "einsum": "a,ae->e",
+      "index_expression": "a,ae->e",
       "shape_A": [
         2
       ],
@@ -147,6 +320,18 @@
         2
       ],
       "shape_out": [
+        2
+      ],
+      "input_shapes": [
+        [
+          2
+        ],
+        [
+          2,
+          2
+        ]
+      ],
+      "output_shape": [
         2
       ],
       "labels_A": [
@@ -172,14 +357,71 @@
       "n_row_blocks": 1,
       "n_col_blocks": 1,
       "needs_k_tiling": false,
+      "structure": "dense",
+      "density_estimate": 1.0,
+      "nnz_estimate": 2,
+      "candidate_routes": [
+        "cpu_reference",
+        "raw_upmem_dense"
+      ],
+      "selected_route": "raw_upmem_dense",
+      "selected_data_format": {
+        "name": "complex_i8_tile_scaled",
+        "logical_dtype": "complex_f64",
+        "accumulator": "int32",
+        "scale_scope": "tile",
+        "complex_layout": "split_real_imag"
+      },
+      "route_reason": "conference_mvp_validation_path_raw_upmem_dense",
+      "rejected_routes_with_reasons": [
+        {
+          "route": "simplepim_default",
+          "reason": "not_part_of_conference_mvp_path"
+        },
+        {
+          "route": "sparsep",
+          "reason": "task_classified_dense"
+        },
+        {
+          "route": "pidcomm_collective",
+          "reason": "single_dpu_no_collective_required"
+        }
+      ],
+      "estimated_cost": {
+        "host_to_dpu_bytes": 81968,
+        "dpu_to_host_bytes": 16384,
+        "mram_wram_bytes": 98352,
+        "integer_ops": 16,
+        "gemm_tile_invocations": 4,
+        "conversion_cost": "measured_by_host_execution_log",
+        "reduction_cost": 0,
+        "quantization_error": "measured_by_validation_record"
+      },
+      "tiling": {
+        "tile_rows": 16,
+        "tile_k": 256,
+        "tile_cols": 64,
+        "n_row_blocks": 1,
+        "n_col_blocks": 1,
+        "k_tiling": false,
+        "estimated_wram_bytes": 24576
+      },
       "is_final": false
     },
     {
       "task_id": 1,
+      "id": "task_1",
+      "op_kind": "contraction",
       "input_A_key": "result_0",
       "input_B_key": "tensor_7",
+      "input_tensor_ids": [
+        "result_0",
+        "tensor_7"
+      ],
       "output_key": "result_1",
+      "output_tensor_id": "result_1",
       "einsum": "e,idjk->eidjk",
+      "index_expression": "e,idjk->eidjk",
       "shape_A": [
         2
       ],
@@ -190,6 +432,24 @@
         2
       ],
       "shape_out": [
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "input_shapes": [
+        [
+          2
+        ],
+        [
+          2,
+          2,
+          2,
+          2
+        ]
+      ],
+      "output_shape": [
         2,
         2,
         2,
@@ -228,14 +488,71 @@
       "n_row_blocks": 1,
       "n_col_blocks": 1,
       "needs_k_tiling": false,
+      "structure": "dense",
+      "density_estimate": 1.0,
+      "nnz_estimate": 32,
+      "candidate_routes": [
+        "cpu_reference",
+        "raw_upmem_dense"
+      ],
+      "selected_route": "raw_upmem_dense",
+      "selected_data_format": {
+        "name": "complex_i8_tile_scaled",
+        "logical_dtype": "complex_f64",
+        "accumulator": "int32",
+        "scale_scope": "tile",
+        "complex_layout": "split_real_imag"
+      },
+      "route_reason": "conference_mvp_validation_path_raw_upmem_dense",
+      "rejected_routes_with_reasons": [
+        {
+          "route": "simplepim_default",
+          "reason": "not_part_of_conference_mvp_path"
+        },
+        {
+          "route": "sparsep",
+          "reason": "task_classified_dense"
+        },
+        {
+          "route": "pidcomm_collective",
+          "reason": "single_dpu_no_collective_required"
+        }
+      ],
+      "estimated_cost": {
+        "host_to_dpu_bytes": 81968,
+        "dpu_to_host_bytes": 16384,
+        "mram_wram_bytes": 98352,
+        "integer_ops": 128,
+        "gemm_tile_invocations": 4,
+        "conversion_cost": "measured_by_host_execution_log",
+        "reduction_cost": 0,
+        "quantization_error": "measured_by_validation_record"
+      },
+      "tiling": {
+        "tile_rows": 16,
+        "tile_k": 256,
+        "tile_cols": 64,
+        "n_row_blocks": 1,
+        "n_col_blocks": 1,
+        "k_tiling": false,
+        "estimated_wram_bytes": 24576
+      },
       "is_final": false
     },
     {
       "task_id": 2,
+      "id": "task_2",
+      "op_kind": "contraction",
       "input_A_key": "result_1",
       "input_B_key": "tensor_3",
+      "input_tensor_ids": [
+        "result_1",
+        "tensor_3"
+      ],
       "output_key": "result_2",
+      "output_tensor_id": "result_2",
       "einsum": "eijkd,d->eijk",
+      "index_expression": "eijkd,d->eijk",
       "shape_A": [
         2,
         2,
@@ -247,6 +564,24 @@
         2
       ],
       "shape_out": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "input_shapes": [
+        [
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        [
+          2
+        ]
+      ],
+      "output_shape": [
         2,
         2,
         2,
@@ -284,14 +619,71 @@
       "n_row_blocks": 1,
       "n_col_blocks": 1,
       "needs_k_tiling": false,
+      "structure": "dense",
+      "density_estimate": 1.0,
+      "nnz_estimate": 16,
+      "candidate_routes": [
+        "cpu_reference",
+        "raw_upmem_dense"
+      ],
+      "selected_route": "raw_upmem_dense",
+      "selected_data_format": {
+        "name": "complex_i8_tile_scaled",
+        "logical_dtype": "complex_f64",
+        "accumulator": "int32",
+        "scale_scope": "tile",
+        "complex_layout": "split_real_imag"
+      },
+      "route_reason": "conference_mvp_validation_path_raw_upmem_dense",
+      "rejected_routes_with_reasons": [
+        {
+          "route": "simplepim_default",
+          "reason": "not_part_of_conference_mvp_path"
+        },
+        {
+          "route": "sparsep",
+          "reason": "task_classified_dense"
+        },
+        {
+          "route": "pidcomm_collective",
+          "reason": "single_dpu_no_collective_required"
+        }
+      ],
+      "estimated_cost": {
+        "host_to_dpu_bytes": 81968,
+        "dpu_to_host_bytes": 16384,
+        "mram_wram_bytes": 98352,
+        "integer_ops": 128,
+        "gemm_tile_invocations": 4,
+        "conversion_cost": "measured_by_host_execution_log",
+        "reduction_cost": 0,
+        "quantization_error": "measured_by_validation_record"
+      },
+      "tiling": {
+        "tile_rows": 16,
+        "tile_k": 256,
+        "tile_cols": 64,
+        "n_row_blocks": 1,
+        "n_col_blocks": 1,
+        "k_tiling": false,
+        "estimated_wram_bytes": 24576
+      },
       "is_final": false
     },
     {
       "task_id": 3,
+      "id": "task_3",
+      "op_kind": "contraction",
       "input_A_key": "result_2",
       "input_B_key": "tensor_2",
+      "input_tensor_ids": [
+        "result_2",
+        "tensor_2"
+      ],
       "output_key": "result_3",
+      "output_tensor_id": "result_3",
       "einsum": "eijk,c->eijkc",
+      "index_expression": "eijk,c->eijkc",
       "shape_A": [
         2,
         2,
@@ -302,6 +694,24 @@
         2
       ],
       "shape_out": [
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "input_shapes": [
+        [
+          2,
+          2,
+          2,
+          2
+        ],
+        [
+          2
+        ]
+      ],
+      "output_shape": [
         2,
         2,
         2,
@@ -340,14 +750,71 @@
       "n_row_blocks": 1,
       "n_col_blocks": 1,
       "needs_k_tiling": false,
+      "structure": "dense",
+      "density_estimate": 1.0,
+      "nnz_estimate": 32,
+      "candidate_routes": [
+        "cpu_reference",
+        "raw_upmem_dense"
+      ],
+      "selected_route": "raw_upmem_dense",
+      "selected_data_format": {
+        "name": "complex_i8_tile_scaled",
+        "logical_dtype": "complex_f64",
+        "accumulator": "int32",
+        "scale_scope": "tile",
+        "complex_layout": "split_real_imag"
+      },
+      "route_reason": "conference_mvp_validation_path_raw_upmem_dense",
+      "rejected_routes_with_reasons": [
+        {
+          "route": "simplepim_default",
+          "reason": "not_part_of_conference_mvp_path"
+        },
+        {
+          "route": "sparsep",
+          "reason": "task_classified_dense"
+        },
+        {
+          "route": "pidcomm_collective",
+          "reason": "single_dpu_no_collective_required"
+        }
+      ],
+      "estimated_cost": {
+        "host_to_dpu_bytes": 81968,
+        "dpu_to_host_bytes": 16384,
+        "mram_wram_bytes": 98352,
+        "integer_ops": 128,
+        "gemm_tile_invocations": 4,
+        "conversion_cost": "measured_by_host_execution_log",
+        "reduction_cost": 0,
+        "quantization_error": "measured_by_validation_record"
+      },
+      "tiling": {
+        "tile_rows": 16,
+        "tile_k": 256,
+        "tile_cols": 64,
+        "n_row_blocks": 1,
+        "n_col_blocks": 1,
+        "k_tiling": false,
+        "estimated_wram_bytes": 24576
+      },
       "is_final": false
     },
     {
       "task_id": 4,
+      "id": "task_4",
+      "op_kind": "contraction",
       "input_A_key": "result_3",
       "input_B_key": "tensor_1",
+      "input_tensor_ids": [
+        "result_3",
+        "tensor_1"
+      ],
       "output_key": "result_4",
+      "output_tensor_id": "result_4",
       "einsum": "eijkc,b->eijkcb",
+      "index_expression": "eijkc,b->eijkcb",
       "shape_A": [
         2,
         2,
@@ -359,6 +826,26 @@
         2
       ],
       "shape_out": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "input_shapes": [
+        [
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        [
+          2
+        ]
+      ],
+      "output_shape": [
         2,
         2,
         2,
@@ -401,14 +888,71 @@
       "n_row_blocks": 2,
       "n_col_blocks": 1,
       "needs_k_tiling": false,
+      "structure": "dense",
+      "density_estimate": 1.0,
+      "nnz_estimate": 64,
+      "candidate_routes": [
+        "cpu_reference",
+        "raw_upmem_dense"
+      ],
+      "selected_route": "raw_upmem_dense",
+      "selected_data_format": {
+        "name": "complex_i8_tile_scaled",
+        "logical_dtype": "complex_f64",
+        "accumulator": "int32",
+        "scale_scope": "tile",
+        "complex_layout": "split_real_imag"
+      },
+      "route_reason": "conference_mvp_validation_path_raw_upmem_dense",
+      "rejected_routes_with_reasons": [
+        {
+          "route": "simplepim_default",
+          "reason": "not_part_of_conference_mvp_path"
+        },
+        {
+          "route": "sparsep",
+          "reason": "task_classified_dense"
+        },
+        {
+          "route": "pidcomm_collective",
+          "reason": "single_dpu_no_collective_required"
+        }
+      ],
+      "estimated_cost": {
+        "host_to_dpu_bytes": 163936,
+        "dpu_to_host_bytes": 32768,
+        "mram_wram_bytes": 196704,
+        "integer_ops": 256,
+        "gemm_tile_invocations": 8,
+        "conversion_cost": "measured_by_host_execution_log",
+        "reduction_cost": 0,
+        "quantization_error": "measured_by_validation_record"
+      },
+      "tiling": {
+        "tile_rows": 16,
+        "tile_k": 256,
+        "tile_cols": 64,
+        "n_row_blocks": 2,
+        "n_col_blocks": 1,
+        "k_tiling": false,
+        "estimated_wram_bytes": 24576
+      },
       "is_final": false
     },
     {
       "task_id": 5,
+      "id": "task_5",
+      "op_kind": "contraction",
       "input_A_key": "result_4",
       "input_B_key": "tensor_6",
+      "input_tensor_ids": [
+        "result_4",
+        "tensor_6"
+      ],
       "output_key": "result_5",
+      "output_tensor_id": "result_5",
       "einsum": "ejkbic,icgh->ejkbgh",
+      "index_expression": "ejkbic,icgh->ejkbgh",
       "shape_A": [
         2,
         2,
@@ -424,6 +968,30 @@
         2
       ],
       "shape_out": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "input_shapes": [
+        [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        [
+          2,
+          2,
+          2,
+          2
+        ]
+      ],
+      "output_shape": [
         2,
         2,
         2,
@@ -473,14 +1041,71 @@
       "n_row_blocks": 1,
       "n_col_blocks": 1,
       "needs_k_tiling": false,
+      "structure": "dense",
+      "density_estimate": 1.0,
+      "nnz_estimate": 64,
+      "candidate_routes": [
+        "cpu_reference",
+        "raw_upmem_dense"
+      ],
+      "selected_route": "raw_upmem_dense",
+      "selected_data_format": {
+        "name": "complex_i8_tile_scaled",
+        "logical_dtype": "complex_f64",
+        "accumulator": "int32",
+        "scale_scope": "tile",
+        "complex_layout": "split_real_imag"
+      },
+      "route_reason": "conference_mvp_validation_path_raw_upmem_dense",
+      "rejected_routes_with_reasons": [
+        {
+          "route": "simplepim_default",
+          "reason": "not_part_of_conference_mvp_path"
+        },
+        {
+          "route": "sparsep",
+          "reason": "task_classified_dense"
+        },
+        {
+          "route": "pidcomm_collective",
+          "reason": "single_dpu_no_collective_required"
+        }
+      ],
+      "estimated_cost": {
+        "host_to_dpu_bytes": 81968,
+        "dpu_to_host_bytes": 16384,
+        "mram_wram_bytes": 98352,
+        "integer_ops": 1024,
+        "gemm_tile_invocations": 4,
+        "conversion_cost": "measured_by_host_execution_log",
+        "reduction_cost": 0,
+        "quantization_error": "measured_by_validation_record"
+      },
+      "tiling": {
+        "tile_rows": 16,
+        "tile_k": 256,
+        "tile_cols": 64,
+        "n_row_blocks": 1,
+        "n_col_blocks": 1,
+        "k_tiling": false,
+        "estimated_wram_bytes": 24576
+      },
       "is_final": false
     },
     {
       "task_id": 6,
+      "id": "task_6",
+      "op_kind": "contraction",
       "input_A_key": "result_5",
       "input_B_key": "tensor_5",
+      "input_tensor_ids": [
+        "result_5",
+        "tensor_5"
+      ],
       "output_key": "result_6",
+      "output_tensor_id": "result_6",
       "einsum": "jkhebg,ebgf->jkhf",
+      "index_expression": "jkhebg,ebgf->jkhf",
       "shape_A": [
         2,
         2,
@@ -496,6 +1121,28 @@
         2
       ],
       "shape_out": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "input_shapes": [
+        [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        [
+          2,
+          2,
+          2,
+          2
+        ]
+      ],
+      "output_shape": [
         2,
         2,
         2,
@@ -540,6 +1187,55 @@
       "n_row_blocks": 1,
       "n_col_blocks": 1,
       "needs_k_tiling": false,
+      "structure": "dense",
+      "density_estimate": 1.0,
+      "nnz_estimate": 16,
+      "candidate_routes": [
+        "cpu_reference",
+        "raw_upmem_dense"
+      ],
+      "selected_route": "raw_upmem_dense",
+      "selected_data_format": {
+        "name": "complex_i8_tile_scaled",
+        "logical_dtype": "complex_f64",
+        "accumulator": "int32",
+        "scale_scope": "tile",
+        "complex_layout": "split_real_imag"
+      },
+      "route_reason": "conference_mvp_validation_path_raw_upmem_dense",
+      "rejected_routes_with_reasons": [
+        {
+          "route": "simplepim_default",
+          "reason": "not_part_of_conference_mvp_path"
+        },
+        {
+          "route": "sparsep",
+          "reason": "task_classified_dense"
+        },
+        {
+          "route": "pidcomm_collective",
+          "reason": "single_dpu_no_collective_required"
+        }
+      ],
+      "estimated_cost": {
+        "host_to_dpu_bytes": 81968,
+        "dpu_to_host_bytes": 16384,
+        "mram_wram_bytes": 98352,
+        "integer_ops": 512,
+        "gemm_tile_invocations": 4,
+        "conversion_cost": "measured_by_host_execution_log",
+        "reduction_cost": 0,
+        "quantization_error": "measured_by_validation_record"
+      },
+      "tiling": {
+        "tile_rows": 16,
+        "tile_k": 256,
+        "tile_cols": 64,
+        "n_row_blocks": 1,
+        "n_col_blocks": 1,
+        "k_tiling": false,
+        "estimated_wram_bytes": 24576
+      },
       "is_final": true
     }
   ]

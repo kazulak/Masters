@@ -1,11 +1,18 @@
-# UPMEM Tensor-Network Quantum Circuit Simulation MVP
+# UPMEM Dense-GEMM MVP Baseline
 
-This directory contains the dense-GEMM MVP for the thesis experiment: produce correct
-quantum-circuit amplitudes by executing tensor-network contraction tiles through an
-UPMEM DPU int8 GEMM kernel.
+This directory contains the fast dense-GEMM MVP that was built for conference
+validation. In the revised thesis architecture it should be treated as:
 
-The point of this MVP is correctness and measurement scaffolding, not speed. It proves
-the full loop exists:
+```text
+RawUPMEMProvider_baseline
+```
+
+It is not the final simulator architecture. Its job is to preserve the smallest
+known-good loop that produces correct quantum-circuit amplitudes by executing
+tensor-network contraction tiles through a UPMEM DPU int8 GEMM kernel.
+
+The point of this MVP is correctness, reproducibility, and baseline measurement,
+not speed. It proves the full loop exists:
 
 1. Build a tensor network from a small quantum circuit.
 2. Ask `opt_einsum` for a pairwise contraction path.
@@ -15,6 +22,23 @@ the full loop exists:
 6. Run the int8 GEMM on a DPU.
 7. Dequantize and accumulate complex results on the host.
 8. Compare the final amplitude tensor against NumPy.
+
+## Architecture Review Outcome
+
+The conference version proved the numerical path but hid too much information for
+the TaskGraph-centered V2 design. The MVP needed these changes:
+
+| Gap in conference MVP | Change made here |
+| --- | --- |
+| Task graph did not identify the route or data format. | `task_graph.json` now marks tasks as `raw_upmem_dense` with `complex_i8_tile_scaled`. |
+| Route decisions were implicit in the C host. | Host now writes `execution_log.json` with selected route records. |
+| Timing was only aggregate DMA/DPU timing. | Host now emits per-task profile records with prepare, pack/quantize, DMA, DPU, and dequantize/accumulate timing. |
+| Validation was console-only and did not affect exit code. | `validate.py` now writes `validation_record.json` and exits nonzero on failure. |
+| README described the MVP as the simulator. | README now documents it as a raw UPMEM baseline and V2 replay target. |
+
+The dense numerical path itself is intentionally unchanged. K-tiling, SimplePIM,
+SparseP, PID-Comm, multi-DPU scheduling, and route-aware planning belong in
+`../02_Modular_UPMEM_TN_Simulator`, not inside this MVP.
 
 ## Directory Layout
 
@@ -34,7 +58,9 @@ the full loop exists:
 │   ├── task_graph.json
 │   ├── tensor_data.bin
 │   ├── reference_output.npy
-│   └── output_amplitudes.bin
+│   ├── output_amplitudes.bin
+│   ├── execution_log.json
+│   └── validation_record.json
 ├── src_c/
 │   ├── main.c
 │   ├── quantizer.c
@@ -99,7 +125,8 @@ This stays below the 48 KiB safe data budget.
 `python_frontend/generate_plan.py` generates three files in `data_exchange/`:
 
 - `task_graph.json`: contraction tasks, tensor shapes, index labels, GEMM dimensions,
-  tile counts, and `needs_k_tiling`.
+  tile counts, `needs_k_tiling`, route metadata, data-format metadata, and static
+  cost estimates.
 - `tensor_data.bin`: initial tensor amplitudes, stored as real float64 block followed
   by imag float64 block for each tensor.
 - `reference_output.npy`: NumPy reference amplitude tensor for validation.
@@ -114,8 +141,9 @@ part of this MVP.
 
 ### 2. Host Orchestration
 
-`src_c/main.c` reads `task_graph.json` and `tensor_data.bin`, then runs the contraction
-tasks in order.
+`src_c/main.c` reads `task_graph.json` and `tensor_data.bin`, then runs the
+contraction tasks in order. It writes both `output_amplitudes.bin` and
+`execution_log.json`.
 
 For each contraction task:
 
@@ -142,6 +170,17 @@ For each contraction task:
 
 If any task has `needs_k_tiling: true`, the host aborts clearly. K-tiling is deliberately
 out of scope for this MVP.
+
+The host route is fixed:
+
+```text
+selected_route = raw_upmem_dense
+selected_format = complex_i8_tile_scaled
+decision_policy = mvp_fixed_route
+```
+
+This is deliberate. V2 should wrap this as the raw dense baseline, not turn this
+directory into the full dispatcher.
 
 ### 3. DPU Kernel
 
@@ -219,7 +258,8 @@ Run the host orchestrator:
 ./mvp_host \
   data_exchange/task_graph.json \
   data_exchange/tensor_data.bin \
-  data_exchange/output_amplitudes.bin
+  data_exchange/output_amplitudes.bin \
+  data_exchange/execution_log.json
 ```
 
 Validate:
@@ -231,7 +271,7 @@ Validate:
 Expected result:
 
 ```text
-✓ PASS — amplitude within int8 tolerance
+[validate] PASS - amplitude within int8 tolerance
 ```
 
 The reference Bell state is:
@@ -254,7 +294,8 @@ Run:
 ./mvp_host \
   data_exchange/task_graph.json \
   data_exchange/tensor_data.bin \
-  data_exchange/output_amplitudes.bin
+  data_exchange/output_amplitudes.bin \
+  data_exchange/execution_log.json
 ```
 
 Validate:
@@ -266,7 +307,7 @@ Validate:
 Expected result:
 
 ```text
-✓ PASS — amplitude within int8 tolerance
+[validate] PASS - amplitude within int8 tolerance
 ```
 
 The reference GHZ state has nonzero amplitudes only at `|0000>` and `|1111>`.
@@ -296,12 +337,16 @@ on hardware without source changes.
 Contains:
 
 - global tile metadata
+- MVP schema version and baseline role
 - initial tensor records
 - one task per pairwise contraction
 - GEMM dimensions: `m`, `k`, `n`
 - tile counts: `n_row_blocks`, `n_col_blocks`
 - tensor index labels needed by the C host to reshape correctly
 - `needs_k_tiling`
+- candidate and selected routes
+- selected data format
+- static byte/op estimates
 
 Quick inspection:
 
@@ -344,6 +389,39 @@ float64 imag[n_elements]
 `python_frontend/validate.py` reads this file and compares it with
 `reference_output.npy`.
 
+### `execution_log.json`
+
+Written by `mvp_host`. Contains:
+
+- baseline role: `RawUPMEMProvider_baseline`
+- fixed route decisions
+- selected format
+- per-task GEMM shape and tile count
+- per-task timing:
+  - host prepare
+  - host pack/quantize
+  - host-to-DPU DMA
+  - DPU kernel
+  - DPU-to-host DMA
+  - host dequantize/accumulate
+- aggregate timing and byte counts
+
+This is the file V2 should use as evidence when replaying the MVP route.
+
+### `validation_record.json`
+
+Written by `python_frontend/validate.py`. Contains:
+
+- compared route: `raw_upmem_dense`
+- reference route: `cpu_reference_numpy`
+- selected data format
+- tolerance
+- max absolute error
+- max relative error
+- norm drift
+- fidelity when available
+- pass/fail status
+
 ## Performance Report
 
 `mvp_host` prints:
@@ -351,10 +429,17 @@ float64 imag[n_elements]
 ```text
 === Performance Report ===
 Total wall time
+Host prepare
+Host pack/quant
 DMA host->DPU
 DPU map phase
 DMA DPU->host
+Host dequant/acc
+GEMM tile calls
+Bytes host->DPU
+Bytes DPU->host
 Output path
+Execution log path
 Output n_elements
 ```
 
@@ -389,24 +474,32 @@ Implemented:
 
 - dense tensor-network contraction
 - `opt_einsum` contraction path
+- raw UPMEM fixed route metadata
+- static route/data-format metadata in `task_graph.json`
 - int8 tile quantization
 - complex GEMM via four real GEMMs
 - DPU-side int8 GEMM
 - host-side double accumulation
+- per-task execution log
+- machine-readable validation record
 - Bell and GHZ validation
 
 Not implemented:
 
 - QASM parser
 - K-tiling for `k > TILE_K`
+- SimplePIM provider
 - sparse route
 - heuristic route
 - multi-DPU row distribution
+- collective provider
 - gate fusion or contraction-path research heuristics
+- route-aware planning
 - performance tuning
 
-These omissions are intentional. This MVP is the smallest complete loop that can produce
-correct amplitudes through a UPMEM DPU kernel.
+These omissions are intentional. This MVP is the smallest complete loop that can
+produce correct amplitudes through a UPMEM DPU kernel and a baseline artifact that
+V2 can replay.
 
 ## Troubleshooting
 
@@ -438,4 +531,3 @@ K-tiling is out of MVP scope.
 
 The SDK may fall back to the simulator backend. That is fine for correctness checks.
 For thesis measurements, rerun on a host where UPMEM ranks are visible to the SDK.
-

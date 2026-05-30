@@ -1,0 +1,20 @@
+{
+  "schema_version": "mvp_validation_record-0.2",
+  "status": "pass",
+  "reference_route": "cpu_reference_numpy",
+  "compared_route": "raw_upmem_dense",
+  "data_format": "complex_i8_tile_scaled",
+  "output_path": "/home/tom/repos/Masters/thesis/01_MVP_DenseGEMM/data_exchange/output_amplitudes.bin",
+  "reference_path": "/home/tom/repos/Masters/thesis/01_MVP_DenseGEMM/data_exchange/reference_output.npy",
+  "tolerance": {
+    "max_rel_error": 0.02
+  },
+  "metrics": {
+    "max_abs_error": 0.0,
+    "max_rel_error": 0.0,
+    "norm_drift": 0.0,
+    "fidelity": 1.0,
+    "result_norm": 0.9999999999999999,
+    "reference_norm": 0.9999999999999999
+  }
+}
