@@ -20,13 +20,13 @@
 	"summary":	{
 		"n_tasks":	7,
 		"gemm_tile_invocations":	32,
-		"total_wall_seconds":	0.004724379992694594,
-		"host_prepare_seconds":	3.9580045267939568e-06,
-		"host_pack_quantize_seconds":	3.2079988159239292e-06,
-		"h2d_dma_seconds":	0.000244294962612912,
-		"dpu_kernel_seconds":	0.00403579005796928,
-		"d2h_dma_seconds":	0.000228136035730131,
-		"host_dequantize_accumulate_seconds":	2.9460497898980975e-06,
+		"total_wall_seconds":	0.0047258350004995,
+		"host_prepare_seconds":	3.8180023693712428e-06,
+		"host_pack_quantize_seconds":	2.9750008252449334e-06,
+		"h2d_dma_seconds":	0.00025069900766538922,
+		"dpu_kernel_seconds":	0.0040079709942801856,
+		"d2h_dma_seconds":	0.00023872899873822462,
+		"host_dequantize_accumulate_seconds":	2.85200439975597e-06,
 		"host_to_dpu_bytes":	655744,
 		"dpu_to_host_bytes":	131072
 	},
@@ -92,14 +92,14 @@
 				"gemm_tile_invocations":	4
 			},
 			"timing_seconds":	{
-				"host_prepare":	1.910084392875433e-07,
-				"host_pack_quantize":	5.61005435883999e-07,
-				"h2d_dma":	3.6327997804619372e-05,
-				"dpu_kernel":	0.00043193700548727065,
-				"d2h_dma":	3.19399987347424e-05,
-				"host_dequantize_accumulate":	4.4201442506164312e-07,
+				"host_prepare":	1.9000071915797889e-07,
+				"host_pack_quantize":	3.30999682773836e-07,
+				"h2d_dma":	3.7019000956206582e-05,
+				"dpu_kernel":	0.00042980500074918382,
+				"d2h_dma":	3.4986000173375942e-05,
+				"host_dequantize_accumulate":	3.400018613319844e-07,
 				"host_reduce":	0,
-				"total":	0.000531302997842431
+				"total":	0.000534520999281085
 			},
 			"bytes":	{
 				"host_to_dpu":	81968,
@@ -124,14 +124,14 @@
 				"gemm_tile_invocations":	4
 			},
 			"timing_seconds":	{
-				"host_prepare":	2.90994648821652e-07,
-				"host_pack_quantize":	3.4100958146154881e-07,
-				"h2d_dma":	3.1108982511796057e-05,
-				"dpu_kernel":	0.00044766701466869563,
-				"d2h_dma":	3.1620002118870616e-05,
-				"host_dequantize_accumulate":	4.0001759771257639e-07,
+				"host_prepare":	2.5100052880588919e-07,
+				"host_pack_quantize":	3.30999682773836e-07,
+				"h2d_dma":	3.62270002369769e-05,
+				"dpu_kernel":	0.00043729800017899834,
+				"d2h_dma":	3.1990000934456475e-05,
+				"host_dequantize_accumulate":	4.10000211559236e-07,
 				"host_reduce":	0,
-				"total":	0.000541842993698083
+				"total":	0.00053542199930234347
 			},
 			"bytes":	{
 				"host_to_dpu":	81968,
@@ -156,14 +156,14 @@
 				"gemm_tile_invocations":	4
 			},
 			"timing_seconds":	{
-				"host_prepare":	5.1100505515933037e-07,
-				"host_pack_quantize":	3.8099824450910091e-07,
-				"h2d_dma":	3.0064999009482563e-05,
-				"dpu_kernel":	0.00045099301496520638,
-				"d2h_dma":	2.80920066870749e-05,
-				"host_dequantize_accumulate":	3.1100353226065636e-07,
+				"host_prepare":	4.90999809699133e-07,
+				"host_pack_quantize":	3.7999961932655424e-07,
+				"h2d_dma":	3.1619001674698666e-05,
+				"dpu_kernel":	0.00042431399924680591,
+				"d2h_dma":	3.142800233035814e-05,
+				"host_dequantize_accumulate":	3.0100090953055769e-07,
 				"host_reduce":	0,
-				"total":	0.00053765499615110457
+				"total":	0.000518029999511782
 			},
 			"bytes":	{
 				"host_to_dpu":	81968,
@@ -188,14 +188,14 @@
 				"gemm_tile_invocations":	4
 			},
 			"timing_seconds":	{
-				"host_prepare":	2.8099748305976391e-07,
-				"host_pack_quantize":	2.8099748305976391e-07,
-				"h2d_dma":	3.4483993658795953e-05,
-				"dpu_kernel":	0.00044713501119986176,
-				"d2h_dma":	2.7771995519287884e-05,
-				"host_dequantize_accumulate":	4.400062607601285e-07,
+				"host_prepare":	2.3000029614195228e-07,
+				"host_pack_quantize":	3.0000046535860747e-07,
+				"h2d_dma":	2.9355000151554123e-05,
+				"dpu_kernel":	0.0004457849954633275,
+				"d2h_dma":	2.6640997020876966e-05,
+				"host_dequantize_accumulate":	3.8000143831595778e-07,
 				"host_reduce":	0,
-				"total":	0.000536241990630515
+				"total":	0.00053081300029589329
 			},
 			"bytes":	{
 				"host_to_dpu":	81968,
@@ -220,14 +220,14 @@
 				"gemm_tile_invocations":	8
 			},
 			"timing_seconds":	{
-				"host_prepare":	4.19997377321124e-07,
-				"host_pack_quantize":	4.5100750867277384e-07,
-				"h2d_dma":	5.5936005082912743e-05,
-				"dpu_kernel":	0.00087933201575651765,
-				"d2h_dma":	5.24969946127385e-05,
-				"host_dequantize_accumulate":	5.70013071410358e-07,
+				"host_prepare":	4.31000444223173e-07,
+				"host_pack_quantize":	4.6100103645585477e-07,
+				"h2d_dma":	5.62270033697132e-05,
+				"dpu_kernel":	0.00088250200133188628,
+				"d2h_dma":	5.5835000239312649e-05,
+				"host_dequantize_accumulate":	5.8999830798711628e-07,
 				"host_reduce":	0,
-				"total":	0.0010208180028712377
+				"total":	0.0010289150013704784
 			},
 			"bytes":	{
 				"host_to_dpu":	163936,
@@ -252,14 +252,14 @@
 				"gemm_tile_invocations":	4
 			},
 			"timing_seconds":	{
-				"host_prepare":	1.1319934856146574e-06,
-				"host_pack_quantize":	5.91986463405192e-07,
-				"h2d_dma":	2.7228990802541375e-05,
-				"dpu_kernel":	0.00084178298129700124,
-				"d2h_dma":	2.698102616705e-05,
-				"host_dequantize_accumulate":	5.0199741963297129e-07,
+				"host_prepare":	1.1330012057442218e-06,
+				"host_pack_quantize":	5.6099997891578823e-07,
+				"h2d_dma":	2.8573000236065127e-05,
+				"dpu_kernel":	0.0008540779981558444,
+				"d2h_dma":	2.7510999643709511e-05,
+				"host_dequantize_accumulate":	4.9000118451658636e-07,
 				"host_reduce":	0,
-				"total":	0.00092443800531327724
+				"total":	0.00094168299983721226
 			},
 			"bytes":	{
 				"host_to_dpu":	81968,
@@ -284,14 +284,14 @@
 				"gemm_tile_invocations":	4
 			},
 			"timing_seconds":	{
-				"host_prepare":	1.1320080375298858e-06,
-				"host_pack_quantize":	6.00994098931551e-07,
-				"h2d_dma":	2.9143993742764e-05,
-				"dpu_kernel":	0.00053694301459472626,
-				"d2h_dma":	2.9234011890366673e-05,
-				"host_dequantize_accumulate":	2.8099748305976391e-07,
+				"host_prepare":	1.0919993655988947e-06,
+				"host_pack_quantize":	6.1100035964045674e-07,
+				"h2d_dma":	3.1679001040174626e-05,
+				"dpu_kernel":	0.00053418899915413931,
+				"d2h_dma":	3.0337998396134935e-05,
+				"host_dequantize_accumulate":	3.41000486514531e-07,
 				"host_reduce":	0,
-				"total":	0.000625147993559949
+				"total":	0.00062918799994804431
 			},
 			"bytes":	{
 				"host_to_dpu":	81968,

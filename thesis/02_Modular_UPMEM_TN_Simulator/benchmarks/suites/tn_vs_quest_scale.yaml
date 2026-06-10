@@ -1,0 +1,17 @@
+suite_id: tn_vs_quest_scale
+description: Compare tensor-network CPU and exact QuEST full-state routes on small, medium, and large local GHZ workloads.
+results_dir: results/tn_vs_quest_scale
+baseline_experiment: bell_2q_tn_cpu
+
+configs:
+  - benchmarks/configs/tn_cpu/bell_2q.yaml
+  - benchmarks/configs/quest_exact/bell_2q.yaml
+  - benchmarks/configs/tn_cpu/ghz_4q.yaml
+  - benchmarks/configs/quest_exact/ghz_4q.yaml
+  - benchmarks/configs/tn_cpu/ghz_8q.yaml
+  - benchmarks/configs/quest_exact/ghz_8q.yaml
+  - benchmarks/configs/tn_cpu/ghz_12q.yaml
+  - benchmarks/configs/quest_exact/ghz_12q.yaml
+  - benchmarks/configs/tn_cpu/ghz_16q.yaml
+  - benchmarks/configs/quest_exact/ghz_16q.yaml
+

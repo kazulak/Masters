@@ -126,6 +126,33 @@ Selected execution route per TaskNode
 Validation + profiling + experiment record
 ```
 
+## Source Layout Rule
+
+The implementation follows the same pipeline boundaries as the architecture.
+Each step has a folder so multiple implementations can coexist without turning
+one file into a framework dump:
+
+```text
+src/tnsim/
++-- core/        # shared dataclasses, file IO, small utilities
++-- config/      # YAML config loaders and future config schemas
++-- circuits/    # built-in workloads and QASM parsers
++-- network/     # circuit-to-tensor-network builders
++-- task_graph/  # TaskGraphV2 planners/lowerers
++-- dispatch/    # route eligibility and selection policies
++-- execution/   # CPU TN, QuEST exact, and future GPU/PIM executors
++-- validation/  # reference outputs and correctness metrics
++-- records/     # execution logs and per-run records
++-- results/     # metric extraction, summaries, charts
++-- suite/       # multi-run orchestration
++-- runner.py    # single-run orchestrator
+```
+
+Adding a new implementation should usually mean adding a file inside the
+corresponding step folder, for example `execution/gpu_cupy.py`,
+`task_graph/cotengra_v1.py`, or `results/energy_rapl.py`. The orchestrators
+should remain small.
+
 ## Domain Core
 
 Domain objects must be serializable, deterministic, and free of hardware calls.

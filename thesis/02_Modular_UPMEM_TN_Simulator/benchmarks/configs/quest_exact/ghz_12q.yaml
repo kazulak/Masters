@@ -1,0 +1,44 @@
+schema_version: benchmark_config-0.1
+
+experiment:
+  id: ghz_12q_quest_exact
+  description: Medium local exact QuEST full-state CPU route for GHZ 12q.
+  seed: 0
+  tags: [quest, full_state, cpu, medium]
+  output_dir: runs/ghz_12q_quest_exact
+
+workload:
+  kind: builtin_circuit
+  name: ghz_chain
+  n_qubits: 12
+
+planner:
+  engine: opt_einsum
+  optimize: greedy
+
+execution:
+  warmups: 1
+  repeats: 3
+  routes:
+    enabled: [quest_exact_statevector]
+    forced: quest_exact_statevector
+    disabled: [cpu_reference, raw_upmem_dense, gpu_cupy, simplepim_default, custom_dense, sparsep, pidcomm_collective]
+  data_format:
+    name: complex_f64_host
+    logical_dtype: complex_f64
+    accumulator: complex_f64
+    scale_scope: none
+
+measurement:
+  energy:
+    mode: rapl_or_estimated_static_power
+    cpu_watts: 65.0
+
+validation:
+  reference: numpy_full_einsum
+  tolerances:
+    max_abs_error: 1.0e-12
+    max_rel_error: 1.0e-12
+    norm_drift: 1.0e-12
+    min_fidelity: 0.999999999999
+

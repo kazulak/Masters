@@ -1,0 +1,43 @@
+schema_version: benchmark_config-0.1
+
+experiment:
+  id: ghz_4q_upmem_sim
+  description: Raw UPMEM DenseGEMM MVP route under UPMEM simulator for GHZ 4q.
+  seed: 0
+  tags: [upmem, simulator, mvp, sanity]
+  output_dir: runs/ghz_4q_upmem_sim
+
+workload:
+  kind: builtin_circuit
+  name: ghz_4q
+
+planner:
+  engine: opt_einsum
+  optimize: optimal
+
+execution:
+  warmups: 0
+  repeats: 3
+  routes:
+    enabled: [raw_upmem_dense]
+    forced: raw_upmem_dense
+    disabled: [cpu_reference, quest_exact_statevector, gpu_cupy, simplepim_default, custom_dense, sparsep, pidcomm_collective]
+  data_format:
+    name: complex_i8_tile_scaled
+    logical_dtype: complex_f64
+    accumulator: int32
+    scale_scope: tile
+
+measurement:
+  energy:
+    mode: estimated_static_power
+    cpu_watts: 65.0
+
+validation:
+  reference: numpy_full_einsum
+  tolerances:
+    max_abs_error: 2.0e-2
+    max_rel_error: 2.0e-2
+    norm_drift: 2.0e-2
+    min_fidelity: 0.999
+
