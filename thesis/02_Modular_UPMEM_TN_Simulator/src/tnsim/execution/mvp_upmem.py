@@ -14,7 +14,7 @@ from tnsim.core.model import ExecutionRun, TensorNetwork
 from .energy import estimate_energy
 
 
-SUPPORTED_CIRCUITS = {"bell_2q", "ghz_4q"}
+SUPPORTED_CIRCUITS = {"bell_2q", "ghz_4q", "ghz_chain"}
 
 
 def execute_mvp_upmem(network: TensorNetwork, config: dict, output_dir: Path) -> ExecutionRun:

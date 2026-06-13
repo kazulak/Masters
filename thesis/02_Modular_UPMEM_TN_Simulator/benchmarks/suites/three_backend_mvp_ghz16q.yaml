@@ -1,0 +1,9 @@
+suite_id: three_backend_mvp
+description: Compare TN CPU, exact QuEST full-state CPU, and raw UPMEM DenseGEMM MVP simulator on shared MVP-sized workloads.
+results_dir: results/three_backend_mvp_ghz16q
+baseline_experiment: ghz_16q
+
+configs:
+  - benchmarks/configs/tn_cpu/ghz_16q.yaml
+  - benchmarks/configs/quest_exact/ghz_16q.yaml
+  - benchmarks/configs/upmem_sim/ghz_16q.yaml
