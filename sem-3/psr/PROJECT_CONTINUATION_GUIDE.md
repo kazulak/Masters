@@ -2,6 +2,8 @@
 
 This document explains how to continue the project from the current POC state. It is written as a teaching handoff: what to do, why it matters, and how to avoid common mistakes.
 
+For the current engineering review, known weaknesses, and recommended priority order, read [PROJECT_REVIEW_AND_PRIORITIES.md](./PROJECT_REVIEW_AND_PRIORITIES.md) before starting new implementation work. For the single canonical continuation prompt, read [NEXT_PROMPT.md](./NEXT_PROMPT.md).
+
 ## 1. Where The Project Is Now
 
 You have a working local POC of a cloud-native service-oriented application:
@@ -10,10 +12,11 @@ You have a working local POC of a cloud-native service-oriented application:
 - Backend services: User Profile, Book Catalog, Embedding Worker, Recommendation, LLM Service.
 - Data: PostgreSQL with normalized tables and pgvector support in Docker Compose.
 - Async communication: event boundary is preserved through `BookCreated`, `BookEmbedded`, and `UserBookAdded`.
-- LLM path: local Ollama through the `llm-service` container, with deterministic mode for tests. The default local generation model is `gemma4:e2b`.
+- LLM path: local Ollama through the `llm-service` container, with deterministic mode for tests. The default local generation model is `gemma4:e2b`, and app calls use `OLLAMA_THINK=false` so Gemma 4 returns final text through `/api/generate` instead of spending the token budget on hidden thinking.
 - Standalone LLM path: `docker-compose.llm.yml` can run only Ollama and LLM Service for quick prompt testing.
 - AMD GPU path: `docker-compose.amd.yml` and `docker-compose.llm.amd.yml` switch Ollama to the ROCm image and pass AMD GPU devices into the container.
 - Local demo catalog: `POST /catalog/seed/demo` gives the recommender a stable offline corpus when Open Library is slow or unavailable.
+- Recommendation filtering: cached reads and recomputation exclude books already in the user's reading list by exact ID and logical identity (`isbn`, `openlibrary_key`, normalized `title + author`). The API returns a `filter_summary`, so the frontend can show how many cached items were hidden. This matters because demo/manual/Open Library sources can create different database IDs for the same book.
 - Azure path: Bicep, GitHub Actions, Azure Service Bus adapter, and Azure OpenAI adapter are prepared. Bicep builds locally, Azure what-if passes in `spaincentral`, and the adapters have mocked tests.
 
 The correct mental model is:
@@ -91,6 +94,7 @@ Why:
 - Ollama models stay in the persistent `ollama-models` Docker volume.
 - You hit `llm-service` on port `8005`, not Ollama directly.
 - Ollama remains internal-only, so host port `11434` can still be used by another local Ollama install.
+- Docker defaults to `LLM_PROVIDER=ollama-with-fallback`: it tries Ollama first and logs/falls back to a deterministic template only if Ollama fails, times out, or returns empty text.
 
 Gemma 4 model choice:
 
@@ -98,6 +102,7 @@ Gemma 4 model choice:
 - Use `OLLAMA_GENERATE_MODEL=gemma4:e4b` only if the local machine has enough GPU memory.
 - Use `OLLAMA_GENERATE_MODEL=gemma4:26b` only as an explicit MoE experiment. It has about 4B active parameters, but the full package is much larger than the edge models.
 - Do not set `gemma4:31b` as the default for this project; it is a workstation-class dense model.
+- Keep `OLLAMA_THINK=false` for normal app demos. The Ollama CLI may show thinking output, but `/api/generate` can return an empty `response` when thinking consumes the whole `num_predict` budget.
 
 For AMD GPU acceleration, first verify the host devices:
 
@@ -128,6 +133,14 @@ Why:
 - A recommender needs unread candidate books to recommend.
 - Open Library may be slow or temporarily unavailable.
 - The demo seed publishes the same `BookCreated` events, so it still tests the async embedding pipeline.
+
+For presentation, use the stronger one-click path:
+
+```text
+System flow -> Run demo scenario
+```
+
+That button seeds the demo catalog, adds Dune to the reading list, runs the embedding and recommendation workers, and reads cached recommendations. It is the fastest way to show the microservice flow without relying on background timing.
 
 ### Step 4 - Understand The Azure Region Policy
 
@@ -363,12 +376,13 @@ Be honest about these points in a submission or defense:
 
 - Azure adapters are tested with mocks and Bicep what-if, but not yet proven through live deployed Container Apps.
 - Bicep includes PostgreSQL Flexible Server, but still needs managed identities and stronger secret handling.
-- Endpoint-level FastAPI tests are postponed because `TestClient` hung in the current runtime.
-- Failure-path tests are still missing for Open Library, Ollama, Azure Service Bus, and PostgreSQL.
+- Endpoint-level FastAPI tests now have a stable real-process path in `tests/test_http_process_endpoints.py`. It starts Uvicorn services on localhost ports and calls endpoints over HTTP. The old `tests/test_http_endpoints.py` in-process ASGI harness remains quarantined and skipped unless `RUN_EXPERIMENTAL_HTTP_TESTS=1`.
+- Failure-path tests now cover Open Library timeout propagation, Book Catalog 502 mapping, Ollama generation fallback, PostgreSQL connection failure, and an embedding-worker LLM dependency failure through the real-process HTTP harness. Azure Service Bus live failure paths and broader endpoint-level errors still need coverage.
 - pgvector ANN indexes should be added after the final embedding dimension is known.
-- The UI is still intentionally minimal; local reliability now depends on the demo catalog seed and async worker smoke tests.
+- The UI now has a topology-style System flow tab, service health, model config, event backlog/timestamps, worker run/failure/latency state, runtime smoke checks, a one-click demo scenario, explicit recommendation refresh/process controls, side-by-side recommendation mode comparison, recommendation filtering feedback, empty states, and addable recommendation cards. Browser-level regression is wired into CI through a dedicated Playwright/Chromium job.
+- The local app smoke now fails if recommendations overlap the user's reading list by ID or logical book identity.
 - Local Gemma 4 AMD GPU execution still needs a live smoke run on a host where `/dev/kfd` and `/dev/dri` are visible to Docker.
-- The latest main Compose run pulled and served `gemma4:e2b`, but Ollama logs showed CPU execution in this sandbox because the AMD ROCm devices were not visible.
+- The latest main Compose run served `gemma4:e2b` through `llm-service` with `provider=ollama:gemma4:e2b` for direct generation, but Ollama logs showed CPU execution in this sandbox because the AMD ROCm devices were not visible.
 
 This is not a failure. It is a normal POC state. The important thing is that the project already documents the gap and has a clear path to close it.
 
@@ -376,20 +390,20 @@ This is not a failure. It is a normal POC state. The important thing is that the
 
 Do this as the next focused implementation pass:
 
-1. Use the main Docker stack and `scripts/local_app_smoke.py` as the default local acceptance test.
-2. Use `docker-compose.llm.yml` and `scripts/llm_prompt.py` when debugging prompt behavior.
-3. Pull and smoke-test `gemma4:e2b` through `llm-service`.
-4. If AMD ROCm devices are present, run the AMD compose override and confirm Ollama uses the GPU path.
-5. Add failure-path tests for Open Library timeouts, Ollama errors, and PostgreSQL connection failures.
-6. Add stable HTTP-level endpoint tests without the currently hanging `TestClient` path.
-7. Improve the Streamlit UX around async processing status.
-8. Only after local testing is smooth, decide whether to deploy infrastructure-only resources in `spaincentral`.
-9. Add pgvector ANN indexes after the embedding dimension is final.
+1. Keep the acceptance loop short: host pytest, Docker pytest, isolated Compose smoke, local app smoke.
+2. Extend browser/screenshot regression from the System flow tab to the Recommendations tab and one-click demo path.
+3. Polish the System flow tab further: clearer fallback/model status and cleaner visual hierarchy.
+4. Expand the real-process HTTP endpoint tests with more failure paths and edge cases.
+5. If AMD ROCm devices are present, run the AMD compose override and confirm Ollama uses the GPU path.
+6. Only after local testing is smooth, decide whether to deploy infrastructure-only resources in `spaincentral`.
+7. Add pgvector ANN indexes after the embedding dimension is final.
 
 Suggested test commands after the pass:
 
 ```bash
 pytest -q
+scripts/docker_pytest.sh
+PYTHON_BIN=.venv/bin/python scripts/compose_smoke.sh
 docker compose up -d --build
 .venv/bin/python scripts/local_app_smoke.py
 docker compose -f docker-compose.llm.yml config
@@ -419,14 +433,29 @@ az deployment group what-if \
 | Should I deploy now? | Not while local app behavior is still being refined. Infrastructure-only deployment is reasonable later. |
 | Should I continue in Docker? | Yes. Treat Docker Compose as staging. |
 | Can Azure services call local Ollama? | Technically yes through tunnel/VPN/public endpoint, but it is fragile and not recommended for the final POC. |
-| Best LLM setup for local dev? | Ollama inside Docker Compose, defaulting to `gemma4:e2b` for local GPU practicality. |
+| Best LLM setup for local dev? | Ollama inside Docker Compose, defaulting to `gemma4:e2b` and `OLLAMA_THINK=false` for local GPU practicality and stable API responses. |
 | Best LLM setup for Azure? | Azure OpenAI behind the existing LLM Service adapter. |
 | What must not change? | Do not remove the async recommendation boundary. |
+| Why can owned books still appear if filtering only by ID? | The same book can exist as manual, demo, and Open Library records with different IDs. Filter by ISBN/Open Library key/title-author identity too. |
 
-## 12. Prompt For The Next Session
+## 12. Current Best Work Focus
 
-Use this prompt when continuing:
+The best next work is not Azure. The best next work is making the local demo presentation-proof.
 
-```text
-You are a senior software developer and DevOps engineer. Continue the Book AI Library POC. Read README.md and PROJECT_CONTINUATION_GUIDE.md first. Keep both documents up to date. Focus locally before Azure unless explicitly asked to deploy. The local LLM default is Gemma 4 via OLLAMA_GENERATE_MODEL=gemma4:e2b; larger Gemma 4 models are opt-in, and the MoE choice is gemma4:26b only for machines with enough memory. AMD ROCm Compose overrides exist in docker-compose.amd.yml and docker-compose.llm.amd.yml. The recommendation API now filters cached rows against the user's current reading list, so the just-added book should not be returned while async recomputation catches up. Next, run the Gemma 4 LLM smoke locally, verify whether /dev/kfd and /dev/dri are available for AMD GPU Docker passthrough, harden the local UX and failure-path tests for Open Library/Ollama/PostgreSQL, add stable HTTP-level endpoint tests, and preserve the async recommendation boundary.
-```
+Work in this order:
+
+1. Extend Streamlit browser regression to Recommendations and the one-click demo path.
+2. Continue UI polish on the System flow and recommendation states.
+3. More HTTP/browser tests using the real-process harness; keep the skipped in-process tests quarantined until the runtime issue is solved.
+4. Event observability refinements: persisted failure history, DLQ-style diagnostics, and clearer fallback/model status.
+5. Only then return to Azure deployment.
+
+Why:
+
+- The app already satisfies the architectural shape.
+- A reviewer will judge the POC by whether the local flow is understandable and reliable.
+- Azure deployment should prove portability, not hide local product issues.
+
+## 13. Next Prompt
+
+There is only one continuation prompt for the project: [NEXT_PROMPT.md](./NEXT_PROMPT.md).

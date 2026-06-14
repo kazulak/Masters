@@ -1,0 +1,17 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+ENV PYTHONPATH=/app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY shared ./shared
+COPY services ./services
+COPY frontend ./frontend
+COPY tests ./tests
+COPY scripts ./scripts
+COPY docker-compose.yml docker-compose.ci.yml docker-compose.llm.yml docker-compose.amd.yml docker-compose.llm.amd.yml ./
+COPY infra ./infra
+
+CMD ["pytest", "-q"]

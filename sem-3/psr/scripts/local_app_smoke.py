@@ -16,6 +16,27 @@ def require_ok(response: requests.Response) -> requests.Response:
     return response
 
 
+def normalize(value: object) -> str:
+    return " ".join(str(value or "").lower().strip().split())
+
+
+def book_identity_keys(book: dict) -> set[str]:
+    keys = set()
+    isbn = normalize(book.get("isbn"))
+    if isbn:
+        keys.add(f"isbn:{isbn}")
+    openlibrary_key = normalize(book.get("openlibrary_key"))
+    if openlibrary_key:
+        keys.add(f"openlibrary:{openlibrary_key}")
+    title = normalize(book.get("title"))
+    author = normalize(book.get("author"))
+    if title and author:
+        keys.add(f"title-author:{title}|{author}")
+    elif title:
+        keys.add(f"title:{title}")
+    return keys
+
+
 def main() -> None:
     frontend_url = env_url("FRONTEND_URL", "http://127.0.0.1:8501")
     user_url = env_url("USER_PROFILE_URL", "http://127.0.0.1:8001")
@@ -67,6 +88,19 @@ def main() -> None:
             recommended_ids = {book["id"] for book in last_payload["books"]}
             if added_book_id in recommended_ids:
                 raise SystemExit(f"recommendations included the just-added book {added_book_id}: {last_payload}")
+            reading_list = require_ok(requests.get(f"{user_url}/me/books", headers=headers, timeout=10)).json()["books"]
+            owned_keys = {
+                key
+                for book in reading_list
+                for key in book_identity_keys(book)
+            }
+            overlaps = [
+                {"title": book["title"], "keys": sorted(book_identity_keys(book).intersection(owned_keys))}
+                for book in last_payload["books"]
+                if book_identity_keys(book).intersection(owned_keys)
+            ]
+            if overlaps:
+                raise SystemExit(f"recommendations overlapped with reading list: {overlaps}")
             print(
                 "ok: local app "
                 f"demo_total={seed['total_catalog_size']} "

@@ -36,8 +36,12 @@ def test_ollama_defaults_to_gemma4_edge_generation_model():
     data = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
     standalone = yaml.safe_load((ROOT / "docker-compose.llm.yml").read_text(encoding="utf-8"))
 
+    assert data["services"]["llm-service"]["environment"]["LLM_PROVIDER"] == "${LLM_PROVIDER:-ollama-with-fallback}"
+    assert standalone["services"]["llm-service"]["environment"]["LLM_PROVIDER"] == "${LLM_PROVIDER:-ollama-with-fallback}"
     assert data["services"]["llm-service"]["environment"]["OLLAMA_GENERATE_MODEL"] == "${OLLAMA_GENERATE_MODEL:-gemma4:e2b}"
     assert standalone["services"]["llm-service"]["environment"]["OLLAMA_GENERATE_MODEL"] == "${OLLAMA_GENERATE_MODEL:-gemma4:e2b}"
+    assert data["services"]["llm-service"]["environment"]["OLLAMA_THINK"] == "${OLLAMA_THINK:-false}"
+    assert standalone["services"]["llm-service"]["environment"]["OLLAMA_THINK"] == "${OLLAMA_THINK:-false}"
 
 
 def test_amd_overrides_use_rocm_ollama_and_gpu_devices():

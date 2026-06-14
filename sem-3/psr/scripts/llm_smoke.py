@@ -12,7 +12,7 @@ def main() -> None:
     health = requests.get(f"{base_url}/health", timeout=10)
     health.raise_for_status()
 
-    embed = requests.post(f"{base_url}/v1/embed", json={"text": "Dune"}, timeout=120)
+    embed = requests.post(f"{base_url}/v1/embed", json={"text": "Dune"}, timeout=300)
     embed.raise_for_status()
     embed_payload = embed.json()
     if not embed_payload.get("embedding"):
@@ -21,7 +21,7 @@ def main() -> None:
     generate = requests.post(
         f"{base_url}/v1/generate",
         json={"prompt": "Recommend one concise science fiction book."},
-        timeout=120,
+        timeout=300,
     )
     generate.raise_for_status()
     text = generate.json().get("text", "").strip()

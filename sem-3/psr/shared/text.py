@@ -11,6 +11,27 @@ def normalize(value: str) -> str:
     return " ".join(value.lower().strip().split())
 
 
+def book_identity_keys(book: dict) -> set[str]:
+    keys = set()
+    isbn = normalize(str(book.get("isbn") or ""))
+    if isbn:
+        keys.add(f"isbn:{isbn}")
+    openlibrary_key = normalize(str(book.get("openlibrary_key") or ""))
+    if openlibrary_key:
+        keys.add(f"openlibrary:{openlibrary_key}")
+    title = normalize(str(book.get("title") or ""))
+    author = normalize(str(book.get("author") or ""))
+    if title and author:
+        keys.add(f"title-author:{title}|{author}")
+    elif title:
+        keys.add(f"title:{title}")
+    return keys
+
+
+def is_same_book(left: dict, right: dict) -> bool:
+    return bool(book_identity_keys(left).intersection(book_identity_keys(right)))
+
+
 def book_text(book: dict) -> str:
     parts = [
         book.get("title", ""),

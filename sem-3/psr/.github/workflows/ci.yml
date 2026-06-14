@@ -18,7 +18,7 @@ on:
       location:
         description: "Azure location"
         required: false
-        default: "westeurope"
+        default: "spaincentral"
         type: string
       app_name:
         description: "Application name prefix"
@@ -71,9 +71,16 @@ jobs:
             sleep 1
           done
           exit 1
-      - run: TEST_DATABASE_URL=postgresql://book_ai:book_ai_password@127.0.0.1:5432/book_ai_library pytest -q tests/test_postgres_storage.py
+      - run: TEST_DATABASE_URL=postgresql://book_ai:book_ai_password@127.0.0.1:15432/book_ai_library pytest -q tests/test_postgres_storage.py
       - if: always()
         run: docker compose -f docker-compose.ci.yml down -v
+
+  docker-pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - run: scripts/docker_pytest.sh
 
   compose-smoke:
     runs-on: ubuntu-latest
@@ -86,10 +93,34 @@ jobs:
       - run: pip install -r requirements.txt
       - uses: docker/setup-buildx-action@v3
       - run: docker compose -f docker-compose.ci.yml config
+      - run: docker compose -f docker-compose.test.yml config
       - run: docker compose -f docker-compose.llm.yml config
       - run: docker compose -f docker-compose.yml -f docker-compose.amd.yml config
       - run: docker compose -f docker-compose.llm.yml -f docker-compose.llm.amd.yml config
       - run: PYTHON_BIN=python scripts/compose_smoke.sh
+
+  streamlit-browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements.txt
+      - run: pip install playwright==1.46.0
+      - run: python -m playwright install --with-deps chromium
+      - uses: docker/setup-buildx-action@v3
+      - run: docker compose -p book-ai-browser -f docker-compose.ci.yml up -d --build
+      - run: |
+          for i in {1..60}; do
+            curl -fsS http://127.0.0.1:18501/ >/dev/null && exit 0
+            sleep 1
+          done
+          exit 1
+      - run: FRONTEND_URL=http://127.0.0.1:18501 pytest -q tests/test_streamlit_browser.py
+      - if: always()
+        run: docker compose -p book-ai-browser -f docker-compose.ci.yml down -v
 
   bicep-build:
     runs-on: ubuntu-latest
@@ -101,7 +132,7 @@ jobs:
 
   azure-deploy-gate:
     if: github.event_name == 'workflow_dispatch' && inputs.deploy_azure
-    needs: [test, postgres-integration, compose-smoke, bicep-build]
+    needs: [test, postgres-integration, docker-pytest, compose-smoke, streamlit-browser, bicep-build]
     runs-on: ubuntu-latest
     environment: azure-manual
     permissions:

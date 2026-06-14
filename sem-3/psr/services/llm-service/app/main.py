@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from fastapi import FastAPI
+import logging
+
+from fastapi import FastAPI, HTTPException
 import requests
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -8,6 +10,7 @@ from shared import config
 from shared.text import deterministic_embedding
 
 app = FastAPI(title="Book AI Library - LLM Service", version="0.1.0")
+logger = logging.getLogger("llm-service")
 
 
 class EmbedRequest(BaseModel):
@@ -42,17 +45,43 @@ class GenerateResponse(BaseModel):
     provider: str
 
 
+def _ollama_timeout() -> float:
+    return float(config.env("OLLAMA_TIMEOUT_SECONDS", str(config.OLLAMA_TIMEOUT_SECONDS)))
+
+
+def _ollama_num_predict() -> int:
+    return int(config.env("OLLAMA_NUM_PREDICT", str(config.OLLAMA_NUM_PREDICT)))
+
+
+def _ollama_think() -> bool:
+    return config.env("OLLAMA_THINK", config.OLLAMA_THINK).lower() in {"1", "true", "yes", "on"}
+
+
+def _raise_upstream_error(exc: Exception, provider: str, operation: str, timeout_seconds: float | None = None) -> None:
+    if isinstance(exc, requests.Timeout):
+        raise HTTPException(
+            status_code=504,
+            detail=f"{provider} {operation} timed out after {(timeout_seconds or 0):.0f} seconds",
+        ) from exc
+    if isinstance(exc, requests.RequestException):
+        raise HTTPException(status_code=502, detail=f"{provider} {operation} failed: {exc}") from exc
+    raise HTTPException(status_code=502, detail=f"{provider} {operation} failed: {exc}") from exc
+
+
 def _ollama_embed(text: str) -> EmbedResponse:
-    response = requests.post(
-        f"{config.env('OLLAMA_BASE_URL', config.OLLAMA_BASE_URL)}/api/embed",
-        json={"model": config.env("OLLAMA_EMBED_MODEL", config.OLLAMA_EMBED_MODEL), "input": text},
-        timeout=float(config.env("OLLAMA_TIMEOUT_SECONDS", str(config.OLLAMA_TIMEOUT_SECONDS))),
-    )
-    response.raise_for_status()
-    payload = response.json()
+    try:
+        response = requests.post(
+            f"{config.env('OLLAMA_BASE_URL', config.OLLAMA_BASE_URL)}/api/embed",
+            json={"model": config.env("OLLAMA_EMBED_MODEL", config.OLLAMA_EMBED_MODEL), "input": text},
+            timeout=_ollama_timeout(),
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        _raise_upstream_error(exc, "Ollama", "embedding", _ollama_timeout())
     embeddings = payload.get("embeddings") or []
     if not embeddings:
-        raise RuntimeError("Ollama returned no embeddings")
+        raise HTTPException(status_code=502, detail="Ollama embedding failed: no embeddings returned")
     embedding = embeddings[0]
     return EmbedResponse(
         embedding=embedding,
@@ -87,14 +116,18 @@ def _azure_openai_url(deployment: str, operation: str) -> str:
 
 def _azure_openai_embed(text: str) -> EmbedResponse:
     deployment = config.env("AZURE_OPENAI_EMBED_DEPLOYMENT", config.AZURE_OPENAI_EMBED_DEPLOYMENT)
-    response = requests.post(
-        _azure_openai_url(deployment, "embeddings"),
-        headers=_azure_openai_headers(),
-        json={"input": text},
-        timeout=float(config.env("AZURE_OPENAI_TIMEOUT_SECONDS", "30")),
-    )
-    response.raise_for_status()
-    payload = response.json()
+    timeout_seconds = float(config.env("AZURE_OPENAI_TIMEOUT_SECONDS", "30"))
+    try:
+        response = requests.post(
+            _azure_openai_url(deployment, "embeddings"),
+            headers=_azure_openai_headers(),
+            json={"input": text},
+            timeout=timeout_seconds,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        _raise_upstream_error(exc, "Azure OpenAI", "embedding", timeout_seconds)
     embedding = payload["data"][0]["embedding"]
     return EmbedResponse(
         embedding=embedding,
@@ -105,16 +138,57 @@ def _azure_openai_embed(text: str) -> EmbedResponse:
 
 def _azure_openai_generate(prompt: str) -> GenerateResponse:
     deployment = config.env("AZURE_OPENAI_CHAT_DEPLOYMENT", config.AZURE_OPENAI_CHAT_DEPLOYMENT)
-    response = requests.post(
-        _azure_openai_url(deployment, "chat/completions"),
-        headers=_azure_openai_headers(),
-        json={"messages": [{"role": "user", "content": prompt}], "temperature": 0.2},
-        timeout=float(config.env("AZURE_OPENAI_TIMEOUT_SECONDS", "30")),
-    )
-    response.raise_for_status()
-    payload = response.json()
+    timeout_seconds = float(config.env("AZURE_OPENAI_TIMEOUT_SECONDS", "30"))
+    try:
+        response = requests.post(
+            _azure_openai_url(deployment, "chat/completions"),
+            headers=_azure_openai_headers(),
+            json={"messages": [{"role": "user", "content": prompt}], "temperature": 0.2},
+            timeout=timeout_seconds,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        _raise_upstream_error(exc, "Azure OpenAI", "generation", timeout_seconds)
     text = payload["choices"][0]["message"]["content"].strip()
     return GenerateResponse(text=text, provider=f"azure-openai:{deployment}")
+
+
+def _ollama_generate(prompt: str) -> GenerateResponse:
+    generate_model = config.env("OLLAMA_GENERATE_MODEL", config.OLLAMA_GENERATE_MODEL)
+    timeout_seconds = _ollama_timeout()
+    try:
+        response = requests.post(
+            f"{config.env('OLLAMA_BASE_URL', config.OLLAMA_BASE_URL)}/api/generate",
+            json={
+                "model": generate_model,
+                "prompt": prompt,
+                "stream": False,
+                "think": _ollama_think(),
+                "options": {"num_predict": _ollama_num_predict()},
+            },
+            timeout=timeout_seconds,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        _raise_upstream_error(exc, "Ollama", "generation", timeout_seconds)
+    text = payload.get("response", "").strip()
+    if not text:
+        _raise_upstream_error(RuntimeError("empty response returned"), "Ollama", "generation", timeout_seconds)
+    return GenerateResponse(text=text, provider=f"ollama:{generate_model}")
+
+
+def _deterministic_generate(request: GenerateRequest) -> GenerateResponse:
+    title = request.context.get("title", "this book")
+    reason = request.context.get("reason", "it matches your reading history")
+    return GenerateResponse(text=f"Recommended {title} because {reason}.", provider="local-template")
+
+
+def _fallback_reason(exc: Exception) -> str:
+    if isinstance(exc, HTTPException):
+        return str(exc.detail)
+    return str(exc)
 
 
 @app.get("/")
@@ -146,6 +220,9 @@ def models() -> dict[str, str]:
         "ollama_base_url": config.env("OLLAMA_BASE_URL", config.OLLAMA_BASE_URL),
         "ollama_embed_model": config.env("OLLAMA_EMBED_MODEL", config.OLLAMA_EMBED_MODEL),
         "ollama_generate_model": config.env("OLLAMA_GENERATE_MODEL", config.OLLAMA_GENERATE_MODEL),
+        "ollama_num_predict": str(config.env("OLLAMA_NUM_PREDICT", str(config.OLLAMA_NUM_PREDICT))),
+        "ollama_timeout_seconds": str(config.env("OLLAMA_TIMEOUT_SECONDS", str(config.OLLAMA_TIMEOUT_SECONDS))),
+        "ollama_think": str(config.env("OLLAMA_THINK", config.OLLAMA_THINK)),
         "azure_openai_embed_deployment": config.env("AZURE_OPENAI_EMBED_DEPLOYMENT", config.AZURE_OPENAI_EMBED_DEPLOYMENT),
         "azure_openai_chat_deployment": config.env("AZURE_OPENAI_CHAT_DEPLOYMENT", config.AZURE_OPENAI_CHAT_DEPLOYMENT),
     }
@@ -161,7 +238,8 @@ def embed(request: EmbedRequest) -> EmbedResponse:
     if provider == "ollama-with-fallback":
         try:
             return _ollama_embed(request.text)
-        except Exception:
+        except Exception as exc:
+            logger.warning("Ollama embedding fallback activated: %s", _fallback_reason(exc))
             return _deterministic_embed(request.text)
     return _deterministic_embed(request.text)
 
@@ -177,20 +255,15 @@ def generate(request: GenerateRequest) -> GenerateResponse:
     prompt = request.prompt_text()
     if provider == "azure-openai":
         return _azure_openai_generate(prompt)
-    if provider.startswith("ollama"):
-        generate_model = config.env("OLLAMA_GENERATE_MODEL", config.OLLAMA_GENERATE_MODEL)
-        response = requests.post(
-            f"{config.env('OLLAMA_BASE_URL', config.OLLAMA_BASE_URL)}/api/generate",
-            json={"model": generate_model, "prompt": prompt, "stream": False},
-            timeout=float(config.env("OLLAMA_TIMEOUT_SECONDS", str(config.OLLAMA_TIMEOUT_SECONDS))),
-        )
-        response.raise_for_status()
-        payload = response.json()
-        return GenerateResponse(text=payload.get("response", "").strip(), provider=f"ollama:{generate_model}")
-
-    title = request.context.get("title", "this book")
-    reason = request.context.get("reason", "it matches your reading history")
-    return GenerateResponse(text=f"Recommended {title} because {reason}.", provider="local-template")
+    if provider == "ollama":
+        return _ollama_generate(prompt)
+    if provider == "ollama-with-fallback":
+        try:
+            return _ollama_generate(prompt)
+        except Exception as exc:
+            logger.warning("Ollama generation fallback activated: %s", _fallback_reason(exc))
+            return _deterministic_generate(request)
+    return _deterministic_generate(request)
 
 
 @app.get("/v1/generate", response_model=GenerateResponse)

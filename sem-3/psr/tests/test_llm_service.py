@@ -3,6 +3,9 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+from fastapi import HTTPException
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -55,6 +58,8 @@ def test_ollama_generate_response_is_mapped(monkeypatch):
         assert json["model"] == "gemma4:e2b"
         assert json["prompt"] == "Explain why Dune is good."
         assert json["stream"] is False
+        assert json["think"] is False
+        assert json["options"]["num_predict"] == 192
         return FakeResponse()
 
     monkeypatch.setattr(module.requests, "post", fake_post)
@@ -64,6 +69,40 @@ def test_ollama_generate_response_is_mapped(monkeypatch):
 
     assert result.text == "A concise recommendation."
     assert result.provider == "ollama:gemma4:e2b"
+
+
+def test_ollama_generate_timeout_returns_504(monkeypatch):
+    module = load_llm_module(monkeypatch, "ollama")
+
+    def fake_post(*args, **kwargs):
+        raise module.requests.Timeout("slow model")
+
+    monkeypatch.setattr(module.requests, "post", fake_post)
+
+    with pytest.raises(HTTPException) as exc:
+        module.generate(module.GenerateRequest(prompt="Recommend a book."))
+
+    assert exc.value.status_code == 504
+    assert "timed out" in exc.value.detail
+
+
+def test_ollama_generate_empty_response_returns_502(monkeypatch):
+    module = load_llm_module(monkeypatch, "ollama")
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"response": ""}
+
+    monkeypatch.setattr(module.requests, "post", lambda *args, **kwargs: FakeResponse())
+
+    with pytest.raises(HTTPException) as exc:
+        module.generate(module.GenerateRequest(prompt="Recommend a book."))
+
+    assert exc.value.status_code == 502
+    assert "empty response" in exc.value.detail
 
 
 def test_llm_root_and_models_are_browser_friendly(monkeypatch):
@@ -76,6 +115,8 @@ def test_llm_root_and_models_are_browser_friendly(monkeypatch):
     assert root["docs"] == "/docs"
     assert "/v1/generate?prompt=" in root["prompt_examples"]["GET"]
     assert models["provider"] == "deterministic"
+    assert models["ollama_num_predict"] == "192"
+    assert models["ollama_think"] == "false"
 
 
 def test_generate_accepts_text_alias_in_post_body(monkeypatch):
@@ -109,3 +150,35 @@ def test_ollama_with_fallback_uses_deterministic_when_ollama_fails(monkeypatch):
 
     assert result.model_version.startswith("local-hash-")
     assert result.dimensions > 0
+
+
+def test_ollama_with_fallback_generate_uses_template_when_ollama_fails(monkeypatch):
+    module = load_llm_module(monkeypatch, "ollama-with-fallback")
+
+    def fake_post(*args, **kwargs):
+        raise RuntimeError("ollama unavailable")
+
+    monkeypatch.setattr(module.requests, "post", fake_post)
+
+    result = module.generate(module.GenerateRequest(prompt="Recommend a book.", context={"title": "Dune"}))
+
+    assert result.provider == "local-template"
+    assert result.text.startswith("Recommended Dune")
+
+
+def test_ollama_with_fallback_generate_uses_template_when_ollama_is_empty(monkeypatch):
+    module = load_llm_module(monkeypatch, "ollama-with-fallback")
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"response": ""}
+
+    monkeypatch.setattr(module.requests, "post", lambda *args, **kwargs: FakeResponse())
+
+    result = module.generate(module.GenerateRequest(prompt="Recommend a book.", context={"title": "Dune"}))
+
+    assert result.provider == "local-template"
+    assert result.text.startswith("Recommended Dune")

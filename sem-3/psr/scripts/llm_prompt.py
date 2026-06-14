@@ -13,7 +13,7 @@ def main() -> None:
 
     base_url = os.getenv("LLM_SERVICE_URL", "http://127.0.0.1:8005").rstrip("/")
     prompt = " ".join(sys.argv[1:])
-    response = requests.post(f"{base_url}/v1/generate", json={"prompt": prompt}, timeout=120)
+    response = requests.post(f"{base_url}/v1/generate", json={"prompt": prompt}, timeout=300)
     response.raise_for_status()
     print(response.json()["text"])
 

@@ -31,11 +31,13 @@ services:
       args:
         SERVICE_PATH: services/llm-service
     environment:
-      LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
+      LLM_PROVIDER: ${LLM_PROVIDER:-ollama-with-fallback}
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-embeddinggemma}
       OLLAMA_GENERATE_MODEL: ${OLLAMA_GENERATE_MODEL:-gemma4:e2b}
-      OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-60}
+      OLLAMA_NUM_PREDICT: ${OLLAMA_NUM_PREDICT:-192}
+      OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-240}
+      OLLAMA_THINK: ${OLLAMA_THINK:-false}
     ports:
       - "${LLM_SERVICE_PORT:-8005}:8000"
     depends_on:

@@ -9,7 +9,7 @@ from psycopg.types.json import Jsonb
 
 from shared import config
 from shared.storage import _ensure_postgres, _parse_vector, _vector_literal, read_state, update_state
-from shared.text import average, cosine, normalize
+from shared.text import average, book_identity_keys, cosine, normalize
 
 
 def utc_now() -> str:
@@ -425,6 +425,11 @@ def pgvector_candidate_books(user_id: str, limit: int = 50) -> list[dict[str, An
     profile = user_profile_vector(user_id)
     if not profile:
         return []
+    owned_keys = {
+        key
+        for book in list_user_books(user_id)
+        for key in book_identity_keys(book)
+    }
     conn = _connect()
     if conn is None:
         return []
@@ -446,20 +451,30 @@ def pgvector_candidate_books(user_id: str, limit: int = 50) -> list[dict[str, An
                 ORDER BY e.embedding <=> %s::vector
                 LIMIT %s
                 """,
-                (_vector_literal(profile), user_id, _vector_literal(profile), limit),
+                (_vector_literal(profile), user_id, _vector_literal(profile), max(limit * 4, limit)),
             )
             rows = cursor.fetchall()
 
-    return [
+    candidates = [
         {"book": _book_from_row(row[:12]), "embedding": _parse_vector(row[12]), "score": float(row[13] or 0.0)}
         for row in rows
     ]
+    return [
+        item
+        for item in candidates
+        if not book_identity_keys(item["book"]).intersection(owned_keys)
+    ][:limit]
 
 
 def memory_candidate_books(user_id: str, limit: int = 50) -> list[dict[str, Any]]:
     state = read_state()
     embeddings = {row["book_id"]: row["embedding"] for row in state["book_embeddings"].values()}
     owned_ids = {row["book_id"] for row in state["reading_list"].values() if row["user_id"] == user_id}
+    owned_keys = {
+        key
+        for book in list_user_books(user_id)
+        for key in book_identity_keys(book)
+    }
     profile = user_profile_vector(user_id)
     if not profile:
         return []
@@ -468,7 +483,10 @@ def memory_candidate_books(user_id: str, limit: int = 50) -> list[dict[str, Any]
     for book_id, vector in embeddings.items():
         if book_id in owned_ids or book_id not in state["books"]:
             continue
-        scored.append({"book": state["books"][book_id], "embedding": vector, "score": cosine(profile, vector)})
+        book = state["books"][book_id]
+        if book_identity_keys(book).intersection(owned_keys):
+            continue
+        scored.append({"book": book, "embedding": vector, "score": cosine(profile, vector)})
     return sorted(scored, key=lambda item: item["score"], reverse=True)[:limit]
 
 
@@ -669,3 +687,81 @@ def pull_events(
                 }
                 for row in rows
             ]
+
+
+EVENT_SUBSCRIPTIONS = (
+    {"topic": "books", "subscriber": "embedding-worker", "event_types": {"BookCreated"}},
+    {"topic": "books", "subscriber": "recommendation-service", "event_types": {"BookEmbedded"}},
+    {"topic": "users", "subscriber": "recommendation-service", "event_types": {"UserBookAdded"}},
+)
+
+
+def event_backlog_summary() -> list[dict[str, Any]]:
+    conn = _connect()
+    if conn is None:
+        events = read_state()["events"]
+        rows = []
+        for subscription in EVENT_SUBSCRIPTIONS:
+            matching = [
+                event
+                for event in events
+                if event["topic"] == subscription["topic"] and event["type"] in subscription["event_types"]
+            ]
+            pending = [event for event in matching if subscription["subscriber"] not in event.get("delivered_to", [])]
+            delivered = [event for event in matching if subscription["subscriber"] in event.get("delivered_to", [])]
+            rows.append(
+                {
+                    "topic": subscription["topic"],
+                    "subscriber": subscription["subscriber"],
+                    "event_types": sorted(subscription["event_types"]),
+                    "total": len(matching),
+                    "pending": len(pending),
+                    "delivered": len(delivered),
+                    "last_event_at": matching[-1]["created_at"] if matching else None,
+                    "last_delivered_at": delivered[-1]["created_at"] if delivered else None,
+                    "oldest_pending_at": pending[0]["created_at"] if pending else None,
+                }
+            )
+        return rows
+
+    with conn:
+        _ensure_postgres(conn)
+        rows = []
+        with conn.cursor() as cursor:
+            for subscription in EVENT_SUBSCRIPTIONS:
+                params = (
+                    subscription["topic"],
+                    sorted(subscription["event_types"]),
+                    subscription["subscriber"],
+                )
+                cursor.execute(
+                    """
+                    SELECT
+                        COUNT(*) AS total,
+                        COUNT(*) FILTER (WHERE d.event_id IS NULL) AS pending,
+                        COUNT(d.event_id) AS delivered,
+                        MAX(e.created_at) AS last_event_at,
+                        MAX(d.delivered_at) AS last_delivered_at,
+                        MIN(e.created_at) FILTER (WHERE d.event_id IS NULL) AS oldest_pending_at
+                    FROM events e
+                    LEFT JOIN event_deliveries d
+                      ON d.event_id = e.id AND d.subscriber = %s
+                    WHERE e.topic = %s AND e.type = ANY(%s)
+                    """,
+                    (subscription["subscriber"], params[0], params[1]),
+                )
+                row = cursor.fetchone()
+                rows.append(
+                    {
+                        "topic": subscription["topic"],
+                        "subscriber": subscription["subscriber"],
+                        "event_types": sorted(subscription["event_types"]),
+                        "total": int(row[0] or 0),
+                        "pending": int(row[1] or 0),
+                        "delivered": int(row[2] or 0),
+                        "last_event_at": row[3].isoformat() if row[3] else None,
+                        "last_delivered_at": row[4].isoformat() if row[4] else None,
+                        "oldest_pending_at": row[5].isoformat() if row[5] else None,
+                    }
+                )
+        return rows

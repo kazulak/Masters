@@ -6,7 +6,7 @@ services:
       POSTGRES_USER: book_ai
       POSTGRES_PASSWORD: book_ai_password
     ports:
-      - "5432:5432"
+      - "${CI_POSTGRES_PORT:-15432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U book_ai -d book_ai_library"]
       interval: 5s
@@ -22,7 +22,7 @@ services:
     environment:
       LLM_PROVIDER: deterministic
     ports:
-      - "8005:8000"
+      - "${CI_LLM_SERVICE_PORT:-18005}:8000"
 
   book-catalog:
     build:
@@ -33,7 +33,7 @@ services:
     environment:
       DATABASE_URL: postgresql://book_ai:book_ai_password@postgres:5432/book_ai_library
     ports:
-      - "8002:8000"
+      - "${CI_BOOK_CATALOG_PORT:-18002}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -49,7 +49,7 @@ services:
       BOOK_CATALOG_URL: http://book-catalog:8000
       DEFAULT_USER_ID: demo-user
     ports:
-      - "8001:8000"
+      - "${CI_USER_PROFILE_PORT:-18001}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -66,7 +66,7 @@ services:
       DATABASE_URL: postgresql://book_ai:book_ai_password@postgres:5432/book_ai_library
       LLM_SERVICE_URL: http://llm-service:8000
     ports:
-      - "8003:8000"
+      - "${CI_EMBEDDING_WORKER_PORT:-18003}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -83,7 +83,33 @@ services:
       DATABASE_URL: postgresql://book_ai:book_ai_password@postgres:5432/book_ai_library
       DEFAULT_USER_ID: demo-user
     ports:
-      - "8004:8000"
+      - "${CI_RECOMMENDATION_PORT:-18004}:8000"
     depends_on:
       postgres:
         condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/streamlit/Dockerfile
+    environment:
+      USER_PROFILE_URL: http://user-profile:8000
+      BOOK_CATALOG_URL: http://book-catalog:8000
+      EMBEDDING_WORKER_URL: http://embedding-worker:8000
+      RECOMMENDATION_URL: http://recommendation:8000
+      LLM_SERVICE_URL: http://llm-service:8000
+      DEFAULT_USER_ID: demo-user
+      STREAMLIT_BROWSER_GATHER_USAGE_STATS: "false"
+    ports:
+      - "${CI_FRONTEND_PORT:-18501}:8501"
+    depends_on:
+      user-profile:
+        condition: service_started
+      book-catalog:
+        condition: service_started
+      embedding-worker:
+        condition: service_started
+      recommendation:
+        condition: service_started
+      llm-service:
+        condition: service_started
