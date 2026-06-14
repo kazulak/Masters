@@ -58,6 +58,17 @@ def recompute_user(user_id: str) -> dict[str, int]:
     return {"computed": computed}
 
 
+def _filter_owned_books(user_id: str, row: dict) -> tuple[list[str], dict[str, str]]:
+    owned_ids = {book["id"] for book in list_user_books(user_id)}
+    unread_ids = [book_id for book_id in row["book_ids"] if book_id not in owned_ids]
+    explanations = row.get("explanations", {})
+    return unread_ids, {
+        book_id: explanations[book_id]
+        for book_id in unread_ids
+        if book_id in explanations
+    }
+
+
 def process_once(limit: int = 10) -> dict[str, int]:
     events = []
     events.extend(pull("books", "recommendation-service", {"BookEmbedded"}, limit=limit))
@@ -124,11 +135,12 @@ def get_recommendations(
         "explanations": {},
         "computed_at": None,
     }
-    books = books_by_ids(row["book_ids"])
+    unread_ids, explanations = _filter_owned_books(user_id, row)
+    books = books_by_ids(unread_ids)
     return {
         "user_id": user_id,
         "type": type,
         "books": books,
-        "explanations": row["explanations"],
+        "explanations": explanations,
         "computed_at": row["computed_at"],
     }

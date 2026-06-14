@@ -10,8 +10,11 @@ You have a working local POC of a cloud-native service-oriented application:
 - Backend services: User Profile, Book Catalog, Embedding Worker, Recommendation, LLM Service.
 - Data: PostgreSQL with normalized tables and pgvector support in Docker Compose.
 - Async communication: event boundary is preserved through `BookCreated`, `BookEmbedded`, and `UserBookAdded`.
-- LLM path: local Ollama through the `llm-service` container, with deterministic mode for tests.
-- Azure path: Bicep, GitHub Actions, Azure Service Bus adapter, and Azure OpenAI adapter are prepared, but not fully validated against real Azure resources.
+- LLM path: local Ollama through the `llm-service` container, with deterministic mode for tests. The default local generation model is `gemma4:e2b`.
+- Standalone LLM path: `docker-compose.llm.yml` can run only Ollama and LLM Service for quick prompt testing.
+- AMD GPU path: `docker-compose.amd.yml` and `docker-compose.llm.amd.yml` switch Ollama to the ROCm image and pass AMD GPU devices into the container.
+- Local demo catalog: `POST /catalog/seed/demo` gives the recommender a stable offline corpus when Open Library is slow or unavailable.
+- Azure path: Bicep, GitHub Actions, Azure Service Bus adapter, and Azure OpenAI adapter are prepared. Bicep builds locally, Azure what-if passes in `spaincentral`, and the adapters have mocked tests.
 
 The correct mental model is:
 
@@ -55,48 +58,102 @@ Run:
 
 ```bash
 pytest -q
-PYTHON_BIN=.venv/bin/python scripts/compose_smoke.sh
+docker compose up -d --build
+.venv/bin/python scripts/local_app_smoke.py
 ```
 
 Why:
 
 - `pytest` checks service logic and contracts.
-- `compose_smoke.sh` checks that the services work together as containers.
+- `local_app_smoke.py` checks that the running web-facing Docker stack works through published ports.
 - This is your staging gate before Azure.
 
 If this fails, fix local first. Do not deploy broken local behavior to Azure.
 
-### Step 2 - Add The Missing Production Dependency For Service Bus
+### Step 2 - Use The Standalone LLM Stack When Debugging Prompts
 
-The code has an Azure Service Bus adapter in `shared/events.py`, but the Python dependency is not installed yet.
+Run:
 
-Add a runtime dependency:
-
-```text
-azure-servicebus
+```bash
+docker compose -f docker-compose.llm.yml up -d --build
+./scripts/llm_smoke.py
+./scripts/llm_prompt.py "Recommend one short science fiction book"
 ```
 
-Prefer doing this carefully:
+You can also open:
 
-1. Add it to `requirements.txt`.
-2. Add tests that mock the Azure client.
-3. Rebuild containers.
-4. Re-run local tests.
+- <http://127.0.0.1:8005/>
+- <http://127.0.0.1:8005/docs>
 
 Why:
 
-- The local event adapter works now.
-- Azure deployment will need the real Azure client package.
-- You want failures to happen in CI, not during a live deployment.
+- It isolates the LLM from the rest of the app.
+- Ollama models stay in the persistent `ollama-models` Docker volume.
+- You hit `llm-service` on port `8005`, not Ollama directly.
+- Ollama remains internal-only, so host port `11434` can still be used by another local Ollama install.
 
-### Step 3 - Validate Bicep Before Deploying
+Gemma 4 model choice:
 
-Install Azure CLI locally or use GitHub Actions.
+- Use `gemma4:e2b` by default for the local POC. It is the practical choice for an AMD RX 6600-class 8 GB GPU.
+- Use `OLLAMA_GENERATE_MODEL=gemma4:e4b` only if the local machine has enough GPU memory.
+- Use `OLLAMA_GENERATE_MODEL=gemma4:26b` only as an explicit MoE experiment. It has about 4B active parameters, but the full package is much larger than the edge models.
+- Do not set `gemma4:31b` as the default for this project; it is a workstation-class dense model.
+
+For AMD GPU acceleration, first verify the host devices:
+
+```bash
+ls -l /dev/kfd /dev/dri
+```
+
+Then run:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.amd.yml up -d --build
+```
+
+or for only the LLM stack:
+
+```bash
+docker compose -f docker-compose.llm.yml -f docker-compose.llm.amd.yml up -d --build
+```
+
+If `/dev/kfd` or `/dev/dri` is missing, Docker cannot use the AMD GPU yet. Fix ROCm/driver/container permissions before treating GPU acceleration as verified.
+
+### Step 3 - Use The Demo Catalog For Reliable Local Testing
+
+When using the web UI, click `Seed demo catalog` before expecting recommendations.
+
+Why:
+
+- A recommender needs unread candidate books to recommend.
+- Open Library may be slow or temporarily unavailable.
+- The demo seed publishes the same `BookCreated` events, so it still tests the async embedding pipeline.
+
+### Step 4 - Understand The Azure Region Policy
+
+The Azure for Students subscription is restricted by policy. The allowed deployment regions are:
+
+- `italynorth`
+- `switzerlandnorth`
+- `swedencentral`
+- `spaincentral`
+- `germanywestcentral`
+
+Use `spaincentral` unless you have a reason to choose another allowed region.
+
+Why:
+
+- `westeurope` and `polandcentral` were rejected by policy.
+- Guessing regions wastes time.
+- A successful `what-if` in an allowed region proves that ARM accepts the template shape before you spend money on resources.
+
+### Step 5 - Validate Bicep Before Deploying
+
+Azure CLI is available in the current environment.
 
 Local commands:
 
 ```bash
-az login
 az bicep build --file infra/bicep/main.bicep
 ```
 
@@ -104,9 +161,9 @@ Then run a what-if deployment:
 
 ```bash
 az deployment group what-if \
-  --resource-group <resource-group> \
+  --resource-group book-ai-library-stage-rg \
   --template-file infra/bicep/main.bicep \
-  --parameters appName=book-ai-library deployApps=false
+  --parameters location=spaincentral appName=book-ai-library deployApps=false deployPostgres=false
 ```
 
 Why:
@@ -115,26 +172,26 @@ Why:
 - `what-if` shows what Azure would create before it creates anything.
 - You learn the cloud deployment shape without spending money unexpectedly.
 
-### Step 4 - Deploy Infrastructure First, Apps Second
+### Step 6 - Deploy Infrastructure First, Apps Second
 
 The current deployment model intentionally separates infrastructure from application containers.
 
 First deployment:
 
 ```bash
-./scripts/deploy_azure.sh <resource-group> <location> <app-name> <tag>
+DEPLOY_APPS=false DEPLOY_POSTGRES=false \
+  ./scripts/deploy_azure.sh book-ai-library-stage-rg spaincentral book-ai-library local-test
 ```
 
 Current script behavior:
 
 1. Creates a resource group.
-2. Deploys ACR, Log Analytics, Container Apps environment, and Service Bus skeleton.
-3. Builds and pushes Docker images.
-4. Deploys Container Apps.
+2. Deploys ACR, Log Analytics, Container Apps environment, Service Bus skeleton, and optionally PostgreSQL.
+3. If `DEPLOY_APPS=true`, builds and pushes Docker images.
+4. If `DEPLOY_APPS=true`, deploys Container Apps.
 
 Before trusting this as production, improve:
 
-- PostgreSQL Flexible Server resource in Bicep.
 - Managed identities instead of ACR admin credentials.
 - Key Vault or Container Apps secrets for sensitive values.
 - Real Azure OpenAI deployment names.
@@ -229,7 +286,7 @@ Use Azure when:
 
 - Local Compose smoke passes.
 - Bicep builds.
-- You know your Azure region supports the needed services.
+- You use one of the allowed subscription regions.
 - You have decided how to handle secrets.
 - You are ready to pay for running resources.
 
@@ -304,11 +361,14 @@ This matches the university requirements cleanly:
 
 Be honest about these points in a submission or defense:
 
-- Azure adapters are prepared but not yet proven against real Azure resources.
-- Bicep still needs PostgreSQL Flexible Server, managed identities, and stronger secret handling.
+- Azure adapters are tested with mocks and Bicep what-if, but not yet proven through live deployed Container Apps.
+- Bicep includes PostgreSQL Flexible Server, but still needs managed identities and stronger secret handling.
 - Endpoint-level FastAPI tests are postponed because `TestClient` hung in the current runtime.
 - Failure-path tests are still missing for Open Library, Ollama, Azure Service Bus, and PostgreSQL.
 - pgvector ANN indexes should be added after the final embedding dimension is known.
+- The UI is still intentionally minimal; local reliability now depends on the demo catalog seed and async worker smoke tests.
+- Local Gemma 4 AMD GPU execution still needs a live smoke run on a host where `/dev/kfd` and `/dev/dri` are visible to Docker.
+- The latest main Compose run pulled and served `gemma4:e2b`, but Ollama logs showed CPU execution in this sandbox because the AMD ROCm devices were not visible.
 
 This is not a failure. It is a normal POC state. The important thing is that the project already documents the gap and has a clear path to close it.
 
@@ -316,20 +376,28 @@ This is not a failure. It is a normal POC state. The important thing is that the
 
 Do this as the next focused implementation pass:
 
-1. Add `azure-servicebus` dependency.
-2. Add mocked tests for Azure Service Bus publish/pull behavior.
-3. Add mocked tests for Azure OpenAI embed/generate behavior.
-4. Add Bicep validation to local docs and CI.
-5. Add PostgreSQL Flexible Server to Bicep.
-6. Add Container Apps secrets for database URL, Service Bus, and Azure OpenAI.
-7. Add a manual Azure smoke test script.
+1. Use the main Docker stack and `scripts/local_app_smoke.py` as the default local acceptance test.
+2. Use `docker-compose.llm.yml` and `scripts/llm_prompt.py` when debugging prompt behavior.
+3. Pull and smoke-test `gemma4:e2b` through `llm-service`.
+4. If AMD ROCm devices are present, run the AMD compose override and confirm Ollama uses the GPU path.
+5. Add failure-path tests for Open Library timeouts, Ollama errors, and PostgreSQL connection failures.
+6. Add stable HTTP-level endpoint tests without the currently hanging `TestClient` path.
+7. Improve the Streamlit UX around async processing status.
+8. Only after local testing is smooth, decide whether to deploy infrastructure-only resources in `spaincentral`.
+9. Add pgvector ANN indexes after the embedding dimension is final.
 
 Suggested test commands after the pass:
 
 ```bash
 pytest -q
-PYTHON_BIN=.venv/bin/python scripts/compose_smoke.sh
+docker compose up -d --build
+.venv/bin/python scripts/local_app_smoke.py
+docker compose -f docker-compose.llm.yml config
+docker compose -f docker-compose.llm.yml -f docker-compose.llm.amd.yml config
+.venv/bin/python scripts/llm_smoke.py
 az bicep build --file infra/bicep/main.bicep
+DEPLOY_APPS=false DEPLOY_POSTGRES=true POSTGRES_ADMIN_PASSWORD='<strong-password>' \
+  scripts/azure_what_if.sh book-ai-library-stage-rg spaincentral book-ai-library local-test
 ```
 
 Then, only when those pass, try:
@@ -348,10 +416,10 @@ az deployment group what-if \
 | Do I need Azure Portal in browser? | No. Use it for inspection. Use CLI/Bicep for real changes. |
 | Can I work from command line? | Yes. That is the preferred DevOps workflow. |
 | Can the assistant configure Azure? | Yes, if `az login` or GitHub OIDC is configured. Do not share passwords or long-lived secrets. |
-| Should I deploy now? | Not before Bicep builds, Service Bus dependency is packaged, and local Compose smoke passes. |
+| Should I deploy now? | Not while local app behavior is still being refined. Infrastructure-only deployment is reasonable later. |
 | Should I continue in Docker? | Yes. Treat Docker Compose as staging. |
 | Can Azure services call local Ollama? | Technically yes through tunnel/VPN/public endpoint, but it is fragile and not recommended for the final POC. |
-| Best LLM setup for local dev? | Ollama inside Docker Compose. |
+| Best LLM setup for local dev? | Ollama inside Docker Compose, defaulting to `gemma4:e2b` for local GPU practicality. |
 | Best LLM setup for Azure? | Azure OpenAI behind the existing LLM Service adapter. |
 | What must not change? | Do not remove the async recommendation boundary. |
 
@@ -360,5 +428,5 @@ az deployment group what-if \
 Use this prompt when continuing:
 
 ```text
-You are a senior software developer and DevOps engineer. Continue the Book AI Library POC. Read README.md and PROJECT_CONTINUATION_GUIDE.md first. Keep both documents up to date. The current app passes local tests and Docker Compose smoke; services use granular repositories, event contracts are enforced, and Azure-ready Service Bus/Azure OpenAI adapter paths exist. Do not deploy automatically. Next, package and test the Azure Service Bus dependency, add mocked Azure Service Bus and Azure OpenAI adapter tests, validate Bicep with az bicep build/what-if when Azure CLI is available, add PostgreSQL Flexible Server and stronger secret handling to Bicep, and preserve the async recommendation boundary.
+You are a senior software developer and DevOps engineer. Continue the Book AI Library POC. Read README.md and PROJECT_CONTINUATION_GUIDE.md first. Keep both documents up to date. Focus locally before Azure unless explicitly asked to deploy. The local LLM default is Gemma 4 via OLLAMA_GENERATE_MODEL=gemma4:e2b; larger Gemma 4 models are opt-in, and the MoE choice is gemma4:26b only for machines with enough memory. AMD ROCm Compose overrides exist in docker-compose.amd.yml and docker-compose.llm.amd.yml. The recommendation API now filters cached rows against the user's current reading list, so the just-added book should not be returned while async recomputation catches up. Next, run the Gemma 4 LLM smoke locally, verify whether /dev/kfd and /dev/dri are available for AMD GPU Docker passthrough, harden the local UX and failure-path tests for Open Library/Ollama/PostgreSQL, add stable HTTP-level endpoint tests, and preserve the async recommendation boundary.
 ```

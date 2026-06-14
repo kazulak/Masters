@@ -10,4 +10,5 @@ python_bin="${PYTHON_BIN:-python}"
 
 docker compose -f docker-compose.ci.yml up -d --build
 "$python_bin" scripts/wait_for_services.py
+"$python_bin" scripts/llm_smoke.py
 "$python_bin" scripts/smoke_test.py

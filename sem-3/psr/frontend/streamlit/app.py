@@ -19,13 +19,26 @@ tab_discover, tab_add, tab_list, tab_recs = st.tabs(["Discover", "Add book", "Re
 
 with tab_discover:
     query = st.text_input("Open Library search", value="Ursula Le Guin")
-    col_search, col_seed = st.columns([1, 1])
+    col_search, col_demo_seed, col_open_seed = st.columns([1, 1, 1])
     with col_search:
         search_clicked = st.button("Search Open Library")
-    with col_seed:
-        seed_clicked = st.button("Seed catalog")
+    with col_demo_seed:
+        demo_seed_clicked = st.button("Seed demo catalog")
+    with col_open_seed:
+        open_seed_clicked = st.button("Seed Open Library")
 
-    if seed_clicked:
+    if demo_seed_clicked:
+        response = requests.post(f"{BOOK_CATALOG_URL}/catalog/seed/demo", timeout=15)
+        if response.ok:
+            result = response.json()
+            st.success(
+                f"Demo catalog seeded: {result['imported']} imported, {result['existing']} already present, "
+                f"{result['total_catalog_size']} books total."
+            )
+        else:
+            st.error(response.text)
+
+    if open_seed_clicked:
         response = requests.post(
             f"{BOOK_CATALOG_URL}/catalog/seed/openlibrary",
             json={"queries": ["science fiction", "fantasy", "mystery", "historical fiction"], "limit_per_query": 8},
@@ -38,7 +51,16 @@ with tab_discover:
                 f"{result['total_catalog_size']} books total."
             )
         else:
-            st.error(response.text)
+            fallback = requests.post(f"{BOOK_CATALOG_URL}/catalog/seed/demo", timeout=15)
+            if fallback.ok:
+                result = fallback.json()
+                st.warning("Open Library is unavailable or slow. Seeded the local demo catalog instead.")
+                st.success(
+                    f"Demo catalog seeded: {result['imported']} imported, {result['existing']} already present, "
+                    f"{result['total_catalog_size']} books total."
+                )
+            else:
+                st.error(response.text)
 
     if search_clicked:
         response = requests.get(

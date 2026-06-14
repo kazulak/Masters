@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from shared.demo_catalog import DEMO_BOOKS
 from shared.events import publish
 from shared.open_library import OpenLibraryBook, find_book, search_open_library
 from shared.repositories import count_books, get_book as repo_get_book, list_books, upsert_book
@@ -37,6 +38,7 @@ class SeedResponse(BaseModel):
     imported: int
     existing: int
     total_catalog_size: int
+    source: str = "openlibrary"
 
 
 def _from_open_library(book: OpenLibraryBook) -> BookCreate:
@@ -141,4 +143,18 @@ def seed_open_library(payload: SeedRequest) -> SeedResponse:
                 existing += 1
 
     total = count_books()
-    return SeedResponse(imported=imported, existing=existing, total_catalog_size=total)
+    return SeedResponse(imported=imported, existing=existing, total_catalog_size=total, source="openlibrary")
+
+
+@app.post("/catalog/seed/demo", response_model=SeedResponse)
+def seed_demo_catalog() -> SeedResponse:
+    imported = 0
+    existing = 0
+    for book in DEMO_BOOKS:
+        result = _upsert_book(BookCreate(**book))
+        if result["created"]:
+            imported += 1
+        else:
+            existing += 1
+
+    return SeedResponse(imported=imported, existing=existing, total_catalog_size=count_books(), source="demo")
