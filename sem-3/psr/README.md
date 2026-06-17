@@ -1,124 +1,143 @@
-# Book AI Library - POC Handoff
+# Book AI Library
 
-Book AI Library is a university POC for a cloud-native SOA book recommendation system. It currently runs locally as five FastAPI services plus a Streamlit frontend. The architecture document is [index.html](./index.html).
+Local-first microservice book recommendation app for the PSR university project. The project is intentionally small: five FastAPI services, one Streamlit frontend, PostgreSQL/pgvector, Ollama locally, and Azure-ready infrastructure.
 
-For a teaching-style continuation plan with Azure, staging, local LLM, and next-step guidance, read [PROJECT_CONTINUATION_GUIDE.md](./PROJECT_CONTINUATION_GUIDE.md). For the current technical review and priority order, read [PROJECT_REVIEW_AND_PRIORITIES.md](./PROJECT_REVIEW_AND_PRIORITIES.md). For the single canonical continuation prompt, read [NEXT_PROMPT.md](./NEXT_PROMPT.md).
+Architecture diagram: [index.html](./index.html)
 
-## Current Status
-
-Implemented and verified locally:
-
-- Microservices: User Profile, Book Catalog, Embedding Worker, Recommendation, LLM Service, Frontend.
-- Async boundary: `BookCreated`, `BookEmbedded`, and `UserBookAdded` events are still processed outside the user request path.
-- Open Library integration: search, enrich manually added books, and seed a bounded catalog of recommendation candidates.
-- Offline/local demo catalog: `POST /catalog/seed/demo` seeds a curated recommendation corpus without depending on Open Library.
-- Local LLM path: LLM Service can use Ollama `/api/embed` and `/api/generate`; deterministic embeddings remain available for fast tests. Docker defaults to `LLM_PROVIDER=ollama-with-fallback`, which tries Ollama first and falls back only if Ollama fails, times out, or returns empty text.
-- Local generation model: the default Ollama generation model is `gemma4:e2b`, chosen as the practical Gemma 4 default for an AMD RX 6600-class local GPU. The service sends `OLLAMA_THINK=false` by default because Gemma 4 otherwise spends the full `/api/generate` token budget on hidden thinking and may return an empty `response`. Larger Gemma 4 models remain opt-in through `OLLAMA_GENERATE_MODEL`.
-- Standalone local LLM path: [docker-compose.llm.yml](./docker-compose.llm.yml) runs only Ollama + LLM Service for prompt/embedding experiments.
-- AMD GPU path: [docker-compose.amd.yml](./docker-compose.amd.yml) and [docker-compose.llm.amd.yml](./docker-compose.llm.amd.yml) switch Ollama to `ollama/ollama:rocm` and pass `/dev/kfd` plus `/dev/dri` into the container.
-- Frontend demo console: Streamlit now has Discover, Add book, Reading list, Recommendations, and System flow tabs. The Recommendations tab has a presentation-focused cache view, side-by-side mode comparison, explicit async processing controls, filtering metrics, empty states, and addable recommendation cards. The System flow tab renders a topology-style microservice map, shows catalog/reading/recommendation counts, displays the active LLM model, shows async event backlog/timestamps, worker run/failure/latency state, runs live smoke checks, can run a one-click end-to-end demo scenario, and can send a real prompt through `llm-service`.
-- Frontend user model: the backend supports multiple users via `X-User-Id`; Streamlit is a demo client with a selectable user ID in the sidebar.
-- Local persistence:
-  - Python/dev mode uses `.local/app_state.json`.
-  - Docker Compose mode uses normalized PostgreSQL tables via `DATABASE_URL`, persisted in the `postgres-data` Docker volume.
-  - PostgreSQL schema includes `users`, `books`, `reading_list`, `book_embeddings`, `recommendations`, `events`, and `event_deliveries`.
-  - `book_embeddings.embedding` uses the pgvector `vector` type, and Recommendation uses pgvector cosine ordering when PostgreSQL is enabled.
-  - Services now use granular repository functions for books, users, reading list rows, embeddings, recommendations, and events. The old snapshot storage API remains only as a JSON fallback/test utility.
-  - Ollama models are persisted in the `ollama-models` Docker volume, so models are not downloaded on every restart.
-  - The Ollama container is internal-only; the public LLM microservice is `llm-service` on port `8005`, so host port `11434` does not need to be free.
-- Event contracts: `BookCreated`, `BookEmbedded`, and `UserBookAdded` payloads are validated before publishing.
-- Azure-ready adapters: `shared/events.py` has an optional Azure Service Bus path behind the same `publish`/`pull` functions; LLM Service has an Azure OpenAI REST path behind `LLM_PROVIDER=azure-openai`. Both paths now have mocked adapter tests.
-- Azure dependency packaging: `azure-servicebus==7.13.0` is in `requirements.txt` and was verified through the Docker Compose smoke build.
-- Azure IaC: Bicep builds locally with Azure CLI and `what-if` validates in an allowed Azure for Students region.
-- Tests: host pytest, Dockerized pytest, PostgreSQL integration, isolated Compose smoke, Bicep build, Azure what-if, local app smoke, and LLM smoke pass locally.
-- Docker images: service images build successfully through the Compose smoke path.
-- Recommendation reads and recomputation now defensively filter against the user's current reading list by exact ID and logical book identity (`isbn`, `openlibrary_key`, normalized `title + author`). Responses include `filter_summary`, so the frontend can show how many cached recommendation rows were hidden because they are already owned.
-- Recommendation modes are intentionally distinct: `similar` prioritizes closest vector/genre matches, `widen` boosts strong candidates from less-read genres, and `mood` biases toward the user's stored mood profile.
-- CI/local Docker test isolation: [scripts/docker_pytest.sh](./scripts/docker_pytest.sh) runs pytest inside Docker with its own PostgreSQL service, and [scripts/compose_smoke.sh](./scripts/compose_smoke.sh) now uses a separate Compose project plus `18001`-`18005` host ports so it can run while the main app is up.
-- Real-process HTTP endpoint tests: [tests/test_http_process_endpoints.py](./tests/test_http_process_endpoints.py) starts Uvicorn services on localhost ports and calls endpoints over HTTP. It replaces the earlier skipped in-process harness as the stable endpoint test path. In restricted sandboxes where socket binding is forbidden, those tests skip; in normal local/CI environments they run.
-- Browser regression hook: [tests/test_streamlit_browser.py](./tests/test_streamlit_browser.py) captures the Streamlit System flow page. CI now has a dedicated `streamlit-browser` job that starts the deterministic Compose stack, installs Playwright Chromium, and runs the screenshot test. Local runs still skip cleanly when browser dependencies are not installed.
-- Async worker observability: Embedding Worker and Recommendation `/status` responses include `last_success_at`, `last_error`, `last_duration_ms`, `total_runs`, `total_failures`, `consecutive_failures`, and `last_result`.
-
-Not production-ready yet:
-
-- Azure Service Bus and Azure OpenAI adapters are tested with mocks and Bicep what-if, but not exercised through a live deployed app yet.
-- No Container Apps, PostgreSQL server, or pushed Azure images were deployed in this session.
-- Azure Bicep now includes Service Bus topics/subscriptions, optional PostgreSQL Flexible Server, and a manual CI deployment gate, but it is still not a hardened production deployment.
-- `shared/storage.py` still contains the legacy snapshot compatibility helpers for JSON/dev tests; application services no longer call them directly.
-
-## Latest Verification
-
-Latest local verification:
-
-- `.venv/bin/python -m pytest -q`: passes with `49 passed, 5 skipped`; real-process HTTP endpoint tests pass when localhost socket binding is available. The Streamlit browser screenshot test is one of the skipped tests unless Playwright/Chromium are installed.
-- `scripts/docker_pytest.sh`: passes in Docker with PostgreSQL, `50 passed, 4 skipped`.
-- PostgreSQL repository integration: `TEST_DATABASE_URL=postgresql://book_ai:book_ai_password@127.0.0.1:15432/book_ai_library .venv/bin/python -m pytest -q tests/test_postgres_storage.py` is the current local host-port path for `docker-compose.ci.yml`.
-- CI Compose smoke: `PYTHON_BIN=.venv/bin/python scripts/compose_smoke.sh` passes with isolated project `book-ai-ci`, deterministic LLM, frontend build, alternate ports, and `ok: 1 recommendations returned`.
-- Running Docker app smoke: `.venv/bin/python scripts/local_app_smoke.py` passes against the rebuilt main Compose stack with `ok: local app demo_total=31 recommendations=9`. The smoke fails if recommendations overlap with the reading list by ID or logical book identity.
-- Running LLM smoke: `.venv/bin/python scripts/llm_smoke.py` passes against the main Compose stack with `provider=ollama-with-fallback embedding_dims=768 generated_chars=25`.
-- Browser-friendly LLM GET prompt: `GET /v1/generate?prompt=...` returns a real Gemma 4 response through `llm-service` with `provider=ollama:gemma4:e2b`.
-- Running model check: `GET /v1/models` reports `ollama_generate_model=gemma4:e2b` and `ollama_think=false`.
-- Worker status checks: `GET /status` on Embedding Worker and Recommendation return event backlog rows plus worker observability. Latest live payloads showed `pending=0`, delivered counts, `last_error=null`, and successful worker run counters.
-- Manual overlap check against the running stack: recommendation smoke returns unread books only; `similar`, `widen`, and `mood` use distinct scoring paths and explanations.
-- Main stack was rebuilt and restarted after the recommendation/System flow changes; all eight containers are running.
-- `az account show`: subscription is `Azure for Students`.
-- Azure policy assignment `sys.regionrestriction` allows only `italynorth`, `switzerlandnorth`, `swedencentral`, `spaincentral`, and `germanywestcentral`.
-- `az bicep build --file infra/bicep/main.bicep`: passes.
-- `DEPLOY_APPS=false DEPLOY_POSTGRES=false scripts/azure_what_if.sh book-ai-library-stage-rg spaincentral book-ai-library local-test`: passes; predicts 9 infrastructure resources.
-- `DEPLOY_APPS=false DEPLOY_POSTGRES=true POSTGRES_ADMIN_PASSWORD=... scripts/azure_what_if.sh book-ai-library-stage-rg spaincentral book-ai-library local-test`: passes; predicts 13 resources including PostgreSQL Flexible Server, database, pgvector allow-list, and firewall rule.
-- `docker compose -f docker-compose.yml config`: valid for the main stack.
-- `docker compose -f docker-compose.llm.yml config`: valid for the standalone local LLM stack.
-- `docker compose -f docker-compose.yml -f docker-compose.amd.yml config`: valid for the AMD ROCm main stack override.
-- `docker compose -f docker-compose.llm.yml -f docker-compose.llm.amd.yml config`: valid for the AMD ROCm standalone LLM override.
-- `docker-compose.yml`: Ollama is internal-only and does not publish host port `11434`.
-- `docker-compose.yml`: `ollama-pull` uses `entrypoint: ["/bin/sh", "-lc"]`, so the pull commands are executed by a shell instead of being parsed as Ollama subcommands.
-
-The Gemma 4 model download may be large. `gemma4:e2b` is about 7.2 GB in Ollama's library, `gemma4:e4b` is about 9.6 GB, and `gemma4:26b` is the MoE option at about 18 GB. The Compose wiring and LLM adapter behavior are covered by tests.
-
-Current AMD GPU note: the host has an AMD Radeon RX 6600-class GPU visible through `lspci`, but this sandbox currently does not expose `/dev/kfd` or `/dev/dri`. The normal Compose stack therefore ran Ollama on CPU; Ollama logs reported `offloaded 0/36 layers to GPU`. The AMD ROCm Compose overrides are present and validated, but a live GPU smoke requires those devices to be visible to Docker.
-
-Azure staging note: the what-if probes created empty resource groups `book-ai-library-rg` in `westeurope`, `book-ai-library-pl-rg` in `polandcentral`, and `book-ai-library-stage-rg` in `spaincentral`. The first two regions are policy-blocked for actual resources in this subscription. The groups are empty and can be deleted if you want a clean Azure portal.
+Presentation/deployment briefing: [AZURE_PRESENTATION_GUIDE.md](./AZURE_PRESENTATION_GUIDE.md)
 
 ## Requirements Mapping
 
-1. Microservices: User Profile, Book Catalog, Embedding Worker, Recommendation, LLM Service, Frontend.
-2. Asynchronous communication: local event adapter now; Azure Service Bus target.
-3. Cloud SaaS services: Azure OpenAI, PostgreSQL, Service Bus, ACR in target architecture.
-4. Serverless / Kubernetes: Azure Container Apps target.
-5. Minimal frontend: Streamlit.
-6. Infrastructure as Code: Bicep starter in [infra/bicep](./infra/bicep).
-7. CI/CD: GitHub Actions starter in [.github/workflows/ci.yml](./.github/workflows/ci.yml).
-8. Architecture diagrams: [index.html](./index.html).
+| Requirement | Implementation |
+| --- | --- |
+| Microservices, min. 3 nodes | `user-profile`, `book-catalog`, `embedding-worker`, `recommendation`, `llm-service`, plus `frontend` |
+| Async communication | `BookCreated`, `BookEmbedded`, `UserBookAdded` events through `shared/events.py`; Azure Service Bus adapter path exists |
+| Cloud SaaS | Target: Azure OpenAI, Azure Service Bus, Azure Database for PostgreSQL, ACR |
+| Serverless / Kubernetes-like | Target: Azure Container Apps via Bicep |
+| Minimal frontend | Streamlit |
+| Infrastructure as Code | `infra/bicep/main.bicep` |
+| CI/CD | `.github/workflows/ci.yml` |
+| Architecture diagram | `index.html` |
 
-## Architecture Clarifications
+## Current App Shape
 
-- Is it REST? Mostly yes. User-facing and service-facing synchronous APIs are HTTP REST-ish FastAPI endpoints. The architecture is not pure REST because it deliberately also uses asynchronous events for the embedding/recommendation pipeline.
-- Is it one-user only? No at the backend level. User Profile and Recommendation accept user identity through `X-User-Id` or `user_id` query parameters. The frontend was originally hard-coded to `demo-user`; it now has a sidebar user selector for local demos.
-- Is the frontend a production UI? No. It is a Streamlit POC UI required by the course. It should be good enough for presentation, but the production evolution path is still React/Next.js or another proper frontend.
+- Streamlit starts with a local sign-in/create-account screen using email + password.
+- User profile and reading list persist in PostgreSQL in Docker mode.
+- Home loads saved profile/library state from PostgreSQL first. It calls the LLM only when `Regenerate profile summary with LLM` is clicked, then saves the generated summary back into the profile.
+- Explore provides curated shelves that can be added to the user's library.
+- Recommendations has two paths:
+  - `GET /recommendations`: fast cache-only read of precomputed recommendations.
+  - `POST /recommendations/ask`: explicit LLM command using the user's prompt and already-filtered unread candidates.
+- The recommendation engine is isolated behind `RECOMMENDATION_ENGINE`; the current engine is `vector-similarity`.
+- Adding a book stays responsive. Embeddings and recommendation recomputation happen asynchronously.
+- Book reads support basic REST caching: `GET /books/{id}` returns `ETag` and honors `If-None-Match`.
 
-## Application Structure
+Do not move LLM calls into `GET /recommendations`; that endpoint is deliberately cache-only.
 
-- [services/user-profile](./services/user-profile): user profile and reading list API.
-- [services/book-catalog](./services/book-catalog): metadata store, Open Library search/enrichment, `BookCreated` publisher.
-- [services/embedding-worker](./services/embedding-worker): consumes `BookCreated`, calls LLM Service, writes embeddings, publishes `BookEmbedded`.
-- [services/recommendation](./services/recommendation): consumes embedding/user events, precomputes cached recommendations.
-- [services/llm-service](./services/llm-service): adapter for deterministic local mode, Ollama, or Azure OpenAI.
-- [frontend/streamlit](./frontend/streamlit): local demo UI with Discover, Add book, Reading list, Recommendations, and live System flow tabs.
-- [shared](./shared): config, repositories, event contracts/adapters, Open Library client, vector helpers.
-- [docker-compose.yml](./docker-compose.yml): local container stack with persistent PostgreSQL and Ollama volumes.
-- [docker-compose.llm.yml](./docker-compose.llm.yml): standalone local LLM stack with persistent Ollama models and public LLM Service on port `8005`.
-- [docker-compose.ci.yml](./docker-compose.ci.yml): deterministic-LLM Compose stack for CI smoke tests.
-- [infra/db/001_init.sql](./infra/db/001_init.sql): normalized PostgreSQL + pgvector schema.
+## Recommendation Design
 
-## Run Locally - Fast Python Mode
+The recommendation path is intentionally split into two layers:
 
-Use this for development and tests. It does not require Docker models.
+1. Candidate engine: `vector-similarity` uses pgvector/cosine-style candidate retrieval and mode-specific scoring.
+2. LLM guide: `POST /recommendations/ask` sends the user's reading list, saved recommendation instructions, request text, and engine candidates to `llm-service`.
+
+The three modes use the same candidate engine but different ranking logic:
+
+| Mode | Intent |
+| --- | --- |
+| `similar` | stay close to the user's current library and overlapping genres |
+| `widen` | prefer useful novelty and underrepresented genres |
+| `mood` | bias candidates toward the user's saved mood keywords |
+
+The LLM is not limited to the vector candidate list by default. The candidates ground the prompt, but the model may recommend an outside book if it explains why it is a better fit. Users can save persistent recommendation instructions in the frontend; those instructions are stored in their profile and included in every LLM recommendation prompt.
+
+Swapping the recommendation engine should happen behind the service boundary, not in the frontend. A future engine can replace `vector-similarity` with collaborative filtering, a graph recommender, a learning-to-rank model, or a dedicated vector database while preserving:
+
+- `GET /recommendations`
+- `POST /recommendations/ask`
+- the async event boundary
+- the frontend contract
+
+## Architecture Notes
+
+This is a REST-based microservice app with one async pipeline:
+
+- Browser users interact with the Streamlit frontend only.
+- Streamlit calls backend FastAPI services over REST.
+- `user-profile`, `book-catalog`, `recommendation`, and `llm-service` expose HTTP APIs.
+- `embedding-worker` is a worker service with HTTP health/admin endpoints, but its main work is async event processing.
+- `BookCreated`, `BookEmbedded`, and `UserBookAdded` events decouple writes from embeddings/recommendation recomputation.
+- PostgreSQL/pgvector stores users, books, reading lists, embeddings, cached recommendations, and local event state.
+
+The local Docker stack runs Ollama plus Gemma through `llm-service`, so the LLM path is visible without cloud inference cost. The Azure deployment path can run the same `llm-service` in deterministic mode when Azure OpenAI is not configured; that proves the microservice wiring without spending on model inference. When Azure OpenAI settings are provided, only `llm-service` changes provider.
+
+## LLM Deployment Choices
+
+The application deliberately keeps all model calls behind `llm-service`, so the rest of the microservices do not care which provider is active.
+
+| Option | Where it runs | When to use it | Trade-off |
+| --- | --- | --- | --- |
+| Local Ollama/Gemma | Your machine through Docker Compose | Best final demo path when you want real model output without cloud inference cost. | Requires local model download and enough CPU/GPU/RAM. |
+| Deterministic provider | Local or Azure `llm-service` container | Proves microservice wiring and keeps Azure cost low when no Azure OpenAI is configured. | Not real AI inference; acceptable only as a technical fallback/demo mode. |
+| Azure OpenAI | Azure SaaS behind `llm-service` | Cleanest cloud/SaaS story for the final requirements. | Requires endpoint, key, and deployment names; consumes Azure OpenAI quota/credits. |
+| Hybrid local LLM | Azure services call a public `llm-service` URL tunneled to your PC | Good demo option when Azure should run the app but your local machine should provide stronger model inference. | Requires a stable HTTPS tunnel such as Cloudflare Tunnel/ngrok, your PC must stay online, and it is not a production security model. |
+| Ollama in Azure | Optional internal Container App running `ollama/ollama` | Good enough for a POC with a tiny model such as `qwen3:0.6b`. | Can be slow, may produce weak output, auto-pulls models after cold start, and uses more Azure credits. Not production-hardened. |
+
+For this project, the recommended presentation is: use local Ollama/Gemma to show real LLM behavior, then show the Azure deployment with deterministic or Azure OpenAI mode to satisfy the cloud/serverless/SaaS requirements. Running Ollama/Gemma in Azure is a valid future extension, but it is not the cheapest or simplest path for a student POC.
+
+Hybrid Azure-to-local LLM deployment is supported through `EXTERNAL_LLM_SERVICE_URL`. Example:
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -r requirements.txt
-./scripts/run_local.sh
+# 1. Run local LLM service and expose it with a secure HTTPS tunnel.
+# 2. Deploy Azure services pointing to that public llm-service URL.
+EXTERNAL_LLM_SERVICE_URL='https://your-tunnel.example.com' \
+DEPLOY_APPS=true DEPLOY_POSTGRES=true POSTGRES_ADMIN_PASSWORD='<strong-password>' \
+  scripts/deploy_azure.sh book-ai-library-stage-rg spaincentral book-ai-library azure-hybrid
+```
+
+In that mode, Azure Container Apps still run the microservices, Service Bus, PostgreSQL, ACR, and Log Analytics. The LLM Service dependency is remote, which is acceptable for a POC architecture demonstration because it proves the service boundary is real.
+
+Tiny self-hosted Azure model POC:
+
+```bash
+DEPLOY_APPS=true DEPLOY_POSTGRES=true DEPLOY_OLLAMA=true \
+OLLAMA_GENERATE_MODEL='qwen3:0.6b' \
+OLLAMA_EMBED_MODEL='embeddinggemma' \
+POSTGRES_ADMIN_PASSWORD='<strong-password>' \
+  scripts/deploy_azure.sh book-ai-library-stage-rg spaincentral book-ai-library azure-qwen-poc
+```
+
+This creates an internal `book-ai-library-ollama` Container App and points `llm-service` at it with `LLM_PROVIDER=ollama-with-fallback` and `OLLAMA_AUTO_PULL=true`. The first request can be slow because the model is downloaded after startup. For a demo, that is acceptable; for production, use Azure OpenAI, managed model serving, or a properly sized GPU workload.
+
+## Repository Structure
+
+```text
+.
+├── services/
+│   ├── user-profile/        # users and reading lists
+│   ├── book-catalog/        # metadata, Open Library, BookCreated events
+│   ├── embedding-worker/    # BookCreated -> vector -> BookEmbedded
+│   ├── recommendation/      # cached recommendations + LLM-guided ask command
+│   └── llm-service/         # Ollama / Azure OpenAI adapter
+├── frontend/streamlit/      # web UI
+├── shared/                  # config, repositories, events, Open Library, text/vector helpers
+├── infra/
+│   ├── db/001_init.sql      # PostgreSQL + pgvector schema
+│   └── bicep/main.bicep     # Azure target infrastructure
+├── scripts/                 # CI, smoke, and Azure helper scripts
+├── tests/                   # unit, integration, real-process HTTP, browser hooks
+├── docker-compose.yml       # local app stack
+├── docker-compose.ci.yml    # deterministic CI smoke stack
+├── docker-compose.test.yml  # Docker pytest stack
+└── .github/workflows/ci.yml
+```
+
+Generated local folders such as `.venv/`, `.local/`, `.pytest_cache/`, and `__pycache__/` are ignored and should not be committed.
+
+## Run Locally
+
+```bash
+docker compose up -d --build
 ```
 
 Open:
@@ -130,388 +149,305 @@ Open:
 - Recommendation API: <http://127.0.0.1:8004/docs>
 - LLM Service API: <http://127.0.0.1:8005/docs>
 
-Demo the live architecture:
+The only port a normal user needs is `8501`. Ports `8001-8005` are developer API ports:
 
-1. Open the Streamlit frontend and go to **System flow**.
-2. Use **Run demo scenario** to seed candidate books, add Dune to the reading list, run the async workers, and read cached recommendations.
-3. Use **Refresh flow** to show the current microservice topology and which services are online.
-4. Use **Run async pass** after adding books to process pending events without waiting for the background loop.
-5. Use **Run smoke checks** to show a live demo check table against the running services.
-6. Use the prompt box to send a real request through `llm-service`; the response caption shows whether Gemma 4 or the fallback answered.
+| Port | Service | Use |
+| --- | --- | --- |
+| `8001` | User Profile | test account/profile/reading-list endpoints |
+| `8002` | Book Catalog | inspect/search/create books and seed catalog |
+| `8003` | Embedding Worker | health/status/admin `POST /work` for async processing |
+| `8004` | Recommendation | cached recommendations, `Ask AI`, profile summary |
+| `8005` | LLM Service | direct embedding/generation adapter tests |
 
-The System flow smoke checks are presentation checks against the running app. Full tests still run from the terminal and in CI.
+You usually do not open ports `8001-8005` while presenting the app. They exist so a reviewer or developer can inspect each microservice independently through `/docs`, prove the services are separately deployable, and test REST contracts without the frontend.
 
-Verify:
-
-```bash
-pytest -q
-./scripts/run_backend_smoke.sh
-```
-
-## Run Locally - Container Mode
-
-Use this to prepare for Azure. It runs services as containers, stores app state in PostgreSQL, and uses Ollama for local embeddings/generation.
+Example:
 
 ```bash
-docker compose build
-docker compose up
+curl -fsS http://127.0.0.1:8004/health
+curl -fsS http://127.0.0.1:8005/v1/generate?prompt=Recommend%20one%20book
 ```
 
-First startup pulls the configured Ollama models:
+In Azure, only the frontend and Recommendation service are public. The other service URLs are internal Container Apps DNS names.
 
-- `OLLAMA_EMBED_MODEL=embeddinggemma`
-- `OLLAMA_GENERATE_MODEL=gemma4:e2b`
-- `OLLAMA_THINK=false`
+Useful local flow:
 
-Those downloads are stored in the persistent `ollama-models` Docker volume. PostgreSQL data is stored in `postgres-data`.
-The `ollama-pull` helper runs via a shell entrypoint, so it actually executes `ollama pull ...` instead of being misparsed by the Ollama binary.
+1. Create a local user with email + password, or sign in to an existing local user.
+2. Open Explore and add a few books.
+3. Open Recommendations and click `Process async updates`.
+4. Compare cached modes or use `Ask AI`.
+5. Open Home and click `Regenerate profile summary with LLM` only when you want a fresh generated profile.
+6. Open Architecture to show service health, event status, and the Azure/ACA-style component layout.
 
-Gemma 4 model choice:
+## LLM Service Usage
 
-- Default: `gemma4:e2b`. Best local-first choice for an AMD RX 6600-class 8 GB GPU because it is the smallest current Gemma 4 edge model.
-- Higher quality edge option: `OLLAMA_GENERATE_MODEL=gemma4:e4b`, but expect more memory pressure.
-- MoE option: `OLLAMA_GENERATE_MODEL=gemma4:26b`. This is the Gemma 4 Mixture-of-Experts model with about 4B active parameters, but the Ollama package is much larger and is not the safe default for an 8 GB local GPU.
-- Workstation dense option: `OLLAMA_GENERATE_MODEL=gemma4:31b`, only for machines with substantially more memory.
+`GET /v1/generate?prompt=...` is a browser-friendly test helper.
 
-Generation setting:
-
-- Keep `OLLAMA_THINK=false` for the app path. With `gemma4:e2b`, Ollama `/api/generate` can otherwise spend the whole `num_predict` budget on thinking tokens and return an empty `response`. The CLI may still appear to work because it displays thinking output differently.
-- Set `OLLAMA_THINK=true` only when intentionally experimenting with reasoning traces and after increasing `OLLAMA_NUM_PREDICT`.
-
-References:
-
-- Gemma 4 model overview: <https://deepmind.google/models/gemma/gemma-4/>
-- Ollama Gemma 4 tags and model sizes: <https://ollama.com/library/gemma4>
-- Ollama Docker AMD ROCm usage: <https://hub.docker.com/r/ollama/ollama>
-
-Useful commands:
+`POST /v1/generate` is the real service command used by the app:
 
 ```bash
-docker compose ps
-docker compose logs -f llm-service
-docker compose logs -f ollama-pull
-docker compose down
+curl -fsS -X POST http://127.0.0.1:8005/v1/generate \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt":"Recommend one book","context":{"title":"Dune"}}'
 ```
 
-Keep volumes when stopping:
+Expected response shape:
+
+```json
+{"text":"...","provider":"ollama:gemma4:e2b"}
+```
+
+If Ollama is slow or unavailable and `LLM_PROVIDER=ollama-with-fallback`, the service falls back to deterministic local text so the demo stays usable. With `LLM_PROVIDER=ollama`, failures are returned as upstream errors.
+
+Stop containers without deleting data:
 
 ```bash
 docker compose down
 ```
 
-Delete all local persisted data and models:
+Reset PostgreSQL/Ollama volumes:
 
 ```bash
 docker compose down -v
 ```
 
-## Run Locally - AMD GPU Ollama
+## Verify
 
-Use this only when the host exposes AMD ROCm devices to Docker. Check first:
-
-```bash
-ls -l /dev/kfd /dev/dri
-```
-
-Run the full app with the ROCm Ollama image:
+Host tests:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.amd.yml up -d --build
+python -m pip install -r requirements.txt
+python -m pytest -q
 ```
 
-Run only Ollama + LLM Service with the ROCm Ollama image:
-
-```bash
-docker compose -f docker-compose.llm.yml -f docker-compose.llm.amd.yml up -d --build
-```
-
-If `/dev/kfd` or `/dev/dri` is missing, Docker cannot pass the AMD GPU into the container. Use the normal CPU compose files until ROCm/driver/container permissions are fixed.
-
-## Local LLM Requests
-
-After `docker compose up`, you can call the local LLM adapter directly:
-
-```bash
-curl -s http://127.0.0.1:8005/health
-```
-
-Browser/quick prompt:
-
-```bash
-curl -s "http://127.0.0.1:8005/v1/generate?prompt=Recommend%20one%20short%20science%20fiction%20book"
-```
-
-```bash
-curl -s http://127.0.0.1:8005/v1/embed \
-  -H 'Content-Type: application/json' \
-  -d '{"text":"Dune by Frank Herbert, desert ecology and politics"}'
-```
-
-```bash
-curl -s http://127.0.0.1:8005/v1/generate \
-  -H 'Content-Type: application/json' \
-  -d '{"prompt":"Explain why Dune is a good recommendation for a science fiction reader."}'
-```
-
-Command helper:
-
-```bash
-./scripts/llm_prompt.py "Recommend one short science fiction book"
-```
-
-The LLM Service calls Ollama’s official `POST /api/embed` endpoint for embeddings. Source: <https://docs.ollama.com/api/embed>.
-If Ollama is unavailable, times out, or returns an empty generation, the `ollama-with-fallback` mode logs the reason and returns a deterministic template response so the local demo does not break. When Ollama succeeds, `/v1/generate` returns `provider=ollama:gemma4:e2b`.
-
-### `POST /v1/generate` vs `GET /v1/generate`
-
-Both endpoints call the same generation adapter.
-
-- `POST /v1/generate` is the application contract. It accepts JSON, supports future structured fields like `context`, and is what scripts, tests, and other services should use.
-- `GET /v1/generate?prompt=...` is a browser/manual convenience endpoint. It exists so you can paste a URL or use a simple `curl` command while checking the LLM container.
-
-Do not build backend service-to-service logic on the GET endpoint. Keep GET for manual inspection and POST for real application calls.
-
-## Run Only The Local LLM
-
-Use this when you only want Ollama plus the `llm-service` API, not the whole application:
-
-```bash
-docker compose -f docker-compose.llm.yml build
-docker compose -f docker-compose.llm.yml up
-```
-
-Open:
-
-- LLM Service docs: <http://127.0.0.1:8005/docs>
-- LLM Service usage JSON: <http://127.0.0.1:8005/>
-
-Verify:
-
-```bash
-./scripts/llm_smoke.py
-./scripts/llm_prompt.py "Recommend one short science fiction book"
-```
-
-The Ollama model volume is still `ollama-models`, so models are not downloaded on every restart. Ollama itself remains internal-only to avoid host port `11434` conflicts.
-
-## Open Library Flow
-
-Book Catalog exposes:
-
-- `GET /external/openlibrary/search?query=...`
-- `POST /books`
-- `POST /catalog/seed/openlibrary`
-- `POST /catalog/seed/demo`
-
-Design intent:
-
-- User can add a title with minimal metadata.
-- Book Catalog enriches missing author/description/genres/ISBN/cover from Open Library.
-- The catalog can be seeded with bounded Open Library searches, creating unread recommendation candidates.
-- The demo catalog can be seeded locally when Open Library is slow, unavailable, or blocked.
-- Seeded books emit `BookCreated`, are embedded asynchronously, and are then available for recommendation ranking.
-
-Do not turn Open Library integration into a crawler. Keep it bounded by query and limit; use official Open Library dumps for a large offline corpus.
-
-## Testing
-
-All tests:
-
-```bash
-pytest -q
-```
-
-Single service or integration area:
-
-```bash
-pytest -q tests/test_llm_service.py
-pytest -q tests/test_open_library.py
-pytest -q tests/test_shared_flow.py
-pytest -q tests/test_event_contracts.py
-pytest -q tests/test_azure_adapters.py
-pytest -q tests/test_book_catalog_demo_seed.py
-pytest -q tests/test_service_health.py
-```
-
-PostgreSQL-backed integration test:
-
-```bash
-docker compose -f docker-compose.ci.yml up -d postgres
-TEST_DATABASE_URL=postgresql://book_ai:book_ai_password@127.0.0.1:15432/book_ai_library \
-  pytest -q tests/test_postgres_storage.py
-docker compose -f docker-compose.ci.yml down -v
-```
-
-Full pytest inside Docker:
+Docker pytest:
 
 ```bash
 scripts/docker_pytest.sh
 ```
 
-Backend smoke test:
+Isolated deterministic Compose smoke:
 
 ```bash
-./scripts/run_backend_smoke.sh
+PYTHON_BIN=python scripts/compose_smoke.sh
 ```
 
-Container smoke test with deterministic LLM and pgvector PostgreSQL:
+Smoke the already-running main stack:
 
 ```bash
-PYTHON_BIN=.venv/bin/python ./scripts/compose_smoke.sh
+python scripts/local_app_smoke.py
 ```
 
-Full local app smoke against the main Docker stack:
+Manual recommendation command check against a running Docker stack:
 
 ```bash
-docker compose up -d --build
-.venv/bin/python scripts/local_app_smoke.py
+curl -fsS -X POST http://127.0.0.1:8004/recommendations/ask \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "user_id":"demo-user",
+    "type":"widen",
+    "prompt":"Recommend something ambitious but readable.",
+    "allow_outside_candidates":true
+  }'
 ```
 
-Standalone LLM smoke:
+Latest verified state:
+
+- Host pytest: not run in this shell because pytest is not installed globally; use the install command above or Docker pytest.
+- Docker pytest: `53 passed, 5 skipped`
+- Compose smoke: passed
+- Main stack smoke: `ok: local app demo_total=39 recommendations=10`
+- Live Docker recommendation command: fresh user + async processing + `POST /recommendations/ask` passed with `source=llm-over-engine-candidates`, `engine=vector-similarity`, `provider=ollama:gemma4:e2b`
+- Direct LLM POST inside Compose: passed with `provider=ollama:gemma4:e2b`
+- Local auth endpoints inside Compose: signup/signin passed
+- Frontend robustness patch: add-book actions no longer crash if an Azure service returns an unexpected payload; demo catalog seed falls back from `POST /catalog/seed/demo` to stable `POST /books` calls when an older Book Catalog image returns HTTP 405.
+- 2026-06-17 validation after Azure frontend crash fix: `python3 -m py_compile frontend/streamlit/app.py services/llm-service/app/main.py tests/test_llm_service.py`, shell syntax checks, `az bicep build --file infra/bicep/main.bicep`, `docker compose -f docker-compose.yml config`, `scripts/docker_pytest.sh`, and `python3 scripts/local_app_smoke.py` passed.
+- 2026-06-17 Azure fix: all Container Apps updated to image tag `azure-20260617-1`; internal service URLs changed from `http://...internal...` to `https://...internal...` to avoid Azure Container Apps 301 redirects changing POST requests into GET requests. Live internal `POST /me/books` smoke passed and public `scripts/azure_smoke.sh book-ai-library-stage-rg book-ai-library` passed.
+- 2026-06-17 Azure database fix: service containers now use shared Azure PostgreSQL through `DATABASE_URL=secretref:database-url`; full internal Azure flow passed: seed demo catalog -> add Dune -> run workers -> read non-empty recommendations. User Profile hotfix image is `azure-20260617-2`.
+- 2026-06-17 Azure stage fix: current live image tag is `azure-qwen-poc`; Book Catalog, User Profile, Embedding Worker, and Recommendation have `DATABASE_URL=secretref:database-url`, `OPEN_LIBRARY_TIMEOUT_SECONDS=25`, and internal HTTPS service URLs. Live smoke passed with `scripts/azure_smoke.sh book-ai-library-stage-rg book-ai-library`: frontend OK, Recommendation health OK, public LLM adapter OK with `provider=ollama:qwen3:0.6b`, internal add/read/recommend flow OK with `books=1 recs=10`, and Open Library discovery OK.
+- Local LLM generation budget is now `OLLAMA_NUM_PREDICT=512`, so Ask AI responses are less likely to stop mid-sentence.
+
+Browser screenshots are in `tests/test_streamlit_browser.py`. They run in CI with Playwright/Chromium; locally they skip unless browser dependencies are installed.
+
+## Presentation Readiness
+
+Local Docker is ready to present as the application demo. It proves the microservice split, REST APIs, async event flow, PostgreSQL/pgvector persistence, local LLM adapter, frontend, and tests.
+
+For the final university requirement set, also redeploy the Azure stage before submission if the reviewer expects to see cloud resources live. The local app demonstrates the behavior; the Azure deployment demonstrates SaaS/serverless/Kubernetes-style hosting.
+
+Recommended final demo flow:
+
+1. Start locally with `docker compose up -d --build`.
+2. Run `scripts/docker_pytest.sh` to show the test suite.
+3. Open <http://127.0.0.1:8501>, create/sign in to a user, add books from Explore, run `Process async updates`, then use `Ask AI`.
+4. Open the Architecture tab and show each service node, health state, LLM provider, and async worker/event status.
+5. Open <http://127.0.0.1:8004/docs> and <http://127.0.0.1:8005/docs> to show independent service APIs.
+6. Open [index.html](./index.html) to show the architecture diagram matching the running system.
+7. For Azure, run `scripts/azure_smoke.sh book-ai-library-stage-rg book-ai-library` and show Azure Container Apps, Service Bus, PostgreSQL, ACR, and Log Analytics in the Azure portal or CLI output.
+
+What is still not production-grade:
+
+- Local email/password auth is intentionally simple and should be replaced by Entra External ID, Azure AD B2C, Clerk, or another real identity provider.
+- Azure deployment still uses connection strings and ACR admin credentials; managed identity/RBAC is the next hardening step.
+- Local Ollama is for a cost-free demo. Azure OpenAI is supported behind `llm-service`, but real deployment settings must be provided to use it.
+- Only the frontend and Recommendation API are public in Azure. Internal services remain private by design.
+
+## Requirement Demonstration
+
+| Polish requirement | How this project addresses it | How to demonstrate it |
+| --- | --- | --- |
+| `architektura mikroserwisów (min. 3 węzły)` | Six deployable containers: `frontend`, `user-profile`, `book-catalog`, `embedding-worker`, `recommendation`, `llm-service`. | Run `docker compose ps`; open service Swagger pages on ports `8001-8005`; show `services/` folders. |
+| `komunikacja asynchroniczna` | Adding books publishes `BookCreated`/`UserBookAdded`; workers later consume events and compute embeddings/recommendations. | Add a book, then click `Process async updates`; show Architecture tab event/worker status; inspect `shared/events.py`. |
+| `usługi SaaS w chmurze` | Azure target uses Azure Service Bus, Azure Database for PostgreSQL, ACR, Log Analytics, and optionally Azure OpenAI. | After redeploy, show these resources in resource group `book-ai-library-stage-rg`; run `scripts/azure_smoke.sh`. |
+| `serverless lub Kubernetes` | Azure Container Apps hosts each container app in a managed serverless Kubernetes-like environment with scale settings. | Show Container Apps resources in Azure or `infra/bicep/main.bicep`; explain local Docker maps to ACA. |
+| `minimalny frontend` | Streamlit frontend in `frontend/streamlit`, public on port `8501` locally and as a public Container App in Azure. | Open <http://127.0.0.1:8501>; sign in, add books, ask for recommendations. |
+| `Infrastructure as Code` | Azure resources are defined in Bicep at `infra/bicep/main.bicep`. | Run `az bicep build --file infra/bicep/main.bicep`; show Bicep resources. |
+| `CI/CD` | GitHub Actions runs tests, Docker pytest, Compose smoke, browser checks, Bicep build, and a manual Azure deployment gate. | Open `.github/workflows/ci.yml`; show completed CI jobs or run the workflow manually. |
+| `Diagram architektury` | Static architecture document is `index.html`; frontend Architecture tab shows the live topology. | Open `index.html`; compare it to the Architecture tab in Streamlit. |
+
+## CI/CD
+
+GitHub Actions jobs:
+
+- `test`: install deps, compile, run pytest
+- `postgres-integration`: run PostgreSQL/pgvector integration tests
+- `docker-pytest`: run tests inside Docker with PostgreSQL
+- `compose-smoke`: build/run deterministic local stack and smoke it
+- `streamlit-browser`: run browser screenshot checks against the CI stack
+- `bicep-build`: validate Bicep syntax
+- `azure-deploy-gate`: manual Azure deployment gate only
+
+Azure deployment is manual by design. Do not deploy paid resources automatically.
+
+## Azure Path
+
+Target Azure resources are defined in `infra/bicep/main.bicep`:
+
+- Azure Container Apps environment
+- Container Apps for services/frontend
+- Azure Container Registry
+- Azure Service Bus topics/subscriptions
+- Optional Azure Database for PostgreSQL Flexible Server
+- Log Analytics
+- Azure OpenAI configuration through environment variables/secrets
+
+Current local-to-Azure mapping:
+
+- Local `postgres` container -> Azure Database for PostgreSQL Flexible Server with pgvector.
+- Local event table adapter -> Azure Service Bus topics/subscriptions behind the same `publish`/`pull` semantics.
+- Local Ollama/Gemma through `llm-service` -> Azure OpenAI or optional internal Azure Ollama behind the same `/v1/embed` and `/v1/generate` API.
+- Local Docker Compose services -> Azure Container Apps containers.
+- Local Streamlit frontend -> public Azure Container App.
+
+## Current Azure Deployment
+
+Deployed on 2026-06-16 and fixed/validated again on 2026-06-17 in the Azure for Students subscription.
+
+| Item | Value |
+| --- | --- |
+| Resource group | `book-ai-library-stage-rg` |
+| Region | `spaincentral` |
+| Image tag | `azure-qwen-poc` |
+| LLM mode | Internal Azure Ollama Container App with `qwen3:0.6b` behind `llm-service`; `llm-service` still exposes `/v1/embed` and `/v1/generate` |
+| ACR | `bookaibookailibrary4biet5q2bsamwacr.azurecr.io` |
+| PostgreSQL server | `book-ai-library-4biet5q2bsamw-pg` |
+| Service Bus namespace | `book-ai-library-4biet5q2bsamw-bus` |
+| Frontend URL | Current observed URL: `https://book-ai-library-frontend.wittydesert-682b90bb.spaincentral.azurecontainerapps.io/`; previous deleted URL was `https://book-ai-library-frontend.whitehill-edc41080.spaincentral.azurecontainerapps.io` |
+| Recommendation URL | Current observed URL: `https://book-ai-library-recommendation.wittydesert-682b90bb.spaincentral.azurecontainerapps.io`; previous deleted URL was `https://book-ai-library-recommendation.whitehill-edc41080.spaincentral.azurecontainerapps.io` |
+
+The current stage was updated in place on 2026-06-17. To recreate the same stage deployment, run:
 
 ```bash
-docker compose -f docker-compose.llm.yml up -d --build
-.venv/bin/python scripts/llm_smoke.py
+DEPLOY_APPS=true DEPLOY_POSTGRES=true DEPLOY_OLLAMA=true \
+OLLAMA_GENERATE_MODEL='qwen3:0.6b' \
+OLLAMA_EMBED_MODEL='embeddinggemma' \
+POSTGRES_ADMIN_PASSWORD='<strong-password>' \
+  scripts/deploy_azure.sh book-ai-library-stage-rg spaincentral book-ai-library azure-qwen-poc
 ```
 
-Compose config checks:
+Deployment smoke after redeploy:
 
 ```bash
-docker compose -f docker-compose.yml config
-docker compose -f docker-compose.llm.yml config
-docker compose -f docker-compose.yml -f docker-compose.amd.yml config
-docker compose -f docker-compose.llm.yml -f docker-compose.llm.amd.yml config
-docker compose -f docker-compose.test.yml config
+scripts/azure_smoke.sh book-ai-library-stage-rg book-ai-library
 ```
 
-Manual service checks:
+The smoke script checks:
+
+- Frontend public URL returns HTTP 200.
+- `GET /health` on Recommendation returns `{"status":"ok","service":"recommendation"}`.
+- `GET /recommendations?user_id=demo-user&type=similar` returns HTTP 200; an empty recommendation cache is expected for a fresh database.
+- `POST /profile/summary` through Recommendation exercises the public LLM adapter path.
+- Internal private service flow from the User Profile container: seed demo catalog, add Dune, read the same user's library from PostgreSQL, run worker endpoints, verify non-empty unread recommendations, and verify Open Library discovery.
+
+Azure frontend troubleshooting:
+
+- If sign-in works but adding a book shows `KeyError: 'book'`, the frontend expected a newer User Profile response shape. Rebuild and redeploy all images with the same tag; the frontend now handles unexpected add-book payloads gracefully instead of crashing.
+- If the demo scenario reports `POST /catalog/seed/demo -> HTTP 405: {"detail":"Method Not Allowed"}`, the deployed Book Catalog image is missing the seed endpoint or the route is stale. The frontend now falls back to seeding through `POST /books`, but the correct fix is still to redeploy the latest `book-catalog` image.
+- If `POST /me/books` fails because Book Catalog returns `[]`, check for internal service URLs beginning with `http://`. Azure Container Apps redirects those calls to `https://`; Python `requests` follows a 301 by converting POST to GET. The Bicep and live stage now use `https://...internal...` URLs.
+- If adding a book shows success but the reading list is empty, check that `DATABASE_URL=secretref:database-url` exists on `book-catalog`, `user-profile`, `embedding-worker`, and `recommendation`. Without it, each service falls back to `/tmp/app_state.json`, so the deployed microservices do not share state.
+- If Open Library search returns HTTP 502 with a read timeout, confirm `OPEN_LIBRARY_TIMEOUT_SECONDS=25` is present on Book Catalog. Azure egress can be slower than local Docker.
+- After redeploying, hard-refresh the browser because Streamlit can keep stale frontend state after an exception.
+
+Container App scale settings:
+
+- `embedding-worker`: min `1`, max `2`
+- `recommendation`: min `1`, max `2`
+- request/response services and frontend: min `0`, max `2`
+
+Azure OpenAI was not configured in the first deployment because no endpoint/deployment settings were provided. The cloud `llm-service` therefore ran deterministic mode behind the same `/v1/embed` and `/v1/generate` API. To enable Azure OpenAI, redeploy with:
 
 ```bash
-curl -s http://127.0.0.1:8001/health
-curl -s http://127.0.0.1:8002/health
-curl -s http://127.0.0.1:8003/health
-curl -s http://127.0.0.1:8004/health
-curl -s http://127.0.0.1:8005/health
+DEPLOY_APPS=true DEPLOY_POSTGRES=true POSTGRES_ADMIN_PASSWORD='<same-or-rotated-password>' \
+AZURE_OPENAI_ENDPOINT='https://<name>.openai.azure.com' \
+AZURE_OPENAI_API_KEY='<key>' \
+AZURE_OPENAI_EMBED_DEPLOYMENT='<embedding-deployment>' \
+AZURE_OPENAI_CHAT_DEPLOYMENT='<chat-deployment>' \
+scripts/deploy_azure.sh book-ai-library-stage-rg spaincentral book-ai-library azure-20260616-1
 ```
 
-Current caveat:
-
-- `tests/test_service_health.py` still calls route functions directly for fast smoke coverage. `tests/test_http_process_endpoints.py` is the stable endpoint path: it starts real Uvicorn processes and calls HTTP endpoints, including user-profile -> book-catalog, the async recommendation pipeline, and an LLM dependency failure path for the embedding worker. `tests/test_http_endpoints.py` remains quarantined as an experimental in-process ASGI harness and is skipped unless `RUN_EXPERIMENTAL_HTTP_TESTS=1`.
-- `tests/test_streamlit_browser.py` is a browser screenshot regression check for the Streamlit System flow page. It requires Playwright and a Chromium browser install locally; CI installs those dependencies in the `streamlit-browser` job.
-- `docker-compose.yml` keeps Ollama internal-only to avoid host port collisions. The user-facing LLM entry point is the `llm-service` container.
-
-Needed test upgrades:
-
-- Expand real-process HTTP tests with more failure paths and edge cases.
-- Expand failure-path coverage beyond the current Open Library timeout, Ollama fallback, PostgreSQL connection failure, and embedding-worker LLM dependency failure tests.
-- Extend browser/screenshot regression beyond System flow to cover the Recommendations tab and one-click demo path.
-- Keep `scripts/local_app_smoke.py` checking recommendation overlap by logical book identity, not only database ID.
-
-## CI/CD Plan
-
-Current CI:
-
-- `test`: installs dependencies, compiles Python files, and runs `pytest -q`.
-- `postgres-integration`: starts pgvector PostgreSQL and runs `tests/test_postgres_storage.py`.
-- `docker-pytest`: runs [scripts/docker_pytest.sh](./scripts/docker_pytest.sh), which executes pytest in a dedicated Docker image with PostgreSQL.
-- `compose-smoke`: validates deterministic, standalone LLM, and AMD ROCm Compose config; builds service images; starts the deterministic-LLM stack; runs `scripts/llm_smoke.py`; and runs `scripts/smoke_test.py`.
-- `streamlit-browser`: starts the deterministic Compose stack with the frontend on port `18501`, installs Playwright Chromium, and runs `tests/test_streamlit_browser.py`.
-- `bicep-build`: runs `az bicep build --file infra/bicep/main.bicep` in GitHub Actions.
-- `azure-deploy-gate`: manual-only `workflow_dispatch` job gated by the `azure-manual` GitHub environment and Azure OIDC secrets. It now takes resource group, region, app name, image tag, `deploy_apps`, and `deploy_postgres` inputs. The default region is `spaincentral`, which is allowed by the current Azure for Students policy.
-
-Recommended next CI stages:
-
-1. Lint and format:
-   - `ruff check .`
-   - `ruff format --check .`
-2. API schema/HTTP contract tests using a stable real-process or browser-level harness.
-3. Optional nightly Ollama smoke with the real local embedding model.
-4. Azure deployment gate:
-   - only on protected branch or manual workflow dispatch
-   - Azure OIDC login
-   - Bicep what-if
-   - optional PostgreSQL
-   - build and push images to ACR
-   - deploy/update Azure Container Apps
-
-Do not store Azure secrets in GitHub. Use OIDC federated credentials.
-
-Current LLM issue solved:
-
-- `ollama` is no longer published to host port `11434`, so it cannot collide with a local Ollama install.
-- `ollama-pull` now uses `entrypoint: ["/bin/sh", "-lc"]` and runs the `ollama pull` commands correctly.
-- The public LLM microservice remains `llm-service:8005`, which is what the app should call.
-- The default generation model is Gemma 4, specifically `gemma4:e2b`; larger Gemma 4 models are explicit opt-ins.
-- Gemma 4 generation now sends `think: false` to Ollama by default through `OLLAMA_THINK=false`. This fixes the observed `/api/generate` behavior where Gemma 4 returned HTTP 200 with an empty `response` after spending the token budget on thinking.
-- AMD GPU mode is provided as a Compose override using `ollama/ollama:rocm`.
-- `ollama-with-fallback` now falls back for generation as well as embeddings and logs the fallback reason.
-- The Streamlit Recommendations tab has `Refresh` and `Process updates` controls. `Process updates` invokes the embedding and recommendation workers explicitly for local demos; recommendation reads still use precomputed rows and do not call the LLM.
-- The Streamlit System flow tab shows a topology-style map of frontend, REST services, local event bus, async worker, LLM adapter, PostgreSQL/pgvector, Open Library, live service health, model config, event backlog/timestamps, runtime smoke checks, and a real LLM prompt path.
-
-## Azure Deployment Path
-
-Do not push yet unless the missing production pieces below are addressed.
-
-Starter command:
+To stop Azure costs for this stage environment, delete the resource group:
 
 ```bash
-./scripts/deploy_azure.sh <resource-group> <location> [app-name] [tag]
+az group delete --name book-ai-library-stage-rg
 ```
 
-Safe preview command:
+Validate Bicep:
+
+```bash
+az bicep build --file infra/bicep/main.bicep
+```
+
+Preview infra without apps/PostgreSQL:
 
 ```bash
 DEPLOY_APPS=false DEPLOY_POSTGRES=false \
   scripts/azure_what_if.sh book-ai-library-stage-rg spaincentral book-ai-library local-test
 ```
 
-PostgreSQL preview command:
+Preview with PostgreSQL:
 
 ```bash
 DEPLOY_APPS=false DEPLOY_POSTGRES=true POSTGRES_ADMIN_PASSWORD='<strong-password>' \
   scripts/azure_what_if.sh book-ai-library-stage-rg spaincentral book-ai-library local-test
 ```
 
-For this Azure for Students subscription, use one of the allowed policy regions: `italynorth`, `switzerlandnorth`, `swedencentral`, `spaincentral`, or `germanywestcentral`.
+Allowed Azure for Students regions observed for this subscription:
 
-Current script behavior:
+- `italynorth`
+- `switzerlandnorth`
+- `swedencentral`
+- `spaincentral`
+- `germanywestcentral`
 
-- Creates resource group.
-- Deploys ACR, Log Analytics, ACA environment, Service Bus namespace/topics/subscriptions, and optionally PostgreSQL Flexible Server.
-- If `DEPLOY_APPS=true`, builds and pushes service images.
-- Re-runs the Bicep deployment with Container Apps enabled only when `DEPLOY_APPS=true`.
+Use `spaincentral` unless there is a reason not to.
 
-Before real Azure deployment:
+## Remaining Work
 
-- Decide whether to use connection-string Service Bus for the POC or replace it with managed identity/RBAC before grading.
-- Set `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_EMBED_DEPLOYMENT`, and `AZURE_OPENAI_CHAT_DEPLOYMENT` for LLM Service.
-- Add pgvector ANN index after embedding dimension is fixed for the Azure OpenAI model.
-- Use managed identities instead of ACR admin credentials.
-- Move secrets to Key Vault or Container Apps secrets.
-- Add App Insights/Log Analytics queries and alerts.
+Keep the project lean and presentation-ready:
 
-## Next Worker Notes
-
-- Keep this README current after every architectural or runtime change.
-- Preserve the async recommendation boundary.
-- Keep LLM Service as an adapter; business services must not import Ollama/Azure OpenAI SDKs directly.
-- Keep Open Library calls bounded by query and limit.
-- Keep the demo catalog path working; it is the reliable local fallback when Open Library is slow or unavailable.
-- Keep the standalone LLM Compose path working; it is the fastest way to test local prompts without the full app.
-- Keep `scripts/docker_pytest.sh` and `scripts/compose_smoke.sh` isolated from the main app; they should be safe to run while the demo stack is already up.
-- Keep the System flow tab live-data driven; it should reflect real service health/model/counts, not a static architecture picture.
-- Keep recommendation filtering based on logical book identity as well as ID; Open Library/demo/manual entries can represent the same book under different IDs.
-- Keep `gemma4:e2b` as the local default unless the target machine has enough GPU memory for a larger Gemma 4 model.
-- Keep `OLLAMA_THINK=false` for Gemma 4 app calls unless you deliberately increase token limits and want reasoning traces.
-- If experimenting with Gemma 4 MoE, use `OLLAMA_GENERATE_MODEL=gemma4:26b` explicitly and expect much higher memory requirements than the default.
-- Keep new service code on granular repository functions; do not reintroduce direct `read_state`/`update_state` calls in services.
-- Decide whether to delete or quarantine the legacy snapshot helpers in `shared/storage.py` once all older tests and scripts are migrated.
-- Add pgvector ANN indexes once the deployed embedding dimension is fixed.
-- Exercise Azure Service Bus and Azure OpenAI adapters through a live deployed app from the manual CI gate.
-- Harden Dockerfiles: split runtime/test requirements and reduce frontend image size.
-- Replace connection-string Service Bus and ACR admin credentials with managed identity/RBAC.
-- Clean up empty exploratory Azure resource groups if you do not want them in the portal.
-
-## Next Prompt
-
-There is only one continuation prompt for the project: [NEXT_PROMPT.md](./NEXT_PROMPT.md).
+1. Add more REST contract tests for idempotency and conditional requests.
+2. Add persisted worker failure history or DLQ-style diagnostics.
+3. Harden Azure auth: managed identity/RBAC instead of connection strings and ACR admin credentials.
+4. Add Azure live smoke tests after a manual deployment.
+5. Replace local demo password handling with Azure AD B2C, Entra External ID, or another real identity provider before treating this as production software.
+6. Split broad Python dependencies if image size becomes a grading concern.

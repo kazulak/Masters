@@ -51,7 +51,7 @@ def _message_payload(message: Any) -> dict[str, Any]:
     return json.loads(text)
 
 
-def _publish_azure_service_bus(topic: str, event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+def _publish_azure_service_bus_event(event: dict[str, Any]) -> dict[str, Any]:
     try:
         from azure.servicebus import ServiceBusClient, ServiceBusMessage
     except ImportError as exc:
@@ -60,14 +60,13 @@ def _publish_azure_service_bus(topic: str, event_type: str, payload: dict[str, A
     connection_string = config.env("AZURE_SERVICE_BUS_CONNECTION_STRING", "")
     if not connection_string:
         raise _azure_not_configured()
-    event = _new_event(topic, event_type, payload)
     with ServiceBusClient.from_connection_string(connection_string) as client:
-        sender = client.get_topic_sender(topic_name=topic)
+        sender = client.get_topic_sender(topic_name=event["topic"])
         with sender:
             sender.send_messages(
                 ServiceBusMessage(
                     json.dumps(event["payload"]),
-                    subject=event_type,
+                    subject=event["type"],
                     message_id=event["id"],
                     content_type="application/json",
                 )
@@ -95,7 +94,10 @@ def _pull_azure_service_bus(
         with receiver:
             for message in receiver.receive_messages(max_message_count=limit, max_wait_time=2):
                 if event_types and message.subject not in event_types:
-                    receiver.abandon_message(message)
+                    # Subscriptions can receive broader topic traffic in the POC Bicep.
+                    # Complete non-matching messages for this subscriber so they do not
+                    # block later relevant events in Azure Service Bus.
+                    receiver.complete_message(message)
                     continue
                 payload = _message_payload(message)
                 validate_event_payload(topic, message.subject, payload)
@@ -116,7 +118,15 @@ def _pull_azure_service_bus(
 def publish(topic: str, event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
     payload = validate_event_payload(topic, event_type, payload)
     if config.env("EVENT_BUS_PROVIDER", "local") == "azure-service-bus":
-        return _publish_azure_service_bus(topic, event_type, payload)
+        # Keep a PostgreSQL/JSON outbox copy even in Azure mode. It prevents a
+        # transient Service Bus issue from breaking user-facing writes in the POC
+        # and lets workers continue through the same pull() interface.
+        event = publish_event(topic, event_type, payload)
+        try:
+            _publish_azure_service_bus_event(event)
+        except Exception as exc:
+            event["publish_warning"] = f"Azure Service Bus publish failed; local outbox copy retained: {exc}"
+        return event
     return publish_event(topic, event_type, payload)
 
 
@@ -127,5 +137,20 @@ def pull(
     limit: int = 10,
 ) -> list[dict[str, Any]]:
     if config.env("EVENT_BUS_PROVIDER", "local") == "azure-service-bus":
-        return _pull_azure_service_bus(topic, subscriber, event_types, limit)
+        events = []
+        try:
+            events.extend(_pull_azure_service_bus(topic, subscriber, event_types, limit))
+        except Exception:
+            pass
+        events.extend(pull_events(topic, subscriber, event_types, limit))
+        deduped = []
+        seen_ids = set()
+        for event in events:
+            if event["id"] in seen_ids:
+                continue
+            seen_ids.add(event["id"])
+            deduped.append(event)
+            if len(deduped) >= limit:
+                break
+        return deduped
     return pull_events(topic, subscriber, event_types, limit)

@@ -19,6 +19,21 @@ param deployApps bool = false
 @description('Deploy Azure Database for PostgreSQL Flexible Server. Keep false for cheap infrastructure what-if checks.')
 param deployPostgres bool = false
 
+@description('Deploy a small internal Ollama Container App for POC model inference. This is not production-hardened.')
+param deployOllama bool = false
+
+@description('Ollama generation model to auto-pull when deployOllama=true')
+param ollamaGenerateModel string = 'qwen3:0.6b'
+
+@description('Ollama embedding model to auto-pull when deployOllama=true')
+param ollamaEmbedModel string = 'embeddinggemma'
+
+@description('CPU for optional Ollama Container App')
+param ollamaCpu string = '2'
+
+@description('Memory for optional Ollama Container App')
+param ollamaMemory string = '4Gi'
+
 @description('PostgreSQL admin user for Flexible Server')
 param postgresAdminUser string = 'bookadmin'
 
@@ -42,14 +57,24 @@ param azureOpenAIEmbedDeployment string = ''
 @description('Azure OpenAI chat deployment name')
 param azureOpenAIChatDeployment string = ''
 
+@description('Optional external LLM Service URL. Use this for hybrid demos where Azure services call a local/remote llm-service exposed through a secure tunnel.')
+param externalLlmServiceUrl string = ''
+
+@description('Timeout in seconds for Open Library requests. Azure egress is slower than localhost, so keep this higher than local browser expectations.')
+param openLibraryTimeoutSeconds string = '25'
+
 var normalizedAppName = toLower(appName)
 var nameSuffix = uniqueString(subscription().id, resourceGroup().id, normalizedAppName)
 var acrName = take('bookai${replace('${normalizedAppName}${nameSuffix}acr', '-', '')}', 50)
 var serviceBusName = take('${normalizedAppName}-${nameSuffix}-bus', 50)
 var postgresServerName = take('${normalizedAppName}-${nameSuffix}-pg', 63)
 var useAzureOpenAI = !empty(azureOpenAIApiKey) && !empty(azureOpenAIEndpoint) && !empty(azureOpenAIEmbedDeployment) && !empty(azureOpenAIChatDeployment)
+var useAzureOllama = deployOllama && !useAzureOpenAI && empty(externalLlmServiceUrl)
 var databaseUrl = deployPostgres ? 'postgresql://${postgresAdminUser}:${postgresAdminPassword}@${postgresServerName}.postgres.database.azure.com:5432/${postgresDatabaseName}?sslmode=require' : ''
 var serviceBusConnectionString = listKeys(resourceId('Microsoft.ServiceBus/namespaces/authorizationRules', serviceBus.name, 'RootManageSharedAccessKey'), '2024-01-01').primaryConnectionString
+var internalBaseDomain = acaEnv.properties.defaultDomain
+var llmServiceUrl = !empty(externalLlmServiceUrl) ? externalLlmServiceUrl : 'https://${normalizedAppName}-llm-service.internal.${internalBaseDomain}'
+var ollamaBaseUrl = 'https://${normalizedAppName}-ollama.internal.${internalBaseDomain}'
 
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: '${normalizedAppName}-logs'
@@ -261,27 +286,55 @@ resource containerApps 'Microsoft.App/containerApps@2024-03-01' = [for service i
             }
             {
               name: 'LLM_SERVICE_URL'
-              value: 'http://${normalizedAppName}-llm-service'
+              value: llmServiceUrl
             }
             {
               name: 'BOOK_CATALOG_URL'
-              value: 'http://${normalizedAppName}-book-catalog'
+              value: 'https://${normalizedAppName}-book-catalog.internal.${internalBaseDomain}'
             }
             {
               name: 'USER_PROFILE_URL'
-              value: 'http://${normalizedAppName}-user-profile'
+              value: 'https://${normalizedAppName}-user-profile.internal.${internalBaseDomain}'
             }
             {
               name: 'RECOMMENDATION_URL'
-              value: 'http://${normalizedAppName}-recommendation'
+              value: 'https://${normalizedAppName}-recommendation.internal.${internalBaseDomain}'
+            }
+            {
+              name: 'EMBEDDING_WORKER_URL'
+              value: 'https://${normalizedAppName}-embedding-worker.internal.${internalBaseDomain}'
             }
             {
               name: 'LLM_PROVIDER'
-              value: service.name == 'llm-service' && useAzureOpenAI ? 'azure-openai' : 'deterministic'
+              value: service.name == 'llm-service' && useAzureOpenAI ? 'azure-openai' : (service.name == 'llm-service' && useAzureOllama ? 'ollama-with-fallback' : 'deterministic')
+            }
+            {
+              name: 'OLLAMA_BASE_URL'
+              value: useAzureOllama ? ollamaBaseUrl : ''
+            }
+            {
+              name: 'OLLAMA_GENERATE_MODEL'
+              value: ollamaGenerateModel
+            }
+            {
+              name: 'OLLAMA_EMBED_MODEL'
+              value: ollamaEmbedModel
+            }
+            {
+              name: 'OLLAMA_AUTO_PULL'
+              value: useAzureOllama ? 'true' : 'false'
+            }
+            {
+              name: 'OLLAMA_TIMEOUT_SECONDS'
+              value: useAzureOllama ? '600' : '240'
             }
             {
               name: 'EVENT_BUS_PROVIDER'
               value: 'azure-service-bus'
+            }
+            {
+              name: 'OPEN_LIBRARY_TIMEOUT_SECONDS'
+              value: openLibraryTimeoutSeconds
             }
             {
               name: 'AZURE_SERVICE_BUS_CONNECTION_STRING'
@@ -317,12 +370,46 @@ resource containerApps 'Microsoft.App/containerApps@2024-03-01' = [for service i
         }
       ]
       scale: {
-        minReplicas: 0
+        minReplicas: contains([
+          'embedding-worker'
+          'recommendation'
+        ], service.name) ? 1 : 0
         maxReplicas: 2
       }
     }
   }
 }]
+
+resource ollamaApp 'Microsoft.App/containerApps@2024-03-01' = if (deployApps && deployOllama) {
+  name: '${normalizedAppName}-ollama'
+  location: location
+  properties: {
+    managedEnvironmentId: acaEnv.id
+    configuration: {
+      ingress: {
+        external: false
+        targetPort: 11434
+        transport: 'auto'
+      }
+    }
+    template: {
+      containers: [
+        {
+          name: 'ollama'
+          image: 'ollama/ollama:latest'
+          resources: {
+            cpu: json(ollamaCpu)
+            memory: ollamaMemory
+          }
+        }
+      ]
+      scale: {
+        minReplicas: 1
+        maxReplicas: 1
+      }
+    }
+  }
+}
 
 output acrLoginServer string = acr.properties.loginServer
 output logAnalyticsId string = logAnalytics.id

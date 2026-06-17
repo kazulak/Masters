@@ -26,6 +26,17 @@ class EmbedResponse(BaseModel):
 
 
 class GenerateRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "prompt": "Recommend one short science fiction book.",
+                    "context": {"title": "Dune", "reason": "the user likes idea-driven science fiction"},
+                }
+            ]
+        }
+    )
+
     prompt: str | None = Field(default=None, min_length=1)
     text: str | None = Field(default=None, min_length=1)
     context: dict = Field(default_factory=dict)
@@ -57,6 +68,29 @@ def _ollama_think() -> bool:
     return config.env("OLLAMA_THINK", config.OLLAMA_THINK).lower() in {"1", "true", "yes", "on"}
 
 
+def _ollama_auto_pull() -> bool:
+    return config.env("OLLAMA_AUTO_PULL", "false").lower() in {"1", "true", "yes", "on"}
+
+
+def _ollama_pull(model: str, timeout_seconds: float) -> None:
+    if not _ollama_auto_pull():
+        return
+    logger.warning("Ollama auto-pull enabled; pulling model %s", model)
+    response = requests.post(
+        f"{config.env('OLLAMA_BASE_URL', config.OLLAMA_BASE_URL)}/api/pull",
+        json={"model": model, "stream": False},
+        timeout=max(timeout_seconds, 600),
+    )
+    response.raise_for_status()
+
+
+def _ollama_model_missing(response: requests.Response) -> bool:
+    if response.status_code == 404:
+        return True
+    body = getattr(response, "text", "") or ""
+    return response.status_code in {400, 404} and "not found" in body.lower()
+
+
 def _raise_upstream_error(exc: Exception, provider: str, operation: str, timeout_seconds: float | None = None) -> None:
     if isinstance(exc, requests.Timeout):
         raise HTTPException(
@@ -69,16 +103,25 @@ def _raise_upstream_error(exc: Exception, provider: str, operation: str, timeout
 
 
 def _ollama_embed(text: str) -> EmbedResponse:
+    embed_model = config.env("OLLAMA_EMBED_MODEL", config.OLLAMA_EMBED_MODEL)
+    timeout_seconds = _ollama_timeout()
     try:
         response = requests.post(
             f"{config.env('OLLAMA_BASE_URL', config.OLLAMA_BASE_URL)}/api/embed",
-            json={"model": config.env("OLLAMA_EMBED_MODEL", config.OLLAMA_EMBED_MODEL), "input": text},
-            timeout=_ollama_timeout(),
+            json={"model": embed_model, "input": text},
+            timeout=timeout_seconds,
         )
+        if _ollama_auto_pull() and _ollama_model_missing(response):
+            _ollama_pull(embed_model, timeout_seconds)
+            response = requests.post(
+                f"{config.env('OLLAMA_BASE_URL', config.OLLAMA_BASE_URL)}/api/embed",
+                json={"model": embed_model, "input": text},
+                timeout=timeout_seconds,
+            )
         response.raise_for_status()
         payload = response.json()
     except Exception as exc:
-        _raise_upstream_error(exc, "Ollama", "embedding", _ollama_timeout())
+        _raise_upstream_error(exc, "Ollama", "embedding", timeout_seconds)
     embeddings = payload.get("embeddings") or []
     if not embeddings:
         raise HTTPException(status_code=502, detail="Ollama embedding failed: no embeddings returned")
@@ -169,6 +212,19 @@ def _ollama_generate(prompt: str) -> GenerateResponse:
             },
             timeout=timeout_seconds,
         )
+        if _ollama_auto_pull() and _ollama_model_missing(response):
+            _ollama_pull(generate_model, timeout_seconds)
+            response = requests.post(
+                f"{config.env('OLLAMA_BASE_URL', config.OLLAMA_BASE_URL)}/api/generate",
+                json={
+                    "model": generate_model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "think": _ollama_think(),
+                    "options": {"num_predict": _ollama_num_predict()},
+                },
+                timeout=timeout_seconds,
+            )
         response.raise_for_status()
         payload = response.json()
     except Exception as exc:
@@ -200,6 +256,7 @@ def root() -> dict:
         "prompt_examples": {
             "GET": "/v1/generate?prompt=Recommend%20a%20science%20fiction%20book",
             "POST": {"url": "/v1/generate", "json": {"prompt": "Recommend a science fiction book"}},
+            "curl": "curl -fsS -X POST http://127.0.0.1:8005/v1/generate -H 'Content-Type: application/json' -d '{\"prompt\":\"Recommend one book\",\"context\":{\"title\":\"Dune\"}}'",
         },
         "embedding_examples": {
             "GET": "/v1/embed?text=Dune",
@@ -223,6 +280,7 @@ def models() -> dict[str, str]:
         "ollama_num_predict": str(config.env("OLLAMA_NUM_PREDICT", str(config.OLLAMA_NUM_PREDICT))),
         "ollama_timeout_seconds": str(config.env("OLLAMA_TIMEOUT_SECONDS", str(config.OLLAMA_TIMEOUT_SECONDS))),
         "ollama_think": str(config.env("OLLAMA_THINK", config.OLLAMA_THINK)),
+        "ollama_auto_pull": str(config.env("OLLAMA_AUTO_PULL", "false")),
         "azure_openai_embed_deployment": config.env("AZURE_OPENAI_EMBED_DEPLOYMENT", config.AZURE_OPENAI_EMBED_DEPLOYMENT),
         "azure_openai_chat_deployment": config.env("AZURE_OPENAI_CHAT_DEPLOYMENT", config.AZURE_OPENAI_CHAT_DEPLOYMENT),
     }

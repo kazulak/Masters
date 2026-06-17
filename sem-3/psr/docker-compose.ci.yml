@@ -82,11 +82,14 @@ services:
     environment:
       DATABASE_URL: postgresql://book_ai:book_ai_password@postgres:5432/book_ai_library
       DEFAULT_USER_ID: demo-user
+      LLM_SERVICE_URL: http://llm-service:8000
     ports:
       - "${CI_RECOMMENDATION_PORT:-18004}:8000"
     depends_on:
       postgres:
         condition: service_healthy
+      llm-service:
+        condition: service_started
 
   frontend:
     build:

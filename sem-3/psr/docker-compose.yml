@@ -51,7 +51,7 @@ services:
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-embeddinggemma}
       OLLAMA_GENERATE_MODEL: ${OLLAMA_GENERATE_MODEL:-gemma4:e2b}
-      OLLAMA_NUM_PREDICT: ${OLLAMA_NUM_PREDICT:-192}
+      OLLAMA_NUM_PREDICT: ${OLLAMA_NUM_PREDICT:-512}
       OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-240}
       OLLAMA_THINK: ${OLLAMA_THINK:-false}
     ports:
@@ -119,11 +119,14 @@ services:
     environment:
       DATABASE_URL: postgresql://book_ai:book_ai_password@postgres:5432/book_ai_library
       DEFAULT_USER_ID: demo-user
+      LLM_SERVICE_URL: http://llm-service:8000
     ports:
       - "8004:8000"
     depends_on:
       postgres:
         condition: service_healthy
+      llm-service:
+        condition: service_started
 
   frontend:
     build:

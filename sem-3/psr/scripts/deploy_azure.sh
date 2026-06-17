@@ -7,12 +7,17 @@ if [ $# -lt 2 ]; then
   echo "optional env:"
   echo "  DEPLOY_APPS=true|false                 default: true"
   echo "  DEPLOY_POSTGRES=true|false             default: true when POSTGRES_ADMIN_PASSWORD is set, otherwise false"
+  echo "  DEPLOY_OLLAMA=true|false               default: false"
+  echo "  OLLAMA_GENERATE_MODEL=qwen3:0.6b"
+  echo "  OLLAMA_EMBED_MODEL=embeddinggemma"
   echo "  POSTGRES_ADMIN_USER=bookadmin"
   echo "  POSTGRES_ADMIN_PASSWORD=..."
   echo "  AZURE_OPENAI_ENDPOINT=https://..."
   echo "  AZURE_OPENAI_API_KEY=..."
   echo "  AZURE_OPENAI_EMBED_DEPLOYMENT=..."
   echo "  AZURE_OPENAI_CHAT_DEPLOYMENT=..."
+  echo "  EXTERNAL_LLM_SERVICE_URL=https://..."
+  echo "  OPEN_LIBRARY_TIMEOUT_SECONDS=25"
   exit 1
 fi
 
@@ -21,6 +26,7 @@ location="$2"
 app_name="${3:-book-ai-library}"
 tag="${4:-latest}"
 deploy_apps="${DEPLOY_APPS:-true}"
+deploy_ollama="${DEPLOY_OLLAMA:-false}"
 postgres_admin_user="${POSTGRES_ADMIN_USER:-bookadmin}"
 postgres_admin_password="${POSTGRES_ADMIN_PASSWORD:-}"
 deploy_postgres="${DEPLOY_POSTGRES:-}"
@@ -42,11 +48,16 @@ common_parameters=(
   "appName=$app_name"
   "imageTag=$tag"
   "deployPostgres=$deploy_postgres"
+  "deployOllama=$deploy_ollama"
+  "ollamaGenerateModel=${OLLAMA_GENERATE_MODEL:-qwen3:0.6b}"
+  "ollamaEmbedModel=${OLLAMA_EMBED_MODEL:-embeddinggemma}"
   "postgresAdminUser=$postgres_admin_user"
   "azureOpenAIEndpoint=${AZURE_OPENAI_ENDPOINT:-}"
   "azureOpenAIApiKey=${AZURE_OPENAI_API_KEY:-}"
   "azureOpenAIEmbedDeployment=${AZURE_OPENAI_EMBED_DEPLOYMENT:-}"
   "azureOpenAIChatDeployment=${AZURE_OPENAI_CHAT_DEPLOYMENT:-}"
+  "externalLlmServiceUrl=${EXTERNAL_LLM_SERVICE_URL:-}"
+  "openLibraryTimeoutSeconds=${OPEN_LIBRARY_TIMEOUT_SECONDS:-25}"
 )
 
 if [ "$deploy_postgres" = "true" ]; then

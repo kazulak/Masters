@@ -40,6 +40,11 @@ on:
         required: true
         default: false
         type: boolean
+      deploy_ollama:
+        description: "Deploy optional internal Ollama Container App for POC inference"
+        required: true
+        default: false
+        type: boolean
 
 jobs:
   test:
@@ -94,9 +99,6 @@ jobs:
       - uses: docker/setup-buildx-action@v3
       - run: docker compose -f docker-compose.ci.yml config
       - run: docker compose -f docker-compose.test.yml config
-      - run: docker compose -f docker-compose.llm.yml config
-      - run: docker compose -f docker-compose.yml -f docker-compose.amd.yml config
-      - run: docker compose -f docker-compose.llm.yml -f docker-compose.llm.amd.yml config
       - run: PYTHON_BIN=python scripts/compose_smoke.sh
 
   streamlit-browser:
@@ -154,11 +156,15 @@ jobs:
         env:
           DEPLOY_APPS: ${{ inputs.deploy_apps }}
           DEPLOY_POSTGRES: ${{ inputs.deploy_postgres }}
+          DEPLOY_OLLAMA: ${{ inputs.deploy_ollama }}
           POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+          OLLAMA_GENERATE_MODEL: ${{ vars.OLLAMA_GENERATE_MODEL || 'qwen3:0.6b' }}
+          OLLAMA_EMBED_MODEL: ${{ vars.OLLAMA_EMBED_MODEL || 'embeddinggemma' }}
           AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
           AZURE_OPENAI_EMBED_DEPLOYMENT: ${{ secrets.AZURE_OPENAI_EMBED_DEPLOYMENT }}
           AZURE_OPENAI_CHAT_DEPLOYMENT: ${{ secrets.AZURE_OPENAI_CHAT_DEPLOYMENT }}
+          EXTERNAL_LLM_SERVICE_URL: ${{ secrets.EXTERNAL_LLM_SERVICE_URL }}
       - run: |
           scripts/deploy_azure.sh \
             "${{ inputs.resource_group }}" \
@@ -168,8 +174,12 @@ jobs:
         env:
           DEPLOY_APPS: ${{ inputs.deploy_apps }}
           DEPLOY_POSTGRES: ${{ inputs.deploy_postgres }}
+          DEPLOY_OLLAMA: ${{ inputs.deploy_ollama }}
           POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+          OLLAMA_GENERATE_MODEL: ${{ vars.OLLAMA_GENERATE_MODEL || 'qwen3:0.6b' }}
+          OLLAMA_EMBED_MODEL: ${{ vars.OLLAMA_EMBED_MODEL || 'embeddinggemma' }}
           AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
           AZURE_OPENAI_EMBED_DEPLOYMENT: ${{ secrets.AZURE_OPENAI_EMBED_DEPLOYMENT }}
           AZURE_OPENAI_CHAT_DEPLOYMENT: ${{ secrets.AZURE_OPENAI_CHAT_DEPLOYMENT }}
+          EXTERNAL_LLM_SERVICE_URL: ${{ secrets.EXTERNAL_LLM_SERVICE_URL }}

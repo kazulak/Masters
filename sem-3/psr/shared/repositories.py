@@ -244,6 +244,25 @@ def get_user(user_id: str) -> dict[str, Any] | None:
             return _user_from_row(row) if row else None
 
 
+def get_user_by_email(email: str) -> dict[str, Any] | None:
+    normalized_email = email.strip().lower()
+    conn = _connect()
+    if conn is None:
+        for user in read_state()["users"].values():
+            if str(user.get("email", "")).lower() == normalized_email:
+                return user
+        return None
+    with conn:
+        _ensure_postgres(conn)
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT id, email, display_name, preferences, created_at FROM users WHERE lower(email) = %s",
+                (normalized_email,),
+            )
+            row = cursor.fetchone()
+            return _user_from_row(row) if row else None
+
+
 def upsert_user(profile: dict[str, Any]) -> dict[str, Any]:
     conn = _connect()
     if conn is None:
@@ -404,7 +423,11 @@ def user_profile_vector(user_id: str) -> list[float]:
         state = read_state()
         embeddings = {row["book_id"]: row["embedding"] for row in state["book_embeddings"].values()}
         owned_ids = [row["book_id"] for row in state["reading_list"].values() if row["user_id"] == user_id]
-        return average([embeddings[book_id] for book_id in owned_ids if book_id in embeddings])
+        vectors = [embeddings[book_id] for book_id in owned_ids if book_id in embeddings]
+        if not vectors:
+            return []
+        target_dim = max(len(vector) for vector in vectors)
+        return average([vector for vector in vectors if len(vector) == target_dim])
 
     with conn:
         _ensure_postgres(conn)
@@ -418,13 +441,18 @@ def user_profile_vector(user_id: str) -> list[float]:
                 """,
                 (user_id,),
             )
-            return average([_parse_vector(row[0]) for row in cursor.fetchall()])
+            vectors = [_parse_vector(row[0]) for row in cursor.fetchall()]
+            if not vectors:
+                return []
+            target_dim = max(len(vector) for vector in vectors)
+            return average([vector for vector in vectors if len(vector) == target_dim])
 
 
 def pgvector_candidate_books(user_id: str, limit: int = 50) -> list[dict[str, Any]]:
     profile = user_profile_vector(user_id)
     if not profile:
         return []
+    profile_dim = len(profile)
     owned_keys = {
         key
         for book in list_user_books(user_id)
@@ -448,10 +476,11 @@ def pgvector_candidate_books(user_id: str, limit: int = 50) -> list[dict[str, An
                     SELECT 1 FROM reading_list rl
                     WHERE rl.user_id = %s AND rl.book_id = b.id
                 )
+                AND vector_dims(e.embedding) = %s
                 ORDER BY e.embedding <=> %s::vector
                 LIMIT %s
                 """,
-                (_vector_literal(profile), user_id, _vector_literal(profile), max(limit * 4, limit)),
+                (_vector_literal(profile), user_id, profile_dim, _vector_literal(profile), max(limit * 4, limit)),
             )
             rows = cursor.fetchall()
 
@@ -482,6 +511,8 @@ def memory_candidate_books(user_id: str, limit: int = 50) -> list[dict[str, Any]
     scored = []
     for book_id, vector in embeddings.items():
         if book_id in owned_ids or book_id not in state["books"]:
+            continue
+        if len(vector) != len(profile):
             continue
         book = state["books"][book_id]
         if book_identity_keys(book).intersection(owned_keys):

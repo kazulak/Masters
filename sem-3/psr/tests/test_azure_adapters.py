@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from shared.events import publish, pull
+from shared.storage import reset_state
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -119,7 +120,7 @@ def test_azure_service_bus_publish_uses_contract_and_topic_sender(monkeypatch, f
     assert FakeSender.sent[0].content_type == "application/json"
 
 
-def test_azure_service_bus_pull_completes_matching_messages_and_abandons_filtered(monkeypatch, fake_servicebus) -> None:
+def test_azure_service_bus_pull_completes_matching_and_filtered_messages(monkeypatch, fake_servicebus) -> None:
     monkeypatch.setenv("EVENT_BUS_PROVIDER", "azure-service-bus")
     monkeypatch.setenv("AZURE_SERVICE_BUS_CONNECTION_STRING", "Endpoint=sb://example/")
     FakeReceiver.messages = [
@@ -139,8 +140,28 @@ def test_azure_service_bus_pull_completes_matching_messages_and_abandons_filtere
             "delivered_to": ["recommendation-service"],
         }
     ]
-    assert FakeReceiver.completed == ["m1"]
-    assert FakeReceiver.abandoned == ["m2"]
+    assert FakeReceiver.completed == ["m1", "m2"]
+    assert FakeReceiver.abandoned == []
+
+
+def test_azure_service_bus_publish_falls_back_to_local_outbox(monkeypatch, tmp_path, fake_servicebus) -> None:
+    monkeypatch.setenv("EVENT_BUS_PROVIDER", "azure-service-bus")
+    monkeypatch.setenv("AZURE_SERVICE_BUS_CONNECTION_STRING", "Endpoint=sb://example/")
+    monkeypatch.setenv("APP_STATE_FILE", str(tmp_path / "state.json"))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    reset_state()
+
+    def fail_send(self, message):
+        raise RuntimeError("service bus unavailable")
+
+    monkeypatch.setattr(FakeSender, "send_messages", fail_send)
+
+    event = publish("books", "BookCreated", {"book_id": "b1"})
+    pulled = pull("books", "embedding-worker", {"BookCreated"}, limit=10)
+
+    assert event["type"] == "BookCreated"
+    assert "publish_warning" in event
+    assert [row["payload"] for row in pulled] == [{"book_id": "b1"}]
 
 
 def load_llm_module(monkeypatch):

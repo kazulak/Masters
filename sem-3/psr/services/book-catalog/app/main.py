@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException, Query
+import hashlib
+import json
+
+from fastapi import FastAPI, Header, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from shared.demo_catalog import DEMO_BOOKS
@@ -94,6 +97,11 @@ def _upsert_book(payload: BookCreate) -> dict:
     return result
 
 
+def _etag(payload: dict) -> str:
+    stable = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return f'"{hashlib.sha256(stable.encode("utf-8")).hexdigest()[:16]}"'
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "book-catalog"}
@@ -113,10 +121,19 @@ def external_search(query: str = Query(min_length=1), limit: int = Query(default
 
 
 @app.get("/books/{book_id}", response_model=Book)
-def get_book(book_id: str) -> Book:
+def get_book(
+    book_id: str,
+    response: Response,
+    if_none_match: str | None = Header(default=None, alias="If-None-Match"),
+) -> Book | Response:
     book = repo_get_book(book_id)
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
+    etag = _etag(book)
+    response.headers["ETag"] = etag
+    response.headers["Cache-Control"] = "no-cache"
+    if if_none_match == etag:
+        return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "no-cache"})
     return Book(**book)
 
 

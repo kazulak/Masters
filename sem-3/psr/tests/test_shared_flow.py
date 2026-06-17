@@ -113,6 +113,41 @@ def test_recommendation_recompute_uses_embeddings(monkeypatch, tmp_path):
     assert state["recommendations"]["u1:similar"]["book_ids"] == ["b2"]
 
 
+def test_user_profile_signup_signin_and_public_profile(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_STATE_FILE", str(tmp_path / "state.json"))
+    reset_state()
+    user_profile = load_module("user_profile_main_auth", "services/user-profile/app/main.py")
+
+    created = user_profile.signup(
+        user_profile.SignUpRequest(
+            email="Reader@Example.edu",
+            password="secret",
+            display_name="Reader",
+            mood="reflective",
+            genres=["classic"],
+        )
+    )
+    signed_in = user_profile.signin(user_profile.SignInRequest(email="reader@example.edu", password="secret"))
+
+    assert created.id == "reader@example.edu"
+    assert signed_in.id == "reader@example.edu"
+    assert signed_in.preferences["mood"] == "reflective"
+    assert "_password" not in signed_in.preferences
+
+
+def test_user_profile_default_profiles_use_unique_emails(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_STATE_FILE", str(tmp_path / "state.json"))
+    reset_state()
+    user_profile = load_module("user_profile_main_defaults", "services/user-profile/app/main.py")
+
+    first = user_profile.get_me("alice")
+    second = user_profile.get_me("bob@example.edu")
+
+    assert first.email == "alice@example.edu"
+    assert second.email == "bob@example.edu"
+    assert first.email != second.email
+
+
 def test_recommendation_response_filters_stale_owned_books(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_STATE_FILE", str(tmp_path / "state.json"))
     reset_state()
@@ -327,6 +362,79 @@ def test_recommendation_modes_use_distinct_scoring_and_explanations(monkeypatch,
     assert "similar pick" in similar["explanations"]["similar"]
     assert "widen pick" in widen["explanations"]["widen"]
     assert "mood pick" in mood["explanations"]["mood"]
+
+
+def test_ai_recommendation_prompt_uses_llm_over_cached_candidates(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_STATE_FILE", str(tmp_path / "state.json"))
+    reset_state()
+
+    def seed(state: dict) -> None:
+        state["users"]["u1"] = {
+            "id": "u1",
+            "email": "u1@example.edu",
+            "display_name": "User",
+            "preferences": {
+                "mood": "reflective",
+                "genres": ["philosophy"],
+                "recommendation_instructions": "Prefer psychologically serious books.",
+            },
+            "created_at": "now",
+        }
+        state["books"]["owned"] = {
+            "id": "owned",
+            "title": "Dune",
+            "author": "Frank Herbert",
+            "genres": ["science fiction"],
+            "description": "desert politics ecology",
+            "created_at": "now",
+        }
+        state["books"]["candidate"] = {
+            "id": "candidate",
+            "title": "Man's Search for Meaning",
+            "author": "Viktor E. Frankl",
+            "genres": ["psychology", "philosophy"],
+            "description": "meaning under suffering",
+            "created_at": "now",
+        }
+        state["reading_list"]["r1"] = {
+            "id": "r1",
+            "user_id": "u1",
+            "book_id": "owned",
+            "read_at": "now",
+            "rating": 5,
+        }
+        state["recommendations"]["u1:similar"] = {
+            "id": "u1:similar",
+            "user_id": "u1",
+            "type": "similar",
+            "book_ids": ["candidate"],
+            "explanations": {"candidate": "fresh candidate"},
+            "computed_at": "now",
+        }
+
+    update_state(seed)
+    recommendation = load_module("recommendation_ai_prompt", "services/recommendation/app/main.py")
+
+    def fake_llm(prompt: str, context: dict | None = None, timeout: int = 120) -> dict:
+        assert "I want something meaningful" in prompt
+        assert "Man's Search for Meaning" in prompt
+        assert "Prefer psychologically serious books." in prompt
+        assert "outside pick" in prompt
+        return {"provider": "test-llm", "text": "Pick Man's Search for Meaning."}
+
+    monkeypatch.setattr(recommendation, "_call_llm", fake_llm)
+
+    response = recommendation.ask_for_recommendations(
+        recommendation.AskRequest(user_id="u1", prompt="I want something meaningful", type="similar")
+    )
+
+    assert response["provider"] == "test-llm"
+    assert response["answer"] == "Pick Man's Search for Meaning."
+    assert [book["id"] for book in response["books"]] == ["candidate"]
+    assert response["source"] == "llm-over-engine-candidates"
+    assert response["engine"] == "vector-similarity"
+    assert response["allow_outside_candidates"] is True
+    assert response["user_instructions"] == "Prefer psychologically serious books."
 
 
 def test_embedding_worker_status_records_success_and_failure(monkeypatch, tmp_path):

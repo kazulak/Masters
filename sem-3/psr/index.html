@@ -323,19 +323,19 @@
     <header>
       <p class="eyebrow">System Architecture Document · Proof of Concept · Cloud-native SOA on Microsoft Azure</p>
       <h1>Book AI Library</h1>
-      <p class="subtitle">A POC architecture for an AI-assisted book recommendation platform using Azure Container Apps, PostgreSQL with pgvector, Azure Service Bus, and Azure OpenAI.</p>
+      <p class="subtitle">A POC architecture for an AI-assisted book recommendation platform using Azure Container Apps, PostgreSQL with pgvector, Azure Service Bus, and an LLM adapter.</p>
       <div class="stack">
         <span class="pill ok">POC - extensible to production</span>
         <span class="pill">Azure Container Apps</span>
         <span class="pill">pgvector</span>
-        <span class="pill">Azure OpenAI</span>
+        <span class="pill">LLM adapter</span>
         <span class="pill">GitHub Actions</span>
         <span class="pill">Bicep IaC</span>
       </div>
       <div class="requirements" aria-label="Requirements compliance strip">
         <div class="req"><strong>✓ Mikroserwisy (min. 3 wezly)</strong><span>5 independent services plus frontend.</span></div>
         <div class="req"><strong>✓ Komunikacja asynchroniczna</strong><span>Azure Service Bus topics: books and users.</span></div>
-        <div class="req"><strong>✓ Uslugi SaaS (chmura)</strong><span>Azure OpenAI, PostgreSQL, Service Bus, ACR.</span></div>
+        <div class="req"><strong>✓ Uslugi SaaS (chmura)</strong><span>PostgreSQL, Service Bus, ACR; Azure OpenAI-ready adapter.</span></div>
         <div class="req"><strong>✓ Serverless / Kubernetes</strong><span>Azure Container Apps managed serverless Kubernetes.</span></div>
         <div class="req"><strong>✓ Minimalny frontend</strong><span>Streamlit, replaceable with React/Next.js.</span></div>
         <div class="req"><strong>✓ Infrastructure as Code</strong><span>Bicep modules and one main deployment file.</span></div>
@@ -348,7 +348,7 @@
       <h2><span class="num">1</span>Component Diagram</h2>
       <div class="drawio">
         <strong>draw.io reproduction:</strong>
-        Create three nested containers: outer dashed grey "Microsoft Azure", inner dashed purple "Azure Container Apps (serverless Kubernetes)", and a separate bottom band "Azure SaaS / Data layer". Place Frontend (teal), five service boxes (purple), Service Bus (amber), and Embedding worker (coral) inside ACA. Place PostgreSQL, Azure OpenAI, Log Analytics, and Container Registry in the data band. Add solid grey arrows for REST calls and amber arrows for async events.
+        Create three nested containers: outer dashed grey "Microsoft Azure", inner dashed purple "Azure Container Apps (serverless Kubernetes)", and a separate bottom band "Azure SaaS / Data layer". Place Frontend (teal), five service boxes (purple), Service Bus (amber), and Embedding worker (coral) inside ACA. Place PostgreSQL, LLM provider target, Log Analytics, and Container Registry in the data band. Add solid grey arrows for REST calls and amber arrows for async events.
       </div>
       <div class="legend">
         <strong style="color:var(--text);font-size:12px">Legend:</strong>
@@ -387,13 +387,13 @@
           <text x="469" y="91" text-anchor="middle" font-size="11" fill="#0F6E56" font-family="Inter,system-ui,sans-serif">UI · calls mid-tier REST</text>
           <rect x="26" y="118" width="162" height="46" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="1"/>
           <text x="107" y="137" text-anchor="middle" font-size="12.5" fill="#3C3489" font-family="Inter,system-ui,sans-serif" font-weight="600">User profile svc</text>
-          <text x="107" y="154" text-anchor="middle" font-size="11" fill="#534AB7" font-family="Inter,system-ui,sans-serif">GET /me · POST /me/books</text>
+          <text x="107" y="154" text-anchor="middle" font-size="11" fill="#534AB7" font-family="Inter,system-ui,sans-serif">POST /auth · GET /me · books</text>
           <rect x="208" y="118" width="162" height="46" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="1"/>
           <text x="289" y="137" text-anchor="middle" font-size="12.5" fill="#3C3489" font-family="Inter,system-ui,sans-serif" font-weight="600">Book catalog svc</text>
           <text x="289" y="154" text-anchor="middle" font-size="11" fill="#534AB7" font-family="Inter,system-ui,sans-serif">POST /books · Open Library</text>
           <rect x="390" y="118" width="186" height="46" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="1"/>
           <text x="483" y="137" text-anchor="middle" font-size="12.5" fill="#3C3489" font-family="Inter,system-ui,sans-serif" font-weight="600">Recommendation svc</text>
-          <text x="483" y="154" text-anchor="middle" font-size="11" fill="#534AB7" font-family="Inter,system-ui,sans-serif">GET /recommendations</text>
+          <text x="483" y="154" text-anchor="middle" font-size="11" fill="#534AB7" font-family="Inter,system-ui,sans-serif">GET cached · POST /ask LLM</text>
           <rect x="596" y="118" width="148" height="46" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="1"/>
           <text x="670" y="137" text-anchor="middle" font-size="12.5" fill="#3C3489" font-family="Inter,system-ui,sans-serif" font-weight="600">LLM service</text>
           <text x="670" y="154" text-anchor="middle" font-size="11" fill="#534AB7" font-family="Inter,system-ui,sans-serif">POST /v1/embed · generate</text>
@@ -418,8 +418,8 @@
           <text x="125" y="376" text-anchor="middle" font-size="12.5" fill="#1E3A6E" font-family="Inter,system-ui,sans-serif" font-weight="600">PostgreSQL + pgvector</text>
           <text x="125" y="393" text-anchor="middle" font-size="11" fill="#1A5FA8" font-family="Inter,system-ui,sans-serif">Azure DB · managed · SaaS ok</text>
           <rect x="253" y="355" width="195" height="52" rx="8" fill="#E8F1FB" stroke="#1A5FA8" stroke-width="1"/>
-          <text x="350" y="376" text-anchor="middle" font-size="12.5" fill="#1E3A6E" font-family="Inter,system-ui,sans-serif" font-weight="600">Azure OpenAI</text>
-          <text x="350" y="393" text-anchor="middle" font-size="11" fill="#1A5FA8" font-family="Inter,system-ui,sans-serif">embeddings + generation · SaaS ok</text>
+          <text x="350" y="376" text-anchor="middle" font-size="12.5" fill="#1E3A6E" font-family="Inter,system-ui,sans-serif" font-weight="600">LLM provider target</text>
+          <text x="350" y="393" text-anchor="middle" font-size="11" fill="#1A5FA8" font-family="Inter,system-ui,sans-serif">Ollama local · Azure OpenAI-ready</text>
           <rect x="468" y="355" width="196" height="52" rx="8" fill="#E8F1FB" stroke="#1A5FA8" stroke-width="1"/>
           <text x="566" y="376" text-anchor="middle" font-size="12.5" fill="#1E3A6E" font-family="Inter,system-ui,sans-serif" font-weight="600">Log Analytics</text>
           <text x="566" y="393" text-anchor="middle" font-size="11" fill="#1A5FA8" font-family="Inter,system-ui,sans-serif">central observability · SaaS ok</text>
@@ -433,7 +433,7 @@
         </svg>
       </div>
       <div class="callout">
-        <strong>JWT insertion point:</strong> a no-op middleware stub sits in User Profile Service. Activating real authentication requires enabling one decorator, with no changes to any other service. Azure APIM can be inserted in front of all ACA services via a DNS CNAME swap.
+        <strong>Auth insertion point:</strong> User Profile Service currently provides local email/password demo auth and still carries the future JWT boundary. Replacing it with Azure AD B2C, Entra External ID, or APIM/JWT validation should not require changes in the other services.
       </div>
     </section>
 
@@ -444,18 +444,18 @@
         <thead><tr><th>Service</th><th>Runtime</th><th>Responsibilities</th><th>REST API</th><th>Events</th><th>Data owned</th></tr></thead>
         <tbody>
           <tr><td>Frontend</td><td>Streamlit; swap to React/Next.js</td><td>Render UI, call REST APIs, keep zero business logic.</td><td>-</td><td>-</td><td>Session state only</td></tr>
-          <tr><td>User Profile svc</td><td>FastAPI</td><td>User accounts and reading list CRUD. JWT stub is the future auth point.</td><td><code>GET /me</code><br><code>POST /me</code><br><code>POST /me/books</code><br><code>GET /me/books</code></td><td><span class="event">publishes UserBookAdded</span></td><td><code>users</code>, <code>reading_list</code></td></tr>
+          <tr><td>User Profile svc</td><td>FastAPI</td><td>Local demo accounts, profile persistence, and reading list CRUD. JWT/OIDC remains the future auth point.</td><td><code>POST /auth/signup</code><br><code>POST /auth/signin</code><br><code>GET /me</code><br><code>POST /me/books</code><br><code>GET /me/books</code></td><td><span class="event">publishes UserBookAdded</span></td><td><code>users</code>, <code>reading_list</code></td></tr>
           <tr><td>Book Catalog svc</td><td>FastAPI</td><td>Book metadata, ISBN/title dedupe, Open Library enrichment.</td><td><code>GET /books?query</code><br><code>POST /books</code><br><code>GET /books/{id}</code></td><td><span class="event">publishes BookCreated</span></td><td><code>books</code></td></tr>
           <tr><td>Embedding svc</td><td>Python worker</td><td>Consumes book creation events, calls LLM Service for embeddings, writes vectors.</td><td>-</td><td><span class="event">subscribes BookCreated</span><span class="event">publishes BookEmbedded</span></td><td><code>book_embeddings</code></td></tr>
-          <tr><td>Recommendation svc</td><td>FastAPI</td><td>Consumes embedding and user events, precomputes three recommendation types, serves cached reads.</td><td><code>GET /recommendations?user_id&amp;type=similar|widen|mood</code></td><td><span class="event">subscribes BookEmbedded</span><span class="event">subscribes UserBookAdded</span></td><td><code>recommendations</code></td></tr>
-          <tr><td>LLM service</td><td>FastAPI</td><td>Infrastructure adapter for Azure OpenAI in prod or Ollama/Gemma in local dev.</td><td><code>POST /v1/embed</code><br><code>POST /v1/generate</code></td><td>-</td><td>No persistent data</td></tr>
+          <tr><td>Recommendation svc</td><td>FastAPI</td><td>Consumes embedding and user events, precomputes three vector-scored recommendation types, serves cached reads, and exposes explicit LLM commands that reason over candidate books plus user instructions.</td><td><code>GET /recommendations?user_id&amp;type=similar|widen|mood</code><br><code>POST /recommendations/ask</code><br><code>POST /profile/summary</code></td><td><span class="event">subscribes BookEmbedded</span><span class="event">subscribes UserBookAdded</span></td><td><code>recommendations</code></td></tr>
+          <tr><td>LLM service</td><td>FastAPI</td><td>Infrastructure adapter for Ollama/Gemma locally, deterministic Azure demo mode, or Azure OpenAI when configured.</td><td><code>POST /v1/embed</code><br><code>POST /v1/generate</code></td><td>-</td><td>No persistent data</td></tr>
         </tbody>
       </table>
     </section>
 
     <section class="section" id="s3">
       <h2><span class="num">3</span>PostgreSQL Data Model</h2>
-      <p>Single Azure Database for PostgreSQL Flexible Server with the pgvector extension. Services share one instance but own their tables via schema-level Postgres roles. The <code>book_embeddings.embedding</code> column uses <code>vector(1536)</code> for Azure OpenAI <code>text-embedding-3-small</code>.</p>
+      <p>Single Azure Database for PostgreSQL Flexible Server with the pgvector extension. Services share one instance but own their tables via schema-level Postgres roles. The embedding dimension is configurable; pin the final Azure OpenAI dimension before adding ANN indexes.</p>
       <p><strong>Key index:</strong> <code>CREATE INDEX ON book_embeddings USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);</code></p>
       <div class="mermaid-box">
         <pre class="mermaid">erDiagram
@@ -571,14 +571,14 @@
           <tr><td>Azure Database for PostgreSQL</td><td>Primary database</td><td><span class="pill ok">SaaS cloud</span></td><td>Managed PaaS with pgvector support.</td></tr>
           <tr><td>pgvector</td><td>ANN vector search</td><td><span class="pill">data layer</span></td><td>Cosine similarity inside PostgreSQL; enough for POC scale.</td></tr>
           <tr><td>Azure Service Bus</td><td>Async messaging</td><td><span class="pill ok">async communication</span></td><td>Managed pub/sub with dead-letter queues.</td></tr>
-          <tr><td>Azure OpenAI</td><td>Embeddings and generation</td><td><span class="pill ok">SaaS / AI</span></td><td>Azure-hosted OpenAI API for 1536-dim embeddings and generated explanations.</td></tr>
+          <tr><td>Azure OpenAI</td><td>Embeddings and generation target</td><td><span class="pill ok">SaaS / AI-ready</span></td><td>Enabled by providing endpoint, key, and deployment names to the LLM Service.</td></tr>
           <tr><td>Open Library API</td><td>Book metadata</td><td><span class="pill">external API</span></td><td>Free, no API key required, used only by Book Catalog.</td></tr>
           <tr><td>Streamlit</td><td>Frontend UI</td><td><span class="pill ok">minimal frontend</span></td><td>Fastest path to a working UI; backend remains replaceable.</td></tr>
           <tr><td>Bicep</td><td>Infrastructure as Code</td><td><span class="pill ok">IaC</span></td><td>Azure-native ARM abstraction with simple module boundaries.</td></tr>
           <tr><td>GitHub Actions</td><td>CI/CD pipeline</td><td><span class="pill ok">CI/CD</span></td><td>Lint, test, build, push to ACR, update ACA.</td></tr>
           <tr><td>Azure Container Registry</td><td>Image registry</td><td><span class="pill ok">SaaS cloud</span></td><td>Managed private registry for container images.</td></tr>
           <tr><td>Azure Log Analytics</td><td>Observability</td><td><span class="pill">ops</span></td><td>Central ACA logs with no agent installation.</td></tr>
-          <tr><td>Ollama + Gemma 2B</td><td>Local dev LLM</td><td><span class="pill">dev only</span></td><td>Free local fallback hidden behind the LLM Service adapter.</td></tr>
+          <tr><td>Ollama + Gemma</td><td>Local dev LLM</td><td><span class="pill">local demo</span></td><td>Free local model path hidden behind the LLM Service adapter, avoiding cloud inference spend during development.</td></tr>
         </tbody>
       </table>
     </section>

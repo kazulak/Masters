@@ -59,7 +59,7 @@ def test_ollama_generate_response_is_mapped(monkeypatch):
         assert json["prompt"] == "Explain why Dune is good."
         assert json["stream"] is False
         assert json["think"] is False
-        assert json["options"]["num_predict"] == 192
+        assert json["options"]["num_predict"] == 512
         return FakeResponse()
 
     monkeypatch.setattr(module.requests, "post", fake_post)
@@ -105,6 +105,46 @@ def test_ollama_generate_empty_response_returns_502(monkeypatch):
     assert "empty response" in exc.value.detail
 
 
+def test_ollama_auto_pull_recovers_from_missing_generate_model(monkeypatch):
+    module = load_llm_module(monkeypatch, "ollama")
+    monkeypatch.setenv("OLLAMA_AUTO_PULL", "true")
+    monkeypatch.setenv("OLLAMA_GENERATE_MODEL", "qwen3:0.6b")
+
+    calls: list[tuple[str, dict]] = []
+
+    class FakeResponse:
+        def __init__(self, status_code: int, payload: dict, text: str = "") -> None:
+            self.status_code = status_code
+            self._payload = payload
+            self.text = text
+
+        def raise_for_status(self) -> None:
+            if self.status_code >= 400:
+                raise module.requests.HTTPError(self.text)
+
+        def json(self) -> dict:
+            return self._payload
+
+    def fake_post(url, json, timeout):
+        calls.append((url, json))
+        if url.endswith("/api/generate") and len(calls) == 1:
+            return FakeResponse(400, {}, 'model "qwen3:0.6b" not found')
+        if url.endswith("/api/pull"):
+            assert json == {"model": "qwen3:0.6b", "stream": False}
+            return FakeResponse(200, {"status": "success"})
+        if url.endswith("/api/generate"):
+            return FakeResponse(200, {"response": "A tiny POC answer."})
+        raise AssertionError(f"unexpected url {url}")
+
+    monkeypatch.setattr(module.requests, "post", fake_post)
+
+    result = module.generate(module.GenerateRequest(prompt="Recommend a book."))
+
+    assert result.provider == "ollama:qwen3:0.6b"
+    assert result.text == "A tiny POC answer."
+    assert [url.rsplit("/", 1)[-1] for url, _ in calls] == ["generate", "pull", "generate"]
+
+
 def test_llm_root_and_models_are_browser_friendly(monkeypatch):
     module = load_llm_module(monkeypatch, "deterministic")
 
@@ -115,7 +155,7 @@ def test_llm_root_and_models_are_browser_friendly(monkeypatch):
     assert root["docs"] == "/docs"
     assert "/v1/generate?prompt=" in root["prompt_examples"]["GET"]
     assert models["provider"] == "deterministic"
-    assert models["ollama_num_predict"] == "192"
+    assert models["ollama_num_predict"] == "512"
     assert models["ollama_think"] == "false"
 
 

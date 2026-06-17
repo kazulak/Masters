@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from time import perf_counter
 
-from fastapi import FastAPI, Query
+import requests
+from fastapi import FastAPI, HTTPException, Query
+from pydantic import BaseModel, Field
 
-from shared.config import DEFAULT_USER_ID
+from shared.config import DEFAULT_USER_ID, LLM_SERVICE_URL
 from shared.events import pull
 from shared.repositories import (
     books_by_ids,
@@ -40,6 +43,19 @@ WORKER_STATE = {
     "total_failures": 0,
     "consecutive_failures": 0,
 }
+
+
+class AskRequest(BaseModel):
+    user_id: str = DEFAULT_USER_ID
+    prompt: str = Field(min_length=3, max_length=800)
+    type: str = Field(default="similar", pattern="^(similar|widen|mood)$")
+    limit: int = Field(default=5, ge=1, le=10)
+    allow_outside_candidates: bool = True
+
+
+class ProfileSummaryRequest(BaseModel):
+    user_id: str = DEFAULT_USER_ID
+    limit: int = Field(default=5, ge=1, le=10)
 
 
 def _utc_now() -> str:
@@ -138,14 +154,36 @@ def _score_candidates(user_id: str, rec_type: str) -> list[dict]:
     return sorted(scored, key=lambda item: item["score"], reverse=True)[:10]
 
 
+class RecommendationEngine:
+    name = "base"
+
+    def recommend(self, user_id: str, rec_type: str, limit: int = 10) -> list[dict]:
+        raise NotImplementedError
+
+
+class VectorSimilarityEngine(RecommendationEngine):
+    name = "vector-similarity"
+
+    def recommend(self, user_id: str, rec_type: str, limit: int = 10) -> list[dict]:
+        return _score_candidates(user_id, rec_type)[:limit]
+
+
+def _engine() -> RecommendationEngine:
+    engine_name = os.getenv("RECOMMENDATION_ENGINE", "vector-similarity")
+    if engine_name == "vector-similarity":
+        return VectorSimilarityEngine()
+    raise HTTPException(status_code=500, detail=f"Unknown recommendation engine: {engine_name}")
+
+
 def recompute_user(user_id: str) -> dict[str, int]:
     computed = 0
+    engine = _engine()
     for rec_type in RECOMMENDATION_TYPES:
-        candidates = _score_candidates(user_id, rec_type)
+        candidates = engine.recommend(user_id, rec_type, limit=10)
         book_ids = [item["book"]["id"] for item in candidates]
         explanations = {
             item["book"]["id"]: (
-                f"{item['book']['title']} is a {rec_type} pick: {item['reason']}. "
+                f"{item['book']['title']} is a {rec_type} pick from {engine.name}: {item['reason']}. "
                 f"Score {item['score']:.2f}; generated asynchronously from cached embeddings."
             )
             for item in candidates
@@ -180,6 +218,84 @@ def _filter_owned_books(user_id: str, row: dict) -> tuple[list[dict], dict[str, 
         "resolved_count": len(books),
         "owned_filtered_count": filtered,
     }
+
+
+def _cached_recommendation_payload(user_id: str, rec_type: str) -> dict:
+    row = get_user_recommendation(user_id, rec_type) or {
+        "user_id": user_id,
+        "type": rec_type,
+        "book_ids": [],
+        "explanations": {},
+        "computed_at": None,
+    }
+    books, explanations, filter_summary = _filter_owned_books(user_id, row)
+    return {
+        "user_id": user_id,
+        "type": rec_type,
+        "books": books,
+        "explanations": explanations,
+        "computed_at": row["computed_at"],
+        "filter_summary": filter_summary,
+    }
+
+
+def _fallback_candidates(user_id: str, rec_type: str, limit: int) -> list[dict]:
+    payload = _cached_recommendation_payload(user_id, rec_type)
+    if payload["books"]:
+        return payload["books"][:limit]
+    return [item["book"] for item in _engine().recommend(user_id, rec_type, limit=limit)]
+
+
+def _engine_candidates(user_id: str, rec_type: str, limit: int) -> tuple[str, list[dict]]:
+    engine = _engine()
+    candidates = engine.recommend(user_id, rec_type, limit=max(limit, 10))
+    if not candidates:
+        cached = _cached_recommendation_payload(user_id, rec_type)
+        explanations = cached.get("explanations", {})
+        candidates = [
+            {
+                "book": book,
+                "score": 0.0,
+                "reason": explanations.get(book["id"], "cached candidate awaiting fresh engine score"),
+            }
+            for book in cached.get("books", [])
+        ]
+    return engine.name, candidates[:limit]
+
+
+def _book_line(book: dict, index: int) -> str:
+    genres = ", ".join(book.get("genres", [])[:4]) or "unknown genres"
+    description = str(book.get("description", "")).strip()
+    if len(description) > 240:
+        description = description[:237].rstrip() + "..."
+    return (
+        f"{index}. {book.get('title', 'Untitled')} by {book.get('author', 'Unknown')} "
+        f"({genres}). {description}"
+    )
+
+
+def _candidate_line(candidate: dict, index: int) -> str:
+    book = candidate["book"]
+    base = _book_line(book, index)
+    return f"{base} Engine score={candidate['score']:.2f}; reason={candidate['reason']}."
+
+
+def _call_llm(prompt: str, context: dict | None = None, timeout: int = 120) -> dict:
+    try:
+        response = requests.post(
+            f"{LLM_SERVICE_URL}/v1/generate",
+            json={"prompt": prompt, "context": context or {}},
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"LLM Service unavailable: {exc}") from exc
+
+
+def _user_context(user_id: str) -> tuple[dict, list[dict]]:
+    user = get_user(user_id) or {"id": user_id, "display_name": user_id, "preferences": {}}
+    return user, list_user_books(user_id)
 
 
 def _process_once(limit: int = 10) -> dict[str, int]:
@@ -268,19 +384,115 @@ def get_recommendations(
     user_id: str = Query(default=DEFAULT_USER_ID),
     type: str = Query(default="similar", pattern="^(similar|widen|mood)$"),
 ) -> dict:
-    row = get_user_recommendation(user_id, type) or {
-        "user_id": user_id,
-        "type": type,
-        "book_ids": [],
-        "explanations": {},
-        "computed_at": None,
-    }
-    books, explanations, filter_summary = _filter_owned_books(user_id, row)
+    return _cached_recommendation_payload(user_id, type)
+
+
+@app.post("/recommendations/ask")
+def ask_for_recommendations(payload: AskRequest) -> dict:
+    user, owned_books = _user_context(payload.user_id)
+    preferences = user.get("preferences", {}) or {}
+    user_instructions = str(preferences.get("recommendation_instructions", "")).strip()
+    engine_name, candidate_rows = _engine_candidates(payload.user_id, payload.type, payload.limit)
+    candidate_books = [item["book"] for item in candidate_rows]
+    if not candidate_books and not owned_books:
+        raise HTTPException(
+            status_code=409,
+            detail="No reading history or candidate recommendations are available yet. Add a book first.",
+        )
+
+    owned_lines = "\n".join(_book_line(book, index) for index, book in enumerate(owned_books[:8], start=1))
+    candidate_lines = "\n".join(_candidate_line(item, index) for index, item in enumerate(candidate_rows, start=1))
+    outside_policy = (
+        "You may recommend a book outside the candidate list if it is clearly better for the user request. "
+        "If you do, label it as an outside pick and explain why the engine candidates were not enough."
+        if payload.allow_outside_candidates
+        else "Only recommend books from the candidate list."
+    )
+    prompt = f"""
+You are the recommendation reasoning layer for Book AI Library.
+The recommendation system has two stages:
+1. A replaceable recommendation engine proposes grounded candidate books.
+2. You make the final recommendation using the user's request, profile, instructions, reading list, and candidates.
+
+User request:
+{payload.prompt}
+
+User profile:
+- id: {payload.user_id}
+- display name: {user.get("display_name", payload.user_id)}
+- preferences: {user.get("preferences", {})}
+- persistent user instructions: {user_instructions or "None provided."}
+
+Books already in the user's library:
+{owned_lines or "No books yet."}
+
+Candidate books from engine "{engine_name}" using mode "{payload.type}":
+{candidate_lines or "No grounded candidates are available yet."}
+
+Policy:
+{outside_policy}
+
+Pick the best 1-3 books for the user's request.
+For each pick, explain briefly whether it came from the engine candidates or is an outside pick, and why it fits the user's request and reading history.
+Finish with one concise next-step sentence.
+""".strip()
+    llm_payload = _call_llm(
+        prompt,
+        context={
+            "title": candidate_books[0].get("title", "a strong outside recommendation") if candidate_books else "a strong outside recommendation",
+            "reason": payload.prompt,
+        },
+    )
     return {
-        "user_id": user_id,
-        "type": type,
-        "books": books,
-        "explanations": explanations,
-        "computed_at": row["computed_at"],
-        "filter_summary": filter_summary,
+        "user_id": payload.user_id,
+        "prompt": payload.prompt,
+        "type": payload.type,
+        "engine": engine_name,
+        "allow_outside_candidates": payload.allow_outside_candidates,
+        "user_instructions": user_instructions,
+        "provider": llm_payload.get("provider", "unknown"),
+        "answer": llm_payload.get("text", ""),
+        "books": candidate_books,
+        "candidates": candidate_rows,
+        "source": "llm-over-engine-candidates",
+        "hot_path": "POST /recommendations/ask intentionally calls LLM Service over engine candidates; GET /recommendations remains cache-only.",
+    }
+
+
+@app.post("/profile/summary")
+def profile_summary(payload: ProfileSummaryRequest) -> dict:
+    user, owned_books = _user_context(payload.user_id)
+    candidates = _fallback_candidates(payload.user_id, "similar", payload.limit)
+    owned_lines = "\n".join(_book_line(book, index) for index, book in enumerate(owned_books[:10], start=1))
+    candidate_lines = "\n".join(_book_line(book, index) for index, book in enumerate(candidates[:5], start=1))
+    prompt = f"""
+Write a short, warm reading profile for this Book AI Library user.
+
+User:
+- id: {payload.user_id}
+- display name: {user.get("display_name", payload.user_id)}
+- preferences: {user.get("preferences", {})}
+
+Library:
+{owned_lines or "The library is empty."}
+
+Possible next books:
+{candidate_lines or "No computed recommendations yet."}
+
+In 3-5 sentences: describe the user's apparent taste, mention one pattern in their library, and finish with one suggested next book from the possible next books if available.
+""".strip()
+    context_title = candidates[0].get("title", "the first book in your recommendation list") if candidates else "your first saved book"
+    llm_payload = _call_llm(
+        prompt,
+        context={
+            "title": context_title,
+            "reason": "it matches the user's saved library",
+        },
+    )
+    return {
+        "user_id": payload.user_id,
+        "provider": llm_payload.get("provider", "unknown"),
+        "summary": llm_payload.get("text", ""),
+        "books_considered": len(owned_books),
+        "candidate_count": len(candidates),
     }

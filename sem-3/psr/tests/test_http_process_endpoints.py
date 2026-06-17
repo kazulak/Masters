@@ -134,11 +134,21 @@ def test_book_catalog_seed_and_list_real_http(tmp_path: Path) -> None:
     with uvicorn_service("book-catalog", tmp_path) as base_url:
         seed_response = requests.post(f"{base_url}/catalog/seed/demo", timeout=5)
         list_response = requests.get(f"{base_url}/books", timeout=3)
+        book_id = list_response.json()[0]["id"]
+        book_response = requests.get(f"{base_url}/books/{book_id}", timeout=3)
+        cached_response = requests.get(
+            f"{base_url}/books/{book_id}",
+            headers={"If-None-Match": book_response.headers["ETag"]},
+            timeout=3,
+        )
 
     assert seed_response.status_code == 200
     assert seed_response.json()["total_catalog_size"] >= 10
     assert list_response.status_code == 200
     assert len(list_response.json()) == seed_response.json()["total_catalog_size"]
+    assert book_response.status_code == 200
+    assert book_response.headers["ETag"]
+    assert cached_response.status_code == 304
 
 
 def test_user_profile_add_book_calls_book_catalog_over_real_http(tmp_path: Path) -> None:
@@ -194,7 +204,12 @@ def test_recommendation_pipeline_over_real_http_processes_async_boundary(tmp_pat
                     extra_env={"LLM_SERVICE_URL": llm_url},
                     app_state_file=state_file,
                 ) as embedding_url:
-                    with uvicorn_service("recommendation", tmp_path, app_state_file=state_file) as recommendation_url:
+                    with uvicorn_service(
+                        "recommendation",
+                        tmp_path,
+                        extra_env={"LLM_SERVICE_URL": llm_url},
+                        app_state_file=state_file,
+                    ) as recommendation_url:
                         seed_response = requests.post(f"{catalog_url}/catalog/seed/demo", timeout=5)
                         add_response = requests.post(
                             f"{user_url}/me/books",
@@ -216,6 +231,20 @@ def test_recommendation_pipeline_over_real_http_processes_async_boundary(tmp_pat
                             params={"user_id": "http-pipeline-user", "type": "similar"},
                             timeout=5,
                         )
+                        ask_response = requests.post(
+                            f"{recommendation_url}/recommendations/ask",
+                            json={
+                                "user_id": "http-pipeline-user",
+                                "type": "similar",
+                                "prompt": "I want a thoughtful science fiction recommendation.",
+                            },
+                            timeout=10,
+                        )
+                        summary_response = requests.post(
+                            f"{recommendation_url}/profile/summary",
+                            json={"user_id": "http-pipeline-user"},
+                            timeout=10,
+                        )
                         embedding_status = requests.get(f"{embedding_url}/status", timeout=3)
                         recommendation_status = requests.get(f"{recommendation_url}/status", timeout=3)
 
@@ -226,6 +255,16 @@ def test_recommendation_pipeline_over_real_http_processes_async_boundary(tmp_pat
     assert payload["filter_summary"]["resolved_count"] >= len(payload["books"])
     assert "owned_filtered_count" in payload["filter_summary"]
     assert payload["books"]
+    assert ask_response.status_code == 200
+    ask_payload = ask_response.json()
+    assert ask_payload["provider"] == "local-template"
+    assert ask_payload["source"] == "llm-over-engine-candidates"
+    assert ask_payload["engine"] == "vector-similarity"
+    assert ask_payload["allow_outside_candidates"] is True
+    assert ask_payload["books"]
+    assert ask_payload["candidates"]
+    assert summary_response.status_code == 200
+    assert summary_response.json()["summary"]
     assert embedding_status.json()["worker"]["last_success_at"]
     assert recommendation_status.json()["worker"]["last_success_at"]
 
