@@ -1,12 +1,14 @@
 import os
+import argparse
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 import subprocess
+from pathlib import Path
 
 # --- Configuration ---
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CSV_FILE = os.path.join(SCRIPT_DIR, "roofline_data.csv")
+SCRIPT_DIR = Path(__file__).resolve().parent
+ROOT_DIR = SCRIPT_DIR.parents[1]
 
 def get_cpu_limits():
     # Detect Cores
@@ -27,12 +29,14 @@ def get_cpu_limits():
 
 PEAK_PERF, PEAK_BANDWIDTH = get_cpu_limits()
 
-def plot_roofline():
-    if not os.path.exists(CSV_FILE):
-        print("CSV not found.")
+def plot_roofline(run_dir):
+    run_dir = Path(run_dir).resolve()
+    csv_file = run_dir / "raw" / "roofline_data.csv"
+    if not csv_file.exists():
+        print(f"CSV not found: {csv_file}")
         return
         
-    df = pd.read_csv(CSV_FILE)
+    df = pd.read_csv(csv_file)
     plt.figure(figsize=(12, 8))
     
     # 1. Generate the Roofline
@@ -77,8 +81,13 @@ def plot_roofline():
     plt.legend(loc='upper left', fontsize=11, frameon=True, shadow=True, borderpad=1)
     
     plt.tight_layout()
-    plt.savefig(os.path.join(SCRIPT_DIR, "roofline_plot.png"), dpi=300)
+    plots_dir = run_dir / "plots"
+    plots_dir.mkdir(exist_ok=True)
+    plt.savefig(plots_dir / "roofline_plot.png", dpi=300)
     print(f"Final Roofline generated. Ridge point is at {ridge_x:.2f}")
 
 if __name__ == "__main__":
-    plot_roofline()
+    parser = argparse.ArgumentParser(description="Plot roofline data from a run directory.")
+    parser.add_argument("run_dir", help="Run directory containing raw/roofline_data.csv.")
+    args = parser.parse_args()
+    plot_roofline(args.run_dir)

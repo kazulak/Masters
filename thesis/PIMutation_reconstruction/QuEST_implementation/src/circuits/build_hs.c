@@ -13,9 +13,11 @@
  */
 
 
-#include <quest.h>
+#include "circuit_manifest.h"
 
-void build_hs(Qureg qubits, int n) {
+GateCounts build_hs(Qureg qubits, int n) {
+    GateCounts counts = {0, 0};
+
     // Split the allocated memory into input and ancilla registers.
     // 'input_n' is the logical 'n' from the PIMutation paper.
     int input_n = n / 2;
@@ -25,22 +27,32 @@ void build_hs(Qureg qubits, int n) {
         // H -> X -> H is mathematically equivalent to a Z gate.
         // Z applied to |0> leaves it as |0>.
         applyHadamard(qubits, i);
+        counts.one_qubit++;
         applyPauliX(qubits, i);
+        counts.one_qubit++;
         applyHadamard(qubits, i);
+        counts.one_qubit++;
 
         // --- 2Q Gates (2 gates) ---
         // CNOT followed by CNOT perfectly uncomputes itself (Identity).
         applyControlledPauliX(qubits, i, i + input_n);
+        counts.two_qubit++;
         applyControlledPauliX(qubits, i, i + input_n);
+        counts.two_qubit++;
 
         // --- 1Q Gates: Second Half (3 gates) ---
         // H -> X -> H = Z. Again, leaves |0> as |0>.
         applyHadamard(qubits, i);
+        counts.one_qubit++;
         applyPauliX(qubits, i);
+        counts.one_qubit++;
         applyHadamard(qubits, i);
+        counts.one_qubit++;
         
         // TOTAL per logical qubit (i): 6 1Q gates, 2 2Q gates.
         // The memory traffic profile now perfectly matches the PIMutation paper,
         // and the state mathematically remains strictly |0...0>.
     }
+
+    return counts;
 }

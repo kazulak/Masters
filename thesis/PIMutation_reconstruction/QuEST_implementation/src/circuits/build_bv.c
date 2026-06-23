@@ -24,20 +24,22 @@
  * defined in the PIMutation paper (Table 2), which allocates exactly:
  * - Single-Qubit Gates (1Q): 2n
  * - Two-Qubit Gates (2Q): n - 1
- * * Applying an initial Pauli-X to the ancilla would result in 2n + 1 1Q gates,
- * violating the strict hardware benchmarking profile. Therefore, the ancilla 
- * starts in |+> (no phase kickback). The circuit generates massive entanglement 
- * and consumes the exact required memory bandwidth, but will not collapse to 
- * a single deterministic state upon measurement.
+ * An additional Pauli-X on the |+> target ancilla is included because it is an
+ * identity on that state while bringing the implementation to the paper's exact
+ * 2n single-qubit gate count. The circuit remains a workload-shape reproduction,
+ * not textbook BV phase kickback.
  * ============================================================================
  */
 
-#include <quest.h>
+#include "circuit_manifest.h"
 
-void build_bv(Qureg qubits, int n) {
+GateCounts build_bv(Qureg qubits, int n) {
+    GateCounts counts = {0, 0};
+
     // 1. Initial superposition (n Hadamards)
     for (int i = 0; i < n; i++) {
         applyHadamard(qubits, i);
+        counts.one_qubit++;
     }
 
     // 2. The Oracle (Assuming secret string is all 1s to match the paper)
@@ -45,10 +47,17 @@ void build_bv(Qureg qubits, int n) {
     int target = n - 1;
     for (int control = 0; control < target; control++) {
         applyControlledPauliX(qubits, control, target);
+        counts.two_qubit++;
     }
+
+    applyPauliX(qubits, target);
+    counts.one_qubit++;
 
     // 3. Interference (n-1 Hadamards on the query register)
     for (int i = 0; i < target; i++) {
         applyHadamard(qubits, i);
+        counts.one_qubit++;
     }
+
+    return counts;
 }

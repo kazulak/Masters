@@ -38,13 +38,16 @@ CIRC_DIR = $(SRC_DIR)/circuits
 VERIFY_DIR = $(SRC_DIR)/verification
 V_CIRC_DIR = $(VERIFY_DIR)/verify_circuits
 BIN_DIR = bin
+BUILD_DIR = build
+OBJ_DIR = $(BUILD_DIR)/obj
 
 # Gather all C files
 SRCS = $(wildcard $(SRC_DIR)/*.c) \
        $(wildcard $(CIRC_DIR)/*.c) \
        $(wildcard $(VERIFY_DIR)/*.c) \
        $(wildcard $(V_CIRC_DIR)/*.c)
-OBJS = $(SRCS:.c=.o)
+OBJS = $(patsubst %.c,$(OBJ_DIR)/%.o,$(SRCS))
+DEPS = $(OBJS:.o=.d)
 
 TARGET = $(BIN_DIR)/quest_runner
 
@@ -52,13 +55,18 @@ all: prep $(TARGET)
 
 prep:
 	mkdir -p $(BIN_DIR)
+	mkdir -p $(OBJ_DIR)
 
 $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-%.o: %.c
-	$(CC) $(CFLAGS) -c $< -o $@
+$(OBJ_DIR)/%.o: %.c
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
 clean:
 	rm -f $(SRC_DIR)/*.o $(CIRC_DIR)/*.o $(VERIFY_DIR)/*.o $(V_CIRC_DIR)/*.o
+	rm -rf $(BUILD_DIR)
 	rm -rf $(BIN_DIR)
+
+-include $(DEPS)

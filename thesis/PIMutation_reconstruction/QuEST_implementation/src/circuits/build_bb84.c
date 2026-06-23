@@ -12,12 +12,18 @@
  * 3. Apply n Pauli-X gates (simulating basis encoding).
  */
 
-#include <quest.h>
+#include "circuit_manifest.h"
 
-void build_bb84(Qureg qubits, int n) {
-// Apply 2n single-qubit gates (n Hadamards + n Pauli-X)
+GateCounts build_bb84(Qureg qubits, int n) {
+    GateCounts counts = {0, 0};
+
+    // Apply 2n single-qubit gates (n Hadamards + n Pauli-X).
     for (int i = 0; i < n; i++) {
         applyHadamard(qubits, i);
+        counts.one_qubit++;
         applyPauliX(qubits, i);
+        counts.one_qubit++;
     }
+
+    return counts;
 }

@@ -3,11 +3,15 @@ import subprocess
 import csv
 import sys
 import re
+from datetime import datetime
+from pathlib import Path
 
 # --- Configuration ---
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-EXEC_PATH = os.path.join(SCRIPT_DIR, "../../bin/quest_runner")
-OUTPUT_FILE = os.path.join(SCRIPT_DIR, "roofline_data.csv")
+SCRIPT_DIR = Path(__file__).resolve().parent
+ROOT_DIR = SCRIPT_DIR.parents[1]
+EXEC_PATH = ROOT_DIR / "bin" / "quest_runner"
+RUN_DIR = ROOT_DIR / "runs" / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_roofline_perf"
+OUTPUT_FILE = RUN_DIR / "raw" / "roofline_data.csv"
 
 ALGORITHMS = ["BB84", "BV", "EDC", "HS", "QRNG", "XOR"]
 QUBITS = 18 # 2GB State Vector - definitely hits RAM
@@ -15,6 +19,7 @@ QUBITS = 18 # 2GB State Vector - definitely hits RAM
 TIME_REGEX = re.compile(r"Execution Time \(Comp\.\):\s+([0-9\.]+)\s+seconds")
 
 def collect_roofline_data():
+    OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(OUTPUT_FILE, mode='w', newline='') as file:
         writer = csv.writer(file)
         writer.writerow(["Algorithm", "Time_s", "Cache_Misses", "Instructions", "Bytes_from_RAM", "Arithmetic_Intensity", "GIPS"])
@@ -34,7 +39,7 @@ def collect_roofline_data():
 
             perf_cmd = [
                 "sudo", "perf", "stat", "-x", ",", "-e", f"instructions,{fp_event},cache-misses",
-                EXEC_PATH, "--algo", algo, "--qubits", str(QUBITS)
+                str(EXEC_PATH), "--algo", algo, "--qubits", str(QUBITS), "--json"
             ]
             
             try:
@@ -42,9 +47,13 @@ def collect_roofline_data():
                 
                 # 1. Parse Compute Time from QuEST Output
                 exec_time = 0.0
-                time_match = TIME_REGEX.search(result.stdout)
-                if time_match:
-                    exec_time = float(time_match.group(1))
+                try:
+                    import json
+                    exec_time = float(json.loads(result.stdout.strip())["time_s"])
+                except Exception:
+                    time_match = TIME_REGEX.search(result.stdout)
+                    if time_match:
+                        exec_time = float(time_match.group(1))
                 
                 # 2. Parse Perf Metrics from Stderr
                 lines = result.stderr.strip().split('\n')
@@ -81,3 +90,4 @@ def collect_roofline_data():
 
 if __name__ == "__main__":
     collect_roofline_data()
+    print(f"Roofline data saved to {OUTPUT_FILE}")

@@ -14,11 +14,12 @@
  * c. Apply the gate to the Qureg.
  */
 
-
-#include <quest.h>
+#include "circuit_manifest.h"
 #include <stdlib.h>
 
-void build_random(Qureg qubits, int n, int depth) {
+GateCounts build_random(Qureg qubits, int n, int depth) {
+    GateCounts counts = {0, 0};
+
     // Set a fixed seed so your benchmarks are reproducible!
     srand(42); 
 
@@ -28,14 +29,19 @@ void build_random(Qureg qubits, int n, int depth) {
             
             if (gate_type == 0) {
                 applyHadamard(qubits, i);
+                counts.one_qubit++;
             } 
             else if (gate_type == 1) {
                 applyPauliX(qubits, i);
+                counts.one_qubit++;
             } 
             else if (gate_type == 2 && i < n - 1) {
                 // Apply a CNOT with the neighbor, if it's not the last qubit
                 applyControlledPauliX(qubits, i, i + 1);
+                counts.two_qubit++;
             }
         }
     }
+
+    return counts;
 }

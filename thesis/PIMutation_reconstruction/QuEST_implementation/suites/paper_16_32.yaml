@@ -1,0 +1,21 @@
+suite_id: paper_16_32
+description: PIMutation-shaped sweep from 16 to 32 allocated qubits where memory permits.
+algorithms: [BB84, BV, EDC, HS, QRNG, XOR]
+qubits:
+  default:
+    start: 16
+    stop: 32
+    step: 2
+  HS:
+    start: 8
+    stop: 16
+    step: 1
+repeats: 10
+warmups: 1
+timeout_s: 900
+memory_guard:
+  max_allocated_qubits: 32
+thread_counts: [1]
+plot: true
+largest_fair_bb84:
+  enabled: false

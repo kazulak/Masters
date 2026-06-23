@@ -1,0 +1,4 @@
+runs/
+build/
+src/profiling/*.csv
+src/profiling/*.png

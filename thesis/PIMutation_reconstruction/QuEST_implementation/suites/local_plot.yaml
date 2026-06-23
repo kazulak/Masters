@@ -1,0 +1,21 @@
+suite_id: local_plot
+description: Lightweight visualization sweep with enough points for readable plots.
+algorithms: [BB84, BV, EDC, HS, QRNG, XOR]
+qubits:
+  default:
+    start: 4
+    stop: 16
+    step: 2
+  HS:
+    start: 2
+    stop: 8
+    step: 1
+repeats: 3
+warmups: 1
+timeout_s: 60
+memory_guard:
+  max_allocated_qubits: 16
+thread_counts: [1]
+plot: true
+largest_fair_bb84:
+  enabled: false

@@ -4,11 +4,15 @@ import subprocess
 import csv
 import re
 import sys
+from datetime import datetime
+from pathlib import Path
 
 # ====================== CONFIG ======================
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-EXEC_PATH = os.path.join(SCRIPT_DIR, "../../bin/quest_runner")
-OUTPUT_FILE = os.path.join(SCRIPT_DIR, "roofline_data_perf.csv")
+SCRIPT_DIR = Path(__file__).resolve().parent
+ROOT_DIR = SCRIPT_DIR.parents[1]
+EXEC_PATH = ROOT_DIR / "bin" / "quest_runner"
+RUN_DIR = ROOT_DIR / "runs" / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_roofline_likwid"
+OUTPUT_FILE = RUN_DIR / "raw" / "roofline_data_perf.csv"
 
 ALGORITHMS = ["BB84", "BV", "EDC", "HS", "QRNG", "XOR"]
 QUBITS = 27          # 2 GiB state vector → forces DRAM traffic (same regime as paper)
@@ -28,7 +32,7 @@ def run_perf(algo):
         "sudo", "taskset", "-c", CORES,
         "perf", "stat", "-x", ",", "-e",
         "instructions,fp_ret_sse_avx_ops.all,l3_misses",
-        EXEC_PATH, "--algo", algo, "--qubits", str(QUBITS)
+        str(EXEC_PATH), "--algo", algo, "--qubits", str(QUBITS), "--json"
     ]
 
     try:
@@ -36,9 +40,13 @@ def run_perf(algo):
 
         # 1. Parse QuEST compute time
         exec_time = 0.0
-        time_match = TIME_REGEX.search(result.stdout)
-        if time_match:
-            exec_time = float(time_match.group(1))
+        try:
+            import json
+            exec_time = float(json.loads(result.stdout.strip())["time_s"])
+        except Exception:
+            time_match = TIME_REGEX.search(result.stdout)
+            if time_match:
+                exec_time = float(time_match.group(1))
 
         # 2. Parse perf counters from stderr
         lines = result.stderr.strip().split('\n')
@@ -84,6 +92,7 @@ def run_perf(algo):
         return None
 
 def main():
+    OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(OUTPUT_FILE, mode='w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=["Algorithm","Time_s","L3_Misses","DRAM_Bytes","FLOPS","Arithmetic_Intensity","GFLOPS","Ridge_FLOP_Byte"])
         writer.writeheader()

@@ -1,0 +1,20 @@
+suite_id: bb84_pc_limit
+description: Automatically find the largest BB84/BB_n circuit that stays under a quick runtime threshold.
+algorithms: []
+qubits: []
+repeats: 1
+warmups: 0
+timeout_s: 120
+memory_guard:
+  max_allocated_qubits: 30
+thread_counts: [1]
+plot: true
+largest_fair_bb84:
+  enabled: true
+  start_qubits: 17
+  max_qubits: 30
+  step: 1
+  repeats: 3
+  warmups: 1
+  runtime_threshold_s: 5.0
+  timeout_s: 120

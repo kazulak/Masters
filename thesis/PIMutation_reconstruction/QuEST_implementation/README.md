@@ -1,69 +1,126 @@
-# State-Vector Simulation Baseline: CPU SOTA
+# State-Vector Simulation Baseline: QuEST CPU
 
-## 1. Scientific Objective
-This repository establishes the State-of-the-Art (SOTA) CPU baseline for full state-vector quantum circuit simulation. This suite is inspired by the benchmarking methodology presented in the "PIMutation" paper (Lee et al., ASPDAC 2025), but is upgraded to utilize the QuEST v4 simulator for true multi-threaded SOTA performance metrics. 
+This directory contains a reproducible CPU baseline for PIMutation-shaped quantum
+circuit workloads using the local QuEST v4 build. The ASP-DAC 2025 PIMutation
+paper used QuEST v3.7.0, so results from this tree are a local SOTA CPU baseline,
+not an exact paper-version reproduction unless QuEST v3.7.0 is also built and
+measured.
 
-This baseline serves as the control group to evaluate future hardware-accelerated approaches (such as Processing-In-Memory and Tensor Network Contractions) by explicitly demonstrating the exponential "Memory Wall" and power bottlenecks of state-vector scaling.
+## Build And Verify
 
-## 2. Methodology & The Universal Runner
-We utilize the Quantum Exact Simulation Toolkit (QuEST) compiled with maximum hardware optimizations (`-O3`, `-march=native`, `-fopenmp`). 
-
-To facilitate both strict hardware benchmarking and general stress-testing, this suite is built as a **Universal Runner**. A single executable parses command-line flags to construct, evaluate, and profile specific quantum circuits.
-
-### Supported Algorithms:
-* **The PIMutation Suite:** `BB84`, `BV`, `EDC`, `HS`, `QRNG`, `XOR`
-* **Randomized Benchmarking:** `RANDOM` (Generates arbitrary circuits to test average-case limits).
-* *Note: The Hidden Subgroup (HS) algorithm requires $2n$ allocated qubits for an $n$-qubit input.*
-
-### Compilation & Manual Execution:
 ```bash
-# Clean previous builds
 make clean
-
-# Compile the suite
 make
-
-# Run the strict Bernstein-Vazirani benchmark for 26 qubits
-# (Requires sudo for RAPL energy telemetry)
-sudo ./bin/quest_runner --algo BV --qubits 26
-
-# Run an arbitrary randomized circuit with a specific gate depth
-sudo ./bin/quest_runner --algo RANDOM --qubits 20 --depth 50
-```
-
-## 3. Mathematical Verification Suite
-To ensure the baseline circuits are mathematically sound before profiling, the suite includes an isolated pure-C verification framework. It bypasses standard measurement and directly queries the QuEST state-vector memory to assert deterministic quantum states and physical normalization.
-```bash
-# Run all mathematical sanity checks
 ./bin/quest_runner --verify FULL
-
-# Verify specific algorithms using a comma-separated list
-./bin/quest_runner --verify BB84,BV
 ```
 
-## 4. Hardware Profiling & Telemetry
-To capture the true bottleneck of state-vector simulation, each benchmark strictly profiles:
+Invalid verification selections are errors:
 
-- Execution Time (Compute): Measured using OpenMP wall-timers (omp_get_wtime()).
-
-- Energy Consumption: CPU energy footprint measured via Intel RAPL (Running Average Power Limit) registers during the compute phase.
-
-⚠️ Important Hardware Note: Because accessing RAPL registers requires hardware-level permissions, all profiling executions must be run with sudo. If run without root privileges, energy metrics will report as 0.0 Joules.
-
-## 5. Automated Data Harvesting & Visualization
-A Python automation suite is provided in src/profiling/ to sweep across qubit counts, extract metrics, filter OS-scheduling noise via median smoothing, and generate exponential scaling plots.
-
-Requirements
 ```bash
-pip install pandas matplotlib
+./bin/quest_runner --verify NOT_A_SUITE
 ```
 
-Running the SweepsThe run_experiments.py script automatically tests the primary scaling circuits (BB84, BV, EDC, XOR, HS) from $n=10$ to $n=30$. It includes a strict memory guard that prevents the OS from crashing by skipping any allocation requiring more than 30 total qubits (~16GB RAM).
+## Manual Runner
+
+Human-readable run:
+
 ```bash
-# Execute the smoothed median benchmark suite 
-# (This will take time for high qubit counts)
-sudo python3 ./src/profiling/run_experiments.py
-
-# Generate high-resolution logarithmic scaling charts
-python3 ./src/profiling/plot_results.py
+./bin/quest_runner --algo BV --qubits 26
 ```
+
+Machine-readable run:
+
+```bash
+./bin/quest_runner --algo BV --qubits 26 --json
+```
+
+`--json` prints one JSON object with `algo`, `input_qubits`,
+`allocated_qubits`, `depth`, `threads`, `time_s`, `energy_joules`,
+`energy_source`, `status`, and `error`. Energy is reported as
+`energy_source=rapl_measured` only when Linux RAPL is readable; otherwise
+`energy_joules` is `null` and `energy_source=unavailable`.
+
+Algorithm names are `BB84`, `BV`, `EDC`, `HS`, `QRNG`, `XOR`, and optional
+`RANDOM`. `BB` is accepted only as a compatibility alias for `BB84`; prefer
+`BB84` in scripts and source-facing CLI.
+
+For `HS`, the paper workload is `HS_2n`: logical `n` qubits and `2n` allocated
+qubits. Use either:
+
+```bash
+./bin/quest_runner --algo HS --logical-qubits 13
+./bin/quest_runner --algo HS --qubits 26
+```
+
+## Reproducible Suites
+
+Suites are YAML files under `suites/`. Outputs are never overwritten; each run
+gets a new timestamped directory:
+
+```text
+runs/YYYYMMDD_HHMMSS_<suite_id>/
+  environment.json
+  raw/repeats.jsonl
+  summary.csv
+  summary.json
+  plots/*.png
+```
+
+Run the quick local suite:
+
+```bash
+python3 src/profiling/run_experiments.py --preset local_quick
+```
+
+For energy measurements, run the suite with privileges but keep plotting on the
+thesis virtualenv interpreter so matplotlib is used instead of the fallback PNG
+plotter:
+
+```bash
+sudo python3 src/profiling/run_experiments.py \
+  --preset local_plot \
+  --plot-python ../../.venv/bin/python
+```
+
+Equivalently:
+
+```bash
+sudo env QUEST_PLOT_PYTHON="$(realpath ../../.venv/bin/python)" \
+  python3 src/profiling/run_experiments.py --preset local_plot
+```
+
+Other bundled presets:
+
+- `local_plot`: lightweight visualization sweep with readable matplotlib plots.
+- `local_energy`: RAPL-oriented local sweep using larger state vectors to avoid
+  zero-energy medians.
+- `paper_16_32`: PIMutation-shaped sweep, guarded at 32 allocated qubits.
+- `bb84_pc_limit`: automatic largest fair `BB84/BB_n` selector above 16 qubits.
+
+Every repeat is written to `raw/repeats.jsonl` before summaries are derived.
+Skipped and failed repeats remain visible in both raw JSONL and summary files.
+The suite runner captures CPU, RAM, OS, compiler flags, QuEST version/path,
+OpenMP variables, git commit, and RAPL availability in `environment.json`.
+
+Plot an existing run:
+
+```bash
+python3 src/profiling/plot_results.py runs/latest
+python3 src/profiling/plot_results.py runs/current_run --baseline runs/baseline_run
+```
+
+## Circuit Manifest
+
+The code manifest lives in `src/circuits/circuit_manifest.*`; verification checks
+the implementation gate counts against it before semantic checks.
+
+| CLI | Paper label | Qubits | Paper 1Q | Paper 2Q | Implementation 1Q | Implementation 2Q | Kind |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `BB84` | `BB_n` | `n` allocated | `2n` | `0` | `2n` | `0` | PIMutation workload-shape reproduction |
+| `BV` | `BV_n` | `n` allocated | `2n` | `n-1` | `2n` | `n-1` | Workload-shape reproduction, not textbook phase-kickback |
+| `EDC` | `EDC_n` | `n` allocated | `2n` | `2n-2` | `2n` | `2n-2` | PIMutation workload-shape reproduction |
+| `HS` | `HS_2n` | logical `n`, allocated `2n` | `6n` | `2n` | `6n` | `2n` | Identity-preserving workload-shape reproduction |
+| `QRNG` | `QRNG_n` | `n` allocated | `n` | `0` | `n` | `0` | Textbook QRNG |
+| `XOR` | `XOR_n` | `n` allocated | `0` | `n-1` | `0` | `n-1` | PIMutation workload-shape reproduction |
+
+`RANDOM` is a configurable stress test and is not one of the six paper circuits.

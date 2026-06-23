@@ -32,28 +32,50 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <inttypes.h>
 
 #define RAPL_PATH "/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj"
+#define RAPL_MAX_RANGE_PATH "/sys/class/powercap/intel-rapl/intel-rapl:0/max_energy_range_uj"
 
 // 1. Encapsulate the state
 typedef struct {
     uint64_t start_uj;
+    uint64_t max_range_uj;
     bool is_available;
 } RaplState;
 
+static inline uint64_t read_rapl_uj(const char* path, bool* ok) {
+    FILE *file = fopen(path, "r");
+    if (!file) {
+        if (ok) *ok = false;
+        return 0;
+    }
+
+    uint64_t value = 0;
+    if (fscanf(file, "%" SCNu64, &value) != 1) {
+        if (ok) *ok = false;
+        fclose(file);
+        return 0;
+    }
+
+    fclose(file);
+    if (ok) *ok = true;
+    return value;
+}
+
 // 2. Pure function to initialize and capture the start state
 static inline RaplState start_energy_profiling() {
-    RaplState state = {0, false};
-    
-    FILE *file = fopen(RAPL_PATH, "r");
-    if (file) {
-        state.is_available = true;
-        if (fscanf(file, "%lu", &state.start_uj) != 1) {
-            state.start_uj = 0;
+    RaplState state = {0, 0, false};
+
+    bool ok = false;
+    state.start_uj = read_rapl_uj(RAPL_PATH, &ok);
+    state.is_available = ok;
+    if (ok) {
+        bool max_ok = false;
+        state.max_range_uj = read_rapl_uj(RAPL_MAX_RANGE_PATH, &max_ok);
+        if (!max_ok) {
+            state.max_range_uj = 0;
         }
-        fclose(file);
-    } else {
-        printf("[Telemetry] WARNING: RAPL interface not found at %s.\n", RAPL_PATH);
     }
     
     return state;
@@ -62,18 +84,23 @@ static inline RaplState start_energy_profiling() {
 // 3. Pure function to calculate the delta based on the passed state
 static inline double stop_energy_profiling(RaplState state) {
     if (!state.is_available) return 0.0;
-    
-    FILE *file = fopen(RAPL_PATH, "r");
-    if (!file) return 0.0;
-    
-    uint64_t end_energy_uj = 0;
-    if (fscanf(file, "%lu", &end_energy_uj) != 1) {
-        end_energy_uj = 0;
+
+    bool ok = false;
+    uint64_t end_energy_uj = read_rapl_uj(RAPL_PATH, &ok);
+    if (!ok) return 0.0;
+
+    uint64_t delta_uj = 0;
+    if (end_energy_uj >= state.start_uj) {
+        delta_uj = end_energy_uj - state.start_uj;
+    } else if (state.max_range_uj > 0) {
+        delta_uj = (state.max_range_uj - state.start_uj) + end_energy_uj;
     }
-    fclose(file);
-    
-    uint64_t delta_uj = end_energy_uj - state.start_uj;
+
     return (double)delta_uj / 1000000.0;
+}
+
+static inline const char* energy_source_name(RaplState state) {
+    return state.is_available ? "rapl_measured" : "unavailable";
 }
 
 #endif // RAPL_ENERGY_H
