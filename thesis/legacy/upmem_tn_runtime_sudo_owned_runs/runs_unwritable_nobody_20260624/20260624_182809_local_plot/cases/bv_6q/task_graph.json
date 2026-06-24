@@ -1,0 +1,1798 @@
+{
+  "network": {
+    "circuit": {
+      "n_qubits": 6,
+      "name": "bv_6q",
+      "operations": [
+        {
+          "gate": "x",
+          "params": [],
+          "wires": [
+            5
+          ]
+        },
+        {
+          "gate": "h",
+          "params": [],
+          "wires": [
+            0
+          ]
+        },
+        {
+          "gate": "h",
+          "params": [],
+          "wires": [
+            1
+          ]
+        },
+        {
+          "gate": "h",
+          "params": [],
+          "wires": [
+            2
+          ]
+        },
+        {
+          "gate": "h",
+          "params": [],
+          "wires": [
+            3
+          ]
+        },
+        {
+          "gate": "h",
+          "params": [],
+          "wires": [
+            4
+          ]
+        },
+        {
+          "gate": "h",
+          "params": [],
+          "wires": [
+            5
+          ]
+        },
+        {
+          "gate": "cx",
+          "params": [],
+          "wires": [
+            0,
+            5
+          ]
+        },
+        {
+          "gate": "cx",
+          "params": [],
+          "wires": [
+            2,
+            5
+          ]
+        },
+        {
+          "gate": "cx",
+          "params": [],
+          "wires": [
+            4,
+            5
+          ]
+        },
+        {
+          "gate": "h",
+          "params": [],
+          "wires": [
+            0
+          ]
+        },
+        {
+          "gate": "h",
+          "params": [],
+          "wires": [
+            1
+          ]
+        },
+        {
+          "gate": "h",
+          "params": [],
+          "wires": [
+            2
+          ]
+        },
+        {
+          "gate": "h",
+          "params": [],
+          "wires": [
+            3
+          ]
+        },
+        {
+          "gate": "h",
+          "params": [],
+          "wires": [
+            4
+          ]
+        }
+      ],
+      "source": {
+        "kind": "builtin",
+        "n_qubits": 6,
+        "name": "BV"
+      }
+    },
+    "einsum_expression": "a,b,c,d,e,f,fg,ah,bi,cj,dk,el,gm,hmno,jopq,lqrs,nt,iu,pv,kw,rx->tuvwxs",
+    "output_labels": [
+      19,
+      20,
+      21,
+      22,
+      23,
+      18
+    ],
+    "tensors": [
+      {
+        "dtype": "complex128",
+        "id": "tensor_0",
+        "labels": [
+          0
+        ],
+        "produced_by": null,
+        "shape": [
+          2
+        ],
+        "structure": "dense"
+      },
+      {
+        "dtype": "complex128",
+        "id": "tensor_1",
+        "labels": [
+          1
+        ],
+        "produced_by": null,
+        "shape": [
+          2
+        ],
+        "structure": "dense"
+      },
+      {
+        "dtype": "complex128",
+        "id": "tensor_2",
+        "labels": [
+          2
+        ],
+        "produced_by": null,
+        "shape": [
+          2
+        ],
+        "structure": "dense"
+      },
+      {
+        "dtype": "complex128",
+        "id": "tensor_3",
+        "labels": [
+          3
+        ],
+        "produced_by": null,
+        "shape": [
+          2
+        ],
+        "structure": "dense"
+      },
+      {
+        "dtype": "complex128",
+        "id": "tensor_4",
+        "labels": [
+          4
+        ],
+        "produced_by": null,
+        "shape": [
+          2
+        ],
+        "structure": "dense"
+      },
+      {
+        "dtype": "complex128",
+        "id": "tensor_5",
+        "labels": [
+          5
+        ],
+        "produced_by": null,
+        "shape": [
+          2
+        ],
+        "structure": "dense"
+      },
+      {
+        "dtype": "complex128",
+        "id": "tensor_6",
+        "labels": [
+          5,
+          6
+        ],
+        "produced_by": "circuit_op_0",
+        "shape": [
+          2,
+          2
+        ],
+        "structure": "permutation"
+      },
+      {
+        "dtype": "complex128",
+        "id": "tensor_7",
+        "labels": [
+          0,
+          7
+        ],
+        "produced_by": "circuit_op_1",
+        "shape": [
+          2,
+          2
+        ],
+        "structure": "dense"
+      },
+      {
+        "dtype": "complex128",
+        "id": "tensor_8",
+        "labels": [
+          1,
+          8
+        ],
+        "produced_by": "circuit_op_2",
+        "shape": [
+          2,
+          2
+        ],
+        "structure": "dense"
+      },
+      {
+        "dtype": "complex128",
+        "id": "tensor_9",
+        "labels": [
+          2,
+          9
+        ],
+        "produced_by": "circuit_op_3",
+        "shape": [
+          2,
+          2
+        ],
+        "structure": "dense"
+      },
+      {
+        "dtype": "complex128",
+        "id": "tensor_10",
+        "labels": [
+          3,
+          10
+        ],
+        "produced_by": "circuit_op_4",
+        "shape": [
+          2,
+          2
+        ],
+        "structure": "dense"
+      },
+      {
+        "dtype": "complex128",
+        "id": "tensor_11",
+        "labels": [
+          4,
+          11
+        ],
+        "produced_by": "circuit_op_5",
+        "shape": [
+          2,
+          2
+        ],
+        "structure": "dense"
+      },
+      {
+        "dtype": "complex128",
+        "id": "tensor_12",
+        "labels": [
+          6,
+          12
+        ],
+        "produced_by": "circuit_op_6",
+        "shape": [
+          2,
+          2
+        ],
+        "structure": "dense"
+      },
+      {
+        "dtype": "complex128",
+        "id": "tensor_13",
+        "labels": [
+          7,
+          12,
+          13,
+          14
+        ],
+        "produced_by": "circuit_op_7",
+        "shape": [
+          2,
+          2,
+          2,
+          2
+        ],
+        "structure": "permutation"
+      },
+      {
+        "dtype": "complex128",
+        "id": "tensor_14",
+        "labels": [
+          9,
+          14,
+          15,
+          16
+        ],
+        "produced_by": "circuit_op_8",
+        "shape": [
+          2,
+          2,
+          2,
+          2
+        ],
+        "structure": "permutation"
+      },
+      {
+        "dtype": "complex128",
+        "id": "tensor_15",
+        "labels": [
+          11,
+          16,
+          17,
+          18
+        ],
+        "produced_by": "circuit_op_9",
+        "shape": [
+          2,
+          2,
+          2,
+          2
+        ],
+        "structure": "permutation"
+      },
+      {
+        "dtype": "complex128",
+        "id": "tensor_16",
+        "labels": [
+          13,
+          19
+        ],
+        "produced_by": "circuit_op_10",
+        "shape": [
+          2,
+          2
+        ],
+        "structure": "dense"
+      },
+      {
+        "dtype": "complex128",
+        "id": "tensor_17",
+        "labels": [
+          8,
+          20
+        ],
+        "produced_by": "circuit_op_11",
+        "shape": [
+          2,
+          2
+        ],
+        "structure": "dense"
+      },
+      {
+        "dtype": "complex128",
+        "id": "tensor_18",
+        "labels": [
+          15,
+          21
+        ],
+        "produced_by": "circuit_op_12",
+        "shape": [
+          2,
+          2
+        ],
+        "structure": "dense"
+      },
+      {
+        "dtype": "complex128",
+        "id": "tensor_19",
+        "labels": [
+          10,
+          22
+        ],
+        "produced_by": "circuit_op_13",
+        "shape": [
+          2,
+          2
+        ],
+        "structure": "dense"
+      },
+      {
+        "dtype": "complex128",
+        "id": "tensor_20",
+        "labels": [
+          17,
+          23
+        ],
+        "produced_by": "circuit_op_14",
+        "shape": [
+          2,
+          2
+        ],
+        "structure": "dense"
+      }
+    ]
+  },
+  "path": [
+    [
+      5,
+      6
+    ],
+    [
+      0,
+      5
+    ],
+    [
+      9,
+      18
+    ],
+    [
+      0,
+      4
+    ],
+    [
+      0,
+      3
+    ],
+    [
+      5,
+      15
+    ],
+    [
+      0,
+      2
+    ],
+    [
+      0,
+      1
+    ],
+    [
+      1,
+      12
+    ],
+    [
+      0,
+      6
+    ],
+    [
+      5,
+      10
+    ],
+    [
+      1,
+      5
+    ],
+    [
+      1,
+      4
+    ],
+    [
+      1,
+      3
+    ],
+    [
+      1,
+      2
+    ],
+    [
+      0,
+      1
+    ],
+    [
+      1,
+      4
+    ],
+    [
+      2,
+      3
+    ],
+    [
+      0,
+      1
+    ],
+    [
+      0,
+      1
+    ]
+  ],
+  "path_summary": {
+    "largest_intermediate": 64,
+    "naive_flops": 352321536.0,
+    "optimize": "greedy",
+    "optimized_flops": 428.0,
+    "path_length": 20,
+    "planner": "opt_einsum",
+    "text": "  Complete contraction:  a,b,c,d,e,f,fg,ah,bi,cj,dk,el,gm,hmno,jopq,lqrs,nt,iu,pv,kw,rx->tuvwxs\n         Naive scaling:  24\n     Optimized scaling:  6\n      Naive FLOP count:  3.523e+8\n  Optimized FLOP count:  4.280e+2\n   Theoretical speedup:  8.232e+5\n  Largest intermediate:  6.400e+1 elements\n--------------------------------------------------------------------------------\nscaling        BLAS                current                             remaining\n--------------------------------------------------------------------------------\n   2           GEMM                fg,f->g    a,b,c,d,e,ah,bi,cj,dk,el,gm,hmno,jopq,lqrs,nt,iu,pv,kw,rx,g->tuvwxs\n   2           GEMM                ah,a->h    b,c,d,e,bi,cj,dk,el,gm,hmno,jopq,lqrs,nt,iu,pv,kw,rx,g,h->tuvwxs\n   4           GEMM            h,hmno->mno    b,c,d,e,bi,cj,dk,el,gm,jopq,lqrs,nt,iu,pv,kw,rx,g,mno->tuvwxs\n   2           GEMM                bi,b->i    c,d,e,cj,dk,el,gm,jopq,lqrs,nt,iu,pv,kw,rx,g,mno,i->tuvwxs\n   2           GEMM                cj,c->j    d,e,dk,el,gm,jopq,lqrs,nt,iu,pv,kw,rx,g,mno,i,j->tuvwxs\n   4           GEMM            j,jopq->opq    d,e,dk,el,gm,lqrs,nt,iu,pv,kw,rx,g,mno,i,opq->tuvwxs\n   2           GEMM                dk,d->k    e,el,gm,lqrs,nt,iu,pv,kw,rx,g,mno,i,opq,k->tuvwxs\n   2           GEMM                el,e->l    gm,lqrs,nt,iu,pv,kw,rx,g,mno,i,opq,k,l->tuvwxs\n   4           GEMM            l,lqrs->qrs    gm,nt,iu,pv,kw,rx,g,mno,i,opq,k,qrs->tuvwxs\n   2           GEMM                g,gm->m    nt,iu,pv,kw,rx,mno,i,opq,k,qrs,m->tuvwxs\n   3           GEMM              m,mno->no    nt,iu,pv,kw,rx,i,opq,k,qrs,no->tuvwxs\n   2           GEMM                i,iu->u    nt,pv,kw,rx,opq,k,qrs,no,u->tuvwxs\n   4           TDOT            opq,pv->oqv       nt,kw,rx,k,qrs,no,u,oqv->tuvwxs\n   2           GEMM                k,kw->w          nt,rx,qrs,no,u,oqv,w->tuvwxs\n   4           TDOT            qrs,rx->qsx             nt,no,u,oqv,w,qsx->tuvwxs\n   3           GEMM              no,nt->ot                u,oqv,w,qsx,ot->tuvwxs\n   4           GEMM            ot,oqv->tqv                   u,w,qsx,tqv->tuvwxs\n   5           TDOT          tqv,qsx->tvsx                      u,w,tvsx->tuvwxs\n   2   OUTER/EINSUM                w,u->wu                       tvsx,wu->tuvwxs\n   6   OUTER/EINSUM        wu,tvsx->tuvwxs                        tuvwxs->tuvwxs"
+  },
+  "planning_time_s": 0.00116791300024488,
+  "tasks": [
+    {
+      "contracted_labels": [
+        5
+      ],
+      "dependencies": [],
+      "estimated_bytes": 128,
+      "estimated_flops": 32,
+      "gemm_k": 2,
+      "gemm_m": 1,
+      "gemm_n": 2,
+      "id": "task_0",
+      "index_expression": "f,fg->g",
+      "input_shapes": [
+        [
+          2
+        ],
+        [
+          2,
+          2
+        ]
+      ],
+      "input_tensor_ids": [
+        "tensor_5",
+        "tensor_6"
+      ],
+      "left_labels": [
+        5
+      ],
+      "output_labels": [
+        6
+      ],
+      "output_shape": [
+        2
+      ],
+      "output_tensor_id": "result_0",
+      "right_labels": [
+        5,
+        6
+      ],
+      "structure": "dense"
+    },
+    {
+      "contracted_labels": [],
+      "dependencies": [
+        "task_0"
+      ],
+      "estimated_bytes": 128,
+      "estimated_flops": 32,
+      "gemm_k": 1,
+      "gemm_m": 2,
+      "gemm_n": 2,
+      "id": "task_1",
+      "index_expression": "a,g->ag",
+      "input_shapes": [
+        [
+          2
+        ],
+        [
+          2
+        ]
+      ],
+      "input_tensor_ids": [
+        "tensor_0",
+        "result_0"
+      ],
+      "left_labels": [
+        0
+      ],
+      "output_labels": [
+        0,
+        6
+      ],
+      "output_shape": [
+        2,
+        2
+      ],
+      "output_tensor_id": "result_1",
+      "right_labels": [
+        6
+      ],
+      "structure": "dense"
+    },
+    {
+      "contracted_labels": [],
+      "dependencies": [],
+      "estimated_bytes": 384,
+      "estimated_flops": 128,
+      "gemm_k": 1,
+      "gemm_m": 4,
+      "gemm_n": 4,
+      "id": "task_2",
+      "index_expression": "el,rx->elrx",
+      "input_shapes": [
+        [
+          2,
+          2
+        ],
+        [
+          2,
+          2
+        ]
+      ],
+      "input_tensor_ids": [
+        "tensor_11",
+        "tensor_20"
+      ],
+      "left_labels": [
+        4,
+        11
+      ],
+      "output_labels": [
+        4,
+        11,
+        17,
+        23
+      ],
+      "output_shape": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "output_tensor_id": "result_2",
+      "right_labels": [
+        17,
+        23
+      ],
+      "structure": "dense"
+    },
+    {
+      "contracted_labels": [],
+      "dependencies": [
+        "task_1"
+      ],
+      "estimated_bytes": 224,
+      "estimated_flops": 64,
+      "gemm_k": 1,
+      "gemm_m": 4,
+      "gemm_n": 2,
+      "id": "task_3",
+      "index_expression": "ag,e->age",
+      "input_shapes": [
+        [
+          2,
+          2
+        ],
+        [
+          2
+        ]
+      ],
+      "input_tensor_ids": [
+        "result_1",
+        "tensor_4"
+      ],
+      "left_labels": [
+        0,
+        6
+      ],
+      "output_labels": [
+        0,
+        6,
+        4
+      ],
+      "output_shape": [
+        2,
+        2,
+        2
+      ],
+      "output_tensor_id": "result_3",
+      "right_labels": [
+        4
+      ],
+      "structure": "dense"
+    },
+    {
+      "contracted_labels": [],
+      "dependencies": [
+        "task_3"
+      ],
+      "estimated_bytes": 416,
+      "estimated_flops": 128,
+      "gemm_k": 1,
+      "gemm_m": 8,
+      "gemm_n": 2,
+      "id": "task_4",
+      "index_expression": "age,d->aged",
+      "input_shapes": [
+        [
+          2,
+          2,
+          2
+        ],
+        [
+          2
+        ]
+      ],
+      "input_tensor_ids": [
+        "result_3",
+        "tensor_3"
+      ],
+      "left_labels": [
+        0,
+        6,
+        4
+      ],
+      "output_labels": [
+        0,
+        6,
+        4,
+        3
+      ],
+      "output_shape": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "output_tensor_id": "result_4",
+      "right_labels": [
+        3
+      ],
+      "structure": "dense"
+    },
+    {
+      "contracted_labels": [],
+      "dependencies": [],
+      "estimated_bytes": 384,
+      "estimated_flops": 128,
+      "gemm_k": 1,
+      "gemm_m": 4,
+      "gemm_n": 4,
+      "id": "task_5",
+      "index_expression": "cj,kw->cjkw",
+      "input_shapes": [
+        [
+          2,
+          2
+        ],
+        [
+          2,
+          2
+        ]
+      ],
+      "input_tensor_ids": [
+        "tensor_9",
+        "tensor_19"
+      ],
+      "left_labels": [
+        2,
+        9
+      ],
+      "output_labels": [
+        2,
+        9,
+        10,
+        22
+      ],
+      "output_shape": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "output_tensor_id": "result_5",
+      "right_labels": [
+        10,
+        22
+      ],
+      "structure": "dense"
+    },
+    {
+      "contracted_labels": [],
+      "dependencies": [
+        "task_4"
+      ],
+      "estimated_bytes": 800,
+      "estimated_flops": 256,
+      "gemm_k": 1,
+      "gemm_m": 16,
+      "gemm_n": 2,
+      "id": "task_6",
+      "index_expression": "aged,c->agedc",
+      "input_shapes": [
+        [
+          2,
+          2,
+          2,
+          2
+        ],
+        [
+          2
+        ]
+      ],
+      "input_tensor_ids": [
+        "result_4",
+        "tensor_2"
+      ],
+      "left_labels": [
+        0,
+        6,
+        4,
+        3
+      ],
+      "output_labels": [
+        0,
+        6,
+        4,
+        3,
+        2
+      ],
+      "output_shape": [
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "output_tensor_id": "result_6",
+      "right_labels": [
+        2
+      ],
+      "structure": "dense"
+    },
+    {
+      "contracted_labels": [],
+      "dependencies": [
+        "task_6"
+      ],
+      "estimated_bytes": 1568,
+      "estimated_flops": 512,
+      "gemm_k": 1,
+      "gemm_m": 32,
+      "gemm_n": 2,
+      "id": "task_7",
+      "index_expression": "agedc,b->agedcb",
+      "input_shapes": [
+        [
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        [
+          2
+        ]
+      ],
+      "input_tensor_ids": [
+        "result_6",
+        "tensor_1"
+      ],
+      "left_labels": [
+        0,
+        6,
+        4,
+        3,
+        2
+      ],
+      "output_labels": [
+        0,
+        6,
+        4,
+        3,
+        2,
+        1
+      ],
+      "output_shape": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "output_tensor_id": "result_7",
+      "right_labels": [
+        1
+      ],
+      "structure": "dense"
+    },
+    {
+      "contracted_labels": [],
+      "dependencies": [],
+      "estimated_bytes": 384,
+      "estimated_flops": 128,
+      "gemm_k": 1,
+      "gemm_m": 4,
+      "gemm_n": 4,
+      "id": "task_8",
+      "index_expression": "ah,pv->ahpv",
+      "input_shapes": [
+        [
+          2,
+          2
+        ],
+        [
+          2,
+          2
+        ]
+      ],
+      "input_tensor_ids": [
+        "tensor_7",
+        "tensor_18"
+      ],
+      "left_labels": [
+        0,
+        7
+      ],
+      "output_labels": [
+        0,
+        7,
+        15,
+        21
+      ],
+      "output_shape": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "output_tensor_id": "result_8",
+      "right_labels": [
+        15,
+        21
+      ],
+      "structure": "dense"
+    },
+    {
+      "contracted_labels": [
+        6
+      ],
+      "dependencies": [
+        "task_7"
+      ],
+      "estimated_bytes": 2112,
+      "estimated_flops": 1024,
+      "gemm_k": 2,
+      "gemm_m": 32,
+      "gemm_n": 2,
+      "id": "task_9",
+      "index_expression": "agedcb,gm->aedcbm",
+      "input_shapes": [
+        [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        [
+          2,
+          2
+        ]
+      ],
+      "input_tensor_ids": [
+        "result_7",
+        "tensor_12"
+      ],
+      "left_labels": [
+        0,
+        6,
+        4,
+        3,
+        2,
+        1
+      ],
+      "output_labels": [
+        0,
+        4,
+        3,
+        2,
+        1,
+        12
+      ],
+      "output_shape": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "output_tensor_id": "result_9",
+      "right_labels": [
+        6,
+        12
+      ],
+      "structure": "dense"
+    },
+    {
+      "contracted_labels": [],
+      "dependencies": [
+        "task_2"
+      ],
+      "estimated_bytes": 1344,
+      "estimated_flops": 512,
+      "gemm_k": 1,
+      "gemm_m": 16,
+      "gemm_n": 4,
+      "id": "task_10",
+      "index_expression": "elrx,iu->elrxiu",
+      "input_shapes": [
+        [
+          2,
+          2,
+          2,
+          2
+        ],
+        [
+          2,
+          2
+        ]
+      ],
+      "input_tensor_ids": [
+        "result_2",
+        "tensor_17"
+      ],
+      "left_labels": [
+        4,
+        11,
+        17,
+        23
+      ],
+      "output_labels": [
+        4,
+        11,
+        17,
+        23,
+        8,
+        20
+      ],
+      "output_shape": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "output_tensor_id": "result_10",
+      "right_labels": [
+        8,
+        20
+      ],
+      "structure": "dense"
+    },
+    {
+      "contracted_labels": [],
+      "dependencies": [
+        "task_8",
+        "task_10"
+      ],
+      "estimated_bytes": 17664,
+      "estimated_flops": 8192,
+      "gemm_k": 1,
+      "gemm_m": 16,
+      "gemm_n": 64,
+      "id": "task_11",
+      "index_expression": "ahpv,elrxiu->ahpvelrxiu",
+      "input_shapes": [
+        [
+          2,
+          2,
+          2,
+          2
+        ],
+        [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ]
+      ],
+      "input_tensor_ids": [
+        "result_8",
+        "result_10"
+      ],
+      "left_labels": [
+        0,
+        7,
+        15,
+        21
+      ],
+      "output_labels": [
+        0,
+        7,
+        15,
+        21,
+        4,
+        11,
+        17,
+        23,
+        8,
+        20
+      ],
+      "output_shape": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "output_tensor_id": "result_11",
+      "right_labels": [
+        4,
+        11,
+        17,
+        23,
+        8,
+        20
+      ],
+      "structure": "dense"
+    },
+    {
+      "contracted_labels": [],
+      "dependencies": [
+        "task_11"
+      ],
+      "estimated_bytes": 81984,
+      "estimated_flops": 32768,
+      "gemm_k": 1,
+      "gemm_m": 1024,
+      "gemm_n": 4,
+      "id": "task_12",
+      "index_expression": "ahpvelrxiu,dk->ahpvelrxiudk",
+      "input_shapes": [
+        [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        [
+          2,
+          2
+        ]
+      ],
+      "input_tensor_ids": [
+        "result_11",
+        "tensor_10"
+      ],
+      "left_labels": [
+        0,
+        7,
+        15,
+        21,
+        4,
+        11,
+        17,
+        23,
+        8,
+        20
+      ],
+      "output_labels": [
+        0,
+        7,
+        15,
+        21,
+        4,
+        11,
+        17,
+        23,
+        8,
+        20,
+        3,
+        10
+      ],
+      "output_shape": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "output_tensor_id": "result_12",
+      "right_labels": [
+        3,
+        10
+      ],
+      "structure": "dense"
+    },
+    {
+      "contracted_labels": [
+        10
+      ],
+      "dependencies": [
+        "task_12",
+        "task_5"
+      ],
+      "estimated_bytes": 327936,
+      "estimated_flops": 262144,
+      "gemm_k": 2,
+      "gemm_m": 2048,
+      "gemm_n": 8,
+      "id": "task_13",
+      "index_expression": "ahpvelrxiudk,cjkw->ahpvelrxiudcjw",
+      "input_shapes": [
+        [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        [
+          2,
+          2,
+          2,
+          2
+        ]
+      ],
+      "input_tensor_ids": [
+        "result_12",
+        "result_5"
+      ],
+      "left_labels": [
+        0,
+        7,
+        15,
+        21,
+        4,
+        11,
+        17,
+        23,
+        8,
+        20,
+        3,
+        10
+      ],
+      "output_labels": [
+        0,
+        7,
+        15,
+        21,
+        4,
+        11,
+        17,
+        23,
+        8,
+        20,
+        3,
+        2,
+        9,
+        22
+      ],
+      "output_shape": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "output_tensor_id": "result_13",
+      "right_labels": [
+        2,
+        9,
+        10,
+        22
+      ],
+      "structure": "dense"
+    },
+    {
+      "contracted_labels": [
+        8
+      ],
+      "dependencies": [
+        "task_13"
+      ],
+      "estimated_bytes": 524352,
+      "estimated_flops": 262144,
+      "gemm_k": 2,
+      "gemm_m": 8192,
+      "gemm_n": 2,
+      "id": "task_14",
+      "index_expression": "ahpvelrxiudcjw,bi->ahpvelrxudcjwb",
+      "input_shapes": [
+        [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        [
+          2,
+          2
+        ]
+      ],
+      "input_tensor_ids": [
+        "result_13",
+        "tensor_8"
+      ],
+      "left_labels": [
+        0,
+        7,
+        15,
+        21,
+        4,
+        11,
+        17,
+        23,
+        8,
+        20,
+        3,
+        2,
+        9,
+        22
+      ],
+      "output_labels": [
+        0,
+        7,
+        15,
+        21,
+        4,
+        11,
+        17,
+        23,
+        20,
+        3,
+        2,
+        9,
+        22,
+        1
+      ],
+      "output_shape": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "output_tensor_id": "result_14",
+      "right_labels": [
+        1,
+        8
+      ],
+      "structure": "dense"
+    },
+    {
+      "contracted_labels": [
+        0,
+        4,
+        3,
+        2,
+        1
+      ],
+      "dependencies": [
+        "task_9",
+        "task_14"
+      ],
+      "estimated_bytes": 279552,
+      "estimated_flops": 262144,
+      "gemm_k": 32,
+      "gemm_m": 2,
+      "gemm_n": 512,
+      "id": "task_15",
+      "index_expression": "aedcbm,ahpvelrxudcjwb->mhpvlrxujw",
+      "input_shapes": [
+        [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ]
+      ],
+      "input_tensor_ids": [
+        "result_9",
+        "result_14"
+      ],
+      "left_labels": [
+        0,
+        4,
+        3,
+        2,
+        1,
+        12
+      ],
+      "output_labels": [
+        12,
+        7,
+        15,
+        21,
+        11,
+        17,
+        23,
+        20,
+        9,
+        22
+      ],
+      "output_shape": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "output_tensor_id": "result_15",
+      "right_labels": [
+        0,
+        7,
+        15,
+        21,
+        4,
+        11,
+        17,
+        23,
+        20,
+        3,
+        2,
+        9,
+        22,
+        1
+      ],
+      "structure": "dense"
+    },
+    {
+      "contracted_labels": [
+        13
+      ],
+      "dependencies": [],
+      "estimated_bytes": 576,
+      "estimated_flops": 256,
+      "gemm_k": 2,
+      "gemm_m": 8,
+      "gemm_n": 2,
+      "id": "task_16",
+      "index_expression": "hmno,nt->hmot",
+      "input_shapes": [
+        [
+          2,
+          2,
+          2,
+          2
+        ],
+        [
+          2,
+          2
+        ]
+      ],
+      "input_tensor_ids": [
+        "tensor_13",
+        "tensor_16"
+      ],
+      "left_labels": [
+        7,
+        12,
+        13,
+        14
+      ],
+      "output_labels": [
+        7,
+        12,
+        14,
+        19
+      ],
+      "output_shape": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "output_tensor_id": "result_16",
+      "right_labels": [
+        13,
+        19
+      ],
+      "structure": "dense"
+    },
+    {
+      "contracted_labels": [
+        16
+      ],
+      "dependencies": [],
+      "estimated_bytes": 1536,
+      "estimated_flops": 1024,
+      "gemm_k": 2,
+      "gemm_m": 8,
+      "gemm_n": 8,
+      "id": "task_17",
+      "index_expression": "jopq,lqrs->joplrs",
+      "input_shapes": [
+        [
+          2,
+          2,
+          2,
+          2
+        ],
+        [
+          2,
+          2,
+          2,
+          2
+        ]
+      ],
+      "input_tensor_ids": [
+        "tensor_14",
+        "tensor_15"
+      ],
+      "left_labels": [
+        9,
+        14,
+        15,
+        16
+      ],
+      "output_labels": [
+        9,
+        14,
+        15,
+        11,
+        17,
+        18
+      ],
+      "output_shape": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "output_tensor_id": "result_17",
+      "right_labels": [
+        11,
+        16,
+        17,
+        18
+      ],
+      "structure": "dense"
+    },
+    {
+      "contracted_labels": [
+        12,
+        7
+      ],
+      "dependencies": [
+        "task_15",
+        "task_16"
+      ],
+      "estimated_bytes": 33024,
+      "estimated_flops": 32768,
+      "gemm_k": 4,
+      "gemm_m": 256,
+      "gemm_n": 4,
+      "id": "task_18",
+      "index_expression": "mhpvlrxujw,hmot->pvlrxujwot",
+      "input_shapes": [
+        [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        [
+          2,
+          2,
+          2,
+          2
+        ]
+      ],
+      "input_tensor_ids": [
+        "result_15",
+        "result_16"
+      ],
+      "left_labels": [
+        12,
+        7,
+        15,
+        21,
+        11,
+        17,
+        23,
+        20,
+        9,
+        22
+      ],
+      "output_labels": [
+        15,
+        21,
+        11,
+        17,
+        23,
+        20,
+        9,
+        22,
+        14,
+        19
+      ],
+      "output_shape": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "output_tensor_id": "result_18",
+      "right_labels": [
+        7,
+        12,
+        14,
+        19
+      ],
+      "structure": "dense"
+    },
+    {
+      "contracted_labels": [
+        15,
+        11,
+        17,
+        9,
+        14
+      ],
+      "dependencies": [
+        "task_18",
+        "task_17"
+      ],
+      "estimated_bytes": 18432,
+      "estimated_flops": 16384,
+      "gemm_k": 32,
+      "gemm_m": 32,
+      "gemm_n": 2,
+      "id": "task_19",
+      "index_expression": "pvlrxujwot,joplrs->vxuwts",
+      "input_shapes": [
+        [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ]
+      ],
+      "input_tensor_ids": [
+        "result_18",
+        "result_17"
+      ],
+      "left_labels": [
+        15,
+        21,
+        11,
+        17,
+        23,
+        20,
+        9,
+        22,
+        14,
+        19
+      ],
+      "output_labels": [
+        21,
+        23,
+        20,
+        22,
+        19,
+        18
+      ],
+      "output_shape": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "output_tensor_id": "result_19",
+      "right_labels": [
+        9,
+        14,
+        15,
+        11,
+        17,
+        18
+      ],
+      "structure": "dense"
+    }
+  ]
+}

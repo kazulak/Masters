@@ -1,0 +1,32 @@
+{
+  "compiler": "cc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "cpu_count": 12,
+  "git_commit": "b251b3e9935b487efd3613f1b45f4765a802ef52",
+  "machine": "x86_64",
+  "matplotlib": "3.10.8",
+  "mem_total_kib": 32735180,
+  "numpy": "2.2.6",
+  "openmp": {
+    "OMP_NUM_THREADS": null,
+    "OMP_PLACES": null,
+    "OMP_PROC_BIND": null
+  },
+  "opt_einsum": "3.4.0",
+  "platform": "Linux-6.8.0-124-generic-x86_64-with-glibc2.35",
+  "processor": "x86_64",
+  "python": "3.10.12",
+  "rapl": {
+    "available": false,
+    "path": "/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj"
+  },
+  "sudo": {
+    "effective_uid": 1000,
+    "sudo_gid": null,
+    "sudo_uid": null
+  },
+  "upmem": {
+    "UPMEM_HOME": "/home/tom/UPMEM_SDK",
+    "dpu_compiler": "/home/tom/UPMEM_SDK/bin/dpu-upmem-dpurte-clang"
+  },
+  "upmem_tn_version": "0.1.0"
+}

@@ -1,0 +1,23 @@
+{
+  "captured_at": "2026-06-24T00:30:55",
+  "cflags": "-O3 -march=native -fopenmp -Wall -I$(QUEST_DIR) -I$(QUEST_DIR)/quest/include -I$(QUEST_BUILD) -I$(QUEST_BUILD)/quest/include",
+  "compiler": "gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "cpu_count": 12,
+  "cpu_model": "AMD Ryzen 5 5600 6-Core Processor",
+  "git_commit": "f590ca359e62f570a8b1055a671a08ab966e3070",
+  "git_dirty_for_quest_implementation": true,
+  "ldflags": "-L$(QUEST_BUILD) -L$(QUEST_BUILD)/quest -Wl,-rpath=$(QUEST_BUILD) -Wl,-rpath=$(QUEST_BUILD)/quest -lQuEST -lm -fopenmp -Wl,-z,muldefs",
+  "make_cc": "gcc",
+  "openmp_env": {},
+  "os": "Linux-6.8.0-124-generic-x86_64-with-glibc2.35",
+  "paper_quest_version": "3.7.0",
+  "python": "3.10.12",
+  "quest_path": "/home/tom/repos/Masters/thesis/extern/QuEST",
+  "quest_version": "4.2.0",
+  "ram_total_kib": 32735180,
+  "rapl": {
+    "available": true,
+    "path": "/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj",
+    "readable": true
+  }
+}

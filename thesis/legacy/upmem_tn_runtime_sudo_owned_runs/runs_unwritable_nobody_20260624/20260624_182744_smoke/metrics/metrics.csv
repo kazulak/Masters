@@ -1,0 +1,5 @@
+case_id,route,n_qubits,depth,status,passed_count,failed_count,skipped_count,time_median_s,time_mean_s,time_min_s,time_max_s,time_stdev_s,energy_median_j,energy_source,skip_reason,error
+bell_2q,cpu_exact_tn,2,2,passed,2,0,0,0.00037887349935772363,0.00037887349935772363,0.0003306190010334831,0.0004271279976819642,6.824216597565079e-05,,unavailable,,
+bell_2q,raw_upmem_dense,2,2,skipped,0,0,2,,,,,,,unavailable,native raw UPMEM route is probed but not yet ported into canonical runtime,
+ghz_4q,cpu_exact_tn,4,4,passed,2,0,0,0.0006054564983060118,0.0006054564983060118,0.0006034079997334629,0.0006075049968785606,2.8970144638005114e-06,,unavailable,,
+ghz_4q,raw_upmem_dense,4,4,skipped,0,0,2,,,,,,,unavailable,native raw UPMEM route is probed but not yet ported into canonical runtime,

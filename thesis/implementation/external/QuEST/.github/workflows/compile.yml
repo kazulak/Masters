@@ -1,0 +1,285 @@
+# Tests for successful compilation of the source
+# code with (attemptedly) all possible configurations
+# of operating system, precision, multithreading,
+# distribution, GPU-acceleration (via CUDA or HIP),
+# and cuQuantum (else custom kernels). Compilation
+# includes the v4 unit and integration tests, the
+# deprecated v3 tests (when possible), and all the
+# example programs. All 'isolated' example executables
+# are then run (both C and C++ versions) to ensure the 
+# build was successful and does not cause link-time 
+# errors. Then, all 'automated' examples are run which
+# permits contributors to demo or test their changes 
+# across all operation systems and compilers.
+# 
+# Note:
+# - This workflow currently wastefully re-downloads and 
+#   installs all needed compilers (like libomp, CUDA, ROCm)
+# - ARM compilation is not tested here, though it is used
+#   by the paid multithreaded CI tests.
+#
+# @author Tyson Jones
+
+name: compile
+
+
+on:
+  push:
+    branches:
+      - main
+      - devel
+  pull_request:
+    branches:
+      - main
+      - devel
+
+
+jobs:
+
+  # test only compilation succeeds (no execution)
+  build-test:
+    name: >
+      ${{ matrix.os == 'ubuntu-latest' && 'Linux' || matrix.os == 'macos-latest' && 'MacOS' || 'Windows' }}
+      [${{ matrix.precision }}]
+      ${{ matrix.omp       == 'ON' && 'OMP'  || '' }}
+      ${{ matrix.mpi       == 'ON' && 'MPI'  || '' }}
+      ${{ matrix.mpi       == 'ON' && format('({0})',matrix.mpilib) || '' }}
+      ${{ matrix.cuda      == 'ON' && 'CUDA' || '' }}
+      ${{ matrix.hip       == 'ON' && 'HIP'  || '' }}
+      ${{ matrix.cuquantum == 'ON' && 'CUQ'  || '' }}
+
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      # continue other jobs if any fail
+      fail-fast: false
+
+      # limit concurrent jobs to avoid running out of disk
+      # (causes CUDA and MPI installation to fail on Windows)
+      max-parallel: 8
+
+      # compile QuEST with all combinations of below flags
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+        precision: [1, 2, 4]
+        omp:       [ON, OFF]
+        mpi:       [ON, OFF]
+        cuda:      [ON, OFF]
+        hip:       [ON, OFF]
+        cuquantum: [ON, OFF]
+        mpilib:    ['', 'mpich', 'ompi', 'impi', 'msmpi']
+
+        # disable deprecated API on MSVC, and assign unique compilers,
+        # so that we can concisely consult e.g. matrix.compiler=='cl'
+        # instead of hardcoding the operating system label. Note that
+        # ultimately env.compiler, not matrix.compiler, will be set/used
+        include:
+          - os: ubuntu-latest
+            compiler: g++
+            deprecated: ON
+          - os: macos-latest
+            compiler: clang++
+            deprecated: ON
+          - os: windows-latest
+            compiler: cl
+            deprecated: OFF
+            
+        exclude:
+          # cannot simultaneously use CUDA and HIP
+          - cuda: ON
+            hip: ON
+
+          # cannot use GPU with quad-precision
+          - cuda: ON
+            precision: 4
+          - hip: ON
+            precision: 4
+
+          # cannot use cuquantum without CUDA
+          - cuda: OFF
+            cuquantum: ON
+
+          # cannot use GPU on MacOS
+          - cuda: ON
+            os: macos-latest
+          - hip: ON
+            os: macos-latest
+
+          # cannot use cuquantum on Windows or MacOS
+          - cuquantum: ON
+            os: windows-latest
+          - cuquantum: ON
+            os: macos-latest
+
+          # don't enumerate MPI libraries when not using MPI
+          - mpi: OFF
+            mpilib: 'mpich' # MPICH
+          - mpi: OFF
+            mpilib: 'ompi'  # OpenMPI
+          - mpi: OFF
+            mpilib: 'impi'  # Intel MPI
+          - mpi: OFF
+            mpilib: 'msmpi' # Microsoft MPI
+          - mpi: ON
+            mpilib: ''      # must pick lib when using MPI
+
+          # exclude OS-incompatible MPI libraries
+          - os: ubuntu-latest
+            mpilib: 'msmpi'    # Linux:   [MPICH, OpenMPI, Intel MPI]
+          - os: macos-latest
+            mpilib: 'msmpi'    # MacOS:   [MPICH, OpenMPI]
+          - os: macos-latest
+            mpilib: 'impi'
+          - os: windows-latest
+            mpilib: 'mpich'    # Windows: [Intel MPI, MS MPI]
+          - os: windows-latest
+            mpilib: 'ompi'
+
+          # cannot presently install HIP on Windows CI (times out)
+          - hip: ON
+            os: windows-latest
+
+          # cannot presently compile HIP + MPI; the linker fails with
+          # "undefined reference to 'vtable for thrust::system::system_error'
+          # (see failed attempted solutions in PR #554)
+          - hip: ON
+            mpi: ON
+
+    # constants
+    env:
+      cuda_arch: 70
+      hip_arch: gfx801
+      rocm_path: /opt/rocm/bin
+      build_dir: build
+      isolated_dir: build/examples/isolated
+      automated_dir: build/examples/automated
+
+    # perform the job
+    steps:
+
+      # free space for big-chungus ROCm compiler
+      - name: Free disk space
+        if: ${{ matrix.hip == 'ON' }}
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+
+      # download QuEST
+      - name: Get QuEST
+        uses: actions/checkout@main
+
+      # obtain OMP for Clang multithreading
+      - name: Setup libomp 
+        if: ${{ matrix.compiler == 'clang++' && matrix.omp == 'ON' }}
+        run: >
+          brew install libomp;
+          echo "OpenMP_ROOT=$(brew --prefix)/opt/libomp" >> $GITHUB_ENV
+
+      # obtain MPI for distribution
+      - name: Setup MPI
+        if: ${{ matrix.mpi == 'ON' }}
+        uses: mpi4py/setup-mpi@v1
+        with:
+          mpi: ${{ matrix.mpilib }}
+
+      # obtain CUDA for GPU acceleration (cuQuantum needs cuBLAS)
+      - name: Setup CUDA (non-MSVC)
+        if: ${{ matrix.cuda == 'ON' && matrix.compiler != 'cl' }}
+        uses: Jimver/cuda-toolkit@v0.2.21
+        with:
+          method: network
+          sub-packages: '["nvcc", "cudart", "thrust"]'
+          non-cuda-sub-packages: ${{ matrix.cuquantum == 'ON' && '["libcublas"]' || '[]' }}
+
+      # bug in Nsight for MSVC breaks above action for windows-2022, so we revert to script
+      - name: Setup CUDA (MSVC)
+        if: ${{ matrix.cuda == 'ON' && matrix.compiler == 'cl' }}
+        shell: pwsh
+        run: .github/scripts/setup_cuda.ps1
+        env:
+          INPUT_CUDA_VERSION: 12.5.0
+
+      # obtain cuQuantum on linux
+      - name: Setup cuQuantum
+        if: ${{ matrix.cuquantum == 'ON' }}
+        run: >
+          wget https://developer.download.nvidia.com/compute/cuquantum/redist/cuquantum/linux-x86_64/cuquantum-linux-x86_64-24.08.0.5_cuda12-archive.tar.xz;
+          tar -xvf cuquantum-linux-x86_64-24.08.0.5_cuda12-archive.tar.xz;
+          echo "CUQUANTUM_ROOT=cuquantum-linux-x86_64-24.08.0.5_cuda12-archive" >> $GITHUB_ENV
+
+      # obtain ROCm for HIP acceleration on Linux
+      - name: Install ROCm
+        if: ${{ matrix.hip == 'ON' }}
+        run: |
+          sudo apt install "linux-headers-$(uname -r)" "linux-modules-extra-$(uname -r)"
+          sudo apt install python3-setuptools python3-wheel
+          sudo usermod -a -G render,video $USER
+          wget https://repo.radeon.com/amdgpu-install/6.3.3/ubuntu/noble/amdgpu-install_6.3.60303-1_all.deb
+          sudo apt install ./amdgpu-install_6.3.60303-1_all.deb
+          sudo apt update
+          sudo apt install amdgpu-dkms rocm
+          echo "${{ env.rocm_path }}" >> $GITHUB_PATH
+
+      # invoke cmake, disabling LTO (it duplicates symbols with CUDA + MPI)
+      - name: Configure CMake
+        run: >
+          cmake -B ${{ env.build_dir }}
+          -DBUILD_EXAMPLES=ON
+          -DENABLE_TESTING=ON
+          -DFLOAT_PRECISION=${{ matrix.precision }}
+          -DENABLE_DEPRECATED_API=${{ matrix.deprecated }}
+          -DDISABLE_DEPRECATION_WARNINGS=${{ matrix.deprecated }}
+          -DENABLE_MULTITHREADING=${{ matrix.omp }}
+          -DENABLE_DISTRIBUTION=${{ matrix.mpi }}
+          -DENABLE_CUDA=${{ matrix.cuda }}
+          -DENABLE_HIP=${{ matrix.hip }}
+          -DENABLE_CUQUANTUM=${{ matrix.cuquantum }}
+          -DCMAKE_CUDA_ARCHITECTURES=${{ env.cuda_arch }}
+          -DCMAKE_HIP_ARCHITECTURES=${{ env.hip_arch }}
+          -DCMAKE_CXX_COMPILER=${{ matrix.compiler }}
+          -DCMAKE_CXX_FLAGS=${{ matrix.mpi == 'ON' && matrix.cuda == 'ON' && '-fno-lto' || '' }}
+
+      # force 'Release' build (needed by MSVC to enable optimisations)
+      - name: Compile
+        run: cmake --build ${{ env.build_dir }} --config Release --parallel
+
+      # run all compiled isolated examples to test for link-time errors,
+      # continuing if any fail (since some deliberately fail)
+      - name: Run isolated examples (Windows)
+        if: ${{ matrix.os == 'windows-latest' }}
+        working-directory: ${{ env.isolated_dir }}/Release/
+        shell: pwsh
+        run: |
+          Get-ChildItem -Filter '*.exe' -File |
+          ForEach-Object {
+            Write-Host "`r`n[[[ $($_.Name) ]]]`r`n"
+            & $_.FullName
+          }
+      - name: Run isolated examples (Unix)
+        if: ${{ matrix.os != 'windows-latest' }}
+        working-directory: ${{ env.isolated_dir }}
+        run: |
+          for fn in *_c *_cpp; do
+            printf "\n[[[ $fn ]]]\n"
+            ./$fn || true
+          done
+
+      # run all compiled 'automated' examples
+      - name: Run automated examples (Windows)
+        if: ${{ matrix.os == 'windows-latest' }}
+        working-directory: ${{ env.automated_dir }}/Release/
+        shell: pwsh
+        run: |
+          Get-ChildItem -Filter '*.exe' -File |
+          ForEach-Object {
+            Write-Host "`r`n[[[ $($_.Name) ]]]`r`n"
+            & $_.FullName
+          }
+      - name: Run automated examples (Unix)
+        if: ${{ matrix.os != 'windows-latest' }}
+        working-directory: ${{ env.automated_dir }}
+        run: |
+          for fn in *_c *_cpp; do
+            printf "\n[[[ $fn ]]]\n"
+            ./$fn || true
+          done

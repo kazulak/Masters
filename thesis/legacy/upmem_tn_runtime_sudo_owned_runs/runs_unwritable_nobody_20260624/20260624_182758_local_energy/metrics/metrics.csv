@@ -1,0 +1,7 @@
+case_id,route,n_qubits,depth,status,passed_count,failed_count,skipped_count,time_median_s,time_mean_s,time_min_s,time_max_s,time_stdev_s,energy_median_j,energy_source,skip_reason,error
+bb84_6q,cpu_exact_tn,6,8,passed,3,0,0,0.0007840360012778547,0.0007851880000089295,0.0007834749994799495,0.0007880529992689844,2.4969674255783883e-06,,unavailable,,
+bb84_6q,quest_full_state,6,8,failed,0,3,0,,,,,,,unavailable,,QuEST failed
+bv_5q,cpu_exact_tn,5,12,passed,3,0,0,0.0011254749988438562,0.0011257283331360668,0.0011051460023736581,0.001146563998190686,2.0710160020447556e-05,,unavailable,,
+bv_5q,quest_full_state,5,12,failed,0,3,0,,,,,,,unavailable,,QuEST failed
+qrng_4q,cpu_exact_tn,4,4,passed,3,0,0,0.0004961779995937832,0.0005196683341637254,0.0004177610026090406,0.0006450660002883524,0.00011545881237979996,,unavailable,,
+qrng_4q,quest_full_state,4,4,failed,0,3,0,,,,,,,unavailable,,QuEST failed

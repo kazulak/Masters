@@ -1,0 +1,38 @@
+_suite_path: /home/tom/repos/Masters/thesis/upmem_tn_runtime/configs/suites/local_energy.yml
+cases:
+- case_id: qrng_4q
+  circuit:
+    kind: builtin
+    n_qubits: 4
+    name: QRNG
+- case_id: bv_5q
+  circuit:
+    kind: builtin
+    n_qubits: 5
+    name: BV
+- case_id: bb84_6q
+  circuit:
+    kind: builtin
+    n_qubits: 6
+    name: BB84
+memory_guard_gib: 8
+planner:
+  engine: opt_einsum
+  optimize: greedy
+repeats: 3
+route_policy:
+  fail_fast: false
+  routes:
+  - cpu_exact_tn
+  - quest_full_state
+suite_id: local_energy
+thread_counts:
+- null
+timeout_s: 60
+tolerances:
+  l2_error: 1.0e-08
+  max_abs_error: 1.0e-09
+  max_rel_error: 1.0e-08
+  min_fidelity: 0.999999999
+  norm_drift: 1.0e-08
+warmups: 1

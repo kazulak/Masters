@@ -1,0 +1,32 @@
+_suite_path: /home/tom/repos/Masters/thesis/upmem_tn_runtime/configs/suites/smoke.yml
+cases:
+- case_id: bell_2q
+  circuit:
+    kind: builtin
+    name: bell_2q
+- case_id: ghz_4q
+  circuit:
+    kind: builtin
+    n_qubits: 4
+    name: ghz_chain
+memory_guard_gib: 2
+planner:
+  engine: opt_einsum
+  optimize: greedy
+repeats: 2
+route_policy:
+  fail_fast: false
+  routes:
+  - cpu_exact_tn
+  - raw_upmem_dense
+suite_id: smoke
+thread_counts:
+- null
+timeout_s: 30
+tolerances:
+  l2_error: 1.0e-08
+  max_abs_error: 1.0e-09
+  max_rel_error: 1.0e-08
+  min_fidelity: 0.999999999
+  norm_drift: 1.0e-08
+warmups: 0

@@ -1,0 +1,90 @@
+# Tests serial execution of the v4 unit tests
+# (but not the larger integration tests), and
+# the deprecated v3 unit tests (when possible),
+# on all OS and at all precisions. All runners 
+# are single-threaded and run on free runners,
+# and as such use the slower, rigorous tests.
+# 
+# @author Tyson Jones
+
+name: test (free, serial)
+
+
+on:
+  push:
+    branches:
+      - main
+      - devel
+  pull_request:
+    branches:
+      - main
+      - devel
+
+
+jobs:
+
+  # run non-parallelised v3 and v4 unit tests,
+  # excluding the v4 integration tests, for free
+  serial-unit-test:
+    name: >
+      ${{ matrix.os == 'ubuntu-latest' && 'Linux' || matrix.os == 'macos-latest' && 'MacOS' || 'Windows' }}
+      [${{ matrix.precision }}]
+      serial
+      unit v${{ matrix.version }}
+
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      # continue other jobs if any fail
+      fail-fast: false
+
+      # we will compile QuEST with all precisions but no parallelisation
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        version: [3, 4]
+        precision: [1, 2, 4]
+
+        # MSVC cannot compile deprecated v3 tests
+        exclude:
+          - os: windows-latest
+            version: 3
+            
+    # constants
+    env:
+      build_dir: "build"
+      depr_dir: "build/tests/deprecated"
+
+    # perform the job
+    steps:
+      - name: Get QuEST
+        uses: actions/checkout@main
+
+      # compile serial unit tests, optionally include deprecated test
+      - name: Configure CMake
+        run: >
+          cmake -B ${{ env.build_dir }}
+          -DENABLE_TESTING=ON
+          -DENABLE_MULTITHREADING=OFF
+          -DENABLE_DEPRECATED_API=${{ matrix.version == 3 && 'ON' || 'OFF' }}
+          -DDISABLE_DEPRECATION_WARNINGS=${{ matrix.version == 3 && 'ON' || 'OFF' }}
+          -DFLOAT_PRECISION=${{ matrix.precision }}
+
+      # force 'Release' build (needed by MSVC to enable optimisations)
+      - name: Compile
+        run: cmake --build ${{ env.build_dir }} --config Release --parallel
+
+      # run v4 unit tests in random order, excluding the integration tests,
+      # using the default environment variables (e.g. test all permutations)
+      # TODO:
+      # ctest currently doesn't know of our Catch2 tags, so we
+      # are manually excluding each integration test by name
+      - name: Run v4 tests
+        if: ${{ matrix.version == 4 }}
+        run: ctest -j2 --output-on-failure --schedule-random -E "density evolution"
+        working-directory: ${{ env.build_dir }}
+
+      # run v3 unit tests in random order
+      - name: Run v3 tests
+        if: ${{ matrix.version == 3 }}
+        run: ctest -j2 --output-on-failure --schedule-random
+        working-directory: ${{ env.depr_dir }}

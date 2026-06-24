@@ -1,0 +1,50 @@
+schema_version: 2
+suite_id: local_energy
+
+defaults:
+  warmups: 1
+  repeats: 3
+  timeout_s: 60
+  memory_guard_gib: 8
+  planner:
+    engine: opt_einsum
+    optimize: greedy
+
+workloads:
+  - id: qrng_4q
+    circuit:
+      kind: builtin
+      name: QRNG
+      n_qubits: 4
+
+  - id: bv_5q
+    circuit:
+      kind: builtin
+      name: BV
+      n_qubits: 5
+
+  - id: bb84_6q
+    circuit:
+      kind: builtin
+      name: BB84
+      n_qubits: 6
+
+routes:
+  - id: cpu_tn_einsum_exact
+    role: reference
+    required: true
+
+  - id: quest_cpu_full_state_benchmark
+    role: baseline
+    required: false
+
+validation:
+  reference_route: cpu_tn_einsum_exact
+  require_output_for_roles:
+    - reference
+  tolerances:
+    max_abs_error: 1.0e-9
+    l2_error: 1.0e-8
+    max_rel_error: 1.0e-8
+    norm_drift: 1.0e-8
+    min_fidelity: 0.999999999

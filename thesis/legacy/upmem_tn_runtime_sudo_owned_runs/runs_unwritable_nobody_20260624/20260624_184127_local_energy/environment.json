@@ -1,0 +1,32 @@
+{
+  "compiler": "cc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "cpu_count": 12,
+  "git_commit": null,
+  "machine": "x86_64",
+  "matplotlib": "3.10.8",
+  "mem_total_kib": 32735180,
+  "numpy": "2.2.6",
+  "openmp": {
+    "OMP_NUM_THREADS": null,
+    "OMP_PLACES": null,
+    "OMP_PROC_BIND": null
+  },
+  "opt_einsum": "3.4.0",
+  "platform": "Linux-6.8.0-124-generic-x86_64-with-glibc2.35",
+  "processor": "x86_64",
+  "python": "3.10.12",
+  "rapl": {
+    "available": true,
+    "path": "/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj"
+  },
+  "sudo": {
+    "effective_uid": 0,
+    "sudo_gid": "0",
+    "sudo_uid": "0"
+  },
+  "upmem": {
+    "UPMEM_HOME": null,
+    "dpu_compiler": null
+  },
+  "upmem_tn_version": "0.1.0"
+}

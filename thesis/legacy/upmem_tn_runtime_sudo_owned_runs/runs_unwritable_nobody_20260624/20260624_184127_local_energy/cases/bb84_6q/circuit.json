@@ -1,0 +1,20 @@
+{
+  "depth_proxy": 8,
+  "gate_counts": {
+    "1q": 8,
+    "2q": 0,
+    "total": 8
+  },
+  "gate_set": [
+    "h",
+    "x"
+  ],
+  "n_qubits": 6,
+  "name": "bb84_6q",
+  "source": {
+    "kind": "builtin",
+    "n_qubits": 6,
+    "name": "BB84"
+  },
+  "workload_kind": "workload-shape reproduction"
+}

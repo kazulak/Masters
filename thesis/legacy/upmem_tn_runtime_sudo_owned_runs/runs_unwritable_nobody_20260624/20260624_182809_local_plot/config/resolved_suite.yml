@@ -1,0 +1,37 @@
+_suite_path: /home/tom/repos/Masters/thesis/upmem_tn_runtime/configs/suites/local_plot.yml
+cases:
+- case_id: qrng_3q
+  circuit:
+    kind: builtin
+    n_qubits: 3
+    name: QRNG
+- case_id: qrng_5q
+  circuit:
+    kind: builtin
+    n_qubits: 5
+    name: QRNG
+- case_id: bv_6q
+  circuit:
+    kind: builtin
+    n_qubits: 6
+    name: BV
+memory_guard_gib: null
+planner:
+  engine: opt_einsum
+  optimize: greedy
+repeats: 2
+route_policy:
+  fail_fast: false
+  routes:
+  - cpu_exact_tn
+suite_id: local_plot
+thread_counts:
+- null
+timeout_s: 60
+tolerances:
+  l2_error: 1.0e-08
+  max_abs_error: 1.0e-09
+  max_rel_error: 1.0e-08
+  min_fidelity: 0.999999999
+  norm_drift: 1.0e-08
+warmups: 0

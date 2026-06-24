@@ -1,0 +1,8 @@
+runs*/
+native/quest_cpu/bin/
+*.pyc
+__pycache__/
+.pytest_cache/
+build/
+dist/
+*.egg-info/

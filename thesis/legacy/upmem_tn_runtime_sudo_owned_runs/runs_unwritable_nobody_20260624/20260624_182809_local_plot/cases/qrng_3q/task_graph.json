@@ -1,0 +1,385 @@
+{
+  "network": {
+    "circuit": {
+      "n_qubits": 3,
+      "name": "qrng_3q",
+      "operations": [
+        {
+          "gate": "h",
+          "params": [],
+          "wires": [
+            0
+          ]
+        },
+        {
+          "gate": "h",
+          "params": [],
+          "wires": [
+            1
+          ]
+        },
+        {
+          "gate": "h",
+          "params": [],
+          "wires": [
+            2
+          ]
+        }
+      ],
+      "source": {
+        "kind": "builtin",
+        "n_qubits": 3,
+        "name": "QRNG"
+      }
+    },
+    "einsum_expression": "a,b,c,ad,be,cf->def",
+    "output_labels": [
+      3,
+      4,
+      5
+    ],
+    "tensors": [
+      {
+        "dtype": "complex128",
+        "id": "tensor_0",
+        "labels": [
+          0
+        ],
+        "produced_by": null,
+        "shape": [
+          2
+        ],
+        "structure": "dense"
+      },
+      {
+        "dtype": "complex128",
+        "id": "tensor_1",
+        "labels": [
+          1
+        ],
+        "produced_by": null,
+        "shape": [
+          2
+        ],
+        "structure": "dense"
+      },
+      {
+        "dtype": "complex128",
+        "id": "tensor_2",
+        "labels": [
+          2
+        ],
+        "produced_by": null,
+        "shape": [
+          2
+        ],
+        "structure": "dense"
+      },
+      {
+        "dtype": "complex128",
+        "id": "tensor_3",
+        "labels": [
+          0,
+          3
+        ],
+        "produced_by": "circuit_op_0",
+        "shape": [
+          2,
+          2
+        ],
+        "structure": "dense"
+      },
+      {
+        "dtype": "complex128",
+        "id": "tensor_4",
+        "labels": [
+          1,
+          4
+        ],
+        "produced_by": "circuit_op_1",
+        "shape": [
+          2,
+          2
+        ],
+        "structure": "dense"
+      },
+      {
+        "dtype": "complex128",
+        "id": "tensor_5",
+        "labels": [
+          2,
+          5
+        ],
+        "produced_by": "circuit_op_2",
+        "shape": [
+          2,
+          2
+        ],
+        "structure": "dense"
+      }
+    ]
+  },
+  "path": [
+    [
+      0,
+      3
+    ],
+    [
+      0,
+      2
+    ],
+    [
+      0,
+      1
+    ],
+    [
+      0,
+      1
+    ],
+    [
+      0,
+      1
+    ]
+  ],
+  "path_summary": {
+    "largest_intermediate": 8,
+    "naive_flops": 384.0,
+    "optimize": "greedy",
+    "optimized_flops": 36.0,
+    "path_length": 5,
+    "planner": "opt_einsum",
+    "text": "  Complete contraction:  a,b,c,ad,be,cf->def\n         Naive scaling:  6\n     Optimized scaling:  3\n      Naive FLOP count:  3.840e+2\n  Optimized FLOP count:  3.600e+1\n   Theoretical speedup:  1.067e+1\n  Largest intermediate:  8.000e+0 elements\n--------------------------------------------------------------------------------\nscaling        BLAS                current                             remaining\n--------------------------------------------------------------------------------\n   2           GEMM                ad,a->d                      b,c,be,cf,d->def\n   2           GEMM                be,b->e                         c,cf,d,e->def\n   2           GEMM                cf,c->f                            d,e,f->def\n   2   OUTER/EINSUM                e,d->ed                             f,ed->def\n   3   OUTER/EINSUM              ed,f->def                              def->def"
+  },
+  "planning_time_s": 0.00040806300239637494,
+  "tasks": [
+    {
+      "contracted_labels": [
+        0
+      ],
+      "dependencies": [],
+      "estimated_bytes": 128,
+      "estimated_flops": 32,
+      "gemm_k": 2,
+      "gemm_m": 1,
+      "gemm_n": 2,
+      "id": "task_0",
+      "index_expression": "a,ad->d",
+      "input_shapes": [
+        [
+          2
+        ],
+        [
+          2,
+          2
+        ]
+      ],
+      "input_tensor_ids": [
+        "tensor_0",
+        "tensor_3"
+      ],
+      "left_labels": [
+        0
+      ],
+      "output_labels": [
+        3
+      ],
+      "output_shape": [
+        2
+      ],
+      "output_tensor_id": "result_0",
+      "right_labels": [
+        0,
+        3
+      ],
+      "structure": "dense"
+    },
+    {
+      "contracted_labels": [],
+      "dependencies": [
+        "task_0"
+      ],
+      "estimated_bytes": 128,
+      "estimated_flops": 32,
+      "gemm_k": 1,
+      "gemm_m": 2,
+      "gemm_n": 2,
+      "id": "task_1",
+      "index_expression": "d,c->dc",
+      "input_shapes": [
+        [
+          2
+        ],
+        [
+          2
+        ]
+      ],
+      "input_tensor_ids": [
+        "result_0",
+        "tensor_2"
+      ],
+      "left_labels": [
+        3
+      ],
+      "output_labels": [
+        3,
+        2
+      ],
+      "output_shape": [
+        2,
+        2
+      ],
+      "output_tensor_id": "result_1",
+      "right_labels": [
+        2
+      ],
+      "structure": "dense"
+    },
+    {
+      "contracted_labels": [],
+      "dependencies": [
+        "task_1"
+      ],
+      "estimated_bytes": 224,
+      "estimated_flops": 64,
+      "gemm_k": 1,
+      "gemm_m": 4,
+      "gemm_n": 2,
+      "id": "task_2",
+      "index_expression": "dc,b->dcb",
+      "input_shapes": [
+        [
+          2,
+          2
+        ],
+        [
+          2
+        ]
+      ],
+      "input_tensor_ids": [
+        "result_1",
+        "tensor_1"
+      ],
+      "left_labels": [
+        3,
+        2
+      ],
+      "output_labels": [
+        3,
+        2,
+        1
+      ],
+      "output_shape": [
+        2,
+        2,
+        2
+      ],
+      "output_tensor_id": "result_2",
+      "right_labels": [
+        1
+      ],
+      "structure": "dense"
+    },
+    {
+      "contracted_labels": [
+        1
+      ],
+      "dependencies": [
+        "task_2"
+      ],
+      "estimated_bytes": 320,
+      "estimated_flops": 128,
+      "gemm_k": 2,
+      "gemm_m": 4,
+      "gemm_n": 2,
+      "id": "task_3",
+      "index_expression": "dcb,be->dce",
+      "input_shapes": [
+        [
+          2,
+          2,
+          2
+        ],
+        [
+          2,
+          2
+        ]
+      ],
+      "input_tensor_ids": [
+        "result_2",
+        "tensor_4"
+      ],
+      "left_labels": [
+        3,
+        2,
+        1
+      ],
+      "output_labels": [
+        3,
+        2,
+        4
+      ],
+      "output_shape": [
+        2,
+        2,
+        2
+      ],
+      "output_tensor_id": "result_3",
+      "right_labels": [
+        1,
+        4
+      ],
+      "structure": "dense"
+    },
+    {
+      "contracted_labels": [
+        2
+      ],
+      "dependencies": [
+        "task_3"
+      ],
+      "estimated_bytes": 320,
+      "estimated_flops": 128,
+      "gemm_k": 2,
+      "gemm_m": 4,
+      "gemm_n": 2,
+      "id": "task_4",
+      "index_expression": "dce,cf->def",
+      "input_shapes": [
+        [
+          2,
+          2,
+          2
+        ],
+        [
+          2,
+          2
+        ]
+      ],
+      "input_tensor_ids": [
+        "result_3",
+        "tensor_5"
+      ],
+      "left_labels": [
+        3,
+        2,
+        4
+      ],
+      "output_labels": [
+        3,
+        4,
+        5
+      ],
+      "output_shape": [
+        2,
+        2,
+        2
+      ],
+      "output_tensor_id": "result_4",
+      "right_labels": [
+        2,
+        5
+      ],
+      "structure": "dense"
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "actual_norm": 0.9999999999999991,
+  "fidelity": 1.0,
+  "l2_error": 0.0,
+  "max_abs_error": 0.0,
+  "max_rel_error": 0.0,
+  "norm_drift": 0.0,
+  "passed": true,
+  "reference_norm": 0.9999999999999991,
+  "tolerance": {
+    "l2_error": 1e-08,
+    "max_abs_error": 1e-09,
+    "max_rel_error": 1e-08,
+    "min_fidelity": 0.999999999,
+    "norm_drift": 1e-08
+  }
+}

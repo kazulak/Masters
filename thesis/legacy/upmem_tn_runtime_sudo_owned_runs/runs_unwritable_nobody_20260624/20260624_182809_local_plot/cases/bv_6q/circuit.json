@@ -1,0 +1,21 @@
+{
+  "depth_proxy": 15,
+  "gate_counts": {
+    "1q": 12,
+    "2q": 3,
+    "total": 15
+  },
+  "gate_set": [
+    "cx",
+    "h",
+    "x"
+  ],
+  "n_qubits": 6,
+  "name": "bv_6q",
+  "source": {
+    "kind": "builtin",
+    "n_qubits": 6,
+    "name": "BV"
+  },
+  "workload_kind": "workload-shape reproduction"
+}

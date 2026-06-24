@@ -1,0 +1,19 @@
+{
+  "depth_proxy": 3,
+  "gate_counts": {
+    "1q": 3,
+    "2q": 0,
+    "total": 3
+  },
+  "gate_set": [
+    "h"
+  ],
+  "n_qubits": 3,
+  "name": "qrng_3q",
+  "source": {
+    "kind": "builtin",
+    "n_qubits": 3,
+    "name": "QRNG"
+  },
+  "workload_kind": "workload-shape reproduction"
+}

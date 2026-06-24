@@ -1,0 +1,19 @@
+{
+  "depth_proxy": 2,
+  "gate_counts": {
+    "1q": 1,
+    "2q": 1,
+    "total": 2
+  },
+  "gate_set": [
+    "cx",
+    "h"
+  ],
+  "n_qubits": 2,
+  "name": "bell_2q",
+  "source": {
+    "kind": "builtin",
+    "name": "bell_2q"
+  },
+  "workload_kind": "textbook/smoke circuit"
+}

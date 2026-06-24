@@ -1,0 +1,17 @@
+target_sources(QuEST
+  PRIVATE
+  calculations.cpp
+  channels.cpp
+  debug.cpp
+  decoherence.cpp
+  environment.cpp
+  initialisations.cpp
+  matrices.cpp
+  modes.cpp
+  multiplication.cpp
+  operations.cpp
+  paulis.cpp
+  qureg.cpp
+  trotterisation.cpp
+  types.cpp
+)

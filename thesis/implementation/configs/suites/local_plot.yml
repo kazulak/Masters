@@ -1,0 +1,45 @@
+schema_version: 2
+suite_id: local_plot
+
+defaults:
+  warmups: 0
+  repeats: 2
+  timeout_s: 60
+  planner:
+    engine: opt_einsum
+    optimize: greedy
+
+workloads:
+  - id: qrng_3q
+    circuit:
+      kind: builtin
+      name: QRNG
+      n_qubits: 3
+
+  - id: qrng_5q
+    circuit:
+      kind: builtin
+      name: QRNG
+      n_qubits: 5
+
+  - id: bv_6q
+    circuit:
+      kind: builtin
+      name: BV
+      n_qubits: 6
+
+routes:
+  - id: cpu_tn_einsum_exact
+    role: reference
+    required: true
+
+validation:
+  reference_route: cpu_tn_einsum_exact
+  require_output_for_roles:
+    - reference
+  tolerances:
+    max_abs_error: 1.0e-9
+    l2_error: 1.0e-8
+    max_rel_error: 1.0e-8
+    norm_drift: 1.0e-8
+    min_fidelity: 0.999999999

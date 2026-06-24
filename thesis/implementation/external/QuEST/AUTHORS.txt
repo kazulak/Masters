@@ -1,0 +1,75 @@
+
+
+Contact: tyson.jones.input@gmail.com
+
+Current team:
+Dr Tyson Ray Jones [developer]
+    algorithms
+    parallelisation
+    architecture
+    interface
+    testing
+    documentation
+Dr Oliver Thomson Brown [developer]
+    build
+    patches
+Dr Erich Essmann [developer]
+    build
+    patches
+Dr Ali Rezaei [developer]
+    optimisation prototyping
+Dr Richard Meister [consultant]
+    design
+    patches
+    previous development
+Dr Balint Koczor [consultant]
+    patches
+    previous development
+Prof Simon C. Benjamin [consultant]
+    user requirements
+
+Past members:
+Dr Ania (Anna) Brown [developer]
+    HPC
+    build
+    quantum ops
+Dr Fergus Cooper [developer]
+    continuous integration
+Mr Jacob Wilkins [developer]
+    testing
+Dr Mihai Duta [developer]
+    original prototyping
+Dr Ian Bush [consultant]
+    software development
+    HPC
+
+External contributors:
+Diogo Pratas Maia
+    added non-unitary Pauli gadget (for unitaryHACK issue #594)
+Mai Đức Khang
+    implemented RAM probe (for unitaryHACK issue #600)
+James Richings
+    patched overflow in bitwise.hpp logic
+Luc Jaulmes
+    patched v4's install process using CMake
+Jakub Adamski
+    optimised distributed communication by sending max-size messages asynchronously
+Bruno Villasenor Alvarez on behalf of AMD
+    ported the GPU backend to HIP, for AMD GPU compatibility
+Dr Nicolas Vogt on behalf of HQS Quantum Simulations
+    implemented mixDamping (CPU)
+Kshitij Chhabra
+    patched validateNumQubitsInQureg
+Drew Silcock
+    patched MacOS OpenMP CMake flags
+Zach van Rijn
+    patched OpenMP on GCC-9
+SchineCompton
+    patched GPU Cmake Release build
+Christopher J. Anders
+    patched Cmake build when multhithreading defaults off
+    revsied Cmake min version for GPU build
+Gleb Struchalin
+    patched the cmake standalone build
+Milos Prokop
+    implemented serial prototype of initDiagonalOpFromPauliHamil
