@@ -7,7 +7,8 @@ from typing import Any
 
 import yaml
 
-from quantum_bench.bench.config import comparison_planner_configs, load_suite
+from quantum_bench.bench.config import comparison_planner_configs, comparison_scoring_weights, load_suite
+from quantum_bench.bench.planner_scoring import csv_value, markdown_summary, score_planner_rows, scoring_metadata
 from quantum_bench.bench.run_dirs import create_run_dir, sanitize
 from quantum_bench.circuits import load_circuit
 from quantum_bench.core.jsonio import write_json, write_jsonl
@@ -21,7 +22,7 @@ from quantum_bench.targets.upmem import (
 from quantum_bench.tn import build_tensor_network, plan_task_graph_with_config, with_path_cost_summary
 
 
-COMPARISON_SCHEMA_VERSION = "planner_comparison_v1"
+COMPARISON_SCHEMA_VERSION = "planner_comparison_v2"
 
 COMPARISON_FIELDS = [
     "case_id",
@@ -50,13 +51,21 @@ COMPARISON_FIELDS = [
     "task_graph_artifact",
     "path_summary_artifact",
     "target_estimates_artifact",
+    "score_model",
+    "upmem_pressure_score",
+    "upmem_rank",
+    "flop_rank",
+    "score_components",
+    "score_weights",
+    "tradeoff_note",
 ]
 
 
 def compare_planners(suite_path: Path, root_dir: Path) -> Path:
     suite = load_suite(suite_path)
     planner_configs = comparison_planner_configs(suite)
-    run_dir = create_run_dir(root_dir, f"{suite['suite_id']}_planner_compare")
+    scoring_weights = comparison_scoring_weights(suite)
+    run_dir = create_run_dir(root_dir, _comparison_run_suite_id(str(suite["suite_id"])))
     os.environ.setdefault("MPLCONFIGDIR", str(run_dir / "plots" / ".matplotlib"))
     (run_dir / "plots" / ".matplotlib").mkdir(parents=True, exist_ok=True)
     (run_dir / "config" / "resolved_suite.yml").write_text(yaml.safe_dump(suite, sort_keys=True), encoding="utf-8")
@@ -65,16 +74,19 @@ def compare_planners(suite_path: Path, root_dir: Path) -> Path:
     rows: list[dict[str, Any]] = []
     for case in suite["cases"]:
         rows.extend(_compare_case(case, planner_configs, root_dir, run_dir))
+    rows = score_planner_rows(rows, scoring_weights)
 
     payload = {
         "schema_version": COMPARISON_SCHEMA_VERSION,
         "suite_id": suite["suite_id"],
         "run_id": run_dir.name,
         "planner_configs": planner_configs,
+        "scoring": scoring_metadata(scoring_weights),
         "rows": rows,
     }
     write_json(run_dir / "planner_comparison.json", payload)
     _write_comparison_csv(run_dir / "planner_comparison.csv", rows)
+    (run_dir / "planner_comparison_summary.md").write_text(markdown_summary(rows), encoding="utf-8")
     return run_dir
 
 
@@ -158,10 +170,16 @@ def _unique_planner_dir_name(planner_id: str, used: dict[str, int]) -> str:
     return f"{base}_{count + 1:02d}"
 
 
+def _comparison_run_suite_id(suite_id: str) -> str:
+    if suite_id == "planner_compare" or suite_id.endswith("_planner_compare"):
+        return suite_id
+    return f"{suite_id}_planner_compare"
+
+
 def _write_comparison_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=COMPARISON_FIELDS)
         writer.writeheader()
         for row in rows:
-            writer.writerow({field: row.get(field) for field in COMPARISON_FIELDS})
+            writer.writerow({field: csv_value(row.get(field)) for field in COMPARISON_FIELDS})

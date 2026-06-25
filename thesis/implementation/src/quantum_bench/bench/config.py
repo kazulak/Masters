@@ -5,6 +5,7 @@ from typing import Any
 
 import yaml
 
+from quantum_bench.bench.planner_scoring import DEFAULT_SCORING_WEIGHTS, validate_scoring_weights
 from quantum_bench.validation import DEFAULT_TOLERANCES
 
 
@@ -80,6 +81,12 @@ def comparison_planner_configs(suite: dict[str, Any]) -> list[dict[str, Any]]:
     return [dict(planner) for planner in planners]
 
 
+def comparison_scoring_weights(suite: dict[str, Any]) -> dict[str, float]:
+    comparison = suite.get("planner_comparison") or {}
+    scoring = comparison.get("scoring") if isinstance(comparison, dict) else None
+    return validate_scoring_weights(scoring)
+
+
 def route_config_for(suite: dict[str, Any], route_id: str) -> dict[str, Any]:
     for entry in suite.get("_route_configs", []):
         if entry["id"] == route_id:
@@ -106,17 +113,25 @@ def _normalize_planner_comparison(value: Any) -> dict[str, Any]:
         return {}
     if not isinstance(value, dict):
         raise ValueError("planner_comparison must be a mapping")
+    normalized: dict[str, Any] = {}
     planners = value.get("planners")
-    if planners is None:
-        return {}
-    if not isinstance(planners, list) or not planners:
-        raise ValueError("planner_comparison.planners must be a non-empty list")
-    normalized = []
-    for planner in planners:
-        if not isinstance(planner, dict):
-            raise ValueError("planner_comparison.planners entries must be mappings")
-        normalized.append(dict(planner))
-    return {"planners": normalized}
+    if planners is not None:
+        if not isinstance(planners, list) or not planners:
+            raise ValueError("planner_comparison.planners must be a non-empty list")
+        normalized_planners = []
+        for planner in planners:
+            if not isinstance(planner, dict):
+                raise ValueError("planner_comparison.planners entries must be mappings")
+            normalized_planners.append(dict(planner))
+        normalized["planners"] = normalized_planners
+    scoring = value.get("scoring")
+    if scoring is not None:
+        if not isinstance(scoring, dict):
+            raise ValueError("planner_comparison.scoring must be a mapping")
+        normalized["scoring"] = validate_scoring_weights(scoring)
+    elif "scoring" in value:
+        normalized["scoring"] = dict(DEFAULT_SCORING_WEIGHTS)
+    return normalized
 
 
 def validate_suite(suite: dict[str, Any]) -> None:

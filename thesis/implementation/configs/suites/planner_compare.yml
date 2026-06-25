@@ -16,6 +16,13 @@ planner_comparison:
       optimize: greedy
     - engine: opt_einsum
       optimize: optimal
+  scoring:
+    transfer_weight: 1.0
+    memory_weight: 1.0
+    tiling_weight: 1.0
+    unsupported_weight: 10.0
+    missing_estimate_weight: 10.0
+    parallelism_bonus_weight: 0.25
 
 workloads:
   - id: bell_2q

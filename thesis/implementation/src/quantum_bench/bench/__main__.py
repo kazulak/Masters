@@ -58,6 +58,7 @@ def main() -> int:
                     "run_dir": str(run_dir),
                     "planner_comparison": str(run_dir / "planner_comparison.json"),
                     "planner_comparison_csv": str(run_dir / "planner_comparison.csv"),
+                    "planner_comparison_summary": str(run_dir / "planner_comparison_summary.md"),
                 },
                 indent=2,
             )

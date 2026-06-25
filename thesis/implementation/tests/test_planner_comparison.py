@@ -22,12 +22,20 @@ def test_planner_comparison_writes_rows_and_artifacts(tmp_path: Path) -> None:
     csv_rows = list(csv.DictReader((run_dir / "planner_comparison.csv").open(encoding="utf-8", newline="")))
     rows = payload["rows"]
 
-    assert payload["schema_version"] == "planner_comparison_v1"
+    assert payload["schema_version"] == "planner_comparison_v2"
     assert payload["suite_id"] == "planner_compare"
     assert payload["run_id"] == run_dir.name
+    assert run_dir.name.endswith("_planner_compare")
+    assert not run_dir.name.endswith("_planner_compare_planner_compare")
     assert [config["optimize"] for config in payload["planner_configs"]] == ["greedy", "optimal"]
+    assert payload["scoring"]["score_model"] == "upmem_pressure_v1"
+    assert payload["scoring"]["rank_scope"] == "case_id"
+    assert payload["scoring"]["normalization"] == "per_case_minmax"
+    assert payload["scoring"]["rank_order"] == "lower_score_is_better"
+    assert payload["scoring"]["weights"]["parallelism_bonus_weight"] == 0.25
     assert len(rows) == 4
     assert len(csv_rows) == len(rows)
+    assert (run_dir / "planner_comparison_summary.md").exists()
     assert not list((run_dir / "raw").glob("*.jsonl"))
     assert not list((run_dir / "cases").glob("*/route_decisions.jsonl"))
 
@@ -57,6 +65,17 @@ def test_planner_comparison_writes_rows_and_artifacts(tmp_path: Path) -> None:
         assert row["missing_target_estimate_count"] == 0
         assert row["estimated_total_tile_count"] >= 0
         assert row["estimated_max_parallel_tiles"] >= 0
+        assert row["score_model"] == "upmem_pressure_v1"
+        assert isinstance(row["upmem_pressure_score"], float)
+        assert row["upmem_rank"] >= 1
+        assert row["flop_rank"] >= 1
+        assert isinstance(row["score_components"], dict)
+        assert isinstance(row["score_weights"], dict)
+        assert row["score_weights"]["parallelism_bonus_weight"] == 0.25
+        assert row["score_components"]["raw"]["extra_tile_raw"] >= 0
+        assert row["score_components"]["raw"]["tiling_raw"] >= row["tiling_required_task_count"]
+        assert row["score_components"]["raw"]["potential_parallelism_raw"] == row["estimated_max_parallel_tiles"]
+        assert "modeled" in row["tradeoff_note"]
 
         task_graph_artifact = Path(row["task_graph_artifact"])
         path_summary_artifact = Path(row["path_summary_artifact"])
@@ -90,3 +109,9 @@ def test_planner_comparison_writes_rows_and_artifacts(tmp_path: Path) -> None:
             assert task_row["host_to_dpu_bytes"] >= 0
             assert task_row["dpu_to_host_bytes"] >= 0
             assert task_row["mram_to_wram_bytes"] >= 0
+
+    for case_id in {"bell_2q", "ghz_3q"}:
+        case_rows = [row for row in rows if row["case_id"] == case_id]
+        assert any(row["upmem_rank"] == 1 for row in case_rows)
+        assert any(row["flop_rank"] == 1 for row in case_rows)
+        assert sum(1 for row in case_rows if row["upmem_rank"] == 1) >= 1
