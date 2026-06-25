@@ -51,6 +51,7 @@ def normalize_v2_suite(data: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("Every v2 workload must define id")
         case = {key: value for key, value in workload.items() if key != "id"}
         case["case_id"] = workload["id"]
+        case["workload_id"] = workload["id"]
         cases.append(case)
     routes = data.get("routes")
     if not isinstance(routes, list) or not routes:
@@ -61,12 +62,22 @@ def normalize_v2_suite(data: dict[str, Any]) -> dict[str, Any]:
         "routes": [entry["id"] for entry in route_configs],
         "fail_fast": bool(data.get("fail_fast", False)),
     }
+    suite["planner_comparison"] = _normalize_planner_comparison(data.get("planner_comparison"))
     validation = data.get("validation") or {}
     suite["tolerances"] = validation.get("tolerances", DEFAULT_TOLERANCES)
     suite["validation"] = validation
     suite["_schema_version"] = 2
     suite["_route_configs"] = route_configs
     return suite
+
+
+def comparison_planner_configs(suite: dict[str, Any]) -> list[dict[str, Any]]:
+    comparison = suite.get("planner_comparison") or {}
+    planners = comparison.get("planners") or [
+        {"engine": "opt_einsum", "optimize": "greedy"},
+        {"engine": "opt_einsum", "optimize": "optimal"},
+    ]
+    return [dict(planner) for planner in planners]
 
 
 def route_config_for(suite: dict[str, Any], route_id: str) -> dict[str, Any]:
@@ -88,6 +99,24 @@ def _normalize_route_entry(entry: Any) -> dict[str, Any]:
         "required": bool(entry.get("required", False)),
         "options": entry.get("options") or {},
     }
+
+
+def _normalize_planner_comparison(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("planner_comparison must be a mapping")
+    planners = value.get("planners")
+    if planners is None:
+        return {}
+    if not isinstance(planners, list) or not planners:
+        raise ValueError("planner_comparison.planners must be a non-empty list")
+    normalized = []
+    for planner in planners:
+        if not isinstance(planner, dict):
+            raise ValueError("planner_comparison.planners entries must be mappings")
+        normalized.append(dict(planner))
+    return {"planners": normalized}
 
 
 def validate_suite(suite: dict[str, Any]) -> None:
