@@ -9,10 +9,10 @@ from typing import Any
 import yaml
 
 from quantum_bench.bench.config import load_suite, route_config_for
-from quantum_bench.bench.run_dirs import create_run_dir
+from quantum_bench.bench.run_dirs import create_run_dir, sanitize
 from quantum_bench.bench.summary import write_summary
 from quantum_bench.circuits import load_circuit, manifest
-from quantum_bench.core.jsonio import append_jsonl, write_json
+from quantum_bench.core.jsonio import append_jsonl, write_json, write_jsonl
 from quantum_bench.core.records import BenchmarkCaseResult, BenchmarkContext, ExecutionProfile, RouteDecision, RouteIdentity, RouteOutput, RouteResult, to_jsonable
 from quantum_bench.environment import capture_environment
 from quantum_bench.tn import build_tensor_network, plan_task_graph
@@ -61,8 +61,10 @@ def run_suite(suite_path: Path, root_dir: Path) -> Path:
                 estimate.estimated_bytes,
                 estimate.estimated_peak_memory,
                 generated["graph"].path_summary.text,
-                wram_fit=None if route.backend_family != "upmem" else can_execute,
+                tile_shape=estimate.tile_shape,
+                wram_fit=estimate.wram_fit,
                 notes=estimate.notes,
+                metadata=estimate.metadata,
             )
             append_jsonl(case_dir / "route_decisions.jsonl", decision)
             if not can_execute:
@@ -136,6 +138,7 @@ def _run_repeat(route: object, generated: dict[str, Any], suite: dict[str, Any],
     result.status = status
     result.error = error
     if persist:
+        _persist_route_artifacts(run_dir, case, result, repeat_id)
         record = _case_record(run_dir.name, suite, case, generated, result, validation, repeat_id, identity, route_config)
         append_jsonl(run_dir / "raw" / f"{case['case_id']}.jsonl", record)
         write_json(run_dir / "validation" / f"{case['case_id']}_{result.route}_{repeat_id}.json", validation)
@@ -175,6 +178,7 @@ def _case_record(run_id: str, suite: dict[str, Any], case: dict[str, Any], gener
         energy_source=result.energy_source,
         validation=to_jsonable(validation) if validation is not None else None,
         error=result.error if result.status != "skipped" else None,
+        route_metadata=to_jsonable(result.metadata),
     )
 
 
@@ -220,6 +224,7 @@ def _record_case_setup_failure(run_dir: Path, suite: dict[str, Any], case: dict[
         "energy_source": "unavailable",
         "validation": None,
         "error": f"{exc}\n{traceback.format_exc()}",
+        "route_metadata": {},
     }
     append_jsonl(run_dir / "raw" / f"{record['case_id']}.jsonl", record)
 
@@ -241,6 +246,16 @@ def _context(root_dir: Path, run_dir: Path, suite: dict[str, Any], case: dict[st
         timeout_s=suite.get("timeout_s"),
         memory_guard_gib=suite.get("memory_guard_gib"),
     )
+
+
+def _persist_route_artifacts(run_dir: Path, case: dict[str, Any], result: RouteResult, repeat_id: int) -> None:
+    metadata = dict(result.metadata)
+    task_metrics = metadata.pop("task_metrics", None)
+    if task_metrics is not None:
+        rel_path = Path("cases") / str(case["case_id"]) / "task_metrics" / f"{sanitize(result.route)}_repeat_{repeat_id}.jsonl"
+        write_jsonl(run_dir / rel_path, list(task_metrics))
+        metadata["task_metrics_artifact"] = rel_path.as_posix()
+    result.metadata = metadata
 
 
 def _merged_profile(profile: ExecutionProfile, generate_s: float, planning_s: float, reference_s: float, validation_s: float, total_s: float) -> ExecutionProfile:

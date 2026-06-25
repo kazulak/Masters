@@ -18,6 +18,13 @@ def append_jsonl(path: Path, payload: Any) -> None:
         handle.write(json.dumps(to_jsonable(payload), sort_keys=True) + "\n")
 
 
+def write_jsonl(path: Path, payloads: list[Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for payload in payloads:
+            handle.write(json.dumps(to_jsonable(payload), sort_keys=True) + "\n")
+
+
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []

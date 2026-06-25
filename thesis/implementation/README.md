@@ -32,6 +32,8 @@ scripts/run_energy_suite.sh configs/suites/local_energy.yml
 - `native/quest_cpu/` contains only the C QuEST runner used by the
   `quest_cpu_full_state_benchmark` provider.
 - `external/QuEST/` contains the local QuEST dependency used by that runner.
+- `src/quantum_bench/targets/upmem/` contains host-side UPMEM WRAM, traffic,
+  and schedule groundwork shared by future UPMEM providers.
 - `native/upmem/` is reserved for future UPMEM native code.
 - `../legacy/` contains old prototypes and generated sudo-owned run folders kept
   out of the active implementation.

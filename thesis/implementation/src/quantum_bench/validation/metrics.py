@@ -30,10 +30,12 @@ def validate(actual: np.ndarray, reference: np.ndarray, tolerances: dict | None 
     diff = actual - reference
     abs_diff = np.abs(diff)
     ref_abs = np.abs(reference)
+    abs_tol = float(tol["max_abs_error"])
     max_abs = float(abs_diff.max()) if abs_diff.size else 0.0
     l2 = float(np.linalg.norm(diff.ravel()))
-    denom = np.maximum(ref_abs, 1.0e-300)
-    max_rel = float((abs_diff / denom).max()) if abs_diff.size else 0.0
+    rel_mask = abs_diff > abs_tol
+    denom = np.maximum(ref_abs[rel_mask], 1.0e-300)
+    max_rel = float((abs_diff[rel_mask] / denom).max()) if np.any(rel_mask) else 0.0
     actual_norm = float(np.linalg.norm(actual.ravel()))
     reference_norm = float(np.linalg.norm(reference.ravel()))
     norm_drift = abs(actual_norm - reference_norm)
@@ -44,7 +46,7 @@ def validate(actual: np.ndarray, reference: np.ndarray, tolerances: dict | None 
     else:
         fidelity = float(abs(np.vdot(reference.ravel(), actual.ravel())) ** 2 / ((reference_norm**2) * (actual_norm**2)))
     passed = (
-        max_abs <= float(tol["max_abs_error"])
+        max_abs <= abs_tol
         and l2 <= float(tol["l2_error"])
         and max_rel <= float(tol["max_rel_error"])
         and norm_drift <= float(tol["norm_drift"])

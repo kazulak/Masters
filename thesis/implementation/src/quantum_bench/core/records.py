@@ -69,6 +69,20 @@ class ContractionTask:
 
 
 @dataclass(frozen=True)
+class TaskExecutionMetric:
+    task_id: str
+    input_tensor_ids: tuple[str, str]
+    output_tensor_id: str
+    input_shapes: tuple[tuple[int, ...], tuple[int, ...]]
+    output_shape: tuple[int, ...]
+    contracted_labels: tuple[int, ...]
+    estimated_flops: int
+    estimated_bytes: int
+    execution_time_s: float
+    intermediate_tensor_bytes: int
+
+
+@dataclass(frozen=True)
 class PathSummary:
     planner: str
     optimize: str
@@ -151,6 +165,7 @@ class RouteDecision:
     tile_shape: JsonDict | None = None
     wram_fit: bool | None = None
     notes: tuple[str, ...] = ()
+    metadata: JsonDict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -160,6 +175,9 @@ class RouteEstimate:
     estimated_bytes: int
     estimated_peak_memory: int | None
     notes: tuple[str, ...] = ()
+    tile_shape: JsonDict | None = None
+    wram_fit: bool | None = None
+    metadata: JsonDict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -233,6 +251,7 @@ class BenchmarkCaseResult:
     energy_source: str
     validation: JsonDict | None
     error: str | None
+    route_metadata: JsonDict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

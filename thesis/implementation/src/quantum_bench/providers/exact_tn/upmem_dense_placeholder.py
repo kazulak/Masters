@@ -14,6 +14,7 @@ from quantum_bench.core.records import (
     RouteResult,
     TaskGraph,
 )
+from quantum_bench.targets.upmem import estimate_dense_task_graph
 from quantum_bench.tn.network import TensorNetworkValue
 
 
@@ -41,32 +42,42 @@ class UpmemDenseInt8PlaceholderRoute:
         probe = self.probe()
         return RouteCapabilities(
             identity=self.identity,
-            supported_workload_families=("bell_2q", "ghz_4q", "ghz_chain"),
+            supported_workload_families=("builtin", "qasm_file"),
             can_return_output=False,
             can_measure_energy=False,
-            metadata={"available": probe.available, "reason": probe.reason, **probe.metadata},
+            metadata={
+                "available": probe.available,
+                "reason": probe.reason,
+                "target_layer": "quantum_bench.targets.upmem",
+                **probe.metadata,
+            },
         )
 
     def can_execute(self, graph: TaskGraph, context: BenchmarkContext) -> tuple[bool, str | None]:
         probe = self.probe()
         if not probe.available:
             return False, probe.reason
-        supported = {"bell_2q", "ghz_4q", "ghz_chain"}
-        circuit_name = str(context.case.get("circuit", {}).get("name", ""))
-        if circuit_name not in supported:
-            return False, f"legacy raw dense route currently supports only {sorted(supported)}"
-        for task in graph.tasks:
-            if task.gemm_k > 256:
-                return False, f"task {task.id} requires K tiling (k={task.gemm_k}); legacy route supports k<=256"
-        return False, "native raw UPMEM route is probed but not yet ported into canonical runtime"
+        schedule = estimate_dense_task_graph(graph)
+        reject_reason = schedule.first_reject_reason()
+        if reject_reason:
+            return False, f"{reject_reason}; WRAM tiling is not implemented yet"
+        return False, "UPMEM dense target estimate is available; native dense execution is not implemented yet"
 
     def estimate(self, graph: TaskGraph, context: BenchmarkContext) -> RouteEstimate:
+        schedule = estimate_dense_task_graph(graph)
         return RouteEstimate(
             self.name,
             sum(task.estimated_flops for task in graph.tasks),
-            sum(task.estimated_bytes for task in graph.tasks),
-            64 * 1024,
-            ("64 KiB WRAM tile guard", "legacy dense int8 GEMM route"),
+            schedule.total_host_to_dpu_bytes + schedule.total_dpu_to_host_bytes,
+            schedule.max_working_set_bytes,
+            (*schedule.notes(), "native dense execution not implemented"),
+            tile_shape={
+                "model": "untiled_dense_gemm",
+                "max_working_set_bytes": schedule.max_working_set_bytes,
+                "wram_bytes": schedule.hardware.wram_bytes,
+            },
+            wram_fit=schedule.all_tasks_fit_without_tiling,
+            metadata=schedule.metadata(),
         )
 
     def prepare(self, graph: TaskGraph, network: TensorNetworkValue, context: BenchmarkContext) -> object:
@@ -81,5 +92,5 @@ class UpmemDenseInt8PlaceholderRoute:
             ExecutionProfile(),
             None,
             "unavailable",
-            "native raw UPMEM route is not executable in this canonical slice",
+            "native UPMEM dense execution is not implemented yet",
         )

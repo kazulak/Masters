@@ -7,6 +7,7 @@ from quantum_bench.bench.config import load_suite
 from quantum_bench.circuits import builtin_circuit, manifest
 from quantum_bench.tn import build_tensor_network, plan_task_graph
 from quantum_bench.providers import route_registry
+from quantum_bench.targets.upmem import estimate_dense_task_graph
 from quantum_bench.validation import compute_reference, validate
 
 
@@ -30,6 +31,18 @@ def test_task_graph_serializes_and_validates_reference() -> None:
     assert graph.tasks
     assert result.passed
     assert result.l2_error == 0.0
+
+
+def test_upmem_target_estimates_shared_task_graph() -> None:
+    circuit = builtin_circuit("bell_2q")
+    network = build_tensor_network(circuit)
+    graph = plan_task_graph(network)
+    schedule = estimate_dense_task_graph(graph)
+    assert len(schedule.tasks) == len(graph.tasks)
+    assert schedule.hardware.wram_bytes == 64 * 1024
+    assert schedule.total_host_to_dpu_bytes > 0
+    assert schedule.total_dpu_to_host_bytes > 0
+    assert schedule.metadata()["target"] == "upmem"
 
 
 def test_suite_config_loads() -> None:
@@ -64,5 +77,8 @@ def test_route_probe_and_upmem_skip_reason() -> None:
 
     context = BenchmarkContext(ROOT, ROOT / "runs" / "test", suite, suite["cases"][0], suite["_route_configs"][1], 0, suite["tolerances"], 30, 2)
     can_execute, reason = routes["upmem_dense_int8_placeholder"].can_execute(graph, context)
+    estimate = routes["upmem_dense_int8_placeholder"].estimate(graph, context)
     assert not can_execute
     assert reason
+    assert estimate.metadata["target"] == "upmem"
+    assert estimate.wram_fit is not None

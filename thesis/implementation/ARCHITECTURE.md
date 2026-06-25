@@ -19,6 +19,7 @@ implementation/
     environment/           environment and RAPL discovery
     plots/                 plot generation from summary artifacts
     providers/             executable routes
+    targets/upmem/         UPMEM WRAM, traffic, tiling, and schedule groundwork
     tn/                    exact tensor-network construction and planning
     validation/            numerical validation metrics
   tests/                   Python runtime tests
@@ -45,8 +46,30 @@ Route IDs are canonical only; old route names are not accepted.
   - metrics-only, benchmark-only validation mode
 - `upmem_dense_int8_placeholder`
   - UPMEM dense candidate placeholder
+  - consumes `targets/upmem/` to estimate WRAM fit and transfer volume
   - probes availability and records skip reasons
   - no native execution yet
+
+## UPMEM Boundary
+
+The future UPMEM implementation has three separate layers:
+
+```text
+tn/
+  shared tensor network and contraction task graph
+targets/upmem/
+  host-side UPMEM model: WRAM fit, data format, traffic estimate, tiling and
+  DPU schedule groundwork
+providers/exact_tn/
+  benchmark routes that decide whether to use the UPMEM target layer and, later,
+  call native kernels
+native/upmem/
+  C/UPMEM SDK host and DPU kernels only
+```
+
+This keeps tensor-network creation and path finding shared across CPU TN, future
+GPU TN, and UPMEM TN. UPMEM-specific constraints do not belong in `tn/`; they
+belong in `targets/upmem/` and are consumed by UPMEM providers.
 
 ## Current Benchmark Artifacts
 
@@ -102,11 +125,13 @@ tile tasks.
    instead of one whole-network `np.einsum`.
 2. Add WRAM/tile estimates to contraction tasks:
    tile shape, tile bytes, host-DPU bytes, MRAM-WRAM bytes, and fit/reject reason.
-3. Extend route decisions from case-level to task-level so the runner records
+3. Extend the current `targets/upmem/` schedule estimate from untiled dense
+   tasks to real tiling choices.
+4. Extend route decisions from case-level to task-level so the runner records
    selected/rejected providers per contraction task.
-4. Port the useful dense UPMEM kernel only after the task schedule and WRAM model
+5. Port the useful dense UPMEM kernel only after the task schedule and WRAM model
    exist.
-5. Add sparse and heuristic/permutation providers after the dense path is
+6. Add sparse and heuristic/permutation providers after the dense path is
    structurally stable.
 
 ## Design Rules
