@@ -13,10 +13,15 @@ from quantum_bench.bench.run_dirs import create_run_dir, sanitize
 from quantum_bench.bench.summary import write_summary
 from quantum_bench.circuits import load_circuit, manifest
 from quantum_bench.core.jsonio import append_jsonl, write_json, write_jsonl
-from quantum_bench.core.records import BenchmarkCaseResult, BenchmarkContext, ExecutionProfile, RouteDecision, RouteIdentity, RouteOutput, RouteResult, to_jsonable
+from quantum_bench.core.records import BenchmarkCaseResult, BenchmarkContext, ExecutionProfile, RouteDecision, RouteIdentity, RouteOutput, RouteResult, TaskGraph, to_jsonable
 from quantum_bench.environment import capture_environment
-from quantum_bench.tn import build_tensor_network, plan_task_graph
+from quantum_bench.tn import build_tensor_network, plan_task_graph_with_config, with_path_cost_summary
 from quantum_bench.providers import route_registry
+from quantum_bench.targets.upmem import (
+    UPMEM_DENSE_ESTIMATE_KEY,
+    annotate_task_graph_with_upmem_estimates,
+    upmem_task_estimate_rows,
+)
 from quantum_bench.validation import compute_reference, validate
 
 
@@ -52,6 +57,11 @@ def run_suite(suite_path: Path, root_dir: Path) -> Path:
             can_execute, skip_reason = route.can_execute(generated["graph"], context0)
             estimate = route.estimate(generated["graph"], context0)
             identity = _effective_identity(route.identity, route_config)
+            decision_metadata = dict(estimate.metadata)
+            estimate_key = decision_metadata.get("estimate_key")
+            artifact_path = generated.get("target_estimate_artifacts", {}).get(estimate_key)
+            if artifact_path:
+                decision_metadata["task_estimates_artifact"] = artifact_path
             decision = RouteDecision(
                 route_name,
                 route.backend_family,
@@ -64,7 +74,7 @@ def run_suite(suite_path: Path, root_dir: Path) -> Path:
                 tile_shape=estimate.tile_shape,
                 wram_fit=estimate.wram_fit,
                 notes=estimate.notes,
-                metadata=estimate.metadata,
+                metadata=decision_metadata,
             )
             append_jsonl(case_dir / "route_decisions.jsonl", decision)
             if not can_execute:
@@ -93,10 +103,20 @@ def _generate_case(case: dict[str, Any], suite: dict[str, Any], root_dir: Path, 
     circuit = load_circuit(case, root_dir)
     network = build_tensor_network(circuit)
     generate_s = time.perf_counter() - start
-    graph = plan_task_graph(network, suite["planner"]["optimize"])
+    graph = plan_task_graph_with_config(network, suite["planner"])
+    graph, _ = annotate_task_graph_with_upmem_estimates(graph)
+    graph = with_path_cost_summary(graph)
+    target_estimate_artifacts = _write_target_estimate_artifacts(case_dir, graph)
     write_json(case_dir / "circuit.json", manifest(circuit))
     write_json(case_dir / "task_graph.json", graph)
-    return {"circuit": circuit, "network": network, "graph": graph, "generate_s": generate_s}
+    write_json(case_dir / "path_summary.json", graph.path_summary)
+    return {
+        "circuit": circuit,
+        "network": network,
+        "graph": graph,
+        "generate_s": generate_s,
+        "target_estimate_artifacts": target_estimate_artifacts,
+    }
 
 
 def _run_repeat(route: object, generated: dict[str, Any], suite: dict[str, Any], case: dict[str, Any], route_config: dict[str, Any], root_dir: Path, run_dir: Path, repeat_id: int, persist: bool) -> RouteResult:
@@ -246,6 +266,13 @@ def _context(root_dir: Path, run_dir: Path, suite: dict[str, Any], case: dict[st
         timeout_s=suite.get("timeout_s"),
         memory_guard_gib=suite.get("memory_guard_gib"),
     )
+
+
+def _write_target_estimate_artifacts(case_dir: Path, graph: TaskGraph) -> dict[str, str]:
+    rel_path = Path("cases") / case_dir.name / "target_estimates" / f"{UPMEM_DENSE_ESTIMATE_KEY}.jsonl"
+    run_dir = case_dir.parents[1]
+    write_jsonl(run_dir / rel_path, upmem_task_estimate_rows(graph))
+    return {UPMEM_DENSE_ESTIMATE_KEY: rel_path.as_posix()}
 
 
 def _persist_route_artifacts(run_dir: Path, case: dict[str, Any], result: RouteResult, repeat_id: int) -> None:

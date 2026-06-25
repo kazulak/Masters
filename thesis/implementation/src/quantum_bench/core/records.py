@@ -66,6 +66,7 @@ class ContractionTask:
     structure: str
     estimated_flops: int
     estimated_bytes: int
+    target_estimates: JsonDict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -80,6 +81,7 @@ class TaskExecutionMetric:
     estimated_bytes: int
     execution_time_s: float
     intermediate_tensor_bytes: int
+    target_estimates: JsonDict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -91,6 +93,26 @@ class PathSummary:
     naive_flops: float | None
     optimized_flops: float | None
     text: str
+    planner_engine: str = ""
+    planner_id: str = ""
+    planner_kind: str = ""
+    optimize_mode: str = ""
+    objective: str = ""
+    cost_basis: str = ""
+    target_estimate_key: str | None = None
+    options: JsonDict = field(default_factory=dict)
+    task_count: int = 0
+    total_estimated_flops: int = 0
+    peak_intermediate_bytes: int = 0
+    max_intermediate_bytes: int = 0
+    total_host_to_dpu_bytes: int = 0
+    total_dpu_to_host_bytes: int = 0
+    total_mram_to_wram_bytes: int = 0
+    unsupported_task_count: int = 0
+    tiling_required_task_count: int = 0
+    missing_target_estimate_count: int = 0
+    estimated_total_tile_count: int = 0
+    estimated_max_parallel_tiles: int = 0
 
 
 @dataclass(frozen=True)

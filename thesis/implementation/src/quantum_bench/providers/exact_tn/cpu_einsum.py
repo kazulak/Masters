@@ -150,6 +150,7 @@ def _execute_task_sequence(graph: TaskGraph, network: TensorNetworkValue) -> tup
                 estimated_bytes=task.estimated_bytes,
                 execution_time_s=task_time_s,
                 intermediate_tensor_bytes=intermediate_bytes,
+                target_estimates=task.target_estimates,
             )
         )
 

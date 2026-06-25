@@ -1,21 +1,31 @@
 from quantum_bench.targets.upmem.schedule import (
     DENSE_INT8_FORMAT,
+    REQUIRES_TILING_NOT_IMPLEMENTED,
+    UNSUPPORTED_DENSE_GEMM_SHAPE,
+    UPMEM_DENSE_ESTIMATE_KEY,
     UPMEM_PROFILE,
     UpmemDataFormat,
     UpmemHardwareProfile,
     UpmemScheduleEstimate,
     UpmemTaskEstimate,
+    annotate_task_graph_with_upmem_estimates,
     estimate_dense_task,
     estimate_dense_task_graph,
+    upmem_task_estimate_rows,
 )
 
 __all__ = [
     "DENSE_INT8_FORMAT",
+    "REQUIRES_TILING_NOT_IMPLEMENTED",
+    "UNSUPPORTED_DENSE_GEMM_SHAPE",
+    "UPMEM_DENSE_ESTIMATE_KEY",
     "UPMEM_PROFILE",
     "UpmemDataFormat",
     "UpmemHardwareProfile",
     "UpmemScheduleEstimate",
     "UpmemTaskEstimate",
+    "annotate_task_graph_with_upmem_estimates",
     "estimate_dense_task",
     "estimate_dense_task_graph",
+    "upmem_task_estimate_rows",
 ]
