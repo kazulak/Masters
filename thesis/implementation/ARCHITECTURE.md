@@ -164,6 +164,20 @@ routing, and keeps `external_command_executed=false` and
 materialization for the harness; it is not the normal CPU execution path and not
 full routed TaskGraph execution.
 
+The dense route coverage analyzer extends this from one selected task to all
+tasks in selected circuits, still without routed execution:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-route-coverage --case bell_2q
+```
+
+It writes `dense_route_coverage.json`, `.csv`, and `.md` artifacts that report
+materialization, dense preparation, fixed-point conversion, WRAM tile-plan,
+bridge-manifest eligibility, and optional external-stub readiness per task.
+This is thesis evidence for route feasibility and bottlenecks; it does not
+select `dense_gemm` in normal routing and does not execute SimplePIM/native
+UPMEM.
+
 Plots follow one rule: bars compare different cases/routes, and lines are used
 only for scaling within a single circuit family across qubit counts.
 

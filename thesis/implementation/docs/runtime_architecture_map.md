@@ -515,6 +515,57 @@ for convenience.
 external stub process was invoked; `metadata.native_kernel_executed=false`
 records that no SimplePIM/native kernel ran.
 
+## Dense Route Coverage Analyzer
+
+`src/quantum_bench/bench/dense_route_coverage.py` is the developer-only
+readiness analyzer between the one-task bridge harness and future routed dense
+execution. It iterates every `ContractionTask` in selected cases, materializes
+task inputs with CPU replay, calls dense preparation, reads fixed-point
+conversion and UPMEM tile-plan metadata, and reports whether each task is
+eligible for bridge-manifest creation. It can optionally write a capped number
+of bridge artifacts and invoke the non-executing external stub contract.
+
+Example:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-route-coverage --case bell_2q
+```
+
+Suite mode iterates workloads/cases only and uses the suite's normalized default
+planner. It does not multiply by routes or planner-comparison variants.
+
+The command writes:
+
+```text
+runs/<timestamp>_<case_or_suite>_dense_route_coverage/
+  environment.json
+  dense_route_coverage.json
+  dense_route_coverage.csv
+  dense_route_coverage_summary.md
+  cases/<case_id>/dense_route_coverage.jsonl
+```
+
+By default, it writes no bridge blobs and calls no subprocess. Optional stub
+checking requires `--bridge-backend simplepim_external_stub`,
+`--execute-external`, `--max-bridge-artifacts > 0`, and `SIMPLEPIM_STUB_BIN`.
+
+Readiness levels are analysis labels, not route selection:
+
+- `not_materializable`
+- `materialized_only`
+- `blocked_unsupported_shape`
+- `blocked_requires_tiling`
+- `dense_prepare_failed`
+- `dense_prepare_ready`
+- `bridge_manifest_ready`
+- `external_stub_ready`
+
+This artifact family is thesis evidence for dense route feasibility and
+bottlenecks: how many tasks can be materialized, prepared, represented as dense
+GEMM, fit the current WRAM model without executable tiling, and satisfy the
+future bridge file contract. It does not select `dense_gemm`, does not execute
+SimplePIM/native UPMEM, and does not replace normal provider execution.
+
 ## Planner Comparison Position
 
 The planner comparison work belongs to:
@@ -534,18 +585,18 @@ which motivates route-aware costs later.
 - `2C.7` dense native/SimplePIM bridge contract for prepared payloads
 - `2C.8` executable dense bridge adapter interface, execution disabled by default
 - `2C.9` developer-only one-task dense bridge harness
-- `2C.10` dynamic router analysis/preparation mode over full `TaskGraph`
+- `2C.10` CPU replay materialization for later one-task bridge inputs
+- `2C.11` non-executing external SimplePIM dense bridge stub
+- `2C.12` dense route readiness coverage analyzer over full `TaskGraph`
 - `2D.1` heuristic/bypass route prototype
 - `2D.2` sparse route feasibility and SparseP integration plan
 - `2D.3` host aggregation/PID-Comm-inspired reporting
 - `2D.4` optional TransPimLib support slot
 - `2E.1` revisit UPMEM-aware path selection using route-aware costs
 
-The next implementation wave should be:
-
-```text
-2C.10 dynamic router analysis/preparation mode over full TaskGraph
-```
+The next implementation wave should build on the coverage evidence and either
+start a real dense execution microkernel path or introduce the route-selection
+analysis layer that consumes coverage/readiness results.
 
 ## Future Codex Instruction
 

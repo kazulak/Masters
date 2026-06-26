@@ -49,6 +49,15 @@ def main() -> int:
     )
     dense_bridge_parser.add_argument("--execute-external", action="store_true")
 
+    coverage_parser = sub.add_parser("dense-route-coverage")
+    coverage_input = coverage_parser.add_mutually_exclusive_group(required=True)
+    coverage_input.add_argument("--suite", help="Suite path or preset name under configs/suites")
+    coverage_input.add_argument("--case", help="Builtin circuit case name")
+    coverage_parser.add_argument("--n-qubits", type=int)
+    coverage_parser.add_argument("--bridge-backend", default="none", choices=("none", "simplepim_external_stub"))
+    coverage_parser.add_argument("--execute-external", action="store_true")
+    coverage_parser.add_argument("--max-bridge-artifacts", type=int, default=0)
+
     sub.add_parser("probe")
 
     args = parser.parse_args()
@@ -128,6 +137,42 @@ def main() -> int:
                     "summary_path": str(result.summary_path),
                     "status": result.status,
                     "reason": result.reason,
+                },
+                indent=2,
+            )
+        )
+        return 0
+    if args.command == "dense-route-coverage":
+        from quantum_bench.bench.dense_route_coverage import run_dense_route_coverage, validate_cli_options
+
+        resolved_suite = suite_path(args.suite, root_dir) if args.suite else None
+        try:
+            validate_cli_options(
+                suite_path=resolved_suite,
+                case=args.case,
+                bridge_backend=args.bridge_backend,
+                execute_external=args.execute_external,
+                max_bridge_artifacts=args.max_bridge_artifacts,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        run_dir = run_dense_route_coverage(
+            root_dir,
+            suite_path=resolved_suite,
+            case=args.case,
+            n_qubits=args.n_qubits,
+            bridge_backend=args.bridge_backend,
+            execute_external=args.execute_external,
+            max_bridge_artifacts=args.max_bridge_artifacts,
+        )
+        print(
+            json.dumps(
+                {
+                    "run_dir": str(run_dir),
+                    "artifact": str(run_dir / "dense_route_coverage.json"),
+                    "csv": str(run_dir / "dense_route_coverage.csv"),
+                    "summary": str(run_dir / "dense_route_coverage_summary.md"),
+                    "status": "completed",
                 },
                 indent=2,
             )

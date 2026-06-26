@@ -23,6 +23,8 @@ PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simplepim-microbench -
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 0 --backend mock_numpy_dequantized
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 1 --materialization cpu-replay --backend mock_numpy_dequantized
 SIMPLEPIM_STUB_BIN=native/upmem/simplepim/simplepim_dense_stub.py PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 0 --backend simplepim_external_stub --execute-external
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-route-coverage --case bell_2q
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-route-coverage --suite configs/suites/planner_compare.yml
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench plot runs/latest
 ```
 
@@ -55,6 +57,10 @@ scripts/run_energy_suite.sh configs/suites/local_energy.yml
   harness that connects a real `ContractionTask` to dense preparation and the
   mock bridge. It can opt into CPU replay for explicit task selection, but it
   does not change normal benchmark routing.
+- `src/quantum_bench/bench/dense_route_coverage.py` is a developer-only
+  readiness analyzer over every task in selected circuits. It reports dense
+  route materialization, preparation, tile-plan, bridge-manifest, and optional
+  stub-contract coverage; it is not routed execution.
 - `native/upmem/simplepim/` is reserved for future SimplePIM bridge code and
   currently contains only a non-executing external contract stub.
 - `native/upmem/raw_dense/` is reserved for future raw UPMEM SDK dense kernels.
