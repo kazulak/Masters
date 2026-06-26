@@ -58,6 +58,20 @@ def main() -> int:
     coverage_parser.add_argument("--execute-external", action="store_true")
     coverage_parser.add_argument("--max-bridge-artifacts", type=int, default=0)
 
+    shadow_parser = sub.add_parser("shadow-routed-runtime")
+    shadow_input = shadow_parser.add_mutually_exclusive_group(required=True)
+    shadow_input.add_argument("--suite", help="Suite path or preset name under configs/suites")
+    shadow_input.add_argument("--case", help="Builtin circuit case name")
+    shadow_parser.add_argument("--n-qubits", type=int)
+    shadow_parser.add_argument("--dense-shadow", default="prepare", choices=("none", "prepare", "bridge", "stub"))
+    shadow_parser.add_argument(
+        "--bridge-backend",
+        default="none",
+        choices=("none", "mock_numpy_dequantized", "simplepim_external_stub"),
+    )
+    shadow_parser.add_argument("--execute-external", action="store_true")
+    shadow_parser.add_argument("--max-bridge-artifacts", type=int, default=0)
+
     sub.add_parser("probe")
 
     args = parser.parse_args()
@@ -172,6 +186,44 @@ def main() -> int:
                     "artifact": str(run_dir / "dense_route_coverage.json"),
                     "csv": str(run_dir / "dense_route_coverage.csv"),
                     "summary": str(run_dir / "dense_route_coverage_summary.md"),
+                    "status": "completed",
+                },
+                indent=2,
+            )
+        )
+        return 0
+    if args.command == "shadow-routed-runtime":
+        from quantum_bench.bench.shadow_routed_runtime import run_shadow_routed_runtime, validate_cli_options
+
+        resolved_suite = suite_path(args.suite, root_dir) if args.suite else None
+        try:
+            validate_cli_options(
+                suite_path=resolved_suite,
+                case=args.case,
+                dense_shadow=args.dense_shadow,
+                bridge_backend=args.bridge_backend,
+                execute_external=args.execute_external,
+                max_bridge_artifacts=args.max_bridge_artifacts,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        run_dir = run_shadow_routed_runtime(
+            root_dir,
+            suite_path=resolved_suite,
+            case=args.case,
+            n_qubits=args.n_qubits,
+            dense_shadow=args.dense_shadow,
+            bridge_backend=args.bridge_backend,
+            execute_external=args.execute_external,
+            max_bridge_artifacts=args.max_bridge_artifacts,
+        )
+        print(
+            json.dumps(
+                {
+                    "run_dir": str(run_dir),
+                    "artifact": str(run_dir / "shadow_routed_runtime.json"),
+                    "csv": str(run_dir / "shadow_routed_runtime.csv"),
+                    "summary": str(run_dir / "shadow_routed_runtime_summary.md"),
                     "status": "completed",
                 },
                 indent=2,

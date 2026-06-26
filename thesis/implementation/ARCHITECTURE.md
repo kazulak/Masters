@@ -178,6 +178,35 @@ This is thesis evidence for route feasibility and bottlenecks; it does not
 select `dense_gemm` in normal routing and does not execute SimplePIM/native
 UPMEM.
 
+The shadow routed runtime is the first developer-only full TaskGraph harness
+that is route-aware from start to finish:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench shadow-routed-runtime --case bell_2q
+```
+
+It iterates every `ContractionTask`, records task-router candidates, performs
+dense route preparation/bridge checks as shadow evidence, and then executes the
+task numerically with CPU fallback. CPU fallback is always authoritative in this
+wave: dense mock/stub outputs never replace runtime tensors, final validation is
+against the CPU fallback result, and `selected_authoritative_route` remains
+`cpu_fallback` for every task. Optional bridge/stub checks are capped by
+`--max-bridge-artifacts`; subprocess execution is allowed only for the explicit
+`simplepim_external_stub` path with `--dense-shadow stub`, `--execute-external`,
+and `SIMPLEPIM_STUB_BIN`.
+
+It writes:
+
+```text
+runs/<timestamp>_<case_or_suite>_shadow_routed_runtime/
+  environment.json
+  shadow_routed_runtime.json
+  shadow_routed_runtime.csv
+  shadow_routed_runtime_summary.md
+  cases/<case_id>/shadow_routed_runtime.jsonl
+  cases/<case_id>/dense_bridge/task_0000/...   optional capped bridge artifacts
+```
+
 Plots follow one rule: bars compare different cases/routes, and lines are used
 only for scaling within a single circuit family across qubit counts.
 

@@ -25,6 +25,7 @@ PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --ca
 SIMPLEPIM_STUB_BIN=native/upmem/simplepim/simplepim_dense_stub.py PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 0 --backend simplepim_external_stub --execute-external
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-route-coverage --case bell_2q
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-route-coverage --suite configs/suites/planner_compare.yml
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench shadow-routed-runtime --case bell_2q
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench plot runs/latest
 ```
 
@@ -61,6 +62,10 @@ scripts/run_energy_suite.sh configs/suites/local_energy.yml
   readiness analyzer over every task in selected circuits. It reports dense
   route materialization, preparation, tile-plan, bridge-manifest, and optional
   stub-contract coverage; it is not routed execution.
+- `src/quantum_bench/bench/shadow_routed_runtime.py` is a developer-only full
+  TaskGraph harness. It executes every task with CPU fallback as the
+  authoritative numeric route while recording dense route preparation and
+  optional capped bridge/stub evidence as shadow metadata.
 - `native/upmem/simplepim/` is reserved for future SimplePIM bridge code and
   currently contains only a non-executing external contract stub.
 - `native/upmem/raw_dense/` is reserved for future raw UPMEM SDK dense kernels.

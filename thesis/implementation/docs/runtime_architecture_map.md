@@ -566,6 +566,59 @@ GEMM, fit the current WRAM model without executable tiling, and satisfy the
 future bridge file contract. It does not select `dense_gemm`, does not execute
 SimplePIM/native UPMEM, and does not replace normal provider execution.
 
+## Shadow Routed Runtime
+
+`src/quantum_bench/bench/shadow_routed_runtime.py` is the first full
+route-aware runtime harness. It executes a complete `TaskGraph` task-by-task,
+but CPU fallback remains the authoritative numeric path. Dense route
+preparation, bridge manifests, mock bridge checks, and external-stub checks are
+recorded only as shadow evidence.
+
+Example:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench shadow-routed-runtime --case bell_2q
+```
+
+The harness records:
+
+- task-router candidate decisions for every task;
+- `selected_authoritative_route: cpu_fallback` for every executed task;
+- dense preparation status and reasons before CPU input release;
+- bridge-manifest eligibility and optional capped bridge artifacts;
+- mock/stub bridge status when explicitly enabled;
+- final CPU fallback validation against the existing reference path.
+
+Artifact layout:
+
+```text
+runs/<timestamp>_<case_or_suite>_shadow_routed_runtime/
+  environment.json
+  config/resolved_suite.yml or config/shadow_routed_runtime_input.json
+  shadow_routed_runtime.json
+  shadow_routed_runtime.csv
+  shadow_routed_runtime_summary.md
+  cases/<case_id>/shadow_routed_runtime.jsonl
+  cases/<case_id>/dense_bridge/task_0000/...   optional capped bridge artifacts
+```
+
+Safety rules:
+
+- dense mock/stub outputs never replace CPU fallback tensors;
+- final validation is computed from the CPU fallback final tensor;
+- bridge artifact cap is per run, not per case;
+- subprocess execution is disabled unless all of these are true:
+  `--dense-shadow stub`, `--bridge-backend simplepim_external_stub`,
+  `--execute-external`, `--max-bridge-artifacts > 0`, and
+  `SIMPLEPIM_STUB_BIN` is configured;
+- `external_command_executed=true` means the non-executing stub process ran, not
+  that SimplePIM/native UPMEM executed.
+
+This harness bridges the gap between coverage analysis and future real routed
+execution. It proves that full-graph route decisions, CPU fallback execution,
+and per-task dense route evidence can coexist without changing normal benchmark
+provider behavior.
+
 ## Planner Comparison Position
 
 The planner comparison work belongs to:
@@ -588,15 +641,16 @@ which motivates route-aware costs later.
 - `2C.10` CPU replay materialization for later one-task bridge inputs
 - `2C.11` non-executing external SimplePIM dense bridge stub
 - `2C.12` dense route readiness coverage analyzer over full `TaskGraph`
-- `2D.1` heuristic/bypass route prototype
-- `2D.2` sparse route feasibility and SparseP integration plan
-- `2D.3` host aggregation/PID-Comm-inspired reporting
-- `2D.4` optional TransPimLib support slot
+- `2D.1` shadow routed TaskGraph runtime with CPU fallback authoritative
+- `2D.2` heuristic/bypass route prototype
+- `2D.3` sparse route feasibility and SparseP integration plan
+- `2D.4` host aggregation/PID-Comm-inspired reporting
+- `2D.5` optional TransPimLib support slot
 - `2E.1` revisit UPMEM-aware path selection using route-aware costs
 
-The next implementation wave should build on the coverage evidence and either
-start a real dense execution microkernel path or introduce the route-selection
-analysis layer that consumes coverage/readiness results.
+The next implementation wave should build on the shadow runtime evidence and
+either start a real dense execution microkernel path or introduce route
+selection analysis that consumes coverage/readiness/shadow-runtime results.
 
 ## Future Codex Instruction
 
