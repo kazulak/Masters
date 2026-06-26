@@ -15,11 +15,16 @@ from quantum_bench.circuits import load_circuit, manifest
 from quantum_bench.core.jsonio import append_jsonl, write_json, write_jsonl
 from quantum_bench.core.records import BenchmarkCaseResult, BenchmarkContext, ExecutionProfile, RouteDecision, RouteIdentity, RouteOutput, RouteResult, TaskGraph, to_jsonable
 from quantum_bench.environment import capture_environment
+from quantum_bench.routing import TaskRouteContext, route_task_graph
 from quantum_bench.tn import build_tensor_network, plan_task_graph_with_config, with_path_cost_summary
 from quantum_bench.providers import route_registry
 from quantum_bench.targets.upmem import (
     UPMEM_DENSE_ESTIMATE_KEY,
+    UPMEM_DENSE_TILE_PLAN_ARTIFACT_KEY,
+    SIMPLEPIM_PROBE_KEY,
     annotate_task_graph_with_upmem_estimates,
+    probe_simplepim,
+    upmem_dense_tile_plan_rows,
     upmem_task_estimate_rows,
 )
 from quantum_bench.validation import compute_reference, validate
@@ -62,6 +67,9 @@ def run_suite(suite_path: Path, root_dir: Path) -> Path:
             artifact_path = generated.get("target_estimate_artifacts", {}).get(estimate_key)
             if artifact_path:
                 decision_metadata["task_estimates_artifact"] = artifact_path
+            tile_plan_artifact = generated.get("target_estimate_artifacts", {}).get(UPMEM_DENSE_TILE_PLAN_ARTIFACT_KEY)
+            if tile_plan_artifact:
+                decision_metadata["tile_plan_artifact"] = tile_plan_artifact
             decision = RouteDecision(
                 route_name,
                 route.backend_family,
@@ -107,6 +115,7 @@ def _generate_case(case: dict[str, Any], suite: dict[str, Any], root_dir: Path, 
     graph, _ = annotate_task_graph_with_upmem_estimates(graph)
     graph = with_path_cost_summary(graph)
     target_estimate_artifacts = _write_target_estimate_artifacts(case_dir, graph)
+    task_route_artifacts = _write_task_route_artifacts(case_dir, graph, suite, target_estimate_artifacts)
     write_json(case_dir / "circuit.json", manifest(circuit))
     write_json(case_dir / "task_graph.json", graph)
     write_json(case_dir / "path_summary.json", graph.path_summary)
@@ -116,6 +125,7 @@ def _generate_case(case: dict[str, Any], suite: dict[str, Any], root_dir: Path, 
         "graph": graph,
         "generate_s": generate_s,
         "target_estimate_artifacts": target_estimate_artifacts,
+        "task_route_artifacts": task_route_artifacts,
     }
 
 
@@ -270,9 +280,40 @@ def _context(root_dir: Path, run_dir: Path, suite: dict[str, Any], case: dict[st
 
 def _write_target_estimate_artifacts(case_dir: Path, graph: TaskGraph) -> dict[str, str]:
     rel_path = Path("cases") / case_dir.name / "target_estimates" / f"{UPMEM_DENSE_ESTIMATE_KEY}.jsonl"
+    tile_plan_rel_path = Path("cases") / case_dir.name / "target_estimates" / f"{UPMEM_DENSE_TILE_PLAN_ARTIFACT_KEY}.jsonl"
     run_dir = case_dir.parents[1]
     write_jsonl(run_dir / rel_path, upmem_task_estimate_rows(graph))
-    return {UPMEM_DENSE_ESTIMATE_KEY: rel_path.as_posix()}
+    write_jsonl(run_dir / tile_plan_rel_path, upmem_dense_tile_plan_rows(graph))
+    return {
+        UPMEM_DENSE_ESTIMATE_KEY: rel_path.as_posix(),
+        UPMEM_DENSE_TILE_PLAN_ARTIFACT_KEY: tile_plan_rel_path.as_posix(),
+    }
+
+
+def _write_task_route_artifacts(
+    case_dir: Path,
+    graph: TaskGraph,
+    suite: dict[str, Any],
+    target_estimate_artifacts: dict[str, str],
+) -> dict[str, str]:
+    run_dir = case_dir.parents[1]
+    decisions_path = Path("cases") / case_dir.name / "task_route_decisions.jsonl"
+    summary_path = Path("cases") / case_dir.name / "task_route_summary.json"
+    context = TaskRouteContext(
+        suite_id=str(suite["suite_id"]),
+        case_id=case_dir.name,
+        run_dir=run_dir,
+        decisions_artifact=decisions_path.as_posix(),
+        target_artifacts=target_estimate_artifacts,
+        backend_probes={SIMPLEPIM_PROBE_KEY: probe_simplepim().to_json_dict()},
+    )
+    analysis = route_task_graph(graph, context)
+    write_jsonl(run_dir / decisions_path, list(analysis.decisions))
+    write_json(run_dir / summary_path, analysis.summary)
+    return {
+        "task_route_decisions": decisions_path.as_posix(),
+        "task_route_summary": summary_path.as_posix(),
+    }
 
 
 def _persist_route_artifacts(run_dir: Path, case: dict[str, Any], result: RouteResult, repeat_id: int) -> None:

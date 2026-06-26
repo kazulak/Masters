@@ -1,30 +1,22 @@
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, replace
 
 from quantum_bench.core.records import ContractionTask, JsonDict, TaskGraph
-
-
-UPMEM_DENSE_ESTIMATE_KEY = "upmem_dense_int8"
-UPMEM_DENSE_MODEL = "dense_int8_single_dpu_feasibility"
-REQUIRES_TILING_NOT_IMPLEMENTED = "requires_tiling_not_implemented"
-UNSUPPORTED_DENSE_GEMM_SHAPE = "unsupported_dense_gemm_shape"
-
-
-@dataclass(frozen=True)
-class UpmemHardwareProfile:
-    name: str
-    wram_bytes: int
-    dpu_count: int | None = None
-
-
-@dataclass(frozen=True)
-class UpmemDataFormat:
-    name: str
-    input_element_bytes: int
-    output_element_bytes: int
-    accumulator_element_bytes: int
+from quantum_bench.targets.upmem.tile_plan import (
+    DENSE_INT8_FORMAT,
+    REQUIRES_TILING_NOT_IMPLEMENTED,
+    UNSUPPORTED_DENSE_GEMM_SHAPE,
+    UPMEM_DENSE_ESTIMATE_KEY,
+    UPMEM_DENSE_MODEL,
+    UPMEM_DENSE_TILE_PLAN_ARTIFACT_KEY,
+    UPMEM_DENSE_TILE_PLAN_MODEL,
+    UPMEM_PROFILE,
+    UpmemDataFormat,
+    UpmemDenseTilePlan,
+    UpmemHardwareProfile,
+    plan_dense_task,
+)
 
 
 @dataclass(frozen=True)
@@ -48,12 +40,14 @@ class UpmemTaskEstimate:
     estimated_tile_count: int
     estimated_parallel_tiles: int
     reject_reason: str | None
+    tile_plan: UpmemDenseTilePlan
 
     @property
     def fits_wram_without_tiling(self) -> bool:
-        return self.wram_fit
+        return self.wram_fit and not self.requires_tiling
 
     def as_task_estimate(self) -> JsonDict:
+        tile_plan = self.tile_plan.as_summary()
         return {
             "target": "upmem",
             "estimate_key": UPMEM_DENSE_ESTIMATE_KEY,
@@ -72,6 +66,21 @@ class UpmemTaskEstimate:
             "dpu_to_host_bytes": self.dpu_to_host_bytes,
             "mram_to_wram_bytes": self.mram_to_wram_bytes,
             "reject_reason": self.reject_reason,
+            "tile_plan_model": UPMEM_DENSE_TILE_PLAN_MODEL,
+            "tile_plan_available": self.tile_plan.supported,
+            "element_dtype": tile_plan["element_dtype"],
+            "element_bytes": tile_plan["element_bytes"],
+            "tile_m": tile_plan["tile_m"],
+            "tile_k": tile_plan["tile_k"],
+            "tile_n": tile_plan["tile_n"],
+            "tile_count_m": tile_plan["tile_count_m"],
+            "tile_count_k": tile_plan["tile_count_k"],
+            "tile_count_n": tile_plan["tile_count_n"],
+            "total_tile_count": tile_plan["total_tile_count"],
+            "double_buffer_possible": tile_plan["double_buffer_possible"],
+            "requires_host_aggregation": tile_plan["requires_host_aggregation"],
+            "fits_wram": tile_plan["fits_wram"],
+            "tile_plan": tile_plan,
         }
 
     def as_artifact_row(self, task: ContractionTask) -> JsonDict:
@@ -101,7 +110,7 @@ class UpmemScheduleEstimate:
 
     @property
     def all_tasks_fit_without_tiling(self) -> bool:
-        return all(task.wram_fit for task in self.tasks)
+        return all(task.fits_wram_without_tiling for task in self.tasks)
 
     def first_reject_reason(self) -> str | None:
         for task in self.tasks:
@@ -114,6 +123,7 @@ class UpmemScheduleEstimate:
             f"UPMEM target layer: {self.hardware.name}, {self.hardware.wram_bytes} B WRAM",
             f"dense schedule estimate: {self.tasks_fit_without_tiling}/{len(self.tasks)} tasks fit without tiling",
             f"estimated H2D={self.total_host_to_dpu_bytes} B, D2H={self.total_dpu_to_host_bytes} B",
+            "WRAM model is conservative: output tile storage and accumulator workspace are counted separately",
         )
 
     def metadata(self) -> JsonDict:
@@ -122,6 +132,7 @@ class UpmemScheduleEstimate:
             "estimate_key": UPMEM_DENSE_ESTIMATE_KEY,
             "route_family": self.route_family,
             "model": UPMEM_DENSE_MODEL,
+            "tile_plan_model": UPMEM_DENSE_TILE_PLAN_MODEL,
             "tiling_implemented": False,
             "hardware": {
                 "name": self.hardware.name,
@@ -145,16 +156,11 @@ class UpmemScheduleEstimate:
             "total_mram_to_wram_bytes": self.total_mram_to_wram_bytes,
             "max_working_set_bytes": self.max_working_set_bytes,
             "first_reject_reason": self.first_reject_reason(),
+            "memory_model_note": (
+                "conservative: output tile storage and accumulator workspace are "
+                "counted as separate WRAM reservations"
+            ),
         }
-
-
-UPMEM_PROFILE = UpmemHardwareProfile(name="UPMEM DPU", wram_bytes=64 * 1024)
-DENSE_INT8_FORMAT = UpmemDataFormat(
-    name="int8_inputs_int32_accumulator",
-    input_element_bytes=1,
-    output_element_bytes=4,
-    accumulator_element_bytes=4,
-)
 
 
 def estimate_dense_task(
@@ -162,64 +168,34 @@ def estimate_dense_task(
     hardware: UpmemHardwareProfile = UPMEM_PROFILE,
     data_format: UpmemDataFormat = DENSE_INT8_FORMAT,
 ) -> UpmemTaskEstimate:
-    if not _is_supported_dense_task(task):
-        return UpmemTaskEstimate(
-            task_id=task.id,
-            gemm_m=task.gemm_m,
-            gemm_k=task.gemm_k,
-            gemm_n=task.gemm_n,
-            supported=False,
-            left_bytes=0,
-            right_bytes=0,
-            output_bytes=0,
-            accumulator_bytes=0,
-            working_set_bytes=0,
-            host_to_dpu_bytes=0,
-            dpu_to_host_bytes=0,
-            mram_to_wram_bytes=0,
-            wram_fit=False,
-            requires_tiling=False,
-            tiling_implemented=False,
-            estimated_tile_count=0,
-            estimated_parallel_tiles=0,
-            reject_reason=UNSUPPORTED_DENSE_GEMM_SHAPE,
-        )
-
-    left_elements = task.gemm_m * task.gemm_k
-    right_elements = task.gemm_k * task.gemm_n
-    output_elements = task.gemm_m * task.gemm_n
-    left_bytes = left_elements * data_format.input_element_bytes
-    right_bytes = right_elements * data_format.input_element_bytes
-    output_bytes = output_elements * data_format.output_element_bytes
-    accumulator_bytes = output_elements * data_format.accumulator_element_bytes
-    working_set_bytes = left_bytes + right_bytes + output_bytes + accumulator_bytes
-    wram_fit = working_set_bytes <= hardware.wram_bytes
-    estimated_tile_count = max(1, math.ceil(working_set_bytes / hardware.wram_bytes))
-    estimated_parallel_tiles = (
-        min(estimated_tile_count, hardware.dpu_count) if hardware.dpu_count is not None else estimated_tile_count
+    tile_plan = plan_dense_task(task, hardware, data_format)
+    estimated_tile_count = tile_plan.tile_counts.total_tile_count
+    host_to_dpu_bytes = estimated_tile_count * (tile_plan.input_a_tile_bytes + tile_plan.input_b_tile_bytes)
+    dpu_to_host_bytes = estimated_tile_count * tile_plan.output_tile_bytes
+    mram_to_wram_bytes = estimated_tile_count * (
+        tile_plan.input_a_tile_bytes + tile_plan.input_b_tile_bytes + tile_plan.output_tile_bytes
     )
-    requires_tiling = not wram_fit
-    reject_reason = REQUIRES_TILING_NOT_IMPLEMENTED if requires_tiling else None
     return UpmemTaskEstimate(
         task_id=task.id,
         gemm_m=task.gemm_m,
         gemm_k=task.gemm_k,
         gemm_n=task.gemm_n,
-        supported=True,
-        left_bytes=left_bytes,
-        right_bytes=right_bytes,
-        output_bytes=output_bytes,
-        accumulator_bytes=accumulator_bytes,
-        working_set_bytes=working_set_bytes,
-        host_to_dpu_bytes=left_bytes + right_bytes,
-        dpu_to_host_bytes=output_bytes,
-        mram_to_wram_bytes=left_bytes + right_bytes + output_bytes,
-        wram_fit=wram_fit,
-        requires_tiling=requires_tiling,
+        supported=tile_plan.supported,
+        left_bytes=tile_plan.input_a_tile_bytes,
+        right_bytes=tile_plan.input_b_tile_bytes,
+        output_bytes=tile_plan.output_tile_bytes,
+        accumulator_bytes=tile_plan.accumulator_tile_bytes,
+        working_set_bytes=tile_plan.working_set_bytes,
+        host_to_dpu_bytes=host_to_dpu_bytes,
+        dpu_to_host_bytes=dpu_to_host_bytes,
+        mram_to_wram_bytes=mram_to_wram_bytes,
+        wram_fit=tile_plan.fits_wram,
+        requires_tiling=tile_plan.requires_tiling,
         tiling_implemented=False,
         estimated_tile_count=estimated_tile_count,
-        estimated_parallel_tiles=estimated_parallel_tiles,
-        reject_reason=reject_reason,
+        estimated_parallel_tiles=tile_plan.estimated_parallel_tiles,
+        reject_reason=tile_plan.reject_reason,
+        tile_plan=tile_plan,
     )
 
 
@@ -279,13 +255,9 @@ def _schedule_from_task_estimates(
         total_dpu_to_host_bytes=sum(task.dpu_to_host_bytes for task in tasks),
         total_mram_to_wram_bytes=sum(task.mram_to_wram_bytes for task in tasks),
         max_working_set_bytes=max((task.working_set_bytes for task in tasks), default=0),
-        tasks_fit_without_tiling=sum(1 for task in tasks if task.wram_fit),
+        tasks_fit_without_tiling=sum(1 for task in tasks if task.fits_wram_without_tiling),
         tasks_requiring_tiling=sum(1 for task in tasks if task.requires_tiling),
         unsupported_tasks=sum(1 for task in tasks if not task.supported),
         total_estimated_tile_count=sum(task.estimated_tile_count for task in tasks),
         max_estimated_parallel_tiles=max((task.estimated_parallel_tiles for task in tasks), default=0),
     )
-
-
-def _is_supported_dense_task(task: ContractionTask) -> bool:
-    return task.structure == "dense" and task.gemm_m > 0 and task.gemm_k > 0 and task.gemm_n > 0

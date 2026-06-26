@@ -11,6 +11,7 @@ from quantum_bench.targets.upmem import (
     REQUIRES_TILING_NOT_IMPLEMENTED,
     UNSUPPORTED_DENSE_GEMM_SHAPE,
     UPMEM_DENSE_ESTIMATE_KEY,
+    UPMEM_DENSE_TILE_PLAN_MODEL,
     UPMEM_PROFILE,
     annotate_task_graph_with_upmem_estimates,
     estimate_dense_task,
@@ -87,10 +88,17 @@ def test_small_dense_task_estimate_fits_wram() -> None:
     assert estimate.working_set_bytes == 640
     assert estimate.working_set_bytes <= UPMEM_PROFILE.wram_bytes
     assert task_estimate["estimate_key"] == UPMEM_DENSE_ESTIMATE_KEY
+    assert task_estimate["tile_plan_model"] == UPMEM_DENSE_TILE_PLAN_MODEL
     assert task_estimate["gemm_m"] == 8
     assert task_estimate["gemm_k"] == 8
     assert task_estimate["gemm_n"] == 8
     assert task_estimate["tiling_implemented"] is False
+    assert task_estimate["tile_m"] == 8
+    assert task_estimate["tile_k"] == 8
+    assert task_estimate["tile_n"] == 8
+    assert task_estimate["total_tile_count"] == 1
+    assert task_estimate["double_buffer_possible"] is True
+    assert task_estimate["requires_host_aggregation"] is False
     _assert_nonnegative_task_bytes(estimate)
 
 
@@ -100,12 +108,13 @@ def test_large_dense_task_estimate_requires_tiling_or_rejects() -> None:
 
     assert estimate.fits_wram_without_tiling is False
     assert estimate.supported is True
-    assert estimate.wram_fit is False
+    assert estimate.wram_fit is True
     assert estimate.requires_tiling is True
     assert estimate.tiling_implemented is False
     assert estimate.estimated_tile_count > 1
     assert estimate.estimated_parallel_tiles >= 1
-    assert estimate.working_set_bytes > UPMEM_PROFILE.wram_bytes
+    assert estimate.working_set_bytes <= UPMEM_PROFILE.wram_bytes
+    assert estimate.tile_plan.full_task_working_set_bytes > UPMEM_PROFILE.wram_bytes
     assert estimate.reject_reason == REQUIRES_TILING_NOT_IMPLEMENTED
     _assert_nonnegative_task_bytes(estimate)
 
@@ -146,9 +155,11 @@ def test_dense_schedule_metadata_reports_transfer_and_wram_estimates() -> None:
     assert metadata["target"] == "upmem"
     assert metadata["estimate_key"] == UPMEM_DENSE_ESTIMATE_KEY
     assert metadata["route_family"] == "dense_gemm"
+    assert metadata["tile_plan_model"] == UPMEM_DENSE_TILE_PLAN_MODEL
     assert metadata["tiling_implemented"] is False
     assert metadata["task_count"] == 2
     assert metadata["first_reject_reason"] == schedule.first_reject_reason()
+    assert metadata["memory_model_note"].startswith("conservative")
     _assert_nonnegative_metadata_bytes(metadata)
 
 
@@ -165,6 +176,9 @@ def test_annotated_task_graph_has_upmem_estimates_on_each_task() -> None:
         assert "gemm_k" in estimate
         assert "gemm_n" in estimate
         assert estimate["tiling_implemented"] is False
+        assert estimate["tile_plan_model"] == UPMEM_DENSE_TILE_PLAN_MODEL
+        assert estimate["estimated_tile_count"] == estimate["total_tile_count"]
+        assert estimate["tile_plan"]["working_set_bytes"] == estimate["max_working_set_bytes"]
         assert "host_to_dpu_bytes" in estimate
         assert "dpu_to_host_bytes" in estimate
         assert "mram_to_wram_bytes" in estimate

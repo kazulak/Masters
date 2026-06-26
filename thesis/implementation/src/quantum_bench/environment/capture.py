@@ -11,12 +11,14 @@ from typing import Any
 import numpy as np
 
 import quantum_bench
+from quantum_bench.targets.upmem import probe_simplepim
 
 
 RAPL_PATH = Path("/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj")
 
 
 def capture_environment(root_dir: Path) -> dict[str, Any]:
+    simplepim_probe = probe_simplepim().to_json_dict()
     return {
         "quantum_bench_version": quantum_bench.__version__,
         "python": sys.version.split()[0],
@@ -34,6 +36,15 @@ def capture_environment(root_dir: Path) -> dict[str, Any]:
         "upmem": {
             "UPMEM_HOME": os.environ.get("UPMEM_HOME"),
             "dpu_compiler": shutil.which("dpu-upmem-dpurte-clang"),
+        },
+        "simplepim": {
+            "SIMPLEPIM_HOME": os.environ.get("SIMPLEPIM_HOME"),
+            "SIMPLEPIM_BIN": os.environ.get("SIMPLEPIM_BIN"),
+            "SIMPLEPIM_LIB": os.environ.get("SIMPLEPIM_LIB"),
+            "command_path": simplepim_probe["simplepim_command_path"],
+            "available": simplepim_probe["simplepim_available"],
+            "probe_status": simplepim_probe["simplepim_probe_status"],
+            "skip_reason": simplepim_probe["skip_reason"],
         },
         "rapl": {
             "path": str(RAPL_PATH),

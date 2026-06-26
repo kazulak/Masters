@@ -72,7 +72,7 @@ class UpmemDenseInt8PlaceholderRoute:
             schedule.max_working_set_bytes,
             (*schedule.notes(), "native dense execution not implemented"),
             tile_shape={
-                "model": "untiled_dense_gemm",
+                "model": "dense_wram_tile_plan",
                 "max_working_set_bytes": schedule.max_working_set_bytes,
                 "wram_bytes": schedule.hardware.wram_bytes,
             },

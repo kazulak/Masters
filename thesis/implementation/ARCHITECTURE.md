@@ -15,16 +15,18 @@ implementation/
   configs/suites/          benchmark suite YAML files
   external/QuEST/          local QuEST dependency for the CPU full-state baseline
   native/quest_cpu/        small C runner used by the QuEST provider
-  native/upmem/            future native UPMEM code
+  native/upmem/            future SimplePIM bridge and raw UPMEM code
   scripts/                 helper commands
   src/quantum_bench/
     bench/                 one benchmark CLI and runner
     circuits/              workload/circuit construction
     core/                  typed records and JSON helpers
     environment/           environment and RAPL discovery
+    formats/               shared host-side tensor format conversion utilities
     plots/                 plot generation from summary artifacts
     providers/             executable routes
-    targets/upmem/         UPMEM WRAM, traffic, tiling, and schedule groundwork
+    routing/               task-level route contract and analysis router
+    targets/upmem/         UPMEM WRAM tile-plan, traffic, schedule, and probe groundwork
     tn/                    exact tensor-network construction and planning
     validation/            numerical validation metrics
   tests/                   Python runtime tests
@@ -63,13 +65,17 @@ The future UPMEM implementation has three separate layers:
 tn/
   shared tensor network and contraction task graph
 targets/upmem/
-  host-side UPMEM model: WRAM fit, data format, traffic estimate, tiling and
-  DPU schedule groundwork
+  host-side UPMEM model: dense WRAM tile plans, data format, traffic estimate,
+  tiling, DPU schedule groundwork, and SimplePIM availability probe metadata
+formats/
+  shared host-side conversion records and deterministic fixed-point utilities
+routing/
+  task-level route contract, route-slot decisions, and CPU fallback policy
 providers/exact_tn/
   benchmark routes that decide whether to use the UPMEM target layer and, later,
   call native kernels
 native/upmem/
-  C/UPMEM SDK host and DPU kernels only
+  future SimplePIM bridge code and raw C/UPMEM SDK host/DPU kernels only
 ```
 
 This keeps tensor-network creation and path finding shared across CPU TN, future
@@ -86,6 +92,9 @@ runs/<timestamp>_<suite_id>/
   environment.json
   cases/<case_id>/circuit.json
   cases/<case_id>/task_graph.json
+  cases/<case_id>/target_estimates/upmem_dense_tile_plan.jsonl
+  cases/<case_id>/task_route_decisions.jsonl
+  cases/<case_id>/task_route_summary.json
   cases/<case_id>/route_decisions.jsonl
   raw/<case_id>.jsonl
   validation/*.json
@@ -126,17 +135,15 @@ tile tasks.
 
 ## Next Implementation Priorities
 
-1. Make `cpu_tn_einsum_exact` execute the planned `ContractionTask` sequence
-   instead of one whole-network `np.einsum`.
-2. Add WRAM/tile estimates to contraction tasks:
-   tile shape, tile bytes, host-DPU bytes, MRAM-WRAM bytes, and fit/reject reason.
-3. Extend the current `targets/upmem/` schedule estimate from untiled dense
-   tasks to real tiling choices.
-4. Extend route decisions from case-level to task-level so the runner records
-   selected/rejected providers per contraction task.
-5. Port the useful dense UPMEM kernel only after the task schedule and WRAM model
+1. Connect `formats/` fixed-point records to future route preparation artifacts
+   once task routes begin preparing tensors.
+2. Extend the current `targets/upmem/` tile-plan model from deterministic host
+   records to executable tiling choices.
+3. Connect `routing/` from analysis-only route decisions to a preparation and
+   execution-aware task router.
+4. Port the useful dense UPMEM kernel only after the task schedule and WRAM model
    exist.
-6. Add sparse and heuristic/permutation providers after the dense path is
+5. Add sparse and heuristic/permutation providers after the dense path is
    structurally stable.
 
 ## Design Rules
