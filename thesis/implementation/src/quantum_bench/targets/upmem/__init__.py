@@ -17,11 +17,19 @@ from quantum_bench.targets.upmem.schedule import (
 )
 from quantum_bench.targets.upmem.simplepim import (
     SIMPLEPIM_PROBE_KEY,
-    SimplePimDenseMicrobenchSpec,
     SimplePimProbeResult,
     SimplePimProbeStatus,
     probe_simplepim,
     simplepim_probe_metadata,
+)
+from quantum_bench.targets.upmem.simplepim_microbench import (
+    SIMPLEPIM_DENSE_MICROBENCH_ID,
+    SIMPLEPIM_DENSE_MICROBENCH_SCHEMA_VERSION,
+    SimplePimDenseMicrobenchInput,
+    SimplePimDenseMicrobenchResult,
+    SimplePimDenseMicrobenchStatus,
+    make_simplepim_dense_microbench_input,
+    prepare_simplepim_dense_microbench,
 )
 from quantum_bench.targets.upmem.tile_plan import (
     UpmemDenseTilePlan,
@@ -41,7 +49,11 @@ __all__ = [
     "UPMEM_DENSE_TILE_PLAN_MODEL",
     "UPMEM_PROFILE",
     "SIMPLEPIM_PROBE_KEY",
-    "SimplePimDenseMicrobenchSpec",
+    "SIMPLEPIM_DENSE_MICROBENCH_ID",
+    "SIMPLEPIM_DENSE_MICROBENCH_SCHEMA_VERSION",
+    "SimplePimDenseMicrobenchInput",
+    "SimplePimDenseMicrobenchResult",
+    "SimplePimDenseMicrobenchStatus",
     "SimplePimProbeResult",
     "SimplePimProbeStatus",
     "UpmemDataFormat",
@@ -57,6 +69,8 @@ __all__ = [
     "plan_dense_task",
     "plan_dense_task_graph",
     "probe_simplepim",
+    "make_simplepim_dense_microbench_input",
+    "prepare_simplepim_dense_microbench",
     "simplepim_probe_metadata",
     "upmem_dense_tile_plan_rows",
     "upmem_task_estimate_rows",

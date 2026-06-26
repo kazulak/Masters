@@ -40,20 +40,6 @@ class SimplePimProbeResult:
         }
 
 
-@dataclass(frozen=True)
-class SimplePimDenseMicrobenchSpec:
-    case_id: str
-    task_id: str
-    route_id: str
-    fixed_point_spec: JsonDict
-    tile_plan: JsonDict
-    input_shapes: tuple[tuple[int, ...], tuple[int, ...]]
-    output_shape: tuple[int, ...]
-    host_to_dpu_bytes: int
-    dpu_to_host_bytes: int
-    mram_to_wram_bytes: int
-
-
 def probe_simplepim(
     env: Mapping[str, str] | None = None,
     path_lookup: Callable[[str], str | None] | None = None,

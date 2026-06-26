@@ -19,6 +19,7 @@ planner, or native-code changes.
 cd thesis/implementation
 PYTHONPATH=src ../.venv/bin/python -m pytest -q
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench run --suite configs/suites/smoke.yml
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simplepim-microbench --dry-run --m 8 --k 8 --n 8
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench plot runs/latest
 ```
 
@@ -39,8 +40,8 @@ scripts/run_energy_suite.sh configs/suites/local_energy.yml
 - `src/quantum_bench/formats/` contains shared host-side data-format conversion
   records and deterministic fixed-point utilities.
 - `src/quantum_bench/targets/upmem/` contains host-side UPMEM WRAM, traffic,
-  tile-plan, schedule, and SimplePIM probe groundwork shared by future UPMEM
-  providers.
+  tile-plan, schedule, SimplePIM probe, and explicit SimplePIM dry-run
+  microbenchmark groundwork shared by future UPMEM providers.
 - `src/quantum_bench/routing/` contains the task-level route contract and
   analysis-only dynamic router skeleton.
 - `native/upmem/simplepim/` is reserved for future SimplePIM bridge code.

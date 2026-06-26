@@ -28,6 +28,15 @@ def main() -> int:
     compare_parser = sub.add_parser("compare-planners")
     compare_parser.add_argument("--suite", required=True, help="Suite path or preset name under configs/suites")
 
+    simplepim_parser = sub.add_parser("simplepim-microbench")
+    simplepim_parser.add_argument("--dry-run", action="store_true", required=True)
+    simplepim_parser.add_argument("--m", type=int, required=True)
+    simplepim_parser.add_argument("--k", type=int, required=True)
+    simplepim_parser.add_argument("--n", type=int, required=True)
+    simplepim_parser.add_argument("--route-dtype", default="int8", choices=("int8", "int16"))
+    simplepim_parser.add_argument("--source-dtype", default="float32", choices=("float32", "float64"))
+    simplepim_parser.add_argument("--seed", type=int, default=0)
+
     sub.add_parser("probe")
 
     args = parser.parse_args()
@@ -59,6 +68,30 @@ def main() -> int:
                     "planner_comparison": str(run_dir / "planner_comparison.json"),
                     "planner_comparison_csv": str(run_dir / "planner_comparison.csv"),
                     "planner_comparison_summary": str(run_dir / "planner_comparison_summary.md"),
+                },
+                indent=2,
+            )
+        )
+        return 0
+    if args.command == "simplepim-microbench":
+        from quantum_bench.bench.simplepim_microbench import run_simplepim_microbench
+
+        run_dir, artifact_path, status = run_simplepim_microbench(
+            root_dir,
+            gemm_m=args.m,
+            gemm_k=args.k,
+            gemm_n=args.n,
+            route_dtype=args.route_dtype,
+            source_dtype=args.source_dtype,
+            seed=args.seed,
+            dry_run=args.dry_run,
+        )
+        print(
+            json.dumps(
+                {
+                    "run_dir": str(run_dir),
+                    "artifact": str(artifact_path),
+                    "status": status,
                 },
                 indent=2,
             )

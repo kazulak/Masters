@@ -26,7 +26,7 @@ implementation/
     plots/                 plot generation from summary artifacts
     providers/             executable routes
     routing/               task-level route contract and analysis router
-    targets/upmem/         UPMEM WRAM tile-plan, traffic, schedule, and probe groundwork
+    targets/upmem/         UPMEM WRAM tile-plan, traffic, schedule, probe, and microbench groundwork
     tn/                    exact tensor-network construction and planning
     validation/            numerical validation metrics
   tests/                   Python runtime tests
@@ -66,7 +66,8 @@ tn/
   shared tensor network and contraction task graph
 targets/upmem/
   host-side UPMEM model: dense WRAM tile plans, data format, traffic estimate,
-  tiling, DPU schedule groundwork, and SimplePIM availability probe metadata
+  tiling, DPU schedule groundwork, SimplePIM availability probe metadata, and
+  explicit dry-run SimplePIM dense GEMM microbenchmark records
 formats/
   shared host-side conversion records and deterministic fixed-point utilities
 routing/
@@ -104,6 +105,18 @@ runs/<timestamp>_<suite_id>/
   summary.md
   plots/*.png
 ```
+
+The standalone SimplePIM dry-run microbenchmark is not a normal benchmark
+suite. It writes only:
+
+```text
+runs/<timestamp>_simplepim_microbench/
+  environment.json
+  simplepim_microbench.json
+```
+
+`ready` in that artifact means ready for a future bridge attempt, not validated
+SimplePIM execution.
 
 Plots follow one rule: bars compare different cases/routes, and lines are used
 only for scaling within a single circuit family across qubit counts.

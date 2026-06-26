@@ -5,6 +5,7 @@ import platform
 import shutil
 import subprocess
 import sys
+from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any
 
@@ -97,6 +98,10 @@ def first_line(command: list[str], cwd: Path | None = None) -> str | None:
 
 
 def _module_version(name: str) -> str | None:
+    try:
+        return importlib_metadata.version(name)
+    except importlib_metadata.PackageNotFoundError:
+        pass
     try:
         module = __import__(name)
     except ImportError:

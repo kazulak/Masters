@@ -50,7 +50,7 @@ only bounded local tasks that fit an explicit route contract.
 | Data format conversion | `src/quantum_bench/formats/` | Deterministic host-side fixed-point records and utilities | Connect conversion records to route preparation artifacts after routing gains preparation |
 | Dynamic heuristic router | `src/quantum_bench/routing/` | Analysis-only task-level router skeleton | Add preparation/execution-aware routing after data conversion and tiling mature |
 | Dense GEMM route | `src/quantum_bench/providers/exact_tn/upmem_dense_placeholder.py`, `src/quantum_bench/targets/upmem/schedule.py`, future `native/upmem/simplepim/` | Estimate-only placeholder | SimplePIM-first dense microbenchmark, then one real task |
-| SimplePIM bridge/probe | `src/quantum_bench/targets/upmem/simplepim.py`, future `native/upmem/simplepim/` | Availability probe and metadata only | Standalone dense GEMM microbenchmark before routed TaskGraph execution |
+| SimplePIM bridge/probe | `src/quantum_bench/targets/upmem/simplepim.py`, `src/quantum_bench/targets/upmem/simplepim_microbench.py`, future `native/upmem/simplepim/` | Availability probe and dry-run dense GEMM microbenchmark metadata | One real task lowered into dense route preparation before routed TaskGraph execution |
 | Sparse route | Architecture slot only | Not implemented | Add SparseP feasibility plan after dense route skeleton |
 | Heuristic/bypass route | Architecture slot only | Not implemented | Host-side row-swap/permutation prototype first |
 | Optional TransPimLib/math support | Architecture slot only | Not implemented | Optional support slot, not first priority |
@@ -185,7 +185,7 @@ before real SimplePIM/UPMEM kernels exist.
 | CPU exact TN route | 5 | 6 |
 | QuEST CPU full-state baseline | 5 | 6 |
 | UPMEM dense GEMM route | 2 | 3, then 4 |
-| SimplePIM bridge/probe | 1 | 3 |
+| SimplePIM bridge/probe | 3 | 4 |
 | UPMEM WRAM slicer/tile planner | 3 | 4 |
 | Data format conversion layer | 2 | 3 |
 | Dynamic task router | 1 | 2 |
@@ -255,37 +255,77 @@ and SimplePIM probe metadata belong under `src/quantum_bench/targets/upmem/`;
 shared tensor conversion records and utilities belong under
 `src/quantum_bench/formats/`.
 
-## Future SimplePIM Dense Microbenchmark Artifact Schema
+## SimplePIM Dense Microbenchmark Artifact Schema
 
-The next SimplePIM execution wave should start with a standalone dense task or
-tile microbenchmark before full routed TaskGraph execution. A future artifact
-should be written under:
+The explicit dry-run SimplePIM dense GEMM microbenchmark is invoked outside
+normal benchmark suites:
 
-```text
-cases/<case_id>/simplepim_microbench/<task_id>.json
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simplepim-microbench --dry-run --m 8 --k 8 --n 8
 ```
 
-Expected fields:
+It writes only:
 
-- `case_id`, `task_id`, `route_id`
+```text
+runs/<timestamp>_simplepim_microbench/
+  environment.json
+  simplepim_microbench.json
+```
+
+Artifact fields:
+
+- `schema_version`
+- `microbench_id`
+- `input`
+- `status`
+- `skip_reason`
+- `error`
 - `simplepim_probe`
 - `fixed_point_spec`
 - `tile_plan`
+- `upmem_task_estimate`
 - `input_shapes`
+- `output_shape`
+- `conversion_records`
 - `conversion_time_s`
-- `kernel_time_s`
+- `reference_time_s`
 - `dequantization_time_s`
+- `kernel_time_s`
 - `host_aggregation_time_s`
 - `total_time_s`
 - `host_to_dpu_bytes`
 - `dpu_to_host_bytes`
 - `mram_to_wram_bytes`
 - `validation_metrics`
-- `status`
-- `skip_reason` or `error`
+- `external_command_executed`
+- `execution_implemented`
 
-This schema is documentation only in the current wave. No SimplePIM
-microbenchmark artifact is generated yet.
+`execution_implemented` is always `false` in this wave. `ready` means ready for
+a future SimplePIM bridge attempt, not validated SimplePIM execution.
+
+Status priority is deterministic:
+
+1. invalid input or host preparation exception -> `failed`
+2. `execute=True` or future execution requested -> `not_implemented`
+3. executable tiling/aggregation required -> `not_implemented`
+4. no SimplePIM executable/configuration -> `skipped`
+5. `SIMPLEPIM_HOME` or `SIMPLEPIM_LIB` only -> `configured_but_unverified`
+6. `SIMPLEPIM_BIN` or discovered command plus dry-run preparation -> `ready`
+
+Host-side fixed-point conversion is performed only inside this explicit
+microbenchmark dry-run command. Normal benchmark runs and task-route artifacts
+do not invoke conversion.
+
+The next execution wave should lower one real `ContractionTask` into dense route
+preparation before full routed TaskGraph execution. That future route
+preparation should connect:
+
+- `simplepim_probe`
+- `fixed_point_spec`
+- `tile_plan`
+- `input_shapes`
+- conversion records
+- validation metrics
 
 ## Planner Comparison Position
 
@@ -301,19 +341,19 @@ which motivates route-aware costs later.
 
 ## Near-Term Roadmap
 
-- `2C.4` SimplePIM dense GEMM boundary/probe and microbenchmark scaffold
-- `2C.5` dense route executes one real `ContractionTask`
-- `2C.6` dynamic router analysis mode over full `TaskGraph`
+- `2C.5` SimplePIM dense GEMM dry-run microbenchmark scaffold
+- `2C.6` lower one real `ContractionTask` into dense route preparation
+- `2C.7` dynamic router analysis/preparation mode over full `TaskGraph`
 - `2D.1` heuristic/bypass route prototype
 - `2D.2` sparse route feasibility and SparseP integration plan
 - `2D.3` host aggregation/PID-Comm-inspired reporting
 - `2D.4` optional TransPimLib support slot
 - `2E.1` revisit UPMEM-aware path selection using route-aware costs
 
-The next implementation wave after the `2C.3` WRAM tile-plan layer should be:
+The next implementation wave after the dry-run microbenchmark should be:
 
 ```text
-2C.4 SimplePIM dense GEMM boundary/probe and microbenchmark scaffold
+2C.6 lower one real ContractionTask into dense route preparation
 ```
 
 ## Future Codex Instruction
