@@ -42,7 +42,11 @@ def main() -> int:
     dense_bridge_parser.add_argument("--n-qubits", type=int)
     dense_bridge_parser.add_argument("--task-index", type=int)
     dense_bridge_parser.add_argument("--materialization", default="initial-only", choices=("initial-only", "cpu-replay"))
-    dense_bridge_parser.add_argument("--backend", default="mock_numpy_dequantized", choices=("mock_numpy_dequantized", "simplepim_external"))
+    dense_bridge_parser.add_argument(
+        "--backend",
+        default="mock_numpy_dequantized",
+        choices=("mock_numpy_dequantized", "simplepim_external", "simplepim_external_stub"),
+    )
     dense_bridge_parser.add_argument("--execute-external", action="store_true")
 
     sub.add_parser("probe")

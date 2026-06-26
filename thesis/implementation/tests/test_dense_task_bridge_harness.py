@@ -9,9 +9,15 @@ from quantum_bench.bench import __main__ as bench_main
 from quantum_bench.bench.dense_task_bridge import run_dense_task_bridge
 import quantum_bench.bench.dense_task_bridge as dense_task_bridge_module
 
+ROOT = Path(__file__).resolve().parents[1]
+
 
 def _load_summary(path: Path) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _stub_path() -> Path:
+    return ROOT / "native" / "upmem" / "simplepim" / "simplepim_dense_stub.py"
 
 
 def test_dense_task_bridge_harness_runs_real_bell_task_with_mock_backend(tmp_path: Path) -> None:
@@ -119,6 +125,51 @@ def test_dense_task_bridge_simplepim_external_is_nonexecuting_and_nonfatal(tmp_p
     output_manifest = _load_summary(result.run_dir / "bridge" / "output_manifest.json")
     assert output_manifest["status"] == "skipped"
     assert output_manifest["output_blob"] is None
+
+
+def test_dense_task_bridge_simplepim_external_stub_executes_only_contract_process(tmp_path: Path) -> None:
+    result = run_dense_task_bridge(
+        tmp_path,
+        case="bell_2q",
+        task_index=0,
+        backend="simplepim_external_stub",
+        execute_external=True,
+        env={"SIMPLEPIM_STUB_BIN": str(_stub_path())},
+    )
+    summary = _load_summary(result.summary_path)
+    encoded = json.dumps(summary)
+
+    assert result.status == "completed"
+    assert result.reason == "external_stub_contract_executed"
+    assert summary["status"] == "completed"
+    assert summary["reason"] == "external_stub_contract_executed"
+    assert summary["bridge_backend_id"] == "simplepim_external_stub"
+    assert summary["bridge_execution_status"] == "stub_executed"
+    assert summary["bridge_execution_reason"] == "external_stub_contract_executed"
+    assert summary["external_command_executed"] is True
+    assert summary["execution_implemented"] is False
+    assert summary["bridge_validation_metrics"] == {
+        "status": "not_applicable",
+        "reason": "stub_writes_no_output_blob",
+    }
+    assert summary["artifacts"] == {
+        "input_manifest": "bridge/input_manifest.json",
+        "output_manifest": "bridge/output_manifest.json",
+    }
+    assert "output_blob" not in summary["artifacts"]
+    assert (result.run_dir / "bridge" / "input_manifest.json").exists()
+    assert (result.run_dir / "bridge" / "output_manifest.json").exists()
+    assert not (result.run_dir / "bridge" / "outputs" / "simplepim_output.npy").exists()
+    output_manifest = _load_summary(result.run_dir / "bridge" / "output_manifest.json")
+    assert output_manifest["status"] == "stub_executed"
+    assert output_manifest["output_blob"] is None
+    assert output_manifest["external_command_executed"] is True
+    assert output_manifest["execution_implemented"] is False
+    assert output_manifest["metadata"]["native_kernel_executed"] is False
+    assert "prepared_operands" not in encoded
+    assert "left_matrix" not in encoded
+    assert "right_matrix" not in encoded
+    assert str(tmp_path) not in encoded
 
 
 def test_dense_task_bridge_rejects_unmaterialized_intermediate_task(tmp_path: Path) -> None:
@@ -239,7 +290,8 @@ def test_dense_task_bridge_cli_dispatch_prints_run_and_summary_paths(monkeypatch
             "--materialization",
             "cpu-replay",
             "--backend",
-            "mock_numpy_dequantized",
+            "simplepim_external_stub",
+            "--execute-external",
         ],
     )
 
@@ -249,8 +301,8 @@ def test_dense_task_bridge_cli_dispatch_prints_run_and_summary_paths(monkeypatch
     assert called["case"] == "bell_2q"
     assert called["task_index"] is None
     assert called["materialization"] == "cpu-replay"
-    assert called["backend"] == "mock_numpy_dequantized"
-    assert called["execute_external"] is False
+    assert called["backend"] == "simplepim_external_stub"
+    assert called["execute_external"] is True
     assert payload["status"] == "completed"
     assert payload["reason"] is None
     assert payload["run_dir"].endswith("fake_dense_task_bridge")

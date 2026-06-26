@@ -34,12 +34,41 @@ Wave 2C.8 adds the backend adapter interface:
 
 - `mock_numpy_dequantized` executes only the local NumPy mock backend.
 - `simplepim_external` is the future external-process backend ID.
+- `simplepim_external_stub` is a non-executing external-process contract stub.
 
 For `simplepim_external`, Python records planned command metadata only:
 `input_manifest.json`, `output_manifest.json`, `outputs/simplepim_output.npy`,
 and SimplePIM environment key names. Even with `execute_external=true`, the
 current adapter returns `simplepim_external_execution_not_implemented` and does
 not call a subprocess.
+
+`simplepim_dense_stub.py` is the Wave 2C.11 external contract stub. It is a
+Python script that consumes `input_manifest.json`, validates manifest-relative
+`.npy` blobs, and writes a `dense_bridge_output` `output_manifest.json` with:
+
+- `backend: simplepim_external_stub`
+- `status: stub_executed`
+- `output_blob: null`
+- `validation_metrics.status: not_applicable`
+- `external_command_executed: true`
+- `execution_implemented: false`
+- `metadata.native_kernel_executed: false`
+
+The stub does not execute SimplePIM, native UPMEM, or any dense kernel. It
+writes no output blob by default.
+
+The runtime may call this stub only through the `simplepim_external_stub`
+backend, only with `--execute-external`, and only when `SIMPLEPIM_STUB_BIN` is
+configured. Relative `SIMPLEPIM_STUB_BIN` values are resolved from the current
+working directory; the validation command is intended to be run from
+`thesis/implementation`:
+
+```bash
+SIMPLEPIM_STUB_BIN=native/upmem/simplepim/simplepim_dense_stub.py PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 0 --backend simplepim_external_stub --execute-external
+```
+
+The adapter invokes the script with `sys.executable`, so the file does not need
+executable permissions or a shebang.
 
 Raw UPMEM SDK experiments should remain separate from this bridge. SimplePIM is
 the preferred first dense execution path if it is practical because it should

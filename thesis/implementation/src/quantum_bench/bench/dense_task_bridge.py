@@ -362,7 +362,9 @@ def _preparation_status(preparation: object) -> tuple[DenseTaskBridgeStatus, str
 def _bridge_status(bridge_status: str, backend: str, bridge_reason: str | None) -> tuple[DenseTaskBridgeStatus, str | None]:
     if bridge_status in _SUCCESSFUL_BRIDGE_STATUSES:
         return "completed", None
-    if backend == "simplepim_external" and bridge_status in {"skipped", "not_implemented"}:
+    if bridge_status == "stub_executed":
+        return "completed", bridge_reason or "external_stub_contract_executed"
+    if backend in {"simplepim_external", "simplepim_external_stub"} and bridge_status in {"skipped", "not_implemented"}:
         return "skipped", bridge_reason or bridge_status
     if bridge_status == "unsupported":
         return "unsupported", bridge_reason or bridge_status
@@ -424,8 +426,12 @@ def _base_summary(
             task_index=task_index,
         ),
         "artifacts": _artifact_paths(run_dir, bridge_result),
-        "external_command_executed": False,
-        "execution_implemented": False,
+        "external_command_executed": (
+            bool(bridge_result.external_command_executed) if bridge_result is not None else False
+        ),
+        "execution_implemented": (
+            bool(bridge_result.execution_implemented) if bridge_result is not None else False
+        ),
         "metadata": {
             "developer_only": True,
             "one_task_only": True,
@@ -589,8 +595,8 @@ def _result_from_summary(run_dir: Path, summary_path: Path, summary: JsonDict) -
         task_index=summary["task_index"],
         task_id=summary["task_id"],
         backend=summary["bridge_backend_id"],
-        external_command_executed=False,
-        execution_implemented=False,
+        external_command_executed=bool(summary["external_command_executed"]),
+        execution_implemented=bool(summary["execution_implemented"]),
         summary=summary,
     )
 

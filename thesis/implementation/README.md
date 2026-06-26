@@ -22,6 +22,7 @@ PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench run --suite configs/su
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simplepim-microbench --dry-run --m 8 --k 8 --n 8
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 0 --backend mock_numpy_dequantized
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 1 --materialization cpu-replay --backend mock_numpy_dequantized
+SIMPLEPIM_STUB_BIN=native/upmem/simplepim/simplepim_dense_stub.py PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 0 --backend simplepim_external_stub --execute-external
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench plot runs/latest
 ```
 
@@ -54,7 +55,8 @@ scripts/run_energy_suite.sh configs/suites/local_energy.yml
   harness that connects a real `ContractionTask` to dense preparation and the
   mock bridge. It can opt into CPU replay for explicit task selection, but it
   does not change normal benchmark routing.
-- `native/upmem/simplepim/` is reserved for future SimplePIM bridge code.
+- `native/upmem/simplepim/` is reserved for future SimplePIM bridge code and
+  currently contains only a non-executing external contract stub.
 - `native/upmem/raw_dense/` is reserved for future raw UPMEM SDK dense kernels.
 - `../legacy/` contains old prototypes and generated sudo-owned run folders kept
   out of the active implementation.

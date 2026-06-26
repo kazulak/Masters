@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
-import inspect
+import subprocess
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -12,6 +14,7 @@ from quantum_bench.circuits import builtin_circuit
 from quantum_bench.core.records import ContractionTask, TensorSpec, TensorValue
 from quantum_bench.routing import DenseTaskPreparationInput, prepare_dense_task
 from quantum_bench.targets.upmem import (
+    DENSE_BRIDGE_ID,
     DENSE_BRIDGE_SCHEMA_VERSION,
     SimplePimProbeResult,
     annotate_task_graph_with_upmem_estimates,
@@ -24,6 +27,8 @@ from quantum_bench.targets.upmem import (
 )
 import quantum_bench.targets.upmem.dense_bridge as dense_bridge_module
 from quantum_bench.tn import build_tensor_network, plan_task_graph
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _available_probe() -> SimplePimProbeResult:
@@ -108,6 +113,10 @@ def _task_tensors(task: ContractionTask) -> tuple[TensorValue, TensorValue]:
 def _synthetic_preparation(task: ContractionTask, probe: SimplePimProbeResult):
     left, right = _task_tensors(task)
     return prepare_dense_task(DenseTaskPreparationInput(task=task, left_tensor=left, right_tensor=right, simplepim_probe=probe))
+
+
+def _stub_path() -> Path:
+    return ROOT / "native" / "upmem" / "simplepim" / "simplepim_dense_stub.py"
 
 
 def test_input_manifest_is_json_serializable_without_raw_arrays(tmp_path: Path) -> None:
@@ -211,11 +220,13 @@ def test_tiled_preparation_is_rejected_before_bridge_input(tmp_path: Path) -> No
 def test_backend_registry_identities_are_json_safe() -> None:
     registry = dense_bridge_backend_registry()
 
-    assert set(registry) == {"mock_numpy_dequantized", "simplepim_external"}
+    assert set(registry) == {"mock_numpy_dequantized", "simplepim_external", "simplepim_external_stub"}
     assert registry["mock_numpy_dequantized"].implemented is True
     assert registry["mock_numpy_dequantized"].external_command_capable is False
     assert registry["simplepim_external"].implemented is False
     assert registry["simplepim_external"].external_command_capable is True
+    assert registry["simplepim_external_stub"].implemented is False
+    assert registry["simplepim_external_stub"].external_command_capable is True
     json.dumps(to_jsonable(registry))
 
 
@@ -296,6 +307,285 @@ def test_simplepim_execute_external_true_is_not_implemented_without_subprocess(t
     assert result.execution_implemented is False
 
 
+def test_mock_and_simplepim_external_backends_do_not_call_subprocess(tmp_path: Path, monkeypatch) -> None:
+    def forbidden_subprocess(*args: object, **kwargs: object) -> object:
+        raise AssertionError("subprocess must not be called by mock or simplepim_external backends")
+
+    monkeypatch.setattr(dense_bridge_module.subprocess, "run", forbidden_subprocess)
+    mock_dir = tmp_path / "mock"
+    simplepim_dir = tmp_path / "simplepim"
+    preparation = _real_preparation(_available_probe())
+    write_dense_bridge_input_manifest(preparation, mock_dir)
+    write_dense_bridge_input_manifest(preparation, simplepim_dir)
+
+    mock_result = execute_dense_bridge(mock_dir / "input_manifest.json", backend="mock_numpy_dequantized")
+    simplepim_result = execute_dense_bridge(
+        simplepim_dir / "input_manifest.json",
+        backend="simplepim_external",
+        execute_external=True,
+        env={"SIMPLEPIM_BIN": "/opt/simplepim/bin/simplepim"},
+    )
+
+    assert mock_result.execution_status == "mock_executed"
+    assert simplepim_result.execution_status == "not_implemented"
+    assert simplepim_result.reason == "simplepim_external_execution_not_implemented"
+
+
+def test_direct_simplepim_external_stub_writes_valid_nonexecuting_output_manifest(tmp_path: Path) -> None:
+    preparation = _real_preparation(_available_probe())
+    write_dense_bridge_input_manifest(preparation, tmp_path)
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(_stub_path()),
+            "--input-manifest",
+            str(tmp_path / "input_manifest.json"),
+            "--output-manifest",
+            str(tmp_path / "output_manifest.json"),
+            "--backend-id",
+            "simplepim_external_stub",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    output_manifest = read_dense_bridge_output_manifest(tmp_path / "output_manifest.json")
+
+    assert completed.returncode == 0
+    assert output_manifest.manifest_kind == "dense_bridge_output"
+    assert output_manifest.backend == "simplepim_external_stub"
+    assert output_manifest.status == "stub_executed"
+    assert output_manifest.output_blob is None
+    assert output_manifest.external_command_executed is True
+    assert output_manifest.execution_implemented is False
+    assert output_manifest.validation_metrics == {
+        "status": "not_applicable",
+        "reason": "stub_writes_no_output_blob",
+    }
+    assert output_manifest.metadata["reason"] == "external_stub_contract_executed"
+    assert output_manifest.metadata["native_kernel_executed"] is False
+
+
+def test_direct_simplepim_external_stub_handles_malformed_input_manifest(tmp_path: Path) -> None:
+    input_path = tmp_path / "input_manifest.json"
+    output_path = tmp_path / "output_manifest.json"
+    input_path.write_text(json.dumps({"schema_version": "wrong"}), encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(_stub_path()),
+            "--input-manifest",
+            str(input_path),
+            "--output-manifest",
+            str(output_path),
+            "--backend-id",
+            "simplepim_external_stub",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    output_manifest = read_dense_bridge_output_manifest(output_path)
+
+    assert completed.returncode == 1
+    assert output_manifest.status == "failed"
+    assert output_manifest.external_command_executed is True
+    assert output_manifest.execution_implemented is False
+    assert output_manifest.output_blob is None
+    assert output_manifest.metadata["error_type"] == "simplepim_external_stub_failed"
+    assert output_manifest.metadata["native_kernel_executed"] is False
+
+
+def test_simplepim_external_stub_disabled_does_not_call_subprocess(tmp_path: Path, monkeypatch) -> None:
+    def forbidden_subprocess(*args: object, **kwargs: object) -> object:
+        raise AssertionError("disabled stub backend must not call subprocess")
+
+    monkeypatch.setattr(dense_bridge_module.subprocess, "run", forbidden_subprocess)
+    preparation = _real_preparation(_available_probe())
+    write_dense_bridge_input_manifest(preparation, tmp_path)
+    result = execute_dense_bridge(
+        tmp_path / "input_manifest.json",
+        backend="simplepim_external_stub",
+        execute_external=False,
+        env={"SIMPLEPIM_STUB_BIN": str(_stub_path())},
+    )
+    output_manifest = read_dense_bridge_output_manifest(tmp_path / "output_manifest.json")
+
+    assert result.execution_status == "not_implemented"
+    assert result.reason == "simplepim_external_stub_execution_disabled"
+    assert result.external_command_executed is False
+    assert output_manifest.status == "not_implemented"
+    assert output_manifest.external_command_executed is False
+
+
+def test_simplepim_external_stub_missing_config_does_not_call_subprocess(tmp_path: Path, monkeypatch) -> None:
+    def forbidden_subprocess(*args: object, **kwargs: object) -> object:
+        raise AssertionError("unconfigured stub backend must not call subprocess")
+
+    monkeypatch.setattr(dense_bridge_module.subprocess, "run", forbidden_subprocess)
+    preparation = _real_preparation(_available_probe())
+    write_dense_bridge_input_manifest(preparation, tmp_path)
+    result = execute_dense_bridge(
+        tmp_path / "input_manifest.json",
+        backend="simplepim_external_stub",
+        execute_external=True,
+        env={},
+    )
+    output_manifest = read_dense_bridge_output_manifest(tmp_path / "output_manifest.json")
+
+    assert result.execution_status == "skipped"
+    assert result.reason == "simplepim_external_stub_unavailable"
+    assert result.external_command_executed is False
+    assert output_manifest.status == "skipped"
+    assert output_manifest.external_command_executed is False
+
+
+def test_simplepim_external_stub_adapter_invokes_configured_relative_path(tmp_path: Path, monkeypatch) -> None:
+    preparation = _real_preparation(_available_probe())
+    write_dense_bridge_input_manifest(preparation, tmp_path)
+    monkeypatch.chdir(ROOT)
+    result = execute_dense_bridge(
+        tmp_path / "input_manifest.json",
+        backend="simplepim_external_stub",
+        execute_external=True,
+        env={"SIMPLEPIM_STUB_BIN": "native/upmem/simplepim/simplepim_dense_stub.py"},
+    )
+    output_manifest = read_dense_bridge_output_manifest(tmp_path / "output_manifest.json")
+    encoded_result = json.dumps(result.to_json_dict())
+
+    assert result.execution_status == "stub_executed"
+    assert result.reason == "external_stub_contract_executed"
+    assert result.external_command_executed is True
+    assert result.execution_implemented is False
+    assert result.output_blob_path is None
+    assert result.metadata["native_kernel_executed"] is False
+    assert output_manifest.status == "stub_executed"
+    assert output_manifest.output_blob is None
+    assert output_manifest.validation_metrics["status"] == "not_applicable"
+    assert not (tmp_path / "outputs" / "simplepim_output.npy").exists()
+    assert str(tmp_path) not in encoded_result
+
+
+def test_simplepim_external_stub_nonzero_exit_is_failed(tmp_path: Path, monkeypatch) -> None:
+    def fake_run(*args: object, **kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(returncode=7, stdout="stub stdout", stderr="stub stderr")
+
+    monkeypatch.setattr(dense_bridge_module.subprocess, "run", fake_run)
+    preparation = _real_preparation(_available_probe())
+    write_dense_bridge_input_manifest(preparation, tmp_path)
+    result = execute_dense_bridge(
+        tmp_path / "input_manifest.json",
+        backend="simplepim_external_stub",
+        execute_external=True,
+        env={"SIMPLEPIM_STUB_BIN": str(_stub_path())},
+    )
+    output_manifest = read_dense_bridge_output_manifest(tmp_path / "output_manifest.json")
+
+    assert result.execution_status == "failed"
+    assert result.reason == "simplepim_external_stub_failed"
+    assert result.error_type == "simplepim_external_stub_failed"
+    assert result.external_command_executed is True
+    assert output_manifest.status == "failed"
+    assert output_manifest.metadata["returncode"] == 7
+    assert output_manifest.metadata["stdout_snippet"] == "stub stdout"
+    assert output_manifest.metadata["stderr_snippet"] == "stub stderr"
+    assert output_manifest.metadata["native_kernel_executed"] is False
+
+
+def test_simplepim_external_stub_missing_output_manifest_is_failed(tmp_path: Path, monkeypatch) -> None:
+    def fake_run(*args: object, **kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(dense_bridge_module.subprocess, "run", fake_run)
+    preparation = _real_preparation(_available_probe())
+    write_dense_bridge_input_manifest(preparation, tmp_path)
+    result = execute_dense_bridge(
+        tmp_path / "input_manifest.json",
+        backend="simplepim_external_stub",
+        execute_external=True,
+        env={"SIMPLEPIM_STUB_BIN": str(_stub_path())},
+    )
+    output_manifest = read_dense_bridge_output_manifest(tmp_path / "output_manifest.json")
+
+    assert result.execution_status == "failed"
+    assert result.reason == "simplepim_external_stub_output_manifest_invalid"
+    assert result.error_type == "simplepim_external_stub_output_manifest_invalid"
+    assert output_manifest.status == "failed"
+    assert output_manifest.metadata["error_type"] == "simplepim_external_stub_output_manifest_invalid"
+
+
+def test_simplepim_external_stub_failed_output_manifest_is_not_success(tmp_path: Path, monkeypatch) -> None:
+    def fake_run(*args: object, **kwargs: object) -> SimpleNamespace:
+        output_manifest = tmp_path / "output_manifest.json"
+        payload = {
+            "schema_version": DENSE_BRIDGE_SCHEMA_VERSION,
+            "bridge_id": DENSE_BRIDGE_ID,
+            "manifest_kind": "dense_bridge_output",
+            "backend": "simplepim_external_stub",
+            "status": "failed",
+            "input_manifest": "input_manifest.json",
+            "route_id": "dense_gemm",
+            "task_id": "task_0",
+            "output_blob": None,
+            "accumulator_blob": None,
+            "validation_metrics": {},
+            "compute_time_s": 0.0,
+            "write_time_s": 0.0,
+            "total_time_s": 0.0,
+            "external_command_executed": True,
+            "execution_implemented": False,
+            "error": "stub reported failure",
+            "metadata": {
+                "reason": "stub_failed_in_test",
+                "error_type": "stub_failed_in_test",
+                "native_kernel_executed": False,
+            },
+        }
+        output_manifest.write_text(json.dumps(payload), encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(dense_bridge_module.subprocess, "run", fake_run)
+    preparation = _real_preparation(_available_probe())
+    write_dense_bridge_input_manifest(preparation, tmp_path)
+    result = execute_dense_bridge(
+        tmp_path / "input_manifest.json",
+        backend="simplepim_external_stub",
+        execute_external=True,
+        env={"SIMPLEPIM_STUB_BIN": str(_stub_path())},
+    )
+
+    assert result.execution_status == "failed"
+    assert result.reason == "stub_failed_in_test"
+    assert result.error_type == "stub_failed_in_test"
+    assert result.error == "stub reported failure"
+    assert result.external_command_executed is True
+
+
+def test_malformed_manifest_fails_before_simplepim_stub_launch(tmp_path: Path, monkeypatch) -> None:
+    def forbidden_subprocess(*args: object, **kwargs: object) -> object:
+        raise AssertionError("malformed bridge input must fail before launching the stub")
+
+    monkeypatch.setattr(dense_bridge_module.subprocess, "run", forbidden_subprocess)
+    preparation = _real_preparation(_available_probe())
+    write_dense_bridge_input_manifest(preparation, tmp_path)
+    manifest_path = tmp_path / "input_manifest.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["operands"]["left"]["shape"] = [999]
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = execute_dense_bridge(
+        manifest_path,
+        backend="simplepim_external_stub",
+        execute_external=True,
+        env={"SIMPLEPIM_STUB_BIN": str(_stub_path())},
+    )
+
+    assert result.execution_status == "failed"
+    assert result.reason == "invalid_bridge_input_manifest"
+    assert result.error_type == "invalid_bridge_input_manifest"
+
+
 def test_unknown_backend_is_unsupported_and_json_safe(tmp_path: Path) -> None:
     preparation = _real_preparation(_available_probe())
     write_dense_bridge_input_manifest(preparation, tmp_path)
@@ -347,7 +637,11 @@ def test_execution_result_and_manifests_do_not_leak_bridge_directory_paths(tmp_p
     assert "right_matrix" not in encoded_result
 
 
-def test_dense_bridge_module_does_not_reference_subprocess() -> None:
-    source = inspect.getsource(dense_bridge_module)
+def test_simplepim_external_stub_is_the_only_registered_external_subprocess_backend() -> None:
+    registry = dense_bridge_backend_registry()
 
-    assert "subprocess" not in source
+    assert registry["mock_numpy_dequantized"].external_command_capable is False
+    assert registry["simplepim_external"].external_command_capable is True
+    assert registry["simplepim_external"].implemented is False
+    assert registry["simplepim_external_stub"].external_command_capable is True
+    assert registry["simplepim_external_stub"].implemented is False

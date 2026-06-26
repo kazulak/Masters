@@ -383,6 +383,11 @@ Wave 2C.8 adds a backend adapter interface on top of this file boundary:
 - `mock_numpy_dequantized` is implemented and executes only local NumPy.
 - `simplepim_external` is a future external-process backend and records planned
   invocation metadata only.
+- `simplepim_external_stub` is a non-executing external-process contract stub.
+  It may call a Python stub process only when `execute_external=true` and
+  `SIMPLEPIM_STUB_BIN` is configured. It validates that the cross-process file
+  contract can consume `input_manifest.json` and write `output_manifest.json`;
+  it does not write an output blob and does not run a SimplePIM/native kernel.
 
 `execute_dense_bridge(...)` is the generic entrypoint. For `simplepim_external`
 it validates the input manifest and blob metadata first, then writes
@@ -395,6 +400,25 @@ reasons are:
 - `simplepim_external_execution_not_implemented` when `execute_external=true`;
 - `invalid_bridge_input_manifest` when manifest/blob validation fails before any
   backend decision.
+
+For `simplepim_external_stub`, the only subprocess exception in this runtime is:
+
+- backend must be `simplepim_external_stub`;
+- `execute_external` must be `true`;
+- `SIMPLEPIM_STUB_BIN` must point to the stub script. Relative values are
+  resolved from the current working directory, so validation commands run from
+  `thesis/implementation`;
+- the adapter invokes the script with `sys.executable`, so executable
+  permissions and a shebang are not required.
+
+The stub writes the same `dense_bridge_output` manifest kind as the mock backend,
+with `backend="simplepim_external_stub"`, `status="stub_executed"`,
+`output_blob=null`, `validation_metrics.status="not_applicable"`,
+`external_command_executed=true`, `execution_implemented=false`, and
+`metadata.native_kernel_executed=false`. A valid stub output manifest must have
+`status="stub_executed"` for the adapter to return `stub_executed`. If the stub
+exits nonzero, fails to write a valid output manifest, or writes
+`status="failed"`, the adapter returns `failed` rather than `stub_executed`.
 
 Invocation metadata uses relative bridge paths such as `input_manifest.json`,
 `output_manifest.json`, and `outputs/simplepim_output.npy`. It may include a
@@ -471,7 +495,8 @@ It never embeds raw tensors.
 Status mapping:
 
 - `completed` only when the bridge backend reports a successful local/mock
-  status such as `mock_executed`;
+  status such as `mock_executed`, or the non-kernel external contract status
+  `stub_executed`;
 - `skipped` for non-executing SimplePIM external backend outcomes;
 - `unsupported` for task selection, materialization, or shape-preparation
   issues;
@@ -479,11 +504,16 @@ Status mapping:
 
 `simplepim_external` may write `input_manifest.json` and a non-executing
 `output_manifest.json`, but it does not write an output blob and does not call a
-subprocess. Summary artifact paths are relative to the run directory. CLI output
-may print absolute `run_dir` and `summary_path` for convenience.
+subprocess. `simplepim_external_stub` may write `input_manifest.json` and a
+non-executing `output_manifest.json` after invoking the configured stub process,
+but it also does not write an output blob. Summary artifact paths are relative
+to the run directory. CLI output may print absolute `run_dir` and `summary_path`
+for convenience.
 
-`external_command_executed` and `execution_implemented` remain `false` in this
-wave.
+`execution_implemented` remains `false` in this wave. For
+`simplepim_external_stub`, `external_command_executed=true` means only that the
+external stub process was invoked; `metadata.native_kernel_executed=false`
+records that no SimplePIM/native kernel ran.
 
 ## Planner Comparison Position
 

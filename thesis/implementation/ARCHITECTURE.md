@@ -133,6 +133,17 @@ earlier CPU contractions:
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 1 --materialization cpu-replay --backend mock_numpy_dequantized
 ```
 
+The non-executing external stub proves the future cross-process boundary without
+running SimplePIM/native UPMEM:
+
+```bash
+SIMPLEPIM_STUB_BIN=native/upmem/simplepim/simplepim_dense_stub.py PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 0 --backend simplepim_external_stub --execute-external
+```
+
+`external_command_executed=true` for that command means only that the stub
+process ran. `execution_implemented=false` and
+`metadata.native_kernel_executed=false` remain explicit.
+
 It writes:
 
 ```text

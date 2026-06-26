@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,8 +23,8 @@ if TYPE_CHECKING:
 DENSE_BRIDGE_SCHEMA_VERSION = "dense_bridge_v1"
 DENSE_BRIDGE_ID = "upmem_dense_bridge_v1"
 
-DenseBridgeStatus = Literal["mock_executed", "skipped", "not_implemented", "failed", "unsupported"]
-DenseBridgeBackendId = Literal["mock_numpy_dequantized", "simplepim_external"]
+DenseBridgeStatus = Literal["mock_executed", "stub_executed", "skipped", "not_implemented", "failed", "unsupported"]
+DenseBridgeBackendId = Literal["mock_numpy_dequantized", "simplepim_external", "simplepim_external_stub"]
 
 
 @dataclass(frozen=True)
@@ -294,6 +296,15 @@ def dense_bridge_backend_registry() -> dict[str, DenseBridgeBackendIdentity]:
             implemented=False,
             description="Future SimplePIM bridge adapter; records invocation metadata only in this wave.",
         ),
+        "simplepim_external_stub": DenseBridgeBackendIdentity(
+            backend_id="simplepim_external_stub",
+            display_name="SimplePIM External Dense Bridge Stub",
+            backend_kind="simplepim_external_stub",
+            execution_mode="external_process",
+            external_command_capable=True,
+            implemented=False,
+            description="Non-executing external-process stub that validates the dense bridge file contract.",
+        ),
     }
 
 
@@ -351,6 +362,9 @@ def execute_dense_bridge(
 
     if request.backend == "simplepim_external":
         return _execute_simplepim_external_bridge(request, identity)
+
+    if request.backend == "simplepim_external_stub":
+        return _execute_simplepim_external_stub_bridge(request, identity)
 
     output_manifest = _nonexecuted_output_manifest(
         backend=request.backend,
@@ -586,6 +600,278 @@ def _execute_simplepim_external_bridge(
     )
 
 
+def _execute_simplepim_external_stub_bridge(
+    request: DenseBridgeExecutionRequest,
+    identity: DenseBridgeBackendIdentity,
+) -> DenseBridgeExecutionResult:
+    started = time.perf_counter()
+    input_manifest_path = request.input_manifest_path
+    bridge_dir = input_manifest_path.parent
+    output_manifest_path = bridge_dir / "output_manifest.json"
+    manifest: DenseBridgeInputManifest | None = None
+    try:
+        manifest = read_dense_bridge_input_manifest(input_manifest_path)
+        _validate_bridge_input_files(manifest, bridge_dir)
+    except Exception as exc:
+        invocation_metadata = _simplepim_stub_invocation_metadata(
+            input_manifest_path=input_manifest_path,
+            stub_path=None,
+            env=request.environment,
+        )
+        output_manifest = _nonexecuted_output_manifest(
+            backend=identity.backend_id,
+            status="failed",
+            reason="invalid_bridge_input_manifest",
+            error=str(exc),
+            error_type="invalid_bridge_input_manifest",
+            input_manifest_path=input_manifest_path,
+            manifest=manifest,
+            invocation_metadata=invocation_metadata,
+            total_time_s=float(time.perf_counter() - started),
+        )
+        write_json(output_manifest_path, output_manifest)
+        return _execution_result(
+            input_manifest_path=input_manifest_path,
+            output_manifest_path=output_manifest_path,
+            output_blob_path=None,
+            backend_id=identity.backend_id,
+            backend_identity=identity,
+            execution_status="failed",
+            reason="invalid_bridge_input_manifest",
+            error=str(exc),
+            error_type="invalid_bridge_input_manifest",
+            output_manifest=output_manifest,
+            invocation_metadata=invocation_metadata,
+        )
+
+    stub_path = _configured_stub_path(request.environment)
+    invocation_metadata = _simplepim_stub_invocation_metadata(
+        input_manifest_path=input_manifest_path,
+        stub_path=stub_path,
+        env=request.environment,
+    )
+
+    if not request.execute_external:
+        output_manifest = _nonexecuted_output_manifest(
+            backend=identity.backend_id,
+            status="not_implemented",
+            reason="simplepim_external_stub_execution_disabled",
+            error=None,
+            error_type=None,
+            input_manifest_path=input_manifest_path,
+            manifest=manifest,
+            invocation_metadata=invocation_metadata,
+            total_time_s=float(time.perf_counter() - started),
+        )
+        write_json(output_manifest_path, output_manifest)
+        return _execution_result(
+            input_manifest_path=input_manifest_path,
+            output_manifest_path=output_manifest_path,
+            output_blob_path=None,
+            backend_id=identity.backend_id,
+            backend_identity=identity,
+            execution_status="not_implemented",
+            reason="simplepim_external_stub_execution_disabled",
+            error=None,
+            error_type=None,
+            output_manifest=output_manifest,
+            invocation_metadata=invocation_metadata,
+        )
+
+    if stub_path is None or not stub_path.exists():
+        error = None if stub_path is None else f"Configured stub path does not exist: {stub_path}"
+        output_manifest = _nonexecuted_output_manifest(
+            backend=identity.backend_id,
+            status="skipped",
+            reason="simplepim_external_stub_unavailable",
+            error=error,
+            error_type=None,
+            input_manifest_path=input_manifest_path,
+            manifest=manifest,
+            invocation_metadata=invocation_metadata,
+            total_time_s=float(time.perf_counter() - started),
+        )
+        write_json(output_manifest_path, output_manifest)
+        return _execution_result(
+            input_manifest_path=input_manifest_path,
+            output_manifest_path=output_manifest_path,
+            output_blob_path=None,
+            backend_id=identity.backend_id,
+            backend_identity=identity,
+            execution_status="skipped",
+            reason="simplepim_external_stub_unavailable",
+            error=error,
+            error_type=None,
+            output_manifest=output_manifest,
+            invocation_metadata=invocation_metadata,
+        )
+
+    command = [
+        sys.executable,
+        str(stub_path),
+        "--input-manifest",
+        input_manifest_path.name,
+        "--output-manifest",
+        output_manifest_path.name,
+        "--backend-id",
+        identity.backend_id,
+    ]
+    invocation_metadata["command_args"] = tuple(command)
+    invocation_metadata["external_command_executed"] = True
+    completed = subprocess.run(
+        command,
+        cwd=bridge_dir,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        output_manifest = _nonexecuted_output_manifest(
+            backend=identity.backend_id,
+            status="failed",
+            reason="simplepim_external_stub_failed",
+            error=f"External stub exited with code {completed.returncode}",
+            error_type="simplepim_external_stub_failed",
+            input_manifest_path=input_manifest_path,
+            manifest=manifest,
+            invocation_metadata=invocation_metadata,
+            total_time_s=float(time.perf_counter() - started),
+            external_command_executed=True,
+            metadata_extra={
+                "native_kernel_executed": False,
+                "stdout_snippet": _bounded_snippet(completed.stdout),
+                "stderr_snippet": _bounded_snippet(completed.stderr),
+                "returncode": int(completed.returncode),
+            },
+        )
+        write_json(output_manifest_path, output_manifest)
+        return _execution_result(
+            input_manifest_path=input_manifest_path,
+            output_manifest_path=output_manifest_path,
+            output_blob_path=None,
+            backend_id=identity.backend_id,
+            backend_identity=identity,
+            execution_status="failed",
+            reason="simplepim_external_stub_failed",
+            error=f"External stub exited with code {completed.returncode}",
+            error_type="simplepim_external_stub_failed",
+            output_manifest=output_manifest,
+            invocation_metadata=invocation_metadata,
+            external_command_executed=True,
+            metadata={"native_kernel_executed": False},
+        )
+
+    try:
+        output_manifest = read_dense_bridge_output_manifest(output_manifest_path)
+    except Exception as exc:
+        output_manifest = _nonexecuted_output_manifest(
+            backend=identity.backend_id,
+            status="failed",
+            reason="simplepim_external_stub_output_manifest_invalid",
+            error=str(exc),
+            error_type="simplepim_external_stub_output_manifest_invalid",
+            input_manifest_path=input_manifest_path,
+            manifest=manifest,
+            invocation_metadata=invocation_metadata,
+            total_time_s=float(time.perf_counter() - started),
+            external_command_executed=True,
+            metadata_extra={
+                "native_kernel_executed": False,
+                "stdout_snippet": _bounded_snippet(completed.stdout),
+                "stderr_snippet": _bounded_snippet(completed.stderr),
+                "returncode": int(completed.returncode),
+            },
+        )
+        write_json(output_manifest_path, output_manifest)
+        return _execution_result(
+            input_manifest_path=input_manifest_path,
+            output_manifest_path=output_manifest_path,
+            output_blob_path=None,
+            backend_id=identity.backend_id,
+            backend_identity=identity,
+            execution_status="failed",
+            reason="simplepim_external_stub_output_manifest_invalid",
+            error=str(exc),
+            error_type="simplepim_external_stub_output_manifest_invalid",
+            output_manifest=output_manifest,
+            invocation_metadata=invocation_metadata,
+            external_command_executed=True,
+            metadata={"native_kernel_executed": False},
+        )
+
+    if output_manifest.status == "failed":
+        reason = str(output_manifest.metadata.get("reason") or "simplepim_external_stub_failed")
+        error_type = str(output_manifest.metadata.get("error_type") or reason)
+        return _execution_result(
+            input_manifest_path=input_manifest_path,
+            output_manifest_path=output_manifest_path,
+            output_blob_path=None,
+            backend_id=identity.backend_id,
+            backend_identity=identity,
+            execution_status="failed",
+            reason=reason,
+            error=output_manifest.error,
+            error_type=error_type,
+            output_manifest=output_manifest,
+            invocation_metadata=invocation_metadata,
+            external_command_executed=output_manifest.external_command_executed,
+            metadata={"native_kernel_executed": False},
+        )
+
+    if output_manifest.status != "stub_executed":
+        output_manifest = _nonexecuted_output_manifest(
+            backend=identity.backend_id,
+            status="failed",
+            reason="simplepim_external_stub_output_manifest_invalid",
+            error=f"Unexpected stub output status: {output_manifest.status}",
+            error_type="simplepim_external_stub_output_manifest_invalid",
+            input_manifest_path=input_manifest_path,
+            manifest=manifest,
+            invocation_metadata=invocation_metadata,
+            total_time_s=float(time.perf_counter() - started),
+            external_command_executed=True,
+            metadata_extra={
+                "native_kernel_executed": False,
+                "stdout_snippet": _bounded_snippet(completed.stdout),
+                "stderr_snippet": _bounded_snippet(completed.stderr),
+                "returncode": int(completed.returncode),
+            },
+        )
+        write_json(output_manifest_path, output_manifest)
+        return _execution_result(
+            input_manifest_path=input_manifest_path,
+            output_manifest_path=output_manifest_path,
+            output_blob_path=None,
+            backend_id=identity.backend_id,
+            backend_identity=identity,
+            execution_status="failed",
+            reason="simplepim_external_stub_output_manifest_invalid",
+            error=output_manifest.error,
+            error_type="simplepim_external_stub_output_manifest_invalid",
+            output_manifest=output_manifest,
+            invocation_metadata=invocation_metadata,
+            external_command_executed=True,
+            metadata={"native_kernel_executed": False},
+        )
+
+    return _execution_result(
+        input_manifest_path=input_manifest_path,
+        output_manifest_path=output_manifest_path,
+        output_blob_path=None,
+        backend_id=identity.backend_id,
+        backend_identity=identity,
+        execution_status="stub_executed",
+        reason="external_stub_contract_executed",
+        error=None,
+        error_type=None,
+        output_manifest=output_manifest,
+        invocation_metadata=invocation_metadata,
+        external_command_executed=output_manifest.external_command_executed,
+        execution_implemented=output_manifest.execution_implemented,
+        metadata={"native_kernel_executed": False},
+    )
+
+
 def _execution_result_from_mock(
     result: DenseBridgeResult,
     identity: DenseBridgeBackendIdentity,
@@ -625,8 +911,17 @@ def _execution_result(
     error_type: str | None,
     output_manifest: DenseBridgeOutputManifest | None,
     invocation_metadata: JsonDict,
+    external_command_executed: bool = False,
+    execution_implemented: bool = False,
+    metadata: JsonDict | None = None,
 ) -> DenseBridgeExecutionResult:
     base_dir = input_manifest_path.parent
+    result_metadata = {
+        "blob_format": "npy",
+        "simplepim_or_native_execution_implemented": False,
+    }
+    if metadata:
+        result_metadata.update(metadata)
     return DenseBridgeExecutionResult(
         schema_version=DENSE_BRIDGE_SCHEMA_VERSION,
         bridge_id=DENSE_BRIDGE_ID,
@@ -641,12 +936,9 @@ def _execution_result(
         output_blob_path=_relative_result_path(output_blob_path, base_dir),
         output_manifest=output_manifest,
         invocation_metadata=invocation_metadata,
-        external_command_executed=False,
-        execution_implemented=False,
-        metadata={
-            "blob_format": "npy",
-            "simplepim_or_native_execution_implemented": False,
-        },
+        external_command_executed=external_command_executed,
+        execution_implemented=execution_implemented,
+        metadata=result_metadata,
     )
 
 
@@ -660,8 +952,18 @@ def _nonexecuted_output_manifest(
     manifest: DenseBridgeInputManifest | None,
     invocation_metadata: JsonDict,
     total_time_s: float,
+    external_command_executed: bool = False,
+    metadata_extra: JsonDict | None = None,
 ) -> DenseBridgeOutputManifest:
     bridge_dir = input_manifest_path.parent
+    metadata = {
+        "reason": reason,
+        "error_type": error_type,
+        "invocation_metadata": invocation_metadata,
+        "mock_or_external_note": "No SimplePIM or native UPMEM kernel was executed",
+    }
+    if metadata_extra:
+        metadata.update(metadata_extra)
     return DenseBridgeOutputManifest(
         schema_version=DENSE_BRIDGE_SCHEMA_VERSION,
         bridge_id=DENSE_BRIDGE_ID,
@@ -677,15 +979,10 @@ def _nonexecuted_output_manifest(
         compute_time_s=0.0,
         write_time_s=0.0,
         total_time_s=total_time_s,
-        external_command_executed=False,
+        external_command_executed=external_command_executed,
         execution_implemented=False,
         error=error,
-        metadata={
-            "reason": reason,
-            "error_type": error_type,
-            "invocation_metadata": invocation_metadata,
-            "mock_or_external_note": "No SimplePIM or native UPMEM command was executed",
-        },
+        metadata=metadata,
     )
 
 
@@ -715,6 +1012,61 @@ def _simplepim_invocation_metadata(
     metadata["simplepim_available"] = bool(probe_payload.get("simplepim_available", False))
     metadata["simplepim_probe_status"] = probe_payload.get("simplepim_probe_status")
     return metadata
+
+
+def _configured_stub_path(env: Mapping[str, str] | None) -> Path | None:
+    environment = env if env is not None else os.environ
+    raw = environment.get("SIMPLEPIM_STUB_BIN")
+    if not raw:
+        return None
+    path = Path(raw)
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    return path.resolve()
+
+
+def _simplepim_stub_invocation_metadata(
+    input_manifest_path: Path,
+    stub_path: Path | None,
+    env: Mapping[str, str] | None,
+) -> JsonDict:
+    environment = env if env is not None else os.environ
+    environment_keys = ("SIMPLEPIM_STUB_BIN",)
+    configured_environment_keys = tuple(key for key in environment_keys if environment.get(key))
+    metadata: JsonDict = {
+        "backend_id": "simplepim_external_stub",
+        "working_directory": ".",
+        "input_manifest_path": _relative_result_path(input_manifest_path, input_manifest_path.parent)
+        or input_manifest_path.name,
+        "expected_output_manifest_path": "output_manifest.json",
+        "expected_output_blob_path": None,
+        "environment_keys": environment_keys,
+        "configured_environment_keys": configured_environment_keys,
+        "blob_format": "npy",
+        "external_command_executed": False,
+        "native_kernel_executed": False,
+    }
+    if stub_path is not None:
+        metadata["command_path"] = str(stub_path)
+        metadata["command_args"] = (
+            sys.executable,
+            str(stub_path),
+            "--input-manifest",
+            input_manifest_path.name,
+            "--output-manifest",
+            "output_manifest.json",
+            "--backend-id",
+            "simplepim_external_stub",
+        )
+    return metadata
+
+
+def _bounded_snippet(value: str | None, limit: int = 2000) -> str:
+    if not value:
+        return ""
+    if len(value) <= limit:
+        return value
+    return value[:limit] + "...<truncated>"
 
 
 def _validate_bridge_input_files(manifest: DenseBridgeInputManifest, bridge_dir: Path) -> None:
