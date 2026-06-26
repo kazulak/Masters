@@ -41,6 +41,7 @@ def main() -> int:
     dense_bridge_parser.add_argument("--case", default="bell_2q")
     dense_bridge_parser.add_argument("--n-qubits", type=int)
     dense_bridge_parser.add_argument("--task-index", type=int)
+    dense_bridge_parser.add_argument("--materialization", default="initial-only", choices=("initial-only", "cpu-replay"))
     dense_bridge_parser.add_argument("--backend", default="mock_numpy_dequantized", choices=("mock_numpy_dequantized", "simplepim_external"))
     dense_bridge_parser.add_argument("--execute-external", action="store_true")
 
@@ -114,6 +115,7 @@ def main() -> int:
             task_index=args.task_index,
             backend=args.backend,
             execute_external=args.execute_external,
+            materialization=args.materialization,
         )
         print(
             json.dumps(

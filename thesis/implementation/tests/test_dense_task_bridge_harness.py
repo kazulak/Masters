@@ -40,6 +40,9 @@ def test_dense_task_bridge_harness_runs_real_bell_task_with_mock_backend(tmp_pat
     assert summary["metadata"]["one_task_only"] is True
     assert summary["metadata"]["normal_routing_unchanged"] is True
     assert summary["metadata"]["bridge_manifest_written"] is True
+    assert summary["materialization"]["mode"] == "initial-only"
+    assert summary["materialization"]["status"] == "initial_inputs_available"
+    assert summary["materialization"]["reason"] is None
     assert summary["artifacts"] == {
         "input_manifest": "bridge/input_manifest.json",
         "output_blob": "bridge/outputs/mock_dequantized_output.npy",
@@ -67,6 +70,26 @@ def test_dense_task_bridge_harness_auto_selects_first_bridgeable_task(tmp_path: 
     assert result.status == "completed"
     assert summary["task_index"] == 0
     assert summary["bridge_execution_status"] == "mock_executed"
+    assert summary["materialization"]["mode"] == "initial-only"
+    assert summary["materialization"]["status"] == "initial_inputs_available"
+
+
+def test_dense_task_bridge_cpu_replay_with_omitted_task_index_keeps_auto_selection_path(tmp_path: Path) -> None:
+    result = run_dense_task_bridge(
+        tmp_path,
+        case="bell_2q",
+        backend="mock_numpy_dequantized",
+        materialization="cpu-replay",
+        env={},
+    )
+    summary = _load_summary(result.summary_path)
+
+    assert result.status == "completed"
+    assert summary["task_index"] == 0
+    assert summary["bridge_execution_status"] == "mock_executed"
+    assert summary["materialization"]["mode"] == "cpu-replay"
+    assert summary["materialization"]["status"] == "initial_inputs_available"
+    assert summary["materialization"]["replayed_task_count"] == 0
 
 
 def test_dense_task_bridge_simplepim_external_is_nonexecuting_and_nonfatal(tmp_path: Path) -> None:
@@ -113,8 +136,79 @@ def test_dense_task_bridge_rejects_unmaterialized_intermediate_task(tmp_path: Pa
     assert summary["status"] == "unsupported"
     assert summary["reason"] == "intermediate_tensor_inputs_not_materialized"
     assert summary["task_index"] == 1
+    assert summary["materialization"]["mode"] == "initial-only"
+    assert summary["materialization"]["status"] == "unsupported"
+    assert summary["materialization"]["reason"] == "intermediate_tensor_inputs_not_materialized"
     assert summary["artifacts"] == {}
     assert not (result.run_dir / "bridge" / "input_manifest.json").exists()
+
+
+def test_dense_task_bridge_cpu_replay_processes_later_task(tmp_path: Path) -> None:
+    result = run_dense_task_bridge(
+        tmp_path,
+        case="bell_2q",
+        task_index=1,
+        materialization="cpu-replay",
+        backend="mock_numpy_dequantized",
+        env={},
+    )
+    summary = _load_summary(result.summary_path)
+    encoded = json.dumps(summary)
+
+    assert result.status == "completed"
+    assert result.reason is None
+    assert summary["task_index"] == 1
+    assert summary["bridge_execution_status"] == "mock_executed"
+    assert summary["materialization"]["mode"] == "cpu-replay"
+    assert summary["materialization"]["status"] == "materialized"
+    assert summary["materialization"]["reason"] is None
+    assert summary["materialization"]["replayed_task_count"] == 1
+    assert summary["materialization"]["replayed_task_ids"] == ["task_0"]
+    assert summary["materialization"]["dead_tensor_release_implemented"] is False
+    assert summary["artifacts"]["input_manifest"] == "bridge/input_manifest.json"
+    assert not Path(summary["artifacts"]["input_manifest"]).is_absolute()
+    assert "prepared_operands" not in encoded
+    assert "left_matrix" not in encoded
+    assert "right_matrix" not in encoded
+    assert str(tmp_path) not in encoded
+
+
+def test_dense_task_bridge_cpu_replay_on_initial_task_records_initial_inputs(tmp_path: Path) -> None:
+    result = run_dense_task_bridge(
+        tmp_path,
+        case="bell_2q",
+        task_index=0,
+        materialization="cpu-replay",
+        backend="mock_numpy_dequantized",
+        env={},
+    )
+    summary = _load_summary(result.summary_path)
+
+    assert result.status == "completed"
+    assert summary["task_index"] == 0
+    assert summary["materialization"]["mode"] == "cpu-replay"
+    assert summary["materialization"]["status"] == "initial_inputs_available"
+    assert summary["materialization"]["reason"] is None
+    assert summary["materialization"]["replayed_task_count"] == 0
+
+
+def test_dense_task_bridge_cpu_replay_keeps_simplepim_external_nonexecuting(tmp_path: Path) -> None:
+    result = run_dense_task_bridge(
+        tmp_path,
+        case="bell_2q",
+        task_index=1,
+        materialization="cpu-replay",
+        backend="simplepim_external",
+        env={},
+    )
+    summary = _load_summary(result.summary_path)
+
+    assert result.status == "skipped"
+    assert result.reason == "simplepim_unavailable"
+    assert summary["bridge_execution_status"] == "skipped"
+    assert summary["materialization"]["status"] == "materialized"
+    assert summary["external_command_executed"] is False
+    assert summary["execution_implemented"] is False
 
 
 def test_dense_task_bridge_cli_dispatch_prints_run_and_summary_paths(monkeypatch, capsys, tmp_path: Path) -> None:
@@ -142,6 +236,8 @@ def test_dense_task_bridge_cli_dispatch_prints_run_and_summary_paths(monkeypatch
             "dense-task-bridge",
             "--case",
             "bell_2q",
+            "--materialization",
+            "cpu-replay",
             "--backend",
             "mock_numpy_dequantized",
         ],
@@ -152,6 +248,7 @@ def test_dense_task_bridge_cli_dispatch_prints_run_and_summary_paths(monkeypatch
 
     assert called["case"] == "bell_2q"
     assert called["task_index"] is None
+    assert called["materialization"] == "cpu-replay"
     assert called["backend"] == "mock_numpy_dequantized"
     assert called["execute_external"] is False
     assert payload["status"] == "completed"

@@ -21,6 +21,7 @@ PYTHONPATH=src ../.venv/bin/python -m pytest -q
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench run --suite configs/suites/smoke.yml
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simplepim-microbench --dry-run --m 8 --k 8 --n 8
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 0 --backend mock_numpy_dequantized
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 1 --materialization cpu-replay --backend mock_numpy_dequantized
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench plot runs/latest
 ```
 
@@ -46,9 +47,13 @@ scripts/run_energy_suite.sh configs/suites/local_energy.yml
 - `src/quantum_bench/routing/` contains the task-level route contract,
   analysis-only dynamic router skeleton, and one-task dense preparation
   boundary for future UPMEM/SimplePIM execution.
+- `src/quantum_bench/tn/materialize.py` contains developer-facing TaskGraph
+  CPU replay for materializing one selected task's inputs. It is not the normal
+  CPU execution path.
 - `src/quantum_bench/bench/dense_task_bridge.py` is a developer-only one-task
   harness that connects a real `ContractionTask` to dense preparation and the
-  mock bridge. It does not change normal benchmark routing.
+  mock bridge. It can opt into CPU replay for explicit task selection, but it
+  does not change normal benchmark routing.
 - `native/upmem/simplepim/` is reserved for future SimplePIM bridge code.
 - `native/upmem/raw_dense/` is reserved for future raw UPMEM SDK dense kernels.
 - `../legacy/` contains old prototypes and generated sudo-owned run folders kept

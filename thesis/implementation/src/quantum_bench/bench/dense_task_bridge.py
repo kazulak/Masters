@@ -18,11 +18,19 @@ from quantum_bench.targets.upmem import (
     probe_simplepim,
     write_dense_bridge_input_manifest,
 )
-from quantum_bench.tn import build_tensor_network, plan_task_graph
+from quantum_bench.tn import (
+    TASK_INPUT_MATERIALIZATION_SCHEMA_VERSION,
+    TaskInputMaterializationRequest,
+    TaskInputMaterializationResult,
+    build_tensor_network,
+    materialize_task_inputs,
+    plan_task_graph,
+)
 
 
 DENSE_TASK_BRIDGE_SCHEMA_VERSION = "dense_task_bridge_v1"
 DenseTaskBridgeStatus = Literal["completed", "skipped", "unsupported", "failed"]
+DenseTaskBridgeMaterializationMode = Literal["initial-only", "cpu-replay"]
 _BRIDGEABLE_PREPARATION_STATUSES = {"prepared", "simplepim_unavailable"}
 _SUCCESSFUL_BRIDGE_STATUSES = {"mock_executed"}
 
@@ -57,6 +65,7 @@ def run_dense_task_bridge(
     task_index: int | None = None,
     backend: str = "mock_numpy_dequantized",
     execute_external: bool = False,
+    materialization: DenseTaskBridgeMaterializationMode = "initial-only",
     env: Mapping[str, str] | None = None,
 ) -> DenseTaskBridgeResult:
     run_dir = _create_dense_task_bridge_run_dir(root_dir)
@@ -71,24 +80,109 @@ def run_dense_task_bridge(
         initial_tensors = {tensor.spec.id: tensor for tensor in network.tensors}
         probe = probe_simplepim(env=env) if env is not None else probe_simplepim()
 
-        selection = _select_task(graph.tasks, initial_tensors, task_index, probe)
+        if materialization not in {"initial-only", "cpu-replay"}:
+            summary = _base_summary(
+                status="unsupported",
+                reason="unsupported_materialization_mode",
+                case_id=circuit.name,
+                circuit_payload=manifest(circuit),
+                task_index=task_index,
+                task=None,
+                backend=backend,
+                probe=probe,
+                materialization=_generic_materialization_payload(
+                    materialization,
+                    status="unsupported",
+                    reason="unsupported_materialization_mode",
+                    task_index=task_index,
+                ),
+            )
+            write_json(summary_path, summary)
+            return _result_from_summary(run_dir, summary_path, summary)
+
+        if materialization == "cpu-replay" and task_index is not None:
+            selection = _select_task_by_index(graph.tasks, task_index)
+        else:
+            selection = _select_task(graph.tasks, initial_tensors, task_index, probe)
         if selection["status"] != "selected":
+            task = selection.get("task")
             summary = _base_summary(
                 status=selection["harness_status"],
                 reason=selection["reason"],
                 case_id=circuit.name,
                 circuit_payload=manifest(circuit),
                 task_index=selection.get("task_index"),
-                task=None,
+                task=task,
                 backend=backend,
                 probe=probe,
+                materialization=_selection_materialization_payload(
+                    mode=materialization,
+                    task=task,
+                    task_index=selection.get("task_index"),
+                    initial_tensors=initial_tensors,
+                    status="unsupported",
+                    reason=selection["reason"],
+                ),
             )
             write_json(summary_path, summary)
             return _result_from_summary(run_dir, summary_path, summary)
 
         task = selection["task"]
         selected_index = int(selection["task_index"])
-        preparation = selection.get("preparation") or _prepare_task(task, initial_tensors, probe)
+        materialization_payload: JsonDict
+        if materialization == "cpu-replay" and task_index is not None:
+            materialization_result = materialize_task_inputs(
+                TaskInputMaterializationRequest(
+                    graph=graph,
+                    initial_tensors=initial_tensors,
+                    target_task_index=selected_index,
+                )
+            )
+            materialization_payload = _materialization_payload(materialization, materialization_result)
+            if materialization_result.status not in {"initial_inputs_available", "materialized"}:
+                summary = _base_summary(
+                    status="failed" if materialization_result.status == "failed" else "unsupported",
+                    reason=materialization_result.reason,
+                    case_id=circuit.name,
+                    circuit_payload=manifest(circuit),
+                    task_index=selected_index,
+                    task=task,
+                    backend=backend,
+                    probe=probe,
+                    materialization=materialization_payload,
+                )
+                write_json(summary_path, summary)
+                return _result_from_summary(run_dir, summary_path, summary)
+            if materialization_result.left_tensor is None or materialization_result.right_tensor is None:
+                summary = _base_summary(
+                    status="failed",
+                    reason="materialized_inputs_missing",
+                    case_id=circuit.name,
+                    circuit_payload=manifest(circuit),
+                    task_index=selected_index,
+                    task=task,
+                    backend=backend,
+                    probe=probe,
+                    materialization=materialization_payload,
+                )
+                write_json(summary_path, summary)
+                return _result_from_summary(run_dir, summary_path, summary)
+            preparation = _prepare_task_from_tensors(
+                task,
+                materialization_result.left_tensor,
+                materialization_result.right_tensor,
+                probe,
+            )
+        else:
+            materialization_payload = _selection_materialization_payload(
+                mode=materialization,
+                task=task,
+                task_index=selected_index,
+                initial_tensors=initial_tensors,
+                status="initial_inputs_available",
+                reason=None,
+            )
+            preparation = selection.get("preparation") or _prepare_task(task, initial_tensors, probe)
         if not _is_bridgeable_preparation(preparation):
             status, reason = _preparation_status(preparation)
             summary = _base_summary(
@@ -101,6 +195,7 @@ def run_dense_task_bridge(
                 backend=backend,
                 probe=probe,
                 preparation=preparation,
+                materialization=materialization_payload,
             )
             write_json(summary_path, summary)
             return _result_from_summary(run_dir, summary_path, summary)
@@ -127,6 +222,7 @@ def run_dense_task_bridge(
             bridge_result=bridge_result,
             input_manifest=input_manifest,
             run_dir=run_dir,
+            materialization=materialization_payload,
         )
         write_json(summary_path, summary)
         return _result_from_summary(run_dir, summary_path, summary)
@@ -138,6 +234,7 @@ def run_dense_task_bridge(
             case_id=case,
             task_index=task_index,
             backend=backend,
+            materialization_mode=materialization,
         )
         write_json(summary_path, summary)
         return _result_from_summary(run_dir, summary_path, summary)
@@ -149,6 +246,7 @@ def run_dense_task_bridge(
             case_id=case,
             task_index=task_index,
             backend=backend,
+            materialization_mode=materialization,
         )
         write_json(summary_path, summary)
         return _result_from_summary(run_dir, summary_path, summary)
@@ -184,6 +282,7 @@ def _select_task(
                 "harness_status": "unsupported",
                 "reason": "intermediate_tensor_inputs_not_materialized",
                 "task_index": task_index,
+                "task": task,
             }
         return {"status": "selected", "task": task, "task_index": task_index}
 
@@ -200,6 +299,17 @@ def _select_task(
     }
 
 
+def _select_task_by_index(tasks: tuple[object, ...], task_index: int) -> JsonDict:
+    if task_index < 0 or task_index >= len(tasks):
+        return {
+            "status": "not_selected",
+            "harness_status": "unsupported",
+            "reason": "target_task_index_out_of_range",
+            "task_index": task_index,
+        }
+    return {"status": "selected", "task": tasks[task_index], "task_index": task_index}
+
+
 def _inputs_available(task: object, initial_tensors: dict[str, object]) -> bool:
     return all(tensor_id in initial_tensors for tensor_id in task.input_tensor_ids)
 
@@ -210,6 +320,22 @@ def _prepare_task(task: object, initial_tensors: dict[str, object], probe: Simpl
             task=task,
             left_tensor=initial_tensors[task.input_tensor_ids[0]],
             right_tensor=initial_tensors[task.input_tensor_ids[1]],
+            simplepim_probe=probe,
+        )
+    )
+
+
+def _prepare_task_from_tensors(
+    task: object,
+    left_tensor: object,
+    right_tensor: object,
+    probe: SimplePimProbeResult,
+):
+    return prepare_dense_task(
+        DenseTaskPreparationInput(
+            task=task,
+            left_tensor=left_tensor,
+            right_tensor=right_tensor,
             simplepim_probe=probe,
         )
     )
@@ -259,6 +385,7 @@ def _base_summary(
     bridge_result: object | None = None,
     input_manifest: object | None = None,
     run_dir: Path | None = None,
+    materialization: JsonDict | None = None,
 ) -> JsonDict:
     bridge_output_manifest = bridge_result.output_manifest if bridge_result is not None else None
     summary: JsonDict = {
@@ -289,6 +416,12 @@ def _base_summary(
         },
         "bridge_validation_metrics": (
             bridge_output_manifest.validation_metrics if bridge_output_manifest is not None else None
+        ),
+        "materialization": materialization or _generic_materialization_payload(
+            "initial-only",
+            status="unsupported",
+            reason="materialization_not_recorded",
+            task_index=task_index,
         ),
         "artifacts": _artifact_paths(run_dir, bridge_result),
         "external_command_executed": False,
@@ -322,6 +455,7 @@ def _error_summary(
     case_id: str,
     task_index: int | None,
     backend: str,
+    materialization_mode: str = "initial-only",
 ) -> JsonDict:
     return {
         "schema_version": DENSE_TASK_BRIDGE_SCHEMA_VERSION,
@@ -342,11 +476,106 @@ def _error_summary(
         "fixed_point_conversion": {"left": None, "right": None},
         "preparation": {"status": None, "reason": None, "error": error, "validation_metrics": None},
         "bridge_validation_metrics": None,
+        "materialization": _generic_materialization_payload(
+            materialization_mode,
+            status=status,
+            reason=reason,
+            task_index=task_index,
+        ),
         "artifacts": {},
         "external_command_executed": False,
         "execution_implemented": False,
         "metadata": {"developer_only": True, "one_task_only": True, "normal_routing_unchanged": True},
     }
+
+
+def _materialization_payload(mode: str, result: TaskInputMaterializationResult) -> JsonDict:
+    payload = result.to_json_dict()
+    payload["mode"] = mode
+    return payload
+
+
+def _selection_materialization_payload(
+    *,
+    mode: str,
+    task: object | None,
+    task_index: int | None,
+    initial_tensors: Mapping[str, object],
+    status: str,
+    reason: str | None,
+) -> JsonDict:
+    if task is None:
+        return _generic_materialization_payload(mode, status=status, reason=reason, task_index=task_index)
+    return {
+        "mode": mode,
+        "schema_version": TASK_INPUT_MATERIALIZATION_SCHEMA_VERSION,
+        "status": status,
+        "reason": reason,
+        "target_task_id": task.id,
+        "target_task_index": task_index,
+        "selected_input_tensor_ids": task.input_tensor_ids,
+        "input_sources": {
+            tensor_id: _input_source_record(tensor_id, initial_tensors.get(tensor_id))
+            for tensor_id in task.input_tensor_ids
+        },
+        "replayed_task_count": 0,
+        "replayed_task_ids": [],
+        "replay_time_s": 0.0,
+        "peak_materialized_bytes": _retained_tensor_bytes(initial_tensors),
+        "dead_tensor_release_implemented": False,
+        "step_metrics": [],
+        "error": None,
+    }
+
+
+def _generic_materialization_payload(
+    mode: str,
+    *,
+    status: str,
+    reason: str | None,
+    task_index: int | None,
+) -> JsonDict:
+    return {
+        "mode": mode,
+        "schema_version": TASK_INPUT_MATERIALIZATION_SCHEMA_VERSION,
+        "status": status,
+        "reason": reason,
+        "target_task_id": None,
+        "target_task_index": task_index,
+        "selected_input_tensor_ids": None,
+        "input_sources": {},
+        "replayed_task_count": 0,
+        "replayed_task_ids": [],
+        "replay_time_s": 0.0,
+        "peak_materialized_bytes": 0,
+        "dead_tensor_release_implemented": False,
+        "step_metrics": [],
+        "error": None,
+    }
+
+
+def _input_source_record(tensor_id: str, tensor: object | None) -> JsonDict:
+    if tensor is None:
+        return {"source": "unavailable", "tensor_id": tensor_id}
+    array = getattr(tensor, "array", None)
+    spec = getattr(tensor, "spec", None)
+    return {
+        "source": "initial",
+        "tensor_id": tensor_id,
+        "labels": getattr(spec, "labels", ()),
+        "shape": getattr(spec, "shape", ()),
+        "dtype": getattr(spec, "dtype", None),
+        "produced_by": getattr(spec, "produced_by", None),
+        "replayed_task_index": None,
+        "nbytes": int(getattr(array, "nbytes", 0) or 0),
+    }
+
+
+def _retained_tensor_bytes(tensors: Mapping[str, object]) -> int:
+    total = 0
+    for tensor in tensors.values():
+        total += int(getattr(getattr(tensor, "array", None), "nbytes", 0) or 0)
+    return total
 
 
 def _result_from_summary(run_dir: Path, summary_path: Path, summary: JsonDict) -> DenseTaskBridgeResult:

@@ -126,6 +126,13 @@ execution:
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 0 --backend mock_numpy_dequantized
 ```
 
+For an explicitly selected later task, it can materialize inputs by replaying
+earlier CPU contractions:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 1 --materialization cpu-replay --backend mock_numpy_dequantized
+```
+
 It writes:
 
 ```text
@@ -142,7 +149,9 @@ runs/<timestamp>_dense_task_bridge/
 This command is a file-boundary and preparation check for one real
 `ContractionTask`. It is mock-by-default, does not select `dense_gemm` in normal
 routing, and keeps `external_command_executed=false` and
-`execution_implemented=false`.
+`execution_implemented=false`. CPU replay is developer-only input
+materialization for the harness; it is not the normal CPU execution path and not
+full routed TaskGraph execution.
 
 Plots follow one rule: bars compare different cases/routes, and lines are used
 only for scaling within a single circuit family across qubit counts.

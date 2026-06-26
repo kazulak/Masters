@@ -415,6 +415,13 @@ Example:
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 0 --backend mock_numpy_dequantized
 ```
 
+For an explicitly selected later task, the harness can opt into CPU replay input
+materialization:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 1 --materialization cpu-replay --backend mock_numpy_dequantized
+```
+
 The command writes:
 
 ```text
@@ -434,15 +441,32 @@ The harness:
 - builds a builtin circuit workload;
 - constructs the `TensorNetwork` and `TaskGraph`;
 - selects one directly materializable task, or the requested `--task-index`;
+- optionally materializes selected task inputs with `--materialization cpu-replay`;
 - calls dense preparation with actual task tensors;
 - writes bridge input blobs and metadata;
 - executes the selected bridge backend through `execute_dense_bridge(...)`;
 - writes `dense_task_bridge_summary.json`.
 
-Only initial-input tasks are materialized in this wave. Later tasks that require
+By default, only initial-input tasks are materialized. Later tasks that require
 intermediate tensors return `unsupported` with
-`intermediate_tensor_inputs_not_materialized`; this prevents the harness from
-silently becoming partial full-TaskGraph routed execution.
+`intermediate_tensor_inputs_not_materialized`. With an explicit
+`--task-index` and `--materialization cpu-replay`, the harness calls
+`src/quantum_bench/tn/materialize.py` to replay predecessor CPU contractions
+until the selected task inputs are available. Omitted `--task-index` still uses
+the existing first initial-input auto-selection path and does not call the
+materializer.
+
+CPU replay is developer-only input materialization. It is not the normal CPU
+execution path, does not select `dense_gemm` in normal routing, and does not
+implement full routed TaskGraph execution. `peak_materialized_bytes` in the
+summary means retained runtime tensor-map bytes during replay, not process RSS.
+Dead-tensor release is intentionally not implemented in this wave and is
+reported as `dead_tensor_release_implemented=false`.
+
+The summary contains a JSON-safe `materialization` object with `mode`, `status`,
+`reason`, selected input IDs, input sources, replayed task IDs, replay timing,
+peak materialized bytes, dead-tensor-release status, and per-step replay metrics.
+It never embeds raw tensors.
 
 Status mapping:
 
