@@ -1,0 +1,166 @@
+from __future__ import annotations
+
+import inspect
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+from quantum_bench.bench import __main__ as bench_main
+from quantum_bench.bench.dense_task_bridge import run_dense_task_bridge
+import quantum_bench.bench.dense_task_bridge as dense_task_bridge_module
+
+
+def _load_summary(path: Path) -> dict[str, object]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_dense_task_bridge_harness_runs_real_bell_task_with_mock_backend(tmp_path: Path) -> None:
+    result = run_dense_task_bridge(
+        tmp_path,
+        case="bell_2q",
+        task_index=0,
+        backend="mock_numpy_dequantized",
+        env={},
+    )
+    summary = _load_summary(result.summary_path)
+    encoded = json.dumps(summary)
+
+    assert result.status == "completed"
+    assert result.reason is None
+    assert summary["schema_version"] == "dense_task_bridge_v1"
+    assert summary["status"] == "completed"
+    assert summary["case_id"] == "bell_2q"
+    assert summary["task_index"] == 0
+    assert summary["route_id"] == "dense_gemm"
+    assert summary["bridge_backend_id"] == "mock_numpy_dequantized"
+    assert summary["bridge_execution_status"] == "mock_executed"
+    assert summary["external_command_executed"] is False
+    assert summary["execution_implemented"] is False
+    assert summary["metadata"]["developer_only"] is True
+    assert summary["metadata"]["one_task_only"] is True
+    assert summary["metadata"]["normal_routing_unchanged"] is True
+    assert summary["metadata"]["bridge_manifest_written"] is True
+    assert summary["artifacts"] == {
+        "input_manifest": "bridge/input_manifest.json",
+        "output_blob": "bridge/outputs/mock_dequantized_output.npy",
+        "output_manifest": "bridge/output_manifest.json",
+    }
+    assert not Path(summary["artifacts"]["input_manifest"]).is_absolute()
+    assert not Path(summary["artifacts"]["output_manifest"]).is_absolute()
+    assert not Path(summary["artifacts"]["output_blob"]).is_absolute()
+    assert (result.run_dir / "environment.json").exists()
+    assert (result.run_dir / "dense_task_bridge_summary.json").exists()
+    assert (result.run_dir / "bridge" / "input_manifest.json").exists()
+    assert (result.run_dir / "bridge" / "output_manifest.json").exists()
+    assert (result.run_dir / "bridge" / "outputs" / "mock_dequantized_output.npy").exists()
+    assert "prepared_operands" not in encoded
+    assert "left_matrix" not in encoded
+    assert "right_matrix" not in encoded
+    assert str(tmp_path) not in encoded
+    json.dumps(summary)
+
+
+def test_dense_task_bridge_harness_auto_selects_first_bridgeable_task(tmp_path: Path) -> None:
+    result = run_dense_task_bridge(tmp_path, case="bell_2q", backend="mock_numpy_dequantized", env={})
+    summary = _load_summary(result.summary_path)
+
+    assert result.status == "completed"
+    assert summary["task_index"] == 0
+    assert summary["bridge_execution_status"] == "mock_executed"
+
+
+def test_dense_task_bridge_simplepim_external_is_nonexecuting_and_nonfatal(tmp_path: Path) -> None:
+    result = run_dense_task_bridge(
+        tmp_path,
+        case="bell_2q",
+        task_index=0,
+        backend="simplepim_external",
+        env={},
+    )
+    summary = _load_summary(result.summary_path)
+
+    assert result.status == "skipped"
+    assert result.reason == "simplepim_unavailable"
+    assert summary["status"] == "skipped"
+    assert summary["bridge_execution_status"] == "skipped"
+    assert summary["bridge_execution_reason"] == "simplepim_unavailable"
+    assert summary["external_command_executed"] is False
+    assert summary["execution_implemented"] is False
+    assert summary["artifacts"] == {
+        "input_manifest": "bridge/input_manifest.json",
+        "output_manifest": "bridge/output_manifest.json",
+    }
+    assert (result.run_dir / "bridge" / "input_manifest.json").exists()
+    assert (result.run_dir / "bridge" / "output_manifest.json").exists()
+    assert not (result.run_dir / "bridge" / "outputs" / "simplepim_output.npy").exists()
+    output_manifest = _load_summary(result.run_dir / "bridge" / "output_manifest.json")
+    assert output_manifest["status"] == "skipped"
+    assert output_manifest["output_blob"] is None
+
+
+def test_dense_task_bridge_rejects_unmaterialized_intermediate_task(tmp_path: Path) -> None:
+    result = run_dense_task_bridge(
+        tmp_path,
+        case="bell_2q",
+        task_index=1,
+        backend="mock_numpy_dequantized",
+        env={},
+    )
+    summary = _load_summary(result.summary_path)
+
+    assert result.status == "unsupported"
+    assert result.reason == "intermediate_tensor_inputs_not_materialized"
+    assert summary["status"] == "unsupported"
+    assert summary["reason"] == "intermediate_tensor_inputs_not_materialized"
+    assert summary["task_index"] == 1
+    assert summary["artifacts"] == {}
+    assert not (result.run_dir / "bridge" / "input_manifest.json").exists()
+
+
+def test_dense_task_bridge_cli_dispatch_prints_run_and_summary_paths(monkeypatch, capsys, tmp_path: Path) -> None:
+    called: dict[str, object] = {}
+
+    def fake_run_dense_task_bridge(root_dir: Path, **kwargs: object) -> SimpleNamespace:
+        called["root_dir"] = root_dir
+        called.update(kwargs)
+        return SimpleNamespace(
+            run_dir=tmp_path / "runs" / "fake_dense_task_bridge",
+            summary_path=tmp_path / "runs" / "fake_dense_task_bridge" / "dense_task_bridge_summary.json",
+            status="completed",
+            reason=None,
+        )
+
+    monkeypatch.setattr(
+        dense_task_bridge_module,
+        "run_dense_task_bridge",
+        fake_run_dense_task_bridge,
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "python -m quantum_bench.bench",
+            "dense-task-bridge",
+            "--case",
+            "bell_2q",
+            "--backend",
+            "mock_numpy_dequantized",
+        ],
+    )
+
+    assert bench_main.main() == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert called["case"] == "bell_2q"
+    assert called["task_index"] is None
+    assert called["backend"] == "mock_numpy_dequantized"
+    assert called["execute_external"] is False
+    assert payload["status"] == "completed"
+    assert payload["reason"] is None
+    assert payload["run_dir"].endswith("fake_dense_task_bridge")
+    assert payload["summary_path"].endswith("dense_task_bridge_summary.json")
+
+
+def test_dense_task_bridge_harness_does_not_reference_subprocess() -> None:
+    source = inspect.getsource(dense_task_bridge_module)
+
+    assert "subprocess" not in source

@@ -119,6 +119,31 @@ runs/<timestamp>_simplepim_microbench/
 `ready` in that artifact means ready for a future bridge attempt, not validated
 SimplePIM execution.
 
+The developer-only one-task dense bridge harness is also outside normal suite
+execution:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 0 --backend mock_numpy_dequantized
+```
+
+It writes:
+
+```text
+runs/<timestamp>_dense_task_bridge/
+  environment.json
+  dense_task_bridge_summary.json
+  bridge/input_manifest.json
+  bridge/operands/*.npy
+  bridge/references/*.npy
+  bridge/output_manifest.json
+  bridge/outputs/*.npy       only for the mock backend
+```
+
+This command is a file-boundary and preparation check for one real
+`ContractionTask`. It is mock-by-default, does not select `dense_gemm` in normal
+routing, and keeps `external_command_executed=false` and
+`execution_implemented=false`.
+
 Plots follow one rule: bars compare different cases/routes, and lines are used
 only for scaling within a single circuit family across qubit counts.
 

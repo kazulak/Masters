@@ -37,6 +37,13 @@ def main() -> int:
     simplepim_parser.add_argument("--source-dtype", default="float32", choices=("float32", "float64"))
     simplepim_parser.add_argument("--seed", type=int, default=0)
 
+    dense_bridge_parser = sub.add_parser("dense-task-bridge")
+    dense_bridge_parser.add_argument("--case", default="bell_2q")
+    dense_bridge_parser.add_argument("--n-qubits", type=int)
+    dense_bridge_parser.add_argument("--task-index", type=int)
+    dense_bridge_parser.add_argument("--backend", default="mock_numpy_dequantized", choices=("mock_numpy_dequantized", "simplepim_external"))
+    dense_bridge_parser.add_argument("--execute-external", action="store_true")
+
     sub.add_parser("probe")
 
     args = parser.parse_args()
@@ -92,6 +99,29 @@ def main() -> int:
                     "run_dir": str(run_dir),
                     "artifact": str(artifact_path),
                     "status": status,
+                },
+                indent=2,
+            )
+        )
+        return 0
+    if args.command == "dense-task-bridge":
+        from quantum_bench.bench.dense_task_bridge import run_dense_task_bridge
+
+        result = run_dense_task_bridge(
+            root_dir,
+            case=args.case,
+            n_qubits=args.n_qubits,
+            task_index=args.task_index,
+            backend=args.backend,
+            execute_external=args.execute_external,
+        )
+        print(
+            json.dumps(
+                {
+                    "run_dir": str(result.run_dir),
+                    "summary_path": str(result.summary_path),
+                    "status": result.status,
+                    "reason": result.reason,
                 },
                 indent=2,
             )

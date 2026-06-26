@@ -401,6 +401,66 @@ Invocation metadata uses relative bridge paths such as `input_manifest.json`,
 SimplePIM command path from the environment/probe, but it must not include the
 absolute bridge directory or raw arrays.
 
+## Developer One-Task Dense Bridge Harness
+
+`src/quantum_bench/bench/dense_task_bridge.py` connects one real benchmark
+`ContractionTask` to the dense preparation and bridge boundary. It is a
+developer-only harness, not a provider route and not a normal benchmark suite
+mode. It is mock-by-default and does not change task routing; `dense_gemm`
+remains non-selected in normal `task_route_decisions.jsonl`.
+
+Example:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 0 --backend mock_numpy_dequantized
+```
+
+The command writes:
+
+```text
+runs/<timestamp>_dense_task_bridge/
+  environment.json
+  dense_task_bridge_summary.json
+  bridge/
+    input_manifest.json
+    operands/
+    references/
+    output_manifest.json
+    outputs/
+```
+
+The harness:
+
+- builds a builtin circuit workload;
+- constructs the `TensorNetwork` and `TaskGraph`;
+- selects one directly materializable task, or the requested `--task-index`;
+- calls dense preparation with actual task tensors;
+- writes bridge input blobs and metadata;
+- executes the selected bridge backend through `execute_dense_bridge(...)`;
+- writes `dense_task_bridge_summary.json`.
+
+Only initial-input tasks are materialized in this wave. Later tasks that require
+intermediate tensors return `unsupported` with
+`intermediate_tensor_inputs_not_materialized`; this prevents the harness from
+silently becoming partial full-TaskGraph routed execution.
+
+Status mapping:
+
+- `completed` only when the bridge backend reports a successful local/mock
+  status such as `mock_executed`;
+- `skipped` for non-executing SimplePIM external backend outcomes;
+- `unsupported` for task selection, materialization, or shape-preparation
+  issues;
+- `failed` for unexpected harness or malformed bridge failures.
+
+`simplepim_external` may write `input_manifest.json` and a non-executing
+`output_manifest.json`, but it does not write an output blob and does not call a
+subprocess. Summary artifact paths are relative to the run directory. CLI output
+may print absolute `run_dir` and `summary_path` for convenience.
+
+`external_command_executed` and `execution_implemented` remain `false` in this
+wave.
+
 ## Planner Comparison Position
 
 The planner comparison work belongs to:
@@ -419,7 +479,8 @@ which motivates route-aware costs later.
 - `2C.6` lower one real `ContractionTask` into dense route preparation
 - `2C.7` dense native/SimplePIM bridge contract for prepared payloads
 - `2C.8` executable dense bridge adapter interface, execution disabled by default
-- `2C.9` dynamic router analysis/preparation mode over full `TaskGraph`
+- `2C.9` developer-only one-task dense bridge harness
+- `2C.10` dynamic router analysis/preparation mode over full `TaskGraph`
 - `2D.1` heuristic/bypass route prototype
 - `2D.2` sparse route feasibility and SparseP integration plan
 - `2D.3` host aggregation/PID-Comm-inspired reporting
@@ -429,7 +490,7 @@ which motivates route-aware costs later.
 The next implementation wave should be:
 
 ```text
-2C.9 dynamic router analysis/preparation mode over full TaskGraph
+2C.10 dynamic router analysis/preparation mode over full TaskGraph
 ```
 
 ## Future Codex Instruction
