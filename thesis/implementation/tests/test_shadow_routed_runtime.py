@@ -45,8 +45,12 @@ def test_shadow_routed_runtime_bell_uses_cpu_fallback_authoritatively(tmp_path: 
     assert case_summary["status"] == "passed"
     assert case_summary["final_validation"]["passed"] is True
     assert rows
+    assert all(row["authoritative_route"] == "cpu_fallback" for row in rows)
     assert all(row["selected_authoritative_route"] == "cpu_fallback" for row in rows)
     assert all(row["final_route_used_for_tensor"] == "cpu_fallback" for row in rows)
+    assert all(row["shadow_policy_id"] == "cpu-only" for row in rows)
+    assert all(row["shadow_policy_status"] == "selected_cpu" for row in rows)
+    assert all(row["shadow_policy_reason"] == "policy_cpu_only" for row in rows)
     assert all(row["router_selected_route"] == "cpu_fallback" for row in rows)
     assert all(row["cpu_execution_status"] == "passed" for row in rows)
     assert all(any(route["route_id"] == "dense_gemm" for route in row["candidate_routes"]) for row in rows)
@@ -60,6 +64,10 @@ def test_shadow_routed_runtime_bell_uses_cpu_fallback_authoritatively(tmp_path: 
     assert "right_matrix" not in encoded
     assert str(tmp_path) not in encoded
     assert (run_dir / "cases" / "bell_2q" / "shadow_routed_runtime.jsonl").exists()
+    policy_summary = payload["summary"]["shadow_policy_summary"]
+    assert policy_summary["shadow_policy_id"] == "cpu-only"
+    assert policy_summary["cpu_fallback_count"] == len(rows)
+    assert policy_summary["dense_gemm_candidate_count"] == len(rows)
 
 
 def test_shadow_cpu_sequence_matches_cpu_exact_route_for_bell() -> None:
@@ -177,6 +185,74 @@ def test_shadow_bridge_artifact_cap_is_per_run_across_suite_cases(tmp_path: Path
     assert sum(1 for row in payload["rows"] if row["bridge_artifact_written"]) == 1
 
 
+def test_shadow_policy_dense_if_estimate_supported_selects_dense_without_changing_authority(tmp_path: Path) -> None:
+    run_dir = run_shadow_routed_runtime(
+        tmp_path,
+        case="bell_2q",
+        shadow_route_policy="dense-if-estimate-supported",
+        env={},
+    )
+    payload = _load_payload(run_dir)
+    rows = payload["rows"]
+    policy_summary = payload["summary"]["shadow_policy_summary"]
+
+    assert payload["status"] == "completed"
+    assert payload["case_summaries"][0]["final_validation"]["passed"] is True
+    assert rows
+    assert all(row["shadow_policy_status"] == "selected_dense" for row in rows)
+    assert all(row["shadow_policy_selected_route"] == "dense_gemm" for row in rows)
+    assert all(row["authoritative_route"] == "cpu_fallback" for row in rows)
+    assert all(row["selected_authoritative_route"] == "cpu_fallback" for row in rows)
+    assert all(row["final_route_used_for_tensor"] == "cpu_fallback" for row in rows)
+    assert policy_summary["selected_route_counts"]["dense_gemm"] == len(rows)
+    assert policy_summary["cpu_fallback_count"] == 0
+    assert policy_summary["total_host_to_dpu_bytes_for_policy_dense"] > 0
+    assert policy_summary["total_dpu_to_host_bytes_for_policy_dense"] > 0
+    assert policy_summary["total_mram_to_wram_bytes_for_policy_dense"] > 0
+
+
+def test_shadow_policy_bridge_ready_works_with_prepare_without_artifacts(tmp_path: Path) -> None:
+    run_dir = run_shadow_routed_runtime(
+        tmp_path,
+        case="bell_2q",
+        dense_shadow="prepare",
+        shadow_route_policy="dense-if-bridge-ready",
+        env={},
+    )
+    payload = _load_payload(run_dir)
+    rows = payload["rows"]
+
+    assert payload["summary"]["bridge_artifact_written_count"] == 0
+    assert all(row["bridge_manifest_eligible"] is True for row in rows)
+    assert all(row["shadow_policy_selected_route"] == "dense_gemm" for row in rows)
+    assert all(row["final_route_used_for_tensor"] == "cpu_fallback" for row in rows)
+
+
+def test_shadow_policy_summary_counts_match_rows(tmp_path: Path) -> None:
+    run_dir = run_shadow_routed_runtime(
+        tmp_path,
+        case="bell_2q",
+        shadow_route_policy="dense-if-no-tiling",
+        env={},
+    )
+    payload = _load_payload(run_dir)
+    rows = payload["rows"]
+    policy_summary = payload["summary"]["shadow_policy_summary"]
+
+    assert policy_summary["dense_gemm_candidate_count"] == sum(
+        1
+        for row in rows
+        for route in row["candidate_routes"]
+        if route["route_id"] == "dense_gemm" and route["estimate"]["supported"]
+    )
+    assert policy_summary["cpu_fallback_count"] == sum(
+        1 for row in rows if row["shadow_policy_selected_route"] == "cpu_fallback"
+    )
+    assert policy_summary["selected_route_counts"]["dense_gemm"] == sum(
+        1 for row in rows if row["shadow_policy_selected_route"] == "dense_gemm"
+    )
+
+
 def test_shadow_stub_explicit_check_is_capped_and_non_numeric(tmp_path: Path) -> None:
     run_dir = run_shadow_routed_runtime(
         tmp_path,
@@ -237,8 +313,10 @@ def test_shadow_csv_uses_json_strings_for_nested_fields(tmp_path: Path) -> None:
     assert rows
     candidate_routes = json.loads(rows[0]["candidate_routes"])
     output_shape = json.loads(rows[0]["output_shape"])
+    policy_blockers = json.loads(rows[0]["shadow_policy_blockers"])
     assert isinstance(candidate_routes, list)
     assert isinstance(output_shape, list)
+    assert isinstance(policy_blockers, list)
 
 
 def test_shadow_cli_rejects_invalid_external_combinations() -> None:
@@ -250,6 +328,7 @@ def test_shadow_cli_rejects_invalid_external_combinations() -> None:
             "bridge_backend": "mock_numpy_dequantized",
             "execute_external": False,
             "max_bridge_artifacts": 0,
+            "shadow_route_policy": "cpu-only",
         },
         {
             "suite_path": None,
@@ -258,6 +337,7 @@ def test_shadow_cli_rejects_invalid_external_combinations() -> None:
             "bridge_backend": "mock_numpy_dequantized",
             "execute_external": False,
             "max_bridge_artifacts": 0,
+            "shadow_route_policy": "cpu-only",
         },
         {
             "suite_path": None,
@@ -266,6 +346,7 @@ def test_shadow_cli_rejects_invalid_external_combinations() -> None:
             "bridge_backend": "simplepim_external_stub",
             "execute_external": False,
             "max_bridge_artifacts": 1,
+            "shadow_route_policy": "cpu-only",
         },
         {
             "suite_path": None,
@@ -274,6 +355,16 @@ def test_shadow_cli_rejects_invalid_external_combinations() -> None:
             "bridge_backend": "simplepim_external_stub",
             "execute_external": True,
             "max_bridge_artifacts": 0,
+            "shadow_route_policy": "cpu-only",
+        },
+        {
+            "suite_path": None,
+            "case": "bell_2q",
+            "dense_shadow": "none",
+            "bridge_backend": "none",
+            "execute_external": False,
+            "max_bridge_artifacts": 0,
+            "shadow_route_policy": "dense-if-bridge-ready",
         },
     ]
     for kwargs in invalid_cases:
@@ -305,6 +396,8 @@ def test_shadow_cli_dispatch(monkeypatch, capsys, tmp_path: Path) -> None:
             "none",
             "--max-bridge-artifacts",
             "1",
+            "--shadow-route-policy",
+            "dense-if-estimate-supported",
         ],
     )
 
@@ -315,6 +408,7 @@ def test_shadow_cli_dispatch(monkeypatch, capsys, tmp_path: Path) -> None:
     assert called["dense_shadow"] == "bridge"
     assert called["bridge_backend"] == "none"
     assert called["max_bridge_artifacts"] == 1
+    assert called["shadow_route_policy"] == "dense-if-estimate-supported"
     assert payload["status"] == "completed"
     assert payload["run_dir"].endswith("fake_shadow_runtime")
 

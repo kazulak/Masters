@@ -22,7 +22,17 @@ from quantum_bench.core.records import (
     to_jsonable,
 )
 from quantum_bench.environment import capture_environment
-from quantum_bench.routing import DenseTaskPreparationInput, TaskRouteContext, prepare_dense_task, route_task_graph
+from quantum_bench.routing import (
+    SHADOW_ROUTE_POLICY_IDS,
+    DenseTaskPreparationInput,
+    ShadowRoutePolicyConfig,
+    ShadowRoutePolicyId,
+    TaskRouteContext,
+    evaluate_shadow_route_policy,
+    prepare_dense_task,
+    route_task_graph,
+    summarize_shadow_route_policy,
+)
 from quantum_bench.targets.upmem import (
     SIMPLEPIM_PROBE_KEY,
     UPMEM_DENSE_ESTIMATE_KEY,
@@ -53,6 +63,7 @@ RUNTIME_FIELDS = [
     "task_id",
     "input_tensor_ids",
     "output_tensor_id",
+    "authoritative_route",
     "selected_authoritative_route",
     "candidate_routes",
     "router_selected_route",
@@ -81,6 +92,11 @@ RUNTIME_FIELDS = [
     "external_command_executed",
     "execution_implemented",
     "native_kernel_executed",
+    "shadow_policy_id",
+    "shadow_policy_selected_route",
+    "shadow_policy_status",
+    "shadow_policy_reason",
+    "shadow_policy_blockers",
     "final_route_used_for_tensor",
 ]
 
@@ -95,6 +111,7 @@ def run_shadow_routed_runtime(
     bridge_backend: ShadowBridgeBackend = "none",
     execute_external: bool = False,
     max_bridge_artifacts: int = 0,
+    shadow_route_policy: ShadowRoutePolicyId = "cpu-only",
     env: Mapping[str, str] | None = None,
 ) -> Path:
     _validate_options(
@@ -104,6 +121,7 @@ def run_shadow_routed_runtime(
         bridge_backend=bridge_backend,
         execute_external=execute_external,
         max_bridge_artifacts=max_bridge_artifacts,
+        shadow_route_policy=shadow_route_policy,
         env=env,
     )
 
@@ -151,6 +169,7 @@ def run_shadow_routed_runtime(
                 "bridge_backend": bridge_backend,
                 "execute_external": execute_external,
                 "max_bridge_artifacts": max_bridge_artifacts,
+                "shadow_route_policy": shadow_route_policy,
             },
         )
 
@@ -169,6 +188,7 @@ def run_shadow_routed_runtime(
             bridge_backend=bridge_backend,
             execute_external=execute_external,
             max_bridge_artifacts=max_bridge_artifacts,
+            shadow_route_policy=shadow_route_policy,
             bridge_artifacts_written=bridge_artifacts_written,
             probe=probe,
             env=env,
@@ -188,6 +208,7 @@ def run_shadow_routed_runtime(
         "bridge_backend": bridge_backend,
         "execute_external": execute_external,
         "max_bridge_artifacts": max_bridge_artifacts,
+        "shadow_route_policy": shadow_route_policy,
         "simplepim_probe": probe.to_json_dict(),
         "status": summary["status"],
         "summary": summary,
@@ -211,6 +232,7 @@ def validate_cli_options(
     bridge_backend: str,
     execute_external: bool,
     max_bridge_artifacts: int,
+    shadow_route_policy: str,
     env: Mapping[str, str] | None = None,
 ) -> None:
     _validate_options(
@@ -220,6 +242,7 @@ def validate_cli_options(
         bridge_backend=bridge_backend,
         execute_external=execute_external,
         max_bridge_artifacts=max_bridge_artifacts,
+        shadow_route_policy=shadow_route_policy,
         env=env,
     )
 
@@ -235,6 +258,7 @@ def _run_shadow_case(
     bridge_backend: ShadowBridgeBackend,
     execute_external: bool,
     max_bridge_artifacts: int,
+    shadow_route_policy: ShadowRoutePolicyId,
     bridge_artifacts_written: int,
     probe: Any,
     env: Mapping[str, str] | None,
@@ -259,6 +283,8 @@ def _run_shadow_case(
     )
     routing = route_task_graph(graph, route_context)
     decisions_by_task = _decisions_by_task(routing.decisions)
+    policy_config = ShadowRoutePolicyConfig(policy_id=shadow_route_policy)
+    simplepim_probe = probe.to_json_dict()
 
     rows: list[JsonDict] = []
     tensors = {tensor.spec.id: np.asarray(tensor.array, dtype=np.complex128) for tensor in network.tensors}
@@ -320,6 +346,12 @@ def _run_shadow_case(
             probe=probe,
             env=env,
         )
+        policy_decision = evaluate_shadow_route_policy(
+            config=policy_config,
+            task_decisions=task_decisions,
+            dense_record=dense_record,
+            simplepim_probe=simplepim_probe,
+        )
         if dense_record.get("shadow_warning"):
             warnings.append(
                 {
@@ -362,6 +394,7 @@ def _run_shadow_case(
             "task_id": task.id,
             "input_tensor_ids": task.input_tensor_ids,
             "output_tensor_id": task.output_tensor_id,
+            "authoritative_route": "cpu_fallback",
             "selected_authoritative_route": "cpu_fallback",
             "candidate_routes": [_candidate_route_payload(decision) for decision in task_decisions],
             "router_selected_route": router_selected.get("route_id"),
@@ -374,6 +407,11 @@ def _run_shadow_case(
             "output_bytes": output_bytes,
             "live_tensor_bytes_after_task": live_tensor_bytes,
             **dense_record,
+            "shadow_policy_id": policy_decision.policy_id,
+            "shadow_policy_selected_route": policy_decision.selected_route,
+            "shadow_policy_status": policy_decision.status,
+            "shadow_policy_reason": policy_decision.reason,
+            "shadow_policy_blockers": policy_decision.blockers,
             "final_route_used_for_tensor": "cpu_fallback" if cpu_status == "passed" else None,
         }
         rows.append(to_jsonable(row))
@@ -813,6 +851,7 @@ def _case_summary(
 def _run_summary(rows: list[JsonDict], case_summaries: list[JsonDict]) -> JsonDict:
     failed_cases = [case for case in case_summaries if case["status"] != "passed"]
     warning_count = sum(int(case.get("dense_shadow_warning_count", 0) or 0) for case in case_summaries)
+    policy_summary = summarize_shadow_route_policy(rows).to_json_dict()
     return {
         "status": "failed" if failed_cases else "completed",
         "case_count": len(case_summaries),
@@ -828,6 +867,7 @@ def _run_summary(rows: list[JsonDict], case_summaries: list[JsonDict]) -> JsonDi
         "bridge_artifact_written_count": sum(1 for row in rows if row.get("bridge_artifact_written")),
         "external_command_executed_count": sum(1 for row in rows if row.get("external_command_executed")),
         "native_kernel_executed_count": sum(1 for row in rows if row.get("native_kernel_executed")),
+        "shadow_policy_summary": policy_summary,
     }
 
 
@@ -845,6 +885,8 @@ def _runtime_markdown(summary: JsonDict, case_summaries: list[JsonDict]) -> str:
         f"- Bridge artifacts written: {summary['bridge_artifact_written_count']}",
         f"- External commands executed: {summary['external_command_executed_count']}",
         f"- Native kernels executed: {summary['native_kernel_executed_count']}",
+        f"- Shadow policy: {summary['shadow_policy_summary']['shadow_policy_id']}",
+        f"- Shadow dense selections: {summary['shadow_policy_summary']['selected_route_counts'].get('dense_gemm', 0)}",
         "",
         "## Cases",
         "",
@@ -903,12 +945,17 @@ def _validate_options(
     bridge_backend: str,
     execute_external: bool,
     max_bridge_artifacts: int,
+    shadow_route_policy: str,
     env: Mapping[str, str] | None,
 ) -> None:
     if (suite_path is None) == (case is None):
         raise ValueError("shadow-routed-runtime requires exactly one of --suite or --case")
     if dense_shadow not in {"none", "prepare", "bridge", "stub"}:
         raise ValueError("--dense-shadow must be one of: none, prepare, bridge, stub")
+    if shadow_route_policy not in SHADOW_ROUTE_POLICY_IDS:
+        raise ValueError("--shadow-route-policy must be one of: " + ", ".join(SHADOW_ROUTE_POLICY_IDS))
+    if shadow_route_policy == "dense-if-bridge-ready" and dense_shadow == "none":
+        raise ValueError("--shadow-route-policy dense-if-bridge-ready requires --dense-shadow prepare, bridge, or stub")
     if bridge_backend not in {"none", "mock_numpy_dequantized", "simplepim_external_stub"}:
         raise ValueError("--bridge-backend must be one of: none, mock_numpy_dequantized, simplepim_external_stub")
     if max_bridge_artifacts < 0:

@@ -583,6 +583,7 @@ PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench shadow-routed-runtime 
 The harness records:
 
 - task-router candidate decisions for every task;
+- shadow route policy decisions for what-if future route selection;
 - `selected_authoritative_route: cpu_fallback` for every executed task;
 - dense preparation status and reasons before CPU input release;
 - bridge-manifest eligibility and optional capped bridge artifacts;
@@ -619,6 +620,21 @@ execution. It proves that full-graph route decisions, CPU fallback execution,
 and per-task dense route evidence can coexist without changing normal benchmark
 provider behavior.
 
+The shadow route policy layer is the current dynamic routing analysis boundary.
+It distinguishes three concepts:
+
+- router candidates: all route-slot evaluations from `route_task_graph`;
+- shadow policy choice: a what-if `dense_gemm` or `cpu_fallback` selection under
+  policies such as `cpu-only`, `dense-if-estimate-supported`,
+  `dense-if-no-tiling`, and `dense-if-bridge-ready`;
+- authoritative route: always `cpu_fallback` in this wave.
+
+Policy summaries count supported dense candidates before blockers, CPU fallback
+policy selections, blocker reasons, and transfer totals only for tasks whose
+shadow policy selected `dense_gemm`. These policy fields are analysis evidence
+for future dynamic heuristic routing. They are not production route selection
+and they never feed dense/mock/stub output into later tensors.
+
 ## Planner Comparison Position
 
 The planner comparison work belongs to:
@@ -642,10 +658,11 @@ which motivates route-aware costs later.
 - `2C.11` non-executing external SimplePIM dense bridge stub
 - `2C.12` dense route readiness coverage analyzer over full `TaskGraph`
 - `2D.1` shadow routed TaskGraph runtime with CPU fallback authoritative
-- `2D.2` heuristic/bypass route prototype
-- `2D.3` sparse route feasibility and SparseP integration plan
-- `2D.4` host aggregation/PID-Comm-inspired reporting
-- `2D.5` optional TransPimLib support slot
+- `2D.2` shadow route policy layer for what-if dynamic route selection
+- `2D.3` heuristic/bypass route prototype
+- `2D.4` sparse route feasibility and SparseP integration plan
+- `2D.5` host aggregation/PID-Comm-inspired reporting
+- `2D.6` optional TransPimLib support slot
 - `2E.1` revisit UPMEM-aware path selection using route-aware costs
 
 The next implementation wave should build on the shadow runtime evidence and

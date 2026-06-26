@@ -195,6 +195,16 @@ against the CPU fallback result, and `selected_authoritative_route` remains
 `simplepim_external_stub` path with `--dense-shadow stub`, `--execute-external`,
 and `SIMPLEPIM_STUB_BIN`.
 
+The shadow route policy inside this command is a what-if selector. Router
+candidates are all task route evaluations, the shadow policy choice records
+which route would be selected under a chosen future policy, and the
+authoritative route remains the CPU fallback used for tensor data and final
+validation. For example:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench shadow-routed-runtime --case bell_2q --shadow-route-policy dense-if-estimate-supported
+```
+
 It writes:
 
 ```text

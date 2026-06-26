@@ -65,6 +65,11 @@ def main() -> int:
     shadow_parser.add_argument("--n-qubits", type=int)
     shadow_parser.add_argument("--dense-shadow", default="prepare", choices=("none", "prepare", "bridge", "stub"))
     shadow_parser.add_argument(
+        "--shadow-route-policy",
+        default="cpu-only",
+        choices=("cpu-only", "dense-if-estimate-supported", "dense-if-no-tiling", "dense-if-bridge-ready"),
+    )
+    shadow_parser.add_argument(
         "--bridge-backend",
         default="none",
         choices=("none", "mock_numpy_dequantized", "simplepim_external_stub"),
@@ -204,6 +209,7 @@ def main() -> int:
                 bridge_backend=args.bridge_backend,
                 execute_external=args.execute_external,
                 max_bridge_artifacts=args.max_bridge_artifacts,
+                shadow_route_policy=args.shadow_route_policy,
             )
         except ValueError as exc:
             parser.error(str(exc))
@@ -216,6 +222,7 @@ def main() -> int:
             bridge_backend=args.bridge_backend,
             execute_external=args.execute_external,
             max_bridge_artifacts=args.max_bridge_artifacts,
+            shadow_route_policy=args.shadow_route_policy,
         )
         print(
             json.dumps(

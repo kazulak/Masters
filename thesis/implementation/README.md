@@ -26,6 +26,8 @@ SIMPLEPIM_STUB_BIN=native/upmem/simplepim/simplepim_dense_stub.py PYTHONPATH=src
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-route-coverage --case bell_2q
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-route-coverage --suite configs/suites/planner_compare.yml
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench shadow-routed-runtime --case bell_2q
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench shadow-routed-runtime --case bell_2q --shadow-route-policy dense-if-estimate-supported
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench shadow-routed-runtime --case ghz_chain --n-qubits 3 --shadow-route-policy dense-if-no-tiling
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench plot runs/latest
 ```
 
@@ -49,8 +51,8 @@ scripts/run_energy_suite.sh configs/suites/local_energy.yml
   tile-plan, schedule, SimplePIM probe, dense bridge manifests, and explicit
   SimplePIM dry-run microbenchmark groundwork shared by future UPMEM providers.
 - `src/quantum_bench/routing/` contains the task-level route contract,
-  analysis-only dynamic router skeleton, and one-task dense preparation
-  boundary for future UPMEM/SimplePIM execution.
+  analysis-only dynamic router skeleton, shadow route policy records, and
+  one-task dense preparation boundary for future UPMEM/SimplePIM execution.
 - `src/quantum_bench/tn/materialize.py` contains developer-facing TaskGraph
   CPU replay for materializing one selected task's inputs. It is not the normal
   CPU execution path.
@@ -65,7 +67,8 @@ scripts/run_energy_suite.sh configs/suites/local_energy.yml
 - `src/quantum_bench/bench/shadow_routed_runtime.py` is a developer-only full
   TaskGraph harness. It executes every task with CPU fallback as the
   authoritative numeric route while recording dense route preparation and
-  optional capped bridge/stub evidence as shadow metadata.
+  optional capped bridge/stub evidence as shadow metadata. Its shadow route
+  policy fields are what-if decisions only; they never replace CPU fallback.
 - `native/upmem/simplepim/` is reserved for future SimplePIM bridge code and
   currently contains only a non-executing external contract stub.
 - `native/upmem/raw_dense/` is reserved for future raw UPMEM SDK dense kernels.
