@@ -74,3 +74,37 @@ Raw UPMEM SDK experiments should remain separate from this bridge. SimplePIM is
 the preferred first dense execution path if it is practical because it should
 reduce early SDK and kernel boilerplate while the host-side task, tile-plan, and
 validation contracts are still stabilizing.
+
+## Environment Verification
+
+Before replacing the stub with real SimplePIM/native execution, run the project
+environment check from `thesis/implementation`:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-env-check
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-env-check --run-sample --target simulator
+```
+
+The checker records:
+
+- `UPMEM_HOME`, if configured;
+- UPMEM tools found on `PATH`, including `dpu-upmem-dpurte-clang` and
+  `dpu-pkg-config`;
+- `SIMPLEPIM_HOME`, if configured;
+- `SIMPLEPIM_STUB_BIN`, if configured for the non-executing stub;
+- the repository fallback `../legacy/extern/SimplePIM` from
+  `thesis/implementation`;
+- optional SimplePIM sample build and simulator run status.
+
+`SIMPLEPIM_HOME` identifies the source tree but does not prove execution.
+Without `--run-sample`, simulator and hardware execution remain not verified.
+With `--run-sample --target simulator`, the checker copies the SimplePIM source
+tree into the timestamped run directory, builds the `benchmarks/va` sample, and
+runs it with `DPU_BACKEND=simulator`. The source copy is intentionally isolated
+from the external dependency tree.
+
+Hardware is never exercised by default. `--target hardware` records hardware as
+not verified unless a future explicit hardware-safe sample path is added.
+Command stdout/stderr are bounded in artifacts; configured homes and tool paths
+may be absolute because they describe the local machine, while run artifact
+paths are relative.

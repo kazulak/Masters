@@ -51,6 +51,7 @@ only bounded local tasks that fit an explicit route contract.
 | Dynamic heuristic router | `src/quantum_bench/routing/` | Analysis-only task-level router skeleton | Add preparation/execution-aware routing after data conversion and tiling mature |
 | Dense GEMM route | `src/quantum_bench/providers/exact_tn/upmem_dense_placeholder.py`, `src/quantum_bench/routing/dense_prepare.py`, `src/quantum_bench/targets/upmem/schedule.py`, future `native/upmem/simplepim/` | Estimate-only placeholder plus one-task host preparation; no execution | SimplePIM-backed microkernel, then integrated TaskGraph route |
 | SimplePIM bridge/probe | `src/quantum_bench/targets/upmem/simplepim.py`, `src/quantum_bench/targets/upmem/simplepim_microbench.py`, `src/quantum_bench/targets/upmem/dense_bridge.py`, future `native/upmem/simplepim/` | Availability probe, dry-run dense GEMM microbenchmark metadata, one-task dense preparation metadata, and file-based bridge manifests | SimplePIM-backed microkernel for one prepared task |
+| UPMEM/SimplePIM environment bring-up | `src/quantum_bench/targets/upmem/environment.py`, `src/quantum_bench/bench/upmem_env_check.py` | Reproducible SDK/toolchain/SimplePIM source check with optional simulator sample | Use verified simulator evidence before real dense backend implementation |
 | Sparse route | Architecture slot only | Not implemented | Add SparseP feasibility plan after dense route skeleton |
 | Heuristic/bypass route | Architecture slot only | Not implemented | Host-side row-swap/permutation prototype first |
 | Optional TransPimLib/math support | Architecture slot only | Not implemented | Optional support slot, not first priority |
@@ -262,6 +263,63 @@ under `src/quantum_bench/providers/`; shared host-side UPMEM estimates, tiling,
 and SimplePIM probe metadata belong under `src/quantum_bench/targets/upmem/`;
 shared tensor conversion records and utilities belong under
 `src/quantum_bench/formats/`.
+
+## UPMEM/SimplePIM Environment Verification
+
+`src/quantum_bench/targets/upmem/environment.py` and
+`src/quantum_bench/bench/upmem_env_check.py` are the transition layer from
+stub/file-contract evidence toward real PIM backend bring-up. They do not
+implement dense tensor contraction, routed execution, or hardware performance
+measurement.
+
+The command is developer-facing and outside normal benchmark suites:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-env-check
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-env-check --run-sample --target simulator
+```
+
+Discovery order for SimplePIM is explicit:
+
+1. `--simplepim-home`
+2. `SIMPLEPIM_HOME`
+3. `root_dir.parent / "legacy" / "extern" / "SimplePIM"`, which is
+   `../legacy/extern/SimplePIM` when run from `thesis/implementation`
+
+The environment check records:
+
+- UPMEM SDK homes and tool probes such as `dpu-upmem-dpurte-clang`,
+  `dpu-pkg-config`, and optional diagnostic tools;
+- SimplePIM source discovery and `SIMPLEPIM_STUB_BIN` if configured;
+- `simulator_available`, which is `not_verified` until a simulator sample run
+  succeeds;
+- `hardware_probe_status`, which remains `not_verified` unless a future safe
+  explicit hardware probe is added;
+- bounded stdout/stderr snippets from optional command checks;
+- next recommended backend step.
+
+With `--run-sample --target simulator`, the checker copies the SimplePIM source
+tree into the timestamped run directory, builds the `benchmarks/va` sample, and
+runs it with `DPU_BACKEND=simulator`. A specific correctness marker in stdout
+is best-effort metadata only; return code 0 is the primary success condition.
+Sample build/run failure makes `upmem_environment_check.json.status` equal to
+`failed`, but the CLI exits normally after writing artifacts so bring-up
+failures remain reproducible.
+
+Artifacts:
+
+```text
+runs/<timestamp>_upmem_env_check/
+  environment.json
+  upmem_environment_check.json
+  simplepim_sample_build.json      only with --run-sample
+  simplepim_sample_run.json        only with --run-sample
+  upmem_env_check_summary.md
+```
+
+Configured homes and tool paths may be absolute because they describe the local
+machine. Run artifact paths, sample workspaces, and copied sample locations are
+relative to the run directory.
 
 ## SimplePIM Dense Microbenchmark Artifact Schema
 
@@ -663,11 +721,12 @@ which motivates route-aware costs later.
 - `2D.4` sparse route feasibility and SparseP integration plan
 - `2D.5` host aggregation/PID-Comm-inspired reporting
 - `2D.6` optional TransPimLib support slot
+- `2E.0` UPMEM/SimplePIM environment verification and simulator sample bring-up
 - `2E.1` revisit UPMEM-aware path selection using route-aware costs
 
 The next implementation wave should build on the shadow runtime evidence and
-either start a real dense execution microkernel path or introduce route
-selection analysis that consumes coverage/readiness/shadow-runtime results.
+the environment verification artifact before starting a real dense execution
+microkernel path or route-aware path selection work.
 
 ## Future Codex Instruction
 

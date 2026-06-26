@@ -26,7 +26,7 @@ implementation/
     plots/                 plot generation from summary artifacts
     providers/             executable routes
     routing/               task-level route contract, analysis router, and dense preparation boundary
-    targets/upmem/         UPMEM WRAM tile-plan, traffic, schedule, probe, bridge, and microbench groundwork
+    targets/upmem/         UPMEM WRAM tile-plan, traffic, schedule, probe, bridge, microbench, and env-check groundwork
     tn/                    exact tensor-network construction and planning
     validation/            numerical validation metrics
   tests/                   Python runtime tests
@@ -67,7 +67,8 @@ tn/
 targets/upmem/
   host-side UPMEM model: dense WRAM tile plans, data format, traffic estimate,
   tiling, DPU schedule groundwork, SimplePIM availability probe metadata, and
-  explicit dense bridge and dry-run SimplePIM dense GEMM microbenchmark records
+  explicit dense bridge, dry-run SimplePIM dense GEMM microbenchmark records,
+  and reproducible UPMEM/SimplePIM environment verification
 formats/
   shared host-side conversion records and deterministic fixed-point utilities
 routing/
@@ -118,6 +119,33 @@ runs/<timestamp>_simplepim_microbench/
 
 `ready` in that artifact means ready for a future bridge attempt, not validated
 SimplePIM execution.
+
+The UPMEM/SimplePIM environment check is also outside normal benchmark suites:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-env-check
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-env-check --run-sample --target simulator
+```
+
+It writes:
+
+```text
+runs/<timestamp>_upmem_env_check/
+  environment.json
+  upmem_environment_check.json
+  simplepim_sample_build.json      only with --run-sample
+  simplepim_sample_run.json        only with --run-sample
+  upmem_env_check_summary.md
+```
+
+The check records UPMEM SDK tools, SimplePIM source discovery, simulator sample
+status when requested, and bounded stdout/stderr snippets. It uses
+`../legacy/extern/SimplePIM` as the repo fallback from `thesis/implementation`.
+Tool paths and configured homes may be absolute because they describe the local
+machine; artifact paths inside the run directory remain relative. A sample
+build/run failure makes the JSON status `failed`, but the CLI still exits
+normally after writing the artifact so backend bring-up failures are
+reproducible rather than hidden.
 
 The developer-only one-task dense bridge harness is also outside normal suite
 execution:
@@ -249,13 +277,15 @@ tile tasks.
 
 1. Connect `formats/` fixed-point records to future route preparation artifacts
    once task routes begin preparing tensors.
-2. Extend the current `targets/upmem/` tile-plan model from deterministic host
+2. Use `upmem-env-check --run-sample --target simulator` to verify the local
+   SimplePIM/UPMEM toolchain before real backend work.
+3. Extend the current `targets/upmem/` tile-plan model from deterministic host
    records to executable tiling choices.
-3. Connect `routing/` from analysis-only route decisions to a preparation and
+4. Connect `routing/` from analysis-only route decisions to a preparation and
    execution-aware task router.
-4. Port the useful dense UPMEM kernel only after the task schedule and WRAM model
+5. Port the useful dense UPMEM kernel only after the task schedule and WRAM model
    exist.
-5. Add sparse and heuristic/permutation providers after the dense path is
+6. Add sparse and heuristic/permutation providers after the dense path is
    structurally stable.
 
 ## Design Rules

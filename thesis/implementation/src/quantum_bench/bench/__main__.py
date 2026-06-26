@@ -77,6 +77,12 @@ def main() -> int:
     shadow_parser.add_argument("--execute-external", action="store_true")
     shadow_parser.add_argument("--max-bridge-artifacts", type=int, default=0)
 
+    upmem_env_parser = sub.add_parser("upmem-env-check")
+    upmem_env_parser.add_argument("--run-sample", action="store_true")
+    upmem_env_parser.add_argument("--target", default="auto", choices=("auto", "simulator", "hardware"))
+    upmem_env_parser.add_argument("--timeout-seconds", type=float, default=10.0)
+    upmem_env_parser.add_argument("--simplepim-home")
+
     sub.add_parser("probe")
 
     args = parser.parse_args()
@@ -232,6 +238,31 @@ def main() -> int:
                     "csv": str(run_dir / "shadow_routed_runtime.csv"),
                     "summary": str(run_dir / "shadow_routed_runtime_summary.md"),
                     "status": "completed",
+                },
+                indent=2,
+            )
+        )
+        return 0
+    if args.command == "upmem-env-check":
+        from quantum_bench.bench.upmem_env_check import run_upmem_env_check
+
+        try:
+            run_dir, artifact_path, status = run_upmem_env_check(
+                root_dir,
+                run_sample=args.run_sample,
+                target=args.target,
+                timeout_seconds=args.timeout_seconds,
+                simplepim_home=args.simplepim_home,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(
+            json.dumps(
+                {
+                    "run_dir": str(run_dir),
+                    "artifact": str(artifact_path),
+                    "summary": str(run_dir / "upmem_env_check_summary.md"),
+                    "status": status,
                 },
                 indent=2,
             )
