@@ -9,6 +9,10 @@ circuits, plans contractions, asks each provider route whether it can execute,
 records skip reasons, validates numerical output, and writes benchmark artifacts
 under timestamped `runs/` directories.
 
+The detailed Host-CPU + UPMEM/SimplePIM architecture scaffold is documented in
+`docs/runtime_architecture_map.md`. Read it before planning route, target,
+planner, or native-code changes.
+
 ## Quick Start
 
 ```bash

@@ -1,0 +1,209 @@
+# Runtime Architecture Map
+
+This document is the implementation scaffold for the Master's thesis runtime.
+It maps the intended Host-CPU + UPMEM/SimplePIM architecture to the current
+`thesis/implementation` codebase and records where future modules belong.
+
+The thesis contribution is a modular Host-CPU + UPMEM/SimplePIM-oriented runtime
+architecture for exact tensor-network quantum-circuit simulation. The host keeps
+global orchestration, planning, routing, validation, and reporting. Bounded local
+execution is delegated to route providers.
+
+Path optimization is important, but it is only one host-side module. The runtime
+must not drift into a path-planner-only prototype or a dense-only throwaway
+vertical slice.
+
+## End-To-End Architecture
+
+```text
+Quantum circuit input
+  -> Host CPU orchestrator
+       circuit analyzer
+       path optimizer
+       WRAM slicer
+       data format conversion
+       dynamic heuristic router
+  -> UPMEM/SimplePIM execution layer
+       dense GEMM route
+       sparse route
+       heuristic/bypass route
+       optional TransPimLib/math-support route
+  -> host aggregation
+  -> amplitude/validation output
+  -> benchmark artifacts
+```
+
+The host is the control plane. It owns the circuit, tensor network, contraction
+plan, route eligibility decisions, fallback policy, validation reference, and
+benchmark artifacts. UPMEM/SimplePIM code is the data plane and should execute
+only bounded local tasks that fit an explicit route contract.
+
+## Current Code Mapping
+
+| Architecture block | Current location | Current status | Intended direction |
+|---|---|---|---|
+| Benchmark spine | `src/quantum_bench/bench/` | Implemented | Remains the single reproducible pipeline |
+| Circuit analyzer | `src/quantum_bench/circuits/`, `src/quantum_bench/tn/network.py` | Basic circuit loading and tensor-network construction | Add structural analysis for dense, sparse, permutation, and diagonal route eligibility |
+| Path optimizer | `src/quantum_bench/tn/planners.py`, `src/quantum_bench/tn/task_graph.py` | opt_einsum planner interface | Later add route-aware costs, not route-aware execution yet |
+| Planner comparison | `src/quantum_bench/bench/planner_compare.py`, `src/quantum_bench/bench/planner_scoring.py` | Implemented analysis layer | Host path optimizer, cost-model, and target-aware planning analysis |
+| WRAM slicer | `src/quantum_bench/targets/upmem/schedule.py` | Estimate-only dense single-DPU feasibility | Split into executable tile planner in `2C.3` |
+| Data format conversion | Not yet separated | Only modeled through `UpmemDataFormat` | Add shared conversion layer in `2C.2` |
+| Dynamic heuristic router | Not yet implemented | Case-level route decisions exist | Add task-level router skeleton in `2C.1` |
+| Dense GEMM route | `src/quantum_bench/providers/exact_tn/upmem_dense_placeholder.py`, `src/quantum_bench/targets/upmem/schedule.py`, future `native/upmem/` | Estimate-only placeholder | SimplePIM-first dense microbenchmark, then one real task |
+| Sparse route | Architecture slot only | Not implemented | Add SparseP feasibility plan after dense route skeleton |
+| Heuristic/bypass route | Architecture slot only | Not implemented | Host-side row-swap/permutation prototype first |
+| Optional TransPimLib/math support | Architecture slot only | Not implemented | Optional support slot, not first priority |
+| Host aggregation | CPU route implicit, UPMEM future | Not separated | Make aggregation cost visible before claiming route speedups |
+| Validation/reporting | `src/quantum_bench/validation/`, `src/quantum_bench/bench/summary.py`, `src/quantum_bench/plots/` | Implemented for current routes | Extend to task-routed outputs later |
+| Benchmark artifacts | `runs/`, JSONL, summaries, path/task artifacts | Implemented | Add task-level route decisions and conversion/aggregation metrics |
+
+## Current Route Interpretation
+
+- `cpu_tn_einsum_exact`
+  - Exact tensor-network CPU reference.
+  - Executes `TaskGraph.tasks` task-by-task with NumPy.
+  - Current role: correctness and CPU baseline.
+- `quest_cpu_full_state_benchmark`
+  - CPU full-state-vector baseline through the native QuEST runner.
+  - Metrics-only and benchmark-only.
+  - Current role: external baseline, not thesis novelty.
+- `upmem_dense_int8_placeholder`
+  - Estimate-only UPMEM dense candidate.
+  - Uses `targets/upmem/` to record dense int8 feasibility, WRAM fit, transfer
+    estimates, tile counts, and skip reasons.
+  - Current role: dense route architecture slot and estimate layer, not native
+    execution.
+
+## Route Maturity Model
+
+| Level | Meaning |
+|---:|---|
+| 0 | Documented architecture slot |
+| 1 | Typed interface/contract |
+| 2 | Estimate-only implementation |
+| 3 | Host-side prototype |
+| 4 | SimplePIM/UPMEM-backed microkernel |
+| 5 | Integrated TaskGraph route |
+| 6 | Thesis-grade benchmarked route |
+
+| Module or route | Current level | Next intended level |
+|---|---:|---:|
+| CPU exact TN route | 5 | 6 |
+| QuEST CPU full-state baseline | 5 | 6 |
+| UPMEM dense GEMM route | 2 | 3, then 4 |
+| UPMEM WRAM slicer/tile planner | 2 | 3 |
+| Data format conversion layer | 0 | 1 |
+| Dynamic task router | 0/1 | 1, then 2 |
+| Heuristic/bypass route | 0 | 1, then 3 |
+| Sparse route | 0 | 1, then 2 |
+| Optional TransPimLib/math support | 0 | 1 |
+| Host aggregation layer | 0/implicit | 1 |
+| Planner comparison/cost model | 3 | 4 only if tied into route-aware planning later |
+| UPMEM-aware path selection | 0/analysis only | 1 after route estimates mature |
+
+Level 6 requires more than implementation. It requires reproducible suite
+coverage, validation where output is produced, explicit skipped/rejected reasons,
+environment capture, route metrics, and thesis-grade reporting.
+
+## Future Route Contract
+
+The current `ExecutionRoute` protocol is case/graph-level. Future UPMEM work
+needs a task-level route/provider contract that can be used by a dynamic router.
+Exact names can be adapted to the codebase later, but the conceptual contract is:
+
+```text
+can_execute(task, context) -> eligibility decision and reason
+estimate(task, context) -> cost, memory, transfer, and precision estimate
+prepare(task, context) -> prepared task, converted data, and preparation metrics
+execute(prepared_task, context) -> result and execution metrics
+validate(result, reference) -> validation record when output is produced
+```
+
+Every route should report explicit failures, not hidden fallback. A rejected or
+skipped route is useful thesis data if the reason is recorded.
+
+## Dynamic Router Concept
+
+The future dynamic router is a host-side module. It should:
+
+- inspect each `ContractionTask`;
+- enumerate candidate routes;
+- evaluate route eligibility and cost estimates;
+- record selected, rejected, skipped, and failed route decisions;
+- preserve fallback behavior, typically CPU exact TN for correctness;
+- keep optional hardware or external libraries skippable;
+- write auditable task-level route-decision artifacts.
+
+The router must not make UPMEM providers own global pathfinding. It receives an
+existing `TaskGraph`, asks which local route can handle each bounded task, and
+records the reasoning.
+
+## SimplePIM Position
+
+SimplePIM is the preferred first implementation path for UPMEM execution if it
+is practical in the local environment. It should be treated as a provider layer
+for bounded UPMEM tasks, not as the architecture itself.
+
+Raw UPMEM SDK code remains an escape hatch for dense hot paths, for experiments
+where SimplePIM hides too much detail, or for comparison against SimplePIM. Raw
+SDK code belongs under `native/upmem/`; Python route/provider code belongs under
+`src/quantum_bench/providers/`; shared host-side UPMEM estimates and tiling
+belong under `src/quantum_bench/targets/upmem/`.
+
+## Planner Comparison Position
+
+The planner comparison work belongs to:
+
+- host path optimizer analysis;
+- cost-model analysis;
+- target-aware planning analysis.
+
+It is not an execution route and it does not replace the dynamic router. It is
+evidence that FLOP-oriented paths can differ from modeled UPMEM-pressure paths,
+which motivates route-aware costs later.
+
+## Near-Term Roadmap
+
+- `2C.1` route provider contract and dynamic router skeleton
+- `2C.2` shared data-format conversion layer
+- `2C.3` shared WRAM slicer/tile planner
+- `2C.4` SimplePIM dense GEMM route microbenchmark
+- `2C.5` dense route executes one real `ContractionTask`
+- `2C.6` dynamic router analysis mode over full `TaskGraph`
+- `2D.1` heuristic/bypass route prototype
+- `2D.2` sparse route feasibility and SparseP integration plan
+- `2D.3` host aggregation/PID-Comm-inspired reporting
+- `2D.4` optional TransPimLib support slot
+- `2E.1` revisit UPMEM-aware path selection using route-aware costs
+
+The next implementation wave after this scaffold should be:
+
+```text
+2C.1 route provider contract and dynamic router skeleton
+```
+
+## Future Codex Instruction
+
+Before proposing architecture, route, planner, target, or native-code changes,
+read:
+
+- `README.md`
+- `ARCHITECTURE.md`
+- `docs/runtime_architecture_map.md`
+- `../CODEX_IMPLEMENTATION_DIRECTION.md`
+- `../CODEX_UPMEM_ARCHITECTURE_DIRECTION.md`
+
+Future plans should preserve this map unless the user explicitly approves an
+architecture change.
+
+## Non-Goals For This Scaffold
+
+- Do not implement SimplePIM.
+- Do not implement native UPMEM.
+- Do not implement dense, sparse, heuristic, or math-support kernels.
+- Do not change benchmark execution behavior.
+- Do not change route IDs.
+- Do not change suite schema requirements.
+- Do not restructure packages.
+- Do not remove or weaken planner comparison work.
+- Do not add public APIs unless a later implementation wave requires them.

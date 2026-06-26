@@ -3,6 +3,11 @@
 This is the active implementation directory for the Master's thesis prototype.
 Old experiments and generated sudo-owned runs are under `../legacy/`.
 
+For the full Host-CPU + UPMEM/SimplePIM thesis runtime map, route maturity
+model, and near-term roadmap, see `docs/runtime_architecture_map.md`. Future
+architecture, route, planner, target, or native-code changes should read that
+map before proposing changes.
+
 ## Current Structure
 
 ```text
