@@ -30,6 +30,17 @@ The current mock bridge reads that manifest, writes `output_manifest.json` and
 `outputs/mock_dequantized_output.npy`, and performs only NumPy validation of the
 file contract. It does not call SimplePIM, native UPMEM, or an external command.
 
+Wave 2C.8 adds the backend adapter interface:
+
+- `mock_numpy_dequantized` executes only the local NumPy mock backend.
+- `simplepim_external` is the future external-process backend ID.
+
+For `simplepim_external`, Python records planned command metadata only:
+`input_manifest.json`, `output_manifest.json`, `outputs/simplepim_output.npy`,
+and SimplePIM environment key names. Even with `execute_external=true`, the
+current adapter returns `simplepim_external_execution_not_implemented` and does
+not call a subprocess.
+
 Raw UPMEM SDK experiments should remain separate from this bridge. SimplePIM is
 the preferred first dense execution path if it is practical because it should
 reduce early SDK and kernel boilerplate while the host-side task, tile-plan, and

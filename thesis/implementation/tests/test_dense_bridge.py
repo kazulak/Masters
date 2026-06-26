@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import inspect
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+from quantum_bench.core.records import to_jsonable
 from quantum_bench.circuits import builtin_circuit
 from quantum_bench.core.records import ContractionTask, TensorSpec, TensorValue
 from quantum_bench.routing import DenseTaskPreparationInput, prepare_dense_task
@@ -13,11 +15,14 @@ from quantum_bench.targets.upmem import (
     DENSE_BRIDGE_SCHEMA_VERSION,
     SimplePimProbeResult,
     annotate_task_graph_with_upmem_estimates,
+    dense_bridge_backend_registry,
+    execute_dense_bridge,
     read_dense_bridge_input_manifest,
     read_dense_bridge_output_manifest,
     run_mock_dense_bridge,
     write_dense_bridge_input_manifest,
 )
+import quantum_bench.targets.upmem.dense_bridge as dense_bridge_module
 from quantum_bench.tn import build_tensor_network, plan_task_graph
 
 
@@ -201,3 +206,148 @@ def test_tiled_preparation_is_rejected_before_bridge_input(tmp_path: Path) -> No
         write_dense_bridge_input_manifest(preparation, tmp_path)
 
     assert not (tmp_path / "input_manifest.json").exists()
+
+
+def test_backend_registry_identities_are_json_safe() -> None:
+    registry = dense_bridge_backend_registry()
+
+    assert set(registry) == {"mock_numpy_dequantized", "simplepim_external"}
+    assert registry["mock_numpy_dequantized"].implemented is True
+    assert registry["mock_numpy_dequantized"].external_command_capable is False
+    assert registry["simplepim_external"].implemented is False
+    assert registry["simplepim_external"].external_command_capable is True
+    json.dumps(to_jsonable(registry))
+
+
+def test_generic_executor_runs_mock_backend(tmp_path: Path) -> None:
+    preparation = _real_preparation(_available_probe())
+    write_dense_bridge_input_manifest(preparation, tmp_path)
+    result = execute_dense_bridge(tmp_path / "input_manifest.json", backend="mock_numpy_dequantized")
+
+    assert result.execution_status == "mock_executed"
+    assert result.backend_id == "mock_numpy_dequantized"
+    assert result.reason is None
+    assert result.error is None
+    assert result.external_command_executed is False
+    assert result.execution_implemented is False
+    assert result.output_manifest_path == "output_manifest.json"
+    assert result.output_blob_path == "outputs/mock_dequantized_output.npy"
+    assert (tmp_path / "output_manifest.json").exists()
+    assert (tmp_path / "outputs" / "mock_dequantized_output.npy").exists()
+    json.dumps(result.to_json_dict())
+
+
+def test_simplepim_backend_without_config_is_skipped_and_writes_manifest(tmp_path: Path) -> None:
+    preparation = _real_preparation(_available_probe())
+    write_dense_bridge_input_manifest(preparation, tmp_path)
+    result = execute_dense_bridge(
+        tmp_path / "input_manifest.json",
+        backend="simplepim_external",
+        execute_external=False,
+        env={},
+    )
+    output_manifest = read_dense_bridge_output_manifest(tmp_path / "output_manifest.json")
+
+    assert result.execution_status == "skipped"
+    assert result.reason == "simplepim_unavailable"
+    assert result.error is None
+    assert result.external_command_executed is False
+    assert result.execution_implemented is False
+    assert output_manifest.status == "skipped"
+    assert output_manifest.output_blob is None
+    assert output_manifest.metadata["reason"] == "simplepim_unavailable"
+    assert (tmp_path / "output_manifest.json").exists()
+
+
+def test_simplepim_backend_configured_but_external_disabled_records_invocation_only(tmp_path: Path) -> None:
+    preparation = _real_preparation(_available_probe())
+    write_dense_bridge_input_manifest(preparation, tmp_path)
+    result = execute_dense_bridge(
+        tmp_path / "input_manifest.json",
+        backend="simplepim_external",
+        execute_external=False,
+        env={"SIMPLEPIM_BIN": "/opt/simplepim/bin/simplepim"},
+    )
+
+    assert result.execution_status == "not_implemented"
+    assert result.reason == "simplepim_external_execution_disabled"
+    assert result.invocation_metadata["command_path"] == "/opt/simplepim/bin/simplepim"
+    assert result.invocation_metadata["working_directory"] == "."
+    assert result.invocation_metadata["input_manifest_path"] == "input_manifest.json"
+    assert result.invocation_metadata["expected_output_manifest_path"] == "output_manifest.json"
+    assert result.invocation_metadata["expected_output_blob_path"] == "outputs/simplepim_output.npy"
+    assert result.external_command_executed is False
+    assert result.execution_implemented is False
+
+
+def test_simplepim_execute_external_true_is_not_implemented_without_subprocess(tmp_path: Path) -> None:
+    preparation = _real_preparation(_available_probe())
+    write_dense_bridge_input_manifest(preparation, tmp_path)
+    result = execute_dense_bridge(
+        tmp_path / "input_manifest.json",
+        backend="simplepim_external",
+        execute_external=True,
+        env={"SIMPLEPIM_BIN": "/opt/simplepim/bin/simplepim"},
+    )
+
+    assert result.execution_status == "not_implemented"
+    assert result.reason == "simplepim_external_execution_not_implemented"
+    assert result.external_command_executed is False
+    assert result.execution_implemented is False
+
+
+def test_unknown_backend_is_unsupported_and_json_safe(tmp_path: Path) -> None:
+    preparation = _real_preparation(_available_probe())
+    write_dense_bridge_input_manifest(preparation, tmp_path)
+    result = execute_dense_bridge(tmp_path / "input_manifest.json", backend="missing_backend")
+    output_manifest = read_dense_bridge_output_manifest(tmp_path / "output_manifest.json")
+
+    assert result.execution_status == "unsupported"
+    assert result.reason == "unsupported_backend"
+    assert result.error_type == "unsupported_backend"
+    assert output_manifest.status == "unsupported"
+    assert output_manifest.metadata["error_type"] == "unsupported_backend"
+    json.dumps(result.to_json_dict())
+
+
+def test_malformed_manifest_fails_before_simplepim_backend_status(tmp_path: Path) -> None:
+    preparation = _real_preparation(_available_probe())
+    write_dense_bridge_input_manifest(preparation, tmp_path)
+    manifest_path = tmp_path / "input_manifest.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["operands"]["left"]["shape"] = [999]
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = execute_dense_bridge(
+        manifest_path,
+        backend="simplepim_external",
+        execute_external=False,
+        env={},
+    )
+    output_manifest = read_dense_bridge_output_manifest(tmp_path / "output_manifest.json")
+
+    assert result.execution_status == "failed"
+    assert result.reason == "invalid_bridge_input_manifest"
+    assert result.error_type == "invalid_bridge_input_manifest"
+    assert output_manifest.status == "failed"
+    assert output_manifest.metadata["error_type"] == "invalid_bridge_input_manifest"
+
+
+def test_execution_result_and_manifests_do_not_leak_bridge_directory_paths(tmp_path: Path) -> None:
+    preparation = _real_preparation(_available_probe())
+    write_dense_bridge_input_manifest(preparation, tmp_path)
+    result = execute_dense_bridge(tmp_path / "input_manifest.json", backend="mock_numpy_dequantized")
+    encoded_result = json.dumps(result.to_json_dict())
+    encoded_manifest = (tmp_path / "output_manifest.json").read_text(encoding="utf-8")
+
+    assert str(tmp_path) not in encoded_result
+    assert str(tmp_path) not in encoded_manifest
+    assert "prepared_operands" not in encoded_result
+    assert "left_matrix" not in encoded_result
+    assert "right_matrix" not in encoded_result
+
+
+def test_dense_bridge_module_does_not_reference_subprocess() -> None:
+    source = inspect.getsource(dense_bridge_module)
+
+    assert "subprocess" not in source

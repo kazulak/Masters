@@ -341,9 +341,9 @@ mean SimplePIM execution happened. `external_command_executed` and
 
 ## Dense Bridge Contract
 
-`src/quantum_bench/targets/upmem/dense_bridge.py` defines the Wave 2C.7
-Python-to-native boundary for one prepared dense task. It is not part of normal
-benchmark suite execution and does not execute SimplePIM or native UPMEM.
+`src/quantum_bench/targets/upmem/dense_bridge.py` defines the Python-to-native
+boundary for one prepared dense task. It is not part of normal benchmark suite
+execution and does not execute SimplePIM or native UPMEM.
 
 The bridge input layout is:
 
@@ -378,6 +378,29 @@ validates against `references/expected_dequantized_output.npy`. This proves the
 file boundary only. `external_command_executed` and `execution_implemented`
 remain `false`.
 
+Wave 2C.8 adds a backend adapter interface on top of this file boundary:
+
+- `mock_numpy_dequantized` is implemented and executes only local NumPy.
+- `simplepim_external` is a future external-process backend and records planned
+  invocation metadata only.
+
+`execute_dense_bridge(...)` is the generic entrypoint. For `simplepim_external`
+it validates the input manifest and blob metadata first, then writes
+`output_manifest.json` even when skipped or not implemented. Exact non-execution
+reasons are:
+
+- `simplepim_unavailable` when no SimplePIM command/configuration is present;
+- `simplepim_external_execution_disabled` when a SimplePIM command/config exists
+  but `execute_external=false`;
+- `simplepim_external_execution_not_implemented` when `execute_external=true`;
+- `invalid_bridge_input_manifest` when manifest/blob validation fails before any
+  backend decision.
+
+Invocation metadata uses relative bridge paths such as `input_manifest.json`,
+`output_manifest.json`, and `outputs/simplepim_output.npy`. It may include a
+SimplePIM command path from the environment/probe, but it must not include the
+absolute bridge directory or raw arrays.
+
 ## Planner Comparison Position
 
 The planner comparison work belongs to:
@@ -395,7 +418,8 @@ which motivates route-aware costs later.
 - `2C.5` SimplePIM dense GEMM dry-run microbenchmark scaffold
 - `2C.6` lower one real `ContractionTask` into dense route preparation
 - `2C.7` dense native/SimplePIM bridge contract for prepared payloads
-- `2C.8` dynamic router analysis/preparation mode over full `TaskGraph`
+- `2C.8` executable dense bridge adapter interface, execution disabled by default
+- `2C.9` dynamic router analysis/preparation mode over full `TaskGraph`
 - `2D.1` heuristic/bypass route prototype
 - `2D.2` sparse route feasibility and SparseP integration plan
 - `2D.3` host aggregation/PID-Comm-inspired reporting
@@ -405,7 +429,7 @@ which motivates route-aware costs later.
 The next implementation wave should be:
 
 ```text
-2C.8 dynamic router analysis/preparation mode over full TaskGraph
+2C.9 dynamic router analysis/preparation mode over full TaskGraph
 ```
 
 ## Future Codex Instruction

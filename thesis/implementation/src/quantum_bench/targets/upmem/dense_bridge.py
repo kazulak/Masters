@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, Mapping
 
 import numpy as np
 
 from quantum_bench.core.jsonio import write_json
 from quantum_bench.core.records import JsonDict, to_jsonable
 from quantum_bench.formats import conversion_error_metrics
+from quantum_bench.targets.upmem.simplepim import probe_simplepim
 
 if TYPE_CHECKING:
     from quantum_bench.routing.dense_prepare import DenseTaskPreparationResult
@@ -19,7 +21,28 @@ if TYPE_CHECKING:
 DENSE_BRIDGE_SCHEMA_VERSION = "dense_bridge_v1"
 DENSE_BRIDGE_ID = "upmem_dense_bridge_v1"
 
-DenseBridgeStatus = Literal["ready", "mock_executed", "skipped", "not_implemented", "failed"]
+DenseBridgeStatus = Literal["mock_executed", "skipped", "not_implemented", "failed", "unsupported"]
+DenseBridgeBackendId = Literal["mock_numpy_dequantized", "simplepim_external"]
+
+
+@dataclass(frozen=True)
+class DenseBridgeBackendIdentity:
+    backend_id: str
+    display_name: str
+    backend_kind: str
+    execution_mode: str
+    external_command_capable: bool
+    implemented: bool
+    description: str
+
+
+@dataclass(frozen=True)
+class DenseBridgeExecutionRequest:
+    input_manifest_path: Path
+    backend: str = "mock_numpy_dequantized"
+    execute_external: bool = False
+    environment: Mapping[str, str] | None = None
+    metadata: JsonDict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -108,6 +131,43 @@ class DenseBridgeResult:
     output_blob_path: Path | None
     error: str | None
     output_manifest: DenseBridgeOutputManifest | None
+    external_command_executed: bool
+    execution_implemented: bool
+    metadata: JsonDict = field(default_factory=dict)
+
+    def to_json_dict(self) -> JsonDict:
+        base_dir = self.input_manifest_path.parent
+        return to_jsonable(
+            {
+                "status": self.status,
+                "backend": self.backend,
+                "input_manifest_path": _relative_result_path(self.input_manifest_path, base_dir),
+                "output_manifest_path": _relative_result_path(self.output_manifest_path, base_dir),
+                "output_blob_path": _relative_result_path(self.output_blob_path, base_dir),
+                "error": self.error,
+                "output_manifest": self.output_manifest,
+                "external_command_executed": self.external_command_executed,
+                "execution_implemented": self.execution_implemented,
+                "metadata": self.metadata,
+            }
+        )
+
+
+@dataclass(frozen=True)
+class DenseBridgeExecutionResult:
+    schema_version: str
+    bridge_id: str
+    execution_status: DenseBridgeStatus
+    backend_id: str
+    backend_identity: DenseBridgeBackendIdentity | None
+    reason: str | None
+    error: str | None
+    error_type: str | None
+    input_manifest_path: str
+    output_manifest_path: str | None
+    output_blob_path: str | None
+    output_manifest: DenseBridgeOutputManifest | None
+    invocation_metadata: JsonDict
     external_command_executed: bool
     execution_implemented: bool
     metadata: JsonDict = field(default_factory=dict)
@@ -212,6 +272,111 @@ def read_dense_bridge_input_manifest(path: Path) -> DenseBridgeInputManifest:
 def read_dense_bridge_output_manifest(path: Path) -> DenseBridgeOutputManifest:
     payload = json.loads(path.read_text(encoding="utf-8"))
     return _output_manifest_from_payload(payload)
+
+
+def dense_bridge_backend_registry() -> dict[str, DenseBridgeBackendIdentity]:
+    return {
+        "mock_numpy_dequantized": DenseBridgeBackendIdentity(
+            backend_id="mock_numpy_dequantized",
+            display_name="Mock NumPy Dequantized Dense Bridge",
+            backend_kind="mock",
+            execution_mode="in_process_python",
+            external_command_capable=False,
+            implemented=True,
+            description="Reads dense bridge manifests and validates the file boundary with local NumPy GEMM.",
+        ),
+        "simplepim_external": DenseBridgeBackendIdentity(
+            backend_id="simplepim_external",
+            display_name="SimplePIM External Dense Bridge",
+            backend_kind="simplepim_external",
+            execution_mode="external_process",
+            external_command_capable=True,
+            implemented=False,
+            description="Future SimplePIM bridge adapter; records invocation metadata only in this wave.",
+        ),
+    }
+
+
+def get_dense_bridge_backend(backend_id: str) -> DenseBridgeBackendIdentity | None:
+    return dense_bridge_backend_registry().get(backend_id)
+
+
+def execute_dense_bridge(
+    input_manifest_path: Path,
+    backend: str = "mock_numpy_dequantized",
+    *,
+    execute_external: bool = False,
+    env: Mapping[str, str] | None = None,
+) -> DenseBridgeExecutionResult:
+    request = DenseBridgeExecutionRequest(
+        input_manifest_path=input_manifest_path,
+        backend=backend,
+        execute_external=execute_external,
+        environment=env,
+    )
+    identity = get_dense_bridge_backend(request.backend)
+    bridge_dir = input_manifest_path.parent
+    output_manifest_path = bridge_dir / "output_manifest.json"
+
+    if identity is None:
+        output_manifest = _nonexecuted_output_manifest(
+            backend=request.backend,
+            status="unsupported",
+            reason="unsupported_backend",
+            error=f"Unsupported dense bridge backend: {request.backend}",
+            error_type="unsupported_backend",
+            input_manifest_path=input_manifest_path,
+            manifest=None,
+            invocation_metadata={"backend_id": request.backend},
+            total_time_s=0.0,
+        )
+        write_json(output_manifest_path, output_manifest)
+        return _execution_result(
+            input_manifest_path=input_manifest_path,
+            output_manifest_path=output_manifest_path,
+            output_blob_path=None,
+            backend_id=request.backend,
+            backend_identity=None,
+            execution_status="unsupported",
+            reason="unsupported_backend",
+            error=f"Unsupported dense bridge backend: {request.backend}",
+            error_type="unsupported_backend",
+            output_manifest=output_manifest,
+            invocation_metadata={"backend_id": request.backend},
+        )
+
+    if request.backend == "mock_numpy_dequantized":
+        result = run_mock_dense_bridge(input_manifest_path)
+        return _execution_result_from_mock(result, identity)
+
+    if request.backend == "simplepim_external":
+        return _execute_simplepim_external_bridge(request, identity)
+
+    output_manifest = _nonexecuted_output_manifest(
+        backend=request.backend,
+        status="unsupported",
+        reason="unsupported_backend",
+        error=f"Unsupported dense bridge backend: {request.backend}",
+        error_type="unsupported_backend",
+        input_manifest_path=input_manifest_path,
+        manifest=None,
+        invocation_metadata={"backend_id": request.backend},
+        total_time_s=0.0,
+    )
+    write_json(output_manifest_path, output_manifest)
+    return _execution_result(
+        input_manifest_path=input_manifest_path,
+        output_manifest_path=output_manifest_path,
+        output_blob_path=None,
+        backend_id=request.backend,
+        backend_identity=identity,
+        execution_status="unsupported",
+        reason="unsupported_backend",
+        error=f"Unsupported dense bridge backend: {request.backend}",
+        error_type="unsupported_backend",
+        output_manifest=output_manifest,
+        invocation_metadata={"backend_id": request.backend},
+    )
 
 
 def run_mock_dense_bridge(input_manifest_path: Path) -> DenseBridgeResult:
@@ -331,6 +496,234 @@ def run_mock_dense_bridge(input_manifest_path: Path) -> DenseBridgeResult:
             external_command_executed=False,
             execution_implemented=False,
         )
+
+
+def _execute_simplepim_external_bridge(
+    request: DenseBridgeExecutionRequest,
+    identity: DenseBridgeBackendIdentity,
+) -> DenseBridgeExecutionResult:
+    started = time.perf_counter()
+    input_manifest_path = request.input_manifest_path
+    output_manifest_path = input_manifest_path.parent / "output_manifest.json"
+    manifest: DenseBridgeInputManifest | None = None
+    try:
+        manifest = read_dense_bridge_input_manifest(input_manifest_path)
+        _validate_bridge_input_files(manifest, input_manifest_path.parent)
+    except Exception as exc:
+        invocation_metadata = _simplepim_invocation_metadata(
+            input_manifest_path=input_manifest_path,
+            probe_payload={},
+            env=request.environment,
+        )
+        output_manifest = _nonexecuted_output_manifest(
+            backend=identity.backend_id,
+            status="failed",
+            reason="invalid_bridge_input_manifest",
+            error=str(exc),
+            error_type="invalid_bridge_input_manifest",
+            input_manifest_path=input_manifest_path,
+            manifest=manifest,
+            invocation_metadata=invocation_metadata,
+            total_time_s=float(time.perf_counter() - started),
+        )
+        write_json(output_manifest_path, output_manifest)
+        return _execution_result(
+            input_manifest_path=input_manifest_path,
+            output_manifest_path=output_manifest_path,
+            output_blob_path=None,
+            backend_id=identity.backend_id,
+            backend_identity=identity,
+            execution_status="failed",
+            reason="invalid_bridge_input_manifest",
+            error=str(exc),
+            error_type="invalid_bridge_input_manifest",
+            output_manifest=output_manifest,
+            invocation_metadata=invocation_metadata,
+        )
+
+    probe = probe_simplepim(env=request.environment if request.environment is not None else os.environ)
+    probe_payload = probe.to_json_dict()
+    invocation_metadata = _simplepim_invocation_metadata(
+        input_manifest_path=input_manifest_path,
+        probe_payload=probe_payload,
+        env=request.environment,
+    )
+
+    if request.execute_external:
+        status: DenseBridgeStatus = "not_implemented"
+        reason = "simplepim_external_execution_not_implemented"
+    elif probe.simplepim_probe_status == "unavailable":
+        status = "skipped"
+        reason = "simplepim_unavailable"
+    else:
+        status = "not_implemented"
+        reason = "simplepim_external_execution_disabled"
+
+    output_manifest = _nonexecuted_output_manifest(
+        backend=identity.backend_id,
+        status=status,
+        reason=reason,
+        error=None,
+        error_type=None,
+        input_manifest_path=input_manifest_path,
+        manifest=manifest,
+        invocation_metadata=invocation_metadata,
+        total_time_s=float(time.perf_counter() - started),
+    )
+    write_json(output_manifest_path, output_manifest)
+    return _execution_result(
+        input_manifest_path=input_manifest_path,
+        output_manifest_path=output_manifest_path,
+        output_blob_path=None,
+        backend_id=identity.backend_id,
+        backend_identity=identity,
+        execution_status=status,
+        reason=reason,
+        error=None,
+        error_type=None,
+        output_manifest=output_manifest,
+        invocation_metadata=invocation_metadata,
+    )
+
+
+def _execution_result_from_mock(
+    result: DenseBridgeResult,
+    identity: DenseBridgeBackendIdentity,
+) -> DenseBridgeExecutionResult:
+    reason = None if result.status == "mock_executed" else "mock_bridge_failed"
+    error_type = None if result.status == "mock_executed" else "mock_bridge_failed"
+    return _execution_result(
+        input_manifest_path=result.input_manifest_path,
+        output_manifest_path=result.output_manifest_path,
+        output_blob_path=result.output_blob_path,
+        backend_id=identity.backend_id,
+        backend_identity=identity,
+        execution_status=result.status,
+        reason=reason,
+        error=result.error,
+        error_type=error_type,
+        output_manifest=result.output_manifest,
+        invocation_metadata={
+            "backend_id": identity.backend_id,
+            "execution_mode": identity.execution_mode,
+            "external_command": None,
+            "external_command_executed": False,
+            "blob_format": "npy",
+        },
+    )
+
+
+def _execution_result(
+    input_manifest_path: Path,
+    output_manifest_path: Path | None,
+    output_blob_path: Path | None,
+    backend_id: str,
+    backend_identity: DenseBridgeBackendIdentity | None,
+    execution_status: DenseBridgeStatus,
+    reason: str | None,
+    error: str | None,
+    error_type: str | None,
+    output_manifest: DenseBridgeOutputManifest | None,
+    invocation_metadata: JsonDict,
+) -> DenseBridgeExecutionResult:
+    base_dir = input_manifest_path.parent
+    return DenseBridgeExecutionResult(
+        schema_version=DENSE_BRIDGE_SCHEMA_VERSION,
+        bridge_id=DENSE_BRIDGE_ID,
+        execution_status=execution_status,
+        backend_id=backend_id,
+        backend_identity=backend_identity,
+        reason=reason,
+        error=error,
+        error_type=error_type,
+        input_manifest_path=_relative_result_path(input_manifest_path, base_dir),
+        output_manifest_path=_relative_result_path(output_manifest_path, base_dir),
+        output_blob_path=_relative_result_path(output_blob_path, base_dir),
+        output_manifest=output_manifest,
+        invocation_metadata=invocation_metadata,
+        external_command_executed=False,
+        execution_implemented=False,
+        metadata={
+            "blob_format": "npy",
+            "simplepim_or_native_execution_implemented": False,
+        },
+    )
+
+
+def _nonexecuted_output_manifest(
+    backend: str,
+    status: DenseBridgeStatus,
+    reason: str,
+    error: str | None,
+    error_type: str | None,
+    input_manifest_path: Path,
+    manifest: DenseBridgeInputManifest | None,
+    invocation_metadata: JsonDict,
+    total_time_s: float,
+) -> DenseBridgeOutputManifest:
+    bridge_dir = input_manifest_path.parent
+    return DenseBridgeOutputManifest(
+        schema_version=DENSE_BRIDGE_SCHEMA_VERSION,
+        bridge_id=DENSE_BRIDGE_ID,
+        manifest_kind="dense_bridge_output",
+        backend=backend,
+        status=status,
+        input_manifest=_relative_result_path(input_manifest_path, bridge_dir) or input_manifest_path.name,
+        route_id=manifest.route_id if manifest is not None else "",
+        task_id=manifest.task_id if manifest is not None else "",
+        output_blob=None,
+        accumulator_blob=None,
+        validation_metrics={},
+        compute_time_s=0.0,
+        write_time_s=0.0,
+        total_time_s=total_time_s,
+        external_command_executed=False,
+        execution_implemented=False,
+        error=error,
+        metadata={
+            "reason": reason,
+            "error_type": error_type,
+            "invocation_metadata": invocation_metadata,
+            "mock_or_external_note": "No SimplePIM or native UPMEM command was executed",
+        },
+    )
+
+
+def _simplepim_invocation_metadata(
+    input_manifest_path: Path,
+    probe_payload: JsonDict,
+    env: Mapping[str, str] | None,
+) -> JsonDict:
+    environment = env if env is not None else os.environ
+    environment_keys = ("SIMPLEPIM_HOME", "SIMPLEPIM_BIN", "SIMPLEPIM_LIB")
+    configured_environment_keys = tuple(key for key in environment_keys if environment.get(key))
+    metadata: JsonDict = {
+        "backend_id": "simplepim_external",
+        "working_directory": ".",
+        "input_manifest_path": _relative_result_path(input_manifest_path, input_manifest_path.parent)
+        or input_manifest_path.name,
+        "expected_output_manifest_path": "output_manifest.json",
+        "expected_output_blob_path": "outputs/simplepim_output.npy",
+        "environment_keys": environment_keys,
+        "configured_environment_keys": configured_environment_keys,
+        "blob_format": "npy",
+        "external_command_executed": False,
+    }
+    command_path = probe_payload.get("simplepim_command_path")
+    if command_path:
+        metadata["command_path"] = command_path
+    metadata["simplepim_available"] = bool(probe_payload.get("simplepim_available", False))
+    metadata["simplepim_probe_status"] = probe_payload.get("simplepim_probe_status")
+    return metadata
+
+
+def _validate_bridge_input_files(manifest: DenseBridgeInputManifest, bridge_dir: Path) -> None:
+    left = np.load(_resolve_manifest_path(bridge_dir, manifest.operands["left"]["relative_path"]), allow_pickle=False)
+    right = np.load(_resolve_manifest_path(bridge_dir, manifest.operands["right"]["relative_path"]), allow_pickle=False)
+    expected = np.load(_resolve_manifest_path(bridge_dir, manifest.expected_output.relative_path), allow_pickle=False)
+    _validate_loaded_blob(left, manifest.operands["left"], "left")
+    _validate_loaded_blob(right, manifest.operands["right"], "right")
+    _validate_loaded_blob(expected, to_jsonable(manifest.expected_output), "expected_output")
 
 
 def _validate_preparation_result(preparation_result: "DenseTaskPreparationResult") -> None:
@@ -504,6 +897,15 @@ def _resolve_manifest_path(base_dir: Path, relative_path: str) -> Path:
 
 def _relative_blob_path(path: Path, base_dir: Path) -> str:
     return path.relative_to(base_dir).as_posix()
+
+
+def _relative_result_path(path: Path | None, base_dir: Path) -> str | None:
+    if path is None:
+        return None
+    try:
+        return path.relative_to(base_dir).as_posix()
+    except ValueError:
+        return path.name
 
 
 def _require_pair_shape(value: tuple[int, int] | None, field_name: str) -> tuple[int, int]:
