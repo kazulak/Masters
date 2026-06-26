@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from quantum_bench.bench.planner_scoring import DEFAULT_SCORING_WEIGHTS, score_planner_rows, validate_scoring_weights
+from quantum_bench.bench.planner_scoring import DEFAULT_SCORING_WEIGHTS, divergence_summary, score_planner_rows, validate_scoring_weights
 
 
 def _row(
@@ -132,6 +132,26 @@ def test_flop_rank_and_upmem_rank_can_differ() -> None:
     assert by_planner["high_flops_low_transfer"]["upmem_rank"] == 1
     assert "lowest modeled FLOPs" in by_planner["low_flops_high_transfer"]["tradeoff_note"]
     assert "lowest modeled UPMEM pressure" in by_planner["high_flops_low_transfer"]["tradeoff_note"]
+
+
+def test_divergence_summary_detects_mismatched_winner_sets() -> None:
+    rows = score_planner_rows(
+        [
+            _row("case_same", "planner_a", flops=10, host_to_dpu=1),
+            _row("case_same", "planner_b", flops=20, host_to_dpu=1000),
+            _row("case_different", "low_flops_high_transfer", flops=10, host_to_dpu=1000),
+            _row("case_different", "high_flops_low_transfer", flops=20, host_to_dpu=1),
+        ],
+        DEFAULT_SCORING_WEIGHTS,
+    )
+
+    summary = divergence_summary(rows)
+    assert summary == {
+        "rank_scope": "case_id",
+        "case_count": 2,
+        "divergent_case_count": 1,
+        "divergent_case_ids": ["case_different"],
+    }
 
 
 def test_invalid_scoring_weights_fail_explicitly() -> None:

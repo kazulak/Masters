@@ -4,6 +4,7 @@ import csv
 import json
 from pathlib import Path
 
+from quantum_bench.bench.config import comparison_planner_configs, load_suite
 from quantum_bench.bench.planner_compare import compare_planners
 from quantum_bench.targets.upmem import UPMEM_DENSE_ESTIMATE_KEY
 
@@ -21,6 +22,7 @@ def test_planner_comparison_writes_rows_and_artifacts(tmp_path: Path) -> None:
     payload = json.loads((run_dir / "planner_comparison.json").read_text(encoding="utf-8"))
     csv_rows = list(csv.DictReader((run_dir / "planner_comparison.csv").open(encoding="utf-8", newline="")))
     rows = payload["rows"]
+    divergence_summary = payload["divergence_summary"]
 
     assert payload["schema_version"] == "planner_comparison_v2"
     assert payload["suite_id"] == "planner_compare"
@@ -33,6 +35,9 @@ def test_planner_comparison_writes_rows_and_artifacts(tmp_path: Path) -> None:
     assert payload["scoring"]["normalization"] == "per_case_minmax"
     assert payload["scoring"]["rank_order"] == "lower_score_is_better"
     assert payload["scoring"]["weights"]["parallelism_bonus_weight"] == 0.25
+    assert divergence_summary["rank_scope"] == "case_id"
+    assert divergence_summary["case_count"] == 2
+    assert divergence_summary["divergent_case_count"] == len(divergence_summary["divergent_case_ids"])
     assert len(rows) == 4
     assert len(csv_rows) == len(rows)
     assert (run_dir / "planner_comparison_summary.md").exists()
@@ -115,3 +120,59 @@ def test_planner_comparison_writes_rows_and_artifacts(tmp_path: Path) -> None:
         assert any(row["upmem_rank"] == 1 for row in case_rows)
         assert any(row["flop_rank"] == 1 for row in case_rows)
         assert sum(1 for row in case_rows if row["upmem_rank"] == 1) >= 1
+
+
+def test_extended_planner_comparison_suite_is_bounded_and_scored(tmp_path: Path) -> None:
+    run_dir = compare_planners(ROOT / "configs" / "suites" / "planner_compare_extended.yml", tmp_path)
+
+    payload = json.loads((run_dir / "planner_comparison.json").read_text(encoding="utf-8"))
+    csv_rows = list(csv.DictReader((run_dir / "planner_comparison.csv").open(encoding="utf-8", newline="")))
+    rows = payload["rows"]
+    case_ids = {row["case_id"] for row in rows}
+    divergent_case_ids = set(payload["divergence_summary"]["divergent_case_ids"])
+
+    assert payload["schema_version"] == "planner_comparison_v2"
+    assert payload["suite_id"] == "planner_compare_extended"
+    assert [config["optimize"] for config in payload["planner_configs"]] == ["greedy", "auto", "random-greedy"]
+    assert len(rows) == 30
+    assert len(csv_rows) == 30
+    assert len(case_ids) == 10
+    assert "edc_4q" in case_ids
+    assert payload["divergence_summary"]["rank_scope"] == "case_id"
+    assert payload["divergence_summary"]["case_count"] == 10
+    assert payload["divergence_summary"]["divergent_case_count"] == len(divergent_case_ids)
+    assert divergent_case_ids <= case_ids
+    assert (run_dir / "planner_comparison_summary.md").exists()
+    assert not list((run_dir / "raw").glob("*.jsonl"))
+    assert not list((run_dir / "cases").glob("*/route_decisions.jsonl"))
+
+    for case_id in case_ids:
+        case_rows = [row for row in rows if row["case_id"] == case_id]
+        assert len(case_rows) == 3
+        assert {row["planner_id"] for row in case_rows} == {
+            "opt_einsum.greedy",
+            "opt_einsum.auto",
+            "opt_einsum.random-greedy",
+        }
+        assert any(row["upmem_rank"] == 1 for row in case_rows)
+        assert any(row["flop_rank"] == 1 for row in case_rows)
+
+    for row in rows:
+        assert row["score_model"] == "upmem_pressure_v1"
+        assert row["workload_id"] == row["case_id"]
+        for key in ("task_graph_artifact", "path_summary_artifact", "target_estimates_artifact"):
+            artifact = Path(row[key])
+            assert not artifact.is_absolute()
+            assert (run_dir / artifact).exists()
+
+
+def test_planner_comparison_suite_configs_separate_tiny_and_extended_modes() -> None:
+    tiny = load_suite(ROOT / "configs" / "suites" / "planner_compare.yml")
+    extended = load_suite(ROOT / "configs" / "suites" / "planner_compare_extended.yml")
+
+    assert [config["optimize"] for config in comparison_planner_configs(tiny)] == ["greedy", "optimal"]
+    assert [config["optimize"] for config in comparison_planner_configs(extended)] == ["greedy", "auto", "random-greedy"]
+    assert "optimal" not in {config["optimize"] for config in comparison_planner_configs(extended)}
+    assert len(extended["cases"]) == 10
+    assert "edc_4q" in {case["case_id"] for case in extended["cases"]}
+    assert max(int(case["circuit"].get("n_qubits", 0) or 0) for case in extended["cases"]) <= 6

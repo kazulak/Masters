@@ -8,7 +8,7 @@ from typing import Any
 import yaml
 
 from quantum_bench.bench.config import comparison_planner_configs, comparison_scoring_weights, load_suite
-from quantum_bench.bench.planner_scoring import csv_value, markdown_summary, score_planner_rows, scoring_metadata
+from quantum_bench.bench.planner_scoring import csv_value, divergence_summary, markdown_summary, score_planner_rows, scoring_metadata
 from quantum_bench.bench.run_dirs import create_run_dir, sanitize
 from quantum_bench.circuits import load_circuit
 from quantum_bench.core.jsonio import write_json, write_jsonl
@@ -82,6 +82,7 @@ def compare_planners(suite_path: Path, root_dir: Path) -> Path:
         "run_id": run_dir.name,
         "planner_configs": planner_configs,
         "scoring": scoring_metadata(scoring_weights),
+        "divergence_summary": divergence_summary(rows),
         "rows": rows,
     }
     write_json(run_dir / "planner_comparison.json", payload)

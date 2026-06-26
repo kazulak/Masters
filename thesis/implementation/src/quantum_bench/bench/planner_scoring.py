@@ -100,16 +100,19 @@ def markdown_summary(rows: list[dict[str, Any]]) -> str:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         grouped[str(row["case_id"])].append(row)
+    summary = divergence_summary(rows)
+    divergent = set(summary["divergent_case_ids"])
 
     lines = [
         "# Planner Comparison Summary",
         "",
         "Modeled UPMEM-pressure ranking is analysis only and is not used for execution.",
+        f"Divergent modeled winner cases: {summary['divergent_case_count']} / {summary['case_count']}.",
         "",
         "| case_id | FLOP winner(s) | UPMEM-score winner(s) | differ? | best UPMEM score | note |",
         "|---|---|---|---:|---:|---|",
     ]
-    for case_id, case_rows in sorted(grouped.items()):
+    for case_id, case_rows in sorted(grouped.items(), key=lambda item: (item[0] not in divergent, item[0])):
         flop_winners = sorted(str(row["planner_id"]) for row in case_rows if int(row["flop_rank"]) == 1)
         upmem_winners = sorted(str(row["planner_id"]) for row in case_rows if int(row["upmem_rank"]) == 1)
         best_score = min(float(row["upmem_pressure_score"]) for row in case_rows)
@@ -120,6 +123,24 @@ def markdown_summary(rows: list[dict[str, Any]]) -> str:
         )
     lines.append("")
     return "\n".join(lines)
+
+
+def divergence_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        grouped[str(row["case_id"])].append(row)
+    divergent_case_ids = []
+    for case_id, case_rows in sorted(grouped.items()):
+        flop_winners = {str(row["planner_id"]) for row in case_rows if int(row["flop_rank"]) == 1}
+        upmem_winners = {str(row["planner_id"]) for row in case_rows if int(row["upmem_rank"]) == 1}
+        if flop_winners != upmem_winners:
+            divergent_case_ids.append(case_id)
+    return {
+        "rank_scope": "case_id",
+        "case_count": len(grouped),
+        "divergent_case_count": len(divergent_case_ids),
+        "divergent_case_ids": divergent_case_ids,
+    }
 
 
 def csv_value(value: Any) -> Any:
