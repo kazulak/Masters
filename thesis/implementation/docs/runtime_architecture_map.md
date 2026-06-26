@@ -47,10 +47,10 @@ only bounded local tasks that fit an explicit route contract.
 | Path optimizer | `src/quantum_bench/tn/planners.py`, `src/quantum_bench/tn/task_graph.py` | opt_einsum planner interface | Later add route-aware costs, not route-aware execution yet |
 | Planner comparison | `src/quantum_bench/bench/planner_compare.py`, `src/quantum_bench/bench/planner_scoring.py` | Implemented analysis layer | Host path optimizer, cost-model, and target-aware planning analysis |
 | WRAM slicer | `src/quantum_bench/targets/upmem/tile_plan.py`, `src/quantum_bench/targets/upmem/schedule.py` | Deterministic dense WRAM tile-plan records | Turn tile plans into executable preparation only after route execution is introduced |
-| Data format conversion | `src/quantum_bench/formats/` | Deterministic host-side fixed-point records and utilities | Connect conversion records to route preparation artifacts after routing gains preparation |
+| Data format conversion | `src/quantum_bench/formats/` | Deterministic host-side fixed-point records and utilities used by explicit dense preparation | Connect conversion records to route execution artifacts after routing gains execution |
 | Dynamic heuristic router | `src/quantum_bench/routing/` | Analysis-only task-level router skeleton | Add preparation/execution-aware routing after data conversion and tiling mature |
-| Dense GEMM route | `src/quantum_bench/providers/exact_tn/upmem_dense_placeholder.py`, `src/quantum_bench/targets/upmem/schedule.py`, future `native/upmem/simplepim/` | Estimate-only placeholder | SimplePIM-first dense microbenchmark, then one real task |
-| SimplePIM bridge/probe | `src/quantum_bench/targets/upmem/simplepim.py`, `src/quantum_bench/targets/upmem/simplepim_microbench.py`, future `native/upmem/simplepim/` | Availability probe and dry-run dense GEMM microbenchmark metadata | One real task lowered into dense route preparation before routed TaskGraph execution |
+| Dense GEMM route | `src/quantum_bench/providers/exact_tn/upmem_dense_placeholder.py`, `src/quantum_bench/routing/dense_prepare.py`, `src/quantum_bench/targets/upmem/schedule.py`, future `native/upmem/simplepim/` | Estimate-only placeholder plus one-task host preparation; no execution | SimplePIM-backed microkernel, then integrated TaskGraph route |
+| SimplePIM bridge/probe | `src/quantum_bench/targets/upmem/simplepim.py`, `src/quantum_bench/targets/upmem/simplepim_microbench.py`, `src/quantum_bench/targets/upmem/dense_bridge.py`, future `native/upmem/simplepim/` | Availability probe, dry-run dense GEMM microbenchmark metadata, one-task dense preparation metadata, and file-based bridge manifests | SimplePIM-backed microkernel for one prepared task |
 | Sparse route | Architecture slot only | Not implemented | Add SparseP feasibility plan after dense route skeleton |
 | Heuristic/bypass route | Architecture slot only | Not implemented | Host-side row-swap/permutation prototype first |
 | Optional TransPimLib/math support | Architecture slot only | Not implemented | Optional support slot, not first priority |
@@ -87,6 +87,14 @@ and records route-slot decisions for:
 - `transpim_support`, a typed future slot;
 - `cpu_fallback`, the selected analysis fallback that maps to the existing
   graph-level `cpu_tn_einsum_exact` provider.
+
+`src/quantum_bench/routing/dense_prepare.py` is a separate developer-facing
+preparation boundary for one real `ContractionTask`. It consumes actual task
+input tensors, lowers the contraction to GEMM operands by labels, applies
+fixed-point conversion, attaches the UPMEM dense tile plan and SimplePIM probe
+metadata, and validates the dequantized-input GEMM output against the CPU/NumPy
+task result. It does not run during normal benchmark suites, does not write
+normal benchmark artifacts, and does not execute SimplePIM or native UPMEM.
 
 Normal benchmark runs write:
 
@@ -184,10 +192,10 @@ before real SimplePIM/UPMEM kernels exist.
 |---|---:|---:|
 | CPU exact TN route | 5 | 6 |
 | QuEST CPU full-state baseline | 5 | 6 |
-| UPMEM dense GEMM route | 2 | 3, then 4 |
+| UPMEM dense GEMM route | 3 | 4 |
 | SimplePIM bridge/probe | 3 | 4 |
 | UPMEM WRAM slicer/tile planner | 3 | 4 |
-| Data format conversion layer | 2 | 3 |
+| Data format conversion layer | 3 | 4 |
 | Dynamic task router | 1 | 2 |
 | Heuristic/bypass route | 1 | 3 |
 | Sparse route | 1 | 2 |
@@ -316,9 +324,9 @@ Host-side fixed-point conversion is performed only inside this explicit
 microbenchmark dry-run command. Normal benchmark runs and task-route artifacts
 do not invoke conversion.
 
-The next execution wave should lower one real `ContractionTask` into dense route
-preparation before full routed TaskGraph execution. That future route
-preparation should connect:
+The one-task dense preparation layer now lowers a real `ContractionTask` into
+the future dense route preparation pipeline before full routed TaskGraph
+execution. It connects:
 
 - `simplepim_probe`
 - `fixed_point_spec`
@@ -326,6 +334,49 @@ preparation should connect:
 - `input_shapes`
 - conversion records
 - validation metrics
+
+`prepared` in this context means host-side preparation succeeded. It does not
+mean SimplePIM execution happened. `external_command_executed` and
+`execution_implemented` remain `false`.
+
+## Dense Bridge Contract
+
+`src/quantum_bench/targets/upmem/dense_bridge.py` defines the Wave 2C.7
+Python-to-native boundary for one prepared dense task. It is not part of normal
+benchmark suite execution and does not execute SimplePIM or native UPMEM.
+
+The bridge input layout is:
+
+```text
+<bridge_dir>/
+  input_manifest.json
+  operands/
+    left_quantized.npy
+    right_quantized.npy
+  references/
+    expected_dequantized_output.npy
+```
+
+The input manifest records task identity, label/order metadata, GEMM dimensions,
+fixed-point scale/dequantization metadata, tile-plan metadata, and relative blob
+paths. It never embeds raw arrays in JSON. `.npy` is the Wave 2C.7 blob format
+because it preserves dtype and shape metadata for inspection; raw native buffers
+are deferred until a real bridge exists.
+
+The mock bridge writes:
+
+```text
+<bridge_dir>/
+  outputs/
+    mock_dequantized_output.npy
+  output_manifest.json
+```
+
+The mock backend is `mock_numpy_dequantized`. It reads the manifest and operand
+blobs, dequantizes them, performs NumPy GEMM, restores output label order, and
+validates against `references/expected_dequantized_output.npy`. This proves the
+file boundary only. `external_command_executed` and `execution_implemented`
+remain `false`.
 
 ## Planner Comparison Position
 
@@ -343,17 +394,18 @@ which motivates route-aware costs later.
 
 - `2C.5` SimplePIM dense GEMM dry-run microbenchmark scaffold
 - `2C.6` lower one real `ContractionTask` into dense route preparation
-- `2C.7` dynamic router analysis/preparation mode over full `TaskGraph`
+- `2C.7` dense native/SimplePIM bridge contract for prepared payloads
+- `2C.8` dynamic router analysis/preparation mode over full `TaskGraph`
 - `2D.1` heuristic/bypass route prototype
 - `2D.2` sparse route feasibility and SparseP integration plan
 - `2D.3` host aggregation/PID-Comm-inspired reporting
 - `2D.4` optional TransPimLib support slot
 - `2E.1` revisit UPMEM-aware path selection using route-aware costs
 
-The next implementation wave after the dry-run microbenchmark should be:
+The next implementation wave should be:
 
 ```text
-2C.6 lower one real ContractionTask into dense route preparation
+2C.8 dynamic router analysis/preparation mode over full TaskGraph
 ```
 
 ## Future Codex Instruction

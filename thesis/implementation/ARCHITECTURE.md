@@ -25,8 +25,8 @@ implementation/
     formats/               shared host-side tensor format conversion utilities
     plots/                 plot generation from summary artifacts
     providers/             executable routes
-    routing/               task-level route contract and analysis router
-    targets/upmem/         UPMEM WRAM tile-plan, traffic, schedule, probe, and microbench groundwork
+    routing/               task-level route contract, analysis router, and dense preparation boundary
+    targets/upmem/         UPMEM WRAM tile-plan, traffic, schedule, probe, bridge, and microbench groundwork
     tn/                    exact tensor-network construction and planning
     validation/            numerical validation metrics
   tests/                   Python runtime tests
@@ -67,11 +67,12 @@ tn/
 targets/upmem/
   host-side UPMEM model: dense WRAM tile plans, data format, traffic estimate,
   tiling, DPU schedule groundwork, SimplePIM availability probe metadata, and
-  explicit dry-run SimplePIM dense GEMM microbenchmark records
+  explicit dense bridge and dry-run SimplePIM dense GEMM microbenchmark records
 formats/
   shared host-side conversion records and deterministic fixed-point utilities
 routing/
-  task-level route contract, route-slot decisions, and CPU fallback policy
+  task-level route contract, route-slot decisions, CPU fallback policy, and
+  one-task dense preparation for future UPMEM/SimplePIM execution
 providers/exact_tn/
   benchmark routes that decide whether to use the UPMEM target layer and, later,
   call native kernels

@@ -40,10 +40,11 @@ scripts/run_energy_suite.sh configs/suites/local_energy.yml
 - `src/quantum_bench/formats/` contains shared host-side data-format conversion
   records and deterministic fixed-point utilities.
 - `src/quantum_bench/targets/upmem/` contains host-side UPMEM WRAM, traffic,
-  tile-plan, schedule, SimplePIM probe, and explicit SimplePIM dry-run
-  microbenchmark groundwork shared by future UPMEM providers.
-- `src/quantum_bench/routing/` contains the task-level route contract and
-  analysis-only dynamic router skeleton.
+  tile-plan, schedule, SimplePIM probe, dense bridge manifests, and explicit
+  SimplePIM dry-run microbenchmark groundwork shared by future UPMEM providers.
+- `src/quantum_bench/routing/` contains the task-level route contract,
+  analysis-only dynamic router skeleton, and one-task dense preparation
+  boundary for future UPMEM/SimplePIM execution.
 - `native/upmem/simplepim/` is reserved for future SimplePIM bridge code.
 - `native/upmem/raw_dense/` is reserved for future raw UPMEM SDK dense kernels.
 - `../legacy/` contains old prototypes and generated sudo-owned run folders kept
