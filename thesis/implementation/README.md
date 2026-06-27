@@ -29,6 +29,7 @@ PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --ca
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-bridge-eval --case bell_2q --n-qubits 2 --dry-run
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-bridge-eval --suite configs/suites/pim_bridge_eval_quick.yml --dry-run
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-bridge-eval --suite configs/suites/pim_bridge_eval_quick.yml --backend upmem_sdk_simulator_dense --execute-external --max-executed-tasks-per-case 2
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-frontier-analysis --suite configs/suites/pim_bridge_eval_quick.yml
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-route-coverage --case bell_2q
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-route-coverage --suite configs/suites/planner_compare.yml
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench shadow-routed-runtime --case bell_2q
@@ -81,6 +82,11 @@ scripts/run_energy_suite.sh configs/suites/local_energy.yml
   materialization, dense preparation, dense bridge manifests, and capped
   `upmem_sdk_simulator_dense` task execution where eligible. It evaluates
   per-task backend evidence only and ignores normal suite `routes:`.
+- `src/quantum_bench/bench/pim_frontier_analysis.py` is a developer-only
+  memory-level and parallelism-frontier analyzer. It classifies TaskGraph GEMM
+  contractions as modeled L1/L2/L3/L4 UPMEM memory cases and estimates
+  inter-task, intra-task, and hybrid DPU parallelism. It does not execute UPMEM
+  kernels or normal provider routes.
 - `native/upmem/simplepim/` is reserved for future SimplePIM bridge code and
   currently contains the non-executing external contract stub plus the first
   UPMEM SDK simulator dense bridge runner. The runner is in the
@@ -144,3 +150,21 @@ simulator output, direct Python int8/int32 reconstruction, and optionally the
 mock bridge output when `--compare-mock-on-failure` is also set. These
 diagnostics are for backend hardening; failed simulator timings must not be
 presented as performance evidence.
+
+## PIM Frontier Analysis
+
+`pim-frontier-analysis` models where each TaskGraph contraction sits in the
+UPMEM memory hierarchy and whether useful parallelism is exposed by the current
+contraction path:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-frontier-analysis --case bell_2q --n-qubits 2
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-frontier-analysis --suite configs/suites/pim_bridge_eval_quick.yml
+```
+
+The command writes JSON, CSV, Markdown, and optional matplotlib plots under
+`runs/`. It reports counts by memory level and by dominant parallelism source.
+If the current pairwise contraction path has frontier width 1, that is recorded
+as `task_graph_serialized_by_planner`; it is evidence for future path-frontier
+optimization, not a command failure. These artifacts are modeled analysis, not
+measured hardware speedup.

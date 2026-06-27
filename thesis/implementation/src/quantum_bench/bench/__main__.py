@@ -80,6 +80,18 @@ def main() -> int:
     pim_eval_parser.add_argument("--compare-mock-on-failure", action="store_true")
     pim_eval_parser.add_argument("--keep-failure-artifacts", action="store_true")
 
+    frontier_parser = sub.add_parser("pim-frontier-analysis")
+    frontier_input = frontier_parser.add_mutually_exclusive_group(required=True)
+    frontier_input.add_argument("--suite", help="Suite path or preset name under configs/suites")
+    frontier_input.add_argument("--case", help="Builtin circuit case name")
+    frontier_parser.add_argument("--n-qubits", type=int)
+    frontier_parser.add_argument("--available-dpus", type=int, default=64)
+    frontier_parser.add_argument("--per-dpu-wram-bytes", type=int, default=64 * 1024)
+    frontier_parser.add_argument("--effective-wram-bytes", type=int, default=60 * 1024)
+    frontier_parser.add_argument("--per-dpu-mram-bytes", type=int, default=64 * 1024 * 1024)
+    frontier_parser.add_argument("--max-task-group-dpus", type=int, default=64)
+    frontier_parser.add_argument("--output-plots", action=argparse.BooleanOptionalAction, default=True)
+
     shadow_parser = sub.add_parser("shadow-routed-runtime")
     shadow_input = shadow_parser.add_mutually_exclusive_group(required=True)
     shadow_input.add_argument("--suite", help="Suite path or preset name under configs/suites")
@@ -272,6 +284,50 @@ def main() -> int:
                     "csv": str(run_dir / "pim_bridge_eval.csv"),
                     "cases_csv": str(run_dir / "pim_bridge_eval_cases.csv"),
                     "summary": str(run_dir / "pim_bridge_eval_summary.md"),
+                    "status": "completed",
+                },
+                indent=2,
+            )
+        )
+        return 0
+    if args.command == "pim-frontier-analysis":
+        from quantum_bench.bench.pim_frontier_analysis import run_pim_frontier_analysis, validate_cli_options
+        from quantum_bench.targets.upmem import UpmemResourceModel
+
+        resolved_suite = suite_path(args.suite, root_dir) if args.suite else None
+        try:
+            resource_model = UpmemResourceModel(
+                available_dpus=args.available_dpus,
+                per_dpu_wram_bytes=args.per_dpu_wram_bytes,
+                effective_wram_bytes=args.effective_wram_bytes,
+                per_dpu_mram_bytes=args.per_dpu_mram_bytes,
+                max_task_group_dpus=args.max_task_group_dpus,
+            )
+            validate_cli_options(
+                suite_path=resolved_suite,
+                case=args.case,
+                n_qubits=args.n_qubits,
+                resource_model=resource_model,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        run_dir = run_pim_frontier_analysis(
+            root_dir,
+            suite_path=resolved_suite,
+            case=args.case,
+            n_qubits=args.n_qubits,
+            resource_model=resource_model,
+            output_plots=args.output_plots,
+        )
+        print(
+            json.dumps(
+                {
+                    "run_dir": str(run_dir),
+                    "artifact": str(run_dir / "pim_frontier_analysis.json"),
+                    "tasks_csv": str(run_dir / "pim_frontier_analysis_tasks.csv"),
+                    "cases_csv": str(run_dir / "pim_frontier_analysis_cases.csv"),
+                    "waves_csv": str(run_dir / "pim_frontier_analysis_waves.csv"),
+                    "summary": str(run_dir / "pim_frontier_analysis_summary.md"),
                     "status": "completed",
                 },
                 indent=2,

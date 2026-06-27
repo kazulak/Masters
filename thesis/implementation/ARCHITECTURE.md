@@ -68,7 +68,8 @@ targets/upmem/
   host-side UPMEM model: dense WRAM tile plans, data format, traffic estimate,
   tiling, DPU schedule groundwork, SimplePIM availability probe metadata, and
   explicit dense bridge, dry-run SimplePIM dense GEMM microbenchmark records,
-  and reproducible UPMEM/SimplePIM environment verification
+  reproducible UPMEM/SimplePIM environment verification, and memory-level /
+  frontier analysis models
 formats/
   shared host-side conversion records and deterministic fixed-point utilities
 routing/
@@ -209,6 +210,21 @@ comparison work. The UPMEM SDK dense runner uses padded row-major buffers with
 explicit DPU-side strides, and `pim-bridge-eval --debug-failures` can write
 diagnostics comparing simulator output, direct Python int8/int32 reconstruction,
 and optional mock bridge output.
+
+The PIM frontier analyzer is also developer-only and does not execute PIM code:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-frontier-analysis --case bell_2q --n-qubits 2
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-frontier-analysis --suite configs/suites/pim_bridge_eval_quick.yml
+```
+
+It classifies each lowered GEMM contraction as modeled `L1_WRAM`,
+`L2_SINGLE_DPU_MRAM`, `L3_MULTI_DPU`, or `L4_OUT_OF_SCOPE`, and reports
+frontier waves, critical path length, modeled DPU occupancy, and dominant
+parallelism source. Memory level is separate from current simulator backend
+support. A frontier width of 1 is expected for serialized pairwise contraction
+paths and should be interpreted as evidence for future path-frontier
+optimization, not as a runtime failure.
 
 It writes:
 

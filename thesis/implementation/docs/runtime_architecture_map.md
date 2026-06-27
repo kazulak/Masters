@@ -47,6 +47,7 @@ only bounded local tasks that fit an explicit route contract.
 | Path optimizer | `src/quantum_bench/tn/planners.py`, `src/quantum_bench/tn/task_graph.py` | opt_einsum planner interface | Later add route-aware costs, not route-aware execution yet |
 | Planner comparison | `src/quantum_bench/bench/planner_compare.py`, `src/quantum_bench/bench/planner_scoring.py` | Implemented analysis layer | Host path optimizer, cost-model, and target-aware planning analysis |
 | PIM bridge evaluation | `src/quantum_bench/bench/pim_bridge_eval.py`, `configs/suites/pim_bridge_eval*.yml` | Per-task simulator backend evidence layer | Compare backend support, blockers, validation, and scaling before full routed execution |
+| PIM memory/frontier analysis | `src/quantum_bench/targets/upmem/frontier.py`, `src/quantum_bench/bench/pim_frontier_analysis.py` | Modeled memory-level and TaskGraph frontier analyzer | Use L1/L2/L3/L4 and inter/intra/hybrid parallelism evidence to choose L2 tiling, L3 distribution, or path-frontier work |
 | WRAM slicer | `src/quantum_bench/targets/upmem/tile_plan.py`, `src/quantum_bench/targets/upmem/schedule.py` | Deterministic dense WRAM tile-plan records | Turn tile plans into executable preparation only after route execution is introduced |
 | Data format conversion | `src/quantum_bench/formats/` | Deterministic host-side fixed-point records and utilities used by explicit dense preparation | Connect conversion records to route execution artifacts after routing gains execution |
 | Dynamic heuristic router | `src/quantum_bench/routing/` | Analysis-only task-level router skeleton | Add preparation/execution-aware routing after data conversion and tiling mature |
@@ -205,6 +206,7 @@ before real SimplePIM/UPMEM kernels exist.
 | Host aggregation layer | 0/implicit | 1 |
 | Planner comparison/cost model | 3 | 4 only if tied into route-aware planning later |
 | PIM bridge evaluation harness | 4 | 5 only after dense outputs can feed an integrated TaskGraph route |
+| PIM memory/frontier analyzer | 3 | 4 only after modeled L2/L3 schedules are compared with measured backend evidence |
 | UPMEM-aware path selection | 0/analysis only | 1 after route estimates mature |
 
 Level 6 requires more than implementation. It requires reproducible suite
@@ -699,6 +701,47 @@ manifest, and optional mock bridge output. The UPMEM SDK dense runner uses a
 padded row-major buffer contract with explicit DPU strides so non-square GEMM
 tasks are interpreted correctly.
 
+## PIM Memory-Level And Frontier Analysis
+
+`src/quantum_bench/targets/upmem/frontier.py` and
+`src/quantum_bench/bench/pim_frontier_analysis.py` model where each TaskGraph
+GEMM contraction sits in the UPMEM memory hierarchy and where parallelism is
+available.
+
+Examples:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-frontier-analysis --case bell_2q --n-qubits 2
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-frontier-analysis --suite configs/suites/pim_bridge_eval_quick.yml
+```
+
+The analyzer consumes existing workload/circuit construction and TaskGraph
+planning. It does not execute providers, UPMEM SDK kernels, SimplePIM commands,
+or dense bridge backends. It deliberately ignores suite `routes:`.
+
+Memory levels are capacity classes, not current backend success classes:
+
+- `L1_WRAM`: the full logical GEMM modeled working set fits effective WRAM;
+- `L2_SINGLE_DPU_MRAM`: the task fits one DPU MRAM but requires WRAM tiling;
+- `L3_MULTI_DPU`: the task requires modeled multi-DPU distribution;
+- `L4_OUT_OF_SCOPE`: the task exceeds aggregate modeled MRAM.
+
+The analyzer also records non-memory reasons such as
+`not_lowerable_to_dense_gemm` and `missing_gemm_dimensions`, so unsupported
+shapes are not confused with aggregate memory overflow.
+
+Frontier width is derived from TaskGraph dependencies and tensor producer /
+consumer relationships. If the current pairwise planner serializes the path,
+frontier width 1 and
+`potential_parallelism_source: task_graph_serialized_by_planner` are expected
+outputs. This is thesis evidence for future path-frontier optimization, not a
+runtime failure.
+
+Artifacts include task rows, case summaries, wave summaries, counts by memory
+level, counts by dominant source (`serial`, `inter_task`, `intra_task`,
+`hybrid`), optional plots, and a Markdown interpretation. These are modeled
+analysis artifacts and must not be presented as measured hardware speedup.
+
 ## Shadow Routed Runtime
 
 `src/quantum_bench/bench/shadow_routed_runtime.py` is the first full
@@ -800,11 +843,13 @@ which motivates route-aware costs later.
 - `2E.1` first UPMEM SDK simulator dense bridge backend for one non-tiled task
 - `2E.2` PIM bridge evaluation harness over growing quantum workloads
 - `2E.3` UPMEM SDK simulator dense correctness diagnostics and stride hardening
+- `2E.4` PIM memory-level and parallelism-frontier analyzer
 - later: revisit UPMEM-aware path selection using route-aware costs
 
-The next implementation wave should use PIM bridge evaluation artifacts to pick
-between larger shape support, executable tiling, hardware backend bring-up,
-SimplePIM GEMM, sparse route work, or route-aware path selection.
+The next implementation wave should use PIM bridge evaluation and frontier
+analysis artifacts to pick between larger shape support, executable L2 tiling,
+L3 distributed GEMM, hardware backend bring-up, SimplePIM GEMM, sparse route
+work, or route-aware path selection.
 
 ## Future Codex Instruction
 
