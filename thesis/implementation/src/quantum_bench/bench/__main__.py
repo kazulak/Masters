@@ -76,6 +76,9 @@ def main() -> int:
     pim_eval_parser.add_argument("--timeout-seconds", type=float, default=60.0)
     pim_eval_parser.add_argument("--planner")
     pim_eval_parser.add_argument("--output-plots", action=argparse.BooleanOptionalAction, default=True)
+    pim_eval_parser.add_argument("--debug-failures", action="store_true")
+    pim_eval_parser.add_argument("--compare-mock-on-failure", action="store_true")
+    pim_eval_parser.add_argument("--keep-failure-artifacts", action="store_true")
 
     shadow_parser = sub.add_parser("shadow-routed-runtime")
     shadow_input = shadow_parser.add_mutually_exclusive_group(required=True)
@@ -257,6 +260,9 @@ def main() -> int:
             timeout_seconds=args.timeout_seconds,
             planner=args.planner,
             output_plots=args.output_plots,
+            debug_failures=args.debug_failures,
+            compare_mock_on_failure=args.compare_mock_on_failure,
+            keep_failure_artifacts=args.keep_failure_artifacts,
         )
         print(
             json.dumps(

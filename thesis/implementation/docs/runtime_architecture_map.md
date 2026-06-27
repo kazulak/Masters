@@ -691,6 +691,14 @@ CSV, Markdown, per-case JSONL, optional dense bridge artifacts, and optional
 matplotlib plots. It does not perform full routed execution and does not make
 dense output authoritative for the circuit.
 
+Wave 2E.3 uses this harness to harden simulator correctness before hardware or
+SimplePIM comparison. `--debug-failures` writes
+`validation_diagnostics.json` next to failed dense bridge attempts. Diagnostics
+compare simulator output, direct Python int8/int32 reconstruction from the same
+manifest, and optional mock bridge output. The UPMEM SDK dense runner uses a
+padded row-major buffer contract with explicit DPU strides so non-square GEMM
+tasks are interpreted correctly.
+
 ## Shadow Routed Runtime
 
 `src/quantum_bench/bench/shadow_routed_runtime.py` is the first full
@@ -791,6 +799,7 @@ which motivates route-aware costs later.
 - `2E.0` UPMEM/SimplePIM environment verification and simulator sample bring-up
 - `2E.1` first UPMEM SDK simulator dense bridge backend for one non-tiled task
 - `2E.2` PIM bridge evaluation harness over growing quantum workloads
+- `2E.3` UPMEM SDK simulator dense correctness diagnostics and stride hardening
 - later: revisit UPMEM-aware path selection using route-aware costs
 
 The next implementation wave should use PIM bridge evaluation artifacts to pick

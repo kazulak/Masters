@@ -36,6 +36,13 @@ from quantum_bench.targets.upmem.dense_bridge import (
     run_mock_dense_bridge,
     write_dense_bridge_input_manifest,
 )
+from quantum_bench.targets.upmem.dense_bridge_diagnostics import (
+    DENSE_BRIDGE_DIAGNOSTICS_SCHEMA_VERSION,
+    compare_arrays,
+    dense_bridge_validation_diagnostics,
+    reconstruct_dense_bridge_output,
+    write_dense_bridge_validation_diagnostics,
+)
 from quantum_bench.targets.upmem.environment import (
     DEFAULT_UPMEM_ENV_TIMEOUT_SECONDS,
     UPMEM_ENV_CHECK_SCHEMA_VERSION,
@@ -79,6 +86,7 @@ from quantum_bench.targets.upmem.tile_plan import (
 __all__ = [
     "DENSE_INT8_FORMAT",
     "DENSE_BRIDGE_ID",
+    "DENSE_BRIDGE_DIAGNOSTICS_SCHEMA_VERSION",
     "DENSE_BRIDGE_SCHEMA_VERSION",
     "DEFAULT_UPMEM_ENV_TIMEOUT_SECONDS",
     "REQUIRES_TILING_NOT_IMPLEMENTED",
@@ -106,6 +114,8 @@ __all__ = [
     "DenseBridgeResult",
     "DenseBridgeStatus",
     "dense_bridge_manifest_eligibility",
+    "dense_bridge_validation_diagnostics",
+    "compare_arrays",
     "CommandExecutionRecord",
     "SampleCheckRecord",
     "SimplePimSourceDiscovery",
@@ -133,6 +143,7 @@ __all__ = [
     "probe_simplepim",
     "read_dense_bridge_input_manifest",
     "read_dense_bridge_output_manifest",
+    "reconstruct_dense_bridge_output",
     "run_command",
     "run_mock_dense_bridge",
     "make_simplepim_dense_microbench_input",
@@ -142,4 +153,5 @@ __all__ = [
     "upmem_dense_tile_plan_rows",
     "upmem_task_estimate_rows",
     "write_dense_bridge_input_manifest",
+    "write_dense_bridge_validation_diagnostics",
 ]

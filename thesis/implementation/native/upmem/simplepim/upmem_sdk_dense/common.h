@@ -13,6 +13,9 @@ typedef struct {
     uint32_t m;
     uint32_t k;
     uint32_t n;
+    uint32_t a_stride;
+    uint32_t b_stride;
+    uint32_t c_stride;
 } upmem_dense_args_t;
 
 #endif

@@ -128,6 +128,7 @@ execution over larger workload suites:
 ```bash
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-bridge-eval --suite configs/suites/pim_bridge_eval_quick.yml --dry-run
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-bridge-eval --suite configs/suites/pim_bridge_eval_quick.yml --backend upmem_sdk_simulator_dense --execute-external --max-executed-tasks-per-case 2
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-bridge-eval --suite configs/suites/pim_bridge_eval_quick.yml --backend upmem_sdk_simulator_dense --execute-external --max-executed-tasks-per-case 2 --debug-failures --compare-mock-on-failure
 ```
 
 Run external simulator execution on the quick suite first. The extended
@@ -136,3 +137,10 @@ attempting simulator execution. The command writes JSON, CSV, Markdown, and
 optional matplotlib plot artifacts under `runs/`. It reports support, blockers,
 validation metrics, and bring-up timings per task; it does not make the dense
 backend authoritative for the full circuit.
+
+For simulator correctness triage, add `--debug-failures`. Failed attempts write
+`validation_diagnostics.json` beside the dense bridge artifacts, comparing the
+simulator output, direct Python int8/int32 reconstruction, and optionally the
+mock bridge output when `--compare-mock-on-failure` is also set. These
+diagnostics are for backend hardening; failed simulator timings must not be
+presented as performance evidence.

@@ -18,6 +18,7 @@ from quantum_bench.targets.upmem import (
     DenseBridgeExecutionResult,
     DenseBridgeOutputManifest,
     dense_bridge_manifest_eligibility,
+    write_dense_bridge_validation_diagnostics,
     read_dense_bridge_input_manifest,
 )
 
@@ -103,6 +104,10 @@ def _fake_success_result(input_manifest_path: Path, *, status: str = "upmem_sdk_
 def _fake_failed_result(input_manifest_path: Path) -> DenseBridgeExecutionResult:
     bridge_dir = input_manifest_path.parent
     manifest = read_dense_bridge_input_manifest(input_manifest_path)
+    expected = np.load(bridge_dir / manifest.expected_output.relative_path, allow_pickle=False)
+    output_path = bridge_dir / "outputs" / "fake_bad_upmem_output.npy"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    np.save(output_path, np.zeros_like(expected), allow_pickle=False)
     output_manifest = DenseBridgeOutputManifest(
         schema_version=DENSE_BRIDGE_SCHEMA_VERSION,
         bridge_id=DENSE_BRIDGE_ID,
@@ -112,16 +117,30 @@ def _fake_failed_result(input_manifest_path: Path) -> DenseBridgeExecutionResult
         input_manifest="input_manifest.json",
         route_id=manifest.route_id,
         task_id=manifest.task_id,
-        output_blob=None,
+        output_blob=DenseBridgeBlob(
+            relative_path="outputs/fake_bad_upmem_output.npy",
+            dtype=str(expected.dtype),
+            shape=tuple(int(dim) for dim in expected.shape),
+            representation="dequantized_output",
+            nbytes=int(expected.nbytes),
+            labels=manifest.output_labels,
+            role="unit_test_bad_output",
+        ),
         accumulator_blob=None,
-        validation_metrics={},
+        validation_metrics={
+            "reference_kind": "expected_dequantized_output_vs_upmem_sdk_simulator_dense",
+            "passed": False,
+            "max_abs_error": float(np.max(np.abs(expected))) if expected.size else 0.0,
+            "l2_error": float(np.linalg.norm(expected.ravel())),
+            "relative_l2_error": 1.0,
+        },
         compute_time_s=0.0,
         write_time_s=0.0,
         total_time_s=0.001,
         external_command_executed=True,
         execution_implemented=True,
         error="runner failed in unit test",
-        metadata={"reason": "runner_execution_failed", "simulator_kernel_executed": False, "hardware_kernel_executed": False},
+        metadata={"reason": "validation_failed", "simulator_kernel_executed": True, "hardware_kernel_executed": False},
     )
     write_json(bridge_dir / "output_manifest.json", output_manifest)
     return DenseBridgeExecutionResult(
@@ -130,12 +149,12 @@ def _fake_failed_result(input_manifest_path: Path) -> DenseBridgeExecutionResult
         execution_status="failed",
         backend_id="upmem_sdk_simulator_dense",
         backend_identity=None,
-        reason="runner_execution_failed",
+        reason="validation_failed",
         error="runner failed in unit test",
-        error_type="runner_execution_failed",
+        error_type="validation_failed",
         input_manifest_path="input_manifest.json",
         output_manifest_path="output_manifest.json",
-        output_blob_path=None,
+        output_blob_path="outputs/fake_bad_upmem_output.npy",
         output_manifest=output_manifest,
         invocation_metadata={"backend_id": "upmem_sdk_simulator_dense"},
         external_command_executed=True,
@@ -306,6 +325,67 @@ def test_pim_bridge_eval_execution_cap_counts_failed_attempts(tmp_path: Path, mo
     assert case_summary["attempted_task_count"] == 1
     assert case_summary["failed_task_count"] == 1
     assert any(row["blocker_reason"] == "execution_cap_reached" for row in payload["rows"])
+
+
+def test_pim_bridge_eval_debug_failures_writes_diagnostics(tmp_path: Path, monkeypatch) -> None:
+    def fake_execute(input_manifest_path: Path, **kwargs: object) -> DenseBridgeExecutionResult:
+        return _fake_failed_result(input_manifest_path)
+
+    monkeypatch.setattr(pim_eval_module, "capture_environment", lambda root_dir: {})
+    monkeypatch.setattr(pim_eval_module, "execute_dense_bridge", fake_execute)
+
+    run_dir = run_pim_bridge_eval(
+        tmp_path,
+        case="bell_2q",
+        n_qubits=2,
+        execute_external=True,
+        max_executed_tasks_per_case=1,
+        debug_failures=True,
+        compare_mock_on_failure=True,
+        env={},
+        output_plots=False,
+    )
+    payload = _load_payload(run_dir)
+    failures = json.loads((run_dir / "pim_bridge_eval_failures.json").read_text(encoding="utf-8"))["failures"]
+    failed_row = next(row for row in payload["rows"] if row["diagnostic_path"])
+    diagnostics = json.loads((run_dir / failed_row["diagnostic_path"]).read_text(encoding="utf-8"))
+
+    assert failures
+    assert failed_row["diagnostic_conclusion"] == "simulator_output_mismatch"
+    assert diagnostics["comparisons"]["direct_python_reconstruction_vs_expected"]["passed"] is True
+    assert diagnostics["comparisons"]["simulator_output_vs_expected"]["passed"] is False
+    assert diagnostics["comparisons"]["simulator_output_vs_expected"]["max_abs_error_index"] is not None
+    assert diagnostics["mock_comparison"]["mock_status"] == "mock_executed"
+    assert diagnostics["comparisons"]["mock_output_vs_expected"]["passed"] is True
+    assert (run_dir / Path(failed_row["diagnostic_path"]).parent / "diagnostics" / "mock_bridge" / "output_manifest.json").exists()
+
+
+def test_dense_bridge_validation_diagnostics_reports_max_error_values(tmp_path: Path, monkeypatch) -> None:
+    def fake_execute(input_manifest_path: Path, **kwargs: object) -> DenseBridgeExecutionResult:
+        return _fake_failed_result(input_manifest_path)
+
+    monkeypatch.setattr(pim_eval_module, "capture_environment", lambda root_dir: {})
+    monkeypatch.setattr(pim_eval_module, "execute_dense_bridge", fake_execute)
+    run_dir = run_pim_bridge_eval(
+        tmp_path,
+        case="bell_2q",
+        n_qubits=2,
+        execute_external=True,
+        max_executed_tasks_per_case=1,
+        env={},
+        output_plots=False,
+    )
+    payload = _load_payload(run_dir)
+    row = next(row for row in payload["rows"] if row["backend_status"] == "failed")
+    bridge_dir = run_dir / Path(row["bridge_artifact_path"]).parent
+    diagnostics = write_dense_bridge_validation_diagnostics(bridge_dir, case_id=row["case_id"], task_index=row["task_index"])
+
+    comparison = diagnostics["comparisons"]["simulator_output_vs_expected"]
+    assert comparison["passed"] is False
+    assert comparison["max_abs_error_index"] is not None
+    assert comparison["expected_value_at_max_error"] is not None
+    assert comparison["actual_value_at_max_error"] is not None
+    assert diagnostics["comparisons"]["direct_python_reconstruction_vs_expected"]["passed"] is True
 
 
 def test_pim_bridge_eval_csv_uses_json_strings_for_nested_fields(tmp_path: Path, monkeypatch) -> None:

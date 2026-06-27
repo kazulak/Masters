@@ -70,7 +70,14 @@ int main(int argc, char **argv) {
     DPU_ASSERT(dpu_alloc(1, NULL, &set));
     DPU_ASSERT(dpu_load(set, dpu_binary, NULL));
 
-    upmem_dense_args_t args = {m, k, n};
+    upmem_dense_args_t args = {
+        m,
+        k,
+        n,
+        UPMEM_DENSE_MAX_DIM,
+        UPMEM_DENSE_MAX_DIM,
+        UPMEM_DENSE_MAX_DIM,
+    };
     DPU_ASSERT(dpu_broadcast_to(set, "DENSE_ARGS", 0, &args, sizeof(args), DPU_XFER_DEFAULT));
     DPU_ASSERT(dpu_broadcast_to(set, "DENSE_A", 0, left, sizeof(left), DPU_XFER_DEFAULT));
     DPU_ASSERT(dpu_broadcast_to(set, "DENSE_B", 0, right, sizeof(right), DPU_XFER_DEFAULT));

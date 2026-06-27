@@ -1611,7 +1611,9 @@ def _upmem_sdk_simulator_invocation_metadata(
             key for key in ("UPMEM_HOME", "UPMEM_DENSE_SIM_MAX_DIM", "UPMEM_DENSE_SIM_TIMEOUT_SECONDS") if environment.get(key)
         ),
         "blob_format": "npy",
-        "native_buffer_layout": "row_major",
+        "native_buffer_layout": "row_major_padded",
+        "native_buffer_stride": "max_dim",
+        "stride_model": "explicit_padded_stride_v1",
         "native_int32_output_dtype": "<i4",
         "external_command_executed": False,
         "timeout_seconds": timeout_seconds,

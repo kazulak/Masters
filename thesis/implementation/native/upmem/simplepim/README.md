@@ -88,9 +88,12 @@ bridge/runner_work/
 ```
 
 The runner builds and executes inside `runner_work`; it must not mutate this
-repository's native source tree. The native buffer contract is row-major int8
-inputs and row-major little-endian int32 output with shapes taken from the
-validated manifest/config.
+repository's native source tree. The native buffer contract is padded row-major
+int8 inputs and padded row-major little-endian int32 output with shapes taken
+from the validated manifest/config. Host code writes `max_dim x max_dim`
+buffers, passes explicit `a_stride`, `b_stride`, and `c_stride` values to the
+DPU, and the DPU indexes A, B, and C using those padded strides. This is
+required for non-square GEMM shapes.
 
 The supported bring-up command is:
 
@@ -115,6 +118,8 @@ Metadata explicitly reports:
 - `simplepim_api_used: false`
 - `simplepim_bridge_lane: true`
 - `target: simulator`
+- `native_buffer_layout: row_major_padded`
+- `stride_model: explicit_padded_stride_v1`
 - `upmem_dpu_program_executed: true`
 - `simulator_kernel_executed: true`
 - `hardware_kernel_executed: false`

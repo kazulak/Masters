@@ -21,6 +21,7 @@ from quantum_bench.targets.upmem import (
     dense_bridge_manifest_eligibility,
     execute_dense_bridge,
     probe_simplepim,
+    write_dense_bridge_validation_diagnostics,
     write_dense_bridge_input_manifest,
 )
 from quantum_bench.tn import (
@@ -86,6 +87,8 @@ TASK_FIELDS = [
     "kernel_invocation_count",
     "output_manifest_path",
     "output_blob_path",
+    "diagnostic_path",
+    "diagnostic_conclusion",
     "external_command_executed",
     "execution_implemented",
     "simulator_kernel_executed",
@@ -134,6 +137,9 @@ def run_pim_bridge_eval(
     timeout_seconds: float = 60.0,
     planner: str | None = None,
     output_plots: bool = True,
+    debug_failures: bool = False,
+    compare_mock_on_failure: bool = False,
+    keep_failure_artifacts: bool = False,
     env: Mapping[str, str] | None = None,
 ) -> Path:
     validate_cli_options(
@@ -198,6 +204,9 @@ def run_pim_bridge_eval(
                 "task_selection": task_selection,
                 "timeout_seconds": timeout_seconds,
                 "planner": planner_config,
+                "debug_failures": debug_failures,
+                "compare_mock_on_failure": compare_mock_on_failure,
+                "keep_failure_artifacts": keep_failure_artifacts,
             },
         )
 
@@ -218,12 +227,15 @@ def run_pim_bridge_eval(
             max_tasks_per_case=max_tasks_per_case,
             max_executed_tasks_per_case=max_executed_tasks_per_case,
             task_selection=task_selection,
+            debug_failures=debug_failures or compare_mock_on_failure,
+            compare_mock_on_failure=compare_mock_on_failure,
             env=execution_env,
         )
         rows.extend(case_rows)
         case_summaries.append(case_summary)
 
     summary = _run_summary(rows, case_summaries)
+    failure_diagnostics = _failure_diagnostics(rows)
     payload = {
         "schema_version": PIM_BRIDGE_EVAL_SCHEMA_VERSION,
         "run_id": run_dir.name,
@@ -238,9 +250,13 @@ def run_pim_bridge_eval(
         "max_executed_tasks_per_case": max_executed_tasks_per_case,
         "timeout_seconds": timeout_seconds,
         "planner": planner_config,
+        "debug_failures": debug_failures,
+        "compare_mock_on_failure": compare_mock_on_failure,
+        "keep_failure_artifacts": keep_failure_artifacts,
         "simplepim_probe": probe.to_json_dict(),
         "summary": summary,
         "case_summaries": case_summaries,
+        "failure_diagnostics": failure_diagnostics,
         "rows": rows,
         "metadata": {
             "developer_only": True,
@@ -252,6 +268,8 @@ def run_pim_bridge_eval(
         },
     }
     write_json(run_dir / "pim_bridge_eval.json", payload)
+    if failure_diagnostics:
+        write_json(run_dir / "pim_bridge_eval_failures.json", {"schema_version": PIM_BRIDGE_EVAL_SCHEMA_VERSION, "failures": failure_diagnostics})
     _write_csv(run_dir / "pim_bridge_eval.csv", rows, TASK_FIELDS)
     _write_csv(run_dir / "pim_bridge_eval_cases.csv", case_summaries, CASE_FIELDS)
     (run_dir / "pim_bridge_eval_summary.md").write_text(_summary_markdown(summary, case_summaries), encoding="utf-8")
@@ -304,6 +322,8 @@ def _evaluate_case(
     max_tasks_per_case: int,
     max_executed_tasks_per_case: int,
     task_selection: PimBridgeTaskSelection,
+    debug_failures: bool,
+    compare_mock_on_failure: bool,
     env: Mapping[str, str],
 ) -> tuple[list[JsonDict], JsonDict]:
     circuit = case_payload.pop("_preloaded_circuit", None)
@@ -371,6 +391,8 @@ def _evaluate_case(
                     preparation=preparation,
                     backend=backend,
                     execute_external=execute_external,
+                    debug_failures=debug_failures,
+                    compare_mock_on_failure=compare_mock_on_failure,
                     env=env,
                 )
                 execution_attempts += 1
@@ -476,6 +498,7 @@ def _base_task_row(
         "kernel_invocation_count": 0,
         "output_manifest_path": None,
         "output_blob_path": None,
+        "diagnostic_path": None,
         "external_command_executed": False,
         "execution_implemented": False,
         "simulator_kernel_executed": False,
@@ -492,6 +515,8 @@ def _execute_backend_task(
     preparation: Any,
     backend: str,
     execute_external: bool,
+    debug_failures: bool,
+    compare_mock_on_failure: bool,
     env: Mapping[str, str],
 ) -> JsonDict:
     bridge_dir = run_dir / "cases" / sanitize(case_id) / "dense_bridge" / f"task_{task_index:04d}"
@@ -530,6 +555,16 @@ def _execute_backend_task(
         row["readiness_status"] = "unsupported"
     else:
         row["readiness_status"] = "failed"
+    if debug_failures and _needs_diagnostics(row, bridge_result):
+        diagnostics = write_dense_bridge_validation_diagnostics(
+            bridge_dir,
+            case_id=str(row["case_id"]),
+            task_index=task_index,
+            task_id=str(row["task_id"]),
+            compare_mock=compare_mock_on_failure,
+        )
+        row["diagnostic_path"] = (bridge_dir / "validation_diagnostics.json").relative_to(run_dir).as_posix()
+        row["diagnostic_conclusion"] = diagnostics.get("conclusion")
     return row
 
 
@@ -598,6 +633,34 @@ def _run_summary(rows: list[JsonDict], case_summaries: list[JsonDict]) -> JsonDi
         "total_simulator_time_s": sum(_float_or_zero(case["total_simulator_time_s"]) for case in case_summaries),
         "total_build_time_s": sum(_float_or_zero(case["total_build_time_s"]) for case in case_summaries),
     }
+
+
+def _failure_diagnostics(rows: list[JsonDict]) -> list[JsonDict]:
+    failures = []
+    for row in rows:
+        if row.get("diagnostic_path"):
+            failures.append(
+                {
+                    "case_id": row.get("case_id"),
+                    "task_index": row.get("task_index"),
+                    "task_id": row.get("task_id"),
+                    "backend_status": row.get("backend_status"),
+                    "blocker_reason": row.get("blocker_reason"),
+                    "diagnostic_conclusion": row.get("diagnostic_conclusion"),
+                    "diagnostic_path": row.get("diagnostic_path"),
+                }
+            )
+    return failures
+
+
+def _needs_diagnostics(row: JsonDict, bridge_result: Any) -> bool:
+    if bridge_result.execution_status == "failed":
+        return True
+    if row.get("validation_status") == "failed":
+        return True
+    if row.get("blocker_reason") == "validation_failed":
+        return True
+    return False
 
 
 def _summary_markdown(summary: JsonDict, case_summaries: list[JsonDict]) -> str:

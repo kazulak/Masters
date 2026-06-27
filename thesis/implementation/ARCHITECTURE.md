@@ -204,6 +204,12 @@ and writes JSON/CSV/Markdown/plot artifacts about support, blockers, validation,
 and bring-up timings. It is not normal provider execution and does not make PIM
 outputs authoritative for full circuits.
 
+Wave 2E.3 hardens simulator correctness before any hardware or SimplePIM
+comparison work. The UPMEM SDK dense runner uses padded row-major buffers with
+explicit DPU-side strides, and `pim-bridge-eval --debug-failures` can write
+diagnostics comparing simulator output, direct Python int8/int32 reconstruction,
+and optional mock bridge output.
+
 It writes:
 
 ```text

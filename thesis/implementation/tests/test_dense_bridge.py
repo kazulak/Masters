@@ -896,6 +896,21 @@ def test_upmem_sdk_runner_real_and_split_complex_scaling_helpers() -> None:
     np.testing.assert_allclose(split_output, np.array([[2.0 + 2.5j]]))
 
 
+def test_upmem_sdk_native_dense_uses_explicit_padded_strides() -> None:
+    native_dir = ROOT / "native" / "upmem" / "simplepim" / "upmem_sdk_dense"
+    common = (native_dir / "common.h").read_text(encoding="utf-8")
+    host = (native_dir / "host.c").read_text(encoding="utf-8")
+    dpu = (native_dir / "dpu.c").read_text(encoding="utf-8")
+
+    assert "uint32_t a_stride;" in common
+    assert "uint32_t b_stride;" in common
+    assert "uint32_t c_stride;" in common
+    assert "UPMEM_DENSE_MAX_DIM" in host
+    assert "local_a[i * a_stride + p]" in dpu
+    assert "local_b[p * b_stride + j]" in dpu
+    assert "local_c[i * c_stride + j]" in dpu
+
+
 def test_malformed_manifest_fails_before_simplepim_backend_status(tmp_path: Path) -> None:
     preparation = _real_preparation(_available_probe())
     write_dense_bridge_input_manifest(preparation, tmp_path)
