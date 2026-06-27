@@ -92,6 +92,10 @@ def main() -> int:
     frontier_parser.add_argument("--max-task-group-dpus", type=int, default=64)
     frontier_parser.add_argument("--output-plots", action=argparse.BooleanOptionalAction, default=True)
 
+    matrix_parser = sub.add_parser("benchmark-matrix-report")
+    matrix_parser.add_argument("--matrix", required=True, help="Benchmark matrix YAML path")
+    matrix_parser.add_argument("--output-plots", action=argparse.BooleanOptionalAction, default=True)
+
     shadow_parser = sub.add_parser("shadow-routed-runtime")
     shadow_input = shadow_parser.add_mutually_exclusive_group(required=True)
     shadow_input.add_argument("--suite", help="Suite path or preset name under configs/suites")
@@ -328,6 +332,29 @@ def main() -> int:
                     "cases_csv": str(run_dir / "pim_frontier_analysis_cases.csv"),
                     "waves_csv": str(run_dir / "pim_frontier_analysis_waves.csv"),
                     "summary": str(run_dir / "pim_frontier_analysis_summary.md"),
+                    "status": "completed",
+                },
+                indent=2,
+            )
+        )
+        return 0
+    if args.command == "benchmark-matrix-report":
+        from quantum_bench.bench.benchmark_matrix_report import run_benchmark_matrix_report
+
+        matrix_path = Path(args.matrix)
+        if not matrix_path.is_absolute():
+            matrix_path = root_dir / matrix_path
+        try:
+            run_dir = run_benchmark_matrix_report(root_dir, matrix_path, output_plots=args.output_plots)
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(
+            json.dumps(
+                {
+                    "run_dir": str(run_dir),
+                    "artifact": str(run_dir / "benchmark_matrix.json"),
+                    "csv": str(run_dir / "benchmark_matrix.csv"),
+                    "summary": str(run_dir / "benchmark_matrix_summary.md"),
                     "status": "completed",
                 },
                 indent=2,

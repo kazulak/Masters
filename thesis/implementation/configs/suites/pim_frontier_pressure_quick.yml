@@ -1,0 +1,102 @@
+schema_version: 2
+suite_id: pim_frontier_pressure_quick
+
+defaults:
+  warmups: 0
+  repeats: 1
+  timeout_s: 60
+  memory_guard_gib: 4
+  planner:
+    engine: opt_einsum
+    optimize: greedy
+
+workloads:
+  - id: ghz_4q
+    metadata:
+      workload_type: real_circuit
+    circuit:
+      kind: builtin
+      name: ghz_chain
+      n_qubits: 4
+
+  - id: bb84_4q
+    metadata:
+      workload_type: real_circuit
+    circuit:
+      kind: builtin
+      name: BB84
+      n_qubits: 4
+
+  - id: synthetic_l1_independent
+    metadata:
+      workload_type: synthetic_pressure
+      execution_scope: model_only
+      not_real_quantum_circuit: true
+      pressure_scale: 1
+    circuit:
+      kind: synthetic_pressure
+      name: synthetic_l1_independent
+      profile: independent_gemm
+      task_count: 8
+      gemm_m: 16
+      gemm_k: 16
+      gemm_n: 16
+
+  - id: synthetic_l2_single_dpu_mram
+    metadata:
+      workload_type: synthetic_pressure
+      execution_scope: model_only
+      not_real_quantum_circuit: true
+      pressure_scale: 2
+    circuit:
+      kind: synthetic_pressure
+      name: synthetic_l2_single_dpu_mram
+      profile: single_gemm
+      task_count: 1
+      gemm_m: 512
+      gemm_k: 512
+      gemm_n: 512
+
+  - id: synthetic_l3_multi_dpu
+    metadata:
+      workload_type: synthetic_pressure
+      execution_scope: model_only
+      not_real_quantum_circuit: true
+      pressure_scale: 3
+    circuit:
+      kind: synthetic_pressure
+      name: synthetic_l3_multi_dpu
+      profile: single_gemm
+      task_count: 1
+      gemm_m: 8192
+      gemm_k: 8192
+      gemm_n: 16
+
+  - id: synthetic_l4_out_of_scope
+    metadata:
+      workload_type: synthetic_pressure
+      execution_scope: model_only
+      not_real_quantum_circuit: true
+      pressure_scale: 4
+    circuit:
+      kind: synthetic_pressure
+      name: synthetic_l4_out_of_scope
+      profile: single_gemm
+      task_count: 1
+      gemm_m: 65536
+      gemm_k: 65536
+      gemm_n: 2
+
+routes:
+  - id: cpu_tn_einsum_exact
+    role: reference
+    required: false
+
+validation:
+  reference_route: cpu_tn_einsum_exact
+  tolerances:
+    max_abs_error: 1.0e-9
+    l2_error: 1.0e-8
+    max_rel_error: 1.0e-8
+    norm_drift: 1.0e-8
+    min_fidelity: 0.999999999

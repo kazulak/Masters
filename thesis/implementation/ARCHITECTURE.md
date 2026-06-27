@@ -12,7 +12,7 @@ map before proposing changes.
 
 ```text
 implementation/
-  configs/suites/          benchmark suite YAML files
+  configs/                 benchmark suites and thesis matrix YAML files
   external/QuEST/          local QuEST dependency for the CPU full-state baseline
   native/quest_cpu/        small C runner used by the QuEST provider
   native/upmem/            future SimplePIM bridge and raw UPMEM code
@@ -69,7 +69,7 @@ targets/upmem/
   tiling, DPU schedule groundwork, SimplePIM availability probe metadata, and
   explicit dense bridge, dry-run SimplePIM dense GEMM microbenchmark records,
   reproducible UPMEM/SimplePIM environment verification, and memory-level /
-  frontier analysis models
+  frontier analysis models, including analysis-only synthetic pressure graphs
 formats/
   shared host-side conversion records and deterministic fixed-point utilities
 routing/
@@ -225,6 +225,33 @@ parallelism source. Memory level is separate from current simulator backend
 support. A frontier width of 1 is expected for serialized pairwise contraction
 paths and should be interpreted as evidence for future path-frontier
 optimization, not as a runtime failure.
+
+Pressure suites such as `configs/suites/pim_frontier_pressure_quick.yml` and
+`configs/suites/pim_frontier_pressure.yml` add explicitly labeled synthetic
+pressure workloads to expose L2/L3/L4 boundaries. Those workloads are
+analysis-only TaskGraphs with GEMM dimensions, dependencies, and UPMEM estimate
+metadata but no tensor arrays. Normal circuit loading and normal benchmark suite
+execution reject `circuit.kind: synthetic_pressure`; only analysis commands can
+consume them.
+
+The benchmark matrix report is the thesis comparison scaffold:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench benchmark-matrix-report --matrix configs/benchmark_matrix.yml
+```
+
+It separates benchmark route categories from implemented route IDs. For
+example, `cpu_tn_exact` is the matrix category and `cpu_tn_einsum_exact` is the
+current implementation route ID. QuEST CPU full-state remains marked
+`output_authority=benchmark_only` and `validation_policy=metrics_only`.
+
+UPMEM is represented as one final top-level runtime category,
+`upmem_tn_runtime`. `L1_WRAM`, `L2_SINGLE_DPU_MRAM`, `L3_MULTI_DPU`, and
+`L4_OUT_OF_SCOPE` are internal execution classes used by that runtime, not
+separate benchmark competitors. Current UPMEM evidence is scoped as task-level
+simulator dense bridge evidence for the currently eligible L1 subset and
+model-only pressure/frontier evidence for L2/L3/L4. Matrix reports must not turn
+those task-level or modeled rows into full-circuit speedup claims.
 
 It writes:
 

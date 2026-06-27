@@ -92,6 +92,14 @@ from quantum_bench.targets.upmem.simplepim_microbench import (
     make_simplepim_dense_microbench_input,
     prepare_simplepim_dense_microbench,
 )
+from quantum_bench.targets.upmem.synthetic_pressure import (
+    SYNTHETIC_PRESSURE_ERROR,
+    SYNTHETIC_PRESSURE_KIND,
+    build_synthetic_pressure_task_graph,
+    is_synthetic_pressure_case,
+    require_synthetic_pressure_metadata,
+    synthetic_pressure_manifest,
+)
 from quantum_bench.targets.upmem.tile_plan import (
     UpmemDenseTilePlan,
     UpmemTileCounts,
@@ -118,6 +126,8 @@ __all__ = [
     "SIMPLEPIM_DENSE_MICROBENCH_SCHEMA_VERSION",
     "UPMEM_ENV_CHECK_SCHEMA_VERSION",
     "PIM_FRONTIER_ANALYSIS_SCHEMA_VERSION",
+    "SYNTHETIC_PRESSURE_KIND",
+    "SYNTHETIC_PRESSURE_ERROR",
     "MEMORY_LEVEL_L1_WRAM",
     "MEMORY_LEVEL_L2_SINGLE_DPU_MRAM",
     "MEMORY_LEVEL_L3_MULTI_DPU",
@@ -184,6 +194,10 @@ __all__ = [
     "prepare_simplepim_dense_microbench",
     "sample_success_marker",
     "simplepim_probe_metadata",
+    "build_synthetic_pressure_task_graph",
+    "is_synthetic_pressure_case",
+    "require_synthetic_pressure_metadata",
+    "synthetic_pressure_manifest",
     "upmem_dense_tile_plan_rows",
     "upmem_task_estimate_rows",
     "write_dense_bridge_input_manifest",

@@ -30,6 +30,8 @@ PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-bridge-eval --case
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-bridge-eval --suite configs/suites/pim_bridge_eval_quick.yml --dry-run
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-bridge-eval --suite configs/suites/pim_bridge_eval_quick.yml --backend upmem_sdk_simulator_dense --execute-external --max-executed-tasks-per-case 2
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-frontier-analysis --suite configs/suites/pim_bridge_eval_quick.yml
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-frontier-analysis --suite configs/suites/pim_frontier_pressure_quick.yml
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench benchmark-matrix-report --matrix configs/benchmark_matrix.yml
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-route-coverage --case bell_2q
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-route-coverage --suite configs/suites/planner_compare.yml
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench shadow-routed-runtime --case bell_2q
@@ -87,6 +89,15 @@ scripts/run_energy_suite.sh configs/suites/local_energy.yml
   contractions as modeled L1/L2/L3/L4 UPMEM memory cases and estimates
   inter-task, intra-task, and hybrid DPU parallelism. It does not execute UPMEM
   kernels or normal provider routes.
+- `src/quantum_bench/targets/upmem/synthetic_pressure.py` contains
+  analysis-only synthetic pressure TaskGraphs used to expose L2/L3/L4 memory
+  boundaries without allocating tensors or pretending they are real quantum
+  circuits. Normal circuit loading and normal suite execution reject these
+  workloads explicitly.
+- `src/quantum_bench/bench/benchmark_matrix_report.py` produces the thesis
+  benchmark matrix and PIM pressure report. It keeps UPMEM as one top-level
+  runtime category, `upmem_tn_runtime`, while reporting L1/L2/L3/L4 only as
+  internal UPMEM execution classes.
 - `native/upmem/simplepim/` is reserved for future SimplePIM bridge code and
   currently contains the non-executing external contract stub plus the first
   UPMEM SDK simulator dense bridge runner. The runner is in the
@@ -168,3 +179,38 @@ If the current pairwise contraction path has frontier width 1, that is recorded
 as `task_graph_serialized_by_planner`; it is evidence for future path-frontier
 optimization, not a command failure. These artifacts are modeled analysis, not
 measured hardware speedup.
+
+Pressure suites add explicitly labeled model-only cases for L2/L3/L4 boundaries:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-frontier-analysis --suite configs/suites/pim_frontier_pressure_quick.yml
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-frontier-analysis --suite configs/suites/pim_frontier_pressure.yml
+```
+
+Synthetic pressure workloads must declare `workload_type: synthetic_pressure`,
+`execution_scope: model_only`, and `not_real_quantum_circuit: true`. They are
+accepted only by analysis commands. If they reach normal circuit loading or
+normal benchmark execution, the run fails with an explicit analysis-only error.
+
+## Benchmark Matrix And Pressure Report
+
+`benchmark-matrix-report` prepares the final thesis comparison scaffold without
+executing planned or unavailable baselines:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench benchmark-matrix-report --matrix configs/benchmark_matrix.yml
+```
+
+The report writes `benchmark_matrix.json`, `benchmark_matrix.csv`,
+`pim_pressure_tasks.csv`, `pim_pressure_cases.csv`,
+`pim_pressure_resource_models.csv`, Markdown, and optional matplotlib plots. It
+distinguishes route categories from implementation route IDs. For example,
+`cpu_tn_exact` is the benchmark category while `cpu_tn_einsum_exact` is the
+current implemented route ID.
+
+The UPMEM row is intentionally one top-level runtime: `upmem_tn_runtime`.
+`L1_WRAM`, `L2_SINGLE_DPU_MRAM`, `L3_MULTI_DPU`, and `L4_OUT_OF_SCOPE` are
+internal UPMEM execution classes under that runtime, not separate final
+competitors. Current UPMEM evidence is scoped as task-level simulator dense
+bridge evidence for an L1 subset plus L2/L3/L4 model-only pressure evidence.
+The report must not be read as a full-circuit UPMEM speedup comparison.

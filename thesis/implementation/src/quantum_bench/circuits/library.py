@@ -14,6 +14,11 @@ from quantum_bench.core.records import CircuitOperation, CircuitSpec
 def load_circuit(case: dict, root_dir: Path) -> CircuitSpec:
     circuit = case.get("circuit", {})
     kind = circuit.get("kind", "builtin")
+    if kind == "synthetic_pressure":
+        raise ValueError(
+            "synthetic_pressure workloads are analysis-only; use "
+            "pim-frontier-analysis or benchmark-matrix-report"
+        )
     if kind == "builtin":
         return builtin_circuit(str(circuit["name"]), circuit)
     if kind == "qasm_file":

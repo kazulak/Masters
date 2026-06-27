@@ -48,6 +48,8 @@ only bounded local tasks that fit an explicit route contract.
 | Planner comparison | `src/quantum_bench/bench/planner_compare.py`, `src/quantum_bench/bench/planner_scoring.py` | Implemented analysis layer | Host path optimizer, cost-model, and target-aware planning analysis |
 | PIM bridge evaluation | `src/quantum_bench/bench/pim_bridge_eval.py`, `configs/suites/pim_bridge_eval*.yml` | Per-task simulator backend evidence layer | Compare backend support, blockers, validation, and scaling before full routed execution |
 | PIM memory/frontier analysis | `src/quantum_bench/targets/upmem/frontier.py`, `src/quantum_bench/bench/pim_frontier_analysis.py` | Modeled memory-level and TaskGraph frontier analyzer | Use L1/L2/L3/L4 and inter/intra/hybrid parallelism evidence to choose L2 tiling, L3 distribution, or path-frontier work |
+| Synthetic pressure workloads | `src/quantum_bench/targets/upmem/synthetic_pressure.py`, `configs/suites/pim_frontier_pressure*.yml` | Analysis-only TaskGraph-compatible records; no tensor arrays | Expose L2/L3/L4 pressure boundaries without entering normal benchmark execution |
+| Benchmark matrix report | `src/quantum_bench/bench/benchmark_matrix_report.py`, `configs/benchmark_matrix.yml` | Thesis benchmark-matrix and pressure-report scaffold | Keep UPMEM as one top-level runtime while reporting L1/L2/L3/L4 as internal execution classes |
 | WRAM slicer | `src/quantum_bench/targets/upmem/tile_plan.py`, `src/quantum_bench/targets/upmem/schedule.py` | Deterministic dense WRAM tile-plan records | Turn tile plans into executable preparation only after route execution is introduced |
 | Data format conversion | `src/quantum_bench/formats/` | Deterministic host-side fixed-point records and utilities used by explicit dense preparation | Connect conversion records to route execution artifacts after routing gains execution |
 | Dynamic heuristic router | `src/quantum_bench/routing/` | Analysis-only task-level router skeleton | Add preparation/execution-aware routing after data conversion and tiling mature |
@@ -742,6 +744,52 @@ level, counts by dominant source (`serial`, `inter_task`, `intra_task`,
 `hybrid`), optional plots, and a Markdown interpretation. These are modeled
 analysis artifacts and must not be presented as measured hardware speedup.
 
+Synthetic pressure suites are accepted only by analysis commands. They use
+`circuit.kind: synthetic_pressure`, `workload_type: synthetic_pressure`,
+`execution_scope: model_only`, and `not_real_quantum_circuit: true`. The records
+provide task indices, tensor IDs, dependencies, GEMM dimensions, and
+target-estimate-compatible metadata, but no ndarray payloads. Normal circuit
+loading and normal benchmark suite execution reject them with an explicit
+analysis-only error.
+
+## Benchmark Matrix And Pressure Report
+
+`src/quantum_bench/bench/benchmark_matrix_report.py` and
+`configs/benchmark_matrix.yml` define the current thesis benchmark comparison
+scaffold. The command is developer-only analysis:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench benchmark-matrix-report --matrix configs/benchmark_matrix.yml
+```
+
+The report distinguishes benchmark route categories from current implementation
+route IDs:
+
+- `cpu_tn_exact` with current route ID `cpu_tn_einsum_exact`;
+- `gpu_tn_exact` as planned/unavailable until implemented;
+- `cpu_full_state` with current QuEST CPU route ID and
+  `output_authority=benchmark_only`;
+- `gpu_full_state` as planned/unavailable until implemented;
+- `upmem_tn_runtime` as the single final UPMEM runtime category.
+
+UPMEM L1/L2/L3/L4 are internal runtime execution classes only:
+
+- `L1_WRAM`: implemented for the current task-level simulator dense bridge
+  subset;
+- `L2_SINGLE_DPU_MRAM`: modeled, planned for executable WRAM tiling;
+- `L3_MULTI_DPU`: modeled, planned for distributed multi-DPU execution;
+- `L4_OUT_OF_SCOPE`: modeled pressure boundary.
+
+The report may duplicate UPMEM rows by `resource_model_id`, but it must not
+create pseudo-routes such as `upmem_l1`, `upmem_l2`, or `upmem_l3`. Non-UPMEM
+rows use `resource_model_id=not_applicable`. Current UPMEM evidence is
+task-level and model-only; it is not a full-circuit speedup claim.
+
+The pressure outputs include counts by memory level and counts by dominant
+parallelism source per case/resource model. First L2/L3 occurrences are reported
+separately for real circuits and synthetic pressure cases so model-only
+boundaries are not mixed with quantum workload evidence.
+
 ## Shadow Routed Runtime
 
 `src/quantum_bench/bench/shadow_routed_runtime.py` is the first full
@@ -844,12 +892,13 @@ which motivates route-aware costs later.
 - `2E.2` PIM bridge evaluation harness over growing quantum workloads
 - `2E.3` UPMEM SDK simulator dense correctness diagnostics and stride hardening
 - `2E.4` PIM memory-level and parallelism-frontier analyzer
+- `2E.5` benchmark matrix and pressure-report scaffold for final thesis baselines
 - later: revisit UPMEM-aware path selection using route-aware costs
 
-The next implementation wave should use PIM bridge evaluation and frontier
-analysis artifacts to pick between larger shape support, executable L2 tiling,
-L3 distributed GEMM, hardware backend bring-up, SimplePIM GEMM, sparse route
-work, or route-aware path selection.
+The next implementation wave should use PIM bridge evaluation, frontier
+analysis, and benchmark matrix artifacts to pick between larger shape support,
+executable L2 tiling, L3 distributed GEMM, hardware backend bring-up, SimplePIM
+GEMM feasibility, sparse route work, or route-aware path selection.
 
 ## Future Codex Instruction
 

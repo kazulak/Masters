@@ -19,10 +19,12 @@ from quantum_bench.routing import TaskRouteContext, route_task_graph
 from quantum_bench.tn import build_tensor_network, plan_task_graph_with_config, with_path_cost_summary
 from quantum_bench.providers import route_registry
 from quantum_bench.targets.upmem import (
+    SYNTHETIC_PRESSURE_ERROR,
     UPMEM_DENSE_ESTIMATE_KEY,
     UPMEM_DENSE_TILE_PLAN_ARTIFACT_KEY,
     SIMPLEPIM_PROBE_KEY,
     annotate_task_graph_with_upmem_estimates,
+    is_synthetic_pressure_case,
     probe_simplepim,
     upmem_dense_tile_plan_rows,
     upmem_task_estimate_rows,
@@ -32,6 +34,9 @@ from quantum_bench.validation import compute_reference, validate
 
 def run_suite(suite_path: Path, root_dir: Path) -> Path:
     suite = load_suite(suite_path)
+    for case in suite["cases"]:
+        if is_synthetic_pressure_case(case):
+            raise ValueError(SYNTHETIC_PRESSURE_ERROR)
     run_dir = create_run_dir(root_dir, suite["suite_id"])
     os.environ.setdefault("MPLCONFIGDIR", str(run_dir / "plots" / ".matplotlib"))
     (run_dir / "plots" / ".matplotlib").mkdir(parents=True, exist_ok=True)

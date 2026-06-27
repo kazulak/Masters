@@ -18,6 +18,9 @@ from quantum_bench.targets.upmem import (
     PIM_FRONTIER_ANALYSIS_SCHEMA_VERSION,
     UpmemResourceModel,
     analyze_task_graph,
+    build_synthetic_pressure_task_graph,
+    is_synthetic_pressure_case,
+    synthetic_pressure_manifest,
 )
 from quantum_bench.tn import build_tensor_network, plan_task_graph_with_config, with_path_cost_summary
 from quantum_bench.targets.upmem import annotate_task_graph_with_upmem_estimates
@@ -269,13 +272,18 @@ def _analyze_case(
     planner_config: dict[str, Any],
     resource_model: UpmemResourceModel,
 ) -> tuple[list[JsonDict], list[JsonDict], JsonDict]:
+    is_synthetic = is_synthetic_pressure_case(case_payload)
     circuit = case_payload.pop("_preloaded_circuit", None)
-    if circuit is None:
-        circuit = load_circuit(case_payload, root_dir)
-    network = build_tensor_network(circuit)
-    graph = plan_task_graph_with_config(network, planner_config)
-    graph, _ = annotate_task_graph_with_upmem_estimates(graph)
-    graph = with_path_cost_summary(graph)
+    if is_synthetic:
+        graph = build_synthetic_pressure_task_graph(case_payload)
+        circuit = graph.network.circuit
+    else:
+        if circuit is None:
+            circuit = load_circuit(case_payload, root_dir)
+        network = build_tensor_network(circuit)
+        graph = plan_task_graph_with_config(network, planner_config)
+        graph, _ = annotate_task_graph_with_upmem_estimates(graph)
+        graph = with_path_cost_summary(graph)
     analysis = analyze_task_graph(graph, resource_model)
     case_id = str(case_payload["case_id"])
     workload_id = str(case_payload.get("workload_id", case_id))
@@ -311,7 +319,7 @@ def _analyze_case(
         "workload_id": workload_id,
         "circuit_family": circuit_family,
         "n_qubits": int(circuit.n_qubits),
-        "circuit": manifest(circuit),
+        "circuit": synthetic_pressure_manifest(graph) if is_synthetic else manifest(circuit),
         "planner_engine": graph.path_summary.planner_engine,
         "planner_id": graph.path_summary.planner_id,
         "optimize_mode": graph.path_summary.optimize_mode,
