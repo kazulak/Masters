@@ -190,6 +190,20 @@ execution from hardware: `target=simulator`,
 `hardware_kernel_executed=false`, and `simplepim_api_used=false`. It is
 non-tiled, simulator-only, and records bring-up timings only.
 
+The PIM bridge evaluation harness is developer-only thesis evidence generation:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-bridge-eval --suite configs/suites/pim_bridge_eval_quick.yml --dry-run
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-bridge-eval --suite configs/suites/pim_bridge_eval_quick.yml --backend upmem_sdk_simulator_dense --execute-external --max-executed-tasks-per-case 2
+```
+
+It consumes suite `workloads:` but deliberately ignores suite `routes:`. It
+materializes TaskGraph inputs with CPU replay, prepares dense bridge operands,
+executes capped `upmem_sdk_simulator_dense` tasks only when explicitly allowed,
+and writes JSON/CSV/Markdown/plot artifacts about support, blockers, validation,
+and bring-up timings. It is not normal provider execution and does not make PIM
+outputs authoritative for full circuits.
+
 It writes:
 
 ```text

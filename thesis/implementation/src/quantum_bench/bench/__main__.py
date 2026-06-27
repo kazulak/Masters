@@ -58,6 +58,25 @@ def main() -> int:
     coverage_parser.add_argument("--execute-external", action="store_true")
     coverage_parser.add_argument("--max-bridge-artifacts", type=int, default=0)
 
+    pim_eval_parser = sub.add_parser("pim-bridge-eval")
+    pim_eval_input = pim_eval_parser.add_mutually_exclusive_group(required=True)
+    pim_eval_input.add_argument("--suite", help="Suite path or preset name under configs/suites")
+    pim_eval_input.add_argument("--case", help="Builtin circuit case name")
+    pim_eval_parser.add_argument("--n-qubits", type=int)
+    pim_eval_parser.add_argument("--backend", default="upmem_sdk_simulator_dense", choices=("upmem_sdk_simulator_dense",))
+    pim_eval_parser.add_argument("--execute-external", action="store_true")
+    pim_eval_parser.add_argument("--dry-run", action="store_true")
+    pim_eval_parser.add_argument("--max-tasks-per-case", type=int, default=64)
+    pim_eval_parser.add_argument("--max-executed-tasks-per-case", type=int, default=2)
+    pim_eval_parser.add_argument(
+        "--task-selection",
+        default="eligible-only",
+        choices=("all", "eligible-only", "first-supported", "first-n"),
+    )
+    pim_eval_parser.add_argument("--timeout-seconds", type=float, default=60.0)
+    pim_eval_parser.add_argument("--planner")
+    pim_eval_parser.add_argument("--output-plots", action=argparse.BooleanOptionalAction, default=True)
+
     shadow_parser = sub.add_parser("shadow-routed-runtime")
     shadow_input = shadow_parser.add_mutually_exclusive_group(required=True)
     shadow_input.add_argument("--suite", help="Suite path or preset name under configs/suites")
@@ -199,6 +218,54 @@ def main() -> int:
                     "artifact": str(run_dir / "dense_route_coverage.json"),
                     "csv": str(run_dir / "dense_route_coverage.csv"),
                     "summary": str(run_dir / "dense_route_coverage_summary.md"),
+                    "status": "completed",
+                },
+                indent=2,
+            )
+        )
+        return 0
+    if args.command == "pim-bridge-eval":
+        from quantum_bench.bench.pim_bridge_eval import run_pim_bridge_eval, validate_cli_options
+
+        resolved_suite = suite_path(args.suite, root_dir) if args.suite else None
+        try:
+            validate_cli_options(
+                suite_path=resolved_suite,
+                case=args.case,
+                n_qubits=args.n_qubits,
+                backend=args.backend,
+                execute_external=args.execute_external,
+                dry_run=args.dry_run,
+                max_tasks_per_case=args.max_tasks_per_case,
+                max_executed_tasks_per_case=args.max_executed_tasks_per_case,
+                task_selection=args.task_selection,
+                timeout_seconds=args.timeout_seconds,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        run_dir = run_pim_bridge_eval(
+            root_dir,
+            suite_path=resolved_suite,
+            case=args.case,
+            n_qubits=args.n_qubits,
+            backend=args.backend,
+            execute_external=args.execute_external,
+            dry_run=args.dry_run,
+            max_tasks_per_case=args.max_tasks_per_case,
+            max_executed_tasks_per_case=args.max_executed_tasks_per_case,
+            task_selection=args.task_selection,
+            timeout_seconds=args.timeout_seconds,
+            planner=args.planner,
+            output_plots=args.output_plots,
+        )
+        print(
+            json.dumps(
+                {
+                    "run_dir": str(run_dir),
+                    "artifact": str(run_dir / "pim_bridge_eval.json"),
+                    "csv": str(run_dir / "pim_bridge_eval.csv"),
+                    "cases_csv": str(run_dir / "pim_bridge_eval_cases.csv"),
+                    "summary": str(run_dir / "pim_bridge_eval_summary.md"),
                     "status": "completed",
                 },
                 indent=2,

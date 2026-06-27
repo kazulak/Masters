@@ -18,6 +18,7 @@ from quantum_bench.routing import DenseTaskPreparationInput, prepare_dense_task
 from quantum_bench.targets.upmem import (
     UPMEM_DENSE_ESTIMATE_KEY,
     annotate_task_graph_with_upmem_estimates,
+    dense_bridge_manifest_eligibility,
     execute_dense_bridge,
     probe_simplepim,
     write_dense_bridge_input_manifest,
@@ -308,7 +309,7 @@ def _coverage_row(
     conversion_records = prep_payload.get("conversion_records") or {}
     left_conversion = conversion_records.get("left") if isinstance(conversion_records, dict) else None
     right_conversion = conversion_records.get("right") if isinstance(conversion_records, dict) else None
-    bridge_manifest_eligible, bridge_reason = _bridge_manifest_eligibility(preparation)
+    bridge_manifest_eligible, bridge_reason = dense_bridge_manifest_eligibility(preparation)
     row = {
         "case_id": case_id,
         "workload_id": workload_id,
@@ -409,26 +410,6 @@ def _write_optional_bridge_artifact(
             row["final_readiness_level"] = "bridge_manifest_ready"
             row["readiness_reason"] = f"external_stub_{bridge_result.execution_status}:{bridge_result.reason}"
     return row, bridge_artifacts_written
-
-
-def _bridge_manifest_eligibility(preparation: Any) -> tuple[bool, str | None]:
-    if preparation is None:
-        return False, "dense_preparation_missing"
-    if preparation.prepared_operands is None:
-        return False, "prepared_operands_missing"
-    if preparation.tile_plan is None:
-        return False, "tile_plan_missing"
-    if preparation.tile_plan.get("requires_tiling") is True:
-        return False, "requires_tiling_not_implemented"
-    if preparation.tile_plan.get("requires_host_aggregation") is True:
-        return False, "requires_host_aggregation_not_representable"
-    if preparation.status not in {"prepared", "simplepim_unavailable"}:
-        return False, f"non_bridgeable_preparation_status:{preparation.status}"
-    if preparation.left_conversion is None or preparation.right_conversion is None:
-        return False, "conversion_records_missing"
-    if preparation.left_matrix_shape is None or preparation.right_matrix_shape is None:
-        return False, "matrix_shapes_missing"
-    return True, None
 
 
 def _readiness_level(row: JsonDict) -> tuple[str, str | None]:

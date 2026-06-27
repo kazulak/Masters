@@ -1,0 +1,79 @@
+schema_version: 2
+suite_id: pim_bridge_eval
+
+defaults:
+  warmups: 0
+  repeats: 1
+  timeout_s: 120
+  memory_guard_gib: 8
+  planner:
+    engine: opt_einsum
+    optimize: greedy
+
+workloads:
+  - id: qrng_3q
+    circuit: {kind: builtin, name: QRNG, n_qubits: 3}
+  - id: qrng_4q
+    circuit: {kind: builtin, name: QRNG, n_qubits: 4}
+  - id: qrng_5q
+    circuit: {kind: builtin, name: QRNG, n_qubits: 5}
+  - id: qrng_6q
+    circuit: {kind: builtin, name: QRNG, n_qubits: 6}
+
+  - id: bv_4q
+    circuit: {kind: builtin, name: BV, n_qubits: 4}
+  - id: bv_5q
+    circuit: {kind: builtin, name: BV, n_qubits: 5}
+  - id: bv_6q
+    circuit: {kind: builtin, name: BV, n_qubits: 6}
+
+  - id: xor_4q
+    circuit: {kind: builtin, name: XOR, n_qubits: 4}
+  - id: xor_5q
+    circuit: {kind: builtin, name: XOR, n_qubits: 5}
+  - id: xor_6q
+    circuit: {kind: builtin, name: XOR, n_qubits: 6}
+
+  - id: bb84_4q
+    circuit: {kind: builtin, name: BB84, n_qubits: 4}
+  - id: bb84_6q
+    circuit: {kind: builtin, name: BB84, n_qubits: 6}
+  - id: bb84_8q
+    circuit: {kind: builtin, name: BB84, n_qubits: 8}
+
+  - id: edc_2q
+    circuit: {kind: builtin, name: EDC, n_qubits: 2}
+  - id: edc_4q
+    circuit: {kind: builtin, name: EDC, n_qubits: 4}
+  - id: edc_6q
+    circuit: {kind: builtin, name: EDC, n_qubits: 6}
+
+  - id: hs_4q_logical_2q
+    circuit: {kind: builtin, name: HS, n_qubits: 4, logical_qubits: 2, allocated_qubits: 4}
+  - id: hs_6q_logical_3q
+    circuit: {kind: builtin, name: HS, n_qubits: 6, logical_qubits: 3, allocated_qubits: 6}
+
+  - id: ghz_3q
+    circuit: {kind: builtin, name: ghz_chain, n_qubits: 3}
+  - id: ghz_4q
+    circuit: {kind: builtin, name: ghz_chain, n_qubits: 4}
+  - id: ghz_5q
+    circuit: {kind: builtin, name: ghz_chain, n_qubits: 5}
+  - id: ghz_6q
+    circuit: {kind: builtin, name: ghz_chain, n_qubits: 6}
+
+routes:
+  - id: cpu_tn_einsum_exact
+    role: reference
+    required: true
+
+validation:
+  reference_route: cpu_tn_einsum_exact
+  require_output_for_roles:
+    - reference
+  tolerances:
+    max_abs_error: 1.0e-9
+    l2_error: 1.0e-8
+    max_rel_error: 1.0e-8
+    norm_drift: 1.0e-8
+    min_fidelity: 0.999999999

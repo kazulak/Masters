@@ -46,6 +46,7 @@ only bounded local tasks that fit an explicit route contract.
 | Circuit analyzer | `src/quantum_bench/circuits/`, `src/quantum_bench/tn/network.py` | Basic circuit loading and tensor-network construction | Add structural analysis for dense, sparse, permutation, and diagonal route eligibility |
 | Path optimizer | `src/quantum_bench/tn/planners.py`, `src/quantum_bench/tn/task_graph.py` | opt_einsum planner interface | Later add route-aware costs, not route-aware execution yet |
 | Planner comparison | `src/quantum_bench/bench/planner_compare.py`, `src/quantum_bench/bench/planner_scoring.py` | Implemented analysis layer | Host path optimizer, cost-model, and target-aware planning analysis |
+| PIM bridge evaluation | `src/quantum_bench/bench/pim_bridge_eval.py`, `configs/suites/pim_bridge_eval*.yml` | Per-task simulator backend evidence layer | Compare backend support, blockers, validation, and scaling before full routed execution |
 | WRAM slicer | `src/quantum_bench/targets/upmem/tile_plan.py`, `src/quantum_bench/targets/upmem/schedule.py` | Deterministic dense WRAM tile-plan records | Turn tile plans into executable preparation only after route execution is introduced |
 | Data format conversion | `src/quantum_bench/formats/` | Deterministic host-side fixed-point records and utilities used by explicit dense preparation | Connect conversion records to route execution artifacts after routing gains execution |
 | Dynamic heuristic router | `src/quantum_bench/routing/` | Analysis-only task-level router skeleton | Add preparation/execution-aware routing after data conversion and tiling mature |
@@ -203,6 +204,7 @@ before real SimplePIM/UPMEM kernels exist.
 | Optional TransPimLib/math support | 1 | 2 |
 | Host aggregation layer | 0/implicit | 1 |
 | Planner comparison/cost model | 3 | 4 only if tied into route-aware planning later |
+| PIM bridge evaluation harness | 4 | 5 only after dense outputs can feed an integrated TaskGraph route |
 | UPMEM-aware path selection | 0/analysis only | 1 after route estimates mature |
 
 Level 6 requires more than implementation. It requires reproducible suite
@@ -667,6 +669,28 @@ GEMM, fit the current WRAM model without executable tiling, and satisfy the
 future bridge file contract. It does not select `dense_gemm`, does not execute
 SimplePIM/native UPMEM, and does not replace normal provider execution.
 
+## PIM Bridge Evaluation Harness
+
+`src/quantum_bench/bench/pim_bridge_eval.py` turns backend bring-up into
+repeatable thesis evidence across growing workloads. It consumes suite
+`workloads:` only; the suite `routes:` section exists for schema compatibility
+and is deliberately ignored.
+
+Examples:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-bridge-eval --suite configs/suites/pim_bridge_eval_quick.yml --dry-run
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-bridge-eval --suite configs/suites/pim_bridge_eval_quick.yml --backend upmem_sdk_simulator_dense --execute-external --max-executed-tasks-per-case 2
+```
+
+The harness materializes selected task inputs with CPU replay, runs dense
+preparation, checks dense bridge manifest eligibility, optionally executes the
+`upmem_sdk_simulator_dense` backend for capped eligible tasks, and validates
+each executed task against `expected_dequantized_output.npy`. It writes JSON,
+CSV, Markdown, per-case JSONL, optional dense bridge artifacts, and optional
+matplotlib plots. It does not perform full routed execution and does not make
+dense output authoritative for the circuit.
+
 ## Shadow Routed Runtime
 
 `src/quantum_bench/bench/shadow_routed_runtime.py` is the first full
@@ -766,11 +790,12 @@ which motivates route-aware costs later.
 - `2D.6` optional TransPimLib support slot
 - `2E.0` UPMEM/SimplePIM environment verification and simulator sample bring-up
 - `2E.1` first UPMEM SDK simulator dense bridge backend for one non-tiled task
-- `2E.2` revisit UPMEM-aware path selection using route-aware costs
+- `2E.2` PIM bridge evaluation harness over growing quantum workloads
+- later: revisit UPMEM-aware path selection using route-aware costs
 
-The next implementation wave should build on the shadow runtime evidence and
-the environment verification artifact before starting a real dense execution
-microkernel path or route-aware path selection work.
+The next implementation wave should use PIM bridge evaluation artifacts to pick
+between larger shape support, executable tiling, hardware backend bring-up,
+SimplePIM GEMM, sparse route work, or route-aware path selection.
 
 ## Future Codex Instruction
 

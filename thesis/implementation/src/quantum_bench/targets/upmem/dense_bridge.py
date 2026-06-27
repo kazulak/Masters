@@ -280,6 +280,31 @@ def write_dense_bridge_input_manifest(
     return manifest
 
 
+def dense_bridge_manifest_eligibility(preparation_result: object | None) -> tuple[bool, str | None]:
+    """Return whether a dense preparation result can be serialized as a bridge input."""
+
+    if preparation_result is None:
+        return False, "dense_preparation_missing"
+    if getattr(preparation_result, "prepared_operands", None) is None:
+        return False, "prepared_operands_missing"
+    tile_plan = getattr(preparation_result, "tile_plan", None)
+    if tile_plan is None:
+        return False, "tile_plan_missing"
+    if isinstance(tile_plan, dict):
+        if tile_plan.get("requires_tiling") is True:
+            return False, "requires_tiling_not_implemented"
+        if tile_plan.get("requires_host_aggregation") is True:
+            return False, "requires_host_aggregation_not_representable"
+    status = getattr(preparation_result, "status", None)
+    if status not in {"prepared", "simplepim_unavailable"}:
+        return False, f"non_bridgeable_preparation_status:{status}"
+    if getattr(preparation_result, "left_conversion", None) is None or getattr(preparation_result, "right_conversion", None) is None:
+        return False, "conversion_records_missing"
+    if getattr(preparation_result, "left_matrix_shape", None) is None or getattr(preparation_result, "right_matrix_shape", None) is None:
+        return False, "matrix_shapes_missing"
+    return True, None
+
+
 def read_dense_bridge_input_manifest(path: Path) -> DenseBridgeInputManifest:
     payload = json.loads(path.read_text(encoding="utf-8"))
     return _input_manifest_from_payload(payload)

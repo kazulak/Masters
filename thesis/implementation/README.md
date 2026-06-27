@@ -26,6 +26,9 @@ PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --ca
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 1 --materialization cpu-replay --backend mock_numpy_dequantized
 SIMPLEPIM_STUB_BIN=native/upmem/simplepim/simplepim_dense_stub.py PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 0 --backend simplepim_external_stub --execute-external
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 0 --backend upmem_sdk_simulator_dense --execute-external
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-bridge-eval --case bell_2q --n-qubits 2 --dry-run
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-bridge-eval --suite configs/suites/pim_bridge_eval_quick.yml --dry-run
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-bridge-eval --suite configs/suites/pim_bridge_eval_quick.yml --backend upmem_sdk_simulator_dense --execute-external --max-executed-tasks-per-case 2
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-route-coverage --case bell_2q
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-route-coverage --suite configs/suites/planner_compare.yml
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench shadow-routed-runtime --case bell_2q
@@ -73,6 +76,11 @@ scripts/run_energy_suite.sh configs/suites/local_energy.yml
   authoritative numeric route while recording dense route preparation and
   optional capped bridge/stub evidence as shadow metadata. Its shadow route
   policy fields are what-if decisions only; they never replace CPU fallback.
+- `src/quantum_bench/bench/pim_bridge_eval.py` is a developer-only thesis
+  evaluation harness. It runs growing workloads through TaskGraph,
+  materialization, dense preparation, dense bridge manifests, and capped
+  `upmem_sdk_simulator_dense` task execution where eligible. It evaluates
+  per-task backend evidence only and ignores normal suite `routes:`.
 - `native/upmem/simplepim/` is reserved for future SimplePIM bridge code and
   currently contains the non-executing external contract stub plus the first
   UPMEM SDK simulator dense bridge runner. The runner is in the
@@ -111,3 +119,20 @@ SDK DPU GEMM program through the simulator, writes
 does not run hardware, does not implement tiling, and does not make dense output
 authoritative in the shadow runtime. Any timings it records are bring-up
 timings, not performance evidence.
+
+## PIM Bridge Evaluation
+
+`pim-bridge-eval` evaluates task-level readiness and optional simulator
+execution over larger workload suites:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-bridge-eval --suite configs/suites/pim_bridge_eval_quick.yml --dry-run
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-bridge-eval --suite configs/suites/pim_bridge_eval_quick.yml --backend upmem_sdk_simulator_dense --execute-external --max-executed-tasks-per-case 2
+```
+
+Run external simulator execution on the quick suite first. The extended
+`configs/suites/pim_bridge_eval.yml` suite should be run as dry-run before
+attempting simulator execution. The command writes JSON, CSV, Markdown, and
+optional matplotlib plot artifacts under `runs/`. It reports support, blockers,
+validation metrics, and bring-up timings per task; it does not make the dense
+backend authoritative for the full circuit.
