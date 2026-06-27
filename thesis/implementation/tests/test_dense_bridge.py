@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
@@ -119,6 +120,85 @@ def _stub_path() -> Path:
     return ROOT / "native" / "upmem" / "simplepim" / "simplepim_dense_stub.py"
 
 
+def _upmem_runner_path() -> Path:
+    return ROOT / "native" / "upmem" / "simplepim" / "upmem_sdk_dense_runner.py"
+
+
+def _load_upmem_runner_module():
+    spec = importlib.util.spec_from_file_location("upmem_sdk_dense_runner_for_tests", _upmem_runner_path())
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _write_upmem_sdk_output_manifest(
+    bridge_dir: Path,
+    *,
+    status: str = "upmem_sdk_simulator_executed",
+    output_blob: bool = True,
+    write_blob: bool = True,
+    validation_passed: bool = True,
+) -> None:
+    input_payload = json.loads((bridge_dir / "input_manifest.json").read_text(encoding="utf-8"))
+    expected = np.load(bridge_dir / input_payload["expected_output"]["relative_path"], allow_pickle=False)
+    output_blob_payload = None
+    if output_blob:
+        blob_path = bridge_dir / "outputs" / "upmem_sdk_simulator_output.npy"
+        if write_blob:
+            blob_path.parent.mkdir(parents=True, exist_ok=True)
+            np.save(blob_path, expected, allow_pickle=False)
+        output_blob_payload = {
+            "relative_path": "outputs/upmem_sdk_simulator_output.npy",
+            "dtype": str(expected.dtype),
+            "shape": list(expected.shape),
+            "representation": "dequantized_output",
+            "nbytes": int(expected.nbytes),
+            "labels": input_payload["output_labels"],
+            "role": "real_single_gemm_upmem_sdk_simulator_output",
+        }
+    payload = {
+        "schema_version": DENSE_BRIDGE_SCHEMA_VERSION,
+        "bridge_id": DENSE_BRIDGE_ID,
+        "manifest_kind": "dense_bridge_output",
+        "backend": "upmem_sdk_simulator_dense",
+        "status": status,
+        "input_manifest": "input_manifest.json",
+        "route_id": input_payload["route_id"],
+        "task_id": input_payload["task_id"],
+        "output_blob": output_blob_payload,
+        "accumulator_blob": None,
+        "validation_metrics": {
+            "reference_kind": "expected_dequantized_output_vs_upmem_sdk_simulator_dense",
+            "max_abs_error": 0.0 if validation_passed else 1.0,
+            "l2_error": 0.0 if validation_passed else 1.0,
+            "relative_l2_error": 0.0 if validation_passed else 1.0,
+            "expected_norm": float(np.linalg.norm(expected.ravel())),
+            "output_norm": float(np.linalg.norm(expected.ravel())),
+            "passed": validation_passed,
+        },
+        "compute_time_s": 0.001,
+        "write_time_s": 0.001,
+        "total_time_s": 0.002,
+        "external_command_executed": True,
+        "execution_implemented": True,
+        "error": None if validation_passed else "validation mismatch",
+        "metadata": {
+            "reason": "upmem_sdk_simulator_executed" if validation_passed else "validation_failed",
+            "error_type": None if validation_passed else "validation_failed",
+            "backend_family": "upmem_sdk",
+            "simplepim_api_used": False,
+            "simplepim_bridge_lane": True,
+            "target": "simulator",
+            "upmem_dpu_program_executed": True,
+            "simulator_kernel_executed": True,
+            "hardware_kernel_executed": False,
+        },
+    }
+    (bridge_dir / "output_manifest.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
 def test_input_manifest_is_json_serializable_without_raw_arrays(tmp_path: Path) -> None:
     preparation = _real_preparation(_available_probe())
     manifest = write_dense_bridge_input_manifest(preparation, tmp_path)
@@ -220,13 +300,20 @@ def test_tiled_preparation_is_rejected_before_bridge_input(tmp_path: Path) -> No
 def test_backend_registry_identities_are_json_safe() -> None:
     registry = dense_bridge_backend_registry()
 
-    assert set(registry) == {"mock_numpy_dequantized", "simplepim_external", "simplepim_external_stub"}
+    assert set(registry) == {
+        "mock_numpy_dequantized",
+        "simplepim_external",
+        "simplepim_external_stub",
+        "upmem_sdk_simulator_dense",
+    }
     assert registry["mock_numpy_dequantized"].implemented is True
     assert registry["mock_numpy_dequantized"].external_command_capable is False
     assert registry["simplepim_external"].implemented is False
     assert registry["simplepim_external"].external_command_capable is True
     assert registry["simplepim_external_stub"].implemented is False
     assert registry["simplepim_external_stub"].external_command_capable is True
+    assert registry["upmem_sdk_simulator_dense"].implemented is True
+    assert registry["upmem_sdk_simulator_dense"].external_command_capable is True
     json.dumps(to_jsonable(registry))
 
 
@@ -600,6 +687,215 @@ def test_unknown_backend_is_unsupported_and_json_safe(tmp_path: Path) -> None:
     json.dumps(result.to_json_dict())
 
 
+def test_upmem_sdk_simulator_backend_requires_execute_external(tmp_path: Path) -> None:
+    preparation = _real_preparation(_available_probe())
+    write_dense_bridge_input_manifest(preparation, tmp_path)
+    result = execute_dense_bridge(
+        tmp_path / "input_manifest.json",
+        backend="upmem_sdk_simulator_dense",
+        execute_external=False,
+    )
+
+    assert result.execution_status == "not_implemented"
+    assert result.reason == "upmem_sdk_simulator_execution_disabled"
+    assert result.external_command_executed is False
+    assert result.execution_implemented is False
+
+
+def test_upmem_sdk_simulator_backend_missing_toolchain_is_skipped(tmp_path: Path, monkeypatch) -> None:
+    preparation = _real_preparation(_available_probe())
+    write_dense_bridge_input_manifest(preparation, tmp_path)
+    monkeypatch.setattr(dense_bridge_module, "_missing_upmem_sdk_simulator_tools", lambda env: ("make",))
+
+    result = execute_dense_bridge(
+        tmp_path / "input_manifest.json",
+        backend="upmem_sdk_simulator_dense",
+        execute_external=True,
+    )
+
+    assert result.execution_status == "skipped"
+    assert result.reason == "upmem_sdk_simulator_unavailable"
+    assert result.external_command_executed is False
+
+
+def test_upmem_sdk_simulator_backend_rejects_invalid_max_dim(tmp_path: Path) -> None:
+    preparation = _real_preparation(_available_probe())
+    write_dense_bridge_input_manifest(preparation, tmp_path)
+    result = execute_dense_bridge(
+        tmp_path / "input_manifest.json",
+        backend="upmem_sdk_simulator_dense",
+        execute_external=True,
+        env={"UPMEM_DENSE_SIM_MAX_DIM": "not-an-int"},
+    )
+
+    assert result.execution_status == "unsupported"
+    assert result.reason == "unsupported_shape_for_initial_backend"
+
+
+def test_upmem_sdk_simulator_backend_rejects_escaping_operand_path_before_launch(tmp_path: Path, monkeypatch) -> None:
+    def forbidden_subprocess(*args: object, **kwargs: object) -> object:
+        raise AssertionError("escaping operand path must fail before runner launch")
+
+    monkeypatch.setattr(dense_bridge_module.subprocess, "run", forbidden_subprocess)
+    preparation = _real_preparation(_available_probe())
+    write_dense_bridge_input_manifest(preparation, tmp_path)
+    manifest_path = tmp_path / "input_manifest.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["operands"]["left"]["relative_path"] = "../left_quantized.npy"
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = execute_dense_bridge(
+        manifest_path,
+        backend="upmem_sdk_simulator_dense",
+        execute_external=True,
+    )
+
+    assert result.execution_status == "failed"
+    assert result.reason == "operand_blob_invalid"
+    assert result.error_type == "operand_blob_invalid"
+
+
+def test_upmem_sdk_simulator_backend_success_with_monkeypatched_runner(tmp_path: Path, monkeypatch) -> None:
+    def fake_run(*args: object, **kwargs: object) -> SimpleNamespace:
+        _write_upmem_sdk_output_manifest(tmp_path)
+        return SimpleNamespace(returncode=0, stdout="runner ok", stderr="")
+
+    monkeypatch.setattr(dense_bridge_module, "_missing_upmem_sdk_simulator_tools", lambda env: ())
+    monkeypatch.setattr(dense_bridge_module.subprocess, "run", fake_run)
+    preparation = _real_preparation(_available_probe())
+    write_dense_bridge_input_manifest(preparation, tmp_path)
+    result = execute_dense_bridge(
+        tmp_path / "input_manifest.json",
+        backend="upmem_sdk_simulator_dense",
+        execute_external=True,
+    )
+
+    assert result.execution_status == "upmem_sdk_simulator_executed"
+    assert result.reason == "upmem_sdk_simulator_executed"
+    assert result.external_command_executed is True
+    assert result.execution_implemented is True
+    assert result.output_blob_path == "outputs/upmem_sdk_simulator_output.npy"
+    assert result.metadata["backend_family"] == "upmem_sdk"
+    assert result.metadata["simplepim_api_used"] is False
+    assert result.metadata["simulator_kernel_executed"] is True
+    assert result.metadata["hardware_kernel_executed"] is False
+
+
+def test_upmem_sdk_simulator_backend_runner_failure_is_failed(tmp_path: Path, monkeypatch) -> None:
+    def fake_run(*args: object, **kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(returncode=5, stdout="runner stdout", stderr="runner stderr")
+
+    monkeypatch.setattr(dense_bridge_module, "_missing_upmem_sdk_simulator_tools", lambda env: ())
+    monkeypatch.setattr(dense_bridge_module.subprocess, "run", fake_run)
+    preparation = _real_preparation(_available_probe())
+    write_dense_bridge_input_manifest(preparation, tmp_path)
+    result = execute_dense_bridge(
+        tmp_path / "input_manifest.json",
+        backend="upmem_sdk_simulator_dense",
+        execute_external=True,
+    )
+
+    assert result.execution_status == "failed"
+    assert result.reason == "runner_execution_failed"
+    assert result.error_type == "runner_execution_failed"
+    assert result.external_command_executed is True
+
+
+def test_upmem_sdk_simulator_backend_missing_output_blob_is_failed(tmp_path: Path, monkeypatch) -> None:
+    def fake_run(*args: object, **kwargs: object) -> SimpleNamespace:
+        _write_upmem_sdk_output_manifest(tmp_path, output_blob=True, write_blob=False)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(dense_bridge_module, "_missing_upmem_sdk_simulator_tools", lambda env: ())
+    monkeypatch.setattr(dense_bridge_module.subprocess, "run", fake_run)
+    preparation = _real_preparation(_available_probe())
+    write_dense_bridge_input_manifest(preparation, tmp_path)
+    result = execute_dense_bridge(
+        tmp_path / "input_manifest.json",
+        backend="upmem_sdk_simulator_dense",
+        execute_external=True,
+    )
+
+    assert result.execution_status == "failed"
+    assert result.reason == "output_blob_missing"
+    assert result.error_type == "output_blob_missing"
+
+
+def test_upmem_sdk_simulator_backend_validation_failure_is_failed(tmp_path: Path, monkeypatch) -> None:
+    def fake_run(*args: object, **kwargs: object) -> SimpleNamespace:
+        _write_upmem_sdk_output_manifest(tmp_path, status="failed", validation_passed=False)
+        return SimpleNamespace(returncode=1, stdout="", stderr="")
+
+    monkeypatch.setattr(dense_bridge_module, "_missing_upmem_sdk_simulator_tools", lambda env: ())
+    monkeypatch.setattr(dense_bridge_module.subprocess, "run", fake_run)
+    preparation = _real_preparation(_available_probe())
+    write_dense_bridge_input_manifest(preparation, tmp_path)
+    result = execute_dense_bridge(
+        tmp_path / "input_manifest.json",
+        backend="upmem_sdk_simulator_dense",
+        execute_external=True,
+    )
+
+    assert result.execution_status == "failed"
+    assert result.reason == "validation_failed"
+    assert result.error_type == "validation_failed"
+
+
+def test_upmem_sdk_runner_hardware_target_writes_not_implemented_without_toolchain(tmp_path: Path) -> None:
+    preparation = _real_preparation(_available_probe())
+    write_dense_bridge_input_manifest(preparation, tmp_path)
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(_upmem_runner_path()),
+            "--input-manifest",
+            str(tmp_path / "input_manifest.json"),
+            "--output-manifest",
+            str(tmp_path / "output_manifest.json"),
+            "--target",
+            "hardware",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    output_manifest = read_dense_bridge_output_manifest(tmp_path / "output_manifest.json")
+
+    assert completed.returncode == 0
+    assert output_manifest.status == "not_implemented"
+    assert output_manifest.metadata["reason"] == "hardware_target_disabled"
+    assert output_manifest.metadata["hardware_kernel_executed"] is False
+    assert output_manifest.metadata["upmem_dpu_program_executed"] is False
+
+
+def test_upmem_sdk_runner_real_and_split_complex_scaling_helpers() -> None:
+    runner = _load_upmem_runner_module()
+    real = {
+        "mode": "real_single_gemm",
+        "components": ({"name": "real", "left_scale": 0.5, "right_scale": 0.25},),
+    }
+    real_output = runner._combine_outputs(real, {"real": np.array([[8]], dtype=np.int32)})
+    np.testing.assert_allclose(real_output, np.array([[1.0]]))
+
+    split = {
+        "mode": "split_complex_four_gemm",
+        "components": (
+            {"name": "ar_br", "left_scale": 0.5, "right_scale": 0.25},
+            {"name": "ai_bi", "left_scale": 0.5, "right_scale": 0.25},
+            {"name": "ar_bi", "left_scale": 0.5, "right_scale": 0.25},
+            {"name": "ai_br", "left_scale": 0.5, "right_scale": 0.25},
+        ),
+    }
+    outputs = {
+        "ar_br": np.array([[20]], dtype=np.int32),
+        "ai_bi": np.array([[4]], dtype=np.int32),
+        "ar_bi": np.array([[12]], dtype=np.int32),
+        "ai_br": np.array([[8]], dtype=np.int32),
+    }
+    split_output = runner._combine_outputs(split, outputs)
+    np.testing.assert_allclose(split_output, np.array([[2.0 + 2.5j]]))
+
+
 def test_malformed_manifest_fails_before_simplepim_backend_status(tmp_path: Path) -> None:
     preparation = _real_preparation(_available_probe())
     write_dense_bridge_input_manifest(preparation, tmp_path)
@@ -637,7 +933,7 @@ def test_execution_result_and_manifests_do_not_leak_bridge_directory_paths(tmp_p
     assert "right_matrix" not in encoded_result
 
 
-def test_simplepim_external_stub_is_the_only_registered_external_subprocess_backend() -> None:
+def test_registered_external_subprocess_backends_are_explicit() -> None:
     registry = dense_bridge_backend_registry()
 
     assert registry["mock_numpy_dequantized"].external_command_capable is False
@@ -645,3 +941,5 @@ def test_simplepim_external_stub_is_the_only_registered_external_subprocess_back
     assert registry["simplepim_external"].implemented is False
     assert registry["simplepim_external_stub"].external_command_capable is True
     assert registry["simplepim_external_stub"].implemented is False
+    assert registry["upmem_sdk_simulator_dense"].external_command_capable is True
+    assert registry["upmem_sdk_simulator_dense"].implemented is True

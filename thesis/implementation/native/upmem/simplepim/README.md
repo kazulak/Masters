@@ -35,6 +35,9 @@ Wave 2C.8 adds the backend adapter interface:
 - `mock_numpy_dequantized` executes only the local NumPy mock backend.
 - `simplepim_external` is the future external-process backend ID.
 - `simplepim_external_stub` is a non-executing external-process contract stub.
+- `upmem_sdk_simulator_dense` is the first real simulator-backed dense bridge
+  backend. It uses UPMEM SDK C/DPU code, not the SimplePIM API, because this
+  SimplePIM tree does not provide a GEMM primitive.
 
 For `simplepim_external`, Python records planned command metadata only:
 `input_manifest.json`, `output_manifest.json`, `outputs/simplepim_output.npy`,
@@ -69,6 +72,57 @@ SIMPLEPIM_STUB_BIN=native/upmem/simplepim/simplepim_dense_stub.py PYTHONPATH=src
 
 The adapter invokes the script with `sys.executable`, so the file does not need
 executable permissions or a shebang.
+
+## UPMEM SDK Simulator Dense Runner
+
+`upmem_sdk_dense_runner.py` consumes the same `input_manifest.json` as the mock
+and stub backends. It copies only the minimal dense source set from
+`upmem_sdk_dense/` into the run artifact directory:
+
+```text
+bridge/runner_work/
+  src/
+  build/
+  inputs/
+  outputs/
+```
+
+The runner builds and executes inside `runner_work`; it must not mutate this
+repository's native source tree. The native buffer contract is row-major int8
+inputs and row-major little-endian int32 output with shapes taken from the
+validated manifest/config.
+
+The supported bring-up command is:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 0 --backend upmem_sdk_simulator_dense --execute-external
+```
+
+This path:
+
+- requires non-tiled GEMM with no host aggregation;
+- supports int8 operands only in this wave;
+- uses a conservative default max dimension of 16, configurable by
+  `UPMEM_DENSE_SIM_MAX_DIM`;
+- supports real GEMM and unambiguous split-complex real/imag layout;
+- runs with `DPU_BACKEND=simulator`;
+- writes `outputs/upmem_sdk_simulator_output.npy`;
+- validates against `references/expected_dequantized_output.npy`.
+
+Metadata explicitly reports:
+
+- `backend_family: upmem_sdk`
+- `simplepim_api_used: false`
+- `simplepim_bridge_lane: true`
+- `target: simulator`
+- `upmem_dpu_program_executed: true`
+- `simulator_kernel_executed: true`
+- `hardware_kernel_executed: false`
+
+The runner CLI has a `--target hardware` value for future compatibility, but
+Wave 2E.1 must report `hardware_target_disabled` and must not launch hardware.
+Recorded build/run timings are bring-up timings, not final performance
+evidence.
 
 Raw UPMEM SDK experiments should remain separate from this bridge. SimplePIM is
 the preferred first dense execution path if it is practical because it should

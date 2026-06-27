@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -23,8 +24,21 @@ if TYPE_CHECKING:
 DENSE_BRIDGE_SCHEMA_VERSION = "dense_bridge_v1"
 DENSE_BRIDGE_ID = "upmem_dense_bridge_v1"
 
-DenseBridgeStatus = Literal["mock_executed", "stub_executed", "skipped", "not_implemented", "failed", "unsupported"]
-DenseBridgeBackendId = Literal["mock_numpy_dequantized", "simplepim_external", "simplepim_external_stub"]
+DenseBridgeStatus = Literal[
+    "mock_executed",
+    "stub_executed",
+    "upmem_sdk_simulator_executed",
+    "skipped",
+    "not_implemented",
+    "failed",
+    "unsupported",
+]
+DenseBridgeBackendId = Literal[
+    "mock_numpy_dequantized",
+    "simplepim_external",
+    "simplepim_external_stub",
+    "upmem_sdk_simulator_dense",
+]
 
 
 @dataclass(frozen=True)
@@ -305,6 +319,18 @@ def dense_bridge_backend_registry() -> dict[str, DenseBridgeBackendIdentity]:
             implemented=False,
             description="Non-executing external-process stub that validates the dense bridge file contract.",
         ),
+        "upmem_sdk_simulator_dense": DenseBridgeBackendIdentity(
+            backend_id="upmem_sdk_simulator_dense",
+            display_name="UPMEM SDK Simulator Dense Bridge",
+            backend_kind="upmem_sdk_simulator_dense",
+            execution_mode="external_process",
+            external_command_capable=True,
+            implemented=True,
+            description=(
+                "Executes one non-tiled dense bridge GEMM through the UPMEM SDK simulator. "
+                "This is not a SimplePIM API GEMM primitive."
+            ),
+        ),
     }
 
 
@@ -365,6 +391,9 @@ def execute_dense_bridge(
 
     if request.backend == "simplepim_external_stub":
         return _execute_simplepim_external_stub_bridge(request, identity)
+
+    if request.backend == "upmem_sdk_simulator_dense":
+        return _execute_upmem_sdk_simulator_dense_bridge(request, identity)
 
     output_manifest = _nonexecuted_output_manifest(
         backend=request.backend,
@@ -872,6 +901,474 @@ def _execute_simplepim_external_stub_bridge(
     )
 
 
+def _execute_upmem_sdk_simulator_dense_bridge(
+    request: DenseBridgeExecutionRequest,
+    identity: DenseBridgeBackendIdentity,
+) -> DenseBridgeExecutionResult:
+    started = time.perf_counter()
+    input_manifest_path = request.input_manifest_path
+    bridge_dir = input_manifest_path.parent
+    output_manifest_path = bridge_dir / "output_manifest.json"
+    manifest: DenseBridgeInputManifest | None = None
+    invocation_metadata: JsonDict = _upmem_sdk_simulator_invocation_metadata(
+        input_manifest_path=input_manifest_path,
+        env=request.environment,
+    )
+
+    try:
+        manifest = read_dense_bridge_input_manifest(input_manifest_path)
+    except Exception as exc:
+        output_manifest = _nonexecuted_output_manifest(
+            backend=identity.backend_id,
+            status="failed",
+            reason="input_manifest_invalid",
+            error=str(exc),
+            error_type="input_manifest_invalid",
+            input_manifest_path=input_manifest_path,
+            manifest=None,
+            invocation_metadata=invocation_metadata,
+            total_time_s=float(time.perf_counter() - started),
+        )
+        write_json(output_manifest_path, output_manifest)
+        return _execution_result(
+            input_manifest_path=input_manifest_path,
+            output_manifest_path=output_manifest_path,
+            output_blob_path=None,
+            backend_id=identity.backend_id,
+            backend_identity=identity,
+            execution_status="failed",
+            reason="input_manifest_invalid",
+            error=str(exc),
+            error_type="input_manifest_invalid",
+            output_manifest=output_manifest,
+            invocation_metadata=invocation_metadata,
+        )
+
+    try:
+        _validate_bridge_input_files(manifest, bridge_dir)
+    except Exception as exc:
+        output_manifest = _nonexecuted_output_manifest(
+            backend=identity.backend_id,
+            status="failed",
+            reason="operand_blob_invalid",
+            error=str(exc),
+            error_type="operand_blob_invalid",
+            input_manifest_path=input_manifest_path,
+            manifest=manifest,
+            invocation_metadata=invocation_metadata,
+            total_time_s=float(time.perf_counter() - started),
+        )
+        write_json(output_manifest_path, output_manifest)
+        return _execution_result(
+            input_manifest_path=input_manifest_path,
+            output_manifest_path=output_manifest_path,
+            output_blob_path=None,
+            backend_id=identity.backend_id,
+            backend_identity=identity,
+            execution_status="failed",
+            reason="operand_blob_invalid",
+            error=str(exc),
+            error_type="operand_blob_invalid",
+            output_manifest=output_manifest,
+            invocation_metadata=invocation_metadata,
+        )
+
+    static_rejection = _upmem_sdk_simulator_static_rejection(manifest, request.environment)
+    if static_rejection is not None:
+        reason, error = static_rejection
+        output_manifest = _nonexecuted_output_manifest(
+            backend=identity.backend_id,
+            status="unsupported",
+            reason=reason,
+            error=error,
+            error_type=reason,
+            input_manifest_path=input_manifest_path,
+            manifest=manifest,
+            invocation_metadata=invocation_metadata,
+            total_time_s=float(time.perf_counter() - started),
+        )
+        write_json(output_manifest_path, output_manifest)
+        return _execution_result(
+            input_manifest_path=input_manifest_path,
+            output_manifest_path=output_manifest_path,
+            output_blob_path=None,
+            backend_id=identity.backend_id,
+            backend_identity=identity,
+            execution_status="unsupported",
+            reason=reason,
+            error=error,
+            error_type=reason,
+            output_manifest=output_manifest,
+            invocation_metadata=invocation_metadata,
+        )
+
+    if not request.execute_external:
+        output_manifest = _nonexecuted_output_manifest(
+            backend=identity.backend_id,
+            status="not_implemented",
+            reason="upmem_sdk_simulator_execution_disabled",
+            error=None,
+            error_type=None,
+            input_manifest_path=input_manifest_path,
+            manifest=manifest,
+            invocation_metadata=invocation_metadata,
+            total_time_s=float(time.perf_counter() - started),
+        )
+        write_json(output_manifest_path, output_manifest)
+        return _execution_result(
+            input_manifest_path=input_manifest_path,
+            output_manifest_path=output_manifest_path,
+            output_blob_path=None,
+            backend_id=identity.backend_id,
+            backend_identity=identity,
+            execution_status="not_implemented",
+            reason="upmem_sdk_simulator_execution_disabled",
+            error=None,
+            error_type=None,
+            output_manifest=output_manifest,
+            invocation_metadata=invocation_metadata,
+        )
+
+    missing_tools = _missing_upmem_sdk_simulator_tools(request.environment)
+    runner_path = _upmem_sdk_dense_runner_path()
+    if missing_tools or not runner_path.exists():
+        error = None
+        if missing_tools:
+            error = f"Missing required UPMEM SDK simulator tools: {', '.join(missing_tools)}"
+        elif not runner_path.exists():
+            error = f"UPMEM SDK dense runner not found: {runner_path}"
+        output_manifest = _nonexecuted_output_manifest(
+            backend=identity.backend_id,
+            status="skipped",
+            reason="upmem_sdk_simulator_unavailable",
+            error=error,
+            error_type=None,
+            input_manifest_path=input_manifest_path,
+            manifest=manifest,
+            invocation_metadata=invocation_metadata,
+            total_time_s=float(time.perf_counter() - started),
+            metadata_extra={
+                "backend_family": "upmem_sdk",
+                "simplepim_api_used": False,
+                "simplepim_bridge_lane": True,
+                "target": "simulator",
+                "upmem_dpu_program_executed": False,
+                "simulator_kernel_executed": False,
+                "hardware_kernel_executed": False,
+                "missing_tools": missing_tools,
+            },
+        )
+        write_json(output_manifest_path, output_manifest)
+        return _execution_result(
+            input_manifest_path=input_manifest_path,
+            output_manifest_path=output_manifest_path,
+            output_blob_path=None,
+            backend_id=identity.backend_id,
+            backend_identity=identity,
+            execution_status="skipped",
+            reason="upmem_sdk_simulator_unavailable",
+            error=error,
+            error_type=None,
+            output_manifest=output_manifest,
+            invocation_metadata=invocation_metadata,
+            metadata={"backend_family": "upmem_sdk", "simplepim_api_used": False, "simplepim_bridge_lane": True},
+        )
+
+    timeout_seconds = _upmem_sdk_simulator_timeout(request.environment)
+    command = [
+        sys.executable,
+        str(runner_path),
+        "--input-manifest",
+        input_manifest_path.name,
+        "--output-manifest",
+        output_manifest_path.name,
+        "--backend-id",
+        identity.backend_id,
+        "--target",
+        "simulator",
+        "--timeout-seconds",
+        str(timeout_seconds),
+    ]
+    invocation_metadata["command_args"] = tuple(command)
+    invocation_metadata["external_command_executed"] = True
+    completed: subprocess.CompletedProcess[str] | None = None
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=bridge_dir,
+            env={**dict(os.environ if request.environment is None else request.environment), "DPU_BACKEND": "simulator"},
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout_seconds + 5.0,
+        )
+    except subprocess.TimeoutExpired as exc:
+        error = f"UPMEM SDK simulator dense runner timed out after {timeout_seconds + 5.0} seconds"
+        output_manifest = _nonexecuted_output_manifest(
+            backend=identity.backend_id,
+            status="failed",
+            reason="runner_execution_failed",
+            error=error,
+            error_type="runner_execution_failed",
+            input_manifest_path=input_manifest_path,
+            manifest=manifest,
+            invocation_metadata=invocation_metadata,
+            total_time_s=float(time.perf_counter() - started),
+            external_command_executed=True,
+            metadata_extra={
+                "backend_family": "upmem_sdk",
+                "simplepim_api_used": False,
+                "simplepim_bridge_lane": True,
+                "target": "simulator",
+                "upmem_dpu_program_executed": False,
+                "simulator_kernel_executed": False,
+                "hardware_kernel_executed": False,
+                "stdout_snippet": _bounded_snippet(_decode_timeout_output(exc.stdout)),
+                "stderr_snippet": _bounded_snippet(_decode_timeout_output(exc.stderr)),
+            },
+        )
+        write_json(output_manifest_path, output_manifest)
+        return _execution_result(
+            input_manifest_path=input_manifest_path,
+            output_manifest_path=output_manifest_path,
+            output_blob_path=None,
+            backend_id=identity.backend_id,
+            backend_identity=identity,
+            execution_status="failed",
+            reason="runner_execution_failed",
+            error=error,
+            error_type="runner_execution_failed",
+            output_manifest=output_manifest,
+            invocation_metadata=invocation_metadata,
+            external_command_executed=True,
+            metadata={"backend_family": "upmem_sdk"},
+        )
+
+    try:
+        output_manifest = read_dense_bridge_output_manifest(output_manifest_path)
+    except Exception as exc:
+        reason = "runner_execution_failed" if completed.returncode != 0 else "output_manifest_invalid"
+        output_manifest = _nonexecuted_output_manifest(
+            backend=identity.backend_id,
+            status="failed",
+            reason=reason,
+            error=str(exc),
+            error_type=reason,
+            input_manifest_path=input_manifest_path,
+            manifest=manifest,
+            invocation_metadata=invocation_metadata,
+            total_time_s=float(time.perf_counter() - started),
+            external_command_executed=True,
+            metadata_extra={
+                "backend_family": "upmem_sdk",
+                "simplepim_api_used": False,
+                "simplepim_bridge_lane": True,
+                "target": "simulator",
+                "upmem_dpu_program_executed": False,
+                "simulator_kernel_executed": False,
+                "hardware_kernel_executed": False,
+                "stdout_snippet": _bounded_snippet(completed.stdout),
+                "stderr_snippet": _bounded_snippet(completed.stderr),
+                "returncode": int(completed.returncode),
+            },
+        )
+        write_json(output_manifest_path, output_manifest)
+        return _execution_result(
+            input_manifest_path=input_manifest_path,
+            output_manifest_path=output_manifest_path,
+            output_blob_path=None,
+            backend_id=identity.backend_id,
+            backend_identity=identity,
+            execution_status="failed",
+            reason=reason,
+            error=str(exc),
+            error_type=reason,
+            output_manifest=output_manifest,
+            invocation_metadata=invocation_metadata,
+            external_command_executed=True,
+            metadata={"backend_family": "upmem_sdk"},
+        )
+
+    if completed.returncode != 0 and output_manifest.status == "upmem_sdk_simulator_executed":
+        reason = "runner_execution_failed"
+        error = f"UPMEM SDK simulator dense runner exited with code {completed.returncode}"
+        output_manifest = _nonexecuted_output_manifest(
+            backend=identity.backend_id,
+            status="failed",
+            reason=reason,
+            error=error,
+            error_type=reason,
+            input_manifest_path=input_manifest_path,
+            manifest=manifest,
+            invocation_metadata=invocation_metadata,
+            total_time_s=float(time.perf_counter() - started),
+            external_command_executed=True,
+            metadata_extra={
+                "backend_family": "upmem_sdk",
+                "simplepim_api_used": False,
+                "simplepim_bridge_lane": True,
+                "target": "simulator",
+                "stdout_snippet": _bounded_snippet(completed.stdout),
+                "stderr_snippet": _bounded_snippet(completed.stderr),
+                "returncode": int(completed.returncode),
+            },
+        )
+        write_json(output_manifest_path, output_manifest)
+        return _execution_result(
+            input_manifest_path=input_manifest_path,
+            output_manifest_path=output_manifest_path,
+            output_blob_path=None,
+            backend_id=identity.backend_id,
+            backend_identity=identity,
+            execution_status="failed",
+            reason=reason,
+            error=error,
+            error_type=reason,
+            output_manifest=output_manifest,
+            invocation_metadata=invocation_metadata,
+            external_command_executed=True,
+            metadata={"backend_family": "upmem_sdk"},
+        )
+
+    if output_manifest.status in {"failed", "unsupported", "skipped", "not_implemented"}:
+        reason = str(output_manifest.metadata.get("reason") or output_manifest.status)
+        error_type = output_manifest.metadata.get("error_type")
+        return _execution_result(
+            input_manifest_path=input_manifest_path,
+            output_manifest_path=output_manifest_path,
+            output_blob_path=None,
+            backend_id=identity.backend_id,
+            backend_identity=identity,
+            execution_status=output_manifest.status,
+            reason=reason,
+            error=output_manifest.error,
+            error_type=str(error_type) if error_type else None,
+            output_manifest=output_manifest,
+            invocation_metadata=invocation_metadata,
+            external_command_executed=output_manifest.external_command_executed,
+            execution_implemented=output_manifest.execution_implemented,
+            metadata=dict(output_manifest.metadata),
+        )
+
+    if output_manifest.status != "upmem_sdk_simulator_executed":
+        reason = "output_manifest_invalid"
+        error = f"Unexpected UPMEM SDK simulator output status: {output_manifest.status}"
+        output_manifest = _nonexecuted_output_manifest(
+            backend=identity.backend_id,
+            status="failed",
+            reason=reason,
+            error=error,
+            error_type=reason,
+            input_manifest_path=input_manifest_path,
+            manifest=manifest,
+            invocation_metadata=invocation_metadata,
+            total_time_s=float(time.perf_counter() - started),
+            external_command_executed=True,
+            metadata_extra={"backend_family": "upmem_sdk"},
+        )
+        write_json(output_manifest_path, output_manifest)
+        return _execution_result(
+            input_manifest_path=input_manifest_path,
+            output_manifest_path=output_manifest_path,
+            output_blob_path=None,
+            backend_id=identity.backend_id,
+            backend_identity=identity,
+            execution_status="failed",
+            reason=reason,
+            error=error,
+            error_type=reason,
+            output_manifest=output_manifest,
+            invocation_metadata=invocation_metadata,
+            external_command_executed=True,
+            metadata={"backend_family": "upmem_sdk"},
+        )
+
+    output_blob_path: Path | None = None
+    if output_manifest.output_blob is None:
+        reason = "output_blob_missing"
+        error = "UPMEM SDK simulator output manifest did not include output_blob"
+    else:
+        output_blob_path = _resolve_manifest_path(bridge_dir, output_manifest.output_blob.relative_path)
+        if not output_blob_path.exists():
+            reason = "output_blob_missing"
+            error = f"UPMEM SDK simulator output blob is missing: {output_manifest.output_blob.relative_path}"
+        else:
+            try:
+                output_array = np.load(output_blob_path, allow_pickle=False)
+                _validate_loaded_blob(output_array, to_jsonable(output_manifest.output_blob), "upmem_sdk_simulator_output")
+                reason = None
+                error = None
+            except Exception as exc:
+                reason = "output_manifest_invalid"
+                error = str(exc)
+    if reason is not None:
+        failed_manifest = _nonexecuted_output_manifest(
+            backend=identity.backend_id,
+            status="failed",
+            reason=reason,
+            error=error,
+            error_type=reason,
+            input_manifest_path=input_manifest_path,
+            manifest=manifest,
+            invocation_metadata=invocation_metadata,
+            total_time_s=float(time.perf_counter() - started),
+            external_command_executed=True,
+            metadata_extra=dict(output_manifest.metadata),
+        )
+        write_json(output_manifest_path, failed_manifest)
+        return _execution_result(
+            input_manifest_path=input_manifest_path,
+            output_manifest_path=output_manifest_path,
+            output_blob_path=None,
+            backend_id=identity.backend_id,
+            backend_identity=identity,
+            execution_status="failed",
+            reason=reason,
+            error=error,
+            error_type=reason,
+            output_manifest=failed_manifest,
+            invocation_metadata=invocation_metadata,
+            external_command_executed=True,
+            metadata=dict(failed_manifest.metadata),
+        )
+
+    if output_manifest.validation_metrics.get("passed") is False:
+        reason = "validation_failed"
+        return _execution_result(
+            input_manifest_path=input_manifest_path,
+            output_manifest_path=output_manifest_path,
+            output_blob_path=output_blob_path,
+            backend_id=identity.backend_id,
+            backend_identity=identity,
+            execution_status="failed",
+            reason=reason,
+            error=output_manifest.error or "UPMEM SDK simulator output did not pass validation",
+            error_type=reason,
+            output_manifest=output_manifest,
+            invocation_metadata=invocation_metadata,
+            external_command_executed=output_manifest.external_command_executed,
+            execution_implemented=output_manifest.execution_implemented,
+            metadata=dict(output_manifest.metadata),
+        )
+
+    return _execution_result(
+        input_manifest_path=input_manifest_path,
+        output_manifest_path=output_manifest_path,
+        output_blob_path=output_blob_path,
+        backend_id=identity.backend_id,
+        backend_identity=identity,
+        execution_status="upmem_sdk_simulator_executed",
+        reason="upmem_sdk_simulator_executed",
+        error=None,
+        error_type=None,
+        output_manifest=output_manifest,
+        invocation_metadata=invocation_metadata,
+        external_command_executed=output_manifest.external_command_executed,
+        execution_implemented=output_manifest.execution_implemented,
+        metadata={**dict(output_manifest.metadata), "simplepim_or_native_execution_implemented": True},
+    )
+
+
 def _execution_result_from_mock(
     result: DenseBridgeResult,
     identity: DenseBridgeBackendIdentity,
@@ -1061,12 +1558,157 @@ def _simplepim_stub_invocation_metadata(
     return metadata
 
 
+def _upmem_sdk_dense_runner_path() -> Path:
+    root_dir = Path(__file__).resolve().parents[4]
+    return root_dir / "native" / "upmem" / "simplepim" / "upmem_sdk_dense_runner.py"
+
+
+def _upmem_sdk_simulator_invocation_metadata(
+    input_manifest_path: Path,
+    env: Mapping[str, str] | None,
+) -> JsonDict:
+    environment = env if env is not None else os.environ
+    runner_path = _upmem_sdk_dense_runner_path()
+    timeout_seconds = _upmem_sdk_simulator_timeout(environment)
+    metadata: JsonDict = {
+        "backend_id": "upmem_sdk_simulator_dense",
+        "backend_family": "upmem_sdk",
+        "simplepim_api_used": False,
+        "simplepim_bridge_lane": True,
+        "working_directory": ".",
+        "input_manifest_path": _relative_result_path(input_manifest_path, input_manifest_path.parent)
+        or input_manifest_path.name,
+        "expected_output_manifest_path": "output_manifest.json",
+        "expected_output_blob_path": "outputs/upmem_sdk_simulator_output.npy",
+        "target": "simulator",
+        "environment_keys": ("UPMEM_HOME", "UPMEM_DENSE_SIM_MAX_DIM", "UPMEM_DENSE_SIM_TIMEOUT_SECONDS"),
+        "configured_environment_keys": tuple(
+            key for key in ("UPMEM_HOME", "UPMEM_DENSE_SIM_MAX_DIM", "UPMEM_DENSE_SIM_TIMEOUT_SECONDS") if environment.get(key)
+        ),
+        "blob_format": "npy",
+        "native_buffer_layout": "row_major",
+        "native_int32_output_dtype": "<i4",
+        "external_command_executed": False,
+        "timeout_seconds": timeout_seconds,
+        "runner_path": str(runner_path),
+    }
+    metadata["command_args"] = (
+        sys.executable,
+        str(runner_path),
+        "--input-manifest",
+        input_manifest_path.name,
+        "--output-manifest",
+        "output_manifest.json",
+        "--backend-id",
+        "upmem_sdk_simulator_dense",
+        "--target",
+        "simulator",
+        "--timeout-seconds",
+        str(timeout_seconds),
+    )
+    return metadata
+
+
+def _missing_upmem_sdk_simulator_tools(env: Mapping[str, str] | None) -> tuple[str, ...]:
+    environment = env if env is not None else os.environ
+    required = {
+        "make": shutil.which("make"),
+        "dpu-upmem-dpurte-clang": _find_upmem_tool("dpu-upmem-dpurte-clang", environment),
+        "dpu-pkg-config": _find_upmem_tool("dpu-pkg-config", environment),
+    }
+    return tuple(name for name, path in required.items() if path is None)
+
+
+def _find_upmem_tool(name: str, env: Mapping[str, str]) -> str | None:
+    upmem_home = env.get("UPMEM_HOME")
+    if upmem_home:
+        candidate = Path(upmem_home).expanduser() / "bin" / name
+        if candidate.exists():
+            return str(candidate)
+    return shutil.which(name)
+
+
+def _upmem_sdk_simulator_timeout(env: Mapping[str, str] | None) -> float:
+    environment = env if env is not None else os.environ
+    raw = environment.get("UPMEM_DENSE_SIM_TIMEOUT_SECONDS")
+    if not raw:
+        return 30.0
+    try:
+        value = float(raw)
+    except ValueError:
+        return 30.0
+    if value <= 0.0:
+        return 30.0
+    return value
+
+
+def _upmem_sdk_simulator_static_rejection(
+    manifest: DenseBridgeInputManifest,
+    env: Mapping[str, str] | None,
+) -> tuple[str, str] | None:
+    tile_plan = manifest.tile_plan or {}
+    if tile_plan.get("requires_tiling") or tile_plan.get("requires_host_aggregation"):
+        return ("unsupported_tiled_gemm", "Executable tiling and host aggregation are not implemented for this backend")
+
+    left_deq = dict(manifest.dequantization.get("left", {}))
+    right_deq = dict(manifest.dequantization.get("right", {}))
+    if left_deq.get("route_dtype") != "int8" or right_deq.get("route_dtype") != "int8":
+        return ("unsupported_dtype", "UPMEM SDK simulator dense backend supports int8 operands only")
+
+    max_dim = _upmem_sdk_simulator_max_dim(env)
+    if max_dim is None:
+        return ("unsupported_shape_for_initial_backend", "Invalid UPMEM_DENSE_SIM_MAX_DIM; expected a positive integer")
+    dims = (manifest.gemm_m, manifest.gemm_k, manifest.gemm_n)
+    if any(dim <= 0 for dim in dims):
+        return ("unsupported_shape", f"Invalid GEMM dimensions: {dims}")
+    if any(dim > max_dim for dim in dims):
+        return ("unsupported_shape_for_initial_backend", f"GEMM dimensions {dims} exceed initial backend max dim {max_dim}")
+
+    left_meta = dict(manifest.operands.get("left", {}))
+    right_meta = dict(manifest.operands.get("right", {}))
+    left_shape = tuple(int(dim) for dim in left_meta.get("shape", ()))
+    right_shape = tuple(int(dim) for dim in right_meta.get("shape", ()))
+    left_rep = str(left_deq.get("representation"))
+    right_rep = str(right_deq.get("representation"))
+    if left_rep == "real" and right_rep == "real":
+        if left_shape != (manifest.gemm_m, manifest.gemm_k) or right_shape != (manifest.gemm_k, manifest.gemm_n):
+            return ("unsupported_shape", "Real operand shapes do not match GEMM dimensions")
+        return None
+    if left_rep == "split_complex_real_imag" and right_rep == "split_complex_real_imag":
+        if left_shape != (manifest.gemm_m, manifest.gemm_k, 2) or right_shape != (manifest.gemm_k, manifest.gemm_n, 2):
+            return ("unsupported_complex_layout", "Split-complex operand shapes do not match GEMM dimensions")
+        return None
+    return ("unsupported_complex_layout", f"Unsupported operand representations: {left_rep}, {right_rep}")
+
+
+def _upmem_sdk_simulator_max_dim(env: Mapping[str, str] | None) -> int | None:
+    environment = env if env is not None else os.environ
+    raw = environment.get("UPMEM_DENSE_SIM_MAX_DIM")
+    if raw is None or not raw.strip():
+        return 16
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    if value <= 0:
+        return None
+    return value
+
+
 def _bounded_snippet(value: str | None, limit: int = 2000) -> str:
     if not value:
         return ""
     if len(value) <= limit:
         return value
     return value[:limit] + "...<truncated>"
+
+
+def _decode_timeout_output(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
 
 
 def _validate_bridge_input_files(manifest: DenseBridgeInputManifest, bridge_dir: Path) -> None:

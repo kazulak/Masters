@@ -32,7 +32,7 @@ DENSE_TASK_BRIDGE_SCHEMA_VERSION = "dense_task_bridge_v1"
 DenseTaskBridgeStatus = Literal["completed", "skipped", "unsupported", "failed"]
 DenseTaskBridgeMaterializationMode = Literal["initial-only", "cpu-replay"]
 _BRIDGEABLE_PREPARATION_STATUSES = {"prepared", "simplepim_unavailable"}
-_SUCCESSFUL_BRIDGE_STATUSES = {"mock_executed"}
+_SUCCESSFUL_BRIDGE_STATUSES = {"mock_executed", "upmem_sdk_simulator_executed"}
 
 
 @dataclass(frozen=True)

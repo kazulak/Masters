@@ -25,6 +25,7 @@ PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simplepim-microbench -
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 0 --backend mock_numpy_dequantized
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 1 --materialization cpu-replay --backend mock_numpy_dequantized
 SIMPLEPIM_STUB_BIN=native/upmem/simplepim/simplepim_dense_stub.py PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 0 --backend simplepim_external_stub --execute-external
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 0 --backend upmem_sdk_simulator_dense --execute-external
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-route-coverage --case bell_2q
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-route-coverage --suite configs/suites/planner_compare.yml
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench shadow-routed-runtime --case bell_2q
@@ -73,7 +74,9 @@ scripts/run_energy_suite.sh configs/suites/local_energy.yml
   optional capped bridge/stub evidence as shadow metadata. Its shadow route
   policy fields are what-if decisions only; they never replace CPU fallback.
 - `native/upmem/simplepim/` is reserved for future SimplePIM bridge code and
-  currently contains only a non-executing external contract stub.
+  currently contains the non-executing external contract stub plus the first
+  UPMEM SDK simulator dense bridge runner. The runner is in the
+  SimplePIM/UPMEM bridge lane but does not use SimplePIM APIs.
 - `native/upmem/raw_dense/` is reserved for future raw UPMEM SDK dense kernels.
 - `../legacy/` contains old prototypes and generated sudo-owned run folders kept
   out of the active implementation.
@@ -91,3 +94,20 @@ repo fallback `../legacy/extern/SimplePIM` from this directory. Without
 Sample build or simulator-run failure is written as JSON status `failed`, but
 the CLI still exits normally after writing the artifact so the failure is
 auditable.
+
+## UPMEM SDK Simulator Dense Backend
+
+`upmem_sdk_simulator_dense` is the first real PIM-backed dense bridge backend.
+It is explicit and simulator-only:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 0 --backend upmem_sdk_simulator_dense --execute-external
+```
+
+The backend consumes the existing dense bridge manifest, runs a minimal UPMEM
+SDK DPU GEMM program through the simulator, writes
+`outputs/upmem_sdk_simulator_output.npy`, and validates against
+`references/expected_dequantized_output.npy`. It is not a normal suite route,
+does not run hardware, does not implement tiling, and does not make dense output
+authoritative in the shadow runtime. Any timings it records are bring-up
+timings, not performance evidence.

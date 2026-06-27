@@ -78,7 +78,8 @@ providers/exact_tn/
   benchmark routes that decide whether to use the UPMEM target layer and, later,
   call native kernels
 native/upmem/
-  future SimplePIM bridge code and raw C/UPMEM SDK host/DPU kernels only
+  SimplePIM bridge code, UPMEM SDK simulator dense runner, and future raw
+  C/UPMEM SDK host/DPU kernels only
 ```
 
 This keeps tensor-network creation and path finding shared across CPU TN, future
@@ -171,6 +172,23 @@ SIMPLEPIM_STUB_BIN=native/upmem/simplepim/simplepim_dense_stub.py PYTHONPATH=src
 `external_command_executed=true` for that command means only that the stub
 process ran. `execution_implemented=false` and
 `metadata.native_kernel_executed=false` remain explicit.
+
+The first real simulator-backed dense contraction backend is
+`upmem_sdk_simulator_dense`:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 0 --backend upmem_sdk_simulator_dense --execute-external
+```
+
+This backend is in the UPMEM/SimplePIM bridge lane but uses UPMEM SDK C/DPU
+code rather than SimplePIM APIs. It consumes the same dense bridge manifest,
+runs a small int8 GEMM with int32 accumulation through the UPMEM simulator,
+writes `outputs/upmem_sdk_simulator_output.npy`, and validates against
+`references/expected_dequantized_output.npy`. Metadata distinguishes simulator
+execution from hardware: `target=simulator`,
+`upmem_dpu_program_executed=true`, `simulator_kernel_executed=true`,
+`hardware_kernel_executed=false`, and `simplepim_api_used=false`. It is
+non-tiled, simulator-only, and records bring-up timings only.
 
 It writes:
 
@@ -279,13 +297,15 @@ tile tasks.
    once task routes begin preparing tensors.
 2. Use `upmem-env-check --run-sample --target simulator` to verify the local
    SimplePIM/UPMEM toolchain before real backend work.
-3. Extend the current `targets/upmem/` tile-plan model from deterministic host
+3. Use `upmem_sdk_simulator_dense` to validate one real non-tiled TaskGraph
+   contraction through the UPMEM simulator.
+4. Extend the current `targets/upmem/` tile-plan model from deterministic host
    records to executable tiling choices.
-4. Connect `routing/` from analysis-only route decisions to a preparation and
+5. Connect `routing/` from analysis-only route decisions to a preparation and
    execution-aware task router.
-5. Port the useful dense UPMEM kernel only after the task schedule and WRAM model
+6. Port the useful dense UPMEM kernel only after the task schedule and WRAM model
    exist.
-6. Add sparse and heuristic/permutation providers after the dense path is
+7. Add sparse and heuristic/permutation providers after the dense path is
    structurally stable.
 
 ## Design Rules

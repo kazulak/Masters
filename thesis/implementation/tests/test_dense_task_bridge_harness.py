@@ -309,6 +309,62 @@ def test_dense_task_bridge_cli_dispatch_prints_run_and_summary_paths(monkeypatch
     assert payload["summary_path"].endswith("dense_task_bridge_summary.json")
 
 
+def test_dense_task_bridge_cli_accepts_upmem_sdk_simulator_backend_only_with_execute_external(
+    monkeypatch,
+    capsys,
+    tmp_path: Path,
+) -> None:
+    called: dict[str, object] = {}
+
+    def fake_run_dense_task_bridge(root_dir: Path, **kwargs: object) -> SimpleNamespace:
+        called.update(kwargs)
+        return SimpleNamespace(
+            run_dir=tmp_path / "runs" / "fake_upmem_dense_task_bridge",
+            summary_path=tmp_path / "runs" / "fake_upmem_dense_task_bridge" / "dense_task_bridge_summary.json",
+            status="completed",
+            reason=None,
+        )
+
+    monkeypatch.setattr(dense_task_bridge_module, "run_dense_task_bridge", fake_run_dense_task_bridge)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "python -m quantum_bench.bench",
+            "dense-task-bridge",
+            "--case",
+            "bell_2q",
+            "--backend",
+            "upmem_sdk_simulator_dense",
+            "--execute-external",
+        ],
+    )
+
+    assert bench_main.main() == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert called["backend"] == "upmem_sdk_simulator_dense"
+    assert called["execute_external"] is True
+    assert payload["status"] == "completed"
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "python -m quantum_bench.bench",
+            "dense-task-bridge",
+            "--case",
+            "bell_2q",
+            "--backend",
+            "upmem_sdk_simulator_dense",
+        ],
+    )
+    try:
+        bench_main.main()
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:  # pragma: no cover - parser.error always raises
+        raise AssertionError("upmem_sdk_simulator_dense must require --execute-external")
+
+
 def test_dense_task_bridge_harness_does_not_reference_subprocess() -> None:
     source = inspect.getsource(dense_task_bridge_module)
 

@@ -50,7 +50,7 @@ only bounded local tasks that fit an explicit route contract.
 | Data format conversion | `src/quantum_bench/formats/` | Deterministic host-side fixed-point records and utilities used by explicit dense preparation | Connect conversion records to route execution artifacts after routing gains execution |
 | Dynamic heuristic router | `src/quantum_bench/routing/` | Analysis-only task-level router skeleton | Add preparation/execution-aware routing after data conversion and tiling mature |
 | Dense GEMM route | `src/quantum_bench/providers/exact_tn/upmem_dense_placeholder.py`, `src/quantum_bench/routing/dense_prepare.py`, `src/quantum_bench/targets/upmem/schedule.py`, future `native/upmem/simplepim/` | Estimate-only placeholder plus one-task host preparation; no execution | SimplePIM-backed microkernel, then integrated TaskGraph route |
-| SimplePIM bridge/probe | `src/quantum_bench/targets/upmem/simplepim.py`, `src/quantum_bench/targets/upmem/simplepim_microbench.py`, `src/quantum_bench/targets/upmem/dense_bridge.py`, future `native/upmem/simplepim/` | Availability probe, dry-run dense GEMM microbenchmark metadata, one-task dense preparation metadata, and file-based bridge manifests | SimplePIM-backed microkernel for one prepared task |
+| SimplePIM bridge/probe | `src/quantum_bench/targets/upmem/simplepim.py`, `src/quantum_bench/targets/upmem/simplepim_microbench.py`, `src/quantum_bench/targets/upmem/dense_bridge.py`, future `native/upmem/simplepim/` | Availability probe, dry-run dense GEMM microbenchmark metadata, one-task dense preparation metadata, file-based bridge manifests, and UPMEM SDK simulator dense backend | SimplePIM-backed or raw UPMEM-backed microkernel for one prepared task |
 | UPMEM/SimplePIM environment bring-up | `src/quantum_bench/targets/upmem/environment.py`, `src/quantum_bench/bench/upmem_env_check.py` | Reproducible SDK/toolchain/SimplePIM source check with optional simulator sample | Use verified simulator evidence before real dense backend implementation |
 | Sparse route | Architecture slot only | Not implemented | Add SparseP feasibility plan after dense route skeleton |
 | Heuristic/bypass route | Architecture slot only | Not implemented | Host-side row-swap/permutation prototype first |
@@ -446,6 +446,11 @@ Wave 2C.8 adds a backend adapter interface on top of this file boundary:
   `SIMPLEPIM_STUB_BIN` is configured. It validates that the cross-process file
   contract can consume `input_manifest.json` and write `output_manifest.json`;
   it does not write an output blob and does not run a SimplePIM/native kernel.
+- `upmem_sdk_simulator_dense` is the first real simulator-backed dense backend.
+  It uses UPMEM SDK C/DPU code rather than SimplePIM APIs, because the inspected
+  SimplePIM source tree does not provide a GEMM primitive. It is still in the
+  UPMEM/SimplePIM bridge lane because it consumes the same dense bridge
+  manifest and native boundary.
 
 `execute_dense_bridge(...)` is the generic entrypoint. For `simplepim_external`
 it validates the input manifest and blob metadata first, then writes
@@ -482,6 +487,44 @@ Invocation metadata uses relative bridge paths such as `input_manifest.json`,
 `output_manifest.json`, and `outputs/simplepim_output.npy`. It may include a
 SimplePIM command path from the environment/probe, but it must not include the
 absolute bridge directory or raw arrays.
+
+For `upmem_sdk_simulator_dense`, the bridge adapter validates manifest paths and
+operand blobs before launch, preflights `make`, `dpu-upmem-dpurte-clang`, and
+`dpu-pkg-config`, then invokes `native/upmem/simplepim/upmem_sdk_dense_runner.py`
+with `--target simulator`. The runner copies only the minimal native dense
+source set into:
+
+```text
+bridge/runner_work/
+  src/
+  build/
+  inputs/
+  outputs/
+```
+
+The native buffer contract is row-major int8 inputs and row-major little-endian
+int32 outputs, with shapes from the validated manifest/config. The initial
+backend is non-tiled, no-host-aggregation, int8-only, and uses a conservative
+default max dimension of 16. Split-complex contractions are supported only when
+manifest metadata proves the real/imag split layout; otherwise the backend
+returns `unsupported_complex_layout`.
+
+Successful simulator execution writes
+`outputs/upmem_sdk_simulator_output.npy` and records:
+
+```text
+backend_family: upmem_sdk
+simplepim_api_used: false
+simplepim_bridge_lane: true
+target: simulator
+upmem_dpu_program_executed: true
+simulator_kernel_executed: true
+hardware_kernel_executed: false
+```
+
+The runner has a `--target hardware` option only to preserve the future boundary.
+In this wave hardware returns `hardware_target_disabled` and must not launch.
+Build/run timings are bring-up timings, not final performance evidence.
 
 ## Developer One-Task Dense Bridge Harness
 
@@ -722,7 +765,8 @@ which motivates route-aware costs later.
 - `2D.5` host aggregation/PID-Comm-inspired reporting
 - `2D.6` optional TransPimLib support slot
 - `2E.0` UPMEM/SimplePIM environment verification and simulator sample bring-up
-- `2E.1` revisit UPMEM-aware path selection using route-aware costs
+- `2E.1` first UPMEM SDK simulator dense bridge backend for one non-tiled task
+- `2E.2` revisit UPMEM-aware path selection using route-aware costs
 
 The next implementation wave should build on the shadow runtime evidence and
 the environment verification artifact before starting a real dense execution

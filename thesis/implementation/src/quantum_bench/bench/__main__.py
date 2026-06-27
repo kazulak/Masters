@@ -45,7 +45,7 @@ def main() -> int:
     dense_bridge_parser.add_argument(
         "--backend",
         default="mock_numpy_dequantized",
-        choices=("mock_numpy_dequantized", "simplepim_external", "simplepim_external_stub"),
+        choices=("mock_numpy_dequantized", "simplepim_external", "simplepim_external_stub", "upmem_sdk_simulator_dense"),
     )
     dense_bridge_parser.add_argument("--execute-external", action="store_true")
 
@@ -146,6 +146,8 @@ def main() -> int:
     if args.command == "dense-task-bridge":
         from quantum_bench.bench.dense_task_bridge import run_dense_task_bridge
 
+        if args.backend == "upmem_sdk_simulator_dense" and not args.execute_external:
+            parser.error("--backend upmem_sdk_simulator_dense requires --execute-external")
         result = run_dense_task_bridge(
             root_dir,
             case=args.case,
