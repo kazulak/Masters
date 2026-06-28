@@ -6,7 +6,13 @@ from quantum_bench.targets.upmem import (
     UNSUPPORTED_DENSE_GEMM_SHAPE,
     UPMEM_DENSE_ESTIMATE_KEY,
     UPMEM_DENSE_TILE_PLAN_MODEL,
+    UPMEM_EXECUTION_CLASS_L2_SINGLE_DPU_MRAM,
+    UPMEM_L2_EFFECTIVE_WRAM_BYTES,
+    UPMEM_L2_KERNEL_STRATEGY,
+    UPMEM_L2_MAX_HOST_BLOB_BYTES,
+    UPMEM_L2_NATIVE_MAX_DIM,
     UPMEM_PROFILE,
+    plan_l2_tiled_execution,
     plan_dense_task,
 )
 
@@ -106,3 +112,44 @@ def test_unsupported_tile_plan_is_explicit() -> None:
     assert plan.tile_counts.total_tile_count == 0
     assert plan.estimated_parallel_tiles == 0
     assert plan.reject_reason == UNSUPPORTED_DENSE_GEMM_SHAPE
+
+
+def test_l2_tiled_execution_plan_supports_starter_shapes() -> None:
+    shapes = {
+        "synthetic_l2_square": (96, 96, 96),
+        "synthetic_l2_rect": (128, 128, 64),
+        "synthetic_l2_kheavy": (72, 512, 32),
+    }
+
+    for m, k, n in shapes.values():
+        plan = plan_l2_tiled_execution(m, k, n)
+
+        assert plan.supported is True
+        assert plan.reason is None
+        assert plan.execution_class == UPMEM_EXECUTION_CLASS_L2_SINGLE_DPU_MRAM
+        assert plan.kernel_strategy == UPMEM_L2_KERNEL_STRATEGY
+        assert plan.conservative_full_task_bytes > UPMEM_L2_EFFECTIVE_WRAM_BYTES
+        assert plan.estimated_wram_bytes_per_tile <= UPMEM_L2_EFFECTIVE_WRAM_BYTES
+        assert plan.host_blob_bytes <= UPMEM_L2_MAX_HOST_BLOB_BYTES
+        assert max(plan.gemm_m, plan.gemm_k, plan.gemm_n) <= UPMEM_L2_NATIVE_MAX_DIM
+        assert plan.tile_m > 0
+        assert plan.tile_k > 0
+        assert plan.tile_n > 0
+        assert plan.total_tile_steps == plan.output_tile_count * plan.k_tile_count
+        assert plan.mram_resident_operands is True
+        assert plan.wram_tiled is True
+
+
+def test_l2_tiled_execution_plan_is_distinct_from_l1_wram_fit() -> None:
+    small = plan_l2_tiled_execution(16, 16, 16)
+
+    assert small.supported is False
+    assert small.reason == "not_l2_wram_resident"
+    assert small.conservative_full_task_bytes <= UPMEM_L2_EFFECTIVE_WRAM_BYTES
+
+
+def test_l2_tiled_execution_plan_rejects_host_blob_over_cap() -> None:
+    plan = plan_l2_tiled_execution(96, 96, 96, max_l2_host_blob_bytes=1024)
+
+    assert plan.supported is False
+    assert plan.reason == "unsupported_l2_blob_size"

@@ -452,11 +452,13 @@ Wave 2C.8 adds a backend adapter interface on top of this file boundary:
   `SIMPLEPIM_STUB_BIN` is configured. It validates that the cross-process file
   contract can consume `input_manifest.json` and write `output_manifest.json`;
   it does not write an output blob and does not run a SimplePIM/native kernel.
-- `upmem_sdk_simulator_dense` is the first real simulator-backed dense backend.
+- `upmem_sdk_simulator_dense` is the first real simulator-backed dense bridge
+  backend.
   It uses UPMEM SDK C/DPU code rather than SimplePIM APIs, because the inspected
   SimplePIM source tree does not provide a GEMM primitive. It is still in the
   UPMEM/SimplePIM bridge lane because it consumes the same dense bridge
-  manifest and native boundary.
+  manifest and native boundary. It is not a final top-level benchmark route;
+  final reports keep UPMEM as one `upmem_tn_runtime` category.
 
 `execute_dense_bridge(...)` is the generic entrypoint. For `simplepim_external`
 it validates the input manifest and blob metadata first, then writes
@@ -509,11 +511,13 @@ bridge/runner_work/
 ```
 
 The native buffer contract is row-major int8 inputs and row-major little-endian
-int32 outputs, with shapes from the validated manifest/config. The initial
-backend is non-tiled, no-host-aggregation, int8-only, and uses a conservative
-default max dimension of 16. Split-complex contractions are supported only when
-manifest metadata proves the real/imag split layout; otherwise the backend
-returns `unsupported_complex_layout`.
+int32 outputs, with shapes from the validated manifest/config. `L1_WRAM` uses
+padded `max_dim x max_dim` buffers and explicit strides. `L2_SINGLE_DPU_MRAM`
+uses exact row-major MRAM operand buffers, keeps one output tile accumulator in
+WRAM, loops over all K tiles, and writes each C tile back to MRAM once.
+Split-complex contractions are supported only by the L1 direct subset when
+manifest metadata proves the real/imag split layout. Complex L2 is explicitly
+rejected with `complex_l2_not_implemented`.
 
 Successful simulator execution writes
 `outputs/upmem_sdk_simulator_output.npy` and records:
@@ -523,6 +527,8 @@ backend_family: upmem_sdk
 simplepim_api_used: false
 simplepim_bridge_lane: true
 target: simulator
+execution_class: L1_WRAM | L2_SINGLE_DPU_MRAM
+kernel_strategy: l1_padded_direct_v1 | l2_single_dpu_mram_wram_tiled_v1
 upmem_dpu_program_executed: true
 simulator_kernel_executed: true
 hardware_kernel_executed: false
@@ -776,7 +782,8 @@ UPMEM L1/L2/L3/L4 are internal runtime execution classes only:
 
 - `L1_WRAM`: implemented for the current task-level simulator dense bridge
   subset;
-- `L2_SINGLE_DPU_MRAM`: modeled, planned for executable WRAM tiling;
+- `L2_SINGLE_DPU_MRAM`: implemented for the task-level simulator real-valued
+  dense bridge subset; modeled/planned outside that subset;
 - `L3_MULTI_DPU`: modeled, planned for distributed multi-DPU execution;
 - `L4_OUT_OF_SCOPE`: modeled pressure boundary.
 
@@ -888,11 +895,12 @@ which motivates route-aware costs later.
 - `2D.5` host aggregation/PID-Comm-inspired reporting
 - `2D.6` optional TransPimLib support slot
 - `2E.0` UPMEM/SimplePIM environment verification and simulator sample bring-up
-- `2E.1` first UPMEM SDK simulator dense bridge backend for one non-tiled task
+- `2E.1` first UPMEM SDK simulator dense bridge backend for one L1 direct task
 - `2E.2` PIM bridge evaluation harness over growing quantum workloads
 - `2E.3` UPMEM SDK simulator dense correctness diagnostics and stride hardening
 - `2E.4` PIM memory-level and parallelism-frontier analyzer
 - `2E.5` benchmark matrix and pressure-report scaffold for final thesis baselines
+- `2E.6` first L2 single-DPU MRAM/WRAM tiled real-valued simulator subset
 - later: revisit UPMEM-aware path selection using route-aware costs
 
 The next implementation wave should use PIM bridge evaluation, frontier

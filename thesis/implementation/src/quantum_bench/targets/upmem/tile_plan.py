@@ -12,6 +12,29 @@ UPMEM_DENSE_TILE_PLAN_ARTIFACT_KEY = "upmem_dense_tile_plan"
 UPMEM_DENSE_TILE_PLAN_MODEL = "dense_int8_wram_tile_plan_v1"
 REQUIRES_TILING_NOT_IMPLEMENTED = "requires_tiling_not_implemented"
 UNSUPPORTED_DENSE_GEMM_SHAPE = "unsupported_dense_gemm_shape"
+UPMEM_EXECUTION_CLASS_L1_WRAM = "L1_WRAM"
+UPMEM_EXECUTION_CLASS_L2_SINGLE_DPU_MRAM = "L2_SINGLE_DPU_MRAM"
+UPMEM_L1_KERNEL_STRATEGY = "l1_padded_direct_v1"
+UPMEM_L2_KERNEL_STRATEGY = "l2_single_dpu_mram_wram_tiled_v1"
+UPMEM_L2_EFFECTIVE_WRAM_BYTES = 60 * 1024
+UPMEM_L2_PER_DPU_MRAM_BYTES = 64 * 1024 * 1024
+UPMEM_L2_MAX_HOST_BLOB_BYTES = 16 * 1024 * 1024
+UPMEM_L2_NATIVE_MAX_DIM = 512
+UPMEM_L2_ALIGNMENT_RESERVE_BYTES = 2048
+UPMEM_L2_TILE_CANDIDATES = (
+    (64, 64, 64),
+    (64, 32, 64),
+    (32, 64, 64),
+    (32, 32, 64),
+    (32, 32, 32),
+    (16, 32, 64),
+    (32, 16, 64),
+    (16, 16, 64),
+    (16, 16, 32),
+    (8, 16, 32),
+    (16, 8, 32),
+    (8, 8, 32),
+)
 
 
 @dataclass(frozen=True)
@@ -127,6 +150,74 @@ class UpmemDenseTilePlan:
         }
 
 
+@dataclass(frozen=True)
+class UpmemL2TiledExecutionPlan:
+    supported: bool
+    reason: str | None
+    execution_class: str
+    kernel_strategy: str
+    gemm_m: int
+    gemm_k: int
+    gemm_n: int
+    tile_m: int
+    tile_n: int
+    tile_k: int
+    output_tile_count: int
+    k_tile_count: int
+    total_tile_steps: int
+    input_a_tile_bytes: int
+    input_b_tile_bytes: int
+    accumulator_tile_bytes: int
+    local_output_scratch_bytes: int
+    alignment_padding_bytes: int
+    estimated_wram_bytes_per_tile: int
+    effective_wram_bytes: int
+    mram_bytes_a: int
+    mram_bytes_b: int
+    mram_bytes_c: int
+    total_mram_bytes: int
+    conservative_full_task_bytes: int
+    max_l2_host_blob_bytes: int
+    host_blob_bytes: int
+    native_max_dim: int
+    mram_resident_operands: bool
+    wram_tiled: bool
+
+    def as_dict(self) -> JsonDict:
+        return {
+            "supported": self.supported,
+            "reason": self.reason,
+            "execution_class": self.execution_class,
+            "kernel_strategy": self.kernel_strategy,
+            "gemm_m": self.gemm_m,
+            "gemm_k": self.gemm_k,
+            "gemm_n": self.gemm_n,
+            "tile_m": self.tile_m,
+            "tile_n": self.tile_n,
+            "tile_k": self.tile_k,
+            "output_tile_count": self.output_tile_count,
+            "k_tile_count": self.k_tile_count,
+            "total_tile_steps": self.total_tile_steps,
+            "input_a_tile_bytes": self.input_a_tile_bytes,
+            "input_b_tile_bytes": self.input_b_tile_bytes,
+            "accumulator_tile_bytes": self.accumulator_tile_bytes,
+            "local_output_scratch_bytes": self.local_output_scratch_bytes,
+            "alignment_padding_bytes": self.alignment_padding_bytes,
+            "estimated_wram_bytes_per_tile": self.estimated_wram_bytes_per_tile,
+            "effective_wram_bytes": self.effective_wram_bytes,
+            "mram_bytes_a": self.mram_bytes_a,
+            "mram_bytes_b": self.mram_bytes_b,
+            "mram_bytes_c": self.mram_bytes_c,
+            "total_mram_bytes": self.total_mram_bytes,
+            "conservative_full_task_bytes": self.conservative_full_task_bytes,
+            "max_l2_host_blob_bytes": self.max_l2_host_blob_bytes,
+            "host_blob_bytes": self.host_blob_bytes,
+            "native_max_dim": self.native_max_dim,
+            "mram_resident_operands": self.mram_resident_operands,
+            "wram_tiled": self.wram_tiled,
+        }
+
+
 UPMEM_PROFILE = UpmemHardwareProfile(name="UPMEM DPU", wram_bytes=64 * 1024)
 DENSE_INT8_FORMAT = UpmemDataFormat(
     name="int8_inputs_int32_accumulator",
@@ -165,6 +256,201 @@ def plan_dense_task_graph(
 
 def upmem_dense_tile_plan_rows(graph: TaskGraph) -> list[JsonDict]:
     return [plan_dense_task(task).as_artifact_row(task) for task in graph.tasks]
+
+
+def plan_l2_tiled_execution(
+    gemm_m: int,
+    gemm_k: int,
+    gemm_n: int,
+    *,
+    effective_wram_bytes: int = UPMEM_L2_EFFECTIVE_WRAM_BYTES,
+    per_dpu_mram_bytes: int = UPMEM_L2_PER_DPU_MRAM_BYTES,
+    max_l2_host_blob_bytes: int = UPMEM_L2_MAX_HOST_BLOB_BYTES,
+    native_max_dim: int = UPMEM_L2_NATIVE_MAX_DIM,
+    alignment_padding_bytes: int = UPMEM_L2_ALIGNMENT_RESERVE_BYTES,
+) -> UpmemL2TiledExecutionPlan:
+    gemm_m = int(gemm_m)
+    gemm_k = int(gemm_k)
+    gemm_n = int(gemm_n)
+    mram_bytes_a = gemm_m * gemm_k * DENSE_INT8_FORMAT.input_element_bytes
+    mram_bytes_b = gemm_k * gemm_n * DENSE_INT8_FORMAT.input_element_bytes
+    mram_bytes_c = gemm_m * gemm_n * DENSE_INT8_FORMAT.output_element_bytes
+    c_accumulator_bytes = gemm_m * gemm_n * DENSE_INT8_FORMAT.accumulator_element_bytes
+    total_mram_bytes = mram_bytes_a + mram_bytes_b + mram_bytes_c
+    conservative_full_task_bytes = total_mram_bytes + c_accumulator_bytes
+    host_blob_bytes = mram_bytes_a + mram_bytes_b + (gemm_m * gemm_n * 8)
+
+    if min(gemm_m, gemm_k, gemm_n) <= 0:
+        return _unsupported_l2_plan(
+            "unsupported_l2_native_shape_limit",
+            gemm_m,
+            gemm_k,
+            gemm_n,
+            effective_wram_bytes,
+            max_l2_host_blob_bytes,
+            native_max_dim,
+            mram_bytes_a,
+            mram_bytes_b,
+            mram_bytes_c,
+            total_mram_bytes,
+            conservative_full_task_bytes,
+            host_blob_bytes,
+            alignment_padding_bytes,
+        )
+    if conservative_full_task_bytes <= effective_wram_bytes:
+        return _unsupported_l2_plan(
+            "not_l2_wram_resident",
+            gemm_m,
+            gemm_k,
+            gemm_n,
+            effective_wram_bytes,
+            max_l2_host_blob_bytes,
+            native_max_dim,
+            mram_bytes_a,
+            mram_bytes_b,
+            mram_bytes_c,
+            total_mram_bytes,
+            conservative_full_task_bytes,
+            host_blob_bytes,
+            alignment_padding_bytes,
+        )
+    if total_mram_bytes > per_dpu_mram_bytes:
+        return _unsupported_l2_plan(
+            "unsupported_l2_mram_capacity",
+            gemm_m,
+            gemm_k,
+            gemm_n,
+            effective_wram_bytes,
+            max_l2_host_blob_bytes,
+            native_max_dim,
+            mram_bytes_a,
+            mram_bytes_b,
+            mram_bytes_c,
+            total_mram_bytes,
+            conservative_full_task_bytes,
+            host_blob_bytes,
+            alignment_padding_bytes,
+        )
+    if max(gemm_m, gemm_k, gemm_n) > native_max_dim:
+        return _unsupported_l2_plan(
+            "unsupported_l2_native_shape_limit",
+            gemm_m,
+            gemm_k,
+            gemm_n,
+            effective_wram_bytes,
+            max_l2_host_blob_bytes,
+            native_max_dim,
+            mram_bytes_a,
+            mram_bytes_b,
+            mram_bytes_c,
+            total_mram_bytes,
+            conservative_full_task_bytes,
+            host_blob_bytes,
+            alignment_padding_bytes,
+        )
+    if any(dim % 8 != 0 for dim in (gemm_m, gemm_k, gemm_n)):
+        return _unsupported_l2_plan(
+            "unsupported_l2_native_shape_limit",
+            gemm_m,
+            gemm_k,
+            gemm_n,
+            effective_wram_bytes,
+            max_l2_host_blob_bytes,
+            native_max_dim,
+            mram_bytes_a,
+            mram_bytes_b,
+            mram_bytes_c,
+            total_mram_bytes,
+            conservative_full_task_bytes,
+            host_blob_bytes,
+            alignment_padding_bytes,
+        )
+    if host_blob_bytes > max_l2_host_blob_bytes:
+        return _unsupported_l2_plan(
+            "unsupported_l2_blob_size",
+            gemm_m,
+            gemm_k,
+            gemm_n,
+            effective_wram_bytes,
+            max_l2_host_blob_bytes,
+            native_max_dim,
+            mram_bytes_a,
+            mram_bytes_b,
+            mram_bytes_c,
+            total_mram_bytes,
+            conservative_full_task_bytes,
+            host_blob_bytes,
+            alignment_padding_bytes,
+        )
+
+    for candidate_m, candidate_k, candidate_n in UPMEM_L2_TILE_CANDIDATES:
+        tile_m = min(candidate_m, gemm_m)
+        tile_k = min(candidate_k, gemm_k)
+        tile_n = min(candidate_n, gemm_n)
+        input_a_tile_bytes = tile_m * tile_k * DENSE_INT8_FORMAT.input_element_bytes
+        input_b_tile_bytes = tile_k * tile_n * DENSE_INT8_FORMAT.input_element_bytes
+        accumulator_tile_bytes = tile_m * tile_n * DENSE_INT8_FORMAT.accumulator_element_bytes
+        local_output_scratch_bytes = 0
+        estimated_wram_bytes = (
+            input_a_tile_bytes
+            + input_b_tile_bytes
+            + accumulator_tile_bytes
+            + local_output_scratch_bytes
+            + alignment_padding_bytes
+        )
+        if estimated_wram_bytes > effective_wram_bytes:
+            continue
+        output_tile_count = math.ceil(gemm_m / tile_m) * math.ceil(gemm_n / tile_n)
+        k_tile_count = math.ceil(gemm_k / tile_k)
+        return UpmemL2TiledExecutionPlan(
+            supported=True,
+            reason=None,
+            execution_class=UPMEM_EXECUTION_CLASS_L2_SINGLE_DPU_MRAM,
+            kernel_strategy=UPMEM_L2_KERNEL_STRATEGY,
+            gemm_m=gemm_m,
+            gemm_k=gemm_k,
+            gemm_n=gemm_n,
+            tile_m=tile_m,
+            tile_n=tile_n,
+            tile_k=tile_k,
+            output_tile_count=output_tile_count,
+            k_tile_count=k_tile_count,
+            total_tile_steps=output_tile_count * k_tile_count,
+            input_a_tile_bytes=input_a_tile_bytes,
+            input_b_tile_bytes=input_b_tile_bytes,
+            accumulator_tile_bytes=accumulator_tile_bytes,
+            local_output_scratch_bytes=local_output_scratch_bytes,
+            alignment_padding_bytes=alignment_padding_bytes,
+            estimated_wram_bytes_per_tile=estimated_wram_bytes,
+            effective_wram_bytes=effective_wram_bytes,
+            mram_bytes_a=mram_bytes_a,
+            mram_bytes_b=mram_bytes_b,
+            mram_bytes_c=mram_bytes_c,
+            total_mram_bytes=total_mram_bytes,
+            conservative_full_task_bytes=conservative_full_task_bytes,
+            max_l2_host_blob_bytes=max_l2_host_blob_bytes,
+            host_blob_bytes=host_blob_bytes,
+            native_max_dim=native_max_dim,
+            mram_resident_operands=True,
+            wram_tiled=True,
+        )
+
+    return _unsupported_l2_plan(
+        "unsupported_l2_tile_plan",
+        gemm_m,
+        gemm_k,
+        gemm_n,
+        effective_wram_bytes,
+        max_l2_host_blob_bytes,
+        native_max_dim,
+        mram_bytes_a,
+        mram_bytes_b,
+        mram_bytes_c,
+        total_mram_bytes,
+        conservative_full_task_bytes,
+        host_blob_bytes,
+        alignment_padding_bytes,
+    )
 
 
 def _plan_from_shape(
@@ -268,6 +554,56 @@ def _unsupported_plan(
         requires_host_aggregation=False,
         estimated_parallel_tiles=0,
         reject_reason=reason,
+    )
+
+
+def _unsupported_l2_plan(
+    reason: str,
+    gemm_m: int,
+    gemm_k: int,
+    gemm_n: int,
+    effective_wram_bytes: int,
+    max_l2_host_blob_bytes: int,
+    native_max_dim: int,
+    mram_bytes_a: int,
+    mram_bytes_b: int,
+    mram_bytes_c: int,
+    total_mram_bytes: int,
+    conservative_full_task_bytes: int,
+    host_blob_bytes: int,
+    alignment_padding_bytes: int,
+) -> UpmemL2TiledExecutionPlan:
+    return UpmemL2TiledExecutionPlan(
+        supported=False,
+        reason=reason,
+        execution_class=UPMEM_EXECUTION_CLASS_L2_SINGLE_DPU_MRAM,
+        kernel_strategy=UPMEM_L2_KERNEL_STRATEGY,
+        gemm_m=gemm_m,
+        gemm_k=gemm_k,
+        gemm_n=gemm_n,
+        tile_m=0,
+        tile_n=0,
+        tile_k=0,
+        output_tile_count=0,
+        k_tile_count=0,
+        total_tile_steps=0,
+        input_a_tile_bytes=0,
+        input_b_tile_bytes=0,
+        accumulator_tile_bytes=0,
+        local_output_scratch_bytes=0,
+        alignment_padding_bytes=alignment_padding_bytes,
+        estimated_wram_bytes_per_tile=0,
+        effective_wram_bytes=effective_wram_bytes,
+        mram_bytes_a=mram_bytes_a,
+        mram_bytes_b=mram_bytes_b,
+        mram_bytes_c=mram_bytes_c,
+        total_mram_bytes=total_mram_bytes,
+        conservative_full_task_bytes=conservative_full_task_bytes,
+        max_l2_host_blob_bytes=max_l2_host_blob_bytes,
+        host_blob_bytes=host_blob_bytes,
+        native_max_dim=native_max_dim,
+        mram_resident_operands=True,
+        wram_tiled=True,
     )
 
 

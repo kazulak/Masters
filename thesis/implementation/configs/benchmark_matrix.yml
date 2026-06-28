@@ -63,6 +63,7 @@ planned_backend_families:
 upmem_runtime:
   implemented_execution_classes:
     - L1_WRAM
+    - L2_SINGLE_DPU_MRAM
   modeled_execution_classes:
     - L2_SINGLE_DPU_MRAM
     - L3_MULTI_DPU
@@ -72,7 +73,7 @@ upmem_runtime:
     - L3_MULTI_DPU
   implementation_notes:
     L1_WRAM: implemented for task-level simulator dense bridge subset only
-    L2_SINGLE_DPU_MRAM: model-only WRAM tiling pressure class
+    L2_SINGLE_DPU_MRAM: implemented for task-level simulator real-valued dense bridge subset only; modeled outside that subset
     L3_MULTI_DPU: model-only multi-DPU distribution pressure class
     L4_OUT_OF_SCOPE: model-only aggregate memory boundary
 

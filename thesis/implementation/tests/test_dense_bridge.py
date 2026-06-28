@@ -19,8 +19,10 @@ from quantum_bench.targets.upmem import (
     DENSE_BRIDGE_SCHEMA_VERSION,
     SimplePimProbeResult,
     annotate_task_graph_with_upmem_estimates,
+    dense_bridge_backend_manifest_eligibility,
     dense_bridge_backend_registry,
     execute_dense_bridge,
+    plan_l2_tiled_execution,
     read_dense_bridge_input_manifest,
     read_dense_bridge_output_manifest,
     run_mock_dense_bridge,
@@ -111,8 +113,24 @@ def _task_tensors(task: ContractionTask) -> tuple[TensorValue, TensorValue]:
     )
 
 
+def _real_task_tensors(task: ContractionTask) -> tuple[TensorValue, TensorValue]:
+    left_size = int(np.prod(task.input_shapes[0]))
+    right_size = int(np.prod(task.input_shapes[1]))
+    left = ((np.arange(left_size, dtype=np.float64).reshape(task.input_shapes[0]) % 31.0) - 15.0) / 31.0
+    right = ((np.arange(right_size, dtype=np.float64).reshape(task.input_shapes[1]) % 29.0) - 14.0) / 29.0
+    return (
+        TensorValue(TensorSpec(task.input_tensor_ids[0], task.left_labels, task.input_shapes[0], "dense", dtype="float64"), left),
+        TensorValue(TensorSpec(task.input_tensor_ids[1], task.right_labels, task.input_shapes[1], "dense", dtype="float64"), right),
+    )
+
+
 def _synthetic_preparation(task: ContractionTask, probe: SimplePimProbeResult):
     left, right = _task_tensors(task)
+    return prepare_dense_task(DenseTaskPreparationInput(task=task, left_tensor=left, right_tensor=right, simplepim_probe=probe))
+
+
+def _real_synthetic_preparation(task: ContractionTask, probe: SimplePimProbeResult):
+    left, right = _real_task_tensors(task)
     return prepare_dense_task(DenseTaskPreparationInput(task=task, left_tensor=left, right_tensor=right, simplepim_probe=probe))
 
 
@@ -287,14 +305,17 @@ def test_unavailable_simplepim_is_nonfatal_for_mock_bridge(tmp_path: Path) -> No
     assert result.error is None
 
 
-def test_tiled_preparation_is_rejected_before_bridge_input(tmp_path: Path) -> None:
+def test_tiled_preparation_can_be_serialized_but_generic_bridge_remains_ineligible(tmp_path: Path) -> None:
     preparation = _synthetic_preparation(_dense_task("large", 256, 256, 256), _available_probe())
     assert preparation.status == "requires_executable_tiling_not_implemented"
 
-    with pytest.raises(ValueError, match="executable tiling is not implemented"):
-        write_dense_bridge_input_manifest(preparation, tmp_path)
+    manifest = write_dense_bridge_input_manifest(preparation, tmp_path)
+    eligible, reason = dense_bridge_backend_manifest_eligibility(preparation, "mock_numpy_dequantized")
 
-    assert not (tmp_path / "input_manifest.json").exists()
+    assert manifest.preparation_status == "requires_executable_tiling_not_implemented"
+    assert eligible is False
+    assert reason == "requires_tiling_not_implemented"
+    assert (tmp_path / "input_manifest.json").exists()
 
 
 def test_backend_registry_identities_are_json_safe() -> None:
@@ -732,6 +753,39 @@ def test_upmem_sdk_simulator_backend_rejects_invalid_max_dim(tmp_path: Path) -> 
     assert result.reason == "unsupported_shape_for_initial_backend"
 
 
+def test_upmem_sdk_simulator_l2_real_preparation_is_backend_bridgeable(tmp_path: Path) -> None:
+    task = _dense_task("synthetic_l2_square", 96, 96, 96)
+    preparation = _real_synthetic_preparation(task, _unavailable_probe())
+    generic_eligible, generic_reason = dense_bridge_backend_manifest_eligibility(preparation, "mock_numpy_dequantized")
+    upmem_eligible, upmem_reason = dense_bridge_backend_manifest_eligibility(preparation, "upmem_sdk_simulator_dense")
+    l2_plan = plan_l2_tiled_execution(task.gemm_m, task.gemm_k, task.gemm_n)
+
+    assert preparation.status == "requires_executable_tiling_not_implemented"
+    assert l2_plan.supported is True
+    assert generic_eligible is False
+    assert generic_reason == "requires_tiling_not_implemented"
+    assert upmem_eligible is True
+    assert upmem_reason is None
+
+    manifest = write_dense_bridge_input_manifest(preparation, tmp_path)
+    payload = manifest.to_json_dict()
+
+    assert payload["metadata"]["execution_class_hint"] == "L2_SINGLE_DPU_MRAM"
+    assert payload["metadata"]["kernel_strategy_hint"] == "l2_single_dpu_mram_wram_tiled_v1"
+    assert payload["tile_plan"]["requires_tiling"] is True
+    assert (tmp_path / "input_manifest.json").exists()
+
+
+def test_upmem_sdk_simulator_l2_complex_preparation_is_explicitly_rejected() -> None:
+    task = _dense_task("synthetic_l2_complex", 96, 96, 96)
+    preparation = _synthetic_preparation(task, _unavailable_probe())
+    eligible, reason = dense_bridge_backend_manifest_eligibility(preparation, "upmem_sdk_simulator_dense")
+
+    assert preparation.status == "requires_executable_tiling_not_implemented"
+    assert eligible is False
+    assert reason == "complex_l2_not_implemented"
+
+
 def test_upmem_sdk_simulator_backend_rejects_escaping_operand_path_before_launch(tmp_path: Path, monkeypatch) -> None:
     def forbidden_subprocess(*args: object, **kwargs: object) -> object:
         raise AssertionError("escaping operand path must fail before runner launch")
@@ -896,19 +950,42 @@ def test_upmem_sdk_runner_real_and_split_complex_scaling_helpers() -> None:
     np.testing.assert_allclose(split_output, np.array([[2.0 + 2.5j]]))
 
 
-def test_upmem_sdk_native_dense_uses_explicit_padded_strides() -> None:
+def test_upmem_sdk_runner_l2_plan_and_hardware_reject_helpers() -> None:
+    runner = _load_upmem_runner_module()
+    plan = runner._plan_l2_tiled_execution(96, 96, 96, {})
+    bad_env = {"UPMEM_DENSE_L2_NATIVE_MAX_DIM": "not-an-int", "UPMEM_DENSE_L2_MAX_HOST_BLOB_BYTES": "-5"}
+
+    assert plan["supported"] is True
+    assert plan["execution_class"] == "L2_SINGLE_DPU_MRAM"
+    assert plan["kernel_strategy"] == "l2_single_dpu_mram_wram_tiled_v1"
+    assert plan["estimated_wram_bytes_per_tile"] <= plan["effective_wram_bytes"]
+    assert runner._l2_native_max_dim_from_env(bad_env) == 512
+    assert runner._l2_max_host_blob_bytes_from_env(bad_env) == 16 * 1024 * 1024
+
+
+def test_upmem_sdk_native_dense_uses_l1_padded_and_l2_tiled_strategies() -> None:
     native_dir = ROOT / "native" / "upmem" / "simplepim" / "upmem_sdk_dense"
     common = (native_dir / "common.h").read_text(encoding="utf-8")
     host = (native_dir / "host.c").read_text(encoding="utf-8")
     dpu = (native_dir / "dpu.c").read_text(encoding="utf-8")
 
+    assert "UPMEM_DENSE_STRATEGY_L1" in common
+    assert "UPMEM_DENSE_STRATEGY_L2" in common
+    assert "UPMEM_DENSE_L2_MAX_DIM" in common
+    assert "UPMEM_DENSE_L2_TILE_MAX_DIM" in common
     assert "uint32_t a_stride;" in common
     assert "uint32_t b_stride;" in common
     assert "uint32_t c_stride;" in common
     assert "UPMEM_DENSE_MAX_DIM" in host
-    assert "local_a[i * a_stride + p]" in dpu
-    assert "local_b[p * b_stride + j]" in dpu
-    assert "local_c[i * c_stride + j]" in dpu
+    assert "usage L2" in host
+    assert "run_l1_direct" in dpu
+    assert "run_l2_tiled" in dpu
+    assert "local_l1_a[i * a_stride + p]" in dpu
+    assert "local_l1_b[p * b_stride + j]" in dpu
+    assert "local_l1_c[i * c_stride + j]" in dpu
+    assert "local_tile_acc" in dpu
+    assert "local_tile_acc[i * tile_n + j] = 0" in dpu
+    assert "mram_resident" not in dpu
 
 
 def test_malformed_manifest_fails_before_simplepim_backend_status(tmp_path: Path) -> None:

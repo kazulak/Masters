@@ -16,8 +16,30 @@ DENSE_BRIDGE_SCHEMA_VERSION = "dense_bridge_v1"
 DENSE_BRIDGE_ID = "upmem_dense_bridge_v1"
 BACKEND_ID = "upmem_sdk_simulator_dense"
 DEFAULT_MAX_DIM = 16
+DEFAULT_L2_NATIVE_MAX_DIM = 512
+DEFAULT_L2_MAX_HOST_BLOB_BYTES = 16 * 1024 * 1024
+DEFAULT_L2_EFFECTIVE_WRAM_BYTES = 60 * 1024
+DEFAULT_L2_ALIGNMENT_RESERVE_BYTES = 2048
 DEFAULT_TIMEOUT_SECONDS = 30.0
 SNIPPET_LIMIT = 2000
+EXECUTION_CLASS_L1 = "L1_WRAM"
+EXECUTION_CLASS_L2 = "L2_SINGLE_DPU_MRAM"
+KERNEL_STRATEGY_L1 = "l1_padded_direct_v1"
+KERNEL_STRATEGY_L2 = "l2_single_dpu_mram_wram_tiled_v1"
+L2_TILE_CANDIDATES = (
+    (64, 64, 64),
+    (64, 32, 64),
+    (32, 64, 64),
+    (32, 32, 64),
+    (32, 32, 32),
+    (16, 32, 64),
+    (32, 16, 64),
+    (16, 16, 64),
+    (16, 16, 32),
+    (8, 16, 32),
+    (16, 8, 32),
+    (8, 8, 32),
+)
 
 
 def main() -> int:
@@ -37,7 +59,7 @@ def main() -> int:
     manifest: dict[str, Any] | None = None
     try:
         manifest = _load_manifest(input_path)
-        prepared = _prepare_inputs(manifest, bridge_dir)
+        prepared = _prepare_inputs(manifest, bridge_dir, os.environ)
         max_dim = _max_dim_from_env(os.environ)
         if max_dim is None:
             _write_output_manifest(
@@ -54,7 +76,7 @@ def main() -> int:
                 error_type="unsupported_shape_for_initial_backend",
                 external_command_executed=True,
                 execution_implemented=False,
-                metadata_extra=_base_metadata(args.target, False),
+                metadata_extra=_base_metadata(args.target, False, prepared if "prepared" in locals() else None),
             )
             return 0
         shape_reason = _shape_limit_reason(prepared, max_dim)
@@ -73,7 +95,7 @@ def main() -> int:
                 error_type="unsupported_shape_for_initial_backend",
                 external_command_executed=True,
                 execution_implemented=False,
-                metadata_extra={**_base_metadata(args.target, False), "max_dim": max_dim},
+                metadata_extra={**_base_metadata(args.target, False, prepared), "max_dim": max_dim},
             )
             return 0
         if args.target == "hardware":
@@ -91,7 +113,7 @@ def main() -> int:
                 error_type=None,
                 external_command_executed=True,
                 execution_implemented=False,
-                metadata_extra={**_base_metadata(args.target, False), "max_dim": max_dim},
+                metadata_extra={**_base_metadata(args.target, False, prepared), "max_dim": max_dim},
             )
             return 0
 
@@ -112,7 +134,7 @@ def main() -> int:
                 error_type=None,
                 external_command_executed=True,
                 execution_implemented=False,
-                metadata_extra={**_base_metadata(args.target, False), "missing_tools": missing_tools, "max_dim": max_dim},
+                metadata_extra={**_base_metadata(args.target, False, prepared), "missing_tools": missing_tools, "max_dim": max_dim},
             )
             return 0
 
@@ -142,13 +164,14 @@ def main() -> int:
                 error_type="runner_build_failed",
                 external_command_executed=True,
                 execution_implemented=True,
-                metadata_extra={**_base_metadata(args.target, False), "max_dim": max_dim},
+                metadata_extra={**_base_metadata(args.target, False, prepared), "max_dim": max_dim},
             )
             return 1
 
         build_started = time.perf_counter()
+        l2_native_max_dim = int(prepared.get("l2_native_max_dim", DEFAULT_L2_NATIVE_MAX_DIM))
         build = _run_command(
-            ("make", f"MAX_DIM={max_dim}"),
+            ("make", f"MAX_DIM={max_dim}", f"L2_MAX_DIM={l2_native_max_dim}"),
             cwd=build_dir,
             env={**os.environ, "DPU_BACKEND": "simulator"},
             timeout_seconds=args.timeout_seconds,
@@ -170,8 +193,9 @@ def main() -> int:
                 external_command_executed=True,
                 execution_implemented=True,
                 metadata_extra={
-                    **_base_metadata(args.target, False),
+                    **_base_metadata(args.target, False, prepared),
                     "max_dim": max_dim,
+                    "l2_native_max_dim": l2_native_max_dim,
                     "build_time_s": build_time_s,
                     "build": build,
                 },
@@ -189,6 +213,7 @@ def main() -> int:
                 outputs_dir=raw_outputs_dir,
                 max_dim=max_dim,
                 timeout_seconds=args.timeout_seconds,
+                execution_class=str(prepared["execution_class"]),
             )
             command_records.append(record)
             if record["status"] != "passed":
@@ -207,8 +232,9 @@ def main() -> int:
                     external_command_executed=True,
                     execution_implemented=True,
                     metadata_extra={
-                        **_base_metadata(args.target, True),
+                        **_base_metadata(args.target, True, prepared),
                         "max_dim": max_dim,
+                        "l2_native_max_dim": l2_native_max_dim,
                         "build_time_s": build_time_s,
                         "simulator_run_time_s": time.perf_counter() - run_started,
                         "build": build,
@@ -251,8 +277,9 @@ def main() -> int:
             external_command_executed=True,
             execution_implemented=True,
             metadata_extra={
-                **_base_metadata(args.target, True),
+                **_base_metadata(args.target, True, prepared),
                 "max_dim": max_dim,
+                "l2_native_max_dim": l2_native_max_dim,
                 "kernel_invocation_count": len(prepared["components"]),
                 "complex_execution_mode": prepared["mode"],
                 "build_time_s": build_time_s,
@@ -319,12 +346,9 @@ def _load_manifest(path: Path) -> dict[str, Any]:
     return payload
 
 
-def _prepare_inputs(manifest: dict[str, Any], bridge_dir: Path) -> dict[str, Any]:
+def _prepare_inputs(manifest: dict[str, Any], bridge_dir: Path, env: Mapping[str, str]) -> dict[str, Any]:
     tile_plan = manifest.get("tile_plan") or {}
-    if tile_plan.get("requires_tiling"):
-        raise UnsupportedInput("unsupported_tiled_gemm", "Executable tiling is not implemented")
-    if tile_plan.get("requires_host_aggregation"):
-        raise UnsupportedInput("unsupported_tiled_gemm", "Host aggregation is not implemented")
+    requires_tiling = bool(tile_plan.get("requires_tiling"))
 
     left_meta = dict(manifest["operands"]["left"])
     right_meta = dict(manifest["operands"]["right"])
@@ -349,6 +373,16 @@ def _prepare_inputs(manifest: dict[str, Any], bridge_dir: Path) -> dict[str, Any
     if left_rep == "real" and right_rep == "real":
         if tuple(left.shape) != (m, k) or tuple(right.shape) != (k, n):
             raise UnsupportedInput("unsupported_shape", "Real operand shapes do not match GEMM dimensions")
+        if requires_tiling:
+            l2_plan = _plan_l2_tiled_execution(m, k, n, env)
+            if not l2_plan["supported"]:
+                raise UnsupportedInput(str(l2_plan["reason"] or "unsupported_l2_tile_plan"), "L2 tiled simulator backend does not support this GEMM shape")
+            execution_class = EXECUTION_CLASS_L2
+            kernel_strategy = KERNEL_STRATEGY_L2
+        else:
+            l2_plan = None
+            execution_class = EXECUTION_CLASS_L1
+            kernel_strategy = KERNEL_STRATEGY_L1
         components = (
             {
                 "name": "real",
@@ -356,6 +390,7 @@ def _prepare_inputs(manifest: dict[str, Any], bridge_dir: Path) -> dict[str, Any
                 "right": right.astype(np.int8, copy=False),
                 "left_scale": float(left_deq["scale"]),
                 "right_scale": float(right_deq["scale"]),
+                "l2_plan": l2_plan,
             },
         )
         return {
@@ -363,10 +398,16 @@ def _prepare_inputs(manifest: dict[str, Any], bridge_dir: Path) -> dict[str, Any
             "m": m,
             "k": k,
             "n": n,
+            "execution_class": execution_class,
+            "kernel_strategy": kernel_strategy,
+            "l2_plan": l2_plan,
+            "l2_native_max_dim": _l2_native_max_dim_from_env(env),
             "components": components,
             "expected": expected,
         }
     if left_rep == "split_complex_real_imag" and right_rep == "split_complex_real_imag":
+        if requires_tiling:
+            raise UnsupportedInput("complex_l2_not_implemented", "L2 tiled simulator backend supports real-valued operands only")
         if tuple(left.shape) != (m, k, 2) or tuple(right.shape) != (k, n, 2):
             raise UnsupportedInput("unsupported_complex_layout", "Split-complex operand shapes do not match GEMM dimensions")
         left_scale = float(left_deq["scale"])
@@ -382,6 +423,10 @@ def _prepare_inputs(manifest: dict[str, Any], bridge_dir: Path) -> dict[str, Any
             "m": m,
             "k": k,
             "n": n,
+            "execution_class": EXECUTION_CLASS_L1,
+            "kernel_strategy": KERNEL_STRATEGY_L1,
+            "l2_plan": None,
+            "l2_native_max_dim": _l2_native_max_dim_from_env(env),
             "components": components,
             "expected": expected,
         }
@@ -392,6 +437,8 @@ def _shape_limit_reason(prepared: dict[str, Any], max_dim: int) -> str | None:
     dims = (int(prepared["m"]), int(prepared["k"]), int(prepared["n"]))
     if any(dim <= 0 for dim in dims):
         return f"Invalid GEMM dimensions: {dims}"
+    if prepared.get("execution_class") == EXECUTION_CLASS_L2:
+        return None
     if any(dim > max_dim for dim in dims):
         return f"GEMM dimensions {dims} exceed initial backend max dim {max_dim}"
     return None
@@ -408,6 +455,95 @@ def _max_dim_from_env(env: Mapping[str, str]) -> int | None:
     if value <= 0:
         return None
     return value
+
+
+def _l2_native_max_dim_from_env(env: Mapping[str, str]) -> int:
+    return _positive_int_env(env, "UPMEM_DENSE_L2_NATIVE_MAX_DIM", DEFAULT_L2_NATIVE_MAX_DIM)
+
+
+def _l2_max_host_blob_bytes_from_env(env: Mapping[str, str]) -> int:
+    return _positive_int_env(env, "UPMEM_DENSE_L2_MAX_HOST_BLOB_BYTES", DEFAULT_L2_MAX_HOST_BLOB_BYTES)
+
+
+def _positive_int_env(env: Mapping[str, str], key: str, default: int) -> int:
+    raw = env.get(key)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _plan_l2_tiled_execution(m: int, k: int, n: int, env: Mapping[str, str]) -> dict[str, Any]:
+    m = int(m)
+    k = int(k)
+    n = int(n)
+    native_max_dim = _l2_native_max_dim_from_env(env)
+    max_host_blob_bytes = _l2_max_host_blob_bytes_from_env(env)
+    a_bytes = m * k
+    b_bytes = k * n
+    c_bytes = m * n * 4
+    c_accumulator_bytes = m * n * 4
+    total_mram_bytes = a_bytes + b_bytes + c_bytes
+    conservative_full_task_bytes = total_mram_bytes + c_accumulator_bytes
+    host_blob_bytes = a_bytes + b_bytes + (m * n * 8)
+    base = {
+        "execution_class": EXECUTION_CLASS_L2,
+        "kernel_strategy": KERNEL_STRATEGY_L2,
+        "gemm_m": m,
+        "gemm_k": k,
+        "gemm_n": n,
+        "effective_wram_bytes": DEFAULT_L2_EFFECTIVE_WRAM_BYTES,
+        "mram_bytes_a": a_bytes,
+        "mram_bytes_b": b_bytes,
+        "mram_bytes_c": c_bytes,
+        "total_mram_bytes": total_mram_bytes,
+        "conservative_full_task_bytes": conservative_full_task_bytes,
+        "max_l2_host_blob_bytes": max_host_blob_bytes,
+        "host_blob_bytes": host_blob_bytes,
+        "native_max_dim": native_max_dim,
+        "mram_resident_operands": True,
+        "wram_tiled": True,
+    }
+    if min(m, k, n) <= 0 or max(m, k, n) > native_max_dim or any(dim % 8 != 0 for dim in (m, k, n)):
+        return {**base, "supported": False, "reason": "unsupported_l2_native_shape_limit"}
+    if conservative_full_task_bytes <= DEFAULT_L2_EFFECTIVE_WRAM_BYTES:
+        return {**base, "supported": False, "reason": "not_l2_wram_resident"}
+    if host_blob_bytes > max_host_blob_bytes:
+        return {**base, "supported": False, "reason": "unsupported_l2_blob_size"}
+    for candidate_m, candidate_k, candidate_n in L2_TILE_CANDIDATES:
+        tile_m = min(candidate_m, m)
+        tile_k = min(candidate_k, k)
+        tile_n = min(candidate_n, n)
+        a_tile = tile_m * tile_k
+        b_tile = tile_k * tile_n
+        accumulator_tile = tile_m * tile_n * 4
+        scratch = 0
+        wram_bytes = a_tile + b_tile + accumulator_tile + scratch + DEFAULT_L2_ALIGNMENT_RESERVE_BYTES
+        if wram_bytes > DEFAULT_L2_EFFECTIVE_WRAM_BYTES:
+            continue
+        output_tile_count = int(np.ceil(m / tile_m) * np.ceil(n / tile_n))
+        k_tile_count = int(np.ceil(k / tile_k))
+        return {
+            **base,
+            "supported": True,
+            "reason": None,
+            "tile_m": tile_m,
+            "tile_k": tile_k,
+            "tile_n": tile_n,
+            "output_tile_count": output_tile_count,
+            "k_tile_count": k_tile_count,
+            "total_tile_steps": output_tile_count * k_tile_count,
+            "input_a_tile_bytes": a_tile,
+            "input_b_tile_bytes": b_tile,
+            "accumulator_tile_bytes": accumulator_tile,
+            "local_output_scratch_bytes": scratch,
+            "alignment_padding_bytes": DEFAULT_L2_ALIGNMENT_RESERVE_BYTES,
+            "estimated_wram_bytes_per_tile": wram_bytes,
+        }
+    return {**base, "supported": False, "reason": "unsupported_l2_tile_plan"}
 
 
 def _required_tools(env: Mapping[str, str]) -> dict[str, str | None]:
@@ -441,29 +577,58 @@ def _run_component(
     outputs_dir: Path,
     max_dim: int,
     timeout_seconds: float,
+    execution_class: str,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     left_path = inputs_dir / f"{item['name']}_left_i8.bin"
     right_path = inputs_dir / f"{item['name']}_right_i8.bin"
     out_path = outputs_dir / f"{item['name']}_out_i32.bin"
     m, k = item["left"].shape
     _, n = item["right"].shape
-    _write_padded_i8(left_path, item["left"], max_dim)
-    _write_padded_i8(right_path, item["right"], max_dim)
-    command = (
-        "./bin/host",
-        "bin/dpu_dense",
-        str(int(m)),
-        str(int(k)),
-        str(int(n)),
-        _relative_path(left_path, build_dir),
-        _relative_path(right_path, build_dir),
-        _relative_path(out_path, build_dir),
-    )
+    if execution_class == EXECUTION_CLASS_L2:
+        plan = dict(item.get("l2_plan") or {})
+        _write_exact_i8(left_path, item["left"])
+        _write_exact_i8(right_path, item["right"])
+        command = (
+            "./bin/host",
+            "bin/dpu_dense",
+            "l2",
+            str(int(m)),
+            str(int(k)),
+            str(int(n)),
+            str(int(plan["tile_m"])),
+            str(int(plan["tile_k"])),
+            str(int(plan["tile_n"])),
+            _relative_path(left_path, build_dir),
+            _relative_path(right_path, build_dir),
+            _relative_path(out_path, build_dir),
+        )
+        output_count = int(m) * int(n)
+        output_shape = (int(m), int(n))
+    else:
+        _write_padded_i8(left_path, item["left"], max_dim)
+        _write_padded_i8(right_path, item["right"], max_dim)
+        command = (
+            "./bin/host",
+            "bin/dpu_dense",
+            str(int(m)),
+            str(int(k)),
+            str(int(n)),
+            _relative_path(left_path, build_dir),
+            _relative_path(right_path, build_dir),
+            _relative_path(out_path, build_dir),
+        )
+        output_count = max_dim * max_dim
+        output_shape = (max_dim, max_dim)
     record = _run_command(command, cwd=build_dir, env={**os.environ, "DPU_BACKEND": "simulator"}, timeout_seconds=timeout_seconds)
     if record["status"] != "passed":
         return np.zeros((int(m), int(n)), dtype=np.int32), record
-    output = np.fromfile(out_path, dtype="<i4", count=max_dim * max_dim).reshape((max_dim, max_dim))[: int(m), : int(n)]
+    output = np.fromfile(out_path, dtype="<i4", count=output_count).reshape(output_shape)[: int(m), : int(n)]
     return output.astype(np.int32, copy=False), record
+
+
+def _write_exact_i8(path: Path, array: np.ndarray) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.asarray(array, dtype=np.int8).astype(np.int8, copy=False).tofile(path)
 
 
 def _write_padded_i8(path: Path, array: np.ndarray, max_dim: int) -> None:
@@ -615,20 +780,50 @@ def _write_output_manifest(
     path.write_text(json.dumps(_jsonable(payload), indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _base_metadata(target: str, dpu_executed: bool) -> dict[str, Any]:
-    return {
+def _base_metadata(target: str, dpu_executed: bool, prepared: dict[str, Any] | None = None) -> dict[str, Any]:
+    execution_class = str((prepared or {}).get("execution_class") or EXECUTION_CLASS_L1)
+    kernel_strategy = str((prepared or {}).get("kernel_strategy") or KERNEL_STRATEGY_L1)
+    l2_plan = dict((prepared or {}).get("l2_plan") or {})
+    metadata: dict[str, Any] = {
         "backend_family": "upmem_sdk",
         "simplepim_api_used": False,
         "simplepim_bridge_lane": True,
         "target": target,
-        "native_buffer_layout": "row_major_padded",
-        "native_buffer_stride": "max_dim",
-        "stride_model": "explicit_padded_stride_v1",
+        "execution_class": execution_class,
+        "kernel_strategy": kernel_strategy,
+        "native_buffer_layout": "row_major" if execution_class == EXECUTION_CLASS_L2 else "row_major_padded",
+        "native_buffer_stride": "dynamic_gemm_n" if execution_class == EXECUTION_CLASS_L2 else "max_dim",
+        "stride_model": "row_major_dynamic_stride_v1" if execution_class == EXECUTION_CLASS_L2 else "explicit_padded_stride_v1",
+        "native_int32_output_dtype": "<i4",
+        "mram_resident_operands": execution_class == EXECUTION_CLASS_L2,
+        "wram_tiled": execution_class == EXECUTION_CLASS_L2,
         "upmem_dpu_program_executed": dpu_executed,
         "simulator_kernel_executed": dpu_executed and target == "simulator",
         "hardware_kernel_executed": False,
         "bringup_timing_note": "Collected timings are bring-up timings, not final performance evidence.",
     }
+    if l2_plan:
+        metadata["l2_tile_plan"] = {
+            key: l2_plan.get(key)
+            for key in (
+                "tile_m",
+                "tile_k",
+                "tile_n",
+                "output_tile_count",
+                "k_tile_count",
+                "total_tile_steps",
+                "estimated_wram_bytes_per_tile",
+                "effective_wram_bytes",
+                "mram_bytes_a",
+                "mram_bytes_b",
+                "mram_bytes_c",
+                "total_mram_bytes",
+                "host_blob_bytes",
+                "max_l2_host_blob_bytes",
+                "native_max_dim",
+            )
+        }
+    return metadata
 
 
 def _blob_payload(path: Path, bridge_dir: Path, array: np.ndarray, manifest: dict[str, Any], mode: str) -> dict[str, Any]:

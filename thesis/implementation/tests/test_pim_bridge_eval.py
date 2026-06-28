@@ -221,6 +221,32 @@ validation: {}
     assert len(payload["rows"]) == case_summary["analyzed_task_count"]
 
 
+def test_pim_bridge_eval_synthetic_l2_quick_suite_is_dry_run_ready(tmp_path: Path, monkeypatch) -> None:
+    def forbidden_execute(*args: object, **kwargs: object) -> object:
+        raise AssertionError("dry-run L2 pim-bridge-eval must not execute dense bridge backend")
+
+    monkeypatch.setattr(pim_eval_module, "capture_environment", lambda root_dir: {})
+    monkeypatch.setattr(pim_eval_module, "execute_dense_bridge", forbidden_execute)
+
+    run_dir = run_pim_bridge_eval(
+        tmp_path,
+        suite_path=ROOT / "configs" / "suites" / "pim_l2_tiled_quick.yml",
+        dry_run=True,
+        env={},
+        output_plots=False,
+    )
+    payload = _load_payload(run_dir)
+    rows = payload["rows"]
+
+    assert len(payload["case_summaries"]) == 3
+    assert len(rows) == 3
+    assert all(row["readiness_status"] == "dry_run_ready" for row in rows)
+    assert all(row["bridge_manifest_eligible"] is True for row in rows)
+    assert all(row["requires_tiling"] is True for row in rows)
+    assert all(row["external_command_executed"] is False for row in rows)
+    assert payload["metadata"]["suite_routes_ignored"] is True
+
+
 def test_pim_bridge_eval_cli_validation_rules() -> None:
     with pytest.raises(ValueError, match="bell_2q"):
         validate_cli_options(

@@ -14,8 +14,12 @@ from quantum_bench.routing import DenseTaskPreparationInput, prepare_dense_task
 from quantum_bench.targets.upmem import (
     SimplePimProbeResult,
     annotate_task_graph_with_upmem_estimates,
+    build_synthetic_pressure_task_graph,
+    dense_bridge_backend_manifest_eligibility,
     execute_dense_bridge,
     probe_simplepim,
+    synthetic_pressure_initial_tensors,
+    synthetic_pressure_manifest,
     write_dense_bridge_input_manifest,
 )
 from quantum_bench.tn import (
@@ -33,6 +37,11 @@ DenseTaskBridgeStatus = Literal["completed", "skipped", "unsupported", "failed"]
 DenseTaskBridgeMaterializationMode = Literal["initial-only", "cpu-replay"]
 _BRIDGEABLE_PREPARATION_STATUSES = {"prepared", "simplepim_unavailable"}
 _SUCCESSFUL_BRIDGE_STATUSES = {"mock_executed", "upmem_sdk_simulator_executed"}
+_SYNTHETIC_L2_CASES: dict[str, tuple[int, int, int]] = {
+    "synthetic_l2_square": (96, 96, 96),
+    "synthetic_l2_rect": (128, 128, 64),
+    "synthetic_l2_kheavy": (72, 512, 32),
+}
 
 
 @dataclass(frozen=True)
@@ -73,11 +82,12 @@ def run_dense_task_bridge(
     write_json(run_dir / "environment.json", capture_environment(root_dir))
 
     try:
-        circuit = _build_builtin_circuit(case, n_qubits)
-        network = build_tensor_network(circuit)
-        graph = plan_task_graph(network)
+        bundle = _build_bridge_case(case, n_qubits)
+        circuit = bundle["circuit"]
+        graph = bundle["graph"]
         graph, _ = annotate_task_graph_with_upmem_estimates(graph)
-        initial_tensors = {tensor.spec.id: tensor for tensor in network.tensors}
+        initial_tensors = bundle["initial_tensors"]
+        circuit_payload = bundle["manifest"]
         probe = probe_simplepim(env=env) if env is not None else probe_simplepim()
 
         if materialization not in {"initial-only", "cpu-replay"}:
@@ -85,7 +95,7 @@ def run_dense_task_bridge(
                 status="unsupported",
                 reason="unsupported_materialization_mode",
                 case_id=circuit.name,
-                circuit_payload=manifest(circuit),
+                circuit_payload=circuit_payload,
                 task_index=task_index,
                 task=None,
                 backend=backend,
@@ -103,14 +113,14 @@ def run_dense_task_bridge(
         if materialization == "cpu-replay" and task_index is not None:
             selection = _select_task_by_index(graph.tasks, task_index)
         else:
-            selection = _select_task(graph.tasks, initial_tensors, task_index, probe)
+            selection = _select_task(graph.tasks, initial_tensors, task_index, probe, backend)
         if selection["status"] != "selected":
             task = selection.get("task")
             summary = _base_summary(
                 status=selection["harness_status"],
                 reason=selection["reason"],
                 case_id=circuit.name,
-                circuit_payload=manifest(circuit),
+                circuit_payload=circuit_payload,
                 task_index=selection.get("task_index"),
                 task=task,
                 backend=backend,
@@ -144,7 +154,7 @@ def run_dense_task_bridge(
                     status="failed" if materialization_result.status == "failed" else "unsupported",
                     reason=materialization_result.reason,
                     case_id=circuit.name,
-                    circuit_payload=manifest(circuit),
+                    circuit_payload=circuit_payload,
                     task_index=selected_index,
                     task=task,
                     backend=backend,
@@ -158,7 +168,7 @@ def run_dense_task_bridge(
                     status="failed",
                     reason="materialized_inputs_missing",
                     case_id=circuit.name,
-                    circuit_payload=manifest(circuit),
+                    circuit_payload=circuit_payload,
                     task_index=selected_index,
                     task=task,
                     backend=backend,
@@ -183,13 +193,13 @@ def run_dense_task_bridge(
                 reason=None,
             )
             preparation = selection.get("preparation") or _prepare_task(task, initial_tensors, probe)
-        if not _is_bridgeable_preparation(preparation):
+        if not _is_bridgeable_preparation(preparation, backend):
             status, reason = _preparation_status(preparation)
             summary = _base_summary(
                 status=status,
                 reason=reason,
                 case_id=circuit.name,
-                circuit_payload=manifest(circuit),
+                circuit_payload=circuit_payload,
                 task_index=selected_index,
                 task=task,
                 backend=backend,
@@ -213,7 +223,7 @@ def run_dense_task_bridge(
             status=status,
             reason=reason,
             case_id=circuit.name,
-            circuit_payload=manifest(circuit),
+            circuit_payload=circuit_payload,
             task_index=selected_index,
             task=task,
             backend=backend,
@@ -252,6 +262,52 @@ def run_dense_task_bridge(
         return _result_from_summary(run_dir, summary_path, summary)
 
 
+def _build_bridge_case(case: str, n_qubits: int | None) -> JsonDict:
+    if case in _SYNTHETIC_L2_CASES:
+        if n_qubits not in {None, 0}:
+            raise ValueError(f"{case} is a synthetic pressure workload and does not accept --n-qubits")
+        graph = build_synthetic_pressure_task_graph(_synthetic_l2_case_payload(case))
+        return {
+            "circuit": graph.network.circuit,
+            "graph": graph,
+            "initial_tensors": synthetic_pressure_initial_tensors(graph),
+            "manifest": synthetic_pressure_manifest(graph),
+        }
+
+    circuit = _build_builtin_circuit(case, n_qubits)
+    network = build_tensor_network(circuit)
+    graph = plan_task_graph(network)
+    return {
+        "circuit": circuit,
+        "graph": graph,
+        "initial_tensors": {tensor.spec.id: tensor for tensor in network.tensors},
+        "manifest": manifest(circuit),
+    }
+
+
+def _synthetic_l2_case_payload(case: str) -> JsonDict:
+    gemm_m, gemm_k, gemm_n = _SYNTHETIC_L2_CASES[case]
+    return {
+        "case_id": case,
+        "workload_id": case,
+        "metadata": {
+            "workload_type": "synthetic_pressure",
+            "execution_scope": "model_only",
+            "not_real_quantum_circuit": True,
+            "developer_bridge_payload": True,
+        },
+        "circuit": {
+            "kind": "synthetic_pressure",
+            "name": case,
+            "profile": "single_gemm",
+            "task_count": 1,
+            "gemm_m": gemm_m,
+            "gemm_k": gemm_k,
+            "gemm_n": gemm_n,
+        },
+    }
+
+
 def _build_builtin_circuit(case: str, n_qubits: int | None):
     if case.lower() == "bell_2q" and n_qubits not in {None, 2}:
         raise ValueError("bell_2q only supports --n-qubits 2")
@@ -266,6 +322,7 @@ def _select_task(
     initial_tensors: dict[str, object],
     task_index: int | None,
     probe: SimplePimProbeResult,
+    backend: str,
 ) -> JsonDict:
     if task_index is not None:
         if task_index < 0 or task_index >= len(tasks):
@@ -289,7 +346,7 @@ def _select_task(
     for index, task in enumerate(tasks):
         if _inputs_available(task, initial_tensors):
             preparation = _prepare_task(task, initial_tensors, probe)
-            if _is_bridgeable_preparation(preparation):
+            if _is_bridgeable_preparation(preparation, backend):
                 return {"status": "selected", "task": task, "task_index": index, "preparation": preparation}
     return {
         "status": "not_selected",
@@ -341,14 +398,9 @@ def _prepare_task_from_tensors(
     )
 
 
-def _is_bridgeable_preparation(preparation: object) -> bool:
-    return (
-        preparation.status in _BRIDGEABLE_PREPARATION_STATUSES
-        and preparation.prepared_operands is not None
-        and preparation.tile_plan is not None
-        and preparation.tile_plan.get("requires_tiling") is not True
-        and preparation.tile_plan.get("requires_host_aggregation") is not True
-    )
+def _is_bridgeable_preparation(preparation: object, backend: str) -> bool:
+    eligible, _ = dense_bridge_backend_manifest_eligibility(preparation, backend)
+    return eligible
 
 
 def _preparation_status(preparation: object) -> tuple[DenseTaskBridgeStatus, str]:

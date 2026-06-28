@@ -123,19 +123,27 @@ auditable.
 ## UPMEM SDK Simulator Dense Backend
 
 `upmem_sdk_simulator_dense` is the first real PIM-backed dense bridge backend.
-It is explicit and simulator-only:
+It is explicit and simulator-only. The backend ID is a developer bridge backend,
+not a normal benchmark route; the final UPMEM route category remains the unified
+`upmem_tn_runtime`.
 
 ```bash
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 0 --backend upmem_sdk_simulator_dense --execute-external
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case synthetic_l2_square --task-index 0 --backend upmem_sdk_simulator_dense --execute-external
 ```
 
 The backend consumes the existing dense bridge manifest, runs a minimal UPMEM
 SDK DPU GEMM program through the simulator, writes
 `outputs/upmem_sdk_simulator_output.npy`, and validates against
-`references/expected_dequantized_output.npy`. It is not a normal suite route,
-does not run hardware, does not implement tiling, and does not make dense output
-authoritative in the shadow runtime. Any timings it records are bring-up
-timings, not performance evidence.
+`references/expected_dequantized_output.npy`. It currently supports:
+
+- `L1_WRAM`: task-level simulator dense bridge subset with padded direct GEMM;
+- `L2_SINGLE_DPU_MRAM`: task-level simulator real-valued dense bridge subset
+  with one-DPU MRAM operands and WRAM-resident output tiles.
+
+It does not run hardware, does not implement L3 multi-DPU execution, and does
+not make dense output authoritative in the shadow runtime. Any timings it
+records are bring-up timings, not performance evidence.
 
 ## PIM Bridge Evaluation
 
@@ -146,11 +154,15 @@ execution over larger workload suites:
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-bridge-eval --suite configs/suites/pim_bridge_eval_quick.yml --dry-run
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-bridge-eval --suite configs/suites/pim_bridge_eval_quick.yml --backend upmem_sdk_simulator_dense --execute-external --max-executed-tasks-per-case 2
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-bridge-eval --suite configs/suites/pim_bridge_eval_quick.yml --backend upmem_sdk_simulator_dense --execute-external --max-executed-tasks-per-case 2 --debug-failures --compare-mock-on-failure
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-bridge-eval --suite configs/suites/pim_l2_tiled_quick.yml --dry-run
 ```
 
 Run external simulator execution on the quick suite first. The extended
 `configs/suites/pim_bridge_eval.yml` suite should be run as dry-run before
-attempting simulator execution. The command writes JSON, CSV, Markdown, and
+attempting simulator execution. `configs/suites/pim_l2_tiled_quick.yml` is a
+developer-only synthetic pressure suite for L2 bring-up; normal benchmark runs
+must not execute it as a real quantum circuit suite. The command writes JSON,
+CSV, Markdown, and
 optional matplotlib plot artifacts under `runs/`. It reports support, blockers,
 validation metrics, and bring-up timings per task; it does not make the dense
 backend authoritative for the full circuit.

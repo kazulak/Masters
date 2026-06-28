@@ -18,8 +18,14 @@ from quantum_bench.routing import DenseTaskPreparationInput, prepare_dense_task
 from quantum_bench.targets.upmem import (
     UPMEM_DENSE_ESTIMATE_KEY,
     annotate_task_graph_with_upmem_estimates,
+    build_synthetic_pressure_task_graph,
+    dense_bridge_backend_manifest_eligibility,
     dense_bridge_manifest_eligibility,
     execute_dense_bridge,
+    is_synthetic_pressure_case,
+    synthetic_pressure_initial_tensors,
+    synthetic_pressure_manifest,
+    plan_l2_tiled_execution,
     probe_simplepim,
     write_dense_bridge_validation_diagnostics,
     write_dense_bridge_input_manifest,
@@ -326,19 +332,31 @@ def _evaluate_case(
     compare_mock_on_failure: bool,
     env: Mapping[str, str],
 ) -> tuple[list[JsonDict], JsonDict]:
-    circuit = case_payload.pop("_preloaded_circuit", None)
-    if circuit is None:
-        circuit = load_circuit(case_payload, root_dir)
-    network = build_tensor_network(circuit)
-    graph = plan_task_graph_with_config(network, planner_config)
-    graph, _ = annotate_task_graph_with_upmem_estimates(graph)
-    graph = with_path_cost_summary(graph)
-    initial_tensors = {tensor.spec.id: tensor for tensor in network.tensors}
+    case_payload = dict(case_payload)
+    synthetic_case = is_synthetic_pressure_case(case_payload)
+    if is_synthetic_pressure_case(case_payload):
+        graph = build_synthetic_pressure_task_graph(case_payload)
+        circuit = graph.network.circuit
+        graph, _ = annotate_task_graph_with_upmem_estimates(graph)
+        graph = with_path_cost_summary(graph)
+        initial_tensors = {}
+        circuit_payload = synthetic_pressure_manifest(graph)
+    else:
+        circuit = case_payload.pop("_preloaded_circuit", None)
+        if circuit is None:
+            circuit = load_circuit(case_payload, root_dir)
+        network = build_tensor_network(circuit)
+        graph = plan_task_graph_with_config(network, planner_config)
+        graph, _ = annotate_task_graph_with_upmem_estimates(graph)
+        graph = with_path_cost_summary(graph)
+        initial_tensors = {tensor.spec.id: tensor for tensor in network.tensors}
+        circuit_payload = manifest(circuit)
     case_id = str(case_payload["case_id"])
     workload_id = str(case_payload.get("workload_id", case_id))
     circuit_family = str(case_payload.get("circuit", {}).get("name", circuit.name))
-    circuit_payload = manifest(circuit)
     selected_indices = _selected_task_indices(graph, task_selection, max_tasks_per_case)
+    if synthetic_case and selected_indices:
+        initial_tensors = synthetic_pressure_initial_tensors(graph)
     rows: list[JsonDict] = []
     execution_attempts = 0
     found_supported = False
@@ -418,11 +436,16 @@ def _cheap_estimate_candidate(task: Any) -> bool:
     estimate = task.target_estimates.get(UPMEM_DENSE_ESTIMATE_KEY, {})
     if not isinstance(estimate, dict) or not estimate.get("supported", False):
         return False
-    if estimate.get("requires_tiling", False):
+    gemm_m = int(getattr(task, "gemm_m", 0) or 0)
+    gemm_k = int(getattr(task, "gemm_k", 0) or 0)
+    gemm_n = int(getattr(task, "gemm_n", 0) or 0)
+    if min(gemm_m, gemm_k, gemm_n) <= 0:
         return False
+    if estimate.get("requires_tiling", False):
+        return plan_l2_tiled_execution(gemm_m, gemm_k, gemm_n).supported
     if estimate.get("requires_host_aggregation", False):
         return False
-    return int(getattr(task, "gemm_m", 0) or 0) > 0 and int(getattr(task, "gemm_k", 0) or 0) > 0 and int(getattr(task, "gemm_n", 0) or 0) > 0
+    return True
 
 
 def _base_task_row(
@@ -445,7 +468,7 @@ def _base_task_row(
     if not isinstance(tile_plan, dict):
         tile_plan = {}
     prep_payload = preparation.to_json_dict() if preparation is not None else {}
-    bridge_manifest_eligible, bridge_reason = dense_bridge_manifest_eligibility(preparation)
+    bridge_manifest_eligible, bridge_reason = dense_bridge_backend_manifest_eligibility(preparation, backend)
     blocker = _blocker_reason(materialization, preparation, estimate, bridge_manifest_eligible, bridge_reason)
     readiness_status = "dry_run_ready" if bridge_manifest_eligible and dry_run else ("executable" if bridge_manifest_eligible else "unsupported")
     conversion_records = prep_payload.get("conversion_records") if isinstance(prep_payload, dict) else None

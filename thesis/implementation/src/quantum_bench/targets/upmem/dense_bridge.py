@@ -16,6 +16,15 @@ from quantum_bench.core.jsonio import write_json
 from quantum_bench.core.records import JsonDict, to_jsonable
 from quantum_bench.formats import conversion_error_metrics
 from quantum_bench.targets.upmem.simplepim import probe_simplepim
+from quantum_bench.targets.upmem.tile_plan import (
+    UPMEM_EXECUTION_CLASS_L1_WRAM,
+    UPMEM_EXECUTION_CLASS_L2_SINGLE_DPU_MRAM,
+    UPMEM_L1_KERNEL_STRATEGY,
+    UPMEM_L2_KERNEL_STRATEGY,
+    UPMEM_L2_MAX_HOST_BLOB_BYTES,
+    UPMEM_L2_NATIVE_MAX_DIM,
+    plan_l2_tiled_execution,
+)
 
 if TYPE_CHECKING:
     from quantum_bench.routing.dense_prepare import DenseTaskPreparationResult
@@ -215,6 +224,7 @@ def write_dense_bridge_input_manifest(
 
     left_conversion = to_jsonable(preparation_result.left_conversion)
     right_conversion = to_jsonable(preparation_result.right_conversion)
+    requires_tiling = bool((preparation_result.tile_plan or {}).get("requires_tiling"))
     manifest = DenseBridgeInputManifest(
         schema_version=DENSE_BRIDGE_SCHEMA_VERSION,
         bridge_id=DENSE_BRIDGE_ID,
@@ -274,6 +284,8 @@ def write_dense_bridge_input_manifest(
             "complex_kernel_mapping_implemented": False,
             "mock_backend_available": True,
             "simplepim_or_native_execution_implemented": False,
+            "execution_class_hint": UPMEM_EXECUTION_CLASS_L2_SINGLE_DPU_MRAM if requires_tiling else UPMEM_EXECUTION_CLASS_L1_WRAM,
+            "kernel_strategy_hint": UPMEM_L2_KERNEL_STRATEGY if requires_tiling else UPMEM_L1_KERNEL_STRATEGY,
         },
     )
     write_json(bridge_dir / "input_manifest.json", manifest)
@@ -303,6 +315,50 @@ def dense_bridge_manifest_eligibility(preparation_result: object | None) -> tupl
     if getattr(preparation_result, "left_matrix_shape", None) is None or getattr(preparation_result, "right_matrix_shape", None) is None:
         return False, "matrix_shapes_missing"
     return True, None
+
+
+def dense_bridge_backend_manifest_eligibility(
+    preparation_result: object | None,
+    backend: str,
+) -> tuple[bool, str | None]:
+    if backend != "upmem_sdk_simulator_dense":
+        return dense_bridge_manifest_eligibility(preparation_result)
+    common = _backend_manifest_common_rejection(preparation_result)
+    if common is not None:
+        return False, common
+    status = getattr(preparation_result, "status", None)
+    tile_plan = getattr(preparation_result, "tile_plan", None)
+    tile_plan = tile_plan if isinstance(tile_plan, dict) else {}
+    if status in {"prepared", "simplepim_unavailable"} and tile_plan.get("requires_tiling") is not True:
+        return True, None
+    if status != "requires_executable_tiling_not_implemented" or tile_plan.get("requires_tiling") is not True:
+        return False, f"non_bridgeable_preparation_status:{status}"
+    left_conversion = to_jsonable(getattr(preparation_result, "left_conversion", None))
+    right_conversion = to_jsonable(getattr(preparation_result, "right_conversion", None))
+    if left_conversion.get("representation") != "real" or right_conversion.get("representation") != "real":
+        return False, "complex_l2_not_implemented"
+    l2_plan = plan_l2_tiled_execution(
+        int(getattr(preparation_result, "gemm_m", 0) or 0),
+        int(getattr(preparation_result, "gemm_k", 0) or 0),
+        int(getattr(preparation_result, "gemm_n", 0) or 0),
+    )
+    if not l2_plan.supported:
+        return False, str(l2_plan.reason or "unsupported_l2_tile_plan")
+    return True, None
+
+
+def _backend_manifest_common_rejection(preparation_result: object | None) -> str | None:
+    if preparation_result is None:
+        return "dense_preparation_missing"
+    if getattr(preparation_result, "prepared_operands", None) is None:
+        return "prepared_operands_missing"
+    if getattr(preparation_result, "tile_plan", None) is None:
+        return "tile_plan_missing"
+    if getattr(preparation_result, "left_conversion", None) is None or getattr(preparation_result, "right_conversion", None) is None:
+        return "conversion_records_missing"
+    if getattr(preparation_result, "left_matrix_shape", None) is None or getattr(preparation_result, "right_matrix_shape", None) is None:
+        return "matrix_shapes_missing"
+    return None
 
 
 def read_dense_bridge_input_manifest(path: Path) -> DenseBridgeInputManifest:
@@ -352,8 +408,8 @@ def dense_bridge_backend_registry() -> dict[str, DenseBridgeBackendIdentity]:
             external_command_capable=True,
             implemented=True,
             description=(
-                "Executes one non-tiled dense bridge GEMM through the UPMEM SDK simulator. "
-                "This is not a SimplePIM API GEMM primitive."
+                "Executes task-level L1 direct and L2 WRAM-tiled dense bridge GEMMs "
+                "through the UPMEM SDK simulator subset. This is not a SimplePIM API GEMM primitive."
             ),
         ),
     }
@@ -1606,9 +1662,23 @@ def _upmem_sdk_simulator_invocation_metadata(
         "expected_output_manifest_path": "output_manifest.json",
         "expected_output_blob_path": "outputs/upmem_sdk_simulator_output.npy",
         "target": "simulator",
-        "environment_keys": ("UPMEM_HOME", "UPMEM_DENSE_SIM_MAX_DIM", "UPMEM_DENSE_SIM_TIMEOUT_SECONDS"),
+        "environment_keys": (
+            "UPMEM_HOME",
+            "UPMEM_DENSE_SIM_MAX_DIM",
+            "UPMEM_DENSE_SIM_TIMEOUT_SECONDS",
+            "UPMEM_DENSE_L2_MAX_HOST_BLOB_BYTES",
+            "UPMEM_DENSE_L2_NATIVE_MAX_DIM",
+        ),
         "configured_environment_keys": tuple(
-            key for key in ("UPMEM_HOME", "UPMEM_DENSE_SIM_MAX_DIM", "UPMEM_DENSE_SIM_TIMEOUT_SECONDS") if environment.get(key)
+            key
+            for key in (
+                "UPMEM_HOME",
+                "UPMEM_DENSE_SIM_MAX_DIM",
+                "UPMEM_DENSE_SIM_TIMEOUT_SECONDS",
+                "UPMEM_DENSE_L2_MAX_HOST_BLOB_BYTES",
+                "UPMEM_DENSE_L2_NATIVE_MAX_DIM",
+            )
+            if environment.get(key)
         ),
         "blob_format": "npy",
         "native_buffer_layout": "row_major_padded",
@@ -1674,22 +1744,13 @@ def _upmem_sdk_simulator_static_rejection(
     env: Mapping[str, str] | None,
 ) -> tuple[str, str] | None:
     tile_plan = manifest.tile_plan or {}
-    if tile_plan.get("requires_tiling") or tile_plan.get("requires_host_aggregation"):
-        return ("unsupported_tiled_gemm", "Executable tiling and host aggregation are not implemented for this backend")
-
     left_deq = dict(manifest.dequantization.get("left", {}))
     right_deq = dict(manifest.dequantization.get("right", {}))
     if left_deq.get("route_dtype") != "int8" or right_deq.get("route_dtype") != "int8":
         return ("unsupported_dtype", "UPMEM SDK simulator dense backend supports int8 operands only")
-
-    max_dim = _upmem_sdk_simulator_max_dim(env)
-    if max_dim is None:
-        return ("unsupported_shape_for_initial_backend", "Invalid UPMEM_DENSE_SIM_MAX_DIM; expected a positive integer")
     dims = (manifest.gemm_m, manifest.gemm_k, manifest.gemm_n)
     if any(dim <= 0 for dim in dims):
         return ("unsupported_shape", f"Invalid GEMM dimensions: {dims}")
-    if any(dim > max_dim for dim in dims):
-        return ("unsupported_shape_for_initial_backend", f"GEMM dimensions {dims} exceed initial backend max dim {max_dim}")
 
     left_meta = dict(manifest.operands.get("left", {}))
     right_meta = dict(manifest.operands.get("right", {}))
@@ -1700,12 +1761,32 @@ def _upmem_sdk_simulator_static_rejection(
     if left_rep == "real" and right_rep == "real":
         if left_shape != (manifest.gemm_m, manifest.gemm_k) or right_shape != (manifest.gemm_k, manifest.gemm_n):
             return ("unsupported_shape", "Real operand shapes do not match GEMM dimensions")
-        return None
-    if left_rep == "split_complex_real_imag" and right_rep == "split_complex_real_imag":
+    elif left_rep == "split_complex_real_imag" and right_rep == "split_complex_real_imag":
         if left_shape != (manifest.gemm_m, manifest.gemm_k, 2) or right_shape != (manifest.gemm_k, manifest.gemm_n, 2):
             return ("unsupported_complex_layout", "Split-complex operand shapes do not match GEMM dimensions")
+    else:
+        return ("unsupported_complex_layout", f"Unsupported operand representations: {left_rep}, {right_rep}")
+
+    if tile_plan.get("requires_tiling"):
+        if left_rep != "real" or right_rep != "real":
+            return ("complex_l2_not_implemented", "L2 tiled simulator backend supports real-valued operands only")
+        l2_plan = plan_l2_tiled_execution(
+            manifest.gemm_m,
+            manifest.gemm_k,
+            manifest.gemm_n,
+            max_l2_host_blob_bytes=_upmem_sdk_l2_max_host_blob_bytes(env),
+            native_max_dim=_upmem_sdk_l2_native_max_dim(env),
+        )
+        if not l2_plan.supported:
+            return (str(l2_plan.reason or "unsupported_l2_tile_plan"), "L2 tiled simulator backend does not support this GEMM shape")
         return None
-    return ("unsupported_complex_layout", f"Unsupported operand representations: {left_rep}, {right_rep}")
+
+    max_dim = _upmem_sdk_simulator_max_dim(env)
+    if max_dim is None:
+        return ("unsupported_shape_for_initial_backend", "Invalid UPMEM_DENSE_SIM_MAX_DIM; expected a positive integer")
+    if any(dim > max_dim for dim in dims):
+        return ("unsupported_shape_for_initial_backend", f"GEMM dimensions {dims} exceed initial backend max dim {max_dim}")
+    return None
 
 
 def _upmem_sdk_simulator_max_dim(env: Mapping[str, str] | None) -> int | None:
@@ -1720,6 +1801,27 @@ def _upmem_sdk_simulator_max_dim(env: Mapping[str, str] | None) -> int | None:
     if value <= 0:
         return None
     return value
+
+
+def _upmem_sdk_l2_max_host_blob_bytes(env: Mapping[str, str] | None) -> int:
+    environment = env if env is not None else os.environ
+    return _positive_int_env(environment, "UPMEM_DENSE_L2_MAX_HOST_BLOB_BYTES", UPMEM_L2_MAX_HOST_BLOB_BYTES)
+
+
+def _upmem_sdk_l2_native_max_dim(env: Mapping[str, str] | None) -> int:
+    environment = env if env is not None else os.environ
+    return _positive_int_env(environment, "UPMEM_DENSE_L2_NATIVE_MAX_DIM", UPMEM_L2_NATIVE_MAX_DIM)
+
+
+def _positive_int_env(env: Mapping[str, str], key: str, default: int) -> int:
+    raw = env.get(key)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
 
 
 def _bounded_snippet(value: str | None, limit: int = 2000) -> str:
@@ -1751,16 +1853,19 @@ def _validate_preparation_result(preparation_result: "DenseTaskPreparationResult
     if preparation_result.prepared_operands is None:
         raise ValueError("prepared_operands are required for dense bridge input")
     tile_plan = preparation_result.tile_plan or {}
-    if tile_plan.get("requires_tiling"):
-        raise ValueError("Dense bridge input requires a non-tiled task; executable tiling is not implemented")
-    if tile_plan.get("requires_host_aggregation"):
-        raise ValueError("Dense bridge input requires no host aggregation; split-K aggregation is not implemented")
-    if preparation_result.status not in {"prepared", "simplepim_unavailable"}:
+    if preparation_result.status not in {"prepared", "simplepim_unavailable", "requires_executable_tiling_not_implemented"}:
         raise ValueError(f"Preparation status {preparation_result.status!r} cannot be bridged")
+    if tile_plan.get("requires_tiling") and preparation_result.status != "requires_executable_tiling_not_implemented":
+        raise ValueError("Tiled dense bridge input must use requires_executable_tiling_not_implemented preparation status")
     if preparation_result.left_conversion is None or preparation_result.right_conversion is None:
         raise ValueError("Fixed-point conversion records are required for dense bridge input")
     if preparation_result.left_matrix_shape is None or preparation_result.right_matrix_shape is None:
         raise ValueError("Matrix shapes are required for dense bridge input")
+    if tile_plan.get("requires_tiling"):
+        operands = preparation_result.prepared_operands
+        host_blob_bytes = int(operands.left_quantized.nbytes + operands.right_quantized.nbytes + operands.dequantized_output.nbytes)
+        if host_blob_bytes > UPMEM_L2_MAX_HOST_BLOB_BYTES:
+            raise ValueError("unsupported_l2_blob_size")
 
 
 def _input_manifest_from_payload(payload: JsonDict) -> DenseBridgeInputManifest:

@@ -365,6 +365,61 @@ def test_dense_task_bridge_cli_accepts_upmem_sdk_simulator_backend_only_with_exe
         raise AssertionError("upmem_sdk_simulator_dense must require --execute-external")
 
 
+def test_dense_task_bridge_supports_synthetic_l2_developer_case(tmp_path: Path, monkeypatch) -> None:
+    def fake_execute(input_manifest_path: Path, **kwargs: object) -> SimpleNamespace:
+        manifest = json.loads(input_manifest_path.read_text(encoding="utf-8"))
+        assert kwargs["backend"] == "upmem_sdk_simulator_dense"
+        assert manifest["metadata"]["execution_class_hint"] == "L2_SINGLE_DPU_MRAM"
+        assert manifest["metadata"]["kernel_strategy_hint"] == "l2_single_dpu_mram_wram_tiled_v1"
+        assert manifest["tile_plan"]["requires_tiling"] is True
+        return SimpleNamespace(
+            execution_status="upmem_sdk_simulator_executed",
+            reason="upmem_sdk_simulator_executed",
+            error=None,
+            error_type=None,
+            output_manifest_path=Path("output_manifest.json"),
+            output_blob_path=Path("outputs/fake.npy"),
+            output_manifest=SimpleNamespace(
+                metadata={
+                    "backend_family": "upmem_sdk",
+                    "execution_class": "L2_SINGLE_DPU_MRAM",
+                    "kernel_strategy": "l2_single_dpu_mram_wram_tiled_v1",
+                    "simulator_kernel_executed": True,
+                    "hardware_kernel_executed": False,
+                },
+                validation_metrics={"passed": True, "max_abs_error": 0.0},
+            ),
+            external_command_executed=True,
+            execution_implemented=True,
+            metadata={
+                "backend_family": "upmem_sdk",
+                "execution_class": "L2_SINGLE_DPU_MRAM",
+                "simulator_kernel_executed": True,
+                "hardware_kernel_executed": False,
+            },
+        )
+
+    monkeypatch.setattr(dense_task_bridge_module, "execute_dense_bridge", fake_execute)
+
+    result = run_dense_task_bridge(
+        tmp_path,
+        case="synthetic_l2_square",
+        task_index=0,
+        backend="upmem_sdk_simulator_dense",
+        execute_external=True,
+        env={},
+    )
+    summary = _load_summary(result.summary_path)
+
+    assert result.status == "completed"
+    assert summary["case_id"] == "synthetic_l2_square"
+    assert summary["workload"]["not_real_quantum_circuit"] is True
+    assert summary["preparation"]["status"] == "requires_executable_tiling_not_implemented"
+    assert summary["tile_plan"]["requires_tiling"] is True
+    assert summary["bridge_execution_status"] == "upmem_sdk_simulator_executed"
+    assert summary["metadata"]["bridge_manifest_written"] is True
+
+
 def test_dense_task_bridge_harness_does_not_reference_subprocess() -> None:
     source = inspect.getsource(dense_task_bridge_module)
 

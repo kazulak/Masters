@@ -88,26 +88,38 @@ bridge/runner_work/
 ```
 
 The runner builds and executes inside `runner_work`; it must not mutate this
-repository's native source tree. The native buffer contract is padded row-major
-int8 inputs and padded row-major little-endian int32 output with shapes taken
-from the validated manifest/config. Host code writes `max_dim x max_dim`
-buffers, passes explicit `a_stride`, `b_stride`, and `c_stride` values to the
-DPU, and the DPU indexes A, B, and C using those padded strides. This is
-required for non-square GEMM shapes.
+repository's native source tree. For `L1_WRAM`, the native buffer contract is
+padded row-major int8 inputs and padded row-major little-endian int32 output
+with shapes taken from the validated manifest/config. Host code writes
+`max_dim x max_dim` buffers, passes explicit `a_stride`, `b_stride`, and
+`c_stride` values to the DPU, and the DPU indexes A, B, and C using those
+padded strides. This is required for non-square GEMM shapes.
+
+For `L2_SINGLE_DPU_MRAM`, the same runner uses exact row-major int8 MRAM
+operand buffers and row-major little-endian int32 C output. The DPU keeps one
+output tile accumulator in WRAM, loops over all K tiles, then writes the C tile
+to MRAM once. This is an internal UPMEM execution class of the future unified
+runtime, not a separate final route.
 
 The supported bring-up command is:
 
 ```bash
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 0 --backend upmem_sdk_simulator_dense --execute-external
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case synthetic_l2_square --task-index 0 --backend upmem_sdk_simulator_dense --execute-external
 ```
 
 This path:
 
-- requires non-tiled GEMM with no host aggregation;
+- supports the task-level `L1_WRAM` padded direct subset;
+- supports the task-level `L2_SINGLE_DPU_MRAM` real-valued single-DPU
+  MRAM/WRAM tiled subset;
 - supports int8 operands only in this wave;
 - uses a conservative default max dimension of 16, configurable by
-  `UPMEM_DENSE_SIM_MAX_DIM`;
-- supports real GEMM and unambiguous split-complex real/imag layout;
+  `UPMEM_DENSE_SIM_MAX_DIM`, for L1;
+- uses `UPMEM_DENSE_L2_NATIVE_MAX_DIM` and
+  `UPMEM_DENSE_L2_MAX_HOST_BLOB_BYTES` for the L2 developer subset;
+- supports real GEMM and unambiguous split-complex real/imag layout for L1;
+- rejects complex L2 with `complex_l2_not_implemented`;
 - runs with `DPU_BACKEND=simulator`;
 - writes `outputs/upmem_sdk_simulator_output.npy`;
 - validates against `references/expected_dequantized_output.npy`.
@@ -118,8 +130,12 @@ Metadata explicitly reports:
 - `simplepim_api_used: false`
 - `simplepim_bridge_lane: true`
 - `target: simulator`
-- `native_buffer_layout: row_major_padded`
-- `stride_model: explicit_padded_stride_v1`
+- `execution_class: L1_WRAM` or `L2_SINGLE_DPU_MRAM`
+- `kernel_strategy: l1_padded_direct_v1` or
+  `l2_single_dpu_mram_wram_tiled_v1`
+- `native_buffer_layout: row_major_padded` for L1 or `row_major` for L2
+- `stride_model: explicit_padded_stride_v1` for L1 or
+  `row_major_dynamic_stride_v1` for L2
 - `upmem_dpu_program_executed: true`
 - `simulator_kernel_executed: true`
 - `hardware_kernel_executed: false`

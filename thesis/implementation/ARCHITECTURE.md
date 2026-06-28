@@ -179,6 +179,7 @@ The first real simulator-backed dense contraction backend is
 
 ```bash
 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 0 --backend upmem_sdk_simulator_dense --execute-external
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case synthetic_l2_square --task-index 0 --backend upmem_sdk_simulator_dense --execute-external
 ```
 
 This backend is in the UPMEM/SimplePIM bridge lane but uses UPMEM SDK C/DPU
@@ -189,7 +190,16 @@ writes `outputs/upmem_sdk_simulator_output.npy`, and validates against
 execution from hardware: `target=simulator`,
 `upmem_dpu_program_executed=true`, `simulator_kernel_executed=true`,
 `hardware_kernel_executed=false`, and `simplepim_api_used=false`. It is
-non-tiled, simulator-only, and records bring-up timings only.
+simulator-only and records bring-up timings only. The supported internal UPMEM
+execution classes are scoped:
+
+- `L1_WRAM`: task-level simulator dense bridge subset with padded direct GEMM;
+- `L2_SINGLE_DPU_MRAM`: task-level simulator real-valued dense bridge subset
+  with one-DPU MRAM operands and WRAM-resident output tiles.
+
+`upmem_sdk_simulator_dense` is a developer bridge backend ID, not a final
+benchmark/provider route. Final reports still expose UPMEM as one unified
+`upmem_tn_runtime` category, with L1/L2/L3 as internal scheduler classes.
 
 The PIM bridge evaluation harness is developer-only thesis evidence generation:
 
@@ -210,6 +220,12 @@ comparison work. The UPMEM SDK dense runner uses padded row-major buffers with
 explicit DPU-side strides, and `pim-bridge-eval --debug-failures` can write
 diagnostics comparing simulator output, direct Python int8/int32 reconstruction,
 and optional mock bridge output.
+
+Wave 2E.6 adds the first L2 single-DPU MRAM/WRAM tiled simulator subset. L2
+uses the same dense bridge manifest path, but the native runner selects
+`execution_class=L2_SINGLE_DPU_MRAM` and
+`kernel_strategy=l2_single_dpu_mram_wram_tiled_v1`. Complex L2, hardware L2,
+L3 distributed GEMM, and full routed UPMEM execution remain future work.
 
 The PIM frontier analyzer is also developer-only and does not execute PIM code:
 
@@ -360,10 +376,10 @@ tile tasks.
    once task routes begin preparing tensors.
 2. Use `upmem-env-check --run-sample --target simulator` to verify the local
    SimplePIM/UPMEM toolchain before real backend work.
-3. Use `upmem_sdk_simulator_dense` to validate one real non-tiled TaskGraph
-   contraction through the UPMEM simulator.
-4. Extend the current `targets/upmem/` tile-plan model from deterministic host
-   records to executable tiling choices.
+3. Use `upmem_sdk_simulator_dense` to validate L1 direct and L2 real-valued
+   tiled TaskGraph contractions through the UPMEM simulator.
+4. Extend the L2 tiled subset beyond the current one-DPU real-valued developer
+   bridge cases, then prepare L3 distributed execution modeling/bring-up.
 5. Connect `routing/` from analysis-only route decisions to a preparation and
    execution-aware task router.
 6. Port the useful dense UPMEM kernel only after the task schedule and WRAM model

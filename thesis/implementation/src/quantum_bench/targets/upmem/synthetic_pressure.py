@@ -3,7 +3,19 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from quantum_bench.core.records import CircuitSpec, ContractionTask, JsonDict, PathSummary, TaskGraph, TensorNetworkSpec
+import numpy as np
+
+from quantum_bench.core.records import (
+    CircuitSpec,
+    ContractionTask,
+    JsonDict,
+    PathSummary,
+    TaskGraph,
+    TensorNetworkSpec,
+    TensorSpec,
+    TensorValue,
+)
+from quantum_bench.targets.upmem.tile_plan import UPMEM_L2_MAX_HOST_BLOB_BYTES
 from quantum_bench.targets.upmem.schedule import UPMEM_DENSE_ESTIMATE_KEY, estimate_dense_task
 from quantum_bench.tn.task_graph import with_path_cost_summary
 
@@ -86,6 +98,41 @@ def synthetic_pressure_manifest(graph: TaskGraph) -> JsonDict:
         "execution_scope": metadata.get("execution_scope", "model_only"),
         "not_real_quantum_circuit": metadata.get("not_real_quantum_circuit", True),
     }
+
+
+def synthetic_pressure_initial_tensors(
+    graph: TaskGraph,
+    *,
+    max_host_blob_bytes: int = UPMEM_L2_MAX_HOST_BLOB_BYTES,
+) -> dict[str, TensorValue]:
+    """Materialize deterministic real-valued tensors for developer bridge tests.
+
+    Synthetic pressure graphs intentionally carry no ndarray payloads in normal
+    analysis. This helper is explicit and bounded so developer harnesses can
+    prepare small L2 bring-up tasks without letting synthetic workloads enter
+    normal provider execution.
+    """
+
+    specs: dict[str, TensorSpec] = {}
+    produced = {task.output_tensor_id for task in graph.tasks}
+    for task in graph.tasks:
+        left_id, right_id = task.input_tensor_ids
+        if left_id not in produced:
+            _add_initial_spec(specs, left_id, task.left_labels, task.input_shapes[0])
+        if right_id not in produced:
+            _add_initial_spec(specs, right_id, task.right_labels, task.input_shapes[1])
+
+    total_bytes = sum(int(np.prod(spec.shape, dtype=np.int64)) * np.dtype(np.float64).itemsize for spec in specs.values())
+    if total_bytes > max_host_blob_bytes:
+        raise ValueError(
+            f"synthetic_pressure initial tensor payload would be {total_bytes} bytes, "
+            f"exceeding max_host_blob_bytes={max_host_blob_bytes}"
+        )
+
+    tensors: dict[str, TensorValue] = {}
+    for index, (tensor_id, spec) in enumerate(sorted(specs.items())):
+        tensors[tensor_id] = TensorValue(spec=spec, array=_deterministic_real_array(spec.shape, seed=index))
+    return tensors
 
 
 def _tasks_from_payload(circuit_payload: JsonDict) -> list[ContractionTask]:
@@ -188,6 +235,33 @@ def _dense_task(
         estimated_flops=int(8 * gemm_m * gemm_k * gemm_n),
         estimated_bytes=int(gemm_m * gemm_k * 16 + gemm_k * gemm_n * 16 + gemm_m * gemm_n * 16),
     )
+
+
+def _add_initial_spec(
+    specs: dict[str, TensorSpec],
+    tensor_id: str,
+    labels: tuple[int, ...],
+    shape: tuple[int, ...],
+) -> None:
+    existing = specs.get(tensor_id)
+    candidate = TensorSpec(
+        id=tensor_id,
+        labels=tuple(int(label) for label in labels),
+        shape=tuple(int(dim) for dim in shape),
+        structure="dense",
+        dtype="float64",
+    )
+    if existing is not None:
+        if existing.labels != candidate.labels or existing.shape != candidate.shape:
+            raise ValueError(f"Inconsistent synthetic_pressure initial tensor shape for {tensor_id}")
+        return
+    specs[tensor_id] = candidate
+
+
+def _deterministic_real_array(shape: tuple[int, ...], *, seed: int) -> np.ndarray:
+    size = int(np.prod(shape, dtype=np.int64))
+    values = np.arange(size, dtype=np.float64).reshape(shape)
+    return (((values + seed * 17.0) % 31.0) - 15.0) / 31.0
 
 
 def _annotate_task(task: ContractionTask) -> ContractionTask:

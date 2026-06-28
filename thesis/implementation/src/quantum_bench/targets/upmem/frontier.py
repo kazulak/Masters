@@ -7,7 +7,7 @@ from typing import Any
 
 from quantum_bench.core.records import ContractionTask, JsonDict, TaskGraph
 from quantum_bench.targets.upmem.schedule import UPMEM_DENSE_ESTIMATE_KEY
-from quantum_bench.targets.upmem.tile_plan import DENSE_INT8_FORMAT
+from quantum_bench.targets.upmem.tile_plan import DENSE_INT8_FORMAT, plan_l2_tiled_execution
 
 
 PIM_FRONTIER_ANALYSIS_SCHEMA_VERSION = "pim_frontier_analysis_v1"
@@ -303,12 +303,32 @@ def analyze_task(task: ContractionTask, task_index: int, resource_model: UpmemRe
     requires_tiling = bool(estimate.get("requires_tiling", False))
     requires_host_aggregation = bool(estimate.get("requires_host_aggregation", tile_plan.get("requires_host_aggregation", False)))
     tiling_implemented = bool(estimate.get("tiling_implemented", False))
+    l2_plan = (
+        plan_l2_tiled_execution(
+            task.gemm_m,
+            task.gemm_k,
+            task.gemm_n,
+            effective_wram_bytes=model.effective_wram_bytes,
+            per_dpu_mram_bytes=model.per_dpu_mram_bytes,
+        )
+        if dense_lowerable and memory_level == MEMORY_LEVEL_L2_SINGLE_DPU_MRAM
+        else None
+    )
     current_backend_executable = bool(
         backend_supported
         and dense_lowerable
-        and memory_level == MEMORY_LEVEL_L1_WRAM
-        and not requires_tiling
-        and not requires_host_aggregation
+        and (
+            (
+                memory_level == MEMORY_LEVEL_L1_WRAM
+                and not requires_tiling
+                and not requires_host_aggregation
+            )
+            or (
+                memory_level == MEMORY_LEVEL_L2_SINGLE_DPU_MRAM
+                and l2_plan is not None
+                and l2_plan.supported
+            )
+        )
     )
     current_backend_reason = _current_backend_reason(
         dense_lowerable=dense_lowerable,
@@ -317,6 +337,8 @@ def analyze_task(task: ContractionTask, task_index: int, resource_model: UpmemRe
         requires_host_aggregation=requires_host_aggregation,
         memory_level=memory_level,
         memory_reason=memory_reason,
+        l2_executable=bool(l2_plan.supported) if l2_plan is not None else False,
+        l2_reason=l2_plan.reason if l2_plan is not None else None,
     )
     estimated_total_tiles = int(estimate.get("estimated_tile_count", tile_plan.get("total_tile_count", 1 if dense_lowerable else 0)) or 0)
     estimated_output_tiles = int(tile_plan.get("tile_count_m", 1 if dense_lowerable else 0) or 0) * int(tile_plan.get("tile_count_n", 1 if dense_lowerable else 0) or 0)
@@ -437,11 +459,15 @@ def _current_backend_reason(
     requires_host_aggregation: bool,
     memory_level: str,
     memory_reason: str | None,
+    l2_executable: bool,
+    l2_reason: str | None,
 ) -> str | None:
     if not dense_lowerable:
         return memory_reason
     if not backend_supported:
         return "unsupported_dense_estimate"
+    if memory_level == MEMORY_LEVEL_L2_SINGLE_DPU_MRAM:
+        return None if l2_executable else (l2_reason or "l2_tiled_backend_not_executable")
     if requires_tiling:
         return "requires_tiling_not_executable_backend"
     if requires_host_aggregation:
