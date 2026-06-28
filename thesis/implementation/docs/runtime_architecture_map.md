@@ -50,6 +50,7 @@ only bounded local tasks that fit an explicit route contract.
 | PIM memory/frontier analysis | `src/quantum_bench/targets/upmem/frontier.py`, `src/quantum_bench/bench/pim_frontier_analysis.py` | Modeled memory-level and TaskGraph frontier analyzer | Use L1/L2/L3/L4 and inter/intra/hybrid parallelism evidence to choose L2 tiling, L3 distribution, or path-frontier work |
 | Synthetic pressure workloads | `src/quantum_bench/targets/upmem/synthetic_pressure.py`, `configs/suites/pim_frontier_pressure*.yml` | Analysis-only TaskGraph-compatible records; no tensor arrays | Expose L2/L3/L4 pressure boundaries without entering normal benchmark execution |
 | Benchmark matrix report | `src/quantum_bench/bench/benchmark_matrix_report.py`, `configs/benchmark_matrix.yml` | Thesis benchmark-matrix and pressure-report scaffold | Keep UPMEM as one top-level runtime while reporting L1/L2/L3/L4 as internal execution classes |
+| External PIM library feasibility | `src/quantum_bench/targets/upmem/external_libs.py`, `src/quantum_bench/bench/upmem_external_libs_check.py` | Evidence-only SimplePIM/PID-Comm/native-SDK candidate report | Decide whether L1/L2 compute should stay native SDK, move to SimplePIM, or support both, and whether L3 communication should use PID-Comm or native host-mediated fallback |
 | WRAM slicer | `src/quantum_bench/targets/upmem/tile_plan.py`, `src/quantum_bench/targets/upmem/schedule.py` | Deterministic dense WRAM tile-plan records | Turn tile plans into executable preparation only after route execution is introduced |
 | Data format conversion | `src/quantum_bench/formats/` | Deterministic host-side fixed-point records and utilities used by explicit dense preparation | Connect conversion records to route execution artifacts after routing gains execution |
 | Dynamic heuristic router | `src/quantum_bench/routing/` | Analysis-only task-level router skeleton | Add preparation/execution-aware routing after data conversion and tiling mature |
@@ -326,6 +327,49 @@ runs/<timestamp>_upmem_env_check/
 Configured homes and tool paths may be absolute because they describe the local
 machine. Run artifact paths, sample workspaces, and copied sample locations are
 relative to the run directory.
+
+## External PIM Library Feasibility
+
+`src/quantum_bench/targets/upmem/external_libs.py` and
+`src/quantum_bench/bench/upmem_external_libs_check.py` record the feasibility
+boundary for external PIM libraries without executing them:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-external-libs-check
+```
+
+The report classifies implementation candidates inside the unified
+`upmem_tn_runtime`:
+
+- native UPMEM SDK is the current L1/L2 control baseline and fallback;
+- SimplePIM is an internal L1/L2 compute candidate;
+- PID-Comm is an internal L3 communication candidate;
+- native host-mediated communication remains an L3 fallback candidate.
+
+SimplePIM and PID-Comm are not top-level benchmark routes. The benchmark matrix
+may attach this report with:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench benchmark-matrix-report --matrix configs/benchmark_matrix.yml --external-libs-report runs/<run_id>/external_pim_libraries.json
+```
+
+If no external-library report is supplied, matrix reports keep their previous
+behavior and mark candidate status as `not_checked`.
+
+The capability scan is intentionally conservative. Bounded source/path scans can
+record evidence such as `int8`, `gemm`, `allreduce`, map/zip/reduction folders,
+or communication headers, but this is not capability proof. Every evidence item
+records relative `evidence_paths` and a `detection_method`. Fields named
+`*_capability_proven` remain false unless a bounded build/run/API check actually
+proves the capability. This avoids mistaking comments, README text, or unused
+source markers for working GEMM or collective support.
+
+The current observed SimplePIM tree appears to expose management,
+communication, map, zip, and reduction code. A ready SimplePIM GEMM primitive
+must not be claimed unless the report records explicit source-level evidence,
+and it still remains unproven until a real SimplePIM GEMM check is added.
+PID-Comm absence is a normal result unless `PID_COMM_HOME` or
+`--pid-comm-home` points to a source tree.
 
 ## SimplePIM Dense Microbenchmark Artifact Schema
 
@@ -901,6 +945,7 @@ which motivates route-aware costs later.
 - `2E.4` PIM memory-level and parallelism-frontier analyzer
 - `2E.5` benchmark matrix and pressure-report scaffold for final thesis baselines
 - `2E.6` first L2 single-DPU MRAM/WRAM tiled real-valued simulator subset
+- `2E.7` external PIM library feasibility and integration boundary for SimplePIM and PID-Comm
 - later: revisit UPMEM-aware path selection using route-aware costs
 
 The next implementation wave should use PIM bridge evaluation, frontier

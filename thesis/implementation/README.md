@@ -120,6 +120,37 @@ Sample build or simulator-run failure is written as JSON status `failed`, but
 the CLI still exits normally after writing the artifact so the failure is
 auditable.
 
+## External PIM Library Feasibility Check
+
+`upmem-external-libs-check` records whether external PIM libraries are useful
+implementation candidates inside the unified `upmem_tn_runtime`:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-external-libs-check
+```
+
+The report treats native UPMEM SDK as the current L1/L2 control baseline,
+SimplePIM as an internal L1/L2 compute candidate, and PID-Comm as an internal
+L3 communication candidate. SimplePIM/PID-Comm are not top-level benchmark
+routes.
+
+The scan is deliberately conservative. Source markers such as `int8`,
+`allreduce`, or `gemm` are reported as evidence only, with relative evidence
+paths and `capability_proven=false` unless a bounded build/run check actually
+proves the capability. The current observed SimplePIM tree appears to expose
+management, communication, map, zip, and reduction code; a ready GEMM primitive
+must not be claimed unless the report records explicit evidence. PID-Comm being
+absent is a normal result unless `PID_COMM_HOME` or `--pid-comm-home` is set.
+
+`benchmark-matrix-report` can optionally attach a completed report:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench benchmark-matrix-report --matrix configs/benchmark_matrix.yml --external-libs-report runs/<run_id>/external_pim_libraries.json
+```
+
+Without `--external-libs-report`, matrix candidate fields remain
+`not_checked` and the existing matrix behavior is unchanged.
+
 ## UPMEM SDK Simulator Dense Backend
 
 `upmem_sdk_simulator_dense` is the first real PIM-backed dense bridge backend.

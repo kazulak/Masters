@@ -149,6 +149,26 @@ build/run failure makes the JSON status `failed`, but the CLI still exits
 normally after writing the artifact so backend bring-up failures are
 reproducible rather than hidden.
 
+The external PIM library feasibility check is a separate developer command:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-external-libs-check
+```
+
+It records native UPMEM SDK as the current L1/L2 control baseline and fallback,
+SimplePIM as an internal L1/L2 compute candidate, and PID-Comm as an internal
+L3 communication candidate. These candidates live under the single final
+`upmem_tn_runtime` category; they are not benchmark routes.
+
+The report distinguishes marker evidence from proven capability. A bounded
+source scan may record evidence paths for terms such as `int8`, `gemm`, or
+`allreduce`, but those fields do not prove a working API or kernel. Capability
+proof requires an explicit bounded build/run check and remains false in this
+wave for SimplePIM GEMM and PID-Comm collectives. The optional
+`benchmark-matrix-report --external-libs-report ...` input only annotates UPMEM
+candidate status; omitting it leaves matrix behavior unchanged with
+`not_checked` candidate fields.
+
 The developer-only one-task dense bridge harness is also outside normal suite
 execution:
 

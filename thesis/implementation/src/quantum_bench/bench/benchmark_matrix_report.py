@@ -25,6 +25,7 @@ from quantum_bench.targets.upmem import (
     is_synthetic_pressure_case,
     synthetic_pressure_manifest,
 )
+from quantum_bench.targets.upmem.external_libs import candidate_status_payload_from_report
 from quantum_bench.tn import build_tensor_network, plan_task_graph_with_config, with_path_cost_summary
 from quantum_bench.targets.upmem import annotate_task_graph_with_upmem_estimates
 
@@ -81,6 +82,12 @@ MATRIX_FIELDS = [
     "max_modeled_dpu_group_size",
     "estimated_transfer_bytes",
     "estimated_host_aggregation_bytes",
+    "l1_l2_compute_backend_candidates",
+    "l3_communication_backend_candidates",
+    "simplepim_candidate_status",
+    "pid_comm_candidate_status",
+    "native_sdk_control_status",
+    "recommended_next_backend_work",
 ]
 
 PRESSURE_TASK_FIELDS = [
@@ -138,11 +145,23 @@ RESOURCE_MODEL_FIELDS = [
 ]
 
 
-def run_benchmark_matrix_report(root_dir: Path, matrix_path: Path, *, output_plots: bool = True) -> Path:
+def run_benchmark_matrix_report(
+    root_dir: Path,
+    matrix_path: Path,
+    *,
+    output_plots: bool = True,
+    external_libs_report_path: Path | None = None,
+) -> Path:
     matrix = load_benchmark_matrix(matrix_path)
+    candidate_payload = _external_candidate_payload(external_libs_report_path)
     run_dir = create_run_dir(root_dir, "benchmark_matrix_report")
     write_json(run_dir / "environment.json", capture_environment(root_dir))
     (run_dir / "config" / "benchmark_matrix.yml").write_text(yaml.safe_dump(matrix, sort_keys=True), encoding="utf-8")
+    if external_libs_report_path is not None:
+        (run_dir / "config" / "external_pim_libraries_source.json").write_text(
+            json.dumps({"path": str(external_libs_report_path)}, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
 
     route_categories = list(matrix["route_categories"])
     resource_models = _resource_models(matrix)
@@ -164,7 +183,7 @@ def run_benchmark_matrix_report(root_dir: Path, matrix_path: Path, *, output_plo
                 case_row = _pressure_case_row(model_id, workload_base, analysis.summary())
                 pressure_case_rows.append(case_row)
                 pressure_task_rows.extend(_pressure_task_rows(model_id, workload_base, analysis))
-                matrix_rows.append(_upmem_matrix_row(workload_base, route, model_id, analysis.summary(), analysis))
+                matrix_rows.append(_upmem_matrix_row(workload_base, route, model_id, analysis.summary(), analysis, candidate_payload))
 
     resource_rows = _resource_model_rows(resource_models, pressure_case_rows)
     summary = _summary(matrix_rows, pressure_case_rows, resource_rows)
@@ -187,6 +206,7 @@ def run_benchmark_matrix_report(root_dir: Path, matrix_path: Path, *, output_plo
             "upmem_kernels_executed": False,
             "gpu_code_executed": False,
             "upmem_l1_l2_l3_are_internal_classes": True,
+            "external_libs_report_loaded": external_libs_report_path is not None,
         },
     }
     write_json(run_dir / "benchmark_matrix.json", payload)
@@ -320,6 +340,7 @@ def _workload_base(workload: JsonDict, workload_manifest: JsonDict) -> JsonDict:
 def _non_upmem_matrix_row(base: JsonDict, route: JsonDict) -> JsonDict:
     return {
         **_empty_upmem_fields(),
+        **_not_applicable_candidate_fields(),
         **base,
         "route_category": route["route_category"],
         "route_id": route["route_id"],
@@ -340,6 +361,7 @@ def _upmem_matrix_row(
     resource_model_id: str,
     summary: JsonDict,
     analysis: Any,
+    candidate_payload: JsonDict,
 ) -> JsonDict:
     tasks = list(analysis.tasks)
     l1_executable = sum(1 for task in tasks if task.memory_level == MEMORY_LEVEL_L1_WRAM and task.current_backend_executable)
@@ -374,6 +396,7 @@ def _upmem_matrix_row(
         "max_modeled_dpu_group_size": int(summary.get("max_modeled_dpu_group_size", 0) or 0),
         "estimated_transfer_bytes": int(summary.get("total_estimated_transfer_bytes", 0) or 0),
         "estimated_host_aggregation_bytes": "unknown",
+        **candidate_payload,
     }
 
 
@@ -398,6 +421,24 @@ def _empty_upmem_fields() -> JsonDict:
         "estimated_transfer_bytes": 0,
         "estimated_host_aggregation_bytes": "not_applicable",
     }
+
+
+def _not_applicable_candidate_fields() -> JsonDict:
+    return {
+        "l1_l2_compute_backend_candidates": "not_applicable",
+        "l3_communication_backend_candidates": "not_applicable",
+        "simplepim_candidate_status": "not_applicable",
+        "pid_comm_candidate_status": "not_applicable",
+        "native_sdk_control_status": "not_applicable",
+        "recommended_next_backend_work": "not_applicable",
+    }
+
+
+def _external_candidate_payload(external_libs_report_path: Path | None) -> JsonDict:
+    if external_libs_report_path is None:
+        return candidate_status_payload_from_report(None)
+    payload = json.loads(external_libs_report_path.read_text(encoding="utf-8"))
+    return candidate_status_payload_from_report(payload)
 
 
 def _pressure_case_row(resource_model_id: str, base: JsonDict, summary: JsonDict) -> JsonDict:

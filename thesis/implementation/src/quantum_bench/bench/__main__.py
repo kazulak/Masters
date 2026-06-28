@@ -94,6 +94,7 @@ def main() -> int:
 
     matrix_parser = sub.add_parser("benchmark-matrix-report")
     matrix_parser.add_argument("--matrix", required=True, help="Benchmark matrix YAML path")
+    matrix_parser.add_argument("--external-libs-report")
     matrix_parser.add_argument("--output-plots", action=argparse.BooleanOptionalAction, default=True)
 
     shadow_parser = sub.add_parser("shadow-routed-runtime")
@@ -120,6 +121,12 @@ def main() -> int:
     upmem_env_parser.add_argument("--target", default="auto", choices=("auto", "simulator", "hardware"))
     upmem_env_parser.add_argument("--timeout-seconds", type=float, default=10.0)
     upmem_env_parser.add_argument("--simplepim-home")
+
+    external_libs_parser = sub.add_parser("upmem-external-libs-check")
+    external_libs_parser.add_argument("--simplepim-home")
+    external_libs_parser.add_argument("--pid-comm-home")
+    external_libs_parser.add_argument("--timeout-seconds", type=float, default=10.0)
+    external_libs_parser.add_argument("--check-pid-comm-build", action="store_true")
 
     sub.add_parser("probe")
 
@@ -344,8 +351,16 @@ def main() -> int:
         matrix_path = Path(args.matrix)
         if not matrix_path.is_absolute():
             matrix_path = root_dir / matrix_path
+        external_libs_report_path = Path(args.external_libs_report) if args.external_libs_report else None
+        if external_libs_report_path is not None and not external_libs_report_path.is_absolute():
+            external_libs_report_path = root_dir / external_libs_report_path
         try:
-            run_dir = run_benchmark_matrix_report(root_dir, matrix_path, output_plots=args.output_plots)
+            run_dir = run_benchmark_matrix_report(
+                root_dir,
+                matrix_path,
+                output_plots=args.output_plots,
+                external_libs_report_path=external_libs_report_path,
+            )
         except ValueError as exc:
             parser.error(str(exc))
         print(
@@ -420,6 +435,31 @@ def main() -> int:
                     "run_dir": str(run_dir),
                     "artifact": str(artifact_path),
                     "summary": str(run_dir / "upmem_env_check_summary.md"),
+                    "status": status,
+                },
+                indent=2,
+            )
+        )
+        return 0
+    if args.command == "upmem-external-libs-check":
+        from quantum_bench.bench.upmem_external_libs_check import run_upmem_external_libs_check
+
+        try:
+            run_dir, artifact_path, status = run_upmem_external_libs_check(
+                root_dir,
+                simplepim_home=args.simplepim_home,
+                pid_comm_home=args.pid_comm_home,
+                check_pid_comm_build=args.check_pid_comm_build,
+                timeout_seconds=args.timeout_seconds,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(
+            json.dumps(
+                {
+                    "run_dir": str(run_dir),
+                    "artifact": str(artifact_path),
+                    "summary": str(run_dir / "external_pim_libraries_summary.md"),
                     "status": status,
                 },
                 indent=2,
