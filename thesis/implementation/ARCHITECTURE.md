@@ -116,6 +116,7 @@ as full-circuit acceleration.
 | Generic fallback preparation and bridge | `routing/generic_prepare.py`, `targets/upmem/generic_bridge.py` | Implemented MVP for small real binary contractions |
 | UPMEM SDK simulator dense runner | `native/upmem/simplepim/upmem_sdk_dense*` | Implemented L1/L2 subsets |
 | UPMEM SDK simulator generic loop runner | `native/upmem/simplepim/upmem_sdk_generic_loop*` | Implemented correctness/coverage MVP |
+| Strict UPMEM TaskGraph runtime | `bench/upmem_taskgraph_runtime.py`, `targets/upmem/taskgraph_runtime.py` | Implemented MVP for small sequential TaskGraphs in SDK simulator mode |
 | PIM bridge evaluation | `bench/pim_bridge_eval.py` | Developer task-level evidence harness |
 | PIM frontier analysis | `bench/pim_frontier_analysis.py`, `targets/upmem/frontier.py` | Model-only analysis |
 | Benchmark matrix report | `bench/benchmark_matrix_report.py` | Thesis scaffold |
@@ -150,6 +151,7 @@ These commands are intentionally outside normal benchmark provider execution:
 |---|---|---|
 | `dense-task-bridge` | One real task through dense preparation and bridge backend | Task-level only |
 | `generic-task-bridge` | One real task through the unoptimized generic fallback bridge | Task-level simulator evidence only |
+| `upmem-taskgraph-runtime` | Sequential full TaskGraph through UPMEM SDK DPU programs using SDK simulator mode | Small strict UPMEM code-path evidence, not hardware timing |
 | `dense-route-coverage` | All-task readiness and bridge eligibility | Analysis only |
 | `shadow-routed-runtime` | Full graph with CPU fallback authoritative and shadow route evidence | Diagnostic only |
 | `pim-bridge-eval` | Capped task-level simulator execution across workloads | Task-level simulator evidence |
@@ -159,9 +161,10 @@ These commands are intentionally outside normal benchmark provider execution:
 | `upmem-env-check` | UPMEM SDK / SimplePIM environment bring-up | Environment evidence |
 | `upmem-external-libs-check` | SimplePIM/PID-Comm/native SDK candidate report | Feasibility evidence |
 
-`shadow-routed-runtime` always keeps CPU fallback authoritative. Dense mock,
-stub, or simulator outputs must not feed later graph tensors in the current
-architecture.
+`shadow-routed-runtime` always keeps CPU fallback authoritative. By contrast,
+`upmem-taskgraph-runtime` is strict: every contraction task must execute through
+the UPMEM SDK DPU program path, and only gathered UPMEM task outputs may feed
+later runtime tensors. CPU exact output is used for final validation only.
 
 ## Synthetic Pressure Workloads
 

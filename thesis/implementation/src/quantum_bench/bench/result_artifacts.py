@@ -85,6 +85,10 @@ def normalized_task_result_from_summary(summary: JsonDict, *, source_artifact: s
     raise ValueError(f"unsupported one-task summary schema_version: {schema}")
 
 
+def normalized_upmem_taskgraph_result_from_summary(summary: JsonDict, *, source_artifact: str | None = None) -> JsonDict:
+    return _upmem_taskgraph_runtime_record(summary, source_artifact=source_artifact)
+
+
 def load_result_records(inputs: Iterable[Path]) -> list[JsonDict]:
     records: list[JsonDict] = []
     for input_path in inputs:
@@ -134,6 +138,7 @@ def _discover_artifacts(path: Path) -> list[Path]:
     names = {
         "dense_task_bridge_summary.json",
         "generic_task_bridge_summary.json",
+        "upmem_taskgraph_runtime_summary.json",
         "pim_bridge_eval.json",
     }
     return sorted(candidate for candidate in path.rglob("*.json") if candidate.name in names)
@@ -145,6 +150,8 @@ def _records_from_artifact(path: Path) -> list[JsonDict]:
     source = _source_artifact_label(path)
     if schema in {"dense_task_bridge_v1", "generic_task_bridge_v1"}:
         return [normalized_task_result_from_summary(payload, source_artifact=source)]
+    if schema == "upmem_taskgraph_runtime_v1":
+        return _upmem_taskgraph_runtime_records(payload, source_artifact=source)
     if schema == "pim_bridge_eval_v1":
         return [_pim_bridge_eval_row_record(payload, row, source_artifact=source) for row in payload.get("rows", [])]
     return []
@@ -251,6 +258,63 @@ def _pim_bridge_eval_row_record(payload: JsonDict, row: JsonDict, *, source_arti
         validation_error_metrics=validation,
         notes=_json_string({"task_index": row.get("task_index"), "task_id": row.get("task_id")}),
         warnings="simulator_task_level_only" if row.get("backend_status") else "not_executed",
+    )
+
+
+def _upmem_taskgraph_runtime_records(payload: JsonDict, *, source_artifact: str | None) -> list[JsonDict]:
+    counts = dict(payload.get("kernel_family_counts") or {})
+    if not counts:
+        return [_upmem_taskgraph_runtime_record(payload, source_artifact=source_artifact, kernel_family="unsupported", task_count=0)]
+    return [
+        _upmem_taskgraph_runtime_record(payload, source_artifact=source_artifact, kernel_family=str(family), task_count=int(count))
+        for family, count in sorted(counts.items())
+    ]
+
+
+def _upmem_taskgraph_runtime_record(
+    summary: JsonDict,
+    *,
+    source_artifact: str | None,
+    kernel_family: str | None = None,
+    task_count: int | None = None,
+) -> JsonDict:
+    final_validation = dict(summary.get("final_validation") or {})
+    family = kernel_family or _dominant_kernel_family(summary)
+    tasks = int(task_count if task_count is not None else summary.get("executed_tasks", 0) or 0)
+    final_passed = final_validation.get("passed") is True
+    return _base_record(
+        source_artifact=source_artifact,
+        run_id=_run_id_from_source(source_artifact),
+        suite_id=None,
+        case_id=summary.get("case_id"),
+        workload_id=summary.get("case_id"),
+        route_id=summary.get("route_id", "upmem_tn_runtime"),
+        backend_id=_json_string(summary.get("backend_counts", {})),
+        kernel_family=family,
+        execution_target=summary.get("contraction_execution_target", "upmem"),
+        execution_scope=summary.get("execution_scope", "full_taskgraph"),
+        simulator_or_hardware="simulator" if summary.get("upmem_execution_mode") == "sdk_simulator" else "not_applicable",
+        status=summary.get("status"),
+        validation_status="passed" if final_passed else "failed",
+        task_count=tasks,
+        validated_task_count=tasks if final_passed else 0,
+        unsupported_task_count=int(summary.get("unsupported_tasks", 0) or 0),
+        total_wall_time_s=float(summary.get("total_wall_time_s", 0.0) or 0.0),
+        kernel_time_s=float(summary.get("total_kernel_time_s", 0.0) or 0.0),
+        build_time_s=float(summary.get("total_build_time_s", 0.0) or 0.0),
+        validation_error_metrics=final_validation,
+        notes=_json_string(
+            {
+                "policy": summary.get("policy"),
+                "quantization_mode": summary.get("quantization_mode"),
+                "whole_network_quantized_at_initialization": summary.get("whole_network_quantized_at_initialization"),
+                "valid_primary_upmem_codepath_result": summary.get("valid_primary_upmem_codepath_result"),
+                "dpu_program_executed_all_tasks": summary.get("dpu_program_executed_all_tasks"),
+                "native_sdk_control_path": summary.get("native_sdk_control_path"),
+                "simplepim_api_used": summary.get("simplepim_api_used"),
+            }
+        ),
+        warnings="sdk_simulator_not_hardware_speedup",
     )
 
 
@@ -438,6 +502,13 @@ def _float_from_metadata(summary: JsonDict, key: str) -> float:
 
 def _json_string(payload: Any) -> str:
     return json.dumps(to_jsonable(payload), sort_keys=True, separators=(",", ":"))
+
+
+def _dominant_kernel_family(summary: JsonDict) -> str:
+    counts = dict(summary.get("kernel_family_counts") or {})
+    if not counts:
+        return "unsupported"
+    return max(sorted(counts), key=lambda family: int(counts[family]))
 
 
 def _warning_text(summary: JsonDict) -> str:

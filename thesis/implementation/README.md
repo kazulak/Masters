@@ -88,6 +88,13 @@ Developer one-task generic fallback bridge check:
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench generic-task-bridge --case bell_2q --task-index 0 --backend upmem_sdk_simulator_generic_loop --execute-external
 ```
 
+Strict small-scope UPMEM TaskGraph runtime:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-taskgraph-runtime --case bell_2q --policy generic-only --quantization-mode per_task_input_quantize --execute-external
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-taskgraph-runtime --case bell_2q --policy dense-then-generic --quantization-mode per_task_input_quantize --execute-external
+```
+
 Artifact-driven result comparison:
 
 ```bash
@@ -121,6 +128,7 @@ Legacy external trees are historical fallback only.
 | UPMEM L1 dense | Implemented subset | Task-level UPMEM SDK simulator, split-complex supported when layout is explicit |
 | UPMEM L2 dense | Implemented subset | Task-level UPMEM SDK simulator, real-valued only |
 | UPMEM generic fallback | Implemented MVP | Task-level UPMEM SDK simulator, real-valued small binary contractions only |
+| Strict UPMEM TaskGraph runtime | Implemented MVP | Sequential full TaskGraph through UPMEM SDK DPU programs using SDK simulator mode; CPU exact is final validation only |
 | UPMEM L3 distributed | Model-only | No execution yet |
 | SimplePIM GEMM | Candidate | Target UPMEM compute/runtime abstraction for L1/L2 and local tile compute inside L3; not integrated |
 | PID-Comm | Candidate | Communication/orchestration substrate across L1/L2/L3, strongest for L3 distributed contraction; not integrated |
@@ -141,6 +149,9 @@ Use these rules when interpreting artifacts:
 - `upmem_sdk_simulator_generic_loop` is an unoptimized developer bridge backend
   for small binary contractions. It exists for correctness coverage and route
   validation, not performance evidence.
+- `upmem-taskgraph-runtime` executes full small TaskGraphs through UPMEM SDK DPU
+  programs using SDK simulator mode. It does not use CPU contraction fallback to
+  feed intermediate tensors.
 - `upmem_tn_runtime` is the only final UPMEM benchmark category.
 - L1/L2/L3 are internal scheduler classes within `upmem_tn_runtime`.
 - Shadow CPU fallback runs are diagnostics only and must not be presented as

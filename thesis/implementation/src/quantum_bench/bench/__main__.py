@@ -56,6 +56,17 @@ def main() -> int:
     generic_bridge_parser.add_argument("--backend", default="upmem_sdk_simulator_generic_loop", choices=("upmem_sdk_simulator_generic_loop",))
     generic_bridge_parser.add_argument("--execute-external", action="store_true")
 
+    upmem_runtime_parser = sub.add_parser("upmem-taskgraph-runtime")
+    upmem_runtime_parser.add_argument("--case", default="bell_2q")
+    upmem_runtime_parser.add_argument("--n-qubits", type=int)
+    upmem_runtime_parser.add_argument("--policy", default="generic-only", choices=("generic-only", "dense-then-generic", "dense-only"))
+    upmem_runtime_parser.add_argument(
+        "--quantization-mode",
+        default="per_task_input_quantize",
+        choices=("per_task_input_quantize", "none", "persistent_network_quantized"),
+    )
+    upmem_runtime_parser.add_argument("--execute-external", action="store_true")
+
     coverage_parser = sub.add_parser("dense-route-coverage")
     coverage_input = coverage_parser.add_mutually_exclusive_group(required=True)
     coverage_input.add_argument("--suite", help="Suite path or preset name under configs/suites")
@@ -243,6 +254,34 @@ def main() -> int:
                 {
                     "run_dir": str(result.run_dir),
                     "summary_path": str(result.summary_path),
+                    "status": result.status,
+                    "reason": result.reason,
+                },
+                indent=2,
+            )
+        )
+        return 0
+    if args.command == "upmem-taskgraph-runtime":
+        from quantum_bench.bench.upmem_taskgraph_runtime import run_upmem_taskgraph_runtime
+
+        if not args.execute_external:
+            parser.error("upmem-taskgraph-runtime requires --execute-external for strict UPMEM SDK DPU execution")
+        if args.quantization_mode != "per_task_input_quantize":
+            parser.error("only --quantization-mode per_task_input_quantize is implemented for upmem-taskgraph-runtime")
+        result = run_upmem_taskgraph_runtime(
+            root_dir,
+            case=args.case,
+            n_qubits=args.n_qubits,
+            policy=args.policy,
+            quantization_mode=args.quantization_mode,
+            execute_external=args.execute_external,
+        )
+        print(
+            json.dumps(
+                {
+                    "run_dir": str(result.run_dir),
+                    "summary_path": str(result.summary_path),
+                    "task_metrics": str(result.run_dir / "cases" / result.case_id / "upmem_taskgraph_task_metrics.jsonl"),
                     "status": result.status,
                     "reason": result.reason,
                 },

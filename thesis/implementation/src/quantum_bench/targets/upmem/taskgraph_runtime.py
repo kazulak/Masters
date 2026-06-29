@@ -1,0 +1,867 @@
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Literal, Mapping
+
+import numpy as np
+
+from quantum_bench.core.records import ContractionTask, JsonDict, TensorSpec, TensorValue, to_jsonable
+from quantum_bench.formats import conversion_error_metrics
+from quantum_bench.routing import DenseTaskPreparationInput, GenericTaskPreparationInput, prepare_dense_task, prepare_generic_task
+from quantum_bench.targets.upmem.dense_bridge import (
+    dense_bridge_backend_manifest_eligibility,
+    execute_dense_bridge,
+    write_dense_bridge_input_manifest,
+)
+from quantum_bench.targets.upmem.generic_bridge import execute_generic_bridge, write_generic_bridge_input_manifest
+from quantum_bench.tn.execution import live_tensor_bytes, order_final_tensor, release_dead_inputs, remaining_input_uses
+from quantum_bench.tn.network import TensorNetworkValue
+from quantum_bench.validation import validate
+
+
+UPMEM_TASKGRAPH_RUNTIME_SCHEMA_VERSION = "upmem_taskgraph_runtime_v1"
+UPMEM_TASKGRAPH_TASK_METRIC_SCHEMA_VERSION = "upmem_taskgraph_task_metric_v1"
+
+UPMEM_TASKGRAPH_POLICIES = ("generic-only", "dense-then-generic", "dense-only")
+UPMEM_TASKGRAPH_QUANTIZATION_MODES = ("per_task_input_quantize", "none", "persistent_network_quantized")
+
+UpmemTaskGraphPolicy = Literal["generic-only", "dense-then-generic", "dense-only"]
+UpmemTaskGraphQuantizationMode = Literal["per_task_input_quantize", "none", "persistent_network_quantized"]
+UpmemTaskGraphStatus = Literal["completed", "unsupported", "failed", "validation_failed"]
+
+CONTRACTION_EXECUTION_TARGET = "upmem"
+UPMEM_EXECUTION_MODE = "sdk_simulator"
+QUANTIZED_FINAL_VALIDATION_TOLERANCES = {
+    "max_abs_error": 0.25,
+    "l2_error": 2.0,
+    "max_rel_error": 10.0,
+    "norm_drift": 2.0,
+    "min_fidelity": 0.0,
+}
+
+
+@dataclass(frozen=True)
+class UpmemTaskGraphRuntimeResult:
+    schema_version: str
+    status: UpmemTaskGraphStatus
+    reason: str | None
+    case_id: str
+    policy: str
+    quantization_mode: str
+    output: np.ndarray | None
+    output_labels: tuple[int, ...] | None
+    final_validation: JsonDict
+    summary: JsonDict
+    task_metrics: tuple[JsonDict, ...]
+    artifacts: JsonDict = field(default_factory=dict)
+
+    def to_json_dict(self) -> JsonDict:
+        return to_jsonable(
+            {
+                "schema_version": self.schema_version,
+                "status": self.status,
+                "reason": self.reason,
+                "case_id": self.case_id,
+                "policy": self.policy,
+                "quantization_mode": self.quantization_mode,
+                "output_labels": self.output_labels,
+                "final_validation": self.final_validation,
+                "summary": self.summary,
+                "task_metrics": self.task_metrics,
+                "artifacts": self.artifacts,
+            }
+        )
+
+
+def execute_upmem_taskgraph_runtime(
+    *,
+    graph,
+    network: TensorNetworkValue,
+    case_id: str,
+    policy: UpmemTaskGraphPolicy,
+    quantization_mode: UpmemTaskGraphQuantizationMode,
+    bridge_root: Path,
+    execute_external: bool,
+    reference_output: np.ndarray | None = None,
+    env: Mapping[str, str] | None = None,
+) -> UpmemTaskGraphRuntimeResult:
+    started = time.perf_counter()
+    if policy not in UPMEM_TASKGRAPH_POLICIES:
+        return _unsupported_result(case_id, policy, quantization_mode, "unsupported_policy", started)
+    if quantization_mode != "per_task_input_quantize":
+        return _unsupported_result(case_id, policy, quantization_mode, f"unsupported_quantization_mode:{quantization_mode}", started)
+    if not execute_external:
+        return _unsupported_result(case_id, policy, quantization_mode, "external_execution_required", started)
+    if not graph.tasks:
+        return _unsupported_result(case_id, policy, quantization_mode, "empty_task_graph_not_supported", started)
+
+    tensors = {tensor.spec.id: np.asarray(tensor.array) for tensor in network.tensors}
+    labels = {tensor.spec.id: tensor.spec.labels for tensor in network.tensors}
+    live_ids = set(tensors)
+    remaining_uses = remaining_input_uses(graph)
+    final_tensor_id = graph.tasks[-1].output_tensor_id
+    task_metrics: list[JsonDict] = []
+    kernel_family_counts: dict[str, int] = {}
+    backend_counts: dict[str, int] = {}
+    total_bridge_time_s = 0.0
+    total_kernel_time_s = 0.0
+    total_build_time_s = 0.0
+    peak_live_bytes = live_tensor_bytes(tensors, live_ids)
+    final_labels: tuple[int, ...] | None = None
+
+    for task_index, task in enumerate(graph.tasks):
+        task_started = time.perf_counter()
+        if not _inputs_available(task, tensors):
+            missing = [tensor_id for tensor_id in task.input_tensor_ids if tensor_id not in tensors]
+            return _stop_result(
+                case_id=case_id,
+                policy=policy,
+                quantization_mode=quantization_mode,
+                status="unsupported",
+                reason="runtime_input_tensor_missing",
+                started=started,
+                task_metrics=task_metrics
+                + [
+                    _base_task_metric(
+                        case_id,
+                        task_index,
+                        task,
+                        policy,
+                        quantization_mode,
+                        status="unsupported",
+                        reason=f"missing:{','.join(missing)}",
+                        task_started=task_started,
+                    )
+                ],
+            )
+
+        left_tensor = _tensor_value_for(task.input_tensor_ids[0], task, tensors, labels, side="left")
+        right_tensor = _tensor_value_for(task.input_tensor_ids[1], task, tensors, labels, side="right")
+        bridge_dir = bridge_root / f"task_{task_index:04d}"
+        task_result = _execute_task_by_policy(
+            task=task,
+            task_index=task_index,
+            case_id=case_id,
+            left_tensor=left_tensor,
+            right_tensor=right_tensor,
+            bridge_dir=bridge_dir,
+            policy=policy,
+            quantization_mode=quantization_mode,
+            execute_external=execute_external,
+            env=env,
+            task_started=task_started,
+        )
+        metric = task_result["metric"]
+        task_metrics.append(metric)
+        if task_result["status"] != "completed":
+            return _stop_result(
+                case_id=case_id,
+                policy=policy,
+                quantization_mode=quantization_mode,
+                status="unsupported" if task_result["status"] == "unsupported" else "failed",
+                reason=str(task_result["reason"]),
+                started=started,
+                task_metrics=task_metrics,
+            )
+
+        output = np.asarray(task_result["output"])
+        tensors[task.output_tensor_id] = output
+        labels[task.output_tensor_id] = task.output_labels
+        live_ids.add(task.output_tensor_id)
+        final_labels = task.output_labels
+        release_dead_inputs(task.input_tensor_ids, task.output_tensor_id, final_tensor_id, tensors, labels, live_ids, remaining_uses)
+        peak_live_bytes = max(peak_live_bytes, live_tensor_bytes(tensors, live_ids))
+        kernel_family_counts[str(metric["selected_kernel_family"])] = kernel_family_counts.get(str(metric["selected_kernel_family"]), 0) + 1
+        backend_counts[str(metric["backend_id"])] = backend_counts.get(str(metric["backend_id"]), 0) + 1
+        total_bridge_time_s += float(metric.get("bridge_total_time_s", 0.0) or 0.0)
+        total_kernel_time_s += float(metric.get("kernel_time_s", 0.0) or 0.0)
+        total_build_time_s += float(metric.get("build_time_s", 0.0) or 0.0)
+
+    if final_tensor_id not in tensors or final_labels is None:
+        return _stop_result(
+            case_id=case_id,
+            policy=policy,
+            quantization_mode=quantization_mode,
+            status="failed",
+            reason="final_tensor_missing",
+            started=started,
+            task_metrics=task_metrics,
+        )
+
+    final_output, final_transposed = order_final_tensor(np.asarray(tensors[final_tensor_id]), final_labels, graph.network.output_labels)
+    final_validation = _final_validation(final_output, reference_output)
+    status: UpmemTaskGraphStatus = "completed" if final_validation.get("passed") else "validation_failed"
+    reason = None if status == "completed" else "final_validation_failed"
+    summary = _summary_payload(
+        case_id=case_id,
+        policy=policy,
+        quantization_mode=quantization_mode,
+        status=status,
+        reason=reason,
+        started=started,
+        task_metrics=task_metrics,
+        kernel_family_counts=kernel_family_counts,
+        backend_counts=backend_counts,
+        final_validation=final_validation,
+        final_tensor_id=final_tensor_id,
+        final_tensor_labels=final_labels,
+        final_transpose_applied=final_transposed,
+        total_bridge_time_s=total_bridge_time_s,
+        total_kernel_time_s=total_kernel_time_s,
+        total_build_time_s=total_build_time_s,
+        peak_live_tensor_bytes=peak_live_bytes,
+    )
+    return UpmemTaskGraphRuntimeResult(
+        schema_version=UPMEM_TASKGRAPH_RUNTIME_SCHEMA_VERSION,
+        status=status,
+        reason=reason,
+        case_id=case_id,
+        policy=policy,
+        quantization_mode=quantization_mode,
+        output=np.asarray(final_output),
+        output_labels=graph.network.output_labels,
+        final_validation=final_validation,
+        summary=summary,
+        task_metrics=tuple(task_metrics),
+    )
+
+
+def _execute_task_by_policy(
+    *,
+    task: ContractionTask,
+    task_index: int,
+    case_id: str,
+    left_tensor: TensorValue,
+    right_tensor: TensorValue,
+    bridge_dir: Path,
+    policy: str,
+    quantization_mode: str,
+    execute_external: bool,
+    env: Mapping[str, str] | None,
+    task_started: float,
+) -> JsonDict:
+    if policy in {"dense-only", "dense-then-generic"}:
+        dense = _execute_dense_task(
+            task=task,
+            task_index=task_index,
+            case_id=case_id,
+            left_tensor=left_tensor,
+            right_tensor=right_tensor,
+            bridge_dir=bridge_dir / "dense",
+            policy=policy,
+            quantization_mode=quantization_mode,
+            execute_external=execute_external,
+            env=env,
+            task_started=task_started,
+        )
+        if dense["status"] == "completed" or policy == "dense-only":
+            return dense
+        dense_reject_reason = str(dense["reason"])
+    else:
+        dense_reject_reason = "policy_generic_only"
+
+    generic = _execute_generic_task(
+        task=task,
+        task_index=task_index,
+        case_id=case_id,
+        left_tensor=left_tensor,
+        right_tensor=right_tensor,
+        bridge_dir=bridge_dir / "generic",
+        policy=policy,
+        quantization_mode=quantization_mode,
+        execute_external=execute_external,
+        env=env,
+        task_started=task_started,
+        dense_reject_reason=dense_reject_reason,
+    )
+    return generic
+
+
+def _execute_dense_task(
+    *,
+    task: ContractionTask,
+    task_index: int,
+    case_id: str,
+    left_tensor: TensorValue,
+    right_tensor: TensorValue,
+    bridge_dir: Path,
+    policy: str,
+    quantization_mode: str,
+    execute_external: bool,
+    env: Mapping[str, str] | None,
+    task_started: float,
+) -> JsonDict:
+    preparation = prepare_dense_task(DenseTaskPreparationInput(task=task, left_tensor=left_tensor, right_tensor=right_tensor))
+    eligible, reason = dense_bridge_backend_manifest_eligibility(preparation, "upmem_sdk_simulator_dense")
+    if not eligible:
+        return {
+            "status": "unsupported",
+            "reason": reason or preparation.reason or preparation.status,
+            "metric": _base_task_metric(
+                case_id,
+                task_index,
+                task,
+                policy,
+                quantization_mode,
+                status="unsupported",
+                reason=reason or preparation.reason or preparation.status,
+                task_started=task_started,
+                selected_kernel_family="dense_gemm",
+                backend_id="upmem_sdk_simulator_dense",
+                preparation=preparation.to_json_dict(),
+            ),
+        }
+    write_dense_bridge_input_manifest(preparation, bridge_dir)
+    result = execute_dense_bridge(bridge_dir / "input_manifest.json", backend="upmem_sdk_simulator_dense", execute_external=execute_external, env=env)
+    output = _load_bridge_output(bridge_dir, result.output_blob_path)
+    if result.execution_status != "upmem_sdk_simulator_executed" or output is None:
+        return {
+            "status": "failed" if result.execution_status == "failed" else "unsupported",
+            "reason": result.reason or result.execution_status,
+            "metric": _base_task_metric(
+                case_id,
+                task_index,
+                task,
+                policy,
+                quantization_mode,
+                status="failed" if result.execution_status == "failed" else "unsupported",
+                reason=result.reason or result.execution_status,
+                task_started=task_started,
+                selected_kernel_family="dense_gemm",
+                backend_id="upmem_sdk_simulator_dense",
+                preparation=preparation.to_json_dict(),
+                bridge_result=result.to_json_dict(),
+            ),
+        }
+    metric = _base_task_metric(
+        case_id,
+        task_index,
+        task,
+        policy,
+        quantization_mode,
+        status="completed",
+        reason=None,
+        task_started=task_started,
+        selected_kernel_family="dense_gemm",
+        backend_id="upmem_sdk_simulator_dense",
+        preparation=preparation.to_json_dict(),
+        bridge_result=result.to_json_dict(),
+        output=output,
+        bridge_artifact_path=bridge_dir,
+    )
+    return {"status": "completed", "reason": None, "output": np.asarray(output), "metric": metric}
+
+
+def _execute_generic_task(
+    *,
+    task: ContractionTask,
+    task_index: int,
+    case_id: str,
+    left_tensor: TensorValue,
+    right_tensor: TensorValue,
+    bridge_dir: Path,
+    policy: str,
+    quantization_mode: str,
+    execute_external: bool,
+    env: Mapping[str, str] | None,
+    task_started: float,
+    dense_reject_reason: str,
+) -> JsonDict:
+    left_array = np.asarray(left_tensor.array)
+    right_array = np.asarray(right_tensor.array)
+    has_nonzero_imaginary = (
+        (np.iscomplexobj(left_array) and bool(np.any(np.abs(left_array.imag) > 0.0)))
+        or (np.iscomplexobj(right_array) and bool(np.any(np.abs(right_array.imag) > 0.0)))
+    )
+    if has_nonzero_imaginary:
+        return _execute_generic_split_complex_task(
+            task=task,
+            task_index=task_index,
+            case_id=case_id,
+            left_tensor=left_tensor,
+            right_tensor=right_tensor,
+            bridge_dir=bridge_dir,
+            policy=policy,
+            quantization_mode=quantization_mode,
+            execute_external=execute_external,
+            env=env,
+            task_started=task_started,
+            dense_reject_reason=dense_reject_reason,
+        )
+    if np.iscomplexobj(left_array):
+        left_tensor = _component_tensor(left_tensor, left_array.real)
+    if np.iscomplexobj(right_array):
+        right_tensor = _component_tensor(right_tensor, right_array.real)
+    return _execute_generic_real_component(
+        task=task,
+        task_index=task_index,
+        case_id=case_id,
+        left_tensor=left_tensor,
+        right_tensor=right_tensor,
+        bridge_dir=bridge_dir,
+        policy=policy,
+        quantization_mode=quantization_mode,
+        execute_external=execute_external,
+        env=env,
+        task_started=task_started,
+        component="real",
+        dense_reject_reason=dense_reject_reason,
+    )
+
+
+def _execute_generic_split_complex_task(
+    *,
+    task: ContractionTask,
+    task_index: int,
+    case_id: str,
+    left_tensor: TensorValue,
+    right_tensor: TensorValue,
+    bridge_dir: Path,
+    policy: str,
+    quantization_mode: str,
+    execute_external: bool,
+    env: Mapping[str, str] | None,
+    task_started: float,
+    dense_reject_reason: str,
+) -> JsonDict:
+    left = np.asarray(left_tensor.array)
+    right = np.asarray(right_tensor.array)
+    components = {
+        "ar_br": (left.real, right.real),
+        "ai_bi": (left.imag, right.imag),
+        "ar_bi": (left.real, right.imag),
+        "ai_br": (left.imag, right.real),
+    }
+    outputs: dict[str, np.ndarray] = {}
+    expected: dict[str, np.ndarray] = {}
+    component_metrics: dict[str, JsonDict] = {}
+    for name, (left_part, right_part) in components.items():
+        component_result = _execute_generic_real_component(
+            task=task,
+            task_index=task_index,
+            case_id=case_id,
+            left_tensor=_component_tensor(left_tensor, left_part),
+            right_tensor=_component_tensor(right_tensor, right_part),
+            bridge_dir=bridge_dir / name,
+            policy=policy,
+            quantization_mode=quantization_mode,
+            execute_external=execute_external,
+            env=env,
+            task_started=task_started,
+            component=name,
+            dense_reject_reason=dense_reject_reason,
+        )
+        component_metrics[name] = component_result["metric"]
+        if component_result["status"] != "completed":
+            metric = _base_task_metric(
+                case_id,
+                task_index,
+                task,
+                policy,
+                quantization_mode,
+                status=component_result["status"],
+                reason=f"split_complex_component_{name}:{component_result['reason']}",
+                task_started=task_started,
+                selected_kernel_family="generic_loop_fallback",
+                backend_id="upmem_sdk_simulator_generic_loop",
+                component_metrics=component_metrics,
+                complex_representation="split_real_imag",
+                dense_reject_reason=dense_reject_reason,
+            )
+            return {"status": component_result["status"], "reason": metric["reason"], "metric": metric}
+        outputs[name] = np.asarray(component_result["output"], dtype=np.float64)
+        expected[name] = np.asarray(component_result["expected_quantized_reference_output"], dtype=np.float64)
+
+    output = (outputs["ar_br"] - outputs["ai_bi"]) + 1j * (outputs["ar_bi"] + outputs["ai_br"])
+    expected_complex = (expected["ar_br"] - expected["ai_bi"]) + 1j * (expected["ar_bi"] + expected["ai_br"])
+    validation = conversion_error_metrics(expected_complex, output)
+    metric = _base_task_metric(
+        case_id,
+        task_index,
+        task,
+        policy,
+        quantization_mode,
+        status="completed",
+        reason=None,
+        task_started=task_started,
+        selected_kernel_family="generic_loop_fallback",
+        backend_id="upmem_sdk_simulator_generic_loop",
+        output=output,
+        component_metrics=component_metrics,
+        complex_representation="split_real_imag",
+        dense_reject_reason=dense_reject_reason,
+        validation_metrics={
+            "reference_kind": "complex_quantized_dequantized_reference_vs_split_complex_generic",
+            "max_abs_error": validation.max_abs_error,
+            "l2_error": validation.l2_error,
+            "relative_l2_error": validation.relative_l2_error,
+            "passed": validation.max_abs_error <= 1.0e-8,
+        },
+    )
+    metric["bridge_artifact_path"] = _metric_artifact_path(bridge_dir)
+    metric["split_complex_component_count"] = 4
+    return {"status": "completed", "reason": None, "output": output, "metric": metric}
+
+
+def _execute_generic_real_component(
+    *,
+    task: ContractionTask,
+    task_index: int,
+    case_id: str,
+    left_tensor: TensorValue,
+    right_tensor: TensorValue,
+    bridge_dir: Path,
+    policy: str,
+    quantization_mode: str,
+    execute_external: bool,
+    env: Mapping[str, str] | None,
+    task_started: float,
+    component: str,
+    dense_reject_reason: str,
+) -> JsonDict:
+    preparation = prepare_generic_task(GenericTaskPreparationInput(task=task, left_tensor=left_tensor, right_tensor=right_tensor))
+    if preparation.status != "prepared":
+        return {
+            "status": "unsupported" if preparation.status == "unsupported_shape" else "failed",
+            "reason": preparation.reason or preparation.status,
+            "metric": _base_task_metric(
+                case_id,
+                task_index,
+                task,
+                policy,
+                quantization_mode,
+                status="unsupported" if preparation.status == "unsupported_shape" else "failed",
+                reason=preparation.reason or preparation.status,
+                task_started=task_started,
+                selected_kernel_family="generic_loop_fallback",
+                backend_id="upmem_sdk_simulator_generic_loop",
+                preparation=preparation.to_json_dict(),
+                component=component,
+                dense_reject_reason=dense_reject_reason,
+            ),
+        }
+    write_generic_bridge_input_manifest(preparation, bridge_dir)
+    result = execute_generic_bridge(bridge_dir / "input_manifest.json", execute_external=execute_external, env=env)
+    output = _load_bridge_output(bridge_dir, result.output_blob_path)
+    status = "completed" if result.execution_status == "upmem_sdk_simulator_generic_loop_executed" and output is not None else (
+        "failed" if result.execution_status == "failed" else "unsupported"
+    )
+    reason = None if status == "completed" else result.reason or result.execution_status
+    metric = _base_task_metric(
+        case_id,
+        task_index,
+        task,
+        policy,
+        quantization_mode,
+        status=status,
+        reason=reason,
+        task_started=task_started,
+        selected_kernel_family="generic_loop_fallback",
+        backend_id="upmem_sdk_simulator_generic_loop",
+        preparation=preparation.to_json_dict(),
+        bridge_result=result.to_json_dict(),
+        output=output,
+        bridge_artifact_path=bridge_dir,
+        component=component,
+        dense_reject_reason=dense_reject_reason,
+    )
+    expected = None
+    if preparation.prepared_operands is not None:
+        expected = np.asarray(preparation.prepared_operands.expected_quantized_reference_output)
+    return {"status": status, "reason": reason, "output": output, "metric": metric, "expected_quantized_reference_output": expected}
+
+
+def _base_task_metric(
+    case_id: str,
+    task_index: int,
+    task: ContractionTask,
+    policy: str,
+    quantization_mode: str,
+    *,
+    status: str,
+    reason: str | None,
+    task_started: float,
+    selected_kernel_family: str | None = None,
+    backend_id: str | None = None,
+    preparation: JsonDict | None = None,
+    bridge_result: JsonDict | None = None,
+    output: np.ndarray | None = None,
+    bridge_artifact_path: Path | None = None,
+    component: str | None = None,
+    component_metrics: JsonDict | None = None,
+    complex_representation: str | None = None,
+    validation_metrics: JsonDict | None = None,
+    dense_reject_reason: str | None = None,
+) -> JsonDict:
+    output_array = np.asarray(output) if output is not None else None
+    bridge_manifest = dict((bridge_result or {}).get("output_manifest") or {})
+    bridge_metadata = dict(bridge_manifest.get("metadata") or {})
+    bridge_validation = dict(bridge_manifest.get("validation_metrics") or {})
+    conversion_records = dict((preparation or {}).get("conversion_records") or {})
+    return to_jsonable(
+        {
+            "schema_version": UPMEM_TASKGRAPH_TASK_METRIC_SCHEMA_VERSION,
+            "case_id": case_id,
+            "task_index": task_index,
+            "task_id": task.id,
+            "input_tensor_ids": task.input_tensor_ids,
+            "output_tensor_id": task.output_tensor_id,
+            "selected_kernel_family": selected_kernel_family,
+            "backend_id": backend_id,
+            "policy": policy,
+            "quantization_mode": quantization_mode,
+            "whole_network_quantized_at_initialization": False,
+            "complex_representation": complex_representation or ("real" if output_array is not None and not np.iscomplexobj(output_array) else None),
+            "complex_quantization_scope": "per_task_operands" if complex_representation else None,
+            "contraction_execution_target": CONTRACTION_EXECUTION_TARGET,
+            "upmem_execution_mode": UPMEM_EXECUTION_MODE,
+            "dpu_program_executed": status == "completed",
+            "native_sdk_control_path": True,
+            "simplepim_api_used": False,
+            "hardware_timing_available": False,
+            "hardware_speedup_applicable": False,
+            "cpu_contraction_fallback_used": False,
+            "status": status,
+            "reason": reason,
+            "dense_reject_reason": dense_reject_reason,
+            "component": component,
+            "input_shapes": task.input_shapes,
+            "output_shape": tuple(int(dim) for dim in output_array.shape) if output_array is not None else task.output_shape,
+            "output_dtype": str(output_array.dtype) if output_array is not None else None,
+            "output_bytes": int(output_array.nbytes) if output_array is not None else 0,
+            "estimated_flops": task.estimated_flops,
+            "estimated_bytes": task.estimated_bytes,
+            "preparation_status": (preparation or {}).get("status"),
+            "preparation_reason": (preparation or {}).get("reason"),
+            "conversion_records": conversion_records,
+            "bridge_execution_status": (bridge_result or {}).get("execution_status"),
+            "bridge_reason": (bridge_result or {}).get("reason"),
+            "bridge_validation_metrics": validation_metrics or bridge_validation,
+            "bridge_total_time_s": float(bridge_manifest.get("total_time_s", 0.0) or 0.0),
+            "kernel_time_s": float(bridge_manifest.get("compute_time_s", 0.0) or 0.0),
+            "build_time_s": float(bridge_metadata.get("build_time_s", 0.0) or 0.0),
+            "runtime_task_wall_time_s": float(time.perf_counter() - task_started),
+            "bridge_artifact_path": _metric_artifact_path(bridge_artifact_path),
+            "component_metrics": component_metrics or {},
+            "runtime_tensor_source": "upmem_output_blob" if status == "completed" else None,
+            "cpu_reference_artifact_used_as_runtime_input": False,
+        }
+    )
+
+
+def _summary_payload(
+    *,
+    case_id: str,
+    policy: str,
+    quantization_mode: str,
+    status: str,
+    reason: str | None,
+    started: float,
+    task_metrics: list[JsonDict],
+    kernel_family_counts: dict[str, int],
+    backend_counts: dict[str, int],
+    final_validation: JsonDict,
+    final_tensor_id: str,
+    final_tensor_labels: tuple[int, ...],
+    final_transpose_applied: bool,
+    total_bridge_time_s: float,
+    total_kernel_time_s: float,
+    total_build_time_s: float,
+    peak_live_tensor_bytes: int,
+) -> JsonDict:
+    executed_tasks = sum(1 for row in task_metrics if row.get("status") == "completed")
+    dpu_all = bool(task_metrics) and all(row.get("dpu_program_executed") is True for row in task_metrics)
+    target_all = bool(task_metrics) and all(row.get("contraction_execution_target") == CONTRACTION_EXECUTION_TARGET for row in task_metrics)
+    mode_all = bool(task_metrics) and all(row.get("upmem_execution_mode") == UPMEM_EXECUTION_MODE for row in task_metrics)
+    no_cpu_feed = bool(task_metrics) and all(
+        row.get("runtime_tensor_source") == "upmem_output_blob" and row.get("cpu_reference_artifact_used_as_runtime_input") is False
+        for row in task_metrics
+        if row.get("status") == "completed"
+    )
+    valid_primary = (
+        status == "completed"
+        and target_all
+        and mode_all
+        and dpu_all
+        and no_cpu_feed
+        and final_validation.get("passed") is True
+        and all(row.get("cpu_contraction_fallback_used") is False for row in task_metrics)
+    )
+    return to_jsonable(
+        {
+            "schema_version": UPMEM_TASKGRAPH_RUNTIME_SCHEMA_VERSION,
+            "case_id": case_id,
+            "status": status,
+            "reason": reason,
+            "policy": policy,
+            "quantization_mode": quantization_mode,
+            "whole_network_quantized_at_initialization": False,
+            "contraction_execution_target": CONTRACTION_EXECUTION_TARGET,
+            "upmem_execution_mode": UPMEM_EXECUTION_MODE,
+            "native_sdk_control_path": True,
+            "simplepim_api_used": False,
+            "hardware_benchmark_result": False,
+            "hardware_timing_available": False,
+            "hardware_speedup_applicable": False,
+            "cpu_fallback_used": False,
+            "dpu_program_executed_all_tasks": dpu_all,
+            "runtime_tensor_sources_all_upmem_output_blobs": no_cpu_feed,
+            "valid_primary_upmem_codepath_result": valid_primary,
+            "total_tasks": len(task_metrics),
+            "executed_tasks": executed_tasks,
+            "unsupported_tasks": sum(1 for row in task_metrics if row.get("status") == "unsupported"),
+            "failed_tasks": sum(1 for row in task_metrics if row.get("status") == "failed"),
+            "dpu_program_executed_task_count": sum(1 for row in task_metrics if row.get("dpu_program_executed") is True),
+            "kernel_family_counts": kernel_family_counts,
+            "backend_counts": backend_counts,
+            "final_tensor_id": final_tensor_id,
+            "final_tensor_labels": final_tensor_labels,
+            "final_transpose_applied": final_transpose_applied,
+            "final_validation": final_validation,
+            "total_wall_time_s": float(time.perf_counter() - started),
+            "total_bridge_time_s": float(total_bridge_time_s),
+            "total_kernel_time_s": float(total_kernel_time_s),
+            "total_build_time_s": float(total_build_time_s),
+            "peak_live_tensor_bytes": int(peak_live_tensor_bytes),
+            "task_metrics_artifact": None,
+            "final_tensor_artifact": None,
+        }
+    )
+
+
+def _final_validation(output: np.ndarray, reference_output: np.ndarray | None) -> JsonDict:
+    if reference_output is None:
+        return {"passed": False, "reason": "reference_output_missing"}
+    result = validate(output, reference_output, QUANTIZED_FINAL_VALIDATION_TOLERANCES)
+    diff = np.asarray(output, dtype=np.complex128) - np.asarray(reference_output, dtype=np.complex128)
+    abs_diff = np.abs(diff)
+    return to_jsonable(
+        {
+            **result.__dict__,
+            "reference_kind": "cpu_exact_taskgraph_full_precision",
+            "tolerance_kind": "quantized_execution_tolerance",
+            "mean_abs_error": float(abs_diff.mean()) if abs_diff.size else 0.0,
+            "max_abs_error": result.max_abs_error,
+            "l2_error": result.l2_error,
+        }
+    )
+
+
+def _stop_result(
+    *,
+    case_id: str,
+    policy: str,
+    quantization_mode: str,
+    status: UpmemTaskGraphStatus,
+    reason: str,
+    started: float,
+    task_metrics: list[JsonDict],
+) -> UpmemTaskGraphRuntimeResult:
+    summary = _summary_payload(
+        case_id=case_id,
+        policy=policy,
+        quantization_mode=quantization_mode,
+        status=status,
+        reason=reason,
+        started=started,
+        task_metrics=task_metrics,
+        kernel_family_counts=_counts(task_metrics, "selected_kernel_family"),
+        backend_counts=_counts(task_metrics, "backend_id"),
+        final_validation={"passed": False, "reason": "not_available"},
+        final_tensor_id="",
+        final_tensor_labels=(),
+        final_transpose_applied=False,
+        total_bridge_time_s=sum(float(row.get("bridge_total_time_s", 0.0) or 0.0) for row in task_metrics),
+        total_kernel_time_s=sum(float(row.get("kernel_time_s", 0.0) or 0.0) for row in task_metrics),
+        total_build_time_s=sum(float(row.get("build_time_s", 0.0) or 0.0) for row in task_metrics),
+        peak_live_tensor_bytes=0,
+    )
+    return UpmemTaskGraphRuntimeResult(
+        schema_version=UPMEM_TASKGRAPH_RUNTIME_SCHEMA_VERSION,
+        status=status,
+        reason=reason,
+        case_id=case_id,
+        policy=policy,
+        quantization_mode=quantization_mode,
+        output=None,
+        output_labels=None,
+        final_validation=summary["final_validation"],
+        summary=summary,
+        task_metrics=tuple(task_metrics),
+    )
+
+
+def _unsupported_result(case_id: str, policy: str, quantization_mode: str, reason: str, started: float) -> UpmemTaskGraphRuntimeResult:
+    return _stop_result(
+        case_id=case_id,
+        policy=policy,
+        quantization_mode=quantization_mode,
+        status="unsupported",
+        reason=reason,
+        started=started,
+        task_metrics=[],
+    )
+
+
+def _counts(rows: list[JsonDict], key: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        value = row.get(key)
+        if value:
+            counts[str(value)] = counts.get(str(value), 0) + 1
+    return counts
+
+
+def _inputs_available(task: ContractionTask, tensors: Mapping[str, np.ndarray]) -> bool:
+    return all(tensor_id in tensors for tensor_id in task.input_tensor_ids)
+
+
+def _tensor_value_for(
+    tensor_id: str,
+    task: ContractionTask,
+    tensors: Mapping[str, np.ndarray],
+    labels: Mapping[str, tuple[int, ...]],
+    *,
+    side: str,
+) -> TensorValue:
+    array = np.asarray(tensors[tensor_id])
+    expected_shape = task.input_shapes[0] if side == "left" else task.input_shapes[1]
+    return TensorValue(
+        TensorSpec(tensor_id, labels[tensor_id], tuple(int(dim) for dim in expected_shape), "dense", dtype=str(array.dtype)),
+        array,
+    )
+
+
+def _component_tensor(tensor: TensorValue, array: np.ndarray) -> TensorValue:
+    return TensorValue(
+        TensorSpec(tensor.spec.id, tensor.spec.labels, tensor.spec.shape, tensor.spec.structure, dtype=str(np.asarray(array).dtype)),
+        np.asarray(array, dtype=np.float64),
+    )
+
+
+def _load_bridge_output(bridge_dir: Path, relative_path: str | None) -> np.ndarray | None:
+    if not relative_path:
+        return None
+    path = Path(relative_path)
+    if path.is_absolute():
+        raise ValueError(f"bridge output path must be relative: {relative_path}")
+    resolved = (bridge_dir / path).resolve()
+    try:
+        resolved.relative_to(bridge_dir.resolve())
+    except ValueError as exc:
+        raise ValueError(f"bridge output path escapes bridge directory: {relative_path}") from exc
+    if not resolved.exists():
+        return None
+    return np.load(resolved, allow_pickle=False)
+
+
+def _metric_artifact_path(path: Path | None) -> str | None:
+    if path is None:
+        return None
+    parts = path.parts
+    for index in range(len(parts) - 1, -1, -1):
+        if parts[index] == "cases":
+            return Path(*parts[index:]).as_posix()
+    return path.name
