@@ -1,418 +1,205 @@
 # Quantum Bench Architecture
 
-This is the active implementation directory for the Master's thesis prototype.
-Old experiments and generated sudo-owned runs are under `../legacy/`.
+This directory contains the active thesis implementation. Older prototypes and
+historical runs live outside this package under `../legacy/`. The active code
+should be understandable and movable as a standalone implementation rooted at
+`thesis/implementation`.
 
-For the full Host-CPU + UPMEM/SimplePIM thesis runtime map, route maturity
-model, and near-term roadmap, see `docs/runtime_architecture_map.md`. Future
-architecture, route, planner, target, or native-code changes should read that
-map before proposing changes.
+The project is a route-aware exact tensor-network quantum-circuit simulation
+runtime. The CPU owns global orchestration, planning, dispatch, validation, and
+reporting. UPMEM-style PIM executes bounded local contraction work only when an
+explicit route/backend contract supports it.
 
-## Current Structure
+## Source Layout
 
 ```text
 implementation/
-  configs/                 benchmark suites and thesis matrix YAML files
-  external/QuEST/          local QuEST dependency for the CPU full-state baseline
-  native/quest_cpu/        small C runner used by the QuEST provider
-  native/upmem/            future SimplePIM bridge and raw UPMEM code
+  configs/                 benchmark suites and thesis matrix inputs
+  external/                implementation-local external Git submodules
+  native/quest_cpu/        QuEST C runner used by the CPU full-state baseline
+  native/upmem/            UPMEM SDK code and future SimplePIM/native bridge code
   scripts/                 helper commands
   src/quantum_bench/
-    bench/                 one benchmark CLI and runner
-    circuits/              workload/circuit construction
-    core/                  typed records and JSON helpers
-    environment/           environment and RAPL discovery
-    formats/               shared host-side tensor format conversion utilities
-    plots/                 plot generation from summary artifacts
-    providers/             executable routes
-    routing/               task-level route contract, analysis router, and dense preparation boundary
-    targets/upmem/         UPMEM WRAM tile-plan, traffic, schedule, probe, bridge, microbench, and env-check groundwork
-    tn/                    exact tensor-network construction and planning
+    bench/                 one CLI, runner, summaries, evaluation harnesses
+    circuits/              builtin workload construction
+    core/                  JSON and typed record helpers
+    environment/           environment capture
+    formats/               fixed-point and tensor-format conversion utilities
+    plots/                 matplotlib plots from generated summaries
+    providers/             benchmark-executable graph-level routes
+    routing/               task-level routing, policy, and dense preparation
+    targets/upmem/         UPMEM estimates, tile plans, bridge, probes, analysis
+    tn/                    tensor-network construction, planning, materialization
     validation/            numerical validation metrics
-  tests/                   Python runtime tests
+  tests/                   pytest suite
 ```
 
-There is one benchmark pipeline:
+There is one benchmark CLI:
 
 ```bash
-PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench run --suite configs/suites/smoke.yml
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench run --suite configs/suites/smoke.yml
 ```
 
-All suite files use schema v2 with separate `workloads:` and `routes:` sections.
-Route IDs are canonical only; old route names are not accepted.
+## Terminology
 
-## Current Routes
+| Term | Meaning | Example |
+|---|---|---|
+| `route_id` | Graph-level benchmark provider identity | `cpu_tn_einsum_exact` |
+| `backend_id` | Developer bridge/backend implementation identity | `upmem_sdk_simulator_dense` |
+| `route_category` | Thesis benchmark-matrix category | `upmem_tn_runtime` |
+| `execution_class` | Internal UPMEM scheduler/memory class | `L2_SINGLE_DPU_MRAM` |
+| `kernel_family` | Kind of local work delegated to a backend | `dense_gemm`, `generic_loop_fallback` |
+| `evidence_type` | How the result was obtained | `measured`, `simulated`, `modeled`, `planned` |
+| `execution_scope` | What the evidence covers | `full_circuit`, `task_level`, `model_only` |
 
-- `cpu_tn_einsum_exact`
-  - exact tensor-network reference route
-  - CPU, in-process Python, NumPy einsum
-  - returns a final tensor and is validated
-- `quest_cpu_full_state_benchmark`
-  - CPU full-state-vector benchmark baseline
-  - external C/QuEST process
-  - metrics-only, benchmark-only validation mode
-- `upmem_dense_int8_placeholder`
-  - UPMEM dense candidate placeholder
-  - consumes `targets/upmem/` to estimate WRAM fit and transfer volume
-  - probes availability and records skip reasons
-  - no native execution yet
+Keep these distinct. In particular, `upmem_sdk_simulator_dense` is not a final
+benchmark route. It is a developer bridge backend used to produce task-level
+UPMEM SDK simulator evidence. The final UPMEM matrix category remains one
+runtime: `upmem_tn_runtime`.
 
-## UPMEM Boundary
-
-The future UPMEM implementation has three separate layers:
-
-```text
-tn/
-  shared tensor network and contraction task graph
-targets/upmem/
-  host-side UPMEM model: dense WRAM tile plans, data format, traffic estimate,
-  tiling, DPU schedule groundwork, SimplePIM availability probe metadata, and
-  explicit dense bridge, dry-run SimplePIM dense GEMM microbenchmark records,
-  reproducible UPMEM/SimplePIM environment verification, and memory-level /
-  frontier analysis models, including analysis-only synthetic pressure graphs
-formats/
-  shared host-side conversion records and deterministic fixed-point utilities
-routing/
-  task-level route contract, route-slot decisions, CPU fallback policy, and
-  one-task dense preparation for future UPMEM/SimplePIM execution
-providers/exact_tn/
-  benchmark routes that decide whether to use the UPMEM target layer and, later,
-  call native kernels
-native/upmem/
-  SimplePIM bridge code, UPMEM SDK simulator dense runner, and future raw
-  C/UPMEM SDK host/DPU kernels only
-```
-
-This keeps tensor-network creation and path finding shared across CPU TN, future
-GPU TN, and UPMEM TN. UPMEM-specific constraints do not belong in `tn/`; they
-belong in `targets/upmem/` and are consumed by UPMEM providers.
-
-## Current Benchmark Artifacts
-
-Each run writes a timestamped directory under `runs/`:
-
-```text
-runs/<timestamp>_<suite_id>/
-  config/resolved_suite.yml
-  environment.json
-  cases/<case_id>/circuit.json
-  cases/<case_id>/task_graph.json
-  cases/<case_id>/target_estimates/upmem_dense_tile_plan.jsonl
-  cases/<case_id>/task_route_decisions.jsonl
-  cases/<case_id>/task_route_summary.json
-  cases/<case_id>/route_decisions.jsonl
-  raw/<case_id>.jsonl
-  validation/*.json
-  metrics/metrics.csv
-  metrics/metrics.json
-  summary.json
-  summary.md
-  plots/*.png
-```
-
-The standalone SimplePIM dry-run microbenchmark is not a normal benchmark
-suite. It writes only:
-
-```text
-runs/<timestamp>_simplepim_microbench/
-  environment.json
-  simplepim_microbench.json
-```
-
-`ready` in that artifact means ready for a future bridge attempt, not validated
-SimplePIM execution.
-
-The UPMEM/SimplePIM environment check is also outside normal benchmark suites:
-
-```bash
-PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-env-check
-PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-env-check --run-sample --target simulator
-```
-
-It writes:
-
-```text
-runs/<timestamp>_upmem_env_check/
-  environment.json
-  upmem_environment_check.json
-  simplepim_sample_build.json      only with --run-sample
-  simplepim_sample_run.json        only with --run-sample
-  upmem_env_check_summary.md
-```
-
-The check records UPMEM SDK tools, SimplePIM source discovery, simulator sample
-status when requested, and bounded stdout/stderr snippets. It uses
-`../legacy/extern/SimplePIM` as the repo fallback from `thesis/implementation`.
-Tool paths and configured homes may be absolute because they describe the local
-machine; artifact paths inside the run directory remain relative. A sample
-build/run failure makes the JSON status `failed`, but the CLI still exits
-normally after writing the artifact so backend bring-up failures are
-reproducible rather than hidden.
-
-The external PIM library feasibility check is a separate developer command:
-
-```bash
-PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-external-libs-check
-```
-
-It records native UPMEM SDK as the current L1/L2 control baseline and fallback,
-SimplePIM as an internal L1/L2 compute candidate, and PID-Comm as an internal
-L3 communication candidate. These candidates live under the single final
-`upmem_tn_runtime` category; they are not benchmark routes.
-
-The report distinguishes marker evidence from proven capability. A bounded
-source scan may record evidence paths for terms such as `int8`, `gemm`, or
-`allreduce`, but those fields do not prove a working API or kernel. Capability
-proof requires an explicit bounded build/run check and remains false in this
-wave for SimplePIM GEMM and PID-Comm collectives. The optional
-`benchmark-matrix-report --external-libs-report ...` input only annotates UPMEM
-candidate status; omitting it leaves matrix behavior unchanged with
-`not_checked` candidate fields.
-
-The developer-only one-task dense bridge harness is also outside normal suite
-execution:
-
-```bash
-PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 0 --backend mock_numpy_dequantized
-```
-
-For an explicitly selected later task, it can materialize inputs by replaying
-earlier CPU contractions:
-
-```bash
-PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 1 --materialization cpu-replay --backend mock_numpy_dequantized
-```
-
-The non-executing external stub proves the future cross-process boundary without
-running SimplePIM/native UPMEM:
-
-```bash
-SIMPLEPIM_STUB_BIN=native/upmem/simplepim/simplepim_dense_stub.py PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 0 --backend simplepim_external_stub --execute-external
-```
-
-`external_command_executed=true` for that command means only that the stub
-process ran. `execution_implemented=false` and
-`metadata.native_kernel_executed=false` remain explicit.
-
-The first real simulator-backed dense contraction backend is
-`upmem_sdk_simulator_dense`:
-
-```bash
-PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case bell_2q --task-index 0 --backend upmem_sdk_simulator_dense --execute-external
-PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-task-bridge --case synthetic_l2_square --task-index 0 --backend upmem_sdk_simulator_dense --execute-external
-```
-
-This backend is in the UPMEM/SimplePIM bridge lane but uses UPMEM SDK C/DPU
-code rather than SimplePIM APIs. It consumes the same dense bridge manifest,
-runs a small int8 GEMM with int32 accumulation through the UPMEM simulator,
-writes `outputs/upmem_sdk_simulator_output.npy`, and validates against
-`references/expected_dequantized_output.npy`. Metadata distinguishes simulator
-execution from hardware: `target=simulator`,
-`upmem_dpu_program_executed=true`, `simulator_kernel_executed=true`,
-`hardware_kernel_executed=false`, and `simplepim_api_used=false`. It is
-simulator-only and records bring-up timings only. The supported internal UPMEM
-execution classes are scoped:
-
-- `L1_WRAM`: task-level simulator dense bridge subset with padded direct GEMM;
-- `L2_SINGLE_DPU_MRAM`: task-level simulator real-valued dense bridge subset
-  with one-DPU MRAM operands and WRAM-resident output tiles.
-
-`upmem_sdk_simulator_dense` is a developer bridge backend ID, not a final
-benchmark/provider route. Final reports still expose UPMEM as one unified
-`upmem_tn_runtime` category, with L1/L2/L3 as internal scheduler classes.
-
-The PIM bridge evaluation harness is developer-only thesis evidence generation:
-
-```bash
-PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-bridge-eval --suite configs/suites/pim_bridge_eval_quick.yml --dry-run
-PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-bridge-eval --suite configs/suites/pim_bridge_eval_quick.yml --backend upmem_sdk_simulator_dense --execute-external --max-executed-tasks-per-case 2
-```
-
-It consumes suite `workloads:` but deliberately ignores suite `routes:`. It
-materializes TaskGraph inputs with CPU replay, prepares dense bridge operands,
-executes capped `upmem_sdk_simulator_dense` tasks only when explicitly allowed,
-and writes JSON/CSV/Markdown/plot artifacts about support, blockers, validation,
-and bring-up timings. It is not normal provider execution and does not make PIM
-outputs authoritative for full circuits.
-
-Wave 2E.3 hardens simulator correctness before any hardware or SimplePIM
-comparison work. The UPMEM SDK dense runner uses padded row-major buffers with
-explicit DPU-side strides, and `pim-bridge-eval --debug-failures` can write
-diagnostics comparing simulator output, direct Python int8/int32 reconstruction,
-and optional mock bridge output.
-
-Wave 2E.6 adds the first L2 single-DPU MRAM/WRAM tiled simulator subset. L2
-uses the same dense bridge manifest path, but the native runner selects
-`execution_class=L2_SINGLE_DPU_MRAM` and
-`kernel_strategy=l2_single_dpu_mram_wram_tiled_v1`. Complex L2, hardware L2,
-L3 distributed GEMM, and full routed UPMEM execution remain future work.
-
-The PIM frontier analyzer is also developer-only and does not execute PIM code:
-
-```bash
-PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-frontier-analysis --case bell_2q --n-qubits 2
-PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench pim-frontier-analysis --suite configs/suites/pim_bridge_eval_quick.yml
-```
-
-It classifies each lowered GEMM contraction as modeled `L1_WRAM`,
-`L2_SINGLE_DPU_MRAM`, `L3_MULTI_DPU`, or `L4_OUT_OF_SCOPE`, and reports
-frontier waves, critical path length, modeled DPU occupancy, and dominant
-parallelism source. Memory level is separate from current simulator backend
-support. A frontier width of 1 is expected for serialized pairwise contraction
-paths and should be interpreted as evidence for future path-frontier
-optimization, not as a runtime failure.
-
-Pressure suites such as `configs/suites/pim_frontier_pressure_quick.yml` and
-`configs/suites/pim_frontier_pressure.yml` add explicitly labeled synthetic
-pressure workloads to expose L2/L3/L4 boundaries. Those workloads are
-analysis-only TaskGraphs with GEMM dimensions, dependencies, and UPMEM estimate
-metadata but no tensor arrays. Normal circuit loading and normal benchmark suite
-execution reject `circuit.kind: synthetic_pressure`; only analysis commands can
-consume them.
-
-The benchmark matrix report is the thesis comparison scaffold:
-
-```bash
-PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench benchmark-matrix-report --matrix configs/benchmark_matrix.yml
-```
-
-It separates benchmark route categories from implemented route IDs. For
-example, `cpu_tn_exact` is the matrix category and `cpu_tn_einsum_exact` is the
-current implementation route ID. QuEST CPU full-state remains marked
-`output_authority=benchmark_only` and `validation_policy=metrics_only`.
-
-UPMEM is represented as one final top-level runtime category,
-`upmem_tn_runtime`. `L1_WRAM`, `L2_SINGLE_DPU_MRAM`, `L3_MULTI_DPU`, and
-`L4_OUT_OF_SCOPE` are internal execution classes used by that runtime, not
-separate benchmark competitors. Current UPMEM evidence is scoped as task-level
-simulator dense bridge evidence for the currently eligible L1 subset and
-model-only pressure/frontier evidence for L2/L3/L4. Matrix reports must not turn
-those task-level or modeled rows into full-circuit speedup claims.
-
-It writes:
-
-```text
-runs/<timestamp>_dense_task_bridge/
-  environment.json
-  dense_task_bridge_summary.json
-  bridge/input_manifest.json
-  bridge/operands/*.npy
-  bridge/references/*.npy
-  bridge/output_manifest.json
-  bridge/outputs/*.npy       only for the mock backend
-```
-
-This command is a file-boundary and preparation check for one real
-`ContractionTask`. It is mock-by-default, does not select `dense_gemm` in normal
-routing, and keeps `external_command_executed=false` and
-`execution_implemented=false`. CPU replay is developer-only input
-materialization for the harness; it is not the normal CPU execution path and not
-full routed TaskGraph execution.
-
-The dense route coverage analyzer extends this from one selected task to all
-tasks in selected circuits, still without routed execution:
-
-```bash
-PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench dense-route-coverage --case bell_2q
-```
-
-It writes `dense_route_coverage.json`, `.csv`, and `.md` artifacts that report
-materialization, dense preparation, fixed-point conversion, WRAM tile-plan,
-bridge-manifest eligibility, and optional external-stub readiness per task.
-This is thesis evidence for route feasibility and bottlenecks; it does not
-select `dense_gemm` in normal routing and does not execute SimplePIM/native
-UPMEM.
-
-The shadow routed runtime is the first developer-only full TaskGraph harness
-that is route-aware from start to finish:
-
-```bash
-PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench shadow-routed-runtime --case bell_2q
-```
-
-It iterates every `ContractionTask`, records task-router candidates, performs
-dense route preparation/bridge checks as shadow evidence, and then executes the
-task numerically with CPU fallback. CPU fallback is always authoritative in this
-wave: dense mock/stub outputs never replace runtime tensors, final validation is
-against the CPU fallback result, and `selected_authoritative_route` remains
-`cpu_fallback` for every task. Optional bridge/stub checks are capped by
-`--max-bridge-artifacts`; subprocess execution is allowed only for the explicit
-`simplepim_external_stub` path with `--dense-shadow stub`, `--execute-external`,
-and `SIMPLEPIM_STUB_BIN`.
-
-The shadow route policy inside this command is a what-if selector. Router
-candidates are all task route evaluations, the shadow policy choice records
-which route would be selected under a chosen future policy, and the
-authoritative route remains the CPU fallback used for tensor data and final
-validation. For example:
-
-```bash
-PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench shadow-routed-runtime --case bell_2q --shadow-route-policy dense-if-estimate-supported
-```
-
-It writes:
-
-```text
-runs/<timestamp>_<case_or_suite>_shadow_routed_runtime/
-  environment.json
-  shadow_routed_runtime.json
-  shadow_routed_runtime.csv
-  shadow_routed_runtime_summary.md
-  cases/<case_id>/shadow_routed_runtime.jsonl
-  cases/<case_id>/dense_bridge/task_0000/...   optional capped bridge artifacts
-```
-
-Plots follow one rule: bars compare different cases/routes, and lines are used
-only for scaling within a single circuit family across qubit counts.
-
-## Target Pipeline
-
-The thesis implementation should stay simple and explicit:
+## End-To-End Direction
 
 ```text
 Quantum circuit
   -> tensor network
-  -> UPMEM-aware contraction path search
-       cost = FLOPs
-            + peak intermediate size
-            + WRAM feasibility
-            + estimated host-DPU traffic
-            + available task/tile parallelism
-            + DPU load balance
-            + synchronization/aggregation cost
-  -> executable contraction schedule
-       tasks/tiles mapped to DPUs
-  -> UPMEM execution
-  -> CPU/QuEST validation and benchmark comparison
+  -> contraction path and TaskGraph
+  -> host-side UPMEM-aware cost and readiness analysis
+  -> task scheduling / route decisions
+  -> UPMEM execution for supported bounded local tasks
+  -> host aggregation
+  -> CPU/QuEST validation and benchmark artifacts
 ```
 
-The host CPU owns global planning, path search, tiling, route decisions,
-validation, and aggregation. UPMEM providers should execute only bounded local
-tile tasks.
+The intended UPMEM path is not CPU fallback hidden behind route metadata. CPU
+fallback remains essential for validation and diagnostics, but UPMEM evaluation
+must report which tensor-network contraction work actually executed on UPMEM,
+which work was modeled only, which work fell back, and why.
 
-## Next Implementation Priorities
+## Current Routes
 
-1. Connect `formats/` fixed-point records to future route preparation artifacts
-   once task routes begin preparing tensors.
-2. Use `upmem-env-check --run-sample --target simulator` to verify the local
-   SimplePIM/UPMEM toolchain before real backend work.
-3. Use `upmem_sdk_simulator_dense` to validate L1 direct and L2 real-valued
-   tiled TaskGraph contractions through the UPMEM simulator.
-4. Extend the L2 tiled subset beyond the current one-DPU real-valued developer
-   bridge cases, then prepare L3 distributed execution modeling/bring-up.
-5. Connect `routing/` from analysis-only route decisions to a preparation and
-   execution-aware task router.
-6. Port the useful dense UPMEM kernel only after the task schedule and WRAM model
-   exist.
-7. Add sparse and heuristic/permutation providers after the dense path is
-   structurally stable.
+| Route ID | Role | Output authority |
+|---|---|---|
+| `cpu_tn_einsum_exact` | Exact tensor-network CPU reference | Authoritative full tensor output |
+| `quest_cpu_full_state_benchmark` | QuEST CPU full-state baseline | Benchmark-only metrics |
+| `upmem_dense_int8_placeholder` | UPMEM dense candidate placeholder | Estimate/skip metadata only |
+
+The QuEST route is useful for timing comparison, but it is not the thesis
+output authority. The CPU exact TN route is the current correctness reference.
+
+## UPMEM Runtime Status
+
+`upmem_tn_runtime` is the final UPMEM benchmark category. Its internal execution
+classes currently stand here:
+
+| Class | Current status | Complex support | Notes |
+|---|---|---|---|
+| `L1_WRAM` | Implemented for task-level UPMEM SDK simulator dense bridge subset | Split-complex supported when manifest layout is explicit | Padded direct GEMM, simulator only |
+| `L2_SINGLE_DPU_MRAM` | Implemented for task-level UPMEM SDK simulator real-valued tiled subset | Complex rejected as `complex_l2_not_implemented` | One-DPU MRAM operands, WRAM output tiles |
+| `L3_MULTI_DPU` | Model-only/planned | Not implemented | Needs distributed scheduling and communication |
+| `L4_OUT_OF_SCOPE` | Model-only pressure boundary | Not applicable | Exceeds aggregate modeled UPMEM memory |
+
+Current UPMEM evidence is task-level simulator evidence. It must not be reported
+as full-circuit acceleration.
+
+## Core Subsystems
+
+| Subsystem | Location | Status |
+|---|---|---|
+| Benchmark runner and suite loading | `src/quantum_bench/bench/runner.py` | Implemented |
+| Circuit and tensor-network construction | `circuits/`, `tn/` | Implemented for current builtins |
+| CPU exact task execution | `providers/exact_tn/cpu_einsum.py` | Implemented |
+| TaskGraph materialization replay | `tn/materialize.py` | Developer helper |
+| Task-level routing and policy | `routing/` | Analysis/shadow only |
+| Fixed-point conversion | `formats/fixed_point.py` | Implemented host-side utilities |
+| UPMEM schedule and tile model | `targets/upmem/schedule.py`, `tile_plan.py` | Implemented model and L1/L2 bridge metadata |
+| Dense bridge manifests | `targets/upmem/dense_bridge.py` | Implemented |
+| Generic fallback preparation and bridge | `routing/generic_prepare.py`, `targets/upmem/generic_bridge.py` | Implemented MVP for small real binary contractions |
+| UPMEM SDK simulator dense runner | `native/upmem/simplepim/upmem_sdk_dense*` | Implemented L1/L2 subsets |
+| UPMEM SDK simulator generic loop runner | `native/upmem/simplepim/upmem_sdk_generic_loop*` | Implemented correctness/coverage MVP |
+| PIM bridge evaluation | `bench/pim_bridge_eval.py` | Developer task-level evidence harness |
+| PIM frontier analysis | `bench/pim_frontier_analysis.py`, `targets/upmem/frontier.py` | Model-only analysis |
+| Benchmark matrix report | `bench/benchmark_matrix_report.py` | Thesis scaffold |
+| External library scan | `targets/upmem/external_libs.py` | Evidence-only feasibility scan |
+
+## External Source Trees
+
+`implementation/external` is canonical for active implementation dependencies
+and is populated by Git submodules. `../legacy/extern` is historical fallback
+only and should not be required by a standalone checkout.
+
+| Source | Current role |
+|---|---|
+| `external/QuEST` | Submodule dependency for the CPU full-state C runner |
+| `external/SimplePIM` | Submodule candidate for UPMEM compute/runtime abstraction for L1/L2 and local tile compute inside L3 |
+| `external/PID-Comm` | Submodule candidate for communication/orchestration across L1/L2/L3, strongest for L3 distributed contraction |
+| ATiM | SLR-derived tensor-kernel autotuning candidate; no submodule until the authoritative URL is confirmed |
+| SparseP, PRISM, PyGim | Sparse or irregular PIM references, not integrated |
+| PIM-LLM GEMM | Optimized GEMM design reference, not integrated |
+| TransPimLib | Optional special-math support candidate, not integrated |
+| Native UPMEM SDK | Current control/fallback implementation |
+
+Capability scans must not turn text markers into proven support. For example,
+`gemm`, `int8`, or `allreduce` evidence in source files is recorded as evidence
+only until a bounded build/run/API check proves the capability.
+
+## Developer Harnesses
+
+These commands are intentionally outside normal benchmark provider execution:
+
+| Command | Purpose | Evidence boundary |
+|---|---|---|
+| `dense-task-bridge` | One real task through dense preparation and bridge backend | Task-level only |
+| `generic-task-bridge` | One real task through the unoptimized generic fallback bridge | Task-level simulator evidence only |
+| `dense-route-coverage` | All-task readiness and bridge eligibility | Analysis only |
+| `shadow-routed-runtime` | Full graph with CPU fallback authoritative and shadow route evidence | Diagnostic only |
+| `pim-bridge-eval` | Capped task-level simulator execution across workloads | Task-level simulator evidence |
+| `pim-frontier-analysis` | Memory-level and parallelism-frontier model | Model-only |
+| `benchmark-matrix-report` | Final thesis matrix scaffold | Report scaffold |
+| `compare-results` | Artifact-driven comparison of generated result files | Reporting only |
+| `upmem-env-check` | UPMEM SDK / SimplePIM environment bring-up | Environment evidence |
+| `upmem-external-libs-check` | SimplePIM/PID-Comm/native SDK candidate report | Feasibility evidence |
+
+`shadow-routed-runtime` always keeps CPU fallback authoritative. Dense mock,
+stub, or simulator outputs must not feed later graph tensors in the current
+architecture.
+
+## Synthetic Pressure Workloads
+
+Synthetic pressure workloads live in `targets/upmem/synthetic_pressure.py` and
+pressure suites. They are not quantum circuits. They exist to expose L2/L3/L4
+memory and parallelism boundaries without allocating real tensors.
+
+They must declare:
+
+```text
+workload_type: synthetic_pressure
+execution_scope: model_only
+not_real_quantum_circuit: true
+```
+
+Normal circuit loading and normal benchmark execution must reject
+`circuit.kind: synthetic_pressure` with an explicit analysis-only error.
+
+## Artifact Policy
+
+Runs write timestamped directories under `runs/`. Those artifacts are generated
+and should not be treated as source. The repo should keep code, configs, tests,
+docs, and implementation-local external source manifests. Native build outputs,
+Python caches, and local benchmark runs are generated.
+
+Plots follow a simple rule: bars compare cases/routes/categories; lines show
+scaling within one comparable circuit family. Do not connect unrelated circuit
+families with one line.
 
 ## Design Rules
 
-- Keep one benchmark runner.
-- Keep providers behind the provider interface.
-- Do not add legacy route names during this design stage.
-- Do not add separate plotting or benchmark scripts for individual baselines.
-- Optional hardware or external tools must skip with explicit reasons.
-- Do not claim UPMEM speedup until transfer, conversion, validation, and
-  aggregation costs are visible in the artifacts.
+- Keep one benchmark runner and one comparable artifact schema.
+- Use kernel-family work-share reporting before interpreting benchmark timings.
+- Keep route IDs, backend IDs, and internal execution classes distinct.
+- Keep UPMEM as one final benchmark category.
+- Keep optional tools skippable with explicit reasons.
+- Do not claim speedup until execution scope, validation, transfer, conversion,
+  aggregation, and fallback work share are visible.
+- Do not let synthetic pressure workloads enter normal benchmark execution.
+- Do not add compatibility aliases during this design stage unless explicitly
+  required by a migration.

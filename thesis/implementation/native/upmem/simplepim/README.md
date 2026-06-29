@@ -145,10 +145,52 @@ Wave 2E.1 must report `hardware_target_disabled` and must not launch hardware.
 Recorded build/run timings are bring-up timings, not final performance
 evidence.
 
-Raw UPMEM SDK experiments should remain separate from this bridge. SimplePIM is
-the preferred first dense execution path if it is practical because it should
-reduce early SDK and kernel boilerplate while the host-side task, tile-plan, and
-validation contracts are still stabilizing.
+Raw UPMEM SDK experiments should remain explicit control/fallback
+implementations inside this bridge lane. SimplePIM is the target UPMEM
+compute/runtime abstraction for L1/L2 and local tile compute inside L3, but it
+must not be claimed as the dense execution path until a SimplePIM kernel is
+actually integrated and validated.
+
+## UPMEM SDK Simulator Generic Loop Runner
+
+`upmem_sdk_generic_loop_runner.py` is an intentionally unoptimized fallback
+contract for small real-valued binary tensor contractions. It is separate from
+the dense GEMM runner and uses:
+
+- `backend_id: upmem_sdk_simulator_generic_loop`
+- `kernel_family: generic_loop_fallback`
+- `simplepim_api_used: false`
+- `native_sdk_control_path: true`
+
+The bridge manifest stores human-readable labels for audit only. The native
+contract uses compact integer axis maps, shape arrays, stride arrays, and
+relative `.npy` blob paths. The DPU program does not parse labels or JSON-like
+structures.
+
+The validation target is quantization-aware:
+
+```text
+int8 left x int8 right -> int32 accumulation -> dequantized output
+```
+
+`expected_quantized_reference_output.npy` is the CPU int32-accumulation
+reference dequantized with the recorded scales. `full_precision_reference_output.npy`
+is diagnostic only and is not the native validation target.
+
+The generic kernel exists for coverage and route validation. It is not a
+performance kernel and should not be used for speedup claims. It currently
+rejects complex tensors with `complex_generic_loop_not_implemented`, enforces
+small rank/element caps, and guards int32 overflow with:
+
+```text
+contracted_combination_count * 127 * 127 <= int32_max
+```
+
+Developer command:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench generic-task-bridge --case bell_2q --task-index 0 --backend upmem_sdk_simulator_generic_loop --execute-external
+```
 
 ## Environment Verification
 
@@ -167,7 +209,7 @@ The checker records:
   `dpu-pkg-config`;
 - `SIMPLEPIM_HOME`, if configured;
 - `SIMPLEPIM_STUB_BIN`, if configured for the non-executing stub;
-- the repository fallback `../legacy/extern/SimplePIM` from
+- the implementation-local fallback `external/SimplePIM` from
   `thesis/implementation`;
 - optional SimplePIM sample build and simulator run status.
 
