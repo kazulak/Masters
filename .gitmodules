@@ -4,3 +4,12 @@
 [submodule "thesis/extern/SimplePIM"]
 	path = thesis/extern/SimplePIM
 	url = https://github.com/CMU-SAFARI/SimplePIM.git
+[submodule "thesis/implementation/external/QuEST"]
+	path = thesis/implementation/external/QuEST
+	url = https://github.com/quest-kit/QuEST.git
+[submodule "thesis/implementation/external/SimplePIM"]
+	path = thesis/implementation/external/SimplePIM
+	url = https://github.com/CMU-SAFARI/SimplePIM.git
+[submodule "thesis/implementation/external/PID-Comm"]
+	path = thesis/implementation/external/PID-Comm
+	url = https://github.com/AIS-SNU/PID-Comm.git

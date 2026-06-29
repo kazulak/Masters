@@ -158,14 +158,16 @@ def test_discover_pid_comm_source_order(tmp_path: Path) -> None:
     root.mkdir()
     cli = tmp_path / "cli_pid"
     env = tmp_path / "env_pid"
-    fallback = tmp_path / "legacy" / "extern" / "PID-Comm"
+    fallback = root / "external" / "PID-Comm"
     cli.mkdir()
     env.mkdir()
     fallback.mkdir(parents=True)
 
     assert discover_pid_comm_source(root, pid_comm_home=str(cli), env={"PID_COMM_HOME": str(env)})["source"] == "cli"
     assert discover_pid_comm_source(root, env={"PID_COMM_HOME": str(env)})["source"] == "environment"
-    assert discover_pid_comm_source(root, env={})["home"] == str(fallback)
+    fallback_result = discover_pid_comm_source(root, env={})
+    assert fallback_result["source"] == "implementation_external"
+    assert fallback_result["home"] == str(fallback)
 
 
 def test_external_pim_libraries_report_serializes_without_execution_claims(tmp_path: Path) -> None:

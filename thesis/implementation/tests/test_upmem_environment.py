@@ -102,7 +102,7 @@ def test_discover_simplepim_source_cli_env_fallback_and_missing(tmp_path: Path) 
     root_dir.mkdir()
     cli_tree = _fake_simplepim_tree(tmp_path / "cli_simplepim")
     env_tree = _fake_simplepim_tree(tmp_path / "env_simplepim")
-    fallback_tree = _fake_simplepim_tree(tmp_path / "legacy" / "extern" / "SimplePIM")
+    fallback_tree = _fake_simplepim_tree(root_dir / "external" / "SimplePIM")
 
     cli = discover_simplepim_source(root_dir, simplepim_home_override=str(cli_tree), env={"SIMPLEPIM_HOME": str(env_tree)})
     env = discover_simplepim_source(root_dir, env={"SIMPLEPIM_HOME": str(env_tree)})
@@ -115,7 +115,7 @@ def test_discover_simplepim_source_cli_env_fallback_and_missing(tmp_path: Path) 
     assert cli.simplepim_home == str(cli_tree)
     assert env.simplepim_source == "environment"
     assert env.simplepim_home == str(env_tree)
-    assert fallback.simplepim_source == "repo_fallback"
+    assert fallback.simplepim_source == "implementation_external"
     assert fallback.simplepim_home == str(fallback_tree)
     assert missing.simplepim_detected is False
     assert missing.simplepim_source == "none"

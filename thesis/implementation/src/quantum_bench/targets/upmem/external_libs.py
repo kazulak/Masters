@@ -425,15 +425,15 @@ def discover_pid_comm_source(
     env: Mapping[str, str] | None = None,
 ) -> JsonDict:
     probe_env = env if env is not None else os.environ
-    extern = root_dir.parent / "legacy" / "extern"
+    extern = root_dir / "external"
     candidates: tuple[tuple[str, str | None], ...] = (
         ("cli", pid_comm_home),
         ("environment", probe_env.get("PID_COMM_HOME")),
-        ("repo_fallback", str(extern / "PID-Comm")),
-        ("repo_fallback", str(extern / "PID_Comm")),
-        ("repo_fallback", str(extern / "PIDComm")),
-        ("repo_fallback", str(extern / "pid-comm")),
-        ("repo_fallback", str(extern / "pid_comm")),
+        ("implementation_external", str(extern / "PID-Comm")),
+        ("implementation_external", str(extern / "PID_Comm")),
+        ("implementation_external", str(extern / "PIDComm")),
+        ("implementation_external", str(extern / "pid-comm")),
+        ("implementation_external", str(extern / "pid_comm")),
     )
     for source, raw_path in candidates:
         cleaned = _clean_path(raw_path)

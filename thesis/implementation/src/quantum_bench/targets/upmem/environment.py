@@ -247,7 +247,7 @@ def discover_simplepim_source(
     candidates: tuple[tuple[str, str | None], ...] = (
         ("cli", simplepim_home_override),
         ("environment", probe_env.get("SIMPLEPIM_HOME")),
-        ("repo_fallback", str(root_dir.parent / "legacy" / "extern" / "SimplePIM")),
+        ("implementation_external", str(root_dir / "external" / "SimplePIM")),
     )
     for source, raw_path in candidates:
         cleaned = _clean_path(raw_path)
