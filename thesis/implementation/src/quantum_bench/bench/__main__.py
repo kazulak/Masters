@@ -49,6 +49,13 @@ def main() -> int:
     )
     dense_bridge_parser.add_argument("--execute-external", action="store_true")
 
+    generic_bridge_parser = sub.add_parser("generic-task-bridge")
+    generic_bridge_parser.add_argument("--case", default="bell_2q")
+    generic_bridge_parser.add_argument("--n-qubits", type=int)
+    generic_bridge_parser.add_argument("--task-index", type=int, required=True)
+    generic_bridge_parser.add_argument("--backend", default="upmem_sdk_simulator_generic_loop", choices=("upmem_sdk_simulator_generic_loop",))
+    generic_bridge_parser.add_argument("--execute-external", action="store_true")
+
     coverage_parser = sub.add_parser("dense-route-coverage")
     coverage_input = coverage_parser.add_mutually_exclusive_group(required=True)
     coverage_input.add_argument("--suite", help="Suite path or preset name under configs/suites")
@@ -128,6 +135,10 @@ def main() -> int:
     external_libs_parser.add_argument("--timeout-seconds", type=float, default=10.0)
     external_libs_parser.add_argument("--check-pid-comm-build", action="store_true")
 
+    compare_results_parser = sub.add_parser("compare-results")
+    compare_results_parser.add_argument("--inputs", nargs="+", required=True)
+    compare_results_parser.add_argument("--out", required=True)
+
     sub.add_parser("probe")
 
     args = parser.parse_args()
@@ -201,6 +212,31 @@ def main() -> int:
             backend=args.backend,
             execute_external=args.execute_external,
             materialization=args.materialization,
+        )
+        print(
+            json.dumps(
+                {
+                    "run_dir": str(result.run_dir),
+                    "summary_path": str(result.summary_path),
+                    "status": result.status,
+                    "reason": result.reason,
+                },
+                indent=2,
+            )
+        )
+        return 0
+    if args.command == "generic-task-bridge":
+        from quantum_bench.bench.generic_task_bridge import run_generic_task_bridge
+
+        if args.backend == "upmem_sdk_simulator_generic_loop" and not args.execute_external:
+            parser.error("--backend upmem_sdk_simulator_generic_loop requires --execute-external")
+        result = run_generic_task_bridge(
+            root_dir,
+            case=args.case,
+            n_qubits=args.n_qubits,
+            task_index=args.task_index,
+            backend=args.backend,
+            execute_external=args.execute_external,
         )
         print(
             json.dumps(
@@ -461,6 +497,27 @@ def main() -> int:
                     "artifact": str(artifact_path),
                     "summary": str(run_dir / "external_pim_libraries_summary.md"),
                     "status": status,
+                },
+                indent=2,
+            )
+        )
+        return 0
+    if args.command == "compare-results":
+        from quantum_bench.bench.result_artifacts import compare_results
+
+        try:
+            result = compare_results((Path(item) for item in args.inputs), Path(args.out))
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(
+            json.dumps(
+                {
+                    "run_dir": str(result.run_dir),
+                    "artifact": str(result.artifact_path),
+                    "csv": str(result.csv_path),
+                    "summary": str(result.summary_path),
+                    "record_count": result.record_count,
+                    "status": "completed",
                 },
                 indent=2,
             )

@@ -21,6 +21,17 @@ from quantum_bench.routing.dense_prepare import (
     DenseTaskValidationMetrics,
     prepare_dense_task,
 )
+from quantum_bench.routing.generic_prepare import (
+    GENERIC_TASK_PREPARATION_SCHEMA_VERSION,
+    GENERIC_TASK_ROUTE_ID,
+    GenericTaskPreparationCaps,
+    GenericTaskPreparationInput,
+    GenericTaskPreparationResult,
+    GenericTaskPreparationStatus,
+    GenericTaskPreparedOperands,
+    generic_loop_reference_int32,
+    prepare_generic_task,
+)
 from quantum_bench.routing.policy import (
     SHADOW_ROUTE_POLICY_IDS,
     SHADOW_POLICY_BLOCKERS,
@@ -38,6 +49,8 @@ from quantum_bench.routing.task_routes import default_task_routes
 __all__ = [
     "DENSE_TASK_PREPARATION_SCHEMA_VERSION",
     "DENSE_TASK_ROUTE_ID",
+    "GENERIC_TASK_PREPARATION_SCHEMA_VERSION",
+    "GENERIC_TASK_ROUTE_ID",
     "STATIC_TASK_ROUTER_ID",
     "TASK_ROUTE_DECISION_SCHEMA_VERSION",
     "TASK_ROUTE_STATUSES",
@@ -49,6 +62,11 @@ __all__ = [
     "DenseTaskPreparationStatus",
     "DenseTaskPreparedOperands",
     "DenseTaskValidationMetrics",
+    "GenericTaskPreparationCaps",
+    "GenericTaskPreparationInput",
+    "GenericTaskPreparationResult",
+    "GenericTaskPreparationStatus",
+    "GenericTaskPreparedOperands",
     "TaskRouteCapabilities",
     "TaskRouteContext",
     "TaskRouteDecision",
@@ -63,7 +81,9 @@ __all__ = [
     "ShadowRoutePolicySummary",
     "default_task_routes",
     "evaluate_shadow_route_policy",
+    "generic_loop_reference_int32",
     "prepare_dense_task",
+    "prepare_generic_task",
     "route_task_graph",
     "summarize_shadow_route_policy",
 ]

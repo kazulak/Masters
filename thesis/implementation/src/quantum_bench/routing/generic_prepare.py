@@ -1,0 +1,408 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Literal
+
+import numpy as np
+
+from quantum_bench.core.records import ContractionTask, JsonDict, TensorValue, to_jsonable
+from quantum_bench.formats import (
+    FixedPointConversionRecord,
+    FixedPointSpec,
+    conversion_error_metrics,
+    quantize_fixed_point,
+)
+
+
+GENERIC_TASK_PREPARATION_SCHEMA_VERSION = "generic_task_preparation_v1"
+GENERIC_TASK_ROUTE_ID = "generic_loop_fallback"
+INT8_MAX_ABS_VALUE = 127
+INT32_MAX_VALUE = (2**31) - 1
+
+GenericTaskPreparationStatus = Literal["prepared", "unsupported_shape", "failed"]
+
+
+@dataclass(frozen=True)
+class GenericTaskPreparationCaps:
+    max_rank: int = 6
+    max_tensor_elements: int = 4096
+    max_contracted_combinations: int = 4096
+
+
+@dataclass(frozen=True)
+class GenericTaskPreparedOperands:
+    left_quantized: np.ndarray
+    right_quantized: np.ndarray
+    expected_quantized_reference_output: np.ndarray
+    full_precision_reference_output: np.ndarray
+
+
+@dataclass(frozen=True)
+class GenericTaskPreparationInput:
+    task: ContractionTask
+    left_tensor: TensorValue
+    right_tensor: TensorValue
+    fixed_point_spec: FixedPointSpec = field(default_factory=lambda: FixedPointSpec(route_dtype="int8", complex_policy="reject"))
+    caps: GenericTaskPreparationCaps = field(default_factory=GenericTaskPreparationCaps)
+    route_id: str = GENERIC_TASK_ROUTE_ID
+
+
+@dataclass(frozen=True)
+class GenericTaskPreparationResult:
+    schema_version: str
+    route_id: str
+    task_id: str
+    status: GenericTaskPreparationStatus
+    reason: str | None
+    error: str | None
+    input_tensor_ids: tuple[str, str]
+    output_tensor_id: str
+    left_labels: tuple[int, ...]
+    right_labels: tuple[int, ...]
+    contracted_labels: tuple[int, ...]
+    output_labels: tuple[int, ...]
+    input_shapes: tuple[tuple[int, ...], tuple[int, ...]]
+    output_shape: tuple[int, ...]
+    left_strides: tuple[int, ...]
+    right_strides: tuple[int, ...]
+    output_strides: tuple[int, ...]
+    output_to_left_axes: tuple[int, ...]
+    output_to_right_axes: tuple[int, ...]
+    contracted_to_left_axes: tuple[int, ...]
+    contracted_to_right_axes: tuple[int, ...]
+    contracted_dims: tuple[int, ...]
+    output_element_count: int
+    contracted_combination_count: int
+    fixed_point_spec: FixedPointSpec
+    left_conversion: FixedPointConversionRecord | None
+    right_conversion: FixedPointConversionRecord | None
+    validation_metrics: JsonDict
+    full_precision_error_metrics: JsonDict
+    caps: GenericTaskPreparationCaps
+    external_command_executed: bool
+    execution_implemented: bool
+    metadata: JsonDict = field(default_factory=dict)
+    prepared_operands: GenericTaskPreparedOperands | None = field(default=None, repr=False, compare=False)
+
+    def to_json_dict(self) -> JsonDict:
+        return to_jsonable(
+            {
+                "schema_version": self.schema_version,
+                "route_id": self.route_id,
+                "task_id": self.task_id,
+                "status": self.status,
+                "reason": self.reason,
+                "error": self.error,
+                "input_tensor_ids": self.input_tensor_ids,
+                "output_tensor_id": self.output_tensor_id,
+                "left_labels": self.left_labels,
+                "right_labels": self.right_labels,
+                "contracted_labels": self.contracted_labels,
+                "output_labels": self.output_labels,
+                "input_shapes": self.input_shapes,
+                "output_shape": self.output_shape,
+                "native_index_metadata": {
+                    "left_strides": self.left_strides,
+                    "right_strides": self.right_strides,
+                    "output_strides": self.output_strides,
+                    "output_to_left_axes": self.output_to_left_axes,
+                    "output_to_right_axes": self.output_to_right_axes,
+                    "contracted_to_left_axes": self.contracted_to_left_axes,
+                    "contracted_to_right_axes": self.contracted_to_right_axes,
+                    "contracted_dims": self.contracted_dims,
+                    "output_element_count": self.output_element_count,
+                    "contracted_combination_count": self.contracted_combination_count,
+                },
+                "fixed_point_spec": self.fixed_point_spec,
+                "conversion_records": {
+                    "left": self.left_conversion,
+                    "right": self.right_conversion,
+                },
+                "validation_metrics": self.validation_metrics,
+                "full_precision_error_metrics": self.full_precision_error_metrics,
+                "caps": self.caps,
+                "external_command_executed": self.external_command_executed,
+                "execution_implemented": self.execution_implemented,
+                "metadata": self.metadata,
+            }
+        )
+
+
+def prepare_generic_task(preparation: GenericTaskPreparationInput) -> GenericTaskPreparationResult:
+    try:
+        return _prepare_generic_task(preparation)
+    except Exception as exc:  # pragma: no cover - defensive boundary
+        return _base_result(preparation, status="failed", reason="host_preparation_exception", error=str(exc))
+
+
+def generic_loop_reference_int32(
+    left_quantized: np.ndarray,
+    right_quantized: np.ndarray,
+    *,
+    output_shape: tuple[int, ...],
+    left_strides: tuple[int, ...],
+    right_strides: tuple[int, ...],
+    output_strides: tuple[int, ...],
+    output_to_left_axes: tuple[int, ...],
+    output_to_right_axes: tuple[int, ...],
+    contracted_to_left_axes: tuple[int, ...],
+    contracted_to_right_axes: tuple[int, ...],
+    contracted_dims: tuple[int, ...],
+) -> np.ndarray:
+    output = np.zeros(output_shape, dtype=np.int32)
+    flat_left = np.asarray(left_quantized, dtype=np.int8).ravel()
+    flat_right = np.asarray(right_quantized, dtype=np.int8).ravel()
+    flat_output = output.ravel()
+    output_element_count = int(output.size)
+    contracted_count = _shape_product(contracted_dims)
+
+    for output_linear in range(output_element_count):
+        output_coords = _decode_index(output_linear, output_shape, output_strides)
+        total = 0
+        for contracted_linear in range(contracted_count):
+            contracted_coords = _decode_index(contracted_linear, contracted_dims, _row_major_strides(contracted_dims))
+            left_offset = _mapped_offset(output_coords, contracted_coords, output_to_left_axes, contracted_to_left_axes, left_strides)
+            right_offset = _mapped_offset(output_coords, contracted_coords, output_to_right_axes, contracted_to_right_axes, right_strides)
+            total += int(flat_left[left_offset]) * int(flat_right[right_offset])
+        flat_output[output_linear] = total
+    return output
+
+
+def _prepare_generic_task(preparation: GenericTaskPreparationInput) -> GenericTaskPreparationResult:
+    task = preparation.task
+    mismatch = _validate_tensor_binding(task, preparation.left_tensor, preparation.right_tensor)
+    if mismatch is not None:
+        return _base_result(preparation, status="unsupported_shape", reason=mismatch)
+
+    left_array = _real_array_or_none(np.asarray(preparation.left_tensor.array))
+    right_array = _real_array_or_none(np.asarray(preparation.right_tensor.array))
+    if left_array is None or right_array is None:
+        return _base_result(preparation, status="unsupported_shape", reason="complex_generic_loop_not_implemented")
+    if preparation.fixed_point_spec.route_dtype != "int8":
+        return _base_result(preparation, status="unsupported_shape", reason="unsupported_dtype")
+
+    metadata_or_reason = _native_index_metadata(task, preparation.caps)
+    if isinstance(metadata_or_reason, str):
+        return _base_result(preparation, status="unsupported_shape", reason=metadata_or_reason)
+    metadata = metadata_or_reason
+
+    left_converted = quantize_fixed_point(left_array, preparation.fixed_point_spec)
+    right_converted = quantize_fixed_point(right_array, preparation.fixed_point_spec)
+    full_precision_reference = np.einsum(task.index_expression, left_array, right_array, optimize=False)
+
+    int32_reference = generic_loop_reference_int32(
+        left_converted.array,
+        right_converted.array,
+        output_shape=task.output_shape,
+        left_strides=metadata["left_strides"],
+        right_strides=metadata["right_strides"],
+        output_strides=metadata["output_strides"],
+        output_to_left_axes=metadata["output_to_left_axes"],
+        output_to_right_axes=metadata["output_to_right_axes"],
+        contracted_to_left_axes=metadata["contracted_to_left_axes"],
+        contracted_to_right_axes=metadata["contracted_to_right_axes"],
+        contracted_dims=metadata["contracted_dims"],
+    )
+    int32_dequantized = int32_reference.astype(np.float64) * float(left_converted.record.scale) * float(right_converted.record.scale)
+    expected_quantized_reference = int32_dequantized
+    validation = conversion_error_metrics(expected_quantized_reference, int32_dequantized)
+    full_precision_error = conversion_error_metrics(full_precision_reference, expected_quantized_reference)
+
+    if tuple(expected_quantized_reference.shape) != task.output_shape:
+        return _base_result(preparation, status="unsupported_shape", reason="output_shape_mismatch")
+
+    operands = GenericTaskPreparedOperands(
+        left_quantized=left_converted.array,
+        right_quantized=right_converted.array,
+        expected_quantized_reference_output=expected_quantized_reference,
+        full_precision_reference_output=full_precision_reference,
+    )
+    return _base_result(
+        preparation,
+        status="prepared",
+        reason=None,
+        left_conversion=left_converted.record,
+        right_conversion=right_converted.record,
+        validation_metrics={
+            "reference_kind": "expected_quantized_reference_vs_python_generic_loop_int32",
+            "max_abs_error": validation.max_abs_error,
+            "l2_error": validation.l2_error,
+            "relative_l2_error": validation.relative_l2_error,
+            "passed": validation.max_abs_error == 0.0,
+        },
+        full_precision_error_metrics={
+            "reference_kind": "full_precision_vs_expected_quantized_reference",
+            "max_abs_error": full_precision_error.max_abs_error,
+            "l2_error": full_precision_error.l2_error,
+            "relative_l2_error": full_precision_error.relative_l2_error,
+        },
+        metadata={
+            "kernel_family": "generic_loop_fallback",
+            "validation_target": "expected_quantized_reference_output",
+            "full_precision_reference_is_validation_target": False,
+            **metadata,
+        },
+        prepared_operands=operands,
+    )
+
+
+def _base_result(
+    preparation: GenericTaskPreparationInput,
+    *,
+    status: GenericTaskPreparationStatus,
+    reason: str | None,
+    error: str | None = None,
+    left_conversion: FixedPointConversionRecord | None = None,
+    right_conversion: FixedPointConversionRecord | None = None,
+    validation_metrics: JsonDict | None = None,
+    full_precision_error_metrics: JsonDict | None = None,
+    metadata: JsonDict | None = None,
+    prepared_operands: GenericTaskPreparedOperands | None = None,
+) -> GenericTaskPreparationResult:
+    task = preparation.task
+    native_metadata = metadata or {}
+    return GenericTaskPreparationResult(
+        schema_version=GENERIC_TASK_PREPARATION_SCHEMA_VERSION,
+        route_id=preparation.route_id,
+        task_id=task.id,
+        status=status,
+        reason=reason,
+        error=error,
+        input_tensor_ids=task.input_tensor_ids,
+        output_tensor_id=task.output_tensor_id,
+        left_labels=task.left_labels,
+        right_labels=task.right_labels,
+        contracted_labels=task.contracted_labels,
+        output_labels=task.output_labels,
+        input_shapes=task.input_shapes,
+        output_shape=task.output_shape,
+        left_strides=tuple(native_metadata.get("left_strides", ())),
+        right_strides=tuple(native_metadata.get("right_strides", ())),
+        output_strides=tuple(native_metadata.get("output_strides", ())),
+        output_to_left_axes=tuple(native_metadata.get("output_to_left_axes", ())),
+        output_to_right_axes=tuple(native_metadata.get("output_to_right_axes", ())),
+        contracted_to_left_axes=tuple(native_metadata.get("contracted_to_left_axes", ())),
+        contracted_to_right_axes=tuple(native_metadata.get("contracted_to_right_axes", ())),
+        contracted_dims=tuple(native_metadata.get("contracted_dims", ())),
+        output_element_count=int(native_metadata.get("output_element_count", 0) or 0),
+        contracted_combination_count=int(native_metadata.get("contracted_combination_count", 0) or 0),
+        fixed_point_spec=preparation.fixed_point_spec,
+        left_conversion=left_conversion,
+        right_conversion=right_conversion,
+        validation_metrics=validation_metrics or {},
+        full_precision_error_metrics=full_precision_error_metrics or {},
+        caps=preparation.caps,
+        external_command_executed=False,
+        execution_implemented=False,
+        metadata=native_metadata,
+        prepared_operands=prepared_operands,
+    )
+
+
+def _validate_tensor_binding(task: ContractionTask, left_tensor: TensorValue, right_tensor: TensorValue) -> str | None:
+    if tuple(task.input_tensor_ids) != (left_tensor.spec.id, right_tensor.spec.id):
+        return "tensor_id_mismatch"
+    if tuple(left_tensor.spec.labels) != tuple(task.left_labels) or tuple(right_tensor.spec.labels) != tuple(task.right_labels):
+        return "label_mismatch"
+    if tuple(np.asarray(left_tensor.array).shape) != tuple(task.input_shapes[0]):
+        return "left_shape_mismatch"
+    if tuple(np.asarray(right_tensor.array).shape) != tuple(task.input_shapes[1]):
+        return "right_shape_mismatch"
+    return None
+
+
+def _real_array_or_none(array: np.ndarray) -> np.ndarray | None:
+    if np.iscomplexobj(array):
+        if np.any(np.abs(array.imag) > 0.0):
+            return None
+        return array.real.astype(np.float64, copy=False)
+    return array
+
+
+def _native_index_metadata(task: ContractionTask, caps: GenericTaskPreparationCaps) -> JsonDict | str:
+    left_shape = tuple(int(dim) for dim in task.input_shapes[0])
+    right_shape = tuple(int(dim) for dim in task.input_shapes[1])
+    output_shape = tuple(int(dim) for dim in task.output_shape)
+    if max(len(left_shape), len(right_shape), len(output_shape), len(task.contracted_labels)) > caps.max_rank:
+        return "rank_cap_exceeded"
+    if max(_shape_product(left_shape), _shape_product(right_shape), _shape_product(output_shape)) > caps.max_tensor_elements:
+        return "element_count_cap_exceeded"
+
+    try:
+        output_to_left_axes = tuple(task.left_labels.index(label) if label in task.left_labels else -1 for label in task.output_labels)
+        output_to_right_axes = tuple(task.right_labels.index(label) if label in task.right_labels else -1 for label in task.output_labels)
+        contracted_to_left_axes = tuple(task.left_labels.index(label) for label in task.contracted_labels)
+        contracted_to_right_axes = tuple(task.right_labels.index(label) for label in task.contracted_labels)
+        contracted_dims = tuple(left_shape[axis] for axis in contracted_to_left_axes)
+    except ValueError:
+        return "label_mapping_invalid"
+    for label, left_axis, right_axis in zip(task.contracted_labels, contracted_to_left_axes, contracted_to_right_axes):
+        if left_shape[left_axis] != right_shape[right_axis]:
+            return "label_mapping_invalid"
+    if any(left_axis < 0 and right_axis < 0 for left_axis, right_axis in zip(output_to_left_axes, output_to_right_axes)):
+        return "label_mapping_invalid"
+
+    contracted_count = _shape_product(contracted_dims)
+    if contracted_count > caps.max_contracted_combinations:
+        return "contracted_combination_cap_exceeded"
+    if contracted_count * INT8_MAX_ABS_VALUE * INT8_MAX_ABS_VALUE > INT32_MAX_VALUE:
+        return "int32_accumulation_overflow_risk"
+
+    return {
+        "left_strides": _row_major_strides(left_shape),
+        "right_strides": _row_major_strides(right_shape),
+        "output_strides": _row_major_strides(output_shape),
+        "output_to_left_axes": output_to_left_axes,
+        "output_to_right_axes": output_to_right_axes,
+        "contracted_to_left_axes": contracted_to_left_axes,
+        "contracted_to_right_axes": contracted_to_right_axes,
+        "contracted_dims": contracted_dims,
+        "output_element_count": _shape_product(output_shape),
+        "contracted_combination_count": contracted_count,
+    }
+
+
+def _row_major_strides(shape: tuple[int, ...]) -> tuple[int, ...]:
+    if not shape:
+        return ()
+    strides: list[int] = []
+    product = 1
+    for dim in reversed(shape):
+        strides.insert(0, product)
+        product *= int(dim)
+    return tuple(strides)
+
+
+def _shape_product(shape: tuple[int, ...]) -> int:
+    product = 1
+    for dim in shape:
+        product *= int(dim)
+    return int(product)
+
+
+def _decode_index(linear: int, shape: tuple[int, ...], strides: tuple[int, ...]) -> tuple[int, ...]:
+    if not shape:
+        return ()
+    remaining = int(linear)
+    coords: list[int] = []
+    for dim, stride in zip(shape, strides):
+        coord = remaining // int(stride)
+        coords.append(int(coord))
+        remaining -= coord * int(stride)
+    return tuple(coords)
+
+
+def _mapped_offset(
+    output_coords: tuple[int, ...],
+    contracted_coords: tuple[int, ...],
+    output_axis_map: tuple[int, ...],
+    contracted_axis_map: tuple[int, ...],
+    strides: tuple[int, ...],
+) -> int:
+    offset = 0
+    for output_axis, tensor_axis in enumerate(output_axis_map):
+        if tensor_axis >= 0:
+            offset += int(output_coords[output_axis]) * int(strides[tensor_axis])
+    for contracted_axis, tensor_axis in enumerate(contracted_axis_map):
+        offset += int(contracted_coords[contracted_axis]) * int(strides[tensor_axis])
+    return int(offset)

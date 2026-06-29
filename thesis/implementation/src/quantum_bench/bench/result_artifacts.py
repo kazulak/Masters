@@ -1,0 +1,449 @@
+from __future__ import annotations
+
+import csv
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Iterable
+
+from quantum_bench.core.jsonio import write_json
+from quantum_bench.core.records import JsonDict, to_jsonable
+
+
+RESULT_ARTIFACT_SCHEMA_VERSION = "benchmark_result_artifact_v1"
+COMPARE_RESULTS_SCHEMA_VERSION = "compare_results_v1"
+
+KERNEL_FAMILIES = (
+    "dense_gemm",
+    "generic_loop_fallback",
+    "quantum_structured",
+    "sparse_or_zero_heavy",
+    "communication_collective",
+    "cpu_reference_only",
+    "unsupported",
+)
+
+RESULT_FIELDS = [
+    "schema_version",
+    "source_artifact",
+    "run_id",
+    "timestamp",
+    "suite_id",
+    "case_id",
+    "workload_id",
+    "route_id",
+    "backend_id",
+    "kernel_family",
+    "execution_target",
+    "execution_scope",
+    "simulator_or_hardware",
+    "status",
+    "validation_status",
+    "task_count",
+    "validated_task_count",
+    "unsupported_task_count",
+    "total_wall_time_s",
+    "kernel_time_s",
+    "host_transfer_time_s",
+    "build_time_s",
+    "launch_overhead_s",
+    "simulator_relative_time",
+    "hardware_speedup",
+    "validation_error_metrics",
+    "notes",
+    "warnings",
+]
+
+SUMMARY_FIELDS = [
+    "schema_version",
+    "kernel_family",
+    "record_count",
+    "task_count",
+    "validated_task_count",
+    "unsupported_task_count",
+    "measured_record_count",
+    "simulator_record_count",
+    "hardware_record_count",
+]
+
+
+@dataclass(frozen=True)
+class CompareResultsResult:
+    run_dir: Path
+    artifact_path: Path
+    csv_path: Path
+    summary_path: Path
+    record_count: int
+
+
+def normalized_task_result_from_summary(summary: JsonDict, *, source_artifact: str | None = None) -> JsonDict:
+    schema = str(summary.get("schema_version", ""))
+    if schema == "dense_task_bridge_v1":
+        return _dense_task_bridge_record(summary, source_artifact=source_artifact)
+    if schema == "generic_task_bridge_v1":
+        return _generic_task_bridge_record(summary, source_artifact=source_artifact)
+    raise ValueError(f"unsupported one-task summary schema_version: {schema}")
+
+
+def load_result_records(inputs: Iterable[Path]) -> list[JsonDict]:
+    records: list[JsonDict] = []
+    for input_path in inputs:
+        path = Path(input_path)
+        if path.is_dir():
+            for artifact in _discover_artifacts(path):
+                records.extend(_records_from_artifact(artifact))
+        else:
+            records.extend(_records_from_artifact(path))
+    return records
+
+
+def compare_results(inputs: Iterable[Path], out_dir: Path) -> CompareResultsResult:
+    records = load_result_records(inputs)
+    if not records:
+        raise ValueError("no compatible benchmark result artifacts found")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    summary = _kernel_family_summary(records)
+    payload = {
+        "schema_version": COMPARE_RESULTS_SCHEMA_VERSION,
+        "record_count": len(records),
+        "kernel_family_summary": summary,
+        "records": records,
+        "metadata": {
+            "simulator_timings_are_not_hardware_speedups": True,
+            "missing_gpu_or_hardware_results_are_not_fabricated": True,
+        },
+    }
+    artifact_path = out_dir / "comparison_results.json"
+    csv_path = out_dir / "comparison_results.csv"
+    family_csv_path = out_dir / "kernel_family_summary.csv"
+    summary_path = out_dir / "comparison_summary.md"
+    write_json(artifact_path, payload)
+    _write_csv(csv_path, records, RESULT_FIELDS)
+    _write_csv(family_csv_path, summary, SUMMARY_FIELDS)
+    summary_path.write_text(_summary_markdown(records, summary), encoding="utf-8")
+    return CompareResultsResult(
+        run_dir=out_dir,
+        artifact_path=artifact_path,
+        csv_path=csv_path,
+        summary_path=summary_path,
+        record_count=len(records),
+    )
+
+
+def _discover_artifacts(path: Path) -> list[Path]:
+    names = {
+        "dense_task_bridge_summary.json",
+        "generic_task_bridge_summary.json",
+        "pim_bridge_eval.json",
+    }
+    return sorted(candidate for candidate in path.rglob("*.json") if candidate.name in names)
+
+
+def _records_from_artifact(path: Path) -> list[JsonDict]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    schema = str(payload.get("schema_version", ""))
+    source = _source_artifact_label(path)
+    if schema in {"dense_task_bridge_v1", "generic_task_bridge_v1"}:
+        return [normalized_task_result_from_summary(payload, source_artifact=source)]
+    if schema == "pim_bridge_eval_v1":
+        return [_pim_bridge_eval_row_record(payload, row, source_artifact=source) for row in payload.get("rows", [])]
+    return []
+
+
+def _source_artifact_label(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(Path.cwd().resolve()).as_posix()
+    except ValueError:
+        return path.name
+
+
+def _dense_task_bridge_record(summary: JsonDict, *, source_artifact: str | None) -> JsonDict:
+    validation = dict(summary.get("bridge_validation_metrics") or {})
+    artifacts = dict(summary.get("artifacts") or {})
+    bridge_status = summary.get("bridge_execution_status")
+    metadata = dict(summary.get("metadata") or {})
+    return _base_record(
+        source_artifact=source_artifact,
+        run_id=_run_id_from_source(source_artifact),
+        suite_id=None,
+        case_id=summary.get("case_id"),
+        workload_id=summary.get("case_id"),
+        route_id=summary.get("route_id", "dense_gemm"),
+        backend_id=summary.get("bridge_backend_id"),
+        kernel_family="dense_gemm",
+        execution_target=_target_from_summary(summary),
+        execution_scope="task_level",
+        simulator_or_hardware=_simulator_or_hardware(summary),
+        status=summary.get("status"),
+        validation_status=_validation_status(validation, bridge_status),
+        task_count=1 if summary.get("task_id") else 0,
+        validated_task_count=1 if validation.get("passed") is True else 0,
+        unsupported_task_count=1 if summary.get("status") == "unsupported" else 0,
+        total_wall_time_s=_float_from_nested(summary, ("bridge_result", "output_manifest", "total_time_s")),
+        kernel_time_s=_float_from_nested(summary, ("bridge_result", "output_manifest", "compute_time_s")),
+        build_time_s=_float_from_metadata(summary, "build_time_s"),
+        validation_error_metrics=validation,
+        notes=_json_string({"artifacts": artifacts, "developer_only": metadata.get("developer_only", True)}),
+        warnings=_warning_text(summary),
+    )
+
+
+def _generic_task_bridge_record(summary: JsonDict, *, source_artifact: str | None) -> JsonDict:
+    validation = dict(summary.get("bridge_validation_metrics") or {})
+    bridge_result = dict(summary.get("bridge_result") or {})
+    output_manifest = dict(bridge_result.get("output_manifest") or {})
+    output_metadata = dict(output_manifest.get("metadata") or {})
+    return _base_record(
+        source_artifact=source_artifact,
+        run_id=_run_id_from_source(source_artifact),
+        suite_id=None,
+        case_id=summary.get("case_id"),
+        workload_id=summary.get("case_id"),
+        route_id=summary.get("route_id", "generic_loop_fallback"),
+        backend_id=summary.get("bridge_backend_id"),
+        kernel_family=summary.get("kernel_family", "generic_loop_fallback"),
+        execution_target=summary.get("execution_target", "upmem_simulator"),
+        execution_scope=summary.get("execution_scope", "task_level"),
+        simulator_or_hardware=str(output_metadata.get("target", "simulator")),
+        status=summary.get("status"),
+        validation_status=_validation_status(validation, summary.get("bridge_execution_status")),
+        task_count=1 if summary.get("task_id") else 0,
+        validated_task_count=1 if validation.get("passed") is True else 0,
+        unsupported_task_count=1 if summary.get("status") == "unsupported" else 0,
+        total_wall_time_s=float(output_manifest.get("total_time_s", 0.0) or 0.0),
+        kernel_time_s=float(output_manifest.get("compute_time_s", 0.0) or 0.0),
+        build_time_s=float(output_metadata.get("build_time_s", 0.0) or 0.0),
+        validation_error_metrics=validation,
+        notes=_json_string(
+            {
+                "artifacts": summary.get("artifacts", {}),
+                "validation_target": summary.get("metadata", {}).get("validation_target"),
+                "full_precision_reference_is_validation_target": False,
+            }
+        ),
+        warnings=_warning_text(summary),
+    )
+
+
+def _pim_bridge_eval_row_record(payload: JsonDict, row: JsonDict, *, source_artifact: str | None) -> JsonDict:
+    validation = dict(row.get("validation_metrics") or {})
+    status = row.get("readiness_status")
+    return _base_record(
+        source_artifact=source_artifact,
+        run_id=str(payload.get("run_id") or _run_id_from_source(source_artifact)),
+        suite_id=payload.get("suite_id"),
+        case_id=row.get("case_id"),
+        workload_id=row.get("workload_id"),
+        route_id="dense_gemm",
+        backend_id=row.get("backend_id", payload.get("backend")),
+        kernel_family=row.get("kernel_family", "dense_gemm"),
+        execution_target="upmem_simulator",
+        execution_scope="task_level",
+        simulator_or_hardware="simulator",
+        status=status,
+        validation_status=row.get("validation_status"),
+        task_count=1,
+        validated_task_count=1 if row.get("validation_status") == "passed" else 0,
+        unsupported_task_count=1 if status == "unsupported" else 0,
+        total_wall_time_s=float(row.get("runner_total_time_s", 0.0) or 0.0),
+        kernel_time_s=float(row.get("simulator_run_time_s", 0.0) or 0.0),
+        build_time_s=float(row.get("build_time_s", 0.0) or 0.0),
+        validation_error_metrics=validation,
+        notes=_json_string({"task_index": row.get("task_index"), "task_id": row.get("task_id")}),
+        warnings="simulator_task_level_only" if row.get("backend_status") else "not_executed",
+    )
+
+
+def _base_record(
+    *,
+    source_artifact: str | None,
+    run_id: str | None,
+    suite_id: Any,
+    case_id: Any,
+    workload_id: Any,
+    route_id: Any,
+    backend_id: Any,
+    kernel_family: Any,
+    execution_target: Any,
+    execution_scope: Any,
+    simulator_or_hardware: Any,
+    status: Any,
+    validation_status: Any,
+    task_count: int,
+    validated_task_count: int,
+    unsupported_task_count: int,
+    total_wall_time_s: float,
+    kernel_time_s: float,
+    build_time_s: float,
+    validation_error_metrics: JsonDict,
+    notes: str,
+    warnings: str,
+) -> JsonDict:
+    return {
+        "schema_version": RESULT_ARTIFACT_SCHEMA_VERSION,
+        "source_artifact": source_artifact,
+        "run_id": run_id,
+        "timestamp": None,
+        "suite_id": suite_id,
+        "case_id": case_id,
+        "workload_id": workload_id,
+        "route_id": route_id,
+        "backend_id": backend_id,
+        "kernel_family": kernel_family if kernel_family in KERNEL_FAMILIES else "unsupported",
+        "execution_target": execution_target,
+        "execution_scope": execution_scope,
+        "simulator_or_hardware": simulator_or_hardware,
+        "status": status,
+        "validation_status": validation_status,
+        "task_count": int(task_count),
+        "validated_task_count": int(validated_task_count),
+        "unsupported_task_count": int(unsupported_task_count),
+        "total_wall_time_s": float(total_wall_time_s),
+        "kernel_time_s": float(kernel_time_s),
+        "host_transfer_time_s": None,
+        "build_time_s": float(build_time_s),
+        "launch_overhead_s": None,
+        "simulator_relative_time": None,
+        "hardware_speedup": "not_applicable",
+        "validation_error_metrics": validation_error_metrics,
+        "notes": notes,
+        "warnings": warnings,
+    }
+
+
+def _kernel_family_summary(records: list[JsonDict]) -> list[JsonDict]:
+    by_family: dict[str, list[JsonDict]] = {}
+    for record in records:
+        by_family.setdefault(str(record.get("kernel_family") or "unsupported"), []).append(record)
+    summary: list[JsonDict] = []
+    for family in sorted(by_family):
+        family_records = by_family[family]
+        summary.append(
+            {
+                "schema_version": RESULT_ARTIFACT_SCHEMA_VERSION,
+                "kernel_family": family,
+                "record_count": len(family_records),
+                "task_count": sum(int(record.get("task_count", 0) or 0) for record in family_records),
+                "validated_task_count": sum(int(record.get("validated_task_count", 0) or 0) for record in family_records),
+                "unsupported_task_count": sum(int(record.get("unsupported_task_count", 0) or 0) for record in family_records),
+                "measured_record_count": sum(1 for record in family_records if record.get("status") in {"completed", "executable"}),
+                "simulator_record_count": sum(1 for record in family_records if record.get("simulator_or_hardware") == "simulator"),
+                "hardware_record_count": sum(1 for record in family_records if record.get("simulator_or_hardware") == "hardware"),
+            }
+        )
+    return summary
+
+
+def _write_csv(path: Path, rows: list[JsonDict], fieldnames: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: _csv_value(row.get(field)) for field in fieldnames})
+
+
+def _csv_value(value: Any) -> Any:
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(to_jsonable(value), sort_keys=True, separators=(",", ":"))
+    return value
+
+
+def _summary_markdown(records: list[JsonDict], family_summary: list[JsonDict]) -> str:
+    lines = [
+        "# Benchmark Result Comparison",
+        "",
+        f"Compatible records loaded: {len(records)}.",
+        "",
+        "Simulator timings are task-level development evidence, not hardware speedups.",
+        "",
+        "## Kernel Families",
+        "",
+        "| Kernel family | Records | Tasks | Validated tasks | Unsupported tasks |",
+        "| --- | ---: | ---: | ---: | ---: |",
+    ]
+    for row in family_summary:
+        lines.append(
+            f"| {row['kernel_family']} | {row['record_count']} | {row['task_count']} | "
+            f"{row['validated_task_count']} | {row['unsupported_task_count']} |"
+        )
+    lines.extend(
+        [
+            "",
+            "Missing CPU, GPU, hardware, or full-circuit results are left absent; this report does not fabricate baselines.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _run_id_from_source(source_artifact: str | None) -> str | None:
+    if not source_artifact:
+        return None
+    path = Path(source_artifact)
+    for parent in path.parents:
+        if parent.name.startswith("20"):
+            return parent.name
+    return path.parent.name
+
+
+def _validation_status(metrics: JsonDict, backend_status: Any) -> str:
+    if metrics.get("passed") is True:
+        return "passed"
+    if metrics.get("passed") is False:
+        return "failed"
+    if backend_status:
+        return "not_applicable"
+    return "not_run"
+
+
+def _target_from_summary(summary: JsonDict) -> str:
+    metadata = dict(summary.get("metadata") or {})
+    bridge = dict(summary.get("bridge_result") or {})
+    output = dict(bridge.get("output_manifest") or {})
+    output_metadata = dict(output.get("metadata") or {})
+    target = output_metadata.get("target")
+    if target == "hardware":
+        return "upmem_hardware"
+    if target == "simulator" or summary.get("bridge_backend_id", "").startswith("upmem_sdk"):
+        return "upmem_simulator"
+    return str(metadata.get("execution_target") or "cpu")
+
+
+def _simulator_or_hardware(summary: JsonDict) -> str:
+    bridge = dict(summary.get("bridge_result") or {})
+    output = dict(bridge.get("output_manifest") or {})
+    target = dict(output.get("metadata") or {}).get("target")
+    if target in {"simulator", "hardware"}:
+        return str(target)
+    if str(summary.get("bridge_backend_id", "")).startswith("upmem_sdk"):
+        return "simulator"
+    return "not_applicable"
+
+
+def _float_from_nested(payload: JsonDict, path: tuple[str, ...]) -> float:
+    current: Any = payload
+    for key in path:
+        if not isinstance(current, dict):
+            return 0.0
+        current = current.get(key)
+    return float(current or 0.0)
+
+
+def _float_from_metadata(summary: JsonDict, key: str) -> float:
+    bridge = dict(summary.get("bridge_result") or {})
+    output = dict(bridge.get("output_manifest") or {})
+    return float(dict(output.get("metadata") or {}).get(key, 0.0) or 0.0)
+
+
+def _json_string(payload: Any) -> str:
+    return json.dumps(to_jsonable(payload), sort_keys=True, separators=(",", ":"))
+
+
+def _warning_text(summary: JsonDict) -> str:
+    warnings: list[str] = ["task_level_only"]
+    if summary.get("execution_target") == "upmem_simulator" or str(summary.get("bridge_backend_id", "")).startswith("upmem_sdk"):
+        warnings.append("simulator_not_hardware_speedup")
+    if summary.get("status") != "completed":
+        warnings.append(str(summary.get("reason") or summary.get("status")))
+    return ",".join(warnings)

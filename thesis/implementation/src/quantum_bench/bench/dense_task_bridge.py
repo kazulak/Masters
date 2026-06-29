@@ -491,6 +491,9 @@ def _base_summary(
             "bridge_manifest_written": input_manifest is not None,
         },
     }
+    from quantum_bench.bench.result_artifacts import normalized_task_result_from_summary
+
+    summary["normalized_result"] = normalized_task_result_from_summary(summary)
     return summary
 
 
@@ -515,7 +518,7 @@ def _error_summary(
     backend: str,
     materialization_mode: str = "initial-only",
 ) -> JsonDict:
-    return {
+    summary = {
         "schema_version": DENSE_TASK_BRIDGE_SCHEMA_VERSION,
         "status": status,
         "reason": reason,
@@ -545,6 +548,10 @@ def _error_summary(
         "execution_implemented": False,
         "metadata": {"developer_only": True, "one_task_only": True, "normal_routing_unchanged": True},
     }
+    from quantum_bench.bench.result_artifacts import normalized_task_result_from_summary
+
+    summary["normalized_result"] = normalized_task_result_from_summary(summary)
+    return summary
 
 
 def _materialization_payload(mode: str, result: TaskInputMaterializationResult) -> JsonDict:
