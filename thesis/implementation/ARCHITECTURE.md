@@ -117,6 +117,7 @@ as full-circuit acceleration.
 | UPMEM SDK simulator dense runner | `native/upmem/simplepim/upmem_sdk_dense*` | Implemented L1/L2 subsets |
 | UPMEM SDK simulator generic loop runner | `native/upmem/simplepim/upmem_sdk_generic_loop*` | Implemented correctness/coverage MVP |
 | Strict UPMEM TaskGraph runtime | `bench/upmem_taskgraph_runtime.py`, `targets/upmem/taskgraph_runtime.py` | Implemented MVP for small sequential TaskGraphs in SDK simulator mode |
+| Suite-level UPMEM MVP benchmark | `bench/upmem_mvp_benchmark.py` | Implemented report regeneration pipeline over strict runtime variants |
 | PIM bridge evaluation | `bench/pim_bridge_eval.py` | Developer task-level evidence harness |
 | PIM frontier analysis | `bench/pim_frontier_analysis.py`, `targets/upmem/frontier.py` | Model-only analysis |
 | Benchmark matrix report | `bench/benchmark_matrix_report.py` | Thesis scaffold |
@@ -152,6 +153,7 @@ These commands are intentionally outside normal benchmark provider execution:
 | `dense-task-bridge` | One real task through dense preparation and bridge backend | Task-level only |
 | `generic-task-bridge` | One real task through the unoptimized generic fallback bridge | Task-level simulator evidence only |
 | `upmem-taskgraph-runtime` | Sequential full TaskGraph through UPMEM SDK DPU programs using SDK simulator mode | Small strict UPMEM code-path evidence, not hardware timing |
+| `upmem-mvp-benchmark` | Suite-level CPU reference plus strict UPMEM runtime variants | Reproducible MVP report pipeline, not optimized performance evidence |
 | `dense-route-coverage` | All-task readiness and bridge eligibility | Analysis only |
 | `shadow-routed-runtime` | Full graph with CPU fallback authoritative and shadow route evidence | Diagnostic only |
 | `pim-bridge-eval` | Capped task-level simulator execution across workloads | Task-level simulator evidence |
@@ -165,6 +167,9 @@ These commands are intentionally outside normal benchmark provider execution:
 `upmem-taskgraph-runtime` is strict: every contraction task must execute through
 the UPMEM SDK DPU program path, and only gathered UPMEM task outputs may feed
 later runtime tensors. CPU exact output is used for final validation only.
+`upmem-mvp-benchmark` preserves that boundary while running the strict runtime
+across a suite and reporting CPU reference timing separately from UPMEM SDK
+simulator timing.
 
 ## Synthetic Pressure Workloads
 

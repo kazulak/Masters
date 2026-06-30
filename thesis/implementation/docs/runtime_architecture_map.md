@@ -48,6 +48,7 @@ Quantum circuit
 | UPMEM SDK simulator L1 | Implemented subset | Task-level simulator dense execution |
 | UPMEM SDK simulator L2 | Implemented subset | Task-level real-valued tiled simulator execution |
 | Strict UPMEM TaskGraph runtime | Implemented MVP | Small sequential TaskGraphs execute through UPMEM SDK DPU programs using SDK simulator mode |
+| Suite-level UPMEM MVP benchmark | Implemented MVP | Runs strict runtime variants across suites and regenerates report tables |
 | PIM bridge eval | Implemented | Task-level evidence, not full-circuit speedup |
 | Frontier analysis | Implemented | Model-only memory/parallelism analysis |
 | Benchmark matrix report | Implemented | Thesis scaffold, not final result table |
@@ -158,6 +159,7 @@ GEMM is the current backbone, not the complete design.
 | External library check | `quantum_bench.bench upmem-external-libs-check` | Candidate feasibility evidence |
 | PIM bridge eval | `quantum_bench.bench pim-bridge-eval ...` | Task-level simulator evidence |
 | Strict UPMEM runtime | `quantum_bench.bench upmem-taskgraph-runtime ...` | Small full-TaskGraph SDK simulator code-path evidence |
+| Suite MVP benchmark | `quantum_bench.bench upmem-mvp-benchmark ...` | Suite-level CPU reference, UPMEM runtime, and report regeneration |
 | Frontier analysis | `quantum_bench.bench pim-frontier-analysis ...` | Model-only memory/parallelism evidence |
 | Matrix report | `quantum_bench.bench benchmark-matrix-report ...` | Thesis benchmark scaffold |
 | Generic fallback bridge | `quantum_bench.bench generic-task-bridge ...` | Task-level coverage/correctness evidence |
@@ -177,15 +179,17 @@ Near-term priorities:
    validation of small binary contractions. It is not a performance kernel.
 4. Use the strict UPMEM TaskGraph runtime as the baseline pipeline for replacing
    individual kernels without CPU contraction fallback.
-5. Decide whether SimplePIM can implement the dense local tile compute path
+5. Use the suite-level MVP benchmark to regenerate CPU reference, strict UPMEM,
+   kernel-family, quantization, and unsupported-reason reports.
+6. Decide whether SimplePIM can implement the dense local tile compute path
    cleanly enough to replace or complement native SDK L1/L2.
-6. Evaluate PID-Comm as the communication/orchestration substrate across
+7. Evaluate PID-Comm as the communication/orchestration substrate across
    L1/L2/L3, with strongest importance for L3 distributed contraction.
-7. Design L3 multi-DPU contraction around explicit communication, aggregation,
+8. Design L3 multi-DPU contraction around explicit communication, aggregation,
    and load-balance artifacts.
-8. Add sparse/irregular kernel planning only after the dense and communication
+9. Add sparse/irregular kernel planning only after the dense and communication
    boundaries remain stable.
-9. Revisit route-aware path planning once route execution evidence includes
+10. Revisit route-aware path planning once route execution evidence includes
    memory, transfer, tiling, communication, fallback, and validation costs.
 
 Do not add performance or speedup claims until the report distinguishes

@@ -35,6 +35,10 @@ RESULT_FIELDS = [
     "backend_id",
     "kernel_family",
     "execution_target",
+    "contraction_execution_target",
+    "upmem_execution_mode",
+    "native_sdk_control_path",
+    "simplepim_api_used",
     "execution_scope",
     "simulator_or_hardware",
     "status",
@@ -138,6 +142,7 @@ def _discover_artifacts(path: Path) -> list[Path]:
     names = {
         "dense_task_bridge_summary.json",
         "generic_task_bridge_summary.json",
+        "upmem_mvp_benchmark_summary.json",
         "upmem_taskgraph_runtime_summary.json",
         "pim_bridge_eval.json",
     }
@@ -152,6 +157,8 @@ def _records_from_artifact(path: Path) -> list[JsonDict]:
         return [normalized_task_result_from_summary(payload, source_artifact=source)]
     if schema == "upmem_taskgraph_runtime_v1":
         return _upmem_taskgraph_runtime_records(payload, source_artifact=source)
+    if schema == "upmem_mvp_benchmark_v1":
+        return _upmem_mvp_benchmark_cpu_records(payload, source_artifact=source)
     if schema == "pim_bridge_eval_v1":
         return [_pim_bridge_eval_row_record(payload, row, source_artifact=source) for row in payload.get("rows", [])]
     return []
@@ -169,7 +176,7 @@ def _dense_task_bridge_record(summary: JsonDict, *, source_artifact: str | None)
     artifacts = dict(summary.get("artifacts") or {})
     bridge_status = summary.get("bridge_execution_status")
     metadata = dict(summary.get("metadata") or {})
-    return _base_record(
+    record = _base_record(
         source_artifact=source_artifact,
         run_id=_run_id_from_source(source_artifact),
         suite_id=None,
@@ -193,6 +200,7 @@ def _dense_task_bridge_record(summary: JsonDict, *, source_artifact: str | None)
         notes=_json_string({"artifacts": artifacts, "developer_only": metadata.get("developer_only", True)}),
         warnings=_warning_text(summary),
     )
+    return _with_upmem_execution_metadata(record, summary)
 
 
 def _generic_task_bridge_record(summary: JsonDict, *, source_artifact: str | None) -> JsonDict:
@@ -200,7 +208,7 @@ def _generic_task_bridge_record(summary: JsonDict, *, source_artifact: str | Non
     bridge_result = dict(summary.get("bridge_result") or {})
     output_manifest = dict(bridge_result.get("output_manifest") or {})
     output_metadata = dict(output_manifest.get("metadata") or {})
-    return _base_record(
+    record = _base_record(
         source_artifact=source_artifact,
         run_id=_run_id_from_source(source_artifact),
         suite_id=None,
@@ -230,12 +238,13 @@ def _generic_task_bridge_record(summary: JsonDict, *, source_artifact: str | Non
         ),
         warnings=_warning_text(summary),
     )
+    return _with_upmem_execution_metadata(record, summary)
 
 
 def _pim_bridge_eval_row_record(payload: JsonDict, row: JsonDict, *, source_artifact: str | None) -> JsonDict:
     validation = dict(row.get("validation_metrics") or {})
     status = row.get("readiness_status")
-    return _base_record(
+    record = _base_record(
         source_artifact=source_artifact,
         run_id=str(payload.get("run_id") or _run_id_from_source(source_artifact)),
         suite_id=payload.get("suite_id"),
@@ -259,6 +268,16 @@ def _pim_bridge_eval_row_record(payload: JsonDict, row: JsonDict, *, source_arti
         notes=_json_string({"task_index": row.get("task_index"), "task_id": row.get("task_id")}),
         warnings="simulator_task_level_only" if row.get("backend_status") else "not_executed",
     )
+    if row.get("external_command_executed") or row.get("backend_status"):
+        record.update(
+            {
+                "contraction_execution_target": "upmem",
+                "upmem_execution_mode": "sdk_simulator",
+                "native_sdk_control_path": True,
+                "simplepim_api_used": False,
+            }
+        )
+    return record
 
 
 def _upmem_taskgraph_runtime_records(payload: JsonDict, *, source_artifact: str | None) -> list[JsonDict]:
@@ -282,7 +301,7 @@ def _upmem_taskgraph_runtime_record(
     family = kernel_family or _dominant_kernel_family(summary)
     tasks = int(task_count if task_count is not None else summary.get("executed_tasks", 0) or 0)
     final_passed = final_validation.get("passed") is True
-    return _base_record(
+    record = _base_record(
         source_artifact=source_artifact,
         run_id=_run_id_from_source(source_artifact),
         suite_id=None,
@@ -316,6 +335,49 @@ def _upmem_taskgraph_runtime_record(
         ),
         warnings="sdk_simulator_not_hardware_speedup",
     )
+    record.update(
+        {
+            "contraction_execution_target": summary.get("contraction_execution_target", "upmem"),
+            "upmem_execution_mode": summary.get("upmem_execution_mode", "sdk_simulator"),
+            "native_sdk_control_path": summary.get("native_sdk_control_path", True),
+            "simplepim_api_used": summary.get("simplepim_api_used", False),
+        }
+    )
+    return record
+
+
+def _upmem_mvp_benchmark_cpu_records(payload: JsonDict, *, source_artifact: str | None) -> list[JsonDict]:
+    records: list[JsonDict] = []
+    for record in payload.get("cpu_reference_records", []):
+        if not isinstance(record, dict):
+            continue
+        normalized = dict(record)
+        normalized["source_artifact"] = source_artifact
+        normalized.setdefault("schema_version", RESULT_ARTIFACT_SCHEMA_VERSION)
+        normalized.setdefault("kernel_family", "cpu_reference_only")
+        normalized.setdefault("execution_target", "cpu")
+        normalized.setdefault("contraction_execution_target", "cpu")
+        normalized.setdefault("execution_scope", "full_taskgraph_reference")
+        normalized.setdefault("hardware_speedup", "not_applicable")
+        records.append(to_jsonable(normalized))
+    return records
+
+
+def _with_upmem_execution_metadata(record: JsonDict, summary: JsonDict) -> JsonDict:
+    execution_target = str(record.get("execution_target") or "")
+    simulator = str(record.get("simulator_or_hardware") or "")
+    backend = str(record.get("backend_id") or "")
+    if execution_target.startswith("upmem") or simulator == "simulator" or backend.startswith("upmem_sdk_"):
+        record.update(
+            {
+                "execution_target": "upmem",
+                "contraction_execution_target": summary.get("contraction_execution_target", "upmem"),
+                "upmem_execution_mode": summary.get("upmem_execution_mode", "sdk_simulator"),
+                "native_sdk_control_path": summary.get("native_sdk_control_path", True),
+                "simplepim_api_used": summary.get("simplepim_api_used", False),
+            }
+        )
+    return record
 
 
 def _base_record(
@@ -355,6 +417,10 @@ def _base_record(
         "backend_id": backend_id,
         "kernel_family": kernel_family if kernel_family in KERNEL_FAMILIES else "unsupported",
         "execution_target": execution_target,
+        "contraction_execution_target": None,
+        "upmem_execution_mode": None,
+        "native_sdk_control_path": None,
+        "simplepim_api_used": None,
         "execution_scope": execution_scope,
         "simulator_or_hardware": simulator_or_hardware,
         "status": status,

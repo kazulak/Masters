@@ -67,6 +67,14 @@ def main() -> int:
     )
     upmem_runtime_parser.add_argument("--execute-external", action="store_true")
 
+    upmem_mvp_parser = sub.add_parser("upmem-mvp-benchmark")
+    upmem_mvp_parser.add_argument("--suite", required=True, help="Suite path or preset name under configs/suites")
+    upmem_mvp_parser.add_argument("--policies", default="generic-only,dense-then-generic")
+    upmem_mvp_parser.add_argument("--quantization-modes", default="per_task_input_quantize")
+    upmem_mvp_parser.add_argument("--execute-external", action="store_true")
+    upmem_mvp_parser.add_argument("--max-taskgraph-tasks", type=int, default=128)
+    upmem_mvp_parser.add_argument("--fail-fast", action="store_true")
+
     coverage_parser = sub.add_parser("dense-route-coverage")
     coverage_input = coverage_parser.add_mutually_exclusive_group(required=True)
     coverage_input.add_argument("--suite", help="Suite path or preset name under configs/suites")
@@ -282,6 +290,38 @@ def main() -> int:
                     "run_dir": str(result.run_dir),
                     "summary_path": str(result.summary_path),
                     "task_metrics": str(result.run_dir / "cases" / result.case_id / "upmem_taskgraph_task_metrics.jsonl"),
+                    "status": result.status,
+                    "reason": result.reason,
+                },
+                indent=2,
+            )
+        )
+        return 0
+    if args.command == "upmem-mvp-benchmark":
+        from quantum_bench.bench.upmem_mvp_benchmark import parse_csv_choices, run_upmem_mvp_benchmark
+
+        try:
+            result = run_upmem_mvp_benchmark(
+                root_dir,
+                suite_path=suite_path(args.suite, root_dir),
+                policies=parse_csv_choices(args.policies),
+                quantization_modes=parse_csv_choices(args.quantization_modes),
+                execute_external=args.execute_external,
+                max_taskgraph_tasks=args.max_taskgraph_tasks,
+                fail_fast=args.fail_fast,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(
+            json.dumps(
+                {
+                    "run_dir": str(result.run_dir),
+                    "artifact": str(result.summary_path),
+                    "results_csv": str(result.run_dir / "upmem_mvp_benchmark_results.csv"),
+                    "kernel_family_summary": str(result.run_dir / "kernel_family_summary.csv"),
+                    "quantization_accuracy_summary": str(result.run_dir / "quantization_accuracy_summary.csv"),
+                    "unsupported_reasons": str(result.run_dir / "unsupported_reasons.csv"),
+                    "summary": str(result.run_dir / "comparison_summary.md"),
                     "status": result.status,
                     "reason": result.reason,
                 },
