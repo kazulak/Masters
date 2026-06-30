@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import csv
+
 from quantum_bench.bench.reporting import compare_runs, prune_run, report_run, validate_retention_mode, write_run_manifest
 from quantum_bench.core.jsonio import write_json, write_jsonl
 
@@ -34,6 +36,64 @@ def _record(case_id: str, *, status: str = "completed", validation_status: str =
         "hardware_speedup": "not_applicable",
         "validation_error_metrics": {"max_abs_error": 0.1 if validation_status == "passed" else 1.0},
         "notes": json.dumps({"policy": "generic-only", "quantization_mode": "per_task_input_quantize"}, sort_keys=True),
+        "warnings": "",
+    }
+
+
+def _simulation_record(
+    case_id: str,
+    route_id: str,
+    *,
+    n_qubits: int,
+    gate_count: int,
+    backend_family: str,
+    execution_model: str,
+    time_s: float,
+    max_abs_error: float = 0.0,
+    probability_l1_error: float = 0.0,
+) -> dict:
+    return {
+        "schema_version": "benchmark_result_artifact_v1",
+        "source_artifact": f"cases/{case_id}/simulation_backend_compare.json",
+        "run_id": "run",
+        "suite_id": "suite",
+        "case_id": case_id,
+        "workload_id": case_id,
+        "route_id": route_id,
+        "backend_id": route_id,
+        "backend_family": backend_family,
+        "kernel_family": "full_state_vector" if execution_model == "full_state" else "external_tn_contraction",
+        "execution_model": execution_model,
+        "execution_target": "cpu",
+        "contraction_execution_target": "cpu",
+        "accelerator_kind": "none",
+        "execution_scope": "full_circuit" if execution_model == "full_state" else "full_taskgraph",
+        "output_kind": "statevector" if execution_model == "full_state" else "final_tensor",
+        "comparison_output_kind": "statevector",
+        "status": "completed",
+        "validation_status": "passed",
+        "policy": "not_applicable",
+        "quantization_mode": "not_applicable",
+        "task_count": 0 if execution_model == "full_state" else 3,
+        "validated_task_count": 0 if execution_model == "full_state" else 3,
+        "unsupported_task_count": 0,
+        "planning_time_s": 0.0 if execution_model == "full_state" else 0.01,
+        "lowering_time_s": 0.0,
+        "total_wall_time_s": time_s,
+        "kernel_time_s": time_s,
+        "hardware_speedup": "not_applicable",
+        "validation_error_metrics": {
+            "max_abs_error": max_abs_error,
+            "l2_error": max_abs_error,
+            "probability_l1_error": probability_l1_error,
+            "probability_max_abs_error": probability_l1_error,
+        },
+        "statevector_bytes": 16 * (1 << n_qubits),
+        "tn_task_count": 0 if execution_model == "full_state" else 3,
+        "tn_max_intermediate_bytes": None if execution_model == "full_state" else 256 * n_qubits,
+        "tn_estimated_flops": None if execution_model == "full_state" else 1024 * n_qubits,
+        "tn_estimated_bytes": None if execution_model == "full_state" else 2048 * n_qubits,
+        "notes": json.dumps({"n_qubits": n_qubits, "gate_count": gate_count}, sort_keys=True),
         "warnings": "",
     }
 
@@ -76,6 +136,53 @@ def test_report_run_is_non_destructive(tmp_path: Path) -> None:
     assert raw_artifact.exists()
     assert (run_dir / "report_run.json").exists()
     assert (run_dir / "metrics" / "timing_breakdown.csv").exists()
+
+
+def test_report_run_writes_thesis_plot_sources_and_inventory(tmp_path: Path) -> None:
+    records = [
+        _simulation_record("quest_qrng_3q", "quest_cpu_full_state_exact", n_qubits=3, gate_count=3, backend_family="quest", execution_model="full_state", time_s=0.12),
+        _simulation_record("quest_qrng_3q", "cpu_tn_einsum_exact", n_qubits=3, gate_count=3, backend_family="cpu", execution_model="tensor_network", time_s=0.08, max_abs_error=1.0e-15),
+        _simulation_record("quest_qrng_3q", "quimb_tn_exact", n_qubits=3, gate_count=3, backend_family="quimb", execution_model="tensor_network", time_s=0.09, max_abs_error=1.0e-15),
+        _simulation_record("quest_qrng_5q", "quest_cpu_full_state_exact", n_qubits=5, gate_count=5, backend_family="quest", execution_model="full_state", time_s=0.2),
+        _simulation_record("quest_qrng_5q", "cpu_tn_einsum_exact", n_qubits=5, gate_count=5, backend_family="cpu", execution_model="tensor_network", time_s=0.16, max_abs_error=1.0e-15),
+        _simulation_record("quest_bv_4q", "quest_cpu_full_state_exact", n_qubits=4, gate_count=9, backend_family="quest", execution_model="full_state", time_s=0.18),
+        _simulation_record("quest_bv_4q", "quimb_tn_exact", n_qubits=4, gate_count=9, backend_family="quimb", execution_model="tensor_network", time_s=0.11, max_abs_error=1.0e-15),
+    ]
+    run_dir = _new_run(tmp_path / "run", records)
+
+    result = report_run(run_dir, output_plots=True)
+
+    assert result.status == "completed"
+    backend_csv = run_dir / "plots" / "data" / "backend_results.csv"
+    scaling_csv = run_dir / "plots" / "data" / "runtime_scaling_by_qubits.csv"
+    relative_csv = run_dir / "plots" / "data" / "relative_runtime_vs_quest_anchor.csv"
+    assert backend_csv.exists()
+    assert scaling_csv.exists()
+    assert relative_csv.exists()
+    with backend_csv.open("r", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert {row["case_family"] for row in rows} >= {"qrng", "bv"}
+    with relative_csv.open("r", encoding="utf-8", newline="") as handle:
+        relative_rows = list(csv.DictReader(handle))
+    assert relative_rows
+    assert all(float(row["relative_runtime"]) > 0 for row in relative_rows)
+
+    manifest = json.loads((run_dir / "plots" / "plot_manifest.json").read_text(encoding="utf-8"))
+    summary = (run_dir / "comparison_summary.md").read_text(encoding="utf-8")
+    assert "## Plot Inventory" in summary
+    if manifest["status"] == "completed":
+        entries = {entry["plot"]: entry for entry in manifest["plots"]}
+        assert "runtime_by_backend_case.png" in entries
+        assert "runtime_scaling_by_qubits.png" in entries
+        for entry in entries.values():
+            assert (run_dir / entry["source_csv"]).exists()
+            if entry["status"] == "generated":
+                assert entry["image"]["non_empty"] is True
+                assert entry["image"]["reasonable_dimensions"] is True
+            else:
+                assert entry["reason"]
+    else:
+        assert manifest["reason"] in {"matplotlib_unavailable", "plot_generation_disabled"}
 
 
 def test_prune_run_compact_is_idempotent_and_rewrites_pruned_refs(tmp_path: Path) -> None:

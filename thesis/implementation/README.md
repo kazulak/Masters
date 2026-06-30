@@ -106,7 +106,13 @@ Simulation backend comparison:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simulation-backend-compare --suite configs/suites/simulation_backend_compare_quick.yml --artifact-retention compact
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simulation-backend-compare --suite configs/suites/simulation_backend_compare_thesis_small.yml --artifact-retention compact
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simulation-backend-probe
 ```
+
+`simulation_backend_compare_quick.yml` is for validation. The thesis-small and
+scaling suites are bounded local benchmark suites with deterministic unitary
+circuits, statevector output caps, and explicit runtime-class metadata.
 
 Artifact-driven result comparison:
 
@@ -125,7 +131,11 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.be
 derived CSV, Markdown, metrics, validation summaries, and plots. Compact
 retention removes debug-heavy bridge blobs and native runner work while keeping
 `run_manifest.json`, `normalized_records.jsonl`, summaries, task metrics, and
-report artifacts. `summary-only` retention is intentionally deferred.
+report artifacts. `summary-only` retention is intentionally deferred. Plot
+generation writes source CSVs under `plots/data/` and a `plot_manifest.json`
+that records generated/skipped status, skipped reasons, and simple readability
+metadata. Plots are regenerated from normalized records; simulations are not
+rerun.
 
 ## Directory Map
 
@@ -151,6 +161,7 @@ Legacy external trees are historical fallback only.
 |---|---|---|
 | CPU exact TN | Implemented | Full tensor output, validation-capable |
 | QuEST CPU full-state | Implemented baseline | Metrics-only route plus output-comparable exact route for small deterministic circuits |
+| External TN libraries | Implemented initial backend | `quimb_tn_exact` exact CPU tensor-network route; cotengra provenance reported when available |
 | UPMEM L1 dense | Implemented subset | Task-level UPMEM SDK simulator, split-complex supported when layout is explicit |
 | UPMEM L2 dense | Implemented subset | Task-level UPMEM SDK simulator, real-valued only |
 | UPMEM generic fallback | Implemented MVP | Task-level UPMEM SDK simulator, real-valued small binary contractions only |
@@ -159,7 +170,7 @@ Legacy external trees are historical fallback only.
 | UPMEM L3 distributed | Model-only | No execution yet |
 | SimplePIM GEMM | Candidate | Target UPMEM compute/runtime abstraction for L1/L2 and local tile compute inside L3; not integrated |
 | PID-Comm | Candidate | Communication/orchestration substrate across L1/L2/L3, strongest for L3 distributed contraction; not integrated |
-| GPU TN/full-state | Planned | Not implemented |
+| GPU TN/full-state | Feasibility only | ROCm/GPU probes may report environment metadata; no GPU benchmark records without real execution |
 | Sparse/irregular PIM | Planned | SparseP/PRISM/PyGim are references only |
 
 Current UPMEM results are task-level simulator evidence. They are not
@@ -174,6 +185,11 @@ Use these rules when interpreting artifacts:
 - `quest_cpu_full_state_exact` is an additive output-comparable QuEST route for
   small deterministic unitary statevector comparisons. It is the full-state
   baseline used by `simulation-backend-compare`.
+- `quimb_tn_exact` is an additive output-comparable external tensor-network
+  backend. It is exact CPU execution and emits dependency/provenance metadata;
+  it is not a GPU or UPMEM result.
+- `simulation-backend-probe` reports optional external-library and GPU
+  feasibility. It does not emit benchmark records.
 - `upmem_sdk_simulator_dense` is a developer bridge backend ID, not a final
   benchmark route.
 - `upmem_sdk_simulator_generic_loop` is an unoptimized developer bridge backend

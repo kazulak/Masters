@@ -11,6 +11,7 @@ from quantum_bench.bench.result_artifacts import KERNEL_FAMILIES, compare_result
 def test_kernel_family_vocabulary_contains_generic_and_dense() -> None:
     assert "dense_gemm" in KERNEL_FAMILIES
     assert "einsum_contraction" in KERNEL_FAMILIES
+    assert "external_tn_contraction" in KERNEL_FAMILIES
     assert "full_state_vector" in KERNEL_FAMILIES
     assert "generic_loop_fallback" in KERNEL_FAMILIES
     assert "unsupported" in KERNEL_FAMILIES

@@ -14,10 +14,15 @@ cd thesis/implementation
 The runner links against the local QuEST source under `../../external/QuEST`.
 
 ```bash
+cmake -S ../../external/QuEST -B ../../external/QuEST/build -DCMAKE_BUILD_TYPE=Release
+cmake --build ../../external/QuEST/build -j2
 make clean
 make
 ./bin/quest_runner --verify FULL
 ```
+
+`../../external/QuEST/build`, `build/`, and `bin/` are generated artifacts and
+should not be committed.
 
 Machine-readable benchmark call:
 

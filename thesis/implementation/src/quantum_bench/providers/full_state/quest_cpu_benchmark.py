@@ -48,11 +48,7 @@ class QuestCpuFullStateBenchmarkRoute:
         self.runner = self.root / "bin" / "quest_runner"
 
     def probe(self) -> RouteProbe:
-        if not self.root.exists():
-            return RouteProbe(self.name, False, f"QuEST implementation not found at {self.root}")
-        if not self.runner.exists():
-            return RouteProbe(self.name, False, f"QuEST runner not built at {self.runner}; run make in {self.root}")
-        return RouteProbe(self.name, True, metadata={"runner": str(self.runner), "quest_root": str(self.root)})
+        return _probe_quest_runner(self.name, self.root, self.runner)
 
     def capabilities(self) -> RouteCapabilities:
         probe = self.probe()
@@ -152,11 +148,7 @@ class QuestCpuFullStateExactRoute:
         self.runner = self.root / "bin" / "quest_runner"
 
     def probe(self) -> RouteProbe:
-        if not self.root.exists():
-            return RouteProbe(self.name, False, f"QuEST implementation not found at {self.root}")
-        if not self.runner.exists():
-            return RouteProbe(self.name, False, f"QuEST runner not built at {self.runner}; run make in {self.root}")
-        return RouteProbe(self.name, True, metadata={"runner": str(self.runner), "quest_root": str(self.root)})
+        return _probe_quest_runner(self.name, self.root, self.runner)
 
     def capabilities(self) -> RouteCapabilities:
         probe = self.probe()
@@ -337,6 +329,22 @@ def _state_dump_metadata(payload: dict) -> dict:
         "amplitude_count": payload.get("amplitude_count"),
         "quest_version": payload.get("quest_version"),
     }
+
+
+def _probe_quest_runner(route: str, root: Path, runner: Path) -> RouteProbe:
+    metadata = {"runner": str(runner), "quest_root": str(root)}
+    if not root.exists():
+        return RouteProbe(route, False, f"QuEST implementation not found at {root}", metadata=metadata)
+    if not runner.exists():
+        return RouteProbe(route, False, f"QuEST runner not built at {runner}; run make in {root}", metadata=metadata)
+    try:
+        result = subprocess.run([str(runner), "--help"], cwd=root, capture_output=True, text=True, check=False, timeout=5.0)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return RouteProbe(route, False, f"QuEST runner failed to start: {exc}", metadata=metadata)
+    if result.returncode != 0:
+        reason = (result.stderr.strip() or result.stdout.strip() or "QuEST runner failed to start").splitlines()[0]
+        return RouteProbe(route, False, f"QuEST runner failed to start: {reason}", metadata=metadata)
+    return RouteProbe(route, True, metadata=metadata)
 
 
 def _quest_exact_failed(

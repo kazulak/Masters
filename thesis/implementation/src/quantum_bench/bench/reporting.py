@@ -3,8 +3,10 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import math
 import os
 import platform
+import re
 import shutil
 import subprocess
 from collections import Counter, defaultdict
@@ -46,11 +48,14 @@ REPORT_RESULT_FIELDS = [
     "status",
     "validation_status",
     "contraction_execution_target",
+    "accelerator_kind",
     "upmem_execution_mode",
     "execution_scope",
     "task_count",
     "validated_task_count",
     "unsupported_task_count",
+    "planning_time_s",
+    "lowering_time_s",
     "total_wall_time_s",
     "kernel_time_s",
     "build_time_s",
@@ -68,6 +73,54 @@ TIMING_FIELDS = [
     "dequantization_time_s",
     "validation_time_s",
 ]
+
+BACKEND_LABELS = {
+    "quest_cpu_full_state_exact": "QuEST full-state",
+    "cpu_tn_einsum_exact": "Internal CPU TN",
+    "quimb_tn_exact": "Quimb TN",
+    "upmem_tn_runtime": "UPMEM TN runtime",
+}
+
+PLOT_DATA_FIELDS = [
+    "case_id",
+    "case_family",
+    "n_qubits",
+    "gate_count",
+    "route_id",
+    "backend_label",
+    "backend_family",
+    "execution_model",
+    "contraction_execution_target",
+    "accelerator_kind",
+    "status",
+    "validation_status",
+    "total_wall_time_s",
+    "kernel_time_s",
+    "planning_time_s",
+    "lowering_time_s",
+    "max_abs_error",
+    "l2_error",
+    "probability_l1_error",
+    "probability_max_abs_error",
+    "memory_proxy_bytes",
+    "statevector_bytes",
+    "tn_task_count",
+    "tn_max_intermediate_bytes",
+    "tn_estimated_flops",
+    "tn_estimated_bytes",
+]
+
+PLOT_SPECS = {
+    "runtime_by_backend_case.png": "Runtime by backend and case",
+    "runtime_scaling_by_qubits.png": "Runtime scaling by qubit count grouped by circuit family",
+    "output_error_by_backend.png": "Output agreement error by backend",
+    "probability_error_by_backend.png": "Probability error by backend",
+    "memory_proxy_by_backend.png": "Memory proxy by backend",
+    "tn_task_and_intermediate_by_backend.png": "TN task count and max intermediate size",
+    "planning_vs_contraction_time.png": "Planning/lowering versus contraction time",
+    "backend_support_summary.png": "Backend support summary",
+    "relative_runtime_vs_quest_anchor.png": "Relative runtime versus QuEST anchor",
+}
 
 
 @dataclass(frozen=True)
@@ -300,6 +353,7 @@ def _load_run_records(run_dir: Path) -> list[JsonDict]:
 
 
 def _write_report_artifacts(run_dir: Path, records: list[JsonDict], *, output_plots: bool) -> None:
+    plot_tables = _write_plot_source_tables(run_dir, records)
     _write_csv(run_dir / "upmem_mvp_benchmark_results.csv", records, REPORT_RESULT_FIELDS)
     _write_csv(run_dir / "kernel_family_summary.csv", _kernel_family_summary(records), ["kernel_family", "record_count", "task_count", "validated_task_count", "unsupported_task_count"])
     _write_csv(run_dir / "quantization_accuracy_summary.csv", _quantization_rows(records), ["case_id", "policy", "quantization_mode", "validation_status", "max_abs_error", "l2_error"])
@@ -309,94 +363,502 @@ def _write_report_artifacts(run_dir: Path, records: list[JsonDict], *, output_pl
     _write_csv(run_dir / "metrics" / "timing_breakdown.csv", _timing_rows(records), ["case_id", "policy", "quantization_mode", *TIMING_FIELDS, "timing_status"])
     write_json(run_dir / "validation" / "validation_summary.json", _validation_summary(records))
     write_jsonl(run_dir / "validation" / "validation_failures.jsonl", _validation_failures(records))
-    (run_dir / "comparison_summary.md").write_text(_report_markdown(records), encoding="utf-8")
     if output_plots:
-        _write_plots(run_dir, records)
+        _write_plots(run_dir, plot_tables)
     else:
         write_json(run_dir / "plots" / "plot_manifest.json", {"schema_version": REPORT_RUN_SCHEMA_VERSION, "status": "skipped", "reason": "plot_generation_disabled"})
+    _write_text_atomic(run_dir / "comparison_summary.md", _report_markdown(records, run_dir))
 
 
-def _write_plots(run_dir: Path, records: list[JsonDict]) -> None:
+def _write_plot_source_tables(run_dir: Path, records: list[JsonDict]) -> JsonDict:
+    data_dir = run_dir / "plots" / "data"
+    rows = [_plot_data_row(record) for record in records]
+    runtime_rows = [row for row in rows if _positive_float(row.get("total_wall_time_s")) is not None]
+    error_rows = [row for row in rows if _float_or_none(row.get("max_abs_error")) is not None]
+    probability_rows = [row for row in rows if _float_or_none(row.get("probability_l1_error")) is not None]
+    memory_rows = [row for row in rows if _positive_float(row.get("memory_proxy_bytes")) is not None]
+    tn_rows = [row for row in rows if row.get("execution_model") == "tensor_network"]
+    support_rows = _backend_support_rows(rows)
+    relative_rows, relative_skipped = _relative_runtime_rows(rows)
+    table_specs = {
+        "backend_results": (data_dir / "backend_results.csv", rows, PLOT_DATA_FIELDS),
+        "runtime_by_backend_case": (data_dir / "runtime_by_backend_case.csv", runtime_rows, PLOT_DATA_FIELDS),
+        "runtime_scaling_by_qubits": (data_dir / "runtime_scaling_by_qubits.csv", runtime_rows, PLOT_DATA_FIELDS),
+        "output_error_by_backend": (data_dir / "output_error_by_backend.csv", error_rows, PLOT_DATA_FIELDS),
+        "probability_error_by_backend": (data_dir / "probability_error_by_backend.csv", probability_rows, PLOT_DATA_FIELDS),
+        "memory_proxy_by_backend": (data_dir / "memory_proxy_by_backend.csv", memory_rows, PLOT_DATA_FIELDS),
+        "tn_task_and_intermediate_by_backend": (data_dir / "tn_task_and_intermediate_by_backend.csv", tn_rows, PLOT_DATA_FIELDS),
+        "planning_vs_contraction_time": (data_dir / "planning_vs_contraction_time.csv", tn_rows, PLOT_DATA_FIELDS),
+        "backend_support_summary": (
+            data_dir / "backend_support_summary.csv",
+            support_rows,
+            ["route_id", "backend_label", "execution_model", "backend_family", "record_count", "passed_count", "failed_count", "unavailable_count"],
+        ),
+        "relative_runtime_vs_quest_anchor": (
+            data_dir / "relative_runtime_vs_quest_anchor.csv",
+            relative_rows,
+            [*PLOT_DATA_FIELDS, "anchor_route_id", "anchor_total_wall_time_s", "relative_runtime"],
+        ),
+        "relative_runtime_vs_quest_anchor_skipped": (
+            data_dir / "relative_runtime_vs_quest_anchor_skipped.csv",
+            relative_skipped,
+            ["case_id", "route_id", "backend_label", "reason"],
+        ),
+    }
+    for _, (path, table_rows, fields) in table_specs.items():
+        _write_csv(path, table_rows, list(fields))
+    return {
+        key: {
+            "path": path,
+            "rows": table_rows,
+            "fieldnames": list(fields),
+            "relative_path": path.relative_to(run_dir).as_posix(),
+        }
+        for key, (path, table_rows, fields) in table_specs.items()
+    }
+
+
+def _write_plots(run_dir: Path, plot_tables: JsonDict) -> None:
     plots_dir = run_dir / "plots"
-    skipped: list[JsonDict] = []
     os.environ.setdefault("MPLCONFIGDIR", str(plots_dir / ".matplotlib"))
     try:
         import matplotlib.pyplot as plt
     except Exception as exc:
         write_json(plots_dir / "plot_manifest.json", {"schema_version": REPORT_RUN_SCHEMA_VERSION, "status": "skipped", "reason": "matplotlib_unavailable", "error": str(exc)})
         return
-    required = {
-        "kernel_family_counts.png": _plot_kernel_family_counts,
-        "final_max_error_by_case.png": _plot_final_max_error,
-        "runtime_breakdown_by_policy.png": _plot_runtime_breakdown,
-        "unsupported_reasons.png": _plot_unsupported_reasons,
+    plotters = {
+        "runtime_by_backend_case.png": ("runtime_by_backend_case", _plot_runtime_by_backend_case),
+        "runtime_scaling_by_qubits.png": ("runtime_scaling_by_qubits", _plot_runtime_scaling_by_qubits),
+        "output_error_by_backend.png": ("output_error_by_backend", _plot_output_error_by_backend),
+        "probability_error_by_backend.png": ("probability_error_by_backend", _plot_probability_error_by_backend),
+        "memory_proxy_by_backend.png": ("memory_proxy_by_backend", _plot_memory_proxy_by_backend),
+        "tn_task_and_intermediate_by_backend.png": ("tn_task_and_intermediate_by_backend", _plot_tn_task_and_intermediate),
+        "planning_vs_contraction_time.png": ("planning_vs_contraction_time", _plot_planning_vs_contraction_time),
+        "backend_support_summary.png": ("backend_support_summary", _plot_backend_support_summary),
+        "relative_runtime_vs_quest_anchor.png": ("relative_runtime_vs_quest_anchor", _plot_relative_runtime_vs_quest_anchor),
     }
-    written: list[str] = []
-    for name, fn in required.items():
-        reason = fn(plt, plots_dir / name, records)
+    entries: list[JsonDict] = []
+    for name, (table_key, fn) in plotters.items():
+        source = plot_tables[table_key]
+        path = plots_dir / name
+        reason = fn(plt, path, source["rows"])
         if reason:
-            skipped.append({"plot": name, "reason": reason})
+            entries.append(
+                {
+                    "plot": name,
+                    "title": PLOT_SPECS[name],
+                    "status": "skipped",
+                    "reason": reason,
+                    "source_csv": source["relative_path"],
+                    "source_row_count": len(source["rows"]),
+                }
+            )
         else:
-            written.append(name)
-    write_json(plots_dir / "plot_manifest.json", {"schema_version": REPORT_RUN_SCHEMA_VERSION, "status": "completed", "written": written, "skipped": skipped})
+            entries.append(
+                {
+                    "plot": name,
+                    "title": PLOT_SPECS[name],
+                    "status": "generated",
+                    "reason": None,
+                    "source_csv": source["relative_path"],
+                    "source_row_count": len(source["rows"]),
+                    "image": _image_metadata(plt, path),
+                }
+            )
+    write_json(
+        plots_dir / "plot_manifest.json",
+        {
+            "schema_version": REPORT_RUN_SCHEMA_VERSION,
+            "status": "completed",
+            "readability_contract": {
+                "min_width_px": 900,
+                "min_height_px": 480,
+                "min_file_size_bytes": 1000,
+                "source_csv_required": True,
+                "manual_quality_review_still_required": True,
+            },
+            "written": [entry["plot"] for entry in entries if entry["status"] == "generated"],
+            "skipped": [entry for entry in entries if entry["status"] == "skipped"],
+            "plots": entries,
+        },
+    )
 
 
-def _plot_kernel_family_counts(plt: Any, path: Path, records: list[JsonDict]) -> str | None:
-    counts = Counter(str(record.get("kernel_family") or "unknown") for record in records)
-    return _simple_bar(plt, path, counts, "Kernel Family Counts", "Records")
+def _plot_runtime_by_backend_case(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+    return _grouped_case_backend_bar(
+        plt,
+        path,
+        rows,
+        value_field="total_wall_time_s",
+        title="Runtime by backend and case",
+        ylabel="Wall time (s, log scale)",
+        log_y=True,
+    )
 
 
-def _plot_final_max_error(plt: Any, path: Path, records: list[JsonDict]) -> str | None:
-    values: dict[str, float] = {}
-    for record in records:
-        metrics = _json_value(record.get("validation_error_metrics"))
-        value = metrics.get("max_abs_error")
-        if value is not None:
-            values[_record_label(record)] = float(value)
-    return _simple_bar(plt, path, values, "Final Max Error By Case", "Max abs error")
-
-
-def _plot_runtime_breakdown(plt: Any, path: Path, records: list[JsonDict]) -> str | None:
-    values: dict[str, float] = {}
-    for record in records:
-        values[_record_label(record)] = float(record.get("total_wall_time_s") or 0.0)
-    return _simple_bar(plt, path, values, "Runtime By Backend/Policy", "Seconds")
-
-
-def _plot_unsupported_reasons(plt: Any, path: Path, records: list[JsonDict]) -> str | None:
-    counts: Counter[str] = Counter()
-    for record in records:
-        if int(record.get("unsupported_task_count", 0) or 0):
-            counts[str(record.get("warnings") or record.get("status") or "unsupported")] += int(record.get("unsupported_task_count", 0) or 0)
-    return _simple_bar(plt, path, counts, "Unsupported Reasons", "Tasks")
-
-
-def _simple_bar(plt: Any, path: Path, values: dict[str, float] | Counter[str], title: str, ylabel: str) -> str | None:
-    if not values:
+def _plot_runtime_scaling_by_qubits(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+    rows = [row for row in rows if row.get("case_family") and _int_or_none(row.get("n_qubits")) is not None and _positive_float(row.get("total_wall_time_s"))]
+    if not rows:
         return "required_data_unavailable"
-    labels = list(values.keys())
-    data = [float(values[label]) for label in labels]
-    path.parent.mkdir(parents=True, exist_ok=True)
-    figure, axis = plt.subplots(figsize=(max(6.0, len(labels) * 0.6), 4.0))
-    axis.bar(labels, data, color="#2563eb")
-    axis.set_title(title)
-    axis.set_ylabel(ylabel)
-    axis.tick_params(axis="x", rotation=45)
-    figure.tight_layout()
-    figure.savefig(path, dpi=150)
-    plt.close(figure)
+    families = sorted({str(row["case_family"]) for row in rows})
+    if not families:
+        return "required_data_unavailable"
+    cols = min(2, len(families))
+    rows_count = (len(families) + cols - 1) // cols
+    fig, axes = plt.subplots(rows_count, cols, figsize=(max(8.0, cols * 5.5), max(4.8, rows_count * 3.6)), squeeze=False, constrained_layout=True)
+    for axis in axes.ravel():
+        axis.set_visible(False)
+    for index, family in enumerate(families):
+        axis = axes[index // cols][index % cols]
+        axis.set_visible(True)
+        family_rows = [row for row in rows if row["case_family"] == family]
+        for backend in _backend_order(family_rows):
+            backend_rows = sorted((row for row in family_rows if row["backend_label"] == backend), key=lambda item: int(item["n_qubits"]))
+            axis.plot(
+                [int(row["n_qubits"]) for row in backend_rows],
+                [max(float(row["total_wall_time_s"]), 1.0e-12) for row in backend_rows],
+                marker="o",
+                label=backend,
+            )
+        axis.set_title(str(family).upper())
+        axis.set_xlabel("Qubits")
+        axis.set_ylabel("Wall time (s)")
+        axis.set_yscale("log")
+        axis.grid(True, axis="y", alpha=0.3)
+        axis.legend(fontsize="small")
+    _save_figure(fig, path)
     return None
 
 
-def _record_label(record: JsonDict) -> str:
-    parts = [str(record.get("case_id") or "case")]
-    if record.get("route_id"):
-        parts.append(str(record["route_id"]))
-    if record.get("policy"):
-        parts.append(str(record["policy"]))
-    if record.get("kernel_family"):
-        parts.append(str(record["kernel_family"]))
-    return "/".join(parts)
+def _plot_output_error_by_backend(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+    return _grouped_case_backend_bar(
+        plt,
+        path,
+        rows,
+        value_field="max_abs_error",
+        title="Output agreement by backend",
+        ylabel="Max abs error (log scale, floor 1e-18)",
+        log_y=True,
+        floor=1.0e-18,
+    )
+
+
+def _plot_probability_error_by_backend(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+    return _grouped_case_backend_bar(
+        plt,
+        path,
+        rows,
+        value_field="probability_l1_error",
+        title="Probability error by backend",
+        ylabel="Probability L1 error (log scale, floor 1e-18)",
+        log_y=True,
+        floor=1.0e-18,
+    )
+
+
+def _plot_memory_proxy_by_backend(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+    return _grouped_case_backend_bar(
+        plt,
+        path,
+        rows,
+        value_field="memory_proxy_bytes",
+        title="Memory proxy by backend",
+        ylabel="Bytes (log scale)",
+        log_y=True,
+    )
+
+
+def _plot_tn_task_and_intermediate(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+    rows = [row for row in rows if row.get("execution_model") == "tensor_network"]
+    if not rows:
+        return "required_data_unavailable"
+    labels = _case_backend_labels(rows)
+    fig, axes = plt.subplots(2, 1, figsize=(max(9.0, len(labels) * 0.42), 7.2), constrained_layout=True)
+    axes[0].bar(labels, [float(row.get("tn_task_count") or 0.0) for row in rows], color="#2563eb")
+    axes[0].set_ylabel("TN tasks")
+    axes[0].set_title("TN task count")
+    axes[0].tick_params(axis="x", rotation=55, labelsize=8)
+    axes[1].bar(labels, [max(float(row.get("tn_max_intermediate_bytes") or 0.0), 1.0) for row in rows], color="#16a34a")
+    axes[1].set_ylabel("Max intermediate bytes")
+    axes[1].set_title("TN max intermediate size")
+    axes[1].set_yscale("log")
+    axes[1].tick_params(axis="x", rotation=55, labelsize=8)
+    _save_figure(fig, path)
+    return None
+
+
+def _plot_planning_vs_contraction_time(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+    rows = [row for row in rows if row.get("execution_model") == "tensor_network"]
+    if not rows:
+        return "required_data_unavailable"
+    labels = _case_backend_labels(rows)
+    planning = [float(row.get("planning_time_s") or 0.0) + float(row.get("lowering_time_s") or 0.0) for row in rows]
+    kernel = [float(row.get("kernel_time_s") or 0.0) for row in rows]
+    fig, axis = plt.subplots(figsize=(max(9.0, len(labels) * 0.42), 5.2), constrained_layout=True)
+    axis.bar(labels, planning, label="planning/lowering", color="#7c3aed")
+    axis.bar(labels, kernel, bottom=planning, label="contraction", color="#2563eb")
+    axis.set_ylabel("Seconds")
+    axis.set_title("Planning/lowering time versus contraction time")
+    axis.tick_params(axis="x", rotation=55, labelsize=8)
+    axis.legend()
+    _save_figure(fig, path)
+    return None
+
+
+def _plot_backend_support_summary(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+    if not rows:
+        return "required_data_unavailable"
+    labels = [str(row["backend_label"]) for row in rows]
+    passed = [int(row.get("passed_count") or 0) for row in rows]
+    failed = [int(row.get("failed_count") or 0) for row in rows]
+    fig, axis = plt.subplots(figsize=(max(7.0, len(labels) * 1.3), 4.8), constrained_layout=True)
+    axis.bar(labels, passed, label="passed", color="#16a34a")
+    axis.bar(labels, failed, bottom=passed, label="failed", color="#dc2626")
+    axis.set_ylabel("Records")
+    axis.set_title("Backend support / validation summary")
+    axis.tick_params(axis="x", rotation=25)
+    axis.legend()
+    _save_figure(fig, path)
+    return None
+
+
+def _plot_relative_runtime_vs_quest_anchor(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+    return _grouped_case_backend_bar(
+        plt,
+        path,
+        rows,
+        value_field="relative_runtime",
+        title="Relative backend timing versus QuEST anchor",
+        ylabel="Relative wall time (QuEST = 1.0; not hardware speedup)",
+        log_y=False,
+    )
+
+
+def _grouped_case_backend_bar(
+    plt: Any,
+    path: Path,
+    rows: list[JsonDict],
+    *,
+    value_field: str,
+    title: str,
+    ylabel: str,
+    log_y: bool,
+    floor: float | None = None,
+) -> str | None:
+    rows = [row for row in rows if _float_or_none(row.get(value_field)) is not None]
+    if not rows:
+        return "required_data_unavailable"
+    cases = sorted({str(row["case_id"]) for row in rows})
+    backends = _backend_order(rows)
+    if not cases or not backends:
+        return "required_data_unavailable"
+    x = list(range(len(cases)))
+    width = min(0.8 / max(len(backends), 1), 0.24)
+    fig, axis = plt.subplots(figsize=(max(9.0, len(cases) * 0.62), 5.6), constrained_layout=True)
+    for offset, backend in enumerate(backends):
+        values = []
+        for case in cases:
+            row = next((item for item in rows if item["case_id"] == case and item["backend_label"] == backend), None)
+            value = _float_or_none((row or {}).get(value_field))
+            if value is None:
+                values.append(float("nan"))
+            elif floor is not None:
+                values.append(max(value, floor))
+            else:
+                values.append(max(value, 1.0e-18) if log_y else value)
+        positions = [item + (offset - (len(backends) - 1) / 2.0) * width for item in x]
+        axis.bar(positions, values, width=width, label=backend)
+    axis.set_xticks(x)
+    axis.set_xticklabels(cases, rotation=35, ha="right", fontsize=8)
+    axis.set_ylabel(ylabel)
+    axis.set_title(title)
+    if log_y:
+        axis.set_yscale("log")
+    axis.grid(True, axis="y", alpha=0.25)
+    axis.legend(fontsize="small")
+    _save_figure(fig, path)
+    return None
+
+
+def _save_figure(fig: Any, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    try:
+        import matplotlib.pyplot as _plt
+
+        _plt.close(fig)
+    except Exception:  # pragma: no cover - defensive fallback for unusual matplotlib states
+        fig.clf()
+
+
+def _image_metadata(plt: Any, path: Path) -> JsonDict:
+    payload: JsonDict = {"size_bytes": path.stat().st_size if path.exists() else 0}
+    try:
+        image = plt.imread(path)
+        height, width = image.shape[:2]
+        payload.update(
+            {
+                "width_px": int(width),
+                "height_px": int(height),
+                "reasonable_dimensions": int(width) >= 900 and int(height) >= 480,
+                "non_empty": payload["size_bytes"] > 1000,
+            }
+        )
+    except Exception as exc:
+        payload.update({"read_error": str(exc), "reasonable_dimensions": False, "non_empty": False})
+    return payload
+
+
+def _plot_data_row(record: JsonDict) -> JsonDict:
+    notes = _json_value(record.get("notes"))
+    metrics = _json_value(record.get("validation_error_metrics"))
+    route_id = str(record.get("route_id") or record.get("backend_id") or "unknown")
+    case_id = str(record.get("case_id") or "unknown")
+    return {
+        "case_id": case_id,
+        "case_family": _case_family(case_id, record, notes),
+        "n_qubits": _int_or_none(record.get("n_qubits") or notes.get("n_qubits")),
+        "gate_count": _int_or_none(record.get("gate_count") or notes.get("gate_count")),
+        "route_id": route_id,
+        "backend_label": _backend_label(route_id),
+        "backend_family": record.get("backend_family"),
+        "execution_model": record.get("execution_model"),
+        "contraction_execution_target": record.get("contraction_execution_target") or record.get("execution_target"),
+        "accelerator_kind": record.get("accelerator_kind") or "none",
+        "status": record.get("status"),
+        "validation_status": record.get("validation_status"),
+        "total_wall_time_s": _float_or_none(record.get("total_wall_time_s")),
+        "kernel_time_s": _float_or_none(record.get("kernel_time_s")),
+        "planning_time_s": _float_or_none(record.get("planning_time_s")),
+        "lowering_time_s": _float_or_none(record.get("lowering_time_s")),
+        "max_abs_error": _float_or_none(record.get("max_abs_error") if record.get("max_abs_error") is not None else metrics.get("max_abs_error")),
+        "l2_error": _float_or_none(record.get("l2_error") if record.get("l2_error") is not None else metrics.get("l2_error")),
+        "probability_l1_error": _float_or_none(metrics.get("probability_l1_error") if metrics.get("probability_l1_error") is not None else record.get("probability_l1_error")),
+        "probability_max_abs_error": _float_or_none(metrics.get("probability_max_abs_error") if metrics.get("probability_max_abs_error") is not None else record.get("probability_max_abs_error")),
+        "memory_proxy_bytes": _memory_proxy_bytes(record),
+        "statevector_bytes": _int_or_none(record.get("statevector_bytes")),
+        "tn_task_count": _int_or_none(record.get("tn_task_count") if record.get("tn_task_count") is not None else record.get("task_count")),
+        "tn_max_intermediate_bytes": _int_or_none(record.get("tn_max_intermediate_bytes")),
+        "tn_estimated_flops": _int_or_none(record.get("tn_estimated_flops")),
+        "tn_estimated_bytes": _int_or_none(record.get("tn_estimated_bytes")),
+    }
+
+
+def _case_family(case_id: str, record: JsonDict, notes: JsonDict) -> str:
+    explicit = record.get("circuit_family") or notes.get("circuit_family")
+    if explicit:
+        return str(explicit)
+    name = case_id
+    if name.startswith("quest_"):
+        name = name[len("quest_") :]
+    name = re.sub(r"_[0-9]+q$", "", name)
+    parts = name.split("_")
+    return parts[0] if parts else name
+
+
+def _backend_label(route_id: str) -> str:
+    if route_id in BACKEND_LABELS:
+        return BACKEND_LABELS[route_id]
+    return route_id.replace("_", " ")
+
+
+def _memory_proxy_bytes(record: JsonDict) -> int | None:
+    if record.get("execution_model") == "full_state":
+        return _int_or_none(record.get("statevector_bytes"))
+    for key in ("tn_max_intermediate_bytes", "estimated_transfer_bytes", "statevector_bytes"):
+        value = _int_or_none(record.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _backend_order(rows: list[JsonDict]) -> list[str]:
+    labels = sorted({str(row.get("backend_label") or _backend_label(str(row.get("route_id") or "unknown"))) for row in rows})
+    preferred = list(BACKEND_LABELS.values())
+    return [label for label in preferred if label in labels] + [label for label in labels if label not in preferred]
+
+
+def _case_backend_labels(rows: list[JsonDict]) -> list[str]:
+    return [f"{row.get('case_id')}\n{row.get('backend_label')}" for row in rows]
+
+
+def _backend_support_rows(rows: list[JsonDict]) -> list[JsonDict]:
+    grouped: dict[str, list[JsonDict]] = defaultdict(list)
+    for row in rows:
+        grouped[str(row.get("route_id") or "unknown")].append(row)
+    out: list[JsonDict] = []
+    for route_id, group in sorted(grouped.items()):
+        validation_statuses = {str(row.get("validation_status") or "") for row in group}
+        statuses = {str(row.get("status") or "") for row in group}
+        out.append(
+            {
+                "route_id": route_id,
+                "backend_label": _backend_label(route_id),
+                "execution_model": next((row.get("execution_model") for row in group if row.get("execution_model")), None),
+                "backend_family": next((row.get("backend_family") for row in group if row.get("backend_family")), None),
+                "record_count": len(group),
+                "passed_count": sum(1 for row in group if row.get("validation_status") in {"passed", "reference"}),
+                "failed_count": sum(1 for row in group if row.get("validation_status") == "failed" or row.get("status") in {"failed", "validation_failed"}),
+                "unavailable_count": sum(1 for row in group if row.get("status") in {"unavailable", "skipped", "not_executed"}),
+                "validation_statuses": sorted(validation_statuses),
+                "statuses": sorted(statuses),
+            }
+        )
+    return out
+
+
+def _relative_runtime_rows(rows: list[JsonDict]) -> tuple[list[JsonDict], list[JsonDict]]:
+    anchors: dict[str, JsonDict] = {}
+    skipped: list[JsonDict] = []
+    for row in rows:
+        if row.get("route_id") == "quest_cpu_full_state_exact":
+            runtime = _positive_float(row.get("total_wall_time_s"))
+            if runtime is not None:
+                anchors[str(row.get("case_id"))] = row
+    relative: list[JsonDict] = []
+    for row in rows:
+        case_id = str(row.get("case_id") or "unknown")
+        anchor = anchors.get(case_id)
+        if anchor is None:
+            skipped.append({"case_id": case_id, "route_id": row.get("route_id"), "backend_label": row.get("backend_label"), "reason": "missing_valid_quest_anchor"})
+            continue
+        runtime = _positive_float(row.get("total_wall_time_s"))
+        if runtime is None:
+            skipped.append({"case_id": case_id, "route_id": row.get("route_id"), "backend_label": row.get("backend_label"), "reason": "missing_valid_backend_runtime"})
+            continue
+        anchor_runtime = float(anchor["total_wall_time_s"])
+        payload = dict(row)
+        payload["anchor_route_id"] = "quest_cpu_full_state_exact"
+        payload["anchor_total_wall_time_s"] = anchor_runtime
+        payload["relative_runtime"] = runtime / anchor_runtime
+        relative.append(payload)
+    return relative, skipped
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    return out if math.isfinite(out) else None
+
+
+def _positive_float(value: Any) -> float | None:
+    out = _float_or_none(value)
+    if out is None or out <= 0.0:
+        return None
+    return out
+
+
+def _int_or_none(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _retention_manifest(run_dir: Path, *, mode: str, pruned: list[JsonDict], retained: list[Path]) -> JsonDict:
@@ -557,8 +1019,6 @@ def _cleanup_empty_report_dirs(run_dir: Path) -> None:
 
 
 def _write_csv(path: Path, rows: list[JsonDict], fieldnames: list[str]) -> None:
-    if not rows:
-        return
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     with tmp.open("w", encoding="utf-8", newline="") as handle:
@@ -566,6 +1026,13 @@ def _write_csv(path: Path, rows: list[JsonDict], fieldnames: list[str]) -> None:
         writer.writeheader()
         for row in rows:
             writer.writerow({field: _csv_value(row.get(field)) for field in fieldnames})
+    tmp.replace(path)
+
+
+def _write_text_atomic(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
     tmp.replace(path)
 
 
@@ -705,7 +1172,7 @@ def _validation_failures(records: list[JsonDict]) -> list[JsonDict]:
     return [row for row in records if row.get("validation_status") == "failed"]
 
 
-def _report_markdown(records: list[JsonDict]) -> str:
+def _report_markdown(records: list[JsonDict], run_dir: Path | None = None) -> str:
     lines = [
         "# Benchmark Run Report",
         "",
@@ -732,8 +1199,130 @@ def _report_markdown(records: list[JsonDict]) -> str:
     )
     for row in _kernel_family_summary(records):
         lines.append(f"| {row['kernel_family']} | {row['record_count']} | {row['task_count']} | {row['validated_task_count']} | {row['unsupported_task_count']} |")
+    lines.extend(
+        [
+            "",
+            "## Backend Metadata",
+            "",
+            "| Route | Backend | Model | Target | Accelerator | Output |",
+            "| --- | --- | --- | --- | --- | --- |",
+        ]
+    )
+    seen_routes: set[str] = set()
+    for record in records:
+        route_id = str(record.get("route_id") or "unknown")
+        if route_id in seen_routes:
+            continue
+        seen_routes.add(route_id)
+        lines.append(
+            f"| {route_id} | {record.get('backend_family')} | {record.get('execution_model')} | "
+            f"{record.get('contraction_execution_target')} | {record.get('accelerator_kind') or 'none'} | {record.get('output_kind')} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Timing Breakdown",
+            "",
+            "| Case | Route | Total wall time s | Kernel time s | Planning time s | Lowering time s |",
+            "| --- | --- | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for record in records:
+        lines.append(
+            f"| {record.get('case_id')} | {record.get('route_id')} | {record.get('total_wall_time_s')} | "
+            f"{record.get('kernel_time_s')} | {record.get('planning_time_s')} | {record.get('lowering_time_s')} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Tensor Network Metrics",
+            "",
+            "| Case | Route | TN tasks | Max intermediate bytes | Estimated FLOPs | Estimated bytes |",
+            "| --- | --- | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for record in records:
+        if record.get("execution_model") == "tensor_network":
+            lines.append(
+                f"| {record.get('case_id')} | {record.get('route_id')} | {record.get('tn_task_count')} | "
+                f"{record.get('tn_max_intermediate_bytes')} | {record.get('tn_estimated_flops')} | {record.get('tn_estimated_bytes')} |"
+            )
+    lines.extend(
+        [
+            "",
+            "## Output Agreement",
+            "",
+            "| Case | Route | Validation | Max abs error | L2 error |",
+            "| --- | --- | --- | ---: | ---: |",
+        ]
+    )
+    for record in records:
+        metrics = _json_value(record.get("validation_error_metrics"))
+        lines.append(
+            f"| {record.get('case_id')} | {record.get('route_id')} | {record.get('validation_status')} | "
+            f"{metrics.get('max_abs_error')} | {metrics.get('l2_error')} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Probability Agreement",
+            "",
+            "| Case | Route | Probability L1 error | Probability max abs error |",
+            "| --- | --- | ---: | ---: |",
+        ]
+    )
+    for record in records:
+        metrics = _json_value(record.get("validation_error_metrics"))
+        lines.append(
+            f"| {record.get('case_id')} | {record.get('route_id')} | "
+            f"{metrics.get('probability_l1_error')} | {metrics.get('probability_max_abs_error')} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Memory / Proxy Metrics",
+            "",
+            "| Case | Route | Statevector bytes | TN max intermediate bytes | Memory proxy bytes |",
+            "| --- | --- | ---: | ---: | ---: |",
+        ]
+    )
+    for row in (_plot_data_row(record) for record in records):
+        lines.append(
+            f"| {row.get('case_id')} | {row.get('route_id')} | {row.get('statevector_bytes')} | "
+            f"{row.get('tn_max_intermediate_bytes')} | {row.get('memory_proxy_bytes')} |"
+        )
+    if run_dir is not None:
+        lines.extend(_plot_inventory_markdown(run_dir))
     lines.append("")
     return "\n".join(lines)
+
+
+def _plot_inventory_markdown(run_dir: Path) -> list[str]:
+    manifest_path = run_dir / "plots" / "plot_manifest.json"
+    lines = [
+        "",
+        "## Plot Inventory",
+        "",
+        "| Plot | Status | Source rows | Reason | Source CSV |",
+        "| --- | --- | ---: | --- | --- |",
+    ]
+    if not manifest_path.exists():
+        lines.append("| plot_manifest.json | missing | 0 | plot manifest not written |  |")
+        return lines
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        lines.append(f"| plot_manifest.json | invalid | 0 | {exc} |  |")
+        return lines
+    if manifest.get("status") == "skipped":
+        lines.append(f"| all plots | skipped | 0 | {manifest.get('reason')} |  |")
+        return lines
+    for item in manifest.get("plots", []):
+        lines.append(
+            f"| {item.get('plot')} | {item.get('status')} | {item.get('source_row_count')} | "
+            f"{item.get('reason') or ''} | {item.get('source_csv') or ''} |"
+        )
+    return lines
 
 
 def _compare_grouped(

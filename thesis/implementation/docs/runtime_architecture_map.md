@@ -41,6 +41,7 @@ Quantum circuit
 | Benchmark runner | Implemented | One CLI and one timestamped artifact layout |
 | CPU exact TN | Implemented | Full output, validation authority |
 | QuEST CPU full-state | Implemented | Metrics-only baseline |
+| External exact TN | Implemented initial backend | Quimb exact CPU TN route with dependency provenance |
 | Planner comparison | Implemented | Analysis of FLOP vs modeled UPMEM pressure |
 | Fixed-point conversion | Implemented | Host-side deterministic utilities |
 | Dense preparation | Implemented | One-task preparation and validation |
@@ -57,7 +58,7 @@ Quantum circuit
 | PID-Comm execution | Planned/candidate | Capability not integrated |
 | L3 distributed UPMEM | Model-only/planned | No execution |
 | Hardware UPMEM | Not implemented | No hardware evidence |
-| GPU TN/full-state | Planned | Not implemented |
+| GPU TN/full-state | Feasibility only | ROCm/GPU probes only; no records without real execution |
 | Sparse/irregular routes | Planned | Not implemented |
 
 ## UPMEM Internal Execution Classes
@@ -86,6 +87,7 @@ Examples:
 | Concept | Example |
 |---|---|
 | Route ID | `cpu_tn_einsum_exact` |
+| External TN route ID | `quimb_tn_exact` |
 | Comparable full-state route ID | `quest_cpu_full_state_exact` |
 | Backend ID | `upmem_sdk_simulator_dense` |
 | Execution class | `L2_SINGLE_DPU_MRAM` |
@@ -102,6 +104,7 @@ Current status must be reported honestly:
 | Path | Current complex support |
 |---|---|
 | CPU exact TN | Supported by NumPy complex tensors |
+| Quimb exact TN | Supported by Quimb complex tensors |
 | QuEST CPU full-state | Metrics-only route plus output-comparable exact route for small deterministic circuits |
 | Dense preparation | Supports explicit split real/imag representation where metadata proves layout |
 | UPMEM L1 simulator | Split-complex four-GEMM path supported for explicit manifest layout |
@@ -159,10 +162,11 @@ GEMM is the current backbone, not the complete design.
 | Normal smoke benchmark | `quantum_bench.bench run --suite configs/suites/smoke.yml` | Current runner/provider health |
 | Environment check | `quantum_bench.bench upmem-env-check` | Local UPMEM/SimplePIM setup evidence |
 | External library check | `quantum_bench.bench upmem-external-libs-check` | Candidate feasibility evidence |
+| Simulation backend probe | `quantum_bench.bench simulation-backend-probe` | Optional Quimb/cotengra/GPU feasibility metadata |
 | PIM bridge eval | `quantum_bench.bench pim-bridge-eval ...` | Task-level simulator evidence |
 | Strict UPMEM runtime | `quantum_bench.bench upmem-taskgraph-runtime ...` | Small full-TaskGraph SDK simulator code-path evidence |
 | Suite MVP benchmark | `quantum_bench.bench upmem-mvp-benchmark ...` | Suite-level CPU reference, UPMEM runtime, and report regeneration |
-| Simulation backend comparison | `quantum_bench.bench simulation-backend-compare ...` | QuEST full-state and CPU TN output comparison |
+| Simulation backend comparison | `quantum_bench.bench simulation-backend-compare ...` | QuEST full-state, internal CPU TN, and external TN output comparison |
 | Report regeneration | `quantum_bench.bench report-run ...` | Non-destructive derived report refresh |
 | Compact pruning | `quantum_bench.bench prune-run ...` | Explicit artifact pruning for new MVP run layouts |
 | Frontier analysis | `quantum_bench.bench pim-frontier-analysis ...` | Model-only memory/parallelism evidence |
@@ -212,5 +216,9 @@ analysis.
 - Do not delete historical runs without a separate result-curation decision.
 - Use compact retention for normal MVP sweeps; use full retention only for
   debugging native bridge artifacts.
+- Serious simulation backend reports must come from `normalized_records.jsonl`.
+  Report regeneration may overwrite derived CSV/Markdown/plot files, but must
+  not prune execution artifacts. Plot source CSVs and skipped-plot reasons are
+  part of the report contract.
 - Do not rename stable route IDs during documentation cleanup.
 - Do not let synthetic pressure workloads enter normal benchmark execution.

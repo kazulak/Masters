@@ -30,6 +30,8 @@ def capture_environment(root_dir: Path) -> dict[str, Any]:
         "mem_total_kib": read_mem_total_kib(),
         "numpy": np.__version__,
         "opt_einsum": _module_version("opt_einsum"),
+        "quimb": _module_version("quimb"),
+        "cotengra": _module_version("cotengra"),
         "matplotlib": _module_version("matplotlib"),
         "compiler": first_line(["cc", "--version"]),
         "git_commit": first_line(["git", "rev-parse", "HEAD"], cwd=root_dir.parents[1]) if (root_dir.parents[1] / ".git").exists() else None,
@@ -37,6 +39,15 @@ def capture_environment(root_dir: Path) -> dict[str, Any]:
         "upmem": {
             "UPMEM_HOME": os.environ.get("UPMEM_HOME"),
             "dpu_compiler": shutil.which("dpu-upmem-dpurte-clang"),
+        },
+        "gpu": {
+            "rocminfo": shutil.which("rocminfo"),
+            "rocm_smi": shutil.which("rocm-smi"),
+            "hipcc": shutil.which("hipcc"),
+            "cupy": _module_version("cupy"),
+            "torch": _module_version("torch"),
+            "jax": _module_version("jax"),
+            "gpu_execution_backend_added": False,
         },
         "simplepim": {
             "SIMPLEPIM_HOME": os.environ.get("SIMPLEPIM_HOME"),

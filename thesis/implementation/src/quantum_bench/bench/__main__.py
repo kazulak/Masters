@@ -80,6 +80,8 @@ def main() -> int:
     simulation_compare_parser.add_argument("--suite", required=True, help="Suite path or preset name under configs/suites")
     simulation_compare_parser.add_argument("--artifact-retention", default="compact", choices=("full", "compact", "summary-only"))
 
+    sub.add_parser("simulation-backend-probe")
+
     report_run_parser = sub.add_parser("report-run")
     report_run_parser.add_argument("--input", required=True)
     report_run_parser.add_argument("--output-plots", action=argparse.BooleanOptionalAction, default=True)
@@ -372,6 +374,11 @@ def main() -> int:
                 indent=2,
             )
         )
+        return 0
+    if args.command == "simulation-backend-probe":
+        from quantum_bench.bench.simulation_backend_probe import probe_simulation_backends
+
+        print(json.dumps(probe_simulation_backends(root_dir), indent=2))
         return 0
     if args.command == "report-run":
         from quantum_bench.bench.reporting import report_run

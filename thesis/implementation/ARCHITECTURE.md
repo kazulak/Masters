@@ -80,6 +80,7 @@ which work was modeled only, which work fell back, and why.
 | Route ID | Role | Output authority |
 |---|---|---|
 | `cpu_tn_einsum_exact` | Exact tensor-network CPU reference | Authoritative full tensor output |
+| `quimb_tn_exact` | External exact tensor-network CPU backend | Comparable final tensor output with Quimb/cotengra provenance |
 | `quest_cpu_full_state_benchmark` | QuEST CPU full-state baseline | Benchmark-only metrics |
 | `quest_cpu_full_state_exact` | QuEST CPU full-state comparable baseline | Statevector output for small deterministic unitary circuits |
 | `upmem_dense_int8_placeholder` | UPMEM dense candidate placeholder | Estimate/skip metadata only |
@@ -88,6 +89,9 @@ The metrics-only QuEST route is useful for timing comparison, but it is not an
 output-comparable route. `quest_cpu_full_state_exact` is additive and compares
 QuEST full-state output against CPU TN output on shared deterministic circuit
 semantics.
+`quimb_tn_exact` is additive as the first external tensor-network execution
+backend. It is exact CPU execution, not GPU execution, and does not replace the
+simple internal `cpu_tn_einsum_exact` baseline.
 
 ## UPMEM Runtime Status
 
@@ -111,6 +115,7 @@ as full-circuit acceleration.
 | Benchmark runner and suite loading | `src/quantum_bench/bench/runner.py` | Implemented |
 | Circuit and tensor-network construction | `circuits/`, `tn/` | Implemented for current builtins |
 | CPU exact task execution | `providers/exact_tn/cpu_einsum.py` | Implemented |
+| External exact TN execution | `providers/exact_tn/quimb_tn.py` | Implemented initial Quimb backend |
 | TaskGraph materialization replay | `tn/materialize.py` | Developer helper |
 | Task-level routing and policy | `routing/` | Analysis/shadow only |
 | Fixed-point conversion | `formats/fixed_point.py` | Implemented host-side utilities |
@@ -158,7 +163,8 @@ These commands are intentionally outside normal benchmark provider execution:
 | `generic-task-bridge` | One real task through the unoptimized generic fallback bridge | Task-level simulator evidence only |
 | `upmem-taskgraph-runtime` | Sequential full TaskGraph through UPMEM SDK DPU programs using SDK simulator mode | Small strict UPMEM code-path evidence, not hardware timing |
 | `upmem-mvp-benchmark` | Suite-level CPU reference plus strict UPMEM runtime variants | Reproducible MVP report pipeline, not optimized performance evidence |
-| `simulation-backend-compare` | QuEST full-state and CPU TN comparison on shared deterministic circuits | CPU backend comparison scaffold |
+| `simulation-backend-compare` | QuEST full-state, internal CPU TN, and external TN comparison on shared deterministic circuits | CPU backend comparison scaffold |
+| `simulation-backend-probe` | Optional simulation library and GPU feasibility probe | Feasibility metadata only; no fake GPU records |
 | `report-run` | Regenerate derived CSV/Markdown/metrics/validation/plots from retained artifacts | Reporting only; non-destructive for execution artifacts |
 | `prune-run` | Explicit compact artifact pruning for new MVP run layouts | Destructive only when explicitly requested; idempotent |
 | `dense-route-coverage` | All-task readiness and bridge eligibility | Analysis only |
@@ -186,6 +192,13 @@ task/runtime outputs. Compact retention is the default MVP mode: it removes
 debug-heavy bridge blobs and native `runner_work/**`, keeps audit summaries and
 task metrics, and records intentional pruning so reports can distinguish pruned
 artifacts from missing artifacts.
+
+Simulation backend comparison has three suite tiers. `simulation_backend_compare_quick.yml`
+is a validation suite. `simulation_backend_compare_thesis_small.yml` and
+`simulation_backend_compare_scaling.yml` are bounded local suites for readable
+trend plots. Scaling plots group by circuit family; relative runtime plots use
+only rows with a valid measured QuEST anchor and are labeled as relative backend
+timing, not speedup.
 
 ## Synthetic Pressure Workloads
 

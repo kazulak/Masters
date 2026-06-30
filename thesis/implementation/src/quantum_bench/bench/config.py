@@ -43,6 +43,7 @@ def normalize_v2_suite(data: dict[str, Any]) -> dict[str, Any]:
     suite = {**DEFAULTS, **defaults}
     suite["schema_version"] = 2
     suite["suite_id"] = data.get("suite_id")
+    suite["metadata"] = data.get("metadata") or {}
     workloads = data.get("workloads")
     if not isinstance(workloads, list) or not workloads:
         raise ValueError("Suite schema v2 must define a non-empty workloads list")
