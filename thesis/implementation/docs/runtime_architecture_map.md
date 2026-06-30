@@ -179,6 +179,15 @@ Developer diagnostics such as `dense-task-bridge`, `dense-route-coverage`,
 `shadow-routed-runtime`, `simplepim-microbench`, and `compare-planners` are
 useful for implementation, but they are not final benchmark claims.
 
+Simulation backend comparison now has separate CPU-only and GPU-scaffold suites.
+`simulation_backend_compare_compute_medium.yml` is compute-focused but
+GPU-independent. `simulation_backend_compare_gpu_medium.yml` may list optional
+GPU candidates, but benchmark records are emitted only after verified GPU
+execution. Candidate reports should use evidence categories such as
+`tailored_quantum_gpu`, `cuda_quantum_stack`, `generic_tensor_gpu`, and
+`feasibility_only`; they should not claim SOTA or GPU results from source
+markers alone.
+
 ## Roadmap
 
 Near-term priorities:

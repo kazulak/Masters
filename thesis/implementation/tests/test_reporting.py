@@ -81,6 +81,16 @@ def _simulation_record(
         "lowering_time_s": 0.0,
         "total_wall_time_s": time_s,
         "kernel_time_s": time_s,
+        "simulation_compute_time_s": time_s * 0.8,
+        "setup_time_s": time_s * 0.05,
+        "data_transfer_time_s": 0.0,
+        "validation_time_s": time_s * 0.02,
+        "output_materialization_time_s": time_s * 0.03,
+        "timing_scope": "end_to_end_and_compute",
+        "gpu_synchronized": False,
+        "validation_method": "full_statevector",
+        "repeat_id": 0,
+        "measured_repeat_count": 1,
         "hardware_speedup": "not_applicable",
         "validation_error_metrics": {
             "max_abs_error": max_abs_error,
@@ -156,9 +166,13 @@ def test_report_run_writes_thesis_plot_sources_and_inventory(tmp_path: Path) -> 
     backend_csv = run_dir / "plots" / "data" / "backend_results.csv"
     scaling_csv = run_dir / "plots" / "data" / "runtime_scaling_by_qubits.csv"
     relative_csv = run_dir / "plots" / "data" / "relative_runtime_vs_quest_anchor.csv"
+    compute_csv = run_dir / "plots" / "data" / "compute_time_by_backend_case.csv"
+    total_vs_compute_csv = run_dir / "plots" / "data" / "total_vs_compute_time.csv"
     assert backend_csv.exists()
     assert scaling_csv.exists()
     assert relative_csv.exists()
+    assert compute_csv.exists()
+    assert total_vs_compute_csv.exists()
     with backend_csv.open("r", encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle))
     assert {row["case_family"] for row in rows} >= {"qrng", "bv"}
@@ -174,6 +188,8 @@ def test_report_run_writes_thesis_plot_sources_and_inventory(tmp_path: Path) -> 
         entries = {entry["plot"]: entry for entry in manifest["plots"]}
         assert "runtime_by_backend_case.png" in entries
         assert "runtime_scaling_by_qubits.png" in entries
+        assert "compute_time_by_backend_case.png" in entries
+        assert "total_vs_compute_time.png" in entries
         for entry in entries.values():
             assert (run_dir / entry["source_csv"]).exists()
             if entry["status"] == "generated":

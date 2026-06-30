@@ -107,12 +107,17 @@ Simulation backend comparison:
 ```bash
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simulation-backend-compare --suite configs/suites/simulation_backend_compare_quick.yml --artifact-retention compact
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simulation-backend-compare --suite configs/suites/simulation_backend_compare_thesis_small.yml --artifact-retention compact
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simulation-backend-compare --suite configs/suites/simulation_backend_compare_compute_medium.yml --artifact-retention compact
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simulation-backend-probe
 ```
 
 `simulation_backend_compare_quick.yml` is for validation. The thesis-small and
 scaling suites are bounded local benchmark suites with deterministic unitary
 circuits, statevector output caps, and explicit runtime-class metadata.
+`simulation_backend_compare_compute_medium.yml` is GPU-independent and must run
+on CPU-only/no-ROCm environments. `simulation_backend_compare_gpu_medium.yml`
+is a scaffold for verified GPU routes; optional GPU candidates remain probe
+metadata until a backend proves real GPU execution.
 
 Artifact-driven result comparison:
 
@@ -189,7 +194,9 @@ Use these rules when interpreting artifacts:
   backend. It is exact CPU execution and emits dependency/provenance metadata;
   it is not a GPU or UPMEM result.
 - `simulation-backend-probe` reports optional external-library and GPU
-  feasibility. It does not emit benchmark records.
+  feasibility. It classifies candidates as `tailored_quantum_gpu`,
+  `cuda_quantum_stack`, `generic_tensor_gpu`, or `feasibility_only`; it does not
+  emit benchmark records.
 - `upmem_sdk_simulator_dense` is a developer bridge backend ID, not a final
   benchmark route.
 - `upmem_sdk_simulator_generic_loop` is an unoptimized developer bridge backend
@@ -214,6 +221,11 @@ Use these rules when interpreting artifacts:
   benchmark execution.
 - Generated artifacts belong under `runs/`; curated thesis results should be
   copied deliberately later, not inferred from every local run.
+- Compute-focused reports separate total wall time from setup, planning,
+  transfer, compute, validation, and output materialization where the backend
+  exposes those timings. SDK simulator timings and future GPU timings are
+  reported as measured execution-mode timings, not hardware speedups unless the
+  record explicitly proves a hardware timing context.
 
 ## External Candidate Libraries
 

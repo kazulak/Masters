@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import csv
 import json
+import statistics
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -63,6 +65,25 @@ RESULT_FIELDS = [
     "statevector_artifact",
     "final_tensor_artifact",
     "dependency_metadata",
+    "repeat_id",
+    "measured_repeat_count",
+    "setup_time_s",
+    "circuit_lowering_time_s",
+    "data_transfer_time_s",
+    "simulation_compute_time_s",
+    "validation_time_s",
+    "output_materialization_time_s",
+    "timing_scope",
+    "gpu_synchronized",
+    "validation_method",
+    "total_wall_time_s_median",
+    "total_wall_time_s_min",
+    "total_wall_time_s_mean",
+    "total_wall_time_s_std",
+    "simulation_compute_time_s_median",
+    "simulation_compute_time_s_min",
+    "simulation_compute_time_s_mean",
+    "simulation_compute_time_s_std",
 ]
 
 
@@ -83,6 +104,8 @@ class ComparableRouteRun:
     final_tensor_rel: Path | None
     output_kind: str
     comparison_output_kind: str
+    repeat_id: int
+    output_materialization_time_s: float
 
 
 def run_simulation_backend_compare(
@@ -175,7 +198,10 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
     write_json(case_dir / "path_summary.json", graph.path_summary)
 
     anchor_route_id = _anchor_route_id(suite)
-    route_runs: list[ComparableRouteRun] = []
+    warmups = int(suite.get("warmups", 0) or 0)
+    repeats = int(suite.get("repeats", 1) or 1)
+    validation_method = _validation_method(suite)
+    executable_routes: list[ExecutionRoute] = []
     optional_backend_reports: list[JsonDict] = []
     routes = route_registry(root_dir)
     for route_id in suite["route_policy"]["routes"]:
@@ -195,24 +221,43 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
             continue
         can_execute, reason = route.can_execute(
             graph,
-            _context(root_dir, run_dir, suite, case_payload, route_config),
+            _context(root_dir, run_dir, suite, case_payload, route_config, repeat_id=0),
         )
         if not can_execute:
             if required:
                 raise RuntimeError(reason or f"{route_id} cannot execute")
             optional_backend_reports.append(_optional_backend_report(case_id, route_id, reason or "route_unavailable"))
             continue
-        try:
-            route_runs.append(_execute_route(root_dir, run_dir, suite, case_payload, graph, network, route))
-        except RuntimeError as exc:
-            if required:
-                raise
-            optional_backend_reports.append(_optional_backend_report(case_id, route_id, str(exc)))
+        executable_routes.append(route)
 
-    runs_by_route = {run.route.name: run for run in route_runs}
-    if anchor_route_id not in runs_by_route:
+    if not any(route.name == anchor_route_id for route in executable_routes):
         raise RuntimeError(f"comparison anchor {anchor_route_id} did not execute")
-    anchor_run = runs_by_route[anchor_route_id]
+
+    for warmup_id in range(warmups):
+        for route in executable_routes:
+            try:
+                _execute_route(root_dir, run_dir, suite, case_payload, graph, network, route, repeat_id=-(warmup_id + 1))
+            except RuntimeError as exc:
+                if route.name == anchor_route_id or bool(route_config_for(suite, route.name).get("required")):
+                    raise
+                optional_backend_reports.append(_optional_backend_report(case_id, route.name, f"warmup_failed:{exc}"))
+
+    measured_runs: list[ComparableRouteRun] = []
+    for repeat_id in range(repeats):
+        for route in executable_routes:
+            try:
+                measured_runs.append(_execute_route(root_dir, run_dir, suite, case_payload, graph, network, route, repeat_id=repeat_id))
+            except RuntimeError as exc:
+                if route.name == anchor_route_id or bool(route_config_for(suite, route.name).get("required")):
+                    raise
+                optional_backend_reports.append(_optional_backend_report(case_id, route.name, str(exc)))
+
+    runs_by_repeat_route = {(run.repeat_id, run.route.name): run for run in measured_runs}
+    for repeat_id in range(repeats):
+        if (repeat_id, anchor_route_id) not in runs_by_repeat_route:
+            raise RuntimeError(f"comparison anchor {anchor_route_id} did not execute for repeat {repeat_id}")
+
+    route_runs = measured_runs
 
     circuit_meta = manifest(circuit)
     gate_counts = circuit_meta["gate_counts"]
@@ -232,9 +277,12 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
     rows: list[JsonDict] = []
     comparisons: list[JsonDict] = []
     for run in route_runs:
-        validation = validate(run.statevector, anchor_run.statevector, suite["tolerances"])
+        repeat_anchor = runs_by_repeat_route[(run.repeat_id, anchor_route_id)]
+        validation_start = time.perf_counter()
+        validation = validate(run.statevector, repeat_anchor.statevector, suite["tolerances"])
         validation_metrics = validation_result_to_dict(validation)
-        validation_metrics.update(probability_error_metrics(run.statevector, anchor_run.statevector))
+        validation_metrics.update(probability_error_metrics(run.statevector, repeat_anchor.statevector))
+        validation_time_s = time.perf_counter() - validation_start
         validation_metrics["error_direction"] = _error_direction(run.route.name, anchor_route_id)
         row = _row_with_metrics(
             {
@@ -256,6 +304,17 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
                 "lowering_time_s": float(run.result.profile.lowering_s),
                 "total_wall_time_s": float(run.result.profile.total_s),
                 "kernel_time_s": float(run.result.profile.kernel_s),
+                "repeat_id": int(run.repeat_id),
+                "measured_repeat_count": repeats,
+                "setup_time_s": float(run.result.profile.prepare_s),
+                "circuit_lowering_time_s": float(run.result.profile.lowering_s),
+                "data_transfer_time_s": float(run.result.profile.h2d_s + run.result.profile.d2h_s),
+                "simulation_compute_time_s": float(run.result.profile.kernel_s),
+                "validation_time_s": float(validation_time_s),
+                "output_materialization_time_s": float(run.output_materialization_time_s),
+                "timing_scope": "end_to_end_and_compute",
+                "gpu_synchronized": bool(run.result.metadata.get("gpu_synchronized", False)),
+                "validation_method": validation_method,
                 "validation_metrics": validation_metrics,
                 "statevector_artifact": artifact_ref(run_dir, run.statevector_rel, role=f"{run.route.name}_statevector"),
                 "final_tensor_artifact": artifact_ref(run_dir, run.final_tensor_rel, role=f"{run.route.name}_final_tensor"),
@@ -265,14 +324,18 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
         )
         rows.append(row)
         comparisons.append(_comparison_row(row, anchor_route_id))
+    _add_repeat_aggregates(rows)
 
     case_summary = {
         **common,
         "schema_version": SIMULATION_BACKEND_COMPARE_SCHEMA_VERSION,
         "basis_order": "quest_little_endian_integer_index",
-        "routes": [run.route.name for run in route_runs],
+        "routes": [route.name for route in executable_routes],
         "anchor_route_id": anchor_route_id,
-        "route_count": len(route_runs),
+        "route_count": len(executable_routes),
+        "warmup_runs": warmups,
+        "measured_runs": repeats,
+        "validation_method": validation_method,
         "validation_status": "passed" if all(row["validation_status"] == "passed" for row in rows) else "failed",
         "backend_families": sorted({row["backend_family"] for row in rows}),
         "execution_models": sorted({row["execution_model"] for row in rows}),
@@ -290,14 +353,14 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
     }
 
 
-def _context(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: JsonDict, route_config: JsonDict) -> BenchmarkContext:
+def _context(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: JsonDict, route_config: JsonDict, *, repeat_id: int) -> BenchmarkContext:
     return BenchmarkContext(
         root_dir,
         run_dir,
         suite,
         case_payload,
         route_config,
-        0,
+        repeat_id,
         suite["tolerances"],
         suite.get("timeout_s"),
         suite.get("memory_guard_gib"),
@@ -312,27 +375,35 @@ def _execute_route(
     graph: Any,
     network: Any,
     route: ExecutionRoute,
+    *,
+    repeat_id: int,
 ) -> ComparableRouteRun:
     case_id = str(case_payload["case_id"])
-    context = _context(root_dir, run_dir, suite, case_payload, route_config_for(suite, route.name))
+    context = _context(root_dir, run_dir, suite, case_payload, route_config_for(suite, route.name), repeat_id=repeat_id)
     result = route.execute(route.prepare(graph, network, context), context)
     if result.status != "passed" or result.output.array is None:
         raise RuntimeError(result.error or f"{route.name} failed")
     array = np.asarray(result.output.array, dtype=np.complex128)
-    route_dir = Path("cases") / sanitize(case_id) / "routes" / sanitize(route.name)
+    repeat_label = f"repeat_{repeat_id}" if repeat_id >= 0 else f"warmup_{abs(repeat_id) - 1}"
+    route_dir = Path("cases") / sanitize(case_id) / "routes" / sanitize(route.name) / repeat_label
     (run_dir / route_dir).mkdir(parents=True, exist_ok=True)
+    output_write_time_s = 0.0
     if route.identity.output_contract == "statevector":
         statevector = _statevector_from_state_output(array, graph.network.circuit.n_qubits, route.name)
         state_rel = route_dir / "statevector.npy"
+        write_start = time.perf_counter()
         np.save(run_dir / state_rel, statevector, allow_pickle=False)
-        return ComparableRouteRun(route, result, statevector, state_rel, None, "statevector", "statevector")
+        output_write_time_s += time.perf_counter() - write_start
+        return ComparableRouteRun(route, result, statevector, state_rel, None, "statevector", "statevector", repeat_id, output_write_time_s)
     if route.identity.output_contract == "final_tensor":
         statevector = tensor_to_quest_statevector(array)
         tensor_rel = route_dir / "final_tensor.npy"
         state_rel = route_dir / "statevector_quest_order.npy"
+        write_start = time.perf_counter()
         np.save(run_dir / tensor_rel, array, allow_pickle=False)
         np.save(run_dir / state_rel, statevector, allow_pickle=False)
-        return ComparableRouteRun(route, result, statevector, state_rel, tensor_rel, "final_tensor", "statevector_from_final_tensor")
+        output_write_time_s += time.perf_counter() - write_start
+        return ComparableRouteRun(route, result, statevector, state_rel, tensor_rel, "final_tensor", "statevector_from_final_tensor", repeat_id, output_write_time_s)
     raise RuntimeError(f"{route.name} output contract {route.identity.output_contract} is not comparable")
 
 
@@ -365,6 +436,46 @@ def _row_with_metrics(row: JsonDict) -> JsonDict:
     return to_jsonable(row)
 
 
+def _validation_method(suite: JsonDict) -> str:
+    metadata = suite.get("metadata") or {}
+    return str(metadata.get("validation_method") or "full_statevector")
+
+
+def _add_repeat_aggregates(rows: list[JsonDict]) -> None:
+    grouped: dict[tuple[str, str], list[JsonDict]] = {}
+    for row in rows:
+        grouped.setdefault((str(row.get("case_id")), str(row.get("route_id"))), []).append(row)
+    for group in grouped.values():
+        total_values = [float(row.get("total_wall_time_s") or 0.0) for row in group]
+        compute_values = [float(row.get("simulation_compute_time_s") or 0.0) for row in group]
+        total_stats = _repeat_stats(total_values)
+        compute_stats = _repeat_stats(compute_values)
+        for row in group:
+            row.update(
+                {
+                    "total_wall_time_s_median": total_stats["median"],
+                    "total_wall_time_s_min": total_stats["min"],
+                    "total_wall_time_s_mean": total_stats["mean"],
+                    "total_wall_time_s_std": total_stats["std"],
+                    "simulation_compute_time_s_median": compute_stats["median"],
+                    "simulation_compute_time_s_min": compute_stats["min"],
+                    "simulation_compute_time_s_mean": compute_stats["mean"],
+                    "simulation_compute_time_s_std": compute_stats["std"],
+                }
+            )
+
+
+def _repeat_stats(values: list[float]) -> JsonDict:
+    if not values:
+        return {"median": None, "min": None, "mean": None, "std": None}
+    return {
+        "median": float(statistics.median(values)),
+        "min": float(min(values)),
+        "mean": float(statistics.mean(values)),
+        "std": float(statistics.pstdev(values)) if len(values) > 1 else 0.0,
+    }
+
+
 def _comparison_row(row: JsonDict, anchor_route_id: str) -> JsonDict:
     metrics = dict(row.get("validation_metrics") or {})
     return to_jsonable(
@@ -383,6 +494,8 @@ def _comparison_row(row: JsonDict, anchor_route_id: str) -> JsonDict:
             "norm_drift": metrics.get("norm_drift"),
             "probability_l1_error": metrics.get("probability_l1_error"),
             "probability_max_abs_error": metrics.get("probability_max_abs_error"),
+            "repeat_id": row.get("repeat_id"),
+            "validation_method": row.get("validation_method"),
         }
     )
 
@@ -423,6 +536,25 @@ def _normalized_record(run_dir: Path, row: JsonDict, *, case_id: str) -> JsonDic
         "lowering_time_s": row.get("lowering_time_s"),
         "total_wall_time_s": float(row.get("total_wall_time_s", 0.0) or 0.0),
         "kernel_time_s": float(row.get("kernel_time_s", 0.0) or 0.0),
+        "repeat_id": int(row.get("repeat_id", 0) or 0),
+        "measured_repeat_count": int(row.get("measured_repeat_count", 1) or 1),
+        "setup_time_s": row.get("setup_time_s"),
+        "circuit_lowering_time_s": row.get("circuit_lowering_time_s"),
+        "data_transfer_time_s": row.get("data_transfer_time_s"),
+        "simulation_compute_time_s": row.get("simulation_compute_time_s"),
+        "validation_time_s": row.get("validation_time_s"),
+        "output_materialization_time_s": row.get("output_materialization_time_s"),
+        "timing_scope": row.get("timing_scope"),
+        "gpu_synchronized": bool(row.get("gpu_synchronized", False)),
+        "validation_method": row.get("validation_method"),
+        "total_wall_time_s_median": row.get("total_wall_time_s_median"),
+        "total_wall_time_s_min": row.get("total_wall_time_s_min"),
+        "total_wall_time_s_mean": row.get("total_wall_time_s_mean"),
+        "total_wall_time_s_std": row.get("total_wall_time_s_std"),
+        "simulation_compute_time_s_median": row.get("simulation_compute_time_s_median"),
+        "simulation_compute_time_s_min": row.get("simulation_compute_time_s_min"),
+        "simulation_compute_time_s_mean": row.get("simulation_compute_time_s_mean"),
+        "simulation_compute_time_s_std": row.get("simulation_compute_time_s_std"),
         "host_transfer_time_s": None,
         "build_time_s": 0.0,
         "launch_overhead_s": None,
@@ -434,6 +566,7 @@ def _normalized_record(run_dir: Path, row: JsonDict, *, case_id: str) -> JsonDic
         "tn_max_intermediate_bytes": row.get("tn_max_intermediate_bytes"),
         "tn_estimated_flops": row.get("tn_estimated_flops"),
         "tn_estimated_bytes": row.get("tn_estimated_bytes"),
+        "dependency_metadata": row.get("dependency_metadata"),
         "notes": json.dumps(
             {
                 "anchor_route_id": row.get("anchor_route_id"),
@@ -442,6 +575,9 @@ def _normalized_record(run_dir: Path, row: JsonDict, *, case_id: str) -> JsonDic
                 "gate_count": row.get("gate_count"),
                 "two_qubit_gate_count": row.get("two_qubit_gate_count"),
                 "dependency_metadata": row.get("dependency_metadata"),
+                "repeat_id": row.get("repeat_id"),
+                "validation_method": row.get("validation_method"),
+                "timing_scope": row.get("timing_scope"),
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -478,8 +614,11 @@ def _summary_payload(
             "normalized_records_artifact": "normalized_records.jsonl",
             "quest_metrics_only_route_is_not_output_comparable": True,
             "statevector_retention_policy": "compact_retains_statevectors_under_configured_caps",
-            "gpu_execution_backend_added": False,
-            "gpu_benchmark_records_emitted": False,
+            "warmup_runs": int(suite.get("warmups", 0) or 0),
+            "measured_runs": int(suite.get("repeats", 1) or 1),
+            "validation_method": str((suite.get("metadata") or {}).get("validation_method") or "full_statevector"),
+            "gpu_execution_backend_added": bool((backend_probe.get("gpu_probe") or {}).get("gpu_execution_backend_added")),
+            "gpu_benchmark_records_emitted": any(row.get("contraction_execution_target") == "gpu" and row.get("status") == "completed" for row in rows),
             "backend_probe": backend_probe,
             "optional_backend_reports": optional_backend_reports,
             "rows": rows,
@@ -536,14 +675,15 @@ def _summary_markdown(summary: JsonDict, comparison_rows: list[JsonDict]) -> str
             "",
             "## Timing Breakdown",
             "",
-            "| Route | Total wall time s | Kernel time s | Planning time s | Lowering time s |",
-            "| --- | ---: | ---: | ---: | ---: |",
+            "| Route | Repeat | Total wall time s | Compute time s | Setup s | Transfer s | Validation s | Output write s |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
     for row in summary["rows"]:
         lines.append(
-            f"| {row['route_id']} | {row.get('total_wall_time_s')} | {row.get('kernel_time_s')} | "
-            f"{row.get('planning_time_s')} | {row.get('lowering_time_s')} |"
+            f"| {row['route_id']} | {row.get('repeat_id')} | {row.get('total_wall_time_s')} | {row.get('simulation_compute_time_s')} | "
+            f"{row.get('setup_time_s')} | {row.get('data_transfer_time_s')} | {row.get('validation_time_s')} | "
+            f"{row.get('output_materialization_time_s')} |"
         )
     lines.extend(
         [

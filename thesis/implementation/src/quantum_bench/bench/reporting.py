@@ -58,6 +58,19 @@ REPORT_RESULT_FIELDS = [
     "lowering_time_s",
     "total_wall_time_s",
     "kernel_time_s",
+    "setup_time_s",
+    "circuit_lowering_time_s",
+    "data_transfer_time_s",
+    "simulation_compute_time_s",
+    "validation_time_s",
+    "output_materialization_time_s",
+    "timing_scope",
+    "gpu_synchronized",
+    "validation_method",
+    "repeat_id",
+    "measured_repeat_count",
+    "total_wall_time_s_median",
+    "simulation_compute_time_s_median",
     "build_time_s",
     "hardware_speedup",
 ]
@@ -70,8 +83,12 @@ TIMING_FIELDS = [
     "bridge_prepare_time_s",
     "native_build_time_s",
     "dpu_program_wall_time_s",
+    "simulation_compute_time_s",
+    "setup_time_s",
+    "data_transfer_time_s",
     "dequantization_time_s",
     "validation_time_s",
+    "output_materialization_time_s",
 ]
 
 BACKEND_LABELS = {
@@ -98,6 +115,19 @@ PLOT_DATA_FIELDS = [
     "kernel_time_s",
     "planning_time_s",
     "lowering_time_s",
+    "setup_time_s",
+    "circuit_lowering_time_s",
+    "data_transfer_time_s",
+    "simulation_compute_time_s",
+    "validation_time_s",
+    "output_materialization_time_s",
+    "timing_scope",
+    "gpu_synchronized",
+    "validation_method",
+    "repeat_id",
+    "measured_repeat_count",
+    "total_wall_time_s_median",
+    "simulation_compute_time_s_median",
     "max_abs_error",
     "l2_error",
     "probability_l1_error",
@@ -120,6 +150,8 @@ PLOT_SPECS = {
     "planning_vs_contraction_time.png": "Planning/lowering versus contraction time",
     "backend_support_summary.png": "Backend support summary",
     "relative_runtime_vs_quest_anchor.png": "Relative runtime versus QuEST anchor",
+    "compute_time_by_backend_case.png": "Compute-focused time by backend and case",
+    "total_vs_compute_time.png": "Total wall time versus compute-focused time",
 }
 
 
@@ -374,6 +406,12 @@ def _write_plot_source_tables(run_dir: Path, records: list[JsonDict]) -> JsonDic
     data_dir = run_dir / "plots" / "data"
     rows = [_plot_data_row(record) for record in records]
     runtime_rows = [row for row in rows if _positive_float(row.get("total_wall_time_s")) is not None]
+    compute_rows = [row for row in rows if _positive_float(row.get("simulation_compute_time_s")) is not None]
+    total_vs_compute_rows = [
+        row
+        for row in rows
+        if _positive_float(row.get("total_wall_time_s")) is not None and _positive_float(row.get("simulation_compute_time_s")) is not None
+    ]
     error_rows = [row for row in rows if _float_or_none(row.get("max_abs_error")) is not None]
     probability_rows = [row for row in rows if _float_or_none(row.get("probability_l1_error")) is not None]
     memory_rows = [row for row in rows if _positive_float(row.get("memory_proxy_bytes")) is not None]
@@ -384,6 +422,8 @@ def _write_plot_source_tables(run_dir: Path, records: list[JsonDict]) -> JsonDic
         "backend_results": (data_dir / "backend_results.csv", rows, PLOT_DATA_FIELDS),
         "runtime_by_backend_case": (data_dir / "runtime_by_backend_case.csv", runtime_rows, PLOT_DATA_FIELDS),
         "runtime_scaling_by_qubits": (data_dir / "runtime_scaling_by_qubits.csv", runtime_rows, PLOT_DATA_FIELDS),
+        "compute_time_by_backend_case": (data_dir / "compute_time_by_backend_case.csv", compute_rows, PLOT_DATA_FIELDS),
+        "total_vs_compute_time": (data_dir / "total_vs_compute_time.csv", total_vs_compute_rows, PLOT_DATA_FIELDS),
         "output_error_by_backend": (data_dir / "output_error_by_backend.csv", error_rows, PLOT_DATA_FIELDS),
         "probability_error_by_backend": (data_dir / "probability_error_by_backend.csv", probability_rows, PLOT_DATA_FIELDS),
         "memory_proxy_by_backend": (data_dir / "memory_proxy_by_backend.csv", memory_rows, PLOT_DATA_FIELDS),
@@ -436,6 +476,8 @@ def _write_plots(run_dir: Path, plot_tables: JsonDict) -> None:
         "planning_vs_contraction_time.png": ("planning_vs_contraction_time", _plot_planning_vs_contraction_time),
         "backend_support_summary.png": ("backend_support_summary", _plot_backend_support_summary),
         "relative_runtime_vs_quest_anchor.png": ("relative_runtime_vs_quest_anchor", _plot_relative_runtime_vs_quest_anchor),
+        "compute_time_by_backend_case.png": ("compute_time_by_backend_case", _plot_compute_time_by_backend_case),
+        "total_vs_compute_time.png": ("total_vs_compute_time", _plot_total_vs_compute_time),
     }
     entries: list[JsonDict] = []
     for name, (table_key, fn) in plotters.items():
@@ -634,6 +676,45 @@ def _plot_relative_runtime_vs_quest_anchor(plt: Any, path: Path, rows: list[Json
     )
 
 
+def _plot_compute_time_by_backend_case(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+    return _grouped_case_backend_bar(
+        plt,
+        path,
+        rows,
+        value_field="simulation_compute_time_s",
+        title="Compute-focused time by backend and case",
+        ylabel="Compute time (s, log scale)",
+        log_y=True,
+    )
+
+
+def _plot_total_vs_compute_time(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+    rows = [
+        row
+        for row in rows
+        if _positive_float(row.get("total_wall_time_s")) is not None and _positive_float(row.get("simulation_compute_time_s")) is not None
+    ]
+    if not rows:
+        return "required_data_unavailable"
+    labels = _case_backend_labels(rows)
+    total = [float(row["total_wall_time_s"]) for row in rows]
+    compute = [float(row["simulation_compute_time_s"]) for row in rows]
+    x = list(range(len(labels)))
+    width = 0.38
+    fig, axis = plt.subplots(figsize=(max(9.0, len(labels) * 0.48), 5.6), constrained_layout=True)
+    axis.bar([item - width / 2 for item in x], total, width=width, label="total wall", color="#2563eb")
+    axis.bar([item + width / 2 for item in x], compute, width=width, label="compute", color="#16a34a")
+    axis.set_xticks(x)
+    axis.set_xticklabels(labels, rotation=55, ha="right", fontsize=8)
+    axis.set_ylabel("Seconds (log scale)")
+    axis.set_title("Total wall time versus compute-focused time")
+    axis.set_yscale("log")
+    axis.grid(True, axis="y", alpha=0.25)
+    axis.legend()
+    _save_figure(fig, path)
+    return None
+
+
 def _grouped_case_backend_bar(
     plt: Any,
     path: Path,
@@ -727,10 +808,23 @@ def _plot_data_row(record: JsonDict) -> JsonDict:
         "accelerator_kind": record.get("accelerator_kind") or "none",
         "status": record.get("status"),
         "validation_status": record.get("validation_status"),
-        "total_wall_time_s": _float_or_none(record.get("total_wall_time_s")),
+        "total_wall_time_s": _float_or_none(record.get("total_wall_time_s_median") if record.get("total_wall_time_s_median") is not None else record.get("total_wall_time_s")),
         "kernel_time_s": _float_or_none(record.get("kernel_time_s")),
         "planning_time_s": _float_or_none(record.get("planning_time_s")),
         "lowering_time_s": _float_or_none(record.get("lowering_time_s")),
+        "setup_time_s": _float_or_none(record.get("setup_time_s")),
+        "circuit_lowering_time_s": _float_or_none(record.get("circuit_lowering_time_s")),
+        "data_transfer_time_s": _float_or_none(record.get("data_transfer_time_s")),
+        "simulation_compute_time_s": _float_or_none(record.get("simulation_compute_time_s_median") if record.get("simulation_compute_time_s_median") is not None else (record.get("simulation_compute_time_s") if record.get("simulation_compute_time_s") is not None else record.get("kernel_time_s"))),
+        "validation_time_s": _float_or_none(record.get("validation_time_s")),
+        "output_materialization_time_s": _float_or_none(record.get("output_materialization_time_s")),
+        "timing_scope": record.get("timing_scope"),
+        "gpu_synchronized": bool(record.get("gpu_synchronized", False)),
+        "validation_method": record.get("validation_method"),
+        "repeat_id": _int_or_none(record.get("repeat_id")),
+        "measured_repeat_count": _int_or_none(record.get("measured_repeat_count")),
+        "total_wall_time_s_median": _float_or_none(record.get("total_wall_time_s_median")),
+        "simulation_compute_time_s_median": _float_or_none(record.get("simulation_compute_time_s_median")),
         "max_abs_error": _float_or_none(record.get("max_abs_error") if record.get("max_abs_error") is not None else metrics.get("max_abs_error")),
         "l2_error": _float_or_none(record.get("l2_error") if record.get("l2_error") is not None else metrics.get("l2_error")),
         "probability_l1_error": _float_or_none(metrics.get("probability_l1_error") if metrics.get("probability_l1_error") is not None else record.get("probability_l1_error")),
@@ -1142,8 +1236,12 @@ def _timing_rows(records: list[JsonDict]) -> list[JsonDict]:
                 "bridge_prepare_time_s": None,
                 "native_build_time_s": record.get("build_time_s") if record.get("execution_target") == "upmem" else None,
                 "dpu_program_wall_time_s": record.get("kernel_time_s") if record.get("execution_target") == "upmem" else None,
+                "simulation_compute_time_s": record.get("simulation_compute_time_s") if record.get("simulation_compute_time_s") is not None else record.get("kernel_time_s"),
+                "setup_time_s": record.get("setup_time_s"),
+                "data_transfer_time_s": record.get("data_transfer_time_s"),
                 "dequantization_time_s": None,
-                "validation_time_s": None,
+                "validation_time_s": record.get("validation_time_s"),
+                "output_materialization_time_s": record.get("output_materialization_time_s"),
                 "timing_status": _timing_status(record),
             }
         )
@@ -1223,15 +1321,28 @@ def _report_markdown(records: list[JsonDict], run_dir: Path | None = None) -> st
             "",
             "## Timing Breakdown",
             "",
-            "| Case | Route | Total wall time s | Kernel time s | Planning time s | Lowering time s |",
-            "| --- | --- | ---: | ---: | ---: | ---: |",
+            "| Case | Route | Total wall time s | Compute time s | Setup s | Transfer s | Validation s | Output write s |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
     for record in records:
         lines.append(
             f"| {record.get('case_id')} | {record.get('route_id')} | {record.get('total_wall_time_s')} | "
-            f"{record.get('kernel_time_s')} | {record.get('planning_time_s')} | {record.get('lowering_time_s')} |"
+            f"{record.get('simulation_compute_time_s') if record.get('simulation_compute_time_s') is not None else record.get('kernel_time_s')} | "
+            f"{record.get('setup_time_s')} | {record.get('data_transfer_time_s')} | {record.get('validation_time_s')} | "
+            f"{record.get('output_materialization_time_s')} |"
         )
+    lines.extend(
+        [
+            "",
+            "## Validation Methods",
+            "",
+            "| Validation method | Records |",
+            "| --- | ---: |",
+        ]
+    )
+    for method, count in sorted(Counter(str(record.get("validation_method") or "unspecified") for record in records).items()):
+        lines.append(f"| {method} | {count} |")
     lines.extend(
         [
             "",

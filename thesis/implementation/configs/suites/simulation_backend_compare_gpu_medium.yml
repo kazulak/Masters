@@ -1,0 +1,72 @@
+schema_version: 2
+suite_id: simulation_backend_compare_gpu_medium
+
+metadata:
+  purpose: gpu_candidate_benchmark_scaffold
+  expected_runtime_class: local_or_cluster_gpu_minutes
+  deterministic_unitary_only: true
+  gpu_execution_suite: true
+  requires_verified_gpu_for_gpu_rows: true
+  validation_tier: performance
+  validation_method: full_statevector
+  statevector_cap_qubits: 10
+  statevector_cap_amplitudes: 1024
+  notes: GPU candidates may be listed as optional routes, but benchmark rows are emitted only after verified GPU execution.
+
+defaults:
+  warmups: 1
+  repeats: 3
+  timeout_s: 300
+  memory_guard_gib: 8
+  planner:
+    engine: opt_einsum
+    optimize: greedy
+
+workloads:
+  - id: quest_qrng_8q
+    circuit: {kind: quest_compatible, name: QRNG, n_qubits: 8}
+  - id: quest_qrng_10q
+    circuit: {kind: quest_compatible, name: QRNG, n_qubits: 10}
+  - id: quest_bv_8q
+    circuit: {kind: quest_compatible, name: BV, n_qubits: 8}
+  - id: quest_bv_10q
+    circuit: {kind: quest_compatible, name: BV, n_qubits: 10}
+  - id: quest_xor_8q
+    circuit: {kind: quest_compatible, name: XOR, n_qubits: 8}
+  - id: quest_xor_10q
+    circuit: {kind: quest_compatible, name: XOR, n_qubits: 10}
+
+routes:
+  - id: cpu_tn_einsum_exact
+    role: baseline
+    required: true
+
+  - id: quest_cpu_full_state_exact
+    role: comparison_anchor
+    required: true
+    options:
+      max_output_qubits: 10
+      max_output_amplitudes: 1024
+      max_output_bytes: 16384
+
+  - id: quimb_tn_exact
+    role: baseline
+    required: true
+    options:
+      optimize: greedy
+
+  - id: quest_gpu_full_state_exact
+    role: optional_gpu_candidate
+    required: false
+
+validation:
+  reference_route: quest_cpu_full_state_exact
+  require_output_for_roles:
+    - baseline
+    - comparison_anchor
+  tolerances:
+    max_abs_error: 1.0e-9
+    l2_error: 1.0e-8
+    max_rel_error: 1.0e-8
+    norm_drift: 1.0e-8
+    min_fidelity: 0.999999999

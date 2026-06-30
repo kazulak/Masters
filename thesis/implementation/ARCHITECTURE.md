@@ -193,12 +193,23 @@ debug-heavy bridge blobs and native `runner_work/**`, keeps audit summaries and
 task metrics, and records intentional pruning so reports can distinguish pruned
 artifacts from missing artifacts.
 
-Simulation backend comparison has three suite tiers. `simulation_backend_compare_quick.yml`
+Simulation backend comparison has four suite tiers. `simulation_backend_compare_quick.yml`
 is a validation suite. `simulation_backend_compare_thesis_small.yml` and
 `simulation_backend_compare_scaling.yml` are bounded local suites for readable
-trend plots. Scaling plots group by circuit family; relative runtime plots use
-only rows with a valid measured QuEST anchor and are labeled as relative backend
-timing, not speedup.
+trend plots. `simulation_backend_compare_compute_medium.yml` is a CPU-only,
+GPU-independent compute-focused suite with warmups and repeats. GPU execution
+belongs in `simulation_backend_compare_gpu_medium.yml` only after a route proves
+real GPU computation; otherwise GPU candidates stay in probe metadata.
+Scaling plots group by circuit family; relative runtime plots use only rows
+with a valid measured QuEST anchor and are labeled as relative backend timing,
+not speedup.
+
+GPU candidate reporting is SOTA-oriented but evidence-bound. QuEST HIP/CUDA,
+Qiskit Aer GPU, CUDA Quantum, cuQuantum, Quimb/cotengra GPU execution, and
+generic tensor GPU paths can appear as candidates. Source support such as
+`ENABLE_HIP` or `ENABLE_CUDA` is not a benchmarkable route until build, run, and
+minimal GPU execution are verified. Generated GPU/native build artifacts must
+stay out of submodule source trees or be ignored/cleaned.
 
 ## Synthetic Pressure Workloads
 

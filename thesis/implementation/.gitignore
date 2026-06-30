@@ -1,5 +1,10 @@
 runs*/
 native/quest_cpu/bin/
+external/QuEST/build*/
+external/QuEST/cmake-build*/
+external/QuEST/_build*/
+external/QuEST/hip-build*/
+external/QuEST/cuda-build*/
 *.pyc
 __pycache__/
 .pytest_cache/

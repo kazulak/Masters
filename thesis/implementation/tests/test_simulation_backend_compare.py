@@ -62,10 +62,13 @@ def test_simulation_backend_compare_writes_normalized_records(monkeypatch, tmp_p
 schema_version: 2
 suite_id: unit_simulation_compare
 defaults:
-  repeats: 1
+  warmups: 1
+  repeats: 2
   planner:
     engine: opt_einsum
     optimize: greedy
+metadata:
+  validation_method: full_statevector
 workloads:
   - id: quest_bv_3q
     circuit:
@@ -153,6 +156,11 @@ validation:
     records = load_result_records([result.run_dir])
     assert {record["execution_model"] for record in records} == {"full_state", "tensor_network"}
     assert {record["route_id"] for record in records} == {"quest_cpu_full_state_exact", "cpu_tn_einsum_exact"}
+    assert {record["repeat_id"] for record in records} == {0, 1}
+    assert {record["measured_repeat_count"] for record in records} == {2}
+    assert all(record["simulation_compute_time_s"] is not None for record in records)
+    assert all(record["validation_method"] == "full_statevector" for record in records)
+    assert all(record["timing_scope"] == "end_to_end_and_compute" for record in records)
     assert all(record["validation_status"] == "passed" for record in records)
     assert all(record["contraction_execution_target"] == "cpu" for record in records)
     assert "## Backend Metadata" in summary_md
@@ -169,12 +177,21 @@ def test_simulation_backend_compare_suite_loads() -> None:
 
     thesis_small = load_suite(ROOT / "configs" / "suites" / "simulation_backend_compare_thesis_small.yml")
     scaling = load_suite(ROOT / "configs" / "suites" / "simulation_backend_compare_scaling.yml")
+    compute_medium = load_suite(ROOT / "configs" / "suites" / "simulation_backend_compare_compute_medium.yml")
+    gpu_medium = load_suite(ROOT / "configs" / "suites" / "simulation_backend_compare_gpu_medium.yml")
     for loaded in (thesis_small, scaling):
         assert loaded["route_policy"]["routes"] == ["cpu_tn_einsum_exact", "quest_cpu_full_state_exact", "quimb_tn_exact"]
         assert loaded["metadata"]["deterministic_unitary_only"] is True
         assert loaded["metadata"]["statevector_cap_qubits"] <= 8
         assert loaded["metadata"]["expected_runtime_class"]
         assert all(case["circuit"]["kind"] == "quest_compatible" for case in loaded["cases"])
+    assert compute_medium["metadata"]["gpu_independent"] is True
+    assert "gpu" not in " ".join(compute_medium["route_policy"]["routes"])
+    assert compute_medium["repeats"] == 3
+    assert compute_medium["warmups"] == 1
+    assert gpu_medium["metadata"]["gpu_execution_suite"] is True
+    assert "quest_gpu_full_state_exact" in gpu_medium["route_policy"]["routes"]
+    assert gpu_medium["_route_configs"][-1]["required"] is False
 
 
 def test_quimb_tn_exact_matches_internal_task_sequence() -> None:
@@ -217,3 +234,10 @@ def test_simulation_backend_probe_reports_gpu_feasibility_without_records() -> N
     assert report["gpu_probe"]["cuda_only_assumption_used"] is False
     assert report["gpu_probe"]["gpu_execution_backend_added"] is False
     assert report["gpu_probe"]["gpu_benchmark_records_emitted"] is False
+    candidates = report["gpu_probe"]["gpu_candidates"]
+    assert candidates
+    assert {candidate["candidate_category"] for candidate in candidates} >= {"tailored_quantum_gpu", "cuda_quantum_stack", "generic_tensor_gpu"}
+    quest_hip = next(candidate for candidate in candidates if candidate["candidate_id"] == "quest_gpu_full_state_hip")
+    assert quest_hip["source_support_is_not_benchmark_evidence"] is True
+    assert quest_hip["gpu_execution_verified"] is False
+    assert all(candidate["benchmark_route_eligible"] == candidate["gpu_execution_verified"] for candidate in candidates)
