@@ -74,6 +74,24 @@ def main() -> int:
     upmem_mvp_parser.add_argument("--execute-external", action="store_true")
     upmem_mvp_parser.add_argument("--max-taskgraph-tasks", type=int, default=128)
     upmem_mvp_parser.add_argument("--fail-fast", action="store_true")
+    upmem_mvp_parser.add_argument("--artifact-retention", default="compact", choices=("full", "compact", "summary-only"))
+
+    simulation_compare_parser = sub.add_parser("simulation-backend-compare")
+    simulation_compare_parser.add_argument("--suite", required=True, help="Suite path or preset name under configs/suites")
+    simulation_compare_parser.add_argument("--artifact-retention", default="compact", choices=("full", "compact", "summary-only"))
+
+    report_run_parser = sub.add_parser("report-run")
+    report_run_parser.add_argument("--input", required=True)
+    report_run_parser.add_argument("--output-plots", action=argparse.BooleanOptionalAction, default=True)
+
+    prune_run_parser = sub.add_parser("prune-run")
+    prune_run_parser.add_argument("--input", required=True)
+    prune_run_parser.add_argument("--artifact-retention", default="compact", choices=("compact", "summary-only"))
+
+    compare_runs_parser = sub.add_parser("compare-runs")
+    compare_runs_parser.add_argument("--baseline", required=True)
+    compare_runs_parser.add_argument("--candidate", required=True)
+    compare_runs_parser.add_argument("--out", required=True)
 
     coverage_parser = sub.add_parser("dense-route-coverage")
     coverage_input = coverage_parser.add_mutually_exclusive_group(required=True)
@@ -309,6 +327,7 @@ def main() -> int:
                 execute_external=args.execute_external,
                 max_taskgraph_tasks=args.max_taskgraph_tasks,
                 fail_fast=args.fail_fast,
+                artifact_retention=args.artifact_retention,
             )
         except ValueError as exc:
             parser.error(str(exc))
@@ -324,6 +343,75 @@ def main() -> int:
                     "summary": str(result.run_dir / "comparison_summary.md"),
                     "status": result.status,
                     "reason": result.reason,
+                },
+                indent=2,
+            )
+        )
+        return 0
+    if args.command == "simulation-backend-compare":
+        from quantum_bench.bench.simulation_backend_compare import run_simulation_backend_compare
+
+        try:
+            result = run_simulation_backend_compare(
+                root_dir,
+                suite_path=suite_path(args.suite, root_dir),
+                artifact_retention=args.artifact_retention,
+            )
+        except (RuntimeError, ValueError) as exc:
+            parser.error(str(exc))
+        print(
+            json.dumps(
+                {
+                    "run_dir": str(result.run_dir),
+                    "artifact": str(result.summary_path),
+                    "results_csv": str(result.run_dir / "simulation_backend_compare_results.csv"),
+                    "summary": str(result.run_dir / "comparison_summary.md"),
+                    "status": result.status,
+                    "case_count": result.case_count,
+                },
+                indent=2,
+            )
+        )
+        return 0
+    if args.command == "report-run":
+        from quantum_bench.bench.reporting import report_run
+
+        try:
+            result = report_run(Path(args.input), output_plots=args.output_plots)
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(json.dumps({"run_dir": str(result.run_dir), "report": str(result.report_path), "status": result.status, "reason": result.reason}, indent=2))
+        return 0
+    if args.command == "prune-run":
+        from quantum_bench.bench.reporting import prune_run
+
+        try:
+            result = prune_run(Path(args.input), artifact_retention=args.artifact_retention)
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(
+            json.dumps(
+                {
+                    "run_dir": str(result.run_dir),
+                    "artifact_retention_manifest": str(result.manifest_path),
+                    "status": result.status,
+                    "pruned_file_count": result.pruned_file_count,
+                },
+                indent=2,
+            )
+        )
+        return 0
+    if args.command == "compare-runs":
+        from quantum_bench.bench.reporting import compare_runs
+
+        result = compare_runs(Path(args.baseline), Path(args.candidate), Path(args.out))
+        print(
+            json.dumps(
+                {
+                    "run_dir": str(result.run_dir),
+                    "artifact": str(result.artifact_path),
+                    "summary": str(result.summary_path),
+                    "status": result.status,
                 },
                 indent=2,
             )

@@ -1,0 +1,66 @@
+schema_version: 2
+suite_id: simulation_backend_compare_quick
+
+defaults:
+  warmups: 0
+  repeats: 1
+  timeout_s: 60
+  memory_guard_gib: 4
+  planner:
+    engine: opt_einsum
+    optimize: greedy
+
+workloads:
+  - id: quest_qrng_3q
+    circuit:
+      kind: quest_compatible
+      name: QRNG
+      n_qubits: 3
+
+  - id: quest_bb84_3q
+    circuit:
+      kind: quest_compatible
+      name: BB84
+      n_qubits: 3
+
+  - id: quest_bv_4q
+    circuit:
+      kind: quest_compatible
+      name: BV
+      n_qubits: 4
+
+  - id: quest_edc_4q
+    circuit:
+      kind: quest_compatible
+      name: EDC
+      n_qubits: 4
+
+  - id: quest_xor_4q
+    circuit:
+      kind: quest_compatible
+      name: XOR
+      n_qubits: 4
+
+routes:
+  - id: cpu_tn_einsum_exact
+    role: baseline
+    required: true
+
+  - id: quest_cpu_full_state_exact
+    role: baseline
+    required: true
+    options:
+      max_output_qubits: 8
+      max_output_amplitudes: 256
+      max_output_bytes: 4096
+
+validation:
+  reference_route: cpu_tn_einsum_exact
+  require_output_for_roles:
+    - baseline
+  tolerances:
+    max_abs_error: 1.0e-9
+    l2_error: 1.0e-8
+    max_rel_error: 1.0e-8
+    norm_drift: 1.0e-8
+    min_fidelity: 0.999999999

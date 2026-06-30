@@ -81,10 +81,13 @@ which work was modeled only, which work fell back, and why.
 |---|---|---|
 | `cpu_tn_einsum_exact` | Exact tensor-network CPU reference | Authoritative full tensor output |
 | `quest_cpu_full_state_benchmark` | QuEST CPU full-state baseline | Benchmark-only metrics |
+| `quest_cpu_full_state_exact` | QuEST CPU full-state comparable baseline | Statevector output for small deterministic unitary circuits |
 | `upmem_dense_int8_placeholder` | UPMEM dense candidate placeholder | Estimate/skip metadata only |
 
-The QuEST route is useful for timing comparison, but it is not the thesis
-output authority. The CPU exact TN route is the current correctness reference.
+The metrics-only QuEST route is useful for timing comparison, but it is not an
+output-comparable route. `quest_cpu_full_state_exact` is additive and compares
+QuEST full-state output against CPU TN output on shared deterministic circuit
+semantics.
 
 ## UPMEM Runtime Status
 
@@ -118,6 +121,7 @@ as full-circuit acceleration.
 | UPMEM SDK simulator generic loop runner | `native/upmem/simplepim/upmem_sdk_generic_loop*` | Implemented correctness/coverage MVP |
 | Strict UPMEM TaskGraph runtime | `bench/upmem_taskgraph_runtime.py`, `targets/upmem/taskgraph_runtime.py` | Implemented MVP for small sequential TaskGraphs in SDK simulator mode |
 | Suite-level UPMEM MVP benchmark | `bench/upmem_mvp_benchmark.py` | Implemented report regeneration pipeline over strict runtime variants |
+| Benchmark reporting and retention | `bench/reporting.py`, `bench/result_artifacts.py` | Implemented canonical normalized records, compact retention, report regeneration, and run comparison |
 | PIM bridge evaluation | `bench/pim_bridge_eval.py` | Developer task-level evidence harness |
 | PIM frontier analysis | `bench/pim_frontier_analysis.py`, `targets/upmem/frontier.py` | Model-only analysis |
 | Benchmark matrix report | `bench/benchmark_matrix_report.py` | Thesis scaffold |
@@ -154,12 +158,16 @@ These commands are intentionally outside normal benchmark provider execution:
 | `generic-task-bridge` | One real task through the unoptimized generic fallback bridge | Task-level simulator evidence only |
 | `upmem-taskgraph-runtime` | Sequential full TaskGraph through UPMEM SDK DPU programs using SDK simulator mode | Small strict UPMEM code-path evidence, not hardware timing |
 | `upmem-mvp-benchmark` | Suite-level CPU reference plus strict UPMEM runtime variants | Reproducible MVP report pipeline, not optimized performance evidence |
+| `simulation-backend-compare` | QuEST full-state and CPU TN comparison on shared deterministic circuits | CPU backend comparison scaffold |
+| `report-run` | Regenerate derived CSV/Markdown/metrics/validation/plots from retained artifacts | Reporting only; non-destructive for execution artifacts |
+| `prune-run` | Explicit compact artifact pruning for new MVP run layouts | Destructive only when explicitly requested; idempotent |
 | `dense-route-coverage` | All-task readiness and bridge eligibility | Analysis only |
 | `shadow-routed-runtime` | Full graph with CPU fallback authoritative and shadow route evidence | Diagnostic only |
 | `pim-bridge-eval` | Capped task-level simulator execution across workloads | Task-level simulator evidence |
 | `pim-frontier-analysis` | Memory-level and parallelism-frontier model | Model-only |
 | `benchmark-matrix-report` | Final thesis matrix scaffold | Report scaffold |
 | `compare-results` | Artifact-driven comparison of generated result files | Reporting only |
+| `compare-runs` | Baseline/candidate run comparison from normalized records | Reporting only |
 | `upmem-env-check` | UPMEM SDK / SimplePIM environment bring-up | Environment evidence |
 | `upmem-external-libs-check` | SimplePIM/PID-Comm/native SDK candidate report | Feasibility evidence |
 
@@ -170,6 +178,14 @@ later runtime tensors. CPU exact output is used for final validation only.
 `upmem-mvp-benchmark` preserves that boundary while running the strict runtime
 across a suite and reporting CPU reference timing separately from UPMEM SDK
 simulator timing.
+
+New MVP benchmark runs write `run_manifest.json` and root
+`normalized_records.jsonl`. The normalized records are canonical for
+`compare-results`; recursive child-summary discovery remains for standalone
+task/runtime outputs. Compact retention is the default MVP mode: it removes
+debug-heavy bridge blobs and native `runner_work/**`, keeps audit summaries and
+task metrics, and records intentional pruning so reports can distinguish pruned
+artifacts from missing artifacts.
 
 ## Synthetic Pressure Workloads
 

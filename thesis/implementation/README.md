@@ -98,14 +98,34 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.be
 Suite-level UPMEM MVP benchmark pipeline:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-mvp-benchmark --suite configs/suites/pim_bridge_eval_quick.yml --policies generic-only,dense-then-generic --quantization-modes per_task_input_quantize --execute-external
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-mvp-benchmark --suite configs/suites/pim_bridge_eval_quick.yml --policies generic-only,dense-then-generic --quantization-modes per_task_input_quantize --execute-external --artifact-retention compact
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench report-run --input runs/latest
+```
+
+Simulation backend comparison:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simulation-backend-compare --suite configs/suites/simulation_backend_compare_quick.yml --artifact-retention compact
 ```
 
 Artifact-driven result comparison:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench compare-results --inputs runs/<run_dir_a> runs/<run_dir_b> --out runs/manual_compare
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench compare-runs --baseline runs/<old_run> --candidate runs/<new_run> --out runs/manual_compare_runs
 ```
+
+Artifact retention:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench prune-run --input runs/<run_dir> --artifact-retention compact
+```
+
+`report-run` is non-destructive for execution artifacts. It may overwrite
+derived CSV, Markdown, metrics, validation summaries, and plots. Compact
+retention removes debug-heavy bridge blobs and native runner work while keeping
+`run_manifest.json`, `normalized_records.jsonl`, summaries, task metrics, and
+report artifacts. `summary-only` retention is intentionally deferred.
 
 ## Directory Map
 
@@ -130,12 +150,12 @@ Legacy external trees are historical fallback only.
 | Area | Status | Evidence boundary |
 |---|---|---|
 | CPU exact TN | Implemented | Full tensor output, validation-capable |
-| QuEST CPU full-state | Implemented baseline | Metrics-only, benchmark-only |
+| QuEST CPU full-state | Implemented baseline | Metrics-only route plus output-comparable exact route for small deterministic circuits |
 | UPMEM L1 dense | Implemented subset | Task-level UPMEM SDK simulator, split-complex supported when layout is explicit |
 | UPMEM L2 dense | Implemented subset | Task-level UPMEM SDK simulator, real-valued only |
 | UPMEM generic fallback | Implemented MVP | Task-level UPMEM SDK simulator, real-valued small binary contractions only |
 | Strict UPMEM TaskGraph runtime | Implemented MVP | Sequential full TaskGraph through UPMEM SDK DPU programs using SDK simulator mode; CPU exact is final validation only |
-| Suite-level UPMEM MVP benchmark | Implemented MVP | Runs strict runtime variants across suites and regenerates JSON/CSV/Markdown reports |
+| Suite-level UPMEM MVP benchmark | Implemented MVP | Runs strict runtime variants across suites, writes canonical normalized records, and regenerates JSON/CSV/Markdown reports |
 | UPMEM L3 distributed | Model-only | No execution yet |
 | SimplePIM GEMM | Candidate | Target UPMEM compute/runtime abstraction for L1/L2 and local tile compute inside L3; not integrated |
 | PID-Comm | Candidate | Communication/orchestration substrate across L1/L2/L3, strongest for L3 distributed contraction; not integrated |
@@ -151,6 +171,9 @@ Use these rules when interpreting artifacts:
 
 - `cpu_tn_einsum_exact` is the current exact tensor-network reference.
 - `quest_cpu_full_state_benchmark` is an external metrics-only baseline.
+- `quest_cpu_full_state_exact` is an additive output-comparable QuEST route for
+  small deterministic unitary statevector comparisons. It is the full-state
+  baseline used by `simulation-backend-compare`.
 - `upmem_sdk_simulator_dense` is a developer bridge backend ID, not a final
   benchmark route.
 - `upmem_sdk_simulator_generic_loop` is an unoptimized developer bridge backend
@@ -162,6 +185,11 @@ Use these rules when interpreting artifacts:
 - `upmem-mvp-benchmark` runs `upmem-taskgraph-runtime` across suites and reports
   CPU reference, kernel-family usage, and quantized final accuracy. CPU
   reference artifacts are validation/reporting inputs only.
+- New MVP benchmark runs use root `normalized_records.jsonl` as the canonical
+  source for `compare-results`. Child runtime summaries remain audit artifacts.
+- Compact artifact retention is the default for MVP benchmarking. It prunes
+  native runner work and per-task debug blobs, then records intentional pruning
+  in artifact references.
 - `upmem_tn_runtime` is the only final UPMEM benchmark category.
 - L1/L2/L3 are internal scheduler classes within `upmem_tn_runtime`.
 - Shadow CPU fallback runs are diagnostics only and must not be presented as

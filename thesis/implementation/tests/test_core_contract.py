@@ -68,6 +68,9 @@ def test_route_probe_and_upmem_skip_reason() -> None:
     assert routes["cpu_tn_einsum_exact"].identity.validation_mode == "compare_output"
     assert routes["quest_cpu_full_state_benchmark"].identity.output_contract == "metrics_only"
     assert routes["quest_cpu_full_state_benchmark"].identity.validation_mode == "benchmark_only"
+    assert routes["quest_cpu_full_state_exact"].identity.output_contract == "statevector"
+    assert routes["quest_cpu_full_state_exact"].identity.validation_mode == "compare_statevector"
+    assert routes["quest_cpu_full_state_exact"].backend_family == "quest"
     assert routes["upmem_dense_int8_placeholder"].identity.hardware_target == "upmem_dpu"
     circuit = builtin_circuit("bell_2q")
     network = build_tensor_network(circuit)

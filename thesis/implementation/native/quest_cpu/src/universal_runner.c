@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <complex.h>
 #include <omp.h>
 #include <quest.h>
 #include "circuits/circuit_manifest.h"
@@ -39,6 +40,7 @@
 void print_usage(const char* prog_name) {
     printf("Usage for Profiling:  %s --algo <NAME> --qubits <ALLOCATED_N> [--depth <D>] [--json]\n", prog_name);
     printf("                    or %s --algo HS --logical-qubits <N> [--json]\n", prog_name);
+    printf("                    optional comparable-output flags: --dump-state-json <PATH> --max-output-amplitudes <N>\n");
     printf("Usage for Testing:    %s --verify <MODE>\n", prog_name);
     printf("Algorithms:           BB84, BV, EDC, HS, QRNG, XOR, RANDOM\n");
     printf("Verify Modes:         FULL, BASE, or comma-separated (e.g., BV,BB84)\n");
@@ -77,6 +79,38 @@ static void print_json_escaped(const char* value) {
         }
     }
     putchar('"');
+}
+
+static void fprint_json_escaped(FILE* handle, const char* value) {
+    if (value == NULL) {
+        fprintf(handle, "null");
+        return;
+    }
+
+    fputc('"', handle);
+    for (const char* p = value; *p != '\0'; p++) {
+        switch (*p) {
+            case '\\':
+                fprintf(handle, "\\\\");
+                break;
+            case '"':
+                fprintf(handle, "\\\"");
+                break;
+            case '\n':
+                fprintf(handle, "\\n");
+                break;
+            case '\r':
+                fprintf(handle, "\\r");
+                break;
+            case '\t':
+                fprintf(handle, "\\t");
+                break;
+            default:
+                fputc(*p, handle);
+                break;
+        }
+    }
+    fputc('"', handle);
 }
 
 static void print_json_result(
@@ -151,12 +185,56 @@ static GateCounts run_algorithm(BenchmarkAlgo algo, Qureg qubits, int allocated_
     return invalid;
 }
 
+static int dump_state_json(const char* path, Qureg qubits, int allocated_qubits, long long max_output_amplitudes, char* error, size_t error_len) {
+    if (path == NULL) {
+        return 1;
+    }
+    if (allocated_qubits < 0 || allocated_qubits >= 62) {
+        snprintf(error, error_len, "Allocated qubit count is outside state dump range.");
+        return 0;
+    }
+    long long amplitude_count = 1LL << allocated_qubits;
+    if (max_output_amplitudes <= 0 || amplitude_count > max_output_amplitudes) {
+        snprintf(error, error_len, "State dump amplitude cap exceeded.");
+        return 0;
+    }
+
+    FILE* handle = fopen(path, "w");
+    if (handle == NULL) {
+        snprintf(error, error_len, "Could not open state dump path.");
+        return 0;
+    }
+
+    fprintf(handle, "{");
+    fprintf(handle, "\"schema_version\":\"quest_state_dump_v1\"");
+    fprintf(handle, ",\"basis_order\":\"quest_little_endian_integer_index\"");
+    fprintf(handle, ",\"allocated_qubits\":%d", allocated_qubits);
+    fprintf(handle, ",\"amplitude_count\":%lld", amplitude_count);
+    fprintf(handle, ",\"quest_version\":");
+    fprint_json_escaped(handle, QUEST_VERSION_STRING);
+    fprintf(handle, ",\"real\":[");
+    for (long long index = 0; index < amplitude_count; index++) {
+        qcomp amp = getQuregAmp(qubits, (qindex) index);
+        fprintf(handle, "%s%.17g", index == 0 ? "" : ",", (double) creal(amp));
+    }
+    fprintf(handle, "],\"imag\":[");
+    for (long long index = 0; index < amplitude_count; index++) {
+        qcomp amp = getQuregAmp(qubits, (qindex) index);
+        fprintf(handle, "%s%.17g", index == 0 ? "" : ",", (double) cimag(amp));
+    }
+    fprintf(handle, "]}");
+    fclose(handle);
+    return 1;
+}
+
 int main(int argc, char** argv) {
     char* algo_arg = NULL;
     int allocated_qubits_arg = 0;
     int logical_qubits_arg = 0;
     int depth_arg = 0;
     char* verify_mode = NULL;
+    char* state_dump_path = NULL;
+    long long max_output_amplitudes = 4096;
     bool json_output = false;
     char cli_error[256] = {0};
 
@@ -172,6 +250,10 @@ int main(int argc, char** argv) {
             depth_arg = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--verify") == 0 && i + 1 < argc) {
             verify_mode = argv[++i]; 
+        } else if (strcmp(argv[i], "--dump-state-json") == 0 && i + 1 < argc) {
+            state_dump_path = argv[++i];
+        } else if (strcmp(argv[i], "--max-output-amplitudes") == 0 && i + 1 < argc) {
+            max_output_amplitudes = atoll(argv[++i]);
         } else if (strcmp(argv[i], "--json") == 0) {
             json_output = true;
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
@@ -316,8 +398,9 @@ int main(int argc, char** argv) {
 
     GateCounts expected = expected_gate_counts(algo_id, input_qubits, allocated_qubits, depth);
     bool counts_ok = gate_counts_match(counts, expected);
-    const char* status = counts_ok ? "ok" : "failed";
-    const char* error = counts_ok ? NULL : "Gate counts did not match circuit manifest.";
+    bool dump_ok = dump_state_json(state_dump_path, qubits, allocated_qubits, max_output_amplitudes, cli_error, sizeof(cli_error));
+    const char* status = (counts_ok && dump_ok) ? "ok" : "failed";
+    const char* error = counts_ok ? (dump_ok ? NULL : cli_error) : "Gate counts did not match circuit manifest.";
 
     // 7. Output Clean Metrics
     if (json_output) {
@@ -355,5 +438,5 @@ int main(int argc, char** argv) {
     destroyQureg(qubits);
     finalizeQuESTEnv();
 
-    return counts_ok ? 0 : 1;
+    return (counts_ok && dump_ok) ? 0 : 1;
 }

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from quantum_bench.core.jsonio import write_json
+from quantum_bench.core.jsonio import read_jsonl, write_json
 from quantum_bench.core.records import JsonDict, to_jsonable
 
 
@@ -15,6 +15,8 @@ COMPARE_RESULTS_SCHEMA_VERSION = "compare_results_v1"
 
 KERNEL_FAMILIES = (
     "dense_gemm",
+    "einsum_contraction",
+    "full_state_vector",
     "generic_loop_fallback",
     "quantum_structured",
     "sparse_or_zero_heavy",
@@ -33,7 +35,11 @@ RESULT_FIELDS = [
     "workload_id",
     "route_id",
     "backend_id",
+    "backend_family",
     "kernel_family",
+    "execution_model",
+    "output_kind",
+    "comparison_output_kind",
     "execution_target",
     "contraction_execution_target",
     "upmem_execution_mode",
@@ -54,6 +60,11 @@ RESULT_FIELDS = [
     "simulator_relative_time",
     "hardware_speedup",
     "validation_error_metrics",
+    "statevector_bytes",
+    "tn_task_count",
+    "tn_max_intermediate_bytes",
+    "tn_estimated_flops",
+    "tn_estimated_bytes",
     "notes",
     "warnings",
 ]
@@ -93,11 +104,19 @@ def normalized_upmem_taskgraph_result_from_summary(summary: JsonDict, *, source_
     return _upmem_taskgraph_runtime_record(summary, source_artifact=source_artifact)
 
 
+def normalized_upmem_taskgraph_records_from_summary(summary: JsonDict, *, source_artifact: str | None = None) -> list[JsonDict]:
+    return _upmem_taskgraph_runtime_records(summary, source_artifact=source_artifact)
+
+
 def load_result_records(inputs: Iterable[Path]) -> list[JsonDict]:
     records: list[JsonDict] = []
     for input_path in inputs:
         path = Path(input_path)
         if path.is_dir():
+            canonical = path / "normalized_records.jsonl"
+            if canonical.exists():
+                records.extend(read_jsonl(canonical))
+                continue
             for artifact in _discover_artifacts(path):
                 records.extend(_records_from_artifact(artifact))
         else:
@@ -145,6 +164,7 @@ def _discover_artifacts(path: Path) -> list[Path]:
         "upmem_mvp_benchmark_summary.json",
         "upmem_taskgraph_runtime_summary.json",
         "pim_bridge_eval.json",
+        "simulation_backend_compare_summary.json",
     }
     return sorted(candidate for candidate in path.rglob("*.json") if candidate.name in names)
 
@@ -159,6 +179,8 @@ def _records_from_artifact(path: Path) -> list[JsonDict]:
         return _upmem_taskgraph_runtime_records(payload, source_artifact=source)
     if schema == "upmem_mvp_benchmark_v1":
         return _upmem_mvp_benchmark_cpu_records(payload, source_artifact=source)
+    if schema == "simulation_backend_compare_v1":
+        return [to_jsonable(record | {"source_artifact": source}) for record in payload.get("normalized_records", [])]
     if schema == "pim_bridge_eval_v1":
         return [_pim_bridge_eval_row_record(payload, row, source_artifact=source) for row in payload.get("rows", [])]
     return []
@@ -337,6 +359,9 @@ def _upmem_taskgraph_runtime_record(
     )
     record.update(
         {
+            "execution_model": "tensor_network",
+            "output_kind": "final_tensor",
+            "comparison_output_kind": "final_tensor",
             "contraction_execution_target": summary.get("contraction_execution_target", "upmem"),
             "upmem_execution_mode": summary.get("upmem_execution_mode", "sdk_simulator"),
             "native_sdk_control_path": summary.get("native_sdk_control_path", True),
@@ -357,6 +382,9 @@ def _upmem_mvp_benchmark_cpu_records(payload: JsonDict, *, source_artifact: str 
         normalized.setdefault("kernel_family", "cpu_reference_only")
         normalized.setdefault("execution_target", "cpu")
         normalized.setdefault("contraction_execution_target", "cpu")
+        normalized.setdefault("execution_model", "tensor_network")
+        normalized.setdefault("output_kind", "final_tensor")
+        normalized.setdefault("comparison_output_kind", "final_tensor")
         normalized.setdefault("execution_scope", "full_taskgraph_reference")
         normalized.setdefault("hardware_speedup", "not_applicable")
         records.append(to_jsonable(normalized))
@@ -415,7 +443,11 @@ def _base_record(
         "workload_id": workload_id,
         "route_id": route_id,
         "backend_id": backend_id,
+        "backend_family": None,
         "kernel_family": kernel_family if kernel_family in KERNEL_FAMILIES else "unsupported",
+        "execution_model": None,
+        "output_kind": None,
+        "comparison_output_kind": None,
         "execution_target": execution_target,
         "contraction_execution_target": None,
         "upmem_execution_mode": None,
@@ -436,6 +468,11 @@ def _base_record(
         "simulator_relative_time": None,
         "hardware_speedup": "not_applicable",
         "validation_error_metrics": validation_error_metrics,
+        "statevector_bytes": None,
+        "tn_task_count": None,
+        "tn_max_intermediate_bytes": None,
+        "tn_estimated_flops": None,
+        "tn_estimated_bytes": None,
         "notes": notes,
         "warnings": warnings,
     }

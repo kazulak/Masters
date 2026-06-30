@@ -30,6 +30,7 @@ from quantum_bench.targets.upmem import (
     upmem_task_estimate_rows,
 )
 from quantum_bench.validation import compute_reference, validate
+from quantum_bench.validation.statevectors import tensor_to_quest_statevector
 
 
 def run_suite(suite_path: Path, root_dir: Path) -> Path:
@@ -156,6 +157,20 @@ def _run_repeat(route: object, generated: dict[str, Any], suite: dict[str, Any],
             validation_s = time.perf_counter() - validation_start
             status = result.status if validation.passed else "failed"
             error = result.error if validation.passed else "validation failed"
+    elif identity.validation_mode == "compare_statevector":
+        reference_tensor, reference_s = compute_reference(generated["network"], suite["planner"]["optimize"])
+        reference = tensor_to_quest_statevector(reference_tensor)
+        validation_start = time.perf_counter()
+        if result.output.array is None:
+            validation = None
+            validation_s = time.perf_counter() - validation_start
+            status = "failed"
+            error = result.error or "statevector validation required but route did not return an output array"
+        else:
+            validation = validate(result.output.array, reference, suite["tolerances"])
+            validation_s = time.perf_counter() - validation_start
+            status = result.status if validation.passed else "failed"
+            error = result.error if validation.passed else "statevector validation failed"
     elif identity.validation_mode == "benchmark_only":
         result.output.metadata.setdefault("validation_policy", "benchmark_only: route returns metrics only")
         status = result.status

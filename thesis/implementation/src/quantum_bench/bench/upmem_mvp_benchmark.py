@@ -11,7 +11,16 @@ import numpy as np
 import yaml
 
 from quantum_bench.bench.config import load_suite
-from quantum_bench.bench.result_artifacts import RESULT_ARTIFACT_SCHEMA_VERSION
+from quantum_bench.bench.reporting import (
+    ARTIFACT_REFERENCE_SCHEMA_VERSION,
+    artifact_ref,
+    prune_run,
+    report_run,
+    validate_retention_mode,
+    write_normalized_records,
+    write_run_manifest,
+)
+from quantum_bench.bench.result_artifacts import RESULT_ARTIFACT_SCHEMA_VERSION, normalized_upmem_taskgraph_records_from_summary
 from quantum_bench.bench.run_dirs import create_run_dir, sanitize
 from quantum_bench.circuits import load_circuit, manifest
 from quantum_bench.core.jsonio import write_json, write_jsonl
@@ -107,6 +116,7 @@ def run_upmem_mvp_benchmark(
     execute_external: bool = False,
     max_taskgraph_tasks: int = 128,
     fail_fast: bool = False,
+    artifact_retention: str = "compact",
     env: Mapping[str, str] | None = None,
 ) -> UpmemMvpBenchmarkResult:
     suite = load_suite(suite_path)
@@ -115,8 +125,20 @@ def run_upmem_mvp_benchmark(
         quantization_modes=quantization_modes,
         execute_external=execute_external,
         max_taskgraph_tasks=max_taskgraph_tasks,
+        artifact_retention=artifact_retention,
     )
     run_dir = create_run_dir(root_dir, f"{suite['suite_id']}_upmem_mvp_benchmark")
+    write_run_manifest(
+        run_dir,
+        run_kind="upmem_mvp_benchmark",
+        suite_id=str(suite["suite_id"]),
+        suite_path=str(suite_path),
+        policies=policies,
+        quantization_modes=quantization_modes,
+        upmem_execution_mode=UPMEM_EXECUTION_MODE,
+        artifact_retention=artifact_retention,
+        root_dir=root_dir,
+    )
     write_json(run_dir / "environment.json", capture_environment(root_dir))
     (run_dir / "config" / "resolved_suite.yml").write_text(yaml.safe_dump(suite, sort_keys=True), encoding="utf-8")
     write_json(
@@ -129,6 +151,7 @@ def run_upmem_mvp_benchmark(
             "execute_external": execute_external,
             "max_taskgraph_tasks": max_taskgraph_tasks,
             "fail_fast": fail_fast,
+            "artifact_retention": artifact_retention,
         },
     )
 
@@ -181,6 +204,11 @@ def run_upmem_mvp_benchmark(
     )
     write_json(run_dir / "upmem_mvp_benchmark_summary.json", summary)
     (run_dir / "comparison_summary.md").write_text(_summary_markdown(summary, result_rows), encoding="utf-8")
+    normalized_records = _normalized_records_for_run(run_dir, cpu_reference_records)
+    write_normalized_records(run_dir, normalized_records)
+    report_run(run_dir, output_plots=True)
+    if artifact_retention == "compact":
+        prune_run(run_dir, artifact_retention="compact")
     status = "completed" if not any(row["status"] == "failed" for row in result_rows) else "failed"
     return UpmemMvpBenchmarkResult(
         schema_version=UPMEM_MVP_BENCHMARK_SCHEMA_VERSION,
@@ -199,7 +227,9 @@ def validate_options(
     quantization_modes: tuple[str, ...],
     execute_external: bool,
     max_taskgraph_tasks: int,
+    artifact_retention: str = "compact",
 ) -> None:
+    validate_retention_mode(artifact_retention)
     if not execute_external:
         raise ValueError("upmem-mvp-benchmark requires --execute-external for strict UPMEM SDK DPU execution")
     if not policies:
@@ -253,7 +283,7 @@ def _generate_reference_case(root_dir: Path, run_dir: Path, suite: JsonDict, cas
         "cpu_reference_time_s": float(cpu_time_s),
         "output_shape": tuple(int(dim) for dim in reference_output.shape),
         "output_dtype": str(reference_output.dtype),
-        "output_artifact": cpu_reference_rel.as_posix(),
+        "output_artifact": artifact_ref(run_dir, cpu_reference_rel, role="cpu_reference_tensor"),
         "metadata": _reference_metadata_payload(reference_metadata),
     }
     write_json(run_dir / cpu_reference_json_rel, cpu_reference_payload)
@@ -279,8 +309,8 @@ def _generate_reference_case(root_dir: Path, run_dir: Path, suite: JsonDict, cas
         "graph": graph,
         "reference_output": reference_output,
         "reference_metadata": reference_metadata,
-        "cpu_reference_artifact": cpu_reference_json_rel.as_posix(),
-        "cpu_reference_tensor_artifact": cpu_reference_rel.as_posix(),
+        "cpu_reference_artifact": artifact_ref(run_dir, cpu_reference_json_rel, role="cpu_reference_metadata"),
+        "cpu_reference_tensor_artifact": artifact_ref(run_dir, cpu_reference_rel, role="cpu_reference_tensor"),
         "cpu_reference_record": cpu_reference_record,
     }
 
@@ -350,6 +380,7 @@ def _run_case_policy(
         np.save(run_dir / final_tensor_rel, runtime.output, allow_pickle=False)
         final_tensor_artifact = final_tensor_rel.as_posix()
     summary = _enriched_runtime_summary(
+        run_dir=run_dir,
         generated=generated,
         policy=policy,
         quantization_mode=quantization_mode,
@@ -365,6 +396,7 @@ def _run_case_policy(
 
 def _enriched_runtime_summary(
     *,
+    run_dir: Path,
     generated: JsonDict,
     policy: str,
     quantization_mode: str,
@@ -387,8 +419,8 @@ def _enriched_runtime_summary(
             "execution_scope": "full_taskgraph",
             "policy": policy,
             "quantization_mode": quantization_mode,
-            "task_metrics_artifact": task_metrics_rel.as_posix(),
-            "final_tensor_artifact": final_tensor_artifact,
+            "task_metrics_artifact": _planned_artifact_ref(task_metrics_rel, role="task_metrics"),
+            "final_tensor_artifact": artifact_ref(run_dir, final_tensor_artifact, role="final_tensor"),
             "reference": {
                 "kind": "cpu_exact_taskgraph_full_precision_final_validation_only",
                 "cpu_reference_artifact": generated["cpu_reference_artifact"],
@@ -396,9 +428,9 @@ def _enriched_runtime_summary(
                 "cpu_reference_used_to_feed_runtime_tensors": False,
             },
             "artifacts": {
-                "runtime_summary": runtime_summary_rel.as_posix(),
-                "task_metrics": task_metrics_rel.as_posix(),
-                **({"final_tensor": final_tensor_artifact} if final_tensor_artifact else {}),
+                "runtime_summary": _planned_artifact_ref(runtime_summary_rel, role="runtime_summary"),
+                "task_metrics": _planned_artifact_ref(task_metrics_rel, role="task_metrics"),
+                "final_tensor": artifact_ref(run_dir, final_tensor_artifact, role="final_tensor"),
             },
             "metadata": {
                 **dict(runtime_summary.get("metadata") or {}),
@@ -451,6 +483,18 @@ def _runtime_error_summary(case_id: str, policy: str, quantization_mode: str, re
     }
     summary["normalized_result"] = normalized_upmem_taskgraph_result_from_summary(summary)
     return to_jsonable(summary)
+
+
+def _planned_artifact_ref(rel_path: Path, *, role: str) -> JsonDict:
+    return {
+        "schema_version": ARTIFACT_REFERENCE_SCHEMA_VERSION,
+        "role": role,
+        "relative_path": rel_path.as_posix(),
+        "retained": True,
+        "status": "retained",
+        "prune_reason": None,
+        "metadata": {},
+    }
 
 
 def _write_child_runtime_artifacts(
@@ -508,9 +552,9 @@ def _row_from_runtime_summary(
             "total_kernel_time_s": float(summary.get("total_kernel_time_s", 0.0) or 0.0),
             "total_bridge_time_s": float(summary.get("total_bridge_time_s", 0.0) or 0.0),
             "cpu_reference_artifact": generated.get("cpu_reference_artifact"),
-            "upmem_runtime_summary_artifact": runtime_summary_rel.as_posix(),
-            "upmem_task_metrics_artifact": task_metrics_rel.as_posix(),
-            "final_tensor_artifact": final_tensor_artifact,
+            "upmem_runtime_summary_artifact": summary.get("artifacts", {}).get("runtime_summary"),
+            "upmem_task_metrics_artifact": summary.get("artifacts", {}).get("task_metrics"),
+            "final_tensor_artifact": summary.get("artifacts", {}).get("final_tensor"),
         }
     )
 
@@ -600,8 +644,10 @@ def _summary_payload(
             "validation_failed_count": sum(1 for row in result_rows if row["status"] == "validation_failed"),
             "cpu_reference_records": cpu_reference_records,
             "upmem_rows": result_rows,
-            "upmem_normalized_records_are_child_runtime_summaries": True,
-            "root_summary_emits_upmem_normalized_records": False,
+            "upmem_normalized_records_are_child_runtime_summaries": False,
+            "root_summary_emits_upmem_normalized_records": True,
+            "root_normalized_records_are_canonical": True,
+            "normalized_records_artifact": "normalized_records.jsonl",
             "metadata": {
                 "developer_only": True,
                 "normal_suite_routes_executed": False,
@@ -611,6 +657,17 @@ def _summary_payload(
             },
         }
     )
+
+
+def _normalized_records_for_run(run_dir: Path, cpu_reference_records: list[JsonDict]) -> list[JsonDict]:
+    records = [dict(record) for record in cpu_reference_records]
+    for summary_path in sorted(run_dir.glob("cases/*/*/*/upmem_taskgraph_runtime_summary.json")):
+        payload = json.loads(summary_path.read_text(encoding="utf-8"))
+        source = summary_path.relative_to(run_dir).as_posix()
+        records.extend(normalized_upmem_taskgraph_records_from_summary(payload, source_artifact=source))
+    for record in records:
+        record.setdefault("run_id", run_dir.name)
+    return to_jsonable(records)
 
 
 def _kernel_family_summary(rows: list[JsonDict]) -> list[JsonDict]:

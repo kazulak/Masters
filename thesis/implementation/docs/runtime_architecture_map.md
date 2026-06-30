@@ -48,7 +48,8 @@ Quantum circuit
 | UPMEM SDK simulator L1 | Implemented subset | Task-level simulator dense execution |
 | UPMEM SDK simulator L2 | Implemented subset | Task-level real-valued tiled simulator execution |
 | Strict UPMEM TaskGraph runtime | Implemented MVP | Small sequential TaskGraphs execute through UPMEM SDK DPU programs using SDK simulator mode |
-| Suite-level UPMEM MVP benchmark | Implemented MVP | Runs strict runtime variants across suites and regenerates report tables |
+| Suite-level UPMEM MVP benchmark | Implemented MVP | Runs strict runtime variants across suites and writes canonical normalized records |
+| Benchmark reporting and artifact hygiene | Implemented MVP | Report regeneration, compact retention, run manifests, and run-to-run comparison |
 | PIM bridge eval | Implemented | Task-level evidence, not full-circuit speedup |
 | Frontier analysis | Implemented | Model-only memory/parallelism analysis |
 | Benchmark matrix report | Implemented | Thesis scaffold, not final result table |
@@ -85,6 +86,7 @@ Examples:
 | Concept | Example |
 |---|---|
 | Route ID | `cpu_tn_einsum_exact` |
+| Comparable full-state route ID | `quest_cpu_full_state_exact` |
 | Backend ID | `upmem_sdk_simulator_dense` |
 | Execution class | `L2_SINGLE_DPU_MRAM` |
 | Route category | `upmem_tn_runtime` |
@@ -100,7 +102,7 @@ Current status must be reported honestly:
 | Path | Current complex support |
 |---|---|
 | CPU exact TN | Supported by NumPy complex tensors |
-| QuEST CPU full-state | QuEST handles full-state simulation, but route is metrics-only |
+| QuEST CPU full-state | Metrics-only route plus output-comparable exact route for small deterministic circuits |
 | Dense preparation | Supports explicit split real/imag representation where metadata proves layout |
 | UPMEM L1 simulator | Split-complex four-GEMM path supported for explicit manifest layout |
 | UPMEM L2 simulator | Real-valued only; complex rejected as `complex_l2_not_implemented` |
@@ -160,10 +162,14 @@ GEMM is the current backbone, not the complete design.
 | PIM bridge eval | `quantum_bench.bench pim-bridge-eval ...` | Task-level simulator evidence |
 | Strict UPMEM runtime | `quantum_bench.bench upmem-taskgraph-runtime ...` | Small full-TaskGraph SDK simulator code-path evidence |
 | Suite MVP benchmark | `quantum_bench.bench upmem-mvp-benchmark ...` | Suite-level CPU reference, UPMEM runtime, and report regeneration |
+| Simulation backend comparison | `quantum_bench.bench simulation-backend-compare ...` | QuEST full-state and CPU TN output comparison |
+| Report regeneration | `quantum_bench.bench report-run ...` | Non-destructive derived report refresh |
+| Compact pruning | `quantum_bench.bench prune-run ...` | Explicit artifact pruning for new MVP run layouts |
 | Frontier analysis | `quantum_bench.bench pim-frontier-analysis ...` | Model-only memory/parallelism evidence |
 | Matrix report | `quantum_bench.bench benchmark-matrix-report ...` | Thesis benchmark scaffold |
 | Generic fallback bridge | `quantum_bench.bench generic-task-bridge ...` | Task-level coverage/correctness evidence |
 | Result comparison | `quantum_bench.bench compare-results ...` | Artifact-driven report only |
+| Run comparison | `quantum_bench.bench compare-runs ...` | Baseline/candidate comparison from normalized records |
 
 Developer diagnostics such as `dense-task-bridge`, `dense-route-coverage`,
 `shadow-routed-runtime`, `simplepim-microbench`, and `compare-planners` are
@@ -179,8 +185,9 @@ Near-term priorities:
    validation of small binary contractions. It is not a performance kernel.
 4. Use the strict UPMEM TaskGraph runtime as the baseline pipeline for replacing
    individual kernels without CPU contraction fallback.
-5. Use the suite-level MVP benchmark to regenerate CPU reference, strict UPMEM,
-   kernel-family, quantization, and unsupported-reason reports.
+5. Use the suite-level MVP benchmark plus `report-run`/`compare-runs` to
+   regenerate CPU reference, strict UPMEM, kernel-family, quantization,
+   unsupported-reason, and run-delta reports from artifacts.
 6. Decide whether SimplePIM can implement the dense local tile compute path
    cleanly enough to replace or complement native SDK L1/L2.
 7. Evaluate PID-Comm as the communication/orchestration substrate across
@@ -203,5 +210,7 @@ analysis.
 - Treat `runs/`, `.pytest_cache/`, `__pycache__/`, `*.pyc`, and native build
   outputs as generated.
 - Do not delete historical runs without a separate result-curation decision.
+- Use compact retention for normal MVP sweeps; use full retention only for
+  debugging native bridge artifacts.
 - Do not rename stable route IDs during documentation cleanup.
 - Do not let synthetic pressure workloads enter normal benchmark execution.

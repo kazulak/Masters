@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import csv
 import json
 from pathlib import Path
 
 import numpy as np
 
+from quantum_bench.bench.reporting import prune_run, report_run
 from quantum_bench.bench.result_artifacts import compare_results, load_result_records
 from quantum_bench.bench.upmem_mvp_benchmark import run_upmem_mvp_benchmark, validate_options
 from quantum_bench.targets.upmem.generic_bridge import (
@@ -133,7 +133,8 @@ def test_upmem_mvp_benchmark_runs_suite_and_compare_results(monkeypatch, tmp_pat
     payload = json.loads(result.summary_path.read_text(encoding="utf-8"))
     assert result.status == "completed"
     assert payload["schema_version"] == "upmem_mvp_benchmark_v1"
-    assert payload["root_summary_emits_upmem_normalized_records"] is False
+    assert payload["root_summary_emits_upmem_normalized_records"] is True
+    assert payload["root_normalized_records_are_canonical"] is True
     assert payload["metadata"]["cpu_reference_used_to_feed_runtime_tensors"] is False
     assert len(payload["cpu_reference_records"]) == 2
     assert len(payload["upmem_rows"]) == 4
@@ -142,13 +143,13 @@ def test_upmem_mvp_benchmark_runs_suite_and_compare_results(monkeypatch, tmp_pat
     assert all(row["upmem_execution_mode"] == "sdk_simulator" for row in payload["upmem_rows"])
     assert all(row["whole_network_quantized_at_initialization"] is False for row in payload["upmem_rows"])
     assert all(row["cpu_fallback_used"] is False for row in payload["upmem_rows"])
-    assert all(not Path(row["upmem_runtime_summary_artifact"]).is_absolute() for row in payload["upmem_rows"])
+    assert all(row["upmem_runtime_summary_artifact"]["retained"] is True for row in payload["upmem_rows"])
+    assert all(not Path(row["upmem_runtime_summary_artifact"]["relative_path"]).is_absolute() for row in payload["upmem_rows"])
 
-    with (result.run_dir / "upmem_mvp_benchmark_results.csv").open("r", encoding="utf-8", newline="") as handle:
-        rows = list(csv.DictReader(handle))
-    assert len(rows) == 4
-    assert set(row["policy"] for row in rows) == {"generic-only", "dense-then-generic"}
-    assert all(int(row["generic_loop_fallback_count"]) > 0 for row in rows)
+    assert (result.run_dir / "run_manifest.json").exists()
+    assert (result.run_dir / "normalized_records.jsonl").exists()
+    assert (result.run_dir / "artifact_retention_manifest.json").exists()
+    assert not list(result.run_dir.rglob("runner_work"))
 
     records = load_result_records([result.run_dir])
     upmem_records = [record for record in records if record["execution_target"] == "upmem"]
@@ -162,6 +163,17 @@ def test_upmem_mvp_benchmark_runs_suite_and_compare_results(monkeypatch, tmp_pat
 
     comparison = compare_results([result.run_dir], tmp_path / "comparison")
     assert comparison.record_count == 6
+
+    report = report_run(result.run_dir, output_plots=False)
+    assert report.status == "completed"
+    assert (result.run_dir / "validation" / "validation_summary.json").exists()
+    assert (result.run_dir / "metrics" / "timing_breakdown.csv").exists()
+
+    before = sorted(path.relative_to(result.run_dir).as_posix() for path in result.run_dir.rglob("*") if path.is_file())
+    second_prune = prune_run(result.run_dir, artifact_retention="compact")
+    after = sorted(path.relative_to(result.run_dir).as_posix() for path in result.run_dir.rglob("*") if path.is_file())
+    assert second_prune.status == "completed"
+    assert set(before) == set(after)
 
 
 def test_upmem_mvp_benchmark_records_unsupported_quantization(monkeypatch, tmp_path: Path) -> None:
