@@ -202,6 +202,11 @@ is a validation suite. `simulation_backend_compare_thesis_small.yml` and
 `simulation_backend_compare_scaling.yml` are bounded local suites for readable
 trend plots. `simulation_backend_compare_compute_medium.yml` is a CPU-only,
 GPU-independent compute-focused suite with warmups and repeats.
+`simulation_backend_compare_upmem_sdk_simulator.yml` adds the strict quantized
+UPMEM SDK simulator route `upmem_tn_sdk_simulator_quantized` beside QuEST CPU
+and Quimb. That route must pass SDK simulator preflight, execute DPU programs
+for every TaskGraph task, and report `cpu_fallback_used=false`; it is not a
+hardware benchmark and does not make hardware speedup applicable.
 `simulation_backend_compare_compute_large.yml` is manual thesis evidence only:
 it records high-memory/long-runtime resource metadata and uses guarded optional
 TN routes so heavy backends can skip visibly instead of killing the machine.

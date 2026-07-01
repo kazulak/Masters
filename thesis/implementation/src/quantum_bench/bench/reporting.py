@@ -57,6 +57,11 @@ REPORT_RESULT_FIELDS = [
     "gpu_device_name",
     "gpu_runtime_stack",
     "upmem_execution_mode",
+    "execution_backend",
+    "hardware_execution",
+    "hardware_timing_available",
+    "hardware_speedup_applicable",
+    "cpu_fallback_used",
     "execution_scope",
     "task_count",
     "validated_task_count",
@@ -113,6 +118,7 @@ BACKEND_LABELS = {
     "cpu_tn_einsum_exact": "Internal CPU TN",
     "quimb_tn_exact": "Quimb TN",
     "upmem_tn_runtime": "UPMEM TN runtime",
+    "upmem_tn_sdk_simulator_quantized": "UPMEM SDK simulator TN",
 }
 
 PLOT_DATA_FIELDS = [

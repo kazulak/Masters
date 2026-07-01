@@ -17,6 +17,7 @@ from quantum_bench.core.records import BenchmarkContext, ExecutionProfile, Route
 from quantum_bench.providers.exact_tn import CpuTnEinsumExactRoute
 from quantum_bench.providers.full_state.quest_gpu import QuestGpuFullStateExactRoute, quest_gpu_verification_path
 from quantum_bench.providers import route_registry
+from quantum_bench.providers.exact_tn.upmem_sdk_simulator import UpmemTnSdkSimulatorQuantizedRoute
 from quantum_bench.tn import build_tensor_network, execute_task_sequence_np_einsum, plan_task_graph_with_config
 from quantum_bench.validation import tensor_to_quest_statevector
 
@@ -188,6 +189,7 @@ def test_simulation_backend_compare_suite_loads() -> None:
     compute_large = load_suite(ROOT / "configs" / "suites" / "simulation_backend_compare_compute_large.yml")
     gpu_medium = load_suite(ROOT / "configs" / "suites" / "simulation_backend_compare_gpu_medium.yml")
     gpu_execution_only = load_suite(ROOT / "configs" / "suites" / "simulation_backend_compare_gpu_execution_only.yml")
+    upmem_sdk = load_suite(ROOT / "configs" / "suites" / "simulation_backend_compare_upmem_sdk_simulator.yml")
     for loaded in (thesis_small, scaling):
         assert loaded["route_policy"]["routes"] == ["cpu_tn_einsum_exact", "quest_cpu_full_state_exact", "quimb_tn_exact"]
         assert loaded["metadata"]["deterministic_unitary_only"] is True
@@ -227,6 +229,17 @@ def test_simulation_backend_compare_suite_loads() -> None:
     assert gpu_execution_only["repeats"] == 1
     assert all(route["id"] not in {"cpu_tn_einsum_exact", "quimb_tn_exact"} for route in gpu_execution_only["_route_configs"])
     assert gpu_execution_only["_route_configs"][1]["required"] is False
+    assert upmem_sdk["route_policy"]["routes"] == [
+        "quest_cpu_full_state_exact",
+        "quimb_tn_exact",
+        "upmem_tn_sdk_simulator_quantized",
+    ]
+    assert "quest_gpu_full_state_exact" not in upmem_sdk["route_policy"]["routes"]
+    upmem_routes = {route["id"]: route for route in upmem_sdk["_route_configs"]}
+    assert upmem_routes["upmem_tn_sdk_simulator_quantized"]["required"] is False
+    assert upmem_routes["upmem_tn_sdk_simulator_quantized"]["options"]["execute_external"] is True
+    assert upmem_routes["upmem_tn_sdk_simulator_quantized"]["options"]["quantization_mode"] == "per_task_input_quantize"
+    assert upmem_sdk["metadata"]["validation_tier"] == "quantized_codepath"
 
 
 def test_resource_guard_missing_estimate_policy_is_explicit() -> None:
@@ -908,3 +921,283 @@ validation:
     assert {record["route_id"] for record in records} == {"quest_cpu_full_state_exact"}
     assert all(record["contraction_execution_target"] == "cpu" for record in records)
     assert all(record["gpu_backend_verified"] is False for record in records)
+
+
+def test_upmem_sdk_simulator_quantized_route_requires_execute_external(tmp_path: Path) -> None:
+    route = UpmemTnSdkSimulatorQuantizedRoute()
+    suite = load_suite(ROOT / "configs" / "suites" / "simulation_backend_compare_upmem_sdk_simulator.yml")
+    case = suite["cases"][0]
+    circuit = quest_compatible_circuit(case["circuit"]["name"], case["circuit"])
+    network = build_tensor_network(circuit)
+    graph = plan_task_graph_with_config(network, suite["planner"])
+    route_config = {"id": route.name, "options": {"execute_external": False}}
+    context = BenchmarkContext(ROOT, tmp_path, suite, case, route_config, 0, suite["tolerances"], 30, 2)
+
+    can_execute, reason = route.can_execute(graph, context)
+
+    assert can_execute is False
+    assert reason == "upmem_sdk_simulator_execute_external_required"
+    preflight = tmp_path / "cases" / case["case_id"] / "routes" / route.name / "repeat_0" / "preflight" / "upmem_sdk_simulator_preflight.json"
+    assert preflight.exists()
+    payload = json.loads(preflight.read_text(encoding="utf-8"))
+    assert payload["status"] == "blocked"
+
+
+def test_simulation_backend_compare_emits_quantized_upmem_sdk_row(monkeypatch, tmp_path: Path) -> None:
+    suite_path = tmp_path / "suite.yml"
+    suite_path.write_text(
+        """
+schema_version: 2
+suite_id: unit_upmem_sdk_compare
+defaults:
+  warmups: 0
+  repeats: 1
+  planner:
+    engine: opt_einsum
+    optimize: greedy
+metadata:
+  validation_method: full_statevector_quantized_tolerance
+workloads:
+  - id: quest_qrng_2q
+    circuit: {kind: quest_compatible, name: QRNG, n_qubits: 2}
+routes:
+  - id: quest_cpu_full_state_exact
+    role: comparison_anchor
+    required: true
+  - id: quimb_tn_exact
+    role: baseline
+    required: true
+  - id: upmem_tn_sdk_simulator_quantized
+    role: optional_upmem_candidate
+    required: true
+    options:
+      execute_external: true
+      policy: dense-then-generic
+      quantization_mode: per_task_input_quantize
+validation:
+  reference_route: quest_cpu_full_state_exact
+  require_output_for_roles:
+    - comparison_anchor
+    - baseline
+  tolerances:
+    max_abs_error: 0.25
+    l2_error: 2.0
+    max_rel_error: 10.0
+    norm_drift: 2.0
+    min_fidelity: 0.0
+""",
+        encoding="utf-8",
+    )
+
+    def fake_upmem_runtime(*, graph, network, case_id, policy, quantization_mode, bridge_root, execute_external, reference_output=None, env=None):
+        output = np.asarray(reference_output if reference_output is not None else 2.0 + 0.0j, dtype=np.complex128)
+        task_count = max(1, len(graph.tasks))
+        summary = {
+            "schema_version": "upmem_taskgraph_runtime_v1",
+            "case_id": case_id,
+            "status": "completed",
+            "reason": None,
+            "policy": policy,
+            "quantization_mode": quantization_mode,
+            "whole_network_quantized_at_initialization": False,
+            "contraction_execution_target": "upmem",
+            "upmem_execution_mode": "sdk_simulator",
+            "native_sdk_control_path": True,
+            "simplepim_api_used": False,
+            "hardware_benchmark_result": False,
+            "hardware_timing_available": False,
+            "hardware_speedup_applicable": False,
+            "cpu_fallback_used": False,
+            "dpu_program_executed_all_tasks": True,
+            "runtime_tensor_sources_all_upmem_output_blobs": True,
+            "valid_primary_upmem_codepath_result": True,
+            "total_tasks": task_count,
+            "executed_tasks": task_count,
+            "unsupported_tasks": 0,
+            "failed_tasks": 0,
+            "dpu_program_executed_task_count": task_count,
+            "kernel_family_counts": {"generic_loop_fallback": task_count},
+            "backend_counts": {"upmem_sdk_simulator_generic_loop": task_count},
+            "final_validation": {"passed": True, "max_abs_error": 0.0, "l2_error": 0.0, "norm_drift": 0.0},
+            "total_wall_time_s": 0.01,
+            "total_bridge_time_s": 0.002,
+            "total_kernel_time_s": 0.003,
+            "total_build_time_s": 0.004,
+        }
+        return SimpleNamespace(status="completed", reason=None, output=output, output_labels=graph.network.output_labels, summary=summary, task_metrics=())
+
+    class FakeQuestRoute:
+        name = "quest_cpu_full_state_exact"
+        backend_family = "quest"
+        identity = RouteIdentity(
+            route_id=name,
+            display_name="fake quest",
+            role="baseline",
+            simulation_method="full_state_vector",
+            kernel_family="full_state_vector",
+            hardware_target="cpu",
+            execution_mode="test",
+            output_contract="statevector",
+            validation_mode="compare_statevector",
+        )
+
+        def probe(self):
+            return RouteProbe(self.name, True)
+
+        def capabilities(self):
+            return RouteCapabilities(self.identity, can_return_output=True)
+
+        def can_execute(self, graph, context):
+            return True, None
+
+        def estimate(self, graph, context):  # pragma: no cover - not used by this harness
+            raise NotImplementedError
+
+        def prepare(self, graph, network, context):
+            return {"graph": graph, "network": network}
+
+        def execute(self, prepared, context):
+            output, _ = execute_task_sequence_np_einsum(prepared["graph"], prepared["network"])
+            state = tensor_to_quest_statevector(output)
+            return RouteResult(
+                self.name,
+                self.backend_family,
+                "passed",
+                RouteOutput("statevector", array=state, shape=state.shape, dtype=str(state.dtype), metadata={}),
+                ExecutionProfile(kernel_s=0.001, total_s=0.002),
+                None,
+                "unavailable",
+                None,
+                {},
+            )
+
+    monkeypatch.setattr("quantum_bench.providers.exact_tn.upmem_sdk_simulator.execute_upmem_taskgraph_runtime", fake_upmem_runtime)
+    monkeypatch.setattr(
+        "quantum_bench.bench.simulation_backend_compare.route_registry",
+        lambda root_dir: {
+            "quest_cpu_full_state_exact": FakeQuestRoute(),
+            "quimb_tn_exact": route_registry(ROOT)["quimb_tn_exact"],
+            "upmem_tn_sdk_simulator_quantized": UpmemTnSdkSimulatorQuantizedRoute(),
+        },
+    )
+
+    result = run_simulation_backend_compare(tmp_path, suite_path=suite_path, artifact_retention="compact")
+    records = load_result_records([result.run_dir])
+    route_ids = {record["route_id"] for record in records}
+    upmem_record = next(record for record in records if record["route_id"] == "upmem_tn_sdk_simulator_quantized")
+
+    assert "upmem_tn_sdk_simulator_exact" not in route_ids
+    assert {"quest_cpu_full_state_exact", "quimb_tn_exact", "upmem_tn_sdk_simulator_quantized"} <= route_ids
+    assert upmem_record["contraction_execution_target"] == "upmem"
+    assert upmem_record["upmem_execution_mode"] == "sdk_simulator"
+    assert upmem_record["execution_backend"] == "upmem_sdk"
+    assert upmem_record["hardware_execution"] is False
+    assert upmem_record["hardware_timing_available"] is False
+    assert upmem_record["hardware_speedup_applicable"] is False
+    assert upmem_record["cpu_fallback_used"] is False
+    assert upmem_record["native_sdk_control_path"] is True
+    assert upmem_record["simplepim_api_used"] is False
+    assert upmem_record["quantization_mode"] == "per_task_input_quantize"
+    assert upmem_record["dpu_program_invocations"] == upmem_record["task_count"]
+    assert upmem_record["upmem_program_executed"] is True
+
+
+def test_blocked_upmem_sdk_preflight_emits_no_fake_benchmark_row(monkeypatch, tmp_path: Path) -> None:
+    suite_path = tmp_path / "suite.yml"
+    suite_path.write_text(
+        """
+schema_version: 2
+suite_id: unit_upmem_sdk_blocked_compare
+defaults:
+  warmups: 0
+  repeats: 1
+  planner:
+    engine: opt_einsum
+    optimize: greedy
+workloads:
+  - id: quest_qrng_2q
+    circuit: {kind: quest_compatible, name: QRNG, n_qubits: 2}
+routes:
+  - id: quest_cpu_full_state_exact
+    role: comparison_anchor
+    required: true
+  - id: upmem_tn_sdk_simulator_quantized
+    role: optional_upmem_candidate
+    required: false
+    options:
+      execute_external: true
+validation:
+  reference_route: quest_cpu_full_state_exact
+  tolerances:
+    max_abs_error: 0.25
+    l2_error: 2.0
+    max_rel_error: 10.0
+    norm_drift: 2.0
+    min_fidelity: 0.0
+""",
+        encoding="utf-8",
+    )
+
+    def blocked_runtime(*args, **kwargs):
+        summary = {
+            "status": "unsupported",
+            "reason": "upmem_sdk_simulator_unavailable",
+            "total_tasks": 0,
+            "dpu_program_executed_task_count": 0,
+            "dpu_program_executed_all_tasks": False,
+            "native_sdk_control_path": True,
+            "simplepim_api_used": False,
+        }
+        return SimpleNamespace(status="unsupported", reason="upmem_sdk_simulator_unavailable", output=None, output_labels=None, summary=summary, task_metrics=())
+
+    class FakeQuestRoute:
+        name = "quest_cpu_full_state_exact"
+        backend_family = "quest"
+        identity = RouteIdentity(name, "fake quest", "baseline", "full_state_vector", "full_state_vector", "cpu", "test", "statevector", "compare_statevector")
+
+        def probe(self):
+            return RouteProbe(self.name, True)
+
+        def capabilities(self):
+            return RouteCapabilities(self.identity, can_return_output=True)
+
+        def can_execute(self, graph, context):
+            return True, None
+
+        def estimate(self, graph, context):  # pragma: no cover - not used by this harness
+            raise NotImplementedError
+
+        def prepare(self, graph, network, context):
+            return {"graph": graph, "network": network}
+
+        def execute(self, prepared, context):
+            output, _ = execute_task_sequence_np_einsum(prepared["graph"], prepared["network"])
+            state = tensor_to_quest_statevector(output)
+            return RouteResult(
+                self.name,
+                self.backend_family,
+                "passed",
+                RouteOutput("statevector", array=state, shape=state.shape, dtype=str(state.dtype), metadata={}),
+                ExecutionProfile(kernel_s=0.001, total_s=0.002),
+                None,
+                "unavailable",
+                None,
+                {},
+            )
+
+    monkeypatch.setattr("quantum_bench.providers.exact_tn.upmem_sdk_simulator.execute_upmem_taskgraph_runtime", blocked_runtime)
+    monkeypatch.setattr(
+        "quantum_bench.bench.simulation_backend_compare.route_registry",
+        lambda root_dir: {
+            "quest_cpu_full_state_exact": FakeQuestRoute(),
+            "upmem_tn_sdk_simulator_quantized": UpmemTnSdkSimulatorQuantizedRoute(),
+        },
+    )
+
+    result = run_simulation_backend_compare(tmp_path, suite_path=suite_path, artifact_retention="compact")
+    records = load_result_records([result.run_dir])
+    summary = json.loads((result.run_dir / "simulation_backend_compare_summary.json").read_text(encoding="utf-8"))
+
+    assert {record["route_id"] for record in records} == {"quest_cpu_full_state_exact"}
+    assert summary["optional_backend_reports"][0]["route_id"] == "upmem_tn_sdk_simulator_quantized"
+    assert summary["optional_backend_reports"][0]["reason"] == "upmem_sdk_simulator_unavailable"

@@ -23,6 +23,7 @@ KERNEL_FAMILIES = (
     "sparse_or_zero_heavy",
     "communication_collective",
     "cpu_reference_only",
+    "upmem_taskgraph_quantized",
     "unsupported",
 )
 
@@ -52,6 +53,13 @@ RESULT_FIELDS = [
     "gpu_device_name",
     "gpu_runtime_stack",
     "upmem_execution_mode",
+    "execution_backend",
+    "hardware_execution",
+    "hardware_timing_available",
+    "hardware_speedup_applicable",
+    "cpu_fallback_used",
+    "dpu_program_invocations",
+    "upmem_program_executed",
     "native_sdk_control_path",
     "simplepim_api_used",
     "execution_scope",

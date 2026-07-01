@@ -84,6 +84,12 @@ def test_route_probe_and_upmem_skip_reason() -> None:
     assert routes["quimb_tn_exact"].identity.validation_mode == "compare_output"
     assert routes["quimb_tn_exact"].backend_family == "quimb"
     assert routes["upmem_dense_int8_placeholder"].identity.hardware_target == "upmem_dpu"
+    assert "upmem_tn_sdk_simulator_quantized" in routes
+    assert "upmem_tn_sdk_simulator_exact" not in routes
+    assert routes["upmem_tn_sdk_simulator_quantized"].identity.hardware_target == "upmem"
+    assert routes["upmem_tn_sdk_simulator_quantized"].identity.execution_mode == "sdk_simulator"
+    assert routes["upmem_tn_sdk_simulator_quantized"].identity.output_contract == "final_tensor"
+    assert routes["upmem_tn_sdk_simulator_quantized"].backend_family == "upmem_sdk"
     circuit = builtin_circuit("bell_2q")
     network = build_tensor_network(circuit)
     graph = plan_task_graph(network)

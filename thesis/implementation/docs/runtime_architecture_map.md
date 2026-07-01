@@ -166,7 +166,7 @@ GEMM is the current backbone, not the complete design.
 | PIM bridge eval | `quantum_bench.bench pim-bridge-eval ...` | Task-level simulator evidence |
 | Strict UPMEM runtime | `quantum_bench.bench upmem-taskgraph-runtime ...` | Small full-TaskGraph SDK simulator code-path evidence |
 | Suite MVP benchmark | `quantum_bench.bench upmem-mvp-benchmark ...` | Suite-level CPU reference, UPMEM runtime, and report regeneration |
-| Simulation backend comparison | `quantum_bench.bench simulation-backend-compare ...` | QuEST full-state, serious external TN, and optional internal TN diagnostic output comparison |
+| Simulation backend comparison | `quantum_bench.bench simulation-backend-compare ...` | QuEST full-state, serious external TN, optional internal TN diagnostic, and optional strict quantized UPMEM SDK simulator output comparison |
 | Report regeneration | `quantum_bench.bench report-run ...` | Non-destructive derived report refresh |
 | Compact pruning | `quantum_bench.bench prune-run ...` | Explicit artifact pruning for new MVP run layouts |
 | Frontier analysis | `quantum_bench.bench pim-frontier-analysis ...` | Model-only memory/parallelism evidence |
@@ -187,6 +187,12 @@ execution. Candidate reports should use evidence categories such as
 `tailored_quantum_gpu`, `cuda_quantum_stack`, `generic_tensor_gpu`, and
 `feasibility_only`; they should not claim SOTA or GPU results from source
 markers alone.
+`simulation_backend_compare_upmem_sdk_simulator.yml` is the minimal comparison
+suite for the strict UPMEM SDK simulator code path. Its UPMEM route is
+`upmem_tn_sdk_simulator_quantized`, reflecting per-task int8/int32
+quantization; `upmem_tn_sdk_simulator_exact` is intentionally not used.
+UPMEM rows require real SDK simulator DPU program execution and keep
+`hardware_speedup_applicable=false`.
 `simulation-backend-probe --verify-gpu auto` attempts only the first plausible
 tailored QuEST GPU route: HIP/ROCm for AMD or CUDA for NVIDIA. Failed attempts
 write blocker artifacts, and generic tensor GPU checks remain feasibility

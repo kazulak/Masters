@@ -108,6 +108,7 @@ Simulation backend comparison:
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simulation-backend-compare --suite configs/suites/simulation_backend_compare_quick.yml --artifact-retention compact
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simulation-backend-compare --suite configs/suites/simulation_backend_compare_thesis_small.yml --artifact-retention compact
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simulation-backend-compare --suite configs/suites/simulation_backend_compare_compute_medium.yml --artifact-retention compact
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simulation-backend-compare --suite configs/suites/simulation_backend_compare_upmem_sdk_simulator.yml --artifact-retention compact
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simulation-backend-probe
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simulation-backend-probe --verify-gpu auto
 ```
@@ -119,6 +120,12 @@ circuits, statevector output caps, and explicit runtime-class metadata.
 on CPU-only/no-ROCm environments. `simulation_backend_compare_gpu_medium.yml`
 is a scaffold for verified GPU routes; optional GPU candidates remain probe
 metadata until a backend proves real GPU execution.
+`simulation_backend_compare_upmem_sdk_simulator.yml` compares QuEST CPU,
+Quimb TN, and `upmem_tn_sdk_simulator_quantized`. The UPMEM row is emitted only
+after the SDK simulator preflight and strict runtime execute real DPU programs.
+It records `contraction_execution_target=upmem`,
+`upmem_execution_mode=sdk_simulator`, `execution_backend=upmem_sdk`,
+`cpu_fallback_used=false`, and `hardware_speedup_applicable=false`.
 `simulation-backend-probe --verify-gpu auto` attempts the first plausible
 tailored QuEST GPU path only: AMD selects HIP/ROCm, NVIDIA selects CUDA. It
 writes a verification or blocker artifact under `build/gpu_verification/`; on
