@@ -187,6 +187,10 @@ execution. Candidate reports should use evidence categories such as
 `tailored_quantum_gpu`, `cuda_quantum_stack`, `generic_tensor_gpu`, and
 `feasibility_only`; they should not claim SOTA or GPU results from source
 markers alone.
+`simulation-backend-probe --verify-gpu auto` attempts only the first plausible
+tailored QuEST GPU route: HIP/ROCm for AMD or CUDA for NVIDIA. Failed attempts
+write blocker artifacts, and generic tensor GPU checks remain feasibility
+metadata rather than benchmark routes.
 `simulation_backend_compare_compute_large.yml` is manual-only thesis evidence:
 it is not routine validation or CI, and heavy TN routes may produce explicit
 resource-guard skip rows when path/intermediate estimates exceed configured

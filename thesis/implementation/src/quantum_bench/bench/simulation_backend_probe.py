@@ -1,18 +1,27 @@
 from __future__ import annotations
 
+import json
+import re
 import subprocess
 import shutil
+from datetime import datetime, timezone
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 
 from quantum_bench.core.records import JsonDict, to_jsonable
 from quantum_bench.providers import route_registry
+from quantum_bench.providers.full_state.quest_gpu import QUEST_GPU_VERIFICATION_SCHEMA_VERSION, quest_gpu_verification_path
 
 
 SIMULATION_BACKEND_PROBE_SCHEMA_VERSION = "simulation_backend_probe_v1"
+GPU_VERIFY_CHOICES = ("none", "auto", "quest-hip", "quest-cuda", "torch-rocm")
 
 
-def probe_simulation_backends(root_dir: Path) -> JsonDict:
+def probe_simulation_backends(root_dir: Path, *, verify_gpu: str = "none") -> JsonDict:
+    if verify_gpu not in GPU_VERIFY_CHOICES:
+        raise ValueError(f"Unsupported --verify-gpu value: {verify_gpu}")
+    gpu_hardware = _gpu_hardware_probe()
+    gpu_verification = _verify_gpu_backend(root_dir, verify_gpu, gpu_hardware) if verify_gpu != "none" else None
     routes = route_registry(root_dir)
     route_reports: list[JsonDict] = []
     for route_id in sorted(routes):
@@ -33,8 +42,7 @@ def probe_simulation_backends(root_dir: Path) -> JsonDict:
                 "metadata": {**probe.metadata, **capabilities.metadata},
             }
         )
-    gpu_hardware = _gpu_hardware_probe()
-    gpu_candidates = _gpu_candidate_matrix(root_dir, gpu_hardware)
+    gpu_candidates = _gpu_candidate_matrix(root_dir, gpu_hardware, gpu_verification)
     payload = {
         "schema_version": SIMULATION_BACKEND_PROBE_SCHEMA_VERSION,
         "routes": route_reports,
@@ -57,6 +65,7 @@ def probe_simulation_backends(root_dir: Path) -> JsonDict:
             "nvidia_smi": _command_status("nvidia-smi"),
             "nvcc": _command_status("nvcc"),
             "gpu_candidates": gpu_candidates,
+            "gpu_verification": gpu_verification,
             "cuda_only_assumption_used": False,
             "gpu_execution_backend_added": any(bool(candidate["benchmark_route_eligible"]) for candidate in gpu_candidates),
             "gpu_benchmark_records_emitted": False,
@@ -91,6 +100,7 @@ def _gpu_hardware_probe() -> JsonDict:
     lspci_lines = _lspci_gpu_lines()
     amd = [line for line in lspci_lines if any(marker in line.lower() for marker in ("amd", "ati", "radeon"))]
     nvidia = [line for line in lspci_lines if "nvidia" in line.lower()]
+    rocminfo = _rocminfo_gpu_status()
     return {
         "amd_gpu_pci_detected": bool(amd),
         "nvidia_gpu_pci_detected": bool(nvidia),
@@ -98,6 +108,10 @@ def _gpu_hardware_probe() -> JsonDict:
         "nvidia_gpu_pci_devices": nvidia,
         "dev_kfd_present": Path("/dev/kfd").exists(),
         "dev_dri_present": Path("/dev/dri").exists(),
+        "dev_dri_renderD128_present": Path("/dev/dri/renderD128").exists(),
+        "rocminfo_gpu_agent_detected": bool(rocminfo["gpu_agent_detected"]),
+        "rocminfo_gfx_targets": rocminfo["gfx_targets"],
+        "rocminfo_returncode": rocminfo["returncode"],
     }
 
 
@@ -116,7 +130,27 @@ def _lspci_gpu_lines() -> list[str]:
     return out
 
 
-def _gpu_candidate_matrix(root_dir: Path, hardware: JsonDict) -> list[JsonDict]:
+def _rocminfo_gpu_status() -> JsonDict:
+    if shutil.which("rocminfo") is None:
+        return {"available": False, "returncode": None, "gpu_agent_detected": False, "gfx_targets": []}
+    try:
+        result = subprocess.run(["rocminfo"], cwd=Path.cwd(), capture_output=True, text=True, check=False, timeout=15)
+        returncode = result.returncode
+        stdout = result.stdout
+    except subprocess.TimeoutExpired:
+        return {"available": False, "returncode": None, "gpu_agent_detected": False, "gfx_targets": [], "timed_out": True}
+    except OSError as exc:
+        return {"available": False, "returncode": None, "gpu_agent_detected": False, "gfx_targets": [], "error": str(exc)}
+    gfx_targets = sorted(set(re.findall(r"\bgfx[0-9a-fA-F]+\b", stdout)))
+    return {
+        "available": returncode == 0,
+        "returncode": returncode,
+        "gpu_agent_detected": bool(gfx_targets),
+        "gfx_targets": gfx_targets,
+    }
+
+
+def _gpu_candidate_matrix(root_dir: Path, hardware: JsonDict, verification: JsonDict | None = None) -> list[JsonDict]:
     quest_cmake = root_dir / "external" / "QuEST" / "CMakeLists.txt"
     quest_text = quest_cmake.read_text(encoding="utf-8", errors="ignore") if quest_cmake.exists() else ""
     quest_has_hip = "ENABLE_HIP" in quest_text
@@ -124,29 +158,36 @@ def _gpu_candidate_matrix(root_dir: Path, hardware: JsonDict) -> list[JsonDict]:
     rocm_tools = {name: _command_status(name) for name in ("hipcc", "rocminfo", "rocm-smi")}
     cuda_tools = {name: _command_status(name) for name in ("nvcc", "nvidia-smi")}
     torch_gpu = _torch_gpu_execution_status()
+    hip_verified = bool(verification and verification.get("selected_backend") == "quest-hip" and verification.get("status") == "verified")
+    cuda_verified = bool(verification and verification.get("selected_backend") == "quest-cuda" and verification.get("status") == "verified")
+    hip_blocker = verification.get("blocker_reason") if verification and verification.get("selected_backend") == "quest-hip" else None
+    cuda_blocker = verification.get("blocker_reason") if verification and verification.get("selected_backend") == "quest-cuda" else None
     candidates = [
         _candidate(
             "quest_gpu_full_state_hip",
             "tailored_quantum_gpu",
             1,
             "amd_rocm",
-            classification="amd_rocm_candidate_not_verified" if quest_has_hip else "feasible_later_not_benchmarkable_now",
-            blocker="quest_enable_hip_source_only_not_benchmark_evidence" if quest_has_hip else "quest_enable_hip_not_detected",
+            classification="usable_current_machine" if hip_verified else ("amd_rocm_candidate_not_verified" if quest_has_hip else "feasible_later_not_benchmarkable_now"),
+            blocker=None if hip_verified else (hip_blocker or ("quest_enable_hip_source_only_not_benchmark_evidence" if quest_has_hip else "quest_enable_hip_not_detected")),
             source_paths=["external/QuEST/CMakeLists.txt"] if quest_has_hip else [],
             dependencies=rocm_tools,
-            gpu_execution_verified=False,
-            usable_current=bool(quest_has_hip and hardware.get("amd_gpu_pci_detected") and all(tool["available"] for tool in rocm_tools.values()) and False),
+            gpu_execution_verified=hip_verified,
+            usable_current=hip_verified,
+            extra={"verification_artifact": verification.get("artifact_path") if verification and verification.get("selected_backend") == "quest-hip" else None},
         ),
         _candidate(
             "quest_gpu_full_state_cuda",
             "tailored_quantum_gpu",
             2,
             "nvidia_cuda",
-            classification="nvidia_cuda_only_not_usable_here" if not hardware.get("nvidia_gpu_pci_detected") else "feasible_later_not_benchmarkable_now",
-            blocker="requires_nvidia_cuda_build_and_minimal_gpu_execution",
+            classification="usable_current_machine" if cuda_verified else ("nvidia_cuda_only_not_usable_here" if not hardware.get("nvidia_gpu_pci_detected") else "feasible_later_not_benchmarkable_now"),
+            blocker=None if cuda_verified else (cuda_blocker or "requires_nvidia_cuda_build_and_minimal_gpu_execution"),
             source_paths=["external/QuEST/CMakeLists.txt"] if quest_has_cuda else [],
             dependencies=cuda_tools,
-            gpu_execution_verified=False,
+            gpu_execution_verified=cuda_verified,
+            usable_current=cuda_verified,
+            extra={"verification_artifact": verification.get("artifact_path") if verification and verification.get("selected_backend") == "quest-cuda" else None},
         ),
         _python_candidate("qiskit_aer_gpu_statevector", "cuda_quantum_stack", 3, "nvidia_cuda", "qiskit_aer", hardware, "qiskit_aer_gpu_execution_not_verified"),
         _python_candidate("qiskit_aer_gpu_tensor_network", "cuda_quantum_stack", 4, "nvidia_cuda", "qiskit_aer", hardware, "qiskit_aer_cuquantum_execution_not_verified"),
@@ -166,10 +207,247 @@ def _gpu_candidate_matrix(root_dir: Path, hardware: JsonDict) -> list[JsonDict]:
             dependencies={"torch": _module_status("torch"), "hipcc": _command_status("hipcc")},
             gpu_execution_verified=bool(torch_gpu["gpu_execution_verified"]),
             usable_current=bool(torch_gpu["gpu_execution_verified"]),
+            benchmark_route_eligible=False,
             extra={"minimal_execution": torch_gpu},
         ),
     ]
     return [to_jsonable(candidate) for candidate in candidates]
+
+
+def _verify_gpu_backend(root_dir: Path, requested_backend: str, hardware: JsonDict) -> JsonDict:
+    selected_backend = _select_gpu_backend(requested_backend, hardware)
+    if selected_backend is None:
+        return _write_gpu_verification_artifact(
+            root_dir,
+            {
+                "status": "blocked",
+                "requested_backend": requested_backend,
+                "selected_backend": None,
+                "blocker_reason": "no_plausible_tailored_gpu_backend_detected",
+                "missing_prerequisites": ["amd_or_nvidia_gpu"],
+                "attempted_steps": [{"step": "select_backend", "status": "blocked"}],
+            },
+        )
+    if selected_backend == "torch-rocm":
+        torch_status = _torch_gpu_execution_status()
+        verified = bool(torch_status.get("gpu_execution_verified"))
+        return _write_gpu_verification_artifact(
+            root_dir,
+            {
+                "status": "verified" if verified else "blocked",
+                "requested_backend": requested_backend,
+                "selected_backend": selected_backend,
+                "verification_backend": "torch-rocm",
+                "candidate_category": "generic_tensor_gpu",
+                "accelerator_kind": "amd_gpu",
+                "gpu_runtime_stack": "amd_rocm",
+                "gpu_backend_verified": verified,
+                "gpu_program_executed": verified,
+                "gpu_device_name": torch_status.get("device_name"),
+                "blocker_reason": None if verified else torch_status.get("reason"),
+                "attempted_steps": [{"step": "torch_rocm_minimal_tensor_execution", "status": "passed" if verified else "blocked"}],
+                "torch_status": torch_status,
+            },
+            artifact_name="torch_rocm_generic_full_state.json",
+        )
+
+    stack = "amd_rocm" if selected_backend == "quest-hip" else "nvidia_cuda"
+    accelerator_kind = "amd_gpu" if selected_backend == "quest-hip" else "nvidia_gpu"
+    prereq = _quest_gpu_prerequisites(selected_backend, hardware)
+    attempted_steps = [{"step": "preflight", "status": "passed" if not prereq["missing"] else "blocked"}]
+    if prereq["missing"]:
+        return _write_gpu_verification_artifact(
+            root_dir,
+            {
+                "status": "blocked",
+                "requested_backend": requested_backend,
+                "selected_backend": selected_backend,
+                "verification_backend": selected_backend,
+                "candidate_category": "tailored_quantum_gpu",
+                "accelerator_kind": accelerator_kind,
+                "gpu_runtime_stack": stack,
+                "gpu_backend_verified": False,
+                "gpu_program_executed": False,
+                "blocker_reason": f"missing_prerequisites:{','.join(prereq['missing'])}",
+                "missing_prerequisites": prereq["missing"],
+                "detected_dependencies": prereq["dependencies"],
+                "attempted_steps": attempted_steps,
+            },
+        )
+
+    runner_root = root_dir / "native" / "quest_gpu"
+    runner = runner_root / "bin" / "quest_gpu_runner"
+    build_cmd = ["make", "clean-all", "all", f"GPU_BACKEND={'hip' if selected_backend == 'quest-hip' else 'cuda'}"]
+    build_result = _run_command(build_cmd, cwd=runner_root, timeout_s=300)
+    attempted_steps.append({"step": "build_quest_gpu_runner", "status": "passed" if build_result["returncode"] == 0 else "failed", "command": build_cmd})
+    if build_result["returncode"] != 0:
+        return _write_gpu_verification_artifact(
+            root_dir,
+            {
+                "status": "failed",
+                "requested_backend": requested_backend,
+                "selected_backend": selected_backend,
+                "verification_backend": selected_backend,
+                "candidate_category": "tailored_quantum_gpu",
+                "accelerator_kind": accelerator_kind,
+                "gpu_runtime_stack": stack,
+                "gpu_backend_verified": False,
+                "gpu_program_executed": False,
+                "blocker_reason": "quest_gpu_build_failed",
+                "detected_dependencies": prereq["dependencies"],
+                "attempted_steps": attempted_steps,
+                "build_result": build_result,
+            },
+        )
+
+    dump_path = root_dir / "build" / "gpu_verification" / "quest_gpu_minimal_state_dump.json"
+    run_cmd = [str(runner), "--algo", "QRNG", "--qubits", "2", "--json", "--dump-state-json", str(dump_path), "--max-output-amplitudes", "4"]
+    run_result = _run_command(run_cmd, cwd=runner_root, timeout_s=60)
+    attempted_steps.append({"step": "minimal_quest_gpu_run", "status": "passed" if run_result["returncode"] == 0 else "failed", "command": run_cmd})
+    payload = _json_from_stdout(run_result.get("stdout") or "")
+    verified = bool(run_result["returncode"] == 0 and payload and payload.get("status") in {"ok", "passed"} and dump_path.exists())
+    return _write_gpu_verification_artifact(
+        root_dir,
+        {
+            "status": "verified" if verified else "failed",
+            "requested_backend": requested_backend,
+            "selected_backend": selected_backend,
+            "verification_backend": selected_backend,
+            "candidate_category": "tailored_quantum_gpu",
+            "accelerator_kind": accelerator_kind,
+            "gpu_runtime_stack": stack,
+            "gpu_backend_verified": verified,
+            "gpu_program_executed": verified,
+            "gpu_device_name": _gpu_device_name(selected_backend),
+            "gpu_toolkit_metadata": prereq["dependencies"],
+            "gpu_synchronized": True,
+            "runner_path": str(runner),
+            "runner_root": str(runner_root),
+            "blocker_reason": None if verified else "quest_gpu_minimal_run_failed",
+            "detected_dependencies": prereq["dependencies"],
+            "attempted_steps": attempted_steps,
+            "build_result": build_result,
+            "minimal_run_result": run_result,
+        },
+    )
+
+
+def _select_gpu_backend(requested_backend: str, hardware: JsonDict) -> str | None:
+    if requested_backend == "auto":
+        if hardware.get("amd_gpu_pci_detected"):
+            return "quest-hip"
+        if hardware.get("nvidia_gpu_pci_detected"):
+            return "quest-cuda"
+        return None
+    return requested_backend
+
+
+def _quest_gpu_prerequisites(selected_backend: str, hardware: JsonDict) -> JsonDict:
+    if selected_backend == "quest-hip":
+        checks = {
+            "amd_gpu_pci": {"available": bool(hardware.get("amd_gpu_pci_detected"))},
+            "dev_kfd": {"available": bool(hardware.get("dev_kfd_present"))},
+            "dev_dri": {"available": bool(hardware.get("dev_dri_present"))},
+            "dev_dri_renderD128": {"available": bool(hardware.get("dev_dri_renderD128_present"))},
+            "rocminfo_gpu_agent": {
+                "available": bool(hardware.get("rocminfo_gpu_agent_detected")),
+                "gfx_targets": hardware.get("rocminfo_gfx_targets") or [],
+                "returncode": hardware.get("rocminfo_returncode"),
+            },
+            "hipcc": _command_status("hipcc"),
+            "rocminfo": _command_status("rocminfo"),
+            "cmake": _command_status("cmake"),
+            "make": _command_status("make"),
+        }
+    else:
+        checks = {
+            "nvidia_gpu_pci": {"available": bool(hardware.get("nvidia_gpu_pci_detected"))},
+            "nvidia-smi": _command_status("nvidia-smi"),
+            "nvcc": _command_status("nvcc"),
+            "cmake": _command_status("cmake"),
+            "make": _command_status("make"),
+        }
+    missing = [name for name, status in checks.items() if not status.get("available")]
+    return {"dependencies": checks, "missing": missing}
+
+
+def _run_command(cmd: list[str], *, cwd: Path, timeout_s: float) -> JsonDict:
+    try:
+        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False, timeout=timeout_s)
+        return {
+            "command": [str(part) for part in cmd],
+            "cwd": str(cwd),
+            "returncode": result.returncode,
+            "stdout": _bounded(result.stdout),
+            "stderr": _bounded(result.stderr),
+            "timeout_s": timeout_s,
+        }
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "command": [str(part) for part in cmd],
+            "cwd": str(cwd),
+            "returncode": None,
+            "stdout": _bounded(exc.stdout or ""),
+            "stderr": _bounded(exc.stderr or ""),
+            "timeout_s": timeout_s,
+            "timed_out": True,
+        }
+    except OSError as exc:
+        return {
+            "command": [str(part) for part in cmd],
+            "cwd": str(cwd),
+            "returncode": None,
+            "stdout": "",
+            "stderr": str(exc),
+            "timeout_s": timeout_s,
+            "os_error": True,
+        }
+
+
+def _write_gpu_verification_artifact(root_dir: Path, payload: JsonDict, *, artifact_name: str | None = None) -> JsonDict:
+    path = quest_gpu_verification_path(root_dir) if artifact_name is None else root_dir / "build" / "gpu_verification" / artifact_name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    final_payload = {
+        "schema_version": QUEST_GPU_VERIFICATION_SCHEMA_VERSION,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "artifact_path": str(path),
+        **payload,
+    }
+    path.write_text(json.dumps(to_jsonable(final_payload), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return to_jsonable(final_payload)
+
+
+def _json_from_stdout(stdout: str) -> JsonDict | None:
+    try:
+        return json.loads(stdout)
+    except json.JSONDecodeError:
+        return None
+
+
+def _gpu_device_name(selected_backend: str) -> str | None:
+    if selected_backend == "quest-hip":
+        result = _run_command(["rocm-smi", "--showproductname"], cwd=Path.cwd(), timeout_s=10)
+        if result.get("returncode") == 0 and result.get("stdout"):
+            lines = [line.strip() for line in str(result["stdout"]).splitlines()]
+            card = next((line.split("Card Series:", 1)[1].strip() for line in lines if "Card Series:" in line), "")
+            gfx = next((line.split("GFX Version:", 1)[1].strip() for line in lines if "GFX Version:" in line), "")
+            if card and gfx:
+                return f"{card} ({gfx})"
+            return card or gfx or None
+    if selected_backend == "quest-cuda":
+        result = _run_command(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"], cwd=Path.cwd(), timeout_s=10)
+        if result.get("returncode") == 0 and result.get("stdout"):
+            return str(result["stdout"]).splitlines()[0].strip() or None
+    return None
+
+
+def _bounded(value: str | bytes | None, limit: int = 4000) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    text = str(value)
+    return text if len(text) <= limit else text[:limit] + "...<truncated>"
 
 
 def _candidate(
@@ -184,6 +462,7 @@ def _candidate(
     dependencies: JsonDict,
     gpu_execution_verified: bool,
     usable_current: bool = False,
+    benchmark_route_eligible: bool | None = None,
     extra: JsonDict | None = None,
 ) -> JsonDict:
     return {
@@ -192,7 +471,7 @@ def _candidate(
         "preferred_priority": priority,
         "target_gpu_stack": stack,
         "classification": "usable_current_machine" if usable_current and gpu_execution_verified else classification,
-        "benchmark_route_eligible": bool(gpu_execution_verified),
+        "benchmark_route_eligible": bool(gpu_execution_verified if benchmark_route_eligible is None else benchmark_route_eligible),
         "gpu_execution_verified": bool(gpu_execution_verified),
         "source_support_is_not_benchmark_evidence": True,
         "evidence_paths": source_paths,

@@ -42,6 +42,10 @@ RESULT_FIELDS = [
     "execution_model",
     "contraction_execution_target",
     "accelerator_kind",
+    "gpu_backend_verified",
+    "gpu_program_executed",
+    "gpu_device_name",
+    "gpu_runtime_stack",
     "execution_scope",
     "output_kind",
     "comparison_output_kind",
@@ -251,7 +255,7 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
             continue
         resource_skip_reason = _resource_guard_skip_reason(route_config, graph)
         if resource_skip_reason:
-            if required:
+            if _route_failure_is_fatal(route_config, route, anchor_route_id):
                 raise RuntimeError(resource_skip_reason)
             optional_backend_reports.append(_optional_backend_report(case_id, route_id, resource_skip_reason))
             skipped_rows.extend(
@@ -271,7 +275,7 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
             _context(root_dir, run_dir, suite, case_payload, route_config, repeat_id=0),
         )
         if not can_execute:
-            if required:
+            if _route_failure_is_fatal(route_config, route, anchor_route_id):
                 raise RuntimeError(reason or f"{route_id} cannot execute")
             optional_backend_reports.append(_optional_backend_report(case_id, route_id, reason or "route_unavailable"))
             continue
@@ -285,7 +289,8 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
             try:
                 _execute_route(root_dir, run_dir, suite, case_payload, graph, network, route, repeat_id=-(warmup_id + 1))
             except (MemoryError, RuntimeError, ValueError) as exc:
-                if route.name == anchor_route_id or bool(route_config_for(suite, route.name).get("required")):
+                route_config = route_config_for(suite, route.name)
+                if _route_failure_is_fatal(route_config, route, anchor_route_id):
                     raise
                 optional_backend_reports.append(_optional_backend_report(case_id, route.name, f"warmup_failed:{exc}"))
 
@@ -295,7 +300,8 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
             try:
                 measured_runs.append(_execute_route(root_dir, run_dir, suite, case_payload, graph, network, route, repeat_id=repeat_id))
             except MemoryError as exc:
-                if route.name == anchor_route_id or bool(route_config_for(suite, route.name).get("required")):
+                route_config = route_config_for(suite, route.name)
+                if _route_failure_is_fatal(route_config, route, anchor_route_id):
                     raise
                 reason = f"memory_error:{exc}"
                 optional_backend_reports.append(_optional_backend_report(case_id, route.name, reason))
@@ -303,7 +309,7 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
                     _skipped_route_row(
                         common,
                         route=route,
-                        route_metadata=_route_benchmark_metadata(route_config_for(suite, route.name), route),
+                        route_metadata=_route_benchmark_metadata(route_config, route),
                         repeat_id=repeat_id,
                         repeats=repeats,
                         reason=reason,
@@ -313,7 +319,8 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
                     )
                 )
             except RuntimeError as exc:
-                if route.name == anchor_route_id or bool(route_config_for(suite, route.name).get("required")):
+                route_config = route_config_for(suite, route.name)
+                if _route_failure_is_fatal(route_config, route, anchor_route_id):
                     raise
                 reason = str(exc)
                 optional_backend_reports.append(_optional_backend_report(case_id, route.name, reason))
@@ -321,7 +328,7 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
                     _skipped_route_row(
                         common,
                         route=route,
-                        route_metadata=_route_benchmark_metadata(route_config_for(suite, route.name), route),
+                        route_metadata=_route_benchmark_metadata(route_config, route),
                         repeat_id=repeat_id,
                         repeats=repeats,
                         reason=reason,
@@ -331,7 +338,8 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
                     )
                 )
             except ValueError as exc:
-                if route.name == anchor_route_id or bool(route_config_for(suite, route.name).get("required")):
+                route_config = route_config_for(suite, route.name)
+                if _route_failure_is_fatal(route_config, route, anchor_route_id):
                     raise
                 reason = f"value_error:{exc}"
                 optional_backend_reports.append(_optional_backend_report(case_id, route.name, reason))
@@ -339,7 +347,7 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
                     _skipped_route_row(
                         common,
                         route=route,
-                        route_metadata=_route_benchmark_metadata(route_config_for(suite, route.name), route),
+                        route_metadata=_route_benchmark_metadata(route_config, route),
                         repeat_id=repeat_id,
                         repeats=repeats,
                         reason=reason,
@@ -362,6 +370,7 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
         comparisons.append(_comparison_row(row, anchor_route_id))
     for run in route_runs:
         repeat_anchor = runs_by_repeat_route[(run.repeat_id, anchor_route_id)]
+        result_metadata = dict(run.result.metadata or {})
         validation_start = time.perf_counter()
         validation = validate(run.statevector, repeat_anchor.statevector, suite["tolerances"])
         validation_metrics = validation_result_to_dict(validation)
@@ -377,7 +386,11 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
                 "kernel_family": run.route.identity.kernel_family,
                 "execution_model": _execution_model(run.route.identity.simulation_method),
                 "contraction_execution_target": _target(run.route.identity.hardware_target),
-                "accelerator_kind": _accelerator_kind(run.route.identity.hardware_target),
+                "accelerator_kind": result_metadata.get("accelerator_kind") or _accelerator_kind(run.route.identity.hardware_target),
+                "gpu_backend_verified": bool(result_metadata.get("gpu_backend_verified", False)),
+                "gpu_program_executed": bool(result_metadata.get("gpu_program_executed", False)),
+                "gpu_device_name": result_metadata.get("gpu_device_name"),
+                "gpu_runtime_stack": result_metadata.get("gpu_runtime_stack"),
                 "execution_scope": _execution_scope(run.route.identity.simulation_method),
                 "output_kind": run.output_kind,
                 "comparison_output_kind": run.comparison_output_kind,
@@ -398,7 +411,7 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
                 "validation_time_s": float(validation_time_s),
                 "output_materialization_time_s": float(run.output_materialization_time_s),
                 "timing_scope": "end_to_end_and_compute",
-                "gpu_synchronized": bool(run.result.metadata.get("gpu_synchronized", False)),
+                "gpu_synchronized": bool(result_metadata.get("gpu_synchronized", False)),
                 "validation_method": validation_method,
                 "resource_guard_status": "executed",
                 "resource_skip_reason": None,
@@ -532,6 +545,22 @@ def _resource_guard_skip_reason(route_config: JsonDict, graph: Any) -> str | Non
     return None
 
 
+def _route_is_internal_diagnostic(route_config: JsonDict, route: ExecutionRoute) -> bool:
+    route_metadata = _route_benchmark_metadata(route_config, route)
+    return (
+        str(route_config.get("role") or "") == "optional_diagnostic"
+        or str(route_metadata.get("benchmark_role") or "") == "internal_debug_baseline"
+    )
+
+
+def _route_failure_is_fatal(route_config: JsonDict, route: ExecutionRoute, anchor_route_id: str) -> bool:
+    if route.name == anchor_route_id:
+        return True
+    if _route_is_internal_diagnostic(route_config, route):
+        return False
+    return bool(route_config.get("required"))
+
+
 def _route_benchmark_metadata(route_config: JsonDict, route: ExecutionRoute) -> JsonDict:
     defaults = {
         "quest_cpu_full_state_exact": (
@@ -610,6 +639,10 @@ def _skipped_route_row(
             "execution_model": _execution_model(route.identity.simulation_method),
             "contraction_execution_target": _target(route.identity.hardware_target),
             "accelerator_kind": _accelerator_kind(route.identity.hardware_target),
+            "gpu_backend_verified": False,
+            "gpu_program_executed": False,
+            "gpu_device_name": None,
+            "gpu_runtime_stack": None,
             "execution_scope": _execution_scope(route.identity.simulation_method),
             "output_kind": route.identity.output_contract,
             "comparison_output_kind": "not_applicable",
@@ -760,6 +793,10 @@ def _normalized_record(run_dir: Path, row: JsonDict, *, case_id: str) -> JsonDic
         "execution_target": row.get("contraction_execution_target"),
         "contraction_execution_target": row.get("contraction_execution_target"),
         "accelerator_kind": row.get("accelerator_kind"),
+        "gpu_backend_verified": bool(row.get("gpu_backend_verified", False)),
+        "gpu_program_executed": bool(row.get("gpu_program_executed", False)),
+        "gpu_device_name": row.get("gpu_device_name"),
+        "gpu_runtime_stack": row.get("gpu_runtime_stack"),
         "upmem_execution_mode": None,
         "native_sdk_control_path": None,
         "simplepim_api_used": None,
@@ -826,6 +863,10 @@ def _normalized_record(run_dir: Path, row: JsonDict, *, case_id: str) -> JsonDic
                 "gate_count": row.get("gate_count"),
                 "two_qubit_gate_count": row.get("two_qubit_gate_count"),
                 "dependency_metadata": row.get("dependency_metadata"),
+                "gpu_backend_verified": bool(row.get("gpu_backend_verified", False)),
+                "gpu_program_executed": bool(row.get("gpu_program_executed", False)),
+                "gpu_device_name": row.get("gpu_device_name"),
+                "gpu_runtime_stack": row.get("gpu_runtime_stack"),
                 "benchmark_role": row.get("benchmark_role"),
                 "route_role_description": row.get("route_role_description"),
                 "route_limitation_scope": row.get("route_limitation_scope"),
@@ -1083,6 +1124,11 @@ def _dependency_metadata(run: ComparableRouteRun) -> JsonDict:
         {
             "dependency_versions": metadata.get("dependency_versions"),
             "quest": metadata.get("quest"),
+            "gpu_backend_verified": metadata.get("gpu_backend_verified"),
+            "gpu_program_executed": metadata.get("gpu_program_executed"),
+            "gpu_device_name": metadata.get("gpu_device_name"),
+            "gpu_runtime_stack": metadata.get("gpu_runtime_stack"),
+            "gpu_toolkit_metadata": metadata.get("gpu_toolkit_metadata"),
             "external_library": metadata.get("external_library", run.route.backend_family not in {"cpu", "quest"}),
             "route_metadata_keys": sorted(metadata),
         }

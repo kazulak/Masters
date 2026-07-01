@@ -109,6 +109,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.be
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simulation-backend-compare --suite configs/suites/simulation_backend_compare_thesis_small.yml --artifact-retention compact
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simulation-backend-compare --suite configs/suites/simulation_backend_compare_compute_medium.yml --artifact-retention compact
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simulation-backend-probe
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simulation-backend-probe --verify-gpu auto
 ```
 
 `simulation_backend_compare_quick.yml` is for validation. The thesis-small and
@@ -118,6 +119,25 @@ circuits, statevector output caps, and explicit runtime-class metadata.
 on CPU-only/no-ROCm environments. `simulation_backend_compare_gpu_medium.yml`
 is a scaffold for verified GPU routes; optional GPU candidates remain probe
 metadata until a backend proves real GPU execution.
+`simulation-backend-probe --verify-gpu auto` attempts the first plausible
+tailored QuEST GPU path only: AMD selects HIP/ROCm, NVIDIA selects CUDA. It
+writes a verification or blocker artifact under `build/gpu_verification/`; on
+the current local AMD setup the expected blocker is missing ROCm device/runtime
+access (`/dev/kfd`, `/dev/dri`, `hipcc`, and `rocminfo`).
+For a focused GPU execution attempt, use the execution-only suite. It contains
+only the QuEST CPU full-state anchor and the optional verified QuEST GPU route,
+so internal/debug TN routes cannot abort the GPU run:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simulation-backend-probe --verify-gpu quest-hip
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simulation-backend-compare --suite configs/suites/simulation_backend_compare_gpu_execution_only.yml --artifact-retention compact
+```
+
+Inspect `normalized_records.jsonl` in the output run. Real GPU rows require
+`contraction_execution_target=gpu`, `gpu_backend_verified=true`,
+`gpu_program_executed=true`, and an AMD device name such as Radeon RX 6600 or
+`gfx1032`. If verification is blocked, the suite still produces CPU anchor rows
+and emits no fake GPU benchmark rows.
 `simulation_backend_compare_compute_large.yml` is manual thesis evidence only:
 it carries high-memory/long-runtime resource metadata, uses guarded optional TN
 routes, and is not part of routine validation or CI.
@@ -215,7 +235,9 @@ Use these rules when interpreting artifacts:
 - `simulation-backend-probe` reports optional external-library and GPU
   feasibility. It classifies candidates as `tailored_quantum_gpu`,
   `cuda_quantum_stack`, `generic_tensor_gpu`, or `feasibility_only`; it does not
-  emit benchmark records.
+  emit benchmark records. `--verify-gpu auto` chooses QuEST HIP on AMD hardware
+  or QuEST CUDA on NVIDIA hardware; generic PyTorch/ROCm remains a feasibility
+  fallback, not the tailored quantum GPU baseline.
 - `upmem_sdk_simulator_dense` is a developer bridge backend ID, not a final
   benchmark route.
 - `upmem_sdk_simulator_generic_loop` is an unoptimized developer bridge backend

@@ -54,12 +54,14 @@ def _simulation_record(
 ) -> dict:
     benchmark_roles = {
         "quest_cpu_full_state_exact": "serious_full_state_baseline",
+        "quest_gpu_full_state_exact": "optional_gpu_candidate",
         "cpu_tn_einsum_exact": "internal_debug_baseline",
         "quimb_tn_exact": "serious_external_tn_baseline",
     }
     limitation_scopes = {
         "cpu_tn_einsum_exact": "Internal einsum expression/lowering engine limitation, not a tensor-network approach limitation.",
     }
+    is_gpu = route_id == "quest_gpu_full_state_exact"
     return {
         "schema_version": "benchmark_result_artifact_v1",
         "source_artifact": f"cases/{case_id}/simulation_backend_compare.json",
@@ -75,9 +77,13 @@ def _simulation_record(
         "route_limitation_scope": limitation_scopes.get(route_id, ""),
         "kernel_family": "full_state_vector" if execution_model == "full_state" else "external_tn_contraction",
         "execution_model": execution_model,
-        "execution_target": "cpu",
-        "contraction_execution_target": "cpu",
-        "accelerator_kind": "none",
+        "execution_target": "gpu" if is_gpu else "cpu",
+        "contraction_execution_target": "gpu" if is_gpu else "cpu",
+        "accelerator_kind": "amd_gpu" if is_gpu else "none",
+        "gpu_backend_verified": is_gpu,
+        "gpu_program_executed": is_gpu,
+        "gpu_device_name": "fixture AMD GPU" if is_gpu else None,
+        "gpu_runtime_stack": "amd_rocm" if is_gpu else None,
         "execution_scope": "full_circuit" if execution_model == "full_state" else "full_taskgraph",
         "output_kind": "statevector" if execution_model == "full_state" else "final_tensor",
         "comparison_output_kind": "statevector",
@@ -98,7 +104,7 @@ def _simulation_record(
         "validation_time_s": time_s * 0.02,
         "output_materialization_time_s": time_s * 0.03,
         "timing_scope": "end_to_end_and_compute",
-        "gpu_synchronized": False,
+        "gpu_synchronized": is_gpu,
         "validation_method": "full_statevector",
         "expected_runtime_class": "local_medium",
         "expected_memory_class": "local_bounded",
@@ -171,6 +177,7 @@ def test_report_run_is_non_destructive(tmp_path: Path) -> None:
 def test_report_run_writes_thesis_plot_sources_and_inventory(tmp_path: Path) -> None:
     records = [
         _simulation_record("quest_qrng_3q", "quest_cpu_full_state_exact", n_qubits=3, gate_count=3, backend_family="quest", execution_model="full_state", time_s=0.12),
+        _simulation_record("quest_qrng_3q", "quest_gpu_full_state_exact", n_qubits=3, gate_count=3, backend_family="quest", execution_model="full_state", time_s=0.1),
         _simulation_record("quest_qrng_3q", "cpu_tn_einsum_exact", n_qubits=3, gate_count=3, backend_family="cpu", execution_model="tensor_network", time_s=0.08, max_abs_error=1.0e-15),
         _simulation_record("quest_qrng_3q", "quimb_tn_exact", n_qubits=3, gate_count=3, backend_family="quimb", execution_model="tensor_network", time_s=0.09, max_abs_error=1.0e-15),
         _simulation_record("quest_qrng_5q", "quest_cpu_full_state_exact", n_qubits=5, gate_count=5, backend_family="quest", execution_model="full_state", time_s=0.2),
@@ -201,6 +208,11 @@ def test_report_run_writes_thesis_plot_sources_and_inventory(tmp_path: Path) -> 
     internal_rows = [row for row in rows if row["route_id"] == "cpu_tn_einsum_exact"]
     assert internal_rows
     assert all("not a tensor-network approach limitation" in row["route_limitation_scope"] for row in internal_rows)
+    gpu_rows = [row for row in rows if row["route_id"] == "quest_gpu_full_state_exact"]
+    assert gpu_rows
+    assert all(row["contraction_execution_target"] == "gpu" for row in gpu_rows)
+    assert all(row["accelerator_kind"] == "amd_gpu" for row in gpu_rows)
+    assert all(row["gpu_backend_verified"] == "True" for row in gpu_rows)
     with relative_csv.open("r", encoding="utf-8", newline="") as handle:
         relative_rows = list(csv.DictReader(handle))
     assert relative_rows

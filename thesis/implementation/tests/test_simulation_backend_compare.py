@@ -5,15 +5,17 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from quantum_bench.bench.config import load_suite
 from quantum_bench.bench.result_artifacts import load_result_records
-from quantum_bench.bench.simulation_backend_probe import probe_simulation_backends
+from quantum_bench.bench.simulation_backend_probe import _select_gpu_backend, _verify_gpu_backend, probe_simulation_backends
 from quantum_bench.bench.simulation_backend_compare import _resource_guard_skip_reason, run_simulation_backend_compare
 from quantum_bench.bench.config import route_config_for
 from quantum_bench.circuits import quest_compatible_circuit
 from quantum_bench.core.records import BenchmarkContext, ExecutionProfile, RouteCapabilities, RouteIdentity, RouteOutput, RouteProbe, RouteResult
 from quantum_bench.providers.exact_tn import CpuTnEinsumExactRoute
+from quantum_bench.providers.full_state.quest_gpu import QuestGpuFullStateExactRoute, quest_gpu_verification_path
 from quantum_bench.providers import route_registry
 from quantum_bench.tn import build_tensor_network, execute_task_sequence_np_einsum, plan_task_graph_with_config
 from quantum_bench.validation import tensor_to_quest_statevector
@@ -185,6 +187,7 @@ def test_simulation_backend_compare_suite_loads() -> None:
     compute_medium = load_suite(ROOT / "configs" / "suites" / "simulation_backend_compare_compute_medium.yml")
     compute_large = load_suite(ROOT / "configs" / "suites" / "simulation_backend_compare_compute_large.yml")
     gpu_medium = load_suite(ROOT / "configs" / "suites" / "simulation_backend_compare_gpu_medium.yml")
+    gpu_execution_only = load_suite(ROOT / "configs" / "suites" / "simulation_backend_compare_gpu_execution_only.yml")
     for loaded in (thesis_small, scaling):
         assert loaded["route_policy"]["routes"] == ["cpu_tn_einsum_exact", "quest_cpu_full_state_exact", "quimb_tn_exact"]
         assert loaded["metadata"]["deterministic_unitary_only"] is True
@@ -218,6 +221,12 @@ def test_simulation_backend_compare_suite_loads() -> None:
     assert gpu_medium["metadata"]["gpu_execution_suite"] is True
     assert "quest_gpu_full_state_exact" in gpu_medium["route_policy"]["routes"]
     assert gpu_medium["_route_configs"][-1]["required"] is False
+    assert gpu_execution_only["metadata"]["gpu_execution_suite"] is True
+    assert gpu_execution_only["route_policy"]["routes"] == ["quest_cpu_full_state_exact", "quest_gpu_full_state_exact"]
+    assert gpu_execution_only["warmups"] == 0
+    assert gpu_execution_only["repeats"] == 1
+    assert all(route["id"] not in {"cpu_tn_einsum_exact", "quimb_tn_exact"} for route in gpu_execution_only["_route_configs"])
+    assert gpu_execution_only["_route_configs"][1]["required"] is False
 
 
 def test_resource_guard_missing_estimate_policy_is_explicit() -> None:
@@ -422,6 +431,203 @@ validation:
     assert failed_optional["resource_skip_reason"].startswith("memory_error:")
 
 
+def test_required_internal_debug_memory_error_is_nonfatal(monkeypatch, tmp_path: Path) -> None:
+    suite_path = tmp_path / "suite.yml"
+    suite_path.write_text(
+        """
+schema_version: 2
+suite_id: unit_required_debug_memory_error_compare
+metadata:
+  expected_runtime_class: manual_large
+workloads:
+  - id: quest_bv_3q
+    circuit: {kind: quest_compatible, name: BV, n_qubits: 3}
+routes:
+  - id: quest_cpu_full_state_exact
+    role: comparison_anchor
+    required: true
+  - id: cpu_tn_einsum_exact
+    role: optional_diagnostic
+    benchmark_role: internal_debug_baseline
+    required: true
+validation:
+  reference_route: quest_cpu_full_state_exact
+  tolerances:
+    max_abs_error: 1.0e-9
+    l2_error: 1.0e-8
+    max_rel_error: 1.0e-8
+    norm_drift: 1.0e-8
+    min_fidelity: 0.999999999
+""",
+        encoding="utf-8",
+    )
+
+    class FakeQuestRoute:
+        name = "quest_cpu_full_state_exact"
+        backend_family = "quest"
+        identity = RouteIdentity(name, "fake quest", "baseline", "full_state_vector", "full_state_vector", "cpu", "test", "statevector", "compare_statevector")
+
+        def probe(self):
+            return RouteProbe(self.name, True)
+
+        def capabilities(self):
+            return RouteCapabilities(self.identity, can_return_output=True)
+
+        def can_execute(self, graph, context):
+            return True, None
+
+        def estimate(self, graph, context):  # pragma: no cover
+            raise NotImplementedError
+
+        def prepare(self, graph, network, context):
+            return {"graph": graph, "network": network}
+
+        def execute(self, prepared, context):
+            output, _ = execute_task_sequence_np_einsum(prepared["graph"], prepared["network"])
+            return RouteResult(
+                self.name,
+                self.backend_family,
+                "passed",
+                RouteOutput("statevector", array=tensor_to_quest_statevector(output), shape=(8,), dtype="complex128", metadata={}),
+                ExecutionProfile(kernel_s=0.001, total_s=0.002),
+                None,
+                "unavailable",
+            )
+
+    class DebugMemoryErrorRoute:
+        name = "cpu_tn_einsum_exact"
+        backend_family = "internal"
+        identity = RouteIdentity(name, "fake cpu tn", "baseline", "exact_tensor_network", "cpu_einsum", "cpu", "test", "final_tensor", "compare_output")
+
+        def probe(self):
+            return RouteProbe(self.name, True)
+
+        def capabilities(self):
+            return RouteCapabilities(self.identity, can_return_output=True)
+
+        def can_execute(self, graph, context):
+            return True, None
+
+        def estimate(self, graph, context):  # pragma: no cover
+            raise NotImplementedError
+
+        def prepare(self, graph, network, context):
+            return {}
+
+        def execute(self, prepared, context):
+            raise MemoryError("diagnostic route memory limit")
+
+    monkeypatch.setattr(
+        "quantum_bench.bench.simulation_backend_compare.route_registry",
+        lambda root_dir: {"quest_cpu_full_state_exact": FakeQuestRoute(), "cpu_tn_einsum_exact": DebugMemoryErrorRoute()},
+    )
+
+    result = run_simulation_backend_compare(tmp_path, suite_path=suite_path, artifact_retention="compact")
+    records = load_result_records([result.run_dir])
+    failed_debug = next(record for record in records if record["route_id"] == "cpu_tn_einsum_exact")
+
+    assert failed_debug["status"] == "failed"
+    assert failed_debug["benchmark_role"] == "internal_debug_baseline"
+    assert failed_debug["validation_status"] == "skipped"
+    assert failed_debug["resource_guard_status"] == "execution_failed"
+    assert failed_debug["resource_skip_reason"].startswith("memory_error:")
+
+
+def test_required_serious_memory_error_remains_fatal(monkeypatch, tmp_path: Path) -> None:
+    suite_path = tmp_path / "suite.yml"
+    suite_path.write_text(
+        """
+schema_version: 2
+suite_id: unit_required_serious_memory_error_compare
+metadata:
+  expected_runtime_class: manual_large
+workloads:
+  - id: quest_bv_3q
+    circuit: {kind: quest_compatible, name: BV, n_qubits: 3}
+routes:
+  - id: quest_cpu_full_state_exact
+    role: comparison_anchor
+    required: true
+  - id: quimb_tn_exact
+    role: baseline
+    benchmark_role: serious_external_tn_baseline
+    required: true
+validation:
+  reference_route: quest_cpu_full_state_exact
+  tolerances:
+    max_abs_error: 1.0e-9
+    l2_error: 1.0e-8
+    max_rel_error: 1.0e-8
+    norm_drift: 1.0e-8
+    min_fidelity: 0.999999999
+""",
+        encoding="utf-8",
+    )
+
+    class FakeQuestRoute:
+        name = "quest_cpu_full_state_exact"
+        backend_family = "quest"
+        identity = RouteIdentity(name, "fake quest", "baseline", "full_state_vector", "full_state_vector", "cpu", "test", "statevector", "compare_statevector")
+
+        def probe(self):
+            return RouteProbe(self.name, True)
+
+        def capabilities(self):
+            return RouteCapabilities(self.identity, can_return_output=True)
+
+        def can_execute(self, graph, context):
+            return True, None
+
+        def estimate(self, graph, context):  # pragma: no cover
+            raise NotImplementedError
+
+        def prepare(self, graph, network, context):
+            return {"graph": graph, "network": network}
+
+        def execute(self, prepared, context):
+            output, _ = execute_task_sequence_np_einsum(prepared["graph"], prepared["network"])
+            return RouteResult(
+                self.name,
+                self.backend_family,
+                "passed",
+                RouteOutput("statevector", array=tensor_to_quest_statevector(output), shape=(8,), dtype="complex128", metadata={}),
+                ExecutionProfile(kernel_s=0.001, total_s=0.002),
+                None,
+                "unavailable",
+            )
+
+    class SeriousMemoryErrorRoute:
+        name = "quimb_tn_exact"
+        backend_family = "quimb"
+        identity = RouteIdentity(name, "fake quimb", "baseline", "exact_tensor_network", "external_tn_contraction", "cpu", "test", "final_tensor", "compare_output")
+
+        def probe(self):
+            return RouteProbe(self.name, True)
+
+        def capabilities(self):
+            return RouteCapabilities(self.identity, can_return_output=True)
+
+        def can_execute(self, graph, context):
+            return True, None
+
+        def estimate(self, graph, context):  # pragma: no cover
+            raise NotImplementedError
+
+        def prepare(self, graph, network, context):
+            return {}
+
+        def execute(self, prepared, context):
+            raise MemoryError("serious route memory limit")
+
+    monkeypatch.setattr(
+        "quantum_bench.bench.simulation_backend_compare.route_registry",
+        lambda root_dir: {"quest_cpu_full_state_exact": FakeQuestRoute(), "quimb_tn_exact": SeriousMemoryErrorRoute()},
+    )
+
+    with pytest.raises(MemoryError, match="serious route memory limit"):
+        run_simulation_backend_compare(tmp_path, suite_path=suite_path, artifact_retention="compact")
+
+
 def test_optional_route_value_error_becomes_normalized_skip(monkeypatch, tmp_path: Path) -> None:
     suite_path = tmp_path / "suite.yml"
     suite_path.write_text(
@@ -558,14 +764,147 @@ def test_simulation_backend_probe_reports_gpu_feasibility_without_records() -> N
     report = probe_simulation_backends(ROOT)
 
     assert report["schema_version"] == "simulation_backend_probe_v1"
+    gpu_route = next(route for route in report["routes"] if route["route_id"] == "quest_gpu_full_state_exact")
+    assert gpu_route["available"] == bool(gpu_route["metadata"].get("gpu_backend_verified", False))
     assert any(route["route_id"] == "quimb_tn_exact" for route in report["routes"])
     assert report["gpu_probe"]["cuda_only_assumption_used"] is False
-    assert report["gpu_probe"]["gpu_execution_backend_added"] is False
     assert report["gpu_probe"]["gpu_benchmark_records_emitted"] is False
     candidates = report["gpu_probe"]["gpu_candidates"]
     assert candidates
     assert {candidate["candidate_category"] for candidate in candidates} >= {"tailored_quantum_gpu", "cuda_quantum_stack", "generic_tensor_gpu"}
     quest_hip = next(candidate for candidate in candidates if candidate["candidate_id"] == "quest_gpu_full_state_hip")
     assert quest_hip["source_support_is_not_benchmark_evidence"] is True
-    assert quest_hip["gpu_execution_verified"] is False
-    assert all(candidate["benchmark_route_eligible"] == candidate["gpu_execution_verified"] for candidate in candidates)
+    assert report["gpu_probe"]["gpu_execution_backend_added"] == bool(quest_hip["gpu_execution_verified"])
+    assert all((not candidate["benchmark_route_eligible"]) or candidate["gpu_execution_verified"] for candidate in candidates)
+
+
+def test_gpu_verify_auto_selects_tailored_backend_by_hardware() -> None:
+    assert _select_gpu_backend("auto", {"amd_gpu_pci_detected": True, "nvidia_gpu_pci_detected": False}) == "quest-hip"
+    assert _select_gpu_backend("auto", {"amd_gpu_pci_detected": False, "nvidia_gpu_pci_detected": True}) == "quest-cuda"
+    assert _select_gpu_backend("auto", {"amd_gpu_pci_detected": False, "nvidia_gpu_pci_detected": False}) is None
+    assert _select_gpu_backend("torch-rocm", {"amd_gpu_pci_detected": True}) == "torch-rocm"
+
+
+def test_failed_gpu_verification_writes_blocker_artifact(tmp_path: Path) -> None:
+    report = _verify_gpu_backend(
+        tmp_path,
+        "auto",
+        {
+            "amd_gpu_pci_detected": True,
+            "nvidia_gpu_pci_detected": False,
+            "dev_kfd_present": False,
+            "dev_dri_present": False,
+        },
+    )
+
+    artifact = quest_gpu_verification_path(tmp_path)
+    assert artifact.exists()
+    assert report["status"] == "blocked"
+    assert report["selected_backend"] == "quest-hip"
+    assert report["gpu_backend_verified"] is False
+    assert "missing_prerequisites" in report
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == "quest_gpu_verification_v1"
+    assert payload["attempted_steps"][0]["step"] == "preflight"
+
+
+def test_optional_unverified_gpu_route_emits_no_benchmark_record(monkeypatch, tmp_path: Path) -> None:
+    suite_path = tmp_path / "suite.yml"
+    suite_path.write_text(
+        """
+schema_version: 2
+suite_id: unit_gpu_optional_compare
+defaults:
+  warmups: 0
+  repeats: 1
+  planner:
+    engine: opt_einsum
+    optimize: greedy
+metadata:
+  validation_method: full_statevector
+workloads:
+  - id: quest_qrng_2q
+    circuit: {kind: quest_compatible, name: QRNG, n_qubits: 2}
+routes:
+  - id: quest_cpu_full_state_exact
+    role: comparison_anchor
+    required: true
+  - id: quest_gpu_full_state_exact
+    role: optional_gpu_candidate
+    required: false
+validation:
+  reference_route: quest_cpu_full_state_exact
+  require_output_for_roles:
+    - comparison_anchor
+  tolerances:
+    max_abs_error: 1.0e-9
+    l2_error: 1.0e-8
+    max_rel_error: 1.0e-8
+    norm_drift: 1.0e-8
+    min_fidelity: 0.999999999
+""",
+        encoding="utf-8",
+    )
+
+    class FakeQuestRoute:
+        name = "quest_cpu_full_state_exact"
+        backend_family = "quest"
+        identity = RouteIdentity(
+            route_id=name,
+            display_name="fake quest",
+            role="baseline",
+            simulation_method="full_state_vector",
+            kernel_family="full_state_vector",
+            hardware_target="cpu",
+            execution_mode="test",
+            output_contract="statevector",
+            validation_mode="compare_statevector",
+        )
+
+        def probe(self):
+            return RouteProbe(self.name, True)
+
+        def capabilities(self):
+            return RouteCapabilities(self.identity, can_return_output=True)
+
+        def can_execute(self, graph, context):
+            return True, None
+
+        def estimate(self, graph, context):  # pragma: no cover - not used by this harness
+            raise NotImplementedError
+
+        def prepare(self, graph, network, context):
+            return {"graph": graph, "network": network}
+
+        def execute(self, prepared, context):
+            state = np.zeros(4, dtype=np.complex128)
+            state[0] = 0.5
+            state[1] = 0.5
+            state[2] = 0.5
+            state[3] = 0.5
+            return RouteResult(
+                self.name,
+                self.backend_family,
+                "passed",
+                RouteOutput("statevector", array=state, shape=state.shape, dtype=str(state.dtype), metadata={}),
+                ExecutionProfile(kernel_s=0.001, total_s=0.002),
+                None,
+                "unavailable",
+                None,
+                {"quest": {"status": "ok"}},
+            )
+
+    monkeypatch.setattr(
+        "quantum_bench.bench.simulation_backend_compare.route_registry",
+        lambda root_dir: {
+            "quest_cpu_full_state_exact": FakeQuestRoute(),
+            "quest_gpu_full_state_exact": QuestGpuFullStateExactRoute(tmp_path),
+        },
+    )
+
+    result = run_simulation_backend_compare(tmp_path, suite_path=suite_path, artifact_retention="compact")
+    records = load_result_records([result.run_dir])
+
+    assert {record["route_id"] for record in records} == {"quest_cpu_full_state_exact"}
+    assert all(record["contraction_execution_target"] == "cpu" for record in records)
+    assert all(record["gpu_backend_verified"] is False for record in records)

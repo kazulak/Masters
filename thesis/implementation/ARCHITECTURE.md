@@ -220,6 +220,10 @@ generic tensor GPU paths can appear as candidates. Source support such as
 `ENABLE_HIP` or `ENABLE_CUDA` is not a benchmarkable route until build, run, and
 minimal GPU execution are verified. Generated GPU/native build artifacts must
 stay out of submodule source trees or be ignored/cleaned.
+`simulation-backend-probe --verify-gpu auto` is the explicit verification path:
+AMD hardware selects QuEST HIP/ROCm, NVIDIA hardware selects QuEST CUDA, and
+generic PyTorch/ROCm is never promoted to the tailored quantum GPU route. Failed
+attempts write blocker artifacts under `build/gpu_verification/`.
 
 ## Synthetic Pressure Workloads
 

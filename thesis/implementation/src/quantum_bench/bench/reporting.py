@@ -52,6 +52,10 @@ REPORT_RESULT_FIELDS = [
     "validation_status",
     "contraction_execution_target",
     "accelerator_kind",
+    "gpu_backend_verified",
+    "gpu_program_executed",
+    "gpu_device_name",
+    "gpu_runtime_stack",
     "upmem_execution_mode",
     "execution_scope",
     "task_count",
@@ -105,6 +109,7 @@ TIMING_FIELDS = [
 
 BACKEND_LABELS = {
     "quest_cpu_full_state_exact": "QuEST full-state",
+    "quest_gpu_full_state_exact": "QuEST GPU full-state",
     "cpu_tn_einsum_exact": "Internal CPU TN",
     "quimb_tn_exact": "Quimb TN",
     "upmem_tn_runtime": "UPMEM TN runtime",
@@ -124,6 +129,10 @@ PLOT_DATA_FIELDS = [
     "execution_model",
     "contraction_execution_target",
     "accelerator_kind",
+    "gpu_backend_verified",
+    "gpu_program_executed",
+    "gpu_device_name",
+    "gpu_runtime_stack",
     "status",
     "validation_status",
     "total_wall_time_s",
@@ -348,6 +357,7 @@ def compare_runs(baseline: Path, candidate: Path, out_dir: Path) -> CompareRunsR
             "policy",
             "quantization_mode",
             "contraction_execution_target",
+            "accelerator_kind",
             "upmem_execution_mode",
         ),
     )
@@ -360,7 +370,7 @@ def compare_runs(baseline: Path, candidate: Path, out_dir: Path) -> CompareRunsR
     kernel = _compare_grouped(
         baseline_records,
         candidate_records,
-        key_fields=("case_id", "policy", "quantization_mode", "contraction_execution_target", "upmem_execution_mode", "kernel_family"),
+        key_fields=("case_id", "policy", "quantization_mode", "contraction_execution_target", "accelerator_kind", "upmem_execution_mode", "kernel_family"),
     )
     payload = {
         "schema_version": COMPARE_RUNS_SCHEMA_VERSION,
@@ -380,6 +390,7 @@ def compare_runs(baseline: Path, candidate: Path, out_dir: Path) -> CompareRunsR
                     "policy",
                     "quantization_mode",
                     "contraction_execution_target",
+                    "accelerator_kind",
                     "upmem_execution_mode",
                 ),
                 "cpu": ("case_id", "contraction_execution_target", "execution_scope"),
@@ -388,6 +399,7 @@ def compare_runs(baseline: Path, candidate: Path, out_dir: Path) -> CompareRunsR
                     "policy",
                     "quantization_mode",
                     "contraction_execution_target",
+                    "accelerator_kind",
                     "upmem_execution_mode",
                     "kernel_family",
                 ),
@@ -844,6 +856,10 @@ def _plot_data_row(record: JsonDict) -> JsonDict:
         "execution_model": record.get("execution_model"),
         "contraction_execution_target": record.get("contraction_execution_target") or record.get("execution_target"),
         "accelerator_kind": record.get("accelerator_kind") or "none",
+        "gpu_backend_verified": bool(record.get("gpu_backend_verified", False)),
+        "gpu_program_executed": bool(record.get("gpu_program_executed", False)),
+        "gpu_device_name": record.get("gpu_device_name"),
+        "gpu_runtime_stack": record.get("gpu_runtime_stack"),
         "status": record.get("status"),
         "validation_status": record.get("validation_status"),
         "total_wall_time_s": _float_or_none(record.get("total_wall_time_s_median") if record.get("total_wall_time_s_median") is not None else record.get("total_wall_time_s")),

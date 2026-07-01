@@ -1,0 +1,66 @@
+schema_version: 2
+suite_id: simulation_backend_compare_gpu_execution_only
+
+metadata:
+  purpose: verified_gpu_execution_only
+  expected_runtime_class: local_gpu_seconds
+  expected_memory_class: small_statevector
+  intended_use: gpu_execution_validation
+  deterministic_unitary_only: true
+  gpu_execution_suite: true
+  requires_verified_gpu_for_gpu_rows: true
+  validation_tier: correctness
+  validation_method: full_statevector
+  statevector_cap_qubits: 4
+  statevector_cap_amplitudes: 16
+  max_qubits: 4
+  notes: Only QuEST CPU full-state anchor and verified QuEST GPU route are included; no internal diagnostic TN routes.
+
+defaults:
+  warmups: 0
+  repeats: 1
+  timeout_s: 120
+  memory_guard_gib: 4
+  planner:
+    engine: opt_einsum
+    optimize: greedy
+
+workloads:
+  - id: quest_qrng_4q
+    circuit: {kind: quest_compatible, name: QRNG, n_qubits: 4}
+  - id: quest_bv_4q
+    circuit: {kind: quest_compatible, name: BV, n_qubits: 4}
+  - id: quest_xor_4q
+    circuit: {kind: quest_compatible, name: XOR, n_qubits: 4}
+
+routes:
+  - id: quest_cpu_full_state_exact
+    role: comparison_anchor
+    benchmark_role: serious_full_state_baseline
+    route_role_description: Serious QuEST CPU full-state comparison anchor.
+    required: true
+    options:
+      max_output_qubits: 4
+      max_output_amplitudes: 16
+      max_output_bytes: 256
+
+  - id: quest_gpu_full_state_exact
+    role: optional_gpu_candidate
+    benchmark_role: optional_gpu_candidate
+    route_role_description: Verified QuEST GPU full-state route; emits benchmark rows only after real GPU execution is proven.
+    required: false
+    options:
+      max_output_qubits: 4
+      max_output_amplitudes: 16
+      max_output_bytes: 256
+
+validation:
+  reference_route: quest_cpu_full_state_exact
+  require_output_for_roles:
+    - comparison_anchor
+  tolerances:
+    max_abs_error: 1.0e-9
+    l2_error: 1.0e-8
+    max_rel_error: 1.0e-8
+    norm_drift: 1.0e-8
+    min_fidelity: 0.999999999
