@@ -52,6 +52,14 @@ def _simulation_record(
     max_abs_error: float = 0.0,
     probability_l1_error: float = 0.0,
 ) -> dict:
+    benchmark_roles = {
+        "quest_cpu_full_state_exact": "serious_full_state_baseline",
+        "cpu_tn_einsum_exact": "internal_debug_baseline",
+        "quimb_tn_exact": "serious_external_tn_baseline",
+    }
+    limitation_scopes = {
+        "cpu_tn_einsum_exact": "Internal einsum expression/lowering engine limitation, not a tensor-network approach limitation.",
+    }
     return {
         "schema_version": "benchmark_result_artifact_v1",
         "source_artifact": f"cases/{case_id}/simulation_backend_compare.json",
@@ -62,6 +70,9 @@ def _simulation_record(
         "route_id": route_id,
         "backend_id": route_id,
         "backend_family": backend_family,
+        "benchmark_role": benchmark_roles.get(route_id),
+        "route_role_description": f"{route_id} fixture route",
+        "route_limitation_scope": limitation_scopes.get(route_id, ""),
         "kernel_family": "full_state_vector" if execution_model == "full_state" else "external_tn_contraction",
         "execution_model": execution_model,
         "execution_target": "cpu",
@@ -89,6 +100,15 @@ def _simulation_record(
         "timing_scope": "end_to_end_and_compute",
         "gpu_synchronized": False,
         "validation_method": "full_statevector",
+        "expected_runtime_class": "local_medium",
+        "expected_memory_class": "local_bounded",
+        "intended_use": "local_validation",
+        "max_qubits": n_qubits,
+        "manual_invocation_required": False,
+        "expected_risk": [],
+        "known_heavy_backends": [],
+        "resource_guard_status": "executed",
+        "resource_skip_reason": None,
         "repeat_id": 0,
         "measured_repeat_count": 1,
         "hardware_speedup": "not_applicable",
@@ -176,6 +196,11 @@ def test_report_run_writes_thesis_plot_sources_and_inventory(tmp_path: Path) -> 
     with backend_csv.open("r", encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle))
     assert {row["case_family"] for row in rows} >= {"qrng", "bv"}
+    assert {row["expected_runtime_class"] for row in rows} == {"local_medium"}
+    assert {row["benchmark_role"] for row in rows} >= {"serious_full_state_baseline", "serious_external_tn_baseline", "internal_debug_baseline"}
+    internal_rows = [row for row in rows if row["route_id"] == "cpu_tn_einsum_exact"]
+    assert internal_rows
+    assert all("not a tensor-network approach limitation" in row["route_limitation_scope"] for row in internal_rows)
     with relative_csv.open("r", encoding="utf-8", newline="") as handle:
         relative_rows = list(csv.DictReader(handle))
     assert relative_rows

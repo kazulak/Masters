@@ -104,6 +104,9 @@ def _normalize_route_entry(entry: Any) -> dict[str, Any]:
     return {
         "id": route_id,
         "role": entry.get("role"),
+        "benchmark_role": entry.get("benchmark_role"),
+        "route_role_description": entry.get("route_role_description"),
+        "route_limitation_scope": entry.get("route_limitation_scope"),
         "required": bool(entry.get("required", False)),
         "options": entry.get("options") or {},
     }

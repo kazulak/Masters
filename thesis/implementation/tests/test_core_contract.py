@@ -64,14 +64,17 @@ def test_suite_v2_config_loads_with_separate_workloads_and_routes() -> None:
 def test_route_probe_and_upmem_skip_reason() -> None:
     routes = route_registry(ROOT)
     assert routes["cpu_tn_einsum_exact"].probe().available
+    assert routes["cpu_tn_einsum_exact"].identity.role == "internal_debug_baseline"
     assert routes["cpu_tn_einsum_exact"].identity.output_contract == "final_tensor"
     assert routes["cpu_tn_einsum_exact"].identity.validation_mode == "compare_output"
     assert routes["quest_cpu_full_state_benchmark"].identity.output_contract == "metrics_only"
     assert routes["quest_cpu_full_state_benchmark"].identity.validation_mode == "benchmark_only"
     assert routes["quest_cpu_full_state_exact"].identity.output_contract == "statevector"
+    assert routes["quest_cpu_full_state_exact"].identity.role == "serious_full_state_baseline"
     assert routes["quest_cpu_full_state_exact"].identity.validation_mode == "compare_statevector"
     assert routes["quest_cpu_full_state_exact"].backend_family == "quest"
     assert routes["quimb_tn_exact"].identity.output_contract == "final_tensor"
+    assert routes["quimb_tn_exact"].identity.role == "serious_external_tn_baseline"
     assert routes["quimb_tn_exact"].identity.validation_mode == "compare_output"
     assert routes["quimb_tn_exact"].backend_family == "quimb"
     assert routes["upmem_dense_int8_placeholder"].identity.hardware_target == "upmem_dpu"

@@ -35,6 +35,9 @@ RESULT_FIELDS = [
     "anchor_route_id",
     "route_id",
     "backend_family",
+    "benchmark_role",
+    "route_role_description",
+    "route_limitation_scope",
     "kernel_family",
     "execution_model",
     "contraction_execution_target",
@@ -76,6 +79,15 @@ RESULT_FIELDS = [
     "timing_scope",
     "gpu_synchronized",
     "validation_method",
+    "expected_runtime_class",
+    "expected_memory_class",
+    "intended_use",
+    "max_qubits",
+    "manual_invocation_required",
+    "expected_risk",
+    "known_heavy_backends",
+    "resource_guard_status",
+    "resource_skip_reason",
     "total_wall_time_s_median",
     "total_wall_time_s_min",
     "total_wall_time_s_mean",
@@ -201,7 +213,25 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
     warmups = int(suite.get("warmups", 0) or 0)
     repeats = int(suite.get("repeats", 1) or 1)
     validation_method = _validation_method(suite)
+    circuit_meta = manifest(circuit)
+    gate_counts = circuit_meta["gate_counts"]
+    resource_profile = _resource_profile(suite)
+    common = {
+        "case_id": case_id,
+        "workload_id": str(case_payload.get("workload_id", case_id)),
+        "suite_id": suite["suite_id"],
+        "anchor_route_id": anchor_route_id,
+        "n_qubits": circuit.n_qubits,
+        "gate_count": int(gate_counts["total"]),
+        "two_qubit_gate_count": int(gate_counts["2q"]),
+        "tn_task_count": len(graph.tasks),
+        "tn_max_intermediate_bytes": int(graph.path_summary.max_intermediate_bytes),
+        "tn_estimated_flops": int(graph.path_summary.total_estimated_flops),
+        "tn_estimated_bytes": int(sum(task.estimated_bytes for task in graph.tasks)),
+        **resource_profile,
+    }
     executable_routes: list[ExecutionRoute] = []
+    skipped_rows: list[JsonDict] = []
     optional_backend_reports: list[JsonDict] = []
     routes = route_registry(root_dir)
     for route_id in suite["route_policy"]["routes"]:
@@ -218,6 +248,23 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
             if required:
                 raise ValueError(f"Required route {route_id} does not return comparable output")
             optional_backend_reports.append(_optional_backend_report(case_id, route_id, "not_output_comparable"))
+            continue
+        resource_skip_reason = _resource_guard_skip_reason(route_config, graph)
+        if resource_skip_reason:
+            if required:
+                raise RuntimeError(resource_skip_reason)
+            optional_backend_reports.append(_optional_backend_report(case_id, route_id, resource_skip_reason))
+            skipped_rows.extend(
+                _skipped_route_rows(
+                    common,
+                    route=route,
+                    route_metadata=_route_benchmark_metadata(route_config, route),
+                    repeats=repeats,
+                    reason=resource_skip_reason,
+                    validation_method=validation_method,
+                    guard_status="resource_guard_skipped",
+                )
+            )
             continue
         can_execute, reason = route.can_execute(
             graph,
@@ -237,7 +284,7 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
         for route in executable_routes:
             try:
                 _execute_route(root_dir, run_dir, suite, case_payload, graph, network, route, repeat_id=-(warmup_id + 1))
-            except RuntimeError as exc:
+            except (MemoryError, RuntimeError, ValueError) as exc:
                 if route.name == anchor_route_id or bool(route_config_for(suite, route.name).get("required")):
                     raise
                 optional_backend_reports.append(_optional_backend_report(case_id, route.name, f"warmup_failed:{exc}"))
@@ -247,10 +294,60 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
         for route in executable_routes:
             try:
                 measured_runs.append(_execute_route(root_dir, run_dir, suite, case_payload, graph, network, route, repeat_id=repeat_id))
+            except MemoryError as exc:
+                if route.name == anchor_route_id or bool(route_config_for(suite, route.name).get("required")):
+                    raise
+                reason = f"memory_error:{exc}"
+                optional_backend_reports.append(_optional_backend_report(case_id, route.name, reason))
+                skipped_rows.append(
+                    _skipped_route_row(
+                        common,
+                        route=route,
+                        route_metadata=_route_benchmark_metadata(route_config_for(suite, route.name), route),
+                        repeat_id=repeat_id,
+                        repeats=repeats,
+                        reason=reason,
+                        validation_method=validation_method,
+                        guard_status="execution_failed",
+                        status="failed",
+                    )
+                )
             except RuntimeError as exc:
                 if route.name == anchor_route_id or bool(route_config_for(suite, route.name).get("required")):
                     raise
-                optional_backend_reports.append(_optional_backend_report(case_id, route.name, str(exc)))
+                reason = str(exc)
+                optional_backend_reports.append(_optional_backend_report(case_id, route.name, reason))
+                skipped_rows.append(
+                    _skipped_route_row(
+                        common,
+                        route=route,
+                        route_metadata=_route_benchmark_metadata(route_config_for(suite, route.name), route),
+                        repeat_id=repeat_id,
+                        repeats=repeats,
+                        reason=reason,
+                        validation_method=validation_method,
+                        guard_status="execution_failed",
+                        status="failed",
+                    )
+                )
+            except ValueError as exc:
+                if route.name == anchor_route_id or bool(route_config_for(suite, route.name).get("required")):
+                    raise
+                reason = f"value_error:{exc}"
+                optional_backend_reports.append(_optional_backend_report(case_id, route.name, reason))
+                skipped_rows.append(
+                    _skipped_route_row(
+                        common,
+                        route=route,
+                        route_metadata=_route_benchmark_metadata(route_config_for(suite, route.name), route),
+                        repeat_id=repeat_id,
+                        repeats=repeats,
+                        reason=reason,
+                        validation_method=validation_method,
+                        guard_status="execution_failed",
+                        status="failed",
+                    )
+                )
 
     runs_by_repeat_route = {(run.repeat_id, run.route.name): run for run in measured_runs}
     for repeat_id in range(repeats):
@@ -259,23 +356,10 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
 
     route_runs = measured_runs
 
-    circuit_meta = manifest(circuit)
-    gate_counts = circuit_meta["gate_counts"]
-    common = {
-        "case_id": case_id,
-        "workload_id": str(case_payload.get("workload_id", case_id)),
-        "suite_id": suite["suite_id"],
-        "anchor_route_id": anchor_route_id,
-        "n_qubits": circuit.n_qubits,
-        "gate_count": int(gate_counts["total"]),
-        "two_qubit_gate_count": int(gate_counts["2q"]),
-        "tn_task_count": len(graph.tasks),
-        "tn_max_intermediate_bytes": int(graph.path_summary.max_intermediate_bytes),
-        "tn_estimated_flops": int(graph.path_summary.total_estimated_flops),
-        "tn_estimated_bytes": int(sum(task.estimated_bytes for task in graph.tasks)),
-    }
-    rows: list[JsonDict] = []
+    rows: list[JsonDict] = list(skipped_rows)
     comparisons: list[JsonDict] = []
+    for row in skipped_rows:
+        comparisons.append(_comparison_row(row, anchor_route_id))
     for run in route_runs:
         repeat_anchor = runs_by_repeat_route[(run.repeat_id, anchor_route_id)]
         validation_start = time.perf_counter()
@@ -289,6 +373,7 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
                 **common,
                 "route_id": run.route.name,
                 "backend_family": run.route.backend_family,
+                **_route_benchmark_metadata(route_config_for(suite, run.route.name), run.route),
                 "kernel_family": run.route.identity.kernel_family,
                 "execution_model": _execution_model(run.route.identity.simulation_method),
                 "contraction_execution_target": _target(run.route.identity.hardware_target),
@@ -315,6 +400,8 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
                 "timing_scope": "end_to_end_and_compute",
                 "gpu_synchronized": bool(run.result.metadata.get("gpu_synchronized", False)),
                 "validation_method": validation_method,
+                "resource_guard_status": "executed",
+                "resource_skip_reason": None,
                 "validation_metrics": validation_metrics,
                 "statevector_artifact": artifact_ref(run_dir, run.statevector_rel, role=f"{run.route.name}_statevector"),
                 "final_tensor_artifact": artifact_ref(run_dir, run.final_tensor_rel, role=f"{run.route.name}_final_tensor"),
@@ -330,13 +417,15 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
         **common,
         "schema_version": SIMULATION_BACKEND_COMPARE_SCHEMA_VERSION,
         "basis_order": "quest_little_endian_integer_index",
-        "routes": [route.name for route in executable_routes],
+        "routes": list(suite["route_policy"]["routes"]),
+        "executed_routes": [route.name for route in executable_routes],
+        "skipped_route_count": sum(1 for row in rows if row.get("validation_status") == "skipped"),
         "anchor_route_id": anchor_route_id,
         "route_count": len(executable_routes),
         "warmup_runs": warmups,
         "measured_runs": repeats,
         "validation_method": validation_method,
-        "validation_status": "passed" if all(row["validation_status"] == "passed" for row in rows) else "failed",
+        "validation_status": "passed" if all(row["validation_status"] in {"passed", "skipped"} for row in rows) else "failed",
         "backend_families": sorted({row["backend_family"] for row in rows}),
         "execution_models": sorted({row["execution_model"] for row in rows}),
         "optional_backend_reports": optional_backend_reports,
@@ -405,6 +494,154 @@ def _execute_route(
         output_write_time_s += time.perf_counter() - write_start
         return ComparableRouteRun(route, result, statevector, state_rel, tensor_rel, "final_tensor", "statevector_from_final_tensor", repeat_id, output_write_time_s)
     raise RuntimeError(f"{route.name} output contract {route.identity.output_contract} is not comparable")
+
+
+def _resource_profile(suite: JsonDict) -> JsonDict:
+    metadata = dict(suite.get("metadata") or {})
+    return {
+        "expected_runtime_class": metadata.get("expected_runtime_class"),
+        "expected_memory_class": metadata.get("expected_memory_class"),
+        "intended_use": metadata.get("intended_use"),
+        "max_qubits": metadata.get("max_qubits") or metadata.get("statevector_cap_qubits"),
+        "manual_invocation_required": bool(metadata.get("manual_invocation_required", False)),
+        "expected_risk": metadata.get("expected_risk") or (),
+        "known_heavy_backends": metadata.get("known_heavy_backends") or (),
+    }
+
+
+def _resource_guard_skip_reason(route_config: JsonDict, graph: Any) -> str | None:
+    options = dict(route_config.get("options") or {})
+    if "max_estimated_intermediate_bytes" not in options and "max_estimated_flops" not in options:
+        return None
+    fallback_reason = str(options.get("resource_skip_reason") or "resource_guard_exceeded")
+    allow_missing = bool(options.get("allow_missing_estimate", False))
+    max_intermediate = options.get("max_estimated_intermediate_bytes")
+    if max_intermediate is not None:
+        estimate = getattr(graph.path_summary, "max_intermediate_bytes", None)
+        if estimate is None:
+            return None if allow_missing else "unavailable_estimate"
+        if int(estimate) > int(max_intermediate):
+            return f"{fallback_reason}:estimated_intermediate_bytes={int(estimate)}:limit={int(max_intermediate)}"
+    max_flops = options.get("max_estimated_flops")
+    if max_flops is not None:
+        estimate = getattr(graph.path_summary, "total_estimated_flops", None)
+        if estimate is None:
+            return None if allow_missing else "unavailable_estimate"
+        if int(estimate) > int(max_flops):
+            return f"{fallback_reason}:estimated_flops={int(estimate)}:limit={int(max_flops)}"
+    return None
+
+
+def _route_benchmark_metadata(route_config: JsonDict, route: ExecutionRoute) -> JsonDict:
+    defaults = {
+        "quest_cpu_full_state_exact": (
+            "serious_full_state_baseline",
+            "Serious CPU full-state baseline and comparison anchor.",
+            "Statevector output is capped by suite options for exact comparison.",
+        ),
+        "quimb_tn_exact": (
+            "serious_external_tn_baseline",
+            "Serious external tensor-network baseline using Quimb/cotengra-compatible execution.",
+            "External exact TN baseline; heavy cases may still be resource guarded.",
+        ),
+        "cpu_tn_einsum_exact": (
+            "internal_debug_baseline",
+            "Internal NumPy einsum tensor-network route for small correctness and diagnostic checks.",
+            "Internal einsum expression/lowering engine limitation, not a tensor-network approach limitation.",
+        ),
+    }
+    default_role, default_description, default_limitation = defaults.get(
+        route.name,
+        (route.identity.role, f"{route.identity.display_name} route.", ""),
+    )
+    return {
+        "benchmark_role": route_config.get("benchmark_role") or default_role,
+        "route_role_description": route_config.get("route_role_description") or default_description,
+        "route_limitation_scope": route_config.get("route_limitation_scope") or default_limitation,
+    }
+
+
+def _skipped_route_rows(
+    common: JsonDict,
+    *,
+    route: ExecutionRoute,
+    route_metadata: JsonDict,
+    repeats: int,
+    reason: str,
+    validation_method: str,
+    guard_status: str,
+    status: str = "not_executed",
+) -> list[JsonDict]:
+    return [
+        _skipped_route_row(
+            common,
+            route=route,
+            route_metadata=route_metadata,
+            repeat_id=repeat_id,
+            repeats=repeats,
+            reason=reason,
+            validation_method=validation_method,
+            guard_status=guard_status,
+            status=status,
+        )
+        for repeat_id in range(repeats)
+    ]
+
+
+def _skipped_route_row(
+    common: JsonDict,
+    *,
+    route: ExecutionRoute,
+    route_metadata: JsonDict,
+    repeat_id: int,
+    repeats: int,
+    reason: str,
+    validation_method: str,
+    guard_status: str,
+    status: str = "not_executed",
+) -> JsonDict:
+    return _row_with_metrics(
+        {
+            **common,
+            "route_id": route.name,
+            "backend_family": route.backend_family,
+            **route_metadata,
+            "kernel_family": route.identity.kernel_family,
+            "execution_model": _execution_model(route.identity.simulation_method),
+            "contraction_execution_target": _target(route.identity.hardware_target),
+            "accelerator_kind": _accelerator_kind(route.identity.hardware_target),
+            "execution_scope": _execution_scope(route.identity.simulation_method),
+            "output_kind": route.identity.output_contract,
+            "comparison_output_kind": "not_applicable",
+            "status": status,
+            "validation_status": "skipped",
+            "error_direction": "not_applicable",
+            "statevector_bytes": None,
+            "planning_time_s": 0.0,
+            "lowering_time_s": 0.0,
+            "total_wall_time_s": 0.0,
+            "kernel_time_s": 0.0,
+            "repeat_id": int(repeat_id),
+            "measured_repeat_count": int(repeats),
+            "setup_time_s": 0.0,
+            "circuit_lowering_time_s": 0.0,
+            "data_transfer_time_s": 0.0,
+            "simulation_compute_time_s": 0.0,
+            "validation_time_s": 0.0,
+            "output_materialization_time_s": 0.0,
+            "timing_scope": "not_executed",
+            "gpu_synchronized": False,
+            "validation_method": validation_method,
+            "resource_guard_status": guard_status,
+            "resource_skip_reason": reason,
+            "unsupported_task_count": 1,
+            "validation_metrics": {},
+            "statevector_artifact": None,
+            "final_tensor_artifact": None,
+            "dependency_metadata": {},
+            "route_metadata": {"not_executed_reason": reason},
+        }
+    )
 
 
 def _statevector_from_state_output(array: np.ndarray, n_qubits: int, route_id: str) -> np.ndarray:
@@ -486,6 +723,8 @@ def _comparison_row(row: JsonDict, anchor_route_id: str) -> JsonDict:
             "anchor_route_id": anchor_route_id,
             "route_id": row["route_id"],
             "backend_family": row["backend_family"],
+            "benchmark_role": row.get("benchmark_role"),
+            "route_limitation_scope": row.get("route_limitation_scope"),
             "execution_model": row["execution_model"],
             "validation_status": row["validation_status"],
             "error_direction": row["error_direction"],
@@ -513,6 +752,9 @@ def _normalized_record(run_dir: Path, row: JsonDict, *, case_id: str) -> JsonDic
         "route_id": row.get("route_id"),
         "backend_id": row.get("route_id"),
         "backend_family": row.get("backend_family"),
+        "benchmark_role": row.get("benchmark_role"),
+        "route_role_description": row.get("route_role_description"),
+        "route_limitation_scope": row.get("route_limitation_scope"),
         "kernel_family": row.get("kernel_family"),
         "execution_model": row.get("execution_model"),
         "execution_target": row.get("contraction_execution_target"),
@@ -531,7 +773,7 @@ def _normalized_record(run_dir: Path, row: JsonDict, *, case_id: str) -> JsonDic
         "validation_status": row.get("validation_status"),
         "task_count": int(row.get("tn_task_count", 0) or 0),
         "validated_task_count": int(row.get("tn_task_count", 0) or 0) if row.get("validation_status") == "passed" else 0,
-        "unsupported_task_count": 0,
+        "unsupported_task_count": int(row.get("unsupported_task_count", 0) or 0),
         "planning_time_s": row.get("planning_time_s"),
         "lowering_time_s": row.get("lowering_time_s"),
         "total_wall_time_s": float(row.get("total_wall_time_s", 0.0) or 0.0),
@@ -547,6 +789,15 @@ def _normalized_record(run_dir: Path, row: JsonDict, *, case_id: str) -> JsonDic
         "timing_scope": row.get("timing_scope"),
         "gpu_synchronized": bool(row.get("gpu_synchronized", False)),
         "validation_method": row.get("validation_method"),
+        "expected_runtime_class": row.get("expected_runtime_class"),
+        "expected_memory_class": row.get("expected_memory_class"),
+        "intended_use": row.get("intended_use"),
+        "max_qubits": row.get("max_qubits"),
+        "manual_invocation_required": bool(row.get("manual_invocation_required", False)),
+        "expected_risk": row.get("expected_risk"),
+        "known_heavy_backends": row.get("known_heavy_backends"),
+        "resource_guard_status": row.get("resource_guard_status"),
+        "resource_skip_reason": row.get("resource_skip_reason"),
         "total_wall_time_s_median": row.get("total_wall_time_s_median"),
         "total_wall_time_s_min": row.get("total_wall_time_s_min"),
         "total_wall_time_s_mean": row.get("total_wall_time_s_mean"),
@@ -575,14 +826,28 @@ def _normalized_record(run_dir: Path, row: JsonDict, *, case_id: str) -> JsonDic
                 "gate_count": row.get("gate_count"),
                 "two_qubit_gate_count": row.get("two_qubit_gate_count"),
                 "dependency_metadata": row.get("dependency_metadata"),
+                "benchmark_role": row.get("benchmark_role"),
+                "route_role_description": row.get("route_role_description"),
+                "route_limitation_scope": row.get("route_limitation_scope"),
                 "repeat_id": row.get("repeat_id"),
                 "validation_method": row.get("validation_method"),
                 "timing_scope": row.get("timing_scope"),
+                "resource_profile": {
+                    "expected_runtime_class": row.get("expected_runtime_class"),
+                    "expected_memory_class": row.get("expected_memory_class"),
+                    "intended_use": row.get("intended_use"),
+                    "max_qubits": row.get("max_qubits"),
+                    "manual_invocation_required": bool(row.get("manual_invocation_required", False)),
+                    "expected_risk": row.get("expected_risk"),
+                    "known_heavy_backends": row.get("known_heavy_backends"),
+                },
+                "resource_guard_status": row.get("resource_guard_status"),
+                "resource_skip_reason": row.get("resource_skip_reason"),
             },
             sort_keys=True,
             separators=(",", ":"),
         ),
-        "warnings": "",
+        "warnings": row.get("resource_skip_reason") or "",
     }
 
 
@@ -610,6 +875,7 @@ def _summary_payload(
             "anchor_route_id": _anchor_route_id(suite),
             "execution_models": sorted({str(row.get("execution_model")) for row in rows}),
             "backend_families": sorted({str(row.get("backend_family")) for row in rows}),
+            "benchmark_roles": sorted({str(row.get("benchmark_role")) for row in rows}),
             "root_normalized_records_are_canonical": True,
             "normalized_records_artifact": "normalized_records.jsonl",
             "quest_metrics_only_route_is_not_output_comparable": True,
@@ -617,6 +883,7 @@ def _summary_payload(
             "warmup_runs": int(suite.get("warmups", 0) or 0),
             "measured_runs": int(suite.get("repeats", 1) or 1),
             "validation_method": str((suite.get("metadata") or {}).get("validation_method") or "full_statevector"),
+            "resource_profile": _resource_profile(suite),
             "gpu_execution_backend_added": bool((backend_probe.get("gpu_probe") or {}).get("gpu_execution_backend_added")),
             "gpu_benchmark_records_emitted": any(row.get("contraction_execution_target") == "gpu" and row.get("status") == "completed" for row in rows),
             "backend_probe": backend_probe,
@@ -641,11 +908,31 @@ def _summary_markdown(summary: JsonDict, comparison_rows: list[JsonDict]) -> str
         "Error directions are labeled per route; the anchor is a comparison anchor, not an implicit claim that every other backend is numerically subordinate.",
         "GPU feasibility is reported separately and does not create benchmark rows without real GPU execution.",
         "",
-        "## Backend Metadata",
+        "## Resource Profile",
         "",
-        "| Route | Backend | Model | Target | Output |",
-        "| --- | --- | --- | --- | --- |",
+        "| Field | Value |",
+        "| --- | --- |",
     ]
+    profile = summary.get("resource_profile") or {}
+    for key in (
+        "expected_runtime_class",
+        "expected_memory_class",
+        "intended_use",
+        "max_qubits",
+        "manual_invocation_required",
+        "expected_risk",
+        "known_heavy_backends",
+    ):
+        lines.append(f"| {key} | {profile.get(key)} |")
+    lines.extend(
+        [
+            "",
+            "## Backend Metadata",
+            "",
+            "| Route | Benchmark role | Backend | Model | Target | Output | Limitation scope |",
+            "| --- | --- | --- | --- | --- | --- | --- |",
+        ]
+    )
     seen: set[str] = set()
     for row in summary["rows"]:
         route_id = str(row["route_id"])
@@ -653,8 +940,8 @@ def _summary_markdown(summary: JsonDict, comparison_rows: list[JsonDict]) -> str
             continue
         seen.add(route_id)
         lines.append(
-            f"| {route_id} | {row['backend_family']} | {row['execution_model']} | "
-            f"{row['contraction_execution_target']} | {row['output_kind']} |"
+            f"| {route_id} | {row.get('benchmark_role')} | {row['backend_family']} | {row['execution_model']} | "
+            f"{row['contraction_execution_target']} | {row['output_kind']} | {row.get('route_limitation_scope')} |"
         )
     lines.extend(
         [

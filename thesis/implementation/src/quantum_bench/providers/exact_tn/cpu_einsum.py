@@ -26,7 +26,7 @@ class CpuTnEinsumExactRoute:
     identity = RouteIdentity(
         route_id=name,
         display_name="CPU exact tensor network (NumPy einsum)",
-        role="reference",
+        role="internal_debug_baseline",
         simulation_method="exact_tensor_network",
         kernel_family="einsum_contraction",
         hardware_target="cpu",

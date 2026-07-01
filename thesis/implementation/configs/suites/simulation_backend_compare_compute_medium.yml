@@ -36,12 +36,10 @@ workloads:
     circuit: {kind: quest_compatible, name: HS, allocated_qubits: 8, logical_qubits: 4}
 
 routes:
-  - id: cpu_tn_einsum_exact
-    role: baseline
-    required: true
-
   - id: quest_cpu_full_state_exact
     role: comparison_anchor
+    benchmark_role: serious_full_state_baseline
+    route_role_description: Serious QuEST CPU full-state comparison anchor.
     required: true
     options:
       max_output_qubits: 8
@@ -50,9 +48,18 @@ routes:
 
   - id: quimb_tn_exact
     role: baseline
+    benchmark_role: serious_external_tn_baseline
+    route_role_description: Primary CPU tensor-network baseline for compute-focused suites.
     required: true
     options:
       optimize: greedy
+
+  - id: cpu_tn_einsum_exact
+    role: optional_diagnostic
+    benchmark_role: internal_debug_baseline
+    route_role_description: Internal NumPy einsum route retained for small diagnostic comparison only.
+    route_limitation_scope: Internal einsum expression/lowering engine limitation, not a tensor-network approach limitation.
+    required: false
 
 validation:
   reference_route: quest_cpu_full_state_exact

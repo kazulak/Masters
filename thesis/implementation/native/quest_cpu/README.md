@@ -12,17 +12,25 @@ cd thesis/implementation
 ## Build And Verify
 
 The runner links against the local QuEST source under `../../external/QuEST`.
+Generated QuEST build files are written outside the submodule by default, under
+`../../build/external/QuEST`, so `external/QuEST` stays clean.
 
 ```bash
-cmake -S ../../external/QuEST -B ../../external/QuEST/build -DCMAKE_BUILD_TYPE=Release
-cmake --build ../../external/QuEST/build -j2
 make clean
 make
 ./bin/quest_runner --verify FULL
 ```
 
-`../../external/QuEST/build`, `build/`, and `bin/` are generated artifacts and
-should not be committed.
+`make` builds the QuEST library first via the `quest-lib` target. Override the
+generated-library path only when needed:
+
+```bash
+make QUEST_BUILD=/tmp/quest-build
+```
+
+`../../build/external/QuEST`, `build/`, and `bin/` are generated artifacts and
+should not be committed. Use `make clean-all` to remove both the native runner
+build and the implementation-local QuEST build.
 
 Machine-readable benchmark call:
 

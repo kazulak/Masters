@@ -40,6 +40,9 @@ REPORT_RESULT_FIELDS = [
     "workload_id",
     "route_id",
     "backend_family",
+    "benchmark_role",
+    "route_role_description",
+    "route_limitation_scope",
     "execution_model",
     "output_kind",
     "policy",
@@ -67,6 +70,15 @@ REPORT_RESULT_FIELDS = [
     "timing_scope",
     "gpu_synchronized",
     "validation_method",
+    "expected_runtime_class",
+    "expected_memory_class",
+    "intended_use",
+    "max_qubits",
+    "manual_invocation_required",
+    "expected_risk",
+    "known_heavy_backends",
+    "resource_guard_status",
+    "resource_skip_reason",
     "repeat_id",
     "measured_repeat_count",
     "total_wall_time_s_median",
@@ -106,6 +118,9 @@ PLOT_DATA_FIELDS = [
     "route_id",
     "backend_label",
     "backend_family",
+    "benchmark_role",
+    "route_role_description",
+    "route_limitation_scope",
     "execution_model",
     "contraction_execution_target",
     "accelerator_kind",
@@ -124,6 +139,15 @@ PLOT_DATA_FIELDS = [
     "timing_scope",
     "gpu_synchronized",
     "validation_method",
+    "expected_runtime_class",
+    "expected_memory_class",
+    "intended_use",
+    "max_qubits",
+    "manual_invocation_required",
+    "expected_risk",
+    "known_heavy_backends",
+    "resource_guard_status",
+    "resource_skip_reason",
     "repeat_id",
     "measured_repeat_count",
     "total_wall_time_s_median",
@@ -432,7 +456,18 @@ def _write_plot_source_tables(run_dir: Path, records: list[JsonDict]) -> JsonDic
         "backend_support_summary": (
             data_dir / "backend_support_summary.csv",
             support_rows,
-            ["route_id", "backend_label", "execution_model", "backend_family", "record_count", "passed_count", "failed_count", "unavailable_count"],
+            [
+                "route_id",
+                "backend_label",
+                "benchmark_role",
+                "route_limitation_scope",
+                "execution_model",
+                "backend_family",
+                "record_count",
+                "passed_count",
+                "failed_count",
+                "unavailable_count",
+            ],
         ),
         "relative_runtime_vs_quest_anchor": (
             data_dir / "relative_runtime_vs_quest_anchor.csv",
@@ -803,6 +838,9 @@ def _plot_data_row(record: JsonDict) -> JsonDict:
         "route_id": route_id,
         "backend_label": _backend_label(route_id),
         "backend_family": record.get("backend_family"),
+        "benchmark_role": record.get("benchmark_role"),
+        "route_role_description": record.get("route_role_description"),
+        "route_limitation_scope": record.get("route_limitation_scope"),
         "execution_model": record.get("execution_model"),
         "contraction_execution_target": record.get("contraction_execution_target") or record.get("execution_target"),
         "accelerator_kind": record.get("accelerator_kind") or "none",
@@ -821,6 +859,15 @@ def _plot_data_row(record: JsonDict) -> JsonDict:
         "timing_scope": record.get("timing_scope"),
         "gpu_synchronized": bool(record.get("gpu_synchronized", False)),
         "validation_method": record.get("validation_method"),
+        "expected_runtime_class": record.get("expected_runtime_class"),
+        "expected_memory_class": record.get("expected_memory_class"),
+        "intended_use": record.get("intended_use"),
+        "max_qubits": _int_or_none(record.get("max_qubits")),
+        "manual_invocation_required": bool(record.get("manual_invocation_required", False)),
+        "expected_risk": record.get("expected_risk"),
+        "known_heavy_backends": record.get("known_heavy_backends"),
+        "resource_guard_status": record.get("resource_guard_status"),
+        "resource_skip_reason": record.get("resource_skip_reason"),
         "repeat_id": _int_or_none(record.get("repeat_id")),
         "measured_repeat_count": _int_or_none(record.get("measured_repeat_count")),
         "total_wall_time_s_median": _float_or_none(record.get("total_wall_time_s_median")),
@@ -888,6 +935,8 @@ def _backend_support_rows(rows: list[JsonDict]) -> list[JsonDict]:
             {
                 "route_id": route_id,
                 "backend_label": _backend_label(route_id),
+                "benchmark_role": next((row.get("benchmark_role") for row in group if row.get("benchmark_role")), None),
+                "route_limitation_scope": next((row.get("route_limitation_scope") for row in group if row.get("route_limitation_scope")), None),
                 "execution_model": next((row.get("execution_model") for row in group if row.get("execution_model")), None),
                 "backend_family": next((row.get("backend_family") for row in group if row.get("backend_family")), None),
                 "record_count": len(group),
@@ -1154,6 +1203,21 @@ def _kernel_family_summary(records: list[JsonDict]) -> list[JsonDict]:
     return rows
 
 
+def _resource_profile_counts(records: list[JsonDict]) -> Counter[tuple[str, str, str, str, str, str]]:
+    counts: Counter[tuple[str, str, str, str, str, str]] = Counter()
+    for record in records:
+        key = (
+            str(record.get("expected_runtime_class") or "unspecified"),
+            str(record.get("expected_memory_class") or "unspecified"),
+            str(record.get("intended_use") or "unspecified"),
+            str(record.get("max_qubits") or ""),
+            str(bool(record.get("manual_invocation_required", False))),
+            _csv_value(record.get("expected_risk") or ""),
+        )
+        counts[key] += 1
+    return counts
+
+
 def _quantization_rows(records: list[JsonDict]) -> list[JsonDict]:
     rows = []
     for record in records:
@@ -1289,6 +1353,18 @@ def _report_markdown(records: list[JsonDict], run_dir: Path | None = None) -> st
     lines.extend(
         [
             "",
+            "## Resource Profiles",
+            "",
+            "| Runtime class | Memory class | Intended use | Max qubits | Manual | Risks | Records |",
+            "| --- | --- | --- | ---: | --- | --- | ---: |",
+        ]
+    )
+    for profile, count in sorted(_resource_profile_counts(records).items(), key=lambda item: tuple(str(part) for part in item[0])):
+        runtime_class, memory_class, intended_use, max_qubits, manual, risks = profile
+        lines.append(f"| {runtime_class} | {memory_class} | {intended_use} | {max_qubits} | {manual} | {risks} | {count} |")
+    lines.extend(
+        [
+            "",
             "## Kernel Families",
             "",
             "| Kernel family | Records | Tasks | Validated tasks | Unsupported tasks |",
@@ -1302,8 +1378,8 @@ def _report_markdown(records: list[JsonDict], run_dir: Path | None = None) -> st
             "",
             "## Backend Metadata",
             "",
-            "| Route | Backend | Model | Target | Accelerator | Output |",
-            "| --- | --- | --- | --- | --- | --- |",
+            "| Route | Benchmark role | Backend | Model | Target | Accelerator | Output | Limitation scope |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
     )
     seen_routes: set[str] = set()
@@ -1313,8 +1389,9 @@ def _report_markdown(records: list[JsonDict], run_dir: Path | None = None) -> st
             continue
         seen_routes.add(route_id)
         lines.append(
-            f"| {route_id} | {record.get('backend_family')} | {record.get('execution_model')} | "
-            f"{record.get('contraction_execution_target')} | {record.get('accelerator_kind') or 'none'} | {record.get('output_kind')} |"
+            f"| {route_id} | {record.get('benchmark_role')} | {record.get('backend_family')} | {record.get('execution_model')} | "
+            f"{record.get('contraction_execution_target')} | {record.get('accelerator_kind') or 'none'} | {record.get('output_kind')} | "
+            f"{record.get('route_limitation_scope')} |"
         )
     lines.extend(
         [

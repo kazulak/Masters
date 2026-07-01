@@ -1,0 +1,109 @@
+schema_version: 2
+suite_id: simulation_backend_compare_compute_large
+
+metadata:
+  purpose: manual_large_backend_comparison
+  expected_runtime_class: manual_large
+  expected_memory_class: workstation_high
+  intended_use: thesis_evidence
+  deterministic_unitary_only: true
+  validation_tier: performance
+  validation_method: full_statevector
+  max_qubits: 12
+  statevector_cap_qubits: 12
+  statevector_cap_amplitudes: 4096
+  manual_invocation_required: true
+  known_heavy_backends:
+    - cpu_tn_einsum_exact
+    - quimb_tn_exact
+  expected_risk:
+    - high_memory
+    - long_runtime
+    - backend_timeout
+  notes: Manual large profile. Not part of routine validation or CI.
+
+defaults:
+  warmups: 1
+  repeats: 3
+  timeout_s: 900
+  memory_guard_gib: 16
+  planner:
+    engine: opt_einsum
+    optimize: greedy
+
+workloads:
+  - id: quest_qrng_8q
+    circuit: {kind: quest_compatible, name: QRNG, n_qubits: 8}
+  - id: quest_qrng_10q
+    circuit: {kind: quest_compatible, name: QRNG, n_qubits: 10}
+  - id: quest_qrng_12q
+    circuit: {kind: quest_compatible, name: QRNG, n_qubits: 12}
+  - id: quest_bb84_8q
+    circuit: {kind: quest_compatible, name: BB84, n_qubits: 8}
+  - id: quest_bb84_10q
+    circuit: {kind: quest_compatible, name: BB84, n_qubits: 10}
+  - id: quest_bb84_12q
+    circuit: {kind: quest_compatible, name: BB84, n_qubits: 12}
+  - id: quest_bv_8q
+    circuit: {kind: quest_compatible, name: BV, n_qubits: 8}
+  - id: quest_bv_10q
+    circuit: {kind: quest_compatible, name: BV, n_qubits: 10}
+  - id: quest_bv_12q
+    circuit: {kind: quest_compatible, name: BV, n_qubits: 12}
+  - id: quest_edc_8q
+    circuit: {kind: quest_compatible, name: EDC, n_qubits: 8}
+  - id: quest_edc_9q
+    circuit: {kind: quest_compatible, name: EDC, n_qubits: 9}
+  - id: quest_xor_8q
+    circuit: {kind: quest_compatible, name: XOR, n_qubits: 8}
+  - id: quest_xor_10q
+    circuit: {kind: quest_compatible, name: XOR, n_qubits: 10}
+  - id: quest_xor_12q
+    circuit: {kind: quest_compatible, name: XOR, n_qubits: 12}
+  - id: quest_hs_8q
+    circuit: {kind: quest_compatible, name: HS, allocated_qubits: 8, logical_qubits: 4}
+  - id: quest_hs_10q
+    circuit: {kind: quest_compatible, name: HS, allocated_qubits: 10, logical_qubits: 5}
+
+routes:
+  - id: quest_cpu_full_state_exact
+    role: comparison_anchor
+    benchmark_role: serious_full_state_baseline
+    route_role_description: Serious QuEST CPU full-state comparison anchor for manual large evidence.
+    required: true
+    options:
+      max_output_qubits: 12
+      max_output_amplitudes: 4096
+      max_output_bytes: 65536
+
+  - id: quimb_tn_exact
+    role: baseline
+    benchmark_role: serious_external_tn_baseline
+    route_role_description: Primary external tensor-network baseline; guarded on manual large resource estimates.
+    required: false
+    options:
+      optimize: greedy
+      max_estimated_intermediate_bytes: 2147483648
+      resource_skip_reason: manual_large_tn_resource_guard
+
+  - id: cpu_tn_einsum_exact
+    role: optional_diagnostic
+    benchmark_role: internal_debug_baseline
+    route_role_description: Internal NumPy einsum route retained only to document/debug internal engine limits.
+    route_limitation_scope: Internal einsum expression/lowering engine limitation, not a tensor-network approach limitation.
+    required: false
+    options:
+      max_estimated_intermediate_bytes: 2147483648
+      resource_skip_reason: manual_large_tn_resource_guard
+
+validation:
+  reference_route: quest_cpu_full_state_exact
+  require_output_for_roles:
+    - baseline
+    - comparison_anchor
+  tolerances:
+    max_abs_error: 1.0e-9
+    l2_error: 1.0e-8
+    max_rel_error: 1.0e-8
+    norm_drift: 1.0e-8
+    min_fidelity: 0.999999999

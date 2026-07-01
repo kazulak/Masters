@@ -13,7 +13,10 @@
 THESIS_ROOT := $(abspath ../../)
 EXTERN_DIR  := $(THESIS_ROOT)/external
 QUEST_DIR   := $(EXTERN_DIR)/QuEST
-QUEST_BUILD := $(QUEST_DIR)/build
+QUEST_BUILD ?= $(THESIS_ROOT)/build/external/QuEST
+QUEST_BUILD_TYPE ?= Release
+QUEST_BUILD_JOBS ?= 2
+CMAKE ?= cmake
 
 CC = gcc
 
@@ -49,7 +52,13 @@ DEPS = $(OBJS:.o=.d)
 
 TARGET = $(BIN_DIR)/quest_runner
 
-all: prep $(TARGET)
+.PHONY: all prep quest-lib clean clean-quest clean-all
+
+all: quest-lib prep $(TARGET)
+
+quest-lib:
+	$(CMAKE) -S $(QUEST_DIR) -B $(QUEST_BUILD) -DCMAKE_BUILD_TYPE=$(QUEST_BUILD_TYPE)
+	$(CMAKE) --build $(QUEST_BUILD) -j$(QUEST_BUILD_JOBS)
 
 prep:
 	mkdir -p $(BIN_DIR)
@@ -66,5 +75,10 @@ clean:
 	rm -f $(SRC_DIR)/*.o $(CIRC_DIR)/*.o $(VERIFY_DIR)/*.o $(V_CIRC_DIR)/*.o
 	rm -rf $(BUILD_DIR)
 	rm -rf $(BIN_DIR)
+
+clean-quest:
+	rm -rf $(QUEST_BUILD)
+
+clean-all: clean clean-quest
 
 -include $(DEPS)

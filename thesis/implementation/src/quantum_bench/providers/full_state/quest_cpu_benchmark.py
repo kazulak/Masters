@@ -134,7 +134,7 @@ class QuestCpuFullStateExactRoute:
     identity = RouteIdentity(
         route_id=name,
         display_name="QuEST CPU full-state exact output",
-        role="baseline",
+        role="serious_full_state_baseline",
         simulation_method="full_state_vector",
         kernel_family="full_state_vector",
         hardware_target="cpu",

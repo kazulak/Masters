@@ -26,7 +26,7 @@ class QuimbTnExactRoute:
     identity = RouteIdentity(
         route_id=name,
         display_name="Quimb exact tensor network",
-        role="baseline",
+        role="serious_external_tn_baseline",
         simulation_method="exact_tensor_network",
         kernel_family="external_tn_contraction",
         hardware_target="cpu",

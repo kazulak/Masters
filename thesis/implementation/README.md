@@ -118,6 +118,20 @@ circuits, statevector output caps, and explicit runtime-class metadata.
 on CPU-only/no-ROCm environments. `simulation_backend_compare_gpu_medium.yml`
 is a scaffold for verified GPU routes; optional GPU candidates remain probe
 metadata until a backend proves real GPU execution.
+`simulation_backend_compare_compute_large.yml` is manual thesis evidence only:
+it carries high-memory/long-runtime resource metadata, uses guarded optional TN
+routes, and is not part of routine validation or CI.
+
+For serious simulation-backend evidence, `quimb_tn_exact` is the primary CPU
+tensor-network baseline. `cpu_tn_einsum_exact` remains in quick/small suites as
+an internal debug/correctness route only; its NumPy einsum symbol and lowering
+limits are internal-engine limitations, not evidence against tensor networks.
+
+Manual large simulation comparison:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simulation-backend-compare --suite configs/suites/simulation_backend_compare_compute_large.yml --artifact-retention compact
+```
 
 Artifact-driven result comparison:
 
@@ -185,14 +199,19 @@ full-circuit speedup numbers.
 
 Use these rules when interpreting artifacts:
 
-- `cpu_tn_einsum_exact` is the current exact tensor-network reference.
+- `cpu_tn_einsum_exact` is the internal small/debug exact tensor-network route.
 - `quest_cpu_full_state_benchmark` is an external metrics-only baseline.
 - `quest_cpu_full_state_exact` is an additive output-comparable QuEST route for
   small deterministic unitary statevector comparisons. It is the full-state
   baseline used by `simulation-backend-compare`.
 - `quimb_tn_exact` is an additive output-comparable external tensor-network
-  backend. It is exact CPU execution and emits dependency/provenance metadata;
-  it is not a GPU or UPMEM result.
+  backend. It is the serious CPU TN baseline for compute-focused and manual
+  thesis evidence. It is exact CPU execution and emits dependency/provenance
+  metadata; it is not a GPU or UPMEM result.
+- `cpu_tn_einsum_exact` is an internal small/debug tensor-network route. It is
+  useful for correctness checks, but index-heavy circuits can exceed the local
+  NumPy einsum symbol/lowering engine. Such failures should be reported as
+  internal engine limitations, not as tensor-network approach failures.
 - `simulation-backend-probe` reports optional external-library and GPU
   feasibility. It classifies candidates as `tailored_quantum_gpu`,
   `cuda_quantum_stack`, `generic_tensor_gpu`, or `feasibility_only`; it does not

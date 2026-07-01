@@ -39,9 +39,9 @@ Quantum circuit
 | Area | Status | Evidence boundary |
 |---|---|---|
 | Benchmark runner | Implemented | One CLI and one timestamped artifact layout |
-| CPU exact TN | Implemented | Full output, validation authority |
+| Internal CPU exact TN | Implemented debug route | Full output for small correctness/diagnostic cases; limited by local NumPy einsum lowering |
 | QuEST CPU full-state | Implemented | Metrics-only baseline |
-| External exact TN | Implemented initial backend | Quimb exact CPU TN route with dependency provenance |
+| External exact TN | Implemented serious baseline | Quimb exact CPU TN route with dependency provenance |
 | Planner comparison | Implemented | Analysis of FLOP vs modeled UPMEM pressure |
 | Fixed-point conversion | Implemented | Host-side deterministic utilities |
 | Dense preparation | Implemented | One-task preparation and validation |
@@ -103,8 +103,8 @@ Current status must be reported honestly:
 
 | Path | Current complex support |
 |---|---|
-| CPU exact TN | Supported by NumPy complex tensors |
-| Quimb exact TN | Supported by Quimb complex tensors |
+| Internal CPU exact TN | Supported by NumPy complex tensors for small/debug cases; index-heavy circuits can exceed internal einsum symbol/lowering limits |
+| Quimb exact TN | Supported by Quimb complex tensors and used as the serious CPU TN baseline |
 | QuEST CPU full-state | Metrics-only route plus output-comparable exact route for small deterministic circuits |
 | Dense preparation | Supports explicit split real/imag representation where metadata proves layout |
 | UPMEM L1 simulator | Split-complex four-GEMM path supported for explicit manifest layout |
@@ -166,7 +166,7 @@ GEMM is the current backbone, not the complete design.
 | PIM bridge eval | `quantum_bench.bench pim-bridge-eval ...` | Task-level simulator evidence |
 | Strict UPMEM runtime | `quantum_bench.bench upmem-taskgraph-runtime ...` | Small full-TaskGraph SDK simulator code-path evidence |
 | Suite MVP benchmark | `quantum_bench.bench upmem-mvp-benchmark ...` | Suite-level CPU reference, UPMEM runtime, and report regeneration |
-| Simulation backend comparison | `quantum_bench.bench simulation-backend-compare ...` | QuEST full-state, internal CPU TN, and external TN output comparison |
+| Simulation backend comparison | `quantum_bench.bench simulation-backend-compare ...` | QuEST full-state, serious external TN, and optional internal TN diagnostic output comparison |
 | Report regeneration | `quantum_bench.bench report-run ...` | Non-destructive derived report refresh |
 | Compact pruning | `quantum_bench.bench prune-run ...` | Explicit artifact pruning for new MVP run layouts |
 | Frontier analysis | `quantum_bench.bench pim-frontier-analysis ...` | Model-only memory/parallelism evidence |
@@ -187,6 +187,10 @@ execution. Candidate reports should use evidence categories such as
 `tailored_quantum_gpu`, `cuda_quantum_stack`, `generic_tensor_gpu`, and
 `feasibility_only`; they should not claim SOTA or GPU results from source
 markers alone.
+`simulation_backend_compare_compute_large.yml` is manual-only thesis evidence:
+it is not routine validation or CI, and heavy TN routes may produce explicit
+resource-guard skip rows when path/intermediate estimates exceed configured
+limits.
 
 ## Roadmap
 
