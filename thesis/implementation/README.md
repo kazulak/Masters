@@ -41,6 +41,75 @@ virtual environment:
 scripts/run_energy_suite.sh configs/suites/local_energy.yml
 ```
 
+## Thesis Evidence Shortcuts
+
+The shortest workflow is through the Makefile. These targets write benchmark
+evidence under `runs/evidence/...`; derived comparisons go under
+`runs/comparisons/...`.
+
+Run CPU evidence:
+
+```bash
+make bench-cpu
+```
+
+The default CPU suite is `configs/suites/simulation_backend_compare_compute_medium.yml`.
+Override it when needed:
+
+```bash
+make bench-cpu CPU_SUITE=configs/suites/simulation_backend_compare_thesis_small.yml
+```
+
+Run GPU evidence:
+
+```bash
+make bench-gpu
+```
+
+This verifies QuEST HIP first, then runs the GPU execution-only suite. If ROCm
+or the AMD GPU path is unavailable, the target fails with a blocker instead of
+emitting fake GPU rows.
+
+Run UPMEM SDK simulator evidence:
+
+```bash
+make bench-upmem-sim
+```
+
+This runs `upmem-env-check --run-sample --target simulator`, then runs the
+strict UPMEM SDK simulator comparison suite. It fails if no strict UPMEM SDK
+simulator row is emitted.
+
+Generate a report for the latest evidence run:
+
+```bash
+make report-latest
+```
+
+Generate a derived comparison for the latest evidence run:
+
+```bash
+make compare-latest
+```
+
+Inspect normalized records:
+
+```bash
+head -n 3 runs/latest/normalized_records.jsonl
+```
+
+Clean generated build/cache files while keeping benchmark evidence:
+
+```bash
+make clean-generated
+```
+
+To remove benchmark evidence and comparisons too, opt in explicitly:
+
+```bash
+make clean-generated CLEAN_RUNS=1
+```
+
 ## Main Commands
 
 Normal benchmark run:
