@@ -7,7 +7,7 @@ from quantum_bench.bench.config import load_suite
 from quantum_bench.circuits import builtin_circuit, manifest
 from quantum_bench.tn import build_tensor_network, plan_task_graph
 from quantum_bench.providers import route_registry
-from quantum_bench.targets.upmem import estimate_dense_task_graph
+from quantum_bench.targets.upmem.schedule import estimate_dense_task_graph
 from quantum_bench.validation import compute_reference, validate
 
 

@@ -12,7 +12,7 @@ import subprocess
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from quantum_bench.bench.result_artifacts import RESULT_FIELDS, load_result_records
 from quantum_bench.core.jsonio import read_jsonl, write_json, write_jsonl
@@ -317,6 +317,23 @@ def write_normalized_records(run_dir: Path, records: Iterable[JsonDict]) -> Path
         payloads.append(to_jsonable(normalized))
     write_jsonl(path, payloads)
     return path
+
+
+def write_summary_and_normalized_records(
+    run_dir: Path,
+    summary_path: Path,
+    summary: JsonDict,
+    records_from_summary: Callable[[JsonDict, str], Iterable[JsonDict]],
+) -> Path:
+    summary["run_id"] = run_dir.name
+    write_json(summary_path, summary)
+    source = summary_path.relative_to(run_dir).as_posix()
+    records = []
+    for record in records_from_summary(summary, source):
+        payload = dict(record)
+        payload["run_id"] = run_dir.name
+        records.append(payload)
+    return write_normalized_records(run_dir, records)
 
 
 def load_normalized_records(run_dir: Path) -> list[JsonDict]:

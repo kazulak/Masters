@@ -6,15 +6,20 @@ from typing import Mapping
 
 import numpy as np
 
-from quantum_bench.bench.reporting import write_normalized_records, write_run_manifest
+from quantum_bench.bench.reporting import write_run_manifest, write_summary_and_normalized_records
 from quantum_bench.bench.result_artifacts import normalized_upmem_taskgraph_records_from_summary, normalized_upmem_taskgraph_result_from_summary
 from quantum_bench.bench.run_dirs import EVIDENCE_ARTIFACT_KIND, create_run_dir
 from quantum_bench.circuits import builtin_circuit, manifest
 from quantum_bench.core.jsonio import write_json, write_jsonl
 from quantum_bench.core.records import JsonDict, to_jsonable
 from quantum_bench.environment import capture_environment
-from quantum_bench.targets.upmem import annotate_task_graph_with_upmem_estimates
+from quantum_bench.targets.upmem.evidence import (
+    CONTRACTION_EXECUTION_TARGET_UPMEM,
+    UPMEM_EXECUTION_MODE_SDK_SIMULATOR,
+    UPMEM_SDK_SIMULATOR_EXECUTES_THROUGH,
+)
 from quantum_bench.targets.upmem.generic_boundary import build_generic_boundary_workload, is_generic_boundary_case
+from quantum_bench.targets.upmem.schedule import annotate_task_graph_with_upmem_estimates
 from quantum_bench.targets.upmem.taskgraph_runtime import (
     QUANTIZED_FINAL_VALIDATION_TOLERANCES,
     UPMEM_TASKGRAPH_POLICIES,
@@ -81,7 +86,7 @@ def run_upmem_taskgraph_runtime(
         summary="upmem_taskgraph_runtime_summary.json",
         policies=(policy,),
         quantization_modes=(quantization_mode,),
-        upmem_execution_mode="sdk_simulator",
+        upmem_execution_mode=UPMEM_EXECUTION_MODE_SDK_SIMULATOR,
         root_dir=root_dir,
     )
     write_json(run_dir / "environment.json", capture_environment(root_dir))
@@ -212,7 +217,7 @@ def run_upmem_taskgraph_runtime(
                     "developer_only": True,
                     "strict_upmem_taskgraph_runtime": True,
                     "cpu_contraction_fallback_allowed": False,
-                    "executes_through": "UPMEM SDK DPU programs using SDK simulator mode",
+                    "executes_through": UPMEM_SDK_SIMULATOR_EXECUTES_THROUGH,
                     "primary_final_validation_reference_kind": primary_reference_kind,
                     "full_precision_reference_is_task_validation_target": primary_reference_kind == "cpu_exact_taskgraph_full_precision",
                     "whole_network_quantized_at_initialization": False,
@@ -245,13 +250,12 @@ def _upmem_taskgraph_route_label(policy: str, quantization_mode: str) -> str:
 
 
 def _write_summary_and_records(run_dir: Path, summary_path: Path, summary: JsonDict) -> None:
-    summary["run_id"] = run_dir.name
-    write_json(summary_path, summary)
-    source = summary_path.relative_to(run_dir).as_posix()
-    records = normalized_upmem_taskgraph_records_from_summary(summary, source_artifact=source)
-    for record in records:
-        record["run_id"] = run_dir.name
-    write_normalized_records(run_dir, records)
+    write_summary_and_normalized_records(
+        run_dir,
+        summary_path,
+        summary,
+        lambda payload, source: normalized_upmem_taskgraph_records_from_summary(payload, source_artifact=source),
+    )
 
 
 def _reference_metadata_payload(metadata: JsonDict) -> JsonDict:
@@ -293,7 +297,7 @@ def _summary_markdown(summary: JsonDict) -> str:
         f"Policy: `{summary.get('policy')}`",
         f"Quantization mode: `{summary.get('quantization_mode')}`",
         "",
-        "This run executes contractions through UPMEM SDK DPU programs using SDK simulator mode. It is not a hardware benchmark.",
+        f"This run executes contractions through {UPMEM_SDK_SIMULATOR_EXECUTES_THROUGH}. It is not a hardware benchmark.",
         "",
         "## Kernel Usage",
         "",
@@ -373,8 +377,8 @@ def _error_summary(
             "policy": policy,
             "quantization_mode": quantization_mode,
             "whole_network_quantized_at_initialization": False,
-            "contraction_execution_target": "upmem",
-            "upmem_execution_mode": "sdk_simulator",
+            "contraction_execution_target": CONTRACTION_EXECUTION_TARGET_UPMEM,
+            "upmem_execution_mode": UPMEM_EXECUTION_MODE_SDK_SIMULATOR,
             "native_sdk_control_path": True,
             "simplepim_api_used": False,
             "hardware_benchmark_result": False,
@@ -393,7 +397,7 @@ def _error_summary(
                 "developer_only": True,
                 "strict_upmem_taskgraph_runtime": True,
                 "cpu_contraction_fallback_allowed": False,
-                "executes_through": "UPMEM SDK DPU programs using SDK simulator mode",
+                "executes_through": UPMEM_SDK_SIMULATOR_EXECUTES_THROUGH,
             },
         }
     )

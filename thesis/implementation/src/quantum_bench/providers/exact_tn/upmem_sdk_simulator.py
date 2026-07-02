@@ -26,10 +26,19 @@ from quantum_bench.core.records import (
     TensorValue,
     to_jsonable,
 )
+from quantum_bench.targets.upmem.evidence import (
+    UPMEM_ACCELERATOR_KIND,
+    UPMEM_EXECUTION_BACKEND_SDK,
+)
 from quantum_bench.targets.upmem.taskgraph_runtime import (
     CONTRACTION_EXECUTION_TARGET,
     UPMEM_EXECUTION_MODE,
     execute_upmem_taskgraph_runtime,
+)
+from quantum_bench.targets.upmem.runtime_checks import (
+    strict_upmem_runtime_assertions,
+    summary_dpu_invocations,
+    upmem_sdk_simulator_preflight_payload,
 )
 from quantum_bench.tn.execution import execute_task_sequence_np_einsum
 from quantum_bench.tn.network import TensorNetworkValue
@@ -37,7 +46,7 @@ from quantum_bench.tn.network import TensorNetworkValue
 
 class UpmemTnSdkSimulatorQuantizedRoute:
     name = "upmem_tn_sdk_simulator_quantized"
-    backend_family = "upmem_sdk"
+    backend_family = UPMEM_EXECUTION_BACKEND_SDK
     identity = RouteIdentity(
         route_id=name,
         display_name="UPMEM SDK simulator tensor network (quantized)",
@@ -78,7 +87,7 @@ class UpmemTnSdkSimulatorQuantizedRoute:
                 "whole_network_quantized_at_initialization": False,
                 "contraction_execution_target": CONTRACTION_EXECUTION_TARGET,
                 "upmem_execution_mode": UPMEM_EXECUTION_MODE,
-                "execution_backend": "upmem_sdk",
+                "execution_backend": UPMEM_EXECUTION_BACKEND_SDK,
                 "hardware_execution": False,
                 "hardware_timing_available": False,
                 "hardware_speedup_applicable": False,
@@ -91,13 +100,13 @@ class UpmemTnSdkSimulatorQuantizedRoute:
     def can_execute(self, graph: TaskGraph, context: BenchmarkContext) -> tuple[bool, str | None]:
         options = _route_options(context)
         if not bool(options.get("execute_external", False)):
-            self._write_preflight(context, _preflight_payload("blocked", "upmem_sdk_simulator_execute_external_required"))
+            self._write_preflight(context, upmem_sdk_simulator_preflight_payload("blocked", "upmem_sdk_simulator_execute_external_required"))
             return False, "upmem_sdk_simulator_execute_external_required"
         if not graph.tasks:
-            self._write_preflight(context, _preflight_payload("blocked", "empty_task_graph_not_supported"))
+            self._write_preflight(context, upmem_sdk_simulator_preflight_payload("blocked", "empty_task_graph_not_supported"))
             return False, "empty_task_graph_not_supported"
         if bool(options.get("skip_preflight", False)):
-            self._write_preflight(context, _preflight_payload("skipped", "preflight_skipped_by_route_option"))
+            self._write_preflight(context, upmem_sdk_simulator_preflight_payload("skipped", "preflight_skipped_by_route_option"))
             return True, None
 
         try:
@@ -112,12 +121,12 @@ class UpmemTnSdkSimulatorQuantizedRoute:
                 reference_output=np.asarray(2.0 + 0.0j, dtype=np.complex128),
             )
         except Exception as exc:  # pragma: no cover - defensive blocker path
-            payload = _preflight_payload("blocked", f"upmem_sdk_simulator_preflight_exception:{exc}")
+            payload = upmem_sdk_simulator_preflight_payload("blocked", f"upmem_sdk_simulator_preflight_exception:{exc}")
             self._write_preflight(context, payload)
             return False, str(payload["reason"])
-        payload = _preflight_payload(
-            "passed" if result.status == "completed" and _summary_dpu_invocations(result.summary) > 0 else "blocked",
-            None if result.status == "completed" and _summary_dpu_invocations(result.summary) > 0 else result.reason or result.status,
+        payload = upmem_sdk_simulator_preflight_payload(
+            "passed" if result.status == "completed" and summary_dpu_invocations(result.summary) > 0 else "blocked",
+            None if result.status == "completed" and summary_dpu_invocations(result.summary) > 0 else result.reason or result.status,
             summary=result.summary,
         )
         self._write_preflight(context, payload)
@@ -168,7 +177,7 @@ class UpmemTnSdkSimulatorQuantizedRoute:
             execute_external=bool(_route_options(context).get("execute_external", False)),
             reference_output=reference_output,
         )
-        assertions = _strict_assertions(runtime.summary)
+        assertions = strict_upmem_runtime_assertions(runtime.summary)
         metadata = _route_metadata(runtime.summary, assertions, reference_time_s, reference_metadata)
         if runtime.status != "completed":
             return _failed(self.name, self.backend_family, runtime.reason or runtime.status, metadata=metadata, total_s=time.perf_counter() - total_start)
@@ -279,44 +288,12 @@ def _preflight_network() -> TensorNetworkValue:
     )
 
 
-def _summary_dpu_invocations(summary: JsonDict) -> int:
-    return int(summary.get("dpu_program_executed_task_count", 0) or 0)
-
-
-def _strict_assertions(summary: JsonDict) -> JsonDict:
-    task_count = int(summary.get("total_tasks", 0) or 0)
-    dpu_invocations = _summary_dpu_invocations(summary)
-    cpu_fallback_task_count = 1 if bool(summary.get("cpu_fallback_used", False)) else 0
-    checks = {
-        "task_count_positive": task_count > 0,
-        "upmem_task_count_matches_task_count": dpu_invocations == task_count,
-        "cpu_fallback_task_count_zero": cpu_fallback_task_count == 0,
-        "dpu_program_invocations_positive": dpu_invocations > 0,
-        "upmem_program_executed": bool(summary.get("dpu_program_executed_all_tasks", False)),
-        "native_sdk_control_path": summary.get("native_sdk_control_path") is True,
-        "simplepim_api_used_false": summary.get("simplepim_api_used") is False,
-    }
-    failed = [name for name, passed in checks.items() if not passed]
-    return to_jsonable(
-        {
-            "status": "passed" if not failed else "failed",
-            "reason": None if not failed else f"strict_upmem_runtime_assertion_failed:{','.join(failed)}",
-            "task_count": task_count,
-            "upmem_task_count": dpu_invocations,
-            "cpu_fallback_task_count": cpu_fallback_task_count,
-            "dpu_program_invocations": dpu_invocations,
-            "upmem_program_executed": bool(summary.get("dpu_program_executed_all_tasks", False)),
-            "checks": checks,
-        }
-    )
-
-
 def _route_metadata(summary: JsonDict, assertions: JsonDict, reference_time_s: float, reference_metadata: JsonDict) -> JsonDict:
     final_validation = dict(summary.get("final_validation") or {})
     return to_jsonable(
         {
-            "execution_backend": "upmem_sdk",
-            "backend_family": "upmem_sdk",
+            "execution_backend": UPMEM_EXECUTION_BACKEND_SDK,
+            "backend_family": UPMEM_EXECUTION_BACKEND_SDK,
             "quantized_execution": True,
             "quantization_mode": summary.get("quantization_mode", "per_task_input_quantize"),
             "policy": summary.get("policy"),
@@ -344,24 +321,7 @@ def _route_metadata(summary: JsonDict, assertions: JsonDict, reference_time_s: f
             "cpu_reference_used_for_validation_only": True,
             "cpu_reference_artifacts_feed_runtime_tensors": False,
             "reference_metadata": reference_metadata,
-            "accelerator_kind": "upmem",
-        }
-    )
-
-
-def _preflight_payload(status: str, reason: str | None, *, summary: JsonDict | None = None) -> JsonDict:
-    return to_jsonable(
-        {
-            "schema_version": "upmem_sdk_simulator_preflight_v1",
-            "status": status,
-            "reason": reason,
-            "required_conditions": {
-                "upmem_sdk_present": status == "passed",
-                "simulator_mode_available": status == "passed",
-                "dpu_program_build_load_works": status == "passed",
-                "real_sdk_simulator_dpu_program_executed": status == "passed",
-            },
-            "summary": summary or {},
+            "accelerator_kind": UPMEM_ACCELERATOR_KIND,
         }
     )
 

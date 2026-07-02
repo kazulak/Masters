@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# Makefile glue for thesis evidence shortcuts, not a public benchmark CLI.
+
 import argparse
 import json
 import sys

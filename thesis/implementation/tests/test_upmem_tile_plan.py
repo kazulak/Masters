@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from quantum_bench.core.records import ContractionTask
-from quantum_bench.targets.upmem import (
+from quantum_bench.targets.upmem.tile_plan import (
     REQUIRES_TILING_NOT_IMPLEMENTED,
     UNSUPPORTED_DENSE_GEMM_SHAPE,
     UPMEM_DENSE_ESTIMATE_KEY,

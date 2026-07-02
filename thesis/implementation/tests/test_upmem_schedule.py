@@ -7,15 +7,17 @@ from quantum_bench.core.records import (
     TaskGraph,
     TensorNetworkSpec,
 )
-from quantum_bench.targets.upmem import (
+from quantum_bench.targets.upmem.schedule import (
+    annotate_task_graph_with_upmem_estimates,
+    estimate_dense_task,
+    estimate_dense_task_graph,
+)
+from quantum_bench.targets.upmem.tile_plan import (
     REQUIRES_TILING_NOT_IMPLEMENTED,
     UNSUPPORTED_DENSE_GEMM_SHAPE,
     UPMEM_DENSE_ESTIMATE_KEY,
     UPMEM_DENSE_TILE_PLAN_MODEL,
     UPMEM_PROFILE,
-    annotate_task_graph_with_upmem_estimates,
-    estimate_dense_task,
-    estimate_dense_task_graph,
 )
 
 

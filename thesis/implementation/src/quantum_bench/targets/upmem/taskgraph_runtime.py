@@ -15,6 +15,10 @@ from quantum_bench.targets.upmem.dense_bridge import (
     execute_dense_bridge,
     write_dense_bridge_input_manifest,
 )
+from quantum_bench.targets.upmem.evidence import (
+    CONTRACTION_EXECUTION_TARGET_UPMEM,
+    UPMEM_EXECUTION_MODE_SDK_SIMULATOR,
+)
 from quantum_bench.targets.upmem.generic_bridge import execute_generic_bridge, write_generic_bridge_input_manifest
 from quantum_bench.tn.execution import live_tensor_bytes, order_final_tensor, release_dead_inputs, remaining_input_uses
 from quantum_bench.tn.network import TensorNetworkValue
@@ -33,8 +37,8 @@ UpmemTaskGraphPolicy = Literal["generic-only", "dense-then-generic", "dense-only
 UpmemTaskGraphQuantizationMode = Literal["per_task_input_quantize", "none", "persistent_network_quantized"]
 UpmemTaskGraphStatus = Literal["completed", "unsupported", "failed", "validation_failed"]
 
-CONTRACTION_EXECUTION_TARGET = "upmem"
-UPMEM_EXECUTION_MODE = "sdk_simulator"
+CONTRACTION_EXECUTION_TARGET = CONTRACTION_EXECUTION_TARGET_UPMEM
+UPMEM_EXECUTION_MODE = UPMEM_EXECUTION_MODE_SDK_SIMULATOR
 QUANTIZED_FINAL_VALIDATION_TOLERANCES = {
     "max_abs_error": 0.25,
     "l2_error": 2.0,

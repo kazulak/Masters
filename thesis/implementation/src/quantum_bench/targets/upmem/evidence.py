@@ -1,0 +1,8 @@
+from __future__ import annotations
+
+CONTRACTION_EXECUTION_TARGET_UPMEM = "upmem"
+UPMEM_EXECUTION_MODE_SDK_SIMULATOR = "sdk_simulator"
+UPMEM_EXECUTION_BACKEND_SDK = "upmem_sdk"
+UPMEM_ACCELERATOR_KIND = "upmem"
+UPMEM_SDK_SIMULATOR_EXECUTES_THROUGH = "UPMEM SDK DPU programs using SDK simulator mode"
+
