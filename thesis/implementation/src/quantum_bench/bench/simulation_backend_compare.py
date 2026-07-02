@@ -12,7 +12,7 @@ import numpy as np
 import yaml
 
 from quantum_bench.bench.config import load_suite, route_config_for
-from quantum_bench.bench.reporting import artifact_ref, prune_run, report_run, validate_retention_mode, write_normalized_records, write_run_manifest
+from quantum_bench.bench.reporting import artifact_ref, prune_run, validate_retention_mode, write_normalized_records, write_run_manifest
 from quantum_bench.bench.result_artifacts import RESULT_ARTIFACT_SCHEMA_VERSION
 from quantum_bench.bench.run_dirs import EVIDENCE_ARTIFACT_KIND, create_run_dir, sanitize
 from quantum_bench.bench.simulation_backend_probe import probe_simulation_backends
@@ -200,7 +200,6 @@ def run_simulation_backend_compare(
     write_json(run_dir / "simulation_backend_compare_summary.json", summary)
     (run_dir / "comparison_summary.md").write_text(_summary_markdown(summary, comparison_rows), encoding="utf-8")
     write_normalized_records(run_dir, normalized_records)
-    report_run(run_dir, output_plots=True)
     if artifact_retention == "compact":
         prune_run(run_dir, artifact_retention="compact")
     return SimulationBackendCompareResult(

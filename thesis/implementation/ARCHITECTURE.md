@@ -67,7 +67,9 @@ runs/comparisons/<suite_id>/<comparison_type>/<comparison_id>/
 ```
 
 `runs/latest` points only to the latest evidence run. `normalized_records.jsonl`
-is the canonical source for report and comparison commands.
+is the canonical source for report and comparison commands. Derived tables,
+plot-source CSVs, and figures belong under comparison/report output directories,
+not inside evidence runs.
 
 ## Route And Device Rules
 

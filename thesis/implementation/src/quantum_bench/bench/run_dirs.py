@@ -19,7 +19,7 @@ ROUTE_LABELS = {
     "upmem_tn_sdk_simulator_quantized": "upmem_generic_int8",
 }
 
-STANDARD_RUN_SUBDIRS = ("config", "cases", "raw", "validation", "metrics", "plots")
+STANDARD_RUN_SUBDIRS = ("config", "cases", "raw", "validation", "metrics")
 
 
 def create_run_dir(

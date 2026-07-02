@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from quantum_bench.bench.result_artifacts import RESULT_FIELDS, load_result_records
+from quantum_bench.bench.run_dirs import is_within_evidence_root
 from quantum_bench.core.jsonio import read_jsonl, write_json, write_jsonl
 from quantum_bench.core.records import JsonDict, to_jsonable
 
@@ -340,25 +341,31 @@ def load_normalized_records(run_dir: Path) -> list[JsonDict]:
     return read_jsonl(run_dir / "normalized_records.jsonl")
 
 
-def report_run(run_dir: Path, *, output_plots: bool = True) -> ReportRunResult:
-    run_dir = run_dir.resolve()
-    records = _load_run_records(run_dir)
+def report_run(input_run_dir: Path, out_dir: Path, *, output_plots: bool = True, root_dir: Path | None = None) -> ReportRunResult:
+    input_run_dir = input_run_dir.resolve()
+    out_dir = out_dir.resolve()
+    if root_dir is not None and is_within_evidence_root(out_dir, root_dir):
+        raise ValueError("report-run output must not be written under runs/evidence; use runs/comparisons or another report directory")
+    records = _load_run_records(input_run_dir)
     if not records:
         raise ValueError("report-run found no normalized benchmark records")
-    _write_report_artifacts(run_dir, records, output_plots=output_plots)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _write_report_artifacts(out_dir, records, input_run_dir=input_run_dir, output_plots=output_plots)
     payload = {
         "schema_version": REPORT_RUN_SCHEMA_VERSION,
-        "run_id": run_dir.name,
+        "input_run_id": input_run_dir.name,
+        "input_run_dir": str(input_run_dir),
+        "report_dir": str(out_dir),
         "status": "completed",
         "record_count": len(records),
         "non_destructive": True,
         "overwrites_derived_reports": True,
         "deletes_execution_artifacts": False,
     }
-    report_path = run_dir / "report_run.json"
+    report_path = out_dir / "report_run.json"
     write_json(report_path, payload)
-    _cleanup_empty_report_dirs(run_dir)
-    return ReportRunResult(run_dir=run_dir, report_path=report_path, status="completed")
+    _cleanup_empty_report_dirs(out_dir)
+    return ReportRunResult(run_dir=out_dir, report_path=report_path, status="completed")
 
 
 def prune_run(run_dir: Path, *, artifact_retention: str = "compact") -> PruneRunResult:
@@ -465,13 +472,13 @@ def _load_run_records(run_dir: Path) -> list[JsonDict]:
     return load_result_records([run_dir])
 
 
-def _write_report_artifacts(run_dir: Path, records: list[JsonDict], *, output_plots: bool) -> None:
+def _write_report_artifacts(run_dir: Path, records: list[JsonDict], *, input_run_dir: Path, output_plots: bool) -> None:
     plot_tables = _write_plot_source_tables(run_dir, records)
     _write_csv(run_dir / "upmem_mvp_benchmark_results.csv", records, REPORT_RESULT_FIELDS)
     _write_csv(run_dir / "kernel_family_summary.csv", _kernel_family_summary(records), ["kernel_family", "record_count", "task_count", "validated_task_count", "unsupported_task_count"])
     _write_csv(run_dir / "quantization_accuracy_summary.csv", _quantization_rows(records), ["case_id", "policy", "quantization_mode", "validation_status", "max_abs_error", "l2_error"])
     _write_csv(run_dir / "unsupported_reasons.csv", _unsupported_rows(records), ["case_id", "policy", "quantization_mode", "reason", "count"])
-    _write_csv(run_dir / "metrics" / "per_task_metrics.csv", _per_task_rows(run_dir), sorted(_per_task_fieldnames(run_dir)))
+    _write_csv(run_dir / "metrics" / "per_task_metrics.csv", _per_task_rows(input_run_dir), sorted(_per_task_fieldnames(input_run_dir)))
     _write_csv(run_dir / "metrics" / "per_case_metrics.csv", _per_case_rows(records), ["case_id", "policy", "quantization_mode", "task_count", "validated_task_count", "unsupported_task_count", "status"])
     _write_csv(run_dir / "metrics" / "timing_breakdown.csv", _timing_rows(records), ["case_id", "policy", "quantization_mode", *TIMING_FIELDS, "timing_status"])
     write_json(run_dir / "validation" / "validation_summary.json", _validation_summary(records))

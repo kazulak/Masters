@@ -15,7 +15,6 @@ from quantum_bench.bench.reporting import (
     ARTIFACT_REFERENCE_SCHEMA_VERSION,
     artifact_ref,
     prune_run,
-    report_run,
     validate_retention_mode,
     write_normalized_records,
     write_run_manifest,
@@ -272,7 +271,6 @@ def run_upmem_mvp_benchmark(
     (run_dir / "comparison_summary.md").write_text(_summary_markdown(summary, result_rows), encoding="utf-8")
     normalized_records = _normalized_records_for_run(run_dir, cpu_reference_records)
     write_normalized_records(run_dir, normalized_records)
-    report_run(run_dir, output_plots=True)
     if artifact_retention == "compact":
         prune_run(run_dir, artifact_retention="compact")
     status = "completed" if not any(row["status"] == "failed" for row in result_rows) else "failed"

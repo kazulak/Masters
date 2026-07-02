@@ -162,16 +162,36 @@ def test_summary_only_retention_is_deferred() -> None:
 
 def test_report_run_is_non_destructive(tmp_path: Path) -> None:
     run_dir = _new_run(tmp_path / "run", [_record("bell_2q")])
+    report_dir = tmp_path / "reports" / "bell_2q"
     raw_artifact = run_dir / "cases" / "bell_2q" / "upmem_taskgraph_bridge" / "task_0000" / "runner_work" / "build" / "bin" / "host"
     raw_artifact.parent.mkdir(parents=True)
     raw_artifact.write_text("native-binary-placeholder", encoding="utf-8")
 
-    result = report_run(run_dir, output_plots=False)
+    result = report_run(run_dir, report_dir, output_plots=False)
 
     assert result.status == "completed"
+    assert result.run_dir == report_dir.resolve()
     assert raw_artifact.exists()
-    assert (run_dir / "report_run.json").exists()
-    assert (run_dir / "metrics" / "timing_breakdown.csv").exists()
+    assert not (run_dir / "report_run.json").exists()
+    assert not (run_dir / "plots").exists()
+    assert (report_dir / "report_run.json").exists()
+    assert (report_dir / "metrics" / "timing_breakdown.csv").exists()
+    payload = json.loads((report_dir / "report_run.json").read_text(encoding="utf-8"))
+    assert payload["input_run_dir"] == str(run_dir.resolve())
+    assert payload["report_dir"] == str(report_dir.resolve())
+
+
+def test_report_run_rejects_output_under_evidence_root(tmp_path: Path) -> None:
+    root_dir = tmp_path / "project"
+    run_dir = _new_run(root_dir / "runs" / "evidence" / "suite" / "route" / "run", [_record("bell_2q")])
+    out_dir = root_dir / "runs" / "evidence" / "suite" / "report" / "bad"
+
+    try:
+        report_run(run_dir, out_dir, output_plots=False, root_dir=root_dir)
+    except ValueError as exc:
+        assert "must not be written under runs/evidence" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("report-run should reject output under runs/evidence")
 
 
 def test_report_run_writes_thesis_plot_sources_and_inventory(tmp_path: Path) -> None:
@@ -187,14 +207,17 @@ def test_report_run_writes_thesis_plot_sources_and_inventory(tmp_path: Path) -> 
     ]
     run_dir = _new_run(tmp_path / "run", records)
 
-    result = report_run(run_dir, output_plots=True)
+    report_dir = tmp_path / "reports" / "plot_report"
+
+    result = report_run(run_dir, report_dir, output_plots=True)
 
     assert result.status == "completed"
-    backend_csv = run_dir / "plots" / "data" / "backend_results.csv"
-    scaling_csv = run_dir / "plots" / "data" / "runtime_scaling_by_qubits.csv"
-    relative_csv = run_dir / "plots" / "data" / "relative_runtime_vs_quest_anchor.csv"
-    compute_csv = run_dir / "plots" / "data" / "compute_time_by_backend_case.csv"
-    total_vs_compute_csv = run_dir / "plots" / "data" / "total_vs_compute_time.csv"
+    assert not (run_dir / "plots").exists()
+    backend_csv = report_dir / "plots" / "data" / "backend_results.csv"
+    scaling_csv = report_dir / "plots" / "data" / "runtime_scaling_by_qubits.csv"
+    relative_csv = report_dir / "plots" / "data" / "relative_runtime_vs_quest_anchor.csv"
+    compute_csv = report_dir / "plots" / "data" / "compute_time_by_backend_case.csv"
+    total_vs_compute_csv = report_dir / "plots" / "data" / "total_vs_compute_time.csv"
     assert backend_csv.exists()
     assert scaling_csv.exists()
     assert relative_csv.exists()
@@ -218,8 +241,8 @@ def test_report_run_writes_thesis_plot_sources_and_inventory(tmp_path: Path) -> 
     assert relative_rows
     assert all(float(row["relative_runtime"]) > 0 for row in relative_rows)
 
-    manifest = json.loads((run_dir / "plots" / "plot_manifest.json").read_text(encoding="utf-8"))
-    summary = (run_dir / "comparison_summary.md").read_text(encoding="utf-8")
+    manifest = json.loads((report_dir / "plots" / "plot_manifest.json").read_text(encoding="utf-8"))
+    summary = (report_dir / "comparison_summary.md").read_text(encoding="utf-8")
     assert "## Plot Inventory" in summary
     if manifest["status"] == "completed":
         entries = {entry["plot"]: entry for entry in manifest["plots"]}
@@ -228,7 +251,7 @@ def test_report_run_writes_thesis_plot_sources_and_inventory(tmp_path: Path) -> 
         assert "compute_time_by_backend_case.png" in entries
         assert "total_vs_compute_time.png" in entries
         for entry in entries.values():
-            assert (run_dir / entry["source_csv"]).exists()
+            assert (report_dir / entry["source_csv"]).exists()
             if entry["status"] == "generated":
                 assert entry["image"]["non_empty"] is True
                 assert entry["image"]["reasonable_dimensions"] is True

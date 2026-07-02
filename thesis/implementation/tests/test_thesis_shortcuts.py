@@ -17,6 +17,8 @@ def test_makefile_shortcuts_are_defined() -> None:
     assert "GPU_VERIFY ?= quest-hip" in text
     for target in ("bench-cpu", "bench-gpu", "bench-upmem-sim", "report-latest", "compare-latest", "clean-generated"):
         assert f"{target}:" in text
+    assert "runs/comparisons/$$suite_id/report_run/$$timestamp" in text
+    assert "report-run --input runs/latest --out" in text
     assert "runs/comparisons/$$suite_id/latest_single_run/$$timestamp" in text
     assert "CLEAN_RUNS=1" in text
 

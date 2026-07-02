@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import csv
-import os
 from pathlib import Path
 from typing import Any
 
@@ -66,8 +65,6 @@ def compare_planners(suite_path: Path, root_dir: Path) -> Path:
     planner_configs = comparison_planner_configs(suite)
     scoring_weights = comparison_scoring_weights(suite)
     run_dir = create_run_dir(root_dir, _comparison_run_suite_id(str(suite["suite_id"])))
-    os.environ.setdefault("MPLCONFIGDIR", str(run_dir / "plots" / ".matplotlib"))
-    (run_dir / "plots" / ".matplotlib").mkdir(parents=True, exist_ok=True)
     (run_dir / "config" / "resolved_suite.yml").write_text(yaml.safe_dump(suite, sort_keys=True), encoding="utf-8")
     write_json(run_dir / "environment.json", capture_environment(root_dir))
 

@@ -61,7 +61,7 @@ def _assert_upmem_estimate_schema(estimate: dict[str, object]) -> None:
     assert "tile_plan" in estimate
 
 
-def test_smoke_suite_writes_raw_summary_and_plots_contract(tmp_path: Path) -> None:
+def test_smoke_suite_writes_raw_summary_without_plots(tmp_path: Path) -> None:
     run_dir = run_suite(ROOT / "configs" / "suites" / "smoke.yml", tmp_path)
     raw_rows = _read_raw_rows(run_dir)
     summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
@@ -77,6 +77,7 @@ def test_smoke_suite_writes_raw_summary_and_plots_contract(tmp_path: Path) -> No
     assert "probe_status" in environment["simplepim"]
     assert "skip_reason" in environment["simplepim"]
     assert (run_dir / "metrics" / "metrics.csv").exists()
+    assert not (run_dir / "plots").exists()
     assert any(row["status"] == "passed" and row["route"] == "cpu_tn_einsum_exact" for row in raw_rows)
     assert all(row["route"] == "cpu_tn_einsum_exact" for row in raw_rows)
     for row in raw_rows:

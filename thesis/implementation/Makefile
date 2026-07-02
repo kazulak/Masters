@@ -34,7 +34,10 @@ bench-upmem-sim:
 	$(PY_ENV) $(PYTHON) scripts/evidence_shortcuts.py check-upmem runs/latest
 
 report-latest:
-	$(BENCH) report-run --input runs/latest
+	@timestamp=$$(date +%Y%m%d_%H%M%S); \
+	suite_id=$$($(PY_ENV) $(PYTHON) scripts/evidence_shortcuts.py suite-id runs/latest); \
+	out_dir="runs/comparisons/$$suite_id/report_run/$$timestamp"; \
+	$(BENCH) report-run --input runs/latest --out "$$out_dir"
 
 compare-latest:
 	@timestamp=$$(date +%Y%m%d_%H%M%S); \

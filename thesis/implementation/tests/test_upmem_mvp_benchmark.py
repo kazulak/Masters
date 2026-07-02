@@ -151,6 +151,7 @@ def test_upmem_mvp_benchmark_runs_suite_and_compare_results(monkeypatch, tmp_pat
     assert (result.run_dir / "run_manifest.json").exists()
     assert (result.run_dir / "normalized_records.jsonl").exists()
     assert (result.run_dir / "artifact_retention_manifest.json").exists()
+    assert not (result.run_dir / "plots").exists()
     assert result.run_dir.parent == tmp_path / "runs" / "evidence" / "upmem_mvp_test" / "upmem_mvp"
     manifest = json.loads((result.run_dir / "run_manifest.json").read_text(encoding="utf-8"))
     assert manifest["artifact_kind"] == "evidence_run"
@@ -173,10 +174,12 @@ def test_upmem_mvp_benchmark_runs_suite_and_compare_results(monkeypatch, tmp_pat
     assert comparison.record_count == 6
     assert (comparison.run_dir / "comparison_manifest.json").exists()
 
-    report = report_run(result.run_dir, output_plots=False)
+    report_dir = tmp_path / "reports" / "upmem_mvp"
+    report = report_run(result.run_dir, report_dir, output_plots=False)
     assert report.status == "completed"
-    assert (result.run_dir / "validation" / "validation_summary.json").exists()
-    assert (result.run_dir / "metrics" / "timing_breakdown.csv").exists()
+    assert not (result.run_dir / "report_run.json").exists()
+    assert (report_dir / "validation" / "validation_summary.json").exists()
+    assert (report_dir / "metrics" / "timing_breakdown.csv").exists()
 
     before = sorted(path.relative_to(result.run_dir).as_posix() for path in result.run_dir.rglob("*") if path.is_file())
     second_prune = prune_run(result.run_dir, artifact_retention="compact")

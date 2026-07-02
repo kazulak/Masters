@@ -154,6 +154,7 @@ validation:
     assert (result.run_dir / "run_manifest.json").exists()
     assert (result.run_dir / "artifact_retention_manifest.json").exists()
     assert (result.run_dir / "normalized_records.jsonl").exists()
+    assert not (result.run_dir / "plots").exists()
     assert result.run_dir.parent == tmp_path / "runs" / "evidence" / "unit_simulation_compare" / "simulation_backend_compare"
     manifest = json.loads((result.run_dir / "run_manifest.json").read_text(encoding="utf-8"))
     assert manifest["artifact_kind"] == "evidence_run"

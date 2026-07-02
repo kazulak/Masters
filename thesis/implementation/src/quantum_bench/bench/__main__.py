@@ -81,6 +81,7 @@ def main() -> int:
 
     report_run_parser = sub.add_parser("report-run")
     report_run_parser.add_argument("--input", required=True)
+    report_run_parser.add_argument("--out", required=True)
     report_run_parser.add_argument("--output-plots", action=argparse.BooleanOptionalAction, default=True)
 
     prune_run_parser = sub.add_parser("prune-run")
@@ -181,10 +182,7 @@ def main() -> int:
         from quantum_bench.bench.runner import run_suite
 
         run_dir = run_suite(suite_path(args.suite, root_dir), root_dir)
-        from quantum_bench.plots import plot_run
-
-        created = plot_run(run_dir)
-        print(json.dumps({"run_dir": str(run_dir), "plots": [str(path) for path in created]}, indent=2))
+        print(json.dumps({"run_dir": str(run_dir)}, indent=2))
         return 0
     if args.command == "compare-planners":
         run_dir = compare_planners(suite_path(args.suite, root_dir), root_dir)
@@ -396,7 +394,7 @@ def main() -> int:
         from quantum_bench.bench.reporting import report_run
 
         try:
-            result = report_run(Path(args.input), output_plots=args.output_plots)
+            result = report_run(Path(args.input), Path(args.out), output_plots=args.output_plots, root_dir=root_dir)
         except ValueError as exc:
             parser.error(str(exc))
         print(json.dumps({"run_dir": str(result.run_dir), "report": str(result.report_path), "status": result.status, "reason": result.reason}, indent=2))

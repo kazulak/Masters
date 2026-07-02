@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import time
 import traceback
 from pathlib import Path
@@ -56,8 +55,6 @@ def run_suite(suite_path: Path, root_dir: Path) -> Path:
         summary="summary.json",
         root_dir=root_dir,
     )
-    os.environ.setdefault("MPLCONFIGDIR", str(run_dir / "plots" / ".matplotlib"))
-    (run_dir / "plots" / ".matplotlib").mkdir(parents=True, exist_ok=True)
     (run_dir / "config" / "resolved_suite.yml").write_text(yaml.safe_dump(suite, sort_keys=True), encoding="utf-8")
     write_json(run_dir / "environment.json", capture_environment(root_dir))
     routes = route_registry(root_dir)

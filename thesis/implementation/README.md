@@ -83,6 +83,9 @@ Regenerate reports for the latest evidence run:
 make report-latest
 ```
 
+This reads `runs/latest` and writes derived tables/plots under
+`runs/comparisons/...`; it does not add figures to the evidence run.
+
 Generate a derived comparison for the latest evidence run:
 
 ```bash
@@ -116,4 +119,6 @@ runs/comparisons/<suite_id>/<comparison_type>/<comparison_id>/
 
 Every evidence run should contain `run_manifest.json` and
 `normalized_records.jsonl`. Comparison reports are derived analysis and should
-not mutate evidence folders.
+not mutate evidence folders. Derived tables, plot-source CSVs, and figures are
+written by `report-latest`, `report-run`, or comparison commands under
+`runs/comparisons/...`.
