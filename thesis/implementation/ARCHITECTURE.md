@@ -83,8 +83,10 @@ is the canonical source for report and comparison commands.
 
 ## Future Simplifications
 
-- Consolidate overlapping suite names into fewer obvious families: quick,
-  medium, large/manual, GPU, and UPMEM.
+- Consolidate suites into a small family: `smoke`, `cpu_evidence`,
+  `gpu_evidence`, `upmem_sim_evidence`, `manual_large`, and `diagnostics`.
+- Keep diagnostic suites and commands out of README and Makefile defaults.
+- Defer route cleanup until suite cleanup is stable.
 - Reduce repeated route/status vocabulary where it does not affect artifact
   semantics.
 - Keep the Makefile as the main execution surface.

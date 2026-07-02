@@ -53,8 +53,8 @@ def test_suite_config_loads() -> None:
     assert suite["route_policy"]["routes"][1] == "upmem_dense_int8_placeholder"
 
 
-def test_suite_v2_config_loads_with_separate_workloads_and_routes() -> None:
-    suite = load_suite(ROOT / "configs" / "suites" / "smoke_v2.yml")
+def test_smoke_suite_v2_schema_loads_with_separate_workloads_and_routes() -> None:
+    suite = load_suite(ROOT / "configs" / "suites" / "smoke.yml")
     assert suite["_schema_version"] == 2
     assert [case["case_id"] for case in suite["cases"]] == ["bell_2q", "ghz_4q"]
     assert suite["route_policy"]["routes"] == ["cpu_tn_einsum_exact", "upmem_dense_int8_placeholder"]

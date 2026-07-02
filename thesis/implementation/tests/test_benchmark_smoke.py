@@ -277,8 +277,8 @@ def test_smoke_suite_writes_raw_summary_and_plots_contract(tmp_path: Path) -> No
             assert metadata[field] >= 0
 
 
-def test_smoke_v2_suite_runs_with_same_contract(tmp_path: Path) -> None:
-    run_dir = run_suite(ROOT / "configs" / "suites" / "smoke_v2.yml", tmp_path)
+def test_smoke_suite_runs_with_same_contract(tmp_path: Path) -> None:
+    run_dir = run_suite(ROOT / "configs" / "suites" / "smoke.yml", tmp_path)
     raw_rows = _read_raw_rows(run_dir)
     summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
     assert len(raw_rows) == 8
