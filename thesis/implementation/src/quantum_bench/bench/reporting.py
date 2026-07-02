@@ -559,7 +559,7 @@ def _write_plot_source_tables(run_dir: Path, records: list[JsonDict]) -> JsonDic
 
 def _write_plots(run_dir: Path, plot_tables: JsonDict) -> None:
     plots_dir = run_dir / "plots"
-    os.environ.setdefault("MPLCONFIGDIR", str(plots_dir / ".matplotlib"))
+    os.environ.setdefault("MPLCONFIGDIR", str(_matplotlib_cache_dir(run_dir)))
     try:
         import matplotlib.pyplot as plt
     except Exception as exc:
@@ -623,6 +623,13 @@ def _write_plots(run_dir: Path, plot_tables: JsonDict) -> None:
             "plots": entries,
         },
     )
+
+
+def _matplotlib_cache_dir(run_dir: Path) -> Path:
+    for parent in (run_dir, *run_dir.parents):
+        if parent.name == "runs":
+            return parent.parent / "build" / "matplotlib"
+    return run_dir.parent / "build" / "matplotlib"
 
 
 def _plot_runtime_by_backend_case(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:

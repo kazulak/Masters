@@ -67,9 +67,21 @@ runs/comparisons/<suite_id>/<comparison_type>/<comparison_id>/
 ```
 
 `runs/latest` points only to the latest evidence run. `normalized_records.jsonl`
-is the canonical source for report and comparison commands. Derived tables,
-plot-source CSVs, and figures belong under comparison/report output directories,
-not inside evidence runs.
+is the canonical source for report and comparison commands. Evidence runs should
+contain raw execution evidence, manifests, summaries, and normalized records
+only.
+
+Derived tables, validation summaries, plot-source CSVs, and figures belong under
+comparison/report output directories, not inside evidence runs. Build/cache
+outputs belong under ignored locations such as `build/`, `.pytest_cache/`, and
+native `bin/` or `build/` directories. Historical timestamped run folders that
+pre-date the `runs/evidence` and `runs/comparisons` split are legacy generated
+diagnostics, not canonical thesis evidence.
+
+The older `run --suite` smoke path still writes concrete legacy evidence files
+under `raw/`, `validation/`, and `metrics/`. Those files are not inputs to
+`report-run`; normalized benchmark/report workflows use `normalized_records.jsonl`
+as the source artifact.
 
 ## Route And Device Rules
 

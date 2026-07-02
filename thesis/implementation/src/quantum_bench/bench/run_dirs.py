@@ -19,7 +19,9 @@ ROUTE_LABELS = {
     "upmem_tn_sdk_simulator_quantized": "upmem_generic_int8",
 }
 
-STANDARD_RUN_SUBDIRS = ("config", "cases", "raw", "validation", "metrics")
+# Evidence runs should not contain empty report/debug scaffolding. Writers create
+# raw, validation, metrics, and plot directories only when they emit real files.
+STANDARD_RUN_SUBDIRS = ("config", "cases")
 
 
 def create_run_dir(

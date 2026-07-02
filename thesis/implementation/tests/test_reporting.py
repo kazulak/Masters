@@ -223,6 +223,7 @@ def test_report_run_writes_thesis_plot_sources_and_inventory(tmp_path: Path) -> 
     assert relative_csv.exists()
     assert compute_csv.exists()
     assert total_vs_compute_csv.exists()
+    assert not (report_dir / "plots" / ".matplotlib").exists()
     with backend_csv.open("r", encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle))
     assert {row["case_family"] for row in rows} >= {"qrng", "bv"}

@@ -65,6 +65,12 @@ def test_compare_results_fails_gracefully_without_compatible_artifacts(tmp_path:
 
 def test_evidence_run_layout_and_compare_results_read_only_boundary(tmp_path: Path) -> None:
     run_dir = create_run_dir(tmp_path, "suite_a", artifact_kind=EVIDENCE_ARTIFACT_KIND, route_label="upmem_generic_int8")
+    assert (run_dir / "config").exists()
+    assert (run_dir / "cases").exists()
+    assert not (run_dir / "raw").exists()
+    assert not (run_dir / "metrics").exists()
+    assert not (run_dir / "validation").exists()
+    assert not (run_dir / "plots").exists()
     record = {
         "schema_version": "benchmark_result_artifact_v1",
         "run_id": run_dir.name,

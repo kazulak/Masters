@@ -110,6 +110,11 @@ Remove benchmark evidence and comparisons only when explicitly requested:
 make clean-generated CLEAN_RUNS=1
 ```
 
+`CLEAN_RUNS=1` is intentionally destructive for generated local run artifacts:
+it removes `runs/evidence`, `runs/comparisons`, `runs/latest`, and older legacy
+run folders. Use it when you want to reclaim disk space or reset local evidence
+state.
+
 ## Where Results Live
 
 ```text
@@ -121,4 +126,9 @@ Every evidence run should contain `run_manifest.json` and
 `normalized_records.jsonl`. Comparison reports are derived analysis and should
 not mutate evidence folders. Derived tables, plot-source CSVs, and figures are
 written by `report-latest`, `report-run`, or comparison commands under
-`runs/comparisons/...`.
+`runs/comparisons/...`. Build/cache outputs are ignored and live under paths
+such as `build/`, `.pytest_cache/`, and native `bin/` or `build/` directories.
+
+The legacy smoke command, `run --suite`, writes raw JSONL, validation JSON, and
+metrics CSV files as its own evidence format. Use the Makefile evidence commands
+when you need `normalized_records.jsonl` for report and comparison regeneration.
