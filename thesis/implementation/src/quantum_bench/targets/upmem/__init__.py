@@ -110,6 +110,14 @@ from quantum_bench.targets.upmem.generic_bridge import (
     read_generic_bridge_output_manifest,
     write_generic_bridge_input_manifest,
 )
+from quantum_bench.targets.upmem.generic_boundary import (
+    GENERIC_BOUNDARY_CASE_ID,
+    GENERIC_BOUNDARY_EINSUM,
+    GenericBoundaryWorkload,
+    build_generic_boundary_workload,
+    generic_boundary_manifest,
+    is_generic_boundary_case,
+)
 from quantum_bench.targets.upmem.simplepim import (
     SIMPLEPIM_PROBE_KEY,
     SimplePimProbeResult,

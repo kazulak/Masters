@@ -7,6 +7,7 @@ import numpy as np
 
 from quantum_bench.bench.reporting import prune_run, report_run
 from quantum_bench.bench.result_artifacts import compare_results, load_result_records
+from quantum_bench.bench.upmem_generic_feasibility import run_upmem_generic_feasibility
 from quantum_bench.bench.upmem_mvp_benchmark import run_upmem_mvp_benchmark, validate_options
 from quantum_bench.targets.upmem.generic_bridge import (
     GENERIC_BRIDGE_ID,
@@ -143,6 +144,7 @@ def test_upmem_mvp_benchmark_runs_suite_and_compare_results(monkeypatch, tmp_pat
     assert all(row["upmem_execution_mode"] == "sdk_simulator" for row in payload["upmem_rows"])
     assert all(row["whole_network_quantized_at_initialization"] is False for row in payload["upmem_rows"])
     assert all(row["cpu_fallback_used"] is False for row in payload["upmem_rows"])
+    assert all(row["native_upmem_kernel_executed"] is True for row in payload["upmem_rows"])
     assert all(row["upmem_runtime_summary_artifact"]["retained"] is True for row in payload["upmem_rows"])
     assert all(not Path(row["upmem_runtime_summary_artifact"]["relative_path"]).is_absolute() for row in payload["upmem_rows"])
 
@@ -159,6 +161,7 @@ def test_upmem_mvp_benchmark_runs_suite_and_compare_results(monkeypatch, tmp_pat
     assert all(record["hardware_speedup"] == "not_applicable" for record in upmem_records)
     assert all(record["contraction_execution_target"] == "upmem" for record in upmem_records)
     assert all(record["upmem_execution_mode"] == "sdk_simulator" for record in upmem_records)
+    assert all(record["upmem_program_executed"] is True for record in upmem_records)
     assert all(record["contraction_execution_target"] == "cpu" for record in cpu_records)
 
     comparison = compare_results([result.run_dir], tmp_path / "comparison")
@@ -176,7 +179,7 @@ def test_upmem_mvp_benchmark_runs_suite_and_compare_results(monkeypatch, tmp_pat
     assert set(before) == set(after)
 
 
-def test_upmem_mvp_benchmark_records_unsupported_quantization(monkeypatch, tmp_path: Path) -> None:
+def test_upmem_mvp_benchmark_records_same_route_quantization_comparison(monkeypatch, tmp_path: Path) -> None:
     suite_path = tmp_path / "suite.yml"
     _write_suite(suite_path)
     monkeypatch.setattr("quantum_bench.targets.upmem.taskgraph_runtime.execute_generic_bridge", _fake_generic_execute_from_expected)
@@ -185,16 +188,26 @@ def test_upmem_mvp_benchmark_records_unsupported_quantization(monkeypatch, tmp_p
         tmp_path,
         suite_path=suite_path,
         policies=("generic-only",),
-        quantization_modes=("none",),
+        quantization_modes=("none", "per_task_input_quantize"),
         execute_external=True,
     )
 
     payload = json.loads(result.summary_path.read_text(encoding="utf-8"))
     assert result.status == "completed"
-    assert payload["unsupported_count"] == 2
-    assert all(row["status"] == "unsupported" for row in payload["upmem_rows"])
-    assert all(row["reason"] == "unsupported_quantization_mode:none" for row in payload["upmem_rows"])
-    assert (result.run_dir / "unsupported_reasons.csv").exists()
+    assert payload["unsupported_count"] == 0
+    assert payload["quantization_comparison_count"] == 2
+    none_rows = [row for row in payload["upmem_rows"] if row["quantization_mode"] == "none"]
+    quantized_rows = [row for row in payload["upmem_rows"] if row["quantization_mode"] == "per_task_input_quantize"]
+    assert len(none_rows) == len(quantized_rows) == 2
+    assert all(row["input_dtype_on_dpu"] == "float32" for row in none_rows)
+    assert all(row["accumulator_dtype_on_dpu"] == "float32" for row in none_rows)
+    assert all(row["native_unquantized_upmem_kernel_executed"] is True for row in none_rows)
+    assert all(row["input_dtype_on_dpu"] == "int8" for row in quantized_rows)
+    assert all(row["scaling_applied"] is True for row in quantized_rows)
+    comparison = json.loads((result.run_dir / "quantization_comparison.json").read_text(encoding="utf-8"))
+    assert len(comparison["rows"]) == 2
+    assert all(row["same_route_comparison"] is True for row in comparison["rows"])
+    assert all(row["native_unquantized_upmem_kernel_executed"] is True for row in comparison["rows"])
 
 
 def test_upmem_mvp_benchmark_records_task_cap_without_crashing(monkeypatch, tmp_path: Path) -> None:
@@ -229,3 +242,22 @@ def test_upmem_mvp_benchmark_requires_external_execution() -> None:
         assert "--execute-external" in str(exc)
     else:  # pragma: no cover - defensive assertion
         raise AssertionError("upmem-mvp-benchmark should require --execute-external")
+
+
+def test_upmem_generic_feasibility_scanner_records_both_quantization_modes(tmp_path: Path) -> None:
+    suite_path = tmp_path / "suite.yml"
+    _write_suite(suite_path)
+
+    result = run_upmem_generic_feasibility(
+        tmp_path,
+        suite_path=suite_path,
+        quantization_modes=("none", "per_task_input_quantize"),
+    )
+
+    payload = json.loads((result.run_dir / "upmem_generic_feasibility.json").read_text(encoding="utf-8"))
+    assert result.status == "completed"
+    assert payload["summary"]["case_mode_rows"] == 4
+    assert payload["summary"]["dpu_programs_executed"] is False
+    assert {row["quantization_mode"] for row in payload["rows"]} == {"none", "per_task_input_quantize"}
+    assert (result.run_dir / "upmem_generic_feasibility_cases.csv").exists()
+    assert (result.run_dir / "upmem_generic_feasibility_tasks.jsonl").exists()

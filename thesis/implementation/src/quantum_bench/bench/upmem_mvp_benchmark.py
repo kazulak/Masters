@@ -31,6 +31,7 @@ from quantum_bench.targets.upmem.taskgraph_runtime import (
     UPMEM_EXECUTION_MODE,
     UPMEM_TASKGRAPH_POLICIES,
     UPMEM_TASKGRAPH_QUANTIZATION_MODES,
+    build_generic_taskgraph_reference,
     execute_upmem_taskgraph_runtime,
 )
 from quantum_bench.tn import build_tensor_network, execute_task_sequence_np_einsum, plan_task_graph_with_config, with_path_cost_summary
@@ -43,6 +44,7 @@ RESULT_FIELDS = [
     "workload_id",
     "circuit_family",
     "n_qubits",
+    "route",
     "policy",
     "quantization_mode",
     "status",
@@ -69,6 +71,21 @@ RESULT_FIELDS = [
     "total_wall_time_s",
     "total_kernel_time_s",
     "total_bridge_time_s",
+    "total_quantization_time_s",
+    "total_dequantization_time_s",
+    "total_simulator_time_s",
+    "total_host_orchestration_time_s",
+    "actual_h2d_bytes",
+    "actual_d2h_bytes",
+    "actual_transfer_bytes",
+    "full_precision_transfer_bytes_model",
+    "transfer_compression_ratio",
+    "input_dtype_on_dpu",
+    "accumulator_dtype_on_dpu",
+    "scaling_applied",
+    "unquantized_mode_kind",
+    "native_upmem_kernel_executed",
+    "native_unquantized_upmem_kernel_executed",
     "cpu_reference_artifact",
     "upmem_runtime_summary_artifact",
     "upmem_task_metrics_artifact",
@@ -88,6 +105,23 @@ QUANTIZATION_FIELDS = [
     "max_task_bridge_error",
 ]
 UNSUPPORTED_FIELDS = ["case_id", "policy", "quantization_mode", "reason", "count"]
+QUANTIZATION_COMPARISON_FIELDS = [
+    "case_id",
+    "policy",
+    "same_route_comparison",
+    "same_taskgraph",
+    "same_kernel_family",
+    "quantized_runtime_s",
+    "unquantized_runtime_s",
+    "quantization_runtime_speedup",
+    "quantized_transfer_bytes",
+    "unquantized_transfer_bytes",
+    "transfer_reduction",
+    "quantized_max_abs_error_vs_full_precision",
+    "unquantized_max_abs_error_vs_full_precision",
+    "accuracy_delta",
+    "native_unquantized_upmem_kernel_executed",
+]
 
 
 @dataclass(frozen=True)
@@ -191,6 +225,21 @@ def run_upmem_mvp_benchmark(
     _write_csv(run_dir / "kernel_family_summary.csv", _kernel_family_summary(result_rows), KERNEL_FAMILY_FIELDS)
     _write_csv(run_dir / "quantization_accuracy_summary.csv", _quantization_accuracy_rows(result_rows), QUANTIZATION_FIELDS)
     _write_csv(run_dir / "unsupported_reasons.csv", _unsupported_reason_rows(result_rows), UNSUPPORTED_FIELDS)
+    quantization_comparison_rows = _quantization_comparison_rows(result_rows)
+    _write_csv(run_dir / "quantization_comparison.csv", quantization_comparison_rows, QUANTIZATION_COMPARISON_FIELDS)
+    write_json(
+        run_dir / "quantization_comparison.json",
+        {
+            "schema_version": UPMEM_MVP_BENCHMARK_SCHEMA_VERSION,
+            "comparison_kind": "same_route_generic_upmem_quantization_attribution",
+            "rows": quantization_comparison_rows,
+            "metadata": {
+                "native_unquantized_upmem_required": True,
+                "hardware_speedup_applicable": False,
+                "simulator_runtime_ratio_not_hardware_speedup": True,
+            },
+        },
+    )
 
     summary = _summary_payload(
         suite=suite,
@@ -201,6 +250,7 @@ def run_upmem_mvp_benchmark(
         max_taskgraph_tasks=max_taskgraph_tasks,
         result_rows=result_rows,
         cpu_reference_records=cpu_reference_records,
+        quantization_comparison_rows=quantization_comparison_rows,
     )
     write_json(run_dir / "upmem_mvp_benchmark_summary.json", summary)
     (run_dir / "comparison_summary.md").write_text(_summary_markdown(summary, result_rows), encoding="utf-8")
@@ -363,6 +413,29 @@ def _run_case_policy(
         _write_child_runtime_artifacts(run_dir, runtime_summary_rel, task_metrics_rel, summary, ())
         return _row_from_runtime_summary(generated, policy, quantization_mode, summary, runtime_summary_rel, task_metrics_rel, None)
 
+    reference_output = generated["reference_output"]
+    reference_kind = "cpu_exact_taskgraph_full_precision"
+    generic_reference = None
+    if policy == "generic-only":
+        generic_reference = build_generic_taskgraph_reference(
+            graph=graph,
+            network=generated["network"],
+            case_id=case_id,
+            quantization_mode=quantization_mode,  # type: ignore[arg-type]
+        )
+        if generic_reference.status != "completed":
+            summary = _runtime_error_summary(
+                case_id,
+                policy,
+                quantization_mode,
+                f"generic_feasibility_{generic_reference.reason or generic_reference.status}",
+            )
+            summary["generic_feasibility"] = generic_reference.to_json_dict()
+            _write_child_runtime_artifacts(run_dir, runtime_summary_rel, task_metrics_rel, summary, ())
+            return _row_from_runtime_summary(generated, policy, quantization_mode, summary, runtime_summary_rel, task_metrics_rel, None)
+        reference_output = generic_reference.output
+        reference_kind = str(generic_reference.summary.get("reference_kind") or reference_kind)
+
     runtime = execute_upmem_taskgraph_runtime(
         graph=graph,
         network=generated["network"],
@@ -371,7 +444,8 @@ def _run_case_policy(
         quantization_mode=quantization_mode,
         bridge_root=child_dir / "upmem_taskgraph_bridge",
         execute_external=execute_external,
-        reference_output=generated["reference_output"],
+        reference_output=reference_output,
+        reference_kind=reference_kind,
         env=env,
     )
     final_tensor_artifact = None
@@ -386,6 +460,7 @@ def _run_case_policy(
         quantization_mode=quantization_mode,
         runtime_summary=dict(runtime.summary),
         runtime_task_metrics=runtime.task_metrics,
+        generic_reference=generic_reference,
         runtime_summary_rel=runtime_summary_rel,
         task_metrics_rel=task_metrics_rel,
         final_tensor_artifact=final_tensor_artifact,
@@ -402,6 +477,7 @@ def _enriched_runtime_summary(
     quantization_mode: str,
     runtime_summary: JsonDict,
     runtime_task_metrics: tuple[JsonDict, ...],
+    generic_reference,
     runtime_summary_rel: Path,
     task_metrics_rel: Path,
     final_tensor_artifact: str | None,
@@ -422,10 +498,11 @@ def _enriched_runtime_summary(
             "task_metrics_artifact": _planned_artifact_ref(task_metrics_rel, role="task_metrics"),
             "final_tensor_artifact": artifact_ref(run_dir, final_tensor_artifact, role="final_tensor"),
             "reference": {
-                "kind": "cpu_exact_taskgraph_full_precision_final_validation_only",
+                "kind": runtime_summary.get("final_validation", {}).get("reference_kind", "cpu_exact_taskgraph_full_precision"),
                 "cpu_reference_artifact": generated["cpu_reference_artifact"],
                 "cpu_reference_tensor_artifact": generated["cpu_reference_tensor_artifact"],
                 "cpu_reference_used_to_feed_runtime_tensors": False,
+                "generic_reference": generic_reference.to_json_dict() if generic_reference is not None else None,
             },
             "artifacts": {
                 "runtime_summary": _planned_artifact_ref(runtime_summary_rel, role="runtime_summary"),
@@ -525,6 +602,7 @@ def _row_from_runtime_summary(
             "workload_id": generated["workload_id"],
             "circuit_family": generated["circuit_family"],
             "n_qubits": int(getattr(generated.get("circuit"), "n_qubits", 0) or 0),
+            "route": "upmem_taskgraph_runtime",
             "policy": policy,
             "quantization_mode": quantization_mode,
             "status": summary.get("status"),
@@ -551,6 +629,28 @@ def _row_from_runtime_summary(
             "total_wall_time_s": float(summary.get("total_wall_time_s", 0.0) or 0.0),
             "total_kernel_time_s": float(summary.get("total_kernel_time_s", 0.0) or 0.0),
             "total_bridge_time_s": float(summary.get("total_bridge_time_s", 0.0) or 0.0),
+            "total_quantization_time_s": float(summary.get("total_quantization_time_s", 0.0) or 0.0),
+            "total_dequantization_time_s": float(summary.get("total_dequantization_time_s", 0.0) or 0.0),
+            "total_simulator_time_s": float(summary.get("total_kernel_time_s", 0.0) or 0.0),
+            "total_host_orchestration_time_s": max(
+                0.0,
+                float(summary.get("total_wall_time_s", 0.0) or 0.0) - float(summary.get("total_kernel_time_s", 0.0) or 0.0),
+            ),
+            "actual_h2d_bytes": int(summary.get("actual_h2d_bytes", 0) or 0),
+            "actual_d2h_bytes": int(summary.get("actual_d2h_bytes", 0) or 0),
+            "actual_transfer_bytes": int(summary.get("actual_transfer_bytes", 0) or 0),
+            "full_precision_transfer_bytes_model": int(summary.get("full_precision_transfer_bytes_model", 0) or 0),
+            "transfer_compression_ratio": summary.get("transfer_compression_ratio"),
+            "input_dtype_on_dpu": summary.get("input_dtype_on_dpu"),
+            "accumulator_dtype_on_dpu": summary.get("accumulator_dtype_on_dpu"),
+            "scaling_applied": summary.get("scaling_applied"),
+            "unquantized_mode_kind": summary.get("unquantized_mode_kind"),
+            "native_upmem_kernel_executed": bool(summary.get("dpu_program_executed_all_tasks") is True),
+            "native_unquantized_upmem_kernel_executed": bool(
+                summary.get("quantization_mode") == "none"
+                and summary.get("input_dtype_on_dpu") == "float32"
+                and summary.get("dpu_program_executed_all_tasks") is True
+            ),
             "cpu_reference_artifact": generated.get("cpu_reference_artifact"),
             "upmem_runtime_summary_artifact": summary.get("artifacts", {}).get("runtime_summary"),
             "upmem_task_metrics_artifact": summary.get("artifacts", {}).get("task_metrics"),
@@ -627,6 +727,7 @@ def _summary_payload(
     max_taskgraph_tasks: int,
     result_rows: list[JsonDict],
     cpu_reference_records: list[JsonDict],
+    quantization_comparison_rows: list[JsonDict],
 ) -> JsonDict:
     return to_jsonable(
         {
@@ -644,6 +745,8 @@ def _summary_payload(
             "validation_failed_count": sum(1 for row in result_rows if row["status"] == "validation_failed"),
             "cpu_reference_records": cpu_reference_records,
             "upmem_rows": result_rows,
+            "quantization_comparison_rows": quantization_comparison_rows,
+            "quantization_comparison_count": len(quantization_comparison_rows),
             "upmem_normalized_records_are_child_runtime_summaries": False,
             "root_summary_emits_upmem_normalized_records": True,
             "root_normalized_records_are_canonical": True,
@@ -701,6 +804,77 @@ def _quantization_accuracy_rows(rows: list[JsonDict]) -> list[JsonDict]:
             }
         )
     return output
+
+
+def _quantization_comparison_rows(rows: list[JsonDict]) -> list[JsonDict]:
+    by_key: dict[tuple[str, str], dict[str, JsonDict]] = {}
+    for row in rows:
+        if row.get("policy") != "generic-only":
+            continue
+        if row.get("status") != "completed":
+            continue
+        mode = str(row.get("quantization_mode"))
+        if mode not in {"none", "per_task_input_quantize"}:
+            continue
+        key = (str(row.get("case_id")), str(row.get("policy")))
+        by_key.setdefault(key, {})[mode] = row
+
+    output: list[JsonDict] = []
+    for (case_id, policy), modes in sorted(by_key.items()):
+        quantized = modes.get("per_task_input_quantize")
+        unquantized = modes.get("none")
+        if quantized is None or unquantized is None:
+            continue
+        quantized_runtime = _positive_float_or_none(quantized.get("total_wall_time_s"))
+        unquantized_runtime = _positive_float_or_none(unquantized.get("total_wall_time_s"))
+        quantized_transfer = _positive_float_or_none(quantized.get("actual_transfer_bytes"))
+        unquantized_transfer = _positive_float_or_none(unquantized.get("actual_transfer_bytes"))
+        quantized_error = _float_or_none(quantized.get("max_abs_error"))
+        unquantized_error = _float_or_none(unquantized.get("max_abs_error"))
+        output.append(
+            {
+                "case_id": case_id,
+                "policy": policy,
+                "same_route_comparison": True,
+                "same_taskgraph": True,
+                "same_kernel_family": True,
+                "quantized_runtime_s": quantized_runtime,
+                "unquantized_runtime_s": unquantized_runtime,
+                "quantization_runtime_speedup": _ratio(unquantized_runtime, quantized_runtime),
+                "quantized_transfer_bytes": quantized_transfer,
+                "unquantized_transfer_bytes": unquantized_transfer,
+                "transfer_reduction": _ratio(unquantized_transfer, quantized_transfer),
+                "quantized_max_abs_error_vs_full_precision": quantized_error,
+                "unquantized_max_abs_error_vs_full_precision": unquantized_error,
+                "accuracy_delta": None if quantized_error is None or unquantized_error is None else quantized_error - unquantized_error,
+                "native_unquantized_upmem_kernel_executed": bool(
+                    unquantized.get("native_unquantized_upmem_kernel_executed") is True
+                ),
+            }
+        )
+    return output
+
+
+def _positive_float_or_none(value: Any) -> float | None:
+    number = _float_or_none(value)
+    if number is None or number <= 0.0:
+        return None
+    return number
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _ratio(numerator: float | None, denominator: float | None) -> float | None:
+    if numerator is None or denominator is None or denominator == 0.0:
+        return None
+    return numerator / denominator
 
 
 def _max_bridge_error(task_metrics: tuple[JsonDict, ...]) -> float | None:

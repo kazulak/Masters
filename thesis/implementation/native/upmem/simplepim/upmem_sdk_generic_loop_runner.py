@@ -21,6 +21,12 @@ DEFAULT_MAX_RANK = 6
 DEFAULT_MAX_ELEMS = 4096
 DEFAULT_TIMEOUT_SECONDS = 30.0
 SNIPPET_LIMIT = 2000
+MODE_INT8_SCALED = "int8_scaled"
+MODE_FLOAT32_NO_QUANT = "float32_no_quant"
+NATIVE_MODE_IDS = {
+    MODE_INT8_SCALED: 0,
+    MODE_FLOAT32_NO_QUANT: 1,
+}
 
 
 def main() -> int:
@@ -133,8 +139,8 @@ def main() -> int:
         right_path = inputs_dir / "right_i8.bin"
         raw_output_path = outputs_dir / "generic_output_i32.bin"
         args_path.write_bytes(_pack_args(prepared["native_index_metadata"]))
-        prepared["left"].astype(np.int8, copy=False).ravel().tofile(left_path)
-        prepared["right"].astype(np.int8, copy=False).ravel().tofile(right_path)
+        prepared["left"].astype(prepared["input_dtype"], copy=False).ravel().tofile(left_path)
+        prepared["right"].astype(prepared["input_dtype"], copy=False).ravel().tofile(right_path)
 
         build_started = time.perf_counter()
         build = _run_command(
@@ -197,10 +203,13 @@ def main() -> int:
             )
             return 1
 
-        output_i32 = np.fromfile(raw_output_path, dtype="<i4")
         output_shape = tuple(int(dim) for dim in manifest["output_shape"])
-        output_i32 = output_i32.reshape(output_shape)
-        output = output_i32.astype(np.float64) * float(prepared["output_scale"])
+        if prepared["operand_mode"] == MODE_FLOAT32_NO_QUANT:
+            raw_output = np.fromfile(raw_output_path, dtype="<f4").reshape(output_shape)
+            output = raw_output.astype(np.float32, copy=False)
+        else:
+            raw_output = np.fromfile(raw_output_path, dtype="<i4").reshape(output_shape)
+            output = raw_output.astype(np.float64) * float(prepared["output_scale"])
         expected = prepared["expected"]
         validation = _validation_metrics(expected, output)
         output_blob_path = bridge_dir / "outputs" / "upmem_sdk_generic_loop_output.npy"
@@ -233,6 +242,17 @@ def main() -> int:
                 "runner_total_time_s": time.perf_counter() - started,
                 "simulator_run_time_s": simulator_run_time_s,
                 "kernel_invocation_count": 1,
+                "operand_mode": prepared["operand_mode"],
+                "quantization_mode": prepared["quantization_mode"],
+                "input_dtype_on_dpu": prepared["input_dtype_name"],
+                "accumulator_dtype_on_dpu": prepared["accumulator_dtype_on_dpu"],
+                "output_dtype_on_dpu": prepared["output_dtype_on_dpu"],
+                "unquantized_mode_kind": prepared["unquantized_mode_kind"],
+                "scaling_applied": prepared["scaling_applied"],
+                "actual_h2d_bytes": prepared["actual_h2d_bytes"],
+                "actual_d2h_bytes": prepared["actual_d2h_bytes"],
+                "full_precision_h2d_bytes_model": prepared["full_precision_h2d_bytes_model"],
+                "full_precision_d2h_bytes_model": prepared["full_precision_d2h_bytes_model"],
                 "build": build,
                 "run": run,
                 "runner_work": {"source": "runner_work/src", "build": "runner_work/build", "inputs": "runner_work/inputs", "outputs": "runner_work/outputs"},
@@ -281,15 +301,50 @@ def _prepare_inputs(manifest: dict[str, Any], bridge_dir: Path, env: Mapping[str
     _validate_blob(left, left_meta, "left")
     _validate_blob(right, right_meta, "right")
     _validate_blob(expected, expected_meta, "expected_quantized_reference_output")
-    if str(left.dtype) != "int8" or str(right.dtype) != "int8":
-        raise ValueError("generic loop backend supports int8 operands only")
+    metadata = dict(manifest.get("metadata") or {})
     native = dict(manifest["native_index_metadata"])
+    operand_mode = str(metadata.get("operand_mode") or native.get("operand_mode") or MODE_INT8_SCALED)
+    if operand_mode not in NATIVE_MODE_IDS:
+        raise ValueError(f"unsupported generic operand mode: {operand_mode}")
+    if operand_mode == MODE_FLOAT32_NO_QUANT:
+        if str(left.dtype) != "float32" or str(right.dtype) != "float32":
+            raise ValueError("float32_no_quant generic loop backend requires float32 operands")
+        input_dtype = np.dtype("<f4")
+        input_dtype_name = "float32"
+        accumulator_dtype = "float32"
+        output_dtype = "float32"
+        scaling_applied = False
+        unquantized_mode_kind = MODE_FLOAT32_NO_QUANT
+    else:
+        if str(left.dtype) != "int8" or str(right.dtype) != "int8":
+            raise ValueError("int8_scaled generic loop backend requires int8 operands")
+        input_dtype = np.dtype("int8")
+        input_dtype_name = "int8"
+        accumulator_dtype = "int32"
+        output_dtype = "int32"
+        scaling_applied = True
+        unquantized_mode_kind = None
+    args_bytes = _pack_args(native)
+    actual_h2d_bytes = _align8(left.size * input_dtype.itemsize) + _align8(right.size * input_dtype.itemsize) + len(args_bytes)
+    actual_d2h_bytes = _align8(expected.size * (4 if operand_mode == MODE_FLOAT32_NO_QUANT else 4))
     return {
         "left": left,
         "right": right,
         "expected": expected,
         "native_index_metadata": native,
         "output_scale": float(manifest["dequantization"]["output_scale"]),
+        "operand_mode": operand_mode,
+        "quantization_mode": str(metadata.get("quantization_mode") or "per_task_input_quantize"),
+        "input_dtype": input_dtype,
+        "input_dtype_name": input_dtype_name,
+        "accumulator_dtype_on_dpu": accumulator_dtype,
+        "output_dtype_on_dpu": output_dtype,
+        "unquantized_mode_kind": unquantized_mode_kind,
+        "scaling_applied": scaling_applied,
+        "actual_h2d_bytes": int(actual_h2d_bytes),
+        "actual_d2h_bytes": int(actual_d2h_bytes),
+        "full_precision_h2d_bytes_model": int(metadata.get("full_precision_h2d_bytes_model") or actual_h2d_bytes),
+        "full_precision_d2h_bytes_model": int(metadata.get("full_precision_d2h_bytes_model") or actual_d2h_bytes),
     }
 
 
@@ -313,6 +368,7 @@ def _pack_args(native: dict[str, Any]) -> bytes:
         _product(tuple(int(dim) for dim in native["right_shape"])),
         int(native["output_element_count"]),
         int(native["contracted_combination_count"]),
+        int(NATIVE_MODE_IDS.get(str(native.get("operand_mode") or MODE_INT8_SCALED), 0)),
     ]
     for key in ("left_shape", "right_shape", "output_shape", "contracted_dims", "left_strides", "right_strides", "output_strides"):
         fields.extend(u32_array(key))
@@ -381,9 +437,9 @@ def _validation_metrics(expected: np.ndarray, actual: np.ndarray) -> dict[str, A
     l2_error = float(np.linalg.norm(diff.ravel()))
     expected_norm = float(np.linalg.norm(expected.ravel()))
     relative_l2_error = 0.0 if expected_norm == 0.0 and l2_error == 0.0 else (None if expected_norm == 0.0 else l2_error / expected_norm)
-    max_abs_tolerance = 1.0e-12
+    max_abs_tolerance = 1.0e-5 if str(np.asarray(expected).dtype) == "float32" else 1.0e-12
     return {
-        "reference_kind": "expected_quantized_reference_output_vs_upmem_sdk_generic_loop",
+        "reference_kind": "expected_reference_output_vs_upmem_sdk_generic_loop",
         "max_abs_error": max_abs_error,
         "l2_error": l2_error,
         "relative_l2_error": relative_l2_error,
@@ -470,6 +526,8 @@ def _base_metadata(target: str, kernel_executed: bool, *, max_elems: int | None 
         "target": target,
         "backend_family": "upmem_sdk",
         "kernel_family": KERNEL_FAMILY,
+        "operand_mode": None,
+        "quantization_mode": None,
         "simplepim_api_used": False,
         "native_sdk_control_path": True,
         "upmem_dpu_program_executed": kernel_executed,
@@ -495,6 +553,10 @@ def _product(shape: tuple[int, ...]) -> int:
     for dim in shape:
         value *= int(dim)
     return int(value)
+
+
+def _align8(bytes_count: int) -> int:
+    return int((int(bytes_count) + 7) & ~7)
 
 
 def _bounded_snippet(text: str, limit: int = SNIPPET_LIMIT) -> str:

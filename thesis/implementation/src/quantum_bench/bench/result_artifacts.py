@@ -62,6 +62,16 @@ RESULT_FIELDS = [
     "upmem_program_executed",
     "native_sdk_control_path",
     "simplepim_api_used",
+    "quantization_mode",
+    "input_dtype_on_dpu",
+    "accumulator_dtype_on_dpu",
+    "scaling_applied",
+    "unquantized_mode_kind",
+    "actual_h2d_bytes",
+    "actual_d2h_bytes",
+    "actual_transfer_bytes",
+    "total_quantization_time_s",
+    "total_dequantization_time_s",
     "execution_scope",
     "simulator_or_hardware",
     "status",
@@ -270,6 +280,21 @@ def _dense_task_bridge_record(summary: JsonDict, *, source_artifact: str | None)
         notes=_json_string({"artifacts": artifacts, "developer_only": metadata.get("developer_only", True)}),
         warnings=_warning_text(summary),
     )
+    record.update(
+        {
+            "execution_backend": summary.get("execution_backend"),
+            "cpu_fallback_used": summary.get("cpu_fallback_used", False),
+            "dpu_program_invocations": summary.get("dpu_program_invocations"),
+            "upmem_program_executed": (
+                summary.get("upmem_program_executed")
+                if summary.get("upmem_program_executed") is not None
+                else summary.get("dpu_program_executed_all_tasks")
+            ),
+            "hardware_execution": summary.get("hardware_execution", False),
+            "hardware_timing_available": summary.get("hardware_timing_available", False),
+            "hardware_speedup_applicable": summary.get("hardware_speedup_applicable", False),
+        }
+    )
     return _with_upmem_execution_metadata(record, summary)
 
 
@@ -307,6 +332,17 @@ def _generic_task_bridge_record(summary: JsonDict, *, source_artifact: str | Non
             }
         ),
         warnings=_warning_text(summary),
+    )
+    record.update(
+        {
+            "execution_backend": summary.get("execution_backend"),
+            "cpu_fallback_used": summary.get("cpu_fallback_used", False),
+            "dpu_program_invocations": summary.get("dpu_program_invocations"),
+            "upmem_program_executed": summary.get("upmem_program_executed"),
+            "hardware_execution": summary.get("hardware_execution", False),
+            "hardware_timing_available": summary.get("hardware_timing_available", False),
+            "hardware_speedup_applicable": summary.get("hardware_speedup_applicable", False),
+        }
     )
     return _with_upmem_execution_metadata(record, summary)
 
@@ -396,6 +432,7 @@ def _upmem_taskgraph_runtime_record(
             {
                 "policy": summary.get("policy"),
                 "quantization_mode": summary.get("quantization_mode"),
+                "reason": summary.get("reason"),
                 "whole_network_quantized_at_initialization": summary.get("whole_network_quantized_at_initialization"),
                 "valid_primary_upmem_codepath_result": summary.get("valid_primary_upmem_codepath_result"),
                 "dpu_program_executed_all_tasks": summary.get("dpu_program_executed_all_tasks"),
@@ -412,8 +449,29 @@ def _upmem_taskgraph_runtime_record(
             "comparison_output_kind": "final_tensor",
             "contraction_execution_target": summary.get("contraction_execution_target", "upmem"),
             "upmem_execution_mode": summary.get("upmem_execution_mode", "sdk_simulator"),
+            "execution_backend": summary.get("execution_backend", "upmem_sdk"),
+            "hardware_execution": summary.get("hardware_execution", False),
+            "hardware_timing_available": summary.get("hardware_timing_available", False),
+            "hardware_speedup_applicable": summary.get("hardware_speedup_applicable", False),
+            "cpu_fallback_used": summary.get("cpu_fallback_used", False),
+            "dpu_program_invocations": summary.get("dpu_program_invocations"),
+            "upmem_program_executed": (
+                summary.get("upmem_program_executed")
+                if summary.get("upmem_program_executed") is not None
+                else summary.get("dpu_program_executed_all_tasks")
+            ),
             "native_sdk_control_path": summary.get("native_sdk_control_path", True),
             "simplepim_api_used": summary.get("simplepim_api_used", False),
+            "quantization_mode": summary.get("quantization_mode"),
+            "input_dtype_on_dpu": summary.get("input_dtype_on_dpu"),
+            "accumulator_dtype_on_dpu": summary.get("accumulator_dtype_on_dpu"),
+            "scaling_applied": summary.get("scaling_applied"),
+            "unquantized_mode_kind": summary.get("unquantized_mode_kind"),
+            "actual_h2d_bytes": summary.get("actual_h2d_bytes"),
+            "actual_d2h_bytes": summary.get("actual_d2h_bytes"),
+            "actual_transfer_bytes": summary.get("actual_transfer_bytes"),
+            "total_quantization_time_s": summary.get("total_quantization_time_s"),
+            "total_dequantization_time_s": summary.get("total_dequantization_time_s"),
         }
     )
     return record
@@ -507,8 +565,25 @@ def _base_record(
         "gpu_device_name": None,
         "gpu_runtime_stack": None,
         "upmem_execution_mode": None,
+        "execution_backend": None,
+        "hardware_execution": False,
+        "hardware_timing_available": False,
+        "hardware_speedup_applicable": False,
+        "cpu_fallback_used": None,
+        "dpu_program_invocations": None,
+        "upmem_program_executed": None,
         "native_sdk_control_path": None,
         "simplepim_api_used": None,
+        "quantization_mode": None,
+        "input_dtype_on_dpu": None,
+        "accumulator_dtype_on_dpu": None,
+        "scaling_applied": None,
+        "unquantized_mode_kind": None,
+        "actual_h2d_bytes": None,
+        "actual_d2h_bytes": None,
+        "actual_transfer_bytes": None,
+        "total_quantization_time_s": None,
+        "total_dequantization_time_s": None,
         "execution_scope": execution_scope,
         "simulator_or_hardware": simulator_or_hardware,
         "status": status,

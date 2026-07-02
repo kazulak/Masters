@@ -1271,7 +1271,7 @@ def _unsupported_rows(records: list[JsonDict]) -> list[JsonDict]:
             str(record.get("case_id")),
             str(notes.get("policy")),
             str(notes.get("quantization_mode")),
-            str(record.get("warnings") or record.get("status") or "unsupported"),
+            str(notes.get("reason") or record.get("resource_skip_reason") or record.get("warnings") or record.get("status") or "unsupported"),
         )
         grouped[key] += count
     return [{"case_id": k[0], "policy": k[1], "quantization_mode": k[2], "reason": k[3], "count": v} for k, v in sorted(grouped.items())]

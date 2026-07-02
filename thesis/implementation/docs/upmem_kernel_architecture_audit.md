@@ -42,6 +42,50 @@ These commands should be treated as local audit evidence only when they pass in 
 | `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-taskgraph-runtime --case bell_2q --policy dense-then-generic --quantization-mode per_task_input_quantize --execute-external` | Revalidate strict sequential UPMEM SDK simulator TaskGraph runtime on a small real case. | Passed with `status: completed`; run directory `runs/20260702_003906_bell_2q_upmem_taskgraph_runtime`. |
 | `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simulation-backend-compare --suite configs/suites/simulation_backend_compare_upmem_sdk_simulator.yml --artifact-retention compact` | Revalidate the normalized comparison route `upmem_tn_sdk_simulator_quantized`. | Passed with `status: completed`, `case_count: 2`, and 6 normalized records in `runs/20260702_003911_simulation_backend_compare_upmem_sdk_simulator_simulation_backend_compare/normalized_records.jsonl`. |
 
+## Wave 2E.23 Boundary Result
+
+Wave 2E.23 added and executed `generic_rank3_boundary`, a developer-only non-GEMM binary contraction:
+
+```text
+abc,cde->abde
+left shape:  (2, 3, 4)
+right shape: (4, 5, 2)
+output shape: (2, 3, 5, 2)
+```
+
+| Evidence command | Result |
+| --- | --- |
+| `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench generic-task-bridge --case generic_rank3_boundary --task-index 0 --backend upmem_sdk_simulator_generic_loop --execute-external` | Passed with `status: completed`; run directory `runs/20260702_142056_generic_rank3_boundary_generic_task_bridge`. The summary records `bridge_execution_status=upmem_sdk_simulator_generic_loop_executed`, `dpu_program_invocations=1`, `upmem_program_executed=true`, `cpu_fallback_used=false`, and validation against `expected_quantized_reference_output` with `max_abs_error=5.551115123125783e-17`. |
+| `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-taskgraph-runtime --case generic_rank3_boundary --policy generic-only --quantization-mode per_task_input_quantize --execute-external` | Passed with `status: completed`; current run directory `runs/20260702_154721_generic_rank3_boundary_upmem_taskgraph_runtime`. The summary records `dpu_program_invocations=1`, `runtime_tensor_sources_all_upmem_output_blobs=true`, `generic_only_all_tasks_used_generic_backend=true`, `valid_primary_upmem_codepath_result=true`, and `final_validation.reference_kind=generic_quantized_taskgraph_replay` with primary `max_abs_error=5.551115123125783e-17`. The secondary full-precision accuracy record reports `max_abs_error=0.0022317899307078837`. |
+
+Native index metadata was preserved in the evidence:
+
+```text
+output_to_left_axes:      [0, 1, -1, -1]
+output_to_right_axes:     [-1, -1, 1, 2]
+contracted_to_left_axes:  [2]
+contracted_to_right_axes: [0]
+contracted_dims:          [4]
+output_element_count:     60
+```
+
+Boundary verdict: the existing generic UPMEM SDK simulator fallback can execute at least one concrete tensor-network-shaped, non-GEMM rank-3 x rank-3 -> rank-4 binary contraction correctly under current caps. This strengthens the claim that the UPMEM path is not limited to GEMM-like dense bridge tasks. It does not change the broader verdict: bounded generic UPMEM contraction exists, but fully general UPMEM TN contraction does not yet exist.
+
+## Wave 2E.24 Generic-Only TaskGraph Coverage Result
+
+Wave 2E.24 changed strict `generic-only` TaskGraph validation so the primary final reference is the CPU-side generic quantized/dequantized TaskGraph replay, not the full-precision CPU einsum replay. Full-precision CPU TaskGraph output is still recorded as secondary accuracy evidence.
+
+The generic quantized replay is implemented by `build_generic_quantized_taskgraph_reference` in `src/quantum_bench/targets/upmem/taskgraph_runtime.py`. It uses `prepare_generic_task` for each real task, combines complex tasks with the same split-real-imag four-component contract as the runtime, and inserts each quantized/dequantized task result into the reference tensor map.
+
+| Evidence command | Result |
+| --- | --- |
+| `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-taskgraph-runtime --case bell_2q --policy generic-only --quantization-mode per_task_input_quantize --execute-external` | Passed with `status: completed`; run directory `runs/20260702_154516_bell_2q_upmem_taskgraph_runtime`. The summary records `total_tasks=3`, `dpu_program_invocations=3`, `generic_only_all_tasks_used_generic_backend=true`, `runtime_tensor_sources_all_upmem_output_blobs=true`, `cpu_fallback_used=false`, `valid_primary_upmem_codepath_result=true`, and `final_validation.reference_kind=generic_quantized_taskgraph_replay`. |
+| `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-taskgraph-runtime --case ghz_chain --n-qubits 3 --policy generic-only --quantization-mode per_task_input_quantize --execute-external` | Passed with `status: completed`; run directory `runs/20260702_154516_ghz_chain_upmem_taskgraph_runtime`. The summary records `total_tasks=5`, `dpu_program_invocations=5`, `generic_only_all_tasks_used_generic_backend=true`, `cpu_fallback_used=false`, and `valid_primary_upmem_codepath_result=true`. |
+| `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-taskgraph-runtime --case bv --n-qubits 3 --policy generic-only --quantization-mode per_task_input_quantize --execute-external` | Passed with `status: completed`; run directory `runs/20260702_154516_bv_upmem_taskgraph_runtime`. The summary records `total_tasks=9`, `dpu_program_invocations=9`, `generic_only_all_tasks_used_generic_backend=true`, `cpu_fallback_used=false`, and `valid_primary_upmem_codepath_result=true`. Secondary full-precision max absolute error was `1.1102230246251565e-16`. |
+| `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench generic-task-bridge --case generic_rank3_boundary --task-index 0 --backend upmem_sdk_simulator_generic_loop --execute-external` | Passed with `status: completed`; run directory `runs/20260702_154529_generic_rank3_boundary_generic_task_bridge`. |
+
+Coverage verdict: the current generic UPMEM SDK simulator path can execute complete small sequential TaskGraphs in `generic-only` mode when every task fits the bounded generic contract. This is a real full-TaskGraph UPMEM SDK simulator codepath result under per-task quantization, not a hardware result and not an optimized runtime. The implementation remains bounded by one-DPU execution, rank/element caps, full local buffers, CPU-side quantization/dequantization, and CPU-side split-complex recombination.
+
 ## Direct Answers
 
 ### 1. What UPMEM Kernels Exist Today?
@@ -99,22 +143,12 @@ No.
 | Slicing/partitioning | Needed for L2/L3 memory hierarchy and distribution. | Missing as kernel. | Missing. | Missing. | `missing`. | Native source inventory from `rg --files native/upmem/simplepim`; strict runtime has no partitioning path in `src/quantum_bench/targets/upmem/taskgraph_runtime.py:114-180`. | No tensor slicing or scatter/gather kernel. | Add one host-side partition metadata model before native DPU slicing. |
 | Multi-DPU distribution/collectives | Needed for L3. | Missing. | Missing. | Missing. | `missing`. | Generic host allocates one DPU at `native/upmem/simplepim/upmem_sdk_generic_loop/host.c:103`; dense host allocates one DPU at `native/upmem/simplepim/upmem_sdk_dense/host.c:145`. | No PID-Comm integration, no native collectives, no multi-DPU scheduler. | Implement a model-only L3 communication contract, then a two-DPU simulator proof if SDK supports it. |
 
-## Smallest Next Execution-Focused Wave
+## Next Minimal Work After 2E.24
 
-Proposed next wave: **Wave 2E.23 - Generic UPMEM Contraction Capability Boundary Test**.
+The next execution-focused step should expand the generic boundary by one dimension of architectural pressure:
 
-Goal: prove the generic kernel covers a non-GEMM binary contraction shape on the real UPMEM SDK simulator, then document the precise failure boundary.
+1. Add one generic boundary case that exceeds the current full-local-buffer approach but still fits one DPU MRAM.
+2. Confirm it rejects before launch with an explicit cap/WRAM-local-buffer reason.
+3. Use that evidence to define the minimum L2 generic tiling requirement.
 
-Minimum work:
-
-1. Add or select one deterministic non-GEMM real TaskGraph task with rank 3 or rank 4 operands, multiple free labels, and at least one contracted label.
-2. Execute it through `generic-task-bridge` and `upmem-taskgraph-runtime` using `upmem_sdk_simulator_generic_loop`.
-3. Validate against the quantized/dequantized generic reference, not full precision.
-4. Add one command-level test or fixture artifact that confirms:
-   - compact integer axis maps are used;
-   - `dpu_program_executed=true`;
-   - output is read from the UPMEM output blob;
-   - no CPU contraction fallback feeds later tensors.
-5. Keep L2/L3/hardware/SimplePIM/PID-Comm out of scope.
-
-This is smaller and more useful than adding another report wave: it directly tests whether the existing generic loop is a credible fallback beyond GEMM-shaped contractions.
+Keep hardware, multi-DPU, PID-Comm, SimplePIM, and native complex-generic execution out of this immediate follow-up.

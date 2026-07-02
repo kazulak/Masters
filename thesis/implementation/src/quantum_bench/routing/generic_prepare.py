@@ -18,8 +18,11 @@ GENERIC_TASK_PREPARATION_SCHEMA_VERSION = "generic_task_preparation_v1"
 GENERIC_TASK_ROUTE_ID = "generic_loop_fallback"
 INT8_MAX_ABS_VALUE = 127
 INT32_MAX_VALUE = (2**31) - 1
+GENERIC_MODE_INT8_SCALED = "int8_scaled"
+GENERIC_MODE_FLOAT32_NO_QUANT = "float32_no_quant"
 
 GenericTaskPreparationStatus = Literal["prepared", "unsupported_shape", "failed"]
+GenericQuantizationMode = Literal["per_task_input_quantize", "none"]
 
 
 @dataclass(frozen=True)
@@ -35,6 +38,10 @@ class GenericTaskPreparedOperands:
     right_quantized: np.ndarray
     expected_quantized_reference_output: np.ndarray
     full_precision_reference_output: np.ndarray
+    left_operand: np.ndarray | None = None
+    right_operand: np.ndarray | None = None
+    expected_reference_output: np.ndarray | None = None
+    operand_mode: str = GENERIC_MODE_INT8_SCALED
 
 
 @dataclass(frozen=True)
@@ -45,6 +52,7 @@ class GenericTaskPreparationInput:
     fixed_point_spec: FixedPointSpec = field(default_factory=lambda: FixedPointSpec(route_dtype="int8", complex_policy="reject"))
     caps: GenericTaskPreparationCaps = field(default_factory=GenericTaskPreparationCaps)
     route_id: str = GENERIC_TASK_ROUTE_ID
+    quantization_mode: GenericQuantizationMode = "per_task_input_quantize"
 
 
 @dataclass(frozen=True)
@@ -168,6 +176,39 @@ def generic_loop_reference_int32(
     return output
 
 
+def generic_loop_reference_float32(
+    left: np.ndarray,
+    right: np.ndarray,
+    *,
+    output_shape: tuple[int, ...],
+    left_strides: tuple[int, ...],
+    right_strides: tuple[int, ...],
+    output_strides: tuple[int, ...],
+    output_to_left_axes: tuple[int, ...],
+    output_to_right_axes: tuple[int, ...],
+    contracted_to_left_axes: tuple[int, ...],
+    contracted_to_right_axes: tuple[int, ...],
+    contracted_dims: tuple[int, ...],
+) -> np.ndarray:
+    output = np.zeros(output_shape, dtype=np.float32)
+    flat_left = np.asarray(left, dtype=np.float32).ravel()
+    flat_right = np.asarray(right, dtype=np.float32).ravel()
+    flat_output = output.ravel()
+    output_element_count = int(output.size)
+    contracted_count = _shape_product(contracted_dims)
+
+    for output_linear in range(output_element_count):
+        output_coords = _decode_index(output_linear, output_shape, output_strides)
+        total = np.float32(0.0)
+        for contracted_linear in range(contracted_count):
+            contracted_coords = _decode_index(contracted_linear, contracted_dims, _row_major_strides(contracted_dims))
+            left_offset = _mapped_offset(output_coords, contracted_coords, output_to_left_axes, contracted_to_left_axes, left_strides)
+            right_offset = _mapped_offset(output_coords, contracted_coords, output_to_right_axes, contracted_to_right_axes, right_strides)
+            total = np.float32(total + np.float32(flat_left[left_offset] * flat_right[right_offset]))
+        flat_output[output_linear] = total
+    return output
+
+
 def _prepare_generic_task(preparation: GenericTaskPreparationInput) -> GenericTaskPreparationResult:
     task = preparation.task
     mismatch = _validate_tensor_binding(task, preparation.left_tensor, preparation.right_tensor)
@@ -178,18 +219,39 @@ def _prepare_generic_task(preparation: GenericTaskPreparationInput) -> GenericTa
     right_array = _real_array_or_none(np.asarray(preparation.right_tensor.array))
     if left_array is None or right_array is None:
         return _base_result(preparation, status="unsupported_shape", reason="complex_generic_loop_not_implemented")
-    if preparation.fixed_point_spec.route_dtype != "int8":
+    if preparation.quantization_mode not in {"per_task_input_quantize", "none"}:
+        return _base_result(preparation, status="unsupported_shape", reason=f"unsupported_quantization_mode:{preparation.quantization_mode}")
+    if preparation.quantization_mode == "per_task_input_quantize" and preparation.fixed_point_spec.route_dtype != "int8":
         return _base_result(preparation, status="unsupported_shape", reason="unsupported_dtype")
 
-    metadata_or_reason = _native_index_metadata(task, preparation.caps)
+    metadata_or_reason = _native_index_metadata(
+        task,
+        preparation.caps,
+        check_int32_accumulation=preparation.quantization_mode == "per_task_input_quantize",
+    )
     if isinstance(metadata_or_reason, str):
         return _base_result(preparation, status="unsupported_shape", reason=metadata_or_reason)
     metadata = metadata_or_reason
 
+    if preparation.quantization_mode == "none":
+        return _prepare_generic_float32_task(preparation, left_array, right_array, metadata)
+    return _prepare_generic_int8_task(preparation, left_array, right_array, metadata)
+
+
+def _prepare_generic_int8_task(
+    preparation: GenericTaskPreparationInput,
+    left_array: np.ndarray,
+    right_array: np.ndarray,
+    metadata: JsonDict,
+) -> GenericTaskPreparationResult:
+    task = preparation.task
+    quantization_started = _perf_counter()
     left_converted = quantize_fixed_point(left_array, preparation.fixed_point_spec)
     right_converted = quantize_fixed_point(right_array, preparation.fixed_point_spec)
+    quantization_time_s = _perf_counter() - quantization_started
     full_precision_reference = np.einsum(task.index_expression, left_array, right_array, optimize=False)
 
+    reference_started = _perf_counter()
     int32_reference = generic_loop_reference_int32(
         left_converted.array,
         right_converted.array,
@@ -204,6 +266,7 @@ def _prepare_generic_task(preparation: GenericTaskPreparationInput) -> GenericTa
         contracted_dims=metadata["contracted_dims"],
     )
     int32_dequantized = int32_reference.astype(np.float64) * float(left_converted.record.scale) * float(right_converted.record.scale)
+    dequantization_time_s = _perf_counter() - reference_started
     expected_quantized_reference = int32_dequantized
     validation = conversion_error_metrics(expected_quantized_reference, int32_dequantized)
     full_precision_error = conversion_error_metrics(full_precision_reference, expected_quantized_reference)
@@ -216,6 +279,10 @@ def _prepare_generic_task(preparation: GenericTaskPreparationInput) -> GenericTa
         right_quantized=right_converted.array,
         expected_quantized_reference_output=expected_quantized_reference,
         full_precision_reference_output=full_precision_reference,
+        left_operand=left_converted.array,
+        right_operand=right_converted.array,
+        expected_reference_output=expected_quantized_reference,
+        operand_mode=GENERIC_MODE_INT8_SCALED,
     )
     return _base_result(
         preparation,
@@ -238,8 +305,105 @@ def _prepare_generic_task(preparation: GenericTaskPreparationInput) -> GenericTa
         },
         metadata={
             "kernel_family": "generic_loop_fallback",
+            "quantization_mode": "per_task_input_quantize",
+            "operand_mode": GENERIC_MODE_INT8_SCALED,
+            "input_dtype_on_dpu": "int8",
+            "accumulator_dtype_on_dpu": "int32",
+            "output_dtype_on_dpu": "int32",
+            "unquantized_mode_kind": None,
+            "scaling_applied": True,
             "validation_target": "expected_quantized_reference_output",
             "full_precision_reference_is_validation_target": False,
+            "quantization_time_s": float(quantization_time_s),
+            "dequantization_time_s": float(dequantization_time_s),
+            "float32_reference_time_s": 0.0,
+            "actual_h2d_bytes_model": int(left_converted.array.nbytes + right_converted.array.nbytes),
+            "actual_d2h_bytes_model": int(int32_reference.nbytes),
+            "full_precision_h2d_bytes_model": int(left_array.astype(np.float32, copy=False).nbytes + right_array.astype(np.float32, copy=False).nbytes),
+            "full_precision_d2h_bytes_model": int(np.asarray(full_precision_reference, dtype=np.float32).nbytes),
+            **metadata,
+        },
+        prepared_operands=operands,
+    )
+
+
+def _prepare_generic_float32_task(
+    preparation: GenericTaskPreparationInput,
+    left_array: np.ndarray,
+    right_array: np.ndarray,
+    metadata: JsonDict,
+) -> GenericTaskPreparationResult:
+    task = preparation.task
+    left_operand = np.asarray(left_array, dtype=np.float32)
+    right_operand = np.asarray(right_array, dtype=np.float32)
+    full_precision_reference = np.einsum(task.index_expression, left_array, right_array, optimize=False)
+    reference_started = _perf_counter()
+    float32_reference = generic_loop_reference_float32(
+        left_operand,
+        right_operand,
+        output_shape=task.output_shape,
+        left_strides=metadata["left_strides"],
+        right_strides=metadata["right_strides"],
+        output_strides=metadata["output_strides"],
+        output_to_left_axes=metadata["output_to_left_axes"],
+        output_to_right_axes=metadata["output_to_right_axes"],
+        contracted_to_left_axes=metadata["contracted_to_left_axes"],
+        contracted_to_right_axes=metadata["contracted_to_right_axes"],
+        contracted_dims=metadata["contracted_dims"],
+    )
+    float32_reference_time_s = _perf_counter() - reference_started
+    validation = conversion_error_metrics(float32_reference, float32_reference)
+    full_precision_error = conversion_error_metrics(full_precision_reference, float32_reference)
+    if tuple(float32_reference.shape) != task.output_shape:
+        return _base_result(preparation, status="unsupported_shape", reason="output_shape_mismatch")
+
+    operands = GenericTaskPreparedOperands(
+        left_quantized=left_operand,
+        right_quantized=right_operand,
+        expected_quantized_reference_output=float32_reference,
+        full_precision_reference_output=full_precision_reference,
+        left_operand=left_operand,
+        right_operand=right_operand,
+        expected_reference_output=float32_reference,
+        operand_mode=GENERIC_MODE_FLOAT32_NO_QUANT,
+    )
+    return _base_result(
+        preparation,
+        status="prepared",
+        reason=None,
+        left_conversion=None,
+        right_conversion=None,
+        validation_metrics={
+            "reference_kind": "expected_float32_reference_vs_python_generic_loop_float32",
+            "max_abs_error": validation.max_abs_error,
+            "l2_error": validation.l2_error,
+            "relative_l2_error": validation.relative_l2_error,
+            "passed": validation.max_abs_error == 0.0,
+        },
+        full_precision_error_metrics={
+            "reference_kind": "full_precision_vs_expected_float32_reference",
+            "max_abs_error": full_precision_error.max_abs_error,
+            "l2_error": full_precision_error.l2_error,
+            "relative_l2_error": full_precision_error.relative_l2_error,
+        },
+        metadata={
+            "kernel_family": "generic_loop_fallback",
+            "quantization_mode": "none",
+            "operand_mode": GENERIC_MODE_FLOAT32_NO_QUANT,
+            "input_dtype_on_dpu": "float32",
+            "accumulator_dtype_on_dpu": "float32",
+            "output_dtype_on_dpu": "float32",
+            "unquantized_mode_kind": GENERIC_MODE_FLOAT32_NO_QUANT,
+            "scaling_applied": False,
+            "validation_target": "expected_float32_reference_output",
+            "full_precision_reference_is_validation_target": False,
+            "quantization_time_s": 0.0,
+            "dequantization_time_s": 0.0,
+            "float32_reference_time_s": float(float32_reference_time_s),
+            "actual_h2d_bytes_model": int(left_operand.nbytes + right_operand.nbytes),
+            "actual_d2h_bytes_model": int(float32_reference.nbytes),
+            "full_precision_h2d_bytes_model": int(left_operand.nbytes + right_operand.nbytes),
+            "full_precision_d2h_bytes_model": int(float32_reference.nbytes),
             **metadata,
         },
         prepared_operands=operands,
@@ -319,7 +483,7 @@ def _real_array_or_none(array: np.ndarray) -> np.ndarray | None:
     return array
 
 
-def _native_index_metadata(task: ContractionTask, caps: GenericTaskPreparationCaps) -> JsonDict | str:
+def _native_index_metadata(task: ContractionTask, caps: GenericTaskPreparationCaps, *, check_int32_accumulation: bool = True) -> JsonDict | str:
     left_shape = tuple(int(dim) for dim in task.input_shapes[0])
     right_shape = tuple(int(dim) for dim in task.input_shapes[1])
     output_shape = tuple(int(dim) for dim in task.output_shape)
@@ -345,7 +509,7 @@ def _native_index_metadata(task: ContractionTask, caps: GenericTaskPreparationCa
     contracted_count = _shape_product(contracted_dims)
     if contracted_count > caps.max_contracted_combinations:
         return "contracted_combination_cap_exceeded"
-    if contracted_count * INT8_MAX_ABS_VALUE * INT8_MAX_ABS_VALUE > INT32_MAX_VALUE:
+    if check_int32_accumulation and contracted_count * INT8_MAX_ABS_VALUE * INT8_MAX_ABS_VALUE > INT32_MAX_VALUE:
         return "int32_accumulation_overflow_risk"
 
     return {
@@ -406,3 +570,10 @@ def _mapped_offset(
     for contracted_axis, tensor_axis in enumerate(contracted_axis_map):
         offset += int(contracted_coords[contracted_axis]) * int(strides[tensor_axis])
     return int(offset)
+
+
+def _perf_counter() -> float:
+    # Local wrapper keeps import surface stable for tests that monkeypatch time elsewhere.
+    import time
+
+    return time.perf_counter()

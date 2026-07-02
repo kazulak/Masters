@@ -145,17 +145,40 @@ def write_generic_bridge_input_manifest(
     operands_dir.mkdir(parents=True, exist_ok=True)
     references_dir.mkdir(parents=True, exist_ok=True)
 
-    left_path = operands_dir / "left_quantized.npy"
-    right_path = operands_dir / "right_quantized.npy"
-    expected_quantized_path = references_dir / "expected_quantized_reference_output.npy"
+    operand_mode = str(getattr(operands, "operand_mode", "") or preparation_result.metadata.get("operand_mode") or "int8_scaled")
+    left_operand = np.asarray(operands.left_operand if operands.left_operand is not None else operands.left_quantized)
+    right_operand = np.asarray(operands.right_operand if operands.right_operand is not None else operands.right_quantized)
+    expected_reference = np.asarray(
+        operands.expected_reference_output
+        if operands.expected_reference_output is not None
+        else operands.expected_quantized_reference_output
+    )
+
+    if operand_mode == "float32_no_quant":
+        left_path = operands_dir / "left_float32.npy"
+        right_path = operands_dir / "right_float32.npy"
+        expected_quantized_path = references_dir / "expected_float32_reference_output.npy"
+        left_role = "left_float32_input"
+        right_role = "right_float32_input"
+        expected_role = "expected_float32_reference_output"
+    else:
+        left_path = operands_dir / "left_quantized.npy"
+        right_path = operands_dir / "right_quantized.npy"
+        expected_quantized_path = references_dir / "expected_quantized_reference_output.npy"
+        left_role = "left_quantized_input"
+        right_role = "right_quantized_input"
+        expected_role = "expected_quantized_reference_output"
     full_precision_path = references_dir / "full_precision_reference_output.npy"
-    np.save(left_path, operands.left_quantized, allow_pickle=False)
-    np.save(right_path, operands.right_quantized, allow_pickle=False)
-    np.save(expected_quantized_path, operands.expected_quantized_reference_output, allow_pickle=False)
+    np.save(left_path, left_operand, allow_pickle=False)
+    np.save(right_path, right_operand, allow_pickle=False)
+    np.save(expected_quantized_path, expected_reference, allow_pickle=False)
     np.save(full_precision_path, operands.full_precision_reference_output, allow_pickle=False)
 
     left_conversion = to_jsonable(preparation_result.left_conversion)
     right_conversion = to_jsonable(preparation_result.right_conversion)
+    output_scale = 1.0
+    if isinstance(left_conversion, dict) and isinstance(right_conversion, dict):
+        output_scale = float(left_conversion["scale"]) * float(right_conversion["scale"])
     manifest = GenericBridgeInputManifest(
         schema_version=GENERIC_BRIDGE_SCHEMA_VERSION,
         bridge_id=GENERIC_BRIDGE_ID,
@@ -180,6 +203,7 @@ def write_generic_bridge_input_manifest(
             "output_labels": preparation_result.output_labels,
         },
         native_index_metadata={
+            "operand_mode": operand_mode,
             "left_rank": len(preparation_result.input_shapes[0]),
             "right_rank": len(preparation_result.input_shapes[1]),
             "output_rank": len(preparation_result.output_shape),
@@ -201,19 +225,25 @@ def write_generic_bridge_input_manifest(
         fixed_point_spec=to_jsonable(preparation_result.fixed_point_spec),
         conversion_records={"left": left_conversion, "right": right_conversion},
         dequantization={
-            "left": {"scale": float(left_conversion["scale"]), "zero_point": int(left_conversion["zero_point"])},
-            "right": {"scale": float(right_conversion["scale"]), "zero_point": int(right_conversion["zero_point"])},
-            "output_scale": float(left_conversion["scale"]) * float(right_conversion["scale"]),
+            "left": {
+                "scale": float(left_conversion["scale"]) if isinstance(left_conversion, dict) else 1.0,
+                "zero_point": int(left_conversion["zero_point"]) if isinstance(left_conversion, dict) else 0,
+            },
+            "right": {
+                "scale": float(right_conversion["scale"]) if isinstance(right_conversion, dict) else 1.0,
+                "zero_point": int(right_conversion["zero_point"]) if isinstance(right_conversion, dict) else 0,
+            },
+            "output_scale": output_scale,
         },
         operands={
-            "left": _blob_metadata(left_path, bridge_dir, operands.left_quantized, "left_quantized_input"),
-            "right": _blob_metadata(right_path, bridge_dir, operands.right_quantized, "right_quantized_input"),
+            "left": _blob_metadata(left_path, bridge_dir, left_operand, left_role),
+            "right": _blob_metadata(right_path, bridge_dir, right_operand, right_role),
         },
         expected_quantized_reference_output=_blob_metadata(
             expected_quantized_path,
             bridge_dir,
-            operands.expected_quantized_reference_output,
-            "expected_quantized_reference_output",
+            expected_reference,
+            expected_role,
         ),
         full_precision_reference_output=_blob_metadata(
             full_precision_path,
@@ -225,8 +255,19 @@ def write_generic_bridge_input_manifest(
             "native_contract_uses_string_labels": False,
             "simplepim_api_used": False,
             "native_sdk_control_path": True,
-            "validation_target": "expected_quantized_reference_output",
+            "quantization_mode": preparation_result.metadata.get("quantization_mode", "per_task_input_quantize"),
+            "operand_mode": operand_mode,
+            "input_dtype_on_dpu": preparation_result.metadata.get("input_dtype_on_dpu", str(left_operand.dtype)),
+            "accumulator_dtype_on_dpu": preparation_result.metadata.get("accumulator_dtype_on_dpu"),
+            "output_dtype_on_dpu": preparation_result.metadata.get("output_dtype_on_dpu"),
+            "unquantized_mode_kind": preparation_result.metadata.get("unquantized_mode_kind"),
+            "scaling_applied": bool(preparation_result.metadata.get("scaling_applied", operand_mode != "float32_no_quant")),
+            "validation_target": preparation_result.metadata.get("validation_target", expected_role),
             "full_precision_reference_is_validation_target": False,
+            "actual_h2d_bytes_model": preparation_result.metadata.get("actual_h2d_bytes_model"),
+            "actual_d2h_bytes_model": preparation_result.metadata.get("actual_d2h_bytes_model"),
+            "full_precision_h2d_bytes_model": preparation_result.metadata.get("full_precision_h2d_bytes_model"),
+            "full_precision_d2h_bytes_model": preparation_result.metadata.get("full_precision_d2h_bytes_model"),
         },
     )
     write_json(bridge_dir / "input_manifest.json", manifest)

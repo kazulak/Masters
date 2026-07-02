@@ -22,6 +22,8 @@ from quantum_bench.routing.dense_prepare import (
     prepare_dense_task,
 )
 from quantum_bench.routing.generic_prepare import (
+    GENERIC_MODE_FLOAT32_NO_QUANT,
+    GENERIC_MODE_INT8_SCALED,
     GENERIC_TASK_PREPARATION_SCHEMA_VERSION,
     GENERIC_TASK_ROUTE_ID,
     GenericTaskPreparationCaps,
@@ -29,6 +31,7 @@ from quantum_bench.routing.generic_prepare import (
     GenericTaskPreparationResult,
     GenericTaskPreparationStatus,
     GenericTaskPreparedOperands,
+    generic_loop_reference_float32,
     generic_loop_reference_int32,
     prepare_generic_task,
 )
@@ -51,6 +54,8 @@ __all__ = [
     "DENSE_TASK_ROUTE_ID",
     "GENERIC_TASK_PREPARATION_SCHEMA_VERSION",
     "GENERIC_TASK_ROUTE_ID",
+    "GENERIC_MODE_FLOAT32_NO_QUANT",
+    "GENERIC_MODE_INT8_SCALED",
     "STATIC_TASK_ROUTER_ID",
     "TASK_ROUTE_DECISION_SCHEMA_VERSION",
     "TASK_ROUTE_STATUSES",
@@ -81,6 +86,7 @@ __all__ = [
     "ShadowRoutePolicySummary",
     "default_task_routes",
     "evaluate_shadow_route_policy",
+    "generic_loop_reference_float32",
     "generic_loop_reference_int32",
     "prepare_dense_task",
     "prepare_generic_task",

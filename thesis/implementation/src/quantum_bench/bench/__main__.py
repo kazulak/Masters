@@ -76,6 +76,11 @@ def main() -> int:
     upmem_mvp_parser.add_argument("--fail-fast", action="store_true")
     upmem_mvp_parser.add_argument("--artifact-retention", default="compact", choices=("full", "compact", "summary-only"))
 
+    upmem_generic_feasibility_parser = sub.add_parser("upmem-generic-feasibility")
+    upmem_generic_feasibility_parser.add_argument("--suite", required=True, help="Suite path or preset name under configs/suites")
+    upmem_generic_feasibility_parser.add_argument("--quantization-modes", default="none,per_task_input_quantize")
+    upmem_generic_feasibility_parser.add_argument("--max-taskgraph-tasks", type=int, default=128)
+
     simulation_compare_parser = sub.add_parser("simulation-backend-compare")
     simulation_compare_parser.add_argument("--suite", required=True, help="Suite path or preset name under configs/suites")
     simulation_compare_parser.add_argument("--artifact-retention", default="compact", choices=("full", "compact", "summary-only"))
@@ -295,8 +300,10 @@ def main() -> int:
 
         if not args.execute_external:
             parser.error("upmem-taskgraph-runtime requires --execute-external for strict UPMEM SDK DPU execution")
-        if args.quantization_mode != "per_task_input_quantize":
-            parser.error("only --quantization-mode per_task_input_quantize is implemented for upmem-taskgraph-runtime")
+        if args.quantization_mode == "persistent_network_quantized":
+            parser.error("--quantization-mode persistent_network_quantized is not implemented for upmem-taskgraph-runtime")
+        if args.quantization_mode == "none" and args.policy != "generic-only":
+            parser.error("--quantization-mode none currently requires --policy generic-only")
         result = run_upmem_taskgraph_runtime(
             root_dir,
             case=args.case,
@@ -346,6 +353,30 @@ def main() -> int:
                     "summary": str(result.run_dir / "comparison_summary.md"),
                     "status": result.status,
                     "reason": result.reason,
+                },
+                indent=2,
+            )
+        )
+        return 0
+    if args.command == "upmem-generic-feasibility":
+        from quantum_bench.bench.upmem_generic_feasibility import parse_csv_choices, run_upmem_generic_feasibility
+
+        try:
+            result = run_upmem_generic_feasibility(
+                root_dir,
+                suite_path=suite_path(args.suite, root_dir),
+                quantization_modes=parse_csv_choices(args.quantization_modes),
+                max_taskgraph_tasks=args.max_taskgraph_tasks,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(
+            json.dumps(
+                {
+                    "run_dir": str(result.run_dir),
+                    "summary_path": str(result.summary_path),
+                    "status": result.status,
+                    "row_count": result.row_count,
                 },
                 indent=2,
             )

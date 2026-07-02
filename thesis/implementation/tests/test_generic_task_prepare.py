@@ -6,8 +6,10 @@ import numpy as np
 
 from quantum_bench.core.records import ContractionTask, TensorSpec, TensorValue
 from quantum_bench.routing import (
+    GENERIC_MODE_FLOAT32_NO_QUANT,
     GenericTaskPreparationCaps,
     GenericTaskPreparationInput,
+    generic_loop_reference_float32,
     generic_loop_reference_int32,
     prepare_generic_task,
 )
@@ -108,6 +110,46 @@ def test_generic_loop_reference_matches_einsum_on_quantized_inputs() -> None:
         optimize=False,
     )
     np.testing.assert_array_equal(reference_i32, expected_i32)
+
+
+def test_generic_preparation_supports_float32_no_quant_mode() -> None:
+    task = _task()
+    left, right = _tensors(task)
+    result = prepare_generic_task(
+        GenericTaskPreparationInput(task=task, left_tensor=left, right_tensor=right, quantization_mode="none")
+    )
+
+    assert result.status == "prepared"
+    assert result.reason is None
+    assert result.left_conversion is None
+    assert result.right_conversion is None
+    assert result.prepared_operands is not None
+    assert result.prepared_operands.operand_mode == GENERIC_MODE_FLOAT32_NO_QUANT
+    assert result.metadata["quantization_mode"] == "none"
+    assert result.metadata["input_dtype_on_dpu"] == "float32"
+    assert result.metadata["accumulator_dtype_on_dpu"] == "float32"
+    assert result.metadata["scaling_applied"] is False
+
+    reference_f32 = generic_loop_reference_float32(
+        result.prepared_operands.left_operand,
+        result.prepared_operands.right_operand,
+        output_shape=result.output_shape,
+        left_strides=result.left_strides,
+        right_strides=result.right_strides,
+        output_strides=result.output_strides,
+        output_to_left_axes=result.output_to_left_axes,
+        output_to_right_axes=result.output_to_right_axes,
+        contracted_to_left_axes=result.contracted_to_left_axes,
+        contracted_to_right_axes=result.contracted_to_right_axes,
+        contracted_dims=result.contracted_dims,
+    )
+    expected = np.einsum(
+        task.index_expression,
+        np.asarray(left.array, dtype=np.float32),
+        np.asarray(right.array, dtype=np.float32),
+        optimize=False,
+    )
+    np.testing.assert_allclose(reference_f32, expected, rtol=1e-6, atol=1e-6)
 
 
 def test_generic_preparation_rejects_complex_values_explicitly() -> None:

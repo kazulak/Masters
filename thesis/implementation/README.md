@@ -91,16 +91,31 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.be
 Strict small-scope UPMEM TaskGraph runtime:
 
 ```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-taskgraph-runtime --case bell_2q --policy generic-only --quantization-mode none --execute-external
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-taskgraph-runtime --case bell_2q --policy generic-only --quantization-mode per_task_input_quantize --execute-external
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-taskgraph-runtime --case bell_2q --policy dense-then-generic --quantization-mode per_task_input_quantize --execute-external
+```
+
+Generic UPMEM feasibility scan:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-generic-feasibility --suite configs/suites/upmem_generic_medium.yml --quantization-modes none,per_task_input_quantize
 ```
 
 Suite-level UPMEM MVP benchmark pipeline:
 
 ```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-mvp-benchmark --suite configs/suites/upmem_generic_medium.yml --policies generic-only --quantization-modes none,per_task_input_quantize --execute-external --artifact-retention compact
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-mvp-benchmark --suite configs/suites/pim_bridge_eval_quick.yml --policies generic-only,dense-then-generic --quantization-modes per_task_input_quantize --execute-external --artifact-retention compact
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench report-run --input runs/latest
 ```
+
+`quantization_mode=none` is a same-route UPMEM SDK simulator baseline for the
+generic fallback: float32 operands and float32 accumulation execute on the DPU
+program path. `per_task_input_quantize` uses int8 operands and int32
+accumulation with host-side per-task quantize/dequantize. The MVP benchmark
+writes `quantization_comparison.csv` for runtime, transfer, and accuracy
+attribution. These are SDK simulator timings, not hardware speedups.
 
 Simulation backend comparison:
 

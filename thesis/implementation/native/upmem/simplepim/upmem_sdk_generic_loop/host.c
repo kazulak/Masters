@@ -67,17 +67,27 @@ int main(int argc, char **argv) {
         fprintf(stderr, "element counts exceed max elems %u\n", UPMEM_GENERIC_MAX_ELEMS);
         return 2;
     }
+    if (args.operand_mode != UPMEM_GENERIC_MODE_INT8_SCALED && args.operand_mode != UPMEM_GENERIC_MODE_FLOAT32_NO_QUANT) {
+        fprintf(stderr, "unsupported operand mode %u\n", args.operand_mode);
+        return 2;
+    }
 
-    const size_t left_bytes = args.left_elems * sizeof(int8_t);
-    const size_t right_bytes = args.right_elems * sizeof(int8_t);
-    const size_t output_bytes = args.output_elems * sizeof(int32_t);
+    const int float32_mode = args.operand_mode == UPMEM_GENERIC_MODE_FLOAT32_NO_QUANT;
+    const size_t input_elem_size = float32_mode ? sizeof(float) : sizeof(int8_t);
+    const size_t output_elem_size = float32_mode ? sizeof(float) : sizeof(int32_t);
+    const char *left_symbol = "GENERIC_A_RAW";
+    const char *right_symbol = "GENERIC_B_RAW";
+    const char *output_symbol = "GENERIC_C_RAW";
+    const size_t left_bytes = args.left_elems * input_elem_size;
+    const size_t right_bytes = args.right_elems * input_elem_size;
+    const size_t output_bytes = args.output_elems * output_elem_size;
     const size_t left_transfer_bytes = align8(left_bytes);
     const size_t right_transfer_bytes = align8(right_bytes);
     const size_t output_transfer_bytes = align8(output_bytes);
 
-    int8_t *left = (int8_t *)calloc(left_transfer_bytes, 1);
-    int8_t *right = (int8_t *)calloc(right_transfer_bytes, 1);
-    int32_t *output = (int32_t *)calloc(output_transfer_bytes, 1);
+    unsigned char *left = (unsigned char *)calloc(left_transfer_bytes, 1);
+    unsigned char *right = (unsigned char *)calloc(right_transfer_bytes, 1);
+    unsigned char *output = (unsigned char *)calloc(output_transfer_bytes, 1);
     if (left == NULL || right == NULL || output == NULL) {
         fprintf(stderr, "host allocation failed\n");
         free(left);
@@ -103,11 +113,11 @@ int main(int argc, char **argv) {
     DPU_ASSERT(dpu_alloc(1, NULL, &set));
     DPU_ASSERT(dpu_load(set, dpu_binary, NULL));
     DPU_ASSERT(dpu_broadcast_to(set, "GENERIC_ARGS", 0, &args, sizeof(args), DPU_XFER_DEFAULT));
-    DPU_ASSERT(dpu_broadcast_to(set, "GENERIC_A", 0, left, left_transfer_bytes, DPU_XFER_DEFAULT));
-    DPU_ASSERT(dpu_broadcast_to(set, "GENERIC_B", 0, right, right_transfer_bytes, DPU_XFER_DEFAULT));
+    DPU_ASSERT(dpu_broadcast_to(set, left_symbol, 0, left, left_transfer_bytes, DPU_XFER_DEFAULT));
+    DPU_ASSERT(dpu_broadcast_to(set, right_symbol, 0, right, right_transfer_bytes, DPU_XFER_DEFAULT));
     DPU_ASSERT(dpu_launch(set, DPU_SYNCHRONOUS));
     DPU_FOREACH(set, dpu) {
-        DPU_ASSERT(dpu_copy_from(dpu, "GENERIC_C", 0, output, output_transfer_bytes));
+        DPU_ASSERT(dpu_copy_from(dpu, output_symbol, 0, output, output_transfer_bytes));
         break;
     }
     DPU_ASSERT(dpu_free(set));

@@ -165,6 +165,7 @@ GEMM is the current backbone, not the complete design.
 | Simulation backend probe | `quantum_bench.bench simulation-backend-probe` | Optional Quimb/cotengra/GPU feasibility metadata |
 | PIM bridge eval | `quantum_bench.bench pim-bridge-eval ...` | Task-level simulator evidence |
 | Strict UPMEM runtime | `quantum_bench.bench upmem-taskgraph-runtime ...` | Small full-TaskGraph SDK simulator code-path evidence |
+| Generic UPMEM feasibility | `quantum_bench.bench upmem-generic-feasibility ...` | Non-executing boundary scan for the bounded generic kernel contract |
 | Suite MVP benchmark | `quantum_bench.bench upmem-mvp-benchmark ...` | Suite-level CPU reference, UPMEM runtime, and report regeneration |
 | Simulation backend comparison | `quantum_bench.bench simulation-backend-compare ...` | QuEST full-state, serious external TN, optional internal TN diagnostic, and optional strict quantized UPMEM SDK simulator output comparison |
 | Report regeneration | `quantum_bench.bench report-run ...` | Non-destructive derived report refresh |
@@ -193,6 +194,12 @@ suite for the strict UPMEM SDK simulator code path. Its UPMEM route is
 quantization; `upmem_tn_sdk_simulator_exact` is intentionally not used.
 UPMEM rows require real SDK simulator DPU program execution and keep
 `hardware_speedup_applicable=false`.
+The standalone strict runtime and MVP benchmark also support
+`quantization_mode=none` for the generic-only path. That mode executes the same
+generic UPMEM SDK DPU program with float32 operands and float32 accumulation;
+`per_task_input_quantize` executes int8 operands with int32 accumulation.
+`upmem_generic_medium.yml` is the developer suite for scanning and measuring
+that same-route quantized versus unquantized boundary.
 `simulation-backend-probe --verify-gpu auto` attempts only the first plausible
 tailored QuEST GPU route: HIP/ROCm for AMD or CUDA for NVIDIA. Failed attempts
 write blocker artifacts, and generic tensor GPU checks remain feasibility

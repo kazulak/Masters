@@ -23,6 +23,8 @@ from quantum_bench.validation import validate
 
 UPMEM_TASKGRAPH_RUNTIME_SCHEMA_VERSION = "upmem_taskgraph_runtime_v1"
 UPMEM_TASKGRAPH_TASK_METRIC_SCHEMA_VERSION = "upmem_taskgraph_task_metric_v1"
+GENERIC_QUANTIZED_TASKGRAPH_REFERENCE_SCHEMA_VERSION = "generic_quantized_taskgraph_reference_v1"
+GENERIC_QUANTIZED_TASKGRAPH_REFERENCE_TASK_SCHEMA_VERSION = "generic_quantized_taskgraph_reference_task_v1"
 
 UPMEM_TASKGRAPH_POLICIES = ("generic-only", "dense-then-generic", "dense-only")
 UPMEM_TASKGRAPH_QUANTIZATION_MODES = ("per_task_input_quantize", "none", "persistent_network_quantized")
@@ -75,6 +77,170 @@ class UpmemTaskGraphRuntimeResult:
         )
 
 
+@dataclass(frozen=True)
+class GenericQuantizedTaskGraphReference:
+    schema_version: str
+    status: Literal["completed", "unsupported", "failed"]
+    reason: str | None
+    case_id: str
+    output: np.ndarray | None
+    output_labels: tuple[int, ...] | None
+    summary: JsonDict
+    task_metrics: tuple[JsonDict, ...]
+
+    def to_json_dict(self) -> JsonDict:
+        return to_jsonable(
+            {
+                "schema_version": self.schema_version,
+                "status": self.status,
+                "reason": self.reason,
+                "case_id": self.case_id,
+                "output_shape": tuple(int(dim) for dim in np.asarray(self.output).shape) if self.output is not None else None,
+                "output_dtype": str(np.asarray(self.output).dtype) if self.output is not None else None,
+                "output_labels": self.output_labels,
+                "summary": self.summary,
+                "task_metrics": self.task_metrics,
+            }
+        )
+
+
+def build_generic_taskgraph_reference(
+    *,
+    graph,
+    network: TensorNetworkValue,
+    case_id: str,
+    quantization_mode: UpmemTaskGraphQuantizationMode = "per_task_input_quantize",
+) -> GenericQuantizedTaskGraphReference:
+    """Replay a TaskGraph using the generic per-task native numeric contract.
+
+    This is the CPU reference for strict generic-only UPMEM validation. It
+    intentionally mirrors the native generic path rather than full-precision
+    einsum: `per_task_input_quantize` uses int8 x int8 -> int32 with
+    dequantization, while `none` uses float32 operands and float32 accumulation.
+    Complex tensors use the same split-real-imag four-component contract as the
+    generic runtime.
+    """
+
+    started = time.perf_counter()
+    if not graph.tasks:
+        return _generic_reference_stop_result(
+            case_id,
+            "unsupported",
+            "empty_task_graph_not_supported",
+            started,
+            [],
+            quantization_mode=quantization_mode,
+        )
+
+    tensors = {tensor.spec.id: np.asarray(tensor.array) for tensor in network.tensors}
+    labels = {tensor.spec.id: tensor.spec.labels for tensor in network.tensors}
+    live_ids = set(tensors)
+    remaining_uses = remaining_input_uses(graph)
+    final_tensor_id = graph.tasks[-1].output_tensor_id
+    final_labels: tuple[int, ...] | None = None
+    task_metrics: list[JsonDict] = []
+    peak_live_bytes = live_tensor_bytes(tensors, live_ids)
+
+    for task_index, task in enumerate(graph.tasks):
+        task_started = time.perf_counter()
+        if not _inputs_available(task, tensors):
+            missing = [tensor_id for tensor_id in task.input_tensor_ids if tensor_id not in tensors]
+            metric = _generic_reference_base_task_metric(
+                case_id,
+                task_index,
+                task,
+                status="unsupported",
+                reason=f"missing:{','.join(missing)}",
+                task_started=task_started,
+            )
+            return _generic_reference_stop_result(
+                case_id,
+                "unsupported",
+                "runtime_input_tensor_missing",
+                started,
+                task_metrics + [metric],
+                quantization_mode=quantization_mode,
+            )
+
+        left_tensor = _tensor_value_for(task.input_tensor_ids[0], task, tensors, labels, side="left")
+        right_tensor = _tensor_value_for(task.input_tensor_ids[1], task, tensors, labels, side="right")
+        reference = _generic_quantized_task_reference(
+            task=task,
+            task_index=task_index,
+            case_id=case_id,
+            left_tensor=left_tensor,
+            right_tensor=right_tensor,
+            task_started=task_started,
+            quantization_mode=quantization_mode,
+        )
+        task_metrics.append(reference["metric"])
+        if reference["status"] != "completed":
+            return _generic_reference_stop_result(
+                case_id,
+                "unsupported" if reference["status"] == "unsupported" else "failed",
+                str(reference["reason"]),
+                started,
+                task_metrics,
+                quantization_mode=quantization_mode,
+            )
+
+        output = np.asarray(reference["output"])
+        tensors[task.output_tensor_id] = output
+        labels[task.output_tensor_id] = task.output_labels
+        live_ids.add(task.output_tensor_id)
+        final_labels = task.output_labels
+        release_dead_inputs(task.input_tensor_ids, task.output_tensor_id, final_tensor_id, tensors, labels, live_ids, remaining_uses)
+        peak_live_bytes = max(peak_live_bytes, live_tensor_bytes(tensors, live_ids))
+
+    if final_tensor_id not in tensors or final_labels is None:
+        return _generic_reference_stop_result(
+            case_id,
+            "failed",
+            "final_tensor_missing",
+            started,
+            task_metrics,
+            quantization_mode=quantization_mode,
+        )
+
+    final_output, final_transposed = order_final_tensor(np.asarray(tensors[final_tensor_id]), final_labels, graph.network.output_labels)
+    summary = _generic_reference_summary(
+        case_id=case_id,
+        status="completed",
+        reason=None,
+        started=started,
+        task_metrics=task_metrics,
+        quantization_mode=quantization_mode,
+        final_tensor_id=final_tensor_id,
+        final_tensor_labels=final_labels,
+        final_transpose_applied=final_transposed,
+        peak_live_tensor_bytes=peak_live_bytes,
+    )
+    return GenericQuantizedTaskGraphReference(
+        schema_version=GENERIC_QUANTIZED_TASKGRAPH_REFERENCE_SCHEMA_VERSION,
+        status="completed",
+        reason=None,
+        case_id=case_id,
+        output=np.asarray(final_output),
+        output_labels=graph.network.output_labels,
+        summary=summary,
+        task_metrics=tuple(task_metrics),
+    )
+
+
+def build_generic_quantized_taskgraph_reference(
+    *,
+    graph,
+    network: TensorNetworkValue,
+    case_id: str,
+) -> GenericQuantizedTaskGraphReference:
+    return build_generic_taskgraph_reference(
+        graph=graph,
+        network=network,
+        case_id=case_id,
+        quantization_mode="per_task_input_quantize",
+    )
+
+
 def execute_upmem_taskgraph_runtime(
     *,
     graph,
@@ -85,13 +251,16 @@ def execute_upmem_taskgraph_runtime(
     bridge_root: Path,
     execute_external: bool,
     reference_output: np.ndarray | None = None,
+    reference_kind: str = "cpu_exact_taskgraph_full_precision",
     env: Mapping[str, str] | None = None,
 ) -> UpmemTaskGraphRuntimeResult:
     started = time.perf_counter()
     if policy not in UPMEM_TASKGRAPH_POLICIES:
         return _unsupported_result(case_id, policy, quantization_mode, "unsupported_policy", started)
-    if quantization_mode != "per_task_input_quantize":
+    if quantization_mode not in {"per_task_input_quantize", "none"}:
         return _unsupported_result(case_id, policy, quantization_mode, f"unsupported_quantization_mode:{quantization_mode}", started)
+    if quantization_mode == "none" and policy != "generic-only":
+        return _unsupported_result(case_id, policy, quantization_mode, "quantization_none_requires_generic_only", started)
     if not execute_external:
         return _unsupported_result(case_id, policy, quantization_mode, "external_execution_required", started)
     if not graph.tasks:
@@ -191,7 +360,7 @@ def execute_upmem_taskgraph_runtime(
         )
 
     final_output, final_transposed = order_final_tensor(np.asarray(tensors[final_tensor_id]), final_labels, graph.network.output_labels)
-    final_validation = _final_validation(final_output, reference_output)
+    final_validation = _final_validation(final_output, reference_output, reference_kind=reference_kind)
     status: UpmemTaskGraphStatus = "completed" if final_validation.get("passed") else "validation_failed"
     reason = None if status == "completed" else "final_validation_failed"
     summary = _summary_payload(
@@ -293,6 +462,23 @@ def _execute_dense_task(
     env: Mapping[str, str] | None,
     task_started: float,
 ) -> JsonDict:
+    if quantization_mode == "none":
+        return {
+            "status": "unsupported",
+            "reason": "dense_quantization_none_not_implemented",
+            "metric": _base_task_metric(
+                case_id,
+                task_index,
+                task,
+                policy,
+                quantization_mode,
+                status="unsupported",
+                reason="dense_quantization_none_not_implemented",
+                task_started=task_started,
+                selected_kernel_family="dense_gemm",
+                backend_id="upmem_sdk_simulator_dense",
+            ),
+        }
     preparation = prepare_dense_task(DenseTaskPreparationInput(task=task, left_tensor=left_tensor, right_tensor=right_tensor))
     eligible, reason = dense_bridge_backend_manifest_eligibility(preparation, "upmem_sdk_simulator_dense")
     if not eligible:
@@ -477,6 +663,7 @@ def _execute_generic_split_complex_task(
     output = (outputs["ar_br"] - outputs["ai_bi"]) + 1j * (outputs["ar_bi"] + outputs["ai_br"])
     expected_complex = (expected["ar_br"] - expected["ai_bi"]) + 1j * (expected["ar_bi"] + expected["ai_br"])
     validation = conversion_error_metrics(expected_complex, output)
+    tolerance = 1.0e-5 if quantization_mode == "none" else 1.0e-8
     metric = _base_task_metric(
         case_id,
         task_index,
@@ -497,7 +684,8 @@ def _execute_generic_split_complex_task(
             "max_abs_error": validation.max_abs_error,
             "l2_error": validation.l2_error,
             "relative_l2_error": validation.relative_l2_error,
-            "passed": validation.max_abs_error <= 1.0e-8,
+            "passed": validation.max_abs_error <= tolerance,
+            "max_abs_tolerance": tolerance,
         },
     )
     metric["bridge_artifact_path"] = _metric_artifact_path(bridge_dir)
@@ -521,7 +709,14 @@ def _execute_generic_real_component(
     component: str,
     dense_reject_reason: str,
 ) -> JsonDict:
-    preparation = prepare_generic_task(GenericTaskPreparationInput(task=task, left_tensor=left_tensor, right_tensor=right_tensor))
+    preparation = prepare_generic_task(
+        GenericTaskPreparationInput(
+            task=task,
+            left_tensor=left_tensor,
+            right_tensor=right_tensor,
+            quantization_mode=quantization_mode,  # type: ignore[arg-type]
+        )
+    )
     if preparation.status != "prepared":
         return {
             "status": "unsupported" if preparation.status == "unsupported_shape" else "failed",
@@ -569,8 +764,352 @@ def _execute_generic_real_component(
     )
     expected = None
     if preparation.prepared_operands is not None:
-        expected = np.asarray(preparation.prepared_operands.expected_quantized_reference_output)
+        expected = np.asarray(
+            preparation.prepared_operands.expected_reference_output
+            if preparation.prepared_operands.expected_reference_output is not None
+            else preparation.prepared_operands.expected_quantized_reference_output
+        )
     return {"status": status, "reason": reason, "output": output, "metric": metric, "expected_quantized_reference_output": expected}
+
+
+def _generic_quantized_task_reference(
+    *,
+    task: ContractionTask,
+    task_index: int,
+    case_id: str,
+    left_tensor: TensorValue,
+    right_tensor: TensorValue,
+    task_started: float,
+    quantization_mode: str,
+) -> JsonDict:
+    left_array = np.asarray(left_tensor.array)
+    right_array = np.asarray(right_tensor.array)
+    has_nonzero_imaginary = (
+        (np.iscomplexobj(left_array) and bool(np.any(np.abs(left_array.imag) > 0.0)))
+        or (np.iscomplexobj(right_array) and bool(np.any(np.abs(right_array.imag) > 0.0)))
+    )
+    if has_nonzero_imaginary:
+        return _generic_quantized_split_complex_reference(
+            task=task,
+            task_index=task_index,
+            case_id=case_id,
+            left_tensor=left_tensor,
+            right_tensor=right_tensor,
+            task_started=task_started,
+            quantization_mode=quantization_mode,
+        )
+    if np.iscomplexobj(left_array):
+        left_tensor = _component_tensor(left_tensor, left_array.real)
+    if np.iscomplexobj(right_array):
+        right_tensor = _component_tensor(right_tensor, right_array.real)
+    return _generic_quantized_real_component_reference(
+        task=task,
+        task_index=task_index,
+        case_id=case_id,
+        left_tensor=left_tensor,
+        right_tensor=right_tensor,
+        task_started=task_started,
+        component="real",
+        quantization_mode=quantization_mode,
+    )
+
+
+def _generic_quantized_split_complex_reference(
+    *,
+    task: ContractionTask,
+    task_index: int,
+    case_id: str,
+    left_tensor: TensorValue,
+    right_tensor: TensorValue,
+    task_started: float,
+    quantization_mode: str,
+) -> JsonDict:
+    left = np.asarray(left_tensor.array)
+    right = np.asarray(right_tensor.array)
+    components = {
+        "ar_br": (left.real, right.real),
+        "ai_bi": (left.imag, right.imag),
+        "ar_bi": (left.real, right.imag),
+        "ai_br": (left.imag, right.real),
+    }
+    expected: dict[str, np.ndarray] = {}
+    component_metrics: dict[str, JsonDict] = {}
+    for name, (left_part, right_part) in components.items():
+        component_result = _generic_quantized_real_component_reference(
+            task=task,
+            task_index=task_index,
+            case_id=case_id,
+            left_tensor=_component_tensor(left_tensor, left_part),
+            right_tensor=_component_tensor(right_tensor, right_part),
+            task_started=task_started,
+            component=name,
+            quantization_mode=quantization_mode,
+        )
+        component_metrics[name] = component_result["metric"]
+        if component_result["status"] != "completed":
+            metric = _generic_reference_base_task_metric(
+                case_id,
+                task_index,
+                task,
+                status=component_result["status"],
+                reason=f"split_complex_component_{name}:{component_result['reason']}",
+                task_started=task_started,
+                component_metrics=component_metrics,
+                complex_representation="split_real_imag",
+            )
+            return {"status": component_result["status"], "reason": metric["reason"], "metric": metric}
+        expected[name] = np.asarray(component_result["output"], dtype=np.float64)
+
+    output = (expected["ar_br"] - expected["ai_bi"]) + 1j * (expected["ar_bi"] + expected["ai_br"])
+    metric = _generic_reference_base_task_metric(
+        case_id,
+        task_index,
+        task,
+        status="completed",
+        reason=None,
+        task_started=task_started,
+        output=output,
+        component_metrics=component_metrics,
+        complex_representation="split_real_imag",
+        validation_metrics={
+            "reference_kind": "complex_quantized_dequantized_reference_from_four_real_generic_replays",
+            "validation_target": "combined_complex_quantized_dequantized_reference",
+            "passed": True,
+            "max_abs_error": 0.0,
+            "l2_error": 0.0,
+            "relative_l2_error": 0.0,
+        },
+    )
+    metric["split_complex_component_count"] = 4
+    return {"status": "completed", "reason": None, "output": output, "metric": metric}
+
+
+def _generic_quantized_real_component_reference(
+    *,
+    task: ContractionTask,
+    task_index: int,
+    case_id: str,
+    left_tensor: TensorValue,
+    right_tensor: TensorValue,
+    task_started: float,
+    component: str,
+    quantization_mode: str,
+) -> JsonDict:
+    preparation = prepare_generic_task(
+        GenericTaskPreparationInput(
+            task=task,
+            left_tensor=left_tensor,
+            right_tensor=right_tensor,
+            quantization_mode=quantization_mode,  # type: ignore[arg-type]
+        )
+    )
+    if preparation.status != "prepared" or preparation.prepared_operands is None:
+        status = "unsupported" if preparation.status == "unsupported_shape" else "failed"
+        return {
+            "status": status,
+            "reason": preparation.reason or preparation.status,
+            "metric": _generic_reference_base_task_metric(
+                case_id,
+                task_index,
+                task,
+                status=status,
+                reason=preparation.reason or preparation.status,
+                task_started=task_started,
+                preparation=preparation.to_json_dict(),
+                component=component,
+            ),
+        }
+
+    output = np.asarray(preparation.prepared_operands.expected_quantized_reference_output)
+    return {
+        "status": "completed",
+        "reason": None,
+        "output": output,
+        "metric": _generic_reference_base_task_metric(
+            case_id,
+            task_index,
+            task,
+            status="completed",
+            reason=None,
+            task_started=task_started,
+            preparation=preparation.to_json_dict(),
+            output=output,
+            component=component,
+            validation_metrics={
+                **dict(preparation.validation_metrics),
+                "validation_target": preparation.metadata.get("validation_target", "expected_quantized_reference_output"),
+            },
+        ),
+    }
+
+
+def _generic_reference_base_task_metric(
+    case_id: str,
+    task_index: int,
+    task: ContractionTask,
+    *,
+    status: str,
+    reason: str | None,
+    task_started: float,
+    preparation: JsonDict | None = None,
+    output: np.ndarray | None = None,
+    component: str | None = None,
+    component_metrics: JsonDict | None = None,
+    complex_representation: str | None = None,
+    validation_metrics: JsonDict | None = None,
+) -> JsonDict:
+    output_array = np.asarray(output) if output is not None else None
+    native_metadata = dict((preparation or {}).get("native_index_metadata") or {})
+    prep_metadata = dict((preparation or {}).get("metadata") or {})
+    return to_jsonable(
+        {
+            "schema_version": GENERIC_QUANTIZED_TASKGRAPH_REFERENCE_TASK_SCHEMA_VERSION,
+            "case_id": case_id,
+            "task_index": task_index,
+            "task_id": task.id,
+            "input_tensor_ids": task.input_tensor_ids,
+            "output_tensor_id": task.output_tensor_id,
+            "status": status,
+            "reason": reason,
+            "component": component,
+            "index_expression": task.index_expression,
+            "input_shapes": task.input_shapes,
+            "output_shape": tuple(int(dim) for dim in output_array.shape) if output_array is not None else task.output_shape,
+            "input_ranks": (len(task.input_shapes[0]), len(task.input_shapes[1])),
+            "output_rank": len(task.output_shape),
+            "left_labels": task.left_labels,
+            "right_labels": task.right_labels,
+            "contracted_labels": task.contracted_labels,
+            "output_labels": task.output_labels,
+            "complex_representation": complex_representation or ("real" if output_array is not None and not np.iscomplexobj(output_array) else None),
+            "complex_quantization_scope": "per_task_operands" if complex_representation else None,
+            "reference_kind": "generic_quantized_task_reference",
+            "selected_kernel_family": prep_metadata.get("kernel_family", "generic_loop_fallback"),
+            "validation_target": prep_metadata.get("validation_target", "expected_quantized_reference_output"),
+            "full_precision_reference_is_validation_target": False,
+            "quantization_mode": prep_metadata.get("quantization_mode"),
+            "operand_mode": prep_metadata.get("operand_mode"),
+            "input_dtype_on_dpu": prep_metadata.get("input_dtype_on_dpu"),
+            "accumulator_dtype_on_dpu": prep_metadata.get("accumulator_dtype_on_dpu"),
+            "output_dtype_on_dpu": prep_metadata.get("output_dtype_on_dpu"),
+            "unquantized_mode_kind": prep_metadata.get("unquantized_mode_kind"),
+            "scaling_applied": prep_metadata.get("scaling_applied"),
+            "quantization_time_s": float(prep_metadata.get("quantization_time_s", 0.0) or 0.0),
+            "dequantization_time_s": float(prep_metadata.get("dequantization_time_s", 0.0) or 0.0),
+            "float32_reference_time_s": float(prep_metadata.get("float32_reference_time_s", 0.0) or 0.0),
+            "actual_h2d_bytes_model": int(prep_metadata.get("actual_h2d_bytes_model", 0) or 0),
+            "actual_d2h_bytes_model": int(prep_metadata.get("actual_d2h_bytes_model", 0) or 0),
+            "actual_transfer_bytes_model": int(prep_metadata.get("actual_h2d_bytes_model", 0) or 0)
+            + int(prep_metadata.get("actual_d2h_bytes_model", 0) or 0),
+            "full_precision_h2d_bytes_model": int(prep_metadata.get("full_precision_h2d_bytes_model", 0) or 0),
+            "full_precision_d2h_bytes_model": int(prep_metadata.get("full_precision_d2h_bytes_model", 0) or 0),
+            "full_precision_transfer_bytes_model": int(prep_metadata.get("full_precision_h2d_bytes_model", 0) or 0)
+            + int(prep_metadata.get("full_precision_d2h_bytes_model", 0) or 0),
+            "preparation_status": (preparation or {}).get("status"),
+            "preparation_reason": (preparation or {}).get("reason"),
+            "native_index_metadata": native_metadata,
+            "conversion_records": (preparation or {}).get("conversion_records") or {},
+            "validation_metrics": validation_metrics or (preparation or {}).get("validation_metrics") or {},
+            "full_precision_error_metrics": (preparation or {}).get("full_precision_error_metrics") or {},
+            "caps": (preparation or {}).get("caps") or {},
+            "output_dtype": str(output_array.dtype) if output_array is not None else None,
+            "output_bytes": int(output_array.nbytes) if output_array is not None else 0,
+            "estimated_flops": task.estimated_flops,
+            "estimated_bytes": task.estimated_bytes,
+            "component_metrics": component_metrics or {},
+            "reference_task_wall_time_s": float(time.perf_counter() - task_started),
+        }
+    )
+
+
+def _generic_reference_summary(
+    *,
+    case_id: str,
+    status: str,
+    reason: str | None,
+    started: float,
+    task_metrics: list[JsonDict],
+    quantization_mode: str = "per_task_input_quantize",
+    final_tensor_id: str,
+    final_tensor_labels: tuple[int, ...],
+    final_transpose_applied: bool,
+    peak_live_tensor_bytes: int,
+) -> JsonDict:
+    return to_jsonable(
+        {
+            "schema_version": GENERIC_QUANTIZED_TASKGRAPH_REFERENCE_SCHEMA_VERSION,
+            "case_id": case_id,
+            "status": status,
+            "reason": reason,
+            "reference_kind": _generic_reference_kind(quantization_mode),
+            "task_reference_kind": "generic_quantized_task_reference",
+            "quantization_mode": quantization_mode,
+            "validation_target": "per_task_expected_float32_reference_output"
+            if quantization_mode == "none"
+            else "per_task_expected_quantized_reference_output",
+            "full_precision_reference_is_task_validation_target": False,
+            "whole_network_quantized_at_initialization": False,
+            "total_tasks": len(task_metrics),
+            "completed_tasks": sum(1 for row in task_metrics if row.get("status") == "completed"),
+            "unsupported_tasks": sum(1 for row in task_metrics if row.get("status") == "unsupported"),
+            "failed_tasks": sum(1 for row in task_metrics if row.get("status") == "failed"),
+            "complex_split_tasks": sum(1 for row in task_metrics if row.get("complex_representation") == "split_real_imag"),
+            "final_tensor_id": final_tensor_id,
+            "final_tensor_labels": final_tensor_labels,
+            "final_transpose_applied": final_transpose_applied,
+            "peak_live_tensor_bytes": int(peak_live_tensor_bytes),
+            "total_wall_time_s": float(time.perf_counter() - started),
+            "input_dtype_on_dpu": _unique_or_none(task_metrics, "input_dtype_on_dpu"),
+            "accumulator_dtype_on_dpu": _unique_or_none(task_metrics, "accumulator_dtype_on_dpu"),
+            "output_dtype_on_dpu": _unique_or_none(task_metrics, "output_dtype_on_dpu"),
+            "unquantized_mode_kind": _unique_or_none(task_metrics, "unquantized_mode_kind"),
+            "scaling_applied": _unique_or_none(task_metrics, "scaling_applied"),
+            "actual_h2d_bytes_model": int(sum(int(row.get("actual_h2d_bytes_model", 0) or 0) for row in task_metrics)),
+            "actual_d2h_bytes_model": int(sum(int(row.get("actual_d2h_bytes_model", 0) or 0) for row in task_metrics)),
+            "actual_transfer_bytes": int(sum(int(row.get("actual_transfer_bytes_model", 0) or 0) for row in task_metrics)),
+            "full_precision_h2d_bytes_model": int(sum(int(row.get("full_precision_h2d_bytes_model", 0) or 0) for row in task_metrics)),
+            "full_precision_d2h_bytes_model": int(sum(int(row.get("full_precision_d2h_bytes_model", 0) or 0) for row in task_metrics)),
+            "full_precision_transfer_bytes_model": int(
+                sum(int(row.get("full_precision_transfer_bytes_model", 0) or 0) for row in task_metrics)
+            ),
+        }
+    )
+
+
+def _generic_reference_stop_result(
+    case_id: str,
+    status: Literal["unsupported", "failed"],
+    reason: str,
+    started: float,
+    task_metrics: list[JsonDict],
+    quantization_mode: str = "per_task_input_quantize",
+) -> GenericQuantizedTaskGraphReference:
+    summary = _generic_reference_summary(
+        case_id=case_id,
+        status=status,
+        reason=reason,
+        started=started,
+        task_metrics=task_metrics,
+        quantization_mode=quantization_mode,
+        final_tensor_id="",
+        final_tensor_labels=(),
+        final_transpose_applied=False,
+        peak_live_tensor_bytes=0,
+    )
+    return GenericQuantizedTaskGraphReference(
+        schema_version=GENERIC_QUANTIZED_TASKGRAPH_REFERENCE_SCHEMA_VERSION,
+        status=status,
+        reason=reason,
+        case_id=case_id,
+        output=None,
+        output_labels=None,
+        summary=summary,
+        task_metrics=tuple(task_metrics),
+    )
+
+
+def _generic_reference_kind(quantization_mode: str) -> str:
+    return "generic_float32_taskgraph_replay" if quantization_mode == "none" else "generic_quantized_taskgraph_replay"
 
 
 def _base_task_metric(
@@ -600,6 +1139,11 @@ def _base_task_metric(
     bridge_metadata = dict(bridge_manifest.get("metadata") or {})
     bridge_validation = dict(bridge_manifest.get("validation_metrics") or {})
     conversion_records = dict((preparation or {}).get("conversion_records") or {})
+    prep_metadata = dict((preparation or {}).get("metadata") or {})
+    actual_h2d_bytes = bridge_metadata.get("actual_h2d_bytes", prep_metadata.get("actual_h2d_bytes_model"))
+    actual_d2h_bytes = bridge_metadata.get("actual_d2h_bytes", prep_metadata.get("actual_d2h_bytes_model"))
+    full_precision_h2d_bytes = prep_metadata.get("full_precision_h2d_bytes_model", bridge_metadata.get("full_precision_h2d_bytes_model"))
+    full_precision_d2h_bytes = prep_metadata.get("full_precision_d2h_bytes_model", bridge_metadata.get("full_precision_d2h_bytes_model"))
     return to_jsonable(
         {
             "schema_version": UPMEM_TASKGRAPH_TASK_METRIC_SCHEMA_VERSION,
@@ -613,6 +1157,12 @@ def _base_task_metric(
             "policy": policy,
             "quantization_mode": quantization_mode,
             "whole_network_quantized_at_initialization": False,
+            "operand_mode": bridge_metadata.get("operand_mode", prep_metadata.get("operand_mode")),
+            "input_dtype_on_dpu": bridge_metadata.get("input_dtype_on_dpu", prep_metadata.get("input_dtype_on_dpu")),
+            "accumulator_dtype_on_dpu": bridge_metadata.get("accumulator_dtype_on_dpu", prep_metadata.get("accumulator_dtype_on_dpu")),
+            "output_dtype_on_dpu": bridge_metadata.get("output_dtype_on_dpu", prep_metadata.get("output_dtype_on_dpu")),
+            "unquantized_mode_kind": bridge_metadata.get("unquantized_mode_kind", prep_metadata.get("unquantized_mode_kind")),
+            "scaling_applied": bridge_metadata.get("scaling_applied", prep_metadata.get("scaling_applied")),
             "complex_representation": complex_representation or ("real" if output_array is not None and not np.iscomplexobj(output_array) else None),
             "complex_quantization_scope": "per_task_operands" if complex_representation else None,
             "contraction_execution_target": CONTRACTION_EXECUTION_TARGET,
@@ -635,6 +1185,7 @@ def _base_task_metric(
             "estimated_bytes": task.estimated_bytes,
             "preparation_status": (preparation or {}).get("status"),
             "preparation_reason": (preparation or {}).get("reason"),
+            "native_index_metadata": (preparation or {}).get("native_index_metadata"),
             "conversion_records": conversion_records,
             "bridge_execution_status": (bridge_result or {}).get("execution_status"),
             "bridge_reason": (bridge_result or {}).get("reason"),
@@ -642,6 +1193,15 @@ def _base_task_metric(
             "bridge_total_time_s": float(bridge_manifest.get("total_time_s", 0.0) or 0.0),
             "kernel_time_s": float(bridge_manifest.get("compute_time_s", 0.0) or 0.0),
             "build_time_s": float(bridge_metadata.get("build_time_s", 0.0) or 0.0),
+            "quantization_time_s": float(prep_metadata.get("quantization_time_s", 0.0) or 0.0),
+            "dequantization_time_s": float(prep_metadata.get("dequantization_time_s", 0.0) or 0.0),
+            "float32_reference_time_s": float(prep_metadata.get("float32_reference_time_s", 0.0) or 0.0),
+            "actual_h2d_bytes": int(actual_h2d_bytes or 0),
+            "actual_d2h_bytes": int(actual_d2h_bytes or 0),
+            "actual_transfer_bytes": int((actual_h2d_bytes or 0) + (actual_d2h_bytes or 0)),
+            "full_precision_h2d_bytes_model": int(full_precision_h2d_bytes or 0),
+            "full_precision_d2h_bytes_model": int(full_precision_d2h_bytes or 0),
+            "full_precision_transfer_bytes_model": int((full_precision_h2d_bytes or 0) + (full_precision_d2h_bytes or 0)),
             "runtime_task_wall_time_s": float(time.perf_counter() - task_started),
             "bridge_artifact_path": _metric_artifact_path(bridge_artifact_path),
             "component_metrics": component_metrics or {},
@@ -672,9 +1232,27 @@ def _summary_payload(
     peak_live_tensor_bytes: int,
 ) -> JsonDict:
     executed_tasks = sum(1 for row in task_metrics if row.get("status") == "completed")
+    dpu_invocations = sum(1 for row in task_metrics if row.get("dpu_program_executed") is True)
+    total_actual_h2d_bytes = sum(int(row.get("actual_h2d_bytes", 0) or 0) for row in task_metrics)
+    total_actual_d2h_bytes = sum(int(row.get("actual_d2h_bytes", 0) or 0) for row in task_metrics)
+    total_full_precision_h2d_bytes = sum(int(row.get("full_precision_h2d_bytes_model", 0) or 0) for row in task_metrics)
+    total_full_precision_d2h_bytes = sum(int(row.get("full_precision_d2h_bytes_model", 0) or 0) for row in task_metrics)
+    total_actual_transfer_bytes = total_actual_h2d_bytes + total_actual_d2h_bytes
+    total_full_precision_transfer_bytes = total_full_precision_h2d_bytes + total_full_precision_d2h_bytes
+    transfer_compression_ratio = (
+        float(total_full_precision_transfer_bytes) / float(total_actual_transfer_bytes)
+        if total_actual_transfer_bytes > 0
+        else None
+    )
     dpu_all = bool(task_metrics) and all(row.get("dpu_program_executed") is True for row in task_metrics)
     target_all = bool(task_metrics) and all(row.get("contraction_execution_target") == CONTRACTION_EXECUTION_TARGET for row in task_metrics)
     mode_all = bool(task_metrics) and all(row.get("upmem_execution_mode") == UPMEM_EXECUTION_MODE for row in task_metrics)
+    generic_only_all_generic = bool(task_metrics) and all(
+        row.get("status") == "completed"
+        and row.get("selected_kernel_family") == "generic_loop_fallback"
+        and row.get("backend_id") == "upmem_sdk_simulator_generic_loop"
+        for row in task_metrics
+    )
     no_cpu_feed = bool(task_metrics) and all(
         row.get("runtime_tensor_source") == "upmem_output_blob" and row.get("cpu_reference_artifact_used_as_runtime_input") is False
         for row in task_metrics
@@ -702,18 +1280,27 @@ def _summary_payload(
             "upmem_execution_mode": UPMEM_EXECUTION_MODE,
             "native_sdk_control_path": True,
             "simplepim_api_used": False,
+            "input_dtype_on_dpu": _unique_or_none(task_metrics, "input_dtype_on_dpu"),
+            "accumulator_dtype_on_dpu": _unique_or_none(task_metrics, "accumulator_dtype_on_dpu"),
+            "output_dtype_on_dpu": _unique_or_none(task_metrics, "output_dtype_on_dpu"),
+            "unquantized_mode_kind": _unique_or_none(task_metrics, "unquantized_mode_kind"),
+            "scaling_applied": _unique_or_none(task_metrics, "scaling_applied"),
             "hardware_benchmark_result": False,
             "hardware_timing_available": False,
             "hardware_speedup_applicable": False,
             "cpu_fallback_used": False,
+            "cpu_fallback_task_count": 0,
             "dpu_program_executed_all_tasks": dpu_all,
+            "dpu_program_invocations": dpu_invocations,
             "runtime_tensor_sources_all_upmem_output_blobs": no_cpu_feed,
+            "generic_only_all_tasks_used_generic_backend": generic_only_all_generic if policy == "generic-only" else None,
             "valid_primary_upmem_codepath_result": valid_primary,
             "total_tasks": len(task_metrics),
             "executed_tasks": executed_tasks,
+            "upmem_task_count": executed_tasks,
             "unsupported_tasks": sum(1 for row in task_metrics if row.get("status") == "unsupported"),
             "failed_tasks": sum(1 for row in task_metrics if row.get("status") == "failed"),
-            "dpu_program_executed_task_count": sum(1 for row in task_metrics if row.get("dpu_program_executed") is True),
+            "dpu_program_executed_task_count": dpu_invocations,
             "kernel_family_counts": kernel_family_counts,
             "backend_counts": backend_counts,
             "final_tensor_id": final_tensor_id,
@@ -724,6 +1311,16 @@ def _summary_payload(
             "total_bridge_time_s": float(total_bridge_time_s),
             "total_kernel_time_s": float(total_kernel_time_s),
             "total_build_time_s": float(total_build_time_s),
+            "total_quantization_time_s": float(sum(float(row.get("quantization_time_s", 0.0) or 0.0) for row in task_metrics)),
+            "total_dequantization_time_s": float(sum(float(row.get("dequantization_time_s", 0.0) or 0.0) for row in task_metrics)),
+            "total_float32_reference_time_s": float(sum(float(row.get("float32_reference_time_s", 0.0) or 0.0) for row in task_metrics)),
+            "actual_h2d_bytes": int(total_actual_h2d_bytes),
+            "actual_d2h_bytes": int(total_actual_d2h_bytes),
+            "actual_transfer_bytes": int(total_actual_transfer_bytes),
+            "full_precision_h2d_bytes_model": int(total_full_precision_h2d_bytes),
+            "full_precision_d2h_bytes_model": int(total_full_precision_d2h_bytes),
+            "full_precision_transfer_bytes_model": int(total_full_precision_transfer_bytes),
+            "transfer_compression_ratio": transfer_compression_ratio,
             "peak_live_tensor_bytes": int(peak_live_tensor_bytes),
             "task_metrics_artifact": None,
             "final_tensor_artifact": None,
@@ -731,16 +1328,16 @@ def _summary_payload(
     )
 
 
-def _final_validation(output: np.ndarray, reference_output: np.ndarray | None) -> JsonDict:
+def _final_validation(output: np.ndarray, reference_output: np.ndarray | None, *, reference_kind: str) -> JsonDict:
     if reference_output is None:
-        return {"passed": False, "reason": "reference_output_missing"}
+        return {"passed": False, "reason": "reference_output_missing", "reference_kind": reference_kind}
     result = validate(output, reference_output, QUANTIZED_FINAL_VALIDATION_TOLERANCES)
     diff = np.asarray(output, dtype=np.complex128) - np.asarray(reference_output, dtype=np.complex128)
     abs_diff = np.abs(diff)
     return to_jsonable(
         {
             **result.__dict__,
-            "reference_kind": "cpu_exact_taskgraph_full_precision",
+            "reference_kind": reference_kind,
             "tolerance_kind": "quantized_execution_tolerance",
             "mean_abs_error": float(abs_diff.mean()) if abs_diff.size else 0.0,
             "max_abs_error": result.max_abs_error,
@@ -812,6 +1409,15 @@ def _counts(rows: list[JsonDict], key: str) -> dict[str, int]:
         if value:
             counts[str(value)] = counts.get(str(value), 0) + 1
     return counts
+
+
+def _unique_or_none(rows: list[JsonDict], key: str) -> object | None:
+    values = {row.get(key) for row in rows if row.get(key) is not None}
+    if len(values) == 1:
+        return next(iter(values))
+    if not values:
+        return None
+    return "mixed"
 
 
 def _inputs_available(task: ContractionTask, tensors: Mapping[str, np.ndarray]) -> bool:

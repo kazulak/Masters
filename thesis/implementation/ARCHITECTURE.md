@@ -125,11 +125,12 @@ as full-circuit acceleration.
 | Fixed-point conversion | `formats/fixed_point.py` | Implemented host-side utilities |
 | UPMEM schedule and tile model | `targets/upmem/schedule.py`, `tile_plan.py` | Implemented model and L1/L2 bridge metadata |
 | Dense bridge manifests | `targets/upmem/dense_bridge.py` | Implemented |
-| Generic fallback preparation and bridge | `routing/generic_prepare.py`, `targets/upmem/generic_bridge.py` | Implemented MVP for small real binary contractions |
+| Generic fallback preparation and bridge | `routing/generic_prepare.py`, `targets/upmem/generic_bridge.py` | Implemented MVP for bounded binary contractions with int8/int32 quantized and float32/no-quant modes |
 | UPMEM SDK simulator dense runner | `native/upmem/simplepim/upmem_sdk_dense*` | Implemented L1/L2 subsets |
-| UPMEM SDK simulator generic loop runner | `native/upmem/simplepim/upmem_sdk_generic_loop*` | Implemented correctness/coverage MVP |
+| UPMEM SDK simulator generic loop runner | `native/upmem/simplepim/upmem_sdk_generic_loop*` | Implemented correctness/coverage MVP with shared int8/int32 and float32 DPU code path |
 | Strict UPMEM TaskGraph runtime | `bench/upmem_taskgraph_runtime.py`, `targets/upmem/taskgraph_runtime.py` | Implemented MVP for small sequential TaskGraphs in SDK simulator mode |
 | Suite-level UPMEM MVP benchmark | `bench/upmem_mvp_benchmark.py` | Implemented report regeneration pipeline over strict runtime variants |
+| Generic UPMEM feasibility scan | `bench/upmem_generic_feasibility.py` | Implemented non-executing scanner for current generic caps and boundary reasons |
 | Benchmark reporting and retention | `bench/reporting.py`, `bench/result_artifacts.py` | Implemented canonical normalized records, compact retention, report regeneration, and run comparison |
 | PIM bridge evaluation | `bench/pim_bridge_eval.py` | Developer task-level evidence harness |
 | PIM frontier analysis | `bench/pim_frontier_analysis.py`, `targets/upmem/frontier.py` | Model-only analysis |
@@ -188,6 +189,14 @@ later runtime tensors. CPU exact output is used for final validation only.
 `upmem-mvp-benchmark` preserves that boundary while running the strict runtime
 across a suite and reporting CPU reference timing separately from UPMEM SDK
 simulator timing.
+
+For generic-only runs, the runtime supports two same-route modes:
+`quantization_mode=none` executes float32 operands and float32 accumulation on
+the UPMEM SDK DPU program path, while `per_task_input_quantize` executes int8
+operands with int32 accumulation and host-side per-task dequantization. The MVP
+benchmark pairs those modes in `quantization_comparison.csv` so quantization
+effects can be attributed without replacing the native unquantized run with a
+CPU replay.
 
 New MVP benchmark runs write `run_manifest.json` and root
 `normalized_records.jsonl`. The normalized records are canonical for

@@ -11,6 +11,9 @@
 #define UPMEM_GENERIC_MAX_ELEMS 4096
 #endif
 
+#define UPMEM_GENERIC_MODE_INT8_SCALED 0u
+#define UPMEM_GENERIC_MODE_FLOAT32_NO_QUANT 1u
+
 typedef struct {
     uint32_t left_rank;
     uint32_t right_rank;
@@ -20,6 +23,7 @@ typedef struct {
     uint32_t right_elems;
     uint32_t output_elems;
     uint32_t contracted_elems;
+    uint32_t operand_mode;
     uint32_t left_shape[UPMEM_GENERIC_MAX_RANK];
     uint32_t right_shape[UPMEM_GENERIC_MAX_RANK];
     uint32_t output_shape[UPMEM_GENERIC_MAX_RANK];

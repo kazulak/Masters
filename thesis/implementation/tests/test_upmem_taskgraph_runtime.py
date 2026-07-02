@@ -16,7 +16,11 @@ from quantum_bench.targets.upmem.generic_bridge import (
     GenericBridgeExecutionResult,
     GenericBridgeOutputManifest,
 )
-from quantum_bench.targets.upmem.taskgraph_runtime import execute_upmem_taskgraph_runtime
+from quantum_bench.targets.upmem.taskgraph_runtime import (
+    build_generic_quantized_taskgraph_reference,
+    build_generic_taskgraph_reference,
+    execute_upmem_taskgraph_runtime,
+)
 from quantum_bench.tn.execution import execute_task_sequence_np_einsum
 from quantum_bench.tn.network import TensorNetworkValue
 
@@ -224,6 +228,71 @@ def test_generic_only_runtime_consumes_upmem_output_blobs_not_cpu_reference(monk
     assert result.status == "validation_failed"
 
 
+def test_generic_quantized_taskgraph_reference_replays_multiple_tasks() -> None:
+    graph, network = _two_task_scalar_graph()
+
+    reference = build_generic_quantized_taskgraph_reference(graph=graph, network=network, case_id="two_task_scalar")
+
+    assert reference.status == "completed"
+    assert reference.summary["reference_kind"] == "generic_quantized_taskgraph_replay"
+    assert reference.summary["completed_tasks"] == 2
+    assert reference.output_labels == ()
+    assert np.asarray(reference.output).shape == ()
+    assert reference.task_metrics[0]["validation_target"] == "expected_quantized_reference_output"
+    assert reference.task_metrics[1]["full_precision_reference_is_validation_target"] is False
+
+
+def test_generic_only_runtime_validates_against_generic_quantized_reference(monkeypatch, tmp_path: Path) -> None:
+    graph, network = _two_task_scalar_graph()
+    reference = build_generic_quantized_taskgraph_reference(graph=graph, network=network, case_id="two_task_scalar")
+    monkeypatch.setattr("quantum_bench.targets.upmem.taskgraph_runtime.execute_generic_bridge", _fake_generic_execute_from_expected)
+
+    result = execute_upmem_taskgraph_runtime(
+        graph=graph,
+        network=network,
+        case_id="two_task_scalar",
+        policy="generic-only",
+        quantization_mode="per_task_input_quantize",
+        bridge_root=tmp_path / "bridge",
+        execute_external=True,
+        reference_output=reference.output,
+        reference_kind="generic_quantized_taskgraph_replay",
+    )
+
+    assert result.status == "completed"
+    assert result.summary["final_validation"]["reference_kind"] == "generic_quantized_taskgraph_replay"
+    assert result.summary["generic_only_all_tasks_used_generic_backend"] is True
+    assert result.summary["dpu_program_invocations"] == result.summary["total_tasks"]
+    assert result.summary["runtime_tensor_sources_all_upmem_output_blobs"] is True
+
+
+def test_generic_only_runtime_supports_float32_no_quant_mode(monkeypatch, tmp_path: Path) -> None:
+    graph, network = _two_task_scalar_graph()
+    reference = build_generic_taskgraph_reference(graph=graph, network=network, case_id="two_task_scalar", quantization_mode="none")
+    monkeypatch.setattr("quantum_bench.targets.upmem.taskgraph_runtime.execute_generic_bridge", _fake_generic_execute_from_expected)
+
+    result = execute_upmem_taskgraph_runtime(
+        graph=graph,
+        network=network,
+        case_id="two_task_scalar",
+        policy="generic-only",
+        quantization_mode="none",
+        bridge_root=tmp_path / "bridge",
+        execute_external=True,
+        reference_output=reference.output,
+        reference_kind="generic_float32_taskgraph_replay",
+    )
+
+    assert result.status == "completed"
+    assert result.summary["quantization_mode"] == "none"
+    assert result.summary["input_dtype_on_dpu"] == "float32"
+    assert result.summary["accumulator_dtype_on_dpu"] == "float32"
+    assert result.summary["scaling_applied"] is False
+    assert result.summary["dpu_program_invocations"] == result.summary["total_tasks"]
+    assert result.summary["valid_primary_upmem_codepath_result"] is True
+    assert result.summary["cpu_fallback_used"] is False
+
+
 def test_generic_split_complex_runtime_combines_four_real_calls(monkeypatch, tmp_path: Path) -> None:
     graph, network = _one_task_complex_graph()
     reference, _ = execute_task_sequence_np_einsum(graph, network)
@@ -294,6 +363,10 @@ def test_run_harness_writes_compare_results_compatible_summary(monkeypatch, tmp_
     assert run.summary["contraction_execution_target"] == "upmem"
     assert run.summary["upmem_execution_mode"] == "sdk_simulator"
     assert run.summary["hardware_speedup_applicable"] is False
+    assert run.summary["final_validation"]["reference_kind"] == "generic_quantized_taskgraph_replay"
+    assert run.summary["reference"]["full_precision_reference_is_task_validation_target"] is False
+    assert run.summary["generic_quantized_taskgraph_reference"]["status"] == "completed"
+    assert run.summary["final_full_precision_accuracy"]["reference_kind"] == "cpu_exact_taskgraph_full_precision"
     assert run.summary["valid_primary_upmem_codepath_result"] is True
     task_metrics_path = run.run_dir / "cases" / run.case_id / "upmem_taskgraph_task_metrics.jsonl"
     assert task_metrics_path.exists()
