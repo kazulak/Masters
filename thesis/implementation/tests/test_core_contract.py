@@ -49,15 +49,14 @@ def test_suite_config_loads() -> None:
     suite = load_suite(ROOT / "configs" / "suites" / "smoke.yml")
     assert suite["suite_id"] == "smoke"
     assert suite["_schema_version"] == 2
-    assert suite["route_policy"]["routes"][0] == "cpu_tn_einsum_exact"
-    assert suite["route_policy"]["routes"][1] == "upmem_dense_int8_placeholder"
+    assert suite["route_policy"]["routes"] == ["cpu_tn_einsum_exact"]
 
 
 def test_smoke_suite_v2_schema_loads_with_separate_workloads_and_routes() -> None:
     suite = load_suite(ROOT / "configs" / "suites" / "smoke.yml")
     assert suite["_schema_version"] == 2
     assert [case["case_id"] for case in suite["cases"]] == ["bell_2q", "ghz_4q"]
-    assert suite["route_policy"]["routes"] == ["cpu_tn_einsum_exact", "upmem_dense_int8_placeholder"]
+    assert suite["route_policy"]["routes"] == ["cpu_tn_einsum_exact"]
     assert suite["_route_configs"][0]["required"] is True
 
 
@@ -83,23 +82,9 @@ def test_route_probe_and_upmem_skip_reason() -> None:
     assert routes["quimb_tn_exact"].identity.role == "serious_external_tn_baseline"
     assert routes["quimb_tn_exact"].identity.validation_mode == "compare_output"
     assert routes["quimb_tn_exact"].backend_family == "quimb"
-    assert routes["upmem_dense_int8_placeholder"].identity.hardware_target == "upmem_dpu"
     assert "upmem_tn_sdk_simulator_quantized" in routes
     assert "upmem_tn_sdk_simulator_exact" not in routes
     assert routes["upmem_tn_sdk_simulator_quantized"].identity.hardware_target == "upmem"
     assert routes["upmem_tn_sdk_simulator_quantized"].identity.execution_mode == "sdk_simulator"
     assert routes["upmem_tn_sdk_simulator_quantized"].identity.output_contract == "final_tensor"
     assert routes["upmem_tn_sdk_simulator_quantized"].backend_family == "upmem_sdk"
-    circuit = builtin_circuit("bell_2q")
-    network = build_tensor_network(circuit)
-    graph = plan_task_graph(network)
-    suite = load_suite(ROOT / "configs" / "suites" / "smoke.yml")
-    from quantum_bench.core.records import BenchmarkContext
-
-    context = BenchmarkContext(ROOT, ROOT / "runs" / "test", suite, suite["cases"][0], suite["_route_configs"][1], 0, suite["tolerances"], 30, 2)
-    can_execute, reason = routes["upmem_dense_int8_placeholder"].can_execute(graph, context)
-    estimate = routes["upmem_dense_int8_placeholder"].estimate(graph, context)
-    assert not can_execute
-    assert reason
-    assert estimate.metadata["target"] == "upmem"
-    assert estimate.wram_fit is not None

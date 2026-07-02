@@ -27,15 +27,10 @@ routes:
     role: reference
     required: true
 
-  - id: upmem_dense_int8_placeholder
-    role: candidate
-    required: false
-
 validation:
   reference_route: cpu_tn_einsum_exact
   require_output_for_roles:
     - reference
-    - candidate
   tolerances:
     max_abs_error: 1.0e-9
     l2_error: 1.0e-8

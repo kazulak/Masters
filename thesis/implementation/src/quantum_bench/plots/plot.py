@@ -13,7 +13,6 @@ DEFAULT_BASELINE_ROUTE = "quest_cpu_full_state_benchmark"
 ROUTE_LABELS = {
     "cpu_tn_einsum_exact": "CPU exact TN",
     "quest_cpu_full_state_benchmark": "QuEST CPU full-state",
-    "upmem_dense_int8_placeholder": "UPMEM dense placeholder",
 }
 
 

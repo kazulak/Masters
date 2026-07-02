@@ -50,6 +50,20 @@ Wave 2E.32 should remove `upmem_dense_int8_placeholder` from smoke only:
 Do not remove `quest_cpu_full_state_benchmark` or legacy CLI paths in the same
 wave.
 
+## Wave 2E.32 Update
+
+`upmem_dense_int8_placeholder` is no longer part of `configs/suites/smoke.yml`.
+It remains registered only for compatibility until route cleanup.
+
+## Wave 2E.33 Update
+
+Reference checks after Wave 2E.32 showed no active suite dependency on
+`upmem_dense_int8_placeholder`. The placeholder provider, registry entry,
+export, plot label, and compatibility assertions were removed. Real UPMEM
+evidence remains covered by `upmem_tn_sdk_simulator_quantized`,
+`configs/suites/simulation_backend_compare_upmem_sdk_simulator.yml`, and
+`make bench-upmem-sim`.
+
 ## Validation Commands
 
 ```bash

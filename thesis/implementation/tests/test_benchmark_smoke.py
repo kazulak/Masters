@@ -64,11 +64,10 @@ def _assert_upmem_estimate_schema(estimate: dict[str, object]) -> None:
 def test_smoke_suite_writes_raw_summary_and_plots_contract(tmp_path: Path) -> None:
     run_dir = run_suite(ROOT / "configs" / "suites" / "smoke.yml", tmp_path)
     raw_rows = _read_raw_rows(run_dir)
-    route_decisions = _read_route_decisions(run_dir)
     summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
     environment = json.loads((run_dir / "environment.json").read_text(encoding="utf-8"))
-    assert len(raw_rows) == 8
-    assert summary["record_count"] == 8
+    assert len(raw_rows) == 4
+    assert summary["record_count"] == 4
     assert (run_dir / "environment.json").exists()
     assert "simplepim" in environment
     assert "SIMPLEPIM_HOME" in environment["simplepim"]
@@ -78,8 +77,8 @@ def test_smoke_suite_writes_raw_summary_and_plots_contract(tmp_path: Path) -> No
     assert "probe_status" in environment["simplepim"]
     assert "skip_reason" in environment["simplepim"]
     assert (run_dir / "metrics" / "metrics.csv").exists()
-    assert any(row["status"] == "skipped" and row["route"] == "upmem_dense_int8_placeholder" for row in raw_rows)
     assert any(row["status"] == "passed" and row["route"] == "cpu_tn_einsum_exact" for row in raw_rows)
+    assert all(row["route"] == "cpu_tn_einsum_exact" for row in raw_rows)
     for row in raw_rows:
         assert "route" + "_alias" not in row
         assert row["role"]
@@ -90,7 +89,6 @@ def test_smoke_suite_writes_raw_summary_and_plots_contract(tmp_path: Path) -> No
         assert row["output_contract"]
         assert row["validation_mode"]
     assert summary["validated_routes"]
-    assert summary["skipped_or_probe_routes"]
 
     for case_dir in sorted((run_dir / "cases").iterdir()):
         if not case_dir.is_dir():
@@ -243,46 +241,12 @@ def test_smoke_suite_writes_raw_summary_and_plots_contract(tmp_path: Path) -> No
             assert isinstance(target_estimates, dict)
             _assert_upmem_estimate_schema(target_estimates[UPMEM_DENSE_ESTIMATE_KEY])
 
-    upmem_decisions = [row for row in route_decisions if row["route"] == "upmem_dense_int8_placeholder"]
-    assert len(upmem_decisions) == 2
-    for decision in upmem_decisions:
-        metadata = decision["metadata"]
-        tile_shape = decision["tile_shape"]
-        assert isinstance(metadata, dict)
-        assert isinstance(tile_shape, dict)
-        assert decision["status"] == "skipped"
-        assert decision["wram_fit"] is not None
-        assert tile_shape["model"] == "dense_wram_tile_plan"
-        assert tile_shape["max_working_set_bytes"] >= 0
-        assert tile_shape["wram_bytes"] == 64 * 1024
-        assert metadata["target"] == "upmem"
-        assert metadata["estimate_key"] == UPMEM_DENSE_ESTIMATE_KEY
-        assert metadata["route_family"] == "dense_gemm"
-        assert metadata["tiling_implemented"] is False
-        artifact = Path(metadata["task_estimates_artifact"])
-        assert not artifact.is_absolute()
-        assert (run_dir / artifact).exists()
-        tile_plan_artifact = Path(metadata["tile_plan_artifact"])
-        assert not tile_plan_artifact.is_absolute()
-        assert (run_dir / tile_plan_artifact).exists()
-        for field in (
-            "total_host_to_dpu_bytes",
-            "total_dpu_to_host_bytes",
-            "total_mram_to_wram_bytes",
-            "max_working_set_bytes",
-            "total_estimated_tile_count",
-            "max_estimated_parallel_tiles",
-        ):
-            assert field in metadata
-            assert metadata[field] >= 0
-
-
 def test_smoke_suite_runs_with_same_contract(tmp_path: Path) -> None:
     run_dir = run_suite(ROOT / "configs" / "suites" / "smoke.yml", tmp_path)
     raw_rows = _read_raw_rows(run_dir)
     summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
-    assert len(raw_rows) == 8
-    assert summary["record_count"] == 8
+    assert len(raw_rows) == 4
+    assert summary["record_count"] == 4
     assert any(row["route"] == "cpu_tn_einsum_exact" and row["role"] == "reference" for row in raw_rows)
-    assert any(row["route"] == "upmem_dense_int8_placeholder" and row["role"] == "candidate" for row in raw_rows)
+    assert all(row["route"] == "cpu_tn_einsum_exact" for row in raw_rows)
     assert summary["validated_routes"]
