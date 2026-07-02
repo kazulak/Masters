@@ -1,52 +1,65 @@
-# Thesis Code Map
+# Thesis Start Here
 
-This directory contains the thesis implementation work and supporting baselines.
-
-## Current Structure
+The active thesis implementation is:
 
 ```text
-thesis/
-+-- PIMutation_reconstruction/
-|   +-- QuEST_implementation/      # CPU state-vector baseline inspired by PIMutation
-|   +-- simple_python/             # Small reference experiments
-+-- 01_MVP_DenseGEMM/              # Current UPMEM dense-GEMM MVP baseline
-+-- 02_Modular_UPMEM_TN_Simulator/ # Planning scaffold for the next thesis stage
-+-- SimplePIM_*                    # SimplePIM experiments and prototypes
-+-- extern/                        # External projects used for comparison/prototyping
-+-- SLR/                           # Literature scoping review material
+thesis/implementation/
 ```
 
-## Working Baseline
+Older prototypes, planning scaffolds, and one-off experiments are under
+`thesis/legacy/`. They are useful for provenance, but they are not the active
+code path.
 
-`01_MVP_DenseGEMM` should remain the reproducible baseline for the current thesis
-state:
+## Current Direction
 
-1. Python builds a small tensor network.
-2. `opt_einsum` creates a pairwise contraction path.
-3. The host converts each pairwise contraction into tiled GEMM.
-4. Tiles are quantized to int8 on the host.
-5. A UPMEM DPU executes integer GEMM tiles.
-6. The host dequantizes, accumulates, and validates against NumPy.
+The implementation is a benchmarkable quantum-circuit simulation runtime built
+around tensor-network contraction and reproducible result artifacts.
 
-The next stage should not erase this baseline. New architectural work belongs in
-`02_Modular_UPMEM_TN_Simulator` until it is mature enough to replace or extend the
-MVP.
+Current serious baselines:
 
-## Planning Entry Point
+- QuEST CPU full-state simulation.
+- Quimb/cotengra CPU tensor-network simulation.
+- Optional QuEST HIP GPU execution when the local ROCm path verifies real GPU
+  computation.
+- Strict UPMEM SDK simulator execution for bounded TaskGraph contractions.
 
-Start with:
+UPMEM SDK simulator results execute real SDK DPU programs in simulator mode.
+They are not hardware timings and must not be reported as hardware speedup.
 
-- `02_Modular_UPMEM_TN_Simulator/README.md`
-- `02_Modular_UPMEM_TN_Simulator/docs/thesis_structure.md`
-- `02_Modular_UPMEM_TN_Simulator/docs/architecture.md`
-- `02_Modular_UPMEM_TN_Simulator/docs/literature_guidelines_mapping.md`
-- `02_Modular_UPMEM_TN_Simulator/docs/implementation_plan.md`
+Current UPMEM limitation:
 
-The planning scaffold is intentionally documentation-only at this point. It records
-the architecture, steps, decisions, experiments, and unresolved ambiguities before
-the next implementation pass.
+> Bounded generic UPMEM contraction exists, but fully general UPMEM TN
+> contraction does not yet exist.
 
-Current committed direction: a TaskGraph-centered modular tensor-network runtime.
-The host owns planning, slicing, dispatch, validation, profiling, and reductions.
-The UPMEM backend is SimplePIM-first, with raw/custom dense, SparseP, heuristic,
-and collective providers selected per task.
+## Run The Implementation
+
+Start here:
+
+```bash
+cd thesis/implementation
+```
+
+Then use the implementation README:
+
+```text
+thesis/implementation/README.md
+```
+
+That file is the only active command page. The current architecture is in:
+
+```text
+thesis/implementation/ARCHITECTURE.md
+```
+
+## Legacy Material
+
+Historical direction and audit documents were moved to:
+
+```text
+thesis/legacy/direction/
+thesis/legacy/audits/
+```
+
+The old `01_MVP_DenseGEMM`, `02_Modular_UPMEM_TN_Simulator`, SimplePIM
+experiments, and earlier PIMutation reconstruction folders remain legacy
+material only.

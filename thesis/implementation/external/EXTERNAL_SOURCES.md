@@ -32,8 +32,8 @@ git submodule update --init --recursive external/QuEST external/SimplePIM extern
 | `ATiM/` | Not confirmed | Not applicable | SLR-derived tensor-kernel autotuning candidate | Planned only; add a submodule only after the authoritative URL is known |
 
 Additional SLR-derived candidates such as SparseP, PRISM, PyGim, PIM-LLM GEMM,
-and TransPimLib stay documented in `docs/runtime_architecture_map.md` until
-they become implementation-local submodules.
+and TransPimLib remain candidate/future references in `../ARCHITECTURE.md`
+until they become implementation-local submodules.
 
 ## Update Policy
 
