@@ -183,6 +183,7 @@ def main() -> int:
     compare_results_parser = sub.add_parser("compare-results")
     compare_results_parser.add_argument("--inputs", nargs="+", required=True)
     compare_results_parser.add_argument("--out", required=True)
+    compare_results_parser.add_argument("--comparison-type", default="generic_comparison")
 
     sub.add_parser("probe")
 
@@ -712,7 +713,7 @@ def main() -> int:
         from quantum_bench.bench.result_artifacts import compare_results
 
         try:
-            result = compare_results((Path(item) for item in args.inputs), Path(args.out))
+            result = compare_results((Path(item) for item in args.inputs), Path(args.out), comparison_type=args.comparison_type, root_dir=root_dir)
         except ValueError as exc:
             parser.error(str(exc))
         print(
@@ -722,6 +723,7 @@ def main() -> int:
                     "artifact": str(result.artifact_path),
                     "csv": str(result.csv_path),
                     "summary": str(result.summary_path),
+                    "manifest": str(result.manifest_path) if result.manifest_path else None,
                     "record_count": result.record_count,
                     "status": "completed",
                 },

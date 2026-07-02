@@ -14,7 +14,7 @@ import yaml
 from quantum_bench.bench.config import load_suite, route_config_for
 from quantum_bench.bench.reporting import artifact_ref, prune_run, report_run, validate_retention_mode, write_normalized_records, write_run_manifest
 from quantum_bench.bench.result_artifacts import RESULT_ARTIFACT_SCHEMA_VERSION
-from quantum_bench.bench.run_dirs import create_run_dir, sanitize
+from quantum_bench.bench.run_dirs import EVIDENCE_ARTIFACT_KIND, create_run_dir, sanitize
 from quantum_bench.bench.simulation_backend_probe import probe_simulation_backends
 from quantum_bench.circuits import load_circuit, manifest
 from quantum_bench.core.jsonio import write_json, write_jsonl
@@ -145,12 +145,23 @@ def run_simulation_backend_compare(
     validate_retention_mode(artifact_retention)
     suite = load_suite(suite_path)
     _validate_suite_routes(suite)
-    run_dir = create_run_dir(root_dir, f"{suite['suite_id']}_simulation_backend_compare")
+    run_dir = create_run_dir(
+        root_dir,
+        str(suite["suite_id"]),
+        artifact_kind=EVIDENCE_ARTIFACT_KIND,
+        route_label="simulation_backend_compare",
+    )
     write_run_manifest(
         run_dir,
         run_kind="simulation_backend_compare",
         suite_id=str(suite["suite_id"]),
         suite_path=str(suite_path),
+        artifact_kind=EVIDENCE_ARTIFACT_KIND,
+        route_label="simulation_backend_compare",
+        execution_scope="suite_backend_comparison",
+        evidence_type="benchmark_execution",
+        normalized_records="normalized_records.jsonl",
+        summary="simulation_backend_compare_summary.json",
         policies=("not_applicable",),
         quantization_modes=("not_applicable",),
         artifact_retention=artifact_retention,

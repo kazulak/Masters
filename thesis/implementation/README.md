@@ -178,8 +178,8 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.be
 Artifact-driven result comparison:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench compare-results --inputs runs/<run_dir_a> runs/<run_dir_b> --out runs/manual_compare
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench compare-runs --baseline runs/<old_run> --candidate runs/<new_run> --out runs/manual_compare_runs
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench compare-results --inputs runs/evidence/<suite_id>/<route_label>/<run_id_a> runs/evidence/<suite_id>/<route_label>/<run_id_b> --comparison-type backend_comparison --out runs/comparisons/<suite_id>/backend_comparison/<comparison_id>
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench compare-runs --baseline runs/evidence/<suite_id>/<route_label>/<old_run_id> --candidate runs/evidence/<suite_id>/<route_label>/<new_run_id> --out runs/comparisons/<suite_id>/run_regression/<comparison_id>
 ```
 
 Artifact retention:
@@ -187,6 +187,16 @@ Artifact retention:
 ```bash
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench prune-run --input runs/<run_dir> --artifact-retention compact
 ```
+
+New benchmark evidence runs are written under
+`runs/evidence/<suite_id>/<route_label>/<run_id>/`. Each evidence run contains
+`run_manifest.json` with `artifact_kind=evidence_run`; canonical normalized
+records live in `normalized_records.jsonl` when that command supports normalized
+records. Derived analysis is written separately under
+`runs/comparisons/<suite_id>/<comparison_type>/<comparison_id>/` with
+`comparison_manifest.json` and `artifact_kind=comparison_report`.
+`compare-results` is read-only with respect to evidence inputs and rejects
+outputs under `runs/evidence`.
 
 `report-run` is non-destructive for execution artifacts. It may overwrite
 derived CSV, Markdown, metrics, validation summaries, and plots. Compact
@@ -209,7 +219,8 @@ implementation/
   scripts/                 helper commands
   src/quantum_bench/       Python runtime package
   tests/                   pytest suite
-  runs/                    generated benchmark artifacts, not source
+  runs/evidence/           raw benchmark executions
+  runs/comparisons/        derived reports over existing evidence
 ```
 
 `implementation/external` is canonical and populated by Git submodules. The

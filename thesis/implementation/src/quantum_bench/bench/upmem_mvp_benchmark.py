@@ -21,7 +21,7 @@ from quantum_bench.bench.reporting import (
     write_run_manifest,
 )
 from quantum_bench.bench.result_artifacts import RESULT_ARTIFACT_SCHEMA_VERSION, normalized_upmem_taskgraph_records_from_summary
-from quantum_bench.bench.run_dirs import create_run_dir, sanitize
+from quantum_bench.bench.run_dirs import EVIDENCE_ARTIFACT_KIND, create_run_dir, sanitize
 from quantum_bench.circuits import load_circuit, manifest
 from quantum_bench.core.jsonio import write_json, write_jsonl
 from quantum_bench.core.records import JsonDict, to_jsonable
@@ -161,12 +161,28 @@ def run_upmem_mvp_benchmark(
         max_taskgraph_tasks=max_taskgraph_tasks,
         artifact_retention=artifact_retention,
     )
-    run_dir = create_run_dir(root_dir, f"{suite['suite_id']}_upmem_mvp_benchmark")
+    route_label = _upmem_mvp_route_label(policies, quantization_modes)
+    run_dir = create_run_dir(
+        root_dir,
+        str(suite["suite_id"]),
+        artifact_kind=EVIDENCE_ARTIFACT_KIND,
+        route_label=route_label,
+    )
     write_run_manifest(
         run_dir,
         run_kind="upmem_mvp_benchmark",
         suite_id=str(suite["suite_id"]),
         suite_path=str(suite_path),
+        artifact_kind=EVIDENCE_ARTIFACT_KIND,
+        route_label=route_label,
+        route_id="upmem_tn_runtime",
+        backend_id="upmem_sdk_simulator_generic_loop",
+        policy=policies[0] if len(policies) == 1 else ",".join(policies),
+        quantization_mode=quantization_modes[0] if len(quantization_modes) == 1 else ",".join(quantization_modes),
+        execution_scope="suite_taskgraph",
+        evidence_type="sdk_simulator",
+        normalized_records="normalized_records.jsonl",
+        summary="upmem_mvp_benchmark_summary.json",
         policies=policies,
         quantization_modes=quantization_modes,
         upmem_execution_mode=UPMEM_EXECUTION_MODE,
@@ -269,6 +285,18 @@ def run_upmem_mvp_benchmark(
         result_count=len(result_rows),
         summary=summary,
     )
+
+
+def _upmem_mvp_route_label(policies: tuple[str, ...], quantization_modes: tuple[str, ...]) -> str:
+    if policies == ("generic-only",):
+        modes = set(quantization_modes)
+        if modes == {"none"}:
+            return "upmem_generic_float32"
+        if modes == {"per_task_input_quantize"}:
+            return "upmem_generic_int8"
+        if modes == {"none", "per_task_input_quantize"}:
+            return "upmem_generic_both_modes"
+    return "upmem_mvp"
 
 
 def validate_options(

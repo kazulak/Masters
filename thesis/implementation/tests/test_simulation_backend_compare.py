@@ -156,6 +156,11 @@ validation:
     assert (result.run_dir / "run_manifest.json").exists()
     assert (result.run_dir / "artifact_retention_manifest.json").exists()
     assert (result.run_dir / "normalized_records.jsonl").exists()
+    assert result.run_dir.parent == tmp_path / "runs" / "evidence" / "unit_simulation_compare" / "simulation_backend_compare"
+    manifest = json.loads((result.run_dir / "run_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["artifact_kind"] == "evidence_run"
+    assert manifest["route_label"] == "simulation_backend_compare"
+    assert manifest["normalized_records"] == "normalized_records.jsonl"
     summary_md = (result.run_dir / "comparison_summary.md").read_text(encoding="utf-8")
     records = load_result_records([result.run_dir])
     assert {record["execution_model"] for record in records} == {"full_state", "tensor_network"}

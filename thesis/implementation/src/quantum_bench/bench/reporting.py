@@ -20,6 +20,7 @@ from quantum_bench.core.records import JsonDict, to_jsonable
 
 
 RUN_MANIFEST_SCHEMA_VERSION = "run_manifest_v1"
+COMPARISON_MANIFEST_SCHEMA_VERSION = "comparison_manifest_v1"
 ARTIFACT_REFERENCE_SCHEMA_VERSION = "artifact_reference_v1"
 ARTIFACT_RETENTION_SCHEMA_VERSION = "artifact_retention_v1"
 REPORT_RUN_SCHEMA_VERSION = "report_run_v1"
@@ -231,6 +232,16 @@ def write_run_manifest(
     run_kind: str,
     suite_id: str | None,
     suite_path: str | None,
+    artifact_kind: str = "legacy_run",
+    route_label: str | None = None,
+    route_id: str | None = None,
+    backend_id: str | None = None,
+    policy: str | None = None,
+    quantization_mode: str | None = None,
+    execution_scope: str | None = None,
+    evidence_type: str | None = None,
+    normalized_records: str | None = "normalized_records.jsonl",
+    summary: str | None = None,
     policies: Iterable[str] = (),
     quantization_modes: Iterable[str] = (),
     upmem_execution_mode: str | None = None,
@@ -241,6 +252,7 @@ def write_run_manifest(
     validate_retention_mode(artifact_retention)
     manifest = {
         "schema_version": RUN_MANIFEST_SCHEMA_VERSION,
+        "artifact_kind": artifact_kind,
         "run_id": run_dir.name,
         "run_kind": run_kind,
         "timestamp": None,
@@ -248,6 +260,15 @@ def write_run_manifest(
         "dirty_tree": _git_dirty(root_dir or run_dir),
         "suite_id": suite_id,
         "suite_path": suite_path,
+        "route_label": route_label,
+        "route_id": route_id,
+        "backend_id": backend_id,
+        "policy": policy,
+        "quantization_mode": quantization_mode,
+        "execution_scope": execution_scope,
+        "evidence_type": evidence_type,
+        "normalized_records": normalized_records,
+        "summary": summary,
         "policies": tuple(policies),
         "quantization_modes": tuple(quantization_modes),
         "upmem_execution_mode": upmem_execution_mode,
@@ -264,6 +285,7 @@ def write_run_manifest(
             "report_run": REPORT_RUN_SCHEMA_VERSION,
             "compare_runs": COMPARE_RUNS_SCHEMA_VERSION,
             "normalized_records": NORMALIZED_RECORDS_SCHEMA_VERSION,
+            "comparison_manifest": COMPARISON_MANIFEST_SCHEMA_VERSION,
         },
     }
     write_json(run_dir / "run_manifest.json", manifest)

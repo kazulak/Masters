@@ -360,6 +360,12 @@ def test_run_harness_writes_compare_results_compatible_summary(monkeypatch, tmp_
     comparison = compare_results([run.run_dir], tmp_path / "comparison")
 
     assert run.status == "completed"
+    assert run.run_dir.parent == tmp_path / "runs" / "evidence" / "bell_2q" / "upmem_generic_int8"
+    assert (run.run_dir / "run_manifest.json").exists()
+    assert (run.run_dir / "normalized_records.jsonl").exists()
+    manifest = json.loads((run.run_dir / "run_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["artifact_kind"] == "evidence_run"
+    assert manifest["route_label"] == "upmem_generic_int8"
     assert run.summary["contraction_execution_target"] == "upmem"
     assert run.summary["upmem_execution_mode"] == "sdk_simulator"
     assert run.summary["hardware_speedup_applicable"] is False
@@ -374,6 +380,7 @@ def test_run_harness_writes_compare_results_compatible_summary(monkeypatch, tmp_
     assert first_metric["bridge_artifact_path"].startswith("cases/")
     assert not Path(first_metric["bridge_artifact_path"]).is_absolute()
     assert records
+    assert all(record["run_id"] == run.run_dir.name for record in records)
     assert records[0]["execution_target"] == "upmem"
     assert records[0]["hardware_speedup"] == "not_applicable"
     assert comparison.record_count >= 1

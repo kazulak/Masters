@@ -9,7 +9,8 @@ from typing import Any
 import yaml
 
 from quantum_bench.bench.config import load_suite, route_config_for
-from quantum_bench.bench.run_dirs import create_run_dir, sanitize
+from quantum_bench.bench.reporting import write_run_manifest
+from quantum_bench.bench.run_dirs import EVIDENCE_ARTIFACT_KIND, create_run_dir, route_label_from_routes, sanitize
 from quantum_bench.bench.summary import write_summary
 from quantum_bench.circuits import load_circuit, manifest
 from quantum_bench.core.jsonio import append_jsonl, write_json, write_jsonl
@@ -38,7 +39,23 @@ def run_suite(suite_path: Path, root_dir: Path) -> Path:
     for case in suite["cases"]:
         if is_synthetic_pressure_case(case):
             raise ValueError(SYNTHETIC_PRESSURE_ERROR)
-    run_dir = create_run_dir(root_dir, suite["suite_id"])
+    routes_for_label = tuple(str(route) for route in suite["route_policy"]["routes"])
+    label = route_label_from_routes(routes_for_label)
+    run_dir = create_run_dir(root_dir, suite["suite_id"], artifact_kind=EVIDENCE_ARTIFACT_KIND, route_label=label)
+    write_run_manifest(
+        run_dir,
+        run_kind="suite_run",
+        suite_id=str(suite["suite_id"]),
+        suite_path=str(suite_path),
+        artifact_kind=EVIDENCE_ARTIFACT_KIND,
+        route_label=label,
+        route_id=routes_for_label[0] if len(routes_for_label) == 1 else None,
+        execution_scope="suite",
+        evidence_type="benchmark_execution",
+        normalized_records=None,
+        summary="summary.json",
+        root_dir=root_dir,
+    )
     os.environ.setdefault("MPLCONFIGDIR", str(run_dir / "plots" / ".matplotlib"))
     (run_dir / "plots" / ".matplotlib").mkdir(parents=True, exist_ok=True)
     (run_dir / "config" / "resolved_suite.yml").write_text(yaml.safe_dump(suite, sort_keys=True), encoding="utf-8")

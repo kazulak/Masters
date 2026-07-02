@@ -151,6 +151,11 @@ def test_upmem_mvp_benchmark_runs_suite_and_compare_results(monkeypatch, tmp_pat
     assert (result.run_dir / "run_manifest.json").exists()
     assert (result.run_dir / "normalized_records.jsonl").exists()
     assert (result.run_dir / "artifact_retention_manifest.json").exists()
+    assert result.run_dir.parent == tmp_path / "runs" / "evidence" / "upmem_mvp_test" / "upmem_mvp"
+    manifest = json.loads((result.run_dir / "run_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["artifact_kind"] == "evidence_run"
+    assert manifest["route_label"] == "upmem_mvp"
+    assert manifest["normalized_records"] == "normalized_records.jsonl"
     assert not list(result.run_dir.rglob("runner_work"))
 
     records = load_result_records([result.run_dir])
@@ -166,6 +171,7 @@ def test_upmem_mvp_benchmark_runs_suite_and_compare_results(monkeypatch, tmp_pat
 
     comparison = compare_results([result.run_dir], tmp_path / "comparison")
     assert comparison.record_count == 6
+    assert (comparison.run_dir / "comparison_manifest.json").exists()
 
     report = report_run(result.run_dir, output_plots=False)
     assert report.status == "completed"
@@ -208,6 +214,7 @@ def test_upmem_mvp_benchmark_records_same_route_quantization_comparison(monkeypa
     assert len(comparison["rows"]) == 2
     assert all(row["same_route_comparison"] is True for row in comparison["rows"])
     assert all(row["native_unquantized_upmem_kernel_executed"] is True for row in comparison["rows"])
+    assert result.run_dir.parent == tmp_path / "runs" / "evidence" / "upmem_mvp_test" / "upmem_generic_both_modes"
 
 
 def test_upmem_mvp_benchmark_records_task_cap_without_crashing(monkeypatch, tmp_path: Path) -> None:

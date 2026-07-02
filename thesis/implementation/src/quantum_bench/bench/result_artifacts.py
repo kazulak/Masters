@@ -8,10 +8,12 @@ from typing import Any, Iterable
 
 from quantum_bench.core.jsonio import read_jsonl, write_json
 from quantum_bench.core.records import JsonDict, to_jsonable
+from quantum_bench.bench.run_dirs import is_within_evidence_root
 
 
 RESULT_ARTIFACT_SCHEMA_VERSION = "benchmark_result_artifact_v1"
 COMPARE_RESULTS_SCHEMA_VERSION = "compare_results_v1"
+COMPARISON_MANIFEST_SCHEMA_VERSION = "comparison_manifest_v1"
 
 KERNEL_FAMILIES = (
     "dense_gemm",
@@ -147,6 +149,7 @@ class CompareResultsResult:
     csv_path: Path
     summary_path: Path
     record_count: int
+    manifest_path: Path | None = None
 
 
 def normalized_task_result_from_summary(summary: JsonDict, *, source_artifact: str | None = None) -> JsonDict:
@@ -182,8 +185,17 @@ def load_result_records(inputs: Iterable[Path]) -> list[JsonDict]:
     return records
 
 
-def compare_results(inputs: Iterable[Path], out_dir: Path) -> CompareResultsResult:
-    records = load_result_records(inputs)
+def compare_results(
+    inputs: Iterable[Path],
+    out_dir: Path,
+    *,
+    comparison_type: str = "generic_comparison",
+    root_dir: Path | None = None,
+) -> CompareResultsResult:
+    input_paths = [Path(input_path) for input_path in inputs]
+    if root_dir is not None and is_within_evidence_root(out_dir, root_dir):
+        raise ValueError("compare-results output must not be written under runs/evidence; use runs/comparisons or another analysis directory")
+    records = load_result_records(input_paths)
     if not records:
         raise ValueError("no compatible benchmark result artifacts found")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -202,17 +214,84 @@ def compare_results(inputs: Iterable[Path], out_dir: Path) -> CompareResultsResu
     csv_path = out_dir / "comparison_results.csv"
     family_csv_path = out_dir / "kernel_family_summary.csv"
     summary_path = out_dir / "comparison_summary.md"
+    manifest_path = out_dir / "comparison_manifest.json"
     write_json(artifact_path, payload)
     _write_csv(csv_path, records, RESULT_FIELDS)
     _write_csv(family_csv_path, summary, SUMMARY_FIELDS)
     summary_path.write_text(_summary_markdown(records, summary), encoding="utf-8")
+    _write_comparison_manifest(
+        manifest_path,
+        out_dir=out_dir,
+        input_paths=input_paths,
+        comparison_type=comparison_type,
+        outputs=(
+            artifact_path.name,
+            csv_path.name,
+            family_csv_path.name,
+            summary_path.name,
+        ),
+        records=records,
+    )
     return CompareResultsResult(
         run_dir=out_dir,
         artifact_path=artifact_path,
         csv_path=csv_path,
         summary_path=summary_path,
         record_count=len(records),
+        manifest_path=manifest_path,
     )
+
+
+def _write_comparison_manifest(
+    path: Path,
+    *,
+    out_dir: Path,
+    input_paths: list[Path],
+    comparison_type: str,
+    outputs: Iterable[str],
+    records: list[JsonDict],
+) -> None:
+    suite_ids = sorted({str(record.get("suite_id")) for record in records if record.get("suite_id")})
+    inputs = []
+    for index, input_path in enumerate(input_paths):
+        manifest = _read_run_manifest(input_path)
+        inputs.append(
+            {
+                "role": f"input_{index}",
+                "path": input_path.as_posix(),
+                "artifact_kind": manifest.get("artifact_kind") if manifest else None,
+                "run_id": manifest.get("run_id") if manifest else input_path.name,
+                "suite_id": manifest.get("suite_id") if manifest else None,
+                "route_label": manifest.get("route_label") if manifest else None,
+                "route_id": manifest.get("route_id") if manifest else None,
+                "quantization_mode": manifest.get("quantization_mode") if manifest else None,
+            }
+        )
+    write_json(
+        path,
+        {
+            "schema_version": COMPARISON_MANIFEST_SCHEMA_VERSION,
+            "artifact_kind": "comparison_report",
+            "comparison_id": out_dir.name,
+            "comparison_type": comparison_type,
+            "suite_id": suite_ids[0] if len(suite_ids) == 1 else None,
+            "input_count": len(input_paths),
+            "record_count": len(records),
+            "inputs": inputs,
+            "outputs": tuple(outputs),
+            "metadata": {
+                "evidence_inputs_are_read_only": True,
+                "comparison_outputs_are_derived_analysis": True,
+            },
+        },
+    )
+
+
+def _read_run_manifest(input_path: Path) -> JsonDict:
+    manifest_path = input_path / "run_manifest.json" if input_path.is_dir() else input_path.parent / "run_manifest.json"
+    if not manifest_path.exists():
+        return {}
+    return json.loads(manifest_path.read_text(encoding="utf-8"))
 
 
 def _discover_artifacts(path: Path) -> list[Path]:

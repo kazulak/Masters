@@ -6,7 +6,9 @@ from typing import Mapping
 
 import numpy as np
 
-from quantum_bench.bench.run_dirs import create_run_dir
+from quantum_bench.bench.reporting import write_normalized_records, write_run_manifest
+from quantum_bench.bench.result_artifacts import normalized_upmem_taskgraph_records_from_summary, normalized_upmem_taskgraph_result_from_summary
+from quantum_bench.bench.run_dirs import EVIDENCE_ARTIFACT_KIND, create_run_dir
 from quantum_bench.circuits import builtin_circuit, manifest
 from quantum_bench.core.jsonio import write_json, write_jsonl
 from quantum_bench.core.records import JsonDict, to_jsonable
@@ -58,26 +60,47 @@ def run_upmem_taskgraph_runtime(
     execute_external: bool = False,
     env: Mapping[str, str] | None = None,
 ) -> UpmemTaskGraphRuntimeRunResult:
-    run_dir = create_run_dir(root_dir, f"{case}_upmem_taskgraph_runtime")
+    route_label = _upmem_taskgraph_route_label(policy, quantization_mode)
+    run_dir = create_run_dir(root_dir, case, artifact_kind=EVIDENCE_ARTIFACT_KIND, route_label=route_label)
     summary_path = run_dir / "upmem_taskgraph_runtime_summary.json"
     final_tensor_rel = Path("raw") / "final_tensor.npy"
+    write_run_manifest(
+        run_dir,
+        run_kind="upmem_taskgraph_runtime",
+        suite_id=case,
+        suite_path=None,
+        artifact_kind=EVIDENCE_ARTIFACT_KIND,
+        route_label=route_label,
+        route_id="upmem_tn_runtime",
+        backend_id="upmem_sdk_simulator_generic_loop",
+        policy=policy,
+        quantization_mode=quantization_mode,
+        execution_scope="full_taskgraph",
+        evidence_type="sdk_simulator",
+        normalized_records="normalized_records.jsonl",
+        summary="upmem_taskgraph_runtime_summary.json",
+        policies=(policy,),
+        quantization_modes=(quantization_mode,),
+        upmem_execution_mode="sdk_simulator",
+        root_dir=root_dir,
+    )
     write_json(run_dir / "environment.json", capture_environment(root_dir))
 
     try:
         if policy not in UPMEM_TASKGRAPH_POLICIES:
             summary = _error_summary(case, policy, quantization_mode, "unsupported_policy")
-            write_json(summary_path, summary)
+            _write_summary_and_records(run_dir, summary_path, summary)
             return _result(run_dir, summary_path, summary)
         if quantization_mode not in UPMEM_TASKGRAPH_QUANTIZATION_MODES:
             summary = _error_summary(case, policy, quantization_mode, "unsupported_quantization_mode")
-            write_json(summary_path, summary)
+            _write_summary_and_records(run_dir, summary_path, summary)
             return _result(run_dir, summary_path, summary)
 
         boundary_case = is_generic_boundary_case(case)
         if boundary_case:
             if n_qubits is not None:
                 summary = _error_summary(case, policy, quantization_mode, "generic_boundary_does_not_accept_n_qubits")
-                write_json(summary_path, summary)
+                _write_summary_and_records(run_dir, summary_path, summary)
                 return _result(run_dir, summary_path, summary)
             workload = build_generic_boundary_workload(case)
             case_id = workload.case_id
@@ -126,7 +149,7 @@ def run_upmem_taskgraph_runtime(
                         "metadata": _reference_metadata_payload(reference_metadata),
                     },
                 }
-                write_json(summary_path, summary)
+                _write_summary_and_records(run_dir, summary_path, summary)
                 return _result(run_dir, summary_path, summary)
             primary_reference_output = generic_quantized_reference.output
             primary_reference_kind = str(generic_quantized_reference.summary.get("reference_kind") or "generic_quantized_taskgraph_replay")
@@ -199,20 +222,36 @@ def run_upmem_taskgraph_runtime(
         )
         if boundary_case:
             summary["generic_boundary_evidence"] = _generic_boundary_runtime_evidence(graph, summary, list(runtime.task_metrics))
-        from quantum_bench.bench.result_artifacts import normalized_upmem_taskgraph_result_from_summary
-
         summary["normalized_result"] = normalized_upmem_taskgraph_result_from_summary(summary)
-        write_json(summary_path, summary)
+        _write_summary_and_records(run_dir, summary_path, summary)
         (run_dir / "upmem_taskgraph_runtime_summary.md").write_text(_summary_markdown(summary), encoding="utf-8")
         return _result(run_dir, summary_path, summary)
     except ValueError as exc:
         summary = _error_summary(case, policy, quantization_mode, "unsupported_case_or_runtime_input", str(exc))
-        write_json(summary_path, summary)
+        _write_summary_and_records(run_dir, summary_path, summary)
         return _result(run_dir, summary_path, summary)
     except Exception as exc:  # pragma: no cover - defensive CLI boundary
         summary = _error_summary(case, policy, quantization_mode, "unexpected_runtime_harness_exception", str(exc), status="failed")
-        write_json(summary_path, summary)
+        _write_summary_and_records(run_dir, summary_path, summary)
         return _result(run_dir, summary_path, summary)
+
+
+def _upmem_taskgraph_route_label(policy: str, quantization_mode: str) -> str:
+    if policy == "generic-only" and quantization_mode == "none":
+        return "upmem_generic_float32"
+    if policy == "generic-only" and quantization_mode == "per_task_input_quantize":
+        return "upmem_generic_int8"
+    return "upmem_taskgraph_runtime"
+
+
+def _write_summary_and_records(run_dir: Path, summary_path: Path, summary: JsonDict) -> None:
+    summary["run_id"] = run_dir.name
+    write_json(summary_path, summary)
+    source = summary_path.relative_to(run_dir).as_posix()
+    records = normalized_upmem_taskgraph_records_from_summary(summary, source_artifact=source)
+    for record in records:
+        record["run_id"] = run_dir.name
+    write_normalized_records(run_dir, records)
 
 
 def _reference_metadata_payload(metadata: JsonDict) -> JsonDict:
