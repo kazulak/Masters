@@ -285,9 +285,9 @@ def _validate_route_entry(route: JsonDict) -> None:
     if route["route_category"] == UPMEM_ROUTE_CATEGORY:
         if route["execution_scope"] == "full_circuit" or route["output_authority"] == "authoritative":
             raise ValueError("current upmem_tn_runtime rows must not claim full-circuit authority")
-    if route["route_category"] == "cpu_full_state" and route["route_id"] == "quest_cpu_full_state_benchmark":
-        if route["output_authority"] != "benchmark_only" or route["validation_policy"] != "metrics_only":
-            raise ValueError("QuEST CPU full-state category must record benchmark_only/metrics_only caveat")
+    if route["route_category"] == "cpu_full_state" and route["route_id"] == "quest_cpu_full_state_exact":
+        if route["output_authority"] != "authoritative" or route["validation_policy"] != "full_exact":
+            raise ValueError("QuEST CPU full-state category must record authoritative/full_exact semantics")
 
 
 def _validate_workload(workload: Any) -> None:

@@ -13,19 +13,19 @@ defaults:
 workloads:
   - id: qrng_4q
     circuit:
-      kind: builtin
+      kind: quest_compatible
       name: QRNG
       n_qubits: 4
 
   - id: bv_5q
     circuit:
-      kind: builtin
+      kind: quest_compatible
       name: BV
       n_qubits: 5
 
   - id: bb84_6q
     circuit:
-      kind: builtin
+      kind: quest_compatible
       name: BB84
       n_qubits: 6
 
@@ -34,7 +34,7 @@ routes:
     role: reference
     required: true
 
-  - id: quest_cpu_full_state_benchmark
+  - id: quest_cpu_full_state_exact
     role: baseline
     required: false
 

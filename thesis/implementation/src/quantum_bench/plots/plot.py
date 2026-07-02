@@ -8,11 +8,11 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_BASELINE_ROUTE = "quest_cpu_full_state_benchmark"
+DEFAULT_BASELINE_ROUTE = "quest_cpu_full_state_exact"
 
 ROUTE_LABELS = {
     "cpu_tn_einsum_exact": "CPU exact TN",
-    "quest_cpu_full_state_benchmark": "QuEST CPU full-state",
+    "quest_cpu_full_state_exact": "QuEST CPU full-state",
 }
 
 

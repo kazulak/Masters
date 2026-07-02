@@ -27,14 +27,14 @@ route_categories:
     validation_policy: full_exact
 
   - route_category: cpu_full_state
-    route_id: quest_cpu_full_state_benchmark
+    route_id: quest_cpu_full_state_exact
     route_status: implemented
     execution_scope: full_circuit
     target: cpu
-    validation_scope: not_applicable
+    validation_scope: full_state
     evidence_type: measured
-    output_authority: benchmark_only
-    validation_policy: metrics_only
+    output_authority: authoritative
+    validation_policy: full_exact
 
   - route_category: gpu_full_state
     route_id: planned

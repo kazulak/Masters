@@ -66,8 +66,6 @@ def test_route_probe_and_upmem_skip_reason() -> None:
     assert routes["cpu_tn_einsum_exact"].identity.role == "internal_debug_baseline"
     assert routes["cpu_tn_einsum_exact"].identity.output_contract == "final_tensor"
     assert routes["cpu_tn_einsum_exact"].identity.validation_mode == "compare_output"
-    assert routes["quest_cpu_full_state_benchmark"].identity.output_contract == "metrics_only"
-    assert routes["quest_cpu_full_state_benchmark"].identity.validation_mode == "benchmark_only"
     assert routes["quest_cpu_full_state_exact"].identity.output_contract == "statevector"
     assert routes["quest_cpu_full_state_exact"].identity.role == "serious_full_state_baseline"
     assert routes["quest_cpu_full_state_exact"].identity.validation_mode == "compare_statevector"

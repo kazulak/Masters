@@ -25,11 +25,9 @@ from quantum_bench.validation import tensor_to_quest_statevector
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_quest_exact_route_is_additive_and_benchmark_route_remains_metrics_only() -> None:
+def test_quest_exact_route_is_active_cpu_full_state_route() -> None:
     routes = route_registry(ROOT)
 
-    assert routes["quest_cpu_full_state_benchmark"].identity.output_contract == "metrics_only"
-    assert routes["quest_cpu_full_state_benchmark"].identity.validation_mode == "benchmark_only"
     assert routes["quest_cpu_full_state_exact"].identity.output_contract == "statevector"
     assert routes["quest_cpu_full_state_exact"].identity.validation_mode == "compare_statevector"
     assert routes["quest_cpu_full_state_exact"].backend_family == "quest"

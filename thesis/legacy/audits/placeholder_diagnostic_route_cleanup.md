@@ -64,6 +64,17 @@ evidence remains covered by `upmem_tn_sdk_simulator_quantized`,
 `configs/suites/simulation_backend_compare_upmem_sdk_simulator.yml`, and
 `make bench-upmem-sim`.
 
+## Wave 2E.34 Update
+
+`quest_cpu_full_state_benchmark` was replaced by
+`quest_cpu_full_state_exact` in active local energy and benchmark-matrix
+configuration. The metrics-only route was removed from the active registry and
+provider exports because the exact QuEST route now carries the CPU full-state
+evidence role. The legacy `summarize`, `plot`, and bare `probe` CLI commands
+were removed from the parser; active reporting/probing remains covered by
+`report-run`, `compare-results`, `compare-runs`, and
+`simulation-backend-probe`.
+
 ## Validation Commands
 
 ```bash

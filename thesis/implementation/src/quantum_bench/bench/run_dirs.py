@@ -13,7 +13,6 @@ LEGACY_ARTIFACT_KIND = "legacy_run"
 ROUTE_LABELS = {
     "cpu_tn_einsum_exact": "cpu_tn_exact",
     "quest_cpu_full_state_exact": "quest_cpu_exact",
-    "quest_cpu_full_state_benchmark": "quest_cpu_benchmark",
     "quest_gpu_full_state_exact": "quest_gpu_exact",
     "quimb_tn_exact": "quimb_tn_exact",
     "upmem_tn_runtime": "upmem_tn_runtime",

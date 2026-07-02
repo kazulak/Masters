@@ -60,9 +60,9 @@ def test_benchmark_matrix_config_loads_and_keeps_upmem_unified() -> None:
     assert "upmem_l2" not in categories
     assert "upmem_l3" not in categories
     assert any(route["route_id"] == "cpu_tn_einsum_exact" for route in matrix["route_categories"])
-    quest = next(route for route in matrix["route_categories"] if route["route_id"] == "quest_cpu_full_state_benchmark")
-    assert quest["output_authority"] == "benchmark_only"
-    assert quest["validation_policy"] == "metrics_only"
+    quest = next(route for route in matrix["route_categories"] if route["route_id"] == "quest_cpu_full_state_exact")
+    assert quest["output_authority"] == "authoritative"
+    assert quest["validation_policy"] == "full_exact"
 
 
 def test_benchmark_matrix_rejects_upmem_internal_classes_as_top_level_routes() -> None:
@@ -86,13 +86,13 @@ def test_benchmark_matrix_rejects_upmem_internal_classes_as_top_level_routes() -
         validate_benchmark_matrix(matrix)
 
 
-def test_benchmark_matrix_rejects_missing_quest_caveat() -> None:
+def test_benchmark_matrix_rejects_missing_quest_exact_semantics() -> None:
     matrix = load_benchmark_matrix(ROOT / "configs" / "benchmark_matrix.yml")
     matrix["route_categories"] = [dict(route) for route in matrix["route_categories"]]
-    quest = next(route for route in matrix["route_categories"] if route["route_id"] == "quest_cpu_full_state_benchmark")
-    quest["output_authority"] = "authoritative"
+    quest = next(route for route in matrix["route_categories"] if route["route_id"] == "quest_cpu_full_state_exact")
+    quest["output_authority"] = "benchmark_only"
 
-    with pytest.raises(ValueError, match="benchmark_only"):
+    with pytest.raises(ValueError, match="authoritative"):
         validate_benchmark_matrix(matrix)
 
 
