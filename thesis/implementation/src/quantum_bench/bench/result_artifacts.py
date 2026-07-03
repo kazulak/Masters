@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import csv
 import json
+import re
+import statistics
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -141,6 +143,54 @@ SUMMARY_FIELDS = [
     "hardware_record_count",
 ]
 
+CPU_GPU_SPEEDUP_PAIR_FIELDS = [
+    "schema_version",
+    "case_id",
+    "case_family",
+    "n_qubits",
+    "repeat_id",
+    "cpu_route_id",
+    "gpu_route_id",
+    "cpu_total_wall_time_s",
+    "gpu_total_wall_time_s",
+    "total_wall_speedup",
+    "cpu_simulation_compute_time_s",
+    "gpu_simulation_compute_time_s",
+    "compute_speedup",
+    "validation_status",
+    "gpu_device_name",
+]
+
+CPU_GPU_SPEEDUP_SUMMARY_FIELDS = [
+    "schema_version",
+    "case_family",
+    "n_qubits",
+    "matched_repeat_count",
+    "cpu_total_wall_time_s_median",
+    "gpu_total_wall_time_s_median",
+    "total_wall_speedup_median",
+    "total_wall_speedup_mean",
+    "total_wall_speedup_min",
+    "total_wall_speedup_max",
+    "cpu_simulation_compute_time_s_median",
+    "gpu_simulation_compute_time_s_median",
+    "compute_speedup_median",
+    "compute_speedup_mean",
+    "compute_speedup_min",
+    "compute_speedup_max",
+    "gpu_device_name",
+    "validation_status",
+]
+
+CPU_GPU_SPEEDUP_SKIPPED_FIELDS = [
+    "schema_version",
+    "case_id",
+    "repeat_id",
+    "reason",
+    "cpu_present",
+    "gpu_present",
+]
+
 
 @dataclass(frozen=True)
 class CompareResultsResult:
@@ -200,6 +250,7 @@ def compare_results(
         raise ValueError("no compatible benchmark result artifacts found")
     out_dir.mkdir(parents=True, exist_ok=True)
     summary = _kernel_family_summary(records)
+    cpu_gpu_speedup = _cpu_gpu_speedup_payload(records) if comparison_type == "cpu_gpu_sweep" else None
     payload = {
         "schema_version": COMPARE_RESULTS_SCHEMA_VERSION,
         "record_count": len(records),
@@ -210,6 +261,8 @@ def compare_results(
             "missing_gpu_or_hardware_results_are_not_fabricated": True,
         },
     }
+    if cpu_gpu_speedup is not None:
+        payload["cpu_gpu_speedup"] = cpu_gpu_speedup
     artifact_path = out_dir / "comparison_results.json"
     csv_path = out_dir / "comparison_results.csv"
     family_csv_path = out_dir / "kernel_family_summary.csv"
@@ -218,7 +271,10 @@ def compare_results(
     write_json(artifact_path, payload)
     _write_csv(csv_path, records, RESULT_FIELDS)
     _write_csv(family_csv_path, summary, SUMMARY_FIELDS)
-    summary_path.write_text(_summary_markdown(records, summary), encoding="utf-8")
+    extra_outputs: list[str] = []
+    if cpu_gpu_speedup is not None:
+        extra_outputs.extend(_write_cpu_gpu_speedup_artifacts(out_dir, cpu_gpu_speedup))
+    summary_path.write_text(_summary_markdown(records, summary, cpu_gpu_speedup=cpu_gpu_speedup), encoding="utf-8")
     _write_comparison_manifest(
         manifest_path,
         out_dir=out_dir,
@@ -229,6 +285,7 @@ def compare_results(
             csv_path.name,
             family_csv_path.name,
             summary_path.name,
+            *extra_outputs,
         ),
         records=records,
     )
@@ -757,7 +814,7 @@ def _csv_value(value: Any) -> Any:
     return value
 
 
-def _summary_markdown(records: list[JsonDict], family_summary: list[JsonDict]) -> str:
+def _summary_markdown(records: list[JsonDict], family_summary: list[JsonDict], *, cpu_gpu_speedup: JsonDict | None = None) -> str:
     lines = [
         "# Benchmark Result Comparison",
         "",
@@ -775,6 +832,25 @@ def _summary_markdown(records: list[JsonDict], family_summary: list[JsonDict]) -
             f"| {row['kernel_family']} | {row['record_count']} | {row['task_count']} | "
             f"{row['validated_task_count']} | {row['unsupported_task_count']} |"
         )
+    if cpu_gpu_speedup is not None:
+        lines.extend(
+            [
+                "",
+                "## CPU/GPU Speedup",
+                "",
+                f"Matched CPU/GPU repeat pairs: {len(cpu_gpu_speedup['pairs'])}.",
+                f"Skipped candidate pairs: {len(cpu_gpu_speedup['skipped_pairs'])}.",
+                "",
+                "| Family | Qubits | Repeats | Median wall speedup | Median compute speedup | GPU device |",
+                "| --- | ---: | ---: | ---: | ---: | --- |",
+            ]
+        )
+        for row in cpu_gpu_speedup["summary"]:
+            lines.append(
+                f"| {row['case_family']} | {row['n_qubits']} | {row['matched_repeat_count']} | "
+                f"{_format_float(row.get('total_wall_speedup_median'))} | "
+                f"{_format_float(row.get('compute_speedup_median'))} | {row.get('gpu_device_name') or ''} |"
+            )
     lines.extend(
         [
             "",
@@ -783,6 +859,298 @@ def _summary_markdown(records: list[JsonDict], family_summary: list[JsonDict]) -
         ]
     )
     return "\n".join(lines)
+
+
+def _cpu_gpu_speedup_payload(records: list[JsonDict]) -> JsonDict:
+    cpu_records: dict[tuple[str, int], JsonDict] = {}
+    gpu_records: dict[tuple[str, int], JsonDict] = {}
+    skipped: list[JsonDict] = []
+    for record in records:
+        route_id = str(record.get("route_id") or "")
+        if route_id not in {"quest_cpu_full_state_exact", "quest_gpu_full_state_exact"}:
+            continue
+        case_id = str(record.get("case_id") or "")
+        repeat_id = _int_value(record.get("repeat_id"))
+        if not case_id or repeat_id is None:
+            skipped.append(_cpu_gpu_skipped(case_id, record.get("repeat_id"), "missing_case_or_repeat", route_id == "quest_cpu_full_state_exact", route_id == "quest_gpu_full_state_exact"))
+            continue
+        key = (case_id, repeat_id)
+        if route_id == "quest_cpu_full_state_exact":
+            cpu_records[key] = record
+        else:
+            gpu_records[key] = record
+
+    pairs: list[JsonDict] = []
+    for key in sorted(set(cpu_records) | set(gpu_records)):
+        cpu = cpu_records.get(key)
+        gpu = gpu_records.get(key)
+        case_id, repeat_id = key
+        if cpu is None or gpu is None:
+            skipped.append(_cpu_gpu_skipped(case_id, repeat_id, "missing_cpu_or_gpu_row", cpu is not None, gpu is not None))
+            continue
+        if cpu.get("validation_status") != "passed" or gpu.get("validation_status") != "passed":
+            skipped.append(_cpu_gpu_skipped(case_id, repeat_id, "validation_not_passed", True, True))
+            continue
+        if gpu.get("gpu_backend_verified") is not True or gpu.get("gpu_program_executed") is not True:
+            skipped.append(_cpu_gpu_skipped(case_id, repeat_id, "gpu_execution_not_verified", True, True))
+            continue
+        cpu_total = _positive_float(cpu.get("total_wall_time_s"))
+        gpu_total = _positive_float(gpu.get("total_wall_time_s"))
+        cpu_compute = _positive_float(cpu.get("simulation_compute_time_s"))
+        gpu_compute = _positive_float(gpu.get("simulation_compute_time_s"))
+        if cpu_total is None or gpu_total is None or cpu_compute is None or gpu_compute is None:
+            skipped.append(_cpu_gpu_skipped(case_id, repeat_id, "missing_positive_timing", True, True))
+            continue
+        family, n_qubits = _case_family_and_qubits(cpu)
+        pairs.append(
+            {
+                "schema_version": COMPARE_RESULTS_SCHEMA_VERSION,
+                "case_id": case_id,
+                "case_family": family,
+                "n_qubits": n_qubits,
+                "repeat_id": repeat_id,
+                "cpu_route_id": "quest_cpu_full_state_exact",
+                "gpu_route_id": "quest_gpu_full_state_exact",
+                "cpu_total_wall_time_s": cpu_total,
+                "gpu_total_wall_time_s": gpu_total,
+                "total_wall_speedup": cpu_total / gpu_total,
+                "cpu_simulation_compute_time_s": cpu_compute,
+                "gpu_simulation_compute_time_s": gpu_compute,
+                "compute_speedup": cpu_compute / gpu_compute,
+                "validation_status": "passed",
+                "gpu_device_name": gpu.get("gpu_device_name"),
+            }
+        )
+    return {
+        "schema_version": COMPARE_RESULTS_SCHEMA_VERSION,
+        "pairs": pairs,
+        "summary": _cpu_gpu_speedup_summary(pairs),
+        "skipped_pairs": skipped,
+        "timing_fields": {
+            "total_wall": "total_wall_time_s",
+            "compute": "simulation_compute_time_s",
+            "repeat": "repeat_id",
+        },
+    }
+
+
+def _cpu_gpu_speedup_summary(pairs: list[JsonDict]) -> list[JsonDict]:
+    grouped: dict[tuple[str, int], list[JsonDict]] = {}
+    for row in pairs:
+        grouped.setdefault((str(row["case_family"]), int(row["n_qubits"])), []).append(row)
+    summary: list[JsonDict] = []
+    for (family, n_qubits), rows in sorted(grouped.items(), key=lambda item: (item[0][0], item[0][1])):
+        total_speedups = [float(row["total_wall_speedup"]) for row in rows]
+        compute_speedups = [float(row["compute_speedup"]) for row in rows]
+        cpu_totals = [float(row["cpu_total_wall_time_s"]) for row in rows]
+        gpu_totals = [float(row["gpu_total_wall_time_s"]) for row in rows]
+        cpu_compute = [float(row["cpu_simulation_compute_time_s"]) for row in rows]
+        gpu_compute = [float(row["gpu_simulation_compute_time_s"]) for row in rows]
+        devices = sorted({str(row.get("gpu_device_name") or "") for row in rows if row.get("gpu_device_name")})
+        summary.append(
+            {
+                "schema_version": COMPARE_RESULTS_SCHEMA_VERSION,
+                "case_family": family,
+                "n_qubits": n_qubits,
+                "matched_repeat_count": len(rows),
+                "cpu_total_wall_time_s_median": statistics.median(cpu_totals),
+                "gpu_total_wall_time_s_median": statistics.median(gpu_totals),
+                "total_wall_speedup_median": statistics.median(total_speedups),
+                "total_wall_speedup_mean": statistics.mean(total_speedups),
+                "total_wall_speedup_min": min(total_speedups),
+                "total_wall_speedup_max": max(total_speedups),
+                "cpu_simulation_compute_time_s_median": statistics.median(cpu_compute),
+                "gpu_simulation_compute_time_s_median": statistics.median(gpu_compute),
+                "compute_speedup_median": statistics.median(compute_speedups),
+                "compute_speedup_mean": statistics.mean(compute_speedups),
+                "compute_speedup_min": min(compute_speedups),
+                "compute_speedup_max": max(compute_speedups),
+                "gpu_device_name": ", ".join(devices),
+                "validation_status": "passed",
+            }
+        )
+    return summary
+
+
+def _write_cpu_gpu_speedup_artifacts(out_dir: Path, payload: JsonDict) -> list[str]:
+    pair_path = out_dir / "cpu_gpu_speedup_pairs.csv"
+    summary_path = out_dir / "cpu_gpu_speedup_summary.csv"
+    skipped_path = out_dir / "cpu_gpu_speedup_skipped_pairs.csv"
+    plot_data_path = out_dir / "plots" / "data" / "cpu_gpu_speedup_summary.csv"
+    _write_csv(pair_path, payload["pairs"], CPU_GPU_SPEEDUP_PAIR_FIELDS)
+    _write_csv(summary_path, payload["summary"], CPU_GPU_SPEEDUP_SUMMARY_FIELDS)
+    _write_csv(skipped_path, payload["skipped_pairs"], CPU_GPU_SPEEDUP_SKIPPED_FIELDS)
+    _write_csv(plot_data_path, payload["summary"], CPU_GPU_SPEEDUP_SUMMARY_FIELDS)
+    outputs = [
+        pair_path.relative_to(out_dir).as_posix(),
+        summary_path.relative_to(out_dir).as_posix(),
+        skipped_path.relative_to(out_dir).as_posix(),
+        plot_data_path.relative_to(out_dir).as_posix(),
+    ]
+    outputs.extend(_write_cpu_gpu_speedup_plots(out_dir, payload["summary"], source_csv=plot_data_path.relative_to(out_dir).as_posix()))
+    return outputs
+
+
+def _write_cpu_gpu_speedup_plots(out_dir: Path, rows: list[JsonDict], *, source_csv: str) -> list[str]:
+    plots_dir = out_dir / "plots"
+    manifest_path = plots_dir / "plot_manifest.json"
+    outputs = ["plots/plot_manifest.json"]
+    try:
+        import matplotlib.pyplot as plt
+    except Exception as exc:
+        write_json(manifest_path, {"schema_version": COMPARE_RESULTS_SCHEMA_VERSION, "status": "skipped", "reason": "matplotlib_unavailable", "error": str(exc)})
+        return outputs
+    entries: list[JsonDict] = []
+    plot_specs = (
+        ("cpu_gpu_speedup_by_family_qubits.png", _plot_cpu_gpu_speedup, "CPU/GPU speedup by family and qubits"),
+        ("cpu_gpu_runtime_by_family_qubits.png", _plot_cpu_gpu_runtime, "CPU/GPU runtime by family and qubits"),
+    )
+    for filename, plotter, title in plot_specs:
+        path = plots_dir / filename
+        reason = plotter(plt, path, rows)
+        if reason:
+            entries.append({"plot": filename, "title": title, "status": "skipped", "reason": reason, "source_csv": source_csv, "source_row_count": len(rows)})
+        else:
+            entries.append(
+                {
+                    "plot": filename,
+                    "title": title,
+                    "status": "generated",
+                    "reason": None,
+                    "source_csv": source_csv,
+                    "source_row_count": len(rows),
+                    "image": _plot_image_metadata(plt, path),
+                }
+            )
+            outputs.append(f"plots/{filename}")
+    write_json(
+        manifest_path,
+        {
+            "schema_version": COMPARE_RESULTS_SCHEMA_VERSION,
+            "status": "completed",
+            "plots": entries,
+            "written": [entry["plot"] for entry in entries if entry["status"] == "generated"],
+            "skipped": [entry for entry in entries if entry["status"] == "skipped"],
+        },
+    )
+    return outputs
+
+
+def _plot_cpu_gpu_speedup(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+    if not rows:
+        return "required_data_unavailable"
+    families = sorted({str(row["case_family"]) for row in rows})
+    fig, axis = plt.subplots(figsize=(max(9.0, len(rows) * 0.32), 5.8), constrained_layout=True)
+    for family in families:
+        family_rows = sorted((row for row in rows if row["case_family"] == family), key=lambda row: int(row["n_qubits"]))
+        axis.plot([int(row["n_qubits"]) for row in family_rows], [float(row["total_wall_speedup_median"]) for row in family_rows], marker="o", label=family.upper())
+    axis.axhline(1.0, color="#6b7280", linewidth=1.0, linestyle="--")
+    axis.set_xlabel("Qubits")
+    axis.set_ylabel("CPU/GPU wall-time speedup")
+    axis.set_title("CPU/GPU full-state speedup by circuit family")
+    axis.grid(True, axis="y", alpha=0.3)
+    axis.legend(fontsize="small", ncol=2)
+    _save_plot(fig, path)
+    return None
+
+
+def _plot_cpu_gpu_runtime(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+    if not rows:
+        return "required_data_unavailable"
+    ordered = sorted(rows, key=lambda row: (str(row["case_family"]), int(row["n_qubits"])))
+    labels = [f"{row['case_family']}_{row['n_qubits']}q" for row in ordered]
+    x = list(range(len(labels)))
+    width = 0.38
+    fig, axis = plt.subplots(figsize=(max(10.0, len(labels) * 0.34), 6.0), constrained_layout=True)
+    axis.bar([item - width / 2 for item in x], [float(row["cpu_total_wall_time_s_median"]) for row in ordered], width=width, label="QuEST CPU", color="#2563eb")
+    axis.bar([item + width / 2 for item in x], [float(row["gpu_total_wall_time_s_median"]) for row in ordered], width=width, label="QuEST HIP GPU", color="#16a34a")
+    axis.set_xticks(x)
+    axis.set_xticklabels(labels, rotation=60, ha="right", fontsize=8)
+    axis.set_ylabel("Median wall time (s, log scale)")
+    axis.set_title("CPU/GPU full-state runtime by circuit and size")
+    axis.set_yscale("log")
+    axis.grid(True, axis="y", alpha=0.3)
+    axis.legend()
+    _save_plot(fig, path)
+    return None
+
+
+def _save_plot(fig: Any, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    try:
+        import matplotlib.pyplot as _plt
+
+        _plt.close(fig)
+    except Exception:  # pragma: no cover
+        fig.clf()
+
+
+def _plot_image_metadata(plt: Any, path: Path) -> JsonDict:
+    payload: JsonDict = {"size_bytes": path.stat().st_size if path.exists() else 0}
+    try:
+        image = plt.imread(path)
+        height, width = image.shape[:2]
+        payload.update({"width_px": int(width), "height_px": int(height), "non_empty": payload["size_bytes"] > 1000})
+    except Exception as exc:
+        payload.update({"read_error": str(exc), "non_empty": False})
+    return payload
+
+
+def _cpu_gpu_skipped(case_id: Any, repeat_id: Any, reason: str, cpu_present: bool, gpu_present: bool) -> JsonDict:
+    return {
+        "schema_version": COMPARE_RESULTS_SCHEMA_VERSION,
+        "case_id": case_id,
+        "repeat_id": repeat_id,
+        "reason": reason,
+        "cpu_present": cpu_present,
+        "gpu_present": gpu_present,
+    }
+
+
+def _case_family_and_qubits(record: JsonDict) -> tuple[str, int]:
+    case_id = str(record.get("case_id") or "")
+    match = re.match(r"^(?:quest_)?(?P<family>.+?)_(?P<qubits>\d+)q$", case_id)
+    if match:
+        return match.group("family"), int(match.group("qubits"))
+    notes = _json_dict(record.get("notes"))
+    family = str(notes.get("circuit_family") or notes.get("family") or case_id)
+    n_qubits = _int_value(record.get("n_qubits")) or _int_value(notes.get("n_qubits")) or _int_value(record.get("max_qubits")) or 0
+    return family, n_qubits
+
+
+def _json_dict(value: Any) -> JsonDict:
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str) or not value:
+        return {}
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _positive_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0.0 else None
+
+
+def _int_value(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_float(value: Any) -> str:
+    parsed = _positive_float(value)
+    if parsed is None:
+        return ""
+    return f"{parsed:.6g}"
 
 
 def _run_id_from_source(source_artifact: str | None) -> str | None:

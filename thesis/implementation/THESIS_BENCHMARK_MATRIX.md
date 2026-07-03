@@ -161,15 +161,15 @@ Stop conditions for all sweeps:
 
 ## Wave 2E.47 Implementation Plan
 
-1. Add a CPU/GPU sweep suite or command that runs overlapping
-   `quest_cpu_full_state_exact` and `quest_gpu_full_state_exact` rows across the
-   defined circuit families and qubit sizes.
+1. Add canonical `configs/suites/cpu_gpu_sweep.yml` and staged manual helpers
+   `configs/suites/manual/cpu_gpu_sweep_tier1.yml` and
+   `configs/suites/manual/cpu_gpu_sweep_tier2.yml`.
 2. Keep the existing 4q GPU evidence as route-smoke validation only.
-3. Run the new CPU/GPU sweep after GPU verification succeeds.
+3. Run GPU verification, then tier 1 (`4,6,8,10,12`) before tier 2
+   (`14,16,18`).
 4. Write evidence under `runs/evidence/cpu_gpu_sweep/...`.
 5. Write derived comparison outputs under `runs/comparisons/cpu_gpu/...`.
 6. Verify every CPU/GPU speedup row has matching circuit family, qubit count,
-   validation status, and measured CPU/GPU timing.
+   repeat index, validation status, and measured CPU/GPU timing.
 7. Then extend the matrix outputs to CPU + Quimb + GPU + UPMEM using the full
    thesis matrix rules.
-

@@ -281,6 +281,33 @@ def test_prune_run_compact_is_idempotent_and_rewrites_pruned_refs(tmp_path: Path
     assert manifest["output_path"]["status"] == "intentionally_pruned"
 
 
+def test_prune_run_compact_prunes_statevectors_and_updates_jsonl_refs(tmp_path: Path) -> None:
+    record = _record("quest_qrng_18q")
+    record["statevector_artifact"] = {
+        "schema_version": "artifact_reference_v1",
+        "role": "quest_cpu_full_state_exact_statevector",
+        "relative_path": "cases/quest_qrng_18q/routes/quest_cpu_full_state_exact/repeat_0/statevector.npy",
+        "retained": True,
+        "status": "retained",
+    }
+    run_dir = _new_run(tmp_path / "run", [record])
+    statevector = run_dir / "cases" / "quest_qrng_18q" / "routes" / "quest_cpu_full_state_exact" / "repeat_0" / "statevector.npy"
+    state_dump = run_dir / "cases" / "quest_qrng_18q" / "quest_full_state" / "repeat_0" / "state_dump.json"
+    statevector.parent.mkdir(parents=True)
+    state_dump.parent.mkdir(parents=True)
+    statevector.write_bytes(b"large-statevector-placeholder")
+    state_dump.write_text('{"large":"state-dump-placeholder"}', encoding="utf-8")
+
+    result = prune_run(run_dir, artifact_retention="compact")
+
+    assert result.status == "completed"
+    assert not statevector.exists()
+    assert not state_dump.exists()
+    records = [json.loads(line) for line in (run_dir / "normalized_records.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert records[0]["statevector_artifact"]["status"] == "intentionally_pruned"
+    assert records[0]["statevector_artifact"]["metadata"]["size_bytes"] == len(b"large-statevector-placeholder")
+
+
 def test_prune_run_rejects_legacy_layout(tmp_path: Path) -> None:
     legacy = tmp_path / "legacy"
     legacy.mkdir()

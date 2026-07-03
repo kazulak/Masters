@@ -1112,6 +1112,9 @@ def _compact_prune_candidates(run_dir: Path) -> list[Path]:
         if path.is_file() and path.suffix == ".bin":
             candidates.add(path)
             continue
+        if path.is_file() and path.name in {"statevector.npy", "statevector_quest_order.npy", "state_dump.json"}:
+            candidates.add(path)
+            continue
         if any(part in {"operands", "references", "outputs"} for part in path.relative_to(run_dir).parts):
             candidates.add(path)
     return sorted(candidates, key=lambda item: (len(item.parts), item.as_posix()), reverse=True)
@@ -1146,6 +1149,24 @@ def _mark_pruned_references(run_dir: Path, refs: list[JsonDict]) -> None:
         updated = _replace_pruned_refs(payload, by_path, run_dir=run_dir, base_dir=json_path.parent)
         if updated != payload:
             write_json(json_path, updated)
+    for jsonl_path in list(run_dir.rglob("*.jsonl")):
+        if any(part in {"runner_work", "operands", "references", "outputs"} for part in jsonl_path.relative_to(run_dir).parts):
+            continue
+        updated_lines: list[str] = []
+        changed = False
+        for line in jsonl_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                payload = json.loads(line)
+            except Exception:
+                updated_lines.append(line)
+                continue
+            updated = _replace_pruned_refs(payload, by_path, run_dir=run_dir, base_dir=jsonl_path.parent)
+            changed = changed or updated != payload
+            updated_lines.append(json.dumps(to_jsonable(updated), sort_keys=True, separators=(",", ":")))
+        if changed:
+            jsonl_path.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
 
 
 def _replace_pruned_refs(value: Any, refs: dict[str, JsonDict], *, run_dir: Path, base_dir: Path) -> Any:

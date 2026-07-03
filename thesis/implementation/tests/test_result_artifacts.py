@@ -10,6 +10,50 @@ from quantum_bench.bench.run_dirs import EVIDENCE_ARTIFACT_KIND, create_run_dir
 from quantum_bench.bench.reporting import write_normalized_records, write_run_manifest
 
 
+def _cpu_gpu_record(case_id: str, route_id: str, repeat_id: int, *, total_s: float, compute_s: float, validation_status: str = "passed") -> dict:
+    is_gpu = route_id == "quest_gpu_full_state_exact"
+    return {
+        "schema_version": "benchmark_result_artifact_v1",
+        "source_artifact": f"cases/{case_id}/simulation_backend_compare.json",
+        "run_id": "run",
+        "suite_id": "cpu_gpu_sweep",
+        "case_id": case_id,
+        "workload_id": case_id,
+        "route_id": route_id,
+        "backend_id": route_id,
+        "backend_family": "quest",
+        "benchmark_role": "serious_gpu_full_state_baseline" if is_gpu else "serious_full_state_baseline",
+        "kernel_family": "full_state_vector",
+        "execution_model": "full_state",
+        "output_kind": "statevector",
+        "comparison_output_kind": "statevector",
+        "execution_target": "gpu" if is_gpu else "cpu",
+        "contraction_execution_target": "gpu" if is_gpu else "cpu",
+        "accelerator_kind": "amd_gpu" if is_gpu else "none",
+        "gpu_backend_verified": is_gpu,
+        "gpu_program_executed": is_gpu,
+        "gpu_device_name": "AMD Radeon RX 6600 (gfx1032)" if is_gpu else None,
+        "execution_scope": "full_circuit",
+        "status": "completed",
+        "validation_status": validation_status,
+        "repeat_id": repeat_id,
+        "measured_repeat_count": 2,
+        "task_count": 0,
+        "validated_task_count": 0,
+        "unsupported_task_count": 0,
+        "total_wall_time_s": total_s,
+        "kernel_time_s": compute_s,
+        "simulation_compute_time_s": compute_s,
+        "validation_error_metrics": {"max_abs_error": 0.0, "l2_error": 0.0},
+        "statevector_bytes": 256,
+        "hardware_speedup": "not_applicable",
+        "hardware_speedup_applicable": False,
+        "cpu_fallback_used": False,
+        "notes": "{}",
+        "warnings": "",
+    }
+
+
 def test_kernel_family_vocabulary_contains_generic_and_dense() -> None:
     assert "dense_gemm" in KERNEL_FAMILIES
     assert "einsum_contraction" in KERNEL_FAMILIES
@@ -130,3 +174,56 @@ def test_evidence_run_layout_and_compare_results_read_only_boundary(tmp_path: Pa
         assert "must not be written under runs/evidence" in str(exc)
     else:  # pragma: no cover - defensive assertion
         raise AssertionError("compare_results should reject outputs inside runs/evidence")
+
+
+def test_compare_results_writes_cpu_gpu_speedup_artifacts(tmp_path: Path) -> None:
+    run_dir = create_run_dir(tmp_path, "cpu_gpu_sweep", artifact_kind=EVIDENCE_ARTIFACT_KIND, route_label="simulation_backend_compare")
+    records = [
+        _cpu_gpu_record("quest_qrng_4q", "quest_cpu_full_state_exact", 0, total_s=4.0, compute_s=2.0),
+        _cpu_gpu_record("quest_qrng_4q", "quest_gpu_full_state_exact", 0, total_s=1.0, compute_s=0.5),
+        _cpu_gpu_record("quest_qrng_4q", "quest_cpu_full_state_exact", 1, total_s=6.0, compute_s=3.0),
+        _cpu_gpu_record("quest_qrng_4q", "quest_gpu_full_state_exact", 1, total_s=2.0, compute_s=1.0),
+        _cpu_gpu_record("quest_bv_6q", "quest_cpu_full_state_exact", 0, total_s=3.0, compute_s=1.5),
+    ]
+    write_run_manifest(
+        run_dir,
+        run_kind="simulation_backend_compare",
+        suite_id="cpu_gpu_sweep",
+        suite_path="configs/suites/cpu_gpu_sweep.yml",
+        artifact_kind=EVIDENCE_ARTIFACT_KIND,
+        route_label="simulation_backend_compare",
+        artifact_retention="compact",
+        root_dir=tmp_path,
+    )
+    write_normalized_records(run_dir, records)
+
+    out_dir = tmp_path / "runs" / "comparisons" / "cpu_gpu" / "quest_full_state" / "run"
+    result = compare_results([run_dir], out_dir, comparison_type="cpu_gpu_sweep", root_dir=tmp_path)
+    payload = json.loads(result.artifact_path.read_text(encoding="utf-8"))
+
+    assert result.record_count == len(records)
+    assert (out_dir / "cpu_gpu_speedup_pairs.csv").exists()
+    assert (out_dir / "cpu_gpu_speedup_summary.csv").exists()
+    assert (out_dir / "cpu_gpu_speedup_skipped_pairs.csv").exists()
+    assert (out_dir / "plots" / "data" / "cpu_gpu_speedup_summary.csv").exists()
+    assert payload["cpu_gpu_speedup"]["timing_fields"] == {
+        "total_wall": "total_wall_time_s",
+        "compute": "simulation_compute_time_s",
+        "repeat": "repeat_id",
+    }
+    assert len(payload["cpu_gpu_speedup"]["pairs"]) == 2
+    assert payload["cpu_gpu_speedup"]["summary"][0]["case_family"] == "qrng"
+    assert payload["cpu_gpu_speedup"]["summary"][0]["n_qubits"] == 4
+    assert payload["cpu_gpu_speedup"]["summary"][0]["matched_repeat_count"] == 2
+    assert payload["cpu_gpu_speedup"]["summary"][0]["total_wall_speedup_median"] == 3.5
+    assert payload["cpu_gpu_speedup"]["summary"][0]["compute_speedup_median"] == 3.5
+    assert payload["cpu_gpu_speedup"]["skipped_pairs"][0]["reason"] == "missing_cpu_or_gpu_row"
+
+    with (out_dir / "cpu_gpu_speedup_pairs.csv").open("r", encoding="utf-8", newline="") as handle:
+        pair_rows = list(csv.DictReader(handle))
+    assert {row["repeat_id"] for row in pair_rows} == {"0", "1"}
+    manifest = json.loads((out_dir / "comparison_manifest.json").read_text(encoding="utf-8"))
+    assert "cpu_gpu_speedup_pairs.csv" in manifest["outputs"]
+    assert "plots/data/cpu_gpu_speedup_summary.csv" in manifest["outputs"]
+    summary_md = result.summary_path.read_text(encoding="utf-8")
+    assert "## CPU/GPU Speedup" in summary_md

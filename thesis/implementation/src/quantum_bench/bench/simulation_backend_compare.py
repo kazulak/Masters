@@ -17,12 +17,12 @@ from quantum_bench.bench.run_dirs import EVIDENCE_ARTIFACT_KIND, create_run_dir,
 from quantum_bench.bench.simulation_backend_probe import probe_simulation_backends
 from quantum_bench.circuits import load_circuit, manifest
 from quantum_bench.core.jsonio import write_json, write_jsonl
-from quantum_bench.core.records import BenchmarkContext, JsonDict, RouteResult, to_jsonable
+from quantum_bench.core.records import BenchmarkContext, JsonDict, PathSummary, RouteResult, TaskGraph, TensorNetworkSpec, to_jsonable
 from quantum_bench.environment import capture_environment
 from quantum_bench.providers import route_registry
 from quantum_bench.providers.base import ExecutionRoute
 from quantum_bench.targets.upmem import SYNTHETIC_PRESSURE_ERROR, is_synthetic_pressure_case
-from quantum_bench.tn import build_tensor_network, plan_task_graph_with_config, with_path_cost_summary
+from quantum_bench.tn import TensorNetworkValue, build_tensor_network, plan_task_graph_with_config, with_path_cost_summary
 from quantum_bench.validation import probability_error_metrics, tensor_to_quest_statevector, validate, validation_result_to_dict
 
 
@@ -128,6 +128,55 @@ def _validate_suite_routes(suite: JsonDict) -> None:
         raise ValueError("simulation backend comparison suite must include at least two comparable routes")
 
 
+def _suite_uses_only_full_state_routes(suite: JsonDict, routes: dict[str, ExecutionRoute]) -> bool:
+    for route_id in suite["route_policy"]["routes"]:
+        route = routes.get(str(route_id))
+        if route is None:
+            return False
+        if route.identity.output_contract != "statevector" or "full_state" not in route.identity.simulation_method:
+            return False
+    return True
+
+
+def _full_state_only_graph(circuit: Any) -> tuple[TensorNetworkValue, TaskGraph]:
+    estimated_statevector_bytes = int((1 << int(circuit.n_qubits)) * np.dtype(np.complex128).itemsize)
+    network_spec = TensorNetworkSpec(
+        circuit=circuit,
+        tensors=(),
+        output_labels=tuple(range(int(circuit.n_qubits))),
+        einsum_expression="full_state_only",
+    )
+    network = TensorNetworkValue(network_spec, [])
+    path_summary = PathSummary(
+        planner="not_applicable",
+        optimize="not_applicable",
+        path_length=0,
+        largest_intermediate=1 << int(circuit.n_qubits),
+        naive_flops=0.0,
+        optimized_flops=0.0,
+        text="full-state-only comparison; tensor-network TaskGraph planning not required",
+        planner_engine="not_applicable",
+        planner_id="full_state_only",
+        planner_kind="full_state_only",
+        optimize_mode="not_applicable",
+        objective="not_applicable",
+        cost_basis="not_applicable",
+        options={"reason": "all selected routes return statevector outputs"},
+        task_count=0,
+        total_estimated_flops=0,
+        peak_intermediate_bytes=estimated_statevector_bytes,
+        max_intermediate_bytes=estimated_statevector_bytes,
+    )
+    graph = TaskGraph(
+        network=network_spec,
+        tasks=(),
+        path=(),
+        path_summary=path_summary,
+        planning_time_s=0.0,
+    )
+    return network, graph
+
+
 def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: JsonDict) -> JsonDict:
     if is_synthetic_pressure_case(case_payload):
         raise ValueError(SYNTHETIC_PRESSURE_ERROR)
@@ -136,11 +185,15 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
 
     case_id = str(case_payload["case_id"])
     case_dir = run_dir / "cases" / sanitize(case_id)
+    routes = route_registry(root_dir)
     circuit = load_circuit(case_payload, root_dir)
     if not circuit.source.get("deterministic_unitary", False):
         raise ValueError(f"{case_id} is not a deterministic unitary statevector comparison case")
-    network = build_tensor_network(circuit)
-    graph = with_path_cost_summary(plan_task_graph_with_config(network, suite["planner"]))
+    if _suite_uses_only_full_state_routes(suite, routes):
+        network, graph = _full_state_only_graph(circuit)
+    else:
+        network = build_tensor_network(circuit)
+        graph = with_path_cost_summary(plan_task_graph_with_config(network, suite["planner"]))
     write_json(case_dir / "circuit.json", manifest(circuit))
     write_json(case_dir / "task_graph.json", graph)
     write_json(case_dir / "path_summary.json", graph.path_summary)
@@ -169,7 +222,6 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
     executable_routes: list[ExecutionRoute] = []
     skipped_rows: list[JsonDict] = []
     optional_backend_reports: list[JsonDict] = []
-    routes = route_registry(root_dir)
     for route_id in suite["route_policy"]["routes"]:
         route_config = route_config_for(suite, route_id)
         required = bool(route_config.get("required")) or route_id == anchor_route_id
@@ -511,6 +563,11 @@ def _route_benchmark_metadata(route_config: JsonDict, route: ExecutionRoute) -> 
             "serious_full_state_baseline",
             "Serious CPU full-state baseline and comparison anchor.",
             "Statevector output is capped by suite options for exact comparison.",
+        ),
+        "quest_gpu_full_state_exact": (
+            "serious_gpu_full_state_baseline",
+            "Serious GPU full-state baseline for direct CPU/GPU QuEST comparison.",
+            "Requires verified GPU execution; unavailable candidates must not emit benchmark rows.",
         ),
         "quimb_tn_exact": (
             "serious_external_tn_baseline",

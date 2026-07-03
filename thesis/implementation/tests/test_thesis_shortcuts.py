@@ -56,12 +56,14 @@ def test_readme_documents_shortcut_targets() -> None:
         "smoke.yml",
         "cpu_evidence.yml",
         "gpu_evidence.yml",
+        "cpu_gpu_sweep.yml",
         "upmem_sim_evidence.yml",
         "upmem_generic_sweep.yml",
         "manual_large.yml",
     ):
         assert f"configs/suites/{suite_name}" in text
     assert "configs/suites/diagnostics/" in text
+    assert "configs/suites/manual/" in text
 
 
 def test_makefile_targets_parse_with_dry_run() -> None:
@@ -94,12 +96,15 @@ def test_top_level_suite_family_is_canonical() -> None:
         "smoke.yml",
         "cpu_evidence.yml",
         "gpu_evidence.yml",
+        "cpu_gpu_sweep.yml",
         "upmem_sim_evidence.yml",
         "upmem_generic_sweep.yml",
         "manual_large.yml",
     }
     assert (ROOT / "configs" / "suites" / "diagnostics" / "planner_compare.yml").exists()
     assert (ROOT / "configs" / "suites" / "diagnostics" / "simulation_backend_compare_quick.yml").exists()
+    assert (ROOT / "configs" / "suites" / "manual" / "cpu_gpu_sweep_tier1.yml").exists()
+    assert (ROOT / "configs" / "suites" / "manual" / "cpu_gpu_sweep_tier2.yml").exists()
 
 
 def test_doctor_reports_prerequisites_without_benchmark_rows() -> None:

@@ -165,6 +165,7 @@ The active suite family is intentionally small:
 configs/suites/smoke.yml
 configs/suites/cpu_evidence.yml
 configs/suites/gpu_evidence.yml
+configs/suites/cpu_gpu_sweep.yml
 configs/suites/upmem_sim_evidence.yml
 configs/suites/upmem_generic_sweep.yml
 configs/suites/manual_large.yml
@@ -172,4 +173,6 @@ configs/suites/manual_large.yml
 
 Developer diagnostics and historical bring-up suites live under
 `configs/suites/diagnostics/` and are not part of the Makefile evidence
-surface.
+surface. Manual staged thesis helpers live under `configs/suites/manual/`; for
+example, `cpu_gpu_sweep_tier1.yml` and `cpu_gpu_sweep_tier2.yml` split the
+canonical CPU/GPU sweep so larger cases can be run after smaller cases pass.

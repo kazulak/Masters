@@ -1,0 +1,99 @@
+schema_version: 2
+suite_id: cpu_gpu_sweep
+
+metadata:
+  purpose: cpu_gpu_thesis_full_state_sweep_tier2
+  expected_runtime_class: manual_gpu_minutes
+  expected_memory_class: bounded_statevector
+  intended_use: thesis_evidence_staged_execution
+  deterministic_unitary_only: true
+  gpu_execution_suite: true
+  requires_verified_gpu_for_gpu_rows: true
+  validation_tier: thesis_full_state_sweep
+  validation_method: full_statevector
+  statevector_cap_qubits: 18
+  statevector_cap_amplitudes: 262144
+  max_qubits: 18
+  manual_invocation_required: true
+  staged_sweep_tier: tier2
+  notes: Second staged CPU/GPU thesis sweep tier covering qubits 14, 16, and 18.
+
+defaults:
+  warmups: 1
+  repeats: 3
+  timeout_s: 600
+  memory_guard_gib: 16
+  planner:
+    engine: opt_einsum
+    optimize: greedy
+
+workloads:
+  - id: quest_qrng_14q
+    circuit: {kind: quest_compatible, name: QRNG, n_qubits: 14}
+  - id: quest_qrng_16q
+    circuit: {kind: quest_compatible, name: QRNG, n_qubits: 16}
+  - id: quest_qrng_18q
+    circuit: {kind: quest_compatible, name: QRNG, n_qubits: 18}
+  - id: quest_bv_14q
+    circuit: {kind: quest_compatible, name: BV, n_qubits: 14}
+  - id: quest_bv_16q
+    circuit: {kind: quest_compatible, name: BV, n_qubits: 16}
+  - id: quest_bv_18q
+    circuit: {kind: quest_compatible, name: BV, n_qubits: 18}
+  - id: quest_xor_14q
+    circuit: {kind: quest_compatible, name: XOR, n_qubits: 14}
+  - id: quest_xor_16q
+    circuit: {kind: quest_compatible, name: XOR, n_qubits: 16}
+  - id: quest_xor_18q
+    circuit: {kind: quest_compatible, name: XOR, n_qubits: 18}
+  - id: quest_bb84_14q
+    circuit: {kind: quest_compatible, name: BB84, n_qubits: 14}
+  - id: quest_bb84_16q
+    circuit: {kind: quest_compatible, name: BB84, n_qubits: 16}
+  - id: quest_bb84_18q
+    circuit: {kind: quest_compatible, name: BB84, n_qubits: 18}
+  - id: quest_edc_14q
+    circuit: {kind: quest_compatible, name: EDC, n_qubits: 14}
+  - id: quest_edc_16q
+    circuit: {kind: quest_compatible, name: EDC, n_qubits: 16}
+  - id: quest_edc_18q
+    circuit: {kind: quest_compatible, name: EDC, n_qubits: 18}
+  - id: quest_hs_14q
+    circuit: {kind: quest_compatible, name: HS, allocated_qubits: 14, logical_qubits: 7}
+  - id: quest_hs_16q
+    circuit: {kind: quest_compatible, name: HS, allocated_qubits: 16, logical_qubits: 8}
+  - id: quest_hs_18q
+    circuit: {kind: quest_compatible, name: HS, allocated_qubits: 18, logical_qubits: 9}
+
+routes:
+  - id: quest_cpu_full_state_exact
+    role: comparison_anchor
+    benchmark_role: serious_full_state_baseline
+    route_role_description: Serious QuEST CPU full-state comparison anchor.
+    required: true
+    options:
+      max_output_qubits: 18
+      max_output_amplitudes: 262144
+      max_output_bytes: 4194304
+
+  - id: quest_gpu_full_state_exact
+    role: gpu_baseline
+    benchmark_role: serious_gpu_full_state_baseline
+    route_role_description: Verified QuEST HIP GPU full-state route for direct CPU/GPU comparison.
+    required: true
+    options:
+      max_output_qubits: 18
+      max_output_amplitudes: 262144
+      max_output_bytes: 4194304
+
+validation:
+  reference_route: quest_cpu_full_state_exact
+  require_output_for_roles:
+    - comparison_anchor
+    - gpu_baseline
+  tolerances:
+    max_abs_error: 1.0e-9
+    l2_error: 1.0e-8
+    max_rel_error: 1.0e-8
+    norm_drift: 1.0e-8
+    min_fidelity: 0.999999999
