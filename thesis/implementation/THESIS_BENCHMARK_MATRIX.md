@@ -17,9 +17,11 @@ benchmark sweep.
 | UPMEM simulator evidence | `runs/evidence/upmem_sim_evidence/simulation_backend_compare/20260703_195349` | Current strict UPMEM SDK simulator evidence. |
 
 The existing 4q GPU run proves that the QuEST HIP route works and can emit real
-GPU rows. It is not the thesis CPU/GPU benchmark. The thesis CPU/GPU benchmark
-requires a new overlapping sweep with CPU and GPU rows for the same circuit
-families and qubit counts.
+GPU rows. The Wave 2E.47 shallow 4-18q sweep proves CPU/GPU comparison plumbing
+and route/runtime validity. It is still overhead-dominated and should not be the
+final GPU performance claim. The thesis CPU/GPU performance benchmark requires
+deeper deterministic workloads with output dumps removed from the timed evidence
+path.
 
 ## First Required Output: CPU/GPU Direct Benchmark Sweep
 
@@ -58,6 +60,14 @@ family, qubit count, validation status, and measured timing scope.
   verification failure.
 - Do not emit GPU benchmark rows unless `gpu_backend_verified=true` and
   `gpu_program_executed=true`.
+- Separate correctness and performance tiers:
+  - correctness: `state_output_mode=full_dump`,
+    `validation_method=full_statevector`;
+  - performance: `state_output_mode=none`,
+    `validation_method=native_status_gate_counts`, `performance_tier=true`.
+- Performance-tier rows are `output_contract=metrics_only`,
+  `exact_output_comparable=false`, and
+  `full_statevector_validation_available=false`.
 
 ### Required Metrics
 
@@ -67,6 +77,8 @@ family, qubit count, validation status, and measured timing scope.
 - Validation status and error metrics.
 - GPU device name.
 - Energy only if real sensor data is available later.
+- Timing scope: wall time, native process time, QuEST compute time, state dump
+  time, validation time when available.
 
 ### Required 2E.47 Outputs
 
@@ -153,7 +165,7 @@ Stop conditions for all sweeps:
 | Output | Required artifacts | Notes |
 |---|---|---|
 | CPU vs GPU runtime by circuit size | CSV, Markdown, plot if supported | First required 2E.47 output. |
-| CPU vs GPU speedup by circuit family and size | CSV, Markdown, plot if supported | Only same-case CPU/GPU rows. |
+| CPU vs GPU speedup by circuit family and size | CSV, Markdown, plot if supported | Only same-case CPU/GPU rows; performance-tier compute speedup is the final speedup metric. |
 | CPU vs Quimb vs GPU runtime by circuit family | CSV, Markdown, plot | Algorithm/backend comparison. |
 | UPMEM supported/unsupported boundary table | CSV, Markdown | Include blocker reasons. |
 | UPMEM quantized accuracy/error table | CSV, Markdown | Simulator path evidence only. |
@@ -173,3 +185,18 @@ Stop conditions for all sweeps:
    repeat index, validation status, and measured CPU/GPU timing.
 7. Then extend the matrix outputs to CPU + Quimb + GPU + UPMEM using the full
    thesis matrix rules.
+
+## Wave 2E.48 Methodology Update
+
+Wave 2E.48 adds two manual CPU/GPU full-state tiers:
+
+- `configs/suites/manual/cpu_gpu_correctness_deep.yml`: deeper deterministic
+  circuits with full state dumps and full-statevector validation under a 12q
+  cap.
+- `configs/suites/manual/cpu_gpu_performance.yml`: deeper deterministic
+  circuits with `state_output_mode=none`; rows are metrics-only performance
+  evidence and are validated by native status/gate-count checks.
+
+CPU/GPU performance speedup should be reported from matched performance-tier
+`simulation_compute_time_s` rows. Wall-time ratios can still be reported as
+overhead-aware context, but must be labeled separately.

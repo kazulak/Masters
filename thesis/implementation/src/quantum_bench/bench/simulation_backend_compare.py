@@ -40,8 +40,8 @@ class SimulationBackendCompareResult:
 class ComparableRouteRun:
     route: ExecutionRoute
     result: RouteResult
-    statevector: np.ndarray
-    statevector_rel: Path
+    statevector: np.ndarray | None
+    statevector_rel: Path | None
     final_tensor_rel: Path | None
     output_kind: str
     comparison_output_kind: str
@@ -355,12 +355,28 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
     for run in route_runs:
         repeat_anchor = runs_by_repeat_route[(run.repeat_id, anchor_route_id)]
         result_metadata = dict(run.result.metadata or {})
-        validation_start = time.perf_counter()
-        validation = validate(run.statevector, repeat_anchor.statevector, suite["tolerances"])
-        validation_metrics = validation_result_to_dict(validation)
-        validation_metrics.update(probability_error_metrics(run.statevector, repeat_anchor.statevector))
-        validation_time_s = time.perf_counter() - validation_start
-        validation_metrics["error_direction"] = _error_direction(run.route.name, anchor_route_id)
+        if run.statevector is not None and repeat_anchor.statevector is not None:
+            validation_start = time.perf_counter()
+            validation = validate(run.statevector, repeat_anchor.statevector, suite["tolerances"])
+            validation_metrics = validation_result_to_dict(validation)
+            validation_metrics.update(probability_error_metrics(run.statevector, repeat_anchor.statevector))
+            validation_time_s = time.perf_counter() - validation_start
+            validation_status = "passed" if validation.passed else "failed"
+            row_status = "completed" if validation.passed else "validation_failed"
+            error_direction = _error_direction(run.route.name, anchor_route_id)
+        else:
+            validation_metrics = {
+                "passed": True,
+                "validation_method": result_metadata.get("validation_method") or validation_method,
+                "native_status": (result_metadata.get("quest") or {}).get("status"),
+                "exact_output_comparable": False,
+                "full_statevector_validation_available": False,
+            }
+            validation_time_s = 0.0
+            validation_status = str(result_metadata.get("validation_status") or "passed_native_status")
+            row_status = "completed"
+            error_direction = "not_applicable"
+        validation_metrics["error_direction"] = error_direction
         row = _row_with_metrics(
             {
                 **common,
@@ -390,10 +406,10 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
                 "execution_scope": _execution_scope(run.route.identity.simulation_method),
                 "output_kind": run.output_kind,
                 "comparison_output_kind": run.comparison_output_kind,
-                "status": "completed" if validation.passed else "validation_failed",
-                "validation_status": "passed" if validation.passed else "failed",
+                "status": row_status,
+                "validation_status": validation_status,
                 "error_direction": validation_metrics["error_direction"],
-                "statevector_bytes": int(run.statevector.nbytes),
+                "statevector_bytes": int(run.statevector.nbytes) if run.statevector is not None else None,
                 "planning_time_s": float(run.result.profile.planning_s),
                 "lowering_time_s": float(run.result.profile.lowering_s),
                 "total_wall_time_s": float(run.result.profile.total_s),
@@ -407,13 +423,29 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
                 "validation_time_s": float(validation_time_s),
                 "output_materialization_time_s": float(run.output_materialization_time_s),
                 "timing_scope": "end_to_end_and_compute",
+                "state_output_mode": result_metadata.get("state_output_mode") or "full_dump",
+                "output_contract": result_metadata.get("output_contract") or run.result.output.contract,
+                "output_contract_label": result_metadata.get("output_contract_label"),
+                "output_contract_is_exact": bool(result_metadata.get("output_contract_is_exact", run.statevector is not None)),
+                "output_contract_note": result_metadata.get("output_contract_note"),
+                "performance_tier": bool(result_metadata.get("performance_tier", False)),
+                "exact_output_comparable": bool(result_metadata.get("exact_output_comparable", run.statevector is not None)),
+                "full_statevector_validation_available": bool(result_metadata.get("full_statevector_validation_available", run.statevector is not None)),
+                "native_process_wall_time_s": result_metadata.get("native_process_wall_time_s"),
+                "quest_simulation_compute_time_s": result_metadata.get("quest_simulation_compute_time_s"),
+                "state_dump_requested": bool(result_metadata.get("state_dump_requested", run.statevector is not None)),
+                "state_dump_time_s": result_metadata.get("state_dump_time_s"),
+                "repeat_layers": result_metadata.get("repeat_layers"),
+                "energy_joules": run.result.energy_joules,
+                "energy_source": run.result.energy_source,
+                "energy_measurement_status": result_metadata.get("energy_measurement_status"),
                 "gpu_synchronized": bool(result_metadata.get("gpu_synchronized", False)),
-                "validation_method": validation_method,
+                "validation_method": result_metadata.get("validation_method") or validation_method,
                 "resource_guard_status": "executed",
                 "resource_skip_reason": None,
                 "validation_metrics": validation_metrics,
-                "statevector_artifact": artifact_ref(run_dir, run.statevector_rel, role=f"{run.route.name}_statevector"),
-                "final_tensor_artifact": artifact_ref(run_dir, run.final_tensor_rel, role=f"{run.route.name}_final_tensor"),
+                "statevector_artifact": artifact_ref(run_dir, run.statevector_rel, role=f"{run.route.name}_statevector") if run.statevector_rel is not None else None,
+                "final_tensor_artifact": artifact_ref(run_dir, run.final_tensor_rel, role=f"{run.route.name}_final_tensor") if run.final_tensor_rel is not None else None,
                 "dependency_metadata": _dependency_metadata(run),
                 "route_metadata": run.result.metadata,
             }
@@ -434,7 +466,7 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
         "warmup_runs": warmups,
         "measured_runs": repeats,
         "validation_method": validation_method,
-        "validation_status": "passed" if all(row["validation_status"] in {"passed", "skipped"} for row in rows) else "failed",
+        "validation_status": "passed" if all(row["validation_status"] in {"passed", "passed_native_status", "passed_runtime_only", "skipped"} for row in rows) else "failed",
         "backend_families": sorted({row["backend_family"] for row in rows}),
         "execution_models": sorted({row["execution_model"] for row in rows}),
         "optional_backend_reports": optional_backend_reports,
@@ -479,21 +511,27 @@ def _execute_route(
     case_id = str(case_payload["case_id"])
     context = _context(root_dir, run_dir, suite, case_payload, route_config_for(suite, route.name), repeat_id=repeat_id)
     result = route.execute(route.prepare(graph, network, context), context)
-    if result.status != "passed" or result.output.array is None:
+    if result.status != "passed":
         raise RuntimeError(result.error or f"{route.name} failed")
-    array = np.asarray(result.output.array, dtype=np.complex128)
     repeat_label = f"repeat_{repeat_id}" if repeat_id >= 0 else f"warmup_{abs(repeat_id) - 1}"
     route_dir = Path("cases") / sanitize(case_id) / "routes" / sanitize(route.name) / repeat_label
     (run_dir / route_dir).mkdir(parents=True, exist_ok=True)
     output_write_time_s = 0.0
-    if route.identity.output_contract == "statevector":
+    output_contract = result.output.contract or route.identity.output_contract
+    output_kind = str((result.output.metadata or {}).get("output_kind") or output_contract)
+    if output_contract == "metrics_only":
+        return ComparableRouteRun(route, result, None, None, None, output_kind, "not_applicable", repeat_id, output_write_time_s)
+    if result.output.array is None:
+        raise RuntimeError(result.error or f"{route.name} did not emit comparable output")
+    array = np.asarray(result.output.array, dtype=np.complex128)
+    if output_contract == "statevector":
         statevector = _statevector_from_state_output(array, graph.network.circuit.n_qubits, route.name)
         state_rel = route_dir / "statevector.npy"
         write_start = time.perf_counter()
         np.save(run_dir / state_rel, statevector, allow_pickle=False)
         output_write_time_s += time.perf_counter() - write_start
         return ComparableRouteRun(route, result, statevector, state_rel, None, "statevector", "statevector", repeat_id, output_write_time_s)
-    if route.identity.output_contract == "final_tensor":
+    if output_contract == "final_tensor":
         statevector = tensor_to_quest_statevector(array)
         tensor_rel = route_dir / "final_tensor.npy"
         state_rel = route_dir / "statevector_quest_order.npy"
@@ -668,6 +706,22 @@ def _skipped_route_row(
             "validation_status": "skipped",
             "error_direction": "not_applicable",
             "statevector_bytes": None,
+            "state_output_mode": "not_executed",
+            "output_contract": route.identity.output_contract,
+            "output_contract_label": "not_executed",
+            "output_contract_is_exact": False,
+            "output_contract_note": "Route did not execute.",
+            "performance_tier": False,
+            "exact_output_comparable": False,
+            "full_statevector_validation_available": False,
+            "native_process_wall_time_s": None,
+            "quest_simulation_compute_time_s": None,
+            "state_dump_requested": False,
+            "state_dump_time_s": None,
+            "repeat_layers": None,
+            "energy_joules": None,
+            "energy_source": "unavailable",
+            "energy_measurement_status": "unavailable",
             "planning_time_s": 0.0,
             "lowering_time_s": 0.0,
             "total_wall_time_s": 0.0,
@@ -786,6 +840,10 @@ def _comparison_row(row: JsonDict, anchor_route_id: str) -> JsonDict:
             "probability_max_abs_error": metrics.get("probability_max_abs_error"),
             "repeat_id": row.get("repeat_id"),
             "validation_method": row.get("validation_method"),
+            "state_output_mode": row.get("state_output_mode"),
+            "performance_tier": row.get("performance_tier"),
+            "exact_output_comparable": row.get("exact_output_comparable"),
+            "full_statevector_validation_available": row.get("full_statevector_validation_available"),
         }
     )
 
@@ -821,13 +879,29 @@ def _normalized_record(run_dir: Path, row: JsonDict, *, case_id: str) -> JsonDic
         "execution_scope": row.get("execution_scope"),
         "output_kind": row.get("output_kind"),
         "comparison_output_kind": row.get("comparison_output_kind"),
+        "state_output_mode": row.get("state_output_mode"),
+        "output_contract": row.get("output_contract"),
+        "output_contract_label": row.get("output_contract_label"),
+        "output_contract_is_exact": bool(row.get("output_contract_is_exact", False)),
+        "output_contract_note": row.get("output_contract_note"),
+        "performance_tier": bool(row.get("performance_tier", False)),
+        "exact_output_comparable": bool(row.get("exact_output_comparable", False)),
+        "full_statevector_validation_available": bool(row.get("full_statevector_validation_available", False)),
+        "native_process_wall_time_s": row.get("native_process_wall_time_s"),
+        "quest_simulation_compute_time_s": row.get("quest_simulation_compute_time_s"),
+        "state_dump_requested": bool(row.get("state_dump_requested", False)),
+        "state_dump_time_s": row.get("state_dump_time_s"),
+        "repeat_layers": row.get("repeat_layers"),
+        "energy_joules": row.get("energy_joules"),
+        "energy_source": row.get("energy_source"),
+        "energy_measurement_status": row.get("energy_measurement_status"),
         "simulator_or_hardware": "simulator" if row.get("upmem_execution_mode") == "sdk_simulator" else "not_applicable",
         "policy": row.get("policy", "not_applicable"),
         "quantization_mode": row.get("quantization_mode", "not_applicable"),
         "status": row.get("status"),
         "validation_status": row.get("validation_status"),
         "task_count": int(row.get("tn_task_count", 0) or 0),
-        "validated_task_count": int(row.get("tn_task_count", 0) or 0) if row.get("validation_status") == "passed" else 0,
+        "validated_task_count": int(row.get("tn_task_count", 0) or 0) if row.get("validation_status") in {"passed", "passed_native_status", "passed_runtime_only"} else 0,
         "unsupported_task_count": int(row.get("unsupported_task_count", 0) or 0),
         "planning_time_s": row.get("planning_time_s"),
         "lowering_time_s": row.get("lowering_time_s"),
@@ -908,6 +982,21 @@ def _normalized_record(run_dir: Path, row: JsonDict, *, case_id: str) -> JsonDic
                 "repeat_id": row.get("repeat_id"),
                 "validation_method": row.get("validation_method"),
                 "timing_scope": row.get("timing_scope"),
+                "state_output_mode": row.get("state_output_mode"),
+                "output_contract": row.get("output_contract"),
+                "output_contract_label": row.get("output_contract_label"),
+                "output_contract_is_exact": bool(row.get("output_contract_is_exact", False)),
+                "output_contract_note": row.get("output_contract_note"),
+                "performance_tier": bool(row.get("performance_tier", False)),
+                "exact_output_comparable": bool(row.get("exact_output_comparable", False)),
+                "full_statevector_validation_available": bool(row.get("full_statevector_validation_available", False)),
+                "native_process_wall_time_s": row.get("native_process_wall_time_s"),
+                "quest_simulation_compute_time_s": row.get("quest_simulation_compute_time_s"),
+                "state_dump_requested": bool(row.get("state_dump_requested", False)),
+                "state_dump_time_s": row.get("state_dump_time_s"),
+                "repeat_layers": row.get("repeat_layers"),
+                "energy_source": row.get("energy_source"),
+                "energy_measurement_status": row.get("energy_measurement_status"),
                 "resource_profile": {
                     "expected_runtime_class": row.get("expected_runtime_class"),
                     "expected_memory_class": row.get("expected_memory_class"),
@@ -959,6 +1048,16 @@ def _summary_payload(
             "warmup_runs": int(suite.get("warmups", 0) or 0),
             "measured_runs": int(suite.get("repeats", 1) or 1),
             "validation_method": str((suite.get("metadata") or {}).get("validation_method") or "full_statevector"),
+            "state_output_modes": sorted({str(row.get("state_output_mode") or "unspecified") for row in rows}),
+            "performance_tier": any(bool(row.get("performance_tier", False)) for row in rows),
+            "performance_tier_record_count": sum(1 for row in rows if bool(row.get("performance_tier", False))),
+            "exact_output_comparable_record_count": sum(1 for row in rows if bool(row.get("exact_output_comparable", False))),
+            "metrics_only_record_count": sum(1 for row in rows if row.get("output_kind") == "metrics_only"),
+            "timing_scope_note": (
+                "Performance-tier rows use native compute timing plus process wall time and do not include full statevector validation."
+                if any(bool(row.get("performance_tier", False)) for row in rows)
+                else "Correctness-tier rows use full statevector output validation."
+            ),
             "resource_profile": _resource_profile(suite),
             "gpu_execution_backend_added": bool((backend_probe.get("gpu_probe") or {}).get("gpu_execution_backend_added")),
             "gpu_benchmark_records_emitted": any(row.get("contraction_execution_target") == "gpu" and row.get("status") == "completed" for row in rows),

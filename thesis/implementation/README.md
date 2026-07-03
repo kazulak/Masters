@@ -81,6 +81,12 @@ GPU rows. The benchmark process must be able to see `/dev/kfd`, `/dev/dri`, and
 a `/dev/dri/renderD*` node; the verifier then runs a tiny HIP kernel before it
 builds and runs the QuEST HIP route.
 
+CPU/GPU full-state benchmarking has two tiers. Correctness-tier suites use
+`state_output_mode=full_dump` and full-statevector validation. Performance-tier
+suites use `state_output_mode=none`, `output_contract=metrics_only`, and
+native status/gate-count validation; those rows are valid for CPU/GPU compute
+timing comparison, not as full-output exactness evidence.
+
 Run UPMEM SDK simulator evidence:
 
 ```bash
@@ -176,3 +182,5 @@ Developer diagnostics and historical bring-up suites live under
 surface. Manual staged thesis helpers live under `configs/suites/manual/`; for
 example, `cpu_gpu_sweep_tier1.yml` and `cpu_gpu_sweep_tier2.yml` split the
 canonical CPU/GPU sweep so larger cases can be run after smaller cases pass.
+`cpu_gpu_correctness_deep.yml` keeps full-output validation under a small cap,
+while `cpu_gpu_performance.yml` disables state dumps for compute-focused timing.

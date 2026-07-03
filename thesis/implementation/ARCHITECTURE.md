@@ -29,6 +29,15 @@ QuEST CPU and Quimb TN are the serious CPU baselines. GPU evidence is optional
 and hardware-dependent. UPMEM SDK simulator evidence proves code-path execution
 through SDK DPU programs, but hardware speedup is not applicable.
 
+CPU/GPU full-state comparison has separate correctness and performance tiers:
+
+- `state_output_mode=full_dump`, `validation_method=full_statevector`:
+  full-output exactness evidence under configured statevector caps.
+- `state_output_mode=none`, `validation_method=native_status_gate_counts`,
+  `performance_tier=true`: metrics-only performance evidence. These rows must
+  include `exact_output_comparable=false` and
+  `full_statevector_validation_available=false`.
+
 ## UPMEM Status
 
 Current UPMEM work is bounded and explicit:
@@ -87,6 +96,8 @@ as the source artifact.
 
 - Do not report simulator timing as hardware speedup.
 - Do not emit GPU rows unless real GPU execution was verified.
+- Do not present `state_output_mode=none` rows as full-statevector validation
+  evidence.
 - Do not emit UPMEM benchmark rows unless strict UPMEM execution actually ran
   SDK DPU programs and `cpu_fallback_used=false`.
 - Keep route IDs, developer backend IDs, and internal UPMEM execution classes

@@ -10,8 +10,20 @@ from quantum_bench.bench.run_dirs import EVIDENCE_ARTIFACT_KIND, create_run_dir
 from quantum_bench.bench.reporting import write_normalized_records, write_run_manifest
 
 
-def _cpu_gpu_record(case_id: str, route_id: str, repeat_id: int, *, total_s: float, compute_s: float, validation_status: str = "passed") -> dict:
+def _cpu_gpu_record(
+    case_id: str,
+    route_id: str,
+    repeat_id: int,
+    *,
+    total_s: float,
+    compute_s: float,
+    validation_status: str = "passed",
+    state_output_mode: str = "full_dump",
+    validation_method: str = "full_statevector",
+    performance_tier: bool = False,
+) -> dict:
     is_gpu = route_id == "quest_gpu_full_state_exact"
+    exact_output = state_output_mode != "none"
     return {
         "schema_version": "benchmark_result_artifact_v1",
         "source_artifact": f"cases/{case_id}/simulation_backend_compare.json",
@@ -25,8 +37,15 @@ def _cpu_gpu_record(case_id: str, route_id: str, repeat_id: int, *, total_s: flo
         "benchmark_role": "serious_gpu_full_state_baseline" if is_gpu else "serious_full_state_baseline",
         "kernel_family": "full_state_vector",
         "execution_model": "full_state",
-        "output_kind": "statevector",
-        "comparison_output_kind": "statevector",
+        "output_kind": "metrics_only" if not exact_output else "statevector",
+        "comparison_output_kind": "not_applicable" if not exact_output else "statevector",
+        "state_output_mode": state_output_mode,
+        "output_contract": "metrics_only" if not exact_output else "statevector",
+        "output_contract_label": "metrics_only" if not exact_output else "full_statevector",
+        "output_contract_is_exact": exact_output,
+        "performance_tier": performance_tier,
+        "exact_output_comparable": exact_output,
+        "full_statevector_validation_available": exact_output,
         "execution_target": "gpu" if is_gpu else "cpu",
         "contraction_execution_target": "gpu" if is_gpu else "cpu",
         "accelerator_kind": "amd_gpu" if is_gpu else "none",
@@ -44,8 +63,18 @@ def _cpu_gpu_record(case_id: str, route_id: str, repeat_id: int, *, total_s: flo
         "total_wall_time_s": total_s,
         "kernel_time_s": compute_s,
         "simulation_compute_time_s": compute_s,
+        "timing_scope": "compute_only_native_and_process_wall" if performance_tier else "end_to_end_and_compute",
+        "validation_method": validation_method,
+        "native_process_wall_time_s": total_s,
+        "quest_simulation_compute_time_s": compute_s,
+        "state_dump_requested": exact_output,
+        "state_dump_time_s": 0.001 if exact_output else 0.0,
+        "repeat_layers": 1,
+        "energy_joules": None,
+        "energy_source": "unavailable",
+        "energy_measurement_status": "unavailable",
         "validation_error_metrics": {"max_abs_error": 0.0, "l2_error": 0.0},
-        "statevector_bytes": 256,
+        "statevector_bytes": 256 if exact_output else None,
         "hardware_speedup": "not_applicable",
         "hardware_speedup_applicable": False,
         "cpu_fallback_used": False,
@@ -210,11 +239,15 @@ def test_compare_results_writes_cpu_gpu_speedup_artifacts(tmp_path: Path) -> Non
         "total_wall": "total_wall_time_s",
         "compute": "simulation_compute_time_s",
         "repeat": "repeat_id",
+        "performance_speedup_field": "compute_speedup",
     }
     assert len(payload["cpu_gpu_speedup"]["pairs"]) == 2
     assert payload["cpu_gpu_speedup"]["summary"][0]["case_family"] == "qrng"
     assert payload["cpu_gpu_speedup"]["summary"][0]["n_qubits"] == 4
     assert payload["cpu_gpu_speedup"]["summary"][0]["matched_repeat_count"] == 2
+    assert payload["cpu_gpu_speedup"]["summary"][0]["state_output_mode"] == "full_dump"
+    assert payload["cpu_gpu_speedup"]["summary"][0]["validation_method"] == "full_statevector"
+    assert payload["cpu_gpu_speedup"]["summary"][0]["performance_tier"] is False
     assert payload["cpu_gpu_speedup"]["summary"][0]["total_wall_speedup_median"] == 3.5
     assert payload["cpu_gpu_speedup"]["summary"][0]["compute_speedup_median"] == 3.5
     assert payload["cpu_gpu_speedup"]["skipped_pairs"][0]["reason"] == "missing_cpu_or_gpu_row"
@@ -227,3 +260,59 @@ def test_compare_results_writes_cpu_gpu_speedup_artifacts(tmp_path: Path) -> Non
     assert "plots/data/cpu_gpu_speedup_summary.csv" in manifest["outputs"]
     summary_md = result.summary_path.read_text(encoding="utf-8")
     assert "## CPU/GPU Speedup" in summary_md
+
+
+def test_compare_results_accepts_cpu_gpu_performance_tier_native_status(tmp_path: Path) -> None:
+    run_dir = create_run_dir(tmp_path, "cpu_gpu_performance", artifact_kind=EVIDENCE_ARTIFACT_KIND, route_label="simulation_backend_compare")
+    records = [
+        _cpu_gpu_record(
+            "quest_qrng_10q_perf",
+            "quest_cpu_full_state_exact",
+            0,
+            total_s=5.0,
+            compute_s=4.0,
+            validation_status="passed_native_status",
+            state_output_mode="none",
+            validation_method="native_status_gate_counts",
+            performance_tier=True,
+        ),
+        _cpu_gpu_record(
+            "quest_qrng_10q_perf",
+            "quest_gpu_full_state_exact",
+            0,
+            total_s=2.0,
+            compute_s=1.0,
+            validation_status="passed_native_status",
+            state_output_mode="none",
+            validation_method="native_status_gate_counts",
+            performance_tier=True,
+        ),
+    ]
+    write_run_manifest(
+        run_dir,
+        run_kind="simulation_backend_compare",
+        suite_id="cpu_gpu_performance",
+        suite_path="configs/suites/manual/cpu_gpu_performance.yml",
+        artifact_kind=EVIDENCE_ARTIFACT_KIND,
+        route_label="simulation_backend_compare",
+        artifact_retention="compact",
+        root_dir=tmp_path,
+    )
+    write_normalized_records(run_dir, records)
+
+    out_dir = tmp_path / "runs" / "comparisons" / "cpu_gpu" / "performance" / "run"
+    result = compare_results([run_dir], out_dir, comparison_type="cpu_gpu_sweep", root_dir=tmp_path)
+    payload = json.loads(result.artifact_path.read_text(encoding="utf-8"))
+    pair = payload["cpu_gpu_speedup"]["pairs"][0]
+    summary = payload["cpu_gpu_speedup"]["summary"][0]
+
+    assert pair["validation_status"] == "passed_native_status"
+    assert pair["state_output_mode"] == "none"
+    assert pair["case_family"] == "qrng"
+    assert pair["n_qubits"] == 10
+    assert pair["performance_tier"] is True
+    assert pair["exact_output_comparable"] is False
+    assert pair["full_statevector_validation_available"] is False
+    assert pair["compute_speedup"] == 4.0
+    assert summary["timing_scope"] == "performance_compute"
+    assert summary["validation_method"] == "native_status_gate_counts"

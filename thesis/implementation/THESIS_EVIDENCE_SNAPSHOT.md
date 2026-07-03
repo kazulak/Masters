@@ -108,6 +108,9 @@ Dominant blocker: `generic_feasibility_rank_cap_exceeded`.
 
 - QuEST CPU full-state and Quimb TN are the serious CPU baselines.
 - QuEST HIP GPU is a verified full-state GPU baseline.
+- Existing shallow CPU/GPU timing evidence is route/runtime evidence, not final
+  GPU performance evidence; deeper no-dump performance-tier runs are required
+  for CPU/GPU compute speedup claims.
 - The GPU evidence is not tensor-network execution and not PIM execution.
 - UPMEM SDK simulator rows are real UPMEM SDK DPU-program simulator execution.
 - SDK simulator timing is development evidence only; it is not hardware timing

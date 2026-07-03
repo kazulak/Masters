@@ -49,6 +49,13 @@ RESULT_FIELDS = [
     "execution_model",
     "output_kind",
     "comparison_output_kind",
+    "state_output_mode",
+    "output_contract",
+    "output_contract_label",
+    "output_contract_is_exact",
+    "performance_tier",
+    "exact_output_comparable",
+    "full_statevector_validation_available",
     "execution_target",
     "contraction_execution_target",
     "accelerator_kind",
@@ -96,6 +103,14 @@ RESULT_FIELDS = [
     "timing_scope",
     "gpu_synchronized",
     "validation_method",
+    "native_process_wall_time_s",
+    "quest_simulation_compute_time_s",
+    "state_dump_requested",
+    "state_dump_time_s",
+    "repeat_layers",
+    "energy_joules",
+    "energy_source",
+    "energy_measurement_status",
     "expected_runtime_class",
     "expected_memory_class",
     "intended_use",
@@ -151,6 +166,12 @@ CPU_GPU_SPEEDUP_PAIR_FIELDS = [
     "repeat_id",
     "cpu_route_id",
     "gpu_route_id",
+    "state_output_mode",
+    "validation_method",
+    "performance_tier",
+    "exact_output_comparable",
+    "full_statevector_validation_available",
+    "timing_scope",
     "cpu_total_wall_time_s",
     "gpu_total_wall_time_s",
     "total_wall_speedup",
@@ -166,6 +187,10 @@ CPU_GPU_SPEEDUP_SUMMARY_FIELDS = [
     "case_family",
     "n_qubits",
     "matched_repeat_count",
+    "state_output_mode",
+    "validation_method",
+    "performance_tier",
+    "timing_scope",
     "cpu_total_wall_time_s_median",
     "gpu_total_wall_time_s_median",
     "total_wall_speedup_median",
@@ -840,14 +865,16 @@ def _summary_markdown(records: list[JsonDict], family_summary: list[JsonDict], *
                 "",
                 f"Matched CPU/GPU repeat pairs: {len(cpu_gpu_speedup['pairs'])}.",
                 f"Skipped candidate pairs: {len(cpu_gpu_speedup['skipped_pairs'])}.",
+                "Speedup is CPU time divided by GPU time. For performance-tier no-dump rows, compute speedup is the primary metric; these rows are not full-statevector validation evidence.",
                 "",
-                "| Family | Qubits | Repeats | Median wall speedup | Median compute speedup | GPU device |",
-                "| --- | ---: | ---: | ---: | ---: | --- |",
+                "| Family | Qubits | Repeats | Output mode | Validation | Performance tier | Median wall speedup | Median compute speedup | GPU device |",
+                "| --- | ---: | ---: | --- | --- | ---: | ---: | ---: | --- |",
             ]
         )
         for row in cpu_gpu_speedup["summary"]:
             lines.append(
                 f"| {row['case_family']} | {row['n_qubits']} | {row['matched_repeat_count']} | "
+                f"{row.get('state_output_mode') or ''} | {row.get('validation_method') or ''} | {row.get('performance_tier')} | "
                 f"{_format_float(row.get('total_wall_speedup_median'))} | "
                 f"{_format_float(row.get('compute_speedup_median'))} | {row.get('gpu_device_name') or ''} |"
             )
@@ -888,8 +915,17 @@ def _cpu_gpu_speedup_payload(records: list[JsonDict]) -> JsonDict:
         if cpu is None or gpu is None:
             skipped.append(_cpu_gpu_skipped(case_id, repeat_id, "missing_cpu_or_gpu_row", cpu is not None, gpu is not None))
             continue
-        if cpu.get("validation_status") != "passed" or gpu.get("validation_status") != "passed":
+        if not _cpu_gpu_validation_ok(cpu) or not _cpu_gpu_validation_ok(gpu):
             skipped.append(_cpu_gpu_skipped(case_id, repeat_id, "validation_not_passed", True, True))
+            continue
+        if str(cpu.get("state_output_mode") or "full_dump") != str(gpu.get("state_output_mode") or "full_dump"):
+            skipped.append(_cpu_gpu_skipped(case_id, repeat_id, "state_output_mode_mismatch", True, True))
+            continue
+        if str(cpu.get("validation_method") or "") != str(gpu.get("validation_method") or ""):
+            skipped.append(_cpu_gpu_skipped(case_id, repeat_id, "validation_method_mismatch", True, True))
+            continue
+        if bool(cpu.get("performance_tier", False)) != bool(gpu.get("performance_tier", False)):
+            skipped.append(_cpu_gpu_skipped(case_id, repeat_id, "performance_tier_mismatch", True, True))
             continue
         if gpu.get("gpu_backend_verified") is not True or gpu.get("gpu_program_executed") is not True:
             skipped.append(_cpu_gpu_skipped(case_id, repeat_id, "gpu_execution_not_verified", True, True))
@@ -902,6 +938,8 @@ def _cpu_gpu_speedup_payload(records: list[JsonDict]) -> JsonDict:
             skipped.append(_cpu_gpu_skipped(case_id, repeat_id, "missing_positive_timing", True, True))
             continue
         family, n_qubits = _case_family_and_qubits(cpu)
+        performance_tier = bool(cpu.get("performance_tier", False))
+        timing_scope = "performance_compute" if performance_tier else "correctness_wall_and_compute"
         pairs.append(
             {
                 "schema_version": COMPARE_RESULTS_SCHEMA_VERSION,
@@ -911,13 +949,20 @@ def _cpu_gpu_speedup_payload(records: list[JsonDict]) -> JsonDict:
                 "repeat_id": repeat_id,
                 "cpu_route_id": "quest_cpu_full_state_exact",
                 "gpu_route_id": "quest_gpu_full_state_exact",
+                "state_output_mode": str(cpu.get("state_output_mode") or "full_dump"),
+                "validation_method": str(cpu.get("validation_method") or ""),
+                "performance_tier": performance_tier,
+                "exact_output_comparable": bool(cpu.get("exact_output_comparable", False)) and bool(gpu.get("exact_output_comparable", False)),
+                "full_statevector_validation_available": bool(cpu.get("full_statevector_validation_available", False))
+                and bool(gpu.get("full_statevector_validation_available", False)),
+                "timing_scope": timing_scope,
                 "cpu_total_wall_time_s": cpu_total,
                 "gpu_total_wall_time_s": gpu_total,
                 "total_wall_speedup": cpu_total / gpu_total,
                 "cpu_simulation_compute_time_s": cpu_compute,
                 "gpu_simulation_compute_time_s": gpu_compute,
                 "compute_speedup": cpu_compute / gpu_compute,
-                "validation_status": "passed",
+                "validation_status": str(cpu.get("validation_status") or gpu.get("validation_status") or "passed"),
                 "gpu_device_name": gpu.get("gpu_device_name"),
             }
         )
@@ -930,16 +975,26 @@ def _cpu_gpu_speedup_payload(records: list[JsonDict]) -> JsonDict:
             "total_wall": "total_wall_time_s",
             "compute": "simulation_compute_time_s",
             "repeat": "repeat_id",
+            "performance_speedup_field": "compute_speedup",
         },
     }
 
 
 def _cpu_gpu_speedup_summary(pairs: list[JsonDict]) -> list[JsonDict]:
-    grouped: dict[tuple[str, int], list[JsonDict]] = {}
+    grouped: dict[tuple[str, int, str, str, bool], list[JsonDict]] = {}
     for row in pairs:
-        grouped.setdefault((str(row["case_family"]), int(row["n_qubits"])), []).append(row)
+        grouped.setdefault(
+            (
+                str(row["case_family"]),
+                int(row["n_qubits"]),
+                str(row.get("state_output_mode") or "full_dump"),
+                str(row.get("validation_method") or ""),
+                bool(row.get("performance_tier", False)),
+            ),
+            [],
+        ).append(row)
     summary: list[JsonDict] = []
-    for (family, n_qubits), rows in sorted(grouped.items(), key=lambda item: (item[0][0], item[0][1])):
+    for (family, n_qubits, state_output_mode, validation_method, performance_tier), rows in sorted(grouped.items(), key=lambda item: (item[0][0], item[0][1], item[0][2])):
         total_speedups = [float(row["total_wall_speedup"]) for row in rows]
         compute_speedups = [float(row["compute_speedup"]) for row in rows]
         cpu_totals = [float(row["cpu_total_wall_time_s"]) for row in rows]
@@ -953,6 +1008,10 @@ def _cpu_gpu_speedup_summary(pairs: list[JsonDict]) -> list[JsonDict]:
                 "case_family": family,
                 "n_qubits": n_qubits,
                 "matched_repeat_count": len(rows),
+                "state_output_mode": state_output_mode,
+                "validation_method": validation_method,
+                "performance_tier": performance_tier,
+                "timing_scope": "performance_compute" if performance_tier else "correctness_wall_and_compute",
                 "cpu_total_wall_time_s_median": statistics.median(cpu_totals),
                 "gpu_total_wall_time_s_median": statistics.median(gpu_totals),
                 "total_wall_speedup_median": statistics.median(total_speedups),
@@ -966,10 +1025,15 @@ def _cpu_gpu_speedup_summary(pairs: list[JsonDict]) -> list[JsonDict]:
                 "compute_speedup_min": min(compute_speedups),
                 "compute_speedup_max": max(compute_speedups),
                 "gpu_device_name": ", ".join(devices),
-                "validation_status": "passed",
+                "validation_status": str(rows[0].get("validation_status") or "passed"),
             }
         )
     return summary
+
+
+def _cpu_gpu_validation_ok(record: JsonDict) -> bool:
+    status = str(record.get("validation_status") or "")
+    return status in {"passed", "passed_native_status", "passed_runtime_only"}
 
 
 def _write_cpu_gpu_speedup_artifacts(out_dir: Path, payload: JsonDict) -> list[str]:
@@ -1040,13 +1104,15 @@ def _plot_cpu_gpu_speedup(plt: Any, path: Path, rows: list[JsonDict]) -> str | N
     if not rows:
         return "required_data_unavailable"
     families = sorted({str(row["case_family"]) for row in rows})
+    use_compute = any(bool(row.get("performance_tier", False)) for row in rows)
+    speedup_key = "compute_speedup_median" if use_compute else "total_wall_speedup_median"
     fig, axis = plt.subplots(figsize=(max(9.0, len(rows) * 0.32), 5.8), constrained_layout=True)
     for family in families:
         family_rows = sorted((row for row in rows if row["case_family"] == family), key=lambda row: int(row["n_qubits"]))
-        axis.plot([int(row["n_qubits"]) for row in family_rows], [float(row["total_wall_speedup_median"]) for row in family_rows], marker="o", label=family.upper())
+        axis.plot([int(row["n_qubits"]) for row in family_rows], [float(row[speedup_key]) for row in family_rows], marker="o", label=family.upper())
     axis.axhline(1.0, color="#6b7280", linewidth=1.0, linestyle="--")
     axis.set_xlabel("Qubits")
-    axis.set_ylabel("CPU/GPU wall-time speedup")
+    axis.set_ylabel("CPU/GPU compute speedup" if use_compute else "CPU/GPU wall-time speedup")
     axis.set_title("CPU/GPU full-state speedup by circuit family")
     axis.grid(True, axis="y", alpha=0.3)
     axis.legend(fontsize="small", ncol=2)
@@ -1061,13 +1127,16 @@ def _plot_cpu_gpu_runtime(plt: Any, path: Path, rows: list[JsonDict]) -> str | N
     labels = [f"{row['case_family']}_{row['n_qubits']}q" for row in ordered]
     x = list(range(len(labels)))
     width = 0.38
+    use_compute = any(bool(row.get("performance_tier", False)) for row in rows)
+    cpu_key = "cpu_simulation_compute_time_s_median" if use_compute else "cpu_total_wall_time_s_median"
+    gpu_key = "gpu_simulation_compute_time_s_median" if use_compute else "gpu_total_wall_time_s_median"
     fig, axis = plt.subplots(figsize=(max(10.0, len(labels) * 0.34), 6.0), constrained_layout=True)
-    axis.bar([item - width / 2 for item in x], [float(row["cpu_total_wall_time_s_median"]) for row in ordered], width=width, label="QuEST CPU", color="#2563eb")
-    axis.bar([item + width / 2 for item in x], [float(row["gpu_total_wall_time_s_median"]) for row in ordered], width=width, label="QuEST HIP GPU", color="#16a34a")
+    axis.bar([item - width / 2 for item in x], [float(row[cpu_key]) for row in ordered], width=width, label="QuEST CPU", color="#2563eb")
+    axis.bar([item + width / 2 for item in x], [float(row[gpu_key]) for row in ordered], width=width, label="QuEST HIP GPU", color="#16a34a")
     axis.set_xticks(x)
     axis.set_xticklabels(labels, rotation=60, ha="right", fontsize=8)
-    axis.set_ylabel("Median wall time (s, log scale)")
-    axis.set_title("CPU/GPU full-state runtime by circuit and size")
+    axis.set_ylabel("Median compute time (s, log scale)" if use_compute else "Median wall time (s, log scale)")
+    axis.set_title("CPU/GPU full-state compute runtime by circuit and size" if use_compute else "CPU/GPU full-state runtime by circuit and size")
     axis.set_yscale("log")
     axis.grid(True, axis="y", alpha=0.3)
     axis.legend()
@@ -1110,7 +1179,7 @@ def _cpu_gpu_skipped(case_id: Any, repeat_id: Any, reason: str, cpu_present: boo
 
 def _case_family_and_qubits(record: JsonDict) -> tuple[str, int]:
     case_id = str(record.get("case_id") or "")
-    match = re.match(r"^(?:quest_)?(?P<family>.+?)_(?P<qubits>\d+)q$", case_id)
+    match = re.match(r"^(?:quest_)?(?P<family>.+?)_(?P<qubits>\d+)q(?:_.+)?$", case_id)
     if match:
         return match.group("family"), int(match.group("qubits"))
     notes = _json_dict(record.get("notes"))

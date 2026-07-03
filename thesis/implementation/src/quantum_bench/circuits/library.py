@@ -36,11 +36,14 @@ def quest_compatible_circuit(name: str, params: dict | None = None) -> CircuitSp
     lowered = name.lower()
     n_qubits = int(params.get("n_qubits", params.get("qubits", 0)) or 0)
     depth = int(params.get("depth", 1))
+    repeat_layers = int(params.get("repeat_layers", 1) or 1)
+    if repeat_layers < 1:
+        raise ValueError("quest-compatible repeat_layers must be >= 1")
 
     if lowered == "qrng":
         n = n_qubits or 4
         ops = tuple(CircuitOperation("h", (wire,)) for wire in range(n))
-        return CircuitSpec(f"quest_qrng_{n}q", n, ops, _source_quest(name, n_qubits=n))
+        return CircuitSpec(f"quest_qrng_{n}q", n, _repeat_ops(ops, repeat_layers), _source_quest(name, n_qubits=n, repeat_layers=repeat_layers))
 
     if lowered in {"bb84", "bb_n"}:
         n = n_qubits or 4
@@ -48,7 +51,7 @@ def quest_compatible_circuit(name: str, params: dict | None = None) -> CircuitSp
         for wire in range(n):
             ops.append(CircuitOperation("h", (wire,)))
             ops.append(CircuitOperation("x", (wire,)))
-        return CircuitSpec(f"quest_bb84_{n}q", n, tuple(ops), _source_quest(name, n_qubits=n))
+        return CircuitSpec(f"quest_bb84_{n}q", n, _repeat_ops(ops, repeat_layers), _source_quest(name, n_qubits=n, repeat_layers=repeat_layers))
 
     if lowered in {"bv", "bernstein_vazirani"}:
         n = n_qubits or 4
@@ -57,7 +60,7 @@ def quest_compatible_circuit(name: str, params: dict | None = None) -> CircuitSp
         ops.extend(CircuitOperation("cx", (control, target)) for control in range(target))
         ops.append(CircuitOperation("x", (target,)))
         ops.extend(CircuitOperation("h", (wire,)) for wire in range(target))
-        return CircuitSpec(f"quest_bv_{n}q", n, tuple(ops), _source_quest(name, n_qubits=n))
+        return CircuitSpec(f"quest_bv_{n}q", n, _repeat_ops(ops, repeat_layers), _source_quest(name, n_qubits=n, repeat_layers=repeat_layers))
 
     if lowered in {"edc", "dense_coding"}:
         n = max(n_qubits or 2, 2)
@@ -65,12 +68,12 @@ def quest_compatible_circuit(name: str, params: dict | None = None) -> CircuitSp
         ops.extend(CircuitOperation("cx", (wire, wire + 1)) for wire in range(n - 1))
         ops.extend(CircuitOperation("cx", (wire, wire - 1)) for wire in range(n - 1, 0, -1))
         ops.extend(CircuitOperation("x", (wire,)) for wire in range(n))
-        return CircuitSpec(f"quest_edc_{n}q", n, tuple(ops), _source_quest(name, n_qubits=n))
+        return CircuitSpec(f"quest_edc_{n}q", n, _repeat_ops(ops, repeat_layers), _source_quest(name, n_qubits=n, repeat_layers=repeat_layers))
 
     if lowered in {"xor", "parity"}:
         n = n_qubits or 4
         ops = tuple(CircuitOperation("cx", (wire, wire + 1)) for wire in range(n - 1))
-        return CircuitSpec(f"quest_xor_{n}q", n, ops, _source_quest(name, n_qubits=n))
+        return CircuitSpec(f"quest_xor_{n}q", n, _repeat_ops(ops, repeat_layers), _source_quest(name, n_qubits=n, repeat_layers=repeat_layers))
 
     if lowered in {"hs", "hidden_shift"}:
         allocated = int(params.get("allocated_qubits", n_qubits or 4))
@@ -94,8 +97,8 @@ def quest_compatible_circuit(name: str, params: dict | None = None) -> CircuitSp
         return CircuitSpec(
             f"quest_hs_{allocated}q",
             allocated,
-            tuple(ops),
-            _source_quest(name, logical_qubits=logical, allocated_qubits=allocated, depth=depth),
+            _repeat_ops(ops, repeat_layers),
+            _source_quest(name, logical_qubits=logical, allocated_qubits=allocated, depth=depth, repeat_layers=repeat_layers),
         )
 
     raise ValueError(f"Unknown quest-compatible circuit: {name}")
@@ -266,6 +269,13 @@ def _source_quest(name: str, **extra: object) -> dict:
         "measurement_mode": "pre_measurement_statevector",
         **extra,
     }
+
+
+def _repeat_ops(ops: Iterable[CircuitOperation], repeat_layers: int) -> tuple[CircuitOperation, ...]:
+    base = tuple(ops)
+    if repeat_layers == 1:
+        return base
+    return tuple(op for _ in range(repeat_layers) for op in base)
 
 
 def _parse_params(raw: str | None) -> tuple[float, ...]:

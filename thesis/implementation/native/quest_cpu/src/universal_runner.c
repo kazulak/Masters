@@ -38,7 +38,7 @@
 #include "verification/verify_runner.h"
 
 void print_usage(const char* prog_name) {
-    printf("Usage for Profiling:  %s --algo <NAME> --qubits <ALLOCATED_N> [--depth <D>] [--json]\n", prog_name);
+    printf("Usage for Profiling:  %s --algo <NAME> --qubits <ALLOCATED_N> [--depth <D>] [--repeat-layers <N>] [--json]\n", prog_name);
     printf("                    or %s --algo HS --logical-qubits <N> [--json]\n", prog_name);
     printf("                    optional comparable-output flags: --dump-state-json <PATH> --max-output-amplitudes <N>\n");
     printf("Usage for Testing:    %s --verify <MODE>\n", prog_name);
@@ -121,6 +121,9 @@ static void print_json_result(
     int depth,
     int threads,
     double time_s,
+    bool state_dump_requested,
+    double state_dump_time_s,
+    int repeat_layers,
     bool has_energy,
     double energy_joules,
     const char* energy_source,
@@ -142,6 +145,9 @@ static void print_json_result(
     printf(",\"depth\":%d", depth);
     printf(",\"threads\":%d", threads);
     printf(",\"time_s\":%.9f", time_s);
+    printf(",\"state_dump_requested\":%s", state_dump_requested ? "true" : "false");
+    printf(",\"state_dump_time_s\":%.9f", state_dump_time_s);
+    printf(",\"repeat_layers\":%d", repeat_layers);
     printf(",\"energy_joules\":");
     if (has_energy) {
         printf("%.9f", energy_joules);
@@ -183,6 +189,14 @@ static GateCounts run_algorithm(BenchmarkAlgo algo, Qureg qubits, int allocated_
 
     GateCounts invalid = {-1, -1};
     return invalid;
+}
+
+static GateCounts scale_gate_counts(GateCounts counts, int repeat_layers) {
+    GateCounts scaled = {
+        counts.one_qubit * repeat_layers,
+        counts.two_qubit * repeat_layers
+    };
+    return scaled;
 }
 
 static int dump_state_json(const char* path, Qureg qubits, int allocated_qubits, long long max_output_amplitudes, char* error, size_t error_len) {
@@ -232,6 +246,7 @@ int main(int argc, char** argv) {
     int allocated_qubits_arg = 0;
     int logical_qubits_arg = 0;
     int depth_arg = 0;
+    int repeat_layers = 1;
     char* verify_mode = NULL;
     char* state_dump_path = NULL;
     long long max_output_amplitudes = 4096;
@@ -248,6 +263,8 @@ int main(int argc, char** argv) {
             logical_qubits_arg = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--depth") == 0 && i + 1 < argc) {
             depth_arg = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--repeat-layers") == 0 && i + 1 < argc) {
+            repeat_layers = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--verify") == 0 && i + 1 < argc) {
             verify_mode = argv[++i]; 
         } else if (strcmp(argv[i], "--dump-state-json") == 0 && i + 1 < argc) {
@@ -281,6 +298,10 @@ int main(int argc, char** argv) {
     int threads = omp_get_max_threads();
     GateCounts no_counts = {-1, -1};
 
+    if (repeat_layers < 1) {
+        snprintf(cli_error, sizeof(cli_error), "repeat-layers must be >= 1.");
+    }
+
     if (cli_error[0] != '\0') {
         if (json_output) {
             print_json_result(
@@ -291,6 +312,9 @@ int main(int argc, char** argv) {
                 depth,
                 threads,
                 0.0,
+                false,
+                0.0,
+                repeat_layers,
                 false,
                 0.0,
                 "unavailable",
@@ -316,6 +340,9 @@ int main(int argc, char** argv) {
                 depth,
                 threads,
                 0.0,
+                false,
+                0.0,
+                repeat_layers,
                 false,
                 0.0,
                 "unavailable",
@@ -348,6 +375,9 @@ int main(int argc, char** argv) {
                 depth,
                 threads,
                 0.0,
+                false,
+                0.0,
+                repeat_layers,
                 false,
                 0.0,
                 "unavailable",
@@ -389,16 +419,29 @@ int main(int argc, char** argv) {
     double start_time = omp_get_wtime();
 
     // 5. Routing Logic
-    GateCounts counts = run_algorithm(algo_id, qubits, allocated_qubits, depth);
+    GateCounts counts = {0, 0};
+    for (int repeat = 0; repeat < repeat_layers; repeat++) {
+        GateCounts iteration = run_algorithm(algo_id, qubits, allocated_qubits, depth);
+        counts.one_qubit += iteration.one_qubit;
+        counts.two_qubit += iteration.two_qubit;
+    }
 
     // 6. STOP PROFILING BOUNDARY
     double end_time = omp_get_wtime();
     double joules = stop_energy_profiling(energy_state);
     double elapsed = end_time - start_time;
 
-    GateCounts expected = expected_gate_counts(algo_id, input_qubits, allocated_qubits, depth);
+    GateCounts expected = scale_gate_counts(expected_gate_counts(algo_id, input_qubits, allocated_qubits, depth), repeat_layers);
     bool counts_ok = gate_counts_match(counts, expected);
-    bool dump_ok = dump_state_json(state_dump_path, qubits, allocated_qubits, max_output_amplitudes, cli_error, sizeof(cli_error));
+    bool dump_ok = true;
+    double dump_elapsed = 0.0;
+    if (state_dump_path != NULL) {
+        double dump_start_time = omp_get_wtime();
+        dump_ok = dump_state_json(state_dump_path, qubits, allocated_qubits, max_output_amplitudes, cli_error, sizeof(cli_error));
+        dump_elapsed = omp_get_wtime() - dump_start_time;
+    } else {
+        dump_ok = dump_state_json(NULL, qubits, allocated_qubits, max_output_amplitudes, cli_error, sizeof(cli_error));
+    }
     const char* status = (counts_ok && dump_ok) ? "ok" : "failed";
     const char* error = counts_ok ? (dump_ok ? NULL : cli_error) : "Gate counts did not match circuit manifest.";
 
@@ -412,6 +455,9 @@ int main(int argc, char** argv) {
             depth,
             threads,
             elapsed,
+            state_dump_path != NULL,
+            dump_elapsed,
+            repeat_layers,
             energy_state.is_available,
             joules,
             energy_source_name(energy_state),
@@ -421,6 +467,9 @@ int main(int argc, char** argv) {
         );
     } else {
         printf("-> Execution Time (Comp.): %f seconds\n", elapsed);
+        printf("-> Repeat Layers:          %d\n", repeat_layers);
+        printf("-> State Dump Requested:   %s\n", state_dump_path != NULL ? "true" : "false");
+        printf("-> State Dump Time:        %f seconds\n", dump_elapsed);
         if (energy_state.is_available) {
             printf("-> Energy Consumed:        %f Joules\n", joules);
         } else {

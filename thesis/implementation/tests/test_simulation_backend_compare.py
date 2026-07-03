@@ -43,6 +43,15 @@ def test_quest_compatible_bv_sequence_matches_native_order() -> None:
     assert gates[8:] == [("h", (0,)), ("h", (1,)), ("h", (2,))]
 
 
+def test_quest_compatible_repeat_layers_repeat_ordered_gate_sequence() -> None:
+    circuit = quest_compatible_circuit("XOR", {"n_qubits": 4, "repeat_layers": 3})
+    gates = [(op.gate, op.wires) for op in circuit.operations]
+    layer = [("cx", (0, 1)), ("cx", (1, 2)), ("cx", (2, 3))]
+
+    assert gates == layer * 3
+    assert circuit.source["repeat_layers"] == 3
+
+
 def test_tensor_to_quest_statevector_catches_basis_order() -> None:
     tensor = np.zeros((2, 2, 2), dtype=np.complex128)
     tensor[1, 0, 0] = 3.0 + 1.0j
@@ -307,6 +316,139 @@ validation:
     assert gpu["gpu_program_executed"] is True
 
 
+def test_metrics_only_performance_tier_is_not_exact_output_evidence(monkeypatch, tmp_path: Path) -> None:
+    suite_path = tmp_path / "suite.yml"
+    suite_path.write_text(
+        """
+schema_version: 2
+suite_id: unit_cpu_gpu_performance
+metadata:
+  validation_method: native_status_gate_counts
+  performance_tier: true
+defaults:
+  warmups: 0
+  repeats: 1
+  planner: {engine: opt_einsum, optimize: greedy}
+workloads:
+  - id: quest_qrng_4q_perf
+    circuit: {kind: quest_compatible, name: QRNG, n_qubits: 4, repeat_layers: 4}
+routes:
+  - id: quest_cpu_full_state_exact
+    role: comparison_anchor
+    required: true
+    options: {state_output_mode: none, validation_method: native_status_gate_counts, performance_tier: true}
+  - id: quest_gpu_full_state_exact
+    role: gpu_baseline
+    required: true
+    options: {state_output_mode: none, validation_method: native_status_gate_counts, performance_tier: true}
+validation:
+  reference_route: quest_cpu_full_state_exact
+  require_output_for_roles: []
+  tolerances:
+    max_abs_error: 1.0e-9
+    l2_error: 1.0e-8
+    max_rel_error: 1.0e-8
+    norm_drift: 1.0e-8
+    min_fidelity: 0.999999999
+""",
+        encoding="utf-8",
+    )
+
+    class FakeMetricsOnlyRoute:
+        def __init__(self, name: str, target: str, backend_family: str) -> None:
+            self.name = name
+            self.backend_family = backend_family
+            self.identity = RouteIdentity(
+                name,
+                name,
+                "baseline",
+                "full_state_vector",
+                "full_state_vector",
+                target,
+                "test",
+                "statevector",
+                "compare_statevector",
+            )
+
+        def probe(self):
+            return RouteProbe(self.name, True)
+
+        def capabilities(self):
+            return RouteCapabilities(self.identity, can_return_output=True)
+
+        def can_execute(self, graph, context):
+            return True, None
+
+        def estimate(self, graph, context):  # pragma: no cover
+            raise NotImplementedError
+
+        def prepare(self, graph, network, context):
+            return {"graph": graph}
+
+        def execute(self, prepared, context):
+            metadata = {
+                "quest": {"status": "ok", "one_qubit_gates": 16, "two_qubit_gates": 0},
+                "state_output_mode": "none",
+                "output_contract": "metrics_only",
+                "output_contract_label": "metrics_only",
+                "output_contract_is_exact": False,
+                "output_contract_note": "Runtime/performance tier only; no full statevector artifact was requested.",
+                "validation_method": "native_status_gate_counts",
+                "validation_status": "passed_native_status",
+                "performance_tier": True,
+                "exact_output_comparable": False,
+                "full_statevector_validation_available": False,
+                "native_process_wall_time_s": 0.01,
+                "quest_simulation_compute_time_s": 0.004,
+                "state_dump_requested": False,
+                "state_dump_time_s": 0.0,
+                "repeat_layers": 4,
+                "energy_measurement_status": "unavailable",
+            }
+            if self.name == "quest_gpu_full_state_exact":
+                metadata.update(
+                    {
+                        "accelerator_kind": "amd_gpu",
+                        "gpu_backend_verified": True,
+                        "gpu_program_executed": True,
+                        "gpu_device_name": "AMD Radeon RX 6600 (gfx1032)",
+                        "gpu_runtime_stack": "hip",
+                        "gpu_synchronized": True,
+                    }
+                )
+            return RouteResult(
+                self.name,
+                self.backend_family,
+                "passed",
+                RouteOutput("metrics_only", array=None, metadata={"output_kind": "metrics_only", **metadata}),
+                ExecutionProfile(kernel_s=0.004, total_s=0.01),
+                None,
+                "unavailable",
+                None,
+                metadata,
+            )
+
+    monkeypatch.setattr(
+        "quantum_bench.bench.simulation_backend_compare.route_registry",
+        lambda root_dir: {
+            "quest_cpu_full_state_exact": FakeMetricsOnlyRoute("quest_cpu_full_state_exact", "cpu", "quest"),
+            "quest_gpu_full_state_exact": FakeMetricsOnlyRoute("quest_gpu_full_state_exact", "amd_gpu", "quest_gpu"),
+        },
+    )
+
+    result = run_simulation_backend_compare(tmp_path, suite_path=suite_path, artifact_retention="compact")
+    records = load_result_records([result.run_dir])
+
+    assert {record["output_kind"] for record in records} == {"metrics_only"}
+    assert {record["validation_status"] for record in records} == {"passed_native_status"}
+    assert {record["state_output_mode"] for record in records} == {"none"}
+    assert all(record["performance_tier"] is True for record in records)
+    assert all(record["exact_output_comparable"] is False for record in records)
+    assert all(record["full_statevector_validation_available"] is False for record in records)
+    assert all(record["statevector_bytes"] is None for record in records)
+    assert all(record["validation_method"] == "native_status_gate_counts" for record in records)
+
+
 def test_simulation_backend_compare_suite_loads() -> None:
     suite = load_suite(ROOT / "configs" / "suites" / "diagnostics" / "simulation_backend_compare_quick.yml")
 
@@ -324,6 +466,8 @@ def test_simulation_backend_compare_suite_loads() -> None:
     cpu_gpu_sweep = load_suite(ROOT / "configs" / "suites" / "cpu_gpu_sweep.yml")
     cpu_gpu_tier1 = load_suite(ROOT / "configs" / "suites" / "manual" / "cpu_gpu_sweep_tier1.yml")
     cpu_gpu_tier2 = load_suite(ROOT / "configs" / "suites" / "manual" / "cpu_gpu_sweep_tier2.yml")
+    cpu_gpu_correctness_deep = load_suite(ROOT / "configs" / "suites" / "manual" / "cpu_gpu_correctness_deep.yml")
+    cpu_gpu_performance = load_suite(ROOT / "configs" / "suites" / "manual" / "cpu_gpu_performance.yml")
     upmem_sdk = load_suite(ROOT / "configs" / "suites" / "upmem_sim_evidence.yml")
     for loaded in (thesis_small, scaling):
         assert loaded["route_policy"]["routes"] == ["cpu_tn_einsum_exact", "quest_cpu_full_state_exact", "quimb_tn_exact"]
@@ -401,6 +545,17 @@ def test_simulation_backend_compare_suite_loads() -> None:
     assert {case["case_id"] for case in cpu_gpu_tier1["cases"]} | {case["case_id"] for case in cpu_gpu_tier2["cases"]} == {
         case["case_id"] for case in cpu_gpu_sweep["cases"]
     }
+    assert cpu_gpu_correctness_deep["metadata"]["state_output_mode"] == "full_dump"
+    assert cpu_gpu_correctness_deep["metadata"]["validation_method"] == "full_statevector"
+    assert cpu_gpu_correctness_deep["metadata"]["performance_tier"] is False
+    assert cpu_gpu_performance["metadata"]["state_output_mode"] == "none"
+    assert cpu_gpu_performance["metadata"]["validation_method"] == "native_status_gate_counts"
+    assert cpu_gpu_performance["metadata"]["performance_tier"] is True
+    assert cpu_gpu_performance["validation"]["require_output_for_roles"] == []
+    performance_routes = {route["id"]: route for route in cpu_gpu_performance["_route_configs"]}
+    assert performance_routes["quest_cpu_full_state_exact"]["options"]["state_output_mode"] == "none"
+    assert performance_routes["quest_gpu_full_state_exact"]["options"]["state_output_mode"] == "none"
+    assert all(case["circuit"]["repeat_layers"] >= 64 for case in cpu_gpu_performance["cases"])
     assert upmem_sdk["route_policy"]["routes"] == [
         "quest_cpu_full_state_exact",
         "quimb_tn_exact",

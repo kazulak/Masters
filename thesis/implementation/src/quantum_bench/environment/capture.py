@@ -43,6 +43,7 @@ def capture_environment(root_dir: Path) -> dict[str, Any]:
         "gpu": {
             "rocminfo": shutil.which("rocminfo"),
             "rocm_smi": shutil.which("rocm-smi"),
+            "amd_smi": shutil.which("amd-smi"),
             "hipcc": shutil.which("hipcc"),
             "cupy": _module_version("cupy"),
             "torch": _module_version("torch"),
@@ -61,6 +62,7 @@ def capture_environment(root_dir: Path) -> dict[str, Any]:
         "rapl": {
             "path": str(RAPL_PATH),
             "available": RAPL_PATH.is_readable() if hasattr(RAPL_PATH, "is_readable") else os.access(RAPL_PATH, os.R_OK),
+            "powercap_energy_uj_paths": _powercap_energy_paths(),
         },
         "sudo": {
             "effective_uid": os.geteuid() if hasattr(os, "geteuid") else None,
@@ -75,6 +77,14 @@ def read_rapl_uj() -> int | None:
         return int(RAPL_PATH.read_text(encoding="utf-8").strip())
     except (OSError, ValueError):
         return None
+
+
+def _powercap_energy_paths() -> list[str]:
+    root = Path("/sys/class/powercap")
+    try:
+        return sorted(str(path) for path in root.glob("**/energy_uj") if os.access(path, os.R_OK))
+    except OSError:
+        return []
 
 
 def read_cpu_model() -> str | None:

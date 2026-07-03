@@ -21,7 +21,10 @@ from quantum_bench.core.records import (
 from quantum_bench.providers.full_state.quest_cpu_benchmark import (
     DEFAULT_MAX_OUTPUT_QUBITS,
     QUEST_COMPARABLE_ALGOS,
+    STATE_OUTPUT_MODE_NONE,
     _check_output_caps,
+    _quest_output_settings,
+    _quest_runtime_metadata,
     _load_state_dump,
     _quest_algo_from_case,
     _quest_exact_failed,
@@ -102,6 +105,11 @@ class QuestGpuFullStateExactRoute:
         algo = _quest_algo_from_case(context)
         if algo is None or algo not in QUEST_COMPARABLE_ALGOS:
             return False, "unsupported_quest_comparable_algorithm"
+        settings, reason = _quest_output_settings(context)
+        if reason:
+            return False, reason
+        if settings["state_output_mode"] == STATE_OUTPUT_MODE_NONE:
+            return True, None
         return _check_output_caps(graph.network.circuit.n_qubits, context.route_config.get("options") or {})
 
     def estimate(self, graph: TaskGraph, context: BenchmarkContext) -> RouteEstimate:
@@ -123,9 +131,14 @@ class QuestGpuFullStateExactRoute:
         if not verification or not _verification_is_valid(verification):
             return _quest_exact_failed(self.name, self.backend_family, "quest_gpu_verification_missing_or_invalid")
         options = context.route_config.get("options") or {}
-        cap_ok, cap_reason = _check_output_caps(graph.network.circuit.n_qubits, options)
-        if not cap_ok:
-            return _quest_exact_failed(self.name, self.backend_family, cap_reason or "state_output_cap_exceeded")
+        settings, settings_reason = _quest_output_settings(context)
+        if settings_reason:
+            return _quest_exact_failed(self.name, self.backend_family, settings_reason)
+        state_output_mode = str(settings["state_output_mode"])
+        if state_output_mode != STATE_OUTPUT_MODE_NONE:
+            cap_ok, cap_reason = _check_output_caps(graph.network.circuit.n_qubits, options)
+            if not cap_ok:
+                return _quest_exact_failed(self.name, self.backend_family, cap_reason or "state_output_cap_exceeded")
         algo = _quest_algo_from_case(context)
         if algo is None:
             return _quest_exact_failed(self.name, self.backend_family, "unsupported_quest_comparable_algorithm")
@@ -136,11 +149,15 @@ class QuestGpuFullStateExactRoute:
             return _quest_exact_failed(self.name, self.backend_family, "quest_gpu_runner_missing", metadata=_verification_metadata(verification))
 
         case_id = str(context.case.get("case_id", graph.network.circuit.name))
-        rel_dump = Path("cases") / _sanitize(case_id) / "quest_gpu_full_state" / f"repeat_{context.repeat_id}" / "state_dump.json"
-        dump_path = context.run_dir / rel_dump
-        dump_path.parent.mkdir(parents=True, exist_ok=True)
+        rel_dump: Path | None = None
+        dump_path: Path | None = None
         max_amplitudes = int(options.get("max_output_amplitudes", 1 << DEFAULT_MAX_OUTPUT_QUBITS))
-        cmd = [str(runner), "--algo", algo, "--json", "--dump-state-json", str(dump_path), "--max-output-amplitudes", str(max_amplitudes)]
+        cmd = [str(runner), "--algo", algo, "--json", "--max-output-amplitudes", str(max_amplitudes)]
+        if state_output_mode != STATE_OUTPUT_MODE_NONE:
+            rel_dump = Path("cases") / _sanitize(case_id) / "quest_gpu_full_state" / f"repeat_{context.repeat_id}" / "state_dump.json"
+            dump_path = context.run_dir / rel_dump
+            dump_path.parent.mkdir(parents=True, exist_ok=True)
+            cmd.extend(["--dump-state-json", str(dump_path)])
         if algo == "HS" and "logical_qubits" in context.case.get("circuit", {}):
             cmd.extend(["--logical-qubits", str(context.case["circuit"]["logical_qubits"])])
         else:
@@ -148,6 +165,8 @@ class QuestGpuFullStateExactRoute:
         depth = context.case.get("circuit", {}).get("depth")
         if depth is not None:
             cmd.extend(["--depth", str(depth)])
+        repeat_layers = int(context.case.get("circuit", {}).get("repeat_layers", 1) or 1)
+        cmd.extend(["--repeat-layers", str(repeat_layers)])
 
         start = time.perf_counter()
         result = subprocess.run(cmd, cwd=runner_root, capture_output=True, text=True, check=False)
@@ -171,6 +190,35 @@ class QuestGpuFullStateExactRoute:
                 total_s,
                 metadata={"quest": payload, "command": cmd, **_verification_metadata(verification)},
             )
+        verification_metadata = _verification_metadata(verification)
+        metadata_common = {
+            **_quest_runtime_metadata(payload, cmd, total_s=total_s, settings=settings),
+            "gpu_synchronized": bool(verification.get("gpu_synchronized", True)),
+            **verification_metadata,
+        }
+        if state_output_mode == STATE_OUTPUT_MODE_NONE:
+            return RouteResult(
+                self.name,
+                self.backend_family,
+                "passed",
+                RouteOutput(
+                    contract="metrics_only",
+                    array=None,
+                    metadata={
+                        "output_kind": "metrics_only",
+                        "execution_model": "full_state",
+                        **metadata_common,
+                    },
+                ),
+                ExecutionProfile(kernel_s=float(payload.get("time_s") or 0.0), total_s=total_s),
+                payload.get("energy_joules"),
+                str(payload.get("energy_source") or "unavailable"),
+                None,
+                metadata_common,
+            )
+
+        assert dump_path is not None
+        assert rel_dump is not None
         try:
             state, dump_payload = _load_state_dump(dump_path, graph.network.circuit.n_qubits)
         except ValueError as exc:
@@ -179,10 +227,9 @@ class QuestGpuFullStateExactRoute:
                 self.backend_family,
                 str(exc),
                 total_s,
-                metadata={"quest": payload, "command": cmd, "state_dump_artifact": rel_dump.as_posix(), **_verification_metadata(verification)},
+                metadata={"quest": payload, "command": cmd, "state_dump_artifact": rel_dump.as_posix(), **metadata_common},
             )
 
-        verification_metadata = _verification_metadata(verification)
         return RouteResult(
             self.name,
             self.backend_family,
@@ -198,7 +245,7 @@ class QuestGpuFullStateExactRoute:
                     "basis_order": dump_payload.get("basis_order"),
                     "output_kind": "statevector",
                     "execution_model": "full_state",
-                    **verification_metadata,
+                    **metadata_common,
                 },
             ),
             ExecutionProfile(kernel_s=float(payload.get("time_s") or 0.0), total_s=total_s),
@@ -206,11 +253,8 @@ class QuestGpuFullStateExactRoute:
             str(payload.get("energy_source") or "unavailable"),
             None,
             {
-                "quest": payload,
                 "state_dump": _state_dump_metadata(dump_payload),
-                "command": cmd,
-                "gpu_synchronized": bool(verification.get("gpu_synchronized", True)),
-                **verification_metadata,
+                **metadata_common,
             },
         )
 

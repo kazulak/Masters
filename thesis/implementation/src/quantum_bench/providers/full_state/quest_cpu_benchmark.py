@@ -26,6 +26,10 @@ DEFAULT_MAX_OUTPUT_QUBITS = 12
 DEFAULT_MAX_OUTPUT_AMPLITUDES = 1 << DEFAULT_MAX_OUTPUT_QUBITS
 DEFAULT_MAX_OUTPUT_BYTES = DEFAULT_MAX_OUTPUT_AMPLITUDES * np.dtype(np.complex128).itemsize
 QUEST_COMPARABLE_ALGOS = {"BB84", "BV", "EDC", "HS", "QRNG", "XOR"}
+STATE_OUTPUT_MODE_FULL_DUMP = "full_dump"
+STATE_OUTPUT_MODE_NONE = "none"
+VALIDATION_METHOD_FULL_STATEVECTOR = "full_statevector"
+VALIDATION_METHOD_NATIVE_STATUS_GATE_COUNTS = "native_status_gate_counts"
 
 
 class QuestCpuFullStateExactRoute:
@@ -78,6 +82,11 @@ class QuestCpuFullStateExactRoute:
         algo = _quest_algo_from_case(context)
         if algo is None or algo not in QUEST_COMPARABLE_ALGOS:
             return False, "unsupported_quest_comparable_algorithm"
+        settings, reason = _quest_output_settings(context)
+        if reason:
+            return False, reason
+        if settings["state_output_mode"] == STATE_OUTPUT_MODE_NONE:
+            return True, None
         return _check_output_caps(graph.network.circuit.n_qubits, context.route_config.get("options") or {})
 
     def estimate(self, graph: TaskGraph, context: BenchmarkContext) -> RouteEstimate:
@@ -96,19 +105,28 @@ class QuestCpuFullStateExactRoute:
     def execute(self, prepared: object, context: BenchmarkContext) -> RouteResult:
         graph: TaskGraph = dict(prepared)["graph"]  # type: ignore[arg-type]
         options = context.route_config.get("options") or {}
-        cap_ok, cap_reason = _check_output_caps(graph.network.circuit.n_qubits, options)
-        if not cap_ok:
-            return _quest_exact_failed(self.name, self.backend_family, cap_reason or "state_output_cap_exceeded")
+        settings, settings_reason = _quest_output_settings(context)
+        if settings_reason:
+            return _quest_exact_failed(self.name, self.backend_family, settings_reason)
+        state_output_mode = str(settings["state_output_mode"])
+        if state_output_mode != STATE_OUTPUT_MODE_NONE:
+            cap_ok, cap_reason = _check_output_caps(graph.network.circuit.n_qubits, options)
+            if not cap_ok:
+                return _quest_exact_failed(self.name, self.backend_family, cap_reason or "state_output_cap_exceeded")
         algo = _quest_algo_from_case(context)
         if algo is None:
             return _quest_exact_failed(self.name, self.backend_family, "unsupported_quest_comparable_algorithm")
 
         case_id = str(context.case.get("case_id", graph.network.circuit.name))
-        rel_dump = Path("cases") / _sanitize(case_id) / "quest_full_state" / f"repeat_{context.repeat_id}" / "state_dump.json"
-        dump_path = context.run_dir / rel_dump
-        dump_path.parent.mkdir(parents=True, exist_ok=True)
+        rel_dump: Path | None = None
+        dump_path: Path | None = None
         max_amplitudes = int(options.get("max_output_amplitudes", DEFAULT_MAX_OUTPUT_AMPLITUDES))
-        cmd = [str(self.runner), "--algo", algo, "--json", "--dump-state-json", str(dump_path), "--max-output-amplitudes", str(max_amplitudes)]
+        cmd = [str(self.runner), "--algo", algo, "--json", "--max-output-amplitudes", str(max_amplitudes)]
+        if state_output_mode != STATE_OUTPUT_MODE_NONE:
+            rel_dump = Path("cases") / _sanitize(case_id) / "quest_full_state" / f"repeat_{context.repeat_id}" / "state_dump.json"
+            dump_path = context.run_dir / rel_dump
+            dump_path.parent.mkdir(parents=True, exist_ok=True)
+            cmd.extend(["--dump-state-json", str(dump_path)])
         if algo == "HS" and "logical_qubits" in context.case.get("circuit", {}):
             cmd.extend(["--logical-qubits", str(context.case["circuit"]["logical_qubits"])])
         else:
@@ -116,6 +134,8 @@ class QuestCpuFullStateExactRoute:
         depth = context.case.get("circuit", {}).get("depth")
         if depth is not None:
             cmd.extend(["--depth", str(depth)])
+        repeat_layers = int(context.case.get("circuit", {}).get("repeat_layers", 1) or 1)
+        cmd.extend(["--repeat-layers", str(repeat_layers)])
 
         start = time.perf_counter()
         result = subprocess.run(cmd, cwd=self.root, capture_output=True, text=True, check=False)
@@ -139,6 +159,30 @@ class QuestCpuFullStateExactRoute:
                 total_s,
                 metadata={"quest": payload, "command": cmd},
             )
+        metadata_common = _quest_runtime_metadata(payload, cmd, total_s=total_s, settings=settings)
+        if state_output_mode == STATE_OUTPUT_MODE_NONE:
+            return RouteResult(
+                self.name,
+                self.backend_family,
+                "passed",
+                RouteOutput(
+                    contract="metrics_only",
+                    array=None,
+                    metadata={
+                        "output_kind": "metrics_only",
+                        "execution_model": "full_state",
+                        **metadata_common,
+                    },
+                ),
+                ExecutionProfile(kernel_s=float(payload.get("time_s") or 0.0), total_s=total_s),
+                payload.get("energy_joules"),
+                str(payload.get("energy_source") or "unavailable"),
+                None,
+                metadata_common,
+            )
+
+        assert dump_path is not None
+        assert rel_dump is not None
         try:
             state, dump_payload = _load_state_dump(dump_path, graph.network.circuit.n_qubits)
         except ValueError as exc:
@@ -147,7 +191,7 @@ class QuestCpuFullStateExactRoute:
                 self.backend_family,
                 str(exc),
                 total_s,
-                metadata={"quest": payload, "command": cmd, "state_dump_artifact": rel_dump.as_posix()},
+                metadata={"quest": payload, "command": cmd, "state_dump_artifact": rel_dump.as_posix(), **metadata_common},
             )
 
         return RouteResult(
@@ -165,13 +209,14 @@ class QuestCpuFullStateExactRoute:
                     "basis_order": dump_payload.get("basis_order"),
                     "output_kind": "statevector",
                     "execution_model": "full_state",
+                    **metadata_common,
                 },
             ),
             ExecutionProfile(kernel_s=float(payload.get("time_s") or 0.0), total_s=total_s),
             payload.get("energy_joules"),
             str(payload.get("energy_source") or "unavailable"),
             None,
-            {"quest": payload, "state_dump": _state_dump_metadata(dump_payload), "command": cmd},
+            {"quest": payload, "state_dump": _state_dump_metadata(dump_payload), "command": cmd, **metadata_common},
         )
 
 
@@ -188,6 +233,78 @@ def _quest_algo_from_case(context: BenchmarkContext) -> str | None:
     if name in {"HIDDEN_SHIFT"}:
         name = "HS"
     return name if name in QUEST_COMPARABLE_ALGOS or name == "RANDOM" else None
+
+
+def _quest_output_settings(context: BenchmarkContext) -> tuple[dict, str | None]:
+    options = dict(context.route_config.get("options") or {})
+    metadata = dict(context.suite.get("metadata") or {})
+    state_output_mode = str(options.get("state_output_mode") or metadata.get("state_output_mode") or STATE_OUTPUT_MODE_FULL_DUMP)
+    validation_method = str(options.get("validation_method") or metadata.get("validation_method") or VALIDATION_METHOD_FULL_STATEVECTOR)
+    performance_tier = bool(options.get("performance_tier", metadata.get("performance_tier", False)))
+    if state_output_mode not in {STATE_OUTPUT_MODE_FULL_DUMP, STATE_OUTPUT_MODE_NONE}:
+        return {}, f"unsupported_state_output_mode:{state_output_mode}"
+    if state_output_mode == STATE_OUTPUT_MODE_NONE:
+        if validation_method != VALIDATION_METHOD_NATIVE_STATUS_GATE_COUNTS:
+            return {}, "metrics_only_requires_native_status_gate_counts_validation"
+        if not performance_tier:
+            return {}, "metrics_only_requires_performance_tier_true"
+    return {
+        "state_output_mode": state_output_mode,
+        "validation_method": validation_method,
+        "performance_tier": performance_tier,
+        "output_contract": "metrics_only" if state_output_mode == STATE_OUTPUT_MODE_NONE else "statevector",
+        "output_contract_label": "metrics_only" if state_output_mode == STATE_OUTPUT_MODE_NONE else "full_statevector",
+        "output_contract_is_exact": state_output_mode != STATE_OUTPUT_MODE_NONE,
+        "exact_output_comparable": state_output_mode != STATE_OUTPUT_MODE_NONE,
+        "full_statevector_validation_available": state_output_mode != STATE_OUTPUT_MODE_NONE,
+        "output_contract_note": (
+            "Runtime/performance tier only; no full statevector artifact was requested."
+            if state_output_mode == STATE_OUTPUT_MODE_NONE
+            else "Full statevector artifact requested for exact output comparison."
+        ),
+    }, None
+
+
+def _quest_runtime_metadata(payload: dict, command: list[str], *, total_s: float, settings: dict) -> dict:
+    validation_status = "passed_native_status" if settings["state_output_mode"] == STATE_OUTPUT_MODE_NONE else "passed"
+    return {
+        "quest": payload,
+        "command": command,
+        "state_output_mode": settings["state_output_mode"],
+        "output_contract": settings["output_contract"],
+        "output_contract_label": settings["output_contract_label"],
+        "output_contract_is_exact": settings["output_contract_is_exact"],
+        "output_contract_note": settings["output_contract_note"],
+        "output_contract_source": "suite_or_route_options",
+        "output_contract_enforced": True,
+        "validation_method": settings["validation_method"],
+        "validation_status": validation_status,
+        "performance_tier": settings["performance_tier"],
+        "output_contract_metrics_only": settings["state_output_mode"] == STATE_OUTPUT_MODE_NONE,
+        "exact_output_comparable": settings["exact_output_comparable"],
+        "full_statevector_validation_available": settings["full_statevector_validation_available"],
+        "native_process_wall_time_s": float(total_s),
+        "quest_simulation_compute_time_s": float(payload.get("time_s") or 0.0),
+        "state_dump_requested": bool(payload.get("state_dump_requested", settings["state_output_mode"] != STATE_OUTPUT_MODE_NONE)),
+        "state_dump_time_s": float(payload.get("state_dump_time_s") or 0.0),
+        "repeat_layers": int(payload.get("repeat_layers") or 1),
+        "timing_scope": "compute_only_native_and_process_wall",
+        "energy_measurement_status": _energy_measurement_status(payload),
+    }
+
+
+def _energy_measurement_status(payload: dict) -> str:
+    source = str(payload.get("energy_source") or "unavailable")
+    value = payload.get("energy_joules")
+    if source == "unavailable" or value is None:
+        return "unavailable"
+    try:
+        joules = float(value)
+    except (TypeError, ValueError):
+        return "invalid"
+    if joules > 0:
+        return "measured_positive"
+    return "available_zero_delta"
 
 
 def _check_output_caps(n_qubits: int, options: dict) -> tuple[bool, str | None]:

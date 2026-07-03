@@ -1,0 +1,111 @@
+schema_version: 2
+suite_id: cpu_gpu_performance
+
+metadata:
+  purpose: cpu_gpu_performance_no_state_dump
+  expected_runtime_class: manual_gpu_minutes
+  expected_memory_class: bounded_statevector_no_dump
+  intended_use: performance_tier
+  deterministic_unitary_only: true
+  gpu_execution_suite: true
+  requires_verified_gpu_for_gpu_rows: true
+  validation_tier: native_status_gate_counts
+  validation_method: native_status_gate_counts
+  state_output_mode: none
+  performance_tier: true
+  output_contract: metrics_only
+  exact_output_comparable: false
+  full_statevector_validation_available: false
+  max_qubits: 18
+  manual_invocation_required: true
+  notes: Performance-tier CPU/GPU full-state timing. No full statevector is dumped; rows are runtime/gate-count validated only.
+
+defaults:
+  warmups: 1
+  repeats: 3
+  timeout_s: 900
+  memory_guard_gib: 16
+  planner:
+    engine: opt_einsum
+    optimize: greedy
+
+workloads:
+  - id: quest_qrng_10q_perf
+    circuit: {kind: quest_compatible, name: QRNG, n_qubits: 10, repeat_layers: 64}
+  - id: quest_qrng_12q_perf
+    circuit: {kind: quest_compatible, name: QRNG, n_qubits: 12, repeat_layers: 64}
+  - id: quest_qrng_14q_perf
+    circuit: {kind: quest_compatible, name: QRNG, n_qubits: 14, repeat_layers: 64}
+  - id: quest_qrng_16q_perf
+    circuit: {kind: quest_compatible, name: QRNG, n_qubits: 16, repeat_layers: 64}
+  - id: quest_qrng_18q_perf
+    circuit: {kind: quest_compatible, name: QRNG, n_qubits: 18, repeat_layers: 64}
+  - id: quest_bv_10q_perf
+    circuit: {kind: quest_compatible, name: BV, n_qubits: 10, repeat_layers: 64}
+  - id: quest_bv_12q_perf
+    circuit: {kind: quest_compatible, name: BV, n_qubits: 12, repeat_layers: 64}
+  - id: quest_bv_14q_perf
+    circuit: {kind: quest_compatible, name: BV, n_qubits: 14, repeat_layers: 64}
+  - id: quest_bv_16q_perf
+    circuit: {kind: quest_compatible, name: BV, n_qubits: 16, repeat_layers: 64}
+  - id: quest_bv_18q_perf
+    circuit: {kind: quest_compatible, name: BV, n_qubits: 18, repeat_layers: 64}
+  - id: quest_xor_10q_perf
+    circuit: {kind: quest_compatible, name: XOR, n_qubits: 10, repeat_layers: 128}
+  - id: quest_xor_12q_perf
+    circuit: {kind: quest_compatible, name: XOR, n_qubits: 12, repeat_layers: 128}
+  - id: quest_xor_14q_perf
+    circuit: {kind: quest_compatible, name: XOR, n_qubits: 14, repeat_layers: 128}
+  - id: quest_xor_16q_perf
+    circuit: {kind: quest_compatible, name: XOR, n_qubits: 16, repeat_layers: 128}
+  - id: quest_xor_18q_perf
+    circuit: {kind: quest_compatible, name: XOR, n_qubits: 18, repeat_layers: 128}
+  - id: quest_edc_10q_perf
+    circuit: {kind: quest_compatible, name: EDC, n_qubits: 10, repeat_layers: 64}
+  - id: quest_edc_12q_perf
+    circuit: {kind: quest_compatible, name: EDC, n_qubits: 12, repeat_layers: 64}
+  - id: quest_edc_14q_perf
+    circuit: {kind: quest_compatible, name: EDC, n_qubits: 14, repeat_layers: 64}
+  - id: quest_edc_16q_perf
+    circuit: {kind: quest_compatible, name: EDC, n_qubits: 16, repeat_layers: 64}
+  - id: quest_edc_18q_perf
+    circuit: {kind: quest_compatible, name: EDC, n_qubits: 18, repeat_layers: 64}
+  - id: quest_hs_10q_perf
+    circuit: {kind: quest_compatible, name: HS, allocated_qubits: 10, logical_qubits: 5, repeat_layers: 64}
+  - id: quest_hs_12q_perf
+    circuit: {kind: quest_compatible, name: HS, allocated_qubits: 12, logical_qubits: 6, repeat_layers: 64}
+  - id: quest_hs_14q_perf
+    circuit: {kind: quest_compatible, name: HS, allocated_qubits: 14, logical_qubits: 7, repeat_layers: 64}
+  - id: quest_hs_16q_perf
+    circuit: {kind: quest_compatible, name: HS, allocated_qubits: 16, logical_qubits: 8, repeat_layers: 64}
+  - id: quest_hs_18q_perf
+    circuit: {kind: quest_compatible, name: HS, allocated_qubits: 18, logical_qubits: 9, repeat_layers: 64}
+
+routes:
+  - id: quest_cpu_full_state_exact
+    role: comparison_anchor
+    benchmark_role: serious_full_state_baseline
+    required: true
+    options:
+      state_output_mode: none
+      validation_method: native_status_gate_counts
+      performance_tier: true
+
+  - id: quest_gpu_full_state_exact
+    role: gpu_baseline
+    benchmark_role: serious_gpu_full_state_baseline
+    required: true
+    options:
+      state_output_mode: none
+      validation_method: native_status_gate_counts
+      performance_tier: true
+
+validation:
+  reference_route: quest_cpu_full_state_exact
+  require_output_for_roles: []
+  tolerances:
+    max_abs_error: 1.0e-9
+    l2_error: 1.0e-8
+    max_rel_error: 1.0e-8
+    norm_drift: 1.0e-8
+    min_fidelity: 0.999999999
