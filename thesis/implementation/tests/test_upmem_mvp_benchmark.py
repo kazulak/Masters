@@ -151,6 +151,15 @@ def test_upmem_mvp_benchmark_runs_suite_and_compare_results(monkeypatch, tmp_pat
     assert (result.run_dir / "run_manifest.json").exists()
     assert (result.run_dir / "normalized_records.jsonl").exists()
     assert (result.run_dir / "artifact_retention_manifest.json").exists()
+    for derived_name in (
+        "comparison_summary.md",
+        "upmem_mvp_benchmark_results.csv",
+        "kernel_family_summary.csv",
+        "quantization_accuracy_summary.csv",
+        "unsupported_reasons.csv",
+        "quantization_comparison.csv",
+    ):
+        assert not (result.run_dir / derived_name).exists()
     assert not (result.run_dir / "plots").exists()
     assert result.run_dir.parent == tmp_path / "runs" / "evidence" / "upmem_mvp_test" / "upmem_mvp"
     manifest = json.loads((result.run_dir / "run_manifest.json").read_text(encoding="utf-8"))

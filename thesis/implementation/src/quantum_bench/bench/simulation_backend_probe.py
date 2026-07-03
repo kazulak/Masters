@@ -101,6 +101,7 @@ def _gpu_hardware_probe() -> JsonDict:
     amd = [line for line in lspci_lines if any(marker in line.lower() for marker in ("amd", "ati", "radeon"))]
     nvidia = [line for line in lspci_lines if "nvidia" in line.lower()]
     rocminfo = _rocminfo_gpu_status()
+    render_nodes = _render_nodes()
     return {
         "amd_gpu_pci_detected": bool(amd),
         "nvidia_gpu_pci_detected": bool(nvidia),
@@ -109,10 +110,19 @@ def _gpu_hardware_probe() -> JsonDict:
         "dev_kfd_present": Path("/dev/kfd").exists(),
         "dev_dri_present": Path("/dev/dri").exists(),
         "dev_dri_renderD128_present": Path("/dev/dri/renderD128").exists(),
+        "dev_dri_render_node_present": bool(render_nodes),
+        "dev_dri_render_nodes": render_nodes,
         "rocminfo_gpu_agent_detected": bool(rocminfo["gpu_agent_detected"]),
         "rocminfo_gfx_targets": rocminfo["gfx_targets"],
         "rocminfo_returncode": rocminfo["returncode"],
     }
+
+
+def _render_nodes() -> list[str]:
+    dri = Path("/dev/dri")
+    if not dri.exists():
+        return []
+    return sorted(path.as_posix() for path in dri.glob("renderD*"))
 
 
 def _lspci_gpu_lines() -> list[str]:
@@ -277,7 +287,79 @@ def _verify_gpu_backend(root_dir: Path, requested_backend: str, hardware: JsonDi
 
     runner_root = root_dir / "native" / "quest_gpu"
     runner = runner_root / "bin" / "quest_gpu_runner"
+    hip_smoke_payload: JsonDict | None = None
+    if selected_backend == "quest-hip":
+        smoke = runner_root / "bin" / "hip_smoke"
+        smoke_build_cmd = ["make", "clean-hip-smoke", "hip-smoke", "GPU_BACKEND=hip", "HIP_ARCHITECTURES=gfx1032"]
+        smoke_build_result = _run_command(smoke_build_cmd, cwd=runner_root, timeout_s=120)
+        attempted_steps.append(
+            {
+                "step": "build_hip_smoke",
+                "status": "passed" if smoke_build_result["returncode"] == 0 else "failed",
+                "command": smoke_build_cmd,
+            }
+        )
+        if smoke_build_result["returncode"] != 0:
+            return _write_gpu_verification_artifact(
+                root_dir,
+                {
+                    "status": "failed",
+                    "requested_backend": requested_backend,
+                    "selected_backend": selected_backend,
+                    "verification_backend": selected_backend,
+                    "candidate_category": "tailored_quantum_gpu",
+                    "accelerator_kind": accelerator_kind,
+                    "gpu_runtime_stack": stack,
+                    "gpu_backend_verified": False,
+                    "gpu_program_executed": False,
+                    "blocker_reason": "hip_smoke_build_failed",
+                    "detected_dependencies": prereq["dependencies"],
+                    "attempted_steps": attempted_steps,
+                    "hip_smoke_build_result": smoke_build_result,
+                },
+            )
+        smoke_run_cmd = [str(smoke)]
+        smoke_run_result = _run_command(smoke_run_cmd, cwd=runner_root, timeout_s=30)
+        hip_smoke_payload = _json_from_stdout(smoke_run_result.get("stdout") or "")
+        smoke_verified = bool(
+            smoke_run_result["returncode"] == 0
+            and hip_smoke_payload
+            and hip_smoke_payload.get("status") == "ok"
+            and hip_smoke_payload.get("gpu_program_executed") is True
+        )
+        attempted_steps.append(
+            {
+                "step": "minimal_hip_smoke_run",
+                "status": "passed" if smoke_verified else "failed",
+                "command": smoke_run_cmd,
+            }
+        )
+        if not smoke_verified:
+            return _write_gpu_verification_artifact(
+                root_dir,
+                {
+                    "status": "failed",
+                    "requested_backend": requested_backend,
+                    "selected_backend": selected_backend,
+                    "verification_backend": selected_backend,
+                    "candidate_category": "tailored_quantum_gpu",
+                    "accelerator_kind": accelerator_kind,
+                    "gpu_runtime_stack": stack,
+                    "gpu_backend_verified": False,
+                    "gpu_program_executed": False,
+                    "gpu_device_name": _gpu_device_name_from_hip_smoke(hip_smoke_payload),
+                    "blocker_reason": "hip_smoke_run_failed",
+                    "detected_dependencies": prereq["dependencies"],
+                    "attempted_steps": attempted_steps,
+                    "hip_smoke_build_result": smoke_build_result,
+                    "hip_smoke_run_result": smoke_run_result,
+                    "hip_smoke_payload": hip_smoke_payload,
+                },
+            )
+
     build_cmd = ["make", "clean-all", "all", f"GPU_BACKEND={'hip' if selected_backend == 'quest-hip' else 'cuda'}"]
+    if selected_backend == "quest-hip":
+        build_cmd.append("HIP_ARCHITECTURES=gfx1032")
     build_result = _run_command(build_cmd, cwd=runner_root, timeout_s=300)
     attempted_steps.append({"step": "build_quest_gpu_runner", "status": "passed" if build_result["returncode"] == 0 else "failed", "command": build_cmd})
     if build_result["returncode"] != 0:
@@ -296,6 +378,7 @@ def _verify_gpu_backend(root_dir: Path, requested_backend: str, hardware: JsonDi
                 "blocker_reason": "quest_gpu_build_failed",
                 "detected_dependencies": prereq["dependencies"],
                 "attempted_steps": attempted_steps,
+                "hip_smoke_payload": hip_smoke_payload,
                 "build_result": build_result,
             },
         )
@@ -318,7 +401,7 @@ def _verify_gpu_backend(root_dir: Path, requested_backend: str, hardware: JsonDi
             "gpu_runtime_stack": stack,
             "gpu_backend_verified": verified,
             "gpu_program_executed": verified,
-            "gpu_device_name": _gpu_device_name(selected_backend),
+            "gpu_device_name": _gpu_device_name(selected_backend) or _gpu_device_name_from_hip_smoke(hip_smoke_payload),
             "gpu_toolkit_metadata": prereq["dependencies"],
             "gpu_synchronized": True,
             "runner_path": str(runner),
@@ -326,6 +409,7 @@ def _verify_gpu_backend(root_dir: Path, requested_backend: str, hardware: JsonDi
             "blocker_reason": None if verified else "quest_gpu_minimal_run_failed",
             "detected_dependencies": prereq["dependencies"],
             "attempted_steps": attempted_steps,
+            "hip_smoke_payload": hip_smoke_payload,
             "build_result": build_result,
             "minimal_run_result": run_result,
         },
@@ -348,7 +432,11 @@ def _quest_gpu_prerequisites(selected_backend: str, hardware: JsonDict) -> JsonD
             "amd_gpu_pci": {"available": bool(hardware.get("amd_gpu_pci_detected"))},
             "dev_kfd": {"available": bool(hardware.get("dev_kfd_present"))},
             "dev_dri": {"available": bool(hardware.get("dev_dri_present"))},
-            "dev_dri_renderD128": {"available": bool(hardware.get("dev_dri_renderD128_present"))},
+            "dev_dri_renderD128": {"available": bool(hardware.get("dev_dri_renderD128_present")), "required": False},
+            "dev_dri_render_node": {
+                "available": bool(hardware.get("dev_dri_render_node_present") or hardware.get("dev_dri_renderD128_present")),
+                "nodes": hardware.get("dev_dri_render_nodes") or [],
+            },
             "rocminfo_gpu_agent": {
                 "available": bool(hardware.get("rocminfo_gpu_agent_detected")),
                 "gfx_targets": hardware.get("rocminfo_gfx_targets") or [],
@@ -367,7 +455,7 @@ def _quest_gpu_prerequisites(selected_backend: str, hardware: JsonDict) -> JsonD
             "cmake": _command_status("cmake"),
             "make": _command_status("make"),
         }
-    missing = [name for name, status in checks.items() if not status.get("available")]
+    missing = [name for name, status in checks.items() if status.get("required", True) and not status.get("available")]
     return {"dependencies": checks, "missing": missing}
 
 
@@ -439,6 +527,16 @@ def _gpu_device_name(selected_backend: str) -> str | None:
         if result.get("returncode") == 0 and result.get("stdout"):
             return str(result["stdout"]).splitlines()[0].strip() or None
     return None
+
+
+def _gpu_device_name_from_hip_smoke(payload: JsonDict | None) -> str | None:
+    if not payload:
+        return None
+    device_name = str(payload.get("gpu_device_name") or "").strip()
+    arch = str(payload.get("gcn_arch_name") or "").strip()
+    if device_name and arch:
+        return f"{device_name} ({arch})"
+    return device_name or arch or None
 
 
 def _bounded(value: str | bytes | None, limit: int = 4000) -> str:

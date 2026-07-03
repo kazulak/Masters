@@ -160,7 +160,12 @@ validation:
     assert manifest["artifact_kind"] == "evidence_run"
     assert manifest["route_label"] == "simulation_backend_compare"
     assert manifest["normalized_records"] == "normalized_records.jsonl"
-    summary_md = (result.run_dir / "comparison_summary.md").read_text(encoding="utf-8")
+    for derived_name in (
+        "comparison_summary.md",
+        "simulation_backend_compare_results.csv",
+        "simulation_backend_compare_pairs.csv",
+    ):
+        assert not (result.run_dir / derived_name).exists()
     records = load_result_records([result.run_dir])
     assert {record["execution_model"] for record in records} == {"full_state", "tensor_network"}
     assert {record["route_id"] for record in records} == {"quest_cpu_full_state_exact", "cpu_tn_einsum_exact"}
@@ -174,9 +179,6 @@ validation:
     roles = {record["route_id"]: record["benchmark_role"] for record in records}
     assert roles["quest_cpu_full_state_exact"] == "serious_full_state_baseline"
     assert roles["cpu_tn_einsum_exact"] == "internal_debug_baseline"
-    assert "## Backend Metadata" in summary_md
-    assert "Benchmark role" in summary_md
-    assert "## Output Agreement" in summary_md
 
 
 def test_simulation_backend_compare_suite_loads() -> None:
@@ -823,6 +825,117 @@ def test_failed_gpu_verification_writes_blocker_artifact(tmp_path: Path) -> None
     payload = json.loads(artifact.read_text(encoding="utf-8"))
     assert payload["schema_version"] == "quest_gpu_verification_v1"
     assert payload["attempted_steps"][0]["step"] == "preflight"
+
+
+def test_gpu_verification_blocks_when_hip_smoke_fails(monkeypatch, tmp_path: Path) -> None:
+    runner_root = tmp_path / "native" / "quest_gpu"
+    runner_root.mkdir(parents=True)
+
+    def fake_run_command(cmd, *, cwd, timeout_s):
+        if "hip-smoke" in cmd:
+            return {"command": cmd, "cwd": str(cwd), "returncode": 1, "stdout": "", "stderr": "compile failed"}
+        raise AssertionError(f"unexpected command after failed HIP smoke build: {cmd}")
+
+    monkeypatch.setattr("quantum_bench.bench.simulation_backend_probe._run_command", fake_run_command)
+
+    report = _verify_gpu_backend(
+        tmp_path,
+        "quest-hip",
+        {
+            "amd_gpu_pci_detected": True,
+            "nvidia_gpu_pci_detected": False,
+            "dev_kfd_present": True,
+            "dev_dri_present": True,
+            "dev_dri_renderD128_present": True,
+            "dev_dri_render_node_present": True,
+            "dev_dri_render_nodes": ["/dev/dri/renderD128"],
+            "rocminfo_gpu_agent_detected": True,
+            "rocminfo_gfx_targets": ["gfx1032"],
+            "rocminfo_returncode": 0,
+        },
+    )
+
+    assert report["status"] == "failed"
+    assert report["blocker_reason"] == "hip_smoke_build_failed"
+    assert report["gpu_backend_verified"] is False
+    assert report["attempted_steps"][1]["step"] == "build_hip_smoke"
+    assert all(step["step"] != "build_quest_gpu_runner" for step in report["attempted_steps"])
+
+
+def test_successful_gpu_verification_requires_hip_smoke_and_quest_run(monkeypatch, tmp_path: Path) -> None:
+    runner_root = tmp_path / "native" / "quest_gpu"
+    runner = runner_root / "bin" / "quest_gpu_runner"
+    runner.parent.mkdir(parents=True)
+
+    def fake_run_command(cmd, *, cwd, timeout_s):
+        if "hip-smoke" in cmd:
+            return {"command": cmd, "cwd": str(cwd), "returncode": 0, "stdout": "", "stderr": ""}
+        if cmd and str(cmd[0]).endswith("hip_smoke"):
+            return {
+                "command": cmd,
+                "cwd": str(cwd),
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "status": "ok",
+                        "gpu_backend_verified": True,
+                        "gpu_program_executed": True,
+                        "gpu_device_name": "AMD Radeon RX 6600",
+                        "gcn_arch_name": "gfx1032",
+                    }
+                ),
+                "stderr": "",
+            }
+        if "clean-all" in cmd and "all" in cmd:
+            runner.write_text("#!/bin/sh\n", encoding="utf-8")
+            return {"command": cmd, "cwd": str(cwd), "returncode": 0, "stdout": "", "stderr": ""}
+        if cmd and str(cmd[0]).endswith("quest_gpu_runner"):
+            dump_path = Path(cmd[cmd.index("--dump-state-json") + 1])
+            dump_path.parent.mkdir(parents=True, exist_ok=True)
+            dump_path.write_text(json.dumps({"basis_order": "little_endian", "real": [1, 0, 0, 0], "imag": [0, 0, 0, 0]}), encoding="utf-8")
+            return {"command": cmd, "cwd": str(cwd), "returncode": 0, "stdout": json.dumps({"status": "ok", "time_s": 0.001}), "stderr": ""}
+        if cmd[:1] == ["rocm-smi"]:
+            return {
+                "command": cmd,
+                "cwd": str(cwd),
+                "returncode": 0,
+                "stdout": "GPU[0] : Card Series: AMD Radeon RX 6600\nGPU[0] : GFX Version: gfx1032\n",
+                "stderr": "",
+            }
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr("quantum_bench.bench.simulation_backend_probe._run_command", fake_run_command)
+
+    report = _verify_gpu_backend(
+        tmp_path,
+        "quest-hip",
+        {
+            "amd_gpu_pci_detected": True,
+            "nvidia_gpu_pci_detected": False,
+            "dev_kfd_present": True,
+            "dev_dri_present": True,
+            "dev_dri_renderD128_present": True,
+            "dev_dri_render_node_present": True,
+            "dev_dri_render_nodes": ["/dev/dri/renderD128"],
+            "rocminfo_gpu_agent_detected": True,
+            "rocminfo_gfx_targets": ["gfx1032"],
+            "rocminfo_returncode": 0,
+        },
+    )
+
+    assert report["status"] == "verified"
+    assert report["gpu_backend_verified"] is True
+    assert report["gpu_program_executed"] is True
+    assert report["gpu_device_name"] == "AMD Radeon RX 6600 (gfx1032)"
+    assert [step["step"] for step in report["attempted_steps"]] == [
+        "preflight",
+        "build_hip_smoke",
+        "minimal_hip_smoke_run",
+        "build_quest_gpu_runner",
+        "minimal_quest_gpu_run",
+    ]
+    payload = json.loads(quest_gpu_verification_path(tmp_path).read_text(encoding="utf-8"))
+    assert payload["hip_smoke_payload"]["gcn_arch_name"] == "gfx1032"
 
 
 def test_optional_unverified_gpu_route_emits_no_benchmark_record(monkeypatch, tmp_path: Path) -> None:

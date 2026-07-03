@@ -237,6 +237,7 @@ def _verification_is_valid(payload: dict) -> bool:
         payload.get("status") == "verified"
         and payload.get("gpu_backend_verified") is True
         and payload.get("gpu_program_executed") is True
+        and payload.get("gpu_device_name")
         and payload.get("runner_path")
         and payload.get("accelerator_kind") in {"amd_gpu", "nvidia_gpu"}
     )

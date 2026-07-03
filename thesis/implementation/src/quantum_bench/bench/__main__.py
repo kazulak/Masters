@@ -324,11 +324,6 @@ def main() -> int:
                 {
                     "run_dir": str(result.run_dir),
                     "artifact": str(result.summary_path),
-                    "results_csv": str(result.run_dir / "upmem_mvp_benchmark_results.csv"),
-                    "kernel_family_summary": str(result.run_dir / "kernel_family_summary.csv"),
-                    "quantization_accuracy_summary": str(result.run_dir / "quantization_accuracy_summary.csv"),
-                    "unsupported_reasons": str(result.run_dir / "unsupported_reasons.csv"),
-                    "summary": str(result.run_dir / "comparison_summary.md"),
                     "status": result.status,
                     "reason": result.reason,
                 },
@@ -376,8 +371,6 @@ def main() -> int:
                 {
                     "run_dir": str(result.run_dir),
                     "artifact": str(result.summary_path),
-                    "results_csv": str(result.run_dir / "simulation_backend_compare_results.csv"),
-                    "summary": str(result.run_dir / "comparison_summary.md"),
                     "status": result.status,
                     "case_count": result.case_count,
                 },

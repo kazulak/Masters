@@ -129,6 +129,7 @@ def test_evidence_shortcut_helper_validates_gpu_and_upmem_rows(tmp_path: Path) -
             "gpu_backend_verified": True,
             "gpu_program_executed": True,
             "gpu_device_name": "AMD Radeon RX 6600",
+            "validation_status": "passed",
         },
         {
             "case_id": "upmem_case",
@@ -168,6 +169,30 @@ def test_evidence_shortcut_helper_validates_gpu_and_upmem_rows(tmp_path: Path) -
     assert "Verified GPU benchmark rows: 1" in gpu.stdout
     assert upmem.returncode == 0
     assert "Verified UPMEM SDK simulator benchmark rows: 1" in upmem.stdout
+
+    bad_run_dir = tmp_path / "bad_gpu"
+    bad_run_dir.mkdir()
+    (bad_run_dir / "normalized_records.jsonl").write_text(
+        json.dumps(
+            {
+                "case_id": "gpu_case",
+                "contraction_execution_target": "gpu",
+                "gpu_backend_verified": True,
+                "gpu_program_executed": True,
+                "gpu_device_name": "AMD Radeon RX 6600",
+                "validation_status": "failed",
+            }
+        ),
+        encoding="utf-8",
+    )
+    bad_gpu = subprocess.run(
+        [sys.executable, "scripts/evidence_shortcuts.py", "check-gpu", str(bad_run_dir)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert bad_gpu.returncode == 2
 
 
 def test_evidence_shortcut_helper_reports_missing_verified_rows(tmp_path: Path) -> None:

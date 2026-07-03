@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import csv
 import json
 import statistics
 import time
@@ -28,92 +27,6 @@ from quantum_bench.validation import probability_error_metrics, tensor_to_quest_
 
 
 SIMULATION_BACKEND_COMPARE_SCHEMA_VERSION = "simulation_backend_compare_v1"
-
-RESULT_FIELDS = [
-    "case_id",
-    "workload_id",
-    "anchor_route_id",
-    "route_id",
-    "backend_family",
-    "benchmark_role",
-    "route_role_description",
-    "route_limitation_scope",
-    "kernel_family",
-    "execution_model",
-    "contraction_execution_target",
-    "upmem_execution_mode",
-    "execution_backend",
-    "hardware_execution",
-    "hardware_timing_available",
-    "hardware_speedup_applicable",
-    "cpu_fallback_used",
-    "native_sdk_control_path",
-    "simplepim_api_used",
-    "policy",
-    "quantization_mode",
-    "dpu_program_invocations",
-    "upmem_program_executed",
-    "accelerator_kind",
-    "gpu_backend_verified",
-    "gpu_program_executed",
-    "gpu_device_name",
-    "gpu_runtime_stack",
-    "execution_scope",
-    "output_kind",
-    "comparison_output_kind",
-    "status",
-    "validation_status",
-    "error_direction",
-    "n_qubits",
-    "gate_count",
-    "two_qubit_gate_count",
-    "statevector_bytes",
-    "tn_task_count",
-    "tn_max_intermediate_bytes",
-    "tn_estimated_flops",
-    "tn_estimated_bytes",
-    "planning_time_s",
-    "lowering_time_s",
-    "total_wall_time_s",
-    "kernel_time_s",
-    "max_abs_error",
-    "l2_error",
-    "norm_drift",
-    "probability_l1_error",
-    "probability_max_abs_error",
-    "statevector_artifact",
-    "final_tensor_artifact",
-    "dependency_metadata",
-    "repeat_id",
-    "measured_repeat_count",
-    "setup_time_s",
-    "circuit_lowering_time_s",
-    "data_transfer_time_s",
-    "simulation_compute_time_s",
-    "validation_time_s",
-    "output_materialization_time_s",
-    "timing_scope",
-    "gpu_synchronized",
-    "validation_method",
-    "expected_runtime_class",
-    "expected_memory_class",
-    "intended_use",
-    "max_qubits",
-    "manual_invocation_required",
-    "expected_risk",
-    "known_heavy_backends",
-    "resource_guard_status",
-    "resource_skip_reason",
-    "total_wall_time_s_median",
-    "total_wall_time_s_min",
-    "total_wall_time_s_mean",
-    "total_wall_time_s_std",
-    "simulation_compute_time_s_median",
-    "simulation_compute_time_s_min",
-    "simulation_compute_time_s_mean",
-    "simulation_compute_time_s_std",
-]
-
 
 @dataclass(frozen=True)
 class SimulationBackendCompareResult:
@@ -184,8 +97,6 @@ def run_simulation_backend_compare(
         normalized_records.extend(case_result["normalized_records"])
 
     write_jsonl(run_dir / "simulation_backend_compare_cases.jsonl", case_rows)
-    _write_csv(run_dir / "simulation_backend_compare_results.csv", rows, RESULT_FIELDS)
-    _write_csv(run_dir / "simulation_backend_compare_pairs.csv", comparison_rows, _fields(comparison_rows))
     backend_probe = probe_simulation_backends(root_dir)
     summary = _summary_payload(
         suite=suite,
@@ -198,7 +109,6 @@ def run_simulation_backend_compare(
         optional_backend_reports=optional_backend_reports,
     )
     write_json(run_dir / "simulation_backend_compare_summary.json", summary)
-    (run_dir / "comparison_summary.md").write_text(_summary_markdown(summary, comparison_rows), encoding="utf-8")
     write_normalized_records(run_dir, normalized_records)
     if artifact_retention == "compact":
         prune_run(run_dir, artifact_retention="compact")
@@ -1003,153 +913,6 @@ def _summary_payload(
             "normalized_records": normalized_records,
         }
     )
-
-
-def _summary_markdown(summary: JsonDict, comparison_rows: list[JsonDict]) -> str:
-    lines = [
-        "# Simulation Backend Comparison",
-        "",
-        f"Suite: `{summary['suite_id']}`",
-        f"Cases: {summary['case_count']}",
-        f"Anchor route: `{summary['anchor_route_id']}`",
-        "",
-        "Comparable backends execute the same deterministic unitary circuit semantics.",
-        "Error directions are labeled per route; the anchor is a comparison anchor, not an implicit claim that every other backend is numerically subordinate.",
-        "GPU feasibility is reported separately and does not create benchmark rows without real GPU execution.",
-        "",
-        "## Resource Profile",
-        "",
-        "| Field | Value |",
-        "| --- | --- |",
-    ]
-    profile = summary.get("resource_profile") or {}
-    for key in (
-        "expected_runtime_class",
-        "expected_memory_class",
-        "intended_use",
-        "max_qubits",
-        "manual_invocation_required",
-        "expected_risk",
-        "known_heavy_backends",
-    ):
-        lines.append(f"| {key} | {profile.get(key)} |")
-    lines.extend(
-        [
-            "",
-            "## Backend Metadata",
-            "",
-            "| Route | Benchmark role | Backend | Model | Target | Output | Limitation scope |",
-            "| --- | --- | --- | --- | --- | --- | --- |",
-        ]
-    )
-    seen: set[str] = set()
-    for row in summary["rows"]:
-        route_id = str(row["route_id"])
-        if route_id in seen:
-            continue
-        seen.add(route_id)
-        lines.append(
-            f"| {route_id} | {row.get('benchmark_role')} | {row['backend_family']} | {row['execution_model']} | "
-            f"{row['contraction_execution_target']} | {row['output_kind']} | {row.get('route_limitation_scope')} |"
-        )
-    lines.extend(
-        [
-            "",
-            "## Output Agreement",
-            "",
-            "| Case | Route | Status | Max abs error | L2 error | Probability L1 error |",
-            "| --- | --- | --- | ---: | ---: | ---: |",
-        ]
-    )
-    for row in comparison_rows:
-        lines.append(
-            f"| {row['case_id']} | {row['route_id']} | {row['validation_status']} | "
-            f"{row.get('max_abs_error')} | {row.get('l2_error')} | {row.get('probability_l1_error')} |"
-        )
-    lines.extend(
-        [
-            "",
-            "## Timing Breakdown",
-            "",
-            "| Route | Repeat | Total wall time s | Compute time s | Setup s | Transfer s | Validation s | Output write s |",
-            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
-        ]
-    )
-    for row in summary["rows"]:
-        lines.append(
-            f"| {row['route_id']} | {row.get('repeat_id')} | {row.get('total_wall_time_s')} | {row.get('simulation_compute_time_s')} | "
-            f"{row.get('setup_time_s')} | {row.get('data_transfer_time_s')} | {row.get('validation_time_s')} | "
-            f"{row.get('output_materialization_time_s')} |"
-        )
-    lines.extend(
-        [
-            "",
-            "## TN Path / Intermediate Metrics",
-            "",
-            "| Case | Route | TN tasks | Max intermediate bytes | Estimated FLOPs | Estimated bytes |",
-            "| --- | --- | ---: | ---: | ---: | ---: |",
-        ]
-    )
-    for row in summary["rows"]:
-        if row.get("execution_model") == "tensor_network":
-            lines.append(
-                f"| {row['case_id']} | {row['route_id']} | {row.get('tn_task_count')} | "
-                f"{row.get('tn_max_intermediate_bytes')} | {row.get('tn_estimated_flops')} | {row.get('tn_estimated_bytes')} |"
-            )
-    lines.extend(
-        [
-            "",
-            "## Optional Backend Feasibility",
-            "",
-            f"- GPU execution backend added: `{summary.get('gpu_execution_backend_added')}`",
-            f"- GPU benchmark records emitted: `{summary.get('gpu_benchmark_records_emitted')}`",
-        ]
-    )
-    optional = summary.get("optional_backend_reports") or []
-    if optional:
-        for item in optional:
-            lines.append(f"- `{item['route_id']}` for `{item['case_id']}`: {item['reason']}")
-    else:
-        lines.append("- No optional comparable backend was skipped.")
-    lines.append("")
-    return "\n".join(lines)
-
-
-def _fields(rows: list[JsonDict]) -> list[str]:
-    if not rows:
-        return ["case_id"]
-    fields = set()
-    for row in rows:
-        fields.update(row)
-    preferred = [
-        "schema_version",
-        "case_id",
-        "workload_id",
-        "anchor_route_id",
-        "route_id",
-        "backend_family",
-        "execution_model",
-        "validation_status",
-        "max_abs_error",
-        "l2_error",
-        "probability_l1_error",
-    ]
-    return preferred + sorted(fields - set(preferred))
-
-
-def _write_csv(path: Path, rows: list[JsonDict], fieldnames: list[str]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({field: _csv_value(row.get(field)) for field in fieldnames})
-
-
-def _csv_value(value: Any) -> Any:
-    if isinstance(value, (dict, list, tuple)):
-        return json.dumps(to_jsonable(value), sort_keys=True, separators=(",", ":"))
-    return value
 
 
 def _execution_model(simulation_method: str) -> str:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import csv
 import json
 import time
 from dataclasses import dataclass, field
@@ -37,91 +36,6 @@ from quantum_bench.tn import build_tensor_network, execute_task_sequence_np_eins
 
 
 UPMEM_MVP_BENCHMARK_SCHEMA_VERSION = "upmem_mvp_benchmark_v1"
-
-RESULT_FIELDS = [
-    "case_id",
-    "workload_id",
-    "circuit_family",
-    "n_qubits",
-    "route",
-    "policy",
-    "quantization_mode",
-    "status",
-    "reason",
-    "contraction_execution_target",
-    "upmem_execution_mode",
-    "whole_network_quantized_at_initialization",
-    "cpu_fallback_used",
-    "hardware_benchmark_result",
-    "hardware_timing_available",
-    "hardware_speedup_applicable",
-    "total_tasks",
-    "executed_tasks",
-    "unsupported_tasks",
-    "dense_gemm_count",
-    "generic_loop_fallback_count",
-    "complex_split_complex_task_count",
-    "final_validation_status",
-    "max_abs_error",
-    "mean_abs_error",
-    "l2_error",
-    "norm_drift",
-    "max_task_bridge_error",
-    "total_wall_time_s",
-    "total_kernel_time_s",
-    "total_bridge_time_s",
-    "total_quantization_time_s",
-    "total_dequantization_time_s",
-    "total_simulator_time_s",
-    "total_host_orchestration_time_s",
-    "actual_h2d_bytes",
-    "actual_d2h_bytes",
-    "actual_transfer_bytes",
-    "full_precision_transfer_bytes_model",
-    "transfer_compression_ratio",
-    "input_dtype_on_dpu",
-    "accumulator_dtype_on_dpu",
-    "scaling_applied",
-    "unquantized_mode_kind",
-    "native_upmem_kernel_executed",
-    "native_unquantized_upmem_kernel_executed",
-    "cpu_reference_artifact",
-    "upmem_runtime_summary_artifact",
-    "upmem_task_metrics_artifact",
-    "final_tensor_artifact",
-]
-
-KERNEL_FAMILY_FIELDS = ["policy", "quantization_mode", "kernel_family", "task_count"]
-QUANTIZATION_FIELDS = [
-    "case_id",
-    "policy",
-    "quantization_mode",
-    "final_validation_status",
-    "max_abs_error",
-    "mean_abs_error",
-    "l2_error",
-    "norm_drift",
-    "max_task_bridge_error",
-]
-UNSUPPORTED_FIELDS = ["case_id", "policy", "quantization_mode", "reason", "count"]
-QUANTIZATION_COMPARISON_FIELDS = [
-    "case_id",
-    "policy",
-    "same_route_comparison",
-    "same_taskgraph",
-    "same_kernel_family",
-    "quantized_runtime_s",
-    "unquantized_runtime_s",
-    "quantization_runtime_speedup",
-    "quantized_transfer_bytes",
-    "unquantized_transfer_bytes",
-    "transfer_reduction",
-    "quantized_max_abs_error_vs_full_precision",
-    "unquantized_max_abs_error_vs_full_precision",
-    "accuracy_delta",
-    "native_unquantized_upmem_kernel_executed",
-]
-
 
 @dataclass(frozen=True)
 class UpmemMvpBenchmarkResult:
@@ -236,12 +150,7 @@ def run_upmem_mvp_benchmark(
                     raise RuntimeError(f"UPMEM MVP benchmark failed for {row['case_id']} {policy}: {row['reason']}")
 
     write_jsonl(run_dir / "upmem_mvp_benchmark_cases.jsonl", case_records)
-    _write_csv(run_dir / "upmem_mvp_benchmark_results.csv", result_rows, RESULT_FIELDS)
-    _write_csv(run_dir / "kernel_family_summary.csv", _kernel_family_summary(result_rows), KERNEL_FAMILY_FIELDS)
-    _write_csv(run_dir / "quantization_accuracy_summary.csv", _quantization_accuracy_rows(result_rows), QUANTIZATION_FIELDS)
-    _write_csv(run_dir / "unsupported_reasons.csv", _unsupported_reason_rows(result_rows), UNSUPPORTED_FIELDS)
     quantization_comparison_rows = _quantization_comparison_rows(result_rows)
-    _write_csv(run_dir / "quantization_comparison.csv", quantization_comparison_rows, QUANTIZATION_COMPARISON_FIELDS)
     write_json(
         run_dir / "quantization_comparison.json",
         {
@@ -268,7 +177,6 @@ def run_upmem_mvp_benchmark(
         quantization_comparison_rows=quantization_comparison_rows,
     )
     write_json(run_dir / "upmem_mvp_benchmark_summary.json", summary)
-    (run_dir / "comparison_summary.md").write_text(_summary_markdown(summary, result_rows), encoding="utf-8")
     normalized_records = _normalized_records_for_run(run_dir, cpu_reference_records)
     write_normalized_records(run_dir, normalized_records)
     if artifact_retention == "compact":
@@ -799,39 +707,6 @@ def _normalized_records_for_run(run_dir: Path, cpu_reference_records: list[JsonD
     return to_jsonable(records)
 
 
-def _kernel_family_summary(rows: list[JsonDict]) -> list[JsonDict]:
-    grouped: dict[tuple[str, str, str], int] = {}
-    for row in rows:
-        for family, field in (("dense_gemm", "dense_gemm_count"), ("generic_loop_fallback", "generic_loop_fallback_count")):
-            count = int(row.get(field, 0) or 0)
-            if count:
-                key = (str(row["policy"]), str(row["quantization_mode"]), family)
-                grouped[key] = grouped.get(key, 0) + count
-    return [
-        {"policy": policy, "quantization_mode": mode, "kernel_family": family, "task_count": count}
-        for (policy, mode, family), count in sorted(grouped.items())
-    ]
-
-
-def _quantization_accuracy_rows(rows: list[JsonDict]) -> list[JsonDict]:
-    output: list[JsonDict] = []
-    for row in rows:
-        output.append(
-            {
-                "case_id": row["case_id"],
-                "policy": row["policy"],
-                "quantization_mode": row["quantization_mode"],
-                "final_validation_status": row["final_validation_status"],
-                "max_abs_error": row.get("max_abs_error"),
-                "mean_abs_error": row.get("mean_abs_error"),
-                "l2_error": row.get("l2_error"),
-                "norm_drift": row.get("norm_drift"),
-                "max_task_bridge_error": row.get("max_task_bridge_error"),
-            }
-        )
-    return output
-
-
 def _quantization_comparison_rows(rows: list[JsonDict]) -> list[JsonDict]:
     by_key: dict[tuple[str, str], dict[str, JsonDict]] = {}
     for row in rows:
@@ -921,60 +796,3 @@ def _collect_bridge_error(metrics: Any, values: list[float]) -> None:
     value = metrics.get("max_abs_error")
     if value is not None:
         values.append(float(value))
-
-
-def _unsupported_reason_rows(rows: list[JsonDict]) -> list[JsonDict]:
-    grouped: dict[tuple[str, str, str, str], int] = {}
-    for row in rows:
-        if row["status"] == "completed":
-            continue
-        reason = str(row.get("reason") or row["status"])
-        key = (str(row["case_id"]), str(row["policy"]), str(row["quantization_mode"]), reason)
-        grouped[key] = grouped.get(key, 0) + 1
-    return [
-        {"case_id": case_id, "policy": policy, "quantization_mode": mode, "reason": reason, "count": count}
-        for (case_id, policy, mode, reason), count in sorted(grouped.items())
-    ]
-
-
-def _summary_markdown(summary: JsonDict, rows: list[JsonDict]) -> str:
-    lines = [
-        "# UPMEM MVP Benchmark",
-        "",
-        f"Suite: `{summary['suite_id']}`",
-        f"Case-policy runs: {summary['case_policy_count']}",
-        f"Completed: {summary['completed_count']}",
-        f"Unsupported: {summary['unsupported_count']}",
-        f"Failed: {summary['failed_count']}",
-        f"Validation failed: {summary['validation_failed_count']}",
-        "",
-        "SDK simulator mode validates the UPMEM DPU code path; it is not hardware timing or speedup evidence.",
-        "CPU exact reference artifacts are used only for final validation and reporting, never to feed UPMEM runtime intermediates.",
-        "",
-        "## Case Policies",
-        "",
-        "| Case | Policy | Quantization | Status | Tasks | Dense | Generic | Max abs error |",
-        "| --- | --- | --- | --- | ---: | ---: | ---: | ---: |",
-    ]
-    for row in rows:
-        lines.append(
-            f"| {row['case_id']} | {row['policy']} | {row['quantization_mode']} | {row['status']} | "
-            f"{row['total_tasks']} | {row['dense_gemm_count']} | {row['generic_loop_fallback_count']} | {row.get('max_abs_error')} |"
-        )
-    lines.append("")
-    return "\n".join(lines)
-
-
-def _write_csv(path: Path, rows: list[JsonDict], fieldnames: list[str]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({field: _csv_value(row.get(field)) for field in fieldnames})
-
-
-def _csv_value(value: Any) -> Any:
-    if isinstance(value, (dict, list, tuple)):
-        return json.dumps(to_jsonable(value), sort_keys=True, separators=(",", ":"))
-    return value

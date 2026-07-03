@@ -53,6 +53,8 @@ def _check_gpu(run_dir: Path) -> int:
         if record.get("contraction_execution_target") == "gpu"
         and _truthy(record.get("gpu_backend_verified"))
         and _truthy(record.get("gpu_program_executed"))
+        and record.get("gpu_device_name")
+        and record.get("validation_status") == "passed"
     ]
     if not matches:
         print(

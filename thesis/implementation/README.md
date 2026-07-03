@@ -77,7 +77,9 @@ make bench-gpu
 
 This verifies QuEST HIP first, then runs the GPU execution-only suite. If the
 ROCm/GPU path is unavailable, it fails with a blocker instead of emitting fake
-GPU rows.
+GPU rows. The benchmark process must be able to see `/dev/kfd`, `/dev/dri`, and
+a `/dev/dri/renderD*` node; the verifier then runs a tiny HIP kernel before it
+builds and runs the QuEST HIP route.
 
 Run UPMEM SDK simulator evidence:
 

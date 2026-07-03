@@ -19,10 +19,16 @@ registered for suite compatibility, but it cannot execute until
 ## AMD ROCm/HIP
 
 ```bash
+make clean-hip-smoke hip-smoke GPU_BACKEND=hip
+./bin/hip_smoke
 make clean-all
 make GPU_BACKEND=hip
 ./bin/quest_gpu_runner --algo QRNG --qubits 2 --json
 ```
+
+`hip_smoke` is the independent device-execution gate. It must run successfully
+against `/dev/kfd` and a `/dev/dri/renderD*` node before a QuEST HIP
+verification artifact can be marked as verified.
 
 ## NVIDIA CUDA
 

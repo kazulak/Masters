@@ -21,6 +21,7 @@ HIP_DIR ?= $(patsubst %/,%,$(dir $(HIP_CONFIG_CMAKE)))
 HIP_ARCHITECTURES ?= gfx1032
 ROCM_CLANGXX ?= $(firstword $(wildcard $(ROCM_PATH)/lib/llvm/bin/clang++ $(ROCM_PATH)/llvm/bin/clang++))
 CMAKE_HIP_COMPILER ?= $(ROCM_CLANGXX)
+HIP_OFFLOAD_ARCH ?= $(HIP_ARCHITECTURES)
 
 ifeq ($(GPU_BACKEND),hip)
 QUEST_GPU_FLAGS := -DENABLE_HIP=ON \
@@ -65,10 +66,14 @@ OBJS = $(patsubst $(QUEST_CPU_RUNNER_DIR)/%.c,$(OBJ_DIR)/%.o,$(SRCS))
 DEPS = $(OBJS:.o=.d)
 
 TARGET = $(BIN_DIR)/quest_gpu_runner
+HIP_SMOKE_TARGET = $(BIN_DIR)/hip_smoke
+HIP_SMOKE_SRC = src/hip_smoke.cpp
 
-.PHONY: all prep quest-lib clean clean-quest clean-all
+.PHONY: all prep quest-lib hip-smoke clean clean-quest clean-hip-smoke clean-all
 
 all: quest-lib prep $(TARGET)
+
+hip-smoke: prep $(HIP_SMOKE_TARGET)
 
 quest-lib:
 ifeq ($(GPU_BACKEND),hip)
@@ -87,6 +92,14 @@ prep:
 $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
+$(HIP_SMOKE_TARGET): $(HIP_SMOKE_SRC)
+ifeq ($(GPU_BACKEND),hip)
+	test -n "$(HIPCC)"
+	$(HIPCC) -O2 --offload-arch=$(HIP_OFFLOAD_ARCH) -o $@ $<
+else
+	$(error hip-smoke is only supported with GPU_BACKEND=hip)
+endif
+
 $(OBJ_DIR)/%.o: $(QUEST_CPU_RUNNER_DIR)/%.c
 	mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
@@ -97,6 +110,9 @@ clean:
 
 clean-quest:
 	rm -rf $(QUEST_GPU_BUILD)
+
+clean-hip-smoke:
+	rm -f $(HIP_SMOKE_TARGET)
 
 clean-all: clean clean-quest
 
