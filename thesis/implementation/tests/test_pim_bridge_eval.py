@@ -230,7 +230,7 @@ def test_pim_bridge_eval_synthetic_l2_quick_suite_is_dry_run_ready(tmp_path: Pat
 
     run_dir = run_pim_bridge_eval(
         tmp_path,
-        suite_path=ROOT / "configs" / "suites" / "pim_l2_tiled_quick.yml",
+        suite_path=ROOT / "configs" / "suites" / "diagnostics" / "pim_l2_tiled_quick.yml",
         dry_run=True,
         env={},
         output_plots=False,

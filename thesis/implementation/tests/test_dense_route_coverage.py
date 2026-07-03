@@ -56,7 +56,7 @@ def test_dense_route_coverage_ghz_chain_three_qubits_is_supported(tmp_path: Path
 def test_dense_route_coverage_suite_uses_default_planner_only(tmp_path: Path) -> None:
     run_dir = run_dense_route_coverage(
         tmp_path,
-        suite_path=ROOT / "configs" / "suites" / "planner_compare.yml",
+        suite_path=ROOT / "configs" / "suites" / "diagnostics" / "planner_compare.yml",
         env={},
     )
     payload = _load_payload(run_dir)

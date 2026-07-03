@@ -1,5 +1,5 @@
 schema_version: 2
-suite_id: upmem_generic_medium
+suite_id: upmem_generic_sweep
 
 metadata:
   purpose: bounded_generic_upmem_runtime_coverage_and_quantization_attribution

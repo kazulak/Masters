@@ -2,9 +2,9 @@ PYTHON ?= ../.venv/bin/python
 PY_ENV := PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src
 BENCH := $(PY_ENV) $(PYTHON) -m quantum_bench.bench
 
-CPU_SUITE ?= configs/suites/simulation_backend_compare_compute_medium.yml
-GPU_SUITE ?= configs/suites/simulation_backend_compare_gpu_execution_only.yml
-UPMEM_SIM_SUITE ?= configs/suites/simulation_backend_compare_upmem_sdk_simulator.yml
+CPU_SUITE ?= configs/suites/cpu_evidence.yml
+GPU_SUITE ?= configs/suites/gpu_evidence.yml
+UPMEM_SIM_SUITE ?= configs/suites/upmem_sim_evidence.yml
 GPU_VERIFY ?= quest-hip
 CLEAN_RUNS ?= 0
 

@@ -171,7 +171,7 @@ def test_shadow_bridge_mock_is_capped_and_not_authoritative(tmp_path: Path) -> N
 def test_shadow_bridge_artifact_cap_is_per_run_across_suite_cases(tmp_path: Path) -> None:
     run_dir = run_shadow_routed_runtime(
         tmp_path,
-        suite_path=ROOT / "configs" / "suites" / "planner_compare.yml",
+        suite_path=ROOT / "configs" / "suites" / "diagnostics" / "planner_compare.yml",
         dense_shadow="bridge",
         bridge_backend="mock_numpy_dequantized",
         max_bridge_artifacts=1,

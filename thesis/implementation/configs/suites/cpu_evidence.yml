@@ -1,5 +1,5 @@
 schema_version: 2
-suite_id: simulation_backend_compare_compute_medium
+suite_id: cpu_evidence
 
 metadata:
   purpose: compute_focused_cpu_backend_comparison

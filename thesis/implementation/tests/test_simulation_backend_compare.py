@@ -180,20 +180,20 @@ validation:
 
 
 def test_simulation_backend_compare_suite_loads() -> None:
-    suite = load_suite(ROOT / "configs" / "suites" / "simulation_backend_compare_quick.yml")
+    suite = load_suite(ROOT / "configs" / "suites" / "diagnostics" / "simulation_backend_compare_quick.yml")
 
     assert "cpu_tn_einsum_exact" in suite["route_policy"]["routes"]
     assert "quest_cpu_full_state_exact" in suite["route_policy"]["routes"]
     assert "quimb_tn_exact" in suite["route_policy"]["routes"]
     assert all(case["circuit"]["kind"] == "quest_compatible" for case in suite["cases"])
 
-    thesis_small = load_suite(ROOT / "configs" / "suites" / "simulation_backend_compare_thesis_small.yml")
-    scaling = load_suite(ROOT / "configs" / "suites" / "simulation_backend_compare_scaling.yml")
-    compute_medium = load_suite(ROOT / "configs" / "suites" / "simulation_backend_compare_compute_medium.yml")
-    compute_large = load_suite(ROOT / "configs" / "suites" / "simulation_backend_compare_compute_large.yml")
-    gpu_medium = load_suite(ROOT / "configs" / "suites" / "simulation_backend_compare_gpu_medium.yml")
-    gpu_execution_only = load_suite(ROOT / "configs" / "suites" / "simulation_backend_compare_gpu_execution_only.yml")
-    upmem_sdk = load_suite(ROOT / "configs" / "suites" / "simulation_backend_compare_upmem_sdk_simulator.yml")
+    thesis_small = load_suite(ROOT / "configs" / "suites" / "diagnostics" / "simulation_backend_compare_thesis_small.yml")
+    scaling = load_suite(ROOT / "configs" / "suites" / "diagnostics" / "simulation_backend_compare_scaling.yml")
+    compute_medium = load_suite(ROOT / "configs" / "suites" / "cpu_evidence.yml")
+    compute_large = load_suite(ROOT / "configs" / "suites" / "manual_large.yml")
+    gpu_medium = load_suite(ROOT / "configs" / "suites" / "diagnostics" / "simulation_backend_compare_gpu_medium.yml")
+    gpu_execution_only = load_suite(ROOT / "configs" / "suites" / "gpu_evidence.yml")
+    upmem_sdk = load_suite(ROOT / "configs" / "suites" / "upmem_sim_evidence.yml")
     for loaded in (thesis_small, scaling):
         assert loaded["route_policy"]["routes"] == ["cpu_tn_einsum_exact", "quest_cpu_full_state_exact", "quimb_tn_exact"]
         assert loaded["metadata"]["deterministic_unitary_only"] is True
@@ -750,7 +750,7 @@ def test_quimb_tn_exact_matches_internal_task_sequence() -> None:
     route = routes["quimb_tn_exact"]
     assert route.probe().available
 
-    suite = load_suite(ROOT / "configs" / "suites" / "simulation_backend_compare_quick.yml")
+    suite = load_suite(ROOT / "configs" / "suites" / "diagnostics" / "simulation_backend_compare_quick.yml")
     case = suite["cases"][0]
     circuit = quest_compatible_circuit(case["circuit"]["name"], case["circuit"])
     network = build_tensor_network(circuit)
@@ -929,7 +929,7 @@ validation:
 
 def test_upmem_sdk_simulator_quantized_route_requires_execute_external(tmp_path: Path) -> None:
     route = UpmemTnSdkSimulatorQuantizedRoute()
-    suite = load_suite(ROOT / "configs" / "suites" / "simulation_backend_compare_upmem_sdk_simulator.yml")
+    suite = load_suite(ROOT / "configs" / "suites" / "upmem_sim_evidence.yml")
     case = suite["cases"][0]
     circuit = quest_compatible_circuit(case["circuit"]["name"], case["circuit"])
     network = build_tensor_network(circuit)

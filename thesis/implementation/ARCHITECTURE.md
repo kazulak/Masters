@@ -97,8 +97,9 @@ as the source artifact.
 
 ## Future Simplifications
 
-- Consolidate suites into a small family: `smoke`, `cpu_evidence`,
-  `gpu_evidence`, `upmem_sim_evidence`, `manual_large`, and `diagnostics`.
+- Keep the suite family small: `smoke`, `cpu_evidence`, `gpu_evidence`,
+  `upmem_sim_evidence`, `upmem_generic_sweep`, `manual_large`, and
+  `diagnostics`.
 - Keep diagnostic suites and commands out of README and Makefile defaults.
 - Defer route cleanup until suite cleanup is stable.
 - Reduce repeated route/status vocabulary where it does not affect artifact

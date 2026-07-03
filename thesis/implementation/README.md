@@ -61,19 +61,13 @@ make bench-cpu
 The default CPU suite is:
 
 ```text
-configs/suites/simulation_backend_compare_compute_medium.yml
+configs/suites/cpu_evidence.yml
 ```
 
 This default CPU evidence path uses the serious baselines only:
 `quest_cpu_full_state_exact` for full-state simulation and `quimb_tn_exact` for
 tensor-network simulation. `cpu_tn_einsum_exact` remains a diagnostic/internal
 route for small checks and is not part of the default CPU evidence suite.
-
-Override it when needed:
-
-```bash
-make bench-cpu CPU_SUITE=configs/suites/simulation_backend_compare_thesis_small.yml
-```
 
 Run GPU evidence:
 
@@ -160,3 +154,20 @@ such as `build/`, `.pytest_cache/`, and native `bin/` or `build/` directories.
 The legacy smoke command, `run --suite`, writes raw JSONL, validation JSON, and
 metrics CSV files as its own evidence format. Use the Makefile evidence commands
 when you need `normalized_records.jsonl` for report and comparison regeneration.
+
+## Canonical Suites
+
+The active suite family is intentionally small:
+
+```text
+configs/suites/smoke.yml
+configs/suites/cpu_evidence.yml
+configs/suites/gpu_evidence.yml
+configs/suites/upmem_sim_evidence.yml
+configs/suites/upmem_generic_sweep.yml
+configs/suites/manual_large.yml
+```
+
+Developer diagnostics and historical bring-up suites live under
+`configs/suites/diagnostics/` and are not part of the Makefile evidence
+surface.

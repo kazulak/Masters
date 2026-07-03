@@ -1,5 +1,5 @@
 schema_version: 2
-suite_id: simulation_backend_compare_compute_large
+suite_id: manual_large
 
 metadata:
   purpose: manual_large_backend_comparison

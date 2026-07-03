@@ -17,7 +17,7 @@ def _read_jsonl(path: Path) -> list[dict[str, object]]:
 
 
 def test_planner_comparison_writes_rows_and_artifacts(tmp_path: Path) -> None:
-    run_dir = compare_planners(ROOT / "configs" / "suites" / "planner_compare.yml", tmp_path)
+    run_dir = compare_planners(ROOT / "configs" / "suites" / "diagnostics" / "planner_compare.yml", tmp_path)
 
     payload = json.loads((run_dir / "planner_comparison.json").read_text(encoding="utf-8"))
     csv_rows = list(csv.DictReader((run_dir / "planner_comparison.csv").open(encoding="utf-8", newline="")))
@@ -123,7 +123,7 @@ def test_planner_comparison_writes_rows_and_artifacts(tmp_path: Path) -> None:
 
 
 def test_extended_planner_comparison_suite_is_bounded_and_scored(tmp_path: Path) -> None:
-    run_dir = compare_planners(ROOT / "configs" / "suites" / "planner_compare_extended.yml", tmp_path)
+    run_dir = compare_planners(ROOT / "configs" / "suites" / "diagnostics" / "planner_compare_extended.yml", tmp_path)
 
     payload = json.loads((run_dir / "planner_comparison.json").read_text(encoding="utf-8"))
     csv_rows = list(csv.DictReader((run_dir / "planner_comparison.csv").open(encoding="utf-8", newline="")))
@@ -167,8 +167,8 @@ def test_extended_planner_comparison_suite_is_bounded_and_scored(tmp_path: Path)
 
 
 def test_planner_comparison_suite_configs_separate_tiny_and_extended_modes() -> None:
-    tiny = load_suite(ROOT / "configs" / "suites" / "planner_compare.yml")
-    extended = load_suite(ROOT / "configs" / "suites" / "planner_compare_extended.yml")
+    tiny = load_suite(ROOT / "configs" / "suites" / "diagnostics" / "planner_compare.yml")
+    extended = load_suite(ROOT / "configs" / "suites" / "diagnostics" / "planner_compare_extended.yml")
 
     assert [config["optimize"] for config in comparison_planner_configs(tiny)] == ["greedy", "optimal"]
     assert [config["optimize"] for config in comparison_planner_configs(extended)] == ["greedy", "auto", "random-greedy"]

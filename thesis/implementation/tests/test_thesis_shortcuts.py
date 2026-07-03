@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_makefile_shortcuts_are_defined() -> None:
     text = (ROOT / "Makefile").read_text(encoding="utf-8")
 
-    assert "CPU_SUITE ?= configs/suites/simulation_backend_compare_compute_medium.yml" in text
+    assert "CPU_SUITE ?= configs/suites/cpu_evidence.yml" in text
     assert "GPU_VERIFY ?= quest-hip" in text
     for target in (
         "build-quest-cpu",
@@ -51,7 +51,17 @@ def test_readme_documents_shortcut_targets() -> None:
         "make clean-generated",
     ):
         assert command in text
-    assert "CPU_SUITE=configs/suites/simulation_backend_compare_thesis_small.yml" in text
+    assert "## Canonical Suites" in text
+    for suite_name in (
+        "smoke.yml",
+        "cpu_evidence.yml",
+        "gpu_evidence.yml",
+        "upmem_sim_evidence.yml",
+        "upmem_generic_sweep.yml",
+        "manual_large.yml",
+    ):
+        assert f"configs/suites/{suite_name}" in text
+    assert "configs/suites/diagnostics/" in text
 
 
 def test_makefile_targets_parse_with_dry_run() -> None:
@@ -70,9 +80,26 @@ def test_makefile_targets_parse_with_dry_run() -> None:
     ):
         result = subprocess.run(["make", "-n", target], cwd=ROOT, text=True, capture_output=True, check=False)
         assert result.returncode == 0, result.stderr
-        assert target != "bench-cpu" or "simulation_backend_compare_compute_medium.yml" in result.stdout
+        assert target != "bench-cpu" or "configs/suites/cpu_evidence.yml" in result.stdout
+        assert target != "bench-gpu" or "configs/suites/gpu_evidence.yml" in result.stdout
+        assert target != "bench-upmem-sim" or "configs/suites/upmem_sim_evidence.yml" in result.stdout
         assert target != "thesis-benchmark" or "thesis_benchmark_cpu_upmem" in result.stdout
         assert "simulation_backend_compare_thesis_small.yml" not in result.stdout
+
+
+def test_top_level_suite_family_is_canonical() -> None:
+    top_level = {path.name for path in (ROOT / "configs" / "suites").glob("*.yml")}
+
+    assert top_level == {
+        "smoke.yml",
+        "cpu_evidence.yml",
+        "gpu_evidence.yml",
+        "upmem_sim_evidence.yml",
+        "upmem_generic_sweep.yml",
+        "manual_large.yml",
+    }
+    assert (ROOT / "configs" / "suites" / "diagnostics" / "planner_compare.yml").exists()
+    assert (ROOT / "configs" / "suites" / "diagnostics" / "simulation_backend_compare_quick.yml").exists()
 
 
 def test_doctor_reports_prerequisites_without_benchmark_rows() -> None:

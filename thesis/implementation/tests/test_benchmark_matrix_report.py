@@ -154,7 +154,7 @@ def test_pim_frontier_pressure_suite_handles_synthetic_cases(tmp_path: Path, mon
 
     run_dir = run_pim_frontier_analysis(
         tmp_path,
-        suite_path=ROOT / "configs" / "suites" / "pim_frontier_pressure_quick.yml",
+        suite_path=ROOT / "configs" / "suites" / "diagnostics" / "pim_frontier_pressure_quick.yml",
         output_plots=False,
     )
     payload = json.loads((run_dir / "pim_frontier_analysis.json").read_text(encoding="utf-8"))
