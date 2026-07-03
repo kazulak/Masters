@@ -13,6 +13,7 @@ Run commands from this directory:
 ```bash
 cd thesis/implementation
 git submodule update --init --recursive external/QuEST external/SimplePIM external/PID-Comm
+../.venv/bin/python -m pip install -e ".[dev]"
 ```
 
 For a fresh clone, prefer:
@@ -39,6 +40,18 @@ The Makefile is the main execution surface. Evidence runs are written under
 `runs/evidence/...`; derived comparisons are written under
 `runs/comparisons/...`. `runs/latest` points only to the latest evidence run.
 
+Check local prerequisites without writing benchmark artifacts:
+
+```bash
+make doctor
+```
+
+Build the native QuEST CPU runner:
+
+```bash
+make build-quest-cpu
+```
+
 Run CPU evidence:
 
 ```bash
@@ -50,6 +63,11 @@ The default CPU suite is:
 ```text
 configs/suites/simulation_backend_compare_compute_medium.yml
 ```
+
+This default CPU evidence path uses the serious baselines only:
+`quest_cpu_full_state_exact` for full-state simulation and `quimb_tn_exact` for
+tensor-network simulation. `cpu_tn_einsum_exact` remains a diagnostic/internal
+route for small checks and is not part of the default CPU evidence suite.
 
 Override it when needed:
 
@@ -76,6 +94,16 @@ make bench-upmem-sim
 This checks the UPMEM SDK simulator path, then runs the strict UPMEM SDK
 simulator comparison suite. It fails if no strict UPMEM SDK simulator row is
 emitted.
+
+Run the canonical CPU + UPMEM SDK simulator evidence and comparison workflow:
+
+```bash
+make thesis-benchmark
+```
+
+This runs CPU evidence, regenerates a CPU report, runs strict UPMEM SDK
+simulator evidence, regenerates a UPMEM report, and writes a derived comparison
+under `runs/comparisons/thesis_benchmark/...`.
 
 Regenerate reports for the latest evidence run:
 

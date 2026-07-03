@@ -15,8 +15,20 @@ def test_makefile_shortcuts_are_defined() -> None:
 
     assert "CPU_SUITE ?= configs/suites/simulation_backend_compare_compute_medium.yml" in text
     assert "GPU_VERIFY ?= quest-hip" in text
-    for target in ("bench-cpu", "bench-gpu", "bench-upmem-sim", "report-latest", "compare-latest", "clean-generated"):
+    for target in (
+        "build-quest-cpu",
+        "doctor",
+        "bench-cpu",
+        "bench-gpu",
+        "bench-upmem-sim",
+        "thesis-benchmark",
+        "report-latest",
+        "compare-latest",
+        "clean-generated",
+    ):
         assert f"{target}:" in text
+    assert "bench-cpu: build-quest-cpu" in text
+    assert "compare-results --inputs \"$$cpu_run\" \"$$upmem_run\"" in text
     assert "runs/comparisons/$$suite_id/report_run/$$timestamp" in text
     assert "report-run --input runs/latest --out" in text
     assert "runs/comparisons/$$suite_id/latest_single_run/$$timestamp" in text
@@ -28,9 +40,12 @@ def test_readme_documents_shortcut_targets() -> None:
 
     assert "## Thesis Evidence Shortcuts" in text
     for command in (
+        "make doctor",
+        "make build-quest-cpu",
         "make bench-cpu",
         "make bench-gpu",
         "make bench-upmem-sim",
+        "make thesis-benchmark",
         "make report-latest",
         "make compare-latest",
         "make clean-generated",
@@ -42,11 +57,38 @@ def test_readme_documents_shortcut_targets() -> None:
 def test_makefile_targets_parse_with_dry_run() -> None:
     if shutil.which("make") is None:
         return
-    for target in ("bench-cpu", "bench-gpu", "bench-upmem-sim", "report-latest", "compare-latest", "clean-generated"):
+    for target in (
+        "build-quest-cpu",
+        "doctor",
+        "bench-cpu",
+        "bench-gpu",
+        "bench-upmem-sim",
+        "thesis-benchmark",
+        "report-latest",
+        "compare-latest",
+        "clean-generated",
+    ):
         result = subprocess.run(["make", "-n", target], cwd=ROOT, text=True, capture_output=True, check=False)
         assert result.returncode == 0, result.stderr
         assert target != "bench-cpu" or "simulation_backend_compare_compute_medium.yml" in result.stdout
+        assert target != "thesis-benchmark" or "thesis_benchmark_cpu_upmem" in result.stdout
         assert "simulation_backend_compare_thesis_small.yml" not in result.stdout
+
+
+def test_doctor_reports_prerequisites_without_benchmark_rows() -> None:
+    result = subprocess.run(
+        [sys.executable, "scripts/doctor.py"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Thesis benchmark doctor" in result.stdout
+    for marker in ("python", "dependency:quantum_bench", "quest_cpu", "gpu_rocm", "upmem_sdk"):
+        assert marker in result.stdout
+    assert "normalized_records" not in result.stdout
 
 
 def test_evidence_shortcut_helper_validates_gpu_and_upmem_rows(tmp_path: Path) -> None:

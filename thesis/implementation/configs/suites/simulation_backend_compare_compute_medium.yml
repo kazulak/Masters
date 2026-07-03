@@ -54,13 +54,6 @@ routes:
     options:
       optimize: greedy
 
-  - id: cpu_tn_einsum_exact
-    role: optional_diagnostic
-    benchmark_role: internal_debug_baseline
-    route_role_description: Internal NumPy einsum route retained for small diagnostic comparison only.
-    route_limitation_scope: Internal einsum expression/lowering engine limitation, not a tensor-network approach limitation.
-    required: false
-
 validation:
   reference_route: quest_cpu_full_state_exact
   require_output_for_roles:

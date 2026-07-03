@@ -202,14 +202,14 @@ def test_simulation_backend_compare_suite_loads() -> None:
         assert all(case["circuit"]["kind"] == "quest_compatible" for case in loaded["cases"])
     assert compute_medium["metadata"]["gpu_independent"] is True
     assert "gpu" not in " ".join(compute_medium["route_policy"]["routes"])
+    assert compute_medium["route_policy"]["routes"] == ["quest_cpu_full_state_exact", "quimb_tn_exact"]
     assert compute_medium["repeats"] == 3
     assert compute_medium["warmups"] == 1
     compute_routes = {route["id"]: route for route in compute_medium["_route_configs"]}
+    assert "cpu_tn_einsum_exact" not in compute_routes
+    assert compute_routes["quest_cpu_full_state_exact"]["benchmark_role"] == "serious_full_state_baseline"
     assert compute_routes["quimb_tn_exact"]["required"] is True
     assert compute_routes["quimb_tn_exact"]["benchmark_role"] == "serious_external_tn_baseline"
-    assert compute_routes["cpu_tn_einsum_exact"]["required"] is False
-    assert compute_routes["cpu_tn_einsum_exact"]["role"] == "optional_diagnostic"
-    assert compute_routes["cpu_tn_einsum_exact"]["benchmark_role"] == "internal_debug_baseline"
     assert compute_large["metadata"]["manual_invocation_required"] is True
     assert compute_large["metadata"]["expected_runtime_class"] == "manual_large"
     assert compute_large["metadata"]["expected_memory_class"] == "workstation_high"
