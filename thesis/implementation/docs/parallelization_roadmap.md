@@ -31,10 +31,10 @@ stronger parallelism claims.
 
 | Mode | What is parallelized | Redundant work risk | Evidence needed | Allowed claim | Not allowed |
 |---|---|---|---|---|---|
-| Slicing-based parallelism | Independent slices of one contraction path. | FLOP inflation, repeated boundary contractions, slice reconstruction overhead. | Slice config, slice count, FLOP inflation, peak memory, reconstruction validation, wall/compute timing. | "Slicing exposes independent work under this configured path." | Claiming no redundant work, or claiming speedup without matched unsliced baseline. |
+| Slicing-based parallelism | Independent slices of one contraction path. | FLOP ratio/change, repeated boundary contractions, slice reconstruction overhead. | Slice config, slice count, FLOP ratio/change, peak memory, reconstruction validation, wall/compute timing. | "Slicing exposes independent work under this configured path." | Claiming no redundant work, or claiming speedup without matched unsliced baseline. |
 | Tree-node/frontier parallelism | Independent ready TaskGraph nodes or subtrees. | Duplicate input materialization, repeated validation, scheduler overhead, poor frontier width from serialized paths. | Frontier widths, executed concurrent tasks, dependency proof, no duplicate contractions, final equivalence. | "The TaskGraph scheduler executed independent contractions concurrently." | Treating modeled frontier width as executed parallel speedup. |
 | Intra-contraction parallelism | Tiles or partitions inside one contraction. | Partial-output reduction cost, transfer overhead, synchronization overhead, load imbalance. | Tile/partition plan, worker count, reduction plan, transfer and sync timing, validation. | "This contraction used intra-task workers/DPUs/threads." | Claiming full TN parallelism from a single tiled contraction alone. |
-| Hybrid slicing + frontier | Slices and independent TaskGraph nodes run concurrently. | Multiplicative task growth, FLOP inflation plus scheduler overhead. | Slice IDs, frontier wave IDs, reconstruction validation, task duplication checks. | "Hybrid mode combines slice-level and graph-level parallelism." | Comparing against the wrong baseline or hiding FLOP inflation. |
+| Hybrid slicing + frontier | Slices and independent TaskGraph nodes run concurrently. | Multiplicative task growth, FLOP ratio/change plus scheduler overhead. | Slice IDs, frontier wave IDs, reconstruction validation, task duplication checks. | "Hybrid mode combines slice-level and graph-level parallelism." | Comparing against the wrong baseline or hiding slicing cost changes. |
 | CPU parallelism | CPU threads, BLAS threads, processes, slicing workers, or frontier workers. | Oversubscription, nondeterministic thread settings, BLAS hidden parallelism. | Thread/env settings, process count, BLAS backend, repeat statistics. | "CPU run used controlled host parallelism." | Comparing against uncontrolled thread counts. |
 | GPU parallelism | GPU full-state simulation or future GPU TN kernels. | Host/device transfer, asynchronous timing errors, CPU fallback hidden as GPU. | Verified device metadata, synchronization status, no CPU fallback, compute vs wall timing. | "Verified GPU execution for this execution model." | Calling QuEST full-state GPU a GPU TN result. |
 | UPMEM/PIM parallelism | DPU task assignment, DPU groups, or intra-DPU kernels. | Host orchestration overhead, transfer cost, quantization/dequantization, DPU sync/reduction. | DPU program execution, DPU count, task assignment, transfer/quantization/sync timing, no CPU contraction fallback. | "Strict UPMEM/PIM path executed these tasks under this mode." | Reporting SDK simulator timing as hardware speedup. |
@@ -50,7 +50,7 @@ stronger parallelism claims.
   sequential task execution against graph-level concurrency.
 - Compare sequential TaskGraph, frontier TaskGraph, and slicing under matched
   circuits and validation settings.
-- Measure FLOP inflation, peak/intermediate memory, wall time, compute time,
+- Measure FLOP ratio/change, peak/intermediate memory, wall time, compute time,
   scheduler overhead, and output accuracy.
 
 ### GPU Full-State And Tensor-Network Goals
@@ -83,7 +83,7 @@ stronger parallelism claims.
 
 | Hybrid mode | Expected benefit | Main risk | Baseline | Artifact fields needed |
 |---|---|---|---|---|
-| Slicing only | Lower memory, independent slice work. | FLOP inflation and reconstruction overhead. | Unsliced same route. | slice_count, sliced_indices, flop_inflation, reconstruction_status. |
+| Slicing only | Lower memory, independent slice work. | FLOP ratio/change and reconstruction overhead. | Unsliced same route. | slice_count, sliced_indices, slicing_flop_ratio, reconstruction_status. |
 | Frontier only | Use independent TaskGraph nodes. | Serialized paths may expose little width. | Sequential TaskGraph route. | frontier_wave_id, ready_width, executed_parallel_tasks, scheduler_overhead_s. |
 | Slicing + frontier | Expose more independent work. | Task explosion and duplicated work. | Slicing-only and frontier-only. | slice_id, frontier_wave_id, duplicate_contraction_check. |
 | Slicing + UPMEM task execution | Bound per-task memory while keeping UPMEM strict path. | Host transfer and quantization may dominate. | Sequential UPMEM same route. | slice_transfer_bytes, quantization_time_s, dpu_invocations. |
@@ -120,7 +120,7 @@ Tests needed before claiming executed parallelism:
 Thesis-facing outputs should include:
 
 - parallelism mode comparison table;
-- slicing FLOP inflation table;
+- slicing FLOP ratio/change table;
 - frontier concurrency table;
 - hybrid mode table;
 - CPU/GPU/UPMEM route capability matrix;
@@ -136,10 +136,10 @@ evidence, and hardware evidence.
 | Goal | Purpose | Route/backend | Required tests | Expected artifacts | Thesis value | Blockers/risks | Status language |
 |---|---|---|---|---|---|---|---|
 | G0 | Document semantics and current baseline. | Existing CPU/GPU/UPMEM routes. | Doc/link checks; existing tests remain green. | This roadmap; architecture links. | Prevents overclaiming. | Stale docs. | Baseline documentation goal. |
-| G1 | Add explicit slicing configuration and evidence goals. | Quimb/cotengra CPU TN route. | Slice reconstruction; exact output equivalence. | Slicing config rows; FLOP inflation table. | Enables slicing-specific claims. | Cotengra config complexity; fair baselines. | Required for slicing claims; optional for current thesis if documented as future work. |
+| G1 | Add explicit slicing configuration and evidence goals. | Quimb/cotengra CPU TN route. | Slice reconstruction; exact output equivalence. | Slicing config rows; FLOP ratio/change table. | Enables slicing-specific claims. | Cotengra config complexity; fair baselines. | Required for slicing claims; optional for current thesis if documented as future work. |
 | G2 | Define internal sequential-vs-frontier scheduler prototype goals. | Internal TaskGraph route. | DAG dependency invariants; no duplicate tasks. | Frontier execution logs; scheduler timing. | Tests graph-level parallelism independently of slicing. | Scheduler complexity; limited frontier width. | Optional experimental goal. |
 | G3 | Compare CPU slicing vs frontier experimentally. | CPU TN slicing route and frontier prototype. | Matched validation; controlled CPU thread settings. | Comparison CSV/Markdown/plots. | Separates parallelism sources. | Oversubscription; unfair timing. | Required for hybrid claims; optional for current thesis if not implemented. |
-| G4 | Define slicing + frontier hybrid experiment goals. | CPU TN hybrid prototype. | Slice/frontier reconstruction; duplicate-work checks. | Hybrid mode table; per-component timing. | Shows composability of parallel modes. | FLOP inflation and scheduler overhead. | Optional hybrid extension. |
+| G4 | Define slicing + frontier hybrid experiment goals. | CPU TN hybrid prototype. | Slice/frontier reconstruction; duplicate-work checks. | Hybrid mode table; per-component timing. | Shows composability of parallel modes. | Slicing cost changes and scheduler overhead. | Optional hybrid extension. |
 | G5 | Define GPU SOTA feasibility or NVIDIA cluster route goals. | Existing QuEST GPU full-state plus future GPU TN backend. | GPU verification; no CPU fallback; synchronization checks. | GPU capability/provenance table. | Separates full-state GPU and future GPU TN evidence. | Vendor stack availability; CUDA/ROCm mismatch. | Optional but thesis-useful. |
 | G6 | Define UPMEM multi-DPU scheduling design goals. | UPMEM TaskGraph/runtime design. | Task assignment invariants; strict no CPU fallback. | DPU scheduling design; modeled/executed comparison fields. | Required before PIM parallelism claims. | Hardware/tooling, PID-Comm integration, reduction costs. | Required for PIM parallelism claims; optional for current thesis if limitations are documented. |
 | G7 | Define UPMEM multi-DPU prototype goals. | Future UPMEM hardware or simulator-supported multi-DPU path. | DPU invocation count; transfer/sync timing; final validation. | Hardware/simulator rows with DPU assignments. | First executed PIM parallelism evidence. | Hardware access and tooling reliability. | Hardware/tooling-dependent. |

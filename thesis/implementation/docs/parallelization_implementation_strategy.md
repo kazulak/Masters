@@ -17,7 +17,7 @@ incrementally, and keep missing values explicit as `not_applicable`,
 | `parallelism_mode` | Names the selected mode. | `sequential`, `slicing`, `frontier`, `intra_contraction`, `hybrid`, `modeled_only`, `not_applicable`. |
 | `parallelism_evidence_type` | Separates executed evidence from analysis. | `executed`, `modeled`, `configured_not_executed`, `unsupported`, `not_applicable`. |
 | `execution_plan_*` | Identifies the plan used by a route. | plan id, plan kind, worker count, status, executed flag. |
-| `slicing_*` | Captures slicing configuration and reconstruction. | backend, sliced indices, slice count, FLOP inflation, reconstruction status. |
+| `slicing_*` | Captures slicing configuration and reconstruction. | backend, sliced indices, slice count, FLOP ratio/change, reconstruction status. |
 | `frontier_*` | Captures graph-level scheduling evidence. | wave count, max/mean frontier width, executed parallel task count, scheduler worker count. |
 | `backend/device metadata` | Keeps comparisons fair. | CPU thread and BLAS settings, GPU device/runtime, UPMEM DPU execution mode. |
 | `timing breakdown` | Preserves attribution. | Reuse existing total, setup, lowering, transfer, compute, validation, output fields; add mode-specific timing only when needed. |
@@ -71,7 +71,7 @@ Route-specific guidance:
 Parallelism fields should be enough to compare modes honestly:
 
 - distinguish executed parallelism from modeled potential;
-- distinguish slicing FLOP inflation from useful work;
+- distinguish slicing FLOP ratio/change from useful work;
 - distinguish graph-level scheduler parallelism from intra-contraction tiling;
 - distinguish SDK simulator timing from UPMEM hardware timing;
 - distinguish exact output validation from metrics-only performance rows.
@@ -79,7 +79,7 @@ Parallelism fields should be enough to compare modes honestly:
 Reports should derive the following tables from normalized records:
 
 - parallelism mode comparison table;
-- slicing configuration and FLOP inflation table;
+- slicing configuration and FLOP ratio/change table;
 - frontier concurrency table;
 - hybrid component table;
 - timing breakdown table;
@@ -131,7 +131,7 @@ baseline so both routes can appear side by side in one diagnostic suite.
 Required evidence:
 
 - slice count and sliced index metadata;
-- FLOP inflation estimate;
+- `slicing_flop_ratio` and cost-source metadata;
 - deterministic slice reconstruction;
 - full output agreement for small correctness cases.
 
@@ -166,8 +166,11 @@ Required evidence:
 
 ### 2E.55 - Hybrid Slicing Plus Frontier Experiment
 
-Only start after slicing and frontier execution are independently validated.
-Measure whether combining modes helps or only multiplies overhead.
+The Wave 2E.55 feasibility verdict is tracked in
+[hybrid_slicing_frontier_design.md](hybrid_slicing_frontier_design.md).
+True hybrid execution should be deferred until a shared slice-aware TaskGraph
+representation exists. Do not call side-by-side Quimb slicing and internal
+TaskGraph frontier rows a hybrid.
 
 Required evidence:
 
