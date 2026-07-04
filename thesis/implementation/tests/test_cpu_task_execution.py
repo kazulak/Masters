@@ -9,7 +9,15 @@ from quantum_bench.bench.config import load_suite
 from quantum_bench.circuits import builtin_circuit
 from quantum_bench.core.records import BenchmarkContext, PathSummary, TaskGraph
 from quantum_bench.providers.exact_tn.cpu_einsum import CpuTnEinsumExactRoute
-from quantum_bench.tn import build_slice_aware_taskgraph_model, build_tensor_network, plan_task_graph, validate_slice_aware_taskgraph_model
+from quantum_bench.tn import (
+    build_slice_aware_taskgraph_model,
+    build_tensor_network,
+    execute_task_hybrid_slice_frontier_np_einsum,
+    execute_task_sequence_np_einsum,
+    execute_task_sliced_sequence_np_einsum,
+    plan_task_graph,
+    validate_slice_aware_taskgraph_model,
+)
 from quantum_bench.validation import compute_reference, validate
 
 
@@ -202,3 +210,64 @@ def test_slice_aware_taskgraph_model_reports_unsupported_empty_graph() -> None:
     assert metadata["slice_reconstruction_required"] is False
     assert metadata["hybrid_ready"] is False
     assert "slice_count" not in metadata
+
+
+def test_executable_sequential_internal_slicing_matches_taskgraph_baseline() -> None:
+    circuit = builtin_circuit("bv", {"n_qubits": 4})
+    network = build_tensor_network(circuit)
+    graph = plan_task_graph(network)
+    expected, _ = execute_task_sequence_np_einsum(graph, network)
+
+    output, metadata = execute_task_sliced_sequence_np_einsum(graph, network, max_slice_count=2)
+
+    np.testing.assert_allclose(output, expected, atol=1.0e-12)
+    assert metadata["parallelism_mode"] == "slicing"
+    assert metadata["parallelism_evidence_type"] == "executed"
+    assert metadata["slice_model_execution_status"] == "executed"
+    assert metadata["slice_task_execution_mode"] == "sequential"
+    assert metadata["slice_model_executed_task_count"] == metadata["slice_model_task_count"] == 2
+    assert metadata["slice_reconstruction_status"] == "completed"
+    assert metadata["hybrid_ready"] is False
+    assert metadata["frontier_scheduler_enabled"] is False
+    assert metadata["hybrid_reconstruction_validation_status"] == "passed"
+    assert metadata["dependency_violation_detected"] is False
+    assert set(metadata["executed_source_task_ids"]) == {task.id for task in graph.tasks}
+    assert len(metadata["executed_source_task_ids"]) == len(graph.tasks)
+    assert len(metadata["executed_slice_task_ids"]) == metadata["slice_model_task_count"]
+
+
+def test_hybrid_slice_frontier_matches_taskgraph_baseline_for_worker_counts() -> None:
+    circuit = builtin_circuit("xor", {"n_qubits": 4})
+    network = build_tensor_network(circuit)
+    graph = plan_task_graph(network)
+    expected, _ = execute_task_sequence_np_einsum(graph, network)
+
+    for worker_count in (1, 2):
+        output, metadata = execute_task_hybrid_slice_frontier_np_einsum(
+            graph,
+            network,
+            frontier_worker_count=worker_count,
+            max_slice_count=2,
+        )
+
+        np.testing.assert_allclose(output, expected, atol=1.0e-12)
+        assert metadata["parallelism_mode"] == "hybrid"
+        assert metadata["parallelism_evidence_type"] == "executed"
+        assert metadata["hybrid_components"] == ["slicing", "frontier"]
+        assert metadata["slicing_backend"] == "internal_taskgraph"
+        assert metadata["frontier_scheduler_enabled"] is True
+        assert metadata["frontier_worker_count"] == worker_count
+        assert metadata["frontier_parallel_execution"] is (worker_count > 1)
+        assert metadata["slice_parallel_execution"] is (worker_count > 1)
+        assert metadata["slice_task_execution_mode"] == "frontier_scheduled"
+        assert metadata["hybrid_ready"] is True
+        assert metadata["slice_model_execution_status"] == "executed"
+        assert metadata["slice_reconstruction_status"] == "completed"
+        assert metadata["hybrid_reconstruction_validation_status"] == "passed"
+        assert metadata["frontier_executed_task_count"] == len(graph.tasks)
+        assert metadata["duplicate_contraction_check"] == "passed"
+        assert metadata["missing_dependency_check"] == "passed"
+        assert metadata["dependency_violation_detected"] is False
+        assert set(metadata["executed_source_task_ids"]) == {task.id for task in graph.tasks}
+        assert len(metadata["executed_source_task_ids"]) == len(graph.tasks)
+        assert len(metadata["executed_slice_task_ids"]) == metadata["slice_model_task_count"]

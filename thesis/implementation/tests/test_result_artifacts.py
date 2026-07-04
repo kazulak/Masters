@@ -218,6 +218,16 @@ def test_evidence_run_layout_and_compare_results_read_only_boundary(tmp_path: Pa
     assert "frontier_executed_task_count" in header
     assert "frontier_executed_parallel_task_count" in header
     assert "duplicate_contraction_check" in header
+    assert "slice_reconstruction_status" in header
+    assert "slice_task_execution_mode" in header
+    assert "hybrid_components" in header
+    assert "hybrid_ready" in header
+    assert "slice_model_execution_status" in header
+    assert "slice_model_slice_count" in header
+    assert "slice_model_task_count" in header
+    assert "slice_model_executed_task_count" in header
+    assert "hybrid_reconstruction_validation_status" in header
+    assert "dependency_violation_detected" in header
     assert comparison_manifest["artifact_kind"] == "comparison_report"
     assert comparison_manifest["comparison_type"] == "quantization_attribution"
     assert comparison_manifest["inputs"][0]["artifact_kind"] == "evidence_run"

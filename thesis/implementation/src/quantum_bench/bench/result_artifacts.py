@@ -69,6 +69,10 @@ RESULT_FIELDS = [
     "slicing_memory_ratio",
     "slicing_memory_reduction_factor",
     "slicing_reconstruction_status",
+    "slice_aware_taskgraph_available",
+    "slice_reconstruction_required",
+    "slice_reconstruction_status",
+    "slice_task_execution_mode",
     "slice_parallel_execution",
     "slice_worker_count",
     "frontier_scheduler_enabled",
@@ -83,6 +87,16 @@ RESULT_FIELDS = [
     "scheduler_overhead_s",
     "duplicate_contraction_check",
     "missing_dependency_check",
+    "hybrid_components",
+    "hybrid_ready",
+    "slice_model_execution_status",
+    "slice_model_slice_count",
+    "slice_model_task_count",
+    "slice_model_executed_task_count",
+    "hybrid_reconstruction_validation_status",
+    "hybrid_reconstruction_max_abs_error",
+    "dependency_violation_detected",
+    "hybrid_execution_node_count",
     "intra_contraction_parallelism_source",
     "modeled_parallelism_available",
     "output_kind",
@@ -270,6 +284,15 @@ PARALLELISM_MODE_SUMMARY_FIELDS = [
     "slicing_memory_ratio",
     "slicing_memory_reduction_factor",
     "scheduler_overhead_s",
+    "hybrid_components",
+    "hybrid_ready",
+    "slice_model_execution_status",
+    "slice_model_slice_count",
+    "slice_model_task_count",
+    "slice_model_executed_task_count",
+    "hybrid_reconstruction_validation_status",
+    "dependency_violation_detected",
+    "hybrid_execution_node_count",
     "same_family_timing_group",
     "interpretation_note",
 ]
@@ -941,6 +964,10 @@ def normalize_parallelism_metadata(record: JsonDict) -> JsonDict:
     normalized.setdefault("slicing_memory_ratio", None)
     normalized.setdefault("slicing_memory_reduction_factor", None)
     normalized.setdefault("slicing_reconstruction_status", None)
+    normalized.setdefault("slice_aware_taskgraph_available", False)
+    normalized.setdefault("slice_reconstruction_required", None)
+    normalized.setdefault("slice_reconstruction_status", None)
+    normalized.setdefault("slice_task_execution_mode", None)
     normalized.setdefault("slice_parallel_execution", False)
     normalized.setdefault("slice_worker_count", None)
     normalized.setdefault("frontier_scheduler_enabled", False)
@@ -955,6 +982,16 @@ def normalize_parallelism_metadata(record: JsonDict) -> JsonDict:
     normalized.setdefault("scheduler_overhead_s", None)
     normalized.setdefault("duplicate_contraction_check", None)
     normalized.setdefault("missing_dependency_check", None)
+    normalized.setdefault("hybrid_components", None)
+    normalized.setdefault("hybrid_ready", False)
+    normalized.setdefault("slice_model_execution_status", None)
+    normalized.setdefault("slice_model_slice_count", None)
+    normalized.setdefault("slice_model_task_count", None)
+    normalized.setdefault("slice_model_executed_task_count", None)
+    normalized.setdefault("hybrid_reconstruction_validation_status", None)
+    normalized.setdefault("hybrid_reconstruction_max_abs_error", None)
+    normalized.setdefault("dependency_violation_detected", False)
+    normalized.setdefault("hybrid_execution_node_count", None)
     normalized.setdefault("modeled_parallelism_available", False)
     normalized["execution_plan_executed"] = executed
 
@@ -995,9 +1032,12 @@ def normalize_parallelism_metadata(record: JsonDict) -> JsonDict:
 
     normalized["execution_plan_executed"] = bool(normalized["execution_plan_executed"])
     normalized["slicing_enabled"] = bool(normalized["slicing_enabled"])
+    normalized["slice_aware_taskgraph_available"] = bool(normalized["slice_aware_taskgraph_available"])
     normalized["slice_parallel_execution"] = bool(normalized["slice_parallel_execution"])
     normalized["frontier_scheduler_enabled"] = bool(normalized["frontier_scheduler_enabled"])
     normalized["frontier_parallel_execution"] = bool(normalized["frontier_parallel_execution"])
+    normalized["hybrid_ready"] = bool(normalized["hybrid_ready"])
+    normalized["dependency_violation_detected"] = bool(normalized["dependency_violation_detected"])
     normalized["modeled_parallelism_available"] = bool(normalized["modeled_parallelism_available"])
     return to_jsonable(normalized)
 
@@ -1067,6 +1107,8 @@ def _default_parallelism_mode(*, route_id: str, execution_model: str, target: st
         return "slicing"
     if route_id == "cpu_tn_frontier_exact":
         return "frontier"
+    if route_id == "cpu_tn_hybrid_sliced_frontier_exact":
+        return "hybrid"
     if execution_model == "tensor_network" or target == "upmem" or route_id == "upmem_tn_sdk_simulator_quantized":
         return "sequential"
     return "not_applicable"
@@ -1081,6 +1123,8 @@ def _default_execution_plan_kind(*, route_id: str, execution_model: str, target:
         return "cotengra_sliced_contraction_tree"
     if route_id == "cpu_tn_frontier_exact":
         return "taskgraph_frontier_scheduler"
+    if route_id == "cpu_tn_hybrid_sliced_frontier_exact":
+        return "internal_slice_aware_taskgraph_frontier_scheduler"
     if route_id == "quimb_tn_exact":
         return "external_tn_unsliced_contract"
     if route_id == "cpu_tn_einsum_exact" or scope == "full_taskgraph_reference":
@@ -1168,6 +1212,17 @@ def _parallelism_mode_summary(records: list[JsonDict]) -> list[JsonDict]:
                 "slicing_memory_ratio": _mean_numeric(record.get("slicing_memory_ratio") for record in route_records),
                 "slicing_memory_reduction_factor": _mean_numeric(record.get("slicing_memory_reduction_factor") for record in route_records),
                 "scheduler_overhead_s": _sum_numbers(record.get("scheduler_overhead_s") for record in route_records),
+                "hybrid_components": first.get("hybrid_components"),
+                "hybrid_ready": any(bool(record.get("hybrid_ready", False)) for record in route_records),
+                "slice_model_execution_status": _aggregate_change_kind(record.get("slice_model_execution_status") for record in route_records),
+                "slice_model_slice_count": _max_numeric(record.get("slice_model_slice_count") for record in route_records),
+                "slice_model_task_count": _sum_ints(record.get("slice_model_task_count") for record in route_records),
+                "slice_model_executed_task_count": _sum_ints(record.get("slice_model_executed_task_count") for record in route_records),
+                "hybrid_reconstruction_validation_status": _aggregate_change_kind(
+                    record.get("hybrid_reconstruction_validation_status") for record in route_records
+                ),
+                "dependency_violation_detected": any(bool(record.get("dependency_violation_detected", False)) for record in route_records),
+                "hybrid_execution_node_count": _sum_ints(record.get("hybrid_execution_node_count") for record in route_records),
                 "same_family_timing_group": _same_family_timing_group(route_id),
                 "interpretation_note": _parallelism_interpretation_note(route_id),
             }
@@ -1205,7 +1260,7 @@ def _parallelism_summary_markdown(rows: list[JsonDict]) -> str:
     lines.extend(
         [
             "",
-            "Slicing evidence here is executed cotengra slicing, but `slice_parallel_execution=false` in Wave 2E.52/2E.54. Frontier evidence is executed internal TaskGraph wave scheduling. These diagnostics do not make GPU, UPMEM, or hardware speedup claims.",
+            "Slicing evidence here is executed cotengra slicing, but `slice_parallel_execution=false` in Wave 2E.52/2E.54. Frontier evidence is executed internal TaskGraph wave scheduling. Hybrid evidence, when present, is a diagnostic internal slice-aware TaskGraph route and is not a serious baseline or speedup claim. These diagnostics do not make GPU, UPMEM, or hardware speedup claims.",
             "",
         ]
     )
@@ -1215,7 +1270,7 @@ def _parallelism_summary_markdown(rows: list[JsonDict]) -> str:
 def _same_family_timing_group(route_id: str) -> str:
     if route_id in {"quimb_tn_exact", "quimb_tn_sliced_exact"}:
         return "quimb_external_tn"
-    if route_id in {"cpu_tn_einsum_exact", "cpu_tn_frontier_exact"}:
+    if route_id in {"cpu_tn_einsum_exact", "cpu_tn_frontier_exact", "cpu_tn_hybrid_sliced_frontier_exact"}:
         return "internal_taskgraph"
     return "not_applicable"
 
@@ -1227,6 +1282,7 @@ def _parallelism_interpretation_note(route_id: str) -> str:
         "quimb_tn_sliced_exact": "executed_slicing_evidence_single_worker_reconstruction",
         "cpu_tn_einsum_exact": "diagnostic_internal_sequential_taskgraph",
         "cpu_tn_frontier_exact": "diagnostic_internal_frontier_taskgraph_no_speedup_claim",
+        "cpu_tn_hybrid_sliced_frontier_exact": "diagnostic_internal_hybrid_slice_frontier_no_speedup_claim",
     }
     return notes.get(route_id, "not_applicable")
 

@@ -70,6 +70,11 @@ def test_route_probe_and_upmem_skip_reason() -> None:
     assert routes["cpu_tn_frontier_exact"].identity.output_contract == "final_tensor"
     assert routes["cpu_tn_frontier_exact"].identity.validation_mode == "compare_output"
     assert routes["cpu_tn_frontier_exact"].capabilities().metadata["frontier_scheduler_enabled"] is True
+    assert routes["cpu_tn_hybrid_sliced_frontier_exact"].identity.role == "internal_hybrid_diagnostic"
+    assert routes["cpu_tn_hybrid_sliced_frontier_exact"].identity.output_contract == "final_tensor"
+    assert routes["cpu_tn_hybrid_sliced_frontier_exact"].identity.validation_mode == "compare_output"
+    assert routes["cpu_tn_hybrid_sliced_frontier_exact"].capabilities().metadata["hybrid_route"] is True
+    assert routes["cpu_tn_hybrid_sliced_frontier_exact"].capabilities().metadata["slicing_backend"] == "internal_taskgraph"
     assert routes["quest_cpu_full_state_exact"].identity.output_contract == "statevector"
     assert routes["quest_cpu_full_state_exact"].identity.role == "serious_full_state_baseline"
     assert routes["quest_cpu_full_state_exact"].identity.validation_mode == "compare_statevector"

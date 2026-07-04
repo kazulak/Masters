@@ -490,6 +490,7 @@ def test_simulation_backend_compare_suite_loads() -> None:
     quimb_slicing = load_suite(ROOT / "configs" / "suites" / "diagnostics" / "quimb_slicing_quick.yml")
     cpu_frontier = load_suite(ROOT / "configs" / "suites" / "diagnostics" / "cpu_frontier_quick.yml")
     cpu_slicing_vs_frontier = load_suite(ROOT / "configs" / "suites" / "diagnostics" / "cpu_slicing_vs_frontier_quick.yml")
+    cpu_hybrid = load_suite(ROOT / "configs" / "suites" / "diagnostics" / "cpu_hybrid_quick.yml")
     for loaded in (thesis_small, scaling):
         assert loaded["route_policy"]["routes"] == ["cpu_tn_einsum_exact", "quest_cpu_full_state_exact", "quimb_tn_exact"]
         assert loaded["metadata"]["deterministic_unitary_only"] is True
@@ -550,6 +551,16 @@ def test_simulation_backend_compare_suite_loads() -> None:
     ]
     assert route_config_for(cpu_slicing_vs_frontier, "quimb_tn_sliced_exact")["options"]["require_slicing"] is True
     assert route_config_for(cpu_slicing_vs_frontier, "cpu_tn_frontier_exact")["options"]["frontier_worker_count"] == 2
+    assert cpu_hybrid["metadata"]["intended_use"] == "diagnostics"
+    assert cpu_hybrid["route_policy"]["routes"] == [
+        "quest_cpu_full_state_exact",
+        "cpu_tn_einsum_exact",
+        "cpu_tn_hybrid_sliced_frontier_exact",
+    ]
+    hybrid_route = route_config_for(cpu_hybrid, "cpu_tn_hybrid_sliced_frontier_exact")
+    assert hybrid_route["benchmark_role"] == "internal_hybrid_diagnostic"
+    assert hybrid_route["options"]["frontier_worker_count"] == 2
+    assert hybrid_route["options"]["max_slice_count"] == 2
     assert cpu_gpu_sweep["suite_id"] == "cpu_gpu_sweep"
     assert cpu_gpu_sweep["route_policy"]["routes"] == ["quest_cpu_full_state_exact", "quest_gpu_full_state_exact"]
     assert cpu_gpu_sweep["warmups"] == 1
@@ -1286,6 +1297,94 @@ def test_cpu_frontier_diagnostic_suite_records_frontier_metadata(tmp_path: Path,
     assert all(record["duplicate_contraction_check"] == "passed" for record in frontier_records)
     assert all(record["missing_dependency_check"] == "passed" for record in frontier_records)
     assert all(record["frontier_scheduler_enabled"] is False for record in sequential_records)
+    assert all(record["parallelism_mode"] == "sequential" for record in sequential_records)
+
+
+def test_cpu_hybrid_diagnostic_suite_records_hybrid_metadata(tmp_path: Path, monkeypatch) -> None:
+    class FakeQuestRoute:
+        name = "quest_cpu_full_state_exact"
+        backend_family = "quest"
+        identity = RouteIdentity(
+            route_id=name,
+            display_name="Fake QuEST CPU",
+            role="serious_full_state_baseline",
+            simulation_method="exact_full_state",
+            kernel_family="full_state_vector",
+            hardware_target="cpu",
+            execution_mode="in_process_fake",
+            output_contract="statevector",
+            validation_mode="compare_statevector",
+        )
+
+        def probe(self):
+            return RouteProbe(self.name, True)
+
+        def capabilities(self):
+            return RouteCapabilities(identity=self.identity, can_return_output=True)
+
+        def can_execute(self, graph, context):
+            return True, None
+
+        def estimate(self, graph, context):  # pragma: no cover
+            raise NotImplementedError
+
+        def prepare(self, graph, network, context):
+            return {"graph": graph, "network": network}
+
+        def execute(self, prepared, context):
+            expected, _ = execute_task_sequence_np_einsum(prepared["graph"], prepared["network"])
+            statevector = tensor_to_quest_statevector(expected)
+            return RouteResult(
+                route=self.name,
+                backend_family=self.backend_family,
+                status="passed",
+                output=RouteOutput(contract="statevector", array=statevector),
+                profile=ExecutionProfile(total_s=0.01, kernel_s=0.01),
+                energy_joules=None,
+                energy_source="unavailable",
+                metadata={},
+            )
+
+    real_routes = route_registry(ROOT)
+    monkeypatch.setattr(
+        "quantum_bench.bench.simulation_backend_compare.route_registry",
+        lambda root_dir: {
+            "quest_cpu_full_state_exact": FakeQuestRoute(),
+            "cpu_tn_einsum_exact": real_routes["cpu_tn_einsum_exact"],
+            "cpu_tn_hybrid_sliced_frontier_exact": real_routes["cpu_tn_hybrid_sliced_frontier_exact"],
+        },
+    )
+    result = run_simulation_backend_compare(
+        tmp_path,
+        suite_path=ROOT / "configs" / "suites" / "diagnostics" / "cpu_hybrid_quick.yml",
+        artifact_retention="compact",
+    )
+    records = load_result_records([result.run_dir])
+    hybrid_records = [record for record in records if record["route_id"] == "cpu_tn_hybrid_sliced_frontier_exact"]
+    sequential_records = [record for record in records if record["route_id"] == "cpu_tn_einsum_exact"]
+
+    assert hybrid_records
+    assert all(record["validation_status"] == "passed" for record in hybrid_records)
+    assert all(record["parallelism_mode"] == "hybrid" for record in hybrid_records)
+    assert all(record["parallelism_evidence_type"] == "executed" for record in hybrid_records)
+    assert all(record["hybrid_components"] == ["slicing", "frontier"] for record in hybrid_records)
+    assert all(record["slicing_backend"] == "internal_taskgraph" for record in hybrid_records)
+    assert all(record["slicing_enabled"] is True for record in hybrid_records)
+    assert all(record["slice_task_execution_mode"] == "frontier_scheduled" for record in hybrid_records)
+    assert all(record["slice_parallel_execution"] is True for record in hybrid_records)
+    assert all(record["frontier_scheduler_enabled"] is True for record in hybrid_records)
+    assert all(record["frontier_worker_count"] == 2 for record in hybrid_records)
+    assert all(record["hybrid_ready"] is True for record in hybrid_records)
+    assert all(record["slice_model_execution_status"] == "executed" for record in hybrid_records)
+    assert all(record["slice_model_slice_count"] == 2 for record in hybrid_records)
+    assert all(record["slice_model_task_count"] == 2 for record in hybrid_records)
+    assert all(record["slice_model_executed_task_count"] == 2 for record in hybrid_records)
+    assert all(record["slice_reconstruction_status"] == "completed" for record in hybrid_records)
+    assert all(record["hybrid_reconstruction_validation_status"] == "passed" for record in hybrid_records)
+    assert all(record["frontier_executed_task_count"] == record["task_count"] for record in hybrid_records)
+    assert all(record["duplicate_contraction_check"] == "passed" for record in hybrid_records)
+    assert all(record["missing_dependency_check"] == "passed" for record in hybrid_records)
+    assert all(record["dependency_violation_detected"] is False for record in hybrid_records)
     assert all(record["parallelism_mode"] == "sequential" for record in sequential_records)
 
 
