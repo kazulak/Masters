@@ -80,6 +80,11 @@ def test_route_probe_and_upmem_skip_reason() -> None:
     assert routes["quimb_tn_exact"].identity.role == "serious_external_tn_baseline"
     assert routes["quimb_tn_exact"].identity.validation_mode == "compare_output"
     assert routes["quimb_tn_exact"].backend_family == "quimb"
+    assert routes["quimb_tn_sliced_exact"].identity.output_contract == "final_tensor"
+    assert routes["quimb_tn_sliced_exact"].identity.role == "explicit_slicing_evidence"
+    assert routes["quimb_tn_sliced_exact"].identity.validation_mode == "compare_output"
+    assert routes["quimb_tn_sliced_exact"].backend_family == "quimb"
+    assert routes["quimb_tn_sliced_exact"].capabilities().metadata["slicing_enabled"] is True
     assert "upmem_tn_sdk_simulator_quantized" in routes
     assert "upmem_tn_sdk_simulator_exact" not in routes
     assert routes["upmem_tn_sdk_simulator_quantized"].identity.hardware_target == "upmem"

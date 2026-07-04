@@ -6,6 +6,7 @@ from quantum_bench.providers.base import ExecutionRoute
 from quantum_bench.providers.exact_tn import (
     CpuTnEinsumExactRoute,
     QuimbTnExactRoute,
+    QuimbTnSlicedExactRoute,
     UpmemTnSdkSimulatorQuantizedRoute,
 )
 from quantum_bench.providers.full_state import QuestCpuFullStateExactRoute, QuestGpuFullStateExactRoute
@@ -15,6 +16,7 @@ def route_registry(root_dir: Path) -> dict[str, ExecutionRoute]:
     routes: list[ExecutionRoute] = [
         CpuTnEinsumExactRoute(),
         QuimbTnExactRoute(),
+        QuimbTnSlicedExactRoute(),
         QuestCpuFullStateExactRoute(root_dir),
         QuestGpuFullStateExactRoute(root_dir),
         UpmemTnSdkSimulatorQuantizedRoute(),

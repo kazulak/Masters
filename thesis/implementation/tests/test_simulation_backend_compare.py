@@ -484,6 +484,7 @@ def test_simulation_backend_compare_suite_loads() -> None:
     cpu_gpu_correctness_deep = load_suite(ROOT / "configs" / "suites" / "manual" / "cpu_gpu_correctness_deep.yml")
     cpu_gpu_performance = load_suite(ROOT / "configs" / "suites" / "manual" / "cpu_gpu_performance.yml")
     upmem_sdk = load_suite(ROOT / "configs" / "suites" / "upmem_sim_evidence.yml")
+    quimb_slicing = load_suite(ROOT / "configs" / "suites" / "diagnostics" / "quimb_slicing_quick.yml")
     for loaded in (thesis_small, scaling):
         assert loaded["route_policy"]["routes"] == ["cpu_tn_einsum_exact", "quest_cpu_full_state_exact", "quimb_tn_exact"]
         assert loaded["metadata"]["deterministic_unitary_only"] is True
@@ -523,6 +524,12 @@ def test_simulation_backend_compare_suite_loads() -> None:
     assert gpu_execution_only["repeats"] == 1
     assert all(route["id"] not in {"cpu_tn_einsum_exact", "quimb_tn_exact"} for route in gpu_execution_only["_route_configs"])
     assert gpu_execution_only["_route_configs"][1]["required"] is False
+    assert quimb_slicing["metadata"]["intended_use"] == "diagnostics"
+    assert quimb_slicing["route_policy"]["routes"] == ["quest_cpu_full_state_exact", "quimb_tn_exact", "quimb_tn_sliced_exact"]
+    sliced_route = route_config_for(quimb_slicing, "quimb_tn_sliced_exact")
+    assert sliced_route["benchmark_role"] == "explicit_slicing_evidence"
+    assert sliced_route["options"]["target_slices"] == 2
+    assert sliced_route["options"]["require_slicing"] is True
     assert cpu_gpu_sweep["suite_id"] == "cpu_gpu_sweep"
     assert cpu_gpu_sweep["route_policy"]["routes"] == ["quest_cpu_full_state_exact", "quest_gpu_full_state_exact"]
     assert cpu_gpu_sweep["warmups"] == 1
@@ -1113,6 +1120,164 @@ def test_quimb_tn_exact_matches_internal_task_sequence() -> None:
     assert result.backend_family == "quimb"
     assert result.metadata["dependency_versions"]["quimb"]
     np.testing.assert_allclose(result.output.array, expected, atol=1.0e-12)
+
+
+def test_quimb_tn_sliced_exact_executes_sliced_tree() -> None:
+    routes = route_registry(ROOT)
+    route = routes["quimb_tn_sliced_exact"]
+    assert route.probe().available
+
+    suite = load_suite(ROOT / "configs" / "suites" / "diagnostics" / "quimb_slicing_quick.yml")
+    case = suite["cases"][0]
+    circuit = quest_compatible_circuit(case["circuit"]["name"], case["circuit"])
+    network = build_tensor_network(circuit)
+    graph = plan_task_graph_with_config(network, suite["planner"])
+    context = BenchmarkContext(
+        ROOT,
+        ROOT / "runs" / "test",
+        suite,
+        case,
+        route_config_for(suite, "quimb_tn_sliced_exact"),
+        0,
+        suite["tolerances"],
+        suite.get("timeout_s"),
+        suite.get("memory_guard_gib"),
+    )
+
+    result = route.execute(route.prepare(graph, network, context), context)
+    expected, _ = execute_task_sequence_np_einsum(graph, network)
+
+    assert result.status == "passed"
+    assert result.output.array is not None
+    assert result.metadata["slicing_enabled"] is True
+    assert result.metadata["slicing_backend"] == "cotengra"
+    assert result.metadata["slice_count"] > 1
+    assert result.metadata["sliced_indices"]
+    assert result.metadata["slicing_reconstruction_status"] == "completed"
+    assert result.metadata["execution_plan_kind"] == "cotengra_sliced_contraction_tree"
+    np.testing.assert_allclose(result.output.array, expected, atol=1.0e-12)
+
+
+def test_quimb_slicing_diagnostic_suite_records_slicing_metadata(tmp_path: Path, monkeypatch) -> None:
+    class FakeQuestRoute:
+        name = "quest_cpu_full_state_exact"
+        backend_family = "quest"
+        identity = RouteIdentity(
+            route_id=name,
+            display_name="Fake QuEST CPU",
+            role="serious_full_state_baseline",
+            simulation_method="exact_full_state",
+            kernel_family="full_state_vector",
+            hardware_target="cpu",
+            execution_mode="in_process_fake",
+            output_contract="statevector",
+            validation_mode="compare_statevector",
+        )
+
+        def probe(self):
+            return RouteProbe(self.name, True)
+
+        def capabilities(self):
+            return RouteCapabilities(identity=self.identity, can_return_output=True)
+
+        def can_execute(self, graph, context):
+            return True, None
+
+        def estimate(self, graph, context):  # pragma: no cover
+            raise NotImplementedError
+
+        def prepare(self, graph, network, context):
+            return {"graph": graph, "network": network}
+
+        def execute(self, prepared, context):
+            expected, _ = execute_task_sequence_np_einsum(prepared["graph"], prepared["network"])
+            statevector = tensor_to_quest_statevector(expected)
+            return RouteResult(
+                route=self.name,
+                backend_family=self.backend_family,
+                status="passed",
+                output=RouteOutput(contract="statevector", array=statevector),
+                profile=ExecutionProfile(total_s=0.01, kernel_s=0.01),
+                energy_joules=None,
+                energy_source="unavailable",
+                metadata={},
+            )
+
+    real_routes = route_registry(ROOT)
+    monkeypatch.setattr(
+        "quantum_bench.bench.simulation_backend_compare.route_registry",
+        lambda root_dir: {
+            "quest_cpu_full_state_exact": FakeQuestRoute(),
+            "quimb_tn_exact": real_routes["quimb_tn_exact"],
+            "quimb_tn_sliced_exact": real_routes["quimb_tn_sliced_exact"],
+        },
+    )
+    suite_path = tmp_path / "quimb_slicing_cpu_anchor.yml"
+    suite_path.write_text(
+        """
+schema_version: 2
+suite_id: quimb_slicing_cpu_anchor
+defaults:
+  warmups: 0
+  repeats: 1
+  timeout_s: 60
+  memory_guard_gib: 4
+  planner: {engine: opt_einsum, optimize: greedy}
+workloads:
+  - id: quest_qrng_3q
+    circuit: {kind: quest_compatible, name: QRNG, n_qubits: 3}
+routes:
+  - id: quest_cpu_full_state_exact
+    role: comparison_anchor
+    required: true
+  - id: quimb_tn_exact
+    role: baseline
+    required: true
+  - id: quimb_tn_sliced_exact
+    role: baseline
+    benchmark_role: explicit_slicing_evidence
+    required: true
+    options:
+      methods: greedy
+      max_repeats: 1
+      slicing_strategy: target_slices
+      target_slices: 2
+      require_slicing: true
+validation:
+  reference_route: quest_cpu_full_state_exact
+  require_output_for_roles: [baseline, comparison_anchor]
+  tolerances:
+    max_abs_error: 1.0e-9
+    l2_error: 1.0e-8
+    max_rel_error: 1.0e-8
+    norm_drift: 1.0e-8
+    min_fidelity: 0.999999999
+""",
+        encoding="utf-8",
+    )
+    result = run_simulation_backend_compare(
+        tmp_path,
+        suite_path=suite_path,
+        artifact_retention="compact",
+    )
+    records = load_result_records([result.run_dir])
+    sliced_records = [record for record in records if record["route_id"] == "quimb_tn_sliced_exact"]
+    unsliced_records = [record for record in records if record["route_id"] == "quimb_tn_exact"]
+
+    assert sliced_records
+    assert unsliced_records
+    assert all(record["validation_status"] == "passed" for record in sliced_records)
+    assert all(record["parallelism_mode"] == "slicing" for record in sliced_records)
+    assert all(record["parallelism_evidence_type"] == "executed" for record in sliced_records)
+    assert all(record["execution_plan_kind"] == "cotengra_sliced_contraction_tree" for record in sliced_records)
+    assert all(record["execution_plan_executed"] is True for record in sliced_records)
+    assert all(record["slicing_enabled"] is True for record in sliced_records)
+    assert all(record["slicing_backend"] == "cotengra" for record in sliced_records)
+    assert all(record["slice_count"] > 1 for record in sliced_records)
+    assert all(record["sliced_indices"] for record in sliced_records)
+    assert all(record["slicing_reconstruction_status"] == "completed" for record in sliced_records)
+    assert all(record["slicing_enabled"] is False for record in unsliced_records)
+    assert all(record["parallelism_mode"] == "sequential" for record in unsliced_records)
 
 
 def test_simulation_backend_probe_reports_gpu_feasibility_without_records() -> None:

@@ -120,15 +120,14 @@ Reuse:
 
 Defer:
 
-- slicing execution;
 - frontier scheduler execution;
 - new benchmark suites beyond metadata tests.
 
 ### 2E.52 - Explicit Quimb/Cotengra Slicing Evidence
 
-Add an explicit slicing route or route option for Quimb/cotengra. Prefer an
-additive candidate route if side-by-side comparison with `quimb_tn_exact` is
-needed in one suite.
+Add an explicit slicing route for Quimb/cotengra:
+`quimb_tn_sliced_exact`. Keep `quimb_tn_exact` as the unsliced serious CPU TN
+baseline so both routes can appear side by side in one diagnostic suite.
 
 Required evidence:
 
@@ -136,6 +135,9 @@ Required evidence:
 - FLOP inflation estimate;
 - deterministic slice reconstruction;
 - full output agreement for small correctness cases.
+
+This is slicing evidence only. It does not claim slice-worker parallel speedup
+unless a later wave runs slices concurrently and records worker metadata.
 
 ### 2E.53 - CPU Frontier TaskGraph Prototype
 
@@ -217,4 +219,3 @@ needs them:
 - frontier worker implementation mechanism;
 - GPU TN backend selection;
 - UPMEM multi-DPU communication substrate and PID-Comm role.
-

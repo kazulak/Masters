@@ -52,6 +52,14 @@ RESULT_FIELDS = [
     "execution_plan_kind",
     "execution_plan_executed",
     "slicing_enabled",
+    "slicing_backend",
+    "slicing_strategy",
+    "slice_count",
+    "sliced_indices",
+    "sliced_index_sizes",
+    "slicing_flop_inflation",
+    "slicing_reconstruction_status",
+    "slice_worker_count",
     "frontier_scheduler_enabled",
     "intra_contraction_parallelism_source",
     "modeled_parallelism_available",
@@ -729,6 +737,14 @@ def _base_record(
         "execution_plan_kind": None,
         "execution_plan_executed": None,
         "slicing_enabled": False,
+        "slicing_backend": None,
+        "slicing_strategy": None,
+        "slice_count": None,
+        "sliced_indices": None,
+        "sliced_index_sizes": None,
+        "slicing_flop_inflation": None,
+        "slicing_reconstruction_status": None,
+        "slice_worker_count": None,
         "frontier_scheduler_enabled": False,
         "intra_contraction_parallelism_source": None,
         "modeled_parallelism_available": False,
@@ -827,6 +843,14 @@ def normalize_parallelism_metadata(record: JsonDict) -> JsonDict:
     scope = str(normalized.get("execution_scope") or "")
 
     normalized.setdefault("slicing_enabled", False)
+    normalized.setdefault("slicing_backend", None)
+    normalized.setdefault("slicing_strategy", None)
+    normalized.setdefault("slice_count", None)
+    normalized.setdefault("sliced_indices", None)
+    normalized.setdefault("sliced_index_sizes", None)
+    normalized.setdefault("slicing_flop_inflation", None)
+    normalized.setdefault("slicing_reconstruction_status", None)
+    normalized.setdefault("slice_worker_count", None)
     normalized.setdefault("frontier_scheduler_enabled", False)
     normalized.setdefault("modeled_parallelism_available", False)
     normalized["execution_plan_executed"] = executed
@@ -886,6 +910,8 @@ def _default_parallelism_mode(*, route_id: str, execution_model: str, target: st
         return "modeled_only"
     if evidence_type == "unsupported":
         return "not_applicable"
+    if route_id == "quimb_tn_sliced_exact":
+        return "slicing"
     if execution_model == "tensor_network" or target == "upmem" or route_id == "upmem_tn_sdk_simulator_quantized":
         return "sequential"
     return "not_applicable"
@@ -896,6 +922,8 @@ def _default_execution_plan_kind(*, route_id: str, execution_model: str, target:
         return "sequential_upmem_taskgraph"
     if target == "upmem":
         return "single_upmem_task"
+    if route_id == "quimb_tn_sliced_exact":
+        return "cotengra_sliced_contraction_tree"
     if route_id == "quimb_tn_exact":
         return "external_tn_unsliced_contract"
     if route_id == "cpu_tn_einsum_exact" or scope == "full_taskgraph_reference":
