@@ -82,6 +82,7 @@ RESULT_FIELDS = [
     "max_frontier_width",
     "mean_frontier_width",
     "frontier_executed_task_count",
+    "source_frontier_completed_task_count",
     "frontier_executed_parallel_task_count",
     "executed_parallel_task_count",
     "scheduler_overhead_s",
@@ -90,9 +91,12 @@ RESULT_FIELDS = [
     "hybrid_components",
     "hybrid_ready",
     "slice_model_execution_status",
+    "source_task_count",
+    "source_task_completion_count",
     "slice_model_slice_count",
     "slice_model_task_count",
     "slice_model_executed_task_count",
+    "slice_parallel_wave_count",
     "hybrid_reconstruction_validation_status",
     "hybrid_reconstruction_max_abs_error",
     "dependency_violation_detected",
@@ -271,6 +275,7 @@ PARALLELISM_MODE_SUMMARY_FIELDS = [
     "validation_passed_count",
     "task_count",
     "frontier_executed_task_count",
+    "source_frontier_completed_task_count",
     "frontier_executed_parallel_task_count",
     "max_frontier_width",
     "mean_frontier_width",
@@ -287,9 +292,12 @@ PARALLELISM_MODE_SUMMARY_FIELDS = [
     "hybrid_components",
     "hybrid_ready",
     "slice_model_execution_status",
+    "source_task_count",
+    "source_task_completion_count",
     "slice_model_slice_count",
     "slice_model_task_count",
     "slice_model_executed_task_count",
+    "slice_parallel_wave_count",
     "hybrid_reconstruction_validation_status",
     "dependency_violation_detected",
     "hybrid_execution_node_count",
@@ -977,6 +985,7 @@ def normalize_parallelism_metadata(record: JsonDict) -> JsonDict:
     normalized.setdefault("max_frontier_width", None)
     normalized.setdefault("mean_frontier_width", None)
     normalized.setdefault("frontier_executed_task_count", None)
+    normalized.setdefault("source_frontier_completed_task_count", None)
     normalized.setdefault("frontier_executed_parallel_task_count", None)
     normalized.setdefault("executed_parallel_task_count", None)
     normalized.setdefault("scheduler_overhead_s", None)
@@ -985,9 +994,12 @@ def normalize_parallelism_metadata(record: JsonDict) -> JsonDict:
     normalized.setdefault("hybrid_components", None)
     normalized.setdefault("hybrid_ready", False)
     normalized.setdefault("slice_model_execution_status", None)
+    normalized.setdefault("source_task_count", None)
+    normalized.setdefault("source_task_completion_count", None)
     normalized.setdefault("slice_model_slice_count", None)
     normalized.setdefault("slice_model_task_count", None)
     normalized.setdefault("slice_model_executed_task_count", None)
+    normalized.setdefault("slice_parallel_wave_count", None)
     normalized.setdefault("hybrid_reconstruction_validation_status", None)
     normalized.setdefault("hybrid_reconstruction_max_abs_error", None)
     normalized.setdefault("dependency_violation_detected", False)
@@ -1197,6 +1209,9 @@ def _parallelism_mode_summary(records: list[JsonDict]) -> list[JsonDict]:
                 "validation_passed_count": sum(1 for record in route_records if record.get("validation_status") == "passed"),
                 "task_count": sum(int(record.get("task_count", 0) or 0) for record in route_records),
                 "frontier_executed_task_count": _sum_ints(record.get("frontier_executed_task_count") for record in route_records),
+                "source_frontier_completed_task_count": _sum_ints(
+                    record.get("source_frontier_completed_task_count") for record in route_records
+                ),
                 "frontier_executed_parallel_task_count": _sum_ints(
                     record.get("frontier_executed_parallel_task_count") for record in route_records
                 ),
@@ -1215,9 +1230,12 @@ def _parallelism_mode_summary(records: list[JsonDict]) -> list[JsonDict]:
                 "hybrid_components": first.get("hybrid_components"),
                 "hybrid_ready": any(bool(record.get("hybrid_ready", False)) for record in route_records),
                 "slice_model_execution_status": _aggregate_change_kind(record.get("slice_model_execution_status") for record in route_records),
+                "source_task_count": _sum_ints(record.get("source_task_count") for record in route_records),
+                "source_task_completion_count": _sum_ints(record.get("source_task_completion_count") for record in route_records),
                 "slice_model_slice_count": _max_numeric(record.get("slice_model_slice_count") for record in route_records),
                 "slice_model_task_count": _sum_ints(record.get("slice_model_task_count") for record in route_records),
                 "slice_model_executed_task_count": _sum_ints(record.get("slice_model_executed_task_count") for record in route_records),
+                "slice_parallel_wave_count": _sum_ints(record.get("slice_parallel_wave_count") for record in route_records),
                 "hybrid_reconstruction_validation_status": _aggregate_change_kind(
                     record.get("hybrid_reconstruction_validation_status") for record in route_records
                 ),

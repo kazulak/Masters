@@ -226,6 +226,8 @@ def test_executable_sequential_internal_slicing_matches_taskgraph_baseline() -> 
     assert metadata["slice_model_execution_status"] == "executed"
     assert metadata["slice_task_execution_mode"] == "sequential"
     assert metadata["slice_model_executed_task_count"] == metadata["slice_model_task_count"] == 2
+    assert metadata["source_task_count"] == len(graph.tasks)
+    assert metadata["source_task_completion_count"] == metadata["source_task_count"]
     assert metadata["slice_reconstruction_status"] == "completed"
     assert metadata["hybrid_ready"] is False
     assert metadata["frontier_scheduler_enabled"] is False
@@ -234,6 +236,7 @@ def test_executable_sequential_internal_slicing_matches_taskgraph_baseline() -> 
     assert set(metadata["executed_source_task_ids"]) == {task.id for task in graph.tasks}
     assert len(metadata["executed_source_task_ids"]) == len(graph.tasks)
     assert len(metadata["executed_slice_task_ids"]) == metadata["slice_model_task_count"]
+    assert metadata["slice_parallel_wave_count"] == 0
 
 
 def test_hybrid_slice_frontier_matches_taskgraph_baseline_for_worker_counts() -> None:
@@ -258,13 +261,20 @@ def test_hybrid_slice_frontier_matches_taskgraph_baseline_for_worker_counts() ->
         assert metadata["frontier_scheduler_enabled"] is True
         assert metadata["frontier_worker_count"] == worker_count
         assert metadata["frontier_parallel_execution"] is (worker_count > 1)
-        assert metadata["slice_parallel_execution"] is (worker_count > 1)
+        if worker_count > 1:
+            assert metadata["slice_parallel_wave_count"] > 0
+        else:
+            assert metadata["slice_parallel_wave_count"] == 0
+        assert metadata["slice_parallel_execution"] is (metadata["slice_parallel_wave_count"] > 0)
         assert metadata["slice_task_execution_mode"] == "frontier_scheduled"
         assert metadata["hybrid_ready"] is True
         assert metadata["slice_model_execution_status"] == "executed"
         assert metadata["slice_reconstruction_status"] == "completed"
         assert metadata["hybrid_reconstruction_validation_status"] == "passed"
-        assert metadata["frontier_executed_task_count"] == len(graph.tasks)
+        assert metadata["source_task_count"] == len(graph.tasks)
+        assert metadata["source_task_completion_count"] == metadata["source_task_count"]
+        assert metadata["source_frontier_completed_task_count"] == len(graph.tasks)
+        assert metadata["frontier_executed_task_count"] == metadata["hybrid_execution_node_count"]
         assert metadata["duplicate_contraction_check"] == "passed"
         assert metadata["missing_dependency_check"] == "passed"
         assert metadata["dependency_violation_detected"] is False

@@ -216,6 +216,7 @@ def test_evidence_run_layout_and_compare_results_read_only_boundary(tmp_path: Pa
     assert "frontier_worker_count" in header
     assert "frontier_wave_count" in header
     assert "frontier_executed_task_count" in header
+    assert "source_frontier_completed_task_count" in header
     assert "frontier_executed_parallel_task_count" in header
     assert "duplicate_contraction_check" in header
     assert "slice_reconstruction_status" in header
@@ -223,9 +224,12 @@ def test_evidence_run_layout_and_compare_results_read_only_boundary(tmp_path: Pa
     assert "hybrid_components" in header
     assert "hybrid_ready" in header
     assert "slice_model_execution_status" in header
+    assert "source_task_count" in header
+    assert "source_task_completion_count" in header
     assert "slice_model_slice_count" in header
     assert "slice_model_task_count" in header
     assert "slice_model_executed_task_count" in header
+    assert "slice_parallel_wave_count" in header
     assert "hybrid_reconstruction_validation_status" in header
     assert "dependency_violation_detected" in header
     assert comparison_manifest["artifact_kind"] == "comparison_report"

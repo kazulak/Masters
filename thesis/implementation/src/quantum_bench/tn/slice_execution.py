@@ -128,6 +128,7 @@ def _execute_slice_aware_graph(
     scheduler_overhead_s = 0.0
     frontier_parallel_execution = use_frontier_scheduler and frontier_worker_count > 1 and any(len(wave) > 1 for wave in waves)
     executed_parallel_node_count = 0
+    slice_parallel_wave_count = 0
     slice_parallel_execution = False
     reconstruction_validation_status = "not_run"
     reconstruction_max_abs_error: float | None = None
@@ -152,6 +153,7 @@ def _execute_slice_aware_graph(
             results = _execute_wave_threaded(wave, tensors, frontier_worker_count)
             executed_parallel_node_count += len(wave)
             if any(node.kind == "slice" for node in wave):
+                slice_parallel_wave_count += 1
                 slice_parallel_execution = True
         else:
             results = [_execute_node(node, tensors) for node in wave]
@@ -226,9 +228,11 @@ def _execute_slice_aware_graph(
         "frontier_widths": frontier_widths if use_frontier_scheduler else (),
         "max_frontier_width": max_frontier_width if use_frontier_scheduler else None,
         "mean_frontier_width": mean_frontier_width if use_frontier_scheduler else None,
-        "frontier_executed_task_count": len(task_metrics) if use_frontier_scheduler else None,
+        "frontier_executed_task_count": len(executed_node_ids) if use_frontier_scheduler else None,
+        "source_frontier_completed_task_count": len(task_metrics) if use_frontier_scheduler else None,
         "frontier_executed_parallel_task_count": int(executed_parallel_node_count),
         "executed_parallel_task_count": int(executed_parallel_node_count),
+        "slice_parallel_wave_count": int(slice_parallel_wave_count),
         "scheduler_overhead_s": float(scheduler_overhead_s if use_frontier_scheduler else 0.0),
         "duplicate_contraction_check": "passed",
         "missing_dependency_check": "passed",
@@ -236,6 +240,7 @@ def _execute_slice_aware_graph(
         "task_count": len(task_metrics),
         "task_metrics": task_metrics,
         "source_task_count": len(graph.tasks),
+        "source_task_completion_count": len(completed_source_ids),
         "executed_source_task_ids": tuple(completed_source_ids),
         "executed_slice_task_ids": tuple(executed_slice_task_ids),
         "peak_intermediate_bytes": int(peak_live_bytes),
