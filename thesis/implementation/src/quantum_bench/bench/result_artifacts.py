@@ -67,6 +67,8 @@ RESULT_FIELDS = [
     "frontier_wave_count",
     "max_frontier_width",
     "mean_frontier_width",
+    "frontier_executed_task_count",
+    "frontier_executed_parallel_task_count",
     "executed_parallel_task_count",
     "scheduler_overhead_s",
     "duplicate_contraction_check",
@@ -233,6 +235,30 @@ CPU_GPU_SPEEDUP_SUMMARY_FIELDS = [
     "validation_status",
 ]
 
+PARALLELISM_MODE_SUMMARY_FIELDS = [
+    "schema_version",
+    "route_id",
+    "benchmark_role",
+    "backend_family",
+    "execution_model",
+    "parallelism_mode",
+    "parallelism_evidence_type",
+    "record_count",
+    "validation_passed_count",
+    "task_count",
+    "frontier_executed_task_count",
+    "frontier_executed_parallel_task_count",
+    "max_frontier_width",
+    "mean_frontier_width",
+    "slice_count",
+    "slicing_backend",
+    "slicing_strategy",
+    "slicing_flop_inflation",
+    "scheduler_overhead_s",
+    "same_family_timing_group",
+    "interpretation_note",
+]
+
 CPU_GPU_SPEEDUP_SKIPPED_FIELDS = [
     "schema_version",
     "case_id",
@@ -302,6 +328,7 @@ def compare_results(
     out_dir.mkdir(parents=True, exist_ok=True)
     summary = _kernel_family_summary(records)
     cpu_gpu_speedup = _cpu_gpu_speedup_payload(records) if comparison_type == "cpu_gpu_sweep" else None
+    parallelism_summary = _parallelism_mode_summary(records) if _has_executed_slicing_or_frontier(records) else None
     payload = {
         "schema_version": COMPARE_RESULTS_SCHEMA_VERSION,
         "record_count": len(records),
@@ -314,6 +341,8 @@ def compare_results(
     }
     if cpu_gpu_speedup is not None:
         payload["cpu_gpu_speedup"] = cpu_gpu_speedup
+    if parallelism_summary is not None:
+        payload["parallelism_mode_summary"] = parallelism_summary
     artifact_path = out_dir / "comparison_results.json"
     csv_path = out_dir / "comparison_results.csv"
     family_csv_path = out_dir / "kernel_family_summary.csv"
@@ -325,7 +354,12 @@ def compare_results(
     extra_outputs: list[str] = []
     if cpu_gpu_speedup is not None:
         extra_outputs.extend(_write_cpu_gpu_speedup_artifacts(out_dir, cpu_gpu_speedup))
-    summary_path.write_text(_summary_markdown(records, summary, cpu_gpu_speedup=cpu_gpu_speedup), encoding="utf-8")
+    if parallelism_summary is not None:
+        extra_outputs.extend(_write_parallelism_summary_artifacts(out_dir, parallelism_summary))
+    summary_path.write_text(
+        _summary_markdown(records, summary, cpu_gpu_speedup=cpu_gpu_speedup, parallelism_summary=parallelism_summary),
+        encoding="utf-8",
+    )
     _write_comparison_manifest(
         manifest_path,
         out_dir=out_dir,
@@ -762,6 +796,8 @@ def _base_record(
         "frontier_wave_count": None,
         "max_frontier_width": None,
         "mean_frontier_width": None,
+        "frontier_executed_task_count": None,
+        "frontier_executed_parallel_task_count": None,
         "executed_parallel_task_count": None,
         "scheduler_overhead_s": None,
         "duplicate_contraction_check": None,
@@ -878,6 +914,8 @@ def normalize_parallelism_metadata(record: JsonDict) -> JsonDict:
     normalized.setdefault("frontier_wave_count", None)
     normalized.setdefault("max_frontier_width", None)
     normalized.setdefault("mean_frontier_width", None)
+    normalized.setdefault("frontier_executed_task_count", None)
+    normalized.setdefault("frontier_executed_parallel_task_count", None)
     normalized.setdefault("executed_parallel_task_count", None)
     normalized.setdefault("scheduler_overhead_s", None)
     normalized.setdefault("duplicate_contraction_check", None)
@@ -904,6 +942,7 @@ def normalize_parallelism_metadata(record: JsonDict) -> JsonDict:
             target=target,
             evidence_type=str(evidence_type),
         )
+    _normalize_frontier_task_counts(normalized)
 
     if normalized.get("execution_plan_kind") is None:
         normalized["execution_plan_kind"] = _default_execution_plan_kind(
@@ -925,6 +964,22 @@ def normalize_parallelism_metadata(record: JsonDict) -> JsonDict:
     normalized["frontier_parallel_execution"] = bool(normalized["frontier_parallel_execution"])
     normalized["modeled_parallelism_available"] = bool(normalized["modeled_parallelism_available"])
     return to_jsonable(normalized)
+
+
+def _normalize_frontier_task_counts(normalized: JsonDict) -> None:
+    parallel_count = normalized.get("frontier_executed_parallel_task_count")
+    legacy_count = normalized.get("executed_parallel_task_count")
+    if parallel_count is None:
+        parallel_count = legacy_count
+        normalized["frontier_executed_parallel_task_count"] = parallel_count
+    if legacy_count is None:
+        normalized["executed_parallel_task_count"] = parallel_count
+    if normalized.get("frontier_executed_task_count") is None and normalized.get("parallelism_mode") == "frontier":
+        task_count = normalized.get("task_count")
+        try:
+            normalized["frontier_executed_task_count"] = int(task_count) if task_count is not None else None
+        except (TypeError, ValueError):
+            normalized["frontier_executed_task_count"] = None
 
 
 def _parallelism_execution_plan_executed(record: JsonDict, status: str) -> bool:
@@ -1007,7 +1062,146 @@ def _csv_value(value: Any) -> Any:
     return value
 
 
-def _summary_markdown(records: list[JsonDict], family_summary: list[JsonDict], *, cpu_gpu_speedup: JsonDict | None = None) -> str:
+def _has_executed_slicing_or_frontier(records: list[JsonDict]) -> bool:
+    return any(str(record.get("parallelism_mode") or "") in {"slicing", "frontier"} for record in records)
+
+
+def _parallelism_mode_summary(records: list[JsonDict]) -> list[JsonDict]:
+    by_route: dict[str, list[JsonDict]] = {}
+    for record in records:
+        by_route.setdefault(str(record.get("route_id") or "unknown"), []).append(record)
+    rows: list[JsonDict] = []
+    for route_id in sorted(by_route):
+        route_records = by_route[route_id]
+        first = route_records[0]
+        rows.append(
+            {
+                "schema_version": COMPARE_RESULTS_SCHEMA_VERSION,
+                "route_id": route_id,
+                "benchmark_role": first.get("benchmark_role"),
+                "backend_family": first.get("backend_family"),
+                "execution_model": first.get("execution_model"),
+                "parallelism_mode": first.get("parallelism_mode"),
+                "parallelism_evidence_type": first.get("parallelism_evidence_type"),
+                "record_count": len(route_records),
+                "validation_passed_count": sum(1 for record in route_records if record.get("validation_status") == "passed"),
+                "task_count": sum(int(record.get("task_count", 0) or 0) for record in route_records),
+                "frontier_executed_task_count": _sum_ints(record.get("frontier_executed_task_count") for record in route_records),
+                "frontier_executed_parallel_task_count": _sum_ints(
+                    record.get("frontier_executed_parallel_task_count") for record in route_records
+                ),
+                "max_frontier_width": _max_numeric(record.get("max_frontier_width") for record in route_records),
+                "mean_frontier_width": _mean_numeric(record.get("mean_frontier_width") for record in route_records),
+                "slice_count": _max_numeric(record.get("slice_count") for record in route_records),
+                "slicing_backend": first.get("slicing_backend"),
+                "slicing_strategy": first.get("slicing_strategy"),
+                "slicing_flop_inflation": _mean_numeric(record.get("slicing_flop_inflation") for record in route_records),
+                "scheduler_overhead_s": _sum_numbers(record.get("scheduler_overhead_s") for record in route_records),
+                "same_family_timing_group": _same_family_timing_group(route_id),
+                "interpretation_note": _parallelism_interpretation_note(route_id),
+            }
+        )
+    return rows
+
+
+def _write_parallelism_summary_artifacts(out_dir: Path, rows: list[JsonDict]) -> list[str]:
+    csv_path = out_dir / "parallelism_mode_summary.csv"
+    markdown_path = out_dir / "parallelism_comparison_summary.md"
+    _write_csv(csv_path, rows, PARALLELISM_MODE_SUMMARY_FIELDS)
+    markdown_path.write_text(_parallelism_summary_markdown(rows), encoding="utf-8")
+    return [csv_path.name, markdown_path.name]
+
+
+def _parallelism_summary_markdown(rows: list[JsonDict]) -> str:
+    lines = [
+        "# CPU Tensor-Network Parallelism Diagnostic Summary",
+        "",
+        "This summary separates implementation families. Compare Quimb unsliced against Quimb sliced, and internal sequential TaskGraph against internal frontier TaskGraph. Do not treat Quimb and the internal TaskGraph routes as equivalent implementation-quality baselines.",
+        "",
+        "| Route | Role | Mode | Evidence | Same-family timing group | Records | Passed | Tasks | Frontier executed | Frontier parallel-dispatched | Slice count | FLOP inflation | Scheduler overhead s |",
+        "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for row in rows:
+        lines.append(
+            f"| {row.get('route_id')} | {row.get('benchmark_role')} | {row.get('parallelism_mode')} | "
+            f"{row.get('parallelism_evidence_type')} | {row.get('same_family_timing_group')} | "
+            f"{row.get('record_count')} | {row.get('validation_passed_count')} | {row.get('task_count')} | "
+            f"{row.get('frontier_executed_task_count') or ''} | {row.get('frontier_executed_parallel_task_count') or ''} | "
+            f"{row.get('slice_count') or ''} | {_format_float(row.get('slicing_flop_inflation'))} | "
+            f"{_format_float(row.get('scheduler_overhead_s'))} |"
+        )
+    lines.extend(
+        [
+            "",
+            "Slicing evidence here is executed cotengra slicing, but `slice_parallel_execution=false` in Wave 2E.52/2E.54. Frontier evidence is executed internal TaskGraph wave scheduling. These diagnostics do not make GPU, UPMEM, or hardware speedup claims.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _same_family_timing_group(route_id: str) -> str:
+    if route_id in {"quimb_tn_exact", "quimb_tn_sliced_exact"}:
+        return "quimb_external_tn"
+    if route_id in {"cpu_tn_einsum_exact", "cpu_tn_frontier_exact"}:
+        return "internal_taskgraph"
+    return "not_applicable"
+
+
+def _parallelism_interpretation_note(route_id: str) -> str:
+    notes = {
+        "quest_cpu_full_state_exact": "full_state_validation_anchor",
+        "quimb_tn_exact": "serious_unsliced_quimb_tn_baseline",
+        "quimb_tn_sliced_exact": "executed_slicing_evidence_single_worker_reconstruction",
+        "cpu_tn_einsum_exact": "diagnostic_internal_sequential_taskgraph",
+        "cpu_tn_frontier_exact": "diagnostic_internal_frontier_taskgraph_no_speedup_claim",
+    }
+    return notes.get(route_id, "not_applicable")
+
+
+def _sum_ints(values: Iterable[Any]) -> int | None:
+    numbers = [_coerce_number(value) for value in values]
+    numbers = [value for value in numbers if value is not None]
+    return int(sum(numbers)) if numbers else None
+
+
+def _sum_numbers(values: Iterable[Any]) -> float | None:
+    numbers = [_coerce_number(value) for value in values]
+    numbers = [value for value in numbers if value is not None]
+    return float(sum(numbers)) if numbers else None
+
+
+def _max_numeric(values: Iterable[Any]) -> float | int | None:
+    numbers = [_coerce_number(value) for value in values]
+    numbers = [value for value in numbers if value is not None]
+    if not numbers:
+        return None
+    max_value = max(numbers)
+    return int(max_value) if float(max_value).is_integer() else max_value
+
+
+def _mean_numeric(values: Iterable[Any]) -> float | None:
+    numbers = [_coerce_number(value) for value in values]
+    numbers = [value for value in numbers if value is not None]
+    return float(statistics.mean(numbers)) if numbers else None
+
+
+def _coerce_number(value: Any) -> float | None:
+    if value in {None, ""}:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _summary_markdown(
+    records: list[JsonDict],
+    family_summary: list[JsonDict],
+    *,
+    cpu_gpu_speedup: JsonDict | None = None,
+    parallelism_summary: list[JsonDict] | None = None,
+) -> str:
     lines = [
         "# Benchmark Result Comparison",
         "",
@@ -1045,6 +1239,23 @@ def _summary_markdown(records: list[JsonDict], family_summary: list[JsonDict], *
                 f"{row.get('state_output_mode') or ''} | {row.get('validation_method') or ''} | {row.get('performance_tier')} | "
                 f"{_format_float(row.get('total_wall_speedup_median'))} | "
                 f"{_format_float(row.get('compute_speedup_median'))} | {row.get('gpu_device_name') or ''} |"
+            )
+    if parallelism_summary is not None:
+        lines.extend(
+            [
+                "",
+                "## CPU TN Parallelism Diagnostics",
+                "",
+                "Parallelism diagnostics are grouped by implementation family. Quimb slicing and internal TaskGraph frontier rows are not interchangeable baseline-quality routes.",
+                "",
+                "| Route | Mode | Evidence | Same-family timing group | Records | Passed |",
+                "| --- | --- | --- | --- | ---: | ---: |",
+            ]
+        )
+        for row in parallelism_summary:
+            lines.append(
+                f"| {row.get('route_id')} | {row.get('parallelism_mode')} | {row.get('parallelism_evidence_type')} | "
+                f"{row.get('same_family_timing_group')} | {row.get('record_count')} | {row.get('validation_passed_count')} |"
             )
     lines.extend(
         [

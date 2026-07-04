@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 from dataclasses import replace
 import json
 from pathlib import Path
@@ -9,7 +10,8 @@ import numpy as np
 import pytest
 
 from quantum_bench.bench.config import load_suite
-from quantum_bench.bench.result_artifacts import load_result_records
+from quantum_bench.bench.result_artifacts import compare_results, load_result_records
+from quantum_bench.bench.reporting import report_run
 from quantum_bench.bench.simulation_backend_probe import _select_gpu_backend, _verify_gpu_backend, probe_simulation_backends
 from quantum_bench.bench.simulation_backend_compare import _resource_guard_skip_reason, run_simulation_backend_compare
 from quantum_bench.bench.config import route_config_for
@@ -487,6 +489,7 @@ def test_simulation_backend_compare_suite_loads() -> None:
     upmem_sdk = load_suite(ROOT / "configs" / "suites" / "upmem_sim_evidence.yml")
     quimb_slicing = load_suite(ROOT / "configs" / "suites" / "diagnostics" / "quimb_slicing_quick.yml")
     cpu_frontier = load_suite(ROOT / "configs" / "suites" / "diagnostics" / "cpu_frontier_quick.yml")
+    cpu_slicing_vs_frontier = load_suite(ROOT / "configs" / "suites" / "diagnostics" / "cpu_slicing_vs_frontier_quick.yml")
     for loaded in (thesis_small, scaling):
         assert loaded["route_policy"]["routes"] == ["cpu_tn_einsum_exact", "quest_cpu_full_state_exact", "quimb_tn_exact"]
         assert loaded["metadata"]["deterministic_unitary_only"] is True
@@ -537,6 +540,16 @@ def test_simulation_backend_compare_suite_loads() -> None:
     frontier_route = route_config_for(cpu_frontier, "cpu_tn_frontier_exact")
     assert frontier_route["benchmark_role"] == "internal_frontier_diagnostic"
     assert frontier_route["options"]["frontier_worker_count"] == 2
+    assert cpu_slicing_vs_frontier["metadata"]["intended_use"] == "diagnostics"
+    assert cpu_slicing_vs_frontier["route_policy"]["routes"] == [
+        "quest_cpu_full_state_exact",
+        "quimb_tn_exact",
+        "quimb_tn_sliced_exact",
+        "cpu_tn_einsum_exact",
+        "cpu_tn_frontier_exact",
+    ]
+    assert route_config_for(cpu_slicing_vs_frontier, "quimb_tn_sliced_exact")["options"]["require_slicing"] is True
+    assert route_config_for(cpu_slicing_vs_frontier, "cpu_tn_frontier_exact")["options"]["frontier_worker_count"] == 2
     assert cpu_gpu_sweep["suite_id"] == "cpu_gpu_sweep"
     assert cpu_gpu_sweep["route_policy"]["routes"] == ["quest_cpu_full_state_exact", "quest_gpu_full_state_exact"]
     assert cpu_gpu_sweep["warmups"] == 1
@@ -1166,6 +1179,8 @@ def test_cpu_tn_frontier_exact_matches_sequential_with_worker_counts() -> None:
         assert result.metadata["frontier_parallel_execution"] is (worker_count > 1)
         assert result.metadata["frontier_wave_count"] > 1
         assert result.metadata["max_frontier_width"] > 1
+        assert result.metadata["frontier_executed_task_count"] == len(graph.tasks)
+        assert result.metadata["frontier_executed_parallel_task_count"] == result.metadata["executed_parallel_task_count"]
         if worker_count > 1:
             assert 0 < result.metadata["executed_parallel_task_count"] <= len(graph.tasks)
         else:
@@ -1265,11 +1280,118 @@ def test_cpu_frontier_diagnostic_suite_records_frontier_metadata(tmp_path: Path,
     assert all(record["frontier_worker_count"] == 2 for record in frontier_records)
     assert all(record["frontier_wave_count"] > 1 for record in frontier_records)
     assert all(record["max_frontier_width"] > 1 for record in frontier_records)
+    assert all(record["frontier_executed_task_count"] == record["task_count"] for record in frontier_records)
+    assert all(record["frontier_executed_parallel_task_count"] == record["executed_parallel_task_count"] for record in frontier_records)
     assert all(record["executed_parallel_task_count"] > 0 for record in frontier_records)
     assert all(record["duplicate_contraction_check"] == "passed" for record in frontier_records)
     assert all(record["missing_dependency_check"] == "passed" for record in frontier_records)
     assert all(record["frontier_scheduler_enabled"] is False for record in sequential_records)
     assert all(record["parallelism_mode"] == "sequential" for record in sequential_records)
+
+
+def test_cpu_slicing_vs_frontier_diagnostic_suite_records_combined_parallelism_metadata(tmp_path: Path, monkeypatch) -> None:
+    class FakeQuestRoute:
+        name = "quest_cpu_full_state_exact"
+        backend_family = "quest"
+        identity = RouteIdentity(
+            route_id=name,
+            display_name="Fake QuEST CPU",
+            role="serious_full_state_baseline",
+            simulation_method="exact_full_state",
+            kernel_family="full_state_vector",
+            hardware_target="cpu",
+            execution_mode="in_process_fake",
+            output_contract="statevector",
+            validation_mode="compare_statevector",
+        )
+
+        def probe(self):
+            return RouteProbe(self.name, True)
+
+        def capabilities(self):
+            return RouteCapabilities(identity=self.identity, can_return_output=True)
+
+        def can_execute(self, graph, context):
+            return True, None
+
+        def estimate(self, graph, context):  # pragma: no cover
+            raise NotImplementedError
+
+        def prepare(self, graph, network, context):
+            return {"graph": graph, "network": network}
+
+        def execute(self, prepared, context):
+            expected, _ = execute_task_sequence_np_einsum(prepared["graph"], prepared["network"])
+            statevector = tensor_to_quest_statevector(expected)
+            return RouteResult(
+                route=self.name,
+                backend_family=self.backend_family,
+                status="passed",
+                output=RouteOutput(contract="statevector", array=statevector),
+                profile=ExecutionProfile(total_s=0.01, kernel_s=0.01),
+                energy_joules=None,
+                energy_source="unavailable",
+                metadata={},
+            )
+
+    real_routes = route_registry(ROOT)
+    monkeypatch.setattr(
+        "quantum_bench.bench.simulation_backend_compare.route_registry",
+        lambda root_dir: {
+            "quest_cpu_full_state_exact": FakeQuestRoute(),
+            "quimb_tn_exact": real_routes["quimb_tn_exact"],
+            "quimb_tn_sliced_exact": real_routes["quimb_tn_sliced_exact"],
+            "cpu_tn_einsum_exact": real_routes["cpu_tn_einsum_exact"],
+            "cpu_tn_frontier_exact": real_routes["cpu_tn_frontier_exact"],
+        },
+    )
+    result = run_simulation_backend_compare(
+        tmp_path,
+        suite_path=ROOT / "configs" / "suites" / "diagnostics" / "cpu_slicing_vs_frontier_quick.yml",
+        artifact_retention="compact",
+    )
+    records = load_result_records([result.run_dir])
+    by_route = {record["route_id"]: record for record in records}
+    assert set(by_route) == {
+        "quest_cpu_full_state_exact",
+        "quimb_tn_exact",
+        "quimb_tn_sliced_exact",
+        "cpu_tn_einsum_exact",
+        "cpu_tn_frontier_exact",
+    }
+    assert by_route["quimb_tn_exact"]["parallelism_mode"] == "sequential"
+    assert by_route["quimb_tn_exact"]["slicing_enabled"] is False
+    assert by_route["quimb_tn_sliced_exact"]["parallelism_mode"] == "slicing"
+    assert by_route["quimb_tn_sliced_exact"]["parallelism_evidence_type"] == "executed"
+    assert by_route["quimb_tn_sliced_exact"]["slice_count"] > 1
+    assert by_route["quimb_tn_sliced_exact"]["slice_parallel_execution"] is False
+    assert by_route["cpu_tn_frontier_exact"]["parallelism_mode"] == "frontier"
+    assert by_route["cpu_tn_frontier_exact"]["frontier_executed_task_count"] == by_route["cpu_tn_frontier_exact"]["task_count"]
+    assert (
+        by_route["cpu_tn_frontier_exact"]["frontier_executed_parallel_task_count"]
+        == by_route["cpu_tn_frontier_exact"]["executed_parallel_task_count"]
+    )
+    assert by_route["cpu_tn_frontier_exact"]["duplicate_contraction_check"] == "passed"
+    assert by_route["cpu_tn_frontier_exact"]["missing_dependency_check"] == "passed"
+    assert all(record["validation_status"] == "passed" for record in records)
+    assert all(record["contraction_execution_target"] == "cpu" for record in records)
+    assert all(record["gpu_backend_verified"] is False for record in records)
+    assert all(record["upmem_execution_mode"] is None for record in records)
+
+    compare = compare_results([result.run_dir], tmp_path / "compare")
+    report = report_run(result.run_dir, tmp_path / "report", output_plots=False, root_dir=tmp_path)
+    assert (compare.run_dir / "parallelism_mode_summary.csv").exists()
+    assert (compare.run_dir / "parallelism_comparison_summary.md").exists()
+    assert "Do not treat Quimb and the internal TaskGraph routes" in (compare.run_dir / "parallelism_comparison_summary.md").read_text(
+        encoding="utf-8"
+    )
+
+    for csv_path in (compare.csv_path, report.run_dir / "plots" / "data" / "backend_results.csv"):
+        with csv_path.open("r", encoding="utf-8", newline="") as handle:
+            header = next(csv.reader(handle))
+        assert "frontier_executed_task_count" in header
+        assert "frontier_executed_parallel_task_count" in header
+        assert "slicing_flop_inflation" in header
 
 
 def test_quimb_tn_sliced_exact_executes_sliced_tree() -> None:

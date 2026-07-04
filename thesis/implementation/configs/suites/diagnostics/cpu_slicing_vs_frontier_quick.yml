@@ -1,0 +1,86 @@
+schema_version: 2
+suite_id: cpu_slicing_vs_frontier_quick
+
+metadata:
+  purpose: diagnostic_cpu_slicing_vs_frontier_comparison
+  expected_runtime_class: quick
+  deterministic_unitary_only: true
+  intended_use: diagnostics
+  validation_method: full_statevector
+  notes: Diagnostic comparison of CPU TN slicing evidence and internal TaskGraph frontier evidence; not part of canonical thesis evidence defaults.
+
+defaults:
+  warmups: 0
+  repeats: 1
+  timeout_s: 60
+  memory_guard_gib: 4
+  planner:
+    engine: opt_einsum
+    optimize: greedy
+
+workloads:
+  - id: quest_bv_4q
+    circuit: {kind: quest_compatible, name: BV, n_qubits: 4}
+  - id: quest_edc_4q
+    circuit: {kind: quest_compatible, name: EDC, n_qubits: 4}
+  - id: quest_xor_4q
+    circuit: {kind: quest_compatible, name: XOR, n_qubits: 4}
+
+routes:
+  - id: quest_cpu_full_state_exact
+    role: comparison_anchor
+    benchmark_role: serious_full_state_baseline
+    route_role_description: Serious QuEST CPU full-state comparison anchor.
+    required: true
+    options:
+      max_output_qubits: 8
+      max_output_amplitudes: 256
+      max_output_bytes: 4096
+
+  - id: quimb_tn_exact
+    role: baseline
+    benchmark_role: serious_external_tn_baseline
+    route_role_description: Unsliced Quimb tensor-network baseline.
+    required: true
+    options:
+      optimize: greedy
+
+  - id: quimb_tn_sliced_exact
+    role: baseline
+    benchmark_role: explicit_slicing_evidence
+    route_role_description: Explicit Quimb/cotengra sliced contraction tree route.
+    required: true
+    options:
+      methods: greedy
+      max_repeats: 1
+      slicing_strategy: target_slices
+      target_slices: 2
+      require_slicing: true
+
+  - id: cpu_tn_einsum_exact
+    role: baseline
+    benchmark_role: internal_debug_baseline
+    route_role_description: Internal sequential NumPy einsum TaskGraph route.
+    route_limitation_scope: Diagnostic internal TaskGraph route; not a serious external TN baseline.
+    required: true
+
+  - id: cpu_tn_frontier_exact
+    role: baseline
+    benchmark_role: internal_frontier_diagnostic
+    route_role_description: Internal CPU TaskGraph frontier scheduler diagnostic route.
+    route_limitation_scope: Diagnostic internal TaskGraph frontier route; not a serious external TN baseline.
+    required: true
+    options:
+      frontier_worker_count: 2
+
+validation:
+  reference_route: quest_cpu_full_state_exact
+  require_output_for_roles:
+    - baseline
+    - comparison_anchor
+  tolerances:
+    max_abs_error: 1.0e-9
+    l2_error: 1.0e-8
+    max_rel_error: 1.0e-8
+    norm_drift: 1.0e-8
+    min_fidelity: 0.999999999

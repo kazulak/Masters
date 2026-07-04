@@ -208,6 +208,8 @@ def test_evidence_run_layout_and_compare_results_read_only_boundary(tmp_path: Pa
     assert "frontier_parallel_execution" in header
     assert "frontier_worker_count" in header
     assert "frontier_wave_count" in header
+    assert "frontier_executed_task_count" in header
+    assert "frontier_executed_parallel_task_count" in header
     assert "duplicate_contraction_check" in header
     assert comparison_manifest["artifact_kind"] == "comparison_report"
     assert comparison_manifest["comparison_type"] == "quantization_attribution"
