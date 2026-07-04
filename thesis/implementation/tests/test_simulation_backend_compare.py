@@ -1431,6 +1431,9 @@ def test_quimb_tn_sliced_exact_executes_sliced_tree() -> None:
     assert result.metadata["slicing_reconstruction_status"] == "completed"
     assert result.metadata["slice_parallel_execution"] is False
     assert result.metadata["slice_worker_count"] == 1
+    assert "slice_model_slice_count" not in result.metadata
+    assert "slice_model_task_count" not in result.metadata
+    assert "slice_model_execution_status" not in result.metadata
     assert result.metadata["slicing_total_flops"] is not None
     assert result.metadata["unsliced_total_flops"] is not None
     assert result.metadata["slicing_flop_ratio"] is not None

@@ -9,7 +9,7 @@ from quantum_bench.bench.config import load_suite
 from quantum_bench.circuits import builtin_circuit
 from quantum_bench.core.records import BenchmarkContext, PathSummary, TaskGraph
 from quantum_bench.providers.exact_tn.cpu_einsum import CpuTnEinsumExactRoute
-from quantum_bench.tn import build_tensor_network, plan_task_graph
+from quantum_bench.tn import build_slice_aware_taskgraph_model, build_tensor_network, plan_task_graph, validate_slice_aware_taskgraph_model
 from quantum_bench.validation import compute_reference, validate
 
 
@@ -109,3 +109,96 @@ def test_empty_multi_tensor_graph_is_rejected() -> None:
 
     with pytest.raises(ValueError, match="Cannot execute empty TaskGraph"):
         route.execute(route.prepare(empty_graph, network, _context()), _context())
+
+
+def test_slice_aware_taskgraph_model_expands_one_contraction_without_execution() -> None:
+    circuit = builtin_circuit("bv", {"n_qubits": 4})
+    network = build_tensor_network(circuit)
+    graph = plan_task_graph(network)
+
+    model = build_slice_aware_taskgraph_model(graph, max_slice_count=2)
+    valid, reason = validate_slice_aware_taskgraph_model(model)
+    metadata = model.to_metadata()
+
+    assert valid is True
+    assert reason is None
+    assert model.available is True
+    assert model.slice_model_kind == "single_task_single_index_model"
+    assert model.slice_model_execution_status == "model_only"
+    assert model.slice_model_slice_count == 2
+    assert model.slice_model_task_count == 2
+    assert metadata["slice_aware_taskgraph_available"] is True
+    assert metadata["slice_model_slice_count"] == 2
+    assert metadata["slice_model_task_count"] == 2
+    assert metadata["slice_model_execution_status"] == "model_only"
+    assert metadata["source_task_count"] == len(graph.tasks)
+    assert metadata["slice_reconstruction_required"] is True
+    assert metadata["slice_reconstruction_status"] == "model_only"
+    assert metadata["slice_reconstruction_step"]["operation"] == "sum_partials"
+    assert metadata["slice_task_execution_mode"] == "model_only"
+    assert metadata["hybrid_ready"] is False
+    assert metadata["slice_model_sliced_indices"] == list(model.sliced_indices)
+    assert len(metadata["slice_model_tasks"]) == model.slice_model_task_count
+    assert len(metadata["slice_dependency_rewrites"]) == len(model.downstream_dependency_rewrites)
+    assert "slice_count" not in metadata
+    assert "parallelism_mode" not in metadata
+
+    selected_task = next(task for task in graph.tasks if task.id == model.sliced_task_id)
+    assert model.sliced_indices == selected_task.contracted_labels[:1]
+    assert model.reconstruction_step is not None
+    assert model.reconstruction_step.output_tensor_id == selected_task.output_tensor_id
+    assert model.reconstruction_step.dependencies == tuple(task.id for task in model.slice_tasks)
+    assert model.reconstruction_step.input_tensor_ids == tuple(task.partial_output_tensor_id for task in model.slice_tasks)
+
+    assert len(model.downstream_dependency_rewrites) >= 1
+    for rewrite in model.downstream_dependency_rewrites:
+        assert rewrite.old_dependency == selected_task.id
+        assert rewrite.new_dependency == model.reconstruction_step.id
+
+    for slice_id, slice_task in enumerate(model.slice_tasks):
+        assert slice_task.id == f"{selected_task.id}__slice_{slice_id}"
+        assert slice_task.source_task_id == selected_task.id
+        assert slice_task.assignment.value == slice_id
+        assert slice_task.assignment.label == model.sliced_indices[0]
+        assert slice_task.dependencies == selected_task.dependencies
+        assert slice_task.input_tensor_ids == selected_task.input_tensor_ids
+        assert slice_task.output_shape == selected_task.output_shape
+        assert slice_task.output_labels == selected_task.output_labels
+        assert len(slice_task.input_restrictions) == 2
+        assert metadata["slice_model_tasks"][slice_id]["partial_output_tensor_id"] == slice_task.partial_output_tensor_id
+        assert len(metadata["slice_model_tasks"][slice_id]["input_restrictions"]) == 2
+
+
+def test_slice_aware_taskgraph_model_reports_unsupported_empty_graph() -> None:
+    circuit = builtin_circuit("qrng", {"n_qubits": 1})
+    idle_circuit = type(circuit)(circuit.name, circuit.n_qubits, (), circuit.source)
+    network = build_tensor_network(idle_circuit)
+    graph = TaskGraph(
+        network=network.spec,
+        tasks=(),
+        path=(),
+        path_summary=PathSummary("unit_test", "manual", 0, None, None, None, ""),
+        planning_time_s=0.0,
+    )
+
+    model = build_slice_aware_taskgraph_model(graph)
+    valid, reason = validate_slice_aware_taskgraph_model(model)
+    metadata = model.to_metadata()
+
+    assert valid is False
+    assert reason == "no_contraction_tasks"
+    assert model.available is False
+    assert model.rejection_reason == "no_contraction_tasks"
+    assert metadata["slice_aware_taskgraph_available"] is False
+    assert metadata["slice_model_execution_status"] == "unsupported"
+    assert metadata["slice_model_rejection_reason"] == "no_contraction_tasks"
+    assert metadata["source_task_count"] == 0
+    assert metadata["slice_model_slice_count"] == 0
+    assert metadata["slice_model_task_count"] == 0
+    assert metadata["slice_model_tasks"] == []
+    assert metadata["slice_reconstruction_step"] is None
+    assert metadata["slice_dependency_rewrites"] == []
+    assert metadata["slice_task_execution_mode"] == "not_applicable"
+    assert metadata["slice_reconstruction_required"] is False
+    assert metadata["hybrid_ready"] is False
+    assert "slice_count" not in metadata
