@@ -12,7 +12,7 @@ import yaml
 
 from quantum_bench.bench.config import load_suite, route_config_for
 from quantum_bench.bench.reporting import artifact_ref, prune_run, validate_retention_mode, write_normalized_records, write_run_manifest
-from quantum_bench.bench.result_artifacts import RESULT_ARTIFACT_SCHEMA_VERSION
+from quantum_bench.bench.result_artifacts import RESULT_ARTIFACT_SCHEMA_VERSION, normalize_parallelism_metadata
 from quantum_bench.bench.run_dirs import EVIDENCE_ARTIFACT_KIND, create_run_dir, sanitize
 from quantum_bench.bench.simulation_backend_probe import probe_simulation_backends
 from quantum_bench.circuits import load_circuit, manifest
@@ -850,7 +850,7 @@ def _comparison_row(row: JsonDict, anchor_route_id: str) -> JsonDict:
 
 def _normalized_record(run_dir: Path, row: JsonDict, *, case_id: str) -> JsonDict:
     metrics = dict(row.get("validation_metrics") or {})
-    return {
+    return normalize_parallelism_metadata({
         "schema_version": RESULT_ARTIFACT_SCHEMA_VERSION,
         "source_artifact": f"cases/{sanitize(case_id)}/simulation_backend_compare.json",
         "run_id": run_dir.name,
@@ -1013,7 +1013,7 @@ def _normalized_record(run_dir: Path, row: JsonDict, *, case_id: str) -> JsonDic
             separators=(",", ":"),
         ),
         "warnings": row.get("resource_skip_reason") or "",
-    }
+    })
 
 
 def _summary_payload(

@@ -47,6 +47,14 @@ RESULT_FIELDS = [
     "route_limitation_scope",
     "kernel_family",
     "execution_model",
+    "parallelism_mode",
+    "parallelism_evidence_type",
+    "execution_plan_kind",
+    "execution_plan_executed",
+    "slicing_enabled",
+    "frontier_scheduler_enabled",
+    "intra_contraction_parallelism_source",
+    "modeled_parallelism_available",
     "output_kind",
     "comparison_output_kind",
     "state_output_mode",
@@ -230,18 +238,18 @@ class CompareResultsResult:
 def normalized_task_result_from_summary(summary: JsonDict, *, source_artifact: str | None = None) -> JsonDict:
     schema = str(summary.get("schema_version", ""))
     if schema == "dense_task_bridge_v1":
-        return _dense_task_bridge_record(summary, source_artifact=source_artifact)
+        return normalize_parallelism_metadata(_dense_task_bridge_record(summary, source_artifact=source_artifact))
     if schema == "generic_task_bridge_v1":
-        return _generic_task_bridge_record(summary, source_artifact=source_artifact)
+        return normalize_parallelism_metadata(_generic_task_bridge_record(summary, source_artifact=source_artifact))
     raise ValueError(f"unsupported one-task summary schema_version: {schema}")
 
 
 def normalized_upmem_taskgraph_result_from_summary(summary: JsonDict, *, source_artifact: str | None = None) -> JsonDict:
-    return _upmem_taskgraph_runtime_record(summary, source_artifact=source_artifact)
+    return normalize_parallelism_metadata(_upmem_taskgraph_runtime_record(summary, source_artifact=source_artifact))
 
 
 def normalized_upmem_taskgraph_records_from_summary(summary: JsonDict, *, source_artifact: str | None = None) -> list[JsonDict]:
-    return _upmem_taskgraph_runtime_records(summary, source_artifact=source_artifact)
+    return [normalize_parallelism_metadata(record) for record in _upmem_taskgraph_runtime_records(summary, source_artifact=source_artifact)]
 
 
 def load_result_records(inputs: Iterable[Path]) -> list[JsonDict]:
@@ -251,7 +259,7 @@ def load_result_records(inputs: Iterable[Path]) -> list[JsonDict]:
         if path.is_dir():
             canonical = path / "normalized_records.jsonl"
             if canonical.exists():
-                records.extend(read_jsonl(canonical))
+                records.extend(normalize_parallelism_metadata(record) for record in read_jsonl(canonical))
                 continue
             for artifact in _discover_artifacts(path):
                 records.extend(_records_from_artifact(artifact))
@@ -399,7 +407,7 @@ def _records_from_artifact(path: Path) -> list[JsonDict]:
     if schema == "upmem_mvp_benchmark_v1":
         return _upmem_mvp_benchmark_cpu_records(payload, source_artifact=source)
     if schema == "simulation_backend_compare_v1":
-        return [to_jsonable(record | {"source_artifact": source}) for record in payload.get("normalized_records", [])]
+        return [normalize_parallelism_metadata(record | {"source_artifact": source}) for record in payload.get("normalized_records", [])]
     if schema == "pim_bridge_eval_v1":
         return [_pim_bridge_eval_row_record(payload, row, source_artifact=source) for row in payload.get("rows", [])]
     return []
@@ -716,6 +724,14 @@ def _base_record(
         "route_limitation_scope": None,
         "kernel_family": kernel_family if kernel_family in KERNEL_FAMILIES else "unsupported",
         "execution_model": None,
+        "parallelism_mode": None,
+        "parallelism_evidence_type": None,
+        "execution_plan_kind": None,
+        "execution_plan_executed": None,
+        "slicing_enabled": False,
+        "frontier_scheduler_enabled": False,
+        "intra_contraction_parallelism_source": None,
+        "modeled_parallelism_available": False,
         "output_kind": None,
         "comparison_output_kind": None,
         "execution_target": execution_target,
@@ -799,6 +815,94 @@ def _base_record(
         "notes": notes,
         "warnings": warnings,
     }
+
+
+def normalize_parallelism_metadata(record: JsonDict) -> JsonDict:
+    normalized = dict(record)
+    status = str(normalized.get("status") or "")
+    executed = _parallelism_execution_plan_executed(normalized, status)
+    target = str(normalized.get("contraction_execution_target") or normalized.get("execution_target") or "")
+    execution_model = str(normalized.get("execution_model") or "")
+    route_id = str(normalized.get("route_id") or "")
+    scope = str(normalized.get("execution_scope") or "")
+
+    normalized.setdefault("slicing_enabled", False)
+    normalized.setdefault("frontier_scheduler_enabled", False)
+    normalized.setdefault("modeled_parallelism_available", False)
+    normalized["execution_plan_executed"] = executed
+
+    evidence_type = normalized.get("parallelism_evidence_type")
+    if evidence_type is None:
+        if bool(normalized.get("modeled_parallelism_available", False)) and not executed:
+            evidence_type = "modeled"
+        elif executed:
+            evidence_type = "executed"
+        elif status in {"not_executed", "skipped", "unsupported", "failed"}:
+            evidence_type = "unsupported"
+        else:
+            evidence_type = "not_applicable"
+        normalized["parallelism_evidence_type"] = evidence_type
+
+    if normalized.get("parallelism_mode") is None:
+        normalized["parallelism_mode"] = _default_parallelism_mode(
+            route_id=route_id,
+            execution_model=execution_model,
+            target=target,
+            evidence_type=str(evidence_type),
+        )
+
+    if normalized.get("execution_plan_kind") is None:
+        normalized["execution_plan_kind"] = _default_execution_plan_kind(
+            route_id=route_id,
+            execution_model=execution_model,
+            target=target,
+            scope=scope,
+        )
+
+    if normalized.get("intra_contraction_parallelism_source") is None:
+        normalized["intra_contraction_parallelism_source"] = (
+            "none" if normalized.get("parallelism_mode") == "sequential" else "not_applicable"
+        )
+
+    normalized["execution_plan_executed"] = bool(normalized["execution_plan_executed"])
+    normalized["slicing_enabled"] = bool(normalized["slicing_enabled"])
+    normalized["frontier_scheduler_enabled"] = bool(normalized["frontier_scheduler_enabled"])
+    normalized["modeled_parallelism_available"] = bool(normalized["modeled_parallelism_available"])
+    return to_jsonable(normalized)
+
+
+def _parallelism_execution_plan_executed(record: JsonDict, status: str) -> bool:
+    if record.get("execution_plan_executed") is not None:
+        return bool(record.get("execution_plan_executed"))
+    if status not in {"completed", "validation_failed", "executable"}:
+        return False
+    if record.get("resource_guard_status") not in {None, "executed"}:
+        return False
+    return True
+
+
+def _default_parallelism_mode(*, route_id: str, execution_model: str, target: str, evidence_type: str) -> str:
+    if evidence_type == "modeled":
+        return "modeled_only"
+    if evidence_type == "unsupported":
+        return "not_applicable"
+    if execution_model == "tensor_network" or target == "upmem" or route_id == "upmem_tn_sdk_simulator_quantized":
+        return "sequential"
+    return "not_applicable"
+
+
+def _default_execution_plan_kind(*, route_id: str, execution_model: str, target: str, scope: str) -> str:
+    if target == "upmem" and scope == "full_taskgraph":
+        return "sequential_upmem_taskgraph"
+    if target == "upmem":
+        return "single_upmem_task"
+    if route_id == "quimb_tn_exact":
+        return "external_tn_unsliced_contract"
+    if route_id == "cpu_tn_einsum_exact" or scope == "full_taskgraph_reference":
+        return "sequential_taskgraph"
+    if execution_model == "full_state":
+        return "full_state_simulation"
+    return "not_applicable"
 
 
 def _kernel_family_summary(records: list[JsonDict]) -> list[JsonDict]:

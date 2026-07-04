@@ -326,10 +326,12 @@ def artifact_ref(run_dir: Path, rel_path: str | Path | None, *, role: str) -> Js
 
 
 def write_normalized_records(run_dir: Path, records: Iterable[JsonDict]) -> Path:
+    from quantum_bench.bench.result_artifacts import normalize_parallelism_metadata
+
     path = run_dir / "normalized_records.jsonl"
     payloads = []
     for record in records:
-        normalized = dict(record)
+        normalized = normalize_parallelism_metadata(dict(record))
         normalized.setdefault("normalized_record_schema_version", NORMALIZED_RECORDS_SCHEMA_VERSION)
         payloads.append(to_jsonable(normalized))
     write_jsonl(path, payloads)

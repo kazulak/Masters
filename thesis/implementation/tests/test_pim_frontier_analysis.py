@@ -152,6 +152,11 @@ def test_pim_frontier_analysis_case_writes_json_csv_and_summary(tmp_path: Path, 
     assert payload["schema_version"] == "pim_frontier_analysis_v1"
     assert payload["metadata"]["analysis_only"] is True
     assert payload["metadata"]["suite_routes_ignored"] is True
+    assert payload["metadata"]["parallelism_mode"] == "modeled_only"
+    assert payload["metadata"]["parallelism_evidence_type"] == "modeled"
+    assert payload["metadata"]["execution_plan_kind"] == "frontier_wave_analysis"
+    assert payload["metadata"]["execution_plan_executed"] is False
+    assert payload["metadata"]["frontier_scheduler_enabled"] is False
     assert payload["task_rows"]
     assert payload["case_summaries"][0]["memory_level_counts"]
     assert payload["case_summaries"][0]["dominant_source_counts"]

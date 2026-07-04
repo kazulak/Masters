@@ -383,4 +383,11 @@ def test_run_harness_writes_compare_results_compatible_summary(monkeypatch, tmp_
     assert all(record["run_id"] == run.run_dir.name for record in records)
     assert records[0]["execution_target"] == "upmem"
     assert records[0]["hardware_speedup"] == "not_applicable"
+    assert records[0]["parallelism_mode"] == "sequential"
+    assert records[0]["parallelism_evidence_type"] == "executed"
+    assert records[0]["execution_plan_kind"] == "sequential_upmem_taskgraph"
+    assert records[0]["execution_plan_executed"] is True
+    assert records[0]["slicing_enabled"] is False
+    assert records[0]["frontier_scheduler_enabled"] is False
+    assert records[0]["modeled_parallelism_available"] is False
     assert comparison.record_count >= 1

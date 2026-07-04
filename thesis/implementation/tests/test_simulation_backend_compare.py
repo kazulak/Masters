@@ -185,6 +185,17 @@ validation:
     assert all(record["timing_scope"] == "end_to_end_and_compute" for record in records)
     assert all(record["validation_status"] == "passed" for record in records)
     assert all(record["contraction_execution_target"] == "cpu" for record in records)
+    assert all("parallelism_mode" in record for record in records)
+    assert all(record["parallelism_evidence_type"] == "executed" for record in records)
+    assert all(record["execution_plan_executed"] is True for record in records)
+    assert all(record["slicing_enabled"] is False for record in records)
+    assert all(record["frontier_scheduler_enabled"] is False for record in records)
+    assert all(record["modeled_parallelism_available"] is False for record in records)
+    by_route = {record["route_id"]: record for record in records}
+    assert by_route["quest_cpu_full_state_exact"]["parallelism_mode"] == "not_applicable"
+    assert by_route["quest_cpu_full_state_exact"]["execution_plan_kind"] == "full_state_simulation"
+    assert by_route["cpu_tn_einsum_exact"]["parallelism_mode"] == "sequential"
+    assert by_route["cpu_tn_einsum_exact"]["execution_plan_kind"] == "sequential_taskgraph"
     roles = {record["route_id"]: record["benchmark_role"] for record in records}
     assert roles["quest_cpu_full_state_exact"] == "serious_full_state_baseline"
     assert roles["cpu_tn_einsum_exact"] == "internal_debug_baseline"
@@ -447,6 +458,10 @@ validation:
     assert all(record["full_statevector_validation_available"] is False for record in records)
     assert all(record["statevector_bytes"] is None for record in records)
     assert all(record["validation_method"] == "native_status_gate_counts" for record in records)
+    assert all(record["parallelism_mode"] == "not_applicable" for record in records)
+    assert all(record["parallelism_evidence_type"] == "executed" for record in records)
+    assert all(record["execution_plan_kind"] == "full_state_simulation" for record in records)
+    assert all(record["execution_plan_executed"] is True for record in records)
 
 
 def test_simulation_backend_compare_suite_loads() -> None:
@@ -1538,6 +1553,14 @@ validation:
     assert upmem_record["quantization_mode"] == "per_task_input_quantize"
     assert upmem_record["dpu_program_invocations"] == upmem_record["task_count"]
     assert upmem_record["upmem_program_executed"] is True
+    assert upmem_record["parallelism_mode"] == "sequential"
+    assert upmem_record["parallelism_evidence_type"] == "executed"
+    assert upmem_record["execution_plan_kind"] == "sequential_upmem_taskgraph"
+    assert upmem_record["execution_plan_executed"] is True
+    assert upmem_record["slicing_enabled"] is False
+    assert upmem_record["frontier_scheduler_enabled"] is False
+    assert upmem_record["intra_contraction_parallelism_source"] == "none"
+    assert upmem_record["modeled_parallelism_available"] is False
 
 
 def test_blocked_upmem_sdk_preflight_emits_no_fake_benchmark_row(monkeypatch, tmp_path: Path) -> None:
