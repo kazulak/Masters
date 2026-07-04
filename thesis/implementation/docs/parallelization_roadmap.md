@@ -5,6 +5,9 @@ parallelization across CPU, GPU, and UPMEM/PIM. It is a planning artifact, not
 an implementation claim. Implementation strategy should be chosen in later
 waves after the goals and evidence requirements here are accepted.
 
+The staged implementation strategy is tracked in
+[parallelization_implementation_strategy.md](parallelization_implementation_strategy.md).
+
 ## Current Baseline
 
 The current implementation already has useful execution evidence, but it does
