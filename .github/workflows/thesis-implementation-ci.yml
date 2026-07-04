@@ -24,13 +24,22 @@ jobs:
         run: |
           cd thesis/implementation
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+          python -m pip install -c ci/constraints.txt -e ".[dev]"
       - name: Build QuEST CPU runner
         run: make -C thesis/implementation/native/quest_cpu
       - name: Run tests
         run: |
           cd thesis/implementation
           PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m pytest -q
+      - name: Check thesis shortcut commands
+        run: |
+          cd thesis/implementation
+          make -n bench-cpu
+          make -n bench-gpu
+          make -n bench-upmem-sim
+          make -n research-plan
+          make -n research-benchmarks
+          make -n research-report
       - name: Run smoke
         run: |
           cd thesis/implementation

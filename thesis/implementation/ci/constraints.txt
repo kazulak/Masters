@@ -1,0 +1,10 @@
+# GitHub Actions uses this file to keep thesis implementation tests
+# reproducible across dependency releases. Update deliberately after
+# running the local validation matrix.
+numpy==2.2.6
+opt_einsum==3.4.0
+cotengra==0.7.5
+quimb==1.11.2
+PyYAML==6.0.3
+matplotlib==3.10.8
+pytest==9.0.3
