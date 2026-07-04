@@ -54,8 +54,8 @@ SRC_DIR = $(QUEST_CPU_RUNNER_DIR)/src
 CIRC_DIR = $(SRC_DIR)/circuits
 VERIFY_DIR = $(SRC_DIR)/verification
 V_CIRC_DIR = $(VERIFY_DIR)/verify_circuits
-BIN_DIR = bin
-BUILD_DIR = build/$(GPU_BACKEND)
+BIN_DIR ?= $(THESIS_ROOT)/build/native/quest_gpu/$(GPU_BACKEND)/bin
+BUILD_DIR ?= $(THESIS_ROOT)/build/native/quest_gpu/$(GPU_BACKEND)/build
 OBJ_DIR = $(BUILD_DIR)/obj
 
 SRCS = $(wildcard $(SRC_DIR)/*.c) \
@@ -105,8 +105,8 @@ $(OBJ_DIR)/%.o: $(QUEST_CPU_RUNNER_DIR)/%.c
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
 clean:
-	rm -rf build
-	rm -rf bin
+	rm -rf $(BUILD_DIR)
+	rm -rf $(BIN_DIR)
 
 clean-quest:
 	rm -rf $(QUEST_GPU_BUILD)

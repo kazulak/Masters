@@ -107,6 +107,35 @@ This runs CPU evidence, regenerates a CPU report, runs strict UPMEM SDK
 simulator evidence, regenerates a UPMEM report, and writes a derived comparison
 under `runs/comparisons/thesis_benchmark/...`.
 
+Print the research benchmark pack plan:
+
+```bash
+make research-plan
+```
+
+Create a lightweight research pack without long benchmark execution:
+
+```bash
+make research-benchmarks
+```
+
+Run the full manual research pack only when you are ready for long runs:
+
+```bash
+RUN_RESEARCH=1 make research-benchmarks
+```
+
+Regenerate a research pack from existing evidence:
+
+```bash
+make research-report
+```
+
+Research packs write derived CSVs, plots, and `benchmark_summary.md` under
+`runs/comparisons/research_pack/...`. See
+[docs/research_benchmark_methodology.md](docs/research_benchmark_methodology.md)
+for the thesis-safe claims and limitations.
+
 Regenerate reports for the latest evidence run:
 
 ```bash
@@ -184,3 +213,5 @@ example, `cpu_gpu_sweep_tier1.yml` and `cpu_gpu_sweep_tier2.yml` split the
 canonical CPU/GPU sweep so larger cases can be run after smaller cases pass.
 `cpu_gpu_correctness_deep.yml` keeps full-output validation under a small cap,
 while `cpu_gpu_performance.yml` disables state dumps for compute-focused timing.
+Research-grade manual suites use the `research_*.yml` prefix in the same manual
+directory and are intended for explicit thesis/paper evidence generation.

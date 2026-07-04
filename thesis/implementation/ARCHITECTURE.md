@@ -92,6 +92,10 @@ native `bin/` or `build/` directories. Historical timestamped run folders that
 pre-date the `runs/evidence` and `runs/comparisons` split are legacy generated
 diagnostics, not canonical thesis evidence.
 
+Research benchmark packs are derived comparison artifacts under
+`runs/comparisons/research_pack/...`; their methodology and claim boundaries are
+documented in [docs/research_benchmark_methodology.md](docs/research_benchmark_methodology.md).
+
 The older `run --suite` smoke path still writes concrete legacy evidence files
 under `raw/`, `validation/`, and `metrics/`. Those files are not inputs to
 `report-run`; normalized benchmark/report workflows use `normalized_records.jsonl`

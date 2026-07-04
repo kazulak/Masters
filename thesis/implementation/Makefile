@@ -8,7 +8,7 @@ UPMEM_SIM_SUITE ?= configs/suites/upmem_sim_evidence.yml
 GPU_VERIFY ?= quest-hip
 CLEAN_RUNS ?= 0
 
-.PHONY: help build-quest-cpu doctor bench-cpu bench-gpu bench-upmem-sim thesis-benchmark report-latest compare-latest clean-generated
+.PHONY: help build-quest-cpu doctor bench-cpu bench-gpu bench-upmem-sim thesis-benchmark research-plan research-benchmarks research-report report-latest compare-latest clean-generated
 
 help:
 	@printf '%s\n' \
@@ -19,6 +19,9 @@ help:
 		'  make bench-gpu          Verify QuEST HIP GPU and run GPU execution-only suite' \
 		'  make bench-upmem-sim    Check UPMEM SDK simulator and run strict UPMEM simulator suite' \
 		'  make thesis-benchmark   Run CPU + UPMEM simulator evidence and compare them' \
+		'  make research-plan      Print research benchmark pack commands and checks' \
+		'  make research-benchmarks Create a lightweight research pack; set RUN_RESEARCH=1 for long runs' \
+		'  make research-report    Build a research pack from existing evidence' \
 		'  make report-latest      Regenerate reports for runs/latest' \
 		'  make compare-latest     Write a derived comparison under runs/comparisons' \
 		'  make clean-generated    Remove generated build/cache files; keeps runs/ by default'
@@ -58,6 +61,15 @@ thesis-benchmark:
 	compare_out="runs/comparisons/thesis_benchmark/cpu_upmem/$$timestamp"; \
 	$(BENCH) compare-results --inputs "$$cpu_run" "$$upmem_run" --comparison-type thesis_benchmark_cpu_upmem --out "$$compare_out"; \
 	printf '%s\n' "CPU evidence: $$cpu_run" "UPMEM evidence: $$upmem_run" "CPU report: $$cpu_report" "UPMEM report: $$upmem_report" "Comparison: $$compare_out"
+
+research-plan:
+	$(PY_ENV) $(PYTHON) scripts/research_benchmark_pack.py plan
+
+research-benchmarks:
+	$(PY_ENV) $(PYTHON) scripts/research_benchmark_pack.py run $(if $(filter 1,$(RUN_RESEARCH)),--full,)
+
+research-report:
+	$(PY_ENV) $(PYTHON) scripts/research_benchmark_pack.py report
 
 report-latest:
 	@timestamp=$$(date +%Y%m%d_%H%M%S); \

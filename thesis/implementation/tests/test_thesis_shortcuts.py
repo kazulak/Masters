@@ -22,6 +22,9 @@ def test_makefile_shortcuts_are_defined() -> None:
         "bench-gpu",
         "bench-upmem-sim",
         "thesis-benchmark",
+        "research-plan",
+        "research-benchmarks",
+        "research-report",
         "report-latest",
         "compare-latest",
         "clean-generated",
@@ -46,6 +49,9 @@ def test_readme_documents_shortcut_targets() -> None:
         "make bench-gpu",
         "make bench-upmem-sim",
         "make thesis-benchmark",
+        "make research-plan",
+        "make research-benchmarks",
+        "make research-report",
         "make report-latest",
         "make compare-latest",
         "make clean-generated",
@@ -76,6 +82,9 @@ def test_makefile_targets_parse_with_dry_run() -> None:
         "bench-gpu",
         "bench-upmem-sim",
         "thesis-benchmark",
+        "research-plan",
+        "research-benchmarks",
+        "research-report",
         "report-latest",
         "compare-latest",
         "clean-generated",
@@ -86,6 +95,9 @@ def test_makefile_targets_parse_with_dry_run() -> None:
         assert target != "bench-gpu" or "configs/suites/gpu_evidence.yml" in result.stdout
         assert target != "bench-upmem-sim" or "configs/suites/upmem_sim_evidence.yml" in result.stdout
         assert target != "thesis-benchmark" or "thesis_benchmark_cpu_upmem" in result.stdout
+        assert target != "research-plan" or "research_benchmark_pack.py plan" in result.stdout
+        assert target != "research-benchmarks" or "research_benchmark_pack.py run" in result.stdout
+        assert target != "research-report" or "research_benchmark_pack.py report" in result.stdout
         assert "simulation_backend_compare_thesis_small.yml" not in result.stdout
 
 

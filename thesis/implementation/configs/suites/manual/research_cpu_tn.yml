@@ -1,0 +1,90 @@
+schema_version: 2
+suite_id: research_cpu_tn
+
+metadata:
+  purpose: research_cpu_tensor_network_baselines
+  expected_runtime_class: manual_cpu_minutes
+  expected_memory_class: bounded_tn_workstation
+  intended_use: thesis_research_tn
+  deterministic_unitary_only: true
+  manual_invocation_required: true
+  validation_method: full_statevector
+  max_qubits: 14
+  notes: Quimb unsliced and sliced CPU TN evidence. Internal TaskGraph diagnostics are kept in research_internal_parallelism.yml.
+
+defaults:
+  warmups: 1
+  repeats: 3
+  timeout_s: 900
+  memory_guard_gib: 24
+  planner:
+    engine: opt_einsum
+    optimize: greedy
+
+workloads:
+  - id: quest_qrng_10q_research_tn
+    circuit: {kind: quest_compatible, name: QRNG, n_qubits: 10}
+  - id: quest_qrng_12q_research_tn
+    circuit: {kind: quest_compatible, name: QRNG, n_qubits: 12}
+  - id: quest_bv_10q_research_tn
+    circuit: {kind: quest_compatible, name: BV, n_qubits: 10}
+  - id: quest_bv_12q_research_tn
+    circuit: {kind: quest_compatible, name: BV, n_qubits: 12}
+  - id: quest_xor_10q_research_tn
+    circuit: {kind: quest_compatible, name: XOR, n_qubits: 10}
+  - id: quest_xor_12q_research_tn
+    circuit: {kind: quest_compatible, name: XOR, n_qubits: 12}
+  - id: quest_edc_10q_research_tn
+    circuit: {kind: quest_compatible, name: EDC, n_qubits: 10}
+    case_skip_reason: internal_tensor_label_symbol_cap
+  - id: quest_edc_12q_research_tn
+    circuit: {kind: quest_compatible, name: EDC, n_qubits: 12}
+    case_skip_reason: internal_tensor_label_symbol_cap
+  - id: quest_hs_10q_research_tn
+    circuit: {kind: quest_compatible, name: HS, allocated_qubits: 10, logical_qubits: 5}
+  - id: quest_hs_12q_research_tn
+    circuit: {kind: quest_compatible, name: HS, allocated_qubits: 12, logical_qubits: 6}
+    case_skip_reason: internal_tensor_label_symbol_cap
+
+routes:
+  - id: quest_cpu_full_state_exact
+    role: comparison_anchor
+    benchmark_role: serious_full_state_baseline
+    required: true
+    options:
+      max_output_qubits: 14
+      max_output_amplitudes: 16384
+      max_output_bytes: 262144
+
+  - id: quimb_tn_exact
+    role: baseline
+    benchmark_role: serious_external_tn_baseline
+    required: true
+    options:
+      optimize: greedy
+
+  - id: quimb_tn_sliced_exact
+    role: slicing_evidence
+    benchmark_role: explicit_slicing_evidence
+    required: false
+    options:
+      methods: greedy
+      max_repeats: 1
+      slicing_strategy: target_slices
+      target_slices: 2
+      require_slicing: true
+      max_estimated_intermediate_bytes: 17179869184
+      allow_missing_estimate: true
+
+validation:
+  reference_route: quest_cpu_full_state_exact
+  require_output_for_roles:
+    - baseline
+    - comparison_anchor
+    - slicing_evidence
+  tolerances:
+    max_abs_error: 1.0e-9
+    l2_error: 1.0e-8
+    max_rel_error: 1.0e-8
+    norm_drift: 1.0e-8
+    min_fidelity: 0.999999999

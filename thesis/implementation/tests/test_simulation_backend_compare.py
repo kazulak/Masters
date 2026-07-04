@@ -486,6 +486,11 @@ def test_simulation_backend_compare_suite_loads() -> None:
     cpu_gpu_tier2 = load_suite(ROOT / "configs" / "suites" / "manual" / "cpu_gpu_sweep_tier2.yml")
     cpu_gpu_correctness_deep = load_suite(ROOT / "configs" / "suites" / "manual" / "cpu_gpu_correctness_deep.yml")
     cpu_gpu_performance = load_suite(ROOT / "configs" / "suites" / "manual" / "cpu_gpu_performance.yml")
+    research_cpu_gpu = load_suite(ROOT / "configs" / "suites" / "manual" / "research_cpu_gpu.yml")
+    research_cpu_gpu_correctness = load_suite(ROOT / "configs" / "suites" / "manual" / "research_cpu_gpu_correctness.yml")
+    research_cpu_tn = load_suite(ROOT / "configs" / "suites" / "manual" / "research_cpu_tn.yml")
+    research_internal_parallelism = load_suite(ROOT / "configs" / "suites" / "manual" / "research_internal_parallelism.yml")
+    research_upmem_boundary = load_suite(ROOT / "configs" / "suites" / "manual" / "research_upmem_boundary.yml")
     upmem_sdk = load_suite(ROOT / "configs" / "suites" / "upmem_sim_evidence.yml")
     quimb_slicing = load_suite(ROOT / "configs" / "suites" / "diagnostics" / "quimb_slicing_quick.yml")
     cpu_frontier = load_suite(ROOT / "configs" / "suites" / "diagnostics" / "cpu_frontier_quick.yml")
@@ -609,6 +614,27 @@ def test_simulation_backend_compare_suite_loads() -> None:
     assert performance_routes["quest_cpu_full_state_exact"]["options"]["state_output_mode"] == "none"
     assert performance_routes["quest_gpu_full_state_exact"]["options"]["state_output_mode"] == "none"
     assert all(case["circuit"]["repeat_layers"] >= 64 for case in cpu_gpu_performance["cases"])
+    assert research_cpu_gpu["metadata"]["manual_invocation_required"] is True
+    assert research_cpu_gpu["metadata"]["state_output_mode"] == "none"
+    assert research_cpu_gpu["metadata"]["performance_tier"] is True
+    assert research_cpu_gpu["repeats"] >= 5
+    assert research_cpu_gpu["warmups"] >= 1
+    assert research_cpu_gpu["route_policy"]["routes"] == ["quest_cpu_full_state_exact", "quest_gpu_full_state_exact"]
+    assert {int(case["circuit"].get("n_qubits", case["circuit"].get("allocated_qubits"))) for case in research_cpu_gpu["cases"]} == {10, 12, 14, 16, 18, 20}
+    assert research_cpu_gpu_correctness["metadata"]["state_output_mode"] == "full_dump"
+    assert research_cpu_gpu_correctness["metadata"]["validation_method"] == "full_statevector"
+    assert research_cpu_tn["route_policy"]["routes"] == ["quest_cpu_full_state_exact", "quimb_tn_exact", "quimb_tn_sliced_exact"]
+    assert route_config_for(research_cpu_tn, "quimb_tn_sliced_exact")["options"]["require_slicing"] is True
+    skipped_cpu_tn_cases = {case["case_id"] for case in research_cpu_tn["cases"] if case.get("case_skip_reason")}
+    assert skipped_cpu_tn_cases == {
+        "quest_edc_10q_research_tn",
+        "quest_edc_12q_research_tn",
+        "quest_hs_12q_research_tn",
+    }
+    assert research_internal_parallelism["metadata"]["intended_use"] == "diagnostics"
+    assert "cpu_tn_hybrid_sliced_frontier_exact" in research_internal_parallelism["route_policy"]["routes"]
+    assert research_upmem_boundary["route_policy"]["routes"] == ["quest_cpu_full_state_exact", "upmem_tn_sdk_simulator_quantized"]
+    assert route_config_for(research_upmem_boundary, "upmem_tn_sdk_simulator_quantized")["options"]["execute_external"] is True
     assert upmem_sdk["route_policy"]["routes"] == [
         "quest_cpu_full_state_exact",
         "quimb_tn_exact",
@@ -1773,7 +1799,7 @@ def test_gpu_verification_blocks_when_hip_smoke_fails(monkeypatch, tmp_path: Pat
 
 def test_successful_gpu_verification_requires_hip_smoke_and_quest_run(monkeypatch, tmp_path: Path) -> None:
     runner_root = tmp_path / "native" / "quest_gpu"
-    runner = runner_root / "bin" / "quest_gpu_runner"
+    runner = tmp_path / "build" / "native" / "quest_gpu" / "hip" / "bin" / "quest_gpu_runner"
     runner.parent.mkdir(parents=True)
 
     def fake_run_command(cmd, *, cwd, timeout_s):

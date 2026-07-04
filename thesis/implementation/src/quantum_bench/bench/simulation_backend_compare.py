@@ -189,6 +189,17 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
     circuit = load_circuit(case_payload, root_dir)
     if not circuit.source.get("deterministic_unitary", False):
         raise ValueError(f"{case_id} is not a deterministic unitary statevector comparison case")
+    case_skip_reason = case_payload.get("case_skip_reason")
+    if case_skip_reason:
+        return _skipped_case_result(
+            root_dir,
+            run_dir,
+            suite,
+            case_payload,
+            routes,
+            circuit,
+            reason=str(case_skip_reason),
+        )
     if _suite_uses_only_full_state_routes(suite, routes):
         network, graph = _full_state_only_graph(circuit)
     else:
@@ -523,6 +534,92 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
         "measured_runs": repeats,
         "validation_method": validation_method,
         "validation_status": "passed" if all(row["validation_status"] in {"passed", "passed_native_status", "passed_runtime_only", "skipped"} for row in rows) else "failed",
+        "backend_families": sorted({row["backend_family"] for row in rows}),
+        "execution_models": sorted({row["execution_model"] for row in rows}),
+        "optional_backend_reports": optional_backend_reports,
+        "rows": rows,
+        "comparisons": comparisons,
+    }
+    write_json(case_dir / "simulation_backend_compare.json", case_summary)
+    return {
+        "rows": rows,
+        "comparisons": comparisons,
+        "case": to_jsonable(case_summary),
+        "optional_backend_reports": optional_backend_reports,
+        "normalized_records": [_normalized_record(run_dir, row, case_id=case_id) for row in rows],
+    }
+
+
+def _skipped_case_result(
+    root_dir: Path,
+    run_dir: Path,
+    suite: JsonDict,
+    case_payload: JsonDict,
+    routes: dict[str, ExecutionRoute],
+    circuit: Any,
+    *,
+    reason: str,
+) -> JsonDict:
+    case_id = str(case_payload["case_id"])
+    case_dir = run_dir / "cases" / sanitize(case_id)
+    network, graph = _full_state_only_graph(circuit)
+    write_json(case_dir / "circuit.json", manifest(circuit))
+    write_json(case_dir / "task_graph.json", graph)
+    write_json(case_dir / "path_summary.json", graph.path_summary)
+    anchor_route_id = _anchor_route_id(suite)
+    repeats = int(suite.get("repeats", 1) or 1)
+    validation_method = _validation_method(suite)
+    circuit_meta = manifest(circuit)
+    gate_counts = circuit_meta["gate_counts"]
+    common = {
+        "case_id": case_id,
+        "workload_id": str(case_payload.get("workload_id", case_id)),
+        "suite_id": suite["suite_id"],
+        "anchor_route_id": anchor_route_id,
+        "n_qubits": circuit.n_qubits,
+        "gate_count": int(gate_counts["total"]),
+        "two_qubit_gate_count": int(gate_counts["2q"]),
+        "tn_task_count": 0,
+        "tn_max_intermediate_bytes": 0,
+        "tn_estimated_flops": 0,
+        "tn_estimated_bytes": 0,
+        **_resource_profile(suite),
+    }
+    rows: list[JsonDict] = []
+    optional_backend_reports: list[JsonDict] = []
+    for route_id in suite["route_policy"]["routes"]:
+        route = routes.get(str(route_id))
+        if route is None:
+            optional_backend_reports.append(_optional_backend_report(case_id, str(route_id), "unknown_route"))
+            continue
+        route_metadata = _route_benchmark_metadata(route_config_for(suite, route.name), route)
+        rows.extend(
+            _skipped_route_rows(
+                common,
+                route=route,
+                route_metadata=route_metadata,
+                repeats=repeats,
+                reason=reason,
+                validation_method=validation_method,
+                guard_status="case_resource_guard_skipped",
+                status="not_executed",
+            )
+        )
+        optional_backend_reports.append(_optional_backend_report(case_id, route.name, reason))
+    comparisons = [_comparison_row(row, anchor_route_id) for row in rows]
+    case_summary = {
+        **common,
+        "schema_version": SIMULATION_BACKEND_COMPARE_SCHEMA_VERSION,
+        "basis_order": "quest_little_endian_integer_index",
+        "routes": list(suite["route_policy"]["routes"]),
+        "executed_routes": [],
+        "skipped_route_count": len(rows),
+        "anchor_route_id": anchor_route_id,
+        "route_count": 0,
+        "warmup_runs": int(suite.get("warmups", 0) or 0),
+        "measured_runs": repeats,
+        "validation_method": validation_method,
+        "validation_status": "passed",
         "backend_families": sorted({row["backend_family"] for row in rows}),
         "execution_models": sorted({row["execution_model"] for row in rows}),
         "optional_backend_reports": optional_backend_reports,

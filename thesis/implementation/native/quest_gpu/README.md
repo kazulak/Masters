@@ -8,8 +8,8 @@ Generated artifacts stay outside the `external/QuEST` submodule:
 
 - `../../build/external/QuEST-hip`
 - `../../build/external/QuEST-cuda`
-- `build/`
-- `bin/`
+- `../../build/native/quest_gpu/hip`
+- `../../build/native/quest_gpu/cuda`
 
 The benchmark route `quest_gpu_full_state_exact` is optional and gated. It is
 registered for suite compatibility, but it cannot execute until
@@ -20,10 +20,10 @@ registered for suite compatibility, but it cannot execute until
 
 ```bash
 make clean-hip-smoke hip-smoke GPU_BACKEND=hip
-./bin/hip_smoke
+../../build/native/quest_gpu/hip/bin/hip_smoke
 make clean-all
 make GPU_BACKEND=hip
-./bin/quest_gpu_runner --algo QRNG --qubits 2 --json
+../../build/native/quest_gpu/hip/bin/quest_gpu_runner --algo QRNG --qubits 2 --json
 ```
 
 `hip_smoke` is the independent device-execution gate. It must run successfully
@@ -35,7 +35,7 @@ verification artifact can be marked as verified.
 ```bash
 make clean-all
 make GPU_BACKEND=cuda
-./bin/quest_gpu_runner --algo QRNG --qubits 2 --json
+../../build/native/quest_gpu/cuda/bin/quest_gpu_runner --algo QRNG --qubits 2 --json
 ```
 
 The preferred project entrypoint is:

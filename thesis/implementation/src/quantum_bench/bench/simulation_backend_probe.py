@@ -286,10 +286,11 @@ def _verify_gpu_backend(root_dir: Path, requested_backend: str, hardware: JsonDi
         )
 
     runner_root = root_dir / "native" / "quest_gpu"
-    runner = runner_root / "bin" / "quest_gpu_runner"
+    runner_bin_dir = root_dir / "build" / "native" / "quest_gpu" / ("hip" if selected_backend == "quest-hip" else "cuda") / "bin"
+    runner = runner_bin_dir / "quest_gpu_runner"
     hip_smoke_payload: JsonDict | None = None
     if selected_backend == "quest-hip":
-        smoke = runner_root / "bin" / "hip_smoke"
+        smoke = runner_bin_dir / "hip_smoke"
         smoke_build_cmd = ["make", "clean-hip-smoke", "hip-smoke", "GPU_BACKEND=hip", "HIP_ARCHITECTURES=gfx1032"]
         smoke_build_result = _run_command(smoke_build_cmd, cwd=runner_root, timeout_s=120)
         attempted_steps.append(
