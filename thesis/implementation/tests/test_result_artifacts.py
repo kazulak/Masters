@@ -203,6 +203,7 @@ def test_evidence_run_layout_and_compare_results_read_only_boundary(tmp_path: Pa
     assert "parallelism_evidence_type" in header
     assert "slicing_backend" in header
     assert "slice_count" in header
+    assert "slice_parallel_execution" in header
     assert "slicing_reconstruction_status" in header
     assert comparison_manifest["artifact_kind"] == "comparison_report"
     assert comparison_manifest["comparison_type"] == "quantization_attribution"

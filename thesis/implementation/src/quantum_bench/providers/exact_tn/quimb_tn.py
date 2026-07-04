@@ -306,11 +306,12 @@ class QuimbTnSlicedExactRoute:
                 metadata={
                     **versions,
                     "slicing_enabled": True,
-                    "slicing_backend": "cotengra",
-                    "slicing_strategy": slicing_strategy,
-                    "target_slices": target_slices,
-                    "slicing_reconstruction_status": "not_executed",
-                },
+                "slicing_backend": "cotengra",
+                "slicing_strategy": slicing_strategy,
+                "target_slices": target_slices,
+                "slicing_reconstruction_status": "not_executed",
+                "slice_parallel_execution": False,
+            },
             )
 
         energy_start = read_rapl_uj()
@@ -332,6 +333,7 @@ class QuimbTnSlicedExactRoute:
                     **tree_metadata,
                     **comparison_metadata,
                     "slicing_reconstruction_status": "failed",
+                    "slice_parallel_execution": False,
                 },
             )
         kernel_s = time.perf_counter() - kernel_start
@@ -371,6 +373,7 @@ class QuimbTnSlicedExactRoute:
             "slicing_strategy": slicing_strategy,
             "target_slices": target_slices,
             "slicing_reconstruction_status": "completed",
+            "slice_parallel_execution": False,
             "intra_contraction_parallelism_source": "cotengra_slicing",
             "frontier_scheduler_enabled": False,
             "modeled_parallelism_available": False,

@@ -59,6 +59,7 @@ RESULT_FIELDS = [
     "sliced_index_sizes",
     "slicing_flop_inflation",
     "slicing_reconstruction_status",
+    "slice_parallel_execution",
     "slice_worker_count",
     "frontier_scheduler_enabled",
     "intra_contraction_parallelism_source",
@@ -744,6 +745,7 @@ def _base_record(
         "sliced_index_sizes": None,
         "slicing_flop_inflation": None,
         "slicing_reconstruction_status": None,
+        "slice_parallel_execution": False,
         "slice_worker_count": None,
         "frontier_scheduler_enabled": False,
         "intra_contraction_parallelism_source": None,
@@ -850,6 +852,7 @@ def normalize_parallelism_metadata(record: JsonDict) -> JsonDict:
     normalized.setdefault("sliced_index_sizes", None)
     normalized.setdefault("slicing_flop_inflation", None)
     normalized.setdefault("slicing_reconstruction_status", None)
+    normalized.setdefault("slice_parallel_execution", False)
     normalized.setdefault("slice_worker_count", None)
     normalized.setdefault("frontier_scheduler_enabled", False)
     normalized.setdefault("modeled_parallelism_available", False)
@@ -890,6 +893,7 @@ def normalize_parallelism_metadata(record: JsonDict) -> JsonDict:
 
     normalized["execution_plan_executed"] = bool(normalized["execution_plan_executed"])
     normalized["slicing_enabled"] = bool(normalized["slicing_enabled"])
+    normalized["slice_parallel_execution"] = bool(normalized["slice_parallel_execution"])
     normalized["frontier_scheduler_enabled"] = bool(normalized["frontier_scheduler_enabled"])
     normalized["modeled_parallelism_available"] = bool(normalized["modeled_parallelism_available"])
     return to_jsonable(normalized)

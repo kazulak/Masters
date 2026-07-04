@@ -1154,6 +1154,8 @@ def test_quimb_tn_sliced_exact_executes_sliced_tree() -> None:
     assert result.metadata["slice_count"] > 1
     assert result.metadata["sliced_indices"]
     assert result.metadata["slicing_reconstruction_status"] == "completed"
+    assert result.metadata["slice_parallel_execution"] is False
+    assert result.metadata["slice_worker_count"] == 1
     assert result.metadata["execution_plan_kind"] == "cotengra_sliced_contraction_tree"
     np.testing.assert_allclose(result.output.array, expected, atol=1.0e-12)
 
@@ -1276,7 +1278,10 @@ validation:
     assert all(record["slice_count"] > 1 for record in sliced_records)
     assert all(record["sliced_indices"] for record in sliced_records)
     assert all(record["slicing_reconstruction_status"] == "completed" for record in sliced_records)
+    assert all(record["slice_parallel_execution"] is False for record in sliced_records)
+    assert all(record["slice_worker_count"] == 1 for record in sliced_records)
     assert all(record["slicing_enabled"] is False for record in unsliced_records)
+    assert all(record["slice_parallel_execution"] is False for record in unsliced_records)
     assert all(record["parallelism_mode"] == "sequential" for record in unsliced_records)
 
 
