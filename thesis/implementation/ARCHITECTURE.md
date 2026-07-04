@@ -61,6 +61,11 @@ Missing UPMEM capabilities include general tiling for arbitrary tensor
 contractions, multi-DPU distribution, PID-Comm orchestration, native
 transpose/slicing kernels, hardware execution, and full general TN coverage.
 
+Parallelism goals and evidence requirements are tracked separately in
+[docs/parallelization_roadmap.md](docs/parallelization_roadmap.md). That roadmap
+distinguishes modeled opportunity from executed slicing, frontier, GPU, and
+UPMEM/PIM parallelism.
+
 ## Artifact Boundary
 
 Benchmark execution produces evidence:

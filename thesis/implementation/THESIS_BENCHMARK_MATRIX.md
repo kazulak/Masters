@@ -159,6 +159,10 @@ Stop conditions for all sweeps:
 - SDK simulator timing may be reported only as SDK simulator timing.
 - CPU/GPU speedup is valid only for same circuit, same size, same QuEST
   semantics, and measured CPU/GPU rows from the same sweep.
+- Parallelism claims should follow
+  [docs/parallelization_roadmap.md](docs/parallelization_roadmap.md): slicing,
+  frontier, GPU TN, and UPMEM/PIM parallelism need separate executed evidence
+  before they are reported as speedup mechanisms.
 
 ## Required Thesis Outputs
 
