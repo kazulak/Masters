@@ -1391,7 +1391,10 @@ def test_cpu_slicing_vs_frontier_diagnostic_suite_records_combined_parallelism_m
             header = next(csv.reader(handle))
         assert "frontier_executed_task_count" in header
         assert "frontier_executed_parallel_task_count" in header
-        assert "slicing_flop_inflation" in header
+        assert "slicing_flop_ratio" in header
+        assert "slicing_flop_change_kind" in header
+        assert "slicing_flop_inflation_factor" in header
+        assert "slicing_memory_ratio" in header
 
 
 def test_quimb_tn_sliced_exact_executes_sliced_tree() -> None:
@@ -1428,6 +1431,20 @@ def test_quimb_tn_sliced_exact_executes_sliced_tree() -> None:
     assert result.metadata["slicing_reconstruction_status"] == "completed"
     assert result.metadata["slice_parallel_execution"] is False
     assert result.metadata["slice_worker_count"] == 1
+    assert result.metadata["slicing_total_flops"] is not None
+    assert result.metadata["unsliced_total_flops"] is not None
+    assert result.metadata["slicing_flop_ratio"] is not None
+    assert result.metadata["slicing_flop_metric_source"] == "cotengra_contraction_tree_total_flops"
+    assert result.metadata["slicing_flop_change_kind"] in {"reduction", "inflation", "equal"}
+    if result.metadata["slicing_flop_ratio"] < 1.0:
+        assert result.metadata["slicing_flop_change_kind"] == "reduction"
+        assert result.metadata["slicing_flop_inflation_factor"] is None
+        assert result.metadata["slicing_flop_inflation"] is None
+    else:
+        assert result.metadata["slicing_flop_inflation_factor"] == result.metadata["slicing_flop_ratio"]
+    assert result.metadata["slicing_max_intermediate_size"] is not None
+    assert result.metadata["unsliced_max_intermediate_size"] is not None
+    assert result.metadata["slicing_memory_ratio"] is not None
     assert result.metadata["execution_plan_kind"] == "cotengra_sliced_contraction_tree"
     np.testing.assert_allclose(result.output.array, expected, atol=1.0e-12)
 
@@ -1549,6 +1566,14 @@ validation:
     assert all(record["slicing_backend"] == "cotengra" for record in sliced_records)
     assert all(record["slice_count"] > 1 for record in sliced_records)
     assert all(record["sliced_indices"] for record in sliced_records)
+    assert all(record["slicing_total_flops"] is not None for record in sliced_records)
+    assert all(record["unsliced_total_flops"] is not None for record in sliced_records)
+    assert all(record["slicing_flop_ratio"] is not None for record in sliced_records)
+    assert all(record["slicing_flop_metric_source"] == "cotengra_contraction_tree_total_flops" for record in sliced_records)
+    assert all(record["slicing_flop_change_kind"] in {"reduction", "inflation", "equal"} for record in sliced_records)
+    assert all(record["slicing_flop_inflation_factor"] is None for record in sliced_records if record["slicing_flop_ratio"] < 1.0)
+    assert all(record["slicing_flop_inflation"] is None for record in sliced_records if record["slicing_flop_ratio"] < 1.0)
+    assert all(record["slicing_memory_ratio"] is not None for record in sliced_records)
     assert all(record["slicing_reconstruction_status"] == "completed" for record in sliced_records)
     assert all(record["slice_parallel_execution"] is False for record in sliced_records)
     assert all(record["slice_worker_count"] == 1 for record in sliced_records)

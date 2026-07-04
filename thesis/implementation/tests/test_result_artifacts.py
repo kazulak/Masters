@@ -203,8 +203,15 @@ def test_evidence_run_layout_and_compare_results_read_only_boundary(tmp_path: Pa
     assert "parallelism_evidence_type" in header
     assert "slicing_backend" in header
     assert "slice_count" in header
+    assert "slicing_total_flops" in header
+    assert "unsliced_total_flops" in header
+    assert "slicing_flop_ratio" in header
+    assert "slicing_flop_metric_source" in header
+    assert "slicing_flop_change_kind" in header
+    assert "slicing_flop_inflation_factor" in header
     assert "slice_parallel_execution" in header
     assert "slicing_reconstruction_status" in header
+    assert "slicing_memory_ratio" in header
     assert "frontier_parallel_execution" in header
     assert "frontier_worker_count" in header
     assert "frontier_wave_count" in header
@@ -222,6 +229,40 @@ def test_evidence_run_layout_and_compare_results_read_only_boundary(tmp_path: Pa
         assert "must not be written under runs/evidence" in str(exc)
     else:  # pragma: no cover - defensive assertion
         raise AssertionError("compare_results should reject outputs inside runs/evidence")
+
+
+def test_legacy_slicing_flop_inflation_maps_to_ratio_without_claiming_inflation(tmp_path: Path) -> None:
+    run_dir = tmp_path / "legacy_slicing"
+    run_dir.mkdir()
+    legacy_record = {
+        "schema_version": "benchmark_result_artifact_v1",
+        "run_id": "legacy",
+        "suite_id": "legacy_slicing",
+        "case_id": "case",
+        "workload_id": "case",
+        "route_id": "quimb_tn_sliced_exact",
+        "backend_id": "quimb_tn_sliced_exact",
+        "backend_family": "quimb",
+        "kernel_family": "external_tn_contraction",
+        "execution_model": "tensor_network",
+        "parallelism_mode": "slicing",
+        "slicing_enabled": True,
+        "slicing_flop_inflation": 0.5,
+        "execution_scope": "full_circuit",
+        "status": "completed",
+        "validation_status": "passed",
+        "task_count": 1,
+        "validated_task_count": 1,
+        "unsupported_task_count": 0,
+    }
+    (run_dir / "normalized_records.jsonl").write_text(json.dumps(legacy_record) + "\n", encoding="utf-8")
+
+    loaded = load_result_records([run_dir])
+
+    assert loaded[0]["slicing_flop_ratio"] == 0.5
+    assert loaded[0]["slicing_flop_metric_source"] == "legacy_slicing_flop_inflation"
+    assert loaded[0]["slicing_flop_change_kind"] == "legacy_unknown"
+    assert loaded[0]["slicing_flop_inflation_factor"] is None
 
 
 def test_compare_results_writes_cpu_gpu_speedup_artifacts(tmp_path: Path) -> None:

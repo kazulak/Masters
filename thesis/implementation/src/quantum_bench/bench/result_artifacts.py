@@ -57,7 +57,17 @@ RESULT_FIELDS = [
     "slice_count",
     "sliced_indices",
     "sliced_index_sizes",
+    "slicing_total_flops",
+    "unsliced_total_flops",
+    "slicing_flop_ratio",
+    "slicing_flop_metric_source",
+    "slicing_flop_change_kind",
+    "slicing_flop_inflation_factor",
     "slicing_flop_inflation",
+    "slicing_max_intermediate_size",
+    "unsliced_max_intermediate_size",
+    "slicing_memory_ratio",
+    "slicing_memory_reduction_factor",
     "slicing_reconstruction_status",
     "slice_parallel_execution",
     "slice_worker_count",
@@ -253,7 +263,12 @@ PARALLELISM_MODE_SUMMARY_FIELDS = [
     "slice_count",
     "slicing_backend",
     "slicing_strategy",
-    "slicing_flop_inflation",
+    "slicing_flop_ratio",
+    "slicing_flop_metric_source",
+    "slicing_flop_change_kind",
+    "slicing_flop_inflation_factor",
+    "slicing_memory_ratio",
+    "slicing_memory_reduction_factor",
     "scheduler_overhead_s",
     "same_family_timing_group",
     "interpretation_note",
@@ -786,7 +801,17 @@ def _base_record(
         "slice_count": None,
         "sliced_indices": None,
         "sliced_index_sizes": None,
+        "slicing_total_flops": None,
+        "unsliced_total_flops": None,
+        "slicing_flop_ratio": None,
+        "slicing_flop_metric_source": None,
+        "slicing_flop_change_kind": None,
+        "slicing_flop_inflation_factor": None,
         "slicing_flop_inflation": None,
+        "slicing_max_intermediate_size": None,
+        "unsliced_max_intermediate_size": None,
+        "slicing_memory_ratio": None,
+        "slicing_memory_reduction_factor": None,
         "slicing_reconstruction_status": None,
         "slice_parallel_execution": False,
         "slice_worker_count": None,
@@ -904,7 +929,17 @@ def normalize_parallelism_metadata(record: JsonDict) -> JsonDict:
     normalized.setdefault("slice_count", None)
     normalized.setdefault("sliced_indices", None)
     normalized.setdefault("sliced_index_sizes", None)
+    normalized.setdefault("slicing_total_flops", None)
+    normalized.setdefault("unsliced_total_flops", None)
+    normalized.setdefault("slicing_flop_ratio", None)
+    normalized.setdefault("slicing_flop_metric_source", None)
+    normalized.setdefault("slicing_flop_change_kind", None)
+    normalized.setdefault("slicing_flop_inflation_factor", None)
     normalized.setdefault("slicing_flop_inflation", None)
+    normalized.setdefault("slicing_max_intermediate_size", None)
+    normalized.setdefault("unsliced_max_intermediate_size", None)
+    normalized.setdefault("slicing_memory_ratio", None)
+    normalized.setdefault("slicing_memory_reduction_factor", None)
     normalized.setdefault("slicing_reconstruction_status", None)
     normalized.setdefault("slice_parallel_execution", False)
     normalized.setdefault("slice_worker_count", None)
@@ -942,6 +977,7 @@ def normalize_parallelism_metadata(record: JsonDict) -> JsonDict:
             target=target,
             evidence_type=str(evidence_type),
         )
+    _normalize_slicing_cost_metadata(normalized)
     _normalize_frontier_task_counts(normalized)
 
     if normalized.get("execution_plan_kind") is None:
@@ -964,6 +1000,36 @@ def normalize_parallelism_metadata(record: JsonDict) -> JsonDict:
     normalized["frontier_parallel_execution"] = bool(normalized["frontier_parallel_execution"])
     normalized["modeled_parallelism_available"] = bool(normalized["modeled_parallelism_available"])
     return to_jsonable(normalized)
+
+
+def _normalize_slicing_cost_metadata(normalized: JsonDict) -> None:
+    ratio = _coerce_number(normalized.get("slicing_flop_ratio"))
+    legacy_value = _coerce_number(normalized.get("slicing_flop_inflation"))
+    source = normalized.get("slicing_flop_metric_source")
+    if ratio is None and legacy_value is not None:
+        ratio = legacy_value
+        normalized["slicing_flop_ratio"] = ratio
+        normalized["slicing_flop_metric_source"] = "legacy_slicing_flop_inflation"
+        normalized["slicing_flop_change_kind"] = "legacy_unknown"
+        normalized["slicing_flop_inflation_factor"] = None
+        return
+    if ratio is None:
+        normalized["slicing_flop_change_kind"] = normalized.get("slicing_flop_change_kind") or "unavailable"
+        return
+    if source == "cotengra_contraction_tree_total_flops":
+        normalized["slicing_flop_change_kind"] = _slicing_ratio_change_kind(ratio)
+        normalized["slicing_flop_inflation_factor"] = ratio if ratio >= 1.0 else None
+        normalized["slicing_flop_inflation"] = ratio if ratio >= 1.0 else None
+    elif normalized.get("slicing_flop_change_kind") is None:
+        normalized["slicing_flop_change_kind"] = "legacy_unknown"
+
+
+def _slicing_ratio_change_kind(ratio: float) -> str:
+    if ratio < 1.0:
+        return "reduction"
+    if ratio > 1.0:
+        return "inflation"
+    return "equal"
 
 
 def _normalize_frontier_task_counts(normalized: JsonDict) -> None:
@@ -1095,7 +1161,12 @@ def _parallelism_mode_summary(records: list[JsonDict]) -> list[JsonDict]:
                 "slice_count": _max_numeric(record.get("slice_count") for record in route_records),
                 "slicing_backend": first.get("slicing_backend"),
                 "slicing_strategy": first.get("slicing_strategy"),
-                "slicing_flop_inflation": _mean_numeric(record.get("slicing_flop_inflation") for record in route_records),
+                "slicing_flop_ratio": _mean_numeric(record.get("slicing_flop_ratio") for record in route_records),
+                "slicing_flop_metric_source": _aggregate_change_kind(record.get("slicing_flop_metric_source") for record in route_records),
+                "slicing_flop_change_kind": _aggregate_change_kind(record.get("slicing_flop_change_kind") for record in route_records),
+                "slicing_flop_inflation_factor": _mean_numeric(record.get("slicing_flop_inflation_factor") for record in route_records),
+                "slicing_memory_ratio": _mean_numeric(record.get("slicing_memory_ratio") for record in route_records),
+                "slicing_memory_reduction_factor": _mean_numeric(record.get("slicing_memory_reduction_factor") for record in route_records),
                 "scheduler_overhead_s": _sum_numbers(record.get("scheduler_overhead_s") for record in route_records),
                 "same_family_timing_group": _same_family_timing_group(route_id),
                 "interpretation_note": _parallelism_interpretation_note(route_id),
@@ -1117,9 +1188,10 @@ def _parallelism_summary_markdown(rows: list[JsonDict]) -> str:
         "# CPU Tensor-Network Parallelism Diagnostic Summary",
         "",
         "This summary separates implementation families. Compare Quimb unsliced against Quimb sliced, and internal sequential TaskGraph against internal frontier TaskGraph. Do not treat Quimb and the internal TaskGraph routes as equivalent implementation-quality baselines.",
+        '`slicing_flop_ratio` = sliced cotengra plan reported FLOPs / unsliced cotengra plan reported FLOPs.',
         "",
-        "| Route | Role | Mode | Evidence | Same-family timing group | Records | Passed | Tasks | Frontier executed | Frontier parallel-dispatched | Slice count | FLOP inflation | Scheduler overhead s |",
-        "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Route | Role | Mode | Evidence | Same-family timing group | Records | Passed | Tasks | Frontier executed | Frontier parallel-dispatched | Slice count | FLOP ratio | FLOP change | Scheduler overhead s |",
+        "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |",
     ]
     for row in rows:
         lines.append(
@@ -1127,7 +1199,7 @@ def _parallelism_summary_markdown(rows: list[JsonDict]) -> str:
             f"{row.get('parallelism_evidence_type')} | {row.get('same_family_timing_group')} | "
             f"{row.get('record_count')} | {row.get('validation_passed_count')} | {row.get('task_count')} | "
             f"{row.get('frontier_executed_task_count') or ''} | {row.get('frontier_executed_parallel_task_count') or ''} | "
-            f"{row.get('slice_count') or ''} | {_format_float(row.get('slicing_flop_inflation'))} | "
+            f"{row.get('slice_count') or ''} | {_format_float(row.get('slicing_flop_ratio'))} | {row.get('slicing_flop_change_kind') or ''} | "
             f"{_format_float(row.get('scheduler_overhead_s'))} |"
         )
     lines.extend(
@@ -1159,6 +1231,15 @@ def _parallelism_interpretation_note(route_id: str) -> str:
     return notes.get(route_id, "not_applicable")
 
 
+def _aggregate_change_kind(values: Iterable[Any]) -> str | None:
+    kinds = sorted({str(value) for value in values if value not in {None, ""}})
+    if not kinds:
+        return None
+    if len(kinds) == 1:
+        return kinds[0]
+    return "mixed"
+
+
 def _sum_ints(values: Iterable[Any]) -> int | None:
     numbers = [_coerce_number(value) for value in values]
     numbers = [value for value in numbers if value is not None]
@@ -1187,7 +1268,7 @@ def _mean_numeric(values: Iterable[Any]) -> float | None:
 
 
 def _coerce_number(value: Any) -> float | None:
-    if value in {None, ""}:
+    if value is None or value == "":
         return None
     try:
         return float(value)

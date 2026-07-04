@@ -295,7 +295,8 @@ class QuimbTnSlicedExactRoute:
                 output_inds,
                 methods=methods,
                 max_repeats=max_repeats,
-                sliced_flops=tree_metadata.get("sliced_flops"),
+                slicing_total_flops=tree_metadata.get("slicing_total_flops"),
+                slicing_max_intermediate_size=tree_metadata.get("slicing_max_intermediate_size"),
             )
         except Exception as exc:
             return _failed(
@@ -467,8 +468,8 @@ def _sliced_tree_metadata(tree: Any, *, require_slicing: bool) -> dict[str, Any]
         "slice_count": slice_count,
         "sliced_indices": tuple(sliced_index_sizes),
         "sliced_index_sizes": sliced_index_sizes,
-        "sliced_flops": _tree_number(tree, "total_flops"),
-        "sliced_max_size": _tree_number(tree, "max_size"),
+        "slicing_total_flops": _tree_number(tree, "total_flops"),
+        "slicing_max_intermediate_size": _tree_number(tree, "max_size"),
     }
 
 
@@ -479,7 +480,8 @@ def _unsliced_tree_comparison(
     *,
     methods: str,
     max_repeats: int,
-    sliced_flops: int | float | None,
+    slicing_total_flops: int | float | None,
+    slicing_max_intermediate_size: int | float | None,
 ) -> dict[str, Any]:
     try:
         unsliced_tree = tensor_network.contract(
@@ -489,16 +491,38 @@ def _unsliced_tree_comparison(
         )
     except Exception as exc:  # pragma: no cover - defensive metadata-only path
         return {"unsliced_tree_cost_status": f"unavailable:{type(exc).__name__}"}
-    unsliced_flops = _tree_number(unsliced_tree, "total_flops")
-    inflation = None
-    if sliced_flops is not None and unsliced_flops:
-        inflation = float(sliced_flops) / float(unsliced_flops)
+    unsliced_total_flops = _tree_number(unsliced_tree, "total_flops")
+    unsliced_max_intermediate_size = _tree_number(unsliced_tree, "max_size")
+    flop_ratio = _safe_ratio(slicing_total_flops, unsliced_total_flops)
+    memory_ratio = _safe_ratio(slicing_max_intermediate_size, unsliced_max_intermediate_size)
     return {
         "unsliced_tree_cost_status": "available",
-        "unsliced_flops": unsliced_flops,
-        "unsliced_max_size": _tree_number(unsliced_tree, "max_size"),
-        "slicing_flop_inflation": inflation,
+        "unsliced_total_flops": unsliced_total_flops,
+        "slicing_flop_ratio": flop_ratio,
+        "slicing_flop_metric_source": "cotengra_contraction_tree_total_flops",
+        "slicing_flop_change_kind": _ratio_change_kind(flop_ratio),
+        "slicing_flop_inflation_factor": flop_ratio if flop_ratio is not None and flop_ratio >= 1.0 else None,
+        "slicing_flop_inflation": flop_ratio if flop_ratio is not None and flop_ratio >= 1.0 else None,
+        "unsliced_max_intermediate_size": unsliced_max_intermediate_size,
+        "slicing_memory_ratio": memory_ratio,
+        "slicing_memory_reduction_factor": (1.0 / memory_ratio) if memory_ratio is not None and 0.0 < memory_ratio < 1.0 else None,
     }
+
+
+def _safe_ratio(numerator: int | float | None, denominator: int | float | None) -> float | None:
+    if numerator is None or denominator in {None, 0}:
+        return None
+    return float(numerator) / float(denominator)
+
+
+def _ratio_change_kind(ratio: float | None) -> str:
+    if ratio is None:
+        return "unavailable"
+    if ratio < 1.0:
+        return "reduction"
+    if ratio > 1.0:
+        return "inflation"
+    return "equal"
 
 
 def _tree_number(tree: Any, method_name: str) -> int | None:
