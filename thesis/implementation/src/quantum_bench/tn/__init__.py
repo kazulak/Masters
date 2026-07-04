@@ -5,7 +5,7 @@ from quantum_bench.tn.materialize import (
     TaskInputReplayMetric,
     materialize_task_inputs,
 )
-from quantum_bench.tn.execution import execute_task_sequence_np_einsum, order_final_tensor
+from quantum_bench.tn.execution import execute_task_frontier_np_einsum, execute_task_sequence_np_einsum, frontier_waves, order_final_tensor
 from quantum_bench.tn.network import TensorNetworkValue, build_tensor_network
 from quantum_bench.tn.planners import OptEinsumPlanner, planner_from_config
 from quantum_bench.tn.task_graph import derive_path_costs, plan_task_graph, plan_task_graph_with_config, plan_task_graph_with_planner, with_path_cost_summary
@@ -19,7 +19,9 @@ __all__ = [
     "TensorNetworkValue",
     "build_tensor_network",
     "derive_path_costs",
+    "execute_task_frontier_np_einsum",
     "execute_task_sequence_np_einsum",
+    "frontier_waves",
     "materialize_task_inputs",
     "order_final_tensor",
     "plan_task_graph",

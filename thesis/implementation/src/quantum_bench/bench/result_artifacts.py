@@ -62,6 +62,15 @@ RESULT_FIELDS = [
     "slice_parallel_execution",
     "slice_worker_count",
     "frontier_scheduler_enabled",
+    "frontier_parallel_execution",
+    "frontier_worker_count",
+    "frontier_wave_count",
+    "max_frontier_width",
+    "mean_frontier_width",
+    "executed_parallel_task_count",
+    "scheduler_overhead_s",
+    "duplicate_contraction_check",
+    "missing_dependency_check",
     "intra_contraction_parallelism_source",
     "modeled_parallelism_available",
     "output_kind",
@@ -748,6 +757,15 @@ def _base_record(
         "slice_parallel_execution": False,
         "slice_worker_count": None,
         "frontier_scheduler_enabled": False,
+        "frontier_parallel_execution": False,
+        "frontier_worker_count": None,
+        "frontier_wave_count": None,
+        "max_frontier_width": None,
+        "mean_frontier_width": None,
+        "executed_parallel_task_count": None,
+        "scheduler_overhead_s": None,
+        "duplicate_contraction_check": None,
+        "missing_dependency_check": None,
         "intra_contraction_parallelism_source": None,
         "modeled_parallelism_available": False,
         "output_kind": None,
@@ -855,6 +873,15 @@ def normalize_parallelism_metadata(record: JsonDict) -> JsonDict:
     normalized.setdefault("slice_parallel_execution", False)
     normalized.setdefault("slice_worker_count", None)
     normalized.setdefault("frontier_scheduler_enabled", False)
+    normalized.setdefault("frontier_parallel_execution", False)
+    normalized.setdefault("frontier_worker_count", None)
+    normalized.setdefault("frontier_wave_count", None)
+    normalized.setdefault("max_frontier_width", None)
+    normalized.setdefault("mean_frontier_width", None)
+    normalized.setdefault("executed_parallel_task_count", None)
+    normalized.setdefault("scheduler_overhead_s", None)
+    normalized.setdefault("duplicate_contraction_check", None)
+    normalized.setdefault("missing_dependency_check", None)
     normalized.setdefault("modeled_parallelism_available", False)
     normalized["execution_plan_executed"] = executed
 
@@ -895,6 +922,7 @@ def normalize_parallelism_metadata(record: JsonDict) -> JsonDict:
     normalized["slicing_enabled"] = bool(normalized["slicing_enabled"])
     normalized["slice_parallel_execution"] = bool(normalized["slice_parallel_execution"])
     normalized["frontier_scheduler_enabled"] = bool(normalized["frontier_scheduler_enabled"])
+    normalized["frontier_parallel_execution"] = bool(normalized["frontier_parallel_execution"])
     normalized["modeled_parallelism_available"] = bool(normalized["modeled_parallelism_available"])
     return to_jsonable(normalized)
 
@@ -916,6 +944,8 @@ def _default_parallelism_mode(*, route_id: str, execution_model: str, target: st
         return "not_applicable"
     if route_id == "quimb_tn_sliced_exact":
         return "slicing"
+    if route_id == "cpu_tn_frontier_exact":
+        return "frontier"
     if execution_model == "tensor_network" or target == "upmem" or route_id == "upmem_tn_sdk_simulator_quantized":
         return "sequential"
     return "not_applicable"
@@ -928,6 +958,8 @@ def _default_execution_plan_kind(*, route_id: str, execution_model: str, target:
         return "single_upmem_task"
     if route_id == "quimb_tn_sliced_exact":
         return "cotengra_sliced_contraction_tree"
+    if route_id == "cpu_tn_frontier_exact":
+        return "taskgraph_frontier_scheduler"
     if route_id == "quimb_tn_exact":
         return "external_tn_unsliced_contract"
     if route_id == "cpu_tn_einsum_exact" or scope == "full_taskgraph_reference":

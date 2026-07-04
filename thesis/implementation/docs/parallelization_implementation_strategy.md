@@ -120,7 +120,6 @@ Reuse:
 
 Defer:
 
-- frontier scheduler execution;
 - new benchmark suites beyond metadata tests.
 
 ### 2E.52 - Explicit Quimb/Cotengra Slicing Evidence
@@ -141,9 +140,10 @@ unless a later wave runs slices concurrently and records worker metadata.
 
 ### 2E.53 - CPU Frontier TaskGraph Prototype
 
-Add an internal/diagnostic TaskGraph frontier scheduler prototype. It should
-execute ready TaskGraph nodes only when dependencies are satisfied and must
-prove no duplicated or missing contractions.
+Add an internal/diagnostic TaskGraph frontier scheduler prototype:
+`cpu_tn_frontier_exact`. It executes ready TaskGraph nodes only when
+dependencies are satisfied and must prove no duplicated or missing
+contractions.
 
 Required evidence:
 
