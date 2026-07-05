@@ -85,6 +85,12 @@ def test_route_probe_and_upmem_skip_reason() -> None:
     gpu_capabilities = routes["quest_gpu_full_state_exact"].capabilities()
     assert gpu_capabilities.can_return_output == bool(gpu_capabilities.metadata.get("gpu_backend_verified", False))
     assert gpu_capabilities.metadata["gpu_records_require_real_gpu_execution"] is True
+    gpu_tn_routes = [
+        route_id
+        for route_id, route in routes.items()
+        if route.identity.hardware_target == "gpu" and "tensor_network" in route.identity.simulation_method
+    ]
+    assert gpu_tn_routes == []
     assert routes["quimb_tn_exact"].identity.output_contract == "final_tensor"
     assert routes["quimb_tn_exact"].identity.role == "serious_external_tn_baseline"
     assert routes["quimb_tn_exact"].identity.validation_mode == "compare_output"

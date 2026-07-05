@@ -2,8 +2,9 @@
 
 This document maps the tensor-network parallelization roadmap to small future
 implementation waves. It is an implementation strategy, not an implementation
-claim: current TaskGraph execution and strict UPMEM SDK simulator execution
-remain sequential until later waves add and validate parallel execution.
+claim: the serious Quimb TN baseline and strict UPMEM SDK simulator baseline
+remain sequential, while internal TaskGraph frontier and hybrid routes provide
+diagnostic executed parallelism evidence only.
 
 ## Shared Metadata Primitives
 
@@ -38,13 +39,15 @@ Do not replace current serious baselines:
 - `upmem_tn_sdk_simulator_quantized` remains the strict sequential UPMEM SDK
   simulator baseline.
 
-Candidate future route IDs may be useful for planning, but final names must be
-confirmed during implementation based on artifact and report compatibility:
+The following route IDs are now implemented and should remain additive rather
+than replacing existing baselines:
 
-- `quimb_tn_sliced_exact`: candidate route ID for explicit Quimb/cotengra
+- `quimb_tn_sliced_exact`: explicit Quimb/cotengra
   slicing evidence.
-- `cpu_tn_frontier_exact`: candidate route ID for an internal TaskGraph
+- `cpu_tn_frontier_exact`: internal TaskGraph
   frontier scheduler prototype.
+- `cpu_tn_hybrid_sliced_frontier_exact`: diagnostic internal slice-aware
+  TaskGraph plus frontier scheduler prototype.
 
 Use additive route IDs when different execution modes need to appear
 side-by-side in one comparison suite. Use route options only when the mode is a
@@ -58,8 +61,10 @@ Route-specific guidance:
 - CPU frontier scheduling should start as an internal/diagnostic route because
   it exercises the local TaskGraph executor rather than the serious external TN
   baseline.
-- Hybrid slicing plus frontier should be deferred until both individual modes
-  have independent correctness and metadata coverage.
+- Hybrid slicing plus frontier is available only as the diagnostic internal
+  route `cpu_tn_hybrid_sliced_frontier_exact`; it is not a serious TN
+  baseline and should not be used for speedup claims without a separate
+  performance/scaling methodology.
 - GPU TN must be separate from QuEST GPU full-state. Do not report QuEST
   full-state GPU speedup as GPU TN speedup.
 - UPMEM multi-DPU execution must remain under the unified UPMEM runtime concept.
@@ -167,10 +172,10 @@ Required evidence:
 ### 2E.55 - Hybrid Slicing Plus Frontier Experiment
 
 The Wave 2E.55 feasibility verdict is tracked in
-[hybrid_slicing_frontier_design.md](hybrid_slicing_frontier_design.md).
-True hybrid execution should be deferred until a shared slice-aware TaskGraph
-representation exists. Do not call side-by-side Quimb slicing and internal
-TaskGraph frontier rows a hybrid.
+[hybrid_slicing_frontier_design.md](hybrid_slicing_frontier_design.md): do not
+call side-by-side Quimb slicing and internal TaskGraph frontier rows a hybrid.
+Later waves added the shared internal representation and diagnostic hybrid
+route, but the original warning remains the key thesis-safety rule.
 
 Required evidence:
 
@@ -179,11 +184,52 @@ Required evidence:
 - reconstruction validation;
 - per-component timing.
 
-### 2E.56 - GPU TN Feasibility
+### 2E.56 - Internal Slice-Aware TaskGraph Model
 
-Investigate a real GPU tensor-network backend separately from QuEST full-state
-GPU. Candidate families include cuTensorNet/cuQuantum/CUDA-Q/Qiskit Aer GPU or
-another exact GPU TN path that can prove real device execution.
+Add a model-only internal slice-aware TaskGraph representation before claiming
+any hybrid execution. This stage provides slice task metadata and reconstruction
+requirements without executing numerical slice contractions.
+
+Required evidence:
+
+- slice model task count and slice count;
+- `slice_model_execution_status=model_only`;
+- `hybrid_ready=false`;
+- no frontier metadata that implies executed hybrid behavior.
+
+### 2E.57 - Executable Internal Hybrid Spike
+
+Add a diagnostic internal route only after sequential slice reconstruction and
+frontier scheduling run in the same execution path:
+`cpu_tn_hybrid_sliced_frontier_exact`.
+
+Required evidence:
+
+- `parallelism_mode=hybrid`;
+- `parallelism_evidence_type=executed`;
+- `hybrid_components=["slicing", "frontier"]`;
+- completed slice reconstruction and final validation;
+- source task counts and expanded execution-node counts;
+- duplicate, missing dependency, and dependency-violation checks.
+
+This route is diagnostic. It must not be promoted to the serious TN baseline or
+used for speedup claims without a separate performance/scaling methodology.
+
+### 2E.58+ - Benchmark Evidence Readiness
+
+Research benchmark packs and reports should keep slicing, frontier, hybrid,
+GPU, and UPMEM claims thesis-safe. Parallelization evidence must stay derived
+from normalized records, with diagnostic routes clearly separated from serious
+baselines.
+
+### Next Stage - GPU TN Feasibility
+
+The feasibility plan is [gpu_tn_feasibility.md](gpu_tn_feasibility.md), and
+`simulation-backend-probe` now reports a feasibility-only GPU tensor-network
+candidate section. It investigates real GPU tensor-network backends separately
+from QuEST full-state GPU. Candidate families include cuTensorNet/cuQuantum,
+CUDA-Q `tensornet`, Qiskit Aer `tensor_network`, and Quimb/cotengra with a
+real GPU array backend.
 
 Required evidence:
 
@@ -192,7 +238,14 @@ Required evidence:
 - synchronization status for timing;
 - exact or clearly labeled metrics-only validation.
 
-### 2E.57 - UPMEM Multi-DPU Scheduling Design
+Current boundary:
+
+- no GPU TN route is registered;
+- no GPU TN benchmark records are emitted;
+- the next implementation step is a minimal candidate execution spike outside
+  benchmark-row emission.
+
+### Future Stage - UPMEM Multi-DPU Scheduling Design
 
 Design task-to-DPU assignment and reduction/synchronization metadata before
 implementing multi-DPU execution. Use current frontier analysis as modeled input
@@ -205,7 +258,7 @@ Required evidence goals:
 - transfer and synchronization cost model;
 - strict no CPU contraction fallback invariant.
 
-### 2E.58+ - UPMEM Multi-DPU Prototype
+### Future Stage - UPMEM Multi-DPU Prototype
 
 Implement only after the design can be tested against real SDK/hardware
 constraints. Hardware timing and speedup claims require real hardware execution;
@@ -216,9 +269,6 @@ SDK simulator timing remains simulator evidence.
 The following choices should be made during the implementation wave that first
 needs them:
 
-- final route IDs for sliced Quimb/cotengra and frontier TaskGraph execution;
-- whether slicing is exposed as a route option, additive route, or both;
-- exact cotengra slicing API and optimizer configuration;
-- frontier worker implementation mechanism;
 - GPU TN backend selection;
+- candidate route ID for any verified GPU TN backend;
 - UPMEM multi-DPU communication substrate and PID-Comm role.

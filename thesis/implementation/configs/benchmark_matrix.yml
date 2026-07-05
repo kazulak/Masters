@@ -21,10 +21,10 @@ route_categories:
     route_status: planned
     execution_scope: full_circuit
     target: gpu
-    validation_scope: full_circuit_amplitudes
+    validation_scope: future_verified_gpu_tn
     evidence_type: planned
-    output_authority: authoritative
-    validation_policy: full_exact
+    output_authority: future_only
+    validation_policy: not_applicable_until_verified
 
   - route_category: cpu_full_state
     route_id: quest_cpu_full_state_exact
@@ -37,14 +37,14 @@ route_categories:
     validation_policy: full_exact
 
   - route_category: gpu_full_state
-    route_id: planned
-    route_status: planned
+    route_id: quest_gpu_full_state_exact
+    route_status: implemented_optional
     execution_scope: full_circuit
     target: gpu
     validation_scope: full_state
-    evidence_type: planned
-    output_authority: authoritative
-    validation_policy: full_exact
+    evidence_type: measured_when_verified
+    output_authority: authoritative_when_verified
+    validation_policy: full_exact_when_state_dump_enabled
 
   - route_category: upmem_tn_runtime
     route_id: not_applicable

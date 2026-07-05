@@ -10,7 +10,11 @@ from pathlib import Path
 
 from quantum_bench.core.records import JsonDict, to_jsonable
 from quantum_bench.providers import route_registry
-from quantum_bench.providers.full_state.quest_gpu import QUEST_GPU_VERIFICATION_SCHEMA_VERSION, quest_gpu_verification_path
+from quantum_bench.providers.full_state.quest_gpu import (
+    QUEST_GPU_VERIFICATION_SCHEMA_VERSION,
+    load_quest_gpu_verification,
+    quest_gpu_verification_path,
+)
 
 
 SIMULATION_BACKEND_PROBE_SCHEMA_VERSION = "simulation_backend_probe_v1"
@@ -21,7 +25,10 @@ def probe_simulation_backends(root_dir: Path, *, verify_gpu: str = "none") -> Js
     if verify_gpu not in GPU_VERIFY_CHOICES:
         raise ValueError(f"Unsupported --verify-gpu value: {verify_gpu}")
     gpu_hardware = _gpu_hardware_probe()
-    gpu_verification = _verify_gpu_backend(root_dir, verify_gpu, gpu_hardware) if verify_gpu != "none" else None
+    if verify_gpu != "none":
+        gpu_verification = _with_verification_source(_verify_gpu_backend(root_dir, verify_gpu, gpu_hardware), "fresh_verify_gpu")
+    else:
+        gpu_verification = _with_verification_source(load_quest_gpu_verification(root_dir), "cached_artifact")
     routes = route_registry(root_dir)
     route_reports: list[JsonDict] = []
     for route_id in sorted(routes):
@@ -43,6 +50,7 @@ def probe_simulation_backends(root_dir: Path, *, verify_gpu: str = "none") -> Js
             }
         )
     gpu_candidates = _gpu_candidate_matrix(root_dir, gpu_hardware, gpu_verification)
+    gpu_tn_candidates = _gpu_tn_candidate_matrix(gpu_candidates, gpu_hardware)
     payload = {
         "schema_version": SIMULATION_BACKEND_PROBE_SCHEMA_VERSION,
         "routes": route_reports,
@@ -65,7 +73,18 @@ def probe_simulation_backends(root_dir: Path, *, verify_gpu: str = "none") -> Js
             "nvidia_smi": _command_status("nvidia-smi"),
             "nvcc": _command_status("nvcc"),
             "gpu_candidates": gpu_candidates,
-            "gpu_verification": gpu_verification,
+            "gpu_tensor_network_probe": {
+                "status": "feasibility_only",
+                "candidate_count": len(gpu_tn_candidates),
+                "gpu_tn_candidates": gpu_tn_candidates,
+                "gpu_tn_backend_route_added": False,
+                "gpu_tn_benchmark_records_emitted": False,
+                "quest_gpu_full_state_is_gpu_tn_evidence": False,
+                "requires_verified_tensor_network_gpu_execution_before_records": True,
+            },
+            "gpu_verification": _gpu_verification_probe_summary(gpu_verification),
+            "gpu_verification_source": gpu_verification.get("verification_source") if gpu_verification else "none",
+            "cached_gpu_verification_used": bool(gpu_verification and gpu_verification.get("verification_source") == "cached_artifact"),
             "cuda_only_assumption_used": False,
             "gpu_execution_backend_added": any(bool(candidate["benchmark_route_eligible"]) for candidate in gpu_candidates),
             "gpu_benchmark_records_emitted": False,
@@ -77,6 +96,86 @@ def probe_simulation_backends(root_dir: Path, *, verify_gpu: str = "none") -> Js
         },
     }
     return to_jsonable(payload)
+
+
+def _with_verification_source(payload: JsonDict | None, source: str) -> JsonDict | None:
+    if not payload:
+        return None
+    return {**payload, "verification_source": source}
+
+
+def _gpu_verification_probe_summary(payload: JsonDict | None) -> JsonDict | None:
+    if not payload:
+        return None
+    summary_keys = (
+        "status",
+        "requested_backend",
+        "selected_backend",
+        "verification_backend",
+        "verification_source",
+        "candidate_category",
+        "accelerator_kind",
+        "gpu_runtime_stack",
+        "gpu_backend_verified",
+        "gpu_program_executed",
+        "gpu_device_name",
+        "gpu_synchronized",
+        "blocker_reason",
+        "missing_prerequisites",
+        "artifact_path",
+        "runner_path",
+        "runner_root",
+        "schema_version",
+        "created_at",
+    )
+    summary = {key: payload.get(key) for key in summary_keys if key in payload}
+    if "attempted_steps" in payload:
+        summary["attempted_steps"] = [
+            {
+                key: step.get(key)
+                for key in ("step", "status", "command")
+                if key in step
+            }
+            for step in (payload.get("attempted_steps") or [])
+            if isinstance(step, dict)
+        ]
+    if "detected_dependencies" in payload:
+        summary["detected_dependencies"] = payload.get("detected_dependencies")
+    if "gpu_toolkit_metadata" in payload:
+        summary["gpu_toolkit_metadata"] = payload.get("gpu_toolkit_metadata")
+    hip_smoke_payload = payload.get("hip_smoke_payload")
+    if isinstance(hip_smoke_payload, dict):
+        summary["hip_smoke_payload"] = {
+            key: hip_smoke_payload.get(key)
+            for key in (
+                "status",
+                "gpu_backend_verified",
+                "gpu_program_executed",
+                "gpu_device_name",
+                "gcn_arch_name",
+                "device_count",
+                "multi_processor_count",
+                "total_global_mem",
+            )
+            if key in hip_smoke_payload
+        }
+    for source_key, summary_key in (
+        ("hip_smoke_build_result", "hip_smoke_build_result_summary"),
+        ("hip_smoke_run_result", "hip_smoke_run_result_summary"),
+        ("build_result", "build_result_summary"),
+        ("minimal_run_result", "minimal_run_result_summary"),
+    ):
+        if isinstance(payload.get(source_key), dict):
+            summary[summary_key] = _command_result_summary(payload[source_key])
+    return to_jsonable(summary)
+
+
+def _command_result_summary(result: JsonDict) -> JsonDict:
+    return {
+        key: result.get(key)
+        for key in ("command", "cwd", "returncode", "timeout_s", "timed_out", "os_error")
+        if key in result
+    }
 
 
 def _module_status(name: str) -> JsonDict:
@@ -168,36 +267,61 @@ def _gpu_candidate_matrix(root_dir: Path, hardware: JsonDict, verification: Json
     rocm_tools = {name: _command_status(name) for name in ("hipcc", "rocminfo", "rocm-smi")}
     cuda_tools = {name: _command_status(name) for name in ("nvcc", "nvidia-smi")}
     torch_gpu = _torch_gpu_execution_status()
+    verification_source = str(verification.get("verification_source") or "fresh_verify_gpu") if verification else "none"
     hip_verified = bool(verification and verification.get("selected_backend") == "quest-hip" and verification.get("status") == "verified")
     cuda_verified = bool(verification and verification.get("selected_backend") == "quest-cuda" and verification.get("status") == "verified")
     hip_blocker = verification.get("blocker_reason") if verification and verification.get("selected_backend") == "quest-hip" else None
     cuda_blocker = verification.get("blocker_reason") if verification and verification.get("selected_backend") == "quest-cuda" else None
+    hip_preflight_available = _quest_hip_live_preflight_available(hardware, rocm_tools)
+    cuda_preflight_available = _quest_cuda_live_preflight_available(hardware, cuda_tools)
+    hip_classification = _verified_gpu_candidate_classification(
+        verified=hip_verified,
+        verification_source=verification_source,
+        current_process_preflight_available=hip_preflight_available,
+        default_classification="amd_rocm_candidate_not_verified" if quest_has_hip else "feasible_later_not_benchmarkable_now",
+    )
+    cuda_classification = _verified_gpu_candidate_classification(
+        verified=cuda_verified,
+        verification_source=verification_source,
+        current_process_preflight_available=cuda_preflight_available,
+        default_classification="nvidia_cuda_only_not_usable_here" if not hardware.get("nvidia_gpu_pci_detected") else "feasible_later_not_benchmarkable_now",
+    )
     candidates = [
         _candidate(
             "quest_gpu_full_state_hip",
             "tailored_quantum_gpu",
             1,
             "amd_rocm",
-            classification="usable_current_machine" if hip_verified else ("amd_rocm_candidate_not_verified" if quest_has_hip else "feasible_later_not_benchmarkable_now"),
+            classification=hip_classification,
             blocker=None if hip_verified else (hip_blocker or ("quest_enable_hip_source_only_not_benchmark_evidence" if quest_has_hip else "quest_enable_hip_not_detected")),
             source_paths=["external/QuEST/CMakeLists.txt"] if quest_has_hip else [],
             dependencies=rocm_tools,
             gpu_execution_verified=hip_verified,
-            usable_current=hip_verified,
-            extra={"verification_artifact": verification.get("artifact_path") if verification and verification.get("selected_backend") == "quest-hip" else None},
+            usable_current=hip_verified and verification_source == "fresh_verify_gpu",
+            extra={
+                "verification_artifact": verification.get("artifact_path") if verification and verification.get("selected_backend") == "quest-hip" else None,
+                "verification_source": verification_source if hip_verified or hip_blocker else "none",
+                "current_process_gpu_preflight_available": hip_preflight_available,
+                "cached_verification_artifact_used": bool(hip_verified and verification_source == "cached_artifact"),
+            },
         ),
         _candidate(
             "quest_gpu_full_state_cuda",
             "tailored_quantum_gpu",
             2,
             "nvidia_cuda",
-            classification="usable_current_machine" if cuda_verified else ("nvidia_cuda_only_not_usable_here" if not hardware.get("nvidia_gpu_pci_detected") else "feasible_later_not_benchmarkable_now"),
+            classification=cuda_classification,
             blocker=None if cuda_verified else (cuda_blocker or "requires_nvidia_cuda_build_and_minimal_gpu_execution"),
             source_paths=["external/QuEST/CMakeLists.txt"] if quest_has_cuda else [],
             dependencies=cuda_tools,
             gpu_execution_verified=cuda_verified,
-            usable_current=cuda_verified,
-            extra={"verification_artifact": verification.get("artifact_path") if verification and verification.get("selected_backend") == "quest-cuda" else None},
+            usable_current=cuda_verified and verification_source == "fresh_verify_gpu",
+            extra={
+                "verification_artifact": verification.get("artifact_path") if verification and verification.get("selected_backend") == "quest-cuda" else None,
+                "verification_source": verification_source if cuda_verified or cuda_blocker else "none",
+                "current_process_gpu_preflight_available": cuda_preflight_available,
+                "cached_verification_artifact_used": bool(cuda_verified and verification_source == "cached_artifact"),
+            },
         ),
         _python_candidate("qiskit_aer_gpu_statevector", "cuda_quantum_stack", 3, "nvidia_cuda", "qiskit_aer", hardware, "qiskit_aer_gpu_execution_not_verified"),
         _python_candidate("qiskit_aer_gpu_tensor_network", "cuda_quantum_stack", 4, "nvidia_cuda", "qiskit_aer", hardware, "qiskit_aer_cuquantum_execution_not_verified"),
@@ -222,6 +346,177 @@ def _gpu_candidate_matrix(root_dir: Path, hardware: JsonDict, verification: Json
         ),
     ]
     return [to_jsonable(candidate) for candidate in candidates]
+
+
+def _quest_hip_live_preflight_available(hardware: JsonDict, rocm_tools: JsonDict) -> bool:
+    return bool(
+        hardware.get("amd_gpu_pci_detected")
+        and hardware.get("dev_kfd_present")
+        and hardware.get("dev_dri_present")
+        and (hardware.get("dev_dri_render_node_present") or hardware.get("dev_dri_renderD128_present"))
+        and hardware.get("rocminfo_gpu_agent_detected")
+        and rocm_tools.get("hipcc", {}).get("available")
+        and rocm_tools.get("rocminfo", {}).get("available")
+    )
+
+
+def _quest_cuda_live_preflight_available(hardware: JsonDict, cuda_tools: JsonDict) -> bool:
+    return bool(
+        hardware.get("nvidia_gpu_pci_detected")
+        and cuda_tools.get("nvidia-smi", {}).get("available")
+        and cuda_tools.get("nvcc", {}).get("available")
+    )
+
+
+def _verified_gpu_candidate_classification(
+    *,
+    verified: bool,
+    verification_source: str,
+    current_process_preflight_available: bool,
+    default_classification: str,
+) -> str:
+    if not verified:
+        return default_classification
+    if verification_source == "cached_artifact" and not current_process_preflight_available:
+        return "verified_cached_artifact_current_preflight_blocked"
+    if verification_source == "cached_artifact":
+        return "verified_cached_artifact"
+    return "usable_current_machine"
+
+
+def _gpu_tn_candidate_matrix(gpu_candidates: list[JsonDict], hardware: JsonDict) -> list[JsonDict]:
+    by_id = {str(candidate["candidate_id"]): candidate for candidate in gpu_candidates}
+    candidates = [
+        _gpu_tn_candidate_from_gpu_candidate(
+            by_id,
+            candidate_id="cuquantum_cutensornet",
+            source_candidate_id="cuquantum_tensor_network",
+            candidate_category="tailored_gpu_tn",
+            preferred_priority=1,
+            target_gpu_stack="nvidia_cuda",
+            backend_family="cuquantum_cutensornet",
+            route_status="future_candidate",
+            feasibility_note="Preferred SOTA-oriented NVIDIA tensor-network library candidate for a future cluster route.",
+        ),
+        _gpu_tn_candidate_from_gpu_candidate(
+            by_id,
+            candidate_id="cudaq_tensornet",
+            source_candidate_id="cudaq_gpu_tensor_network",
+            candidate_category="cuda_quantum_stack",
+            preferred_priority=2,
+            target_gpu_stack="nvidia_cuda",
+            backend_family="cudaq",
+            route_status="future_candidate",
+            feasibility_note="CUDA-Q tensor-network simulator candidate; separate from QuEST full-state GPU.",
+        ),
+        _gpu_tn_candidate_from_gpu_candidate(
+            by_id,
+            candidate_id="qiskit_aer_tensor_network",
+            source_candidate_id="qiskit_aer_gpu_tensor_network",
+            candidate_category="cuda_quantum_stack",
+            preferred_priority=3,
+            target_gpu_stack="nvidia_cuda",
+            backend_family="qiskit_aer",
+            route_status="future_candidate",
+            feasibility_note="Qiskit Aer GPU tensor_network method candidate; requires GPU-enabled Aer and cuTensorNet.",
+        ),
+        _gpu_tn_candidate_from_gpu_candidate(
+            by_id,
+            candidate_id="quimb_cotengra_gpu_array_backend",
+            source_candidate_id="quimb_cotengra_gpu",
+            candidate_category="gpu_array_tn_integration",
+            preferred_priority=4,
+            target_gpu_stack="gpu_array_backend",
+            backend_family="quimb_cotengra",
+            route_status="future_candidate",
+            feasibility_note="Integration candidate only if contractions are proven to execute on GPU with synchronization.",
+        ),
+        _generic_cupy_rocm_tn_feasibility_candidate(hardware),
+    ]
+    return [to_jsonable(candidate) for candidate in candidates]
+
+
+def _gpu_tn_candidate_from_gpu_candidate(
+    candidates_by_id: dict[str, JsonDict],
+    *,
+    candidate_id: str,
+    source_candidate_id: str,
+    candidate_category: str,
+    preferred_priority: int,
+    target_gpu_stack: str,
+    backend_family: str,
+    route_status: str,
+    feasibility_note: str,
+) -> JsonDict:
+    source = candidates_by_id.get(source_candidate_id, {})
+    gpu_execution_verified = bool(source.get("gpu_execution_verified"))
+    benchmark_route_eligible = False
+    return {
+        "candidate_id": candidate_id,
+        "source_candidate_id": source_candidate_id,
+        "candidate_category": candidate_category,
+        "preferred_priority": preferred_priority,
+        "execution_model": "tensor_network",
+        "backend_family": backend_family,
+        "target_gpu_stack": target_gpu_stack,
+        "classification": source.get("classification", "dependency_missing"),
+        "blocker_reason": source.get("blocker_reason", f"{source_candidate_id}_not_available"),
+        "detected_dependencies": source.get("detected_dependencies", {}),
+        "gpu_execution_verified": gpu_execution_verified,
+        "tensor_network_gpu_execution_verified": False,
+        "benchmark_route_eligible": benchmark_route_eligible,
+        "benchmark_records_emitted": False,
+        "route_status": route_status,
+        "quest_full_state_gpu_route_reused": False,
+        "source_support_is_not_benchmark_evidence": True,
+        "required_next_evidence": [
+            "minimal_tensor_network_gpu_execution",
+            "no_cpu_fallback",
+            "gpu_device_metadata",
+            "synchronization_status",
+            "exact_or_metrics_only_validation_contract",
+        ],
+        "feasibility_note": feasibility_note,
+    }
+
+
+def _generic_cupy_rocm_tn_feasibility_candidate(hardware: JsonDict) -> JsonDict:
+    cupy_status = _module_status("cupy")
+    if not cupy_status["available"]:
+        classification = "dependency_missing"
+        blocker = "cupy_not_installed"
+    elif not hardware.get("amd_gpu_pci_detected"):
+        classification = "feasible_later_not_benchmarkable_now"
+        blocker = "requires_amd_rocm_gpu_for_local_rocm_feasibility"
+    else:
+        classification = "amd_rocm_candidate_not_verified"
+        blocker = "cupy_rocm_tensor_contraction_execution_not_verified"
+    return {
+        "candidate_id": "cupy_rocm_generic_tensor_contraction",
+        "source_candidate_id": None,
+        "candidate_category": "generic_tensor_gpu_feasibility",
+        "preferred_priority": 5,
+        "execution_model": "generic_tensor_contraction",
+        "backend_family": "cupy",
+        "target_gpu_stack": "amd_rocm",
+        "classification": classification,
+        "blocker_reason": blocker,
+        "detected_dependencies": {"cupy": cupy_status, "hipcc": _command_status("hipcc")},
+        "gpu_execution_verified": False,
+        "tensor_network_gpu_execution_verified": False,
+        "benchmark_route_eligible": False,
+        "benchmark_records_emitted": False,
+        "route_status": "feasibility_only_not_primary_gpu_tn_baseline",
+        "quest_full_state_gpu_route_reused": False,
+        "source_support_is_not_benchmark_evidence": True,
+        "required_next_evidence": [
+            "minimal_gpu_tensor_contraction",
+            "no_cpu_fallback",
+            "gpu_device_metadata",
+            "synchronization_status",
+        ],
+        "feasibility_note": "Local AMD feasibility candidate only; do not present as the main SOTA quantum GPU TN baseline.",
+    }
 
 
 def _verify_gpu_backend(root_dir: Path, requested_backend: str, hardware: JsonDict) -> JsonDict:

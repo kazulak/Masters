@@ -163,6 +163,10 @@ Stop conditions for all sweeps:
   [docs/parallelization_roadmap.md](docs/parallelization_roadmap.md): slicing,
   frontier, GPU TN, and UPMEM/PIM parallelism need separate executed evidence
   before they are reported as speedup mechanisms.
+- GPU tensor-network support is currently feasibility-only. Candidate status is
+  reported by `simulation-backend-probe` and documented in
+  [docs/gpu_tn_feasibility.md](docs/gpu_tn_feasibility.md); it is not a thesis
+  benchmark engine until a real GPU TN execution path is verified.
 
 ## Required Thesis Outputs
 

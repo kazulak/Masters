@@ -12,7 +12,14 @@ import pytest
 from quantum_bench.bench.config import load_suite
 from quantum_bench.bench.result_artifacts import compare_results, load_result_records
 from quantum_bench.bench.reporting import report_run
-from quantum_bench.bench.simulation_backend_probe import _select_gpu_backend, _verify_gpu_backend, probe_simulation_backends
+from quantum_bench.bench.simulation_backend_probe import (
+    _gpu_candidate_matrix,
+    _gpu_verification_probe_summary,
+    _gpu_tn_candidate_matrix,
+    _select_gpu_backend,
+    _verify_gpu_backend,
+    probe_simulation_backends,
+)
 from quantum_bench.bench.simulation_backend_compare import _resource_guard_skip_reason, run_simulation_backend_compare
 from quantum_bench.bench.config import route_config_for
 from quantum_bench.circuits import quest_compatible_circuit
@@ -1723,6 +1730,8 @@ def test_simulation_backend_probe_reports_gpu_feasibility_without_records() -> N
     assert any(route["route_id"] == "quimb_tn_exact" for route in report["routes"])
     assert report["gpu_probe"]["cuda_only_assumption_used"] is False
     assert report["gpu_probe"]["gpu_benchmark_records_emitted"] is False
+    assert report["gpu_probe"]["gpu_verification_source"] in {"none", "cached_artifact", "fresh_verify_gpu"}
+    assert isinstance(report["gpu_probe"]["cached_gpu_verification_used"], bool)
     candidates = report["gpu_probe"]["gpu_candidates"]
     assert candidates
     assert {candidate["candidate_category"] for candidate in candidates} >= {"tailored_quantum_gpu", "cuda_quantum_stack", "generic_tensor_gpu"}
@@ -1730,6 +1739,130 @@ def test_simulation_backend_probe_reports_gpu_feasibility_without_records() -> N
     assert quest_hip["source_support_is_not_benchmark_evidence"] is True
     assert report["gpu_probe"]["gpu_execution_backend_added"] == bool(quest_hip["gpu_execution_verified"])
     assert all((not candidate["benchmark_route_eligible"]) or candidate["gpu_execution_verified"] for candidate in candidates)
+    gpu_tn = report["gpu_probe"]["gpu_tensor_network_probe"]
+    assert gpu_tn["status"] == "feasibility_only"
+    assert gpu_tn["gpu_tn_backend_route_added"] is False
+    assert gpu_tn["gpu_tn_benchmark_records_emitted"] is False
+    assert gpu_tn["quest_gpu_full_state_is_gpu_tn_evidence"] is False
+    tn_candidates = gpu_tn["gpu_tn_candidates"]
+    assert {candidate["candidate_id"] for candidate in tn_candidates} >= {
+        "cuquantum_cutensornet",
+        "cudaq_tensornet",
+        "qiskit_aer_tensor_network",
+        "quimb_cotengra_gpu_array_backend",
+    }
+    assert all(candidate["benchmark_route_eligible"] is False for candidate in tn_candidates)
+    assert all(candidate["benchmark_records_emitted"] is False for candidate in tn_candidates)
+    assert all(candidate["quest_full_state_gpu_route_reused"] is False for candidate in tn_candidates)
+
+
+def test_gpu_tn_feasibility_does_not_reuse_verified_full_state_gpu_route() -> None:
+    candidates = _gpu_tn_candidate_matrix(
+        [
+            {
+                "candidate_id": "quest_gpu_full_state_hip",
+                "gpu_execution_verified": True,
+                "benchmark_route_eligible": True,
+                "classification": "usable_current_machine",
+                "blocker_reason": None,
+            },
+            {
+                "candidate_id": "cuquantum_tensor_network",
+                "gpu_execution_verified": False,
+                "classification": "feasible_later_not_benchmarkable_now",
+                "blocker_reason": "cutensornet_integration_not_implemented",
+                "detected_dependencies": {"cuquantum": {"available": True, "version": "mock"}},
+            },
+        ],
+        {"amd_gpu_pci_detected": True, "nvidia_gpu_pci_detected": False},
+    )
+
+    assert all(candidate["benchmark_route_eligible"] is False for candidate in candidates)
+    assert all(candidate["tensor_network_gpu_execution_verified"] is False for candidate in candidates)
+    assert all(candidate["quest_full_state_gpu_route_reused"] is False for candidate in candidates)
+    cutensornet = next(candidate for candidate in candidates if candidate["candidate_id"] == "cuquantum_cutensornet")
+    assert cutensornet["backend_family"] == "cuquantum_cutensornet"
+    assert cutensornet["execution_model"] == "tensor_network"
+
+
+def test_gpu_candidate_matrix_labels_cached_verification_separately(monkeypatch, tmp_path: Path) -> None:
+    def fake_command_status(name: str):
+        return {"available": True, "path": f"/mock/bin/{name}"}
+
+    monkeypatch.setattr("quantum_bench.bench.simulation_backend_probe._command_status", fake_command_status)
+    candidates = _gpu_candidate_matrix(
+        tmp_path,
+        {
+            "amd_gpu_pci_detected": True,
+            "nvidia_gpu_pci_detected": False,
+            "dev_kfd_present": False,
+            "dev_dri_present": False,
+            "dev_dri_renderD128_present": False,
+            "dev_dri_render_node_present": False,
+            "rocminfo_gpu_agent_detected": False,
+        },
+        {
+            "selected_backend": "quest-hip",
+            "status": "verified",
+            "gpu_backend_verified": True,
+            "gpu_program_executed": True,
+            "artifact_path": str(tmp_path / "build" / "gpu_verification" / "quest_gpu_full_state_exact.json"),
+            "verification_source": "cached_artifact",
+        },
+    )
+
+    quest_hip = next(candidate for candidate in candidates if candidate["candidate_id"] == "quest_gpu_full_state_hip")
+    assert quest_hip["gpu_execution_verified"] is True
+    assert quest_hip["benchmark_route_eligible"] is True
+    assert quest_hip["verification_source"] == "cached_artifact"
+    assert quest_hip["cached_verification_artifact_used"] is True
+    assert quest_hip["current_process_gpu_preflight_available"] is False
+    assert quest_hip["classification"] == "verified_cached_artifact_current_preflight_blocked"
+
+
+def test_gpu_verification_probe_summary_omits_build_logs() -> None:
+    summary = _gpu_verification_probe_summary(
+        {
+            "status": "verified",
+            "selected_backend": "quest-hip",
+            "verification_source": "cached_artifact",
+            "gpu_backend_verified": True,
+            "gpu_program_executed": True,
+            "gpu_device_name": "AMD Radeon RX 6600 (gfx1032)",
+            "artifact_path": "build/gpu_verification/quest_gpu_full_state_exact.json",
+            "attempted_steps": [{"step": "build_quest_gpu_runner", "status": "passed", "command": ["make", "all"], "stdout": "ignored"}],
+            "build_result": {
+                "command": ["make", "all"],
+                "cwd": "native/quest_gpu",
+                "returncode": 0,
+                "stdout": "large build log",
+                "stderr": "large warning log",
+                "timeout_s": 300,
+            },
+            "minimal_run_result": {
+                "command": ["quest_gpu_runner"],
+                "cwd": "native/quest_gpu",
+                "returncode": 0,
+                "stdout": "{\"status\":\"ok\"}",
+                "stderr": "",
+                "timeout_s": 60,
+            },
+        }
+    )
+
+    assert summary is not None
+    assert summary["status"] == "verified"
+    assert summary["gpu_backend_verified"] is True
+    assert summary["gpu_program_executed"] is True
+    assert summary["verification_source"] == "cached_artifact"
+    assert summary["artifact_path"] == "build/gpu_verification/quest_gpu_full_state_exact.json"
+    assert summary["attempted_steps"] == [{"step": "build_quest_gpu_runner", "status": "passed", "command": ["make", "all"]}]
+    assert summary["build_result_summary"]["returncode"] == 0
+    assert summary["minimal_run_result_summary"]["returncode"] == 0
+    assert "build_result" not in summary
+    assert "minimal_run_result" not in summary
+    assert "stdout" not in summary["build_result_summary"]
+    assert "stderr" not in summary["minimal_run_result_summary"]
 
 
 def test_gpu_verify_auto_selects_tailored_backend_by_hardware() -> None:
@@ -1762,9 +1895,17 @@ def test_failed_gpu_verification_writes_blocker_artifact(tmp_path: Path) -> None
     assert payload["attempted_steps"][0]["step"] == "preflight"
 
 
+def _mock_quest_hip_tool_preflight(monkeypatch) -> None:
+    def fake_command_status(name: str):
+        return {"available": True, "path": f"/mock/bin/{name}"}
+
+    monkeypatch.setattr("quantum_bench.bench.simulation_backend_probe._command_status", fake_command_status)
+
+
 def test_gpu_verification_blocks_when_hip_smoke_fails(monkeypatch, tmp_path: Path) -> None:
     runner_root = tmp_path / "native" / "quest_gpu"
     runner_root.mkdir(parents=True)
+    _mock_quest_hip_tool_preflight(monkeypatch)
 
     def fake_run_command(cmd, *, cwd, timeout_s):
         if "hip-smoke" in cmd:
@@ -1801,6 +1942,7 @@ def test_successful_gpu_verification_requires_hip_smoke_and_quest_run(monkeypatc
     runner_root = tmp_path / "native" / "quest_gpu"
     runner = tmp_path / "build" / "native" / "quest_gpu" / "hip" / "bin" / "quest_gpu_runner"
     runner.parent.mkdir(parents=True)
+    _mock_quest_hip_tool_preflight(monkeypatch)
 
     def fake_run_command(cmd, *, cwd, timeout_s):
         if "hip-smoke" in cmd:

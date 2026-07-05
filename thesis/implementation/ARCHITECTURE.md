@@ -38,6 +38,23 @@ CPU/GPU full-state comparison has separate correctness and performance tiers:
   include `exact_output_comparable=false` and
   `full_statevector_validation_available=false`.
 
+## Parallelism Status
+
+Parallelism evidence is intentionally split by execution family:
+
+| Mode | Current status | Claim boundary |
+|---|---|---|
+| Quimb/cotengra slicing | `quimb_tn_sliced_exact` executes explicit sliced Quimb/cotengra contractions with single-worker reconstruction. | Slicing evidence only; no slice-worker speedup claim. |
+| Internal TaskGraph frontier | `cpu_tn_frontier_exact` executes dependency-safe diagnostic frontier scheduling. | Internal diagnostic route; not the serious TN baseline. |
+| Internal hybrid slicing + frontier | `cpu_tn_hybrid_sliced_frontier_exact` executes diagnostic internal slice-aware frontier scheduling on tiny deterministic cases. | Diagnostic composability evidence; no performance/scaling claim yet. |
+| GPU full-state | `quest_gpu_full_state_exact` is verified full-state GPU execution when GPU verification passes. | Full-state GPU evidence, not GPU TN evidence. |
+| GPU tensor network | Feasibility-only candidates are reported by `simulation-backend-probe`. | No GPU TN benchmark rows until real TN GPU execution is verified. |
+| UPMEM/PIM parallelism | Strict UPMEM SDK simulator TaskGraph execution is sequential; frontier/multi-DPU work is future/model-only. | SDK simulator code-path evidence only; no hardware or PIM parallel speedup claim. |
+
+The detailed roadmap is [docs/parallelization_roadmap.md](docs/parallelization_roadmap.md).
+The GPU tensor-network feasibility gate is
+[docs/gpu_tn_feasibility.md](docs/gpu_tn_feasibility.md).
+
 ## UPMEM Status
 
 Current UPMEM work is bounded and explicit:
@@ -63,8 +80,9 @@ transpose/slicing kernels, hardware execution, and full general TN coverage.
 
 Parallelism goals and evidence requirements are tracked separately in
 [docs/parallelization_roadmap.md](docs/parallelization_roadmap.md). That roadmap
-distinguishes modeled opportunity from executed slicing, frontier, GPU, and
-UPMEM/PIM parallelism.
+distinguishes modeled opportunity, diagnostic CPU parallel execution, verified
+full-state GPU execution, future GPU TN execution, and future UPMEM/PIM
+parallel execution.
 
 ## Artifact Boundary
 

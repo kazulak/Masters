@@ -11,11 +11,17 @@ The staged implementation strategy is tracked in
 ## Current Baseline
 
 The current implementation already has useful execution evidence, but it does
-not yet implement tensor-network parallel execution:
+not yet implement production tensor-network parallel execution:
 
-- Internal TaskGraph execution is sequential over contraction tasks.
-- Quimb is the serious CPU tensor-network baseline, but the route does not yet
-  expose an explicit cotengra slicing contract in benchmark artifacts.
+- `quimb_tn_exact` is the serious unsliced CPU tensor-network baseline.
+- `quimb_tn_sliced_exact` provides executed Quimb/cotengra slicing evidence
+  with explicit slicing metadata and single-worker slice reconstruction.
+- `cpu_tn_einsum_exact` remains a diagnostic sequential internal TaskGraph
+  baseline.
+- `cpu_tn_frontier_exact` provides executed diagnostic internal TaskGraph
+  frontier scheduling evidence.
+- `cpu_tn_hybrid_sliced_frontier_exact` provides executed diagnostic internal
+  slice-aware TaskGraph plus frontier scheduling evidence on tiny cases.
 - UPMEM strict TaskGraph runtime is sequential over tasks.
 - UPMEM frontier/wave parallelism is modeled and reported, not executed.
 - QuEST GPU is a verified full-state GPU baseline, not a GPU tensor-network
@@ -59,6 +65,8 @@ stronger parallelism claims.
 - Treat GPU TN as a separate future capability requiring a real TN-capable GPU
   backend, such as cuTensorNet/cuQuantum/CUDA-Q/Qiskit Aer GPU or another
   verified exact GPU TN path.
+- Track candidate selection and evidence gates in
+  [gpu_tn_feasibility.md](gpu_tn_feasibility.md).
 - Separate GPU full-state speedup claims from GPU TN speedup claims.
 - Support an optional NVIDIA cluster path only after device/tool metadata and
   no-CPU-fallback checks are in place.
@@ -136,11 +144,11 @@ evidence, and hardware evidence.
 | Goal | Purpose | Route/backend | Required tests | Expected artifacts | Thesis value | Blockers/risks | Status language |
 |---|---|---|---|---|---|---|---|
 | G0 | Document semantics and current baseline. | Existing CPU/GPU/UPMEM routes. | Doc/link checks; existing tests remain green. | This roadmap; architecture links. | Prevents overclaiming. | Stale docs. | Baseline documentation goal. |
-| G1 | Add explicit slicing configuration and evidence goals. | Quimb/cotengra CPU TN route. | Slice reconstruction; exact output equivalence. | Slicing config rows; FLOP ratio/change table. | Enables slicing-specific claims. | Cotengra config complexity; fair baselines. | Required for slicing claims; optional for current thesis if documented as future work. |
-| G2 | Define internal sequential-vs-frontier scheduler prototype goals. | Internal TaskGraph route. | DAG dependency invariants; no duplicate tasks. | Frontier execution logs; scheduler timing. | Tests graph-level parallelism independently of slicing. | Scheduler complexity; limited frontier width. | Optional experimental goal. |
-| G3 | Compare CPU slicing vs frontier experimentally. | CPU TN slicing route and frontier prototype. | Matched validation; controlled CPU thread settings. | Comparison CSV/Markdown/plots. | Separates parallelism sources. | Oversubscription; unfair timing. | Required for hybrid claims; optional for current thesis if not implemented. |
-| G4 | Define slicing + frontier hybrid experiment goals. | CPU TN hybrid prototype. | Slice/frontier reconstruction; duplicate-work checks. | Hybrid mode table; per-component timing. | Shows composability of parallel modes. | Slicing cost changes and scheduler overhead. | Optional hybrid extension. |
-| G5 | Define GPU SOTA feasibility or NVIDIA cluster route goals. | Existing QuEST GPU full-state plus future GPU TN backend. | GPU verification; no CPU fallback; synchronization checks. | GPU capability/provenance table. | Separates full-state GPU and future GPU TN evidence. | Vendor stack availability; CUDA/ROCm mismatch. | Optional but thesis-useful. |
+| G1 | Add explicit slicing configuration and evidence goals. | Quimb/cotengra CPU TN route. | Slice reconstruction; exact output equivalence. | Slicing config rows; FLOP ratio/change table. | Enables slicing-specific claims. | Cotengra config complexity; fair baselines. | Implemented as explicit slicing evidence; required for slicing claims. |
+| G2 | Define internal sequential-vs-frontier scheduler prototype goals. | Internal TaskGraph route. | DAG dependency invariants; no duplicate tasks. | Frontier execution logs; scheduler timing. | Tests graph-level parallelism independently of slicing. | Scheduler complexity; limited frontier width. | Implemented as diagnostic experimental evidence. |
+| G3 | Compare CPU slicing vs frontier experimentally. | CPU TN slicing route and frontier prototype. | Matched validation; controlled CPU thread settings. | Comparison CSV/Markdown/plots. | Separates parallelism sources. | Oversubscription; unfair timing. | Implemented diagnostically; required for hybrid claims. |
+| G4 | Define slicing + frontier hybrid experiment goals. | CPU TN hybrid prototype. | Slice/frontier reconstruction; duplicate-work checks. | Hybrid mode table; per-component timing. | Shows composability of parallel modes. | Slicing cost changes and scheduler overhead. | Implemented diagnostically on tiny cases; not a serious baseline. |
+| G5 | Define GPU SOTA feasibility or NVIDIA cluster route goals. | Existing QuEST GPU full-state plus future GPU TN backend. | GPU verification; no CPU fallback; synchronization checks. | GPU capability/provenance table; `simulation-backend-probe` GPU TN feasibility section. | Separates full-state GPU and future GPU TN evidence. | Vendor stack availability; CUDA/ROCm mismatch. | Feasibility probe implemented; next step is candidate execution spike, not benchmark rows. |
 | G6 | Define UPMEM multi-DPU scheduling design goals. | UPMEM TaskGraph/runtime design. | Task assignment invariants; strict no CPU fallback. | DPU scheduling design; modeled/executed comparison fields. | Required before PIM parallelism claims. | Hardware/tooling, PID-Comm integration, reduction costs. | Required for PIM parallelism claims; optional for current thesis if limitations are documented. |
 | G7 | Define UPMEM multi-DPU prototype goals. | Future UPMEM hardware or simulator-supported multi-DPU path. | DPU invocation count; transfer/sync timing; final validation. | Hardware/simulator rows with DPU assignments. | First executed PIM parallelism evidence. | Hardware access and tooling reliability. | Hardware/tooling-dependent. |
 | G8 | Define thesis-ready combined comparison goals. | All verified routes only. | Report invariants; validation and timing scope checks. | Final matrix tables/plots. | Connects CPU, GPU, TN, and UPMEM evidence. | Methodology drift; mixed evidence types. | Final comparison goal only after relevant modes exist. |

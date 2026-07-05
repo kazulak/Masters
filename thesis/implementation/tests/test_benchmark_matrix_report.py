@@ -63,6 +63,16 @@ def test_benchmark_matrix_config_loads_and_keeps_upmem_unified() -> None:
     quest = next(route for route in matrix["route_categories"] if route["route_id"] == "quest_cpu_full_state_exact")
     assert quest["output_authority"] == "authoritative"
     assert quest["validation_policy"] == "full_exact"
+    gpu_tn = next(route for route in matrix["route_categories"] if route["route_category"] == "gpu_tn_exact")
+    assert gpu_tn["route_status"] == "planned"
+    assert gpu_tn["evidence_type"] == "planned"
+    assert gpu_tn["output_authority"] == "future_only"
+    assert gpu_tn["validation_policy"] == "not_applicable_until_verified"
+    gpu_full_state = next(route for route in matrix["route_categories"] if route["route_category"] == "gpu_full_state")
+    assert gpu_full_state["route_id"] == "quest_gpu_full_state_exact"
+    assert gpu_full_state["route_status"] == "implemented_optional"
+    assert gpu_full_state["evidence_type"] == "measured_when_verified"
+    assert gpu_full_state["output_authority"] == "authoritative_when_verified"
 
 
 def test_benchmark_matrix_rejects_upmem_internal_classes_as_top_level_routes() -> None:
@@ -93,6 +103,28 @@ def test_benchmark_matrix_rejects_missing_quest_exact_semantics() -> None:
     quest["output_authority"] = "benchmark_only"
 
     with pytest.raises(ValueError, match="authoritative"):
+        validate_benchmark_matrix(matrix)
+
+
+def test_benchmark_matrix_rejects_gpu_tn_authoritative_claim_before_verified_route() -> None:
+    matrix = load_benchmark_matrix(ROOT / "configs" / "benchmark_matrix.yml")
+    matrix["route_categories"] = [dict(route) for route in matrix["route_categories"]]
+    gpu_tn = next(route for route in matrix["route_categories"] if route["route_category"] == "gpu_tn_exact")
+    gpu_tn["output_authority"] = "authoritative"
+    gpu_tn["validation_policy"] = "full_exact"
+
+    with pytest.raises(ValueError, match="planned GPU TN"):
+        validate_benchmark_matrix(matrix)
+
+
+def test_benchmark_matrix_rejects_gpu_full_state_without_verified_route_semantics() -> None:
+    matrix = load_benchmark_matrix(ROOT / "configs" / "benchmark_matrix.yml")
+    matrix["route_categories"] = [dict(route) for route in matrix["route_categories"]]
+    gpu_full_state = next(route for route in matrix["route_categories"] if route["route_category"] == "gpu_full_state")
+    gpu_full_state["route_id"] = "planned"
+    gpu_full_state["route_status"] = "planned"
+
+    with pytest.raises(ValueError, match="optional verified QuEST GPU"):
         validate_benchmark_matrix(matrix)
 
 

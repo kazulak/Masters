@@ -288,6 +288,16 @@ def _validate_route_entry(route: JsonDict) -> None:
     if route["route_category"] == "cpu_full_state" and route["route_id"] == "quest_cpu_full_state_exact":
         if route["output_authority"] != "authoritative" or route["validation_policy"] != "full_exact":
             raise ValueError("QuEST CPU full-state category must record authoritative/full_exact semantics")
+    if route["route_category"] == "gpu_tn_exact":
+        if route["route_status"] != "planned" or route["evidence_type"] != "planned":
+            raise ValueError("GPU TN matrix category must remain planned until a verified GPU TN route exists")
+        if route["output_authority"] == "authoritative" or route["validation_policy"] == "full_exact":
+            raise ValueError("planned GPU TN matrix category must not claim authoritative/full_exact semantics")
+    if route["route_category"] == "gpu_full_state":
+        if route["route_id"] != "quest_gpu_full_state_exact" or route["route_status"] != "implemented_optional":
+            raise ValueError("GPU full-state matrix category must reference the optional verified QuEST GPU route")
+        if route["evidence_type"] != "measured_when_verified" or route["output_authority"] != "authoritative_when_verified":
+            raise ValueError("GPU full-state matrix category must be conditional on verified GPU execution")
 
 
 def _validate_workload(workload: Any) -> None:

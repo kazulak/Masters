@@ -16,6 +16,8 @@ Already in place:
 - UPMEM SDK simulator fields that distinguish SDK simulator mode from hardware;
 - unsupported/skipped rows and resource guard reasons;
 - evidence/comparison artifact split.
+- explicit parallelism claim boundaries for slicing, frontier, hybrid,
+  full-state GPU, GPU TN feasibility, and UPMEM SDK simulator evidence.
 
 Added in Wave 2E.58:
 
@@ -33,6 +35,8 @@ Remaining limitations:
 - energy is not reported unless real measured sensor metadata exists;
 - UPMEM SDK simulator timing is code-path evidence, not hardware timing;
 - UPMEM boundary cases are limited by the current bounded generic/dense runtime.
+- GPU tensor-network support is feasibility-only until a real GPU TN candidate
+  executes tensor-network work on the GPU with no CPU fallback.
 
 ## Research Suites
 
@@ -67,6 +71,15 @@ started accidentally.
 - Quimb sliced and unsliced rows are CPU TN implementation evidence.
   `slicing_flop_ratio` means sliced cotengra reported FLOPs divided by unsliced
   cotengra reported FLOPs.
+- `quimb_tn_sliced_exact` is executed slicing evidence, but it currently uses
+  single-worker slice reconstruction unless a row explicitly records otherwise.
+- `cpu_tn_frontier_exact` and `cpu_tn_hybrid_sliced_frontier_exact` are
+  diagnostic internal TaskGraph routes. They support architecture evidence, not
+  serious TN baseline claims.
+- `quest_gpu_full_state_exact` is full-state GPU evidence. It is not GPU
+  tensor-network evidence.
+- GPU tensor-network rows are not thesis evidence until a separate GPU TN route
+  proves real tensor-network execution on a GPU with no CPU fallback.
 - UPMEM SDK simulator rows prove strict SDK simulator code-path execution and
   current boundary behavior when `cpu_fallback_used=false`.
 
@@ -75,9 +88,17 @@ started accidentally.
 - No hardware speedup claim from UPMEM SDK simulator timing.
 - No GPU benchmark row unless `gpu_backend_verified=true` and
   `gpu_program_executed=true`.
+- Cached GPU verification artifacts must be interpreted with their
+  `gpu_verification_source` and current-process preflight fields. A cached
+  artifact proves an earlier GPU run; it does not by itself prove that the
+  current process can see GPU devices for a new benchmark.
+- No GPU TN claim from QuEST full-state GPU rows or from feasibility metadata
+  alone.
 - No energy-efficiency claim without real measured energy metadata.
 - No speedup across incompatible route families, such as Quimb versus internal
   TaskGraph diagnostics.
+- No parallel speedup claim from diagnostic frontier or hybrid rows without a
+  separate matched performance/scaling methodology.
 - No full-output exactness claim for `state_output_mode=none` rows.
 
 ## Outputs
