@@ -1,0 +1,78 @@
+schema_version: 2
+suite_id: thesis_upmem_quantization_boundary
+
+metadata:
+  purpose: thesis_upmem_sdk_simulator_quantization_boundary
+  expected_runtime_class: manual_upmem_sdk_simulator
+  expected_memory_class: small_statevector
+  intended_use: thesis_evidence_upmem_boundary
+  deterministic_unitary_only: true
+  manual_invocation_required: true
+  validation_tier: quantized_and_float32_codepath_boundary
+  validation_method: full_statevector_quantized_tolerance
+  statevector_cap_qubits: 7
+  statevector_cap_amplitudes: 128
+  max_qubits: 7
+  execution_target: upmem
+  upmem_execution_mode: sdk_simulator
+  notes: >
+    Thesis UPMEM SDK simulator boundary suite. Use with upmem-mvp-benchmark
+    and quantization modes none,per_task_input_quantize to gather same-route
+    float32 vs int8 generic TaskGraph evidence. SDK simulator timing is not
+    hardware timing or hardware speedup.
+
+defaults:
+  warmups: 0
+  repeats: 1
+  timeout_s: 360
+  memory_guard_gib: 8
+  planner:
+    engine: opt_einsum
+    optimize: greedy
+
+workloads:
+  - id: qrng_4q_thesis_upmem
+    circuit: {kind: builtin, name: QRNG, n_qubits: 4}
+  - id: qrng_5q_thesis_upmem
+    circuit: {kind: builtin, name: QRNG, n_qubits: 5}
+  - id: qrng_6q_thesis_upmem
+    circuit: {kind: builtin, name: QRNG, n_qubits: 6}
+  - id: qrng_7q_thesis_upmem_boundary
+    circuit: {kind: builtin, name: QRNG, n_qubits: 7}
+  - id: bb84_4q_thesis_upmem
+    circuit: {kind: builtin, name: BB84, n_qubits: 4}
+  - id: bb84_5q_thesis_upmem
+    circuit: {kind: builtin, name: BB84, n_qubits: 5}
+  - id: bb84_6q_thesis_upmem_boundary
+    circuit: {kind: builtin, name: BB84, n_qubits: 6}
+  - id: bv_3q_thesis_upmem
+    circuit: {kind: builtin, name: BV, n_qubits: 3}
+  - id: bv_4q_thesis_upmem
+    circuit: {kind: builtin, name: BV, n_qubits: 4}
+  - id: xor_3q_thesis_upmem
+    circuit: {kind: builtin, name: XOR, n_qubits: 3}
+  - id: xor_4q_thesis_upmem
+    circuit: {kind: builtin, name: XOR, n_qubits: 4}
+  - id: edc_4q_thesis_upmem
+    circuit: {kind: builtin, name: EDC, n_qubits: 4}
+  - id: edc_5q_thesis_upmem_boundary
+    circuit: {kind: builtin, name: EDC, n_qubits: 5}
+  - id: ghz_4q_thesis_upmem
+    circuit: {kind: builtin, name: ghz_chain, n_qubits: 4}
+  - id: ghz_5q_thesis_upmem_boundary
+    circuit: {kind: builtin, name: ghz_chain, n_qubits: 5}
+
+routes:
+  - id: cpu_tn_einsum_exact
+    role: reference
+    benchmark_role: internal_debug_baseline
+    required: true
+
+validation:
+  reference_route: cpu_tn_einsum_exact
+  tolerances:
+    max_abs_error: 2.5e-1
+    l2_error: 2.0
+    max_rel_error: 10.0
+    norm_drift: 2.0
+    min_fidelity: 0.0

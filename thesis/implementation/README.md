@@ -81,6 +81,12 @@ GPU rows. The benchmark process must be able to see `/dev/kfd`, `/dev/dri`, and
 a `/dev/dri/renderD*` node; the verifier then runs a tiny HIP kernel before it
 builds and runs the QuEST HIP route.
 
+`simulation-backend-probe` reports whether GPU status came from a fresh
+`--verify-gpu` run or a cached verification artifact. Cached verification can
+prove that an earlier QuEST GPU run executed, but current-process device
+visibility is reported separately and should be checked before new GPU
+benchmarks.
+
 CPU/GPU full-state benchmarking has two tiers. Correctness-tier suites use
 `state_output_mode=full_dump` and full-statevector validation. Performance-tier
 suites use `state_output_mode=none`, `output_contract=metrics_only`, and
@@ -106,6 +112,17 @@ make thesis-benchmark
 This runs CPU evidence, regenerates a CPU report, runs strict UPMEM SDK
 simulator evidence, regenerates a UPMEM report, and writes a derived comparison
 under `runs/comparisons/thesis_benchmark/...`.
+
+Generate the thesis comparison report from explicit evidence paths:
+
+```bash
+make thesis-report THESIS_INPUTS="runs/evidence/<suite>/<route>/<run_id> runs/evidence/<suite>/<route>/<run_id>"
+```
+
+This does not run benchmarks and does not inspect `runs/latest`. It reads the
+provided evidence directories and writes derived CSV/Markdown/plots under
+`runs/comparisons/thesis/...`. The GPU thesis suite must be run manually in a
+GPU-visible shell when this Codex process cannot see `/dev/kfd` and `/dev/dri`.
 
 Print the research benchmark pack plan:
 
@@ -135,6 +152,14 @@ Research packs write derived CSVs, plots, and `benchmark_summary.md` under
 `runs/comparisons/research_pack/...`. See
 [docs/research_benchmark_methodology.md](docs/research_benchmark_methodology.md)
 for the thesis-safe claims and limitations.
+
+Parallelism work is tracked separately from benchmark execution commands. See
+[docs/parallelization_roadmap.md](docs/parallelization_roadmap.md) and
+[docs/parallelization_implementation_strategy.md](docs/parallelization_implementation_strategy.md)
+for the current slicing, frontier, hybrid, GPU TN, and UPMEM/PIM claim
+boundaries. GPU tensor-network support remains feasibility-only until a real
+GPU TN route executes tensor-network work on a GPU with no CPU fallback; see
+[docs/gpu_tn_feasibility.md](docs/gpu_tn_feasibility.md).
 
 Regenerate reports for the latest evidence run:
 
