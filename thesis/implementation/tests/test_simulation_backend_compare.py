@@ -14,9 +14,12 @@ from quantum_bench.bench.result_artifacts import compare_results, load_result_re
 from quantum_bench.bench.reporting import report_run
 from quantum_bench.bench.simulation_backend_probe import (
     _gpu_candidate_matrix,
+    _gpu_tn_execution_payload,
     _gpu_verification_probe_summary,
     _gpu_tn_candidate_matrix,
+    _select_gpu_tn_candidate,
     _select_gpu_backend,
+    _verify_gpu_tn_candidate,
     _verify_gpu_backend,
     probe_simulation_backends,
 )
@@ -1783,6 +1786,90 @@ def test_gpu_tn_feasibility_does_not_reuse_verified_full_state_gpu_route() -> No
     cutensornet = next(candidate for candidate in candidates if candidate["candidate_id"] == "cuquantum_cutensornet")
     assert cutensornet["backend_family"] == "cuquantum_cutensornet"
     assert cutensornet["execution_model"] == "tensor_network"
+
+
+def test_gpu_tn_auto_selection_prefers_nvidia_then_amd_generic() -> None:
+    assert (
+        _select_gpu_tn_candidate(
+            "auto",
+            {"nvidia_gpu_pci_detected": True, "amd_gpu_pci_detected": False},
+        )
+        == "cuquantum_cutensornet"
+    )
+    assert (
+        _select_gpu_tn_candidate(
+            "auto",
+            {"nvidia_gpu_pci_detected": False, "amd_gpu_pci_detected": True},
+        )
+        == "cupy_rocm_generic_tensor_contraction"
+    )
+    assert _select_gpu_tn_candidate("auto", {"nvidia_gpu_pci_detected": False, "amd_gpu_pci_detected": False}) is None
+
+
+def test_gpu_tn_verification_spike_can_mark_mocked_cutensornet_verified(monkeypatch, tmp_path: Path) -> None:
+    def fake_minimal_cutensornet():
+        return _gpu_tn_execution_payload(
+            selected_candidate="cuquantum_cutensornet",
+            candidate_category="tailored_gpu_tn",
+            backend_family="cuquantum_cutensornet",
+            target_gpu_stack="nvidia_cuda",
+            status="verified",
+            blocker_reason=None,
+            dependencies={"cuquantum": {"available": True, "version": "mock"}},
+            tensor_network_gpu_execution_verified=True,
+            minimal_gpu_tensor_contraction_verified=True,
+            gpu_program_executed=True,
+            cpu_fallback_used=False,
+            gpu_device_name="Mock NVIDIA GPU",
+            minimal_tn_validation_status="passed",
+            attempted_steps=[{"step": "minimal_cutensornet_contract", "status": "passed"}],
+        )
+
+    monkeypatch.setattr("quantum_bench.bench.simulation_backend_probe._minimal_cuquantum_cutensornet_execution", fake_minimal_cutensornet)
+
+    verification = _verify_gpu_tn_candidate(tmp_path, "cuquantum-cutensornet", {"nvidia_gpu_pci_detected": True})
+    artifact = Path(verification["artifact_path"])
+    candidates = _gpu_tn_candidate_matrix([], {"nvidia_gpu_pci_detected": True}, {**verification, "verification_source": "fresh_verify_gpu_tn"})
+    cutensornet = next(candidate for candidate in candidates if candidate["candidate_id"] == "cuquantum_cutensornet")
+
+    assert artifact.exists()
+    assert verification["status"] == "verified"
+    assert verification["tensor_network_gpu_execution_verified"] is True
+    assert verification["benchmark_route_eligible"] is False
+    assert verification["benchmark_records_emitted"] is False
+    assert cutensornet["tensor_network_gpu_execution_verified"] is True
+    assert cutensornet["gpu_program_executed"] is True
+    assert cutensornet["benchmark_route_eligible"] is False
+    assert cutensornet["benchmark_records_emitted"] is False
+    assert cutensornet["quest_full_state_gpu_route_reused"] is False
+
+
+def test_gpu_tn_cpu_fallback_candidate_remains_blocked() -> None:
+    verification = _gpu_tn_execution_payload(
+        selected_candidate="cuquantum_cutensornet",
+        candidate_category="tailored_gpu_tn",
+        backend_family="cuquantum_cutensornet",
+        target_gpu_stack="nvidia_cuda",
+        status="failed",
+        blocker_reason="cpu_fallback_detected",
+        dependencies={"cuquantum": {"available": True, "version": "mock"}},
+        tensor_network_gpu_execution_verified=False,
+        minimal_gpu_tensor_contraction_verified=False,
+        gpu_program_executed=False,
+        cpu_fallback_used=True,
+        gpu_device_name=None,
+        minimal_tn_validation_status="failed",
+        attempted_steps=[{"step": "minimal_cutensornet_contract", "status": "failed"}],
+    )
+
+    candidates = _gpu_tn_candidate_matrix([], {"nvidia_gpu_pci_detected": True}, verification)
+    cutensornet = next(candidate for candidate in candidates if candidate["candidate_id"] == "cuquantum_cutensornet")
+
+    assert cutensornet["tensor_network_gpu_execution_verified"] is False
+    assert cutensornet["cpu_fallback_detected"] is True
+    assert cutensornet["cpu_fallback_used"] is True
+    assert cutensornet["benchmark_route_eligible"] is False
+    assert cutensornet["benchmark_records_emitted"] is False
 
 
 def test_gpu_candidate_matrix_labels_cached_verification_separately(monkeypatch, tmp_path: Path) -> None:

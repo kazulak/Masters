@@ -19,16 +19,30 @@ from quantum_bench.providers.full_state.quest_gpu import (
 
 SIMULATION_BACKEND_PROBE_SCHEMA_VERSION = "simulation_backend_probe_v1"
 GPU_VERIFY_CHOICES = ("none", "auto", "quest-hip", "quest-cuda", "torch-rocm")
+GPU_TN_VERIFY_CHOICES = (
+    "none",
+    "auto",
+    "cuquantum-cutensornet",
+    "cudaq-tensornet",
+    "qiskit-aer-tensor-network",
+    "cupy-rocm-generic",
+)
 
 
-def probe_simulation_backends(root_dir: Path, *, verify_gpu: str = "none") -> JsonDict:
+def probe_simulation_backends(root_dir: Path, *, verify_gpu: str = "none", verify_gpu_tn: str = "none") -> JsonDict:
     if verify_gpu not in GPU_VERIFY_CHOICES:
         raise ValueError(f"Unsupported --verify-gpu value: {verify_gpu}")
+    if verify_gpu_tn not in GPU_TN_VERIFY_CHOICES:
+        raise ValueError(f"Unsupported --verify-gpu-tn value: {verify_gpu_tn}")
     gpu_hardware = _gpu_hardware_probe()
     if verify_gpu != "none":
         gpu_verification = _with_verification_source(_verify_gpu_backend(root_dir, verify_gpu, gpu_hardware), "fresh_verify_gpu")
     else:
         gpu_verification = _with_verification_source(load_quest_gpu_verification(root_dir), "cached_artifact")
+    if verify_gpu_tn != "none":
+        gpu_tn_verification = _with_verification_source(_verify_gpu_tn_candidate(root_dir, verify_gpu_tn, gpu_hardware), "fresh_verify_gpu_tn")
+    else:
+        gpu_tn_verification = None
     routes = route_registry(root_dir)
     route_reports: list[JsonDict] = []
     for route_id in sorted(routes):
@@ -50,7 +64,7 @@ def probe_simulation_backends(root_dir: Path, *, verify_gpu: str = "none") -> Js
             }
         )
     gpu_candidates = _gpu_candidate_matrix(root_dir, gpu_hardware, gpu_verification)
-    gpu_tn_candidates = _gpu_tn_candidate_matrix(gpu_candidates, gpu_hardware)
+    gpu_tn_candidates = _gpu_tn_candidate_matrix(gpu_candidates, gpu_hardware, gpu_tn_verification)
     payload = {
         "schema_version": SIMULATION_BACKEND_PROBE_SCHEMA_VERSION,
         "routes": route_reports,
@@ -81,6 +95,7 @@ def probe_simulation_backends(root_dir: Path, *, verify_gpu: str = "none") -> Js
                 "gpu_tn_benchmark_records_emitted": False,
                 "quest_gpu_full_state_is_gpu_tn_evidence": False,
                 "requires_verified_tensor_network_gpu_execution_before_records": True,
+                "gpu_tn_verification": _gpu_tn_verification_probe_summary(gpu_tn_verification),
             },
             "gpu_verification": _gpu_verification_probe_summary(gpu_verification),
             "gpu_verification_source": gpu_verification.get("verification_source") if gpu_verification else "none",
@@ -167,6 +182,49 @@ def _gpu_verification_probe_summary(payload: JsonDict | None) -> JsonDict | None
     ):
         if isinstance(payload.get(source_key), dict):
             summary[summary_key] = _command_result_summary(payload[source_key])
+    return to_jsonable(summary)
+
+
+def _gpu_tn_verification_probe_summary(payload: JsonDict | None) -> JsonDict | None:
+    if not payload:
+        return None
+    summary_keys = (
+        "status",
+        "requested_candidate",
+        "selected_candidate",
+        "candidate_category",
+        "backend_family",
+        "target_gpu_stack",
+        "gpu_backend_family",
+        "tensor_network_gpu_execution_verified",
+        "minimal_gpu_tensor_contraction_verified",
+        "gpu_program_executed",
+        "cpu_fallback_used",
+        "cpu_fallback_detected",
+        "gpu_device_name",
+        "gpu_synchronized",
+        "synchronization_status",
+        "minimal_tn_validation_status",
+        "benchmark_route_eligible",
+        "benchmark_records_emitted",
+        "blocker_reason",
+        "schema_version",
+        "created_at",
+        "artifact_path",
+    )
+    summary = {key: payload.get(key) for key in summary_keys if key in payload}
+    if "attempted_steps" in payload:
+        summary["attempted_steps"] = [
+            {
+                key: step.get(key)
+                for key in ("step", "status", "reason")
+                if key in step
+            }
+            for step in (payload.get("attempted_steps") or [])
+            if isinstance(step, dict)
+        ]
+    if "detected_dependencies" in payload:
+        summary["detected_dependencies"] = payload.get("detected_dependencies")
     return to_jsonable(summary)
 
 
@@ -384,7 +442,11 @@ def _verified_gpu_candidate_classification(
     return "usable_current_machine"
 
 
-def _gpu_tn_candidate_matrix(gpu_candidates: list[JsonDict], hardware: JsonDict) -> list[JsonDict]:
+def _gpu_tn_candidate_matrix(
+    gpu_candidates: list[JsonDict],
+    hardware: JsonDict,
+    verification: JsonDict | None = None,
+) -> list[JsonDict]:
     by_id = {str(candidate["candidate_id"]): candidate for candidate in gpu_candidates}
     candidates = [
         _gpu_tn_candidate_from_gpu_candidate(
@@ -433,7 +495,42 @@ def _gpu_tn_candidate_matrix(gpu_candidates: list[JsonDict], hardware: JsonDict)
         ),
         _generic_cupy_rocm_tn_feasibility_candidate(hardware),
     ]
+    if verification:
+        candidates = [_annotate_gpu_tn_candidate(candidate, verification) for candidate in candidates]
     return [to_jsonable(candidate) for candidate in candidates]
+
+
+def _annotate_gpu_tn_candidate(candidate: JsonDict, verification: JsonDict) -> JsonDict:
+    selected = str(verification.get("selected_candidate") or "")
+    if candidate.get("candidate_id") != selected:
+        return candidate
+    verified = bool(verification.get("tensor_network_gpu_execution_verified", False))
+    generic_verified = bool(verification.get("minimal_gpu_tensor_contraction_verified", False))
+    status = str(verification.get("status") or "")
+    annotated = dict(candidate)
+    annotated.update(
+        {
+            "classification": "minimal_execution_verified" if verified or generic_verified else candidate.get("classification"),
+            "blocker_reason": None if verified or generic_verified else verification.get("blocker_reason") or candidate.get("blocker_reason"),
+            "gpu_execution_verified": bool(verification.get("gpu_program_executed", False)),
+            "gpu_program_executed": bool(verification.get("gpu_program_executed", False)),
+            "tensor_network_gpu_execution_verified": verified,
+            "minimal_gpu_tensor_contraction_verified": generic_verified,
+            "benchmark_route_eligible": False,
+            "benchmark_records_emitted": False,
+            "route_status": "verified_feasibility_only" if status == "verified" else candidate.get("route_status"),
+            "verification_artifact": verification.get("artifact_path"),
+            "verification_source": verification.get("verification_source", "fresh_verify_gpu_tn"),
+            "gpu_device_name": verification.get("gpu_device_name"),
+            "gpu_backend_family": verification.get("gpu_backend_family"),
+            "synchronization_status": verification.get("synchronization_status"),
+            "minimal_tn_validation_status": verification.get("minimal_tn_validation_status"),
+            "cpu_fallback_used": bool(verification.get("cpu_fallback_used", False)),
+            "cpu_fallback_detected": bool(verification.get("cpu_fallback_detected", False)),
+            "benchmark_route_eligible_after_separate_route_wave": verified,
+        }
+    )
+    return annotated
 
 
 def _gpu_tn_candidate_from_gpu_candidate(
@@ -517,6 +614,309 @@ def _generic_cupy_rocm_tn_feasibility_candidate(hardware: JsonDict) -> JsonDict:
         ],
         "feasibility_note": "Local AMD feasibility candidate only; do not present as the main SOTA quantum GPU TN baseline.",
     }
+
+
+def _verify_gpu_tn_candidate(root_dir: Path, requested_candidate: str, hardware: JsonDict) -> JsonDict:
+    selected = _select_gpu_tn_candidate(requested_candidate, hardware)
+    if selected is None:
+        return _write_gpu_tn_verification_artifact(
+            root_dir,
+            {
+                "status": "blocked",
+                "requested_candidate": requested_candidate,
+                "selected_candidate": None,
+                "blocker_reason": "no_plausible_gpu_tn_candidate_detected",
+                "attempted_steps": [{"step": "select_gpu_tn_candidate", "status": "blocked"}],
+                "benchmark_route_eligible": False,
+                "benchmark_records_emitted": False,
+            },
+        )
+    if selected == "cuquantum_cutensornet":
+        result = _minimal_cuquantum_cutensornet_execution()
+    elif selected == "cupy_rocm_generic_tensor_contraction":
+        result = _minimal_cupy_rocm_tensor_contraction(hardware)
+    elif selected == "cudaq_tensornet":
+        result = _blocked_gpu_tn_execution(
+            selected,
+            "cuda_quantum_stack",
+            "cudaq_tensornet_minimal_execution_not_implemented",
+            target_gpu_stack="nvidia_cuda",
+            backend_family="cudaq",
+        )
+    elif selected == "qiskit_aer_tensor_network":
+        result = _blocked_gpu_tn_execution(
+            selected,
+            "cuda_quantum_stack",
+            "qiskit_aer_tensor_network_minimal_execution_not_implemented",
+            target_gpu_stack="nvidia_cuda",
+            backend_family="qiskit_aer",
+        )
+    else:  # pragma: no cover - defensive for future choices
+        result = _blocked_gpu_tn_execution(selected, selected, "unknown_gpu_tn_candidate", target_gpu_stack="unknown", backend_family=selected)
+    return _write_gpu_tn_verification_artifact(
+        root_dir,
+        {
+            "requested_candidate": requested_candidate,
+            **result,
+            "benchmark_route_eligible": False,
+            "benchmark_records_emitted": False,
+            "source_support_is_not_benchmark_evidence": True,
+        },
+    )
+
+
+def _select_gpu_tn_candidate(requested_candidate: str, hardware: JsonDict) -> str | None:
+    if requested_candidate == "auto":
+        if hardware.get("nvidia_gpu_pci_detected"):
+            if _module_status("cuquantum")["available"]:
+                return "cuquantum_cutensornet"
+            if _module_status("cudaq")["available"]:
+                return "cudaq_tensornet"
+            if _module_status("qiskit_aer")["available"]:
+                return "qiskit_aer_tensor_network"
+            return "cuquantum_cutensornet"
+        if hardware.get("amd_gpu_pci_detected"):
+            return "cupy_rocm_generic_tensor_contraction"
+        return None
+    return {
+        "cuquantum-cutensornet": "cuquantum_cutensornet",
+        "cudaq-tensornet": "cudaq_tensornet",
+        "qiskit-aer-tensor-network": "qiskit_aer_tensor_network",
+        "cupy-rocm-generic": "cupy_rocm_generic_tensor_contraction",
+    }.get(requested_candidate)
+
+
+def _minimal_cuquantum_cutensornet_execution() -> JsonDict:
+    dependencies = {"cuquantum": _module_status("cuquantum"), "cupy": _module_status("cupy"), "nvidia-smi": _command_status("nvidia-smi")}
+    if not dependencies["cuquantum"]["available"]:
+        return _blocked_gpu_tn_execution(
+            "cuquantum_cutensornet",
+            "tailored_gpu_tn",
+            "cuquantum_not_installed",
+            target_gpu_stack="nvidia_cuda",
+            backend_family="cuquantum_cutensornet",
+            dependencies=dependencies,
+        )
+    if not dependencies["cupy"]["available"]:
+        return _blocked_gpu_tn_execution(
+            "cuquantum_cutensornet",
+            "tailored_gpu_tn",
+            "cupy_not_installed_for_gpu_array_inputs",
+            target_gpu_stack="nvidia_cuda",
+            backend_family="cuquantum_cutensornet",
+            dependencies=dependencies,
+        )
+    try:
+        import cupy as cp  # type: ignore[import-not-found]
+        from cuquantum import contract  # type: ignore[import-not-found]
+
+        if cp.cuda.runtime.getDeviceCount() <= 0:
+            return _blocked_gpu_tn_execution(
+                "cuquantum_cutensornet",
+                "tailored_gpu_tn",
+                "cuda_gpu_device_not_available",
+                target_gpu_stack="nvidia_cuda",
+                backend_family="cuquantum_cutensornet",
+                dependencies=dependencies,
+            )
+        a = cp.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=cp.float64)
+        b = cp.asarray([[5.0, 6.0], [7.0, 8.0]], dtype=cp.float64)
+        out = contract("ab,bc->ac", a, b)
+        cp.cuda.Device().synchronize()
+        host = cp.asnumpy(out)
+        expected = [[19.0, 22.0], [43.0, 50.0]]
+        passed = bool((abs(host - cp.asnumpy(cp.asarray(expected))).max() < 1e-12))
+        device_props = cp.cuda.runtime.getDeviceProperties(cp.cuda.runtime.getDevice())
+        device_name = device_props.get("name", b"")
+        if isinstance(device_name, bytes):
+            device_name = device_name.decode("utf-8", errors="replace")
+        return _gpu_tn_execution_payload(
+            selected_candidate="cuquantum_cutensornet",
+            candidate_category="tailored_gpu_tn",
+            backend_family="cuquantum_cutensornet",
+            target_gpu_stack="nvidia_cuda",
+            status="verified" if passed else "failed",
+            blocker_reason=None if passed else "minimal_tn_validation_failed",
+            dependencies=dependencies,
+            tensor_network_gpu_execution_verified=passed,
+            minimal_gpu_tensor_contraction_verified=passed,
+            gpu_program_executed=True,
+            cpu_fallback_used=False,
+            gpu_device_name=str(device_name or "nvidia_gpu"),
+            minimal_tn_validation_status="passed" if passed else "failed",
+            attempted_steps=[
+                {"step": "import_cuquantum_and_cupy", "status": "passed"},
+                {"step": "minimal_cutensornet_contract", "status": "passed" if passed else "failed"},
+            ],
+        )
+    except Exception as exc:  # pragma: no cover - depends on optional GPU libraries
+        return _blocked_gpu_tn_execution(
+            "cuquantum_cutensornet",
+            "tailored_gpu_tn",
+            f"cuquantum_minimal_execution_exception:{exc}",
+            target_gpu_stack="nvidia_cuda",
+            backend_family="cuquantum_cutensornet",
+            dependencies=dependencies,
+            status="failed",
+        )
+
+
+def _minimal_cupy_rocm_tensor_contraction(hardware: JsonDict) -> JsonDict:
+    dependencies = {"cupy": _module_status("cupy"), "hipcc": _command_status("hipcc"), "rocminfo": _command_status("rocminfo")}
+    if not dependencies["cupy"]["available"]:
+        return _blocked_gpu_tn_execution(
+            "cupy_rocm_generic_tensor_contraction",
+            "generic_tensor_gpu_feasibility",
+            "cupy_not_installed",
+            target_gpu_stack="amd_rocm",
+            backend_family="cupy",
+            dependencies=dependencies,
+        )
+    if not hardware.get("amd_gpu_pci_detected"):
+        return _blocked_gpu_tn_execution(
+            "cupy_rocm_generic_tensor_contraction",
+            "generic_tensor_gpu_feasibility",
+            "amd_gpu_not_detected",
+            target_gpu_stack="amd_rocm",
+            backend_family="cupy",
+            dependencies=dependencies,
+        )
+    try:
+        import cupy as cp  # type: ignore[import-not-found]
+
+        if cp.cuda.runtime.getDeviceCount() <= 0:
+            return _blocked_gpu_tn_execution(
+                "cupy_rocm_generic_tensor_contraction",
+                "generic_tensor_gpu_feasibility",
+                "cupy_gpu_device_not_available",
+                target_gpu_stack="amd_rocm",
+                backend_family="cupy",
+                dependencies=dependencies,
+            )
+        a = cp.asarray([1.0, 2.0, 3.0], dtype=cp.float32)
+        b = cp.asarray([4.0, 5.0, 6.0], dtype=cp.float32)
+        out = cp.einsum("i,i->", a, b)
+        cp.cuda.Device().synchronize()
+        value = float(out.get())
+        passed = abs(value - 32.0) < 1e-5
+        props = cp.cuda.runtime.getDeviceProperties(cp.cuda.runtime.getDevice())
+        name = props.get("name", b"")
+        if isinstance(name, bytes):
+            name = name.decode("utf-8", errors="replace")
+        return _gpu_tn_execution_payload(
+            selected_candidate="cupy_rocm_generic_tensor_contraction",
+            candidate_category="generic_tensor_gpu_feasibility",
+            backend_family="cupy",
+            target_gpu_stack="amd_rocm",
+            status="verified" if passed else "failed",
+            blocker_reason=None if passed else "minimal_tensor_validation_failed",
+            dependencies=dependencies,
+            tensor_network_gpu_execution_verified=False,
+            minimal_gpu_tensor_contraction_verified=passed,
+            gpu_program_executed=True,
+            cpu_fallback_used=False,
+            gpu_device_name=str(name or "amd_rocm_gpu"),
+            minimal_tn_validation_status="passed" if passed else "failed",
+            attempted_steps=[
+                {"step": "import_cupy", "status": "passed"},
+                {"step": "minimal_gpu_einsum", "status": "passed" if passed else "failed"},
+            ],
+        )
+    except Exception as exc:  # pragma: no cover - depends on optional GPU libraries
+        return _blocked_gpu_tn_execution(
+            "cupy_rocm_generic_tensor_contraction",
+            "generic_tensor_gpu_feasibility",
+            f"cupy_rocm_minimal_execution_exception:{exc}",
+            target_gpu_stack="amd_rocm",
+            backend_family="cupy",
+            dependencies=dependencies,
+            status="failed",
+        )
+
+
+def _blocked_gpu_tn_execution(
+    selected_candidate: str,
+    candidate_category: str,
+    blocker_reason: str,
+    *,
+    target_gpu_stack: str,
+    backend_family: str,
+    dependencies: JsonDict | None = None,
+    status: str = "blocked",
+) -> JsonDict:
+    return _gpu_tn_execution_payload(
+        selected_candidate=selected_candidate,
+        candidate_category=candidate_category,
+        backend_family=backend_family,
+        target_gpu_stack=target_gpu_stack,
+        status=status,
+        blocker_reason=blocker_reason,
+        dependencies=dependencies or {},
+        tensor_network_gpu_execution_verified=False,
+        minimal_gpu_tensor_contraction_verified=False,
+        gpu_program_executed=False,
+        cpu_fallback_used=False,
+        gpu_device_name=None,
+        minimal_tn_validation_status="not_run",
+        attempted_steps=[{"step": "minimal_gpu_tn_execution", "status": status, "reason": blocker_reason}],
+    )
+
+
+def _gpu_tn_execution_payload(
+    *,
+    selected_candidate: str,
+    candidate_category: str,
+    backend_family: str,
+    target_gpu_stack: str,
+    status: str,
+    blocker_reason: str | None,
+    dependencies: JsonDict,
+    tensor_network_gpu_execution_verified: bool,
+    minimal_gpu_tensor_contraction_verified: bool,
+    gpu_program_executed: bool,
+    cpu_fallback_used: bool,
+    gpu_device_name: str | None,
+    minimal_tn_validation_status: str,
+    attempted_steps: list[JsonDict],
+) -> JsonDict:
+    return {
+        "status": status,
+        "selected_candidate": selected_candidate,
+        "candidate_category": candidate_category,
+        "backend_family": backend_family,
+        "target_gpu_stack": target_gpu_stack,
+        "gpu_backend_family": backend_family,
+        "tensor_network_gpu_execution_verified": bool(tensor_network_gpu_execution_verified),
+        "minimal_gpu_tensor_contraction_verified": bool(minimal_gpu_tensor_contraction_verified),
+        "gpu_program_executed": bool(gpu_program_executed),
+        "cpu_fallback_used": bool(cpu_fallback_used),
+        "cpu_fallback_detected": bool(cpu_fallback_used),
+        "gpu_device_name": gpu_device_name,
+        "gpu_synchronized": bool(gpu_program_executed),
+        "synchronization_status": "synchronized" if gpu_program_executed else "not_run",
+        "minimal_tn_validation_status": minimal_tn_validation_status,
+        "blocker_reason": blocker_reason,
+        "detected_dependencies": dependencies,
+        "attempted_steps": attempted_steps,
+    }
+
+
+def _write_gpu_tn_verification_artifact(root_dir: Path, payload: JsonDict) -> JsonDict:
+    selected = str(payload.get("selected_candidate") or payload.get("requested_candidate") or "gpu_tn")
+    path = root_dir / "build" / "gpu_verification" / f"{_artifact_safe(selected)}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    final_payload = {
+        "schema_version": "gpu_tn_feasibility_verification_v1",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "artifact_path": str(path),
+        **payload,
+    }
+    path.write_text(json.dumps(to_jsonable(final_payload), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return to_jsonable(final_payload)
+
+
+def _artifact_safe(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("_") or "gpu_tn"
 
 
 def _verify_gpu_backend(root_dir: Path, requested_backend: str, hardware: JsonDict) -> JsonDict:

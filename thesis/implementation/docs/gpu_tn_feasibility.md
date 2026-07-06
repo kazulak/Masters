@@ -83,6 +83,18 @@ backends and blockers, but it must keep:
 - `gpu_tn_benchmark_records_emitted=false`
 - `quest_gpu_full_state_is_gpu_tn_evidence=false`
 
+To run the execution spike without creating benchmark rows:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simulation-backend-probe --verify-gpu-tn auto
+```
+
+On an NVIDIA/CUDA environment, `auto` selects the first plausible tailored GPU
+TN candidate, starting with cuQuantum/cuTensorNet. On the local AMD/ROCm
+workstation, `auto` may attempt only the generic CuPy ROCm tensor-contraction
+feasibility path if CuPy is installed; that is not the preferred SOTA quantum
+TN baseline.
+
 Candidate rows include:
 
 - `candidate_id`

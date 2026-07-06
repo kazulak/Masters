@@ -78,6 +78,11 @@ def main() -> int:
 
     simulation_probe_parser = sub.add_parser("simulation-backend-probe")
     simulation_probe_parser.add_argument("--verify-gpu", default="none", choices=("none", "auto", "quest-hip", "quest-cuda", "torch-rocm"))
+    simulation_probe_parser.add_argument(
+        "--verify-gpu-tn",
+        default="none",
+        choices=("none", "auto", "cuquantum-cutensornet", "cudaq-tensornet", "qiskit-aer-tensor-network", "cupy-rocm-generic"),
+    )
 
     report_run_parser = sub.add_parser("report-run")
     report_run_parser.add_argument("--input", required=True)
@@ -381,7 +386,7 @@ def main() -> int:
     if args.command == "simulation-backend-probe":
         from quantum_bench.bench.simulation_backend_probe import probe_simulation_backends
 
-        print(json.dumps(probe_simulation_backends(root_dir, verify_gpu=args.verify_gpu), indent=2))
+        print(json.dumps(probe_simulation_backends(root_dir, verify_gpu=args.verify_gpu, verify_gpu_tn=args.verify_gpu_tn), indent=2))
         return 0
     if args.command == "report-run":
         from quantum_bench.bench.reporting import report_run
