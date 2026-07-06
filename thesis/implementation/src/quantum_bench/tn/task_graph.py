@@ -5,7 +5,7 @@ from typing import Any
 
 import numpy as np
 
-from quantum_bench.core.indices import index_symbols, shape_product
+from quantum_bench.core.indices import LABEL_LIST_EINSUM_SENTINEL, index_symbols, label_count, shape_product, supports_string_einsum
 from quantum_bench.core.records import ContractionTask, PathSummary, TaskGraph, TensorSpec
 from quantum_bench.tn.network import TensorNetworkValue
 from quantum_bench.tn.planners import OptEinsumPlanner, PathPlanner, PlannerResult, planner_from_config
@@ -26,7 +26,6 @@ def plan_task_graph_with_planner(network: TensorNetworkValue, planner: PathPlann
     planner_result = planner.plan(network)
     active = list(network.spec.tensors)
     produced_by: dict[str, str | None] = {tensor.id: tensor.produced_by for tensor in active}
-    symbols = index_symbols([tensor.labels for tensor in active], network.spec.output_labels)
     tasks: list[ContractionTask] = []
 
     for step_index, contraction in enumerate(planner_result.path):
@@ -35,22 +34,22 @@ def plan_task_graph_with_planner(network: TensorNetworkValue, planner: PathPlann
         i, j = sorted(contraction)
         left = active[i]
         right = active[j]
-        contracted = tuple(label for label in left.labels if label in set(right.labels) and label not in network.spec.output_labels)
-        free_left = tuple(label for label in left.labels if label not in contracted)
-        free_right = tuple(label for label in right.labels if label not in contracted)
-        output_labels = free_left + free_right
+        remaining = [tensor for pos, tensor in enumerate(active) if pos not in {i, j}]
+        remaining_labels = {label for tensor in remaining for label in tensor.labels}
+        output_labels = _task_output_labels(left, right, remaining_labels, network.spec.output_labels)
+        contracted = tuple(label for label in left.labels if label in set(right.labels) and label not in output_labels)
+        removed_labels = _removed_labels(left, right, output_labels)
+        free_left = tuple(label for label in left.labels if label in output_labels and label not in contracted)
+        free_right = tuple(label for label in right.labels if label in output_labels and label not in contracted and label not in free_left)
         output_shape = tuple(_label_dim(label, left, right) for label in output_labels)
-        expression = (
-            "".join(symbols[label] for label in left.labels)
-            + ","
-            + "".join(symbols[label] for label in right.labels)
-            + "->"
-            + "".join(symbols[label] for label in output_labels)
-        )
+        expression = _task_index_expression(left, right, output_labels)
         m = shape_product(tuple(_label_dim(label, left, right) for label in free_left))
         k = shape_product(tuple(_label_dim(label, left, right) for label in contracted))
         n = shape_product(tuple(_label_dim(label, left, right) for label in free_right))
-        output_bytes = int(np.prod(output_shape, dtype=np.int64) * np.dtype(np.complex128).itemsize)
+        output_elements = shape_product(output_shape)
+        reduced_elements = shape_product(tuple(_label_dim(label, left, right) for label in removed_labels))
+        element_size = np.dtype(np.complex128).itemsize
+        output_bytes = int(output_elements * element_size)
         task_id = f"task_{step_index}"
         output_id = f"result_{step_index}"
         dependencies = tuple(
@@ -73,15 +72,15 @@ def plan_task_graph_with_planner(network: TensorNetworkValue, planner: PathPlann
                 gemm_k=k,
                 gemm_n=n,
                 structure="dense",
-                estimated_flops=int(8 * m * k * n),
-                estimated_bytes=int(np.prod(left.shape) * 16 + np.prod(right.shape) * 16 + output_bytes),
+                estimated_flops=int(8 * output_elements * max(1, reduced_elements)),
+                estimated_bytes=int(shape_product(left.shape) * element_size + shape_product(right.shape) * element_size + output_bytes),
             )
         )
         output_tensor = TensorSpec(output_id, output_labels, output_shape, "dense", produced_by=task_id)
         produced_by[output_id] = task_id
         active.pop(j)
         active.pop(i)
-        active.insert(i, output_tensor)
+        active.append(output_tensor)
 
     summary = _base_path_summary(planner_result)
     graph = TaskGraph(
@@ -172,5 +171,42 @@ def _label_dim(label: int, left: TensorSpec, right: TensorSpec) -> int:
     return right.shape[right.labels.index(label)]
 
 
+def _task_output_labels(
+    left: TensorSpec,
+    right: TensorSpec,
+    remaining_labels: set[int],
+    final_output_labels: tuple[int, ...],
+) -> tuple[int, ...]:
+    keep = remaining_labels | set(final_output_labels)
+    labels: list[int] = []
+    for label in left.labels + right.labels:
+        if label in keep and label not in labels:
+            labels.append(label)
+    return tuple(labels)
+
+
+def _removed_labels(left: TensorSpec, right: TensorSpec, output_labels: tuple[int, ...]) -> tuple[int, ...]:
+    output = set(output_labels)
+    labels: list[int] = []
+    for label in left.labels + right.labels:
+        if label not in output and label not in labels:
+            labels.append(label)
+    return tuple(labels)
+
+
+def _task_index_expression(left: TensorSpec, right: TensorSpec, output_labels: tuple[int, ...]) -> str:
+    label_sets = [left.labels, right.labels]
+    if not supports_string_einsum(label_sets, output_labels):
+        return f"{LABEL_LIST_EINSUM_SENTINEL}:task_labels={label_count(label_sets, output_labels)}"
+    symbols = index_symbols(label_sets, output_labels)
+    return (
+        "".join(symbols[label] for label in left.labels)
+        + ","
+        + "".join(symbols[label] for label in right.labels)
+        + "->"
+        + "".join(symbols[label] for label in output_labels)
+    )
+
+
 def _output_bytes(task: ContractionTask) -> int:
-    return int(np.prod(task.output_shape, dtype=np.int64) * np.dtype(np.complex128).itemsize)
+    return int(shape_product(task.output_shape) * np.dtype(np.complex128).itemsize)

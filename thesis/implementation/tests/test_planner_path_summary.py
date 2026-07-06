@@ -3,10 +3,14 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
+import numpy as np
 
-from quantum_bench.circuits import builtin_circuit
+from quantum_bench.circuits import builtin_circuit, quest_compatible_circuit
+from quantum_bench.core.indices import LABEL_LIST_EINSUM_SENTINEL, is_label_list_einsum_expression
+from quantum_bench.core.records import ContractionTask
 from quantum_bench.targets.upmem import UPMEM_DENSE_ESTIMATE_KEY, annotate_task_graph_with_upmem_estimates
 from quantum_bench.tn import build_tensor_network, derive_path_costs, plan_task_graph, plan_task_graph_with_config, planner_from_config, with_path_cost_summary
+from quantum_bench.tn.contract import contract_binary_task
 from quantum_bench.tn.planners import OptEinsumPlanner
 
 
@@ -49,6 +53,65 @@ def test_plan_task_graph_preserves_current_opt_einsum_behavior() -> None:
     assert graph.path_summary.optimize == "greedy"
     assert graph.path_summary.optimize_mode == "greedy"
     assert graph.path_summary.task_count == len(graph.tasks)
+
+
+def test_plan_task_graph_handles_more_labels_than_numpy_einsum_symbols() -> None:
+    circuit = quest_compatible_circuit("EDC", {"n_qubits": 10})
+    network = build_tensor_network(circuit)
+
+    assert is_label_list_einsum_expression(network.spec.einsum_expression)
+
+    graph = plan_task_graph_with_config(network, {"engine": "opt_einsum", "optimize": "greedy"})
+
+    assert graph.tasks
+    assert graph.path_summary.planner == "opt_einsum"
+    assert all("," in task.index_expression and "->" in task.index_expression for task in graph.tasks)
+
+
+def test_plan_task_graph_handles_large_binary_tasks_beyond_numpy_einsum_symbols() -> None:
+    circuit = quest_compatible_circuit("BV", {"n_qubits": 18})
+    network = build_tensor_network(circuit)
+
+    assert is_label_list_einsum_expression(network.spec.einsum_expression)
+
+    graph = plan_task_graph_with_config(network, {"engine": "opt_einsum", "optimize": "greedy"})
+
+    assert graph.tasks
+    assert not any(is_label_list_einsum_expression(task.index_expression) for task in graph.tasks)
+    assert max(len(task.output_labels) for task in graph.tasks) == circuit.n_qubits
+    assert graph.path_summary.planner == "opt_einsum"
+
+
+def test_large_label_binary_task_contracts_without_numpy_einsum_symbols() -> None:
+    left_labels = tuple(range(32))
+    right_labels = tuple(range(32, 63))
+    output_labels = left_labels + right_labels
+    left = np.ones((1,) * len(left_labels), dtype=np.complex128)
+    right = np.ones((1,) * len(right_labels), dtype=np.complex128)
+    task = ContractionTask(
+        id="task_large_label",
+        input_tensor_ids=("left", "right"),
+        output_tensor_id="out",
+        dependencies=(),
+        index_expression=f"{LABEL_LIST_EINSUM_SENTINEL}:task_labels=63",
+        input_shapes=(left.shape, right.shape),
+        output_shape=(1,) * len(output_labels),
+        left_labels=left_labels,
+        right_labels=right_labels,
+        contracted_labels=(),
+        output_labels=output_labels,
+        gemm_m=1,
+        gemm_k=1,
+        gemm_n=1,
+        structure="dense",
+        estimated_flops=1,
+        estimated_bytes=1,
+    )
+
+    output = contract_binary_task(task, left, right)
+
+    assert output.shape == task.output_shape
+    assert output.item() == 1.0 + 0.0j
 
 
 def test_path_summary_costs_are_derived_from_tasks_and_upmem_estimates() -> None:

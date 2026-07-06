@@ -21,6 +21,7 @@ from quantum_bench.targets.upmem import (
     estimate_dense_task,
     probe_simplepim,
 )
+from quantum_bench.tn.contract import contract_binary_task
 
 
 DENSE_TASK_PREPARATION_SCHEMA_VERSION = "dense_task_preparation_v1"
@@ -385,7 +386,7 @@ def _lower_task_to_gemm(task: ContractionTask, left_tensor: TensorValue, right_t
 
     left_matrix = left_reordered.reshape((task.gemm_m, task.gemm_k))
     right_matrix = right_reordered.reshape((task.gemm_k, task.gemm_n))
-    reference_output = np.einsum(task.index_expression, left_array, right_array, optimize=False)
+    reference_output = contract_binary_task(task, left_array, right_array)
     gemm_output_matrix = left_matrix @ right_matrix
     output_from_gemm = _restore_output_order(
         gemm_output_matrix,

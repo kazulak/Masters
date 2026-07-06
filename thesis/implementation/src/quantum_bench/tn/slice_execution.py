@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from quantum_bench.core.records import ContractionTask, TaskExecutionMetric, TaskGraph
+from quantum_bench.tn.contract import contract_binary_task
 from quantum_bench.tn.execution import live_tensor_bytes, order_final_tensor
 from quantum_bench.tn.network import TensorNetworkValue
 from quantum_bench.tn.slicing import SliceAwareTaskGraphModel, SliceModelTask, build_slice_aware_taskgraph_model, validate_slice_aware_taskgraph_model
@@ -327,7 +328,7 @@ def _execute_slice_node(task: ContractionTask, slice_task: SliceModelTask, tenso
     left_id, right_id = task.input_tensor_ids
     left = _restricted_tensor(tensors[left_id], slice_task, left_id)
     right = _restricted_tensor(tensors[right_id], slice_task, right_id)
-    return np.einsum(task.index_expression, left, right, optimize=False)
+    return contract_binary_task(task, left, right)
 
 
 def _execute_reconstruction(node: _ExecutionNode, tensors: dict[str, np.ndarray]) -> np.ndarray:
@@ -354,7 +355,7 @@ def _restricted_tensor(tensor: np.ndarray, slice_task: SliceModelTask, tensor_id
 
 def _execute_direct_task(task: ContractionTask, tensors: dict[str, np.ndarray]) -> np.ndarray:
     left_id, right_id = task.input_tensor_ids
-    return np.einsum(task.index_expression, tensors[left_id], tensors[right_id], optimize=False)
+    return contract_binary_task(task, tensors[left_id], tensors[right_id])
 
 
 def _node_output_tensor_id(node: _ExecutionNode) -> str:

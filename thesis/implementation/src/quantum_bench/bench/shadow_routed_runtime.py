@@ -33,6 +33,7 @@ from quantum_bench.routing import (
     route_task_graph,
     summarize_shadow_route_policy,
 )
+from quantum_bench.tn.contract import contract_binary_task
 from quantum_bench.targets.upmem import (
     SIMPLEPIM_PROBE_KEY,
     UPMEM_DENSE_ESTIMATE_KEY,
@@ -637,7 +638,7 @@ def _execute_cpu_fallback_task(task: ContractionTask, tensors: Mapping[str, np.n
         }
     try:
         start = time.perf_counter()
-        output = np.einsum(task.index_expression, tensors[left_id], tensors[right_id], optimize=False)
+        output = contract_binary_task(task, tensors[left_id], tensors[right_id])
         execution_time_s = time.perf_counter() - start
         output = np.asarray(output, dtype=np.complex128)
         if tuple(int(dim) for dim in output.shape) != task.output_shape:

@@ -14,6 +14,7 @@ from quantum_bench.tn import (
     materialize_task_inputs,
     plan_task_graph,
 )
+from quantum_bench.tn.contract import contract_binary_task
 
 
 def _available_probe() -> SimplePimProbeResult:
@@ -36,51 +37,54 @@ def _bell_graph_and_tensors():
 
 def test_materializes_later_task_inputs_by_replaying_predecessors() -> None:
     graph, initial = _bell_graph_and_tensors()
+    target_index = _first_task_with_intermediate_inputs(graph, initial)
     result = materialize_task_inputs(
-        TaskInputMaterializationRequest(graph=graph, initial_tensors=initial, target_task_index=1)
+        TaskInputMaterializationRequest(graph=graph, initial_tensors=initial, target_task_index=target_index)
     )
-    target_task = graph.tasks[1]
-    replayed_task = graph.tasks[0]
-    direct = np.einsum(
-        replayed_task.index_expression,
-        np.asarray(initial[replayed_task.input_tensor_ids[0]].array, dtype=np.complex128),
-        np.asarray(initial[replayed_task.input_tensor_ids[1]].array, dtype=np.complex128),
-        optimize=False,
-    )
-    direct = np.asarray(direct, dtype=np.complex128)
+    target_task = graph.tasks[target_index]
+    replayed_tasks = graph.tasks[:target_index]
+    direct_outputs = {
+        task.output_tensor_id: contract_binary_task(
+            task,
+            np.asarray(initial[task.input_tensor_ids[0]].array, dtype=np.complex128),
+            np.asarray(initial[task.input_tensor_ids[1]].array, dtype=np.complex128),
+        )
+        for task in replayed_tasks
+    }
 
     assert result.status == "materialized"
     assert result.reason is None
-    assert result.target_task_index == 1
+    assert result.target_task_index == target_index
     assert result.target_task_id == target_task.id
     assert result.selected_input_tensor_ids == target_task.input_tensor_ids
-    assert result.replayed_task_count == 1
-    assert result.replayed_task_ids == (replayed_task.id,)
+    assert result.replayed_task_count == len(replayed_tasks)
+    assert result.replayed_task_ids == tuple(task.id for task in replayed_tasks)
     assert result.dead_tensor_release_implemented is False
-    assert result.peak_materialized_bytes >= direct.nbytes
+    assert result.peak_materialized_bytes >= sum(output.nbytes for output in direct_outputs.values())
     assert result.left_tensor is not None
     assert result.right_tensor is not None
-    assert result.input_sources[target_task.input_tensor_ids[0]]["source"] == "initial"
+    assert result.input_sources[target_task.input_tensor_ids[0]]["source"] == "replayed"
     assert result.input_sources[target_task.input_tensor_ids[1]]["source"] == "replayed"
-    assert result.right_tensor.spec.id == replayed_task.output_tensor_id
-    assert result.right_tensor.spec.labels == replayed_task.output_labels
-    assert result.right_tensor.spec.shape == replayed_task.output_shape
+    assert result.left_tensor.spec.id in direct_outputs
+    assert result.right_tensor.spec.id in direct_outputs
+    assert result.left_tensor.spec.dtype == "complex128"
     assert result.right_tensor.spec.dtype == "complex128"
-    assert result.right_tensor.spec.produced_by == replayed_task.id
-    np.testing.assert_allclose(result.right_tensor.array, direct)
+    np.testing.assert_allclose(result.left_tensor.array, direct_outputs[result.left_tensor.spec.id])
+    np.testing.assert_allclose(result.right_tensor.array, direct_outputs[result.right_tensor.spec.id])
 
 
 def test_materialized_inputs_are_accepted_by_dense_preparation() -> None:
     graph, initial = _bell_graph_and_tensors()
+    target_index = _first_task_with_intermediate_inputs(graph, initial)
     materialized = materialize_task_inputs(
-        TaskInputMaterializationRequest(graph=graph, initial_tensors=initial, target_task_index=1)
+        TaskInputMaterializationRequest(graph=graph, initial_tensors=initial, target_task_index=target_index)
     )
 
     assert materialized.left_tensor is not None
     assert materialized.right_tensor is not None
     prepared = prepare_dense_task(
         DenseTaskPreparationInput(
-            task=graph.tasks[1],
+            task=graph.tasks[target_index],
             left_tensor=materialized.left_tensor,
             right_tensor=materialized.right_tensor,
             simplepim_probe=_available_probe(),
@@ -88,7 +92,7 @@ def test_materialized_inputs_are_accepted_by_dense_preparation() -> None:
     )
 
     assert prepared.status == "prepared"
-    assert prepared.input_tensor_ids == graph.tasks[1].input_tensor_ids
+    assert prepared.input_tensor_ids == graph.tasks[target_index].input_tensor_ids
     assert prepared.prepared_operands is not None
 
 
@@ -139,9 +143,10 @@ def test_replay_output_shape_mismatch_returns_failed_result() -> None:
     graph, initial = _bell_graph_and_tensors()
     bad_first_task = replace(graph.tasks[0], output_shape=(999,))
     bad_graph = replace(graph, tasks=(bad_first_task, *graph.tasks[1:]))
+    target_index = _first_task_with_intermediate_inputs(bad_graph, initial)
 
     result = materialize_task_inputs(
-        TaskInputMaterializationRequest(graph=bad_graph, initial_tensors=initial, target_task_index=1)
+        TaskInputMaterializationRequest(graph=bad_graph, initial_tensors=initial, target_task_index=target_index)
     )
 
     assert result.status == "failed"
@@ -151,8 +156,9 @@ def test_replay_output_shape_mismatch_returns_failed_result() -> None:
 
 def test_materialization_json_omits_raw_arrays() -> None:
     graph, initial = _bell_graph_and_tensors()
+    target_index = _first_task_with_intermediate_inputs(graph, initial)
     result = materialize_task_inputs(
-        TaskInputMaterializationRequest(graph=graph, initial_tensors=initial, target_task_index=1)
+        TaskInputMaterializationRequest(graph=graph, initial_tensors=initial, target_task_index=target_index)
     )
     payload = result.to_json_dict()
     encoded = json.dumps(payload)
@@ -161,3 +167,11 @@ def test_materialization_json_omits_raw_arrays() -> None:
     assert "right_tensor" not in payload
     assert "array" not in encoded
     assert payload["status"] == "materialized"
+
+
+def _first_task_with_intermediate_inputs(graph, initial: dict) -> int:
+    initial_ids = set(initial)
+    for index, task in enumerate(graph.tasks):
+        if any(tensor_id not in initial_ids for tensor_id in task.input_tensor_ids):
+            return index
+    raise AssertionError("expected at least one task with intermediate inputs")

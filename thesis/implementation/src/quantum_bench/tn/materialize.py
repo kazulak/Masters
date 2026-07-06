@@ -7,6 +7,7 @@ from typing import Literal, Mapping
 import numpy as np
 
 from quantum_bench.core.records import ContractionTask, JsonDict, TaskGraph, TensorSpec, TensorValue, to_jsonable
+from quantum_bench.tn.contract import contract_binary_task
 
 
 TASK_INPUT_MATERIALIZATION_SCHEMA_VERSION = "task_input_materialization_v1"
@@ -325,12 +326,7 @@ def _replay_task(task: ContractionTask, tensor_map: Mapping[str, TensorValue]) -
     left = tensor_map[task.input_tensor_ids[0]]
     right = tensor_map[task.input_tensor_ids[1]]
     started = time.perf_counter()
-    output = np.einsum(
-        task.index_expression,
-        np.asarray(left.array, dtype=np.complex128),
-        np.asarray(right.array, dtype=np.complex128),
-        optimize=False,
-    )
+    output = contract_binary_task(task, np.asarray(left.array, dtype=np.complex128), np.asarray(right.array, dtype=np.complex128))
     output = np.asarray(output, dtype=np.complex128)
     execution_time_s = float(time.perf_counter() - started)
     if tuple(int(dim) for dim in output.shape) != task.output_shape:

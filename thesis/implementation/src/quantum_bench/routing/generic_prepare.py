@@ -12,6 +12,7 @@ from quantum_bench.formats import (
     conversion_error_metrics,
     quantize_fixed_point,
 )
+from quantum_bench.tn.contract import contract_binary_task
 
 
 GENERIC_TASK_PREPARATION_SCHEMA_VERSION = "generic_task_preparation_v1"
@@ -249,7 +250,7 @@ def _prepare_generic_int8_task(
     left_converted = quantize_fixed_point(left_array, preparation.fixed_point_spec)
     right_converted = quantize_fixed_point(right_array, preparation.fixed_point_spec)
     quantization_time_s = _perf_counter() - quantization_started
-    full_precision_reference = np.einsum(task.index_expression, left_array, right_array, optimize=False)
+    full_precision_reference = contract_binary_task(task, left_array, right_array)
 
     reference_started = _perf_counter()
     int32_reference = generic_loop_reference_int32(
@@ -336,7 +337,7 @@ def _prepare_generic_float32_task(
     task = preparation.task
     left_operand = np.asarray(left_array, dtype=np.float32)
     right_operand = np.asarray(right_array, dtype=np.float32)
-    full_precision_reference = np.einsum(task.index_expression, left_array, right_array, optimize=False)
+    full_precision_reference = contract_binary_task(task, left_array, right_array)
     reference_started = _perf_counter()
     float32_reference = generic_loop_reference_float32(
         left_operand,

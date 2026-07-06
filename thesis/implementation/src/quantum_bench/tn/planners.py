@@ -6,7 +6,7 @@ from typing import Any, Protocol
 
 import opt_einsum as oe
 
-from quantum_bench.tn.network import TensorNetworkValue
+from quantum_bench.tn.network import TensorNetworkValue, interleaved_einsum_args
 
 
 @dataclass(frozen=True)
@@ -57,9 +57,8 @@ class OptEinsumPlanner:
         )
 
     def plan(self, network: TensorNetworkValue) -> PlannerResult:
-        arrays = [tensor.array for tensor in network.tensors]
         start = time.perf_counter()
-        path, path_info = oe.contract_path(network.spec.einsum_expression, *arrays, optimize=self.optimize)
+        path, path_info = oe.contract_path(*interleaved_einsum_args(network), optimize=self.optimize)
         planning_time_s = time.perf_counter() - start
         return PlannerResult(
             identity=self.identity,

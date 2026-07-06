@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 
 from quantum_bench.core.records import ContractionTask, TaskExecutionMetric, TaskGraph
+from quantum_bench.tn.contract import contract_binary_task
 from quantum_bench.tn.network import TensorNetworkValue
 
 
@@ -42,7 +43,7 @@ def execute_task_sequence_np_einsum(graph: TaskGraph, network: TensorNetworkValu
             raise ValueError(f"Task {task.id} references unavailable tensor(s): {', '.join(missing)}")
 
         task_start = time.perf_counter()
-        intermediate = np.einsum(task.index_expression, tensors[left_id], tensors[right_id], optimize=False)
+        intermediate = contract_binary_task(task, tensors[left_id], tensors[right_id])
         task_time_s = time.perf_counter() - task_start
         intermediate = np.asarray(intermediate, dtype=np.complex128)
 
@@ -285,7 +286,7 @@ def _execute_frontier_task(
     task_inputs: tuple[np.ndarray, np.ndarray],
 ) -> tuple[ContractionTask, np.ndarray, float]:
     task_start = time.perf_counter()
-    intermediate = np.einsum(task.index_expression, task_inputs[0], task_inputs[1], optimize=False)
+    intermediate = contract_binary_task(task, task_inputs[0], task_inputs[1])
     task_time_s = time.perf_counter() - task_start
     return task, np.asarray(intermediate, dtype=np.complex128), task_time_s
 

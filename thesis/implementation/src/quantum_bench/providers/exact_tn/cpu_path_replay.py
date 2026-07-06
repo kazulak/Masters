@@ -20,6 +20,7 @@ from quantum_bench.core.records import (
 from quantum_bench.environment import read_rapl_uj
 from quantum_bench.formats.fixed_point import FixedPointSpec, conversion_error_metrics, dequantize_fixed_point, quantize_fixed_point
 from quantum_bench.tn import plan_task_graph_with_config, with_path_cost_summary
+from quantum_bench.tn.contract import contract_binary_task
 from quantum_bench.tn.execution import execute_empty_task_graph, order_final_tensor, release_dead_inputs, remaining_input_uses
 from quantum_bench.tn.network import TensorNetworkValue
 
@@ -265,7 +266,7 @@ def _execute_path_replay(graph: TaskGraph, network: TensorNetworkValue, *, quant
             quantization_l2_error += float(qmeta["l2_error"])
 
         task_start = time.perf_counter()
-        intermediate = np.einsum(task.index_expression, left, right, optimize=False)
+        intermediate = contract_binary_task(task, left, right)
         task_time_s = time.perf_counter() - task_start
         intermediate = np.asarray(intermediate, dtype=np.complex128)
 

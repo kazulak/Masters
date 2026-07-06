@@ -3,9 +3,11 @@ from __future__ import annotations
 import time
 
 import numpy as np
+import opt_einsum as oe
 
+from quantum_bench.core.indices import is_label_list_einsum_expression
 from quantum_bench.core.records import ValidationResult
-from quantum_bench.tn.network import TensorNetworkValue
+from quantum_bench.tn.network import TensorNetworkValue, interleaved_einsum_args
 
 
 DEFAULT_TOLERANCES = {
@@ -19,7 +21,10 @@ DEFAULT_TOLERANCES = {
 
 def compute_reference(network: TensorNetworkValue, optimize: str = "greedy") -> tuple[np.ndarray, float]:
     start = time.perf_counter()
-    result = np.einsum(network.spec.einsum_expression, *(tensor.array for tensor in network.tensors), optimize=optimize)
+    if is_label_list_einsum_expression(network.spec.einsum_expression):
+        result = oe.contract(*interleaved_einsum_args(network), optimize=optimize)
+    else:
+        result = np.einsum(network.spec.einsum_expression, *(tensor.array for tensor in network.tensors), optimize=optimize)
     return np.asarray(result, dtype=np.complex128), time.perf_counter() - start
 
 
