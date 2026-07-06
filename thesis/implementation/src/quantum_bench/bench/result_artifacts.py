@@ -125,6 +125,8 @@ RESULT_FIELDS = [
     "hardware_timing_available",
     "hardware_speedup_applicable",
     "cpu_fallback_used",
+    "cpu_fallback_task_count",
+    "upmem_task_count",
     "dpu_program_invocations",
     "upmem_program_executed",
     "native_sdk_control_path",

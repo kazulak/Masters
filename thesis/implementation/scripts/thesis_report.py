@@ -47,6 +47,23 @@ FULL_STATE_FIELDS = [
     "gpu_program_executed",
 ]
 
+FULL_STATE_SUMMARY_FIELDS = [
+    "schema_version",
+    "case_family",
+    "n_qubits",
+    "matched_repeat_count",
+    "cpu_simulation_compute_time_median_s",
+    "gpu_simulation_compute_time_median_s",
+    "compute_speedup_median_cpu_over_gpu",
+    "cpu_total_wall_time_median_s",
+    "gpu_total_wall_time_median_s",
+    "wall_time_ratio_median_cpu_over_gpu",
+    "validation_method",
+    "state_output_mode",
+    "performance_tier",
+    "gpu_device_name",
+]
+
 TN_PATH_FIELDS = [
     "schema_version",
     "suite_id",
@@ -55,7 +72,10 @@ TN_PATH_FIELDS = [
     "n_qubits",
     "repeat_id",
     "route_id",
+    "thesis_route_label",
     "benchmark_role",
+    "contraction_execution_target",
+    "accelerator_kind",
     "parallelism_mode",
     "path_replay_execution",
     "path_strategy",
@@ -74,6 +94,28 @@ TN_PATH_FIELDS = [
     "total_dequantization_time_s",
     "quantization_max_abs_error",
     "quantization_l2_error",
+    "max_abs_error",
+    "l2_error",
+]
+
+TN_PATH_SUMMARY_FIELDS = [
+    "schema_version",
+    "case_family",
+    "n_qubits",
+    "route_id",
+    "thesis_route_label",
+    "benchmark_role",
+    "contraction_execution_target",
+    "accelerator_kind",
+    "parallelism_mode",
+    "path_strategy",
+    "quantization_mode",
+    "repeat_count",
+    "simulation_compute_time_median_s",
+    "total_wall_time_median_s",
+    "slice_count_median",
+    "slicing_flop_ratio_median",
+    "validation_pass_count",
 ]
 
 TN_QUANT_FIELDS = [
@@ -85,18 +127,57 @@ TN_QUANT_FIELDS = [
     "path_strategy",
     "unquantized_route_id",
     "quantized_route_id",
+    "comparison_scope",
+    "contraction_execution_target",
+    "accelerator_kind",
+    "unquantized_input_dtype",
+    "unquantized_accumulator_dtype",
+    "quantized_input_dtype",
+    "quantized_accumulator_dtype",
     "unquantized_simulation_compute_time_s",
     "quantized_simulation_compute_time_s",
     "compute_ratio_unquantized_over_quantized",
+    "compute_slowdown_quantized_over_unquantized",
     "unquantized_total_wall_time_s",
     "quantized_total_wall_time_s",
     "wall_ratio_unquantized_over_quantized",
+    "wall_slowdown_quantized_over_unquantized",
     "quantization_max_abs_error",
     "quantization_l2_error",
     "max_abs_error_vs_reference",
     "l2_error_vs_reference",
     "validation_status",
     "quantized_replay_numeric_contract",
+    "interpretation",
+]
+
+TN_QUANT_SPEEDUP_FIELDS = [
+    "schema_version",
+    "case_family",
+    "n_qubits",
+    "path_strategy",
+    "matched_repeat_count",
+    "unquantized_simulation_compute_time_median_s",
+    "quantized_simulation_compute_time_median_s",
+    "compute_ratio_median_unquantized_over_quantized",
+    "compute_slowdown_median_quantized_over_unquantized",
+    "unquantized_total_wall_time_median_s",
+    "quantized_total_wall_time_median_s",
+    "wall_ratio_median_unquantized_over_quantized",
+    "wall_slowdown_median_quantized_over_unquantized",
+    "comparison_scope",
+]
+
+TN_QUANT_ERROR_FIELDS = [
+    "schema_version",
+    "case_family",
+    "n_qubits",
+    "path_strategy",
+    "matched_repeat_count",
+    "quantization_max_abs_error_median",
+    "quantization_l2_error_median",
+    "max_abs_error_vs_reference_median",
+    "l2_error_vs_reference_median",
 ]
 
 UPMEM_FIELDS = [
@@ -107,22 +188,55 @@ UPMEM_FIELDS = [
     "n_qubits",
     "repeat_id",
     "route_id",
+    "thesis_route_label",
     "quantization_mode",
+    "policy",
     "status",
     "validation_status",
     "contraction_execution_target",
+    "backend_family",
+    "accelerator_kind",
     "upmem_execution_mode",
     "execution_backend",
     "cpu_fallback_used",
+    "cpu_fallback_task_count",
+    "task_count",
+    "upmem_task_count",
     "upmem_program_executed",
     "dpu_program_invocations",
+    "native_sdk_control_path",
+    "simplepim_api_used",
     "hardware_execution",
+    "hardware_timing_available",
     "hardware_speedup_applicable",
     "simulation_compute_time_s",
+    "total_simulator_time_s",
     "total_wall_time_s",
+    "input_dtype_on_dpu",
+    "accumulator_dtype_on_dpu",
+    "scaling_applied",
+    "actual_h2d_bytes",
+    "actual_d2h_bytes",
+    "actual_transfer_bytes",
     "max_abs_error",
     "l2_error",
     "resource_skip_reason",
+]
+
+UPMEM_ACCURACY_FIELDS = [
+    "schema_version",
+    "case_family",
+    "n_qubits",
+    "route_id",
+    "thesis_route_label",
+    "quantization_mode",
+    "row_count",
+    "supported_count",
+    "unsupported_count",
+    "max_abs_error_median",
+    "l2_error_median",
+    "cpu_fallback_rows",
+    "hardware_speedup_applicable_rows",
 ]
 
 
@@ -140,11 +254,21 @@ def main(argv: list[str] | None = None) -> int:
     tn_path_rows = tn_path_rows_from_records(records)
     tn_quant_rows = tn_quantization_rows(records)
     upmem_rows = upmem_boundary_rows(records)
+    cpu_gpu_summary_rows = full_state_cpu_gpu_summary_rows(cpu_gpu_rows)
+    tn_path_summary_rows = tn_path_runtime_summary_rows(tn_path_rows)
+    tn_quant_speedup_rows = tn_quantization_speedup_summary_rows(tn_quant_rows)
+    tn_quant_error_rows = tn_quantization_error_summary_rows(tn_quant_rows)
+    upmem_accuracy_rows = upmem_accuracy_summary_rows(upmem_rows)
 
     _write_csv(args.out / "full_state_cpu_gpu_by_circuit.csv", cpu_gpu_rows, FULL_STATE_FIELDS)
+    _write_csv(args.out / "full_state_cpu_gpu_speedup_by_circuit_size.csv", cpu_gpu_summary_rows, FULL_STATE_SUMMARY_FIELDS)
     _write_csv(args.out / "tn_path_comparison_by_circuit.csv", tn_path_rows, TN_PATH_FIELDS)
+    _write_csv(args.out / "tn_path_runtime_by_circuit_size.csv", tn_path_summary_rows, TN_PATH_SUMMARY_FIELDS)
     _write_csv(args.out / "tn_quantization_comparison.csv", tn_quant_rows, TN_QUANT_FIELDS)
+    _write_csv(args.out / "tn_quantization_speedup_by_circuit_size.csv", tn_quant_speedup_rows, TN_QUANT_SPEEDUP_FIELDS)
+    _write_csv(args.out / "tn_quantization_error_by_circuit_size.csv", tn_quant_error_rows, TN_QUANT_ERROR_FIELDS)
     _write_csv(args.out / "upmem_boundary_quantization.csv", upmem_rows, UPMEM_FIELDS)
+    _write_csv(args.out / "upmem_accuracy_by_circuit_size.csv", upmem_accuracy_rows, UPMEM_ACCURACY_FIELDS)
 
     manifest = {
         "schema_version": SCHEMA_VERSION,
@@ -155,23 +279,49 @@ def main(argv: list[str] | None = None) -> int:
         "inputs": [path.as_posix() for path in args.inputs],
         "outputs": [
             "full_state_cpu_gpu_by_circuit.csv",
+            "full_state_cpu_gpu_speedup_by_circuit_size.csv",
             "tn_path_comparison_by_circuit.csv",
+            "tn_path_runtime_by_circuit_size.csv",
             "tn_quantization_comparison.csv",
+            "tn_quantization_speedup_by_circuit_size.csv",
+            "tn_quantization_error_by_circuit_size.csv",
             "upmem_boundary_quantization.csv",
+            "upmem_accuracy_by_circuit_size.csv",
             "benchmark_summary.md",
             "plot_manifest.json",
         ],
         "claims": {
             "gpu_scope": "QuEST full-state GPU only; not GPU tensor-network evidence.",
-            "tn_quantization_scope": "CPU TN path replay uses per-contraction operand quantization and complex128 accumulation.",
+            "tn_quantization_scope": "CPU diagnostic TN path replay uses int8 operand quantization, immediate dequantization, and complex128 CPU einsum.",
             "upmem_scope": "UPMEM SDK simulator evidence is not hardware timing or hardware speedup.",
         },
     }
     _write_json(args.out / "thesis_report_manifest.json", manifest)
-    plot_manifest = write_plots(args.out, cpu_gpu_rows, tn_path_rows, tn_quant_rows, upmem_rows)
+    plot_manifest = write_plots(
+        args.out,
+        cpu_gpu_summary_rows,
+        tn_path_summary_rows,
+        tn_quant_speedup_rows,
+        tn_quant_error_rows,
+        upmem_rows,
+        upmem_accuracy_rows,
+    )
     _write_json(args.out / "plot_manifest.json", plot_manifest)
     (args.out / "benchmark_summary.md").write_text(
-        benchmark_summary(args.title, records, cpu_gpu_rows, tn_path_rows, tn_quant_rows, upmem_rows, plot_manifest),
+        benchmark_summary(
+            args.title,
+            records,
+            cpu_gpu_rows,
+            cpu_gpu_summary_rows,
+            tn_path_rows,
+            tn_path_summary_rows,
+            tn_quant_rows,
+            tn_quant_speedup_rows,
+            tn_quant_error_rows,
+            upmem_rows,
+            upmem_accuracy_rows,
+            plot_manifest,
+        ),
         encoding="utf-8",
     )
     print(args.out)
@@ -220,6 +370,38 @@ def full_state_cpu_gpu_rows(records: list[JsonDict]) -> list[JsonDict]:
     return rows
 
 
+def full_state_cpu_gpu_summary_rows(rows: list[JsonDict]) -> list[JsonDict]:
+    summaries: list[JsonDict] = []
+    for (family, qubits), group in _group_rows(rows, "case_family", "n_qubits").items():
+        cpu_compute = _numbers(group, "cpu_simulation_compute_time_s")
+        gpu_compute = _numbers(group, "gpu_simulation_compute_time_s")
+        cpu_wall = _numbers(group, "cpu_total_wall_time_s")
+        gpu_wall = _numbers(group, "gpu_total_wall_time_s")
+        speedups = _numbers(group, "compute_speedup_cpu_over_gpu")
+        wall_ratios = _numbers(group, "wall_time_ratio_cpu_over_gpu")
+        if not (cpu_compute and gpu_compute and speedups):
+            continue
+        summaries.append(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "case_family": family,
+                "n_qubits": qubits,
+                "matched_repeat_count": len(group),
+                "cpu_simulation_compute_time_median_s": statistics.median(cpu_compute),
+                "gpu_simulation_compute_time_median_s": statistics.median(gpu_compute),
+                "compute_speedup_median_cpu_over_gpu": statistics.median(speedups),
+                "cpu_total_wall_time_median_s": statistics.median(cpu_wall) if cpu_wall else None,
+                "gpu_total_wall_time_median_s": statistics.median(gpu_wall) if gpu_wall else None,
+                "wall_time_ratio_median_cpu_over_gpu": statistics.median(wall_ratios) if wall_ratios else None,
+                "validation_method": _first_present(group, "validation_method"),
+                "state_output_mode": _first_present(group, "state_output_mode"),
+                "performance_tier": bool(_first_present(group, "performance_tier")),
+                "gpu_device_name": _first_present(group, "gpu_device_name"),
+            }
+        )
+    return sorted(summaries, key=_family_qubits_sort_key)
+
+
 def tn_path_rows_from_records(records: list[JsonDict]) -> list[JsonDict]:
     selected_routes = {
         "quimb_tn_exact",
@@ -242,7 +424,10 @@ def tn_path_rows_from_records(records: list[JsonDict]) -> list[JsonDict]:
                 "n_qubits": qubits,
                 "repeat_id": record.get("repeat_id"),
                 "route_id": record.get("route_id"),
+                "thesis_route_label": _thesis_route_label(record),
                 "benchmark_role": record.get("benchmark_role"),
+                "contraction_execution_target": record.get("contraction_execution_target"),
+                "accelerator_kind": record.get("accelerator_kind"),
                 "parallelism_mode": record.get("parallelism_mode"),
                 "path_replay_execution": bool(record.get("path_replay_execution", False)),
                 "path_strategy": record.get("path_strategy"),
@@ -268,6 +453,37 @@ def tn_path_rows_from_records(records: list[JsonDict]) -> list[JsonDict]:
     return rows
 
 
+def tn_path_runtime_summary_rows(rows: list[JsonDict]) -> list[JsonDict]:
+    summaries: list[JsonDict] = []
+    for (family, qubits, route_id), group in _group_rows(rows, "case_family", "n_qubits", "route_id").items():
+        compute = _numbers(group, "simulation_compute_time_s")
+        wall = _numbers(group, "total_wall_time_s")
+        if not compute:
+            continue
+        summaries.append(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "case_family": family,
+                "n_qubits": qubits,
+                "route_id": route_id,
+                "thesis_route_label": _first_present(group, "thesis_route_label"),
+                "benchmark_role": _first_present(group, "benchmark_role"),
+                "contraction_execution_target": _first_present(group, "contraction_execution_target"),
+                "accelerator_kind": _first_present(group, "accelerator_kind"),
+                "parallelism_mode": _first_present(group, "parallelism_mode"),
+                "path_strategy": _first_present(group, "path_strategy"),
+                "quantization_mode": _first_present(group, "quantization_mode"),
+                "repeat_count": len(group),
+                "simulation_compute_time_median_s": statistics.median(compute),
+                "total_wall_time_median_s": statistics.median(wall) if wall else None,
+                "slice_count_median": _median_or_none(_numbers(group, "slice_count")),
+                "slicing_flop_ratio_median": _median_or_none(_numbers(group, "slicing_flop_ratio")),
+                "validation_pass_count": sum(1 for row in group if _validation_ok(row)),
+            }
+        )
+    return sorted(summaries, key=lambda row: (_family_qubits_sort_key(row), str(row.get("route_id"))))
+
+
 def tn_quantization_rows(records: list[JsonDict]) -> list[JsonDict]:
     baseline = _records_by_case_repeat(records, "cpu_tn_path_replay_float64")
     quantized = _records_by_case_repeat(records, "cpu_tn_path_replay_int8_quantized")
@@ -285,6 +501,7 @@ def tn_quantization_rows(records: list[JsonDict]) -> list[JsonDict]:
             continue
         family, qubits = _family_and_qubits(base)
         errors = _validation_errors(quant)
+        comparison_scope = "same_route_family_cpu_diagnostic_path_replay"
         rows.append(
             {
                 "schema_version": SCHEMA_VERSION,
@@ -295,21 +512,90 @@ def tn_quantization_rows(records: list[JsonDict]) -> list[JsonDict]:
                 "path_strategy": base.get("path_strategy"),
                 "unquantized_route_id": "cpu_tn_path_replay_float64",
                 "quantized_route_id": "cpu_tn_path_replay_int8_quantized",
+                "comparison_scope": comparison_scope,
+                "contraction_execution_target": quant.get("contraction_execution_target") or base.get("contraction_execution_target"),
+                "accelerator_kind": quant.get("accelerator_kind") or base.get("accelerator_kind"),
+                "unquantized_input_dtype": base.get("input_dtype"),
+                "unquantized_accumulator_dtype": base.get("accumulator_dtype"),
+                "quantized_input_dtype": quant.get("input_dtype"),
+                "quantized_accumulator_dtype": quant.get("accumulator_dtype"),
                 "unquantized_simulation_compute_time_s": base_compute,
                 "quantized_simulation_compute_time_s": quant_compute,
                 "compute_ratio_unquantized_over_quantized": base_compute / quant_compute,
+                "compute_slowdown_quantized_over_unquantized": quant_compute / base_compute,
                 "unquantized_total_wall_time_s": base_wall,
                 "quantized_total_wall_time_s": quant_wall,
                 "wall_ratio_unquantized_over_quantized": base_wall / quant_wall,
+                "wall_slowdown_quantized_over_unquantized": quant_wall / base_wall,
                 "quantization_max_abs_error": quant.get("quantization_max_abs_error"),
                 "quantization_l2_error": quant.get("quantization_l2_error"),
                 "max_abs_error_vs_reference": errors.get("max_abs_error"),
                 "l2_error_vs_reference": errors.get("l2_error"),
                 "validation_status": quant.get("validation_status"),
                 "quantized_replay_numeric_contract": quant.get("quantized_replay_numeric_contract"),
+                "interpretation": "CPU diagnostic replay; int8 operands are dequantized before complex128 einsum.",
             }
         )
     return rows
+
+
+def tn_quantization_speedup_summary_rows(rows: list[JsonDict]) -> list[JsonDict]:
+    summaries: list[JsonDict] = []
+    for (family, qubits, path_strategy), group in _group_rows(rows, "case_family", "n_qubits", "path_strategy").items():
+        unquant_compute = _numbers(group, "unquantized_simulation_compute_time_s")
+        quant_compute = _numbers(group, "quantized_simulation_compute_time_s")
+        compute_ratios = _numbers(group, "compute_ratio_unquantized_over_quantized")
+        unquant_wall = _numbers(group, "unquantized_total_wall_time_s")
+        quant_wall = _numbers(group, "quantized_total_wall_time_s")
+        wall_ratios = _numbers(group, "wall_ratio_unquantized_over_quantized")
+        compute_slowdowns = _numbers(group, "compute_slowdown_quantized_over_unquantized")
+        wall_slowdowns = _numbers(group, "wall_slowdown_quantized_over_unquantized")
+        if not (unquant_compute and quant_compute and compute_ratios):
+            continue
+        summaries.append(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "case_family": family,
+                "n_qubits": qubits,
+                "path_strategy": path_strategy,
+                "matched_repeat_count": len(group),
+                "unquantized_simulation_compute_time_median_s": statistics.median(unquant_compute),
+                "quantized_simulation_compute_time_median_s": statistics.median(quant_compute),
+                "compute_ratio_median_unquantized_over_quantized": statistics.median(compute_ratios),
+                "compute_slowdown_median_quantized_over_unquantized": statistics.median(compute_slowdowns) if compute_slowdowns else None,
+                "unquantized_total_wall_time_median_s": statistics.median(unquant_wall) if unquant_wall else None,
+                "quantized_total_wall_time_median_s": statistics.median(quant_wall) if quant_wall else None,
+                "wall_ratio_median_unquantized_over_quantized": statistics.median(wall_ratios) if wall_ratios else None,
+                "wall_slowdown_median_quantized_over_unquantized": statistics.median(wall_slowdowns) if wall_slowdowns else None,
+                "comparison_scope": _first_present(group, "comparison_scope"),
+            }
+        )
+    return sorted(summaries, key=lambda row: (_family_qubits_sort_key(row), str(row.get("path_strategy"))))
+
+
+def tn_quantization_error_summary_rows(rows: list[JsonDict]) -> list[JsonDict]:
+    summaries: list[JsonDict] = []
+    for (family, qubits, path_strategy), group in _group_rows(rows, "case_family", "n_qubits", "path_strategy").items():
+        max_errors = _numbers(group, "max_abs_error_vs_reference")
+        l2_errors = _numbers(group, "l2_error_vs_reference")
+        quant_max = _numbers(group, "quantization_max_abs_error")
+        quant_l2 = _numbers(group, "quantization_l2_error")
+        if not (max_errors or l2_errors or quant_max or quant_l2):
+            continue
+        summaries.append(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "case_family": family,
+                "n_qubits": qubits,
+                "path_strategy": path_strategy,
+                "matched_repeat_count": len(group),
+                "quantization_max_abs_error_median": _median_or_none(quant_max),
+                "quantization_l2_error_median": _median_or_none(quant_l2),
+                "max_abs_error_vs_reference_median": _median_or_none(max_errors),
+                "l2_error_vs_reference_median": _median_or_none(l2_errors),
+            }
+        )
+    return sorted(summaries, key=lambda row: (_family_qubits_sort_key(row), str(row.get("path_strategy"))))
 
 
 def upmem_boundary_rows(records: list[JsonDict]) -> list[JsonDict]:
@@ -319,6 +605,8 @@ def upmem_boundary_rows(records: list[JsonDict]) -> list[JsonDict]:
             continue
         family, qubits = _family_and_qubits(record)
         errors = _validation_errors(record)
+        task_count = _first_number(record, "task_count", "tn_task_count", "dpu_program_invocations")
+        upmem_task_count = _first_number(record, "upmem_task_count", "dpu_program_invocations")
         rows.append(
             {
                 "schema_version": SCHEMA_VERSION,
@@ -328,19 +616,36 @@ def upmem_boundary_rows(records: list[JsonDict]) -> list[JsonDict]:
                 "n_qubits": qubits,
                 "repeat_id": record.get("repeat_id"),
                 "route_id": record.get("route_id"),
+                "thesis_route_label": _upmem_thesis_label(record),
                 "quantization_mode": record.get("quantization_mode"),
+                "policy": record.get("policy") or "generic-only",
                 "status": record.get("status"),
                 "validation_status": record.get("validation_status"),
                 "contraction_execution_target": record.get("contraction_execution_target"),
+                "backend_family": record.get("execution_backend") or record.get("backend_family") or "upmem_sdk",
+                "accelerator_kind": record.get("accelerator_kind") or "upmem",
                 "upmem_execution_mode": record.get("upmem_execution_mode"),
                 "execution_backend": record.get("execution_backend"),
                 "cpu_fallback_used": bool(record.get("cpu_fallback_used", False)),
+                "cpu_fallback_task_count": _first_number(record, "cpu_fallback_task_count") or 0,
+                "task_count": task_count,
+                "upmem_task_count": upmem_task_count,
                 "upmem_program_executed": bool(record.get("upmem_program_executed", False)),
                 "dpu_program_invocations": record.get("dpu_program_invocations"),
+                "native_sdk_control_path": bool(record.get("native_sdk_control_path", False)),
+                "simplepim_api_used": bool(record.get("simplepim_api_used", False)),
                 "hardware_execution": bool(record.get("hardware_execution", False)),
+                "hardware_timing_available": bool(record.get("hardware_timing_available", False)),
                 "hardware_speedup_applicable": bool(record.get("hardware_speedup_applicable", False)),
                 "simulation_compute_time_s": record.get("simulation_compute_time_s"),
+                "total_simulator_time_s": record.get("total_simulator_time_s") or record.get("simulation_compute_time_s"),
                 "total_wall_time_s": record.get("total_wall_time_s"),
+                "input_dtype_on_dpu": record.get("input_dtype_on_dpu") or record.get("input_dtype"),
+                "accumulator_dtype_on_dpu": record.get("accumulator_dtype_on_dpu") or record.get("accumulator_dtype"),
+                "scaling_applied": record.get("scaling_applied"),
+                "actual_h2d_bytes": record.get("actual_h2d_bytes"),
+                "actual_d2h_bytes": record.get("actual_d2h_bytes"),
+                "actual_transfer_bytes": record.get("actual_transfer_bytes"),
                 "max_abs_error": errors.get("max_abs_error"),
                 "l2_error": errors.get("l2_error"),
                 "resource_skip_reason": record.get("resource_skip_reason"),
@@ -349,12 +654,40 @@ def upmem_boundary_rows(records: list[JsonDict]) -> list[JsonDict]:
     return rows
 
 
+def upmem_accuracy_summary_rows(rows: list[JsonDict]) -> list[JsonDict]:
+    summaries: list[JsonDict] = []
+    for (family, qubits, route_id, quantization_mode), group in _group_rows(rows, "case_family", "n_qubits", "route_id", "quantization_mode").items():
+        max_errors = _numbers(group, "max_abs_error")
+        l2_errors = _numbers(group, "l2_error")
+        supported = [row for row in group if _validation_ok(row)]
+        summaries.append(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "case_family": family,
+                "n_qubits": qubits,
+                "route_id": route_id,
+                "thesis_route_label": _first_present(group, "thesis_route_label"),
+                "quantization_mode": quantization_mode,
+                "row_count": len(group),
+                "supported_count": len(supported),
+                "unsupported_count": len(group) - len(supported),
+                "max_abs_error_median": _median_or_none(max_errors),
+                "l2_error_median": _median_or_none(l2_errors),
+                "cpu_fallback_rows": sum(1 for row in group if bool(row.get("cpu_fallback_used", False))),
+                "hardware_speedup_applicable_rows": sum(1 for row in group if bool(row.get("hardware_speedup_applicable", False))),
+            }
+        )
+    return sorted(summaries, key=lambda row: (_family_qubits_sort_key(row), str(row.get("quantization_mode"))))
+
+
 def write_plots(
     out_dir: Path,
-    cpu_gpu_rows: list[JsonDict],
-    tn_path_rows: list[JsonDict],
-    tn_quant_rows: list[JsonDict],
+    cpu_gpu_summary_rows: list[JsonDict],
+    tn_path_summary_rows: list[JsonDict],
+    tn_quant_speedup_rows: list[JsonDict],
+    tn_quant_error_rows: list[JsonDict],
     upmem_rows: list[JsonDict],
+    upmem_accuracy_rows: list[JsonDict],
 ) -> JsonDict:
     plots_dir = out_dir / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
@@ -363,10 +696,55 @@ def write_plots(
     except Exception as exc:
         return {"schema_version": SCHEMA_VERSION, "status": "skipped", "reason": "matplotlib_unavailable", "error": str(exc), "plots": []}
     entries = [
-        _plot_entry(plt, plots_dir / "full_state_cpu_gpu_speedup_by_qubits.png", "Full-state CPU/GPU speedup", lambda path: _plot_speedup(plt, path, cpu_gpu_rows)),
-        _plot_entry(plt, plots_dir / "tn_path_runtime_by_qubits.png", "TN route/path runtime", lambda path: _plot_tn_runtime(plt, path, tn_path_rows)),
-        _plot_entry(plt, plots_dir / "tn_quantization_error_by_qubits.png", "TN quantization error", lambda path: _plot_tn_quant_error(plt, path, tn_quant_rows)),
-        _plot_entry(plt, plots_dir / "upmem_boundary_status.png", "UPMEM SDK simulator boundary", lambda path: _plot_upmem_boundary(plt, path, upmem_rows)),
+        _plot_entry(
+            plt,
+            plots_dir / "full_state_cpu_gpu_runtime_by_circuit_size.png",
+            "Full-state CPU/GPU runtime",
+            "full_state_cpu_gpu_speedup_by_circuit_size.csv",
+            lambda path: _plot_full_state_runtime(plt, path, cpu_gpu_summary_rows),
+        ),
+        _plot_entry(
+            plt,
+            plots_dir / "full_state_cpu_gpu_speedup_by_circuit_size.png",
+            "Full-state CPU/GPU speedup",
+            "full_state_cpu_gpu_speedup_by_circuit_size.csv",
+            lambda path: _plot_speedup(plt, path, cpu_gpu_summary_rows),
+        ),
+        _plot_entry(
+            plt,
+            plots_dir / "tn_path_runtime_by_circuit_size.png",
+            "TN route/path runtime",
+            "tn_path_runtime_by_circuit_size.csv",
+            lambda path: _plot_tn_runtime(plt, path, tn_path_summary_rows),
+        ),
+        _plot_entry(
+            plt,
+            plots_dir / "tn_quantization_runtime_by_circuit_size.png",
+            "CPU diagnostic TN replay runtime",
+            "tn_quantization_speedup_by_circuit_size.csv",
+            lambda path: _plot_tn_quant_runtime(plt, path, tn_quant_speedup_rows),
+        ),
+        _plot_entry(
+            plt,
+            plots_dir / "tn_quantization_error_by_circuit_size.png",
+            "CPU diagnostic TN replay quantization error",
+            "tn_quantization_error_by_circuit_size.csv",
+            lambda path: _plot_tn_quant_error(plt, path, tn_quant_error_rows),
+        ),
+        _plot_entry(
+            plt,
+            plots_dir / "upmem_boundary_status.png",
+            "UPMEM SDK simulator boundary",
+            "upmem_boundary_quantization.csv",
+            lambda path: _plot_upmem_boundary(plt, path, upmem_rows),
+        ),
+        _plot_entry(
+            plt,
+            plots_dir / "upmem_accuracy_error_by_circuit_size.png",
+            "UPMEM SDK simulator accuracy",
+            "upmem_accuracy_by_circuit_size.csv",
+            lambda path: _plot_upmem_accuracy(plt, path, upmem_accuracy_rows),
+        ),
     ]
     return {
         "schema_version": SCHEMA_VERSION,
@@ -381,9 +759,14 @@ def benchmark_summary(
     title: str,
     records: list[JsonDict],
     cpu_gpu_rows: list[JsonDict],
+    cpu_gpu_summary_rows: list[JsonDict],
     tn_path_rows: list[JsonDict],
+    tn_path_summary_rows: list[JsonDict],
     tn_quant_rows: list[JsonDict],
+    tn_quant_speedup_rows: list[JsonDict],
+    tn_quant_error_rows: list[JsonDict],
     upmem_rows: list[JsonDict],
+    upmem_accuracy_rows: list[JsonDict],
     plot_manifest: JsonDict,
 ) -> str:
     routes = sorted({str(record.get("route_id")) for record in records})
@@ -400,15 +783,28 @@ def benchmark_summary(
         "## Tables",
         "",
         f"- Full-state CPU/GPU matched rows: {len(cpu_gpu_rows)}",
+        f"- Full-state CPU/GPU per-circuit-size rows: {len(cpu_gpu_summary_rows)}",
         f"- TN route/path rows: {len(tn_path_rows)}",
+        f"- TN route/path per-circuit-size rows: {len(tn_path_summary_rows)}",
         f"- TN quantization matched rows: {len(tn_quant_rows)}",
+        f"- TN quantization speedup per-circuit-size rows: {len(tn_quant_speedup_rows)}",
+        f"- TN quantization error per-circuit-size rows: {len(tn_quant_error_rows)}",
         f"- UPMEM boundary rows: {len(upmem_rows)}",
+        f"- UPMEM accuracy per-circuit-size rows: {len(upmem_accuracy_rows)}",
+        "",
+        "## Required Thesis Outputs",
+        "",
+        "- Full-state CPU/GPU runtime and speedup by circuit family and qubit size.",
+        "- Tensor-network route/path runtime by circuit family and qubit size.",
+        "- CPU diagnostic tensor-network replay runtime/error for float64 versus int8-dequantized complex128 replay.",
+        "- UPMEM SDK simulator supported/unsupported boundary and accuracy rows.",
         "",
         "## Claims Allowed",
         "",
         "- QuEST CPU vs QuEST GPU rows are direct full-state route comparisons when GPU rows are verified.",
         "- Quimb rows are serious CPU tensor-network evidence.",
-        "- CPU path replay rows are diagnostic path and quantization attribution evidence.",
+        "- CPU path replay rows are diagnostic path and quantization attribution evidence only.",
+        "- CPU quantized replay slowdown/speedup rows describe CPU diagnostic replay, not native int8 hardware.",
         "- UPMEM SDK simulator rows are strict code-path/boundary evidence only.",
         "",
         "## Claims Not Allowed",
@@ -416,6 +812,7 @@ def benchmark_summary(
         "- QuEST full-state GPU only: these rows are not GPU tensor-network evidence.",
         "- QuEST GPU full-state rows are not GPU tensor-network evidence.",
         "- CPU path replay rows are not serious external TN baselines.",
+        "- CPU quantized replay rows are not UPMEM or native int8 kernel performance evidence.",
         "- UPMEM SDK simulator timing is not hardware timing or hardware speedup.",
         "- No energy claim is made unless energy rows contain measured sensor data.",
         "",
@@ -476,15 +873,28 @@ def _family_and_qubits(record: JsonDict) -> tuple[str, int | None]:
 def _validation_errors(record: JsonDict) -> JsonDict:
     payload = record.get("validation_error_metrics")
     if isinstance(payload, dict):
-        return payload
+        result = dict(payload)
+        if result.get("max_abs_error") is None and record.get("max_abs_error") is not None:
+            result["max_abs_error"] = record.get("max_abs_error")
+        if result.get("l2_error") is None and record.get("l2_error") is not None:
+            result["l2_error"] = record.get("l2_error")
+        return result
     if isinstance(payload, str) and payload:
         try:
             parsed = json.loads(payload)
             if isinstance(parsed, dict):
+                if parsed.get("max_abs_error") is None and record.get("max_abs_error") is not None:
+                    parsed["max_abs_error"] = record.get("max_abs_error")
+                if parsed.get("l2_error") is None and record.get("l2_error") is not None:
+                    parsed["l2_error"] = record.get("l2_error")
                 return parsed
         except json.JSONDecodeError:
-            return {}
-    return {}
+            pass
+    return {
+        key: record.get(key)
+        for key in ("max_abs_error", "l2_error")
+        if record.get(key) is not None
+    }
 
 
 def _positive(value: Any) -> float | None:
@@ -502,6 +912,43 @@ def _int_or_none(value: Any) -> int | None:
         return None
 
 
+def _first_number(record: JsonDict, *fields: str) -> int | float | None:
+    for field in fields:
+        value = record.get(field)
+        if value is None or value == "":
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        return int(number) if number.is_integer() else number
+    return None
+
+
+def _thesis_route_label(record: JsonDict) -> str:
+    route_id = str(record.get("route_id") or "")
+    if route_id == "quimb_tn_exact":
+        return "Quimb TN exact"
+    if route_id == "quimb_tn_sliced_exact":
+        return "Quimb/cotengra sliced TN exact"
+    if route_id == "cpu_tn_path_replay_float64":
+        return "CPU diagnostic TN path replay float64"
+    if route_id == "cpu_tn_path_replay_int8_quantized":
+        return "CPU diagnostic TN path replay int8-dequantized"
+    if str(record.get("contraction_execution_target")) == "upmem":
+        return _upmem_thesis_label(record)
+    return route_id
+
+
+def _upmem_thesis_label(record: JsonDict) -> str:
+    quantization_mode = str(record.get("quantization_mode") or "not_applicable")
+    if quantization_mode == "none":
+        return "UPMEM SDK simulator generic float32/no quantization"
+    if quantization_mode == "per_task_input_quantize":
+        return "UPMEM SDK simulator generic int8 per-task quantized"
+    return f"UPMEM SDK simulator generic {quantization_mode}"
+
+
 def _write_csv(path: Path, rows: list[JsonDict], fields: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as handle:
@@ -515,42 +962,75 @@ def _write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(to_jsonable(payload), indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _plot_entry(plt: Any, path: Path, title: str, plotter: Any) -> JsonDict:
+def _plot_entry(plt: Any, path: Path, title: str, source_csv: str, plotter: Any) -> JsonDict:
     reason = plotter(path)
     if reason:
-        return {"plot": path.name, "title": title, "status": "skipped", "reason": reason}
-    return {"plot": path.name, "title": title, "status": "generated", "reason": None, "size_bytes": path.stat().st_size}
+        return {"plot": path.name, "title": title, "status": "skipped", "reason": reason, "source_csv": source_csv}
+    return {"plot": path.name, "title": title, "status": "generated", "reason": None, "source_csv": source_csv, "size_bytes": path.stat().st_size}
 
 
 def _plot_speedup(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
     if not rows:
         return "no_matched_cpu_gpu_rows"
-    grouped = _median_by_family_qubits(rows, "compute_speedup_cpu_over_gpu")
+    grouped = _points_by_family(rows, "compute_speedup_median_cpu_over_gpu")
     return _line_plot(plt, path, grouped, "Full-state CPU/GPU compute speedup", "CPU/GPU speedup")
 
 
+def _plot_full_state_runtime(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+    if not rows:
+        return "no_matched_cpu_gpu_rows"
+    grouped: dict[str, list[tuple[int, float]]] = {}
+    for row in rows:
+        family = str(row.get("case_family"))
+        qubits = _int_or_none(row.get("n_qubits"))
+        cpu = _positive(row.get("cpu_simulation_compute_time_median_s"))
+        gpu = _positive(row.get("gpu_simulation_compute_time_median_s"))
+        if qubits is None:
+            continue
+        if cpu is not None:
+            grouped.setdefault(f"{family} CPU", []).append((qubits, cpu))
+        if gpu is not None:
+            grouped.setdefault(f"{family} GPU", []).append((qubits, gpu))
+    return _line_plot(plt, path, grouped, "Full-state CPU/GPU compute runtime", "Median compute time (s)", log_y=True)
+
+
 def _plot_tn_runtime(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
-    selected = [row for row in rows if _positive(row.get("simulation_compute_time_s")) is not None]
+    selected = [row for row in rows if _positive(row.get("simulation_compute_time_median_s")) is not None]
     if not selected:
         return "no_tn_runtime_rows"
     grouped: dict[str, list[tuple[int, float]]] = {}
-    by_key: dict[tuple[str, int], list[float]] = {}
     for row in selected:
         qubits = _int_or_none(row.get("n_qubits"))
         if qubits is None:
             continue
-        label = str(row.get("route_id"))
-        by_key.setdefault((label, qubits), []).append(float(row["simulation_compute_time_s"]))
-    for (label, qubits), values in by_key.items():
-        grouped.setdefault(label, []).append((qubits, statistics.median(values)))
+        label = f"{row.get('case_family')} {row.get('route_id')}"
+        grouped.setdefault(label, []).append((qubits, float(row["simulation_compute_time_median_s"])))
     return _line_plot(plt, path, grouped, "Tensor-network route runtime", "Median compute time (s)", log_y=True)
+
+
+def _plot_tn_quant_runtime(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+    if not rows:
+        return "no_tn_quantization_rows"
+    grouped: dict[str, list[tuple[int, float]]] = {}
+    for row in rows:
+        qubits = _int_or_none(row.get("n_qubits"))
+        unquant = _positive(row.get("unquantized_simulation_compute_time_median_s"))
+        quant = _positive(row.get("quantized_simulation_compute_time_median_s"))
+        family = str(row.get("case_family"))
+        if qubits is None:
+            continue
+        if unquant is not None:
+            grouped.setdefault(f"{family} CPU float64 replay", []).append((qubits, unquant))
+        if quant is not None:
+            grouped.setdefault(f"{family} CPU int8-dequantized replay", []).append((qubits, quant))
+    return _line_plot(plt, path, grouped, "CPU diagnostic TN replay runtime", "Median CPU compute time (s)", log_y=True)
 
 
 def _plot_tn_quant_error(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
     if not rows:
         return "no_tn_quantization_rows"
-    grouped = _median_by_family_qubits(rows, "max_abs_error_vs_reference")
-    return _line_plot(plt, path, grouped, "TN quantized replay error", "Max abs error", log_y=True)
+    grouped = _points_by_family(rows, "max_abs_error_vs_reference_median")
+    return _line_plot(plt, path, grouped, "CPU diagnostic TN replay quantization error", "Max abs error", log_y=True)
 
 
 def _plot_upmem_boundary(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
@@ -568,6 +1048,66 @@ def _plot_upmem_boundary(plt: Any, path: Path, rows: list[JsonDict]) -> str | No
     fig.savefig(path)
     plt.close(fig)
     return None
+
+
+def _plot_upmem_accuracy(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+    selected = [row for row in rows if _positive(row.get("max_abs_error_median")) is not None]
+    if not selected:
+        return "no_upmem_accuracy_rows"
+    grouped = _points_by_family(selected, "max_abs_error_median")
+    return _line_plot(plt, path, grouped, "UPMEM SDK simulator max absolute error", "Max abs error", log_y=True)
+
+
+def _points_by_family(rows: list[JsonDict], field: str) -> dict[str, list[tuple[int, float]]]:
+    grouped: dict[str, list[tuple[int, float]]] = {}
+    for row in rows:
+        qubits = _int_or_none(row.get("n_qubits"))
+        value = _positive(row.get(field))
+        if qubits is None or value is None:
+            continue
+        grouped.setdefault(str(row.get("case_family")), []).append((qubits, value))
+    return grouped
+
+
+def _group_rows(rows: list[JsonDict], *fields: str) -> dict[tuple[Any, ...], list[JsonDict]]:
+    grouped: dict[tuple[Any, ...], list[JsonDict]] = {}
+    for row in rows:
+        key = tuple(row.get(field) for field in fields)
+        grouped.setdefault(key, []).append(row)
+    return grouped
+
+
+def _numbers(rows: list[JsonDict], field: str) -> list[float]:
+    values: list[float] = []
+    for row in rows:
+        value = _positive(row.get(field))
+        if value is not None:
+            values.append(value)
+    return values
+
+
+def _median_or_none(values: list[float]) -> float | None:
+    return statistics.median(values) if values else None
+
+
+def _first_present(rows: list[JsonDict], field: str) -> Any:
+    for row in rows:
+        value = row.get(field)
+        if value is not None and value != "":
+            return value
+    return None
+
+
+def _family_qubits_sort_key(row: JsonDict | tuple[Any, ...]) -> tuple[str, int, str]:
+    if isinstance(row, tuple):
+        family = str(row[0])
+        qubits = _int_or_none(row[1]) if len(row) > 1 else None
+        extra = str(row[2]) if len(row) > 2 else ""
+    else:
+        family = str(row.get("case_family"))
+        qubits = _int_or_none(row.get("n_qubits"))
+        extra = str(row.get("route_id") or row.get("path_strategy") or row.get("quantization_mode") or "")
+    return (family, qubits if qubits is not None else -1, extra)
 
 
 def _median_by_family_qubits(rows: list[JsonDict], field: str) -> dict[str, list[tuple[int, float]]]:

@@ -2379,6 +2379,8 @@ validation:
     assert upmem_record["native_sdk_control_path"] is True
     assert upmem_record["simplepim_api_used"] is False
     assert upmem_record["quantization_mode"] == "per_task_input_quantize"
+    assert upmem_record["upmem_task_count"] == upmem_record["task_count"]
+    assert upmem_record["cpu_fallback_task_count"] == 0
     assert upmem_record["dpu_program_invocations"] == upmem_record["task_count"]
     assert upmem_record["upmem_program_executed"] is True
     assert upmem_record["parallelism_mode"] == "sequential"
