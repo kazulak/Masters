@@ -5,10 +5,14 @@ BENCH := $(PY_ENV) $(PYTHON) -m quantum_bench.bench
 CPU_SUITE ?= configs/suites/cpu_evidence.yml
 GPU_SUITE ?= configs/suites/gpu_evidence.yml
 UPMEM_SIM_SUITE ?= configs/suites/upmem_sim_evidence.yml
+THESIS_FULL_STATE_SUITE ?= configs/suites/manual/thesis_full_state_cpu_gpu.yml
+THESIS_TN_QUIMB_SUITE ?= configs/suites/manual/thesis_cpu_tn_quimb.yml
+THESIS_TN_QUANT_SUITE ?= configs/suites/manual/thesis_tn_paths_quantization.yml
+THESIS_UPMEM_SUITE ?= configs/suites/manual/thesis_upmem_quantization_boundary.yml
 GPU_VERIFY ?= quest-hip
 CLEAN_RUNS ?= 0
 
-.PHONY: help build-quest-cpu doctor bench-cpu bench-gpu bench-upmem-sim thesis-benchmark thesis-report research-plan research-benchmarks research-report report-latest compare-latest clean-generated
+.PHONY: help build-quest-cpu doctor bench-cpu bench-gpu bench-upmem-sim thesis-benchmark thesis-results thesis-results-resume thesis-report research-plan research-benchmarks research-report report-latest compare-latest clean-generated
 
 help:
 	@printf '%s\n' \
@@ -19,6 +23,8 @@ help:
 		'  make bench-gpu          Verify QuEST HIP GPU and run GPU execution-only suite' \
 		'  make bench-upmem-sim    Check UPMEM SDK simulator and run strict UPMEM simulator suite' \
 		'  make thesis-benchmark   Run CPU + UPMEM simulator evidence and compare them' \
+		'  make thesis-results     Run thesis CPU/GPU + TN + UPMEM evidence and generate report' \
+		'  make thesis-results-resume FULL_STATE_RUN=...  Continue after CPU/GPU evidence exists' \
 		'  make thesis-report      Build thesis report from explicit THESIS_INPUTS evidence paths' \
 		'  make research-plan      Print research benchmark pack commands and checks' \
 		'  make research-benchmarks Create a lightweight research pack; set RUN_RESEARCH=1 for long runs' \
@@ -62,6 +68,53 @@ thesis-benchmark:
 	compare_out="runs/comparisons/thesis_benchmark/cpu_upmem/$$timestamp"; \
 	$(BENCH) compare-results --inputs "$$cpu_run" "$$upmem_run" --comparison-type thesis_benchmark_cpu_upmem --out "$$compare_out"; \
 	printf '%s\n' "CPU evidence: $$cpu_run" "UPMEM evidence: $$upmem_run" "CPU report: $$cpu_report" "UPMEM report: $$upmem_report" "Comparison: $$compare_out"
+
+thesis-results:
+	@set -e; \
+	timestamp=$$(date +%Y%m%d_%H%M%S); \
+	printf '%s\n' 'Running thesis full-state CPU/GPU evidence...'; \
+	$(BENCH) simulation-backend-probe --verify-gpu $(GPU_VERIFY); \
+	$(BENCH) simulation-backend-compare --suite $(THESIS_FULL_STATE_SUITE) --artifact-retention compact; \
+	full_state_run=$$(readlink -f runs/latest); \
+	printf '%s\n' "Full-state CPU/GPU evidence: $$full_state_run"; \
+	printf '%s\n' 'Running thesis CPU TN path/quantization evidence...'; \
+	$(BENCH) simulation-backend-compare --suite $(THESIS_TN_QUIMB_SUITE) --artifact-retention compact; \
+	tn_quimb_run=$$(readlink -f runs/latest); \
+	printf '%s\n' "Quimb CPU TN evidence: $$tn_quimb_run"; \
+	$(BENCH) simulation-backend-compare --suite $(THESIS_TN_QUANT_SUITE) --artifact-retention compact; \
+	tn_quant_run=$$(readlink -f runs/latest); \
+	printf '%s\n' "TN path/quantization diagnostic evidence: $$tn_quant_run"; \
+	printf '%s\n' 'Running thesis UPMEM SDK simulator boundary evidence...'; \
+	$(BENCH) upmem-mvp-benchmark --suite $(THESIS_UPMEM_SUITE) --policies generic-only --quantization-modes none,per_task_input_quantize --execute-external; \
+	upmem_run=$$(readlink -f runs/latest); \
+	printf '%s\n' "UPMEM SDK simulator evidence: $$upmem_run"; \
+	out_dir="runs/comparisons/thesis/$$timestamp"; \
+	$(PY_ENV) $(PYTHON) scripts/thesis_report.py --inputs "$$full_state_run" "$$tn_quimb_run" "$$tn_quant_run" "$$upmem_run" --out "$$out_dir"; \
+	printf '%s\n' "Thesis report: $$out_dir" "Plots: $$out_dir/plots"
+
+thesis-results-resume:
+	@if [ -z "$(FULL_STATE_RUN)" ]; then \
+		echo 'Set FULL_STATE_RUN=runs/evidence/thesis_full_state_cpu_gpu/simulation_backend_compare/<run_id>'; \
+		exit 2; \
+	fi
+	@set -e; \
+	timestamp=$$(date +%Y%m%d_%H%M%S); \
+	full_state_run=$$(readlink -f "$(FULL_STATE_RUN)"); \
+	printf '%s\n' "Reusing full-state CPU/GPU evidence: $$full_state_run"; \
+	printf '%s\n' 'Running thesis CPU TN path/quantization evidence...'; \
+	$(BENCH) simulation-backend-compare --suite $(THESIS_TN_QUIMB_SUITE) --artifact-retention compact; \
+	tn_quimb_run=$$(readlink -f runs/latest); \
+	printf '%s\n' "Quimb CPU TN evidence: $$tn_quimb_run"; \
+	$(BENCH) simulation-backend-compare --suite $(THESIS_TN_QUANT_SUITE) --artifact-retention compact; \
+	tn_quant_run=$$(readlink -f runs/latest); \
+	printf '%s\n' "TN path/quantization diagnostic evidence: $$tn_quant_run"; \
+	printf '%s\n' 'Running thesis UPMEM SDK simulator boundary evidence...'; \
+	$(BENCH) upmem-mvp-benchmark --suite $(THESIS_UPMEM_SUITE) --policies generic-only --quantization-modes none,per_task_input_quantize --execute-external; \
+	upmem_run=$$(readlink -f runs/latest); \
+	printf '%s\n' "UPMEM SDK simulator evidence: $$upmem_run"; \
+	out_dir="runs/comparisons/thesis/$$timestamp"; \
+	$(PY_ENV) $(PYTHON) scripts/thesis_report.py --inputs "$$full_state_run" "$$tn_quimb_run" "$$tn_quant_run" "$$upmem_run" --out "$$out_dir"; \
+	printf '%s\n' "Thesis report: $$out_dir" "Plots: $$out_dir/plots"
 
 thesis-report:
 	@if [ -z "$(THESIS_INPUTS)" ]; then \

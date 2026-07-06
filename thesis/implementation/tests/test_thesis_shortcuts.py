@@ -22,6 +22,8 @@ def test_makefile_shortcuts_are_defined() -> None:
         "bench-gpu",
         "bench-upmem-sim",
         "thesis-benchmark",
+        "thesis-results",
+        "thesis-results-resume",
         "thesis-report",
         "research-plan",
         "research-benchmarks",
@@ -33,6 +35,12 @@ def test_makefile_shortcuts_are_defined() -> None:
         assert f"{target}:" in text
     assert "bench-cpu: build-quest-cpu" in text
     assert "compare-results --inputs \"$$cpu_run\" \"$$upmem_run\"" in text
+    assert "THESIS_FULL_STATE_SUITE ?= configs/suites/manual/thesis_full_state_cpu_gpu.yml" in text
+    assert "THESIS_TN_QUIMB_SUITE ?= configs/suites/manual/thesis_cpu_tn_quimb.yml" in text
+    assert "THESIS_TN_QUANT_SUITE ?= configs/suites/manual/thesis_tn_paths_quantization.yml" in text
+    assert "THESIS_UPMEM_SUITE ?= configs/suites/manual/thesis_upmem_quantization_boundary.yml" in text
+    assert "scripts/thesis_report.py --inputs \"$$full_state_run\" \"$$tn_quimb_run\" \"$$tn_quant_run\" \"$$upmem_run\"" in text
+    assert "FULL_STATE_RUN=runs/evidence/thesis_full_state_cpu_gpu/simulation_backend_compare/<run_id>" in text
     assert "runs/comparisons/$$suite_id/report_run/$$timestamp" in text
     assert "report-run --input runs/latest --out" in text
     assert "runs/comparisons/$$suite_id/latest_single_run/$$timestamp" in text
@@ -50,6 +58,8 @@ def test_readme_documents_shortcut_targets() -> None:
         "make bench-gpu",
         "make bench-upmem-sim",
         "make thesis-benchmark",
+        "make thesis-results",
+        "make thesis-results-resume",
         "make thesis-report",
         "make research-plan",
         "make research-benchmarks",
@@ -84,6 +94,8 @@ def test_makefile_targets_parse_with_dry_run() -> None:
         "bench-gpu",
         "bench-upmem-sim",
         "thesis-benchmark",
+        "thesis-results",
+        "thesis-results-resume",
         "thesis-report",
         "research-plan",
         "research-benchmarks",
@@ -98,6 +110,9 @@ def test_makefile_targets_parse_with_dry_run() -> None:
         assert target != "bench-gpu" or "configs/suites/gpu_evidence.yml" in result.stdout
         assert target != "bench-upmem-sim" or "configs/suites/upmem_sim_evidence.yml" in result.stdout
         assert target != "thesis-benchmark" or "thesis_benchmark_cpu_upmem" in result.stdout
+        assert target != "thesis-results" or "configs/suites/manual/thesis_full_state_cpu_gpu.yml" in result.stdout
+        assert target != "thesis-results" or "scripts/thesis_report.py --inputs" in result.stdout
+        assert target != "thesis-results-resume" or "Set FULL_STATE_RUN=" in result.stdout
         assert target != "thesis-report" or "thesis_report.py --inputs" in result.stdout
         assert target != "research-plan" or "research_benchmark_pack.py plan" in result.stdout
         assert target != "research-benchmarks" or "research_benchmark_pack.py run" in result.stdout

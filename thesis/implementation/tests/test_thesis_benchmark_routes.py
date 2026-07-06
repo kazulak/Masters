@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 from pathlib import Path
 
@@ -7,6 +8,7 @@ import numpy as np
 
 from scripts import thesis_report
 from quantum_bench.bench.config import load_suite
+from quantum_bench.bench.simulation_backend_compare import _resource_guard_skip_reason
 from quantum_bench.core.jsonio import write_jsonl
 from quantum_bench.core.records import BenchmarkContext
 from quantum_bench.circuits import quest_compatible_circuit
@@ -21,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_thesis_manual_suites_load() -> None:
     for rel_path in (
         "configs/suites/manual/thesis_full_state_cpu_gpu.yml",
+        "configs/suites/manual/thesis_cpu_tn_quimb.yml",
         "configs/suites/manual/thesis_tn_paths_quantization.yml",
         "configs/suites/manual/thesis_upmem_quantization_boundary.yml",
     ):
@@ -28,6 +31,72 @@ def test_thesis_manual_suites_load() -> None:
         assert suite["metadata"]["manual_invocation_required"] is True
         assert suite["cases"]
         assert suite["route_policy"]["routes"]
+
+
+def test_thesis_manual_suites_cover_declared_size_targets() -> None:
+    cpu_gpu = load_suite(ROOT / "configs/suites/manual/thesis_full_state_cpu_gpu.yml")
+    tn_quimb = load_suite(ROOT / "configs/suites/manual/thesis_cpu_tn_quimb.yml")
+    tn_quant = load_suite(ROOT / "configs/suites/manual/thesis_tn_paths_quantization.yml")
+
+    assert _sizes_for_family(cpu_gpu, "quest_qrng") == {8, 10, 12, 14, 16, 18, 20}
+    assert _sizes_for_family(cpu_gpu, "quest_bv") == {8, 10, 12, 14, 16, 18, 20}
+    assert _sizes_for_family(tn_quimb, "quest_qrng") == {8, 10, 12, 14, 16, 18, 20}
+    assert _sizes_for_family(tn_quimb, "quest_bv") == {8, 10, 12, 14, 16, 18, 20}
+    assert _sizes_for_family(tn_quant, "quest_qrng") == {8, 10, 12, 14, 16, 18, 20}
+    assert _sizes_for_family(tn_quant, "quest_bv") == {8, 10, 12, 14, 16, 18, 20}
+    assert tn_quimb["metadata"]["max_qubits"] == 20
+    assert tn_quant["metadata"]["max_qubits"] == 20
+    assert tn_quimb["warmups"] == 0
+    assert tn_quant["warmups"] == 0
+    assert tn_quimb["repeats"] == 3
+    assert tn_quant["repeats"] == 1
+    assert tn_quimb["memory_guard_gib"] == 12
+    assert tn_quant["memory_guard_gib"] == 8
+    quest_reference = next(route for route in tn_quimb["_route_configs"] if route["id"] == "quest_cpu_full_state_exact")
+    assert quest_reference["options"]["max_output_qubits"] == 20
+    assert quest_reference["options"]["max_output_amplitudes"] == 1_048_576
+    quimb_route = next(route for route in tn_quimb["_route_configs"] if route["id"] == "quimb_tn_exact")
+    replay_route = next(route for route in tn_quant["_route_configs"] if route["id"] == "cpu_tn_path_replay_float64")
+    assert quimb_route["options"]["max_estimated_intermediate_bytes"] == 4_294_967_296
+    assert replay_route["options"]["max_estimated_intermediate_bytes"] == 1_073_741_824
+
+
+def test_thesis_tn_manual_suites_large_label_cases_build_taskgraphs() -> None:
+    suites = [
+        load_suite(ROOT / "configs/suites/manual/thesis_cpu_tn_quimb.yml"),
+        load_suite(ROOT / "configs/suites/manual/thesis_tn_paths_quantization.yml"),
+    ]
+
+    for suite in suites:
+        assert not any(case.get("case_skip_reason") == "internal_tensor_label_symbol_cap" for case in suite["cases"])
+        for case in suite["cases"]:
+            if case.get("case_skip_reason"):
+                continue
+            circuit = quest_compatible_circuit(case["circuit"]["name"], case["circuit"])
+            network = build_tensor_network(circuit)
+            graph = with_path_cost_summary(plan_task_graph_with_config(network, suite["planner"]))
+            assert graph.tasks
+
+
+def test_thesis_tn_suite_taskgraph_estimates_match_planner_and_pass_guards() -> None:
+    tn_quimb = load_suite(ROOT / "configs/suites/manual/thesis_cpu_tn_quimb.yml")
+    tn_quant = load_suite(ROOT / "configs/suites/manual/thesis_tn_paths_quantization.yml")
+    quimb_routes = {route["id"]: route for route in tn_quimb["_route_configs"]}
+    quant_routes = {route["id"]: route for route in tn_quant["_route_configs"]}
+
+    for case in tn_quimb["cases"]:
+        graph = _graph_for_case(case, tn_quimb)
+        assert graph.path_summary.largest_intermediate is not None
+        assert graph.path_summary.max_intermediate_bytes == graph.path_summary.largest_intermediate * 16
+        assert _resource_guard_skip_reason(quimb_routes["quimb_tn_exact"], graph) is None
+        assert _resource_guard_skip_reason(quimb_routes["quimb_tn_sliced_exact"], graph) is None
+
+    for case in tn_quant["cases"]:
+        graph = _graph_for_case(case, tn_quant)
+        assert graph.path_summary.largest_intermediate is not None
+        assert graph.path_summary.max_intermediate_bytes == graph.path_summary.largest_intermediate * 16
+        assert _resource_guard_skip_reason(quant_routes["cpu_tn_path_replay_float64"], graph) is None
+        assert _resource_guard_skip_reason(quant_routes["cpu_tn_path_replay_int8_quantized"], graph) is None
 
 
 def test_path_replay_routes_are_registered() -> None:
@@ -77,29 +146,93 @@ def test_path_replay_quantized_records_per_contraction_metadata(tmp_path: Path) 
 
 
 def test_thesis_report_uses_explicit_evidence_inputs(tmp_path: Path) -> None:
-    evidence = tmp_path / "runs" / "evidence" / "unit" / "route" / "run"
-    records = [
+    full_state_evidence = tmp_path / "runs" / "evidence" / "unit_full_state" / "route" / "run"
+    quimb_evidence = tmp_path / "runs" / "evidence" / "unit_quimb" / "route" / "run"
+    quant_evidence = tmp_path / "runs" / "evidence" / "unit_quant" / "route" / "run"
+    upmem_evidence = tmp_path / "runs" / "evidence" / "unit_upmem" / "route" / "run"
+    write_jsonl(full_state_evidence / "normalized_records.jsonl", [
         _record("quest_bv_8q_thesis_gpu", "quest_cpu_full_state_exact", 0, target="cpu", compute=8.0),
         _record("quest_bv_8q_thesis_gpu", "quest_gpu_full_state_exact", 0, target="gpu", compute=2.0),
+    ])
+    write_jsonl(quimb_evidence / "normalized_records.jsonl", [
+        _record("quest_bv_8q_thesis_tn", "quimb_tn_exact", 0, target="cpu", compute=1.5),
+        _record("quest_bv_8q_thesis_tn", "quimb_tn_sliced_exact", 0, target="cpu", compute=1.8),
+    ])
+    write_jsonl(quant_evidence / "normalized_records.jsonl", [
         _record("quest_bv_8q_thesis_tn", "cpu_tn_path_replay_float64", 0, target="cpu", compute=3.0),
         _record("quest_bv_8q_thesis_tn", "cpu_tn_path_replay_int8_quantized", 0, target="cpu", compute=2.5),
+    ])
+    write_jsonl(upmem_evidence / "normalized_records.jsonl", [
         _record("bv_4q_thesis_upmem", "upmem_tn_sdk_simulator_quantized", 0, target="upmem", compute=1.0),
-    ]
-    write_jsonl(evidence / "normalized_records.jsonl", records)
+    ])
     out = tmp_path / "runs" / "comparisons" / "thesis" / "unit"
 
-    exit_code = thesis_report.main(["--inputs", str(evidence), "--out", str(out)])
+    exit_code = thesis_report.main([
+        "--inputs",
+        str(full_state_evidence),
+        str(quimb_evidence),
+        str(quant_evidence),
+        str(upmem_evidence),
+        "--out",
+        str(out),
+    ])
 
     assert exit_code == 0
     assert (out / "full_state_cpu_gpu_by_circuit.csv").exists()
+    assert (out / "full_state_cpu_gpu_speedup_by_circuit_size.csv").exists()
     assert (out / "tn_path_comparison_by_circuit.csv").exists()
+    assert (out / "tn_path_runtime_by_circuit_size.csv").exists()
     assert (out / "tn_quantization_comparison.csv").exists()
+    assert (out / "tn_quantization_speedup_by_circuit_size.csv").exists()
+    assert (out / "tn_quantization_error_by_circuit_size.csv").exists()
     assert (out / "upmem_boundary_quantization.csv").exists()
+    assert (out / "upmem_accuracy_by_circuit_size.csv").exists()
     assert (out / "benchmark_summary.md").exists()
     manifest = json.loads((out / "thesis_report_manifest.json").read_text(encoding="utf-8"))
     assert manifest["artifact_kind"] == "thesis_comparison_report"
-    assert manifest["input_count"] == 1
-    assert "QuEST full-state GPU only" in (out / "benchmark_summary.md").read_text(encoding="utf-8")
+    assert manifest["input_count"] == 4
+    assert "full_state_cpu_gpu_speedup_by_circuit_size.csv" in manifest["outputs"]
+    assert "tn_quantization_speedup_by_circuit_size.csv" in manifest["outputs"]
+    plot_manifest = json.loads((out / "plot_manifest.json").read_text(encoding="utf-8"))
+    plot_names = {entry["plot"] for entry in plot_manifest["plots"]}
+    assert "full_state_cpu_gpu_speedup_by_circuit_size.png" in plot_names
+    assert "tn_quantization_runtime_by_circuit_size.png" in plot_names
+    assert "upmem_accuracy_error_by_circuit_size.png" in plot_names
+    with (out / "full_state_cpu_gpu_speedup_by_circuit_size.csv").open("r", encoding="utf-8", newline="") as handle:
+        summary_rows = list(csv.DictReader(handle))
+    assert summary_rows[0]["case_family"] == "quest_bv"
+    assert summary_rows[0]["n_qubits"] == "8"
+    assert summary_rows[0]["compute_speedup_median_cpu_over_gpu"] == "4.0"
+    with (out / "tn_quantization_comparison.csv").open("r", encoding="utf-8", newline="") as handle:
+        quant_rows = list(csv.DictReader(handle))
+    assert quant_rows[0]["comparison_scope"] == "same_route_family_cpu_diagnostic_path_replay"
+    assert quant_rows[0]["contraction_execution_target"] == "cpu"
+    assert quant_rows[0]["accelerator_kind"] == "none"
+    assert quant_rows[0]["quantized_input_dtype"] == "int8_split_real_imag"
+    assert quant_rows[0]["quantized_accumulator_dtype"] == "complex128"
+    assert quant_rows[0]["compute_slowdown_quantized_over_unquantized"] == "0.8333333333333334"
+    assert "CPU diagnostic replay" in quant_rows[0]["interpretation"]
+    with (out / "tn_path_comparison_by_circuit.csv").open("r", encoding="utf-8", newline="") as handle:
+        tn_rows = list(csv.DictReader(handle))
+    quant_tn_row = next(row for row in tn_rows if row["route_id"] == "cpu_tn_path_replay_int8_quantized")
+    assert quant_tn_row["thesis_route_label"] == "CPU diagnostic TN path replay int8-dequantized"
+    assert quant_tn_row["contraction_execution_target"] == "cpu"
+    assert quant_tn_row["max_abs_error"] == "0.02"
+    with (out / "upmem_boundary_quantization.csv").open("r", encoding="utf-8", newline="") as handle:
+        upmem_rows = list(csv.DictReader(handle))
+    assert upmem_rows[0]["thesis_route_label"] == "UPMEM SDK simulator generic float32/no quantization"
+    assert upmem_rows[0]["backend_family"] == "upmem_sdk"
+    assert upmem_rows[0]["accelerator_kind"] == "upmem"
+    assert upmem_rows[0]["policy"] == "generic-only"
+    assert upmem_rows[0]["cpu_fallback_task_count"] == "0"
+    assert upmem_rows[0]["upmem_task_count"] == "1"
+    assert upmem_rows[0]["hardware_timing_available"] == "False"
+    assert upmem_rows[0]["hardware_speedup_applicable"] == "False"
+    assert upmem_rows[0]["max_abs_error"] == "0.0"
+    summary = (out / "benchmark_summary.md").read_text(encoding="utf-8")
+    assert "QuEST full-state GPU only" in summary
+    assert "Full-state CPU/GPU runtime and speedup by circuit family and qubit size" in summary
+    assert "CPU quantized replay rows are not UPMEM or native int8 kernel performance evidence" in summary
 
 
 def _context(tmp_path: Path, route_id: str) -> BenchmarkContext:
@@ -114,6 +247,23 @@ def _context(tmp_path: Path, route_id: str) -> BenchmarkContext:
         timeout_s=None,
         memory_guard_gib=None,
     )
+
+
+def _sizes_for_family(suite: dict, family_prefix: str) -> set[int]:
+    sizes: set[int] = set()
+    for case in suite["cases"]:
+        case_id = str(case["case_id"])
+        if not case_id.startswith(family_prefix):
+            continue
+        circuit = case["circuit"]
+        sizes.add(int(circuit.get("n_qubits") or circuit.get("allocated_qubits")))
+    return sizes
+
+
+def _graph_for_case(case: dict, suite: dict):
+    circuit = quest_compatible_circuit(case["circuit"]["name"], case["circuit"])
+    network = build_tensor_network(circuit)
+    return with_path_cost_summary(plan_task_graph_with_config(network, suite["planner"]))
 
 
 def _record(case_id: str, route_id: str, repeat_id: int, *, target: str, compute: float) -> dict:

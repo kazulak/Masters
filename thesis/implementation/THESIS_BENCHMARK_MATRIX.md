@@ -172,12 +172,22 @@ Stop conditions for all sweeps:
 
 | Output | Required artifacts | Notes |
 |---|---|---|
-| CPU vs GPU runtime by circuit size | CSV, Markdown, plot if supported | First required 2E.47 output. |
-| CPU vs GPU speedup by circuit family and size | CSV, Markdown, plot if supported | Only same-case CPU/GPU rows; performance-tier compute speedup is the final speedup metric. |
-| CPU vs Quimb vs GPU runtime by circuit family | CSV, Markdown, plot | Algorithm/backend comparison. |
-| UPMEM supported/unsupported boundary table | CSV, Markdown | Include blocker reasons. |
-| UPMEM quantized accuracy/error table | CSV, Markdown | Simulator path evidence only. |
+| Full-state CPU vs GPU runtime by circuit family and size | `full_state_cpu_gpu_by_circuit.csv`, `full_state_cpu_gpu_speedup_by_circuit_size.csv`, plot | QuEST CPU/GPU only; GPU evidence must be run manually in a GPU-visible shell. |
+| Full-state CPU/GPU speedup by circuit family and size | `full_state_cpu_gpu_speedup_by_circuit_size.csv`, plot | Only same-case CPU/GPU rows; performance-tier compute speedup is the final speedup metric. |
+| TN path runtime by circuit family and size | `tn_path_comparison_by_circuit.csv`, `tn_path_runtime_by_circuit_size.csv`, plot | Quimb unsliced/sliced come from `thesis_cpu_tn_quimb.yml` as serious TN evidence; CPU path replay comes from `thesis_tn_paths_quantization.yml` as diagnostic attribution. |
+| TN quantization runtime/error by circuit family and size | `tn_quantization_comparison.csv`, `tn_quantization_speedup_by_circuit_size.csv`, `tn_quantization_error_by_circuit_size.csv`, plots | Float64 path replay versus per-contraction int8 replay; attribution only, not native acceleration. |
+| UPMEM supported/unsupported boundary table | `upmem_boundary_quantization.csv`, plot | Include blocker reasons. |
+| UPMEM quantized accuracy/error table | `upmem_accuracy_by_circuit_size.csv`, plot | Simulator path evidence only. |
 | Energy table | CSV, Markdown | Optional, only with real sensor data. |
+
+The current thesis report command is:
+
+```bash
+make thesis-report THESIS_INPUTS="runs/evidence/<cpu_gpu_run> runs/evidence/<quimb_tn_run> runs/evidence/<quantization_diagnostic_run> runs/evidence/<upmem_run>"
+```
+
+It reads explicit evidence paths and writes only derived report artifacts under
+`runs/comparisons/thesis/...`.
 
 ## Wave 2E.47 Implementation Plan
 

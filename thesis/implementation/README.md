@@ -113,16 +113,58 @@ This runs CPU evidence, regenerates a CPU report, runs strict UPMEM SDK
 simulator evidence, regenerates a UPMEM report, and writes a derived comparison
 under `runs/comparisons/thesis_benchmark/...`.
 
-Generate the thesis comparison report from explicit evidence paths:
+Run the full thesis benchmark workflow and generate plots:
+
+```bash
+make thesis-results
+```
+
+This runs the thesis full-state CPU/GPU suite, Quimb CPU TN suite, diagnostic
+CPU TN path/quantization suite, and UPMEM SDK simulator boundary suite. Each benchmark run is saved
+automatically under `runs/evidence/...`; the target captures those paths and
+writes derived CSV/Markdown/plots under `runs/comparisons/thesis/<timestamp>/`.
+The GPU thesis suite must be run manually in a GPU-visible shell when this
+Codex process cannot see `/dev/kfd` and `/dev/dri`.
+
+Regenerate the thesis comparison report from existing evidence paths:
 
 ```bash
 make thesis-report THESIS_INPUTS="runs/evidence/<suite>/<route>/<run_id> runs/evidence/<suite>/<route>/<run_id>"
 ```
 
-This does not run benchmarks and does not inspect `runs/latest`. It reads the
-provided evidence directories and writes derived CSV/Markdown/plots under
-`runs/comparisons/thesis/...`. The GPU thesis suite must be run manually in a
-GPU-visible shell when this Codex process cannot see `/dev/kfd` and `/dev/dri`.
+Use this only when the evidence already exists and you want a new report
+without rerunning benchmarks.
+
+`make thesis-results` expands to these commands:
+
+```bash
+# Full-state CPU/GPU, seven sizes from 8q to 20q.
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simulation-backend-probe --verify-gpu quest-hip
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simulation-backend-compare --suite configs/suites/manual/thesis_full_state_cpu_gpu.yml --artifact-retention compact
+
+# Serious CPU tensor-network evidence, seven target sizes.
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simulation-backend-compare --suite configs/suites/manual/thesis_cpu_tn_quimb.yml --artifact-retention compact
+
+# Diagnostic CPU tensor-network path and quantization attribution, seven target sizes.
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench simulation-backend-compare --suite configs/suites/manual/thesis_tn_paths_quantization.yml --artifact-retention compact
+
+# UPMEM SDK simulator boundary, no hardware speedup claim.
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-mvp-benchmark --suite configs/suites/manual/thesis_upmem_quantization_boundary.yml --policies generic-only --quantization-modes none,per_task_input_quantize --execute-external
+
+# Derived thesis tables and plots from the evidence paths produced above.
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python scripts/thesis_report.py --inputs "<captured_cpu_gpu_run>" "<captured_quimb_tn_run>" "<captured_quantization_diagnostic_run>" "<captured_upmem_run>" --out runs/comparisons/thesis/<timestamp>
+```
+
+The report produces CPU/GPU speedup plots, TN path runtime plots, TN
+quantization speedup/error plots, and UPMEM boundary plots. It does not create
+GPU evidence by itself; GPU evidence must come from a GPU-visible shell.
+
+If `make thesis-results` stops after printing a full-state CPU/GPU evidence
+path, resume without rerunning the GPU sweep:
+
+```bash
+make thesis-results-resume FULL_STATE_RUN=runs/evidence/thesis_full_state_cpu_gpu/simulation_backend_compare/<run_id>
+```
 
 Print the research benchmark pack plan:
 

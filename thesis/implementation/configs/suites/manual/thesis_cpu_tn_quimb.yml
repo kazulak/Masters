@@ -1,28 +1,26 @@
 schema_version: 2
-suite_id: thesis_tn_paths_quantization
+suite_id: thesis_cpu_tn_quimb
 
 metadata:
-  purpose: thesis_tensor_network_path_and_quantization_comparison
-  expected_runtime_class: manual_cpu_diagnostic_minutes
-  expected_memory_class: bounded_taskgraph_replay
-  intended_use: thesis_evidence_tn_path_quantization_diagnostic
+  purpose: thesis_external_cpu_tensor_network_comparison
+  expected_runtime_class: manual_cpu_minutes
+  expected_memory_class: bounded_tn_workstation
+  intended_use: thesis_evidence_external_cpu_tn
   deterministic_unitary_only: true
   manual_invocation_required: true
   validation_method: full_statevector
   max_qubits: 20
   notes: >
-    Thesis diagnostic CPU tensor-network suite for same-path replay and
-    per-contraction quantization attribution. This is not the serious external
-    CPU TN baseline; use thesis_cpu_tn_quimb.yml for Quimb unsliced/sliced
-    thesis evidence. Resource-heavy route/case pairs must be reported as
-    skipped before execution rather than allowed to trigger workstation OOM
-    kills.
+    Thesis CPU tensor-network suite. Quimb unsliced/sliced routes are the
+    serious CPU TN evidence. Internal TaskGraph/path replay routes are not
+    included here because they are diagnostic attribution routes, not serious
+    external TN baselines.
 
 defaults:
   warmups: 0
-  repeats: 1
+  repeats: 3
   timeout_s: 1200
-  memory_guard_gib: 8
+  memory_guard_gib: 12
   planner:
     engine: opt_einsum
     optimize: greedy
@@ -123,25 +121,29 @@ routes:
       max_output_amplitudes: 1048576
       max_output_bytes: 16777216
 
-  - id: cpu_tn_path_replay_float64
-    role: path_replay_baseline
-    benchmark_role: diagnostic_path_replay_baseline
+  - id: quimb_tn_exact
+    role: baseline
+    benchmark_role: serious_external_tn_baseline
     required: false
     options:
-      path_strategy: greedy
-      max_estimated_intermediate_bytes: 1073741824
-      resource_skip_reason: thesis_tn_diagnostic_replay_guard
-      allow_missing_estimate: false
+      optimize: greedy
+      max_estimated_intermediate_bytes: 4294967296
+      resource_skip_reason: thesis_tn_resource_guard
+      allow_missing_estimate: true
 
-  - id: cpu_tn_path_replay_int8_quantized
-    role: quantized_path_replay
-    benchmark_role: diagnostic_quantized_path_replay
+  - id: quimb_tn_sliced_exact
+    role: slicing_evidence
+    benchmark_role: explicit_slicing_evidence
     required: false
     options:
-      path_strategy: greedy
-      max_estimated_intermediate_bytes: 1073741824
-      resource_skip_reason: thesis_tn_diagnostic_replay_guard
-      allow_missing_estimate: false
+      methods: greedy
+      max_repeats: 1
+      slicing_strategy: target_slices
+      target_slices: 2
+      require_slicing: true
+      max_estimated_intermediate_bytes: 4294967296
+      resource_skip_reason: thesis_tn_resource_guard
+      allow_missing_estimate: true
 
 validation:
   reference_route: quest_cpu_full_state_exact
