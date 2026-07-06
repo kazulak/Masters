@@ -106,3 +106,18 @@ def test_route_probe_and_upmem_skip_reason() -> None:
     assert routes["upmem_tn_sdk_simulator_quantized"].identity.execution_mode == "sdk_simulator"
     assert routes["upmem_tn_sdk_simulator_quantized"].identity.output_contract == "final_tensor"
     assert routes["upmem_tn_sdk_simulator_quantized"].backend_family == "upmem_sdk"
+
+
+def test_parallelization_docs_link_upmem_multi_dpu_design() -> None:
+    roadmap = (ROOT / "docs" / "parallelization_roadmap.md").read_text(encoding="utf-8")
+    strategy = (ROOT / "docs" / "parallelization_implementation_strategy.md").read_text(encoding="utf-8")
+    design = (ROOT / "docs" / "upmem_multi_dpu_scheduling_design.md").read_text(encoding="utf-8")
+
+    assert "upmem_multi_dpu_scheduling_design.md" in roadmap
+    assert "upmem_multi_dpu_scheduling_design.md" in strategy
+    assert "upmem_parallelism_evidence_type" in design
+    assert "modeled_only" in design
+    assert "sdk_simulator_executed" in design
+    assert "hardware_executed" in design
+    assert "cpu_fallback_used=false" in design
+    assert "no hardware speedup claim from SDK simulator rows" in design

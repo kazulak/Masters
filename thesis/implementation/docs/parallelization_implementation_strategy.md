@@ -249,7 +249,8 @@ Current boundary:
 
 Design task-to-DPU assignment and reduction/synchronization metadata before
 implementing multi-DPU execution. Use current frontier analysis as modeled input
-only.
+only. The design contract is tracked in
+[upmem_multi_dpu_scheduling_design.md](upmem_multi_dpu_scheduling_design.md).
 
 Required evidence goals:
 
@@ -257,6 +258,11 @@ Required evidence goals:
 - DPU group IDs;
 - transfer and synchronization cost model;
 - strict no CPU contraction fallback invariant.
+
+The smallest safe implementation after the design is a modeled assignment
+report that emits `upmem_parallelism_evidence_type=modeled` and writes an
+assignment plan artifact, while leaving the existing sequential SDK simulator
+runtime unchanged.
 
 ### Future Stage - UPMEM Multi-DPU Prototype
 
