@@ -49,7 +49,7 @@ Parallelism evidence is intentionally split by execution family:
 | Internal hybrid slicing + frontier | `cpu_tn_hybrid_sliced_frontier_exact` executes diagnostic internal slice-aware frontier scheduling on tiny deterministic cases. | Diagnostic composability evidence; no performance/scaling claim yet. |
 | GPU full-state | `quest_gpu_full_state_exact` is verified full-state GPU execution when GPU verification passes. | Full-state GPU evidence, not GPU TN evidence. |
 | GPU tensor network | Feasibility-only candidates are reported by `simulation-backend-probe`. | No GPU TN benchmark rows until real TN GPU execution is verified. |
-| UPMEM/PIM parallelism | Strict UPMEM SDK simulator TaskGraph execution is sequential; frontier/multi-DPU work is future/model-only. | SDK simulator code-path evidence only; no hardware or PIM parallel speedup claim. |
+| UPMEM/PIM parallelism | Strict UPMEM SDK simulator TaskGraph execution is sequential; `upmem-multi-dpu-assignment` emits modeled DPU assignment plans. | Modeled assignment is not execution; SDK simulator code-path evidence is not hardware or PIM parallel speedup. |
 
 The detailed roadmap is [docs/parallelization_roadmap.md](docs/parallelization_roadmap.md).
 The GPU tensor-network feasibility gate is
@@ -64,6 +64,8 @@ Current UPMEM work is bounded and explicit:
 - Strict generic-only TaskGraph execution exists for small supported plans.
 - The SDK simulator path can run quantized int8/int32 and unquantized float32
   generic modes for attribution.
+- A modeled multi-DPU assignment report can map TaskGraph frontier waves to DPU
+  groups without executing those assignments.
 - CPU fallback is not allowed inside strict UPMEM runtime tensor production.
 
 Current limitation:

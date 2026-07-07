@@ -116,6 +116,9 @@ def test_parallelization_docs_link_upmem_multi_dpu_design() -> None:
     assert "upmem_multi_dpu_scheduling_design.md" in roadmap
     assert "upmem_multi_dpu_scheduling_design.md" in strategy
     assert "upmem_parallelism_evidence_type" in design
+    assert "upmem-multi-dpu-assignment" in strategy
+    assert "upmem-multi-dpu-assignment" in design
+    assert "modeled assignment report implemented" in roadmap
     assert "modeled_only" in design
     assert "sdk_simulator_executed" in design
     assert "hardware_executed" in design

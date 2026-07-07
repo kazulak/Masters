@@ -202,6 +202,16 @@ for the current slicing, frontier, hybrid, GPU TN, and UPMEM/PIM claim
 boundaries. GPU tensor-network support remains feasibility-only until a real
 GPU TN route executes tensor-network work on a GPU with no CPU fallback; see
 [docs/gpu_tn_feasibility.md](docs/gpu_tn_feasibility.md).
+UPMEM multi-DPU work currently has a modeled assignment command only:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-multi-dpu-assignment \
+  --suite configs/suites/upmem_sim_evidence.yml \
+  --dpu-groups 4
+```
+
+This writes assignment evidence under `runs/evidence/...`; it does not execute
+multi-DPU work or create hardware speedup evidence.
 
 Regenerate reports for the latest evidence run:
 

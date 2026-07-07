@@ -1,9 +1,9 @@
 # UPMEM Multi-DPU Scheduling Design
 
-This document defines the evidence contract and implementation boundary for a
-future UPMEM multi-DPU scheduler. It is a design artifact, not an execution
-claim. The current UPMEM route remains strict sequential SDK simulator
-execution.
+This document defines the evidence contract and implementation boundary for
+UPMEM multi-DPU scheduling. A modeled assignment report exists, but it is not an
+execution claim. The current UPMEM execution route remains strict sequential SDK
+simulator execution.
 
 ## Current Baseline
 
@@ -16,7 +16,7 @@ Implemented UPMEM evidence today:
 - SDK simulator rows are code-path and boundary evidence, not hardware timing
   or hardware speedup evidence.
 
-Current strict-path invariants:
+Current strict-path execution invariants:
 
 - `task_count > 0`
 - `upmem_task_count == task_count`
@@ -158,9 +158,9 @@ Any modeled or executed multi-DPU scheduler must prove:
 - CPU contraction fallback remains false;
 - simulator rows do not claim hardware timing or hardware speedup.
 
-## First Implementation Wave
+## Implemented Modeled Assignment Wave
 
-The smallest safe implementation after this design is:
+The first safe implementation is:
 
 **UPMEM modeled multi-DPU assignment report**
 

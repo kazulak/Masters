@@ -23,7 +23,9 @@ not yet implement production tensor-network parallel execution:
 - `cpu_tn_hybrid_sliced_frontier_exact` provides executed diagnostic internal
   slice-aware TaskGraph plus frontier scheduling evidence on tiny cases.
 - UPMEM strict TaskGraph runtime is sequential over tasks.
-- UPMEM frontier/wave parallelism is modeled and reported, not executed.
+- UPMEM frontier/wave parallelism is modeled and reported, including the
+  `upmem-multi-dpu-assignment` assignment-plan command; it is not executed
+  multi-DPU work.
 - QuEST GPU is a verified full-state GPU baseline, not a GPU tensor-network
   baseline.
 - UPMEM SDK simulator evidence proves strict SDK DPU code-path execution, not
@@ -151,7 +153,7 @@ evidence, and hardware evidence.
 | G3 | Compare CPU slicing vs frontier experimentally. | CPU TN slicing route and frontier prototype. | Matched validation; controlled CPU thread settings. | Comparison CSV/Markdown/plots. | Separates parallelism sources. | Oversubscription; unfair timing. | Implemented diagnostically; required for hybrid claims. |
 | G4 | Define slicing + frontier hybrid experiment goals. | CPU TN hybrid prototype. | Slice/frontier reconstruction; duplicate-work checks. | Hybrid mode table; per-component timing. | Shows composability of parallel modes. | Slicing cost changes and scheduler overhead. | Implemented diagnostically on tiny cases; not a serious baseline. |
 | G5 | Define GPU SOTA feasibility or NVIDIA cluster route goals. | Existing QuEST GPU full-state plus future GPU TN backend. | GPU verification; no CPU fallback; synchronization checks. | GPU capability/provenance table; `simulation-backend-probe` GPU TN feasibility section. | Separates full-state GPU and future GPU TN evidence. | Vendor stack availability; CUDA/ROCm mismatch. | Feasibility probe implemented; next step is candidate execution spike, not benchmark rows. |
-| G6 | Define UPMEM multi-DPU scheduling design goals. | UPMEM TaskGraph/runtime design. | Task assignment invariants; strict no CPU fallback. | DPU scheduling design; modeled/executed comparison fields. | Required before PIM parallelism claims. | Hardware/tooling, PID-Comm integration, reduction costs. | Design documented; required for PIM parallelism claims; optional for current thesis if limitations are documented. |
+| G6 | Define UPMEM multi-DPU scheduling design goals. | UPMEM TaskGraph/runtime design. | Task assignment invariants; strict no CPU fallback. | DPU scheduling design; modeled assignment report; modeled/executed comparison fields. | Required before PIM parallelism claims. | Hardware/tooling, PID-Comm integration, reduction costs. | Design and modeled assignment report implemented; executed multi-DPU remains future and optional for current thesis if limitations are documented. |
 | G7 | Define UPMEM multi-DPU prototype goals. | Future UPMEM hardware or simulator-supported multi-DPU path. | DPU invocation count; transfer/sync timing; final validation. | Hardware/simulator rows with DPU assignments. | First executed PIM parallelism evidence. | Hardware access and tooling reliability. | Hardware/tooling-dependent. |
 | G8 | Define thesis-ready combined comparison goals. | All verified routes only. | Report invariants; validation and timing scope checks. | Final matrix tables/plots. | Connects CPU, GPU, TN, and UPMEM evidence. | Methodology drift; mixed evidence types. | Final comparison goal only after relevant modes exist. |
 

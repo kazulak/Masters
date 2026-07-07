@@ -245,12 +245,17 @@ Current boundary:
 - the next implementation step is a minimal candidate execution spike outside
   benchmark-row emission.
 
-### Future Stage - UPMEM Multi-DPU Scheduling Design
+### 2E.59 - UPMEM Modeled Multi-DPU Assignment Report
 
-Design task-to-DPU assignment and reduction/synchronization metadata before
-implementing multi-DPU execution. Use current frontier analysis as modeled input
-only. The design contract is tracked in
+The design contract is tracked in
 [upmem_multi_dpu_scheduling_design.md](upmem_multi_dpu_scheduling_design.md).
+The first modeled implementation is now available as:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-multi-dpu-assignment \
+  --suite configs/suites/upmem_sim_evidence.yml \
+  --dpu-groups 4
+```
 
 Required evidence goals:
 
@@ -259,10 +264,9 @@ Required evidence goals:
 - transfer and synchronization cost model;
 - strict no CPU contraction fallback invariant.
 
-The smallest safe implementation after the design is a modeled assignment
-report that emits `upmem_parallelism_evidence_type=modeled` and writes an
-assignment plan artifact, while leaving the existing sequential SDK simulator
-runtime unchanged.
+This command emits `upmem_parallelism_evidence_type=modeled`, writes
+`upmem_multi_dpu_assignment_plan.json`, and leaves the existing sequential SDK
+simulator runtime unchanged. It is not executed multi-DPU evidence.
 
 ### Future Stage - UPMEM Multi-DPU Prototype
 
