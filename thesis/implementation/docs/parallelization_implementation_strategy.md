@@ -113,6 +113,16 @@ with modeled UPMEM assignment evidence. It is a reporting workflow only; it
 does not implement UPMEM multi-DPU execution. The comparison output includes
 `parallelism_mode_summary.*` and `parallelism_capability_matrix.*` artifacts.
 
+To include the executed UPMEM SDK simulator frontier prototype in that same
+comparison, run:
+
+```bash
+make parallelism-report PARALLELISM_INCLUDE_UPMEM_FRONTIER=1
+```
+
+That opt-in path requires the UPMEM SDK simulator to be available and still
+emits simulator evidence only.
+
 No fake speedup fields should be added. Any ratio must state its timing scope
 and denominator route. UPMEM SDK simulator timing may be reported only as SDK
 simulator timing.

@@ -43,9 +43,11 @@ def test_makefile_shortcuts_are_defined() -> None:
     assert "PARALLELISM_SLICING_FRONTIER_SUITE ?= configs/suites/diagnostics/cpu_slicing_vs_frontier_quick.yml" in text
     assert "PARALLELISM_HYBRID_SUITE ?= configs/suites/diagnostics/cpu_hybrid_quick.yml" in text
     assert "PARALLELISM_UPMEM_ASSIGNMENT_SUITE ?= configs/suites/upmem_sim_evidence.yml" in text
+    assert "PARALLELISM_INCLUDE_UPMEM_FRONTIER ?= 0" in text
     assert "scripts/thesis_report.py --inputs \"$$full_state_run\" \"$$tn_quimb_run\" \"$$tn_quant_run\" \"$$upmem_run\"" in text
     assert "upmem-multi-dpu-assignment --suite $(PARALLELISM_UPMEM_ASSIGNMENT_SUITE)" in text
-    assert "compare-results --inputs \"$$slicing_frontier_run\" \"$$hybrid_run\" \"$$upmem_assignment_run\"" in text
+    assert "upmem-taskgraph-frontier-runtime --case $(PARALLELISM_UPMEM_FRONTIER_CASE)" in text
+    assert "compare-results --inputs $$inputs" in text
     assert "FULL_STATE_RUN=runs/evidence/thesis_full_state_cpu_gpu/simulation_backend_compare/<run_id>" in text
     assert "runs/comparisons/$$suite_id/report_run/$$timestamp" in text
     assert "report-run --input runs/latest --out" in text
@@ -124,11 +126,23 @@ def test_makefile_targets_parse_with_dry_run() -> None:
         assert target != "thesis-report" or "thesis_report.py --inputs" in result.stdout
         assert target != "parallelism-report" or "cpu_slicing_vs_frontier_quick.yml" in result.stdout
         assert target != "parallelism-report" or "upmem-multi-dpu-assignment" in result.stdout
+        assert target != "parallelism-report" or "PARALLELISM_INCLUDE_UPMEM_FRONTIER" in (ROOT / "Makefile").read_text(encoding="utf-8")
         assert target != "parallelism-report" or "parallelism_evidence" in result.stdout
         assert target != "research-plan" or "research_benchmark_pack.py plan" in result.stdout
         assert target != "research-benchmarks" or "research_benchmark_pack.py run" in result.stdout
         assert target != "research-report" or "research_benchmark_pack.py report" in result.stdout
         assert "simulation_backend_compare_thesis_small.yml" not in result.stdout
+
+    opt_in = subprocess.run(
+        ["make", "-n", "parallelism-report", "PARALLELISM_INCLUDE_UPMEM_FRONTIER=1"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert opt_in.returncode == 0, opt_in.stderr
+    assert "upmem-taskgraph-frontier-runtime" in opt_in.stdout
+    assert "--frontier-worker-count 1" in opt_in.stdout
 
 
 def test_top_level_suite_family_is_canonical() -> None:

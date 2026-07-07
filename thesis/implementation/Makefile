@@ -13,6 +13,9 @@ PARALLELISM_SLICING_FRONTIER_SUITE ?= configs/suites/diagnostics/cpu_slicing_vs_
 PARALLELISM_HYBRID_SUITE ?= configs/suites/diagnostics/cpu_hybrid_quick.yml
 PARALLELISM_UPMEM_ASSIGNMENT_SUITE ?= configs/suites/upmem_sim_evidence.yml
 PARALLELISM_DPU_GROUPS ?= 4
+PARALLELISM_INCLUDE_UPMEM_FRONTIER ?= 0
+PARALLELISM_UPMEM_FRONTIER_CASE ?= bell_2q
+PARALLELISM_UPMEM_FRONTIER_QUANTIZATION ?= per_task_input_quantize
 GPU_VERIFY ?= quest-hip
 CLEAN_RUNS ?= 0
 
@@ -31,6 +34,7 @@ help:
 		'  make thesis-results-resume FULL_STATE_RUN=...  Continue after CPU/GPU evidence exists' \
 		'  make thesis-report      Build thesis report from explicit THESIS_INPUTS evidence paths' \
 		'  make parallelism-report Build current slicing/frontier/hybrid/modeled-UPMEM comparison' \
+		'  make parallelism-report PARALLELISM_INCLUDE_UPMEM_FRONTIER=1  Include executed UPMEM SDK simulator frontier row' \
 		'  make research-plan      Print research benchmark pack commands and checks' \
 		'  make research-benchmarks Create a lightweight research pack; set RUN_RESEARCH=1 for long runs' \
 		'  make research-report    Build a research pack from existing evidence' \
@@ -145,8 +149,16 @@ parallelism-report: build-quest-cpu
 	$(BENCH) upmem-multi-dpu-assignment --suite $(PARALLELISM_UPMEM_ASSIGNMENT_SUITE) --dpu-groups $(PARALLELISM_DPU_GROUPS); \
 	upmem_assignment_run=$$(readlink -f runs/latest); \
 	printf '%s\n' "UPMEM modeled assignment evidence: $$upmem_assignment_run"; \
+	inputs="$$slicing_frontier_run $$hybrid_run $$upmem_assignment_run"; \
+	if [ "$(PARALLELISM_INCLUDE_UPMEM_FRONTIER)" = "1" ]; then \
+		printf '%s\n' 'Running UPMEM SDK simulator frontier evidence...'; \
+		$(BENCH) upmem-taskgraph-frontier-runtime --case $(PARALLELISM_UPMEM_FRONTIER_CASE) --policy generic-only --quantization-mode $(PARALLELISM_UPMEM_FRONTIER_QUANTIZATION) --dpu-groups $(PARALLELISM_DPU_GROUPS) --frontier-worker-count 1 --execute-external; \
+		upmem_frontier_run=$$(readlink -f runs/latest); \
+		printf '%s\n' "UPMEM SDK simulator frontier evidence: $$upmem_frontier_run"; \
+		inputs="$$inputs $$upmem_frontier_run"; \
+	fi; \
 	out_dir="runs/comparisons/parallelism/current/$$timestamp"; \
-	$(BENCH) compare-results --inputs "$$slicing_frontier_run" "$$hybrid_run" "$$upmem_assignment_run" --comparison-type parallelism_evidence --out "$$out_dir"; \
+	$(BENCH) compare-results --inputs $$inputs --comparison-type parallelism_evidence --out "$$out_dir"; \
 	printf '%s\n' "Parallelism comparison: $$out_dir" "Summary: $$out_dir/parallelism_comparison_summary.md"
 
 research-plan:

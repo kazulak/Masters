@@ -257,6 +257,16 @@ writes derived comparison artifacts under `runs/comparisons/parallelism/...`.
 It does not execute UPMEM multi-DPU work and does not create hardware speedup
 evidence.
 
+To include the executed SDK simulator frontier prototype row in the same
+comparison, opt in explicitly:
+
+```bash
+make parallelism-report PARALLELISM_INCLUDE_UPMEM_FRONTIER=1
+```
+
+That run requires a working UPMEM SDK simulator path. The added UPMEM row is
+still SDK simulator evidence, not hardware multi-DPU evidence.
+
 Inspect normalized records:
 
 ```bash
