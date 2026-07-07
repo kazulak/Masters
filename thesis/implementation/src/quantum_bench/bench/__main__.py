@@ -58,6 +58,24 @@ def main() -> int:
     )
     upmem_runtime_parser.add_argument("--execute-external", action="store_true")
 
+    upmem_frontier_runtime_parser = sub.add_parser("upmem-taskgraph-frontier-runtime")
+    upmem_frontier_runtime_parser.add_argument("--case", default="bell_2q")
+    upmem_frontier_runtime_parser.add_argument("--n-qubits", type=int)
+    upmem_frontier_runtime_parser.add_argument("--policy", default="generic-only", choices=("generic-only", "dense-then-generic", "dense-only"))
+    upmem_frontier_runtime_parser.add_argument(
+        "--quantization-mode",
+        default="per_task_input_quantize",
+        choices=("per_task_input_quantize", "none", "persistent_network_quantized"),
+    )
+    upmem_frontier_runtime_parser.add_argument("--dpu-groups", type=int, default=2)
+    upmem_frontier_runtime_parser.add_argument("--frontier-worker-count", type=int, default=1)
+    upmem_frontier_runtime_parser.add_argument(
+        "--strategy",
+        default="frontier_round_robin_dpu_groups",
+        choices=("sequential_single_dpu", "frontier_round_robin_dpu_groups", "frontier_size_aware_dpu_groups"),
+    )
+    upmem_frontier_runtime_parser.add_argument("--execute-external", action="store_true")
+
     upmem_mvp_parser = sub.add_parser("upmem-mvp-benchmark")
     upmem_mvp_parser.add_argument("--suite", required=True, help="Suite path or preset name under configs/suites")
     upmem_mvp_parser.add_argument("--policies", default="generic-only,dense-then-generic")
@@ -312,6 +330,46 @@ def main() -> int:
                     "task_metrics": str(result.run_dir / "cases" / result.case_id / "upmem_taskgraph_task_metrics.jsonl"),
                     "status": result.status,
                     "reason": result.reason,
+                },
+                indent=2,
+            )
+        )
+        return 0
+    if args.command == "upmem-taskgraph-frontier-runtime":
+        from quantum_bench.bench.upmem_taskgraph_runtime import run_upmem_taskgraph_runtime
+
+        if not args.execute_external:
+            parser.error("upmem-taskgraph-frontier-runtime requires --execute-external for strict UPMEM SDK DPU execution")
+        if args.frontier_worker_count != 1:
+            parser.error("--frontier-worker-count > 1 is not implemented for the first SDK simulator frontier prototype")
+        if args.dpu_groups < 1:
+            parser.error("--dpu-groups must be >= 1")
+        if args.quantization_mode == "persistent_network_quantized":
+            parser.error("--quantization-mode persistent_network_quantized is not implemented for upmem-taskgraph-frontier-runtime")
+        if args.quantization_mode == "none" and args.policy != "generic-only":
+            parser.error("--quantization-mode none currently requires --policy generic-only")
+        result = run_upmem_taskgraph_runtime(
+            root_dir,
+            case=args.case,
+            n_qubits=args.n_qubits,
+            policy=args.policy,
+            quantization_mode=args.quantization_mode,
+            execute_external=args.execute_external,
+            schedule_mode="frontier",
+            frontier_worker_count=args.frontier_worker_count,
+            dpu_group_count=args.dpu_groups,
+            task_assignment_strategy=args.strategy,
+        )
+        print(
+            json.dumps(
+                {
+                    "run_dir": str(result.run_dir),
+                    "summary_path": str(result.summary_path),
+                    "task_metrics": str(result.run_dir / "cases" / result.case_id / "upmem_taskgraph_task_metrics.jsonl"),
+                    "status": result.status,
+                    "reason": result.reason,
+                    "frontier_worker_count": args.frontier_worker_count,
+                    "dpu_groups": args.dpu_groups,
                 },
                 indent=2,
             )

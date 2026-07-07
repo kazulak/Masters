@@ -391,3 +391,73 @@ def test_run_harness_writes_compare_results_compatible_summary(monkeypatch, tmp_
     assert records[0]["frontier_scheduler_enabled"] is False
     assert records[0]["modeled_parallelism_available"] is False
     assert comparison.record_count >= 1
+
+
+def test_frontier_runtime_records_sdk_simulator_parallelism_metadata(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("quantum_bench.targets.upmem.taskgraph_runtime.execute_generic_bridge", _fake_generic_execute_from_expected)
+
+    run = run_upmem_taskgraph_runtime(
+        tmp_path,
+        case="bell_2q",
+        policy="generic-only",
+        quantization_mode="per_task_input_quantize",
+        execute_external=True,
+        schedule_mode="frontier",
+        frontier_worker_count=1,
+        dpu_group_count=2,
+        task_assignment_strategy="frontier_round_robin_dpu_groups",
+    )
+    records = load_result_records([run.run_dir])
+    comparison = compare_results([run.run_dir], tmp_path / "frontier_comparison", comparison_type="parallelism_evidence")
+
+    assert run.status == "completed"
+    assert run.run_dir.parent == tmp_path / "runs" / "evidence" / "bell_2q" / "upmem_frontier_generic_int8"
+    assert run.summary["route_id"] == "upmem_tn_frontier_sdk_simulator"
+    assert run.summary["parallelism_mode"] == "frontier"
+    assert run.summary["parallelism_evidence_type"] == "executed"
+    assert run.summary["execution_plan_kind"] == "upmem_frontier_assignment_scheduler"
+    assert run.summary["frontier_scheduler_enabled"] is True
+    assert run.summary["frontier_worker_count"] == 1
+    assert run.summary["frontier_parallel_execution"] is False
+    assert run.summary["upmem_parallelism_mode"] == "frontier_multi_dpu"
+    assert run.summary["upmem_parallelism_evidence_type"] == "sdk_simulator_executed"
+    assert run.summary["dpu_group_count"] == 2
+    assert run.summary["assigned_task_count"] == run.summary["total_tasks"]
+    assert run.summary["executed_dpu_task_count"] == run.summary["executed_tasks"]
+    assert run.summary["dpu_program_invocations"] == run.summary["total_tasks"]
+    assert run.summary["dpu_assignment_validation_status"] == "passed"
+    assert run.summary["duplicate_contraction_check"] == "passed"
+    assert run.summary["missing_dependency_check"] == "passed"
+    assert run.summary["dependency_violation_detected"] is False
+    assert run.summary["hardware_execution"] is False
+    assert run.summary["hardware_speedup_applicable"] is False
+    assert run.summary["valid_primary_upmem_codepath_result"] is True
+
+    assert records
+    row = records[0]
+    assert row["route_id"] == "upmem_tn_frontier_sdk_simulator"
+    assert row["parallelism_mode"] == "frontier"
+    assert row["parallelism_evidence_type"] == "executed"
+    assert row["upmem_parallelism_evidence_type"] == "sdk_simulator_executed"
+    assert row["execution_plan_executed"] is True
+    assert row["frontier_scheduler_enabled"] is True
+    assert row["frontier_worker_count"] == 1
+    assert row["hardware_speedup_applicable"] is False
+
+    task_metrics_path = run.run_dir / "cases" / run.case_id / "upmem_taskgraph_task_metrics.jsonl"
+    task_metrics = [json.loads(line) for line in task_metrics_path.read_text(encoding="utf-8").splitlines()]
+    assert len(task_metrics) == run.summary["total_tasks"]
+    assert all("frontier_wave_index" in metric for metric in task_metrics)
+    assert all("dpu_group_id" in metric for metric in task_metrics)
+
+    assert (comparison.run_dir / "parallelism_mode_summary.csv").exists()
+    assert (comparison.run_dir / "parallelism_capability_matrix.csv").exists()
+    comparison_payload = json.loads(comparison.artifact_path.read_text(encoding="utf-8"))
+    capability = {
+        row["route_id"]: row
+        for row in comparison_payload["parallelism_capability_matrix"]
+    }
+    frontier_capability = capability["upmem_tn_frontier_sdk_simulator"]
+    assert frontier_capability["same_family_timing_group"] == "upmem_sdk"
+    assert frontier_capability["speedup_claim_allowed"] is False
+    assert frontier_capability["claim_boundary"] == "sdk_simulator_no_hardware_speedup"

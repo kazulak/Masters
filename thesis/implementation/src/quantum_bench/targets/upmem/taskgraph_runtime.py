@@ -20,7 +20,7 @@ from quantum_bench.targets.upmem.evidence import (
     UPMEM_EXECUTION_MODE_SDK_SIMULATOR,
 )
 from quantum_bench.targets.upmem.generic_bridge import execute_generic_bridge, write_generic_bridge_input_manifest
-from quantum_bench.tn.execution import live_tensor_bytes, order_final_tensor, release_dead_inputs, remaining_input_uses
+from quantum_bench.tn.execution import frontier_waves, live_tensor_bytes, order_final_tensor, release_dead_inputs, remaining_input_uses
 from quantum_bench.tn.network import TensorNetworkValue
 from quantum_bench.validation import validate
 
@@ -36,6 +36,7 @@ UPMEM_TASKGRAPH_QUANTIZATION_MODES = ("per_task_input_quantize", "none", "persis
 UpmemTaskGraphPolicy = Literal["generic-only", "dense-then-generic", "dense-only"]
 UpmemTaskGraphQuantizationMode = Literal["per_task_input_quantize", "none", "persistent_network_quantized"]
 UpmemTaskGraphStatus = Literal["completed", "unsupported", "failed", "validation_failed"]
+UpmemTaskGraphScheduleMode = Literal["sequential", "frontier"]
 
 CONTRACTION_EXECUTION_TARGET = CONTRACTION_EXECUTION_TARGET_UPMEM
 UPMEM_EXECUTION_MODE = UPMEM_EXECUTION_MODE_SDK_SIMULATOR
@@ -257,10 +258,22 @@ def execute_upmem_taskgraph_runtime(
     reference_output: np.ndarray | None = None,
     reference_kind: str = "cpu_exact_taskgraph_full_precision",
     env: Mapping[str, str] | None = None,
+    schedule_mode: UpmemTaskGraphScheduleMode = "sequential",
+    frontier_worker_count: int = 1,
+    dpu_group_count: int = 1,
+    task_assignment_strategy: str = "sequential_single_dpu",
 ) -> UpmemTaskGraphRuntimeResult:
     started = time.perf_counter()
     if policy not in UPMEM_TASKGRAPH_POLICIES:
         return _unsupported_result(case_id, policy, quantization_mode, "unsupported_policy", started)
+    if schedule_mode not in {"sequential", "frontier"}:
+        return _unsupported_result(case_id, policy, quantization_mode, f"unsupported_schedule_mode:{schedule_mode}", started)
+    if frontier_worker_count < 1:
+        return _unsupported_result(case_id, policy, quantization_mode, "frontier_worker_count_must_be_positive", started)
+    if dpu_group_count < 1:
+        return _unsupported_result(case_id, policy, quantization_mode, "dpu_group_count_must_be_positive", started)
+    if schedule_mode == "frontier" and frontier_worker_count > 1:
+        return _unsupported_result(case_id, policy, quantization_mode, "frontier_worker_count_gt_1_not_implemented", started)
     if quantization_mode not in {"per_task_input_quantize", "none"}:
         return _unsupported_result(case_id, policy, quantization_mode, f"unsupported_quantization_mode:{quantization_mode}", started)
     if quantization_mode == "none" and policy != "generic-only":
@@ -283,74 +296,189 @@ def execute_upmem_taskgraph_runtime(
     total_build_time_s = 0.0
     peak_live_bytes = live_tensor_bytes(tensors, live_ids)
     final_labels: tuple[int, ...] | None = None
+    scheduler_started = time.perf_counter()
+    schedule_waves = frontier_waves(graph) if schedule_mode == "frontier" else tuple((task,) for task in graph.tasks)
+    scheduler_overhead_s = time.perf_counter() - scheduler_started
+    frontier_widths = tuple(len(wave) for wave in schedule_waves)
+    max_frontier_width = max(frontier_widths, default=0)
+    mean_frontier_width = (sum(frontier_widths) / len(frontier_widths)) if frontier_widths else 0.0
+    task_indices = {task.id: index for index, task in enumerate(graph.tasks)}
+    completed_task_ids: set[str] = set()
+    executed_task_ids: set[str] = set()
+    dependency_violation_detected = False
+    missing_dependency_check = "passed"
+    duplicate_contraction_check = "passed"
 
-    for task_index, task in enumerate(graph.tasks):
-        task_started = time.perf_counter()
-        if not _inputs_available(task, tensors):
-            missing = [tensor_id for tensor_id in task.input_tensor_ids if tensor_id not in tensors]
-            return _stop_result(
+    for wave_index, wave in enumerate(schedule_waves):
+        for task in wave:
+            task_index = task_indices[task.id]
+            task_started = time.perf_counter()
+            if task.id in executed_task_ids:
+                duplicate_contraction_check = "failed"
+                return _stop_result(
+                    case_id=case_id,
+                    policy=policy,
+                    quantization_mode=quantization_mode,
+                    status="failed",
+                    reason="duplicate_contraction_detected",
+                    started=started,
+                    task_metrics=task_metrics
+                    + [
+                        _base_task_metric(
+                            case_id,
+                            task_index,
+                            task,
+                            policy,
+                            quantization_mode,
+                            status="failed",
+                            reason="duplicate_contraction_detected",
+                            task_started=task_started,
+                        )
+                    ],
+                    schedule_metadata=_schedule_metadata(
+                        schedule_mode=schedule_mode,
+                        frontier_worker_count=frontier_worker_count,
+                        dpu_group_count=dpu_group_count,
+                        task_assignment_strategy=task_assignment_strategy,
+                        frontier_widths=frontier_widths,
+                        scheduler_overhead_s=scheduler_overhead_s,
+                        executed_task_count=len(executed_task_ids),
+                        duplicate_contraction_check=duplicate_contraction_check,
+                        missing_dependency_check=missing_dependency_check,
+                        dependency_violation_detected=dependency_violation_detected,
+                    ),
+                )
+            missing_dependencies = [dependency for dependency in task.dependencies if dependency not in completed_task_ids]
+            if missing_dependencies:
+                dependency_violation_detected = True
+                missing_dependency_check = "failed"
+                return _stop_result(
+                    case_id=case_id,
+                    policy=policy,
+                    quantization_mode=quantization_mode,
+                    status="failed",
+                    reason="runtime_task_dependency_missing",
+                    started=started,
+                    task_metrics=task_metrics
+                    + [
+                        _base_task_metric(
+                            case_id,
+                            task_index,
+                            task,
+                            policy,
+                            quantization_mode,
+                            status="failed",
+                            reason=f"missing_dependencies:{','.join(missing_dependencies)}",
+                            task_started=task_started,
+                        )
+                    ],
+                    schedule_metadata=_schedule_metadata(
+                        schedule_mode=schedule_mode,
+                        frontier_worker_count=frontier_worker_count,
+                        dpu_group_count=dpu_group_count,
+                        task_assignment_strategy=task_assignment_strategy,
+                        frontier_widths=frontier_widths,
+                        scheduler_overhead_s=scheduler_overhead_s,
+                        executed_task_count=len(executed_task_ids),
+                        duplicate_contraction_check=duplicate_contraction_check,
+                        missing_dependency_check=missing_dependency_check,
+                        dependency_violation_detected=dependency_violation_detected,
+                    ),
+                )
+            if not _inputs_available(task, tensors):
+                missing = [tensor_id for tensor_id in task.input_tensor_ids if tensor_id not in tensors]
+                return _stop_result(
+                    case_id=case_id,
+                    policy=policy,
+                    quantization_mode=quantization_mode,
+                    status="unsupported",
+                    reason="runtime_input_tensor_missing",
+                    started=started,
+                    task_metrics=task_metrics
+                    + [
+                        _base_task_metric(
+                            case_id,
+                            task_index,
+                            task,
+                            policy,
+                            quantization_mode,
+                            status="unsupported",
+                            reason=f"missing:{','.join(missing)}",
+                            task_started=task_started,
+                        )
+                    ],
+                    schedule_metadata=_schedule_metadata(
+                        schedule_mode=schedule_mode,
+                        frontier_worker_count=frontier_worker_count,
+                        dpu_group_count=dpu_group_count,
+                        task_assignment_strategy=task_assignment_strategy,
+                        frontier_widths=frontier_widths,
+                        scheduler_overhead_s=scheduler_overhead_s,
+                        executed_task_count=len(executed_task_ids),
+                        duplicate_contraction_check=duplicate_contraction_check,
+                        missing_dependency_check=missing_dependency_check,
+                        dependency_violation_detected=dependency_violation_detected,
+                    ),
+                )
+
+            left_tensor = _tensor_value_for(task.input_tensor_ids[0], task, tensors, labels, side="left")
+            right_tensor = _tensor_value_for(task.input_tensor_ids[1], task, tensors, labels, side="right")
+            bridge_dir = bridge_root / f"wave_{wave_index:04d}" / f"task_{task_index:04d}" if schedule_mode == "frontier" else bridge_root / f"task_{task_index:04d}"
+            task_result = _execute_task_by_policy(
+                task=task,
+                task_index=task_index,
                 case_id=case_id,
+                left_tensor=left_tensor,
+                right_tensor=right_tensor,
+                bridge_dir=bridge_dir,
                 policy=policy,
                 quantization_mode=quantization_mode,
-                status="unsupported",
-                reason="runtime_input_tensor_missing",
-                started=started,
-                task_metrics=task_metrics
-                + [
-                    _base_task_metric(
-                        case_id,
-                        task_index,
-                        task,
-                        policy,
-                        quantization_mode,
-                        status="unsupported",
-                        reason=f"missing:{','.join(missing)}",
-                        task_started=task_started,
-                    )
-                ],
+                execute_external=execute_external,
+                env=env,
+                task_started=task_started,
             )
+            metric = task_result["metric"]
+            if schedule_mode == "frontier":
+                metric["frontier_wave_index"] = int(wave_index)
+                metric["dpu_group_id"] = _assigned_dpu_group(wave_index, task_index, dpu_group_count, task_assignment_strategy)
+            task_metrics.append(metric)
+            if task_result["status"] != "completed":
+                return _stop_result(
+                    case_id=case_id,
+                    policy=policy,
+                    quantization_mode=quantization_mode,
+                    status="unsupported" if task_result["status"] == "unsupported" else "failed",
+                    reason=str(task_result["reason"]),
+                    started=started,
+                    task_metrics=task_metrics,
+                    schedule_metadata=_schedule_metadata(
+                        schedule_mode=schedule_mode,
+                        frontier_worker_count=frontier_worker_count,
+                        dpu_group_count=dpu_group_count,
+                        task_assignment_strategy=task_assignment_strategy,
+                        frontier_widths=frontier_widths,
+                        scheduler_overhead_s=scheduler_overhead_s,
+                        executed_task_count=len(executed_task_ids),
+                        duplicate_contraction_check=duplicate_contraction_check,
+                        missing_dependency_check=missing_dependency_check,
+                        dependency_violation_detected=dependency_violation_detected,
+                    ),
+                )
 
-        left_tensor = _tensor_value_for(task.input_tensor_ids[0], task, tensors, labels, side="left")
-        right_tensor = _tensor_value_for(task.input_tensor_ids[1], task, tensors, labels, side="right")
-        bridge_dir = bridge_root / f"task_{task_index:04d}"
-        task_result = _execute_task_by_policy(
-            task=task,
-            task_index=task_index,
-            case_id=case_id,
-            left_tensor=left_tensor,
-            right_tensor=right_tensor,
-            bridge_dir=bridge_dir,
-            policy=policy,
-            quantization_mode=quantization_mode,
-            execute_external=execute_external,
-            env=env,
-            task_started=task_started,
-        )
-        metric = task_result["metric"]
-        task_metrics.append(metric)
-        if task_result["status"] != "completed":
-            return _stop_result(
-                case_id=case_id,
-                policy=policy,
-                quantization_mode=quantization_mode,
-                status="unsupported" if task_result["status"] == "unsupported" else "failed",
-                reason=str(task_result["reason"]),
-                started=started,
-                task_metrics=task_metrics,
-            )
-
-        output = np.asarray(task_result["output"])
-        tensors[task.output_tensor_id] = output
-        labels[task.output_tensor_id] = task.output_labels
-        live_ids.add(task.output_tensor_id)
-        final_labels = task.output_labels
-        release_dead_inputs(task.input_tensor_ids, task.output_tensor_id, final_tensor_id, tensors, labels, live_ids, remaining_uses)
-        peak_live_bytes = max(peak_live_bytes, live_tensor_bytes(tensors, live_ids))
-        kernel_family_counts[str(metric["selected_kernel_family"])] = kernel_family_counts.get(str(metric["selected_kernel_family"]), 0) + 1
-        backend_counts[str(metric["backend_id"])] = backend_counts.get(str(metric["backend_id"]), 0) + 1
-        total_bridge_time_s += float(metric.get("bridge_total_time_s", 0.0) or 0.0)
-        total_kernel_time_s += float(metric.get("kernel_time_s", 0.0) or 0.0)
-        total_build_time_s += float(metric.get("build_time_s", 0.0) or 0.0)
+            output = np.asarray(task_result["output"])
+            tensors[task.output_tensor_id] = output
+            labels[task.output_tensor_id] = task.output_labels
+            live_ids.add(task.output_tensor_id)
+            final_labels = task.output_labels
+            completed_task_ids.add(task.id)
+            executed_task_ids.add(task.id)
+            release_dead_inputs(task.input_tensor_ids, task.output_tensor_id, final_tensor_id, tensors, labels, live_ids, remaining_uses)
+            peak_live_bytes = max(peak_live_bytes, live_tensor_bytes(tensors, live_ids))
+            kernel_family_counts[str(metric["selected_kernel_family"])] = kernel_family_counts.get(str(metric["selected_kernel_family"]), 0) + 1
+            backend_counts[str(metric["backend_id"])] = backend_counts.get(str(metric["backend_id"]), 0) + 1
+            total_bridge_time_s += float(metric.get("bridge_total_time_s", 0.0) or 0.0)
+            total_kernel_time_s += float(metric.get("kernel_time_s", 0.0) or 0.0)
+            total_build_time_s += float(metric.get("build_time_s", 0.0) or 0.0)
 
     if final_tensor_id not in tensors or final_labels is None:
         return _stop_result(
@@ -385,6 +513,18 @@ def execute_upmem_taskgraph_runtime(
         total_kernel_time_s=total_kernel_time_s,
         total_build_time_s=total_build_time_s,
         peak_live_tensor_bytes=peak_live_bytes,
+        schedule_metadata=_schedule_metadata(
+            schedule_mode=schedule_mode,
+            frontier_worker_count=frontier_worker_count,
+            dpu_group_count=dpu_group_count,
+            task_assignment_strategy=task_assignment_strategy,
+            frontier_widths=frontier_widths,
+            scheduler_overhead_s=scheduler_overhead_s,
+            executed_task_count=len(executed_task_ids),
+            duplicate_contraction_check=duplicate_contraction_check,
+            missing_dependency_check=missing_dependency_check,
+            dependency_violation_detected=dependency_violation_detected,
+        ),
     )
     return UpmemTaskGraphRuntimeResult(
         schema_version=UPMEM_TASKGRAPH_RUNTIME_SCHEMA_VERSION,
@@ -1215,6 +1355,69 @@ def _base_task_metric(
     )
 
 
+def _assigned_dpu_group(wave_index: int, task_index: int, dpu_group_count: int, task_assignment_strategy: str) -> int:
+    if dpu_group_count <= 1:
+        return 0
+    if task_assignment_strategy == "sequential_single_dpu":
+        return 0
+    if task_assignment_strategy == "frontier_size_aware_dpu_groups":
+        return int(task_index % dpu_group_count)
+    return int((wave_index + task_index) % dpu_group_count)
+
+
+def _schedule_metadata(
+    *,
+    schedule_mode: str,
+    frontier_worker_count: int,
+    dpu_group_count: int,
+    task_assignment_strategy: str,
+    frontier_widths: tuple[int, ...],
+    scheduler_overhead_s: float,
+    executed_task_count: int,
+    duplicate_contraction_check: str,
+    missing_dependency_check: str,
+    dependency_violation_detected: bool,
+) -> JsonDict:
+    frontier_enabled = schedule_mode == "frontier"
+    assigned_task_count = int(sum(frontier_widths)) if frontier_enabled else None
+    return to_jsonable(
+        {
+            "parallelism_mode": "frontier" if frontier_enabled else "sequential",
+            "parallelism_evidence_type": "executed",
+            "execution_plan_kind": "upmem_frontier_assignment_scheduler" if frontier_enabled else "sequential_upmem_taskgraph",
+            "execution_plan_executed": True,
+            "frontier_scheduler_enabled": frontier_enabled,
+            "frontier_parallel_execution": bool(frontier_enabled and frontier_worker_count > 1 and any(width > 1 for width in frontier_widths)),
+            "frontier_worker_count": int(frontier_worker_count) if frontier_enabled else None,
+            "frontier_wave_count": len(frontier_widths) if frontier_enabled else None,
+            "max_frontier_width": max(frontier_widths, default=0) if frontier_enabled else None,
+            "mean_frontier_width": (sum(frontier_widths) / len(frontier_widths)) if frontier_enabled and frontier_widths else None,
+            "frontier_executed_task_count": int(executed_task_count) if frontier_enabled else None,
+            "frontier_executed_parallel_task_count": 0 if frontier_enabled else None,
+            "executed_parallel_task_count": 0 if frontier_enabled else None,
+            "scheduler_overhead_s": float(scheduler_overhead_s) if frontier_enabled else None,
+            "duplicate_contraction_check": duplicate_contraction_check if frontier_enabled else None,
+            "missing_dependency_check": missing_dependency_check if frontier_enabled else None,
+            "dependency_violation_detected": bool(dependency_violation_detected) if frontier_enabled else False,
+            "upmem_parallelism_mode": "frontier_multi_dpu" if frontier_enabled else "sequential",
+            "upmem_parallelism_evidence_type": "sdk_simulator_executed" if frontier_enabled else None,
+            "task_assignment_strategy": task_assignment_strategy if frontier_enabled else None,
+            "dpu_group_count": int(dpu_group_count) if frontier_enabled else None,
+            "assigned_task_count": assigned_task_count,
+            "executed_dpu_task_count": int(executed_task_count) if frontier_enabled else None,
+            "unassigned_task_count": max(0, int(assigned_task_count or 0) - int(executed_task_count)) if frontier_enabled else None,
+            "dpu_assignment_validation_status": (
+                "passed"
+                if frontier_enabled and duplicate_contraction_check == "passed" and missing_dependency_check == "passed" and not dependency_violation_detected
+                else ("failed" if frontier_enabled else None)
+            ),
+            "hardware_execution": False,
+            "hardware_timing_available": False,
+            "hardware_speedup_applicable": False,
+        }
+    )
+
+
 def _summary_payload(
     *,
     case_id: str,
@@ -1234,7 +1437,20 @@ def _summary_payload(
     total_kernel_time_s: float,
     total_build_time_s: float,
     peak_live_tensor_bytes: int,
+    schedule_metadata: JsonDict | None = None,
 ) -> JsonDict:
+    schedule_metadata = schedule_metadata or _schedule_metadata(
+        schedule_mode="sequential",
+        frontier_worker_count=1,
+        dpu_group_count=1,
+        task_assignment_strategy="sequential_single_dpu",
+        frontier_widths=tuple(1 for _ in task_metrics),
+        scheduler_overhead_s=0.0,
+        executed_task_count=sum(1 for row in task_metrics if row.get("status") == "completed"),
+        duplicate_contraction_check="passed",
+        missing_dependency_check="passed",
+        dependency_violation_detected=False,
+    )
     executed_tasks = sum(1 for row in task_metrics if row.get("status") == "completed")
     dpu_invocations = sum(1 for row in task_metrics if row.get("dpu_program_executed") is True)
     total_actual_h2d_bytes = sum(int(row.get("actual_h2d_bytes", 0) or 0) for row in task_metrics)
@@ -1328,6 +1544,7 @@ def _summary_payload(
             "peak_live_tensor_bytes": int(peak_live_tensor_bytes),
             "task_metrics_artifact": None,
             "final_tensor_artifact": None,
+            **schedule_metadata,
         }
     )
 
@@ -1359,6 +1576,7 @@ def _stop_result(
     reason: str,
     started: float,
     task_metrics: list[JsonDict],
+    schedule_metadata: JsonDict | None = None,
 ) -> UpmemTaskGraphRuntimeResult:
     summary = _summary_payload(
         case_id=case_id,
@@ -1378,6 +1596,7 @@ def _stop_result(
         total_kernel_time_s=sum(float(row.get("kernel_time_s", 0.0) or 0.0) for row in task_metrics),
         total_build_time_s=sum(float(row.get("build_time_s", 0.0) or 0.0) for row in task_metrics),
         peak_live_tensor_bytes=0,
+        schedule_metadata=schedule_metadata,
     )
     return UpmemTaskGraphRuntimeResult(
         schema_version=UPMEM_TASKGRAPH_RUNTIME_SCHEMA_VERSION,

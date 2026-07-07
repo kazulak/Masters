@@ -26,6 +26,7 @@ from quantum_bench.targets.upmem.taskgraph_runtime import (
     UPMEM_TASKGRAPH_QUANTIZATION_MODES,
     UpmemTaskGraphPolicy,
     UpmemTaskGraphQuantizationMode,
+    UpmemTaskGraphScheduleMode,
     build_generic_taskgraph_reference,
     execute_upmem_taskgraph_runtime,
 )
@@ -64,23 +65,30 @@ def run_upmem_taskgraph_runtime(
     quantization_mode: UpmemTaskGraphQuantizationMode = "per_task_input_quantize",
     execute_external: bool = False,
     env: Mapping[str, str] | None = None,
+    schedule_mode: UpmemTaskGraphScheduleMode = "sequential",
+    frontier_worker_count: int = 1,
+    dpu_group_count: int = 1,
+    task_assignment_strategy: str = "sequential_single_dpu",
 ) -> UpmemTaskGraphRuntimeRunResult:
-    route_label = _upmem_taskgraph_route_label(policy, quantization_mode)
+    route_label = _upmem_taskgraph_route_label(policy, quantization_mode, schedule_mode=schedule_mode)
+    route_id = "upmem_tn_frontier_sdk_simulator" if schedule_mode == "frontier" else "upmem_tn_runtime"
+    run_kind = "upmem_taskgraph_frontier_runtime" if schedule_mode == "frontier" else "upmem_taskgraph_runtime"
+    execution_scope = "frontier_taskgraph" if schedule_mode == "frontier" else "full_taskgraph"
     run_dir = create_run_dir(root_dir, case, artifact_kind=EVIDENCE_ARTIFACT_KIND, route_label=route_label)
     summary_path = run_dir / "upmem_taskgraph_runtime_summary.json"
     final_tensor_rel = Path("raw") / "final_tensor.npy"
     write_run_manifest(
         run_dir,
-        run_kind="upmem_taskgraph_runtime",
+        run_kind=run_kind,
         suite_id=case,
         suite_path=None,
         artifact_kind=EVIDENCE_ARTIFACT_KIND,
         route_label=route_label,
-        route_id="upmem_tn_runtime",
+        route_id=route_id,
         backend_id="upmem_sdk_simulator_generic_loop",
         policy=policy,
         quantization_mode=quantization_mode,
-        execution_scope="full_taskgraph",
+        execution_scope=execution_scope,
         evidence_type="sdk_simulator",
         normalized_records="normalized_records.jsonl",
         summary="upmem_taskgraph_runtime_summary.json",
@@ -170,6 +178,10 @@ def run_upmem_taskgraph_runtime(
             reference_output=primary_reference_output,
             reference_kind=primary_reference_kind,
             env=env,
+            schedule_mode=schedule_mode,
+            frontier_worker_count=frontier_worker_count,
+            dpu_group_count=dpu_group_count,
+            task_assignment_strategy=task_assignment_strategy,
         )
         write_jsonl(run_dir / task_metrics_rel, list(runtime.task_metrics))
         final_tensor_artifact: str | None = None
@@ -184,8 +196,8 @@ def run_upmem_taskgraph_runtime(
                 "run_schema_version": UPMEM_TASKGRAPH_RUNTIME_RUN_SCHEMA_VERSION,
                 "case_id": case_id,
                 "circuit": circuit_payload,
-                "route_id": "upmem_tn_runtime",
-                "execution_scope": "full_taskgraph",
+                "route_id": route_id,
+                "execution_scope": execution_scope,
                 "task_metrics_artifact": task_metrics_rel.as_posix(),
                 "final_tensor_artifact": final_tensor_artifact,
                 "reference": {
@@ -222,6 +234,7 @@ def run_upmem_taskgraph_runtime(
                     "full_precision_reference_is_task_validation_target": primary_reference_kind == "cpu_exact_taskgraph_full_precision",
                     "whole_network_quantized_at_initialization": False,
                     "normal_benchmark_routes_unchanged": True,
+                    "upmem_frontier_runtime_prototype": schedule_mode == "frontier",
                 },
             }
         )
@@ -241,7 +254,13 @@ def run_upmem_taskgraph_runtime(
         return _result(run_dir, summary_path, summary)
 
 
-def _upmem_taskgraph_route_label(policy: str, quantization_mode: str) -> str:
+def _upmem_taskgraph_route_label(policy: str, quantization_mode: str, *, schedule_mode: str = "sequential") -> str:
+    if schedule_mode == "frontier":
+        if policy == "generic-only" and quantization_mode == "per_task_input_quantize":
+            return "upmem_frontier_generic_int8"
+        if policy == "generic-only" and quantization_mode == "none":
+            return "upmem_frontier_generic_float32"
+        return "upmem_frontier_taskgraph_runtime"
     if policy == "generic-only" and quantization_mode == "none":
         return "upmem_generic_float32"
     if policy == "generic-only" and quantization_mode == "per_task_input_quantize":

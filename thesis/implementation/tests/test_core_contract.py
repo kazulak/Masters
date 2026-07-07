@@ -131,4 +131,5 @@ def test_parallelization_docs_link_upmem_multi_dpu_design() -> None:
     assert "dpu_alloc(1" in readiness
     assert "frontier_worker_count=1" in readiness
     assert "hardware_speedup_applicable=false" in readiness
-    assert "do not treat this as implemented yet" in readiness
+    assert "Status: implemented for `frontier_worker_count=1`" in readiness
+    assert "not hardware multi-DPU execution" in readiness

@@ -16,11 +16,17 @@ Implemented today:
 - The assignment report emits `upmem_parallelism_evidence_type=modeled`,
   `execution_plan_executed=false`, `dpu_program_invocations=0`, and
   `hardware_speedup_applicable=false`.
+- `upmem-taskgraph-frontier-runtime` executes the same strict per-task UPMEM
+  SDK simulator path by dependency-safe frontier waves with
+  `frontier_worker_count=1`. It emits
+  `upmem_parallelism_evidence_type=sdk_simulator_executed`, not hardware
+  evidence.
 
 Not implemented today:
 
 - no runtime consumes `upmem_multi_dpu_assignment_plan.json` to execute tasks;
-- no UPMEM task runner accepts `dpu_group_id` or `dpu_group_count`;
+- no UPMEM task runner uses `dpu_group_id` or `dpu_group_count` to control real
+  DPU allocation;
 - no native generic host distributes one contraction across multiple DPUs;
 - no PID-Comm or inter-DPU communication path is integrated;
 - no UPMEM hardware execution or hardware timing exists.
@@ -44,12 +50,16 @@ Current sequential runtime evidence:
   plans and normalized modeled records, but intentionally reports zero DPU
   invocations.
 
-## Smallest Safe Next Prototype
+## Smallest Safe Prototype
 
-The next implementation should not jump directly to hardware multi-DPU claims.
-The smallest safe prototype is:
+The implementation should not jump directly to hardware multi-DPU claims. The
+smallest safe prototype is:
 
 **UPMEM SDK simulator frontier-scheduled execution over assignment plans**
+
+Status: implemented for `frontier_worker_count=1` through
+`upmem-taskgraph-frontier-runtime`. This is an executed SDK simulator scheduler
+prototype, not hardware multi-DPU execution.
 
 Purpose:
 
@@ -88,12 +98,13 @@ The prototype should execute by frontier waves:
 8. Validate the final output against the same reference contract as the
    sequential UPMEM route.
 
-Worker count should be explicit:
+Worker count is explicit:
 
-- `frontier_worker_count=1` proves sequential-frontier semantics first.
-- `frontier_worker_count>1` may execute multiple independent task invocations
-  concurrently on the host, but must still be labeled SDK simulator execution,
-  not hardware speedup.
+- `frontier_worker_count=1` proves sequential-frontier semantics and is
+  implemented.
+- `frontier_worker_count>1` remains future work. If implemented, it may execute
+  multiple independent task invocations concurrently on the host, but must still
+  be labeled SDK simulator execution, not hardware speedup.
 
 ## Required Normalized Metadata
 
@@ -166,9 +177,10 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.be
   --suite configs/suites/upmem_sim_evidence.yml \
   --dpu-groups 2
 
-# Future command name only; do not treat this as implemented yet.
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-taskgraph-frontier-runtime \
-  --suite configs/suites/diagnostics/upmem_frontier_quick.yml \
+  --case bell_2q \
+  --policy generic-only \
+  --quantization-mode per_task_input_quantize \
   --dpu-groups 2 \
   --frontier-worker-count 1 \
   --execute-external
@@ -189,6 +201,11 @@ Until that exists, simulator frontier scheduling is only SDK simulator evidence.
 
 ## Next Milestone Recommendation
 
-Ask for explicit confirmation before implementation. If confirmed, implement the
-SDK simulator frontier-scheduled prototype with `frontier_worker_count=1` first.
-Only after that passes validation should `frontier_worker_count>1` be enabled.
+Do not jump directly to hardware. The next implementation should either:
+
+1. add a tiny suite-level harness around `upmem-taskgraph-frontier-runtime`, or
+2. enable `frontier_worker_count>1` for isolated host-side SDK simulator task
+   invocations, with unique bridge directories and strict dependency checks.
+
+Only after that passes validation should true hardware multi-DPU allocation be
+considered.

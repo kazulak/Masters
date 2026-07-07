@@ -70,6 +70,10 @@ Route-specific guidance:
 - UPMEM multi-DPU execution must remain under the unified UPMEM runtime concept.
   Do not introduce `upmem_l1`, `upmem_l2`, or `upmem_l3` top-level benchmark
   routes.
+- `upmem-taskgraph-frontier-runtime` is the first executed SDK simulator
+  frontier prototype. It reuses the strict per-task UPMEM SDK simulator path
+  with `frontier_worker_count=1` and records simulator evidence only. It is not
+  hardware multi-DPU execution.
 
 ## Artifact And Reporting Strategy
 

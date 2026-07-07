@@ -202,7 +202,8 @@ for the current slicing, frontier, hybrid, GPU TN, and UPMEM/PIM claim
 boundaries. GPU tensor-network support remains feasibility-only until a real
 GPU TN route executes tensor-network work on a GPU with no CPU fallback; see
 [docs/gpu_tn_feasibility.md](docs/gpu_tn_feasibility.md).
-UPMEM multi-DPU work currently has a modeled assignment command only:
+UPMEM multi-DPU work currently has modeled assignment evidence plus a
+frontier-scheduled SDK simulator prototype. The modeled assignment command is:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-multi-dpu-assignment \
@@ -212,6 +213,22 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.be
 
 This writes assignment evidence under `runs/evidence/...`; it does not execute
 multi-DPU work or create hardware speedup evidence.
+
+The first executed SDK simulator frontier prototype is:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-taskgraph-frontier-runtime \
+  --case bell_2q \
+  --policy generic-only \
+  --quantization-mode per_task_input_quantize \
+  --dpu-groups 2 \
+  --frontier-worker-count 1 \
+  --execute-external
+```
+
+This executes ready TaskGraph contractions wave-by-wave through the existing
+strict UPMEM SDK simulator path. It is still simulator evidence, not hardware
+multi-DPU execution or hardware speedup evidence.
 
 Regenerate reports for the latest evidence run:
 

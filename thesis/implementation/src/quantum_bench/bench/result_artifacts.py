@@ -783,11 +783,36 @@ def _upmem_taskgraph_runtime_record(
     record.update(
         {
             "execution_model": "tensor_network",
+            "parallelism_mode": summary.get("parallelism_mode"),
+            "parallelism_evidence_type": summary.get("parallelism_evidence_type"),
+            "execution_plan_kind": summary.get("execution_plan_kind"),
+            "execution_plan_executed": summary.get("execution_plan_executed"),
+            "frontier_scheduler_enabled": summary.get("frontier_scheduler_enabled"),
+            "frontier_parallel_execution": summary.get("frontier_parallel_execution"),
+            "frontier_worker_count": summary.get("frontier_worker_count"),
+            "frontier_wave_count": summary.get("frontier_wave_count"),
+            "max_frontier_width": summary.get("max_frontier_width"),
+            "mean_frontier_width": summary.get("mean_frontier_width"),
+            "frontier_executed_task_count": summary.get("frontier_executed_task_count"),
+            "frontier_executed_parallel_task_count": summary.get("frontier_executed_parallel_task_count"),
+            "executed_parallel_task_count": summary.get("executed_parallel_task_count"),
+            "scheduler_overhead_s": summary.get("scheduler_overhead_s"),
+            "duplicate_contraction_check": summary.get("duplicate_contraction_check"),
+            "missing_dependency_check": summary.get("missing_dependency_check"),
+            "dependency_violation_detected": summary.get("dependency_violation_detected", False),
             "output_kind": "final_tensor",
             "comparison_output_kind": "final_tensor",
             "contraction_execution_target": summary.get("contraction_execution_target", "upmem"),
             "upmem_execution_mode": summary.get("upmem_execution_mode", "sdk_simulator"),
             "execution_backend": summary.get("execution_backend", "upmem_sdk"),
+            "upmem_parallelism_mode": summary.get("upmem_parallelism_mode"),
+            "upmem_parallelism_evidence_type": summary.get("upmem_parallelism_evidence_type"),
+            "task_assignment_strategy": summary.get("task_assignment_strategy"),
+            "dpu_group_count": summary.get("dpu_group_count"),
+            "assigned_task_count": summary.get("assigned_task_count"),
+            "executed_dpu_task_count": summary.get("executed_dpu_task_count"),
+            "unassigned_task_count": summary.get("unassigned_task_count"),
+            "dpu_assignment_validation_status": summary.get("dpu_assignment_validation_status"),
             "hardware_execution": summary.get("hardware_execution", False),
             "hardware_timing_available": summary.get("hardware_timing_available", False),
             "hardware_speedup_applicable": summary.get("hardware_speedup_applicable", False),
@@ -1462,6 +1487,7 @@ def _parallelism_speedup_claim_allowed(route_id: str, hardware_execution: bool, 
         "upmem_multi_dpu_assignment_model",
         "upmem_tn_sdk_simulator_quantized",
         "upmem_tn_runtime",
+        "upmem_tn_frontier_sdk_simulator",
     }:
         return False
     return bool(hardware_execution and hardware_speedup_applicable)
@@ -1490,7 +1516,7 @@ def _same_family_timing_group(route_id: str) -> str:
         return "quimb_external_tn"
     if route_id in {"cpu_tn_einsum_exact", "cpu_tn_frontier_exact", "cpu_tn_hybrid_sliced_frontier_exact"}:
         return "internal_taskgraph"
-    if route_id in {"upmem_tn_sdk_simulator_quantized", "upmem_tn_runtime", "upmem_multi_dpu_assignment_model"}:
+    if route_id in {"upmem_tn_sdk_simulator_quantized", "upmem_tn_runtime", "upmem_tn_frontier_sdk_simulator", "upmem_multi_dpu_assignment_model"}:
         return "upmem_sdk"
     return "not_applicable"
 
@@ -1505,6 +1531,7 @@ def _parallelism_interpretation_note(route_id: str) -> str:
         "cpu_tn_hybrid_sliced_frontier_exact": "diagnostic_internal_hybrid_slice_frontier_no_speedup_claim",
         "upmem_tn_sdk_simulator_quantized": "strict_sequential_upmem_sdk_simulator_no_hardware_speedup",
         "upmem_tn_runtime": "strict_sequential_upmem_sdk_simulator_no_hardware_speedup",
+        "upmem_tn_frontier_sdk_simulator": "frontier_scheduled_upmem_sdk_simulator_no_hardware_speedup",
         "upmem_multi_dpu_assignment_model": "modeled_upmem_assignment_not_executed",
     }
     return notes.get(route_id, "not_applicable")
