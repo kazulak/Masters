@@ -195,11 +195,14 @@ Tests:
 
 Only after modeled scheduling is validated:
 
-1. Add SDK simulator multi-DPU execution if the SDK path can represent assigned
-   DPU groups.
-2. Add reduction/synchronization metadata.
-3. Add hardware execution only when real UPMEM hardware is available.
-4. Introduce PID-Comm only when communication or synchronization is the actual
+1. Follow
+   [upmem_multi_dpu_prototype_readiness.md](upmem_multi_dpu_prototype_readiness.md)
+   before adding any executed scheduler.
+2. Add SDK simulator frontier-scheduled execution if the SDK path can represent
+   assigned DPU groups without CPU contraction fallback.
+3. Add reduction/synchronization metadata.
+4. Add hardware execution only when real UPMEM hardware is available.
+5. Introduce PID-Comm only when communication or synchronization is the actual
    bottleneck being tested.
 
 ## Non-Goals

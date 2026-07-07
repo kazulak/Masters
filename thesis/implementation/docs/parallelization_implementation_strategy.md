@@ -274,6 +274,13 @@ Implement only after the design can be tested against real SDK/hardware
 constraints. Hardware timing and speedup claims require real hardware execution;
 SDK simulator timing remains simulator evidence.
 
+The readiness gate is
+[upmem_multi_dpu_prototype_readiness.md](upmem_multi_dpu_prototype_readiness.md).
+It records the current boundary: the generic native host allocates one DPU per
+task invocation, and the next safe implementation is an SDK simulator
+frontier-scheduled prototype that consumes assignment plans without claiming
+hardware execution.
+
 ## Deferred Decisions
 
 The following choices should be made during the implementation wave that first
