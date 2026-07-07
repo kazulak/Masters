@@ -174,6 +174,15 @@ Behavior:
   `upmem_parallelism_evidence_type=modeled`;
 - run no DPU programs beyond the existing sequential baseline.
 
+CLI sketch:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench upmem-multi-dpu-assignment \
+  --suite configs/suites/upmem_sim_evidence.yml \
+  --dpu-groups 4 \
+  --strategy frontier_round_robin_dpu_groups
+```
+
 Tests:
 
 - assignment covers every supported task exactly once;

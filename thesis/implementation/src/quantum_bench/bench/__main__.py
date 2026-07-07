@@ -72,6 +72,15 @@ def main() -> int:
     upmem_generic_feasibility_parser.add_argument("--quantization-modes", default="none,per_task_input_quantize")
     upmem_generic_feasibility_parser.add_argument("--max-taskgraph-tasks", type=int, default=128)
 
+    upmem_multi_dpu_parser = sub.add_parser("upmem-multi-dpu-assignment")
+    upmem_multi_dpu_parser.add_argument("--suite", required=True, help="Suite path or preset name under configs/suites")
+    upmem_multi_dpu_parser.add_argument("--dpu-groups", type=int, default=4)
+    upmem_multi_dpu_parser.add_argument(
+        "--strategy",
+        default="frontier_round_robin_dpu_groups",
+        choices=("sequential_single_dpu", "frontier_round_robin_dpu_groups", "frontier_size_aware_dpu_groups"),
+    )
+
     simulation_compare_parser = sub.add_parser("simulation-backend-compare")
     simulation_compare_parser.add_argument("--suite", required=True, help="Suite path or preset name under configs/suites")
     simulation_compare_parser.add_argument("--artifact-retention", default="compact", choices=("full", "compact", "summary-only"))
@@ -355,6 +364,31 @@ def main() -> int:
                     "summary_path": str(result.summary_path),
                     "status": result.status,
                     "row_count": result.row_count,
+                },
+                indent=2,
+            )
+        )
+        return 0
+    if args.command == "upmem-multi-dpu-assignment":
+        from quantum_bench.bench.upmem_multi_dpu_assignment import run_upmem_multi_dpu_assignment
+
+        try:
+            result = run_upmem_multi_dpu_assignment(
+                root_dir,
+                suite_path=suite_path(args.suite, root_dir),
+                dpu_group_count=args.dpu_groups,
+                strategy=args.strategy,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(
+            json.dumps(
+                {
+                    "run_dir": str(result.run_dir),
+                    "artifact": str(result.plan_path),
+                    "normalized_records": str(result.normalized_records_path),
+                    "status": result.status,
+                    "case_count": result.case_count,
                 },
                 indent=2,
             )
