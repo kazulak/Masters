@@ -9,10 +9,14 @@ THESIS_FULL_STATE_SUITE ?= configs/suites/manual/thesis_full_state_cpu_gpu.yml
 THESIS_TN_QUIMB_SUITE ?= configs/suites/manual/thesis_cpu_tn_quimb.yml
 THESIS_TN_QUANT_SUITE ?= configs/suites/manual/thesis_tn_paths_quantization.yml
 THESIS_UPMEM_SUITE ?= configs/suites/manual/thesis_upmem_quantization_boundary.yml
+PARALLELISM_SLICING_FRONTIER_SUITE ?= configs/suites/diagnostics/cpu_slicing_vs_frontier_quick.yml
+PARALLELISM_HYBRID_SUITE ?= configs/suites/diagnostics/cpu_hybrid_quick.yml
+PARALLELISM_UPMEM_ASSIGNMENT_SUITE ?= configs/suites/upmem_sim_evidence.yml
+PARALLELISM_DPU_GROUPS ?= 4
 GPU_VERIFY ?= quest-hip
 CLEAN_RUNS ?= 0
 
-.PHONY: help build-quest-cpu doctor bench-cpu bench-gpu bench-upmem-sim thesis-benchmark thesis-results thesis-results-resume thesis-report research-plan research-benchmarks research-report report-latest compare-latest clean-generated
+.PHONY: help build-quest-cpu doctor bench-cpu bench-gpu bench-upmem-sim thesis-benchmark thesis-results thesis-results-resume thesis-report parallelism-report research-plan research-benchmarks research-report report-latest compare-latest clean-generated
 
 help:
 	@printf '%s\n' \
@@ -26,6 +30,7 @@ help:
 		'  make thesis-results     Run thesis CPU/GPU + TN + UPMEM evidence and generate report' \
 		'  make thesis-results-resume FULL_STATE_RUN=...  Continue after CPU/GPU evidence exists' \
 		'  make thesis-report      Build thesis report from explicit THESIS_INPUTS evidence paths' \
+		'  make parallelism-report Build current slicing/frontier/hybrid/modeled-UPMEM comparison' \
 		'  make research-plan      Print research benchmark pack commands and checks' \
 		'  make research-benchmarks Create a lightweight research pack; set RUN_RESEARCH=1 for long runs' \
 		'  make research-report    Build a research pack from existing evidence' \
@@ -124,6 +129,25 @@ thesis-report:
 	@timestamp=$$(date +%Y%m%d_%H%M%S); \
 	out_dir="$${THESIS_OUT:-runs/comparisons/thesis/$$timestamp}"; \
 	$(PY_ENV) $(PYTHON) scripts/thesis_report.py --inputs $(THESIS_INPUTS) --out "$$out_dir"
+
+parallelism-report: build-quest-cpu
+	@set -e; \
+	timestamp=$$(date +%Y%m%d_%H%M%S); \
+	printf '%s\n' 'Running CPU slicing/frontier diagnostic evidence...'; \
+	$(BENCH) simulation-backend-compare --suite $(PARALLELISM_SLICING_FRONTIER_SUITE) --artifact-retention compact; \
+	slicing_frontier_run=$$(readlink -f runs/latest); \
+	printf '%s\n' "CPU slicing/frontier evidence: $$slicing_frontier_run"; \
+	printf '%s\n' 'Running CPU hybrid diagnostic evidence...'; \
+	$(BENCH) simulation-backend-compare --suite $(PARALLELISM_HYBRID_SUITE) --artifact-retention compact; \
+	hybrid_run=$$(readlink -f runs/latest); \
+	printf '%s\n' "CPU hybrid evidence: $$hybrid_run"; \
+	printf '%s\n' 'Running modeled UPMEM DPU assignment evidence...'; \
+	$(BENCH) upmem-multi-dpu-assignment --suite $(PARALLELISM_UPMEM_ASSIGNMENT_SUITE) --dpu-groups $(PARALLELISM_DPU_GROUPS); \
+	upmem_assignment_run=$$(readlink -f runs/latest); \
+	printf '%s\n' "UPMEM modeled assignment evidence: $$upmem_assignment_run"; \
+	out_dir="runs/comparisons/parallelism/current/$$timestamp"; \
+	$(BENCH) compare-results --inputs "$$slicing_frontier_run" "$$hybrid_run" "$$upmem_assignment_run" --comparison-type parallelism_evidence --out "$$out_dir"; \
+	printf '%s\n' "Parallelism comparison: $$out_dir" "Summary: $$out_dir/parallelism_comparison_summary.md"
 
 research-plan:
 	$(PY_ENV) $(PYTHON) scripts/research_benchmark_pack.py plan

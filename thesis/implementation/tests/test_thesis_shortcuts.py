@@ -25,6 +25,7 @@ def test_makefile_shortcuts_are_defined() -> None:
         "thesis-results",
         "thesis-results-resume",
         "thesis-report",
+        "parallelism-report",
         "research-plan",
         "research-benchmarks",
         "research-report",
@@ -39,7 +40,12 @@ def test_makefile_shortcuts_are_defined() -> None:
     assert "THESIS_TN_QUIMB_SUITE ?= configs/suites/manual/thesis_cpu_tn_quimb.yml" in text
     assert "THESIS_TN_QUANT_SUITE ?= configs/suites/manual/thesis_tn_paths_quantization.yml" in text
     assert "THESIS_UPMEM_SUITE ?= configs/suites/manual/thesis_upmem_quantization_boundary.yml" in text
+    assert "PARALLELISM_SLICING_FRONTIER_SUITE ?= configs/suites/diagnostics/cpu_slicing_vs_frontier_quick.yml" in text
+    assert "PARALLELISM_HYBRID_SUITE ?= configs/suites/diagnostics/cpu_hybrid_quick.yml" in text
+    assert "PARALLELISM_UPMEM_ASSIGNMENT_SUITE ?= configs/suites/upmem_sim_evidence.yml" in text
     assert "scripts/thesis_report.py --inputs \"$$full_state_run\" \"$$tn_quimb_run\" \"$$tn_quant_run\" \"$$upmem_run\"" in text
+    assert "upmem-multi-dpu-assignment --suite $(PARALLELISM_UPMEM_ASSIGNMENT_SUITE)" in text
+    assert "compare-results --inputs \"$$slicing_frontier_run\" \"$$hybrid_run\" \"$$upmem_assignment_run\"" in text
     assert "FULL_STATE_RUN=runs/evidence/thesis_full_state_cpu_gpu/simulation_backend_compare/<run_id>" in text
     assert "runs/comparisons/$$suite_id/report_run/$$timestamp" in text
     assert "report-run --input runs/latest --out" in text
@@ -61,6 +67,7 @@ def test_readme_documents_shortcut_targets() -> None:
         "make thesis-results",
         "make thesis-results-resume",
         "make thesis-report",
+        "make parallelism-report",
         "make research-plan",
         "make research-benchmarks",
         "make research-report",
@@ -97,6 +104,7 @@ def test_makefile_targets_parse_with_dry_run() -> None:
         "thesis-results",
         "thesis-results-resume",
         "thesis-report",
+        "parallelism-report",
         "research-plan",
         "research-benchmarks",
         "research-report",
@@ -114,6 +122,9 @@ def test_makefile_targets_parse_with_dry_run() -> None:
         assert target != "thesis-results" or "scripts/thesis_report.py --inputs" in result.stdout
         assert target != "thesis-results-resume" or "Set FULL_STATE_RUN=" in result.stdout
         assert target != "thesis-report" or "thesis_report.py --inputs" in result.stdout
+        assert target != "parallelism-report" or "cpu_slicing_vs_frontier_quick.yml" in result.stdout
+        assert target != "parallelism-report" or "upmem-multi-dpu-assignment" in result.stdout
+        assert target != "parallelism-report" or "parallelism_evidence" in result.stdout
         assert target != "research-plan" or "research_benchmark_pack.py plan" in result.stdout
         assert target != "research-benchmarks" or "research_benchmark_pack.py run" in result.stdout
         assert target != "research-report" or "research_benchmark_pack.py report" in result.stdout

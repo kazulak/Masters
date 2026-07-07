@@ -91,6 +91,16 @@ Reports should derive the following tables from normalized records:
 - validation/output-contract table;
 - CPU/GPU/UPMEM capability matrix.
 
+Current implemented evidence can be gathered with:
+
+```bash
+make parallelism-report
+```
+
+This target compares existing executed CPU slicing/frontier/hybrid diagnostics
+with modeled UPMEM assignment evidence. It is a reporting workflow only; it
+does not implement UPMEM multi-DPU execution.
+
 No fake speedup fields should be added. Any ratio must state its timing scope
 and denominator route. UPMEM SDK simulator timing may be reported only as SDK
 simulator timing.

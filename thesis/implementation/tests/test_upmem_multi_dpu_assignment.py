@@ -147,3 +147,5 @@ def test_upmem_multi_dpu_assignment_compare_results_includes_assignment_fields(t
     summary_md = (comparison.run_dir / "parallelism_comparison_summary.md").read_text(encoding="utf-8")
     assert "UPMEM modeled assignment" in summary_md
     assert "modeled_upmem_assignment_not_executed" in summary_md
+    assert "| upmem_multi_dpu_assignment_model |" in summary_md
+    assert f"| {summary_rows[0]['assigned_task_count']} | 0 |" in summary_md

@@ -228,6 +228,18 @@ Generate a derived comparison for the latest evidence run:
 make compare-latest
 ```
 
+Generate the current parallelism evidence comparison:
+
+```bash
+make parallelism-report
+```
+
+This runs the existing CPU slicing/frontier diagnostic suite, the internal
+hybrid diagnostic suite, and the modeled UPMEM DPU assignment report, then
+writes derived comparison artifacts under `runs/comparisons/parallelism/...`.
+It does not execute UPMEM multi-DPU work and does not create hardware speedup
+evidence.
+
 Inspect normalized records:
 
 ```bash

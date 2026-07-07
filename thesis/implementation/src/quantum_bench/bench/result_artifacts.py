@@ -1332,8 +1332,10 @@ def _parallelism_summary_markdown(rows: list[JsonDict]) -> str:
             f"{row.get('parallelism_evidence_type')} | {row.get('upmem_parallelism_evidence_type') or ''} | "
             f"{row.get('same_family_timing_group')} | {row.get('interpretation_note')} | "
             f"{row.get('record_count')} | {row.get('validation_passed_count')} | {row.get('task_count')} | "
-            f"{row.get('frontier_executed_task_count') or ''} | {row.get('frontier_executed_parallel_task_count') or ''} | "
-            f"{row.get('slice_count') or ''} | {row.get('assigned_task_count') or ''} | {row.get('executed_dpu_task_count') or ''} | "
+            f"{_markdown_cell(row.get('frontier_executed_task_count'))} | "
+            f"{_markdown_cell(row.get('frontier_executed_parallel_task_count'))} | "
+            f"{_markdown_cell(row.get('slice_count'))} | {_markdown_cell(row.get('assigned_task_count'))} | "
+            f"{_markdown_cell(row.get('executed_dpu_task_count'))} | "
             f"{_format_float(row.get('slicing_flop_ratio'))} | {row.get('slicing_flop_change_kind') or ''} | "
             f"{_format_float(row.get('scheduler_overhead_s'))} |"
         )
@@ -1345,6 +1347,10 @@ def _parallelism_summary_markdown(rows: list[JsonDict]) -> str:
         ]
     )
     return "\n".join(lines)
+
+
+def _markdown_cell(value: Any) -> Any:
+    return "" if value is None else value
 
 
 def _same_family_timing_group(route_id: str) -> str:
