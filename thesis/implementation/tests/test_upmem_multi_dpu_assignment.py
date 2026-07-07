@@ -131,3 +131,19 @@ def test_upmem_multi_dpu_assignment_compare_results_includes_assignment_fields(t
     assert rows[0]["assigned_task_count"]
     assert rows[0]["executed_dpu_task_count"] == "0"
     assert rows[0]["dpu_assignment_validation_status"] == "passed"
+    assert (comparison.run_dir / "parallelism_mode_summary.csv").exists()
+    assert (comparison.run_dir / "parallelism_comparison_summary.md").exists()
+
+    with (comparison.run_dir / "parallelism_mode_summary.csv").open(encoding="utf-8", newline="") as handle:
+        summary_rows = list(csv.DictReader(handle))
+    assert summary_rows[0]["route_id"] == "upmem_multi_dpu_assignment_model"
+    assert summary_rows[0]["parallelism_mode"] == "modeled_only"
+    assert summary_rows[0]["upmem_parallelism_evidence_type"] == "modeled"
+    assert summary_rows[0]["same_family_timing_group"] == "upmem_sdk"
+    assert summary_rows[0]["assigned_task_count"]
+    assert summary_rows[0]["executed_dpu_task_count"] == "0"
+    assert summary_rows[0]["hardware_speedup_applicable"] == "False"
+
+    summary_md = (comparison.run_dir / "parallelism_comparison_summary.md").read_text(encoding="utf-8")
+    assert "UPMEM modeled assignment" in summary_md
+    assert "modeled_upmem_assignment_not_executed" in summary_md

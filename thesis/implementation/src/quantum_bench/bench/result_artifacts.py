@@ -332,6 +332,18 @@ PARALLELISM_MODE_SUMMARY_FIELDS = [
     "hybrid_reconstruction_validation_status",
     "dependency_violation_detected",
     "hybrid_execution_node_count",
+    "upmem_parallelism_mode",
+    "upmem_parallelism_evidence_type",
+    "task_assignment_strategy",
+    "dpu_group_count",
+    "assigned_task_count",
+    "executed_dpu_task_count",
+    "unassigned_task_count",
+    "dpu_assignment_validation_status",
+    "modeled_dpu_occupancy",
+    "modeled_load_imbalance_ratio",
+    "hardware_execution",
+    "hardware_speedup_applicable",
     "same_family_timing_group",
     "interpretation_note",
 ]
@@ -405,7 +417,7 @@ def compare_results(
     out_dir.mkdir(parents=True, exist_ok=True)
     summary = _kernel_family_summary(records)
     cpu_gpu_speedup = _cpu_gpu_speedup_payload(records) if comparison_type == "cpu_gpu_sweep" else None
-    parallelism_summary = _parallelism_mode_summary(records) if _has_executed_slicing_or_frontier(records) else None
+    parallelism_summary = _parallelism_mode_summary(records) if _has_parallelism_evidence(records) else None
     payload = {
         "schema_version": COMPARE_RESULTS_SCHEMA_VERSION,
         "record_count": len(records),
@@ -1215,8 +1227,13 @@ def _csv_value(value: Any) -> Any:
     return value
 
 
-def _has_executed_slicing_or_frontier(records: list[JsonDict]) -> bool:
-    return any(str(record.get("parallelism_mode") or "") in {"slicing", "frontier"} for record in records)
+def _has_parallelism_evidence(records: list[JsonDict]) -> bool:
+    return any(
+        str(record.get("parallelism_mode") or "") in {"slicing", "frontier", "hybrid", "modeled_only"}
+        or str(record.get("upmem_parallelism_evidence_type") or "")
+        in {"modeled", "sdk_simulator_executed", "hardware_executed"}
+        for record in records
+    )
 
 
 def _parallelism_mode_summary(records: list[JsonDict]) -> list[JsonDict]:
@@ -1272,6 +1289,18 @@ def _parallelism_mode_summary(records: list[JsonDict]) -> list[JsonDict]:
                 ),
                 "dependency_violation_detected": any(bool(record.get("dependency_violation_detected", False)) for record in route_records),
                 "hybrid_execution_node_count": _sum_ints(record.get("hybrid_execution_node_count") for record in route_records),
+                "upmem_parallelism_mode": first.get("upmem_parallelism_mode"),
+                "upmem_parallelism_evidence_type": first.get("upmem_parallelism_evidence_type"),
+                "task_assignment_strategy": first.get("task_assignment_strategy"),
+                "dpu_group_count": _max_numeric(record.get("dpu_group_count") for record in route_records),
+                "assigned_task_count": _sum_ints(record.get("assigned_task_count") for record in route_records),
+                "executed_dpu_task_count": _sum_ints(record.get("executed_dpu_task_count") for record in route_records),
+                "unassigned_task_count": _sum_ints(record.get("unassigned_task_count") for record in route_records),
+                "dpu_assignment_validation_status": _aggregate_change_kind(record.get("dpu_assignment_validation_status") for record in route_records),
+                "modeled_dpu_occupancy": _mean_numeric(record.get("modeled_dpu_occupancy") for record in route_records),
+                "modeled_load_imbalance_ratio": _mean_numeric(record.get("modeled_load_imbalance_ratio") for record in route_records),
+                "hardware_execution": any(bool(record.get("hardware_execution", False)) for record in route_records),
+                "hardware_speedup_applicable": any(bool(record.get("hardware_speedup_applicable", False)) for record in route_records),
                 "same_family_timing_group": _same_family_timing_group(route_id),
                 "interpretation_note": _parallelism_interpretation_note(route_id),
             }
@@ -1291,19 +1320,21 @@ def _parallelism_summary_markdown(rows: list[JsonDict]) -> str:
     lines = [
         "# CPU Tensor-Network Parallelism Diagnostic Summary",
         "",
-        "This summary separates implementation families. Compare Quimb unsliced against Quimb sliced, and internal sequential TaskGraph against internal frontier TaskGraph. Do not treat Quimb and the internal TaskGraph routes as equivalent implementation-quality baselines.",
+        "This summary separates implementation families. Compare Quimb unsliced against Quimb sliced, internal sequential TaskGraph against internal frontier TaskGraph, and UPMEM modeled assignment against UPMEM execution evidence only within its evidence boundary. Do not treat Quimb and the internal TaskGraph routes as equivalent implementation-quality baselines.",
         '`slicing_flop_ratio` = sliced cotengra plan reported FLOPs / unsliced cotengra plan reported FLOPs.',
         "",
-        "| Route | Role | Mode | Evidence | Same-family timing group | Records | Passed | Tasks | Frontier executed | Frontier parallel-dispatched | Slice count | FLOP ratio | FLOP change | Scheduler overhead s |",
-        "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |",
+        "| Route | Role | Mode | Evidence | UPMEM evidence | Same-family timing group | Interpretation | Records | Passed | Tasks | Frontier executed | Frontier parallel-dispatched | Slice count | Assigned tasks | Executed DPU tasks | FLOP ratio | FLOP change | Scheduler overhead s |",
+        "| --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |",
     ]
     for row in rows:
         lines.append(
             f"| {row.get('route_id')} | {row.get('benchmark_role')} | {row.get('parallelism_mode')} | "
-            f"{row.get('parallelism_evidence_type')} | {row.get('same_family_timing_group')} | "
+            f"{row.get('parallelism_evidence_type')} | {row.get('upmem_parallelism_evidence_type') or ''} | "
+            f"{row.get('same_family_timing_group')} | {row.get('interpretation_note')} | "
             f"{row.get('record_count')} | {row.get('validation_passed_count')} | {row.get('task_count')} | "
             f"{row.get('frontier_executed_task_count') or ''} | {row.get('frontier_executed_parallel_task_count') or ''} | "
-            f"{row.get('slice_count') or ''} | {_format_float(row.get('slicing_flop_ratio'))} | {row.get('slicing_flop_change_kind') or ''} | "
+            f"{row.get('slice_count') or ''} | {row.get('assigned_task_count') or ''} | {row.get('executed_dpu_task_count') or ''} | "
+            f"{_format_float(row.get('slicing_flop_ratio'))} | {row.get('slicing_flop_change_kind') or ''} | "
             f"{_format_float(row.get('scheduler_overhead_s'))} |"
         )
     lines.extend(
@@ -1321,6 +1352,8 @@ def _same_family_timing_group(route_id: str) -> str:
         return "quimb_external_tn"
     if route_id in {"cpu_tn_einsum_exact", "cpu_tn_frontier_exact", "cpu_tn_hybrid_sliced_frontier_exact"}:
         return "internal_taskgraph"
+    if route_id in {"upmem_tn_sdk_simulator_quantized", "upmem_tn_runtime", "upmem_multi_dpu_assignment_model"}:
+        return "upmem_sdk"
     return "not_applicable"
 
 
@@ -1332,6 +1365,9 @@ def _parallelism_interpretation_note(route_id: str) -> str:
         "cpu_tn_einsum_exact": "diagnostic_internal_sequential_taskgraph",
         "cpu_tn_frontier_exact": "diagnostic_internal_frontier_taskgraph_no_speedup_claim",
         "cpu_tn_hybrid_sliced_frontier_exact": "diagnostic_internal_hybrid_slice_frontier_no_speedup_claim",
+        "upmem_tn_sdk_simulator_quantized": "strict_sequential_upmem_sdk_simulator_no_hardware_speedup",
+        "upmem_tn_runtime": "strict_sequential_upmem_sdk_simulator_no_hardware_speedup",
+        "upmem_multi_dpu_assignment_model": "modeled_upmem_assignment_not_executed",
     }
     return notes.get(route_id, "not_applicable")
 
