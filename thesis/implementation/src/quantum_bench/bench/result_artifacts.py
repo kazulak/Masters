@@ -348,6 +348,29 @@ PARALLELISM_MODE_SUMMARY_FIELDS = [
     "interpretation_note",
 ]
 
+PARALLELISM_CAPABILITY_MATRIX_FIELDS = [
+    "schema_version",
+    "route_id",
+    "benchmark_role",
+    "backend_family",
+    "execution_model",
+    "contraction_execution_target",
+    "accelerator_kind",
+    "parallelism_mode",
+    "parallelism_evidence_type",
+    "upmem_parallelism_mode",
+    "upmem_parallelism_evidence_type",
+    "output_contract",
+    "exact_output_comparable",
+    "validation_method",
+    "same_family_timing_group",
+    "hardware_execution",
+    "hardware_speedup_applicable",
+    "speedup_claim_allowed",
+    "claim_boundary",
+    "interpretation_note",
+]
+
 CPU_GPU_SPEEDUP_SKIPPED_FIELDS = [
     "schema_version",
     "case_id",
@@ -418,6 +441,7 @@ def compare_results(
     summary = _kernel_family_summary(records)
     cpu_gpu_speedup = _cpu_gpu_speedup_payload(records) if comparison_type == "cpu_gpu_sweep" else None
     parallelism_summary = _parallelism_mode_summary(records) if _has_parallelism_evidence(records) else None
+    parallelism_capability_matrix = _parallelism_capability_matrix(records, parallelism_summary) if parallelism_summary is not None else None
     payload = {
         "schema_version": COMPARE_RESULTS_SCHEMA_VERSION,
         "record_count": len(records),
@@ -432,6 +456,8 @@ def compare_results(
         payload["cpu_gpu_speedup"] = cpu_gpu_speedup
     if parallelism_summary is not None:
         payload["parallelism_mode_summary"] = parallelism_summary
+    if parallelism_capability_matrix is not None:
+        payload["parallelism_capability_matrix"] = parallelism_capability_matrix
     artifact_path = out_dir / "comparison_results.json"
     csv_path = out_dir / "comparison_results.csv"
     family_csv_path = out_dir / "kernel_family_summary.csv"
@@ -445,6 +471,8 @@ def compare_results(
         extra_outputs.extend(_write_cpu_gpu_speedup_artifacts(out_dir, cpu_gpu_speedup))
     if parallelism_summary is not None:
         extra_outputs.extend(_write_parallelism_summary_artifacts(out_dir, parallelism_summary))
+    if parallelism_capability_matrix is not None:
+        extra_outputs.extend(_write_parallelism_capability_matrix_artifacts(out_dir, parallelism_capability_matrix))
     summary_path.write_text(
         _summary_markdown(records, summary, cpu_gpu_speedup=cpu_gpu_speedup, parallelism_summary=parallelism_summary),
         encoding="utf-8",
@@ -1308,11 +1336,58 @@ def _parallelism_mode_summary(records: list[JsonDict]) -> list[JsonDict]:
     return rows
 
 
+def _parallelism_capability_matrix(records: list[JsonDict], summary_rows: list[JsonDict]) -> list[JsonDict]:
+    by_route: dict[str, list[JsonDict]] = {}
+    for record in records:
+        by_route.setdefault(str(record.get("route_id") or "unknown"), []).append(record)
+    summary_by_route = {str(row.get("route_id") or "unknown"): row for row in summary_rows}
+    rows: list[JsonDict] = []
+    for route_id in sorted(by_route):
+        route_records = by_route[route_id]
+        first = route_records[0]
+        summary = summary_by_route.get(route_id, {})
+        hardware_execution = any(bool(record.get("hardware_execution", False)) for record in route_records)
+        hardware_speedup_applicable = any(bool(record.get("hardware_speedup_applicable", False)) for record in route_records)
+        rows.append(
+            {
+                "schema_version": COMPARE_RESULTS_SCHEMA_VERSION,
+                "route_id": route_id,
+                "benchmark_role": first.get("benchmark_role"),
+                "backend_family": first.get("backend_family"),
+                "execution_model": first.get("execution_model"),
+                "contraction_execution_target": first.get("contraction_execution_target"),
+                "accelerator_kind": first.get("accelerator_kind"),
+                "parallelism_mode": first.get("parallelism_mode"),
+                "parallelism_evidence_type": first.get("parallelism_evidence_type"),
+                "upmem_parallelism_mode": first.get("upmem_parallelism_mode"),
+                "upmem_parallelism_evidence_type": first.get("upmem_parallelism_evidence_type"),
+                "output_contract": first.get("output_contract"),
+                "exact_output_comparable": first.get("exact_output_comparable"),
+                "validation_method": first.get("validation_method"),
+                "same_family_timing_group": summary.get("same_family_timing_group") or _same_family_timing_group(route_id),
+                "hardware_execution": hardware_execution,
+                "hardware_speedup_applicable": hardware_speedup_applicable,
+                "speedup_claim_allowed": _parallelism_speedup_claim_allowed(route_id, hardware_execution, hardware_speedup_applicable),
+                "claim_boundary": _parallelism_claim_boundary(route_id, first),
+                "interpretation_note": summary.get("interpretation_note") or _parallelism_interpretation_note(route_id),
+            }
+        )
+    return rows
+
+
 def _write_parallelism_summary_artifacts(out_dir: Path, rows: list[JsonDict]) -> list[str]:
     csv_path = out_dir / "parallelism_mode_summary.csv"
     markdown_path = out_dir / "parallelism_comparison_summary.md"
     _write_csv(csv_path, rows, PARALLELISM_MODE_SUMMARY_FIELDS)
     markdown_path.write_text(_parallelism_summary_markdown(rows), encoding="utf-8")
+    return [csv_path.name, markdown_path.name]
+
+
+def _write_parallelism_capability_matrix_artifacts(out_dir: Path, rows: list[JsonDict]) -> list[str]:
+    csv_path = out_dir / "parallelism_capability_matrix.csv"
+    markdown_path = out_dir / "parallelism_capability_matrix.md"
+    _write_csv(csv_path, rows, PARALLELISM_CAPABILITY_MATRIX_FIELDS)
+    markdown_path.write_text(_parallelism_capability_matrix_markdown(rows), encoding="utf-8")
     return [csv_path.name, markdown_path.name]
 
 
@@ -1349,8 +1424,65 @@ def _parallelism_summary_markdown(rows: list[JsonDict]) -> str:
     return "\n".join(lines)
 
 
+def _parallelism_capability_matrix_markdown(rows: list[JsonDict]) -> str:
+    lines = [
+        "# Parallelism Capability Matrix",
+        "",
+        "This matrix states what each route can support as evidence. It is derived from normalized records and does not add benchmark execution. `speedup_claim_allowed=false` means the route may still be useful evidence, but not as a hardware or cross-family speedup claim.",
+        "",
+        "| Route | Role | Target | Backend | Execution model | Mode | Evidence | UPMEM evidence | Same-family group | Speedup claim allowed | Claim boundary |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for row in rows:
+        lines.append(
+            f"| {row.get('route_id')} | {row.get('benchmark_role')} | {row.get('contraction_execution_target')} | "
+            f"{row.get('backend_family')} | {row.get('execution_model')} | {row.get('parallelism_mode')} | "
+            f"{row.get('parallelism_evidence_type')} | {row.get('upmem_parallelism_evidence_type') or ''} | "
+            f"{row.get('same_family_timing_group')} | {row.get('speedup_claim_allowed')} | {row.get('claim_boundary')} |"
+        )
+    lines.extend(
+        [
+            "",
+            "UPMEM SDK simulator rows and modeled assignment rows are functional or planning evidence, not UPMEM hardware speedup evidence. QuEST GPU rows, when present, are full-state GPU evidence, not GPU tensor-network evidence.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def _markdown_cell(value: Any) -> Any:
     return "" if value is None else value
+
+
+def _parallelism_speedup_claim_allowed(route_id: str, hardware_execution: bool, hardware_speedup_applicable: bool) -> bool:
+    if route_id in {
+        "quimb_tn_sliced_exact",
+        "cpu_tn_frontier_exact",
+        "cpu_tn_hybrid_sliced_frontier_exact",
+        "upmem_multi_dpu_assignment_model",
+        "upmem_tn_sdk_simulator_quantized",
+        "upmem_tn_runtime",
+    }:
+        return False
+    return bool(hardware_execution and hardware_speedup_applicable)
+
+
+def _parallelism_claim_boundary(route_id: str, record: JsonDict) -> str:
+    if route_id == "quimb_tn_sliced_exact":
+        return "executed_slicing_no_slice_worker_speedup"
+    if route_id == "cpu_tn_frontier_exact":
+        return "diagnostic_internal_frontier_not_serious_baseline"
+    if route_id == "cpu_tn_hybrid_sliced_frontier_exact":
+        return "diagnostic_internal_hybrid_not_serious_baseline"
+    if route_id == "upmem_multi_dpu_assignment_model":
+        return "modeled_only_no_dpu_execution"
+    if str(record.get("upmem_execution_mode") or "") == "sdk_simulator":
+        return "sdk_simulator_no_hardware_speedup"
+    if route_id == "quest_gpu_full_state_exact":
+        return "full_state_gpu_not_gpu_tn"
+    if str(record.get("parallelism_evidence_type") or "") == "modeled":
+        return "modeled_only_no_execution_claim"
+    return _parallelism_interpretation_note(route_id)
 
 
 def _same_family_timing_group(route_id: str) -> str:

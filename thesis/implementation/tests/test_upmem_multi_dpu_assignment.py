@@ -133,6 +133,8 @@ def test_upmem_multi_dpu_assignment_compare_results_includes_assignment_fields(t
     assert rows[0]["dpu_assignment_validation_status"] == "passed"
     assert (comparison.run_dir / "parallelism_mode_summary.csv").exists()
     assert (comparison.run_dir / "parallelism_comparison_summary.md").exists()
+    assert (comparison.run_dir / "parallelism_capability_matrix.csv").exists()
+    assert (comparison.run_dir / "parallelism_capability_matrix.md").exists()
 
     with (comparison.run_dir / "parallelism_mode_summary.csv").open(encoding="utf-8", newline="") as handle:
         summary_rows = list(csv.DictReader(handle))
@@ -144,8 +146,19 @@ def test_upmem_multi_dpu_assignment_compare_results_includes_assignment_fields(t
     assert summary_rows[0]["executed_dpu_task_count"] == "0"
     assert summary_rows[0]["hardware_speedup_applicable"] == "False"
 
+    with (comparison.run_dir / "parallelism_capability_matrix.csv").open(encoding="utf-8", newline="") as handle:
+        capability_rows = list(csv.DictReader(handle))
+    assert capability_rows[0]["route_id"] == "upmem_multi_dpu_assignment_model"
+    assert capability_rows[0]["contraction_execution_target"] == "upmem"
+    assert capability_rows[0]["upmem_parallelism_evidence_type"] == "modeled"
+    assert capability_rows[0]["speedup_claim_allowed"] == "False"
+    assert capability_rows[0]["claim_boundary"] == "modeled_only_no_dpu_execution"
+
     summary_md = (comparison.run_dir / "parallelism_comparison_summary.md").read_text(encoding="utf-8")
     assert "UPMEM modeled assignment" in summary_md
     assert "modeled_upmem_assignment_not_executed" in summary_md
     assert "| upmem_multi_dpu_assignment_model |" in summary_md
     assert f"| {summary_rows[0]['assigned_task_count']} | 0 |" in summary_md
+    capability_md = (comparison.run_dir / "parallelism_capability_matrix.md").read_text(encoding="utf-8")
+    assert "Parallelism Capability Matrix" in capability_md
+    assert "modeled_only_no_dpu_execution" in capability_md

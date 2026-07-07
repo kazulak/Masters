@@ -1521,9 +1521,16 @@ def test_cpu_slicing_vs_frontier_diagnostic_suite_records_combined_parallelism_m
     report = report_run(result.run_dir, tmp_path / "report", output_plots=False, root_dir=tmp_path)
     assert (compare.run_dir / "parallelism_mode_summary.csv").exists()
     assert (compare.run_dir / "parallelism_comparison_summary.md").exists()
+    assert (compare.run_dir / "parallelism_capability_matrix.csv").exists()
+    assert (compare.run_dir / "parallelism_capability_matrix.md").exists()
     assert "Do not treat Quimb and the internal TaskGraph routes" in (compare.run_dir / "parallelism_comparison_summary.md").read_text(
         encoding="utf-8"
     )
+    with (compare.run_dir / "parallelism_capability_matrix.csv").open(encoding="utf-8", newline="") as handle:
+        capability_rows = {row["route_id"]: row for row in csv.DictReader(handle)}
+    assert capability_rows["quimb_tn_sliced_exact"]["claim_boundary"] == "executed_slicing_no_slice_worker_speedup"
+    assert capability_rows["cpu_tn_frontier_exact"]["claim_boundary"] == "diagnostic_internal_frontier_not_serious_baseline"
+    assert capability_rows["quimb_tn_sliced_exact"]["speedup_claim_allowed"] == "False"
 
     for csv_path in (compare.csv_path, report.run_dir / "plots" / "data" / "backend_results.csv"):
         with csv_path.open("r", encoding="utf-8", newline="") as handle:

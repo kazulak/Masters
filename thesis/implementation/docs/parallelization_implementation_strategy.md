@@ -91,6 +91,13 @@ Reports should derive the following tables from normalized records:
 - validation/output-contract table;
 - CPU/GPU/UPMEM capability matrix.
 
+`compare-results` now emits `parallelism_capability_matrix.csv` and
+`parallelism_capability_matrix.md` whenever parallelism evidence is present.
+The matrix is a claim-boundary artifact: it records route role, execution
+target, evidence type, same-family timing group, and whether a speedup claim is
+allowed from the available evidence. Modeled UPMEM assignment and SDK simulator
+rows remain marked as non-hardware-speedup evidence.
+
 Current implemented evidence can be gathered with:
 
 ```bash
@@ -99,7 +106,8 @@ make parallelism-report
 
 This target compares existing executed CPU slicing/frontier/hybrid diagnostics
 with modeled UPMEM assignment evidence. It is a reporting workflow only; it
-does not implement UPMEM multi-DPU execution.
+does not implement UPMEM multi-DPU execution. The comparison output includes
+`parallelism_mode_summary.*` and `parallelism_capability_matrix.*` artifacts.
 
 No fake speedup fields should be added. Any ratio must state its timing scope
 and denominator route. UPMEM SDK simulator timing may be reported only as SDK
