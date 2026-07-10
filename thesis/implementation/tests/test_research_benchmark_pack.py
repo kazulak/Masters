@@ -370,6 +370,29 @@ def test_research_pack_same_plan_cpu_upmem_requires_matching_hash() -> None:
     assert pack.same_plan_execution([cpu, upmem]) == []
 
 
+def test_research_pack_builds_full_state_tn_ratio_without_calling_it_speedup() -> None:
+    common = {
+        "schema_version": pack.SCHEMA_VERSION,
+        "suite_id": "research_cpu_tn",
+        "case_id": "quest_bv_10q_research_tn",
+        "case_family": "bv",
+        "benchmark_n_qubits": 10,
+        "validation_passed_count": 3,
+    }
+    stats = [
+        {**common, "route_id": "quest_cpu_full_state_exact", "simulation_compute_time_s_median": 1.0},
+        {**common, "route_id": "quimb_tn_exact", "simulation_compute_time_s_median": 2.0},
+        {**common, "route_id": "quimb_tn_sliced_exact", "simulation_compute_time_s_median": 3.0},
+    ]
+
+    rows = pack.full_state_tn_comparison(stats)
+
+    assert len(rows) == 1
+    assert rows[0]["quimb_unsliced_time_over_quest_time"] == 2.0
+    assert rows[0]["quimb_sliced_time_over_unsliced_time"] == 1.5
+    assert all("speedup" not in key for key in rows[0])
+
+
 def test_research_pack_boundary_check_detects_derived_evidence_files(tmp_path: Path) -> None:
     bad = tmp_path / "runs" / "evidence" / "suite" / "route" / "run" / "comparison_summary.md"
     bad.parent.mkdir(parents=True)
@@ -394,8 +417,10 @@ def test_research_pack_writes_lightweight_pack(tmp_path: Path) -> None:
     assert exit_code == 0
     assert (out / "benchmark_manifest.json").exists()
     assert (out / "per_case_route_stats.csv").exists()
+    assert (out / "full_state_tn_comparison.csv").exists()
     assert (out / "plot_manifest.json").exists()
     summary = (out / "benchmark_summary.md").read_text(encoding="utf-8")
     assert "Next UPMEM Implementation Readiness" in summary
     manifest = json.loads((out / "benchmark_manifest.json").read_text(encoding="utf-8"))
     assert manifest["artifact_kind"] == "research_benchmark_pack"
+    assert not (tmp_path / "latest").exists()

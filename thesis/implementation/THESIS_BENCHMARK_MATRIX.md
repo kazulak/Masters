@@ -141,6 +141,7 @@ All live under `thesis_results/current/tables/` after promotion:
 
 - `per_case_route_stats.csv`
 - `cpu_gpu_performance_summary.csv`
+- `full_state_tn_comparison.csv`
 - `paired_speedups.csv`
 - `planner_comparison.csv`
 - `same_plan_execution.csv`

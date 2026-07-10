@@ -83,6 +83,7 @@ def test_promote_snapshot_copies_compact_evidence_and_report(monkeypatch, tmp_pa
     assert (out / "tables" / "per_case_route_stats.csv").is_file()
     assert (out / "plots" / "runtime.png").is_file()
     assert not list(out.rglob("*.npy"))
+    assert json.loads((out / "snapshot_manifest.json").read_text(encoding="utf-8"))["dirty_worktree"] is False
 
 
 def test_snapshot_verification_rejects_binary_evidence(monkeypatch, tmp_path: Path) -> None:
@@ -102,6 +103,25 @@ def test_snapshot_verification_rejects_binary_evidence(monkeypatch, tmp_path: Pa
         assert "forbidden artifact" in str(exc)
     else:
         raise AssertionError("binary evidence should fail snapshot verification")
+
+
+def test_snapshot_verification_rejects_symlinks(monkeypatch, tmp_path: Path) -> None:
+    evidence = _evidence(tmp_path, "research_cpu_gpu", "run")
+    pack = tmp_path / "pack"
+    _write_json(pack / "benchmark_manifest.json", {"git_commit": "test-head", "dirty_worktree": False, "evidence_inputs": [str(evidence)]})
+    monkeypatch.setattr(thesis_snapshot, "report_pack", _fake_report)
+    monkeypatch.setattr(thesis_snapshot, "_git", lambda *args: "test-head" if args[:2] == ("rev-parse", "HEAD") else "")
+    monkeypatch.setattr(thesis_snapshot, "ROOT", tmp_path)
+    out = tmp_path / "snapshot"
+    thesis_snapshot.promote_snapshot(pack, out)
+    (out / "bad-link").symlink_to("missing")
+
+    try:
+        thesis_snapshot.verify_snapshot(out)
+    except ValueError as exc:
+        assert "cannot contain symlinks" in str(exc)
+    else:
+        raise AssertionError("snapshot symlinks should fail verification")
 
 
 def test_prune_runs_keeps_only_snapshot_selection(monkeypatch, tmp_path: Path) -> None:
@@ -124,3 +144,16 @@ def test_prune_runs_keeps_only_snapshot_selection(monkeypatch, tmp_path: Path) -
 
     assert keep.exists()
     assert not remove.exists()
+
+
+def test_run_listing_does_not_duplicate_latest_symlinks(monkeypatch, tmp_path: Path) -> None:
+    run = _evidence(tmp_path, "research_cpu_gpu", "2026-07-10_12-00-00")
+    latest = run.parent / "latest"
+    latest.symlink_to(run.name)
+    monkeypatch.setattr(thesis_runs, "ROOT", tmp_path)
+    monkeypatch.setattr(thesis_runs, "RUNS", tmp_path / "runs")
+    monkeypatch.setattr(thesis_runs, "SNAPSHOT", tmp_path / "missing_snapshot.json")
+
+    rows = thesis_runs._run_rows()
+
+    assert [row["run_id"] for row in rows] == [run.name]

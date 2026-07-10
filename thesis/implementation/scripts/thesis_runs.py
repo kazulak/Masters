@@ -70,6 +70,8 @@ def _run_rows() -> list[dict[str, Any]]:
     if evidence_root.exists():
         for manifest_path in evidence_root.glob("*/*/*/run_manifest.json"):
             run_dir = manifest_path.parent
+            if run_dir.is_symlink() or run_dir.name == "latest":
+                continue
             manifest = _read_json(manifest_path)
             rows.append(
                 _row(
@@ -84,9 +86,13 @@ def _run_rows() -> list[dict[str, Any]]:
     if comparison_root.exists():
         for manifest_path in comparison_root.glob("*/*/benchmark_manifest.json"):
             run_dir = manifest_path.parent
+            if run_dir.is_symlink() or run_dir.name == "latest":
+                continue
             rows.append(_row("comparison", run_dir.parent.name, "research_pack", run_dir, selected))
         for manifest_path in comparison_root.glob("*/*/*/comparison_manifest.json"):
             run_dir = manifest_path.parent
+            if run_dir.is_symlink() or run_dir.name == "latest":
+                continue
             rows.append(_row("comparison", run_dir.parents[1].name, run_dir.parent.name, run_dir, selected))
     return sorted(rows, key=lambda row: (row["kind"], row["suite"], row["route"], row["run_id"]))
 

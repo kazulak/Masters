@@ -78,7 +78,8 @@ def promote_snapshot(pack: Path, out: Path, *, allow_dirty: bool = False) -> int
         raise ValueError("research pack contains no evidence inputs")
 
     head = _git("rev-parse", "HEAD")
-    if not allow_dirty and _git("status", "--short", "--", "."):
+    dirty_worktree = bool(_git("status", "--short", "--", "."))
+    if not allow_dirty and dirty_worktree:
         raise ValueError("tracked thesis snapshots require a clean worktree")
     if not allow_dirty and str(pack_manifest.get("git_commit") or "") != head:
         raise ValueError("research pack git commit does not match current HEAD")
@@ -101,14 +102,14 @@ def promote_snapshot(pack: Path, out: Path, *, allow_dirty: bool = False) -> int
     report_inputs = [staging / entry["snapshot_path"] for entry in selected]
     if report_pack(ROOT, report_dir, inputs=report_inputs, suite_filter=None) != 0:
         raise RuntimeError("snapshot report generation failed")
-    _install_report(report_dir, staging)
+    _install_report(report_dir, staging, provenance=pack_manifest)
 
     snapshot_manifest = {
         "schema_version": SNAPSHOT_SCHEMA_VERSION,
         "snapshot_id": "current",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "git_commit": head,
-        "dirty_worktree": bool(_git("status", "--short", "--", ".")),
+        "dirty_worktree": dirty_worktree,
         "evidence_level": "normalized_report_regenerable",
         "raw_tensor_artifacts_included": False,
         "selected_evidence": selected,
@@ -151,6 +152,8 @@ def verify_snapshot(snapshot: Path) -> None:
             raise ValueError(f"snapshot contains forbidden artifact type: {forbidden}")
     if next(snapshot.rglob("runner_work"), None) is not None:
         raise ValueError("snapshot contains runner_work")
+    if any(path.is_symlink() for path in snapshot.rglob("*")):
+        raise ValueError("snapshot must be self-contained and cannot contain symlinks")
     if not (snapshot / "README.md").is_file() or not (snapshot / "plots").is_dir() or not (snapshot / "tables").is_dir():
         raise ValueError("snapshot report, tables, or plots are missing")
     expected = _read_json(snapshot / "checksums.json") if (snapshot / "checksums.json").exists() else None
@@ -173,7 +176,7 @@ def regenerate_snapshot_report(snapshot: Path, *, root: Path = ROOT) -> int:
     shutil.rmtree(snapshot / "plots", ignore_errors=True)
     for name in ("README.md", "plot_manifest.json", "report_manifest.json"):
         (snapshot / name).unlink(missing_ok=True)
-    _install_report(report_dir, snapshot)
+    _install_report(report_dir, snapshot, provenance=manifest)
     _write_json(snapshot / "checksums.json", _checksums(snapshot, exclude={"checksums.json"}))
     verify_snapshot(snapshot)
     print(snapshot)
@@ -232,7 +235,7 @@ def _copy_evidence_capsule(source: Path, staging: Path, used_roles: set[str]) ->
     }
 
 
-def _install_report(report_dir: Path, staging: Path) -> None:
+def _install_report(report_dir: Path, staging: Path, *, provenance: dict[str, Any]) -> None:
     tables = staging / "tables"
     tables.mkdir()
     plots = report_dir / "plots"
@@ -248,6 +251,9 @@ def _install_report(report_dir: Path, staging: Path) -> None:
     report_manifest["root"] = "."
     report_manifest["evidence_inputs"] = sorted(path.relative_to(staging).as_posix() for path in (staging / "evidence").iterdir())
     report_manifest["command_line"] = "make thesis-report"
+    report_manifest["git_commit"] = provenance.get("git_commit")
+    report_manifest["dirty_worktree"] = bool(provenance.get("dirty_worktree", False))
+    report_manifest["provenance_scope"] = "selected_evidence"
     _write_json(staging / "report_manifest.json", report_manifest)
     shutil.rmtree(report_dir)
 

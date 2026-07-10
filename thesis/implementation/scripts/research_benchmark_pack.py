@@ -72,6 +72,7 @@ FORBIDDEN_EVIDENCE_DERIVED_NAMES = {
     "quantization_comparison.csv",
     "upmem_quantization_attribution.csv",
     "cpu_gpu_performance_summary.csv",
+    "full_state_tn_comparison.csv",
     "per_case_route_stats.csv",
     "paired_speedups.csv",
     "unsupported_cases.csv",
@@ -212,6 +213,7 @@ def _write_pack(
     stats_rows = per_case_route_stats(records)
     speedup_rows = paired_speedups(records)
     cpu_gpu_rows = cpu_gpu_performance_summary(speedup_rows)
+    full_state_tn_rows = full_state_tn_comparison(stats_rows)
     quantization_rows = upmem_quantization_attribution(records)
     same_plan_rows = same_plan_execution(records)
     planner_rows = planner_comparison(records)
@@ -221,6 +223,7 @@ def _write_pack(
     _write_csv(out_dir / "per_case_route_stats.csv", stats_rows, PER_CASE_ROUTE_STATS_FIELDS)
     _write_csv(out_dir / "paired_speedups.csv", speedup_rows, PAIRED_SPEEDUP_FIELDS)
     _write_csv(out_dir / "cpu_gpu_performance_summary.csv", cpu_gpu_rows, CPU_GPU_PERFORMANCE_SUMMARY_FIELDS)
+    _write_csv(out_dir / "full_state_tn_comparison.csv", full_state_tn_rows, FULL_STATE_TN_COMPARISON_FIELDS)
     _write_csv(out_dir / "upmem_quantization_attribution.csv", quantization_rows, UPMEM_QUANTIZATION_ATTRIBUTION_FIELDS)
     _write_csv(out_dir / "same_plan_execution.csv", same_plan_rows, SAME_PLAN_EXECUTION_FIELDS)
     _write_csv(out_dir / "planner_comparison.csv", planner_rows, PLANNER_COMPARISON_FIELDS)
@@ -237,6 +240,7 @@ def _write_pack(
             speedup_rows,
             quantization_rows,
             planner_rows,
+            full_state_tn_rows,
             unsupported_rows,
             validation_rows,
             capability_rows,
@@ -246,7 +250,8 @@ def _write_pack(
         ),
         encoding="utf-8",
     )
-    _update_latest_link(out_dir.parent, out_dir)
+    if _is_within(out_dir, root / "runs" / "comparisons"):
+        _update_latest_link(out_dir.parent, out_dir)
     print(out_dir)
     return 1 if boundary["status"] == "failed" or guard_issues else 0
 
@@ -425,6 +430,23 @@ CPU_GPU_PERFORMANCE_SUMMARY_FIELDS = [
     "gpu_total_wall_time_s_median",
     "wall_time_ratio_cpu_over_gpu_median",
     "gpu_device_name",
+]
+
+FULL_STATE_TN_COMPARISON_FIELDS = [
+    "schema_version",
+    "suite_id",
+    "case_id",
+    "case_family",
+    "benchmark_n_qubits",
+    "quest_cpu_compute_time_s_median",
+    "quimb_unsliced_compute_time_s_median",
+    "quimb_sliced_compute_time_s_median",
+    "quimb_unsliced_time_over_quest_time",
+    "quimb_sliced_time_over_quest_time",
+    "quimb_sliced_time_over_unsliced_time",
+    "quest_validation_passed_count",
+    "quimb_unsliced_validation_passed_count",
+    "quimb_sliced_validation_passed_count",
 ]
 
 UNSUPPORTED_FIELDS = [
@@ -684,6 +706,45 @@ def cpu_gpu_performance_summary(speedup_rows: list[JsonDict]) -> list[JsonDict]:
             }
         )
     return summary
+
+
+def full_state_tn_comparison(stats_rows: list[JsonDict]) -> list[JsonDict]:
+    grouped: dict[tuple[str, str], dict[str, JsonDict]] = defaultdict(dict)
+    for row in stats_rows:
+        if row.get("suite_id") != "research_cpu_tn":
+            continue
+        route = str(row.get("route_id") or "")
+        if route in {"quest_cpu_full_state_exact", "quimb_tn_exact", "quimb_tn_sliced_exact"}:
+            grouped[(str(row.get("suite_id")), str(row.get("case_id")))][route] = row
+    result: list[JsonDict] = []
+    for (suite_id, case_id), routes in sorted(grouped.items()):
+        quest = routes.get("quest_cpu_full_state_exact")
+        unsliced = routes.get("quimb_tn_exact")
+        sliced = routes.get("quimb_tn_sliced_exact")
+        if quest is None or unsliced is None:
+            continue
+        quest_time = _positive(quest.get("simulation_compute_time_s_median"))
+        unsliced_time = _positive(unsliced.get("simulation_compute_time_s_median"))
+        sliced_time = _positive(sliced.get("simulation_compute_time_s_median")) if sliced else None
+        result.append(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "suite_id": suite_id,
+                "case_id": case_id,
+                "case_family": quest.get("case_family"),
+                "benchmark_n_qubits": quest.get("benchmark_n_qubits"),
+                "quest_cpu_compute_time_s_median": quest_time,
+                "quimb_unsliced_compute_time_s_median": unsliced_time,
+                "quimb_sliced_compute_time_s_median": sliced_time,
+                "quimb_unsliced_time_over_quest_time": _ratio(unsliced_time, quest_time),
+                "quimb_sliced_time_over_quest_time": _ratio(sliced_time, quest_time),
+                "quimb_sliced_time_over_unsliced_time": _ratio(sliced_time, unsliced_time),
+                "quest_validation_passed_count": quest.get("validation_passed_count"),
+                "quimb_unsliced_validation_passed_count": unsliced.get("validation_passed_count"),
+                "quimb_sliced_validation_passed_count": sliced.get("validation_passed_count") if sliced else None,
+            }
+        )
+    return result
 
 
 def upmem_quantization_attribution(records: list[JsonDict]) -> list[JsonDict]:
@@ -986,6 +1047,7 @@ def benchmark_summary(
     speedup_rows: list[JsonDict],
     quantization_rows: list[JsonDict],
     planner_rows: list[JsonDict],
+    full_state_tn_rows: list[JsonDict],
     unsupported_rows: list[JsonDict],
     validation_rows: list[JsonDict],
     capability_rows: list[JsonDict],
@@ -1077,6 +1139,10 @@ def benchmark_summary(
             f"- Modeled contraction-path candidate rows: {len(planner_rows)}.",
             f"- Unsupported/skipped rows preserved: {len(unsupported_rows)}.",
             "",
+            "## Observed Result Snapshot",
+            "",
+            *_observed_result_lines(speedup_rows, full_state_tn_rows, quantization_rows, planner_rows, unsupported_rows),
+            "",
             "## Unsupported Cases",
             "",
         ]
@@ -1128,6 +1194,68 @@ def benchmark_summary(
     for item in missing:
         lines.append(f"- {item}")
     return "\n".join(lines) + "\n"
+
+
+def _observed_result_lines(
+    speedup_rows: list[JsonDict],
+    full_state_tn_rows: list[JsonDict],
+    quantization_rows: list[JsonDict],
+    planner_rows: list[JsonDict],
+    unsupported_rows: list[JsonDict],
+) -> list[str]:
+    lines: list[str] = []
+    gpu_ratios = _numbers(row.get("compute_speedup_cpu_over_gpu") for row in speedup_rows if _bool(row.get("performance_tier")))
+    if gpu_ratios:
+        lines.append(
+            "- Verified QuEST GPU compute ratio (CPU/GPU): "
+            f"median `{statistics.median(gpu_ratios):.3g}x`, range `{min(gpu_ratios):.3g}x` to `{max(gpu_ratios):.3g}x`; "
+            f"GPU was faster in `{sum(value > 1.0 for value in gpu_ratios)}/{len(gpu_ratios)}` matched repeats."
+        )
+    else:
+        lines.append("- No matched verified CPU/GPU performance repeats were available.")
+
+    tn_ratios = _numbers(row.get("quimb_unsliced_time_over_quest_time") for row in full_state_tn_rows)
+    slicing_ratios = _numbers(row.get("quimb_sliced_time_over_unsliced_time") for row in full_state_tn_rows)
+    if tn_ratios:
+        lines.append(
+            "- Shallow exact CPU comparison (Quimb TN time / QuEST full-state time): "
+            f"median `{statistics.median(tn_ratios):.3g}x` across `{len(tn_ratios)}` cases. "
+            "This is an algorithm/backend runtime ratio, not same-plan speedup."
+        )
+    if slicing_ratios:
+        lines.append(
+            "- Executed Quimb slicing time / unsliced Quimb time: "
+            f"median `{statistics.median(slicing_ratios):.3g}x`, range `{min(slicing_ratios):.3g}x` to `{max(slicing_ratios):.3g}x`; "
+            "slice reconstruction used one worker."
+        )
+
+    quant_runtime = _numbers(row.get("route_runtime_ratio_none_over_quantized") for row in quantization_rows)
+    quant_transfer = _numbers(row.get("transfer_ratio_none_over_quantized") for row in quantization_rows)
+    quant_error = _numbers(row.get("quantized_max_abs_error_vs_full_precision") for row in quantization_rows)
+    if quant_runtime:
+        lines.append(
+            "- Strict generic UPMEM SDK-simulator float32/int8 attribution: "
+            f"median route-time ratio `{statistics.median(quant_runtime):.3g}x`, "
+            f"median transfer ratio `{statistics.median(quant_transfer):.3g}x`"
+            + (f", maximum observed int8 absolute error `{max(quant_error):.3g}`." if quant_error else ".")
+            + " These are simulator-route measurements, not hardware speedup."
+        )
+
+    planner_cases = {str(row.get("case_id")) for row in planner_rows}
+    planner_ids = {str(row.get("planner_id")) for row in planner_rows}
+    if planner_rows:
+        lines.append(
+            f"- Planner evidence covers `{len(planner_cases)}` cases and `{len(planner_ids)}` candidates "
+            "with plan hashes, FLOP/peak-memory estimates, and modeled UPMEM pressure."
+        )
+    if unsupported_rows:
+        reason_counts = Counter(str(row.get("resource_skip_reason") or "unknown") for row in unsupported_rows)
+        lines.append(
+            "- Explicit boundary rows: "
+            + ", ".join(f"`{reason}` = {count}" for reason, count in reason_counts.most_common())
+            + "."
+        )
+    return lines
 
 
 def validate_artifact_boundaries(root: Path) -> JsonDict:
@@ -1901,6 +2029,14 @@ def _update_latest_link(parent: Path, target: Path) -> None:
         latest.symlink_to(target.name)
     except OSError:
         return
+
+
+def _is_within(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
 
 
 def _latest_evidence_for_suite(root: Path, suite_id: str) -> Path | None:
