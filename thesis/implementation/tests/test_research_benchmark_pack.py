@@ -44,6 +44,42 @@ def _record(case_id: str, route_id: str, repeat_id: int, *, target: str, total: 
     }
 
 
+def _generic_upmem_record(case_id: str, quantization_mode: str, *, total: float, compute: float, transfer: int) -> dict:
+    float_mode = quantization_mode == "none"
+    return {
+        "schema_version": "benchmark_result_artifact_v1",
+        "suite_id": "thesis_upmem_quantization_boundary",
+        "case_id": case_id,
+        "workload_id": case_id,
+        "n_qubits": 7,
+        "route_id": "upmem_tn_runtime",
+        "backend_family": "upmem_sdk",
+        "benchmark_role": "strict_upmem_sdk_simulator_generic",
+        "kernel_family": "generic_loop_fallback",
+        "execution_model": "tensor_network",
+        "contraction_execution_target": "upmem",
+        "upmem_execution_mode": "sdk_simulator",
+        "policy": "generic-only",
+        "quantization_mode": quantization_mode,
+        "generic_only_all_tasks_used_generic_backend": True,
+        "valid_primary_upmem_codepath_result": True,
+        "dpu_program_invocations": 3,
+        "upmem_program_executed": True,
+        "cpu_fallback_used": False,
+        "status": "completed",
+        "validation_status": "passed",
+        "repeat_id": 0,
+        "total_wall_time_s": total,
+        "simulation_compute_time_s": compute,
+        "actual_transfer_bytes": transfer,
+        "input_dtype_on_dpu": "float32" if float_mode else "int8",
+        "native_unquantized_upmem_kernel_executed": float_mode,
+        "hardware_speedup": "not_applicable",
+        "hardware_speedup_applicable": False,
+        "validation_error_metrics": {"max_abs_error": 0.0 if float_mode else 0.01, "l2_error": 0.0 if float_mode else 0.02},
+    }
+
+
 def test_research_pack_statistics_and_cpu_gpu_pairing() -> None:
     records = [
         _record("quest_bv_10q_research_perf", "quest_cpu_full_state_exact", 0, target="cpu", total=10.0, compute=8.0),
@@ -133,6 +169,101 @@ def test_research_pack_rejects_unverified_gpu_and_fake_energy() -> None:
     assert any("energy value without measured status" in issue for issue in issues)
 
 
+def test_research_pack_rejects_dense_upmem_rows_and_accepts_strict_generic_rows() -> None:
+    dense = _generic_upmem_record("qrng_7q_thesis_upmem_boundary", "per_task_input_quantize", total=2.0, compute=0.1, transfer=100)
+    dense["policy"] = "dense-then-generic"
+    dense["kernel_family"] = "dense_gemm"
+
+    issues = pack._claim_guard_issues([dense])
+
+    assert any("not generic-only" in issue for issue in issues)
+    generic = _generic_upmem_record("qrng_7q_thesis_upmem_boundary", "per_task_input_quantize", total=2.0, compute=0.1, transfer=100)
+    assert pack._claim_guard_issues([generic]) == []
+
+
+def test_research_pack_separates_generic_quantization_modes_and_builds_attribution() -> None:
+    float32 = _generic_upmem_record("qrng_7q_thesis_upmem_boundary", "none", total=4.0, compute=2.0, transfer=400)
+    int8 = _generic_upmem_record("qrng_7q_thesis_upmem_boundary", "per_task_input_quantize", total=2.0, compute=1.0, transfer=100)
+
+    stats = pack.per_case_route_stats([float32, int8])
+    attribution = pack.upmem_quantization_attribution([float32, int8])
+
+    assert len(stats) == 2
+    assert {row["quantization_mode"] for row in stats} == {"none", "per_task_input_quantize"}
+    assert len(attribution) == 1
+    assert attribution[0]["same_route_comparison"] is True
+    assert attribution[0]["route_runtime_ratio_none_over_quantized"] == 2.0
+    assert attribution[0]["transfer_ratio_none_over_quantized"] == 4.0
+    assert attribution[0]["native_unquantized_upmem_kernel_executed"] is True
+
+
+def test_research_pack_quantization_attribution_rejects_different_routes_or_runs() -> None:
+    float32 = _generic_upmem_record("qrng_7q_thesis_upmem_boundary", "none", total=4.0, compute=2.0, transfer=400)
+    int8 = _generic_upmem_record("qrng_7q_thesis_upmem_boundary", "per_task_input_quantize", total=2.0, compute=1.0, transfer=100)
+    float32["run_id"] = "run_a"
+    int8["run_id"] = "run_a"
+    int8["route_id"] = "another_upmem_route"
+
+    assert pack.upmem_quantization_attribution([float32, int8]) == []
+
+    int8["route_id"] = float32["route_id"]
+    int8["run_id"] = "run_b"
+    assert pack.upmem_quantization_attribution([float32, int8]) == []
+
+
+def test_research_pack_preserves_generic_boundary_reason_from_record_notes() -> None:
+    unsupported = _generic_upmem_record("qrng_8q_thesis_upmem_boundary", "none", total=0.0, compute=0.0, transfer=0)
+    unsupported.update(
+        {
+            "status": "unsupported",
+            "validation_status": "skipped",
+            "unsupported_task_count": 1,
+            "notes": '{"reason":"generic_feasibility_rank_cap_exceeded"}',
+        }
+    )
+
+    rows = pack.unsupported_cases([unsupported])
+
+    assert rows[0]["resource_skip_reason"] == "generic_feasibility_rank_cap_exceeded"
+
+
+def test_research_pack_cpu_gpu_plot_rows_exclude_correctness_tier() -> None:
+    performance = _record("quest_bv_10q_research_perf", "quest_cpu_full_state_exact", 0, target="cpu", total=10.0, compute=8.0)
+    gpu_performance = _record("quest_bv_10q_research_perf", "quest_gpu_full_state_exact", 0, target="gpu", total=5.0, compute=2.0)
+    correctness = dict(performance)
+    correctness["case_id"] = "quest_bv_10q_research_correctness"
+    correctness["performance_tier"] = False
+    correctness["state_output_mode"] = "full_dump"
+    correctness["validation_method"] = "full_statevector"
+    gpu_correctness = dict(gpu_performance)
+    gpu_correctness["case_id"] = correctness["case_id"]
+    gpu_correctness["performance_tier"] = False
+    gpu_correctness["state_output_mode"] = "full_dump"
+    gpu_correctness["validation_method"] = "full_statevector"
+
+    pairs = pack.paired_speedups([performance, gpu_performance, correctness, gpu_correctness])
+
+    assert len(pairs) == 2
+    assert len([row for row in pairs if row["performance_tier"]]) == 1
+
+
+def test_research_pack_cpu_gpu_performance_summary_uses_repeat_medians() -> None:
+    records = [
+        _record("quest_bv_10q_research_perf", "quest_cpu_full_state_exact", 0, target="cpu", total=10.0, compute=8.0),
+        _record("quest_bv_10q_research_perf", "quest_gpu_full_state_exact", 0, target="gpu", total=5.0, compute=2.0),
+        _record("quest_bv_10q_research_perf", "quest_cpu_full_state_exact", 1, target="cpu", total=12.0, compute=10.0),
+        _record("quest_bv_10q_research_perf", "quest_gpu_full_state_exact", 1, target="gpu", total=6.0, compute=2.5),
+    ]
+
+    summary = pack.cpu_gpu_performance_summary(pack.paired_speedups(records))
+
+    assert len(summary) == 1
+    assert summary[0]["matched_repeat_count"] == 2
+    assert summary[0]["cpu_simulation_compute_time_s_median"] == 9.0
+    assert summary[0]["gpu_simulation_compute_time_s_median"] == 2.25
+    assert summary[0]["compute_speedup_cpu_over_gpu_median"] == 4.0
+
+
 def test_research_pack_skipped_group_result_is_visible() -> None:
     result = pack._skipped_group_result("cpu_gpu", "hip_smoke_build_failed")
 
@@ -140,6 +271,16 @@ def test_research_pack_skipped_group_result_is_visible() -> None:
     assert result["skipped_group"] == "cpu_gpu"
     assert result["blocker_reason"] == "hip_smoke_build_failed"
     assert result["benchmark_rows_emitted"] is False
+
+
+def test_research_pack_runs_upmem_boundary_through_strict_generic_mvp_command() -> None:
+    argv = pack._research_suite_argv("upmem_boundary", pack.ROOT)
+
+    assert argv[:2] == ["upmem-mvp-benchmark", "--suite"]
+    assert any(item.endswith("thesis_upmem_quantization_boundary.yml") for item in argv)
+    assert argv[argv.index("--policies") + 1] == "generic-only"
+    assert argv[argv.index("--quantization-modes") + 1] == "none,per_task_input_quantize"
+    assert "--execute-external" in argv
 
 
 def test_research_pack_boundary_check_detects_derived_evidence_files(tmp_path: Path) -> None:

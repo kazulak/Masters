@@ -34,7 +34,7 @@ Remaining limitations:
 - long research runs are manual and hardware-dependent;
 - energy is not reported unless real measured sensor metadata exists;
 - UPMEM SDK simulator timing is code-path evidence, not hardware timing;
-- UPMEM boundary cases are limited by the current bounded generic/dense runtime.
+- UPMEM generic-boundary cases are limited by the current bounded generic runtime.
 - GPU tensor-network support is feasibility-only until a real GPU TN candidate
   executes tensor-network work on the GPU with no CPU fallback.
 
@@ -46,7 +46,7 @@ Remaining limitations:
 | `configs/suites/manual/research_cpu_gpu_correctness.yml` | Smaller full-statevector correctness tier for the same QuEST CPU/GPU routes. |
 | `configs/suites/manual/research_cpu_tn.yml` | QuEST anchor, Quimb unsliced, and Quimb sliced CPU TN evidence. |
 | `configs/suites/manual/research_internal_parallelism.yml` | Diagnostic internal TaskGraph sequential/frontier/hybrid evidence. |
-| `configs/suites/manual/research_upmem_boundary.yml` | Strict UPMEM SDK simulator supported/unsupported boundary evidence. |
+| `configs/suites/manual/thesis_upmem_quantization_boundary.yml` | Strict generic-only UPMEM SDK simulator boundary and same-route float32/int8 attribution evidence. |
 
 ## Commands
 
@@ -81,7 +81,12 @@ started accidentally.
 - GPU tensor-network rows are not thesis evidence until a separate GPU TN route
   proves real tensor-network execution on a GPU with no CPU fallback.
 - UPMEM SDK simulator rows prove strict SDK simulator code-path execution and
-  current boundary behavior when `cpu_fallback_used=false`.
+  current bounded generic behavior when `policy=generic-only`,
+  `generic_only_all_tasks_used_generic_backend=true`, and
+  `cpu_fallback_used=false`.
+- The UPMEM research group runs `upmem-mvp-benchmark`, not the dense-capable
+  route-comparison suite. It records `quantization_mode=none` and
+  `per_task_input_quantize` separately for same-route attribution.
 
 ## Claims Not Allowed
 
@@ -114,6 +119,8 @@ Expected files include:
 - `benchmark_manifest.json`
 - `per_case_route_stats.csv`
 - `paired_speedups.csv`
+- `cpu_gpu_performance_summary.csv`
+- `upmem_quantization_attribution.csv`
 - `unsupported_cases.csv`
 - `validation_summary.csv`
 - `route_capability_matrix.csv`

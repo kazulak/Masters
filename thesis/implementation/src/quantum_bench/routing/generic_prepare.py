@@ -28,7 +28,7 @@ GenericQuantizationMode = Literal["per_task_input_quantize", "none"]
 
 @dataclass(frozen=True)
 class GenericTaskPreparationCaps:
-    max_rank: int = 6
+    max_rank: int = 7
     max_tensor_elements: int = 4096
     max_contracted_combinations: int = 4096
 

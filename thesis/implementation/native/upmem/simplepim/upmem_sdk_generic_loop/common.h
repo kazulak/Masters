@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 #ifndef UPMEM_GENERIC_MAX_RANK
-#define UPMEM_GENERIC_MAX_RANK 6
+#define UPMEM_GENERIC_MAX_RANK 7
 #endif
 
 #ifndef UPMEM_GENERIC_MAX_ELEMS

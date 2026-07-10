@@ -68,6 +68,12 @@ Current UPMEM work is bounded and explicit:
 - Strict generic-only TaskGraph execution exists for small supported plans.
 - The SDK simulator path can run quantized int8/int32 and unquantized float32
   generic modes for attribution.
+- The current generic contract is deliberately bounded to rank seven and 4096
+  tensor elements; the manual boundary suite includes QRNG 8q to expose the
+  next rank-cap boundary explicitly.
+- Research-pack generic boundary evidence is collected through
+  `upmem-mvp-benchmark` with `policy=generic-only` and both float32 and int8
+  modes; dense-capable route-comparison evidence is not used for that claim.
 - A modeled multi-DPU assignment report can map TaskGraph frontier waves to DPU
   groups without executing those assignments.
 - A frontier-scheduled UPMEM SDK simulator prototype executes ready tasks

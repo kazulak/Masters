@@ -177,6 +177,9 @@ def test_upmem_mvp_benchmark_runs_suite_and_compare_results(monkeypatch, tmp_pat
     assert all(record["contraction_execution_target"] == "upmem" for record in upmem_records)
     assert all(record["upmem_execution_mode"] == "sdk_simulator" for record in upmem_records)
     assert all(record["upmem_program_executed"] is True for record in upmem_records)
+    assert all(record["policy"] in {"generic-only", "dense-then-generic"} for record in upmem_records)
+    assert all(record["valid_primary_upmem_codepath_result"] is True for record in upmem_records)
+    assert all(record["dpu_program_invocations"] > 0 for record in upmem_records)
     assert all(record["contraction_execution_target"] == "cpu" for record in cpu_records)
 
     comparison = compare_results([result.run_dir], tmp_path / "comparison")
@@ -222,6 +225,14 @@ def test_upmem_mvp_benchmark_records_same_route_quantization_comparison(monkeypa
     assert all(row["native_unquantized_upmem_kernel_executed"] is True for row in none_rows)
     assert all(row["input_dtype_on_dpu"] == "int8" for row in quantized_rows)
     assert all(row["scaling_applied"] is True for row in quantized_rows)
+    records = load_result_records([result.run_dir])
+    upmem_records = [record for record in records if record["execution_target"] == "upmem"]
+    assert all(record["policy"] == "generic-only" for record in upmem_records)
+    assert all(record["generic_only_all_tasks_used_generic_backend"] is True for record in upmem_records)
+    assert all(record["valid_primary_upmem_codepath_result"] is True for record in upmem_records)
+    assert all(record["kernel_family"] == "generic_loop_fallback" for record in upmem_records)
+    assert all(record["suite_id"] == "upmem_mvp_test" for record in upmem_records)
+    assert all(record["run_id"] == result.run_dir.name for record in upmem_records)
     comparison = json.loads((result.run_dir / "quantization_comparison.json").read_text(encoding="utf-8"))
     assert len(comparison["rows"]) == 2
     assert all(row["same_route_comparison"] is True for row in comparison["rows"])

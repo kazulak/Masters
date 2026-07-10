@@ -190,3 +190,46 @@ def test_generic_preparation_rejects_element_cap_before_bridge() -> None:
 
     assert result.status == "unsupported_shape"
     assert result.reason == "element_count_cap_exceeded"
+
+
+def test_generic_preparation_default_rank_cap_accepts_rank_seven() -> None:
+    rank = 7
+    task = _task(
+        "rank_seven",
+        left_shape=(1,) * rank,
+        right_shape=(1,),
+        output_shape=(1,) * (rank - 1),
+        index_expression="abcdefg,g->abcdef",
+        left_labels=tuple(range(rank)),
+        right_labels=(rank - 1,),
+        contracted_labels=(rank - 1,),
+        output_labels=tuple(range(rank - 1)),
+    )
+    left, right = _tensors(task)
+
+    result = prepare_generic_task(GenericTaskPreparationInput(task=task, left_tensor=left, right_tensor=right))
+
+    assert GenericTaskPreparationCaps().max_rank == rank
+    assert result.status == "prepared"
+    assert result.reason is None
+
+
+def test_generic_preparation_default_rank_cap_rejects_rank_eight() -> None:
+    rank = 8
+    task = _task(
+        "rank_eight",
+        left_shape=(1,) * rank,
+        right_shape=(1,),
+        output_shape=(1,) * (rank - 1),
+        index_expression="abcdefgh,h->abcdefg",
+        left_labels=tuple(range(rank)),
+        right_labels=(rank - 1,),
+        contracted_labels=(rank - 1,),
+        output_labels=tuple(range(rank - 1)),
+    )
+    left, right = _tensors(task)
+
+    result = prepare_generic_task(GenericTaskPreparationInput(task=task, left_tensor=left, right_tensor=right))
+
+    assert result.status == "unsupported_shape"
+    assert result.reason == "rank_cap_exceeded"

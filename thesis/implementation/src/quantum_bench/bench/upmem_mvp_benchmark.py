@@ -130,6 +130,7 @@ def run_upmem_mvp_benchmark(
             generated = _failed_case_payload(case_payload, str(exc))
             if fail_fast:
                 raise
+        generated.setdefault("suite_id", str(suite["suite_id"]))
 
         for policy in policies:
             for quantization_mode in quantization_modes:
@@ -285,6 +286,7 @@ def _generate_reference_case(root_dir: Path, run_dir: Path, suite: JsonDict, cas
     )
     return {
         "status": "ready",
+        "suite_id": str(suite["suite_id"]),
         "case_id": case_id,
         "workload_id": str(case_payload.get("workload_id", case_id)),
         "circuit_family": str(case_payload.get("circuit", {}).get("name", circuit.name)),
@@ -430,9 +432,22 @@ def _enriched_runtime_summary(
             "n_qubits": int(getattr(generated.get("circuit"), "n_qubits", 0) or 0),
             "circuit": manifest(generated["circuit"]),
             "route_id": "upmem_tn_runtime",
+            "benchmark_role": "strict_upmem_sdk_simulator_generic" if policy == "generic-only" else "strict_upmem_sdk_simulator",
+            "route_role_description": (
+                "Strict bounded generic UPMEM SDK simulator TaskGraph execution."
+                if policy == "generic-only"
+                else "Strict UPMEM SDK simulator TaskGraph execution."
+            ),
+            "route_limitation_scope": (
+                "Bounded generic binary contraction loop; SDK simulator only, no hardware timing."
+                if policy == "generic-only"
+                else "SDK simulator only, no hardware timing."
+            ),
             "execution_scope": "full_taskgraph",
             "policy": policy,
             "quantization_mode": quantization_mode,
+            "timing_scope": "sdk_simulator_route_total_and_kernel",
+            "validation_method": (runtime_summary.get("final_validation") or {}).get("tolerance_kind"),
             "task_metrics_artifact": _planned_artifact_ref(task_metrics_rel, role="task_metrics"),
             "final_tensor_artifact": artifact_ref(run_dir, final_tensor_artifact, role="final_tensor"),
             "reference": {
@@ -556,6 +571,11 @@ def _row_from_runtime_summary(
             "upmem_execution_mode": UPMEM_EXECUTION_MODE,
             "whole_network_quantized_at_initialization": False,
             "cpu_fallback_used": bool(summary.get("cpu_fallback_used", False)),
+            "generic_only_all_tasks_used_generic_backend": summary.get("generic_only_all_tasks_used_generic_backend"),
+            "valid_primary_upmem_codepath_result": summary.get("valid_primary_upmem_codepath_result"),
+            "upmem_task_count": int(summary.get("upmem_task_count", summary.get("executed_tasks", 0)) or 0),
+            "dpu_program_invocations": int(summary.get("dpu_program_invocations", 0) or 0),
+            "upmem_program_executed": bool(summary.get("dpu_program_executed_all_tasks") is True),
             "hardware_benchmark_result": False,
             "hardware_timing_available": False,
             "hardware_speedup_applicable": False,
@@ -714,7 +734,10 @@ def _normalized_records_for_run(run_dir: Path, cpu_reference_records: list[JsonD
         source = summary_path.relative_to(run_dir).as_posix()
         records.extend(normalized_upmem_taskgraph_records_from_summary(payload, source_artifact=source))
     for record in records:
-        record.setdefault("run_id", run_dir.name)
+        # Child summaries are canonical for their runtime details, but all of
+        # them belong to this one evidence run. Do not let a child path-derived
+        # ID break same-run comparisons such as float32 versus int8 attribution.
+        record["run_id"] = run_dir.name
     return to_jsonable(records)
 
 

@@ -1,4 +1,4 @@
-MAX_RANK ?= 6
+MAX_RANK ?= 7
 MAX_ELEMS ?= 4096
 DPU_CC ?= dpu-upmem-dpurte-clang
 HOST_CC ?= gcc

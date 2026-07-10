@@ -147,6 +147,13 @@ RESULT_FIELDS = [
     "native_sdk_control_path",
     "simplepim_api_used",
     "quantization_mode",
+    "policy",
+    "generic_only_all_tasks_used_generic_backend",
+    "valid_primary_upmem_codepath_result",
+    "dpu_program_executed_all_tasks",
+    "native_upmem_kernel_executed",
+    "native_unquantized_upmem_kernel_executed",
+    "kernel_family_counts",
     "per_contraction_quantization",
     "input_dtype",
     "accumulator_dtype",
@@ -171,6 +178,8 @@ RESULT_FIELDS = [
     "actual_transfer_bytes",
     "total_quantization_time_s",
     "total_dequantization_time_s",
+    "total_simulator_time_s",
+    "total_host_orchestration_time_s",
     "execution_scope",
     "simulator_or_hardware",
     "status",
@@ -753,20 +762,23 @@ def _upmem_taskgraph_runtime_record(
     family = kernel_family or _dominant_kernel_family(summary)
     tasks = int(task_count if task_count is not None else summary.get("executed_tasks", 0) or 0)
     final_passed = final_validation.get("passed") is True
+    policy = summary.get("policy")
+    is_generic_only = policy == "generic-only"
+    status = summary.get("status")
     record = _base_record(
         source_artifact=source_artifact,
         run_id=_run_id_from_source(source_artifact),
-        suite_id=None,
+        suite_id=summary.get("suite_id"),
         case_id=summary.get("case_id"),
-        workload_id=summary.get("case_id"),
+        workload_id=summary.get("workload_id", summary.get("case_id")),
         route_id=summary.get("route_id", "upmem_tn_runtime"),
         backend_id=_json_string(summary.get("backend_counts", {})),
         kernel_family=family,
         execution_target=summary.get("contraction_execution_target", "upmem"),
         execution_scope=summary.get("execution_scope", "full_taskgraph"),
         simulator_or_hardware="simulator" if summary.get("upmem_execution_mode") == "sdk_simulator" else "not_applicable",
-        status=summary.get("status"),
-        validation_status="passed" if final_passed else "failed",
+        status=status,
+        validation_status="passed" if final_passed else ("skipped" if status == "unsupported" else "failed"),
         task_count=tasks,
         validated_task_count=tasks if final_passed else 0,
         unsupported_task_count=int(summary.get("unsupported_tasks", 0) or 0),
@@ -792,6 +804,18 @@ def _upmem_taskgraph_runtime_record(
         {
             "execution_model": "tensor_network",
             "n_qubits": summary.get("n_qubits"),
+            "backend_family": "upmem_sdk",
+            "benchmark_role": "strict_upmem_sdk_simulator_generic" if is_generic_only else "strict_upmem_sdk_simulator",
+            "route_role_description": (
+                "Strict bounded generic UPMEM SDK simulator TaskGraph execution."
+                if is_generic_only
+                else "Strict UPMEM SDK simulator TaskGraph execution."
+            ),
+            "route_limitation_scope": (
+                "Bounded generic binary contraction loop; SDK simulator only, no hardware timing."
+                if is_generic_only
+                else "SDK simulator only, no hardware timing."
+            ),
             "parallelism_mode": summary.get("parallelism_mode"),
             "parallelism_evidence_type": summary.get("parallelism_evidence_type"),
             "execution_plan_kind": summary.get("execution_plan_kind"),
@@ -836,6 +860,17 @@ def _upmem_taskgraph_runtime_record(
             "native_sdk_control_path": summary.get("native_sdk_control_path", True),
             "simplepim_api_used": summary.get("simplepim_api_used", False),
             "quantization_mode": summary.get("quantization_mode"),
+            "policy": policy,
+            "generic_only_all_tasks_used_generic_backend": summary.get("generic_only_all_tasks_used_generic_backend"),
+            "valid_primary_upmem_codepath_result": summary.get("valid_primary_upmem_codepath_result"),
+            "dpu_program_executed_all_tasks": summary.get("dpu_program_executed_all_tasks"),
+            "native_upmem_kernel_executed": summary.get("dpu_program_executed_all_tasks") is True,
+            "native_unquantized_upmem_kernel_executed": (
+                summary.get("quantization_mode") == "none"
+                and summary.get("input_dtype_on_dpu") == "float32"
+                and summary.get("dpu_program_executed_all_tasks") is True
+            ),
+            "kernel_family_counts": summary.get("kernel_family_counts"),
             "input_dtype_on_dpu": summary.get("input_dtype_on_dpu"),
             "accumulator_dtype_on_dpu": summary.get("accumulator_dtype_on_dpu"),
             "scaling_applied": summary.get("scaling_applied"),
@@ -845,6 +880,14 @@ def _upmem_taskgraph_runtime_record(
             "actual_transfer_bytes": summary.get("actual_transfer_bytes"),
             "total_quantization_time_s": summary.get("total_quantization_time_s"),
             "total_dequantization_time_s": summary.get("total_dequantization_time_s"),
+            "total_simulator_time_s": summary.get("total_kernel_time_s"),
+            "total_host_orchestration_time_s": max(
+                0.0,
+                float(summary.get("total_wall_time_s", 0.0) or 0.0) - float(summary.get("total_kernel_time_s", 0.0) or 0.0),
+            ),
+            "timing_scope": summary.get("timing_scope", "sdk_simulator_route_total_and_kernel"),
+            "validation_method": summary.get("validation_method", final_validation.get("tolerance_kind")),
+            "resource_skip_reason": summary.get("reason") if status == "unsupported" else None,
         }
     )
     return record
