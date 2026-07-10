@@ -124,9 +124,11 @@ flowchart TD
     V --> E[Normalized evidence<br/>traffic, timing, error, invocation counts]
 ```
 
-The strict generic baseline currently executes one contraction at a time and is
-bounded by local rank/element contracts. The SDK simulator proves the native
-SDK control path and DPU program invocation, not physical PIM timing.
+The strict generic baseline currently executes one contraction at a time through
+the implemented bounded single-DPU SDK-simulator strategy
+`mram_resident_output_tiled_v1`, with local rank/element contracts and output
+tiles bounded at 256 elements. The SDK simulator proves the native SDK control
+path and DPU program invocation, not physical PIM timing.
 
 Current limitation:
 
@@ -139,7 +141,7 @@ Current limitation:
 | --- | --- | --- | --- |
 | UPMEM-aware path objective | Score FLOPs, peak intermediate size, transfers, tiling, and available DPU concurrency | Modeled scoring exists; planner integration is not final | Thesis contribution on top of `opt_einsum`/cotengra |
 | Kernel classifier/selector | Choose dense GEMM, generic tiled contraction, permutation/layout, sparse, or collective path | Dense/generic routing scaffolding exists | Thesis architecture |
-| Tiled generic contraction | Stream operands/output through MRAM/WRAM under explicit caps | Missing; next implementation target | UPMEM programming model, SimplePIM/ATiM ideas |
+| Tiled generic contraction | Stream operands/output through MRAM/WRAM under explicit caps | Implemented, bounded single-DPU SDK-simulator strategy | UPMEM programming model, SimplePIM/ATiM ideas |
 | Gate-aware permutation kernels | Replace arithmetic by row/index permutation for gates where mathematically valid | Missing | PIMutation-inspired specialization, thesis adaptation to TN tasks |
 | Layout/transpose/slicing kernels | Avoid host materialization and enable bounded subproblems | Missing | Standard TN/PIM techniques; implementation is thesis work |
 | Quantization formats | Compare same-plan float32 and integer execution with explicit scale/error | Float32 and int8 generic modes exist | Thesis evaluation; motivated by weak DPU floating point |
@@ -149,9 +151,9 @@ Current limitation:
 | Automatic kernel generation | Explore generated DPU kernels for selected contractions | Not integrated | ATiM candidate |
 | Sparse kernels | Exploit zero/sparsity structure when measured | Not integrated | SparseP candidate |
 
-The first kernel wave should implement a conservative MRAM/WRAM-tiled generic
-binary contraction because current evidence can measure its effect using an
-unchanged TaskGraph and CPU reference. Specialized permutation, sparse, and
+The first kernel wave implements a conservative MRAM/WRAM-tiled generic binary
+contraction; current evidence can measure its effect using an unchanged
+TaskGraph and CPU reference. Specialized permutation, sparse, and
 communication kernels should follow only when a recorded workload class makes
 their expected benefit testable.
 

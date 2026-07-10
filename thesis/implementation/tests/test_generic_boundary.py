@@ -133,6 +133,18 @@ def test_generic_boundary_preparation_uses_expected_integer_axis_maps() -> None:
     assert "right_quantized" not in encoded
 
 
+def test_generic_boundary_small_regression_matches_numpy_einsum() -> None:
+    workload = build_generic_boundary_workload()
+    task = workload.graph.tasks[0]
+    tensors = {tensor.spec.id: tensor for tensor in workload.network.tensors}
+    result = prepare_generic_task(GenericTaskPreparationInput(task=task, left_tensor=tensors["boundary_left"], right_tensor=tensors["boundary_right"]))
+
+    assert result.status == "prepared"
+    assert result.prepared_operands is not None
+    expected = np.einsum("abc,cde->abde", result.prepared_operands.left_quantized.astype(np.int32), result.prepared_operands.right_quantized.astype(np.int32), optimize=False)
+    np.testing.assert_array_equal(result.prepared_operands.expected_quantized_reference_output, expected)
+
+
 def test_generic_boundary_task_bridge_records_boundary_evidence(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("quantum_bench.bench.generic_task_bridge.execute_generic_bridge", _fake_generic_execute_from_expected)
 

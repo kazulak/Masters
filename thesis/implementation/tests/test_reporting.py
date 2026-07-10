@@ -181,6 +181,26 @@ def test_report_run_is_non_destructive(tmp_path: Path) -> None:
     assert payload["report_dir"] == str(report_dir.resolve())
 
 
+def test_normalized_and_report_hash_fields_are_pass_through(tmp_path: Path) -> None:
+    hashes = {
+        "circuit_semantics_hash": "c" * 64,
+        "tensor_network_hash": "t" * 64,
+        "contraction_plan_hash": "p" * 64,
+        "executor_config_hash": "e" * 64,
+    }
+    record = _record("hash_passthrough") | hashes
+    run_dir = _new_run(tmp_path / "run", [record])
+    normalized = json.loads((run_dir / "normalized_records.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert {key: normalized[key] for key in hashes} == hashes
+
+    report_dir = tmp_path / "reports" / "hash_passthrough"
+    report_run(run_dir, report_dir, output_plots=False)
+    with (report_dir / "upmem_mvp_benchmark_results.csv").open("r", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 1
+    assert {key: rows[0][key] for key in hashes} == hashes
+
+
 def test_report_run_rejects_output_under_evidence_root(tmp_path: Path) -> None:
     root_dir = tmp_path / "project"
     run_dir = _new_run(root_dir / "runs" / "evidence" / "suite" / "route" / "run", [_record("bell_2q")])

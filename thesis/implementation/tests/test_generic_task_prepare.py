@@ -184,7 +184,7 @@ def test_generic_preparation_rejects_int32_accumulation_overflow_risk() -> None:
 
 
 def test_generic_preparation_rejects_element_cap_before_bridge() -> None:
-    task = _task("cap", left_shape=(65, 65), right_shape=(65, 1), output_shape=(65, 1))
+    task = _task("cap", left_shape=(65537, 1), right_shape=(1, 1), output_shape=(65537, 1))
     left, right = _tensors(task)
     result = prepare_generic_task(GenericTaskPreparationInput(task=task, left_tensor=left, right_tensor=right))
 
@@ -192,14 +192,24 @@ def test_generic_preparation_rejects_element_cap_before_bridge() -> None:
     assert result.reason == "element_count_cap_exceeded"
 
 
-def test_generic_preparation_default_rank_cap_accepts_rank_seven() -> None:
-    rank = 7
+def test_generic_preparation_default_element_cap_accepts_65536() -> None:
+    task = _task("element_boundary", left_shape=(256, 256), right_shape=(256, 1), output_shape=(256, 1))
+    left, right = _tensors(task)
+    result = prepare_generic_task(GenericTaskPreparationInput(task=task, left_tensor=left, right_tensor=right))
+
+    assert GenericTaskPreparationCaps().max_tensor_elements == 65536
+    assert result.status == "prepared"
+    assert result.reason is None
+
+
+def test_generic_preparation_default_rank_cap_accepts_rank_sixteen() -> None:
+    rank = 16
     task = _task(
-        "rank_seven",
+        "rank_sixteen",
         left_shape=(1,) * rank,
         right_shape=(1,),
         output_shape=(1,) * (rank - 1),
-        index_expression="abcdefg,g->abcdef",
+        index_expression="abcdefghijklmnop,p->abcdefghijklmno",
         left_labels=tuple(range(rank)),
         right_labels=(rank - 1,),
         contracted_labels=(rank - 1,),
@@ -214,14 +224,14 @@ def test_generic_preparation_default_rank_cap_accepts_rank_seven() -> None:
     assert result.reason is None
 
 
-def test_generic_preparation_default_rank_cap_rejects_rank_eight() -> None:
-    rank = 8
+def test_generic_preparation_default_rank_cap_rejects_rank_seventeen() -> None:
+    rank = 17
     task = _task(
-        "rank_eight",
+        "rank_seventeen",
         left_shape=(1,) * rank,
         right_shape=(1,),
         output_shape=(1,) * (rank - 1),
-        index_expression="abcdefgh,h->abcdefg",
+        index_expression="abcdefghijklmnopq,q->abcdefghijklmnop",
         left_labels=tuple(range(rank)),
         right_labels=(rank - 1,),
         contracted_labels=(rank - 1,),
@@ -233,3 +243,29 @@ def test_generic_preparation_default_rank_cap_rejects_rank_eight() -> None:
 
     assert result.status == "unsupported_shape"
     assert result.reason == "rank_cap_exceeded"
+
+
+def test_generic_preparation_contract_cap_remains_4096() -> None:
+    task = _task(
+        "contracted_cap",
+        left_shape=(4097, 1),
+        right_shape=(4097, 1),
+        output_shape=(1, 1),
+        index_expression="ab,ac->bc",
+        left_labels=(0, 1),
+        right_labels=(0, 2),
+        contracted_labels=(0,),
+        output_labels=(1, 2),
+    )
+    left, right = _tensors(task)
+    result = prepare_generic_task(
+        GenericTaskPreparationInput(
+            task=task,
+            left_tensor=left,
+            right_tensor=right,
+            caps=GenericTaskPreparationCaps(max_tensor_elements=65536),
+        )
+    )
+
+    assert result.status == "unsupported_shape"
+    assert result.reason == "contracted_combination_cap_exceeded"

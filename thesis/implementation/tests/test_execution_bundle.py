@@ -85,3 +85,25 @@ def test_execution_metadata_and_executor_hash_separate_plan_from_route_config() 
     assert executor_config_hash("cpu", {"quantization_mode": "none"}) != executor_config_hash(
         "cpu", {"quantization_mode": "int8"}
     )
+
+
+def test_wave_2e65_tiled_strategy_relationships_and_hash_invariants() -> None:
+    graph = _graph()
+    cpu_bundle = build_execution_bundle(graph, case_id="wave_2e65", suite_id="cpu")
+    upmem_bundle = build_execution_bundle(graph, case_id="wave_2e65", suite_id="upmem")
+    strategy = {
+        "name": "mram_resident_output_tiled_v1",
+        "max_rank": 16,
+        "max_tensor_elements": 65536,
+        "max_contracted_combinations": 4096,
+        "output_tile": 256,
+    }
+    cpu_executor = executor_config_hash("cpu", {"strategy": strategy, "quantization_mode": "none"})
+    upmem_executor = executor_config_hash("upmem", {"strategy": strategy, "quantization_mode": "none"})
+    int8_executor = executor_config_hash("upmem", {"strategy": strategy, "quantization_mode": "int8"})
+
+    assert strategy["output_tile"] <= strategy["max_tensor_elements"]
+    assert strategy["max_contracted_combinations"] <= strategy["max_tensor_elements"]
+    assert cpu_bundle["contraction_plan_hash"] == upmem_bundle["contraction_plan_hash"] == graph.contraction_plan_hash
+    assert cpu_executor != upmem_executor
+    assert upmem_executor != int8_executor
