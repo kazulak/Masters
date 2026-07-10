@@ -27,8 +27,8 @@ def test_planner_comparison_writes_rows_and_artifacts(tmp_path: Path) -> None:
     assert payload["schema_version"] == "planner_comparison_v2"
     assert payload["suite_id"] == "planner_compare"
     assert payload["run_id"] == run_dir.name
-    assert run_dir.name.endswith("_planner_compare")
-    assert not run_dir.name.endswith("_planner_compare_planner_compare")
+    assert run_dir.parent.name == "planner_comparison"
+    assert run_dir.parents[1].name == "planner_compare"
     assert [config["optimize"] for config in payload["planner_configs"]] == ["greedy", "optimal"]
     assert payload["scoring"]["score_model"] == "upmem_pressure_v1"
     assert payload["scoring"]["rank_scope"] == "case_id"
@@ -41,6 +41,10 @@ def test_planner_comparison_writes_rows_and_artifacts(tmp_path: Path) -> None:
     assert len(rows) == 4
     assert len(csv_rows) == len(rows)
     assert (run_dir / "planner_comparison_summary.md").exists()
+    assert (run_dir / "run_manifest.json").exists()
+    assert (run_dir / "artifact_retention_manifest.json").exists()
+    normalized_rows = _read_jsonl(run_dir / "normalized_records.jsonl")
+    assert len(normalized_rows) == len(rows)
     assert not list((run_dir / "raw").glob("*.jsonl"))
     assert not list((run_dir / "cases").glob("*/route_decisions.jsonl"))
 
@@ -85,12 +89,16 @@ def test_planner_comparison_writes_rows_and_artifacts(tmp_path: Path) -> None:
         task_graph_artifact = Path(row["task_graph_artifact"])
         path_summary_artifact = Path(row["path_summary_artifact"])
         target_estimates_artifact = Path(row["target_estimates_artifact"])
+        execution_bundle_artifact = Path(row["execution_bundle_artifact"])
         assert not task_graph_artifact.is_absolute()
         assert not path_summary_artifact.is_absolute()
         assert not target_estimates_artifact.is_absolute()
+        assert not execution_bundle_artifact.is_absolute()
         assert (run_dir / task_graph_artifact).exists()
         assert (run_dir / path_summary_artifact).exists()
         assert (run_dir / target_estimates_artifact).exists()
+        assert (run_dir / execution_bundle_artifact).exists()
+        assert len(row["contraction_plan_hash"]) == 64
 
         task_graph = json.loads((run_dir / task_graph_artifact).read_text(encoding="utf-8"))
         path_summary = json.loads((run_dir / path_summary_artifact).read_text(encoding="utf-8"))
@@ -114,6 +122,10 @@ def test_planner_comparison_writes_rows_and_artifacts(tmp_path: Path) -> None:
             assert task_row["host_to_dpu_bytes"] >= 0
             assert task_row["dpu_to_host_bytes"] >= 0
             assert task_row["mram_to_wram_bytes"] >= 0
+
+    assert all(row["route_id"] == "planner_candidate_model" for row in normalized_rows)
+    assert all(row["parallelism_evidence_type"] == "modeled" for row in normalized_rows)
+    assert all(row["execution_plan_executed"] is False for row in normalized_rows)
 
     for case_id in {"bell_2q", "ghz_3q"}:
         case_rows = [row for row in rows if row["case_id"] == case_id]

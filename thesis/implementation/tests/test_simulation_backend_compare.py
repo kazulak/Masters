@@ -672,10 +672,17 @@ def test_simulation_backend_compare_suite_loads() -> None:
     assert research_cpu_gpu["repeats"] >= 5
     assert research_cpu_gpu["warmups"] >= 1
     assert research_cpu_gpu["route_policy"]["routes"] == ["quest_cpu_full_state_exact", "quest_gpu_full_state_exact"]
-    assert {int(case["circuit"].get("n_qubits", case["circuit"].get("allocated_qubits"))) for case in research_cpu_gpu["cases"]} == {10, 12, 14, 16, 18, 20}
+    canonical_sizes = {4, 6, 8, 10, 12, 14, 16}
+    canonical_families = {"QRNG", "BV", "XOR", "BB84", "EDC", "HS"}
+    assert {int(case["circuit"].get("n_qubits", case["circuit"].get("allocated_qubits"))) for case in research_cpu_gpu["cases"]} == canonical_sizes
+    assert {case["circuit"]["name"] for case in research_cpu_gpu["cases"]} == canonical_families
+    assert len(research_cpu_gpu["cases"]) == 42
     assert research_cpu_gpu_correctness["metadata"]["state_output_mode"] == "full_dump"
     assert research_cpu_gpu_correctness["metadata"]["validation_method"] == "full_statevector"
     assert research_cpu_tn["route_policy"]["routes"] == ["quest_cpu_full_state_exact", "quimb_tn_exact", "quimb_tn_sliced_exact"]
+    assert {int(case["circuit"].get("n_qubits", case["circuit"].get("allocated_qubits"))) for case in research_cpu_tn["cases"]} == canonical_sizes
+    assert {case["circuit"]["name"] for case in research_cpu_tn["cases"]} == canonical_families
+    assert len(research_cpu_tn["cases"]) == 42
     assert route_config_for(research_cpu_tn, "quimb_tn_sliced_exact")["options"]["require_slicing"] is True
     skipped_cpu_tn_cases = {case["case_id"] for case in research_cpu_tn["cases"] if case.get("case_skip_reason")}
     assert skipped_cpu_tn_cases == set()

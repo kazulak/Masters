@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from scripts import research_benchmark_pack as pack
+from quantum_bench.bench.config import comparison_planner_configs, load_suite
 
 
 def _record(case_id: str, route_id: str, repeat_id: int, *, target: str, total: float, compute: float) -> dict:
@@ -281,6 +282,92 @@ def test_research_pack_runs_upmem_boundary_through_strict_generic_mvp_command() 
     assert argv[argv.index("--policies") + 1] == "generic-only"
     assert argv[argv.index("--quantization-modes") + 1] == "none,per_task_input_quantize"
     assert "--execute-external" in argv
+
+
+def test_research_suite_matrix_uses_six_families_and_seven_local_sizes() -> None:
+    expected_families = {"QRNG", "BV", "XOR", "BB84", "EDC", "HS"}
+    expected_sizes = {4, 6, 8, 10, 12, 14, 16}
+    for suite_name in ("research_cpu_gpu.yml", "research_cpu_tn.yml", "research_planner_compare.yml"):
+        suite = load_suite(pack.ROOT / "configs" / "suites" / "manual" / suite_name)
+        families = {str(case["circuit"]["name"]) for case in suite["cases"]}
+        sizes = {
+            int(case["circuit"].get("n_qubits") or case["circuit"].get("allocated_qubits"))
+            for case in suite["cases"]
+        }
+        assert families == expected_families
+        assert sizes == expected_sizes
+        assert len(suite["cases"]) == 42
+
+    planner = load_suite(pack.RESEARCH_SUITES["planner_paths"])
+    assert [item["optimize"] for item in comparison_planner_configs(planner)] == ["greedy", "auto"]
+    assert pack._research_suite_argv("planner_paths", pack.ROOT)[:2] == ["compare-planners", "--suite"]
+
+
+def test_research_pack_preserves_modeled_planner_candidates() -> None:
+    records = [
+        {
+            "suite_id": "research_planner_compare",
+            "case_id": "quest_bv_10q_planner",
+            "n_qubits": 10,
+            "route_id": "planner_candidate_model",
+            "backend_id": "opt_einsum.greedy",
+            "planner_id": "opt_einsum.greedy",
+            "optimize_mode": "greedy",
+            "contraction_plan_hash": "a" * 64,
+            "planning_time_s": 0.01,
+            "task_count": 12,
+            "tn_estimated_flops": 1234,
+            "tn_max_intermediate_bytes": 2048,
+            "total_host_to_dpu_bytes": 100,
+            "total_dpu_to_host_bytes": 50,
+            "total_mram_to_wram_bytes": 500,
+            "tiling_required_task_count": 1,
+            "estimated_total_tile_count": 4,
+            "estimated_max_parallel_tiles": 2,
+            "upmem_pressure_score": 0.25,
+            "upmem_rank": 1,
+            "flop_rank": 2,
+            "parallelism_evidence_type": "modeled",
+            "execution_plan_executed": False,
+        }
+    ]
+
+    rows = pack.planner_comparison(records)
+
+    assert len(rows) == 1
+    assert rows[0]["benchmark_n_qubits"] == 10
+    assert rows[0]["planner_id"] == "opt_einsum.greedy"
+    assert rows[0]["parallelism_evidence_type"] == "modeled"
+    assert rows[0]["execution_plan_executed"] is False
+
+
+def test_research_pack_same_plan_cpu_upmem_requires_matching_hash() -> None:
+    plan_hash = "b" * 64
+    cpu = {
+        "suite_id": "thesis_upmem_quantization_boundary",
+        "case_id": "qrng_4q_thesis_upmem",
+        "route_id": "cpu_tn_einsum_exact",
+        "contraction_execution_target": "cpu",
+        "status": "completed",
+        "simulation_compute_time_s": 0.1,
+        "contraction_plan_hash": plan_hash,
+    }
+    upmem = _generic_upmem_record(
+        "qrng_4q_thesis_upmem",
+        "per_task_input_quantize",
+        total=2.0,
+        compute=1.0,
+        transfer=100,
+    )
+    upmem["contraction_plan_hash"] = plan_hash
+
+    rows = pack.same_plan_execution([cpu, upmem])
+
+    assert len(rows) == 1
+    assert rows[0]["same_plan_verified"] is True
+    assert rows[0]["hardware_speedup_applicable"] is False
+    upmem["contraction_plan_hash"] = "c" * 64
+    assert pack.same_plan_execution([cpu, upmem]) == []
 
 
 def test_research_pack_boundary_check_detects_derived_evidence_files(tmp_path: Path) -> None:

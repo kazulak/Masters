@@ -17,7 +17,9 @@ metadata:
   output_contract: metrics_only
   exact_output_comparable: false
   full_statevector_validation_available: false
-  max_qubits: 20
+  canonical_circuit_families: [QRNG, BV, XOR, BB84, EDC, HS]
+  canonical_qubit_sizes: [4, 6, 8, 10, 12, 14, 16]
+  max_qubits: 16
   notes: >
     Research CPU/GPU performance tier. Rows are metrics-only and validated by
     native status/gate-count checks; full-output correctness is covered by
@@ -33,66 +35,48 @@ defaults:
     optimize: greedy
 
 workloads:
-  - id: quest_qrng_10q_research_perf
-    circuit: {kind: quest_compatible, name: QRNG, n_qubits: 10, repeat_layers: 64}
-  - id: quest_qrng_12q_research_perf
-    circuit: {kind: quest_compatible, name: QRNG, n_qubits: 12, repeat_layers: 64}
-  - id: quest_qrng_14q_research_perf
-    circuit: {kind: quest_compatible, name: QRNG, n_qubits: 14, repeat_layers: 64}
-  - id: quest_qrng_16q_research_perf
-    circuit: {kind: quest_compatible, name: QRNG, n_qubits: 16, repeat_layers: 64}
-  - id: quest_qrng_18q_research_perf
-    circuit: {kind: quest_compatible, name: QRNG, n_qubits: 18, repeat_layers: 64}
-  - id: quest_qrng_20q_research_perf
-    circuit: {kind: quest_compatible, name: QRNG, n_qubits: 20, repeat_layers: 64}
-  - id: quest_bv_10q_research_perf
-    circuit: {kind: quest_compatible, name: BV, n_qubits: 10, repeat_layers: 64}
-  - id: quest_bv_12q_research_perf
-    circuit: {kind: quest_compatible, name: BV, n_qubits: 12, repeat_layers: 64}
-  - id: quest_bv_14q_research_perf
-    circuit: {kind: quest_compatible, name: BV, n_qubits: 14, repeat_layers: 64}
-  - id: quest_bv_16q_research_perf
-    circuit: {kind: quest_compatible, name: BV, n_qubits: 16, repeat_layers: 64}
-  - id: quest_bv_18q_research_perf
-    circuit: {kind: quest_compatible, name: BV, n_qubits: 18, repeat_layers: 64}
-  - id: quest_bv_20q_research_perf
-    circuit: {kind: quest_compatible, name: BV, n_qubits: 20, repeat_layers: 64}
-  - id: quest_xor_10q_research_perf
-    circuit: {kind: quest_compatible, name: XOR, n_qubits: 10, repeat_layers: 128}
-  - id: quest_xor_12q_research_perf
-    circuit: {kind: quest_compatible, name: XOR, n_qubits: 12, repeat_layers: 128}
-  - id: quest_xor_14q_research_perf
-    circuit: {kind: quest_compatible, name: XOR, n_qubits: 14, repeat_layers: 128}
-  - id: quest_xor_16q_research_perf
-    circuit: {kind: quest_compatible, name: XOR, n_qubits: 16, repeat_layers: 128}
-  - id: quest_xor_18q_research_perf
-    circuit: {kind: quest_compatible, name: XOR, n_qubits: 18, repeat_layers: 128}
-  - id: quest_xor_20q_research_perf
-    circuit: {kind: quest_compatible, name: XOR, n_qubits: 20, repeat_layers: 128}
-  - id: quest_edc_10q_research_perf
-    circuit: {kind: quest_compatible, name: EDC, n_qubits: 10, repeat_layers: 64}
-  - id: quest_edc_12q_research_perf
-    circuit: {kind: quest_compatible, name: EDC, n_qubits: 12, repeat_layers: 64}
-  - id: quest_edc_14q_research_perf
-    circuit: {kind: quest_compatible, name: EDC, n_qubits: 14, repeat_layers: 64}
-  - id: quest_edc_16q_research_perf
-    circuit: {kind: quest_compatible, name: EDC, n_qubits: 16, repeat_layers: 64}
-  - id: quest_edc_18q_research_perf
-    circuit: {kind: quest_compatible, name: EDC, n_qubits: 18, repeat_layers: 64}
-  - id: quest_edc_20q_research_perf
-    circuit: {kind: quest_compatible, name: EDC, n_qubits: 20, repeat_layers: 64}
-  - id: quest_hs_10q_research_perf
-    circuit: {kind: quest_compatible, name: HS, allocated_qubits: 10, logical_qubits: 5, repeat_layers: 64}
-  - id: quest_hs_12q_research_perf
-    circuit: {kind: quest_compatible, name: HS, allocated_qubits: 12, logical_qubits: 6, repeat_layers: 64}
-  - id: quest_hs_14q_research_perf
-    circuit: {kind: quest_compatible, name: HS, allocated_qubits: 14, logical_qubits: 7, repeat_layers: 64}
-  - id: quest_hs_16q_research_perf
-    circuit: {kind: quest_compatible, name: HS, allocated_qubits: 16, logical_qubits: 8, repeat_layers: 64}
-  - id: quest_hs_18q_research_perf
-    circuit: {kind: quest_compatible, name: HS, allocated_qubits: 18, logical_qubits: 9, repeat_layers: 64}
-  - id: quest_hs_20q_research_perf
-    circuit: {kind: quest_compatible, name: HS, allocated_qubits: 20, logical_qubits: 10, repeat_layers: 64}
+  - {id: quest_qrng_4q_research_perf, circuit: {kind: quest_compatible, name: QRNG, n_qubits: 4, repeat_layers: 64}}
+  - {id: quest_qrng_6q_research_perf, circuit: {kind: quest_compatible, name: QRNG, n_qubits: 6, repeat_layers: 64}}
+  - {id: quest_qrng_8q_research_perf, circuit: {kind: quest_compatible, name: QRNG, n_qubits: 8, repeat_layers: 64}}
+  - {id: quest_qrng_10q_research_perf, circuit: {kind: quest_compatible, name: QRNG, n_qubits: 10, repeat_layers: 64}}
+  - {id: quest_qrng_12q_research_perf, circuit: {kind: quest_compatible, name: QRNG, n_qubits: 12, repeat_layers: 64}}
+  - {id: quest_qrng_14q_research_perf, circuit: {kind: quest_compatible, name: QRNG, n_qubits: 14, repeat_layers: 64}}
+  - {id: quest_qrng_16q_research_perf, circuit: {kind: quest_compatible, name: QRNG, n_qubits: 16, repeat_layers: 64}}
+  - {id: quest_bv_4q_research_perf, circuit: {kind: quest_compatible, name: BV, n_qubits: 4, repeat_layers: 64}}
+  - {id: quest_bv_6q_research_perf, circuit: {kind: quest_compatible, name: BV, n_qubits: 6, repeat_layers: 64}}
+  - {id: quest_bv_8q_research_perf, circuit: {kind: quest_compatible, name: BV, n_qubits: 8, repeat_layers: 64}}
+  - {id: quest_bv_10q_research_perf, circuit: {kind: quest_compatible, name: BV, n_qubits: 10, repeat_layers: 64}}
+  - {id: quest_bv_12q_research_perf, circuit: {kind: quest_compatible, name: BV, n_qubits: 12, repeat_layers: 64}}
+  - {id: quest_bv_14q_research_perf, circuit: {kind: quest_compatible, name: BV, n_qubits: 14, repeat_layers: 64}}
+  - {id: quest_bv_16q_research_perf, circuit: {kind: quest_compatible, name: BV, n_qubits: 16, repeat_layers: 64}}
+  - {id: quest_xor_4q_research_perf, circuit: {kind: quest_compatible, name: XOR, n_qubits: 4, repeat_layers: 128}}
+  - {id: quest_xor_6q_research_perf, circuit: {kind: quest_compatible, name: XOR, n_qubits: 6, repeat_layers: 128}}
+  - {id: quest_xor_8q_research_perf, circuit: {kind: quest_compatible, name: XOR, n_qubits: 8, repeat_layers: 128}}
+  - {id: quest_xor_10q_research_perf, circuit: {kind: quest_compatible, name: XOR, n_qubits: 10, repeat_layers: 128}}
+  - {id: quest_xor_12q_research_perf, circuit: {kind: quest_compatible, name: XOR, n_qubits: 12, repeat_layers: 128}}
+  - {id: quest_xor_14q_research_perf, circuit: {kind: quest_compatible, name: XOR, n_qubits: 14, repeat_layers: 128}}
+  - {id: quest_xor_16q_research_perf, circuit: {kind: quest_compatible, name: XOR, n_qubits: 16, repeat_layers: 128}}
+  - {id: quest_bb84_4q_research_perf, circuit: {kind: quest_compatible, name: BB84, n_qubits: 4, repeat_layers: 64}}
+  - {id: quest_bb84_6q_research_perf, circuit: {kind: quest_compatible, name: BB84, n_qubits: 6, repeat_layers: 64}}
+  - {id: quest_bb84_8q_research_perf, circuit: {kind: quest_compatible, name: BB84, n_qubits: 8, repeat_layers: 64}}
+  - {id: quest_bb84_10q_research_perf, circuit: {kind: quest_compatible, name: BB84, n_qubits: 10, repeat_layers: 64}}
+  - {id: quest_bb84_12q_research_perf, circuit: {kind: quest_compatible, name: BB84, n_qubits: 12, repeat_layers: 64}}
+  - {id: quest_bb84_14q_research_perf, circuit: {kind: quest_compatible, name: BB84, n_qubits: 14, repeat_layers: 64}}
+  - {id: quest_bb84_16q_research_perf, circuit: {kind: quest_compatible, name: BB84, n_qubits: 16, repeat_layers: 64}}
+  - {id: quest_edc_4q_research_perf, circuit: {kind: quest_compatible, name: EDC, n_qubits: 4, repeat_layers: 64}}
+  - {id: quest_edc_6q_research_perf, circuit: {kind: quest_compatible, name: EDC, n_qubits: 6, repeat_layers: 64}}
+  - {id: quest_edc_8q_research_perf, circuit: {kind: quest_compatible, name: EDC, n_qubits: 8, repeat_layers: 64}}
+  - {id: quest_edc_10q_research_perf, circuit: {kind: quest_compatible, name: EDC, n_qubits: 10, repeat_layers: 64}}
+  - {id: quest_edc_12q_research_perf, circuit: {kind: quest_compatible, name: EDC, n_qubits: 12, repeat_layers: 64}}
+  - {id: quest_edc_14q_research_perf, circuit: {kind: quest_compatible, name: EDC, n_qubits: 14, repeat_layers: 64}}
+  - {id: quest_edc_16q_research_perf, circuit: {kind: quest_compatible, name: EDC, n_qubits: 16, repeat_layers: 64}}
+  - {id: quest_hs_4q_research_perf, circuit: {kind: quest_compatible, name: HS, allocated_qubits: 4, logical_qubits: 2, repeat_layers: 64}}
+  - {id: quest_hs_6q_research_perf, circuit: {kind: quest_compatible, name: HS, allocated_qubits: 6, logical_qubits: 3, repeat_layers: 64}}
+  - {id: quest_hs_8q_research_perf, circuit: {kind: quest_compatible, name: HS, allocated_qubits: 8, logical_qubits: 4, repeat_layers: 64}}
+  - {id: quest_hs_10q_research_perf, circuit: {kind: quest_compatible, name: HS, allocated_qubits: 10, logical_qubits: 5, repeat_layers: 64}}
+  - {id: quest_hs_12q_research_perf, circuit: {kind: quest_compatible, name: HS, allocated_qubits: 12, logical_qubits: 6, repeat_layers: 64}}
+  - {id: quest_hs_14q_research_perf, circuit: {kind: quest_compatible, name: HS, allocated_qubits: 14, logical_qubits: 7, repeat_layers: 64}}
+  - {id: quest_hs_16q_research_perf, circuit: {kind: quest_compatible, name: HS, allocated_qubits: 16, logical_qubits: 8, repeat_layers: 64}}
 
 routes:
   - id: quest_cpu_full_state_exact

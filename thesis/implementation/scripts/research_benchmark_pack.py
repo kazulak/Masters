@@ -33,6 +33,7 @@ RESEARCH_SUITES = {
     "cpu_gpu": ROOT / "configs" / "suites" / "manual" / "research_cpu_gpu.yml",
     "cpu_gpu_correctness": ROOT / "configs" / "suites" / "manual" / "research_cpu_gpu_correctness.yml",
     "cpu_tn": ROOT / "configs" / "suites" / "manual" / "research_cpu_tn.yml",
+    "planner_paths": ROOT / "configs" / "suites" / "manual" / "research_planner_compare.yml",
     # This group intentionally uses the strict generic-only MVP command rather
     # than the route-comparison suite.  The latter permits dense bridge tasks,
     # which is useful for route coverage but is not generic-TN boundary evidence.
@@ -44,6 +45,7 @@ SUITE_COMMAND_ORDER = (
     "cpu_gpu_correctness",
     "cpu_gpu",
     "cpu_tn",
+    "planner_paths",
     "upmem_boundary",
     "internal_parallelism",
 )
@@ -132,10 +134,9 @@ def print_plan(root: Path = ROOT) -> None:
         print(f"  {_bench_command(_research_suite_argv(key, root))}")
     print("")
     print("Pack commands:")
-    print("  make research-plan")
-    print("  make research-benchmarks")
-    print("  RUN_RESEARCH=1 make research-benchmarks")
-    print("  make research-report")
+    print("  make thesis-run")
+    print("  make thesis-promote")
+    print("  make thesis-report")
     print("")
     print("Derived artifacts are written under runs/comparisons/research_pack/<timestamp>/; evidence runs remain read-only.")
 
@@ -212,6 +213,8 @@ def _write_pack(
     speedup_rows = paired_speedups(records)
     cpu_gpu_rows = cpu_gpu_performance_summary(speedup_rows)
     quantization_rows = upmem_quantization_attribution(records)
+    same_plan_rows = same_plan_execution(records)
+    planner_rows = planner_comparison(records)
     unsupported_rows = unsupported_cases(records)
     validation_rows = validation_summary(records)
     capability_rows = route_capability_matrix(records)
@@ -219,10 +222,12 @@ def _write_pack(
     _write_csv(out_dir / "paired_speedups.csv", speedup_rows, PAIRED_SPEEDUP_FIELDS)
     _write_csv(out_dir / "cpu_gpu_performance_summary.csv", cpu_gpu_rows, CPU_GPU_PERFORMANCE_SUMMARY_FIELDS)
     _write_csv(out_dir / "upmem_quantization_attribution.csv", quantization_rows, UPMEM_QUANTIZATION_ATTRIBUTION_FIELDS)
+    _write_csv(out_dir / "same_plan_execution.csv", same_plan_rows, SAME_PLAN_EXECUTION_FIELDS)
+    _write_csv(out_dir / "planner_comparison.csv", planner_rows, PLANNER_COMPARISON_FIELDS)
     _write_csv(out_dir / "unsupported_cases.csv", unsupported_rows, UNSUPPORTED_FIELDS)
     _write_csv(out_dir / "validation_summary.csv", validation_rows, VALIDATION_SUMMARY_FIELDS)
     _write_csv(out_dir / "route_capability_matrix.csv", capability_rows, ROUTE_CAPABILITY_FIELDS)
-    plot_manifest = write_plots(out_dir, stats_rows, cpu_gpu_rows, quantization_rows)
+    plot_manifest = write_plots(out_dir, stats_rows, cpu_gpu_rows, quantization_rows, same_plan_rows, planner_rows)
     _write_json(out_dir / "plot_manifest.json", plot_manifest)
     (out_dir / "benchmark_summary.md").write_text(
         benchmark_summary(
@@ -231,6 +236,7 @@ def _write_pack(
             stats_rows,
             speedup_rows,
             quantization_rows,
+            planner_rows,
             unsupported_rows,
             validation_rows,
             capability_rows,
@@ -240,6 +246,7 @@ def _write_pack(
         ),
         encoding="utf-8",
     )
+    _update_latest_link(out_dir.parent, out_dir)
     print(out_dir)
     return 1 if boundary["status"] == "failed" or guard_issues else 0
 
@@ -258,7 +265,7 @@ def build_manifest(
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "root": root.as_posix(),
         "git_commit": _git(root, ["rev-parse", "HEAD"]),
-        "dirty_worktree": bool(_git(root, ["status", "--short"])),
+        "dirty_worktree": bool(_git(root, ["status", "--short", "--", "."])),
         "command_line": " ".join(sys.argv),
         "hostname": socket.gethostname(),
         "platform": platform.platform(),
@@ -294,6 +301,9 @@ PER_CASE_ROUTE_STATS_FIELDS = [
     "backend_family",
     "execution_model",
     "parallelism_mode",
+    "circuit_semantics_hash",
+    "tensor_network_hash",
+    "contraction_plan_hash",
     "contraction_execution_target",
     "upmem_execution_mode",
     "policy",
@@ -317,7 +327,14 @@ PER_CASE_ROUTE_STATS_FIELDS = [
     "simulation_compute_time_s_min",
     "simulation_compute_time_s_max",
     "simulation_compute_time_s_std",
+    "planning_time_s_median",
+    "planning_time_s_mean",
+    "planning_time_s_min",
+    "planning_time_s_max",
+    "planning_time_s_std",
     "actual_transfer_bytes_median",
+    "tn_estimated_flops",
+    "tn_max_intermediate_bytes",
     "validation_passed_count",
     "validation_failed_count",
     "unsupported_count",
@@ -448,6 +465,51 @@ ROUTE_CAPABILITY_FIELDS = [
     "hardware_speedup_applicable_count",
 ]
 
+SAME_PLAN_EXECUTION_FIELDS = [
+    "schema_version",
+    "suite_id",
+    "case_id",
+    "case_family",
+    "benchmark_n_qubits",
+    "contraction_plan_hash",
+    "cpu_route_id",
+    "upmem_route_id",
+    "quantization_mode",
+    "cpu_time_s",
+    "upmem_simulator_time_s",
+    "route_time_ratio_cpu_over_upmem_simulator",
+    "actual_transfer_bytes",
+    "max_abs_error",
+    "same_plan_verified",
+    "hardware_speedup_applicable",
+]
+
+PLANNER_COMPARISON_FIELDS = [
+    "schema_version",
+    "suite_id",
+    "case_id",
+    "case_family",
+    "benchmark_n_qubits",
+    "planner_id",
+    "optimize_mode",
+    "contraction_plan_hash",
+    "planning_time_s",
+    "task_count",
+    "tn_estimated_flops",
+    "tn_max_intermediate_bytes",
+    "total_host_to_dpu_bytes",
+    "total_dpu_to_host_bytes",
+    "total_mram_to_wram_bytes",
+    "tiling_required_task_count",
+    "estimated_total_tile_count",
+    "estimated_max_parallel_tiles",
+    "upmem_pressure_score",
+    "upmem_rank",
+    "flop_rank",
+    "parallelism_evidence_type",
+    "execution_plan_executed",
+]
+
 
 def per_case_route_stats(records: list[JsonDict]) -> list[JsonDict]:
     grouped: dict[tuple[Any, ...], list[JsonDict]] = defaultdict(list)
@@ -469,6 +531,7 @@ def per_case_route_stats(records: list[JsonDict]) -> list[JsonDict]:
         first = group[0]
         total_values = _numbers(row.get("total_wall_time_s") for row in group)
         compute_values = _numbers(row.get("simulation_compute_time_s") for row in group)
+        planning_values = _numbers(row.get("planning_time_s") for row in group)
         transfer_values = _numbers(row.get("actual_transfer_bytes") for row in group)
         family, qubits = _family_and_qubits(first)
         errors = [_validation_errors(row) for row in group]
@@ -485,6 +548,9 @@ def per_case_route_stats(records: list[JsonDict]) -> list[JsonDict]:
                 "backend_family": first.get("backend_family"),
                 "execution_model": first.get("execution_model"),
                 "parallelism_mode": first.get("parallelism_mode"),
+                "circuit_semantics_hash": first.get("circuit_semantics_hash"),
+                "tensor_network_hash": first.get("tensor_network_hash"),
+                "contraction_plan_hash": first.get("contraction_plan_hash"),
                 "contraction_execution_target": first.get("contraction_execution_target"),
                 "upmem_execution_mode": first.get("upmem_execution_mode"),
                 "policy": _record_value(first, "policy"),
@@ -500,7 +566,10 @@ def per_case_route_stats(records: list[JsonDict]) -> list[JsonDict]:
                 "repeat_count": len(group),
                 **_stats("total_wall_time_s", total_values),
                 **_stats("simulation_compute_time_s", compute_values),
+                **_stats("planning_time_s", planning_values),
                 **_stats("actual_transfer_bytes", transfer_values),
+                "tn_estimated_flops": _first_present(group, "tn_estimated_flops"),
+                "tn_max_intermediate_bytes": _first_present(group, "tn_max_intermediate_bytes"),
                 "validation_passed_count": sum(1 for row in group if str(row.get("validation_status")) in {"passed", "passed_native_status", "passed_runtime_only"}),
                 "validation_failed_count": sum(1 for row in group if str(row.get("validation_status")) not in {"passed", "passed_native_status", "passed_runtime_only", "skipped"}),
                 "unsupported_count": sum(1 for row in group if _is_unsupported(row)),
@@ -703,6 +772,101 @@ def upmem_quantization_attribution(records: list[JsonDict]) -> list[JsonDict]:
     return rows
 
 
+def same_plan_execution(records: list[JsonDict]) -> list[JsonDict]:
+    cpu_by_plan: dict[tuple[str, str, str], JsonDict] = {}
+    upmem_rows: list[JsonDict] = []
+    for record in records:
+        plan_hash = str(record.get("contraction_plan_hash") or "")
+        if not plan_hash:
+            continue
+        key = (str(record.get("suite_id") or ""), str(record.get("case_id") or ""), plan_hash)
+        if (
+            record.get("route_id") == "cpu_tn_einsum_exact"
+            and record.get("contraction_execution_target") == "cpu"
+            and str(record.get("status") or "") == "completed"
+        ):
+            cpu_by_plan[key] = record
+        elif _is_strict_generic_upmem_record(record) and str(record.get("status") or "") == "completed":
+            upmem_rows.append(record)
+
+    rows: list[JsonDict] = []
+    for upmem in upmem_rows:
+        plan_hash = str(upmem["contraction_plan_hash"])
+        key = (str(upmem.get("suite_id") or ""), str(upmem.get("case_id") or ""), plan_hash)
+        cpu = cpu_by_plan.get(key)
+        if cpu is None:
+            continue
+        cpu_time = _positive(cpu.get("simulation_compute_time_s") or cpu.get("kernel_time_s"))
+        upmem_time = _positive(upmem.get("simulation_compute_time_s") or upmem.get("kernel_time_s"))
+        if cpu_time is None or upmem_time is None:
+            continue
+        family, qubits = _family_and_qubits(upmem)
+        rows.append(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "suite_id": key[0],
+                "case_id": key[1],
+                "case_family": family,
+                "benchmark_n_qubits": qubits["benchmark_n_qubits"],
+                "contraction_plan_hash": plan_hash,
+                "cpu_route_id": "cpu_tn_einsum_exact",
+                "upmem_route_id": str(upmem.get("route_id") or "upmem_tn_runtime"),
+                "quantization_mode": _record_value(upmem, "quantization_mode"),
+                "cpu_time_s": cpu_time,
+                "upmem_simulator_time_s": upmem_time,
+                "route_time_ratio_cpu_over_upmem_simulator": cpu_time / upmem_time,
+                "actual_transfer_bytes": upmem.get("actual_transfer_bytes"),
+                "max_abs_error": upmem.get("max_abs_error") or _validation_errors(upmem).get("max_abs_error"),
+                "same_plan_verified": True,
+                "hardware_speedup_applicable": False,
+            }
+        )
+    return sorted(rows, key=lambda row: (str(row["case_family"]), int(row["benchmark_n_qubits"] or 0), str(row["quantization_mode"])))
+
+
+def planner_comparison(records: list[JsonDict]) -> list[JsonDict]:
+    rows: list[JsonDict] = []
+    for record in records:
+        if record.get("route_id") != "planner_candidate_model":
+            continue
+        family, qubits = _family_and_qubits(record)
+        rows.append(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "suite_id": record.get("suite_id"),
+                "case_id": record.get("case_id"),
+                "case_family": family,
+                "benchmark_n_qubits": qubits["benchmark_n_qubits"],
+                "planner_id": record.get("planner_id") or record.get("backend_id"),
+                "optimize_mode": record.get("optimize_mode"),
+                "contraction_plan_hash": record.get("contraction_plan_hash"),
+                "planning_time_s": record.get("planning_time_s"),
+                "task_count": record.get("task_count"),
+                "tn_estimated_flops": record.get("tn_estimated_flops"),
+                "tn_max_intermediate_bytes": record.get("tn_max_intermediate_bytes"),
+                "total_host_to_dpu_bytes": record.get("total_host_to_dpu_bytes"),
+                "total_dpu_to_host_bytes": record.get("total_dpu_to_host_bytes"),
+                "total_mram_to_wram_bytes": record.get("total_mram_to_wram_bytes"),
+                "tiling_required_task_count": record.get("tiling_required_task_count"),
+                "estimated_total_tile_count": record.get("estimated_total_tile_count"),
+                "estimated_max_parallel_tiles": record.get("estimated_max_parallel_tiles"),
+                "upmem_pressure_score": record.get("upmem_pressure_score"),
+                "upmem_rank": record.get("upmem_rank"),
+                "flop_rank": record.get("flop_rank"),
+                "parallelism_evidence_type": record.get("parallelism_evidence_type"),
+                "execution_plan_executed": record.get("execution_plan_executed"),
+            }
+        )
+    return sorted(
+        rows,
+        key=lambda row: (
+            str(row["case_family"]),
+            int(row.get("benchmark_n_qubits") or 0),
+            str(row.get("planner_id") or ""),
+        ),
+    )
+
+
 def unsupported_cases(records: list[JsonDict]) -> list[JsonDict]:
     return [
         {
@@ -764,6 +928,8 @@ def write_plots(
     stats_rows: list[JsonDict],
     cpu_gpu_rows: list[JsonDict],
     quantization_rows: list[JsonDict],
+    same_plan_rows: list[JsonDict],
+    planner_rows: list[JsonDict],
 ) -> JsonDict:
     plots_dir = out_dir / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
@@ -782,10 +948,19 @@ def write_plots(
         ("cpu_gpu_runtime_by_qubits.png", "CPU/GPU runtime by qubits", "cpu_gpu_performance_summary.csv", lambda path: _plot_cpu_gpu_runtime(plt, path, cpu_gpu_rows)),
         ("cpu_gpu_speedup_by_qubits.png", "CPU/GPU speedup by qubits", "cpu_gpu_performance_summary.csv", lambda path: _plot_cpu_gpu_speedup(plt, path, cpu_gpu_rows)),
         ("cpu_tn_runtime_by_qubits.png", "CPU tensor-network runtime by qubits", "per_case_route_stats.csv", lambda path: _plot_cpu_tn_runtime(plt, path, stats_rows)),
+        ("full_state_vs_tn_runtime_by_qubits.png", "QuEST full-state versus CPU tensor-network runtime", "per_case_route_stats.csv", lambda path: _plot_full_state_vs_tn_runtime(plt, path, stats_rows)),
+        ("tn_planning_vs_contraction.png", "TN planning versus contraction time", "per_case_route_stats.csv", lambda path: _plot_tn_planning_vs_contraction(plt, path, stats_rows)),
+        ("tn_path_flops_by_family_size.png", "TN path estimated FLOPs", "per_case_route_stats.csv", lambda path: _plot_tn_path_metric(plt, path, stats_rows, metric="tn_estimated_flops", ylabel="Estimated FLOPs", title="TN path estimated FLOPs")),
+        ("tn_path_peak_memory_by_family_size.png", "TN path peak intermediate memory", "per_case_route_stats.csv", lambda path: _plot_tn_path_metric(plt, path, stats_rows, metric="tn_max_intermediate_bytes", ylabel="Peak intermediate bytes", title="TN path peak intermediate memory")),
         ("cpu_tn_slicing_flop_ratio.png", "Quimb slicing FLOP ratio", "per_case_route_stats.csv", lambda path: _plot_slicing_ratio(plt, path, stats_rows)),
         ("upmem_supported_boundary.png", "UPMEM SDK simulator support boundary", "per_case_route_stats.csv", lambda path: _plot_upmem_boundary(plt, path, stats_rows)),
         ("upmem_accuracy_error.png", "UPMEM SDK simulator accuracy", "per_case_route_stats.csv", lambda path: _plot_upmem_accuracy(plt, path, stats_rows)),
         ("upmem_quantization_attribution.png", "UPMEM generic quantization attribution", "upmem_quantization_attribution.csv", lambda path: _plot_upmem_quantization_attribution(plt, path, quantization_rows)),
+        ("quantization_runtime_by_executor.png", "Quantization route runtime attribution", "upmem_quantization_attribution.csv", lambda path: _plot_quantization_metric(plt, path, quantization_rows, metric="route_runtime_ratio_none_over_quantized", ylabel="float32 time / int8 time", title="UPMEM SDK simulator quantization runtime ratio")),
+        ("quantization_transfer_bytes.png", "Quantization transfer attribution", "upmem_quantization_attribution.csv", lambda path: _plot_quantization_metric(plt, path, quantization_rows, metric="transfer_ratio_none_over_quantized", ylabel="float32 bytes / int8 bytes", title="UPMEM transfer-volume ratio")),
+        ("quantization_error_by_family_size.png", "Quantization accuracy attribution", "upmem_quantization_attribution.csv", lambda path: _plot_quantization_metric(plt, path, quantization_rows, metric="quantized_max_abs_error_vs_full_precision", ylabel="Max absolute error", title="UPMEM int8 error versus full precision", log_scale=True)),
+        ("same_plan_cpu_upmem_runtime.png", "Same-plan CPU versus UPMEM SDK simulator runtime", "same_plan_execution.csv", lambda path: _plot_same_plan_runtime(plt, path, same_plan_rows)),
+        ("planner_flops_vs_upmem_pressure.png", "Planner FLOPs versus modeled UPMEM pressure", "planner_comparison.csv", lambda path: _plot_planner_pressure(plt, path, planner_rows)),
         ("internal_parallelism_metadata_by_qubits.png", "Internal diagnostic parallelism metadata", "per_case_route_stats.csv", lambda path: _plot_internal_parallelism(plt, path, stats_rows)),
     ]
     for filename, title, source_csv, plotter in plotters:
@@ -810,6 +985,7 @@ def benchmark_summary(
     stats_rows: list[JsonDict],
     speedup_rows: list[JsonDict],
     quantization_rows: list[JsonDict],
+    planner_rows: list[JsonDict],
     unsupported_rows: list[JsonDict],
     validation_rows: list[JsonDict],
     capability_rows: list[JsonDict],
@@ -846,8 +1022,8 @@ def benchmark_summary(
             "",
             "## Exact Commands",
             "",
-            "Run `make research-plan` to print the command pack.",
-            "Run `RUN_RESEARCH=1 make research-benchmarks` for full manual execution.",
+            "Run `make research-plan` to print the underlying commands.",
+            "Run `make thesis-run` for the complete local benchmark matrix.",
             "",
             "## Hardware And Software Manifest",
             "",
@@ -898,6 +1074,7 @@ def benchmark_summary(
             f"- Per-case route statistic rows: {len(stats_rows)}.",
             f"- Valid CPU/GPU paired speedup rows: {len(speedup_rows)}.",
             f"- Matched strict generic UPMEM float32/int8 attribution rows: {len(quantization_rows)}.",
+            f"- Modeled contraction-path candidate rows: {len(planner_rows)}.",
             f"- Unsupported/skipped rows preserved: {len(unsupported_rows)}.",
             "",
             "## Unsupported Cases",
@@ -1034,21 +1211,23 @@ def _plot_cpu_gpu_runtime(plt: Any, path: Path, rows: list[JsonDict]) -> str | N
     usable = [row for row in rows if _plot_qubits(row) is not None]
     if not usable:
         return "no_performance_tier_cpu_gpu_rows"
-    ordered = sorted(usable, key=lambda row: (str(row["case_family"]), int(_plot_qubits(row) or 0), str(row["case_id"])))
-    labels = [f"{row['case_family']}_{_plot_qubits(row)}q" for row in ordered]
-    x = list(range(len(labels)))
-    width = 0.36
-    fig, ax = plt.subplots(figsize=(max(10.0, len(labels) * 0.4), 6.0), constrained_layout=True)
-    ax.bar([i - width / 2 for i in x], [float(row["cpu_simulation_compute_time_s_median"]) for row in ordered], width=width, label="QuEST CPU")
-    ax.bar([i + width / 2 for i in x], [float(row["gpu_simulation_compute_time_s_median"]) for row in ordered], width=width, label="QuEST GPU")
-    ax.set_yscale("log")
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=60, ha="right", fontsize=8)
-    ax.set_xlabel("Circuit family and qubits")
-    ax.set_ylabel("Median compute time (s, log scale)")
-    ax.set_title("CPU/GPU full-state compute runtime (performance tier)")
-    ax.legend()
-    ax.grid(True, axis="y", alpha=0.3)
+    families = sorted({str(row["case_family"]) for row in usable})
+    fig, axes = plt.subplots(2, 3, figsize=(13.0, 7.5), constrained_layout=True, sharey=True)
+    for axis, family in zip(axes.flat, families):
+        group = sorted((row for row in usable if str(row["case_family"]) == family), key=lambda row: int(_plot_qubits(row) or 0))
+        qubits = [int(_plot_qubits(row) or 0) for row in group]
+        axis.plot(qubits, [float(row["cpu_simulation_compute_time_s_median"]) for row in group], marker="o", label="QuEST CPU")
+        axis.plot(qubits, [float(row["gpu_simulation_compute_time_s_median"]) for row in group], marker="s", label="QuEST GPU")
+        axis.set_yscale("log")
+        axis.set_title(family)
+        axis.set_xlabel("Qubits")
+        axis.grid(True, alpha=0.3)
+    for axis in axes[:, 0]:
+        axis.set_ylabel("Median compute time (s, log)")
+    for axis in axes.flat[len(families) :]:
+        axis.set_visible(False)
+    axes.flat[0].legend(fontsize="small")
+    fig.suptitle("CPU/GPU full-state compute runtime (performance tier)")
     _save_plot(fig, path)
     return None
 
@@ -1078,22 +1257,249 @@ def _plot_cpu_tn_runtime(plt: Any, path: Path, rows: list[JsonDict]) -> str | No
     selected = [row for row in rows if row.get("route_id") in {"quimb_tn_exact", "quimb_tn_sliced_exact"} and _positive(row.get("simulation_compute_time_s_median")) is not None]
     if not selected:
         return "no_quimb_tn_rows"
-    fig, ax = plt.subplots(figsize=(9.5, 5.8), constrained_layout=True)
-    for route in ("quimb_tn_exact", "quimb_tn_sliced_exact"):
-        group = sorted(
-            (row for row in selected if row["route_id"] == route and _plot_qubits(row) is not None),
-            key=lambda row: (str(row["case_family"]), int(_plot_qubits(row) or 0), str(row["case_id"])),
-        )
-        if not group:
-            continue
-        labels = [f"{row['case_family']}_{_plot_qubits(row)}q" for row in group]
-        ax.plot(range(len(group)), [float(row["simulation_compute_time_s_median"]) for row in group], marker="o", label=route)
+    families = sorted({str(row["case_family"]) for row in selected})
+    fig, axes = plt.subplots(2, 3, figsize=(13.0, 7.5), constrained_layout=True, sharey=True)
+    for axis, family in zip(axes.flat, families):
+        for route, label, marker in (
+            ("quimb_tn_exact", "Quimb unsliced", "o"),
+            ("quimb_tn_sliced_exact", "Quimb sliced", "s"),
+        ):
+            group = sorted(
+                (row for row in selected if row["route_id"] == route and str(row["case_family"]) == family),
+                key=lambda row: int(_plot_qubits(row) or 0),
+            )
+            if group:
+                axis.plot(
+                    [int(_plot_qubits(row) or 0) for row in group],
+                    [float(row["simulation_compute_time_s_median"]) for row in group],
+                    marker=marker,
+                    label=label,
+                )
+        axis.set_yscale("log")
+        axis.set_title(family)
+        axis.set_xlabel("Qubits")
+        axis.grid(True, alpha=0.3)
+    for axis in axes[:, 0]:
+        axis.set_ylabel("Median contraction time (s, log)")
+    for axis in axes.flat[len(families) :]:
+        axis.set_visible(False)
+    axes.flat[0].legend(fontsize="small")
+    fig.suptitle("CPU tensor-network contraction runtime")
+    _save_plot(fig, path)
+    return None
+
+
+def _plot_full_state_vs_tn_runtime(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+    routes = {
+        "quest_cpu_full_state_exact": ("QuEST CPU full state", "o"),
+        "quimb_tn_exact": ("Quimb TN unsliced", "s"),
+        "quimb_tn_sliced_exact": ("Quimb TN sliced", "^"),
+    }
+    selected = [
+        row
+        for row in rows
+        if row.get("suite_id") == "research_cpu_tn"
+        and row.get("route_id") in routes
+        and _plot_qubits(row) is not None
+        and _positive(row.get("simulation_compute_time_s_median")) is not None
+    ]
+    if not selected:
+        return "no_matching_full_state_and_tn_rows"
+    families = sorted({str(row["case_family"]) for row in selected})
+    fig, axes = plt.subplots(2, 3, figsize=(13.0, 7.5), constrained_layout=True, sharey=True)
+    for axis, family in zip(axes.flat, families):
+        for route, (label, marker) in routes.items():
+            group = sorted(
+                (row for row in selected if row["route_id"] == route and str(row["case_family"]) == family),
+                key=lambda row: int(_plot_qubits(row) or 0),
+            )
+            if group:
+                axis.plot(
+                    [int(_plot_qubits(row) or 0) for row in group],
+                    [float(row["simulation_compute_time_s_median"]) for row in group],
+                    marker=marker,
+                    label=label,
+                )
+        axis.set_yscale("log")
+        axis.set_title(family)
+        axis.set_xlabel("Qubits")
+        axis.grid(True, alpha=0.3)
+    for axis in axes[:, 0]:
+        axis.set_ylabel("Median simulation/contraction time (s, log)")
+    for axis in axes.flat[len(families) :]:
+        axis.set_visible(False)
+    axes.flat[0].legend(fontsize="x-small")
+    fig.suptitle("Full-state and tensor-network CPU implementations (different execution models)")
+    _save_plot(fig, path)
+    return None
+
+
+def _plot_tn_planning_vs_contraction(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+    selected = [
+        row
+        for row in rows
+        if row.get("route_id") in {"quimb_tn_exact", "quimb_tn_sliced_exact"}
+        and _plot_qubits(row) is not None
+        and _positive(row.get("simulation_compute_time_s_median")) is not None
+    ]
+    if not selected:
+        return "no_quimb_timing_rows"
+    families = sorted({str(row["case_family"]) for row in selected})
+    fig, axes = plt.subplots(2, 3, figsize=(13.0, 7.5), constrained_layout=True, sharey=True)
+    styles = {
+        "quimb_tn_exact": ("Quimb unsliced", "o"),
+        "quimb_tn_sliced_exact": ("Quimb sliced", "s"),
+    }
+    for axis, family in zip(axes.flat, families):
+        for route, (label, marker) in styles.items():
+            group = sorted(
+                (row for row in selected if row["route_id"] == route and str(row["case_family"]) == family),
+                key=lambda row: int(_plot_qubits(row) or 0),
+            )
+            if not group:
+                continue
+            x = [int(_plot_qubits(row) or 0) for row in group]
+            axis.plot(x, [max(float(row.get("planning_time_s_median") or 0.0), 1e-12) for row in group], marker=marker, linestyle="--", label=f"{label} planning")
+            axis.plot(x, [float(row["simulation_compute_time_s_median"]) for row in group], marker=marker, linestyle="-", label=f"{label} contraction")
+        axis.set_yscale("log")
+        axis.set_title(family)
+        axis.set_xlabel("Qubits")
+        axis.grid(True, alpha=0.3)
+    for axis in axes[:, 0]:
+        axis.set_ylabel("Median time (s, log)")
+    for axis in axes.flat[len(families) :]:
+        axis.set_visible(False)
+    axes.flat[0].legend(fontsize="x-small")
+    fig.suptitle("Tensor-network planning versus contraction time")
+    _save_plot(fig, path)
+    return None
+
+
+def _plot_tn_path_metric(
+    plt: Any,
+    path: Path,
+    rows: list[JsonDict],
+    *,
+    metric: str,
+    ylabel: str,
+    title: str,
+) -> str | None:
+    selected = [
+        row
+        for row in rows
+        if row.get("route_id") in {"quimb_tn_exact", "quimb_tn_sliced_exact"}
+        and _plot_qubits(row) is not None
+        and _positive(row.get(metric)) is not None
+    ]
+    if not selected:
+        return f"no_{metric}_rows"
+    families = sorted({str(row["case_family"]) for row in selected})
+    fig, axes = plt.subplots(2, 3, figsize=(13.0, 7.5), constrained_layout=True, sharey=True)
+    for axis, family in zip(axes.flat, families):
+        for route, label, marker in (
+            ("quimb_tn_exact", "Quimb unsliced", "o"),
+            ("quimb_tn_sliced_exact", "Quimb sliced", "s"),
+        ):
+            group = sorted(
+                (row for row in selected if row["route_id"] == route and str(row["case_family"]) == family),
+                key=lambda row: int(_plot_qubits(row) or 0),
+            )
+            if group:
+                axis.plot(
+                    [int(_plot_qubits(row) or 0) for row in group],
+                    [float(row[metric]) for row in group],
+                    marker=marker,
+                    label=label,
+                )
+        axis.set_yscale("log")
+        axis.set_title(family)
+        axis.set_xlabel("Qubits")
+        axis.grid(True, alpha=0.3)
+    for axis in axes[:, 0]:
+        axis.set_ylabel(f"{ylabel} (log)")
+    for axis in axes.flat[len(families) :]:
+        axis.set_visible(False)
+    axes.flat[0].legend(fontsize="small")
+    fig.suptitle(title)
+    _save_plot(fig, path)
+    return None
+
+
+def _plot_quantization_metric(
+    plt: Any,
+    path: Path,
+    rows: list[JsonDict],
+    *,
+    metric: str,
+    ylabel: str,
+    title: str,
+    log_scale: bool = False,
+) -> str | None:
+    selected = [row for row in rows if _plot_qubits(row) is not None and _positive(row.get(metric)) is not None]
+    if not selected:
+        return f"no_{metric}_rows"
+    ordered = sorted(selected, key=lambda row: (str(row["case_family"]), int(_plot_qubits(row) or 0), str(row["case_id"])))
+    labels = [f"{row['case_family']}_{_plot_qubits(row)}q" for row in ordered]
+    fig, ax = plt.subplots(figsize=(max(8.0, len(labels) * 0.5), 5.2), constrained_layout=True)
+    ax.bar(range(len(ordered)), [float(row[metric]) for row in ordered], color="#0f766e")
+    if "ratio" in metric:
+        ax.axhline(1.0, color="#64748b", linestyle="--", linewidth=1.0)
+    if log_scale:
+        ax.set_yscale("log")
+    ax.set_xticks(range(len(labels)))
+    ax.set_xticklabels(labels, rotation=60, ha="right", fontsize=8)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    _save_plot(fig, path)
+    return None
+
+
+def _plot_same_plan_runtime(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+    if not rows:
+        return "no_same_plan_cpu_upmem_rows"
+    ordered = sorted(rows, key=lambda row: (str(row["case_family"]), int(row.get("benchmark_n_qubits") or 0), str(row["quantization_mode"])))
+    labels = [f"{row['case_family']}_{row['benchmark_n_qubits']}q_{row['quantization_mode']}" for row in ordered]
+    x = list(range(len(labels)))
+    width = 0.38
+    fig, ax = plt.subplots(figsize=(max(9.0, len(labels) * 0.55), 5.8), constrained_layout=True)
+    ax.bar([value - width / 2 for value in x], [float(row["cpu_time_s"]) for row in ordered], width=width, label="CPU TaskGraph replay")
+    ax.bar([value + width / 2 for value in x], [float(row["upmem_simulator_time_s"]) for row in ordered], width=width, label="UPMEM SDK simulator")
     ax.set_yscale("log")
-    ax.set_xlabel("Case order")
-    ax.set_ylabel("Median compute time (s, log scale)")
-    ax.set_title("CPU TN runtime for Quimb routes")
-    ax.grid(True, axis="y", alpha=0.3)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=65, ha="right", fontsize=8)
+    ax.set_ylabel("Route compute time (s, log scale)")
+    ax.set_title("Same-plan CPU and UPMEM SDK simulator execution")
     ax.legend()
+    _save_plot(fig, path)
+    return None
+
+
+def _plot_planner_pressure(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+    selected = [
+        row
+        for row in rows
+        if _positive(row.get("tn_estimated_flops")) is not None
+        and _float_or_none(row.get("upmem_pressure_score")) is not None
+        and row.get("contraction_plan_hash")
+    ]
+    if len({str(row.get("planner_id")) for row in selected}) < 2:
+        return "multiple_planner_candidates_not_available"
+    fig, ax = plt.subplots(figsize=(7.5, 5.5), constrained_layout=True)
+    grouped: dict[str, list[JsonDict]] = defaultdict(list)
+    for row in selected:
+        grouped[str(row.get("planner_id") or "unknown")].append(row)
+    for planner_id, group in sorted(grouped.items()):
+        ax.scatter(
+            [float(row["tn_estimated_flops"]) for row in group],
+            [float(row["upmem_pressure_score"]) for row in group],
+            label=planner_id,
+            alpha=0.75,
+        )
+    ax.set_xscale("log")
+    ax.set_xlabel("Estimated FLOPs")
+    ax.set_ylabel("Modeled UPMEM pressure score")
+    ax.set_title("Contraction-plan FLOPs versus UPMEM transfer pressure")
+    ax.legend(fontsize="small")
     _save_plot(fig, path)
     return None
 
@@ -1221,10 +1627,19 @@ def _caption(filename: str) -> str:
         "cpu_gpu_runtime_by_qubits.png": "Performance-tier median QuEST CPU and verified QuEST GPU compute time by circuit size.",
         "cpu_gpu_speedup_by_qubits.png": "Performance-tier CPU/GPU compute speedup; values above 1 mean GPU faster.",
         "cpu_tn_runtime_by_qubits.png": "Quimb CPU tensor-network timing; sliced and unsliced routes are separate execution modes.",
+        "full_state_vs_tn_runtime_by_qubits.png": "QuEST CPU full-state and Quimb CPU TN timing on the same shallow circuits; this is an algorithm/backend comparison, not same-plan speedup.",
+        "tn_planning_vs_contraction.png": "Planning and contraction timing are reported separately for external CPU TN routes.",
+        "tn_path_flops_by_family_size.png": "Reported contraction-plan FLOP estimates by circuit family and size.",
+        "tn_path_peak_memory_by_family_size.png": "Reported peak intermediate tensor bytes by circuit family and size.",
         "cpu_tn_slicing_flop_ratio.png": "slicing_flop_ratio = sliced cotengra reported FLOPs / unsliced cotengra reported FLOPs.",
         "upmem_supported_boundary.png": "Supported versus unsupported strict generic-only UPMEM SDK simulator rows.",
         "upmem_accuracy_error.png": "Strict generic UPMEM SDK simulator max absolute error where validation data exists.",
         "upmem_quantization_attribution.png": "Same-route float32 versus int8 ratios for strict generic UPMEM SDK simulator execution; this is not hardware speedup.",
+        "quantization_runtime_by_executor.png": "Same-plan SDK simulator float32/int8 route-time ratio; this is not hardware speedup.",
+        "quantization_transfer_bytes.png": "Same-plan float32/int8 host-DPU transfer-volume ratio.",
+        "quantization_error_by_family_size.png": "Int8 maximum absolute error against the full-precision TaskGraph reference.",
+        "same_plan_cpu_upmem_runtime.png": "CPU replay and UPMEM SDK simulator rows share an identical contraction-plan hash; timing is not hardware speedup.",
+        "planner_flops_vs_upmem_pressure.png": "Planner FLOP estimates versus modeled UPMEM pressure when multiple plan candidates are available.",
         "internal_parallelism_metadata_by_qubits.png": "Diagnostic internal TaskGraph frontier metadata, not serious baseline performance.",
     }.get(filename, "")
 
@@ -1467,19 +1882,34 @@ def _research_suite_argv(key: str, root: Path) -> list[str]:
             "--artifact-retention",
             "compact",
         ]
+    if key == "planner_paths":
+        return ["compare-planners", "--suite", suite]
     return ["simulation-backend-compare", "--suite", suite, "--artifact-retention", "compact"]
 
 
 def _pack_dir(root: Path, out: Path | None) -> Path:
     if out is not None:
         return out if out.is_absolute() else root / out
-    return DEFAULT_COMPARISON_ROOT / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    return DEFAULT_COMPARISON_ROOT / datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
+
+
+def _update_latest_link(parent: Path, target: Path) -> None:
+    latest = parent / "latest"
+    try:
+        if latest.is_symlink() or latest.exists():
+            latest.unlink()
+        latest.symlink_to(target.name)
+    except OSError:
+        return
 
 
 def _latest_evidence_for_suite(root: Path, suite_id: str) -> Path | None:
     suite_root = root / "runs" / "evidence" / suite_id
     if not suite_root.exists():
         return None
+    latest = suite_root / "latest"
+    if latest.is_symlink() and latest.exists() and (latest.resolve() / "normalized_records.jsonl").is_file():
+        return latest.resolve()
     candidates = [path.parent for path in suite_root.glob("*/*/normalized_records.jsonl")]
     if not candidates:
         return None
