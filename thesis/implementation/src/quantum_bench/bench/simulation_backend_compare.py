@@ -26,7 +26,14 @@ from quantum_bench.environment import capture_environment
 from quantum_bench.providers import route_registry
 from quantum_bench.providers.base import ExecutionRoute
 from quantum_bench.targets.upmem import SYNTHETIC_PRESSURE_ERROR, is_synthetic_pressure_case
-from quantum_bench.tn import TensorNetworkValue, build_tensor_network, plan_task_graph_with_config, with_path_cost_summary
+from quantum_bench.tn import (
+    TensorNetworkValue,
+    build_execution_bundle,
+    build_tensor_network,
+    plan_task_graph_with_config,
+    with_execution_identity,
+    with_path_cost_summary,
+)
 from quantum_bench.validation import probability_error_metrics, tensor_to_quest_statevector, validate, validation_result_to_dict
 
 
@@ -326,15 +333,22 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
         )
     if _suite_uses_only_full_state_routes(suite, routes):
         network, graph = _full_state_only_graph(circuit)
+        execution_bundle_rel = None
     else:
         network = build_tensor_network(circuit)
         if _suite_requires_internal_taskgraph(suite, routes):
-            graph = with_path_cost_summary(plan_task_graph_with_config(network, suite["planner"]))
+            graph = with_execution_identity(with_path_cost_summary(plan_task_graph_with_config(network, suite["planner"])))
+            execution_bundle_rel = Path("cases") / sanitize(case_id) / "execution_bundle.json"
+            write_json(
+                run_dir / execution_bundle_rel,
+                build_execution_bundle(graph, case_id=case_id, suite_id=str(suite["suite_id"])),
+            )
         else:
             graph = _graph_without_internal_taskgraph(
                 network,
                 reason="selected external tensor-network routes plan their own contraction trees",
             )
+            execution_bundle_rel = None
     write_json(case_dir / "circuit.json", manifest(circuit))
     write_json(case_dir / "task_graph.json", graph)
     write_json(case_dir / "path_summary.json", graph.path_summary)
@@ -543,6 +557,17 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
                 "parallelism_evidence_type": result_metadata.get("parallelism_evidence_type"),
                 "execution_plan_kind": result_metadata.get("execution_plan_kind"),
                 "execution_plan_executed": result_metadata.get("execution_plan_executed"),
+                "circuit_semantics_hash": result_metadata.get("circuit_semantics_hash"),
+                "tensor_network_hash": result_metadata.get("tensor_network_hash"),
+                "contraction_plan_hash": result_metadata.get("contraction_plan_hash"),
+                "plan_reused": result_metadata.get("plan_reused"),
+                "planning_in_timed_region": result_metadata.get("planning_in_timed_region"),
+                "executor_config_hash": result_metadata.get("executor_config_hash"),
+                "execution_bundle_artifact": (
+                    artifact_ref(run_dir, execution_bundle_rel, role="execution_bundle")
+                    if result_metadata.get("contraction_plan_hash") and execution_bundle_rel is not None
+                    else None
+                ),
                 "slicing_enabled": bool(result_metadata.get("slicing_enabled", False)),
                 "slicing_backend": result_metadata.get("slicing_backend"),
                 "slicing_strategy": result_metadata.get("slicing_strategy"),

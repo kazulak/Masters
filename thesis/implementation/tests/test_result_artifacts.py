@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 from pathlib import Path
 
 from quantum_bench.bench.generic_task_bridge import run_generic_task_bridge
@@ -181,6 +182,9 @@ def test_evidence_run_layout_and_compare_results_read_only_boundary(tmp_path: Pa
     write_normalized_records(run_dir, [record])
 
     assert run_dir.parent == tmp_path / "runs" / "evidence" / "suite_a" / "upmem_generic_int8"
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(?:_\d{2})?", run_dir.name)
+    assert (run_dir.parent / "latest").resolve() == run_dir.resolve()
+    assert (run_dir.parent.parent / "latest").resolve() == run_dir.resolve()
     latest = tmp_path / "runs" / "latest"
     assert latest.is_symlink()
     assert latest.resolve() == run_dir.resolve()

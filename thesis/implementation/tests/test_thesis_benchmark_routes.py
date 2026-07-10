@@ -123,6 +123,9 @@ def test_path_replay_float64_matches_internal_task_sequence(tmp_path: Path) -> N
     assert result.metadata["path_replay_execution"] is True
     assert result.metadata["quantization_mode"] == "none"
     assert result.metadata["per_contraction_quantization"] is False
+    assert result.metadata["contraction_plan_hash"] == graph.contraction_plan_hash
+    assert result.metadata["plan_reused"] is True
+    assert result.metadata["planning_in_timed_region"] is False
 
 
 def test_path_replay_quantized_records_per_contraction_metadata(tmp_path: Path) -> None:
@@ -143,6 +146,7 @@ def test_path_replay_quantized_records_per_contraction_metadata(tmp_path: Path) 
     assert result.metadata["total_quantization_time_s"] >= 0.0
     assert result.metadata["total_dequantization_time_s"] >= 0.0
     assert result.metadata["quantized_replay_numeric_contract"] == "int8_operand_quantize_dequantize_then_complex128_einsum"
+    assert result.metadata["contraction_plan_hash"] == graph.contraction_plan_hash
 
 
 def test_thesis_report_uses_explicit_evidence_inputs(tmp_path: Path) -> None:

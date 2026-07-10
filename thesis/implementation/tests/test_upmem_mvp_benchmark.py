@@ -233,6 +233,15 @@ def test_upmem_mvp_benchmark_records_same_route_quantization_comparison(monkeypa
     assert all(record["kernel_family"] == "generic_loop_fallback" for record in upmem_records)
     assert all(record["suite_id"] == "upmem_mvp_test" for record in upmem_records)
     assert all(record["run_id"] == result.run_dir.name for record in upmem_records)
+    cpu_plan_by_case = {
+        record["case_id"]: record["contraction_plan_hash"]
+        for record in records
+        if record["execution_target"] == "cpu"
+    }
+    assert all(record["contraction_plan_hash"] == cpu_plan_by_case[record["case_id"]] for record in upmem_records)
+    assert all(record["plan_reused"] is True for record in upmem_records)
+    assert all(record["planning_in_timed_region"] is False for record in upmem_records)
+    assert (result.run_dir / "cases" / "bell_2q" / "execution_bundle.json").is_file()
     comparison = json.loads((result.run_dir / "quantization_comparison.json").read_text(encoding="utf-8"))
     assert len(comparison["rows"]) == 2
     assert all(row["same_route_comparison"] is True for row in comparison["rows"])

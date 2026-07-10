@@ -1,0 +1,87 @@
+from __future__ import annotations
+
+from dataclasses import replace
+
+import pytest
+
+from quantum_bench.circuits import builtin_circuit
+from quantum_bench.tn import (
+    build_execution_bundle,
+    build_tensor_network,
+    execution_identity_metadata,
+    executor_config_hash,
+    plan_task_graph_with_config,
+    validate_execution_bundle,
+    with_execution_identity,
+)
+
+
+def _graph(optimize: str = "greedy"):
+    network = build_tensor_network(builtin_circuit("ghz_chain", {"n_qubits": 4}))
+    return plan_task_graph_with_config(network, {"engine": "opt_einsum", "optimize": optimize})
+
+
+def test_execution_bundle_hashes_are_stable_and_validate() -> None:
+    first = _graph()
+    second = _graph()
+
+    assert first.circuit_semantics_hash == second.circuit_semantics_hash
+    assert first.tensor_network_hash == second.tensor_network_hash
+    assert first.contraction_plan_hash == second.contraction_plan_hash
+
+    bundle = build_execution_bundle(first, case_id="ghz_4q", suite_id="test")
+    validate_execution_bundle(bundle, second)
+    assert bundle["contraction_plan_hash"] == first.contraction_plan_hash
+    assert bundle["provenance"]["planning_in_timed_region"] is False
+
+
+def test_semantic_task_change_changes_plan_hash_only() -> None:
+    graph = _graph()
+    task = graph.tasks[0]
+    changed_task = replace(task, structure="test_changed_structure")
+    changed = replace(
+        graph,
+        tasks=(changed_task, *graph.tasks[1:]),
+        circuit_semantics_hash="",
+        tensor_network_hash="",
+        contraction_plan_hash="",
+    )
+    changed = with_execution_identity(changed)
+
+    assert changed.circuit_semantics_hash == graph.circuit_semantics_hash
+    assert changed.tensor_network_hash == graph.tensor_network_hash
+    assert changed.contraction_plan_hash != graph.contraction_plan_hash
+
+
+def test_stale_execution_identity_is_rejected() -> None:
+    graph = _graph()
+    stale = replace(graph, contraction_plan_hash="0" * 64)
+
+    with pytest.raises(ValueError, match="contraction_plan_hash"):
+        with_execution_identity(stale)
+
+
+def test_bundle_mismatch_is_rejected() -> None:
+    greedy = _graph("greedy")
+    auto = _graph("auto")
+    bundle = build_execution_bundle(greedy, case_id="ghz_4q", suite_id="test")
+
+    if greedy.contraction_plan_hash == auto.contraction_plan_hash:
+        changed = {**bundle, "contraction_plan_hash": "0" * 64}
+        with pytest.raises(ValueError, match="contraction_plan_hash"):
+            validate_execution_bundle(changed, greedy)
+    else:
+        with pytest.raises(ValueError, match="contraction_plan_hash"):
+            validate_execution_bundle(bundle, auto)
+
+
+def test_execution_metadata_and_executor_hash_separate_plan_from_route_config() -> None:
+    graph = _graph()
+    metadata = execution_identity_metadata(graph, plan_reused=True)
+
+    assert metadata["contraction_plan_hash"] == graph.contraction_plan_hash
+    assert metadata["plan_reused"] is True
+    assert metadata["planning_in_timed_region"] is False
+    assert executor_config_hash("cpu", {"quantization_mode": "none"}) != executor_config_hash(
+        "cpu", {"quantization_mode": "int8"}
+    )

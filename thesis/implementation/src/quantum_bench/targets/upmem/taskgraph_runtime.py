@@ -21,6 +21,7 @@ from quantum_bench.targets.upmem.evidence import (
 )
 from quantum_bench.targets.upmem.generic_bridge import execute_generic_bridge, write_generic_bridge_input_manifest
 from quantum_bench.tn.execution import frontier_waves, live_tensor_bytes, order_final_tensor, release_dead_inputs, remaining_input_uses
+from quantum_bench.tn.execution_bundle import execution_identity_metadata, executor_config_hash, with_execution_identity
 from quantum_bench.tn.network import TensorNetworkValue
 from quantum_bench.validation import validate
 
@@ -264,24 +265,39 @@ def execute_upmem_taskgraph_runtime(
     task_assignment_strategy: str = "sequential_single_dpu",
 ) -> UpmemTaskGraphRuntimeResult:
     started = time.perf_counter()
+    graph = with_execution_identity(graph)
+    execution_metadata = {
+        **execution_identity_metadata(graph, plan_reused=True),
+        "executor_config_hash": executor_config_hash(
+            "upmem_tn_runtime",
+            {
+                "policy": policy,
+                "quantization_mode": quantization_mode,
+                "schedule_mode": schedule_mode,
+                "frontier_worker_count": frontier_worker_count,
+                "dpu_group_count": dpu_group_count,
+                "task_assignment_strategy": task_assignment_strategy,
+            },
+        ),
+    }
     if policy not in UPMEM_TASKGRAPH_POLICIES:
-        return _unsupported_result(case_id, policy, quantization_mode, "unsupported_policy", started)
+        return _unsupported_result(case_id, policy, quantization_mode, "unsupported_policy", started, execution_metadata)
     if schedule_mode not in {"sequential", "frontier"}:
-        return _unsupported_result(case_id, policy, quantization_mode, f"unsupported_schedule_mode:{schedule_mode}", started)
+        return _unsupported_result(case_id, policy, quantization_mode, f"unsupported_schedule_mode:{schedule_mode}", started, execution_metadata)
     if frontier_worker_count < 1:
-        return _unsupported_result(case_id, policy, quantization_mode, "frontier_worker_count_must_be_positive", started)
+        return _unsupported_result(case_id, policy, quantization_mode, "frontier_worker_count_must_be_positive", started, execution_metadata)
     if dpu_group_count < 1:
-        return _unsupported_result(case_id, policy, quantization_mode, "dpu_group_count_must_be_positive", started)
+        return _unsupported_result(case_id, policy, quantization_mode, "dpu_group_count_must_be_positive", started, execution_metadata)
     if schedule_mode == "frontier" and frontier_worker_count > 1:
-        return _unsupported_result(case_id, policy, quantization_mode, "frontier_worker_count_gt_1_not_implemented", started)
+        return _unsupported_result(case_id, policy, quantization_mode, "frontier_worker_count_gt_1_not_implemented", started, execution_metadata)
     if quantization_mode not in {"per_task_input_quantize", "none"}:
-        return _unsupported_result(case_id, policy, quantization_mode, f"unsupported_quantization_mode:{quantization_mode}", started)
+        return _unsupported_result(case_id, policy, quantization_mode, f"unsupported_quantization_mode:{quantization_mode}", started, execution_metadata)
     if quantization_mode == "none" and policy != "generic-only":
-        return _unsupported_result(case_id, policy, quantization_mode, "quantization_none_requires_generic_only", started)
+        return _unsupported_result(case_id, policy, quantization_mode, "quantization_none_requires_generic_only", started, execution_metadata)
     if not execute_external:
-        return _unsupported_result(case_id, policy, quantization_mode, "external_execution_required", started)
+        return _unsupported_result(case_id, policy, quantization_mode, "external_execution_required", started, execution_metadata)
     if not graph.tasks:
-        return _unsupported_result(case_id, policy, quantization_mode, "empty_task_graph_not_supported", started)
+        return _unsupported_result(case_id, policy, quantization_mode, "empty_task_graph_not_supported", started, execution_metadata)
 
     tensors = {tensor.spec.id: np.asarray(tensor.array) for tensor in network.tensors}
     labels = {tensor.spec.id: tensor.spec.labels for tensor in network.tensors}
@@ -347,6 +363,7 @@ def execute_upmem_taskgraph_runtime(
                         missing_dependency_check=missing_dependency_check,
                         dependency_violation_detected=dependency_violation_detected,
                     ),
+                    execution_metadata=execution_metadata,
                 )
             missing_dependencies = [dependency for dependency in task.dependencies if dependency not in completed_task_ids]
             if missing_dependencies:
@@ -384,6 +401,7 @@ def execute_upmem_taskgraph_runtime(
                         missing_dependency_check=missing_dependency_check,
                         dependency_violation_detected=dependency_violation_detected,
                     ),
+                    execution_metadata=execution_metadata,
                 )
             if not _inputs_available(task, tensors):
                 missing = [tensor_id for tensor_id in task.input_tensor_ids if tensor_id not in tensors]
@@ -419,6 +437,7 @@ def execute_upmem_taskgraph_runtime(
                         missing_dependency_check=missing_dependency_check,
                         dependency_violation_detected=dependency_violation_detected,
                     ),
+                    execution_metadata=execution_metadata,
                 )
 
             left_tensor = _tensor_value_for(task.input_tensor_ids[0], task, tensors, labels, side="left")
@@ -463,6 +482,7 @@ def execute_upmem_taskgraph_runtime(
                         missing_dependency_check=missing_dependency_check,
                         dependency_violation_detected=dependency_violation_detected,
                     ),
+                    execution_metadata=execution_metadata,
                 )
 
             output = np.asarray(task_result["output"])
@@ -489,6 +509,7 @@ def execute_upmem_taskgraph_runtime(
             reason="final_tensor_missing",
             started=started,
             task_metrics=task_metrics,
+            execution_metadata=execution_metadata,
         )
 
     final_output, final_transposed = order_final_tensor(np.asarray(tensors[final_tensor_id]), final_labels, graph.network.output_labels)
@@ -525,6 +546,7 @@ def execute_upmem_taskgraph_runtime(
             missing_dependency_check=missing_dependency_check,
             dependency_violation_detected=dependency_violation_detected,
         ),
+        execution_metadata=execution_metadata,
     )
     return UpmemTaskGraphRuntimeResult(
         schema_version=UPMEM_TASKGRAPH_RUNTIME_SCHEMA_VERSION,
@@ -1438,6 +1460,7 @@ def _summary_payload(
     total_build_time_s: float,
     peak_live_tensor_bytes: int,
     schedule_metadata: JsonDict | None = None,
+    execution_metadata: JsonDict | None = None,
 ) -> JsonDict:
     schedule_metadata = schedule_metadata or _schedule_metadata(
         schedule_mode="sequential",
@@ -1493,6 +1516,7 @@ def _summary_payload(
             "case_id": case_id,
             "status": status,
             "reason": reason,
+            **dict(execution_metadata or {}),
             "policy": policy,
             "quantization_mode": quantization_mode,
             "whole_network_quantized_at_initialization": False,
@@ -1577,6 +1601,7 @@ def _stop_result(
     started: float,
     task_metrics: list[JsonDict],
     schedule_metadata: JsonDict | None = None,
+    execution_metadata: JsonDict | None = None,
 ) -> UpmemTaskGraphRuntimeResult:
     summary = _summary_payload(
         case_id=case_id,
@@ -1597,6 +1622,7 @@ def _stop_result(
         total_build_time_s=sum(float(row.get("build_time_s", 0.0) or 0.0) for row in task_metrics),
         peak_live_tensor_bytes=0,
         schedule_metadata=schedule_metadata,
+        execution_metadata=execution_metadata,
     )
     return UpmemTaskGraphRuntimeResult(
         schema_version=UPMEM_TASKGRAPH_RUNTIME_SCHEMA_VERSION,
@@ -1613,7 +1639,14 @@ def _stop_result(
     )
 
 
-def _unsupported_result(case_id: str, policy: str, quantization_mode: str, reason: str, started: float) -> UpmemTaskGraphRuntimeResult:
+def _unsupported_result(
+    case_id: str,
+    policy: str,
+    quantization_mode: str,
+    reason: str,
+    started: float,
+    execution_metadata: JsonDict | None = None,
+) -> UpmemTaskGraphRuntimeResult:
     return _stop_result(
         case_id=case_id,
         policy=policy,
@@ -1622,6 +1655,7 @@ def _unsupported_result(case_id: str, policy: str, quantization_mode: str, reaso
         reason=reason,
         started=started,
         task_metrics=[],
+        execution_metadata=execution_metadata,
     )
 
 

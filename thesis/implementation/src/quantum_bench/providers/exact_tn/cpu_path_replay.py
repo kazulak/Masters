@@ -19,9 +19,9 @@ from quantum_bench.core.records import (
 )
 from quantum_bench.environment import read_rapl_uj
 from quantum_bench.formats.fixed_point import FixedPointSpec, conversion_error_metrics, dequantize_fixed_point, quantize_fixed_point
-from quantum_bench.tn import plan_task_graph_with_config, with_path_cost_summary
 from quantum_bench.tn.contract import contract_binary_task
 from quantum_bench.tn.execution import execute_empty_task_graph, order_final_tensor, release_dead_inputs, remaining_input_uses
+from quantum_bench.tn.execution_bundle import execution_identity_metadata, executor_config_hash, with_execution_identity
 from quantum_bench.tn.network import TensorNetworkValue
 
 
@@ -70,7 +70,7 @@ class CpuTnPathReplayFloat64Route:
         )
 
     def prepare(self, graph: TaskGraph, network: TensorNetworkValue, context: BenchmarkContext) -> dict:
-        replay_graph = _route_graph(graph, network, context)
+        replay_graph = with_execution_identity(graph)
         return {"graph": replay_graph, "network": network, "prepare_s": 0.0, "planner": _route_planner(context, graph)}
 
     def execute(self, prepared: object, context: BenchmarkContext) -> RouteResult:
@@ -109,6 +109,8 @@ class CpuTnPathReplayFloat64Route:
                 "quantized_replay_numeric_contract": "not_applicable",
                 "total_quantization_time_s": 0.0,
                 "total_dequantization_time_s": 0.0,
+                **execution_identity_metadata(graph, plan_reused=True),
+                "executor_config_hash": executor_config_hash(self.name, dict(context.route_config.get("options") or {})),
             },
         )
 
@@ -189,28 +191,18 @@ class CpuTnPathReplayInt8QuantizedRoute(CpuTnPathReplayFloat64Route):
                 "accumulator_dtype": "complex128",
                 "scaling_applied": True,
                 "quantized_replay_numeric_contract": "int8_operand_quantize_dequantize_then_complex128_einsum",
+                **execution_identity_metadata(graph, plan_reused=True),
+                "executor_config_hash": executor_config_hash(self.name, dict(context.route_config.get("options") or {})),
             },
         )
 
 
-def _route_graph(graph: TaskGraph, network: TensorNetworkValue, context: BenchmarkContext) -> TaskGraph:
-    planner = _route_planner(context, graph)
-    if not planner:
-        return graph
-    return with_path_cost_summary(plan_task_graph_with_config(network, planner))
-
-
 def _route_planner(context: BenchmarkContext, graph: TaskGraph) -> dict[str, Any]:
-    options = dict(context.route_config.get("options") or {})
-    planner = options.get("planner")
-    if isinstance(planner, dict):
-        return dict(planner)
-    path_strategy = options.get("path_strategy") or options.get("optimize")
-    if path_strategy:
-        return {"engine": "opt_einsum", "optimize": str(path_strategy)}
     return {
-        "engine": graph.path_summary.planner_engine or "opt_einsum",
-        "optimize": graph.path_summary.optimize_mode or graph.path_summary.optimize or "greedy",
+        "engine": graph.path_summary.planner_engine or graph.path_summary.planner or "unknown",
+        "optimize": graph.path_summary.optimize_mode or graph.path_summary.optimize or "unknown",
+        "planner_id": graph.path_summary.planner_id,
+        "source": "shared_execution_bundle",
     }
 
 

@@ -9,6 +9,7 @@ from quantum_bench.core.indices import LABEL_LIST_EINSUM_SENTINEL, index_symbols
 from quantum_bench.core.records import ContractionTask, PathSummary, TaskGraph, TensorSpec
 from quantum_bench.tn.network import TensorNetworkValue
 from quantum_bench.tn.planners import OptEinsumPlanner, PathPlanner, PlannerResult, planner_from_config
+from quantum_bench.tn.execution_bundle import with_execution_identity
 
 
 DEFAULT_TARGET_ESTIMATE_KEY = "upmem_dense_int8"
@@ -90,7 +91,7 @@ def plan_task_graph_with_planner(network: TensorNetworkValue, planner: PathPlann
         path_summary=summary,
         planning_time_s=planner_result.planning_time_s,
     )
-    return with_path_cost_summary(graph)
+    return with_execution_identity(with_path_cost_summary(graph))
 
 
 def with_path_cost_summary(graph: TaskGraph, target_estimate_key: str = DEFAULT_TARGET_ESTIMATE_KEY) -> TaskGraph:

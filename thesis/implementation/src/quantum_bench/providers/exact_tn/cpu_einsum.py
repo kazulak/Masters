@@ -16,6 +16,7 @@ from quantum_bench.core.records import (
     TaskGraph,
 )
 from quantum_bench.environment import read_rapl_uj
+from quantum_bench.tn.execution_bundle import execution_identity_metadata, executor_config_hash, with_execution_identity
 from quantum_bench.tn.execution import execute_task_sequence_np_einsum
 from quantum_bench.tn.network import TensorNetworkValue
 
@@ -59,7 +60,7 @@ class CpuTnEinsumExactRoute:
         )
 
     def prepare(self, graph: TaskGraph, network: TensorNetworkValue, context: BenchmarkContext) -> dict:
-        return {"graph": graph, "network": network, "prepare_s": 0.0}
+        return {"graph": with_execution_identity(graph), "network": network, "prepare_s": 0.0}
 
     def execute(self, prepared: object, context: BenchmarkContext) -> RouteResult:
         payload = dict(prepared)  # type: ignore[arg-type]
@@ -89,7 +90,11 @@ class CpuTnEinsumExactRoute:
             profile=ExecutionProfile(prepare_s=float(payload.get("prepare_s", 0.0)), kernel_s=kernel_s, total_s=kernel_s),
             energy_joules=energy_joules,
             energy_source=energy_source,
-            metadata=metadata,
+            metadata={
+                **metadata,
+                **execution_identity_metadata(graph, plan_reused=True),
+                "executor_config_hash": executor_config_hash(self.name, dict(context.route_config.get("options") or {})),
+            },
         )
 
 

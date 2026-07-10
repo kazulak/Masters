@@ -122,6 +122,9 @@ class TaskGraph:
     path: tuple[tuple[int, ...], ...]
     path_summary: PathSummary
     planning_time_s: float
+    circuit_semantics_hash: str = ""
+    tensor_network_hash: str = ""
+    contraction_plan_hash: str = ""
 
 
 @dataclass(frozen=True)

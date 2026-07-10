@@ -32,7 +32,16 @@ from quantum_bench.targets.upmem.taskgraph_runtime import (
     build_generic_taskgraph_reference,
     execute_upmem_taskgraph_runtime,
 )
-from quantum_bench.tn import build_tensor_network, execute_task_sequence_np_einsum, plan_task_graph_with_config, with_path_cost_summary
+from quantum_bench.tn import (
+    build_execution_bundle,
+    build_tensor_network,
+    execute_task_sequence_np_einsum,
+    execution_identity_metadata,
+    executor_config_hash,
+    plan_task_graph_with_config,
+    with_execution_identity,
+    with_path_cost_summary,
+)
 
 
 UPMEM_MVP_BENCHMARK_SCHEMA_VERSION = "upmem_mvp_benchmark_v1"
@@ -247,7 +256,12 @@ def _generate_reference_case(root_dir: Path, run_dir: Path, suite: JsonDict, cas
     network = build_tensor_network(circuit)
     graph = plan_task_graph_with_config(network, suite["planner"])
     graph, _ = annotate_task_graph_with_upmem_estimates(graph)
-    graph = with_path_cost_summary(graph)
+    graph = with_execution_identity(with_path_cost_summary(graph))
+    execution_bundle_rel = Path("cases") / sanitize(case_id) / "execution_bundle.json"
+    write_json(
+        run_dir / execution_bundle_rel,
+        build_execution_bundle(graph, case_id=case_id, suite_id=str(suite["suite_id"])),
+    )
     start = time.perf_counter()
     reference_output, reference_metadata = execute_task_sequence_np_einsum(graph, network)
     cpu_time_s = time.perf_counter() - start
@@ -283,6 +297,8 @@ def _generate_reference_case(root_dir: Path, run_dir: Path, suite: JsonDict, cas
         task_count=len(graph.tasks),
         cpu_time_s=cpu_time_s,
         source_artifact=cpu_reference_json_rel.as_posix(),
+        graph=graph,
+        execution_bundle_artifact=artifact_ref(run_dir, execution_bundle_rel, role="execution_bundle"),
     )
     return {
         "status": "ready",
@@ -298,6 +314,7 @@ def _generate_reference_case(root_dir: Path, run_dir: Path, suite: JsonDict, cas
         "cpu_reference_artifact": artifact_ref(run_dir, cpu_reference_json_rel, role="cpu_reference_metadata"),
         "cpu_reference_tensor_artifact": artifact_ref(run_dir, cpu_reference_rel, role="cpu_reference_tensor"),
         "cpu_reference_record": cpu_reference_record,
+        "execution_bundle_artifact": artifact_ref(run_dir, execution_bundle_rel, role="execution_bundle"),
     }
 
 
@@ -443,6 +460,12 @@ def _enriched_runtime_summary(
                 if policy == "generic-only"
                 else "SDK simulator only, no hardware timing."
             ),
+            **execution_identity_metadata(generated["graph"], plan_reused=True),
+            "executor_config_hash": executor_config_hash(
+                "upmem_tn_runtime",
+                {"policy": policy, "quantization_mode": quantization_mode},
+            ),
+            "execution_bundle_artifact": generated.get("execution_bundle_artifact"),
             "execution_scope": "full_taskgraph",
             "policy": policy,
             "quantization_mode": quantization_mode,
@@ -464,6 +487,12 @@ def _enriched_runtime_summary(
             },
             "metadata": {
                 **dict(runtime_summary.get("metadata") or {}),
+                **execution_identity_metadata(generated["graph"], plan_reused=True),
+                "executor_config_hash": executor_config_hash(
+                    "upmem_tn_runtime",
+                    {"policy": policy, "quantization_mode": quantization_mode},
+                ),
+                "execution_bundle_artifact": generated.get("execution_bundle_artifact"),
                 "suite_level_upmem_mvp_benchmark": True,
                 "cpu_reference_used_to_feed_runtime_tensors": False,
                 "strict_upmem_timing_excludes_cpu_reference_time": True,
@@ -616,6 +645,15 @@ def _row_from_runtime_summary(
                 and summary.get("input_dtype_on_dpu") == "float32"
                 and summary.get("dpu_program_executed_all_tasks") is True
             ),
+            "circuit_semantics_hash": summary.get("circuit_semantics_hash") or summary.get("metadata", {}).get("circuit_semantics_hash"),
+            "tensor_network_hash": summary.get("tensor_network_hash") or summary.get("metadata", {}).get("tensor_network_hash"),
+            "contraction_plan_hash": summary.get("contraction_plan_hash") or summary.get("metadata", {}).get("contraction_plan_hash"),
+            "plan_reused": summary.get("plan_reused", summary.get("metadata", {}).get("plan_reused")),
+            "planning_in_timed_region": summary.get(
+                "planning_in_timed_region", summary.get("metadata", {}).get("planning_in_timed_region")
+            ),
+            "executor_config_hash": summary.get("executor_config_hash") or summary.get("metadata", {}).get("executor_config_hash"),
+            "execution_bundle_artifact": summary.get("metadata", {}).get("execution_bundle_artifact"),
             "cpu_reference_artifact": generated.get("cpu_reference_artifact"),
             "upmem_runtime_summary_artifact": summary.get("artifacts", {}).get("runtime_summary"),
             "upmem_task_metrics_artifact": summary.get("artifacts", {}).get("task_metrics"),
@@ -633,6 +671,8 @@ def _cpu_reference_record(
     task_count: int,
     cpu_time_s: float,
     source_artifact: str,
+    graph,
+    execution_bundle_artifact: JsonDict,
 ) -> JsonDict:
     return {
         "schema_version": RESULT_ARTIFACT_SCHEMA_VERSION,
@@ -673,6 +713,9 @@ def _cpu_reference_record(
         "warnings": "reference_not_upmem_execution",
         "contraction_execution_target": "cpu",
         "cpu_role": "reference_validator",
+        **execution_identity_metadata(graph, plan_reused=True),
+        "executor_config_hash": executor_config_hash("cpu_tn_einsum_exact", {"quantization_mode": "none"}),
+        "execution_bundle_artifact": execution_bundle_artifact,
     }
 
 
