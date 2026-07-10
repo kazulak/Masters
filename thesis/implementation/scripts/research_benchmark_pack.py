@@ -1585,19 +1585,47 @@ def _plot_quantization_metric(
 def _plot_same_plan_runtime(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
     if not rows:
         return "no_same_plan_cpu_upmem_rows"
-    ordered = sorted(rows, key=lambda row: (str(row["case_family"]), int(row.get("benchmark_n_qubits") or 0), str(row["quantization_mode"])))
-    labels = [f"{row['case_family']}_{row['benchmark_n_qubits']}q_{row['quantization_mode']}" for row in ordered]
-    x = list(range(len(labels)))
-    width = 0.38
-    fig, ax = plt.subplots(figsize=(max(9.0, len(labels) * 0.55), 5.8), constrained_layout=True)
-    ax.bar([value - width / 2 for value in x], [float(row["cpu_time_s"]) for row in ordered], width=width, label="CPU TaskGraph replay")
-    ax.bar([value + width / 2 for value in x], [float(row["upmem_simulator_time_s"]) for row in ordered], width=width, label="UPMEM SDK simulator")
-    ax.set_yscale("log")
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=65, ha="right", fontsize=8)
-    ax.set_ylabel("Route compute time (s, log scale)")
-    ax.set_title("Same-plan CPU and UPMEM SDK simulator execution")
-    ax.legend()
+    families = sorted({str(row["case_family"]) for row in rows})
+    fig, axes = plt.subplots(2, 3, figsize=(13.0, 7.5), constrained_layout=True, sharey=True)
+    for axis, family in zip(axes.flat, families):
+        group = [row for row in rows if str(row["case_family"]) == family]
+        by_qubits: dict[int, list[JsonDict]] = defaultdict(list)
+        for row in group:
+            by_qubits[int(row.get("benchmark_n_qubits") or 0)].append(row)
+        qubits = sorted(by_qubits)
+        axis.plot(
+            qubits,
+            [float(by_qubits[value][0]["cpu_time_s"]) for value in qubits],
+            marker="o",
+            label="CPU TaskGraph",
+        )
+        for mode, label, marker in (
+            ("none", "UPMEM float32", "s"),
+            ("per_task_input_quantize", "UPMEM int8", "^"),
+        ):
+            mode_rows = {
+                int(row.get("benchmark_n_qubits") or 0): row
+                for row in group
+                if row.get("quantization_mode") == mode
+            }
+            mode_qubits = sorted(mode_rows)
+            if mode_qubits:
+                axis.plot(
+                    mode_qubits,
+                    [float(mode_rows[value]["upmem_simulator_time_s"]) for value in mode_qubits],
+                    marker=marker,
+                    label=label,
+                )
+        axis.set_yscale("log")
+        axis.set_title(family)
+        axis.set_xlabel("Qubits")
+        axis.grid(True, alpha=0.3)
+    for axis in axes[:, 0]:
+        axis.set_ylabel("Route compute time (s, log)")
+    for axis in axes.flat[len(families) :]:
+        axis.set_visible(False)
+    axes.flat[0].legend(fontsize="small")
+    fig.suptitle("Same-plan CPU and UPMEM SDK simulator execution")
     _save_plot(fig, path)
     return None
 
@@ -1656,18 +1684,36 @@ def _plot_upmem_boundary(plt: Any, path: Path, rows: list[JsonDict]) -> str | No
     selected = [row for row in rows if _is_strict_generic_upmem_record(row)]
     if not selected:
         return "no_upmem_rows"
-    ordered = sorted((row for row in selected if _plot_qubits(row) is not None), key=lambda row: (str(row["case_family"]), int(_plot_qubits(row) or 0), str(row["case_id"])))
-    if not ordered:
+    usable = [row for row in selected if _plot_qubits(row) is not None]
+    if not usable:
         return "no_actual_qubit_metadata"
-    labels = [f"{row['case_family']}_{_plot_qubits(row)}q" for row in ordered]
-    values = [0 if int(row.get("unsupported_count", 0) or 0) else 1 for row in ordered]
-    fig, ax = plt.subplots(figsize=(max(8.0, len(labels) * 0.45), 4.8), constrained_layout=True)
-    ax.bar(range(len(ordered)), values, color=["#16a34a" if value else "#dc2626" for value in values])
-    ax.set_xticks(range(len(labels)))
-    ax.set_xticklabels(labels, rotation=60, ha="right", fontsize=8)
-    ax.set_yticks([0, 1])
-    ax.set_yticklabels(["unsupported", "supported"])
-    ax.set_title("Strict generic UPMEM SDK simulator support boundary")
+    families = sorted({str(row["case_family"]) for row in usable})
+    fig, axes = plt.subplots(2, 3, figsize=(13.0, 6.8), constrained_layout=True, sharey=True)
+    for axis, family in zip(axes.flat, families):
+        grouped: dict[tuple[str, int], list[JsonDict]] = defaultdict(list)
+        for row in usable:
+            if str(row["case_family"]) == family:
+                grouped[(str(row["case_id"]), int(_plot_qubits(row) or 0))].append(row)
+        points = sorted(grouped.items(), key=lambda item: item[0][1])
+        qubits = [key[1] for key, _ in points]
+        supported = [int(all(int(row.get("unsupported_count", 0) or 0) == 0 for row in group)) for _, group in points]
+        axis.scatter(
+            qubits,
+            supported,
+            c=["#16a34a" if value else "#dc2626" for value in supported],
+            s=65,
+            zorder=3,
+        )
+        axis.plot(qubits, supported, color="#94a3b8", linewidth=1.0, zorder=2)
+        axis.set_title(family)
+        axis.set_xlabel("Qubits")
+        axis.set_yticks([0, 1])
+        axis.set_yticklabels(["unsupported", "supported"])
+        axis.set_ylim(-0.25, 1.25)
+        axis.grid(True, alpha=0.3)
+    for axis in axes.flat[len(families) :]:
+        axis.set_visible(False)
+    fig.suptitle("Strict generic UPMEM SDK simulator support boundary")
     _save_plot(fig, path)
     return None
 
