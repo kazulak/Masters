@@ -17,8 +17,11 @@ GENERIC_BRIDGE_SCHEMA_VERSION = "generic_contraction_bridge_v1"
 GENERIC_BRIDGE_ID = "upmem_generic_contraction_bridge_v1"
 BACKEND_ID = "upmem_sdk_simulator_generic_loop"
 KERNEL_FAMILY = "generic_loop_fallback"
-DEFAULT_MAX_RANK = 7
-DEFAULT_MAX_ELEMS = 4096
+DEFAULT_MAX_RANK = 16
+DEFAULT_MAX_ELEMS = 65536
+MAX_COMPILED_ELEMS = DEFAULT_MAX_ELEMS
+OUTPUT_TILE_ELEMENTS = 256
+GENERIC_KERNEL_STRATEGY = "mram_resident_output_tiled_v1"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 SNIPPET_LIMIT = 2000
 MODE_INT8_SCALED = "int8_scaled"
@@ -47,7 +50,8 @@ def main() -> int:
     try:
         manifest = _load_manifest(input_path)
         prepared = _prepare_inputs(manifest, bridge_dir, os.environ)
-        max_elems = _positive_int_env(os.environ, "UPMEM_GENERIC_MAX_ELEMS", DEFAULT_MAX_ELEMS)
+        requested_max_elems = _positive_int_env(os.environ, "UPMEM_GENERIC_MAX_ELEMS", DEFAULT_MAX_ELEMS)
+        max_elems = min(requested_max_elems, MAX_COMPILED_ELEMS) if requested_max_elems is not None else None
         if max_elems is None:
             _write_output_manifest(
                 output_path,
@@ -63,7 +67,7 @@ def main() -> int:
                 error_type="unsupported_shape_for_initial_backend",
                 external_command_executed=True,
                 execution_implemented=False,
-                metadata_extra=_base_metadata(args.target, False, max_elems=DEFAULT_MAX_ELEMS),
+                metadata_extra=_base_metadata(args.target, False, max_elems=MAX_COMPILED_ELEMS),
             )
             return 0
         if max(prepared["left"].size, prepared["right"].size, prepared["expected"].size) > max_elems:
@@ -303,6 +307,7 @@ def _prepare_inputs(manifest: dict[str, Any], bridge_dir: Path, env: Mapping[str
     _validate_blob(expected, expected_meta, "expected_quantized_reference_output")
     metadata = dict(manifest.get("metadata") or {})
     native = dict(manifest["native_index_metadata"])
+    tile_metadata = _tile_metadata(native)
     operand_mode = str(metadata.get("operand_mode") or native.get("operand_mode") or MODE_INT8_SCALED)
     if operand_mode not in NATIVE_MODE_IDS:
         raise ValueError(f"unsupported generic operand mode: {operand_mode}")
@@ -345,6 +350,7 @@ def _prepare_inputs(manifest: dict[str, Any], bridge_dir: Path, env: Mapping[str
         "actual_d2h_bytes": int(actual_d2h_bytes),
         "full_precision_h2d_bytes_model": int(metadata.get("full_precision_h2d_bytes_model") or actual_h2d_bytes),
         "full_precision_d2h_bytes_model": int(metadata.get("full_precision_d2h_bytes_model") or actual_d2h_bytes),
+        **tile_metadata,
     }
 
 
@@ -534,6 +540,34 @@ def _base_metadata(target: str, kernel_executed: bool, *, max_elems: int | None 
         "simulator_kernel_executed": kernel_executed and target == "simulator",
         "hardware_kernel_executed": False,
         "max_elems": max_elems,
+        "generic_kernel_strategy": GENERIC_KERNEL_STRATEGY,
+        "native_max_rank": DEFAULT_MAX_RANK,
+        "native_max_tensor_elements": MAX_COMPILED_ELEMS,
+        "generic_output_tile_elements": OUTPUT_TILE_ELEMENTS,
+        "generic_output_tile_count": None,
+        "mram_resident_operands": True,
+        "wram_output_tiled": True,
+        "mram_tiled_task_count": 0,
+        "mram_read_bytes_model": 0,
+        "mram_write_bytes_model": 0,
+    }
+
+
+def _tile_metadata(native: Mapping[str, Any]) -> dict[str, Any]:
+    output_elements = int(native.get("output_element_count", 0) or 0)
+    contracted = int(native.get("contracted_combination_count", 0) or 0)
+    tile_count = (output_elements + OUTPUT_TILE_ELEMENTS - 1) // OUTPUT_TILE_ELEMENTS
+    return {
+        "generic_kernel_strategy": str(native.get("generic_kernel_strategy") or GENERIC_KERNEL_STRATEGY),
+        "native_max_rank": DEFAULT_MAX_RANK,
+        "native_max_tensor_elements": MAX_COMPILED_ELEMS,
+        "generic_output_tile_elements": OUTPUT_TILE_ELEMENTS,
+        "generic_output_tile_count": tile_count,
+        "mram_resident_operands": True,
+        "wram_output_tiled": True,
+        "mram_tiled_task_count": int(tile_count > 1),
+        "mram_read_bytes_model": output_elements * contracted * 2 * 8,
+        "mram_write_bytes_model": output_elements * 4,
     }
 
 

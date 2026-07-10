@@ -21,6 +21,8 @@ INT8_MAX_ABS_VALUE = 127
 INT32_MAX_VALUE = (2**31) - 1
 GENERIC_MODE_INT8_SCALED = "int8_scaled"
 GENERIC_MODE_FLOAT32_NO_QUANT = "float32_no_quant"
+GENERIC_KERNEL_STRATEGY = "mram_resident_output_tiled_v1"
+GENERIC_OUTPUT_TILE_ELEMENTS = 256
 
 GenericTaskPreparationStatus = Literal["prepared", "unsupported_shape", "failed"]
 GenericQuantizationMode = Literal["per_task_input_quantize", "none"]
@@ -28,8 +30,8 @@ GenericQuantizationMode = Literal["per_task_input_quantize", "none"]
 
 @dataclass(frozen=True)
 class GenericTaskPreparationCaps:
-    max_rank: int = 7
-    max_tensor_elements: int = 4096
+    max_rank: int = 16
+    max_tensor_elements: int = 65536
     max_contracted_combinations: int = 4096
 
 
@@ -513,6 +515,8 @@ def _native_index_metadata(task: ContractionTask, caps: GenericTaskPreparationCa
     if check_int32_accumulation and contracted_count * INT8_MAX_ABS_VALUE * INT8_MAX_ABS_VALUE > INT32_MAX_VALUE:
         return "int32_accumulation_overflow_risk"
 
+    output_element_count = _shape_product(output_shape)
+    output_tile_count = (output_element_count + GENERIC_OUTPUT_TILE_ELEMENTS - 1) // GENERIC_OUTPUT_TILE_ELEMENTS
     return {
         "left_strides": _row_major_strides(left_shape),
         "right_strides": _row_major_strides(right_shape),
@@ -522,8 +526,18 @@ def _native_index_metadata(task: ContractionTask, caps: GenericTaskPreparationCa
         "contracted_to_left_axes": contracted_to_left_axes,
         "contracted_to_right_axes": contracted_to_right_axes,
         "contracted_dims": contracted_dims,
-        "output_element_count": _shape_product(output_shape),
+        "output_element_count": output_element_count,
         "contracted_combination_count": contracted_count,
+        "generic_kernel_strategy": GENERIC_KERNEL_STRATEGY,
+        "native_max_rank": caps.max_rank,
+        "native_max_tensor_elements": caps.max_tensor_elements,
+        "generic_output_tile_elements": GENERIC_OUTPUT_TILE_ELEMENTS,
+        "generic_output_tile_count": output_tile_count,
+        "mram_resident_operands": True,
+        "wram_output_tiled": True,
+        "mram_tiled_task_count": int(output_tile_count > 1),
+        "mram_read_bytes_model": int(output_element_count * contracted_count * 2 * 8),
+        "mram_write_bytes_model": int(output_element_count * 4),
     }
 
 

@@ -33,6 +33,10 @@ GENERIC_QUANTIZED_TASKGRAPH_REFERENCE_TASK_SCHEMA_VERSION = "generic_quantized_t
 
 UPMEM_TASKGRAPH_POLICIES = ("generic-only", "dense-then-generic", "dense-only")
 UPMEM_TASKGRAPH_QUANTIZATION_MODES = ("per_task_input_quantize", "none", "persistent_network_quantized")
+GENERIC_KERNEL_STRATEGY = "mram_resident_output_tiled_v1"
+GENERIC_NATIVE_MAX_RANK = 16
+GENERIC_NATIVE_MAX_TENSOR_ELEMENTS = 65536
+GENERIC_OUTPUT_TILE_ELEMENTS = 256
 
 UpmemTaskGraphPolicy = Literal["generic-only", "dense-then-generic", "dense-only"]
 UpmemTaskGraphQuantizationMode = Literal["per_task_input_quantize", "none", "persistent_network_quantized"]
@@ -277,6 +281,10 @@ def execute_upmem_taskgraph_runtime(
                 "frontier_worker_count": frontier_worker_count,
                 "dpu_group_count": dpu_group_count,
                 "task_assignment_strategy": task_assignment_strategy,
+                "generic_kernel_strategy": GENERIC_KERNEL_STRATEGY,
+                "native_max_rank": GENERIC_NATIVE_MAX_RANK,
+                "native_max_tensor_elements": GENERIC_NATIVE_MAX_TENSOR_ELEMENTS,
+                "generic_output_tile_elements": GENERIC_OUTPUT_TILE_ELEMENTS,
             },
         ),
     }
@@ -1329,6 +1337,16 @@ def _base_task_metric(
             "output_dtype_on_dpu": bridge_metadata.get("output_dtype_on_dpu", prep_metadata.get("output_dtype_on_dpu")),
             "unquantized_mode_kind": bridge_metadata.get("unquantized_mode_kind", prep_metadata.get("unquantized_mode_kind")),
             "scaling_applied": bridge_metadata.get("scaling_applied", prep_metadata.get("scaling_applied")),
+            "generic_kernel_strategy": bridge_metadata.get("generic_kernel_strategy", prep_metadata.get("generic_kernel_strategy", GENERIC_KERNEL_STRATEGY)),
+            "native_max_rank": bridge_metadata.get("native_max_rank", prep_metadata.get("native_max_rank", GENERIC_NATIVE_MAX_RANK)),
+            "native_max_tensor_elements": bridge_metadata.get("native_max_tensor_elements", prep_metadata.get("native_max_tensor_elements", GENERIC_NATIVE_MAX_TENSOR_ELEMENTS)),
+            "generic_output_tile_elements": bridge_metadata.get("generic_output_tile_elements", prep_metadata.get("generic_output_tile_elements", GENERIC_OUTPUT_TILE_ELEMENTS)),
+            "generic_output_tile_count": bridge_metadata.get("generic_output_tile_count", prep_metadata.get("generic_output_tile_count")),
+            "mram_resident_operands": bridge_metadata.get("mram_resident_operands", prep_metadata.get("mram_resident_operands", True)),
+            "wram_output_tiled": bridge_metadata.get("wram_output_tiled", prep_metadata.get("wram_output_tiled", True)),
+            "mram_tiled_task_count": bridge_metadata.get("mram_tiled_task_count", prep_metadata.get("mram_tiled_task_count", 0)),
+            "mram_read_bytes_model": bridge_metadata.get("mram_read_bytes_model", prep_metadata.get("mram_read_bytes_model", 0)),
+            "mram_write_bytes_model": bridge_metadata.get("mram_write_bytes_model", prep_metadata.get("mram_write_bytes_model", 0)),
             "complex_representation": complex_representation or ("real" if output_array is not None and not np.iscomplexobj(output_array) else None),
             "complex_quantization_scope": "per_task_operands" if complex_representation else None,
             "contraction_execution_target": CONTRACTION_EXECUTION_TARGET,
@@ -1565,6 +1583,16 @@ def _summary_payload(
             "full_precision_d2h_bytes_model": int(total_full_precision_d2h_bytes),
             "full_precision_transfer_bytes_model": int(total_full_precision_transfer_bytes),
             "transfer_compression_ratio": transfer_compression_ratio,
+            "generic_kernel_strategy": _unique_or_none(task_metrics, "generic_kernel_strategy") or GENERIC_KERNEL_STRATEGY,
+            "native_max_rank": _unique_or_none(task_metrics, "native_max_rank") or GENERIC_NATIVE_MAX_RANK,
+            "native_max_tensor_elements": _unique_or_none(task_metrics, "native_max_tensor_elements") or GENERIC_NATIVE_MAX_TENSOR_ELEMENTS,
+            "generic_output_tile_elements": _unique_or_none(task_metrics, "generic_output_tile_elements") or GENERIC_OUTPUT_TILE_ELEMENTS,
+            "generic_output_tile_count": int(sum(int(row.get("generic_output_tile_count", 0) or 0) for row in task_metrics)),
+            "mram_resident_operands": all(row.get("mram_resident_operands", True) is True for row in task_metrics),
+            "wram_output_tiled": all(row.get("wram_output_tiled", True) is True for row in task_metrics),
+            "mram_tiled_task_count": int(sum(int(row.get("mram_tiled_task_count", 0) or 0) for row in task_metrics)),
+            "mram_read_bytes_model": int(sum(int(row.get("mram_read_bytes_model", 0) or 0) for row in task_metrics)),
+            "mram_write_bytes_model": int(sum(int(row.get("mram_write_bytes_model", 0) or 0) for row in task_metrics)),
             "peak_live_tensor_bytes": int(peak_live_tensor_bytes),
             "task_metrics_artifact": None,
             "final_tensor_artifact": None,

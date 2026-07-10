@@ -58,6 +58,16 @@ RESULT_FIELDS = [
     "plan_reused",
     "planning_in_timed_region",
     "executor_config_hash",
+    "generic_kernel_strategy",
+    "native_max_rank",
+    "native_max_tensor_elements",
+    "generic_output_tile_elements",
+    "generic_output_tile_count",
+    "mram_resident_operands",
+    "wram_output_tiled",
+    "mram_tiled_task_count",
+    "mram_read_bytes_model",
+    "mram_write_bytes_model",
     "execution_bundle_artifact",
     "slicing_enabled",
     "slicing_backend",
@@ -720,6 +730,16 @@ def _generic_task_bridge_record(summary: JsonDict, *, source_artifact: str | Non
             "hardware_execution": summary.get("hardware_execution", False),
             "hardware_timing_available": summary.get("hardware_timing_available", False),
             "hardware_speedup_applicable": summary.get("hardware_speedup_applicable", False),
+            "generic_kernel_strategy": output_metadata.get("generic_kernel_strategy") or (summary.get("preparation") or {}).get("metadata", {}).get("generic_kernel_strategy"),
+            "native_max_rank": output_metadata.get("native_max_rank") or (summary.get("preparation") or {}).get("metadata", {}).get("native_max_rank"),
+            "native_max_tensor_elements": output_metadata.get("native_max_tensor_elements") or (summary.get("preparation") or {}).get("metadata", {}).get("native_max_tensor_elements"),
+            "generic_output_tile_elements": output_metadata.get("generic_output_tile_elements") or (summary.get("preparation") or {}).get("metadata", {}).get("generic_output_tile_elements"),
+            "generic_output_tile_count": output_metadata.get("generic_output_tile_count") or (summary.get("preparation") or {}).get("metadata", {}).get("generic_output_tile_count"),
+            "mram_resident_operands": output_metadata.get("mram_resident_operands") if output_metadata.get("mram_resident_operands") is not None else (summary.get("preparation") or {}).get("metadata", {}).get("mram_resident_operands"),
+            "wram_output_tiled": output_metadata.get("wram_output_tiled") if output_metadata.get("wram_output_tiled") is not None else (summary.get("preparation") or {}).get("metadata", {}).get("wram_output_tiled"),
+            "mram_tiled_task_count": output_metadata.get("mram_tiled_task_count") if output_metadata.get("mram_tiled_task_count") is not None else (summary.get("preparation") or {}).get("metadata", {}).get("mram_tiled_task_count"),
+            "mram_read_bytes_model": output_metadata.get("mram_read_bytes_model") or (summary.get("preparation") or {}).get("metadata", {}).get("mram_read_bytes_model"),
+            "mram_write_bytes_model": output_metadata.get("mram_write_bytes_model") or (summary.get("preparation") or {}).get("metadata", {}).get("mram_write_bytes_model"),
         }
     )
     return _with_upmem_execution_metadata(record, summary)
@@ -849,6 +869,16 @@ def _upmem_taskgraph_runtime_record(
             "plan_reused": summary.get("plan_reused"),
             "planning_in_timed_region": summary.get("planning_in_timed_region"),
             "executor_config_hash": summary.get("executor_config_hash"),
+            "generic_kernel_strategy": summary.get("generic_kernel_strategy"),
+            "native_max_rank": summary.get("native_max_rank"),
+            "native_max_tensor_elements": summary.get("native_max_tensor_elements"),
+            "generic_output_tile_elements": summary.get("generic_output_tile_elements"),
+            "generic_output_tile_count": summary.get("generic_output_tile_count"),
+            "mram_resident_operands": summary.get("mram_resident_operands"),
+            "wram_output_tiled": summary.get("wram_output_tiled"),
+            "mram_tiled_task_count": summary.get("mram_tiled_task_count"),
+            "mram_read_bytes_model": summary.get("mram_read_bytes_model"),
+            "mram_write_bytes_model": summary.get("mram_write_bytes_model"),
             "execution_bundle_artifact": summary.get("execution_bundle_artifact"),
             "frontier_scheduler_enabled": summary.get("frontier_scheduler_enabled"),
             "frontier_parallel_execution": summary.get("frontier_parallel_execution"),
@@ -1171,6 +1201,18 @@ def normalize_parallelism_metadata(record: JsonDict) -> JsonDict:
     normalized.setdefault("plan_reused", None)
     normalized.setdefault("planning_in_timed_region", None)
     normalized.setdefault("executor_config_hash", None)
+    # Preserve the runtime's stronger identity hash when MVP normalization is
+    # applied; legacy summaries may not carry the new fields.
+    normalized.setdefault("generic_kernel_strategy", None)
+    normalized.setdefault("native_max_rank", None)
+    normalized.setdefault("native_max_tensor_elements", None)
+    normalized.setdefault("generic_output_tile_elements", None)
+    normalized.setdefault("generic_output_tile_count", None)
+    normalized.setdefault("mram_resident_operands", None)
+    normalized.setdefault("wram_output_tiled", None)
+    normalized.setdefault("mram_tiled_task_count", None)
+    normalized.setdefault("mram_read_bytes_model", None)
+    normalized.setdefault("mram_write_bytes_model", None)
     normalized.setdefault("execution_bundle_artifact", None)
     normalized.setdefault("slicing_backend", None)
     normalized.setdefault("slicing_strategy", None)
