@@ -39,6 +39,18 @@ static size_t align8(size_t bytes) {
     return (bytes + 7u) & ~((size_t)7u);
 }
 
+static int transfer_sizes(uint32_t elements, size_t element_size, size_t *bytes, size_t *transfer_bytes) {
+    if ((size_t)elements > SIZE_MAX / element_size) {
+        return 1;
+    }
+    *bytes = (size_t)elements * element_size;
+    if (*bytes > SIZE_MAX - 7u) {
+        return 1;
+    }
+    *transfer_bytes = align8(*bytes);
+    return *transfer_bytes == 0 || (*transfer_bytes % 8u) != 0;
+}
+
 int main(int argc, char **argv) {
     if (argc != 6) {
         fprintf(stderr, "usage: %s <dpu_binary> <args.bin> <left_i8.bin> <right_i8.bin> <out_i32.bin>\n", argv[0]);
@@ -63,7 +75,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "zero element counts are unsupported\n");
         return 2;
     }
-    if (args.left_elems > UPMEM_GENERIC_MAX_ELEMS || args.right_elems > UPMEM_GENERIC_MAX_ELEMS || args.output_elems > UPMEM_GENERIC_MAX_ELEMS) {
+    if (args.left_elems > UPMEM_GENERIC_MAX_ELEMS || args.right_elems > UPMEM_GENERIC_MAX_ELEMS || args.output_elems > UPMEM_GENERIC_MAX_ELEMS || args.contracted_elems > UPMEM_GENERIC_MAX_ELEMS) {
         fprintf(stderr, "element counts exceed max elems %u\n", UPMEM_GENERIC_MAX_ELEMS);
         return 2;
     }
@@ -78,12 +90,18 @@ int main(int argc, char **argv) {
     const char *left_symbol = "GENERIC_A_RAW";
     const char *right_symbol = "GENERIC_B_RAW";
     const char *output_symbol = "GENERIC_C_RAW";
-    const size_t left_bytes = args.left_elems * input_elem_size;
-    const size_t right_bytes = args.right_elems * input_elem_size;
-    const size_t output_bytes = args.output_elems * output_elem_size;
-    const size_t left_transfer_bytes = align8(left_bytes);
-    const size_t right_transfer_bytes = align8(right_bytes);
-    const size_t output_transfer_bytes = align8(output_bytes);
+    size_t left_bytes;
+    size_t right_bytes;
+    size_t output_bytes;
+    size_t left_transfer_bytes;
+    size_t right_transfer_bytes;
+    size_t output_transfer_bytes;
+    if (transfer_sizes(args.left_elems, input_elem_size, &left_bytes, &left_transfer_bytes) != 0 ||
+        transfer_sizes(args.right_elems, input_elem_size, &right_bytes, &right_transfer_bytes) != 0 ||
+        transfer_sizes(args.output_elems, output_elem_size, &output_bytes, &output_transfer_bytes) != 0) {
+        fprintf(stderr, "unaligned or overflowing native transfer size\n");
+        return 2;
+    }
 
     unsigned char *left = (unsigned char *)calloc(left_transfer_bytes, 1);
     unsigned char *right = (unsigned char *)calloc(right_transfer_bytes, 1);

@@ -179,8 +179,11 @@ is diagnostic only and is not the native validation target.
 
 The generic kernel exists for coverage and route validation. It is not a
 performance kernel and should not be used for speedup claims. It currently
-rejects complex tensors with `complex_generic_loop_not_implemented`, enforces
-small rank/element caps, and guards int32 overflow with:
+rejects complex tensors with `complex_generic_loop_not_implemented`; native
+compile defaults are rank 16, 65536 elements, and a 256-element output tile.
+It keeps operands and output in MRAM, reads scalar inputs through aligned
+8-byte windows, and uses one DPU/tasklet with no input caching. The surrounding
+contract's cap remains unchanged. It guards int32 overflow with:
 
 ```text
 contracted_combination_count * 127 * 127 <= int32_max
