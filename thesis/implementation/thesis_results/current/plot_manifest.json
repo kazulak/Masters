@@ -95,7 +95,7 @@
       "caption": "Supported versus unsupported strict generic-only UPMEM SDK simulator rows.",
       "plot": "upmem_supported_boundary.png",
       "reason": null,
-      "size_bytes": 46161,
+      "size_bytes": 72778,
       "source_csv": "per_case_route_stats.csv",
       "status": "generated",
       "title": "UPMEM SDK simulator support boundary"
@@ -149,7 +149,7 @@
       "caption": "CPU replay and UPMEM SDK simulator rows share an identical contraction-plan hash; timing is not hardware speedup.",
       "plot": "same_plan_cpu_upmem_runtime.png",
       "reason": null,
-      "size_bytes": 159633,
+      "size_bytes": 112567,
       "source_csv": "same_plan_execution.csv",
       "status": "generated",
       "title": "Same-plan CPU versus UPMEM SDK simulator runtime"

@@ -32,8 +32,8 @@ Run `make thesis-run` for the complete local benchmark matrix.
 
 ## Hardware And Software Manifest
 
-- Git commit: `77ba9321295c15befec8a2f28260046743dd7716`
-- Dirty worktree: `True`
+- Git commit: `3552a123d5f8a3e3be3c81d602f76ded7bdb406e`
+- Dirty worktree: `False`
 - Host: `kazulak`
 - Python: `3.10.12 (main, Jun 22 2026, 18:55:27) [GCC 11.4.0]`
 - Packages: `{"cotengra": "0.7.5", "matplotlib": "3.10.8", "numpy": "2.2.6", "opt_einsum": "3.4.0", "quimb": "1.11.2"}`
