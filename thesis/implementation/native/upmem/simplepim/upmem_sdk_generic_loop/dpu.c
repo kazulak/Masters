@@ -107,6 +107,9 @@ int main(void) {
             }
         }
 
+        if ((tile_elems & 1u) != 0u) {
+            output_tile.i32[tile_elems] = 0;
+        }
         const uint32_t tile_bytes = align8(tile_elems * (uint32_t)sizeof(uint32_t));
         if (float32_mode) {
             mram_write(output_tile.f32, GENERIC_C_RAW + tile_start * sizeof(float), tile_bytes);

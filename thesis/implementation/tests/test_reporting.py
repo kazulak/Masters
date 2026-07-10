@@ -201,6 +201,33 @@ def test_normalized_and_report_hash_fields_are_pass_through(tmp_path: Path) -> N
     assert {key: rows[0][key] for key in hashes} == hashes
 
 
+def test_report_csv_preserves_tiled_generic_metadata(tmp_path: Path) -> None:
+    tiled = {
+        "generic_kernel_strategy": "mram_resident_output_tiled_v1",
+        "native_max_rank": 16,
+        "native_max_tensor_elements": 65536,
+        "generic_output_tile_elements": 256,
+        "generic_output_tile_count": 18,
+        "mram_resident_operands": True,
+        "wram_output_tiled": True,
+        "mram_tiled_task_count": 1,
+        "mram_read_bytes_model": 589824,
+        "mram_write_bytes_model": 18432,
+    }
+    run_dir = _new_run(tmp_path / "run", [_record("tiled_generic") | tiled])
+    report_dir = tmp_path / "reports" / "tiled_generic"
+
+    report_run(run_dir, report_dir, output_plots=False)
+
+    with (report_dir / "upmem_mvp_benchmark_results.csv").open("r", encoding="utf-8", newline="") as handle:
+        row = next(csv.DictReader(handle))
+    assert row["generic_kernel_strategy"] == tiled["generic_kernel_strategy"]
+    assert int(row["generic_output_tile_count"]) == tiled["generic_output_tile_count"]
+    assert int(row["mram_tiled_task_count"]) == 1
+    assert int(row["mram_read_bytes_model"]) == tiled["mram_read_bytes_model"]
+    assert int(row["mram_write_bytes_model"]) == tiled["mram_write_bytes_model"]
+
+
 def test_report_run_rejects_output_under_evidence_root(tmp_path: Path) -> None:
     root_dir = tmp_path / "project"
     run_dir = _new_run(root_dir / "runs" / "evidence" / "suite" / "route" / "run", [_record("bell_2q")])

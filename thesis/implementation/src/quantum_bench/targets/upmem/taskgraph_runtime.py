@@ -40,6 +40,29 @@ GENERIC_OUTPUT_TILE_ELEMENTS = 256
 
 UpmemTaskGraphPolicy = Literal["generic-only", "dense-then-generic", "dense-only"]
 UpmemTaskGraphQuantizationMode = Literal["per_task_input_quantize", "none", "persistent_network_quantized"]
+
+
+def upmem_taskgraph_executor_config(
+    *,
+    policy: str,
+    quantization_mode: str,
+    schedule_mode: str = "sequential",
+    frontier_worker_count: int = 1,
+    dpu_group_count: int = 1,
+    task_assignment_strategy: str = "sequential_single_dpu",
+) -> JsonDict:
+    return {
+        "policy": policy,
+        "quantization_mode": quantization_mode,
+        "schedule_mode": schedule_mode,
+        "frontier_worker_count": frontier_worker_count,
+        "dpu_group_count": dpu_group_count,
+        "task_assignment_strategy": task_assignment_strategy,
+        "generic_kernel_strategy": GENERIC_KERNEL_STRATEGY,
+        "native_max_rank": GENERIC_NATIVE_MAX_RANK,
+        "native_max_tensor_elements": GENERIC_NATIVE_MAX_TENSOR_ELEMENTS,
+        "generic_output_tile_elements": GENERIC_OUTPUT_TILE_ELEMENTS,
+    }
 UpmemTaskGraphStatus = Literal["completed", "unsupported", "failed", "validation_failed"]
 UpmemTaskGraphScheduleMode = Literal["sequential", "frontier"]
 
@@ -274,18 +297,14 @@ def execute_upmem_taskgraph_runtime(
         **execution_identity_metadata(graph, plan_reused=True),
         "executor_config_hash": executor_config_hash(
             "upmem_tn_runtime",
-            {
-                "policy": policy,
-                "quantization_mode": quantization_mode,
-                "schedule_mode": schedule_mode,
-                "frontier_worker_count": frontier_worker_count,
-                "dpu_group_count": dpu_group_count,
-                "task_assignment_strategy": task_assignment_strategy,
-                "generic_kernel_strategy": GENERIC_KERNEL_STRATEGY,
-                "native_max_rank": GENERIC_NATIVE_MAX_RANK,
-                "native_max_tensor_elements": GENERIC_NATIVE_MAX_TENSOR_ELEMENTS,
-                "generic_output_tile_elements": GENERIC_OUTPUT_TILE_ELEMENTS,
-            },
+            upmem_taskgraph_executor_config(
+                policy=policy,
+                quantization_mode=quantization_mode,
+                schedule_mode=schedule_mode,
+                frontier_worker_count=frontier_worker_count,
+                dpu_group_count=dpu_group_count,
+                task_assignment_strategy=task_assignment_strategy,
+            ),
         ),
     }
     if policy not in UPMEM_TASKGRAPH_POLICIES:

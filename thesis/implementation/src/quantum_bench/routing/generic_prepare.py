@@ -537,7 +537,7 @@ def _native_index_metadata(task: ContractionTask, caps: GenericTaskPreparationCa
         "wram_output_tiled": True,
         "mram_tiled_task_count": int(output_tile_count > 1),
         "mram_read_bytes_model": int(output_element_count * contracted_count * 2 * 8),
-        "mram_write_bytes_model": int(output_element_count * 4),
+        "mram_write_bytes_model": int((output_element_count * 4 + 7) & ~7),
     }
 
 

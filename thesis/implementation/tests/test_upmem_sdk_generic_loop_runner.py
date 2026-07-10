@@ -78,6 +78,17 @@ def test_generic_loop_runner_packs_all_rank_sixteen_entries() -> None:
         assert words[start : start + max_rank] == tuple(native[key])
 
 
+def test_tiled_metadata_counts_aligned_mram_traffic() -> None:
+    runner = _load_runner_module()
+
+    metadata = runner._tile_metadata({"output_element_count": 3, "contracted_combination_count": 2})
+
+    assert metadata["generic_output_tile_count"] == 1
+    assert metadata["mram_tiled_task_count"] == 0
+    assert metadata["mram_read_bytes_model"] == 3 * 2 * 2 * 8
+    assert metadata["mram_write_bytes_model"] == 16
+
+
 def _write_non_gemm_manifest(root: Path, *, mode: str) -> Path:
     left_shape = (9, 8, 8)
     right_shape = (8, 8, 8)
@@ -170,3 +181,10 @@ def test_sdk_runner_real_non_gemm_shape_when_sdk_tools_are_present(tmp_path: Pat
     result = json.loads(output.read_text(encoding="utf-8"))
     assert result["status"] == "upmem_sdk_simulator_generic_loop_executed"
     assert result["validation_metrics"]["passed"] is True
+    metadata = result["metadata"]
+    assert metadata["generic_kernel_strategy"] == "mram_resident_output_tiled_v1"
+    assert metadata["generic_output_tile_elements"] == 256
+    assert metadata["generic_output_tile_count"] == 18
+    assert metadata["mram_tiled_task_count"] == 1
+    assert metadata["mram_read_bytes_model"] == 4608 * 8 * 2 * 8
+    assert metadata["mram_write_bytes_model"] == 4608 * 4

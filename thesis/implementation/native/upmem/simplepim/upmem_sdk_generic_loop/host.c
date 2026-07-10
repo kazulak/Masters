@@ -51,6 +51,77 @@ static int transfer_sizes(uint32_t elements, size_t element_size, size_t *bytes,
     return *transfer_bytes == 0 || (*transfer_bytes % 8u) != 0;
 }
 
+static int validate_row_major(const uint32_t *shape, const uint32_t *strides, uint32_t rank, uint32_t expected_elements) {
+    uint64_t product = 1;
+    uint64_t expected_stride = 1;
+    for (uint32_t reverse_axis = 0; reverse_axis < rank; reverse_axis++) {
+        const uint32_t axis = rank - reverse_axis - 1u;
+        if (shape[axis] == 0 || strides[axis] != expected_stride) {
+            return 1;
+        }
+        product *= shape[axis];
+        expected_stride *= shape[axis];
+        if (product > UINT32_MAX || expected_stride > UINT32_MAX) {
+            return 1;
+        }
+    }
+    return product != expected_elements;
+}
+
+static int validate_index_maps(const upmem_generic_args_t *args) {
+    uint8_t left_used[UPMEM_GENERIC_MAX_RANK] = {0};
+    uint8_t right_used[UPMEM_GENERIC_MAX_RANK] = {0};
+
+    for (uint32_t output_axis = 0; output_axis < args->output_rank; output_axis++) {
+        const int32_t left_axis = args->output_to_left_axes[output_axis];
+        const int32_t right_axis = args->output_to_right_axes[output_axis];
+        if (left_axis < -1 || right_axis < -1 ||
+            left_axis >= (int32_t)args->left_rank || right_axis >= (int32_t)args->right_rank ||
+            (left_axis < 0 && right_axis < 0)) {
+            return 1;
+        }
+        if (left_axis >= 0) {
+            if (left_used[left_axis] || args->left_shape[left_axis] != args->output_shape[output_axis]) {
+                return 1;
+            }
+            left_used[left_axis] = 1;
+        }
+        if (right_axis >= 0) {
+            if (right_used[right_axis] || args->right_shape[right_axis] != args->output_shape[output_axis]) {
+                return 1;
+            }
+            right_used[right_axis] = 1;
+        }
+    }
+
+    for (uint32_t contracted_axis = 0; contracted_axis < args->contracted_rank; contracted_axis++) {
+        const int32_t left_axis = args->contracted_to_left_axes[contracted_axis];
+        const int32_t right_axis = args->contracted_to_right_axes[contracted_axis];
+        if (left_axis < 0 || right_axis < 0 ||
+            left_axis >= (int32_t)args->left_rank || right_axis >= (int32_t)args->right_rank ||
+            left_used[left_axis] || right_used[right_axis] ||
+            args->contracted_dims[contracted_axis] == 0 ||
+            args->left_shape[left_axis] != args->contracted_dims[contracted_axis] ||
+            args->right_shape[right_axis] != args->contracted_dims[contracted_axis]) {
+            return 1;
+        }
+        left_used[left_axis] = 1;
+        right_used[right_axis] = 1;
+    }
+
+    for (uint32_t axis = 0; axis < args->left_rank; axis++) {
+        if (!left_used[axis]) {
+            return 1;
+        }
+    }
+    for (uint32_t axis = 0; axis < args->right_rank; axis++) {
+        if (!right_used[axis]) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc != 6) {
         fprintf(stderr, "usage: %s <dpu_binary> <args.bin> <left_i8.bin> <right_i8.bin> <out_i32.bin>\n", argv[0]);
@@ -81,6 +152,24 @@ int main(int argc, char **argv) {
     }
     if (args.operand_mode != UPMEM_GENERIC_MODE_INT8_SCALED && args.operand_mode != UPMEM_GENERIC_MODE_FLOAT32_NO_QUANT) {
         fprintf(stderr, "unsupported operand mode %u\n", args.operand_mode);
+        return 2;
+    }
+    if (validate_row_major(args.left_shape, args.left_strides, args.left_rank, args.left_elems) != 0 ||
+        validate_row_major(args.right_shape, args.right_strides, args.right_rank, args.right_elems) != 0 ||
+        validate_row_major(args.output_shape, args.output_strides, args.output_rank, args.output_elems) != 0) {
+        fprintf(stderr, "invalid row-major tensor metadata\n");
+        return 2;
+    }
+    uint64_t contracted_product = 1;
+    for (uint32_t axis = 0; axis < args.contracted_rank; axis++) {
+        if (args.contracted_dims[axis] == 0 || contracted_product > UINT32_MAX / args.contracted_dims[axis]) {
+            fprintf(stderr, "invalid contracted dimensions\n");
+            return 2;
+        }
+        contracted_product *= args.contracted_dims[axis];
+    }
+    if (contracted_product != args.contracted_elems || validate_index_maps(&args) != 0) {
+        fprintf(stderr, "invalid generic contraction index metadata\n");
         return 2;
     }
 

@@ -31,6 +31,7 @@ from quantum_bench.targets.upmem.taskgraph_runtime import (
     UPMEM_TASKGRAPH_QUANTIZATION_MODES,
     build_generic_taskgraph_reference,
     execute_upmem_taskgraph_runtime,
+    upmem_taskgraph_executor_config,
 )
 from quantum_bench.tn import (
     build_execution_bundle,
@@ -463,7 +464,7 @@ def _enriched_runtime_summary(
             **execution_identity_metadata(generated["graph"], plan_reused=True),
             "executor_config_hash": executor_config_hash(
                 "upmem_tn_runtime",
-                {"policy": policy, "quantization_mode": quantization_mode},
+                upmem_taskgraph_executor_config(policy=policy, quantization_mode=quantization_mode),
             ),
             "execution_bundle_artifact": generated.get("execution_bundle_artifact"),
             "execution_scope": "full_taskgraph",
@@ -490,7 +491,7 @@ def _enriched_runtime_summary(
                 **execution_identity_metadata(generated["graph"], plan_reused=True),
                 "executor_config_hash": executor_config_hash(
                     "upmem_tn_runtime",
-                    {"policy": policy, "quantization_mode": quantization_mode},
+                    upmem_taskgraph_executor_config(policy=policy, quantization_mode=quantization_mode),
                 ),
                 "execution_bundle_artifact": generated.get("execution_bundle_artifact"),
                 "suite_level_upmem_mvp_benchmark": True,

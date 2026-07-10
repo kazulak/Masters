@@ -141,8 +141,16 @@ def test_generic_boundary_small_regression_matches_numpy_einsum() -> None:
 
     assert result.status == "prepared"
     assert result.prepared_operands is not None
-    expected = np.einsum("abc,cde->abde", result.prepared_operands.left_quantized.astype(np.int32), result.prepared_operands.right_quantized.astype(np.int32), optimize=False)
-    np.testing.assert_array_equal(result.prepared_operands.expected_quantized_reference_output, expected)
+    expected_i32 = np.einsum(
+        "abc,cde->abde",
+        result.prepared_operands.left_quantized.astype(np.int32),
+        result.prepared_operands.right_quantized.astype(np.int32),
+        optimize=False,
+    )
+    assert result.left_conversion is not None
+    assert result.right_conversion is not None
+    expected = expected_i32.astype(np.float64) * result.left_conversion.scale * result.right_conversion.scale
+    np.testing.assert_allclose(result.prepared_operands.expected_quantized_reference_output, expected)
 
 
 def test_generic_boundary_task_bridge_records_boundary_evidence(monkeypatch, tmp_path: Path) -> None:

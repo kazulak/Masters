@@ -17,6 +17,8 @@ from quantum_bench.targets.upmem.generic_bridge import (
     GenericBridgeExecutionResult,
     GenericBridgeOutputManifest,
 )
+from quantum_bench.targets.upmem.taskgraph_runtime import upmem_taskgraph_executor_config
+from quantum_bench.tn import executor_config_hash
 
 
 def _write_suite(path: Path) -> None:
@@ -241,6 +243,14 @@ def test_upmem_mvp_benchmark_records_same_route_quantization_comparison(monkeypa
     assert all(record["contraction_plan_hash"] == cpu_plan_by_case[record["case_id"]] for record in upmem_records)
     assert all(record["plan_reused"] is True for record in upmem_records)
     assert all(record["planning_in_timed_region"] is False for record in upmem_records)
+    expected_executor_hashes = {
+        mode: executor_config_hash(
+            "upmem_tn_runtime",
+            upmem_taskgraph_executor_config(policy="generic-only", quantization_mode=mode),
+        )
+        for mode in ("none", "per_task_input_quantize")
+    }
+    assert all(record["executor_config_hash"] == expected_executor_hashes[record["quantization_mode"]] for record in upmem_records)
     assert (result.run_dir / "cases" / "bell_2q" / "execution_bundle.json").is_file()
     comparison = json.loads((result.run_dir / "quantization_comparison.json").read_text(encoding="utf-8"))
     assert len(comparison["rows"]) == 2

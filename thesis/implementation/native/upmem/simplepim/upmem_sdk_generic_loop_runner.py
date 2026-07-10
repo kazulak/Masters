@@ -51,7 +51,7 @@ def main() -> int:
         manifest = _load_manifest(input_path)
         prepared = _prepare_inputs(manifest, bridge_dir, os.environ)
         requested_max_elems = _positive_int_env(os.environ, "UPMEM_GENERIC_MAX_ELEMS", DEFAULT_MAX_ELEMS)
-        max_elems = min(requested_max_elems, MAX_COMPILED_ELEMS) if requested_max_elems is not None else None
+        max_elems = requested_max_elems
         if max_elems is None:
             _write_output_manifest(
                 output_path,
@@ -65,6 +65,24 @@ def main() -> int:
                 error="Invalid UPMEM_GENERIC_MAX_ELEMS; expected a positive integer",
                 reason="unsupported_shape_for_initial_backend",
                 error_type="unsupported_shape_for_initial_backend",
+                external_command_executed=True,
+                execution_implemented=False,
+                metadata_extra=_base_metadata(args.target, False, max_elems=MAX_COMPILED_ELEMS),
+            )
+            return 0
+        if max_elems > MAX_COMPILED_ELEMS:
+            _write_output_manifest(
+                output_path,
+                backend=args.backend_id,
+                status="unsupported",
+                manifest=manifest,
+                input_manifest_path=input_path,
+                output_blob=None,
+                validation_metrics={"status": "not_applicable", "reason": "requested_element_cap_exceeds_compiled_limit"},
+                total_time_s=time.perf_counter() - started,
+                error=f"UPMEM_GENERIC_MAX_ELEMS={max_elems} exceeds compiled limit {MAX_COMPILED_ELEMS}",
+                reason="requested_element_cap_exceeds_compiled_limit",
+                error_type="requested_element_cap_exceeds_compiled_limit",
                 external_command_executed=True,
                 execution_implemented=False,
                 metadata_extra=_base_metadata(args.target, False, max_elems=MAX_COMPILED_ELEMS),
@@ -257,6 +275,16 @@ def main() -> int:
                 "actual_d2h_bytes": prepared["actual_d2h_bytes"],
                 "full_precision_h2d_bytes_model": prepared["full_precision_h2d_bytes_model"],
                 "full_precision_d2h_bytes_model": prepared["full_precision_d2h_bytes_model"],
+                "generic_kernel_strategy": prepared["generic_kernel_strategy"],
+                "native_max_rank": prepared["native_max_rank"],
+                "native_max_tensor_elements": prepared["native_max_tensor_elements"],
+                "generic_output_tile_elements": prepared["generic_output_tile_elements"],
+                "generic_output_tile_count": prepared["generic_output_tile_count"],
+                "mram_resident_operands": prepared["mram_resident_operands"],
+                "wram_output_tiled": prepared["wram_output_tiled"],
+                "mram_tiled_task_count": prepared["mram_tiled_task_count"],
+                "mram_read_bytes_model": prepared["mram_read_bytes_model"],
+                "mram_write_bytes_model": prepared["mram_write_bytes_model"],
                 "build": build,
                 "run": run,
                 "runner_work": {"source": "runner_work/src", "build": "runner_work/build", "inputs": "runner_work/inputs", "outputs": "runner_work/outputs"},
@@ -567,7 +595,7 @@ def _tile_metadata(native: Mapping[str, Any]) -> dict[str, Any]:
         "wram_output_tiled": True,
         "mram_tiled_task_count": int(tile_count > 1),
         "mram_read_bytes_model": output_elements * contracted * 2 * 8,
-        "mram_write_bytes_model": output_elements * 4,
+        "mram_write_bytes_model": _align8(output_elements * 4),
     }
 
 
