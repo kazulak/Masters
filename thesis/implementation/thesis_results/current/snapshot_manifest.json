@@ -1,0 +1,69 @@
+{
+  "created_at": "2026-07-10T17:32:45.837469+00:00",
+  "dirty_worktree": false,
+  "evidence_level": "normalized_report_regenerable",
+  "git_commit": "4db930c1b4c62747e116083ed137149d39bd6e20",
+  "plots_dir": "plots",
+  "raw_tensor_artifacts_included": false,
+  "report_entrypoint": "README.md",
+  "schema_version": "thesis_result_snapshot_v1",
+  "selected_evidence": [
+    {
+      "git_commit": "4db930c1b4c62747e116083ed137149d39bd6e20",
+      "record_count": 48,
+      "role": "full_state_correctness",
+      "run_id": "2026-07-10_19-16-46",
+      "snapshot_path": "evidence/full_state_correctness",
+      "source_run": "runs/evidence/research_cpu_gpu_correctness/simulation_backend_compare/2026-07-10_19-16-46",
+      "suite_id": "research_cpu_gpu_correctness"
+    },
+    {
+      "git_commit": "4db930c1b4c62747e116083ed137149d39bd6e20",
+      "record_count": 420,
+      "role": "full_state_performance",
+      "run_id": "2026-07-10_19-18-08",
+      "snapshot_path": "evidence/full_state_performance",
+      "source_run": "runs/evidence/research_cpu_gpu/simulation_backend_compare/2026-07-10_19-18-08",
+      "suite_id": "research_cpu_gpu"
+    },
+    {
+      "git_commit": "4db930c1b4c62747e116083ed137149d39bd6e20",
+      "record_count": 378,
+      "role": "cpu_tn",
+      "run_id": "2026-07-10_19-19-47",
+      "snapshot_path": "evidence/cpu_tn",
+      "source_run": "runs/evidence/research_cpu_tn/simulation_backend_compare/2026-07-10_19-19-47",
+      "suite_id": "research_cpu_tn"
+    },
+    {
+      "git_commit": "4db930c1b4c62747e116083ed137149d39bd6e20",
+      "record_count": 84,
+      "role": "planner_paths",
+      "run_id": "2026-07-10_19-29-59",
+      "snapshot_path": "evidence/planner_paths",
+      "source_run": "runs/evidence/research_planner_compare/planner_comparison/2026-07-10_19-29-59",
+      "suite_id": "research_planner_compare"
+    },
+    {
+      "git_commit": "4db930c1b4c62747e116083ed137149d39bd6e20",
+      "record_count": 48,
+      "role": "upmem_generic_boundary",
+      "run_id": "2026-07-10_19-30-01",
+      "snapshot_path": "evidence/upmem_generic_boundary",
+      "source_run": "runs/evidence/thesis_upmem_quantization_boundary/upmem_generic_both_modes/2026-07-10_19-30-01",
+      "suite_id": "thesis_upmem_quantization_boundary"
+    },
+    {
+      "git_commit": "4db930c1b4c62747e116083ed137149d39bd6e20",
+      "record_count": 24,
+      "role": "internal_parallelism",
+      "run_id": "2026-07-10_19-31-26",
+      "snapshot_path": "evidence/internal_parallelism",
+      "source_run": "runs/evidence/research_internal_parallelism/simulation_backend_compare/2026-07-10_19-31-26",
+      "suite_id": "research_internal_parallelism"
+    }
+  ],
+  "snapshot_id": "current",
+  "source_pack": "runs/comparisons/research_pack/2026-07-10_19-13-58_979027",
+  "tables_dir": "tables"
+}

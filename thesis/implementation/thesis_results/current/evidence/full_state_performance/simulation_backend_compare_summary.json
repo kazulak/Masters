@@ -1,0 +1,1018 @@
+{
+  "anchor_route_id": "quest_cpu_full_state_exact",
+  "backend_families": [
+    "quest"
+  ],
+  "backend_probe": {
+    "gpu_probe": {
+      "cached_gpu_verification_used": true,
+      "cuda_only_assumption_used": false,
+      "gpu_benchmark_records_emitted": false,
+      "gpu_candidates": [
+        {
+          "benchmark_route_eligible": true,
+          "blocker_reason": null,
+          "cached_verification_artifact_used": true,
+          "candidate_category": "tailored_quantum_gpu",
+          "candidate_id": "quest_gpu_full_state_hip",
+          "classification": "verified_cached_artifact",
+          "current_process_gpu_preflight_available": true,
+          "detected_dependencies": {
+            "hipcc": {
+              "available": true,
+              "path": "/usr/bin/hipcc"
+            },
+            "rocm-smi": {
+              "available": true,
+              "path": "/usr/bin/rocm-smi"
+            },
+            "rocminfo": {
+              "available": true,
+              "path": "/usr/bin/rocminfo"
+            }
+          },
+          "evidence_paths": [
+            "external/QuEST/CMakeLists.txt"
+          ],
+          "gpu_execution_verified": true,
+          "preferred_priority": 1,
+          "source_support_is_not_benchmark_evidence": true,
+          "target_gpu_stack": "amd_rocm",
+          "verification_artifact": "/home/tom/repos/Masters/thesis/implementation/build/gpu_verification/quest_gpu_full_state_exact.json",
+          "verification_source": "cached_artifact"
+        },
+        {
+          "benchmark_route_eligible": false,
+          "blocker_reason": "requires_nvidia_cuda_build_and_minimal_gpu_execution",
+          "cached_verification_artifact_used": false,
+          "candidate_category": "tailored_quantum_gpu",
+          "candidate_id": "quest_gpu_full_state_cuda",
+          "classification": "nvidia_cuda_only_not_usable_here",
+          "current_process_gpu_preflight_available": false,
+          "detected_dependencies": {
+            "nvcc": {
+              "available": false,
+              "path": null
+            },
+            "nvidia-smi": {
+              "available": false,
+              "path": null
+            }
+          },
+          "evidence_paths": [
+            "external/QuEST/CMakeLists.txt"
+          ],
+          "gpu_execution_verified": false,
+          "preferred_priority": 2,
+          "source_support_is_not_benchmark_evidence": true,
+          "target_gpu_stack": "nvidia_cuda",
+          "verification_artifact": null,
+          "verification_source": "none"
+        },
+        {
+          "benchmark_route_eligible": false,
+          "blocker_reason": "qiskit_aer_not_installed",
+          "candidate_category": "cuda_quantum_stack",
+          "candidate_id": "qiskit_aer_gpu_statevector",
+          "classification": "dependency_missing",
+          "detected_dependencies": {
+            "qiskit_aer": {
+              "available": false,
+              "version": null
+            }
+          },
+          "evidence_paths": [],
+          "gpu_execution_verified": false,
+          "preferred_priority": 3,
+          "source_support_is_not_benchmark_evidence": true,
+          "target_gpu_stack": "nvidia_cuda"
+        },
+        {
+          "benchmark_route_eligible": false,
+          "blocker_reason": "qiskit_aer_not_installed",
+          "candidate_category": "cuda_quantum_stack",
+          "candidate_id": "qiskit_aer_gpu_tensor_network",
+          "classification": "dependency_missing",
+          "detected_dependencies": {
+            "qiskit_aer": {
+              "available": false,
+              "version": null
+            }
+          },
+          "evidence_paths": [],
+          "gpu_execution_verified": false,
+          "preferred_priority": 4,
+          "source_support_is_not_benchmark_evidence": true,
+          "target_gpu_stack": "nvidia_cuda"
+        },
+        {
+          "benchmark_route_eligible": false,
+          "blocker_reason": "cudaq_not_installed",
+          "candidate_category": "cuda_quantum_stack",
+          "candidate_id": "cudaq_gpu_full_state",
+          "classification": "dependency_missing",
+          "detected_dependencies": {
+            "cudaq": {
+              "available": false,
+              "version": null
+            }
+          },
+          "evidence_paths": [],
+          "gpu_execution_verified": false,
+          "preferred_priority": 5,
+          "source_support_is_not_benchmark_evidence": true,
+          "target_gpu_stack": "nvidia_cuda"
+        },
+        {
+          "benchmark_route_eligible": false,
+          "blocker_reason": "cudaq_not_installed",
+          "candidate_category": "cuda_quantum_stack",
+          "candidate_id": "cudaq_gpu_tensor_network",
+          "classification": "dependency_missing",
+          "detected_dependencies": {
+            "cudaq": {
+              "available": false,
+              "version": null
+            }
+          },
+          "evidence_paths": [],
+          "gpu_execution_verified": false,
+          "preferred_priority": 6,
+          "source_support_is_not_benchmark_evidence": true,
+          "target_gpu_stack": "nvidia_cuda"
+        },
+        {
+          "benchmark_route_eligible": false,
+          "blocker_reason": "cuquantum_not_installed",
+          "candidate_category": "cuda_quantum_stack",
+          "candidate_id": "cuquantum_statevector",
+          "classification": "dependency_missing",
+          "detected_dependencies": {
+            "cuquantum": {
+              "available": false,
+              "version": null
+            }
+          },
+          "evidence_paths": [],
+          "gpu_execution_verified": false,
+          "preferred_priority": 7,
+          "source_support_is_not_benchmark_evidence": true,
+          "target_gpu_stack": "nvidia_cuda"
+        },
+        {
+          "benchmark_route_eligible": false,
+          "blocker_reason": "cuquantum_not_installed",
+          "candidate_category": "cuda_quantum_stack",
+          "candidate_id": "cuquantum_tensor_network",
+          "classification": "dependency_missing",
+          "detected_dependencies": {
+            "cuquantum": {
+              "available": false,
+              "version": null
+            }
+          },
+          "evidence_paths": [],
+          "gpu_execution_verified": false,
+          "preferred_priority": 8,
+          "source_support_is_not_benchmark_evidence": true,
+          "target_gpu_stack": "nvidia_cuda"
+        },
+        {
+          "benchmark_route_eligible": false,
+          "blocker_reason": "no_gpu_array_backend_detected_for_quimb_cotengra",
+          "candidate_category": "tailored_quantum_gpu",
+          "candidate_id": "quimb_cotengra_gpu",
+          "classification": "cpu_only_current_environment",
+          "detected_dependencies": {
+            "cotengra": {
+              "available": true,
+              "version": "0.7.5"
+            },
+            "cupy": {
+              "available": false,
+              "version": null
+            },
+            "jax": {
+              "available": false,
+              "version": null
+            },
+            "quimb": {
+              "available": true,
+              "version": "1.11.2"
+            },
+            "torch": {
+              "available": false,
+              "version": null
+            }
+          },
+          "evidence_paths": [],
+          "gpu_execution_verified": false,
+          "preferred_priority": 9,
+          "source_support_is_not_benchmark_evidence": true,
+          "target_gpu_stack": "gpu_array_backend"
+        },
+        {
+          "benchmark_route_eligible": false,
+          "blocker_reason": "torch_not_installed",
+          "candidate_category": "generic_tensor_gpu",
+          "candidate_id": "torch_rocm_generic_full_state",
+          "classification": "dependency_missing",
+          "detected_dependencies": {
+            "hipcc": {
+              "available": true,
+              "path": "/usr/bin/hipcc"
+            },
+            "torch": {
+              "available": false,
+              "version": null
+            }
+          },
+          "evidence_paths": [],
+          "gpu_execution_verified": false,
+          "minimal_execution": {
+            "classification": "dependency_missing",
+            "gpu_execution_verified": false,
+            "reason": "torch_not_installed"
+          },
+          "preferred_priority": 10,
+          "source_support_is_not_benchmark_evidence": true,
+          "target_gpu_stack": "amd_rocm"
+        }
+      ],
+      "gpu_execution_backend_added": true,
+      "gpu_tensor_network_probe": {
+        "candidate_count": 5,
+        "gpu_tn_backend_route_added": false,
+        "gpu_tn_benchmark_records_emitted": false,
+        "gpu_tn_candidates": [
+          {
+            "backend_family": "cuquantum_cutensornet",
+            "benchmark_records_emitted": false,
+            "benchmark_route_eligible": false,
+            "blocker_reason": "cuquantum_not_installed",
+            "candidate_category": "tailored_gpu_tn",
+            "candidate_id": "cuquantum_cutensornet",
+            "classification": "dependency_missing",
+            "detected_dependencies": {
+              "cuquantum": {
+                "available": false,
+                "version": null
+              }
+            },
+            "execution_model": "tensor_network",
+            "feasibility_note": "Preferred SOTA-oriented NVIDIA tensor-network library candidate for a future cluster route.",
+            "gpu_execution_verified": false,
+            "preferred_priority": 1,
+            "quest_full_state_gpu_route_reused": false,
+            "required_next_evidence": [
+              "minimal_tensor_network_gpu_execution",
+              "no_cpu_fallback",
+              "gpu_device_metadata",
+              "synchronization_status",
+              "exact_or_metrics_only_validation_contract"
+            ],
+            "route_status": "future_candidate",
+            "source_candidate_id": "cuquantum_tensor_network",
+            "source_support_is_not_benchmark_evidence": true,
+            "target_gpu_stack": "nvidia_cuda",
+            "tensor_network_gpu_execution_verified": false
+          },
+          {
+            "backend_family": "cudaq",
+            "benchmark_records_emitted": false,
+            "benchmark_route_eligible": false,
+            "blocker_reason": "cudaq_not_installed",
+            "candidate_category": "cuda_quantum_stack",
+            "candidate_id": "cudaq_tensornet",
+            "classification": "dependency_missing",
+            "detected_dependencies": {
+              "cudaq": {
+                "available": false,
+                "version": null
+              }
+            },
+            "execution_model": "tensor_network",
+            "feasibility_note": "CUDA-Q tensor-network simulator candidate; separate from QuEST full-state GPU.",
+            "gpu_execution_verified": false,
+            "preferred_priority": 2,
+            "quest_full_state_gpu_route_reused": false,
+            "required_next_evidence": [
+              "minimal_tensor_network_gpu_execution",
+              "no_cpu_fallback",
+              "gpu_device_metadata",
+              "synchronization_status",
+              "exact_or_metrics_only_validation_contract"
+            ],
+            "route_status": "future_candidate",
+            "source_candidate_id": "cudaq_gpu_tensor_network",
+            "source_support_is_not_benchmark_evidence": true,
+            "target_gpu_stack": "nvidia_cuda",
+            "tensor_network_gpu_execution_verified": false
+          },
+          {
+            "backend_family": "qiskit_aer",
+            "benchmark_records_emitted": false,
+            "benchmark_route_eligible": false,
+            "blocker_reason": "qiskit_aer_not_installed",
+            "candidate_category": "cuda_quantum_stack",
+            "candidate_id": "qiskit_aer_tensor_network",
+            "classification": "dependency_missing",
+            "detected_dependencies": {
+              "qiskit_aer": {
+                "available": false,
+                "version": null
+              }
+            },
+            "execution_model": "tensor_network",
+            "feasibility_note": "Qiskit Aer GPU tensor_network method candidate; requires GPU-enabled Aer and cuTensorNet.",
+            "gpu_execution_verified": false,
+            "preferred_priority": 3,
+            "quest_full_state_gpu_route_reused": false,
+            "required_next_evidence": [
+              "minimal_tensor_network_gpu_execution",
+              "no_cpu_fallback",
+              "gpu_device_metadata",
+              "synchronization_status",
+              "exact_or_metrics_only_validation_contract"
+            ],
+            "route_status": "future_candidate",
+            "source_candidate_id": "qiskit_aer_gpu_tensor_network",
+            "source_support_is_not_benchmark_evidence": true,
+            "target_gpu_stack": "nvidia_cuda",
+            "tensor_network_gpu_execution_verified": false
+          },
+          {
+            "backend_family": "quimb_cotengra",
+            "benchmark_records_emitted": false,
+            "benchmark_route_eligible": false,
+            "blocker_reason": "no_gpu_array_backend_detected_for_quimb_cotengra",
+            "candidate_category": "gpu_array_tn_integration",
+            "candidate_id": "quimb_cotengra_gpu_array_backend",
+            "classification": "cpu_only_current_environment",
+            "detected_dependencies": {
+              "cotengra": {
+                "available": true,
+                "version": "0.7.5"
+              },
+              "cupy": {
+                "available": false,
+                "version": null
+              },
+              "jax": {
+                "available": false,
+                "version": null
+              },
+              "quimb": {
+                "available": true,
+                "version": "1.11.2"
+              },
+              "torch": {
+                "available": false,
+                "version": null
+              }
+            },
+            "execution_model": "tensor_network",
+            "feasibility_note": "Integration candidate only if contractions are proven to execute on GPU with synchronization.",
+            "gpu_execution_verified": false,
+            "preferred_priority": 4,
+            "quest_full_state_gpu_route_reused": false,
+            "required_next_evidence": [
+              "minimal_tensor_network_gpu_execution",
+              "no_cpu_fallback",
+              "gpu_device_metadata",
+              "synchronization_status",
+              "exact_or_metrics_only_validation_contract"
+            ],
+            "route_status": "future_candidate",
+            "source_candidate_id": "quimb_cotengra_gpu",
+            "source_support_is_not_benchmark_evidence": true,
+            "target_gpu_stack": "gpu_array_backend",
+            "tensor_network_gpu_execution_verified": false
+          },
+          {
+            "backend_family": "cupy",
+            "benchmark_records_emitted": false,
+            "benchmark_route_eligible": false,
+            "blocker_reason": "cupy_not_installed",
+            "candidate_category": "generic_tensor_gpu_feasibility",
+            "candidate_id": "cupy_rocm_generic_tensor_contraction",
+            "classification": "dependency_missing",
+            "detected_dependencies": {
+              "cupy": {
+                "available": false,
+                "version": null
+              },
+              "hipcc": {
+                "available": true,
+                "path": "/usr/bin/hipcc"
+              }
+            },
+            "execution_model": "generic_tensor_contraction",
+            "feasibility_note": "Local AMD feasibility candidate only; do not present as the main SOTA quantum GPU TN baseline.",
+            "gpu_execution_verified": false,
+            "preferred_priority": 5,
+            "quest_full_state_gpu_route_reused": false,
+            "required_next_evidence": [
+              "minimal_gpu_tensor_contraction",
+              "no_cpu_fallback",
+              "gpu_device_metadata",
+              "synchronization_status"
+            ],
+            "route_status": "feasibility_only_not_primary_gpu_tn_baseline",
+            "source_candidate_id": null,
+            "source_support_is_not_benchmark_evidence": true,
+            "target_gpu_stack": "amd_rocm",
+            "tensor_network_gpu_execution_verified": false
+          }
+        ],
+        "gpu_tn_verification": null,
+        "quest_gpu_full_state_is_gpu_tn_evidence": false,
+        "requires_verified_tensor_network_gpu_execution_before_records": true,
+        "status": "feasibility_only"
+      },
+      "gpu_verification": {
+        "accelerator_kind": "amd_gpu",
+        "artifact_path": "/home/tom/repos/Masters/thesis/implementation/build/gpu_verification/quest_gpu_full_state_exact.json",
+        "attempted_steps": [
+          {
+            "status": "passed",
+            "step": "preflight"
+          },
+          {
+            "command": [
+              "make",
+              "clean-hip-smoke",
+              "hip-smoke",
+              "GPU_BACKEND=hip",
+              "HIP_ARCHITECTURES=gfx1032"
+            ],
+            "status": "passed",
+            "step": "build_hip_smoke"
+          },
+          {
+            "command": [
+              "/home/tom/repos/Masters/thesis/implementation/build/native/quest_gpu/hip/bin/hip_smoke"
+            ],
+            "status": "passed",
+            "step": "minimal_hip_smoke_run"
+          },
+          {
+            "command": [
+              "make",
+              "clean-all",
+              "all",
+              "GPU_BACKEND=hip",
+              "HIP_ARCHITECTURES=gfx1032"
+            ],
+            "status": "passed",
+            "step": "build_quest_gpu_runner"
+          },
+          {
+            "command": [
+              "/home/tom/repos/Masters/thesis/implementation/build/native/quest_gpu/hip/bin/quest_gpu_runner",
+              "--algo",
+              "QRNG",
+              "--qubits",
+              "2",
+              "--json",
+              "--dump-state-json",
+              "/home/tom/repos/Masters/thesis/implementation/build/gpu_verification/quest_gpu_minimal_state_dump.json",
+              "--max-output-amplitudes",
+              "4"
+            ],
+            "status": "passed",
+            "step": "minimal_quest_gpu_run"
+          }
+        ],
+        "blocker_reason": null,
+        "build_result_summary": {
+          "command": [
+            "make",
+            "clean-all",
+            "all",
+            "GPU_BACKEND=hip",
+            "HIP_ARCHITECTURES=gfx1032"
+          ],
+          "cwd": "/home/tom/repos/Masters/thesis/implementation/native/quest_gpu",
+          "returncode": 0,
+          "timeout_s": 300
+        },
+        "candidate_category": "tailored_quantum_gpu",
+        "created_at": "2026-07-10T17:16:46.326142+00:00",
+        "detected_dependencies": {
+          "amd_gpu_pci": {
+            "available": true
+          },
+          "cmake": {
+            "available": true,
+            "path": "/usr/bin/cmake"
+          },
+          "dev_dri": {
+            "available": true
+          },
+          "dev_dri_renderD128": {
+            "available": true,
+            "required": false
+          },
+          "dev_dri_render_node": {
+            "available": true,
+            "nodes": [
+              "/dev/dri/renderD128"
+            ]
+          },
+          "dev_kfd": {
+            "available": true
+          },
+          "hipcc": {
+            "available": true,
+            "path": "/usr/bin/hipcc"
+          },
+          "make": {
+            "available": true,
+            "path": "/usr/bin/make"
+          },
+          "rocminfo": {
+            "available": true,
+            "path": "/usr/bin/rocminfo"
+          },
+          "rocminfo_gpu_agent": {
+            "available": true,
+            "gfx_targets": [
+              "gfx10",
+              "gfx1032"
+            ],
+            "returncode": 0
+          }
+        },
+        "gpu_backend_verified": true,
+        "gpu_device_name": "AMD Radeon RX 6600 (gfx1032)",
+        "gpu_program_executed": true,
+        "gpu_runtime_stack": "amd_rocm",
+        "gpu_synchronized": true,
+        "gpu_toolkit_metadata": {
+          "amd_gpu_pci": {
+            "available": true
+          },
+          "cmake": {
+            "available": true,
+            "path": "/usr/bin/cmake"
+          },
+          "dev_dri": {
+            "available": true
+          },
+          "dev_dri_renderD128": {
+            "available": true,
+            "required": false
+          },
+          "dev_dri_render_node": {
+            "available": true,
+            "nodes": [
+              "/dev/dri/renderD128"
+            ]
+          },
+          "dev_kfd": {
+            "available": true
+          },
+          "hipcc": {
+            "available": true,
+            "path": "/usr/bin/hipcc"
+          },
+          "make": {
+            "available": true,
+            "path": "/usr/bin/make"
+          },
+          "rocminfo": {
+            "available": true,
+            "path": "/usr/bin/rocminfo"
+          },
+          "rocminfo_gpu_agent": {
+            "available": true,
+            "gfx_targets": [
+              "gfx10",
+              "gfx1032"
+            ],
+            "returncode": 0
+          }
+        },
+        "hip_smoke_payload": {
+          "device_count": 1,
+          "gcn_arch_name": "gfx1032",
+          "gpu_backend_verified": true,
+          "gpu_device_name": "AMD Radeon RX 6600",
+          "gpu_program_executed": true,
+          "multi_processor_count": 14,
+          "status": "ok",
+          "total_global_mem": 8573157376
+        },
+        "minimal_run_result_summary": {
+          "command": [
+            "/home/tom/repos/Masters/thesis/implementation/build/native/quest_gpu/hip/bin/quest_gpu_runner",
+            "--algo",
+            "QRNG",
+            "--qubits",
+            "2",
+            "--json",
+            "--dump-state-json",
+            "/home/tom/repos/Masters/thesis/implementation/build/gpu_verification/quest_gpu_minimal_state_dump.json",
+            "--max-output-amplitudes",
+            "4"
+          ],
+          "cwd": "/home/tom/repos/Masters/thesis/implementation/native/quest_gpu",
+          "returncode": 0,
+          "timeout_s": 60
+        },
+        "requested_backend": "quest-hip",
+        "runner_path": "/home/tom/repos/Masters/thesis/implementation/build/native/quest_gpu/hip/bin/quest_gpu_runner",
+        "runner_root": "/home/tom/repos/Masters/thesis/implementation/native/quest_gpu",
+        "schema_version": "quest_gpu_verification_v1",
+        "selected_backend": "quest-hip",
+        "status": "verified",
+        "verification_backend": "quest-hip",
+        "verification_source": "cached_artifact"
+      },
+      "gpu_verification_source": "cached_artifact",
+      "hardware": {
+        "amd_gpu_pci_detected": true,
+        "amd_gpu_pci_devices": [
+          "08:00.0 PCI bridge: Advanced Micro Devices, Inc. [AMD/ATI] Navi 10 XL Upstream Port of PCI Express Switch (rev c7)",
+          "09:00.0 PCI bridge: Advanced Micro Devices, Inc. [AMD/ATI] Navi 10 XL Downstream Port of PCI Express Switch",
+          "0a:00.0 VGA compatible controller: Advanced Micro Devices, Inc. [AMD/ATI] Navi 23 [Radeon RX 6600/6600 XT/6600M] (rev c7)",
+          "0a:00.1 Audio device: Advanced Micro Devices, Inc. [AMD/ATI] Navi 21 HDMI Audio [Radeon RX 6800/6800 XT / 6900 XT]"
+        ],
+        "dev_dri_present": true,
+        "dev_dri_renderD128_present": true,
+        "dev_dri_render_node_present": true,
+        "dev_dri_render_nodes": [
+          "/dev/dri/renderD128"
+        ],
+        "dev_kfd_present": true,
+        "nvidia_gpu_pci_detected": false,
+        "nvidia_gpu_pci_devices": [],
+        "rocminfo_gfx_targets": [
+          "gfx10",
+          "gfx1032"
+        ],
+        "rocminfo_gpu_agent_detected": true,
+        "rocminfo_returncode": 0
+      },
+      "hipcc": {
+        "available": true,
+        "path": "/usr/bin/hipcc"
+      },
+      "nvcc": {
+        "available": false,
+        "path": null
+      },
+      "nvidia_smi": {
+        "available": false,
+        "path": null
+      },
+      "rocm_smi": {
+        "available": true,
+        "path": "/usr/bin/rocm-smi"
+      },
+      "rocminfo": {
+        "available": true,
+        "path": "/usr/bin/rocminfo"
+      },
+      "status": "feasibility_only"
+    },
+    "notes": {
+      "gpu_records_require_real_gpu_execution": true,
+      "unavailable_optional_libraries_do_not_create_benchmark_records": true
+    },
+    "optional_libraries": {
+      "cotengra": {
+        "available": true,
+        "version": "0.7.5"
+      },
+      "cudaq": {
+        "available": false,
+        "version": null
+      },
+      "cupy": {
+        "available": false,
+        "version": null
+      },
+      "cuquantum": {
+        "available": false,
+        "version": null
+      },
+      "jax": {
+        "available": false,
+        "version": null
+      },
+      "qiskit": {
+        "available": false,
+        "version": null
+      },
+      "qiskit_aer": {
+        "available": false,
+        "version": null
+      },
+      "quimb": {
+        "available": true,
+        "version": "1.11.2"
+      },
+      "torch": {
+        "available": false,
+        "version": null
+      }
+    },
+    "routes": [
+      {
+        "accelerator_kind": "none",
+        "available": true,
+        "backend_family": "cpu",
+        "can_return_output": true,
+        "contraction_execution_target": "cpu",
+        "execution_model": "tensor_network",
+        "metadata": {
+          "numpy": "2.2.6"
+        },
+        "output_contract": "final_tensor",
+        "reason": null,
+        "route_id": "cpu_tn_einsum_exact"
+      },
+      {
+        "accelerator_kind": "none",
+        "available": true,
+        "backend_family": "cpu",
+        "can_return_output": true,
+        "contraction_execution_target": "cpu",
+        "execution_model": "tensor_network",
+        "metadata": {
+          "diagnostic_route": true,
+          "frontier_scheduler_enabled": true,
+          "numpy": "2.2.6"
+        },
+        "output_contract": "final_tensor",
+        "reason": null,
+        "route_id": "cpu_tn_frontier_exact"
+      },
+      {
+        "accelerator_kind": "none",
+        "available": true,
+        "backend_family": "cpu",
+        "can_return_output": true,
+        "contraction_execution_target": "cpu",
+        "execution_model": "tensor_network",
+        "metadata": {
+          "diagnostic_route": true,
+          "frontier_scheduler_enabled": true,
+          "hybrid_route": true,
+          "numpy": "2.2.6",
+          "slicing_backend": "internal_taskgraph"
+        },
+        "output_contract": "final_tensor",
+        "reason": null,
+        "route_id": "cpu_tn_hybrid_sliced_frontier_exact"
+      },
+      {
+        "accelerator_kind": "none",
+        "available": true,
+        "backend_family": "cpu",
+        "can_return_output": true,
+        "contraction_execution_target": "cpu",
+        "execution_model": "tensor_network",
+        "metadata": {
+          "exact_output_comparable": true,
+          "numpy": "2.2.6",
+          "path_replay_execution": true,
+          "per_contraction_quantization": false
+        },
+        "output_contract": "final_tensor",
+        "reason": null,
+        "route_id": "cpu_tn_path_replay_float64"
+      },
+      {
+        "accelerator_kind": "none",
+        "available": true,
+        "backend_family": "cpu",
+        "can_return_output": true,
+        "contraction_execution_target": "cpu",
+        "execution_model": "tensor_network",
+        "metadata": {
+          "exact_output_comparable": true,
+          "numpy": "2.2.6",
+          "path_replay_execution": true,
+          "per_contraction_quantization": true,
+          "quantization_mode": "per_contraction_input_quantize"
+        },
+        "output_contract": "final_tensor",
+        "reason": null,
+        "route_id": "cpu_tn_path_replay_int8_quantized"
+      },
+      {
+        "accelerator_kind": "none",
+        "available": true,
+        "backend_family": "quest",
+        "can_return_output": true,
+        "contraction_execution_target": "cpu",
+        "execution_model": "full_state",
+        "metadata": {
+          "available": true,
+          "default_max_output_qubits": 12,
+          "deterministic_statevector_only": true,
+          "quest_root": "/home/tom/repos/Masters/thesis/implementation/native/quest_cpu",
+          "reason": null,
+          "runner": "/home/tom/repos/Masters/thesis/implementation/native/quest_cpu/bin/quest_runner"
+        },
+        "output_contract": "statevector",
+        "reason": null,
+        "route_id": "quest_cpu_full_state_exact"
+      },
+      {
+        "accelerator_kind": "gpu",
+        "available": true,
+        "backend_family": "quest",
+        "can_return_output": true,
+        "contraction_execution_target": "gpu",
+        "execution_model": "full_state",
+        "metadata": {
+          "accelerator_kind": "amd_gpu",
+          "available": true,
+          "default_max_output_qubits": 12,
+          "deterministic_statevector_only": true,
+          "gpu_backend_verified": true,
+          "gpu_device_name": "AMD Radeon RX 6600 (gfx1032)",
+          "gpu_program_executed": true,
+          "gpu_records_require_real_gpu_execution": true,
+          "gpu_runtime_stack": "amd_rocm",
+          "gpu_toolkit_metadata": {
+            "amd_gpu_pci": {
+              "available": true
+            },
+            "cmake": {
+              "available": true,
+              "path": "/usr/bin/cmake"
+            },
+            "dev_dri": {
+              "available": true
+            },
+            "dev_dri_renderD128": {
+              "available": true,
+              "required": false
+            },
+            "dev_dri_render_node": {
+              "available": true,
+              "nodes": [
+                "/dev/dri/renderD128"
+              ]
+            },
+            "dev_kfd": {
+              "available": true
+            },
+            "hipcc": {
+              "available": true,
+              "path": "/usr/bin/hipcc"
+            },
+            "make": {
+              "available": true,
+              "path": "/usr/bin/make"
+            },
+            "rocminfo": {
+              "available": true,
+              "path": "/usr/bin/rocminfo"
+            },
+            "rocminfo_gpu_agent": {
+              "available": true,
+              "gfx_targets": [
+                "gfx10",
+                "gfx1032"
+              ],
+              "returncode": 0
+            }
+          },
+          "reason": null,
+          "verification_artifact": "/home/tom/repos/Masters/thesis/implementation/build/gpu_verification/quest_gpu_full_state_exact.json",
+          "verification_backend": "quest-hip"
+        },
+        "output_contract": "statevector",
+        "reason": null,
+        "route_id": "quest_gpu_full_state_exact"
+      },
+      {
+        "accelerator_kind": "none",
+        "available": true,
+        "backend_family": "quimb",
+        "can_return_output": true,
+        "contraction_execution_target": "cpu",
+        "execution_model": "tensor_network",
+        "metadata": {
+          "accelerator_kind": "none",
+          "available": true,
+          "cotengra": "0.7.5",
+          "exact_output_comparable": true,
+          "external_library": true,
+          "opt_einsum": "3.4.0",
+          "quimb": "1.11.2",
+          "reason": null
+        },
+        "output_contract": "final_tensor",
+        "reason": null,
+        "route_id": "quimb_tn_exact"
+      },
+      {
+        "accelerator_kind": "none",
+        "available": true,
+        "backend_family": "quimb",
+        "can_return_output": true,
+        "contraction_execution_target": "cpu",
+        "execution_model": "tensor_network",
+        "metadata": {
+          "accelerator_kind": "none",
+          "available": true,
+          "cotengra": "0.7.5",
+          "exact_output_comparable": true,
+          "external_library": true,
+          "opt_einsum": "3.4.0",
+          "quimb": "1.11.2",
+          "reason": null,
+          "slicing_backend": "cotengra",
+          "slicing_enabled": true
+        },
+        "output_contract": "final_tensor",
+        "reason": null,
+        "route_id": "quimb_tn_sliced_exact"
+      },
+      {
+        "accelerator_kind": "upmem",
+        "available": true,
+        "backend_family": "upmem_sdk",
+        "can_return_output": true,
+        "contraction_execution_target": "upmem",
+        "execution_model": "tensor_network",
+        "metadata": {
+          "benchmark_rows_require_preflight": true,
+          "contraction_execution_target": "upmem",
+          "cpu_fallback_used": false,
+          "execution_backend": "upmem_sdk",
+          "external_execution_required": true,
+          "hardware_execution": false,
+          "hardware_speedup_applicable": false,
+          "hardware_timing_available": false,
+          "native_sdk_control_path": true,
+          "preflight_required": true,
+          "quantization_mode": "per_task_input_quantize",
+          "quantized_execution": true,
+          "route_registered": true,
+          "simplepim_api_used": false,
+          "upmem_execution_mode": "sdk_simulator",
+          "whole_network_quantized_at_initialization": false
+        },
+        "output_contract": "final_tensor",
+        "reason": null,
+        "route_id": "upmem_tn_sdk_simulator_quantized"
+      }
+    ],
+    "schema_version": "simulation_backend_probe_v1"
+  },
+  "benchmark_roles": [
+    "serious_full_state_baseline",
+    "serious_gpu_full_state_baseline"
+  ],
+  "case_artifacts_directory": "cases",
+  "case_count": 42,
+  "case_records_artifact": "simulation_backend_compare_cases.jsonl",
+  "exact_output_comparable_record_count": 0,
+  "execution_models": [
+    "full_state"
+  ],
+  "failed_case_count": 0,
+  "gpu_benchmark_records_emitted": true,
+  "gpu_execution_backend_added": true,
+  "measured_runs": 5,
+  "metrics_only_record_count": 420,
+  "normalized_records_artifact": "normalized_records.jsonl",
+  "optional_backend_reports": [],
+  "passed_case_count": 42,
+  "performance_tier": true,
+  "performance_tier_record_count": 420,
+  "quest_metrics_only_route_is_not_output_comparable": true,
+  "record_count": 420,
+  "resource_profile": {
+    "expected_memory_class": "bounded_statevector_no_dump",
+    "expected_risk": [],
+    "expected_runtime_class": "manual_gpu_minutes",
+    "intended_use": "thesis_research_performance",
+    "known_heavy_backends": [],
+    "manual_invocation_required": true,
+    "max_qubits": 16
+  },
+  "root_normalized_records_are_canonical": true,
+  "routes": [
+    "quest_cpu_full_state_exact",
+    "quest_gpu_full_state_exact"
+  ],
+  "schema_version": "simulation_backend_compare_v1",
+  "state_output_modes": [
+    "none"
+  ],
+  "statevector_retention_policy": "compact_prunes_validated_output_tensors_and_retains_metadata",
+  "suite_id": "research_cpu_gpu",
+  "suite_path": "/home/tom/repos/Masters/thesis/implementation/configs/suites/manual/research_cpu_gpu.yml",
+  "timing_scope_note": "Performance-tier rows use native compute timing plus process wall time and do not include full statevector validation.",
+  "validation_method": "native_status_gate_counts",
+  "warmup_runs": 1
+}

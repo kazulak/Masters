@@ -1,0 +1,158 @@
+_route_configs:
+- benchmark_role: internal_debug_baseline
+  id: cpu_tn_einsum_exact
+  options: {}
+  required: true
+  role: reference
+  route_limitation_scope: null
+  route_role_description: null
+_schema_version: 2
+_suite_path: /home/tom/repos/Masters/thesis/implementation/configs/suites/manual/thesis_upmem_quantization_boundary.yml
+cases:
+- case_id: qrng_4q_thesis_upmem
+  circuit:
+    kind: builtin
+    n_qubits: 4
+    name: QRNG
+  workload_id: qrng_4q_thesis_upmem
+- case_id: qrng_5q_thesis_upmem
+  circuit:
+    kind: builtin
+    n_qubits: 5
+    name: QRNG
+  workload_id: qrng_5q_thesis_upmem
+- case_id: qrng_6q_thesis_upmem
+  circuit:
+    kind: builtin
+    n_qubits: 6
+    name: QRNG
+  workload_id: qrng_6q_thesis_upmem
+- case_id: qrng_7q_thesis_upmem_boundary
+  circuit:
+    kind: builtin
+    n_qubits: 7
+    name: QRNG
+  workload_id: qrng_7q_thesis_upmem_boundary
+- case_id: qrng_8q_thesis_upmem_boundary
+  circuit:
+    kind: builtin
+    n_qubits: 8
+    name: QRNG
+  workload_id: qrng_8q_thesis_upmem_boundary
+- case_id: bb84_4q_thesis_upmem
+  circuit:
+    kind: builtin
+    n_qubits: 4
+    name: BB84
+  workload_id: bb84_4q_thesis_upmem
+- case_id: bb84_5q_thesis_upmem
+  circuit:
+    kind: builtin
+    n_qubits: 5
+    name: BB84
+  workload_id: bb84_5q_thesis_upmem
+- case_id: bb84_6q_thesis_upmem_boundary
+  circuit:
+    kind: builtin
+    n_qubits: 6
+    name: BB84
+  workload_id: bb84_6q_thesis_upmem_boundary
+- case_id: bv_3q_thesis_upmem
+  circuit:
+    kind: builtin
+    n_qubits: 3
+    name: BV
+  workload_id: bv_3q_thesis_upmem
+- case_id: bv_4q_thesis_upmem
+  circuit:
+    kind: builtin
+    n_qubits: 4
+    name: BV
+  workload_id: bv_4q_thesis_upmem
+- case_id: xor_3q_thesis_upmem
+  circuit:
+    kind: builtin
+    n_qubits: 3
+    name: XOR
+  workload_id: xor_3q_thesis_upmem
+- case_id: xor_4q_thesis_upmem
+  circuit:
+    kind: builtin
+    n_qubits: 4
+    name: XOR
+  workload_id: xor_4q_thesis_upmem
+- case_id: edc_4q_thesis_upmem
+  circuit:
+    kind: builtin
+    n_qubits: 4
+    name: EDC
+  workload_id: edc_4q_thesis_upmem
+- case_id: edc_5q_thesis_upmem_boundary
+  circuit:
+    kind: builtin
+    n_qubits: 5
+    name: EDC
+  workload_id: edc_5q_thesis_upmem_boundary
+- case_id: ghz_4q_thesis_upmem
+  circuit:
+    kind: builtin
+    n_qubits: 4
+    name: ghz_chain
+  workload_id: ghz_4q_thesis_upmem
+- case_id: ghz_5q_thesis_upmem_boundary
+  circuit:
+    kind: builtin
+    n_qubits: 5
+    name: ghz_chain
+  workload_id: ghz_5q_thesis_upmem_boundary
+memory_guard_gib: 8
+metadata:
+  deterministic_unitary_only: true
+  execution_target: upmem
+  expected_memory_class: small_statevector
+  expected_runtime_class: manual_upmem_sdk_simulator
+  intended_use: thesis_evidence_upmem_boundary
+  manual_invocation_required: true
+  max_qubits: 8
+  notes: 'Thesis UPMEM SDK simulator boundary suite. Use with upmem-mvp-benchmark
+    and quantization modes none,per_task_input_quantize to gather same-route float32
+    vs int8 generic TaskGraph evidence. QRNG 7q is the first rank-seven capability
+    case; QRNG 8q is the expected rank-cap boundary. SDK simulator timing is not hardware
+    timing or hardware speedup.
+
+    '
+  purpose: thesis_upmem_sdk_simulator_quantization_boundary
+  statevector_cap_amplitudes: 256
+  statevector_cap_qubits: 8
+  upmem_execution_mode: sdk_simulator
+  validation_method: full_statevector_quantized_tolerance
+  validation_tier: quantized_and_float32_codepath_boundary
+planner:
+  engine: opt_einsum
+  optimize: greedy
+planner_comparison: {}
+repeats: 1
+route_policy:
+  fail_fast: false
+  routes:
+  - cpu_tn_einsum_exact
+schema_version: 2
+suite_id: thesis_upmem_quantization_boundary
+thread_counts:
+- null
+timeout_s: 360
+tolerances:
+  l2_error: 2.0
+  max_abs_error: 0.25
+  max_rel_error: 10.0
+  min_fidelity: 0.0
+  norm_drift: 2.0
+validation:
+  reference_route: cpu_tn_einsum_exact
+  tolerances:
+    l2_error: 2.0
+    max_abs_error: 0.25
+    max_rel_error: 10.0
+    min_fidelity: 0.0
+    norm_drift: 2.0
+warmups: 0

@@ -1,0 +1,119 @@
+_route_configs:
+- benchmark_role: serious_full_state_baseline
+  id: quest_cpu_full_state_exact
+  options: {}
+  required: true
+  role: comparison_anchor
+  route_limitation_scope: null
+  route_role_description: null
+- benchmark_role: internal_debug_baseline
+  id: cpu_tn_einsum_exact
+  options: {}
+  required: true
+  role: diagnostic_sequential
+  route_limitation_scope: null
+  route_role_description: null
+- benchmark_role: internal_frontier_diagnostic
+  id: cpu_tn_frontier_exact
+  options:
+    frontier_worker_count: 2
+  required: true
+  role: diagnostic_frontier
+  route_limitation_scope: null
+  route_role_description: null
+- benchmark_role: internal_hybrid_diagnostic
+  id: cpu_tn_hybrid_sliced_frontier_exact
+  options:
+    frontier_worker_count: 2
+    max_slice_count: 2
+  required: true
+  role: diagnostic_hybrid
+  route_limitation_scope: null
+  route_role_description: null
+_schema_version: 2
+_suite_path: /home/tom/repos/Masters/thesis/implementation/configs/suites/manual/research_internal_parallelism.yml
+cases:
+- case_id: quest_bv_6q_internal_diag
+  circuit:
+    kind: quest_compatible
+    n_qubits: 6
+    name: BV
+  workload_id: quest_bv_6q_internal_diag
+- case_id: quest_bv_8q_internal_diag
+  circuit:
+    kind: quest_compatible
+    n_qubits: 8
+    name: BV
+  workload_id: quest_bv_8q_internal_diag
+- case_id: quest_xor_6q_internal_diag
+  circuit:
+    kind: quest_compatible
+    n_qubits: 6
+    name: XOR
+  workload_id: quest_xor_6q_internal_diag
+- case_id: quest_xor_8q_internal_diag
+  circuit:
+    kind: quest_compatible
+    n_qubits: 8
+    name: XOR
+  workload_id: quest_xor_8q_internal_diag
+- case_id: quest_edc_6q_internal_diag
+  circuit:
+    kind: quest_compatible
+    n_qubits: 6
+    name: EDC
+  workload_id: quest_edc_6q_internal_diag
+- case_id: quest_hs_8q_internal_diag
+  circuit:
+    allocated_qubits: 8
+    kind: quest_compatible
+    logical_qubits: 4
+    name: HS
+  workload_id: quest_hs_8q_internal_diag
+memory_guard_gib: 8
+metadata:
+  deterministic_unitary_only: true
+  expected_memory_class: diagnostic_bounded
+  expected_runtime_class: manual_cpu_minutes
+  intended_use: diagnostics
+  manual_invocation_required: true
+  notes: Diagnostic architecture evidence only; not a serious CPU TN baseline.
+  purpose: research_internal_taskgraph_parallelism_diagnostics
+  validation_method: full_statevector
+planner:
+  engine: opt_einsum
+  optimize: greedy
+planner_comparison: {}
+repeats: 1
+route_policy:
+  fail_fast: false
+  routes:
+  - quest_cpu_full_state_exact
+  - cpu_tn_einsum_exact
+  - cpu_tn_frontier_exact
+  - cpu_tn_hybrid_sliced_frontier_exact
+schema_version: 2
+suite_id: research_internal_parallelism
+thread_counts:
+- null
+timeout_s: 300
+tolerances:
+  l2_error: 1.0e-08
+  max_abs_error: 1.0e-09
+  max_rel_error: 1.0e-08
+  min_fidelity: 0.999999999
+  norm_drift: 1.0e-08
+validation:
+  reference_route: quest_cpu_full_state_exact
+  require_output_for_roles:
+  - comparison_anchor
+  - diagnostic_sequential
+  - diagnostic_frontier
+  - diagnostic_hybrid
+  tolerances:
+    l2_error: 1.0e-08
+    max_abs_error: 1.0e-09
+    max_rel_error: 1.0e-08
+    min_fidelity: 0.999999999
+    norm_drift: 1.0e-08
+warmups: 0
