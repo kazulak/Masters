@@ -418,6 +418,7 @@ def test_research_pack_writes_lightweight_pack(tmp_path: Path) -> None:
     assert (out / "benchmark_manifest.json").exists()
     assert (out / "per_case_route_stats.csv").exists()
     assert (out / "full_state_tn_comparison.csv").exists()
+    assert b"\r\n" not in (out / "per_case_route_stats.csv").read_bytes()
     assert (out / "plot_manifest.json").exists()
     summary = (out / "benchmark_summary.md").read_text(encoding="utf-8")
     assert "Next UPMEM Implementation Readiness" in summary
