@@ -86,7 +86,7 @@ thesis-results:
 	$(BENCH) simulation-backend-compare --suite $(THESIS_FULL_STATE_SUITE) --artifact-retention compact; \
 	full_state_run=$$(readlink -f runs/latest); \
 	printf '%s\n' "Full-state CPU/GPU evidence: $$full_state_run"; \
-	printf '%s\n' 'Running thesis CPU TN path/quantization evidence...'; \
+	printf '%s\n' 'Running thesis external CPU TN evidence...'; \
 	$(BENCH) simulation-backend-compare --suite $(THESIS_TN_QUIMB_SUITE) --artifact-retention compact; \
 	tn_quimb_run=$$(readlink -f runs/latest); \
 	printf '%s\n' "Quimb CPU TN evidence: $$tn_quimb_run"; \
@@ -110,7 +110,7 @@ thesis-results-resume:
 	timestamp=$$(date +%Y%m%d_%H%M%S); \
 	full_state_run=$$(readlink -f "$(FULL_STATE_RUN)"); \
 	printf '%s\n' "Reusing full-state CPU/GPU evidence: $$full_state_run"; \
-	printf '%s\n' 'Running thesis CPU TN path/quantization evidence...'; \
+	printf '%s\n' 'Running thesis external CPU TN evidence...'; \
 	$(BENCH) simulation-backend-compare --suite $(THESIS_TN_QUIMB_SUITE) --artifact-retention compact; \
 	tn_quimb_run=$$(readlink -f runs/latest); \
 	printf '%s\n' "Quimb CPU TN evidence: $$tn_quimb_run"; \

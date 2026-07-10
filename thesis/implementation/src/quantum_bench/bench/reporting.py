@@ -7,10 +7,13 @@ import math
 import os
 import platform
 import re
+import shlex
 import shutil
 import subprocess
+import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -434,7 +437,7 @@ def write_run_manifest(
         "artifact_kind": artifact_kind,
         "run_id": run_dir.name,
         "run_kind": run_kind,
-        "timestamp": None,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "git_commit": _git_commit(root_dir or run_dir),
         "dirty_tree": _git_dirty(root_dir or run_dir),
         "suite_id": suite_id,
@@ -456,7 +459,7 @@ def write_run_manifest(
         "upmem_sdk_available": "unknown",
         "hardware_available": "not_checked",
         "environment_hash": _environment_hash(),
-        "command": command,
+        "command": command or shlex.join(sys.argv),
         "schema_versions": {
             "run_manifest": RUN_MANIFEST_SCHEMA_VERSION,
             "artifact_reference": ARTIFACT_REFERENCE_SCHEMA_VERSION,
@@ -491,9 +494,18 @@ def write_normalized_records(run_dir: Path, records: Iterable[JsonDict]) -> Path
     from quantum_bench.bench.result_artifacts import normalize_parallelism_metadata
 
     path = run_dir / "normalized_records.jsonl"
+    run_timestamp = None
+    manifest_path = run_dir / "run_manifest.json"
+    if manifest_path.exists():
+        try:
+            run_timestamp = json.loads(manifest_path.read_text(encoding="utf-8")).get("timestamp")
+        except (OSError, json.JSONDecodeError):
+            run_timestamp = None
     payloads = []
     for record in records:
         normalized = normalize_parallelism_metadata(dict(record))
+        if not normalized.get("timestamp") and run_timestamp:
+            normalized["timestamp"] = run_timestamp
         normalized.setdefault("normalized_record_schema_version", NORMALIZED_RECORDS_SCHEMA_VERSION)
         payloads.append(to_jsonable(normalized))
     write_jsonl(path, payloads)
@@ -556,6 +568,7 @@ def prune_run(run_dir: Path, *, artifact_retention: str = "compact") -> PruneRun
         manifest = _retention_manifest(run_dir, mode="full", pruned=[], retained=_all_files(run_dir))
         write_json(run_dir / "artifact_retention_manifest.json", manifest)
         return PruneRunResult(run_dir, run_dir / "artifact_retention_manifest.json", "completed", 0)
+    previous_pruned_refs = _prior_pruned_references(run_dir)
     candidates = _compact_prune_candidates(run_dir)
     pruned_refs: list[JsonDict] = []
     for path in candidates:
@@ -569,10 +582,29 @@ def prune_run(run_dir: Path, *, artifact_retention: str = "compact") -> PruneRun
             path.unlink()
         pruned_refs.append(ref)
     _mark_pruned_references(run_dir, pruned_refs)
-    manifest = _retention_manifest(run_dir, mode="compact", pruned=pruned_refs, retained=_all_files(run_dir))
+    all_pruned_refs = _merge_pruned_references(previous_pruned_refs, pruned_refs)
+    manifest = _retention_manifest(run_dir, mode="compact", pruned=all_pruned_refs, retained=_all_files(run_dir))
     write_json(run_dir / "artifact_retention_manifest.json", manifest)
     _cleanup_empty_report_dirs(run_dir)
     return PruneRunResult(run_dir, run_dir / "artifact_retention_manifest.json", "completed", len(pruned_refs))
+
+
+def _prior_pruned_references(run_dir: Path) -> list[JsonDict]:
+    path = run_dir / "artifact_retention_manifest.json"
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    refs = payload.get("pruned_artifacts") or []
+    return [dict(ref) for ref in refs if isinstance(ref, dict) and ref.get("relative_path")]
+
+
+def _merge_pruned_references(previous: list[JsonDict], current: list[JsonDict]) -> list[JsonDict]:
+    by_path = {str(ref["relative_path"]): ref for ref in previous}
+    by_path.update({str(ref["relative_path"]): ref for ref in current})
+    return [by_path[path] for path in sorted(by_path)]
 
 
 def compare_runs(baseline: Path, candidate: Path, out_dir: Path) -> CompareRunsResult:
@@ -1292,7 +1324,12 @@ def _compact_prune_candidates(run_dir: Path) -> list[Path]:
         if path.is_file() and path.suffix == ".bin":
             candidates.add(path)
             continue
-        if path.is_file() and path.name in {"statevector.npy", "statevector_quest_order.npy", "state_dump.json"}:
+        if path.is_file() and path.name in {
+            "final_tensor.npy",
+            "statevector.npy",
+            "statevector_quest_order.npy",
+            "state_dump.json",
+        }:
             candidates.add(path)
             continue
         if any(part in {"operands", "references", "outputs"} for part in path.relative_to(run_dir).parts):

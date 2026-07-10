@@ -339,11 +339,13 @@ def _run_case_policy(
 
     if generated["status"] != "ready":
         summary = _runtime_error_summary(case_id, policy, quantization_mode, str(generated.get("reason") or "case_setup_failed"))
+        _annotate_runtime_summary_case(summary, generated)
         _write_child_runtime_artifacts(run_dir, runtime_summary_rel, task_metrics_rel, summary, ())
         return _row_from_runtime_summary(generated, policy, quantization_mode, summary, runtime_summary_rel, task_metrics_rel, None)
     graph = generated["graph"]
     if len(graph.tasks) > max_taskgraph_tasks:
         summary = _runtime_error_summary(case_id, policy, quantization_mode, "taskgraph_task_cap_exceeded")
+        _annotate_runtime_summary_case(summary, generated)
         _write_child_runtime_artifacts(run_dir, runtime_summary_rel, task_metrics_rel, summary, ())
         return _row_from_runtime_summary(generated, policy, quantization_mode, summary, runtime_summary_rel, task_metrics_rel, None)
 
@@ -365,6 +367,7 @@ def _run_case_policy(
                 f"generic_feasibility_{generic_reference.reason or generic_reference.status}",
             )
             summary["generic_feasibility"] = generic_reference.to_json_dict()
+            _annotate_runtime_summary_case(summary, generated)
             _write_child_runtime_artifacts(run_dir, runtime_summary_rel, task_metrics_rel, summary, ())
             return _row_from_runtime_summary(generated, policy, quantization_mode, summary, runtime_summary_rel, task_metrics_rel, None)
         reference_output = generic_reference.output
@@ -424,6 +427,7 @@ def _enriched_runtime_summary(
             "suite_id": generated.get("suite_id"),
             "case_id": generated["case_id"],
             "workload_id": generated["workload_id"],
+            "n_qubits": int(getattr(generated.get("circuit"), "n_qubits", 0) or 0),
             "circuit": manifest(generated["circuit"]),
             "route_id": "upmem_tn_runtime",
             "execution_scope": "full_taskgraph",
@@ -457,6 +461,13 @@ def _enriched_runtime_summary(
     runtime_summary["max_task_bridge_error"] = _max_bridge_error(runtime_task_metrics)
     runtime_summary["normalized_result"] = normalized_upmem_taskgraph_result_from_summary(runtime_summary)
     return to_jsonable(runtime_summary)
+
+
+def _annotate_runtime_summary_case(summary: JsonDict, generated: JsonDict) -> None:
+    circuit = generated.get("circuit")
+    summary.setdefault("suite_id", generated.get("suite_id"))
+    summary.setdefault("workload_id", generated.get("workload_id"))
+    summary.setdefault("n_qubits", int(getattr(circuit, "n_qubits", 0) or 0))
 
 
 def _runtime_error_summary(case_id: str, policy: str, quantization_mode: str, reason: str, *, status: str = "unsupported") -> JsonDict:

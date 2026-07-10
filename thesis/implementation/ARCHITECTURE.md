@@ -29,6 +29,10 @@ QuEST CPU and Quimb TN are the serious CPU baselines. GPU evidence is optional
 and hardware-dependent. UPMEM SDK simulator evidence proves code-path execution
 through SDK DPU programs, but hardware speedup is not applicable.
 
+Quimb routes build and execute their own contraction trees. They do not depend
+on the repository's internal TaskGraph lowering, so an internal label or replay
+limit is reported only for an internal/UPMEM route, not as a Quimb TN limit.
+
 CPU/GPU full-state comparison has separate correctness and performance tiers:
 
 - `state_output_mode=full_dump`, `validation_method=full_statevector`:
@@ -107,6 +111,10 @@ runs/comparisons/<suite_id>/<comparison_type>/<comparison_id>/
 is the canonical source for report and comparison commands. Evidence runs should
 contain raw execution evidence, manifests, summaries, and normalized records
 only.
+
+With `artifact_retention=compact`, validated per-repeat statevectors and final
+tensors are intentionally pruned after their metadata and validation results are
+recorded. Use `full` retention only when raw numeric output arrays are needed.
 
 Derived tables, validation summaries, plot-source CSVs, and figures belong under
 comparison/report output directories, not inside evidence runs. Build/cache

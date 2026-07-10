@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import ctypes
+import gc
 import json
+import multiprocessing
 import statistics
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,7 +20,7 @@ from quantum_bench.bench.result_artifacts import RESULT_ARTIFACT_SCHEMA_VERSION,
 from quantum_bench.bench.run_dirs import EVIDENCE_ARTIFACT_KIND, create_run_dir, sanitize
 from quantum_bench.bench.simulation_backend_probe import probe_simulation_backends
 from quantum_bench.circuits import load_circuit, manifest
-from quantum_bench.core.jsonio import write_json, write_jsonl
+from quantum_bench.core.jsonio import read_jsonl, write_json, write_jsonl
 from quantum_bench.core.records import BenchmarkContext, JsonDict, PathSummary, RouteResult, TaskGraph, TensorNetworkSpec, to_jsonable
 from quantum_bench.environment import capture_environment
 from quantum_bench.providers import route_registry
@@ -89,14 +93,25 @@ def run_simulation_backend_compare(
     normalized_records: list[JsonDict] = []
     optional_backend_reports: list[JsonDict] = []
     for case_payload in suite["cases"]:
-        case_result = _run_case(root_dir, run_dir, suite, case_payload)
+        case_result = _run_case_with_optional_isolation(root_dir, run_dir, suite, case_payload)
         rows.extend(case_result["rows"])
         comparison_rows.extend(case_result["comparisons"])
         case_rows.append(case_result["case"])
         optional_backend_reports.extend(case_result["optional_backend_reports"])
         normalized_records.extend(case_result["normalized_records"])
 
-    write_jsonl(run_dir / "simulation_backend_compare_cases.jsonl", case_rows)
+        if artifact_retention == "compact":
+            # Compact evidence should not retain every repeat's full output
+            # until a manual scaling suite has finished.
+            write_jsonl(run_dir / "simulation_backend_compare_cases.jsonl", case_rows)
+            write_normalized_records(run_dir, normalized_records)
+            prune_run(run_dir, artifact_retention="compact")
+            case_rows = read_jsonl(run_dir / "simulation_backend_compare_cases.jsonl")
+            normalized_records = read_jsonl(run_dir / "normalized_records.jsonl")
+            _release_completed_case_memory()
+
+    if artifact_retention != "compact":
+        write_jsonl(run_dir / "simulation_backend_compare_cases.jsonl", case_rows)
     backend_probe = probe_simulation_backends(root_dir)
     summary = _summary_payload(
         suite=suite,
@@ -109,14 +124,97 @@ def run_simulation_backend_compare(
         optional_backend_reports=optional_backend_reports,
     )
     write_json(run_dir / "simulation_backend_compare_summary.json", summary)
-    write_normalized_records(run_dir, normalized_records)
-    if artifact_retention == "compact":
-        prune_run(run_dir, artifact_retention="compact")
+    if artifact_retention != "compact":
+        write_normalized_records(run_dir, normalized_records)
     return SimulationBackendCompareResult(
         run_dir=run_dir,
         summary_path=run_dir / "simulation_backend_compare_summary.json",
         status="completed",
         case_count=len(case_rows),
+    )
+
+
+def _release_completed_case_memory() -> None:
+    gc.collect()
+    try:
+        libc = ctypes.CDLL(None)
+        trim = libc.malloc_trim
+    except (AttributeError, OSError):
+        return
+    trim(0)
+
+
+def _run_case_with_optional_isolation(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: JsonDict) -> JsonDict:
+    if not bool((suite.get("metadata") or {}).get("case_process_isolation", False)):
+        return _run_case(root_dir, run_dir, suite, case_payload)
+
+    timeout_s = suite.get("timeout_s")
+    timeout = float(timeout_s) if timeout_s is not None else None
+    with tempfile.NamedTemporaryFile(prefix="quantum_bench_case_", suffix=".json", delete=False) as handle:
+        result_path = Path(handle.name)
+    result_path.unlink(missing_ok=True)
+    try:
+        process_context = multiprocessing.get_context("fork")
+    except ValueError:  # pragma: no cover - Windows fallback for local development
+        process_context = multiprocessing.get_context("spawn")
+    process = process_context.Process(
+        target=_isolated_case_worker,
+        args=(str(root_dir), str(run_dir), suite, case_payload, str(result_path)),
+    )
+    process.start()
+    process.join(timeout)
+    try:
+        if process.is_alive():
+            process.terminate()
+            process.join(5.0)
+            return _isolated_case_failure(root_dir, run_dir, suite, case_payload, "case_process_timeout")
+        if process.exitcode != 0:
+            return _isolated_case_failure(
+                root_dir,
+                run_dir,
+                suite,
+                case_payload,
+                f"case_process_exit_{process.exitcode}",
+            )
+        if not result_path.exists():
+            return _isolated_case_failure(root_dir, run_dir, suite, case_payload, "case_process_result_missing")
+        return json.loads(result_path.read_text(encoding="utf-8"))
+    finally:
+        result_path.unlink(missing_ok=True)
+
+
+def _isolated_case_worker(
+    root_dir: str,
+    run_dir: str,
+    suite: JsonDict,
+    case_payload: JsonDict,
+    result_path: str,
+) -> None:
+    try:
+        result = _run_case(Path(root_dir), Path(run_dir), suite, case_payload)
+        write_json(Path(result_path), result)
+    except Exception as exc:
+        write_json(Path(result_path), {"error": f"{type(exc).__name__}:{exc}"})
+        raise
+
+
+def _isolated_case_failure(
+    root_dir: Path,
+    run_dir: Path,
+    suite: JsonDict,
+    case_payload: JsonDict,
+    reason: str,
+) -> JsonDict:
+    routes = route_registry(root_dir)
+    circuit = load_circuit(case_payload, root_dir)
+    return _skipped_case_result(
+        root_dir,
+        run_dir,
+        suite,
+        case_payload,
+        routes,
+        circuit,
+        reason=reason,
     )
 
 
@@ -138,8 +236,30 @@ def _suite_uses_only_full_state_routes(suite: JsonDict, routes: dict[str, Execut
     return True
 
 
+def _route_requires_internal_taskgraph(route: ExecutionRoute) -> bool:
+    """Return whether a route needs the repository's TaskGraph lowering.
+
+    QuEST full-state routes and external-library TN routes have their own
+    execution plans. Requiring the local TaskGraph for those routes makes an
+    internal lowering limit look like a backend limitation.
+    """
+    if "full_state" in route.identity.simulation_method:
+        # Test harness routes often execute the internal NumPy TaskGraph while
+        # presenting a full-state output. Real QuEST routes are external
+        # processes and do not need that lowering.
+        return route.identity.execution_mode in {"test", "in_process_fake"}
+    return not route.identity.execution_mode.startswith("in_process_external_library")
+
+
+def _suite_requires_internal_taskgraph(suite: JsonDict, routes: dict[str, ExecutionRoute]) -> bool:
+    return any(
+        _route_requires_internal_taskgraph(route)
+        for route_id in suite["route_policy"]["routes"]
+        if (route := routes.get(str(route_id))) is not None
+    )
+
+
 def _full_state_only_graph(circuit: Any) -> tuple[TensorNetworkValue, TaskGraph]:
-    estimated_statevector_bytes = int((1 << int(circuit.n_qubits)) * np.dtype(np.complex128).itemsize)
     network_spec = TensorNetworkSpec(
         circuit=circuit,
         tensors=(),
@@ -147,34 +267,38 @@ def _full_state_only_graph(circuit: Any) -> tuple[TensorNetworkValue, TaskGraph]
         einsum_expression="full_state_only",
     )
     network = TensorNetworkValue(network_spec, [])
+    return network, _graph_without_internal_taskgraph(network, reason="all selected routes return statevector outputs")
+
+
+def _graph_without_internal_taskgraph(network: TensorNetworkValue, *, reason: str) -> TaskGraph:
+    estimated_statevector_bytes = int((1 << int(network.spec.circuit.n_qubits)) * np.dtype(np.complex128).itemsize)
     path_summary = PathSummary(
         planner="not_applicable",
         optimize="not_applicable",
         path_length=0,
-        largest_intermediate=1 << int(circuit.n_qubits),
+        largest_intermediate=1 << int(network.spec.circuit.n_qubits),
         naive_flops=0.0,
         optimized_flops=0.0,
-        text="full-state-only comparison; tensor-network TaskGraph planning not required",
+        text=f"{reason}; internal TaskGraph planning not required",
         planner_engine="not_applicable",
         planner_id="full_state_only",
         planner_kind="full_state_only",
         optimize_mode="not_applicable",
         objective="not_applicable",
         cost_basis="not_applicable",
-        options={"reason": "all selected routes return statevector outputs"},
+        options={"reason": reason},
         task_count=0,
         total_estimated_flops=0,
         peak_intermediate_bytes=estimated_statevector_bytes,
         max_intermediate_bytes=estimated_statevector_bytes,
     )
-    graph = TaskGraph(
-        network=network_spec,
+    return TaskGraph(
+        network=network.spec,
         tasks=(),
         path=(),
         path_summary=path_summary,
         planning_time_s=0.0,
     )
-    return network, graph
 
 
 def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: JsonDict) -> JsonDict:
@@ -204,7 +328,13 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
         network, graph = _full_state_only_graph(circuit)
     else:
         network = build_tensor_network(circuit)
-        graph = with_path_cost_summary(plan_task_graph_with_config(network, suite["planner"]))
+        if _suite_requires_internal_taskgraph(suite, routes):
+            graph = with_path_cost_summary(plan_task_graph_with_config(network, suite["planner"]))
+        else:
+            graph = _graph_without_internal_taskgraph(
+                network,
+                reason="selected external tensor-network routes plan their own contraction trees",
+            )
     write_json(case_dir / "circuit.json", manifest(circuit))
     write_json(case_dir / "task_graph.json", graph)
     write_json(case_dir / "path_summary.json", graph.path_summary)
@@ -248,7 +378,20 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
                 raise ValueError(f"Required route {route_id} does not return comparable output")
             optional_backend_reports.append(_optional_backend_report(case_id, route_id, "not_output_comparable"))
             continue
-        resource_skip_reason = _resource_guard_skip_reason(route_config, graph)
+        resource_estimate = None
+        if _route_uses_resource_guard(route_config):
+            try:
+                resource_estimate = route.estimate(
+                    graph,
+                    _context(root_dir, run_dir, suite, case_payload, route_config, repeat_id=0),
+                )
+            except (MemoryError, RuntimeError, ValueError) as exc:
+                resource_estimate = None
+                resource_skip_reason = _resource_guard_estimate_failure(route_config, exc)
+            else:
+                resource_skip_reason = _resource_guard_skip_reason(route_config, graph, estimate=resource_estimate)
+        else:
+            resource_skip_reason = None
         if resource_skip_reason:
             if _route_failure_is_fatal(route_config, route, anchor_route_id):
                 raise RuntimeError(resource_skip_reason)
@@ -535,6 +678,10 @@ def _run_case(root_dir: Path, run_dir: Path, suite: JsonDict, case_payload: Json
                 "energy_source": run.result.energy_source,
                 "energy_measurement_status": result_metadata.get("energy_measurement_status"),
                 "gpu_synchronized": bool(result_metadata.get("gpu_synchronized", False)),
+                "tn_task_count": result_metadata.get("tn_task_count", common["tn_task_count"]),
+                "tn_max_intermediate_bytes": result_metadata.get("tn_max_intermediate_bytes", common["tn_max_intermediate_bytes"]),
+                "tn_estimated_flops": result_metadata.get("tn_estimated_flops", common["tn_estimated_flops"]),
+                "tn_estimated_bytes": result_metadata.get("tn_estimated_bytes", common["tn_estimated_bytes"]),
                 "validation_method": result_metadata.get("validation_method") or validation_method,
                 "resource_guard_status": "executed",
                 "resource_skip_reason": None,
@@ -737,26 +884,52 @@ def _resource_profile(suite: JsonDict) -> JsonDict:
     }
 
 
-def _resource_guard_skip_reason(route_config: JsonDict, graph: Any) -> str | None:
+def _route_uses_resource_guard(route_config: JsonDict) -> bool:
+    options = dict(route_config.get("options") or {})
+    return "max_estimated_intermediate_bytes" in options or "max_estimated_flops" in options
+
+
+def _resource_guard_estimate_failure(route_config: JsonDict, exc: Exception) -> str | None:
+    options = dict(route_config.get("options") or {})
+    if bool(options.get("allow_missing_estimate", False)):
+        return None
+    fallback_reason = str(options.get("resource_skip_reason") or "resource_guard_exceeded")
+    return f"{fallback_reason}:estimate_failed:{type(exc).__name__}:{exc}"
+
+
+def _resource_guard_skip_reason(route_config: JsonDict, graph: Any, *, estimate: Any | None = None) -> str | None:
     options = dict(route_config.get("options") or {})
     if "max_estimated_intermediate_bytes" not in options and "max_estimated_flops" not in options:
         return None
     fallback_reason = str(options.get("resource_skip_reason") or "resource_guard_exceeded")
     allow_missing = bool(options.get("allow_missing_estimate", False))
+    estimate_metadata = dict(getattr(estimate, "metadata", {}) or {}) if estimate is not None else {}
+    if estimate_metadata.get("estimate_status") == "failed":
+        if allow_missing:
+            return None
+        return f"{fallback_reason}:estimate_failed:{estimate_metadata.get('estimate_error', 'unknown')}"
     max_intermediate = options.get("max_estimated_intermediate_bytes")
     if max_intermediate is not None:
-        estimate = getattr(graph.path_summary, "max_intermediate_bytes", None)
-        if estimate is None:
+        intermediate_estimate = (
+            getattr(estimate, "estimated_peak_memory", None)
+            if estimate is not None
+            else getattr(graph.path_summary, "max_intermediate_bytes", None)
+        )
+        if intermediate_estimate is None:
             return None if allow_missing else "unavailable_estimate"
-        if int(estimate) > int(max_intermediate):
-            return f"{fallback_reason}:estimated_intermediate_bytes={int(estimate)}:limit={int(max_intermediate)}"
+        if int(intermediate_estimate) > int(max_intermediate):
+            return f"{fallback_reason}:estimated_intermediate_bytes={int(intermediate_estimate)}:limit={int(max_intermediate)}"
     max_flops = options.get("max_estimated_flops")
     if max_flops is not None:
-        estimate = getattr(graph.path_summary, "total_estimated_flops", None)
-        if estimate is None:
+        flops_estimate = (
+            getattr(estimate, "estimated_flops", None)
+            if estimate is not None
+            else getattr(graph.path_summary, "total_estimated_flops", None)
+        )
+        if flops_estimate is None:
             return None if allow_missing else "unavailable_estimate"
-        if int(estimate) > int(max_flops):
-            return f"{fallback_reason}:estimated_flops={int(estimate)}:limit={int(max_flops)}"
+        if int(flops_estimate) > int(max_flops):
+            return f"{fallback_reason}:estimated_flops={int(flops_estimate)}:limit={int(max_flops)}"
     return None
 
 
@@ -1133,6 +1306,7 @@ def _normalized_record(run_dir: Path, row: JsonDict, *, case_id: str) -> JsonDic
         "suite_id": row.get("suite_id"),
         "case_id": row.get("case_id"),
         "workload_id": row.get("workload_id"),
+        "n_qubits": row.get("n_qubits"),
         "route_id": row.get("route_id"),
         "backend_id": row.get("route_id"),
         "backend_family": row.get("backend_family"),
@@ -1254,6 +1428,11 @@ def _normalized_record(run_dir: Path, row: JsonDict, *, case_id: str) -> JsonDic
         "actual_transfer_bytes": row.get("actual_transfer_bytes"),
         "status": row.get("status"),
         "validation_status": row.get("validation_status"),
+        "max_abs_error": metrics.get("max_abs_error"),
+        "l2_error": metrics.get("l2_error"),
+        "norm_drift": metrics.get("norm_drift"),
+        "probability_l1_error": metrics.get("probability_l1_error"),
+        "probability_max_abs_error": metrics.get("probability_max_abs_error"),
         "task_count": int(row.get("tn_task_count", 0) or 0),
         "validated_task_count": int(row.get("tn_task_count", 0) or 0) if row.get("validation_status") in {"passed", "passed_native_status", "passed_runtime_only"} else 0,
         "unsupported_task_count": int(row.get("unsupported_task_count", 0) or 0),
@@ -1307,6 +1486,8 @@ def _normalized_record(run_dir: Path, row: JsonDict, *, case_id: str) -> JsonDic
         "upmem_program_executed": bool(row.get("upmem_program_executed", False)),
         "validation_error_metrics": metrics,
         "statevector_bytes": row.get("statevector_bytes"),
+        "statevector_artifact": row.get("statevector_artifact"),
+        "final_tensor_artifact": row.get("final_tensor_artifact"),
         "tn_task_count": row.get("tn_task_count"),
         "tn_max_intermediate_bytes": row.get("tn_max_intermediate_bytes"),
         "tn_estimated_flops": row.get("tn_estimated_flops"),
@@ -1419,8 +1600,10 @@ def _summary_payload(
             "benchmark_roles": sorted({str(row.get("benchmark_role")) for row in rows}),
             "root_normalized_records_are_canonical": True,
             "normalized_records_artifact": "normalized_records.jsonl",
+            "case_records_artifact": "simulation_backend_compare_cases.jsonl",
+            "case_artifacts_directory": "cases",
             "quest_metrics_only_route_is_not_output_comparable": True,
-            "statevector_retention_policy": "compact_retains_statevectors_under_configured_caps",
+            "statevector_retention_policy": "compact_prunes_validated_output_tensors_and_retains_metadata",
             "warmup_runs": int(suite.get("warmups", 0) or 0),
             "measured_runs": int(suite.get("repeats", 1) or 1),
             "validation_method": str((suite.get("metadata") or {}).get("validation_method") or "full_statevector"),
@@ -1439,10 +1622,6 @@ def _summary_payload(
             "gpu_benchmark_records_emitted": any(row.get("contraction_execution_target") == "gpu" and row.get("status") == "completed" for row in rows),
             "backend_probe": backend_probe,
             "optional_backend_reports": optional_backend_reports,
-            "rows": rows,
-            "cases": case_rows,
-            "comparisons": comparison_rows,
-            "normalized_records": normalized_records,
         }
     )
 

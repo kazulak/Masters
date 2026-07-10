@@ -138,7 +138,17 @@ class QuestCpuFullStateExactRoute:
         cmd.extend(["--repeat-layers", str(repeat_layers)])
 
         start = time.perf_counter()
-        result = subprocess.run(cmd, cwd=self.root, capture_output=True, text=True, check=False)
+        timeout_s = float(context.timeout_s) if context.timeout_s is not None else None
+        try:
+            result = subprocess.run(cmd, cwd=self.root, capture_output=True, text=True, check=False, timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            return _quest_exact_failed(
+                self.name,
+                self.backend_family,
+                f"quest_timeout:{timeout_s}",
+                time.perf_counter() - start,
+                metadata={"command": cmd, "timeout_s": timeout_s},
+            )
         total_s = time.perf_counter() - start
         try:
             payload = json.loads(result.stdout)

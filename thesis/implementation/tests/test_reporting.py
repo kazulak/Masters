@@ -271,14 +271,23 @@ def test_prune_run_compact_is_idempotent_and_rewrites_pruned_refs(tmp_path: Path
     write_json(bridge / "output_manifest.json", {"output_blob": {"relative_path": "outputs/output.npy"}, "output_path": "outputs/output.npy"})
 
     first = prune_run(run_dir, artifact_retention="compact")
+    second_output = bridge / "outputs" / "output_second.npy"
+    second_output.parent.mkdir(parents=True)
+    second_output.write_bytes(b"second-output")
     second = prune_run(run_dir, artifact_retention="compact")
 
     assert first.status == "completed"
     assert second.status == "completed"
     assert not output.exists()
+    assert not second_output.exists()
     manifest = json.loads((bridge / "output_manifest.json").read_text(encoding="utf-8"))
     assert manifest["output_blob"]["status"] == "intentionally_pruned"
     assert manifest["output_path"]["status"] == "intentionally_pruned"
+    retention = json.loads((run_dir / "artifact_retention_manifest.json").read_text(encoding="utf-8"))
+    assert {ref["relative_path"] for ref in retention["pruned_artifacts"]} >= {
+        "cases/bell_2q/policy/mode/upmem_taskgraph_bridge/task_0000/generic/outputs/output.npy",
+        "cases/bell_2q/policy/mode/upmem_taskgraph_bridge/task_0000/generic/outputs/output_second.npy",
+    }
 
 
 def test_prune_run_compact_prunes_statevectors_and_updates_jsonl_refs(tmp_path: Path) -> None:
@@ -290,22 +299,35 @@ def test_prune_run_compact_prunes_statevectors_and_updates_jsonl_refs(tmp_path: 
         "retained": True,
         "status": "retained",
     }
+    record["final_tensor_artifact"] = {
+        "schema_version": "artifact_reference_v1",
+        "role": "quimb_tn_exact_final_tensor",
+        "relative_path": "cases/quest_qrng_18q/routes/quimb_tn_exact/repeat_0/final_tensor.npy",
+        "retained": True,
+        "status": "retained",
+    }
     run_dir = _new_run(tmp_path / "run", [record])
     statevector = run_dir / "cases" / "quest_qrng_18q" / "routes" / "quest_cpu_full_state_exact" / "repeat_0" / "statevector.npy"
     state_dump = run_dir / "cases" / "quest_qrng_18q" / "quest_full_state" / "repeat_0" / "state_dump.json"
     statevector.parent.mkdir(parents=True)
     state_dump.parent.mkdir(parents=True)
+    final_tensor = run_dir / "cases" / "quest_qrng_18q" / "routes" / "quimb_tn_exact" / "repeat_0" / "final_tensor.npy"
+    final_tensor.parent.mkdir(parents=True)
     statevector.write_bytes(b"large-statevector-placeholder")
     state_dump.write_text('{"large":"state-dump-placeholder"}', encoding="utf-8")
+    final_tensor.write_bytes(b"large-final-tensor-placeholder")
 
     result = prune_run(run_dir, artifact_retention="compact")
 
     assert result.status == "completed"
     assert not statevector.exists()
     assert not state_dump.exists()
+    assert not final_tensor.exists()
     records = [json.loads(line) for line in (run_dir / "normalized_records.jsonl").read_text(encoding="utf-8").splitlines()]
     assert records[0]["statevector_artifact"]["status"] == "intentionally_pruned"
     assert records[0]["statevector_artifact"]["metadata"]["size_bytes"] == len(b"large-statevector-placeholder")
+    assert records[0]["final_tensor_artifact"]["status"] == "intentionally_pruned"
+    assert records[0]["final_tensor_artifact"]["metadata"]["size_bytes"] == len(b"large-final-tensor-placeholder")
 
 
 def test_prune_run_rejects_legacy_layout(tmp_path: Path) -> None:

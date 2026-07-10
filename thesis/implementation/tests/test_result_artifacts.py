@@ -187,12 +187,15 @@ def test_evidence_run_layout_and_compare_results_read_only_boundary(tmp_path: Pa
     manifest = json.loads((run_dir / "run_manifest.json").read_text(encoding="utf-8"))
     assert manifest["artifact_kind"] == "evidence_run"
     assert manifest["route_label"] == "upmem_generic_int8"
+    assert manifest["timestamp"]
+    assert manifest["command"]
 
     out_dir = tmp_path / "runs" / "comparisons" / "suite_a" / "quantization_attribution" / "manual"
     result = compare_results([run_dir], out_dir, comparison_type="quantization_attribution", root_dir=tmp_path)
     comparison_manifest = json.loads((out_dir / "comparison_manifest.json").read_text(encoding="utf-8"))
     loaded_records = load_result_records([run_dir])
     assert result.record_count == 1
+    assert loaded_records[0]["timestamp"] == manifest["timestamp"]
     assert loaded_records[0]["parallelism_mode"] == "sequential"
     assert loaded_records[0]["parallelism_evidence_type"] == "executed"
     assert loaded_records[0]["execution_plan_kind"] == "sequential_upmem_taskgraph"

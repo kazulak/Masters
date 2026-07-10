@@ -10,6 +10,7 @@ metadata:
   manual_invocation_required: true
   validation_method: full_statevector
   max_qubits: 20
+  case_process_isolation: true
   notes: >
     Thesis CPU tensor-network suite. Quimb unsliced/sliced routes are the
     serious CPU TN evidence. Internal TaskGraph/path replay routes are not
@@ -129,7 +130,6 @@ routes:
       optimize: greedy
       max_estimated_intermediate_bytes: 4294967296
       resource_skip_reason: thesis_tn_resource_guard
-      allow_missing_estimate: true
 
   - id: quimb_tn_sliced_exact
     role: slicing_evidence
@@ -143,7 +143,6 @@ routes:
       require_slicing: true
       max_estimated_intermediate_bytes: 4294967296
       resource_skip_reason: thesis_tn_resource_guard
-      allow_missing_estimate: true
 
 validation:
   reference_route: quest_cpu_full_state_exact

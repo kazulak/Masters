@@ -19,7 +19,7 @@ from quantum_bench.core.records import (
     TaskGraph,
 )
 from quantum_bench.environment import read_rapl_uj
-from quantum_bench.tn.network import TensorNetworkValue
+from quantum_bench.tn.network import TensorNetworkValue, build_tensor_network
 
 
 class QuimbTnExactRoute:
@@ -72,15 +72,23 @@ class QuimbTnExactRoute:
         return True, None
 
     def estimate(self, graph: TaskGraph, context: BenchmarkContext) -> RouteEstimate:
+        options = dict(context.route_config.get("options") or {})
+        network = build_tensor_network(graph.network.circuit)
+        estimated_flops, estimated_peak_memory, metadata = _estimate_tree(
+            network,
+            optimize=str(options.get("optimize", "greedy")),
+            execution_plan_kind="quimb_contraction_tree",
+        )
         return RouteEstimate(
             self.name,
-            sum(task.estimated_flops for task in graph.tasks),
-            sum(task.estimated_bytes for task in graph.tasks),
-            graph.path_summary.largest_intermediate * 16 if graph.path_summary.largest_intermediate else None,
+            estimated_flops,
+            estimated_peak_memory or 0,
+            estimated_peak_memory,
             metadata={
                 "execution_model": "tensor_network",
                 "backend_family": self.backend_family,
                 "external_library": True,
+                **metadata,
             },
         )
 
@@ -105,12 +113,25 @@ class QuimbTnExactRoute:
             return _failed(self.name, self.backend_family, str(exc), metadata=versions)
 
         total_start = time.perf_counter()
-        tensor_network, output_inds, lowering_s = _build_quimb_network(qtn, graph, network)
+        try:
+            tensor_network, output_inds, lowering_s = _build_quimb_network(qtn, network)
+            planning_start = time.perf_counter()
+            tree = tensor_network.contract(output_inds=output_inds, optimize=optimize, get="tree")
+            planning_s = time.perf_counter() - planning_start
+            tree_metadata = _tree_execution_metadata(tree)
+        except Exception as exc:  # pragma: no cover - defensive runtime failure path
+            return _failed(
+                self.name,
+                self.backend_family,
+                f"quimb contraction plan failed: {exc}",
+                total_s=time.perf_counter() - total_start,
+                metadata={**versions, "optimize": optimize, "estimate_status": "failed"},
+            )
 
         energy_start = read_rapl_uj()
         kernel_start = time.perf_counter()
         try:
-            contracted = tensor_network.contract(output_inds=output_inds, optimize=optimize)
+            contracted = tensor_network.contract(output_inds=output_inds, optimize=tree)
         except Exception as exc:  # pragma: no cover - defensive runtime failure path
             return _failed(
                 self.name,
@@ -130,7 +151,7 @@ class QuimbTnExactRoute:
             energy_joules = (energy_end - energy_start) / 1_000_000.0
             energy_source = "rapl_measured" if energy_joules > 0 else "rapl_zero_or_too_short"
         metadata = {
-            "execution_engine": "quimb_tensor_network_contract",
+            "execution_engine": "quimb_contraction_tree",
             "dependency_versions": versions,
             "external_library": True,
             "accelerator_kind": "none",
@@ -139,13 +160,10 @@ class QuimbTnExactRoute:
             "output_inds": output_inds,
             "actual_output_inds": actual_inds,
             "final_transpose_applied": transposed,
-            "planning_time_s": None,
-            "planning_time_included_in_kernel_s": True,
+            "planning_time_s": planning_s,
+            "planning_time_included_in_kernel_s": False,
             "lowering_time_s": lowering_s,
-            "tn_task_count": len(graph.tasks),
-            "tn_max_intermediate_bytes": graph.path_summary.max_intermediate_bytes,
-            "tn_estimated_flops": graph.path_summary.total_estimated_flops,
-            "tn_estimated_bytes": sum(task.estimated_bytes for task in graph.tasks),
+            **tree_metadata,
         }
         return RouteResult(
             route=self.name,
@@ -159,6 +177,7 @@ class QuimbTnExactRoute:
                 metadata={"output_inds": output_inds},
             ),
             profile=ExecutionProfile(
+                planning_s=planning_s,
                 lowering_s=lowering_s,
                 kernel_s=kernel_s,
                 total_s=total_s,
@@ -228,16 +247,54 @@ class QuimbTnSlicedExactRoute:
         return True, None
 
     def estimate(self, graph: TaskGraph, context: BenchmarkContext) -> RouteEstimate:
+        options = dict(context.route_config.get("options") or {})
+        strategy = str(options.get("slicing_strategy") or "target_slices")
+        target_slices = int(options.get("target_slices", 2) or 2)
+        if strategy != "target_slices" or target_slices < 2:
+            return RouteEstimate(
+                self.name,
+                0,
+                0,
+                None,
+                metadata={
+                    "execution_model": "tensor_network",
+                    "backend_family": self.backend_family,
+                    "external_library": True,
+                    "slicing_enabled": True,
+                    "estimate_status": "failed",
+                    "estimate_error": "unsupported_slicing_strategy",
+                },
+            )
+        network = build_tensor_network(graph.network.circuit)
+        try:
+            import cotengra as ctg
+
+            optimizer = _cotengra_optimizer(
+                ctg,
+                methods=str(options.get("methods") or options.get("optimize") or "greedy"),
+                max_repeats=int(options.get("max_repeats", 1) or 1),
+                slicing_opts={"target_slices": target_slices},
+            )
+            estimated_flops, estimated_peak_memory, metadata = _estimate_tree(
+                network,
+                optimize=optimizer,
+                execution_plan_kind="cotengra_sliced_contraction_tree",
+                require_slicing=True,
+            )
+        except Exception as exc:  # pragma: no cover - dependency and defensive path
+            estimated_flops, estimated_peak_memory = 0, None
+            metadata = {"estimate_status": "failed", "estimate_error": f"{type(exc).__name__}:{exc}"}
         return RouteEstimate(
             self.name,
-            sum(task.estimated_flops for task in graph.tasks),
-            sum(task.estimated_bytes for task in graph.tasks),
-            graph.path_summary.largest_intermediate * 16 if graph.path_summary.largest_intermediate else None,
+            estimated_flops,
+            estimated_peak_memory or 0,
+            estimated_peak_memory,
             metadata={
                 "execution_model": "tensor_network",
                 "backend_family": self.backend_family,
                 "external_library": True,
                 "slicing_enabled": True,
+                **metadata,
             },
         )
 
@@ -278,7 +335,7 @@ class QuimbTnSlicedExactRoute:
 
         total_start = time.perf_counter()
         try:
-            tensor_network, output_inds, lowering_s = _build_quimb_network(qtn, graph, network)
+            tensor_network, output_inds, lowering_s = _build_quimb_network(qtn, network)
             planning_start = time.perf_counter()
             optimizer = _cotengra_optimizer(
                 ctg,
@@ -361,10 +418,7 @@ class QuimbTnSlicedExactRoute:
             "planning_time_s": planning_s,
             "planning_time_included_in_kernel_s": False,
             "lowering_time_s": lowering_s,
-            "tn_task_count": len(graph.tasks),
-            "tn_max_intermediate_bytes": graph.path_summary.max_intermediate_bytes,
-            "tn_estimated_flops": graph.path_summary.total_estimated_flops,
-            "tn_estimated_bytes": sum(task.estimated_bytes for task in graph.tasks),
+            **_tree_execution_metadata(tree),
             "parallelism_mode": "slicing",
             "parallelism_evidence_type": "executed",
             "execution_plan_kind": "cotengra_sliced_contraction_tree",
@@ -424,7 +478,7 @@ def _index_name(label: int) -> str:
     return f"i{int(label)}"
 
 
-def _build_quimb_network(qtn: Any, graph: TaskGraph, network: TensorNetworkValue) -> tuple[Any, tuple[str, ...], float]:
+def _build_quimb_network(qtn: Any, network: TensorNetworkValue) -> tuple[Any, tuple[str, ...], float]:
     lowering_start = time.perf_counter()
     tensors = [
         qtn.Tensor(
@@ -434,8 +488,61 @@ def _build_quimb_network(qtn: Any, graph: TaskGraph, network: TensorNetworkValue
         )
         for tensor in network.tensors
     ]
-    output_inds = tuple(_index_name(label) for label in graph.network.output_labels)
+    output_inds = tuple(_index_name(label) for label in network.spec.output_labels)
     return qtn.TensorNetwork(tensors), output_inds, time.perf_counter() - lowering_start
+
+
+def _estimate_tree(
+    network: TensorNetworkValue,
+    *,
+    optimize: Any,
+    execution_plan_kind: str,
+    require_slicing: bool = False,
+) -> tuple[int, int | None, dict[str, Any]]:
+    try:
+        import quimb.tensor as qtn
+
+        tensor_network, output_inds, _ = _build_quimb_network(qtn, network)
+        tree = tensor_network.contract(output_inds=output_inds, optimize=optimize, get="tree")
+        metadata = {
+            "estimate_status": "available",
+            "execution_plan_kind": execution_plan_kind,
+            **_tree_execution_metadata(tree),
+        }
+        if require_slicing:
+            metadata.update(_sliced_tree_metadata(tree, require_slicing=True))
+        return (
+            int(metadata.get("tn_estimated_flops") or 0),
+            metadata.get("tn_max_intermediate_bytes"),
+            metadata,
+        )
+    except Exception as exc:  # pragma: no cover - defensive preflight path
+        return (
+            0,
+            None,
+            {
+                "estimate_status": "failed",
+                "estimate_error": f"{type(exc).__name__}:{exc}",
+                "execution_plan_kind": execution_plan_kind,
+            },
+        )
+
+
+def _tree_execution_metadata(tree: Any) -> dict[str, Any]:
+    max_intermediate_elements = _tree_number(tree, "max_size")
+    max_intermediate_bytes = (
+        int(max_intermediate_elements * np.dtype(np.complex128).itemsize)
+        if max_intermediate_elements is not None
+        else None
+    )
+    return {
+        "contraction_tree_total_flops": _tree_number(tree, "total_flops"),
+        "contraction_tree_max_intermediate_elements": max_intermediate_elements,
+        "tn_task_count": None,
+        "tn_max_intermediate_bytes": max_intermediate_bytes,
+        "tn_estimated_flops": _tree_number(tree, "total_flops"),
+        "tn_estimated_bytes": None,
+    }
 
 
 def _cotengra_optimizer(ctg: Any, *, methods: str, max_repeats: int, slicing_opts: dict[str, int] | None = None) -> Any:

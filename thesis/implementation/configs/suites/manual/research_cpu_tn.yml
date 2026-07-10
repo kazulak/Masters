@@ -36,15 +36,12 @@ workloads:
     circuit: {kind: quest_compatible, name: XOR, n_qubits: 12}
   - id: quest_edc_10q_research_tn
     circuit: {kind: quest_compatible, name: EDC, n_qubits: 10}
-    case_skip_reason: internal_tensor_label_symbol_cap
   - id: quest_edc_12q_research_tn
     circuit: {kind: quest_compatible, name: EDC, n_qubits: 12}
-    case_skip_reason: internal_tensor_label_symbol_cap
   - id: quest_hs_10q_research_tn
     circuit: {kind: quest_compatible, name: HS, allocated_qubits: 10, logical_qubits: 5}
   - id: quest_hs_12q_research_tn
     circuit: {kind: quest_compatible, name: HS, allocated_qubits: 12, logical_qubits: 6}
-    case_skip_reason: internal_tensor_label_symbol_cap
 
 routes:
   - id: quest_cpu_full_state_exact
@@ -62,6 +59,8 @@ routes:
     required: true
     options:
       optimize: greedy
+      max_estimated_intermediate_bytes: 17179869184
+      resource_skip_reason: research_tn_resource_guard
 
   - id: quimb_tn_sliced_exact
     role: slicing_evidence
@@ -74,7 +73,7 @@ routes:
       target_slices: 2
       require_slicing: true
       max_estimated_intermediate_bytes: 17179869184
-      allow_missing_estimate: true
+      resource_skip_reason: research_tn_resource_guard
 
 validation:
   reference_route: quest_cpu_full_state_exact

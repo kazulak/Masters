@@ -126,6 +126,12 @@ writes derived CSV/Markdown/plots under `runs/comparisons/thesis/<timestamp>/`.
 The GPU thesis suite must be run manually in a GPU-visible shell when this
 Codex process cannot see `/dev/kfd` and `/dev/dri`.
 
+The Quimb stage uses its own external contraction tree rather than the internal
+TaskGraph replay path. A Quimb resource/planning boundary is written as an
+explicit optional-route row; it is not treated as a full-suite crash.
+The 8q–20q manual TN suites isolate each case in a short-lived process so a
+single resource-boundary case cannot retain native TN memory for later cases.
+
 Regenerate the thesis comparison report from existing evidence paths:
 
 ```bash
@@ -303,6 +309,9 @@ not mutate evidence folders. Derived tables, plot-source CSVs, and figures are
 written by `report-latest`, `report-run`, or comparison commands under
 `runs/comparisons/...`. Build/cache outputs are ignored and live under paths
 such as `build/`, `.pytest_cache/`, and native `bin/` or `build/` directories.
+Compact retention removes validated per-repeat final tensors and state dumps
+after recording structured artifact metadata; use full retention only when the
+raw output arrays are required.
 
 The legacy smoke command, `run --suite`, writes raw JSONL, validation JSON, and
 metrics CSV files as its own evidence format. Use the Makefile evidence commands

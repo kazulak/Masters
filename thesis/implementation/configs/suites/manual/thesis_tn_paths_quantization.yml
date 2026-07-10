@@ -10,6 +10,7 @@ metadata:
   manual_invocation_required: true
   validation_method: full_statevector
   max_qubits: 20
+  case_process_isolation: true
   notes: >
     Thesis diagnostic CPU tensor-network suite for same-path replay and
     per-contraction quantization attribution. This is not the serious external

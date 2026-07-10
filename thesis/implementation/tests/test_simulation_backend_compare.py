@@ -4,6 +4,7 @@ import csv
 from dataclasses import replace
 import json
 from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 
 import numpy as np
@@ -26,12 +27,14 @@ from quantum_bench.bench.simulation_backend_probe import (
 from quantum_bench.bench.simulation_backend_compare import _resource_guard_skip_reason, run_simulation_backend_compare
 from quantum_bench.bench.config import route_config_for
 from quantum_bench.circuits import quest_compatible_circuit
-from quantum_bench.core.records import BenchmarkContext, ExecutionProfile, RouteCapabilities, RouteIdentity, RouteOutput, RouteProbe, RouteResult
+from quantum_bench.core.records import BenchmarkContext, ExecutionProfile, RouteCapabilities, RouteEstimate, RouteIdentity, RouteOutput, RouteProbe, RouteResult
 from quantum_bench.providers.exact_tn import CpuTnEinsumExactRoute
 from quantum_bench.providers.full_state.quest_gpu import QuestGpuFullStateExactRoute, quest_gpu_verification_path
+from quantum_bench.providers.full_state.quest_cpu_benchmark import QuestCpuFullStateExactRoute
 from quantum_bench.providers import route_registry
 from quantum_bench.providers.exact_tn.upmem_sdk_simulator import UpmemTnSdkSimulatorQuantizedRoute
 from quantum_bench.tn import build_tensor_network, execute_task_frontier_np_einsum, execute_task_sequence_np_einsum, frontier_waves, plan_task_graph_with_config
+from quantum_bench.tn.network import interleaved_einsum_args
 from quantum_bench.validation import tensor_to_quest_statevector
 
 
@@ -79,6 +82,35 @@ def test_tensor_to_quest_statevector_catches_basis_order() -> None:
     assert not np.array_equal(state, tensor.ravel())
 
 
+def test_quest_cpu_route_honors_context_timeout(monkeypatch, tmp_path: Path) -> None:
+    case = {"case_id": "quest_qrng_2q", "circuit": {"kind": "quest_compatible", "name": "QRNG", "n_qubits": 2}}
+    circuit = quest_compatible_circuit("QRNG", case["circuit"])
+    network = build_tensor_network(circuit)
+    graph = plan_task_graph_with_config(network, {"engine": "opt_einsum", "optimize": "greedy"})
+    context = BenchmarkContext(
+        tmp_path,
+        tmp_path / "run",
+        {"tolerances": {}},
+        case,
+        {"options": {"max_output_qubits": 2, "max_output_amplitudes": 4, "max_output_bytes": 64}},
+        0,
+        {},
+        0.1,
+        None,
+    )
+    route = QuestCpuFullStateExactRoute(tmp_path)
+
+    def timed_out(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired("quest_runner", 0.1)
+
+    monkeypatch.setattr("quantum_bench.providers.full_state.quest_cpu_benchmark.subprocess.run", timed_out)
+    result = route.execute(route.prepare(graph, network, context), context)
+
+    assert result.status == "failed"
+    assert result.error == "quest_timeout:0.1"
+    assert result.metadata["timeout_s"] == 0.1
+
+
 def test_simulation_backend_compare_writes_normalized_records(monkeypatch, tmp_path: Path) -> None:
     suite_path = tmp_path / "suite.yml"
     suite_path.write_text(
@@ -93,6 +125,7 @@ defaults:
     optimize: greedy
 metadata:
   validation_method: full_statevector
+  case_process_isolation: true
 workloads:
   - id: quest_bv_3q
     circuit:
@@ -182,6 +215,13 @@ validation:
     assert manifest["artifact_kind"] == "evidence_run"
     assert manifest["route_label"] == "simulation_backend_compare"
     assert manifest["normalized_records"] == "normalized_records.jsonl"
+    assert manifest["timestamp"]
+    assert manifest["command"]
+    summary = json.loads((result.run_dir / "simulation_backend_compare_summary.json").read_text(encoding="utf-8"))
+    assert summary["case_records_artifact"] == "simulation_backend_compare_cases.jsonl"
+    assert summary["normalized_records_artifact"] == "normalized_records.jsonl"
+    assert "rows" not in summary
+    assert "normalized_records" not in summary
     for derived_name in (
         "comparison_summary.md",
         "simulation_backend_compare_results.csv",
@@ -192,6 +232,8 @@ validation:
     assert {record["execution_model"] for record in records} == {"full_state", "tensor_network"}
     assert {record["route_id"] for record in records} == {"quest_cpu_full_state_exact", "cpu_tn_einsum_exact"}
     assert {record["repeat_id"] for record in records} == {0, 1}
+    assert {record["n_qubits"] for record in records} == {3}
+    assert {record["timestamp"] for record in records} == {manifest["timestamp"]}
     assert {record["measured_repeat_count"] for record in records} == {2}
     assert all(record["simulation_compute_time_s"] is not None for record in records)
     assert all(record["validation_method"] == "full_statevector" for record in records)
@@ -636,11 +678,7 @@ def test_simulation_backend_compare_suite_loads() -> None:
     assert research_cpu_tn["route_policy"]["routes"] == ["quest_cpu_full_state_exact", "quimb_tn_exact", "quimb_tn_sliced_exact"]
     assert route_config_for(research_cpu_tn, "quimb_tn_sliced_exact")["options"]["require_slicing"] is True
     skipped_cpu_tn_cases = {case["case_id"] for case in research_cpu_tn["cases"] if case.get("case_skip_reason")}
-    assert skipped_cpu_tn_cases == {
-        "quest_edc_10q_research_tn",
-        "quest_edc_12q_research_tn",
-        "quest_hs_12q_research_tn",
-    }
+    assert skipped_cpu_tn_cases == set()
     assert research_internal_parallelism["metadata"]["intended_use"] == "diagnostics"
     assert "cpu_tn_hybrid_sliced_frontier_exact" in research_internal_parallelism["route_policy"]["routes"]
     assert research_upmem_boundary["route_policy"]["routes"] == ["quest_cpu_full_state_exact", "upmem_tn_sdk_simulator_quantized"]
@@ -663,6 +701,25 @@ def test_resource_guard_missing_estimate_policy_is_explicit() -> None:
 
     assert _resource_guard_skip_reason({"options": {"max_estimated_intermediate_bytes": 1}}, graph) == "unavailable_estimate"
     assert _resource_guard_skip_reason({"options": {"max_estimated_intermediate_bytes": 1, "allow_missing_estimate": True}}, graph) is None
+
+
+def test_resource_guard_reports_external_tree_estimate_failure() -> None:
+    graph = SimpleNamespace(path_summary=SimpleNamespace(max_intermediate_bytes=8, total_estimated_flops=4))
+    estimate = RouteEstimate(
+        "quimb_tn_exact",
+        0,
+        0,
+        None,
+        metadata={"estimate_status": "failed", "estimate_error": "ValueError:tree_plan_failed"},
+    )
+
+    reason = _resource_guard_skip_reason(
+        {"options": {"max_estimated_intermediate_bytes": 1024, "resource_skip_reason": "thesis_tn_resource_guard"}},
+        graph,
+        estimate=estimate,
+    )
+
+    assert reason == "thesis_tn_resource_guard:estimate_failed:ValueError:tree_plan_failed"
 
 
 def test_resource_guard_skips_optional_route_before_execution(monkeypatch, tmp_path: Path) -> None:
@@ -758,6 +815,101 @@ validation:
     assert "unit_guard" in skipped["resource_skip_reason"]
     assert skipped["manual_invocation_required"] is True
     assert skipped["expected_runtime_class"] == "manual_large"
+
+
+def test_external_quimb_routes_do_not_require_internal_taskgraph_planning(monkeypatch, tmp_path: Path) -> None:
+    suite_path = tmp_path / "suite.yml"
+    suite_path.write_text(
+        """
+schema_version: 2
+suite_id: unit_external_quimb
+metadata:
+  validation_method: full_statevector
+defaults:
+  warmups: 0
+  repeats: 1
+  planner:
+    engine: opt_einsum
+    optimize: greedy
+workloads:
+  - id: quest_bv_3q
+    circuit: {kind: quest_compatible, name: BV, n_qubits: 3}
+routes:
+  - id: quest_cpu_full_state_exact
+    role: comparison_anchor
+    required: true
+  - id: quimb_tn_exact
+    role: baseline
+    required: false
+    options:
+      optimize: greedy
+      max_estimated_intermediate_bytes: 1048576
+      resource_skip_reason: unit_external_quimb_guard
+validation:
+  reference_route: quest_cpu_full_state_exact
+  tolerances:
+    max_abs_error: 1.0e-9
+    l2_error: 1.0e-8
+    max_rel_error: 1.0e-8
+    norm_drift: 1.0e-8
+    min_fidelity: 0.999999999
+""",
+        encoding="utf-8",
+    )
+
+    class FakeQuestRoute:
+        name = "quest_cpu_full_state_exact"
+        backend_family = "quest"
+        identity = RouteIdentity(name, "fake quest", "baseline", "full_state_vector", "full_state_vector", "cpu", "external_process", "statevector", "compare_statevector")
+
+        def probe(self):
+            return RouteProbe(self.name, True)
+
+        def capabilities(self):
+            return RouteCapabilities(self.identity, can_return_output=True)
+
+        def can_execute(self, graph, context):
+            return True, None
+
+        def estimate(self, graph, context):  # pragma: no cover - no guard on the anchor
+            raise NotImplementedError
+
+        def prepare(self, graph, network, context):
+            return {"network": network}
+
+        def execute(self, prepared, context):
+            tensor = np.einsum(*interleaved_einsum_args(prepared["network"]), optimize=True)
+            state = tensor_to_quest_statevector(tensor)
+            return RouteResult(
+                self.name,
+                self.backend_family,
+                "passed",
+                RouteOutput("statevector", array=state, shape=state.shape, dtype=str(state.dtype), metadata={}),
+                ExecutionProfile(kernel_s=0.001, total_s=0.002),
+                None,
+                "unavailable",
+            )
+
+    real_quimb = route_registry(ROOT)["quimb_tn_exact"]
+    monkeypatch.setattr(
+        "quantum_bench.bench.simulation_backend_compare.route_registry",
+        lambda root_dir: {"quest_cpu_full_state_exact": FakeQuestRoute(), "quimb_tn_exact": real_quimb},
+    )
+    monkeypatch.setattr(
+        "quantum_bench.bench.simulation_backend_compare.plan_task_graph_with_config",
+        lambda *_args, **_kwargs: pytest.fail("external Quimb route must not trigger internal TaskGraph planning"),
+    )
+
+    result = run_simulation_backend_compare(tmp_path, suite_path=suite_path, artifact_retention="compact")
+    records = load_result_records([result.run_dir])
+    quimb = next(record for record in records if record["route_id"] == "quimb_tn_exact")
+
+    assert quimb["status"] == "completed"
+    assert quimb["validation_status"] == "passed"
+    assert quimb["n_qubits"] == 3
+    assert quimb["tn_task_count"] is None
+    assert quimb["tn_estimated_flops"] > 0
+    assert quimb["final_tensor_artifact"]["status"] == "intentionally_pruned"
 
 
 def test_optional_route_memory_error_becomes_normalized_skip(monkeypatch, tmp_path: Path) -> None:
@@ -2390,6 +2542,8 @@ validation:
     assert upmem_record["cpu_fallback_task_count"] == 0
     assert upmem_record["dpu_program_invocations"] == upmem_record["task_count"]
     assert upmem_record["upmem_program_executed"] is True
+    assert upmem_record["max_abs_error"] is not None
+    assert upmem_record["l2_error"] is not None
     assert upmem_record["parallelism_mode"] == "sequential"
     assert upmem_record["parallelism_evidence_type"] == "executed"
     assert upmem_record["execution_plan_kind"] == "sequential_upmem_taskgraph"
