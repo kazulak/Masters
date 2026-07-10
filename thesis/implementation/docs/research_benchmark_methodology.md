@@ -1,10 +1,10 @@
 # Research Benchmark Methodology
 
-This document describes the current thesis-grade benchmark workflow. Generated
-evidence and comparisons remain under ignored `runs/` directories; this file
-records the methodology and claim boundaries.
+This document describes the benchmark methodology and claim boundaries.
+Generated executions remain under ignored `runs/`; the selected compact result,
+source CSVs, and plots are promoted to tracked `thesis_results/current/`.
 
-## Stage A Audit Summary
+## Implemented Methodology
 
 Already in place:
 
@@ -15,19 +15,12 @@ Already in place:
 - CPU/GPU performance-tier metadata with `state_output_mode=none`;
 - UPMEM SDK simulator fields that distinguish SDK simulator mode from hardware;
 - unsupported/skipped rows and resource guard reasons;
-- evidence/comparison artifact split.
+- evidence/comparison artifact split;
+- content hashes for circuit semantics, internal TN structure, and contraction
+  plan identity;
+- tracked compact snapshots with checksums and report regeneration;
 - explicit parallelism claim boundaries for slicing, frontier, hybrid,
   full-state GPU, GPU TN feasibility, and UPMEM SDK simulator evidence.
-
-Added in Wave 2E.58:
-
-- manual research suites for CPU/GPU, CPU TN, internal diagnostics, and UPMEM
-  boundary evidence;
-- `scripts/research_benchmark_pack.py` for reproducible pack generation;
-- Make targets for plan, lightweight pack creation, full opt-in research runs,
-  and report regeneration;
-- derived research CSVs, plots, manifest, and summary under
-  `runs/comparisons/research_pack/...`.
 
 Remaining limitations:
 
@@ -45,21 +38,20 @@ Remaining limitations:
 | `configs/suites/manual/research_cpu_gpu.yml` | QuEST CPU vs verified QuEST GPU performance tier. |
 | `configs/suites/manual/research_cpu_gpu_correctness.yml` | Smaller full-statevector correctness tier for the same QuEST CPU/GPU routes. |
 | `configs/suites/manual/research_cpu_tn.yml` | QuEST anchor, Quimb unsliced, and Quimb sliced CPU TN evidence. |
+| `configs/suites/manual/research_planner_compare.yml` | Greedy/auto path costs and modeled UPMEM pressure over the canonical grid. |
 | `configs/suites/manual/research_internal_parallelism.yml` | Diagnostic internal TaskGraph sequential/frontier/hybrid evidence. |
 | `configs/suites/manual/thesis_upmem_quantization_boundary.yml` | Strict generic-only UPMEM SDK simulator boundary and same-route float32/int8 attribution evidence. |
 
 ## Commands
 
 ```bash
-make research-plan
-make research-benchmarks
-RUN_RESEARCH=1 make research-benchmarks
-make research-report
+make thesis-run
+make thesis-promote
+make thesis-verify
+make thesis-report
 ```
 
-`make research-benchmarks` is lightweight by default. Full benchmark execution
-requires `RUN_RESEARCH=1` so long GPU, TN, and UPMEM simulator runs are never
-started accidentally.
+`make research-plan` remains available to print each underlying command.
 
 ## Allowed Claims
 
@@ -87,6 +79,9 @@ started accidentally.
 - The UPMEM research group runs `upmem-mvp-benchmark`, not the dense-capable
   route-comparison suite. It records `quantization_mode=none` and
   `per_task_input_quantize` separately for same-route attribution.
+- A CPU/UPMEM row is labeled same-plan only when its
+  `contraction_plan_hash` matches. Planner candidates are modeled evidence and
+  remain separate from executor timing.
 
 ## Claims Not Allowed
 
@@ -121,12 +116,14 @@ Expected files include:
 - `paired_speedups.csv`
 - `cpu_gpu_performance_summary.csv`
 - `upmem_quantization_attribution.csv`
+- `same_plan_execution.csv`
+- `planner_comparison.csv`
 - `unsupported_cases.csv`
 - `validation_summary.csv`
 - `route_capability_matrix.csv`
 - `plot_manifest.json`
 - `benchmark_summary.md`
 
+Every generated figure names one of these source CSVs in `plot_manifest.json`.
 The summary ends with `Next UPMEM Implementation Readiness`, which lists the
-current UPMEM blockers visible in the loaded evidence and recommends one next
-UPMEM implementation target.
+current blockers and recommends one concrete next implementation target.

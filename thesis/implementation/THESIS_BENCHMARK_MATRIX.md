@@ -1,220 +1,188 @@
-# Thesis Benchmark Matrix - Wave 2E.46
+# Thesis Benchmark Matrix
 
-This document defines the benchmark matrix for the thesis evaluation. It is a
-tracked design artifact; generated evidence and comparison outputs remain under
-`runs/` and are intentionally ignored by git.
+This document fixes the benchmark questions before further UPMEM kernel work.
+Suite YAML files are the executable specification; this document defines how
+their evidence is interpreted.
 
-Wave 2E.46 does not generate new benchmark artifacts. The first concrete output
-from this matrix should be produced by Wave 2E.47: a new CPU/GPU direct
-benchmark sweep.
+## Canonical Local Grid
 
-## Current Evidence Inputs
-
-| Evidence | Path | Role |
-|---|---|---|
-| CPU evidence | `runs/evidence/cpu_evidence/simulation_backend_compare/20260703_195342` | Current QuEST CPU and Quimb TN evidence. |
-| GPU smoke evidence | `runs/evidence/gpu_evidence/simulation_backend_compare/20260703_195327` | Verified QuEST HIP route smoke evidence only. |
-| UPMEM simulator evidence | `runs/evidence/upmem_sim_evidence/simulation_backend_compare/20260703_195349` | Current strict UPMEM SDK simulator evidence. |
-
-The existing 4q GPU run proves that the QuEST HIP route works and can emit real
-GPU rows. The Wave 2E.47 shallow 4-18q sweep proves CPU/GPU comparison plumbing
-and route/runtime validity. It is still overhead-dominated and should not be the
-final GPU performance claim. The thesis CPU/GPU performance benchmark requires
-deeper deterministic workloads with output dumps removed from the timed evidence
-path.
-
-## First Required Output: CPU/GPU Direct Benchmark Sweep
-
-Wave 2E.47 should create and run a new CPU/GPU sweep using only:
-
-- `quest_cpu_full_state_exact`
-- `quest_gpu_full_state_exact`
-
-The sweep must use identical deterministic circuit semantics for CPU and GPU
-rows. CPU/GPU speedup is valid only when the row pair has the same circuit
-family, qubit count, validation status, and measured timing scope.
-
-### Circuit Families
-
-- QRNG
-- BV
-- XOR
-- GHZ/HS
-- BB84
-- EDC
-- random shallow only if already supported by existing generators
-
-### Qubit Sweep
-
-| Tier | Qubits | Use |
-|---|---:|---|
-| small | 4, 6, 8 | Correctness and low-cost sanity. |
-| medium | 10, 12, 14, 16, 18 | Main thesis figure range. |
-| stress/manual | 20, 22, 24+ | Manual only, if runtime and memory allow. |
-
-### Measurement Rules
-
-- Use at least 3 measured repeats for timing stability.
-- Keep warmup timing separate from measured timing where supported.
-- Stop a case cleanly on timeout, memory guard, validation failure, or GPU
-  verification failure.
-- Do not emit GPU benchmark rows unless `gpu_backend_verified=true` and
-  `gpu_program_executed=true`.
-- Separate correctness and performance tiers:
-  - correctness: `state_output_mode=full_dump`,
-    `validation_method=full_statevector`;
-  - performance: `state_output_mode=none`,
-    `validation_method=native_status_gate_counts`, `performance_tier=true`.
-- Performance-tier rows are `output_contract=metrics_only`,
-  `exact_output_comparable=false`, and
-  `full_statevector_validation_available=false`.
-
-### Required Metrics
-
-- CPU runtime.
-- GPU runtime.
-- CPU/GPU speedup.
-- Validation status and error metrics.
-- GPU device name.
-- Energy only if real sensor data is available later.
-- Timing scope: wall time, native process time, QuEST compute time, state dump
-  time, validation time when available.
-
-### Required 2E.47 Outputs
-
-Evidence should be written under:
+Circuit families, chosen for continuity with PIMutation:
 
 ```text
-runs/evidence/cpu_gpu_sweep/...
+QRNG, BV, XOR, BB84, EDC, HS
 ```
 
-Derived comparison artifacts should be written under:
+Canonical local sizes:
 
 ```text
-runs/comparisons/cpu_gpu/...
+4, 6, 8, 10, 12, 14, 16 qubits
 ```
 
-Required derived artifacts:
+This is 42 family/size cases. The grid is deliberately bounded for frequent
+local iteration. Larger workstation and cluster sweeps may extend it, but must
+not silently replace it.
 
-- CPU/GPU comparison CSV.
-- CPU/GPU Markdown summary.
-- Runtime and speedup plot if existing report tooling supports it cleanly.
+## Executable Groups
 
-## Full Thesis Matrix
+| Group | Suite | Routes/modes | Repeats | Scientific purpose |
+| --- | --- | --- | ---: | --- |
+| Full-state correctness | `configs/suites/manual/research_cpu_gpu_correctness.yml` | QuEST CPU + verified QuEST GPU, full dump | 1 | Prove CPU/GPU semantic agreement on representative 4/8/12/16q cases |
+| Full-state performance | `configs/suites/manual/research_cpu_gpu.yml` | QuEST CPU + verified QuEST GPU, metrics only | 5 + 1 warmup | Compare compute time and process wall time over all 42 cases |
+| CPU TN | `configs/suites/manual/research_cpu_tn.yml` | QuEST CPU anchor, Quimb unsliced, Quimb sliced | 3 + 1 warmup | Compare full-state and external TN execution, path cost, slicing, and memory proxies over all 42 shallow cases |
+| Planner candidates | `configs/suites/manual/research_planner_compare.yml` | `opt_einsum` greedy and auto | planning once | Compare plan FLOPs, peak intermediates, modeled transfers/tiling, and UPMEM pressure |
+| UPMEM boundary | `configs/suites/manual/thesis_upmem_quantization_boundary.yml` | Same internal TaskGraph, float32 and int8 strict generic UPMEM SDK simulator | 1 | Find supported/unsupported boundary and attribute transfer/error/runtime changes to quantization |
+| Internal parallelism | `configs/suites/manual/research_internal_parallelism.yml` | sequential/frontier/hybrid internal TaskGraph | 1 | Diagnostic architecture evidence only |
 
-### Engines
+The CPU/GPU performance suite uses deeper repeated circuits to reduce startup
+dominance. The CPU TN suite uses shallow exact circuits on the same canonical
+family/size grid because deep full-output TN contraction can be a different,
+much larger computational problem. Depth/repeat count is always present in the
+resolved suite and must be included when interpreting results.
 
-- `quest_cpu_full_state_exact`
-- `quimb_tn_exact`
-- `quest_gpu_full_state_exact`
-- `upmem_tn_sdk_simulator_quantized`
+## Required Comparisons
 
-### Boundary Evidence
+### Full-State CPU Versus GPU
 
-- `upmem_generic_sweep`
+Valid direct comparison:
 
-`upmem_tn_sdk_simulator_quantized` is the executable UPMEM SDK simulator
-comparison route.
-
-`upmem_generic_sweep` is boundary and coverage evidence, not a normal baseline
-engine.
-
-### Matrix Roles
-
-| Route or evidence | Execution model | Target | Thesis role |
-|---|---|---|---|
-| `quest_cpu_full_state_exact` | full-state | CPU | Serious CPU full-state baseline. |
-| `quimb_tn_exact` | tensor-network | CPU | Serious CPU tensor-network baseline. |
-| `quest_gpu_full_state_exact` | full-state | GPU | Verified QuEST HIP GPU baseline. |
-| `upmem_tn_sdk_simulator_quantized` | tensor-network | UPMEM SDK simulator | Executable quantized UPMEM simulator comparison route. |
-| `upmem_generic_sweep` | tensor-network boundary scan | UPMEM SDK simulator | Boundary evidence for generic UPMEM coverage. |
-
-### Sweep Levels
-
-| Sweep | Purpose | Expected behavior |
-|---|---|---|
-| small correctness | Verify output agreement and route semantics. | Full validation where feasible. |
-| medium thesis figure | Main CPU/GPU and CPU/TN figures. | Repeats and clean timing summaries. |
-| stress/manual boundary | Find scaling and support boundaries. | Manual invocation with explicit stop reasons. |
-
-Stop conditions for all sweeps:
-
-- timeout
-- memory guard
-- validation failure
-- unsupported reason
-- GPU verification failure
-- explicit resource skip
-
-## Scientific Comparison Rules
-
-- QuEST CPU full-state vs QuEST GPU full-state is a valid direct backend
-  comparison.
-- Quimb TN vs QuEST full-state is a valid algorithm/backend comparison, not the
-  same execution model.
-- UPMEM SDK simulator vs CPU/GPU is a functional/runtime-path comparison, not
-  hardware speedup.
-- UPMEM generic sweep is boundary evidence only and must not be presented as a
-  universal TN coverage claim.
-- SDK simulator timing may be reported only as SDK simulator timing.
-- CPU/GPU speedup is valid only for same circuit, same size, same QuEST
-  semantics, and measured CPU/GPU rows from the same sweep.
-- Parallelism claims should follow
-  [docs/parallelization_roadmap.md](docs/parallelization_roadmap.md): slicing,
-  frontier, GPU TN, and UPMEM/PIM parallelism need separate executed evidence
-  before they are reported as speedup mechanisms.
-- GPU tensor-network support is currently feasibility-only. Candidate status is
-  reported by `simulation-backend-probe` and documented in
-  [docs/gpu_tn_feasibility.md](docs/gpu_tn_feasibility.md); it is not a thesis
-  benchmark engine until a real GPU TN execution path is verified.
-
-## Required Thesis Outputs
-
-| Output | Required artifacts | Notes |
-|---|---|---|
-| Full-state CPU vs GPU runtime by circuit family and size | `full_state_cpu_gpu_by_circuit.csv`, `full_state_cpu_gpu_speedup_by_circuit_size.csv`, plot | QuEST CPU/GPU only; GPU evidence must be run manually in a GPU-visible shell. |
-| Full-state CPU/GPU speedup by circuit family and size | `full_state_cpu_gpu_speedup_by_circuit_size.csv`, plot | Only same-case CPU/GPU rows; performance-tier compute speedup is the final speedup metric. |
-| TN path runtime by circuit family and size | `tn_path_comparison_by_circuit.csv`, `tn_path_runtime_by_circuit_size.csv`, plot | Quimb unsliced/sliced come from `thesis_cpu_tn_quimb.yml` as serious TN evidence; CPU path replay comes from `thesis_tn_paths_quantization.yml` as diagnostic attribution. |
-| TN quantization runtime/error by circuit family and size | `tn_quantization_comparison.csv`, `tn_quantization_speedup_by_circuit_size.csv`, `tn_quantization_error_by_circuit_size.csv`, plots | Float64 path replay versus per-contraction int8 replay; attribution only, not native acceleration. |
-| UPMEM supported/unsupported boundary table | `upmem_boundary_quantization.csv`, plot | Include blocker reasons. |
-| UPMEM quantized accuracy/error table | `upmem_accuracy_by_circuit_size.csv`, plot | Simulator path evidence only. |
-| Energy table | CSV, Markdown | Optional, only with real sensor data. |
-
-The current thesis report command is:
-
-```bash
-make thesis-report THESIS_INPUTS="runs/evidence/<cpu_gpu_run> runs/evidence/<quimb_tn_run> runs/evidence/<quantization_diagnostic_run> runs/evidence/<upmem_run>"
+```text
+quest_cpu_full_state_exact vs quest_gpu_full_state_exact
 ```
 
-It reads explicit evidence paths and writes only derived report artifacts under
-`runs/comparisons/thesis/...`.
+Pair only equal case, repeat, output contract, validation method, and timing
+scope. Report:
 
-## Wave 2E.47 Implementation Plan
+- median CPU and GPU compute time;
+- CPU/GPU compute speedup (`CPU time / GPU time`);
+- process wall-time ratio separately;
+- matched repeat count and spread;
+- verified GPU device/runtime metadata.
 
-1. Add canonical `configs/suites/cpu_gpu_sweep.yml` and staged manual helpers
-   `configs/suites/manual/cpu_gpu_sweep_tier1.yml` and
-   `configs/suites/manual/cpu_gpu_sweep_tier2.yml`.
-2. Keep the existing 4q GPU evidence as route-smoke validation only.
-3. Run GPU verification, then tier 1 (`4,6,8,10,12`) before tier 2
-   (`14,16,18`).
-4. Write evidence under `runs/evidence/cpu_gpu_sweep/...`.
-5. Write derived comparison outputs under `runs/comparisons/cpu_gpu/...`.
-6. Verify every CPU/GPU speedup row has matching circuit family, qubit count,
-   repeat index, validation status, and measured CPU/GPU timing.
-7. Then extend the matrix outputs to CPU + Quimb + GPU + UPMEM using the full
-   thesis matrix rules.
+Performance-tier rows are metrics-only and are not full-statevector validation
+evidence. Correctness comes from the separate full-dump tier.
 
-## Wave 2E.48 Methodology Update
+### Full-State CPU Versus CPU TN
 
-Wave 2E.48 adds two manual CPU/GPU full-state tiers:
+Valid algorithm/backend comparison on the exact same shallow circuit:
 
-- `configs/suites/manual/cpu_gpu_correctness_deep.yml`: deeper deterministic
-  circuits with full state dumps and full-statevector validation under a 12q
-  cap.
-- `configs/suites/manual/cpu_gpu_performance.yml`: deeper deterministic
-  circuits with `state_output_mode=none`; rows are metrics-only performance
-  evidence and are validated by native status/gate-count checks.
+```text
+quest_cpu_full_state_exact vs quimb_tn_exact vs quimb_tn_sliced_exact
+```
 
-CPU/GPU performance speedup should be reported from matched performance-tier
-`simulation_compute_time_s` rows. Wall-time ratios can still be reported as
-overhead-aware context, but must be labeled separately.
+Report planning time, contraction time, total wall time, peak intermediate
+proxy, task/path metrics, output agreement, slice count, and
+`slicing_flop_ratio`. This is not same-implementation speedup: QuEST and Quimb
+use different simulation models.
+
+### Contraction Path Choice
+
+The planner suite emits one content-addressed TaskGraph per candidate. Report:
+
+- estimated FLOPs;
+- peak intermediate bytes;
+- host-to-DPU, DPU-to-host, and MRAM-to-WRAM estimates;
+- tiling-required task count and estimated tile parallelism;
+- modeled UPMEM pressure score/rank;
+- planning time and contraction-plan hash.
+
+Planner rows are modeled path evidence. They do not claim execution speedup.
+The chosen future UPMEM-aware objective should be compared with the unchanged
+greedy/auto baselines using these fields.
+
+### Same-Plan CPU Versus UPMEM
+
+The strict UPMEM suite generates one internal TaskGraph and runs:
+
+```text
+CPU exact TaskGraph replay
+UPMEM SDK simulator generic float32
+UPMEM SDK simulator generic int8/int32
+```
+
+A pair is valid only when `contraction_plan_hash` matches. Report route time,
+SDK-simulator kernel time, actual host/DPU bytes, quantization/dequantization
+time, invocation count, error, and unsupported reason. No ratio is labeled
+hardware speedup.
+
+### Quantization Attribution
+
+Compare float32 and int8 only within the same strict generic UPMEM route and
+plan. Required outputs:
+
+- float32/int8 route-time ratio;
+- float32/int8 simulator-kernel ratio;
+- transfer-volume ratio;
+- max-absolute and L2 error against the full-precision TaskGraph reference;
+- clipping/saturation information when available.
+
+CPU path-replay quantization remains a diagnostic for numerical behavior and
+host conversion overhead. It is not evidence that quantization is slower on a
+DPU.
+
+## PIMutation Comparison
+
+The six shared family names provide a recognizable comparison surface. The
+thesis should synthesize, per family:
+
+| Question | This implementation | PIMutation context |
+| --- | --- | --- |
+| Baseline model | QuEST full state and Quimb TN | State-vector PIM simulation |
+| Scaling variable | qubits, gate count/depth, TN path width | qubits/gate workload reported by PIMutation |
+| PIM execution | TN contraction TaskGraph (simulator now, hardware later) | state-vector gate operations on UPMEM |
+| Quantization | same-plan float32 vs int8 contraction | fixed/integer PIM motivation |
+| Specialization | future permutation/layout/sparse kernels | gate-aware data operations inspire candidates |
+
+This is a relative scientific comparison, not a claim that both systems execute
+identical kernels, paths, software versions, or hardware.
+
+## Required Derived Tables
+
+All live under `thesis_results/current/tables/` after promotion:
+
+- `per_case_route_stats.csv`
+- `cpu_gpu_performance_summary.csv`
+- `paired_speedups.csv`
+- `planner_comparison.csv`
+- `same_plan_execution.csv`
+- `upmem_quantization_attribution.csv`
+- `unsupported_cases.csv`
+- `validation_summary.csv`
+- `route_capability_matrix.csv`
+
+## Required Human-Readable Figures
+
+All live under `thesis_results/current/plots/`, each with a source CSV in the
+tables directory:
+
+- CPU/GPU runtime and speedup by family/qubits;
+- CPU TN runtime, planning/contraction split, path FLOPs, and peak memory;
+- Quimb slicing FLOP ratio;
+- planner FLOPs versus modeled UPMEM pressure;
+- UPMEM support boundary and validation error;
+- float32/int8 UPMEM runtime, transfer, and error attribution;
+- same-plan CPU replay versus UPMEM SDK-simulator route timing.
+
+If a figure lacks valid input rows, the plot manifest records a skip reason.
+The report must not fabricate empty or incomparable values.
+
+## Cluster Extension
+
+The local matrix is rerun on the final CPU/NVIDIA/UPMEM environments using the
+same suite semantics where possible. Environment/device records must identify:
+
+- CPU model, core/thread policy, BLAS thread variables;
+- GPU model, driver/toolkit, real program verification, synchronization;
+- UPMEM SDK version, simulator versus hardware, DPU count, task assignment;
+- Git commit, resolved suite, dependency versions, and semantic/plan hashes.
+
+NVIDIA full-state or TN software is added only after real execution is verified.
+Physical UPMEM rows use a distinct hardware execution mode and are never merged
+with SDK-simulator timing.
+
+## Stop/Boundary Rules
+
+A case is retained as unsupported rather than hidden when it reaches a rank,
+element, memory, timeout, planner, validation, or device boundary. A manual
+stress run may stop before larger sizes after such a boundary is established.
+The canonical local grid remains fixed so regressions and improvements are
+visible across waves.

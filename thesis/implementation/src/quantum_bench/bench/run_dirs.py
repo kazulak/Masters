@@ -34,7 +34,7 @@ def create_run_dir(
 ) -> Path:
     runs_dir = root_dir / "runs"
     runs_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     if artifact_kind == EVIDENCE_ARTIFACT_KIND:
         if not route_label:
             raise ValueError("evidence runs require a route_label")
@@ -58,6 +58,8 @@ def create_run_dir(
         suffix += 1
     for rel in STANDARD_RUN_SUBDIRS:
         (run_dir / rel).mkdir(parents=True, exist_ok=True)
+    update_latest_symlink(parent, run_dir)
+    update_latest_symlink(parent.parent, run_dir)
     if artifact_kind != COMPARISON_ARTIFACT_KIND:
         update_latest_symlink(runs_dir, run_dir)
     return run_dir

@@ -102,26 +102,20 @@ target, evidence type, same-family timing group, and whether a speedup claim is
 allowed from the available evidence. Modeled UPMEM assignment and SDK simulator
 rows remain marked as non-hardware-speedup evidence.
 
-Current implemented evidence can be gathered with:
+Current internal CPU diagnostic evidence is included in:
 
 ```bash
-make parallelism-report
+make thesis-run
 ```
 
-This target compares existing executed CPU slicing/frontier/hybrid diagnostics
-with modeled UPMEM assignment evidence. It is a reporting workflow only; it
-does not implement UPMEM multi-DPU execution. The comparison output includes
-`parallelism_mode_summary.*` and `parallelism_capability_matrix.*` artifacts.
-
-To include the executed UPMEM SDK simulator frontier prototype in that same
-comparison, run:
+Modeled UPMEM assignment remains an explicit developer diagnostic:
 
 ```bash
-make parallelism-report PARALLELISM_INCLUDE_UPMEM_FRONTIER=1
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench \
+  upmem-multi-dpu-assignment --suite configs/suites/upmem_sim_evidence.yml --dpu-groups 4
 ```
 
-That opt-in path requires the UPMEM SDK simulator to be available and still
-emits simulator evidence only.
+It does not implement UPMEM multi-DPU execution or hardware speedup.
 
 No fake speedup fields should be added. Any ratio must state its timing scope
 and denominator route. UPMEM SDK simulator timing may be reported only as SDK
