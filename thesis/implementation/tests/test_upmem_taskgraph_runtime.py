@@ -16,7 +16,9 @@ from quantum_bench.targets.upmem.generic_bridge import (
     GenericBridgeExecutionResult,
     GenericBridgeOutputManifest,
 )
+from quantum_bench.targets.upmem import numeric_reference, runtime_evidence
 from quantum_bench.targets.upmem.taskgraph_runtime import (
+    GenericQuantizedTaskGraphReference,
     build_generic_quantized_taskgraph_reference,
     build_generic_taskgraph_reference,
     execute_upmem_taskgraph_runtime,
@@ -146,6 +148,7 @@ def _fake_generic_result(input_manifest_path: Path, output: np.ndarray):
         nbytes=int(np.asarray(output).nbytes),
         role="output",
     )
+
     manifest = GenericBridgeOutputManifest(
         schema_version=GENERIC_BRIDGE_SCHEMA_VERSION,
         bridge_id=GENERIC_BRIDGE_ID,
@@ -188,6 +191,12 @@ def _fake_generic_result(input_manifest_path: Path, output: np.ndarray):
         execution_implemented=True,
         metadata=manifest.metadata,
     )
+
+
+def test_taskgraph_runtime_reexports_extracted_reference_and_result_types() -> None:
+    assert build_generic_taskgraph_reference is numeric_reference.build_generic_taskgraph_reference
+    assert build_generic_quantized_taskgraph_reference is numeric_reference.build_generic_quantized_taskgraph_reference
+    assert GenericQuantizedTaskGraphReference is runtime_evidence.GenericQuantizedTaskGraphReference
 
 
 def test_generic_only_runtime_consumes_upmem_output_blobs_not_cpu_reference(monkeypatch, tmp_path: Path) -> None:
