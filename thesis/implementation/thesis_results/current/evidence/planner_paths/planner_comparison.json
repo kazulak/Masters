@@ -36,7 +36,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.00023492100081057288,
+      "planning_time_s": 0.00021304499978214153,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -110,7 +110,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0006553999992320314,
+      "planning_time_s": 0.0005828779999319522,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -184,7 +184,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0002795549989969004,
+      "planning_time_s": 0.0002516689996809873,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -258,7 +258,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0004328219984017778,
+      "planning_time_s": 0.0004050799998367438,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -332,7 +332,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.00033024000003933907,
+      "planning_time_s": 0.0003130860000055691,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -406,7 +406,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0005138849992363248,
+      "planning_time_s": 0.0003213810000488593,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -480,7 +480,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.00041077999776462093,
+      "planning_time_s": 0.00038792800023657037,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -554,7 +554,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.00039167399881989695,
+      "planning_time_s": 0.00038810800015198765,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -628,7 +628,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.000491611997858854,
+      "planning_time_s": 0.0004517190000115079,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -702,7 +702,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.00047544200060656294,
+      "planning_time_s": 0.00044670999977824977,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -776,7 +776,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0005255659998510964,
+      "planning_time_s": 0.0005127750000610831,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -850,7 +850,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0005577259980782401,
+      "planning_time_s": 0.0005176149998078472,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -924,7 +924,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0005963389994576573,
+      "planning_time_s": 0.0005686920003427076,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -998,7 +998,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0010163270017073955,
+      "planning_time_s": 0.0005602649998763809,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -1072,7 +1072,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0005166000009921845,
+      "planning_time_s": 0.0004291459999876679,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -1146,7 +1146,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0005395330008468591,
+      "planning_time_s": 0.00043071900017821463,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -1220,7 +1220,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0007045519996609073,
+      "planning_time_s": 0.0006456179999076994,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -1294,7 +1294,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0006597479987249244,
+      "planning_time_s": 0.0006565180001416593,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -1368,7 +1368,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0008836880006128922,
+      "planning_time_s": 0.0008692629999131896,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -1442,7 +1442,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0009172719983325806,
+      "planning_time_s": 0.0008836700003485021,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -1516,7 +1516,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0013556029989558738,
+      "planning_time_s": 0.0011951020001106372,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -1590,7 +1590,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0011264929999015294,
+      "planning_time_s": 0.001116362000175286,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -1664,7 +1664,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0014101660017331596,
+      "planning_time_s": 0.0013668589999724645,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -1738,7 +1738,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.001474286000302527,
+      "planning_time_s": 0.0014100710000093386,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -1812,7 +1812,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0016696829989086837,
+      "planning_time_s": 0.0016118949997689924,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -1886,7 +1886,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0016420009997091256,
+      "planning_time_s": 0.0017266230001951044,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -1960,7 +1960,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0018792759983625729,
+      "planning_time_s": 0.0020849050001743308,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -2034,7 +2034,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0018903769996541087,
+      "planning_time_s": 0.0019191300002603384,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -2108,7 +2108,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0002354320022277534,
+      "planning_time_s": 0.00038487199981318554,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -2182,7 +2182,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0005368880010792054,
+      "planning_time_s": 0.0005576400003519666,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -2256,7 +2256,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.00047202600035234354,
+      "planning_time_s": 0.0003857639999296225,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -2330,7 +2330,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0004502749980019871,
+      "planning_time_s": 0.0004539229998954397,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -2404,7 +2404,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0004785880009876564,
+      "planning_time_s": 0.0005632209999930637,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -2478,7 +2478,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.000601879000896588,
+      "planning_time_s": 0.0004934480002702912,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -2552,7 +2552,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0006186209975567181,
+      "planning_time_s": 0.000629386999662529,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -2626,7 +2626,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0006099550009821542,
+      "planning_time_s": 0.0006803840001339267,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -2700,7 +2700,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0007414909996441565,
+      "planning_time_s": 0.0011334549999446608,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -2774,7 +2774,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0007298490018001758,
+      "planning_time_s": 0.0013144999998075946,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -2848,7 +2848,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0008493140012433287,
+      "planning_time_s": 0.0010079059998133744,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -2922,7 +2922,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0013699909977731295,
+      "planning_time_s": 0.0011536839997461357,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -2996,7 +2996,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0010246120000374503,
+      "planning_time_s": 0.0016170149997378758,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -3070,7 +3070,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0010577640023257118,
+      "planning_time_s": 0.001092216999950324,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -3144,7 +3144,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0002749660015979316,
+      "planning_time_s": 0.0004468890001589898,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -3218,7 +3218,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.00039559200013172813,
+      "planning_time_s": 0.0004582810001920734,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -3292,7 +3292,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.00039030200059642084,
+      "planning_time_s": 0.00041246399996452965,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -3366,7 +3366,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0005959889967925847,
+      "planning_time_s": 0.0005515090001608769,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -3440,7 +3440,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.00048413800323032774,
+      "planning_time_s": 0.0005160509999768692,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -3514,7 +3514,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0004832560007344,
+      "planning_time_s": 0.0005064130000391742,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -3588,7 +3588,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0006134010000096168,
+      "planning_time_s": 0.0006052509997971356,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -3662,7 +3662,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0006082920008338988,
+      "planning_time_s": 0.0005985279999549675,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -3736,7 +3736,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0007157130021369085,
+      "planning_time_s": 0.0007440639997184917,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -3810,7 +3810,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.000713147997885244,
+      "planning_time_s": 0.0007320420004361949,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -3884,7 +3884,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0008612559977336787,
+      "planning_time_s": 0.0008087979999800154,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -3958,7 +3958,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0008184860016626772,
+      "planning_time_s": 0.0008842219999678491,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -4032,7 +4032,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.000927589997445466,
+      "planning_time_s": 0.0010994209997079452,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -4106,7 +4106,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.000930215999687789,
+      "planning_time_s": 0.0009762569998201798,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -4180,7 +4180,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0006695459996990394,
+      "planning_time_s": 0.0006000809999022749,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -4254,7 +4254,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0005847969987371471,
+      "planning_time_s": 0.0005891309997423377,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -4328,7 +4328,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0009068319996003993,
+      "planning_time_s": 0.0009202100000038627,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -4402,7 +4402,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.000942568000027677,
+      "planning_time_s": 0.0009380640003655571,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -4476,7 +4476,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0012594530016940553,
+      "planning_time_s": 0.0013607870000669209,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -4550,7 +4550,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0012550350002129562,
+      "planning_time_s": 0.0012446870000530907,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -4624,7 +4624,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.001625469001737656,
+      "planning_time_s": 0.0020481450001170742,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -4698,7 +4698,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.001629708000109531,
+      "planning_time_s": 0.0016333660000782402,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -4772,7 +4772,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0019762090014410205,
+      "planning_time_s": 0.001971739000055095,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -4846,7 +4846,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0021670259993697982,
+      "planning_time_s": 0.0021810270000059973,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -4920,7 +4920,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.002433175999613013,
+      "planning_time_s": 0.0024496080000062648,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -4994,7 +4994,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.002391728001384763,
+      "planning_time_s": 0.0023254619995896064,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -5068,7 +5068,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0028138099987700116,
+      "planning_time_s": 0.002785316999961651,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -5142,7 +5142,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0028001639984722715,
+      "planning_time_s": 0.0026821000001291395,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -5216,7 +5216,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0005866610008524731,
+      "planning_time_s": 0.0005653349999192869,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -5290,7 +5290,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0005589190004684497,
+      "planning_time_s": 0.0005681399998138659,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -5364,7 +5364,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0008209499974327628,
+      "planning_time_s": 0.0007943810001052043,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -5438,7 +5438,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0008171529989340343,
+      "planning_time_s": 0.0008015739999791549,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -5512,7 +5512,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0010642470006132498,
+      "planning_time_s": 0.0010353679999752785,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -5586,7 +5586,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.001073354000254767,
+      "planning_time_s": 0.0010351089999858232,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -5660,7 +5660,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0013294849995872937,
+      "planning_time_s": 0.0013096299999233452,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -5734,7 +5734,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.001328632999502588,
+      "planning_time_s": 0.0013296590000209108,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -5808,7 +5808,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0015787420015840326,
+      "planning_time_s": 0.0015538249999735854,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -5882,7 +5882,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0016351280028175097,
+      "planning_time_s": 0.0015606079996359767,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -5956,7 +5956,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.001959877001354471,
+      "planning_time_s": 0.0018715989999691374,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -6030,7 +6030,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0019038430000364315,
+      "planning_time_s": 0.0018950130001940124,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -6104,7 +6104,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.greedy",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0022507030007545836,
+      "planning_time_s": 0.0021437169998534955,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -6178,7 +6178,7 @@
       "planner_engine": "opt_einsum",
       "planner_id": "opt_einsum.auto",
       "planner_kind": "external_path_optimizer",
-      "planning_time_s": 0.0021623280008498114,
+      "planning_time_s": 0.002126573999703396,
       "score_components": {
         "normalized": {
           "extra_tile_component": 0.0,
@@ -6233,7 +6233,7 @@
       "workload_id": "quest_hs_16q_planner"
     }
   ],
-  "run_id": "2026-07-10_19-29-59",
+  "run_id": "2026-07-12_14-17-40",
   "schema_version": "planner_comparison_v2",
   "scoring": {
     "formula": "per-case min-max normalized weighted pressure: transfer + memory + tiling + unsupported + missing estimates - conservative modeled/potential parallelism bonus",

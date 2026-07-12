@@ -7,7 +7,7 @@
   "environment_hash": "49c2e5dde58bb593be8d72701474a04634ecafdb603dae99303fa5fe4d630d88",
   "evidence_type": "benchmark_execution",
   "execution_scope": "suite_backend_comparison",
-  "git_commit": "4db930c1b4c62747e116083ed137149d39bd6e20",
+  "git_commit": "47794596c569396078b9e6d1d948d5a1f34165ba",
   "hardware_available": "not_checked",
   "normalized_records": "normalized_records.jsonl",
   "policies": [
@@ -21,7 +21,7 @@
   ],
   "route_id": null,
   "route_label": "simulation_backend_compare",
-  "run_id": "2026-07-10_19-31-26",
+  "run_id": "2026-07-12_14-17-56",
   "run_kind": "simulation_backend_compare",
   "schema_version": "run_manifest_v1",
   "schema_versions": {
@@ -36,7 +36,7 @@
   "suite_id": "research_internal_parallelism",
   "suite_path": "/home/tom/repos/Masters/thesis/implementation/configs/suites/manual/research_internal_parallelism.yml",
   "summary": "simulation_backend_compare_summary.json",
-  "timestamp": "2026-07-10T17:31:26.107110+00:00",
+  "timestamp": "2026-07-12T12:17:56.251679+00:00",
   "upmem_execution_mode": null,
   "upmem_sdk_available": "unknown"
 }

@@ -23,7 +23,7 @@
       "caption": "Performance-tier median QuEST CPU and verified QuEST GPU compute time by circuit size.",
       "plot": "cpu_gpu_runtime_by_qubits.png",
       "reason": null,
-      "size_bytes": 152570,
+      "size_bytes": 161742,
       "source_csv": "cpu_gpu_performance_summary.csv",
       "status": "generated",
       "title": "CPU/GPU runtime by qubits"
@@ -32,7 +32,7 @@
       "caption": "Performance-tier CPU/GPU compute speedup; values above 1 mean GPU faster.",
       "plot": "cpu_gpu_speedup_by_qubits.png",
       "reason": null,
-      "size_bytes": 127934,
+      "size_bytes": 150040,
       "source_csv": "cpu_gpu_performance_summary.csv",
       "status": "generated",
       "title": "CPU/GPU speedup by qubits"
@@ -41,7 +41,7 @@
       "caption": "Quimb CPU tensor-network timing; sliced and unsliced routes are separate execution modes.",
       "plot": "cpu_tn_runtime_by_qubits.png",
       "reason": null,
-      "size_bytes": 134828,
+      "size_bytes": 125185,
       "source_csv": "per_case_route_stats.csv",
       "status": "generated",
       "title": "CPU tensor-network runtime by qubits"
@@ -50,7 +50,7 @@
       "caption": "QuEST CPU full-state and Quimb CPU TN timing on the same shallow circuits; this is an algorithm/backend comparison, not same-plan speedup.",
       "plot": "full_state_vs_tn_runtime_by_qubits.png",
       "reason": null,
-      "size_bytes": 204563,
+      "size_bytes": 168322,
       "source_csv": "per_case_route_stats.csv",
       "status": "generated",
       "title": "QuEST full-state versus CPU tensor-network runtime"
@@ -59,7 +59,7 @@
       "caption": "Planning and contraction timing are reported separately for external CPU TN routes.",
       "plot": "tn_planning_vs_contraction.png",
       "reason": null,
-      "size_bytes": 200385,
+      "size_bytes": 179799,
       "source_csv": "per_case_route_stats.csv",
       "status": "generated",
       "title": "TN planning versus contraction time"
@@ -68,7 +68,7 @@
       "caption": "Reported contraction-plan FLOP estimates by circuit family and size.",
       "plot": "tn_path_flops_by_family_size.png",
       "reason": null,
-      "size_bytes": 150820,
+      "size_bytes": 134469,
       "source_csv": "per_case_route_stats.csv",
       "status": "generated",
       "title": "TN path estimated FLOPs"
@@ -77,7 +77,7 @@
       "caption": "Reported peak intermediate tensor bytes by circuit family and size.",
       "plot": "tn_path_peak_memory_by_family_size.png",
       "reason": null,
-      "size_bytes": 171500,
+      "size_bytes": 107618,
       "source_csv": "per_case_route_stats.csv",
       "status": "generated",
       "title": "TN path peak intermediate memory"
@@ -86,7 +86,7 @@
       "caption": "slicing_flop_ratio = sliced cotengra reported FLOPs / unsliced cotengra reported FLOPs.",
       "plot": "cpu_tn_slicing_flop_ratio.png",
       "reason": null,
-      "size_bytes": 81700,
+      "size_bytes": 66652,
       "source_csv": "per_case_route_stats.csv",
       "status": "generated",
       "title": "Quimb slicing FLOP ratio"
@@ -95,7 +95,7 @@
       "caption": "Supported versus unsupported strict generic-only UPMEM SDK simulator rows.",
       "plot": "upmem_supported_boundary.png",
       "reason": null,
-      "size_bytes": 72778,
+      "size_bytes": 76733,
       "source_csv": "per_case_route_stats.csv",
       "status": "generated",
       "title": "UPMEM SDK simulator support boundary"
@@ -104,7 +104,7 @@
       "caption": "Strict generic UPMEM SDK simulator max absolute error where validation data exists.",
       "plot": "upmem_accuracy_error.png",
       "reason": null,
-      "size_bytes": 45092,
+      "size_bytes": 52433,
       "source_csv": "per_case_route_stats.csv",
       "status": "generated",
       "title": "UPMEM SDK simulator accuracy"
@@ -113,16 +113,16 @@
       "caption": "Same-route float32 versus int8 ratios for strict generic UPMEM SDK simulator execution; this is not hardware speedup.",
       "plot": "upmem_quantization_attribution.png",
       "reason": null,
-      "size_bytes": 87975,
+      "size_bytes": 103226,
       "source_csv": "upmem_quantization_attribution.csv",
       "status": "generated",
       "title": "UPMEM generic quantization attribution"
     },
     {
-      "caption": "Same-plan SDK simulator float32/int8 route-time ratio; this is not hardware speedup.",
+      "caption": "Same-plan SDK simulator float32/int8 host-side residual-time ratio; this is not hardware speedup.",
       "plot": "quantization_runtime_by_executor.png",
       "reason": null,
-      "size_bytes": 47118,
+      "size_bytes": 58641,
       "source_csv": "upmem_quantization_attribution.csv",
       "status": "generated",
       "title": "Quantization route runtime attribution"
@@ -131,7 +131,7 @@
       "caption": "Same-plan float32/int8 host-DPU transfer-volume ratio.",
       "plot": "quantization_transfer_bytes.png",
       "reason": null,
-      "size_bytes": 45431,
+      "size_bytes": 56593,
       "source_csv": "upmem_quantization_attribution.csv",
       "status": "generated",
       "title": "Quantization transfer attribution"
@@ -140,7 +140,7 @@
       "caption": "Int8 maximum absolute error against the full-precision TaskGraph reference.",
       "plot": "quantization_error_by_family_size.png",
       "reason": null,
-      "size_bytes": 40033,
+      "size_bytes": 47579,
       "source_csv": "upmem_quantization_attribution.csv",
       "status": "generated",
       "title": "Quantization accuracy attribution"
@@ -149,7 +149,7 @@
       "caption": "CPU replay and UPMEM SDK simulator rows share an identical contraction-plan hash; timing is not hardware speedup.",
       "plot": "same_plan_cpu_upmem_runtime.png",
       "reason": null,
-      "size_bytes": 112567,
+      "size_bytes": 124600,
       "source_csv": "same_plan_execution.csv",
       "status": "generated",
       "title": "Same-plan CPU versus UPMEM SDK simulator runtime"

@@ -2,7 +2,7 @@
   "compiler": "cc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
   "cotengra": "0.7.5",
   "cpu_count": 12,
-  "git_commit": "4db930c1b4c62747e116083ed137149d39bd6e20",
+  "git_commit": "47794596c569396078b9e6d1d948d5a1f34165ba",
   "gpu": {
     "amd_smi": "/usr/bin/amd-smi",
     "cupy": null,

@@ -11,13 +11,13 @@
       "gpu_benchmark_records_emitted": false,
       "gpu_candidates": [
         {
-          "benchmark_route_eligible": true,
-          "blocker_reason": null,
-          "cached_verification_artifact_used": true,
+          "benchmark_route_eligible": false,
+          "blocker_reason": "missing_prerequisites:dev_kfd,dev_dri,dev_dri_render_node,rocminfo_gpu_agent",
+          "cached_verification_artifact_used": false,
           "candidate_category": "tailored_quantum_gpu",
           "candidate_id": "quest_gpu_full_state_hip",
-          "classification": "verified_cached_artifact",
-          "current_process_gpu_preflight_available": true,
+          "classification": "amd_rocm_candidate_not_verified",
+          "current_process_gpu_preflight_available": false,
           "detected_dependencies": {
             "hipcc": {
               "available": true,
@@ -35,7 +35,7 @@
           "evidence_paths": [
             "external/QuEST/CMakeLists.txt"
           ],
-          "gpu_execution_verified": true,
+          "gpu_execution_verified": false,
           "preferred_priority": 1,
           "source_support_is_not_benchmark_evidence": true,
           "target_gpu_stack": "amd_rocm",
@@ -240,7 +240,7 @@
           "target_gpu_stack": "amd_rocm"
         }
       ],
-      "gpu_execution_backend_added": true,
+      "gpu_execution_backend_added": false,
       "gpu_tensor_network_probe": {
         "candidate_count": 5,
         "gpu_tn_backend_route_added": false,
@@ -436,70 +436,13 @@
         "artifact_path": "/home/tom/repos/Masters/thesis/implementation/build/gpu_verification/quest_gpu_full_state_exact.json",
         "attempted_steps": [
           {
-            "status": "passed",
+            "status": "blocked",
             "step": "preflight"
-          },
-          {
-            "command": [
-              "make",
-              "clean-hip-smoke",
-              "hip-smoke",
-              "GPU_BACKEND=hip",
-              "HIP_ARCHITECTURES=gfx1032"
-            ],
-            "status": "passed",
-            "step": "build_hip_smoke"
-          },
-          {
-            "command": [
-              "/home/tom/repos/Masters/thesis/implementation/build/native/quest_gpu/hip/bin/hip_smoke"
-            ],
-            "status": "passed",
-            "step": "minimal_hip_smoke_run"
-          },
-          {
-            "command": [
-              "make",
-              "clean-all",
-              "all",
-              "GPU_BACKEND=hip",
-              "HIP_ARCHITECTURES=gfx1032"
-            ],
-            "status": "passed",
-            "step": "build_quest_gpu_runner"
-          },
-          {
-            "command": [
-              "/home/tom/repos/Masters/thesis/implementation/build/native/quest_gpu/hip/bin/quest_gpu_runner",
-              "--algo",
-              "QRNG",
-              "--qubits",
-              "2",
-              "--json",
-              "--dump-state-json",
-              "/home/tom/repos/Masters/thesis/implementation/build/gpu_verification/quest_gpu_minimal_state_dump.json",
-              "--max-output-amplitudes",
-              "4"
-            ],
-            "status": "passed",
-            "step": "minimal_quest_gpu_run"
           }
         ],
-        "blocker_reason": null,
-        "build_result_summary": {
-          "command": [
-            "make",
-            "clean-all",
-            "all",
-            "GPU_BACKEND=hip",
-            "HIP_ARCHITECTURES=gfx1032"
-          ],
-          "cwd": "/home/tom/repos/Masters/thesis/implementation/native/quest_gpu",
-          "returncode": 0,
-          "timeout_s": 300
-        },
+        "blocker_reason": "missing_prerequisites:dev_kfd,dev_dri,dev_dri_render_node,rocminfo_gpu_agent",
         "candidate_category": "tailored_quantum_gpu",
-        "created_at": "2026-07-10T17:16:46.326142+00:00",
+        "created_at": "2026-07-12T12:17:23.923345+00:00",
         "detected_dependencies": {
           "amd_gpu_pci": {
             "available": true
@@ -509,20 +452,18 @@
             "path": "/usr/bin/cmake"
           },
           "dev_dri": {
-            "available": true
+            "available": false
           },
           "dev_dri_renderD128": {
-            "available": true,
+            "available": false,
             "required": false
           },
           "dev_dri_render_node": {
-            "available": true,
-            "nodes": [
-              "/dev/dri/renderD128"
-            ]
+            "available": false,
+            "nodes": []
           },
           "dev_kfd": {
-            "available": true
+            "available": false
           },
           "hipcc": {
             "available": true,
@@ -537,97 +478,24 @@
             "path": "/usr/bin/rocminfo"
           },
           "rocminfo_gpu_agent": {
-            "available": true,
-            "gfx_targets": [
-              "gfx10",
-              "gfx1032"
-            ],
-            "returncode": 0
+            "available": false,
+            "gfx_targets": [],
+            "returncode": 1
           }
         },
-        "gpu_backend_verified": true,
-        "gpu_device_name": "AMD Radeon RX 6600 (gfx1032)",
-        "gpu_program_executed": true,
+        "gpu_backend_verified": false,
+        "gpu_program_executed": false,
         "gpu_runtime_stack": "amd_rocm",
-        "gpu_synchronized": true,
-        "gpu_toolkit_metadata": {
-          "amd_gpu_pci": {
-            "available": true
-          },
-          "cmake": {
-            "available": true,
-            "path": "/usr/bin/cmake"
-          },
-          "dev_dri": {
-            "available": true
-          },
-          "dev_dri_renderD128": {
-            "available": true,
-            "required": false
-          },
-          "dev_dri_render_node": {
-            "available": true,
-            "nodes": [
-              "/dev/dri/renderD128"
-            ]
-          },
-          "dev_kfd": {
-            "available": true
-          },
-          "hipcc": {
-            "available": true,
-            "path": "/usr/bin/hipcc"
-          },
-          "make": {
-            "available": true,
-            "path": "/usr/bin/make"
-          },
-          "rocminfo": {
-            "available": true,
-            "path": "/usr/bin/rocminfo"
-          },
-          "rocminfo_gpu_agent": {
-            "available": true,
-            "gfx_targets": [
-              "gfx10",
-              "gfx1032"
-            ],
-            "returncode": 0
-          }
-        },
-        "hip_smoke_payload": {
-          "device_count": 1,
-          "gcn_arch_name": "gfx1032",
-          "gpu_backend_verified": true,
-          "gpu_device_name": "AMD Radeon RX 6600",
-          "gpu_program_executed": true,
-          "multi_processor_count": 14,
-          "status": "ok",
-          "total_global_mem": 8573157376
-        },
-        "minimal_run_result_summary": {
-          "command": [
-            "/home/tom/repos/Masters/thesis/implementation/build/native/quest_gpu/hip/bin/quest_gpu_runner",
-            "--algo",
-            "QRNG",
-            "--qubits",
-            "2",
-            "--json",
-            "--dump-state-json",
-            "/home/tom/repos/Masters/thesis/implementation/build/gpu_verification/quest_gpu_minimal_state_dump.json",
-            "--max-output-amplitudes",
-            "4"
-          ],
-          "cwd": "/home/tom/repos/Masters/thesis/implementation/native/quest_gpu",
-          "returncode": 0,
-          "timeout_s": 60
-        },
+        "missing_prerequisites": [
+          "dev_kfd",
+          "dev_dri",
+          "dev_dri_render_node",
+          "rocminfo_gpu_agent"
+        ],
         "requested_backend": "quest-hip",
-        "runner_path": "/home/tom/repos/Masters/thesis/implementation/build/native/quest_gpu/hip/bin/quest_gpu_runner",
-        "runner_root": "/home/tom/repos/Masters/thesis/implementation/native/quest_gpu",
         "schema_version": "quest_gpu_verification_v1",
         "selected_backend": "quest-hip",
-        "status": "verified",
+        "status": "blocked",
         "verification_backend": "quest-hip",
         "verification_source": "cached_artifact"
       },
@@ -640,21 +508,16 @@
           "0a:00.0 VGA compatible controller: Advanced Micro Devices, Inc. [AMD/ATI] Navi 23 [Radeon RX 6600/6600 XT/6600M] (rev c7)",
           "0a:00.1 Audio device: Advanced Micro Devices, Inc. [AMD/ATI] Navi 21 HDMI Audio [Radeon RX 6800/6800 XT / 6900 XT]"
         ],
-        "dev_dri_present": true,
-        "dev_dri_renderD128_present": true,
-        "dev_dri_render_node_present": true,
-        "dev_dri_render_nodes": [
-          "/dev/dri/renderD128"
-        ],
-        "dev_kfd_present": true,
+        "dev_dri_present": false,
+        "dev_dri_renderD128_present": false,
+        "dev_dri_render_node_present": false,
+        "dev_dri_render_nodes": [],
+        "dev_kfd_present": false,
         "nvidia_gpu_pci_detected": false,
         "nvidia_gpu_pci_devices": [],
-        "rocminfo_gfx_targets": [
-          "gfx10",
-          "gfx1032"
-        ],
-        "rocminfo_gpu_agent_detected": true,
-        "rocminfo_returncode": 0
+        "rocminfo_gfx_targets": [],
+        "rocminfo_gpu_agent_detected": false,
+        "rocminfo_returncode": 1
       },
       "hipcc": {
         "available": true,
@@ -825,72 +688,28 @@
       },
       {
         "accelerator_kind": "gpu",
-        "available": true,
+        "available": false,
         "backend_family": "quest",
-        "can_return_output": true,
+        "can_return_output": false,
         "contraction_execution_target": "gpu",
         "execution_model": "full_state",
         "metadata": {
           "accelerator_kind": "amd_gpu",
-          "available": true,
+          "available": false,
           "default_max_output_qubits": 12,
           "deterministic_statevector_only": true,
-          "gpu_backend_verified": true,
-          "gpu_device_name": "AMD Radeon RX 6600 (gfx1032)",
-          "gpu_program_executed": true,
+          "gpu_backend_verified": false,
+          "gpu_device_name": null,
+          "gpu_program_executed": false,
           "gpu_records_require_real_gpu_execution": true,
           "gpu_runtime_stack": "amd_rocm",
-          "gpu_toolkit_metadata": {
-            "amd_gpu_pci": {
-              "available": true
-            },
-            "cmake": {
-              "available": true,
-              "path": "/usr/bin/cmake"
-            },
-            "dev_dri": {
-              "available": true
-            },
-            "dev_dri_renderD128": {
-              "available": true,
-              "required": false
-            },
-            "dev_dri_render_node": {
-              "available": true,
-              "nodes": [
-                "/dev/dri/renderD128"
-              ]
-            },
-            "dev_kfd": {
-              "available": true
-            },
-            "hipcc": {
-              "available": true,
-              "path": "/usr/bin/hipcc"
-            },
-            "make": {
-              "available": true,
-              "path": "/usr/bin/make"
-            },
-            "rocminfo": {
-              "available": true,
-              "path": "/usr/bin/rocminfo"
-            },
-            "rocminfo_gpu_agent": {
-              "available": true,
-              "gfx_targets": [
-                "gfx10",
-                "gfx1032"
-              ],
-              "returncode": 0
-            }
-          },
-          "reason": null,
+          "gpu_toolkit_metadata": null,
+          "reason": "missing_prerequisites:dev_kfd,dev_dri,dev_dri_render_node,rocminfo_gpu_agent",
           "verification_artifact": "/home/tom/repos/Masters/thesis/implementation/build/gpu_verification/quest_gpu_full_state_exact.json",
           "verification_backend": "quest-hip"
         },
         "output_contract": "statevector",
-        "reason": null,
+        "reason": "missing_prerequisites:dev_kfd,dev_dri,dev_dri_render_node,rocminfo_gpu_agent",
         "route_id": "quest_gpu_full_state_exact"
       },
       {
@@ -985,7 +804,7 @@
   ],
   "failed_case_count": 0,
   "gpu_benchmark_records_emitted": false,
-  "gpu_execution_backend_added": true,
+  "gpu_execution_backend_added": false,
   "measured_runs": 1,
   "metrics_only_record_count": 0,
   "normalized_records_artifact": "normalized_records.jsonl",

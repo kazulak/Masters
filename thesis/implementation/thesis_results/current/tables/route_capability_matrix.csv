@@ -1,10 +1,10 @@
 schema_version,route_id,benchmark_role,backend_family,execution_model,contraction_execution_target,accelerator_kind,upmem_execution_mode,record_count,completed_count,unsupported_count,validation_passed_count,gpu_verified_count,cpu_fallback_count,hardware_speedup_applicable_count
-research_benchmark_pack_v1,cpu_tn_einsum_exact,,,,cpu,,,22,22,0,6,0,0,0
+research_benchmark_pack_v1,cpu_tn_einsum_exact,,,,cpu,,,27,27,0,6,0,0,0
 research_benchmark_pack_v1,cpu_tn_frontier_exact,internal_frontier_diagnostic,cpu,tensor_network,cpu,none,,6,6,0,6,0,0,0
 research_benchmark_pack_v1,cpu_tn_hybrid_sliced_frontier_exact,internal_hybrid_diagnostic,cpu,tensor_network,cpu,none,,6,6,0,6,0,0,0
 research_benchmark_pack_v1,planner_candidate_model,contraction_path_candidate,opt_einsum,tensor_network_planning,modeled,none,,84,84,0,0,0,0,0
-research_benchmark_pack_v1,quest_cpu_full_state_exact,serious_full_state_baseline,quest,full_state,cpu,none,,366,366,0,366,0,0,0
+research_benchmark_pack_v1,quest_cpu_full_state_exact,serious_full_state_baseline,quest,full_state,cpu,none,,333,333,0,333,0,0,0
 research_benchmark_pack_v1,quest_gpu_full_state_exact,serious_gpu_full_state_baseline,quest,full_state,gpu,amd_gpu,,234,234,0,234,234,0,0
-research_benchmark_pack_v1,quimb_tn_exact,serious_external_tn_baseline,quimb,tensor_network,cpu,none,,126,126,0,126,0,0,0
-research_benchmark_pack_v1,quimb_tn_sliced_exact,explicit_slicing_evidence,quimb,tensor_network,cpu,none,,126,126,0,126,0,0,0
-research_benchmark_pack_v1,upmem_tn_runtime,strict_upmem_sdk_simulator_generic,upmem_sdk,tensor_network,upmem,,sdk_simulator,32,30,2,30,0,0,0
+research_benchmark_pack_v1,quimb_tn_exact,serious_external_tn_baseline,quimb,tensor_network,cpu,none,,93,93,0,93,0,0,0
+research_benchmark_pack_v1,quimb_tn_sliced_exact,explicit_slicing_evidence,quimb,tensor_network,cpu,none,,93,93,0,93,0,0,0
+research_benchmark_pack_v1,upmem_tn_runtime,strict_upmem_sdk_simulator_generic,upmem_sdk,tensor_network,upmem,,sdk_simulator,42,40,2,40,0,0,0

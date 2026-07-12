@@ -1,0 +1,84 @@
+_route_configs:
+- benchmark_role: internal_taskgraph_reference
+  id: cpu_tn_einsum_exact
+  options: {}
+  required: true
+  role: reference
+  route_limitation_scope: null
+  route_role_description: null
+_schema_version: 2
+_suite_path: /home/tom/repos/Masters/thesis/implementation/configs/suites/manual/thesis_upmem_quantization_stress.yml
+cases:
+- case_id: quantization_stress_4q_thesis_upmem
+  circuit:
+    kind: builtin
+    n_qubits: 4
+    name: quantization_stress
+    repeat_layers: 2
+  workload_id: quantization_stress_4q_thesis_upmem
+- case_id: quantization_stress_6q_thesis_upmem
+  circuit:
+    kind: builtin
+    n_qubits: 6
+    name: quantization_stress
+    repeat_layers: 2
+  workload_id: quantization_stress_6q_thesis_upmem
+- case_id: quantization_stress_8q_thesis_upmem
+  circuit:
+    kind: builtin
+    n_qubits: 8
+    name: quantization_stress
+    repeat_layers: 2
+  workload_id: quantization_stress_8q_thesis_upmem
+memory_guard_gib: 8
+metadata:
+  deterministic_unitary_only: true
+  execution_target: upmem
+  expected_memory_class: small_statevector
+  expected_runtime_class: manual_upmem_sdk_simulator
+  hardware_claim: none
+  hardware_speedup_applicable: false
+  hardware_timing_available: false
+  intended_use: thesis_evidence_upmem_quantization_stress
+  manual_invocation_required: true
+  notes: 'Strict generic-only UPMEM SDK simulator stress suite for the deterministic
+    quantization_stress circuit. The upmem-mvp-benchmark command generates an internal
+    CPU TaskGraph reference for validation; it does not feed runtime tensors. Run
+    both float32 and per-task int8 modes once. SDK simulator timing is not hardware
+    timing or hardware speedup.
+
+    '
+  purpose: thesis_upmem_sdk_simulator_generic_quantization_stress
+  reference_route: cpu_tn_einsum_exact
+  upmem_execution_mode: sdk_simulator
+  validation_method: full_statevector_quantized_tolerance
+  validation_tier: generic_float32_int8_stress
+planner:
+  engine: opt_einsum
+  optimize: greedy
+planner_comparison: {}
+repeats: 1
+route_policy:
+  fail_fast: false
+  routes:
+  - cpu_tn_einsum_exact
+schema_version: 2
+suite_id: thesis_upmem_quantization_stress
+thread_counts:
+- null
+timeout_s: 360
+tolerances:
+  l2_error: 2.0
+  max_abs_error: 0.25
+  max_rel_error: 10.0
+  min_fidelity: 0.0
+  norm_drift: 2.0
+validation:
+  reference_route: cpu_tn_einsum_exact
+  tolerances:
+    l2_error: 2.0
+    max_abs_error: 0.25
+    max_rel_error: 10.0
+    min_fidelity: 0.0
+    norm_drift: 2.0
+warmups: 0

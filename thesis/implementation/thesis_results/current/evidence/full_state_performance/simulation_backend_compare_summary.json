@@ -498,7 +498,7 @@
           "timeout_s": 300
         },
         "candidate_category": "tailored_quantum_gpu",
-        "created_at": "2026-07-10T17:16:46.326142+00:00",
+        "created_at": "2026-07-12T12:28:38.564440+00:00",
         "detected_dependencies": {
           "amd_gpu_pci": {
             "available": true

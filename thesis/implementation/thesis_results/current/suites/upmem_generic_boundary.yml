@@ -39,6 +39,18 @@ cases:
     n_qubits: 8
     name: QRNG
   workload_id: qrng_8q_thesis_upmem_boundary
+- case_id: qrng_13q_thesis_upmem_supported
+  circuit:
+    kind: builtin
+    n_qubits: 13
+    name: QRNG
+  workload_id: qrng_13q_thesis_upmem_supported
+- case_id: qrng_17q_thesis_upmem_feasibility_boundary
+  circuit:
+    kind: builtin
+    n_qubits: 17
+    name: QRNG
+  workload_id: qrng_17q_thesis_upmem_feasibility_boundary
 - case_id: bb84_4q_thesis_upmem
   circuit:
     kind: builtin
@@ -113,17 +125,17 @@ metadata:
   expected_runtime_class: manual_upmem_sdk_simulator
   intended_use: thesis_evidence_upmem_boundary
   manual_invocation_required: true
-  max_qubits: 8
+  max_qubits: 17
   notes: 'Thesis UPMEM SDK simulator boundary suite. Use with upmem-mvp-benchmark
     and quantization modes none,per_task_input_quantize to gather same-route float32
-    vs int8 generic TaskGraph evidence. QRNG 7q is the first rank-seven capability
-    case; QRNG 8q is the expected rank-cap boundary. SDK simulator timing is not hardware
-    timing or hardware speedup.
+    vs int8 generic TaskGraph evidence. QRNG 8q and QRNG 13q are expected supported
+    evidence cases; QRNG 17q is the explicit feasibility boundary and remains manual.
+    SDK simulator timing is not hardware timing or hardware speedup.
 
     '
   purpose: thesis_upmem_sdk_simulator_quantization_boundary
-  statevector_cap_amplitudes: 256
-  statevector_cap_qubits: 8
+  statevector_cap_amplitudes: 131072
+  statevector_cap_qubits: 17
   upmem_execution_mode: sdk_simulator
   validation_method: full_statevector_quantized_tolerance
   validation_tier: quantized_and_float32_codepath_boundary

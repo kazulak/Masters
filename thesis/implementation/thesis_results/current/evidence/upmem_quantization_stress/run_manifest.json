@@ -2,7 +2,7 @@
   "artifact_kind": "evidence_run",
   "artifact_retention": "compact",
   "backend_id": "upmem_sdk_simulator_generic_loop",
-  "command": "/home/tom/repos/Masters/thesis/implementation/src/quantum_bench/bench/__main__.py upmem-mvp-benchmark --suite configs/suites/manual/thesis_upmem_quantization_boundary.yml --policies generic-only --quantization-modes none,per_task_input_quantize --execute-external --artifact-retention compact",
+  "command": "/home/tom/repos/Masters/thesis/implementation/src/quantum_bench/bench/__main__.py upmem-mvp-benchmark --suite configs/suites/manual/thesis_upmem_quantization_stress.yml --policies generic-only --quantization-modes none,per_task_input_quantize --execute-external --artifact-retention compact",
   "dirty_tree": true,
   "environment_hash": "49c2e5dde58bb593be8d72701474a04634ecafdb603dae99303fa5fe4d630d88",
   "evidence_type": "sdk_simulator",
@@ -22,7 +22,7 @@
   ],
   "route_id": "upmem_tn_runtime",
   "route_label": "upmem_generic_both_modes",
-  "run_id": "2026-07-12_14-18-18",
+  "run_id": "2026-07-12_14-20-29",
   "run_kind": "upmem_mvp_benchmark",
   "schema_version": "run_manifest_v1",
   "schema_versions": {
@@ -34,10 +34,10 @@
     "report_run": "report_run_v1",
     "run_manifest": "run_manifest_v1"
   },
-  "suite_id": "thesis_upmem_quantization_boundary",
-  "suite_path": "/home/tom/repos/Masters/thesis/implementation/configs/suites/manual/thesis_upmem_quantization_boundary.yml",
+  "suite_id": "thesis_upmem_quantization_stress",
+  "suite_path": "/home/tom/repos/Masters/thesis/implementation/configs/suites/manual/thesis_upmem_quantization_stress.yml",
   "summary": "upmem_mvp_benchmark_summary.json",
-  "timestamp": "2026-07-12T12:18:18.095764+00:00",
+  "timestamp": "2026-07-12T12:20:29.698078+00:00",
   "upmem_execution_mode": "sdk_simulator",
   "upmem_sdk_available": "unknown"
 }
