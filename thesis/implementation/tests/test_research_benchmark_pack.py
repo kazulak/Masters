@@ -162,6 +162,25 @@ def test_research_pack_cpu_tn_plot_source_uses_actual_qubits() -> None:
     assert stats[0]["benchmark_n_qubits"] == 12
 
 
+def test_route_capability_matrix_uses_nonempty_route_metadata() -> None:
+    reference = _record("quest_bv_10q", "cpu_tn_einsum_exact", 0, target="cpu", total=1.0, compute=0.8)
+    reference["benchmark_role"] = ""
+    reference["backend_family"] = ""
+    reference["execution_model"] = ""
+    diagnostic = dict(reference)
+    diagnostic.update(
+        benchmark_role="internal_debug_baseline",
+        backend_family="cpu",
+        execution_model="tensor_network",
+    )
+
+    matrix = pack.route_capability_matrix([reference, diagnostic])
+
+    assert matrix[0]["benchmark_role"] == "internal_debug_baseline"
+    assert matrix[0]["backend_family"] == "cpu"
+    assert matrix[0]["execution_model"] == "tensor_network"
+
+
 def test_research_pack_rejects_unverified_gpu_and_fake_energy() -> None:
     good_cpu = _record("quest_bv_10q_research_perf", "quest_cpu_full_state_exact", 0, target="cpu", total=10.0, compute=8.0)
     bad_gpu = _record("quest_bv_10q_research_perf", "quest_gpu_full_state_exact", 0, target="gpu", total=5.0, compute=2.0)

@@ -1122,17 +1122,16 @@ def route_capability_matrix(records: list[JsonDict]) -> list[JsonDict]:
         grouped[str(record.get("route_id") or "unknown")].append(record)
     rows: list[JsonDict] = []
     for route_id, group in sorted(grouped.items()):
-        first = group[0]
         rows.append(
             {
                 "schema_version": SCHEMA_VERSION,
                 "route_id": route_id,
-                "benchmark_role": first.get("benchmark_role"),
-                "backend_family": first.get("backend_family"),
-                "execution_model": first.get("execution_model"),
-                "contraction_execution_target": first.get("contraction_execution_target"),
-                "accelerator_kind": first.get("accelerator_kind"),
-                "upmem_execution_mode": first.get("upmem_execution_mode"),
+                "benchmark_role": _first_present(group, "benchmark_role"),
+                "backend_family": _first_present(group, "backend_family"),
+                "execution_model": _first_present(group, "execution_model"),
+                "contraction_execution_target": _first_present(group, "contraction_execution_target"),
+                "accelerator_kind": _first_present(group, "accelerator_kind"),
+                "upmem_execution_mode": _first_present(group, "upmem_execution_mode"),
                 "record_count": len(group),
                 "completed_count": sum(1 for row in group if str(row.get("status")) in {"completed", "executable"}),
                 "unsupported_count": sum(1 for row in group if _is_unsupported(row)),
