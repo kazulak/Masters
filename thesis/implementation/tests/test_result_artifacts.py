@@ -200,6 +200,13 @@ def test_evidence_run_layout_and_compare_results_read_only_boundary(tmp_path: Pa
     assert manifest["route_label"] == "upmem_generic_int8"
     assert manifest["timestamp"]
     assert manifest["command"]
+    assert manifest["benchmark_source_commit"] is None
+    assert manifest["benchmark_source_worktree_dirty"] is None
+    assert manifest["repository_worktree_dirty"] is None
+    assert manifest["provenance_scope"] == "thesis/implementation"
+    assert manifest["git_commit"] == manifest["benchmark_source_commit"]
+    assert manifest["dirty_tree"] == manifest["benchmark_source_worktree_dirty"]
+    assert manifest["dirty_worktree"] == manifest["benchmark_source_worktree_dirty"]
 
     out_dir = tmp_path / "runs" / "comparisons" / "suite_a" / "quantization_attribution" / "manual"
     result = compare_results([run_dir], out_dir, comparison_type="quantization_attribution", root_dir=tmp_path)

@@ -22,7 +22,18 @@ from scripts.research_benchmark_pack import report_pack  # noqa: E402
 
 
 SNAPSHOT_SCHEMA_VERSION = "thesis_result_snapshot_v1"
+BENCHMARK_SOURCE_SCOPE = "thesis/implementation"
+PROVENANCE_ALIAS_DESCRIPTION = {
+    "git_commit": "alias of benchmark_source_commit",
+    "dirty_tree": "alias of benchmark_source_worktree_dirty",
+    "dirty_worktree": "alias of benchmark_source_worktree_dirty",
+}
 ROLE_BY_SUITE = {
+    "thesis_full_state_correctness": "full_state_correctness",
+    "thesis_full_state_cpu_gpu": "full_state_performance",
+    "thesis_cpu_tn_quimb": "cpu_tn",
+    "thesis_tn_paths_quantization": "tn_path_quantization",
+    "thesis_planner_compare": "planner_paths",
     "research_cpu_gpu_correctness": "full_state_correctness",
     "research_cpu_gpu": "full_state_performance",
     "research_cpu_tn": "cpu_tn",
@@ -78,14 +89,16 @@ def promote_snapshot(pack: Path, out: Path, *, allow_dirty: bool = False) -> int
     if not evidence_inputs:
         raise ValueError("research pack contains no evidence inputs")
 
-    head = _git("rev-parse", "HEAD")
-    dirty_worktree = bool(_git("status", "--short", "--", "."))
-    if not allow_dirty and dirty_worktree:
-        raise ValueError("tracked thesis snapshots require a clean worktree")
-    if not allow_dirty and str(pack_manifest.get("git_commit") or "") != head:
+    promotion_stage = _current_provenance()
+    report_stage = dict(promotion_stage)
+    head = promotion_stage["commit"]
+    if promotion_stage["benchmark_source_worktree_dirty"]:
+        raise ValueError("tracked thesis snapshots require a clean thesis/implementation source")
+    source_manifest = _manifest_provenance(pack_manifest, fallback_commit=head)
+    if not allow_dirty and source_manifest["commit"] != head:
         raise ValueError("research pack git commit does not match current HEAD")
-    if not allow_dirty and bool(pack_manifest.get("dirty_worktree")):
-        raise ValueError("research pack was generated from a dirty worktree")
+    if source_manifest["worktree_dirty"]:
+        raise ValueError("research pack was generated from dirty thesis/implementation source")
 
     staging = out.parent / f".{out.name}.staging"
     shutil.rmtree(staging, ignore_errors=True)
@@ -95,22 +108,48 @@ def promote_snapshot(pack: Path, out: Path, *, allow_dirty: bool = False) -> int
     used_roles: set[str] = set()
     for source in evidence_inputs:
         entry = _copy_evidence_capsule(source, staging, used_roles)
-        if not allow_dirty and entry["git_commit"] != head:
+        if not allow_dirty and entry["benchmark_source_commit"] != head:
             raise ValueError(f"evidence commit mismatch for {entry['role']}")
+        if entry["benchmark_source_worktree_dirty"]:
+            raise ValueError(f"evidence source is dirty for {entry['role']}")
         selected.append(entry)
 
     report_dir = staging / ".report"
     report_inputs = [staging / entry["snapshot_path"] for entry in selected]
     if report_pack(ROOT, report_dir, inputs=report_inputs, suite_filter=None) != 0:
         raise RuntimeError("snapshot report generation failed")
-    _install_report(report_dir, staging, provenance=pack_manifest)
+    _install_report(report_dir, staging, provenance=pack_manifest, report_stage=report_stage)
+
+    source_commit = source_manifest["commit"]
+    source_dirty = source_manifest["worktree_dirty"]
+    source_repository_dirty = source_manifest["repository_worktree_dirty"] or any(
+        entry["repository_worktree_dirty"] for entry in selected
+    )
+    provenance_stages = {
+        "benchmark_source": _stage(source_commit, source_dirty, source_repository_dirty),
+        "report_generation": _stage_from_provenance(report_stage),
+        "snapshot_promotion": _stage_from_provenance(promotion_stage),
+    }
 
     snapshot_manifest = {
         "schema_version": SNAPSHOT_SCHEMA_VERSION,
         "snapshot_id": "current",
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "git_commit": head,
-        "dirty_worktree": dirty_worktree,
+        # Legacy aliases remain source-scoped; repository dirtiness is carried
+        # separately so unrelated files cannot masquerade as dirty evidence.
+        "git_commit": source_commit,
+        "dirty_tree": source_dirty,
+        "dirty_worktree": source_dirty,
+        "benchmark_source_commit": source_commit,
+        "benchmark_source_worktree_dirty": source_dirty,
+        "repository_worktree_dirty": promotion_stage["repository_worktree_dirty"],
+        "provenance_scope": BENCHMARK_SOURCE_SCOPE,
+        "provenance_aliases": PROVENANCE_ALIAS_DESCRIPTION,
+        "report_generation_commit": report_stage["commit"],
+        "report_generation_worktree_dirty": report_stage["benchmark_source_worktree_dirty"],
+        "snapshot_promotion_commit": promotion_stage["commit"],
+        "snapshot_promotion_worktree_dirty": promotion_stage["benchmark_source_worktree_dirty"],
+        "provenance_stages": provenance_stages,
         "evidence_level": "normalized_report_regenerable",
         "raw_tensor_artifacts_included": False,
         "selected_evidence": selected,
@@ -148,6 +187,21 @@ def verify_snapshot(snapshot: Path) -> None:
                 raise ValueError(f"snapshot evidence file missing: {evidence / name}")
         if not any((evidence / "normalized_records.jsonl").read_text(encoding="utf-8").splitlines()):
             raise ValueError(f"snapshot has empty normalized records: {evidence}")
+        evidence_manifest = _read_json(evidence / "run_manifest.json")
+        # Legacy snapshots predate the scoped field and may contain a stale
+        # dirty_tree value from the run-generation worktree. Promotion still
+        # rejects that legacy evidence; verification remains compatible with
+        # already-tracked v1 snapshots until they are regenerated.
+        if "benchmark_source_worktree_dirty" in evidence_manifest and _manifest_provenance(evidence_manifest)["worktree_dirty"]:
+            raise ValueError(f"snapshot evidence has dirty thesis/implementation source: {evidence}")
+    if manifest.get("benchmark_source_worktree_dirty"):
+        raise ValueError("snapshot benchmark source is dirty")
+    if "provenance_stages" in manifest:
+        stages = manifest["provenance_stages"]
+        if not all(name in stages for name in ("benchmark_source", "report_generation", "snapshot_promotion")):
+            raise ValueError("snapshot provenance stages are incomplete")
+        if stages["benchmark_source"].get("worktree_dirty"):
+            raise ValueError("snapshot benchmark source stage is dirty")
     for forbidden in ("*.npy", "*.bin", "*.pyc"):
         if next(snapshot.rglob(forbidden), None) is not None:
             raise ValueError(f"snapshot contains forbidden artifact type: {forbidden}")
@@ -171,13 +225,14 @@ def regenerate_snapshot_report(snapshot: Path, *, root: Path = ROOT) -> int:
     inputs = [snapshot / str(entry["snapshot_path"]) for entry in manifest["selected_evidence"]]
     report_dir = snapshot.parent / f".{snapshot.name}.report"
     shutil.rmtree(report_dir, ignore_errors=True)
+    report_stage = _current_provenance()
     if report_pack(root, report_dir, inputs=inputs, suite_filter=None) != 0:
         raise RuntimeError("snapshot report regeneration failed")
     shutil.rmtree(snapshot / "tables", ignore_errors=True)
     shutil.rmtree(snapshot / "plots", ignore_errors=True)
     for name in ("README.md", "plot_manifest.json", "report_manifest.json"):
         (snapshot / name).unlink(missing_ok=True)
-    _install_report(report_dir, snapshot, provenance=manifest)
+    _install_report(report_dir, snapshot, provenance=manifest, report_stage=report_stage)
     _write_json(snapshot / "checksums.json", _checksums(snapshot, exclude={"checksums.json"}))
     verify_snapshot(snapshot)
     print(snapshot)
@@ -229,14 +284,26 @@ def _copy_evidence_capsule(source: Path, staging: Path, used_roles: set[str]) ->
         "role": role,
         "suite_id": suite_id,
         "run_id": str(run_manifest.get("run_id") or source.name),
-        "git_commit": str(run_manifest.get("git_commit") or ""),
+        "git_commit": _manifest_provenance(run_manifest)["commit"],
+        "dirty_tree": _manifest_provenance(run_manifest)["worktree_dirty"],
+        "dirty_worktree": _manifest_provenance(run_manifest)["worktree_dirty"],
+        "benchmark_source_commit": _manifest_provenance(run_manifest)["commit"],
+        "benchmark_source_worktree_dirty": _manifest_provenance(run_manifest)["worktree_dirty"],
+        "repository_worktree_dirty": _manifest_provenance(run_manifest)["repository_worktree_dirty"],
+        "provenance_scope": _manifest_provenance(run_manifest)["scope"],
         "record_count": records,
         "source_run": _relative_or_string(source),
         "snapshot_path": f"evidence/{role}",
     }
 
 
-def _install_report(report_dir: Path, staging: Path, *, provenance: dict[str, Any]) -> None:
+def _install_report(
+    report_dir: Path,
+    staging: Path,
+    *,
+    provenance: dict[str, Any],
+    report_stage: dict[str, Any] | None = None,
+) -> None:
     tables = staging / "tables"
     tables.mkdir()
     plots = report_dir / "plots"
@@ -249,12 +316,32 @@ def _install_report(report_dir: Path, staging: Path, *, provenance: dict[str, An
     shutil.copy2(report_dir / "benchmark_summary.md", staging / "README.md")
     shutil.copy2(report_dir / "plot_manifest.json", staging / "plot_manifest.json")
     report_manifest = _read_json(report_dir / "benchmark_manifest.json")
+    source_provenance = _manifest_provenance(provenance)
+    report_stage = report_stage or _manifest_provenance(report_manifest)
     report_manifest["root"] = "."
     report_manifest["evidence_inputs"] = sorted(path.relative_to(staging).as_posix() for path in (staging / "evidence").iterdir())
     report_manifest["command_line"] = "make thesis-report"
-    report_manifest["git_commit"] = provenance.get("git_commit")
-    report_manifest["dirty_worktree"] = bool(provenance.get("dirty_worktree", False))
-    report_manifest["provenance_scope"] = "selected_evidence"
+    report_manifest.update(
+        {
+            "git_commit": source_provenance["commit"],
+            "dirty_tree": source_provenance["worktree_dirty"],
+            "dirty_worktree": source_provenance["worktree_dirty"],
+            "benchmark_source_commit": source_provenance["commit"],
+            "benchmark_source_worktree_dirty": source_provenance["worktree_dirty"],
+            "repository_worktree_dirty": report_stage["repository_worktree_dirty"],
+            "provenance_scope": BENCHMARK_SOURCE_SCOPE,
+            "provenance_aliases": PROVENANCE_ALIAS_DESCRIPTION,
+            "provenance_stage": "report_generation",
+            "provenance_stages": {
+                "benchmark_source": _stage(
+                    source_provenance["commit"],
+                    source_provenance["worktree_dirty"],
+                    source_provenance["repository_worktree_dirty"],
+                ),
+                "report_generation": _stage_from_provenance(report_stage),
+            },
+        }
+    )
     _write_json(staging / "report_manifest.json", report_manifest)
     shutil.rmtree(report_dir)
 
@@ -285,6 +372,40 @@ def _read_json(path: Path) -> dict[str, Any]:
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _manifest_provenance(manifest: dict[str, Any], *, fallback_commit: str | None = None) -> dict[str, Any]:
+    return {
+        "commit": str(manifest.get("benchmark_source_commit") or manifest.get("git_commit") or fallback_commit or ""),
+        "worktree_dirty": bool(
+            manifest.get("benchmark_source_worktree_dirty")
+            if manifest.get("benchmark_source_worktree_dirty") is not None
+            else manifest.get("dirty_tree", manifest.get("dirty_worktree", False))
+        ),
+        "repository_worktree_dirty": bool(manifest.get("repository_worktree_dirty", False)),
+        "scope": str(manifest.get("provenance_scope") or BENCHMARK_SOURCE_SCOPE),
+    }
+
+
+def _stage(commit: str, worktree_dirty: bool, repository_worktree_dirty: bool) -> dict[str, Any]:
+    return {
+        "commit": commit,
+        "worktree_dirty": bool(worktree_dirty),
+        "repository_worktree_dirty": bool(repository_worktree_dirty),
+        "scope": BENCHMARK_SOURCE_SCOPE,
+    }
+
+
+def _stage_from_provenance(provenance: dict[str, Any]) -> dict[str, Any]:
+    return _stage(provenance["commit"], provenance["benchmark_source_worktree_dirty"], provenance["repository_worktree_dirty"])
+
+
+def _current_provenance() -> dict[str, Any]:
+    return {
+        "commit": _git("rev-parse", "HEAD"),
+        "benchmark_source_worktree_dirty": bool(_git("status", "--short", "--", f":(top){BENCHMARK_SOURCE_SCOPE}")),
+        "repository_worktree_dirty": bool(_git("status", "--short", "--", ":(top)**")),
+    }
 
 
 def _git(*args: str) -> str:

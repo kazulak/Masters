@@ -42,15 +42,15 @@ jobs:
       - name: Check thesis shortcut commands
         run: |
           cd thesis/implementation
-          make -n bench-cpu
-          make -n bench-gpu
-          make -n bench-upmem-sim
-          make -n research-plan
-          make -n thesis-run
-          make -n thesis-report
-          make -n thesis-verify
+          make PYTHON=python -n bench-cpu
+          make PYTHON=python -n bench-gpu
+          make PYTHON=python -n bench-upmem-sim
+          make PYTHON=python -n research-plan
+          make PYTHON=python -n thesis-run
+          make PYTHON=python -n thesis-report
+          make PYTHON=python -n thesis-verify
       - name: Verify tracked thesis snapshot
-        run: make -C thesis/implementation thesis-verify
+        run: make -C thesis/implementation PYTHON=python thesis-verify
       - name: Run smoke
         run: |
           cd thesis/implementation

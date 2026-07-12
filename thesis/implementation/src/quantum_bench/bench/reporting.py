@@ -30,6 +30,12 @@ ARTIFACT_RETENTION_SCHEMA_VERSION = "artifact_retention_v1"
 REPORT_RUN_SCHEMA_VERSION = "report_run_v1"
 COMPARE_RUNS_SCHEMA_VERSION = "compare_runs_v1"
 NORMALIZED_RECORDS_SCHEMA_VERSION = "normalized_records_v1"
+BENCHMARK_SOURCE_SCOPE = "thesis/implementation"
+PROVENANCE_ALIAS_DESCRIPTION = {
+    "git_commit": "alias of benchmark_source_commit",
+    "dirty_tree": "alias of benchmark_source_worktree_dirty",
+    "dirty_worktree": "alias of benchmark_source_worktree_dirty",
+}
 
 RETENTION_MODES = ("full", "compact")
 COMPACT_PRUNE_PATTERNS = (
@@ -465,14 +471,23 @@ def write_run_manifest(
     root_dir: Path | None = None,
 ) -> JsonDict:
     validate_retention_mode(artifact_retention)
+    provenance = _provenance(root_dir or run_dir)
     manifest = {
         "schema_version": RUN_MANIFEST_SCHEMA_VERSION,
         "artifact_kind": artifact_kind,
         "run_id": run_dir.name,
         "run_kind": run_kind,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "git_commit": _git_commit(root_dir or run_dir),
-        "dirty_tree": _git_dirty(root_dir or run_dir),
+        # Keep these names for consumers of the v1 manifest. They are now
+        # explicitly aliases for the benchmark source scope below.
+        "git_commit": provenance["benchmark_source_commit"],
+        "dirty_tree": provenance["benchmark_source_worktree_dirty"],
+        "dirty_worktree": provenance["benchmark_source_worktree_dirty"],
+        "benchmark_source_commit": provenance["benchmark_source_commit"],
+        "benchmark_source_worktree_dirty": provenance["benchmark_source_worktree_dirty"],
+        "repository_worktree_dirty": provenance["repository_worktree_dirty"],
+        "provenance_scope": provenance["provenance_scope"],
+        "provenance_aliases": PROVENANCE_ALIAS_DESCRIPTION,
         "suite_id": suite_id,
         "suite_path": suite_path,
         "route_label": route_label,
@@ -1951,9 +1966,22 @@ def _git_commit(root_dir: Path) -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
-def _git_dirty(root_dir: Path) -> bool | None:
+def _provenance(root_dir: Path) -> JsonDict:
+    source_dirty = _git_dirty(root_dir, scope=BENCHMARK_SOURCE_SCOPE)
+    return {
+        "benchmark_source_commit": _git_commit(root_dir),
+        "benchmark_source_worktree_dirty": source_dirty,
+        "repository_worktree_dirty": _git_dirty(root_dir, scope="**"),
+        "provenance_scope": BENCHMARK_SOURCE_SCOPE,
+    }
+
+
+def _git_dirty(root_dir: Path, *, scope: str | None = None) -> bool | None:
     try:
-        result = subprocess.run(["git", "status", "--short"], cwd=root_dir, check=False, text=True, capture_output=True, timeout=5)
+        command = ["git", "status", "--short"]
+        if scope is not None:
+            command.extend(["--", f":(top){scope}"])
+        result = subprocess.run(command, cwd=root_dir, check=False, text=True, capture_output=True, timeout=5)
     except Exception:
         return None
     if result.returncode != 0:
