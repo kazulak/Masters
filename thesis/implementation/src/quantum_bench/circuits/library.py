@@ -121,6 +121,36 @@ def builtin_circuit(name: str, params: dict | None = None) -> CircuitSpec:
         ops = tuple(CircuitOperation("h", (wire,)) for wire in range(n))
         return CircuitSpec(f"qrng_{n}q", n, ops, _source(name, n_qubits=n))
 
+    if lowered in {"quantization_stress", "quantization-stress", "quant_stress"}:
+        n = n_qubits or 4
+        if n < 2:
+            raise ValueError("quantization_stress requires at least two qubits")
+        repeat_layers = int(params.get("repeat_layers", max(depth, 2)))
+        if repeat_layers < 1:
+            raise ValueError("quantization_stress repeat_layers must be >= 1")
+        # Keep the angles fixed across sizes so changes in the records are
+        # attributable to the circuit size and not generated parameters.
+        fixed_angles = (math.pi / 7, -math.pi / 5, math.pi / 3, -math.pi / 4, math.pi / 6, -math.pi / 8)
+        ops: list[CircuitOperation] = []
+        for layer in range(repeat_layers):
+            ops.extend(CircuitOperation("h", (wire,)) for wire in range(n))
+            ops.extend(CircuitOperation("rz", (wire,), (fixed_angles[wire % len(fixed_angles)],)) for wire in range(n))
+            ops.extend(CircuitOperation("cx", (wire, wire + 1)) for wire in range(n - 1))
+            if layer % 2 == 1:
+                ops.extend(CircuitOperation("rz", (wire,), (fixed_angles[(wire + 2) % len(fixed_angles)],)) for wire in range(n))
+        return CircuitSpec(
+            f"quantization_stress_{n}q",
+            n,
+            tuple(ops),
+            _source(
+                name,
+                n_qubits=n,
+                repeat_layers=repeat_layers,
+                deterministic_unitary=True,
+                measurement_mode="pre_measurement_statevector",
+            ),
+        )
+
     if lowered in {"bv", "bernstein_vazirani"}:
         n = n_qubits or 4
         ops: list[CircuitOperation] = [CircuitOperation("x", (n - 1,))]

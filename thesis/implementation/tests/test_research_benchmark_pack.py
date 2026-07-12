@@ -425,3 +425,73 @@ def test_research_pack_writes_lightweight_pack(tmp_path: Path) -> None:
     manifest = json.loads((out / "benchmark_manifest.json").read_text(encoding="utf-8"))
     assert manifest["artifact_kind"] == "research_benchmark_pack"
     assert not (tmp_path / "latest").exists()
+
+
+def test_research_pack_prefers_host_residual_for_upmem_attribution() -> None:
+    float32 = _generic_upmem_record("quantization_stress_4q_thesis_upmem", "none", total=10.0, compute=2.0, transfer=400)
+    int8 = _generic_upmem_record("quantization_stress_4q_thesis_upmem", "per_task_input_quantize", total=8.0, compute=1.0, transfer=100)
+    float32["total_host_residual_time_s"] = 4.0
+    int8["total_host_residual_time_s"] = 2.0
+
+    row = pack.upmem_quantization_attribution([float32, int8])[0]
+
+    assert row["unquantized_total_wall_time_s"] == 10.0
+    assert row["quantized_total_wall_time_s"] == 8.0
+    assert row["unquantized_host_residual_time_s"] == 4.0
+    assert row["quantized_host_residual_time_s"] == 2.0
+    assert row["route_runtime_ratio_none_over_quantized"] == 2.0
+
+
+def test_research_pack_prefers_full_precision_accuracy_but_keeps_execution_validation() -> None:
+    record = _generic_upmem_record("quantization_stress_4q_thesis_upmem", "per_task_input_quantize", total=2.0, compute=1.0, transfer=100)
+    record["validation_error_metrics"] = {"max_abs_error": 0.01, "l2_error": 0.02}
+    record["full_precision_max_abs_error"] = 0.25
+    record["full_precision_l2_error"] = 0.5
+
+    row = pack.per_case_route_stats([record])[0]
+
+    assert row["max_abs_error"] == 0.25
+    assert row["l2_error"] == 0.5
+    assert row["execution_max_abs_error"] == 0.01
+    assert row["execution_l2_error"] == 0.02
+
+
+def test_research_pack_readiness_is_record_derived() -> None:
+    supported = _generic_upmem_record("quantization_stress_6q_thesis_upmem", "none", total=2.0, compute=1.0, transfer=100)
+    supported["n_qubits"] = 6
+    supported["wram_output_tiled"] = True
+    unsupported = _generic_upmem_record("quantization_stress_8q_thesis_upmem", "none", total=0.0, compute=0.0, transfer=0)
+    unsupported.update(
+        {
+            "n_qubits": 8,
+            "status": "unsupported",
+            "validation_status": "skipped",
+            "unsupported_task_count": 1,
+            "resource_skip_reason": "generic_feasibility_rank_cap_exceeded",
+        }
+    )
+
+    lines = pack._upmem_readiness_lines([supported, unsupported], pack.unsupported_cases([unsupported]))
+    text = "\n".join(lines)
+
+    assert "6" in text
+    assert "quantization_stress_8q_thesis_upmem" in text
+    assert "generic_feasibility_rank_cap_exceeded" in text
+    assert "tiling support derived from records" in text.lower()
+    assert "lack of tiling" not in text.lower()
+    assert "rank-eight" not in text.lower()
+
+
+def test_research_pack_includes_manual_quantization_stress_suite() -> None:
+    suite = load_suite(pack.ROOT / "configs" / "suites" / "manual" / "thesis_upmem_quantization_stress.yml")
+
+    assert suite["repeats"] == 1
+    assert suite["metadata"]["reference_route"] == "cpu_tn_einsum_exact"
+    assert suite["metadata"]["hardware_claim"] == "none"
+    assert {case["circuit"]["name"] for case in suite["cases"]} == {"quantization_stress"}
+    assert {case["circuit"]["n_qubits"] for case in suite["cases"]} == {4, 6, 8}
+    argv = pack._research_suite_argv("upmem_quantization_stress", pack.ROOT)
+    assert argv[0] == "upmem-mvp-benchmark"
+    assert argv[argv.index("--policies") + 1] == "generic-only"
+    assert argv[argv.index("--quantization-modes") + 1] == "none,per_task_input_quantize"
+    assert "--execute-external" in argv

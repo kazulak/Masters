@@ -1,0 +1,56 @@
+schema_version: 2
+suite_id: thesis_upmem_quantization_stress
+
+metadata:
+  purpose: thesis_upmem_sdk_simulator_generic_quantization_stress
+  expected_runtime_class: manual_upmem_sdk_simulator
+  expected_memory_class: small_statevector
+  intended_use: thesis_evidence_upmem_quantization_stress
+  deterministic_unitary_only: true
+  manual_invocation_required: true
+  validation_tier: generic_float32_int8_stress
+  validation_method: full_statevector_quantized_tolerance
+  execution_target: upmem
+  upmem_execution_mode: sdk_simulator
+  reference_route: cpu_tn_einsum_exact
+  hardware_claim: none
+  hardware_speedup_applicable: false
+  hardware_timing_available: false
+  notes: >
+    Strict generic-only UPMEM SDK simulator stress suite for the deterministic
+    quantization_stress circuit. The upmem-mvp-benchmark command generates an
+    internal CPU TaskGraph reference for validation; it does not feed runtime
+    tensors. Run both float32 and per-task int8 modes once. SDK simulator
+    timing is not hardware timing or hardware speedup.
+
+defaults:
+  warmups: 0
+  repeats: 1
+  timeout_s: 360
+  memory_guard_gib: 8
+  planner:
+    engine: opt_einsum
+    optimize: greedy
+
+workloads:
+  - id: quantization_stress_4q_thesis_upmem
+    circuit: {kind: builtin, name: quantization_stress, n_qubits: 4, repeat_layers: 2}
+  - id: quantization_stress_6q_thesis_upmem
+    circuit: {kind: builtin, name: quantization_stress, n_qubits: 6, repeat_layers: 2}
+  - id: quantization_stress_8q_thesis_upmem
+    circuit: {kind: builtin, name: quantization_stress, n_qubits: 8, repeat_layers: 2}
+
+routes:
+  - id: cpu_tn_einsum_exact
+    role: reference
+    benchmark_role: internal_taskgraph_reference
+    required: true
+
+validation:
+  reference_route: cpu_tn_einsum_exact
+  tolerances:
+    max_abs_error: 2.5e-1
+    l2_error: 2.0
+    max_rel_error: 10.0
+    norm_drift: 2.0
+    min_fidelity: 0.0

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import warnings
 
 import numpy as np
 
@@ -160,6 +161,24 @@ def test_generic_preparation_rejects_complex_values_explicitly() -> None:
     assert result.status == "unsupported_shape"
     assert result.reason == "complex_generic_loop_not_implemented"
     assert result.prepared_operands is None
+
+
+def test_generic_preparation_counts_complex_source_bytes_without_complex_warning() -> None:
+    task = _task("complex_zero_imag")
+    left, right = _tensors(task)
+    left_array = np.asarray(left.array, dtype=np.complex128)
+    left = TensorValue(left.spec, left_array)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = prepare_generic_task(GenericTaskPreparationInput(task=task, left_tensor=left, right_tensor=right))
+
+    assert result.status == "prepared"
+    assert result.prepared_operands is not None
+    assert not any(issubclass(item.category, np.ComplexWarning) for item in caught)
+    assert result.metadata["full_precision_h2d_bytes_model"] == left_array.size * 8 + np.asarray(right.array).size * 4
+    assert result.metadata["full_precision_d2h_bytes_model"] == result.prepared_operands.full_precision_reference_output.size * 8
+    assert np.iscomplexobj(result.prepared_operands.full_precision_reference_output)
 
 
 def test_generic_preparation_rejects_int32_accumulation_overflow_risk() -> None:

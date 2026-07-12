@@ -22,6 +22,7 @@ from quantum_bench.targets.upmem.evidence import (
 from quantum_bench.targets.upmem.generic_bridge import execute_generic_bridge, write_generic_bridge_input_manifest
 from quantum_bench.tn.execution import frontier_waves, live_tensor_bytes, order_final_tensor, release_dead_inputs, remaining_input_uses
 from quantum_bench.tn.execution_bundle import execution_identity_metadata, executor_config_hash, with_execution_identity
+from quantum_bench.tn.contract import contract_binary_task
 from quantum_bench.tn.network import TensorNetworkValue
 from quantum_bench.validation import validate
 
@@ -285,6 +286,8 @@ def execute_upmem_taskgraph_runtime(
     execute_external: bool,
     reference_output: np.ndarray | None = None,
     reference_kind: str = "cpu_exact_taskgraph_full_precision",
+    full_precision_reference_output: np.ndarray | None = None,
+    full_precision_reference_kind: str = "cpu_exact_taskgraph_full_precision",
     env: Mapping[str, str] | None = None,
     schedule_mode: UpmemTaskGraphScheduleMode = "sequential",
     frontier_worker_count: int = 1,
@@ -343,8 +346,6 @@ def execute_upmem_taskgraph_runtime(
     schedule_waves = frontier_waves(graph) if schedule_mode == "frontier" else tuple((task,) for task in graph.tasks)
     scheduler_overhead_s = time.perf_counter() - scheduler_started
     frontier_widths = tuple(len(wave) for wave in schedule_waves)
-    max_frontier_width = max(frontier_widths, default=0)
-    mean_frontier_width = (sum(frontier_widths) / len(frontier_widths)) if frontier_widths else 0.0
     task_indices = {task.id: index for index, task in enumerate(graph.tasks)}
     completed_task_ids: set[str] = set()
     executed_task_ids: set[str] = set()
@@ -541,6 +542,11 @@ def execute_upmem_taskgraph_runtime(
 
     final_output, final_transposed = order_final_tensor(np.asarray(tensors[final_tensor_id]), final_labels, graph.network.output_labels)
     final_validation = _final_validation(final_output, reference_output, reference_kind=reference_kind)
+    final_full_precision_accuracy = _full_precision_accuracy(
+        final_output,
+        full_precision_reference_output,
+        reference_kind=full_precision_reference_kind,
+    )
     status: UpmemTaskGraphStatus = "completed" if final_validation.get("passed") else "validation_failed"
     reason = None if status == "completed" else "final_validation_failed"
     summary = _summary_payload(
@@ -554,6 +560,7 @@ def execute_upmem_taskgraph_runtime(
         kernel_family_counts=kernel_family_counts,
         backend_counts=backend_counts,
         final_validation=final_validation,
+        final_full_precision_accuracy=final_full_precision_accuracy,
         final_tensor_id=final_tensor_id,
         final_tensor_labels=final_labels,
         final_transpose_applied=final_transposed,
@@ -855,6 +862,7 @@ def _execute_generic_split_complex_task(
 
     output = (outputs["ar_br"] - outputs["ai_bi"]) + 1j * (outputs["ar_bi"] + outputs["ai_br"])
     expected_complex = (expected["ar_br"] - expected["ai_bi"]) + 1j * (expected["ar_bi"] + expected["ai_br"])
+    full_precision_error = conversion_error_metrics(contract_binary_task(task, left, right), expected_complex)
     validation = conversion_error_metrics(expected_complex, output)
     tolerance = 1.0e-5 if quantization_mode == "none" else 1.0e-8
     metric = _base_task_metric(
@@ -879,6 +887,12 @@ def _execute_generic_split_complex_task(
             "relative_l2_error": validation.relative_l2_error,
             "passed": validation.max_abs_error <= tolerance,
             "max_abs_tolerance": tolerance,
+        },
+        full_precision_metrics={
+            "reference_kind": "full_precision_vs_expected_quantized_reference",
+            "max_abs_error": full_precision_error.max_abs_error,
+            "l2_error": full_precision_error.l2_error,
+            "relative_l2_error": full_precision_error.relative_l2_error,
         },
     )
     metric["bridge_artifact_path"] = _metric_artifact_path(bridge_dir)
@@ -1054,6 +1068,7 @@ def _generic_quantized_split_complex_reference(
         expected[name] = np.asarray(component_result["output"], dtype=np.float64)
 
     output = (expected["ar_br"] - expected["ai_bi"]) + 1j * (expected["ar_bi"] + expected["ai_br"])
+    full_precision_error = conversion_error_metrics(contract_binary_task(task, left, right), output)
     metric = _generic_reference_base_task_metric(
         case_id,
         task_index,
@@ -1071,6 +1086,12 @@ def _generic_quantized_split_complex_reference(
             "max_abs_error": 0.0,
             "l2_error": 0.0,
             "relative_l2_error": 0.0,
+        },
+        full_precision_metrics={
+            "reference_kind": "full_precision_vs_expected_quantized_reference",
+            "max_abs_error": full_precision_error.max_abs_error,
+            "l2_error": full_precision_error.l2_error,
+            "relative_l2_error": full_precision_error.relative_l2_error,
         },
     )
     metric["split_complex_component_count"] = 4
@@ -1150,10 +1171,13 @@ def _generic_reference_base_task_metric(
     component_metrics: JsonDict | None = None,
     complex_representation: str | None = None,
     validation_metrics: JsonDict | None = None,
+    full_precision_metrics: JsonDict | None = None,
 ) -> JsonDict:
     output_array = np.asarray(output) if output is not None else None
     native_metadata = dict((preparation or {}).get("native_index_metadata") or {})
     prep_metadata = dict((preparation or {}).get("metadata") or {})
+    conversion_summary = _conversion_summary(preparation=preparation, component_metrics=component_metrics)
+    full_precision_metrics = _full_precision_metrics(full_precision_metrics, preparation)
     return to_jsonable(
         {
             "schema_version": GENERIC_QUANTIZED_TASKGRAPH_REFERENCE_TASK_SCHEMA_VERSION,
@@ -1174,12 +1198,16 @@ def _generic_reference_base_task_metric(
             "right_labels": task.right_labels,
             "contracted_labels": task.contracted_labels,
             "output_labels": task.output_labels,
-            "complex_representation": complex_representation or ("real" if output_array is not None and not np.iscomplexobj(output_array) else None),
             "complex_quantization_scope": "per_task_operands" if complex_representation else None,
             "reference_kind": "generic_quantized_task_reference",
             "selected_kernel_family": prep_metadata.get("kernel_family", "generic_loop_fallback"),
             "validation_target": prep_metadata.get("validation_target", "expected_quantized_reference_output"),
             "full_precision_reference_is_validation_target": False,
+            **_full_precision_metric_fields(full_precision_metrics),
+            **conversion_summary,
+            "complex_representation": complex_representation
+            or conversion_summary.get("complex_representation")
+            or ("real" if output_array is not None and not np.iscomplexobj(output_array) else None),
             "quantization_mode": prep_metadata.get("quantization_mode"),
             "operand_mode": prep_metadata.get("operand_mode"),
             "input_dtype_on_dpu": prep_metadata.get("input_dtype_on_dpu"),
@@ -1325,6 +1353,7 @@ def _base_task_metric(
     component_metrics: JsonDict | None = None,
     complex_representation: str | None = None,
     validation_metrics: JsonDict | None = None,
+    full_precision_metrics: JsonDict | None = None,
     dense_reject_reason: str | None = None,
 ) -> JsonDict:
     output_array = np.asarray(output) if output is not None else None
@@ -1337,6 +1366,8 @@ def _base_task_metric(
     actual_d2h_bytes = bridge_metadata.get("actual_d2h_bytes", prep_metadata.get("actual_d2h_bytes_model"))
     full_precision_h2d_bytes = prep_metadata.get("full_precision_h2d_bytes_model", bridge_metadata.get("full_precision_h2d_bytes_model"))
     full_precision_d2h_bytes = prep_metadata.get("full_precision_d2h_bytes_model", bridge_metadata.get("full_precision_d2h_bytes_model"))
+    conversion_summary = _conversion_summary(preparation=preparation, component_metrics=component_metrics)
+    full_precision_metrics = _full_precision_metrics(full_precision_metrics, preparation)
     return to_jsonable(
         {
             "schema_version": UPMEM_TASKGRAPH_TASK_METRIC_SCHEMA_VERSION,
@@ -1366,8 +1397,12 @@ def _base_task_metric(
             "mram_tiled_task_count": bridge_metadata.get("mram_tiled_task_count", prep_metadata.get("mram_tiled_task_count", 0)),
             "mram_read_bytes_model": bridge_metadata.get("mram_read_bytes_model", prep_metadata.get("mram_read_bytes_model", 0)),
             "mram_write_bytes_model": bridge_metadata.get("mram_write_bytes_model", prep_metadata.get("mram_write_bytes_model", 0)),
-            "complex_representation": complex_representation or ("real" if output_array is not None and not np.iscomplexobj(output_array) else None),
             "complex_quantization_scope": "per_task_operands" if complex_representation else None,
+            **_full_precision_metric_fields(full_precision_metrics),
+            **conversion_summary,
+            "complex_representation": complex_representation
+            or conversion_summary.get("complex_representation")
+            or ("real" if output_array is not None and not np.iscomplexobj(output_array) else None),
             "contraction_execution_target": CONTRACTION_EXECUTION_TARGET,
             "upmem_execution_mode": UPMEM_EXECUTION_MODE,
             "dpu_program_executed": status == "completed",
@@ -1489,6 +1524,7 @@ def _summary_payload(
     kernel_family_counts: dict[str, int],
     backend_counts: dict[str, int],
     final_validation: JsonDict,
+    final_full_precision_accuracy: JsonDict | None = None,
     final_tensor_id: str,
     final_tensor_labels: tuple[int, ...],
     final_transpose_applied: bool,
@@ -1519,6 +1555,12 @@ def _summary_payload(
     total_full_precision_d2h_bytes = sum(int(row.get("full_precision_d2h_bytes_model", 0) or 0) for row in task_metrics)
     total_actual_transfer_bytes = total_actual_h2d_bytes + total_actual_d2h_bytes
     total_full_precision_transfer_bytes = total_full_precision_h2d_bytes + total_full_precision_d2h_bytes
+    total_clipping = sum(int(row.get("quantization_clipping_count", 0) or 0) for row in task_metrics)
+    total_saturation = sum(int(row.get("quantization_saturation_count", 0) or 0) for row in task_metrics)
+    total_left_clipping = sum(int(row.get("left_quantization_clipping_count", 0) or 0) for row in task_metrics)
+    total_right_clipping = sum(int(row.get("right_quantization_clipping_count", 0) or 0) for row in task_metrics)
+    total_left_saturation = sum(int(row.get("left_quantization_saturation_count", 0) or 0) for row in task_metrics)
+    total_right_saturation = sum(int(row.get("right_quantization_saturation_count", 0) or 0) for row in task_metrics)
     transfer_compression_ratio = (
         float(total_full_precision_transfer_bytes) / float(total_actual_transfer_bytes)
         if total_actual_transfer_bytes > 0
@@ -1588,6 +1630,11 @@ def _summary_payload(
             "final_tensor_labels": final_tensor_labels,
             "final_transpose_applied": final_transpose_applied,
             "final_validation": final_validation,
+            "final_full_precision_accuracy": final_full_precision_accuracy or _unavailable_full_precision_accuracy(),
+            "full_precision_reference_kind": (final_full_precision_accuracy or {}).get("full_precision_reference_kind"),
+            "full_precision_max_abs_error": (final_full_precision_accuracy or {}).get("full_precision_max_abs_error"),
+            "full_precision_l2_error": (final_full_precision_accuracy or {}).get("full_precision_l2_error"),
+            "full_precision_relative_l2_error": (final_full_precision_accuracy or {}).get("full_precision_relative_l2_error"),
             "total_wall_time_s": float(time.perf_counter() - started),
             "total_bridge_time_s": float(total_bridge_time_s),
             "total_kernel_time_s": float(total_kernel_time_s),
@@ -1602,6 +1649,19 @@ def _summary_payload(
             "full_precision_d2h_bytes_model": int(total_full_precision_d2h_bytes),
             "full_precision_transfer_bytes_model": int(total_full_precision_transfer_bytes),
             "transfer_compression_ratio": transfer_compression_ratio,
+            "left_quantization_clipping_count": int(total_left_clipping),
+            "right_quantization_clipping_count": int(total_right_clipping),
+            "quantization_clipping_count": int(total_clipping),
+            "left_quantization_saturation_count": int(total_left_saturation),
+            "right_quantization_saturation_count": int(total_right_saturation),
+            "quantization_saturation_count": int(total_saturation),
+            "left_quantization_scale": _unique_or_none(task_metrics, "left_quantization_scale"),
+            "right_quantization_scale": _unique_or_none(task_metrics, "right_quantization_scale"),
+            "quantization_scales": {
+                "left": [row.get("left_quantization_scale") for row in task_metrics if row.get("left_quantization_scale") is not None],
+                "right": [row.get("right_quantization_scale") for row in task_metrics if row.get("right_quantization_scale") is not None],
+            },
+            "complex_representation": _unique_or_none(task_metrics, "complex_representation"),
             "generic_kernel_strategy": _unique_or_none(task_metrics, "generic_kernel_strategy") or GENERIC_KERNEL_STRATEGY,
             "native_max_rank": _unique_or_none(task_metrics, "native_max_rank") or GENERIC_NATIVE_MAX_RANK,
             "native_max_tensor_elements": _unique_or_none(task_metrics, "native_max_tensor_elements") or GENERIC_NATIVE_MAX_TENSOR_ELEMENTS,
@@ -1636,6 +1696,37 @@ def _final_validation(output: np.ndarray, reference_output: np.ndarray | None, *
             "l2_error": result.l2_error,
         }
     )
+
+
+def _unavailable_full_precision_accuracy() -> JsonDict:
+    return {
+        "full_precision_reference_kind": None,
+        "full_precision_max_abs_error": None,
+        "full_precision_l2_error": None,
+        "full_precision_relative_l2_error": None,
+        "available": False,
+    }
+
+
+def _full_precision_accuracy(
+    output: np.ndarray,
+    reference_output: np.ndarray | None,
+    *,
+    reference_kind: str,
+) -> JsonDict:
+    if reference_output is None:
+        return {
+            **_unavailable_full_precision_accuracy(),
+            "full_precision_reference_kind": reference_kind,
+        }
+    metrics = conversion_error_metrics(reference_output, output)
+    return {
+        "full_precision_reference_kind": reference_kind,
+        "full_precision_max_abs_error": metrics.max_abs_error,
+        "full_precision_l2_error": metrics.l2_error,
+        "full_precision_relative_l2_error": metrics.relative_l2_error,
+        "available": True,
+    }
 
 
 def _stop_result(
@@ -1722,6 +1813,91 @@ def _unique_or_none(rows: list[JsonDict], key: str) -> object | None:
     if not values:
         return None
     return "mixed"
+
+
+def _full_precision_metric_fields(metrics: JsonDict) -> JsonDict:
+    return {
+        "full_precision_reference_kind": metrics.get("reference_kind"),
+        "full_precision_max_abs_error": metrics.get("max_abs_error"),
+        "full_precision_l2_error": metrics.get("l2_error"),
+        "full_precision_relative_l2_error": metrics.get("relative_l2_error"),
+    }
+
+
+def _full_precision_metrics(explicit: JsonDict | None, preparation: JsonDict | None) -> JsonDict:
+    metrics = dict(explicit or (preparation or {}).get("full_precision_error_metrics") or {})
+    if metrics:
+        return metrics
+    dense_validation = dict((preparation or {}).get("validation_metrics") or {})
+    if "dequantized_output_max_abs_error" not in dense_validation:
+        return {}
+    return {
+        "reference_kind": "full_precision_reference_vs_dequantized_output",
+        "max_abs_error": dense_validation.get("dequantized_output_max_abs_error"),
+        "l2_error": dense_validation.get("dequantized_output_l2_error"),
+        "relative_l2_error": dense_validation.get("dequantized_output_relative_l2_error"),
+    }
+
+
+def _conversion_summary(
+    *,
+    preparation: JsonDict | None,
+    component_metrics: JsonDict | None,
+) -> JsonDict:
+    records = dict((preparation or {}).get("conversion_records") or {})
+    if records:
+        left = dict(records.get("left") or {})
+        right = dict(records.get("right") or {})
+        return {
+            "complex_representation": (
+                "split_real_imag"
+                if left.get("representation") == "split_complex_real_imag"
+                or right.get("representation") == "split_complex_real_imag"
+                else "real"
+            ),
+            "left_quantization_scale": left.get("scale"),
+            "right_quantization_scale": right.get("scale"),
+            "quantization_scales": {"left": left.get("scale"), "right": right.get("scale")},
+            "left_quantization_clipping_count": int(left.get("clipping_count", 0) or 0),
+            "right_quantization_clipping_count": int(right.get("clipping_count", 0) or 0),
+            "quantization_clipping_count": int(left.get("clipping_count", 0) or 0)
+            + int(right.get("clipping_count", 0) or 0),
+            "left_quantization_saturation_count": int(left.get("saturation_count", 0) or 0),
+            "right_quantization_saturation_count": int(right.get("saturation_count", 0) or 0),
+            "quantization_saturation_count": int(left.get("saturation_count", 0) or 0)
+            + int(right.get("saturation_count", 0) or 0),
+        }
+
+    component_rows = [row for row in (component_metrics or {}).values() if isinstance(row, dict)]
+    if not component_rows:
+        return {
+            "complex_representation": _unique_or_none(component_rows, "complex_representation"),
+            "left_quantization_scale": None,
+            "right_quantization_scale": None,
+            "quantization_scales": None,
+            "left_quantization_clipping_count": 0,
+            "right_quantization_clipping_count": 0,
+            "quantization_clipping_count": 0,
+            "left_quantization_saturation_count": 0,
+            "right_quantization_saturation_count": 0,
+            "quantization_saturation_count": 0,
+        }
+    left_scales = [row.get("left_quantization_scale") for row in component_rows if row.get("left_quantization_scale") is not None]
+    right_scales = [row.get("right_quantization_scale") for row in component_rows if row.get("right_quantization_scale") is not None]
+    left_scale = left_scales[0] if left_scales and all(value == left_scales[0] for value in left_scales) else None
+    right_scale = right_scales[0] if right_scales and all(value == right_scales[0] for value in right_scales) else None
+    return {
+        "complex_representation": _unique_or_none(component_rows, "complex_representation"),
+        "left_quantization_scale": left_scale,
+        "right_quantization_scale": right_scale,
+        "quantization_scales": {"left": left_scales, "right": right_scales},
+        "left_quantization_clipping_count": sum(int(row.get("left_quantization_clipping_count", 0) or 0) for row in component_rows),
+        "right_quantization_clipping_count": sum(int(row.get("right_quantization_clipping_count", 0) or 0) for row in component_rows),
+        "quantization_clipping_count": sum(int(row.get("quantization_clipping_count", 0) or 0) for row in component_rows),
+        "left_quantization_saturation_count": sum(int(row.get("left_quantization_saturation_count", 0) or 0) for row in component_rows),
+        "right_quantization_saturation_count": sum(int(row.get("right_quantization_saturation_count", 0) or 0) for row in component_rows),
+        "quantization_saturation_count": sum(int(row.get("quantization_saturation_count", 0) or 0) for row in component_rows),
+    }
 
 
 def _inputs_available(task: ContractionTask, tensors: Mapping[str, np.ndarray]) -> bool:

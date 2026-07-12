@@ -350,7 +350,6 @@ def _run_case_policy(
     env: Mapping[str, str] | None,
 ) -> JsonDict:
     case_id = str(generated["case_id"])
-    workload_id = str(generated["workload_id"])
     child_rel = Path("cases") / sanitize(case_id) / sanitize(policy) / sanitize(quantization_mode)
     child_dir = run_dir / child_rel
     runtime_summary_rel = child_rel / "upmem_taskgraph_runtime_summary.json"
@@ -403,6 +402,8 @@ def _run_case_policy(
         execute_external=execute_external,
         reference_output=reference_output,
         reference_kind=reference_kind,
+        full_precision_reference_output=generated["reference_output"],
+        full_precision_reference_kind="cpu_exact_taskgraph_full_precision",
         env=env,
     )
     final_tensor_artifact = None
@@ -627,10 +628,27 @@ def _row_from_runtime_summary(
             "total_quantization_time_s": float(summary.get("total_quantization_time_s", 0.0) or 0.0),
             "total_dequantization_time_s": float(summary.get("total_dequantization_time_s", 0.0) or 0.0),
             "total_simulator_time_s": float(summary.get("total_kernel_time_s", 0.0) or 0.0),
-            "total_host_orchestration_time_s": max(
+            "total_host_orchestration_time_s": None,
+            "total_host_residual_time_s": max(
                 0.0,
                 float(summary.get("total_wall_time_s", 0.0) or 0.0) - float(summary.get("total_kernel_time_s", 0.0) or 0.0),
             ),
+            "host_residual_time_kind": "derived_wall_minus_simulator",
+            "total_build_time_s": float(summary.get("total_build_time_s", 0.0) or 0.0),
+            "left_quantization_clipping_count": summary.get("left_quantization_clipping_count"),
+            "right_quantization_clipping_count": summary.get("right_quantization_clipping_count"),
+            "quantization_clipping_count": summary.get("quantization_clipping_count"),
+            "left_quantization_saturation_count": summary.get("left_quantization_saturation_count"),
+            "right_quantization_saturation_count": summary.get("right_quantization_saturation_count"),
+            "quantization_saturation_count": summary.get("quantization_saturation_count"),
+            "left_quantization_scale": summary.get("left_quantization_scale"),
+            "right_quantization_scale": summary.get("right_quantization_scale"),
+            "quantization_scales": summary.get("quantization_scales"),
+            "complex_representation": summary.get("complex_representation"),
+            "full_precision_reference_kind": (summary.get("final_full_precision_accuracy") or {}).get("full_precision_reference_kind"),
+            "full_precision_max_abs_error": (summary.get("final_full_precision_accuracy") or {}).get("full_precision_max_abs_error"),
+            "full_precision_l2_error": (summary.get("final_full_precision_accuracy") or {}).get("full_precision_l2_error"),
+            "full_precision_relative_l2_error": (summary.get("final_full_precision_accuracy") or {}).get("full_precision_relative_l2_error"),
             "actual_h2d_bytes": int(summary.get("actual_h2d_bytes", 0) or 0),
             "actual_d2h_bytes": int(summary.get("actual_d2h_bytes", 0) or 0),
             "actual_transfer_bytes": int(summary.get("actual_transfer_bytes", 0) or 0),

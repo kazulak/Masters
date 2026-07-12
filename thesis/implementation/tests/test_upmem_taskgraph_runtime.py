@@ -257,6 +257,7 @@ def test_generic_only_runtime_validates_against_generic_quantized_reference(monk
         execute_external=True,
         reference_output=reference.output,
         reference_kind="generic_quantized_taskgraph_replay",
+        full_precision_reference_output=execute_task_sequence_np_einsum(graph, network)[0],
     )
 
     assert result.status == "completed"
@@ -264,6 +265,9 @@ def test_generic_only_runtime_validates_against_generic_quantized_reference(monk
     assert result.summary["generic_only_all_tasks_used_generic_backend"] is True
     assert result.summary["dpu_program_invocations"] == result.summary["total_tasks"]
     assert result.summary["runtime_tensor_sources_all_upmem_output_blobs"] is True
+    assert result.summary["final_validation"]["reference_kind"] == "generic_quantized_taskgraph_replay"
+    assert result.summary["final_full_precision_accuracy"]["full_precision_reference_kind"] == "cpu_exact_taskgraph_full_precision"
+    assert result.summary["final_full_precision_accuracy"]["full_precision_max_abs_error"] >= 0.0
 
 
 def test_generic_only_runtime_supports_float32_no_quant_mode(monkeypatch, tmp_path: Path) -> None:
@@ -307,6 +311,7 @@ def test_generic_split_complex_runtime_combines_four_real_calls(monkeypatch, tmp
         bridge_root=tmp_path / "bridge",
         execute_external=True,
         reference_output=reference,
+        full_precision_reference_output=reference,
     )
 
     assert result.status == "completed"
@@ -317,6 +322,15 @@ def test_generic_split_complex_runtime_combines_four_real_calls(monkeypatch, tmp
     assert metric["complex_quantization_scope"] == "per_task_operands"
     assert metric["split_complex_component_count"] == 4
     assert metric["bridge_validation_metrics"]["passed"] is True
+    assert metric["full_precision_reference_kind"] == "full_precision_vs_expected_quantized_reference"
+    assert metric["full_precision_max_abs_error"] >= 0.0
+    assert metric["quantization_clipping_count"] == sum(
+        component["quantization_clipping_count"] for component in metric["component_metrics"].values()
+    )
+    assert metric["left_quantization_scale"] is not None
+    assert metric["right_quantization_scale"] is not None
+    assert result.summary["final_full_precision_accuracy"]["full_precision_reference_kind"] == "cpu_exact_taskgraph_full_precision"
+    assert result.summary["final_full_precision_accuracy"]["full_precision_max_abs_error"] >= 0.0
     assert np.allclose(result.output, reference)
 
 

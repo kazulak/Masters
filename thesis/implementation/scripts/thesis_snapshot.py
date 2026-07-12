@@ -28,6 +28,7 @@ ROLE_BY_SUITE = {
     "research_cpu_tn": "cpu_tn",
     "research_planner_compare": "planner_paths",
     "thesis_upmem_quantization_boundary": "upmem_generic_boundary",
+    "thesis_upmem_quantization_stress": "upmem_quantization_stress",
     "research_internal_parallelism": "internal_parallelism",
 }
 REQUIRED_EVIDENCE_FILES = ("run_manifest.json", "environment.json", "normalized_records.jsonl")

@@ -76,19 +76,19 @@ machine metadata are also excluded from semantic hashes.
 
 | Layer | Active modules | Responsibility | Status |
 | --- | --- | --- | --- |
-| Circuit semantics | `src/quantum_bench/circuits/` | Deterministic circuit definitions and QuEST-compatible semantic mapping | Active |
-| TN lowering | `src/quantum_bench/tn/network.py` | Convert ordered gates into tensors, labels, and output convention | Active, thesis infrastructure |
-| Planning | `src/quantum_bench/tn/planners.py`, `task_graph.py` | Obtain contraction path and lower it into dependency tasks | Active |
-| Execution identity | `src/quantum_bench/tn/execution_bundle.py` | Canonical serialization and SHA-256 identities | Active, thesis contribution |
-| Serious full-state baseline | `providers/full_state/` + `external/QuEST` | QuEST CPU and verified GPU execution | Active |
-| Serious CPU TN baseline | `providers/exact_tn/quimb_tn.py` | Quimb/cotengra unsliced and sliced exact TN execution | Active |
-| Shared-plan CPU reference | `cpu_einsum.py`, `cpu_path_replay.py` | Execute the internal TaskGraph on CPU | Active; diagnostic/reference quality |
-| Strict UPMEM runtime | `targets/upmem/taskgraph_runtime.py` | Validate policy, dispatch every supported contraction, reject CPU fallback | Active, SDK simulator |
-| Native DPU programs | `native/upmem/simplepim/` | Dense and bounded generic host/DPU programs | Active, bounded |
-| UPMEM analysis | `targets/upmem/tile_plan.py`, `schedule.py`, planner scoring | Estimate transfer, tiling, frontier, and assignment pressure | Active but partly modeled |
-| Evidence writer | `bench/simulation_backend_compare.py`, `upmem_mvp_benchmark.py` | Run fixed suites and write canonical normalized evidence | Active |
-| Derived analysis | `scripts/research_benchmark_pack.py` | Statistics, claim guards, source CSVs, and plots | Active |
-| Thesis snapshot | `scripts/thesis_snapshot.py`, `thesis_runs.py` | Promote compact tracked evidence and prune stale generated runs | Active |
+| Circuit semantics | `thesis/implementation/src/quantum_bench/circuits/` | Deterministic circuit definitions and QuEST-compatible semantic mapping | Active |
+| TN lowering | `thesis/implementation/src/quantum_bench/tn/network.py` | Convert ordered gates into tensors, labels, and output convention | Active, thesis infrastructure |
+| Planning | `thesis/implementation/src/quantum_bench/tn/planners.py`, `task_graph.py` | Obtain contraction path and lower it into dependency tasks | Active |
+| Execution identity | `thesis/implementation/src/quantum_bench/tn/execution_bundle.py` | Canonical serialization and SHA-256 identities | Active, thesis contribution |
+| Serious full-state baseline | `thesis/implementation/src/quantum_bench/providers/full_state/` + `thesis/implementation/external/QuEST/` | QuEST CPU and verified GPU execution | Active |
+| Serious CPU TN baseline | `thesis/implementation/src/quantum_bench/providers/exact_tn/quimb_tn.py` | Quimb/cotengra unsliced and sliced exact TN execution | Active |
+| Shared-plan CPU reference | `thesis/implementation/src/quantum_bench/providers/exact_tn/cpu_einsum.py`, `cpu_path_replay.py` | Execute the internal TaskGraph on CPU | Active; diagnostic/reference quality |
+| Strict UPMEM runtime | `thesis/implementation/src/quantum_bench/targets/upmem/taskgraph_runtime.py` | Validate policy, dispatch every supported contraction, reject CPU fallback | Active, SDK simulator |
+| Native DPU programs | `thesis/implementation/native/upmem/simplepim/` | Dense and bounded generic host/DPU programs | Active, bounded |
+| UPMEM analysis | `thesis/implementation/src/quantum_bench/targets/upmem/tile_plan.py`, `schedule.py`, planner scoring | Estimate transfer, tiling, frontier, and assignment pressure | Active; execution coverage remains bounded |
+| Evidence writer | `thesis/implementation/src/quantum_bench/bench/simulation_backend_compare.py`, `upmem_mvp_benchmark.py` | Run fixed suites and write canonical normalized evidence | Active |
+| Derived analysis | `thesis/implementation/scripts/research_benchmark_pack.py` | Statistics, claim guards, source CSVs, and plots | Active |
+| Thesis snapshot | `thesis/implementation/scripts/thesis_snapshot.py`, `thesis_runs.py` | Promote compact tracked evidence and prune stale generated runs | Active |
 
 ## Route Roles And Claim Boundaries
 
@@ -124,16 +124,20 @@ flowchart TD
     V --> E[Normalized evidence<br/>traffic, timing, error, invocation counts]
 ```
 
-The strict generic baseline currently executes one contraction at a time through
-the implemented bounded single-DPU SDK-simulator strategy
-`mram_resident_output_tiled_v1`, with local rank/element contracts and output
-tiles bounded at 256 elements. The SDK simulator proves the native SDK control
-path and DPU program invocation, not physical PIM timing.
+Post-2E.65, the implementation has two explicit bounded tiling states. The
+planner exposes dense L1 direct and L2 single-DPU MRAM-resident/WRAM-tiled
+plans through `thesis/implementation/src/quantum_bench/targets/upmem/tile_plan.py`.
+The strict generic path executes `mram_resident_output_tiled_v1` with output
+tiles bounded at 256 elements. The dense bridge has an executable bounded
+L2 real-valued tiled path, while complex L2 and shapes outside the recorded
+contracts remain explicit boundaries. The SDK simulator proves the native SDK
+control path and DPU program invocation, not physical PIM timing.
 
 Current limitation:
 
-> Bounded generic UPMEM contraction exists, but fully general UPMEM TN
-> contraction does not yet exist.
+> Bounded generic and bounded tiled UPMEM contractions exist; fully general
+> UPMEM TN contraction, unrestricted layouts, and hardware timing do not yet
+> exist.
 
 ### Target Modular Architecture
 
@@ -141,7 +145,7 @@ Current limitation:
 | --- | --- | --- | --- |
 | UPMEM-aware path objective | Score FLOPs, peak intermediate size, transfers, tiling, and available DPU concurrency | Modeled scoring exists; planner integration is not final | Thesis contribution on top of `opt_einsum`/cotengra |
 | Kernel classifier/selector | Choose dense GEMM, generic tiled contraction, permutation/layout, sparse, or collective path | Dense/generic routing scaffolding exists | Thesis architecture |
-| Tiled generic contraction | Stream operands/output through MRAM/WRAM under explicit caps | Implemented, bounded single-DPU SDK-simulator strategy | UPMEM programming model, SimplePIM/ATiM ideas |
+| Tiled generic contraction | Stream operands/output through MRAM/WRAM under explicit caps | Implemented for bounded output tiling and bounded L2 dense real-valued execution; strict generic coverage remains capped | UPMEM programming model, SimplePIM/ATiM ideas |
 | Gate-aware permutation kernels | Replace arithmetic by row/index permutation for gates where mathematically valid | Missing | PIMutation-inspired specialization, thesis adaptation to TN tasks |
 | Layout/transpose/slicing kernels | Avoid host materialization and enable bounded subproblems | Missing | Standard TN/PIM techniques; implementation is thesis work |
 | Quantization formats | Compare same-plan float32 and integer execution with explicit scale/error | Float32 and int8 generic modes exist | Thesis evaluation; motivated by weak DPU floating point |

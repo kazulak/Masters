@@ -248,6 +248,8 @@ def _prepare_generic_int8_task(
     metadata: JsonDict,
 ) -> GenericTaskPreparationResult:
     task = preparation.task
+    left_source_bytes = _float32_transfer_nbytes(preparation.left_tensor.array)
+    right_source_bytes = _float32_transfer_nbytes(preparation.right_tensor.array)
     quantization_started = _perf_counter()
     left_converted = quantize_fixed_point(left_array, preparation.fixed_point_spec)
     right_converted = quantize_fixed_point(right_array, preparation.fixed_point_spec)
@@ -322,8 +324,8 @@ def _prepare_generic_int8_task(
             "float32_reference_time_s": 0.0,
             "actual_h2d_bytes_model": int(left_converted.array.nbytes + right_converted.array.nbytes),
             "actual_d2h_bytes_model": int(int32_reference.nbytes),
-            "full_precision_h2d_bytes_model": int(left_array.astype(np.float32, copy=False).nbytes + right_array.astype(np.float32, copy=False).nbytes),
-            "full_precision_d2h_bytes_model": int(np.asarray(full_precision_reference, dtype=np.float32).nbytes),
+            "full_precision_h2d_bytes_model": left_source_bytes + right_source_bytes,
+            "full_precision_d2h_bytes_model": _float32_transfer_nbytes(full_precision_reference),
             **metadata,
         },
         prepared_operands=operands,
@@ -337,6 +339,8 @@ def _prepare_generic_float32_task(
     metadata: JsonDict,
 ) -> GenericTaskPreparationResult:
     task = preparation.task
+    left_source_bytes = _float32_transfer_nbytes(preparation.left_tensor.array)
+    right_source_bytes = _float32_transfer_nbytes(preparation.right_tensor.array)
     left_operand = np.asarray(left_array, dtype=np.float32)
     right_operand = np.asarray(right_array, dtype=np.float32)
     full_precision_reference = contract_binary_task(task, left_array, right_array)
@@ -405,8 +409,8 @@ def _prepare_generic_float32_task(
             "float32_reference_time_s": float(float32_reference_time_s),
             "actual_h2d_bytes_model": int(left_operand.nbytes + right_operand.nbytes),
             "actual_d2h_bytes_model": int(float32_reference.nbytes),
-            "full_precision_h2d_bytes_model": int(left_operand.nbytes + right_operand.nbytes),
-            "full_precision_d2h_bytes_model": int(float32_reference.nbytes),
+            "full_precision_h2d_bytes_model": left_source_bytes + right_source_bytes,
+            "full_precision_d2h_bytes_model": _float32_transfer_nbytes(full_precision_reference),
             **metadata,
         },
         prepared_operands=operands,
@@ -557,6 +561,13 @@ def _shape_product(shape: tuple[int, ...]) -> int:
     for dim in shape:
         product *= int(dim)
     return int(product)
+
+
+def _float32_transfer_nbytes(array: object) -> int:
+    """Model native float32 transfer without casting away complex components."""
+    value = np.asarray(array)
+    component_count = 2 if np.iscomplexobj(value) else 1
+    return int(value.size * component_count * np.dtype(np.float32).itemsize)
 
 
 def _decode_index(linear: int, shape: tuple[int, ...], strides: tuple[int, ...]) -> tuple[int, ...]:

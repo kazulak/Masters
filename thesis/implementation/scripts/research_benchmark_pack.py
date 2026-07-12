@@ -38,6 +38,7 @@ RESEARCH_SUITES = {
     # than the route-comparison suite.  The latter permits dense bridge tasks,
     # which is useful for route coverage but is not generic-TN boundary evidence.
     "upmem_boundary": ROOT / "configs" / "suites" / "manual" / "thesis_upmem_quantization_boundary.yml",
+    "upmem_quantization_stress": ROOT / "configs" / "suites" / "manual" / "thesis_upmem_quantization_stress.yml",
     "internal_parallelism": ROOT / "configs" / "suites" / "manual" / "research_internal_parallelism.yml",
 }
 
@@ -47,6 +48,7 @@ SUITE_COMMAND_ORDER = (
     "cpu_tn",
     "planner_paths",
     "upmem_boundary",
+    "upmem_quantization_stress",
     "internal_parallelism",
 )
 
@@ -327,6 +329,17 @@ PER_CASE_ROUTE_STATS_FIELDS = [
     "total_wall_time_s_min",
     "total_wall_time_s_max",
     "total_wall_time_s_std",
+    "total_host_residual_time_s_median",
+    "total_host_residual_time_s_mean",
+    "total_host_residual_time_s_min",
+    "total_host_residual_time_s_max",
+    "total_host_residual_time_s_std",
+    "reported_time_s_median",
+    "reported_time_s_mean",
+    "reported_time_s_min",
+    "reported_time_s_max",
+    "reported_time_s_std",
+    "timing_basis",
     "simulation_compute_time_s_median",
     "simulation_compute_time_s_mean",
     "simulation_compute_time_s_min",
@@ -348,6 +361,10 @@ PER_CASE_ROUTE_STATS_FIELDS = [
     "slicing_flop_change_kind",
     "max_abs_error",
     "l2_error",
+    "execution_max_abs_error",
+    "execution_l2_error",
+    "full_precision_max_abs_error",
+    "full_precision_l2_error",
     "hardware_speedup_applicable",
     "gpu_backend_verified",
     "gpu_device_name",
@@ -374,6 +391,8 @@ UPMEM_QUANTIZATION_ATTRIBUTION_FIELDS = [
     "same_kernel_family",
     "unquantized_total_wall_time_s",
     "quantized_total_wall_time_s",
+    "unquantized_host_residual_time_s",
+    "quantized_host_residual_time_s",
     "route_runtime_ratio_none_over_quantized",
     "unquantized_simulation_compute_time_s",
     "quantized_simulation_compute_time_s",
@@ -383,6 +402,10 @@ UPMEM_QUANTIZATION_ATTRIBUTION_FIELDS = [
     "transfer_ratio_none_over_quantized",
     "unquantized_max_abs_error_vs_full_precision",
     "quantized_max_abs_error_vs_full_precision",
+    "unquantized_execution_max_abs_error",
+    "quantized_execution_max_abs_error",
+    "unquantized_full_precision_max_abs_error",
+    "quantized_full_precision_max_abs_error",
     "accuracy_delta_quantized_minus_unquantized",
     "native_unquantized_upmem_kernel_executed",
 ]
@@ -552,11 +575,19 @@ def per_case_route_stats(records: list[JsonDict]) -> list[JsonDict]:
     for key, group in sorted(grouped.items(), key=lambda item: tuple(str(value) for value in item[0])):
         first = group[0]
         total_values = _numbers(row.get("total_wall_time_s") for row in group)
+        residual_values = _numbers(row.get("total_host_residual_time_s") for row in group)
+        reported_values = [_reported_time(row)[0] for row in group]
+        reported_values = [value for value in reported_values if value is not None]
         compute_values = _numbers(row.get("simulation_compute_time_s") for row in group)
         planning_values = _numbers(row.get("planning_time_s") for row in group)
         transfer_values = _numbers(row.get("actual_transfer_bytes") for row in group)
         family, qubits = _family_and_qubits(first)
         errors = [_validation_errors(row) for row in group]
+        full_precision_errors = [_full_precision_errors(row) for row in group]
+        selected_accuracy_errors = [
+            _accuracy_errors_for_reporting(row)
+            for row in group
+        ]
         rows.append(
             {
                 "schema_version": SCHEMA_VERSION,
@@ -587,6 +618,9 @@ def per_case_route_stats(records: list[JsonDict]) -> list[JsonDict]:
                 "timing_scope": first.get("timing_scope"),
                 "repeat_count": len(group),
                 **_stats("total_wall_time_s", total_values),
+                **_stats("total_host_residual_time_s", residual_values),
+                **_stats("reported_time_s", reported_values),
+                "timing_basis": _reported_timing_basis(group),
                 **_stats("simulation_compute_time_s", compute_values),
                 **_stats("planning_time_s", planning_values),
                 **_stats("actual_transfer_bytes", transfer_values),
@@ -598,8 +632,12 @@ def per_case_route_stats(records: list[JsonDict]) -> list[JsonDict]:
                 "slice_count": _first_present(group, "slice_count"),
                 "slicing_flop_ratio": _first_present(group, "slicing_flop_ratio"),
                 "slicing_flop_change_kind": _first_present(group, "slicing_flop_change_kind"),
-                "max_abs_error": _max_number(error.get("max_abs_error") for error in errors),
-                "l2_error": _max_number(error.get("l2_error") for error in errors),
+                "max_abs_error": _max_number(error.get("max_abs_error") for error in selected_accuracy_errors),
+                "l2_error": _max_number(error.get("l2_error") for error in selected_accuracy_errors),
+                "execution_max_abs_error": _max_number(error.get("max_abs_error") for error in errors),
+                "execution_l2_error": _max_number(error.get("l2_error") for error in errors),
+                "full_precision_max_abs_error": _max_number(error.get("max_abs_error") for error in full_precision_errors),
+                "full_precision_l2_error": _max_number(error.get("l2_error") for error in full_precision_errors),
                 "hardware_speedup_applicable": any(bool(row.get("hardware_speedup_applicable", False)) for row in group),
                 "gpu_backend_verified": any(bool(row.get("gpu_backend_verified", False)) for row in group),
                 "gpu_device_name": _first_present(group, "gpu_device_name"),
@@ -794,12 +832,16 @@ def upmem_quantization_attribution(records: list[JsonDict]) -> list[JsonDict]:
         family, qubits = _family_and_qubits(unquantized)
         unquantized_total = _positive(unquantized.get("total_wall_time_s"))
         quantized_total = _positive(quantized.get("total_wall_time_s"))
+        unquantized_residual = _reported_time(unquantized)[0]
+        quantized_residual = _reported_time(quantized)[0]
         unquantized_compute = _positive(unquantized.get("simulation_compute_time_s"))
         quantized_compute = _positive(quantized.get("simulation_compute_time_s"))
         unquantized_transfer = _positive(unquantized.get("actual_transfer_bytes"))
         quantized_transfer = _positive(quantized.get("actual_transfer_bytes"))
         unquantized_error = _validation_errors(unquantized).get("max_abs_error")
         quantized_error = _validation_errors(quantized).get("max_abs_error")
+        unquantized_full_precision_error = _full_precision_errors(unquantized).get("max_abs_error")
+        quantized_full_precision_error = _full_precision_errors(quantized).get("max_abs_error")
         rows.append(
             {
                 "schema_version": SCHEMA_VERSION,
@@ -817,16 +859,27 @@ def upmem_quantization_attribution(records: list[JsonDict]) -> list[JsonDict]:
                 "same_kernel_family": True,
                 "unquantized_total_wall_time_s": unquantized_total,
                 "quantized_total_wall_time_s": quantized_total,
-                "route_runtime_ratio_none_over_quantized": _ratio(unquantized_total, quantized_total),
+                "unquantized_host_residual_time_s": unquantized_residual,
+                "quantized_host_residual_time_s": quantized_residual,
+                "route_runtime_ratio_none_over_quantized": _ratio(unquantized_residual, quantized_residual)
+                if unquantized_residual is not None and quantized_residual is not None
+                else _ratio(unquantized_total, quantized_total),
                 "unquantized_simulation_compute_time_s": unquantized_compute,
                 "quantized_simulation_compute_time_s": quantized_compute,
                 "simulator_kernel_ratio_none_over_quantized": _ratio(unquantized_compute, quantized_compute),
                 "unquantized_transfer_bytes": unquantized_transfer,
                 "quantized_transfer_bytes": quantized_transfer,
                 "transfer_ratio_none_over_quantized": _ratio(unquantized_transfer, quantized_transfer),
-                "unquantized_max_abs_error_vs_full_precision": _float_or_none(unquantized_error),
-                "quantized_max_abs_error_vs_full_precision": _float_or_none(quantized_error),
-                "accuracy_delta_quantized_minus_unquantized": _difference(quantized_error, unquantized_error),
+                "unquantized_max_abs_error_vs_full_precision": _float_or_none(unquantized_full_precision_error if unquantized_full_precision_error is not None else unquantized_error),
+                "quantized_max_abs_error_vs_full_precision": _float_or_none(quantized_full_precision_error if quantized_full_precision_error is not None else quantized_error),
+                "unquantized_execution_max_abs_error": _float_or_none(unquantized_error),
+                "quantized_execution_max_abs_error": _float_or_none(quantized_error),
+                "unquantized_full_precision_max_abs_error": _float_or_none(unquantized_full_precision_error),
+                "quantized_full_precision_max_abs_error": _float_or_none(quantized_full_precision_error),
+                "accuracy_delta_quantized_minus_unquantized": _difference(
+                    quantized_full_precision_error if quantized_full_precision_error is not None else quantized_error,
+                    unquantized_full_precision_error if unquantized_full_precision_error is not None else unquantized_error,
+                ),
                 "native_unquantized_upmem_kernel_executed": _record_value(unquantized, "native_unquantized_upmem_kernel_executed") is True,
             }
         )
@@ -1109,7 +1162,7 @@ def benchmark_summary(
             "## Repeats, Warmups, And Timing",
             "",
             "Statistics are computed from normalized records. Median and spread fields are reported per case/route.",
-            "CPU/GPU performance-tier speedup uses `simulation_compute_time_s`; wall-time ratios are reported separately.",
+            "CPU/GPU performance-tier speedup uses `simulation_compute_time_s`; UPMEM route timing prefers `total_host_residual_time_s` when present and retains execution validation separately.",
             "Qubit-scaling tables and plots use `benchmark_n_qubits` / `actual_n_qubits`; suite caps and output caps are not used as circuit size.",
             "",
             "## Validation Methods",
@@ -1235,7 +1288,7 @@ def _observed_result_lines(
     if quant_runtime:
         lines.append(
             "- Strict generic UPMEM SDK-simulator float32/int8 attribution: "
-            f"median route-time ratio `{statistics.median(quant_runtime):.3g}x`, "
+            f"median host-residual-time ratio `{statistics.median(quant_runtime):.3g}x`, "
             f"median transfer ratio `{statistics.median(quant_transfer):.3g}x`"
             + (f", maximum observed int8 absolute error `{max(quant_error):.3g}`." if quant_error else ".")
             + " These are simulator-route measurements, not hardware speedup."
@@ -1297,13 +1350,23 @@ def _upmem_readiness_lines(records: list[JsonDict], unsupported_rows: list[JsonD
     if not upmem_records:
         return [
             "- No UPMEM SDK simulator records were loaded in this pack.",
-            "- Next target: run `thesis_upmem_quantization_boundary.yml` through the strict generic-only MVP command before making stronger UPMEM claims.",
+            "- Next target: run the selected strict generic-only UPMEM suite and regenerate this pack before making stronger UPMEM claims.",
         ]
     unsupported = [row for row in unsupported_rows if str(row.get("route_id") or "").startswith("upmem") or row.get("route_id") == "upmem_tn_sdk_simulator_quantized"]
     fallback_count = sum(1 for row in upmem_records if bool(row.get("cpu_fallback_used", False)))
     sdk_count = sum(1 for row in upmem_records if row.get("upmem_execution_mode") == "sdk_simulator")
     generic_records = [row for row in upmem_records if _is_strict_generic_upmem_record(row)]
-    reasons = Counter(str(row.get("resource_skip_reason") or row.get("warnings") or row.get("validation_status") or "unknown") for row in unsupported)
+    reasons = Counter(_unsupported_reason(row) for row in unsupported)
+    supported = [row for row in upmem_records if str(row.get("status") or "") == "completed" and not _is_unsupported(row)]
+    supported_qubits = [(qubits, row) for row in supported if (qubits := _family_and_qubits(row)[1]["benchmark_n_qubits"]) is not None]
+    highest_supported = max(supported_qubits, key=lambda item: (int(item[0]), str(item[1].get("case_id") or "")), default=None)
+    first_unsupported = min(
+        ((qubits, row) for row in unsupported if (qubits := _family_and_qubits(row)[1]["benchmark_n_qubits"]) is not None),
+        key=lambda item: (int(item[0]), str(item[1].get("case_id") or "")),
+        default=None,
+    )
+    tiling_records = [row for row in upmem_records if _tiling_status(row) is not None]
+    tiling_supported = [row for row in tiling_records if _tiling_status(row) is True]
     lines = [
         f"- UPMEM SDK simulator records loaded: {len(upmem_records)}; SDK simulator rows: {sdk_count}.",
         f"- Strict generic-only UPMEM rows: {len(generic_records)}.",
@@ -1312,12 +1375,27 @@ def _upmem_readiness_lines(records: list[JsonDict], unsupported_rows: list[JsonD
     ]
     if reasons:
         lines.append(f"- Top blocker reasons: {', '.join(f'{reason}={count}' for reason, count in reasons.most_common(5))}.")
-    lines.extend(
-        [
-            "- Evidence still blocks stronger UPMEM claims where tensor/task size caps, rank caps, lack of tiling, single-DPU execution, host-DPU transfer overhead, quantization/dequantization overhead, missing hardware timing, or missing multi-DPU scheduling appear in records.",
-            "- Recommended next UPMEM implementation target: characterize the first rank-eight generic TaskGraph boundary, then add conservative rank/tiling support only if that boundary is the dominant blocker.",
-        ]
-    )
+    if tiling_records:
+        lines.append(
+            f"- Tiling support derived from records: {len(tiling_supported)}/{len(tiling_records)} rows report executable or observed tiling metadata."
+        )
+    else:
+        lines.append("- Tiling support derived from records: no tiling status was recorded.")
+    if highest_supported is not None:
+        lines.append(
+            f"- Highest supported UPMEM case in these records: `{highest_supported[1].get('case_id')}` at `{int(highest_supported[0])}` qubits."
+        )
+    else:
+        lines.append("- Highest supported UPMEM case in these records: none.")
+    if first_unsupported is not None:
+        first_case = first_unsupported[1].get("case_id")
+        first_reason = _unsupported_reason(first_unsupported[1])
+        lines.append(f"- First unsupported case by recorded qubit count: `{first_case}` at `{int(first_unsupported[0])}` qubits; reason: `{first_reason}`.")
+        lines.append(f"- Next target derived from the boundary: investigate `{first_case}` and address `{first_reason}` without CPU fallback.")
+    elif highest_supported is not None:
+        lines.append(f"- Next target derived from the records: extend the strict generic-only sweep beyond `{highest_supported[1].get('case_id')}` and record the resulting boundary.")
+    else:
+        lines.append("- Next target derived from the records: obtain a completed strict generic-only UPMEM record with capability metadata.")
     return lines
 
 
@@ -1750,7 +1828,7 @@ def _plot_upmem_quantization_attribution(plt: Any, path: Path, rows: list[JsonDi
     fig, (runtime_ax, transfer_ax) = plt.subplots(2, 1, figsize=(max(8.0, len(labels) * 0.5), 7.0), constrained_layout=True)
     x = list(range(len(ordered)))
     for axis, values, title, ylabel in (
-        (runtime_ax, runtime_values, "Route-level SDK simulator time ratio", "float32 total time / int8 total time"),
+        (runtime_ax, runtime_values, "Host-side residual time ratio", "float32 host residual time / int8 host residual time"),
         (transfer_ax, transfer_values, "Host/DPU transfer ratio", "float32 bytes / int8 bytes"),
     ):
         axis.bar(x, [float(value) if _positive(value) is not None else 0.0 for value in values], color="#0f766e")
@@ -1809,7 +1887,7 @@ def _caption(filename: str) -> str:
         "upmem_supported_boundary.png": "Supported versus unsupported strict generic-only UPMEM SDK simulator rows.",
         "upmem_accuracy_error.png": "Strict generic UPMEM SDK simulator max absolute error where validation data exists.",
         "upmem_quantization_attribution.png": "Same-route float32 versus int8 ratios for strict generic UPMEM SDK simulator execution; this is not hardware speedup.",
-        "quantization_runtime_by_executor.png": "Same-plan SDK simulator float32/int8 route-time ratio; this is not hardware speedup.",
+        "quantization_runtime_by_executor.png": "Same-plan SDK simulator float32/int8 host-side residual-time ratio; this is not hardware speedup.",
         "quantization_transfer_bytes.png": "Same-plan float32/int8 host-DPU transfer-volume ratio.",
         "quantization_error_by_family_size.png": "Int8 maximum absolute error against the full-precision TaskGraph reference.",
         "same_plan_cpu_upmem_runtime.png": "CPU replay and UPMEM SDK simulator rows share an identical contraction-plan hash; timing is not hardware speedup.",
@@ -1845,6 +1923,24 @@ def _positive(value: Any) -> float | None:
     if number is None or number <= 0:
         return None
     return number
+
+
+def _reported_time(record: JsonDict) -> tuple[float | None, str]:
+    """Select the recorded host residual without reconstructing it from totals."""
+    residual = _float_or_none(record.get("total_host_residual_time_s"))
+    if residual is not None and residual >= 0:
+        return residual, "host_residual"
+    total = _float_or_none(record.get("total_wall_time_s"))
+    if total is not None and total >= 0:
+        return total, "total_wall"
+    return None, "unavailable"
+
+
+def _reported_timing_basis(records: list[JsonDict]) -> str:
+    bases = {_reported_time(record)[1] for record in records}
+    if len(bases) == 1:
+        return next(iter(bases))
+    return "mixed"
 
 
 def _float_or_none(value: Any) -> float | None:
@@ -1902,6 +1998,72 @@ def _validation_errors(record: JsonDict) -> JsonDict:
         except json.JSONDecodeError:
             return {}
     return {}
+
+
+def _full_precision_errors(record: JsonDict) -> JsonDict:
+    """Read full-precision accuracy fields without replacing execution validation."""
+    candidates: list[Any] = [
+        record,
+        record.get("final_full_precision_accuracy"),
+        record.get("full_precision_accuracy"),
+        _notes(record).get("final_full_precision_accuracy"),
+        _notes(record).get("full_precision_accuracy"),
+    ]
+    output: JsonDict = {}
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        for output_key, keys in {
+            "max_abs_error": ("full_precision_max_abs_error", "max_abs_error"),
+            "l2_error": ("full_precision_l2_error", "l2_error"),
+            "norm_drift": ("full_precision_norm_drift", "norm_drift"),
+        }.items():
+            if output_key not in output:
+                for key in keys:
+                    if candidate.get(key) not in {None, ""}:
+                        output[output_key] = candidate[key]
+                        break
+    return output
+
+
+def _accuracy_errors_for_reporting(record: JsonDict) -> JsonDict:
+    execution = _validation_errors(record)
+    full_precision = _full_precision_errors(record)
+    if str(_record_value(record, "quantization_mode") or "") == "per_task_input_quantize":
+        return {
+            key: full_precision.get(key, execution.get(key))
+            for key in ("max_abs_error", "l2_error", "norm_drift")
+        }
+    return execution
+
+
+def _unsupported_reason(record: JsonDict) -> str:
+    return str(
+        _record_value(record, "resource_skip_reason")
+        or _record_value(record, "reason")
+        or record.get("validation_status")
+        or record.get("status")
+        or "unknown"
+    )
+
+
+def _tiling_status(record: JsonDict) -> bool | None:
+    explicit = (
+        record.get("tiling_implemented"),
+        record.get("tiling_supported"),
+        record.get("wram_output_tiled"),
+        record.get("l2_tiled_execution"),
+    )
+    explicit_values = [_bool(value) for value in explicit if value is not None]
+    if any(explicit_values):
+        return True
+    if explicit_values:
+        return False
+    for key in ("mram_tiled_task_count", "generic_output_tile_count"):
+        value = _int_or_none(record.get(key))
+        if value is not None:
+            return value > 0 if key == "mram_tiled_task_count" else value > 1
+    return None
 
 
 def _notes(record: JsonDict) -> JsonDict:
@@ -2043,7 +2205,7 @@ def _selected_suites(suite_filter: list[str] | None) -> list[str]:
 
 def _research_suite_argv(key: str, root: Path) -> list[str]:
     suite = RESEARCH_SUITES[key].relative_to(root).as_posix()
-    if key == "upmem_boundary":
+    if key in {"upmem_boundary", "upmem_quantization_stress"}:
         return [
             "upmem-mvp-benchmark",
             "--suite",
