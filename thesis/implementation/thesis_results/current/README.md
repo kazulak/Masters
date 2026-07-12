@@ -6,7 +6,7 @@ This is a derived research pack generated from normalized benchmark records. Evi
 
 | Route | Role | Target | Records | Unsupported |
 | --- | --- | --- | ---: | ---: |
-| cpu_tn_einsum_exact |  | cpu | 27 | 0 |
+| cpu_tn_einsum_exact | internal_debug_baseline | cpu | 27 | 0 |
 | cpu_tn_frontier_exact | internal_frontier_diagnostic | cpu | 6 | 0 |
 | cpu_tn_hybrid_sliced_frontier_exact | internal_hybrid_diagnostic | cpu | 6 | 0 |
 | cpu_tn_path_replay_float64 | diagnostic_path_replay_baseline | cpu | 42 | 0 |

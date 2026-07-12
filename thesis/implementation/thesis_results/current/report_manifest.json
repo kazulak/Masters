@@ -18,7 +18,7 @@
     "logical_count": 12,
     "model": "AMD Ryzen 5 5600 6-Core Processor"
   },
-  "created_at": "2026-07-13T00:17:31",
+  "created_at": "2026-07-13T00:21:05",
   "dirty_tree": false,
   "dirty_worktree": false,
   "environment": {
@@ -276,18 +276,18 @@
       "worktree_dirty": false
     },
     "report_generation": {
-      "commit": "29fcd17b18521d08c3c86c1c092eb6eca67bb48f",
+      "commit": "97245f422bc8b240034520a47f69401801516781",
       "repository_worktree_dirty": true,
       "scope": "thesis/implementation",
-      "worktree_dirty": true
+      "worktree_dirty": false
     }
   },
   "python_version": "3.10.12 (main, Jun 22 2026, 18:55:27) [GCC 11.4.0]",
   "record_count": 1143,
   "report_generation": {
     "command_line": "scripts/thesis_snapshot.py report --snapshot thesis_results/current",
-    "commit": "29fcd17b18521d08c3c86c1c092eb6eca67bb48f",
-    "generated_at": "2026-07-13T00:17:31",
+    "commit": "97245f422bc8b240034520a47f69401801516781",
+    "generated_at": "2026-07-13T00:21:05",
     "generator": "research_benchmark_pack",
     "input_count": 8,
     "input_paths": [
@@ -306,10 +306,10 @@
     "scope": "thesis/implementation",
     "script": "scripts/research_benchmark_pack.py",
     "source_records_read_only": true,
-    "worktree_dirty": true
+    "worktree_dirty": false
   },
   "report_generation_command": "scripts/thesis_snapshot.py report --snapshot thesis_results/current",
-  "report_generation_commit": "29fcd17b18521d08c3c86c1c092eb6eca67bb48f",
+  "report_generation_commit": "97245f422bc8b240034520a47f69401801516781",
   "report_generation_input_paths": [
     "/home/tom/repos/Masters/thesis/implementation/thesis_results/current/evidence/full_state_correctness",
     "/home/tom/repos/Masters/thesis/implementation/thesis_results/current/evidence/full_state_performance",
@@ -323,8 +323,8 @@
   "report_generation_mode": "report",
   "report_generation_provenance": {
     "command_line": "scripts/thesis_snapshot.py report --snapshot thesis_results/current",
-    "commit": "29fcd17b18521d08c3c86c1c092eb6eca67bb48f",
-    "generated_at": "2026-07-13T00:17:31",
+    "commit": "97245f422bc8b240034520a47f69401801516781",
+    "generated_at": "2026-07-13T00:21:05",
     "generator": "research_benchmark_pack",
     "input_count": 8,
     "input_paths": [
@@ -343,12 +343,12 @@
     "scope": "thesis/implementation",
     "script": "scripts/research_benchmark_pack.py",
     "source_records_read_only": true,
-    "worktree_dirty": true
+    "worktree_dirty": false
   },
   "report_generation_repository_worktree_dirty": true,
   "report_generation_script": "scripts/research_benchmark_pack.py",
-  "report_generation_timestamp": "2026-07-13T00:17:31",
-  "report_generation_worktree_dirty": true,
+  "report_generation_timestamp": "2026-07-13T00:21:05",
+  "report_generation_worktree_dirty": false,
   "repository_worktree_dirty": true,
   "root": ".",
   "schema_version": "research_benchmark_pack_v1",

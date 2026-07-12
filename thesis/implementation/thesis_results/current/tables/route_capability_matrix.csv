@@ -1,5 +1,5 @@
 schema_version,route_id,benchmark_role,backend_family,execution_model,contraction_execution_target,accelerator_kind,upmem_execution_mode,record_count,completed_count,unsupported_count,validation_passed_count,gpu_verified_count,cpu_fallback_count,hardware_speedup_applicable_count
-research_benchmark_pack_v1,cpu_tn_einsum_exact,,,,cpu,,,27,27,0,6,0,0,0
+research_benchmark_pack_v1,cpu_tn_einsum_exact,internal_debug_baseline,cpu,tensor_network,cpu,none,,27,27,0,6,0,0,0
 research_benchmark_pack_v1,cpu_tn_frontier_exact,internal_frontier_diagnostic,cpu,tensor_network,cpu,none,,6,6,0,6,0,0,0
 research_benchmark_pack_v1,cpu_tn_hybrid_sliced_frontier_exact,internal_hybrid_diagnostic,cpu,tensor_network,cpu,none,,6,6,0,6,0,0,0
 research_benchmark_pack_v1,cpu_tn_path_replay_float64,diagnostic_path_replay_baseline,cpu,tensor_network,cpu,none,,42,42,0,42,0,0,0
