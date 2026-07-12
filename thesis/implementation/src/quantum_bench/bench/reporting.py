@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from quantum_bench.bench.result_artifacts import RESULT_FIELDS, load_result_records
+from quantum_bench.bench.result_artifacts import load_result_records
 from quantum_bench.bench.run_dirs import is_within_evidence_root
 from quantum_bench.core.jsonio import read_jsonl, write_json, write_jsonl
 from quantum_bench.core.records import JsonDict, to_jsonable

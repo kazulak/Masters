@@ -19,8 +19,10 @@ benchmark matrix is in [THESIS_BENCHMARK_MATRIX.md](THESIS_BENCHMARK_MATRIX.md).
 From `thesis/implementation`:
 
 ```bash
+python3 -m venv ../.venv
+../.venv/bin/python -m pip install --upgrade pip
 git submodule update --init --recursive external/QuEST external/SimplePIM external/PID-Comm
-../.venv/bin/python -m pip install -e ".[dev]"
+../.venv/bin/python -m pip install -c ci/constraints.txt -e ".[dev]"
 make doctor
 ```
 

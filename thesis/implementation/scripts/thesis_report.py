@@ -8,7 +8,7 @@ import statistics
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]

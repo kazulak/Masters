@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
-from pathlib import Path
 
 from quantum_bench.circuits import builtin_circuit
 from quantum_bench.core.records import CircuitSpec, ContractionTask, PathSummary, TaskGraph, TensorNetworkSpec, to_jsonable

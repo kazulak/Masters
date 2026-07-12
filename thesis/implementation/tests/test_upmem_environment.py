@@ -4,7 +4,6 @@ import json
 import sys
 from pathlib import Path
 
-import pytest
 
 from quantum_bench.bench import __main__ as bench_main
 import quantum_bench.bench.upmem_env_check as upmem_env_check_module
@@ -54,7 +53,8 @@ def _failed(command: tuple[str, ...] | list[str], **kwargs: object) -> CommandEx
 
 
 def test_discover_upmem_sdk_from_env_and_path() -> None:
-    lookup = lambda command: f"/sdk/bin/{command}" if command in {"dpu-upmem-dpurte-clang", "dpu-pkg-config"} else None
+    def lookup(command: str) -> str | None:
+        return f"/sdk/bin/{command}" if command in {"dpu-upmem-dpurte-clang", "dpu-pkg-config"} else None
     result = discover_upmem_sdk(
         env={"UPMEM_HOME": "/sdk"},
         path_lookup=lookup,

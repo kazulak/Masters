@@ -77,6 +77,10 @@ def interleaved_einsum_args(network: TensorNetworkValue) -> list[object]:
 def _validate_wires(wires: tuple[int, ...], n_qubits: int) -> None:
     if not wires:
         raise ValueError("Gate operation has no wires")
+    seen: set[int] = set()
     for wire in wires:
         if wire < 0 or wire >= n_qubits:
             raise ValueError(f"Wire {wire} outside qreg size {n_qubits}")
+        if wire in seen:
+            raise ValueError(f"Duplicate wire {wire} in gate operation")
+        seen.add(wire)

@@ -8,7 +8,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
-import pytest
 
 from quantum_bench.core.records import to_jsonable
 from quantum_bench.circuits import builtin_circuit

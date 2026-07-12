@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 from pathlib import Path
-from typing import Callable, Mapping, Sequence
+from typing import Callable, Mapping
 
 from quantum_bench.bench.run_dirs import create_run_dir
 from quantum_bench.core.jsonio import write_json

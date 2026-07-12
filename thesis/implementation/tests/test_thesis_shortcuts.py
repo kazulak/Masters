@@ -6,6 +6,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+from quantum_bench.core.records import CircuitOperation, CircuitSpec
+from quantum_bench.tn import build_tensor_network
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -16,6 +21,7 @@ def test_makefile_shortcuts_are_defined() -> None:
     assert "CPU_SUITE ?= configs/suites/cpu_evidence.yml" in text
     assert "GPU_VERIFY ?= quest-hip" in text
     for target in (
+        "help",
         "build-quest-cpu",
         "doctor",
         "bench-cpu",
@@ -32,6 +38,8 @@ def test_makefile_shortcuts_are_defined() -> None:
         "clean-generated",
     ):
         assert f"{target}:" in text
+        assert f"  make {target}" in text
+    assert ".PHONY: $(PUBLIC_TARGETS)" in text
     assert "bench-cpu: build-quest-cpu" in text
     assert "thesis-run: build-quest-cpu" in text
     assert "research_benchmark_pack.py run --full" in text
@@ -58,6 +66,18 @@ def test_readme_documents_shortcut_targets() -> None:
         assert command in text
     assert "thesis_results/current" in text
     assert "contraction_plan_hash" in text
+
+
+def test_duplicate_gate_wires_are_rejected() -> None:
+    circuit = CircuitSpec(
+        name="duplicate-wire",
+        n_qubits=2,
+        operations=(CircuitOperation("cx", (0, 0)),),
+        source={},
+    )
+
+    with pytest.raises(ValueError, match="Duplicate wire 0"):
+        build_tensor_network(circuit)
 
 
 def test_makefile_targets_parse_with_dry_run() -> None:

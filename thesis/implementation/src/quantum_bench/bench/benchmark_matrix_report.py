@@ -9,7 +9,7 @@ from typing import Any
 
 import yaml
 
-from quantum_bench.bench.run_dirs import create_run_dir, sanitize
+from quantum_bench.bench.run_dirs import create_run_dir
 from quantum_bench.circuits import load_circuit, manifest
 from quantum_bench.core.jsonio import write_json
 from quantum_bench.core.records import JsonDict, TaskGraph, to_jsonable

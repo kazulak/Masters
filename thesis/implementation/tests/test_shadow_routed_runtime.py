@@ -9,7 +9,6 @@ import numpy as np
 import pytest
 
 from quantum_bench.bench import __main__ as bench_main
-from quantum_bench.bench.config import suite_path
 from quantum_bench.bench.shadow_routed_runtime import (
     run_shadow_routed_runtime,
     validate_cli_options,

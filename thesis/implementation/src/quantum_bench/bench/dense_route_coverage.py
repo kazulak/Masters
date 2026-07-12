@@ -10,7 +10,7 @@ import yaml
 
 from quantum_bench.bench.config import DEFAULTS, load_suite
 from quantum_bench.bench.run_dirs import create_run_dir
-from quantum_bench.circuits import builtin_circuit, load_circuit, manifest
+from quantum_bench.circuits import builtin_circuit, load_circuit
 from quantum_bench.core.jsonio import write_json, write_jsonl
 from quantum_bench.core.records import JsonDict, TaskGraph, to_jsonable
 from quantum_bench.environment import capture_environment

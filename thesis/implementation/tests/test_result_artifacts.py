@@ -7,7 +7,7 @@ from pathlib import Path
 
 from quantum_bench.bench.generic_task_bridge import run_generic_task_bridge
 from quantum_bench.bench.result_artifacts import KERNEL_FAMILIES, compare_results, load_result_records
-from quantum_bench.bench.run_dirs import EVIDENCE_ARTIFACT_KIND, create_run_dir
+from quantum_bench.bench.run_dirs import EVIDENCE_ARTIFACT_KIND, LEGACY_ARTIFACT_KIND, create_run_dir
 from quantum_bench.bench.reporting import write_normalized_records, write_run_manifest
 
 
@@ -135,6 +135,13 @@ def test_compare_results_fails_gracefully_without_compatible_artifacts(tmp_path:
         assert "no compatible benchmark result artifacts found" in str(exc)
     else:  # pragma: no cover - defensive assertion
         raise AssertionError("compare_results should reject directories with no compatible artifacts")
+
+
+def test_legacy_run_updates_runs_latest_without_repository_root_symlink(tmp_path: Path) -> None:
+    run_dir = create_run_dir(tmp_path, "diagnostic", artifact_kind=LEGACY_ARTIFACT_KIND)
+
+    assert (tmp_path / "runs" / "latest").resolve() == run_dir.resolve()
+    assert not (tmp_path / "latest").exists()
 
 
 def test_evidence_run_layout_and_compare_results_read_only_boundary(tmp_path: Path) -> None:

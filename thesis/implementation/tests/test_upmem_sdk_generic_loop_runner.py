@@ -117,7 +117,14 @@ def _write_non_gemm_manifest(root: Path, *, mode: str) -> Path:
     np.save(operands / "left.npy", left_blob, allow_pickle=False)
     np.save(operands / "right.npy", right_blob, allow_pickle=False)
     np.save(references / "expected.npy", expected, allow_pickle=False)
-    blob = lambda path, array, role: {"relative_path": path, "dtype": str(array.dtype), "shape": list(array.shape), "nbytes": int(array.nbytes), "role": role}
+    def blob(path, array, role):
+        return {
+            "relative_path": path,
+            "dtype": str(array.dtype),
+            "shape": list(array.shape),
+            "nbytes": int(array.nbytes),
+            "role": role,
+        }
     metadata = {
         "operand_mode": operand_mode,
         "quantization_mode": quantization_mode,

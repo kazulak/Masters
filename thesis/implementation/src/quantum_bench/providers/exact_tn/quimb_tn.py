@@ -103,7 +103,6 @@ class QuimbTnExactRoute:
 
     def execute(self, prepared: object, context: BenchmarkContext) -> RouteResult:
         payload = dict(prepared)  # type: ignore[arg-type]
-        graph: TaskGraph = payload["graph"]
         network: TensorNetworkValue = payload["network"]
         optimize = str(payload.get("optimize", "greedy"))
         versions = _dependency_versions()
@@ -319,7 +318,6 @@ class QuimbTnSlicedExactRoute:
 
     def execute(self, prepared: object, context: BenchmarkContext) -> RouteResult:
         payload = dict(prepared)  # type: ignore[arg-type]
-        graph: TaskGraph = payload["graph"]
         network: TensorNetworkValue = payload["network"]
         methods = str(payload.get("methods") or "greedy")
         max_repeats = int(payload.get("max_repeats", 1) or 1)

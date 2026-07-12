@@ -2192,7 +2192,6 @@ def test_gpu_verification_blocks_when_hip_smoke_fails(monkeypatch, tmp_path: Pat
 
 
 def test_successful_gpu_verification_requires_hip_smoke_and_quest_run(monkeypatch, tmp_path: Path) -> None:
-    runner_root = tmp_path / "native" / "quest_gpu"
     runner = tmp_path / "build" / "native" / "quest_gpu" / "hip" / "bin" / "quest_gpu_runner"
     runner.parent.mkdir(parents=True)
     _mock_quest_hip_tool_preflight(monkeypatch)

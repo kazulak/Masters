@@ -3,7 +3,6 @@ from __future__ import annotations
 import math
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any
 
 from quantum_bench.core.records import ContractionTask, JsonDict, TaskGraph
 from quantum_bench.targets.upmem.schedule import UPMEM_DENSE_ESTIMATE_KEY

@@ -17,8 +17,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest"]
-dev = ["pytest"]
+test = ["pytest", "ruff==0.15.21"]
+dev = ["pytest", "ruff==0.15.21"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -26,3 +26,6 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

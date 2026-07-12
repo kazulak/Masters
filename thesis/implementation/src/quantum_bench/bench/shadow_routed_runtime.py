@@ -36,7 +36,6 @@ from quantum_bench.routing import (
 from quantum_bench.tn.contract import contract_binary_task
 from quantum_bench.targets.upmem import (
     SIMPLEPIM_PROBE_KEY,
-    UPMEM_DENSE_ESTIMATE_KEY,
     annotate_task_graph_with_upmem_estimates,
     execute_dense_bridge,
     probe_simplepim,

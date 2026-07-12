@@ -59,7 +59,8 @@ def create_run_dir(
     for rel in STANDARD_RUN_SUBDIRS:
         (run_dir / rel).mkdir(parents=True, exist_ok=True)
     update_latest_symlink(parent, run_dir)
-    update_latest_symlink(parent.parent, run_dir)
+    if artifact_kind != LEGACY_ARTIFACT_KIND:
+        update_latest_symlink(parent.parent, run_dir)
     if artifact_kind != COMPARISON_ARTIFACT_KIND:
         update_latest_symlink(runs_dir, run_dir)
     return run_dir

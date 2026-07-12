@@ -14,10 +14,10 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.10"
       - name: Install package
@@ -27,10 +27,18 @@ jobs:
           python -m pip install -c ci/constraints.txt -e ".[dev]"
       - name: Build QuEST CPU runner
         run: make -C thesis/implementation/native/quest_cpu
+      - name: Build Python wheel
+        run: |
+          cd thesis/implementation
+          python -m pip wheel --no-build-isolation --no-deps --wheel-dir /tmp/quantum-bench-wheel .
       - name: Run tests
         run: |
           cd thesis/implementation
           PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m pytest -q
+      - name: Run Ruff correctness checks
+        run: |
+          cd thesis/implementation
+          python -m ruff check src tests scripts
       - name: Check thesis shortcut commands
         run: |
           cd thesis/implementation
@@ -38,8 +46,11 @@ jobs:
           make -n bench-gpu
           make -n bench-upmem-sim
           make -n research-plan
-          make -n research-benchmarks
-          make -n research-report
+          make -n thesis-run
+          make -n thesis-report
+          make -n thesis-verify
+      - name: Verify tracked thesis snapshot
+        run: make -C thesis/implementation thesis-verify
       - name: Run smoke
         run: |
           cd thesis/implementation

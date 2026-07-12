@@ -11,19 +11,42 @@ THESIS_PACK ?= runs/comparisons/research_pack/latest
 THESIS_SNAPSHOT ?= thesis_results/current
 APPLY ?= 0
 
-.PHONY: help build-quest-cpu doctor bench-cpu bench-gpu bench-upmem-sim thesis-report research-plan clean-generated thesis-run thesis-promote thesis-verify thesis-clean thesis-release list-runs
+PUBLIC_TARGETS := \
+	help \
+	build-quest-cpu \
+	doctor \
+	bench-cpu \
+	bench-gpu \
+	bench-upmem-sim \
+	research-plan \
+	thesis-run \
+	thesis-promote \
+	thesis-verify \
+	thesis-report \
+	list-runs \
+	thesis-clean \
+	thesis-release \
+	clean-generated
+
+.PHONY: $(PUBLIC_TARGETS)
 
 help:
 	@printf '%s\n' \
 		'Thesis evidence shortcuts:' \
+		'  make help              Show this command summary' \
 		'  make doctor             Check local benchmark prerequisites without creating evidence' \
+		'  make build-quest-cpu    Build the native QuEST CPU runner' \
+		'  make bench-cpu          Run the CPU evidence suite' \
+		'  make bench-gpu          Verify the GPU and run the GPU evidence suite' \
+		'  make bench-upmem-sim    Check UPMEM simulator and run its evidence suite' \
+		'  make research-plan      Show the research benchmark plan' \
 		'  make thesis-run         Run the complete local thesis benchmark matrix' \
 		'  make thesis-promote     Promote the latest research pack into tracked thesis_results/current' \
+		'  make thesis-verify      Verify tracked thesis results without rerunning benchmarks' \
 		'  make thesis-report      Regenerate tracked tables and plots from thesis_results/current' \
 		'  make thesis-clean       Preview stale generated run cleanup; add APPLY=1 to remove' \
 		'  make thesis-release NAME=<name>  Freeze current results as a named milestone' \
 		'  make list-runs          Show generated evidence/comparisons and current selection' \
-		'  make build-quest-cpu    Build the native QuEST CPU runner' \
 		'  make clean-generated    Remove generated build/cache files; keeps runs/ by default'
 
 build-quest-cpu:

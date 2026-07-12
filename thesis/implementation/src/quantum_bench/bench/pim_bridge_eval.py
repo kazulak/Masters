@@ -20,7 +20,6 @@ from quantum_bench.targets.upmem import (
     annotate_task_graph_with_upmem_estimates,
     build_synthetic_pressure_task_graph,
     dense_bridge_backend_manifest_eligibility,
-    dense_bridge_manifest_eligibility,
     execute_dense_bridge,
     is_synthetic_pressure_case,
     synthetic_pressure_initial_tensors,
