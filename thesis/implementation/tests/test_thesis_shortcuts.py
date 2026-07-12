@@ -43,6 +43,8 @@ def test_makefile_shortcuts_are_defined() -> None:
     assert "bench-cpu: build-quest-cpu" in text
     assert "thesis-run: build-quest-cpu" in text
     assert "research_benchmark_pack.py run --full" in text
+    assert "BENCH_CPU_THREADS ?=" in text
+    assert "OPENBLAS_NUM_THREADS=$(BENCH_CPU_THREADS)" in text
     assert "scripts/thesis_snapshot.py promote" in text
     assert "scripts/thesis_snapshot.py report" in text
     assert "scripts/thesis_runs.py prune" in text
@@ -104,6 +106,7 @@ def test_makefile_targets_parse_with_dry_run() -> None:
         assert target != "bench-gpu" or "configs/suites/gpu_evidence.yml" in result.stdout
         assert target != "bench-upmem-sim" or "configs/suites/upmem_sim_evidence.yml" in result.stdout
         assert target != "thesis-run" or "research_benchmark_pack.py run --full" in result.stdout
+        assert target != "thesis-run" or "BENCH_CPU_THREADS" in result.stdout
         assert target != "thesis-promote" or "thesis_snapshot.py promote" in result.stdout
         assert target != "thesis-verify" or "thesis_snapshot.py verify" in result.stdout
         assert target != "thesis-report" or "thesis_snapshot.py report" in result.stdout
@@ -142,9 +145,27 @@ def test_doctor_reports_prerequisites_without_benchmark_rows() -> None:
 
     assert result.returncode == 0
     assert "Thesis benchmark doctor" in result.stdout
-    for marker in ("python", "dependency:quantum_bench", "quest_cpu", "gpu_rocm", "upmem_sdk"):
+    for marker in ("python", "dependency:quantum_bench", "cpu_benchmark_profile", "recommended_thesis_run", "quest_cpu", "gpu_rocm", "upmem_sdk"):
         assert marker in result.stdout
     assert "normalized_records" not in result.stdout
+
+
+def test_thesis_run_requires_explicit_positive_thread_count() -> None:
+    if shutil.which("make") is None:
+        return
+    missing = subprocess.run(["make", "-o", "build-quest-cpu", "thesis-run"], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert missing.returncode == 2
+    assert "Set BENCH_CPU_THREADS" in missing.stderr
+
+    invalid = subprocess.run(
+        ["make", "-o", "build-quest-cpu", "thesis-run", "BENCH_CPU_THREADS=zero"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert invalid.returncode == 2
+    assert "positive integer" in invalid.stderr
 
 
 def test_evidence_shortcut_helper_validates_gpu_and_upmem_rows(tmp_path: Path) -> None:

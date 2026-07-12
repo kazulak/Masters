@@ -1,6 +1,16 @@
 PYTHON ?= ../.venv/bin/python
 PY_ENV := PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src
 BENCH := $(PY_ENV) $(PYTHON) -m quantum_bench.bench
+BENCH_CPU_THREADS ?=
+THESIS_BENCH_ENV := \
+	BENCH_CPU_THREADS=$(BENCH_CPU_THREADS) \
+	OMP_NUM_THREADS=$(BENCH_CPU_THREADS) \
+	OPENBLAS_NUM_THREADS=$(BENCH_CPU_THREADS) \
+	MKL_NUM_THREADS=$(BENCH_CPU_THREADS) \
+	NUMEXPR_NUM_THREADS=$(BENCH_CPU_THREADS) \
+	OMP_DYNAMIC=FALSE \
+	OMP_PROC_BIND=close \
+	OMP_PLACES=cores
 
 CPU_SUITE ?= configs/suites/cpu_evidence.yml
 GPU_SUITE ?= configs/suites/gpu_evidence.yml
@@ -40,7 +50,8 @@ help:
 		'  make bench-gpu          Verify the GPU and run the GPU evidence suite' \
 		'  make bench-upmem-sim    Check UPMEM simulator and run its evidence suite' \
 		'  make research-plan      Show the research benchmark plan' \
-		'  make thesis-run         Run the complete local thesis benchmark matrix' \
+		'  make thesis-run BENCH_CPU_THREADS=<physical cores>' \
+		'                           Run the controlled thesis benchmark matrix' \
 		'  make thesis-promote     Promote the latest research pack into tracked thesis_results/current' \
 		'  make thesis-verify      Verify tracked thesis results without rerunning benchmarks' \
 		'  make thesis-report      Regenerate tracked tables and plots from thesis_results/current' \
@@ -72,7 +83,10 @@ research-plan:
 	$(PY_ENV) $(PYTHON) scripts/research_benchmark_pack.py plan
 
 thesis-run: build-quest-cpu
-	$(PY_ENV) $(PYTHON) scripts/research_benchmark_pack.py run --full
+	@test -n "$(BENCH_CPU_THREADS)" || { echo 'Set BENCH_CPU_THREADS to the physical CPU core count, for example: BENCH_CPU_THREADS=6 make thesis-run' >&2; exit 2; }
+	@case "$(BENCH_CPU_THREADS)" in *[!0-9]*|'') echo 'BENCH_CPU_THREADS must be a positive integer' >&2; exit 2;; esac
+	@test "$(BENCH_CPU_THREADS)" -gt 0 || { echo 'BENCH_CPU_THREADS must be a positive integer' >&2; exit 2; }
+	$(PY_ENV) $(THESIS_BENCH_ENV) $(PYTHON) scripts/research_benchmark_pack.py run --full
 
 thesis-promote:
 	$(PY_ENV) $(PYTHON) scripts/thesis_snapshot.py promote --pack $(THESIS_PACK) --out $(THESIS_SNAPSHOT)

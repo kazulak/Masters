@@ -20,6 +20,16 @@ RAPL_PATH = Path("/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj")
 
 def capture_environment(root_dir: Path) -> dict[str, Any]:
     simplepim_probe = probe_simplepim().to_json_dict()
+    thread_variables = (
+        "BENCH_CPU_THREADS",
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "OMP_DYNAMIC",
+        "OMP_PROC_BIND",
+        "OMP_PLACES",
+    )
     return {
         "quantum_bench_version": quantum_bench.__version__,
         "python": sys.version.split()[0],
@@ -27,6 +37,9 @@ def capture_environment(root_dir: Path) -> dict[str, Any]:
         "machine": platform.machine(),
         "processor": platform.processor() or read_cpu_model(),
         "cpu_count": os.cpu_count(),
+        "physical_cpu_count": read_physical_cpu_count(),
+        "cpu_affinity": read_cpu_affinity(),
+        "cpu_frequency_governor": read_cpu_frequency_governor(),
         "mem_total_kib": read_mem_total_kib(),
         "numpy": np.__version__,
         "opt_einsum": _module_version("opt_einsum"),
@@ -35,7 +48,9 @@ def capture_environment(root_dir: Path) -> dict[str, Any]:
         "matplotlib": _module_version("matplotlib"),
         "compiler": first_line(["cc", "--version"]),
         "git_commit": first_line(["git", "rev-parse", "HEAD"], cwd=root_dir.parents[1]) if (root_dir.parents[1] / ".git").exists() else None,
-        "openmp": {key: os.environ.get(key) for key in ("OMP_NUM_THREADS", "OMP_PROC_BIND", "OMP_PLACES")},
+        "benchmark_threads": {key: os.environ.get(key) for key in thread_variables},
+        "openmp": {key: os.environ.get(key) for key in ("OMP_NUM_THREADS", "OMP_DYNAMIC", "OMP_PROC_BIND", "OMP_PLACES")},
+        "blas": read_numpy_blas_config(),
         "upmem": {
             "UPMEM_HOME": os.environ.get("UPMEM_HOME"),
             "dpu_compiler": shutil.which("dpu-upmem-dpurte-clang"),
@@ -105,6 +120,63 @@ def read_mem_total_kib() -> int | None:
         if line.startswith("MemTotal:"):
             return int(line.split()[1])
     return None
+
+
+def read_cpu_affinity() -> list[int] | None:
+    if not hasattr(os, "sched_getaffinity"):
+        return None
+    try:
+        return sorted(os.sched_getaffinity(0))
+    except OSError:
+        return None
+
+
+def read_cpu_frequency_governor() -> str | None:
+    path = Path("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor")
+    try:
+        return path.read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
+def read_physical_cpu_count() -> int | None:
+    cpuinfo = Path("/proc/cpuinfo")
+    if not cpuinfo.exists():
+        return None
+    packages_and_cores: set[tuple[str, str]] = set()
+    current: dict[str, str] = {}
+    try:
+        lines = cpuinfo.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return None
+    for line in [*lines, ""]:
+        if not line.strip():
+            if "physical id" in current and "core id" in current:
+                packages_and_cores.add((current["physical id"], current["core id"]))
+            current = {}
+            continue
+        if ":" in line:
+            key, value = line.split(":", 1)
+            current[key.strip()] = value.strip()
+    if packages_and_cores:
+        return len(packages_and_cores)
+    return os.cpu_count()
+
+
+def read_numpy_blas_config() -> dict[str, Any]:
+    try:
+        config = np.show_config(mode="dicts")
+    except (TypeError, AttributeError):
+        return {"name": None, "version": None, "configuration": None}
+    dependencies = config.get("Build Dependencies", {}) if isinstance(config, dict) else {}
+    blas = dependencies.get("blas", {}) if isinstance(dependencies, dict) else {}
+    if not isinstance(blas, dict):
+        return {"name": None, "version": None, "configuration": None}
+    return {
+        "name": blas.get("name"),
+        "version": blas.get("version"),
+        "configuration": blas.get("openblas configuration"),
+    }
 
 
 def first_line(command: list[str], cwd: Path | None = None) -> str | None:

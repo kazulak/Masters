@@ -23,8 +23,10 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_thesis_manual_suites_load() -> None:
     for rel_path in (
         "configs/suites/manual/thesis_full_state_cpu_gpu.yml",
+        "configs/suites/manual/thesis_full_state_correctness.yml",
         "configs/suites/manual/thesis_cpu_tn_quimb.yml",
         "configs/suites/manual/thesis_tn_paths_quantization.yml",
+        "configs/suites/manual/thesis_planner_compare.yml",
         "configs/suites/manual/thesis_upmem_quantization_boundary.yml",
     ):
         suite = load_suite(ROOT / rel_path)
@@ -35,8 +37,10 @@ def test_thesis_manual_suites_load() -> None:
 
 def test_thesis_manual_suites_cover_declared_size_targets() -> None:
     cpu_gpu = load_suite(ROOT / "configs/suites/manual/thesis_full_state_cpu_gpu.yml")
+    correctness = load_suite(ROOT / "configs/suites/manual/thesis_full_state_correctness.yml")
     tn_quimb = load_suite(ROOT / "configs/suites/manual/thesis_cpu_tn_quimb.yml")
     tn_quant = load_suite(ROOT / "configs/suites/manual/thesis_tn_paths_quantization.yml")
+    planner = load_suite(ROOT / "configs/suites/manual/thesis_planner_compare.yml")
 
     assert _sizes_for_family(cpu_gpu, "quest_qrng") == {8, 10, 12, 14, 16, 18, 20}
     assert _sizes_for_family(cpu_gpu, "quest_bv") == {8, 10, 12, 14, 16, 18, 20}
@@ -44,6 +48,10 @@ def test_thesis_manual_suites_cover_declared_size_targets() -> None:
     assert _sizes_for_family(tn_quimb, "quest_bv") == {8, 10, 12, 14, 16, 18, 20}
     assert _sizes_for_family(tn_quant, "quest_qrng") == {8, 10, 12, 14, 16, 18, 20}
     assert _sizes_for_family(tn_quant, "quest_bv") == {8, 10, 12, 14, 16, 18, 20}
+    assert _sizes_for_family(planner, "quest_qrng") == {8, 10, 12, 14, 16, 18, 20}
+    assert _sizes_for_family(planner, "quest_bv") == {8, 10, 12, 14, 16, 18, 20}
+    assert correctness["suite_id"] == "thesis_full_state_correctness"
+    assert correctness["metadata"]["state_output_mode"] == "full_dump"
     assert tn_quimb["metadata"]["max_qubits"] == 20
     assert tn_quant["metadata"]["max_qubits"] == 20
     assert tn_quimb["warmups"] == 0

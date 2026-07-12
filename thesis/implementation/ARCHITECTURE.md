@@ -83,7 +83,7 @@ machine metadata are also excluded from semantic hashes.
 | Serious full-state baseline | `thesis/implementation/src/quantum_bench/providers/full_state/` + `thesis/implementation/external/QuEST/` | QuEST CPU and verified GPU execution | Active |
 | Serious CPU TN baseline | `thesis/implementation/src/quantum_bench/providers/exact_tn/quimb_tn.py` | Quimb/cotengra unsliced and sliced exact TN execution | Active |
 | Shared-plan CPU reference | `thesis/implementation/src/quantum_bench/providers/exact_tn/cpu_einsum.py`, `cpu_path_replay.py` | Execute the internal TaskGraph on CPU | Active; diagnostic/reference quality |
-| Strict UPMEM runtime | `thesis/implementation/src/quantum_bench/targets/upmem/taskgraph_runtime.py` | Validate policy, dispatch every supported contraction, reject CPU fallback | Active, SDK simulator |
+| Strict UPMEM runtime | `thesis/implementation/src/quantum_bench/targets/upmem/taskgraph_runtime.py`, `numeric_reference.py`, `runtime_evidence.py` | Execute policy/scheduling while keeping CPU references, validation, and evidence construction reviewable | Active, SDK simulator |
 | Native DPU programs | `thesis/implementation/native/upmem/simplepim/` | Dense and bounded generic host/DPU programs | Active, bounded |
 | UPMEM analysis | `thesis/implementation/src/quantum_bench/targets/upmem/tile_plan.py`, `schedule.py`, planner scoring | Estimate transfer, tiling, frontier, and assignment pressure | Active; execution coverage remains bounded |
 | Evidence writer | `thesis/implementation/src/quantum_bench/bench/simulation_backend_compare.py`, `upmem_mvp_benchmark.py` | Run fixed suites and write canonical normalized evidence | Active |
@@ -194,6 +194,17 @@ execution bundles, summaries, and bounded case/task artifacts. Derived plots and
 comparison tables are forbidden in evidence. `thesis_results/current` includes
 checksums and enough normalized evidence to regenerate its report without
 rerunning a simulator.
+
+Final performance runs require an explicit physical-core count. The workflow
+sets and records OpenMP, OpenBLAS, MKL, and NumExpr thread counts, and captures
+the active CPU affinity, frequency governor, and NumPy BLAS implementation.
+Tables report repeat dispersion as quartiles/IQR in addition to medians.
+
+Provenance has three explicit stages: benchmark source, report generation, and
+snapshot promotion. All selected evidence must share one clean implementation
+source commit. Repository-wide dirtiness is retained as context, but files
+outside `thesis/implementation` do not invalidate the implementation-scoped
+source check.
 
 ## Scientific Safety Rules
 

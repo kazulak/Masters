@@ -538,9 +538,9 @@ def test_simulation_backend_compare_suite_loads() -> None:
     cpu_gpu_tier2 = load_suite(ROOT / "configs" / "suites" / "manual" / "cpu_gpu_sweep_tier2.yml")
     cpu_gpu_correctness_deep = load_suite(ROOT / "configs" / "suites" / "manual" / "cpu_gpu_correctness_deep.yml")
     cpu_gpu_performance = load_suite(ROOT / "configs" / "suites" / "manual" / "cpu_gpu_performance.yml")
-    research_cpu_gpu = load_suite(ROOT / "configs" / "suites" / "manual" / "research_cpu_gpu.yml")
-    research_cpu_gpu_correctness = load_suite(ROOT / "configs" / "suites" / "manual" / "research_cpu_gpu_correctness.yml")
-    research_cpu_tn = load_suite(ROOT / "configs" / "suites" / "manual" / "research_cpu_tn.yml")
+    thesis_cpu_gpu = load_suite(ROOT / "configs" / "suites" / "manual" / "thesis_full_state_cpu_gpu.yml")
+    thesis_cpu_gpu_correctness = load_suite(ROOT / "configs" / "suites" / "manual" / "thesis_full_state_correctness.yml")
+    thesis_cpu_tn = load_suite(ROOT / "configs" / "suites" / "manual" / "thesis_cpu_tn_quimb.yml")
     research_internal_parallelism = load_suite(ROOT / "configs" / "suites" / "manual" / "research_internal_parallelism.yml")
     research_upmem_boundary = load_suite(ROOT / "configs" / "suites" / "manual" / "research_upmem_boundary.yml")
     upmem_sdk = load_suite(ROOT / "configs" / "suites" / "upmem_sim_evidence.yml")
@@ -666,25 +666,25 @@ def test_simulation_backend_compare_suite_loads() -> None:
     assert performance_routes["quest_cpu_full_state_exact"]["options"]["state_output_mode"] == "none"
     assert performance_routes["quest_gpu_full_state_exact"]["options"]["state_output_mode"] == "none"
     assert all(case["circuit"]["repeat_layers"] >= 64 for case in cpu_gpu_performance["cases"])
-    assert research_cpu_gpu["metadata"]["manual_invocation_required"] is True
-    assert research_cpu_gpu["metadata"]["state_output_mode"] == "none"
-    assert research_cpu_gpu["metadata"]["performance_tier"] is True
-    assert research_cpu_gpu["repeats"] >= 5
-    assert research_cpu_gpu["warmups"] >= 1
-    assert research_cpu_gpu["route_policy"]["routes"] == ["quest_cpu_full_state_exact", "quest_gpu_full_state_exact"]
-    canonical_sizes = {4, 6, 8, 10, 12, 14, 16}
+    assert thesis_cpu_gpu["metadata"]["manual_invocation_required"] is True
+    assert thesis_cpu_gpu["metadata"]["state_output_mode"] == "none"
+    assert thesis_cpu_gpu["metadata"]["performance_tier"] is True
+    assert thesis_cpu_gpu["repeats"] >= 5
+    assert thesis_cpu_gpu["warmups"] >= 1
+    assert thesis_cpu_gpu["route_policy"]["routes"] == ["quest_cpu_full_state_exact", "quest_gpu_full_state_exact"]
+    canonical_sizes = {8, 10, 12, 14, 16, 18, 20}
     canonical_families = {"QRNG", "BV", "XOR", "BB84", "EDC", "HS"}
-    assert {int(case["circuit"].get("n_qubits", case["circuit"].get("allocated_qubits"))) for case in research_cpu_gpu["cases"]} == canonical_sizes
-    assert {case["circuit"]["name"] for case in research_cpu_gpu["cases"]} == canonical_families
-    assert len(research_cpu_gpu["cases"]) == 42
-    assert research_cpu_gpu_correctness["metadata"]["state_output_mode"] == "full_dump"
-    assert research_cpu_gpu_correctness["metadata"]["validation_method"] == "full_statevector"
-    assert research_cpu_tn["route_policy"]["routes"] == ["quest_cpu_full_state_exact", "quimb_tn_exact", "quimb_tn_sliced_exact"]
-    assert {int(case["circuit"].get("n_qubits", case["circuit"].get("allocated_qubits"))) for case in research_cpu_tn["cases"]} == canonical_sizes
-    assert {case["circuit"]["name"] for case in research_cpu_tn["cases"]} == canonical_families
-    assert len(research_cpu_tn["cases"]) == 42
-    assert route_config_for(research_cpu_tn, "quimb_tn_sliced_exact")["options"]["require_slicing"] is True
-    skipped_cpu_tn_cases = {case["case_id"] for case in research_cpu_tn["cases"] if case.get("case_skip_reason")}
+    assert {int(case["circuit"].get("n_qubits", case["circuit"].get("allocated_qubits"))) for case in thesis_cpu_gpu["cases"]} == canonical_sizes
+    assert {case["circuit"]["name"] for case in thesis_cpu_gpu["cases"]} == canonical_families
+    assert len(thesis_cpu_gpu["cases"]) == 42
+    assert thesis_cpu_gpu_correctness["metadata"]["state_output_mode"] == "full_dump"
+    assert thesis_cpu_gpu_correctness["metadata"]["validation_method"] == "full_statevector"
+    assert thesis_cpu_tn["route_policy"]["routes"] == ["quest_cpu_full_state_exact", "quimb_tn_exact", "quimb_tn_sliced_exact"]
+    assert {int(case["circuit"].get("n_qubits", case["circuit"].get("allocated_qubits"))) for case in thesis_cpu_tn["cases"]} == canonical_sizes
+    assert {case["circuit"]["name"] for case in thesis_cpu_tn["cases"]} == canonical_families
+    assert len(thesis_cpu_tn["cases"]) == 42
+    assert route_config_for(thesis_cpu_tn, "quimb_tn_sliced_exact")["options"]["require_slicing"] is True
+    skipped_cpu_tn_cases = {case["case_id"] for case in thesis_cpu_tn["cases"] if case.get("case_skip_reason")}
     assert skipped_cpu_tn_cases == set()
     assert research_internal_parallelism["metadata"]["intended_use"] == "diagnostics"
     assert "cpu_tn_hybrid_sliced_frontier_exact" in research_internal_parallelism["route_policy"]["routes"]

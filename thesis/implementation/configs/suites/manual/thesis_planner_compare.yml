@@ -1,14 +1,17 @@
 schema_version: 2
-suite_id: research_planner_compare
+suite_id: thesis_planner_compare
 
 metadata:
   purpose: thesis_contraction_path_comparison
   expected_runtime_class: manual_cpu_minutes
   expected_memory_class: planning_only
-  intended_use: thesis_research_planner_evidence
+  intended_use: thesis_evidence_planner_comparison
   deterministic_unitary_only: true
   manual_invocation_required: true
   execution_tier: modeled_planning_only
+  canonical_circuit_families: [QRNG, BV, XOR, BB84, EDC, HS]
+  canonical_qubit_sizes: [8, 10, 12, 14, 16, 18, 20]
+  max_qubits: 20
   notes: >
     Compares deterministic opt_einsum planner choices for the six PIMutation
     circuit families and the canonical seven local sizes. No contraction is
@@ -38,48 +41,48 @@ planner_comparison:
     parallelism_bonus_weight: 0.25
 
 workloads:
-  - {id: quest_qrng_4q_planner, circuit: {kind: quest_compatible, name: QRNG, n_qubits: 4}}
-  - {id: quest_qrng_6q_planner, circuit: {kind: quest_compatible, name: QRNG, n_qubits: 6}}
   - {id: quest_qrng_8q_planner, circuit: {kind: quest_compatible, name: QRNG, n_qubits: 8}}
   - {id: quest_qrng_10q_planner, circuit: {kind: quest_compatible, name: QRNG, n_qubits: 10}}
   - {id: quest_qrng_12q_planner, circuit: {kind: quest_compatible, name: QRNG, n_qubits: 12}}
   - {id: quest_qrng_14q_planner, circuit: {kind: quest_compatible, name: QRNG, n_qubits: 14}}
   - {id: quest_qrng_16q_planner, circuit: {kind: quest_compatible, name: QRNG, n_qubits: 16}}
-  - {id: quest_bv_4q_planner, circuit: {kind: quest_compatible, name: BV, n_qubits: 4}}
-  - {id: quest_bv_6q_planner, circuit: {kind: quest_compatible, name: BV, n_qubits: 6}}
+  - {id: quest_qrng_18q_planner, circuit: {kind: quest_compatible, name: QRNG, n_qubits: 18}}
+  - {id: quest_qrng_20q_planner, circuit: {kind: quest_compatible, name: QRNG, n_qubits: 20}}
   - {id: quest_bv_8q_planner, circuit: {kind: quest_compatible, name: BV, n_qubits: 8}}
   - {id: quest_bv_10q_planner, circuit: {kind: quest_compatible, name: BV, n_qubits: 10}}
   - {id: quest_bv_12q_planner, circuit: {kind: quest_compatible, name: BV, n_qubits: 12}}
   - {id: quest_bv_14q_planner, circuit: {kind: quest_compatible, name: BV, n_qubits: 14}}
   - {id: quest_bv_16q_planner, circuit: {kind: quest_compatible, name: BV, n_qubits: 16}}
-  - {id: quest_xor_4q_planner, circuit: {kind: quest_compatible, name: XOR, n_qubits: 4}}
-  - {id: quest_xor_6q_planner, circuit: {kind: quest_compatible, name: XOR, n_qubits: 6}}
+  - {id: quest_bv_18q_planner, circuit: {kind: quest_compatible, name: BV, n_qubits: 18}}
+  - {id: quest_bv_20q_planner, circuit: {kind: quest_compatible, name: BV, n_qubits: 20}}
   - {id: quest_xor_8q_planner, circuit: {kind: quest_compatible, name: XOR, n_qubits: 8}}
   - {id: quest_xor_10q_planner, circuit: {kind: quest_compatible, name: XOR, n_qubits: 10}}
   - {id: quest_xor_12q_planner, circuit: {kind: quest_compatible, name: XOR, n_qubits: 12}}
   - {id: quest_xor_14q_planner, circuit: {kind: quest_compatible, name: XOR, n_qubits: 14}}
   - {id: quest_xor_16q_planner, circuit: {kind: quest_compatible, name: XOR, n_qubits: 16}}
-  - {id: quest_bb84_4q_planner, circuit: {kind: quest_compatible, name: BB84, n_qubits: 4}}
-  - {id: quest_bb84_6q_planner, circuit: {kind: quest_compatible, name: BB84, n_qubits: 6}}
+  - {id: quest_xor_18q_planner, circuit: {kind: quest_compatible, name: XOR, n_qubits: 18}}
+  - {id: quest_xor_20q_planner, circuit: {kind: quest_compatible, name: XOR, n_qubits: 20}}
   - {id: quest_bb84_8q_planner, circuit: {kind: quest_compatible, name: BB84, n_qubits: 8}}
   - {id: quest_bb84_10q_planner, circuit: {kind: quest_compatible, name: BB84, n_qubits: 10}}
   - {id: quest_bb84_12q_planner, circuit: {kind: quest_compatible, name: BB84, n_qubits: 12}}
   - {id: quest_bb84_14q_planner, circuit: {kind: quest_compatible, name: BB84, n_qubits: 14}}
   - {id: quest_bb84_16q_planner, circuit: {kind: quest_compatible, name: BB84, n_qubits: 16}}
-  - {id: quest_edc_4q_planner, circuit: {kind: quest_compatible, name: EDC, n_qubits: 4}}
-  - {id: quest_edc_6q_planner, circuit: {kind: quest_compatible, name: EDC, n_qubits: 6}}
+  - {id: quest_bb84_18q_planner, circuit: {kind: quest_compatible, name: BB84, n_qubits: 18}}
+  - {id: quest_bb84_20q_planner, circuit: {kind: quest_compatible, name: BB84, n_qubits: 20}}
   - {id: quest_edc_8q_planner, circuit: {kind: quest_compatible, name: EDC, n_qubits: 8}}
   - {id: quest_edc_10q_planner, circuit: {kind: quest_compatible, name: EDC, n_qubits: 10}}
   - {id: quest_edc_12q_planner, circuit: {kind: quest_compatible, name: EDC, n_qubits: 12}}
   - {id: quest_edc_14q_planner, circuit: {kind: quest_compatible, name: EDC, n_qubits: 14}}
   - {id: quest_edc_16q_planner, circuit: {kind: quest_compatible, name: EDC, n_qubits: 16}}
-  - {id: quest_hs_4q_planner, circuit: {kind: quest_compatible, name: HS, allocated_qubits: 4, logical_qubits: 2}}
-  - {id: quest_hs_6q_planner, circuit: {kind: quest_compatible, name: HS, allocated_qubits: 6, logical_qubits: 3}}
+  - {id: quest_edc_18q_planner, circuit: {kind: quest_compatible, name: EDC, n_qubits: 18}}
+  - {id: quest_edc_20q_planner, circuit: {kind: quest_compatible, name: EDC, n_qubits: 20}}
   - {id: quest_hs_8q_planner, circuit: {kind: quest_compatible, name: HS, allocated_qubits: 8, logical_qubits: 4}}
   - {id: quest_hs_10q_planner, circuit: {kind: quest_compatible, name: HS, allocated_qubits: 10, logical_qubits: 5}}
   - {id: quest_hs_12q_planner, circuit: {kind: quest_compatible, name: HS, allocated_qubits: 12, logical_qubits: 6}}
   - {id: quest_hs_14q_planner, circuit: {kind: quest_compatible, name: HS, allocated_qubits: 14, logical_qubits: 7}}
   - {id: quest_hs_16q_planner, circuit: {kind: quest_compatible, name: HS, allocated_qubits: 16, logical_qubits: 8}}
+  - {id: quest_hs_18q_planner, circuit: {kind: quest_compatible, name: HS, allocated_qubits: 18, logical_qubits: 9}}
+  - {id: quest_hs_20q_planner, circuit: {kind: quest_compatible, name: HS, allocated_qubits: 20, logical_qubits: 10}}
 
 routes:
   - id: cpu_tn_einsum_exact

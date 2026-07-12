@@ -38,7 +38,8 @@ The Makefile is the public execution surface.
 
 ```bash
 # 1. Run the complete local research matrix.
-make thesis-run
+# Use the physical-core count printed by `make doctor`.
+BENCH_CPU_THREADS=6 make thesis-run
 
 # 2. Inspect generated evidence and comparisons.
 make list-runs
@@ -58,14 +59,17 @@ make thesis-clean APPLY=1
 make thesis-release NAME=upmem-baseline-v1
 ```
 
-`make thesis-run` runs fixed suite files and saves every execution automatically.
-No run path needs to be copied manually.
+`make thesis-run` requires an explicit physical-core count, fixes the OpenMP,
+OpenBLAS, MKL, and NumExpr thread settings for every subprocess, runs fixed
+suite files, and saves every execution automatically. No run path needs to be
+copied manually.
 
 The long run includes:
 
 - QuEST CPU/GPU correctness evidence;
-- QuEST CPU/GPU deep performance evidence;
-- QuEST CPU plus Quimb unsliced/sliced CPU TN evidence;
+- QuEST CPU/GPU 8--20q performance evidence across seven sizes;
+- QuEST CPU plus Quimb unsliced/sliced 8--20q CPU TN evidence;
+- same-path float64/int8 internal TaskGraph replay for quantization attribution;
 - modeled `opt_einsum` contraction-path candidates with UPMEM pressure scores;
 - strict generic UPMEM SDK-simulator float32/int8 boundary evidence;
 - internal parallelism diagnostics, clearly excluded from serious baselines.
@@ -143,6 +147,13 @@ TaskGraph-based CPU and UPMEM records carry
 `contraction_plan_hash`. A CPU/UPMEM execution comparison is called same-plan
 only when those hashes match. Planning time is recorded separately from route
 execution time.
+
+Evidence provenance is stage-specific. `benchmark_source_*` fields identify
+the code that executed the workload, `report_generation_*` fields identify the
+revision that derived tables and plots, and `snapshot_promotion_*` fields
+identify the clean base revision used to select tracked evidence. Repository
+dirtiness outside `thesis/implementation` is recorded separately and does not
+silently change benchmark-source cleanliness.
 
 Current limitation:
 

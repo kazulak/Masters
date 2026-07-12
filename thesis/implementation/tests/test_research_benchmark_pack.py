@@ -100,6 +100,12 @@ def test_research_pack_statistics_and_cpu_gpu_pairing() -> None:
     assert cpu["benchmark_n_qubits"] == 10
     assert cpu["actual_n_qubits_source"] == "case_id"
     assert cpu["simulation_compute_time_s_median"] == 9.0
+    assert cpu["simulation_compute_time_s_p25"] == 8.5
+    assert cpu["simulation_compute_time_s_p75"] == 9.5
+    assert cpu["simulation_compute_time_s_iqr"] == 1.0
+    assert cpu["total_wall_time_s_p25"] == 10.5
+    assert cpu["total_wall_time_s_p75"] == 11.5
+    assert cpu["total_host_residual_time_s_iqr"] is None
     assert len(speedups) == 2
     assert speedups[0]["n_qubits"] == 10
     assert speedups[0]["actual_n_qubits"] == 10
@@ -263,6 +269,11 @@ def test_research_pack_cpu_gpu_performance_summary_uses_repeat_medians() -> None
     assert summary[0]["cpu_simulation_compute_time_s_median"] == 9.0
     assert summary[0]["gpu_simulation_compute_time_s_median"] == 2.25
     assert summary[0]["compute_speedup_cpu_over_gpu_median"] == 4.0
+    assert summary[0]["compute_speedup_cpu_over_gpu_p25"] == 4.0
+    assert summary[0]["compute_speedup_cpu_over_gpu_p75"] == 4.0
+    assert summary[0]["compute_speedup_cpu_over_gpu_iqr"] == 0.0
+    assert summary[0]["compute_speedup_cpu_over_gpu_crossover_qubit"] == 10
+    assert summary[0]["crossover_qubit"] == 10
 
 
 def test_research_pack_skipped_group_result_is_visible() -> None:
@@ -284,10 +295,19 @@ def test_research_pack_runs_upmem_boundary_through_strict_generic_mvp_command() 
     assert "--execute-external" in argv
 
 
+def test_research_pack_registry_uses_canonical_thesis_suite_paths() -> None:
+    assert pack.RESEARCH_SUITES["cpu_gpu"].name == "thesis_full_state_cpu_gpu.yml"
+    assert pack.RESEARCH_SUITES["cpu_gpu_correctness"].name == "thesis_full_state_correctness.yml"
+    assert pack.RESEARCH_SUITES["cpu_tn"].name == "thesis_cpu_tn_quimb.yml"
+    assert pack.RESEARCH_SUITES["tn_path_quantization"].name == "thesis_tn_paths_quantization.yml"
+    assert pack.RESEARCH_SUITES["planner_paths"].name == "thesis_planner_compare.yml"
+    assert pack.SUITE_COMMAND_ORDER.index("tn_path_quantization") == pack.SUITE_COMMAND_ORDER.index("cpu_tn") + 1
+    assert all("research_cpu_gpu.yml" not in path.name and "research_cpu_tn.yml" not in path.name for path in pack.RESEARCH_SUITES.values())
+
+
 def test_research_suite_matrix_uses_six_families_and_seven_local_sizes() -> None:
     expected_families = {"QRNG", "BV", "XOR", "BB84", "EDC", "HS"}
-    expected_sizes = {4, 6, 8, 10, 12, 14, 16}
-    for suite_name in ("research_cpu_gpu.yml", "research_cpu_tn.yml", "research_planner_compare.yml"):
+    for suite_name in ("thesis_full_state_cpu_gpu.yml", "thesis_cpu_tn_quimb.yml", "thesis_tn_paths_quantization.yml"):
         suite = load_suite(pack.ROOT / "configs" / "suites" / "manual" / suite_name)
         families = {str(case["circuit"]["name"]) for case in suite["cases"]}
         sizes = {
@@ -295,10 +315,11 @@ def test_research_suite_matrix_uses_six_families_and_seven_local_sizes() -> None
             for case in suite["cases"]
         }
         assert families == expected_families
-        assert sizes == expected_sizes
+        assert sizes == {8, 10, 12, 14, 16, 18, 20}
         assert len(suite["cases"]) == 42
 
     planner = load_suite(pack.RESEARCH_SUITES["planner_paths"])
+    assert planner["suite_id"] == "thesis_planner_compare"
     assert [item["optimize"] for item in comparison_planner_configs(planner)] == ["greedy", "auto"]
     assert pack._research_suite_argv("planner_paths", pack.ROOT)[:2] == ["compare-planners", "--suite"]
 
@@ -424,7 +445,39 @@ def test_research_pack_writes_lightweight_pack(tmp_path: Path) -> None:
     assert "Next UPMEM Implementation Readiness" in summary
     manifest = json.loads((out / "benchmark_manifest.json").read_text(encoding="utf-8"))
     assert manifest["artifact_kind"] == "research_benchmark_pack"
+    assert manifest["report_generation_provenance"]["script"] == "scripts/research_benchmark_pack.py"
+    assert manifest["report_generation"]["mode"] == "report"
+    assert manifest["report_generation_input_paths"] == []
+    assert manifest["benchmark_source_commit"] is None
+    assert manifest["benchmark_source_commits"] == []
+    assert manifest["benchmark_source_worktree_dirty"] is False
+    assert "report_generation_commit" in manifest
+    assert "report_generation_worktree_dirty" in manifest
     assert not (tmp_path / "latest").exists()
+
+
+def test_research_pack_derives_source_provenance_from_evidence(tmp_path: Path) -> None:
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    (evidence / "run_manifest.json").write_text(
+        json.dumps(
+            {
+                "benchmark_source_commit": "source-head",
+                "benchmark_source_worktree_dirty": False,
+                "repository_worktree_dirty": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    provenance = pack._evidence_source_provenance([evidence])
+
+    assert provenance == {
+        "commit": "source-head",
+        "commits": ["source-head"],
+        "worktree_dirty": False,
+        "repository_worktree_dirty": True,
+    }
 
 
 def test_research_pack_prefers_host_residual_for_upmem_attribution() -> None:

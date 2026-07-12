@@ -15,21 +15,21 @@ QRNG, BV, XOR, BB84, EDC, HS
 Canonical local sizes:
 
 ```text
-4, 6, 8, 10, 12, 14, 16 qubits
+8, 10, 12, 14, 16, 18, 20 qubits
 ```
 
-This is 42 family/size cases. The grid is deliberately bounded for frequent
-local iteration. Larger workstation and cluster sweeps may extend it, but must
-not silently replace it.
+This is 42 family/size cases. The correctness tier remains a smaller 4/8/12/16q
+semantic check; it is not the performance grid.
 
 ## Executable Groups
 
 | Group | Suite | Routes/modes | Repeats | Scientific purpose |
 | --- | --- | --- | ---: | --- |
-| Full-state correctness | `configs/suites/manual/research_cpu_gpu_correctness.yml` | QuEST CPU + verified QuEST GPU, full dump | 1 | Prove CPU/GPU semantic agreement on representative 4/8/12/16q cases |
-| Full-state performance | `configs/suites/manual/research_cpu_gpu.yml` | QuEST CPU + verified QuEST GPU, metrics only | 5 + 1 warmup | Compare compute time and process wall time over all 42 cases |
-| CPU TN | `configs/suites/manual/research_cpu_tn.yml` | QuEST CPU anchor, Quimb unsliced, Quimb sliced | 3 + 1 warmup | Compare full-state and external TN execution, path cost, slicing, and memory proxies over all 42 shallow cases |
-| Planner candidates | `configs/suites/manual/research_planner_compare.yml` | `opt_einsum` greedy and auto | planning once | Compare plan FLOPs, peak intermediates, modeled transfers/tiling, and UPMEM pressure |
+| Full-state correctness | `configs/suites/manual/thesis_full_state_correctness.yml` | QuEST CPU + verified QuEST GPU, full dump | 1 | Prove CPU/GPU semantic agreement on representative 4/8/12/16q cases |
+| Full-state performance | `configs/suites/manual/thesis_full_state_cpu_gpu.yml` | QuEST CPU + verified QuEST GPU, metrics only | 5 + 1 warmup | Compare compute time and process wall time over all 42 cases |
+| CPU TN | `configs/suites/manual/thesis_cpu_tn_quimb.yml` | QuEST CPU anchor, Quimb unsliced, Quimb sliced | 3 | Compare full-state and external TN execution, path cost, slicing, and memory proxies over all 42 shallow cases |
+| Same-path quantization | `configs/suites/manual/thesis_tn_paths_quantization.yml` | float64 and int8 internal TaskGraph replay | 1 | Attribute runtime and error to per-contraction quantization on an identical path; diagnostic, not serious TN baseline |
+| Planner candidates | `configs/suites/manual/thesis_planner_compare.yml` | `opt_einsum` greedy and auto | planning once | Compare plan FLOPs, peak intermediates, modeled transfers/tiling, and UPMEM pressure |
 | UPMEM boundary | `configs/suites/manual/thesis_upmem_quantization_boundary.yml` | Same internal TaskGraph, float32 and int8 strict generic UPMEM SDK simulator | 1 | Find supported/unsupported boundary and attribute transfer/error/runtime changes to quantization |
 | Internal parallelism | `configs/suites/manual/research_internal_parallelism.yml` | sequential/frontier/hybrid internal TaskGraph | 1 | Diagnostic architecture evidence only |
 

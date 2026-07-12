@@ -1,11 +1,11 @@
 schema_version: 2
-suite_id: research_cpu_gpu_correctness
+suite_id: thesis_full_state_correctness
 
 metadata:
-  purpose: research_cpu_gpu_full_state_correctness
+  purpose: thesis_full_state_cpu_gpu_correctness
   expected_runtime_class: manual_gpu_minutes
   expected_memory_class: bounded_statevector
-  intended_use: thesis_research_correctness
+  intended_use: thesis_evidence_full_state_correctness
   deterministic_unitary_only: true
   manual_invocation_required: true
   gpu_execution_suite: true
@@ -19,7 +19,7 @@ metadata:
   canonical_circuit_families: [QRNG, BV, XOR, BB84, EDC, HS]
   correctness_qubit_sizes: [4, 8, 12, 16]
   max_qubits: 16
-  notes: Full-output correctness tier for the CPU/GPU performance route.
+  notes: Full-output correctness tier for the canonical thesis CPU/GPU performance route.
 
 defaults:
   warmups: 0

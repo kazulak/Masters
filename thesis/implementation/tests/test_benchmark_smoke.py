@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from quantum_bench.bench.runner import run_suite
+from quantum_bench.environment.capture import capture_environment
 from quantum_bench.targets.upmem import UPMEM_DENSE_ESTIMATE_KEY
 
 
@@ -70,6 +71,13 @@ def test_smoke_suite_writes_raw_summary_without_plots(tmp_path: Path) -> None:
     assert summary["record_count"] == 4
     assert (run_dir / "environment.json").exists()
     assert "simplepim" in environment
+    assert "physical_cpu_count" in environment
+    assert "cpu_affinity" in environment
+    assert "cpu_frequency_governor" in environment
+    assert "benchmark_threads" in environment
+    assert "OPENBLAS_NUM_THREADS" in environment["benchmark_threads"]
+    assert "blas" in environment
+    assert "name" in environment["blas"]
     assert "SIMPLEPIM_HOME" in environment["simplepim"]
     assert "SIMPLEPIM_BIN" in environment["simplepim"]
     assert "SIMPLEPIM_LIB" in environment["simplepim"]
@@ -241,6 +249,28 @@ def test_smoke_suite_writes_raw_summary_without_plots(tmp_path: Path) -> None:
             target_estimates = metric["target_estimates"]
             assert isinstance(target_estimates, dict)
             _assert_upmem_estimate_schema(target_estimates[UPMEM_DENSE_ESTIMATE_KEY])
+
+def test_environment_capture_records_controlled_thread_profile(monkeypatch) -> None:
+    values = {
+        "BENCH_CPU_THREADS": "6",
+        "OMP_NUM_THREADS": "6",
+        "OPENBLAS_NUM_THREADS": "6",
+        "MKL_NUM_THREADS": "6",
+        "NUMEXPR_NUM_THREADS": "6",
+        "OMP_DYNAMIC": "FALSE",
+        "OMP_PROC_BIND": "close",
+        "OMP_PLACES": "cores",
+    }
+    for key, value in values.items():
+        monkeypatch.setenv(key, value)
+
+    environment = capture_environment(ROOT)
+
+    assert environment["benchmark_threads"] == values
+    assert environment["physical_cpu_count"]
+    assert isinstance(environment["cpu_affinity"], list)
+    assert set(environment["blas"]) == {"name", "version", "configuration"}
+
 
 def test_smoke_suite_runs_with_same_contract(tmp_path: Path) -> None:
     run_dir = run_suite(ROOT / "configs" / "suites" / "smoke.yml", tmp_path)

@@ -30,10 +30,11 @@ RESEARCH_PACK_KIND = "research_benchmark_pack"
 DEFAULT_COMPARISON_ROOT = ROOT / "runs" / "comparisons" / "research_pack"
 
 RESEARCH_SUITES = {
-    "cpu_gpu": ROOT / "configs" / "suites" / "manual" / "research_cpu_gpu.yml",
-    "cpu_gpu_correctness": ROOT / "configs" / "suites" / "manual" / "research_cpu_gpu_correctness.yml",
-    "cpu_tn": ROOT / "configs" / "suites" / "manual" / "research_cpu_tn.yml",
-    "planner_paths": ROOT / "configs" / "suites" / "manual" / "research_planner_compare.yml",
+    "cpu_gpu": ROOT / "configs" / "suites" / "manual" / "thesis_full_state_cpu_gpu.yml",
+    "cpu_gpu_correctness": ROOT / "configs" / "suites" / "manual" / "thesis_full_state_correctness.yml",
+    "cpu_tn": ROOT / "configs" / "suites" / "manual" / "thesis_cpu_tn_quimb.yml",
+    "tn_path_quantization": ROOT / "configs" / "suites" / "manual" / "thesis_tn_paths_quantization.yml",
+    "planner_paths": ROOT / "configs" / "suites" / "manual" / "thesis_planner_compare.yml",
     # This group intentionally uses the strict generic-only MVP command rather
     # than the route-comparison suite.  The latter permits dense bridge tasks,
     # which is useful for route coverage but is not generic-TN boundary evidence.
@@ -46,6 +47,7 @@ SUITE_COMMAND_ORDER = (
     "cpu_gpu_correctness",
     "cpu_gpu",
     "cpu_tn",
+    "tn_path_quantization",
     "planner_paths",
     "upmem_boundary",
     "upmem_quantization_stress",
@@ -53,10 +55,14 @@ SUITE_COMMAND_ORDER = (
 )
 
 RELEVANT_ENV_VARS = (
+    "BENCH_CPU_THREADS",
     "OMP_NUM_THREADS",
     "OPENBLAS_NUM_THREADS",
     "MKL_NUM_THREADS",
     "NUMEXPR_NUM_THREADS",
+    "OMP_DYNAMIC",
+    "OMP_PROC_BIND",
+    "OMP_PLACES",
     "HIP_VISIBLE_DEVICES",
     "CUDA_VISIBLE_DEVICES",
 )
@@ -137,7 +143,7 @@ def print_plan(root: Path = ROOT) -> None:
         print(f"  {_bench_command(_research_suite_argv(key, root))}")
     print("")
     print("Pack commands:")
-    print("  make thesis-run")
+    print("  BENCH_CPU_THREADS=<physical-core-count> make thesis-run")
     print("  make thesis-promote")
     print("  make thesis-report")
     print("")
@@ -175,7 +181,7 @@ def run_pack(root: Path, out: Path | None, *, suite_filter: list[str] | None, fu
                 "stderr": "",
             }
         )
-    return _write_pack(root, out_dir, evidence_inputs, command_results=command_results, selected_suite_keys=selected)
+    return _write_pack(root, out_dir, evidence_inputs, command_results=command_results, selected_suite_keys=selected, generation_mode="run")
 
 
 def report_pack(root: Path, out: Path | None, *, inputs: list[Path], suite_filter: list[str] | None) -> int:
@@ -195,7 +201,7 @@ def report_pack(root: Path, out: Path | None, *, inputs: list[Path], suite_filte
             "stderr": "",
         }
     ]
-    return _write_pack(root, out_dir, evidence_inputs, command_results=command_results, selected_suite_keys=selected)
+    return _write_pack(root, out_dir, evidence_inputs, command_results=command_results, selected_suite_keys=selected, generation_mode="report")
 
 
 def _write_pack(
@@ -205,12 +211,20 @@ def _write_pack(
     *,
     command_results: list[JsonDict],
     selected_suite_keys: list[str],
+    generation_mode: str = "report",
 ) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     records = load_result_records(evidence_inputs) if evidence_inputs else []
     boundary = validate_artifact_boundaries(root)
     guard_issues = _claim_guard_issues(records)
-    manifest = build_manifest(root, command_results=command_results, evidence_inputs=evidence_inputs, record_count=len(records), selected_suite_keys=selected_suite_keys)
+    manifest = build_manifest(
+        root,
+        command_results=command_results,
+        evidence_inputs=evidence_inputs,
+        record_count=len(records),
+        selected_suite_keys=selected_suite_keys,
+        generation_mode=generation_mode,
+    )
     _write_json(out_dir / "benchmark_manifest.json", manifest)
     stats_rows = per_case_route_stats(records)
     speedup_rows = paired_speedups(records)
@@ -265,15 +279,46 @@ def build_manifest(
     evidence_inputs: list[Path],
     record_count: int,
     selected_suite_keys: list[str],
+    generation_mode: str = "report",
 ) -> JsonDict:
+    command_line = " ".join(sys.argv)
+    generated_at = datetime.now().isoformat(timespec="seconds")
+    source = _evidence_source_provenance(evidence_inputs)
+    report_commit = _git(root, ["rev-parse", "HEAD"])
+    report_dirty = bool(_git(root, ["status", "--short", "--", "."]))
+    report_repository_dirty = bool(_git(root, ["status", "--short"]))
+    provenance = {
+        "generator": RESEARCH_PACK_KIND,
+        "script": "scripts/research_benchmark_pack.py",
+        "schema_version": SCHEMA_VERSION,
+        "mode": generation_mode,
+        "generated_at": generated_at,
+        "command_line": command_line,
+        "input_count": len(evidence_inputs),
+        "input_paths": [path.as_posix() for path in evidence_inputs],
+        "source_records_read_only": True,
+        "commit": report_commit,
+        "worktree_dirty": report_dirty,
+        "repository_worktree_dirty": report_repository_dirty,
+        "scope": "thesis/implementation",
+    }
     return {
         "schema_version": SCHEMA_VERSION,
         "artifact_kind": RESEARCH_PACK_KIND,
-        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "created_at": generated_at,
         "root": root.as_posix(),
-        "git_commit": _git(root, ["rev-parse", "HEAD"]),
-        "dirty_worktree": bool(_git(root, ["status", "--short", "--", "."])),
-        "command_line": " ".join(sys.argv),
+        "git_commit": source["commit"],
+        "dirty_tree": source["worktree_dirty"],
+        "dirty_worktree": source["worktree_dirty"],
+        "benchmark_source_commit": source["commit"],
+        "benchmark_source_commits": source["commits"],
+        "benchmark_source_worktree_dirty": source["worktree_dirty"],
+        "repository_worktree_dirty": source["repository_worktree_dirty"],
+        "provenance_scope": "thesis/implementation",
+        "report_generation_commit": report_commit,
+        "report_generation_worktree_dirty": report_dirty,
+        "report_generation_repository_worktree_dirty": report_repository_dirty,
+        "command_line": command_line,
         "hostname": socket.gethostname(),
         "platform": platform.platform(),
         "python_version": sys.version.replace("\n", " "),
@@ -284,6 +329,13 @@ def build_manifest(
         "evidence_inputs": [path.as_posix() for path in evidence_inputs],
         "record_count": record_count,
         "commands": command_results,
+        "report_generation_provenance": provenance,
+        "report_generation": provenance,
+        "report_generation_script": provenance["script"],
+        "report_generation_mode": generation_mode,
+        "report_generation_timestamp": generated_at,
+        "report_generation_command": command_line,
+        "report_generation_input_paths": [path.as_posix() for path in evidence_inputs],
         "gpu_verification": _read_optional_json(root / "build" / "gpu_verification" / "quest_gpu_full_state_exact.json"),
         "notes": {
             "long_runs_require_explicit_opt_in": True,
@@ -325,11 +377,17 @@ PER_CASE_ROUTE_STATS_FIELDS = [
     "timing_scope",
     "repeat_count",
     "total_wall_time_s_median",
+    "total_wall_time_s_p25",
+    "total_wall_time_s_p75",
+    "total_wall_time_s_iqr",
     "total_wall_time_s_mean",
     "total_wall_time_s_min",
     "total_wall_time_s_max",
     "total_wall_time_s_std",
     "total_host_residual_time_s_median",
+    "total_host_residual_time_s_p25",
+    "total_host_residual_time_s_p75",
+    "total_host_residual_time_s_iqr",
     "total_host_residual_time_s_mean",
     "total_host_residual_time_s_min",
     "total_host_residual_time_s_max",
@@ -341,6 +399,9 @@ PER_CASE_ROUTE_STATS_FIELDS = [
     "reported_time_s_std",
     "timing_basis",
     "simulation_compute_time_s_median",
+    "simulation_compute_time_s_p25",
+    "simulation_compute_time_s_p75",
+    "simulation_compute_time_s_iqr",
     "simulation_compute_time_s_mean",
     "simulation_compute_time_s_min",
     "simulation_compute_time_s_max",
@@ -429,6 +490,8 @@ PAIRED_SPEEDUP_FIELDS = [
     "cpu_total_wall_time_s",
     "gpu_total_wall_time_s",
     "wall_time_ratio_cpu_over_gpu",
+    "cpu_total_host_residual_time_s",
+    "gpu_total_host_residual_time_s",
     "cpu_simulation_compute_time_s",
     "gpu_simulation_compute_time_s",
     "compute_speedup_cpu_over_gpu",
@@ -447,11 +510,39 @@ CPU_GPU_PERFORMANCE_SUMMARY_FIELDS = [
     "matched_repeat_count",
     "timing_scope",
     "cpu_simulation_compute_time_s_median",
+    "cpu_simulation_compute_time_s_p25",
+    "cpu_simulation_compute_time_s_p75",
+    "cpu_simulation_compute_time_s_iqr",
     "gpu_simulation_compute_time_s_median",
+    "gpu_simulation_compute_time_s_p25",
+    "gpu_simulation_compute_time_s_p75",
+    "gpu_simulation_compute_time_s_iqr",
     "compute_speedup_cpu_over_gpu_median",
+    "compute_speedup_cpu_over_gpu_p25",
+    "compute_speedup_cpu_over_gpu_p75",
+    "compute_speedup_cpu_over_gpu_iqr",
     "cpu_total_wall_time_s_median",
+    "cpu_total_wall_time_s_p25",
+    "cpu_total_wall_time_s_p75",
+    "cpu_total_wall_time_s_iqr",
     "gpu_total_wall_time_s_median",
+    "gpu_total_wall_time_s_p25",
+    "gpu_total_wall_time_s_p75",
+    "gpu_total_wall_time_s_iqr",
     "wall_time_ratio_cpu_over_gpu_median",
+    "wall_time_ratio_cpu_over_gpu_p25",
+    "wall_time_ratio_cpu_over_gpu_p75",
+    "wall_time_ratio_cpu_over_gpu_iqr",
+    "cpu_total_host_residual_time_s_median",
+    "cpu_total_host_residual_time_s_p25",
+    "cpu_total_host_residual_time_s_p75",
+    "cpu_total_host_residual_time_s_iqr",
+    "gpu_total_host_residual_time_s_median",
+    "gpu_total_host_residual_time_s_p25",
+    "gpu_total_host_residual_time_s_p75",
+    "gpu_total_host_residual_time_s_iqr",
+    "compute_speedup_cpu_over_gpu_crossover_qubit",
+    "crossover_qubit",
     "gpu_device_name",
 ]
 
@@ -699,6 +790,8 @@ def paired_speedups(records: list[JsonDict]) -> list[JsonDict]:
                 "cpu_total_wall_time_s": cpu_total,
                 "gpu_total_wall_time_s": gpu_total,
                 "wall_time_ratio_cpu_over_gpu": cpu_total / gpu_total,
+                "cpu_total_host_residual_time_s": _float_or_none(cpu.get("total_host_residual_time_s")),
+                "gpu_total_host_residual_time_s": _float_or_none(gpu.get("total_host_residual_time_s")),
                 "cpu_simulation_compute_time_s": cpu_compute,
                 "gpu_simulation_compute_time_s": gpu_compute,
                 "compute_speedup_cpu_over_gpu": cpu_compute / gpu_compute,
@@ -722,8 +815,7 @@ def cpu_gpu_performance_summary(speedup_rows: list[JsonDict]) -> list[JsonDict]:
     summary: list[JsonDict] = []
     for (case_id, family, qubits), group in sorted(grouped.items()):
         first = group[0]
-        summary.append(
-            {
+        summary.append({
                 "schema_version": SCHEMA_VERSION,
                 "case_id": case_id,
                 "case_family": family,
@@ -734,22 +826,38 @@ def cpu_gpu_performance_summary(speedup_rows: list[JsonDict]) -> list[JsonDict]:
                 "actual_n_qubits_warning": first.get("actual_n_qubits_warning"),
                 "matched_repeat_count": len(group),
                 "timing_scope": "performance_compute",
-                "cpu_simulation_compute_time_s_median": statistics.median(float(row["cpu_simulation_compute_time_s"]) for row in group),
-                "gpu_simulation_compute_time_s_median": statistics.median(float(row["gpu_simulation_compute_time_s"]) for row in group),
-                "compute_speedup_cpu_over_gpu_median": statistics.median(float(row["compute_speedup_cpu_over_gpu"]) for row in group),
-                "cpu_total_wall_time_s_median": statistics.median(float(row["cpu_total_wall_time_s"]) for row in group),
-                "gpu_total_wall_time_s_median": statistics.median(float(row["gpu_total_wall_time_s"]) for row in group),
-                "wall_time_ratio_cpu_over_gpu_median": statistics.median(float(row["wall_time_ratio_cpu_over_gpu"]) for row in group),
                 "gpu_device_name": _first_present(group, "gpu_device_name"),
-            }
+                **_stats("cpu_simulation_compute_time_s", _numbers(row.get("cpu_simulation_compute_time_s") for row in group)),
+                **_stats("gpu_simulation_compute_time_s", _numbers(row.get("gpu_simulation_compute_time_s") for row in group)),
+                **_stats("compute_speedup_cpu_over_gpu", _numbers(row.get("compute_speedup_cpu_over_gpu") for row in group)),
+                **_stats("cpu_total_wall_time_s", _numbers(row.get("cpu_total_wall_time_s") for row in group)),
+                **_stats("gpu_total_wall_time_s", _numbers(row.get("gpu_total_wall_time_s") for row in group)),
+                **_stats("wall_time_ratio_cpu_over_gpu", _numbers(row.get("wall_time_ratio_cpu_over_gpu") for row in group)),
+                **_stats("cpu_total_host_residual_time_s", _numbers(row.get("cpu_total_host_residual_time_s") for row in group)),
+                **_stats("gpu_total_host_residual_time_s", _numbers(row.get("gpu_total_host_residual_time_s") for row in group)),
+            })
+    crossover_by_family: dict[str, int | str] = {}
+    family_groups: dict[str, list[JsonDict]] = defaultdict(list)
+    for row in summary:
+        family_groups[str(row["case_family"])].append(row)
+    for family, family_rows in family_groups.items():
+        observed = sorted(
+            int(row["n_qubits"])
+            for row in family_rows
+            if _plot_qubits(row) is not None and _positive(row.get("compute_speedup_cpu_over_gpu_median")) is not None
+            and float(row["compute_speedup_cpu_over_gpu_median"]) > 1.0
         )
+        crossover_by_family[family] = observed[0] if observed else "none_observed"
+    for row in summary:
+        row["compute_speedup_cpu_over_gpu_crossover_qubit"] = crossover_by_family[str(row["case_family"])]
+        row["crossover_qubit"] = row["compute_speedup_cpu_over_gpu_crossover_qubit"]
     return summary
 
 
 def full_state_tn_comparison(stats_rows: list[JsonDict]) -> list[JsonDict]:
     grouped: dict[tuple[str, str], dict[str, JsonDict]] = defaultdict(dict)
     for row in stats_rows:
-        if row.get("suite_id") != "research_cpu_tn":
+        if row.get("suite_id") not in {"thesis_cpu_tn_quimb", "research_cpu_tn"}:
             continue
         route = str(row.get("route_id") or "")
         if route in {"quest_cpu_full_state_exact", "quimb_tn_exact", "quimb_tn_sliced_exact"}:
@@ -1138,7 +1246,7 @@ def benchmark_summary(
             "## Exact Commands",
             "",
             "Run `make research-plan` to print the underlying commands.",
-            "Run `make thesis-run` for the complete local benchmark matrix.",
+            "Run `BENCH_CPU_THREADS=<physical-core-count> make thesis-run` for the complete local benchmark matrix.",
             "",
             "## Hardware And Software Manifest",
             "",
@@ -1422,8 +1530,22 @@ def _plot_cpu_gpu_runtime(plt: Any, path: Path, rows: list[JsonDict]) -> str | N
     for axis, family in zip(axes.flat, families):
         group = sorted((row for row in usable if str(row["case_family"]) == family), key=lambda row: int(_plot_qubits(row) or 0))
         qubits = [int(_plot_qubits(row) or 0) for row in group]
-        axis.plot(qubits, [float(row["cpu_simulation_compute_time_s_median"]) for row in group], marker="o", label="QuEST CPU")
-        axis.plot(qubits, [float(row["gpu_simulation_compute_time_s_median"]) for row in group], marker="s", label="QuEST GPU")
+        axis.errorbar(
+            qubits,
+            [float(row["cpu_simulation_compute_time_s_median"]) for row in group],
+            yerr=_plot_iqr_error(group, "cpu_simulation_compute_time_s"),
+            marker="o",
+            capsize=3,
+            label="QuEST CPU",
+        )
+        axis.errorbar(
+            qubits,
+            [float(row["gpu_simulation_compute_time_s_median"]) for row in group],
+            yerr=_plot_iqr_error(group, "gpu_simulation_compute_time_s"),
+            marker="s",
+            capsize=3,
+            label="QuEST GPU",
+        )
         axis.set_yscale("log")
         axis.set_title(family)
         axis.set_xlabel("Qubits")
@@ -1448,7 +1570,14 @@ def _plot_cpu_gpu_speedup(plt: Any, path: Path, rows: list[JsonDict]) -> str | N
     fig, ax = plt.subplots(figsize=(9.0, 5.6), constrained_layout=True)
     for family, group in sorted(grouped.items()):
         ordered = sorted(group, key=lambda row: int(_plot_qubits(row) or 0))
-        ax.plot([int(_plot_qubits(row) or 0) for row in ordered], [float(row["compute_speedup_cpu_over_gpu_median"]) for row in ordered], marker="o", label=family)
+        ax.errorbar(
+            [int(_plot_qubits(row) or 0) for row in ordered],
+            [float(row["compute_speedup_cpu_over_gpu_median"]) for row in ordered],
+            yerr=_plot_iqr_error(ordered, "compute_speedup_cpu_over_gpu"),
+            marker="o",
+            capsize=3,
+            label=family,
+        )
     ax.axhline(1.0, color="#64748b", linestyle="--", linewidth=1.0)
     ax.set_xlabel("Qubits")
     ax.set_ylabel("Compute speedup (CPU time / GPU time)")
@@ -1475,10 +1604,12 @@ def _plot_cpu_tn_runtime(plt: Any, path: Path, rows: list[JsonDict]) -> str | No
                 key=lambda row: int(_plot_qubits(row) or 0),
             )
             if group:
-                axis.plot(
+                axis.errorbar(
                     [int(_plot_qubits(row) or 0) for row in group],
                     [float(row["simulation_compute_time_s_median"]) for row in group],
+                    yerr=_plot_iqr_error(group, "simulation_compute_time_s"),
                     marker=marker,
+                    capsize=3,
                     label=label,
                 )
         axis.set_yscale("log")
@@ -1504,7 +1635,7 @@ def _plot_full_state_vs_tn_runtime(plt: Any, path: Path, rows: list[JsonDict]) -
     selected = [
         row
         for row in rows
-        if row.get("suite_id") == "research_cpu_tn"
+        if row.get("suite_id") in {"thesis_cpu_tn_quimb", "research_cpu_tn"}
         and row.get("route_id") in routes
         and _plot_qubits(row) is not None
         and _positive(row.get("simulation_compute_time_s_median")) is not None
@@ -1520,10 +1651,12 @@ def _plot_full_state_vs_tn_runtime(plt: Any, path: Path, rows: list[JsonDict]) -
                 key=lambda row: int(_plot_qubits(row) or 0),
             )
             if group:
-                axis.plot(
+                axis.errorbar(
                     [int(_plot_qubits(row) or 0) for row in group],
                     [float(row["simulation_compute_time_s_median"]) for row in group],
+                    yerr=_plot_iqr_error(group, "simulation_compute_time_s"),
                     marker=marker,
+                    capsize=3,
                     label=label,
                 )
         axis.set_yscale("log")
@@ -1900,13 +2033,24 @@ def _stats(prefix: str, values: list[float]) -> JsonDict:
     if not values:
         return {
             f"{prefix}_median": None,
+            f"{prefix}_p25": None,
+            f"{prefix}_p75": None,
+            f"{prefix}_iqr": None,
             f"{prefix}_mean": None,
             f"{prefix}_min": None,
             f"{prefix}_max": None,
             f"{prefix}_std": None,
         }
+    if len(values) == 1:
+        p25 = p75 = values[0]
+    else:
+        quartiles = statistics.quantiles(values, n=4, method="inclusive")
+        p25, p75 = quartiles[0], quartiles[2]
     return {
         f"{prefix}_median": statistics.median(values),
+        f"{prefix}_p25": p25,
+        f"{prefix}_p75": p75,
+        f"{prefix}_iqr": p75 - p25,
         f"{prefix}_mean": statistics.mean(values),
         f"{prefix}_min": min(values),
         f"{prefix}_max": max(values),
@@ -2170,6 +2314,22 @@ def _plot_qubits(row: JsonDict) -> int | None:
     return None
 
 
+def _plot_iqr_error(rows: list[JsonDict], prefix: str) -> list[list[float]]:
+    lower: list[float] = []
+    upper: list[float] = []
+    for row in rows:
+        median = _float_or_none(row.get(f"{prefix}_median"))
+        p25 = _float_or_none(row.get(f"{prefix}_p25"))
+        p75 = _float_or_none(row.get(f"{prefix}_p75"))
+        if median is None or p25 is None or p75 is None:
+            lower.append(0.0)
+            upper.append(0.0)
+        else:
+            lower.append(max(0.0, median - p25))
+            upper.append(max(0.0, p75 - median))
+    return [lower, upper]
+
+
 def _first_present(group: list[JsonDict], key: str) -> Any:
     for row in group:
         value = row.get(key)
@@ -2287,6 +2447,31 @@ def _read_optional_json(path: Path) -> JsonDict | None:
         return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return {"read_error": "invalid_json", "path": path.as_posix()}
+
+
+def _evidence_source_provenance(evidence_inputs: list[Path]) -> JsonDict:
+    commits: set[str] = set()
+    source_dirty = False
+    repository_dirty = False
+    for evidence in evidence_inputs:
+        root = evidence if evidence.is_dir() else evidence.parent
+        manifest = _read_optional_json(root / "run_manifest.json") or {}
+        commit = str(manifest.get("benchmark_source_commit") or manifest.get("git_commit") or "")
+        if commit:
+            commits.add(commit)
+        source_dirty = source_dirty or bool(
+            manifest.get("benchmark_source_worktree_dirty")
+            if manifest.get("benchmark_source_worktree_dirty") is not None
+            else manifest.get("dirty_tree", manifest.get("dirty_worktree", False))
+        )
+        repository_dirty = repository_dirty or bool(manifest.get("repository_worktree_dirty", False))
+    ordered_commits = sorted(commits)
+    return {
+        "commit": ordered_commits[0] if len(ordered_commits) == 1 else None,
+        "commits": ordered_commits,
+        "worktree_dirty": source_dirty,
+        "repository_worktree_dirty": repository_dirty,
+    }
 
 
 def _gpu_verification_passed(root: Path) -> bool:

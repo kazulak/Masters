@@ -10,6 +10,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from quantum_bench.environment.capture import read_cpu_affinity, read_cpu_frequency_governor, read_physical_cpu_count
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -21,6 +23,7 @@ def main() -> int:
     _check_import("quantum_bench", required=True)
     for module in ("numpy", "opt_einsum", "cotengra", "quimb", "yaml", "matplotlib"):
         _check_import(module, required=False)
+    _check_cpu_benchmark_profile()
     _check_quest_cpu()
     _check_rocm()
     _check_upmem_sdk()
@@ -52,6 +55,22 @@ def _check_quest_cpu() -> None:
         _line("PASS", "quest_cpu", str(runner.relative_to(ROOT)))
     else:
         _line("BLOCKED", "quest_cpu", "native runner missing; run `make build-quest-cpu`")
+
+
+def _check_cpu_benchmark_profile() -> None:
+    physical = read_physical_cpu_count()
+    logical = os.cpu_count()
+    affinity = read_cpu_affinity()
+    governor = read_cpu_frequency_governor()
+    configured = os.environ.get("BENCH_CPU_THREADS")
+    details = (
+        f"physical={physical or 'unknown'}; logical={logical or 'unknown'}; "
+        f"affinity={','.join(str(cpu) for cpu in affinity) if affinity else 'unknown'}; "
+        f"governor={governor or 'unknown'}; BENCH_CPU_THREADS={configured or 'unset'}"
+    )
+    _line("PASS" if configured else "WARN", "cpu_benchmark_profile", details)
+    if physical:
+        _line("PASS", "recommended_thesis_run", f"BENCH_CPU_THREADS={physical} make thesis-run")
 
 
 def _check_rocm() -> None:

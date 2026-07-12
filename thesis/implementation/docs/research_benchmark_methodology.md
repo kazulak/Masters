@@ -10,7 +10,7 @@ Already in place:
 
 - fixed suite files and canonical evidence shortcuts;
 - normalized records as the source for report and comparison generation;
-- warmups, repeats, median, mean, min, max, and standard deviation fields;
+- warmups, repeats, median, quartiles/IQR, mean, min, max, and standard deviation fields;
 - route role metadata for serious baselines and diagnostic routes;
 - CPU/GPU performance-tier metadata with `state_output_mode=none`;
 - UPMEM SDK simulator fields that distinguish SDK simulator mode from hardware;
@@ -35,17 +35,18 @@ Remaining limitations:
 
 | Suite | Role |
 |---|---|
-| `configs/suites/manual/research_cpu_gpu.yml` | QuEST CPU vs verified QuEST GPU performance tier. |
-| `configs/suites/manual/research_cpu_gpu_correctness.yml` | Smaller full-statevector correctness tier for the same QuEST CPU/GPU routes. |
-| `configs/suites/manual/research_cpu_tn.yml` | QuEST anchor, Quimb unsliced, and Quimb sliced CPU TN evidence. |
-| `configs/suites/manual/research_planner_compare.yml` | Greedy/auto path costs and modeled UPMEM pressure over the canonical grid. |
+| `configs/suites/manual/thesis_full_state_cpu_gpu.yml` | QuEST CPU vs verified QuEST GPU 8--20q performance tier. |
+| `configs/suites/manual/thesis_full_state_correctness.yml` | Smaller full-statevector correctness tier for the same QuEST CPU/GPU routes. |
+| `configs/suites/manual/thesis_cpu_tn_quimb.yml` | QuEST anchor, Quimb unsliced, and Quimb sliced 8--20q CPU TN evidence. |
+| `configs/suites/manual/thesis_tn_paths_quantization.yml` | Same-path float64/int8 internal replay diagnostic. |
+| `configs/suites/manual/thesis_planner_compare.yml` | Greedy/auto path costs and modeled UPMEM pressure over the canonical grid. |
 | `configs/suites/manual/research_internal_parallelism.yml` | Diagnostic internal TaskGraph sequential/frontier/hybrid evidence. |
 | `configs/suites/manual/thesis_upmem_quantization_boundary.yml` | Strict generic-only UPMEM SDK simulator boundary and same-route float32/int8 attribution evidence. |
 
 ## Commands
 
 ```bash
-make thesis-run
+BENCH_CPU_THREADS=<physical-core-count> make thesis-run
 make thesis-promote
 make thesis-verify
 make thesis-report
