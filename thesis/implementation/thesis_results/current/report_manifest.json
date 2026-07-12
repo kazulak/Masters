@@ -1,26 +1,36 @@
 {
   "artifact_kind": "research_benchmark_pack",
+  "benchmark_source_commit": "29fcd17b18521d08c3c86c1c092eb6eca67bb48f",
+  "benchmark_source_commits": [
+    "29fcd17b18521d08c3c86c1c092eb6eca67bb48f"
+  ],
+  "benchmark_source_worktree_dirty": false,
   "command_line": "make thesis-report",
   "commands": [
     {
       "command": "report existing evidence",
       "returncode": 0,
       "stderr": "",
-      "stdout": "inputs=7"
+      "stdout": "inputs=8"
     }
   ],
   "cpu": {
     "logical_count": 12,
     "model": "AMD Ryzen 5 5600 6-Core Processor"
   },
-  "created_at": "2026-07-12T14:35:51",
+  "created_at": "2026-07-13T00:17:31",
+  "dirty_tree": false,
   "dirty_worktree": false,
   "environment": {
+    "BENCH_CPU_THREADS": null,
     "CUDA_VISIBLE_DEVICES": null,
     "HIP_VISIBLE_DEVICES": null,
     "MKL_NUM_THREADS": null,
     "NUMEXPR_NUM_THREADS": null,
+    "OMP_DYNAMIC": null,
     "OMP_NUM_THREADS": null,
+    "OMP_PLACES": null,
+    "OMP_PROC_BIND": null,
     "OPENBLAS_NUM_THREADS": null
   },
   "evidence_inputs": [
@@ -29,10 +39,11 @@
     "evidence/full_state_performance",
     "evidence/internal_parallelism",
     "evidence/planner_paths",
+    "evidence/tn_path_quantization",
     "evidence/upmem_generic_boundary",
     "evidence/upmem_quantization_stress"
   ],
-  "git_commit": "47794596c569396078b9e6d1d948d5a1f34165ba",
+  "git_commit": "29fcd17b18521d08c3c86c1c092eb6eca67bb48f",
   "gpu_verification": {
     "accelerator_kind": "amd_gpu",
     "artifact_path": "/home/tom/repos/Masters/thesis/implementation/build/gpu_verification/quest_gpu_full_state_exact.json",
@@ -99,11 +110,11 @@
       "cwd": "/home/tom/repos/Masters/thesis/implementation/native/quest_gpu",
       "returncode": 0,
       "stderr": "In file included from /home/tom/repos/Masters/thesis/implementation/external/QuEST/quest/src/gpu/gpu_subroutines.cpp:58:\n/home/tom/repos/Masters/thesis/implementation/external/QuEST/quest/src/gpu/gpu_thrust.cuh:178:44: warning: 'unary_function<HIP_vector_type<double, 2>, HIP_vector_type<double, 2>>' is deprecated [-Wdeprecated-declarations]\n  178 | struct functor_getAmpConj : public thrust::unary_function<cu_qcomp,cu_qcomp> {\n      |                                            ^\n/opt/rocm-7.2.4/lib/llvm/bin/../../../include/thrust/functional.h:166:8: note: 'unary_function<HIP_vector_type<double, 2>, HIP_vector_type<double, 2>>' has been explicitly marked deprecated here\n  166 | struct THRUST_DEPRECATED unary_function\n      |        ^\n/opt/rocm-7.2.4/lib/llvm/bin/../../../include/thrust/detail/config/deprecated.h:39:44: note: expanded from macro 'THRUST_DEPRECATED'\n   39 | #  define THRUST_DEPRECATED              [[deprecated]]\n      |                                            ^\nIn file included from /home/tom/repos/Masters/thesis/implementation/external/QuEST/quest/src/gpu/gpu_subroutines.cpp:58:\n/home/tom/repos/Masters/thesis/implementation/external/QuEST/quest/src/gpu/gpu_thrust.cuh:185:44: warning: 'unary_function<HIP_vector_type<double, 2>, double>' is deprecated [-Wdeprecated-declarations]\n  185 | struct functor_getAmpNorm : public thrust::unary_function<cu_qcomp,qreal> {\n      |                                            ^\n/opt/rocm-7.2.4/lib/llvm/bin/../../../include/thrust/functional.h:166:8: note: 'unary_function<HIP_vector_type<double, 2>, double>' has been explicitly marked deprecated here\n  166 | struct THRUST_DEPRECATED unary_function\n      |        ^\n/opt/rocm-7.2.4/lib/llvm/bin/../../../include/thrust/detail/config/deprecated.h:39:44: note: expanded from macro 'THRUST_DEPRECATED'\n   39 | #  define THRUST_DEPRECATED              [[deprecated]]\n      |                                            ^\nIn file included from /home/tom/repos/Masters/thesis/implementation/external/QuEST/quest/src/gpu/gpu_subroutines.cpp:58:\n/home/tom/repos/Masters/thesis/implementation/external/QuEST/quest/src/gpu/gpu_thrust.cuh:192:44: warning: 'unary_function<HIP_vector_type<double, 2>, double>' is deprecated [-Wdeprecated-declarations]\n  192 | struct functor_getAmpReal : public thrust::unary_function<cu_qcomp,qreal> {\n      |                                            ^\n/opt/rocm-7.2.4/lib/llvm/bin/../../../include/thrust/functional.h:166:8: note: 'unary_function<HIP_vector_type<double, 2>, double>' has been explicitly marked deprecated here\n  166 | struct THRUST_DEPRECATED unary_function\n      |        ^\n/opt/rocm-7.2.4/lib/llvm/bin/../../../include/thrust/detail/config/deprecated.h:39:44: note: expanded from macro 'THRUST_DEPRECATED'\n   39 | #  define THRUST_DEPRECATED              [[deprecated]]\n      |                                            ^\nIn file included from /home/tom/repos/Masters/thesis/implementation/external/QuEST/quest/src/gpu/gpu_subroutines.cpp:58:\n/home/tom/repos/Masters/thesis/implementation/external/QuEST/quest/src/gpu/gpu_thrust.cuh:200:48: warning: 'binary_function<HIP_vector_type<double, 2>, HIP_vector_type<double, 2>, HIP_vector_type<double, 2>>' is deprecated [-Wdeprecated-declarations]\n  200 | struct functor_getAmpConjProd : public thrust::binary_function<cu_qcomp,cu_qcomp,cu_qcomp> {\n      |                                                ^\n/opt/rocm-7.2.4/lib/llvm/bin/../../../include/thrust/functional.h:207:8: note: 'binary_function<HIP_vector_type<double, 2>, HIP_vector_type<double, 2>, HIP_vector_type<double, 2>>' has been explicitly marked deprecated here\n  207 | struct THRUST_DEPRECATED binary_function\n      |        ^\n/opt/rocm-7.2.4/lib/llvm/bin/../../../include/thrust/detail/config/deprecated.h:39:44: note: expanded from macro 'THRUST_DEPRECATED'\n   39 | #  define THRUST_DEPRECATED              [[deprecated]]\n      |                                            ^\nIn file included from /home/tom/repos...<truncated>",
-      "stdout": "rm -rf /home/tom/repos/Masters/thesis/implementation/build/native/quest_gpu/hip/build\nrm -rf /home/tom/repos/Masters/thesis/implementation/build/native/quest_gpu/hip/bin\nrm -rf /home/tom/repos/Masters/thesis/implementation/build/external/QuEST-hip\ntest -n \"/opt/rocm-7.2.4\"\ntest -n \"/usr/bin/hipcc\"\ntest -n \"/opt/rocm-7.2.4/lib/cmake/hip/hip-config.cmake\"\ntest -n \"/opt/rocm-7.2.4/lib/llvm/bin/clang++\"\ncmake -S /home/tom/repos/Masters/thesis/implementation/external/QuEST -B /home/tom/repos/Masters/thesis/implementation/build/external/QuEST-hip -DCMAKE_BUILD_TYPE=Release -DENABLE_HIP=ON -DCMAKE_PREFIX_PATH=/opt/rocm-7.2.4 -DHIP_DIR=/opt/rocm-7.2.4/lib/cmake/hip -DCMAKE_HIP_COMPILER=/opt/rocm-7.2.4/lib/llvm/bin/clang++ -DCMAKE_HIP_ARCHITECTURES=gfx1032\n-- The CXX compiler identification is GNU 11.4.0\n-- The C compiler identification is GNU 11.4.0\n-- Detecting CXX compiler ABI info\n-- Detecting CXX compiler ABI info - done\n-- Check for working CXX compiler: /usr/bin/c++ - skipped\n-- Detecting CXX compile features\n-- Detecting CXX compile features - done\n-- Detecting C compiler ABI info\n-- Detecting C compiler ABI info - done\n-- Check for working C compiler: /usr/bin/cc - skipped\n-- Detecting C compile features\n-- Detecting C compile features - done\n-- Shared library is turned ON. Set BUILD_SHARED_LIBS to modify.\n-- Library will be named libQuEST. Set LIB_NAME to modify.\n-- Verbose library naming is turned OFF. Set VERBOSE_LIB_NAME to modify.\n-- Precision set to 2. Set FLOAT_PRECISION to modify.\n-- Examples are turned OFF. Set BUILD_EXAMPLES to modify.\n-- Testing is turned OFF. Set ENABLE_TESTING to modify.\n-- Multithreading is turned ON. Set ENABLE_MULTITHREADING to modify.\n-- Distribution is turned OFF. Set ENABLE_DISTRIBUTION to modify.\n-- NVIDIA GPU acceleration is turned OFF. Set ENABLE_CUDA to modify.\n-- CuQuantum support is turned OFF. Set ENABLE_CUQUANTUM to modify.\n-- AMD GPU acceleration is turned ON. Set ENABLE_HIP to modify.\n-- Deprecated API support is turned OFF. Set ENABLE_DEPRECATED_API to modify.\n-- Disabling of deprecated API warnings is turned OFF. Set DISABLE_DEPRECATION_WARNINGS to modify.\n-- Found PkgConfig: /usr/bin/pkg-config (found version \"0.29.2\") \n-- Checking for one of the modules 'numa'\n-- NUMA awareness is enabled.\n-- The HIP compiler identification is Clang 22.0.0\n-- Detecting HIP compiler ABI info\n-- Detecting HIP compiler ABI info - done\n-- Check for working HIP compiler: /opt/rocm-7.2.4/lib/llvm/bin/clang++ - skipped\n-- Detecting HIP compile features\n-- Detecting HIP compile features - done\n-- Looking for pthread.h\n-- Looking for pthread.h - found\n-- Performing Test CMAKE_HAVE_LIBC_PTHREAD\n-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success\n-- Found Threads: TRUE  \n-- Found HIP: 7.2.53211\n-- Configuring done\n-- Generating done\n-- Build files have been written to: /home/tom/repos/Masters/thesis/implementation/build/external/QuEST-hip\ncmake --build /home/tom/repos/Masters/thesis/implementation/build/external/QuEST-hip -j2\ngmake[1]: Entering directory '/home/tom/repos/Masters/thesis/implementation/build/external/QuEST-hip'\ngmake[2]: Entering directory '/home/tom/repos/Masters/thesis/implementation/build/external/QuEST-hip'\ngmake[3]: Entering directory '/home/tom/repos/Masters/thesis/implementation/build/external/QuEST-hip'\nScanning dependencies of target QuEST\ngmake[3]: Leaving directory '/home/tom/repos/Masters/thesis/implementation/build/external/QuEST-hip'\ngmake[3]: Entering directory '/home/tom/repos/Masters/thesis/implementation/build/external/QuEST-hip'\n[  5%] Building CXX object CMakeFiles/QuEST.dir/quest/src/api/calculations.cpp.o\n[  5%] Building CXX object CMakeFiles/QuEST.dir/quest/src/api/channels.cpp.o\n[  8%] Building CXX object CMakeFiles/QuEST.dir/quest/src/api/debug.cpp.o\n[ 11%] Building CXX object CMakeFiles/QuEST.dir/quest/src/api/decoherence.cpp.o\n[ 14%] Building CXX object CMakeFiles/QuEST.dir/quest/src/api/environment.cpp.o\n[ 17%] Building CXX object CMakeFiles/QuEST.dir/quest/src/...<truncated>",
+      "stdout": "make[1]: Entering directory '/home/tom/repos/Masters/thesis/implementation/native/quest_gpu'\nrm -rf /home/tom/repos/Masters/thesis/implementation/build/native/quest_gpu/hip/build\nrm -rf /home/tom/repos/Masters/thesis/implementation/build/native/quest_gpu/hip/bin\nrm -rf /home/tom/repos/Masters/thesis/implementation/build/external/QuEST-hip\ntest -n \"/opt/rocm-7.2.4\"\ntest -n \"/usr/bin/hipcc\"\ntest -n \"/opt/rocm-7.2.4/lib/cmake/hip/hip-config.cmake\"\ntest -n \"/opt/rocm-7.2.4/lib/llvm/bin/clang++\"\ncmake -S /home/tom/repos/Masters/thesis/implementation/external/QuEST -B /home/tom/repos/Masters/thesis/implementation/build/external/QuEST-hip -DCMAKE_BUILD_TYPE=Release -DENABLE_HIP=ON -DCMAKE_PREFIX_PATH=/opt/rocm-7.2.4 -DHIP_DIR=/opt/rocm-7.2.4/lib/cmake/hip -DCMAKE_HIP_COMPILER=/opt/rocm-7.2.4/lib/llvm/bin/clang++ -DCMAKE_HIP_ARCHITECTURES=gfx1032\n-- The CXX compiler identification is GNU 11.4.0\n-- The C compiler identification is GNU 11.4.0\n-- Detecting CXX compiler ABI info\n-- Detecting CXX compiler ABI info - done\n-- Check for working CXX compiler: /usr/bin/c++ - skipped\n-- Detecting CXX compile features\n-- Detecting CXX compile features - done\n-- Detecting C compiler ABI info\n-- Detecting C compiler ABI info - done\n-- Check for working C compiler: /usr/bin/cc - skipped\n-- Detecting C compile features\n-- Detecting C compile features - done\n-- Shared library is turned ON. Set BUILD_SHARED_LIBS to modify.\n-- Library will be named libQuEST. Set LIB_NAME to modify.\n-- Verbose library naming is turned OFF. Set VERBOSE_LIB_NAME to modify.\n-- Precision set to 2. Set FLOAT_PRECISION to modify.\n-- Examples are turned OFF. Set BUILD_EXAMPLES to modify.\n-- Testing is turned OFF. Set ENABLE_TESTING to modify.\n-- Multithreading is turned ON. Set ENABLE_MULTITHREADING to modify.\n-- Distribution is turned OFF. Set ENABLE_DISTRIBUTION to modify.\n-- NVIDIA GPU acceleration is turned OFF. Set ENABLE_CUDA to modify.\n-- CuQuantum support is turned OFF. Set ENABLE_CUQUANTUM to modify.\n-- AMD GPU acceleration is turned ON. Set ENABLE_HIP to modify.\n-- Deprecated API support is turned OFF. Set ENABLE_DEPRECATED_API to modify.\n-- Disabling of deprecated API warnings is turned OFF. Set DISABLE_DEPRECATION_WARNINGS to modify.\n-- Found PkgConfig: /usr/bin/pkg-config (found version \"0.29.2\") \n-- Checking for one of the modules 'numa'\n-- NUMA awareness is enabled.\n-- The HIP compiler identification is Clang 22.0.0\n-- Detecting HIP compiler ABI info\n-- Detecting HIP compiler ABI info - done\n-- Check for working HIP compiler: /opt/rocm-7.2.4/lib/llvm/bin/clang++ - skipped\n-- Detecting HIP compile features\n-- Detecting HIP compile features - done\n-- Looking for pthread.h\n-- Looking for pthread.h - found\n-- Performing Test CMAKE_HAVE_LIBC_PTHREAD\n-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success\n-- Found Threads: TRUE  \n-- Found HIP: 7.2.53211\n-- Configuring done\n-- Generating done\n-- Build files have been written to: /home/tom/repos/Masters/thesis/implementation/build/external/QuEST-hip\ncmake --build /home/tom/repos/Masters/thesis/implementation/build/external/QuEST-hip -j2\ngmake[2]: Entering directory '/home/tom/repos/Masters/thesis/implementation/build/external/QuEST-hip'\ngmake[3]: Entering directory '/home/tom/repos/Masters/thesis/implementation/build/external/QuEST-hip'\ngmake[4]: Entering directory '/home/tom/repos/Masters/thesis/implementation/build/external/QuEST-hip'\nScanning dependencies of target QuEST\ngmake[4]: Leaving directory '/home/tom/repos/Masters/thesis/implementation/build/external/QuEST-hip'\ngmake[4]: Entering directory '/home/tom/repos/Masters/thesis/implementation/build/external/QuEST-hip'\n[  5%] Building CXX object CMakeFiles/QuEST.dir/quest/src/api/calculations.cpp.o\n[  5%] Building CXX object CMakeFiles/QuEST.dir/quest/src/api/channels.cpp.o\n[  8%] Building CXX object CMakeFiles/QuEST.dir/quest/src/api/debug.cpp.o\n[ 11%] Building CXX object CMakeFiles/QuEST.dir/quest/src/api/decoherence.cpp.o\n[ 14%] Building CXX object CMakeFiles/QuEST.d...<truncated>",
       "timeout_s": 300
     },
     "candidate_category": "tailored_quantum_gpu",
-    "created_at": "2026-07-12T12:28:38.564440+00:00",
+    "created_at": "2026-07-12T21:44:27.767917+00:00",
     "detected_dependencies": {
       "amd_gpu_pci": {
         "available": true
@@ -225,7 +236,7 @@
       "cwd": "/home/tom/repos/Masters/thesis/implementation/native/quest_gpu",
       "returncode": 0,
       "stderr": "",
-      "stdout": "{\"algo\":\"QRNG\",\"paper_algo\":\"QRNG_n\",\"result_label\":\"QRNG/QRNG_n\",\"input_qubits\":2,\"allocated_qubits\":2,\"depth\":0,\"threads\":12,\"time_s\":0.000086069,\"state_dump_requested\":true,\"state_dump_time_s\":0.000145912,\"repeat_layers\":1,\"energy_joules\":null,\"energy_source\":\"unavailable\",\"status\":\"ok\",\"error\":null,\"one_qubit_gates\":2,\"two_qubit_gates\":0,\"quest_version\":\"4.2.0\"}\n",
+      "stdout": "{\"algo\":\"QRNG\",\"paper_algo\":\"QRNG_n\",\"result_label\":\"QRNG/QRNG_n\",\"input_qubits\":2,\"allocated_qubits\":2,\"depth\":0,\"threads\":6,\"time_s\":0.000076056,\"state_dump_requested\":true,\"state_dump_time_s\":0.000163078,\"repeat_layers\":1,\"energy_joules\":null,\"energy_source\":\"unavailable\",\"status\":\"ok\",\"error\":null,\"one_qubit_gates\":2,\"two_qubit_gates\":0,\"quest_version\":\"4.2.0\"}\n",
       "timeout_s": 60
     },
     "requested_backend": "quest-hip",
@@ -250,17 +261,104 @@
     "quimb": "1.11.2"
   },
   "platform": "Linux-6.8.0-124-generic-x86_64-with-glibc2.35",
-  "provenance_scope": "selected_evidence",
+  "provenance_aliases": {
+    "dirty_tree": "alias of benchmark_source_worktree_dirty",
+    "dirty_worktree": "alias of benchmark_source_worktree_dirty",
+    "git_commit": "alias of benchmark_source_commit"
+  },
+  "provenance_scope": "thesis/implementation",
+  "provenance_stage": "report_generation",
+  "provenance_stages": {
+    "benchmark_source": {
+      "commit": "29fcd17b18521d08c3c86c1c092eb6eca67bb48f",
+      "repository_worktree_dirty": true,
+      "scope": "thesis/implementation",
+      "worktree_dirty": false
+    },
+    "report_generation": {
+      "commit": "29fcd17b18521d08c3c86c1c092eb6eca67bb48f",
+      "repository_worktree_dirty": true,
+      "scope": "thesis/implementation",
+      "worktree_dirty": true
+    }
+  },
   "python_version": "3.10.12 (main, Jun 22 2026, 18:55:27) [GCC 11.4.0]",
-  "record_count": 918,
+  "record_count": 1143,
+  "report_generation": {
+    "command_line": "scripts/thesis_snapshot.py report --snapshot thesis_results/current",
+    "commit": "29fcd17b18521d08c3c86c1c092eb6eca67bb48f",
+    "generated_at": "2026-07-13T00:17:31",
+    "generator": "research_benchmark_pack",
+    "input_count": 8,
+    "input_paths": [
+      "/home/tom/repos/Masters/thesis/implementation/thesis_results/current/evidence/full_state_correctness",
+      "/home/tom/repos/Masters/thesis/implementation/thesis_results/current/evidence/full_state_performance",
+      "/home/tom/repos/Masters/thesis/implementation/thesis_results/current/evidence/cpu_tn",
+      "/home/tom/repos/Masters/thesis/implementation/thesis_results/current/evidence/tn_path_quantization",
+      "/home/tom/repos/Masters/thesis/implementation/thesis_results/current/evidence/planner_paths",
+      "/home/tom/repos/Masters/thesis/implementation/thesis_results/current/evidence/upmem_generic_boundary",
+      "/home/tom/repos/Masters/thesis/implementation/thesis_results/current/evidence/upmem_quantization_stress",
+      "/home/tom/repos/Masters/thesis/implementation/thesis_results/current/evidence/internal_parallelism"
+    ],
+    "mode": "report",
+    "repository_worktree_dirty": true,
+    "schema_version": "research_benchmark_pack_v1",
+    "scope": "thesis/implementation",
+    "script": "scripts/research_benchmark_pack.py",
+    "source_records_read_only": true,
+    "worktree_dirty": true
+  },
+  "report_generation_command": "scripts/thesis_snapshot.py report --snapshot thesis_results/current",
+  "report_generation_commit": "29fcd17b18521d08c3c86c1c092eb6eca67bb48f",
+  "report_generation_input_paths": [
+    "/home/tom/repos/Masters/thesis/implementation/thesis_results/current/evidence/full_state_correctness",
+    "/home/tom/repos/Masters/thesis/implementation/thesis_results/current/evidence/full_state_performance",
+    "/home/tom/repos/Masters/thesis/implementation/thesis_results/current/evidence/cpu_tn",
+    "/home/tom/repos/Masters/thesis/implementation/thesis_results/current/evidence/tn_path_quantization",
+    "/home/tom/repos/Masters/thesis/implementation/thesis_results/current/evidence/planner_paths",
+    "/home/tom/repos/Masters/thesis/implementation/thesis_results/current/evidence/upmem_generic_boundary",
+    "/home/tom/repos/Masters/thesis/implementation/thesis_results/current/evidence/upmem_quantization_stress",
+    "/home/tom/repos/Masters/thesis/implementation/thesis_results/current/evidence/internal_parallelism"
+  ],
+  "report_generation_mode": "report",
+  "report_generation_provenance": {
+    "command_line": "scripts/thesis_snapshot.py report --snapshot thesis_results/current",
+    "commit": "29fcd17b18521d08c3c86c1c092eb6eca67bb48f",
+    "generated_at": "2026-07-13T00:17:31",
+    "generator": "research_benchmark_pack",
+    "input_count": 8,
+    "input_paths": [
+      "/home/tom/repos/Masters/thesis/implementation/thesis_results/current/evidence/full_state_correctness",
+      "/home/tom/repos/Masters/thesis/implementation/thesis_results/current/evidence/full_state_performance",
+      "/home/tom/repos/Masters/thesis/implementation/thesis_results/current/evidence/cpu_tn",
+      "/home/tom/repos/Masters/thesis/implementation/thesis_results/current/evidence/tn_path_quantization",
+      "/home/tom/repos/Masters/thesis/implementation/thesis_results/current/evidence/planner_paths",
+      "/home/tom/repos/Masters/thesis/implementation/thesis_results/current/evidence/upmem_generic_boundary",
+      "/home/tom/repos/Masters/thesis/implementation/thesis_results/current/evidence/upmem_quantization_stress",
+      "/home/tom/repos/Masters/thesis/implementation/thesis_results/current/evidence/internal_parallelism"
+    ],
+    "mode": "report",
+    "repository_worktree_dirty": true,
+    "schema_version": "research_benchmark_pack_v1",
+    "scope": "thesis/implementation",
+    "script": "scripts/research_benchmark_pack.py",
+    "source_records_read_only": true,
+    "worktree_dirty": true
+  },
+  "report_generation_repository_worktree_dirty": true,
+  "report_generation_script": "scripts/research_benchmark_pack.py",
+  "report_generation_timestamp": "2026-07-13T00:17:31",
+  "report_generation_worktree_dirty": true,
+  "repository_worktree_dirty": true,
   "root": ".",
   "schema_version": "research_benchmark_pack_v1",
   "selected_suites": {
-    "cpu_gpu": "configs/suites/manual/research_cpu_gpu.yml",
-    "cpu_gpu_correctness": "configs/suites/manual/research_cpu_gpu_correctness.yml",
-    "cpu_tn": "configs/suites/manual/research_cpu_tn.yml",
+    "cpu_gpu": "configs/suites/manual/thesis_full_state_cpu_gpu.yml",
+    "cpu_gpu_correctness": "configs/suites/manual/thesis_full_state_correctness.yml",
+    "cpu_tn": "configs/suites/manual/thesis_cpu_tn_quimb.yml",
     "internal_parallelism": "configs/suites/manual/research_internal_parallelism.yml",
-    "planner_paths": "configs/suites/manual/research_planner_compare.yml",
+    "planner_paths": "configs/suites/manual/thesis_planner_compare.yml",
+    "tn_path_quantization": "configs/suites/manual/thesis_tn_paths_quantization.yml",
     "upmem_boundary": "configs/suites/manual/thesis_upmem_quantization_boundary.yml",
     "upmem_quantization_stress": "configs/suites/manual/thesis_upmem_quantization_stress.yml"
   }

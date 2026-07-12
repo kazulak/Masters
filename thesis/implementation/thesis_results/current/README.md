@@ -9,19 +9,22 @@ This is a derived research pack generated from normalized benchmark records. Evi
 | cpu_tn_einsum_exact |  | cpu | 27 | 0 |
 | cpu_tn_frontier_exact | internal_frontier_diagnostic | cpu | 6 | 0 |
 | cpu_tn_hybrid_sliced_frontier_exact | internal_hybrid_diagnostic | cpu | 6 | 0 |
+| cpu_tn_path_replay_float64 | diagnostic_path_replay_baseline | cpu | 42 | 0 |
+| cpu_tn_path_replay_int8_quantized | diagnostic_quantized_path_replay | cpu | 42 | 0 |
 | planner_candidate_model | contraction_path_candidate | modeled | 84 | 0 |
-| quest_cpu_full_state_exact | serious_full_state_baseline | cpu | 333 | 0 |
+| quest_cpu_full_state_exact | serious_full_state_baseline | cpu | 408 | 0 |
 | quest_gpu_full_state_exact | serious_gpu_full_state_baseline | gpu | 234 | 0 |
-| quimb_tn_exact | serious_external_tn_baseline | cpu | 93 | 0 |
-| quimb_tn_sliced_exact | explicit_slicing_evidence | cpu | 93 | 0 |
+| quimb_tn_exact | serious_external_tn_baseline | cpu | 126 | 0 |
+| quimb_tn_sliced_exact | explicit_slicing_evidence | cpu | 126 | 0 |
 | upmem_tn_runtime | strict_upmem_sdk_simulator_generic | upmem | 42 | 2 |
 
 ## Suite Paths
 
-- `cpu_gpu_correctness`: `configs/suites/manual/research_cpu_gpu_correctness.yml`
-- `cpu_gpu`: `configs/suites/manual/research_cpu_gpu.yml`
-- `cpu_tn`: `configs/suites/manual/research_cpu_tn.yml`
-- `planner_paths`: `configs/suites/manual/research_planner_compare.yml`
+- `cpu_gpu_correctness`: `configs/suites/manual/thesis_full_state_correctness.yml`
+- `cpu_gpu`: `configs/suites/manual/thesis_full_state_cpu_gpu.yml`
+- `cpu_tn`: `configs/suites/manual/thesis_cpu_tn_quimb.yml`
+- `tn_path_quantization`: `configs/suites/manual/thesis_tn_paths_quantization.yml`
+- `planner_paths`: `configs/suites/manual/thesis_planner_compare.yml`
 - `upmem_boundary`: `configs/suites/manual/thesis_upmem_quantization_boundary.yml`
 - `upmem_quantization_stress`: `configs/suites/manual/thesis_upmem_quantization_stress.yml`
 - `internal_parallelism`: `configs/suites/manual/research_internal_parallelism.yml`
@@ -29,12 +32,12 @@ This is a derived research pack generated from normalized benchmark records. Evi
 ## Exact Commands
 
 Run `make research-plan` to print the underlying commands.
-Run `make thesis-run` for the complete local benchmark matrix.
+Run `BENCH_CPU_THREADS=<physical-core-count> make thesis-run` for the complete local benchmark matrix.
 
 ## Hardware And Software Manifest
 
-- Git commit: `47794596c569396078b9e6d1d948d5a1f34165ba`
-- Dirty worktree: `True`
+- Git commit: `29fcd17b18521d08c3c86c1c092eb6eca67bb48f`
+- Dirty worktree: `False`
 - Host: `kazulak`
 - Python: `3.10.12 (main, Jun 22 2026, 18:55:27) [GCC 11.4.0]`
 - Packages: `{"cotengra": "0.7.5", "matplotlib": "3.10.8", "numpy": "2.2.6", "opt_einsum": "3.4.0", "quimb": "1.11.2"}`
@@ -55,13 +58,15 @@ Qubit-scaling tables and plots use `benchmark_n_qubits` / `actual_n_qubits`; sui
 - `cpu_tn_einsum_exact` `reference`: 21 records
 - `cpu_tn_frontier_exact` `passed`: 6 records
 - `cpu_tn_hybrid_sliced_frontier_exact` `passed`: 6 records
+- `cpu_tn_path_replay_float64` `passed`: 42 records
+- `cpu_tn_path_replay_int8_quantized` `passed`: 42 records
 - `planner_candidate_model` `not_applicable`: 84 records
-- `quest_cpu_full_state_exact` `passed`: 123 records
+- `quest_cpu_full_state_exact` `passed`: 198 records
 - `quest_cpu_full_state_exact` `passed_native_status`: 210 records
 - `quest_gpu_full_state_exact` `passed`: 24 records
 - `quest_gpu_full_state_exact` `passed_native_status`: 210 records
-- `quimb_tn_exact` `passed`: 93 records
-- `quimb_tn_sliced_exact` `passed`: 93 records
+- `quimb_tn_exact` `passed`: 126 records
+- `quimb_tn_sliced_exact` `passed`: 126 records
 - `upmem_tn_runtime` `passed`: 40 records
 - `upmem_tn_runtime` `skipped`: 2 records
 
@@ -87,8 +92,8 @@ Qubit-scaling tables and plots use `benchmark_n_qubits` / `actual_n_qubits`; sui
 
 ## Key Findings
 
-- Normalized records loaded: 918.
-- Per-case route statistic rows: 354.
+- Normalized records loaded: 1143.
+- Per-case route statistic rows: 513.
 - Valid CPU/GPU paired speedup rows: 234.
 - Matched strict generic UPMEM float32/int8 attribution rows: 20.
 - Modeled contraction-path candidate rows: 84.
@@ -96,10 +101,10 @@ Qubit-scaling tables and plots use `benchmark_n_qubits` / `actual_n_qubits`; sui
 
 ## Observed Result Snapshot
 
-- Verified QuEST GPU compute ratio (CPU/GPU): median `0.776x`, range `0.14x` to `30.8x`; GPU was faster in `39/210` matched repeats.
-- Shallow exact CPU comparison (Quimb TN time / QuEST full-state time): median `2.68x` across `31` cases. This is an algorithm/backend runtime ratio, not same-plan speedup.
-- Executed Quimb slicing time / unsliced Quimb time: median `1.69x`, range `1.2x` to `10.8x`; slice reconstruction used one worker.
-- Strict generic UPMEM SDK-simulator float32/int8 attribution: median host-residual-time ratio `0.996x`, median transfer ratio `1.01x`, maximum observed int8 absolute error `0.00642`. These are simulator-route measurements, not hardware speedup.
+- Verified QuEST GPU compute ratio (CPU/GPU): median `0.283x`, range `0.164x` to `5.4x`; GPU was faster in `59/210` matched repeats.
+- Shallow exact CPU comparison (Quimb TN time / QuEST full-state time): median `2.53x` across `42` cases. This is an algorithm/backend runtime ratio, not same-plan speedup.
+- Executed Quimb slicing time / unsliced Quimb time: median `2.07x`, range `1.28x` to `43.5x`; slice reconstruction used one worker.
+- Strict generic UPMEM SDK-simulator float32/int8 attribution: median host-residual-time ratio `0.999x`, median transfer ratio `1.01x`, maximum observed int8 absolute error `0.00642`. These are simulator-route measurements, not hardware speedup.
 - Planner evidence covers `42` cases and `2` candidates with plan hashes, FLOP/peak-memory estimates, and modeled UPMEM pressure.
 - Explicit boundary rows: `generic_feasibility_rank_cap_exceeded` = 2.
 

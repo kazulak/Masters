@@ -9,32 +9,30 @@ _route_configs:
   role: comparison_anchor
   route_limitation_scope: null
   route_role_description: null
-- benchmark_role: serious_external_tn_baseline
-  id: quimb_tn_exact
+- benchmark_role: diagnostic_path_replay_baseline
+  id: cpu_tn_path_replay_float64
   options:
-    max_estimated_intermediate_bytes: 4294967296
-    optimize: greedy
-    resource_skip_reason: thesis_tn_resource_guard
+    allow_missing_estimate: false
+    max_estimated_intermediate_bytes: 1073741824
+    path_strategy: greedy
+    resource_skip_reason: thesis_tn_diagnostic_replay_guard
   required: false
-  role: baseline
+  role: path_replay_baseline
   route_limitation_scope: null
   route_role_description: null
-- benchmark_role: explicit_slicing_evidence
-  id: quimb_tn_sliced_exact
+- benchmark_role: diagnostic_quantized_path_replay
+  id: cpu_tn_path_replay_int8_quantized
   options:
-    max_estimated_intermediate_bytes: 4294967296
-    max_repeats: 1
-    methods: greedy
-    require_slicing: true
-    resource_skip_reason: thesis_tn_resource_guard
-    slicing_strategy: target_slices
-    target_slices: 2
+    allow_missing_estimate: false
+    max_estimated_intermediate_bytes: 1073741824
+    path_strategy: greedy
+    resource_skip_reason: thesis_tn_diagnostic_replay_guard
   required: false
-  role: slicing_evidence
+  role: quantized_path_replay
   route_limitation_scope: null
   route_role_description: null
 _schema_version: 2
-_suite_path: /home/tom/repos/Masters/thesis/implementation/configs/suites/manual/thesis_cpu_tn_quimb.yml
+_suite_path: /home/tom/repos/Masters/thesis/implementation/configs/suites/manual/thesis_tn_paths_quantization.yml
 cases:
 - case_id: quest_qrng_8q_thesis_tn
   circuit:
@@ -295,35 +293,37 @@ cases:
     logical_qubits: 10
     name: HS
   workload_id: quest_hs_20q_thesis_tn
-memory_guard_gib: 12
+memory_guard_gib: 8
 metadata:
   case_process_isolation: true
   deterministic_unitary_only: true
-  expected_memory_class: bounded_tn_workstation
-  expected_runtime_class: manual_cpu_minutes
-  intended_use: thesis_evidence_external_cpu_tn
+  expected_memory_class: bounded_taskgraph_replay
+  expected_runtime_class: manual_cpu_diagnostic_minutes
+  intended_use: thesis_evidence_tn_path_quantization_diagnostic
   manual_invocation_required: true
   max_qubits: 20
-  notes: 'Thesis CPU tensor-network suite. Quimb unsliced/sliced routes are the serious
-    CPU TN evidence. Internal TaskGraph/path replay routes are not included here because
-    they are diagnostic attribution routes, not serious external TN baselines.
+  notes: 'Thesis diagnostic CPU tensor-network suite for same-path replay and per-contraction
+    quantization attribution. This is not the serious external CPU TN baseline; use
+    thesis_cpu_tn_quimb.yml for Quimb unsliced/sliced thesis evidence. Resource-heavy
+    route/case pairs must be reported as skipped before execution rather than allowed
+    to trigger workstation OOM kills.
 
     '
-  purpose: thesis_external_cpu_tensor_network_comparison
+  purpose: thesis_tensor_network_path_and_quantization_comparison
   validation_method: full_statevector
 planner:
   engine: opt_einsum
   optimize: greedy
 planner_comparison: {}
-repeats: 3
+repeats: 1
 route_policy:
   fail_fast: false
   routes:
   - quest_cpu_full_state_exact
-  - quimb_tn_exact
-  - quimb_tn_sliced_exact
+  - cpu_tn_path_replay_float64
+  - cpu_tn_path_replay_int8_quantized
 schema_version: 2
-suite_id: thesis_cpu_tn_quimb
+suite_id: thesis_tn_paths_quantization
 thread_counts:
 - null
 timeout_s: 1200

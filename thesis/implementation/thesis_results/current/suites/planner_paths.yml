@@ -7,20 +7,8 @@ _route_configs:
   route_limitation_scope: null
   route_role_description: null
 _schema_version: 2
-_suite_path: /home/tom/repos/Masters/thesis/implementation/configs/suites/manual/research_planner_compare.yml
+_suite_path: /home/tom/repos/Masters/thesis/implementation/configs/suites/manual/thesis_planner_compare.yml
 cases:
-- case_id: quest_qrng_4q_planner
-  circuit:
-    kind: quest_compatible
-    n_qubits: 4
-    name: QRNG
-  workload_id: quest_qrng_4q_planner
-- case_id: quest_qrng_6q_planner
-  circuit:
-    kind: quest_compatible
-    n_qubits: 6
-    name: QRNG
-  workload_id: quest_qrng_6q_planner
 - case_id: quest_qrng_8q_planner
   circuit:
     kind: quest_compatible
@@ -51,18 +39,18 @@ cases:
     n_qubits: 16
     name: QRNG
   workload_id: quest_qrng_16q_planner
-- case_id: quest_bv_4q_planner
+- case_id: quest_qrng_18q_planner
   circuit:
     kind: quest_compatible
-    n_qubits: 4
-    name: BV
-  workload_id: quest_bv_4q_planner
-- case_id: quest_bv_6q_planner
+    n_qubits: 18
+    name: QRNG
+  workload_id: quest_qrng_18q_planner
+- case_id: quest_qrng_20q_planner
   circuit:
     kind: quest_compatible
-    n_qubits: 6
-    name: BV
-  workload_id: quest_bv_6q_planner
+    n_qubits: 20
+    name: QRNG
+  workload_id: quest_qrng_20q_planner
 - case_id: quest_bv_8q_planner
   circuit:
     kind: quest_compatible
@@ -93,18 +81,18 @@ cases:
     n_qubits: 16
     name: BV
   workload_id: quest_bv_16q_planner
-- case_id: quest_xor_4q_planner
+- case_id: quest_bv_18q_planner
   circuit:
     kind: quest_compatible
-    n_qubits: 4
-    name: XOR
-  workload_id: quest_xor_4q_planner
-- case_id: quest_xor_6q_planner
+    n_qubits: 18
+    name: BV
+  workload_id: quest_bv_18q_planner
+- case_id: quest_bv_20q_planner
   circuit:
     kind: quest_compatible
-    n_qubits: 6
-    name: XOR
-  workload_id: quest_xor_6q_planner
+    n_qubits: 20
+    name: BV
+  workload_id: quest_bv_20q_planner
 - case_id: quest_xor_8q_planner
   circuit:
     kind: quest_compatible
@@ -135,18 +123,18 @@ cases:
     n_qubits: 16
     name: XOR
   workload_id: quest_xor_16q_planner
-- case_id: quest_bb84_4q_planner
+- case_id: quest_xor_18q_planner
   circuit:
     kind: quest_compatible
-    n_qubits: 4
-    name: BB84
-  workload_id: quest_bb84_4q_planner
-- case_id: quest_bb84_6q_planner
+    n_qubits: 18
+    name: XOR
+  workload_id: quest_xor_18q_planner
+- case_id: quest_xor_20q_planner
   circuit:
     kind: quest_compatible
-    n_qubits: 6
-    name: BB84
-  workload_id: quest_bb84_6q_planner
+    n_qubits: 20
+    name: XOR
+  workload_id: quest_xor_20q_planner
 - case_id: quest_bb84_8q_planner
   circuit:
     kind: quest_compatible
@@ -177,18 +165,18 @@ cases:
     n_qubits: 16
     name: BB84
   workload_id: quest_bb84_16q_planner
-- case_id: quest_edc_4q_planner
+- case_id: quest_bb84_18q_planner
   circuit:
     kind: quest_compatible
-    n_qubits: 4
-    name: EDC
-  workload_id: quest_edc_4q_planner
-- case_id: quest_edc_6q_planner
+    n_qubits: 18
+    name: BB84
+  workload_id: quest_bb84_18q_planner
+- case_id: quest_bb84_20q_planner
   circuit:
     kind: quest_compatible
-    n_qubits: 6
-    name: EDC
-  workload_id: quest_edc_6q_planner
+    n_qubits: 20
+    name: BB84
+  workload_id: quest_bb84_20q_planner
 - case_id: quest_edc_8q_planner
   circuit:
     kind: quest_compatible
@@ -219,20 +207,18 @@ cases:
     n_qubits: 16
     name: EDC
   workload_id: quest_edc_16q_planner
-- case_id: quest_hs_4q_planner
+- case_id: quest_edc_18q_planner
   circuit:
-    allocated_qubits: 4
     kind: quest_compatible
-    logical_qubits: 2
-    name: HS
-  workload_id: quest_hs_4q_planner
-- case_id: quest_hs_6q_planner
+    n_qubits: 18
+    name: EDC
+  workload_id: quest_edc_18q_planner
+- case_id: quest_edc_20q_planner
   circuit:
-    allocated_qubits: 6
     kind: quest_compatible
-    logical_qubits: 3
-    name: HS
-  workload_id: quest_hs_6q_planner
+    n_qubits: 20
+    name: EDC
+  workload_id: quest_edc_20q_planner
 - case_id: quest_hs_8q_planner
   circuit:
     allocated_qubits: 8
@@ -268,14 +254,44 @@ cases:
     logical_qubits: 8
     name: HS
   workload_id: quest_hs_16q_planner
+- case_id: quest_hs_18q_planner
+  circuit:
+    allocated_qubits: 18
+    kind: quest_compatible
+    logical_qubits: 9
+    name: HS
+  workload_id: quest_hs_18q_planner
+- case_id: quest_hs_20q_planner
+  circuit:
+    allocated_qubits: 20
+    kind: quest_compatible
+    logical_qubits: 10
+    name: HS
+  workload_id: quest_hs_20q_planner
 memory_guard_gib: 8
 metadata:
+  canonical_circuit_families:
+  - QRNG
+  - BV
+  - XOR
+  - BB84
+  - EDC
+  - HS
+  canonical_qubit_sizes:
+  - 8
+  - 10
+  - 12
+  - 14
+  - 16
+  - 18
+  - 20
   deterministic_unitary_only: true
   execution_tier: modeled_planning_only
   expected_memory_class: planning_only
   expected_runtime_class: manual_cpu_minutes
-  intended_use: thesis_research_planner_evidence
+  intended_use: thesis_evidence_planner_comparison
   manual_invocation_required: true
+  max_qubits: 20
   notes: 'Compares deterministic opt_einsum planner choices for the six PIMutation
     circuit families and the canonical seven local sizes. No contraction is executed
     and no runtime speedup is claimed from these rows.
@@ -304,7 +320,7 @@ route_policy:
   routes:
   - cpu_tn_einsum_exact
 schema_version: 2
-suite_id: research_planner_compare
+suite_id: thesis_planner_compare
 thread_counts:
 - null
 timeout_s: 600

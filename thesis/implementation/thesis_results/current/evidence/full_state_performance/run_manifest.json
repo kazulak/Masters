@@ -2,26 +2,36 @@
   "artifact_kind": "evidence_run",
   "artifact_retention": "compact",
   "backend_id": null,
-  "command": "/home/tom/repos/Masters/thesis/implementation/src/quantum_bench/bench/__main__.py simulation-backend-compare --suite configs/suites/manual/research_cpu_gpu.yml --artifact-retention compact",
-  "dirty_tree": true,
-  "environment_hash": "49c2e5dde58bb593be8d72701474a04634ecafdb603dae99303fa5fe4d630d88",
+  "benchmark_source_commit": "29fcd17b18521d08c3c86c1c092eb6eca67bb48f",
+  "benchmark_source_worktree_dirty": false,
+  "command": "/home/tom/repos/Masters/thesis/implementation/src/quantum_bench/bench/__main__.py simulation-backend-compare --suite configs/suites/manual/thesis_full_state_cpu_gpu.yml --artifact-retention compact",
+  "dirty_tree": false,
+  "dirty_worktree": false,
+  "environment_hash": "38137bd7696aa7225971f22807b899ebc2c6e4e593167a56a68516884062343a",
   "evidence_type": "benchmark_execution",
   "execution_scope": "suite_backend_comparison",
-  "git_commit": "47794596c569396078b9e6d1d948d5a1f34165ba",
+  "git_commit": "29fcd17b18521d08c3c86c1c092eb6eca67bb48f",
   "hardware_available": "not_checked",
   "normalized_records": "normalized_records.jsonl",
   "policies": [
     "not_applicable"
   ],
   "policy": null,
+  "provenance_aliases": {
+    "dirty_tree": "alias of benchmark_source_worktree_dirty",
+    "dirty_worktree": "alias of benchmark_source_worktree_dirty",
+    "git_commit": "alias of benchmark_source_commit"
+  },
+  "provenance_scope": "thesis/implementation",
   "python_version": "3.10.12",
   "quantization_mode": null,
   "quantization_modes": [
     "not_applicable"
   ],
+  "repository_worktree_dirty": true,
   "route_id": null,
   "route_label": "simulation_backend_compare",
-  "run_id": "2026-07-12_14-32-32",
+  "run_id": "2026-07-12_23-45-48",
   "run_kind": "simulation_backend_compare",
   "schema_version": "run_manifest_v1",
   "schema_versions": {
@@ -33,10 +43,10 @@
     "report_run": "report_run_v1",
     "run_manifest": "run_manifest_v1"
   },
-  "suite_id": "research_cpu_gpu",
-  "suite_path": "/home/tom/repos/Masters/thesis/implementation/configs/suites/manual/research_cpu_gpu.yml",
+  "suite_id": "thesis_full_state_cpu_gpu",
+  "suite_path": "/home/tom/repos/Masters/thesis/implementation/configs/suites/manual/thesis_full_state_cpu_gpu.yml",
   "summary": "simulation_backend_compare_summary.json",
-  "timestamp": "2026-07-12T12:32:32.936824+00:00",
+  "timestamp": "2026-07-12T21:45:48.104485+00:00",
   "upmem_execution_mode": null,
   "upmem_sdk_available": "unknown"
 }

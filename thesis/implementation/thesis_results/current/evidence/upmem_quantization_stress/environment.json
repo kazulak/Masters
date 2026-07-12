@@ -1,8 +1,38 @@
 {
+  "benchmark_threads": {
+    "BENCH_CPU_THREADS": "6",
+    "MKL_NUM_THREADS": "6",
+    "NUMEXPR_NUM_THREADS": "6",
+    "OMP_DYNAMIC": "FALSE",
+    "OMP_NUM_THREADS": "6",
+    "OMP_PLACES": "cores",
+    "OMP_PROC_BIND": "close",
+    "OPENBLAS_NUM_THREADS": "6"
+  },
+  "blas": {
+    "configuration": "OpenBLAS 0.3.29  USE64BITINT DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=64",
+    "name": "scipy-openblas",
+    "version": "0.3.29"
+  },
   "compiler": "cc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
   "cotengra": "0.7.5",
+  "cpu_affinity": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11
+  ],
   "cpu_count": 12,
-  "git_commit": "47794596c569396078b9e6d1d948d5a1f34165ba",
+  "cpu_frequency_governor": "schedutil",
+  "git_commit": "29fcd17b18521d08c3c86c1c092eb6eca67bb48f",
   "gpu": {
     "amd_smi": "/usr/bin/amd-smi",
     "cupy": null,
@@ -18,11 +48,13 @@
   "mem_total_kib": 32735180,
   "numpy": "2.2.6",
   "openmp": {
-    "OMP_NUM_THREADS": null,
-    "OMP_PLACES": null,
-    "OMP_PROC_BIND": null
+    "OMP_DYNAMIC": "FALSE",
+    "OMP_NUM_THREADS": "6",
+    "OMP_PLACES": "cores",
+    "OMP_PROC_BIND": "close"
   },
   "opt_einsum": "3.4.0",
+  "physical_cpu_count": 6,
   "platform": "Linux-6.8.0-124-generic-x86_64-with-glibc2.35",
   "processor": "x86_64",
   "python": "3.10.12",

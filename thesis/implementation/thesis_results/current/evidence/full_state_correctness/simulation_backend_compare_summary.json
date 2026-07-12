@@ -498,7 +498,7 @@
           "timeout_s": 300
         },
         "candidate_category": "tailored_quantum_gpu",
-        "created_at": "2026-07-12T12:28:38.564440+00:00",
+        "created_at": "2026-07-12T21:44:27.767917+00:00",
         "detected_dependencies": {
           "amd_gpu_pci": {
             "available": true
@@ -995,7 +995,7 @@
     "expected_memory_class": "bounded_statevector",
     "expected_risk": [],
     "expected_runtime_class": "manual_gpu_minutes",
-    "intended_use": "thesis_research_correctness",
+    "intended_use": "thesis_evidence_full_state_correctness",
     "known_heavy_backends": [],
     "manual_invocation_required": true,
     "max_qubits": 16
@@ -1010,8 +1010,8 @@
     "full_dump"
   ],
   "statevector_retention_policy": "compact_prunes_validated_output_tensors_and_retains_metadata",
-  "suite_id": "research_cpu_gpu_correctness",
-  "suite_path": "/home/tom/repos/Masters/thesis/implementation/configs/suites/manual/research_cpu_gpu_correctness.yml",
+  "suite_id": "thesis_full_state_correctness",
+  "suite_path": "/home/tom/repos/Masters/thesis/implementation/configs/suites/manual/thesis_full_state_correctness.yml",
   "timing_scope_note": "Correctness-tier rows use full statevector output validation.",
   "validation_method": "full_statevector",
   "warmup_runs": 0

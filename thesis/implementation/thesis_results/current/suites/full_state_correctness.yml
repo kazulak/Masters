@@ -26,7 +26,7 @@ _route_configs:
   route_limitation_scope: null
   route_role_description: null
 _schema_version: 2
-_suite_path: /home/tom/repos/Masters/thesis/implementation/configs/suites/manual/research_cpu_gpu_correctness.yml
+_suite_path: /home/tom/repos/Masters/thesis/implementation/configs/suites/manual/thesis_full_state_correctness.yml
 cases:
 - case_id: quest_qrng_4q_research_correctness
   circuit:
@@ -218,12 +218,13 @@ metadata:
   expected_memory_class: bounded_statevector
   expected_runtime_class: manual_gpu_minutes
   gpu_execution_suite: true
-  intended_use: thesis_research_correctness
+  intended_use: thesis_evidence_full_state_correctness
   manual_invocation_required: true
   max_qubits: 16
-  notes: Full-output correctness tier for the CPU/GPU performance route.
+  notes: Full-output correctness tier for the canonical thesis CPU/GPU performance
+    route.
   performance_tier: false
-  purpose: research_cpu_gpu_full_state_correctness
+  purpose: thesis_full_state_cpu_gpu_correctness
   requires_verified_gpu_for_gpu_rows: true
   state_output_mode: full_dump
   statevector_cap_amplitudes: 65536
@@ -241,7 +242,7 @@ route_policy:
   - quest_cpu_full_state_exact
   - quest_gpu_full_state_exact
 schema_version: 2
-suite_id: research_cpu_gpu_correctness
+suite_id: thesis_full_state_correctness
 thread_counts:
 - null
 timeout_s: 600

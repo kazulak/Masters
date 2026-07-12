@@ -20,346 +20,331 @@ _route_configs:
   route_limitation_scope: null
   route_role_description: null
 _schema_version: 2
-_suite_path: /home/tom/repos/Masters/thesis/implementation/configs/suites/manual/research_cpu_gpu.yml
+_suite_path: /home/tom/repos/Masters/thesis/implementation/configs/suites/manual/thesis_full_state_cpu_gpu.yml
 cases:
-- case_id: quest_qrng_4q_research_perf
-  circuit:
-    kind: quest_compatible
-    n_qubits: 4
-    name: QRNG
-    repeat_layers: 64
-  workload_id: quest_qrng_4q_research_perf
-- case_id: quest_qrng_6q_research_perf
-  circuit:
-    kind: quest_compatible
-    n_qubits: 6
-    name: QRNG
-    repeat_layers: 64
-  workload_id: quest_qrng_6q_research_perf
-- case_id: quest_qrng_8q_research_perf
+- case_id: quest_qrng_8q_thesis_gpu
   circuit:
     kind: quest_compatible
     n_qubits: 8
     name: QRNG
     repeat_layers: 64
-  workload_id: quest_qrng_8q_research_perf
-- case_id: quest_qrng_10q_research_perf
+  workload_id: quest_qrng_8q_thesis_gpu
+- case_id: quest_qrng_10q_thesis_gpu
   circuit:
     kind: quest_compatible
     n_qubits: 10
     name: QRNG
     repeat_layers: 64
-  workload_id: quest_qrng_10q_research_perf
-- case_id: quest_qrng_12q_research_perf
+  workload_id: quest_qrng_10q_thesis_gpu
+- case_id: quest_qrng_12q_thesis_gpu
   circuit:
     kind: quest_compatible
     n_qubits: 12
     name: QRNG
     repeat_layers: 64
-  workload_id: quest_qrng_12q_research_perf
-- case_id: quest_qrng_14q_research_perf
+  workload_id: quest_qrng_12q_thesis_gpu
+- case_id: quest_qrng_14q_thesis_gpu
   circuit:
     kind: quest_compatible
     n_qubits: 14
     name: QRNG
     repeat_layers: 64
-  workload_id: quest_qrng_14q_research_perf
-- case_id: quest_qrng_16q_research_perf
+  workload_id: quest_qrng_14q_thesis_gpu
+- case_id: quest_qrng_16q_thesis_gpu
   circuit:
     kind: quest_compatible
     n_qubits: 16
     name: QRNG
     repeat_layers: 64
-  workload_id: quest_qrng_16q_research_perf
-- case_id: quest_bv_4q_research_perf
+  workload_id: quest_qrng_16q_thesis_gpu
+- case_id: quest_qrng_18q_thesis_gpu
   circuit:
     kind: quest_compatible
-    n_qubits: 4
-    name: BV
+    n_qubits: 18
+    name: QRNG
     repeat_layers: 64
-  workload_id: quest_bv_4q_research_perf
-- case_id: quest_bv_6q_research_perf
+  workload_id: quest_qrng_18q_thesis_gpu
+- case_id: quest_qrng_20q_thesis_gpu
   circuit:
     kind: quest_compatible
-    n_qubits: 6
-    name: BV
+    n_qubits: 20
+    name: QRNG
     repeat_layers: 64
-  workload_id: quest_bv_6q_research_perf
-- case_id: quest_bv_8q_research_perf
+  workload_id: quest_qrng_20q_thesis_gpu
+- case_id: quest_bv_8q_thesis_gpu
   circuit:
     kind: quest_compatible
     n_qubits: 8
     name: BV
     repeat_layers: 64
-  workload_id: quest_bv_8q_research_perf
-- case_id: quest_bv_10q_research_perf
+  workload_id: quest_bv_8q_thesis_gpu
+- case_id: quest_bv_10q_thesis_gpu
   circuit:
     kind: quest_compatible
     n_qubits: 10
     name: BV
     repeat_layers: 64
-  workload_id: quest_bv_10q_research_perf
-- case_id: quest_bv_12q_research_perf
+  workload_id: quest_bv_10q_thesis_gpu
+- case_id: quest_bv_12q_thesis_gpu
   circuit:
     kind: quest_compatible
     n_qubits: 12
     name: BV
     repeat_layers: 64
-  workload_id: quest_bv_12q_research_perf
-- case_id: quest_bv_14q_research_perf
+  workload_id: quest_bv_12q_thesis_gpu
+- case_id: quest_bv_14q_thesis_gpu
   circuit:
     kind: quest_compatible
     n_qubits: 14
     name: BV
     repeat_layers: 64
-  workload_id: quest_bv_14q_research_perf
-- case_id: quest_bv_16q_research_perf
+  workload_id: quest_bv_14q_thesis_gpu
+- case_id: quest_bv_16q_thesis_gpu
   circuit:
     kind: quest_compatible
     n_qubits: 16
     name: BV
     repeat_layers: 64
-  workload_id: quest_bv_16q_research_perf
-- case_id: quest_xor_4q_research_perf
+  workload_id: quest_bv_16q_thesis_gpu
+- case_id: quest_bv_18q_thesis_gpu
   circuit:
     kind: quest_compatible
-    n_qubits: 4
-    name: XOR
-    repeat_layers: 128
-  workload_id: quest_xor_4q_research_perf
-- case_id: quest_xor_6q_research_perf
+    n_qubits: 18
+    name: BV
+    repeat_layers: 64
+  workload_id: quest_bv_18q_thesis_gpu
+- case_id: quest_bv_20q_thesis_gpu
   circuit:
     kind: quest_compatible
-    n_qubits: 6
-    name: XOR
-    repeat_layers: 128
-  workload_id: quest_xor_6q_research_perf
-- case_id: quest_xor_8q_research_perf
+    n_qubits: 20
+    name: BV
+    repeat_layers: 64
+  workload_id: quest_bv_20q_thesis_gpu
+- case_id: quest_xor_8q_thesis_gpu
   circuit:
     kind: quest_compatible
     n_qubits: 8
     name: XOR
     repeat_layers: 128
-  workload_id: quest_xor_8q_research_perf
-- case_id: quest_xor_10q_research_perf
+  workload_id: quest_xor_8q_thesis_gpu
+- case_id: quest_xor_10q_thesis_gpu
   circuit:
     kind: quest_compatible
     n_qubits: 10
     name: XOR
     repeat_layers: 128
-  workload_id: quest_xor_10q_research_perf
-- case_id: quest_xor_12q_research_perf
+  workload_id: quest_xor_10q_thesis_gpu
+- case_id: quest_xor_12q_thesis_gpu
   circuit:
     kind: quest_compatible
     n_qubits: 12
     name: XOR
     repeat_layers: 128
-  workload_id: quest_xor_12q_research_perf
-- case_id: quest_xor_14q_research_perf
+  workload_id: quest_xor_12q_thesis_gpu
+- case_id: quest_xor_14q_thesis_gpu
   circuit:
     kind: quest_compatible
     n_qubits: 14
     name: XOR
     repeat_layers: 128
-  workload_id: quest_xor_14q_research_perf
-- case_id: quest_xor_16q_research_perf
+  workload_id: quest_xor_14q_thesis_gpu
+- case_id: quest_xor_16q_thesis_gpu
   circuit:
     kind: quest_compatible
     n_qubits: 16
     name: XOR
     repeat_layers: 128
-  workload_id: quest_xor_16q_research_perf
-- case_id: quest_bb84_4q_research_perf
+  workload_id: quest_xor_16q_thesis_gpu
+- case_id: quest_xor_18q_thesis_gpu
   circuit:
     kind: quest_compatible
-    n_qubits: 4
-    name: BB84
-    repeat_layers: 64
-  workload_id: quest_bb84_4q_research_perf
-- case_id: quest_bb84_6q_research_perf
+    n_qubits: 18
+    name: XOR
+    repeat_layers: 128
+  workload_id: quest_xor_18q_thesis_gpu
+- case_id: quest_xor_20q_thesis_gpu
   circuit:
     kind: quest_compatible
-    n_qubits: 6
-    name: BB84
-    repeat_layers: 64
-  workload_id: quest_bb84_6q_research_perf
-- case_id: quest_bb84_8q_research_perf
+    n_qubits: 20
+    name: XOR
+    repeat_layers: 128
+  workload_id: quest_xor_20q_thesis_gpu
+- case_id: quest_bb84_8q_thesis_gpu
   circuit:
     kind: quest_compatible
     n_qubits: 8
     name: BB84
     repeat_layers: 64
-  workload_id: quest_bb84_8q_research_perf
-- case_id: quest_bb84_10q_research_perf
+  workload_id: quest_bb84_8q_thesis_gpu
+- case_id: quest_bb84_10q_thesis_gpu
   circuit:
     kind: quest_compatible
     n_qubits: 10
     name: BB84
     repeat_layers: 64
-  workload_id: quest_bb84_10q_research_perf
-- case_id: quest_bb84_12q_research_perf
+  workload_id: quest_bb84_10q_thesis_gpu
+- case_id: quest_bb84_12q_thesis_gpu
   circuit:
     kind: quest_compatible
     n_qubits: 12
     name: BB84
     repeat_layers: 64
-  workload_id: quest_bb84_12q_research_perf
-- case_id: quest_bb84_14q_research_perf
+  workload_id: quest_bb84_12q_thesis_gpu
+- case_id: quest_bb84_14q_thesis_gpu
   circuit:
     kind: quest_compatible
     n_qubits: 14
     name: BB84
     repeat_layers: 64
-  workload_id: quest_bb84_14q_research_perf
-- case_id: quest_bb84_16q_research_perf
+  workload_id: quest_bb84_14q_thesis_gpu
+- case_id: quest_bb84_16q_thesis_gpu
   circuit:
     kind: quest_compatible
     n_qubits: 16
     name: BB84
     repeat_layers: 64
-  workload_id: quest_bb84_16q_research_perf
-- case_id: quest_edc_4q_research_perf
+  workload_id: quest_bb84_16q_thesis_gpu
+- case_id: quest_bb84_18q_thesis_gpu
   circuit:
     kind: quest_compatible
-    n_qubits: 4
-    name: EDC
+    n_qubits: 18
+    name: BB84
     repeat_layers: 64
-  workload_id: quest_edc_4q_research_perf
-- case_id: quest_edc_6q_research_perf
+  workload_id: quest_bb84_18q_thesis_gpu
+- case_id: quest_bb84_20q_thesis_gpu
   circuit:
     kind: quest_compatible
-    n_qubits: 6
-    name: EDC
+    n_qubits: 20
+    name: BB84
     repeat_layers: 64
-  workload_id: quest_edc_6q_research_perf
-- case_id: quest_edc_8q_research_perf
+  workload_id: quest_bb84_20q_thesis_gpu
+- case_id: quest_edc_8q_thesis_gpu
   circuit:
     kind: quest_compatible
     n_qubits: 8
     name: EDC
     repeat_layers: 64
-  workload_id: quest_edc_8q_research_perf
-- case_id: quest_edc_10q_research_perf
+  workload_id: quest_edc_8q_thesis_gpu
+- case_id: quest_edc_10q_thesis_gpu
   circuit:
     kind: quest_compatible
     n_qubits: 10
     name: EDC
     repeat_layers: 64
-  workload_id: quest_edc_10q_research_perf
-- case_id: quest_edc_12q_research_perf
+  workload_id: quest_edc_10q_thesis_gpu
+- case_id: quest_edc_12q_thesis_gpu
   circuit:
     kind: quest_compatible
     n_qubits: 12
     name: EDC
     repeat_layers: 64
-  workload_id: quest_edc_12q_research_perf
-- case_id: quest_edc_14q_research_perf
+  workload_id: quest_edc_12q_thesis_gpu
+- case_id: quest_edc_14q_thesis_gpu
   circuit:
     kind: quest_compatible
     n_qubits: 14
     name: EDC
     repeat_layers: 64
-  workload_id: quest_edc_14q_research_perf
-- case_id: quest_edc_16q_research_perf
+  workload_id: quest_edc_14q_thesis_gpu
+- case_id: quest_edc_16q_thesis_gpu
   circuit:
     kind: quest_compatible
     n_qubits: 16
     name: EDC
     repeat_layers: 64
-  workload_id: quest_edc_16q_research_perf
-- case_id: quest_hs_4q_research_perf
+  workload_id: quest_edc_16q_thesis_gpu
+- case_id: quest_edc_18q_thesis_gpu
   circuit:
-    allocated_qubits: 4
     kind: quest_compatible
-    logical_qubits: 2
-    name: HS
+    n_qubits: 18
+    name: EDC
     repeat_layers: 64
-  workload_id: quest_hs_4q_research_perf
-- case_id: quest_hs_6q_research_perf
+  workload_id: quest_edc_18q_thesis_gpu
+- case_id: quest_edc_20q_thesis_gpu
   circuit:
-    allocated_qubits: 6
     kind: quest_compatible
-    logical_qubits: 3
-    name: HS
+    n_qubits: 20
+    name: EDC
     repeat_layers: 64
-  workload_id: quest_hs_6q_research_perf
-- case_id: quest_hs_8q_research_perf
+  workload_id: quest_edc_20q_thesis_gpu
+- case_id: quest_hs_8q_thesis_gpu
   circuit:
     allocated_qubits: 8
     kind: quest_compatible
     logical_qubits: 4
     name: HS
     repeat_layers: 64
-  workload_id: quest_hs_8q_research_perf
-- case_id: quest_hs_10q_research_perf
+  workload_id: quest_hs_8q_thesis_gpu
+- case_id: quest_hs_10q_thesis_gpu
   circuit:
     allocated_qubits: 10
     kind: quest_compatible
     logical_qubits: 5
     name: HS
     repeat_layers: 64
-  workload_id: quest_hs_10q_research_perf
-- case_id: quest_hs_12q_research_perf
+  workload_id: quest_hs_10q_thesis_gpu
+- case_id: quest_hs_12q_thesis_gpu
   circuit:
     allocated_qubits: 12
     kind: quest_compatible
     logical_qubits: 6
     name: HS
     repeat_layers: 64
-  workload_id: quest_hs_12q_research_perf
-- case_id: quest_hs_14q_research_perf
+  workload_id: quest_hs_12q_thesis_gpu
+- case_id: quest_hs_14q_thesis_gpu
   circuit:
     allocated_qubits: 14
     kind: quest_compatible
     logical_qubits: 7
     name: HS
     repeat_layers: 64
-  workload_id: quest_hs_14q_research_perf
-- case_id: quest_hs_16q_research_perf
+  workload_id: quest_hs_14q_thesis_gpu
+- case_id: quest_hs_16q_thesis_gpu
   circuit:
     allocated_qubits: 16
     kind: quest_compatible
     logical_qubits: 8
     name: HS
     repeat_layers: 64
-  workload_id: quest_hs_16q_research_perf
+  workload_id: quest_hs_16q_thesis_gpu
+- case_id: quest_hs_18q_thesis_gpu
+  circuit:
+    allocated_qubits: 18
+    kind: quest_compatible
+    logical_qubits: 9
+    name: HS
+    repeat_layers: 64
+  workload_id: quest_hs_18q_thesis_gpu
+- case_id: quest_hs_20q_thesis_gpu
+  circuit:
+    allocated_qubits: 20
+    kind: quest_compatible
+    logical_qubits: 10
+    name: HS
+    repeat_layers: 64
+  workload_id: quest_hs_20q_thesis_gpu
 memory_guard_gib: 24
 metadata:
-  canonical_circuit_families:
-  - QRNG
-  - BV
-  - XOR
-  - BB84
-  - EDC
-  - HS
-  canonical_qubit_sizes:
-  - 4
-  - 6
-  - 8
-  - 10
-  - 12
-  - 14
-  - 16
   deterministic_unitary_only: true
   exact_output_comparable: false
   expected_memory_class: bounded_statevector_no_dump
   expected_runtime_class: manual_gpu_minutes
   full_statevector_validation_available: false
   gpu_execution_suite: true
-  intended_use: thesis_research_performance
+  intended_use: thesis_evidence_full_state_cpu_gpu
   manual_invocation_required: true
-  max_qubits: 16
-  notes: 'Research CPU/GPU performance tier. Rows are metrics-only and validated by
-    native status/gate-count checks; full-output correctness is covered by research_cpu_gpu_correctness.yml.
+  max_qubits: 20
+  notes: 'Thesis CPU/GPU full-state performance suite. This suite must be run manually
+    in a GPU-visible environment; Codex cannot run it when /dev/kfd and /dev/dri are
+    hidden.
 
     '
   output_contract: metrics_only
   performance_tier: true
-  purpose: research_cpu_gpu_full_state_performance
+  purpose: thesis_full_state_cpu_gpu_direct_comparison
   requires_verified_gpu_for_gpu_rows: true
   state_output_mode: none
   validation_method: native_status_gate_counts
-  validation_tier: native_status_gate_counts
 planner:
   engine: opt_einsum
   optimize: greedy
@@ -371,7 +356,7 @@ route_policy:
   - quest_cpu_full_state_exact
   - quest_gpu_full_state_exact
 schema_version: 2
-suite_id: research_cpu_gpu
+suite_id: thesis_full_state_cpu_gpu
 thread_counts:
 - null
 timeout_s: 1200

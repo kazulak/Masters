@@ -13,8 +13,8 @@
       "execution_bundle_artifact": {
         "metadata": {
           "kind": "file",
-          "sha256": "7b6afe175ab410651b4e5c3e29ef74b8981da1e4ed3b3c945ab68a52b41d130f",
-          "size_bytes": 39416
+          "sha256": "1bebe20372e209f5bb01c581792c625c996147755ba0265122a698131ac301a7",
+          "size_bytes": 39415
         },
         "prune_reason": null,
         "relative_path": "cases/quantization_stress_4q_thesis_upmem/execution_bundle.json",
@@ -29,13 +29,13 @@
       "hardware_speedup": "not_applicable",
       "host_transfer_time_s": null,
       "kernel_family": "cpu_reference_only",
-      "kernel_time_s": 0.0003603249997468083,
+      "kernel_time_s": 0.0003564159997040406,
       "launch_overhead_s": null,
       "notes": "{\"contraction_execution_target\":\"cpu\",\"cpu_reference_used_to_feed_runtime_tensors\":false,\"cpu_role\":\"reference_validator\"}",
       "plan_reused": true,
       "planning_in_timed_region": false,
       "route_id": "cpu_tn_einsum_exact",
-      "run_id": "2026-07-12_14-20-29",
+      "run_id": "2026-07-13_00-11-23",
       "schema_version": "benchmark_result_artifact_v1",
       "simulator_or_hardware": "not_applicable",
       "simulator_relative_time": null,
@@ -45,7 +45,7 @@
       "task_count": 29,
       "tensor_network_hash": "b8f2952d6d1f4392e0be74045c0661a57b5828b1658cbbddbaafb7b1d954bf38",
       "timestamp": null,
-      "total_wall_time_s": 0.0003603249997468083,
+      "total_wall_time_s": 0.0003564159997040406,
       "unsupported_task_count": 0,
       "validated_task_count": 29,
       "validation_error_metrics": {},
@@ -64,7 +64,7 @@
       "execution_bundle_artifact": {
         "metadata": {
           "kind": "file",
-          "sha256": "98c4dbdbeb0d96f6237758cf4e8aa3960b20ffac059b4115089e538c5051c67b",
+          "sha256": "1508c74c5e6e19e8b5373412e4394616ce6f8ffef59fd6e8fb81fa40804cca4f",
           "size_bytes": 60739
         },
         "prune_reason": null,
@@ -80,13 +80,13 @@
       "hardware_speedup": "not_applicable",
       "host_transfer_time_s": null,
       "kernel_family": "cpu_reference_only",
-      "kernel_time_s": 0.0005150699998921482,
+      "kernel_time_s": 0.0004964369945810176,
       "launch_overhead_s": null,
       "notes": "{\"contraction_execution_target\":\"cpu\",\"cpu_reference_used_to_feed_runtime_tensors\":false,\"cpu_role\":\"reference_validator\"}",
       "plan_reused": true,
       "planning_in_timed_region": false,
       "route_id": "cpu_tn_einsum_exact",
-      "run_id": "2026-07-12_14-20-29",
+      "run_id": "2026-07-13_00-11-23",
       "schema_version": "benchmark_result_artifact_v1",
       "simulator_or_hardware": "not_applicable",
       "simulator_relative_time": null,
@@ -96,7 +96,7 @@
       "task_count": 45,
       "tensor_network_hash": "c16b8d1bfea53977396e32ac9dca8f013b5afecc451ddfbb1865cdd89c40f967",
       "timestamp": null,
-      "total_wall_time_s": 0.0005150699998921482,
+      "total_wall_time_s": 0.0004964369945810176,
       "unsupported_task_count": 0,
       "validated_task_count": 45,
       "validation_error_metrics": {},
@@ -115,8 +115,8 @@
       "execution_bundle_artifact": {
         "metadata": {
           "kind": "file",
-          "sha256": "485428e500980839f505642d50245c8c7a620afd8431dd4d8cc521b9d36a05e5",
-          "size_bytes": 82011
+          "sha256": "3db9fc945ad5ab68beff589ada57d104746a7f4f0e6803b25aae08274196997c",
+          "size_bytes": 82012
         },
         "prune_reason": null,
         "relative_path": "cases/quantization_stress_8q_thesis_upmem/execution_bundle.json",
@@ -131,13 +131,13 @@
       "hardware_speedup": "not_applicable",
       "host_transfer_time_s": null,
       "kernel_family": "cpu_reference_only",
-      "kernel_time_s": 0.0007055420001051971,
+      "kernel_time_s": 0.0007098360001691617,
       "launch_overhead_s": null,
       "notes": "{\"contraction_execution_target\":\"cpu\",\"cpu_reference_used_to_feed_runtime_tensors\":false,\"cpu_role\":\"reference_validator\"}",
       "plan_reused": true,
       "planning_in_timed_region": false,
       "route_id": "cpu_tn_einsum_exact",
-      "run_id": "2026-07-12_14-20-29",
+      "run_id": "2026-07-13_00-11-23",
       "schema_version": "benchmark_result_artifact_v1",
       "simulator_or_hardware": "not_applicable",
       "simulator_relative_time": null,
@@ -147,7 +147,7 @@
       "task_count": 61,
       "tensor_network_hash": "d7136816a546d6e887eacf020cf892c31d004554ecca40bac8483887cc0ac719",
       "timestamp": null,
-      "total_wall_time_s": 0.0007055420001051971,
+      "total_wall_time_s": 0.0007098360001691617,
       "unsupported_task_count": 0,
       "validated_task_count": 61,
       "validation_error_metrics": {},
@@ -177,16 +177,16 @@
       "case_id": "quantization_stress_4q_thesis_upmem",
       "native_unquantized_upmem_kernel_executed": true,
       "policy": "generic-only",
-      "quantization_runtime_speedup": 0.9941198636098303,
+      "quantization_runtime_speedup": 0.9985565971972189,
       "quantized_max_abs_error_vs_full_precision": 2.220446049250313e-16,
-      "quantized_runtime_s": 26.087856611000007,
+      "quantized_runtime_s": 23.389590161998058,
       "quantized_transfer_bytes": 3056.0,
       "same_kernel_family": true,
       "same_route_comparison": true,
       "same_taskgraph": true,
       "transfer_reduction": 1.0104712041884816,
       "unquantized_max_abs_error_vs_full_precision": 0.0,
-      "unquantized_runtime_s": 25.934456456000134,
+      "unquantized_runtime_s": 23.355829562002327,
       "unquantized_transfer_bytes": 3088.0
     },
     {
@@ -194,16 +194,16 @@
       "case_id": "quantization_stress_6q_thesis_upmem",
       "native_unquantized_upmem_kernel_executed": true,
       "policy": "generic-only",
-      "quantization_runtime_speedup": 0.9877788510814164,
+      "quantization_runtime_speedup": 0.9988445486819584,
       "quantized_max_abs_error_vs_full_precision": 6.667118051786499e-16,
-      "quantized_runtime_s": 41.04165085800014,
+      "quantized_runtime_s": 35.94957429399801,
       "quantized_transfer_bytes": 4584.0,
       "same_kernel_family": true,
       "same_route_comparison": true,
       "same_taskgraph": true,
       "transfer_reduction": 1.0104712041884816,
       "unquantized_max_abs_error_vs_full_precision": 0.0,
-      "unquantized_runtime_s": 40.540074731000004,
+      "unquantized_runtime_s": 35.90803631099698,
       "unquantized_transfer_bytes": 4632.0
     },
     {
@@ -211,16 +211,16 @@
       "case_id": "quantization_stress_8q_thesis_upmem",
       "native_unquantized_upmem_kernel_executed": true,
       "policy": "generic-only",
-      "quantization_runtime_speedup": 1.0172035940590487,
+      "quantization_runtime_speedup": 0.9994765995079892,
       "quantized_max_abs_error_vs_full_precision": 5.558049685633556e-16,
-      "quantized_runtime_s": 55.87611284600007,
+      "quantized_runtime_s": 48.91406178300531,
       "quantized_transfer_bytes": 6112.0,
       "same_kernel_family": true,
       "same_route_comparison": true,
       "same_taskgraph": true,
       "transfer_reduction": 1.0104712041884816,
       "unquantized_max_abs_error_vs_full_precision": 0.0,
-      "unquantized_runtime_s": 56.837382809000246,
+      "unquantized_runtime_s": 48.888460139001836,
       "unquantized_transfer_bytes": 6176.0
     }
   ],
@@ -252,7 +252,7 @@
       "cpu_reference_artifact": {
         "metadata": {
           "kind": "file",
-          "sha256": "9f5f55220a886109a1de8eb952141cb350e2983edc0f9c189137755b41f34513",
+          "sha256": "4555498c02cc1329634fbf4c5c849f8baa889481e050a6e1650a562b2c6575cb",
           "size_bytes": 1452
         },
         "prune_reason": null,
@@ -268,8 +268,8 @@
       "execution_bundle_artifact": {
         "metadata": {
           "kind": "file",
-          "sha256": "7b6afe175ab410651b4e5c3e29ef74b8981da1e4ed3b3c945ab68a52b41d130f",
-          "size_bytes": 39416
+          "sha256": "1bebe20372e209f5bb01c581792c625c996147755ba0265122a698131ac301a7",
+          "size_bytes": 39415
         },
         "prune_reason": null,
         "relative_path": "cases/quantization_stress_4q_thesis_upmem/execution_bundle.json",
@@ -341,16 +341,16 @@
       "scaling_applied": false,
       "status": "completed",
       "tensor_network_hash": "b8f2952d6d1f4392e0be74045c0661a57b5828b1658cbbddbaafb7b1d954bf38",
-      "total_bridge_time_s": 0.6571577199997591,
-      "total_build_time_s": 0.6314302999994652,
+      "total_bridge_time_s": 0.6117300120095024,
+      "total_build_time_s": 0.5871772329992382,
       "total_dequantization_time_s": 0.0,
       "total_host_orchestration_time_s": null,
-      "total_host_residual_time_s": 25.921833709999646,
-      "total_kernel_time_s": 0.012622746000488405,
+      "total_host_residual_time_s": 23.343508072008262,
+      "total_kernel_time_s": 0.012321489994064905,
       "total_quantization_time_s": 0.0,
-      "total_simulator_time_s": 0.012622746000488405,
+      "total_simulator_time_s": 0.012321489994064905,
       "total_tasks": 29,
-      "total_wall_time_s": 25.934456456000134,
+      "total_wall_time_s": 23.355829562002327,
       "transfer_compression_ratio": 0.05181347150259067,
       "unquantized_mode_kind": "float32_no_quant",
       "unsupported_tasks": 0,
@@ -395,7 +395,7 @@
       "cpu_reference_artifact": {
         "metadata": {
           "kind": "file",
-          "sha256": "9f5f55220a886109a1de8eb952141cb350e2983edc0f9c189137755b41f34513",
+          "sha256": "4555498c02cc1329634fbf4c5c849f8baa889481e050a6e1650a562b2c6575cb",
           "size_bytes": 1452
         },
         "prune_reason": null,
@@ -411,8 +411,8 @@
       "execution_bundle_artifact": {
         "metadata": {
           "kind": "file",
-          "sha256": "7b6afe175ab410651b4e5c3e29ef74b8981da1e4ed3b3c945ab68a52b41d130f",
-          "size_bytes": 39416
+          "sha256": "1bebe20372e209f5bb01c581792c625c996147755ba0265122a698131ac301a7",
+          "size_bytes": 39415
         },
         "prune_reason": null,
         "relative_path": "cases/quantization_stress_4q_thesis_upmem/execution_bundle.json",
@@ -494,16 +494,16 @@
       "scaling_applied": true,
       "status": "completed",
       "tensor_network_hash": "b8f2952d6d1f4392e0be74045c0661a57b5828b1658cbbddbaafb7b1d954bf38",
-      "total_bridge_time_s": 0.6548507480001717,
-      "total_build_time_s": 0.6290794249998726,
-      "total_dequantization_time_s": 9.672399983173818e-05,
+      "total_bridge_time_s": 0.6060305789942504,
+      "total_build_time_s": 0.5810980979949818,
+      "total_dequantization_time_s": 0.00010523699893383309,
       "total_host_orchestration_time_s": null,
-      "total_host_residual_time_s": 26.075670415999866,
-      "total_kernel_time_s": 0.012186195000140287,
-      "total_quantization_time_s": 0.0007484239999939746,
-      "total_simulator_time_s": 0.012186195000140287,
+      "total_host_residual_time_s": 23.376694340011454,
+      "total_kernel_time_s": 0.01289582198660355,
+      "total_quantization_time_s": 0.0007706110045546666,
+      "total_simulator_time_s": 0.01289582198660355,
       "total_tasks": 29,
-      "total_wall_time_s": 26.087856611000007,
+      "total_wall_time_s": 23.389590161998058,
       "transfer_compression_ratio": 0.05235602094240838,
       "unquantized_mode_kind": null,
       "unsupported_tasks": 0,
@@ -548,7 +548,7 @@
       "cpu_reference_artifact": {
         "metadata": {
           "kind": "file",
-          "sha256": "c5e842ea708e632b206557de36d207942c9a30fcc3eba7881d5b52676e6c2c4f",
+          "sha256": "13c103924e29a0a861590abc410949d2b75e0944c4f31f29ffc93332d3623a92",
           "size_bytes": 1530
         },
         "prune_reason": null,
@@ -564,7 +564,7 @@
       "execution_bundle_artifact": {
         "metadata": {
           "kind": "file",
-          "sha256": "98c4dbdbeb0d96f6237758cf4e8aa3960b20ffac059b4115089e538c5051c67b",
+          "sha256": "1508c74c5e6e19e8b5373412e4394616ce6f8ffef59fd6e8fb81fa40804cca4f",
           "size_bytes": 60739
         },
         "prune_reason": null,
@@ -639,16 +639,16 @@
       "scaling_applied": false,
       "status": "completed",
       "tensor_network_hash": "c16b8d1bfea53977396e32ac9dca8f013b5afecc451ddfbb1865cdd89c40f967",
-      "total_bridge_time_s": 0.9865494290002061,
-      "total_build_time_s": 0.9476048889996491,
+      "total_bridge_time_s": 0.9112942040010239,
+      "total_build_time_s": 0.874618323003233,
       "total_dequantization_time_s": 0.0,
       "total_host_orchestration_time_s": null,
-      "total_host_residual_time_s": 40.52111609299982,
-      "total_kernel_time_s": 0.0189586380001856,
+      "total_host_residual_time_s": 35.88914076999208,
+      "total_kernel_time_s": 0.018895541004894767,
       "total_quantization_time_s": 0.0,
-      "total_simulator_time_s": 0.0189586380001856,
+      "total_simulator_time_s": 0.018895541004894767,
       "total_tasks": 45,
-      "total_wall_time_s": 40.540074731000004,
+      "total_wall_time_s": 35.90803631099698,
       "transfer_compression_ratio": 0.05181347150259067,
       "unquantized_mode_kind": "float32_no_quant",
       "unsupported_tasks": 0,
@@ -693,7 +693,7 @@
       "cpu_reference_artifact": {
         "metadata": {
           "kind": "file",
-          "sha256": "c5e842ea708e632b206557de36d207942c9a30fcc3eba7881d5b52676e6c2c4f",
+          "sha256": "13c103924e29a0a861590abc410949d2b75e0944c4f31f29ffc93332d3623a92",
           "size_bytes": 1530
         },
         "prune_reason": null,
@@ -709,7 +709,7 @@
       "execution_bundle_artifact": {
         "metadata": {
           "kind": "file",
-          "sha256": "98c4dbdbeb0d96f6237758cf4e8aa3960b20ffac059b4115089e538c5051c67b",
+          "sha256": "1508c74c5e6e19e8b5373412e4394616ce6f8ffef59fd6e8fb81fa40804cca4f",
           "size_bytes": 60739
         },
         "prune_reason": null,
@@ -798,16 +798,16 @@
       "scaling_applied": true,
       "status": "completed",
       "tensor_network_hash": "c16b8d1bfea53977396e32ac9dca8f013b5afecc451ddfbb1865cdd89c40f967",
-      "total_bridge_time_s": 1.003979108000749,
-      "total_build_time_s": 0.9634210599997459,
-      "total_dequantization_time_s": 0.00014777200021853787,
+      "total_bridge_time_s": 0.8887496130046202,
+      "total_build_time_s": 0.8533616969871218,
+      "total_dequantization_time_s": 0.00015197299944702536,
       "total_host_orchestration_time_s": null,
-      "total_host_residual_time_s": 41.02303992199995,
-      "total_kernel_time_s": 0.018610936000186484,
-      "total_quantization_time_s": 0.001158793999820773,
-      "total_simulator_time_s": 0.018610936000186484,
+      "total_host_residual_time_s": 35.93081949599582,
+      "total_kernel_time_s": 0.01875479800219182,
+      "total_quantization_time_s": 0.0011907449952559546,
+      "total_simulator_time_s": 0.01875479800219182,
       "total_tasks": 45,
-      "total_wall_time_s": 41.04165085800014,
+      "total_wall_time_s": 35.94957429399801,
       "transfer_compression_ratio": 0.05235602094240838,
       "unquantized_mode_kind": null,
       "unsupported_tasks": 0,
@@ -852,7 +852,7 @@
       "cpu_reference_artifact": {
         "metadata": {
           "kind": "file",
-          "sha256": "72c66a064304a10228c6fb00a0192fcdc951728d96fcfb89c3e4ccf7443dc569",
+          "sha256": "1d9768707ae565a1b2ca5b85be9b769e11e502fca91af2934f0eebca254433c1",
           "size_bytes": 1606
         },
         "prune_reason": null,
@@ -868,8 +868,8 @@
       "execution_bundle_artifact": {
         "metadata": {
           "kind": "file",
-          "sha256": "485428e500980839f505642d50245c8c7a620afd8431dd4d8cc521b9d36a05e5",
-          "size_bytes": 82011
+          "sha256": "3db9fc945ad5ab68beff589ada57d104746a7f4f0e6803b25aae08274196997c",
+          "size_bytes": 82012
         },
         "prune_reason": null,
         "relative_path": "cases/quantization_stress_8q_thesis_upmem/execution_bundle.json",
@@ -945,16 +945,16 @@
       "scaling_applied": false,
       "status": "completed",
       "tensor_network_hash": "d7136816a546d6e887eacf020cf892c31d004554ecca40bac8483887cc0ac719",
-      "total_bridge_time_s": 1.3197651939995012,
-      "total_build_time_s": 1.2648860660001446,
+      "total_bridge_time_s": 1.1874053660139907,
+      "total_build_time_s": 1.1402195250047953,
       "total_dequantization_time_s": 0.0,
       "total_host_orchestration_time_s": null,
-      "total_host_residual_time_s": 56.811614098000064,
-      "total_kernel_time_s": 0.02576871100018252,
+      "total_host_residual_time_s": 48.86387321100483,
+      "total_kernel_time_s": 0.02458692799700657,
       "total_quantization_time_s": 0.0,
-      "total_simulator_time_s": 0.02576871100018252,
+      "total_simulator_time_s": 0.02458692799700657,
       "total_tasks": 61,
-      "total_wall_time_s": 56.837382809000246,
+      "total_wall_time_s": 48.888460139001836,
       "transfer_compression_ratio": 0.05181347150259067,
       "unquantized_mode_kind": "float32_no_quant",
       "unsupported_tasks": 0,
@@ -999,7 +999,7 @@
       "cpu_reference_artifact": {
         "metadata": {
           "kind": "file",
-          "sha256": "72c66a064304a10228c6fb00a0192fcdc951728d96fcfb89c3e4ccf7443dc569",
+          "sha256": "1d9768707ae565a1b2ca5b85be9b769e11e502fca91af2934f0eebca254433c1",
           "size_bytes": 1606
         },
         "prune_reason": null,
@@ -1015,8 +1015,8 @@
       "execution_bundle_artifact": {
         "metadata": {
           "kind": "file",
-          "sha256": "485428e500980839f505642d50245c8c7a620afd8431dd4d8cc521b9d36a05e5",
-          "size_bytes": 82011
+          "sha256": "3db9fc945ad5ab68beff589ada57d104746a7f4f0e6803b25aae08274196997c",
+          "size_bytes": 82012
         },
         "prune_reason": null,
         "relative_path": "cases/quantization_stress_8q_thesis_upmem/execution_bundle.json",
@@ -1110,16 +1110,16 @@
       "scaling_applied": true,
       "status": "completed",
       "tensor_network_hash": "d7136816a546d6e887eacf020cf892c31d004554ecca40bac8483887cc0ac719",
-      "total_bridge_time_s": 1.331990928999403,
-      "total_build_time_s": 1.2791171620001478,
-      "total_dequantization_time_s": 0.00020200500102873775,
+      "total_bridge_time_s": 1.189182971000264,
+      "total_build_time_s": 1.1417678680081735,
+      "total_dequantization_time_s": 0.0002051150004263036,
       "total_host_orchestration_time_s": null,
-      "total_host_residual_time_s": 55.85131651499978,
-      "total_kernel_time_s": 0.024796331000288774,
-      "total_quantization_time_s": 0.0015472020008928666,
-      "total_simulator_time_s": 0.024796331000288774,
+      "total_host_residual_time_s": 48.88885475400457,
+      "total_kernel_time_s": 0.025207029000739567,
+      "total_quantization_time_s": 0.0015453780069947243,
+      "total_simulator_time_s": 0.025207029000739567,
       "total_tasks": 61,
-      "total_wall_time_s": 55.87611284600007,
+      "total_wall_time_s": 48.91406178300531,
       "transfer_compression_ratio": 0.05235602094240838,
       "unquantized_mode_kind": null,
       "unsupported_tasks": 0,

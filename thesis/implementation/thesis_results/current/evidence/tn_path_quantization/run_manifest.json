@@ -4,7 +4,7 @@
   "backend_id": null,
   "benchmark_source_commit": "29fcd17b18521d08c3c86c1c092eb6eca67bb48f",
   "benchmark_source_worktree_dirty": false,
-  "command": "/home/tom/repos/Masters/thesis/implementation/src/quantum_bench/bench/__main__.py simulation-backend-compare --suite configs/suites/manual/thesis_full_state_correctness.yml --artifact-retention compact",
+  "command": "/home/tom/repos/Masters/thesis/implementation/src/quantum_bench/bench/__main__.py simulation-backend-compare --suite configs/suites/manual/thesis_tn_paths_quantization.yml --artifact-retention compact",
   "dirty_tree": false,
   "dirty_worktree": false,
   "environment_hash": "38137bd7696aa7225971f22807b899ebc2c6e4e593167a56a68516884062343a",
@@ -31,7 +31,7 @@
   "repository_worktree_dirty": true,
   "route_id": null,
   "route_label": "simulation_backend_compare",
-  "run_id": "2026-07-12_23-44-28",
+  "run_id": "2026-07-13_00-01-12",
   "run_kind": "simulation_backend_compare",
   "schema_version": "run_manifest_v1",
   "schema_versions": {
@@ -43,10 +43,10 @@
     "report_run": "report_run_v1",
     "run_manifest": "run_manifest_v1"
   },
-  "suite_id": "thesis_full_state_correctness",
-  "suite_path": "/home/tom/repos/Masters/thesis/implementation/configs/suites/manual/thesis_full_state_correctness.yml",
+  "suite_id": "thesis_tn_paths_quantization",
+  "suite_path": "/home/tom/repos/Masters/thesis/implementation/configs/suites/manual/thesis_tn_paths_quantization.yml",
   "summary": "simulation_backend_compare_summary.json",
-  "timestamp": "2026-07-12T21:44:28.064120+00:00",
+  "timestamp": "2026-07-12T22:01:12.609698+00:00",
   "upmem_execution_mode": null,
   "upmem_sdk_available": "unknown"
 }

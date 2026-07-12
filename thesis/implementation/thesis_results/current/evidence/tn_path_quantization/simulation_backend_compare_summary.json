@@ -1,6 +1,7 @@
 {
   "anchor_route_id": "quest_cpu_full_state_exact",
   "backend_families": [
+    "cpu",
     "quest"
   ],
   "backend_probe": {
@@ -969,33 +970,35 @@
     "schema_version": "simulation_backend_probe_v1"
   },
   "benchmark_roles": [
-    "serious_full_state_baseline",
-    "serious_gpu_full_state_baseline"
+    "diagnostic_path_replay_baseline",
+    "diagnostic_quantized_path_replay",
+    "serious_full_state_baseline"
   ],
   "case_artifacts_directory": "cases",
   "case_count": 42,
   "case_records_artifact": "simulation_backend_compare_cases.jsonl",
-  "exact_output_comparable_record_count": 0,
+  "exact_output_comparable_record_count": 126,
   "execution_models": [
-    "full_state"
+    "full_state",
+    "tensor_network"
   ],
   "failed_case_count": 0,
-  "gpu_benchmark_records_emitted": true,
+  "gpu_benchmark_records_emitted": false,
   "gpu_execution_backend_added": true,
-  "measured_runs": 5,
-  "metrics_only_record_count": 420,
+  "measured_runs": 1,
+  "metrics_only_record_count": 0,
   "normalized_records_artifact": "normalized_records.jsonl",
   "optional_backend_reports": [],
   "passed_case_count": 42,
-  "performance_tier": true,
-  "performance_tier_record_count": 420,
+  "performance_tier": false,
+  "performance_tier_record_count": 0,
   "quest_metrics_only_route_is_not_output_comparable": true,
-  "record_count": 420,
+  "record_count": 126,
   "resource_profile": {
-    "expected_memory_class": "bounded_statevector_no_dump",
+    "expected_memory_class": "bounded_taskgraph_replay",
     "expected_risk": [],
-    "expected_runtime_class": "manual_gpu_minutes",
-    "intended_use": "thesis_evidence_full_state_cpu_gpu",
+    "expected_runtime_class": "manual_cpu_diagnostic_minutes",
+    "intended_use": "thesis_evidence_tn_path_quantization_diagnostic",
     "known_heavy_backends": [],
     "manual_invocation_required": true,
     "max_qubits": 20
@@ -1003,16 +1006,17 @@
   "root_normalized_records_are_canonical": true,
   "routes": [
     "quest_cpu_full_state_exact",
-    "quest_gpu_full_state_exact"
+    "cpu_tn_path_replay_float64",
+    "cpu_tn_path_replay_int8_quantized"
   ],
   "schema_version": "simulation_backend_compare_v1",
   "state_output_modes": [
-    "none"
+    "full_dump"
   ],
   "statevector_retention_policy": "compact_prunes_validated_output_tensors_and_retains_metadata",
-  "suite_id": "thesis_full_state_cpu_gpu",
-  "suite_path": "/home/tom/repos/Masters/thesis/implementation/configs/suites/manual/thesis_full_state_cpu_gpu.yml",
-  "timing_scope_note": "Performance-tier rows use native compute timing plus process wall time and do not include full statevector validation.",
-  "validation_method": "native_status_gate_counts",
-  "warmup_runs": 1
+  "suite_id": "thesis_tn_paths_quantization",
+  "suite_path": "/home/tom/repos/Masters/thesis/implementation/configs/suites/manual/thesis_tn_paths_quantization.yml",
+  "timing_scope_note": "Correctness-tier rows use full statevector output validation.",
+  "validation_method": "full_statevector",
+  "warmup_runs": 0
 }
