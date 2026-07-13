@@ -965,8 +965,41 @@ def _write_json(path: Path, payload: Any) -> None:
 def _plot_entry(plt: Any, path: Path, title: str, source_csv: str, plotter: Any) -> JsonDict:
     reason = plotter(path)
     if reason:
-        return {"plot": path.name, "title": title, "status": "skipped", "reason": reason, "source_csv": source_csv}
+        _write_todo_plot(plt, path, title, reason)
+        return {
+            "plot": path.name,
+            "title": title,
+            "status": "generated_todo_missing_data",
+            "reason": reason,
+            "source_csv": source_csv,
+            "size_bytes": path.stat().st_size,
+        }
     return {"plot": path.name, "title": title, "status": "generated", "reason": None, "source_csv": source_csv, "size_bytes": path.stat().st_size}
+
+
+def _write_todo_plot(plt: Any, path: Path, title: str, reason: str) -> None:
+    """Keep the expected report surface without inventing a missing value."""
+    fig, axis = plt.subplots(figsize=(8, 4.5), dpi=160)
+    axis.set_title(title)
+    axis.set_xlabel("Evidence input")
+    axis.set_ylabel("Value")
+    axis.text(
+        0.5,
+        0.5,
+        f"TODO\n{reason}",
+        ha="center",
+        va="center",
+        wrap=True,
+        transform=axis.transAxes,
+        color="#b45309",
+        fontsize=14,
+        weight="bold",
+    )
+    axis.set_xticks([])
+    axis.set_yticks([])
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
 
 
 def _plot_speedup(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:

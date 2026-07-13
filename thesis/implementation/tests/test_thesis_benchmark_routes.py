@@ -27,6 +27,7 @@ def test_thesis_manual_suites_load() -> None:
         "configs/suites/manual/thesis_cpu_tn_quimb.yml",
         "configs/suites/manual/thesis_tn_paths_quantization.yml",
         "configs/suites/manual/thesis_planner_compare.yml",
+        "configs/suites/manual/thesis_planner_sensitivity.yml",
         "configs/suites/manual/thesis_upmem_quantization_boundary.yml",
     ):
         suite = load_suite(ROOT / rel_path)
@@ -210,6 +211,7 @@ def test_thesis_report_uses_explicit_evidence_inputs(tmp_path: Path) -> None:
     assert "full_state_cpu_gpu_speedup_by_circuit_size.png" in plot_names
     assert "tn_quantization_runtime_by_circuit_size.png" in plot_names
     assert "upmem_accuracy_error_by_circuit_size.png" in plot_names
+    assert all(entry["status"] != "skipped" for entry in plot_manifest["plots"])
     with (out / "full_state_cpu_gpu_speedup_by_circuit_size.csv").open("r", encoding="utf-8", newline="") as handle:
         summary_rows = list(csv.DictReader(handle))
     assert summary_rows[0]["case_family"] == "quest_bv"

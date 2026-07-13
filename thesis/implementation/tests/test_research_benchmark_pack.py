@@ -1,10 +1,74 @@
 from __future__ import annotations
 
+import csv
 import json
+import sys
+import types
 from pathlib import Path
 
 from scripts import research_benchmark_pack as pack
 from quantum_bench.bench.config import comparison_planner_configs, load_suite
+
+
+class _FakeFigure:
+    def savefig(self, path: Path, **kwargs) -> None:
+        del kwargs
+        Path(path).write_bytes(b"\x89PNG\r\n\x1a\nphase-0.5")
+
+    def clf(self) -> None:
+        return None
+
+
+class _FakeAxes:
+    def __init__(self) -> None:
+        self.text_values: list[str] = []
+
+    def text(self, *args, **kwargs) -> None:
+        del kwargs
+        if len(args) > 2:
+            self.text_values.append(str(args[2]))
+
+    def __getattr__(self, name):
+        del name
+        return lambda *args, **kwargs: None
+
+
+class _FakePyplot:
+    def __init__(self) -> None:
+        self.axes = _FakeAxes()
+
+    def subplots(self, *args, **kwargs):
+        del args, kwargs
+        return _FakeFigure(), self.axes
+
+    def close(self, fig) -> None:
+        del fig
+
+
+def _install_fake_matplotlib(monkeypatch) -> _FakePyplot:
+    pyplot = _FakePyplot()
+    matplotlib = types.ModuleType("matplotlib")
+    matplotlib.pyplot = pyplot
+    monkeypatch.setitem(sys.modules, "matplotlib", matplotlib)
+    monkeypatch.setitem(sys.modules, "matplotlib.pyplot", pyplot)
+    return pyplot
+
+
+def _contract_plot_spec(*, rows: list[dict], renderer=None, reason=None) -> pack.PlotSpec:
+    return pack.PlotSpec(
+        filename="contract.png",
+        title="Contract title",
+        source_csv="source.csv",
+        source_fields=("value",),
+        claim_basis="Recorded test evidence.",
+        caption="Contract caption.",
+        x_label="Qubits",
+        y_label="Measured value",
+        renderer=renderer,
+        not_implemented_reason=reason,
+        variance_fields=("value",),
+        data_rows=rows,
+    )
 
 
 def _record(case_id: str, route_id: str, repeat_id: int, *, target: str, total: float, compute: float) -> dict:
@@ -73,12 +137,283 @@ def _generic_upmem_record(case_id: str, quantization_mode: str, *, total: float,
         "total_wall_time_s": total,
         "simulation_compute_time_s": compute,
         "actual_transfer_bytes": transfer,
+        "actual_h2d_bytes": int(transfer * 3 // 4),
+        "actual_d2h_bytes": int(transfer - (transfer * 3 // 4)),
+        "actual_transfer_bytes_invariant": "passed",
+        "transfer_accounting_scope": "application_visible_sdk_recorded",
         "input_dtype_on_dpu": "float32" if float_mode else "int8",
         "native_unquantized_upmem_kernel_executed": float_mode,
         "hardware_speedup": "not_applicable",
         "hardware_speedup_applicable": False,
         "validation_error_metrics": {"max_abs_error": 0.0 if float_mode else 0.01, "l2_error": 0.0 if float_mode else 0.02},
     }
+
+
+def test_plot_contract_generates_missing_and_zero_variance_placeholders(tmp_path: Path, monkeypatch) -> None:
+    pyplot = _install_fake_matplotlib(monkeypatch)
+    missing_path = tmp_path / "missing.png"
+    missing = pack._render_plot_spec(
+        pyplot,
+        missing_path,
+        _contract_plot_spec(rows=[]),
+    )
+    assert missing.status == "generated_todo_missing_data"
+    assert missing_path.read_bytes().startswith(b"\x89PNG")
+    assert "source fields contain no numeric data" in pyplot.axes.text_values[-1]
+
+    zero_path = tmp_path / "zero.png"
+    zero = pack._render_plot_spec(
+        pyplot,
+        zero_path,
+        _contract_plot_spec(rows=[{"value": 3.0}, {"value": 3.0}]),
+    )
+    assert zero.status == "generated_todo_no_variance"
+    assert zero_path.exists()
+    assert "zero variance" in pyplot.axes.text_values[-1]
+
+
+def test_plot_contract_classifies_valid_not_implemented_and_failed(tmp_path: Path, monkeypatch) -> None:
+    pyplot = _install_fake_matplotlib(monkeypatch)
+
+    def renderer(_plt, path: Path):
+        path.write_bytes(b"\x89PNG\r\n\x1a\nvalid")
+        return None
+
+    valid = pack._render_plot_spec(
+        pyplot,
+        tmp_path / "valid.png",
+        _contract_plot_spec(rows=[{"value": 1.0}, {"value": 2.0}], renderer=renderer),
+    )
+    assert valid.status == "generated_valid"
+
+    todo = pack._render_plot_spec(
+        pyplot,
+        tmp_path / "not-implemented.png",
+        _contract_plot_spec(rows=[{"value": 1.0}], reason="missing implementation"),
+    )
+    assert todo.status == "generated_todo_not_implemented"
+    assert (tmp_path / "not-implemented.png").exists()
+
+    def failing_renderer(_plt, _path: Path):
+        raise RuntimeError("test render failure")
+
+    failed = pack._render_plot_spec(
+        pyplot,
+        tmp_path / "failed.png",
+        _contract_plot_spec(rows=[{"value": 1.0}, {"value": 2.0}], renderer=failing_renderer),
+    )
+    assert failed.status == "failed"
+    assert "rendering_failed" in (failed.reason or "")
+
+
+def test_plot_manifest_has_evidence_contract_and_stable_todo_pngs(tmp_path: Path, monkeypatch) -> None:
+    _install_fake_matplotlib(monkeypatch)
+    manifest = pack.write_plots(tmp_path, [], [], [], [], [])
+
+    assert all(entry["status"] in pack.PLOT_STATUSES for entry in manifest["plots"])
+    assert all({"source_csv", "source_fields", "claim_basis", "caption", "status", "reason"} <= entry.keys() for entry in manifest["plots"])
+    assert all((tmp_path / "plots" / entry["plot"]).exists() for entry in manifest["plots"])
+    names = {entry["plot"] for entry in manifest["plots"]}
+    assert "cpu_gpu_energy_efficiency_by_qubits.png" in names
+    assert "cpu_tn_slicing_tradeoff.png" in names
+    assert "planner_component_scores.png" in names
+    assert "planner_selection.png" in names
+    assert "planner_pareto_frontier.png" in names
+    assert "planner_sensitivity.png" in names
+    assert "quantization_probability_error_by_family_size.png" in names
+    assert manifest["failed_figures"] == []
+    assert any(entry["status"] == "generated_todo_not_implemented" for entry in manifest["plots"])
+
+
+def test_slicing_tradeoff_pairs_compatible_quimb_rows_and_derives_ratios() -> None:
+    common = {
+        "schema_version": pack.SCHEMA_VERSION,
+        "suite_id": "research_cpu_tn",
+        "case_id": "quest_bv_10q_research_tn",
+        "case_family": "bv",
+        "benchmark_n_qubits": 10,
+        "timing_scope": "compute_only_native_and_process_wall",
+        "state_output_mode": "none",
+        "performance_tier": True,
+    }
+    stats = [
+        {
+            **common,
+            "route_id": "quimb_tn_exact",
+            "simulation_compute_time_s_median": 2.0,
+            "tn_max_intermediate_bytes": 1000,
+        },
+        {
+            **common,
+            "route_id": "quimb_tn_sliced_exact",
+            "simulation_compute_time_s_median": 3.0,
+            "slicing_flop_ratio": 0.5,
+            "tn_max_intermediate_bytes": 250,
+        },
+    ]
+
+    rows = pack.slicing_tradeoff(stats)
+
+    assert len(rows) == 1
+    assert rows[0]["runtime_ratio_sliced_over_unsliced"] == 1.5
+    assert rows[0]["slicing_flop_ratio"] == 0.5
+    assert rows[0]["largest_intermediate_ratio_sliced_over_unsliced"] == 0.25
+    assert all("speedup" not in key for key in rows[0])
+
+    mismatched = [dict(row, timing_scope="end_to_end") for row in stats if row["route_id"] == "quimb_tn_sliced_exact"]
+    assert pack.slicing_tradeoff(stats[:1] + mismatched) == []
+
+
+def test_slicing_tradeoff_plot_writes_source_csv_and_is_valid_for_one_pair(tmp_path: Path, monkeypatch) -> None:
+    _install_fake_matplotlib(monkeypatch)
+    stats = [
+        {
+            "suite_id": "research_cpu_tn",
+            "case_id": "quest_bv_10q_research_tn",
+            "case_family": "bv",
+            "benchmark_n_qubits": 10,
+            "timing_scope": "compute_only",
+            "state_output_mode": "none",
+            "performance_tier": True,
+            "route_id": "quimb_tn_exact",
+            "simulation_compute_time_s_median": 2.0,
+            "tn_max_intermediate_bytes": 1000,
+        },
+        {
+            "suite_id": "research_cpu_tn",
+            "case_id": "quest_bv_10q_research_tn",
+            "case_family": "bv",
+            "benchmark_n_qubits": 10,
+            "timing_scope": "compute_only",
+            "state_output_mode": "none",
+            "performance_tier": True,
+            "route_id": "quimb_tn_sliced_exact",
+            "simulation_compute_time_s_median": 3.0,
+            "slicing_flop_ratio": 0.5,
+            "tn_max_intermediate_bytes": 250,
+        },
+    ]
+
+    manifest = pack.write_plots(tmp_path, stats, [], [], [], [])
+    entry = next(item for item in manifest["plots"] if item["plot"] == "cpu_tn_slicing_tradeoff.png")
+
+    assert entry["status"] == "generated_valid"
+    assert entry["source_csv"] == "cpu_tn_slicing_tradeoff.csv"
+    assert "sliced / unsliced" in entry["caption"]
+    assert "speedup" not in entry["caption"].lower()
+    source = (tmp_path / "cpu_tn_slicing_tradeoff.csv").read_text(encoding="utf-8")
+    assert "runtime_ratio_sliced_over_unsliced" in source
+    assert "1.5" in source
+
+
+def test_slicing_tradeoff_plot_keeps_honest_todo_without_complete_pair(tmp_path: Path, monkeypatch) -> None:
+    _install_fake_matplotlib(monkeypatch)
+
+    manifest = pack.write_plots(
+        tmp_path,
+        [
+            {
+                "suite_id": "research_cpu_tn",
+                "case_id": "quest_bv_10q_research_tn",
+                "benchmark_n_qubits": 10,
+                "route_id": "quimb_tn_exact",
+                "simulation_compute_time_s_median": 2.0,
+            }
+        ],
+        [],
+        [],
+        [],
+        [],
+    )
+    entry = next(item for item in manifest["plots"] if item["plot"] == "cpu_tn_slicing_tradeoff.png")
+
+    assert entry["status"] == "generated_todo_missing_data"
+    assert "source fields contain no numeric data" in (entry["reason"] or "")
+    assert (tmp_path / "cpu_tn_slicing_tradeoff.csv").exists()
+
+
+def test_slicing_tradeoff_plot_requires_largest_intermediate_ratio(tmp_path: Path, monkeypatch) -> None:
+    _install_fake_matplotlib(monkeypatch)
+    stats = [
+        {
+            "suite_id": "research_cpu_tn",
+            "case_id": "quest_bv_10q_research_tn",
+            "benchmark_n_qubits": 10,
+            "route_id": "quimb_tn_exact",
+            "simulation_compute_time_s_median": 2.0,
+            "tn_max_intermediate_bytes": 0,
+        },
+        {
+            "suite_id": "research_cpu_tn",
+            "case_id": "quest_bv_10q_research_tn",
+            "benchmark_n_qubits": 10,
+            "route_id": "quimb_tn_sliced_exact",
+            "simulation_compute_time_s_median": 3.0,
+            "slicing_flop_ratio": 1.2,
+            "tn_max_intermediate_bytes": 250,
+        },
+    ]
+
+    manifest = pack.write_plots(tmp_path, stats, [], [], [], [])
+    entry = next(item for item in manifest["plots"] if item["plot"] == "cpu_tn_slicing_tradeoff.png")
+
+    assert entry["status"] == "generated_todo_missing_data"
+
+
+def test_benchmark_summary_separates_completed_todo_and_failed_figures() -> None:
+    plot_manifest = {
+        "plots": [
+            {"plot": "valid.png", "status": "generated_valid", "caption": "measured"},
+            {"plot": "todo.png", "status": "generated_todo_missing_data", "reason": "no rows", "caption": "TODO"},
+            {"plot": "failed.png", "status": "failed", "reason": "rendering_failed: test", "caption": "failed"},
+        ]
+    }
+    summary = pack.benchmark_summary(
+        {"selected_suites": {}, "commands": []},
+        [], [], [], [], [], [], [], [], [], plot_manifest, {"status": "ok"}, [],
+    )
+
+    assert "### Completed Scientific Figures" in summary
+    assert "### TODO Figures" in summary
+    assert "### Failed Figures" in summary
+    assert "`valid.png`: measured" in summary
+    assert "`todo.png`: generated_todo_missing_data" in summary
+    assert "`failed.png`: failed" in summary
+
+
+def test_per_case_route_stats_propagates_normalized_frontier_metadata() -> None:
+    record = _record("quest_bv_10q_research_perf", "cpu_tn_frontier_exact", 0, target="cpu", total=1.0, compute=0.8)
+    record.update(
+        {
+            "suite_id": "research_internal_parallelism",
+            "parallelism_mode": "frontier",
+            "parallelism_evidence_type": "executed",
+            "execution_plan_kind": "taskgraph_frontier_scheduler",
+            "execution_plan_executed": True,
+            "frontier_scheduler_enabled": True,
+            "frontier_parallel_execution": True,
+            "frontier_worker_count": 2,
+            "frontier_wave_count": 4,
+            "max_frontier_width": 3,
+            "mean_frontier_width": 1.75,
+            "frontier_executed_task_count": 12,
+            "source_frontier_completed_task_count": 12,
+            "frontier_executed_parallel_task_count": 5,
+            "executed_parallel_task_count": 5,
+            "source_task_count": 12,
+            "source_task_completion_count": 12,
+        }
+    )
+
+    row = pack.per_case_route_stats([record])[0]
+
+    assert row["parallelism_evidence_type"] == "executed"
+    assert row["execution_plan_kind"] == "taskgraph_frontier_scheduler"
+    assert row["frontier_worker_count"] == 2
+    assert row["frontier_wave_count"] == 4
+    assert row["max_frontier_width"] == 3
+    assert row["frontier_executed_parallel_task_count"] == 5
+    assert all(field in pack.PER_CASE_ROUTE_STATS_FIELDS for field in ("max_frontier_width", "frontier_wave_count", "frontier_executed_parallel_task_count"))
 
 
 def test_research_pack_statistics_and_cpu_gpu_pairing() -> None:
@@ -210,6 +545,16 @@ def test_research_pack_rejects_dense_upmem_rows_and_accepts_strict_generic_rows(
 def test_research_pack_separates_generic_quantization_modes_and_builds_attribution() -> None:
     float32 = _generic_upmem_record("qrng_7q_thesis_upmem_boundary", "none", total=4.0, compute=2.0, transfer=400)
     int8 = _generic_upmem_record("qrng_7q_thesis_upmem_boundary", "per_task_input_quantize", total=2.0, compute=1.0, transfer=100)
+    float32["validation_error_metrics"].update(
+        {"probability_max_abs_error": 0.001, "probability_l1_error": 0.002}
+    )
+    int8["validation_error_metrics"].update(
+        {"probability_max_abs_error": 0.01, "probability_l1_error": 0.02}
+    )
+    float32["quantization_clipping_count"] = 0
+    float32["quantization_saturation_count"] = 0
+    int8["quantization_clipping_count"] = 3
+    int8["quantization_saturation_count"] = 4
 
     stats = pack.per_case_route_stats([float32, int8])
     attribution = pack.upmem_quantization_attribution([float32, int8])
@@ -221,6 +566,40 @@ def test_research_pack_separates_generic_quantization_modes_and_builds_attributi
     assert attribution[0]["route_runtime_ratio_none_over_quantized"] == 2.0
     assert attribution[0]["transfer_ratio_none_over_quantized"] == 4.0
     assert attribution[0]["native_unquantized_upmem_kernel_executed"] is True
+    assert attribution[0]["quantized_probability_max_abs_error"] == 0.01
+    assert attribution[0]["quantized_probability_l1_error"] == 0.02
+    assert attribution[0]["quantized_quantization_clipping_count"] == 3
+    assert attribution[0]["quantized_quantization_saturation_count"] == 4
+
+
+def test_research_pack_probability_plot_uses_recorded_probability_metrics(tmp_path: Path, monkeypatch) -> None:
+    _install_fake_matplotlib(monkeypatch)
+    rows = []
+    for case_id, probability_max, probability_l1 in (
+        ("qrng_7q_thesis_upmem_boundary", 0.01, 0.02),
+        ("qrng_8q_thesis_upmem_boundary", 0.03, 0.04),
+    ):
+        float32 = _generic_upmem_record(case_id, "none", total=4.0, compute=2.0, transfer=400)
+        int8 = _generic_upmem_record(case_id, "per_task_input_quantize", total=2.0, compute=1.0, transfer=100)
+        float32["validation_error_metrics"].update(
+            {"probability_max_abs_error": 0.001, "probability_l1_error": 0.002}
+        )
+        int8["validation_error_metrics"].update(
+            {"probability_max_abs_error": probability_max, "probability_l1_error": probability_l1}
+        )
+        rows.extend((float32, int8))
+
+    attribution = pack.upmem_quantization_attribution(rows)
+    manifest = pack.write_plots(tmp_path, [], [], attribution, [], [])
+    entry = next(
+        item
+        for item in manifest["plots"]
+        if item["plot"] == "quantization_probability_error_by_family_size.png"
+    )
+
+    assert entry["status"] == "generated_valid"
+    assert entry["source_csv"] == "upmem_quantization_attribution.csv"
+    assert (tmp_path / "plots" / entry["plot"]).exists()
 
 
 def test_research_pack_quantization_attribution_rejects_different_routes_or_runs() -> None:
@@ -320,6 +699,7 @@ def test_research_pack_registry_uses_canonical_thesis_suite_paths() -> None:
     assert pack.RESEARCH_SUITES["cpu_tn"].name == "thesis_cpu_tn_quimb.yml"
     assert pack.RESEARCH_SUITES["tn_path_quantization"].name == "thesis_tn_paths_quantization.yml"
     assert pack.RESEARCH_SUITES["planner_paths"].name == "thesis_planner_compare.yml"
+    assert pack.RESEARCH_SUITES["planner_sensitivity"].name == "thesis_planner_sensitivity.yml"
     assert pack.SUITE_COMMAND_ORDER.index("tn_path_quantization") == pack.SUITE_COMMAND_ORDER.index("cpu_tn") + 1
     assert all("research_cpu_gpu.yml" not in path.name and "research_cpu_tn.yml" not in path.name for path in pack.RESEARCH_SUITES.values())
 
@@ -339,8 +719,18 @@ def test_research_suite_matrix_uses_six_families_and_seven_local_sizes() -> None
 
     planner = load_suite(pack.RESEARCH_SUITES["planner_paths"])
     assert planner["suite_id"] == "thesis_planner_compare"
-    assert [item["optimize"] for item in comparison_planner_configs(planner)] == ["greedy", "auto"]
+    planner_configs = comparison_planner_configs(planner)
+    assert {(item["engine"], item.get("optimize"), item.get("objective")) for item in planner_configs} >= {
+        ("opt_einsum", "greedy", None),
+        ("opt_einsum", "auto", None),
+        ("cotengra", None, "flops"),
+        ("cotengra", None, "size"),
+        ("cotengra", None, "write"),
+        ("cotengra", None, "combo"),
+        ("custom_upmem", None, None),
+    }
     assert pack._research_suite_argv("planner_paths", pack.ROOT)[:2] == ["compare-planners", "--suite"]
+    assert pack._research_suite_argv("planner_sensitivity", pack.ROOT)[:2] == ["compare-planners", "--suite"]
 
 
 def test_research_pack_preserves_modeled_planner_candidates() -> None:
@@ -379,6 +769,43 @@ def test_research_pack_preserves_modeled_planner_candidates() -> None:
     assert rows[0]["planner_id"] == "opt_einsum.greedy"
     assert rows[0]["parallelism_evidence_type"] == "modeled"
     assert rows[0]["execution_plan_executed"] is False
+
+
+def test_research_pack_planner_csv_schema_preserves_motif_and_feasibility_context(tmp_path: Path) -> None:
+    record = {
+        "schema_version": pack.SCHEMA_VERSION,
+        "suite_id": "planner_objective_motifs_planner_compare",
+        "case_id": "planner_motif_grid",
+        "route_id": "planner_candidate_model",
+        "workload_kind": "planner_motif",
+        "not_real_quantum_circuit": True,
+        "planner_motif": "grid",
+        "network_tensor_count": 5,
+        "network_index_count": 6,
+        "network_max_rank": 3,
+        "network_max_tensor_elements": 16,
+        "network_size_proxy": 5,
+        "planner_id": "custom_upmem.greedy.wram_constrained",
+        "planner_engine": "custom_upmem",
+        "candidate_status": "rejected",
+        "candidate_failure_reason": "bounded generic model rejects shape",
+        "unsupported_task_count": 1,
+        "missing_target_estimate_count": 0,
+        "parallelism_evidence_type": "modeled",
+        "execution_plan_executed": False,
+    }
+    rows = pack.planner_comparison([record])
+    pack._write_csv(tmp_path / "planner_comparison.csv", rows, pack.PLANNER_COMPARISON_FIELDS)
+
+    with (tmp_path / "planner_comparison.csv").open(encoding="utf-8", newline="") as handle:
+        written = next(csv.DictReader(handle))
+
+    assert written["workload_kind"] == "planner_motif"
+    assert written["not_real_quantum_circuit"] == "True"
+    assert written["planner_motif"] == "grid"
+    assert written["network_max_rank"] == "3"
+    assert written["candidate_status"] == "rejected"
+    assert written["unsupported_task_count"] == "1"
 
 
 def test_research_pack_same_plan_cpu_upmem_requires_matching_hash() -> None:
@@ -512,6 +939,23 @@ def test_research_pack_prefers_host_residual_for_upmem_attribution() -> None:
     assert row["unquantized_host_residual_time_s"] == 4.0
     assert row["quantized_host_residual_time_s"] == 2.0
     assert row["route_runtime_ratio_none_over_quantized"] == 2.0
+    assert row["unquantized_h2d_bytes"] == 300.0
+    assert row["quantized_d2h_bytes"] == 25.0
+    assert row["actual_transfer_bytes_invariant"] == "passed"
+    assert row["transfer_accounting_scope"] == "application_visible_sdk_recorded"
+
+
+def test_research_pack_transfer_guard_accepts_legacy_totals_and_rejects_bad_directional_totals() -> None:
+    legacy = _generic_upmem_record("quantization_stress_4q_thesis_upmem", "none", total=2.0, compute=1.0, transfer=100)
+    legacy.pop("actual_h2d_bytes")
+    legacy.pop("actual_d2h_bytes")
+    legacy.pop("actual_transfer_bytes_invariant")
+    assert pack._claim_guard_issues([legacy]) == []
+
+    malformed = _generic_upmem_record("quantization_stress_4q_thesis_upmem", "none", total=2.0, compute=1.0, transfer=100)
+    malformed["actual_d2h_bytes"] = 26
+    issues = pack._claim_guard_issues([malformed])
+    assert any("transfer-byte invariant failed" in issue for issue in issues)
 
 
 def test_research_pack_prefers_full_precision_accuracy_but_keeps_execution_validation() -> None:

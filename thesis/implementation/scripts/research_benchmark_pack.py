@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import os
 import platform
 import re
@@ -11,10 +12,11 @@ import statistics
 import subprocess
 import sys
 from collections import Counter, defaultdict
+from dataclasses import dataclass, replace
 from datetime import datetime
 from importlib import metadata
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,6 +37,7 @@ RESEARCH_SUITES = {
     "cpu_tn": ROOT / "configs" / "suites" / "manual" / "thesis_cpu_tn_quimb.yml",
     "tn_path_quantization": ROOT / "configs" / "suites" / "manual" / "thesis_tn_paths_quantization.yml",
     "planner_paths": ROOT / "configs" / "suites" / "manual" / "thesis_planner_compare.yml",
+    "planner_sensitivity": ROOT / "configs" / "suites" / "manual" / "thesis_planner_sensitivity.yml",
     # This group intentionally uses the strict generic-only MVP command rather
     # than the route-comparison suite.  The latter permits dense bridge tasks,
     # which is useful for route coverage but is not generic-TN boundary evidence.
@@ -49,6 +52,7 @@ SUITE_COMMAND_ORDER = (
     "cpu_tn",
     "tn_path_quantization",
     "planner_paths",
+    "planner_sensitivity",
     "upmem_boundary",
     "upmem_quantization_stress",
     "internal_parallelism",
@@ -92,6 +96,43 @@ FORBIDDEN_EVIDENCE_DERIVED_NAMES = {
 
 
 JsonDict = dict[str, Any]
+
+
+PLOT_STATUSES = (
+    "generated_valid",
+    "generated_todo_missing_data",
+    "generated_todo_no_variance",
+    "generated_todo_not_implemented",
+    "failed",
+)
+
+
+@dataclass(frozen=True)
+class PlotSpec:
+    filename: str
+    title: str
+    source_csv: str
+    source_fields: tuple[str, ...]
+    claim_basis: str
+    caption: str
+    x_label: str
+    y_label: str
+    renderer: Callable[[Any, Path], str | None] | None = None
+    not_implemented_reason: str | None = None
+    variance_fields: tuple[str, ...] = ()
+    data_rows: list[JsonDict] | None = None
+    allow_zero_variance: bool = False
+
+
+@dataclass(frozen=True)
+class PlotOutcome:
+    status: str
+    reason: str | None = None
+    size_bytes: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.status not in PLOT_STATUSES:
+            raise ValueError(f"unknown plot status: {self.status}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -230,6 +271,7 @@ def _write_pack(
     speedup_rows = paired_speedups(records)
     cpu_gpu_rows = cpu_gpu_performance_summary(speedup_rows)
     full_state_tn_rows = full_state_tn_comparison(stats_rows)
+    slicing_tradeoff_rows = slicing_tradeoff(stats_rows)
     quantization_rows = upmem_quantization_attribution(records)
     same_plan_rows = same_plan_execution(records)
     planner_rows = planner_comparison(records)
@@ -240,13 +282,22 @@ def _write_pack(
     _write_csv(out_dir / "paired_speedups.csv", speedup_rows, PAIRED_SPEEDUP_FIELDS)
     _write_csv(out_dir / "cpu_gpu_performance_summary.csv", cpu_gpu_rows, CPU_GPU_PERFORMANCE_SUMMARY_FIELDS)
     _write_csv(out_dir / "full_state_tn_comparison.csv", full_state_tn_rows, FULL_STATE_TN_COMPARISON_FIELDS)
+    _write_csv(out_dir / "cpu_tn_slicing_tradeoff.csv", slicing_tradeoff_rows, SLICING_TRADEOFF_FIELDS)
     _write_csv(out_dir / "upmem_quantization_attribution.csv", quantization_rows, UPMEM_QUANTIZATION_ATTRIBUTION_FIELDS)
     _write_csv(out_dir / "same_plan_execution.csv", same_plan_rows, SAME_PLAN_EXECUTION_FIELDS)
     _write_csv(out_dir / "planner_comparison.csv", planner_rows, PLANNER_COMPARISON_FIELDS)
     _write_csv(out_dir / "unsupported_cases.csv", unsupported_rows, UNSUPPORTED_FIELDS)
     _write_csv(out_dir / "validation_summary.csv", validation_rows, VALIDATION_SUMMARY_FIELDS)
     _write_csv(out_dir / "route_capability_matrix.csv", capability_rows, ROUTE_CAPABILITY_FIELDS)
-    plot_manifest = write_plots(out_dir, stats_rows, cpu_gpu_rows, quantization_rows, same_plan_rows, planner_rows)
+    plot_manifest = write_plots(
+        out_dir,
+        stats_rows,
+        cpu_gpu_rows,
+        quantization_rows,
+        same_plan_rows,
+        planner_rows,
+        slicing_tradeoff_rows,
+    )
     _write_json(out_dir / "plot_manifest.json", plot_manifest)
     (out_dir / "benchmark_summary.md").write_text(
         benchmark_summary(
@@ -360,6 +411,21 @@ PER_CASE_ROUTE_STATS_FIELDS = [
     "backend_family",
     "execution_model",
     "parallelism_mode",
+    "parallelism_evidence_type",
+    "execution_plan_kind",
+    "execution_plan_executed",
+    "frontier_scheduler_enabled",
+    "frontier_parallel_execution",
+    "frontier_worker_count",
+    "frontier_wave_count",
+    "max_frontier_width",
+    "mean_frontier_width",
+    "frontier_executed_task_count",
+    "source_frontier_completed_task_count",
+    "frontier_executed_parallel_task_count",
+    "executed_parallel_task_count",
+    "source_task_count",
+    "source_task_completion_count",
     "circuit_semantics_hash",
     "tensor_network_hash",
     "contraction_plan_hash",
@@ -398,6 +464,9 @@ PER_CASE_ROUTE_STATS_FIELDS = [
     "reported_time_s_max",
     "reported_time_s_std",
     "timing_basis",
+    "energy_joules",
+    "energy_source",
+    "energy_measurement_status",
     "simulation_compute_time_s_median",
     "simulation_compute_time_s_p25",
     "simulation_compute_time_s_p75",
@@ -412,6 +481,10 @@ PER_CASE_ROUTE_STATS_FIELDS = [
     "planning_time_s_max",
     "planning_time_s_std",
     "actual_transfer_bytes_median",
+    "actual_h2d_bytes_median",
+    "actual_d2h_bytes_median",
+    "transfer_accounting_scope",
+    "actual_transfer_bytes_invariant",
     "tn_estimated_flops",
     "tn_max_intermediate_bytes",
     "validation_passed_count",
@@ -460,6 +533,12 @@ UPMEM_QUANTIZATION_ATTRIBUTION_FIELDS = [
     "simulator_kernel_ratio_none_over_quantized",
     "unquantized_transfer_bytes",
     "quantized_transfer_bytes",
+    "unquantized_h2d_bytes",
+    "quantized_h2d_bytes",
+    "unquantized_d2h_bytes",
+    "quantized_d2h_bytes",
+    "transfer_accounting_scope",
+    "actual_transfer_bytes_invariant",
     "transfer_ratio_none_over_quantized",
     "unquantized_max_abs_error_vs_full_precision",
     "quantized_max_abs_error_vs_full_precision",
@@ -467,6 +546,14 @@ UPMEM_QUANTIZATION_ATTRIBUTION_FIELDS = [
     "quantized_execution_max_abs_error",
     "unquantized_full_precision_max_abs_error",
     "quantized_full_precision_max_abs_error",
+    "unquantized_probability_max_abs_error",
+    "quantized_probability_max_abs_error",
+    "unquantized_probability_l1_error",
+    "quantized_probability_l1_error",
+    "unquantized_quantization_clipping_count",
+    "quantized_quantization_clipping_count",
+    "unquantized_quantization_saturation_count",
+    "quantized_quantization_saturation_count",
     "accuracy_delta_quantized_minus_unquantized",
     "native_unquantized_upmem_kernel_executed",
 ]
@@ -552,6 +639,14 @@ FULL_STATE_TN_COMPARISON_FIELDS = [
     "case_id",
     "case_family",
     "benchmark_n_qubits",
+    "workload_kind",
+    "not_real_quantum_circuit",
+    "planner_motif",
+    "network_tensor_count",
+    "network_index_count",
+    "network_max_rank",
+    "network_max_tensor_elements",
+    "network_size_proxy",
     "quest_cpu_compute_time_s_median",
     "quimb_unsliced_compute_time_s_median",
     "quimb_sliced_compute_time_s_median",
@@ -561,6 +656,24 @@ FULL_STATE_TN_COMPARISON_FIELDS = [
     "quest_validation_passed_count",
     "quimb_unsliced_validation_passed_count",
     "quimb_sliced_validation_passed_count",
+]
+
+SLICING_TRADEOFF_FIELDS = [
+    "schema_version",
+    "suite_id",
+    "case_id",
+    "case_family",
+    "benchmark_n_qubits",
+    "timing_scope",
+    "state_output_mode",
+    "performance_tier",
+    "unsliced_compute_time_s_median",
+    "sliced_compute_time_s_median",
+    "runtime_ratio_sliced_over_unsliced",
+    "slicing_flop_ratio",
+    "unsliced_tn_max_intermediate_bytes",
+    "sliced_tn_max_intermediate_bytes",
+    "largest_intermediate_ratio_sliced_over_unsliced",
 ]
 
 UNSUPPORTED_FIELDS = [
@@ -626,9 +739,25 @@ PLANNER_COMPARISON_FIELDS = [
     "case_id",
     "case_family",
     "benchmark_n_qubits",
+    "workload_kind",
+    "not_real_quantum_circuit",
+    "planner_motif",
+    "network_tensor_count",
+    "network_index_count",
+    "network_max_rank",
+    "network_max_tensor_elements",
+    "network_size_proxy",
     "planner_id",
+    "planner_engine",
+    "planner_kind",
     "optimize_mode",
+    "objective",
+    "cost_basis",
+    "target_estimate_key",
     "contraction_plan_hash",
+    "contraction_path_structure_hash",
+    "candidate_status",
+    "candidate_failure_reason",
     "planning_time_s",
     "task_count",
     "tn_estimated_flops",
@@ -636,12 +765,42 @@ PLANNER_COMPARISON_FIELDS = [
     "total_host_to_dpu_bytes",
     "total_dpu_to_host_bytes",
     "total_mram_to_wram_bytes",
+    "unsupported_task_count",
     "tiling_required_task_count",
+    "missing_target_estimate_count",
     "estimated_total_tile_count",
     "estimated_max_parallel_tiles",
     "upmem_pressure_score",
     "upmem_rank",
     "flop_rank",
+    "score_model",
+    "score_components",
+    "score_weights",
+    "tradeoff_note",
+    "pim_objective_version",
+    "pim_weight_profile",
+    "pim_normalization",
+    "pim_execution_policy",
+    "pim_feasible",
+    "pim_rejection_reasons",
+    "pim_estimated_flops",
+    "pim_peak_intermediate_bytes",
+    "pim_total_intermediate_write_bytes",
+    "pim_estimated_host_to_dpu_bytes",
+    "pim_estimated_dpu_to_host_bytes",
+    "pim_estimated_host_dpu_bytes",
+    "pim_estimated_mram_to_wram_bytes",
+    "pim_estimated_dpu_local_work",
+    "pim_estimated_sync_events",
+    "pim_estimated_numerical_penalty",
+    "pim_estimated_wram_pressure",
+    "pim_estimated_tile_count",
+    "pim_objective_components",
+    "pim_normalized_components",
+    "pim_objective_score",
+    "pim_objective_rank",
+    "pim_pareto_dominated",
+    "pim_selected",
     "parallelism_evidence_type",
     "execution_plan_executed",
 ]
@@ -672,6 +831,8 @@ def per_case_route_stats(records: list[JsonDict]) -> list[JsonDict]:
         compute_values = _numbers(row.get("simulation_compute_time_s") for row in group)
         planning_values = _numbers(row.get("planning_time_s") for row in group)
         transfer_values = _numbers(row.get("actual_transfer_bytes") for row in group)
+        h2d_values = _numbers(row.get("actual_h2d_bytes") for row in group)
+        d2h_values = _numbers(row.get("actual_d2h_bytes") for row in group)
         family, qubits = _family_and_qubits(first)
         errors = [_validation_errors(row) for row in group]
         full_precision_errors = [_full_precision_errors(row) for row in group]
@@ -692,6 +853,21 @@ def per_case_route_stats(records: list[JsonDict]) -> list[JsonDict]:
                 "backend_family": first.get("backend_family"),
                 "execution_model": first.get("execution_model"),
                 "parallelism_mode": first.get("parallelism_mode"),
+                "parallelism_evidence_type": _first_present(group, "parallelism_evidence_type"),
+                "execution_plan_kind": _first_present(group, "execution_plan_kind"),
+                "execution_plan_executed": any(bool(row.get("execution_plan_executed", False)) for row in group),
+                "frontier_scheduler_enabled": any(bool(row.get("frontier_scheduler_enabled", False)) for row in group),
+                "frontier_parallel_execution": any(bool(row.get("frontier_parallel_execution", False)) for row in group),
+                "frontier_worker_count": _first_present(group, "frontier_worker_count"),
+                "frontier_wave_count": _max_number(row.get("frontier_wave_count") for row in group),
+                "max_frontier_width": _max_number(row.get("max_frontier_width") for row in group),
+                "mean_frontier_width": _first_present(group, "mean_frontier_width"),
+                "frontier_executed_task_count": _max_number(row.get("frontier_executed_task_count") for row in group),
+                "source_frontier_completed_task_count": _max_number(row.get("source_frontier_completed_task_count") for row in group),
+                "frontier_executed_parallel_task_count": _max_number(row.get("frontier_executed_parallel_task_count") for row in group),
+                "executed_parallel_task_count": _max_number(row.get("executed_parallel_task_count") for row in group),
+                "source_task_count": _max_number(row.get("source_task_count") for row in group),
+                "source_task_completion_count": _max_number(row.get("source_task_completion_count") for row in group),
                 "circuit_semantics_hash": first.get("circuit_semantics_hash"),
                 "tensor_network_hash": first.get("tensor_network_hash"),
                 "contraction_plan_hash": first.get("contraction_plan_hash"),
@@ -712,9 +888,16 @@ def per_case_route_stats(records: list[JsonDict]) -> list[JsonDict]:
                 **_stats("total_host_residual_time_s", residual_values),
                 **_stats("reported_time_s", reported_values),
                 "timing_basis": _reported_timing_basis(group),
+                "energy_joules": _first_present(group, "energy_joules"),
+                "energy_source": _first_present(group, "energy_source"),
+                "energy_measurement_status": _first_present(group, "energy_measurement_status"),
                 **_stats("simulation_compute_time_s", compute_values),
                 **_stats("planning_time_s", planning_values),
                 **_stats("actual_transfer_bytes", transfer_values),
+                **_stats("actual_h2d_bytes", h2d_values),
+                **_stats("actual_d2h_bytes", d2h_values),
+                "transfer_accounting_scope": _first_present(group, "transfer_accounting_scope"),
+                "actual_transfer_bytes_invariant": _transfer_invariant_status(group),
                 "tn_estimated_flops": _first_present(group, "tn_estimated_flops"),
                 "tn_max_intermediate_bytes": _first_present(group, "tn_max_intermediate_bytes"),
                 "validation_passed_count": sum(1 for row in group if str(row.get("validation_status")) in {"passed", "passed_native_status", "passed_runtime_only"}),
@@ -893,6 +1076,65 @@ def full_state_tn_comparison(stats_rows: list[JsonDict]) -> list[JsonDict]:
     return result
 
 
+def slicing_tradeoff(stats_rows: list[JsonDict]) -> list[JsonDict]:
+    """Pair compatible external Quimb unsliced and sliced route statistics.
+
+    The sliced planner reports its FLOP ratio against its corresponding
+    unsliced plan.  Runtime and intermediate-size ratios are derived only from
+    the two matched route rows, and are not interpreted as speedups.
+    """
+    grouped: dict[tuple[str, str, str, str, bool], dict[str, JsonDict]] = defaultdict(dict)
+    for row in stats_rows:
+        if row.get("suite_id") not in {"thesis_cpu_tn_quimb", "research_cpu_tn"}:
+            continue
+        route = str(row.get("route_id") or "")
+        if route not in {"quimb_tn_exact", "quimb_tn_sliced_exact"}:
+            continue
+        key = (
+            str(row.get("suite_id") or ""),
+            str(row.get("case_id") or ""),
+            str(row.get("timing_scope") or "unspecified"),
+            str(row.get("state_output_mode") or "unspecified"),
+            bool(row.get("performance_tier", False)),
+        )
+        grouped[key][route] = row
+
+    result: list[JsonDict] = []
+    for (suite_id, case_id, _timing_scope, _state_output_mode, _performance_tier), routes in sorted(grouped.items()):
+        unsliced = routes.get("quimb_tn_exact")
+        sliced = routes.get("quimb_tn_sliced_exact")
+        if unsliced is None or sliced is None:
+            continue
+        unsliced_time = _positive(unsliced.get("simulation_compute_time_s_median"))
+        sliced_time = _positive(sliced.get("simulation_compute_time_s_median"))
+        flop_ratio = _positive(sliced.get("slicing_flop_ratio"))
+        if unsliced_time is None or sliced_time is None or flop_ratio is None:
+            continue
+        result.append(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "suite_id": suite_id,
+                "case_id": case_id,
+                "case_family": sliced.get("case_family") or unsliced.get("case_family"),
+                "benchmark_n_qubits": sliced.get("benchmark_n_qubits") or unsliced.get("benchmark_n_qubits"),
+                "timing_scope": sliced.get("timing_scope"),
+                "state_output_mode": sliced.get("state_output_mode"),
+                "performance_tier": bool(sliced.get("performance_tier", False)),
+                "unsliced_compute_time_s_median": unsliced_time,
+                "sliced_compute_time_s_median": sliced_time,
+                "runtime_ratio_sliced_over_unsliced": _ratio(sliced_time, unsliced_time),
+                "slicing_flop_ratio": flop_ratio,
+                "unsliced_tn_max_intermediate_bytes": _positive(unsliced.get("tn_max_intermediate_bytes")),
+                "sliced_tn_max_intermediate_bytes": _positive(sliced.get("tn_max_intermediate_bytes")),
+                "largest_intermediate_ratio_sliced_over_unsliced": _ratio(
+                    sliced.get("tn_max_intermediate_bytes"),
+                    unsliced.get("tn_max_intermediate_bytes"),
+                ),
+            }
+        )
+    return result
+
+
 def upmem_quantization_attribution(records: list[JsonDict]) -> list[JsonDict]:
     """Pair strict generic UPMEM float32 and int8 records from one TaskGraph.
 
@@ -946,8 +1188,16 @@ def upmem_quantization_attribution(records: list[JsonDict]) -> list[JsonDict]:
         quantized_compute = _positive(quantized.get("simulation_compute_time_s"))
         unquantized_transfer = _positive(unquantized.get("actual_transfer_bytes"))
         quantized_transfer = _positive(quantized.get("actual_transfer_bytes"))
+        unquantized_h2d = _positive(unquantized.get("actual_h2d_bytes"))
+        quantized_h2d = _positive(quantized.get("actual_h2d_bytes"))
+        unquantized_d2h = _positive(unquantized.get("actual_d2h_bytes"))
+        quantized_d2h = _positive(quantized.get("actual_d2h_bytes"))
         unquantized_error = _validation_errors(unquantized).get("max_abs_error")
         quantized_error = _validation_errors(quantized).get("max_abs_error")
+        unquantized_probability_max_abs_error = _validation_metric(unquantized, "probability_max_abs_error")
+        quantized_probability_max_abs_error = _validation_metric(quantized, "probability_max_abs_error")
+        unquantized_probability_l1_error = _validation_metric(unquantized, "probability_l1_error")
+        quantized_probability_l1_error = _validation_metric(quantized, "probability_l1_error")
         unquantized_full_precision_error = _full_precision_errors(unquantized).get("max_abs_error")
         quantized_full_precision_error = _full_precision_errors(quantized).get("max_abs_error")
         rows.append(
@@ -977,6 +1227,15 @@ def upmem_quantization_attribution(records: list[JsonDict]) -> list[JsonDict]:
                 "simulator_kernel_ratio_none_over_quantized": _ratio(unquantized_compute, quantized_compute),
                 "unquantized_transfer_bytes": unquantized_transfer,
                 "quantized_transfer_bytes": quantized_transfer,
+                "unquantized_h2d_bytes": unquantized_h2d,
+                "quantized_h2d_bytes": quantized_h2d,
+                "unquantized_d2h_bytes": unquantized_d2h,
+                "quantized_d2h_bytes": quantized_d2h,
+                "transfer_accounting_scope": _same_or_mixed(
+                    unquantized.get("transfer_accounting_scope"),
+                    quantized.get("transfer_accounting_scope"),
+                ),
+                "actual_transfer_bytes_invariant": _paired_transfer_invariant_status(unquantized, quantized),
                 "transfer_ratio_none_over_quantized": _ratio(unquantized_transfer, quantized_transfer),
                 "unquantized_max_abs_error_vs_full_precision": _float_or_none(unquantized_full_precision_error if unquantized_full_precision_error is not None else unquantized_error),
                 "quantized_max_abs_error_vs_full_precision": _float_or_none(quantized_full_precision_error if quantized_full_precision_error is not None else quantized_error),
@@ -984,6 +1243,22 @@ def upmem_quantization_attribution(records: list[JsonDict]) -> list[JsonDict]:
                 "quantized_execution_max_abs_error": _float_or_none(quantized_error),
                 "unquantized_full_precision_max_abs_error": _float_or_none(unquantized_full_precision_error),
                 "quantized_full_precision_max_abs_error": _float_or_none(quantized_full_precision_error),
+                "unquantized_probability_max_abs_error": _float_or_none(unquantized_probability_max_abs_error),
+                "quantized_probability_max_abs_error": _float_or_none(quantized_probability_max_abs_error),
+                "unquantized_probability_l1_error": _float_or_none(unquantized_probability_l1_error),
+                "quantized_probability_l1_error": _float_or_none(quantized_probability_l1_error),
+                "unquantized_quantization_clipping_count": _int_or_none(
+                    _record_value(unquantized, "quantization_clipping_count")
+                ),
+                "quantized_quantization_clipping_count": _int_or_none(
+                    _record_value(quantized, "quantization_clipping_count")
+                ),
+                "unquantized_quantization_saturation_count": _int_or_none(
+                    _record_value(unquantized, "quantization_saturation_count")
+                ),
+                "quantized_quantization_saturation_count": _int_or_none(
+                    _record_value(quantized, "quantization_saturation_count")
+                ),
                 "accuracy_delta_quantized_minus_unquantized": _difference(
                     quantized_full_precision_error if quantized_full_precision_error is not None else quantized_error,
                     unquantized_full_precision_error if unquantized_full_precision_error is not None else unquantized_error,
@@ -1059,9 +1334,25 @@ def planner_comparison(records: list[JsonDict]) -> list[JsonDict]:
                 "case_id": record.get("case_id"),
                 "case_family": family,
                 "benchmark_n_qubits": qubits["benchmark_n_qubits"],
+                "workload_kind": record.get("workload_kind"),
+                "not_real_quantum_circuit": record.get("not_real_quantum_circuit"),
+                "planner_motif": record.get("planner_motif"),
+                "network_tensor_count": record.get("network_tensor_count"),
+                "network_index_count": record.get("network_index_count"),
+                "network_max_rank": record.get("network_max_rank"),
+                "network_max_tensor_elements": record.get("network_max_tensor_elements"),
+                "network_size_proxy": record.get("network_size_proxy"),
                 "planner_id": record.get("planner_id") or record.get("backend_id"),
+                "planner_engine": record.get("planner_engine"),
+                "planner_kind": record.get("planner_kind"),
                 "optimize_mode": record.get("optimize_mode"),
+                "objective": record.get("objective"),
+                "cost_basis": record.get("cost_basis"),
+                "target_estimate_key": record.get("target_estimate_key"),
                 "contraction_plan_hash": record.get("contraction_plan_hash"),
+                "contraction_path_structure_hash": record.get("contraction_path_structure_hash"),
+                "candidate_status": record.get("candidate_status"),
+                "candidate_failure_reason": record.get("candidate_failure_reason"),
                 "planning_time_s": record.get("planning_time_s"),
                 "task_count": record.get("task_count"),
                 "tn_estimated_flops": record.get("tn_estimated_flops"),
@@ -1069,12 +1360,42 @@ def planner_comparison(records: list[JsonDict]) -> list[JsonDict]:
                 "total_host_to_dpu_bytes": record.get("total_host_to_dpu_bytes"),
                 "total_dpu_to_host_bytes": record.get("total_dpu_to_host_bytes"),
                 "total_mram_to_wram_bytes": record.get("total_mram_to_wram_bytes"),
+                "unsupported_task_count": record.get("unsupported_task_count"),
                 "tiling_required_task_count": record.get("tiling_required_task_count"),
+                "missing_target_estimate_count": record.get("missing_target_estimate_count"),
                 "estimated_total_tile_count": record.get("estimated_total_tile_count"),
                 "estimated_max_parallel_tiles": record.get("estimated_max_parallel_tiles"),
                 "upmem_pressure_score": record.get("upmem_pressure_score"),
                 "upmem_rank": record.get("upmem_rank"),
                 "flop_rank": record.get("flop_rank"),
+                "score_model": record.get("score_model"),
+                "score_components": record.get("score_components"),
+                "score_weights": record.get("score_weights"),
+                "tradeoff_note": record.get("tradeoff_note"),
+                "pim_objective_version": record.get("pim_objective_version"),
+                "pim_weight_profile": record.get("pim_weight_profile"),
+                "pim_normalization": record.get("pim_normalization"),
+                "pim_execution_policy": record.get("pim_execution_policy"),
+                "pim_feasible": record.get("pim_feasible"),
+                "pim_rejection_reasons": record.get("pim_rejection_reasons"),
+                "pim_estimated_flops": record.get("pim_estimated_flops"),
+                "pim_peak_intermediate_bytes": record.get("pim_peak_intermediate_bytes"),
+                "pim_total_intermediate_write_bytes": record.get("pim_total_intermediate_write_bytes"),
+                "pim_estimated_host_to_dpu_bytes": record.get("pim_estimated_host_to_dpu_bytes"),
+                "pim_estimated_dpu_to_host_bytes": record.get("pim_estimated_dpu_to_host_bytes"),
+                "pim_estimated_host_dpu_bytes": record.get("pim_estimated_host_dpu_bytes"),
+                "pim_estimated_mram_to_wram_bytes": record.get("pim_estimated_mram_to_wram_bytes"),
+                "pim_estimated_dpu_local_work": record.get("pim_estimated_dpu_local_work"),
+                "pim_estimated_sync_events": record.get("pim_estimated_sync_events"),
+                "pim_estimated_numerical_penalty": record.get("pim_estimated_numerical_penalty"),
+                "pim_estimated_wram_pressure": record.get("pim_estimated_wram_pressure"),
+                "pim_estimated_tile_count": record.get("pim_estimated_tile_count"),
+                "pim_objective_components": record.get("pim_objective_components"),
+                "pim_normalized_components": record.get("pim_normalized_components"),
+                "pim_objective_score": record.get("pim_objective_score"),
+                "pim_objective_rank": record.get("pim_objective_rank"),
+                "pim_pareto_dominated": record.get("pim_pareto_dominated"),
+                "pim_selected": record.get("pim_selected"),
                 "parallelism_evidence_type": record.get("parallelism_evidence_type"),
                 "execution_plan_executed": record.get("execution_plan_executed"),
             }
@@ -1151,53 +1472,153 @@ def write_plots(
     quantization_rows: list[JsonDict],
     same_plan_rows: list[JsonDict],
     planner_rows: list[JsonDict],
+    slicing_tradeoff_rows: list[JsonDict] | None = None,
 ) -> JsonDict:
     plots_dir = out_dir / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
-    entries: list[JsonDict] = []
+    if slicing_tradeoff_rows is None:
+        slicing_tradeoff_rows = slicing_tradeoff(stats_rows)
+        _write_csv(out_dir / "cpu_tn_slicing_tradeoff.csv", slicing_tradeoff_rows, SLICING_TRADEOFF_FIELDS)
     try:
         import matplotlib.pyplot as plt
     except Exception as exc:
         return {
             "schema_version": SCHEMA_VERSION,
-            "status": "skipped",
-            "reason": "matplotlib_unavailable",
-            "error": str(exc),
-            "plots": [],
+            "status": "completed",
+            "plots": [
+                {
+                    "plot": spec.filename,
+                    "title": spec.title,
+                    "source_csv": spec.source_csv,
+                    "source_fields": list(spec.source_fields),
+                    "claim_basis": spec.claim_basis,
+                    "caption": spec.caption,
+                    "status": "failed",
+                    "reason": f"matplotlib_unavailable: {exc}",
+                }
+                for spec in _plot_specs(stats_rows, cpu_gpu_rows, quantization_rows, same_plan_rows, planner_rows, slicing_tradeoff_rows)
+            ],
+            "generated_valid": [],
+            "todo_figures": [],
+            "failed_figures": [spec.filename for spec in _plot_specs(stats_rows, cpu_gpu_rows, quantization_rows, same_plan_rows, planner_rows)],
         }
-    plotters = [
-        ("cpu_gpu_runtime_by_qubits.png", "CPU/GPU runtime by qubits", "cpu_gpu_performance_summary.csv", lambda path: _plot_cpu_gpu_runtime(plt, path, cpu_gpu_rows)),
-        ("cpu_gpu_speedup_by_qubits.png", "CPU/GPU speedup by qubits", "cpu_gpu_performance_summary.csv", lambda path: _plot_cpu_gpu_speedup(plt, path, cpu_gpu_rows)),
-        ("cpu_tn_runtime_by_qubits.png", "CPU tensor-network runtime by qubits", "per_case_route_stats.csv", lambda path: _plot_cpu_tn_runtime(plt, path, stats_rows)),
-        ("full_state_vs_tn_runtime_by_qubits.png", "QuEST full-state versus CPU tensor-network runtime", "per_case_route_stats.csv", lambda path: _plot_full_state_vs_tn_runtime(plt, path, stats_rows)),
-        ("tn_planning_vs_contraction.png", "TN planning versus contraction time", "per_case_route_stats.csv", lambda path: _plot_tn_planning_vs_contraction(plt, path, stats_rows)),
-        ("tn_path_flops_by_family_size.png", "TN path estimated FLOPs", "per_case_route_stats.csv", lambda path: _plot_tn_path_metric(plt, path, stats_rows, metric="tn_estimated_flops", ylabel="Estimated FLOPs", title="TN path estimated FLOPs")),
-        ("tn_path_peak_memory_by_family_size.png", "TN path peak intermediate memory", "per_case_route_stats.csv", lambda path: _plot_tn_path_metric(plt, path, stats_rows, metric="tn_max_intermediate_bytes", ylabel="Peak intermediate bytes", title="TN path peak intermediate memory")),
-        ("cpu_tn_slicing_flop_ratio.png", "Quimb slicing FLOP ratio", "per_case_route_stats.csv", lambda path: _plot_slicing_ratio(plt, path, stats_rows)),
-        ("upmem_supported_boundary.png", "UPMEM SDK simulator support boundary", "per_case_route_stats.csv", lambda path: _plot_upmem_boundary(plt, path, stats_rows)),
-        ("upmem_accuracy_error.png", "UPMEM SDK simulator accuracy", "per_case_route_stats.csv", lambda path: _plot_upmem_accuracy(plt, path, stats_rows)),
-        ("upmem_quantization_attribution.png", "UPMEM generic quantization attribution", "upmem_quantization_attribution.csv", lambda path: _plot_upmem_quantization_attribution(plt, path, quantization_rows)),
-        ("quantization_runtime_by_executor.png", "Quantization route runtime attribution", "upmem_quantization_attribution.csv", lambda path: _plot_quantization_metric(plt, path, quantization_rows, metric="route_runtime_ratio_none_over_quantized", ylabel="float32 time / int8 time", title="UPMEM SDK simulator quantization runtime ratio")),
-        ("quantization_transfer_bytes.png", "Quantization transfer attribution", "upmem_quantization_attribution.csv", lambda path: _plot_quantization_metric(plt, path, quantization_rows, metric="transfer_ratio_none_over_quantized", ylabel="float32 bytes / int8 bytes", title="UPMEM transfer-volume ratio")),
-        ("quantization_error_by_family_size.png", "Quantization accuracy attribution", "upmem_quantization_attribution.csv", lambda path: _plot_quantization_metric(plt, path, quantization_rows, metric="quantized_max_abs_error_vs_full_precision", ylabel="Max absolute error", title="UPMEM int8 error versus full precision", log_scale=True)),
-        ("same_plan_cpu_upmem_runtime.png", "Same-plan CPU versus UPMEM SDK simulator runtime", "same_plan_execution.csv", lambda path: _plot_same_plan_runtime(plt, path, same_plan_rows)),
-        ("planner_flops_vs_upmem_pressure.png", "Planner FLOPs versus modeled UPMEM pressure", "planner_comparison.csv", lambda path: _plot_planner_pressure(plt, path, planner_rows)),
-        ("internal_parallelism_metadata_by_qubits.png", "Internal diagnostic parallelism metadata", "per_case_route_stats.csv", lambda path: _plot_internal_parallelism(plt, path, stats_rows)),
-    ]
-    for filename, title, source_csv, plotter in plotters:
-        path = plots_dir / filename
-        reason = plotter(path)
-        if reason:
-            entries.append({"plot": filename, "title": title, "status": "skipped", "reason": reason, "source_csv": source_csv, "caption": _caption(filename)})
-        else:
-            entries.append({"plot": filename, "title": title, "status": "generated", "reason": None, "source_csv": source_csv, "caption": _caption(filename), "size_bytes": path.stat().st_size})
+    entries: list[JsonDict] = []
+    for spec in _plot_specs(stats_rows, cpu_gpu_rows, quantization_rows, same_plan_rows, planner_rows, slicing_tradeoff_rows):
+        path = plots_dir / spec.filename
+        outcome = _render_plot_spec(plt, path, spec)
+        entry = {
+            "plot": spec.filename,
+            "title": spec.title,
+            "source_csv": spec.source_csv,
+            "source_fields": list(spec.source_fields),
+            "claim_basis": spec.claim_basis,
+            "caption": spec.caption,
+            "status": outcome.status,
+            "reason": outcome.reason,
+        }
+        if outcome.size_bytes is not None:
+            entry["size_bytes"] = outcome.size_bytes
+        entries.append(entry)
+    generated_valid = [entry["plot"] for entry in entries if entry["status"] == "generated_valid"]
+    todo_entries = [entry for entry in entries if entry["status"].startswith("generated_todo_")]
+    failed = [entry["plot"] for entry in entries if entry["status"] == "failed"]
     return {
         "schema_version": SCHEMA_VERSION,
         "status": "completed",
         "plots": entries,
-        "generated": [entry["plot"] for entry in entries if entry["status"] == "generated"],
-        "skipped": [entry for entry in entries if entry["status"] == "skipped"],
+        "generated_valid": generated_valid,
+        "todo_figures": todo_entries,
+        "failed_figures": failed,
     }
+
+
+def _plot_specs(
+    stats_rows: list[JsonDict],
+    cpu_gpu_rows: list[JsonDict],
+    quantization_rows: list[JsonDict],
+    same_plan_rows: list[JsonDict],
+    planner_rows: list[JsonDict],
+    slicing_tradeoff_rows: list[JsonDict] | None = None,
+) -> list[PlotSpec]:
+    def render(function: Callable[..., str | None], *args: Any, **kwargs: Any) -> Callable[[Any, Path], str | None]:
+        return lambda plt, path: function(plt, path, *args, **kwargs)
+
+    specs = [
+        PlotSpec("cpu_gpu_runtime_by_qubits.png", "Measured QuEST CPU/GPU compute time by qubits", "cpu_gpu_performance_summary.csv", ("benchmark_n_qubits", "cpu_simulation_compute_time_s_median", "gpu_simulation_compute_time_s_median"), "Verified QuEST CPU/GPU performance-tier compute measurements.", "Measured QuEST CPU and verified QuEST GPU compute time by circuit size.", "Qubits", "Measured compute time (s, log)", render(_plot_cpu_gpu_runtime, cpu_gpu_rows), variance_fields=("cpu_simulation_compute_time_s_median", "gpu_simulation_compute_time_s_median")),
+        PlotSpec("cpu_gpu_speedup_by_qubits.png", "Measured QuEST CPU/GPU compute ratio by qubits", "cpu_gpu_performance_summary.csv", ("benchmark_n_qubits", "compute_speedup_cpu_over_gpu_median"), "Paired verified QuEST compute-time measurements; ratio is CPU divided by GPU.", "Measured CPU/GPU compute ratio; values above 1 mean GPU compute was faster.", "Qubits", "CPU/GPU compute ratio", render(_plot_cpu_gpu_speedup, cpu_gpu_rows), variance_fields=("compute_speedup_cpu_over_gpu_median",)),
+        PlotSpec("cpu_gpu_energy_efficiency_by_qubits.png", "Measured CPU/GPU energy efficiency by qubits", "per_case_route_stats.csv", ("benchmark_n_qubits", "energy_joules", "energy_measurement_status", "simulation_compute_time_s_median"), "Requires measured energy for both paired CPU and GPU executions; unavailable energy is not inferred.", "TODO: energy metadata is unavailable or not a validated paired measurement.", "Qubits", "Energy efficiency (measured joules per compute work unit)", not_implemented_reason="energy measurements are unavailable in the research evidence contract"),
+        PlotSpec("cpu_tn_runtime_by_qubits.png", "Measured Quimb unsliced/sliced compute time by qubits", "per_case_route_stats.csv", ("benchmark_n_qubits", "route_id", "simulation_compute_time_s_median"), "Measured external Quimb tensor-network contraction compute time, with unsliced and sliced routes kept separate.", "Measured Quimb unsliced and sliced tensor-network compute time by circuit size.", "Qubits", "Measured contraction compute time (s, log)", render(_plot_cpu_tn_runtime, stats_rows), variance_fields=("simulation_compute_time_s_median",)),
+        PlotSpec("full_state_vs_tn_runtime_by_qubits.png", "Cross-algorithm/backend measured compute time", "per_case_route_stats.csv", ("benchmark_n_qubits", "route_id", "simulation_compute_time_s_median"), "Cross-algorithm/backend comparison of measured QuEST full-state and Quimb tensor-network compute time; not a same-plan speedup.", "Cross-algorithm/backend measured compute time on the same shallow circuits.", "Qubits", "Measured compute time (s, log)", render(_plot_full_state_vs_tn_runtime, stats_rows), variance_fields=("simulation_compute_time_s_median",)),
+        PlotSpec("tn_planning_vs_contraction.png", "Measured Quimb planning versus contraction compute time", "per_case_route_stats.csv", ("benchmark_n_qubits", "planning_time_s_median", "simulation_compute_time_s_median"), "Measured Quimb planning and contraction timings are reported as separate software phases.", "Measured Quimb planning and contraction compute time; phases are not combined.", "Qubits", "Measured time (s, log)", render(_plot_tn_planning_vs_contraction, stats_rows), variance_fields=("planning_time_s_median", "simulation_compute_time_s_median")),
+        PlotSpec("tn_path_flops_by_family_size.png", "Planner-estimated contraction FLOPs", "per_case_route_stats.csv", ("benchmark_n_qubits", "tn_estimated_flops", "route_id"), "Planner-reported contraction-path FLOP estimates, not measured processor instructions.", "Planner-estimated contraction FLOPs by circuit family and size.", "Qubits", "Planner-estimated FLOPs (log)", render(_plot_tn_path_metric, stats_rows, metric="tn_estimated_flops", ylabel="Planner-estimated FLOPs", title="Planner-estimated contraction FLOPs"), variance_fields=("tn_estimated_flops",)),
+        PlotSpec("tn_path_peak_memory_by_family_size.png", "Planner-estimated largest intermediate tensor", "per_case_route_stats.csv", ("benchmark_n_qubits", "tn_max_intermediate_bytes", "route_id"), "Planner-reported largest intermediate tensor size, not measured resident memory.", "Planner-estimated largest intermediate tensor bytes by circuit family and size.", "Qubits", "Largest intermediate bytes (log)", render(_plot_tn_path_metric, stats_rows, metric="tn_max_intermediate_bytes", ylabel="Largest intermediate bytes", title="Planner-estimated largest intermediate tensor"), variance_fields=("tn_max_intermediate_bytes",)),
+        PlotSpec("cpu_tn_slicing_flop_ratio.png", "Planner-estimated slicing arithmetic ratio", "per_case_route_stats.csv", ("benchmark_n_qubits", "slicing_flop_ratio", "slicing_flop_change_kind"), "Quimb/cotengra reported sliced-to-unsliced plan FLOPs for the external sliced route; optimizer choices can change this ratio.", "Slicing FLOP ratio = sliced cotengra plan reported FLOPs / unsliced cotengra plan reported FLOPs.", "Case", "Sliced plan FLOPs / unsliced plan FLOPs", render(_plot_slicing_ratio, stats_rows), variance_fields=("slicing_flop_ratio",)),
+        PlotSpec("cpu_tn_slicing_tradeoff.png", "Quimb slicing tradeoff", "cpu_tn_slicing_tradeoff.csv", ("benchmark_n_qubits", "runtime_ratio_sliced_over_unsliced", "slicing_flop_ratio", "largest_intermediate_ratio_sliced_over_unsliced"), "Matched external Quimb sliced/unsliced route statistics with compatible timing and output scopes; ratios are descriptive slicing trade-offs, not speedup claims.", "Matched Quimb slicing trade-off ratios: runtime, planner-estimated FLOPs, and largest intermediate size (sliced / unsliced).", "Qubits", "Ratio (sliced / unsliced)", render(_plot_slicing_tradeoff, slicing_tradeoff_rows or []), variance_fields=("runtime_ratio_sliced_over_unsliced", "slicing_flop_ratio", "largest_intermediate_ratio_sliced_over_unsliced"), allow_zero_variance=True),
+        PlotSpec("upmem_supported_boundary.png", "UPMEM SDK simulator support boundary", "per_case_route_stats.csv", ("benchmark_n_qubits", "status", "unsupported_count", "upmem_execution_mode"), "Strict generic-only UPMEM SDK simulator support/unsupported records; no hardware claim.", "Supported versus unsupported strict generic-only UPMEM SDK simulator rows.", "Qubits", "SDK simulator support (0/1)", render(_plot_upmem_boundary, stats_rows), variance_fields=("unsupported_count",)),
+        PlotSpec("upmem_accuracy_error.png", "UPMEM SDK simulator accuracy error", "per_case_route_stats.csv", ("benchmark_n_qubits", "max_abs_error", "validation_method", "upmem_execution_mode"), "Validation error from strict generic UPMEM SDK simulator execution against its recorded reference.", "Strict generic UPMEM SDK simulator maximum absolute error where validation data exists.", "Case", "Maximum absolute error (log)", render(_plot_upmem_accuracy, stats_rows), variance_fields=("max_abs_error",)),
+        PlotSpec("upmem_quantization_attribution.png", "UPMEM SDK simulator quantization attribution", "upmem_quantization_attribution.csv", ("benchmark_n_qubits", "route_runtime_ratio_none_over_quantized", "transfer_ratio_none_over_quantized"), "Same-route float32/int8 attribution from SDK simulator measurements; not hardware speedup.", "Same-route float32 versus int8 attribution for strict generic UPMEM SDK simulator execution.", "Case", "Recorded ratio", render(_plot_upmem_quantization_attribution, quantization_rows), variance_fields=("route_runtime_ratio_none_over_quantized", "transfer_ratio_none_over_quantized")),
+        PlotSpec("quantization_runtime_by_executor.png", "UPMEM SDK simulator software-recorded host/control residual ratio", "upmem_quantization_attribution.csv", ("benchmark_n_qubits", "route_runtime_ratio_none_over_quantized", "unquantized_host_residual_time_s", "quantized_host_residual_time_s"), "Same-route SDK simulator software-recorded host/control residual time; attribution is not a hardware speedup claim.", "Same-plan SDK simulator float32/int8 software-recorded host/control residual-time ratio.", "Case", "Float32/int8 host/control residual ratio", render(_plot_quantization_metric, quantization_rows, metric="route_runtime_ratio_none_over_quantized", ylabel="Float32 / int8 software-recorded host/control residual time", title="UPMEM SDK simulator software-recorded host/control residual ratio"), variance_fields=("route_runtime_ratio_none_over_quantized",)),
+        PlotSpec("quantization_transfer_bytes.png", "UPMEM SDK simulator software-recorded directional transfer bytes", "upmem_quantization_attribution.csv", ("benchmark_n_qubits", "unquantized_h2d_bytes", "quantized_h2d_bytes", "unquantized_d2h_bytes", "quantized_d2h_bytes", "transfer_ratio_none_over_quantized"), "Application-visible SDK transfer bytes from matched routes. They are not physical bus/DIMM traffic and exclude unobservable SDK overhead.", "Absolute application-visible H2D/D2H bytes plus the same-plan float32/int8 total-byte ratio.", "Case", "Software-recorded application-visible bytes", render(_plot_quantization_transfer_bytes, quantization_rows), variance_fields=("unquantized_h2d_bytes", "quantized_h2d_bytes", "unquantized_d2h_bytes", "quantized_d2h_bytes", "transfer_ratio_none_over_quantized")),
+        PlotSpec("quantization_error_by_family_size.png", "UPMEM SDK simulator int8 error", "upmem_quantization_attribution.csv", ("benchmark_n_qubits", "quantized_max_abs_error_vs_full_precision", "quantized_execution_max_abs_error"), "Quantized SDK simulator error against the recorded full-precision reference.", "UPMEM SDK simulator int8 maximum absolute error against the full-precision reference.", "Case", "Maximum absolute error (log)", render(_plot_quantization_metric, quantization_rows, metric="quantized_max_abs_error_vs_full_precision", ylabel="Maximum absolute error", title="UPMEM SDK simulator int8 error versus full precision", log_scale=True), variance_fields=("quantized_max_abs_error_vs_full_precision",)),
+        PlotSpec("quantization_probability_error_by_family_size.png", "UPMEM SDK simulator probability error", "upmem_quantization_attribution.csv", ("benchmark_n_qubits", "quantized_probability_max_abs_error", "quantized_probability_l1_error"), "Probability-error fields from matched quantized UPMEM SDK-simulator validation records; no amplitude error is relabeled as probability error.", "Matched UPMEM SDK-simulator quantized probability error against the recorded validation reference.", "Case", "Probability error", render(_plot_quantization_probability_error, quantization_rows), variance_fields=("quantized_probability_max_abs_error", "quantized_probability_l1_error")),
+        PlotSpec("same_plan_cpu_upmem_runtime.png", "Same-plan CPU versus UPMEM SDK simulator compute time", "same_plan_execution.csv", ("benchmark_n_qubits", "contraction_plan_hash", "cpu_time_s", "upmem_simulator_time_s"), "CPU replay and UPMEM SDK simulator rows share an identical contraction-plan hash; timing is not hardware speedup.", "Same-plan CPU and UPMEM SDK simulator execution timing.", "Qubits", "Measured/software-recorded compute time (s, log)", render(_plot_same_plan_runtime, same_plan_rows), variance_fields=("cpu_time_s", "upmem_simulator_time_s")),
+        PlotSpec("planner_flops_vs_upmem_pressure.png", "Planner-estimated FLOPs versus normalized modeled PIM objective", "planner_comparison.csv", ("planner_id", "pim_estimated_flops", "pim_objective_score", "pim_feasible"), "Modeled generic-single-DPU planning objective; no executor timing or hardware speedup claim.", "Planner-estimated FLOPs versus normalized modeled PIM objective for feasible candidates.", "Planner-estimated FLOPs", "Normalized modeled PIM objective", render(_plot_planner_pressure, planner_rows), variance_fields=("pim_estimated_flops", "pim_objective_score")),
+        PlotSpec("planner_component_scores.png", "Modeled PIM planner objective components", "planner_comparison.csv", ("planner_id", "pim_estimated_flops", "pim_estimated_host_dpu_bytes", "pim_estimated_mram_to_wram_bytes", "pim_estimated_tile_count"), "Normalized modeled PIM planning components; scenario weights are not measured hardware constants.", "Modeled PIM objective components for feasible planner candidates.", "Planner candidate", "Normalized component value", render(_plot_planner_components, planner_rows), variance_fields=("pim_estimated_flops", "pim_estimated_host_dpu_bytes", "pim_estimated_mram_to_wram_bytes", "pim_estimated_tile_count")),
+        PlotSpec("planner_selection.png", "Modeled PIM planner selection", "planner_comparison.csv", ("planner_id", "pim_objective_rank", "pim_selected"), "Selection is by the recorded modeled PIM objective within one profile, not execution performance.", "Selected feasible planner candidate per modeled PIM objective profile.", "Case", "Modeled objective rank", render(_plot_planner_selection, planner_rows), variance_fields=("pim_objective_rank",)),
+        PlotSpec("planner_pareto_frontier.png", "Planner-estimated Pareto frontier", "planner_comparison.csv", ("planner_id", "pim_estimated_flops", "pim_peak_intermediate_bytes", "pim_pareto_dominated"), "Pareto status compares modeled planner components only; it is not a runtime ranking.", "Feasible planner candidates colored by modeled Pareto status.", "Planner-estimated FLOPs", "Planner-estimated largest intermediate bytes", render(_plot_planner_pareto, planner_rows), variance_fields=("pim_estimated_flops", "pim_peak_intermediate_bytes")),
+        PlotSpec("planner_sensitivity.png", "Modeled PIM planner sensitivity", "planner_comparison.csv", ("planner_id", "pim_weight_profile", "pim_objective_score", "pim_selected"), "Scenario weight profiles are literature-informed sensitivity cases, not calibrated hardware constants.", "Selected planner candidates across modeled PIM weight profiles.", "Weight profile", "Normalized modeled PIM objective", render(_plot_planner_sensitivity, planner_rows), variance_fields=("pim_objective_score",)),
+        PlotSpec("internal_parallelism_metadata_by_qubits.png", "Internal diagnostic frontier metadata", "per_case_route_stats.csv", ("benchmark_n_qubits", "parallelism_mode", "parallelism_evidence_type", "frontier_worker_count", "frontier_wave_count", "max_frontier_width", "frontier_executed_parallel_task_count"), "Executed internal TaskGraph frontier metadata; diagnostic only and not a parallel speedup claim.", "Diagnostic internal TaskGraph frontier metadata, not serious baseline performance.", "Case", "Maximum frontier width", render(_plot_internal_parallelism, stats_rows), variance_fields=("max_frontier_width",)),
+    ]
+    source_rows = {
+        "per_case_route_stats.csv": stats_rows,
+        "cpu_gpu_performance_summary.csv": cpu_gpu_rows,
+        "upmem_quantization_attribution.csv": quantization_rows,
+        "same_plan_execution.csv": same_plan_rows,
+        "planner_comparison.csv": planner_rows,
+        "cpu_tn_slicing_tradeoff.csv": slicing_tradeoff_rows or [],
+    }
+    return [replace(spec, data_rows=source_rows[spec.source_csv]) for spec in specs]
+
+
+def _render_plot_spec(plt: Any, path: Path, spec: PlotSpec) -> PlotOutcome:
+    if spec.not_implemented_reason:
+        _save_todo_plot(plt, path, spec, spec.not_implemented_reason)
+        return PlotOutcome("generated_todo_not_implemented", spec.not_implemented_reason, path.stat().st_size)
+    field_values = [
+        [number for number in (_float_or_none(row.get(field)) for row in (spec.data_rows or [])) if number is not None]
+        for field in spec.variance_fields
+    ]
+    values = [number for field_values_item in field_values for number in field_values_item]
+    if not values:
+        reason = "source fields contain no numeric data: " + ", ".join(spec.source_fields)
+        _save_todo_plot(plt, path, spec, reason)
+        return PlotOutcome("generated_todo_missing_data", reason, path.stat().st_size)
+    if not spec.allow_zero_variance and all(len(set(field_values_item)) <= 1 for field_values_item in field_values if field_values_item):
+        reason = "source data has zero variance across the available records"
+        _save_todo_plot(plt, path, spec, reason)
+        return PlotOutcome("generated_todo_no_variance", reason, path.stat().st_size)
+    try:
+        reason = spec.renderer(plt, path) if spec.renderer is not None else "renderer_not_configured"
+    except Exception as exc:  # Plot failures remain distinct from evidence TODOs.
+        return PlotOutcome("failed", f"rendering_failed: {type(exc).__name__}: {exc}")
+    if reason:
+        _save_todo_plot(plt, path, spec, reason)
+        return PlotOutcome("generated_todo_missing_data", reason, path.stat().st_size)
+    if not path.exists():
+        return PlotOutcome("failed", "rendering_failed: renderer did not create the expected PNG")
+    return PlotOutcome("generated_valid", None, path.stat().st_size)
+
+
+def _save_todo_plot(plt: Any, path: Path, spec: PlotSpec, reason: str) -> None:
+    fig, ax = plt.subplots(figsize=(8.0, 4.8), constrained_layout=True)
+    ax.set_title(spec.title)
+    ax.set_xlabel(spec.x_label)
+    ax.set_ylabel(spec.y_label)
+    ax.text(0.5, 0.5, f"TODO\n{reason}", ha="center", va="center", wrap=True, transform=ax.transAxes, color="#b45309")
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(0.0, 1.0)
+    ax.grid(True, alpha=0.25)
+    _save_plot(fig, path)
 
 
 def benchmark_summary(
@@ -1283,10 +1704,22 @@ def benchmark_summary(
             "",
             "## Plots",
             "",
+            "### Completed Scientific Figures",
+            "",
         ]
     )
-    for entry in plot_manifest.get("plots", []):
-        lines.append(f"- `{entry['plot']}`: {entry['status']} ({entry.get('reason') or 'ok'}). {entry.get('caption') or ''}")
+    entries = plot_manifest.get("plots", [])
+    for entry in entries:
+        if entry.get("status") == "generated_valid":
+            lines.append(f"- `{entry['plot']}`: {entry.get('caption') or ''}")
+    lines.extend(["", "### TODO Figures", ""])
+    for entry in entries:
+        if str(entry.get("status", "")).startswith("generated_todo_"):
+            lines.append(f"- `{entry['plot']}`: {entry['status']} ({entry.get('reason') or 'TODO'}). {entry.get('caption') or ''}")
+    lines.extend(["", "### Failed Figures", ""])
+    for entry in entries:
+        if entry.get("status") == "failed":
+            lines.append(f"- `{entry['plot']}`: failed ({entry.get('reason') or 'unknown rendering failure'}).")
     lines.extend(
         [
             "",
@@ -1447,8 +1880,31 @@ def _claim_guard_issues(records: list[JsonDict]) -> list[str]:
                 issues.append(f"sdk simulator row has hardware_speedup value: {case}/{route}")
         if record.get("energy_joules") not in {None, ""} and str(record.get("energy_measurement_status") or "") not in {"measured", "available"}:
             issues.append(f"energy value without measured status: {case}/{route}")
+        issues.extend(_transfer_accounting_issues(record, case=case, route=route))
         if record.get("contraction_execution_target") == "upmem":
             issues.extend(_strict_generic_upmem_issues(record))
+    return issues
+
+
+def _transfer_accounting_issues(record: JsonDict, *, case: Any, route: Any) -> list[str]:
+    """Validate directional byte totals when the producing runtime exposes them.
+
+    Older evidence may have only ``actual_transfer_bytes``. That remains
+    readable, but it cannot satisfy or fail a directional invariant that was
+    not recorded at the time.
+    """
+    h2d = _float_or_none(record.get("actual_h2d_bytes"))
+    d2h = _float_or_none(record.get("actual_d2h_bytes"))
+    total = _float_or_none(record.get("actual_transfer_bytes"))
+    issues: list[str] = []
+    if h2d is not None or d2h is not None:
+        if h2d is None or d2h is None or total is None:
+            issues.append(f"incomplete directional transfer accounting: {case}/{route}")
+        elif not math.isclose(total, h2d + d2h, rel_tol=0.0, abs_tol=0.0):
+            issues.append(f"transfer-byte invariant failed: {case}/{route}")
+    declared = record.get("actual_transfer_bytes_invariant")
+    if declared not in {None, "", "passed"}:
+        issues.append(f"transfer-byte invariant not passed: {case}/{route}")
     return issues
 
 
@@ -1550,11 +2006,11 @@ def _plot_cpu_gpu_runtime(plt: Any, path: Path, rows: list[JsonDict]) -> str | N
         axis.set_xlabel("Qubits")
         axis.grid(True, alpha=0.3)
     for axis in axes[:, 0]:
-        axis.set_ylabel("Median compute time (s, log)")
+        axis.set_ylabel("Measured compute time (s, log)")
     for axis in axes.flat[len(families) :]:
         axis.set_visible(False)
     axes.flat[0].legend(fontsize="small")
-    fig.suptitle("CPU/GPU full-state compute runtime (performance tier)")
+    fig.suptitle("Measured QuEST CPU/GPU full-state compute time (performance tier)")
     _save_plot(fig, path)
     return None
 
@@ -1579,8 +2035,8 @@ def _plot_cpu_gpu_speedup(plt: Any, path: Path, rows: list[JsonDict]) -> str | N
         )
     ax.axhline(1.0, color="#64748b", linestyle="--", linewidth=1.0)
     ax.set_xlabel("Qubits")
-    ax.set_ylabel("Compute speedup (CPU time / GPU time)")
-    ax.set_title("CPU/GPU compute speedup by circuit family")
+    ax.set_ylabel("Measured CPU/GPU compute ratio")
+    ax.set_title("Measured CPU/GPU compute ratio by circuit family")
     ax.grid(True, axis="y", alpha=0.3)
     ax.legend(fontsize="small", ncol=2)
     _save_plot(fig, path)
@@ -1620,7 +2076,7 @@ def _plot_cpu_tn_runtime(plt: Any, path: Path, rows: list[JsonDict]) -> str | No
     for axis in axes.flat[len(families) :]:
         axis.set_visible(False)
     axes.flat[0].legend(fontsize="small")
-    fig.suptitle("CPU tensor-network contraction runtime")
+    fig.suptitle("Measured Quimb unsliced and sliced contraction compute time")
     _save_plot(fig, path)
     return None
 
@@ -1667,7 +2123,7 @@ def _plot_full_state_vs_tn_runtime(plt: Any, path: Path, rows: list[JsonDict]) -
     for axis in axes.flat[len(families) :]:
         axis.set_visible(False)
     axes.flat[0].legend(fontsize="x-small")
-    fig.suptitle("Full-state and tensor-network CPU implementations (different execution models)")
+    fig.suptitle("Cross-algorithm/backend measured compute time")
     _save_plot(fig, path)
     return None
 
@@ -1708,7 +2164,7 @@ def _plot_tn_planning_vs_contraction(plt: Any, path: Path, rows: list[JsonDict])
     for axis in axes.flat[len(families) :]:
         axis.set_visible(False)
     axes.flat[0].legend(fontsize="x-small")
-    fig.suptitle("Tensor-network planning versus contraction time")
+    fig.suptitle("Measured Quimb planning versus contraction compute time")
     _save_plot(fig, path)
     return None
 
@@ -1792,6 +2248,51 @@ def _plot_quantization_metric(
     return None
 
 
+def _plot_quantization_probability_error(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+    """Render recorded probability errors without substituting amplitude errors."""
+    selected = [
+        row
+        for row in rows
+        if _plot_qubits(row) is not None
+        and any(
+            _positive(row.get(field)) is not None
+            for field in ("quantized_probability_max_abs_error", "quantized_probability_l1_error")
+        )
+    ]
+    if not selected:
+        return "no_quantized_probability_error_rows"
+    ordered = sorted(
+        selected,
+        key=lambda row: (str(row["case_family"]), int(_plot_qubits(row) or 0), str(row["case_id"])),
+    )
+    labels = [f"{row['case_family']}_{_plot_qubits(row)}q" for row in ordered]
+    fig, ax = plt.subplots(figsize=(max(8.0, len(labels) * 0.55), 5.2), constrained_layout=True)
+    x = list(range(len(ordered)))
+    width = 0.38
+    max_abs = [
+        float(row["quantized_probability_max_abs_error"])
+        if _positive(row.get("quantized_probability_max_abs_error")) is not None
+        else 0.0
+        for row in ordered
+    ]
+    l1 = [
+        float(row["quantized_probability_l1_error"])
+        if _positive(row.get("quantized_probability_l1_error")) is not None
+        else 0.0
+        for row in ordered
+    ]
+    ax.bar([value - width / 2 for value in x], max_abs, width=width, label="maximum probability error", color="#ea580c")
+    ax.bar([value + width / 2 for value in x], l1, width=width, label="probability L1 error", color="#0f766e")
+    ax.set_yscale("log")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=60, ha="right", fontsize=8)
+    ax.set_ylabel("Recorded probability error (log)")
+    ax.set_title("UPMEM SDK simulator quantized probability error")
+    ax.legend(fontsize="small")
+    _save_plot(fig, path)
+    return None
+
+
 def _plot_same_plan_runtime(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
     if not rows:
         return "no_same_plan_cpu_upmem_rows"
@@ -1835,7 +2336,7 @@ def _plot_same_plan_runtime(plt: Any, path: Path, rows: list[JsonDict]) -> str |
     for axis in axes.flat[len(families) :]:
         axis.set_visible(False)
     axes.flat[0].legend(fontsize="small")
-    fig.suptitle("Same-plan CPU and UPMEM SDK simulator execution")
+    fig.suptitle("Same-plan CPU and UPMEM SDK simulator compute time")
     _save_plot(fig, path)
     return None
 
@@ -1844,30 +2345,155 @@ def _plot_planner_pressure(plt: Any, path: Path, rows: list[JsonDict]) -> str | 
     selected = [
         row
         for row in rows
-        if _positive(row.get("tn_estimated_flops")) is not None
-        and _float_or_none(row.get("upmem_pressure_score")) is not None
-        and row.get("contraction_plan_hash")
+        if row.get("pim_feasible") is True
+        and _positive(row.get("pim_estimated_flops")) is not None
+        and _float_or_none(row.get("pim_objective_score")) is not None
     ]
     if len({str(row.get("planner_id")) for row in selected}) < 2:
-        return "multiple_planner_candidates_not_available"
+        return "multiple_feasible_planner_candidates_not_available"
     fig, ax = plt.subplots(figsize=(7.5, 5.5), constrained_layout=True)
     grouped: dict[str, list[JsonDict]] = defaultdict(list)
     for row in selected:
         grouped[str(row.get("planner_id") or "unknown")].append(row)
     for planner_id, group in sorted(grouped.items()):
         ax.scatter(
-            [float(row["tn_estimated_flops"]) for row in group],
-            [float(row["upmem_pressure_score"]) for row in group],
+            [float(row["pim_estimated_flops"]) for row in group],
+            [float(row["pim_objective_score"]) for row in group],
             label=planner_id,
             alpha=0.75,
+            marker="*" if any(bool(row.get("pim_selected")) for row in group) else "o",
         )
     ax.set_xscale("log")
-    ax.set_xlabel("Estimated FLOPs")
-    ax.set_ylabel("Modeled UPMEM pressure score")
-    ax.set_title("Contraction-plan FLOPs versus UPMEM transfer pressure")
+    ax.set_xlabel("Planner-estimated FLOPs")
+    ax.set_ylabel("Normalized modeled PIM objective")
+    ax.set_title("Planner-estimated FLOPs versus normalized modeled PIM objective")
     ax.legend(fontsize="small")
     _save_plot(fig, path)
     return None
+
+
+def _plot_planner_components(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+    selected = [row for row in rows if row.get("pim_feasible") is True and _component_mapping(row)]
+    if len({str(row.get("planner_id")) for row in selected}) < 2:
+        return "multiple_feasible_planner_candidates_not_available"
+    component_names = (
+        "flops",
+        "host_dpu_bytes",
+        "mram_wram_bytes",
+        "local_work",
+        "sync_events",
+        "wram_pressure",
+        "tiles",
+        "numeric_penalty",
+    )
+    grouped: dict[str, list[JsonDict]] = defaultdict(list)
+    for row in selected:
+        grouped[str(row.get("planner_id") or "unknown")].append(row)
+    labels = sorted(grouped)
+    values = {
+        name: [
+            statistics.mean(float(_component_mapping(row).get(name, 0.0) or 0.0) for row in grouped[label])
+            for label in labels
+        ]
+        for name in component_names
+    }
+    fig, ax = plt.subplots(figsize=(max(8.0, len(labels) * 1.4), 5.5), constrained_layout=True)
+    bottom = [0.0] * len(labels)
+    for name in component_names:
+        current = values[name]
+        ax.bar(labels, current, bottom=bottom, label=name)
+        bottom = [left + right for left, right in zip(bottom, current)]
+    ax.set_ylabel("Mean normalized modeled component")
+    ax.set_title("Modeled PIM planner objective components")
+    ax.tick_params(axis="x", labelrotation=25)
+    ax.legend(fontsize="x-small", ncol=2)
+    _save_plot(fig, path)
+    return None
+
+
+def _plot_planner_selection(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+    selected = [row for row in rows if row.get("pim_feasible") is True and row.get("pim_objective_rank") is not None]
+    if not selected:
+        return "no_modeled_pim_selection_rows"
+    labels = [f"{row['case_id']}\n{row['planner_id']}" for row in selected]
+    fig, ax = plt.subplots(figsize=(max(8.0, len(labels) * 0.55), 5.2), constrained_layout=True)
+    colors = ["#0f766e" if row.get("pim_selected") else "#94a3b8" for row in selected]
+    ax.bar(range(len(selected)), [float(row["pim_objective_rank"]) for row in selected], color=colors)
+    ax.set_xticks(range(len(labels)))
+    ax.set_xticklabels(labels, rotation=60, ha="right", fontsize=7)
+    ax.set_ylabel("Modeled objective rank (1 = selected)")
+    ax.set_title("Modeled PIM planner selection")
+    _save_plot(fig, path)
+    return None
+
+
+def _plot_planner_pareto(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+    selected = [
+        row
+        for row in rows
+        if row.get("pim_feasible") is True
+        and _positive(row.get("pim_estimated_flops")) is not None
+        and _positive(row.get("pim_peak_intermediate_bytes")) is not None
+        and row.get("pim_pareto_dominated") is not None
+    ]
+    if len(selected) < 2:
+        return "insufficient_feasible_pareto_candidates"
+    fig, ax = plt.subplots(figsize=(7.5, 5.5), constrained_layout=True)
+    for dominated, color, label in ((False, "#0f766e", "Pareto non-dominated"), (True, "#94a3b8", "Pareto dominated")):
+        group = [row for row in selected if bool(row.get("pim_pareto_dominated")) is dominated]
+        if group:
+            ax.scatter(
+                [float(row["pim_estimated_flops"]) for row in group],
+                [float(row["pim_peak_intermediate_bytes"]) for row in group],
+                color=color,
+                label=label,
+                alpha=0.8,
+            )
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("Planner-estimated FLOPs")
+    ax.set_ylabel("Planner-estimated largest intermediate bytes")
+    ax.set_title("Planner-estimated Pareto frontier")
+    ax.legend(fontsize="small")
+    _save_plot(fig, path)
+    return None
+
+
+def _plot_planner_sensitivity(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+    selected = [
+        row
+        for row in rows
+        if row.get("pim_feasible") is True
+        and row.get("pim_selected") is True
+        and row.get("pim_weight_profile")
+        and _float_or_none(row.get("pim_objective_score")) is not None
+    ]
+    profiles = sorted({str(row["pim_weight_profile"]) for row in selected})
+    if len(profiles) < 2:
+        return "multiple_weight_profiles_not_available"
+    grouped: dict[str, list[JsonDict]] = defaultdict(list)
+    for row in selected:
+        grouped[str(row["pim_weight_profile"])].append(row)
+    fig, ax = plt.subplots(figsize=(max(8.0, len(profiles) * 1.8), 5.0), constrained_layout=True)
+    ax.bar(profiles, [statistics.mean(float(row["pim_objective_score"]) for row in grouped[name]) for name in profiles], color="#2563eb")
+    ax.set_ylabel("Mean selected normalized modeled PIM objective")
+    ax.set_title("Modeled PIM planner sensitivity by weight profile")
+    ax.tick_params(axis="x", labelrotation=25)
+    _save_plot(fig, path)
+    return None
+
+
+def _component_mapping(row: JsonDict) -> JsonDict:
+    value = row.get("pim_normalized_components")
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
 
 
 def _plot_slicing_ratio(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
@@ -1885,7 +2511,51 @@ def _plot_slicing_ratio(plt: Any, path: Path, rows: list[JsonDict]) -> str | Non
     ax.set_xticklabels(labels, rotation=60, ha="right", fontsize=8)
     ax.set_xlabel("Case")
     ax.set_ylabel("Sliced FLOPs / unsliced FLOPs")
-    ax.set_title("Quimb/cotengra slicing FLOP ratio")
+    ax.set_title("Planner-estimated Quimb/cotengra slicing arithmetic ratio")
+    _save_plot(fig, path)
+    return None
+
+
+def _plot_slicing_tradeoff(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+    selected = [
+        row
+        for row in rows
+        if _plot_qubits(row) is not None
+        and _positive(row.get("runtime_ratio_sliced_over_unsliced")) is not None
+        and _positive(row.get("slicing_flop_ratio")) is not None
+        and _positive(row.get("largest_intermediate_ratio_sliced_over_unsliced")) is not None
+    ]
+    if not selected:
+        return "no_complete_compatible_slicing_tradeoff_pairs"
+    ordered = sorted(
+        selected,
+        key=lambda row: (str(row.get("case_family") or ""), int(_plot_qubits(row) or 0), str(row.get("case_id") or "")),
+    )
+    labels = [f"{row.get('case_family') or 'case'}_{_plot_qubits(row)}q" for row in ordered]
+    x = list(range(len(labels)))
+    width = 0.25
+    fig, ax = plt.subplots(figsize=(max(8.0, len(labels) * 0.6), 5.6), constrained_layout=True)
+    metrics = (
+        ("runtime_ratio_sliced_over_unsliced", "Runtime"),
+        ("slicing_flop_ratio", "Planner FLOPs"),
+        ("largest_intermediate_ratio_sliced_over_unsliced", "Largest intermediate"),
+    )
+    for index, (field, label) in enumerate(metrics):
+        values = [
+            float(row[field])
+            for row in ordered
+        ]
+        offsets = [value + (index - 1) * width for value in x]
+        ax.bar(offsets, values, width=width, label=label)
+    ax.axhline(1.0, color="#64748b", linestyle="--", linewidth=1.0)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=60, ha="right", fontsize=8)
+    ax.set_xlabel("Case")
+    ax.set_ylabel("Ratio (sliced / unsliced, log)")
+    ax.set_yscale("log")
+    ax.set_title("Quimb slicing trade-off ratios")
+    ax.grid(True, axis="y", alpha=0.3)
+    ax.legend(fontsize="small")
     _save_plot(fig, path)
     return None
 
@@ -1942,7 +2612,7 @@ def _plot_upmem_accuracy(plt: Any, path: Path, rows: list[JsonDict]) -> str | No
     ax.set_xticks(range(len(labels)))
     ax.set_xticklabels(labels, rotation=60, ha="right", fontsize=8)
     ax.set_ylabel("Max abs error (log scale)")
-    ax.set_title("Strict generic UPMEM SDK simulator accuracy vs reference")
+    ax.set_title("Strict generic UPMEM SDK simulator accuracy versus reference")
     _save_plot(fig, path)
     return None
 
@@ -1972,6 +2642,62 @@ def _plot_upmem_quantization_attribution(plt: Any, path: Path, rows: list[JsonDi
     transfer_ax.set_xticklabels(labels, rotation=60, ha="right", fontsize=8)
     transfer_ax.set_xlabel("Case")
     fig.suptitle("Strict generic UPMEM float32 vs int8 attribution (SDK simulator)")
+    _save_plot(fig, path)
+    return None
+
+
+def _plot_quantization_transfer_bytes(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+    """Render application-visible directional SDK transfer evidence.
+
+    The runtime can observe payload-level H2D/D2H accounting, but not physical
+    bus/DIMM traffic or unobservable SDK overhead. Keeping those boundaries in
+    the figure prevents a byte-count plot from becoming a hardware claim.
+    """
+    usable = [
+        row
+        for row in rows
+        if _plot_qubits(row) is not None
+        and any(
+            _positive(row.get(field)) is not None
+            for field in (
+                "unquantized_h2d_bytes",
+                "quantized_h2d_bytes",
+                "unquantized_d2h_bytes",
+                "quantized_d2h_bytes",
+            )
+        )
+    ]
+    if not usable:
+        return "no_directional_application_visible_transfer_bytes"
+    ordered = sorted(usable, key=lambda row: (str(row["case_family"]), int(_plot_qubits(row) or 0), str(row["case_id"])))
+    labels = [f"{row['case_family']}_{_plot_qubits(row)}q" for row in ordered]
+    x = list(range(len(ordered)))
+    fig, (bytes_ax, ratio_ax) = plt.subplots(2, 1, figsize=(max(8.0, len(labels) * 0.6), 7.2), constrained_layout=True)
+    width = 0.36
+    float_h2d = [float(row.get("unquantized_h2d_bytes") or 0.0) for row in ordered]
+    float_d2h = [float(row.get("unquantized_d2h_bytes") or 0.0) for row in ordered]
+    int8_h2d = [float(row.get("quantized_h2d_bytes") or 0.0) for row in ordered]
+    int8_d2h = [float(row.get("quantized_d2h_bytes") or 0.0) for row in ordered]
+    left = [value - width / 2 for value in x]
+    right = [value + width / 2 for value in x]
+    bytes_ax.bar(left, float_h2d, width, label="float32 H2D", color="#2563eb")
+    bytes_ax.bar(left, float_d2h, width, bottom=float_h2d, label="float32 D2H", color="#93c5fd")
+    bytes_ax.bar(right, int8_h2d, width, label="int8 H2D", color="#b45309")
+    bytes_ax.bar(right, int8_d2h, width, bottom=int8_h2d, label="int8 D2H", color="#fdba74")
+    bytes_ax.set_ylabel("Application-visible SDK bytes")
+    bytes_ax.set_title("Software-recorded application-visible H2D/D2H bytes")
+    bytes_ax.legend(fontsize="small", ncol=2)
+    bytes_ax.grid(True, axis="y", alpha=0.3)
+
+    ratios = [row.get("transfer_ratio_none_over_quantized") for row in ordered]
+    ratio_ax.bar(x, [float(value) if _positive(value) is not None else 0.0 for value in ratios], color="#0f766e")
+    ratio_ax.axhline(1.0, color="#64748b", linestyle="--", linewidth=1.0)
+    ratio_ax.set_ylabel("float32 total bytes / int8 total bytes")
+    ratio_ax.set_xlabel("Case")
+    ratio_ax.set_xticks(x)
+    ratio_ax.set_xticklabels(labels, rotation=60, ha="right", fontsize=8)
+    ratio_ax.grid(True, axis="y", alpha=0.3)
+    fig.suptitle("UPMEM SDK simulator transfer attribution (not physical bus traffic)")
     _save_plot(fig, path)
     return None
 
@@ -2008,22 +2734,29 @@ def _save_plot(fig: Any, path: Path) -> None:
 
 def _caption(filename: str) -> str:
     return {
-        "cpu_gpu_runtime_by_qubits.png": "Performance-tier median QuEST CPU and verified QuEST GPU compute time by circuit size.",
-        "cpu_gpu_speedup_by_qubits.png": "Performance-tier CPU/GPU compute speedup; values above 1 mean GPU faster.",
-        "cpu_tn_runtime_by_qubits.png": "Quimb CPU tensor-network timing; sliced and unsliced routes are separate execution modes.",
-        "full_state_vs_tn_runtime_by_qubits.png": "QuEST CPU full-state and Quimb CPU TN timing on the same shallow circuits; this is an algorithm/backend comparison, not same-plan speedup.",
-        "tn_planning_vs_contraction.png": "Planning and contraction timing are reported separately for external CPU TN routes.",
-        "tn_path_flops_by_family_size.png": "Reported contraction-plan FLOP estimates by circuit family and size.",
-        "tn_path_peak_memory_by_family_size.png": "Reported peak intermediate tensor bytes by circuit family and size.",
-        "cpu_tn_slicing_flop_ratio.png": "slicing_flop_ratio = sliced cotengra reported FLOPs / unsliced cotengra reported FLOPs.",
+        "cpu_gpu_runtime_by_qubits.png": "Measured QuEST CPU and verified QuEST GPU compute time by circuit size.",
+        "cpu_gpu_speedup_by_qubits.png": "Measured CPU/GPU compute ratio; values above 1 mean GPU compute was faster.",
+        "cpu_gpu_energy_efficiency_by_qubits.png": "TODO until paired measured energy metadata is available.",
+        "cpu_tn_runtime_by_qubits.png": "Measured Quimb unsliced and sliced tensor-network compute time by circuit size.",
+        "full_state_vs_tn_runtime_by_qubits.png": "Cross-algorithm/backend measured QuEST full-state and Quimb TN compute time; not same-plan speedup.",
+        "tn_planning_vs_contraction.png": "Measured Quimb planning and contraction compute time are reported separately.",
+        "tn_path_flops_by_family_size.png": "Planner-estimated contraction FLOPs by circuit family and size.",
+        "tn_path_peak_memory_by_family_size.png": "Planner-estimated largest intermediate tensor bytes by circuit family and size.",
+        "cpu_tn_slicing_flop_ratio.png": "Slicing FLOP ratio = sliced cotengra plan reported FLOPs / unsliced cotengra plan reported FLOPs.",
+        "cpu_tn_slicing_tradeoff.png": "Matched Quimb slicing trade-off ratios for runtime, planner-estimated FLOPs, and largest intermediate size (sliced / unsliced); not a speedup claim.",
         "upmem_supported_boundary.png": "Supported versus unsupported strict generic-only UPMEM SDK simulator rows.",
-        "upmem_accuracy_error.png": "Strict generic UPMEM SDK simulator max absolute error where validation data exists.",
-        "upmem_quantization_attribution.png": "Same-route float32 versus int8 ratios for strict generic UPMEM SDK simulator execution; this is not hardware speedup.",
-        "quantization_runtime_by_executor.png": "Same-plan SDK simulator float32/int8 host-side residual-time ratio; this is not hardware speedup.",
-        "quantization_transfer_bytes.png": "Same-plan float32/int8 host-DPU transfer-volume ratio.",
-        "quantization_error_by_family_size.png": "Int8 maximum absolute error against the full-precision TaskGraph reference.",
+        "upmem_accuracy_error.png": "Strict generic UPMEM SDK simulator maximum absolute error where validation data exists.",
+        "upmem_quantization_attribution.png": "Same-route float32 versus int8 attribution for strict generic UPMEM SDK simulator execution; not hardware speedup.",
+        "quantization_runtime_by_executor.png": "Same-plan SDK simulator software-recorded host/control residual-time ratio; not hardware speedup.",
+        "quantization_transfer_bytes.png": "Application-visible SDK H2D/D2H bytes and same-plan float32/int8 total-byte ratio; not physical bus traffic.",
+        "quantization_error_by_family_size.png": "UPMEM SDK simulator int8 maximum absolute error against the full-precision TaskGraph reference.",
+        "quantization_probability_error_by_family_size.png": "Recorded matched UPMEM SDK-simulator probability errors when validation records provide them; otherwise an explicit TODO figure.",
         "same_plan_cpu_upmem_runtime.png": "CPU replay and UPMEM SDK simulator rows share an identical contraction-plan hash; timing is not hardware speedup.",
-        "planner_flops_vs_upmem_pressure.png": "Planner FLOP estimates versus modeled UPMEM pressure when multiple plan candidates are available.",
+        "planner_flops_vs_upmem_pressure.png": "Planner-estimated FLOPs versus normalized modeled PIM objective for feasible candidates.",
+        "planner_component_scores.png": "Normalized modeled PIM objective components; scenario weights are not measured hardware constants.",
+        "planner_selection.png": "Selected feasible planner candidate per modeled PIM objective profile.",
+        "planner_pareto_frontier.png": "Feasible planner candidates colored by modeled Pareto status.",
+        "planner_sensitivity.png": "Selected planner candidates across modeled PIM weight profiles.",
         "internal_parallelism_metadata_by_qubits.png": "Diagnostic internal TaskGraph frontier metadata, not serious baseline performance.",
     }.get(filename, "")
 
@@ -2141,6 +2874,14 @@ def _validation_errors(record: JsonDict) -> JsonDict:
         except json.JSONDecodeError:
             return {}
     return {}
+
+
+def _validation_metric(record: JsonDict, key: str) -> Any:
+    """Read a normalized validation metric, including older direct-row records."""
+    metrics = _validation_errors(record)
+    if metrics.get(key) not in {None, ""}:
+        return metrics[key]
+    return record.get(key)
 
 
 def _full_precision_errors(record: JsonDict) -> JsonDict:
@@ -2337,6 +3078,32 @@ def _first_present(group: list[JsonDict], key: str) -> Any:
     return None
 
 
+def _transfer_invariant_status(group: list[JsonDict]) -> str | None:
+    statuses = {
+        str(row.get("actual_transfer_bytes_invariant"))
+        for row in group
+        if row.get("actual_transfer_bytes_invariant") not in {None, ""}
+    }
+    if not statuses:
+        return None
+    return next(iter(statuses)) if len(statuses) == 1 else "mixed"
+
+
+def _same_or_mixed(left: Any, right: Any) -> Any:
+    if left in {None, ""}:
+        return right
+    if right in {None, ""}:
+        return left
+    return left if left == right else "mixed"
+
+
+def _paired_transfer_invariant_status(left: JsonDict, right: JsonDict) -> str | None:
+    return _same_or_mixed(
+        left.get("actual_transfer_bytes_invariant"),
+        right.get("actual_transfer_bytes_invariant"),
+    )
+
+
 def _first_record_value(group: list[JsonDict], key: str) -> Any:
     for row in group:
         value = _record_value(row, key)
@@ -2377,7 +3144,7 @@ def _research_suite_argv(key: str, root: Path) -> list[str]:
             "--artifact-retention",
             "compact",
         ]
-    if key == "planner_paths":
+    if key in {"planner_paths", "planner_sensitivity"}:
         return ["compare-planners", "--suite", suite]
     return ["simulation-backend-compare", "--suite", suite, "--artifact-retention", "compact"]
 

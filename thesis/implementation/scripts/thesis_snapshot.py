@@ -34,6 +34,7 @@ ROLE_BY_SUITE = {
     "thesis_cpu_tn_quimb": "cpu_tn",
     "thesis_tn_paths_quantization": "tn_path_quantization",
     "thesis_planner_compare": "planner_paths",
+    "thesis_planner_sensitivity": "planner_sensitivity",
     "research_cpu_gpu_correctness": "full_state_correctness",
     "research_cpu_gpu": "full_state_performance",
     "research_cpu_tn": "cpu_tn",
