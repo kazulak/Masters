@@ -1,0 +1,86 @@
+{
+  "benchmark_threads": {
+    "BENCH_CPU_THREADS": null,
+    "MKL_NUM_THREADS": null,
+    "NUMEXPR_NUM_THREADS": null,
+    "OMP_DYNAMIC": null,
+    "OMP_NUM_THREADS": null,
+    "OMP_PLACES": null,
+    "OMP_PROC_BIND": null,
+    "OPENBLAS_NUM_THREADS": null
+  },
+  "blas": {
+    "configuration": "OpenBLAS 0.3.29  USE64BITINT DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=64",
+    "name": "scipy-openblas",
+    "version": "0.3.29"
+  },
+  "compiler": "cc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "cotengra": "0.7.5",
+  "cpu_affinity": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11
+  ],
+  "cpu_count": 12,
+  "cpu_frequency_governor": "schedutil",
+  "git_commit": "a453331d7bc240f64c3b6391f4ea2ac916de798c",
+  "gpu": {
+    "amd_smi": "/usr/bin/amd-smi",
+    "cupy": null,
+    "gpu_execution_backend_added": false,
+    "hipcc": "/usr/bin/hipcc",
+    "jax": null,
+    "rocm_smi": "/usr/bin/rocm-smi",
+    "rocminfo": "/usr/bin/rocminfo",
+    "torch": null
+  },
+  "machine": "x86_64",
+  "matplotlib": "3.10.8",
+  "mem_total_kib": 32735180,
+  "numpy": "2.2.6",
+  "openmp": {
+    "OMP_DYNAMIC": null,
+    "OMP_NUM_THREADS": null,
+    "OMP_PLACES": null,
+    "OMP_PROC_BIND": null
+  },
+  "opt_einsum": "3.4.0",
+  "physical_cpu_count": 6,
+  "platform": "Linux-6.8.0-124-generic-x86_64-with-glibc2.35",
+  "processor": "x86_64",
+  "python": "3.10.12",
+  "quantum_bench_version": "0.1.0",
+  "quimb": "1.11.2",
+  "rapl": {
+    "available": false,
+    "path": "/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj",
+    "powercap_energy_uj_paths": []
+  },
+  "simplepim": {
+    "SIMPLEPIM_BIN": null,
+    "SIMPLEPIM_HOME": null,
+    "SIMPLEPIM_LIB": null,
+    "available": false,
+    "command_path": null,
+    "probe_status": "unavailable",
+    "skip_reason": "SimplePIM is not configured; set SIMPLEPIM_BIN or put a SimplePIM command on PATH"
+  },
+  "sudo": {
+    "effective_uid": 1000,
+    "sudo_gid": null,
+    "sudo_uid": null
+  },
+  "upmem": {
+    "UPMEM_HOME": "/home/tom/UPMEM_SDK",
+    "dpu_compiler": "/home/tom/UPMEM_SDK/bin/dpu-upmem-dpurte-clang"
+  }
+}

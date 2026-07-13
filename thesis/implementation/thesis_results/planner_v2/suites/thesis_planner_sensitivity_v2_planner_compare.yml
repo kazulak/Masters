@@ -1,0 +1,204 @@
+_route_configs:
+- benchmark_role: diagnostic_internal_only
+  id: cpu_tn_einsum_exact
+  options: {}
+  required: false
+  role: planning_reference_only
+  route_limitation_scope: null
+  route_role_description: null
+_schema_version: 2
+_suite_path: /home/tom/repos/Masters/thesis/implementation/configs/suites/manual/thesis_planner_sensitivity_v2.yml
+cases:
+- case_id: quantum_bell_2q_sensitivity_v2
+  circuit:
+    kind: builtin
+    name: bell_2q
+  metadata:
+    execution_scope: modeled_planning
+    workload_type: small_quantum_sensitivity_probe
+  workload_id: quantum_bell_2q_sensitivity_v2
+- case_id: quantum_ghz_3q_sensitivity_v2
+  circuit:
+    kind: builtin
+    n_qubits: 3
+    name: ghz_chain
+  metadata:
+    execution_scope: modeled_planning
+    workload_type: small_quantum_sensitivity_probe
+  workload_id: quantum_ghz_3q_sensitivity_v2
+- case_id: quantum_qrng_2q_sensitivity_v2
+  circuit:
+    kind: quest_compatible
+    n_qubits: 2
+    name: QRNG
+  metadata:
+    execution_scope: modeled_planning
+    workload_type: small_quantum_sensitivity_probe
+  workload_id: quantum_qrng_2q_sensitivity_v2
+- case_id: quantum_bv_3q_sensitivity_v2
+  circuit:
+    kind: quest_compatible
+    n_qubits: 3
+    name: BV
+  metadata:
+    execution_scope: modeled_planning
+    workload_type: small_quantum_sensitivity_probe
+  workload_id: quantum_bv_3q_sensitivity_v2
+- case_id: planner_motif_chain_sensitivity_v2
+  circuit:
+    kind: planner_motif
+    name: chain
+  metadata:
+    execution_scope: model_only
+    not_real_quantum_circuit: true
+    workload_type: synthetic_planner_motif
+  workload_id: planner_motif_chain_sensitivity_v2
+- case_id: planner_motif_balanced_tree_sensitivity_v2
+  circuit:
+    kind: planner_motif
+    name: balanced_tree
+  metadata:
+    execution_scope: model_only
+    not_real_quantum_circuit: true
+    workload_type: synthetic_planner_motif
+  workload_id: planner_motif_balanced_tree_sensitivity_v2
+- case_id: planner_motif_star_sensitivity_v2
+  circuit:
+    kind: planner_motif
+    name: star
+  metadata:
+    execution_scope: model_only
+    not_real_quantum_circuit: true
+    workload_type: synthetic_planner_motif
+  workload_id: planner_motif_star_sensitivity_v2
+- case_id: planner_motif_cycle_sensitivity_v2
+  circuit:
+    kind: planner_motif
+    name: cycle
+  metadata:
+    execution_scope: model_only
+    not_real_quantum_circuit: true
+    workload_type: synthetic_planner_motif
+  workload_id: planner_motif_cycle_sensitivity_v2
+- case_id: planner_motif_grid_sensitivity_v2
+  circuit:
+    kind: planner_motif
+    name: grid
+  metadata:
+    execution_scope: model_only
+    not_real_quantum_circuit: true
+    workload_type: synthetic_planner_motif
+  workload_id: planner_motif_grid_sensitivity_v2
+- case_id: planner_motif_flop_memory_tradeoff_sensitivity_v2
+  circuit:
+    kind: planner_motif
+    name: flop_memory_tradeoff
+  metadata:
+    execution_scope: model_only
+    not_real_quantum_circuit: true
+    workload_type: synthetic_planner_motif
+  workload_id: planner_motif_flop_memory_tradeoff_sensitivity_v2
+memory_guard_gib: 2
+metadata:
+  execution_tier: modeled_planning_only
+  hardware_performance_claim: forbidden
+  intended_use: thesis_evidence_planner_sensitivity_v2
+  manual_invocation_required: true
+  notes: 'Sensitivity is evaluated over named v2 modeled weight profiles, with opt_einsum
+    and cotengra retained as standard planning baselines. Quantum cases are deliberately
+    small; synthetic motifs provide controlled graph shape coverage and are model-only,
+    not quantum circuits. Profile weights are scenario assumptions, not measured hardware
+    constants, and no hardware performance claim is permitted.
+
+    '
+  numeric_contract: real_float32_or_split_real_imag_v2
+  planner_evidence_version: v2
+  planner_selection_scope: projected_prefix
+  purpose: thesis_modeled_upmem_planner_v2_sensitivity_evidence
+planner:
+  algorithm: greedy
+  engine: custom_upmem
+  execution_policy: generic_single_dpu_split_complex_v2
+  normalization: fixed_log1p_generic_budgets_v2
+  objective_version: upmem_path_cost_v2
+  optimize: greedy
+  selection_scope: projected_prefix
+planner_comparison:
+  pim_objective:
+    execution_policy: generic_single_dpu_split_complex_v2
+    normalization: fixed_log1p_generic_budgets_v2
+    objective_version: upmem_path_cost_v2
+    weight_profile: balanced_literature_informed
+  planners:
+  - engine: opt_einsum
+    optimize: greedy
+  - engine: cotengra
+    max_repeats: 1
+    methods: greedy
+    objective: flops
+  - engine: cotengra
+    max_repeats: 1
+    methods: greedy
+    objective: size
+  - algorithm: greedy
+    engine: custom_upmem
+    execution_policy: generic_single_dpu_split_complex_v2
+    normalization: fixed_log1p_generic_budgets_v2
+    objective_version: upmem_path_cost_v2
+    selection_scope: projected_prefix
+    weight_profile: compute_oriented
+  - algorithm: greedy
+    engine: custom_upmem
+    execution_policy: generic_single_dpu_split_complex_v2
+    normalization: fixed_log1p_generic_budgets_v2
+    objective_version: upmem_path_cost_v2
+    selection_scope: projected_prefix
+    weight_profile: host_transfer_oriented
+  - algorithm: greedy
+    engine: custom_upmem
+    execution_policy: generic_single_dpu_split_complex_v2
+    normalization: fixed_log1p_generic_budgets_v2
+    objective_version: upmem_path_cost_v2
+    selection_scope: projected_prefix
+    weight_profile: local_movement_oriented
+  - algorithm: greedy
+    engine: custom_upmem
+    execution_policy: generic_single_dpu_split_complex_v2
+    normalization: fixed_log1p_generic_budgets_v2
+    objective_version: upmem_path_cost_v2
+    selection_scope: projected_prefix
+    weight_profile: wram_constrained
+  - algorithm: greedy
+    engine: custom_upmem
+    execution_policy: generic_single_dpu_split_complex_v2
+    normalization: fixed_log1p_generic_budgets_v2
+    objective_version: upmem_path_cost_v2
+    selection_scope: projected_prefix
+    weight_profile: synchronization_constrained
+  - algorithm: greedy
+    engine: custom_upmem
+    execution_policy: generic_single_dpu_split_complex_v2
+    normalization: fixed_log1p_generic_budgets_v2
+    objective_version: upmem_path_cost_v2
+    selection_scope: projected_prefix
+    weight_profile: balanced_literature_informed
+repeats: 1
+route_policy:
+  fail_fast: false
+  routes:
+  - cpu_tn_einsum_exact
+schema_version: 2
+suite_id: thesis_planner_sensitivity_v2
+thread_counts:
+- null
+timeout_s: 600
+tolerances:
+  l2_error: 1.0e-08
+  max_abs_error: 1.0e-09
+  max_rel_error: 1.0e-08
+  min_fidelity: 0.999999999
+  norm_drift: 1.0e-08
+validation:
+  reference_route: cpu_tn_einsum_exact
+  require_output_for_roles: []
+warmups: 0

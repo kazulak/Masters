@@ -1,0 +1,709 @@
+{
+  "failed_figures": [],
+  "generated_valid": [
+    "planner_flops_vs_upmem_pressure.png",
+    "planner_component_scores.png",
+    "planner_selection.png",
+    "planner_pareto_frontier.png",
+    "planner_sensitivity.png",
+    "planner_component_diagnostics.png"
+  ],
+  "plots": [
+    {
+      "caption": "Measured QuEST CPU and verified QuEST GPU compute time by circuit size.",
+      "claim_basis": "Verified QuEST CPU/GPU performance-tier compute measurements.",
+      "plot": "cpu_gpu_runtime_by_qubits.png",
+      "reason": "source fields contain no numeric data: benchmark_n_qubits, cpu_simulation_compute_time_s_median, gpu_simulation_compute_time_s_median",
+      "size_bytes": 56813,
+      "source_csv": "cpu_gpu_performance_summary.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "cpu_simulation_compute_time_s_median",
+        "gpu_simulation_compute_time_s_median"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "Measured QuEST CPU/GPU compute time by qubits"
+    },
+    {
+      "caption": "Measured CPU/GPU compute ratio; values above 1 mean GPU compute was faster.",
+      "claim_basis": "Paired verified QuEST compute-time measurements; ratio is CPU divided by GPU.",
+      "plot": "cpu_gpu_speedup_by_qubits.png",
+      "reason": "source fields contain no numeric data: benchmark_n_qubits, compute_speedup_cpu_over_gpu_median",
+      "size_bytes": 49627,
+      "source_csv": "cpu_gpu_performance_summary.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "compute_speedup_cpu_over_gpu_median"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "Measured QuEST CPU/GPU compute ratio by qubits"
+    },
+    {
+      "caption": "TODO: energy metadata is unavailable or not a validated paired measurement.",
+      "claim_basis": "Requires measured energy for both paired CPU and GPU executions; unavailable energy is not inferred.",
+      "plot": "cpu_gpu_energy_efficiency_by_qubits.png",
+      "reason": "energy measurements are unavailable in the research evidence contract",
+      "size_bytes": 53381,
+      "source_csv": "per_case_route_stats.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "energy_joules",
+        "energy_measurement_status",
+        "simulation_compute_time_s_median"
+      ],
+      "status": "generated_todo_not_implemented",
+      "title": "Measured CPU/GPU energy efficiency by qubits"
+    },
+    {
+      "caption": "Measured Quimb unsliced and sliced tensor-network compute time by circuit size.",
+      "claim_basis": "Measured external Quimb tensor-network contraction compute time, with unsliced and sliced routes kept separate.",
+      "plot": "cpu_tn_runtime_by_qubits.png",
+      "reason": "source fields contain no numeric data: benchmark_n_qubits, route_id, simulation_compute_time_s_median",
+      "size_bytes": 55162,
+      "source_csv": "per_case_route_stats.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "route_id",
+        "simulation_compute_time_s_median"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "Measured Quimb unsliced/sliced compute time by qubits"
+    },
+    {
+      "caption": "Cross-algorithm/backend measured compute time on the same shallow circuits.",
+      "claim_basis": "Cross-algorithm/backend comparison of measured QuEST full-state and Quimb tensor-network compute time; not a same-plan speedup.",
+      "plot": "full_state_vs_tn_runtime_by_qubits.png",
+      "reason": "source fields contain no numeric data: benchmark_n_qubits, route_id, simulation_compute_time_s_median",
+      "size_bytes": 51191,
+      "source_csv": "per_case_route_stats.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "route_id",
+        "simulation_compute_time_s_median"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "Cross-algorithm/backend measured compute time"
+    },
+    {
+      "caption": "Measured Quimb planning and contraction compute time; phases are not combined.",
+      "claim_basis": "Measured Quimb planning and contraction timings are reported as separate software phases.",
+      "plot": "tn_planning_vs_contraction.png",
+      "reason": "no_quimb_timing_rows",
+      "size_bytes": 38070,
+      "source_csv": "per_case_route_stats.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "planning_time_s_median",
+        "simulation_compute_time_s_median"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "Measured Quimb planning versus contraction compute time"
+    },
+    {
+      "caption": "Planner-estimated contraction FLOPs by circuit family and size.",
+      "claim_basis": "Planner-reported contraction-path FLOP estimates, not measured processor instructions.",
+      "plot": "tn_path_flops_by_family_size.png",
+      "reason": "no_tn_estimated_flops_rows",
+      "size_bytes": 38793,
+      "source_csv": "per_case_route_stats.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "tn_estimated_flops",
+        "route_id"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "Planner-estimated contraction FLOPs"
+    },
+    {
+      "caption": "Planner-estimated largest intermediate tensor bytes by circuit family and size.",
+      "claim_basis": "Planner-reported largest intermediate tensor size, not measured resident memory.",
+      "plot": "tn_path_peak_memory_by_family_size.png",
+      "reason": "no_tn_max_intermediate_bytes_rows",
+      "size_bytes": 42391,
+      "source_csv": "per_case_route_stats.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "tn_max_intermediate_bytes",
+        "route_id"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "Planner-estimated largest intermediate tensor"
+    },
+    {
+      "caption": "Slicing FLOP ratio = sliced cotengra plan reported FLOPs / unsliced cotengra plan reported FLOPs.",
+      "claim_basis": "Quimb/cotengra reported sliced-to-unsliced plan FLOPs for the external sliced route; optimizer choices can change this ratio.",
+      "plot": "cpu_tn_slicing_flop_ratio.png",
+      "reason": "source fields contain no numeric data: benchmark_n_qubits, slicing_flop_ratio, slicing_flop_change_kind",
+      "size_bytes": 48493,
+      "source_csv": "per_case_route_stats.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "slicing_flop_ratio",
+        "slicing_flop_change_kind"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "Planner-estimated slicing arithmetic ratio"
+    },
+    {
+      "caption": "Matched Quimb slicing trade-off ratios: runtime, planner-estimated FLOPs, and largest intermediate size (sliced / unsliced).",
+      "claim_basis": "Matched external Quimb sliced/unsliced route statistics with compatible timing and output scopes; ratios are descriptive slicing trade-offs, not speedup claims.",
+      "plot": "cpu_tn_slicing_tradeoff.png",
+      "reason": "source fields contain no numeric data: benchmark_n_qubits, runtime_ratio_sliced_over_unsliced, slicing_flop_ratio, largest_intermediate_ratio_sliced_over_unsliced",
+      "size_bytes": 52782,
+      "source_csv": "cpu_tn_slicing_tradeoff.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "runtime_ratio_sliced_over_unsliced",
+        "slicing_flop_ratio",
+        "largest_intermediate_ratio_sliced_over_unsliced"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "Quimb slicing tradeoff"
+    },
+    {
+      "caption": "Supported versus unsupported strict generic-only UPMEM SDK simulator rows.",
+      "claim_basis": "Strict generic-only UPMEM SDK simulator support/unsupported records; no hardware claim.",
+      "plot": "upmem_supported_boundary.png",
+      "reason": "source data has zero variance across the available records",
+      "size_bytes": 45005,
+      "source_csv": "per_case_route_stats.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "status",
+        "unsupported_count",
+        "upmem_execution_mode"
+      ],
+      "status": "generated_todo_no_variance",
+      "title": "UPMEM SDK simulator support boundary"
+    },
+    {
+      "caption": "Strict generic UPMEM SDK simulator maximum absolute error where validation data exists.",
+      "claim_basis": "Validation error from strict generic UPMEM SDK simulator execution against its recorded reference.",
+      "plot": "upmem_accuracy_error.png",
+      "reason": "source fields contain no numeric data: benchmark_n_qubits, max_abs_error, validation_method, upmem_execution_mode",
+      "size_bytes": 50871,
+      "source_csv": "per_case_route_stats.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "max_abs_error",
+        "validation_method",
+        "upmem_execution_mode"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "UPMEM SDK simulator accuracy error"
+    },
+    {
+      "caption": "Same-route float32 versus int8 attribution for strict generic UPMEM SDK simulator execution.",
+      "claim_basis": "Same-route float32/int8 attribution from SDK simulator measurements; not hardware speedup.",
+      "plot": "upmem_quantization_attribution.png",
+      "reason": "source fields contain no numeric data: benchmark_n_qubits, route_runtime_ratio_none_over_quantized, transfer_ratio_none_over_quantized",
+      "size_bytes": 51640,
+      "source_csv": "upmem_quantization_attribution.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "route_runtime_ratio_none_over_quantized",
+        "transfer_ratio_none_over_quantized"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "UPMEM SDK simulator quantization attribution"
+    },
+    {
+      "caption": "Same-plan SDK simulator float32/int8 software-recorded host/control residual-time ratio.",
+      "claim_basis": "Same-route SDK simulator software-recorded host/control residual time; attribution is not a hardware speedup claim.",
+      "plot": "quantization_runtime_by_executor.png",
+      "reason": "source fields contain no numeric data: benchmark_n_qubits, route_runtime_ratio_none_over_quantized, unquantized_host_residual_time_s, quantized_host_residual_time_s",
+      "size_bytes": 64444,
+      "source_csv": "upmem_quantization_attribution.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "route_runtime_ratio_none_over_quantized",
+        "unquantized_host_residual_time_s",
+        "quantized_host_residual_time_s"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "UPMEM SDK simulator software-recorded host/control residual ratio"
+    },
+    {
+      "caption": "Absolute application-visible H2D/D2H bytes plus the same-plan float32/int8 total-byte ratio.",
+      "claim_basis": "Application-visible SDK transfer bytes from matched routes. They are not physical bus/DIMM traffic and exclude unobservable SDK overhead.",
+      "plot": "quantization_transfer_bytes.png",
+      "reason": "source fields contain no numeric data: benchmark_n_qubits, unquantized_h2d_bytes, quantized_h2d_bytes, unquantized_d2h_bytes, quantized_d2h_bytes, transfer_ratio_none_over_quantized",
+      "size_bytes": 71045,
+      "source_csv": "upmem_quantization_attribution.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "unquantized_h2d_bytes",
+        "quantized_h2d_bytes",
+        "unquantized_d2h_bytes",
+        "quantized_d2h_bytes",
+        "transfer_ratio_none_over_quantized"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "UPMEM SDK simulator software-recorded directional transfer bytes"
+    },
+    {
+      "caption": "UPMEM SDK simulator int8 maximum absolute error against the full-precision reference.",
+      "claim_basis": "Quantized SDK simulator error against the recorded full-precision reference.",
+      "plot": "quantization_error_by_family_size.png",
+      "reason": "source fields contain no numeric data: benchmark_n_qubits, quantized_max_abs_error_vs_full_precision, quantized_execution_max_abs_error",
+      "size_bytes": 54088,
+      "source_csv": "upmem_quantization_attribution.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "quantized_max_abs_error_vs_full_precision",
+        "quantized_execution_max_abs_error"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "UPMEM SDK simulator int8 error"
+    },
+    {
+      "caption": "Matched UPMEM SDK-simulator quantized probability error against the recorded validation reference.",
+      "claim_basis": "Probability-error fields from matched quantized UPMEM SDK-simulator validation records; no amplitude error is relabeled as probability error.",
+      "plot": "quantization_probability_error_by_family_size.png",
+      "reason": "source fields contain no numeric data: benchmark_n_qubits, quantized_probability_max_abs_error, quantized_probability_l1_error",
+      "size_bytes": 50520,
+      "source_csv": "upmem_quantization_attribution.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "quantized_probability_max_abs_error",
+        "quantized_probability_l1_error"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "UPMEM SDK simulator probability error"
+    },
+    {
+      "caption": "Same-plan CPU and UPMEM SDK simulator execution timing.",
+      "claim_basis": "CPU replay and UPMEM SDK simulator rows share an identical contraction-plan hash; timing is not hardware speedup.",
+      "plot": "same_plan_cpu_upmem_runtime.png",
+      "reason": "source fields contain no numeric data: benchmark_n_qubits, contraction_plan_hash, cpu_time_s, upmem_simulator_time_s",
+      "size_bytes": 60721,
+      "source_csv": "same_plan_execution.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "contraction_plan_hash",
+        "cpu_time_s",
+        "upmem_simulator_time_s"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "Same-plan CPU versus UPMEM SDK simulator compute time"
+    },
+    {
+      "caption": "Planner-estimated FLOPs versus normalized modeled PIM objective for feasible candidates.",
+      "claim_basis": "Modeled generic-single-DPU planning objective; no executor timing or hardware speedup claim.",
+      "plot": "planner_flops_vs_upmem_pressure.png",
+      "reason": null,
+      "size_bytes": 127701,
+      "source_csv": "planner_comparison.csv",
+      "source_fields": [
+        "planner_id",
+        "pim_estimated_flops",
+        "pim_objective_score",
+        "pim_feasible"
+      ],
+      "status": "generated_valid",
+      "title": "Planner-estimated FLOPs versus normalized modeled PIM objective"
+    },
+    {
+      "caption": "Modeled PIM objective components for feasible planner candidates.",
+      "claim_basis": "Normalized modeled PIM planning components; scenario weights are not measured hardware constants.",
+      "plot": "planner_component_scores.png",
+      "reason": null,
+      "size_bytes": 171369,
+      "source_csv": "planner_comparison.csv",
+      "source_fields": [
+        "planner_id",
+        "pim_estimated_flops",
+        "pim_estimated_host_dpu_bytes",
+        "pim_estimated_mram_to_wram_bytes",
+        "pim_estimated_tile_count"
+      ],
+      "status": "generated_valid",
+      "title": "Modeled PIM planner objective components"
+    },
+    {
+      "caption": "Selected feasible planner candidate per modeled PIM objective profile.",
+      "claim_basis": "Selection is by the recorded modeled PIM objective within one profile, not execution performance.",
+      "plot": "planner_selection.png",
+      "reason": null,
+      "size_bytes": 476684,
+      "source_csv": "planner_comparison.csv",
+      "source_fields": [
+        "planner_id",
+        "pim_objective_rank",
+        "pim_selected"
+      ],
+      "status": "generated_valid",
+      "title": "Modeled PIM planner selection"
+    },
+    {
+      "caption": "Feasible planner candidates colored by modeled Pareto status.",
+      "claim_basis": "Pareto status compares modeled planner components only; it is not a runtime ranking.",
+      "plot": "planner_pareto_frontier.png",
+      "reason": null,
+      "size_bytes": 54039,
+      "source_csv": "planner_comparison.csv",
+      "source_fields": [
+        "planner_id",
+        "pim_estimated_flops",
+        "pim_peak_intermediate_bytes",
+        "pim_pareto_dominated"
+      ],
+      "status": "generated_valid",
+      "title": "Planner-estimated Pareto frontier"
+    },
+    {
+      "caption": "Selected planner candidates across modeled PIM weight profiles.",
+      "claim_basis": "Scenario weight profiles are literature-informed sensitivity cases, not calibrated hardware constants.",
+      "plot": "planner_sensitivity.png",
+      "reason": null,
+      "size_bytes": 90047,
+      "source_csv": "planner_comparison.csv",
+      "source_fields": [
+        "planner_id",
+        "pim_weight_profile",
+        "pim_objective_score",
+        "pim_selected"
+      ],
+      "status": "generated_valid",
+      "title": "Modeled PIM planner sensitivity"
+    },
+    {
+      "caption": "Versioned planner component diagnostics where v2 records provide numeric execution decomposition fields.",
+      "claim_basis": "Versioned modeled planner component diagnostics; these are structural cost-model values, not measured hardware counters.",
+      "plot": "planner_component_diagnostics.png",
+      "reason": null,
+      "size_bytes": 482914,
+      "source_csv": "planner_component_diagnostics.csv",
+      "source_fields": [
+        "planner_id",
+        "pim_objective_version",
+        "pim_numeric_component_invocations",
+        "pim_numeric_recombination_flops",
+        "pim_mram_payload_pressure_ratio",
+        "pim_wram_known_pressure_ratio"
+      ],
+      "status": "generated_valid",
+      "title": "Modeled PIM planner component diagnostics"
+    },
+    {
+      "caption": "Diagnostic internal TaskGraph frontier metadata, not serious baseline performance.",
+      "claim_basis": "Executed internal TaskGraph frontier metadata; diagnostic only and not a parallel speedup claim.",
+      "plot": "internal_parallelism_metadata_by_qubits.png",
+      "reason": "source fields contain no numeric data: benchmark_n_qubits, parallelism_mode, parallelism_evidence_type, frontier_worker_count, frontier_wave_count, max_frontier_width, frontier_executed_parallel_task_count",
+      "size_bytes": 60181,
+      "source_csv": "per_case_route_stats.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "parallelism_mode",
+        "parallelism_evidence_type",
+        "frontier_worker_count",
+        "frontier_wave_count",
+        "max_frontier_width",
+        "frontier_executed_parallel_task_count"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "Internal diagnostic frontier metadata"
+    }
+  ],
+  "schema_version": "research_benchmark_pack_v1",
+  "status": "completed",
+  "todo_figures": [
+    {
+      "caption": "Measured QuEST CPU and verified QuEST GPU compute time by circuit size.",
+      "claim_basis": "Verified QuEST CPU/GPU performance-tier compute measurements.",
+      "plot": "cpu_gpu_runtime_by_qubits.png",
+      "reason": "source fields contain no numeric data: benchmark_n_qubits, cpu_simulation_compute_time_s_median, gpu_simulation_compute_time_s_median",
+      "size_bytes": 56813,
+      "source_csv": "cpu_gpu_performance_summary.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "cpu_simulation_compute_time_s_median",
+        "gpu_simulation_compute_time_s_median"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "Measured QuEST CPU/GPU compute time by qubits"
+    },
+    {
+      "caption": "Measured CPU/GPU compute ratio; values above 1 mean GPU compute was faster.",
+      "claim_basis": "Paired verified QuEST compute-time measurements; ratio is CPU divided by GPU.",
+      "plot": "cpu_gpu_speedup_by_qubits.png",
+      "reason": "source fields contain no numeric data: benchmark_n_qubits, compute_speedup_cpu_over_gpu_median",
+      "size_bytes": 49627,
+      "source_csv": "cpu_gpu_performance_summary.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "compute_speedup_cpu_over_gpu_median"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "Measured QuEST CPU/GPU compute ratio by qubits"
+    },
+    {
+      "caption": "TODO: energy metadata is unavailable or not a validated paired measurement.",
+      "claim_basis": "Requires measured energy for both paired CPU and GPU executions; unavailable energy is not inferred.",
+      "plot": "cpu_gpu_energy_efficiency_by_qubits.png",
+      "reason": "energy measurements are unavailable in the research evidence contract",
+      "size_bytes": 53381,
+      "source_csv": "per_case_route_stats.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "energy_joules",
+        "energy_measurement_status",
+        "simulation_compute_time_s_median"
+      ],
+      "status": "generated_todo_not_implemented",
+      "title": "Measured CPU/GPU energy efficiency by qubits"
+    },
+    {
+      "caption": "Measured Quimb unsliced and sliced tensor-network compute time by circuit size.",
+      "claim_basis": "Measured external Quimb tensor-network contraction compute time, with unsliced and sliced routes kept separate.",
+      "plot": "cpu_tn_runtime_by_qubits.png",
+      "reason": "source fields contain no numeric data: benchmark_n_qubits, route_id, simulation_compute_time_s_median",
+      "size_bytes": 55162,
+      "source_csv": "per_case_route_stats.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "route_id",
+        "simulation_compute_time_s_median"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "Measured Quimb unsliced/sliced compute time by qubits"
+    },
+    {
+      "caption": "Cross-algorithm/backend measured compute time on the same shallow circuits.",
+      "claim_basis": "Cross-algorithm/backend comparison of measured QuEST full-state and Quimb tensor-network compute time; not a same-plan speedup.",
+      "plot": "full_state_vs_tn_runtime_by_qubits.png",
+      "reason": "source fields contain no numeric data: benchmark_n_qubits, route_id, simulation_compute_time_s_median",
+      "size_bytes": 51191,
+      "source_csv": "per_case_route_stats.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "route_id",
+        "simulation_compute_time_s_median"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "Cross-algorithm/backend measured compute time"
+    },
+    {
+      "caption": "Measured Quimb planning and contraction compute time; phases are not combined.",
+      "claim_basis": "Measured Quimb planning and contraction timings are reported as separate software phases.",
+      "plot": "tn_planning_vs_contraction.png",
+      "reason": "no_quimb_timing_rows",
+      "size_bytes": 38070,
+      "source_csv": "per_case_route_stats.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "planning_time_s_median",
+        "simulation_compute_time_s_median"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "Measured Quimb planning versus contraction compute time"
+    },
+    {
+      "caption": "Planner-estimated contraction FLOPs by circuit family and size.",
+      "claim_basis": "Planner-reported contraction-path FLOP estimates, not measured processor instructions.",
+      "plot": "tn_path_flops_by_family_size.png",
+      "reason": "no_tn_estimated_flops_rows",
+      "size_bytes": 38793,
+      "source_csv": "per_case_route_stats.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "tn_estimated_flops",
+        "route_id"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "Planner-estimated contraction FLOPs"
+    },
+    {
+      "caption": "Planner-estimated largest intermediate tensor bytes by circuit family and size.",
+      "claim_basis": "Planner-reported largest intermediate tensor size, not measured resident memory.",
+      "plot": "tn_path_peak_memory_by_family_size.png",
+      "reason": "no_tn_max_intermediate_bytes_rows",
+      "size_bytes": 42391,
+      "source_csv": "per_case_route_stats.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "tn_max_intermediate_bytes",
+        "route_id"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "Planner-estimated largest intermediate tensor"
+    },
+    {
+      "caption": "Slicing FLOP ratio = sliced cotengra plan reported FLOPs / unsliced cotengra plan reported FLOPs.",
+      "claim_basis": "Quimb/cotengra reported sliced-to-unsliced plan FLOPs for the external sliced route; optimizer choices can change this ratio.",
+      "plot": "cpu_tn_slicing_flop_ratio.png",
+      "reason": "source fields contain no numeric data: benchmark_n_qubits, slicing_flop_ratio, slicing_flop_change_kind",
+      "size_bytes": 48493,
+      "source_csv": "per_case_route_stats.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "slicing_flop_ratio",
+        "slicing_flop_change_kind"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "Planner-estimated slicing arithmetic ratio"
+    },
+    {
+      "caption": "Matched Quimb slicing trade-off ratios: runtime, planner-estimated FLOPs, and largest intermediate size (sliced / unsliced).",
+      "claim_basis": "Matched external Quimb sliced/unsliced route statistics with compatible timing and output scopes; ratios are descriptive slicing trade-offs, not speedup claims.",
+      "plot": "cpu_tn_slicing_tradeoff.png",
+      "reason": "source fields contain no numeric data: benchmark_n_qubits, runtime_ratio_sliced_over_unsliced, slicing_flop_ratio, largest_intermediate_ratio_sliced_over_unsliced",
+      "size_bytes": 52782,
+      "source_csv": "cpu_tn_slicing_tradeoff.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "runtime_ratio_sliced_over_unsliced",
+        "slicing_flop_ratio",
+        "largest_intermediate_ratio_sliced_over_unsliced"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "Quimb slicing tradeoff"
+    },
+    {
+      "caption": "Supported versus unsupported strict generic-only UPMEM SDK simulator rows.",
+      "claim_basis": "Strict generic-only UPMEM SDK simulator support/unsupported records; no hardware claim.",
+      "plot": "upmem_supported_boundary.png",
+      "reason": "source data has zero variance across the available records",
+      "size_bytes": 45005,
+      "source_csv": "per_case_route_stats.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "status",
+        "unsupported_count",
+        "upmem_execution_mode"
+      ],
+      "status": "generated_todo_no_variance",
+      "title": "UPMEM SDK simulator support boundary"
+    },
+    {
+      "caption": "Strict generic UPMEM SDK simulator maximum absolute error where validation data exists.",
+      "claim_basis": "Validation error from strict generic UPMEM SDK simulator execution against its recorded reference.",
+      "plot": "upmem_accuracy_error.png",
+      "reason": "source fields contain no numeric data: benchmark_n_qubits, max_abs_error, validation_method, upmem_execution_mode",
+      "size_bytes": 50871,
+      "source_csv": "per_case_route_stats.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "max_abs_error",
+        "validation_method",
+        "upmem_execution_mode"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "UPMEM SDK simulator accuracy error"
+    },
+    {
+      "caption": "Same-route float32 versus int8 attribution for strict generic UPMEM SDK simulator execution.",
+      "claim_basis": "Same-route float32/int8 attribution from SDK simulator measurements; not hardware speedup.",
+      "plot": "upmem_quantization_attribution.png",
+      "reason": "source fields contain no numeric data: benchmark_n_qubits, route_runtime_ratio_none_over_quantized, transfer_ratio_none_over_quantized",
+      "size_bytes": 51640,
+      "source_csv": "upmem_quantization_attribution.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "route_runtime_ratio_none_over_quantized",
+        "transfer_ratio_none_over_quantized"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "UPMEM SDK simulator quantization attribution"
+    },
+    {
+      "caption": "Same-plan SDK simulator float32/int8 software-recorded host/control residual-time ratio.",
+      "claim_basis": "Same-route SDK simulator software-recorded host/control residual time; attribution is not a hardware speedup claim.",
+      "plot": "quantization_runtime_by_executor.png",
+      "reason": "source fields contain no numeric data: benchmark_n_qubits, route_runtime_ratio_none_over_quantized, unquantized_host_residual_time_s, quantized_host_residual_time_s",
+      "size_bytes": 64444,
+      "source_csv": "upmem_quantization_attribution.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "route_runtime_ratio_none_over_quantized",
+        "unquantized_host_residual_time_s",
+        "quantized_host_residual_time_s"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "UPMEM SDK simulator software-recorded host/control residual ratio"
+    },
+    {
+      "caption": "Absolute application-visible H2D/D2H bytes plus the same-plan float32/int8 total-byte ratio.",
+      "claim_basis": "Application-visible SDK transfer bytes from matched routes. They are not physical bus/DIMM traffic and exclude unobservable SDK overhead.",
+      "plot": "quantization_transfer_bytes.png",
+      "reason": "source fields contain no numeric data: benchmark_n_qubits, unquantized_h2d_bytes, quantized_h2d_bytes, unquantized_d2h_bytes, quantized_d2h_bytes, transfer_ratio_none_over_quantized",
+      "size_bytes": 71045,
+      "source_csv": "upmem_quantization_attribution.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "unquantized_h2d_bytes",
+        "quantized_h2d_bytes",
+        "unquantized_d2h_bytes",
+        "quantized_d2h_bytes",
+        "transfer_ratio_none_over_quantized"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "UPMEM SDK simulator software-recorded directional transfer bytes"
+    },
+    {
+      "caption": "UPMEM SDK simulator int8 maximum absolute error against the full-precision reference.",
+      "claim_basis": "Quantized SDK simulator error against the recorded full-precision reference.",
+      "plot": "quantization_error_by_family_size.png",
+      "reason": "source fields contain no numeric data: benchmark_n_qubits, quantized_max_abs_error_vs_full_precision, quantized_execution_max_abs_error",
+      "size_bytes": 54088,
+      "source_csv": "upmem_quantization_attribution.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "quantized_max_abs_error_vs_full_precision",
+        "quantized_execution_max_abs_error"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "UPMEM SDK simulator int8 error"
+    },
+    {
+      "caption": "Matched UPMEM SDK-simulator quantized probability error against the recorded validation reference.",
+      "claim_basis": "Probability-error fields from matched quantized UPMEM SDK-simulator validation records; no amplitude error is relabeled as probability error.",
+      "plot": "quantization_probability_error_by_family_size.png",
+      "reason": "source fields contain no numeric data: benchmark_n_qubits, quantized_probability_max_abs_error, quantized_probability_l1_error",
+      "size_bytes": 50520,
+      "source_csv": "upmem_quantization_attribution.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "quantized_probability_max_abs_error",
+        "quantized_probability_l1_error"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "UPMEM SDK simulator probability error"
+    },
+    {
+      "caption": "Same-plan CPU and UPMEM SDK simulator execution timing.",
+      "claim_basis": "CPU replay and UPMEM SDK simulator rows share an identical contraction-plan hash; timing is not hardware speedup.",
+      "plot": "same_plan_cpu_upmem_runtime.png",
+      "reason": "source fields contain no numeric data: benchmark_n_qubits, contraction_plan_hash, cpu_time_s, upmem_simulator_time_s",
+      "size_bytes": 60721,
+      "source_csv": "same_plan_execution.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "contraction_plan_hash",
+        "cpu_time_s",
+        "upmem_simulator_time_s"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "Same-plan CPU versus UPMEM SDK simulator compute time"
+    },
+    {
+      "caption": "Diagnostic internal TaskGraph frontier metadata, not serious baseline performance.",
+      "claim_basis": "Executed internal TaskGraph frontier metadata; diagnostic only and not a parallel speedup claim.",
+      "plot": "internal_parallelism_metadata_by_qubits.png",
+      "reason": "source fields contain no numeric data: benchmark_n_qubits, parallelism_mode, parallelism_evidence_type, frontier_worker_count, frontier_wave_count, max_frontier_width, frontier_executed_parallel_task_count",
+      "size_bytes": 60181,
+      "source_csv": "per_case_route_stats.csv",
+      "source_fields": [
+        "benchmark_n_qubits",
+        "parallelism_mode",
+        "parallelism_evidence_type",
+        "frontier_worker_count",
+        "frontier_wave_count",
+        "max_frontier_width",
+        "frontier_executed_parallel_task_count"
+      ],
+      "status": "generated_todo_missing_data",
+      "title": "Internal diagnostic frontier metadata"
+    }
+  ]
+}

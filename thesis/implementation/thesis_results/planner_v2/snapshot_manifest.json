@@ -1,0 +1,128 @@
+{
+  "benchmark_source_commit": "a453331d7bc240f64c3b6391f4ea2ac916de798c",
+  "benchmark_source_worktree_dirty": false,
+  "created_at": "2026-07-13T16:39:27.682906+00:00",
+  "dirty_tree": false,
+  "dirty_worktree": false,
+  "evidence_level": "normalized_report_regenerable",
+  "git_commit": "a453331d7bc240f64c3b6391f4ea2ac916de798c",
+  "planner_semantics": {
+    "contexts": [
+      {
+        "objective_version": "upmem_path_cost_v2",
+        "record_count": 150,
+        "score_model": "upmem_pressure_v1"
+      }
+    ],
+    "execution_policies": [
+      "generic_single_dpu_split_complex_v2"
+    ],
+    "issues": [],
+    "legacy_score_models": [
+      "upmem_pressure_v1"
+    ],
+    "normalizations": [
+      "fixed_log1p_generic_budgets_v2"
+    ],
+    "objective_versions": [
+      "upmem_path_cost_v2"
+    ],
+    "planner_config_hashes": [
+      "2197acf1524706bd82747388500c1b3a4fe50aefeb9d40cdf554575733b0b275",
+      "29abf6127107d130856c0eaa87fbe850bf32d0d563501d9dac818edbc4b47437",
+      "40c5f2dba78149fbd966780eb0ed1346b1fe5e783f8d424be5a584f437038a34",
+      "553e7e0a7a591e1b4a6de756bcf637b0e4cead923e8bbd9834300fa1e2db3026",
+      "638f09e3766d56f7f57c13aabd54a5504ec08dc6e213c8124ed16f732a36dada",
+      "732e5d6ce69eb7f899d95e1d4a3ba1c390eb63c7f748cdd8667ef363f7fa7de4",
+      "b8051e9addae8ef03cd83f704a6c0b44a271351853044aaaeb6bc834b43172be",
+      "e4fe2eea8b9aaa935b91fc73f8e7b5a4d59746c545686b2803cb83e99dd31633",
+      "e9852bf700905b31e3be67ba9bb323fddcf0304d58266d028aec042719273fd7",
+      "fde812588671a3d9df7989613d74a726977d15c7159aab8025fab190502208a8"
+    ],
+    "planner_record_count": 150,
+    "score_models": [
+      "upmem_pressure_v1"
+    ],
+    "semantic_versions": [
+      "upmem_path_cost_v2"
+    ],
+    "weight_profiles": [
+      "balanced_literature_informed",
+      "compute_oriented",
+      "host_transfer_oriented",
+      "local_movement_oriented",
+      "synchronization_constrained",
+      "wram_constrained"
+    ]
+  },
+  "plots_dir": "plots",
+  "provenance_aliases": {
+    "dirty_tree": "alias of benchmark_source_worktree_dirty",
+    "dirty_worktree": "alias of benchmark_source_worktree_dirty",
+    "git_commit": "alias of benchmark_source_commit"
+  },
+  "provenance_scope": "thesis/implementation",
+  "provenance_stages": {
+    "benchmark_source": {
+      "commit": "a453331d7bc240f64c3b6391f4ea2ac916de798c",
+      "repository_worktree_dirty": true,
+      "scope": "thesis/implementation",
+      "worktree_dirty": false
+    },
+    "report_generation": {
+      "commit": "a453331d7bc240f64c3b6391f4ea2ac916de798c",
+      "repository_worktree_dirty": true,
+      "scope": "thesis/implementation",
+      "worktree_dirty": false
+    },
+    "snapshot_promotion": {
+      "commit": "a453331d7bc240f64c3b6391f4ea2ac916de798c",
+      "repository_worktree_dirty": true,
+      "scope": "thesis/implementation",
+      "worktree_dirty": false
+    }
+  },
+  "raw_tensor_artifacts_included": false,
+  "report_entrypoint": "README.md",
+  "report_generation_commit": "a453331d7bc240f64c3b6391f4ea2ac916de798c",
+  "report_generation_worktree_dirty": false,
+  "repository_worktree_dirty": true,
+  "schema_version": "thesis_result_snapshot_v1",
+  "selected_evidence": [
+    {
+      "benchmark_source_commit": "a453331d7bc240f64c3b6391f4ea2ac916de798c",
+      "benchmark_source_worktree_dirty": false,
+      "dirty_tree": false,
+      "dirty_worktree": false,
+      "git_commit": "a453331d7bc240f64c3b6391f4ea2ac916de798c",
+      "provenance_scope": "thesis/implementation",
+      "record_count": 60,
+      "repository_worktree_dirty": true,
+      "role": "thesis_planner_semantic_v2_planner_compare",
+      "run_id": "2026-07-13_18-38-58",
+      "snapshot_path": "evidence/thesis_planner_semantic_v2_planner_compare",
+      "source_run": "runs/evidence/thesis_planner_semantic_v2_planner_compare/planner_comparison/2026-07-13_18-38-58",
+      "suite_id": "thesis_planner_semantic_v2_planner_compare"
+    },
+    {
+      "benchmark_source_commit": "a453331d7bc240f64c3b6391f4ea2ac916de798c",
+      "benchmark_source_worktree_dirty": false,
+      "dirty_tree": false,
+      "dirty_worktree": false,
+      "git_commit": "a453331d7bc240f64c3b6391f4ea2ac916de798c",
+      "provenance_scope": "thesis/implementation",
+      "record_count": 90,
+      "repository_worktree_dirty": true,
+      "role": "thesis_planner_sensitivity_v2_planner_compare",
+      "run_id": "2026-07-13_18-39-02",
+      "snapshot_path": "evidence/thesis_planner_sensitivity_v2_planner_compare",
+      "source_run": "runs/evidence/thesis_planner_sensitivity_v2_planner_compare/planner_comparison/2026-07-13_18-39-02",
+      "suite_id": "thesis_planner_sensitivity_v2_planner_compare"
+    }
+  ],
+  "snapshot_id": "current",
+  "snapshot_promotion_commit": "a453331d7bc240f64c3b6391f4ea2ac916de798c",
+  "snapshot_promotion_worktree_dirty": false,
+  "source_pack": "runs/comparisons/research_pack/planner_v2_2026-07-13_18-39-02",
+  "tables_dir": "tables"
+}

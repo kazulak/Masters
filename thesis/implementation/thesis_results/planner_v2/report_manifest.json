@@ -1,0 +1,365 @@
+{
+  "artifact_kind": "research_benchmark_pack",
+  "benchmark_source_commit": "a453331d7bc240f64c3b6391f4ea2ac916de798c",
+  "benchmark_source_commits": [
+    "a453331d7bc240f64c3b6391f4ea2ac916de798c"
+  ],
+  "benchmark_source_worktree_dirty": false,
+  "command_line": "make thesis-report",
+  "commands": [
+    {
+      "command": "report existing evidence",
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "inputs=2"
+    }
+  ],
+  "cpu": {
+    "logical_count": 12,
+    "model": "AMD Ryzen 5 5600 6-Core Processor"
+  },
+  "created_at": "2026-07-13T18:39:21",
+  "dirty_tree": false,
+  "dirty_worktree": false,
+  "environment": {
+    "BENCH_CPU_THREADS": null,
+    "CUDA_VISIBLE_DEVICES": null,
+    "HIP_VISIBLE_DEVICES": null,
+    "MKL_NUM_THREADS": null,
+    "NUMEXPR_NUM_THREADS": null,
+    "OMP_DYNAMIC": null,
+    "OMP_NUM_THREADS": null,
+    "OMP_PLACES": null,
+    "OMP_PROC_BIND": null,
+    "OPENBLAS_NUM_THREADS": null
+  },
+  "evidence_inputs": [
+    "evidence/thesis_planner_semantic_v2_planner_compare",
+    "evidence/thesis_planner_sensitivity_v2_planner_compare"
+  ],
+  "git_commit": "a453331d7bc240f64c3b6391f4ea2ac916de798c",
+  "gpu_verification": {
+    "accelerator_kind": "amd_gpu",
+    "artifact_path": "/home/tom/repos/Masters/thesis/implementation/build/gpu_verification/quest_gpu_full_state_exact.json",
+    "attempted_steps": [
+      {
+        "status": "passed",
+        "step": "preflight"
+      },
+      {
+        "command": [
+          "make",
+          "clean-hip-smoke",
+          "hip-smoke",
+          "GPU_BACKEND=hip",
+          "HIP_ARCHITECTURES=gfx1032"
+        ],
+        "status": "passed",
+        "step": "build_hip_smoke"
+      },
+      {
+        "command": [
+          "/home/tom/repos/Masters/thesis/implementation/build/native/quest_gpu/hip/bin/hip_smoke"
+        ],
+        "status": "passed",
+        "step": "minimal_hip_smoke_run"
+      },
+      {
+        "command": [
+          "make",
+          "clean-all",
+          "all",
+          "GPU_BACKEND=hip",
+          "HIP_ARCHITECTURES=gfx1032"
+        ],
+        "status": "passed",
+        "step": "build_quest_gpu_runner"
+      },
+      {
+        "command": [
+          "/home/tom/repos/Masters/thesis/implementation/build/native/quest_gpu/hip/bin/quest_gpu_runner",
+          "--algo",
+          "QRNG",
+          "--qubits",
+          "2",
+          "--json",
+          "--dump-state-json",
+          "/home/tom/repos/Masters/thesis/implementation/build/gpu_verification/quest_gpu_minimal_state_dump.json",
+          "--max-output-amplitudes",
+          "4"
+        ],
+        "status": "passed",
+        "step": "minimal_quest_gpu_run"
+      }
+    ],
+    "blocker_reason": null,
+    "build_result": {
+      "command": [
+        "make",
+        "clean-all",
+        "all",
+        "GPU_BACKEND=hip",
+        "HIP_ARCHITECTURES=gfx1032"
+      ],
+      "cwd": "/home/tom/repos/Masters/thesis/implementation/native/quest_gpu",
+      "returncode": 0,
+      "stderr": "In file included from /home/tom/repos/Masters/thesis/implementation/external/QuEST/quest/src/gpu/gpu_subroutines.cpp:58:\n/home/tom/repos/Masters/thesis/implementation/external/QuEST/quest/src/gpu/gpu_thrust.cuh:178:44: warning: 'unary_function<HIP_vector_type<double, 2>, HIP_vector_type<double, 2>>' is deprecated [-Wdeprecated-declarations]\n  178 | struct functor_getAmpConj : public thrust::unary_function<cu_qcomp,cu_qcomp> {\n      |                                            ^\n/opt/rocm-7.2.4/lib/llvm/bin/../../../include/thrust/functional.h:166:8: note: 'unary_function<HIP_vector_type<double, 2>, HIP_vector_type<double, 2>>' has been explicitly marked deprecated here\n  166 | struct THRUST_DEPRECATED unary_function\n      |        ^\n/opt/rocm-7.2.4/lib/llvm/bin/../../../include/thrust/detail/config/deprecated.h:39:44: note: expanded from macro 'THRUST_DEPRECATED'\n   39 | #  define THRUST_DEPRECATED              [[deprecated]]\n      |                                            ^\nIn file included from /home/tom/repos/Masters/thesis/implementation/external/QuEST/quest/src/gpu/gpu_subroutines.cpp:58:\n/home/tom/repos/Masters/thesis/implementation/external/QuEST/quest/src/gpu/gpu_thrust.cuh:185:44: warning: 'unary_function<HIP_vector_type<double, 2>, double>' is deprecated [-Wdeprecated-declarations]\n  185 | struct functor_getAmpNorm : public thrust::unary_function<cu_qcomp,qreal> {\n      |                                            ^\n/opt/rocm-7.2.4/lib/llvm/bin/../../../include/thrust/functional.h:166:8: note: 'unary_function<HIP_vector_type<double, 2>, double>' has been explicitly marked deprecated here\n  166 | struct THRUST_DEPRECATED unary_function\n      |        ^\n/opt/rocm-7.2.4/lib/llvm/bin/../../../include/thrust/detail/config/deprecated.h:39:44: note: expanded from macro 'THRUST_DEPRECATED'\n   39 | #  define THRUST_DEPRECATED              [[deprecated]]\n      |                                            ^\nIn file included from /home/tom/repos/Masters/thesis/implementation/external/QuEST/quest/src/gpu/gpu_subroutines.cpp:58:\n/home/tom/repos/Masters/thesis/implementation/external/QuEST/quest/src/gpu/gpu_thrust.cuh:192:44: warning: 'unary_function<HIP_vector_type<double, 2>, double>' is deprecated [-Wdeprecated-declarations]\n  192 | struct functor_getAmpReal : public thrust::unary_function<cu_qcomp,qreal> {\n      |                                            ^\n/opt/rocm-7.2.4/lib/llvm/bin/../../../include/thrust/functional.h:166:8: note: 'unary_function<HIP_vector_type<double, 2>, double>' has been explicitly marked deprecated here\n  166 | struct THRUST_DEPRECATED unary_function\n      |        ^\n/opt/rocm-7.2.4/lib/llvm/bin/../../../include/thrust/detail/config/deprecated.h:39:44: note: expanded from macro 'THRUST_DEPRECATED'\n   39 | #  define THRUST_DEPRECATED              [[deprecated]]\n      |                                            ^\nIn file included from /home/tom/repos/Masters/thesis/implementation/external/QuEST/quest/src/gpu/gpu_subroutines.cpp:58:\n/home/tom/repos/Masters/thesis/implementation/external/QuEST/quest/src/gpu/gpu_thrust.cuh:200:48: warning: 'binary_function<HIP_vector_type<double, 2>, HIP_vector_type<double, 2>, HIP_vector_type<double, 2>>' is deprecated [-Wdeprecated-declarations]\n  200 | struct functor_getAmpConjProd : public thrust::binary_function<cu_qcomp,cu_qcomp,cu_qcomp> {\n      |                                                ^\n/opt/rocm-7.2.4/lib/llvm/bin/../../../include/thrust/functional.h:207:8: note: 'binary_function<HIP_vector_type<double, 2>, HIP_vector_type<double, 2>, HIP_vector_type<double, 2>>' has been explicitly marked deprecated here\n  207 | struct THRUST_DEPRECATED binary_function\n      |        ^\n/opt/rocm-7.2.4/lib/llvm/bin/../../../include/thrust/detail/config/deprecated.h:39:44: note: expanded from macro 'THRUST_DEPRECATED'\n   39 | #  define THRUST_DEPRECATED              [[deprecated]]\n      |                                            ^\nIn file included from /home/tom/repos...<truncated>",
+      "stdout": "make[1]: Entering directory '/home/tom/repos/Masters/thesis/implementation/native/quest_gpu'\nrm -rf /home/tom/repos/Masters/thesis/implementation/build/native/quest_gpu/hip/build\nrm -rf /home/tom/repos/Masters/thesis/implementation/build/native/quest_gpu/hip/bin\nrm -rf /home/tom/repos/Masters/thesis/implementation/build/external/QuEST-hip\ntest -n \"/opt/rocm-7.2.4\"\ntest -n \"/usr/bin/hipcc\"\ntest -n \"/opt/rocm-7.2.4/lib/cmake/hip/hip-config.cmake\"\ntest -n \"/opt/rocm-7.2.4/lib/llvm/bin/clang++\"\ncmake -S /home/tom/repos/Masters/thesis/implementation/external/QuEST -B /home/tom/repos/Masters/thesis/implementation/build/external/QuEST-hip -DCMAKE_BUILD_TYPE=Release -DENABLE_HIP=ON -DCMAKE_PREFIX_PATH=/opt/rocm-7.2.4 -DHIP_DIR=/opt/rocm-7.2.4/lib/cmake/hip -DCMAKE_HIP_COMPILER=/opt/rocm-7.2.4/lib/llvm/bin/clang++ -DCMAKE_HIP_ARCHITECTURES=gfx1032\n-- The CXX compiler identification is GNU 11.4.0\n-- The C compiler identification is GNU 11.4.0\n-- Detecting CXX compiler ABI info\n-- Detecting CXX compiler ABI info - done\n-- Check for working CXX compiler: /usr/bin/c++ - skipped\n-- Detecting CXX compile features\n-- Detecting CXX compile features - done\n-- Detecting C compiler ABI info\n-- Detecting C compiler ABI info - done\n-- Check for working C compiler: /usr/bin/cc - skipped\n-- Detecting C compile features\n-- Detecting C compile features - done\n-- Shared library is turned ON. Set BUILD_SHARED_LIBS to modify.\n-- Library will be named libQuEST. Set LIB_NAME to modify.\n-- Verbose library naming is turned OFF. Set VERBOSE_LIB_NAME to modify.\n-- Precision set to 2. Set FLOAT_PRECISION to modify.\n-- Examples are turned OFF. Set BUILD_EXAMPLES to modify.\n-- Testing is turned OFF. Set ENABLE_TESTING to modify.\n-- Multithreading is turned ON. Set ENABLE_MULTITHREADING to modify.\n-- Distribution is turned OFF. Set ENABLE_DISTRIBUTION to modify.\n-- NVIDIA GPU acceleration is turned OFF. Set ENABLE_CUDA to modify.\n-- CuQuantum support is turned OFF. Set ENABLE_CUQUANTUM to modify.\n-- AMD GPU acceleration is turned ON. Set ENABLE_HIP to modify.\n-- Deprecated API support is turned OFF. Set ENABLE_DEPRECATED_API to modify.\n-- Disabling of deprecated API warnings is turned OFF. Set DISABLE_DEPRECATION_WARNINGS to modify.\n-- Found PkgConfig: /usr/bin/pkg-config (found version \"0.29.2\") \n-- Checking for one of the modules 'numa'\n-- NUMA awareness is enabled.\n-- The HIP compiler identification is Clang 22.0.0\n-- Detecting HIP compiler ABI info\n-- Detecting HIP compiler ABI info - done\n-- Check for working HIP compiler: /opt/rocm-7.2.4/lib/llvm/bin/clang++ - skipped\n-- Detecting HIP compile features\n-- Detecting HIP compile features - done\n-- Looking for pthread.h\n-- Looking for pthread.h - found\n-- Performing Test CMAKE_HAVE_LIBC_PTHREAD\n-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success\n-- Found Threads: TRUE  \n-- Found HIP: 7.2.53211\n-- Configuring done\n-- Generating done\n-- Build files have been written to: /home/tom/repos/Masters/thesis/implementation/build/external/QuEST-hip\ncmake --build /home/tom/repos/Masters/thesis/implementation/build/external/QuEST-hip -j2\ngmake[2]: Entering directory '/home/tom/repos/Masters/thesis/implementation/build/external/QuEST-hip'\ngmake[3]: Entering directory '/home/tom/repos/Masters/thesis/implementation/build/external/QuEST-hip'\ngmake[4]: Entering directory '/home/tom/repos/Masters/thesis/implementation/build/external/QuEST-hip'\nScanning dependencies of target QuEST\ngmake[4]: Leaving directory '/home/tom/repos/Masters/thesis/implementation/build/external/QuEST-hip'\ngmake[4]: Entering directory '/home/tom/repos/Masters/thesis/implementation/build/external/QuEST-hip'\n[  5%] Building CXX object CMakeFiles/QuEST.dir/quest/src/api/calculations.cpp.o\n[  5%] Building CXX object CMakeFiles/QuEST.dir/quest/src/api/channels.cpp.o\n[  8%] Building CXX object CMakeFiles/QuEST.dir/quest/src/api/debug.cpp.o\n[ 11%] Building CXX object CMakeFiles/QuEST.dir/quest/src/api/decoherence.cpp.o\n[ 14%] Building CXX object CMakeFiles/QuEST.d...<truncated>",
+      "timeout_s": 300
+    },
+    "candidate_category": "tailored_quantum_gpu",
+    "created_at": "2026-07-12T21:44:27.767917+00:00",
+    "detected_dependencies": {
+      "amd_gpu_pci": {
+        "available": true
+      },
+      "cmake": {
+        "available": true,
+        "path": "/usr/bin/cmake"
+      },
+      "dev_dri": {
+        "available": true
+      },
+      "dev_dri_renderD128": {
+        "available": true,
+        "required": false
+      },
+      "dev_dri_render_node": {
+        "available": true,
+        "nodes": [
+          "/dev/dri/renderD128"
+        ]
+      },
+      "dev_kfd": {
+        "available": true
+      },
+      "hipcc": {
+        "available": true,
+        "path": "/usr/bin/hipcc"
+      },
+      "make": {
+        "available": true,
+        "path": "/usr/bin/make"
+      },
+      "rocminfo": {
+        "available": true,
+        "path": "/usr/bin/rocminfo"
+      },
+      "rocminfo_gpu_agent": {
+        "available": true,
+        "gfx_targets": [
+          "gfx10",
+          "gfx1032"
+        ],
+        "returncode": 0
+      }
+    },
+    "gpu_backend_verified": true,
+    "gpu_device_name": "AMD Radeon RX 6600 (gfx1032)",
+    "gpu_program_executed": true,
+    "gpu_runtime_stack": "amd_rocm",
+    "gpu_synchronized": true,
+    "gpu_toolkit_metadata": {
+      "amd_gpu_pci": {
+        "available": true
+      },
+      "cmake": {
+        "available": true,
+        "path": "/usr/bin/cmake"
+      },
+      "dev_dri": {
+        "available": true
+      },
+      "dev_dri_renderD128": {
+        "available": true,
+        "required": false
+      },
+      "dev_dri_render_node": {
+        "available": true,
+        "nodes": [
+          "/dev/dri/renderD128"
+        ]
+      },
+      "dev_kfd": {
+        "available": true
+      },
+      "hipcc": {
+        "available": true,
+        "path": "/usr/bin/hipcc"
+      },
+      "make": {
+        "available": true,
+        "path": "/usr/bin/make"
+      },
+      "rocminfo": {
+        "available": true,
+        "path": "/usr/bin/rocminfo"
+      },
+      "rocminfo_gpu_agent": {
+        "available": true,
+        "gfx_targets": [
+          "gfx10",
+          "gfx1032"
+        ],
+        "returncode": 0
+      }
+    },
+    "hip_smoke_payload": {
+      "device_count": 1,
+      "gcn_arch_name": "gfx1032",
+      "gpu_backend_verified": true,
+      "gpu_device_name": "AMD Radeon RX 6600",
+      "gpu_program_executed": true,
+      "multi_processor_count": 14,
+      "status": "ok",
+      "total_global_mem": 8573157376
+    },
+    "minimal_run_result": {
+      "command": [
+        "/home/tom/repos/Masters/thesis/implementation/build/native/quest_gpu/hip/bin/quest_gpu_runner",
+        "--algo",
+        "QRNG",
+        "--qubits",
+        "2",
+        "--json",
+        "--dump-state-json",
+        "/home/tom/repos/Masters/thesis/implementation/build/gpu_verification/quest_gpu_minimal_state_dump.json",
+        "--max-output-amplitudes",
+        "4"
+      ],
+      "cwd": "/home/tom/repos/Masters/thesis/implementation/native/quest_gpu",
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "{\"algo\":\"QRNG\",\"paper_algo\":\"QRNG_n\",\"result_label\":\"QRNG/QRNG_n\",\"input_qubits\":2,\"allocated_qubits\":2,\"depth\":0,\"threads\":6,\"time_s\":0.000076056,\"state_dump_requested\":true,\"state_dump_time_s\":0.000163078,\"repeat_layers\":1,\"energy_joules\":null,\"energy_source\":\"unavailable\",\"status\":\"ok\",\"error\":null,\"one_qubit_gates\":2,\"two_qubit_gates\":0,\"quest_version\":\"4.2.0\"}\n",
+      "timeout_s": 60
+    },
+    "requested_backend": "quest-hip",
+    "runner_path": "/home/tom/repos/Masters/thesis/implementation/build/native/quest_gpu/hip/bin/quest_gpu_runner",
+    "runner_root": "/home/tom/repos/Masters/thesis/implementation/native/quest_gpu",
+    "schema_version": "quest_gpu_verification_v1",
+    "selected_backend": "quest-hip",
+    "status": "verified",
+    "verification_backend": "quest-hip"
+  },
+  "hostname": "kazulak",
+  "notes": {
+    "derived_outputs_are_under_runs_comparisons": true,
+    "evidence_inputs_are_read_only": true,
+    "long_runs_require_explicit_opt_in": true
+  },
+  "packages": {
+    "cotengra": "0.7.5",
+    "matplotlib": "3.10.8",
+    "numpy": "2.2.6",
+    "opt_einsum": "3.4.0",
+    "quimb": "1.11.2"
+  },
+  "planner_semantics": {
+    "contexts": [
+      {
+        "objective_version": "upmem_path_cost_v2",
+        "record_count": 150,
+        "score_model": "upmem_pressure_v1"
+      }
+    ],
+    "execution_policies": [
+      "generic_single_dpu_split_complex_v2"
+    ],
+    "issues": [],
+    "legacy_score_models": [
+      "upmem_pressure_v1"
+    ],
+    "normalizations": [
+      "fixed_log1p_generic_budgets_v2"
+    ],
+    "objective_versions": [
+      "upmem_path_cost_v2"
+    ],
+    "planner_config_hashes": [
+      "2197acf1524706bd82747388500c1b3a4fe50aefeb9d40cdf554575733b0b275",
+      "29abf6127107d130856c0eaa87fbe850bf32d0d563501d9dac818edbc4b47437",
+      "40c5f2dba78149fbd966780eb0ed1346b1fe5e783f8d424be5a584f437038a34",
+      "553e7e0a7a591e1b4a6de756bcf637b0e4cead923e8bbd9834300fa1e2db3026",
+      "638f09e3766d56f7f57c13aabd54a5504ec08dc6e213c8124ed16f732a36dada",
+      "732e5d6ce69eb7f899d95e1d4a3ba1c390eb63c7f748cdd8667ef363f7fa7de4",
+      "b8051e9addae8ef03cd83f704a6c0b44a271351853044aaaeb6bc834b43172be",
+      "e4fe2eea8b9aaa935b91fc73f8e7b5a4d59746c545686b2803cb83e99dd31633",
+      "e9852bf700905b31e3be67ba9bb323fddcf0304d58266d028aec042719273fd7",
+      "fde812588671a3d9df7989613d74a726977d15c7159aab8025fab190502208a8"
+    ],
+    "planner_record_count": 150,
+    "score_models": [
+      "upmem_pressure_v1"
+    ],
+    "semantic_versions": [
+      "upmem_path_cost_v2"
+    ],
+    "weight_profiles": [
+      "balanced_literature_informed",
+      "compute_oriented",
+      "host_transfer_oriented",
+      "local_movement_oriented",
+      "synchronization_constrained",
+      "wram_constrained"
+    ]
+  },
+  "platform": "Linux-6.8.0-124-generic-x86_64-with-glibc2.35",
+  "provenance_aliases": {
+    "dirty_tree": "alias of benchmark_source_worktree_dirty",
+    "dirty_worktree": "alias of benchmark_source_worktree_dirty",
+    "git_commit": "alias of benchmark_source_commit"
+  },
+  "provenance_scope": "thesis/implementation",
+  "provenance_stage": "report_generation",
+  "provenance_stages": {
+    "benchmark_source": {
+      "commit": "a453331d7bc240f64c3b6391f4ea2ac916de798c",
+      "repository_worktree_dirty": true,
+      "scope": "thesis/implementation",
+      "worktree_dirty": false
+    },
+    "report_generation": {
+      "commit": "a453331d7bc240f64c3b6391f4ea2ac916de798c",
+      "repository_worktree_dirty": true,
+      "scope": "thesis/implementation",
+      "worktree_dirty": false
+    }
+  },
+  "python_version": "3.10.12 (main, Jun 22 2026, 18:55:27) [GCC 11.4.0]",
+  "record_count": 150,
+  "report_generation": {
+    "benchmark_source_worktree_dirty": false,
+    "commit": "a453331d7bc240f64c3b6391f4ea2ac916de798c",
+    "repository_worktree_dirty": true
+  },
+  "report_generation_command": "scripts/thesis_snapshot.py promote --pack runs/comparisons/research_pack/planner_v2_2026-07-13_18-39-02 --out thesis_results/planner_v2",
+  "report_generation_commit": "a453331d7bc240f64c3b6391f4ea2ac916de798c",
+  "report_generation_input_paths": [
+    "/home/tom/repos/Masters/thesis/implementation/thesis_results/.planner_v2.staging/evidence/thesis_planner_semantic_v2_planner_compare",
+    "/home/tom/repos/Masters/thesis/implementation/thesis_results/.planner_v2.staging/evidence/thesis_planner_sensitivity_v2_planner_compare"
+  ],
+  "report_generation_mode": "report",
+  "report_generation_provenance": {
+    "benchmark_source_worktree_dirty": false,
+    "commit": "a453331d7bc240f64c3b6391f4ea2ac916de798c",
+    "repository_worktree_dirty": true
+  },
+  "report_generation_repository_worktree_dirty": true,
+  "report_generation_script": "scripts/research_benchmark_pack.py",
+  "report_generation_timestamp": "2026-07-13T18:39:21",
+  "report_generation_worktree_dirty": false,
+  "repository_worktree_dirty": true,
+  "root": ".",
+  "schema_version": "research_benchmark_pack_v1",
+  "selected_suites": {
+    "cpu_gpu": "configs/suites/manual/thesis_full_state_cpu_gpu.yml",
+    "cpu_gpu_correctness": "configs/suites/manual/thesis_full_state_correctness.yml",
+    "cpu_tn": "configs/suites/manual/thesis_cpu_tn_quimb.yml",
+    "internal_parallelism": "configs/suites/manual/research_internal_parallelism.yml",
+    "planner_paths": "configs/suites/manual/thesis_planner_semantic_v2.yml",
+    "planner_sensitivity": "configs/suites/manual/thesis_planner_sensitivity_v2.yml",
+    "tn_path_quantization": "configs/suites/manual/thesis_tn_paths_quantization.yml",
+    "upmem_boundary": "configs/suites/manual/thesis_upmem_quantization_boundary.yml",
+    "upmem_quantization_stress": "configs/suites/manual/thesis_upmem_quantization_stress.yml"
+  }
+}
