@@ -18,7 +18,7 @@ if str(ROOT) not in sys.path:
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from scripts.research_benchmark_pack import report_pack  # noqa: E402
+from scripts.research_benchmark_pack import planner_semantic_context, report_pack  # noqa: E402
 
 
 SNAPSHOT_SCHEMA_VERSION = "thesis_result_snapshot_v1"
@@ -35,6 +35,8 @@ ROLE_BY_SUITE = {
     "thesis_tn_paths_quantization": "tn_path_quantization",
     "thesis_planner_compare": "planner_paths",
     "thesis_planner_sensitivity": "planner_sensitivity",
+    "thesis_planner_semantic_v2": "planner_paths_v2",
+    "thesis_planner_sensitivity_v2": "planner_sensitivity_v2",
     "research_cpu_gpu_correctness": "full_state_correctness",
     "research_cpu_gpu": "full_state_performance",
     "research_cpu_tn": "cpu_tn",
@@ -120,6 +122,8 @@ def promote_snapshot(pack: Path, out: Path, *, allow_dirty: bool = False) -> int
     if report_pack(ROOT, report_dir, inputs=report_inputs, suite_filter=None) != 0:
         raise RuntimeError("snapshot report generation failed")
     _install_report(report_dir, staging, provenance=pack_manifest, report_stage=report_stage)
+    report_manifest = _read_json(staging / "report_manifest.json")
+    planner_semantics = report_manifest.get("planner_semantics") or planner_semantic_context([])
 
     source_commit = source_manifest["commit"]
     source_dirty = source_manifest["worktree_dirty"]
@@ -154,6 +158,7 @@ def promote_snapshot(pack: Path, out: Path, *, allow_dirty: bool = False) -> int
         "evidence_level": "normalized_report_regenerable",
         "raw_tensor_artifacts_included": False,
         "selected_evidence": selected,
+        "planner_semantics": planner_semantics,
         "source_pack": _relative_or_string(pack),
         "report_entrypoint": "README.md",
         "tables_dir": "tables",
@@ -181,6 +186,7 @@ def verify_snapshot(snapshot: Path) -> None:
     selected = list(manifest.get("selected_evidence") or ())
     if not selected:
         raise ValueError("snapshot contains no selected evidence")
+    records: list[dict[str, Any]] = []
     for entry in selected:
         evidence = snapshot / str(entry["snapshot_path"])
         for name in REQUIRED_EVIDENCE_FILES:
@@ -188,6 +194,9 @@ def verify_snapshot(snapshot: Path) -> None:
                 raise ValueError(f"snapshot evidence file missing: {evidence / name}")
         if not any((evidence / "normalized_records.jsonl").read_text(encoding="utf-8").splitlines()):
             raise ValueError(f"snapshot has empty normalized records: {evidence}")
+        for line in (evidence / "normalized_records.jsonl").read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                records.append(json.loads(line))
         evidence_manifest = _read_json(evidence / "run_manifest.json")
         # Legacy snapshots predate the scoped field and may contain a stale
         # dirty_tree value from the run-generation worktree. Promotion still
@@ -195,6 +204,12 @@ def verify_snapshot(snapshot: Path) -> None:
         # already-tracked v1 snapshots until they are regenerated.
         if "benchmark_source_worktree_dirty" in evidence_manifest and _manifest_provenance(evidence_manifest)["worktree_dirty"]:
             raise ValueError(f"snapshot evidence has dirty thesis/implementation source: {evidence}")
+    planner_semantics = planner_semantic_context(records)
+    if planner_semantics["issues"]:
+        raise ValueError("snapshot planner semantic versions are mixed: " + "; ".join(planner_semantics["issues"]))
+    recorded_semantics = manifest.get("planner_semantics")
+    if isinstance(recorded_semantics, dict) and recorded_semantics.get("semantic_versions") != planner_semantics["semantic_versions"]:
+        raise ValueError("snapshot planner semantic context does not match evidence")
     if manifest.get("benchmark_source_worktree_dirty"):
         raise ValueError("snapshot benchmark source is dirty")
     if "provenance_stages" in manifest:
@@ -234,6 +249,9 @@ def regenerate_snapshot_report(snapshot: Path, *, root: Path = ROOT) -> int:
     for name in ("README.md", "plot_manifest.json", "report_manifest.json"):
         (snapshot / name).unlink(missing_ok=True)
     _install_report(report_dir, snapshot, provenance=manifest, report_stage=report_stage)
+    report_manifest = _read_json(snapshot / "report_manifest.json")
+    manifest["planner_semantics"] = report_manifest.get("planner_semantics") or planner_semantic_context([])
+    _write_json(snapshot / "snapshot_manifest.json", manifest)
     _write_json(snapshot / "checksums.json", _checksums(snapshot, exclude={"checksums.json"}))
     verify_snapshot(snapshot)
     print(snapshot)

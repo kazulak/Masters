@@ -1,0 +1,96 @@
+schema_version: 2
+suite_id: thesis_planner_semantic_v2
+
+metadata:
+  purpose: thesis_modeled_upmem_planner_v2_semantic_evidence
+  intended_use: thesis_evidence_planner_semantic_v2
+  execution_tier: modeled_planning_only
+  manual_invocation_required: true
+  planner_evidence_version: v2
+  planner_selection_scope: projected_prefix
+  numeric_contract: real_float32_or_split_real_imag_v2
+  hardware_performance_claim: forbidden
+  notes: >
+    Small quantum tensor networks exercise the v2 semantic contract alongside
+    standard opt_einsum/cotengra planning baselines. Controlled synthetic
+    motifs exercise the same modeled objective but are not real quantum
+    circuits. Zero-imaginary complex inputs are accepted as real-valued work;
+    nonzero complex inputs are modeled as split real/imaginary components where
+    the bounded policy supports them. No contraction runtime or hardware
+    performance claim is produced by this suite.
+
+defaults:
+  warmups: 0
+  repeats: 1
+  timeout_s: 600
+  memory_guard_gib: 2
+  planner:
+    engine: opt_einsum
+    optimize: greedy
+
+planner_comparison:
+  pim_objective:
+    objective_version: upmem_path_cost_v2
+    weight_profile: balanced_literature_informed
+    normalization: fixed_log1p_generic_budgets_v2
+    execution_policy: generic_single_dpu_split_complex_v2
+  planners:
+    - {engine: opt_einsum, optimize: greedy}
+    - {engine: opt_einsum, optimize: auto}
+    - {engine: cotengra, objective: flops, methods: greedy, max_repeats: 1}
+    - {engine: cotengra, objective: size, methods: greedy, max_repeats: 1}
+    - engine: custom_upmem
+      algorithm: greedy
+      objective_version: upmem_path_cost_v2
+      selection_scope: projected_prefix
+      weight_profile: balanced_literature_informed
+      normalization: fixed_log1p_generic_budgets_v2
+      execution_policy: generic_single_dpu_split_complex_v2
+
+workloads:
+  - id: quantum_bell_2q_semantic_v2
+    circuit: {kind: builtin, name: bell_2q}
+    metadata: {workload_type: small_quantum_semantic_probe, execution_scope: modeled_planning}
+  - id: quantum_ghz_3q_semantic_v2
+    circuit: {kind: builtin, name: ghz_chain, n_qubits: 3}
+    metadata: {workload_type: small_quantum_semantic_probe, execution_scope: modeled_planning}
+  - id: quantum_qrng_2q_semantic_v2
+    circuit: {kind: quest_compatible, name: QRNG, n_qubits: 2}
+    metadata: {workload_type: small_quantum_semantic_probe, execution_scope: modeled_planning}
+  - id: quantum_bv_3q_semantic_v2
+    circuit: {kind: quest_compatible, name: BV, n_qubits: 3}
+    metadata: {workload_type: small_quantum_semantic_probe, execution_scope: modeled_planning}
+  - id: quantum_xor_4q_semantic_v2
+    circuit: {kind: quest_compatible, name: XOR, n_qubits: 4}
+    metadata: {workload_type: small_quantum_semantic_probe, execution_scope: modeled_planning}
+  - id: quantum_quantization_stress_2q_semantic_v2
+    circuit: {kind: builtin, name: quantization_stress, n_qubits: 2, repeat_layers: 1}
+    metadata: {workload_type: split_complex_numeric_contract_probe, execution_scope: modeled_planning}
+  - id: planner_motif_chain_semantic_v2
+    circuit: {kind: planner_motif, name: chain}
+    metadata: {workload_type: synthetic_planner_motif, execution_scope: model_only, not_real_quantum_circuit: true}
+  - id: planner_motif_balanced_tree_semantic_v2
+    circuit: {kind: planner_motif, name: balanced_tree}
+    metadata: {workload_type: synthetic_planner_motif, execution_scope: model_only, not_real_quantum_circuit: true}
+  - id: planner_motif_star_semantic_v2
+    circuit: {kind: planner_motif, name: star}
+    metadata: {workload_type: synthetic_planner_motif, execution_scope: model_only, not_real_quantum_circuit: true}
+  - id: planner_motif_cycle_semantic_v2
+    circuit: {kind: planner_motif, name: cycle}
+    metadata: {workload_type: synthetic_planner_motif, execution_scope: model_only, not_real_quantum_circuit: true}
+  - id: planner_motif_grid_semantic_v2
+    circuit: {kind: planner_motif, name: grid}
+    metadata: {workload_type: synthetic_planner_motif, execution_scope: model_only, not_real_quantum_circuit: true}
+  - id: planner_motif_flop_memory_tradeoff_semantic_v2
+    circuit: {kind: planner_motif, name: flop_memory_tradeoff}
+    metadata: {workload_type: synthetic_planner_motif, execution_scope: model_only, not_real_quantum_circuit: true}
+
+routes:
+  - id: cpu_tn_einsum_exact
+    role: planning_reference_only
+    benchmark_role: diagnostic_internal_only
+    required: false
+
+validation:
+  reference_route: cpu_tn_einsum_exact
+  require_output_for_roles: []

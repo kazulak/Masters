@@ -29,11 +29,52 @@ def test_thesis_manual_suites_load() -> None:
         "configs/suites/manual/thesis_planner_compare.yml",
         "configs/suites/manual/thesis_planner_sensitivity.yml",
         "configs/suites/manual/thesis_upmem_quantization_boundary.yml",
+        "configs/suites/manual/thesis_planner_semantic_v2.yml",
+        "configs/suites/manual/thesis_planner_sensitivity_v2.yml",
     ):
         suite = load_suite(ROOT / rel_path)
         assert suite["metadata"]["manual_invocation_required"] is True
         assert suite["cases"]
         assert suite["route_policy"]["routes"]
+
+
+def test_v2_planner_suites_declare_modeled_evidence_intent() -> None:
+    paths = [
+        ROOT / "configs/suites/manual/thesis_planner_semantic_v2.yml",
+        ROOT / "configs/suites/manual/thesis_planner_sensitivity_v2.yml",
+    ]
+    for path in paths:
+        suite = load_suite(path)
+        metadata = suite["metadata"]
+        objective = suite["planner_comparison"]["pim_objective"]
+        planners = suite["planner_comparison"]["planners"]
+
+        assert metadata["planner_evidence_version"] == "v2"
+        assert metadata["planner_selection_scope"] == "projected_prefix"
+        assert metadata["numeric_contract"] == "real_float32_or_split_real_imag_v2"
+        assert metadata["hardware_performance_claim"] == "forbidden"
+        assert objective["objective_version"] == "upmem_path_cost_v2"
+        assert any(planner.get("engine") == "opt_einsum" for planner in planners)
+        assert any(planner.get("engine") == "cotengra" for planner in planners)
+        custom = [planner for planner in planners if planner.get("engine") == "custom_upmem"]
+        assert custom
+        assert all(planner["objective_version"] == "upmem_path_cost_v2" for planner in custom)
+        assert all(planner["selection_scope"] == "projected_prefix" for planner in custom)
+
+        quantum = [case for case in suite["cases"] if case["circuit"]["kind"] != "planner_motif"]
+        motifs = [case for case in suite["cases"] if case["circuit"]["kind"] == "planner_motif"]
+        assert quantum
+        assert all(case["circuit"].get("n_qubits", 0) <= 4 for case in quantum)
+        assert {case["circuit"]["name"] for case in motifs} == {
+            "chain",
+            "balanced_tree",
+            "star",
+            "cycle",
+            "grid",
+            "flop_memory_tradeoff",
+        }
+        assert all(case["metadata"]["execution_scope"] == "model_only" for case in motifs)
+        assert all(case["metadata"]["not_real_quantum_circuit"] is True for case in motifs)
 
 
 def test_thesis_manual_suites_cover_declared_size_targets() -> None:

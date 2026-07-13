@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from scripts import thesis_runs, thesis_snapshot
 
 
@@ -232,6 +234,29 @@ def test_snapshot_verification_rejects_symlinks(monkeypatch, tmp_path: Path) -> 
         assert "cannot contain symlinks" in str(exc)
     else:
         raise AssertionError("snapshot symlinks should fail verification")
+
+
+def test_snapshot_verification_rejects_mixed_planner_semantics(monkeypatch, tmp_path: Path) -> None:
+    evidence = _evidence(tmp_path, "research_cpu_gpu", "run")
+    pack = tmp_path / "pack"
+    _write_json(pack / "benchmark_manifest.json", {"git_commit": "test-head", "dirty_worktree": False, "evidence_inputs": [str(evidence)]})
+    monkeypatch.setattr(thesis_snapshot, "report_pack", _fake_report)
+    monkeypatch.setattr(thesis_snapshot, "_git", lambda *args: "test-head" if args[:2] == ("rev-parse", "HEAD") else "")
+    monkeypatch.setattr(thesis_snapshot, "ROOT", tmp_path)
+    out = tmp_path / "snapshot"
+    thesis_snapshot.promote_snapshot(pack, out)
+
+    records = [
+        {"route_id": "planner_candidate_model", "pim_objective_version": "upmem_path_cost_v1", "pim_weight_profile": "balanced"},
+        {"route_id": "planner_candidate_model", "pim_objective_version": "upmem_path_cost_v2", "pim_weight_profile": "balanced"},
+    ]
+    (out / "evidence" / "full_state_performance" / "normalized_records.jsonl").write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="snapshot planner semantic versions are mixed"):
+        thesis_snapshot.verify_snapshot(out)
 
 
 def test_prune_runs_keeps_only_snapshot_selection(monkeypatch, tmp_path: Path) -> None:

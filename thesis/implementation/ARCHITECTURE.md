@@ -82,7 +82,7 @@ different identities or objective settings but select the same structural path.
 | --- | --- | --- | --- |
 | Circuit semantics | `thesis/implementation/src/quantum_bench/circuits/` | Deterministic circuit definitions and QuEST-compatible semantic mapping | Active |
 | TN lowering | `thesis/implementation/src/quantum_bench/tn/network.py` | Convert ordered gates into tensors, labels, and output convention | Active, thesis infrastructure |
-| Planning | `thesis/implementation/src/quantum_bench/tn/planners.py`, `upmem_planner.py`, `upmem_path_cost.py`, `task_graph.py` | Obtain standard-library or custom modeled path and lower it into dependency tasks | Active; UPMEM objective is modeled, not hardware-calibrated |
+| Planning | `thesis/implementation/src/quantum_bench/tn/planners.py`, `upmem_planner.py`, `upmem_path_cost.py`, `upmem_path_cost_v2.py`, `task_graph.py` | Obtain standard-library or versioned custom modeled paths and lower them into dependency tasks | Active; v1 historical and v2 projected-prefix UPMEM objectives are modeled, not hardware-calibrated |
 | Execution identity | `thesis/implementation/src/quantum_bench/tn/execution_bundle.py` | Canonical serialization and SHA-256 identities | Active, thesis contribution |
 | Serious full-state baseline | `thesis/implementation/src/quantum_bench/providers/full_state/` + `thesis/implementation/external/QuEST/` | QuEST CPU and verified GPU execution | Active |
 | Serious CPU TN baseline | `thesis/implementation/src/quantum_bench/providers/exact_tn/quimb_tn.py` | Quimb/cotengra unsliced and sliced exact TN execution | Active |
@@ -212,27 +212,42 @@ source check.
 
 ## Modeled Planner And Report Contract
 
-The Phase 0.5 planner path is intentionally narrow. `custom_upmem` evaluates
-one fixed `generic_single_dpu_float32_v1` execution-policy model. Its
-`PathCostComponents` record planner-estimated FLOPs, largest intermediate,
-intermediate writes, host-to-DPU and DPU-to-host application-visible bytes,
-MRAM-to-WRAM movement, local work, synchronization events, numerical penalty,
-WRAM pressure, tile count, feasibility, and rejection reasons. Infeasible
-steps are rejected rather than made artificially attractive by a large score.
+Planner objective versions are preserved rather than silently rewritten. The
+existing `upmem_path_cost_v1` suites are historical v1 evidence. V1 evaluates
+the fixed `generic_single_dpu_float32_v1` policy, and complex quantum tensor
+networks remain standard-planner baseline evidence with modeled UPMEM
+infeasibility under that contract.
 
-The model currently requires real-valued tensor operands, matching the bounded
-generic float32 DPU contract. Quantum tensor networks with complex-typed gate
-tensors therefore retain their standard planning candidates as baseline path
-evidence but carry `pim_feasible=false` and
-`complex_generic_loop_not_implemented`; no candidate is selected under this
-policy. The custom generator is exercised on separately labeled real-valued
-planner motifs until a split-complex lowering is implemented.
+The additive v2 suites use `custom_upmem` with
+`objective_version: upmem_path_cost_v2` and
+`selection_scope: projected_prefix`. V2 is a deterministic greedy planner: at
+each step it scores the already selected prefix plus each candidate, so it does
+not claim a globally optimal complete path. Its
+`PathCostComponentsV2` records modeled FLOPs, largest tensor bytes,
+split-complex component invocations and recombination, host payloads, modeled
+MRAM/DMA windows, tile iterations, host completion events, and explicit memory
+assumptions. Those assumptions distinguish logical task payload, fixed native
+MRAM reservation, total configured MRAM capacity, maximum per-buffer payload
+ratio, known static WRAM bytes, and configured WRAM budget. They are modeled
+capacity fields, not measured DPU occupancy. Infeasible steps carry explicit
+rejection reasons.
 
-`configs/suites/diagnostics/planner_objective_motifs.yml` contains controlled
-real-valued chain, tree, star, cycle, grid, and FLOP/memory trade-off networks.
-They exist only to test the modeled objective. Their records are marked
-`not_real_quantum_circuit=true` and must never be used as circuit runtime or
-UPMEM hardware evidence.
+The v2 numeric contract accepts real inputs and complex-typed inputs with zero
+imaginary values as real-valued work. Nonzero complex inputs are represented as
+split real/imaginary components and are modeled where the bounded policy
+supports them. This is a modeled numeric/execution-policy contract, not a claim
+that every arbitrary complex layout or workload is executable.
+
+`configs/suites/diagnostics/planner_objective_motifs.yml` and the v2 manual
+planner suites contain controlled real-valued chain, tree, star, cycle, grid,
+and FLOP/memory trade-off networks. They exist only to test the modeled
+objective. Their records are marked `not_real_quantum_circuit=true` and must
+never be used as circuit runtime or UPMEM hardware evidence.
+
+Both v1 and v2 planner rows are evidence of path selection and modeled cost
+components only. Neither version supplies a UPMEM hardware performance claim;
+SDK-simulator or physical timing requires a separate executor route and an
+explicitly recorded execution mode.
 
 Derived figures always remain in the report surface. A figure with no valid
 data, no variance, or no implementation is emitted as a visible TODO PNG and

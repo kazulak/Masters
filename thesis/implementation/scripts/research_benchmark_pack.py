@@ -36,8 +36,13 @@ RESEARCH_SUITES = {
     "cpu_gpu_correctness": ROOT / "configs" / "suites" / "manual" / "thesis_full_state_correctness.yml",
     "cpu_tn": ROOT / "configs" / "suites" / "manual" / "thesis_cpu_tn_quimb.yml",
     "tn_path_quantization": ROOT / "configs" / "suites" / "manual" / "thesis_tn_paths_quantization.yml",
-    "planner_paths": ROOT / "configs" / "suites" / "manual" / "thesis_planner_compare.yml",
-    "planner_sensitivity": ROOT / "configs" / "suites" / "manual" / "thesis_planner_sensitivity.yml",
+    # V2 is the active, projected-prefix planner evidence surface.  V1 stays
+    # addressable for historical comparison but is never mixed into a default
+    # research report because the objective semantics differ.
+    "planner_paths": ROOT / "configs" / "suites" / "manual" / "thesis_planner_semantic_v2.yml",
+    "planner_sensitivity": ROOT / "configs" / "suites" / "manual" / "thesis_planner_sensitivity_v2.yml",
+    "planner_paths_v1": ROOT / "configs" / "suites" / "manual" / "thesis_planner_compare.yml",
+    "planner_sensitivity_v1": ROOT / "configs" / "suites" / "manual" / "thesis_planner_sensitivity.yml",
     # This group intentionally uses the strict generic-only MVP command rather
     # than the route-comparison suite.  The latter permits dense bridge tasks,
     # which is useful for route coverage but is not generic-TN boundary evidence.
@@ -90,6 +95,7 @@ FORBIDDEN_EVIDENCE_DERIVED_NAMES = {
     "unsupported_cases.csv",
     "validation_summary.csv",
     "route_capability_matrix.csv",
+    "planner_component_diagnostics.csv",
     "benchmark_summary.md",
     "plot_manifest.json",
 }
@@ -256,6 +262,9 @@ def _write_pack(
 ) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     records = load_result_records(evidence_inputs) if evidence_inputs else []
+    planner_semantics = planner_semantic_context(records)
+    if planner_semantics["issues"]:
+        raise ValueError("planner semantic versions are mixed: " + "; ".join(planner_semantics["issues"]))
     boundary = validate_artifact_boundaries(root)
     guard_issues = _claim_guard_issues(records)
     manifest = build_manifest(
@@ -265,6 +274,7 @@ def _write_pack(
         record_count=len(records),
         selected_suite_keys=selected_suite_keys,
         generation_mode=generation_mode,
+        planner_semantics=planner_semantics,
     )
     _write_json(out_dir / "benchmark_manifest.json", manifest)
     stats_rows = per_case_route_stats(records)
@@ -278,6 +288,7 @@ def _write_pack(
     unsupported_rows = unsupported_cases(records)
     validation_rows = validation_summary(records)
     capability_rows = route_capability_matrix(records)
+    planner_component_rows = planner_component_diagnostics(planner_rows)
     _write_csv(out_dir / "per_case_route_stats.csv", stats_rows, PER_CASE_ROUTE_STATS_FIELDS)
     _write_csv(out_dir / "paired_speedups.csv", speedup_rows, PAIRED_SPEEDUP_FIELDS)
     _write_csv(out_dir / "cpu_gpu_performance_summary.csv", cpu_gpu_rows, CPU_GPU_PERFORMANCE_SUMMARY_FIELDS)
@@ -286,6 +297,7 @@ def _write_pack(
     _write_csv(out_dir / "upmem_quantization_attribution.csv", quantization_rows, UPMEM_QUANTIZATION_ATTRIBUTION_FIELDS)
     _write_csv(out_dir / "same_plan_execution.csv", same_plan_rows, SAME_PLAN_EXECUTION_FIELDS)
     _write_csv(out_dir / "planner_comparison.csv", planner_rows, PLANNER_COMPARISON_FIELDS)
+    _write_csv(out_dir / "planner_component_diagnostics.csv", planner_component_rows, PLANNER_COMPONENT_DIAGNOSTICS_FIELDS)
     _write_csv(out_dir / "unsupported_cases.csv", unsupported_rows, UNSUPPORTED_FIELDS)
     _write_csv(out_dir / "validation_summary.csv", validation_rows, VALIDATION_SUMMARY_FIELDS)
     _write_csv(out_dir / "route_capability_matrix.csv", capability_rows, ROUTE_CAPABILITY_FIELDS)
@@ -297,6 +309,7 @@ def _write_pack(
         same_plan_rows,
         planner_rows,
         slicing_tradeoff_rows,
+        planner_component_rows,
     )
     _write_json(out_dir / "plot_manifest.json", plot_manifest)
     (out_dir / "benchmark_summary.md").write_text(
@@ -331,6 +344,7 @@ def build_manifest(
     record_count: int,
     selected_suite_keys: list[str],
     generation_mode: str = "report",
+    planner_semantics: JsonDict | None = None,
 ) -> JsonDict:
     command_line = " ".join(sys.argv)
     generated_at = datetime.now().isoformat(timespec="seconds")
@@ -379,6 +393,7 @@ def build_manifest(
         "selected_suites": {key: _display_path(RESEARCH_SUITES[key], root) for key in selected_suite_keys},
         "evidence_inputs": [path.as_posix() for path in evidence_inputs],
         "record_count": record_count,
+        "planner_semantics": planner_semantics or planner_semantic_context([]),
         "commands": command_results,
         "report_generation_provenance": provenance,
         "report_generation": provenance,
@@ -396,11 +411,93 @@ def build_manifest(
     }
 
 
+def planner_semantic_context(records: list[JsonDict]) -> JsonDict:
+    """Return the immutable semantic context for planner-derived evidence.
+
+    The report may combine profiles within one objective, but cannot compare
+    candidate rows generated with different objective or legacy score models.
+    Older non-planner runs remain reportable unchanged.
+    """
+    rows = [record for record in records if record.get("route_id") == "planner_candidate_model"]
+    contexts: dict[tuple[str | None, str | None], dict[str, Any]] = {}
+    objective_versions: set[str] = set()
+    score_models: set[str] = set()
+    semantic_versions: set[str] = set()
+    config_hashes: set[str] = set()
+    profile_ids: set[str] = set()
+    policy_ids: set[str] = set()
+    normalization_ids: set[str] = set()
+    for row in rows:
+        objective = _nonempty_text(row.get("pim_objective_version"))
+        score_model = _nonempty_text(row.get("score_model"))
+        if objective:
+            objective_versions.add(objective)
+        if score_model:
+            score_models.add(score_model)
+        # The score model is the legacy semantic identifier.  Once an
+        # objective version is present it is authoritative for that row, but
+        # a row carrying only score_model remains comparable only with the
+        # same legacy semantic family.
+        semantic_version = objective or (f"legacy_score_model:{score_model}" if score_model else None)
+        if semantic_version:
+            semantic_versions.add(semantic_version)
+        config_hash = _nonempty_text(row.get("planner_config_hash") or row.get("config_hash") or row.get("executor_config_hash"))
+        if config_hash:
+            config_hashes.add(config_hash)
+        profile = _nonempty_text(row.get("pim_weight_profile"))
+        if profile:
+            profile_ids.add(profile)
+        policy = _planner_policy_id(row.get("pim_execution_policy"))
+        if policy:
+            policy_ids.add(policy)
+        normalization = _planner_normalization_id(row.get("pim_normalization"))
+        if normalization:
+            normalization_ids.add(normalization)
+        contexts.setdefault((objective, score_model), {"objective_version": objective, "score_model": score_model, "record_count": 0})["record_count"] += 1
+    issues: list[str] = []
+    if len(objective_versions) > 1:
+        issues.append("pim_objective_version=" + ",".join(sorted(objective_versions)))
+    if len(score_models) > 1:
+        issues.append("score_model=" + ",".join(sorted(score_models)))
+    if len(semantic_versions) > 1:
+        issues.append("semantic_version=" + ",".join(sorted(semantic_versions)))
+    return {
+        "planner_record_count": len(rows),
+        "objective_versions": sorted(objective_versions),
+        "score_models": sorted(score_models),
+        "legacy_score_models": sorted(score_models),
+        "semantic_versions": sorted(semantic_versions),
+        "planner_config_hashes": sorted(config_hashes),
+        "weight_profiles": sorted(profile_ids),
+        "execution_policies": sorted(policy_ids),
+        "normalizations": sorted(normalization_ids),
+        "contexts": sorted(contexts.values(), key=lambda item: (str(item["objective_version"]), str(item["score_model"]))),
+        "issues": issues,
+    }
+
+
+def _nonempty_text(value: object) -> str | None:
+    text = str(value).strip() if value is not None else ""
+    return text or None
+
+
+def _planner_policy_id(value: object) -> str | None:
+    if isinstance(value, dict):
+        return _nonempty_text(value.get("policy_id"))
+    return None
+
+
+def _planner_normalization_id(value: object) -> str | None:
+    if isinstance(value, dict):
+        return _nonempty_text(value.get("normalization_id"))
+    return None
+
+
 PER_CASE_ROUTE_STATS_FIELDS = [
     "schema_version",
     "suite_id",
     "case_id",
-    "case_family",
+    "circuit_family",
     "n_qubits",
     "actual_n_qubits",
     "benchmark_n_qubits",
@@ -750,10 +847,14 @@ PLANNER_COMPARISON_FIELDS = [
     "planner_id",
     "planner_engine",
     "planner_kind",
+    "planner_config_hash",
+    "planner_config",
+    "planner_selection_scope",
     "optimize_mode",
     "objective",
     "cost_basis",
     "target_estimate_key",
+    "target_estimate_model",
     "contraction_plan_hash",
     "contraction_path_structure_hash",
     "candidate_status",
@@ -795,6 +896,23 @@ PLANNER_COMPARISON_FIELDS = [
     "pim_estimated_numerical_penalty",
     "pim_estimated_wram_pressure",
     "pim_estimated_tile_count",
+    "pim_largest_tensor_bytes",
+    "pim_host_to_dpu_payload_bytes",
+    "pim_dpu_to_host_payload_bytes",
+    "pim_mram_dma_window_bytes_model",
+    "pim_tile_iterations",
+    "pim_host_completion_events",
+    "pim_numeric_component_invocations",
+    "pim_numeric_recombination_flops",
+    "pim_task_mram_payload_bytes",
+    "pim_native_static_mram_reservation_bytes",
+    "pim_mram_capacity_bytes",
+    "pim_mram_static_reservation_pressure_ratio",
+    "pim_mram_max_region_payload_ratio",
+    "pim_mram_payload_pressure_ratio",
+    "pim_known_wram_static_bytes",
+    "pim_wram_budget_bytes",
+    "pim_wram_known_pressure_ratio",
     "pim_objective_components",
     "pim_normalized_components",
     "pim_objective_score",
@@ -803,6 +921,50 @@ PLANNER_COMPARISON_FIELDS = [
     "pim_selected",
     "parallelism_evidence_type",
     "execution_plan_executed",
+]
+
+PLANNER_COMPONENT_DIAGNOSTICS_FIELDS = [
+    "schema_version",
+    "suite_id",
+    "case_id",
+    "case_family",
+    "benchmark_n_qubits",
+    "workload_kind",
+    "not_real_quantum_circuit",
+    "planner_motif",
+    "planner_id",
+    "planner_config_hash",
+    "planner_selection_scope",
+    "score_model",
+    "pim_objective_version",
+    "pim_weight_profile",
+    "pim_feasible",
+    "pim_objective_score",
+    "pim_objective_rank",
+    "pim_selected",
+    "pim_estimated_flops",
+    "pim_peak_intermediate_bytes",
+    "pim_total_intermediate_write_bytes",
+    "pim_estimated_host_dpu_bytes",
+    "pim_estimated_mram_to_wram_bytes",
+    "pim_estimated_tile_count",
+    "pim_largest_tensor_bytes",
+    "pim_host_to_dpu_payload_bytes",
+    "pim_dpu_to_host_payload_bytes",
+    "pim_mram_dma_window_bytes_model",
+    "pim_tile_iterations",
+    "pim_host_completion_events",
+    "pim_numeric_component_invocations",
+    "pim_numeric_recombination_flops",
+    "pim_task_mram_payload_bytes",
+    "pim_native_static_mram_reservation_bytes",
+    "pim_mram_capacity_bytes",
+    "pim_mram_static_reservation_pressure_ratio",
+    "pim_mram_max_region_payload_ratio",
+    "pim_mram_payload_pressure_ratio",
+    "pim_known_wram_static_bytes",
+    "pim_wram_budget_bytes",
+    "pim_wram_known_pressure_ratio",
 ]
 
 
@@ -1345,10 +1507,14 @@ def planner_comparison(records: list[JsonDict]) -> list[JsonDict]:
                 "planner_id": record.get("planner_id") or record.get("backend_id"),
                 "planner_engine": record.get("planner_engine"),
                 "planner_kind": record.get("planner_kind"),
+                "planner_config_hash": record.get("planner_config_hash") or record.get("config_hash") or record.get("executor_config_hash"),
+                "planner_config": record.get("planner_config"),
+                "planner_selection_scope": record.get("planner_selection_scope"),
                 "optimize_mode": record.get("optimize_mode"),
                 "objective": record.get("objective"),
                 "cost_basis": record.get("cost_basis"),
                 "target_estimate_key": record.get("target_estimate_key"),
+                "target_estimate_model": record.get("target_estimate_model"),
                 "contraction_plan_hash": record.get("contraction_plan_hash"),
                 "contraction_path_structure_hash": record.get("contraction_path_structure_hash"),
                 "candidate_status": record.get("candidate_status"),
@@ -1390,6 +1556,25 @@ def planner_comparison(records: list[JsonDict]) -> list[JsonDict]:
                 "pim_estimated_numerical_penalty": record.get("pim_estimated_numerical_penalty"),
                 "pim_estimated_wram_pressure": record.get("pim_estimated_wram_pressure"),
                 "pim_estimated_tile_count": record.get("pim_estimated_tile_count"),
+                "pim_largest_tensor_bytes": record.get("pim_largest_tensor_bytes"),
+                "pim_host_to_dpu_payload_bytes": record.get("pim_host_to_dpu_payload_bytes"),
+                "pim_dpu_to_host_payload_bytes": record.get("pim_dpu_to_host_payload_bytes"),
+                "pim_mram_dma_window_bytes_model": record.get("pim_mram_dma_window_bytes_model"),
+                "pim_tile_iterations": record.get("pim_tile_iterations"),
+                "pim_host_completion_events": record.get("pim_host_completion_events"),
+                "pim_numeric_component_invocations": record.get("pim_numeric_component_invocations"),
+                "pim_numeric_recombination_flops": record.get("pim_numeric_recombination_flops"),
+                "pim_task_mram_payload_bytes": record.get("pim_task_mram_payload_bytes"),
+                "pim_native_static_mram_reservation_bytes": record.get("pim_native_static_mram_reservation_bytes"),
+                "pim_mram_capacity_bytes": record.get("pim_mram_capacity_bytes"),
+                "pim_mram_static_reservation_pressure_ratio": record.get(
+                    "pim_mram_static_reservation_pressure_ratio"
+                ),
+                "pim_mram_max_region_payload_ratio": record.get("pim_mram_max_region_payload_ratio"),
+                "pim_mram_payload_pressure_ratio": record.get("pim_mram_payload_pressure_ratio"),
+                "pim_known_wram_static_bytes": record.get("pim_known_wram_static_bytes"),
+                "pim_wram_budget_bytes": record.get("pim_wram_budget_bytes"),
+                "pim_wram_known_pressure_ratio": record.get("pim_wram_known_pressure_ratio"),
                 "pim_objective_components": record.get("pim_objective_components"),
                 "pim_normalized_components": record.get("pim_normalized_components"),
                 "pim_objective_score": record.get("pim_objective_score"),
@@ -1408,6 +1593,14 @@ def planner_comparison(records: list[JsonDict]) -> list[JsonDict]:
             str(row.get("planner_id") or ""),
         ),
     )
+
+
+def planner_component_diagnostics(planner_rows: list[JsonDict]) -> list[JsonDict]:
+    """Project planner scoring components into a compact diagnostic table."""
+    return [
+        {field: row.get(field) for field in PLANNER_COMPONENT_DIAGNOSTICS_FIELDS}
+        for row in planner_rows
+    ]
 
 
 def unsupported_cases(records: list[JsonDict]) -> list[JsonDict]:
@@ -1473,12 +1666,16 @@ def write_plots(
     same_plan_rows: list[JsonDict],
     planner_rows: list[JsonDict],
     slicing_tradeoff_rows: list[JsonDict] | None = None,
+    planner_component_rows: list[JsonDict] | None = None,
 ) -> JsonDict:
     plots_dir = out_dir / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
     if slicing_tradeoff_rows is None:
         slicing_tradeoff_rows = slicing_tradeoff(stats_rows)
         _write_csv(out_dir / "cpu_tn_slicing_tradeoff.csv", slicing_tradeoff_rows, SLICING_TRADEOFF_FIELDS)
+    if planner_component_rows is None:
+        planner_component_rows = planner_component_diagnostics(planner_rows)
+    _write_csv(out_dir / "planner_component_diagnostics.csv", planner_component_rows, PLANNER_COMPONENT_DIAGNOSTICS_FIELDS)
     try:
         import matplotlib.pyplot as plt
     except Exception as exc:
@@ -1496,14 +1693,14 @@ def write_plots(
                     "status": "failed",
                     "reason": f"matplotlib_unavailable: {exc}",
                 }
-                for spec in _plot_specs(stats_rows, cpu_gpu_rows, quantization_rows, same_plan_rows, planner_rows, slicing_tradeoff_rows)
+                for spec in _plot_specs(stats_rows, cpu_gpu_rows, quantization_rows, same_plan_rows, planner_rows, slicing_tradeoff_rows, planner_component_rows)
             ],
             "generated_valid": [],
             "todo_figures": [],
-            "failed_figures": [spec.filename for spec in _plot_specs(stats_rows, cpu_gpu_rows, quantization_rows, same_plan_rows, planner_rows)],
+            "failed_figures": [spec.filename for spec in _plot_specs(stats_rows, cpu_gpu_rows, quantization_rows, same_plan_rows, planner_rows, slicing_tradeoff_rows, planner_component_rows)],
         }
     entries: list[JsonDict] = []
-    for spec in _plot_specs(stats_rows, cpu_gpu_rows, quantization_rows, same_plan_rows, planner_rows, slicing_tradeoff_rows):
+    for spec in _plot_specs(stats_rows, cpu_gpu_rows, quantization_rows, same_plan_rows, planner_rows, slicing_tradeoff_rows, planner_component_rows):
         path = plots_dir / spec.filename
         outcome = _render_plot_spec(plt, path, spec)
         entry = {
@@ -1539,6 +1736,7 @@ def _plot_specs(
     same_plan_rows: list[JsonDict],
     planner_rows: list[JsonDict],
     slicing_tradeoff_rows: list[JsonDict] | None = None,
+    planner_component_rows: list[JsonDict] | None = None,
 ) -> list[PlotSpec]:
     def render(function: Callable[..., str | None], *args: Any, **kwargs: Any) -> Callable[[Any, Path], str | None]:
         return lambda plt, path: function(plt, path, *args, **kwargs)
@@ -1567,6 +1765,7 @@ def _plot_specs(
         PlotSpec("planner_selection.png", "Modeled PIM planner selection", "planner_comparison.csv", ("planner_id", "pim_objective_rank", "pim_selected"), "Selection is by the recorded modeled PIM objective within one profile, not execution performance.", "Selected feasible planner candidate per modeled PIM objective profile.", "Case", "Modeled objective rank", render(_plot_planner_selection, planner_rows), variance_fields=("pim_objective_rank",)),
         PlotSpec("planner_pareto_frontier.png", "Planner-estimated Pareto frontier", "planner_comparison.csv", ("planner_id", "pim_estimated_flops", "pim_peak_intermediate_bytes", "pim_pareto_dominated"), "Pareto status compares modeled planner components only; it is not a runtime ranking.", "Feasible planner candidates colored by modeled Pareto status.", "Planner-estimated FLOPs", "Planner-estimated largest intermediate bytes", render(_plot_planner_pareto, planner_rows), variance_fields=("pim_estimated_flops", "pim_peak_intermediate_bytes")),
         PlotSpec("planner_sensitivity.png", "Modeled PIM planner sensitivity", "planner_comparison.csv", ("planner_id", "pim_weight_profile", "pim_objective_score", "pim_selected"), "Scenario weight profiles are literature-informed sensitivity cases, not calibrated hardware constants.", "Selected planner candidates across modeled PIM weight profiles.", "Weight profile", "Normalized modeled PIM objective", render(_plot_planner_sensitivity, planner_rows), variance_fields=("pim_objective_score",)),
+        PlotSpec("planner_component_diagnostics.png", "Modeled PIM planner component diagnostics", "planner_component_diagnostics.csv", ("planner_id", "pim_objective_version", "pim_numeric_component_invocations", "pim_numeric_recombination_flops", "pim_mram_payload_pressure_ratio", "pim_wram_known_pressure_ratio"), "Versioned modeled planner component diagnostics; these are structural cost-model values, not measured hardware counters.", "Versioned planner component diagnostics where v2 records provide numeric execution decomposition fields.", "Planner candidate", "Modeled component value", render(_plot_planner_component_diagnostics, planner_component_rows or []), variance_fields=("pim_numeric_component_invocations", "pim_numeric_recombination_flops", "pim_mram_payload_pressure_ratio", "pim_wram_known_pressure_ratio"), allow_zero_variance=True),
         PlotSpec("internal_parallelism_metadata_by_qubits.png", "Internal diagnostic frontier metadata", "per_case_route_stats.csv", ("benchmark_n_qubits", "parallelism_mode", "parallelism_evidence_type", "frontier_worker_count", "frontier_wave_count", "max_frontier_width", "frontier_executed_parallel_task_count"), "Executed internal TaskGraph frontier metadata; diagnostic only and not a parallel speedup claim.", "Diagnostic internal TaskGraph frontier metadata, not serious baseline performance.", "Case", "Maximum frontier width", render(_plot_internal_parallelism, stats_rows), variance_fields=("max_frontier_width",)),
     ]
     source_rows = {
@@ -1576,6 +1775,7 @@ def _plot_specs(
         "same_plan_execution.csv": same_plan_rows,
         "planner_comparison.csv": planner_rows,
         "cpu_tn_slicing_tradeoff.csv": slicing_tradeoff_rows or [],
+        "planner_component_diagnostics.csv": planner_component_rows or [],
     }
     return [replace(spec, data_rows=source_rows[spec.source_csv]) for spec in specs]
 
@@ -2411,6 +2611,34 @@ def _plot_planner_components(plt: Any, path: Path, rows: list[JsonDict]) -> str 
     return None
 
 
+def _plot_planner_component_diagnostics(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+    selected = [
+        row
+        for row in rows
+        if _float_or_none(row.get("pim_numeric_component_invocations")) is not None
+        or _float_or_none(row.get("pim_mram_payload_pressure_ratio")) is not None
+    ]
+    if not selected:
+        return "no v2 planner component diagnostics"
+    selected = sorted(selected, key=lambda row: (str(row.get("case_id") or ""), str(row.get("planner_id") or "")))
+    labels = [str(row.get("planner_id") or "candidate") for row in selected]
+    invocations = [float(row.get("pim_numeric_component_invocations") or 0.0) for row in selected]
+    recombination = [float(row.get("pim_numeric_recombination_flops") or 0.0) for row in selected]
+    fig, axes = plt.subplots(2, 1, figsize=(max(8.0, len(labels) * 0.5), 7.0), constrained_layout=True)
+    axes[0].bar(range(len(labels)), invocations, color="#0f766e")
+    axes[0].set_ylabel("Numeric component invocations")
+    axes[0].set_title("V2 modeled numeric decomposition")
+    axes[0].set_xticks(range(len(labels)))
+    axes[0].set_xticklabels(labels, rotation=60, ha="right", fontsize=8)
+    axes[1].bar(range(len(labels)), recombination, color="#be123c")
+    axes[1].set_ylabel("Recombination FLOPs")
+    axes[1].set_xlabel("Planner candidate")
+    axes[1].set_xticks(range(len(labels)))
+    axes[1].set_xticklabels(labels, rotation=60, ha="right", fontsize=8)
+    _save_plot(fig, path)
+    return None
+
+
 def _plot_planner_selection(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
     selected = [row for row in rows if row.get("pim_feasible") is True and row.get("pim_objective_rank") is not None]
     if not selected:
@@ -3144,7 +3372,7 @@ def _research_suite_argv(key: str, root: Path) -> list[str]:
             "--artifact-retention",
             "compact",
         ]
-    if key in {"planner_paths", "planner_sensitivity"}:
+    if key in {"planner_paths", "planner_sensitivity", "planner_paths_v1", "planner_sensitivity_v1"}:
         return ["compare-planners", "--suite", suite]
     return ["simulation-backend-compare", "--suite", suite, "--artifact-retention", "compact"]
 

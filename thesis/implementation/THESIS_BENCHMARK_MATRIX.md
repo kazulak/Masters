@@ -31,6 +31,8 @@ semantic check; it is not the performance grid.
 | Same-path quantization | `configs/suites/manual/thesis_tn_paths_quantization.yml` | float64 and int8 internal TaskGraph replay | 1 | Attribute runtime and error to per-contraction quantization on an identical path; diagnostic, not serious TN baseline |
 | Planner candidates | `configs/suites/manual/thesis_planner_compare.yml` | `opt_einsum`, cotengra objectives, custom UPMEM greedy | planning once | Compare plan FLOPs, peak intermediates, modeled transfers/tiling, and a fixed-policy UPMEM objective |
 | Planner sensitivity | `configs/suites/manual/thesis_planner_sensitivity.yml` | custom UPMEM greedy under six named scenario profiles | planning once | Show objective sensitivity without presenting scenario weights as measured hardware constants |
+| Planner semantic v2 | `configs/suites/manual/thesis_planner_semantic_v2.yml` | Standard opt_einsum/cotengra baselines plus `custom_upmem` `upmem_path_cost_v2` projected-prefix planner | planning once | Exercise small quantum cases and all controlled motifs under the v2 numeric/modeling contract |
+| Planner sensitivity v2 | `configs/suites/manual/thesis_planner_sensitivity_v2.yml` | Standard opt_einsum/cotengra baselines plus six v2 `custom_upmem` profiles | planning once | Measure modeled projected-prefix sensitivity; profile weights remain scenario assumptions, not hardware constants |
 | UPMEM boundary | `configs/suites/manual/thesis_upmem_quantization_boundary.yml` | Same internal TaskGraph, float32 and int8 strict generic UPMEM SDK simulator | 1 | Find supported/unsupported boundary and attribute transfer/error/runtime changes to quantization |
 | Internal parallelism | `configs/suites/manual/research_internal_parallelism.yml` | sequential/frontier/hybrid internal TaskGraph | 1 | Diagnostic architecture evidence only |
 
@@ -101,11 +103,21 @@ Their fixed single-DPU policy is a literature-informed planning scenario, not a
 calibrated UPMEM hardware predictor. Controlled planner motifs are separately
 labeled modeled-only and not real quantum circuits.
 
-The current generic planner contract is real float32 only. Complex quantum TN
-paths are retained as standard-library planning baselines, but their modeled
-UPMEM feasibility is `false` with
-`complex_generic_loop_not_implemented`; they must not be selected until a
-split-complex UPMEM lowering is available.
+Planner objective versions are separate evidence contracts. The existing
+`upmem_path_cost_v1` suites are historical v1 evidence: their custom policy is
+the real float32 generic model and complex quantum paths are retained as
+standard-planner baselines, with modeled UPMEM infeasibility where applicable.
+The additive v2 suites use `upmem_path_cost_v2` and the projected-prefix greedy
+selection scope. V2 accepts complex-typed inputs whose imaginary values are
+zero as real-valued work; genuinely nonzero complex inputs are modeled as split
+real/imaginary components under the bounded policy where supported. A v2
+selection remains a modeled planner result, not an execution or hardware
+performance result.
+
+The v2 semantic and sensitivity suites deliberately use small quantum cases
+alongside the controlled chain, tree, star, cycle, grid, and FLOP/memory
+trade-off motifs. The motifs remain `not_real_quantum_circuit=true` and
+`execution_scope=model_only`; they validate planner behavior only.
 
 ### Same-Plan CPU Versus UPMEM
 

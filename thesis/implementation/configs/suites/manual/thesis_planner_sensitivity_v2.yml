@@ -1,0 +1,91 @@
+schema_version: 2
+suite_id: thesis_planner_sensitivity_v2
+
+metadata:
+  purpose: thesis_modeled_upmem_planner_v2_sensitivity_evidence
+  intended_use: thesis_evidence_planner_sensitivity_v2
+  execution_tier: modeled_planning_only
+  manual_invocation_required: true
+  planner_evidence_version: v2
+  planner_selection_scope: projected_prefix
+  numeric_contract: real_float32_or_split_real_imag_v2
+  hardware_performance_claim: forbidden
+  notes: >
+    Sensitivity is evaluated over named v2 modeled weight profiles, with
+    opt_einsum and cotengra retained as standard planning baselines. Quantum
+    cases are deliberately small; synthetic motifs provide controlled graph
+    shape coverage and are model-only, not quantum circuits. Profile weights
+    are scenario assumptions, not measured hardware constants, and no hardware
+    performance claim is permitted.
+
+defaults:
+  warmups: 0
+  repeats: 1
+  timeout_s: 600
+  memory_guard_gib: 2
+  planner:
+    engine: custom_upmem
+    algorithm: greedy
+    objective_version: upmem_path_cost_v2
+    selection_scope: projected_prefix
+    normalization: fixed_log1p_generic_budgets_v2
+    execution_policy: generic_single_dpu_split_complex_v2
+
+planner_comparison:
+  pim_objective:
+    objective_version: upmem_path_cost_v2
+    weight_profile: balanced_literature_informed
+    normalization: fixed_log1p_generic_budgets_v2
+    execution_policy: generic_single_dpu_split_complex_v2
+  planners:
+    - {engine: opt_einsum, optimize: greedy}
+    - {engine: cotengra, objective: flops, methods: greedy, max_repeats: 1}
+    - {engine: cotengra, objective: size, methods: greedy, max_repeats: 1}
+    - {engine: custom_upmem, algorithm: greedy, objective_version: upmem_path_cost_v2, selection_scope: projected_prefix, weight_profile: compute_oriented, normalization: fixed_log1p_generic_budgets_v2, execution_policy: generic_single_dpu_split_complex_v2}
+    - {engine: custom_upmem, algorithm: greedy, objective_version: upmem_path_cost_v2, selection_scope: projected_prefix, weight_profile: host_transfer_oriented, normalization: fixed_log1p_generic_budgets_v2, execution_policy: generic_single_dpu_split_complex_v2}
+    - {engine: custom_upmem, algorithm: greedy, objective_version: upmem_path_cost_v2, selection_scope: projected_prefix, weight_profile: local_movement_oriented, normalization: fixed_log1p_generic_budgets_v2, execution_policy: generic_single_dpu_split_complex_v2}
+    - {engine: custom_upmem, algorithm: greedy, objective_version: upmem_path_cost_v2, selection_scope: projected_prefix, weight_profile: wram_constrained, normalization: fixed_log1p_generic_budgets_v2, execution_policy: generic_single_dpu_split_complex_v2}
+    - {engine: custom_upmem, algorithm: greedy, objective_version: upmem_path_cost_v2, selection_scope: projected_prefix, weight_profile: synchronization_constrained, normalization: fixed_log1p_generic_budgets_v2, execution_policy: generic_single_dpu_split_complex_v2}
+    - {engine: custom_upmem, algorithm: greedy, objective_version: upmem_path_cost_v2, selection_scope: projected_prefix, weight_profile: balanced_literature_informed, normalization: fixed_log1p_generic_budgets_v2, execution_policy: generic_single_dpu_split_complex_v2}
+
+workloads:
+  - id: quantum_bell_2q_sensitivity_v2
+    circuit: {kind: builtin, name: bell_2q}
+    metadata: {workload_type: small_quantum_sensitivity_probe, execution_scope: modeled_planning}
+  - id: quantum_ghz_3q_sensitivity_v2
+    circuit: {kind: builtin, name: ghz_chain, n_qubits: 3}
+    metadata: {workload_type: small_quantum_sensitivity_probe, execution_scope: modeled_planning}
+  - id: quantum_qrng_2q_sensitivity_v2
+    circuit: {kind: quest_compatible, name: QRNG, n_qubits: 2}
+    metadata: {workload_type: small_quantum_sensitivity_probe, execution_scope: modeled_planning}
+  - id: quantum_bv_3q_sensitivity_v2
+    circuit: {kind: quest_compatible, name: BV, n_qubits: 3}
+    metadata: {workload_type: small_quantum_sensitivity_probe, execution_scope: modeled_planning}
+  - id: planner_motif_chain_sensitivity_v2
+    circuit: {kind: planner_motif, name: chain}
+    metadata: {workload_type: synthetic_planner_motif, execution_scope: model_only, not_real_quantum_circuit: true}
+  - id: planner_motif_balanced_tree_sensitivity_v2
+    circuit: {kind: planner_motif, name: balanced_tree}
+    metadata: {workload_type: synthetic_planner_motif, execution_scope: model_only, not_real_quantum_circuit: true}
+  - id: planner_motif_star_sensitivity_v2
+    circuit: {kind: planner_motif, name: star}
+    metadata: {workload_type: synthetic_planner_motif, execution_scope: model_only, not_real_quantum_circuit: true}
+  - id: planner_motif_cycle_sensitivity_v2
+    circuit: {kind: planner_motif, name: cycle}
+    metadata: {workload_type: synthetic_planner_motif, execution_scope: model_only, not_real_quantum_circuit: true}
+  - id: planner_motif_grid_sensitivity_v2
+    circuit: {kind: planner_motif, name: grid}
+    metadata: {workload_type: synthetic_planner_motif, execution_scope: model_only, not_real_quantum_circuit: true}
+  - id: planner_motif_flop_memory_tradeoff_sensitivity_v2
+    circuit: {kind: planner_motif, name: flop_memory_tradeoff}
+    metadata: {workload_type: synthetic_planner_motif, execution_scope: model_only, not_real_quantum_circuit: true}
+
+routes:
+  - id: cpu_tn_einsum_exact
+    role: planning_reference_only
+    benchmark_role: diagnostic_internal_only
+    required: false
+
+validation:
+  reference_route: cpu_tn_einsum_exact
+  require_output_for_roles: []

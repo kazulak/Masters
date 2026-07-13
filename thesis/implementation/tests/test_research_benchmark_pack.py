@@ -6,6 +6,8 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
+
 from scripts import research_benchmark_pack as pack
 from quantum_bench.bench.config import comparison_planner_configs, load_suite
 
@@ -220,6 +222,8 @@ def test_plot_manifest_has_evidence_contract_and_stable_todo_pngs(tmp_path: Path
     assert "planner_selection.png" in names
     assert "planner_pareto_frontier.png" in names
     assert "planner_sensitivity.png" in names
+    assert "planner_component_diagnostics.png" in names
+    assert (tmp_path / "planner_component_diagnostics.csv").is_file()
     assert "quantization_probability_error_by_family_size.png" in names
     assert manifest["failed_figures"] == []
     assert any(entry["status"] == "generated_todo_not_implemented" for entry in manifest["plots"])
@@ -698,8 +702,12 @@ def test_research_pack_registry_uses_canonical_thesis_suite_paths() -> None:
     assert pack.RESEARCH_SUITES["cpu_gpu_correctness"].name == "thesis_full_state_correctness.yml"
     assert pack.RESEARCH_SUITES["cpu_tn"].name == "thesis_cpu_tn_quimb.yml"
     assert pack.RESEARCH_SUITES["tn_path_quantization"].name == "thesis_tn_paths_quantization.yml"
-    assert pack.RESEARCH_SUITES["planner_paths"].name == "thesis_planner_compare.yml"
-    assert pack.RESEARCH_SUITES["planner_sensitivity"].name == "thesis_planner_sensitivity.yml"
+    assert pack.RESEARCH_SUITES["planner_paths"].name == "thesis_planner_semantic_v2.yml"
+    assert pack.RESEARCH_SUITES["planner_sensitivity"].name == "thesis_planner_sensitivity_v2.yml"
+    assert pack.RESEARCH_SUITES["planner_paths_v1"].name == "thesis_planner_compare.yml"
+    assert pack.RESEARCH_SUITES["planner_sensitivity_v1"].name == "thesis_planner_sensitivity.yml"
+    assert "planner_paths_v1" not in pack.SUITE_COMMAND_ORDER
+    assert "planner_sensitivity_v1" not in pack.SUITE_COMMAND_ORDER
     assert pack.SUITE_COMMAND_ORDER.index("tn_path_quantization") == pack.SUITE_COMMAND_ORDER.index("cpu_tn") + 1
     assert all("research_cpu_gpu.yml" not in path.name and "research_cpu_tn.yml" not in path.name for path in pack.RESEARCH_SUITES.values())
 
@@ -717,9 +725,9 @@ def test_research_suite_matrix_uses_six_families_and_seven_local_sizes() -> None
         assert sizes == {8, 10, 12, 14, 16, 18, 20}
         assert len(suite["cases"]) == 42
 
-    planner = load_suite(pack.RESEARCH_SUITES["planner_paths"])
-    assert planner["suite_id"] == "thesis_planner_compare"
-    planner_configs = comparison_planner_configs(planner)
+    legacy_planner = load_suite(pack.RESEARCH_SUITES["planner_paths_v1"])
+    assert legacy_planner["suite_id"] == "thesis_planner_compare"
+    planner_configs = comparison_planner_configs(legacy_planner)
     assert {(item["engine"], item.get("optimize"), item.get("objective")) for item in planner_configs} >= {
         ("opt_einsum", "greedy", None),
         ("opt_einsum", "auto", None),
@@ -731,6 +739,11 @@ def test_research_suite_matrix_uses_six_families_and_seven_local_sizes() -> None
     }
     assert pack._research_suite_argv("planner_paths", pack.ROOT)[:2] == ["compare-planners", "--suite"]
     assert pack._research_suite_argv("planner_sensitivity", pack.ROOT)[:2] == ["compare-planners", "--suite"]
+    assert pack._research_suite_argv("planner_paths_v1", pack.ROOT)[:2] == ["compare-planners", "--suite"]
+
+    planner_v2 = load_suite(pack.RESEARCH_SUITES["planner_paths"])
+    assert planner_v2["suite_id"] == "thesis_planner_semantic_v2"
+    assert planner_v2["planner_comparison"]["pim_objective"]["objective_version"] == "upmem_path_cost_v2"
 
 
 def test_research_pack_preserves_modeled_planner_candidates() -> None:
@@ -787,10 +800,27 @@ def test_research_pack_planner_csv_schema_preserves_motif_and_feasibility_contex
         "network_size_proxy": 5,
         "planner_id": "custom_upmem.greedy.wram_constrained",
         "planner_engine": "custom_upmem",
+        "planner_config_hash": "config-hash",
+        "planner_config": {"engine": "custom_upmem", "algorithm": "greedy"},
+        "planner_selection_scope": "projected_prefix",
+        "target_estimate_key": "upmem_dense_v1",
+        "target_estimate_model": "generic_single_dpu",
         "candidate_status": "rejected",
         "candidate_failure_reason": "bounded generic model rejects shape",
         "unsupported_task_count": 1,
         "missing_target_estimate_count": 0,
+        "pim_objective_version": "upmem_path_cost_v2",
+        "pim_numeric_component_invocations": 4,
+        "pim_numeric_recombination_flops": 12,
+        "pim_task_mram_payload_bytes": 2048,
+        "pim_native_static_mram_reservation_bytes": 786432,
+        "pim_mram_capacity_bytes": 67108864,
+        "pim_mram_static_reservation_pressure_ratio": 0.01171875,
+        "pim_mram_max_region_payload_ratio": 0.25,
+        "pim_mram_payload_pressure_ratio": 0.25,
+        "pim_known_wram_static_bytes": 1032,
+        "pim_wram_budget_bytes": 61440,
+        "pim_wram_known_pressure_ratio": 0.5,
         "parallelism_evidence_type": "modeled",
         "execution_plan_executed": False,
     }
@@ -806,6 +836,81 @@ def test_research_pack_planner_csv_schema_preserves_motif_and_feasibility_contex
     assert written["network_max_rank"] == "3"
     assert written["candidate_status"] == "rejected"
     assert written["unsupported_task_count"] == "1"
+    assert written["planner_config_hash"] == "config-hash"
+    assert json.loads(written["planner_config"])["algorithm"] == "greedy"
+    assert written["planner_selection_scope"] == "projected_prefix"
+    assert written["target_estimate_key"] == "upmem_dense_v1"
+    assert written["target_estimate_model"] == "generic_single_dpu"
+    assert written["pim_numeric_component_invocations"] == "4"
+    assert written["pim_numeric_recombination_flops"] == "12"
+    assert written["pim_task_mram_payload_bytes"] == "2048"
+    assert written["pim_native_static_mram_reservation_bytes"] == "786432"
+    assert written["pim_mram_max_region_payload_ratio"] == "0.25"
+    assert written["pim_mram_payload_pressure_ratio"] == "0.25"
+
+
+def _planner_semantic_record(*, objective: str | None, profile: str, score_model: str | None = None) -> dict:
+    return {
+        "schema_version": pack.SCHEMA_VERSION,
+        "suite_id": "thesis_planner_compare",
+        "case_id": f"planner_{profile}",
+        "route_id": "planner_candidate_model",
+        "n_qubits": 8,
+        "planner_id": f"custom_upmem.{profile}",
+        "pim_objective_version": objective,
+        "pim_weight_profile": profile,
+        "score_model": score_model,
+    }
+
+
+def test_report_allows_ordinary_evidence_and_multiple_profiles_with_one_planner_objective(monkeypatch, tmp_path: Path) -> None:
+    records = [
+        {"route_id": "quest_cpu_full_state_exact", "suite_id": "research_cpu_gpu", "case_id": "case_4q", "n_qubits": 4},
+        _planner_semantic_record(objective="upmem_path_cost_v2", profile="compute_oriented"),
+        _planner_semantic_record(objective="upmem_path_cost_v2", profile="wram_constrained"),
+    ]
+    monkeypatch.setattr(pack, "load_result_records", lambda _inputs: records)
+    monkeypatch.setattr(pack, "validate_artifact_boundaries", lambda _root: {"status": "passed"})
+    monkeypatch.setattr(pack, "_git", lambda *_args: "test-head")
+    monkeypatch.setattr(
+        pack,
+        "write_plots",
+        lambda *_args, **_kwargs: {"plots": [], "generated_valid": [], "todo_figures": [], "failed_figures": []},
+    )
+    input_path = tmp_path / "evidence"
+    input_path.mkdir()
+
+    assert pack.report_pack(tmp_path, tmp_path / "pack", inputs=[input_path], suite_filter=None) == 0
+    manifest = json.loads((tmp_path / "pack" / "benchmark_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["planner_semantics"]["semantic_versions"] == ["upmem_path_cost_v2"]
+    assert manifest["planner_semantics"]["weight_profiles"] == ["compute_oriented", "wram_constrained"]
+    assert (tmp_path / "pack" / "planner_component_diagnostics.csv").is_file()
+
+
+def test_report_rejects_mixed_planner_objective_versions(monkeypatch, tmp_path: Path) -> None:
+    records = [
+        _planner_semantic_record(objective="upmem_path_cost_v1", profile="balanced_literature_informed"),
+        _planner_semantic_record(objective="upmem_path_cost_v2", profile="balanced_literature_informed"),
+    ]
+    monkeypatch.setattr(pack, "load_result_records", lambda _inputs: records)
+    input_path = tmp_path / "evidence"
+    input_path.mkdir()
+
+    with pytest.raises(ValueError, match="planner semantic versions are mixed"):
+        pack.report_pack(tmp_path, tmp_path / "pack", inputs=[input_path], suite_filter=None)
+
+
+def test_report_rejects_mixed_legacy_planner_score_models(monkeypatch, tmp_path: Path) -> None:
+    records = [
+        _planner_semantic_record(objective=None, profile="legacy", score_model="upmem_pressure_v1"),
+        _planner_semantic_record(objective=None, profile="legacy", score_model="upmem_pressure_v2"),
+    ]
+    monkeypatch.setattr(pack, "load_result_records", lambda _inputs: records)
+    input_path = tmp_path / "evidence"
+    input_path.mkdir()
+
+    with pytest.raises(ValueError, match="planner semantic versions are mixed"):
+        pack.report_pack(tmp_path, tmp_path / "pack", inputs=[input_path], suite_filter=None)
 
 
 def test_research_pack_same_plan_cpu_upmem_requires_matching_hash() -> None:

@@ -44,6 +44,8 @@ Remaining limitations:
 | `configs/suites/manual/thesis_tn_paths_quantization.yml` | Same-path float64/int8 internal replay diagnostic. |
 | `configs/suites/manual/thesis_planner_compare.yml` | Standard opt_einsum/cotengra baselines plus deterministic custom UPMEM-greedy modeled path comparison over the canonical grid. |
 | `configs/suites/manual/thesis_planner_sensitivity.yml` | Modeled-only scenario sensitivity for named custom UPMEM objective weight profiles. |
+| `configs/suites/manual/thesis_planner_semantic_v2.yml` | V2 projected-prefix modeled planner semantics on small quantum cases plus controlled synthetic motifs, with standard planning baselines. |
+| `configs/suites/manual/thesis_planner_sensitivity_v2.yml` | V2 projected-prefix sensitivity across named profiles, retaining standard opt_einsum/cotengra baselines. |
 | `configs/suites/manual/research_internal_parallelism.yml` | Diagnostic internal TaskGraph sequential/frontier/hybrid evidence. |
 | `configs/suites/manual/thesis_upmem_quantization_boundary.yml` | Strict generic-only UPMEM SDK simulator boundary and same-route float32/int8 attribution evidence. |
 
@@ -87,13 +89,18 @@ make thesis-report
 - A CPU/UPMEM row is labeled same-plan only when its
   `contraction_plan_hash` matches. Planner candidates are modeled evidence and
   remain separate from executor timing.
-- The `custom_upmem` planner is a deterministic path generator under the
-  recorded `generic_single_dpu_float32_v1` policy. Its costs are
-  planner-estimated/modelled, not a hardware runtime predictor.
-- That current generic policy accepts real float32 tensors only. Complex
-  quantum TN candidates are preserved as standard-planner baselines but are
-  explicitly reported as modeled infeasible rather than selected for UPMEM;
-  real-valued planner motifs exercise the custom path generator in this phase.
+- The existing v1 `custom_upmem` suites are historical evidence under the
+  recorded `upmem_path_cost_v1` and `generic_single_dpu_float32_v1` contract.
+  Their costs are planner-estimated/modelled, not a hardware runtime
+  predictor.
+- The additive v2 suites use `upmem_path_cost_v2` with deterministic
+  `projected_prefix` greedy selection. Zero-imaginary complex inputs are
+  accepted as real-valued work; nonzero complex inputs are modeled as split
+  real/imaginary components where the bounded policy supports them. The v2
+  contract does not imply unrestricted complex execution.
+- Both v1 and v2 planner suites retain standard opt_einsum/cotengra baselines.
+  Planner rows are modeled path evidence only and never support a UPMEM
+  hardware performance claim.
 - Controlled chain/tree/star/cycle/grid/trade-off planner motifs are marked
   `not_real_quantum_circuit=true`; they validate planner behavior and never
   support circuit-runtime or hardware claims.
@@ -118,6 +125,10 @@ make thesis-report
 - No physical bus-traffic claim from `application_visible_sdk_recorded`
   transfer bytes. When directional fields exist, reports require
   `actual_transfer_bytes = actual_h2d_bytes + actual_d2h_bytes`.
+- The native generic-loop sidecar separately records prepared operand/result
+  payload, control arguments, and modeled 8-byte payload alignment. Those are
+  application-visible SDK-call lengths; unknown SDK and physical-DIMM traffic
+  remain explicitly unavailable.
 
 ## Outputs
 
