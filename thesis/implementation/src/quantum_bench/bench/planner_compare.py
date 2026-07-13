@@ -36,10 +36,24 @@ from quantum_bench.tn.upmem_path_cost import (
     upmem_path_cost_policy,
     upmem_path_cost_profile,
 )
-from quantum_bench.tn.upmem_planner import PlannerInfeasibleError, UPMEM_PATH_OBJECTIVE_VERSION
+from quantum_bench.tn.upmem_path_cost_v2 import (
+    DEFAULT_UPMEM_PATH_COST_NORMALIZATION_V2,
+    PathCostComponentsV2,
+    model_upmem_network_path_cost_v2,
+    upmem_path_cost_policy_v2,
+    upmem_path_cost_profile_v2,
+)
+from quantum_bench.tn.upmem_planner import (
+    PlannerInfeasibleError,
+    UPMEM_PATH_OBJECTIVE_VERSION,
+    UPMEM_PATH_SELECTION_SCOPE_V1,
+    UPMEM_PATH_SELECTION_SCOPE_V2,
+)
+from quantum_bench.tn.upmem_path_cost_v2 import UPMEM_PATH_OBJECTIVE_V2
+from quantum_bench.tn.planners import canonical_planner_config_hash
 
 
-COMPARISON_SCHEMA_VERSION = "planner_comparison_v3"
+COMPARISON_SCHEMA_VERSION = "planner_comparison_v4"
 
 COMPARISON_FIELDS = [
     "case_id",
@@ -57,6 +71,9 @@ COMPARISON_FIELDS = [
     "network_size_proxy",
     "planner_engine",
     "planner_id",
+    "planner_config_hash",
+    "planner_config",
+    "planner_selection_scope",
     "planner_kind",
     "optimize_mode",
     "objective",
@@ -111,6 +128,23 @@ COMPARISON_FIELDS = [
     "pim_estimated_numerical_penalty",
     "pim_estimated_wram_pressure",
     "pim_estimated_tile_count",
+    "pim_largest_tensor_bytes",
+    "pim_host_to_dpu_payload_bytes",
+    "pim_dpu_to_host_payload_bytes",
+    "pim_mram_dma_window_bytes_model",
+    "pim_tile_iterations",
+    "pim_host_completion_events",
+    "pim_numeric_component_invocations",
+    "pim_numeric_recombination_flops",
+    "pim_task_mram_payload_bytes",
+    "pim_native_static_mram_reservation_bytes",
+    "pim_mram_capacity_bytes",
+    "pim_mram_static_reservation_pressure_ratio",
+    "pim_mram_max_region_payload_ratio",
+    "pim_mram_payload_pressure_ratio",
+    "pim_known_wram_static_bytes",
+    "pim_wram_budget_bytes",
+    "pim_wram_known_pressure_ratio",
     "pim_objective_components",
     "pim_normalized_components",
     "pim_objective_score",
@@ -234,13 +268,19 @@ def _compare_case(
     rows: list[dict[str, Any]] = []
 
     for planner_config in planner_configs:
-        profile = _pim_profile_for_config(planner_config, pim_objective_config)
+        objective_version, profile = _pim_profile_for_config(planner_config, pim_objective_config)
         try:
             graph = plan_task_graph_with_config(network, planner_config)
             graph, _ = annotate_task_graph_with_upmem_estimates(graph)
             graph = with_path_cost_summary(graph)
-            components = model_upmem_network_path_cost(network, graph.tasks, profile.policy)
-            planner_dir_name = _unique_planner_dir_name(graph.path_summary.planner_id, used_planner_dirs)
+            components = _model_pim_components(objective_version, network, graph.tasks, profile)
+            planner_config_hash = str(graph.path_summary.options.get("planner_config_hash") or "")
+            planner_dir_name = _unique_planner_dir_name(
+                f"{graph.path_summary.planner_id}_{planner_config_hash[:12]}"
+                if planner_config_hash
+                else graph.path_summary.planner_id,
+                used_planner_dirs,
+            )
             artifacts = _write_planner_artifacts(
                 run_dir,
                 suite_id,
@@ -261,6 +301,7 @@ def _compare_case(
                     artifacts,
                     components,
                     profile,
+                    objective_version,
                 )
             )
         except PlannerInfeasibleError as exc:
@@ -274,6 +315,7 @@ def _compare_case(
                     workload_metadata,
                     planner_config,
                     profile,
+                    objective_version,
                     str(exc),
                     exc.rejection_reasons,
                     candidate_status="rejected",
@@ -290,6 +332,7 @@ def _compare_case(
                     workload_metadata,
                     planner_config,
                     profile,
+                    objective_version,
                     f"{type(exc).__name__}: {exc}",
                     ("planner_candidate_failed",),
                     candidate_status="failed",
@@ -305,7 +348,7 @@ def _write_planner_artifacts(
     case_id: str,
     planner_dir_name: str,
     graph: TaskGraph,
-    components: PathCostComponents,
+    components: PathCostComponents | PathCostComponentsV2,
 ) -> dict[str, str]:
     planner_root = Path("cases") / case_id / "planners" / planner_dir_name
     task_graph_artifact = planner_root / "task_graph.json"
@@ -345,8 +388,9 @@ def _comparison_row(
     workload_metadata: dict[str, Any],
     graph: TaskGraph,
     artifacts: dict[str, str],
-    components: PathCostComponents,
+    components: PathCostComponents | PathCostComponentsV2,
     profile: Any,
+    objective_version: str,
 ) -> dict[str, Any]:
     summary = graph.path_summary
     return {
@@ -358,6 +402,9 @@ def _comparison_row(
         **workload_metadata,
         "planner_engine": summary.planner_engine,
         "planner_id": summary.planner_id,
+        "planner_config_hash": summary.options.get("planner_config_hash"),
+        "planner_config": summary.options.get("planner_config"),
+        "planner_selection_scope": summary.planner_metadata.get("selection_scope"),
         "planner_kind": summary.planner_kind,
         "optimize_mode": summary.optimize_mode,
         "objective": summary.objective,
@@ -381,25 +428,37 @@ def _comparison_row(
         "contraction_plan_hash": graph.contraction_plan_hash,
         "contraction_path_structure_hash": contraction_path_structure_hash(graph),
         "planning_time_s": graph.planning_time_s,
-        **_pim_component_fields(components, profile),
+        **_pim_component_fields(components, profile, objective_version),
         **artifacts,
     }
 
 
-def _pim_profile_for_config(planner_config: dict[str, Any], defaults: dict[str, str]) -> Any:
+def _pim_profile_for_config(planner_config: dict[str, Any], defaults: dict[str, str]) -> tuple[str, Any]:
     objective_version = str(planner_config.get("objective_version", defaults["objective_version"]))
-    if objective_version != UPMEM_PATH_OBJECTIVE_VERSION:
-        raise ValueError(f"Unsupported modeled UPMEM objective version: {objective_version}")
     normalization_id = str(planner_config.get("normalization", defaults["normalization"]))
-    if normalization_id != DEFAULT_UPMEM_PATH_COST_NORMALIZATION_ID:
-        raise ValueError(f"Unsupported modeled UPMEM normalization: {normalization_id}")
     policy_id = str(planner_config.get("execution_policy", defaults["execution_policy"]))
     profile_id = str(planner_config.get("weight_profile", defaults["weight_profile"]))
-    return upmem_path_cost_profile(profile_id, policy=upmem_path_cost_policy(policy_id))
+    if objective_version == UPMEM_PATH_OBJECTIVE_VERSION:
+        if normalization_id != DEFAULT_UPMEM_PATH_COST_NORMALIZATION_ID:
+            raise ValueError(f"Unsupported modeled UPMEM v1 normalization: {normalization_id}")
+        return objective_version, upmem_path_cost_profile(profile_id, policy=upmem_path_cost_policy(policy_id))
+    if objective_version == UPMEM_PATH_OBJECTIVE_V2:
+        if normalization_id != DEFAULT_UPMEM_PATH_COST_NORMALIZATION_V2:
+            raise ValueError(f"Unsupported modeled UPMEM v2 normalization: {normalization_id}")
+        return objective_version, upmem_path_cost_profile_v2(profile_id, policy=upmem_path_cost_policy_v2(policy_id))
+    raise ValueError(f"Unsupported modeled UPMEM objective version: {objective_version}")
 
 
-def _pim_component_fields(components: PathCostComponents, profile: Any) -> dict[str, Any]:
+def _pim_component_fields(
+    components: PathCostComponents | PathCostComponentsV2,
+    profile: Any,
+    objective_version: str,
+) -> dict[str, Any]:
     score = profile.score(components)
+    if objective_version == UPMEM_PATH_OBJECTIVE_V2:
+        assert isinstance(components, PathCostComponentsV2)
+        return _pim_component_fields_v2(components, profile, score)
+    assert isinstance(components, PathCostComponents)
     return {
         "pim_objective_version": UPMEM_PATH_OBJECTIVE_VERSION,
         "pim_weight_profile": profile.profile_id,
@@ -428,6 +487,73 @@ def _pim_component_fields(components: PathCostComponents, profile: Any) -> dict[
     }
 
 
+def _pim_component_fields_v2(
+    components: PathCostComponentsV2,
+    profile: Any,
+    score: float,
+) -> dict[str, Any]:
+    return {
+        "pim_objective_version": UPMEM_PATH_OBJECTIVE_V2,
+        "pim_weight_profile": profile.profile_id,
+        "pim_normalization": profile.normalization.to_json_dict(),
+        "pim_execution_policy": profile.policy.to_json_dict(),
+        "pim_feasible": bool(components.feasibility),
+        "pim_rejection_reasons": list(components.rejection_reasons),
+        # Compatibility aliases retain a stable report surface.  New fields
+        # below carry the precise v2 meanings used by the weighted objective.
+        "pim_estimated_flops": int(components.estimated_flops),
+        "pim_peak_intermediate_bytes": int(components.largest_tensor_bytes),
+        "pim_total_intermediate_write_bytes": int(components.dpu_to_host_payload_bytes),
+        "pim_estimated_host_to_dpu_bytes": int(components.host_to_dpu_payload_bytes),
+        "pim_estimated_dpu_to_host_bytes": int(components.dpu_to_host_payload_bytes),
+        "pim_estimated_host_dpu_bytes": int(
+            components.host_to_dpu_payload_bytes + components.dpu_to_host_payload_bytes
+        ),
+        "pim_estimated_mram_to_wram_bytes": int(components.mram_dma_window_bytes_model),
+        "pim_estimated_dpu_local_work": int(components.estimated_flops),
+        "pim_estimated_sync_events": int(components.host_completion_events),
+        "pim_estimated_numerical_penalty": float(components.numeric_representation_penalty),
+        "pim_estimated_wram_pressure": float(components.wram_known_pressure_ratio),
+        "pim_estimated_tile_count": int(components.tile_iterations),
+        "pim_largest_tensor_bytes": int(components.largest_tensor_bytes),
+        "pim_host_to_dpu_payload_bytes": int(components.host_to_dpu_payload_bytes),
+        "pim_dpu_to_host_payload_bytes": int(components.dpu_to_host_payload_bytes),
+        "pim_mram_dma_window_bytes_model": int(components.mram_dma_window_bytes_model),
+        "pim_tile_iterations": int(components.tile_iterations),
+        "pim_host_completion_events": int(components.host_completion_events),
+        "pim_numeric_component_invocations": int(components.numeric_component_invocations),
+        "pim_numeric_recombination_flops": int(components.numeric_recombination_flops),
+        "pim_task_mram_payload_bytes": int(components.task_mram_payload_bytes),
+        "pim_native_static_mram_reservation_bytes": int(components.native_static_mram_reservation_bytes),
+        "pim_mram_capacity_bytes": int(components.mram_capacity_bytes),
+        "pim_mram_static_reservation_pressure_ratio": float(
+            components.mram_static_reservation_pressure_ratio
+        ),
+        "pim_mram_max_region_payload_ratio": float(components.mram_max_region_payload_ratio),
+        "pim_mram_payload_pressure_ratio": float(components.mram_payload_pressure_ratio),
+        "pim_known_wram_static_bytes": int(components.known_wram_static_bytes),
+        "pim_wram_budget_bytes": int(components.wram_budget_bytes),
+        "pim_wram_known_pressure_ratio": float(components.wram_known_pressure_ratio),
+        "pim_objective_components": components.to_json_dict(),
+        "pim_normalized_components": profile.normalize(components) if components.feasibility else None,
+        "pim_objective_score": float(score) if math.isfinite(score) else None,
+        "pim_objective_rank": None,
+        "pim_pareto_dominated": None,
+        "pim_selected": False,
+    }
+
+
+def _model_pim_components(
+    objective_version: str,
+    network: Any,
+    tasks: tuple[Any, ...],
+    profile: Any,
+) -> PathCostComponents | PathCostComponentsV2:
+    if objective_version == UPMEM_PATH_OBJECTIVE_V2:
+        return model_upmem_network_path_cost_v2(network, tasks, profile.policy)
+    return model_upmem_network_path_cost(network, tasks, profile.policy)
+
+
 def _rejected_comparison_row(
     case: dict[str, Any],
     circuit_name: str,
@@ -437,13 +563,18 @@ def _rejected_comparison_row(
     workload_metadata: dict[str, Any],
     planner_config: dict[str, Any],
     profile: Any,
+    objective_version: str,
     failure_reason: str,
     rejection_reasons: tuple[str, ...],
     *,
     candidate_status: str,
 ) -> dict[str, Any]:
-    identity = _planner_identity_fields(planner_config, profile)
-    components = PathCostComponents(feasibility=False, rejection_reasons=tuple(rejection_reasons))
+    identity = _planner_identity_fields(planner_config, profile, objective_version)
+    components: PathCostComponents | PathCostComponentsV2
+    if objective_version == UPMEM_PATH_OBJECTIVE_V2:
+        components = PathCostComponentsV2(feasibility=False, rejection_reasons=tuple(rejection_reasons))
+    else:
+        components = PathCostComponents(feasibility=False, rejection_reasons=tuple(rejection_reasons))
     return {
         "case_id": str(case["case_id"]),
         "workload_id": workload_id,
@@ -483,17 +614,22 @@ def _rejected_comparison_row(
         "score_components": None,
         "score_weights": None,
         "tradeoff_note": "planner candidate rejected before path construction",
-        **_pim_component_fields(components, profile),
+        **_pim_component_fields(components, profile, objective_version),
     }
 
 
-def _planner_identity_fields(planner_config: dict[str, Any], profile: Any) -> dict[str, Any]:
+def _planner_identity_fields(planner_config: dict[str, Any], profile: Any, objective_version: str) -> dict[str, Any]:
     engine = str(planner_config.get("engine", "opt_einsum"))
+    resolved = dict(planner_config)
+    config_hash = canonical_planner_config_hash(resolved)
     if engine == "opt_einsum":
         optimize = str(planner_config.get("optimize", "greedy"))
         return {
             "planner_engine": engine,
             "planner_id": f"opt_einsum.{optimize}",
+            "planner_config_hash": config_hash,
+            "planner_config": resolved,
+            "planner_selection_scope": None,
             "planner_kind": "external_path_optimizer",
             "optimize_mode": optimize,
             "objective": "opt_einsum_contract_path",
@@ -505,6 +641,9 @@ def _planner_identity_fields(planner_config: dict[str, Any], profile: Any) -> di
         return {
             "planner_engine": engine,
             "planner_id": f"cotengra.{objective}",
+            "planner_config_hash": config_hash,
+            "planner_config": resolved,
+            "planner_selection_scope": None,
             "planner_kind": "external_contraction_tree",
             "optimize_mode": str(planner_config.get("methods", "greedy")),
             "objective": f"cotengra_{objective}",
@@ -512,18 +651,29 @@ def _planner_identity_fields(planner_config: dict[str, Any], profile: Any) -> di
             "target_estimate_key": None,
         }
     if engine == "custom_upmem":
+        is_v2 = objective_version == UPMEM_PATH_OBJECTIVE_V2
         return {
             "planner_engine": engine,
-            "planner_id": f"custom_upmem.greedy.{profile.profile_id}",
-            "planner_kind": "native_target_greedy",
+            "planner_id": (
+                f"custom_upmem.greedy.v2.{profile.profile_id}"
+                if is_v2
+                else f"custom_upmem.greedy.{profile.profile_id}"
+            ),
+            "planner_config_hash": config_hash,
+            "planner_config": resolved,
+            "planner_selection_scope": UPMEM_PATH_SELECTION_SCOPE_V2 if is_v2 else UPMEM_PATH_SELECTION_SCOPE_V1,
+            "planner_kind": "native_target_projected_prefix_greedy" if is_v2 else "native_target_greedy",
             "optimize_mode": "greedy",
-            "objective": UPMEM_PATH_OBJECTIVE_VERSION,
+            "objective": objective_version,
             "cost_basis": profile.policy.policy_id,
             "target_estimate_key": profile.policy.policy_id,
         }
     return {
         "planner_engine": engine,
         "planner_id": engine,
+        "planner_config_hash": config_hash,
+        "planner_config": resolved,
+        "planner_selection_scope": None,
         "planner_kind": "unknown",
         "optimize_mode": "",
         "objective": "",
@@ -549,16 +699,23 @@ def _score_pim_objective_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]
         for row in case_rows:
             row["pim_pareto_dominated"] = _pim_pareto_dominated(row, feasible) if row in feasible else None
 
-        by_profile: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+        by_profile: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
         for row in feasible:
             key = (
+                str(row.get("pim_objective_version")),
                 str(row.get("pim_weight_profile")),
                 _stable_json_text(row.get("pim_normalization")),
                 _stable_json_text(row.get("pim_execution_policy")),
             )
             by_profile.setdefault(key, []).append(row)
         for profile_rows in by_profile.values():
-            ordered = sorted(profile_rows, key=lambda row: (float(row["pim_objective_score"]), str(row["planner_id"])))
+            ordered = sorted(
+                profile_rows,
+                key=lambda row: (
+                    float(row["pim_objective_score"]),
+                    str(row.get("planner_config_hash") or row["planner_id"]),
+                ),
+            )
             rank = 0
             prior_score: float | None = None
             for index, row in enumerate(ordered, start=1):
@@ -586,6 +743,18 @@ def _pim_pareto_dominated(row: dict[str, Any], feasible_rows: list[dict[str, Any
 
 
 def _pim_component_vector(row: dict[str, Any]) -> dict[str, float]:
+    if row.get("pim_objective_version") == UPMEM_PATH_OBJECTIVE_V2:
+        return {
+            "estimated_flops": float(row.get("pim_estimated_flops", 0) or 0),
+            "host_to_dpu_payload_bytes": float(row.get("pim_host_to_dpu_payload_bytes", 0) or 0),
+            "dpu_to_host_payload_bytes": float(row.get("pim_dpu_to_host_payload_bytes", 0) or 0),
+            "mram_dma_window_bytes_model": float(row.get("pim_mram_dma_window_bytes_model", 0) or 0),
+            "tile_iterations": float(row.get("pim_tile_iterations", 0) or 0),
+            "host_completion_events": float(row.get("pim_host_completion_events", 0) or 0),
+            "mram_payload_pressure_ratio": float(row.get("pim_mram_payload_pressure_ratio", 0) or 0),
+            "wram_known_pressure_ratio": float(row.get("pim_wram_known_pressure_ratio", 0) or 0),
+            "numeric_representation_penalty": float(row.get("pim_estimated_numerical_penalty", 0) or 0),
+        }
     return {
         "flops": float(row.get("pim_estimated_flops", 0) or 0),
         "peak_bytes": float(row.get("pim_peak_intermediate_bytes", 0) or 0),
@@ -636,7 +805,14 @@ def _normalized_planner_record(payload: dict[str, Any], row: dict[str, Any]) -> 
         "contraction_path_structure_hash": row.get("contraction_path_structure_hash"),
         "plan_reused": False,
         "planning_in_timed_region": False,
-        "executor_config_hash": executor_config_hash("planner_candidate_model", {"planner_id": row["planner_id"]}),
+        "executor_config_hash": executor_config_hash(
+            "planner_candidate_model",
+            {
+                "planner_id": row["planner_id"],
+                "planner_config_hash": row.get("planner_config_hash"),
+                "pim_objective_version": row.get("pim_objective_version"),
+            },
+        ),
         "execution_bundle_artifact": row.get("execution_bundle_artifact"),
         "planner_cost_components_artifact": row.get("planner_cost_components_artifact"),
         "planner_step_trace_artifact": row.get("planner_step_trace_artifact"),
@@ -649,6 +825,9 @@ def _normalized_planner_record(payload: dict[str, Any], row: dict[str, Any]) -> 
         "planning_time_s": row.get("planning_time_s"),
         "planner_engine": row["planner_engine"],
         "planner_id": row["planner_id"],
+        "planner_config_hash": row.get("planner_config_hash"),
+        "planner_config": row.get("planner_config"),
+        "planner_selection_scope": row.get("planner_selection_scope"),
         "planner_kind": row["planner_kind"],
         "optimize_mode": row["optimize_mode"],
         "objective": row["objective"],
@@ -690,6 +869,23 @@ def _normalized_planner_record(payload: dict[str, Any], row: dict[str, Any]) -> 
         "pim_estimated_numerical_penalty": row.get("pim_estimated_numerical_penalty"),
         "pim_estimated_wram_pressure": row.get("pim_estimated_wram_pressure"),
         "pim_estimated_tile_count": row.get("pim_estimated_tile_count"),
+        "pim_largest_tensor_bytes": row.get("pim_largest_tensor_bytes"),
+        "pim_host_to_dpu_payload_bytes": row.get("pim_host_to_dpu_payload_bytes"),
+        "pim_dpu_to_host_payload_bytes": row.get("pim_dpu_to_host_payload_bytes"),
+        "pim_mram_dma_window_bytes_model": row.get("pim_mram_dma_window_bytes_model"),
+        "pim_tile_iterations": row.get("pim_tile_iterations"),
+        "pim_host_completion_events": row.get("pim_host_completion_events"),
+        "pim_numeric_component_invocations": row.get("pim_numeric_component_invocations"),
+        "pim_numeric_recombination_flops": row.get("pim_numeric_recombination_flops"),
+        "pim_task_mram_payload_bytes": row.get("pim_task_mram_payload_bytes"),
+        "pim_native_static_mram_reservation_bytes": row.get("pim_native_static_mram_reservation_bytes"),
+        "pim_mram_capacity_bytes": row.get("pim_mram_capacity_bytes"),
+        "pim_mram_static_reservation_pressure_ratio": row.get("pim_mram_static_reservation_pressure_ratio"),
+        "pim_mram_max_region_payload_ratio": row.get("pim_mram_max_region_payload_ratio"),
+        "pim_mram_payload_pressure_ratio": row.get("pim_mram_payload_pressure_ratio"),
+        "pim_known_wram_static_bytes": row.get("pim_known_wram_static_bytes"),
+        "pim_wram_budget_bytes": row.get("pim_wram_budget_bytes"),
+        "pim_wram_known_pressure_ratio": row.get("pim_wram_known_pressure_ratio"),
         "pim_objective_components": row.get("pim_objective_components"),
         "pim_normalized_components": row.get("pim_normalized_components"),
         "hardware_execution": False,

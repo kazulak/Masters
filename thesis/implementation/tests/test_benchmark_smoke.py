@@ -112,7 +112,11 @@ def test_smoke_suite_writes_raw_summary_without_plots(tmp_path: Path) -> None:
         assert path_summary["objective"] == "opt_einsum_contract_path"
         assert path_summary["cost_basis"] == "opt_einsum_internal"
         assert path_summary["target_estimate_key"] is None
-        assert path_summary["options"] == {"engine": "opt_einsum", "optimize": "greedy"}
+        assert path_summary["options"]["engine"] == "opt_einsum"
+        assert path_summary["options"]["optimize"] == "greedy"
+        assert path_summary["options"]["planner_config"]["engine"] == "opt_einsum"
+        assert path_summary["options"]["planner_config"]["optimize"] == "greedy"
+        assert path_summary["options"]["planner_config_hash"]
         assert path_summary["task_count"] == len(task_graph["tasks"])
         assert path_summary["total_estimated_flops"] == sum(task["estimated_flops"] for task in task_graph["tasks"])
         assert path_summary["peak_intermediate_bytes"] >= path_summary["max_intermediate_bytes"]

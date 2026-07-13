@@ -27,10 +27,25 @@ from quantum_bench.tn.upmem_path_cost import (
     upmem_path_cost_policy,
     upmem_path_cost_profile,
 )
+from quantum_bench.tn.upmem_path_cost_v2 import (
+    DEFAULT_UPMEM_PATH_COST_NORMALIZATION_V2,
+    DEFAULT_UPMEM_PATH_COST_POLICY_V2,
+    UPMEM_PATH_OBJECTIVE_V2,
+    PathCostComponentsV2,
+    TaskNumericExecution,
+    UpmemPathCostProfileV2,
+    combine_path_cost_components_v2,
+    task_numeric_execution,
+    upmem_path_cost_policy_v2,
+    upmem_path_cost_profile_v2,
+)
+from quantum_bench.routing.generic_numeric_contract import classify_numeric
 
 
 UPMEM_PATH_OBJECTIVE_VERSION = "upmem_path_cost_v1"
 UPMEM_PATH_ENGINE = "custom_upmem"
+UPMEM_PATH_SELECTION_SCOPE_V1 = "local_step"
+UPMEM_PATH_SELECTION_SCOPE_V2 = "projected_prefix"
 
 
 class PlannerInfeasibleError(ValueError):
@@ -201,6 +216,7 @@ class UpmemAwareGreedyPlanner:
                 "normalization": self.profile.normalization.to_json_dict(),
                 "execution_policy": self.profile.policy.to_json_dict(),
                 "numeric_contract": "float32_real_generic_model",
+                "selection_scope": UPMEM_PATH_SELECTION_SCOPE_V1,
                 "components": total.to_json_dict(),
                 "normalized_components": self.profile.normalize(total),
                 "modeled_score": self.profile.score(total),
@@ -208,9 +224,307 @@ class UpmemAwareGreedyPlanner:
                 "execution_plan_executed": False,
             },
         )
+
+
+@dataclass(frozen=True)
+class _ProjectedCandidate:
+    pair: tuple[int, int]
+    task: Any
+    output_tensor: TensorSpec
+    next_active: tuple[TensorSpec, ...]
+    numeric_execution: TaskNumericExecution
+    components: PathCostComponentsV2
+    local_score: float
+    projected_components: PathCostComponentsV2
+    projected_score: float
+    tie_break: tuple[Any, ...]
+
+
+class UpmemAwareProjectedPrefixPlanner:
+    """Deterministic v2 greedy planner scored against its selected prefix.
+
+    The planner is intentionally still greedy.  At each step it selects the
+    candidate with the lowest modeled score of the already selected prefix plus
+    that candidate; it does not claim a global complete-path optimum.
+    """
+
+    def __init__(self, *, profile: UpmemPathCostProfileV2, options: dict[str, Any] | None = None) -> None:
+        self.profile = profile
+        base_options = {
+            "engine": UPMEM_PATH_ENGINE,
+            "algorithm": "greedy",
+            "objective_version": UPMEM_PATH_OBJECTIVE_V2,
+            "selection_scope": UPMEM_PATH_SELECTION_SCOPE_V2,
+            "weight_profile": profile.profile_id,
+            "normalization": profile.normalization.normalization_id,
+            "execution_policy": profile.policy.policy_id,
+            "numeric_contract": "real_float32_or_split_real_imag_v2",
+        }
+        if options:
+            base_options.update(options)
+        self.identity = PlannerIdentity(
+            planner_engine=UPMEM_PATH_ENGINE,
+            planner_id=f"{UPMEM_PATH_ENGINE}.greedy.v2.{profile.profile_id}",
+            planner_kind="native_target_projected_prefix_greedy",
+            optimize_mode="greedy",
+            objective=UPMEM_PATH_OBJECTIVE_V2,
+            cost_basis=profile.policy.policy_id,
+            target_estimate_key=profile.policy.policy_id,
+            options=base_options,
+        )
+
+    @classmethod
+    def from_config(cls, config: dict[str, Any]) -> "UpmemAwareProjectedPrefixPlanner":
+        algorithm = str(config.get("algorithm", "greedy"))
+        if algorithm != "greedy":
+            raise ValueError(f"Unsupported custom_upmem v2 planner algorithm: {algorithm}")
+        objective_version = str(config.get("objective_version", UPMEM_PATH_OBJECTIVE_V2))
+        if objective_version != UPMEM_PATH_OBJECTIVE_V2:
+            raise ValueError(f"Unsupported custom_upmem v2 objective version: {objective_version}")
+        selection_scope = str(config.get("selection_scope", UPMEM_PATH_SELECTION_SCOPE_V2))
+        if selection_scope != UPMEM_PATH_SELECTION_SCOPE_V2:
+            raise ValueError(f"Unsupported custom_upmem v2 selection scope: {selection_scope}")
+        policy_id = str(config.get("execution_policy", DEFAULT_UPMEM_PATH_COST_POLICY_V2))
+        normalization = str(config.get("normalization", DEFAULT_UPMEM_PATH_COST_NORMALIZATION_V2))
+        if normalization != DEFAULT_UPMEM_PATH_COST_NORMALIZATION_V2:
+            raise ValueError(f"Unsupported custom_upmem v2 normalization: {normalization}")
+        policy = upmem_path_cost_policy_v2(policy_id)
+        profile = upmem_path_cost_profile_v2(
+            str(config.get("weight_profile", "balanced_literature_informed")),
+            policy=policy,
+        )
+        return cls(profile=profile, options=config)
+
+    def plan(self, network: TensorNetworkValue) -> PlannerResult:
+        # Import lazily: task_graph imports PlannerResult/PathPlanner.
+        from quantum_bench.tn.task_graph import derive_binary_contraction_step
+
+        numeric_complex_by_tensor: dict[str, bool] = {}
+        for tensor in network.tensors:
+            classification = classify_numeric(np.asarray(tensor.array))
+            if classification.has_nonfinite:
+                raise PlannerInfeasibleError(
+                    "custom_upmem v2 policy cannot model nonfinite tensor inputs",
+                    rejection_reasons=("nonfinite_values_not_supported",),
+                )
+            numeric_complex_by_tensor[tensor.spec.id] = classification.has_nonzero_imaginary
+
+        start = time.perf_counter()
+        active = [tensor.spec for tensor in network.tensors]
+        produced_by: dict[str, str | None] = {tensor.id: tensor.produced_by for tensor in active}
+        selected_tasks: list[Any] = []
+        selected_components: list[PathCostComponentsV2] = []
+        selected_executions: dict[str, TaskNumericExecution] = {}
+        path: list[tuple[int, int]] = []
+        step_trace: list[dict[str, Any]] = []
+
+        for step_index in range(max(0, len(active) - 1)):
+            candidates: list[_ProjectedCandidate] = []
+            rejections: list[str] = []
+            active_tensor_ids = [tensor.id for tensor in active]
+            for i in range(len(active)):
+                for j in range(i + 1, len(active)):
+                    step = derive_binary_contraction_step(
+                        active,
+                        (i, j),
+                        network.spec.output_labels,
+                        produced_by=produced_by,
+                        task_id=f"task_{step_index}",
+                        output_id=f"result_{step_index}",
+                    )
+                    execution = task_numeric_execution(
+                        numeric_complex_by_tensor[step.task.input_tensor_ids[0]],
+                        numeric_complex_by_tensor[step.task.input_tensor_ids[1]],
+                        int(np.prod(step.task.output_shape, dtype=np.int64)),
+                    )
+                    components = self._task_components(step.task, execution)
+                    local_score = self.profile.score(components)
+                    projected_components = combine_path_cost_components_v2(
+                        [*selected_components, components],
+                        self.profile.policy,
+                    )
+                    projected_score = self.profile.score(projected_components)
+                    output_elements = int(np.prod(step.task.output_shape, dtype=np.int64))
+                    tie_break = (
+                        projected_score,
+                        components.tile_iterations,
+                        output_elements,
+                        step.task.estimated_flops,
+                        (i, j),
+                    )
+                    if not components.feasibility:
+                        rejections.extend(components.rejection_reasons)
+                        step_trace.append(
+                            self._trace_entry(
+                                step_index=step_index,
+                                active_tensor_ids=active_tensor_ids,
+                                pair=(i, j),
+                                task=step.task,
+                                execution=execution,
+                                components=components,
+                                local_score=local_score,
+                                projected_components=projected_components,
+                                projected_score=projected_score,
+                                tie_break=tie_break,
+                                candidate_rank=None,
+                                selected=False,
+                            )
+                        )
+                        continue
+                    candidates.append(
+                        _ProjectedCandidate(
+                            pair=(i, j),
+                            task=step.task,
+                            output_tensor=step.output_tensor,
+                            next_active=step.next_active,
+                            numeric_execution=execution,
+                            components=components,
+                            local_score=local_score,
+                            projected_components=projected_components,
+                            projected_score=projected_score,
+                            tie_break=tie_break,
+                        )
+                    )
+
+            if not candidates:
+                reasons = tuple(dict.fromkeys(rejections)) or ("no_feasible_pair",)
+                raise PlannerInfeasibleError(
+                    f"custom_upmem v2 planner found no feasible pair at step {step_index}: {', '.join(reasons)}",
+                    rejection_reasons=reasons,
+                    step_index=step_index,
+                )
+
+            ordered = sorted(candidates, key=lambda item: item.tie_break)
+            selected = ordered[0]
+            for candidate_rank, candidate in enumerate(ordered, start=1):
+                step_trace.append(
+                    self._trace_entry(
+                        step_index=step_index,
+                        active_tensor_ids=active_tensor_ids,
+                        pair=candidate.pair,
+                        task=candidate.task,
+                        execution=candidate.numeric_execution,
+                        components=candidate.components,
+                        local_score=candidate.local_score,
+                        projected_components=candidate.projected_components,
+                        projected_score=candidate.projected_score,
+                        tie_break=candidate.tie_break,
+                        candidate_rank=candidate_rank,
+                        selected=candidate is selected,
+                    )
+                )
+
+            path.append(selected.pair)
+            selected_tasks.append(selected.task)
+            selected_components.append(selected.components)
+            selected_executions[selected.task.id] = selected.numeric_execution
+            produced_by[selected.output_tensor.id] = selected.task.id
+            numeric_complex_by_tensor[selected.output_tensor.id] = (
+                selected.numeric_execution.representation == "split_real_imag"
+            )
+            active = list(selected.next_active)
+
+        if len(active) != 1:
+            raise PlannerInfeasibleError(
+                f"custom_upmem v2 planner ended with {len(active)} active tensors",
+                rejection_reasons=("incomplete_path",),
+            )
+        total = combine_path_cost_components_v2(selected_components, self.profile.policy)
+        if not total.feasibility:
+            raise PlannerInfeasibleError(
+                "custom_upmem v2 planner selected an infeasible path",
+                rejection_reasons=total.rejection_reasons,
+            )
+        planning_time_s = time.perf_counter() - start
+        return PlannerResult(
+            identity=self.identity,
+            path=tuple(path),
+            path_info_text=(
+                f"deterministic {UPMEM_PATH_ENGINE} projected-prefix greedy path using "
+                f"{self.profile.profile_id} under {self.profile.policy.policy_id}"
+            ),
+            largest_intermediate=max((int(np.prod(task.output_shape, dtype=np.int64)) for task in selected_tasks), default=0),
+            naive_flops=None,
+            optimized_flops=float(total.estimated_flops),
+            planning_time_s=planning_time_s,
+            metadata={
+                "planner_cost_model": UPMEM_PATH_OBJECTIVE_V2,
+                "selection_scope": UPMEM_PATH_SELECTION_SCOPE_V2,
+                "selection_claim": "greedy_projected_prefix_not_global_path_optimum",
+                "weight_profile": self.profile.profile_id,
+                "normalization": self.profile.normalization.to_json_dict(),
+                "execution_policy": self.profile.policy.to_json_dict(),
+                "numeric_contract": "real_float32_or_split_real_imag_v2",
+                "components": total.to_json_dict(),
+                "normalized_components": self.profile.normalize(total),
+                "final_path_score": self.profile.score(total),
+                # Maintained for consumers that still read the former field.
+                "modeled_score": self.profile.score(total),
+                "step_trace": step_trace,
+                "task_numeric_executions": {
+                    task_id: execution.to_json_dict() for task_id, execution in selected_executions.items()
+                },
+                "execution_plan_executed": False,
+            },
+        )
+
+    def _task_components(self, task: Any, execution: TaskNumericExecution) -> PathCostComponentsV2:
+        from quantum_bench.tn.upmem_path_cost_v2 import model_upmem_task_cost_v2
+
+        return model_upmem_task_cost_v2(task, self.profile.policy, numeric_execution=execution)
+
+    @staticmethod
+    def _trace_entry(
+        *,
+        step_index: int,
+        active_tensor_ids: list[str],
+        pair: tuple[int, int],
+        task: Any,
+        execution: TaskNumericExecution,
+        components: PathCostComponentsV2,
+        local_score: float,
+        projected_components: PathCostComponentsV2,
+        projected_score: float,
+        tie_break: tuple[Any, ...],
+        candidate_rank: int | None,
+        selected: bool,
+    ) -> dict[str, Any]:
+        return {
+            "step_index": step_index,
+            "active_tensor_ids": list(active_tensor_ids),
+            "pair": list(pair),
+            "left_tensor_id": task.input_tensor_ids[0],
+            "right_tensor_id": task.input_tensor_ids[1],
+            "output_tensor_id": task.output_tensor_id,
+            "output_shape": list(task.output_shape),
+            "numeric_execution": execution.to_json_dict(),
+            "feasible": components.feasibility,
+            "local_step_score": local_score if np.isfinite(local_score) else None,
+            "projected_cumulative_score": projected_score if np.isfinite(projected_score) else None,
+            "components": components.to_json_dict(),
+            "projected_cumulative_components": projected_components.to_json_dict(),
+            "candidate_rank": candidate_rank,
+            "tie_break": _jsonable_tie_break(tie_break),
+            "selected": selected,
+        }
+
+
+def _jsonable_tie_break(value: tuple[Any, ...]) -> list[Any]:
+    result: list[Any] = []
+    for item in value:
+        if isinstance(item, tuple):
+            result.append(list(item))
+        elif isinstance(item, np.generic):
+            result.append(item.item())
+        else:
+            result.append(item)
+    return result
 __all__ = [
     "PlannerInfeasibleError",
     "UPMEM_PATH_ENGINE",
     "UPMEM_PATH_OBJECTIVE_VERSION",
+    "UPMEM_PATH_SELECTION_SCOPE_V1",
+    "UPMEM_PATH_SELECTION_SCOPE_V2",
     "UpmemAwareGreedyPlanner",
+    "UpmemAwareProjectedPrefixPlanner",
 ]

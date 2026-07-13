@@ -24,7 +24,7 @@ def test_planner_comparison_writes_rows_and_artifacts(tmp_path: Path) -> None:
     rows = payload["rows"]
     divergence_summary = payload["divergence_summary"]
 
-    assert payload["schema_version"] == "planner_comparison_v3"
+    assert payload["schema_version"] == "planner_comparison_v4"
     assert payload["suite_id"] == "planner_compare"
     assert payload["run_id"] == run_dir.name
     assert run_dir.parent.name == "planner_comparison"
@@ -148,7 +148,7 @@ def test_extended_planner_comparison_suite_is_bounded_and_scored(tmp_path: Path)
     case_ids = {row["case_id"] for row in rows}
     divergent_case_ids = set(payload["divergence_summary"]["divergent_case_ids"])
 
-    assert payload["schema_version"] == "planner_comparison_v3"
+    assert payload["schema_version"] == "planner_comparison_v4"
     assert payload["suite_id"] == "planner_compare_extended"
     assert [config["optimize"] for config in payload["planner_configs"]] == ["greedy", "auto", "random-greedy"]
     assert len(rows) == 30
@@ -227,6 +227,34 @@ def test_upmem_aware_planner_comparison_records_components_and_selection(tmp_pat
         case_rows = [row for row in rows if row["case_id"] == case_id]
         assert not any(row["pim_selected"] for row in case_rows)
         assert not any(row["pim_selected"] for row in case_rows if row["planner_engine"] == "custom_upmem")
+
+
+def test_v2_planner_comparison_records_projected_prefix_and_precise_memory_fields(tmp_path: Path) -> None:
+    run_dir = compare_planners(
+        ROOT / "configs" / "suites" / "manual" / "thesis_planner_semantic_v2.yml",
+        tmp_path,
+    )
+    payload = json.loads((run_dir / "planner_comparison.json").read_text(encoding="utf-8"))
+    rows = payload["rows"]
+    custom_rows = [row for row in rows if row["planner_engine"] == "custom_upmem"]
+
+    assert payload["schema_version"] == "planner_comparison_v4"
+    assert payload["pim_objective"]["objective_version"] == "upmem_path_cost_v2"
+    assert custom_rows
+    assert all(row["candidate_status"] == "completed" for row in custom_rows)
+    assert all(row["pim_objective_version"] == "upmem_path_cost_v2" for row in rows)
+    assert all(row["planner_config_hash"] for row in rows)
+    assert all(row["pim_native_static_mram_reservation_bytes"] > 0 for row in custom_rows)
+    assert all(row["pim_mram_capacity_bytes"] > row["pim_native_static_mram_reservation_bytes"] for row in custom_rows)
+    assert all(row["pim_known_wram_static_bytes"] > 0 for row in custom_rows)
+    assert all(row["pim_wram_budget_bytes"] > row["pim_known_wram_static_bytes"] for row in custom_rows)
+
+    graph_row = next(row for row in custom_rows if row["case_id"] == "quantum_bell_2q_semantic_v2")
+    trace = json.loads((run_dir / graph_row["planner_step_trace_artifact"]).read_text(encoding="utf-8"))
+    selected = [entry for entry in trace if entry["selected"]]
+    assert selected
+    assert all(entry["candidate_rank"] == 1 for entry in selected)
+    assert all(entry["projected_cumulative_score"] is not None for entry in selected)
 
 
 def test_planner_comparison_rejects_unknown_modeled_objective_version(tmp_path: Path) -> None:

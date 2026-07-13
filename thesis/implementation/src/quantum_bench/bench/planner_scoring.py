@@ -79,19 +79,19 @@ def score_planner_rows(rows: list[dict[str, Any]], weights: dict[str, float]) ->
                 scored_rows.append(scored)
             continue
 
-        components_by_planner = {str(row["planner_id"]): _raw_components(row) for row in eligible_rows}
+        components_by_planner = {_planner_key(row): _raw_components(row) for row in eligible_rows}
         normalized_by_planner = _normalized_components(components_by_planner)
         score_by_planner = {
             planner_id: _weighted_score(normalized, weights)
             for planner_id, normalized in normalized_by_planner.items()
         }
         upmem_ranks = _dense_ranks(score_by_planner)
-        flop_ranks = _dense_ranks({str(row["planner_id"]): float(row["total_estimated_flops"]) for row in eligible_rows})
+        flop_ranks = _dense_ranks({_planner_key(row): float(row["total_estimated_flops"]) for row in eligible_rows})
         upmem_winners = {planner_id for planner_id, rank in upmem_ranks.items() if rank == 1}
         flop_winners = {planner_id for planner_id, rank in flop_ranks.items() if rank == 1}
 
         for row in case_rows:
-            planner_id = str(row["planner_id"])
+            planner_id = _planner_key(row)
             if row not in eligible_rows:
                 scored = dict(row)
                 scored.update(
@@ -173,8 +173,8 @@ def divergence_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         eligible_rows = [row for row in case_rows if row.get("upmem_rank") is not None]
         if not eligible_rows:
             continue
-        flop_winners = {str(row["planner_id"]) for row in eligible_rows if int(row["flop_rank"]) == 1}
-        upmem_winners = {str(row["planner_id"]) for row in eligible_rows if int(row["upmem_rank"]) == 1}
+        flop_winners = {_planner_key(row) for row in eligible_rows if int(row["flop_rank"]) == 1}
+        upmem_winners = {_planner_key(row) for row in eligible_rows if int(row["upmem_rank"]) == 1}
         if flop_winners != upmem_winners:
             divergent_case_ids.append(case_id)
     return {
@@ -293,3 +293,12 @@ def _tradeoff_note(row: dict[str, Any], planner_id: str, flop_winners: set[str],
 
 def _float(row: dict[str, Any], key: str) -> float:
     return float(row.get(key, 0) or 0)
+
+
+def _planner_key(row: dict[str, Any]) -> str:
+    """Use resolved configuration identity when it is available.
+
+    Human-readable ``planner_id`` intentionally remains short and may be shared
+    by two cotengra runs with different seed or method settings.
+    """
+    return str(row.get("planner_config_hash") or row["planner_id"])

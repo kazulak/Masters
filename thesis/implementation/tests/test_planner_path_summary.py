@@ -13,7 +13,11 @@ from quantum_bench.tn import build_tensor_network, derive_path_costs, plan_task_
 from quantum_bench.tn.contract import contract_binary_task
 from quantum_bench.tn.planner_motifs import build_planner_motif_workload
 from quantum_bench.tn.planners import CotengraPlanner, OptEinsumPlanner
-from quantum_bench.tn.upmem_planner import PlannerInfeasibleError, UpmemAwareGreedyPlanner
+from quantum_bench.tn.upmem_planner import (
+    PlannerInfeasibleError,
+    UpmemAwareGreedyPlanner,
+    UpmemAwareProjectedPrefixPlanner,
+)
 
 
 def _annotated_graph():
@@ -35,7 +39,18 @@ def test_planner_from_config_returns_opt_einsum_planner() -> None:
     assert planner.identity.objective == "opt_einsum_contract_path"
     assert planner.identity.cost_basis == "opt_einsum_internal"
     assert planner.identity.target_estimate_key is None
-    assert planner.identity.options == {"engine": "opt_einsum", "optimize": "greedy"}
+    assert planner.identity.planner_config_hash
+    assert planner.identity.planner_config["engine"] == "opt_einsum"
+    assert planner.identity.options["planner_config_hash"] == planner.identity.planner_config_hash
+
+
+def test_random_greedy_records_seed_policy_and_version_metadata() -> None:
+    planner = planner_from_config({"engine": "opt_einsum", "optimize": "random-greedy"})
+
+    assert planner.identity.planner_id == "opt_einsum.random-greedy"
+    assert planner.identity.planner_config["random_seed_policy"] == "opt_einsum_random_optimizer_run_index_v1"
+    assert planner.identity.planner_config["random_seed_version"] == "opt_einsum.path_random.RandomOptimizer"
+    assert planner.identity.planner_config["opt_einsum_version"]
 
 
 def test_unknown_planner_engine_fails_explicitly() -> None:
@@ -49,6 +64,9 @@ def test_cotengra_baseline_adapter_returns_pairwise_path() -> None:
     )
     assert isinstance(planner, CotengraPlanner)
     assert planner.identity.planner_id == "cotengra.flops"
+    assert planner.identity.planner_config["optlib"] == "random"
+    assert planner.identity.planner_config["seed"] == 0
+    assert planner.identity.planner_config["parallel"] is False
 
     graph = plan_task_graph_with_config(
         build_tensor_network(builtin_circuit("bell_2q")),
@@ -59,6 +77,19 @@ def test_cotengra_baseline_adapter_returns_pairwise_path() -> None:
     assert graph.path_summary.planner_engine == "cotengra"
     assert graph.path_summary.objective == "cotengra_flops"
     assert all(len(step) == 2 for step in graph.path)
+
+
+def test_cotengra_seeded_planning_is_repeatable() -> None:
+    config = {"engine": "cotengra", "objective": "flops", "methods": "greedy", "max_repeats": 1}
+    network = build_tensor_network(builtin_circuit("ghz_chain", {"n_qubits": 4}))
+
+    first = plan_task_graph_with_config(network, config)
+    second = plan_task_graph_with_config(network, config)
+
+    assert first.path == second.path
+    assert first.path_summary.planner_id == second.path_summary.planner_id == "cotengra.flops"
+    assert first.path_summary.options["planner_config_hash"] == second.path_summary.options["planner_config_hash"]
+    assert first.path_summary.planner_metadata["cotengra_seed"] == 0
 
 
 def test_custom_upmem_planner_is_deterministic_and_uses_shared_taskgraph_lowering() -> None:
@@ -103,6 +134,26 @@ def test_custom_upmem_planner_rejects_complex_generic_inputs_explicitly() -> Non
         planner.plan(network)
 
     assert error.value.rejection_reasons == ("complex_generic_loop_not_implemented",)
+
+
+def test_custom_upmem_v2_config_is_explicit_and_distinct_from_v1_identity() -> None:
+    v1 = planner_from_config({"engine": "custom_upmem", "weight_profile": "balanced_literature_informed"})
+    v2 = planner_from_config(
+        {
+            "engine": "custom_upmem",
+            "objective_version": "upmem_path_cost_v2",
+            "selection_scope": "projected_prefix",
+            "weight_profile": "balanced_literature_informed",
+            "normalization": "fixed_log1p_generic_budgets_v2",
+            "execution_policy": "generic_single_dpu_split_complex_v2",
+        }
+    )
+
+    assert isinstance(v2, UpmemAwareProjectedPrefixPlanner)
+    assert isinstance(v1, UpmemAwareGreedyPlanner)
+    assert v1.identity.planner_config_hash != v2.identity.planner_config_hash
+    assert v2.identity.planner_config["objective_version"] == "upmem_path_cost_v2"
+    assert v2.identity.planner_config["selection_scope"] == "projected_prefix"
 
 
 def test_plan_task_graph_preserves_current_opt_einsum_behavior() -> None:

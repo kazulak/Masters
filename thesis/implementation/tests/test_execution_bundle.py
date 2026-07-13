@@ -17,9 +17,10 @@ from quantum_bench.tn import (
 )
 
 
-def _graph(optimize: str = "greedy"):
+def _graph(optimize: str = "greedy", **config_overrides):
     network = build_tensor_network(builtin_circuit("ghz_chain", {"n_qubits": 4}))
-    return plan_task_graph_with_config(network, {"engine": "opt_einsum", "optimize": optimize})
+    config = {"engine": "opt_einsum", "optimize": optimize, **config_overrides}
+    return plan_task_graph_with_config(network, config)
 
 
 def test_execution_bundle_hashes_are_stable_and_validate() -> None:
@@ -119,3 +120,16 @@ def test_structure_hash_excludes_planner_identity_but_keeps_pairwise_structure()
 
     assert contraction_path_structure_hash(changed) == contraction_path_structure_hash(graph)
     assert changed.contraction_plan_hash != graph.contraction_plan_hash
+
+
+def test_planner_config_hash_changes_executor_identity_but_not_structure_hash() -> None:
+    first = _graph(planner_run_label="first")
+    second = _graph(planner_run_label="second")
+
+    assert first.path == second.path
+    assert first.path_summary.options["planner_config_hash"] != second.path_summary.options["planner_config_hash"]
+    assert first.contraction_plan_hash != second.contraction_plan_hash
+    assert build_execution_bundle(first, case_id="ghz_4q", suite_id="test")["planner"] != build_execution_bundle(
+        second, case_id="ghz_4q", suite_id="test"
+    )["planner"]
+    assert contraction_path_structure_hash(first) == contraction_path_structure_hash(second)
