@@ -14,6 +14,9 @@ Already in place:
 - route role metadata for serious baselines and diagnostic routes;
 - CPU/GPU performance-tier metadata with `state_output_mode=none`;
 - UPMEM SDK simulator fields that distinguish SDK simulator mode from hardware;
+- quantization attribution that preserves recorded probability errors and
+  clipping/saturation counts when the underlying validation/runtime evidence
+  provides them;
 - unsupported/skipped rows and resource guard reasons;
 - evidence/comparison artifact split;
 - content hashes for circuit semantics, internal TN structure, and contraction
@@ -39,7 +42,8 @@ Remaining limitations:
 | `configs/suites/manual/thesis_full_state_correctness.yml` | Smaller full-statevector correctness tier for the same QuEST CPU/GPU routes. |
 | `configs/suites/manual/thesis_cpu_tn_quimb.yml` | QuEST anchor, Quimb unsliced, and Quimb sliced 8--20q CPU TN evidence. |
 | `configs/suites/manual/thesis_tn_paths_quantization.yml` | Same-path float64/int8 internal replay diagnostic. |
-| `configs/suites/manual/thesis_planner_compare.yml` | Greedy/auto path costs and modeled UPMEM pressure over the canonical grid. |
+| `configs/suites/manual/thesis_planner_compare.yml` | Standard opt_einsum/cotengra baselines plus deterministic custom UPMEM-greedy modeled path comparison over the canonical grid. |
+| `configs/suites/manual/thesis_planner_sensitivity.yml` | Modeled-only scenario sensitivity for named custom UPMEM objective weight profiles. |
 | `configs/suites/manual/research_internal_parallelism.yml` | Diagnostic internal TaskGraph sequential/frontier/hybrid evidence. |
 | `configs/suites/manual/thesis_upmem_quantization_boundary.yml` | Strict generic-only UPMEM SDK simulator boundary and same-route float32/int8 attribution evidence. |
 
@@ -83,6 +87,16 @@ make thesis-report
 - A CPU/UPMEM row is labeled same-plan only when its
   `contraction_plan_hash` matches. Planner candidates are modeled evidence and
   remain separate from executor timing.
+- The `custom_upmem` planner is a deterministic path generator under the
+  recorded `generic_single_dpu_float32_v1` policy. Its costs are
+  planner-estimated/modelled, not a hardware runtime predictor.
+- That current generic policy accepts real float32 tensors only. Complex
+  quantum TN candidates are preserved as standard-planner baselines but are
+  explicitly reported as modeled infeasible rather than selected for UPMEM;
+  real-valued planner motifs exercise the custom path generator in this phase.
+- Controlled chain/tree/star/cycle/grid/trade-off planner motifs are marked
+  `not_real_quantum_circuit=true`; they validate planner behavior and never
+  support circuit-runtime or hardware claims.
 
 ## Claims Not Allowed
 
@@ -101,6 +115,9 @@ make thesis-report
 - No parallel speedup claim from diagnostic frontier or hybrid rows without a
   separate matched performance/scaling methodology.
 - No full-output exactness claim for `state_output_mode=none` rows.
+- No physical bus-traffic claim from `application_visible_sdk_recorded`
+  transfer bytes. When directional fields exist, reports require
+  `actual_transfer_bytes = actual_h2d_bytes + actual_d2h_bytes`.
 
 ## Outputs
 
@@ -126,5 +143,8 @@ Expected files include:
 - `benchmark_summary.md`
 
 Every generated figure names one of these source CSVs in `plot_manifest.json`.
+Figures with missing/zero-variance/unimplemented data remain as visible TODO
+PNGs with `generated_todo_*` status and an exact reason; they are separate from
+valid figures in the benchmark summary.
 The summary ends with `Next UPMEM Implementation Readiness`, which lists the
 current blockers and recommends one concrete next implementation target.

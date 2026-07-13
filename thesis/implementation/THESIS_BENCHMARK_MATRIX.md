@@ -29,7 +29,8 @@ semantic check; it is not the performance grid.
 | Full-state performance | `configs/suites/manual/thesis_full_state_cpu_gpu.yml` | QuEST CPU + verified QuEST GPU, metrics only | 5 + 1 warmup | Compare compute time and process wall time over all 42 cases |
 | CPU TN | `configs/suites/manual/thesis_cpu_tn_quimb.yml` | QuEST CPU anchor, Quimb unsliced, Quimb sliced | 3 | Compare full-state and external TN execution, path cost, slicing, and memory proxies over all 42 shallow cases |
 | Same-path quantization | `configs/suites/manual/thesis_tn_paths_quantization.yml` | float64 and int8 internal TaskGraph replay | 1 | Attribute runtime and error to per-contraction quantization on an identical path; diagnostic, not serious TN baseline |
-| Planner candidates | `configs/suites/manual/thesis_planner_compare.yml` | `opt_einsum` greedy and auto | planning once | Compare plan FLOPs, peak intermediates, modeled transfers/tiling, and UPMEM pressure |
+| Planner candidates | `configs/suites/manual/thesis_planner_compare.yml` | `opt_einsum`, cotengra objectives, custom UPMEM greedy | planning once | Compare plan FLOPs, peak intermediates, modeled transfers/tiling, and a fixed-policy UPMEM objective |
+| Planner sensitivity | `configs/suites/manual/thesis_planner_sensitivity.yml` | custom UPMEM greedy under six named scenario profiles | planning once | Show objective sensitivity without presenting scenario weights as measured hardware constants |
 | UPMEM boundary | `configs/suites/manual/thesis_upmem_quantization_boundary.yml` | Same internal TaskGraph, float32 and int8 strict generic UPMEM SDK simulator | 1 | Find supported/unsupported boundary and attribute transfer/error/runtime changes to quantization |
 | Internal parallelism | `configs/suites/manual/research_internal_parallelism.yml` | sequential/frontier/hybrid internal TaskGraph | 1 | Diagnostic architecture evidence only |
 
@@ -76,18 +77,35 @@ use different simulation models.
 
 ### Contraction Path Choice
 
-The planner suite emits one content-addressed TaskGraph per candidate. Report:
+The planner suite emits one content-addressed TaskGraph per candidate. It keeps
+standard-library candidates as permanent baselines and adds a deterministic
+`custom_upmem` greedy generator, not merely post-hoc candidate rescoring.
+Report:
 
 - estimated FLOPs;
 - peak intermediate bytes;
 - host-to-DPU, DPU-to-host, and MRAM-to-WRAM estimates;
 - tiling-required task count and estimated tile parallelism;
 - modeled UPMEM pressure score/rank;
+- fixed execution-policy assumptions, objective version, normalization, and
+  named weight profile;
+- modeled components: FLOPs, largest intermediate, intermediate writes,
+  host-to-DPU and DPU-to-host bytes, MRAM-to-WRAM bytes, local work,
+  synchronization events, numerical penalty, WRAM pressure, tile count,
+  feasibility, and rejection reasons;
+- modeled Pareto status and selected candidate within each weight profile;
 - planning time and contraction-plan hash.
 
 Planner rows are modeled path evidence. They do not claim execution speedup.
-The chosen future UPMEM-aware objective should be compared with the unchanged
-greedy/auto baselines using these fields.
+Their fixed single-DPU policy is a literature-informed planning scenario, not a
+calibrated UPMEM hardware predictor. Controlled planner motifs are separately
+labeled modeled-only and not real quantum circuits.
+
+The current generic planner contract is real float32 only. Complex quantum TN
+paths are retained as standard-library planning baselines, but their modeled
+UPMEM feasibility is `false` with
+`complex_generic_loop_not_implemented`; they must not be selected until a
+split-complex UPMEM lowering is available.
 
 ### Same-Plan CPU Versus UPMEM
 
@@ -113,6 +131,8 @@ plan. Required outputs:
 - float32/int8 simulator-kernel ratio;
 - transfer-volume ratio;
 - max-absolute and L2 error against the full-precision TaskGraph reference;
+- probability maximum-absolute and L1 error when validation records contain
+  probability outputs; no amplitude error is relabeled as probability error;
 - clipping/saturation information when available.
 
 CPU path-replay quantization remains a diagnostic for numerical behavior and
@@ -158,13 +178,17 @@ tables directory:
 - CPU/GPU runtime and speedup by family/qubits;
 - CPU TN runtime, planning/contraction split, path FLOPs, and peak memory;
 - Quimb slicing FLOP ratio;
-- planner FLOPs versus modeled UPMEM pressure;
+- planner FLOPs versus normalized modeled PIM objective, component scores,
+  selection, Pareto status, and scenario sensitivity;
 - UPMEM support boundary and validation error;
 - float32/int8 UPMEM runtime, transfer, and error attribution;
 - same-plan CPU replay versus UPMEM SDK-simulator route timing.
 
-If a figure lacks valid input rows, the plot manifest records a skip reason.
-The report must not fabricate empty or incomparable values.
+If a figure lacks valid input rows, has zero variance, or is not yet
+implemented, the report retains a visible TODO PNG at the expected path. The
+plot manifest records a `generated_todo_*` status and exact reason; the figure
+is listed separately from valid scientific figures. The report must not
+fabricate empty or incomparable values.
 
 ## Cluster Extension
 
