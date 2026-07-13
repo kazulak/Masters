@@ -89,6 +89,86 @@ def test_tiled_metadata_counts_aligned_mram_traffic() -> None:
     assert metadata["mram_write_bytes_model"] == 16
 
 
+def test_native_host_transfer_accounting_json_contract_is_explicit() -> None:
+    source = (
+        ROOT
+        / "native"
+        / "upmem"
+        / "simplepim"
+        / "upmem_sdk_generic_loop"
+        / "host.c"
+    ).read_text(encoding="utf-8")
+
+    for field in (
+        "prepared_payload_h2d_bytes",
+        "prepared_payload_d2h_bytes",
+        "sdk_observed_h2d_bytes",
+        "sdk_observed_d2h_bytes",
+        "control_argument_bytes",
+        "alignment_padding_bytes",
+        "physical_bus_bytes_available",
+        "sdk_observed_bytes_definition",
+    ):
+        assert field in source
+
+    assert 'getenv("UPMEM_GENERIC_TRANSFER_ACCOUNTING_JSON")' in source
+    assert "control_bytes + left_transfer_bytes + right_transfer_bytes" in source
+    assert "output_transfer_bytes - output_bytes" in source
+    assert "argc != 6" in source
+
+
+def test_native_transfer_accounting_loader_preserves_application_visible_scope(tmp_path: Path) -> None:
+    runner = _load_runner_module()
+    path = tmp_path / "transfer_accounting.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "upmem_sdk_generic_loop_transfer_accounting_v1",
+                "physical_bus_bytes_available": False,
+                "prepared_payload_h2d_bytes": 16,
+                "prepared_payload_d2h_bytes": 8,
+                "actual_h2d_bytes": 24,
+                "actual_d2h_bytes": 8,
+                "actual_transfer_bytes": 32,
+                "control_bytes": 4,
+                "alignment_padding_bytes": 4,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = runner._load_transfer_accounting(path)
+
+    assert payload["actual_transfer_bytes"] == 32
+    assert payload["prepared_payload_h2d_bytes"] == 16
+    assert payload["physical_bus_bytes_available"] is False
+    assert payload["transfer_accounting_artifact"] == "transfer_accounting.json"
+
+
+def test_native_transfer_accounting_loader_rejects_invalid_invariant(tmp_path: Path) -> None:
+    runner = _load_runner_module()
+    path = tmp_path / "transfer_accounting.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "upmem_sdk_generic_loop_transfer_accounting_v1",
+                "physical_bus_bytes_available": False,
+                "prepared_payload_h2d_bytes": 16,
+                "prepared_payload_d2h_bytes": 8,
+                "actual_h2d_bytes": 24,
+                "actual_d2h_bytes": 8,
+                "actual_transfer_bytes": 31,
+                "control_bytes": 4,
+                "alignment_padding_bytes": 4,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="invariant"):
+        runner._load_transfer_accounting(path)
+
+
 def _write_non_gemm_manifest(root: Path, *, mode: str) -> Path:
     left_shape = (9, 8, 8)
     right_shape = (8, 8, 8)

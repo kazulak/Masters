@@ -38,6 +38,10 @@ def transfer_accounting(
     *,
     declared_total_bytes: int | None = None,
     recorded_by_sdk: bool = True,
+    prepared_h2d_bytes: int | None = None,
+    prepared_d2h_bytes: int | None = None,
+    control_bytes: int | None = None,
+    alignment_padding_bytes: int | None = None,
 ) -> JsonDict:
     """Return a checked application-visible transfer accounting record.
 
@@ -55,6 +59,14 @@ def transfer_accounting(
         raise ValueError(
             f"actual_transfer_bytes invariant failed: {declared_total_bytes} != {h2d} + {d2h}"
         )
+    payload_h2d = int(prepared_h2d_bytes) if prepared_h2d_bytes is not None else h2d
+    payload_d2h = int(prepared_d2h_bytes) if prepared_d2h_bytes is not None else d2h
+    if min(payload_h2d, payload_d2h) < 0:
+        raise ValueError("prepared payload byte counts must be nonnegative")
+    h2d_nonpayload = h2d - payload_h2d if recorded_by_sdk else None
+    d2h_nonpayload = d2h - payload_d2h if recorded_by_sdk else None
+    if recorded_by_sdk and (h2d_nonpayload is None or d2h_nonpayload is None or h2d_nonpayload < 0 or d2h_nonpayload < 0):
+        raise ValueError("SDK-observed transfer bytes cannot be smaller than prepared payload bytes")
     return {
         "actual_h2d_bytes": h2d,
         "actual_d2h_bytes": d2h,
@@ -66,13 +78,23 @@ def transfer_accounting(
             else APPLICATION_VISIBLE_PREPARATION_TRANSFER_SCOPE
         ),
         "physical_bus_bytes_available": False,
+        "prepared_payload_h2d_bytes": payload_h2d,
+        "prepared_payload_d2h_bytes": payload_d2h,
+        "sdk_observed_h2d_bytes": h2d if recorded_by_sdk else None,
+        "sdk_observed_d2h_bytes": d2h if recorded_by_sdk else None,
         "transfer_components": {
-            "h2d_application_visible_payload_bytes": h2d,
-            "d2h_application_visible_payload_bytes": d2h,
+            "h2d_application_visible_payload_bytes": payload_h2d,
+            "d2h_application_visible_payload_bytes": payload_d2h,
+            "prepared_payload_h2d_bytes": payload_h2d,
+            "prepared_payload_d2h_bytes": payload_d2h,
+            "sdk_observed_h2d_bytes": h2d if recorded_by_sdk else None,
+            "sdk_observed_d2h_bytes": d2h if recorded_by_sdk else None,
+            "sdk_observed_h2d_nonpayload_bytes": h2d_nonpayload,
+            "sdk_observed_d2h_nonpayload_bytes": d2h_nonpayload,
             "quantization_scale_bytes": None,
             "shape_index_metadata_bytes": None,
-            "control_structure_bytes": None,
-            "alignment_padding_bytes": None,
+            "control_structure_bytes": control_bytes,
+            "alignment_padding_bytes": alignment_padding_bytes,
             "unobserved_sdk_overhead_bytes": None,
         },
     }
@@ -355,10 +377,21 @@ def _base_task_metric(
     prep_metadata = dict((preparation or {}).get("metadata") or {})
     actual_h2d_bytes = bridge_metadata.get("actual_h2d_bytes", prep_metadata.get("actual_h2d_bytes_model"))
     actual_d2h_bytes = bridge_metadata.get("actual_d2h_bytes", prep_metadata.get("actual_d2h_bytes_model"))
+    recorded_by_sdk = "actual_h2d_bytes" in bridge_metadata or "actual_d2h_bytes" in bridge_metadata
     transfer = transfer_accounting(
         actual_h2d_bytes,
         actual_d2h_bytes,
-        recorded_by_sdk=("actual_h2d_bytes" in bridge_metadata or "actual_d2h_bytes" in bridge_metadata),
+        recorded_by_sdk=recorded_by_sdk,
+        prepared_h2d_bytes=bridge_metadata.get(
+            "prepared_payload_h2d_bytes",
+            prep_metadata.get("prepared_payload_h2d_bytes", prep_metadata.get("actual_h2d_bytes_model")),
+        ),
+        prepared_d2h_bytes=bridge_metadata.get(
+            "prepared_payload_d2h_bytes",
+            prep_metadata.get("prepared_payload_d2h_bytes", prep_metadata.get("actual_d2h_bytes_model")),
+        ),
+        control_bytes=bridge_metadata.get("control_bytes"),
+        alignment_padding_bytes=bridge_metadata.get("alignment_padding_bytes"),
     )
     full_precision_h2d_bytes = prep_metadata.get("full_precision_h2d_bytes_model", bridge_metadata.get("full_precision_h2d_bytes_model"))
     full_precision_d2h_bytes = prep_metadata.get("full_precision_d2h_bytes_model", bridge_metadata.get("full_precision_d2h_bytes_model"))

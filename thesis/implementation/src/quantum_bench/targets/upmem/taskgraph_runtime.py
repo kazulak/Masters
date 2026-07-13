@@ -35,6 +35,7 @@ from quantum_bench.targets.upmem.runtime_evidence import (
     _summary_payload,
     _unsupported_result,
 )
+from quantum_bench.routing.generic_numeric_contract import classify_numeric
 from quantum_bench.tn.execution import frontier_waves, live_tensor_bytes, order_final_tensor, release_dead_inputs, remaining_input_uses
 from quantum_bench.tn.execution_bundle import execution_identity_metadata, executor_config_hash, with_execution_identity
 from quantum_bench.tn.network import TensorNetworkValue
@@ -572,10 +573,17 @@ def _execute_generic_task(
 ) -> JsonDict:
     left_array = np.asarray(left_tensor.array)
     right_array = np.asarray(right_tensor.array)
-    has_nonzero_imaginary = (
-        (np.iscomplexobj(left_array) and bool(np.any(np.abs(left_array.imag) > 0.0)))
-        or (np.iscomplexobj(right_array) and bool(np.any(np.abs(right_array.imag) > 0.0)))
-    )
+    left_classification = classify_numeric(left_array)
+    right_classification = classify_numeric(right_array)
+    if left_classification.has_nonfinite or right_classification.has_nonfinite:
+        metric = _base_task_metric(
+            case_id, task_index, task, policy, quantization_mode,
+            status="unsupported", reason="nonfinite_values_not_supported",
+            task_started=task_started, selected_kernel_family="generic_loop_fallback",
+            backend_id="upmem_sdk_simulator_generic_loop", dense_reject_reason=dense_reject_reason,
+        )
+        return {"status": "unsupported", "reason": metric["reason"], "metric": metric}
+    has_nonzero_imaginary = left_classification.has_nonzero_imaginary or right_classification.has_nonzero_imaginary
     if has_nonzero_imaginary:
         return _execute_generic_split_complex_task(
             task=task,

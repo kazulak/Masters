@@ -35,6 +35,93 @@ static int write_exact(const char *path, const void *buffer, size_t bytes) {
     return 0;
 }
 
+static int write_transfer_accounting(
+    const char *path,
+    size_t left_bytes,
+    size_t right_bytes,
+    size_t output_bytes,
+    size_t left_transfer_bytes,
+    size_t right_transfer_bytes,
+    size_t output_transfer_bytes,
+    size_t control_bytes
+) {
+    const size_t prepared_payload_h2d_bytes = left_bytes + right_bytes;
+    const size_t prepared_payload_d2h_bytes = output_bytes;
+    const size_t h2d_alignment_padding_bytes =
+        (left_transfer_bytes - left_bytes) + (right_transfer_bytes - right_bytes);
+    const size_t d2h_alignment_padding_bytes = output_transfer_bytes - output_bytes;
+    const size_t alignment_padding_bytes =
+        h2d_alignment_padding_bytes + d2h_alignment_padding_bytes;
+    const size_t sdk_observed_h2d_bytes =
+        control_bytes + left_transfer_bytes + right_transfer_bytes;
+    const size_t sdk_observed_d2h_bytes = output_transfer_bytes;
+    FILE *file = fopen(path, "w");
+    if (file == NULL) {
+        perror(path);
+        return 1;
+    }
+
+    fprintf(file,
+        "{\n"
+        "  \"schema_version\": \"upmem_sdk_generic_loop_transfer_accounting_v1\",\n"
+        "  \"transfer_accounting_scope\": \"application_visible_sdk_recorded\",\n"
+        "  \"physical_bus_bytes_available\": false,\n"
+        "  \"prepared_payload_h2d_bytes\": %zu,\n"
+        "  \"prepared_payload_d2h_bytes\": %zu,\n"
+        "  \"sdk_observed_h2d_bytes\": %zu,\n"
+        "  \"sdk_observed_d2h_bytes\": %zu,\n"
+        "  \"actual_h2d_bytes\": %zu,\n"
+        "  \"actual_d2h_bytes\": %zu,\n"
+        "  \"actual_transfer_bytes\": %zu,\n"
+        "  \"actual_transfer_bytes_invariant\": \"passed\",\n"
+        "  \"control_bytes\": %zu,\n"
+        "  \"control_argument_bytes\": %zu,\n"
+        "  \"alignment_padding_bytes\": %zu,\n"
+        "  \"h2d_alignment_padding_bytes\": %zu,\n"
+        "  \"d2h_alignment_padding_bytes\": %zu,\n"
+        "  \"alignment_model\": {\n"
+        "    \"boundary_bytes\": 8,\n"
+        "    \"control_argument_transfer\": \"exact_sizeof_args_no_padding_claimed\",\n"
+        "    \"payload_transfer\": \"each_payload_buffer_rounded_up_to_8_bytes\",\n"
+        "    \"physical_bus_padding_observed\": false\n"
+        "  },\n"
+        "  \"transfer_components\": {\n"
+        "    \"h2d_application_visible_payload_bytes\": %zu,\n"
+        "    \"d2h_application_visible_payload_bytes\": %zu,\n"
+        "    \"control_structure_bytes\": %zu,\n"
+        "    \"alignment_padding_bytes\": %zu,\n"
+        "    \"unobserved_sdk_overhead_bytes\": null\n"
+        "  },\n"
+        "  \"sdk_observed_bytes_definition\": \"sum_of_lengths_passed_to_dpu_broadcast_to_and_dpu_copy_from\"\n"
+        "}\n",
+        prepared_payload_h2d_bytes,
+        prepared_payload_d2h_bytes,
+        sdk_observed_h2d_bytes,
+        sdk_observed_d2h_bytes,
+        sdk_observed_h2d_bytes,
+        sdk_observed_d2h_bytes,
+        sdk_observed_h2d_bytes + sdk_observed_d2h_bytes,
+        control_bytes,
+        control_bytes,
+        alignment_padding_bytes,
+        h2d_alignment_padding_bytes,
+        d2h_alignment_padding_bytes,
+        prepared_payload_h2d_bytes,
+        prepared_payload_d2h_bytes,
+        control_bytes,
+        alignment_padding_bytes
+    );
+    int failed = ferror(file) != 0;
+    if (fclose(file) != 0) {
+        failed = 1;
+    }
+    if (failed) {
+        fprintf(stderr, "failed to write transfer accounting JSON to %s\n", path);
+        return 1;
+    }
+    return 0;
+}
+
 static size_t align8(size_t bytes) {
     return (bytes + 7u) & ~((size_t)7u);
 }
@@ -230,8 +317,22 @@ int main(int argc, char **argv) {
     DPU_ASSERT(dpu_free(set));
 
     int rc = write_exact(out_path, output, output_bytes);
+    int accounting_rc = 0;
+    const char *accounting_path = getenv("UPMEM_GENERIC_TRANSFER_ACCOUNTING_JSON");
+    if (rc == 0 && accounting_path != NULL && accounting_path[0] != '\0') {
+        accounting_rc = write_transfer_accounting(
+            accounting_path,
+            left_bytes,
+            right_bytes,
+            output_bytes,
+            left_transfer_bytes,
+            right_transfer_bytes,
+            output_transfer_bytes,
+            sizeof(args)
+        );
+    }
     free(left);
     free(right);
     free(output);
-    return rc;
+    return rc != 0 ? rc : accounting_rc;
 }

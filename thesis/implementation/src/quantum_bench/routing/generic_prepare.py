@@ -13,6 +13,7 @@ from quantum_bench.formats import (
     quantize_fixed_point,
 )
 from quantum_bench.tn.contract import contract_binary_task
+from quantum_bench.routing.generic_numeric_contract import classify_numeric
 
 
 GENERIC_TASK_PREPARATION_SCHEMA_VERSION = "generic_task_preparation_v1"
@@ -231,8 +232,14 @@ def _prepare_generic_task(preparation: GenericTaskPreparationInput) -> GenericTa
     if mismatch is not None:
         return _base_result(preparation, status="unsupported_shape", reason=mismatch)
 
-    left_array = _real_array_or_none(np.asarray(preparation.left_tensor.array))
-    right_array = _real_array_or_none(np.asarray(preparation.right_tensor.array))
+    left_value = np.asarray(preparation.left_tensor.array)
+    right_value = np.asarray(preparation.right_tensor.array)
+    left_classification = classify_numeric(left_value)
+    right_classification = classify_numeric(right_value)
+    if left_classification.has_nonfinite or right_classification.has_nonfinite:
+        return _base_result(preparation, status="unsupported_shape", reason="nonfinite_values_not_supported")
+    left_array = _real_array_or_none(left_value)
+    right_array = _real_array_or_none(right_value)
     if left_array is None or right_array is None:
         return _base_result(preparation, status="unsupported_shape", reason="complex_generic_loop_not_implemented")
     if preparation.quantization_mode not in {"per_task_input_quantize", "none"}:
@@ -337,6 +344,8 @@ def _prepare_generic_int8_task(
             "float32_reference_time_s": 0.0,
             "actual_h2d_bytes_model": int(left_converted.array.nbytes + right_converted.array.nbytes),
             "actual_d2h_bytes_model": int(int32_reference.nbytes),
+            "prepared_payload_h2d_bytes": int(left_converted.array.nbytes + right_converted.array.nbytes),
+            "prepared_payload_d2h_bytes": int(int32_reference.nbytes),
             "full_precision_h2d_bytes_model": left_source_bytes + right_source_bytes,
             "full_precision_d2h_bytes_model": _float32_transfer_nbytes(full_precision_reference),
             **metadata,
@@ -422,6 +431,8 @@ def _prepare_generic_float32_task(
             "float32_reference_time_s": float(float32_reference_time_s),
             "actual_h2d_bytes_model": int(left_operand.nbytes + right_operand.nbytes),
             "actual_d2h_bytes_model": int(float32_reference.nbytes),
+            "prepared_payload_h2d_bytes": int(left_operand.nbytes + right_operand.nbytes),
+            "prepared_payload_d2h_bytes": int(float32_reference.nbytes),
             "full_precision_h2d_bytes_model": left_source_bytes + right_source_bytes,
             "full_precision_d2h_bytes_model": _float32_transfer_nbytes(full_precision_reference),
             **metadata,

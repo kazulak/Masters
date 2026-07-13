@@ -160,6 +160,7 @@ def main() -> int:
         left_path = inputs_dir / "left_i8.bin"
         right_path = inputs_dir / "right_i8.bin"
         raw_output_path = outputs_dir / "generic_output_i32.bin"
+        transfer_accounting_path = outputs_dir / "transfer_accounting.json"
         args_path.write_bytes(_pack_args(prepared["native_index_metadata"]))
         prepared["left"].astype(prepared["input_dtype"], copy=False).ravel().tofile(left_path)
         prepared["right"].astype(prepared["input_dtype"], copy=False).ravel().tofile(right_path)
@@ -202,7 +203,11 @@ def main() -> int:
                 str(raw_output_path),
             ),
             cwd=build_dir,
-            env={**os.environ, "DPU_BACKEND": "simulator"},
+            env={
+                **os.environ,
+                "DPU_BACKEND": "simulator",
+                "UPMEM_GENERIC_TRANSFER_ACCOUNTING_JSON": str(transfer_accounting_path),
+            },
             timeout_seconds=args.timeout_seconds,
         )
         simulator_run_time_s = time.perf_counter() - run_started
@@ -222,6 +227,33 @@ def main() -> int:
                 external_command_executed=True,
                 execution_implemented=True,
                 metadata_extra={**_base_metadata(args.target, True, max_elems=max_elems), "build_time_s": build_time_s, "simulator_run_time_s": simulator_run_time_s, "build": build, "run": run},
+            )
+            return 1
+
+        try:
+            transfer_accounting = _load_transfer_accounting(transfer_accounting_path)
+        except Exception as exc:
+            _write_output_manifest(
+                output_path,
+                backend=args.backend_id,
+                status="failed",
+                manifest=manifest,
+                input_manifest_path=input_path,
+                output_blob=None,
+                validation_metrics={},
+                total_time_s=time.perf_counter() - started,
+                error=f"UPMEM SDK generic loop transfer accounting invalid: {exc}",
+                reason="transfer_accounting_invalid",
+                error_type="transfer_accounting_invalid",
+                external_command_executed=True,
+                execution_implemented=True,
+                metadata_extra={
+                    **_base_metadata(args.target, True, max_elems=max_elems),
+                    "build_time_s": build_time_s,
+                    "simulator_run_time_s": simulator_run_time_s,
+                    "build": build,
+                    "run": run,
+                },
             )
             return 1
 
@@ -271,8 +303,7 @@ def main() -> int:
                 "output_dtype_on_dpu": prepared["output_dtype_on_dpu"],
                 "unquantized_mode_kind": prepared["unquantized_mode_kind"],
                 "scaling_applied": prepared["scaling_applied"],
-                "actual_h2d_bytes": prepared["actual_h2d_bytes"],
-                "actual_d2h_bytes": prepared["actual_d2h_bytes"],
+                **transfer_accounting,
                 "full_precision_h2d_bytes_model": prepared["full_precision_h2d_bytes_model"],
                 "full_precision_d2h_bytes_model": prepared["full_precision_d2h_bytes_model"],
                 "generic_kernel_strategy": prepared["generic_kernel_strategy"],
@@ -380,6 +411,35 @@ def _prepare_inputs(manifest: dict[str, Any], bridge_dir: Path, env: Mapping[str
         "full_precision_d2h_bytes_model": int(metadata.get("full_precision_d2h_bytes_model") or actual_d2h_bytes),
         **tile_metadata,
     }
+
+
+def _load_transfer_accounting(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        raise ValueError("native host did not write transfer accounting sidecar")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload.get("schema_version") != "upmem_sdk_generic_loop_transfer_accounting_v1":
+        raise ValueError("unsupported transfer accounting schema")
+    required = (
+        "prepared_payload_h2d_bytes",
+        "prepared_payload_d2h_bytes",
+        "actual_h2d_bytes",
+        "actual_d2h_bytes",
+        "actual_transfer_bytes",
+        "control_bytes",
+        "alignment_padding_bytes",
+    )
+    missing = [key for key in required if key not in payload]
+    if missing:
+        raise ValueError("transfer accounting missing field(s): " + ", ".join(missing))
+    actual_h2d = int(payload["actual_h2d_bytes"])
+    actual_d2h = int(payload["actual_d2h_bytes"])
+    total = int(payload["actual_transfer_bytes"])
+    if min(actual_h2d, actual_d2h, total) < 0 or total != actual_h2d + actual_d2h:
+        raise ValueError("transfer accounting byte invariant failed")
+    if payload.get("physical_bus_bytes_available") is not False:
+        raise ValueError("transfer accounting must not claim physical bus counters")
+    payload["transfer_accounting_artifact"] = path.name
+    return payload
 
 
 def _pack_args(native: dict[str, Any]) -> bytes:
