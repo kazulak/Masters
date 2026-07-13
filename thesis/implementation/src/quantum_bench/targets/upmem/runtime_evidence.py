@@ -23,11 +23,59 @@ GENERIC_KERNEL_STRATEGY = "mram_resident_output_tiled_v1"
 GENERIC_NATIVE_MAX_RANK = 16
 GENERIC_NATIVE_MAX_TENSOR_ELEMENTS = 65536
 GENERIC_OUTPUT_TILE_ELEMENTS = 256
+APPLICATION_VISIBLE_SDK_TRANSFER_SCOPE = "application_visible_sdk_recorded"
+APPLICATION_VISIBLE_PREPARATION_TRANSFER_SCOPE = "application_visible_preparation_model"
 
 UpmemTaskGraphStatus = Literal["completed", "unsupported", "failed", "validation_failed"]
 
 CONTRACTION_EXECUTION_TARGET = CONTRACTION_EXECUTION_TARGET_UPMEM
 UPMEM_EXECUTION_MODE = UPMEM_EXECUTION_MODE_SDK_SIMULATOR
+
+
+def transfer_accounting(
+    actual_h2d_bytes: int | None,
+    actual_d2h_bytes: int | None,
+    *,
+    declared_total_bytes: int | None = None,
+    recorded_by_sdk: bool = True,
+) -> JsonDict:
+    """Return a checked application-visible transfer accounting record.
+
+    SDK simulator artifacts do not expose physical DIMM/bus counters. Values
+    are therefore deliberately scoped to application-visible byte records or
+    preparation models, never presented as physical hardware traffic.
+    """
+
+    h2d = int(actual_h2d_bytes or 0)
+    d2h = int(actual_d2h_bytes or 0)
+    if h2d < 0 or d2h < 0:
+        raise ValueError("actual transfer byte counts must be nonnegative")
+    total = h2d + d2h
+    if declared_total_bytes is not None and int(declared_total_bytes) != total:
+        raise ValueError(
+            f"actual_transfer_bytes invariant failed: {declared_total_bytes} != {h2d} + {d2h}"
+        )
+    return {
+        "actual_h2d_bytes": h2d,
+        "actual_d2h_bytes": d2h,
+        "actual_transfer_bytes": total,
+        "actual_transfer_bytes_invariant": "passed",
+        "transfer_accounting_scope": (
+            APPLICATION_VISIBLE_SDK_TRANSFER_SCOPE
+            if recorded_by_sdk
+            else APPLICATION_VISIBLE_PREPARATION_TRANSFER_SCOPE
+        ),
+        "physical_bus_bytes_available": False,
+        "transfer_components": {
+            "h2d_application_visible_payload_bytes": h2d,
+            "d2h_application_visible_payload_bytes": d2h,
+            "quantization_scale_bytes": None,
+            "shape_index_metadata_bytes": None,
+            "control_structure_bytes": None,
+            "alignment_padding_bytes": None,
+            "unobserved_sdk_overhead_bytes": None,
+        },
+    }
 
 
 @dataclass(frozen=True)
@@ -307,6 +355,11 @@ def _base_task_metric(
     prep_metadata = dict((preparation or {}).get("metadata") or {})
     actual_h2d_bytes = bridge_metadata.get("actual_h2d_bytes", prep_metadata.get("actual_h2d_bytes_model"))
     actual_d2h_bytes = bridge_metadata.get("actual_d2h_bytes", prep_metadata.get("actual_d2h_bytes_model"))
+    transfer = transfer_accounting(
+        actual_h2d_bytes,
+        actual_d2h_bytes,
+        recorded_by_sdk=("actual_h2d_bytes" in bridge_metadata or "actual_d2h_bytes" in bridge_metadata),
+    )
     full_precision_h2d_bytes = prep_metadata.get("full_precision_h2d_bytes_model", bridge_metadata.get("full_precision_h2d_bytes_model"))
     full_precision_d2h_bytes = prep_metadata.get("full_precision_d2h_bytes_model", bridge_metadata.get("full_precision_d2h_bytes_model"))
     conversion_summary = _conversion_summary(preparation=preparation, component_metrics=component_metrics)
@@ -377,9 +430,7 @@ def _base_task_metric(
             "quantization_time_s": float(prep_metadata.get("quantization_time_s", 0.0) or 0.0),
             "dequantization_time_s": float(prep_metadata.get("dequantization_time_s", 0.0) or 0.0),
             "float32_reference_time_s": float(prep_metadata.get("float32_reference_time_s", 0.0) or 0.0),
-            "actual_h2d_bytes": int(actual_h2d_bytes or 0),
-            "actual_d2h_bytes": int(actual_d2h_bytes or 0),
-            "actual_transfer_bytes": int((actual_h2d_bytes or 0) + (actual_d2h_bytes or 0)),
+            **transfer,
             "full_precision_h2d_bytes_model": int(full_precision_h2d_bytes or 0),
             "full_precision_d2h_bytes_model": int(full_precision_d2h_bytes or 0),
             "full_precision_transfer_bytes_model": int((full_precision_h2d_bytes or 0) + (full_precision_d2h_bytes or 0)),
@@ -488,6 +539,16 @@ def _summary_payload(
     total_full_precision_d2h_bytes = sum(int(row.get("full_precision_d2h_bytes_model", 0) or 0) for row in task_metrics)
     total_actual_transfer_bytes = total_actual_h2d_bytes + total_actual_d2h_bytes
     total_full_precision_transfer_bytes = total_full_precision_h2d_bytes + total_full_precision_d2h_bytes
+    transfer = transfer_accounting(
+        total_actual_h2d_bytes,
+        total_actual_d2h_bytes,
+        declared_total_bytes=total_actual_transfer_bytes,
+        recorded_by_sdk=all(
+            row.get("transfer_accounting_scope") == APPLICATION_VISIBLE_SDK_TRANSFER_SCOPE
+            for row in task_metrics
+            if row.get("status") == "completed"
+        ),
+    )
     total_clipping = sum(int(row.get("quantization_clipping_count", 0) or 0) for row in task_metrics)
     total_saturation = sum(int(row.get("quantization_saturation_count", 0) or 0) for row in task_metrics)
     total_left_clipping = sum(int(row.get("left_quantization_clipping_count", 0) or 0) for row in task_metrics)
@@ -575,9 +636,7 @@ def _summary_payload(
             "total_quantization_time_s": float(sum(float(row.get("quantization_time_s", 0.0) or 0.0) for row in task_metrics)),
             "total_dequantization_time_s": float(sum(float(row.get("dequantization_time_s", 0.0) or 0.0) for row in task_metrics)),
             "total_float32_reference_time_s": float(sum(float(row.get("float32_reference_time_s", 0.0) or 0.0) for row in task_metrics)),
-            "actual_h2d_bytes": int(total_actual_h2d_bytes),
-            "actual_d2h_bytes": int(total_actual_d2h_bytes),
-            "actual_transfer_bytes": int(total_actual_transfer_bytes),
+            **transfer,
             "full_precision_h2d_bytes_model": int(total_full_precision_h2d_bytes),
             "full_precision_d2h_bytes_model": int(total_full_precision_d2h_bytes),
             "full_precision_transfer_bytes_model": int(total_full_precision_transfer_bytes),

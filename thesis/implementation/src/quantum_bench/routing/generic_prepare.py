@@ -36,6 +36,19 @@ class GenericTaskPreparationCaps:
 
 
 @dataclass(frozen=True)
+class GenericStructuralFeasibility:
+    """Pure structural result shared by preparation and analysis callers."""
+
+    feasible: bool
+    metadata: JsonDict = field(default_factory=dict)
+    rejection_reasons: tuple[str, ...] = ()
+
+    @property
+    def reason(self) -> str | None:
+        return self.rejection_reasons[0] if self.rejection_reasons else None
+
+
+@dataclass(frozen=True)
 class GenericTaskPreparedOperands:
     left_quantized: np.ndarray
     right_quantized: np.ndarray
@@ -490,14 +503,25 @@ def _real_array_or_none(array: np.ndarray) -> np.ndarray | None:
     return array
 
 
-def _native_index_metadata(task: ContractionTask, caps: GenericTaskPreparationCaps, *, check_int32_accumulation: bool = True) -> JsonDict | str:
+def generic_structural_feasibility(
+    task: ContractionTask,
+    caps: GenericTaskPreparationCaps = GenericTaskPreparationCaps(),
+    *,
+    check_int32_accumulation: bool = True,
+) -> GenericStructuralFeasibility:
+    """Return generic-loop shape metadata without touching tensor values.
+
+    The validation order and reason strings are the generic preparation contract.
+    Keeping this function value-free lets planners use the same rejection rules
+    without importing or executing the preparation path.
+    """
     left_shape = tuple(int(dim) for dim in task.input_shapes[0])
     right_shape = tuple(int(dim) for dim in task.input_shapes[1])
     output_shape = tuple(int(dim) for dim in task.output_shape)
     if max(len(left_shape), len(right_shape), len(output_shape), len(task.contracted_labels)) > caps.max_rank:
-        return "rank_cap_exceeded"
+        return GenericStructuralFeasibility(False, rejection_reasons=("rank_cap_exceeded",))
     if max(_shape_product(left_shape), _shape_product(right_shape), _shape_product(output_shape)) > caps.max_tensor_elements:
-        return "element_count_cap_exceeded"
+        return GenericStructuralFeasibility(False, rejection_reasons=("element_count_cap_exceeded",))
 
     try:
         output_to_left_axes = tuple(task.left_labels.index(label) if label in task.left_labels else -1 for label in task.output_labels)
@@ -506,43 +530,55 @@ def _native_index_metadata(task: ContractionTask, caps: GenericTaskPreparationCa
         contracted_to_right_axes = tuple(task.right_labels.index(label) for label in task.contracted_labels)
         contracted_dims = tuple(left_shape[axis] for axis in contracted_to_left_axes)
     except ValueError:
-        return "label_mapping_invalid"
+        return GenericStructuralFeasibility(False, rejection_reasons=("label_mapping_invalid",))
     for label, left_axis, right_axis in zip(task.contracted_labels, contracted_to_left_axes, contracted_to_right_axes):
         if left_shape[left_axis] != right_shape[right_axis]:
-            return "label_mapping_invalid"
+            return GenericStructuralFeasibility(False, rejection_reasons=("label_mapping_invalid",))
     if any(left_axis < 0 and right_axis < 0 for left_axis, right_axis in zip(output_to_left_axes, output_to_right_axes)):
-        return "label_mapping_invalid"
+        return GenericStructuralFeasibility(False, rejection_reasons=("label_mapping_invalid",))
 
     contracted_count = _shape_product(contracted_dims)
     if contracted_count > caps.max_contracted_combinations:
-        return "contracted_combination_cap_exceeded"
+        return GenericStructuralFeasibility(False, rejection_reasons=("contracted_combination_cap_exceeded",))
     if check_int32_accumulation and contracted_count * INT8_MAX_ABS_VALUE * INT8_MAX_ABS_VALUE > INT32_MAX_VALUE:
-        return "int32_accumulation_overflow_risk"
+        return GenericStructuralFeasibility(False, rejection_reasons=("int32_accumulation_overflow_risk",))
 
     output_element_count = _shape_product(output_shape)
     output_tile_count = (output_element_count + GENERIC_OUTPUT_TILE_ELEMENTS - 1) // GENERIC_OUTPUT_TILE_ELEMENTS
-    return {
-        "left_strides": _row_major_strides(left_shape),
-        "right_strides": _row_major_strides(right_shape),
-        "output_strides": _row_major_strides(output_shape),
-        "output_to_left_axes": output_to_left_axes,
-        "output_to_right_axes": output_to_right_axes,
-        "contracted_to_left_axes": contracted_to_left_axes,
-        "contracted_to_right_axes": contracted_to_right_axes,
-        "contracted_dims": contracted_dims,
-        "output_element_count": output_element_count,
-        "contracted_combination_count": contracted_count,
-        "generic_kernel_strategy": GENERIC_KERNEL_STRATEGY,
-        "native_max_rank": caps.max_rank,
-        "native_max_tensor_elements": caps.max_tensor_elements,
-        "generic_output_tile_elements": GENERIC_OUTPUT_TILE_ELEMENTS,
-        "generic_output_tile_count": output_tile_count,
-        "mram_resident_operands": True,
-        "wram_output_tiled": True,
-        "mram_tiled_task_count": int(output_tile_count > 1),
-        "mram_read_bytes_model": int(output_element_count * contracted_count * 2 * 8),
-        "mram_write_bytes_model": int((output_element_count * 4 + 7) & ~7),
-    }
+    return GenericStructuralFeasibility(
+        True,
+        metadata={
+            "left_strides": _row_major_strides(left_shape),
+            "right_strides": _row_major_strides(right_shape),
+            "output_strides": _row_major_strides(output_shape),
+            "output_to_left_axes": output_to_left_axes,
+            "output_to_right_axes": output_to_right_axes,
+            "contracted_to_left_axes": contracted_to_left_axes,
+            "contracted_to_right_axes": contracted_to_right_axes,
+            "contracted_dims": contracted_dims,
+            "output_element_count": output_element_count,
+            "contracted_combination_count": contracted_count,
+            "generic_kernel_strategy": GENERIC_KERNEL_STRATEGY,
+            "native_max_rank": caps.max_rank,
+            "native_max_tensor_elements": caps.max_tensor_elements,
+            "generic_output_tile_elements": GENERIC_OUTPUT_TILE_ELEMENTS,
+            "generic_output_tile_count": output_tile_count,
+            "mram_resident_operands": True,
+            "wram_output_tiled": True,
+            "mram_tiled_task_count": int(output_tile_count > 1),
+            "mram_read_bytes_model": int(output_element_count * contracted_count * 2 * 8),
+            "mram_write_bytes_model": int((output_element_count * 4 + 7) & ~7),
+        },
+    )
+
+
+def _native_index_metadata(task: ContractionTask, caps: GenericTaskPreparationCaps, *, check_int32_accumulation: bool = True) -> JsonDict | str:
+    feasibility = generic_structural_feasibility(
+        task,
+        caps,
+        check_int32_accumulation=check_int32_accumulation,
+    )
+    return feasibility.metadata if feasibility.feasible else (feasibility.reason or "generic_structural_rejection")
 
 
 def _row_major_strides(shape: tuple[int, ...]) -> tuple[int, ...]:

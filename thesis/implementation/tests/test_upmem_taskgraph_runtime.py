@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from quantum_bench.bench.result_artifacts import compare_results, load_result_records
 from quantum_bench.bench.upmem_taskgraph_runtime import run_upmem_taskgraph_runtime
@@ -25,6 +26,20 @@ from quantum_bench.targets.upmem.taskgraph_runtime import (
 )
 from quantum_bench.tn.execution import execute_task_sequence_np_einsum
 from quantum_bench.tn.network import TensorNetworkValue
+
+
+def test_transfer_accounting_preserves_directional_invariant() -> None:
+    accounting = runtime_evidence.transfer_accounting(48, 16, declared_total_bytes=64, recorded_by_sdk=True)
+
+    assert accounting["actual_h2d_bytes"] == 48
+    assert accounting["actual_d2h_bytes"] == 16
+    assert accounting["actual_transfer_bytes"] == 64
+    assert accounting["actual_transfer_bytes_invariant"] == "passed"
+    assert accounting["transfer_accounting_scope"] == "application_visible_sdk_recorded"
+    assert accounting["physical_bus_bytes_available"] is False
+
+    with pytest.raises(ValueError, match="invariant"):
+        runtime_evidence.transfer_accounting(48, 16, declared_total_bytes=63)
 
 
 def _simple_path_summary(task_count: int) -> PathSummary:
