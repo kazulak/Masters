@@ -111,6 +111,10 @@ def test_promote_snapshot_copies_compact_evidence_and_report(monkeypatch, tmp_pa
     assert manifest["snapshot_promotion_worktree_dirty"] is False
     assert set(manifest["provenance_stages"]) == {"benchmark_source", "report_generation", "snapshot_promotion"}
     assert all(not stage["worktree_dirty"] for stage in manifest["provenance_stages"].values())
+    report_manifest = json.loads((out / "report_manifest.json").read_text(encoding="utf-8"))
+    assert report_manifest["report_generation_commit"] == "test-head"
+    assert report_manifest["report_generation_worktree_dirty"] is False
+    assert report_manifest["report_generation_provenance"]["benchmark_source_worktree_dirty"] is False
 
 
 def test_outside_repository_dirtiness_is_recorded_without_dirty_source(monkeypatch, tmp_path: Path) -> None:

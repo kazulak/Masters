@@ -351,6 +351,16 @@ def _install_report(
             "provenance_scope": BENCHMARK_SOURCE_SCOPE,
             "provenance_aliases": PROVENANCE_ALIAS_DESCRIPTION,
             "provenance_stage": "report_generation",
+            # report_pack runs inside the snapshot staging tree. Its own
+            # repository probe therefore sees the intentionally untracked
+            # staging files. Preserve the provenance captured before staging
+            # was created so the installed report describes the actual source
+            # revision rather than its temporary packaging workspace.
+            "report_generation_commit": report_stage["commit"],
+            "report_generation_worktree_dirty": report_stage["benchmark_source_worktree_dirty"],
+            "report_generation_repository_worktree_dirty": report_stage["repository_worktree_dirty"],
+            "report_generation_provenance": report_stage,
+            "report_generation": report_stage,
             "provenance_stages": {
                 "benchmark_source": _stage(
                     source_provenance["commit"],
