@@ -18,6 +18,7 @@ from quantum_bench.targets.upmem.schedule import (
 from quantum_bench.targets.upmem.dense_bridge import (
     DENSE_BRIDGE_ID,
     DENSE_BRIDGE_SCHEMA_VERSION,
+    UPMEM_SDK_HARDWARE_DENSE_BACKEND_ID,
     DenseBridgeBlob,
     DenseBridgeBackendId,
     DenseBridgeBackendIdentity,
@@ -169,6 +170,7 @@ __all__ = [
     "DENSE_BRIDGE_ID",
     "DENSE_BRIDGE_DIAGNOSTICS_SCHEMA_VERSION",
     "DENSE_BRIDGE_SCHEMA_VERSION",
+    "UPMEM_SDK_HARDWARE_DENSE_BACKEND_ID",
     "DEFAULT_UPMEM_ENV_TIMEOUT_SECONDS",
     "REQUIRES_TILING_NOT_IMPLEMENTED",
     "UNSUPPORTED_DENSE_GEMM_SHAPE",

@@ -32,11 +32,13 @@ if TYPE_CHECKING:
 
 DENSE_BRIDGE_SCHEMA_VERSION = "dense_bridge_v1"
 DENSE_BRIDGE_ID = "upmem_dense_bridge_v1"
+UPMEM_SDK_HARDWARE_DENSE_BACKEND_ID = "upmem_sdk_hardware_dense"
 
 DenseBridgeStatus = Literal[
     "mock_executed",
     "stub_executed",
     "upmem_sdk_simulator_executed",
+    "upmem_sdk_hardware_executed",
     "skipped",
     "not_implemented",
     "failed",
@@ -47,6 +49,7 @@ DenseBridgeBackendId = Literal[
     "simplepim_external",
     "simplepim_external_stub",
     "upmem_sdk_simulator_dense",
+    "upmem_sdk_hardware_dense",
 ]
 
 
@@ -166,9 +169,15 @@ class DenseBridgeResult:
             {
                 "status": self.status,
                 "backend": self.backend,
-                "input_manifest_path": _relative_result_path(self.input_manifest_path, base_dir),
-                "output_manifest_path": _relative_result_path(self.output_manifest_path, base_dir),
-                "output_blob_path": _relative_result_path(self.output_blob_path, base_dir),
+                "input_manifest_path": _relative_result_path(
+                    self.input_manifest_path, base_dir
+                ),
+                "output_manifest_path": _relative_result_path(
+                    self.output_manifest_path, base_dir
+                ),
+                "output_blob_path": _relative_result_path(
+                    self.output_blob_path, base_dir
+                ),
                 "error": self.error,
                 "output_manifest": self.output_manifest,
                 "external_command_executed": self.external_command_executed,
@@ -249,8 +258,12 @@ def write_dense_bridge_input_manifest(
         gemm_output_labels=preparation_result.gemm_output_labels,
         output_labels=preparation_result.output_labels,
         input_shapes=preparation_result.input_shapes,
-        left_matrix_shape=_require_pair_shape(preparation_result.left_matrix_shape, "left_matrix_shape"),
-        right_matrix_shape=_require_pair_shape(preparation_result.right_matrix_shape, "right_matrix_shape"),
+        left_matrix_shape=_require_pair_shape(
+            preparation_result.left_matrix_shape, "left_matrix_shape"
+        ),
+        right_matrix_shape=_require_pair_shape(
+            preparation_result.right_matrix_shape, "right_matrix_shape"
+        ),
         output_shape=preparation_result.output_shape,
         fixed_point_spec=to_jsonable(preparation_result.fixed_point_spec),
         conversion_records={
@@ -260,13 +273,26 @@ def write_dense_bridge_input_manifest(
         dequantization={
             "left": _dequantization_payload(left_conversion),
             "right": _dequantization_payload(right_conversion),
-            "output_scale_hint": float(left_conversion["scale"]) * float(right_conversion["scale"]),
+            "output_scale_hint": float(left_conversion["scale"])
+            * float(right_conversion["scale"]),
         },
         tile_plan=dict(preparation_result.tile_plan or {}),
         upmem_task_estimate=dict(preparation_result.upmem_task_estimate or {}),
         operands={
-            "left": _blob_metadata(left_path, bridge_dir, prepared_operands.left_quantized, left_conversion, "left_operand"),
-            "right": _blob_metadata(right_path, bridge_dir, prepared_operands.right_quantized, right_conversion, "right_operand"),
+            "left": _blob_metadata(
+                left_path,
+                bridge_dir,
+                prepared_operands.left_quantized,
+                left_conversion,
+                "left_operand",
+            ),
+            "right": _blob_metadata(
+                right_path,
+                bridge_dir,
+                prepared_operands.right_quantized,
+                right_conversion,
+                "right_operand",
+            ),
         },
         expected_output=DenseBridgeBlob(
             relative_path=_relative_blob_path(expected_path, bridge_dir),
@@ -284,15 +310,21 @@ def write_dense_bridge_input_manifest(
             "complex_kernel_mapping_implemented": False,
             "mock_backend_available": True,
             "simplepim_or_native_execution_implemented": False,
-            "execution_class_hint": UPMEM_EXECUTION_CLASS_L2_SINGLE_DPU_MRAM if requires_tiling else UPMEM_EXECUTION_CLASS_L1_WRAM,
-            "kernel_strategy_hint": UPMEM_L2_KERNEL_STRATEGY if requires_tiling else UPMEM_L1_KERNEL_STRATEGY,
+            "execution_class_hint": UPMEM_EXECUTION_CLASS_L2_SINGLE_DPU_MRAM
+            if requires_tiling
+            else UPMEM_EXECUTION_CLASS_L1_WRAM,
+            "kernel_strategy_hint": UPMEM_L2_KERNEL_STRATEGY
+            if requires_tiling
+            else UPMEM_L1_KERNEL_STRATEGY,
         },
     )
     write_json(bridge_dir / "input_manifest.json", manifest)
     return manifest
 
 
-def dense_bridge_manifest_eligibility(preparation_result: object | None) -> tuple[bool, str | None]:
+def dense_bridge_manifest_eligibility(
+    preparation_result: object | None,
+) -> tuple[bool, str | None]:
     """Return whether a dense preparation result can be serialized as a bridge input."""
 
     if preparation_result is None:
@@ -310,9 +342,15 @@ def dense_bridge_manifest_eligibility(preparation_result: object | None) -> tupl
     status = getattr(preparation_result, "status", None)
     if status not in {"prepared", "simplepim_unavailable"}:
         return False, f"non_bridgeable_preparation_status:{status}"
-    if getattr(preparation_result, "left_conversion", None) is None or getattr(preparation_result, "right_conversion", None) is None:
+    if (
+        getattr(preparation_result, "left_conversion", None) is None
+        or getattr(preparation_result, "right_conversion", None) is None
+    ):
         return False, "conversion_records_missing"
-    if getattr(preparation_result, "left_matrix_shape", None) is None or getattr(preparation_result, "right_matrix_shape", None) is None:
+    if (
+        getattr(preparation_result, "left_matrix_shape", None) is None
+        or getattr(preparation_result, "right_matrix_shape", None) is None
+    ):
         return False, "matrix_shapes_missing"
     return True, None
 
@@ -321,7 +359,7 @@ def dense_bridge_backend_manifest_eligibility(
     preparation_result: object | None,
     backend: str,
 ) -> tuple[bool, str | None]:
-    if backend != "upmem_sdk_simulator_dense":
+    if backend not in {"upmem_sdk_simulator_dense", "upmem_sdk_hardware_dense"}:
         return dense_bridge_manifest_eligibility(preparation_result)
     common = _backend_manifest_common_rejection(preparation_result)
     if common is not None:
@@ -329,13 +367,24 @@ def dense_bridge_backend_manifest_eligibility(
     status = getattr(preparation_result, "status", None)
     tile_plan = getattr(preparation_result, "tile_plan", None)
     tile_plan = tile_plan if isinstance(tile_plan, dict) else {}
-    if status in {"prepared", "simplepim_unavailable"} and tile_plan.get("requires_tiling") is not True:
+    if (
+        status in {"prepared", "simplepim_unavailable"}
+        and tile_plan.get("requires_tiling") is not True
+    ):
         return True, None
-    if status != "requires_executable_tiling_not_implemented" or tile_plan.get("requires_tiling") is not True:
+    if (
+        status != "requires_executable_tiling_not_implemented"
+        or tile_plan.get("requires_tiling") is not True
+    ):
         return False, f"non_bridgeable_preparation_status:{status}"
     left_conversion = to_jsonable(getattr(preparation_result, "left_conversion", None))
-    right_conversion = to_jsonable(getattr(preparation_result, "right_conversion", None))
-    if left_conversion.get("representation") != "real" or right_conversion.get("representation") != "real":
+    right_conversion = to_jsonable(
+        getattr(preparation_result, "right_conversion", None)
+    )
+    if (
+        left_conversion.get("representation") != "real"
+        or right_conversion.get("representation") != "real"
+    ):
         return False, "complex_l2_not_implemented"
     l2_plan = plan_l2_tiled_execution(
         int(getattr(preparation_result, "gemm_m", 0) or 0),
@@ -354,9 +403,15 @@ def _backend_manifest_common_rejection(preparation_result: object | None) -> str
         return "prepared_operands_missing"
     if getattr(preparation_result, "tile_plan", None) is None:
         return "tile_plan_missing"
-    if getattr(preparation_result, "left_conversion", None) is None or getattr(preparation_result, "right_conversion", None) is None:
+    if (
+        getattr(preparation_result, "left_conversion", None) is None
+        or getattr(preparation_result, "right_conversion", None) is None
+    ):
         return "conversion_records_missing"
-    if getattr(preparation_result, "left_matrix_shape", None) is None or getattr(preparation_result, "right_matrix_shape", None) is None:
+    if (
+        getattr(preparation_result, "left_matrix_shape", None) is None
+        or getattr(preparation_result, "right_matrix_shape", None) is None
+    ):
         return "matrix_shapes_missing"
     return None
 
@@ -411,6 +466,15 @@ def dense_bridge_backend_registry() -> dict[str, DenseBridgeBackendIdentity]:
                 "Executes task-level L1 direct and L2 WRAM-tiled dense bridge GEMMs "
                 "through the UPMEM SDK simulator subset. This is not a SimplePIM API GEMM primitive."
             ),
+        ),
+        "upmem_sdk_hardware_dense": DenseBridgeBackendIdentity(
+            backend_id="upmem_sdk_hardware_dense",
+            display_name="UPMEM SDK Hardware Dense Bridge",
+            backend_kind="upmem_sdk_hardware_dense",
+            execution_mode="external_process",
+            external_command_capable=True,
+            implemented=True,
+            description="Hardware-only UPMEM SDK dense int8 MVP; never falls back to a simulator or CPU executor.",
         ),
     }
 
@@ -476,6 +540,9 @@ def execute_dense_bridge(
     if request.backend == "upmem_sdk_simulator_dense":
         return _execute_upmem_sdk_simulator_dense_bridge(request, identity)
 
+    if request.backend == "upmem_sdk_hardware_dense":
+        return _execute_upmem_sdk_hardware_dense_bridge(request, identity)
+
     output_manifest = _nonexecuted_output_manifest(
         backend=request.backend,
         status="unsupported",
@@ -507,12 +574,24 @@ def run_mock_dense_bridge(input_manifest_path: Path) -> DenseBridgeResult:
     started = time.perf_counter()
     backend = "mock_numpy_dequantized"
     output_manifest_path = input_manifest_path.parent / "output_manifest.json"
-    output_blob_path = input_manifest_path.parent / "outputs" / "mock_dequantized_output.npy"
+    output_blob_path = (
+        input_manifest_path.parent / "outputs" / "mock_dequantized_output.npy"
+    )
     try:
         manifest = read_dense_bridge_input_manifest(input_manifest_path)
         bridge_dir = input_manifest_path.parent
-        left = np.load(_resolve_manifest_path(bridge_dir, manifest.operands["left"]["relative_path"]), allow_pickle=False)
-        right = np.load(_resolve_manifest_path(bridge_dir, manifest.operands["right"]["relative_path"]), allow_pickle=False)
+        left = np.load(
+            _resolve_manifest_path(
+                bridge_dir, manifest.operands["left"]["relative_path"]
+            ),
+            allow_pickle=False,
+        )
+        right = np.load(
+            _resolve_manifest_path(
+                bridge_dir, manifest.operands["right"]["relative_path"]
+            ),
+            allow_pickle=False,
+        )
         _validate_loaded_blob(left, manifest.operands["left"], "left")
         _validate_loaded_blob(right, manifest.operands["right"], "right")
 
@@ -534,8 +613,13 @@ def run_mock_dense_bridge(input_manifest_path: Path) -> DenseBridgeResult:
         np.save(output_blob_path, output, allow_pickle=False)
         write_time_s = time.perf_counter() - write_started
 
-        expected = np.load(_resolve_manifest_path(bridge_dir, manifest.expected_output.relative_path), allow_pickle=False)
-        _validate_loaded_blob(expected, to_jsonable(manifest.expected_output), "expected_output")
+        expected = np.load(
+            _resolve_manifest_path(bridge_dir, manifest.expected_output.relative_path),
+            allow_pickle=False,
+        )
+        _validate_loaded_blob(
+            expected, to_jsonable(manifest.expected_output), "expected_output"
+        )
         validation = conversion_error_metrics(expected, output)
         output_manifest = DenseBridgeOutputManifest(
             schema_version=DENSE_BRIDGE_SCHEMA_VERSION,
@@ -606,7 +690,9 @@ def run_mock_dense_bridge(input_manifest_path: Path) -> DenseBridgeResult:
             external_command_executed=False,
             execution_implemented=False,
             error=str(exc),
-            metadata={"mock_means": "file boundary validation failed before any external command"},
+            metadata={
+                "mock_means": "file boundary validation failed before any external command"
+            },
         )
         write_json(output_manifest_path, output_manifest)
         return DenseBridgeResult(
@@ -619,6 +705,423 @@ def run_mock_dense_bridge(input_manifest_path: Path) -> DenseBridgeResult:
             output_manifest=output_manifest,
             external_command_executed=False,
             execution_implemented=False,
+        )
+
+
+def _execute_upmem_sdk_hardware_dense_bridge(
+    request: DenseBridgeExecutionRequest,
+    identity: DenseBridgeBackendIdentity,
+) -> DenseBridgeExecutionResult:
+    """Execute the physical-only runner and enforce its additive hardware contract."""
+    started = time.perf_counter()
+    input_path = request.input_manifest_path
+    bridge_dir = input_path.parent
+    output_path = bridge_dir / "output_manifest.json"
+    environment = dict(
+        os.environ if request.environment is None else request.environment
+    )
+    invocation: JsonDict = {
+        "backend_id": identity.backend_id,
+        "backend_family": "upmem_sdk",
+        "target": "hardware",
+        "simplepim_api_used": False,
+        "hardware_kernel_executed": False,
+        "external_command_executed": False,
+    }
+    manifest: DenseBridgeInputManifest | None = None
+
+    try:
+        manifest = read_dense_bridge_input_manifest(input_path)
+        _validate_bridge_input_files(manifest, bridge_dir)
+        from quantum_bench.targets.upmem.hardware_mvp import (
+            validate_hardware_mvp_manifest,
+        )
+
+        validate_hardware_mvp_manifest(
+            json.loads(input_path.read_text(encoding="utf-8"))
+        )
+    except Exception as exc:
+        return _write_hardware_bridge_failure(
+            input_path,
+            output_path,
+            identity,
+            manifest,
+            invocation,
+            "hardware_profile_violation",
+            str(exc),
+            started,
+        )
+
+    if environment.get("UPMEM_ALLOW_PHYSICAL_HARDWARE") != "1":
+        return _write_hardware_bridge_failure(
+            input_path,
+            output_path,
+            identity,
+            manifest,
+            invocation,
+            "hardware_opt_in_missing",
+            "UPMEM_ALLOW_PHYSICAL_HARDWARE=1 is required",
+            started,
+        )
+    if not request.execute_external:
+        return _write_hardware_bridge_failure(
+            input_path,
+            output_path,
+            identity,
+            manifest,
+            invocation,
+            "hardware_profile_violation",
+            "execute_external=True is required",
+            started,
+        )
+    if environment.get("DPU_BACKEND"):
+        return _write_hardware_bridge_failure(
+            input_path,
+            output_path,
+            identity,
+            manifest,
+            invocation,
+            "hardware_profile_violation",
+            "DPU_BACKEND must not be inherited for hardware execution",
+            started,
+        )
+    if environment.get("UPMEM_PROFILE", "hw") != "hw":
+        return _write_hardware_bridge_failure(
+            input_path,
+            output_path,
+            identity,
+            manifest,
+            invocation,
+            "hardware_profile_violation",
+            "UPMEM_PROFILE must be hw",
+            started,
+        )
+    if environment.get("UPMEM_DENSE_HARDWARE_RUNNER"):
+        return _write_hardware_bridge_failure(
+            input_path,
+            output_path,
+            identity,
+            manifest,
+            invocation,
+            "hardware_profile_violation",
+            "UPMEM_DENSE_HARDWARE_RUNNER override is forbidden by hardware_mvp_l1_v1",
+            started,
+        )
+
+    runner = _upmem_sdk_hardware_runner_path()
+    timeout = _upmem_sdk_hardware_timeout()
+    command = [
+        sys.executable,
+        str(runner),
+        "--input-manifest",
+        input_path.name,
+        "--output-manifest",
+        output_path.name,
+        "--backend-id",
+        identity.backend_id,
+        "--timeout-seconds",
+        str(timeout),
+    ]
+    invocation.update(
+        {
+            "command_args": tuple(command),
+            "runner_path": str(runner),
+            "timeout_seconds": timeout,
+        }
+    )
+    child_env = dict(environment)
+    child_env.pop("DPU_BACKEND", None)
+    child_env["UPMEM_PROFILE"] = "hw"
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=bridge_dir,
+            env=child_env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout + 2.0,
+        )
+        invocation.update(
+            {
+                "external_command_executed": True,
+                "returncode": int(completed.returncode),
+                "stdout_snippet": _bounded_snippet(completed.stdout),
+                "stderr_snippet": _bounded_snippet(completed.stderr),
+            }
+        )
+    except subprocess.TimeoutExpired:
+        invocation.update({"external_command_executed": True, "timed_out": True})
+        return _write_hardware_bridge_failure(
+            input_path,
+            output_path,
+            identity,
+            manifest,
+            invocation,
+            "kernel_timeout",
+            f"hardware runner timed out after {timeout + 2.0} seconds",
+            started,
+        )
+
+    try:
+        output = read_dense_bridge_output_manifest(output_path)
+        payload = json.loads(output_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return _write_hardware_bridge_failure(
+            input_path,
+            output_path,
+            identity,
+            manifest,
+            invocation,
+            "output_manifest_failed",
+            str(exc),
+            started,
+        )
+    if completed.returncode != 0 and output.status == "upmem_sdk_hardware_executed":
+        return _write_hardware_bridge_failure(
+            input_path,
+            output_path,
+            identity,
+            manifest,
+            invocation,
+            str(output.metadata.get("reason") or "output_validation_failed"),
+            f"hardware runner exited with code {completed.returncode}",
+            started,
+            output,
+        )
+    if output.status == "upmem_sdk_hardware_executed":
+        try:
+            _validate_hardware_output_contract(payload, output, bridge_dir)
+        except Exception as exc:
+            return _write_hardware_bridge_failure(
+                input_path,
+                output_path,
+                identity,
+                manifest,
+                invocation,
+                "output_validation_failed",
+                str(exc),
+                started,
+                output,
+            )
+        invocation["hardware_kernel_executed"] = True
+        return _execution_result(
+            input_path,
+            output_path,
+            _resolve_manifest_path(bridge_dir, output.output_blob.relative_path)
+            if output.output_blob
+            else None,
+            identity.backend_id,
+            identity,
+            "upmem_sdk_hardware_executed",
+            "upmem_sdk_hardware_executed",
+            None,
+            None,
+            output,
+            invocation,
+            external_command_executed=True,
+            execution_implemented=True,
+            metadata=dict(output.metadata),
+        )
+    reason = str(output.metadata.get("reason") or output.status)
+    return _execution_result(
+        input_path,
+        output_path,
+        None,
+        identity.backend_id,
+        identity,
+        output.status,
+        reason,
+        output.error,
+        str(output.metadata.get("error_type"))
+        if output.metadata.get("error_type")
+        else None,
+        output,
+        invocation,
+        external_command_executed=True,
+        execution_implemented=output.execution_implemented,
+        metadata=dict(output.metadata),
+    )
+
+
+def _write_hardware_bridge_failure(
+    input_path: Path,
+    output_path: Path,
+    identity: DenseBridgeBackendIdentity,
+    manifest: DenseBridgeInputManifest | None,
+    invocation: JsonDict,
+    reason: str,
+    error: str,
+    started: float,
+    output: DenseBridgeOutputManifest | None = None,
+) -> DenseBridgeExecutionResult:
+    if output is None:
+        failed = _nonexecuted_output_manifest(
+            identity.backend_id,
+            "failed",
+            reason,
+            error,
+            reason,
+            input_path,
+            manifest,
+            invocation,
+            float(time.perf_counter() - started),
+            external_command_executed=bool(invocation.get("external_command_executed")),
+            metadata_extra={
+                "backend_family": "upmem_sdk",
+                "target": "hardware",
+                "hardware_kernel_executed": False,
+            },
+        )
+    else:
+        failed = DenseBridgeOutputManifest(
+            schema_version=output.schema_version,
+            bridge_id=output.bridge_id,
+            manifest_kind=output.manifest_kind,
+            backend=identity.backend_id,
+            status="failed",
+            input_manifest=output.input_manifest,
+            route_id=output.route_id,
+            task_id=output.task_id,
+            output_blob=output.output_blob,
+            accumulator_blob=output.accumulator_blob,
+            validation_metrics={
+                **dict(output.validation_metrics),
+                "passed": False,
+                "exact_integer_passed": False,
+            },
+            compute_time_s=output.compute_time_s,
+            write_time_s=output.write_time_s,
+            total_time_s=float(time.perf_counter() - started),
+            external_command_executed=bool(invocation.get("external_command_executed")),
+            execution_implemented=output.execution_implemented,
+            error=error,
+            metadata={
+                **dict(output.metadata),
+                "reason": reason,
+                "error_type": reason,
+                "hardware_stage": reason,
+                "hardware_kernel_executed": False,
+                "simulator_kernel_executed": False,
+                "cpu_fallback_used": False,
+            },
+        )
+    write_json(output_path, failed)
+    return _execution_result(
+        input_path,
+        output_path,
+        None,
+        identity.backend_id,
+        identity,
+        "failed",
+        reason,
+        error,
+        reason,
+        failed,
+        invocation,
+        external_command_executed=bool(invocation.get("external_command_executed")),
+        metadata=dict(failed.metadata),
+    )
+
+
+def _validate_hardware_output_contract(
+    payload: JsonDict, output: DenseBridgeOutputManifest, bridge_dir: Path
+) -> None:
+    required = {
+        "hardware_status_json",
+        "raw_accumulator_crop",
+        "cpu_reference",
+        "hashes",
+        "application_visible_transfer_bytes",
+        "timing_labels",
+        "speedup_claims",
+    }
+    missing = sorted(required.difference(output.metadata))
+    if missing:
+        raise ValueError(
+            f"hardware output metadata missing required fields: {', '.join(missing)}"
+        )
+    if (
+        output.backend != "upmem_sdk_hardware_dense"
+        or output.status != "upmem_sdk_hardware_executed"
+    ):
+        raise ValueError("hardware output identity/status mismatch")
+    if output.output_blob is None or output.accumulator_blob is None:
+        raise ValueError("hardware output and accumulator blobs are required")
+    if (
+        output.validation_metrics.get("exact_integer_passed") is not True
+        or output.validation_metrics.get("passed") is not True
+    ):
+        raise ValueError("exact integer validation did not pass")
+    if output.metadata["speedup_claims"] is not False:
+        raise ValueError("hardware bring-up must not claim speedup")
+    if output.metadata["timing_labels"] != "hardware_bringup_functionality_only":
+        raise ValueError("hardware timing label is not functionality-only")
+    if not isinstance(output.metadata["hardware_status_json"], dict):
+        raise ValueError("hardware_status_json must be an object")
+    status = output.metadata["hardware_status_json"]
+    if (
+        status.get("success") is not True
+        or status.get("failure_stage") is not None
+        or int(status.get("requested_dpus", 0)) != 1
+        or int(status.get("allocated_dpus", 0)) != 1
+        or int(status.get("tasklets", 0)) != 1
+    ):
+        raise ValueError(
+            "hardware status does not prove one-DPU/one-tasklet successful execution"
+        )
+    if output.metadata.get("hardware_kernel_executed") is not True:
+        raise ValueError("hardware output does not prove native kernel execution")
+    if output.metadata.get("simulator_kernel_executed") is not False:
+        raise ValueError(
+            "hardware output must state that the simulator did not execute"
+        )
+    if output.metadata.get("cpu_fallback_used") is not False:
+        raise ValueError("hardware output must state that no CPU fallback was used")
+    hashes = output.metadata["hashes"]
+    if not isinstance(hashes, dict) or not {
+        "left",
+        "right",
+        "accumulator",
+        "output",
+    }.issubset(hashes):
+        raise ValueError(
+            "hardware hashes must cover both operands, accumulator, and output"
+        )
+    transfers = output.metadata["application_visible_transfer_bytes"]
+    if not isinstance(transfers, dict) or any(
+        key not in transfers for key in ("h2d", "d2h", "total")
+    ):
+        raise ValueError("application-visible H2D/D2H accounting is incomplete")
+    if int(transfers["h2d"]) + int(transfers["d2h"]) != int(transfers["total"]):
+        raise ValueError("application-visible transfer total is inconsistent")
+    raw_path = _resolve_manifest_path(
+        bridge_dir, str(output.accumulator_blob["relative_path"])
+    )
+    raw = np.load(raw_path, allow_pickle=False)
+    _validate_loaded_blob(raw, output.accumulator_blob, "hardware_accumulator")
+    if np.dtype(output.accumulator_blob["dtype"]) != np.dtype("<i4"):
+        raise ValueError("hardware accumulator must be little-endian int32")
+    try:
+        input_payload = json.loads(
+            (bridge_dir / output.input_manifest).read_text(encoding="utf-8")
+        )
+        reference_info = (input_payload.get("metadata") or {}).get(
+            "expected_accumulator"
+        )
+        if not isinstance(reference_info, dict):
+            raise ValueError("retained exact CPU accumulator reference is missing")
+        expected_path = _resolve_manifest_path(
+            bridge_dir, str(reference_info["relative_path"])
+        )
+        expected = np.load(expected_path, allow_pickle=False).astype("<i4", copy=False)
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"hardware exact CPU reference cannot be loaded: {exc}"
+        ) from exc
+    if not np.array_equal(raw.astype("<i4", copy=False), expected):
+        raise ValueError(
+            "hardware accumulator does not match the retained exact CPU reference"
         )
 
 
@@ -665,7 +1168,9 @@ def _execute_simplepim_external_bridge(
             invocation_metadata=invocation_metadata,
         )
 
-    probe = probe_simplepim(env=request.environment if request.environment is not None else os.environ)
+    probe = probe_simplepim(
+        env=request.environment if request.environment is not None else os.environ
+    )
     probe_payload = probe.to_json_dict()
     invocation_metadata = _simplepim_invocation_metadata(
         input_manifest_path=input_manifest_path,
@@ -789,7 +1294,11 @@ def _execute_simplepim_external_stub_bridge(
         )
 
     if stub_path is None or not stub_path.exists():
-        error = None if stub_path is None else f"Configured stub path does not exist: {stub_path}"
+        error = (
+            None
+            if stub_path is None
+            else f"Configured stub path does not exist: {stub_path}"
+        )
         output_manifest = _nonexecuted_output_manifest(
             backend=identity.backend_id,
             status="skipped",
@@ -910,7 +1419,9 @@ def _execute_simplepim_external_stub_bridge(
         )
 
     if output_manifest.status == "failed":
-        reason = str(output_manifest.metadata.get("reason") or "simplepim_external_stub_failed")
+        reason = str(
+            output_manifest.metadata.get("reason") or "simplepim_external_stub_failed"
+        )
         error_type = str(output_manifest.metadata.get("error_type") or reason)
         return _execution_result(
             input_manifest_path=input_manifest_path,
@@ -1054,7 +1565,9 @@ def _execute_upmem_sdk_simulator_dense_bridge(
             invocation_metadata=invocation_metadata,
         )
 
-    static_rejection = _upmem_sdk_simulator_static_rejection(manifest, request.environment)
+    static_rejection = _upmem_sdk_simulator_static_rejection(
+        manifest, request.environment
+    )
     if static_rejection is not None:
         reason, error = static_rejection
         output_manifest = _nonexecuted_output_manifest(
@@ -1152,7 +1665,11 @@ def _execute_upmem_sdk_simulator_dense_bridge(
             error_type=None,
             output_manifest=output_manifest,
             invocation_metadata=invocation_metadata,
-            metadata={"backend_family": "upmem_sdk", "simplepim_api_used": False, "simplepim_bridge_lane": True},
+            metadata={
+                "backend_family": "upmem_sdk",
+                "simplepim_api_used": False,
+                "simplepim_bridge_lane": True,
+            },
         )
 
     timeout_seconds = _upmem_sdk_simulator_timeout(request.environment)
@@ -1177,7 +1694,12 @@ def _execute_upmem_sdk_simulator_dense_bridge(
         completed = subprocess.run(
             command,
             cwd=bridge_dir,
-            env={**dict(os.environ if request.environment is None else request.environment), "DPU_BACKEND": "simulator"},
+            env={
+                **dict(
+                    os.environ if request.environment is None else request.environment
+                ),
+                "DPU_BACKEND": "simulator",
+            },
             capture_output=True,
             text=True,
             check=False,
@@ -1228,7 +1750,11 @@ def _execute_upmem_sdk_simulator_dense_bridge(
     try:
         output_manifest = read_dense_bridge_output_manifest(output_manifest_path)
     except Exception as exc:
-        reason = "runner_execution_failed" if completed.returncode != 0 else "output_manifest_invalid"
+        reason = (
+            "runner_execution_failed"
+            if completed.returncode != 0
+            else "output_manifest_invalid"
+        )
         output_manifest = _nonexecuted_output_manifest(
             backend=identity.backend_id,
             status="failed",
@@ -1270,9 +1796,14 @@ def _execute_upmem_sdk_simulator_dense_bridge(
             metadata={"backend_family": "upmem_sdk"},
         )
 
-    if completed.returncode != 0 and output_manifest.status == "upmem_sdk_simulator_executed":
+    if (
+        completed.returncode != 0
+        and output_manifest.status == "upmem_sdk_simulator_executed"
+    ):
         reason = "runner_execution_failed"
-        error = f"UPMEM SDK simulator dense runner exited with code {completed.returncode}"
+        error = (
+            f"UPMEM SDK simulator dense runner exited with code {completed.returncode}"
+        )
         output_manifest = _nonexecuted_output_manifest(
             backend=identity.backend_id,
             status="failed",
@@ -1311,7 +1842,12 @@ def _execute_upmem_sdk_simulator_dense_bridge(
             metadata={"backend_family": "upmem_sdk"},
         )
 
-    if output_manifest.status in {"failed", "unsupported", "skipped", "not_implemented"}:
+    if output_manifest.status in {
+        "failed",
+        "unsupported",
+        "skipped",
+        "not_implemented",
+    }:
         reason = str(output_manifest.metadata.get("reason") or output_manifest.status)
         error_type = output_manifest.metadata.get("error_type")
         return _execution_result(
@@ -1333,7 +1869,9 @@ def _execute_upmem_sdk_simulator_dense_bridge(
 
     if output_manifest.status != "upmem_sdk_simulator_executed":
         reason = "output_manifest_invalid"
-        error = f"Unexpected UPMEM SDK simulator output status: {output_manifest.status}"
+        error = (
+            f"Unexpected UPMEM SDK simulator output status: {output_manifest.status}"
+        )
         output_manifest = _nonexecuted_output_manifest(
             backend=identity.backend_id,
             status="failed",
@@ -1369,14 +1907,20 @@ def _execute_upmem_sdk_simulator_dense_bridge(
         reason = "output_blob_missing"
         error = "UPMEM SDK simulator output manifest did not include output_blob"
     else:
-        output_blob_path = _resolve_manifest_path(bridge_dir, output_manifest.output_blob.relative_path)
+        output_blob_path = _resolve_manifest_path(
+            bridge_dir, output_manifest.output_blob.relative_path
+        )
         if not output_blob_path.exists():
             reason = "output_blob_missing"
             error = f"UPMEM SDK simulator output blob is missing: {output_manifest.output_blob.relative_path}"
         else:
             try:
                 output_array = np.load(output_blob_path, allow_pickle=False)
-                _validate_loaded_blob(output_array, to_jsonable(output_manifest.output_blob), "upmem_sdk_simulator_output")
+                _validate_loaded_blob(
+                    output_array,
+                    to_jsonable(output_manifest.output_blob),
+                    "upmem_sdk_simulator_output",
+                )
                 reason = None
                 error = None
             except Exception as exc:
@@ -1423,7 +1967,8 @@ def _execute_upmem_sdk_simulator_dense_bridge(
             backend_identity=identity,
             execution_status="failed",
             reason=reason,
-            error=output_manifest.error or "UPMEM SDK simulator output did not pass validation",
+            error=output_manifest.error
+            or "UPMEM SDK simulator output did not pass validation",
             error_type=reason,
             output_manifest=output_manifest,
             invocation_metadata=invocation_metadata,
@@ -1446,7 +1991,10 @@ def _execute_upmem_sdk_simulator_dense_bridge(
         invocation_metadata=invocation_metadata,
         external_command_executed=output_manifest.external_command_executed,
         execution_implemented=output_manifest.execution_implemented,
-        metadata={**dict(output_manifest.metadata), "simplepim_or_native_execution_implemented": True},
+        metadata={
+            **dict(output_manifest.metadata),
+            "simplepim_or_native_execution_implemented": True,
+        },
     )
 
 
@@ -1548,7 +2096,8 @@ def _nonexecuted_output_manifest(
         manifest_kind="dense_bridge_output",
         backend=backend,
         status=status,
-        input_manifest=_relative_result_path(input_manifest_path, bridge_dir) or input_manifest_path.name,
+        input_manifest=_relative_result_path(input_manifest_path, bridge_dir)
+        or input_manifest_path.name,
         route_id=manifest.route_id if manifest is not None else "",
         task_id=manifest.task_id if manifest is not None else "",
         output_blob=None,
@@ -1571,11 +2120,15 @@ def _simplepim_invocation_metadata(
 ) -> JsonDict:
     environment = env if env is not None else os.environ
     environment_keys = ("SIMPLEPIM_HOME", "SIMPLEPIM_BIN", "SIMPLEPIM_LIB")
-    configured_environment_keys = tuple(key for key in environment_keys if environment.get(key))
+    configured_environment_keys = tuple(
+        key for key in environment_keys if environment.get(key)
+    )
     metadata: JsonDict = {
         "backend_id": "simplepim_external",
         "working_directory": ".",
-        "input_manifest_path": _relative_result_path(input_manifest_path, input_manifest_path.parent)
+        "input_manifest_path": _relative_result_path(
+            input_manifest_path, input_manifest_path.parent
+        )
         or input_manifest_path.name,
         "expected_output_manifest_path": "output_manifest.json",
         "expected_output_blob_path": "outputs/simplepim_output.npy",
@@ -1587,7 +2140,9 @@ def _simplepim_invocation_metadata(
     command_path = probe_payload.get("simplepim_command_path")
     if command_path:
         metadata["command_path"] = command_path
-    metadata["simplepim_available"] = bool(probe_payload.get("simplepim_available", False))
+    metadata["simplepim_available"] = bool(
+        probe_payload.get("simplepim_available", False)
+    )
     metadata["simplepim_probe_status"] = probe_payload.get("simplepim_probe_status")
     return metadata
 
@@ -1610,11 +2165,15 @@ def _simplepim_stub_invocation_metadata(
 ) -> JsonDict:
     environment = env if env is not None else os.environ
     environment_keys = ("SIMPLEPIM_STUB_BIN",)
-    configured_environment_keys = tuple(key for key in environment_keys if environment.get(key))
+    configured_environment_keys = tuple(
+        key for key in environment_keys if environment.get(key)
+    )
     metadata: JsonDict = {
         "backend_id": "simplepim_external_stub",
         "working_directory": ".",
-        "input_manifest_path": _relative_result_path(input_manifest_path, input_manifest_path.parent)
+        "input_manifest_path": _relative_result_path(
+            input_manifest_path, input_manifest_path.parent
+        )
         or input_manifest_path.name,
         "expected_output_manifest_path": "output_manifest.json",
         "expected_output_blob_path": None,
@@ -1644,6 +2203,23 @@ def _upmem_sdk_dense_runner_path() -> Path:
     return root_dir / "native" / "upmem" / "simplepim" / "upmem_sdk_dense_runner.py"
 
 
+def _upmem_sdk_hardware_runner_path() -> Path:
+    root_dir = Path(__file__).resolve().parents[4]
+    return (
+        root_dir
+        / "native"
+        / "upmem"
+        / "simplepim"
+        / "upmem_sdk_dense_hardware_mvp_runner.py"
+    )
+
+
+def _upmem_sdk_hardware_timeout() -> float:
+    """The hardware MVP timeout is profile-owned, never environment-owned."""
+
+    return 30.0
+
+
 def _upmem_sdk_simulator_invocation_metadata(
     input_manifest_path: Path,
     env: Mapping[str, str] | None,
@@ -1657,7 +2233,9 @@ def _upmem_sdk_simulator_invocation_metadata(
         "simplepim_api_used": False,
         "simplepim_bridge_lane": True,
         "working_directory": ".",
-        "input_manifest_path": _relative_result_path(input_manifest_path, input_manifest_path.parent)
+        "input_manifest_path": _relative_result_path(
+            input_manifest_path, input_manifest_path.parent
+        )
         or input_manifest_path.name,
         "expected_output_manifest_path": "output_manifest.json",
         "expected_output_blob_path": "outputs/upmem_sdk_simulator_output.npy",
@@ -1706,11 +2284,15 @@ def _upmem_sdk_simulator_invocation_metadata(
     return metadata
 
 
-def _missing_upmem_sdk_simulator_tools(env: Mapping[str, str] | None) -> tuple[str, ...]:
+def _missing_upmem_sdk_simulator_tools(
+    env: Mapping[str, str] | None,
+) -> tuple[str, ...]:
     environment = env if env is not None else os.environ
     required = {
         "make": shutil.which("make"),
-        "dpu-upmem-dpurte-clang": _find_upmem_tool("dpu-upmem-dpurte-clang", environment),
+        "dpu-upmem-dpurte-clang": _find_upmem_tool(
+            "dpu-upmem-dpurte-clang", environment
+        ),
         "dpu-pkg-config": _find_upmem_tool("dpu-pkg-config", environment),
     }
     return tuple(name for name, path in required.items() if path is None)
@@ -1747,7 +2329,10 @@ def _upmem_sdk_simulator_static_rejection(
     left_deq = dict(manifest.dequantization.get("left", {}))
     right_deq = dict(manifest.dequantization.get("right", {}))
     if left_deq.get("route_dtype") != "int8" or right_deq.get("route_dtype") != "int8":
-        return ("unsupported_dtype", "UPMEM SDK simulator dense backend supports int8 operands only")
+        return (
+            "unsupported_dtype",
+            "UPMEM SDK simulator dense backend supports int8 operands only",
+        )
     dims = (manifest.gemm_m, manifest.gemm_k, manifest.gemm_n)
     if any(dim <= 0 for dim in dims):
         return ("unsupported_shape", f"Invalid GEMM dimensions: {dims}")
@@ -1759,17 +2344,38 @@ def _upmem_sdk_simulator_static_rejection(
     left_rep = str(left_deq.get("representation"))
     right_rep = str(right_deq.get("representation"))
     if left_rep == "real" and right_rep == "real":
-        if left_shape != (manifest.gemm_m, manifest.gemm_k) or right_shape != (manifest.gemm_k, manifest.gemm_n):
-            return ("unsupported_shape", "Real operand shapes do not match GEMM dimensions")
-    elif left_rep == "split_complex_real_imag" and right_rep == "split_complex_real_imag":
-        if left_shape != (manifest.gemm_m, manifest.gemm_k, 2) or right_shape != (manifest.gemm_k, manifest.gemm_n, 2):
-            return ("unsupported_complex_layout", "Split-complex operand shapes do not match GEMM dimensions")
+        if left_shape != (manifest.gemm_m, manifest.gemm_k) or right_shape != (
+            manifest.gemm_k,
+            manifest.gemm_n,
+        ):
+            return (
+                "unsupported_shape",
+                "Real operand shapes do not match GEMM dimensions",
+            )
+    elif (
+        left_rep == "split_complex_real_imag" and right_rep == "split_complex_real_imag"
+    ):
+        if left_shape != (manifest.gemm_m, manifest.gemm_k, 2) or right_shape != (
+            manifest.gemm_k,
+            manifest.gemm_n,
+            2,
+        ):
+            return (
+                "unsupported_complex_layout",
+                "Split-complex operand shapes do not match GEMM dimensions",
+            )
     else:
-        return ("unsupported_complex_layout", f"Unsupported operand representations: {left_rep}, {right_rep}")
+        return (
+            "unsupported_complex_layout",
+            f"Unsupported operand representations: {left_rep}, {right_rep}",
+        )
 
     if tile_plan.get("requires_tiling"):
         if left_rep != "real" or right_rep != "real":
-            return ("complex_l2_not_implemented", "L2 tiled simulator backend supports real-valued operands only")
+            return (
+                "complex_l2_not_implemented",
+                "L2 tiled simulator backend supports real-valued operands only",
+            )
         l2_plan = plan_l2_tiled_execution(
             manifest.gemm_m,
             manifest.gemm_k,
@@ -1778,14 +2384,23 @@ def _upmem_sdk_simulator_static_rejection(
             native_max_dim=_upmem_sdk_l2_native_max_dim(env),
         )
         if not l2_plan.supported:
-            return (str(l2_plan.reason or "unsupported_l2_tile_plan"), "L2 tiled simulator backend does not support this GEMM shape")
+            return (
+                str(l2_plan.reason or "unsupported_l2_tile_plan"),
+                "L2 tiled simulator backend does not support this GEMM shape",
+            )
         return None
 
     max_dim = _upmem_sdk_simulator_max_dim(env)
     if max_dim is None:
-        return ("unsupported_shape_for_initial_backend", "Invalid UPMEM_DENSE_SIM_MAX_DIM; expected a positive integer")
+        return (
+            "unsupported_shape_for_initial_backend",
+            "Invalid UPMEM_DENSE_SIM_MAX_DIM; expected a positive integer",
+        )
     if any(dim > max_dim for dim in dims):
-        return ("unsupported_shape_for_initial_backend", f"GEMM dimensions {dims} exceed initial backend max dim {max_dim}")
+        return (
+            "unsupported_shape_for_initial_backend",
+            f"GEMM dimensions {dims} exceed initial backend max dim {max_dim}",
+        )
     return None
 
 
@@ -1805,12 +2420,16 @@ def _upmem_sdk_simulator_max_dim(env: Mapping[str, str] | None) -> int | None:
 
 def _upmem_sdk_l2_max_host_blob_bytes(env: Mapping[str, str] | None) -> int:
     environment = env if env is not None else os.environ
-    return _positive_int_env(environment, "UPMEM_DENSE_L2_MAX_HOST_BLOB_BYTES", UPMEM_L2_MAX_HOST_BLOB_BYTES)
+    return _positive_int_env(
+        environment, "UPMEM_DENSE_L2_MAX_HOST_BLOB_BYTES", UPMEM_L2_MAX_HOST_BLOB_BYTES
+    )
 
 
 def _upmem_sdk_l2_native_max_dim(env: Mapping[str, str] | None) -> int:
     environment = env if env is not None else os.environ
-    return _positive_int_env(environment, "UPMEM_DENSE_L2_NATIVE_MAX_DIM", UPMEM_L2_NATIVE_MAX_DIM)
+    return _positive_int_env(
+        environment, "UPMEM_DENSE_L2_NATIVE_MAX_DIM", UPMEM_L2_NATIVE_MAX_DIM
+    )
 
 
 def _positive_int_env(env: Mapping[str, str], key: str, default: int) -> int:
@@ -1840,30 +2459,68 @@ def _decode_timeout_output(value: str | bytes | None) -> str:
     return value
 
 
-def _validate_bridge_input_files(manifest: DenseBridgeInputManifest, bridge_dir: Path) -> None:
-    left = np.load(_resolve_manifest_path(bridge_dir, manifest.operands["left"]["relative_path"]), allow_pickle=False)
-    right = np.load(_resolve_manifest_path(bridge_dir, manifest.operands["right"]["relative_path"]), allow_pickle=False)
-    expected = np.load(_resolve_manifest_path(bridge_dir, manifest.expected_output.relative_path), allow_pickle=False)
+def _validate_bridge_input_files(
+    manifest: DenseBridgeInputManifest, bridge_dir: Path
+) -> None:
+    left = np.load(
+        _resolve_manifest_path(bridge_dir, manifest.operands["left"]["relative_path"]),
+        allow_pickle=False,
+    )
+    right = np.load(
+        _resolve_manifest_path(bridge_dir, manifest.operands["right"]["relative_path"]),
+        allow_pickle=False,
+    )
+    expected = np.load(
+        _resolve_manifest_path(bridge_dir, manifest.expected_output.relative_path),
+        allow_pickle=False,
+    )
     _validate_loaded_blob(left, manifest.operands["left"], "left")
     _validate_loaded_blob(right, manifest.operands["right"], "right")
-    _validate_loaded_blob(expected, to_jsonable(manifest.expected_output), "expected_output")
+    _validate_loaded_blob(
+        expected, to_jsonable(manifest.expected_output), "expected_output"
+    )
 
 
-def _validate_preparation_result(preparation_result: "DenseTaskPreparationResult") -> None:
+def _validate_preparation_result(
+    preparation_result: "DenseTaskPreparationResult",
+) -> None:
     if preparation_result.prepared_operands is None:
         raise ValueError("prepared_operands are required for dense bridge input")
     tile_plan = preparation_result.tile_plan or {}
-    if preparation_result.status not in {"prepared", "simplepim_unavailable", "requires_executable_tiling_not_implemented"}:
-        raise ValueError(f"Preparation status {preparation_result.status!r} cannot be bridged")
-    if tile_plan.get("requires_tiling") and preparation_result.status != "requires_executable_tiling_not_implemented":
-        raise ValueError("Tiled dense bridge input must use requires_executable_tiling_not_implemented preparation status")
-    if preparation_result.left_conversion is None or preparation_result.right_conversion is None:
-        raise ValueError("Fixed-point conversion records are required for dense bridge input")
-    if preparation_result.left_matrix_shape is None or preparation_result.right_matrix_shape is None:
+    if preparation_result.status not in {
+        "prepared",
+        "simplepim_unavailable",
+        "requires_executable_tiling_not_implemented",
+    }:
+        raise ValueError(
+            f"Preparation status {preparation_result.status!r} cannot be bridged"
+        )
+    if (
+        tile_plan.get("requires_tiling")
+        and preparation_result.status != "requires_executable_tiling_not_implemented"
+    ):
+        raise ValueError(
+            "Tiled dense bridge input must use requires_executable_tiling_not_implemented preparation status"
+        )
+    if (
+        preparation_result.left_conversion is None
+        or preparation_result.right_conversion is None
+    ):
+        raise ValueError(
+            "Fixed-point conversion records are required for dense bridge input"
+        )
+    if (
+        preparation_result.left_matrix_shape is None
+        or preparation_result.right_matrix_shape is None
+    ):
         raise ValueError("Matrix shapes are required for dense bridge input")
     if tile_plan.get("requires_tiling"):
         operands = preparation_result.prepared_operands
-        host_blob_bytes = int(operands.left_quantized.nbytes + operands.right_quantized.nbytes + operands.dequantized_output.nbytes)
+        host_blob_bytes = int(
+            operands.left_quantized.nbytes
+            + operands.right_quantized.nbytes
+            + operands.dequantized_output.nbytes
+        )
         if host_blob_bytes > UPMEM_L2_MAX_HOST_BLOB_BYTES:
             raise ValueError("unsupported_l2_blob_size")
 
@@ -1976,13 +2633,17 @@ def _dequantization_payload(conversion_record: JsonDict) -> JsonDict:
 
 
 def _dequantize_blob(array: np.ndarray, metadata: JsonDict) -> np.ndarray:
-    result = (array.astype(np.float64) - int(metadata["zero_point"])) * float(metadata["scale"])
+    result = (array.astype(np.float64) - int(metadata["zero_point"])) * float(
+        metadata["scale"]
+    )
     representation = metadata["representation"]
     source_shape = tuple(int(dim) for dim in metadata["source_shape"])
     if representation == "split_complex_real_imag":
         expected_shape = (*source_shape, 2)
         if tuple(result.shape) != expected_shape:
-            raise ValueError(f"Converted complex blob shape {result.shape} does not match {expected_shape}")
+            raise ValueError(
+                f"Converted complex blob shape {result.shape} does not match {expected_shape}"
+            )
         return result[..., 0] + 1j * result[..., 1]
     if representation != "real":
         raise ValueError(f"Unsupported bridge blob representation: {representation}")
@@ -1997,7 +2658,9 @@ def _restore_output_order(
     output_shape: tuple[int, ...],
 ) -> np.ndarray:
     gemm_labels = left_free + right_free
-    gemm_shape = tuple(int(output_shape[output_labels.index(label)]) for label in gemm_labels)
+    gemm_shape = tuple(
+        int(output_shape[output_labels.index(label)]) for label in gemm_labels
+    )
     tensor_output = np.asarray(matrix_output).reshape(gemm_shape)
     if gemm_labels == output_labels:
         return tensor_output
@@ -2009,15 +2672,21 @@ def _validate_loaded_blob(array: np.ndarray, metadata: JsonDict, role: str) -> N
     expected_shape = tuple(int(dim) for dim in metadata["shape"])
     expected_dtype = np.dtype(str(metadata["dtype"]))
     if tuple(array.shape) != expected_shape:
-        raise ValueError(f"{role} blob shape {array.shape} does not match manifest shape {expected_shape}")
+        raise ValueError(
+            f"{role} blob shape {array.shape} does not match manifest shape {expected_shape}"
+        )
     if array.dtype != expected_dtype:
-        raise ValueError(f"{role} blob dtype {array.dtype} does not match manifest dtype {expected_dtype}")
+        raise ValueError(
+            f"{role} blob dtype {array.dtype} does not match manifest dtype {expected_dtype}"
+        )
 
 
 def _resolve_manifest_path(base_dir: Path, relative_path: str) -> Path:
     rel = Path(relative_path)
     if rel.is_absolute() or ".." in rel.parts:
-        raise ValueError(f"Bridge manifest path must be relative and stay inside the bridge directory: {relative_path}")
+        raise ValueError(
+            f"Bridge manifest path must be relative and stay inside the bridge directory: {relative_path}"
+        )
     return base_dir / rel
 
 
@@ -2034,7 +2703,9 @@ def _relative_result_path(path: Path | None, base_dir: Path) -> str | None:
         return path.name
 
 
-def _require_pair_shape(value: tuple[int, int] | None, field_name: str) -> tuple[int, int]:
+def _require_pair_shape(
+    value: tuple[int, int] | None, field_name: str
+) -> tuple[int, int]:
     if value is None:
         raise ValueError(f"{field_name} is required")
     return (int(value[0]), int(value[1]))

@@ -10,6 +10,10 @@ GPU baselines, bounded UPMEM SDK-simulator execution, and reproducible evidence.
 It does **not** yet claim UPMEM hardware speedup or a fully general UPMEM tensor
 contraction kernel.
 
+The first physical one-DPU dense functionality run is documented separately in
+[docs/upmem_hardware_mvp_runbook.md](docs/upmem_hardware_mvp_runbook.md). It is
+hardware correctness evidence only and is not part of the default thesis matrix.
+
 Start with [ARCHITECTURE.md](ARCHITECTURE.md) for module ownership, external
 provenance, thesis contributions, and the planned UPMEM architecture. The fixed
 benchmark matrix is in [THESIS_BENCHMARK_MATRIX.md](THESIS_BENCHMARK_MATRIX.md).
@@ -119,8 +123,19 @@ make build-quest-cpu
 make bench-cpu
 make bench-gpu
 make bench-upmem-sim
+make upmem-hw-mvp-plan
 make research-plan
 ```
+
+On the ETH hardware host, after the preparation command succeeds:
+
+```bash
+UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make PYTHON=.venv/bin/python upmem-hw-mvp
+```
+
+This runs only the fixed 2x2 then 4x4 one-DPU/one-tasklet dense int8 MVP. It
+does not run the generic TaskGraph route, report timing as speedup, or promote
+the resulting evidence automatically.
 
 For a specific research group:
 

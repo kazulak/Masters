@@ -4,6 +4,10 @@
 
 #include "common.h"
 
+#ifndef NR_TASKLETS
+#define NR_TASKLETS 1
+#endif
+
 __host upmem_dense_args_t DENSE_ARGS;
 
 __mram_noinit int8_t DENSE_A[UPMEM_DENSE_L2_MAX_A_ELEMS];
@@ -17,6 +21,10 @@ __dma_aligned int32_t local_l1_c[UPMEM_DENSE_MAX_ELEMS];
 __dma_aligned int8_t local_tile_a[UPMEM_DENSE_L2_TILE_MAX_DIM * UPMEM_DENSE_L2_TILE_MAX_DIM];
 __dma_aligned int8_t local_tile_b[UPMEM_DENSE_L2_TILE_MAX_DIM * UPMEM_DENSE_L2_TILE_MAX_DIM];
 __dma_aligned int32_t local_tile_acc[UPMEM_DENSE_L2_TILE_MAX_DIM * UPMEM_DENSE_L2_TILE_MAX_DIM];
+
+#if UPMEM_DENSE_HARDWARE_MVP && (NR_TASKLETS != 1)
+#error "UPMEM_DENSE_HARDWARE_MVP requires exactly one DPU tasklet"
+#endif
 
 static uint32_t min_u32(uint32_t a, uint32_t b) {
     return a < b ? a : b;
@@ -32,6 +40,10 @@ static void run_l1_direct(void) {
 
     mram_read(DENSE_A, local_l1_a, sizeof(local_l1_a));
     mram_read(DENSE_B, local_l1_b, sizeof(local_l1_b));
+
+    for (uint32_t index = 0; index < UPMEM_DENSE_MAX_ELEMS; index++) {
+        local_l1_c[index] = 0;
+    }
 
     for (uint32_t i = 0; i < m; i++) {
         for (uint32_t j = 0; j < n; j++) {
@@ -110,6 +122,11 @@ static void run_l2_tiled(void) {
 }
 
 int main(void) {
+    /* DPU globals and DMA buffers are shared by tasklets; only tasklet 0 owns this kernel. */
+    if (me() != 0) {
+        return 0;
+    }
+
     if (DENSE_ARGS.strategy == UPMEM_DENSE_STRATEGY_L2) {
         run_l2_tiled();
     } else {

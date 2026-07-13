@@ -151,6 +151,25 @@ compute/runtime abstraction for L1/L2 and local tile compute inside L3, but it
 must not be claimed as the dense execution path until a SimplePIM kernel is
 actually integrated and validated.
 
+## Physical One-DPU Dense MVP
+
+`upmem_sdk_dense_hardware_mvp_runner.py` is deliberately separate from the
+simulator runner. It builds an isolated copy of `upmem_sdk_dense/` with
+`MAX_DIM=4`, `NR_TASKLETS=1`, and `UPMEM_DENSE_HARDWARE_MVP=1`, uses one
+physical DPU, and validates deterministic int8 x int8 -> int32 L1 output
+against a CPU reference. It never selects `DPU_BACKEND=simulator` and never
+falls back to NumPy or the generic loop.
+
+Use the public runbook rather than invoking the runner directly:
+
+```bash
+make PYTHON=.venv/bin/python upmem-hw-mvp-plan
+UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make PYTHON=.venv/bin/python upmem-hw-mvp
+```
+
+This is Phase 1A functionality evidence only. It is not a SimplePIM compute
+integration, a generic contraction path, or a hardware performance claim.
+
 ## UPMEM SDK Simulator Generic Loop Runner
 
 `upmem_sdk_generic_loop_runner.py` is an intentionally unoptimized fallback

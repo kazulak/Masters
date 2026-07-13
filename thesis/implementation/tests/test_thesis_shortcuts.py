@@ -27,6 +27,8 @@ def test_makefile_shortcuts_are_defined() -> None:
         "bench-cpu",
         "bench-gpu",
         "bench-upmem-sim",
+        "upmem-hw-mvp-plan",
+        "upmem-hw-mvp",
         "thesis-run",
         "thesis-promote",
         "thesis-verify",
@@ -91,6 +93,8 @@ def test_makefile_targets_parse_with_dry_run() -> None:
         "bench-cpu",
         "bench-gpu",
         "bench-upmem-sim",
+        "upmem-hw-mvp-plan",
+        "upmem-hw-mvp",
         "thesis-run",
         "thesis-promote",
         "thesis-verify",
@@ -105,6 +109,8 @@ def test_makefile_targets_parse_with_dry_run() -> None:
         assert target != "bench-cpu" or "configs/suites/cpu_evidence.yml" in result.stdout
         assert target != "bench-gpu" or "configs/suites/gpu_evidence.yml" in result.stdout
         assert target != "bench-upmem-sim" or "configs/suites/upmem_sim_evidence.yml" in result.stdout
+        assert target != "upmem-hw-mvp-plan" or "configs/suites/upmem_hardware_mvp.yml" in result.stdout
+        assert target != "upmem-hw-mvp" or "UPMEM_ALLOW_PHYSICAL_HARDWARE" in result.stdout
         assert target != "thesis-run" or "research_benchmark_pack.py run --full" in result.stdout
         assert target != "thesis-run" or "BENCH_CPU_THREADS" in result.stdout
         assert target != "thesis-promote" or "thesis_snapshot.py promote" in result.stdout
@@ -126,6 +132,7 @@ def test_top_level_suite_family_is_canonical() -> None:
         "cpu_gpu_sweep.yml",
         "upmem_sim_evidence.yml",
         "upmem_generic_sweep.yml",
+        "upmem_hardware_mvp.yml",
         "manual_large.yml",
     }
     assert (ROOT / "configs" / "suites" / "diagnostics" / "planner_compare.yml").exists()
@@ -269,3 +276,38 @@ def test_evidence_shortcut_helper_reports_missing_verified_rows(tmp_path: Path) 
     assert "GPU blocker" in gpu.stderr
     assert upmem.returncode == 2
     assert "UPMEM SDK simulator blocker" in upmem.stderr
+
+
+def test_evidence_shortcut_helper_validates_hardware_mvp_rows(tmp_path: Path) -> None:
+    run_dir = tmp_path / "hardware"
+    run_dir.mkdir()
+    record = {
+        "case_id": "dense_l1_2x2",
+        "contraction_execution_target": "upmem",
+        "target_requested": "hardware",
+        "target_observed": "hardware",
+        "backend_id": "upmem_sdk_hardware_dense",
+        "hardware_profile_version": "hardware_mvp_l1_v1",
+        "requested_dpu_count": 1,
+        "allocated_dpu_count": 1,
+        "tasklets_per_dpu": 1,
+        "hardware_allocation_verified": True,
+        "hardware_kernel_executed": True,
+        "simulator_kernel_executed": False,
+        "cpu_fallback_used": False,
+        "exact_integer_match": True,
+        "validation_status": "passed",
+        "hardware_speedup_applicable": False,
+    }
+    (run_dir / "normalized_records.jsonl").write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+    hardware = subprocess.run(
+        [sys.executable, "scripts/evidence_shortcuts.py", "check-upmem-hardware", str(run_dir)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert hardware.returncode == 0
+    assert "Verified UPMEM hardware MVP rows: 1" in hardware.stdout

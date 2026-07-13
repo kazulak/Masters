@@ -156,6 +156,39 @@ RESULT_FIELDS = [
     "hardware_execution",
     "hardware_timing_available",
     "hardware_speedup_applicable",
+    "hardware_functionality_evidence",
+    "target_requested",
+    "target_observed",
+    "execution_class",
+    "kernel_strategy",
+    "hardware_profile_version",
+    "requested_dpu_count",
+    "allocated_dpu_count",
+    "tasklets_per_dpu",
+    "hardware_allocation_verified",
+    "hardware_kernel_executed",
+    "simulator_kernel_executed",
+    "exact_integer_match",
+    "validation_max_abs_error",
+    "application_visible_h2d_bytes",
+    "application_visible_d2h_bytes",
+    "application_visible_transfer_bytes",
+    "allocation_time_s",
+    "binary_load_time_s",
+    "h2d_time_s",
+    "d2h_time_s",
+    "total_route_time_s",
+    "timing_is_bringup_only",
+    "speedup_claim_allowed",
+    "source_commit",
+    "hostname",
+    "sdk_metadata",
+    "compiler_metadata",
+    "host_binary_hash",
+    "dpu_binary_hash",
+    "input_hash",
+    "output_hash",
+    "failure_stage",
     "cpu_fallback_used",
     "cpu_fallback_task_count",
     "upmem_task_count",
@@ -1328,6 +1361,11 @@ def normalize_parallelism_metadata(record: JsonDict) -> JsonDict:
     normalized.setdefault("dependency_violation_detected", False)
     normalized.setdefault("hybrid_execution_node_count", None)
     normalized.setdefault("modeled_parallelism_available", False)
+    normalized.setdefault("hardware_functionality_evidence", False)
+    normalized.setdefault("hardware_speedup_applicable", False)
+    normalized.setdefault("simulator_kernel_executed", False)
+    normalized.setdefault("cpu_fallback_used", False)
+    normalized.setdefault("timing_is_bringup_only", False)
     normalized["execution_plan_executed"] = executed
 
     evidence_type = normalized.get("parallelism_evidence_type")

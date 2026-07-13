@@ -325,6 +325,7 @@ def test_backend_registry_identities_are_json_safe() -> None:
         "simplepim_external",
         "simplepim_external_stub",
         "upmem_sdk_simulator_dense",
+        "upmem_sdk_hardware_dense",
     }
     assert registry["mock_numpy_dequantized"].implemented is True
     assert registry["mock_numpy_dequantized"].external_command_capable is False
@@ -334,6 +335,8 @@ def test_backend_registry_identities_are_json_safe() -> None:
     assert registry["simplepim_external_stub"].external_command_capable is True
     assert registry["upmem_sdk_simulator_dense"].implemented is True
     assert registry["upmem_sdk_simulator_dense"].external_command_capable is True
+    assert registry["upmem_sdk_hardware_dense"].implemented is True
+    assert registry["upmem_sdk_hardware_dense"].external_command_capable is True
     json.dumps(to_jsonable(registry))
 
 

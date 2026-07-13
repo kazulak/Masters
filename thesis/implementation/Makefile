@@ -15,6 +15,7 @@ THESIS_BENCH_ENV := \
 CPU_SUITE ?= configs/suites/cpu_evidence.yml
 GPU_SUITE ?= configs/suites/gpu_evidence.yml
 UPMEM_SIM_SUITE ?= configs/suites/upmem_sim_evidence.yml
+UPMEM_HW_MVP_SUITE ?= configs/suites/upmem_hardware_mvp.yml
 GPU_VERIFY ?= quest-hip
 CLEAN_RUNS ?= 0
 THESIS_PACK ?= runs/comparisons/research_pack/latest
@@ -28,6 +29,8 @@ PUBLIC_TARGETS := \
 	bench-cpu \
 	bench-gpu \
 	bench-upmem-sim \
+	upmem-hw-mvp-plan \
+	upmem-hw-mvp \
 	research-plan \
 	thesis-run \
 	thesis-promote \
@@ -49,6 +52,8 @@ help:
 		'  make bench-cpu          Run the CPU evidence suite' \
 		'  make bench-gpu          Verify the GPU and run the GPU evidence suite' \
 		'  make bench-upmem-sim    Check UPMEM simulator and run its evidence suite' \
+		'  make upmem-hw-mvp-plan  Prepare/build the guarded one-DPU hardware dense MVP; never allocates a DPU' \
+		'  make upmem-hw-mvp       Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; runs the one-DPU hardware dense MVP' \
 		'  make research-plan      Show the research benchmark plan' \
 		'  make thesis-run BENCH_CPU_THREADS=<physical cores>' \
 		'                           Run the controlled thesis benchmark matrix' \
@@ -78,6 +83,14 @@ bench-upmem-sim:
 	$(BENCH) upmem-env-check --run-sample --target simulator
 	$(BENCH) simulation-backend-compare --suite $(UPMEM_SIM_SUITE) --artifact-retention compact
 	$(PY_ENV) $(PYTHON) scripts/evidence_shortcuts.py check-upmem runs/latest
+
+upmem-hw-mvp-plan:
+	$(BENCH) upmem-hardware-mvp --suite $(UPMEM_HW_MVP_SUITE) --prepare-only --build
+
+upmem-hw-mvp:
+	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1 to run physical UPMEM hardware' >&2; exit 2; }
+	$(BENCH) upmem-hardware-mvp --suite $(UPMEM_HW_MVP_SUITE) --execute
+	$(PY_ENV) $(PYTHON) scripts/evidence_shortcuts.py check-upmem-hardware runs/latest
 
 research-plan:
 	$(PY_ENV) $(PYTHON) scripts/research_benchmark_pack.py plan
