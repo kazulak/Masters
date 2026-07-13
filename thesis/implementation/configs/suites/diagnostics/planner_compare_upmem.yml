@@ -1,0 +1,43 @@
+schema_version: 2
+suite_id: planner_compare_upmem
+
+metadata:
+  purpose: bounded_modeled_upmem_path_selection
+  execution_tier: modeled_planning_only
+  manual_invocation_required: false
+  notes: >
+    Diagnostic comparison of standard planning baselines and the deterministic
+    generic-single-DPU UPMEM-aware greedy planner. No contraction is executed.
+
+defaults:
+  warmups: 0
+  repeats: 1
+  planner:
+    engine: opt_einsum
+    optimize: greedy
+
+planner_comparison:
+  pim_objective:
+    objective_version: upmem_path_cost_v1
+    weight_profile: balanced_literature_informed
+    normalization: fixed_log1p_generic_caps_v1
+    execution_policy: generic_single_dpu_float32_v1
+  planners:
+    - {engine: opt_einsum, optimize: greedy}
+    - {engine: cotengra, objective: flops, methods: greedy, max_repeats: 1}
+    - {engine: cotengra, objective: size, methods: greedy, max_repeats: 1}
+    - {engine: custom_upmem, algorithm: greedy, weight_profile: balanced_literature_informed}
+
+workloads:
+  - {id: bell_2q_upmem_planner, circuit: {kind: builtin, name: bell_2q}}
+  - {id: qrng_4q_upmem_planner, circuit: {kind: builtin, name: qrng, n_qubits: 4}}
+
+routes:
+  - id: cpu_tn_einsum_exact
+    role: planning_reference_only
+    benchmark_role: diagnostic_internal_only
+    required: false
+
+validation:
+  reference_route: cpu_tn_einsum_exact
+  require_output_for_roles: []

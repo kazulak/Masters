@@ -9,19 +9,22 @@ from quantum_bench.tn.execution import execute_task_frontier_np_einsum, execute_
 from quantum_bench.tn.execution_bundle import (
     EXECUTION_BUNDLE_SCHEMA_VERSION,
     build_execution_bundle,
+    contraction_path_structure_hash,
     execution_identity_metadata,
     executor_config_hash,
     validate_execution_bundle,
     with_execution_identity,
 )
 from quantum_bench.tn.network import TensorNetworkValue, build_tensor_network
-from quantum_bench.tn.planners import OptEinsumPlanner, planner_from_config
+from quantum_bench.tn.planners import CotengraPlanner, OptEinsumPlanner, planner_from_config
 from quantum_bench.tn.slice_execution import execute_task_hybrid_slice_frontier_np_einsum, execute_task_sliced_sequence_np_einsum
 from quantum_bench.tn.slicing import SliceAwareTaskGraphModel, build_slice_aware_taskgraph_model, validate_slice_aware_taskgraph_model
-from quantum_bench.tn.task_graph import derive_path_costs, plan_task_graph, plan_task_graph_with_config, plan_task_graph_with_planner, with_path_cost_summary
+from quantum_bench.tn.task_graph import BinaryContractionStep, derive_binary_contraction_step, derive_path_costs, plan_task_graph, plan_task_graph_with_config, plan_task_graph_with_planner, with_path_cost_summary
 
 __all__ = [
     "OptEinsumPlanner",
+    "CotengraPlanner",
+    "BinaryContractionStep",
     "EXECUTION_BUNDLE_SCHEMA_VERSION",
     "SliceAwareTaskGraphModel",
     "TASK_INPUT_MATERIALIZATION_SCHEMA_VERSION",
@@ -31,6 +34,8 @@ __all__ = [
     "TensorNetworkValue",
     "build_tensor_network",
     "build_execution_bundle",
+    "contraction_path_structure_hash",
+    "derive_binary_contraction_step",
     "derive_path_costs",
     "execute_task_frontier_np_einsum",
     "execute_task_hybrid_slice_frontier_np_einsum",

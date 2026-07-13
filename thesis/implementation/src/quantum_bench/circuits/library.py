@@ -19,6 +19,11 @@ def load_circuit(case: dict, root_dir: Path) -> CircuitSpec:
             "synthetic_pressure workloads are analysis-only; use "
             "pim-frontier-analysis or benchmark-matrix-report"
         )
+    if kind == "planner_motif":
+        raise ValueError(
+            "planner_motif workloads are modeled-planning-only; use "
+            "compare-planners"
+        )
     if kind == "builtin":
         return builtin_circuit(str(circuit["name"]), circuit)
     if kind == "quest_compatible":

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import replace
-from typing import Any
+from dataclasses import dataclass, replace
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 
@@ -13,6 +13,19 @@ from quantum_bench.tn.execution_bundle import with_execution_identity
 
 
 DEFAULT_TARGET_ESTIMATE_KEY = "upmem_dense_int8"
+
+
+@dataclass(frozen=True)
+class BinaryContractionStep:
+    """Canonical lowering result for one dynamic pairwise path step.
+
+    Both TaskGraph construction and modeled planners use this helper so label
+    retention, dependency derivation, and tensor sizing cannot drift.
+    """
+
+    task: ContractionTask
+    output_tensor: TensorSpec
+    next_active: tuple[TensorSpec, ...]
 
 
 def plan_task_graph(network: TensorNetworkValue, optimize: str = "greedy") -> TaskGraph:
@@ -30,58 +43,24 @@ def plan_task_graph_with_planner(network: TensorNetworkValue, planner: PathPlann
     tasks: list[ContractionTask] = []
 
     for step_index, contraction in enumerate(planner_result.path):
-        if len(contraction) != 2:
-            raise ValueError(f"Only pairwise contraction paths are supported; got {contraction}")
-        i, j = sorted(contraction)
-        left = active[i]
-        right = active[j]
-        remaining = [tensor for pos, tensor in enumerate(active) if pos not in {i, j}]
-        remaining_labels = {label for tensor in remaining for label in tensor.labels}
-        output_labels = _task_output_labels(left, right, remaining_labels, network.spec.output_labels)
-        contracted = tuple(label for label in left.labels if label in set(right.labels) and label not in output_labels)
-        removed_labels = _removed_labels(left, right, output_labels)
-        free_left = tuple(label for label in left.labels if label in output_labels and label not in contracted)
-        free_right = tuple(label for label in right.labels if label in output_labels and label not in contracted and label not in free_left)
-        output_shape = tuple(_label_dim(label, left, right) for label in output_labels)
-        expression = _task_index_expression(left, right, output_labels)
-        m = shape_product(tuple(_label_dim(label, left, right) for label in free_left))
-        k = shape_product(tuple(_label_dim(label, left, right) for label in contracted))
-        n = shape_product(tuple(_label_dim(label, left, right) for label in free_right))
-        output_elements = shape_product(output_shape)
-        reduced_elements = shape_product(tuple(_label_dim(label, left, right) for label in removed_labels))
-        element_size = np.dtype(np.complex128).itemsize
-        output_bytes = int(output_elements * element_size)
         task_id = f"task_{step_index}"
         output_id = f"result_{step_index}"
-        dependencies = tuple(
-            dep for dep in (produced_by.get(left.id), produced_by.get(right.id)) if dep and dep.startswith("task_")
+        step = derive_binary_contraction_step(
+            active,
+            contraction,
+            network.spec.output_labels,
+            produced_by=produced_by,
+            task_id=task_id,
+            output_id=output_id,
         )
-        tasks.append(
-            ContractionTask(
-                id=task_id,
-                input_tensor_ids=(left.id, right.id),
-                output_tensor_id=output_id,
-                dependencies=dependencies,
-                index_expression=expression,
-                input_shapes=(left.shape, right.shape),
-                output_shape=output_shape,
-                left_labels=left.labels,
-                right_labels=right.labels,
-                contracted_labels=contracted,
-                output_labels=output_labels,
-                gemm_m=m,
-                gemm_k=k,
-                gemm_n=n,
-                structure="dense",
-                estimated_flops=int(8 * output_elements * max(1, reduced_elements)),
-                estimated_bytes=int(shape_product(left.shape) * element_size + shape_product(right.shape) * element_size + output_bytes),
-            )
-        )
-        output_tensor = TensorSpec(output_id, output_labels, output_shape, "dense", produced_by=task_id)
+        tasks.append(step.task)
         produced_by[output_id] = task_id
-        active.pop(j)
-        active.pop(i)
-        active.append(output_tensor)
+        active = list(step.next_active)
+
+    if len(active) != 1:
+        raise ValueError(
+            f"Pairwise contraction path ended with {len(active)} active tensors; expected exactly one final tensor"
+        )
 
     summary = _base_path_summary(planner_result)
     graph = TaskGraph(
@@ -92,6 +71,73 @@ def plan_task_graph_with_planner(network: TensorNetworkValue, planner: PathPlann
         planning_time_s=planner_result.planning_time_s,
     )
     return with_execution_identity(with_path_cost_summary(graph))
+
+
+def derive_binary_contraction_step(
+    active: Sequence[TensorSpec],
+    contraction: Sequence[int],
+    final_output_labels: tuple[int, ...],
+    *,
+    produced_by: Mapping[str, str | None],
+    task_id: str,
+    output_id: str,
+) -> BinaryContractionStep:
+    """Lower one pairwise dynamic path step using TaskGraph semantics.
+
+    ``contraction`` follows opt_einsum's dynamic active-list convention. The
+    returned active list removes the selected pair and appends the output,
+    matching the existing TaskGraph execution convention exactly.
+    """
+
+    if len(contraction) != 2:
+        raise ValueError(f"Only pairwise contraction paths are supported; got {tuple(contraction)}")
+    i, j = sorted(int(item) for item in contraction)
+    if i < 0 or j >= len(active) or i == j:
+        raise ValueError(f"Invalid pairwise contraction indices {tuple(contraction)} for {len(active)} active tensors")
+
+    left = active[i]
+    right = active[j]
+    remaining = [tensor for pos, tensor in enumerate(active) if pos not in {i, j}]
+    remaining_labels = {label for tensor in remaining for label in tensor.labels}
+    output_labels = _task_output_labels(left, right, remaining_labels, final_output_labels)
+    right_label_set = set(right.labels)
+    contracted = tuple(label for label in left.labels if label in right_label_set and label not in output_labels)
+    removed_labels = _removed_labels(left, right, output_labels)
+    free_left = tuple(label for label in left.labels if label in output_labels and label not in contracted)
+    free_right = tuple(label for label in right.labels if label in output_labels and label not in contracted and label not in free_left)
+    output_shape = tuple(_label_dim(label, left, right) for label in output_labels)
+    expression = _task_index_expression(left, right, output_labels)
+    m = shape_product(tuple(_label_dim(label, left, right) for label in free_left))
+    k = shape_product(tuple(_label_dim(label, left, right) for label in contracted))
+    n = shape_product(tuple(_label_dim(label, left, right) for label in free_right))
+    output_elements = shape_product(output_shape)
+    reduced_elements = shape_product(tuple(_label_dim(label, left, right) for label in removed_labels))
+    element_size = np.dtype(np.complex128).itemsize
+    output_bytes = int(output_elements * element_size)
+    dependencies = tuple(
+        dep for dep in (produced_by.get(left.id), produced_by.get(right.id)) if dep and dep.startswith("task_")
+    )
+    task = ContractionTask(
+        id=task_id,
+        input_tensor_ids=(left.id, right.id),
+        output_tensor_id=output_id,
+        dependencies=dependencies,
+        index_expression=expression,
+        input_shapes=(left.shape, right.shape),
+        output_shape=output_shape,
+        left_labels=left.labels,
+        right_labels=right.labels,
+        contracted_labels=contracted,
+        output_labels=output_labels,
+        gemm_m=m,
+        gemm_k=k,
+        gemm_n=n,
+        structure="dense",
+        estimated_flops=int(8 * output_elements * max(1, reduced_elements)),
+        estimated_bytes=int(shape_product(left.shape) * element_size + shape_product(right.shape) * element_size + output_bytes),
+    )
+    output_tensor = TensorSpec(output_id, output_labels, output_shape, "dense", produced_by=task_id)
+    return BinaryContractionStep(task=task, output_tensor=output_tensor, next_active=tuple((*remaining, output_tensor)))
 
 
 def with_path_cost_summary(graph: TaskGraph, target_estimate_key: str = DEFAULT_TARGET_ESTIMATE_KEY) -> TaskGraph:
@@ -163,6 +209,7 @@ def _base_path_summary(planner_result: PlannerResult) -> PathSummary:
         cost_basis=identity.cost_basis,
         target_estimate_key=identity.target_estimate_key,
         options=identity.options,
+        planner_metadata=planner_result.metadata,
     )
 
 

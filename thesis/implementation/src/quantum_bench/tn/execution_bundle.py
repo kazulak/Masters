@@ -52,6 +52,7 @@ def build_execution_bundle(
             "circuit_semantics_hash": identified.circuit_semantics_hash,
             "tensor_network_hash": identified.tensor_network_hash,
             "contraction_plan_hash": identified.contraction_plan_hash,
+            "contraction_path_structure_hash": contraction_path_structure_hash(identified),
             "circuit": _circuit_payload(identified),
             "tensor_network": _network_payload(identified, identified.circuit_semantics_hash),
             "planner": _planner_payload(identified),
@@ -75,6 +76,9 @@ def validate_execution_bundle(bundle: JsonDict, graph: TaskGraph) -> None:
     for key, expected in hashes.items():
         if bundle.get(key) != expected:
             raise ValueError(f"execution bundle {key} mismatch")
+    structure_hash = bundle.get("contraction_path_structure_hash")
+    if structure_hash is not None and structure_hash != contraction_path_structure_hash(graph):
+        raise ValueError("execution bundle contraction_path_structure_hash mismatch")
 
 
 def execution_identity_metadata(graph: TaskGraph, *, plan_reused: bool) -> JsonDict:
@@ -83,6 +87,7 @@ def execution_identity_metadata(graph: TaskGraph, *, plan_reused: bool) -> JsonD
         "circuit_semantics_hash": identified.circuit_semantics_hash,
         "tensor_network_hash": identified.tensor_network_hash,
         "contraction_plan_hash": identified.contraction_plan_hash,
+        "contraction_path_structure_hash": contraction_path_structure_hash(identified),
         "plan_reused": bool(plan_reused),
         "planning_in_timed_region": False,
     }
@@ -90,6 +95,13 @@ def execution_identity_metadata(graph: TaskGraph, *, plan_reused: bool) -> JsonD
 
 def executor_config_hash(route_id: str, config: dict[str, Any] | None = None) -> str:
     return canonical_hash({"route_id": route_id, "config": config or {}})
+
+
+def contraction_path_structure_hash(graph: TaskGraph) -> str:
+    """Hash path/task structure without planner identity or executor settings."""
+
+    identified = with_execution_identity(graph)
+    return canonical_hash(_path_structure_payload(identified, identified.tensor_network_hash))
 
 
 def canonical_hash(payload: Any) -> str:
@@ -152,6 +164,15 @@ def _plan_payload(graph: TaskGraph, network_hash: str) -> JsonDict:
         {
             "tensor_network_hash": network_hash,
             "planner": _planner_payload(graph),
+            **_path_structure_payload(graph, network_hash),
+        }
+    )
+
+
+def _path_structure_payload(graph: TaskGraph, network_hash: str) -> JsonDict:
+    return to_jsonable(
+        {
+            "tensor_network_hash": network_hash,
             "path": graph.path,
             "tasks": [
                 {

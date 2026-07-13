@@ -1,0 +1,65 @@
+schema_version: 2
+suite_id: thesis_planner_sensitivity
+
+metadata:
+  purpose: thesis_modeled_upmem_planner_weight_sensitivity
+  intended_use: thesis_evidence_planner_sensitivity
+  execution_tier: modeled_planning_only
+  manual_invocation_required: true
+  notes: >
+    Literature-informed scenario sensitivity for the deterministic custom
+    UPMEM-aware planner. Weights are not calibrated hardware constants and
+    this suite does not execute a contraction or claim a performance result.
+
+defaults:
+  warmups: 0
+  repeats: 1
+  planner:
+    engine: custom_upmem
+    algorithm: greedy
+
+planner_comparison:
+  pim_objective:
+    objective_version: upmem_path_cost_v1
+    weight_profile: balanced_literature_informed
+    normalization: fixed_log1p_generic_caps_v1
+    execution_policy: generic_single_dpu_float32_v1
+  planners:
+    - {engine: opt_einsum, optimize: greedy}
+    - {engine: cotengra, objective: flops, methods: greedy, max_repeats: 1}
+    - {engine: custom_upmem, algorithm: greedy, weight_profile: compute_oriented}
+    - {engine: custom_upmem, algorithm: greedy, weight_profile: host_transfer_oriented}
+    - {engine: custom_upmem, algorithm: greedy, weight_profile: local_movement_oriented}
+    - {engine: custom_upmem, algorithm: greedy, weight_profile: wram_constrained}
+    - {engine: custom_upmem, algorithm: greedy, weight_profile: synchronization_constrained}
+    - {engine: custom_upmem, algorithm: greedy, weight_profile: balanced_literature_informed}
+
+workloads:
+  - id: planner_motif_chain_sensitivity
+    circuit: {kind: planner_motif, name: chain}
+    metadata: {workload_type: synthetic_planner_motif, execution_scope: model_only, not_real_quantum_circuit: true}
+  - id: planner_motif_balanced_tree_sensitivity
+    circuit: {kind: planner_motif, name: balanced_tree}
+    metadata: {workload_type: synthetic_planner_motif, execution_scope: model_only, not_real_quantum_circuit: true}
+  - id: planner_motif_star_sensitivity
+    circuit: {kind: planner_motif, name: star}
+    metadata: {workload_type: synthetic_planner_motif, execution_scope: model_only, not_real_quantum_circuit: true}
+  - id: planner_motif_cycle_sensitivity
+    circuit: {kind: planner_motif, name: cycle}
+    metadata: {workload_type: synthetic_planner_motif, execution_scope: model_only, not_real_quantum_circuit: true}
+  - id: planner_motif_grid_sensitivity
+    circuit: {kind: planner_motif, name: grid}
+    metadata: {workload_type: synthetic_planner_motif, execution_scope: model_only, not_real_quantum_circuit: true}
+  - id: planner_motif_flop_memory_tradeoff_sensitivity
+    circuit: {kind: planner_motif, name: flop_memory_tradeoff}
+    metadata: {workload_type: synthetic_planner_motif, execution_scope: model_only, not_real_quantum_circuit: true}
+
+routes:
+  - id: cpu_tn_einsum_exact
+    role: planning_reference_only
+    benchmark_role: diagnostic_internal_only
+    required: false
+
+validation:
+  reference_route: cpu_tn_einsum_exact
+  require_output_for_roles: []

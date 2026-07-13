@@ -88,6 +88,25 @@ def comparison_scoring_weights(suite: dict[str, Any]) -> dict[str, float]:
     return validate_scoring_weights(scoring)
 
 
+def comparison_pim_objective_config(suite: dict[str, Any]) -> dict[str, str]:
+    comparison = suite.get("planner_comparison") or {}
+    value = comparison.get("pim_objective") if isinstance(comparison, dict) else None
+    defaults = {
+        "objective_version": "upmem_path_cost_v1",
+        "weight_profile": "balanced_literature_informed",
+        "normalization": "fixed_log1p_generic_caps_v1",
+        "execution_policy": "generic_single_dpu_float32_v1",
+    }
+    if value is None:
+        return defaults
+    if not isinstance(value, dict):
+        raise ValueError("planner_comparison.pim_objective must be a mapping")
+    unknown = sorted(set(value) - set(defaults))
+    if unknown:
+        raise ValueError(f"Unknown planner_comparison.pim_objective field(s): {', '.join(unknown)}")
+    return {key: str(value.get(key, default)) for key, default in defaults.items()}
+
+
 def route_config_for(suite: dict[str, Any], route_id: str) -> dict[str, Any]:
     for entry in suite.get("_route_configs", []):
         if entry["id"] == route_id:
@@ -135,6 +154,11 @@ def _normalize_planner_comparison(value: Any) -> dict[str, Any]:
         normalized["scoring"] = validate_scoring_weights(scoring)
     elif "scoring" in value:
         normalized["scoring"] = dict(DEFAULT_SCORING_WEIGHTS)
+    pim_objective = value.get("pim_objective")
+    if pim_objective is not None:
+        if not isinstance(pim_objective, dict):
+            raise ValueError("planner_comparison.pim_objective must be a mapping")
+        normalized["pim_objective"] = dict(pim_objective)
     return normalized
 
 

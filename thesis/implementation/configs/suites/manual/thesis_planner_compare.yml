@@ -13,7 +13,8 @@ metadata:
   canonical_qubit_sizes: [8, 10, 12, 14, 16, 18, 20]
   max_qubits: 20
   notes: >
-    Compares deterministic opt_einsum planner choices for the six PIMutation
+    Compares standard opt_einsum/cotengra objectives with the deterministic
+    generic-single-DPU UPMEM-aware greedy path generator for the six PIMutation
     circuit families and the canonical seven local sizes. No contraction is
     executed and no runtime speedup is claimed from these rows.
 
@@ -27,11 +28,37 @@ defaults:
     optimize: greedy
 
 planner_comparison:
+  pim_objective:
+    objective_version: upmem_path_cost_v1
+    weight_profile: balanced_literature_informed
+    normalization: fixed_log1p_generic_caps_v1
+    execution_policy: generic_single_dpu_float32_v1
   planners:
     - engine: opt_einsum
       optimize: greedy
     - engine: opt_einsum
       optimize: auto
+    - engine: opt_einsum
+      optimize: random-greedy
+    - engine: cotengra
+      objective: flops
+      methods: greedy
+      max_repeats: 1
+    - engine: cotengra
+      objective: size
+      methods: greedy
+      max_repeats: 1
+    - engine: cotengra
+      objective: write
+      methods: greedy
+      max_repeats: 1
+    - engine: cotengra
+      objective: combo
+      methods: greedy
+      max_repeats: 1
+    - engine: custom_upmem
+      algorithm: greedy
+      weight_profile: balanced_literature_informed
   scoring:
     transfer_weight: 1.0
     memory_weight: 1.0

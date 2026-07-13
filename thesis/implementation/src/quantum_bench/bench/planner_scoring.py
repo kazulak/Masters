@@ -59,19 +59,54 @@ def score_planner_rows(rows: list[dict[str, Any]], weights: dict[str, float]) ->
 
     scored_rows: list[dict[str, Any]] = []
     for case_rows in grouped.values():
-        components_by_planner = {str(row["planner_id"]): _raw_components(row) for row in case_rows}
+        eligible_rows = [
+            row for row in case_rows if str(row.get("candidate_status", "completed")) == "completed"
+        ]
+        if not eligible_rows:
+            for row in case_rows:
+                scored = dict(row)
+                scored.update(
+                    {
+                        "score_model": SCORE_MODEL,
+                        "upmem_pressure_score": None,
+                        "upmem_rank": None,
+                        "flop_rank": None,
+                        "score_components": None,
+                        "score_weights": dict(weights),
+                        "tradeoff_note": "planner candidate rejected before legacy pressure scoring",
+                    }
+                )
+                scored_rows.append(scored)
+            continue
+
+        components_by_planner = {str(row["planner_id"]): _raw_components(row) for row in eligible_rows}
         normalized_by_planner = _normalized_components(components_by_planner)
         score_by_planner = {
             planner_id: _weighted_score(normalized, weights)
             for planner_id, normalized in normalized_by_planner.items()
         }
         upmem_ranks = _dense_ranks(score_by_planner)
-        flop_ranks = _dense_ranks({str(row["planner_id"]): float(row["total_estimated_flops"]) for row in case_rows})
+        flop_ranks = _dense_ranks({str(row["planner_id"]): float(row["total_estimated_flops"]) for row in eligible_rows})
         upmem_winners = {planner_id for planner_id, rank in upmem_ranks.items() if rank == 1}
         flop_winners = {planner_id for planner_id, rank in flop_ranks.items() if rank == 1}
 
         for row in case_rows:
             planner_id = str(row["planner_id"])
+            if row not in eligible_rows:
+                scored = dict(row)
+                scored.update(
+                    {
+                        "score_model": SCORE_MODEL,
+                        "upmem_pressure_score": None,
+                        "upmem_rank": None,
+                        "flop_rank": None,
+                        "score_components": None,
+                        "score_weights": dict(weights),
+                        "tradeoff_note": "planner candidate rejected before legacy pressure scoring",
+                    }
+                )
+                scored_rows.append(scored)
+                continue
             raw = components_by_planner[planner_id]
             normalized = normalized_by_planner[planner_id]
             weighted = _weighted_components(normalized, weights)
@@ -113,9 +148,13 @@ def markdown_summary(rows: list[dict[str, Any]]) -> str:
         "|---|---|---|---:|---:|---|",
     ]
     for case_id, case_rows in sorted(grouped.items(), key=lambda item: (item[0] not in divergent, item[0])):
-        flop_winners = sorted(str(row["planner_id"]) for row in case_rows if int(row["flop_rank"]) == 1)
-        upmem_winners = sorted(str(row["planner_id"]) for row in case_rows if int(row["upmem_rank"]) == 1)
-        best_score = min(float(row["upmem_pressure_score"]) for row in case_rows)
+        eligible_rows = [row for row in case_rows if row.get("upmem_rank") is not None]
+        if not eligible_rows:
+            lines.append(f"| {case_id} | none | none | n/a | n/a | all planner candidates rejected |")
+            continue
+        flop_winners = sorted(str(row["planner_id"]) for row in eligible_rows if int(row["flop_rank"]) == 1)
+        upmem_winners = sorted(str(row["planner_id"]) for row in eligible_rows if int(row["upmem_rank"]) == 1)
+        best_score = min(float(row["upmem_pressure_score"]) for row in eligible_rows)
         differ = "yes" if set(flop_winners) != set(upmem_winners) else "no"
         note = "modeled FLOP and UPMEM-pressure winners differ" if differ == "yes" else "same modeled winner set"
         lines.append(
@@ -131,8 +170,11 @@ def divergence_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         grouped[str(row["case_id"])].append(row)
     divergent_case_ids = []
     for case_id, case_rows in sorted(grouped.items()):
-        flop_winners = {str(row["planner_id"]) for row in case_rows if int(row["flop_rank"]) == 1}
-        upmem_winners = {str(row["planner_id"]) for row in case_rows if int(row["upmem_rank"]) == 1}
+        eligible_rows = [row for row in case_rows if row.get("upmem_rank") is not None]
+        if not eligible_rows:
+            continue
+        flop_winners = {str(row["planner_id"]) for row in eligible_rows if int(row["flop_rank"]) == 1}
+        upmem_winners = {str(row["planner_id"]) for row in eligible_rows if int(row["upmem_rank"]) == 1}
         if flop_winners != upmem_winners:
             divergent_case_ids.append(case_id)
     return {

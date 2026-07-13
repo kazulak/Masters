@@ -101,6 +101,7 @@ class PathSummary:
     cost_basis: str = ""
     target_estimate_key: str | None = None
     options: JsonDict = field(default_factory=dict)
+    planner_metadata: JsonDict = field(default_factory=dict)
     task_count: int = 0
     total_estimated_flops: int = 0
     peak_intermediate_bytes: int = 0

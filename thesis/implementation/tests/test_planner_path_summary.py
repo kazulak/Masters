@@ -11,7 +11,9 @@ from quantum_bench.core.records import ContractionTask
 from quantum_bench.targets.upmem import UPMEM_DENSE_ESTIMATE_KEY, annotate_task_graph_with_upmem_estimates
 from quantum_bench.tn import build_tensor_network, derive_path_costs, plan_task_graph, plan_task_graph_with_config, planner_from_config, with_path_cost_summary
 from quantum_bench.tn.contract import contract_binary_task
-from quantum_bench.tn.planners import OptEinsumPlanner
+from quantum_bench.tn.planner_motifs import build_planner_motif_workload
+from quantum_bench.tn.planners import CotengraPlanner, OptEinsumPlanner
+from quantum_bench.tn.upmem_planner import PlannerInfeasibleError, UpmemAwareGreedyPlanner
 
 
 def _annotated_graph():
@@ -39,6 +41,68 @@ def test_planner_from_config_returns_opt_einsum_planner() -> None:
 def test_unknown_planner_engine_fails_explicitly() -> None:
     with pytest.raises(ValueError, match="Unsupported planner engine"):
         planner_from_config({"engine": "upmem_aware"})
+
+
+def test_cotengra_baseline_adapter_returns_pairwise_path() -> None:
+    planner = planner_from_config(
+        {"engine": "cotengra", "objective": "flops", "methods": "greedy", "max_repeats": 1}
+    )
+    assert isinstance(planner, CotengraPlanner)
+    assert planner.identity.planner_id == "cotengra.flops"
+
+    graph = plan_task_graph_with_config(
+        build_tensor_network(builtin_circuit("bell_2q")),
+        {"engine": "cotengra", "objective": "flops", "methods": "greedy", "max_repeats": 1},
+    )
+
+    assert graph.tasks
+    assert graph.path_summary.planner_engine == "cotengra"
+    assert graph.path_summary.objective == "cotengra_flops"
+    assert all(len(step) == 2 for step in graph.path)
+
+
+def test_custom_upmem_planner_is_deterministic_and_uses_shared_taskgraph_lowering() -> None:
+    config = {
+        "engine": "custom_upmem",
+        "algorithm": "greedy",
+        "weight_profile": "balanced_literature_informed",
+    }
+    first = planner_from_config(config)
+    second = planner_from_config(config)
+    assert isinstance(first, UpmemAwareGreedyPlanner)
+    assert isinstance(second, UpmemAwareGreedyPlanner)
+    assert first.identity == second.identity
+
+    network = build_planner_motif_workload(
+        {
+            "case_id": "planner_motif_chain",
+            "circuit": {"kind": "planner_motif", "name": "chain"},
+            "metadata": {
+                "workload_type": "synthetic_planner_motif",
+                "execution_scope": "model_only",
+                "not_real_quantum_circuit": True,
+            },
+        }
+    ).network
+    first_graph = plan_task_graph_with_config(network, config)
+    second_graph = plan_task_graph_with_config(network, config)
+
+    assert first_graph.path == second_graph.path
+    assert first_graph.path_summary.planner_engine == "custom_upmem"
+    assert first_graph.path_summary.planner_kind == "native_target_greedy"
+    assert first_graph.path_summary.objective == "upmem_path_cost_v1"
+    assert first_graph.path_summary.planner_metadata["execution_plan_executed"] is False
+    assert len(first_graph.tasks) == len(network.tensors) - 1
+
+
+def test_custom_upmem_planner_rejects_complex_generic_inputs_explicitly() -> None:
+    network = build_tensor_network(builtin_circuit("quantization_stress", {"n_qubits": 2}))
+    planner = planner_from_config({"engine": "custom_upmem"})
+
+    with pytest.raises(PlannerInfeasibleError, match="complex") as error:
+        planner.plan(network)
+
+    assert error.value.rejection_reasons == ("complex_generic_loop_not_implemented",)
 
 
 def test_plan_task_graph_preserves_current_opt_einsum_behavior() -> None:

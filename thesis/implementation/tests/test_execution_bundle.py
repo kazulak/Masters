@@ -7,6 +7,7 @@ import pytest
 from quantum_bench.circuits import builtin_circuit
 from quantum_bench.tn import (
     build_execution_bundle,
+    contraction_path_structure_hash,
     build_tensor_network,
     execution_identity_metadata,
     executor_config_hash,
@@ -32,6 +33,7 @@ def test_execution_bundle_hashes_are_stable_and_validate() -> None:
     bundle = build_execution_bundle(first, case_id="ghz_4q", suite_id="test")
     validate_execution_bundle(bundle, second)
     assert bundle["contraction_plan_hash"] == first.contraction_plan_hash
+    assert bundle["contraction_path_structure_hash"] == contraction_path_structure_hash(first)
     assert bundle["provenance"]["planning_in_timed_region"] is False
 
 
@@ -80,6 +82,7 @@ def test_execution_metadata_and_executor_hash_separate_plan_from_route_config() 
     metadata = execution_identity_metadata(graph, plan_reused=True)
 
     assert metadata["contraction_plan_hash"] == graph.contraction_plan_hash
+    assert metadata["contraction_path_structure_hash"] == contraction_path_structure_hash(graph)
     assert metadata["plan_reused"] is True
     assert metadata["planning_in_timed_region"] is False
     assert executor_config_hash("cpu", {"quantization_mode": "none"}) != executor_config_hash(
@@ -107,3 +110,12 @@ def test_wave_2e65_tiled_strategy_relationships_and_hash_invariants() -> None:
     assert cpu_bundle["contraction_plan_hash"] == upmem_bundle["contraction_plan_hash"] == graph.contraction_plan_hash
     assert cpu_executor != upmem_executor
     assert upmem_executor != int8_executor
+
+
+def test_structure_hash_excludes_planner_identity_but_keeps_pairwise_structure() -> None:
+    graph = _graph()
+    changed_summary = replace(graph.path_summary, planner_id="test.other", planner_engine="test")
+    changed = with_execution_identity(replace(graph, path_summary=changed_summary, contraction_plan_hash=""))
+
+    assert contraction_path_structure_hash(changed) == contraction_path_structure_hash(graph)
+    assert changed.contraction_plan_hash != graph.contraction_plan_hash

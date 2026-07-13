@@ -1,0 +1,63 @@
+schema_version: 2
+suite_id: planner_objective_motifs
+
+metadata:
+  purpose: controlled_upmem_planner_objective_diagnostics
+  execution_tier: modeled_planning_only
+  manual_invocation_required: false
+  notes: >
+    Real-valued tensor-network motifs used only to demonstrate modeled
+    contraction-path trade-offs. They are not quantum-circuit benchmarks and
+    no contractions or speedups are reported from this suite.
+
+defaults:
+  warmups: 0
+  repeats: 1
+  planner:
+    engine: opt_einsum
+    optimize: greedy
+
+planner_comparison:
+  pim_objective:
+    objective_version: upmem_path_cost_v1
+    weight_profile: balanced_literature_informed
+    normalization: fixed_log1p_generic_caps_v1
+    execution_policy: generic_single_dpu_float32_v1
+  planners:
+    - {engine: opt_einsum, optimize: greedy}
+    - {engine: opt_einsum, optimize: auto}
+    - {engine: cotengra, objective: flops, methods: greedy, max_repeats: 1}
+    - {engine: cotengra, objective: size, methods: greedy, max_repeats: 1}
+    - {engine: cotengra, objective: write, methods: greedy, max_repeats: 1}
+    - {engine: cotengra, objective: combo, methods: greedy, max_repeats: 1}
+    - {engine: custom_upmem, algorithm: greedy, weight_profile: balanced_literature_informed}
+
+workloads:
+  - id: planner_motif_chain
+    circuit: {kind: planner_motif, name: chain}
+    metadata: {workload_type: synthetic_planner_motif, execution_scope: model_only, not_real_quantum_circuit: true}
+  - id: planner_motif_balanced_tree
+    circuit: {kind: planner_motif, name: balanced_tree}
+    metadata: {workload_type: synthetic_planner_motif, execution_scope: model_only, not_real_quantum_circuit: true}
+  - id: planner_motif_star
+    circuit: {kind: planner_motif, name: star}
+    metadata: {workload_type: synthetic_planner_motif, execution_scope: model_only, not_real_quantum_circuit: true}
+  - id: planner_motif_cycle
+    circuit: {kind: planner_motif, name: cycle}
+    metadata: {workload_type: synthetic_planner_motif, execution_scope: model_only, not_real_quantum_circuit: true}
+  - id: planner_motif_grid
+    circuit: {kind: planner_motif, name: grid}
+    metadata: {workload_type: synthetic_planner_motif, execution_scope: model_only, not_real_quantum_circuit: true}
+  - id: planner_motif_flop_memory_tradeoff
+    circuit: {kind: planner_motif, name: flop_memory_tradeoff}
+    metadata: {workload_type: synthetic_planner_motif, execution_scope: model_only, not_real_quantum_circuit: true}
+
+routes:
+  - id: cpu_tn_einsum_exact
+    role: planning_reference_only
+    benchmark_role: diagnostic_internal_only
+    required: false
+
+validation:
+  reference_route: cpu_tn_einsum_exact
+  require_output_for_roles: []

@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from quantum_bench.bench.config import comparison_planner_configs, load_suite
-from quantum_bench.bench.planner_compare import compare_planners
+from quantum_bench.bench.planner_compare import _score_pim_objective_rows, compare_planners
 from quantum_bench.targets.upmem import UPMEM_DENSE_ESTIMATE_KEY
 
 
@@ -24,7 +24,7 @@ def test_planner_comparison_writes_rows_and_artifacts(tmp_path: Path) -> None:
     rows = payload["rows"]
     divergence_summary = payload["divergence_summary"]
 
-    assert payload["schema_version"] == "planner_comparison_v2"
+    assert payload["schema_version"] == "planner_comparison_v3"
     assert payload["suite_id"] == "planner_compare"
     assert payload["run_id"] == run_dir.name
     assert run_dir.parent.name == "planner_comparison"
@@ -99,6 +99,11 @@ def test_planner_comparison_writes_rows_and_artifacts(tmp_path: Path) -> None:
         assert (run_dir / target_estimates_artifact).exists()
         assert (run_dir / execution_bundle_artifact).exists()
         assert len(row["contraction_plan_hash"]) == 64
+        assert len(row["contraction_path_structure_hash"]) == 64
+        assert row["candidate_status"] == "completed"
+        assert row["pim_feasible"] is False
+        assert row["pim_objective_score"] is None
+        assert row["pim_rejection_reasons"] == ["complex_generic_loop_not_implemented"]
 
         task_graph = json.loads((run_dir / task_graph_artifact).read_text(encoding="utf-8"))
         path_summary = json.loads((run_dir / path_summary_artifact).read_text(encoding="utf-8"))
@@ -131,7 +136,7 @@ def test_planner_comparison_writes_rows_and_artifacts(tmp_path: Path) -> None:
         case_rows = [row for row in rows if row["case_id"] == case_id]
         assert any(row["upmem_rank"] == 1 for row in case_rows)
         assert any(row["flop_rank"] == 1 for row in case_rows)
-        assert sum(1 for row in case_rows if row["upmem_rank"] == 1) >= 1
+        assert not any(row["pim_selected"] for row in case_rows)
 
 
 def test_extended_planner_comparison_suite_is_bounded_and_scored(tmp_path: Path) -> None:
@@ -143,7 +148,7 @@ def test_extended_planner_comparison_suite_is_bounded_and_scored(tmp_path: Path)
     case_ids = {row["case_id"] for row in rows}
     divergent_case_ids = set(payload["divergence_summary"]["divergent_case_ids"])
 
-    assert payload["schema_version"] == "planner_comparison_v2"
+    assert payload["schema_version"] == "planner_comparison_v3"
     assert payload["suite_id"] == "planner_compare_extended"
     assert [config["optimize"] for config in payload["planner_configs"]] == ["greedy", "auto", "random-greedy"]
     assert len(rows) == 30
@@ -188,3 +193,99 @@ def test_planner_comparison_suite_configs_separate_tiny_and_extended_modes() -> 
     assert len(extended["cases"]) == 10
     assert "edc_4q" in {case["case_id"] for case in extended["cases"]}
     assert max(int(case["circuit"].get("n_qubits", 0) or 0) for case in extended["cases"]) <= 6
+
+
+def test_upmem_aware_planner_comparison_records_components_and_selection(tmp_path: Path) -> None:
+    run_dir = compare_planners(ROOT / "configs" / "suites" / "diagnostics" / "planner_compare_upmem.yml", tmp_path)
+    payload = json.loads((run_dir / "planner_comparison.json").read_text(encoding="utf-8"))
+    rows = payload["rows"]
+
+    assert payload["pim_objective"]["execution_policy"] == "generic_single_dpu_float32_v1"
+    assert {row["planner_id"] for row in rows} >= {
+        "opt_einsum.greedy",
+        "cotengra.flops",
+        "cotengra.size",
+        "custom_upmem.greedy.balanced_literature_informed",
+    }
+    custom_rows = [row for row in rows if row["planner_engine"] == "custom_upmem"]
+    assert custom_rows
+    assert all(row["candidate_status"] == "rejected" for row in custom_rows)
+    assert all("complex_generic_loop_not_implemented" in row["pim_rejection_reasons"] for row in custom_rows)
+    assert all(row["pim_selected"] is False for row in custom_rows)
+
+    for row in (row for row in rows if row["planner_engine"] != "custom_upmem"):
+        assert row["candidate_status"] == "completed"
+        assert row["pim_feasible"] is False
+        assert "complex_generic_loop_not_implemented" in row["pim_rejection_reasons"]
+        assert row["pim_objective_components"]["host_to_dpu_bytes"] >= 0
+        assert row["pim_objective_components"]["dpu_to_host_bytes"] >= 0
+        assert row["pim_objective_score"] is None
+        assert row["pim_objective_rank"] is None
+        assert (run_dir / row["planner_cost_components_artifact"]).is_file()
+        assert (run_dir / row["planner_step_trace_artifact"]).is_file()
+    for case_id in {row["case_id"] for row in rows}:
+        case_rows = [row for row in rows if row["case_id"] == case_id]
+        assert not any(row["pim_selected"] for row in case_rows)
+        assert not any(row["pim_selected"] for row in case_rows if row["planner_engine"] == "custom_upmem")
+
+
+def test_planner_comparison_rejects_unknown_modeled_objective_version(tmp_path: Path) -> None:
+    suite = tmp_path / "bad_objective.yml"
+    suite.write_text(
+        """
+schema_version: 2
+suite_id: bad_objective
+planner_comparison:
+  pim_objective:
+    objective_version: unknown_v99
+  planners:
+    - {engine: opt_einsum, optimize: greedy}
+workloads:
+  - id: bell
+    circuit: {kind: builtin, name: bell_2q}
+routes:
+  - {id: cpu_tn_einsum_exact, required: false}
+validation: {require_output_for_roles: []}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    try:
+        compare_planners(suite, tmp_path / "runs")
+    except ValueError as exc:
+        assert "objective version" in str(exc)
+    else:  # pragma: no cover - protects the explicit config contract
+        raise AssertionError("invalid modeled objective version was accepted")
+
+
+def test_modeled_selection_never_selects_an_infeasible_candidate_when_a_feasible_one_exists() -> None:
+    common = {
+        "case_id": "selection_guard",
+        "pim_weight_profile": "balanced_literature_informed",
+        "pim_normalization": {"normalization_id": "fixed_log1p_generic_caps_v1"},
+        "pim_execution_policy": {"policy_id": "generic_single_dpu_float32_v1"},
+    }
+    rows = _score_pim_objective_rows(
+        [
+            {
+                **common,
+                "planner_id": "infeasible_low_score",
+                "candidate_status": "completed",
+                "pim_feasible": False,
+                "pim_objective_score": 0.0,
+            },
+            {
+                **common,
+                "planner_id": "feasible_candidate",
+                "candidate_status": "completed",
+                "pim_feasible": True,
+                "pim_objective_score": 10.0,
+            },
+        ]
+    )
+
+    selected = [row for row in rows if row.get("pim_selected")]
+    assert [row["planner_id"] for row in selected] == ["feasible_candidate"]
+    rejected = next(row for row in rows if row["planner_id"] == "infeasible_low_score")
+    assert rejected.get("pim_selected") is not True
+    assert rejected.get("pim_objective_rank") is None
