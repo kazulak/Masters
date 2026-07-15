@@ -151,6 +151,52 @@ def _generic_upmem_record(case_id: str, quantization_mode: str, *, total: float,
     }
 
 
+def _hardware_mvp_record(case_id: str, repeat_id: int) -> dict:
+    record = _record(
+        case_id,
+        "upmem_dense_l1_int8_hardware_mvp",
+        repeat_id,
+        target="upmem",
+        total=0.9,
+        compute=0.0,
+    )
+    record.update(
+        {
+            "suite_id": "upmem_hardware_mvp",
+            "backend_id": "upmem_sdk_hardware_dense",
+            "backend_family": "upmem_sdk",
+            "benchmark_role": "hardware_functionality_mvp",
+            "kernel_family": "dense_gemm",
+            "execution_model": "binary_tensor_contraction",
+            "upmem_execution_mode": "sdk_hardware_single_dpu",
+            "target_requested": "hardware",
+            "target_observed": "hardware",
+            "hardware_profile_version": "hardware_mvp_l1_v2",
+            "execution_class": "L1_WRAM",
+            "kernel_strategy": "l1_direct_int8_int32_v1",
+            "requested_dpu_count": 1,
+            "allocated_dpu_count": 1,
+            "tasklets_per_dpu": 1,
+            "hardware_allocation_verified": True,
+            "native_kernel_executed": True,
+            "hardware_kernel_executed": True,
+            "simulator_kernel_executed": False,
+            "upmem_program_executed": True,
+            "cpu_fallback_used": False,
+            "exact_integer_match": True,
+            "validation_method": "exact_int8_x_int8_to_int32_cpu_reference",
+            "validation_status": "passed",
+            "actual_h2d_bytes": 72,
+            "actual_d2h_bytes": 64,
+            "actual_transfer_bytes": 136,
+            "timing_scope": "hardware_bringup_functionality_only",
+            "hardware_speedup_applicable": False,
+            "hardware_speedup": "not_applicable",
+        }
+    )
+    return record
+
+
 def test_plot_contract_generates_missing_and_zero_variance_placeholders(tmp_path: Path, monkeypatch) -> None:
     pyplot = _install_fake_matplotlib(monkeypatch)
     missing_path = tmp_path / "missing.png"
@@ -544,6 +590,38 @@ def test_research_pack_rejects_dense_upmem_rows_and_accepts_strict_generic_rows(
     assert any("not generic-only" in issue for issue in issues)
     generic = _generic_upmem_record("qrng_7q_thesis_upmem_boundary", "per_task_input_quantize", total=2.0, compute=0.1, transfer=100)
     assert pack._claim_guard_issues([generic]) == []
+
+
+def test_research_pack_classifies_physical_hardware_mvp_separately() -> None:
+    records = [
+        _hardware_mvp_record("dense_l1_2x2", 0),
+        _hardware_mvp_record("dense_l1_2x2", 1),
+        _hardware_mvp_record("dense_l1_4x4", 0),
+    ]
+
+    assert pack._claim_guard_issues(records) == []
+    rows = pack.upmem_hardware_mvp_summary(records)
+
+    assert [row["case_id"] for row in rows] == ["dense_l1_2x2", "dense_l1_4x4"]
+    assert rows[0]["repeat_count"] == 2
+    assert rows[0]["exact_integer_match_count"] == 2
+    assert rows[0]["hardware_execution_count"] == 2
+    assert rows[0]["functionality_evidence_status"] == "passed"
+    specs = pack._plot_specs([], [], [], [], [], hardware_mvp_rows=rows)
+    hardware_spec = next(
+        spec for spec in specs if spec.filename == "upmem_hardware_mvp_validation.png"
+    )
+    assert hardware_spec.source_csv == "upmem_hardware_mvp_summary.csv"
+    assert hardware_spec.data_rows == rows
+
+
+def test_research_pack_rejects_incomplete_completed_hardware_mvp_row() -> None:
+    record = _hardware_mvp_record("dense_l1_2x2", 0)
+    record["exact_integer_match"] = False
+
+    issues = pack._claim_guard_issues([record])
+
+    assert any("lacks exact_integer_match" in issue for issue in issues)
 
 
 def test_research_pack_separates_generic_quantization_modes_and_builds_attribution() -> None:

@@ -44,6 +44,7 @@ ROLE_BY_SUITE = {
     "thesis_upmem_quantization_boundary": "upmem_generic_boundary",
     "thesis_upmem_quantization_stress": "upmem_quantization_stress",
     "research_internal_parallelism": "internal_parallelism",
+    "upmem_hardware_mvp": "upmem_hardware_functionality",
 }
 REQUIRED_EVIDENCE_FILES = ("run_manifest.json", "environment.json", "normalized_records.jsonl")
 
@@ -294,6 +295,9 @@ def _copy_evidence_capsule(source: Path, staging: Path, used_roles: set[str]) ->
     suite_source = source / "config" / "resolved_suite.yml"
     for name in copied:
         shutil.copy2(source / name, destination / Path(name).name)
+    hardware_profile = source / "config" / "hardware_profile.json"
+    if hardware_profile.is_file():
+        shutil.copy2(hardware_profile, destination / hardware_profile.name)
     if suite_source.is_file():
         suite_name = f"{role}.yml"
         shutil.copy2(suite_source, staging / "suites" / suite_name)

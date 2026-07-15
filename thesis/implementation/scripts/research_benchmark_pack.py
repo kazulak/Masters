@@ -88,6 +88,7 @@ FORBIDDEN_EVIDENCE_DERIVED_NAMES = {
     "unsupported_reasons.csv",
     "quantization_comparison.csv",
     "upmem_quantization_attribution.csv",
+    "upmem_hardware_mvp_summary.csv",
     "cpu_gpu_performance_summary.csv",
     "full_state_tn_comparison.csv",
     "per_case_route_stats.csv",
@@ -283,6 +284,7 @@ def _write_pack(
     full_state_tn_rows = full_state_tn_comparison(stats_rows)
     slicing_tradeoff_rows = slicing_tradeoff(stats_rows)
     quantization_rows = upmem_quantization_attribution(records)
+    hardware_mvp_rows = upmem_hardware_mvp_summary(records)
     same_plan_rows = same_plan_execution(records)
     planner_rows = planner_comparison(records)
     unsupported_rows = unsupported_cases(records)
@@ -295,6 +297,7 @@ def _write_pack(
     _write_csv(out_dir / "full_state_tn_comparison.csv", full_state_tn_rows, FULL_STATE_TN_COMPARISON_FIELDS)
     _write_csv(out_dir / "cpu_tn_slicing_tradeoff.csv", slicing_tradeoff_rows, SLICING_TRADEOFF_FIELDS)
     _write_csv(out_dir / "upmem_quantization_attribution.csv", quantization_rows, UPMEM_QUANTIZATION_ATTRIBUTION_FIELDS)
+    _write_csv(out_dir / "upmem_hardware_mvp_summary.csv", hardware_mvp_rows, UPMEM_HARDWARE_MVP_FIELDS)
     _write_csv(out_dir / "same_plan_execution.csv", same_plan_rows, SAME_PLAN_EXECUTION_FIELDS)
     _write_csv(out_dir / "planner_comparison.csv", planner_rows, PLANNER_COMPARISON_FIELDS)
     _write_csv(out_dir / "planner_component_diagnostics.csv", planner_component_rows, PLANNER_COMPONENT_DIAGNOSTICS_FIELDS)
@@ -310,6 +313,7 @@ def _write_pack(
         planner_rows,
         slicing_tradeoff_rows,
         planner_component_rows,
+        hardware_mvp_rows,
     )
     _write_json(out_dir / "plot_manifest.json", plot_manifest)
     (out_dir / "benchmark_summary.md").write_text(
@@ -327,6 +331,7 @@ def _write_pack(
             plot_manifest,
             boundary,
             guard_issues,
+            hardware_mvp_rows,
         ),
         encoding="utf-8",
     )
@@ -653,6 +658,34 @@ UPMEM_QUANTIZATION_ATTRIBUTION_FIELDS = [
     "quantized_quantization_saturation_count",
     "accuracy_delta_quantized_minus_unquantized",
     "native_unquantized_upmem_kernel_executed",
+]
+
+UPMEM_HARDWARE_MVP_FIELDS = [
+    "schema_version",
+    "suite_id",
+    "case_id",
+    "route_id",
+    "backend_id",
+    "hardware_profile_version",
+    "execution_class",
+    "kernel_strategy",
+    "repeat_count",
+    "completed_count",
+    "validation_passed_count",
+    "exact_integer_match_count",
+    "hardware_execution_count",
+    "hardware_allocation_verified_count",
+    "no_simulator_fallback_count",
+    "no_cpu_fallback_count",
+    "requested_dpu_count",
+    "allocated_dpu_count",
+    "tasklets_per_dpu",
+    "application_visible_h2d_bytes_median",
+    "application_visible_d2h_bytes_median",
+    "application_visible_transfer_bytes_median",
+    "timing_scope",
+    "hardware_speedup_applicable",
+    "functionality_evidence_status",
 ]
 
 PAIRED_SPEEDUP_FIELDS = [
@@ -1658,6 +1691,105 @@ def route_capability_matrix(records: list[JsonDict]) -> list[JsonDict]:
     return rows
 
 
+def upmem_hardware_mvp_summary(records: list[JsonDict]) -> list[JsonDict]:
+    """Summarize physical-MVP functionality evidence without timing claims."""
+
+    grouped: dict[tuple[str, str, str], list[JsonDict]] = defaultdict(list)
+    for record in records:
+        if not _is_hardware_mvp_record(record):
+            continue
+        grouped[
+            (
+                str(record.get("suite_id") or ""),
+                str(record.get("case_id") or ""),
+                str(record.get("route_id") or ""),
+            )
+        ].append(record)
+
+    rows: list[JsonDict] = []
+    for (_, _, _), group in sorted(grouped.items()):
+        first = group[0]
+        h2d_values = _numbers(row.get("application_visible_h2d_bytes") for row in group)
+        d2h_values = _numbers(row.get("application_visible_d2h_bytes") for row in group)
+        total_values = _numbers(
+            row.get("application_visible_transfer_bytes") for row in group
+        )
+        completed_count = sum(
+            1 for row in group if str(row.get("status") or "") == "completed"
+        )
+        validation_passed_count = sum(
+            1 for row in group if str(row.get("validation_status") or "") == "passed"
+        )
+        exact_integer_match_count = sum(
+            1 for row in group if row.get("exact_integer_match") is True
+        )
+        hardware_execution_count = sum(
+            1 for row in group if row.get("hardware_kernel_executed") is True
+        )
+        allocation_count = sum(
+            1 for row in group if row.get("hardware_allocation_verified") is True
+        )
+        no_simulator_count = sum(
+            1 for row in group if row.get("simulator_kernel_executed") is False
+        )
+        no_cpu_fallback_count = sum(
+            1 for row in group if row.get("cpu_fallback_used") is False
+        )
+        passed = all(
+            count == len(group)
+            for count in (
+                completed_count,
+                validation_passed_count,
+                exact_integer_match_count,
+                hardware_execution_count,
+                allocation_count,
+                no_simulator_count,
+                no_cpu_fallback_count,
+            )
+        )
+        rows.append(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "suite_id": first.get("suite_id"),
+                "case_id": first.get("case_id"),
+                "route_id": first.get("route_id"),
+                "backend_id": first.get("backend_id"),
+                "hardware_profile_version": first.get("hardware_profile_version"),
+                "execution_class": first.get("execution_class"),
+                "kernel_strategy": first.get("kernel_strategy"),
+                "repeat_count": len(group),
+                "completed_count": completed_count,
+                "validation_passed_count": validation_passed_count,
+                "exact_integer_match_count": exact_integer_match_count,
+                "hardware_execution_count": hardware_execution_count,
+                "hardware_allocation_verified_count": allocation_count,
+                "no_simulator_fallback_count": no_simulator_count,
+                "no_cpu_fallback_count": no_cpu_fallback_count,
+                "requested_dpu_count": _first_present(group, "requested_dpu_count"),
+                "allocated_dpu_count": _first_present(group, "allocated_dpu_count"),
+                "tasklets_per_dpu": _first_present(group, "tasklets_per_dpu"),
+                "application_visible_h2d_bytes_median": statistics.median(h2d_values)
+                if h2d_values
+                else None,
+                "application_visible_d2h_bytes_median": statistics.median(d2h_values)
+                if d2h_values
+                else None,
+                "application_visible_transfer_bytes_median": statistics.median(
+                    total_values
+                )
+                if total_values
+                else None,
+                "timing_scope": _first_present(group, "timing_scope"),
+                "hardware_speedup_applicable": any(
+                    bool(row.get("hardware_speedup_applicable", False))
+                    for row in group
+                ),
+                "functionality_evidence_status": "passed" if passed else "failed",
+            }
+        )
+    return rows
+
+
 def write_plots(
     out_dir: Path,
     stats_rows: list[JsonDict],
@@ -1667,6 +1799,7 @@ def write_plots(
     planner_rows: list[JsonDict],
     slicing_tradeoff_rows: list[JsonDict] | None = None,
     planner_component_rows: list[JsonDict] | None = None,
+    hardware_mvp_rows: list[JsonDict] | None = None,
 ) -> JsonDict:
     plots_dir = out_dir / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
@@ -1675,6 +1808,8 @@ def write_plots(
         _write_csv(out_dir / "cpu_tn_slicing_tradeoff.csv", slicing_tradeoff_rows, SLICING_TRADEOFF_FIELDS)
     if planner_component_rows is None:
         planner_component_rows = planner_component_diagnostics(planner_rows)
+    if hardware_mvp_rows is None:
+        hardware_mvp_rows = []
     _write_csv(out_dir / "planner_component_diagnostics.csv", planner_component_rows, PLANNER_COMPONENT_DIAGNOSTICS_FIELDS)
     try:
         import matplotlib.pyplot as plt
@@ -1693,14 +1828,14 @@ def write_plots(
                     "status": "failed",
                     "reason": f"matplotlib_unavailable: {exc}",
                 }
-                for spec in _plot_specs(stats_rows, cpu_gpu_rows, quantization_rows, same_plan_rows, planner_rows, slicing_tradeoff_rows, planner_component_rows)
+                for spec in _plot_specs(stats_rows, cpu_gpu_rows, quantization_rows, same_plan_rows, planner_rows, slicing_tradeoff_rows, planner_component_rows, hardware_mvp_rows)
             ],
             "generated_valid": [],
             "todo_figures": [],
-            "failed_figures": [spec.filename for spec in _plot_specs(stats_rows, cpu_gpu_rows, quantization_rows, same_plan_rows, planner_rows, slicing_tradeoff_rows, planner_component_rows)],
+            "failed_figures": [spec.filename for spec in _plot_specs(stats_rows, cpu_gpu_rows, quantization_rows, same_plan_rows, planner_rows, slicing_tradeoff_rows, planner_component_rows, hardware_mvp_rows)],
         }
     entries: list[JsonDict] = []
-    for spec in _plot_specs(stats_rows, cpu_gpu_rows, quantization_rows, same_plan_rows, planner_rows, slicing_tradeoff_rows, planner_component_rows):
+    for spec in _plot_specs(stats_rows, cpu_gpu_rows, quantization_rows, same_plan_rows, planner_rows, slicing_tradeoff_rows, planner_component_rows, hardware_mvp_rows):
         path = plots_dir / spec.filename
         outcome = _render_plot_spec(plt, path, spec)
         entry = {
@@ -1737,6 +1872,7 @@ def _plot_specs(
     planner_rows: list[JsonDict],
     slicing_tradeoff_rows: list[JsonDict] | None = None,
     planner_component_rows: list[JsonDict] | None = None,
+    hardware_mvp_rows: list[JsonDict] | None = None,
 ) -> list[PlotSpec]:
     def render(function: Callable[..., str | None], *args: Any, **kwargs: Any) -> Callable[[Any, Path], str | None]:
         return lambda plt, path: function(plt, path, *args, **kwargs)
@@ -1754,6 +1890,7 @@ def _plot_specs(
         PlotSpec("cpu_tn_slicing_tradeoff.png", "Quimb slicing tradeoff", "cpu_tn_slicing_tradeoff.csv", ("benchmark_n_qubits", "runtime_ratio_sliced_over_unsliced", "slicing_flop_ratio", "largest_intermediate_ratio_sliced_over_unsliced"), "Matched external Quimb sliced/unsliced route statistics with compatible timing and output scopes; ratios are descriptive slicing trade-offs, not speedup claims.", "Matched Quimb slicing trade-off ratios: runtime, planner-estimated FLOPs, and largest intermediate size (sliced / unsliced).", "Qubits", "Ratio (sliced / unsliced)", render(_plot_slicing_tradeoff, slicing_tradeoff_rows or []), variance_fields=("runtime_ratio_sliced_over_unsliced", "slicing_flop_ratio", "largest_intermediate_ratio_sliced_over_unsliced"), allow_zero_variance=True),
         PlotSpec("upmem_supported_boundary.png", "UPMEM SDK simulator support boundary", "per_case_route_stats.csv", ("benchmark_n_qubits", "status", "unsupported_count", "upmem_execution_mode"), "Strict generic-only UPMEM SDK simulator support/unsupported records; no hardware claim.", "Supported versus unsupported strict generic-only UPMEM SDK simulator rows.", "Qubits", "SDK simulator support (0/1)", render(_plot_upmem_boundary, stats_rows), variance_fields=("unsupported_count",)),
         PlotSpec("upmem_accuracy_error.png", "UPMEM SDK simulator accuracy error", "per_case_route_stats.csv", ("benchmark_n_qubits", "max_abs_error", "validation_method", "upmem_execution_mode"), "Validation error from strict generic UPMEM SDK simulator execution against its recorded reference.", "Strict generic UPMEM SDK simulator maximum absolute error where validation data exists.", "Case", "Maximum absolute error (log)", render(_plot_upmem_accuracy, stats_rows), variance_fields=("max_abs_error",)),
+        PlotSpec("upmem_hardware_mvp_validation.png", "Physical UPMEM single-DPU MVP validation", "upmem_hardware_mvp_summary.csv", ("case_id", "repeat_count", "validation_passed_count", "exact_integer_match_count"), "Physical one-DPU/one-tasklet int8 x int8 -> int32 functionality evidence. This figure does not report timing, speedup, energy, or scaling.", "Physical UPMEM functionality MVP: exact CPU-reference validation counts by fixed dense case.", "Fixed dense case", "Validated physical executions", render(_plot_upmem_hardware_mvp_validation, hardware_mvp_rows or []), variance_fields=("validation_passed_count",), allow_zero_variance=True),
         PlotSpec("upmem_quantization_attribution.png", "UPMEM SDK simulator quantization attribution", "upmem_quantization_attribution.csv", ("benchmark_n_qubits", "route_runtime_ratio_none_over_quantized", "transfer_ratio_none_over_quantized"), "Same-route float32/int8 attribution from SDK simulator measurements; not hardware speedup.", "Same-route float32 versus int8 attribution for strict generic UPMEM SDK simulator execution.", "Case", "Recorded ratio", render(_plot_upmem_quantization_attribution, quantization_rows), variance_fields=("route_runtime_ratio_none_over_quantized", "transfer_ratio_none_over_quantized")),
         PlotSpec("quantization_runtime_by_executor.png", "UPMEM SDK simulator software-recorded host/control residual ratio", "upmem_quantization_attribution.csv", ("benchmark_n_qubits", "route_runtime_ratio_none_over_quantized", "unquantized_host_residual_time_s", "quantized_host_residual_time_s"), "Same-route SDK simulator software-recorded host/control residual time; attribution is not a hardware speedup claim.", "Same-plan SDK simulator float32/int8 software-recorded host/control residual-time ratio.", "Case", "Float32/int8 host/control residual ratio", render(_plot_quantization_metric, quantization_rows, metric="route_runtime_ratio_none_over_quantized", ylabel="Float32 / int8 software-recorded host/control residual time", title="UPMEM SDK simulator software-recorded host/control residual ratio"), variance_fields=("route_runtime_ratio_none_over_quantized",)),
         PlotSpec("quantization_transfer_bytes.png", "UPMEM SDK simulator software-recorded directional transfer bytes", "upmem_quantization_attribution.csv", ("benchmark_n_qubits", "unquantized_h2d_bytes", "quantized_h2d_bytes", "unquantized_d2h_bytes", "quantized_d2h_bytes", "transfer_ratio_none_over_quantized"), "Application-visible SDK transfer bytes from matched routes. They are not physical bus/DIMM traffic and exclude unobservable SDK overhead.", "Absolute application-visible H2D/D2H bytes plus the same-plan float32/int8 total-byte ratio.", "Case", "Software-recorded application-visible bytes", render(_plot_quantization_transfer_bytes, quantization_rows), variance_fields=("unquantized_h2d_bytes", "quantized_h2d_bytes", "unquantized_d2h_bytes", "quantized_d2h_bytes", "transfer_ratio_none_over_quantized")),
@@ -1776,6 +1913,7 @@ def _plot_specs(
         "planner_comparison.csv": planner_rows,
         "cpu_tn_slicing_tradeoff.csv": slicing_tradeoff_rows or [],
         "planner_component_diagnostics.csv": planner_component_rows or [],
+        "upmem_hardware_mvp_summary.csv": hardware_mvp_rows or [],
     }
     return [replace(spec, data_rows=source_rows[spec.source_csv]) for spec in specs]
 
@@ -1835,7 +1973,13 @@ def benchmark_summary(
     plot_manifest: JsonDict,
     boundary: JsonDict,
     guard_issues: list[str],
+    hardware_mvp_rows: list[JsonDict] | None = None,
 ) -> str:
+    hardware_mvp_rows = (
+        upmem_hardware_mvp_summary(records)
+        if hardware_mvp_rows is None
+        else hardware_mvp_rows
+    )
     lines = [
         "# Research Benchmark Summary",
         "",
@@ -1899,6 +2043,25 @@ def benchmark_summary(
     )
     for row in validation_rows:
         lines.append(f"- `{row['route_id']}` `{row['validation_status']}`: {row['record_count']} records")
+    if hardware_mvp_rows:
+        lines.extend(
+            [
+                "",
+                "## Physical UPMEM Hardware MVP",
+                "",
+                "This section reports physical hardware functionality evidence only. It deliberately excludes performance, speedup, energy, scaling, multi-DPU, generic TaskGraph, and quantum-circuit claims.",
+                "",
+                "| Case | Repeats | Exact matches | One-DPU allocations | Hardware kernel executions | H2D/D2H bytes | Status |",
+                "| --- | ---: | ---: | ---: | ---: | ---: | --- |",
+            ]
+        )
+        for row in hardware_mvp_rows:
+            lines.append(
+                f"| {row['case_id']} | {row['repeat_count']} | {row['exact_integer_match_count']} | "
+                f"{row['hardware_allocation_verified_count']} | {row['hardware_execution_count']} | "
+                f"{row.get('application_visible_h2d_bytes_median')}/{row.get('application_visible_d2h_bytes_median')} | "
+                f"{row['functionality_evidence_status']} |"
+            )
     lines.extend(
         [
             "",
@@ -1970,6 +2133,17 @@ def benchmark_summary(
             f"- Guard issues: {len(guard_issues)}.",
         ]
     )
+    if hardware_mvp_rows:
+        allowed_index = lines.index("- Strict generic-only UPMEM SDK simulator rows as bounded generic code-path and boundary evidence.")
+        lines.insert(
+            allowed_index,
+            "- Physical one-DPU/one-tasklet dense int8 x int8 -> int32 exact-validation rows as hardware functionality evidence only.",
+        )
+        not_allowed_index = lines.index("- No hardware speedup claim from UPMEM SDK simulator timing.")
+        lines.insert(
+            not_allowed_index,
+            "- No performance, speedup, energy, scaling, or generic-TN claim from the physical hardware MVP bring-up rows.",
+        )
     for issue in guard_issues:
         lines.append(f"  - {issue}")
     lines.extend(
@@ -2082,7 +2256,15 @@ def _claim_guard_issues(records: list[JsonDict]) -> list[str]:
             issues.append(f"energy value without measured status: {case}/{route}")
         issues.extend(_transfer_accounting_issues(record, case=case, route=route))
         if record.get("contraction_execution_target") == "upmem":
-            issues.extend(_strict_generic_upmem_issues(record))
+            if _is_hardware_mvp_record(record):
+                issues.extend(_hardware_mvp_issues(record))
+            elif str(record.get("upmem_execution_mode") or "") == "sdk_simulator":
+                issues.extend(_strict_generic_upmem_issues(record))
+            else:
+                issues.append(
+                    f"UPMEM research row has unknown evidence class: {case}/{route} "
+                    f"mode={record.get('upmem_execution_mode') or 'missing'}"
+                )
     return issues
 
 
@@ -2109,18 +2291,35 @@ def _transfer_accounting_issues(record: JsonDict, *, case: Any, route: Any) -> l
 
 
 def _upmem_readiness_lines(records: list[JsonDict], unsupported_rows: list[JsonDict]) -> list[str]:
-    upmem_records = [row for row in records if row.get("contraction_execution_target") == "upmem" or row.get("upmem_execution_mode") == "sdk_simulator"]
+    upmem_records = [
+        row
+        for row in records
+        if row.get("contraction_execution_target") == "upmem"
+        or row.get("upmem_execution_mode") in {"sdk_simulator", "sdk_hardware_single_dpu"}
+    ]
     if not upmem_records:
         return [
-            "- No UPMEM SDK simulator records were loaded in this pack.",
-            "- Next target: run the selected strict generic-only UPMEM suite and regenerate this pack before making stronger UPMEM claims.",
+            "- No UPMEM records were loaded in this pack.",
+            "- Next target: run the selected strict generic-only UPMEM suite or physical MVP and regenerate this pack before making stronger UPMEM claims.",
         ]
-    unsupported = [row for row in unsupported_rows if str(row.get("route_id") or "").startswith("upmem") or row.get("route_id") == "upmem_tn_sdk_simulator_quantized"]
+    hardware_records = [row for row in upmem_records if _is_hardware_mvp_record(row)]
+    simulator_records = [
+        row for row in upmem_records if str(row.get("upmem_execution_mode") or "") == "sdk_simulator"
+    ]
+    unsupported = [
+        row
+        for row in unsupported_rows
+        if str(row.get("route_id") or "").startswith("upmem")
+        or row.get("route_id") == "upmem_tn_sdk_simulator_quantized"
+    ]
     fallback_count = sum(1 for row in upmem_records if bool(row.get("cpu_fallback_used", False)))
-    sdk_count = sum(1 for row in upmem_records if row.get("upmem_execution_mode") == "sdk_simulator")
-    generic_records = [row for row in upmem_records if _is_strict_generic_upmem_record(row)]
+    generic_records = [row for row in simulator_records if _is_strict_generic_upmem_record(row)]
     reasons = Counter(_unsupported_reason(row) for row in unsupported)
-    supported = [row for row in upmem_records if str(row.get("status") or "") == "completed" and not _is_unsupported(row)]
+    supported = [
+        row
+        for row in simulator_records
+        if str(row.get("status") or "") == "completed" and not _is_unsupported(row)
+    ]
     supported_qubits = [(qubits, row) for row in supported if (qubits := _family_and_qubits(row)[1]["benchmark_n_qubits"]) is not None]
     highest_supported = max(supported_qubits, key=lambda item: (int(item[0]), str(item[1].get("case_id") or "")), default=None)
     first_unsupported = min(
@@ -2128,14 +2327,30 @@ def _upmem_readiness_lines(records: list[JsonDict], unsupported_rows: list[JsonD
         key=lambda item: (int(item[0]), str(item[1].get("case_id") or "")),
         default=None,
     )
-    tiling_records = [row for row in upmem_records if _tiling_status(row) is not None]
+    tiling_records = [row for row in simulator_records if _tiling_status(row) is not None]
     tiling_supported = [row for row in tiling_records if _tiling_status(row) is True]
-    lines = [
-        f"- UPMEM SDK simulator records loaded: {len(upmem_records)}; SDK simulator rows: {sdk_count}.",
-        f"- Strict generic-only UPMEM rows: {len(generic_records)}.",
-        f"- CPU fallback flagged in UPMEM rows: {fallback_count}.",
-        f"- Unsupported/boundary rows: {len(unsupported)}.",
-    ]
+    lines = [f"- UPMEM records loaded: {len(upmem_records)}."]
+    if hardware_records:
+        completed = sum(
+            1 for row in hardware_records if str(row.get("status") or "") == "completed"
+        )
+        exact = sum(1 for row in hardware_records if row.get("exact_integer_match") is True)
+        physical_cases = sorted({str(row.get("case_id") or "unknown") for row in hardware_records})
+        lines.extend(
+            [
+                f"- Physical UPMEM single-DPU MVP rows: {len(hardware_records)}; completed: {completed}; exact int8/int32 matches: {exact}.",
+                f"- Physical MVP cases: {', '.join(f'`{case}`' for case in physical_cases)}.",
+                "- Physical MVP scope: one DPU, one tasklet, fixed tiny dense contractions; this is hardware functionality evidence only, not performance, energy, scaling, or generic-TN evidence.",
+            ]
+        )
+    lines.extend(
+        [
+            f"- UPMEM SDK simulator rows: {len(simulator_records)}.",
+            f"- Strict generic-only UPMEM SDK simulator rows: {len(generic_records)}.",
+            f"- CPU fallback flagged in UPMEM rows: {fallback_count}.",
+            f"- Unsupported/boundary rows: {len(unsupported)}.",
+        ]
+    )
     if reasons:
         lines.append(f"- Top blocker reasons: {', '.join(f'{reason}={count}' for reason, count in reasons.most_common(5))}.")
     if tiling_records:
@@ -2171,8 +2386,10 @@ def _missing_evidence(records: list[JsonDict]) -> list[str]:
         missing.append("Verified QuEST GPU records are absent.")
     if "quimb_tn_exact" not in routes:
         missing.append("Quimb TN baseline records are absent.")
-    if not any(record.get("contraction_execution_target") == "upmem" for record in records):
-        missing.append("UPMEM SDK simulator quantized records are absent.")
+    if not any(_is_strict_generic_upmem_record(record) for record in records):
+        missing.append("Strict generic-only UPMEM SDK-simulator boundary records are absent.")
+    if not any(_is_hardware_mvp_record(record) for record in records):
+        missing.append("Physical single-DPU UPMEM functionality-MVP records are absent.")
     return missing or ["No mandatory evidence class is obviously absent from loaded records."]
 
 
@@ -2788,6 +3005,41 @@ def _plot_slicing_tradeoff(plt: Any, path: Path, rows: list[JsonDict]) -> str | 
     return None
 
 
+def _plot_upmem_hardware_mvp_validation(
+    plt: Any, path: Path, rows: list[JsonDict]
+) -> str | None:
+    if not rows:
+        return "no_physical_upmem_mvp_rows"
+    ordered = sorted(rows, key=lambda row: str(row.get("case_id") or ""))
+    labels = [str(row.get("case_id") or "unknown") for row in ordered]
+    passed = [int(row.get("validation_passed_count") or 0) for row in ordered]
+    repeats = [int(row.get("repeat_count") or 0) for row in ordered]
+    if not any(repeats):
+        return "physical_upmem_mvp_rows_have_no_repeat_counts"
+    fig, ax = plt.subplots(
+        figsize=(max(7.0, len(labels) * 2.6), 5.2), constrained_layout=True
+    )
+    x = list(range(len(ordered)))
+    bars = ax.bar(x, passed, color="#0f766e", label="exact CPU-reference validations")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=20, ha="right")
+    ax.set_ylim(0, max(repeats) + 0.8)
+    ax.set_ylabel("Validated physical executions")
+    ax.set_title("Physical UPMEM single-DPU MVP validation (functionality only)")
+    for bar, pass_count, repeat_count in zip(bars, passed, repeats):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            pass_count + 0.08,
+            f"{pass_count}/{repeat_count}",
+            ha="center",
+            va="bottom",
+        )
+    ax.grid(axis="y", alpha=0.3)
+    ax.legend(fontsize="small")
+    _save_plot(fig, path)
+    return None
+
+
 def _plot_upmem_boundary(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
     selected = [row for row in rows if _is_strict_generic_upmem_record(row)]
     if not selected:
@@ -2974,6 +3226,7 @@ def _caption(filename: str) -> str:
         "cpu_tn_slicing_tradeoff.png": "Matched Quimb slicing trade-off ratios for runtime, planner-estimated FLOPs, and largest intermediate size (sliced / unsliced); not a speedup claim.",
         "upmem_supported_boundary.png": "Supported versus unsupported strict generic-only UPMEM SDK simulator rows.",
         "upmem_accuracy_error.png": "Strict generic UPMEM SDK simulator maximum absolute error where validation data exists.",
+        "upmem_hardware_mvp_validation.png": "Physical UPMEM functionality MVP: exact CPU-reference validation counts by fixed dense case; not a performance figure.",
         "upmem_quantization_attribution.png": "Same-route float32 versus int8 attribution for strict generic UPMEM SDK simulator execution; not hardware speedup.",
         "quantization_runtime_by_executor.png": "Same-plan SDK simulator software-recorded host/control residual-time ratio; not hardware speedup.",
         "quantization_transfer_bytes.png": "Application-visible SDK H2D/D2H bytes and same-plan float32/int8 total-byte ratio; not physical bus traffic.",
@@ -3204,6 +3457,58 @@ def _is_strict_generic_upmem_record(record: JsonDict) -> bool:
         and str(_record_value(record, "policy") or "") == "generic-only"
         and str(_record_value(record, "quantization_mode") or "") in {"none", "per_task_input_quantize"}
     )
+
+
+def _is_hardware_mvp_record(record: JsonDict) -> bool:
+    return (
+        record.get("contraction_execution_target") == "upmem"
+        and (
+            record.get("benchmark_role") == "hardware_functionality_mvp"
+            or str(record.get("upmem_execution_mode") or "")
+            == "sdk_hardware_single_dpu"
+        )
+    )
+
+
+def _hardware_mvp_issues(record: JsonDict) -> list[str]:
+    """Validate the narrow physical single-DPU functionality-evidence contract."""
+
+    case = str(record.get("case_id") or "unknown")
+    route = str(record.get("route_id") or "unknown")
+    issues: list[str] = []
+    if str(record.get("upmem_execution_mode") or "") != "sdk_hardware_single_dpu":
+        issues.append(f"hardware MVP row has wrong execution mode: {case}/{route}")
+    if str(record.get("target_requested") or "") != "hardware":
+        issues.append(f"hardware MVP row did not request hardware: {case}/{route}")
+    if bool(record.get("hardware_speedup_applicable", False)):
+        issues.append(f"hardware MVP row marked speedup applicable: {case}/{route}")
+    if bool(record.get("cpu_fallback_used", False)):
+        issues.append(f"hardware MVP row used CPU fallback: {case}/{route}")
+    if bool(record.get("simulator_kernel_executed", False)):
+        issues.append(f"hardware MVP row executed simulator kernel: {case}/{route}")
+    if str(record.get("status") or "") != "completed":
+        return issues
+    required_true = (
+        "hardware_allocation_verified",
+        "native_kernel_executed",
+        "hardware_kernel_executed",
+        "upmem_program_executed",
+        "exact_integer_match",
+    )
+    for field in required_true:
+        if record.get(field) is not True:
+            issues.append(f"completed hardware MVP row lacks {field}: {case}/{route}")
+    if str(record.get("target_observed") or "") != "hardware":
+        issues.append(f"completed hardware MVP row did not observe hardware: {case}/{route}")
+    if str(record.get("validation_status") or "") != "passed":
+        issues.append(f"completed hardware MVP row did not pass validation: {case}/{route}")
+    if _int_or_none(record.get("requested_dpu_count")) != 1:
+        issues.append(f"hardware MVP row requested other than one DPU: {case}/{route}")
+    if _int_or_none(record.get("allocated_dpu_count")) != 1:
+        issues.append(f"hardware MVP row allocated other than one DPU: {case}/{route}")
+    if _int_or_none(record.get("tasklets_per_dpu")) != 1:
+        issues.append(f"hardware MVP row used other than one tasklet: {case}/{route}")
+    return issues
 
 
 def _strict_generic_upmem_issues(record: JsonDict) -> list[str]:

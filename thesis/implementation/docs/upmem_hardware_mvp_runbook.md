@@ -78,6 +78,31 @@ The Make target runs `check-upmem-hardware` after execution. A failed row stays
 failed and records its `failure_stage`; the command never retries through the
 simulator, NumPy, mocks, or another backend.
 
+## Report And Snapshot
+
+After a fully passing run from a clean `thesis/implementation` checkout, keep
+the hardware MVP as a separate compact result capsule. Do not replace
+`thesis_results/current`, which represents the broader benchmark snapshot.
+
+```bash
+RUN=runs/evidence/upmem_hardware_mvp/upmem_hw_dense/latest
+OUT=runs/comparisons/physical_upmem_mvp/$(basename "$(readlink -f "$RUN")")
+
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python \
+  scripts/research_benchmark_pack.py report --input "$RUN" --out "$OUT"
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python \
+  scripts/thesis_snapshot.py promote --pack "$OUT" \
+  --out thesis_results/physical_hardware_mvp_v1
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python \
+  scripts/thesis_snapshot.py verify \
+  --snapshot thesis_results/physical_hardware_mvp_v1
+```
+
+The compact snapshot retains normalized rows, the resolved suite, the hardware
+profile, summary, environment manifest, report tables, plot manifest, and
+checksums. It intentionally excludes raw arrays, copied native work trees, and
+binaries; their recorded hashes remain in the normalized evidence.
+
 ## Failure Collection And Reruns
 
 Inspect the retained per-repeat bridge directory first:
