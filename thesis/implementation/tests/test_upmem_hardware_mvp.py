@@ -251,6 +251,24 @@ def test_hardware_bridge_requires_status_proof_and_never_injects_simulator(
     assert "UPMEM_PROFILE_BASE" not in captured["env"]
 
     invalid = json.loads((bridge / "output_manifest.json").read_text(encoding="utf-8"))
+    invalid["output_blob"]["nbytes"] = 32
+    (bridge / "output_manifest.json").write_text(json.dumps(invalid), encoding="utf-8")
+
+    def fake_output_nbytes_mismatch_run(command: object, **kwargs: object) -> Completed:
+        return Completed()
+
+    monkeypatch.setattr(dense_bridge_module.subprocess, "run", fake_output_nbytes_mismatch_run)
+    output_nbytes_mismatch = execute_dense_bridge(
+        bridge / "input_manifest.json",
+        backend="upmem_sdk_hardware_dense",
+        execute_external=True,
+        env={"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1"},
+    )
+
+    assert output_nbytes_mismatch.execution_status == "failed"
+    assert output_nbytes_mismatch.reason == "output_validation_failed"
+
+    invalid["output_blob"]["nbytes"] = 16
     invalid["metadata"]["hardware_status_json"]["allocated_dpus"] = 2
     (bridge / "output_manifest.json").write_text(json.dumps(invalid), encoding="utf-8")
 

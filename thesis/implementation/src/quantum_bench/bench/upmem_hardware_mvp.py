@@ -231,6 +231,7 @@ def run_upmem_hardware_mvp(
         evidence_type="physical_hardware_functionality",
         upmem_execution_mode="sdk_hardware_single_dpu",
         artifact_retention="full",
+        summary="upmem_hardware_mvp_summary.json",
         root_dir=root_dir,
     )
 
@@ -284,6 +285,22 @@ def run_upmem_hardware_mvp(
     summary_path = run_dir / "upmem_hardware_mvp_summary.json"
     write_json(summary_path, summary)
     write_normalized_records(run_dir, records)
+    run_manifest.update(
+        {
+            "summary": summary_path.name,
+            "upmem_sdk_available": (
+                "verified_by_execution"
+                if status == "completed"
+                else "not_verified_by_execution"
+            ),
+            "hardware_available": (
+                "verified_by_execution"
+                if status == "completed"
+                else "not_verified_by_execution"
+            ),
+        }
+    )
+    write_json(run_dir / "run_manifest.json", run_manifest)
     return UpmemHardwareMvpResult(
         run_dir=run_dir,
         summary_path=summary_path,

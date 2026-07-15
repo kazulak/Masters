@@ -1105,6 +1105,15 @@ def _validate_hardware_output_contract(
     )
     raw = np.load(raw_path, allow_pickle=False)
     _validate_loaded_blob(raw, output.accumulator_blob, "hardware_accumulator")
+    output_path = _resolve_manifest_path(
+        bridge_dir, str(output.output_blob.relative_path)
+    )
+    persisted_output = np.load(output_path, allow_pickle=False)
+    _validate_loaded_blob(
+        persisted_output,
+        to_jsonable(output.output_blob),
+        "hardware_output",
+    )
     if np.dtype(output.accumulator_blob["dtype"]) != np.dtype("<i4"):
         raise ValueError("hardware accumulator must be little-endian int32")
     try:
@@ -2695,6 +2704,11 @@ def _validate_loaded_blob(array: np.ndarray, metadata: JsonDict, role: str) -> N
     if array.dtype != expected_dtype:
         raise ValueError(
             f"{role} blob dtype {array.dtype} does not match manifest dtype {expected_dtype}"
+        )
+    expected_nbytes = int(metadata["nbytes"])
+    if array.nbytes != expected_nbytes:
+        raise ValueError(
+            f"{role} blob byte count {array.nbytes} does not match manifest nbytes {expected_nbytes}"
         )
 
 

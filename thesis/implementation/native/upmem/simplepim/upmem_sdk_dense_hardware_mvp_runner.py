@@ -451,7 +451,8 @@ def main(argv: list[str] | None = None) -> int:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         np.save(raw_path, accumulator, allow_pickle=False)
         write_started = time.perf_counter()
-        np.save(out_path, output.astype(expected.dtype, copy=False), allow_pickle=False)
+        stored_output = output.astype(expected.dtype, copy=False)
+        np.save(out_path, stored_output, allow_pickle=False)
         write_time = time.perf_counter() - write_started
         h2d_components = {
             "arguments": 40,
@@ -536,10 +537,10 @@ def main(argv: list[str] | None = None) -> int:
             "task_id": manifest.get("task_id", ""),
             "output_blob": {
                 "relative_path": out_path.relative_to(bridge).as_posix(),
-                "dtype": str(output.dtype),
-                "shape": output.shape,
+                "dtype": str(stored_output.dtype),
+                "shape": stored_output.shape,
                 "representation": "dequantized_output",
-                "nbytes": output.nbytes,
+                "nbytes": stored_output.nbytes,
                 "labels": manifest.get("output_labels", ()),
                 "role": "hardware_output",
             },
