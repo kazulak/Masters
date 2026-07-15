@@ -23,15 +23,18 @@ corrected runs must be identified as `hardware_mvp_l1_v2`.
 ## ETH Procedure
 
 From the checked-out `thesis/implementation` directory, after creating the
-user-local uv environment:
+user-local uv environment. The repository default is the sibling environment
+at `../.venv/bin/python`; override `PYTHON` only when your environment lives
+elsewhere.
 
 ```bash
+PYTHON=../.venv/bin/python
 git rev-parse HEAD
 git status --short thesis/implementation
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m pytest \
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src "$PYTHON" -m pytest \
   tests/test_upmem_hardware_mvp.py tests/test_dense_bridge.py -q
-make PYTHON=.venv/bin/python upmem-hw-mvp-plan
-UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make PYTHON=.venv/bin/python upmem-hw-mvp
+make PYTHON="$PYTHON" upmem-hw-mvp-plan
+UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make PYTHON="$PYTHON" upmem-hw-mvp
 ```
 
 `upmem-hw-mvp-plan` resolves the suite, writes deterministic input manifests,
@@ -87,13 +90,14 @@ the hardware MVP as a separate compact result capsule. Do not replace
 ```bash
 RUN=runs/evidence/upmem_hardware_mvp/upmem_hw_dense/latest
 OUT=runs/comparisons/physical_upmem_mvp/$(basename "$(readlink -f "$RUN")")
+PYTHON=../.venv/bin/python
 
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python \
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src "$PYTHON" \
   scripts/research_benchmark_pack.py report --input "$RUN" --out "$OUT"
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python \
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src "$PYTHON" \
   scripts/thesis_snapshot.py promote --pack "$OUT" \
   --out thesis_results/physical_hardware_mvp_v1
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python \
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src "$PYTHON" \
   scripts/thesis_snapshot.py verify \
   --snapshot thesis_results/physical_hardware_mvp_v1
 ```
