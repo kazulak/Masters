@@ -12,6 +12,14 @@ case has five sequential repetitions, one DPU, one tasklet, and a 30-second
 timeout. The profile rejects any larger dimensions, complex input, dtype
 change, tiling, simulator selection, or alternate DPU count.
 
+The repaired contract is `hardware_mvp_l1_v2`. Native allocation passes the
+explicit SDK profile `backend=hw`; it does not select hardware through an
+environment profile. The native child environment isolates both
+`UPMEM_PROFILE` and `UPMEM_PROFILE_BASE`. Keep `UPMEM_ALLOW_PHYSICAL_HARDWARE=1`
+for the host command. There is no simulator, CPU, mock, or other fallback, and
+validation is exact integer comparison. Failed v1 runs remain historical;
+corrected runs must be identified as `hardware_mvp_l1_v2`.
+
 ## ETH Procedure
 
 From the checked-out `thesis/implementation` directory, after creating the
@@ -47,7 +55,7 @@ Every successful normalized row must have:
 target_requested=hardware
 target_observed=hardware
 backend_id=upmem_sdk_hardware_dense
-hardware_profile_version=hardware_mvp_l1_v1
+hardware_profile_version=hardware_mvp_l1_v2
 requested_dpu_count=1
 allocated_dpu_count=1
 tasklets_per_dpu=1
@@ -59,6 +67,12 @@ exact_integer_match=true
 validation_status=passed
 hardware_speedup_applicable=false
 ```
+
+The preparation plan and native status sidecar should show the exact backend
+allocation contract: `backend=hw`, `requested_dpus=1`, `allocated_dpus=1`,
+`tasklets=1`, and `success=true`. A corrected successful run has
+`failure_stage=null`; a failed run has `status=failed`, `failure_stage` set to
+the exact stage, and retains bounded stderr and the native status sidecar.
 
 The Make target runs `check-upmem-hardware` after execution. A failed row stays
 failed and records its `failure_stage`; the command never retries through the
@@ -76,9 +90,10 @@ sed -n '1,260p' "$RUN"/cases/dense_l1_2x2/repeat_00/bridge/output_manifest.json
 ```
 
 Use the exact failing `failure_stage`, output manifest, native status sidecar,
-and bounded stderr for diagnosis. Do not change profile limits, add retries, or
-switch to the generic loop while debugging the dense MVP. Rerun the same
-explicit command after fixing the stated issue.
+and bounded stderr for diagnosis. Do not change profile limits, add retries,
+set the environment profile variables, or switch to the generic loop while
+debugging the dense MVP. Rerun the same explicit command after fixing the
+stated issue.
 
 Only after all 2x2 and 4x4 repetitions pass may the next wave enable one
 separate tiny generic-loop physical case.

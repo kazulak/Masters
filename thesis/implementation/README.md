@@ -130,12 +130,19 @@ make research-plan
 On the ETH hardware host, after the preparation command succeeds:
 
 ```bash
+make PYTHON=.venv/bin/python upmem-hw-mvp-plan
 UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make PYTHON=.venv/bin/python upmem-hw-mvp
 ```
 
 This runs only the fixed 2x2 then 4x4 one-DPU/one-tasklet dense int8 MVP. It
 does not run the generic TaskGraph route, report timing as speedup, or promote
 the resulting evidence automatically.
+Physical allocation uses the explicit SDK `backend=hw` contract. The runner
+isolates `UPMEM_PROFILE` and `UPMEM_PROFILE_BASE` from child processes; do not
+set either variable to select hardware. `UPMEM_ALLOW_PHYSICAL_HARDWARE=1`
+remains mandatory, with no fallback. The repaired evidence profile is
+`hardware_mvp_l1_v2`; failed v1 evidence is historical and must not be treated
+as a corrected run.
 
 For a specific research group:
 
