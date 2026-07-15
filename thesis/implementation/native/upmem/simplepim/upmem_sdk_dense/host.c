@@ -5,8 +5,17 @@
 
 #include "common.h"
 
-static void write_status(const char *stage, int success, uint32_t requested, uint32_t allocated) {
+#if UPMEM_DENSE_HARDWARE_MVP
+#define UPMEM_DENSE_ALLOCATION_PROFILE "backend=hw"
+#else
+#define UPMEM_DENSE_ALLOCATION_PROFILE NULL
+#endif
+
+static void write_status(const char *stage, int success, uint32_t requested, uint32_t allocated, int sdk_error_code) {
     const char *path = getenv("UPMEM_DENSE_STATUS_JSON");
+    const char *allocation_profile_json = UPMEM_DENSE_ALLOCATION_PROFILE == NULL
+                                              ? "null"
+                                              : "\"backend=hw\"";
     if (path == NULL || path[0] == '\0') {
         return;
     }
@@ -16,12 +25,13 @@ static void write_status(const char *stage, int success, uint32_t requested, uin
     }
     if (stage == NULL) {
         fprintf(file,
-                "{\"requested_dpus\":%u,\"allocated_dpus\":%u,\"tasklets\":%u,\"success\":%s,\"failure_stage\":null}\n",
-                requested, allocated, (unsigned)NR_TASKLETS, success ? "true" : "false");
+                "{\"requested_dpus\":%u,\"allocated_dpus\":%u,\"tasklets\":%u,\"success\":%s,\"failure_stage\":null,\"allocation_profile\":%s,\"sdk_error_code\":null}\n",
+                requested, allocated, (unsigned)NR_TASKLETS, success ? "true" : "false", allocation_profile_json);
     } else {
         fprintf(file,
-                "{\"requested_dpus\":%u,\"allocated_dpus\":%u,\"tasklets\":%u,\"success\":%s,\"failure_stage\":\"%s\"}\n",
-                requested, allocated, (unsigned)NR_TASKLETS, success ? "true" : "false", stage);
+                "{\"requested_dpus\":%u,\"allocated_dpus\":%u,\"tasklets\":%u,\"success\":%s,\"failure_stage\":\"%s\",\"allocation_profile\":%s,\"sdk_error_code\":%d}\n",
+                requested, allocated, (unsigned)NR_TASKLETS, success ? "true" : "false", stage,
+                allocation_profile_json, sdk_error_code);
     }
     fclose(file);
 }
@@ -64,7 +74,7 @@ int main(int argc, char **argv) {
     if (argc != 8 && argc != 12) {
         fprintf(stderr, "usage L1: %s <dpu_binary> <m> <k> <n> <left_i8.bin> <right_i8.bin> <out_i32.bin>\n", argv[0]);
         fprintf(stderr, "usage L2: %s <dpu_binary> l2 <m> <k> <n> <tile_m> <tile_k> <tile_n> <left_i8.bin> <right_i8.bin> <out_i32.bin>\n", argv[0]);
-        write_status("hardware_profile_violation", 0, 1, 0);
+        write_status("hardware_profile_violation", 0, 1, 0, -1);
         return 2;
     }
 
@@ -77,7 +87,7 @@ int main(int argc, char **argv) {
     if (argc == 12) {
         if (argv[2][0] != 'l' || argv[2][1] != '2' || argv[2][2] != '\0') {
             fprintf(stderr, "unsupported strategy: %s\n", argv[2]);
-            write_status("hardware_profile_violation", 0, 1, 0);
+            write_status("hardware_profile_violation", 0, 1, 0, -1);
             return 2;
         }
         strategy = UPMEM_DENSE_STRATEGY_L2;
@@ -105,7 +115,7 @@ int main(int argc, char **argv) {
 
     if (m == 0 || k == 0 || n == 0) {
         fprintf(stderr, "unsupported GEMM dimensions: m=%u k=%u n=%u\n", m, k, n);
-        write_status("hardware_profile_violation", 0, 1, 0);
+        write_status("hardware_profile_violation", 0, 1, 0, -1);
         return 2;
     }
 
@@ -118,17 +128,17 @@ int main(int argc, char **argv) {
     if (strategy == UPMEM_DENSE_STRATEGY_L2) {
         if (m > UPMEM_DENSE_L2_MAX_DIM || k > UPMEM_DENSE_L2_MAX_DIM || n > UPMEM_DENSE_L2_MAX_DIM) {
             fprintf(stderr, "unsupported L2 GEMM dimensions: m=%u k=%u n=%u max=%u\n", m, k, n, UPMEM_DENSE_L2_MAX_DIM);
-            write_status("hardware_profile_violation", 0, 1, 0);
+            write_status("hardware_profile_violation", 0, 1, 0, -1);
             return 2;
         }
         if (tile_m == 0 || tile_k == 0 || tile_n == 0 || tile_m > UPMEM_DENSE_L2_TILE_MAX_DIM || tile_k > UPMEM_DENSE_L2_TILE_MAX_DIM || tile_n > UPMEM_DENSE_L2_TILE_MAX_DIM) {
             fprintf(stderr, "unsupported L2 tile dimensions: tile_m=%u tile_k=%u tile_n=%u max=%u\n", tile_m, tile_k, tile_n, UPMEM_DENSE_L2_TILE_MAX_DIM);
-            write_status("hardware_profile_violation", 0, 1, 0);
+            write_status("hardware_profile_violation", 0, 1, 0, -1);
             return 2;
         }
         if ((m % 8U) != 0U || (k % 8U) != 0U || (n % 8U) != 0U || (tile_m % 8U) != 0U || (tile_k % 8U) != 0U || (tile_n % 8U) != 0U) {
             fprintf(stderr, "L2 dimensions and tile dimensions must be multiples of 8 for this initial DMA-safe backend\n");
-            write_status("hardware_profile_violation", 0, 1, 0);
+            write_status("hardware_profile_violation", 0, 1, 0, -1);
             return 2;
         }
         a_stride = k;
@@ -140,7 +150,7 @@ int main(int argc, char **argv) {
     } else {
         if (m > UPMEM_DENSE_MAX_DIM || k > UPMEM_DENSE_MAX_DIM || n > UPMEM_DENSE_MAX_DIM) {
             fprintf(stderr, "unsupported GEMM dimensions: m=%u k=%u n=%u max=%u\n", m, k, n, UPMEM_DENSE_MAX_DIM);
-            write_status("hardware_profile_violation", 0, 1, 0);
+            write_status("hardware_profile_violation", 0, 1, 0, -1);
             return 2;
         }
         left_bytes = sizeof(int8_t) * UPMEM_DENSE_MAX_ELEMS;
@@ -153,7 +163,7 @@ int main(int argc, char **argv) {
     int32_t *output = (int32_t *)calloc(output_bytes, 1);
     if (left == NULL || right == NULL || output == NULL) {
         fprintf(stderr, "host allocation failed\n");
-        write_status("hardware_allocation_failed", 0, 1, 0);
+        write_status("hardware_allocation_failed", 0, 1, 0, -1);
         free(left);
         free(right);
         free(output);
@@ -161,14 +171,14 @@ int main(int argc, char **argv) {
     }
 
     if (read_exact(left_path, left, left_bytes) != 0) {
-        write_status("operand_transfer_failed", 0, 1, 0);
+        write_status("operand_transfer_failed", 0, 1, 0, -1);
         free(left);
         free(right);
         free(output);
         return 1;
     }
     if (read_exact(right_path, right, right_bytes) != 0) {
-        write_status("operand_transfer_failed", 0, 1, 0);
+        write_status("operand_transfer_failed", 0, 1, 0, -1);
         free(left);
         free(right);
         free(output);
@@ -184,10 +194,11 @@ int main(int argc, char **argv) {
     int success = 0;
     dpu_error_t error;
 
-    error = dpu_alloc(requested_dpus, NULL, &set);
+    error = dpu_alloc(requested_dpus, UPMEM_DENSE_ALLOCATION_PROFILE, &set);
     if (error != DPU_OK) {
         report_sdk_error("dpu_alloc", error);
-        write_status("hardware_allocation_failed", 0, requested_dpus, 0);
+        write_status(error == DPU_ERR_INVALID_PROFILE ? "hardware_profile_violation" : "hardware_allocation_failed",
+                     0, requested_dpus, 0, (int)error);
         free(left);
         free(right);
         free(output);
@@ -267,7 +278,7 @@ release:
         }
     }
     if (!success) {
-        write_status(failure_stage, 0, requested_dpus, allocated_dpus);
+        write_status(failure_stage, 0, requested_dpus, allocated_dpus, -1);
         free(left);
         free(right);
         free(output);
@@ -275,13 +286,13 @@ release:
     }
 
     if (write_exact(out_path, output, output_bytes) != 0) {
-        write_status("result_transfer_failed", 0, requested_dpus, allocated_dpus);
+        write_status("result_transfer_failed", 0, requested_dpus, allocated_dpus, -1);
         free(left);
         free(right);
         free(output);
         return 1;
     }
-    write_status(NULL, 1, requested_dpus, allocated_dpus);
+    write_status(NULL, 1, requested_dpus, allocated_dpus, -1);
     free(left);
     free(right);
     free(output);

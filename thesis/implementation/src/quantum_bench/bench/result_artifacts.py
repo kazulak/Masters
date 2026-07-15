@@ -162,6 +162,8 @@ RESULT_FIELDS = [
     "execution_class",
     "kernel_strategy",
     "hardware_profile_version",
+    "sdk_allocation_profile",
+    "sdk_allocation_profile_verified",
     "requested_dpu_count",
     "allocated_dpu_count",
     "tasklets_per_dpu",

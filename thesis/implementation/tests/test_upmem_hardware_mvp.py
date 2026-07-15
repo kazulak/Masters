@@ -47,6 +47,7 @@ def test_hardware_mvp_suite_is_fixed_and_deterministic() -> None:
 @pytest.mark.parametrize(
     ("field", "value"),
     [
+        ("hardware_profile_version", "hardware_mvp_l1_v1"),
         ("requested_dpu_count", 2),
         ("tasklets_per_dpu", 2),
         ("max_dim", 5),
@@ -54,7 +55,7 @@ def test_hardware_mvp_suite_is_fixed_and_deterministic() -> None:
     ],
 )
 def test_hardware_mvp_suite_rejects_profile_expansion(
-    tmp_path: Path, field: str, value: int
+    tmp_path: Path, field: str, value: object
 ) -> None:
     payload = yaml.safe_load(SUITE_PATH.read_text(encoding="utf-8"))
     payload["profile"][field] = value
@@ -90,6 +91,14 @@ def test_hardware_mvp_profile_rejects_expanded_or_nonreal_manifests(
     with pytest.raises(ValueError, match="complex policy"):
         validate_hardware_mvp_manifest(complex_policy)
 
+    wrong_allocation_profile = dict(payload)
+    wrong_allocation_profile["metadata"] = {
+        **payload["metadata"],
+        "sdk_allocation_profile": "backend=simulator",
+    }
+    with pytest.raises(ValueError, match="sdk_allocation_profile"):
+        validate_hardware_mvp_manifest(wrong_allocation_profile)
+
 
 def test_hardware_execution_request_fails_closed_without_opt_in() -> None:
     with pytest.raises(ValueError, match="UPMEM_ALLOW_PHYSICAL_HARDWARE=1"):
@@ -102,6 +111,14 @@ def test_hardware_execution_request_fails_closed_without_opt_in() -> None:
                 "DPU_BACKEND": "simulator",
             },
         )
+    validate_hardware_execution_request(
+        execute=True,
+        environment={
+            "UPMEM_ALLOW_PHYSICAL_HARDWARE": "1",
+            "UPMEM_PROFILE": "backend=simulator",
+            "UPMEM_PROFILE_BASE": "backend=hw",
+        },
+    )
 
 
 def test_hardware_bridge_returns_explicit_opt_in_failure_without_external_process(
@@ -183,10 +200,13 @@ def test_hardware_bridge_requires_status_proof_and_never_injects_simulator(
                 "hardware_status_json": {
                     "success": True,
                     "failure_stage": None,
+                    "allocation_profile": "backend=hw",
                     "requested_dpus": 1,
                     "allocated_dpus": 1,
                     "tasklets": 1,
                 },
+                "sdk_allocation_profile": "backend=hw",
+                "sdk_allocation_profile_source": "compiled_native_literal",
                 "raw_accumulator_crop": True,
                 "cpu_reference": "int8_x_int8_to_int32_exact",
                 "hashes": {
@@ -217,13 +237,18 @@ def test_hardware_bridge_requires_status_proof_and_never_injects_simulator(
         bridge / "input_manifest.json",
         backend="upmem_sdk_hardware_dense",
         execute_external=True,
-        env={"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1", "UPMEM_PROFILE": "hw"},
+        env={
+            "UPMEM_ALLOW_PHYSICAL_HARDWARE": "1",
+            "UPMEM_PROFILE": "backend=simulator",
+            "UPMEM_PROFILE_BASE": "backend=hw",
+        },
     )
 
     assert result.execution_status == "upmem_sdk_hardware_executed"
     assert isinstance(captured["env"], dict)
     assert "DPU_BACKEND" not in captured["env"]
-    assert captured["env"]["UPMEM_PROFILE"] == "hw"
+    assert "UPMEM_PROFILE" not in captured["env"]
+    assert "UPMEM_PROFILE_BASE" not in captured["env"]
 
     invalid = json.loads((bridge / "output_manifest.json").read_text(encoding="utf-8"))
     invalid["metadata"]["hardware_status_json"]["allocated_dpus"] = 2
@@ -237,13 +262,36 @@ def test_hardware_bridge_requires_status_proof_and_never_injects_simulator(
         bridge / "input_manifest.json",
         backend="upmem_sdk_hardware_dense",
         execute_external=True,
-        env={"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1", "UPMEM_PROFILE": "hw"},
+        env={
+            "UPMEM_ALLOW_PHYSICAL_HARDWARE": "1",
+            "UPMEM_PROFILE": "backend=simulator",
+            "UPMEM_PROFILE_BASE": "backend=hw",
+        },
     )
 
     assert invalid_result.execution_status == "failed"
     assert invalid_result.reason == "output_validation_failed"
     assert invalid_result.output_manifest is not None
     assert invalid_result.output_manifest.status == "failed"
+
+    missing_profile = json.loads(
+        (bridge / "output_manifest.json").read_text(encoding="utf-8")
+    )
+    missing_profile["metadata"]["hardware_status_json"]["allocated_dpus"] = 1
+    missing_profile["metadata"].pop("sdk_allocation_profile")
+    (bridge / "output_manifest.json").write_text(
+        json.dumps(missing_profile), encoding="utf-8"
+    )
+    missing_profile_result = execute_dense_bridge(
+        bridge / "input_manifest.json",
+        backend="upmem_sdk_hardware_dense",
+        execute_external=True,
+        env={"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1"},
+    )
+
+    assert missing_profile_result.execution_status == "failed"
+    assert missing_profile_result.output_manifest is not None
+    assert missing_profile_result.output_manifest.status == "failed"
 
 
 def test_prepare_only_writes_inputs_without_build_or_dpu_allocation(
@@ -306,7 +354,15 @@ def test_hardware_normalized_record_requires_single_dpu_exact_flags(
         execution_implemented=True,
         metadata={
             "hardware_kernel_executed": True,
-            "hardware_status_json": {"allocated_dpus": 1},
+            "hardware_status_json": {
+                "success": True,
+                "failure_stage": None,
+                "allocation_profile": "backend=hw",
+                "requested_dpus": 1,
+                "allocated_dpus": 1,
+                "tasklets": 1,
+            },
+            "sdk_allocation_profile": "backend=hw",
             "application_visible_transfer_bytes": {"h2d": 72, "d2h": 64, "total": 136},
             "hashes": {},
         },
@@ -366,6 +422,7 @@ def test_hardware_normalized_record_requires_single_dpu_exact_flags(
     assert record["status"] == "completed"
     assert record["allocated_dpu_count"] == 1
     assert record["hardware_allocation_verified"] is True
+    assert record["sdk_allocation_profile_verified"] is True
     assert record["simulator_kernel_executed"] is False
     assert record["cpu_fallback_used"] is False
     assert (
@@ -393,6 +450,9 @@ def test_native_hardware_mvp_sources_enforce_one_tasklet_and_checked_status() ->
     assert "UPMEM_DENSE_HARDWARE_MVP requires exactly one DPU tasklet" in dpu
     assert "if (me() != 0)" in dpu
     assert "dpu_get_nr_dpus" in host
+    assert 'UPMEM_DENSE_ALLOCATION_PROFILE "backend=hw"' in host
+    assert "dpu_alloc(requested_dpus, UPMEM_DENSE_ALLOCATION_PROFILE" in host
+    assert "DPU_ERR_INVALID_PROFILE" in host
     assert "DPU_SYNCHRONOUS" in host
     assert "UPMEM_DENSE_STATUS_JSON" in host
     assert 'write_status("result_transfer_failed"' in host
@@ -400,3 +460,5 @@ def test_native_hardware_mvp_sources_enforce_one_tasklet_and_checked_status() ->
     assert "host_stderr_snippet" in runner
     assert '"sdk_metadata"' in runner
     assert '"compiler_metadata"' in runner
+    assert 'PROFILE_VERSION = "hardware_mvp_l1_v2"' in runner
+    assert 'SDK_ALLOCATION_PROFILE = "backend=hw"' in runner

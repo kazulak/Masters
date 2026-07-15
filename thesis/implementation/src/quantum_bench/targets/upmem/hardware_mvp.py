@@ -17,7 +17,8 @@ import yaml
 
 
 UPMEM_HARDWARE_MVP_SUITE_SCHEMA_VERSION = "upmem_hardware_mvp_v1"
-HARDWARE_MVP_PROFILE_VERSION = "hardware_mvp_l1_v1"
+HARDWARE_MVP_PROFILE_VERSION = "hardware_mvp_l1_v2"
+HARDWARE_MVP_SDK_ALLOCATION_PROFILE = "backend=hw"
 HARDWARE_MVP_BACKEND_ID = "upmem_sdk_hardware_dense"
 HARDWARE_MVP_ROUTE_ID = "upmem_dense_l1_int8_hardware_mvp"
 HARDWARE_MVP_EXECUTION_CLASS = "L1_WRAM"
@@ -203,6 +204,27 @@ def validate_hardware_mvp_manifest(
     fixed = manifest.get("fixed_point_spec")
     if not isinstance(fixed, Mapping):
         raise ValueError("hardware_profile_violation: fixed_point_spec missing")
+    metadata = manifest.get("metadata")
+    if not isinstance(metadata, Mapping):
+        raise ValueError("hardware_profile_violation: hardware profile metadata missing")
+    expected_metadata = {
+        "hardware_profile_version": profile.version,
+        "sdk_allocation_profile": HARDWARE_MVP_SDK_ALLOCATION_PROFILE,
+        "sdk_allocation_profile_source": "compiled_native_literal",
+        "target": profile.target,
+        "execution_class": profile.execution_class,
+        "backend_id": profile.backend_id,
+        "requested_dpu_count": profile.requested_dpu_count,
+        "tasklets_per_dpu": profile.tasklets_per_dpu,
+        "synchronous_execution": True,
+        "performance_claim_applicable": False,
+    }
+    for field, expected in expected_metadata.items():
+        if metadata.get(field) != expected:
+            raise ValueError(
+                "hardware_profile_violation: "
+                f"metadata field {field} must be {expected!r}"
+            )
     if fixed.get("route_dtype") != profile.input_dtype:
         raise ValueError("hardware_profile_violation: input dtype must be int8")
     if fixed.get("complex_policy") != profile.complex_policy:
@@ -233,6 +255,8 @@ def hardware_mvp_profile_metadata(
 
     return {
         **profile.to_json_dict(),
+        "sdk_allocation_profile": HARDWARE_MVP_SDK_ALLOCATION_PROFILE,
+        "sdk_allocation_profile_source": "compiled_native_literal",
         "hardware_functionality_evidence": True,
         "hardware_speedup_applicable": False,
         "performance_claim_applicable": False,
@@ -288,7 +312,7 @@ def _parse_case(value: object, profile: HardwareMvpProfile) -> HardwareMvpCase:
 def _validate_canonical_cases(cases: tuple[HardwareMvpCase, ...]) -> None:
     if tuple(case.case_id for case in cases) != tuple(HARDWARE_MVP_CANONICAL_OPERANDS):
         raise ValueError(
-            "hardware_profile_violation: hardware_mvp_l1_v1 requires the fixed 2x2 then 4x4 case order"
+            "hardware_profile_violation: hardware_mvp_l1_v2 requires the fixed 2x2 then 4x4 case order"
         )
     for case in cases:
         expected_left, expected_right = HARDWARE_MVP_CANONICAL_OPERANDS[case.case_id]
@@ -296,7 +320,7 @@ def _validate_canonical_cases(cases: tuple[HardwareMvpCase, ...]) -> None:
             case.right_int8, expected_right
         ):
             raise ValueError(
-                f"hardware_profile_violation: {case.case_id} operands are fixed by hardware_mvp_l1_v1"
+                f"hardware_profile_violation: {case.case_id} operands are fixed by hardware_mvp_l1_v2"
             )
 
 

@@ -44,6 +44,7 @@ from quantum_bench.targets.upmem.dense_bridge import (
 from quantum_bench.targets.upmem.environment import discover_upmem_sdk
 from quantum_bench.targets.upmem.hardware_mvp import (
     HARDWARE_MVP_BACKEND_ID,
+    HARDWARE_MVP_SDK_ALLOCATION_PROFILE,
     HardwareMvpCase,
     HardwareMvpSuite,
     hardware_mvp_profile_metadata,
@@ -103,8 +104,6 @@ def validate_hardware_execution_request(
         )
     if env.get("DPU_BACKEND"):
         raise ValueError("DPU_BACKEND must be unset for the physical UPMEM MVP")
-    if env.get("UPMEM_PROFILE", "hw") != "hw":
-        raise ValueError("UPMEM_PROFILE must be hw for the physical UPMEM MVP")
 
 
 def prepare_upmem_hardware_mvp(
@@ -402,7 +401,6 @@ def _prepare_case_bridge(
     manifest_payload = json.loads(
         (bridge_dir / "input_manifest.json").read_text(encoding="utf-8")
     )
-    validate_hardware_mvp_manifest(manifest_payload, profile=profile)
     reference_path = bridge_dir / "references" / "expected_accumulator_i32.npy"
     np.save(reference_path, case.expected_accumulator.astype("<i4"), allow_pickle=False)
     manifest_payload["metadata"] = {
@@ -416,6 +414,7 @@ def _prepare_case_bridge(
             "reference_kind": "exact_int8_x_int8_to_int32_cpu_reference",
         },
     }
+    validate_hardware_mvp_manifest(manifest_payload, profile=profile)
     write_json(bridge_dir / "input_manifest.json", manifest_payload)
     return manifest, reference_path
 
@@ -468,15 +467,32 @@ def _normalized_record(
         or result.reason
         or "output_manifest_failed"
     )
-    succeeded = result.execution_status == "upmem_sdk_hardware_executed" and bool(
-        validation.get("exact_integer_passed")
-    )
-    native_executed = succeeded and bool(metadata.get("hardware_kernel_executed"))
+    allocation_profile = metadata.get("sdk_allocation_profile")
     status_json = (
         metadata.get("hardware_status_json")
         if isinstance(metadata.get("hardware_status_json"), dict)
         else {}
     )
+    allocation_profile_verified = (
+        allocation_profile == HARDWARE_MVP_SDK_ALLOCATION_PROFILE
+        and status_json.get("allocation_profile")
+        == HARDWARE_MVP_SDK_ALLOCATION_PROFILE
+    )
+    hardware_status_verified = (
+        status_json.get("success") is True
+        and status_json.get("failure_stage") is None
+        and status_json.get("requested_dpus") == 1
+        and status_json.get("allocated_dpus") == 1
+        and status_json.get("tasklets") == 1
+    )
+    succeeded = (
+        result.execution_status == "upmem_sdk_hardware_executed"
+        and bool(validation.get("exact_integer_passed"))
+        and allocation_profile_verified
+        and hardware_status_verified
+        and bool(metadata.get("hardware_kernel_executed"))
+    )
+    native_executed = succeeded and bool(metadata.get("hardware_kernel_executed"))
     allocated = (
         status_json.get("allocated_dpus") if isinstance(status_json, dict) else None
     )
@@ -507,6 +523,8 @@ def _normalized_record(
         "execution_class": suite.profile.execution_class,
         "kernel_strategy": suite.profile.kernel_strategy,
         "hardware_profile_version": suite.profile.version,
+        "sdk_allocation_profile": allocation_profile,
+        "sdk_allocation_profile_verified": allocation_profile_verified,
         "requested_dpu_count": suite.profile.requested_dpu_count,
         "allocated_dpu_count": allocated,
         "tasklets_per_dpu": suite.profile.tasklets_per_dpu,
@@ -593,6 +611,8 @@ def _failed_preparation_record(
         "target_requested": "hardware",
         "execution_class": suite.profile.execution_class,
         "hardware_profile_version": suite.profile.version,
+        "sdk_allocation_profile": HARDWARE_MVP_SDK_ALLOCATION_PROFILE,
+        "sdk_allocation_profile_verified": False,
         "requested_dpu_count": 1,
         "tasklets_per_dpu": 1,
         "cpu_fallback_used": False,
@@ -621,8 +641,11 @@ def _hardware_environment(root_dir: Path, environment: Mapping[str, str]) -> Jso
         "hostname": socket.gethostname(),
         "upmem_hardware_mvp": {
             "sdk_discovery": sdk,
-            "UPMEM_PROFILE": environment.get("UPMEM_PROFILE", "hw"),
+            "sdk_allocation_profile": HARDWARE_MVP_SDK_ALLOCATION_PROFILE,
+            "UPMEM_PROFILE_present": "UPMEM_PROFILE" in environment,
+            "UPMEM_PROFILE_BASE_present": "UPMEM_PROFILE_BASE" in environment,
             "DPU_BACKEND_present": bool(environment.get("DPU_BACKEND")),
+            "physical_child_environment_sanitized": True,
             "UPMEM_ALLOW_PHYSICAL_HARDWARE": environment.get(
                 "UPMEM_ALLOW_PHYSICAL_HARDWARE"
             )
@@ -652,8 +675,8 @@ def _build_hardware_native_source(
     build_dir = plan_dir / "native_build"
     shutil.copytree(source, build_dir)
     child_env = dict(environment)
-    child_env.pop("DPU_BACKEND", None)
-    child_env["UPMEM_PROFILE"] = "hw"
+    for name in ("UPMEM_PROFILE", "UPMEM_PROFILE_BASE", "DPU_BACKEND"):
+        child_env.pop(name, None)
     command = [
         "make",
         "clean",

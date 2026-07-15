@@ -15,6 +15,7 @@ import numpy as np
 from quantum_bench.core.jsonio import write_json
 from quantum_bench.core.records import JsonDict, to_jsonable
 from quantum_bench.formats import conversion_error_metrics
+from quantum_bench.targets.upmem.hardware_mvp import HARDWARE_MVP_SDK_ALLOCATION_PROFILE
 from quantum_bench.targets.upmem.simplepim import probe_simplepim
 from quantum_bench.targets.upmem.tile_plan import (
     UPMEM_EXECUTION_CLASS_L1_WRAM,
@@ -785,17 +786,6 @@ def _execute_upmem_sdk_hardware_dense_bridge(
             "DPU_BACKEND must not be inherited for hardware execution",
             started,
         )
-    if environment.get("UPMEM_PROFILE", "hw") != "hw":
-        return _write_hardware_bridge_failure(
-            input_path,
-            output_path,
-            identity,
-            manifest,
-            invocation,
-            "hardware_profile_violation",
-            "UPMEM_PROFILE must be hw",
-            started,
-        )
     if environment.get("UPMEM_DENSE_HARDWARE_RUNNER"):
         return _write_hardware_bridge_failure(
             input_path,
@@ -804,7 +794,7 @@ def _execute_upmem_sdk_hardware_dense_bridge(
             manifest,
             invocation,
             "hardware_profile_violation",
-            "UPMEM_DENSE_HARDWARE_RUNNER override is forbidden by hardware_mvp_l1_v1",
+            "UPMEM_DENSE_HARDWARE_RUNNER override is forbidden by hardware_mvp_l1_v2",
             started,
         )
 
@@ -830,8 +820,13 @@ def _execute_upmem_sdk_hardware_dense_bridge(
         }
     )
     child_env = dict(environment)
-    child_env.pop("DPU_BACKEND", None)
-    child_env["UPMEM_PROFILE"] = "hw"
+    invocation["sanitized_environment"] = {
+        "UPMEM_PROFILE_present": "UPMEM_PROFILE" in child_env,
+        "UPMEM_PROFILE_BASE_present": "UPMEM_PROFILE_BASE" in child_env,
+        "DPU_BACKEND_present": "DPU_BACKEND" in child_env,
+    }
+    for name in ("UPMEM_PROFILE", "UPMEM_PROFILE_BASE", "DPU_BACKEND"):
+        child_env.pop(name, None)
     try:
         completed = subprocess.run(
             command,
@@ -878,13 +873,16 @@ def _execute_upmem_sdk_hardware_dense_bridge(
             started,
         )
     if completed.returncode != 0 and output.status == "upmem_sdk_hardware_executed":
+        failure_reason = _hardware_failure_reason(
+            output.metadata, output.error, completed.stdout, completed.stderr
+        )
         return _write_hardware_bridge_failure(
             input_path,
             output_path,
             identity,
             manifest,
             invocation,
-            str(output.metadata.get("reason") or "output_validation_failed"),
+            failure_reason or "output_validation_failed",
             f"hardware runner exited with code {completed.returncode}",
             started,
             output,
@@ -893,13 +891,14 @@ def _execute_upmem_sdk_hardware_dense_bridge(
         try:
             _validate_hardware_output_contract(payload, output, bridge_dir)
         except Exception as exc:
+            failure_reason = _hardware_failure_reason(output.metadata, str(exc))
             return _write_hardware_bridge_failure(
                 input_path,
                 output_path,
                 identity,
                 manifest,
                 invocation,
-                "output_validation_failed",
+                failure_reason or "output_validation_failed",
                 str(exc),
                 started,
                 output,
@@ -923,7 +922,9 @@ def _execute_upmem_sdk_hardware_dense_bridge(
             execution_implemented=True,
             metadata=dict(output.metadata),
         )
-    reason = str(output.metadata.get("reason") or output.status)
+    reason = _hardware_failure_reason(
+        output.metadata, output.error, output.status
+    ) or str(output.metadata.get("reason") or output.status)
     return _execution_result(
         input_path,
         output_path,
@@ -1046,6 +1047,8 @@ def _validate_hardware_output_contract(
         or output.status != "upmem_sdk_hardware_executed"
     ):
         raise ValueError("hardware output identity/status mismatch")
+    if output.metadata.get("sdk_allocation_profile") != HARDWARE_MVP_SDK_ALLOCATION_PROFILE:
+        raise ValueError("hardware output does not prove sdk allocation profile backend=hw")
     if output.output_blob is None or output.accumulator_blob is None:
         raise ValueError("hardware output and accumulator blobs are required")
     if (
@@ -1063,6 +1066,8 @@ def _validate_hardware_output_contract(
     if (
         status.get("success") is not True
         or status.get("failure_stage") is not None
+        or status.get("allocation_profile")
+        != HARDWARE_MVP_SDK_ALLOCATION_PROFILE
         or int(status.get("requested_dpus", 0)) != 1
         or int(status.get("allocated_dpus", 0)) != 1
         or int(status.get("tasklets", 0)) != 1
@@ -1123,6 +1128,18 @@ def _validate_hardware_output_contract(
         raise ValueError(
             "hardware accumulator does not match the retained exact CPU reference"
         )
+
+
+def _hardware_failure_reason(
+    metadata: Mapping[str, Any], *values: object
+) -> str | None:
+    """Map SDK invalid-profile reports to the stable hardware failure stage."""
+    text = " ".join(str(value) for value in values if value is not None).lower()
+    if "invalid profile" in text or "invalid dpu profile" in text:
+        return "hardware_profile_violation"
+    if metadata.get("hardware_stage") == "hardware_profile_violation":
+        return "hardware_profile_violation"
+    return None
 
 
 def _execute_simplepim_external_bridge(

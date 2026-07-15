@@ -24,7 +24,8 @@ SCHEMA = "dense_bridge_v1"
 BRIDGE_ID = "upmem_dense_bridge_v1"
 BACKEND = "upmem_sdk_hardware_dense"
 MAX_DIM = 4
-PROFILE_VERSION = "hardware_mvp_l1_v1"
+PROFILE_VERSION = "hardware_mvp_l1_v2"
+SDK_ALLOCATION_PROFILE = "backend=hw"
 STAGES = {
     "hardware_opt_in_missing",
     "hardware_profile_violation",
@@ -118,6 +119,13 @@ def _base(
             "timing_labels": "hardware_bringup_functionality_only",
             "command": command,
             "returncode": returncode,
+            "native_environment_sanitized": [
+                "UPMEM_PROFILE",
+                "UPMEM_PROFILE_BASE",
+                "DPU_BACKEND",
+            ],
+            "sdk_allocation_profile": SDK_ALLOCATION_PROFILE,
+            "sdk_allocation_profile_source": "compiled_native_literal",
         },
     }
 
@@ -143,6 +151,14 @@ def _tools(env: Mapping[str, str]) -> dict[str, str | None]:
         return shutil.which(name, path=env.get("PATH"))
 
     return {name: find(name) for name in ("dpu-upmem-dpurte-clang", "dpu-pkg-config")}
+
+
+def _sanitised_native_env(env: Mapping[str, str]) -> dict[str, str]:
+    """Remove backend/profile selectors so the native boundary owns selection."""
+    result = dict(env)
+    for name in ("UPMEM_PROFILE", "UPMEM_PROFILE_BASE", "DPU_BACKEND"):
+        result.pop(name, None)
+    return result
 
 
 def _run(
@@ -187,6 +203,7 @@ def _failure_stage(
         return stage
     lower = text.lower()
     keyword_stages = (
+        (("invalid_profile", "invalid profile"), "hardware_profile_violation"),
         (("alloc", "dpu_alloc"), "hardware_allocation_failed"),
         (("load", "dpu_load", "binary"), "binary_load_failed"),
         (("argument", "dense_args"), "argument_transfer_failed"),
@@ -239,7 +256,7 @@ def main(argv: list[str] | None = None) -> int:
         if float(args.timeout_seconds) != 30.0:
             return fail(
                 "hardware_profile_violation",
-                "hardware_mvp_l1_v1 requires a fixed 30-second timeout",
+                "hardware_mvp_l1_v2 requires a fixed 30-second timeout",
             )
         manifest = json.loads(input_path.read_text(encoding="utf-8"))
         if (
@@ -262,9 +279,6 @@ def main(argv: list[str] | None = None) -> int:
             return fail(
                 "hardware_profile_violation", "DPU_BACKEND must not be inherited"
             )
-        if os.environ.get("UPMEM_PROFILE", "hw") != "hw":
-            return fail("hardware_profile_violation", "UPMEM_PROFILE must be hw")
-
         dims = tuple(int(manifest[key]) for key in ("gemm_m", "gemm_k", "gemm_n"))
         if any(value <= 0 or value > MAX_DIM for value in dims):
             return fail(
@@ -296,7 +310,8 @@ def main(argv: list[str] | None = None) -> int:
                 "hardware_profile_violation",
                 "operand shapes do not match GEMM dimensions",
             )
-        tools = _tools(os.environ)
+        native_env = _sanitised_native_env(os.environ)
+        tools = _tools(native_env)
         if any(value is None for value in tools.values()):
             return fail(
                 "sdk_discovery_failed",
@@ -308,9 +323,7 @@ def main(argv: list[str] | None = None) -> int:
         source_snapshot, build = work / "src", work / "build"
         shutil.copytree(source, source_snapshot, dirs_exist_ok=True)
         shutil.copytree(source, build, dirs_exist_ok=True)
-        build_env = dict(os.environ)
-        build_env.pop("DPU_BACKEND", None)
-        build_env["UPMEM_PROFILE"] = "hw"
+        build_env = native_env
         build_cmd = [
             "make",
             "clean",
@@ -372,6 +385,12 @@ def main(argv: list[str] | None = None) -> int:
             return fail(
                 "output_manifest_failed",
                 "hardware host did not emit its required status sidecar",
+                result,
+            )
+        if host_status.get("allocation_profile") != SDK_ALLOCATION_PROFILE:
+            return fail(
+                "hardware_profile_violation",
+                "hardware host did not prove allocation with backend=hw",
                 result,
             )
         if host_status.get("success") is not True:
@@ -449,6 +468,8 @@ def main(argv: list[str] | None = None) -> int:
             "backend_family": "upmem_sdk",
             "target": "hardware",
             "hardware_status_json": host_status,
+            "sdk_allocation_profile": SDK_ALLOCATION_PROFILE,
+            "sdk_allocation_profile_source": "compiled_native_literal",
             "raw_accumulator_crop": True,
             "cpu_reference": "int8_x_int8_to_int32_exact",
             "hashes": {
@@ -491,12 +512,17 @@ def main(argv: list[str] | None = None) -> int:
             "timing_decomposition_note": "SDK host program does not separately measure allocation/load/H2D/kernel/D2H in Phase 1A.",
             "sdk_tools": sdk_tools,
             "sdk_metadata": {
-                "upmem_profile": "hw",
+                "allocation_profile": SDK_ALLOCATION_PROFILE,
+                "environment_sanitized": [
+                    "UPMEM_PROFILE",
+                    "UPMEM_PROFILE_BASE",
+                    "DPU_BACKEND",
+                ],
                 "tools": sdk_tools,
             },
             "compiler_metadata": {
                 "dpu_upmem_dpurte_clang": sdk_tools.get("dpu-upmem-dpurte-clang"),
-                "host_gcc": _command_version("gcc", os.environ),
+                "host_gcc": _command_version("gcc", native_env),
             },
         }
         payload = {
@@ -570,6 +596,7 @@ def _profile_metadata_valid(manifest: Mapping[str, Any]) -> bool:
         return False
     return (
         metadata.get("hardware_profile_version") == PROFILE_VERSION
+        and metadata.get("sdk_allocation_profile") == SDK_ALLOCATION_PROFILE
         and metadata.get("target") == "hardware"
         and metadata.get("execution_class") == "L1_WRAM"
         and metadata.get("backend_id") == BACKEND

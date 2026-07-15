@@ -109,7 +109,9 @@ def _check_upmem_hardware(run_dir: Path) -> int:
         and record.get("target_requested") == "hardware"
         and record.get("target_observed") == "hardware"
         and record.get("backend_id") == "upmem_sdk_hardware_dense"
-        and record.get("hardware_profile_version") == "hardware_mvp_l1_v1"
+        and record.get("hardware_profile_version") == "hardware_mvp_l1_v2"
+        and record.get("sdk_allocation_profile") == "backend=hw"
+        and _truthy(record.get("sdk_allocation_profile_verified"))
         and record.get("requested_dpu_count") == 1
         and record.get("allocated_dpu_count") == 1
         and record.get("tasklets_per_dpu") == 1

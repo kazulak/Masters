@@ -1,7 +1,7 @@
 schema_version: upmem_hardware_mvp_v1
 suite_id: upmem_hardware_mvp
 profile:
-  hardware_profile_version: hardware_mvp_l1_v1
+  hardware_profile_version: hardware_mvp_l1_v2
   target: hardware
   execution_class: L1_WRAM
   backend_id: upmem_sdk_hardware_dense
