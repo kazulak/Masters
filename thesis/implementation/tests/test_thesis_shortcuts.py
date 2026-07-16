@@ -219,7 +219,10 @@ def test_makefile_targets_parse_with_dry_run() -> None:
         )
         assert target != "upmem-hw-taskgraph-resident-plan" or "upmem_hardware_taskgraph_resident_path_quantization.yml" in result.stdout
         assert target != "upmem-hw-taskgraph-resident" or "Resident TaskGraph runtime is reserved" in result.stdout
-        assert target != "upmem-hw-taskgraph-resident-report" or "upmem_hw_taskgraph_resident" in result.stdout
+        assert target != "upmem-hw-taskgraph-resident-report" or (
+            "check-resident-evidence" in result.stdout
+            and "upmem_hw_taskgraph_resident" in result.stdout
+        )
         assert target != "evidence-inbox" or "runs/inbox/eth" in result.stdout
         assert (
             target != "thesis-run"
@@ -242,6 +245,83 @@ def test_makefile_targets_parse_with_dry_run() -> None:
         assert target != "planner-report" or "--label planner_v2" in result.stdout
         assert target != "archive-evidence" or "thesis_runs.py archive" in result.stdout
         assert "simulation_backend_compare_thesis_small.yml" not in result.stdout
+
+
+def test_resident_report_checker_rejects_arbitrary_normalized_records(tmp_path: Path) -> None:
+    run_dir = tmp_path / "resident-run"
+    run_dir.mkdir()
+    (run_dir / "run_manifest.json").write_text(
+        json.dumps(
+            {"suite_id": "upmem_hardware_taskgraph_resident_path_quantization"}
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "normalized_records.jsonl").write_text(
+        json.dumps(
+            {
+                "suite_id": "upmem_hardware_taskgraph_resident_path_quantization",
+                "route_id": "upmem_tn_hardware_taskgraph_resident",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    valid = subprocess.run(
+        [
+            sys.executable,
+            "scripts/research_benchmark_pack.py",
+            "check-resident-evidence",
+            "--input",
+            str(run_dir),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert valid.returncode == 0, valid.stderr
+
+    (run_dir / "normalized_records.jsonl").write_text(
+        json.dumps(
+            {
+                "suite_id": "upmem_hardware_taskgraph_resident_path_quantization",
+                "route_id": "quest_cpu_full_state_exact",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    invalid = subprocess.run(
+        [
+            sys.executable,
+            "scripts/research_benchmark_pack.py",
+            "check-resident-evidence",
+            "--input",
+            str(run_dir),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert invalid.returncode != 0
+
+
+def test_historical_make_target_rejects_traversal_destination() -> None:
+    result = subprocess.run(
+        [
+            "make",
+            "thesis-promote-historical",
+            "THESIS_SNAPSHOT=thesis_results/..",
+            "THESIS_PACK=/tmp/missing-pack",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert "direct named child" in result.stderr
 
 
 def test_top_level_suite_family_is_canonical() -> None:

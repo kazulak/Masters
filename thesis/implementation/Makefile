@@ -196,6 +196,8 @@ thesis-promote:
 	$(PY_ENV) $(PYTHON) scripts/thesis_snapshot.py promote --pack $(THESIS_PACK) --out $(THESIS_SNAPSHOT)
 
 thesis-promote-historical:
+	@case "$(THESIS_SNAPSHOT)" in thesis_results/*) ;; *) echo 'Set THESIS_SNAPSHOT=thesis_results/<named-snapshot>' >&2; exit 2;; esac
+	@case "$(THESIS_SNAPSHOT)" in */*/*|*..*) echo 'THESIS_SNAPSHOT must be a direct named child of thesis_results' >&2; exit 2;; esac
 	@test "$(THESIS_SNAPSHOT)" != "thesis_results/current" && test "$(notdir $(THESIS_SNAPSHOT))" != "current" || { echo 'Set THESIS_SNAPSHOT=thesis_results/<named-snapshot>; historical promotion cannot target current' >&2; exit 2; }
 	$(PY_ENV) $(PYTHON) scripts/thesis_snapshot.py promote --historical --pack $(THESIS_PACK) --out $(THESIS_SNAPSHOT)
 
@@ -213,7 +215,7 @@ upmem-hw-taskgraph-resident:
 	@exit 2
 
 upmem-hw-taskgraph-resident-report:
-	@test -f "$(UPMEM_HW_TASKGRAPH_RESIDENT_RUN)/normalized_records.jsonl" || { echo 'Set UPMEM_HW_TASKGRAPH_RESIDENT_RUN=<future resident-route evidence directory>' >&2; exit 2; }
+	$(PY_ENV) $(PYTHON) scripts/research_benchmark_pack.py check-resident-evidence --input $(UPMEM_HW_TASKGRAPH_RESIDENT_RUN)
 	$(PY_ENV) $(PYTHON) scripts/research_benchmark_pack.py report --input $(UPMEM_HW_TASKGRAPH_RESIDENT_RUN) --label upmem_hw_taskgraph_resident
 
 list-runs:

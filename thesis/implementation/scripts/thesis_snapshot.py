@@ -92,10 +92,12 @@ def main(argv: list[str] | None = None) -> int:
 
 def promote_snapshot(pack: Path, out: Path, *, historical: bool = False) -> int:
     pack = pack.resolve()
-    out = out.resolve()
-    current_snapshot = (ROOT / "thesis_results" / "current").resolve()
-    if historical and out == current_snapshot:
-        raise ValueError("historical evidence promotion requires a named snapshot other than thesis_results/current")
+    requested_out = Path(out)
+    if not requested_out.is_absolute():
+        requested_out = ROOT / requested_out
+    out = requested_out.resolve()
+    if historical:
+        _validate_historical_destination(requested_out, out)
     manifest_path = pack / "benchmark_manifest.json"
     if not manifest_path.exists():
         raise ValueError(f"research pack manifest missing: {manifest_path}")
@@ -191,6 +193,18 @@ def promote_snapshot(pack: Path, out: Path, *, historical: bool = False) -> int:
     shutil.rmtree(backup, ignore_errors=True)
     print(out.resolve())
     return 0
+
+
+def _validate_historical_destination(requested: Path, resolved: Path) -> None:
+    """Constrain historical promotion to one named child of thesis_results."""
+    results_root = (ROOT / "thesis_results").resolve()
+    current_snapshot = results_root / "current"
+    if ".." in requested.parts:
+        raise ValueError("historical evidence promotion destination cannot contain path traversal")
+    if resolved.parent != results_root:
+        raise ValueError("historical evidence promotion destination must be a direct child of thesis_results")
+    if resolved in {results_root, current_snapshot}:
+        raise ValueError("historical evidence promotion requires a named snapshot other than thesis_results/current")
 
 
 def verify_snapshot(snapshot: Path) -> None:

@@ -30,6 +30,8 @@ from quantum_bench.bench.result_artifacts import load_result_records  # noqa: E4
 SCHEMA_VERSION = "research_benchmark_pack_v1"
 RESEARCH_PACK_KIND = "research_benchmark_pack"
 DEFAULT_COMPARISON_ROOT = ROOT / "runs" / "comparisons" / "research_pack"
+RESIDENT_SUITE_ID = "upmem_hardware_taskgraph_resident_path_quantization"
+RESIDENT_ROUTE_ID = "upmem_tn_hardware_taskgraph_resident"
 
 RESEARCH_SUITES = {
     "cpu_gpu": ROOT / "configs" / "suites" / "manual" / "thesis_full_state_cpu_gpu.yml",
@@ -224,6 +226,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Auto-discover latest evidence for a suite group.",
     )
 
+    resident_check = subparsers.add_parser(
+        "check-resident-evidence",
+        help="Validate suite and route provenance before labeling resident evidence.",
+    )
+    resident_check.add_argument("--input", type=Path, required=True)
+
     args = parser.parse_args(argv)
     if args.command == "plan":
         print_plan(args.root)
@@ -244,6 +252,12 @@ def main(argv: list[str] | None = None) -> int:
             inputs=[Path(item) for item in args.inputs or ()],
             suite_filter=args.suite,
         )
+    if args.command == "check-resident-evidence":
+        try:
+            return check_resident_evidence(args.input)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(f"Resident evidence blocker: {exc}", file=sys.stderr)
+            return 2
     raise AssertionError(f"unknown command: {args.command}")
 
 
@@ -262,6 +276,39 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Named comparison output namespace (for example: planner_v2).",
     )
+
+
+def check_resident_evidence(run_dir: Path) -> int:
+    """Reject arbitrary normalized files before the resident report shortcut."""
+    run_dir = run_dir.resolve()
+    manifest_path = run_dir / "run_manifest.json"
+    records_path = run_dir / "normalized_records.jsonl"
+    if not manifest_path.is_file() or not records_path.is_file():
+        raise ValueError("resident evidence requires run_manifest.json and normalized_records.jsonl")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if str(manifest.get("suite_id") or "") != RESIDENT_SUITE_ID:
+        raise ValueError(
+            f"resident evidence suite_id must be {RESIDENT_SUITE_ID}"
+        )
+    records = [
+        json.loads(line)
+        for line in records_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    if not records:
+        raise ValueError("resident evidence normalized_records.jsonl is empty")
+    invalid = [
+        record
+        for record in records
+        if str(record.get("suite_id") or "") != RESIDENT_SUITE_ID
+        or str(record.get("route_id") or "") != RESIDENT_ROUTE_ID
+    ]
+    if invalid:
+        raise ValueError(
+            "resident evidence normalized records must all carry the resident suite and route provenance"
+        )
+    print(f"Verified resident evidence provenance for {len(records)} normalized records")
+    return 0
 
 
 def print_plan(root: Path = ROOT) -> None:
@@ -4355,23 +4402,35 @@ def benchmark_summary(
                 f"{row['functionality_evidence_status']} |"
             )
     if one_dpu_rows:
-        ready_count = sum(
-            1 for row in one_dpu_rows if row.get("study_comparison_ready") is True
-        )
+        rows_by_route: dict[str, list[JsonDict]] = defaultdict(list)
+        for row in one_dpu_rows:
+            rows_by_route[str(row.get("route_id") or "unknown")].append(row)
         lines.extend(
             [
                 "",
                 "## Physical One-DPU Path And Quantization Study",
                 "",
-                "This section reports physical host-rehydrated, sequential steady-state execution on one DPU per circuit case. It compares two selected paths and float32 versus per-task int8 within this route only; ratios are not speedups and do not compare UPMEM with CPU, GPU, another backend, a resident route, or multiple DPUs.",
+                "This section reports route-partitioned physical one-DPU sequential steady-state evidence. Each route is kept separate; ratios are not speedups and do not compare UPMEM with CPU, GPU, or another backend.",
                 "",
-                f"- Runtime aggregate rows: `{len(one_dpu_rows)}`; comparison-ready rows: `{ready_count}`.",
                 f"- Compatible float32/int8 pairs: `{len(one_dpu_quantization_pairs)}` in `upmem_one_dpu_quantization_pairs.csv`.",
                 f"- Compatible path pairs: `{len(one_dpu_path_pairs)}` in `upmem_one_dpu_path_pairs.csv`.",
                 "- Aggregate timing and all individual component summaries are in `upmem_one_dpu_runtime_summary.csv`.",
                 "- `custom_upmem_v2` is a modeled float32/split-complex path selector; int8 is an execution-mode ablation, not evidence that the planner optimized an int8 path.",
             ]
         )
+        for route_id, route_rows in sorted(rows_by_route.items()):
+            ready_count = sum(
+                1 for row in route_rows if row.get("study_comparison_ready") is True
+            )
+            if route_id == _ONE_DPU_ROUTE:
+                scope = "physical host-rehydrated, sequential, one DPU; no resident-session or multi-DPU claim"
+            elif route_id == _ONE_DPU_RESIDENT_ROUTE:
+                scope = "future resident-route evidence only; no host-rehydrated or multi-DPU claim"
+            else:
+                scope = "unrecognized one-DPU route; route-specific interpretation required"
+            lines.append(
+                f"- Route `{route_id}`: `{len(route_rows)}` aggregate rows; `{ready_count}` comparison-ready; scope: {scope}."
+            )
     lines.extend(
         [
             "",
@@ -6339,6 +6398,26 @@ def _one_dpu_axes(plt: Any, rows: list[JsonDict], title: str, ylabel: str) -> tu
     return fig, flat_axes[: len(families)], grouped
 
 
+def _one_dpu_bar_positions(
+    rows: list[JsonDict], series_index: int, series_count: int
+) -> tuple[list[float], float]:
+    width = min(0.72 / max(series_count, 1), 0.18)
+    offset = (series_index - (series_count - 1) / 2.0) * width
+    return [float(_one_dpu_qubits(row) or 0) + offset for row in rows], width
+
+
+def _one_dpu_series(
+    rows: list[JsonDict], key: Callable[[JsonDict], object]
+) -> list[tuple[object, list[JsonDict]]]:
+    grouped: dict[object, list[JsonDict]] = defaultdict(list)
+    for row in rows:
+        grouped[key(row)].append(row)
+    return sorted(
+        ((series, sorted(items, key=lambda row: _one_dpu_qubits(row) or 0)) for series, items in grouped.items()),
+        key=lambda item: str(item[0]),
+    )
+
+
 def _plot_one_dpu_runtime(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
     selected = [
         row
@@ -6355,10 +6434,10 @@ def _plot_one_dpu_runtime(plt: Any, path: Path, rows: list[JsonDict]) -> str | N
         "Steady-state execution (s)",
     )
     for axis, family in zip(axes, sorted(grouped)):
-        series: dict[tuple[str, str], list[JsonDict]] = defaultdict(list)
+        series: dict[tuple[str, str, str, str], list[JsonDict]] = defaultdict(list)
         for row in grouped[family]:
-            series[(_one_dpu_short_path(row.get("path_variant_id")), _one_dpu_short_mode(row.get("quantization_mode")))].append(row)
-        for (short_path, short_mode), group in sorted(series.items()):
+            series[(str(row.get("route_id") or "route"), str(row.get("case_id") or "case"), _one_dpu_short_path(row.get("path_variant_id")), _one_dpu_short_mode(row.get("quantization_mode")))].append(row)
+        for (route_id, case_id, short_path, short_mode), group in sorted(series.items()):
             ordered = sorted(group, key=lambda row: _one_dpu_qubits(row) or 0)
             axis.errorbar(
                 [_one_dpu_qubits(row) for row in ordered],
@@ -6366,7 +6445,7 @@ def _plot_one_dpu_runtime(plt: Any, path: Path, rows: list[JsonDict]) -> str | N
                 yerr=[float(row.get("steady_state_graph_execution_s_iqr") or 0.0) / 2.0 for row in ordered],
                 marker="o",
                 capsize=3,
-                label=f"{short_path}/{short_mode}",
+                label=f"{route_id}/{case_id}/{short_path}/{short_mode}",
             )
         axis.legend(fontsize="x-small")
     _save_plot(fig, path)
@@ -6384,8 +6463,15 @@ def _plot_one_dpu_ratio(
         )
         is not None
     ]
+    if kind == "path":
+        selected = [
+            row
+            for row in selected
+            if row.get("left_path_variant_id") == "custom_upmem_v2_balanced"
+            and row.get("right_path_variant_id") == "opt_einsum_greedy"
+        ]
     if not selected:
-        return "no_compatible_one_dpu_pair_rows"
+        return "no_named_one_dpu_path_pair_rows" if kind == "path" else "no_compatible_one_dpu_pair_rows"
     fig, axes, grouped = _one_dpu_axes(
         plt,
         selected,
@@ -6393,14 +6479,25 @@ def _plot_one_dpu_ratio(
         "Runtime ratio (reference orientation)",
     )
     for axis, family in zip(axes, sorted(grouped)):
-        group = sorted(grouped[family], key=lambda row: _one_dpu_qubits(row) or 0)
-        axis.bar(
-            [_one_dpu_qubits(row) for row in group],
-            [float(row["steady_state_graph_execution_s_ratio_left_over_right"]) for row in group],
-            color="#0f766e",
+        series_key = (
+            (lambda row: (row.get("route_id"), row.get("case_id"), row.get("path_variant_id")))
+            if kind == "quantization"
+            else (lambda row: (row.get("route_id"), row.get("case_id"), row.get("numeric_mode")))
         )
+        series = _one_dpu_series(grouped[family], series_key)
+        for index, (_series_name, group) in enumerate(series):
+            positions, width = _one_dpu_bar_positions(group, index, len(series))
+            axis.bar(
+                positions,
+                [float(row["steady_state_graph_execution_s_ratio_left_over_right"]) for row in group],
+                width=width,
+                color="#0f766e",
+                label=str(_series_name),
+            )
         axis.axhline(1.0, color="#444444", linewidth=0.8)
-        axis.set_xticks([_one_dpu_qubits(row) for row in group])
+        axis.set_xticks(sorted({_one_dpu_qubits(row) for row in grouped[family]}))
+        if len(series) > 1:
+            axis.legend(fontsize="x-small")
         if kind == "quantization":
             axis.set_title("f32/none over int8")
         else:
@@ -6435,17 +6532,23 @@ def _plot_one_dpu_breakdown(plt: Any, path: Path, rows: list[JsonDict]) -> str |
         "Measured time (s)",
     )
     for axis, family in zip(axes, sorted(grouped)):
-        group = sorted(grouped[family], key=lambda row: _one_dpu_qubits(row) or 0)
-        bottoms = [0.0] * len(group)
-        for field in fields:
-            values = [float(row.get(f"{field}_median") or 0.0) for row in group]
-            axis.bar(
-                [_one_dpu_qubits(row) for row in group],
-                values,
-                bottom=bottoms,
-                label=field.removesuffix("_time_s"),
-            )
-            bottoms = [a + b for a, b in zip(bottoms, values)]
+        series = _one_dpu_series(
+            grouped[family],
+            lambda row: (row.get("route_id"), row.get("case_id"), _one_dpu_short_path(row.get("path_variant_id")), _one_dpu_short_mode(row.get("quantization_mode"))),
+        )
+        for index, (_series_name, group) in enumerate(series):
+            positions, width = _one_dpu_bar_positions(group, index, len(series))
+            bottoms = [0.0] * len(group)
+            for field in fields:
+                values = [float(row.get(f"{field}_median") or 0.0) for row in group]
+                axis.bar(
+                    positions,
+                    values,
+                    width=width,
+                    bottom=bottoms,
+                    label=field.removesuffix("_time_s"),
+                )
+                bottoms = [a + b for a, b in zip(bottoms, values)]
         axis.legend(fontsize="x-small", ncol=2)
     _save_plot(fig, path)
     return None
@@ -6469,12 +6572,21 @@ def _plot_one_dpu_metric(
         ylabel,
     )
     for axis, family in zip(axes, sorted(grouped)):
-        group = sorted(grouped[family], key=lambda row: _one_dpu_qubits(row) or 0)
-        axis.bar(
-            [_one_dpu_qubits(row) for row in group],
-            [float(row[field]) for row in group],
-            color="#2563eb",
+        series = _one_dpu_series(
+            grouped[family],
+            lambda row: (row.get("route_id"), row.get("case_id"), _one_dpu_short_path(row.get("path_variant_id")), _one_dpu_short_mode(row.get("quantization_mode"))),
         )
+        for index, (_series_name, group) in enumerate(series):
+            positions, width = _one_dpu_bar_positions(group, index, len(series))
+            axis.bar(
+                positions,
+                [float(row[field]) for row in group],
+                width=width,
+                color="#2563eb",
+                label=str(_series_name),
+            )
+        if len(series) > 1:
+            axis.legend(fontsize="x-small")
     _save_plot(fig, path)
     return None
 
@@ -6498,21 +6610,25 @@ def _plot_one_dpu_errors(plt: Any, path: Path, rows: list[JsonDict]) -> str | No
         "Recorded validation error",
     )
     for axis, family in zip(axes, sorted(grouped)):
-        group = sorted(grouped[family], key=lambda row: _one_dpu_qubits(row) or 0)
-        x = [_one_dpu_qubits(row) for row in group]
-        axis.bar(
-            [v - 0.18 for v in x],
-            [float(row.get("max_abs_error_median") or 0.0) for row in group],
-            0.36,
-            label="max abs",
+        series = _one_dpu_series(
+            grouped[family],
+            lambda row: (row.get("route_id"), row.get("case_id"), _one_dpu_short_path(row.get("path_variant_id")), _one_dpu_short_mode(row.get("quantization_mode"))),
         )
-        axis.bar(
-            [v + 0.18 for v in x],
-            [float(row.get("l2_error_median") or 0.0) for row in group],
-            0.36,
-            label="L2",
-        )
-        axis.set_xticks(x)
+        for index, (_series_name, group) in enumerate(series):
+            positions, width = _one_dpu_bar_positions(group, index, len(series))
+            axis.bar(
+                [position - width * 0.24 for position in positions],
+                [float(row.get("max_abs_error_median") or 0.0) for row in group],
+                width * 0.48,
+                label=f"{_series_name} max abs",
+            )
+            axis.bar(
+                [position + width * 0.24 for position in positions],
+                [float(row.get("l2_error_median") or 0.0) for row in group],
+                width * 0.48,
+                label=f"{_series_name} L2",
+            )
+        axis.set_xticks(sorted({_one_dpu_qubits(row) for row in grouped[family]}))
         axis.legend(fontsize="x-small")
     _save_plot(fig, path)
     return None

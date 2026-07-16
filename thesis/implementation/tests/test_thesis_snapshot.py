@@ -199,6 +199,19 @@ def test_historical_promotion_rejects_dirty_evidence_and_current_destination(
         )
 
 
+def test_historical_promotion_rejects_traversal_to_repository_root(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(thesis_snapshot, "ROOT", tmp_path)
+    with pytest.raises(ValueError, match="destination"):
+        thesis_snapshot.promote_snapshot(
+            tmp_path / "missing-pack",
+            tmp_path / "thesis_results" / "..",
+            historical=True,
+        )
+    assert not (tmp_path / "snapshot_manifest.json").exists()
+
+
 def test_normal_promotion_remains_strict_for_non_head_evidence(
     monkeypatch, tmp_path: Path
 ) -> None:

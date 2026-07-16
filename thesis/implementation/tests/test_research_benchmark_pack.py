@@ -35,6 +35,16 @@ class _FakeAxes:
         return lambda *args, **kwargs: None
 
 
+class _TracingAxes(_FakeAxes):
+    def __init__(self) -> None:
+        super().__init__()
+        self.bar_positions: list[list[float]] = []
+
+    def bar(self, positions, *args, **kwargs):
+        del args, kwargs
+        self.bar_positions.append(list(positions))
+
+
 class _FakePyplot:
     def __init__(self) -> None:
         self.axes = _FakeAxes()
@@ -45,6 +55,11 @@ class _FakePyplot:
 
     def close(self, fig) -> None:
         del fig
+
+
+class _TracingPyplot(_FakePyplot):
+    def __init__(self) -> None:
+        self.axes = _TracingAxes()
 
 
 def _install_fake_matplotlib(monkeypatch) -> _FakePyplot:
@@ -682,6 +697,42 @@ def test_one_dpu_report_statuses_separate_policy_pass_from_full_precision_thresh
     assert breakdown[0]["full_precision_accuracy_status"] == "threshold_failed"
 
 
+def test_one_dpu_aggregation_and_summary_keep_resident_route_separate() -> None:
+    persistent = _complete_one_dpu_records(path="path-a")
+    resident = [
+        dict(record, route_id=pack._ONE_DPU_RESIDENT_ROUTE)
+        for record in _complete_one_dpu_records(path="path-a", runtime=1.0)
+    ]
+    rows = pack.upmem_one_dpu_runtime_summary([*persistent, *resident])
+
+    assert {row["route_id"] for row in rows} == {
+        pack._ONE_DPU_ROUTE,
+        pack._ONE_DPU_RESIDENT_ROUTE,
+    }
+    summary = pack.benchmark_summary(
+        {"selected_suites": {}, "commands": []},
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        {"plots": []},
+        {"status": "ok"},
+        [],
+        one_dpu_rows=rows,
+        one_dpu_quantization_pairs=[],
+        one_dpu_path_pairs=[],
+    )
+
+    assert "physical host-rehydrated, sequential, one DPU" in summary
+    assert "future resident-route evidence only" in summary
+    assert "a resident route" not in summary
+
+
 def test_one_dpu_plot_manifest_marks_current_faceted_figures_readable_and_oriented(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -718,6 +769,49 @@ def test_one_dpu_plot_manifest_marks_current_faceted_figures_readable_and_orient
     assert "float32/none over int8" in by_name["upmem_one_dpu_quantization_ratio_by_path.png"]["caption"].lower()
     assert "custom_upmem_v2_balanced over opt_einsum_greedy" in by_name["upmem_one_dpu_path_ratio_by_numeric_mode.png"]["caption"]
     assert by_name["upmem_one_dpu_path_ratio_by_numeric_mode.png"]["layout_status"] == "readable"
+
+
+def test_one_dpu_metric_plot_offsets_same_qubit_path_mode_series() -> None:
+    pyplot = _TracingPyplot()
+    rows = pack.upmem_one_dpu_runtime_summary(
+        [
+            *_complete_one_dpu_records(mode="none", runtime=2.0),
+            *_complete_one_dpu_records(mode="int8", runtime=1.0),
+        ]
+    )
+
+    assert (
+        pack._plot_one_dpu_metric(
+            pyplot,
+            Path("/tmp/one-dpu-offset-test.png"),
+            rows,
+            "application_visible_transfer_bytes_median",
+            "Transfer bytes",
+        )
+        is None
+    )
+    assert len(pyplot.axes.bar_positions) == 2
+    assert pyplot.axes.bar_positions[0] != pyplot.axes.bar_positions[1]
+
+
+def test_one_dpu_path_ratio_plot_rejects_arbitrary_pair_orientation() -> None:
+    pyplot = _TracingPyplot()
+    generic_pair = {
+        "case_id": "case-one-dpu",
+        "case_family": "ghz",
+        "benchmark_n_qubits": 4,
+        "left_path_variant_id": "path-a",
+        "right_path_variant_id": "path-b",
+        "numeric_mode": "none",
+        "steady_state_graph_execution_s_ratio_left_over_right": 2.0,
+    }
+
+    assert (
+        pack._plot_one_dpu_ratio(
+            pyplot, Path("/tmp/one-dpu-generic-pair.png"), [generic_pair], "path"
+        )
+        == "no_named_one_dpu_path_pair_rows"
+    )
 
 
 def test_physical_quantization_uses_float32_full_precision_error_when_not_quantized() -> (
