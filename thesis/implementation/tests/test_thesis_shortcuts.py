@@ -120,6 +120,7 @@ def test_makefile_targets_parse_with_dry_run() -> None:
     ):
         result = subprocess.run(["make", "-n", target], cwd=ROOT, text=True, capture_output=True, check=False)
         assert result.returncode == 0, result.stderr
+        assert target != "setup" or "clean-quest" in result.stdout
         assert target != "bench-cpu" or "configs/suites/cpu_evidence.yml" in result.stdout
         assert target != "bench-gpu" or "configs/suites/gpu_evidence.yml" in result.stdout
         assert target != "bench-upmem-sim" or "configs/suites/upmem_sim_evidence.yml" in result.stdout

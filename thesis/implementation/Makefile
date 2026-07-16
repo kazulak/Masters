@@ -82,6 +82,7 @@ help:
 
 setup:
 	@python3 scripts/bootstrap_env.py
+	$(MAKE) -C native/quest_cpu clean-quest
 	$(MAKE) build-quest-cpu
 	$(MAKE) doctor
 
