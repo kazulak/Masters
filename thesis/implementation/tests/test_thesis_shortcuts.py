@@ -20,6 +20,10 @@ def test_makefile_shortcuts_are_defined() -> None:
 
     assert "CPU_SUITE ?= configs/suites/cpu_evidence.yml" in text
     assert "GPU_VERIFY ?= quest-hip" in text
+    assert (
+        "UPMEM_HW_TASKGRAPH_RUN ?= "
+        "runs/evidence/upmem_hardware_taskgraph_correctness/upmem_hw_taskgraph/latest"
+    ) in text
     for target in (
         "help",
         "build-quest-cpu",

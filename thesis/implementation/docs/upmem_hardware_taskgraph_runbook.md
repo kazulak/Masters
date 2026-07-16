@@ -33,7 +33,7 @@ Artifacts are retained below:
 
 ```text
 build/upmem_hardware_taskgraph_plan/<timestamp>/
-runs/evidence/upmem_hardware_taskgraph/<route>/<timestamp>/
+runs/evidence/upmem_hardware_taskgraph_correctness/<route>/<timestamp>/
 ```
 
 Keep the resolved suite, plan/run summaries, environment manifest, native

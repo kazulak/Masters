@@ -24,7 +24,7 @@ On ETH, archive the *completed evidence run directory*, not a source checkout.
 For the physical TaskGraph route, the source directory is normally:
 
 ```bash
-RUN=$(readlink -f ~/work/Masters/thesis/implementation/runs/evidence/upmem_hardware_taskgraph/upmem_hw_taskgraph/latest)
+RUN=$(readlink -f ~/work/Masters/thesis/implementation/runs/evidence/upmem_hardware_taskgraph_correctness/upmem_hw_taskgraph/latest)
 tar -C "$(dirname "$RUN")" -czf ~/upmem_taskgraph_$(date -u +%Y-%m-%d_%H-%M-%S).tar.gz "$(basename "$RUN")"
 ```
 
@@ -35,9 +35,9 @@ make evidence-inbox
 scp safari-baguette1:~/upmem_taskgraph_<timestamp>.tar.gz runs/inbox/eth/
 tar -tzf runs/inbox/eth/upmem_taskgraph_<timestamp>.tar.gz | head
 
-mkdir -p runs/evidence/upmem_hardware_taskgraph/upmem_hw_taskgraph
+mkdir -p runs/evidence/upmem_hardware_taskgraph_correctness/upmem_hw_taskgraph
 tar -xzf runs/inbox/eth/upmem_taskgraph_<timestamp>.tar.gz \
-  -C runs/evidence/upmem_hardware_taskgraph/upmem_hw_taskgraph
+  -C runs/evidence/upmem_hardware_taskgraph_correctness/upmem_hw_taskgraph
 ```
 
 The archive must unpack to one timestamped run directory containing at least:
@@ -66,7 +66,7 @@ Report from the exact extracted run. Do not rerun the hardware benchmark just
 to make plots:
 
 ```bash
-RUN=runs/evidence/upmem_hardware_taskgraph/upmem_hw_taskgraph/<timestamp>
+RUN=runs/evidence/upmem_hardware_taskgraph_correctness/upmem_hw_taskgraph/<timestamp>
 make upmem-hw-taskgraph-report UPMEM_HW_TASKGRAPH_RUN="$RUN"
 ```
 
