@@ -23,6 +23,8 @@ UPMEM_HW_TASKGRAPH_SUITE ?= configs/suites/upmem_hardware_taskgraph_correctness.
 UPMEM_HW_TASKGRAPH_RUN ?= runs/evidence/upmem_hardware_taskgraph_correctness/upmem_hw_taskgraph/latest
 UPMEM_HW_TASKGRAPH_STUDY_SUITE ?= configs/suites/upmem_hardware_taskgraph_path_quantization.yml
 UPMEM_HW_TASKGRAPH_STUDY_RUN ?= runs/evidence/upmem_hardware_taskgraph_path_quantization/upmem_hw_taskgraph_study/latest
+UPMEM_HW_TASKGRAPH_RESIDENT_SUITE ?= configs/suites/upmem_hardware_taskgraph_resident_path_quantization.yml
+UPMEM_HW_TASKGRAPH_RESIDENT_RUN ?= runs/evidence/upmem_hardware_taskgraph_resident_path_quantization/upmem_hw_taskgraph_resident/latest
 EVIDENCE_INBOX ?= runs/inbox/eth
 GPU_VERIFY ?= quest-hip
 CLEAN_RUNS ?= 0
@@ -48,12 +50,16 @@ PUBLIC_TARGETS := \
 	upmem-hw-taskgraph-study-plan \
 	upmem-hw-taskgraph-study \
 	upmem-hw-taskgraph-study-report \
+	upmem-hw-taskgraph-resident-plan \
+	upmem-hw-taskgraph-resident \
+	upmem-hw-taskgraph-resident-report \
 	evidence-inbox \
 	research-plan \
 	planner-evidence \
 	planner-report \
 	thesis-run \
 	thesis-promote \
+	thesis-promote-historical \
 	thesis-verify \
 	thesis-report \
 	list-runs \
@@ -84,6 +90,9 @@ help:
 		'  make upmem-hw-taskgraph-study-plan  Prepare/build the physical TaskGraph path/quantization study; never allocates a DPU' \
 		'  make upmem-hw-taskgraph-study  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; runs the physical TaskGraph path/quantization study' \
 		'  make upmem-hw-taskgraph-study-report  Generate the labeled report from the latest physical TaskGraph study evidence' \
+		'  make upmem-hw-taskgraph-resident-plan  Show the future resident-route suite/config without running a resident runtime' \
+		'  make upmem-hw-taskgraph-resident  Reserved future resident-route execution target; runtime is not implemented' \
+		'  make upmem-hw-taskgraph-resident-report  Generate a report from explicitly supplied future resident-route evidence' \
 		'  make evidence-inbox     Create the ignored inbox for copied ETH evidence bundles' \
 		'  make research-plan      Show the research benchmark plan' \
 		'  make planner-evidence   Run modeled planner v2 evidence into runs/comparisons/planner_v2/' \
@@ -91,6 +100,8 @@ help:
 		'  make thesis-run BENCH_CPU_THREADS=<physical cores>' \
 		'                           Run the controlled thesis benchmark matrix' \
 		'  make thesis-promote     Promote the latest research pack into tracked thesis_results/current' \
+		'  make thesis-promote-historical THESIS_SNAPSHOT=thesis_results/<name>' \
+		'                           Explicitly promote clean historical evidence into a named snapshot; never use current' \
 		'  make thesis-verify      Verify tracked thesis results without rerunning benchmarks' \
 		'  make thesis-report      Regenerate tracked tables and plots from thesis_results/current' \
 		'  make thesis-clean       Preview stale generated run cleanup; add APPLY=1 to remove' \
@@ -184,11 +195,26 @@ thesis-run: build-quest-cpu
 thesis-promote:
 	$(PY_ENV) $(PYTHON) scripts/thesis_snapshot.py promote --pack $(THESIS_PACK) --out $(THESIS_SNAPSHOT)
 
+thesis-promote-historical:
+	@test "$(THESIS_SNAPSHOT)" != "thesis_results/current" && test "$(notdir $(THESIS_SNAPSHOT))" != "current" || { echo 'Set THESIS_SNAPSHOT=thesis_results/<named-snapshot>; historical promotion cannot target current' >&2; exit 2; }
+	$(PY_ENV) $(PYTHON) scripts/thesis_snapshot.py promote --historical --pack $(THESIS_PACK) --out $(THESIS_SNAPSHOT)
+
 thesis-verify:
 	$(PY_ENV) $(PYTHON) scripts/thesis_snapshot.py verify --snapshot $(THESIS_SNAPSHOT)
 
 thesis-report:
 	$(PY_ENV) $(PYTHON) scripts/thesis_snapshot.py report --snapshot $(THESIS_SNAPSHOT)
+
+upmem-hw-taskgraph-resident-plan:
+	@printf '%s\n' 'Future resident TaskGraph route plan (no runtime invoked):' '  suite=$(UPMEM_HW_TASKGRAPH_RESIDENT_SUITE)' '  run=$(UPMEM_HW_TASKGRAPH_RESIDENT_RUN)' '  route=upmem_tn_hardware_taskgraph_resident'
+
+upmem-hw-taskgraph-resident:
+	@echo 'Resident TaskGraph runtime is reserved for a future implementation; no runtime was invoked.' >&2
+	@exit 2
+
+upmem-hw-taskgraph-resident-report:
+	@test -f "$(UPMEM_HW_TASKGRAPH_RESIDENT_RUN)/normalized_records.jsonl" || { echo 'Set UPMEM_HW_TASKGRAPH_RESIDENT_RUN=<future resident-route evidence directory>' >&2; exit 2; }
+	$(PY_ENV) $(PYTHON) scripts/research_benchmark_pack.py report --input $(UPMEM_HW_TASKGRAPH_RESIDENT_RUN) --label upmem_hw_taskgraph_resident
 
 list-runs:
 	$(PY_ENV) $(PYTHON) scripts/thesis_runs.py list

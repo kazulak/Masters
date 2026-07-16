@@ -980,6 +980,8 @@ UPMEM_PHYSICAL_TASKGRAPH_FIELDS = [
     "split_complex_component_count",
     "status",
     "validation_status",
+    "policy_reference_validation_status",
+    "full_precision_accuracy_status",
     "validation_passed",
     "validation_max_abs_error",
     "full_precision_max_abs_error",
@@ -1016,6 +1018,8 @@ UPMEM_PHYSICAL_TASKGRAPH_FIELDS = [
 UPMEM_ONE_DPU_RUNTIME_FIELDS = [
     "schema_version",
     "route_id",
+    "case_family",
+    "benchmark_n_qubits",
     "case_id",
     "path_variant_id",
     "planner_config_hash",
@@ -1038,6 +1042,8 @@ UPMEM_ONE_DPU_RUNTIME_FIELDS = [
     "duplicate_repeat_ids",
     "study_comparison_ready",
     "study_comparison_reason",
+    "policy_reference_validation_status",
+    "full_precision_accuracy_status",
     "hardware_profile_version",
     "session_protocol",
     "host_binary_hash",
@@ -1066,6 +1072,9 @@ for _metric in (
 UPMEM_ONE_DPU_QUANTIZATION_PAIR_FIELDS = [
     "schema_version",
     "case_id",
+    "case_family",
+    "benchmark_n_qubits",
+    "route_id",
     "path_variant_id",
     "numeric_mode_left",
     "numeric_mode_right",
@@ -1086,6 +1095,9 @@ UPMEM_ONE_DPU_QUANTIZATION_PAIR_FIELDS = [
 UPMEM_ONE_DPU_PATH_PAIR_FIELDS = [
     "schema_version",
     "case_id",
+    "case_family",
+    "benchmark_n_qubits",
+    "route_id",
     "numeric_mode",
     "left_path_variant_id",
     "right_path_variant_id",
@@ -2253,6 +2265,12 @@ def upmem_physical_taskgraph_breakdown(records: list[JsonDict]) -> list[JsonDict
                 ),
                 "status": record.get("status"),
                 "validation_status": validation_status,
+                "policy_reference_validation_status": _report_accuracy_status(
+                    record, "policy_reference_validation"
+                ),
+                "full_precision_accuracy_status": _report_accuracy_status(
+                    record, "full_precision_accuracy"
+                ),
                 "validation_passed": validation_status
                 in {"passed", "passed_native_status", "passed_runtime_only"},
                 "validation_max_abs_error": _physical_number(
@@ -2330,6 +2348,8 @@ def upmem_physical_taskgraph_breakdown(records: list[JsonDict]) -> list[JsonDict
 
 
 _ONE_DPU_ROUTE = "upmem_tn_hardware_taskgraph_persistent"
+_ONE_DPU_RESIDENT_ROUTE = "upmem_tn_hardware_taskgraph_resident"
+_ONE_DPU_ROUTES = {_ONE_DPU_ROUTE, _ONE_DPU_RESIDENT_ROUTE}
 _ONE_DPU_HASH_FIELDS = (
     "planner_config_hash",
     "circuit_semantics_hash",
@@ -2362,7 +2382,7 @@ _ONE_DPU_EXPECTED_REPEAT_IDS = tuple(range(7))
 
 def _is_valid_one_dpu_record(record: JsonDict) -> bool:
     return (
-        record.get("route_id") == _ONE_DPU_ROUTE
+        record.get("route_id") in _ONE_DPU_ROUTES
         and record.get("status") == "completed"
         and record.get("validation_status") == "passed"
         and record.get("hardware_execution") is True
@@ -2397,6 +2417,61 @@ def _one_dpu_error(record: JsonDict, key: str) -> float | None:
     return _float_or_none(_validation_metric(record, key))
 
 
+def _accuracy_payload(record: JsonDict, key: str) -> JsonDict:
+    notes = _notes(record)
+    aliases = {
+        "policy_reference_validation": "policy_reference_accuracy",
+        "full_precision_accuracy": "final_full_precision_accuracy",
+    }
+    candidates = [
+        record.get(key),
+        record.get(aliases.get(key, "")),
+        notes.get(key),
+        notes.get(aliases.get(key, "")),
+    ]
+    for candidate in candidates:
+        if isinstance(candidate, dict):
+            return candidate
+    return {}
+
+
+def _report_accuracy_status(record: JsonDict, key: str) -> str:
+    """Derive a report-only status from raw validation metrics.
+
+    The study's route validation is the policy-reference gate. Full-precision
+    accuracy is a separate threshold check, so a full-precision threshold
+    failure must not be represented as a policy-reference failure.
+    """
+    payload = _accuracy_payload(record, key)
+    passed = payload.get("passed")
+    if isinstance(passed, bool):
+        if passed:
+            return "passed"
+        return "threshold_failed" if key == "full_precision_accuracy" else "failed"
+    if key == "policy_reference_validation":
+        raw_status = str(record.get("validation_status") or "").lower()
+        if raw_status in {"passed", "passed_native_status", "passed_runtime_only"}:
+            return "passed"
+    error = _float_or_none(payload.get("max_abs_error"))
+    tolerance = _float_or_none(payload.get("tolerance"))
+    if error is not None and tolerance is not None:
+        return "passed" if error <= tolerance else (
+            "threshold_failed" if key == "full_precision_accuracy" else "failed"
+        )
+    return "missing"
+
+
+def _aggregate_report_status(statuses: Iterable[str]) -> str:
+    observed = {status for status in statuses if status and status != "missing"}
+    if not observed:
+        return "missing"
+    if len(observed) == 1:
+        return next(iter(observed))
+    if "threshold_failed" in observed:
+        return "threshold_failed"
+    return "mixed"
+
+
 def upmem_one_dpu_runtime_summary(records: list[JsonDict]) -> list[JsonDict]:
     """Aggregate measured persistent one-DPU records by case/path/numeric mode."""
     groups: dict[tuple[object, ...], list[JsonDict]] = defaultdict(list)
@@ -2411,10 +2486,10 @@ def upmem_one_dpu_runtime_summary(records: list[JsonDict]) -> list[JsonDict]:
                 _nonempty_text(record.get(field))
                 for field in _ONE_DPU_EXECUTION_IDENTITY_FIELDS
             )
-            groups[(case, path, mode, *identity)].append(record)
+            groups[(str(record.get("route_id") or ""), case, path, mode, *identity)].append(record)
     rows: list[JsonDict] = []
     for key, group in sorted(groups.items()):
-        case, path, mode = key[:3]
+        route, case, path, mode = key[:4]
         first = group[0]
         repeat_ids = [
             item.get("repeat_id")
@@ -2454,7 +2529,7 @@ def upmem_one_dpu_runtime_summary(records: list[JsonDict]) -> list[JsonDict]:
         )
         row: JsonDict = {
             "schema_version": SCHEMA_VERSION,
-            "route_id": _ONE_DPU_ROUTE,
+            "route_id": first.get("route_id"),
             "case_id": case,
             "path_variant_id": path,
             "quantization_mode": mode,
@@ -2472,7 +2547,18 @@ def upmem_one_dpu_runtime_summary(records: list[JsonDict]) -> list[JsonDict]:
             "duplicate_repeat_ids": duplicate_repeat_ids,
             "study_comparison_ready": comparison_reason is None,
             "study_comparison_reason": comparison_reason,
+            "policy_reference_validation_status": _aggregate_report_status(
+                _report_accuracy_status(item, "policy_reference_validation")
+                for item in group
+            ),
+            "full_precision_accuracy_status": _aggregate_report_status(
+                _report_accuracy_status(item, "full_precision_accuracy")
+                for item in group
+            ),
         }
+        family, qubits = _family_and_qubits(first)
+        row["case_family"] = family
+        row["benchmark_n_qubits"] = qubits["benchmark_n_qubits"]
         for field in _ONE_DPU_HASH_FIELDS:
             values = {_nonempty_text(item.get(field)) for item in group}
             row[field] = next(iter(values)) if len(values) == 1 else None
@@ -2493,7 +2579,13 @@ def upmem_one_dpu_runtime_summary(records: list[JsonDict]) -> list[JsonDict]:
 
 def _one_dpu_pair(left: JsonDict, right: JsonDict, *, kind: str) -> JsonDict:
     metrics = _ONE_DPU_METRICS
-    fields: JsonDict = {"schema_version": SCHEMA_VERSION, "case_id": left["case_id"]}
+    fields: JsonDict = {
+        "schema_version": SCHEMA_VERSION,
+        "case_id": left["case_id"],
+        "case_family": left.get("case_family"),
+        "benchmark_n_qubits": left.get("benchmark_n_qubits"),
+        "route_id": left.get("route_id"),
+    }
     if kind == "quantization":
         fields.update(
             {
@@ -2544,37 +2636,39 @@ def _one_dpu_pair(left: JsonDict, right: JsonDict, *, kind: str) -> JsonDict:
 
 def upmem_one_dpu_quantization_pairs(rows: list[JsonDict]) -> list[JsonDict]:
     """Pair numeric modes only when every structure/plan hash agrees."""
-    groups: dict[tuple[str, str], list[JsonDict]] = defaultdict(list)
+    groups: dict[tuple[str, str, str], list[JsonDict]] = defaultdict(list)
     for row in rows:
         if row.get("study_comparison_ready") is True and all(
             _nonempty_text(row.get(field))
             for field in (*_ONE_DPU_HASH_FIELDS, *_ONE_DPU_EXECUTION_IDENTITY_FIELDS)
         ):
-            groups[(row["case_id"], row["path_variant_id"])].append(row)
+            groups[(str(row.get("route_id") or ""), row["case_id"], row["path_variant_id"])].append(row)
     result = []
     for group in groups.values():
-        for index, left in enumerate(
-            sorted(group, key=lambda item: item["quantization_mode"])
+        full_precision = next(
+            (row for row in group if _one_dpu_numeric_mode(row) in {"none", "float32", "float32_no_quant", "no_quantization"}),
+            None,
+        )
+        quantized = next(
+            (row for row in group if _one_dpu_numeric_mode(row) in {"int8", "per_task_input_quantize", "int8_scaled", "fixed_scale_identity_int8"}),
+            None,
+        )
+        if full_precision is None or quantized is None:
+            continue
+        if (
+            full_precision.get("repeat_ids") == quantized.get("repeat_ids")
+            and all(
+                full_precision.get(field) == quantized.get(field)
+                for field in (*_ONE_DPU_HASH_FIELDS, *_ONE_DPU_EXECUTION_IDENTITY_FIELDS)
+            )
         ):
-            for right in group[index + 1 :]:
-                if (
-                    left["quantization_mode"] != right["quantization_mode"]
-                    and left.get("repeat_ids") == right.get("repeat_ids")
-                    and all(
-                        left.get(field) == right.get(field)
-                        for field in (
-                            *_ONE_DPU_HASH_FIELDS,
-                            *_ONE_DPU_EXECUTION_IDENTITY_FIELDS,
-                        )
-                    )
-                ):
-                    result.append(_one_dpu_pair(left, right, kind="quantization"))
+            result.append(_one_dpu_pair(full_precision, quantized, kind="quantization"))
     return result
 
 
 def upmem_one_dpu_path_pairs(rows: list[JsonDict]) -> list[JsonDict]:
     """Pair distinct path structures only within matching circuit/TN semantics."""
-    groups: dict[tuple[str, str], list[JsonDict]] = defaultdict(list)
+    groups: dict[tuple[str, str, str], list[JsonDict]] = defaultdict(list)
     for row in rows:
         if (
             row.get("study_comparison_ready") is True
@@ -2585,10 +2679,17 @@ def upmem_one_dpu_path_pairs(rows: list[JsonDict]) -> list[JsonDict]:
                 for field in _ONE_DPU_EXECUTION_IDENTITY_FIELDS
             )
         ):
-            groups[(row["case_id"], row["quantization_mode"])].append(row)
+            groups[(str(row.get("route_id") or ""), row["case_id"], row["quantization_mode"])].append(row)
     result = []
     for group in groups.values():
-        ordered = sorted(group, key=lambda item: item["path_variant_id"])
+        ordered = sorted(
+            group,
+            key=lambda item: (
+                0 if item.get("path_variant_id") == "custom_upmem_v2_balanced" else 1
+                if item.get("path_variant_id") == "opt_einsum_greedy" else 2,
+                str(item.get("path_variant_id") or ""),
+            ),
+        )
         for index, left in enumerate(ordered):
             for right in ordered[index + 1 :]:
                 if (
@@ -3145,6 +3246,7 @@ def write_plots(
                     "caption": spec.caption,
                     "status": "failed",
                     "reason": f"matplotlib_unavailable: {exc}",
+                    "layout_status": "unreadable",
                 }
                 for spec in _plot_specs(
                     stats_rows,
@@ -3213,6 +3315,13 @@ def write_plots(
             "caption": spec.caption,
             "status": outcome.status,
             "reason": outcome.reason,
+            "layout_status": (
+                "readable"
+                if outcome.status == "generated_valid"
+                else "unreadable"
+                if outcome.status == "failed"
+                else "not_rendered"
+            ),
         }
         if outcome.size_bytes is not None:
             entry["size_bytes"] = outcome.size_bytes
@@ -3762,9 +3871,9 @@ def _plot_specs(
                 "steady_state_graph_execution_s_ratio_left_over_right",
             ),
             "Matched path and structure/plan hashes for measured physical one-DPU steady-state execution; not hardware speedup.",
-            "Measured physical one-DPU steady-state ratio of numeric-mode medians by path; source CSV retains both IQRs, not hardware speedup.",
+            "Measured physical one-DPU float32/none over int8 quantized steady-state ratio by path; reference line is y=1 and this is not a hardware speedup.",
             "Case/path/numeric-mode comparison",
-            "Steady-state runtime ratio (left/right; not speedup)",
+            "Float32/none over int8 runtime ratio (reference y=1)",
             render(
                 _plot_one_dpu_ratio, one_dpu_quantization_pairs or [], "quantization"
             ),
@@ -3783,9 +3892,9 @@ def _plot_specs(
                 "steady_state_graph_execution_s_ratio_left_over_right",
             ),
             "Matched circuit and tensor-network hashes with differing path structures for measured physical one-DPU steady-state execution; not hardware speedup.",
-            "Measured physical one-DPU steady-state ratio of path medians by numeric mode; source CSV retains both IQRs, not hardware speedup.",
+            "Measured physical one-DPU custom_upmem_v2_balanced over opt_einsum_greedy steady-state ratio by numeric mode; reference line is y=1 and this is not a hardware speedup.",
             "Case/numeric-mode/path comparison",
-            "Steady-state runtime ratio (left/right; not speedup)",
+            "custom_upmem_v2_balanced over opt_einsum_greedy ratio (reference y=1)",
             render(_plot_one_dpu_ratio, one_dpu_path_pairs or [], "path"),
             variance_fields=("steady_state_graph_execution_s_ratio_left_over_right",),
             allow_zero_variance=True,
@@ -4254,7 +4363,7 @@ def benchmark_summary(
                 "",
                 "## Physical One-DPU Path And Quantization Study",
                 "",
-                "This section reports measured steady-state execution inside one persistent physical one-DPU session per circuit case. It compares two selected paths and float32 versus per-task int8 within this one route only; ratios are not speedups and do not compare UPMEM with CPU, GPU, or another backend.",
+                "This section reports physical host-rehydrated, sequential steady-state execution on one DPU per circuit case. It compares two selected paths and float32 versus per-task int8 within this route only; ratios are not speedups and do not compare UPMEM with CPU, GPU, another backend, a resident route, or multiple DPUs.",
                 "",
                 f"- Runtime aggregate rows: `{len(one_dpu_rows)}`; comparison-ready rows: `{ready_count}`.",
                 f"- Compatible float32/int8 pairs: `{len(one_dpu_quantization_pairs)}` in `upmem_one_dpu_quantization_pairs.csv`.",
@@ -4675,6 +4784,7 @@ def _upmem_readiness_lines(
         if row.get("contraction_execution_target") == "upmem"
         or row.get("upmem_execution_mode")
         in {"sdk_simulator", "sdk_hardware_single_dpu"}
+        or _is_one_dpu_route_record(row)
     ]
     if not upmem_records:
         return [
@@ -4686,6 +4796,13 @@ def _upmem_readiness_lines(
     ]
     generic_hardware_records = [
         row for row in upmem_records if _is_hardware_generic_mvp_record(row)
+    ]
+    one_dpu_records = [row for row in upmem_records if _is_one_dpu_route_record(row)]
+    host_rehydrated_records = [
+        row for row in one_dpu_records if row.get("route_id") == _ONE_DPU_ROUTE
+    ]
+    resident_records = [
+        row for row in one_dpu_records if row.get("route_id") == _ONE_DPU_RESIDENT_ROUTE
     ]
     simulator_records = [
         row
@@ -4776,6 +4893,26 @@ def _upmem_readiness_lines(
                 "- Physical generic TaskGraph scope: one DPU, one tasklet, one synthetic real-valued contraction; this is functionality evidence only, not a general quantum-TN, performance, energy, scaling, or scheduler result.",
             ]
         )
+    if host_rehydrated_records:
+        completed = sum(
+            1
+            for row in host_rehydrated_records
+            if str(row.get("status") or "") == "completed"
+        )
+        cases = sorted(
+            {str(row.get("case_id") or "unknown") for row in host_rehydrated_records}
+        )
+        lines.extend(
+            [
+                f"- Physical UPMEM host-rehydrated one-DPU TaskGraph study rows: {len(one_dpu_records)}; completed: {completed}.",
+                f"- Physical host-rehydrated study cases: {', '.join(f'`{case}`' for case in cases)}.",
+                "- Host-rehydrated scope: physical hardware, sequential TaskGraph execution, one DPU; no resident-session claim and no multi-DPU claim.",
+            ]
+        )
+    if resident_records:
+        lines.append(
+            f"- Future resident-route records loaded: {len(resident_records)}; these are reported separately and do not establish host-rehydrated or multi-DPU claims."
+        )
     lines.extend(
         [
             f"- UPMEM SDK simulator rows: {len(simulator_records)}.",
@@ -4835,7 +4972,10 @@ def _missing_evidence(records: list[JsonDict]) -> list[str]:
         missing.append(
             "Strict generic-only UPMEM SDK-simulator boundary records are absent."
         )
-    if not any(_is_physical_hardware_mvp_record(record) for record in records):
+    if not any(
+        _is_physical_hardware_mvp_record(record) or _is_one_dpu_route_record(record)
+        for record in records
+    ):
         missing.append(
             "Physical single-DPU UPMEM functionality-MVP records are absent."
         )
@@ -6138,9 +6278,65 @@ def _plot_physical_taskgraph_timing(
 
 def _one_dpu_labels(rows: list[JsonDict]) -> list[str]:
     return [
-        f"{row.get('case_id')} / {row.get('path_variant_id')} / {row.get('quantization_mode')}"
+        f"{row.get('path_variant_id')} / {row.get('quantization_mode')}"
         for row in rows
     ]
+
+
+def _one_dpu_family(row: JsonDict) -> str:
+    family = _nonempty_text(row.get("case_family"))
+    if family:
+        return family
+    return _family_and_qubits(row)[0] or "unknown"
+
+
+def _one_dpu_qubits(row: JsonDict) -> int | None:
+    value = _int_or_none(
+        row.get("benchmark_n_qubits")
+        if row.get("benchmark_n_qubits") is not None
+        else row.get("n_qubits")
+    )
+    return value if value is not None else 0
+
+
+def _one_dpu_short_path(value: object) -> str:
+    return {
+        "opt_einsum_greedy": "greedy",
+        "custom_upmem_v2_balanced": "custom-v2",
+    }.get(str(value), str(value))
+
+
+def _one_dpu_short_mode(value: object) -> str:
+    text = str(value)
+    return "f32" if text in {"none", "float32", "float32_no_quant", "no_quantization"} else "int8" if text in {"int8", "per_task_input_quantize", "int8_scaled", "fixed_scale_identity_int8"} else text
+
+
+def _one_dpu_axes(plt: Any, rows: list[JsonDict], title: str, ylabel: str) -> tuple[Any, list[Any], dict[str, list[JsonDict]]]:
+    families = sorted({_one_dpu_family(row) for row in rows})
+    grouped = {family: [row for row in rows if _one_dpu_family(row) == family] for family in families}
+    columns = min(3, max(1, len(families)))
+    rows_count = max(1, math.ceil(len(families) / columns))
+    fig, axes = plt.subplots(
+        rows_count,
+        columns,
+        figsize=(4.4 * columns, 3.4 * rows_count),
+        constrained_layout=True,
+        squeeze=False,
+    )
+    flat = getattr(axes, "flat", ())
+    flat_axes = [] if callable(flat) else list(flat)
+    if not flat_axes:
+        flat_axes = [axes]
+    for axis, family in zip(flat_axes, families):
+        axis.set_title(family)
+        axis.set_xlabel("Qubits")
+        axis.set_ylabel(ylabel)
+        axis.grid(True, axis="y", alpha=0.3)
+    for axis in flat_axes[len(families):]:
+        axis.axis("off")
+    if hasattr(fig, "suptitle"):
+        fig.suptitle(title)
+    return fig, flat_axes[: len(families)], grouped
 
 
 def _plot_one_dpu_runtime(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
@@ -6152,30 +6348,27 @@ def _plot_one_dpu_runtime(plt: Any, path: Path, rows: list[JsonDict]) -> str | N
     ]
     if not selected:
         return "no_measured_one_dpu_steady_state_rows"
-    labels = _one_dpu_labels(selected)
-    fig, ax = plt.subplots(
-        figsize=(max(8.0, len(labels) * 0.6), 5.2), constrained_layout=True
+    fig, axes, grouped = _one_dpu_axes(
+        plt,
+        selected,
+        "Physical one-DPU steady-state execution by family",
+        "Steady-state execution (s)",
     )
-    values = [float(row["steady_state_graph_execution_s_median"]) for row in selected]
-    errors = [
-        float(row.get("steady_state_graph_execution_s_iqr") or 0.0) / 2.0
-        for row in selected
-    ]
-    ax.errorbar(
-        range(len(values)),
-        values,
-        yerr=errors,
-        fmt="o",
-        capsize=4,
-        label="median +/- half IQR",
-    )
-    ax.set_xticks(range(len(labels)))
-    ax.set_xticklabels(labels, rotation=60, ha="right", fontsize=8)
-    ax.set_ylabel("Steady-state graph execution (s)")
-    ax.set_title(
-        "Measured physical one-DPU steady-state execution (not hardware speedup)"
-    )
-    ax.grid(True, axis="y", alpha=0.3)
+    for axis, family in zip(axes, sorted(grouped)):
+        series: dict[tuple[str, str], list[JsonDict]] = defaultdict(list)
+        for row in grouped[family]:
+            series[(_one_dpu_short_path(row.get("path_variant_id")), _one_dpu_short_mode(row.get("quantization_mode")))].append(row)
+        for (short_path, short_mode), group in sorted(series.items()):
+            ordered = sorted(group, key=lambda row: _one_dpu_qubits(row) or 0)
+            axis.errorbar(
+                [_one_dpu_qubits(row) for row in ordered],
+                [float(row["steady_state_graph_execution_s_median"]) for row in ordered],
+                yerr=[float(row.get("steady_state_graph_execution_s_iqr") or 0.0) / 2.0 for row in ordered],
+                marker="o",
+                capsize=3,
+                label=f"{short_path}/{short_mode}",
+            )
+        axis.legend(fontsize="x-small")
     _save_plot(fig, path)
     return None
 
@@ -6193,37 +6386,25 @@ def _plot_one_dpu_ratio(
     ]
     if not selected:
         return "no_compatible_one_dpu_pair_rows"
-    if kind == "quantization":
-        labels = [
-            f"{row.get('case_id')} / {row.get('path_variant_id')} / "
-            f"{row.get('numeric_mode_left')} over {row.get('numeric_mode_right')}"
-            for row in selected
-        ]
-    else:
-        labels = [
-            f"{row.get('case_id')} / {row.get('numeric_mode')} / "
-            f"{row.get('left_path_variant_id')} over {row.get('right_path_variant_id')}"
-            for row in selected
-        ]
-    fig, ax = plt.subplots(
-        figsize=(max(8.0, len(labels) * 0.6), 5.2), constrained_layout=True
+    fig, axes, grouped = _one_dpu_axes(
+        plt,
+        selected,
+        f"Physical one-DPU {kind} runtime ratio by family",
+        "Runtime ratio (reference orientation)",
     )
-    ax.bar(
-        range(len(labels)),
-        [
-            float(row["steady_state_graph_execution_s_ratio_left_over_right"])
-            for row in selected
-        ],
-        color="#0f766e",
-    )
-    ax.axhline(1.0, color="#444444", linewidth=0.8)
-    ax.set_xticks(range(len(labels)))
-    ax.set_xticklabels(labels, rotation=60, ha="right", fontsize=8)
-    ax.set_ylabel("Steady-state runtime ratio (left / right; not speedup)")
-    ax.set_title(
-        f"Measured physical one-DPU {kind} runtime ratio (not hardware speedup)"
-    )
-    ax.grid(True, axis="y", alpha=0.3)
+    for axis, family in zip(axes, sorted(grouped)):
+        group = sorted(grouped[family], key=lambda row: _one_dpu_qubits(row) or 0)
+        axis.bar(
+            [_one_dpu_qubits(row) for row in group],
+            [float(row["steady_state_graph_execution_s_ratio_left_over_right"]) for row in group],
+            color="#0f766e",
+        )
+        axis.axhline(1.0, color="#444444", linewidth=0.8)
+        axis.set_xticks([_one_dpu_qubits(row) for row in group])
+        if kind == "quantization":
+            axis.set_title("f32/none over int8")
+        else:
+            axis.set_title("custom-v2 over greedy")
     _save_plot(fig, path)
     return None
 
@@ -6247,24 +6428,25 @@ def _plot_one_dpu_breakdown(plt: Any, path: Path, rows: list[JsonDict]) -> str |
     ]
     if not selected:
         return "no_measured_one_dpu_timing_components"
-    fig, ax = plt.subplots(
-        figsize=(max(8.0, len(selected) * 0.6), 5.2), constrained_layout=True
+    fig, axes, grouped = _one_dpu_axes(
+        plt,
+        selected,
+        "Physical one-DPU timing breakdown by family",
+        "Measured time (s)",
     )
-    bottoms = [0.0] * len(selected)
-    for field in fields:
-        values = [float(row.get(f"{field}_median") or 0.0) for row in selected]
-        ax.bar(
-            range(len(selected)),
-            values,
-            bottom=bottoms,
-            label=field.removesuffix("_time_s"),
-        )
-        bottoms = [a + b for a, b in zip(bottoms, values)]
-    ax.set_xticks(range(len(selected)))
-    ax.set_xticklabels(_one_dpu_labels(selected), rotation=60, ha="right", fontsize=8)
-    ax.set_ylabel("Measured time (s)")
-    ax.set_title("Measured physical one-DPU timing breakdown (not hardware speedup)")
-    ax.legend(fontsize="small", ncol=2)
+    for axis, family in zip(axes, sorted(grouped)):
+        group = sorted(grouped[family], key=lambda row: _one_dpu_qubits(row) or 0)
+        bottoms = [0.0] * len(group)
+        for field in fields:
+            values = [float(row.get(f"{field}_median") or 0.0) for row in group]
+            axis.bar(
+                [_one_dpu_qubits(row) for row in group],
+                values,
+                bottom=bottoms,
+                label=field.removesuffix("_time_s"),
+            )
+            bottoms = [a + b for a, b in zip(bottoms, values)]
+        axis.legend(fontsize="x-small", ncol=2)
     _save_plot(fig, path)
     return None
 
@@ -6280,16 +6462,19 @@ def _plot_one_dpu_metric(
     ]
     if not selected:
         return "no_one_dpu_metric_rows"
-    fig, ax = plt.subplots(
-        figsize=(max(8.0, len(selected) * 0.6), 5.2), constrained_layout=True
+    fig, axes, grouped = _one_dpu_axes(
+        plt,
+        selected,
+        "Physical one-DPU metric by family",
+        ylabel,
     )
-    ax.bar(
-        range(len(selected)), [float(row[field]) for row in selected], color="#2563eb"
-    )
-    ax.set_xticks(range(len(selected)))
-    ax.set_xticklabels(_one_dpu_labels(selected), rotation=60, ha="right", fontsize=8)
-    ax.set_ylabel(ylabel)
-    ax.set_title("Measured physical one-DPU metric (not hardware speedup)")
+    for axis, family in zip(axes, sorted(grouped)):
+        group = sorted(grouped[family], key=lambda row: _one_dpu_qubits(row) or 0)
+        axis.bar(
+            [_one_dpu_qubits(row) for row in group],
+            [float(row[field]) for row in group],
+            color="#2563eb",
+        )
     _save_plot(fig, path)
     return None
 
@@ -6306,26 +6491,29 @@ def _plot_one_dpu_errors(plt: Any, path: Path, rows: list[JsonDict]) -> str | No
     ]
     if not selected:
         return "no_one_dpu_validation_error_rows"
-    fig, ax = plt.subplots(
-        figsize=(max(8.0, len(selected) * 0.6), 5.2), constrained_layout=True
+    fig, axes, grouped = _one_dpu_axes(
+        plt,
+        selected,
+        "Physical one-DPU validation error by family",
+        "Recorded validation error",
     )
-    x = list(range(len(selected)))
-    ax.bar(
-        [v - 0.18 for v in x],
-        [float(row.get("max_abs_error_median") or 0.0) for row in selected],
-        0.36,
-        label="max abs error",
-    )
-    ax.bar(
-        [v + 0.18 for v in x],
-        [float(row.get("l2_error_median") or 0.0) for row in selected],
-        0.36,
-        label="L2 error",
-    )
-    ax.set_xticks(x)
-    ax.set_xticklabels(_one_dpu_labels(selected), rotation=60, ha="right", fontsize=8)
-    ax.set_ylabel("Recorded validation error")
-    ax.legend(fontsize="small")
+    for axis, family in zip(axes, sorted(grouped)):
+        group = sorted(grouped[family], key=lambda row: _one_dpu_qubits(row) or 0)
+        x = [_one_dpu_qubits(row) for row in group]
+        axis.bar(
+            [v - 0.18 for v in x],
+            [float(row.get("max_abs_error_median") or 0.0) for row in group],
+            0.36,
+            label="max abs",
+        )
+        axis.bar(
+            [v + 0.18 for v in x],
+            [float(row.get("l2_error_median") or 0.0) for row in group],
+            0.36,
+            label="L2",
+        )
+        axis.set_xticks(x)
+        axis.legend(fontsize="x-small")
     _save_plot(fig, path)
     return None
 
@@ -6677,6 +6865,10 @@ def _is_hardware_generic_mvp_record(record: JsonDict) -> bool:
 
 def _is_physical_hardware_mvp_record(record: JsonDict) -> bool:
     return _is_hardware_mvp_record(record) or _is_hardware_generic_mvp_record(record)
+
+
+def _is_one_dpu_route_record(record: JsonDict) -> bool:
+    return str(record.get("route_id") or "") in _ONE_DPU_ROUTES
 
 
 def _is_physical_upmem_taskgraph_record(record: JsonDict) -> bool:

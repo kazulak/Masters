@@ -13,17 +13,24 @@ def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-def _evidence(root: Path, suite_id: str, role_name: str, *, source_dirty: bool = False) -> Path:
+def _evidence(
+    root: Path,
+    suite_id: str,
+    role_name: str,
+    *,
+    source_dirty: bool = False,
+    commit: str = "test-head",
+) -> Path:
     run = root / "runs" / "evidence" / suite_id / "route" / role_name
     _write_json(
         run / "run_manifest.json",
         {
             "suite_id": suite_id,
             "run_id": role_name,
-            "git_commit": "test-head",
+            "git_commit": commit,
             "dirty_tree": source_dirty,
             "dirty_worktree": source_dirty,
-            "benchmark_source_commit": "test-head",
+            "benchmark_source_commit": commit,
             "benchmark_source_worktree_dirty": source_dirty,
             "repository_worktree_dirty": False,
             "provenance_scope": "thesis/implementation",
@@ -117,6 +124,101 @@ def test_promote_snapshot_copies_compact_evidence_and_report(monkeypatch, tmp_pa
     assert report_manifest["report_generation_provenance"]["benchmark_source_worktree_dirty"] is False
 
 
+def test_historical_promotion_accepts_clean_non_head_evidence_and_records_stages(
+    monkeypatch, tmp_path: Path
+) -> None:
+    evidence = _evidence(
+        tmp_path,
+        "research_cpu_gpu",
+        "historical-run",
+        commit="historical-commit",
+    )
+    pack = tmp_path / "pack"
+    _write_json(
+        pack / "benchmark_manifest.json",
+        {
+            "benchmark_source_commit": "historical-commit",
+            "benchmark_source_worktree_dirty": False,
+            "evidence_inputs": [str(evidence)],
+        },
+    )
+    monkeypatch.setattr(thesis_snapshot, "report_pack", _fake_report)
+
+    def fake_git(*args: str) -> str:
+        if args[:2] == ("rev-parse", "HEAD"):
+            return "current-commit"
+        return ""
+
+    monkeypatch.setattr(thesis_snapshot, "_git", fake_git)
+    monkeypatch.setattr(thesis_snapshot, "ROOT", tmp_path)
+    out = tmp_path / "thesis_results" / "historical_clean"
+
+    assert thesis_snapshot.promote_snapshot(pack, out, historical=True) == 0
+    manifest = json.loads((out / "snapshot_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["historical_evidence_promotion"] is True
+    assert manifest["snapshot_id"] == "historical_clean"
+    assert manifest["benchmark_source_commit"] == "historical-commit"
+    assert manifest["report_generation_commit"] == "current-commit"
+    assert manifest["snapshot_promotion_commit"] == "current-commit"
+
+
+def test_historical_promotion_rejects_dirty_evidence_and_current_destination(
+    monkeypatch, tmp_path: Path
+) -> None:
+    dirty = _evidence(
+        tmp_path,
+        "research_cpu_gpu",
+        "historical-dirty",
+        source_dirty=True,
+        commit="historical-commit",
+    )
+    pack = tmp_path / "pack"
+    _write_json(
+        pack / "benchmark_manifest.json",
+        {
+            "benchmark_source_commit": "historical-commit",
+            "benchmark_source_worktree_dirty": False,
+            "evidence_inputs": [str(dirty)],
+        },
+    )
+    monkeypatch.setattr(thesis_snapshot, "report_pack", _fake_report)
+    monkeypatch.setattr(
+        thesis_snapshot,
+        "_git",
+        lambda *args: "current-commit" if args[:2] == ("rev-parse", "HEAD") else "",
+    )
+    monkeypatch.setattr(thesis_snapshot, "ROOT", tmp_path)
+
+    with pytest.raises(ValueError, match="evidence source is dirty"):
+        thesis_snapshot.promote_snapshot(
+            pack, tmp_path / "thesis_results" / "historical_dirty", historical=True
+        )
+    with pytest.raises(ValueError, match="named snapshot"):
+        thesis_snapshot.promote_snapshot(
+            pack, tmp_path / "thesis_results" / "current", historical=True
+        )
+
+
+def test_normal_promotion_remains_strict_for_non_head_evidence(
+    monkeypatch, tmp_path: Path
+) -> None:
+    evidence = _evidence(tmp_path, "research_cpu_gpu", "mismatched", commit="old-commit")
+    pack = tmp_path / "pack"
+    _write_json(
+        pack / "benchmark_manifest.json",
+        {
+            "benchmark_source_commit": "old-commit",
+            "benchmark_source_worktree_dirty": False,
+            "evidence_inputs": [str(evidence)],
+        },
+    )
+    monkeypatch.setattr(thesis_snapshot, "_git", lambda *args: "current-commit" if args[:2] == ("rev-parse", "HEAD") else "")
+    monkeypatch.setattr(thesis_snapshot, "ROOT", tmp_path)
+
+    with pytest.raises(ValueError, match="does not match current HEAD"):
+        thesis_snapshot.promote_snapshot(pack, tmp_path / "snapshot")
+
+
 def test_outside_repository_dirtiness_is_recorded_without_dirty_source(monkeypatch, tmp_path: Path) -> None:
     evidence = _evidence(tmp_path, "research_cpu_gpu", "run")
     pack = tmp_path / "pack"
@@ -179,6 +281,19 @@ def test_taskgraph_hardware_capsule_uses_a_distinct_role(tmp_path: Path) -> None
     entry = thesis_snapshot._copy_evidence_capsule(evidence, staging, set())
 
     assert entry["role"] == "upmem_hardware_taskgraph_correctness"
+
+
+def test_taskgraph_study_capsule_uses_host_rehydrated_role(tmp_path: Path) -> None:
+    evidence = _evidence(
+        tmp_path, "upmem_hardware_taskgraph_path_quantization", "study-run"
+    )
+    staging = tmp_path / "staging"
+    (staging / "evidence").mkdir(parents=True)
+    (staging / "suites").mkdir()
+
+    entry = thesis_snapshot._copy_evidence_capsule(evidence, staging, set())
+
+    assert entry["role"] == "physical_one_dpu_taskgraph_host_rehydrated"
 
 
 def test_dirty_implementation_source_fails_promotion(monkeypatch, tmp_path: Path) -> None:

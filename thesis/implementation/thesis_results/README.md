@@ -20,3 +20,9 @@ pack such as `--label planner_v2` is written under
 `latest` link. Raw tensor dumps and native build output are intentionally not
 tracked here. Raw ETH bundles first go to the ignored `runs/inbox/eth/` area;
 only reviewed compact evidence belongs in this directory.
+
+Historical promotion is an explicit exception to the normal exact-`HEAD`
+promotion gate. Use a named destination and clean evidence, for example
+`make thesis-promote-historical THESIS_SNAPSHOT=thesis_results/<name>`.
+Never target `thesis_results/current`; regular `make thesis-promote` remains
+strict exact-`HEAD` promotion.

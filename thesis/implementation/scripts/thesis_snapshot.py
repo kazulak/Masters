@@ -47,6 +47,7 @@ ROLE_BY_SUITE = {
     "upmem_hardware_mvp": "upmem_hardware_functionality",
     "upmem_hardware_generic_mvp": "upmem_hardware_generic_taskgraph_functionality",
     "upmem_hardware_taskgraph_correctness": "upmem_hardware_taskgraph_correctness",
+    "upmem_hardware_taskgraph_path_quantization": "physical_one_dpu_taskgraph_host_rehydrated",
 }
 REQUIRED_EVIDENCE_FILES = ("run_manifest.json", "environment.json", "normalized_records.jsonl")
 
@@ -58,7 +59,11 @@ def main(argv: list[str] | None = None) -> int:
     promote = subparsers.add_parser("promote")
     promote.add_argument("--pack", type=Path, default=ROOT / "runs" / "comparisons" / "research_pack" / "latest")
     promote.add_argument("--out", type=Path, default=ROOT / "thesis_results" / "current")
-    promote.add_argument("--allow-dirty", action="store_true", help=argparse.SUPPRESS)
+    promote.add_argument(
+        "--historical",
+        action="store_true",
+        help="Opt in to promoting clean evidence from a non-HEAD benchmark commit into a named snapshot.",
+    )
 
     verify = subparsers.add_parser("verify")
     verify.add_argument("--snapshot", type=Path, default=ROOT / "thesis_results" / "current")
@@ -73,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     if args.command == "promote":
-        return promote_snapshot(args.pack, args.out, allow_dirty=bool(args.allow_dirty))
+        return promote_snapshot(args.pack, args.out, historical=bool(args.historical))
     if args.command == "verify":
         verify_snapshot(args.snapshot)
         print(args.snapshot.resolve())
@@ -85,8 +90,12 @@ def main(argv: list[str] | None = None) -> int:
     raise AssertionError(args.command)
 
 
-def promote_snapshot(pack: Path, out: Path, *, allow_dirty: bool = False) -> int:
+def promote_snapshot(pack: Path, out: Path, *, historical: bool = False) -> int:
     pack = pack.resolve()
+    out = out.resolve()
+    current_snapshot = (ROOT / "thesis_results" / "current").resolve()
+    if historical and out == current_snapshot:
+        raise ValueError("historical evidence promotion requires a named snapshot other than thesis_results/current")
     manifest_path = pack / "benchmark_manifest.json"
     if not manifest_path.exists():
         raise ValueError(f"research pack manifest missing: {manifest_path}")
@@ -101,7 +110,7 @@ def promote_snapshot(pack: Path, out: Path, *, allow_dirty: bool = False) -> int
     if promotion_stage["benchmark_source_worktree_dirty"]:
         raise ValueError("tracked thesis snapshots require a clean thesis/implementation source")
     source_manifest = _manifest_provenance(pack_manifest, fallback_commit=head)
-    if not allow_dirty and source_manifest["commit"] != head:
+    if not historical and source_manifest["commit"] != head:
         raise ValueError("research pack git commit does not match current HEAD")
     if source_manifest["worktree_dirty"]:
         raise ValueError("research pack was generated from dirty thesis/implementation source")
@@ -114,8 +123,10 @@ def promote_snapshot(pack: Path, out: Path, *, allow_dirty: bool = False) -> int
     used_roles: set[str] = set()
     for source in evidence_inputs:
         entry = _copy_evidence_capsule(source, staging, used_roles)
-        if not allow_dirty and entry["benchmark_source_commit"] != head:
+        if not historical and entry["benchmark_source_commit"] != head:
             raise ValueError(f"evidence commit mismatch for {entry['role']}")
+        if historical and entry["benchmark_source_commit"] != source_manifest["commit"]:
+            raise ValueError(f"historical evidence commit mismatch for {entry['role']}")
         if entry["benchmark_source_worktree_dirty"]:
             raise ValueError(f"evidence source is dirty for {entry['role']}")
         selected.append(entry)
@@ -141,7 +152,7 @@ def promote_snapshot(pack: Path, out: Path, *, allow_dirty: bool = False) -> int
 
     snapshot_manifest = {
         "schema_version": SNAPSHOT_SCHEMA_VERSION,
-        "snapshot_id": "current",
+        "snapshot_id": out.name,
         "created_at": datetime.now(timezone.utc).isoformat(),
         # Legacy aliases remain source-scoped; repository dirtiness is carried
         # separately so unrelated files cannot masquerade as dirty evidence.
@@ -166,6 +177,7 @@ def promote_snapshot(pack: Path, out: Path, *, allow_dirty: bool = False) -> int
         "report_entrypoint": "README.md",
         "tables_dir": "tables",
         "plots_dir": "plots",
+        "historical_evidence_promotion": historical,
     }
     _write_json(staging / "snapshot_manifest.json", snapshot_manifest)
     _write_json(staging / "checksums.json", _checksums(staging, exclude={"checksums.json"}))

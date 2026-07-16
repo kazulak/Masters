@@ -637,6 +637,89 @@ def test_one_dpu_plot_names_and_todos_with_fixture_records(
     )
 
 
+def test_one_dpu_study_is_reported_as_physical_host_rehydrated_without_mvp_gap() -> None:
+    records = _complete_one_dpu_records(
+        path="opt_einsum_greedy",
+        mode="none",
+        case_family="ghz",
+        benchmark_n_qubits=8,
+    )
+    lines = pack._upmem_readiness_lines(records, [])
+    text = "\n".join(lines).lower()
+
+    assert "host-rehydrated" in text
+    assert "physical" in text
+    assert "sequential" in text
+    assert "one dpu" in text
+    assert "no resident-session claim" in text
+    assert "no multi-dpu claim" in text
+    assert all("physical single-dpu upmem functionality-mvp records are absent" not in item.lower() for item in pack._missing_evidence(records))
+
+
+def test_one_dpu_report_statuses_separate_policy_pass_from_full_precision_threshold_failure() -> None:
+    record = _one_dpu_record(
+        notes={
+            "policy_reference_validation": {
+                "passed": True,
+                "max_abs_error": 0.0,
+                "tolerance": 1.0e-3,
+            },
+            "full_precision_accuracy": {
+                "passed": False,
+                "max_abs_error": 0.02,
+                "tolerance": 1.0e-5,
+            },
+        }
+    )
+    summary = pack.upmem_one_dpu_runtime_summary([record])
+
+    assert summary[0]["policy_reference_validation_status"] == "passed"
+    assert summary[0]["full_precision_accuracy_status"] == "threshold_failed"
+
+    physical = dict(record, contraction_execution_target="upmem")
+    breakdown = pack.upmem_physical_taskgraph_breakdown([physical])
+    assert breakdown[0]["policy_reference_validation_status"] == "passed"
+    assert breakdown[0]["full_precision_accuracy_status"] == "threshold_failed"
+
+
+def test_one_dpu_plot_manifest_marks_current_faceted_figures_readable_and_oriented(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _install_fake_matplotlib(monkeypatch)
+    summary = pack.upmem_one_dpu_runtime_summary(
+        [
+            *_complete_one_dpu_records(
+                path="opt_einsum_greedy", mode="none", case_family="ghz", benchmark_n_qubits=4
+            ),
+            *_complete_one_dpu_records(
+                path="custom_upmem_v2_balanced", mode="none", runtime=1.5, case_family="ghz", benchmark_n_qubits=4
+            ),
+            *_complete_one_dpu_records(
+                path="opt_einsum_greedy", mode="int8", runtime=1.0, case_family="ghz", benchmark_n_qubits=4
+            ),
+        ]
+    )
+    quantization = pack.upmem_one_dpu_quantization_pairs(summary)
+    paths = pack.upmem_one_dpu_path_pairs(summary)
+    manifest = pack.write_plots(
+        tmp_path,
+        [],
+        [],
+        [],
+        [],
+        [],
+        one_dpu_rows=summary,
+        one_dpu_quantization_pairs=quantization,
+        one_dpu_path_pairs=paths,
+    )
+    by_name = {entry["plot"]: entry for entry in manifest["plots"]}
+
+    assert by_name["upmem_one_dpu_path_quantization_runtime.png"]["layout_status"] == "readable"
+    assert "float32/none over int8" in by_name["upmem_one_dpu_quantization_ratio_by_path.png"]["caption"].lower()
+    assert "custom_upmem_v2_balanced over opt_einsum_greedy" in by_name["upmem_one_dpu_path_ratio_by_numeric_mode.png"]["caption"]
+    assert by_name["upmem_one_dpu_path_ratio_by_numeric_mode.png"]["layout_status"] == "readable"
+
+
 def test_physical_quantization_uses_float32_full_precision_error_when_not_quantized() -> (
     None
 ):

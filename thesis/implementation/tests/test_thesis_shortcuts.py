@@ -32,6 +32,8 @@ def test_makefile_shortcuts_are_defined() -> None:
         "UPMEM_HW_TASKGRAPH_STUDY_RUN ?= "
         "runs/evidence/upmem_hardware_taskgraph_path_quantization/upmem_hw_taskgraph_study/latest"
     ) in text
+    assert "UPMEM_HW_TASKGRAPH_RESIDENT_SUITE ?= configs/suites/upmem_hardware_taskgraph_resident_path_quantization.yml" in text
+    assert "UPMEM_HW_TASKGRAPH_RESIDENT_RUN ?= runs/evidence/upmem_hardware_taskgraph_resident_path_quantization/upmem_hw_taskgraph_resident/latest" in text
     for target in (
         "help",
         "build-quest-cpu",
@@ -47,9 +49,13 @@ def test_makefile_shortcuts_are_defined() -> None:
         "upmem-hw-taskgraph-study-plan",
         "upmem-hw-taskgraph-study",
         "upmem-hw-taskgraph-study-report",
+        "upmem-hw-taskgraph-resident-plan",
+        "upmem-hw-taskgraph-resident",
+        "upmem-hw-taskgraph-resident-report",
         "evidence-inbox",
         "thesis-run",
         "thesis-promote",
+        "thesis-promote-historical",
         "thesis-verify",
         "thesis-report",
         "thesis-clean",
@@ -69,6 +75,7 @@ def test_makefile_shortcuts_are_defined() -> None:
     assert "export PATH := $(PYTHON_BIN_DIR):$(PATH)" in text
     assert "OPENBLAS_NUM_THREADS=$(BENCH_CPU_THREADS)" in text
     assert "scripts/thesis_snapshot.py promote" in text
+    assert "--historical" in text
     assert "scripts/thesis_snapshot.py report" in text
     assert "scripts/thesis_runs.py prune" in text
     assert "scripts/thesis_runs.py list" in text
@@ -133,9 +140,13 @@ def test_makefile_targets_parse_with_dry_run() -> None:
         "upmem-hw-taskgraph-study-plan",
         "upmem-hw-taskgraph-study",
         "upmem-hw-taskgraph-study-report",
+        "upmem-hw-taskgraph-resident-plan",
+        "upmem-hw-taskgraph-resident",
+        "upmem-hw-taskgraph-resident-report",
         "evidence-inbox",
         "thesis-run",
         "thesis-promote",
+        "thesis-promote-historical",
         "thesis-verify",
         "thesis-report",
         "thesis-clean",
@@ -206,6 +217,9 @@ def test_makefile_targets_parse_with_dry_run() -> None:
             "normalized_records.jsonl" in result.stdout
             and "--label upmem_hw_taskgraph_study" in result.stdout
         )
+        assert target != "upmem-hw-taskgraph-resident-plan" or "upmem_hardware_taskgraph_resident_path_quantization.yml" in result.stdout
+        assert target != "upmem-hw-taskgraph-resident" or "Resident TaskGraph runtime is reserved" in result.stdout
+        assert target != "upmem-hw-taskgraph-resident-report" or "upmem_hw_taskgraph_resident" in result.stdout
         assert target != "evidence-inbox" or "runs/inbox/eth" in result.stdout
         assert (
             target != "thesis-run"
@@ -215,6 +229,7 @@ def test_makefile_targets_parse_with_dry_run() -> None:
         assert (
             target != "thesis-promote" or "thesis_snapshot.py promote" in result.stdout
         )
+        assert target != "thesis-promote-historical" or "thesis_snapshot.py promote --historical" in result.stdout
         assert target != "thesis-verify" or "thesis_snapshot.py verify" in result.stdout
         assert target != "thesis-report" or "thesis_snapshot.py report" in result.stdout
         assert target != "thesis-clean" or "thesis_runs.py prune" in result.stdout
@@ -232,7 +247,7 @@ def test_makefile_targets_parse_with_dry_run() -> None:
 def test_top_level_suite_family_is_canonical() -> None:
     top_level = {path.name for path in (ROOT / "configs" / "suites").glob("*.yml")}
 
-    assert top_level == {
+    canonical_top_level = {
         "smoke.yml",
         "cpu_evidence.yml",
         "gpu_evidence.yml",
@@ -244,6 +259,10 @@ def test_top_level_suite_family_is_canonical() -> None:
         "upmem_hardware_taskgraph_correctness.yml",
         "upmem_hardware_taskgraph_path_quantization.yml",
         "manual_large.yml",
+    }
+    assert canonical_top_level <= top_level
+    assert top_level - canonical_top_level <= {
+        "upmem_hardware_taskgraph_resident_path_quantization.yml"
     }
     assert (
         ROOT / "configs" / "suites" / "diagnostics" / "planner_compare.yml"
