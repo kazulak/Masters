@@ -108,8 +108,12 @@ def test_generic_bridge_external_disabled_writes_nonexecuting_output_manifest(tm
 def test_generic_backend_registry_is_explicit() -> None:
     registry = generic_bridge_backend_registry()
 
-    assert tuple(registry) == (GENERIC_LOOP_BACKEND_ID,)
+    assert tuple(registry) == (
+        GENERIC_LOOP_BACKEND_ID,
+        "upmem_sdk_hardware_generic_loop",
+    )
     identity = registry[GENERIC_LOOP_BACKEND_ID]
     assert identity.kernel_family == "generic_loop_fallback"
     assert identity.external_command_capable is True
     assert identity.implemented is True
+    assert registry["upmem_sdk_hardware_generic_loop"].implemented is True

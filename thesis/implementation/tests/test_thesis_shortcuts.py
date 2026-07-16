@@ -88,6 +88,7 @@ def test_makefile_targets_parse_with_dry_run() -> None:
     if shutil.which("make") is None:
         return
     for target in (
+        "setup",
         "build-quest-cpu",
         "doctor",
         "bench-cpu",
@@ -95,6 +96,8 @@ def test_makefile_targets_parse_with_dry_run() -> None:
         "bench-upmem-sim",
         "upmem-hw-mvp-plan",
         "upmem-hw-mvp",
+        "upmem-hw-generic-plan",
+        "upmem-hw-generic-mvp",
         "thesis-run",
         "thesis-promote",
         "thesis-verify",
@@ -102,6 +105,9 @@ def test_makefile_targets_parse_with_dry_run() -> None:
         "thesis-clean",
         "list-runs",
         "research-plan",
+        "planner-evidence",
+        "planner-report",
+        "archive-evidence",
         "clean-generated",
     ):
         result = subprocess.run(["make", "-n", target], cwd=ROOT, text=True, capture_output=True, check=False)
@@ -111,6 +117,8 @@ def test_makefile_targets_parse_with_dry_run() -> None:
         assert target != "bench-upmem-sim" or "configs/suites/upmem_sim_evidence.yml" in result.stdout
         assert target != "upmem-hw-mvp-plan" or "configs/suites/upmem_hardware_mvp.yml" in result.stdout
         assert target != "upmem-hw-mvp" or "UPMEM_ALLOW_PHYSICAL_HARDWARE" in result.stdout
+        assert target != "upmem-hw-generic-plan" or "configs/suites/upmem_hardware_generic_mvp.yml" in result.stdout
+        assert target != "upmem-hw-generic-mvp" or "UPMEM_ALLOW_PHYSICAL_HARDWARE" in result.stdout
         assert target != "thesis-run" or "research_benchmark_pack.py run --full" in result.stdout
         assert target != "thesis-run" or "BENCH_CPU_THREADS" in result.stdout
         assert target != "thesis-promote" or "thesis_snapshot.py promote" in result.stdout
@@ -119,6 +127,9 @@ def test_makefile_targets_parse_with_dry_run() -> None:
         assert target != "thesis-clean" or "thesis_runs.py prune" in result.stdout
         assert target != "list-runs" or "thesis_runs.py list" in result.stdout
         assert target != "research-plan" or "research_benchmark_pack.py plan" in result.stdout
+        assert target != "planner-evidence" or "--label planner_v2" in result.stdout
+        assert target != "planner-report" or "--label planner_v2" in result.stdout
+        assert target != "archive-evidence" or "thesis_runs.py archive" in result.stdout
         assert "simulation_backend_compare_thesis_small.yml" not in result.stdout
 
 
@@ -133,6 +144,7 @@ def test_top_level_suite_family_is_canonical() -> None:
         "upmem_sim_evidence.yml",
         "upmem_generic_sweep.yml",
         "upmem_hardware_mvp.yml",
+        "upmem_hardware_generic_mvp.yml",
         "manual_large.yml",
     }
     assert (ROOT / "configs" / "suites" / "diagnostics" / "planner_compare.yml").exists()

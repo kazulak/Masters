@@ -45,6 +45,7 @@ ROLE_BY_SUITE = {
     "thesis_upmem_quantization_stress": "upmem_quantization_stress",
     "research_internal_parallelism": "internal_parallelism",
     "upmem_hardware_mvp": "upmem_hardware_functionality",
+    "upmem_hardware_generic_mvp": "upmem_hardware_generic_taskgraph_functionality",
 }
 REQUIRED_EVIDENCE_FILES = ("run_manifest.json", "environment.json", "normalized_records.jsonl")
 

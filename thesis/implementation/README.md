@@ -10,9 +10,12 @@ GPU baselines, bounded UPMEM SDK-simulator execution, and reproducible evidence.
 It does **not** yet claim UPMEM hardware speedup or a fully general UPMEM tensor
 contraction kernel.
 
-The first physical one-DPU dense functionality run is documented separately in
-[docs/upmem_hardware_mvp_runbook.md](docs/upmem_hardware_mvp_runbook.md). It is
-hardware correctness evidence only and is not part of the default thesis matrix.
+The first physical one-DPU dense functionality run and the separate tiny
+generic TaskGraph MVP are documented in
+[docs/upmem_hardware_mvp_runbook.md](docs/upmem_hardware_mvp_runbook.md) and
+[docs/upmem_hardware_generic_mvp_runbook.md](docs/upmem_hardware_generic_mvp_runbook.md).
+Both are hardware correctness evidence only and are not part of the default
+thesis matrix.
 
 Start with [ARCHITECTURE.md](ARCHITECTURE.md) for module ownership, external
 provenance, thesis contributions, and the planned UPMEM architecture. The fixed
@@ -23,12 +26,14 @@ benchmark matrix is in [THESIS_BENCHMARK_MATRIX.md](THESIS_BENCHMARK_MATRIX.md).
 From `thesis/implementation`:
 
 ```bash
-python3 -m venv ../.venv
-../.venv/bin/python -m pip install --upgrade pip
-git submodule update --init --recursive external/QuEST external/SimplePIM external/PID-Comm
-../.venv/bin/python -m pip install -c ci/constraints.txt -e ".[dev]"
-make doctor
+# Requires uv. It creates/reuses ../.venv with .python-version, installs
+# constrained dev dependencies, initializes submodules, then runs doctor.
+make setup
 ```
+
+`make setup` refuses to replace an existing incompatible environment. Its
+diagnostic prints the exact environment path; remove that path explicitly only
+when you intend to rebuild it.
 
 Run tests:
 
@@ -124,14 +129,18 @@ make bench-cpu
 make bench-gpu
 make bench-upmem-sim
 make upmem-hw-mvp-plan
+make upmem-hw-generic-plan
+make planner-report
 make research-plan
 ```
 
 On the ETH hardware host, after the preparation command succeeds:
 
 ```bash
-make PYTHON=.venv/bin/python upmem-hw-mvp-plan
-UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make PYTHON=.venv/bin/python upmem-hw-mvp
+make upmem-hw-mvp-plan
+UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-mvp
+make upmem-hw-generic-plan
+UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-generic-mvp
 ```
 
 This runs only the fixed 2x2 then 4x4 one-DPU/one-tasklet dense int8 MVP. It
@@ -143,6 +152,22 @@ set either variable to select hardware. `UPMEM_ALLOW_PHYSICAL_HARDWARE=1`
 remains mandatory, with no fallback. The repaired evidence profile is
 `hardware_mvp_l1_v2`; failed v1 evidence is historical and must not be treated
 as a corrected run.
+
+The generic command is separate and runs only the fixed synthetic real-valued
+`A[a,b,c] x B[c,d,e] -> C[a,b,d,e]` TaskGraph node. It uses two bounded output
+tiles and exact int32 validation, but is not a quantum-circuit benchmark or a
+hardware speedup claim. See the generic MVP runbook for expected fields and
+failure handling.
+
+Modeled planner evidence has its own comparison namespace:
+
+```bash
+make planner-evidence
+make planner-report
+```
+
+These commands write under `runs/comparisons/planner_v2/`; their scores are
+model-based path-selection hypotheses, not hardware-calibrated timing.
 
 For a specific research group:
 

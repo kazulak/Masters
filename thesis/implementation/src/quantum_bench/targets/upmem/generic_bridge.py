@@ -21,10 +21,12 @@ if TYPE_CHECKING:
 GENERIC_BRIDGE_SCHEMA_VERSION = "generic_contraction_bridge_v1"
 GENERIC_BRIDGE_ID = "upmem_generic_contraction_bridge_v1"
 GENERIC_LOOP_BACKEND_ID = "upmem_sdk_simulator_generic_loop"
+HARDWARE_GENERIC_LOOP_BACKEND_ID = "upmem_sdk_hardware_generic_loop"
 GENERIC_LOOP_KERNEL_FAMILY = "generic_loop_fallback"
 
 GenericBridgeStatus = Literal[
     "upmem_sdk_simulator_generic_loop_executed",
+    "upmem_sdk_hardware_generic_loop_executed",
     "skipped",
     "not_implemented",
     "failed",
@@ -136,9 +138,16 @@ class GenericBridgeExecutionResult:
 def write_generic_bridge_input_manifest(
     preparation_result: "GenericTaskPreparationResult",
     bridge_dir: Path,
+    *,
+    backend_id: str = GENERIC_LOOP_BACKEND_ID,
+    execution_target: str = "upmem_simulator",
 ) -> GenericBridgeInputManifest:
     if preparation_result.status != "prepared" or preparation_result.prepared_operands is None:
         raise ValueError(f"generic preparation is not bridgeable: {preparation_result.status}")
+    if backend_id not in generic_bridge_backend_registry():
+        raise ValueError(f"unsupported generic bridge backend: {backend_id}")
+    if execution_target not in {"upmem_simulator", "upmem_hardware"}:
+        raise ValueError(f"unsupported generic bridge execution target: {execution_target}")
     operands = preparation_result.prepared_operands
     operands_dir = bridge_dir / "operands"
     references_dir = bridge_dir / "references"
@@ -184,9 +193,9 @@ def write_generic_bridge_input_manifest(
         bridge_id=GENERIC_BRIDGE_ID,
         manifest_kind="generic_contraction_bridge_input",
         route_id=preparation_result.route_id,
-        backend_id=GENERIC_LOOP_BACKEND_ID,
+        backend_id=backend_id,
         kernel_family=GENERIC_LOOP_KERNEL_FAMILY,
-        execution_target="upmem_simulator",
+        execution_target=execution_target,
         execution_scope="task_level",
         task_id=preparation_result.task_id,
         input_tensor_ids=preparation_result.input_tensor_ids,
@@ -305,7 +314,17 @@ def generic_bridge_backend_registry() -> dict[str, GenericBridgeBackendIdentity]
             external_command_capable=True,
             implemented=True,
             description="Executes small real-valued binary tensor contractions with an unoptimized UPMEM SDK simulator loop kernel.",
-        )
+        ),
+        HARDWARE_GENERIC_LOOP_BACKEND_ID: GenericBridgeBackendIdentity(
+            backend_id=HARDWARE_GENERIC_LOOP_BACKEND_ID,
+            display_name="UPMEM SDK Hardware Generic Loop MVP",
+            backend_kind="upmem_sdk_hardware_generic_loop",
+            kernel_family=GENERIC_LOOP_KERNEL_FAMILY,
+            execution_mode="external_process",
+            external_command_capable=True,
+            implemented=True,
+            description="Executes the guarded one-DPU physical generic-loop TaskGraph functionality MVP.",
+        ),
     }
 
 
@@ -339,6 +358,7 @@ def execute_generic_bridge(
     *,
     execute_external: bool = False,
     env: Mapping[str, str] | None = None,
+    timeout_seconds: float | None = None,
 ) -> GenericBridgeExecutionResult:
     identity = get_generic_bridge_backend(backend)
     output_manifest_path = input_manifest_path.parent / "output_manifest.json"
@@ -354,8 +374,15 @@ def execute_generic_bridge(
         )
         write_json(output_manifest_path, output_manifest)
         return _execution_result(input_manifest_path, output_manifest_path, None, backend, None, "unsupported", "unsupported_backend", output_manifest.error, "unsupported_backend", output_manifest, {})
-    if backend == GENERIC_LOOP_BACKEND_ID:
-        return _execute_upmem_sdk_generic_loop(input_manifest_path, identity, execute_external=execute_external, env=env)
+    if backend in {GENERIC_LOOP_BACKEND_ID, HARDWARE_GENERIC_LOOP_BACKEND_ID}:
+        return _execute_upmem_sdk_generic_loop(
+            input_manifest_path,
+            identity,
+            execute_external=execute_external,
+            env=env,
+            target=("hardware" if backend == HARDWARE_GENERIC_LOOP_BACKEND_ID else "simulator"),
+            timeout_seconds=timeout_seconds,
+        )
     output_manifest = _nonexecuted_output_manifest(
         backend=backend,
         status="unsupported",
@@ -375,6 +402,8 @@ def _execute_upmem_sdk_generic_loop(
     *,
     execute_external: bool,
     env: Mapping[str, str] | None,
+    target: str,
+    timeout_seconds: float | None,
 ) -> GenericBridgeExecutionResult:
     started = time.perf_counter()
     bridge_dir = input_manifest_path.parent
@@ -408,21 +437,87 @@ def _execute_upmem_sdk_generic_loop(
         write_json(output_manifest_path, output_manifest)
         return _execution_result(input_manifest_path, output_manifest_path, None, identity.backend_id, identity, "not_implemented", "generic_external_execution_disabled", None, None, output_manifest, {})
 
+    child_env = {**os.environ, **dict(env or {})}
+    native_timeout_seconds = 30.0 if timeout_seconds is None else float(timeout_seconds)
+    if native_timeout_seconds <= 0.0:
+        output_manifest = _nonexecuted_output_manifest(
+            backend=identity.backend_id,
+            status="failed",
+            reason="hardware_profile_violation" if target == "hardware" else "runner_timeout_invalid",
+            error="native runner timeout must be positive",
+            input_manifest_path=input_manifest_path,
+            manifest=manifest,
+            total_time_s=float(time.perf_counter() - started),
+        )
+        write_json(output_manifest_path, output_manifest)
+        return _execution_result(input_manifest_path, output_manifest_path, None, identity.backend_id, identity, "failed", str(output_manifest.metadata["reason"]), output_manifest.error, str(output_manifest.metadata["reason"]), output_manifest, {})
+    if target == "hardware":
+        if child_env.get("UPMEM_ALLOW_PHYSICAL_HARDWARE") != "1":
+            output_manifest = _nonexecuted_output_manifest(
+                backend=identity.backend_id,
+                status="failed",
+                reason="hardware_opt_in_missing",
+                error="UPMEM_ALLOW_PHYSICAL_HARDWARE=1 is required",
+                input_manifest_path=input_manifest_path,
+                manifest=manifest,
+                total_time_s=float(time.perf_counter() - started),
+            )
+            write_json(output_manifest_path, output_manifest)
+            return _execution_result(input_manifest_path, output_manifest_path, None, identity.backend_id, identity, "failed", "hardware_opt_in_missing", output_manifest.error, "hardware_opt_in_missing", output_manifest, {})
+        if child_env.get("DPU_BACKEND"):
+            output_manifest = _nonexecuted_output_manifest(
+                backend=identity.backend_id,
+                status="failed",
+                reason="hardware_profile_violation",
+                error="DPU_BACKEND must be unset for physical generic MVP execution",
+                input_manifest_path=input_manifest_path,
+                manifest=manifest,
+                total_time_s=float(time.perf_counter() - started),
+            )
+            write_json(output_manifest_path, output_manifest)
+            return _execution_result(input_manifest_path, output_manifest_path, None, identity.backend_id, identity, "failed", "hardware_profile_violation", output_manifest.error, "hardware_profile_violation", output_manifest, {})
+        for name in ("UPMEM_PROFILE", "UPMEM_PROFILE_BASE", "DPU_BACKEND"):
+            child_env.pop(name, None)
+
     runner = Path(__file__).resolve().parents[4] / "native" / "upmem" / "simplepim" / "upmem_sdk_generic_loop_runner.py"
     invocation = {
         "backend_id": identity.backend_id,
-        "command": (sys.executable, str(runner), "--input-manifest", input_manifest_path.name, "--output-manifest", output_manifest_path.name, "--backend-id", identity.backend_id, "--target", "simulator"),
+        "command": (sys.executable, str(runner), "--input-manifest", input_manifest_path.name, "--output-manifest", output_manifest_path.name, "--backend-id", identity.backend_id, "--target", target, "--timeout-seconds", f"{native_timeout_seconds:g}"),
         "working_directory": ".",
         "external_command_executed": True,
+        "native_stage_timeout_seconds": native_timeout_seconds,
+        "outer_runner_timeout_seconds": native_timeout_seconds * 2.0 + 5.0,
     }
-    completed = subprocess.run(
-        list(invocation["command"]),
-        cwd=bridge_dir,
-        env={**os.environ, **dict(env or {})},
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            list(invocation["command"]),
+            cwd=bridge_dir,
+            env=child_env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=float(invocation["outer_runner_timeout_seconds"]),
+        )
+    except subprocess.TimeoutExpired as exc:
+        output_manifest = _nonexecuted_output_manifest(
+            backend=identity.backend_id,
+            status="failed",
+            reason="kernel_timeout" if target == "hardware" else "runner_timeout",
+            error="generic loop runner exceeded its bounded timeout",
+            input_manifest_path=input_manifest_path,
+            manifest=manifest,
+            total_time_s=float(time.perf_counter() - started),
+            external_command_executed=True,
+            execution_implemented=True,
+            metadata_extra={
+                "stdout_snippet": _bounded_snippet(_timeout_output(exc.stdout)),
+                "stderr_snippet": _bounded_snippet(_timeout_output(exc.stderr)),
+                "native_stage_timeout_seconds": native_timeout_seconds,
+                "outer_runner_timeout_seconds": invocation["outer_runner_timeout_seconds"],
+            },
+        )
+        write_json(output_manifest_path, output_manifest)
+        return _execution_result(input_manifest_path, output_manifest_path, None, identity.backend_id, identity, "failed", str(output_manifest.metadata["reason"]), output_manifest.error, str(output_manifest.metadata["reason"]), output_manifest, invocation)
     if completed.returncode != 0:
         output_manifest = _nonexecuted_output_manifest(
             backend=identity.backend_id,
@@ -463,8 +558,29 @@ def _execute_upmem_sdk_generic_loop(
         output_blob_path = _resolve_manifest_path(bridge_dir, output_manifest.output_blob.relative_path)
         if not output_blob_path.exists():
             return _execution_result(input_manifest_path, output_manifest_path, None, identity.backend_id, identity, "failed", "output_blob_missing", "Generic bridge output blob missing", "output_blob_missing", output_manifest, invocation)
-    if output_manifest.status != "upmem_sdk_simulator_generic_loop_executed":
+    expected_status = (
+        "upmem_sdk_hardware_generic_loop_executed"
+        if target == "hardware"
+        else "upmem_sdk_simulator_generic_loop_executed"
+    )
+    if output_manifest.status != expected_status:
         return _execution_result(input_manifest_path, output_manifest_path, output_blob_path, identity.backend_id, identity, output_manifest.status, str(output_manifest.metadata.get("reason") or output_manifest.status), output_manifest.error, str(output_manifest.metadata.get("error_type") or output_manifest.status), output_manifest, invocation)
+    if target == "hardware":
+        violation = _hardware_output_violation(output_manifest)
+        if violation is not None:
+            invalid = _nonexecuted_output_manifest(
+                backend=identity.backend_id,
+                status="failed",
+                reason="output_validation_failed",
+                error=violation,
+                input_manifest_path=input_manifest_path,
+                manifest=manifest,
+                total_time_s=float(time.perf_counter() - started),
+                external_command_executed=True,
+                execution_implemented=True,
+            )
+            write_json(output_manifest_path, invalid)
+            return _execution_result(input_manifest_path, output_manifest_path, output_blob_path, identity.backend_id, identity, "failed", "output_validation_failed", violation, "output_validation_failed", invalid, invocation)
     return _execution_result(
         input_manifest_path,
         output_manifest_path,
@@ -472,12 +588,47 @@ def _execute_upmem_sdk_generic_loop(
         identity.backend_id,
         identity,
         output_manifest.status,
-        "upmem_sdk_simulator_generic_loop_executed",
+        expected_status,
         None,
         None,
         output_manifest,
         invocation,
     )
+
+
+def _hardware_output_violation(output: GenericBridgeOutputManifest) -> str | None:
+    metadata = dict(output.metadata)
+    status = metadata.get("hardware_status_json")
+    if not isinstance(status, Mapping):
+        return "hardware output is missing the native status sidecar"
+    if (
+        status.get("success") is not True
+        or status.get("failure_stage") is not None
+        or status.get("allocation_profile") != "backend=hw"
+        or status.get("requested_dpus") != 1
+        or status.get("allocated_dpus") != 1
+        or status.get("tasklets") != 1
+    ):
+        return "hardware native status does not prove one-DPU, one-tasklet execution"
+    if (
+        metadata.get("hardware_kernel_executed") is not True
+        or metadata.get("native_kernel_executed") is not True
+        or metadata.get("simulator_kernel_executed") is not False
+        or metadata.get("cpu_fallback_used") is not False
+    ):
+        return "hardware output contains invalid execution markers"
+    transfer = metadata.get("application_visible_transfer_bytes")
+    if not isinstance(transfer, Mapping) or transfer.get("total") != int(transfer.get("h2d", -1)) + int(transfer.get("d2h", -1)):
+        return "hardware output violates application-visible transfer accounting"
+    if output.validation_metrics.get("exact_integer_passed") is not True:
+        return "hardware output does not prove exact int32 validation"
+    return None
+
+
+def _timeout_output(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value
 
 
 def _validate_bridge_input_files(manifest: GenericBridgeInputManifest, bridge_dir: Path) -> None:

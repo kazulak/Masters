@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -10,17 +11,38 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 RUNS = ROOT / "runs"
 SNAPSHOT = ROOT / "thesis_results" / "current" / "snapshot_manifest.json"
+ARCHIVE_MANIFEST_NAMES = (
+    "run_manifest.json",
+    "benchmark_manifest.json",
+    "comparison_manifest.json",
+)
+
+
+def _repository_root() -> Path:
+    """Return the checkout root from the active implementation root.
+
+    Keep this derived rather than cached: tests and maintenance tooling can
+    intentionally replace ``ROOT`` with an isolated checkout.
+    """
+    return ROOT.resolve().parents[1]
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="List or prune generated thesis runs.")
+    parser = argparse.ArgumentParser(description="List or safely manage generated thesis runs.")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("list")
     prune = subparsers.add_parser("prune")
     prune.add_argument("--apply", action="store_true")
+    archive = subparsers.add_parser("archive", help="copy one run outside the repository")
+    archive.add_argument("path", type=Path)
+    archive.add_argument("--archive-root", type=Path)
+    archive.add_argument("--apply", action="store_true")
     args = parser.parse_args(argv)
     if args.command == "list":
         list_runs()
+        return 0
+    if args.command == "archive":
+        archive_run(args.path, apply=bool(args.apply), archive_root=args.archive_root)
         return 0
     return prune_runs(apply=bool(args.apply))
 
@@ -113,20 +135,104 @@ def _row(kind: str, suite: str, route: str, path: Path, selected: set[Path]) -> 
 
 
 def _selected_paths(*, require_snapshot: bool) -> set[Path]:
-    if not SNAPSHOT.exists():
+    manifests = _snapshot_manifests()
+    if not manifests:
         if require_snapshot:
-            raise ValueError("create and verify thesis_results/current before pruning runs")
+            raise ValueError("create and verify a thesis_results snapshot before pruning runs")
         return set()
-    manifest = _read_json(SNAPSHOT)
-    selected = {
-        (ROOT / str(entry["source_run"])).resolve()
-        for entry in manifest.get("selected_evidence") or ()
-        if not Path(str(entry["source_run"])).is_absolute()
-    }
-    source_pack = manifest.get("source_pack")
-    if source_pack and not Path(str(source_pack)).is_absolute():
-        selected.add((ROOT / str(source_pack)).resolve())
+    selected: set[Path] = set()
+    for snapshot in manifests:
+        manifest = _read_json(snapshot)
+        for entry in manifest.get("selected_evidence") or ():
+            source = Path(str(entry["source_run"]))
+            selected.add((source if source.is_absolute() else ROOT / source).resolve())
+        source_pack = manifest.get("source_pack")
+        if source_pack:
+            source = Path(str(source_pack))
+            selected.add((source if source.is_absolute() else ROOT / source).resolve())
+    # A current `latest` link is an intentional active working result, even
+    # before it is promoted to a tracked snapshot. Keep its target so cleanup
+    # preserves the one obvious current run per namespace.
+    if RUNS.exists():
+        for latest in RUNS.rglob("latest"):
+            if latest.is_symlink() and latest.exists():
+                selected.add(latest.resolve())
     return selected
+
+
+def _snapshot_manifests() -> list[Path]:
+    root = ROOT / "thesis_results"
+    if not root.exists():
+        return [SNAPSHOT] if SNAPSHOT.exists() else []
+    return sorted(
+        path for path in root.rglob("snapshot_manifest.json")
+        if path.is_file() and not path.is_symlink()
+    )
+
+
+def archive_run(
+    run_path: str | Path,
+    *,
+    apply: bool = False,
+    archive_root: str | Path | None = None,
+) -> Path:
+    """Archive one explicitly named run, deleting it only after verified apply."""
+    source_input = Path(run_path).expanduser()
+    source_input = ROOT / source_input if not source_input.is_absolute() else source_input
+    if source_input.is_symlink():
+        raise ValueError(f"run path must be a real directory: {source_input}")
+    source = source_input.resolve()
+    root = _repository_root()
+    if not source.is_dir():
+        raise ValueError(f"run path must be a real directory: {source}")
+    try:
+        relative = source.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("run path must be inside the implementation repository") from exc
+    if not any((source / name).is_file() for name in ARCHIVE_MANIFEST_NAMES):
+        raise ValueError(
+            "archive source must be an explicit evidence or comparison run directory "
+            "containing a run manifest"
+        )
+    destination_root = (
+        Path(archive_root).expanduser().resolve()
+        if archive_root is not None
+        else root.parent / "thesis-evidence-archive"
+    )
+    try:
+        destination_root.relative_to(root)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("archive root must be outside the implementation repository")
+    destination = destination_root / relative
+    if destination.exists() or destination.is_symlink():
+        raise FileExistsError(f"archive destination already exists: {destination}")
+    checksums = _file_checksums(source)
+    action = "ARCHIVE" if apply else "WOULD ARCHIVE"
+    print(f"{action} {source.relative_to(root)} -> {destination}")
+    if not apply:
+        print("Dry run only. Re-run with --apply to copy, verify, and remove the original.")
+        return destination
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.copytree(source, destination, copy_function=shutil.copy2)
+        if _file_checksums(destination) != checksums:
+            raise ValueError("archive checksum verification failed; original was retained")
+    except Exception:
+        if destination.exists():
+            shutil.rmtree(destination)
+        raise
+    shutil.rmtree(source)
+    return destination
+
+
+def _file_checksums(root: Path) -> dict[str, str]:
+    checksums: dict[str, str] = {}
+    for path in sorted(item for item in root.rglob("*") if item.is_file()):
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        checksums[path.relative_to(root).as_posix()] = digest
+    return checksums
 
 
 def _remove_legacy_roots() -> None:

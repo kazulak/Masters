@@ -4,6 +4,14 @@
 
 #include "common.h"
 
+#ifndef UPMEM_GENERIC_HARDWARE_MVP
+#define UPMEM_GENERIC_HARDWARE_MVP 0
+#endif
+
+#if UPMEM_GENERIC_HARDWARE_MVP && (NR_TASKLETS != 1)
+#error "hardware generic MVP requires exactly one tasklet"
+#endif
+
 __host upmem_generic_args_t GENERIC_ARGS;
 
 /* The host transfers only the mode-sized prefix of each full MRAM region. */

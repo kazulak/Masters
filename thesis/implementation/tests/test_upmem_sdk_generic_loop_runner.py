@@ -78,6 +78,47 @@ def test_generic_loop_runner_packs_all_rank_sixteen_entries() -> None:
         assert words[start : start + max_rank] == tuple(native[key])
 
 
+def test_generic_loop_runner_can_pack_fixed_hardware_rank_four_contract() -> None:
+    runner = _load_runner_module()
+    native = {
+        "left_rank": 3,
+        "right_rank": 3,
+        "output_rank": 4,
+        "contracted_rank": 1,
+        "left_shape": [2, 2, 2],
+        "right_shape": [2, 2, 2],
+        "output_shape": [2, 2, 2, 2],
+        "contracted_dims": [2],
+        "left_strides": [4, 2, 1],
+        "right_strides": [4, 2, 1],
+        "output_strides": [8, 4, 2, 1],
+        "output_to_left_axes": [0, 1, -1, -1],
+        "output_to_right_axes": [-1, -1, 1, 2],
+        "contracted_to_left_axes": [2],
+        "contracted_to_right_axes": [0],
+        "output_element_count": 16,
+        "contracted_combination_count": 2,
+    }
+
+    packed = runner._pack_args(native, max_rank=4)
+
+    assert len(packed) == struct.calcsize("<" + "I" * (9 + 7 * 4) + "i" * (4 * 4))
+
+
+def test_isolated_native_copy_excludes_local_build_outputs(tmp_path: Path) -> None:
+    runner = _load_runner_module()
+    source = tmp_path / "source"
+    (source / "bin").mkdir(parents=True)
+    (source / "bin" / "host").write_bytes(b"stale binary")
+    (source / "host.c").write_text("source", encoding="utf-8")
+    destination = tmp_path / "destination"
+
+    runner._copy_source_tree(source, destination)
+
+    assert (destination / "host.c").read_text(encoding="utf-8") == "source"
+    assert not (destination / "bin").exists()
+
+
 def test_tiled_metadata_counts_aligned_mram_traffic() -> None:
     runner = _load_runner_module()
 
@@ -111,10 +152,43 @@ def test_native_host_transfer_accounting_json_contract_is_explicit() -> None:
     ):
         assert field in source
 
-    assert 'getenv("UPMEM_GENERIC_TRANSFER_ACCOUNTING_JSON")' in source
-    assert "control_bytes + left_transfer_bytes + right_transfer_bytes" in source
-    assert "output_transfer_bytes - output_bytes" in source
-    assert "argc != 6" in source
+
+def test_native_generic_hardware_build_is_fixed_to_one_tasklet_and_hw_profile() -> None:
+    source = (
+        ROOT
+        / "native"
+        / "upmem"
+        / "simplepim"
+        / "upmem_sdk_generic_loop"
+        / "Makefile"
+    ).read_text(encoding="utf-8")
+    host = (
+        ROOT
+        / "native"
+        / "upmem"
+        / "simplepim"
+        / "upmem_sdk_generic_loop"
+        / "host.c"
+    ).read_text(encoding="utf-8")
+    dpu = (
+        ROOT
+        / "native"
+        / "upmem"
+        / "simplepim"
+        / "upmem_sdk_generic_loop"
+        / "dpu.c"
+    ).read_text(encoding="utf-8")
+
+    assert "-DNR_TASKLETS=$(NR_TASKLETS)" in source
+    assert "-DUPMEM_GENERIC_HARDWARE_MVP=$(UPMEM_GENERIC_HARDWARE_MVP)" in source
+    assert 'UPMEM_GENERIC_ALLOCATION_PROFILE "backend=hw"' in host
+    assert "dpu_alloc(requested_dpus, UPMEM_GENERIC_ALLOCATION_PROFILE" in host
+    assert "hardware generic MVP requires exactly one tasklet" in dpu
+
+    assert 'getenv("UPMEM_GENERIC_TRANSFER_ACCOUNTING_JSON")' in host
+    assert "control_bytes + left_transfer_bytes + right_transfer_bytes" in host
+    assert "output_transfer_bytes - output_bytes" in host
+    assert "argc != 6" in host
 
 
 def test_native_transfer_accounting_loader_preserves_application_visible_scope(tmp_path: Path) -> None:

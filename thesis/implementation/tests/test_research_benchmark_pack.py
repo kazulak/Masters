@@ -197,6 +197,25 @@ def _hardware_mvp_record(case_id: str, repeat_id: int) -> dict:
     return record
 
 
+def _hardware_generic_mvp_record(repeat_id: int) -> dict:
+    record = _hardware_mvp_record("generic_real_abc_cde_2", repeat_id)
+    record.update(
+        {
+            "suite_id": "upmem_hardware_generic_mvp",
+            "route_id": "upmem_tn_hardware_generic_loop_mvp",
+            "backend_id": "upmem_sdk_hardware_generic_loop",
+            "benchmark_role": "hardware_generic_taskgraph_functionality_mvp",
+            "kernel_family": "generic_loop_fallback",
+            "execution_class": "MRAM_WRAM_TILED",
+            "hardware_profile_version": "hardware_generic_loop_mvp_v1",
+            "kernel_strategy": "generic_loop_output_tiled_int8_int32_v1",
+            "synthetic_real_taskgraph_mvp": True,
+            "not_real_quantum_circuit": True,
+        }
+    )
+    return record
+
+
 def test_plot_contract_generates_missing_and_zero_variance_placeholders(tmp_path: Path, monkeypatch) -> None:
     pyplot = _install_fake_matplotlib(monkeypatch)
     missing_path = tmp_path / "missing.png"
@@ -615,6 +634,22 @@ def test_research_pack_classifies_physical_hardware_mvp_separately() -> None:
     assert hardware_spec.data_rows == rows
 
 
+def test_research_pack_keeps_generic_hardware_mvp_out_of_dense_summary() -> None:
+    records = [_hardware_generic_mvp_record(0), _hardware_generic_mvp_record(1)]
+
+    assert pack._claim_guard_issues(records) == []
+    assert pack.upmem_hardware_mvp_summary(records) == []
+    generic_rows = pack.upmem_hardware_generic_mvp_summary(records)
+    assert generic_rows[0]["case_id"] == "generic_real_abc_cde_2"
+    assert generic_rows[0]["repeat_count"] == 2
+    specs = pack._plot_specs([], [], [], [], [], hardware_generic_mvp_rows=generic_rows)
+    generic_spec = next(
+        spec for spec in specs if spec.filename == "upmem_hardware_generic_mvp_validation.png"
+    )
+    assert generic_spec.source_csv == "upmem_hardware_generic_mvp_summary.csv"
+    assert generic_spec.data_rows == generic_rows
+
+
 def test_research_pack_rejects_incomplete_completed_hardware_mvp_row() -> None:
     record = _hardware_mvp_record("dense_l1_2x2", 0)
     record["exact_integer_match"] = False
@@ -963,6 +998,53 @@ def test_report_allows_ordinary_evidence_and_multiple_profiles_with_one_planner_
     assert manifest["planner_semantics"]["semantic_versions"] == ["upmem_path_cost_v2"]
     assert manifest["planner_semantics"]["weight_profiles"] == ["compute_oriented", "wram_constrained"]
     assert (tmp_path / "pack" / "planner_component_diagnostics.csv").is_file()
+
+
+def test_report_label_uses_named_namespace_and_preserves_latest_link(tmp_path: Path) -> None:
+    labeled = pack._pack_dir(tmp_path, None, label="planner_v2")
+    assert labeled.parent == tmp_path / "runs" / "comparisons" / "planner_v2"
+    assert labeled.name.count("_") == 2
+
+    target = labeled
+    target.mkdir(parents=True)
+    pack._update_latest_link(target.parent, target)
+    assert (target.parent / "latest").is_symlink()
+    assert (target.parent / "latest").resolve() == target.resolve()
+    assert pack._pack_dir(tmp_path, None).parent == pack.DEFAULT_COMPARISON_ROOT
+    with pytest.raises(ValueError, match="comparison label"):
+        pack._pack_dir(tmp_path, None, label="../planner_v2")
+
+
+def test_planner_interpretation_states_model_boundary_counts_structure_and_cost_sources() -> None:
+    rows = [
+        {
+            "case_id": "case_a",
+            "planner_id": "custom_upmem.greedy",
+            "pim_selected": True,
+            "pim_weight_profile": "compute_oriented",
+            "pim_objective_version": "upmem_path_cost_v2",
+            "contraction_path_structure_hash": "path-a",
+            "pim_estimated_flops": 12.0,
+            "pim_objective_components": {"compute": 0.3, "transfer": 0.2},
+        },
+        {
+            "case_id": "case_a",
+            "planner_id": "opt_einsum.greedy",
+            "pim_objective_version": "upmem_path_cost_v2",
+            "score_components": {"compute": 0.4},
+        },
+        {"case_id": "case_b", "planner_id": "custom_upmem.greedy", "pim_objective_version": "upmem_path_cost_v2"},
+    ]
+
+    text = "\n".join(pack._planner_interpretation_lines(rows))
+    assert "model-only hypothesis evidence" in text
+    assert "`2` modeled cases and `3` candidate records" in text
+    assert "Selected planner/profile/path structure" in text
+    assert "custom_upmem.greedy" in text
+    assert "compute_oriented" in text
+    assert "pim_estimated_flops" in text
+    assert "objective component: compute" in text
+    assert "cannot claim hardware performance" in text
 
 
 def test_report_rejects_mixed_planner_objective_versions(monkeypatch, tmp_path: Path) -> None:

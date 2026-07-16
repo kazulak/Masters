@@ -16,6 +16,7 @@ CPU_SUITE ?= configs/suites/cpu_evidence.yml
 GPU_SUITE ?= configs/suites/gpu_evidence.yml
 UPMEM_SIM_SUITE ?= configs/suites/upmem_sim_evidence.yml
 UPMEM_HW_MVP_SUITE ?= configs/suites/upmem_hardware_mvp.yml
+UPMEM_HW_GENERIC_MVP_SUITE ?= configs/suites/upmem_hardware_generic_mvp.yml
 GPU_VERIFY ?= quest-hip
 CLEAN_RUNS ?= 0
 THESIS_PACK ?= runs/comparisons/research_pack/latest
@@ -24,6 +25,7 @@ APPLY ?= 0
 
 PUBLIC_TARGETS := \
 	help \
+	setup \
 	build-quest-cpu \
 	doctor \
 	bench-cpu \
@@ -31,13 +33,18 @@ PUBLIC_TARGETS := \
 	bench-upmem-sim \
 	upmem-hw-mvp-plan \
 	upmem-hw-mvp \
+	upmem-hw-generic-plan \
+	upmem-hw-generic-mvp \
 	research-plan \
+	planner-evidence \
+	planner-report \
 	thesis-run \
 	thesis-promote \
 	thesis-verify \
 	thesis-report \
 	list-runs \
 	thesis-clean \
+	archive-evidence \
 	thesis-release \
 	clean-generated
 
@@ -47,6 +54,7 @@ help:
 	@printf '%s\n' \
 		'Thesis evidence shortcuts:' \
 		'  make help              Show this command summary' \
+		'  make setup             Require uv, create/reuse ../.venv, install dev dependencies, and run doctor' \
 		'  make doctor             Check local benchmark prerequisites without creating evidence' \
 		'  make build-quest-cpu    Build the native QuEST CPU runner' \
 		'  make bench-cpu          Run the CPU evidence suite' \
@@ -54,16 +62,26 @@ help:
 		'  make bench-upmem-sim    Check UPMEM simulator and run its evidence suite' \
 		'  make upmem-hw-mvp-plan  Prepare/build the guarded one-DPU hardware dense MVP; never allocates a DPU' \
 		'  make upmem-hw-mvp       Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; runs the one-DPU hardware dense MVP' \
+		'  make upmem-hw-generic-plan  Prepare/build the guarded generic TaskGraph MVP; never allocates a DPU' \
+		'  make upmem-hw-generic-mvp   Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; runs one real generic TaskGraph contraction' \
 		'  make research-plan      Show the research benchmark plan' \
+		'  make planner-evidence   Run modeled planner v2 evidence into runs/comparisons/planner_v2/' \
+		'  make planner-report     Regenerate the labeled planner v2 report from latest planner evidence' \
 		'  make thesis-run BENCH_CPU_THREADS=<physical cores>' \
 		'                           Run the controlled thesis benchmark matrix' \
 		'  make thesis-promote     Promote the latest research pack into tracked thesis_results/current' \
 		'  make thesis-verify      Verify tracked thesis results without rerunning benchmarks' \
 		'  make thesis-report      Regenerate tracked tables and plots from thesis_results/current' \
 		'  make thesis-clean       Preview stale generated run cleanup; add APPLY=1 to remove' \
+		'  make archive-evidence RUN=<path> APPLY=1  Checksum-archive one raw run outside Git, then remove the source' \
 		'  make thesis-release NAME=<name>  Freeze current results as a named milestone' \
 		'  make list-runs          Show generated evidence/comparisons and current selection' \
 		'  make clean-generated    Remove generated build/cache files; keeps runs/ by default'
+
+setup:
+	@python3 scripts/bootstrap_env.py
+	$(MAKE) build-quest-cpu
+	$(MAKE) doctor
 
 build-quest-cpu:
 	$(MAKE) -C native/quest_cpu
@@ -92,8 +110,21 @@ upmem-hw-mvp:
 	$(BENCH) upmem-hardware-mvp --suite $(UPMEM_HW_MVP_SUITE) --execute
 	$(PY_ENV) $(PYTHON) scripts/evidence_shortcuts.py check-upmem-hardware runs/latest
 
+upmem-hw-generic-plan:
+	$(BENCH) upmem-hardware-generic-mvp --suite $(UPMEM_HW_GENERIC_MVP_SUITE) --prepare-only --build
+
+upmem-hw-generic-mvp:
+	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1 to run physical UPMEM hardware' >&2; exit 2; }
+	$(BENCH) upmem-hardware-generic-mvp --suite $(UPMEM_HW_GENERIC_MVP_SUITE) --execute
+
 research-plan:
 	$(PY_ENV) $(PYTHON) scripts/research_benchmark_pack.py plan
+
+planner-evidence:
+	$(PY_ENV) $(PYTHON) scripts/research_benchmark_pack.py run --full --suite planner_paths --suite planner_sensitivity --label planner_v2
+
+planner-report:
+	$(PY_ENV) $(PYTHON) scripts/research_benchmark_pack.py report --suite planner_paths --suite planner_sensitivity --label planner_v2
 
 thesis-run: build-quest-cpu
 	@test -n "$(BENCH_CPU_THREADS)" || { echo 'Set BENCH_CPU_THREADS to the physical CPU core count, for example: BENCH_CPU_THREADS=6 make thesis-run' >&2; exit 2; }
@@ -115,6 +146,10 @@ list-runs:
 
 thesis-clean:
 	$(PY_ENV) $(PYTHON) scripts/thesis_runs.py prune $(if $(filter 1,$(APPLY)),--apply,)
+
+archive-evidence:
+	@test -n "$(RUN)" || { echo 'Set RUN=<raw evidence directory>'; exit 2; }
+	$(PY_ENV) $(PYTHON) scripts/thesis_runs.py archive $(RUN) $(if $(filter 1,$(APPLY)),--apply,)
 
 thesis-release:
 	@if [ -z "$(NAME)" ]; then echo 'Set NAME=<milestone-name>'; exit 2; fi

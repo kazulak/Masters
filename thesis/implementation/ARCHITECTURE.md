@@ -89,6 +89,7 @@ different identities or objective settings but select the same structural path.
 | Shared-plan CPU reference | `thesis/implementation/src/quantum_bench/providers/exact_tn/cpu_einsum.py`, `cpu_path_replay.py` | Execute the internal TaskGraph on CPU | Active; diagnostic/reference quality |
 | Strict UPMEM runtime | `thesis/implementation/src/quantum_bench/targets/upmem/taskgraph_runtime.py`, `numeric_reference.py`, `runtime_evidence.py` | Execute policy/scheduling while keeping CPU references, validation, and evidence construction reviewable | Active, SDK simulator |
 | Physical UPMEM bring-up | `targets/upmem/hardware_mvp.py`, `bench/upmem_hardware_mvp.py`, `native/upmem/simplepim/upmem_sdk_dense_hardware_mvp_runner.py` | Guarded one-DPU/one-tasklet dense int8 -> int32 exact functionality evidence | Phase 1A; fixed 2x2/4x4 L1 cases only, no speedup or energy claim |
+| Physical generic TaskGraph MVP | `targets/upmem/hardware_generic_mvp.py`, `bench/upmem_hardware_generic_mvp.py`, `targets/upmem/generic_bridge.py`, `native/upmem/simplepim/upmem_sdk_generic_loop_runner.py` | Guarded one-DPU/one-tasklet synthetic real rank-3 x rank-3 -> rank-4 generic contraction with two output tiles | Phase 1B; exact functionality evidence only, no general quantum-TN, speedup, energy, scaling, or scheduler claim |
 | Native DPU programs | `thesis/implementation/native/upmem/simplepim/` | Dense and bounded generic host/DPU programs | Active, bounded |
 | UPMEM analysis | `thesis/implementation/src/quantum_bench/targets/upmem/tile_plan.py`, `schedule.py`, `tn/upmem_path_cost.py`, planner scoring | Estimate transfer, tiling, frontier, assignment pressure, and objective components | Active; execution coverage remains bounded |
 | Evidence writer | `thesis/implementation/src/quantum_bench/bench/simulation_backend_compare.py`, `upmem_mvp_benchmark.py` | Run fixed suites and write canonical normalized evidence | Active |
@@ -106,6 +107,7 @@ different identities or objective settings but select the same structural path.
 | `cpu_tn_einsum_exact` | Internal NumPy TaskGraph | Shared-plan reference/diagnostic | Correct execution of supported internal plans, not a SOTA TN baseline |
 | `cpu_tn_path_replay_*` | Internal NumPy TaskGraph | Quantization diagnostic | CPU cost/error of per-contraction replay; not UPMEM performance |
 | `upmem_tn_sdk_simulator_quantized` / strict runtime | UPMEM SDK simulator | Bounded PIM code-path evidence | SDK DPU program execution, support boundary, traffic, and error; no hardware speedup |
+| `upmem_tn_hardware_generic_loop_mvp` | UPMEM SDK physical hardware | Synthetic one-task generic TaskGraph functionality MVP | One-DPU/one-tasklet exact int32 validation only; not a quantum-circuit or performance result |
 | `planner_candidate_model` | Host planning/model | Path candidate evidence | Standard objectives plus deterministic custom UPMEM-aware greedy selection; modeled only, no execution speedup |
 
 Full-state correctness and performance are separate tiers. `full_dump` rows can

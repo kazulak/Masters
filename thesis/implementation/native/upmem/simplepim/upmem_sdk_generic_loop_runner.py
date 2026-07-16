@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -16,6 +17,7 @@ import numpy as np
 GENERIC_BRIDGE_SCHEMA_VERSION = "generic_contraction_bridge_v1"
 GENERIC_BRIDGE_ID = "upmem_generic_contraction_bridge_v1"
 BACKEND_ID = "upmem_sdk_simulator_generic_loop"
+HARDWARE_BACKEND_ID = "upmem_sdk_hardware_generic_loop"
 KERNEL_FAMILY = "generic_loop_fallback"
 DEFAULT_MAX_RANK = 16
 DEFAULT_MAX_ELEMS = 65536
@@ -26,13 +28,19 @@ DEFAULT_TIMEOUT_SECONDS = 30.0
 SNIPPET_LIMIT = 2000
 MODE_INT8_SCALED = "int8_scaled"
 MODE_FLOAT32_NO_QUANT = "float32_no_quant"
+HARDWARE_PROFILE_VERSION = "hardware_generic_loop_mvp_v1"
+HARDWARE_SDK_ALLOCATION_PROFILE = "backend=hw"
+HARDWARE_MAX_RANK = 4
+HARDWARE_MAX_ELEMS = 16
+HARDWARE_OUTPUT_TILE_ELEMENTS = 8
+HARDWARE_TIMEOUT_SECONDS = 30.0
 NATIVE_MODE_IDS = {
     MODE_INT8_SCALED: 0,
     MODE_FLOAT32_NO_QUANT: 1,
 }
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="UPMEM SDK simulator generic tensor-contraction loop runner")
     parser.add_argument("--input-manifest", required=True)
     parser.add_argument("--output-manifest", required=True)
@@ -40,7 +48,7 @@ def main() -> int:
     parser.add_argument("--target", default="simulator", choices=("simulator", "hardware"))
     parser.add_argument("--source-dir")
     parser.add_argument("--timeout-seconds", type=float, default=DEFAULT_TIMEOUT_SECONDS)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     started = time.perf_counter()
     input_path = Path(args.input_manifest)
@@ -49,6 +57,8 @@ def main() -> int:
     manifest: dict[str, Any] | None = None
     try:
         manifest = _load_manifest(input_path)
+        if args.target == "hardware":
+            return _run_hardware_mvp(args, manifest, input_path, output_path, bridge_dir, started)
         prepared = _prepare_inputs(manifest, bridge_dir, os.environ)
         requested_max_elems = _positive_int_env(os.environ, "UPMEM_GENERIC_MAX_ELEMS", DEFAULT_MAX_ELEMS)
         max_elems = requested_max_elems
@@ -106,25 +116,6 @@ def main() -> int:
                 metadata_extra=_base_metadata(args.target, False, max_elems=max_elems),
             )
             return 0
-        if args.target == "hardware":
-            _write_output_manifest(
-                output_path,
-                backend=args.backend_id,
-                status="not_implemented",
-                manifest=manifest,
-                input_manifest_path=input_path,
-                output_blob=None,
-                validation_metrics={"status": "not_applicable", "reason": "hardware_target_disabled"},
-                total_time_s=time.perf_counter() - started,
-                error=None,
-                reason="hardware_target_disabled",
-                error_type=None,
-                external_command_executed=True,
-                execution_implemented=False,
-                metadata_extra=_base_metadata(args.target, False, max_elems=max_elems),
-            )
-            return 0
-
         missing_tools = tuple(name for name, path in _required_tools(os.environ).items() if path is None)
         if missing_tools:
             _write_output_manifest(
@@ -167,7 +158,7 @@ def main() -> int:
 
         build_started = time.perf_counter()
         build = _run_command(
-            ("make", f"MAX_RANK={DEFAULT_MAX_RANK}", f"MAX_ELEMS={max_elems}"),
+            ("make", "clean", "all", f"MAX_RANK={DEFAULT_MAX_RANK}", f"MAX_ELEMS={max_elems}"),
             cwd=build_dir,
             env={**os.environ, "DPU_BACKEND": "simulator"},
             timeout_seconds=args.timeout_seconds,
@@ -343,6 +334,485 @@ def main() -> int:
         return 1
 
 
+def _run_hardware_mvp(
+    args: argparse.Namespace,
+    manifest: dict[str, Any],
+    input_path: Path,
+    output_path: Path,
+    bridge_dir: Path,
+    started: float,
+) -> int:
+    """Execute the intentionally fixed one-DPU generic-loop hardware MVP.
+
+    This branch owns physical SDK selection.  It must never inherit a
+    simulator selector or retry through a different executor.
+    """
+
+    command: tuple[str, ...] | None = None
+
+    def fail(
+        stage: str,
+        message: str,
+        *,
+        run: Mapping[str, Any] | None = None,
+        extra: Mapping[str, Any] | None = None,
+    ) -> int:
+        metadata = _hardware_metadata(False, stage)
+        if run:
+            metadata.update(
+                {
+                    "stdout_snippet": run.get("stdout_snippet"),
+                    "stderr_snippet": run.get("stderr_snippet"),
+                    "returncode": run.get("returncode"),
+                    "command": run.get("command"),
+                }
+            )
+        if extra:
+            metadata.update(dict(extra))
+        _write_output_manifest(
+            output_path,
+            backend=args.backend_id,
+            status="failed",
+            manifest=manifest,
+            input_manifest_path=input_path,
+            output_blob=None,
+            validation_metrics={"status": "failed", "reason": stage},
+            total_time_s=time.perf_counter() - started,
+            error=message,
+            reason=stage,
+            error_type=stage,
+            external_command_executed=command is not None,
+            execution_implemented=True,
+            metadata_extra=metadata,
+        )
+        return 1
+
+    try:
+        if float(args.timeout_seconds) != HARDWARE_TIMEOUT_SECONDS:
+            return fail(
+                "hardware_profile_violation",
+                f"{HARDWARE_PROFILE_VERSION} requires a fixed {HARDWARE_TIMEOUT_SECONDS:g}-second timeout",
+            )
+        if args.backend_id != HARDWARE_BACKEND_ID:
+            return fail(
+                "hardware_profile_violation",
+                f"hardware backend ID must be {HARDWARE_BACKEND_ID}",
+            )
+        if os.environ.get("UPMEM_ALLOW_PHYSICAL_HARDWARE") != "1":
+            return fail(
+                "hardware_opt_in_missing",
+                "UPMEM_ALLOW_PHYSICAL_HARDWARE=1 is required",
+            )
+        if os.environ.get("DPU_BACKEND"):
+            return fail(
+                "hardware_profile_violation",
+                "DPU_BACKEND must not be inherited by the physical generic MVP",
+            )
+        if args.source_dir:
+            return fail(
+                "hardware_profile_violation",
+                "physical generic MVP does not permit an alternate native source directory",
+            )
+        _validate_hardware_manifest(manifest)
+        prepared = _prepare_inputs(manifest, bridge_dir, os.environ)
+        if prepared["operand_mode"] != MODE_INT8_SCALED:
+            return fail(
+                "hardware_profile_violation",
+                "physical generic MVP requires identity-scale int8 operands",
+            )
+        if (
+            prepared["left"].size > HARDWARE_MAX_ELEMS
+            or prepared["right"].size > HARDWARE_MAX_ELEMS
+            or prepared["expected"].size != HARDWARE_MAX_ELEMS
+        ):
+            return fail(
+                "hardware_profile_violation",
+                "physical generic MVP requires operands <=16 elements and exactly 16 outputs",
+            )
+        native = dict(prepared["native_index_metadata"])
+        args_blob = _pack_args(native, max_rank=HARDWARE_MAX_RANK)
+        native_env = _sanitised_hardware_env(os.environ)
+        tools = _hardware_tools(native_env)
+        missing_tools = tuple(name for name, path in tools.items() if path is None)
+        if missing_tools:
+            return fail(
+                "sdk_discovery_failed",
+                "missing required UPMEM SDK tools: " + ", ".join(missing_tools),
+                extra={"missing_tools": missing_tools},
+            )
+
+        source_dir = Path(__file__).resolve().parent / "upmem_sdk_generic_loop"
+        runner_work = bridge_dir / "hardware_runner_work"
+        source_snapshot = runner_work / "src"
+        build_dir = runner_work / "build"
+        inputs_dir = runner_work / "inputs"
+        outputs_dir = runner_work / "outputs"
+        _copy_source_tree(source_dir, source_snapshot)
+        _copy_source_tree(source_dir, build_dir)
+        inputs_dir.mkdir(parents=True, exist_ok=True)
+        outputs_dir.mkdir(parents=True, exist_ok=True)
+
+        build_command = (
+            "make",
+            "clean",
+            "all",
+            f"MAX_RANK={HARDWARE_MAX_RANK}",
+            f"MAX_ELEMS={HARDWARE_MAX_ELEMS}",
+            f"OUTPUT_TILE_ELEMS={HARDWARE_OUTPUT_TILE_ELEMENTS}",
+            "NR_TASKLETS=1",
+            "UPMEM_GENERIC_HARDWARE_MVP=1",
+        )
+        build_started = time.perf_counter()
+        build = _run_command(
+            build_command,
+            cwd=build_dir,
+            env=native_env,
+            timeout_seconds=args.timeout_seconds,
+        )
+        build_time_s = time.perf_counter() - build_started
+        if build["status"] != "passed":
+            return fail(
+                "native_build_failed",
+                "isolated physical generic-loop build failed",
+                run=build,
+                extra={"build_time_s": build_time_s},
+            )
+
+        args_path = inputs_dir / "generic_args.bin"
+        left_path = inputs_dir / "left_i8.bin"
+        right_path = inputs_dir / "right_i8.bin"
+        raw_output_path = outputs_dir / "generic_output_i32.bin"
+        status_path = runner_work / "host_status.json"
+        args_path.write_bytes(args_blob)
+        prepared["left"].astype(np.int8, copy=False).ravel().tofile(left_path)
+        prepared["right"].astype(np.int8, copy=False).ravel().tofile(right_path)
+        command = (
+            str(build_dir / "bin" / "host"),
+            str(build_dir / "bin" / "dpu_generic"),
+            str(args_path),
+            str(left_path),
+            str(right_path),
+            str(raw_output_path),
+        )
+        host_env = dict(native_env)
+        host_env["UPMEM_GENERIC_STATUS_JSON"] = str(status_path)
+        run_started = time.perf_counter()
+        run = _run_command(
+            command,
+            cwd=build_dir,
+            env=host_env,
+            timeout_seconds=args.timeout_seconds,
+        )
+        host_wall_time_s = time.perf_counter() - run_started
+        host_status = _load_status(status_path)
+        if run["status"] == "timeout":
+            return fail("kernel_timeout", "physical generic host invocation timed out", run=run)
+        if run["status"] != "passed":
+            return fail(
+                _hardware_failure_stage(run, host_status),
+                "physical generic host invocation failed",
+                run=run,
+                extra={"hardware_status_json": host_status},
+            )
+        if not _hardware_status_valid(host_status):
+            return fail(
+                "output_manifest_failed",
+                "physical generic host did not prove one-DPU backend=hw execution",
+                run=run,
+                extra={"hardware_status_json": host_status},
+            )
+        if not raw_output_path.exists():
+            return fail("result_transfer_failed", "physical generic output buffer was not produced", run=run)
+
+        output_shape = tuple(int(dim) for dim in manifest["output_shape"])
+        accumulator = np.fromfile(raw_output_path, dtype="<i4")
+        if accumulator.size != int(np.prod(output_shape)):
+            return fail(
+                "result_transfer_failed",
+                "physical generic raw int32 output has an unexpected element count",
+                run=run,
+            )
+        accumulator = accumulator.reshape(output_shape)
+        expected_float = np.asarray(prepared["expected"])
+        expected_i32 = np.rint(expected_float).astype("<i4")
+        if not np.array_equal(expected_float, expected_i32.astype(expected_float.dtype)):
+            return fail(
+                "hardware_profile_violation",
+                "identity-scale generic hardware reference is not integer-valued",
+                run=run,
+            )
+        if not np.array_equal(accumulator, expected_i32):
+            return fail(
+                "output_validation_failed",
+                "raw int32 generic output differs from the retained CPU reference",
+                run=run,
+            )
+        output = accumulator.astype(np.float64) * float(prepared["output_scale"])
+        if not np.allclose(output, expected_float, rtol=0.0, atol=0.0):
+            return fail(
+                "output_validation_failed",
+                "dequantized generic output differs from expected reference",
+                run=run,
+            )
+
+        raw_accumulator_path = outputs_dir / "hardware_accumulator_i32.npy"
+        output_blob_path = bridge_dir / "outputs" / "upmem_sdk_hardware_generic_loop_output.npy"
+        output_blob_path.parent.mkdir(parents=True, exist_ok=True)
+        np.save(raw_accumulator_path, accumulator, allow_pickle=False)
+        write_started = time.perf_counter()
+        stored_output = output.astype(expected_float.dtype, copy=False)
+        np.save(output_blob_path, stored_output, allow_pickle=False)
+        write_time_s = time.perf_counter() - write_started
+        transfer = {
+            "h2d": len(args_blob) + _align8(prepared["left"].nbytes) + _align8(prepared["right"].nbytes),
+            "d2h": _align8(accumulator.nbytes),
+        }
+        transfer["total"] = int(transfer["h2d"] + transfer["d2h"])
+        metadata = {
+            **_hardware_metadata(True, None),
+            "reason": "upmem_sdk_hardware_generic_loop_executed",
+            "hardware_status_json": host_status,
+            "application_visible_transfer_bytes": {
+                **transfer,
+                "h2d_components": {
+                    "arguments": len(args_blob),
+                    "left_int8": _align8(prepared["left"].nbytes),
+                    "right_int8": _align8(prepared["right"].nbytes),
+                },
+                "d2h_components": {"output_int32": _align8(accumulator.nbytes)},
+                "scope": "application_visible_sdk_buffers_not_physical_bus_counters",
+            },
+            "hashes": {
+                "left": _hash_file(left_path),
+                "right": _hash_file(right_path),
+                "accumulator": _hash_file(raw_accumulator_path),
+                "output": _hash_file(output_blob_path),
+                "host_binary": _hash_file(build_dir / "bin" / "host"),
+                "dpu_binary": _hash_file(build_dir / "bin" / "dpu_generic"),
+                "input_manifest": _hash_file(input_path),
+                "native_source_snapshot": _hash_tree(source_snapshot),
+            },
+            "native_build": build_command,
+            "host_command": command,
+            "build_time_s": build_time_s,
+            "native_process_wall_time_s": host_wall_time_s,
+            "native_build_stdout_snippet": build.get("stdout_snippet"),
+            "native_build_stderr_snippet": build.get("stderr_snippet"),
+            "host_stdout_snippet": run.get("stdout_snippet"),
+            "host_stderr_snippet": run.get("stderr_snippet"),
+            "allocation_time_s": host_status.get("allocation_time_s"),
+            "binary_load_time_s": host_status.get("binary_load_time_s"),
+            "h2d_time_s": host_status.get("h2d_time_s"),
+            "kernel_time_s": host_status.get("kernel_time_s"),
+            "d2h_time_s": host_status.get("d2h_time_s"),
+            "host_output_write_time_s": host_status.get("output_write_time_s"),
+            "reconstruction_time_s": write_time_s,
+            "timing_decomposition_available": all(
+                host_status.get(name) is not None
+                for name in ("allocation_time_s", "binary_load_time_s", "h2d_time_s", "kernel_time_s", "d2h_time_s")
+            ),
+            "timing_decomposition_note": "Host-side SDK stage timings are bring-up diagnostics only, not isolated kernel benchmarks.",
+            "sdk_tools": _tool_versions(tools, native_env),
+            "runner_work": {
+                "source": "hardware_runner_work/src",
+                "build": "hardware_runner_work/build",
+                "inputs": "hardware_runner_work/inputs",
+                "outputs": "hardware_runner_work/outputs",
+            },
+        }
+        _write_output_manifest(
+            output_path,
+            backend=args.backend_id,
+            status="upmem_sdk_hardware_generic_loop_executed",
+            manifest=manifest,
+            input_manifest_path=input_path,
+            output_blob=_blob_payload(output_blob_path, bridge_dir, stored_output, "generic_loop_hardware_dequantized_output"),
+            validation_metrics={
+                "reference_kind": "exact_int8_x_int8_to_int32_cpu_generic_loop_reference",
+                "exact_integer_passed": True,
+                "passed": True,
+                "max_abs_error": 0.0,
+                "l2_error": 0.0,
+                "relative_l2_error": 0.0,
+            },
+            # This is the synchronous host-side SDK launch interval. It is
+            # retained for bring-up diagnostics only and is not a performance
+            # or speedup metric for this MVP.
+            compute_time_s=float(host_status.get("kernel_time_s") or 0.0),
+            write_time_s=write_time_s,
+            total_time_s=time.perf_counter() - started,
+            error=None,
+            reason="upmem_sdk_hardware_generic_loop_executed",
+            error_type=None,
+            external_command_executed=True,
+            execution_implemented=True,
+            metadata_extra=metadata,
+        )
+        return 0
+    except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        return fail("output_manifest_failed", str(exc))
+
+
+def _validate_hardware_manifest(manifest: Mapping[str, Any]) -> None:
+    metadata = manifest.get("metadata")
+    native = manifest.get("native_index_metadata")
+    fixed = manifest.get("fixed_point_spec")
+    if not isinstance(metadata, Mapping) or not isinstance(native, Mapping) or not isinstance(fixed, Mapping):
+        raise ValueError("hardware generic manifest is incomplete")
+    expected = {
+        "hardware_profile_version": HARDWARE_PROFILE_VERSION,
+        "target": "hardware",
+        "execution_class": "MRAM_WRAM_TILED",
+        "backend_id": HARDWARE_BACKEND_ID,
+        "requested_dpu_count": 1,
+        "tasklets_per_dpu": 1,
+        "max_rank": HARDWARE_MAX_RANK,
+        "max_tensor_elements": HARDWARE_MAX_ELEMS,
+        "output_tile_elements": HARDWARE_OUTPUT_TILE_ELEMENTS,
+        "synchronous_execution": True,
+        "performance_claim_applicable": False,
+        "synthetic_real_taskgraph_mvp": True,
+        "not_real_quantum_circuit": True,
+        "sdk_allocation_profile": HARDWARE_SDK_ALLOCATION_PROFILE,
+    }
+    for key, value in expected.items():
+        if metadata.get(key) != value:
+            raise ValueError(f"hardware generic manifest metadata {key} is invalid")
+    if manifest.get("backend_id") != HARDWARE_BACKEND_ID or manifest.get("execution_target") != "upmem_hardware":
+        raise ValueError("hardware generic manifest backend or target is invalid")
+    if fixed.get("route_dtype") != "int8" or fixed.get("complex_policy") != "reject" or float(fixed.get("scale", 0.0)) != 1.0:
+        raise ValueError("hardware generic manifest must use identity int8 quantization")
+    if (
+        int(native.get("left_rank", -1)) != 3
+        or int(native.get("right_rank", -1)) != 3
+        or int(native.get("output_rank", -1)) != 4
+        or int(native.get("output_element_count", -1)) != HARDWARE_MAX_ELEMS
+        or int(native.get("contracted_combination_count", -1)) != 2
+        or int(native.get("generic_output_tile_elements", -1)) != HARDWARE_OUTPUT_TILE_ELEMENTS
+        or int(native.get("generic_output_tile_count", -1)) != 2
+    ):
+        raise ValueError("hardware generic manifest native task contract is invalid")
+
+
+def _hardware_metadata(kernel_executed: bool, failure_stage: str | None) -> dict[str, Any]:
+    return {
+        **_base_metadata("hardware", kernel_executed, max_elems=HARDWARE_MAX_ELEMS),
+        "hardware_profile_version": HARDWARE_PROFILE_VERSION,
+        "target": "hardware",
+        "execution_class": "MRAM_WRAM_TILED",
+        "backend_id": HARDWARE_BACKEND_ID,
+        "requested_dpu_count": 1,
+        "tasklets_per_dpu": 1,
+        "sdk_allocation_profile": HARDWARE_SDK_ALLOCATION_PROFILE,
+        "sdk_allocation_profile_source": "compiled_native_literal",
+        "hardware_kernel_executed": kernel_executed,
+        "native_kernel_executed": kernel_executed,
+        "simulator_kernel_executed": False,
+        "cpu_fallback_used": False,
+        "hardware_functionality_evidence": True,
+        "hardware_speedup_applicable": False,
+        "timing_labels": "hardware_bringup_functionality_only",
+        "failure_stage": failure_stage,
+        "generic_output_tile_elements": HARDWARE_OUTPUT_TILE_ELEMENTS,
+        "generic_output_tile_count": 2,
+        "mram_tiled_task_count": 1,
+    }
+
+
+def _sanitised_hardware_env(env: Mapping[str, str]) -> dict[str, str]:
+    result = dict(env)
+    for name in ("UPMEM_PROFILE", "UPMEM_PROFILE_BASE", "DPU_BACKEND"):
+        result.pop(name, None)
+    return result
+
+
+def _hardware_tools(env: Mapping[str, str]) -> dict[str, str | None]:
+    home = env.get("UPMEM_HOME")
+
+    def find(name: str) -> str | None:
+        if home:
+            candidate = Path(home) / "bin" / name
+            if candidate.exists():
+                return str(candidate)
+        return shutil.which(name, path=env.get("PATH"))
+
+    return {name: find(name) for name in ("make", "dpu-upmem-dpurte-clang", "dpu-pkg-config")}
+
+
+def _load_status(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _hardware_status_valid(status: Mapping[str, Any]) -> bool:
+    return (
+        status.get("success") is True
+        and status.get("failure_stage") is None
+        and status.get("allocation_profile") == HARDWARE_SDK_ALLOCATION_PROFILE
+        and status.get("requested_dpus") == 1
+        and status.get("allocated_dpus") == 1
+        and status.get("tasklets") == 1
+    )
+
+
+def _hardware_failure_stage(run: Mapping[str, Any], status: Mapping[str, Any]) -> str:
+    stage = str(status.get("failure_stage") or "")
+    if stage in {
+        "hardware_profile_violation", "hardware_allocation_failed", "binary_load_failed",
+        "argument_transfer_failed", "operand_transfer_failed", "kernel_launch_failed",
+        "result_transfer_failed", "output_manifest_failed", "hardware_release_failed",
+    }:
+        return stage
+    text = f"{run.get('stdout_snippet', '')}\n{run.get('stderr_snippet', '')}".lower()
+    for needles, candidate in (
+        (("dpu_alloc", "allocation"), "hardware_allocation_failed"),
+        (("dpu_load", "binary"), "binary_load_failed"),
+        (("generic_args", "argument"), "argument_transfer_failed"),
+        (("generic_a", "generic_b", "operand"), "operand_transfer_failed"),
+        (("dpu_launch", "launch"), "kernel_launch_failed"),
+        (("generic_c", "copy_from", "result"), "result_transfer_failed"),
+        (("dpu_free", "release"), "hardware_release_failed"),
+    ):
+        if any(needle in text for needle in needles):
+            return candidate
+    return "kernel_launch_failed"
+
+
+def _hash_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _hash_tree(path: Path) -> str:
+    digest = hashlib.sha256()
+    for item in sorted(path.rglob("*")):
+        if item.is_file():
+            digest.update(item.relative_to(path).as_posix().encode("utf-8"))
+            digest.update(_hash_file(item).encode("ascii"))
+    return digest.hexdigest()
+
+
+def _tool_versions(tools: Mapping[str, str | None], env: Mapping[str, str]) -> dict[str, str | None]:
+    return {name: _command_version(path, env) if path else None for name, path in tools.items()}
+
+
+def _command_version(command: str | None, env: Mapping[str, str]) -> str | None:
+    if not command:
+        return None
+    try:
+        completed = subprocess.run([command, "--version"], env=dict(env), capture_output=True, text=True, check=False, timeout=5.0)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    output = (completed.stdout or completed.stderr or "").strip().splitlines()
+    return output[0] if output else None
+
+
 def _load_manifest(path: Path) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if payload.get("schema_version") != GENERIC_BRIDGE_SCHEMA_VERSION:
@@ -442,8 +912,7 @@ def _load_transfer_accounting(path: Path) -> dict[str, Any]:
     return payload
 
 
-def _pack_args(native: dict[str, Any]) -> bytes:
-    max_rank = DEFAULT_MAX_RANK
+def _pack_args(native: dict[str, Any], *, max_rank: int = DEFAULT_MAX_RANK) -> bytes:
 
     def u32_array(name: str) -> list[int]:
         values = [int(value) for value in native.get(name, ())]
@@ -556,7 +1025,10 @@ def _required_tools(env: Mapping[str, str]) -> dict[str, str | None]:
 def _copy_source_tree(source: Path, dest: Path) -> None:
     if dest.exists():
         shutil.rmtree(dest)
-    shutil.copytree(source, dest)
+    # The runner must compile its requested profile from source. Carrying a
+    # developer's local native binaries into an isolated work tree can cause
+    # Make to reuse a binary built with incompatible rank or element limits.
+    shutil.copytree(source, dest, ignore=shutil.ignore_patterns("bin", "__pycache__", "*.pyc"))
 
 
 def _run_command(command: tuple[str, ...], *, cwd: Path, env: Mapping[str, str], timeout_seconds: float) -> dict[str, Any]:
