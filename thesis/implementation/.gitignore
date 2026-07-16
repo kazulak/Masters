@@ -1,3 +1,6 @@
+# Generated evidence, imported ETH bundles, and derived comparisons. These are
+# deliberately outside Git until a reviewed compact snapshot is promoted under
+# thesis_results/.
 runs*/
 native/quest_cpu/bin/
 native/quest_gpu/bin/

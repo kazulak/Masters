@@ -18,4 +18,5 @@ default location is `runs/comparisons/research_pack/<timestamp>/`; a labeled
 pack such as `--label planner_v2` is written under
 `runs/comparisons/planner_v2/<timestamp>/`. Each namespace retains its own
 `latest` link. Raw tensor dumps and native build output are intentionally not
-tracked here.
+tracked here. Raw ETH bundles first go to the ignored `runs/inbox/eth/` area;
+only reviewed compact evidence belongs in this directory.

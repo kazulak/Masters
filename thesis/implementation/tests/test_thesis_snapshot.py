@@ -170,6 +170,17 @@ def test_hardware_mvp_capsule_keeps_profile_and_explicit_role(tmp_path: Path) ->
     assert (staging / "suites" / "upmem_hardware_functionality.yml").is_file()
 
 
+def test_taskgraph_hardware_capsule_uses_a_distinct_role(tmp_path: Path) -> None:
+    evidence = _evidence(tmp_path, "upmem_hardware_taskgraph_correctness", "run")
+    staging = tmp_path / "staging"
+    (staging / "evidence").mkdir(parents=True)
+    (staging / "suites").mkdir()
+
+    entry = thesis_snapshot._copy_evidence_capsule(evidence, staging, set())
+
+    assert entry["role"] == "upmem_hardware_taskgraph_correctness"
+
+
 def test_dirty_implementation_source_fails_promotion(monkeypatch, tmp_path: Path) -> None:
     evidence = _evidence(tmp_path, "research_cpu_gpu", "run")
     pack = tmp_path / "pack"
