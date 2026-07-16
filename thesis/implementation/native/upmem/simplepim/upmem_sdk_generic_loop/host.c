@@ -2,9 +2,11 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/time.h>
 
 #include "common.h"
+#include "session_protocol.h"
 
 #ifndef UPMEM_GENERIC_HARDWARE_MVP
 #define UPMEM_GENERIC_HARDWARE_MVP 0
@@ -291,7 +293,301 @@ static int validate_index_maps(const upmem_generic_args_t *args) {
     return 0;
 }
 
+static int validate_session_task(upmem_generic_session_task *task) {
+    const upmem_generic_args_t *args = &task->args;
+    uint64_t contracted_product = 1u;
+    const int float32_mode = args->operand_mode == UPMEM_GENERIC_MODE_FLOAT32_NO_QUANT;
+    const size_t input_elem_size = float32_mode ? sizeof(float) : sizeof(int8_t);
+    const size_t output_elem_size = float32_mode ? sizeof(float) : sizeof(int32_t);
+
+    if (args->left_rank > UPMEM_GENERIC_MAX_RANK ||
+        args->right_rank > UPMEM_GENERIC_MAX_RANK ||
+        args->output_rank > UPMEM_GENERIC_MAX_RANK ||
+        args->contracted_rank > UPMEM_GENERIC_MAX_RANK ||
+        args->left_elems == 0 || args->right_elems == 0 ||
+        args->output_elems == 0 || args->contracted_elems == 0 ||
+        args->left_elems > UPMEM_GENERIC_MAX_ELEMS ||
+        args->right_elems > UPMEM_GENERIC_MAX_ELEMS ||
+        args->output_elems > UPMEM_GENERIC_MAX_ELEMS ||
+        args->contracted_elems > UPMEM_GENERIC_MAX_ELEMS ||
+        (args->operand_mode != UPMEM_GENERIC_MODE_INT8_SCALED &&
+         args->operand_mode != UPMEM_GENERIC_MODE_FLOAT32_NO_QUANT) ||
+        validate_row_major(args->left_shape, args->left_strides, args->left_rank, args->left_elems) != 0 ||
+        validate_row_major(args->right_shape, args->right_strides, args->right_rank, args->right_elems) != 0 ||
+        validate_index_maps(args) != 0) {
+        return 1;
+    }
+    for (uint32_t axis = 0; axis < args->contracted_rank; axis++) {
+        if (args->contracted_dims[axis] == 0 ||
+            contracted_product > UINT32_MAX / args->contracted_dims[axis]) {
+            return 1;
+        }
+        contracted_product *= args->contracted_dims[axis];
+    }
+    if (contracted_product != args->contracted_elems ||
+        validate_row_major(args->output_shape, args->output_strides,
+                           args->output_rank, args->output_elems) != 0) {
+        return 1;
+    }
+    return transfer_sizes(args->left_elems, input_elem_size,
+                          &task->left_bytes, &task->left_transfer_bytes) != 0 ||
+        transfer_sizes(args->right_elems, input_elem_size,
+                       &task->right_bytes, &task->right_transfer_bytes) != 0 ||
+        transfer_sizes(args->output_elems, output_elem_size,
+                       &task->output_bytes, &task->output_transfer_bytes) != 0;
+}
+
+static void mark_session_task_failure(
+    upmem_generic_session_task *task,
+    const char *stage,
+    int sdk_error_code
+) {
+    task->result_status = UPMEM_GENERIC_SESSION_TASK_FAILED;
+    task->sdk_error_code = sdk_error_code;
+    snprintf(task->failure_stage, sizeof(task->failure_stage), "%s", stage);
+}
+
+static int run_session(const char *manifest_path, const char *response_path) {
+    upmem_generic_session session;
+    char *manifest_error = NULL;
+    struct dpu_set_t set;
+    struct dpu_set_t dpu;
+    dpu_error_t error = DPU_OK;
+    uint32_t allocated_dpus = 0u;
+    int set_allocated = 0;
+    int sdk_error_code = -1;
+    const char *failure_stage = NULL;
+    const char *failure_message = NULL;
+    double allocation_time_s = 0.0;
+    double binary_load_time_s = 0.0;
+    double batch_time_s = 0.0;
+    double release_time_s = 0.0;
+
+    if (upmem_generic_session_load(manifest_path, &session, &manifest_error) != 0) {
+        int response_rc = upmem_generic_session_write_error_response(
+            response_path, "manifest_parse_failed",
+            manifest_error ? manifest_error : "invalid session manifest"
+        );
+        free(manifest_error);
+        return response_rc == 0 ? 2 : 1;
+    }
+
+#if NR_TASKLETS != 1
+    failure_stage = "hardware_profile_violation";
+    failure_message = "persistent generic session requires NR_TASKLETS=1";
+    goto session_response;
+#endif
+
+    /*
+     * Preflight every args.bin before allocating a DPU. This makes malformed
+     * later tasks deterministic and prevents a partial batch from consuming a
+     * physical DPU when no task could have run.
+     */
+    for (size_t index = 0; index < session.task_count; index++) {
+        upmem_generic_session_task *task = &session.tasks[index];
+        if (read_exact(task->args_path, &task->args, sizeof(task->args)) != 0) {
+            mark_session_task_failure(task, "argument_transfer_failed", -1);
+            failure_stage = "argument_transfer_failed";
+            failure_message = "session task args.bin could not be read";
+            goto session_response;
+        }
+        if (validate_session_task(task) != 0) {
+            mark_session_task_failure(task, "hardware_profile_violation", -1);
+            failure_stage = "hardware_profile_violation";
+            failure_message = "session task generic contraction metadata is invalid";
+            goto session_response;
+        }
+    }
+
+    {
+        const double started = now_s();
+        error = dpu_alloc(session.requested_dpus, UPMEM_GENERIC_ALLOCATION_PROFILE, &set);
+        allocation_time_s = now_s() - started;
+    }
+    if (error != DPU_OK) {
+        report_sdk_error("dpu_alloc", error);
+        sdk_error_code = (int)error;
+        failure_stage = error == DPU_ERR_INVALID_PROFILE
+            ? "hardware_profile_violation" : "hardware_allocation_failed";
+        failure_message = "persistent session DPU allocation failed";
+        goto session_response;
+    }
+    set_allocated = 1;
+    error = dpu_get_nr_dpus(set, &allocated_dpus);
+    if (error != DPU_OK || allocated_dpus != session.requested_dpus) {
+        if (error != DPU_OK) {
+            report_sdk_error("dpu_get_nr_dpus", error);
+            sdk_error_code = (int)error;
+        }
+        failure_stage = "hardware_allocation_failed";
+        failure_message = "persistent session did not receive exactly one DPU";
+        goto session_release;
+    }
+    {
+        const double started = now_s();
+        error = dpu_load(set, session.dpu_binary_path, NULL);
+        binary_load_time_s = now_s() - started;
+    }
+    if (error != DPU_OK) {
+        report_sdk_error("dpu_load", error);
+        sdk_error_code = (int)error;
+        failure_stage = "binary_load_failed";
+        failure_message = "persistent session DPU binary load failed";
+        goto session_release;
+    }
+
+    {
+        const double batch_started = now_s();
+        for (size_t index = 0; index < session.task_count; index++) {
+            upmem_generic_session_task *task = &session.tasks[index];
+            unsigned char *left = NULL;
+            unsigned char *right = NULL;
+            unsigned char *output = NULL;
+            const double task_started = now_s();
+            double stage_started;
+
+            left = (unsigned char *)calloc(task->left_transfer_bytes, 1u);
+            right = (unsigned char *)calloc(task->right_transfer_bytes, 1u);
+            output = (unsigned char *)calloc(task->output_transfer_bytes, 1u);
+            if (left == NULL || right == NULL || output == NULL) {
+                task->timing.total_time_s = now_s() - task_started;
+                mark_session_task_failure(task, "hardware_allocation_failed", -1);
+                failure_stage = "hardware_allocation_failed";
+                failure_message = "persistent session task buffers could not be allocated";
+                free(left); free(right); free(output);
+                break;
+            }
+            stage_started = now_s();
+            if (read_exact(task->left_path, left, task->left_bytes) != 0 ||
+                read_exact(task->right_path, right, task->right_bytes) != 0) {
+                task->timing.input_read_time_s = now_s() - stage_started;
+                task->timing.total_time_s = now_s() - task_started;
+                mark_session_task_failure(task, "operand_transfer_failed", -1);
+                failure_stage = "operand_transfer_failed";
+                failure_message = "persistent session task operand could not be read";
+                free(left); free(right); free(output);
+                break;
+            }
+            task->timing.input_read_time_s = now_s() - stage_started;
+
+            stage_started = now_s();
+            error = dpu_broadcast_to(set, "GENERIC_ARGS", 0, &task->args,
+                                     sizeof(task->args), DPU_XFER_DEFAULT);
+            if (error == DPU_OK) {
+                error = dpu_broadcast_to(set, "GENERIC_A_RAW", 0, left,
+                                         task->left_transfer_bytes, DPU_XFER_DEFAULT);
+            }
+            if (error == DPU_OK) {
+                error = dpu_broadcast_to(set, "GENERIC_B_RAW", 0, right,
+                                         task->right_transfer_bytes, DPU_XFER_DEFAULT);
+            }
+            task->timing.h2d_time_s = now_s() - stage_started;
+            if (error != DPU_OK) {
+                report_sdk_error("persistent task operand transfer", error);
+                sdk_error_code = (int)error;
+                task->timing.total_time_s = now_s() - task_started;
+                mark_session_task_failure(task, "operand_transfer_failed", sdk_error_code);
+                failure_stage = "operand_transfer_failed";
+                failure_message = "persistent session task H2D transfer failed";
+                free(left); free(right); free(output);
+                break;
+            }
+
+            stage_started = now_s();
+            error = dpu_launch(set, DPU_SYNCHRONOUS);
+            task->timing.kernel_time_s = now_s() - stage_started;
+            if (error != DPU_OK) {
+                report_sdk_error("persistent task dpu_launch", error);
+                sdk_error_code = (int)error;
+                task->timing.total_time_s = now_s() - task_started;
+                mark_session_task_failure(task, "kernel_launch_failed", sdk_error_code);
+                failure_stage = "kernel_launch_failed";
+                failure_message = "persistent session synchronous launch failed";
+                free(left); free(right); free(output);
+                break;
+            }
+
+            stage_started = now_s();
+            DPU_FOREACH(set, dpu) {
+                error = dpu_copy_from(dpu, "GENERIC_C_RAW", 0, output,
+                                       task->output_transfer_bytes);
+                break;
+            }
+            task->timing.d2h_time_s = now_s() - stage_started;
+            if (error != DPU_OK) {
+                report_sdk_error("persistent task result transfer", error);
+                sdk_error_code = (int)error;
+                task->timing.total_time_s = now_s() - task_started;
+                mark_session_task_failure(task, "result_transfer_failed", sdk_error_code);
+                failure_stage = "result_transfer_failed";
+                failure_message = "persistent session task D2H transfer failed";
+                free(left); free(right); free(output);
+                break;
+            }
+
+            stage_started = now_s();
+            if (write_exact(task->output_path, output, task->output_bytes) != 0) {
+                task->timing.output_write_time_s = now_s() - stage_started;
+                task->timing.total_time_s = now_s() - task_started;
+                mark_session_task_failure(task, "output_manifest_failed", -1);
+                failure_stage = "output_manifest_failed";
+                failure_message = "persistent session task output could not be written";
+                free(left); free(right); free(output);
+                break;
+            }
+            task->timing.output_write_time_s = now_s() - stage_started;
+            task->timing.total_time_s = now_s() - task_started;
+            task->result_status = UPMEM_GENERIC_SESSION_TASK_COMPLETED;
+            task->sdk_error_code = 0;
+            free(left); free(right); free(output);
+        }
+        batch_time_s = now_s() - batch_started;
+    }
+
+session_release:
+    if (set_allocated) {
+        const double started = now_s();
+        error = dpu_free(set);
+        release_time_s = now_s() - started;
+        if (error != DPU_OK) {
+            report_sdk_error("dpu_free", error);
+            sdk_error_code = (int)error;
+            failure_stage = "hardware_release_failed";
+            failure_message = "persistent session DPU release failed";
+        }
+    }
+
+session_response:
+    if (failure_stage == NULL) {
+        sdk_error_code = 0;
+        failure_message = NULL;
+    } else {
+        for (size_t index = 0; index < session.task_count; index++) {
+            if (session.tasks[index].result_status == UPMEM_GENERIC_SESSION_TASK_NOT_RUN) {
+                snprintf(session.tasks[index].failure_stage,
+                         sizeof(session.tasks[index].failure_stage),
+                         "%s", "not_run_after_failure");
+            }
+        }
+    }
+    {
+        const int response_rc = upmem_generic_session_write_response(
+            response_path, &session, failure_stage == NULL ? "completed" : "failed",
+            failure_stage, failure_message, allocated_dpus, sdk_error_code,
+            allocation_time_s, binary_load_time_s, batch_time_s, release_time_s
+        );
+        upmem_generic_session_free(&session);
+        return response_rc == 0 && failure_stage == NULL ? 0 : 1;
+    }
+}
+
 int main(int argc, char **argv) {
+    if (argc == 5 &&
+        strcmp(argv[1], "--session-manifest") == 0 &&
+        strcmp(argv[3], "--response-manifest") == 0) {
+        return run_session(argv[2], argv[4]);
+    }
+
     const uint32_t requested_dpus = 1;
     uint32_t allocated_dpus = 0;
     int set_allocated = 0;

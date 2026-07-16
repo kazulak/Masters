@@ -94,6 +94,7 @@ Generated runs use readable local timestamps:
 
 ```text
 runs/
+  inbox/eth/<experiment-id>/              # copied raw ETH archives; ignored
   evidence/<suite>/<route>/2026-07-10_18-30-00/
   comparisons/research_pack/2026-07-10_19-15-00/
 ```
@@ -119,6 +120,21 @@ Reports are regenerated from `normalized_records.jsonl`; benchmark execution is
 not repeated. Generated plots and comparison tables never belong in
 `runs/evidence`.
 
+## Importing ETH Evidence
+
+Raw results copied from the ETH UPMEM host belong in the ignored
+`runs/inbox/eth/` staging area, not beside source code. Create it with:
+
+```bash
+make evidence-inbox
+```
+
+Keep the archive there, extract the validated evidence run under
+`runs/evidence/`, then regenerate a report from that exact run. Only after the
+source commit, normalized rows, and report have been reviewed should a compact
+named snapshot be promoted into `thesis_results/`. The complete copy, audit,
+and promotion procedure is in [the evidence workflow](docs/evidence_workflow.md).
+
 ## Individual Commands
 
 The full matrix is preferred, but focused commands remain useful:
@@ -130,6 +146,8 @@ make bench-gpu
 make bench-upmem-sim
 make upmem-hw-mvp-plan
 make upmem-hw-generic-plan
+make upmem-hw-taskgraph-plan
+make upmem-hw-taskgraph-report
 make planner-report
 make research-plan
 ```
@@ -141,11 +159,19 @@ make upmem-hw-mvp-plan
 UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-mvp
 make upmem-hw-generic-plan
 UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-generic-mvp
+UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-taskgraph
+make upmem-hw-taskgraph-report
 ```
 
-This runs only the fixed 2x2 then 4x4 one-DPU/one-tasklet dense int8 MVP. It
-does not run the generic TaskGraph route, report timing as speedup, or promote
-the resulting evidence automatically.
+The TaskGraph hardware command is correctness-only and does not claim speedup.
+Its report compares float32 and int8 via recorded application-visible transfer
+bytes and validation error. Its runtime figure remains an explicit TODO until
+the route uses a persistent whole-TaskGraph hardware session.
+See [the ETH runbook](docs/upmem_hardware_taskgraph_runbook.md).
+
+The dense MVP remains separate: it runs only the fixed 2x2 then 4x4
+one-DPU/one-tasklet int8 cases. Neither hardware command promotes evidence or
+reports timing as speedup automatically.
 Physical allocation uses the explicit SDK `backend=hw` contract. The runner
 isolates `UPMEM_PROFILE` and `UPMEM_PROFILE_BASE` from child processes; do not
 set either variable to select hardware. `UPMEM_ALLOW_PHYSICAL_HARDWARE=1`

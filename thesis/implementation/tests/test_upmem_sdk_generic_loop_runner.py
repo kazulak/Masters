@@ -191,6 +191,149 @@ def test_native_generic_hardware_build_is_fixed_to_one_tasklet_and_hw_profile() 
     assert "argc != 6" in host
 
 
+def test_native_persistent_session_protocol_is_additive_and_structured() -> None:
+    native_dir = ROOT / "native" / "upmem" / "simplepim" / "upmem_sdk_generic_loop"
+    host = (native_dir / "host.c").read_text(encoding="utf-8")
+    protocol = (native_dir / "session_protocol.h").read_text(encoding="utf-8")
+    documentation = (native_dir / "SESSION_PROTOCOL.md").read_text(encoding="utf-8")
+
+    assert 'strcmp(argv[1], "--session-manifest")' in host
+    assert 'strcmp(argv[3], "--response-manifest")' in host
+    assert "dpu_alloc(session.requested_dpus" in host
+    assert "dpu_load(set, session.dpu_binary_path" in host
+    assert "DPU_SYNCHRONOUS" in host
+    assert "upmem_generic_session_write_response" in host
+    assert "UPMEM_GENERIC_SESSION_SCHEMA" in protocol
+    assert '"status": "completed"' in documentation or "status, failure stage" in documentation
+    assert "There is no fallback" in protocol
+
+
+def _run_native_persistent_session_protocol_ordered_batch(
+    tmp_path: Path,
+    mode: str,
+) -> None:
+    runner = _load_runner_module()
+    missing = tuple(name for name, path in runner._required_tools(os.environ).items() if path is None)
+    if missing:
+        pytest.skip(f"UPMEM SDK simulator unavailable: missing {', '.join(missing)}")
+
+    native_source = ROOT / "native" / "upmem" / "simplepim" / "upmem_sdk_generic_loop"
+    build_dir = tmp_path / "build"
+    runner._copy_source_tree(native_source, build_dir)
+    build = runner._run_command(
+        ("make", "clean", "all"),
+        cwd=build_dir,
+        env={**os.environ, "DPU_BACKEND": "simulator"},
+        timeout_seconds=60.0,
+    )
+    assert build["status"] == "passed", build
+
+    inputs = tmp_path / "inputs"
+    outputs = tmp_path / "outputs"
+    inputs.mkdir()
+    outputs.mkdir()
+    native = {
+        "operand_mode": mode,
+        "left_rank": 2,
+        "right_rank": 2,
+        "output_rank": 2,
+        "contracted_rank": 1,
+        "left_shape": [2, 2],
+        "right_shape": [2, 2],
+        "output_shape": [2, 2],
+        "contracted_dims": [2],
+        "left_strides": [2, 1],
+        "right_strides": [2, 1],
+        "output_strides": [2, 1],
+        "output_to_left_axes": [0, -1],
+        "output_to_right_axes": [-1, 1],
+        "contracted_to_left_axes": [1],
+        "contracted_to_right_axes": [0],
+        "output_element_count": 4,
+        "contracted_combination_count": 2,
+    }
+    if mode == "float32_no_quant":
+        left_values = np.asarray([[1.0, 0.5], [2.0, -1.0]], dtype="<f4")
+        right_values = np.asarray([[2.0, 3.0], [-4.0, 1.0]], dtype="<f4")
+        output_dtype = "<f4"
+    else:
+        left_values = np.asarray([[1, 2], [3, -1]], dtype=np.int8)
+        right_values = np.asarray([[2, 3], [-4, 1]], dtype=np.int8)
+        output_dtype = "<i4"
+
+    tasks = []
+    for index, multiplier in enumerate((1, 2)):
+        left_path = inputs / f"task-{index}-left.bin"
+        right_path = inputs / f"task-{index}-right.bin"
+        args_path = inputs / f"task-{index}-args.bin"
+        output_path = outputs / f"task-{index}-output.bin"
+        (left_values * multiplier).ravel().tofile(left_path)
+        (right_values * multiplier).ravel().tofile(right_path)
+        args_path.write_bytes(runner._pack_args(native))
+        tasks.append(
+            {
+                "task_id": f"task-{index}",
+                "args_path": args_path.relative_to(tmp_path).as_posix(),
+                "left_path": left_path.relative_to(tmp_path).as_posix(),
+                "right_path": right_path.relative_to(tmp_path).as_posix(),
+                "output_path": output_path.relative_to(tmp_path).as_posix(),
+            }
+        )
+
+    manifest = tmp_path / "session.json"
+    response = tmp_path / "response.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": "upmem_generic_session_v1",
+                "manifest_kind": "upmem_generic_session_input",
+                "session_id": f"test-{mode}",
+                "dpu_binary": "build/bin/dpu_generic",
+                "requested_dpus": 1,
+                "tasklets": 1,
+                "tasks": tasks,
+            }
+        ),
+        encoding="utf-8",
+    )
+    run = runner._run_command(
+        (
+            str(build_dir / "bin" / "host"),
+            "--session-manifest",
+            str(manifest),
+            "--response-manifest",
+            str(response),
+        ),
+        cwd=tmp_path,
+        env={**os.environ, "DPU_BACKEND": "simulator"},
+        timeout_seconds=60.0,
+    )
+    assert run["status"] == "passed", run
+
+    result = json.loads(response.read_text(encoding="utf-8"))
+    assert result["status"] == "completed"
+    assert result["requested_dpus"] == result["allocated_dpus"] == 1
+    assert result["tasklets"] == 1
+    assert result["task_count"] == result["completed_task_count"] == 2
+    assert [task["task_id"] for task in result["tasks"]] == ["task-0", "task-1"]
+    assert all(task["status"] == "completed" for task in result["tasks"])
+    assert all(task["output"]["path"] == tasks[index]["output_path"] for index, task in enumerate(result["tasks"]))
+    for index, multiplier in enumerate((1, 2)):
+        actual = np.fromfile(outputs / f"task-{index}-output.bin", dtype=output_dtype).reshape((2, 2))
+        expected = np.einsum(
+            "ik,kj->ij",
+            left_values * multiplier,
+            right_values * multiplier,
+            optimize=False,
+        )
+        np.testing.assert_allclose(actual, expected, rtol=0.0, atol=0.0)
+
+
+@pytest.mark.parametrize("mode", ("float32_no_quant", "int8_scaled"))
+def test_native_persistent_session_protocol_modes(tmp_path: Path, mode: str) -> None:
+    _run_native_persistent_session_protocol_ordered_batch(tmp_path, mode)
+
+
 def test_native_transfer_accounting_loader_preserves_application_visible_scope(tmp_path: Path) -> None:
     runner = _load_runner_module()
     path = tmp_path / "transfer_accounting.json"

@@ -16,8 +16,8 @@ bin:
 bin/dpu_generic: dpu.c common.h | bin
 	$(DPU_CC) -O2 -DNR_TASKLETS=$(NR_TASKLETS) -DUPMEM_GENERIC_HARDWARE_MVP=$(UPMEM_GENERIC_HARDWARE_MVP) -DUPMEM_GENERIC_MAX_RANK=$(MAX_RANK) -DUPMEM_GENERIC_MAX_ELEMS=$(MAX_ELEMS) -DUPMEM_GENERIC_OUTPUT_TILE_ELEMS=$(OUTPUT_TILE_ELEMS) -o $@ dpu.c
 
-bin/host: host.c common.h | bin
-	$(HOST_CC) -std=c99 -O2 -Wall -Wextra -DNR_TASKLETS=$(NR_TASKLETS) -DUPMEM_GENERIC_HARDWARE_MVP=$(UPMEM_GENERIC_HARDWARE_MVP) -DUPMEM_GENERIC_MAX_RANK=$(MAX_RANK) -DUPMEM_GENERIC_MAX_ELEMS=$(MAX_ELEMS) -DUPMEM_GENERIC_OUTPUT_TILE_ELEMS=$(OUTPUT_TILE_ELEMS) -o $@ host.c `dpu-pkg-config --cflags --libs dpu`
+bin/host: host.c common.h session_protocol.c session_protocol.h | bin
+	$(HOST_CC) -std=c99 -O2 -Wall -Wextra -DNR_TASKLETS=$(NR_TASKLETS) -DUPMEM_GENERIC_HARDWARE_MVP=$(UPMEM_GENERIC_HARDWARE_MVP) -DUPMEM_GENERIC_MAX_RANK=$(MAX_RANK) -DUPMEM_GENERIC_MAX_ELEMS=$(MAX_ELEMS) -DUPMEM_GENERIC_OUTPUT_TILE_ELEMS=$(OUTPUT_TILE_ELEMS) -o $@ host.c session_protocol.c $$(dpu-pkg-config --cflags --libs dpu)
 
 clean:
 	rm -rf bin

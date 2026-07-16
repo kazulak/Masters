@@ -19,6 +19,9 @@ GPU_SUITE ?= configs/suites/gpu_evidence.yml
 UPMEM_SIM_SUITE ?= configs/suites/upmem_sim_evidence.yml
 UPMEM_HW_MVP_SUITE ?= configs/suites/upmem_hardware_mvp.yml
 UPMEM_HW_GENERIC_MVP_SUITE ?= configs/suites/upmem_hardware_generic_mvp.yml
+UPMEM_HW_TASKGRAPH_SUITE ?= configs/suites/upmem_hardware_taskgraph_correctness.yml
+UPMEM_HW_TASKGRAPH_RUN ?= runs/evidence/upmem_hardware_taskgraph/upmem_hw_taskgraph/latest
+EVIDENCE_INBOX ?= runs/inbox/eth
 GPU_VERIFY ?= quest-hip
 CLEAN_RUNS ?= 0
 THESIS_PACK ?= runs/comparisons/research_pack/latest
@@ -37,6 +40,10 @@ PUBLIC_TARGETS := \
 	upmem-hw-mvp \
 	upmem-hw-generic-plan \
 	upmem-hw-generic-mvp \
+	upmem-hw-taskgraph-plan \
+	upmem-hw-taskgraph \
+	upmem-hw-taskgraph-report \
+	evidence-inbox \
 	research-plan \
 	planner-evidence \
 	planner-report \
@@ -66,6 +73,10 @@ help:
 		'  make upmem-hw-mvp       Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; runs the one-DPU hardware dense MVP' \
 		'  make upmem-hw-generic-plan  Prepare/build the guarded generic TaskGraph MVP; never allocates a DPU' \
 		'  make upmem-hw-generic-mvp   Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; runs one real generic TaskGraph contraction' \
+		'  make upmem-hw-taskgraph-plan  Prepare/build the physical TaskGraph correctness route; never allocates a DPU' \
+		'  make upmem-hw-taskgraph  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; runs correctness-only TaskGraph evidence' \
+		'  make upmem-hw-taskgraph-report  Generate correctness/quantization plots from the latest physical TaskGraph evidence' \
+		'  make evidence-inbox     Create the ignored inbox for copied ETH evidence bundles' \
 		'  make research-plan      Show the research benchmark plan' \
 		'  make planner-evidence   Run modeled planner v2 evidence into runs/comparisons/planner_v2/' \
 		'  make planner-report     Regenerate the labeled planner v2 report from latest planner evidence' \
@@ -119,6 +130,22 @@ upmem-hw-generic-plan:
 upmem-hw-generic-mvp:
 	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1 to run physical UPMEM hardware' >&2; exit 2; }
 	$(BENCH) upmem-hardware-generic-mvp --suite $(UPMEM_HW_GENERIC_MVP_SUITE) --execute
+
+upmem-hw-taskgraph-plan:
+	$(BENCH) upmem-hardware-taskgraph --suite $(UPMEM_HW_TASKGRAPH_SUITE) --prepare-only --build
+
+upmem-hw-taskgraph:
+	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1 to run physical UPMEM hardware' >&2; exit 2; }
+	$(BENCH) upmem-hardware-taskgraph --suite $(UPMEM_HW_TASKGRAPH_SUITE) --execute
+
+upmem-hw-taskgraph-report:
+	@test -f "$(UPMEM_HW_TASKGRAPH_RUN)/normalized_records.jsonl" || { echo 'Set UPMEM_HW_TASKGRAPH_RUN=<physical TaskGraph evidence directory>' >&2; exit 2; }
+	$(PY_ENV) $(PYTHON) scripts/research_benchmark_pack.py report --input $(UPMEM_HW_TASKGRAPH_RUN) --label upmem_hw_taskgraph
+
+evidence-inbox:
+	@mkdir -p "$(EVIDENCE_INBOX)"
+	@printf '%s\n' "$(EVIDENCE_INBOX)" \
+		'Copy raw ETH archives here. Extract validated run directories under runs/evidence/ and promote only reviewed compact results into thesis_results/.'
 
 research-plan:
 	$(PY_ENV) $(PYTHON) scripts/research_benchmark_pack.py plan
