@@ -56,7 +56,9 @@ def _install_fake_matplotlib(monkeypatch) -> _FakePyplot:
     return pyplot
 
 
-def _contract_plot_spec(*, rows: list[dict], renderer=None, reason=None) -> pack.PlotSpec:
+def _contract_plot_spec(
+    *, rows: list[dict], renderer=None, reason=None
+) -> pack.PlotSpec:
     return pack.PlotSpec(
         filename="contract.png",
         title="Contract title",
@@ -73,7 +75,15 @@ def _contract_plot_spec(*, rows: list[dict], renderer=None, reason=None) -> pack
     )
 
 
-def _record(case_id: str, route_id: str, repeat_id: int, *, target: str, total: float, compute: float) -> dict:
+def _record(
+    case_id: str,
+    route_id: str,
+    repeat_id: int,
+    *,
+    target: str,
+    total: float,
+    compute: float,
+) -> dict:
     is_gpu = route_id == "quest_gpu_full_state_exact"
     return {
         "schema_version": "benchmark_result_artifact_v1",
@@ -84,7 +94,9 @@ def _record(case_id: str, route_id: str, repeat_id: int, *, target: str, total: 
         "route_id": route_id,
         "backend_id": route_id,
         "backend_family": "quest",
-        "benchmark_role": "serious_gpu_full_state_baseline" if is_gpu else "serious_full_state_baseline",
+        "benchmark_role": "serious_gpu_full_state_baseline"
+        if is_gpu
+        else "serious_full_state_baseline",
         "kernel_family": "full_state_vector",
         "execution_model": "full_state",
         "contraction_execution_target": target,
@@ -111,7 +123,9 @@ def _record(case_id: str, route_id: str, repeat_id: int, *, target: str, total: 
     }
 
 
-def _generic_upmem_record(case_id: str, quantization_mode: str, *, total: float, compute: float, transfer: int) -> dict:
+def _generic_upmem_record(
+    case_id: str, quantization_mode: str, *, total: float, compute: float, transfer: int
+) -> dict:
     float_mode = quantization_mode == "none"
     return {
         "schema_version": "benchmark_result_artifact_v1",
@@ -147,7 +161,10 @@ def _generic_upmem_record(case_id: str, quantization_mode: str, *, total: float,
         "native_unquantized_upmem_kernel_executed": float_mode,
         "hardware_speedup": "not_applicable",
         "hardware_speedup_applicable": False,
-        "validation_error_metrics": {"max_abs_error": 0.0 if float_mode else 0.01, "l2_error": 0.0 if float_mode else 0.02},
+        "validation_error_metrics": {
+            "max_abs_error": 0.0 if float_mode else 0.01,
+            "l2_error": 0.0 if float_mode else 0.02,
+        },
     }
 
 
@@ -216,7 +233,62 @@ def _hardware_generic_mvp_record(repeat_id: int) -> dict:
     return record
 
 
-def test_plot_contract_generates_missing_and_zero_variance_placeholders(tmp_path: Path, monkeypatch) -> None:
+def _physical_taskgraph_record(
+    quantization_mode: str, *, plan_hash: str = "p" * 64
+) -> dict:
+    float_mode = quantization_mode == "none"
+    return {
+        "schema_version": "benchmark_result_artifact_v1",
+        "suite_id": "upmem_physical_taskgraph",
+        "run_id": "physical-run-1",
+        "case_id": "qrng_6q_physical_taskgraph",
+        "workload_id": "qrng_6q_physical_taskgraph",
+        "n_qubits": 6,
+        "route_id": "upmem_tn_runtime",
+        "backend_id": "upmem_sdk_taskgraph",
+        "backend_family": "upmem_sdk",
+        "benchmark_role": "physical_upmem_taskgraph",
+        "kernel_family": "generic_loop_fallback",
+        "execution_model": "tensor_network",
+        "contraction_execution_target": "upmem",
+        "upmem_execution_mode": "sdk_hardware_taskgraph",
+        "execution_scope": "full_taskgraph",
+        "execution_plan_kind": "sequential_upmem_taskgraph",
+        "contraction_plan_hash": plan_hash,
+        "quantization_mode": quantization_mode,
+        "input_dtype_on_dpu": "float32" if float_mode else "int8",
+        "hardware_execution": True,
+        "hardware_kernel_executed": True,
+        "simulator_kernel_executed": False,
+        "cpu_fallback_used": False,
+        "hardware_timing_available": True,
+        "timing_is_bringup_only": False,
+        "target_observed": "hardware",
+        "status": "completed",
+        "validation_status": "passed",
+        "repeat_id": 0,
+        "task_count": 4,
+        "validated_task_count": 4,
+        "actual_h2d_bytes": 400 if float_mode else 100,
+        "actual_d2h_bytes": 80 if float_mode else 40,
+        "actual_transfer_bytes": 480 if float_mode else 140,
+        "total_route_time_s": 0.20 if float_mode else 0.10,
+        "allocation_time_s": 0.01,
+        "binary_load_time_s": 0.02,
+        "h2d_time_s": 0.03,
+        "d2h_time_s": 0.01,
+        "validation_time_s": 0.004,
+        "total_quantization_time_s": 0.0 if float_mode else 0.006,
+        "total_dequantization_time_s": 0.0 if float_mode else 0.002,
+        "quantization_max_abs_error": None if float_mode else 0.125,
+        "max_abs_error": 0.0 if float_mode else 0.125,
+        "hardware_speedup_applicable": False,
+    }
+
+
+def test_plot_contract_generates_missing_and_zero_variance_placeholders(
+    tmp_path: Path, monkeypatch
+) -> None:
     pyplot = _install_fake_matplotlib(monkeypatch)
     missing_path = tmp_path / "missing.png"
     missing = pack._render_plot_spec(
@@ -239,7 +311,9 @@ def test_plot_contract_generates_missing_and_zero_variance_placeholders(tmp_path
     assert "zero variance" in pyplot.axes.text_values[-1]
 
 
-def test_plot_contract_classifies_valid_not_implemented_and_failed(tmp_path: Path, monkeypatch) -> None:
+def test_plot_contract_classifies_valid_not_implemented_and_failed(
+    tmp_path: Path, monkeypatch
+) -> None:
     pyplot = _install_fake_matplotlib(monkeypatch)
 
     def renderer(_plt, path: Path):
@@ -267,19 +341,29 @@ def test_plot_contract_classifies_valid_not_implemented_and_failed(tmp_path: Pat
     failed = pack._render_plot_spec(
         pyplot,
         tmp_path / "failed.png",
-        _contract_plot_spec(rows=[{"value": 1.0}, {"value": 2.0}], renderer=failing_renderer),
+        _contract_plot_spec(
+            rows=[{"value": 1.0}, {"value": 2.0}], renderer=failing_renderer
+        ),
     )
     assert failed.status == "failed"
     assert "rendering_failed" in (failed.reason or "")
 
 
-def test_plot_manifest_has_evidence_contract_and_stable_todo_pngs(tmp_path: Path, monkeypatch) -> None:
+def test_plot_manifest_has_evidence_contract_and_stable_todo_pngs(
+    tmp_path: Path, monkeypatch
+) -> None:
     _install_fake_matplotlib(monkeypatch)
     manifest = pack.write_plots(tmp_path, [], [], [], [], [])
 
     assert all(entry["status"] in pack.PLOT_STATUSES for entry in manifest["plots"])
-    assert all({"source_csv", "source_fields", "claim_basis", "caption", "status", "reason"} <= entry.keys() for entry in manifest["plots"])
-    assert all((tmp_path / "plots" / entry["plot"]).exists() for entry in manifest["plots"])
+    assert all(
+        {"source_csv", "source_fields", "claim_basis", "caption", "status", "reason"}
+        <= entry.keys()
+        for entry in manifest["plots"]
+    )
+    assert all(
+        (tmp_path / "plots" / entry["plot"]).exists() for entry in manifest["plots"]
+    )
     names = {entry["plot"] for entry in manifest["plots"]}
     assert "cpu_gpu_energy_efficiency_by_qubits.png" in names
     assert "cpu_tn_slicing_tradeoff.png" in names
@@ -291,7 +375,128 @@ def test_plot_manifest_has_evidence_contract_and_stable_todo_pngs(tmp_path: Path
     assert (tmp_path / "planner_component_diagnostics.csv").is_file()
     assert "quantization_probability_error_by_family_size.png" in names
     assert manifest["failed_figures"] == []
-    assert any(entry["status"] == "generated_todo_not_implemented" for entry in manifest["plots"])
+    assert any(
+        entry["status"] == "generated_todo_not_implemented"
+        for entry in manifest["plots"]
+    )
+
+
+def test_physical_taskgraph_quantization_requires_same_plan_and_excludes_bringup_runtime() -> (
+    None
+):
+    float32 = _physical_taskgraph_record("none")
+    int8 = _physical_taskgraph_record("per_task_input_quantize")
+
+    rows = pack.upmem_physical_quantization_attribution([float32, int8])
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["same_plan_verified"] is True
+    assert row["float32_warm_runtime_s"] == 0.20
+    assert row["int8_warm_runtime_s"] == 0.10
+    assert row["warm_runtime_ratio_float32_over_int8"] == 2.0
+    assert row["transfer_ratio_float32_over_int8"] == 480 / 140
+    assert row["quantization_error_int8_vs_float32"] == 0.125
+    assert row["hardware_speedup_applicable"] is False
+
+    bringup_float = _physical_taskgraph_record("none")
+    bringup_int8 = _physical_taskgraph_record("per_task_input_quantize")
+    bringup_float.update(
+        {
+            "hardware_timing_available": False,
+            "timing_is_bringup_only": True,
+            "timing_scope": "hardware_bringup_functionality_only",
+        }
+    )
+    bringup_int8.update(
+        {
+            "hardware_timing_available": False,
+            "timing_is_bringup_only": True,
+            "timing_scope": "hardware_bringup_functionality_only",
+        }
+    )
+    bringup = pack.upmem_physical_quantization_attribution(
+        [bringup_float, bringup_int8]
+    )[0]
+    assert bringup["float32_warm_runtime_s"] is None
+    assert bringup["int8_warm_runtime_s"] is None
+    assert bringup["float32_timing_class"] == "bringup_only"
+
+    mismatched = _physical_taskgraph_record(
+        "per_task_input_quantize", plan_hash="q" * 64
+    )
+    assert pack.upmem_physical_quantization_attribution([float32, mismatched]) == []
+
+
+def test_physical_quantization_uses_float32_full_precision_error_when_not_quantized() -> (
+    None
+):
+    float32 = _physical_taskgraph_record("none")
+    int8 = _physical_taskgraph_record("per_task_input_quantize")
+    float32["quantization_max_abs_error"] = None
+    float32["full_precision_max_abs_error"] = 0.002
+    int8["quantization_max_abs_error"] = 0.05
+
+    rows = pack.upmem_physical_quantization_attribution([float32, int8])
+
+    assert rows[0]["float32_max_abs_error"] == 0.002
+    assert rows[0]["int8_max_abs_error"] == 0.05
+    assert rows[0]["quantization_error_int8_vs_float32"] == pytest.approx(0.048)
+
+
+def test_physical_taskgraph_breakdown_preserves_validation_and_timing_classes() -> None:
+    measured = _physical_taskgraph_record("per_task_input_quantize")
+    bringup = _physical_taskgraph_record("none")
+    bringup.update(
+        {
+            "hardware_timing_available": False,
+            "timing_is_bringup_only": True,
+            "timing_scope": "hardware_bringup_functionality_only",
+        }
+    )
+
+    rows = pack.upmem_physical_taskgraph_breakdown([measured, bringup])
+
+    assert len(rows) == 2
+    measured_row = next(
+        row for row in rows if row["quantization_mode"] == "per_task_input_quantize"
+    )
+    bringup_row = next(row for row in rows if row["quantization_mode"] == "none")
+    assert measured_row["validation_passed"] is True
+    assert measured_row["timing_class"] == "measured_warm"
+    assert measured_row["warm_runtime_s"] == 0.10
+    assert measured_row["total_quantization_time_s"] == 0.006
+    assert bringup_row["timing_class"] == "bringup_only"
+    assert bringup_row["warm_runtime_s"] is None
+
+
+def test_physical_plot_sources_and_todos_are_emitted_without_physical_data(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _install_fake_matplotlib(monkeypatch)
+
+    manifest = pack.write_plots(tmp_path, [], [], [], [], [])
+
+    names = {entry["plot"] for entry in manifest["plots"]}
+    expected = {
+        "upmem_physical_quantization_runtime.png",
+        "upmem_physical_quantization_transfer.png",
+        "upmem_physical_quantization_error.png",
+        "upmem_physical_taskgraph_validation.png",
+        "upmem_physical_taskgraph_timing_breakdown.png",
+    }
+    assert expected <= names
+    physical_entries = [
+        entry for entry in manifest["plots"] if entry["plot"] in expected
+    ]
+    assert all(
+        entry["status"].startswith("generated_todo_") for entry in physical_entries
+    )
+    assert all(
+        (tmp_path / "plots" / entry["plot"]).exists() for entry in physical_entries
+    )
+    assert (tmp_path / "upmem_physical_quantization_attribution.csv").is_file()
+    assert (tmp_path / "upmem_physical_taskgraph_breakdown.csv").is_file()
 
 
 def test_slicing_tradeoff_pairs_compatible_quimb_rows_and_derives_ratios() -> None:
@@ -329,11 +534,17 @@ def test_slicing_tradeoff_pairs_compatible_quimb_rows_and_derives_ratios() -> No
     assert rows[0]["largest_intermediate_ratio_sliced_over_unsliced"] == 0.25
     assert all("speedup" not in key for key in rows[0])
 
-    mismatched = [dict(row, timing_scope="end_to_end") for row in stats if row["route_id"] == "quimb_tn_sliced_exact"]
+    mismatched = [
+        dict(row, timing_scope="end_to_end")
+        for row in stats
+        if row["route_id"] == "quimb_tn_sliced_exact"
+    ]
     assert pack.slicing_tradeoff(stats[:1] + mismatched) == []
 
 
-def test_slicing_tradeoff_plot_writes_source_csv_and_is_valid_for_one_pair(tmp_path: Path, monkeypatch) -> None:
+def test_slicing_tradeoff_plot_writes_source_csv_and_is_valid_for_one_pair(
+    tmp_path: Path, monkeypatch
+) -> None:
     _install_fake_matplotlib(monkeypatch)
     stats = [
         {
@@ -364,7 +575,11 @@ def test_slicing_tradeoff_plot_writes_source_csv_and_is_valid_for_one_pair(tmp_p
     ]
 
     manifest = pack.write_plots(tmp_path, stats, [], [], [], [])
-    entry = next(item for item in manifest["plots"] if item["plot"] == "cpu_tn_slicing_tradeoff.png")
+    entry = next(
+        item
+        for item in manifest["plots"]
+        if item["plot"] == "cpu_tn_slicing_tradeoff.png"
+    )
 
     assert entry["status"] == "generated_valid"
     assert entry["source_csv"] == "cpu_tn_slicing_tradeoff.csv"
@@ -375,7 +590,9 @@ def test_slicing_tradeoff_plot_writes_source_csv_and_is_valid_for_one_pair(tmp_p
     assert "1.5" in source
 
 
-def test_slicing_tradeoff_plot_keeps_honest_todo_without_complete_pair(tmp_path: Path, monkeypatch) -> None:
+def test_slicing_tradeoff_plot_keeps_honest_todo_without_complete_pair(
+    tmp_path: Path, monkeypatch
+) -> None:
     _install_fake_matplotlib(monkeypatch)
 
     manifest = pack.write_plots(
@@ -394,14 +611,20 @@ def test_slicing_tradeoff_plot_keeps_honest_todo_without_complete_pair(tmp_path:
         [],
         [],
     )
-    entry = next(item for item in manifest["plots"] if item["plot"] == "cpu_tn_slicing_tradeoff.png")
+    entry = next(
+        item
+        for item in manifest["plots"]
+        if item["plot"] == "cpu_tn_slicing_tradeoff.png"
+    )
 
     assert entry["status"] == "generated_todo_missing_data"
     assert "source fields contain no numeric data" in (entry["reason"] or "")
     assert (tmp_path / "cpu_tn_slicing_tradeoff.csv").exists()
 
 
-def test_slicing_tradeoff_plot_requires_largest_intermediate_ratio(tmp_path: Path, monkeypatch) -> None:
+def test_slicing_tradeoff_plot_requires_largest_intermediate_ratio(
+    tmp_path: Path, monkeypatch
+) -> None:
     _install_fake_matplotlib(monkeypatch)
     stats = [
         {
@@ -424,7 +647,11 @@ def test_slicing_tradeoff_plot_requires_largest_intermediate_ratio(tmp_path: Pat
     ]
 
     manifest = pack.write_plots(tmp_path, stats, [], [], [], [])
-    entry = next(item for item in manifest["plots"] if item["plot"] == "cpu_tn_slicing_tradeoff.png")
+    entry = next(
+        item
+        for item in manifest["plots"]
+        if item["plot"] == "cpu_tn_slicing_tradeoff.png"
+    )
 
     assert entry["status"] == "generated_todo_missing_data"
 
@@ -433,13 +660,34 @@ def test_benchmark_summary_separates_completed_todo_and_failed_figures() -> None
     plot_manifest = {
         "plots": [
             {"plot": "valid.png", "status": "generated_valid", "caption": "measured"},
-            {"plot": "todo.png", "status": "generated_todo_missing_data", "reason": "no rows", "caption": "TODO"},
-            {"plot": "failed.png", "status": "failed", "reason": "rendering_failed: test", "caption": "failed"},
+            {
+                "plot": "todo.png",
+                "status": "generated_todo_missing_data",
+                "reason": "no rows",
+                "caption": "TODO",
+            },
+            {
+                "plot": "failed.png",
+                "status": "failed",
+                "reason": "rendering_failed: test",
+                "caption": "failed",
+            },
         ]
     }
     summary = pack.benchmark_summary(
         {"selected_suites": {}, "commands": []},
-        [], [], [], [], [], [], [], [], [], plot_manifest, {"status": "ok"}, [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        plot_manifest,
+        {"status": "ok"},
+        [],
     )
 
     assert "### Completed Scientific Figures" in summary
@@ -451,7 +699,14 @@ def test_benchmark_summary_separates_completed_todo_and_failed_figures() -> None
 
 
 def test_per_case_route_stats_propagates_normalized_frontier_metadata() -> None:
-    record = _record("quest_bv_10q_research_perf", "cpu_tn_frontier_exact", 0, target="cpu", total=1.0, compute=0.8)
+    record = _record(
+        "quest_bv_10q_research_perf",
+        "cpu_tn_frontier_exact",
+        0,
+        target="cpu",
+        total=1.0,
+        compute=0.8,
+    )
     record.update(
         {
             "suite_id": "research_internal_parallelism",
@@ -482,15 +737,50 @@ def test_per_case_route_stats_propagates_normalized_frontier_metadata() -> None:
     assert row["frontier_wave_count"] == 4
     assert row["max_frontier_width"] == 3
     assert row["frontier_executed_parallel_task_count"] == 5
-    assert all(field in pack.PER_CASE_ROUTE_STATS_FIELDS for field in ("max_frontier_width", "frontier_wave_count", "frontier_executed_parallel_task_count"))
+    assert all(
+        field in pack.PER_CASE_ROUTE_STATS_FIELDS
+        for field in (
+            "max_frontier_width",
+            "frontier_wave_count",
+            "frontier_executed_parallel_task_count",
+        )
+    )
 
 
 def test_research_pack_statistics_and_cpu_gpu_pairing() -> None:
     records = [
-        _record("quest_bv_10q_research_perf", "quest_cpu_full_state_exact", 0, target="cpu", total=10.0, compute=8.0),
-        _record("quest_bv_10q_research_perf", "quest_gpu_full_state_exact", 0, target="gpu", total=5.0, compute=2.0),
-        _record("quest_bv_10q_research_perf", "quest_cpu_full_state_exact", 1, target="cpu", total=12.0, compute=10.0),
-        _record("quest_bv_10q_research_perf", "quest_gpu_full_state_exact", 1, target="gpu", total=6.0, compute=2.5),
+        _record(
+            "quest_bv_10q_research_perf",
+            "quest_cpu_full_state_exact",
+            0,
+            target="cpu",
+            total=10.0,
+            compute=8.0,
+        ),
+        _record(
+            "quest_bv_10q_research_perf",
+            "quest_gpu_full_state_exact",
+            0,
+            target="gpu",
+            total=5.0,
+            compute=2.0,
+        ),
+        _record(
+            "quest_bv_10q_research_perf",
+            "quest_cpu_full_state_exact",
+            1,
+            target="cpu",
+            total=12.0,
+            compute=10.0,
+        ),
+        _record(
+            "quest_bv_10q_research_perf",
+            "quest_gpu_full_state_exact",
+            1,
+            target="gpu",
+            total=6.0,
+            compute=2.5,
+        ),
     ]
 
     stats = pack.per_case_route_stats(records)
@@ -519,7 +809,14 @@ def test_research_pack_statistics_and_cpu_gpu_pairing() -> None:
 
 
 def test_research_pack_actual_qubits_do_not_use_output_caps() -> None:
-    record = _record("quest_xor_12q_research_perf", "quest_cpu_full_state_exact", 0, target="cpu", total=1.0, compute=1.0)
+    record = _record(
+        "quest_xor_12q_research_perf",
+        "quest_cpu_full_state_exact",
+        0,
+        target="cpu",
+        total=1.0,
+        compute=1.0,
+    )
     record["max_qubits"] = 99
     record["max_output_amplitudes"] = 4096
 
@@ -532,7 +829,14 @@ def test_research_pack_actual_qubits_do_not_use_output_caps() -> None:
 
 
 def test_research_pack_actual_qubits_prefer_explicit_fields() -> None:
-    record = _record("opaque_case_name", "quest_cpu_full_state_exact", 0, target="cpu", total=1.0, compute=1.0)
+    record = _record(
+        "opaque_case_name",
+        "quest_cpu_full_state_exact",
+        0,
+        target="cpu",
+        total=1.0,
+        compute=1.0,
+    )
     record["actual_n_qubits"] = 18
     record["max_qubits"] = 99
 
@@ -543,7 +847,14 @@ def test_research_pack_actual_qubits_prefer_explicit_fields() -> None:
 
 
 def test_research_pack_actual_qubits_warn_when_unresolved() -> None:
-    record = _record("opaque_case_name", "quest_cpu_full_state_exact", 0, target="cpu", total=1.0, compute=1.0)
+    record = _record(
+        "opaque_case_name",
+        "quest_cpu_full_state_exact",
+        0,
+        target="cpu",
+        total=1.0,
+        compute=1.0,
+    )
     record.pop("max_qubits", None)
 
     stats = pack.per_case_route_stats([record])
@@ -554,7 +865,14 @@ def test_research_pack_actual_qubits_warn_when_unresolved() -> None:
 
 
 def test_research_pack_cpu_tn_plot_source_uses_actual_qubits() -> None:
-    record = _record("quest_bv_12q_research_tn", "quimb_tn_exact", 0, target="cpu", total=2.0, compute=1.5)
+    record = _record(
+        "quest_bv_12q_research_tn",
+        "quimb_tn_exact",
+        0,
+        target="cpu",
+        total=2.0,
+        compute=1.5,
+    )
     record["backend_family"] = "quimb"
     record["benchmark_role"] = "serious_external_tn_baseline"
     record["max_qubits"] = 14
@@ -567,7 +885,9 @@ def test_research_pack_cpu_tn_plot_source_uses_actual_qubits() -> None:
 
 
 def test_route_capability_matrix_uses_nonempty_route_metadata() -> None:
-    reference = _record("quest_bv_10q", "cpu_tn_einsum_exact", 0, target="cpu", total=1.0, compute=0.8)
+    reference = _record(
+        "quest_bv_10q", "cpu_tn_einsum_exact", 0, target="cpu", total=1.0, compute=0.8
+    )
     reference["benchmark_role"] = ""
     reference["backend_family"] = ""
     reference["execution_model"] = ""
@@ -586,8 +906,22 @@ def test_route_capability_matrix_uses_nonempty_route_metadata() -> None:
 
 
 def test_research_pack_rejects_unverified_gpu_and_fake_energy() -> None:
-    good_cpu = _record("quest_bv_10q_research_perf", "quest_cpu_full_state_exact", 0, target="cpu", total=10.0, compute=8.0)
-    bad_gpu = _record("quest_bv_10q_research_perf", "quest_gpu_full_state_exact", 0, target="gpu", total=5.0, compute=2.0)
+    good_cpu = _record(
+        "quest_bv_10q_research_perf",
+        "quest_cpu_full_state_exact",
+        0,
+        target="cpu",
+        total=10.0,
+        compute=8.0,
+    )
+    bad_gpu = _record(
+        "quest_bv_10q_research_perf",
+        "quest_gpu_full_state_exact",
+        0,
+        target="gpu",
+        total=5.0,
+        compute=2.0,
+    )
     bad_gpu["gpu_backend_verified"] = False
     fake_energy = dict(good_cpu)
     fake_energy["case_id"] = "quest_xor_10q_research_perf"
@@ -599,15 +933,29 @@ def test_research_pack_rejects_unverified_gpu_and_fake_energy() -> None:
     assert any("energy value without measured status" in issue for issue in issues)
 
 
-def test_research_pack_rejects_dense_upmem_rows_and_accepts_strict_generic_rows() -> None:
-    dense = _generic_upmem_record("qrng_7q_thesis_upmem_boundary", "per_task_input_quantize", total=2.0, compute=0.1, transfer=100)
+def test_research_pack_rejects_dense_upmem_rows_and_accepts_strict_generic_rows() -> (
+    None
+):
+    dense = _generic_upmem_record(
+        "qrng_7q_thesis_upmem_boundary",
+        "per_task_input_quantize",
+        total=2.0,
+        compute=0.1,
+        transfer=100,
+    )
     dense["policy"] = "dense-then-generic"
     dense["kernel_family"] = "dense_gemm"
 
     issues = pack._claim_guard_issues([dense])
 
     assert any("not generic-only" in issue for issue in issues)
-    generic = _generic_upmem_record("qrng_7q_thesis_upmem_boundary", "per_task_input_quantize", total=2.0, compute=0.1, transfer=100)
+    generic = _generic_upmem_record(
+        "qrng_7q_thesis_upmem_boundary",
+        "per_task_input_quantize",
+        total=2.0,
+        compute=0.1,
+        transfer=100,
+    )
     assert pack._claim_guard_issues([generic]) == []
 
 
@@ -644,7 +992,9 @@ def test_research_pack_keeps_generic_hardware_mvp_out_of_dense_summary() -> None
     assert generic_rows[0]["repeat_count"] == 2
     specs = pack._plot_specs([], [], [], [], [], hardware_generic_mvp_rows=generic_rows)
     generic_spec = next(
-        spec for spec in specs if spec.filename == "upmem_hardware_generic_mvp_validation.png"
+        spec
+        for spec in specs
+        if spec.filename == "upmem_hardware_generic_mvp_validation.png"
     )
     assert generic_spec.source_csv == "upmem_hardware_generic_mvp_summary.csv"
     assert generic_spec.data_rows == generic_rows
@@ -659,9 +1009,19 @@ def test_research_pack_rejects_incomplete_completed_hardware_mvp_row() -> None:
     assert any("lacks exact_integer_match" in issue for issue in issues)
 
 
-def test_research_pack_separates_generic_quantization_modes_and_builds_attribution() -> None:
-    float32 = _generic_upmem_record("qrng_7q_thesis_upmem_boundary", "none", total=4.0, compute=2.0, transfer=400)
-    int8 = _generic_upmem_record("qrng_7q_thesis_upmem_boundary", "per_task_input_quantize", total=2.0, compute=1.0, transfer=100)
+def test_research_pack_separates_generic_quantization_modes_and_builds_attribution() -> (
+    None
+):
+    float32 = _generic_upmem_record(
+        "qrng_7q_thesis_upmem_boundary", "none", total=4.0, compute=2.0, transfer=400
+    )
+    int8 = _generic_upmem_record(
+        "qrng_7q_thesis_upmem_boundary",
+        "per_task_input_quantize",
+        total=2.0,
+        compute=1.0,
+        transfer=100,
+    )
     float32["validation_error_metrics"].update(
         {"probability_max_abs_error": 0.001, "probability_l1_error": 0.002}
     )
@@ -677,7 +1037,10 @@ def test_research_pack_separates_generic_quantization_modes_and_builds_attributi
     attribution = pack.upmem_quantization_attribution([float32, int8])
 
     assert len(stats) == 2
-    assert {row["quantization_mode"] for row in stats} == {"none", "per_task_input_quantize"}
+    assert {row["quantization_mode"] for row in stats} == {
+        "none",
+        "per_task_input_quantize",
+    }
     assert len(attribution) == 1
     assert attribution[0]["same_route_comparison"] is True
     assert attribution[0]["route_runtime_ratio_none_over_quantized"] == 2.0
@@ -689,20 +1052,29 @@ def test_research_pack_separates_generic_quantization_modes_and_builds_attributi
     assert attribution[0]["quantized_quantization_saturation_count"] == 4
 
 
-def test_research_pack_probability_plot_uses_recorded_probability_metrics(tmp_path: Path, monkeypatch) -> None:
+def test_research_pack_probability_plot_uses_recorded_probability_metrics(
+    tmp_path: Path, monkeypatch
+) -> None:
     _install_fake_matplotlib(monkeypatch)
     rows = []
     for case_id, probability_max, probability_l1 in (
         ("qrng_7q_thesis_upmem_boundary", 0.01, 0.02),
         ("qrng_8q_thesis_upmem_boundary", 0.03, 0.04),
     ):
-        float32 = _generic_upmem_record(case_id, "none", total=4.0, compute=2.0, transfer=400)
-        int8 = _generic_upmem_record(case_id, "per_task_input_quantize", total=2.0, compute=1.0, transfer=100)
+        float32 = _generic_upmem_record(
+            case_id, "none", total=4.0, compute=2.0, transfer=400
+        )
+        int8 = _generic_upmem_record(
+            case_id, "per_task_input_quantize", total=2.0, compute=1.0, transfer=100
+        )
         float32["validation_error_metrics"].update(
             {"probability_max_abs_error": 0.001, "probability_l1_error": 0.002}
         )
         int8["validation_error_metrics"].update(
-            {"probability_max_abs_error": probability_max, "probability_l1_error": probability_l1}
+            {
+                "probability_max_abs_error": probability_max,
+                "probability_l1_error": probability_l1,
+            }
         )
         rows.extend((float32, int8))
 
@@ -719,9 +1091,19 @@ def test_research_pack_probability_plot_uses_recorded_probability_metrics(tmp_pa
     assert (tmp_path / "plots" / entry["plot"]).exists()
 
 
-def test_research_pack_quantization_attribution_rejects_different_routes_or_runs() -> None:
-    float32 = _generic_upmem_record("qrng_7q_thesis_upmem_boundary", "none", total=4.0, compute=2.0, transfer=400)
-    int8 = _generic_upmem_record("qrng_7q_thesis_upmem_boundary", "per_task_input_quantize", total=2.0, compute=1.0, transfer=100)
+def test_research_pack_quantization_attribution_rejects_different_routes_or_runs() -> (
+    None
+):
+    float32 = _generic_upmem_record(
+        "qrng_7q_thesis_upmem_boundary", "none", total=4.0, compute=2.0, transfer=400
+    )
+    int8 = _generic_upmem_record(
+        "qrng_7q_thesis_upmem_boundary",
+        "per_task_input_quantize",
+        total=2.0,
+        compute=1.0,
+        transfer=100,
+    )
     float32["run_id"] = "run_a"
     int8["run_id"] = "run_a"
     int8["route_id"] = "another_upmem_route"
@@ -734,7 +1116,9 @@ def test_research_pack_quantization_attribution_rejects_different_routes_or_runs
 
 
 def test_research_pack_preserves_generic_boundary_reason_from_record_notes() -> None:
-    unsupported = _generic_upmem_record("qrng_8q_thesis_upmem_boundary", "none", total=0.0, compute=0.0, transfer=0)
+    unsupported = _generic_upmem_record(
+        "qrng_8q_thesis_upmem_boundary", "none", total=0.0, compute=0.0, transfer=0
+    )
     unsupported.update(
         {
             "status": "unsupported",
@@ -750,8 +1134,22 @@ def test_research_pack_preserves_generic_boundary_reason_from_record_notes() -> 
 
 
 def test_research_pack_cpu_gpu_plot_rows_exclude_correctness_tier() -> None:
-    performance = _record("quest_bv_10q_research_perf", "quest_cpu_full_state_exact", 0, target="cpu", total=10.0, compute=8.0)
-    gpu_performance = _record("quest_bv_10q_research_perf", "quest_gpu_full_state_exact", 0, target="gpu", total=5.0, compute=2.0)
+    performance = _record(
+        "quest_bv_10q_research_perf",
+        "quest_cpu_full_state_exact",
+        0,
+        target="cpu",
+        total=10.0,
+        compute=8.0,
+    )
+    gpu_performance = _record(
+        "quest_bv_10q_research_perf",
+        "quest_gpu_full_state_exact",
+        0,
+        target="gpu",
+        total=5.0,
+        compute=2.0,
+    )
     correctness = dict(performance)
     correctness["case_id"] = "quest_bv_10q_research_correctness"
     correctness["performance_tier"] = False
@@ -763,7 +1161,9 @@ def test_research_pack_cpu_gpu_plot_rows_exclude_correctness_tier() -> None:
     gpu_correctness["state_output_mode"] = "full_dump"
     gpu_correctness["validation_method"] = "full_statevector"
 
-    pairs = pack.paired_speedups([performance, gpu_performance, correctness, gpu_correctness])
+    pairs = pack.paired_speedups(
+        [performance, gpu_performance, correctness, gpu_correctness]
+    )
 
     assert len(pairs) == 2
     assert len([row for row in pairs if row["performance_tier"]]) == 1
@@ -771,10 +1171,38 @@ def test_research_pack_cpu_gpu_plot_rows_exclude_correctness_tier() -> None:
 
 def test_research_pack_cpu_gpu_performance_summary_uses_repeat_medians() -> None:
     records = [
-        _record("quest_bv_10q_research_perf", "quest_cpu_full_state_exact", 0, target="cpu", total=10.0, compute=8.0),
-        _record("quest_bv_10q_research_perf", "quest_gpu_full_state_exact", 0, target="gpu", total=5.0, compute=2.0),
-        _record("quest_bv_10q_research_perf", "quest_cpu_full_state_exact", 1, target="cpu", total=12.0, compute=10.0),
-        _record("quest_bv_10q_research_perf", "quest_gpu_full_state_exact", 1, target="gpu", total=6.0, compute=2.5),
+        _record(
+            "quest_bv_10q_research_perf",
+            "quest_cpu_full_state_exact",
+            0,
+            target="cpu",
+            total=10.0,
+            compute=8.0,
+        ),
+        _record(
+            "quest_bv_10q_research_perf",
+            "quest_gpu_full_state_exact",
+            0,
+            target="gpu",
+            total=5.0,
+            compute=2.0,
+        ),
+        _record(
+            "quest_bv_10q_research_perf",
+            "quest_cpu_full_state_exact",
+            1,
+            target="cpu",
+            total=12.0,
+            compute=10.0,
+        ),
+        _record(
+            "quest_bv_10q_research_perf",
+            "quest_gpu_full_state_exact",
+            1,
+            target="gpu",
+            total=6.0,
+            compute=2.5,
+        ),
     ]
 
     summary = pack.cpu_gpu_performance_summary(pack.paired_speedups(records))
@@ -806,32 +1234,62 @@ def test_research_pack_runs_upmem_boundary_through_strict_generic_mvp_command() 
     assert argv[:2] == ["upmem-mvp-benchmark", "--suite"]
     assert any(item.endswith("thesis_upmem_quantization_boundary.yml") for item in argv)
     assert argv[argv.index("--policies") + 1] == "generic-only"
-    assert argv[argv.index("--quantization-modes") + 1] == "none,per_task_input_quantize"
+    assert (
+        argv[argv.index("--quantization-modes") + 1] == "none,per_task_input_quantize"
+    )
     assert "--execute-external" in argv
 
 
 def test_research_pack_registry_uses_canonical_thesis_suite_paths() -> None:
     assert pack.RESEARCH_SUITES["cpu_gpu"].name == "thesis_full_state_cpu_gpu.yml"
-    assert pack.RESEARCH_SUITES["cpu_gpu_correctness"].name == "thesis_full_state_correctness.yml"
+    assert (
+        pack.RESEARCH_SUITES["cpu_gpu_correctness"].name
+        == "thesis_full_state_correctness.yml"
+    )
     assert pack.RESEARCH_SUITES["cpu_tn"].name == "thesis_cpu_tn_quimb.yml"
-    assert pack.RESEARCH_SUITES["tn_path_quantization"].name == "thesis_tn_paths_quantization.yml"
-    assert pack.RESEARCH_SUITES["planner_paths"].name == "thesis_planner_semantic_v2.yml"
-    assert pack.RESEARCH_SUITES["planner_sensitivity"].name == "thesis_planner_sensitivity_v2.yml"
+    assert (
+        pack.RESEARCH_SUITES["tn_path_quantization"].name
+        == "thesis_tn_paths_quantization.yml"
+    )
+    assert (
+        pack.RESEARCH_SUITES["planner_paths"].name == "thesis_planner_semantic_v2.yml"
+    )
+    assert (
+        pack.RESEARCH_SUITES["planner_sensitivity"].name
+        == "thesis_planner_sensitivity_v2.yml"
+    )
     assert pack.RESEARCH_SUITES["planner_paths_v1"].name == "thesis_planner_compare.yml"
-    assert pack.RESEARCH_SUITES["planner_sensitivity_v1"].name == "thesis_planner_sensitivity.yml"
+    assert (
+        pack.RESEARCH_SUITES["planner_sensitivity_v1"].name
+        == "thesis_planner_sensitivity.yml"
+    )
     assert "planner_paths_v1" not in pack.SUITE_COMMAND_ORDER
     assert "planner_sensitivity_v1" not in pack.SUITE_COMMAND_ORDER
-    assert pack.SUITE_COMMAND_ORDER.index("tn_path_quantization") == pack.SUITE_COMMAND_ORDER.index("cpu_tn") + 1
-    assert all("research_cpu_gpu.yml" not in path.name and "research_cpu_tn.yml" not in path.name for path in pack.RESEARCH_SUITES.values())
+    assert (
+        pack.SUITE_COMMAND_ORDER.index("tn_path_quantization")
+        == pack.SUITE_COMMAND_ORDER.index("cpu_tn") + 1
+    )
+    assert all(
+        "research_cpu_gpu.yml" not in path.name
+        and "research_cpu_tn.yml" not in path.name
+        for path in pack.RESEARCH_SUITES.values()
+    )
 
 
 def test_research_suite_matrix_uses_six_families_and_seven_local_sizes() -> None:
     expected_families = {"QRNG", "BV", "XOR", "BB84", "EDC", "HS"}
-    for suite_name in ("thesis_full_state_cpu_gpu.yml", "thesis_cpu_tn_quimb.yml", "thesis_tn_paths_quantization.yml"):
+    for suite_name in (
+        "thesis_full_state_cpu_gpu.yml",
+        "thesis_cpu_tn_quimb.yml",
+        "thesis_tn_paths_quantization.yml",
+    ):
         suite = load_suite(pack.ROOT / "configs" / "suites" / "manual" / suite_name)
         families = {str(case["circuit"]["name"]) for case in suite["cases"]}
         sizes = {
-            int(case["circuit"].get("n_qubits") or case["circuit"].get("allocated_qubits"))
+            int(
+                case["circuit"].get("n_qubits")
+                or case["circuit"].get("allocated_qubits")
+            )
             for case in suite["cases"]
         }
         assert families == expected_families
@@ -841,7 +1299,10 @@ def test_research_suite_matrix_uses_six_families_and_seven_local_sizes() -> None
     legacy_planner = load_suite(pack.RESEARCH_SUITES["planner_paths_v1"])
     assert legacy_planner["suite_id"] == "thesis_planner_compare"
     planner_configs = comparison_planner_configs(legacy_planner)
-    assert {(item["engine"], item.get("optimize"), item.get("objective")) for item in planner_configs} >= {
+    assert {
+        (item["engine"], item.get("optimize"), item.get("objective"))
+        for item in planner_configs
+    } >= {
         ("opt_einsum", "greedy", None),
         ("opt_einsum", "auto", None),
         ("cotengra", None, "flops"),
@@ -850,13 +1311,25 @@ def test_research_suite_matrix_uses_six_families_and_seven_local_sizes() -> None
         ("cotengra", None, "combo"),
         ("custom_upmem", None, None),
     }
-    assert pack._research_suite_argv("planner_paths", pack.ROOT)[:2] == ["compare-planners", "--suite"]
-    assert pack._research_suite_argv("planner_sensitivity", pack.ROOT)[:2] == ["compare-planners", "--suite"]
-    assert pack._research_suite_argv("planner_paths_v1", pack.ROOT)[:2] == ["compare-planners", "--suite"]
+    assert pack._research_suite_argv("planner_paths", pack.ROOT)[:2] == [
+        "compare-planners",
+        "--suite",
+    ]
+    assert pack._research_suite_argv("planner_sensitivity", pack.ROOT)[:2] == [
+        "compare-planners",
+        "--suite",
+    ]
+    assert pack._research_suite_argv("planner_paths_v1", pack.ROOT)[:2] == [
+        "compare-planners",
+        "--suite",
+    ]
 
     planner_v2 = load_suite(pack.RESEARCH_SUITES["planner_paths"])
     assert planner_v2["suite_id"] == "thesis_planner_semantic_v2"
-    assert planner_v2["planner_comparison"]["pim_objective"]["objective_version"] == "upmem_path_cost_v2"
+    assert (
+        planner_v2["planner_comparison"]["pim_objective"]["objective_version"]
+        == "upmem_path_cost_v2"
+    )
 
 
 def test_research_pack_preserves_modeled_planner_candidates() -> None:
@@ -897,7 +1370,9 @@ def test_research_pack_preserves_modeled_planner_candidates() -> None:
     assert rows[0]["execution_plan_executed"] is False
 
 
-def test_research_pack_planner_csv_schema_preserves_motif_and_feasibility_context(tmp_path: Path) -> None:
+def test_research_pack_planner_csv_schema_preserves_motif_and_feasibility_context(
+    tmp_path: Path,
+) -> None:
     record = {
         "schema_version": pack.SCHEMA_VERSION,
         "suite_id": "planner_objective_motifs_planner_compare",
@@ -938,9 +1413,13 @@ def test_research_pack_planner_csv_schema_preserves_motif_and_feasibility_contex
         "execution_plan_executed": False,
     }
     rows = pack.planner_comparison([record])
-    pack._write_csv(tmp_path / "planner_comparison.csv", rows, pack.PLANNER_COMPARISON_FIELDS)
+    pack._write_csv(
+        tmp_path / "planner_comparison.csv", rows, pack.PLANNER_COMPARISON_FIELDS
+    )
 
-    with (tmp_path / "planner_comparison.csv").open(encoding="utf-8", newline="") as handle:
+    with (tmp_path / "planner_comparison.csv").open(
+        encoding="utf-8", newline=""
+    ) as handle:
         written = next(csv.DictReader(handle))
 
     assert written["workload_kind"] == "planner_motif"
@@ -962,7 +1441,9 @@ def test_research_pack_planner_csv_schema_preserves_motif_and_feasibility_contex
     assert written["pim_mram_payload_pressure_ratio"] == "0.25"
 
 
-def _planner_semantic_record(*, objective: str | None, profile: str, score_model: str | None = None) -> dict:
+def _planner_semantic_record(
+    *, objective: str | None, profile: str, score_model: str | None = None
+) -> dict:
     return {
         "schema_version": pack.SCHEMA_VERSION,
         "suite_id": "thesis_planner_compare",
@@ -976,31 +1457,61 @@ def _planner_semantic_record(*, objective: str | None, profile: str, score_model
     }
 
 
-def test_report_allows_ordinary_evidence_and_multiple_profiles_with_one_planner_objective(monkeypatch, tmp_path: Path) -> None:
+def test_report_allows_ordinary_evidence_and_multiple_profiles_with_one_planner_objective(
+    monkeypatch, tmp_path: Path
+) -> None:
     records = [
-        {"route_id": "quest_cpu_full_state_exact", "suite_id": "research_cpu_gpu", "case_id": "case_4q", "n_qubits": 4},
-        _planner_semantic_record(objective="upmem_path_cost_v2", profile="compute_oriented"),
-        _planner_semantic_record(objective="upmem_path_cost_v2", profile="wram_constrained"),
+        {
+            "route_id": "quest_cpu_full_state_exact",
+            "suite_id": "research_cpu_gpu",
+            "case_id": "case_4q",
+            "n_qubits": 4,
+        },
+        _planner_semantic_record(
+            objective="upmem_path_cost_v2", profile="compute_oriented"
+        ),
+        _planner_semantic_record(
+            objective="upmem_path_cost_v2", profile="wram_constrained"
+        ),
     ]
     monkeypatch.setattr(pack, "load_result_records", lambda _inputs: records)
-    monkeypatch.setattr(pack, "validate_artifact_boundaries", lambda _root: {"status": "passed"})
+    monkeypatch.setattr(
+        pack, "validate_artifact_boundaries", lambda _root: {"status": "passed"}
+    )
     monkeypatch.setattr(pack, "_git", lambda *_args: "test-head")
     monkeypatch.setattr(
         pack,
         "write_plots",
-        lambda *_args, **_kwargs: {"plots": [], "generated_valid": [], "todo_figures": [], "failed_figures": []},
+        lambda *_args, **_kwargs: {
+            "plots": [],
+            "generated_valid": [],
+            "todo_figures": [],
+            "failed_figures": [],
+        },
     )
     input_path = tmp_path / "evidence"
     input_path.mkdir()
 
-    assert pack.report_pack(tmp_path, tmp_path / "pack", inputs=[input_path], suite_filter=None) == 0
-    manifest = json.loads((tmp_path / "pack" / "benchmark_manifest.json").read_text(encoding="utf-8"))
+    assert (
+        pack.report_pack(
+            tmp_path, tmp_path / "pack", inputs=[input_path], suite_filter=None
+        )
+        == 0
+    )
+    manifest = json.loads(
+        (tmp_path / "pack" / "benchmark_manifest.json").read_text(encoding="utf-8")
+    )
     assert manifest["planner_semantics"]["semantic_versions"] == ["upmem_path_cost_v2"]
-    assert manifest["planner_semantics"]["weight_profiles"] == ["compute_oriented", "wram_constrained"]
+    assert manifest["planner_semantics"]["weight_profiles"] == [
+        "compute_oriented",
+        "wram_constrained",
+    ]
     assert (tmp_path / "pack" / "planner_component_diagnostics.csv").is_file()
 
 
-def test_report_label_uses_named_namespace_and_preserves_latest_link(tmp_path: Path) -> None:
+def test_report_label_uses_named_namespace_and_preserves_latest_link(
+    tmp_path: Path,
+) -> None:
     labeled = pack._pack_dir(tmp_path, None, label="planner_v2")
     assert labeled.parent == tmp_path / "runs" / "comparisons" / "planner_v2"
     assert labeled.name.count("_") == 2
@@ -1015,7 +1526,9 @@ def test_report_label_uses_named_namespace_and_preserves_latest_link(tmp_path: P
         pack._pack_dir(tmp_path, None, label="../planner_v2")
 
 
-def test_planner_interpretation_states_model_boundary_counts_structure_and_cost_sources() -> None:
+def test_planner_interpretation_states_model_boundary_counts_structure_and_cost_sources() -> (
+    None
+):
     rows = [
         {
             "case_id": "case_a",
@@ -1033,7 +1546,11 @@ def test_planner_interpretation_states_model_boundary_counts_structure_and_cost_
             "pim_objective_version": "upmem_path_cost_v2",
             "score_components": {"compute": 0.4},
         },
-        {"case_id": "case_b", "planner_id": "custom_upmem.greedy", "pim_objective_version": "upmem_path_cost_v2"},
+        {
+            "case_id": "case_b",
+            "planner_id": "custom_upmem.greedy",
+            "pim_objective_version": "upmem_path_cost_v2",
+        },
     ]
 
     text = "\n".join(pack._planner_interpretation_lines(rows))
@@ -1047,30 +1564,46 @@ def test_planner_interpretation_states_model_boundary_counts_structure_and_cost_
     assert "cannot claim hardware performance" in text
 
 
-def test_report_rejects_mixed_planner_objective_versions(monkeypatch, tmp_path: Path) -> None:
+def test_report_rejects_mixed_planner_objective_versions(
+    monkeypatch, tmp_path: Path
+) -> None:
     records = [
-        _planner_semantic_record(objective="upmem_path_cost_v1", profile="balanced_literature_informed"),
-        _planner_semantic_record(objective="upmem_path_cost_v2", profile="balanced_literature_informed"),
+        _planner_semantic_record(
+            objective="upmem_path_cost_v1", profile="balanced_literature_informed"
+        ),
+        _planner_semantic_record(
+            objective="upmem_path_cost_v2", profile="balanced_literature_informed"
+        ),
     ]
     monkeypatch.setattr(pack, "load_result_records", lambda _inputs: records)
     input_path = tmp_path / "evidence"
     input_path.mkdir()
 
     with pytest.raises(ValueError, match="planner semantic versions are mixed"):
-        pack.report_pack(tmp_path, tmp_path / "pack", inputs=[input_path], suite_filter=None)
+        pack.report_pack(
+            tmp_path, tmp_path / "pack", inputs=[input_path], suite_filter=None
+        )
 
 
-def test_report_rejects_mixed_legacy_planner_score_models(monkeypatch, tmp_path: Path) -> None:
+def test_report_rejects_mixed_legacy_planner_score_models(
+    monkeypatch, tmp_path: Path
+) -> None:
     records = [
-        _planner_semantic_record(objective=None, profile="legacy", score_model="upmem_pressure_v1"),
-        _planner_semantic_record(objective=None, profile="legacy", score_model="upmem_pressure_v2"),
+        _planner_semantic_record(
+            objective=None, profile="legacy", score_model="upmem_pressure_v1"
+        ),
+        _planner_semantic_record(
+            objective=None, profile="legacy", score_model="upmem_pressure_v2"
+        ),
     ]
     monkeypatch.setattr(pack, "load_result_records", lambda _inputs: records)
     input_path = tmp_path / "evidence"
     input_path.mkdir()
 
     with pytest.raises(ValueError, match="planner semantic versions are mixed"):
-        pack.report_pack(tmp_path, tmp_path / "pack", inputs=[input_path], suite_filter=None)
+        pack.report_pack(
+            tmp_path, tmp_path / "pack", inputs=[input_path], suite_filter=None
+        )
 
 
 def test_research_pack_same_plan_cpu_upmem_requires_matching_hash() -> None:
@@ -1112,9 +1645,21 @@ def test_research_pack_builds_full_state_tn_ratio_without_calling_it_speedup() -
         "validation_passed_count": 3,
     }
     stats = [
-        {**common, "route_id": "quest_cpu_full_state_exact", "simulation_compute_time_s_median": 1.0},
-        {**common, "route_id": "quimb_tn_exact", "simulation_compute_time_s_median": 2.0},
-        {**common, "route_id": "quimb_tn_sliced_exact", "simulation_compute_time_s_median": 3.0},
+        {
+            **common,
+            "route_id": "quest_cpu_full_state_exact",
+            "simulation_compute_time_s_median": 1.0,
+        },
+        {
+            **common,
+            "route_id": "quimb_tn_exact",
+            "simulation_compute_time_s_median": 2.0,
+        },
+        {
+            **common,
+            "route_id": "quimb_tn_sliced_exact",
+            "simulation_compute_time_s_median": 3.0,
+        },
     ]
 
     rows = pack.full_state_tn_comparison(stats)
@@ -1125,15 +1670,27 @@ def test_research_pack_builds_full_state_tn_ratio_without_calling_it_speedup() -
     assert all("speedup" not in key for key in rows[0])
 
 
-def test_research_pack_boundary_check_detects_derived_evidence_files(tmp_path: Path) -> None:
-    bad = tmp_path / "runs" / "evidence" / "suite" / "route" / "run" / "comparison_summary.md"
+def test_research_pack_boundary_check_detects_derived_evidence_files(
+    tmp_path: Path,
+) -> None:
+    bad = (
+        tmp_path
+        / "runs"
+        / "evidence"
+        / "suite"
+        / "route"
+        / "run"
+        / "comparison_summary.md"
+    )
     bad.parent.mkdir(parents=True)
     bad.write_text("derived", encoding="utf-8")
 
     result = pack.validate_artifact_boundaries(tmp_path)
 
     assert result["status"] == "failed"
-    assert result["violations"] == ["runs/evidence/suite/route/run/comparison_summary.md"]
+    assert result["violations"] == [
+        "runs/evidence/suite/route/run/comparison_summary.md"
+    ]
 
 
 def test_research_pack_writes_lightweight_pack(tmp_path: Path) -> None:
@@ -1142,7 +1699,9 @@ def test_research_pack_writes_lightweight_pack(tmp_path: Path) -> None:
         tmp_path,
         out,
         [],
-        command_results=[{"command": "unit", "returncode": 0, "stdout": "", "stderr": ""}],
+        command_results=[
+            {"command": "unit", "returncode": 0, "stdout": "", "stderr": ""}
+        ],
         selected_suite_keys=["cpu_gpu"],
     )
 
@@ -1156,7 +1715,10 @@ def test_research_pack_writes_lightweight_pack(tmp_path: Path) -> None:
     assert "Next UPMEM Implementation Readiness" in summary
     manifest = json.loads((out / "benchmark_manifest.json").read_text(encoding="utf-8"))
     assert manifest["artifact_kind"] == "research_benchmark_pack"
-    assert manifest["report_generation_provenance"]["script"] == "scripts/research_benchmark_pack.py"
+    assert (
+        manifest["report_generation_provenance"]["script"]
+        == "scripts/research_benchmark_pack.py"
+    )
     assert manifest["report_generation"]["mode"] == "report"
     assert manifest["report_generation_input_paths"] == []
     assert manifest["benchmark_source_commit"] is None
@@ -1192,8 +1754,20 @@ def test_research_pack_derives_source_provenance_from_evidence(tmp_path: Path) -
 
 
 def test_research_pack_prefers_host_residual_for_upmem_attribution() -> None:
-    float32 = _generic_upmem_record("quantization_stress_4q_thesis_upmem", "none", total=10.0, compute=2.0, transfer=400)
-    int8 = _generic_upmem_record("quantization_stress_4q_thesis_upmem", "per_task_input_quantize", total=8.0, compute=1.0, transfer=100)
+    float32 = _generic_upmem_record(
+        "quantization_stress_4q_thesis_upmem",
+        "none",
+        total=10.0,
+        compute=2.0,
+        transfer=400,
+    )
+    int8 = _generic_upmem_record(
+        "quantization_stress_4q_thesis_upmem",
+        "per_task_input_quantize",
+        total=8.0,
+        compute=1.0,
+        transfer=100,
+    )
     float32["total_host_residual_time_s"] = 4.0
     int8["total_host_residual_time_s"] = 2.0
 
@@ -1210,21 +1784,43 @@ def test_research_pack_prefers_host_residual_for_upmem_attribution() -> None:
     assert row["transfer_accounting_scope"] == "application_visible_sdk_recorded"
 
 
-def test_research_pack_transfer_guard_accepts_legacy_totals_and_rejects_bad_directional_totals() -> None:
-    legacy = _generic_upmem_record("quantization_stress_4q_thesis_upmem", "none", total=2.0, compute=1.0, transfer=100)
+def test_research_pack_transfer_guard_accepts_legacy_totals_and_rejects_bad_directional_totals() -> (
+    None
+):
+    legacy = _generic_upmem_record(
+        "quantization_stress_4q_thesis_upmem",
+        "none",
+        total=2.0,
+        compute=1.0,
+        transfer=100,
+    )
     legacy.pop("actual_h2d_bytes")
     legacy.pop("actual_d2h_bytes")
     legacy.pop("actual_transfer_bytes_invariant")
     assert pack._claim_guard_issues([legacy]) == []
 
-    malformed = _generic_upmem_record("quantization_stress_4q_thesis_upmem", "none", total=2.0, compute=1.0, transfer=100)
+    malformed = _generic_upmem_record(
+        "quantization_stress_4q_thesis_upmem",
+        "none",
+        total=2.0,
+        compute=1.0,
+        transfer=100,
+    )
     malformed["actual_d2h_bytes"] = 26
     issues = pack._claim_guard_issues([malformed])
     assert any("transfer-byte invariant failed" in issue for issue in issues)
 
 
-def test_research_pack_prefers_full_precision_accuracy_but_keeps_execution_validation() -> None:
-    record = _generic_upmem_record("quantization_stress_4q_thesis_upmem", "per_task_input_quantize", total=2.0, compute=1.0, transfer=100)
+def test_research_pack_prefers_full_precision_accuracy_but_keeps_execution_validation() -> (
+    None
+):
+    record = _generic_upmem_record(
+        "quantization_stress_4q_thesis_upmem",
+        "per_task_input_quantize",
+        total=2.0,
+        compute=1.0,
+        transfer=100,
+    )
     record["validation_error_metrics"] = {"max_abs_error": 0.01, "l2_error": 0.02}
     record["full_precision_max_abs_error"] = 0.25
     record["full_precision_l2_error"] = 0.5
@@ -1238,10 +1834,22 @@ def test_research_pack_prefers_full_precision_accuracy_but_keeps_execution_valid
 
 
 def test_research_pack_readiness_is_record_derived() -> None:
-    supported = _generic_upmem_record("quantization_stress_6q_thesis_upmem", "none", total=2.0, compute=1.0, transfer=100)
+    supported = _generic_upmem_record(
+        "quantization_stress_6q_thesis_upmem",
+        "none",
+        total=2.0,
+        compute=1.0,
+        transfer=100,
+    )
     supported["n_qubits"] = 6
     supported["wram_output_tiled"] = True
-    unsupported = _generic_upmem_record("quantization_stress_8q_thesis_upmem", "none", total=0.0, compute=0.0, transfer=0)
+    unsupported = _generic_upmem_record(
+        "quantization_stress_8q_thesis_upmem",
+        "none",
+        total=0.0,
+        compute=0.0,
+        transfer=0,
+    )
     unsupported.update(
         {
             "n_qubits": 8,
@@ -1252,7 +1860,9 @@ def test_research_pack_readiness_is_record_derived() -> None:
         }
     )
 
-    lines = pack._upmem_readiness_lines([supported, unsupported], pack.unsupported_cases([unsupported]))
+    lines = pack._upmem_readiness_lines(
+        [supported, unsupported], pack.unsupported_cases([unsupported])
+    )
     text = "\n".join(lines)
 
     assert "6" in text
@@ -1264,15 +1874,25 @@ def test_research_pack_readiness_is_record_derived() -> None:
 
 
 def test_research_pack_includes_manual_quantization_stress_suite() -> None:
-    suite = load_suite(pack.ROOT / "configs" / "suites" / "manual" / "thesis_upmem_quantization_stress.yml")
+    suite = load_suite(
+        pack.ROOT
+        / "configs"
+        / "suites"
+        / "manual"
+        / "thesis_upmem_quantization_stress.yml"
+    )
 
     assert suite["repeats"] == 1
     assert suite["metadata"]["reference_route"] == "cpu_tn_einsum_exact"
     assert suite["metadata"]["hardware_claim"] == "none"
-    assert {case["circuit"]["name"] for case in suite["cases"]} == {"quantization_stress"}
+    assert {case["circuit"]["name"] for case in suite["cases"]} == {
+        "quantization_stress"
+    }
     assert {case["circuit"]["n_qubits"] for case in suite["cases"]} == {4, 6, 8}
     argv = pack._research_suite_argv("upmem_quantization_stress", pack.ROOT)
     assert argv[0] == "upmem-mvp-benchmark"
     assert argv[argv.index("--policies") + 1] == "generic-only"
-    assert argv[argv.index("--quantization-modes") + 1] == "none,per_task_input_quantize"
+    assert (
+        argv[argv.index("--quantization-modes") + 1] == "none,per_task_input_quantize"
+    )
     assert "--execute-external" in argv

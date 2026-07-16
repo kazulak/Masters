@@ -33,22 +33,58 @@ DEFAULT_COMPARISON_ROOT = ROOT / "runs" / "comparisons" / "research_pack"
 
 RESEARCH_SUITES = {
     "cpu_gpu": ROOT / "configs" / "suites" / "manual" / "thesis_full_state_cpu_gpu.yml",
-    "cpu_gpu_correctness": ROOT / "configs" / "suites" / "manual" / "thesis_full_state_correctness.yml",
+    "cpu_gpu_correctness": ROOT
+    / "configs"
+    / "suites"
+    / "manual"
+    / "thesis_full_state_correctness.yml",
     "cpu_tn": ROOT / "configs" / "suites" / "manual" / "thesis_cpu_tn_quimb.yml",
-    "tn_path_quantization": ROOT / "configs" / "suites" / "manual" / "thesis_tn_paths_quantization.yml",
+    "tn_path_quantization": ROOT
+    / "configs"
+    / "suites"
+    / "manual"
+    / "thesis_tn_paths_quantization.yml",
     # V2 is the active, projected-prefix planner evidence surface.  V1 stays
     # addressable for historical comparison but is never mixed into a default
     # research report because the objective semantics differ.
-    "planner_paths": ROOT / "configs" / "suites" / "manual" / "thesis_planner_semantic_v2.yml",
-    "planner_sensitivity": ROOT / "configs" / "suites" / "manual" / "thesis_planner_sensitivity_v2.yml",
-    "planner_paths_v1": ROOT / "configs" / "suites" / "manual" / "thesis_planner_compare.yml",
-    "planner_sensitivity_v1": ROOT / "configs" / "suites" / "manual" / "thesis_planner_sensitivity.yml",
+    "planner_paths": ROOT
+    / "configs"
+    / "suites"
+    / "manual"
+    / "thesis_planner_semantic_v2.yml",
+    "planner_sensitivity": ROOT
+    / "configs"
+    / "suites"
+    / "manual"
+    / "thesis_planner_sensitivity_v2.yml",
+    "planner_paths_v1": ROOT
+    / "configs"
+    / "suites"
+    / "manual"
+    / "thesis_planner_compare.yml",
+    "planner_sensitivity_v1": ROOT
+    / "configs"
+    / "suites"
+    / "manual"
+    / "thesis_planner_sensitivity.yml",
     # This group intentionally uses the strict generic-only MVP command rather
     # than the route-comparison suite.  The latter permits dense bridge tasks,
     # which is useful for route coverage but is not generic-TN boundary evidence.
-    "upmem_boundary": ROOT / "configs" / "suites" / "manual" / "thesis_upmem_quantization_boundary.yml",
-    "upmem_quantization_stress": ROOT / "configs" / "suites" / "manual" / "thesis_upmem_quantization_stress.yml",
-    "internal_parallelism": ROOT / "configs" / "suites" / "manual" / "research_internal_parallelism.yml",
+    "upmem_boundary": ROOT
+    / "configs"
+    / "suites"
+    / "manual"
+    / "thesis_upmem_quantization_boundary.yml",
+    "upmem_quantization_stress": ROOT
+    / "configs"
+    / "suites"
+    / "manual"
+    / "thesis_upmem_quantization_stress.yml",
+    "internal_parallelism": ROOT
+    / "configs"
+    / "suites"
+    / "manual"
+    / "research_internal_parallelism.yml",
 }
 
 SUITE_COMMAND_ORDER = (
@@ -88,6 +124,8 @@ FORBIDDEN_EVIDENCE_DERIVED_NAMES = {
     "unsupported_reasons.csv",
     "quantization_comparison.csv",
     "upmem_quantization_attribution.csv",
+    "upmem_physical_quantization_attribution.csv",
+    "upmem_physical_taskgraph_breakdown.csv",
     "upmem_hardware_mvp_summary.csv",
     "upmem_hardware_generic_mvp_summary.csv",
     "cpu_gpu_performance_summary.csv",
@@ -144,37 +182,86 @@ class PlotOutcome:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build a thesis research benchmark pack from normalized records.")
+    parser = argparse.ArgumentParser(
+        description="Build a thesis research benchmark pack from normalized records."
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    plan = subparsers.add_parser("plan", help="Print exact research benchmark commands and preflight context.")
+    plan = subparsers.add_parser(
+        "plan", help="Print exact research benchmark commands and preflight context."
+    )
     _add_common_args(plan)
 
-    run = subparsers.add_parser("run", help="Create a research pack; long benchmark execution requires --full or RUN_RESEARCH=1.")
+    run = subparsers.add_parser(
+        "run",
+        help="Create a research pack; long benchmark execution requires --full or RUN_RESEARCH=1.",
+    )
     _add_common_args(run)
-    run.add_argument("--full", action="store_true", help="Run long manual research suites.")
-    run.add_argument("--suite", action="append", choices=sorted(RESEARCH_SUITES), help="Limit full execution/report discovery to a suite group.")
+    run.add_argument(
+        "--full", action="store_true", help="Run long manual research suites."
+    )
+    run.add_argument(
+        "--suite",
+        action="append",
+        choices=sorted(RESEARCH_SUITES),
+        help="Limit full execution/report discovery to a suite group.",
+    )
 
-    report = subparsers.add_parser("report", help="Generate a research pack from existing evidence runs.")
+    report = subparsers.add_parser(
+        "report", help="Generate a research pack from existing evidence runs."
+    )
     _add_common_args(report)
-    report.add_argument("--input", action="append", dest="inputs", help="Evidence run directory or artifact path. May be repeated.")
-    report.add_argument("--suite", action="append", choices=sorted(RESEARCH_SUITES), help="Auto-discover latest evidence for a suite group.")
+    report.add_argument(
+        "--input",
+        action="append",
+        dest="inputs",
+        help="Evidence run directory or artifact path. May be repeated.",
+    )
+    report.add_argument(
+        "--suite",
+        action="append",
+        choices=sorted(RESEARCH_SUITES),
+        help="Auto-discover latest evidence for a suite group.",
+    )
 
     args = parser.parse_args(argv)
     if args.command == "plan":
         print_plan(args.root)
         return 0
     if args.command == "run":
-        return run_pack(args.root, args.out, label=args.label, suite_filter=args.suite, full=bool(args.full or os.environ.get("RUN_RESEARCH") == "1"))
+        return run_pack(
+            args.root,
+            args.out,
+            label=args.label,
+            suite_filter=args.suite,
+            full=bool(args.full or os.environ.get("RUN_RESEARCH") == "1"),
+        )
     if args.command == "report":
-        return report_pack(args.root, args.out, label=args.label, inputs=[Path(item) for item in args.inputs or ()], suite_filter=args.suite)
+        return report_pack(
+            args.root,
+            args.out,
+            label=args.label,
+            inputs=[Path(item) for item in args.inputs or ()],
+            suite_filter=args.suite,
+        )
     raise AssertionError(f"unknown command: {args.command}")
 
 
 def _add_common_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--root", type=Path, default=ROOT, help="Implementation root directory.")
-    parser.add_argument("--out", type=Path, default=None, help="Output directory for generated research pack.")
-    parser.add_argument("--label", default=None, help="Named comparison output namespace (for example: planner_v2).")
+    parser.add_argument(
+        "--root", type=Path, default=ROOT, help="Implementation root directory."
+    )
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="Output directory for generated research pack.",
+    )
+    parser.add_argument(
+        "--label",
+        default=None,
+        help="Named comparison output namespace (for example: planner_v2).",
+    )
 
 
 def print_plan(root: Path = ROOT) -> None:
@@ -197,10 +284,19 @@ def print_plan(root: Path = ROOT) -> None:
     print("  make thesis-promote")
     print("  make thesis-report")
     print("")
-    print("Derived artifacts are written under runs/comparisons/research_pack/<timestamp>/; evidence runs remain read-only.")
+    print(
+        "Derived artifacts are written under runs/comparisons/research_pack/<timestamp>/; evidence runs remain read-only."
+    )
 
 
-def run_pack(root: Path, out: Path | None, *, label: str | None = None, suite_filter: list[str] | None, full: bool) -> int:
+def run_pack(
+    root: Path,
+    out: Path | None,
+    *,
+    label: str | None = None,
+    suite_filter: list[str] | None,
+    full: bool,
+) -> int:
     out_dir = _pack_dir(root, out, label=label)
     selected = _selected_suites(suite_filter)
     command_results: list[JsonDict] = []
@@ -209,13 +305,22 @@ def run_pack(root: Path, out: Path | None, *, label: str | None = None, suite_fi
         command_results.append(_run_capture(root, ["make", "doctor"]))
         gpu_verified = True
         if "cpu_gpu" in selected or "cpu_gpu_correctness" in selected:
-            command_results.append(_run_capture(root, _bench_argv(["simulation-backend-probe", "--verify-gpu", "quest-hip"])))
+            command_results.append(
+                _run_capture(
+                    root,
+                    _bench_argv(
+                        ["simulation-backend-probe", "--verify-gpu", "quest-hip"]
+                    ),
+                )
+            )
             gpu_verified = _gpu_verification_passed(root)
         for key in SUITE_COMMAND_ORDER:
             if key not in selected:
                 continue
             if key in {"cpu_gpu", "cpu_gpu_correctness"} and not gpu_verified:
-                command_results.append(_skipped_group_result(key, _gpu_blocker_reason(root)))
+                command_results.append(
+                    _skipped_group_result(key, _gpu_blocker_reason(root))
+                )
                 continue
             result = _run_capture(root, _bench_argv(_research_suite_argv(key, root)))
             command_results.append(result)
@@ -231,10 +336,24 @@ def run_pack(root: Path, out: Path | None, *, label: str | None = None, suite_fi
                 "stderr": "",
             }
         )
-    return _write_pack(root, out_dir, evidence_inputs, command_results=command_results, selected_suite_keys=selected, generation_mode="run")
+    return _write_pack(
+        root,
+        out_dir,
+        evidence_inputs,
+        command_results=command_results,
+        selected_suite_keys=selected,
+        generation_mode="run",
+    )
 
 
-def report_pack(root: Path, out: Path | None, *, label: str | None = None, inputs: list[Path], suite_filter: list[str] | None) -> int:
+def report_pack(
+    root: Path,
+    out: Path | None,
+    *,
+    label: str | None = None,
+    inputs: list[Path],
+    suite_filter: list[str] | None,
+) -> int:
     out_dir = _pack_dir(root, out, label=label)
     selected = _selected_suites(suite_filter)
     evidence_inputs = [path.resolve() for path in inputs]
@@ -251,7 +370,14 @@ def report_pack(root: Path, out: Path | None, *, label: str | None = None, input
             "stderr": "",
         }
     ]
-    return _write_pack(root, out_dir, evidence_inputs, command_results=command_results, selected_suite_keys=selected, generation_mode="report")
+    return _write_pack(
+        root,
+        out_dir,
+        evidence_inputs,
+        command_results=command_results,
+        selected_suite_keys=selected,
+        generation_mode="report",
+    )
 
 
 def _write_pack(
@@ -267,7 +393,10 @@ def _write_pack(
     records = load_result_records(evidence_inputs) if evidence_inputs else []
     planner_semantics = planner_semantic_context(records)
     if planner_semantics["issues"]:
-        raise ValueError("planner semantic versions are mixed: " + "; ".join(planner_semantics["issues"]))
+        raise ValueError(
+            "planner semantic versions are mixed: "
+            + "; ".join(planner_semantics["issues"])
+        )
     boundary = validate_artifact_boundaries(root)
     guard_issues = _claim_guard_issues(records)
     manifest = build_manifest(
@@ -286,6 +415,8 @@ def _write_pack(
     full_state_tn_rows = full_state_tn_comparison(stats_rows)
     slicing_tradeoff_rows = slicing_tradeoff(stats_rows)
     quantization_rows = upmem_quantization_attribution(records)
+    physical_quantization_rows = upmem_physical_quantization_attribution(records)
+    physical_taskgraph_rows = upmem_physical_taskgraph_breakdown(records)
     hardware_mvp_rows = upmem_hardware_mvp_summary(records)
     hardware_generic_mvp_rows = upmem_hardware_generic_mvp_summary(records)
     same_plan_rows = same_plan_execution(records)
@@ -294,20 +425,70 @@ def _write_pack(
     validation_rows = validation_summary(records)
     capability_rows = route_capability_matrix(records)
     planner_component_rows = planner_component_diagnostics(planner_rows)
-    _write_csv(out_dir / "per_case_route_stats.csv", stats_rows, PER_CASE_ROUTE_STATS_FIELDS)
+    _write_csv(
+        out_dir / "per_case_route_stats.csv", stats_rows, PER_CASE_ROUTE_STATS_FIELDS
+    )
     _write_csv(out_dir / "paired_speedups.csv", speedup_rows, PAIRED_SPEEDUP_FIELDS)
-    _write_csv(out_dir / "cpu_gpu_performance_summary.csv", cpu_gpu_rows, CPU_GPU_PERFORMANCE_SUMMARY_FIELDS)
-    _write_csv(out_dir / "full_state_tn_comparison.csv", full_state_tn_rows, FULL_STATE_TN_COMPARISON_FIELDS)
-    _write_csv(out_dir / "cpu_tn_slicing_tradeoff.csv", slicing_tradeoff_rows, SLICING_TRADEOFF_FIELDS)
-    _write_csv(out_dir / "upmem_quantization_attribution.csv", quantization_rows, UPMEM_QUANTIZATION_ATTRIBUTION_FIELDS)
-    _write_csv(out_dir / "upmem_hardware_mvp_summary.csv", hardware_mvp_rows, UPMEM_HARDWARE_MVP_FIELDS)
-    _write_csv(out_dir / "upmem_hardware_generic_mvp_summary.csv", hardware_generic_mvp_rows, UPMEM_HARDWARE_MVP_FIELDS)
-    _write_csv(out_dir / "same_plan_execution.csv", same_plan_rows, SAME_PLAN_EXECUTION_FIELDS)
-    _write_csv(out_dir / "planner_comparison.csv", planner_rows, PLANNER_COMPARISON_FIELDS)
-    _write_csv(out_dir / "planner_component_diagnostics.csv", planner_component_rows, PLANNER_COMPONENT_DIAGNOSTICS_FIELDS)
+    _write_csv(
+        out_dir / "cpu_gpu_performance_summary.csv",
+        cpu_gpu_rows,
+        CPU_GPU_PERFORMANCE_SUMMARY_FIELDS,
+    )
+    _write_csv(
+        out_dir / "full_state_tn_comparison.csv",
+        full_state_tn_rows,
+        FULL_STATE_TN_COMPARISON_FIELDS,
+    )
+    _write_csv(
+        out_dir / "cpu_tn_slicing_tradeoff.csv",
+        slicing_tradeoff_rows,
+        SLICING_TRADEOFF_FIELDS,
+    )
+    _write_csv(
+        out_dir / "upmem_quantization_attribution.csv",
+        quantization_rows,
+        UPMEM_QUANTIZATION_ATTRIBUTION_FIELDS,
+    )
+    _write_csv(
+        out_dir / "upmem_physical_quantization_attribution.csv",
+        physical_quantization_rows,
+        UPMEM_PHYSICAL_QUANTIZATION_FIELDS,
+    )
+    _write_csv(
+        out_dir / "upmem_physical_taskgraph_breakdown.csv",
+        physical_taskgraph_rows,
+        UPMEM_PHYSICAL_TASKGRAPH_FIELDS,
+    )
+    _write_csv(
+        out_dir / "upmem_hardware_mvp_summary.csv",
+        hardware_mvp_rows,
+        UPMEM_HARDWARE_MVP_FIELDS,
+    )
+    _write_csv(
+        out_dir / "upmem_hardware_generic_mvp_summary.csv",
+        hardware_generic_mvp_rows,
+        UPMEM_HARDWARE_MVP_FIELDS,
+    )
+    _write_csv(
+        out_dir / "same_plan_execution.csv", same_plan_rows, SAME_PLAN_EXECUTION_FIELDS
+    )
+    _write_csv(
+        out_dir / "planner_comparison.csv", planner_rows, PLANNER_COMPARISON_FIELDS
+    )
+    _write_csv(
+        out_dir / "planner_component_diagnostics.csv",
+        planner_component_rows,
+        PLANNER_COMPONENT_DIAGNOSTICS_FIELDS,
+    )
     _write_csv(out_dir / "unsupported_cases.csv", unsupported_rows, UNSUPPORTED_FIELDS)
-    _write_csv(out_dir / "validation_summary.csv", validation_rows, VALIDATION_SUMMARY_FIELDS)
-    _write_csv(out_dir / "route_capability_matrix.csv", capability_rows, ROUTE_CAPABILITY_FIELDS)
+    _write_csv(
+        out_dir / "validation_summary.csv", validation_rows, VALIDATION_SUMMARY_FIELDS
+    )
+    _write_csv(
+        out_dir / "route_capability_matrix.csv",
+        capability_rows,
+        ROUTE_CAPABILITY_FIELDS,
+    )
     plot_manifest = write_plots(
         out_dir,
         stats_rows,
@@ -319,6 +500,8 @@ def _write_pack(
         planner_component_rows,
         hardware_mvp_rows,
         hardware_generic_mvp_rows,
+        physical_quantization_rows,
+        physical_taskgraph_rows,
     )
     _write_json(out_dir / "plot_manifest.json", plot_manifest)
     (out_dir / "benchmark_summary.md").write_text(
@@ -338,6 +521,8 @@ def _write_pack(
             guard_issues,
             hardware_mvp_rows,
             hardware_generic_mvp_rows,
+            physical_quantization_rows,
+            physical_taskgraph_rows,
         ),
         encoding="utf-8",
     )
@@ -398,10 +583,16 @@ def build_manifest(
         "hostname": socket.gethostname(),
         "platform": platform.platform(),
         "python_version": sys.version.replace("\n", " "),
-        "packages": {name: _package_version(name) for name in ("numpy", "quimb", "cotengra", "opt_einsum", "matplotlib")},
+        "packages": {
+            name: _package_version(name)
+            for name in ("numpy", "quimb", "cotengra", "opt_einsum", "matplotlib")
+        },
         "cpu": _cpu_metadata(),
         "environment": {name: os.environ.get(name) for name in RELEVANT_ENV_VARS},
-        "selected_suites": {key: _display_path(RESEARCH_SUITES[key], root) for key in selected_suite_keys},
+        "selected_suites": {
+            key: _display_path(RESEARCH_SUITES[key], root)
+            for key in selected_suite_keys
+        },
         "evidence_inputs": [path.as_posix() for path in evidence_inputs],
         "record_count": record_count,
         "planner_semantics": planner_semantics or planner_semantic_context([]),
@@ -413,7 +604,9 @@ def build_manifest(
         "report_generation_timestamp": generated_at,
         "report_generation_command": command_line,
         "report_generation_input_paths": [path.as_posix() for path in evidence_inputs],
-        "gpu_verification": _read_optional_json(root / "build" / "gpu_verification" / "quest_gpu_full_state_exact.json"),
+        "gpu_verification": _read_optional_json(
+            root / "build" / "gpu_verification" / "quest_gpu_full_state_exact.json"
+        ),
         "notes": {
             "long_runs_require_explicit_opt_in": True,
             "derived_outputs_are_under_runs_comparisons": True,
@@ -429,7 +622,11 @@ def planner_semantic_context(records: list[JsonDict]) -> JsonDict:
     candidate rows generated with different objective or legacy score models.
     Older non-planner runs remain reportable unchanged.
     """
-    rows = [record for record in records if record.get("route_id") == "planner_candidate_model"]
+    rows = [
+        record
+        for record in records
+        if record.get("route_id") == "planner_candidate_model"
+    ]
     contexts: dict[tuple[str | None, str | None], dict[str, Any]] = {}
     objective_versions: set[str] = set()
     score_models: set[str] = set()
@@ -449,10 +646,16 @@ def planner_semantic_context(records: list[JsonDict]) -> JsonDict:
         # objective version is present it is authoritative for that row, but
         # a row carrying only score_model remains comparable only with the
         # same legacy semantic family.
-        semantic_version = objective or (f"legacy_score_model:{score_model}" if score_model else None)
+        semantic_version = objective or (
+            f"legacy_score_model:{score_model}" if score_model else None
+        )
         if semantic_version:
             semantic_versions.add(semantic_version)
-        config_hash = _nonempty_text(row.get("planner_config_hash") or row.get("config_hash") or row.get("executor_config_hash"))
+        config_hash = _nonempty_text(
+            row.get("planner_config_hash")
+            or row.get("config_hash")
+            or row.get("executor_config_hash")
+        )
         if config_hash:
             config_hashes.add(config_hash)
         profile = _nonempty_text(row.get("pim_weight_profile"))
@@ -464,7 +667,14 @@ def planner_semantic_context(records: list[JsonDict]) -> JsonDict:
         normalization = _planner_normalization_id(row.get("pim_normalization"))
         if normalization:
             normalization_ids.add(normalization)
-        contexts.setdefault((objective, score_model), {"objective_version": objective, "score_model": score_model, "record_count": 0})["record_count"] += 1
+        contexts.setdefault(
+            (objective, score_model),
+            {
+                "objective_version": objective,
+                "score_model": score_model,
+                "record_count": 0,
+            },
+        )["record_count"] += 1
     issues: list[str] = []
     if len(objective_versions) > 1:
         issues.append("pim_objective_version=" + ",".join(sorted(objective_versions)))
@@ -482,7 +692,10 @@ def planner_semantic_context(records: list[JsonDict]) -> JsonDict:
         "weight_profiles": sorted(profile_ids),
         "execution_policies": sorted(policy_ids),
         "normalizations": sorted(normalization_ids),
-        "contexts": sorted(contexts.values(), key=lambda item: (str(item["objective_version"]), str(item["score_model"]))),
+        "contexts": sorted(
+            contexts.values(),
+            key=lambda item: (str(item["objective_version"]), str(item["score_model"])),
+        ),
         "issues": issues,
     }
 
@@ -692,6 +905,88 @@ UPMEM_HARDWARE_MVP_FIELDS = [
     "timing_scope",
     "hardware_speedup_applicable",
     "functionality_evidence_status",
+]
+
+UPMEM_PHYSICAL_QUANTIZATION_FIELDS = [
+    "schema_version",
+    "suite_id",
+    "run_id",
+    "case_id",
+    "case_family",
+    "benchmark_n_qubits",
+    "repeat_id",
+    "contraction_plan_hash",
+    "float32_route_id",
+    "int8_route_id",
+    "same_route",
+    "same_taskgraph",
+    "same_plan_verified",
+    "float32_warm_runtime_s",
+    "int8_warm_runtime_s",
+    "warm_runtime_ratio_float32_over_int8",
+    "float32_transfer_bytes",
+    "int8_transfer_bytes",
+    "float32_h2d_bytes",
+    "int8_h2d_bytes",
+    "float32_d2h_bytes",
+    "int8_d2h_bytes",
+    "transfer_ratio_float32_over_int8",
+    "float32_max_abs_error",
+    "int8_max_abs_error",
+    "quantization_error_int8_vs_float32",
+    "float32_timing_class",
+    "int8_timing_class",
+    "hardware_speedup_applicable",
+]
+
+UPMEM_PHYSICAL_TASKGRAPH_FIELDS = [
+    "schema_version",
+    "suite_id",
+    "run_id",
+    "case_id",
+    "case_family",
+    "benchmark_n_qubits",
+    "repeat_id",
+    "contraction_plan_hash",
+    "route_id",
+    "quantization_mode",
+    "input_dtype_on_dpu",
+    "complex_policy",
+    "hardware_numeric_coverage",
+    "split_complex_component_count",
+    "status",
+    "validation_status",
+    "validation_passed",
+    "validation_max_abs_error",
+    "full_precision_max_abs_error",
+    "quantization_max_abs_error",
+    "exact_integer_match",
+    "task_count",
+    "validated_task_count",
+    "unsupported_task_count",
+    "hardware_execution",
+    "hardware_kernel_executed",
+    "simulator_kernel_executed",
+    "cpu_fallback_used",
+    "timing_class",
+    "hardware_timing_available",
+    "timing_is_bringup_only",
+    "allocation_time_s",
+    "binary_load_time_s",
+    "h2d_time_s",
+    "d2h_time_s",
+    "application_visible_h2d_bytes",
+    "application_visible_d2h_bytes",
+    "application_visible_transfer_bytes",
+    "total_route_time_s",
+    "warm_runtime_s",
+    "total_quantization_time_s",
+    "total_dequantization_time_s",
+    "total_bridge_time_s",
+    "total_build_time_s",
+    "validation_time_s",
+    "output_materialization_time_s",
+    "hardware_speedup_applicable",
 ]
 
 PAIRED_SPEEDUP_FIELDS = [
@@ -1023,10 +1318,14 @@ def per_case_route_stats(records: list[JsonDict]) -> list[JsonDict]:
         )
         grouped[key].append(record)
     rows: list[JsonDict] = []
-    for key, group in sorted(grouped.items(), key=lambda item: tuple(str(value) for value in item[0])):
+    for key, group in sorted(
+        grouped.items(), key=lambda item: tuple(str(value) for value in item[0])
+    ):
         first = group[0]
         total_values = _numbers(row.get("total_wall_time_s") for row in group)
-        residual_values = _numbers(row.get("total_host_residual_time_s") for row in group)
+        residual_values = _numbers(
+            row.get("total_host_residual_time_s") for row in group
+        )
         reported_values = [_reported_time(row)[0] for row in group]
         reported_values = [value for value in reported_values if value is not None]
         compute_values = _numbers(row.get("simulation_compute_time_s") for row in group)
@@ -1038,8 +1337,7 @@ def per_case_route_stats(records: list[JsonDict]) -> list[JsonDict]:
         errors = [_validation_errors(row) for row in group]
         full_precision_errors = [_full_precision_errors(row) for row in group]
         selected_accuracy_errors = [
-            _accuracy_errors_for_reporting(row)
-            for row in group
+            _accuracy_errors_for_reporting(row) for row in group
         ]
         rows.append(
             {
@@ -1054,32 +1352,66 @@ def per_case_route_stats(records: list[JsonDict]) -> list[JsonDict]:
                 "backend_family": first.get("backend_family"),
                 "execution_model": first.get("execution_model"),
                 "parallelism_mode": first.get("parallelism_mode"),
-                "parallelism_evidence_type": _first_present(group, "parallelism_evidence_type"),
+                "parallelism_evidence_type": _first_present(
+                    group, "parallelism_evidence_type"
+                ),
                 "execution_plan_kind": _first_present(group, "execution_plan_kind"),
-                "execution_plan_executed": any(bool(row.get("execution_plan_executed", False)) for row in group),
-                "frontier_scheduler_enabled": any(bool(row.get("frontier_scheduler_enabled", False)) for row in group),
-                "frontier_parallel_execution": any(bool(row.get("frontier_parallel_execution", False)) for row in group),
+                "execution_plan_executed": any(
+                    bool(row.get("execution_plan_executed", False)) for row in group
+                ),
+                "frontier_scheduler_enabled": any(
+                    bool(row.get("frontier_scheduler_enabled", False)) for row in group
+                ),
+                "frontier_parallel_execution": any(
+                    bool(row.get("frontier_parallel_execution", False)) for row in group
+                ),
                 "frontier_worker_count": _first_present(group, "frontier_worker_count"),
-                "frontier_wave_count": _max_number(row.get("frontier_wave_count") for row in group),
-                "max_frontier_width": _max_number(row.get("max_frontier_width") for row in group),
+                "frontier_wave_count": _max_number(
+                    row.get("frontier_wave_count") for row in group
+                ),
+                "max_frontier_width": _max_number(
+                    row.get("max_frontier_width") for row in group
+                ),
                 "mean_frontier_width": _first_present(group, "mean_frontier_width"),
-                "frontier_executed_task_count": _max_number(row.get("frontier_executed_task_count") for row in group),
-                "source_frontier_completed_task_count": _max_number(row.get("source_frontier_completed_task_count") for row in group),
-                "frontier_executed_parallel_task_count": _max_number(row.get("frontier_executed_parallel_task_count") for row in group),
-                "executed_parallel_task_count": _max_number(row.get("executed_parallel_task_count") for row in group),
-                "source_task_count": _max_number(row.get("source_task_count") for row in group),
-                "source_task_completion_count": _max_number(row.get("source_task_completion_count") for row in group),
+                "frontier_executed_task_count": _max_number(
+                    row.get("frontier_executed_task_count") for row in group
+                ),
+                "source_frontier_completed_task_count": _max_number(
+                    row.get("source_frontier_completed_task_count") for row in group
+                ),
+                "frontier_executed_parallel_task_count": _max_number(
+                    row.get("frontier_executed_parallel_task_count") for row in group
+                ),
+                "executed_parallel_task_count": _max_number(
+                    row.get("executed_parallel_task_count") for row in group
+                ),
+                "source_task_count": _max_number(
+                    row.get("source_task_count") for row in group
+                ),
+                "source_task_completion_count": _max_number(
+                    row.get("source_task_completion_count") for row in group
+                ),
                 "circuit_semantics_hash": first.get("circuit_semantics_hash"),
                 "tensor_network_hash": first.get("tensor_network_hash"),
                 "contraction_plan_hash": first.get("contraction_plan_hash"),
-                "contraction_execution_target": first.get("contraction_execution_target"),
+                "contraction_execution_target": first.get(
+                    "contraction_execution_target"
+                ),
                 "upmem_execution_mode": first.get("upmem_execution_mode"),
                 "policy": _record_value(first, "policy"),
                 "quantization_mode": _record_value(first, "quantization_mode"),
-                "generic_only_all_tasks_used_generic_backend": _record_value(first, "generic_only_all_tasks_used_generic_backend"),
-                "valid_primary_upmem_codepath_result": _record_value(first, "valid_primary_upmem_codepath_result"),
-                "upmem_program_executed": _record_value(first, "upmem_program_executed"),
-                "dpu_program_invocations": _record_value(first, "dpu_program_invocations"),
+                "generic_only_all_tasks_used_generic_backend": _record_value(
+                    first, "generic_only_all_tasks_used_generic_backend"
+                ),
+                "valid_primary_upmem_codepath_result": _record_value(
+                    first, "valid_primary_upmem_codepath_result"
+                ),
+                "upmem_program_executed": _record_value(
+                    first, "upmem_program_executed"
+                ),
+                "dpu_program_invocations": _record_value(
+                    first, "dpu_program_invocations"
+                ),
                 "state_output_mode": first.get("state_output_mode"),
                 "validation_method": first.get("validation_method"),
                 "performance_tier": bool(first.get("performance_tier", False)),
@@ -1091,33 +1423,77 @@ def per_case_route_stats(records: list[JsonDict]) -> list[JsonDict]:
                 "timing_basis": _reported_timing_basis(group),
                 "energy_joules": _first_present(group, "energy_joules"),
                 "energy_source": _first_present(group, "energy_source"),
-                "energy_measurement_status": _first_present(group, "energy_measurement_status"),
+                "energy_measurement_status": _first_present(
+                    group, "energy_measurement_status"
+                ),
                 **_stats("simulation_compute_time_s", compute_values),
                 **_stats("planning_time_s", planning_values),
                 **_stats("actual_transfer_bytes", transfer_values),
                 **_stats("actual_h2d_bytes", h2d_values),
                 **_stats("actual_d2h_bytes", d2h_values),
-                "transfer_accounting_scope": _first_present(group, "transfer_accounting_scope"),
+                "transfer_accounting_scope": _first_present(
+                    group, "transfer_accounting_scope"
+                ),
                 "actual_transfer_bytes_invariant": _transfer_invariant_status(group),
                 "tn_estimated_flops": _first_present(group, "tn_estimated_flops"),
-                "tn_max_intermediate_bytes": _first_present(group, "tn_max_intermediate_bytes"),
-                "validation_passed_count": sum(1 for row in group if str(row.get("validation_status")) in {"passed", "passed_native_status", "passed_runtime_only"}),
-                "validation_failed_count": sum(1 for row in group if str(row.get("validation_status")) not in {"passed", "passed_native_status", "passed_runtime_only", "skipped"}),
+                "tn_max_intermediate_bytes": _first_present(
+                    group, "tn_max_intermediate_bytes"
+                ),
+                "validation_passed_count": sum(
+                    1
+                    for row in group
+                    if str(row.get("validation_status"))
+                    in {"passed", "passed_native_status", "passed_runtime_only"}
+                ),
+                "validation_failed_count": sum(
+                    1
+                    for row in group
+                    if str(row.get("validation_status"))
+                    not in {
+                        "passed",
+                        "passed_native_status",
+                        "passed_runtime_only",
+                        "skipped",
+                    }
+                ),
                 "unsupported_count": sum(1 for row in group if _is_unsupported(row)),
                 "slice_count": _first_present(group, "slice_count"),
                 "slicing_flop_ratio": _first_present(group, "slicing_flop_ratio"),
-                "slicing_flop_change_kind": _first_present(group, "slicing_flop_change_kind"),
-                "max_abs_error": _max_number(error.get("max_abs_error") for error in selected_accuracy_errors),
-                "l2_error": _max_number(error.get("l2_error") for error in selected_accuracy_errors),
-                "execution_max_abs_error": _max_number(error.get("max_abs_error") for error in errors),
-                "execution_l2_error": _max_number(error.get("l2_error") for error in errors),
-                "full_precision_max_abs_error": _max_number(error.get("max_abs_error") for error in full_precision_errors),
-                "full_precision_l2_error": _max_number(error.get("l2_error") for error in full_precision_errors),
-                "hardware_speedup_applicable": any(bool(row.get("hardware_speedup_applicable", False)) for row in group),
-                "gpu_backend_verified": any(bool(row.get("gpu_backend_verified", False)) for row in group),
+                "slicing_flop_change_kind": _first_present(
+                    group, "slicing_flop_change_kind"
+                ),
+                "max_abs_error": _max_number(
+                    error.get("max_abs_error") for error in selected_accuracy_errors
+                ),
+                "l2_error": _max_number(
+                    error.get("l2_error") for error in selected_accuracy_errors
+                ),
+                "execution_max_abs_error": _max_number(
+                    error.get("max_abs_error") for error in errors
+                ),
+                "execution_l2_error": _max_number(
+                    error.get("l2_error") for error in errors
+                ),
+                "full_precision_max_abs_error": _max_number(
+                    error.get("max_abs_error") for error in full_precision_errors
+                ),
+                "full_precision_l2_error": _max_number(
+                    error.get("l2_error") for error in full_precision_errors
+                ),
+                "hardware_speedup_applicable": any(
+                    bool(row.get("hardware_speedup_applicable", False)) for row in group
+                ),
+                "gpu_backend_verified": any(
+                    bool(row.get("gpu_backend_verified", False)) for row in group
+                ),
                 "gpu_device_name": _first_present(group, "gpu_device_name"),
-                "cpu_fallback_used": any(bool(row.get("cpu_fallback_used", False)) for row in group),
-                "resource_skip_reason": _first_record_value(group, "resource_skip_reason") or _first_record_value(group, "reason"),
+                "cpu_fallback_used": any(
+                    bool(row.get("cpu_fallback_used", False)) for row in group
+                ),
+                "resource_skip_reason": _first_record_value(
+                    group, "resource_skip_reason"
+                )
+                or _first_record_value(group, "reason"),
             }
         )
     return rows
@@ -1142,13 +1518,22 @@ def paired_speedups(records: list[JsonDict]) -> list[JsonDict]:
         gpu = gpu_records[key]
         if not _valid_for_pair(cpu) or not _valid_for_pair(gpu):
             continue
-        if not (gpu.get("gpu_backend_verified") is True and gpu.get("gpu_program_executed") is True):
+        if not (
+            gpu.get("gpu_backend_verified") is True
+            and gpu.get("gpu_program_executed") is True
+        ):
             continue
-        if str(cpu.get("state_output_mode") or "") != str(gpu.get("state_output_mode") or ""):
+        if str(cpu.get("state_output_mode") or "") != str(
+            gpu.get("state_output_mode") or ""
+        ):
             continue
-        if str(cpu.get("validation_method") or "") != str(gpu.get("validation_method") or ""):
+        if str(cpu.get("validation_method") or "") != str(
+            gpu.get("validation_method") or ""
+        ):
             continue
-        if bool(cpu.get("performance_tier", False)) != bool(gpu.get("performance_tier", False)):
+        if bool(cpu.get("performance_tier", False)) != bool(
+            gpu.get("performance_tier", False)
+        ):
             continue
         cpu_total = _positive(cpu.get("total_wall_time_s"))
         gpu_total = _positive(gpu.get("total_wall_time_s"))
@@ -1167,15 +1552,21 @@ def paired_speedups(records: list[JsonDict]) -> list[JsonDict]:
                 "repeat_id": key[1],
                 "cpu_route_id": "quest_cpu_full_state_exact",
                 "gpu_route_id": "quest_gpu_full_state_exact",
-                "timing_scope": "performance_compute" if bool(cpu.get("performance_tier", False)) else "correctness_wall_and_compute",
+                "timing_scope": "performance_compute"
+                if bool(cpu.get("performance_tier", False))
+                else "correctness_wall_and_compute",
                 "state_output_mode": cpu.get("state_output_mode"),
                 "validation_method": cpu.get("validation_method"),
                 "performance_tier": bool(cpu.get("performance_tier", False)),
                 "cpu_total_wall_time_s": cpu_total,
                 "gpu_total_wall_time_s": gpu_total,
                 "wall_time_ratio_cpu_over_gpu": cpu_total / gpu_total,
-                "cpu_total_host_residual_time_s": _float_or_none(cpu.get("total_host_residual_time_s")),
-                "gpu_total_host_residual_time_s": _float_or_none(gpu.get("total_host_residual_time_s")),
+                "cpu_total_host_residual_time_s": _float_or_none(
+                    cpu.get("total_host_residual_time_s")
+                ),
+                "gpu_total_host_residual_time_s": _float_or_none(
+                    gpu.get("total_host_residual_time_s")
+                ),
                 "cpu_simulation_compute_time_s": cpu_compute,
                 "gpu_simulation_compute_time_s": gpu_compute,
                 "compute_speedup_cpu_over_gpu": cpu_compute / gpu_compute,
@@ -1194,12 +1585,15 @@ def cpu_gpu_performance_summary(speedup_rows: list[JsonDict]) -> list[JsonDict]:
         qubits = _plot_qubits(row)
         if qubits is None:
             continue
-        grouped[(str(row.get("case_id") or ""), str(row.get("case_family") or ""), qubits)].append(row)
+        grouped[
+            (str(row.get("case_id") or ""), str(row.get("case_family") or ""), qubits)
+        ].append(row)
 
     summary: list[JsonDict] = []
     for (case_id, family, qubits), group in sorted(grouped.items()):
         first = group[0]
-        summary.append({
+        summary.append(
+            {
                 "schema_version": SCHEMA_VERSION,
                 "case_id": case_id,
                 "case_family": family,
@@ -1211,15 +1605,44 @@ def cpu_gpu_performance_summary(speedup_rows: list[JsonDict]) -> list[JsonDict]:
                 "matched_repeat_count": len(group),
                 "timing_scope": "performance_compute",
                 "gpu_device_name": _first_present(group, "gpu_device_name"),
-                **_stats("cpu_simulation_compute_time_s", _numbers(row.get("cpu_simulation_compute_time_s") for row in group)),
-                **_stats("gpu_simulation_compute_time_s", _numbers(row.get("gpu_simulation_compute_time_s") for row in group)),
-                **_stats("compute_speedup_cpu_over_gpu", _numbers(row.get("compute_speedup_cpu_over_gpu") for row in group)),
-                **_stats("cpu_total_wall_time_s", _numbers(row.get("cpu_total_wall_time_s") for row in group)),
-                **_stats("gpu_total_wall_time_s", _numbers(row.get("gpu_total_wall_time_s") for row in group)),
-                **_stats("wall_time_ratio_cpu_over_gpu", _numbers(row.get("wall_time_ratio_cpu_over_gpu") for row in group)),
-                **_stats("cpu_total_host_residual_time_s", _numbers(row.get("cpu_total_host_residual_time_s") for row in group)),
-                **_stats("gpu_total_host_residual_time_s", _numbers(row.get("gpu_total_host_residual_time_s") for row in group)),
-            })
+                **_stats(
+                    "cpu_simulation_compute_time_s",
+                    _numbers(row.get("cpu_simulation_compute_time_s") for row in group),
+                ),
+                **_stats(
+                    "gpu_simulation_compute_time_s",
+                    _numbers(row.get("gpu_simulation_compute_time_s") for row in group),
+                ),
+                **_stats(
+                    "compute_speedup_cpu_over_gpu",
+                    _numbers(row.get("compute_speedup_cpu_over_gpu") for row in group),
+                ),
+                **_stats(
+                    "cpu_total_wall_time_s",
+                    _numbers(row.get("cpu_total_wall_time_s") for row in group),
+                ),
+                **_stats(
+                    "gpu_total_wall_time_s",
+                    _numbers(row.get("gpu_total_wall_time_s") for row in group),
+                ),
+                **_stats(
+                    "wall_time_ratio_cpu_over_gpu",
+                    _numbers(row.get("wall_time_ratio_cpu_over_gpu") for row in group),
+                ),
+                **_stats(
+                    "cpu_total_host_residual_time_s",
+                    _numbers(
+                        row.get("cpu_total_host_residual_time_s") for row in group
+                    ),
+                ),
+                **_stats(
+                    "gpu_total_host_residual_time_s",
+                    _numbers(
+                        row.get("gpu_total_host_residual_time_s") for row in group
+                    ),
+                ),
+            }
+        )
     crossover_by_family: dict[str, int | str] = {}
     family_groups: dict[str, list[JsonDict]] = defaultdict(list)
     for row in summary:
@@ -1228,12 +1651,15 @@ def cpu_gpu_performance_summary(speedup_rows: list[JsonDict]) -> list[JsonDict]:
         observed = sorted(
             int(row["n_qubits"])
             for row in family_rows
-            if _plot_qubits(row) is not None and _positive(row.get("compute_speedup_cpu_over_gpu_median")) is not None
+            if _plot_qubits(row) is not None
+            and _positive(row.get("compute_speedup_cpu_over_gpu_median")) is not None
             and float(row["compute_speedup_cpu_over_gpu_median"]) > 1.0
         )
         crossover_by_family[family] = observed[0] if observed else "none_observed"
     for row in summary:
-        row["compute_speedup_cpu_over_gpu_crossover_qubit"] = crossover_by_family[str(row["case_family"])]
+        row["compute_speedup_cpu_over_gpu_crossover_qubit"] = crossover_by_family[
+            str(row["case_family"])
+        ]
         row["crossover_qubit"] = row["compute_speedup_cpu_over_gpu_crossover_qubit"]
     return summary
 
@@ -1244,7 +1670,11 @@ def full_state_tn_comparison(stats_rows: list[JsonDict]) -> list[JsonDict]:
         if row.get("suite_id") not in {"thesis_cpu_tn_quimb", "research_cpu_tn"}:
             continue
         route = str(row.get("route_id") or "")
-        if route in {"quest_cpu_full_state_exact", "quimb_tn_exact", "quimb_tn_sliced_exact"}:
+        if route in {
+            "quest_cpu_full_state_exact",
+            "quimb_tn_exact",
+            "quimb_tn_sliced_exact",
+        }:
             grouped[(str(row.get("suite_id")), str(row.get("case_id")))][route] = row
     result: list[JsonDict] = []
     for (suite_id, case_id), routes in sorted(grouped.items()):
@@ -1255,7 +1685,11 @@ def full_state_tn_comparison(stats_rows: list[JsonDict]) -> list[JsonDict]:
             continue
         quest_time = _positive(quest.get("simulation_compute_time_s_median"))
         unsliced_time = _positive(unsliced.get("simulation_compute_time_s_median"))
-        sliced_time = _positive(sliced.get("simulation_compute_time_s_median")) if sliced else None
+        sliced_time = (
+            _positive(sliced.get("simulation_compute_time_s_median"))
+            if sliced
+            else None
+        )
         result.append(
             {
                 "schema_version": SCHEMA_VERSION,
@@ -1266,12 +1700,22 @@ def full_state_tn_comparison(stats_rows: list[JsonDict]) -> list[JsonDict]:
                 "quest_cpu_compute_time_s_median": quest_time,
                 "quimb_unsliced_compute_time_s_median": unsliced_time,
                 "quimb_sliced_compute_time_s_median": sliced_time,
-                "quimb_unsliced_time_over_quest_time": _ratio(unsliced_time, quest_time),
+                "quimb_unsliced_time_over_quest_time": _ratio(
+                    unsliced_time, quest_time
+                ),
                 "quimb_sliced_time_over_quest_time": _ratio(sliced_time, quest_time),
-                "quimb_sliced_time_over_unsliced_time": _ratio(sliced_time, unsliced_time),
+                "quimb_sliced_time_over_unsliced_time": _ratio(
+                    sliced_time, unsliced_time
+                ),
                 "quest_validation_passed_count": quest.get("validation_passed_count"),
-                "quimb_unsliced_validation_passed_count": unsliced.get("validation_passed_count"),
-                "quimb_sliced_validation_passed_count": sliced.get("validation_passed_count") if sliced else None,
+                "quimb_unsliced_validation_passed_count": unsliced.get(
+                    "validation_passed_count"
+                ),
+                "quimb_sliced_validation_passed_count": sliced.get(
+                    "validation_passed_count"
+                )
+                if sliced
+                else None,
             }
         )
     return result
@@ -1284,7 +1728,9 @@ def slicing_tradeoff(stats_rows: list[JsonDict]) -> list[JsonDict]:
     unsliced plan.  Runtime and intermediate-size ratios are derived only from
     the two matched route rows, and are not interpreted as speedups.
     """
-    grouped: dict[tuple[str, str, str, str, bool], dict[str, JsonDict]] = defaultdict(dict)
+    grouped: dict[tuple[str, str, str, str, bool], dict[str, JsonDict]] = defaultdict(
+        dict
+    )
     for row in stats_rows:
         if row.get("suite_id") not in {"thesis_cpu_tn_quimb", "research_cpu_tn"}:
             continue
@@ -1301,7 +1747,13 @@ def slicing_tradeoff(stats_rows: list[JsonDict]) -> list[JsonDict]:
         grouped[key][route] = row
 
     result: list[JsonDict] = []
-    for (suite_id, case_id, _timing_scope, _state_output_mode, _performance_tier), routes in sorted(grouped.items()):
+    for (
+        suite_id,
+        case_id,
+        _timing_scope,
+        _state_output_mode,
+        _performance_tier,
+    ), routes in sorted(grouped.items()):
         unsliced = routes.get("quimb_tn_exact")
         sliced = routes.get("quimb_tn_sliced_exact")
         if unsliced is None or sliced is None:
@@ -1317,16 +1769,23 @@ def slicing_tradeoff(stats_rows: list[JsonDict]) -> list[JsonDict]:
                 "suite_id": suite_id,
                 "case_id": case_id,
                 "case_family": sliced.get("case_family") or unsliced.get("case_family"),
-                "benchmark_n_qubits": sliced.get("benchmark_n_qubits") or unsliced.get("benchmark_n_qubits"),
+                "benchmark_n_qubits": sliced.get("benchmark_n_qubits")
+                or unsliced.get("benchmark_n_qubits"),
                 "timing_scope": sliced.get("timing_scope"),
                 "state_output_mode": sliced.get("state_output_mode"),
                 "performance_tier": bool(sliced.get("performance_tier", False)),
                 "unsliced_compute_time_s_median": unsliced_time,
                 "sliced_compute_time_s_median": sliced_time,
-                "runtime_ratio_sliced_over_unsliced": _ratio(sliced_time, unsliced_time),
+                "runtime_ratio_sliced_over_unsliced": _ratio(
+                    sliced_time, unsliced_time
+                ),
                 "slicing_flop_ratio": flop_ratio,
-                "unsliced_tn_max_intermediate_bytes": _positive(unsliced.get("tn_max_intermediate_bytes")),
-                "sliced_tn_max_intermediate_bytes": _positive(sliced.get("tn_max_intermediate_bytes")),
+                "unsliced_tn_max_intermediate_bytes": _positive(
+                    unsliced.get("tn_max_intermediate_bytes")
+                ),
+                "sliced_tn_max_intermediate_bytes": _positive(
+                    sliced.get("tn_max_intermediate_bytes")
+                ),
                 "largest_intermediate_ratio_sliced_over_unsliced": _ratio(
                     sliced.get("tn_max_intermediate_bytes"),
                     unsliced.get("tn_max_intermediate_bytes"),
@@ -1343,7 +1802,9 @@ def upmem_quantization_attribution(records: list[JsonDict]) -> list[JsonDict]:
     must prove the same generic-only SDK-simulator execution family.  Ratios are
     route-level simulator evidence, never hardware speedups.
     """
-    grouped: dict[tuple[str, str, str, int, str], dict[str, JsonDict]] = defaultdict(dict)
+    grouped: dict[tuple[str, str, str, int, str], dict[str, JsonDict]] = defaultdict(
+        dict
+    )
     for record in records:
         if not _is_strict_generic_upmem_record(record):
             continue
@@ -1367,7 +1828,9 @@ def upmem_quantization_attribution(records: list[JsonDict]) -> list[JsonDict]:
         ][mode] = record
 
     rows: list[JsonDict] = []
-    for (suite_id, run_id, case_id, repeat_id, route_id), modes in sorted(grouped.items()):
+    for (suite_id, run_id, case_id, repeat_id, route_id), modes in sorted(
+        grouped.items()
+    ):
         unquantized = modes.get("none")
         quantized = modes.get("per_task_input_quantize")
         if unquantized is None or quantized is None:
@@ -1376,7 +1839,10 @@ def upmem_quantization_attribution(records: list[JsonDict]) -> list[JsonDict]:
             continue
         if str(_record_value(quantized, "policy") or "") != "generic-only":
             continue
-        if str(unquantized.get("route_id") or "") != route_id or str(quantized.get("route_id") or "") != route_id:
+        if (
+            str(unquantized.get("route_id") or "") != route_id
+            or str(quantized.get("route_id") or "") != route_id
+        ):
             continue
         if unquantized.get("kernel_family") != quantized.get("kernel_family"):
             continue
@@ -1395,12 +1861,24 @@ def upmem_quantization_attribution(records: list[JsonDict]) -> list[JsonDict]:
         quantized_d2h = _positive(quantized.get("actual_d2h_bytes"))
         unquantized_error = _validation_errors(unquantized).get("max_abs_error")
         quantized_error = _validation_errors(quantized).get("max_abs_error")
-        unquantized_probability_max_abs_error = _validation_metric(unquantized, "probability_max_abs_error")
-        quantized_probability_max_abs_error = _validation_metric(quantized, "probability_max_abs_error")
-        unquantized_probability_l1_error = _validation_metric(unquantized, "probability_l1_error")
-        quantized_probability_l1_error = _validation_metric(quantized, "probability_l1_error")
-        unquantized_full_precision_error = _full_precision_errors(unquantized).get("max_abs_error")
-        quantized_full_precision_error = _full_precision_errors(quantized).get("max_abs_error")
+        unquantized_probability_max_abs_error = _validation_metric(
+            unquantized, "probability_max_abs_error"
+        )
+        quantized_probability_max_abs_error = _validation_metric(
+            quantized, "probability_max_abs_error"
+        )
+        unquantized_probability_l1_error = _validation_metric(
+            unquantized, "probability_l1_error"
+        )
+        quantized_probability_l1_error = _validation_metric(
+            quantized, "probability_l1_error"
+        )
+        unquantized_full_precision_error = _full_precision_errors(unquantized).get(
+            "max_abs_error"
+        )
+        quantized_full_precision_error = _full_precision_errors(quantized).get(
+            "max_abs_error"
+        )
         rows.append(
             {
                 "schema_version": SCHEMA_VERSION,
@@ -1420,12 +1898,16 @@ def upmem_quantization_attribution(records: list[JsonDict]) -> list[JsonDict]:
                 "quantized_total_wall_time_s": quantized_total,
                 "unquantized_host_residual_time_s": unquantized_residual,
                 "quantized_host_residual_time_s": quantized_residual,
-                "route_runtime_ratio_none_over_quantized": _ratio(unquantized_residual, quantized_residual)
+                "route_runtime_ratio_none_over_quantized": _ratio(
+                    unquantized_residual, quantized_residual
+                )
                 if unquantized_residual is not None and quantized_residual is not None
                 else _ratio(unquantized_total, quantized_total),
                 "unquantized_simulation_compute_time_s": unquantized_compute,
                 "quantized_simulation_compute_time_s": quantized_compute,
-                "simulator_kernel_ratio_none_over_quantized": _ratio(unquantized_compute, quantized_compute),
+                "simulator_kernel_ratio_none_over_quantized": _ratio(
+                    unquantized_compute, quantized_compute
+                ),
                 "unquantized_transfer_bytes": unquantized_transfer,
                 "quantized_transfer_bytes": quantized_transfer,
                 "unquantized_h2d_bytes": unquantized_h2d,
@@ -1436,18 +1918,44 @@ def upmem_quantization_attribution(records: list[JsonDict]) -> list[JsonDict]:
                     unquantized.get("transfer_accounting_scope"),
                     quantized.get("transfer_accounting_scope"),
                 ),
-                "actual_transfer_bytes_invariant": _paired_transfer_invariant_status(unquantized, quantized),
-                "transfer_ratio_none_over_quantized": _ratio(unquantized_transfer, quantized_transfer),
-                "unquantized_max_abs_error_vs_full_precision": _float_or_none(unquantized_full_precision_error if unquantized_full_precision_error is not None else unquantized_error),
-                "quantized_max_abs_error_vs_full_precision": _float_or_none(quantized_full_precision_error if quantized_full_precision_error is not None else quantized_error),
-                "unquantized_execution_max_abs_error": _float_or_none(unquantized_error),
+                "actual_transfer_bytes_invariant": _paired_transfer_invariant_status(
+                    unquantized, quantized
+                ),
+                "transfer_ratio_none_over_quantized": _ratio(
+                    unquantized_transfer, quantized_transfer
+                ),
+                "unquantized_max_abs_error_vs_full_precision": _float_or_none(
+                    unquantized_full_precision_error
+                    if unquantized_full_precision_error is not None
+                    else unquantized_error
+                ),
+                "quantized_max_abs_error_vs_full_precision": _float_or_none(
+                    quantized_full_precision_error
+                    if quantized_full_precision_error is not None
+                    else quantized_error
+                ),
+                "unquantized_execution_max_abs_error": _float_or_none(
+                    unquantized_error
+                ),
                 "quantized_execution_max_abs_error": _float_or_none(quantized_error),
-                "unquantized_full_precision_max_abs_error": _float_or_none(unquantized_full_precision_error),
-                "quantized_full_precision_max_abs_error": _float_or_none(quantized_full_precision_error),
-                "unquantized_probability_max_abs_error": _float_or_none(unquantized_probability_max_abs_error),
-                "quantized_probability_max_abs_error": _float_or_none(quantized_probability_max_abs_error),
-                "unquantized_probability_l1_error": _float_or_none(unquantized_probability_l1_error),
-                "quantized_probability_l1_error": _float_or_none(quantized_probability_l1_error),
+                "unquantized_full_precision_max_abs_error": _float_or_none(
+                    unquantized_full_precision_error
+                ),
+                "quantized_full_precision_max_abs_error": _float_or_none(
+                    quantized_full_precision_error
+                ),
+                "unquantized_probability_max_abs_error": _float_or_none(
+                    unquantized_probability_max_abs_error
+                ),
+                "quantized_probability_max_abs_error": _float_or_none(
+                    quantized_probability_max_abs_error
+                ),
+                "unquantized_probability_l1_error": _float_or_none(
+                    unquantized_probability_l1_error
+                ),
+                "quantized_probability_l1_error": _float_or_none(
+                    quantized_probability_l1_error
+                ),
                 "unquantized_quantization_clipping_count": _int_or_none(
                     _record_value(unquantized, "quantization_clipping_count")
                 ),
@@ -1461,13 +1969,225 @@ def upmem_quantization_attribution(records: list[JsonDict]) -> list[JsonDict]:
                     _record_value(quantized, "quantization_saturation_count")
                 ),
                 "accuracy_delta_quantized_minus_unquantized": _difference(
-                    quantized_full_precision_error if quantized_full_precision_error is not None else quantized_error,
-                    unquantized_full_precision_error if unquantized_full_precision_error is not None else unquantized_error,
+                    quantized_full_precision_error
+                    if quantized_full_precision_error is not None
+                    else quantized_error,
+                    unquantized_full_precision_error
+                    if unquantized_full_precision_error is not None
+                    else unquantized_error,
                 ),
-                "native_unquantized_upmem_kernel_executed": _record_value(unquantized, "native_unquantized_upmem_kernel_executed") is True,
+                "native_unquantized_upmem_kernel_executed": _record_value(
+                    unquantized, "native_unquantized_upmem_kernel_executed"
+                )
+                is True,
             }
         )
     return rows
+
+
+def upmem_physical_quantization_attribution(records: list[JsonDict]) -> list[JsonDict]:
+    """Pair future physical TaskGraph float32/int8 rows without claiming speedup.
+
+    Physical rows may keep the existing TaskGraph route and differ only in
+    quantization mode.  The plan hash, case, repeat, run, and route must agree;
+    missing hashes never become a same-plan match by inference.
+    """
+    grouped: dict[tuple[str, str, str, str, int, str], dict[str, JsonDict]] = (
+        defaultdict(dict)
+    )
+    for record in records:
+        if (
+            not _is_physical_upmem_taskgraph_record(record)
+            or str(record.get("status") or "") != "completed"
+        ):
+            continue
+        dtype = _physical_taskgraph_dtype(record)
+        plan_hash = str(record.get("contraction_plan_hash") or "")
+        case_id = str(record.get("case_id") or "")
+        route_id = str(record.get("route_id") or "")
+        if dtype is None or not plan_hash or not case_id or not route_id:
+            continue
+        repeat_id = _int_or_none(record.get("repeat_id"))
+        grouped[
+            (
+                str(record.get("suite_id") or ""),
+                str(record.get("run_id") or ""),
+                case_id,
+                plan_hash,
+                0 if repeat_id is None else repeat_id,
+                route_id,
+            )
+        ][dtype] = record
+
+    rows: list[JsonDict] = []
+    for (suite_id, run_id, case_id, plan_hash, repeat_id, route_id), modes in sorted(
+        grouped.items()
+    ):
+        float32 = modes.get("float32")
+        int8 = modes.get("int8")
+        if float32 is None or int8 is None:
+            continue
+        family, qubits = _family_and_qubits(float32)
+        float32_transfer = _physical_transfer_bytes(float32)
+        int8_transfer = _physical_transfer_bytes(int8)
+        float32_error = _physical_error(float32)
+        int8_error = _physical_error(int8)
+        float32_runtime = _physical_warm_runtime(float32)
+        int8_runtime = _physical_warm_runtime(int8)
+        rows.append(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "suite_id": suite_id or float32.get("suite_id"),
+                "run_id": run_id or float32.get("run_id"),
+                "case_id": case_id,
+                "case_family": family,
+                "benchmark_n_qubits": qubits["benchmark_n_qubits"],
+                "repeat_id": repeat_id,
+                "contraction_plan_hash": plan_hash,
+                "float32_route_id": route_id,
+                "int8_route_id": route_id,
+                "same_route": True,
+                "same_taskgraph": True,
+                "same_plan_verified": True,
+                "float32_warm_runtime_s": float32_runtime,
+                "int8_warm_runtime_s": int8_runtime,
+                "warm_runtime_ratio_float32_over_int8": _ratio(
+                    float32_runtime, int8_runtime
+                ),
+                "float32_transfer_bytes": float32_transfer,
+                "int8_transfer_bytes": int8_transfer,
+                "float32_h2d_bytes": _physical_directional_transfer(float32, "h2d"),
+                "int8_h2d_bytes": _physical_directional_transfer(int8, "h2d"),
+                "float32_d2h_bytes": _physical_directional_transfer(float32, "d2h"),
+                "int8_d2h_bytes": _physical_directional_transfer(int8, "d2h"),
+                "transfer_ratio_float32_over_int8": _ratio(
+                    float32_transfer, int8_transfer
+                ),
+                "float32_max_abs_error": float32_error,
+                "int8_max_abs_error": int8_error,
+                "quantization_error_int8_vs_float32": _difference(
+                    int8_error, float32_error
+                ),
+                "float32_timing_class": _physical_timing_class(float32),
+                "int8_timing_class": _physical_timing_class(int8),
+                "hardware_speedup_applicable": False,
+            }
+        )
+    return sorted(
+        rows,
+        key=lambda row: (
+            str(row["case_family"]),
+            int(row.get("benchmark_n_qubits") or 0),
+            int(row.get("repeat_id") or 0),
+        ),
+    )
+
+
+def upmem_physical_taskgraph_breakdown(records: list[JsonDict]) -> list[JsonDict]:
+    """Project physical TaskGraph validation and timing metadata verbatim."""
+    rows: list[JsonDict] = []
+    for record in records:
+        if not _is_physical_upmem_taskgraph_record(record):
+            continue
+        family, qubits = _family_and_qubits(record)
+        validation_status = str(record.get("validation_status") or "unknown")
+        rows.append(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "suite_id": record.get("suite_id"),
+                "run_id": record.get("run_id"),
+                "case_id": record.get("case_id"),
+                "case_family": family,
+                "benchmark_n_qubits": qubits["benchmark_n_qubits"],
+                "repeat_id": _int_or_none(record.get("repeat_id")),
+                "contraction_plan_hash": record.get("contraction_plan_hash"),
+                "route_id": record.get("route_id"),
+                "quantization_mode": _record_value(record, "quantization_mode"),
+                "input_dtype_on_dpu": _record_value(record, "input_dtype_on_dpu")
+                or record.get("input_dtype"),
+                "complex_policy": _record_value(record, "complex_policy"),
+                "hardware_numeric_coverage": _record_value(
+                    record, "hardware_numeric_coverage"
+                ),
+                "split_complex_component_count": _record_value(
+                    record, "split_complex_component_count"
+                ),
+                "status": record.get("status"),
+                "validation_status": validation_status,
+                "validation_passed": validation_status
+                in {"passed", "passed_native_status", "passed_runtime_only"},
+                "validation_max_abs_error": _physical_number(
+                    record, "validation_max_abs_error", "max_abs_error"
+                ),
+                "full_precision_max_abs_error": _physical_number(
+                    record, "full_precision_max_abs_error"
+                ),
+                "quantization_max_abs_error": _physical_number(
+                    record, "quantization_max_abs_error"
+                ),
+                "exact_integer_match": record.get("exact_integer_match"),
+                "task_count": _record_value(record, "task_count")
+                or _record_value(record, "upmem_task_count"),
+                "validated_task_count": _record_value(record, "validated_task_count"),
+                "unsupported_task_count": _record_value(
+                    record, "unsupported_task_count"
+                ),
+                "hardware_execution": _physical_bool(record, "hardware_execution"),
+                "hardware_kernel_executed": _physical_bool(
+                    record, "hardware_kernel_executed"
+                ),
+                "simulator_kernel_executed": _physical_bool(
+                    record, "simulator_kernel_executed"
+                ),
+                "cpu_fallback_used": bool(record.get("cpu_fallback_used", False)),
+                "timing_class": _physical_timing_class(record),
+                "hardware_timing_available": _physical_bool(
+                    record, "hardware_timing_available"
+                ),
+                "timing_is_bringup_only": _physical_bool(
+                    record, "timing_is_bringup_only"
+                ),
+                "allocation_time_s": _physical_number(record, "allocation_time_s"),
+                "binary_load_time_s": _physical_number(record, "binary_load_time_s"),
+                "h2d_time_s": _physical_number(record, "h2d_time_s"),
+                "d2h_time_s": _physical_number(record, "d2h_time_s"),
+                "application_visible_h2d_bytes": _physical_number(
+                    record, "application_visible_h2d_bytes"
+                ),
+                "application_visible_d2h_bytes": _physical_number(
+                    record, "application_visible_d2h_bytes"
+                ),
+                "application_visible_transfer_bytes": _physical_number(
+                    record, "application_visible_transfer_bytes"
+                ),
+                "total_route_time_s": _physical_number(record, "total_route_time_s"),
+                "warm_runtime_s": _physical_warm_runtime(record),
+                "total_quantization_time_s": _physical_number(
+                    record, "total_quantization_time_s"
+                ),
+                "total_dequantization_time_s": _physical_number(
+                    record, "total_dequantization_time_s"
+                ),
+                "total_bridge_time_s": _physical_number(record, "total_bridge_time_s"),
+                "total_build_time_s": _physical_number(
+                    record, "total_build_time_s", "build_time_s"
+                ),
+                "validation_time_s": _physical_number(record, "validation_time_s"),
+                "output_materialization_time_s": _physical_number(
+                    record, "output_materialization_time_s"
+                ),
+                "hardware_speedup_applicable": False,
+            }
+        )
+    return sorted(
+        rows,
+        key=lambda row: (
+            str(row.get("case_family") or ""),
+            int(row.get("benchmark_n_qubits") or 0),
+            str(row.get("quantization_mode") or ""),
+            int(row.get("repeat_id") or 0),
+        ),
+    )
 
 
 def same_plan_execution(records: list[JsonDict]) -> list[JsonDict]:
@@ -1477,25 +2197,40 @@ def same_plan_execution(records: list[JsonDict]) -> list[JsonDict]:
         plan_hash = str(record.get("contraction_plan_hash") or "")
         if not plan_hash:
             continue
-        key = (str(record.get("suite_id") or ""), str(record.get("case_id") or ""), plan_hash)
+        key = (
+            str(record.get("suite_id") or ""),
+            str(record.get("case_id") or ""),
+            plan_hash,
+        )
         if (
             record.get("route_id") == "cpu_tn_einsum_exact"
             and record.get("contraction_execution_target") == "cpu"
             and str(record.get("status") or "") == "completed"
         ):
             cpu_by_plan[key] = record
-        elif _is_strict_generic_upmem_record(record) and str(record.get("status") or "") == "completed":
+        elif (
+            _is_strict_generic_upmem_record(record)
+            and str(record.get("status") or "") == "completed"
+        ):
             upmem_rows.append(record)
 
     rows: list[JsonDict] = []
     for upmem in upmem_rows:
         plan_hash = str(upmem["contraction_plan_hash"])
-        key = (str(upmem.get("suite_id") or ""), str(upmem.get("case_id") or ""), plan_hash)
+        key = (
+            str(upmem.get("suite_id") or ""),
+            str(upmem.get("case_id") or ""),
+            plan_hash,
+        )
         cpu = cpu_by_plan.get(key)
         if cpu is None:
             continue
-        cpu_time = _positive(cpu.get("simulation_compute_time_s") or cpu.get("kernel_time_s"))
-        upmem_time = _positive(upmem.get("simulation_compute_time_s") or upmem.get("kernel_time_s"))
+        cpu_time = _positive(
+            cpu.get("simulation_compute_time_s") or cpu.get("kernel_time_s")
+        )
+        upmem_time = _positive(
+            upmem.get("simulation_compute_time_s") or upmem.get("kernel_time_s")
+        )
         if cpu_time is None or upmem_time is None:
             continue
         family, qubits = _family_and_qubits(upmem)
@@ -1514,12 +2249,20 @@ def same_plan_execution(records: list[JsonDict]) -> list[JsonDict]:
                 "upmem_simulator_time_s": upmem_time,
                 "route_time_ratio_cpu_over_upmem_simulator": cpu_time / upmem_time,
                 "actual_transfer_bytes": upmem.get("actual_transfer_bytes"),
-                "max_abs_error": upmem.get("max_abs_error") or _validation_errors(upmem).get("max_abs_error"),
+                "max_abs_error": upmem.get("max_abs_error")
+                or _validation_errors(upmem).get("max_abs_error"),
                 "same_plan_verified": True,
                 "hardware_speedup_applicable": False,
             }
         )
-    return sorted(rows, key=lambda row: (str(row["case_family"]), int(row["benchmark_n_qubits"] or 0), str(row["quantization_mode"])))
+    return sorted(
+        rows,
+        key=lambda row: (
+            str(row["case_family"]),
+            int(row["benchmark_n_qubits"] or 0),
+            str(row["quantization_mode"]),
+        ),
+    )
 
 
 def planner_comparison(records: list[JsonDict]) -> list[JsonDict]:
@@ -1541,12 +2284,16 @@ def planner_comparison(records: list[JsonDict]) -> list[JsonDict]:
                 "network_tensor_count": record.get("network_tensor_count"),
                 "network_index_count": record.get("network_index_count"),
                 "network_max_rank": record.get("network_max_rank"),
-                "network_max_tensor_elements": record.get("network_max_tensor_elements"),
+                "network_max_tensor_elements": record.get(
+                    "network_max_tensor_elements"
+                ),
                 "network_size_proxy": record.get("network_size_proxy"),
                 "planner_id": record.get("planner_id") or record.get("backend_id"),
                 "planner_engine": record.get("planner_engine"),
                 "planner_kind": record.get("planner_kind"),
-                "planner_config_hash": record.get("planner_config_hash") or record.get("config_hash") or record.get("executor_config_hash"),
+                "planner_config_hash": record.get("planner_config_hash")
+                or record.get("config_hash")
+                or record.get("executor_config_hash"),
                 "planner_config": record.get("planner_config"),
                 "planner_selection_scope": record.get("planner_selection_scope"),
                 "optimize_mode": record.get("optimize_mode"),
@@ -1555,7 +2302,9 @@ def planner_comparison(records: list[JsonDict]) -> list[JsonDict]:
                 "target_estimate_key": record.get("target_estimate_key"),
                 "target_estimate_model": record.get("target_estimate_model"),
                 "contraction_plan_hash": record.get("contraction_plan_hash"),
-                "contraction_path_structure_hash": record.get("contraction_path_structure_hash"),
+                "contraction_path_structure_hash": record.get(
+                    "contraction_path_structure_hash"
+                ),
                 "candidate_status": record.get("candidate_status"),
                 "candidate_failure_reason": record.get("candidate_failure_reason"),
                 "planning_time_s": record.get("planning_time_s"),
@@ -1567,9 +2316,13 @@ def planner_comparison(records: list[JsonDict]) -> list[JsonDict]:
                 "total_mram_to_wram_bytes": record.get("total_mram_to_wram_bytes"),
                 "unsupported_task_count": record.get("unsupported_task_count"),
                 "tiling_required_task_count": record.get("tiling_required_task_count"),
-                "missing_target_estimate_count": record.get("missing_target_estimate_count"),
+                "missing_target_estimate_count": record.get(
+                    "missing_target_estimate_count"
+                ),
                 "estimated_total_tile_count": record.get("estimated_total_tile_count"),
-                "estimated_max_parallel_tiles": record.get("estimated_max_parallel_tiles"),
+                "estimated_max_parallel_tiles": record.get(
+                    "estimated_max_parallel_tiles"
+                ),
                 "upmem_pressure_score": record.get("upmem_pressure_score"),
                 "upmem_rank": record.get("upmem_rank"),
                 "flop_rank": record.get("flop_rank"),
@@ -1584,36 +2337,76 @@ def planner_comparison(records: list[JsonDict]) -> list[JsonDict]:
                 "pim_feasible": record.get("pim_feasible"),
                 "pim_rejection_reasons": record.get("pim_rejection_reasons"),
                 "pim_estimated_flops": record.get("pim_estimated_flops"),
-                "pim_peak_intermediate_bytes": record.get("pim_peak_intermediate_bytes"),
-                "pim_total_intermediate_write_bytes": record.get("pim_total_intermediate_write_bytes"),
-                "pim_estimated_host_to_dpu_bytes": record.get("pim_estimated_host_to_dpu_bytes"),
-                "pim_estimated_dpu_to_host_bytes": record.get("pim_estimated_dpu_to_host_bytes"),
-                "pim_estimated_host_dpu_bytes": record.get("pim_estimated_host_dpu_bytes"),
-                "pim_estimated_mram_to_wram_bytes": record.get("pim_estimated_mram_to_wram_bytes"),
-                "pim_estimated_dpu_local_work": record.get("pim_estimated_dpu_local_work"),
+                "pim_peak_intermediate_bytes": record.get(
+                    "pim_peak_intermediate_bytes"
+                ),
+                "pim_total_intermediate_write_bytes": record.get(
+                    "pim_total_intermediate_write_bytes"
+                ),
+                "pim_estimated_host_to_dpu_bytes": record.get(
+                    "pim_estimated_host_to_dpu_bytes"
+                ),
+                "pim_estimated_dpu_to_host_bytes": record.get(
+                    "pim_estimated_dpu_to_host_bytes"
+                ),
+                "pim_estimated_host_dpu_bytes": record.get(
+                    "pim_estimated_host_dpu_bytes"
+                ),
+                "pim_estimated_mram_to_wram_bytes": record.get(
+                    "pim_estimated_mram_to_wram_bytes"
+                ),
+                "pim_estimated_dpu_local_work": record.get(
+                    "pim_estimated_dpu_local_work"
+                ),
                 "pim_estimated_sync_events": record.get("pim_estimated_sync_events"),
-                "pim_estimated_numerical_penalty": record.get("pim_estimated_numerical_penalty"),
-                "pim_estimated_wram_pressure": record.get("pim_estimated_wram_pressure"),
+                "pim_estimated_numerical_penalty": record.get(
+                    "pim_estimated_numerical_penalty"
+                ),
+                "pim_estimated_wram_pressure": record.get(
+                    "pim_estimated_wram_pressure"
+                ),
                 "pim_estimated_tile_count": record.get("pim_estimated_tile_count"),
                 "pim_largest_tensor_bytes": record.get("pim_largest_tensor_bytes"),
-                "pim_host_to_dpu_payload_bytes": record.get("pim_host_to_dpu_payload_bytes"),
-                "pim_dpu_to_host_payload_bytes": record.get("pim_dpu_to_host_payload_bytes"),
-                "pim_mram_dma_window_bytes_model": record.get("pim_mram_dma_window_bytes_model"),
+                "pim_host_to_dpu_payload_bytes": record.get(
+                    "pim_host_to_dpu_payload_bytes"
+                ),
+                "pim_dpu_to_host_payload_bytes": record.get(
+                    "pim_dpu_to_host_payload_bytes"
+                ),
+                "pim_mram_dma_window_bytes_model": record.get(
+                    "pim_mram_dma_window_bytes_model"
+                ),
                 "pim_tile_iterations": record.get("pim_tile_iterations"),
                 "pim_host_completion_events": record.get("pim_host_completion_events"),
-                "pim_numeric_component_invocations": record.get("pim_numeric_component_invocations"),
-                "pim_numeric_recombination_flops": record.get("pim_numeric_recombination_flops"),
-                "pim_task_mram_payload_bytes": record.get("pim_task_mram_payload_bytes"),
-                "pim_native_static_mram_reservation_bytes": record.get("pim_native_static_mram_reservation_bytes"),
+                "pim_numeric_component_invocations": record.get(
+                    "pim_numeric_component_invocations"
+                ),
+                "pim_numeric_recombination_flops": record.get(
+                    "pim_numeric_recombination_flops"
+                ),
+                "pim_task_mram_payload_bytes": record.get(
+                    "pim_task_mram_payload_bytes"
+                ),
+                "pim_native_static_mram_reservation_bytes": record.get(
+                    "pim_native_static_mram_reservation_bytes"
+                ),
                 "pim_mram_capacity_bytes": record.get("pim_mram_capacity_bytes"),
                 "pim_mram_static_reservation_pressure_ratio": record.get(
                     "pim_mram_static_reservation_pressure_ratio"
                 ),
-                "pim_mram_max_region_payload_ratio": record.get("pim_mram_max_region_payload_ratio"),
-                "pim_mram_payload_pressure_ratio": record.get("pim_mram_payload_pressure_ratio"),
-                "pim_known_wram_static_bytes": record.get("pim_known_wram_static_bytes"),
+                "pim_mram_max_region_payload_ratio": record.get(
+                    "pim_mram_max_region_payload_ratio"
+                ),
+                "pim_mram_payload_pressure_ratio": record.get(
+                    "pim_mram_payload_pressure_ratio"
+                ),
+                "pim_known_wram_static_bytes": record.get(
+                    "pim_known_wram_static_bytes"
+                ),
                 "pim_wram_budget_bytes": record.get("pim_wram_budget_bytes"),
-                "pim_wram_known_pressure_ratio": record.get("pim_wram_known_pressure_ratio"),
+                "pim_wram_known_pressure_ratio": record.get(
+                    "pim_wram_known_pressure_ratio"
+                ),
                 "pim_objective_components": record.get("pim_objective_components"),
                 "pim_normalized_components": record.get("pim_normalized_components"),
                 "pim_objective_score": record.get("pim_objective_score"),
@@ -1653,7 +2446,8 @@ def unsupported_cases(records: list[JsonDict]) -> list[JsonDict]:
             "validation_status": record.get("validation_status"),
             "status": record.get("status"),
             "unsupported_task_count": int(record.get("unsupported_task_count", 0) or 0),
-            "resource_skip_reason": _record_value(record, "resource_skip_reason") or _record_value(record, "reason"),
+            "resource_skip_reason": _record_value(record, "resource_skip_reason")
+            or _record_value(record, "reason"),
             "warnings": record.get("warnings"),
         }
         for record in records
@@ -1662,9 +2456,20 @@ def unsupported_cases(records: list[JsonDict]) -> list[JsonDict]:
 
 
 def validation_summary(records: list[JsonDict]) -> list[JsonDict]:
-    counts = Counter((str(record.get("route_id") or ""), str(record.get("validation_status") or "unknown")) for record in records)
+    counts = Counter(
+        (
+            str(record.get("route_id") or ""),
+            str(record.get("validation_status") or "unknown"),
+        )
+        for record in records
+    )
     return [
-        {"schema_version": SCHEMA_VERSION, "route_id": route_id, "validation_status": status, "record_count": count}
+        {
+            "schema_version": SCHEMA_VERSION,
+            "route_id": route_id,
+            "validation_status": status,
+            "record_count": count,
+        }
         for (route_id, status), count in sorted(counts.items())
     ]
 
@@ -1682,16 +2487,35 @@ def route_capability_matrix(records: list[JsonDict]) -> list[JsonDict]:
                 "benchmark_role": _first_present(group, "benchmark_role"),
                 "backend_family": _first_present(group, "backend_family"),
                 "execution_model": _first_present(group, "execution_model"),
-                "contraction_execution_target": _first_present(group, "contraction_execution_target"),
+                "contraction_execution_target": _first_present(
+                    group, "contraction_execution_target"
+                ),
                 "accelerator_kind": _first_present(group, "accelerator_kind"),
                 "upmem_execution_mode": _first_present(group, "upmem_execution_mode"),
                 "record_count": len(group),
-                "completed_count": sum(1 for row in group if str(row.get("status")) in {"completed", "executable"}),
+                "completed_count": sum(
+                    1
+                    for row in group
+                    if str(row.get("status")) in {"completed", "executable"}
+                ),
                 "unsupported_count": sum(1 for row in group if _is_unsupported(row)),
-                "validation_passed_count": sum(1 for row in group if str(row.get("validation_status")) in {"passed", "passed_native_status", "passed_runtime_only"}),
-                "gpu_verified_count": sum(1 for row in group if bool(row.get("gpu_backend_verified", False))),
-                "cpu_fallback_count": sum(1 for row in group if bool(row.get("cpu_fallback_used", False))),
-                "hardware_speedup_applicable_count": sum(1 for row in group if bool(row.get("hardware_speedup_applicable", False))),
+                "validation_passed_count": sum(
+                    1
+                    for row in group
+                    if str(row.get("validation_status"))
+                    in {"passed", "passed_native_status", "passed_runtime_only"}
+                ),
+                "gpu_verified_count": sum(
+                    1 for row in group if bool(row.get("gpu_backend_verified", False))
+                ),
+                "cpu_fallback_count": sum(
+                    1 for row in group if bool(row.get("cpu_fallback_used", False))
+                ),
+                "hardware_speedup_applicable_count": sum(
+                    1
+                    for row in group
+                    if bool(row.get("hardware_speedup_applicable", False))
+                ),
             }
         )
     return rows
@@ -1706,7 +2530,9 @@ def upmem_hardware_mvp_summary(records: list[JsonDict]) -> list[JsonDict]:
 def upmem_hardware_generic_mvp_summary(records: list[JsonDict]) -> list[JsonDict]:
     """Summarize the separate synthetic generic TaskGraph physical MVP."""
 
-    return _upmem_hardware_functionality_summary(records, _is_hardware_generic_mvp_record)
+    return _upmem_hardware_functionality_summary(
+        records, _is_hardware_generic_mvp_record
+    )
 
 
 def _upmem_hardware_functionality_summary(
@@ -1802,8 +2628,7 @@ def _upmem_hardware_functionality_summary(
                 else None,
                 "timing_scope": _first_present(group, "timing_scope"),
                 "hardware_speedup_applicable": any(
-                    bool(row.get("hardware_speedup_applicable", False))
-                    for row in group
+                    bool(row.get("hardware_speedup_applicable", False)) for row in group
                 ),
                 "functionality_evidence_status": "passed" if passed else "failed",
             }
@@ -1822,19 +2647,43 @@ def write_plots(
     planner_component_rows: list[JsonDict] | None = None,
     hardware_mvp_rows: list[JsonDict] | None = None,
     hardware_generic_mvp_rows: list[JsonDict] | None = None,
+    physical_quantization_rows: list[JsonDict] | None = None,
+    physical_taskgraph_rows: list[JsonDict] | None = None,
 ) -> JsonDict:
     plots_dir = out_dir / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
     if slicing_tradeoff_rows is None:
         slicing_tradeoff_rows = slicing_tradeoff(stats_rows)
-        _write_csv(out_dir / "cpu_tn_slicing_tradeoff.csv", slicing_tradeoff_rows, SLICING_TRADEOFF_FIELDS)
+        _write_csv(
+            out_dir / "cpu_tn_slicing_tradeoff.csv",
+            slicing_tradeoff_rows,
+            SLICING_TRADEOFF_FIELDS,
+        )
     if planner_component_rows is None:
         planner_component_rows = planner_component_diagnostics(planner_rows)
     if hardware_mvp_rows is None:
         hardware_mvp_rows = []
     if hardware_generic_mvp_rows is None:
         hardware_generic_mvp_rows = []
-    _write_csv(out_dir / "planner_component_diagnostics.csv", planner_component_rows, PLANNER_COMPONENT_DIAGNOSTICS_FIELDS)
+    if physical_quantization_rows is None:
+        physical_quantization_rows = []
+    if physical_taskgraph_rows is None:
+        physical_taskgraph_rows = []
+    _write_csv(
+        out_dir / "upmem_physical_quantization_attribution.csv",
+        physical_quantization_rows,
+        UPMEM_PHYSICAL_QUANTIZATION_FIELDS,
+    )
+    _write_csv(
+        out_dir / "upmem_physical_taskgraph_breakdown.csv",
+        physical_taskgraph_rows,
+        UPMEM_PHYSICAL_TASKGRAPH_FIELDS,
+    )
+    _write_csv(
+        out_dir / "planner_component_diagnostics.csv",
+        planner_component_rows,
+        PLANNER_COMPONENT_DIAGNOSTICS_FIELDS,
+    )
     try:
         import matplotlib.pyplot as plt
     except Exception as exc:
@@ -1852,14 +2701,53 @@ def write_plots(
                     "status": "failed",
                     "reason": f"matplotlib_unavailable: {exc}",
                 }
-                for spec in _plot_specs(stats_rows, cpu_gpu_rows, quantization_rows, same_plan_rows, planner_rows, slicing_tradeoff_rows, planner_component_rows, hardware_mvp_rows, hardware_generic_mvp_rows)
+                for spec in _plot_specs(
+                    stats_rows,
+                    cpu_gpu_rows,
+                    quantization_rows,
+                    same_plan_rows,
+                    planner_rows,
+                    slicing_tradeoff_rows,
+                    planner_component_rows,
+                    hardware_mvp_rows,
+                    hardware_generic_mvp_rows,
+                    physical_quantization_rows,
+                    physical_taskgraph_rows,
+                )
             ],
             "generated_valid": [],
             "todo_figures": [],
-            "failed_figures": [spec.filename for spec in _plot_specs(stats_rows, cpu_gpu_rows, quantization_rows, same_plan_rows, planner_rows, slicing_tradeoff_rows, planner_component_rows, hardware_mvp_rows, hardware_generic_mvp_rows)],
+            "failed_figures": [
+                spec.filename
+                for spec in _plot_specs(
+                    stats_rows,
+                    cpu_gpu_rows,
+                    quantization_rows,
+                    same_plan_rows,
+                    planner_rows,
+                    slicing_tradeoff_rows,
+                    planner_component_rows,
+                    hardware_mvp_rows,
+                    hardware_generic_mvp_rows,
+                    physical_quantization_rows,
+                    physical_taskgraph_rows,
+                )
+            ],
         }
     entries: list[JsonDict] = []
-    for spec in _plot_specs(stats_rows, cpu_gpu_rows, quantization_rows, same_plan_rows, planner_rows, slicing_tradeoff_rows, planner_component_rows, hardware_mvp_rows, hardware_generic_mvp_rows):
+    for spec in _plot_specs(
+        stats_rows,
+        cpu_gpu_rows,
+        quantization_rows,
+        same_plan_rows,
+        planner_rows,
+        slicing_tradeoff_rows,
+        planner_component_rows,
+        hardware_mvp_rows,
+        hardware_generic_mvp_rows,
+        physical_quantization_rows,
+        physical_taskgraph_rows,
+    ):
         path = plots_dir / spec.filename
         outcome = _render_plot_spec(plt, path, spec)
         entry = {
@@ -1875,8 +2763,12 @@ def write_plots(
         if outcome.size_bytes is not None:
             entry["size_bytes"] = outcome.size_bytes
         entries.append(entry)
-    generated_valid = [entry["plot"] for entry in entries if entry["status"] == "generated_valid"]
-    todo_entries = [entry for entry in entries if entry["status"].startswith("generated_todo_")]
+    generated_valid = [
+        entry["plot"] for entry in entries if entry["status"] == "generated_valid"
+    ]
+    todo_entries = [
+        entry for entry in entries if entry["status"].startswith("generated_todo_")
+    ]
     failed = [entry["plot"] for entry in entries if entry["status"] == "failed"]
     return {
         "schema_version": SCHEMA_VERSION,
@@ -1898,38 +2790,620 @@ def _plot_specs(
     planner_component_rows: list[JsonDict] | None = None,
     hardware_mvp_rows: list[JsonDict] | None = None,
     hardware_generic_mvp_rows: list[JsonDict] | None = None,
+    physical_quantization_rows: list[JsonDict] | None = None,
+    physical_taskgraph_rows: list[JsonDict] | None = None,
 ) -> list[PlotSpec]:
-    def render(function: Callable[..., str | None], *args: Any, **kwargs: Any) -> Callable[[Any, Path], str | None]:
+    def render(
+        function: Callable[..., str | None], *args: Any, **kwargs: Any
+    ) -> Callable[[Any, Path], str | None]:
         return lambda plt, path: function(plt, path, *args, **kwargs)
 
     specs = [
-        PlotSpec("cpu_gpu_runtime_by_qubits.png", "Measured QuEST CPU/GPU compute time by qubits", "cpu_gpu_performance_summary.csv", ("benchmark_n_qubits", "cpu_simulation_compute_time_s_median", "gpu_simulation_compute_time_s_median"), "Verified QuEST CPU/GPU performance-tier compute measurements.", "Measured QuEST CPU and verified QuEST GPU compute time by circuit size.", "Qubits", "Measured compute time (s, log)", render(_plot_cpu_gpu_runtime, cpu_gpu_rows), variance_fields=("cpu_simulation_compute_time_s_median", "gpu_simulation_compute_time_s_median")),
-        PlotSpec("cpu_gpu_speedup_by_qubits.png", "Measured QuEST CPU/GPU compute ratio by qubits", "cpu_gpu_performance_summary.csv", ("benchmark_n_qubits", "compute_speedup_cpu_over_gpu_median"), "Paired verified QuEST compute-time measurements; ratio is CPU divided by GPU.", "Measured CPU/GPU compute ratio; values above 1 mean GPU compute was faster.", "Qubits", "CPU/GPU compute ratio", render(_plot_cpu_gpu_speedup, cpu_gpu_rows), variance_fields=("compute_speedup_cpu_over_gpu_median",)),
-        PlotSpec("cpu_gpu_energy_efficiency_by_qubits.png", "Measured CPU/GPU energy efficiency by qubits", "per_case_route_stats.csv", ("benchmark_n_qubits", "energy_joules", "energy_measurement_status", "simulation_compute_time_s_median"), "Requires measured energy for both paired CPU and GPU executions; unavailable energy is not inferred.", "TODO: energy metadata is unavailable or not a validated paired measurement.", "Qubits", "Energy efficiency (measured joules per compute work unit)", not_implemented_reason="energy measurements are unavailable in the research evidence contract"),
-        PlotSpec("cpu_tn_runtime_by_qubits.png", "Measured Quimb unsliced/sliced compute time by qubits", "per_case_route_stats.csv", ("benchmark_n_qubits", "route_id", "simulation_compute_time_s_median"), "Measured external Quimb tensor-network contraction compute time, with unsliced and sliced routes kept separate.", "Measured Quimb unsliced and sliced tensor-network compute time by circuit size.", "Qubits", "Measured contraction compute time (s, log)", render(_plot_cpu_tn_runtime, stats_rows), variance_fields=("simulation_compute_time_s_median",)),
-        PlotSpec("full_state_vs_tn_runtime_by_qubits.png", "Cross-algorithm/backend measured compute time", "per_case_route_stats.csv", ("benchmark_n_qubits", "route_id", "simulation_compute_time_s_median"), "Cross-algorithm/backend comparison of measured QuEST full-state and Quimb tensor-network compute time; not a same-plan speedup.", "Cross-algorithm/backend measured compute time on the same shallow circuits.", "Qubits", "Measured compute time (s, log)", render(_plot_full_state_vs_tn_runtime, stats_rows), variance_fields=("simulation_compute_time_s_median",)),
-        PlotSpec("tn_planning_vs_contraction.png", "Measured Quimb planning versus contraction compute time", "per_case_route_stats.csv", ("benchmark_n_qubits", "planning_time_s_median", "simulation_compute_time_s_median"), "Measured Quimb planning and contraction timings are reported as separate software phases.", "Measured Quimb planning and contraction compute time; phases are not combined.", "Qubits", "Measured time (s, log)", render(_plot_tn_planning_vs_contraction, stats_rows), variance_fields=("planning_time_s_median", "simulation_compute_time_s_median")),
-        PlotSpec("tn_path_flops_by_family_size.png", "Planner-estimated contraction FLOPs", "per_case_route_stats.csv", ("benchmark_n_qubits", "tn_estimated_flops", "route_id"), "Planner-reported contraction-path FLOP estimates, not measured processor instructions.", "Planner-estimated contraction FLOPs by circuit family and size.", "Qubits", "Planner-estimated FLOPs (log)", render(_plot_tn_path_metric, stats_rows, metric="tn_estimated_flops", ylabel="Planner-estimated FLOPs", title="Planner-estimated contraction FLOPs"), variance_fields=("tn_estimated_flops",)),
-        PlotSpec("tn_path_peak_memory_by_family_size.png", "Planner-estimated largest intermediate tensor", "per_case_route_stats.csv", ("benchmark_n_qubits", "tn_max_intermediate_bytes", "route_id"), "Planner-reported largest intermediate tensor size, not measured resident memory.", "Planner-estimated largest intermediate tensor bytes by circuit family and size.", "Qubits", "Largest intermediate bytes (log)", render(_plot_tn_path_metric, stats_rows, metric="tn_max_intermediate_bytes", ylabel="Largest intermediate bytes", title="Planner-estimated largest intermediate tensor"), variance_fields=("tn_max_intermediate_bytes",)),
-        PlotSpec("cpu_tn_slicing_flop_ratio.png", "Planner-estimated slicing arithmetic ratio", "per_case_route_stats.csv", ("benchmark_n_qubits", "slicing_flop_ratio", "slicing_flop_change_kind"), "Quimb/cotengra reported sliced-to-unsliced plan FLOPs for the external sliced route; optimizer choices can change this ratio.", "Slicing FLOP ratio = sliced cotengra plan reported FLOPs / unsliced cotengra plan reported FLOPs.", "Case", "Sliced plan FLOPs / unsliced plan FLOPs", render(_plot_slicing_ratio, stats_rows), variance_fields=("slicing_flop_ratio",)),
-        PlotSpec("cpu_tn_slicing_tradeoff.png", "Quimb slicing tradeoff", "cpu_tn_slicing_tradeoff.csv", ("benchmark_n_qubits", "runtime_ratio_sliced_over_unsliced", "slicing_flop_ratio", "largest_intermediate_ratio_sliced_over_unsliced"), "Matched external Quimb sliced/unsliced route statistics with compatible timing and output scopes; ratios are descriptive slicing trade-offs, not speedup claims.", "Matched Quimb slicing trade-off ratios: runtime, planner-estimated FLOPs, and largest intermediate size (sliced / unsliced).", "Qubits", "Ratio (sliced / unsliced)", render(_plot_slicing_tradeoff, slicing_tradeoff_rows or []), variance_fields=("runtime_ratio_sliced_over_unsliced", "slicing_flop_ratio", "largest_intermediate_ratio_sliced_over_unsliced"), allow_zero_variance=True),
-        PlotSpec("upmem_supported_boundary.png", "UPMEM SDK simulator support boundary", "per_case_route_stats.csv", ("benchmark_n_qubits", "status", "unsupported_count", "upmem_execution_mode"), "Strict generic-only UPMEM SDK simulator support/unsupported records; no hardware claim.", "Supported versus unsupported strict generic-only UPMEM SDK simulator rows.", "Qubits", "SDK simulator support (0/1)", render(_plot_upmem_boundary, stats_rows), variance_fields=("unsupported_count",)),
-        PlotSpec("upmem_accuracy_error.png", "UPMEM SDK simulator accuracy error", "per_case_route_stats.csv", ("benchmark_n_qubits", "max_abs_error", "validation_method", "upmem_execution_mode"), "Validation error from strict generic UPMEM SDK simulator execution against its recorded reference.", "Strict generic UPMEM SDK simulator maximum absolute error where validation data exists.", "Case", "Maximum absolute error (log)", render(_plot_upmem_accuracy, stats_rows), variance_fields=("max_abs_error",)),
-        PlotSpec("upmem_hardware_mvp_validation.png", "Physical UPMEM single-DPU MVP validation", "upmem_hardware_mvp_summary.csv", ("case_id", "repeat_count", "validation_passed_count", "exact_integer_match_count"), "Physical one-DPU/one-tasklet int8 x int8 -> int32 functionality evidence. This figure does not report timing, speedup, energy, or scaling.", "Physical UPMEM functionality MVP: exact CPU-reference validation counts by fixed dense case.", "Fixed dense case", "Validated physical executions", render(_plot_upmem_hardware_mvp_validation, hardware_mvp_rows or []), variance_fields=("validation_passed_count",), allow_zero_variance=True),
-        PlotSpec("upmem_hardware_generic_mvp_validation.png", "Physical UPMEM generic TaskGraph MVP validation", "upmem_hardware_generic_mvp_summary.csv", ("case_id", "repeat_count", "validation_passed_count", "exact_integer_match_count"), "Physical one-DPU/one-tasklet synthetic real generic TaskGraph functionality evidence. This figure does not report timing, speedup, energy, scaling, or general quantum-circuit execution.", "Physical generic TaskGraph MVP: exact CPU-reference validation counts for the fixed synthetic contraction.", "Synthetic generic TaskGraph case", "Validated physical executions", render(_plot_upmem_hardware_mvp_validation, hardware_generic_mvp_rows or [], title="Physical UPMEM generic TaskGraph MVP validation (functionality only)"), variance_fields=("validation_passed_count",), allow_zero_variance=True),
-        PlotSpec("upmem_quantization_attribution.png", "UPMEM SDK simulator quantization attribution", "upmem_quantization_attribution.csv", ("benchmark_n_qubits", "route_runtime_ratio_none_over_quantized", "transfer_ratio_none_over_quantized"), "Same-route float32/int8 attribution from SDK simulator measurements; not hardware speedup.", "Same-route float32 versus int8 attribution for strict generic UPMEM SDK simulator execution.", "Case", "Recorded ratio", render(_plot_upmem_quantization_attribution, quantization_rows), variance_fields=("route_runtime_ratio_none_over_quantized", "transfer_ratio_none_over_quantized")),
-        PlotSpec("quantization_runtime_by_executor.png", "UPMEM SDK simulator software-recorded host/control residual ratio", "upmem_quantization_attribution.csv", ("benchmark_n_qubits", "route_runtime_ratio_none_over_quantized", "unquantized_host_residual_time_s", "quantized_host_residual_time_s"), "Same-route SDK simulator software-recorded host/control residual time; attribution is not a hardware speedup claim.", "Same-plan SDK simulator float32/int8 software-recorded host/control residual-time ratio.", "Case", "Float32/int8 host/control residual ratio", render(_plot_quantization_metric, quantization_rows, metric="route_runtime_ratio_none_over_quantized", ylabel="Float32 / int8 software-recorded host/control residual time", title="UPMEM SDK simulator software-recorded host/control residual ratio"), variance_fields=("route_runtime_ratio_none_over_quantized",)),
-        PlotSpec("quantization_transfer_bytes.png", "UPMEM SDK simulator software-recorded directional transfer bytes", "upmem_quantization_attribution.csv", ("benchmark_n_qubits", "unquantized_h2d_bytes", "quantized_h2d_bytes", "unquantized_d2h_bytes", "quantized_d2h_bytes", "transfer_ratio_none_over_quantized"), "Application-visible SDK transfer bytes from matched routes. They are not physical bus/DIMM traffic and exclude unobservable SDK overhead.", "Absolute application-visible H2D/D2H bytes plus the same-plan float32/int8 total-byte ratio.", "Case", "Software-recorded application-visible bytes", render(_plot_quantization_transfer_bytes, quantization_rows), variance_fields=("unquantized_h2d_bytes", "quantized_h2d_bytes", "unquantized_d2h_bytes", "quantized_d2h_bytes", "transfer_ratio_none_over_quantized")),
-        PlotSpec("quantization_error_by_family_size.png", "UPMEM SDK simulator int8 error", "upmem_quantization_attribution.csv", ("benchmark_n_qubits", "quantized_max_abs_error_vs_full_precision", "quantized_execution_max_abs_error"), "Quantized SDK simulator error against the recorded full-precision reference.", "UPMEM SDK simulator int8 maximum absolute error against the full-precision reference.", "Case", "Maximum absolute error (log)", render(_plot_quantization_metric, quantization_rows, metric="quantized_max_abs_error_vs_full_precision", ylabel="Maximum absolute error", title="UPMEM SDK simulator int8 error versus full precision", log_scale=True), variance_fields=("quantized_max_abs_error_vs_full_precision",)),
-        PlotSpec("quantization_probability_error_by_family_size.png", "UPMEM SDK simulator probability error", "upmem_quantization_attribution.csv", ("benchmark_n_qubits", "quantized_probability_max_abs_error", "quantized_probability_l1_error"), "Probability-error fields from matched quantized UPMEM SDK-simulator validation records; no amplitude error is relabeled as probability error.", "Matched UPMEM SDK-simulator quantized probability error against the recorded validation reference.", "Case", "Probability error", render(_plot_quantization_probability_error, quantization_rows), variance_fields=("quantized_probability_max_abs_error", "quantized_probability_l1_error")),
-        PlotSpec("same_plan_cpu_upmem_runtime.png", "Same-plan CPU versus UPMEM SDK simulator compute time", "same_plan_execution.csv", ("benchmark_n_qubits", "contraction_plan_hash", "cpu_time_s", "upmem_simulator_time_s"), "CPU replay and UPMEM SDK simulator rows share an identical contraction-plan hash; timing is not hardware speedup.", "Same-plan CPU and UPMEM SDK simulator execution timing.", "Qubits", "Measured/software-recorded compute time (s, log)", render(_plot_same_plan_runtime, same_plan_rows), variance_fields=("cpu_time_s", "upmem_simulator_time_s")),
-        PlotSpec("planner_flops_vs_upmem_pressure.png", "Planner-estimated FLOPs versus normalized modeled PIM objective", "planner_comparison.csv", ("planner_id", "pim_estimated_flops", "pim_objective_score", "pim_feasible"), "Modeled generic-single-DPU planning objective; no executor timing or hardware speedup claim.", "Planner-estimated FLOPs versus normalized modeled PIM objective for feasible candidates.", "Planner-estimated FLOPs", "Normalized modeled PIM objective", render(_plot_planner_pressure, planner_rows), variance_fields=("pim_estimated_flops", "pim_objective_score")),
-        PlotSpec("planner_component_scores.png", "Modeled PIM planner objective components", "planner_comparison.csv", ("planner_id", "pim_estimated_flops", "pim_estimated_host_dpu_bytes", "pim_estimated_mram_to_wram_bytes", "pim_estimated_tile_count"), "Normalized modeled PIM planning components; scenario weights are not measured hardware constants.", "Modeled PIM objective components for feasible planner candidates.", "Planner candidate", "Normalized component value", render(_plot_planner_components, planner_rows), variance_fields=("pim_estimated_flops", "pim_estimated_host_dpu_bytes", "pim_estimated_mram_to_wram_bytes", "pim_estimated_tile_count")),
-        PlotSpec("planner_selection.png", "Modeled PIM planner selection", "planner_comparison.csv", ("planner_id", "pim_objective_rank", "pim_selected"), "Selection is by the recorded modeled PIM objective within one profile, not execution performance.", "Selected feasible planner candidate per modeled PIM objective profile.", "Case", "Modeled objective rank", render(_plot_planner_selection, planner_rows), variance_fields=("pim_objective_rank",)),
-        PlotSpec("planner_pareto_frontier.png", "Planner-estimated Pareto frontier", "planner_comparison.csv", ("planner_id", "pim_estimated_flops", "pim_peak_intermediate_bytes", "pim_pareto_dominated"), "Pareto status compares modeled planner components only; it is not a runtime ranking.", "Feasible planner candidates colored by modeled Pareto status.", "Planner-estimated FLOPs", "Planner-estimated largest intermediate bytes", render(_plot_planner_pareto, planner_rows), variance_fields=("pim_estimated_flops", "pim_peak_intermediate_bytes")),
-        PlotSpec("planner_sensitivity.png", "Modeled PIM planner sensitivity", "planner_comparison.csv", ("planner_id", "pim_weight_profile", "pim_objective_score", "pim_selected"), "Scenario weight profiles are literature-informed sensitivity cases, not calibrated hardware constants.", "Selected planner candidates across modeled PIM weight profiles.", "Weight profile", "Normalized modeled PIM objective", render(_plot_planner_sensitivity, planner_rows), variance_fields=("pim_objective_score",)),
-        PlotSpec("planner_component_diagnostics.png", "Modeled PIM planner component diagnostics", "planner_component_diagnostics.csv", ("planner_id", "pim_objective_version", "pim_numeric_component_invocations", "pim_numeric_recombination_flops", "pim_mram_payload_pressure_ratio", "pim_wram_known_pressure_ratio"), "Versioned modeled planner component diagnostics; these are structural cost-model values, not measured hardware counters.", "Versioned planner component diagnostics where v2 records provide numeric execution decomposition fields.", "Planner candidate", "Modeled component value", render(_plot_planner_component_diagnostics, planner_component_rows or []), variance_fields=("pim_numeric_component_invocations", "pim_numeric_recombination_flops", "pim_mram_payload_pressure_ratio", "pim_wram_known_pressure_ratio"), allow_zero_variance=True),
-        PlotSpec("internal_parallelism_metadata_by_qubits.png", "Internal diagnostic frontier metadata", "per_case_route_stats.csv", ("benchmark_n_qubits", "parallelism_mode", "parallelism_evidence_type", "frontier_worker_count", "frontier_wave_count", "max_frontier_width", "frontier_executed_parallel_task_count"), "Executed internal TaskGraph frontier metadata; diagnostic only and not a parallel speedup claim.", "Diagnostic internal TaskGraph frontier metadata, not serious baseline performance.", "Case", "Maximum frontier width", render(_plot_internal_parallelism, stats_rows), variance_fields=("max_frontier_width",)),
+        PlotSpec(
+            "cpu_gpu_runtime_by_qubits.png",
+            "Measured QuEST CPU/GPU compute time by qubits",
+            "cpu_gpu_performance_summary.csv",
+            (
+                "benchmark_n_qubits",
+                "cpu_simulation_compute_time_s_median",
+                "gpu_simulation_compute_time_s_median",
+            ),
+            "Verified QuEST CPU/GPU performance-tier compute measurements.",
+            "Measured QuEST CPU and verified QuEST GPU compute time by circuit size.",
+            "Qubits",
+            "Measured compute time (s, log)",
+            render(_plot_cpu_gpu_runtime, cpu_gpu_rows),
+            variance_fields=(
+                "cpu_simulation_compute_time_s_median",
+                "gpu_simulation_compute_time_s_median",
+            ),
+        ),
+        PlotSpec(
+            "cpu_gpu_speedup_by_qubits.png",
+            "Measured QuEST CPU/GPU compute ratio by qubits",
+            "cpu_gpu_performance_summary.csv",
+            ("benchmark_n_qubits", "compute_speedup_cpu_over_gpu_median"),
+            "Paired verified QuEST compute-time measurements; ratio is CPU divided by GPU.",
+            "Measured CPU/GPU compute ratio; values above 1 mean GPU compute was faster.",
+            "Qubits",
+            "CPU/GPU compute ratio",
+            render(_plot_cpu_gpu_speedup, cpu_gpu_rows),
+            variance_fields=("compute_speedup_cpu_over_gpu_median",),
+        ),
+        PlotSpec(
+            "cpu_gpu_energy_efficiency_by_qubits.png",
+            "Measured CPU/GPU energy efficiency by qubits",
+            "per_case_route_stats.csv",
+            (
+                "benchmark_n_qubits",
+                "energy_joules",
+                "energy_measurement_status",
+                "simulation_compute_time_s_median",
+            ),
+            "Requires measured energy for both paired CPU and GPU executions; unavailable energy is not inferred.",
+            "TODO: energy metadata is unavailable or not a validated paired measurement.",
+            "Qubits",
+            "Energy efficiency (measured joules per compute work unit)",
+            not_implemented_reason="energy measurements are unavailable in the research evidence contract",
+        ),
+        PlotSpec(
+            "cpu_tn_runtime_by_qubits.png",
+            "Measured Quimb unsliced/sliced compute time by qubits",
+            "per_case_route_stats.csv",
+            ("benchmark_n_qubits", "route_id", "simulation_compute_time_s_median"),
+            "Measured external Quimb tensor-network contraction compute time, with unsliced and sliced routes kept separate.",
+            "Measured Quimb unsliced and sliced tensor-network compute time by circuit size.",
+            "Qubits",
+            "Measured contraction compute time (s, log)",
+            render(_plot_cpu_tn_runtime, stats_rows),
+            variance_fields=("simulation_compute_time_s_median",),
+        ),
+        PlotSpec(
+            "full_state_vs_tn_runtime_by_qubits.png",
+            "Cross-algorithm/backend measured compute time",
+            "per_case_route_stats.csv",
+            ("benchmark_n_qubits", "route_id", "simulation_compute_time_s_median"),
+            "Cross-algorithm/backend comparison of measured QuEST full-state and Quimb tensor-network compute time; not a same-plan speedup.",
+            "Cross-algorithm/backend measured compute time on the same shallow circuits.",
+            "Qubits",
+            "Measured compute time (s, log)",
+            render(_plot_full_state_vs_tn_runtime, stats_rows),
+            variance_fields=("simulation_compute_time_s_median",),
+        ),
+        PlotSpec(
+            "tn_planning_vs_contraction.png",
+            "Measured Quimb planning versus contraction compute time",
+            "per_case_route_stats.csv",
+            (
+                "benchmark_n_qubits",
+                "planning_time_s_median",
+                "simulation_compute_time_s_median",
+            ),
+            "Measured Quimb planning and contraction timings are reported as separate software phases.",
+            "Measured Quimb planning and contraction compute time; phases are not combined.",
+            "Qubits",
+            "Measured time (s, log)",
+            render(_plot_tn_planning_vs_contraction, stats_rows),
+            variance_fields=(
+                "planning_time_s_median",
+                "simulation_compute_time_s_median",
+            ),
+        ),
+        PlotSpec(
+            "tn_path_flops_by_family_size.png",
+            "Planner-estimated contraction FLOPs",
+            "per_case_route_stats.csv",
+            ("benchmark_n_qubits", "tn_estimated_flops", "route_id"),
+            "Planner-reported contraction-path FLOP estimates, not measured processor instructions.",
+            "Planner-estimated contraction FLOPs by circuit family and size.",
+            "Qubits",
+            "Planner-estimated FLOPs (log)",
+            render(
+                _plot_tn_path_metric,
+                stats_rows,
+                metric="tn_estimated_flops",
+                ylabel="Planner-estimated FLOPs",
+                title="Planner-estimated contraction FLOPs",
+            ),
+            variance_fields=("tn_estimated_flops",),
+        ),
+        PlotSpec(
+            "tn_path_peak_memory_by_family_size.png",
+            "Planner-estimated largest intermediate tensor",
+            "per_case_route_stats.csv",
+            ("benchmark_n_qubits", "tn_max_intermediate_bytes", "route_id"),
+            "Planner-reported largest intermediate tensor size, not measured resident memory.",
+            "Planner-estimated largest intermediate tensor bytes by circuit family and size.",
+            "Qubits",
+            "Largest intermediate bytes (log)",
+            render(
+                _plot_tn_path_metric,
+                stats_rows,
+                metric="tn_max_intermediate_bytes",
+                ylabel="Largest intermediate bytes",
+                title="Planner-estimated largest intermediate tensor",
+            ),
+            variance_fields=("tn_max_intermediate_bytes",),
+        ),
+        PlotSpec(
+            "cpu_tn_slicing_flop_ratio.png",
+            "Planner-estimated slicing arithmetic ratio",
+            "per_case_route_stats.csv",
+            ("benchmark_n_qubits", "slicing_flop_ratio", "slicing_flop_change_kind"),
+            "Quimb/cotengra reported sliced-to-unsliced plan FLOPs for the external sliced route; optimizer choices can change this ratio.",
+            "Slicing FLOP ratio = sliced cotengra plan reported FLOPs / unsliced cotengra plan reported FLOPs.",
+            "Case",
+            "Sliced plan FLOPs / unsliced plan FLOPs",
+            render(_plot_slicing_ratio, stats_rows),
+            variance_fields=("slicing_flop_ratio",),
+        ),
+        PlotSpec(
+            "cpu_tn_slicing_tradeoff.png",
+            "Quimb slicing tradeoff",
+            "cpu_tn_slicing_tradeoff.csv",
+            (
+                "benchmark_n_qubits",
+                "runtime_ratio_sliced_over_unsliced",
+                "slicing_flop_ratio",
+                "largest_intermediate_ratio_sliced_over_unsliced",
+            ),
+            "Matched external Quimb sliced/unsliced route statistics with compatible timing and output scopes; ratios are descriptive slicing trade-offs, not speedup claims.",
+            "Matched Quimb slicing trade-off ratios: runtime, planner-estimated FLOPs, and largest intermediate size (sliced / unsliced).",
+            "Qubits",
+            "Ratio (sliced / unsliced)",
+            render(_plot_slicing_tradeoff, slicing_tradeoff_rows or []),
+            variance_fields=(
+                "runtime_ratio_sliced_over_unsliced",
+                "slicing_flop_ratio",
+                "largest_intermediate_ratio_sliced_over_unsliced",
+            ),
+            allow_zero_variance=True,
+        ),
+        PlotSpec(
+            "upmem_supported_boundary.png",
+            "UPMEM SDK simulator support boundary",
+            "per_case_route_stats.csv",
+            (
+                "benchmark_n_qubits",
+                "status",
+                "unsupported_count",
+                "upmem_execution_mode",
+            ),
+            "Strict generic-only UPMEM SDK simulator support/unsupported records; no hardware claim.",
+            "Supported versus unsupported strict generic-only UPMEM SDK simulator rows.",
+            "Qubits",
+            "SDK simulator support (0/1)",
+            render(_plot_upmem_boundary, stats_rows),
+            variance_fields=("unsupported_count",),
+        ),
+        PlotSpec(
+            "upmem_accuracy_error.png",
+            "UPMEM SDK simulator accuracy error",
+            "per_case_route_stats.csv",
+            (
+                "benchmark_n_qubits",
+                "max_abs_error",
+                "validation_method",
+                "upmem_execution_mode",
+            ),
+            "Validation error from strict generic UPMEM SDK simulator execution against its recorded reference.",
+            "Strict generic UPMEM SDK simulator maximum absolute error where validation data exists.",
+            "Case",
+            "Maximum absolute error (log)",
+            render(_plot_upmem_accuracy, stats_rows),
+            variance_fields=("max_abs_error",),
+        ),
+        PlotSpec(
+            "upmem_hardware_mvp_validation.png",
+            "Physical UPMEM single-DPU MVP validation",
+            "upmem_hardware_mvp_summary.csv",
+            (
+                "case_id",
+                "repeat_count",
+                "validation_passed_count",
+                "exact_integer_match_count",
+            ),
+            "Physical one-DPU/one-tasklet int8 x int8 -> int32 functionality evidence. This figure does not report timing, speedup, energy, or scaling.",
+            "Physical UPMEM functionality MVP: exact CPU-reference validation counts by fixed dense case.",
+            "Fixed dense case",
+            "Validated physical executions",
+            render(_plot_upmem_hardware_mvp_validation, hardware_mvp_rows or []),
+            variance_fields=("validation_passed_count",),
+            allow_zero_variance=True,
+        ),
+        PlotSpec(
+            "upmem_hardware_generic_mvp_validation.png",
+            "Physical UPMEM generic TaskGraph MVP validation",
+            "upmem_hardware_generic_mvp_summary.csv",
+            (
+                "case_id",
+                "repeat_count",
+                "validation_passed_count",
+                "exact_integer_match_count",
+            ),
+            "Physical one-DPU/one-tasklet synthetic real generic TaskGraph functionality evidence. This figure does not report timing, speedup, energy, scaling, or general quantum-circuit execution.",
+            "Physical generic TaskGraph MVP: exact CPU-reference validation counts for the fixed synthetic contraction.",
+            "Synthetic generic TaskGraph case",
+            "Validated physical executions",
+            render(
+                _plot_upmem_hardware_mvp_validation,
+                hardware_generic_mvp_rows or [],
+                title="Physical UPMEM generic TaskGraph MVP validation (functionality only)",
+            ),
+            variance_fields=("validation_passed_count",),
+            allow_zero_variance=True,
+        ),
+        PlotSpec(
+            "upmem_quantization_attribution.png",
+            "UPMEM SDK simulator quantization attribution",
+            "upmem_quantization_attribution.csv",
+            (
+                "benchmark_n_qubits",
+                "route_runtime_ratio_none_over_quantized",
+                "transfer_ratio_none_over_quantized",
+            ),
+            "Same-route float32/int8 attribution from SDK simulator measurements; not hardware speedup.",
+            "Same-route float32 versus int8 attribution for strict generic UPMEM SDK simulator execution.",
+            "Case",
+            "Recorded ratio",
+            render(_plot_upmem_quantization_attribution, quantization_rows),
+            variance_fields=(
+                "route_runtime_ratio_none_over_quantized",
+                "transfer_ratio_none_over_quantized",
+            ),
+        ),
+        PlotSpec(
+            "quantization_runtime_by_executor.png",
+            "UPMEM SDK simulator software-recorded host/control residual ratio",
+            "upmem_quantization_attribution.csv",
+            (
+                "benchmark_n_qubits",
+                "route_runtime_ratio_none_over_quantized",
+                "unquantized_host_residual_time_s",
+                "quantized_host_residual_time_s",
+            ),
+            "Same-route SDK simulator software-recorded host/control residual time; attribution is not a hardware speedup claim.",
+            "Same-plan SDK simulator float32/int8 software-recorded host/control residual-time ratio.",
+            "Case",
+            "Float32/int8 host/control residual ratio",
+            render(
+                _plot_quantization_metric,
+                quantization_rows,
+                metric="route_runtime_ratio_none_over_quantized",
+                ylabel="Float32 / int8 software-recorded host/control residual time",
+                title="UPMEM SDK simulator software-recorded host/control residual ratio",
+            ),
+            variance_fields=("route_runtime_ratio_none_over_quantized",),
+        ),
+        PlotSpec(
+            "quantization_transfer_bytes.png",
+            "UPMEM SDK simulator software-recorded directional transfer bytes",
+            "upmem_quantization_attribution.csv",
+            (
+                "benchmark_n_qubits",
+                "unquantized_h2d_bytes",
+                "quantized_h2d_bytes",
+                "unquantized_d2h_bytes",
+                "quantized_d2h_bytes",
+                "transfer_ratio_none_over_quantized",
+            ),
+            "Application-visible SDK transfer bytes from matched routes. They are not physical bus/DIMM traffic and exclude unobservable SDK overhead.",
+            "Absolute application-visible H2D/D2H bytes plus the same-plan float32/int8 total-byte ratio.",
+            "Case",
+            "Software-recorded application-visible bytes",
+            render(_plot_quantization_transfer_bytes, quantization_rows),
+            variance_fields=(
+                "unquantized_h2d_bytes",
+                "quantized_h2d_bytes",
+                "unquantized_d2h_bytes",
+                "quantized_d2h_bytes",
+                "transfer_ratio_none_over_quantized",
+            ),
+        ),
+        PlotSpec(
+            "quantization_error_by_family_size.png",
+            "UPMEM SDK simulator int8 error",
+            "upmem_quantization_attribution.csv",
+            (
+                "benchmark_n_qubits",
+                "quantized_max_abs_error_vs_full_precision",
+                "quantized_execution_max_abs_error",
+            ),
+            "Quantized SDK simulator error against the recorded full-precision reference.",
+            "UPMEM SDK simulator int8 maximum absolute error against the full-precision reference.",
+            "Case",
+            "Maximum absolute error (log)",
+            render(
+                _plot_quantization_metric,
+                quantization_rows,
+                metric="quantized_max_abs_error_vs_full_precision",
+                ylabel="Maximum absolute error",
+                title="UPMEM SDK simulator int8 error versus full precision",
+                log_scale=True,
+            ),
+            variance_fields=("quantized_max_abs_error_vs_full_precision",),
+        ),
+        PlotSpec(
+            "quantization_probability_error_by_family_size.png",
+            "UPMEM SDK simulator probability error",
+            "upmem_quantization_attribution.csv",
+            (
+                "benchmark_n_qubits",
+                "quantized_probability_max_abs_error",
+                "quantized_probability_l1_error",
+            ),
+            "Probability-error fields from matched quantized UPMEM SDK-simulator validation records; no amplitude error is relabeled as probability error.",
+            "Matched UPMEM SDK-simulator quantized probability error against the recorded validation reference.",
+            "Case",
+            "Probability error",
+            render(_plot_quantization_probability_error, quantization_rows),
+            variance_fields=(
+                "quantized_probability_max_abs_error",
+                "quantized_probability_l1_error",
+            ),
+        ),
+        PlotSpec(
+            "same_plan_cpu_upmem_runtime.png",
+            "Same-plan CPU versus UPMEM SDK simulator compute time",
+            "same_plan_execution.csv",
+            (
+                "benchmark_n_qubits",
+                "contraction_plan_hash",
+                "cpu_time_s",
+                "upmem_simulator_time_s",
+            ),
+            "CPU replay and UPMEM SDK simulator rows share an identical contraction-plan hash; timing is not hardware speedup.",
+            "Same-plan CPU and UPMEM SDK simulator execution timing.",
+            "Qubits",
+            "Measured/software-recorded compute time (s, log)",
+            render(_plot_same_plan_runtime, same_plan_rows),
+            variance_fields=("cpu_time_s", "upmem_simulator_time_s"),
+        ),
+        PlotSpec(
+            "upmem_physical_quantization_runtime.png",
+            "Physical UPMEM TaskGraph float32/int8 warm runtime",
+            "upmem_physical_quantization_attribution.csv",
+            (
+                "benchmark_n_qubits",
+                "contraction_plan_hash",
+                "float32_warm_runtime_s",
+                "int8_warm_runtime_s",
+                "warm_runtime_ratio_float32_over_int8",
+            ),
+            "Matched same-plan physical UPMEM TaskGraph rows with explicit measured warm hardware timing. Bring-up-only wall time is excluded.",
+            "Physical UPMEM float32/int8 warm runtime attribution; no speedup claim.",
+            "Case",
+            "Measured warm route time (s)",
+            render(
+                _plot_physical_quantization_runtime, physical_quantization_rows or []
+            ),
+            variance_fields=("float32_warm_runtime_s", "int8_warm_runtime_s"),
+        ),
+        PlotSpec(
+            "upmem_physical_quantization_transfer.png",
+            "Physical UPMEM TaskGraph float32/int8 transfer bytes",
+            "upmem_physical_quantization_attribution.csv",
+            (
+                "benchmark_n_qubits",
+                "float32_transfer_bytes",
+                "int8_transfer_bytes",
+                "transfer_ratio_float32_over_int8",
+            ),
+            "Matched same-plan physical UPMEM application-visible transfer accounting; byte counts are recorded transfers, not a bus-bandwidth or speedup claim.",
+            "Physical UPMEM float32/int8 application-visible transfer attribution.",
+            "Case",
+            "Recorded transfer bytes",
+            render(
+                _plot_physical_quantization_transfer, physical_quantization_rows or []
+            ),
+            variance_fields=("float32_transfer_bytes", "int8_transfer_bytes"),
+        ),
+        PlotSpec(
+            "upmem_physical_quantization_error.png",
+            "Physical UPMEM TaskGraph float32/int8 error",
+            "upmem_physical_quantization_attribution.csv",
+            (
+                "benchmark_n_qubits",
+                "float32_max_abs_error",
+                "int8_max_abs_error",
+                "quantization_error_int8_vs_float32",
+            ),
+            "Matched same-plan physical UPMEM validation error fields are reported as recorded; absent error metadata is not inferred.",
+            "Physical UPMEM float32/int8 maximum absolute error attribution.",
+            "Case",
+            "Recorded maximum absolute error",
+            render(_plot_physical_quantization_error, physical_quantization_rows or []),
+            variance_fields=(
+                "float32_max_abs_error",
+                "int8_max_abs_error",
+                "quantization_error_int8_vs_float32",
+            ),
+            allow_zero_variance=True,
+        ),
+        PlotSpec(
+            "upmem_physical_taskgraph_validation.png",
+            "Physical UPMEM TaskGraph validation",
+            "upmem_physical_taskgraph_breakdown.csv",
+            (
+                "case_id",
+                "validation_passed",
+                "exact_integer_match",
+                "task_count",
+                "validated_task_count",
+            ),
+            "Physical UPMEM TaskGraph validation and execution evidence, including bring-up rows; no performance claim.",
+            "Physical UPMEM TaskGraph validation status and task coverage.",
+            "Case/repeat",
+            "Validation result (1=passed)",
+            render(_plot_physical_taskgraph_validation, physical_taskgraph_rows or []),
+            variance_fields=("validation_passed", "task_count", "validated_task_count"),
+            allow_zero_variance=True,
+        ),
+        PlotSpec(
+            "upmem_physical_taskgraph_timing_breakdown.png",
+            "Physical UPMEM TaskGraph timing breakdown",
+            "upmem_physical_taskgraph_breakdown.csv",
+            (
+                "case_id",
+                "timing_class",
+                "allocation_time_s",
+                "binary_load_time_s",
+                "h2d_time_s",
+                "d2h_time_s",
+                "total_quantization_time_s",
+                "total_dequantization_time_s",
+                "total_bridge_time_s",
+                "total_build_time_s",
+                "warm_runtime_s",
+                "validation_time_s",
+                "output_materialization_time_s",
+            ),
+            "Physical UPMEM TaskGraph timing components are shown only when recorded. Bring-up-only route time is labeled and excluded from measured warm timing.",
+            "Physical UPMEM TaskGraph timing breakdown; bring-up and measured warm timing remain distinct.",
+            "Case/repeat",
+            "Recorded time (s)",
+            render(_plot_physical_taskgraph_timing, physical_taskgraph_rows or []),
+            variance_fields=(
+                "allocation_time_s",
+                "binary_load_time_s",
+                "h2d_time_s",
+                "d2h_time_s",
+                "total_quantization_time_s",
+                "total_dequantization_time_s",
+                "total_bridge_time_s",
+                "total_build_time_s",
+                "warm_runtime_s",
+                "validation_time_s",
+                "output_materialization_time_s",
+            ),
+            allow_zero_variance=True,
+        ),
+        PlotSpec(
+            "planner_flops_vs_upmem_pressure.png",
+            "Planner-estimated FLOPs versus normalized modeled PIM objective",
+            "planner_comparison.csv",
+            (
+                "planner_id",
+                "pim_estimated_flops",
+                "pim_objective_score",
+                "pim_feasible",
+            ),
+            "Modeled generic-single-DPU planning objective; no executor timing or hardware speedup claim.",
+            "Planner-estimated FLOPs versus normalized modeled PIM objective for feasible candidates.",
+            "Planner-estimated FLOPs",
+            "Normalized modeled PIM objective",
+            render(_plot_planner_pressure, planner_rows),
+            variance_fields=("pim_estimated_flops", "pim_objective_score"),
+        ),
+        PlotSpec(
+            "planner_component_scores.png",
+            "Modeled PIM planner objective components",
+            "planner_comparison.csv",
+            (
+                "planner_id",
+                "pim_estimated_flops",
+                "pim_estimated_host_dpu_bytes",
+                "pim_estimated_mram_to_wram_bytes",
+                "pim_estimated_tile_count",
+            ),
+            "Normalized modeled PIM planning components; scenario weights are not measured hardware constants.",
+            "Modeled PIM objective components for feasible planner candidates.",
+            "Planner candidate",
+            "Normalized component value",
+            render(_plot_planner_components, planner_rows),
+            variance_fields=(
+                "pim_estimated_flops",
+                "pim_estimated_host_dpu_bytes",
+                "pim_estimated_mram_to_wram_bytes",
+                "pim_estimated_tile_count",
+            ),
+        ),
+        PlotSpec(
+            "planner_selection.png",
+            "Modeled PIM planner selection",
+            "planner_comparison.csv",
+            ("planner_id", "pim_objective_rank", "pim_selected"),
+            "Selection is by the recorded modeled PIM objective within one profile, not execution performance.",
+            "Selected feasible planner candidate per modeled PIM objective profile.",
+            "Case",
+            "Modeled objective rank",
+            render(_plot_planner_selection, planner_rows),
+            variance_fields=("pim_objective_rank",),
+        ),
+        PlotSpec(
+            "planner_pareto_frontier.png",
+            "Planner-estimated Pareto frontier",
+            "planner_comparison.csv",
+            (
+                "planner_id",
+                "pim_estimated_flops",
+                "pim_peak_intermediate_bytes",
+                "pim_pareto_dominated",
+            ),
+            "Pareto status compares modeled planner components only; it is not a runtime ranking.",
+            "Feasible planner candidates colored by modeled Pareto status.",
+            "Planner-estimated FLOPs",
+            "Planner-estimated largest intermediate bytes",
+            render(_plot_planner_pareto, planner_rows),
+            variance_fields=("pim_estimated_flops", "pim_peak_intermediate_bytes"),
+        ),
+        PlotSpec(
+            "planner_sensitivity.png",
+            "Modeled PIM planner sensitivity",
+            "planner_comparison.csv",
+            ("planner_id", "pim_weight_profile", "pim_objective_score", "pim_selected"),
+            "Scenario weight profiles are literature-informed sensitivity cases, not calibrated hardware constants.",
+            "Selected planner candidates across modeled PIM weight profiles.",
+            "Weight profile",
+            "Normalized modeled PIM objective",
+            render(_plot_planner_sensitivity, planner_rows),
+            variance_fields=("pim_objective_score",),
+        ),
+        PlotSpec(
+            "planner_component_diagnostics.png",
+            "Modeled PIM planner component diagnostics",
+            "planner_component_diagnostics.csv",
+            (
+                "planner_id",
+                "pim_objective_version",
+                "pim_numeric_component_invocations",
+                "pim_numeric_recombination_flops",
+                "pim_mram_payload_pressure_ratio",
+                "pim_wram_known_pressure_ratio",
+            ),
+            "Versioned modeled planner component diagnostics; these are structural cost-model values, not measured hardware counters.",
+            "Versioned planner component diagnostics where v2 records provide numeric execution decomposition fields.",
+            "Planner candidate",
+            "Modeled component value",
+            render(_plot_planner_component_diagnostics, planner_component_rows or []),
+            variance_fields=(
+                "pim_numeric_component_invocations",
+                "pim_numeric_recombination_flops",
+                "pim_mram_payload_pressure_ratio",
+                "pim_wram_known_pressure_ratio",
+            ),
+            allow_zero_variance=True,
+        ),
+        PlotSpec(
+            "internal_parallelism_metadata_by_qubits.png",
+            "Internal diagnostic frontier metadata",
+            "per_case_route_stats.csv",
+            (
+                "benchmark_n_qubits",
+                "parallelism_mode",
+                "parallelism_evidence_type",
+                "frontier_worker_count",
+                "frontier_wave_count",
+                "max_frontier_width",
+                "frontier_executed_parallel_task_count",
+            ),
+            "Executed internal TaskGraph frontier metadata; diagnostic only and not a parallel speedup claim.",
+            "Diagnostic internal TaskGraph frontier metadata, not serious baseline performance.",
+            "Case",
+            "Maximum frontier width",
+            render(_plot_internal_parallelism, stats_rows),
+            variance_fields=("max_frontier_width",),
+        ),
     ]
     source_rows = {
         "per_case_route_stats.csv": stats_rows,
@@ -1941,6 +3415,8 @@ def _plot_specs(
         "planner_component_diagnostics.csv": planner_component_rows or [],
         "upmem_hardware_mvp_summary.csv": hardware_mvp_rows or [],
         "upmem_hardware_generic_mvp_summary.csv": hardware_generic_mvp_rows or [],
+        "upmem_physical_quantization_attribution.csv": physical_quantization_rows or [],
+        "upmem_physical_taskgraph_breakdown.csv": physical_taskgraph_rows or [],
     }
     return [replace(spec, data_rows=source_rows[spec.source_csv]) for spec in specs]
 
@@ -1948,29 +3424,53 @@ def _plot_specs(
 def _render_plot_spec(plt: Any, path: Path, spec: PlotSpec) -> PlotOutcome:
     if spec.not_implemented_reason:
         _save_todo_plot(plt, path, spec, spec.not_implemented_reason)
-        return PlotOutcome("generated_todo_not_implemented", spec.not_implemented_reason, path.stat().st_size)
+        return PlotOutcome(
+            "generated_todo_not_implemented",
+            spec.not_implemented_reason,
+            path.stat().st_size,
+        )
     field_values = [
-        [number for number in (_float_or_none(row.get(field)) for row in (spec.data_rows or [])) if number is not None]
+        [
+            number
+            for number in (
+                _float_or_none(row.get(field)) for row in (spec.data_rows or [])
+            )
+            if number is not None
+        ]
         for field in spec.variance_fields
     ]
-    values = [number for field_values_item in field_values for number in field_values_item]
+    values = [
+        number for field_values_item in field_values for number in field_values_item
+    ]
     if not values:
-        reason = "source fields contain no numeric data: " + ", ".join(spec.source_fields)
+        reason = "source fields contain no numeric data: " + ", ".join(
+            spec.source_fields
+        )
         _save_todo_plot(plt, path, spec, reason)
         return PlotOutcome("generated_todo_missing_data", reason, path.stat().st_size)
-    if not spec.allow_zero_variance and all(len(set(field_values_item)) <= 1 for field_values_item in field_values if field_values_item):
+    if not spec.allow_zero_variance and all(
+        len(set(field_values_item)) <= 1
+        for field_values_item in field_values
+        if field_values_item
+    ):
         reason = "source data has zero variance across the available records"
         _save_todo_plot(plt, path, spec, reason)
         return PlotOutcome("generated_todo_no_variance", reason, path.stat().st_size)
     try:
-        reason = spec.renderer(plt, path) if spec.renderer is not None else "renderer_not_configured"
+        reason = (
+            spec.renderer(plt, path)
+            if spec.renderer is not None
+            else "renderer_not_configured"
+        )
     except Exception as exc:  # Plot failures remain distinct from evidence TODOs.
         return PlotOutcome("failed", f"rendering_failed: {type(exc).__name__}: {exc}")
     if reason:
         _save_todo_plot(plt, path, spec, reason)
         return PlotOutcome("generated_todo_missing_data", reason, path.stat().st_size)
     if not path.exists():
-        return PlotOutcome("failed", "rendering_failed: renderer did not create the expected PNG")
+        return PlotOutcome(
+            "failed", "rendering_failed: renderer did not create the expected PNG"
+        )
     return PlotOutcome("generated_valid", None, path.stat().st_size)
 
 
@@ -1979,7 +3479,16 @@ def _save_todo_plot(plt: Any, path: Path, spec: PlotSpec, reason: str) -> None:
     ax.set_title(spec.title)
     ax.set_xlabel(spec.x_label)
     ax.set_ylabel(spec.y_label)
-    ax.text(0.5, 0.5, f"TODO\n{reason}", ha="center", va="center", wrap=True, transform=ax.transAxes, color="#b45309")
+    ax.text(
+        0.5,
+        0.5,
+        f"TODO\n{reason}",
+        ha="center",
+        va="center",
+        wrap=True,
+        transform=ax.transAxes,
+        color="#b45309",
+    )
     ax.set_xlim(0.0, 1.0)
     ax.set_ylim(0.0, 1.0)
     ax.grid(True, alpha=0.25)
@@ -2002,6 +3511,8 @@ def benchmark_summary(
     guard_issues: list[str],
     hardware_mvp_rows: list[JsonDict] | None = None,
     hardware_generic_mvp_rows: list[JsonDict] | None = None,
+    physical_quantization_rows: list[JsonDict] | None = None,
+    physical_taskgraph_rows: list[JsonDict] | None = None,
 ) -> str:
     hardware_mvp_rows = (
         upmem_hardware_mvp_summary(records)
@@ -2012,6 +3523,12 @@ def benchmark_summary(
         upmem_hardware_generic_mvp_summary(records)
         if hardware_generic_mvp_rows is None
         else hardware_generic_mvp_rows
+    )
+    physical_quantization_rows = (
+        [] if physical_quantization_rows is None else physical_quantization_rows
+    )
+    physical_taskgraph_rows = (
+        [] if physical_taskgraph_rows is None else physical_taskgraph_rows
     )
     lines = [
         "# Research Benchmark Summary",
@@ -2058,9 +3575,13 @@ def benchmark_summary(
         ]
     )
     for command in manifest.get("commands", []):
-        lines.append(f"- `{command.get('command')}`: returncode `{command.get('returncode')}`.")
+        lines.append(
+            f"- `{command.get('command')}`: returncode `{command.get('returncode')}`."
+        )
         if command.get("skipped_group"):
-            lines.append(f"  - skipped group `{command.get('skipped_group')}`: {command.get('blocker_reason')}")
+            lines.append(
+                f"  - skipped group `{command.get('skipped_group')}`: {command.get('blocker_reason')}"
+            )
     lines.extend(
         [
             "",
@@ -2075,7 +3596,9 @@ def benchmark_summary(
         ]
     )
     for row in validation_rows:
-        lines.append(f"- `{row['route_id']}` `{row['validation_status']}`: {row['record_count']} records")
+        lines.append(
+            f"- `{row['route_id']}` `{row['validation_status']}`: {row['record_count']} records"
+        )
     if hardware_mvp_rows:
         lines.extend(
             [
@@ -2130,11 +3653,15 @@ def benchmark_summary(
     lines.extend(["", "### TODO Figures", ""])
     for entry in entries:
         if str(entry.get("status", "")).startswith("generated_todo_"):
-            lines.append(f"- `{entry['plot']}`: {entry['status']} ({entry.get('reason') or 'TODO'}). {entry.get('caption') or ''}")
+            lines.append(
+                f"- `{entry['plot']}`: {entry['status']} ({entry.get('reason') or 'TODO'}). {entry.get('caption') or ''}"
+            )
     lines.extend(["", "### Failed Figures", ""])
     for entry in entries:
         if entry.get("status") == "failed":
-            lines.append(f"- `{entry['plot']}`: failed ({entry.get('reason') or 'unknown rendering failure'}).")
+            lines.append(
+                f"- `{entry['plot']}`: failed ({entry.get('reason') or 'unknown rendering failure'})."
+            )
     lines.extend(
         [
             "",
@@ -2144,12 +3671,20 @@ def benchmark_summary(
             f"- Per-case route statistic rows: {len(stats_rows)}.",
             f"- Valid CPU/GPU paired speedup rows: {len(speedup_rows)}.",
             f"- Matched strict generic UPMEM float32/int8 attribution rows: {len(quantization_rows)}.",
+            f"- Matched physical UPMEM TaskGraph float32/int8 attribution rows: {len(physical_quantization_rows)}.",
+            f"- Physical UPMEM TaskGraph validation/timing breakdown rows: {len(physical_taskgraph_rows)}.",
             f"- Modeled contraction-path candidate rows: {len(planner_rows)}.",
             f"- Unsupported/skipped rows preserved: {len(unsupported_rows)}.",
             "",
             "## Observed Result Snapshot",
             "",
-            *_observed_result_lines(speedup_rows, full_state_tn_rows, quantization_rows, planner_rows, unsupported_rows),
+            *_observed_result_lines(
+                speedup_rows,
+                full_state_tn_rows,
+                quantization_rows,
+                planner_rows,
+                unsupported_rows,
+            ),
             "",
             "## Planner Interpretation",
             "",
@@ -2161,9 +3696,13 @@ def benchmark_summary(
     )
     if unsupported_rows:
         for row in unsupported_rows[:20]:
-            lines.append(f"- `{row.get('case_id')}` / `{row.get('route_id')}`: {row.get('resource_skip_reason') or row.get('validation_status') or row.get('status')}")
+            lines.append(
+                f"- `{row.get('case_id')}` / `{row.get('route_id')}`: {row.get('resource_skip_reason') or row.get('validation_status') or row.get('status')}"
+            )
         if len(unsupported_rows) > 20:
-            lines.append(f"- ... {len(unsupported_rows) - 20} more rows in `unsupported_cases.csv`.")
+            lines.append(
+                f"- ... {len(unsupported_rows) - 20} more rows in `unsupported_cases.csv`."
+            )
     else:
         lines.append("- None in loaded records.")
     lines.extend(
@@ -2175,10 +3714,12 @@ def benchmark_summary(
             "- Quimb unsliced vs sliced comparisons as CPU TN implementation evidence, with slicing metrics labeled as `slicing_flop_ratio`.",
             "- Strict generic-only UPMEM SDK simulator rows as bounded generic code-path and boundary evidence.",
             "- Same-route float32 versus int8 generic UPMEM ratios as SDK-simulator route attribution, not hardware speedup.",
+            "- Matched physical UPMEM TaskGraph float32/int8 transfer and validation-error attribution only when the plan hash matches; runtime figures use explicit measured warm timing.",
             "",
             "## Claims Not Allowed",
             "",
             "- No hardware speedup claim from UPMEM SDK simulator timing.",
+            "- No speedup claim from physical UPMEM TaskGraph attribution; bring-up-only timing is not measured warm timing.",
             "- No fake GPU rows without verified GPU execution.",
             "- No energy-efficiency claim without real measured energy metadata.",
             "- No speedup across incompatible route families such as Quimb versus internal TaskGraph diagnostics.",
@@ -2190,12 +3731,16 @@ def benchmark_summary(
         ]
     )
     if hardware_mvp_rows:
-        allowed_index = lines.index("- Strict generic-only UPMEM SDK simulator rows as bounded generic code-path and boundary evidence.")
+        allowed_index = lines.index(
+            "- Strict generic-only UPMEM SDK simulator rows as bounded generic code-path and boundary evidence."
+        )
         lines.insert(
             allowed_index,
             "- Physical one-DPU/one-tasklet dense int8 x int8 -> int32 exact-validation rows as hardware functionality evidence only.",
         )
-        not_allowed_index = lines.index("- No hardware speedup claim from UPMEM SDK simulator timing.")
+        not_allowed_index = lines.index(
+            "- No hardware speedup claim from UPMEM SDK simulator timing."
+        )
         lines.insert(
             not_allowed_index,
             "- No performance, speedup, energy, scaling, or generic-TN claim from the physical hardware MVP bring-up rows.",
@@ -2226,10 +3771,30 @@ def _planner_interpretation_lines(planner_rows: list[JsonDict]) -> list[str]:
 
     cases = {str(row.get("case_id")) for row in planner_rows if row.get("case_id")}
     selected = [row for row in planner_rows if row.get("pim_selected") is True]
-    planners = sorted({str(row.get("planner_id")) for row in selected if row.get("planner_id")})
-    profiles = sorted({str(row.get("pim_weight_profile")) for row in selected if row.get("pim_weight_profile")})
-    paths = sorted({str(row.get("contraction_path_structure_hash")) for row in selected if row.get("contraction_path_structure_hash")})
-    objective_versions = sorted({str(row.get("pim_objective_version")) for row in planner_rows if row.get("pim_objective_version")})
+    planners = sorted(
+        {str(row.get("planner_id")) for row in selected if row.get("planner_id")}
+    )
+    profiles = sorted(
+        {
+            str(row.get("pim_weight_profile"))
+            for row in selected
+            if row.get("pim_weight_profile")
+        }
+    )
+    paths = sorted(
+        {
+            str(row.get("contraction_path_structure_hash"))
+            for row in selected
+            if row.get("contraction_path_structure_hash")
+        }
+    )
+    objective_versions = sorted(
+        {
+            str(row.get("pim_objective_version"))
+            for row in planner_rows
+            if row.get("pim_objective_version")
+        }
+    )
 
     component_fields = (
         "pim_estimated_flops",
@@ -2240,7 +3805,11 @@ def _planner_interpretation_lines(planner_rows: list[JsonDict]) -> list[str]:
         "pim_estimated_sync_events",
         "pim_estimated_numerical_penalty",
     )
-    sources = [field for field in component_fields if any(row.get(field) is not None for row in planner_rows)]
+    sources = [
+        field
+        for field in component_fields
+        if any(row.get(field) is not None for row in planner_rows)
+    ]
     component_keys = sorted(
         {
             str(key)
@@ -2256,7 +3825,9 @@ def _planner_interpretation_lines(planner_rows: list[JsonDict]) -> list[str]:
         "- It cannot claim hardware performance, hardware speedup, measured runtime, energy, or executed UPMEM behavior.",
     ]
     if objective_versions:
-        lines.append(f"- Modeled objective/profile semantics: {', '.join(f'`{item}`' for item in objective_versions)}.")
+        lines.append(
+            f"- Modeled objective/profile semantics: {', '.join(f'`{item}`' for item in objective_versions)}."
+        )
     if selected:
         structural = [f"{len(selected)} selected rows"]
         if planners:
@@ -2264,12 +3835,20 @@ def _planner_interpretation_lines(planner_rows: list[JsonDict]) -> list[str]:
         if profiles:
             structural.append("profiles=" + ", ".join(f"`{item}`" for item in profiles))
         if paths:
-            structural.append(f"{len(paths)} distinct contraction path structure hash(es)")
-        lines.append("- Selected planner/profile/path structure: " + "; ".join(structural) + ".")
+            structural.append(
+                f"{len(paths)} distinct contraction path structure hash(es)"
+            )
+        lines.append(
+            "- Selected planner/profile/path structure: " + "; ".join(structural) + "."
+        )
     else:
         lines.append("- No selected planner/profile/path structure was recorded.")
     if cost_sources:
-        lines.append("- Modeled cost-component sources: " + ", ".join(f"`{item}`" for item in cost_sources) + ".")
+        lines.append(
+            "- Modeled cost-component sources: "
+            + ", ".join(f"`{item}`" for item in cost_sources)
+            + "."
+        )
     else:
         lines.append("- No modeled cost-component source fields were populated.")
     return lines
@@ -2283,7 +3862,11 @@ def _observed_result_lines(
     unsupported_rows: list[JsonDict],
 ) -> list[str]:
     lines: list[str] = []
-    gpu_ratios = _numbers(row.get("compute_speedup_cpu_over_gpu") for row in speedup_rows if _bool(row.get("performance_tier")))
+    gpu_ratios = _numbers(
+        row.get("compute_speedup_cpu_over_gpu")
+        for row in speedup_rows
+        if _bool(row.get("performance_tier"))
+    )
     if gpu_ratios:
         lines.append(
             "- Verified QuEST GPU compute ratio (CPU/GPU): "
@@ -2291,10 +3874,16 @@ def _observed_result_lines(
             f"GPU was faster in `{sum(value > 1.0 for value in gpu_ratios)}/{len(gpu_ratios)}` matched repeats."
         )
     else:
-        lines.append("- No matched verified CPU/GPU performance repeats were available.")
+        lines.append(
+            "- No matched verified CPU/GPU performance repeats were available."
+        )
 
-    tn_ratios = _numbers(row.get("quimb_unsliced_time_over_quest_time") for row in full_state_tn_rows)
-    slicing_ratios = _numbers(row.get("quimb_sliced_time_over_unsliced_time") for row in full_state_tn_rows)
+    tn_ratios = _numbers(
+        row.get("quimb_unsliced_time_over_quest_time") for row in full_state_tn_rows
+    )
+    slicing_ratios = _numbers(
+        row.get("quimb_sliced_time_over_unsliced_time") for row in full_state_tn_rows
+    )
     if tn_ratios:
         lines.append(
             "- Shallow exact CPU comparison (Quimb TN time / QuEST full-state time): "
@@ -2308,15 +3897,26 @@ def _observed_result_lines(
             "slice reconstruction used one worker."
         )
 
-    quant_runtime = _numbers(row.get("route_runtime_ratio_none_over_quantized") for row in quantization_rows)
-    quant_transfer = _numbers(row.get("transfer_ratio_none_over_quantized") for row in quantization_rows)
-    quant_error = _numbers(row.get("quantized_max_abs_error_vs_full_precision") for row in quantization_rows)
+    quant_runtime = _numbers(
+        row.get("route_runtime_ratio_none_over_quantized") for row in quantization_rows
+    )
+    quant_transfer = _numbers(
+        row.get("transfer_ratio_none_over_quantized") for row in quantization_rows
+    )
+    quant_error = _numbers(
+        row.get("quantized_max_abs_error_vs_full_precision")
+        for row in quantization_rows
+    )
     if quant_runtime:
         lines.append(
             "- Strict generic UPMEM SDK-simulator float32/int8 attribution: "
             f"median host-residual-time ratio `{statistics.median(quant_runtime):.3g}x`, "
             f"median transfer ratio `{statistics.median(quant_transfer):.3g}x`"
-            + (f", maximum observed int8 absolute error `{max(quant_error):.3g}`." if quant_error else ".")
+            + (
+                f", maximum observed int8 absolute error `{max(quant_error):.3g}`."
+                if quant_error
+                else "."
+            )
             + " These are simulator-route measurements, not hardware speedup."
         )
 
@@ -2328,10 +3928,15 @@ def _observed_result_lines(
             "with plan hashes, FLOP/peak-memory estimates, and modeled UPMEM pressure."
         )
     if unsupported_rows:
-        reason_counts = Counter(str(row.get("resource_skip_reason") or "unknown") for row in unsupported_rows)
+        reason_counts = Counter(
+            str(row.get("resource_skip_reason") or "unknown")
+            for row in unsupported_rows
+        )
         lines.append(
             "- Explicit boundary rows: "
-            + ", ".join(f"`{reason}` = {count}" for reason, count in reason_counts.most_common())
+            + ", ".join(
+                f"`{reason}` = {count}" for reason, count in reason_counts.most_common()
+            )
             + "."
         )
     return lines
@@ -2349,7 +3954,11 @@ def validate_artifact_boundaries(root: Path) -> JsonDict:
                 violations.append(rel)
             if path.suffix.lower() in {".png", ".svg", ".pdf"} or "/plots/" in rel:
                 violations.append(rel)
-    return {"schema_version": SCHEMA_VERSION, "status": "failed" if violations else "passed", "violations": violations}
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "status": "failed" if violations else "passed",
+        "violations": violations,
+    }
 
 
 def _claim_guard_issues(records: list[JsonDict]) -> list[str]:
@@ -2357,19 +3966,41 @@ def _claim_guard_issues(records: list[JsonDict]) -> list[str]:
     for record in records:
         route = record.get("route_id")
         case = record.get("case_id")
-        if record.get("contraction_execution_target") == "gpu" and not (record.get("gpu_backend_verified") is True and record.get("gpu_program_executed") is True):
+        if record.get("contraction_execution_target") == "gpu" and not (
+            record.get("gpu_backend_verified") is True
+            and record.get("gpu_program_executed") is True
+        ):
             issues.append(f"unverified gpu row: {case}/{route}")
         if record.get("upmem_execution_mode") == "sdk_simulator":
             if bool(record.get("hardware_speedup_applicable", False)):
-                issues.append(f"sdk simulator row marked hardware speedup applicable: {case}/{route}")
+                issues.append(
+                    f"sdk simulator row marked hardware speedup applicable: {case}/{route}"
+                )
             if record.get("hardware_speedup") not in {None, "", "not_applicable"}:
-                issues.append(f"sdk simulator row has hardware_speedup value: {case}/{route}")
-        if record.get("energy_joules") not in {None, ""} and str(record.get("energy_measurement_status") or "") not in {"measured", "available"}:
+                issues.append(
+                    f"sdk simulator row has hardware_speedup value: {case}/{route}"
+                )
+        if record.get("energy_joules") not in {None, ""} and str(
+            record.get("energy_measurement_status") or ""
+        ) not in {"measured", "available"}:
             issues.append(f"energy value without measured status: {case}/{route}")
         issues.extend(_transfer_accounting_issues(record, case=case, route=route))
         if record.get("contraction_execution_target") == "upmem":
             if _is_physical_hardware_mvp_record(record):
                 issues.extend(_hardware_mvp_issues(record))
+            elif _is_physical_upmem_taskgraph_record(record):
+                if bool(record.get("hardware_speedup_applicable", False)):
+                    issues.append(
+                        f"physical TaskGraph row marked hardware speedup applicable: {case}/{route}"
+                    )
+                if bool(record.get("cpu_fallback_used", False)):
+                    issues.append(
+                        f"physical TaskGraph row used CPU fallback: {case}/{route}"
+                    )
+                if bool(record.get("simulator_kernel_executed", False)):
+                    issues.append(
+                        f"physical TaskGraph row executed simulator kernel: {case}/{route}"
+                    )
             elif str(record.get("upmem_execution_mode") or "") == "sdk_simulator":
                 issues.extend(_strict_generic_upmem_issues(record))
             else:
@@ -2380,7 +4011,9 @@ def _claim_guard_issues(records: list[JsonDict]) -> list[str]:
     return issues
 
 
-def _transfer_accounting_issues(record: JsonDict, *, case: Any, route: Any) -> list[str]:
+def _transfer_accounting_issues(
+    record: JsonDict, *, case: Any, route: Any
+) -> list[str]:
     """Validate directional byte totals when the producing runtime exposes them.
 
     Older evidence may have only ``actual_transfer_bytes``. That remains
@@ -2402,22 +4035,31 @@ def _transfer_accounting_issues(record: JsonDict, *, case: Any, route: Any) -> l
     return issues
 
 
-def _upmem_readiness_lines(records: list[JsonDict], unsupported_rows: list[JsonDict]) -> list[str]:
+def _upmem_readiness_lines(
+    records: list[JsonDict], unsupported_rows: list[JsonDict]
+) -> list[str]:
     upmem_records = [
         row
         for row in records
         if row.get("contraction_execution_target") == "upmem"
-        or row.get("upmem_execution_mode") in {"sdk_simulator", "sdk_hardware_single_dpu"}
+        or row.get("upmem_execution_mode")
+        in {"sdk_simulator", "sdk_hardware_single_dpu"}
     ]
     if not upmem_records:
         return [
             "- No UPMEM records were loaded in this pack.",
             "- Next target: run the selected strict generic-only UPMEM suite or physical MVP and regenerate this pack before making stronger UPMEM claims.",
         ]
-    dense_hardware_records = [row for row in upmem_records if _is_hardware_mvp_record(row)]
-    generic_hardware_records = [row for row in upmem_records if _is_hardware_generic_mvp_record(row)]
+    dense_hardware_records = [
+        row for row in upmem_records if _is_hardware_mvp_record(row)
+    ]
+    generic_hardware_records = [
+        row for row in upmem_records if _is_hardware_generic_mvp_record(row)
+    ]
     simulator_records = [
-        row for row in upmem_records if str(row.get("upmem_execution_mode") or "") == "sdk_simulator"
+        row
+        for row in upmem_records
+        if str(row.get("upmem_execution_mode") or "") == "sdk_simulator"
     ]
     unsupported = [
         row
@@ -2425,30 +4067,56 @@ def _upmem_readiness_lines(records: list[JsonDict], unsupported_rows: list[JsonD
         if str(row.get("route_id") or "").startswith("upmem")
         or row.get("route_id") == "upmem_tn_sdk_simulator_quantized"
     ]
-    fallback_count = sum(1 for row in upmem_records if bool(row.get("cpu_fallback_used", False)))
-    generic_records = [row for row in simulator_records if _is_strict_generic_upmem_record(row)]
+    fallback_count = sum(
+        1 for row in upmem_records if bool(row.get("cpu_fallback_used", False))
+    )
+    generic_records = [
+        row for row in simulator_records if _is_strict_generic_upmem_record(row)
+    ]
     reasons = Counter(_unsupported_reason(row) for row in unsupported)
     supported = [
         row
         for row in simulator_records
         if str(row.get("status") or "") == "completed" and not _is_unsupported(row)
     ]
-    supported_qubits = [(qubits, row) for row in supported if (qubits := _family_and_qubits(row)[1]["benchmark_n_qubits"]) is not None]
-    highest_supported = max(supported_qubits, key=lambda item: (int(item[0]), str(item[1].get("case_id") or "")), default=None)
-    first_unsupported = min(
-        ((qubits, row) for row in unsupported if (qubits := _family_and_qubits(row)[1]["benchmark_n_qubits"]) is not None),
+    supported_qubits = [
+        (qubits, row)
+        for row in supported
+        if (qubits := _family_and_qubits(row)[1]["benchmark_n_qubits"]) is not None
+    ]
+    highest_supported = max(
+        supported_qubits,
         key=lambda item: (int(item[0]), str(item[1].get("case_id") or "")),
         default=None,
     )
-    tiling_records = [row for row in simulator_records if _tiling_status(row) is not None]
+    first_unsupported = min(
+        (
+            (qubits, row)
+            for row in unsupported
+            if (qubits := _family_and_qubits(row)[1]["benchmark_n_qubits"]) is not None
+        ),
+        key=lambda item: (int(item[0]), str(item[1].get("case_id") or "")),
+        default=None,
+    )
+    tiling_records = [
+        row for row in simulator_records if _tiling_status(row) is not None
+    ]
     tiling_supported = [row for row in tiling_records if _tiling_status(row) is True]
     lines = [f"- UPMEM records loaded: {len(upmem_records)}."]
     if dense_hardware_records:
         completed = sum(
-            1 for row in dense_hardware_records if str(row.get("status") or "") == "completed"
+            1
+            for row in dense_hardware_records
+            if str(row.get("status") or "") == "completed"
         )
-        exact = sum(1 for row in dense_hardware_records if row.get("exact_integer_match") is True)
-        physical_cases = sorted({str(row.get("case_id") or "unknown") for row in dense_hardware_records})
+        exact = sum(
+            1
+            for row in dense_hardware_records
+            if row.get("exact_integer_match") is True
+        )
+        physical_cases = sorted(
+            {str(row.get("case_id") or "unknown") for row in dense_hardware_records}
+        )
         lines.extend(
             [
                 f"- Physical UPMEM dense single-DPU MVP rows: {len(dense_hardware_records)}; completed: {completed}; exact int8/int32 matches: {exact}.",
@@ -2458,10 +4126,18 @@ def _upmem_readiness_lines(records: list[JsonDict], unsupported_rows: list[JsonD
         )
     if generic_hardware_records:
         completed = sum(
-            1 for row in generic_hardware_records if str(row.get("status") or "") == "completed"
+            1
+            for row in generic_hardware_records
+            if str(row.get("status") or "") == "completed"
         )
-        exact = sum(1 for row in generic_hardware_records if row.get("exact_integer_match") is True)
-        physical_cases = sorted({str(row.get("case_id") or "unknown") for row in generic_hardware_records})
+        exact = sum(
+            1
+            for row in generic_hardware_records
+            if row.get("exact_integer_match") is True
+        )
+        physical_cases = sorted(
+            {str(row.get("case_id") or "unknown") for row in generic_hardware_records}
+        )
         lines.extend(
             [
                 f"- Physical UPMEM generic TaskGraph MVP rows: {len(generic_hardware_records)}; completed: {completed}; exact int8/int32 matches: {exact}.",
@@ -2478,13 +4154,17 @@ def _upmem_readiness_lines(records: list[JsonDict], unsupported_rows: list[JsonD
         ]
     )
     if reasons:
-        lines.append(f"- Top blocker reasons: {', '.join(f'{reason}={count}' for reason, count in reasons.most_common(5))}.")
+        lines.append(
+            f"- Top blocker reasons: {', '.join(f'{reason}={count}' for reason, count in reasons.most_common(5))}."
+        )
     if tiling_records:
         lines.append(
             f"- Tiling support derived from records: {len(tiling_supported)}/{len(tiling_records)} rows report executable or observed tiling metadata."
         )
     else:
-        lines.append("- Tiling support derived from records: no tiling status was recorded.")
+        lines.append(
+            "- Tiling support derived from records: no tiling status was recorded."
+        )
     if highest_supported is not None:
         lines.append(
             f"- Highest supported UPMEM case in these records: `{highest_supported[1].get('case_id')}` at `{int(highest_supported[0])}` qubits."
@@ -2494,12 +4174,20 @@ def _upmem_readiness_lines(records: list[JsonDict], unsupported_rows: list[JsonD
     if first_unsupported is not None:
         first_case = first_unsupported[1].get("case_id")
         first_reason = _unsupported_reason(first_unsupported[1])
-        lines.append(f"- First unsupported case by recorded qubit count: `{first_case}` at `{int(first_unsupported[0])}` qubits; reason: `{first_reason}`.")
-        lines.append(f"- Next target derived from the boundary: investigate `{first_case}` and address `{first_reason}` without CPU fallback.")
+        lines.append(
+            f"- First unsupported case by recorded qubit count: `{first_case}` at `{int(first_unsupported[0])}` qubits; reason: `{first_reason}`."
+        )
+        lines.append(
+            f"- Next target derived from the boundary: investigate `{first_case}` and address `{first_reason}` without CPU fallback."
+        )
     elif highest_supported is not None:
-        lines.append(f"- Next target derived from the records: extend the strict generic-only sweep beyond `{highest_supported[1].get('case_id')}` and record the resulting boundary.")
+        lines.append(
+            f"- Next target derived from the records: extend the strict generic-only sweep beyond `{highest_supported[1].get('case_id')}` and record the resulting boundary."
+        )
     else:
-        lines.append("- Next target derived from the records: obtain a completed strict generic-only UPMEM record with capability metadata.")
+        lines.append(
+            "- Next target derived from the records: obtain a completed strict generic-only UPMEM record with capability metadata."
+        )
     return lines
 
 
@@ -2513,10 +4201,16 @@ def _missing_evidence(records: list[JsonDict]) -> list[str]:
     if "quimb_tn_exact" not in routes:
         missing.append("Quimb TN baseline records are absent.")
     if not any(_is_strict_generic_upmem_record(record) for record in records):
-        missing.append("Strict generic-only UPMEM SDK-simulator boundary records are absent.")
+        missing.append(
+            "Strict generic-only UPMEM SDK-simulator boundary records are absent."
+        )
     if not any(_is_physical_hardware_mvp_record(record) for record in records):
-        missing.append("Physical single-DPU UPMEM functionality-MVP records are absent.")
-    return missing or ["No mandatory evidence class is obviously absent from loaded records."]
+        missing.append(
+            "Physical single-DPU UPMEM functionality-MVP records are absent."
+        )
+    return missing or [
+        "No mandatory evidence class is obviously absent from loaded records."
+    ]
 
 
 def _plot_cpu_gpu_runtime(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
@@ -2524,9 +4218,14 @@ def _plot_cpu_gpu_runtime(plt: Any, path: Path, rows: list[JsonDict]) -> str | N
     if not usable:
         return "no_performance_tier_cpu_gpu_rows"
     families = sorted({str(row["case_family"]) for row in usable})
-    fig, axes = plt.subplots(2, 3, figsize=(13.0, 7.5), constrained_layout=True, sharey=True)
+    fig, axes = plt.subplots(
+        2, 3, figsize=(13.0, 7.5), constrained_layout=True, sharey=True
+    )
     for axis, family in zip(axes.flat, families):
-        group = sorted((row for row in usable if str(row["case_family"]) == family), key=lambda row: int(_plot_qubits(row) or 0))
+        group = sorted(
+            (row for row in usable if str(row["case_family"]) == family),
+            key=lambda row: int(_plot_qubits(row) or 0),
+        )
         qubits = [int(_plot_qubits(row) or 0) for row in group]
         axis.errorbar(
             qubits,
@@ -2587,18 +4286,29 @@ def _plot_cpu_gpu_speedup(plt: Any, path: Path, rows: list[JsonDict]) -> str | N
 
 
 def _plot_cpu_tn_runtime(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
-    selected = [row for row in rows if row.get("route_id") in {"quimb_tn_exact", "quimb_tn_sliced_exact"} and _positive(row.get("simulation_compute_time_s_median")) is not None]
+    selected = [
+        row
+        for row in rows
+        if row.get("route_id") in {"quimb_tn_exact", "quimb_tn_sliced_exact"}
+        and _positive(row.get("simulation_compute_time_s_median")) is not None
+    ]
     if not selected:
         return "no_quimb_tn_rows"
     families = sorted({str(row["case_family"]) for row in selected})
-    fig, axes = plt.subplots(2, 3, figsize=(13.0, 7.5), constrained_layout=True, sharey=True)
+    fig, axes = plt.subplots(
+        2, 3, figsize=(13.0, 7.5), constrained_layout=True, sharey=True
+    )
     for axis, family in zip(axes.flat, families):
         for route, label, marker in (
             ("quimb_tn_exact", "Quimb unsliced", "o"),
             ("quimb_tn_sliced_exact", "Quimb sliced", "s"),
         ):
             group = sorted(
-                (row for row in selected if row["route_id"] == route and str(row["case_family"]) == family),
+                (
+                    row
+                    for row in selected
+                    if row["route_id"] == route and str(row["case_family"]) == family
+                ),
                 key=lambda row: int(_plot_qubits(row) or 0),
             )
             if group:
@@ -2624,7 +4334,9 @@ def _plot_cpu_tn_runtime(plt: Any, path: Path, rows: list[JsonDict]) -> str | No
     return None
 
 
-def _plot_full_state_vs_tn_runtime(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+def _plot_full_state_vs_tn_runtime(
+    plt: Any, path: Path, rows: list[JsonDict]
+) -> str | None:
     routes = {
         "quest_cpu_full_state_exact": ("QuEST CPU full state", "o"),
         "quimb_tn_exact": ("Quimb TN unsliced", "s"),
@@ -2641,11 +4353,17 @@ def _plot_full_state_vs_tn_runtime(plt: Any, path: Path, rows: list[JsonDict]) -
     if not selected:
         return "no_matching_full_state_and_tn_rows"
     families = sorted({str(row["case_family"]) for row in selected})
-    fig, axes = plt.subplots(2, 3, figsize=(13.0, 7.5), constrained_layout=True, sharey=True)
+    fig, axes = plt.subplots(
+        2, 3, figsize=(13.0, 7.5), constrained_layout=True, sharey=True
+    )
     for axis, family in zip(axes.flat, families):
         for route, (label, marker) in routes.items():
             group = sorted(
-                (row for row in selected if row["route_id"] == route and str(row["case_family"]) == family),
+                (
+                    row
+                    for row in selected
+                    if row["route_id"] == route and str(row["case_family"]) == family
+                ),
                 key=lambda row: int(_plot_qubits(row) or 0),
             )
             if group:
@@ -2671,7 +4389,9 @@ def _plot_full_state_vs_tn_runtime(plt: Any, path: Path, rows: list[JsonDict]) -
     return None
 
 
-def _plot_tn_planning_vs_contraction(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+def _plot_tn_planning_vs_contraction(
+    plt: Any, path: Path, rows: list[JsonDict]
+) -> str | None:
     selected = [
         row
         for row in rows
@@ -2682,7 +4402,9 @@ def _plot_tn_planning_vs_contraction(plt: Any, path: Path, rows: list[JsonDict])
     if not selected:
         return "no_quimb_timing_rows"
     families = sorted({str(row["case_family"]) for row in selected})
-    fig, axes = plt.subplots(2, 3, figsize=(13.0, 7.5), constrained_layout=True, sharey=True)
+    fig, axes = plt.subplots(
+        2, 3, figsize=(13.0, 7.5), constrained_layout=True, sharey=True
+    )
     styles = {
         "quimb_tn_exact": ("Quimb unsliced", "o"),
         "quimb_tn_sliced_exact": ("Quimb sliced", "s"),
@@ -2690,14 +4412,33 @@ def _plot_tn_planning_vs_contraction(plt: Any, path: Path, rows: list[JsonDict])
     for axis, family in zip(axes.flat, families):
         for route, (label, marker) in styles.items():
             group = sorted(
-                (row for row in selected if row["route_id"] == route and str(row["case_family"]) == family),
+                (
+                    row
+                    for row in selected
+                    if row["route_id"] == route and str(row["case_family"]) == family
+                ),
                 key=lambda row: int(_plot_qubits(row) or 0),
             )
             if not group:
                 continue
             x = [int(_plot_qubits(row) or 0) for row in group]
-            axis.plot(x, [max(float(row.get("planning_time_s_median") or 0.0), 1e-12) for row in group], marker=marker, linestyle="--", label=f"{label} planning")
-            axis.plot(x, [float(row["simulation_compute_time_s_median"]) for row in group], marker=marker, linestyle="-", label=f"{label} contraction")
+            axis.plot(
+                x,
+                [
+                    max(float(row.get("planning_time_s_median") or 0.0), 1e-12)
+                    for row in group
+                ],
+                marker=marker,
+                linestyle="--",
+                label=f"{label} planning",
+            )
+            axis.plot(
+                x,
+                [float(row["simulation_compute_time_s_median"]) for row in group],
+                marker=marker,
+                linestyle="-",
+                label=f"{label} contraction",
+            )
         axis.set_yscale("log")
         axis.set_title(family)
         axis.set_xlabel("Qubits")
@@ -2731,14 +4472,20 @@ def _plot_tn_path_metric(
     if not selected:
         return f"no_{metric}_rows"
     families = sorted({str(row["case_family"]) for row in selected})
-    fig, axes = plt.subplots(2, 3, figsize=(13.0, 7.5), constrained_layout=True, sharey=True)
+    fig, axes = plt.subplots(
+        2, 3, figsize=(13.0, 7.5), constrained_layout=True, sharey=True
+    )
     for axis, family in zip(axes.flat, families):
         for route, label, marker in (
             ("quimb_tn_exact", "Quimb unsliced", "o"),
             ("quimb_tn_sliced_exact", "Quimb sliced", "s"),
         ):
             group = sorted(
-                (row for row in selected if row["route_id"] == route and str(row["case_family"]) == family),
+                (
+                    row
+                    for row in selected
+                    if row["route_id"] == route and str(row["case_family"]) == family
+                ),
                 key=lambda row: int(_plot_qubits(row) or 0),
             )
             if group:
@@ -2772,13 +4519,28 @@ def _plot_quantization_metric(
     title: str,
     log_scale: bool = False,
 ) -> str | None:
-    selected = [row for row in rows if _plot_qubits(row) is not None and _positive(row.get(metric)) is not None]
+    selected = [
+        row
+        for row in rows
+        if _plot_qubits(row) is not None and _positive(row.get(metric)) is not None
+    ]
     if not selected:
         return f"no_{metric}_rows"
-    ordered = sorted(selected, key=lambda row: (str(row["case_family"]), int(_plot_qubits(row) or 0), str(row["case_id"])))
+    ordered = sorted(
+        selected,
+        key=lambda row: (
+            str(row["case_family"]),
+            int(_plot_qubits(row) or 0),
+            str(row["case_id"]),
+        ),
+    )
     labels = [f"{row['case_family']}_{_plot_qubits(row)}q" for row in ordered]
-    fig, ax = plt.subplots(figsize=(max(8.0, len(labels) * 0.5), 5.2), constrained_layout=True)
-    ax.bar(range(len(ordered)), [float(row[metric]) for row in ordered], color="#0f766e")
+    fig, ax = plt.subplots(
+        figsize=(max(8.0, len(labels) * 0.5), 5.2), constrained_layout=True
+    )
+    ax.bar(
+        range(len(ordered)), [float(row[metric]) for row in ordered], color="#0f766e"
+    )
     if "ratio" in metric:
         ax.axhline(1.0, color="#64748b", linestyle="--", linewidth=1.0)
     if log_scale:
@@ -2791,7 +4553,9 @@ def _plot_quantization_metric(
     return None
 
 
-def _plot_quantization_probability_error(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+def _plot_quantization_probability_error(
+    plt: Any, path: Path, rows: list[JsonDict]
+) -> str | None:
     """Render recorded probability errors without substituting amplitude errors."""
     selected = [
         row
@@ -2799,17 +4563,26 @@ def _plot_quantization_probability_error(plt: Any, path: Path, rows: list[JsonDi
         if _plot_qubits(row) is not None
         and any(
             _positive(row.get(field)) is not None
-            for field in ("quantized_probability_max_abs_error", "quantized_probability_l1_error")
+            for field in (
+                "quantized_probability_max_abs_error",
+                "quantized_probability_l1_error",
+            )
         )
     ]
     if not selected:
         return "no_quantized_probability_error_rows"
     ordered = sorted(
         selected,
-        key=lambda row: (str(row["case_family"]), int(_plot_qubits(row) or 0), str(row["case_id"])),
+        key=lambda row: (
+            str(row["case_family"]),
+            int(_plot_qubits(row) or 0),
+            str(row["case_id"]),
+        ),
     )
     labels = [f"{row['case_family']}_{_plot_qubits(row)}q" for row in ordered]
-    fig, ax = plt.subplots(figsize=(max(8.0, len(labels) * 0.55), 5.2), constrained_layout=True)
+    fig, ax = plt.subplots(
+        figsize=(max(8.0, len(labels) * 0.55), 5.2), constrained_layout=True
+    )
     x = list(range(len(ordered)))
     width = 0.38
     max_abs = [
@@ -2824,8 +4597,20 @@ def _plot_quantization_probability_error(plt: Any, path: Path, rows: list[JsonDi
         else 0.0
         for row in ordered
     ]
-    ax.bar([value - width / 2 for value in x], max_abs, width=width, label="maximum probability error", color="#ea580c")
-    ax.bar([value + width / 2 for value in x], l1, width=width, label="probability L1 error", color="#0f766e")
+    ax.bar(
+        [value - width / 2 for value in x],
+        max_abs,
+        width=width,
+        label="maximum probability error",
+        color="#ea580c",
+    )
+    ax.bar(
+        [value + width / 2 for value in x],
+        l1,
+        width=width,
+        label="probability L1 error",
+        color="#0f766e",
+    )
     ax.set_yscale("log")
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=60, ha="right", fontsize=8)
@@ -2840,7 +4625,9 @@ def _plot_same_plan_runtime(plt: Any, path: Path, rows: list[JsonDict]) -> str |
     if not rows:
         return "no_same_plan_cpu_upmem_rows"
     families = sorted({str(row["case_family"]) for row in rows})
-    fig, axes = plt.subplots(2, 3, figsize=(13.0, 7.5), constrained_layout=True, sharey=True)
+    fig, axes = plt.subplots(
+        2, 3, figsize=(13.0, 7.5), constrained_layout=True, sharey=True
+    )
     for axis, family in zip(axes.flat, families):
         group = [row for row in rows if str(row["case_family"]) == family]
         by_qubits: dict[int, list[JsonDict]] = defaultdict(list)
@@ -2866,7 +4653,10 @@ def _plot_same_plan_runtime(plt: Any, path: Path, rows: list[JsonDict]) -> str |
             if mode_qubits:
                 axis.plot(
                     mode_qubits,
-                    [float(mode_rows[value]["upmem_simulator_time_s"]) for value in mode_qubits],
+                    [
+                        float(mode_rows[value]["upmem_simulator_time_s"])
+                        for value in mode_qubits
+                    ],
                     marker=marker,
                     label=label,
                 )
@@ -2916,7 +4706,11 @@ def _plot_planner_pressure(plt: Any, path: Path, rows: list[JsonDict]) -> str | 
 
 
 def _plot_planner_components(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
-    selected = [row for row in rows if row.get("pim_feasible") is True and _component_mapping(row)]
+    selected = [
+        row
+        for row in rows
+        if row.get("pim_feasible") is True and _component_mapping(row)
+    ]
     if len({str(row.get("planner_id")) for row in selected}) < 2:
         return "multiple_feasible_planner_candidates_not_available"
     component_names = (
@@ -2935,12 +4729,17 @@ def _plot_planner_components(plt: Any, path: Path, rows: list[JsonDict]) -> str 
     labels = sorted(grouped)
     values = {
         name: [
-            statistics.mean(float(_component_mapping(row).get(name, 0.0) or 0.0) for row in grouped[label])
+            statistics.mean(
+                float(_component_mapping(row).get(name, 0.0) or 0.0)
+                for row in grouped[label]
+            )
             for label in labels
         ]
         for name in component_names
     }
-    fig, ax = plt.subplots(figsize=(max(8.0, len(labels) * 1.4), 5.5), constrained_layout=True)
+    fig, ax = plt.subplots(
+        figsize=(max(8.0, len(labels) * 1.4), 5.5), constrained_layout=True
+    )
     bottom = [0.0] * len(labels)
     for name in component_names:
         current = values[name]
@@ -2954,7 +4753,9 @@ def _plot_planner_components(plt: Any, path: Path, rows: list[JsonDict]) -> str 
     return None
 
 
-def _plot_planner_component_diagnostics(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+def _plot_planner_component_diagnostics(
+    plt: Any, path: Path, rows: list[JsonDict]
+) -> str | None:
     selected = [
         row
         for row in rows
@@ -2963,11 +4764,23 @@ def _plot_planner_component_diagnostics(plt: Any, path: Path, rows: list[JsonDic
     ]
     if not selected:
         return "no v2 planner component diagnostics"
-    selected = sorted(selected, key=lambda row: (str(row.get("case_id") or ""), str(row.get("planner_id") or "")))
+    selected = sorted(
+        selected,
+        key=lambda row: (
+            str(row.get("case_id") or ""),
+            str(row.get("planner_id") or ""),
+        ),
+    )
     labels = [str(row.get("planner_id") or "candidate") for row in selected]
-    invocations = [float(row.get("pim_numeric_component_invocations") or 0.0) for row in selected]
-    recombination = [float(row.get("pim_numeric_recombination_flops") or 0.0) for row in selected]
-    fig, axes = plt.subplots(2, 1, figsize=(max(8.0, len(labels) * 0.5), 7.0), constrained_layout=True)
+    invocations = [
+        float(row.get("pim_numeric_component_invocations") or 0.0) for row in selected
+    ]
+    recombination = [
+        float(row.get("pim_numeric_recombination_flops") or 0.0) for row in selected
+    ]
+    fig, axes = plt.subplots(
+        2, 1, figsize=(max(8.0, len(labels) * 0.5), 7.0), constrained_layout=True
+    )
     axes[0].bar(range(len(labels)), invocations, color="#0f766e")
     axes[0].set_ylabel("Numeric component invocations")
     axes[0].set_title("V2 modeled numeric decomposition")
@@ -2983,13 +4796,23 @@ def _plot_planner_component_diagnostics(plt: Any, path: Path, rows: list[JsonDic
 
 
 def _plot_planner_selection(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
-    selected = [row for row in rows if row.get("pim_feasible") is True and row.get("pim_objective_rank") is not None]
+    selected = [
+        row
+        for row in rows
+        if row.get("pim_feasible") is True and row.get("pim_objective_rank") is not None
+    ]
     if not selected:
         return "no_modeled_pim_selection_rows"
     labels = [f"{row['case_id']}\n{row['planner_id']}" for row in selected]
-    fig, ax = plt.subplots(figsize=(max(8.0, len(labels) * 0.55), 5.2), constrained_layout=True)
+    fig, ax = plt.subplots(
+        figsize=(max(8.0, len(labels) * 0.55), 5.2), constrained_layout=True
+    )
     colors = ["#0f766e" if row.get("pim_selected") else "#94a3b8" for row in selected]
-    ax.bar(range(len(selected)), [float(row["pim_objective_rank"]) for row in selected], color=colors)
+    ax.bar(
+        range(len(selected)),
+        [float(row["pim_objective_rank"]) for row in selected],
+        color=colors,
+    )
     ax.set_xticks(range(len(labels)))
     ax.set_xticklabels(labels, rotation=60, ha="right", fontsize=7)
     ax.set_ylabel("Modeled objective rank (1 = selected)")
@@ -3010,8 +4833,15 @@ def _plot_planner_pareto(plt: Any, path: Path, rows: list[JsonDict]) -> str | No
     if len(selected) < 2:
         return "insufficient_feasible_pareto_candidates"
     fig, ax = plt.subplots(figsize=(7.5, 5.5), constrained_layout=True)
-    for dominated, color, label in ((False, "#0f766e", "Pareto non-dominated"), (True, "#94a3b8", "Pareto dominated")):
-        group = [row for row in selected if bool(row.get("pim_pareto_dominated")) is dominated]
+    for dominated, color, label in (
+        (False, "#0f766e", "Pareto non-dominated"),
+        (True, "#94a3b8", "Pareto dominated"),
+    ):
+        group = [
+            row
+            for row in selected
+            if bool(row.get("pim_pareto_dominated")) is dominated
+        ]
         if group:
             ax.scatter(
                 [float(row["pim_estimated_flops"]) for row in group],
@@ -3045,8 +4875,17 @@ def _plot_planner_sensitivity(plt: Any, path: Path, rows: list[JsonDict]) -> str
     grouped: dict[str, list[JsonDict]] = defaultdict(list)
     for row in selected:
         grouped[str(row["pim_weight_profile"])].append(row)
-    fig, ax = plt.subplots(figsize=(max(8.0, len(profiles) * 1.8), 5.0), constrained_layout=True)
-    ax.bar(profiles, [statistics.mean(float(row["pim_objective_score"]) for row in grouped[name]) for name in profiles], color="#2563eb")
+    fig, ax = plt.subplots(
+        figsize=(max(8.0, len(profiles) * 1.8), 5.0), constrained_layout=True
+    )
+    ax.bar(
+        profiles,
+        [
+            statistics.mean(float(row["pim_objective_score"]) for row in grouped[name])
+            for name in profiles
+        ],
+        color="#2563eb",
+    )
     ax.set_ylabel("Mean selected normalized modeled PIM objective")
     ax.set_title("Modeled PIM planner sensitivity by weight profile")
     ax.tick_params(axis="x", labelrotation=25)
@@ -3068,15 +4907,33 @@ def _component_mapping(row: JsonDict) -> JsonDict:
 
 
 def _plot_slicing_ratio(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
-    selected = [row for row in rows if row.get("route_id") == "quimb_tn_sliced_exact" and _positive(row.get("slicing_flop_ratio")) is not None]
+    selected = [
+        row
+        for row in rows
+        if row.get("route_id") == "quimb_tn_sliced_exact"
+        and _positive(row.get("slicing_flop_ratio")) is not None
+    ]
     if not selected:
         return "no_slicing_flop_ratio_rows"
-    ordered = sorted((row for row in selected if _plot_qubits(row) is not None), key=lambda row: (str(row["case_family"]), int(_plot_qubits(row) or 0), str(row["case_id"])))
+    ordered = sorted(
+        (row for row in selected if _plot_qubits(row) is not None),
+        key=lambda row: (
+            str(row["case_family"]),
+            int(_plot_qubits(row) or 0),
+            str(row["case_id"]),
+        ),
+    )
     if not ordered:
         return "no_actual_qubit_metadata"
     labels = [f"{row['case_family']}_{_plot_qubits(row)}q" for row in ordered]
-    fig, ax = plt.subplots(figsize=(max(8.0, len(labels) * 0.45), 5.2), constrained_layout=True)
-    ax.bar(range(len(ordered)), [float(row["slicing_flop_ratio"]) for row in ordered], color="#7c3aed")
+    fig, ax = plt.subplots(
+        figsize=(max(8.0, len(labels) * 0.45), 5.2), constrained_layout=True
+    )
+    ax.bar(
+        range(len(ordered)),
+        [float(row["slicing_flop_ratio"]) for row in ordered],
+        color="#7c3aed",
+    )
     ax.axhline(1.0, color="#64748b", linestyle="--", linewidth=1.0)
     ax.set_xticks(range(len(labels)))
     ax.set_xticklabels(labels, rotation=60, ha="right", fontsize=8)
@@ -3094,28 +4951,34 @@ def _plot_slicing_tradeoff(plt: Any, path: Path, rows: list[JsonDict]) -> str | 
         if _plot_qubits(row) is not None
         and _positive(row.get("runtime_ratio_sliced_over_unsliced")) is not None
         and _positive(row.get("slicing_flop_ratio")) is not None
-        and _positive(row.get("largest_intermediate_ratio_sliced_over_unsliced")) is not None
+        and _positive(row.get("largest_intermediate_ratio_sliced_over_unsliced"))
+        is not None
     ]
     if not selected:
         return "no_complete_compatible_slicing_tradeoff_pairs"
     ordered = sorted(
         selected,
-        key=lambda row: (str(row.get("case_family") or ""), int(_plot_qubits(row) or 0), str(row.get("case_id") or "")),
+        key=lambda row: (
+            str(row.get("case_family") or ""),
+            int(_plot_qubits(row) or 0),
+            str(row.get("case_id") or ""),
+        ),
     )
-    labels = [f"{row.get('case_family') or 'case'}_{_plot_qubits(row)}q" for row in ordered]
+    labels = [
+        f"{row.get('case_family') or 'case'}_{_plot_qubits(row)}q" for row in ordered
+    ]
     x = list(range(len(labels)))
     width = 0.25
-    fig, ax = plt.subplots(figsize=(max(8.0, len(labels) * 0.6), 5.6), constrained_layout=True)
+    fig, ax = plt.subplots(
+        figsize=(max(8.0, len(labels) * 0.6), 5.6), constrained_layout=True
+    )
     metrics = (
         ("runtime_ratio_sliced_over_unsliced", "Runtime"),
         ("slicing_flop_ratio", "Planner FLOPs"),
         ("largest_intermediate_ratio_sliced_over_unsliced", "Largest intermediate"),
     )
     for index, (field, label) in enumerate(metrics):
-        values = [
-            float(row[field])
-            for row in ordered
-        ]
+        values = [float(row[field]) for row in ordered]
         offsets = [value + (index - 1) * width for value in x]
         ax.bar(offsets, values, width=width, label=label)
     ax.axhline(1.0, color="#64748b", linestyle="--", linewidth=1.0)
@@ -3178,7 +5041,9 @@ def _plot_upmem_boundary(plt: Any, path: Path, rows: list[JsonDict]) -> str | No
     if not usable:
         return "no_actual_qubit_metadata"
     families = sorted({str(row["case_family"]) for row in usable})
-    fig, axes = plt.subplots(2, 3, figsize=(13.0, 6.8), constrained_layout=True, sharey=True)
+    fig, axes = plt.subplots(
+        2, 3, figsize=(13.0, 6.8), constrained_layout=True, sharey=True
+    )
     for axis, family in zip(axes.flat, families):
         grouped: dict[tuple[str, int], list[JsonDict]] = defaultdict(list)
         for row in usable:
@@ -3186,7 +5051,10 @@ def _plot_upmem_boundary(plt: Any, path: Path, rows: list[JsonDict]) -> str | No
                 grouped[(str(row["case_id"]), int(_plot_qubits(row) or 0))].append(row)
         points = sorted(grouped.items(), key=lambda item: item[0][1])
         qubits = [key[1] for key, _ in points]
-        supported = [int(all(int(row.get("unsupported_count", 0) or 0) == 0 for row in group)) for _, group in points]
+        supported = [
+            int(all(int(row.get("unsupported_count", 0) or 0) == 0 for row in group))
+            for _, group in points
+        ]
         axis.scatter(
             qubits,
             supported,
@@ -3209,15 +5077,33 @@ def _plot_upmem_boundary(plt: Any, path: Path, rows: list[JsonDict]) -> str | No
 
 
 def _plot_upmem_accuracy(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
-    selected = [row for row in rows if _is_strict_generic_upmem_record(row) and _positive(row.get("max_abs_error")) is not None]
+    selected = [
+        row
+        for row in rows
+        if _is_strict_generic_upmem_record(row)
+        and _positive(row.get("max_abs_error")) is not None
+    ]
     if not selected:
         return "no_upmem_error_rows"
-    ordered = sorted((row for row in selected if _plot_qubits(row) is not None), key=lambda row: (str(row["case_family"]), int(_plot_qubits(row) or 0), str(row["case_id"])))
+    ordered = sorted(
+        (row for row in selected if _plot_qubits(row) is not None),
+        key=lambda row: (
+            str(row["case_family"]),
+            int(_plot_qubits(row) or 0),
+            str(row["case_id"]),
+        ),
+    )
     if not ordered:
         return "no_actual_qubit_metadata"
     labels = [f"{row['case_family']}_{_plot_qubits(row)}q" for row in ordered]
-    fig, ax = plt.subplots(figsize=(max(8.0, len(labels) * 0.45), 4.8), constrained_layout=True)
-    ax.bar(range(len(ordered)), [float(row["max_abs_error"]) for row in ordered], color="#ea580c")
+    fig, ax = plt.subplots(
+        figsize=(max(8.0, len(labels) * 0.45), 4.8), constrained_layout=True
+    )
+    ax.bar(
+        range(len(ordered)),
+        [float(row["max_abs_error"]) for row in ordered],
+        color="#ea580c",
+    )
     ax.set_yscale("log")
     ax.set_xticks(range(len(labels)))
     ax.set_xticklabels(labels, rotation=60, ha="right", fontsize=8)
@@ -3227,23 +5113,52 @@ def _plot_upmem_accuracy(plt: Any, path: Path, rows: list[JsonDict]) -> str | No
     return None
 
 
-def _plot_upmem_quantization_attribution(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+def _plot_upmem_quantization_attribution(
+    plt: Any, path: Path, rows: list[JsonDict]
+) -> str | None:
     usable = [row for row in rows if _plot_qubits(row) is not None]
     if not usable:
         return "no_matched_generic_quantization_rows"
-    ordered = sorted(usable, key=lambda row: (str(row["case_family"]), int(_plot_qubits(row) or 0), str(row["case_id"])))
+    ordered = sorted(
+        usable,
+        key=lambda row: (
+            str(row["case_family"]),
+            int(_plot_qubits(row) or 0),
+            str(row["case_id"]),
+        ),
+    )
     labels = [f"{row['case_family']}_{_plot_qubits(row)}q" for row in ordered]
-    runtime_values = [row.get("route_runtime_ratio_none_over_quantized") for row in ordered]
+    runtime_values = [
+        row.get("route_runtime_ratio_none_over_quantized") for row in ordered
+    ]
     transfer_values = [row.get("transfer_ratio_none_over_quantized") for row in ordered]
-    if not any(_positive(value) is not None for value in [*runtime_values, *transfer_values]):
+    if not any(
+        _positive(value) is not None for value in [*runtime_values, *transfer_values]
+    ):
         return "no_generic_quantization_ratios"
-    fig, (runtime_ax, transfer_ax) = plt.subplots(2, 1, figsize=(max(8.0, len(labels) * 0.5), 7.0), constrained_layout=True)
+    fig, (runtime_ax, transfer_ax) = plt.subplots(
+        2, 1, figsize=(max(8.0, len(labels) * 0.5), 7.0), constrained_layout=True
+    )
     x = list(range(len(ordered)))
     for axis, values, title, ylabel in (
-        (runtime_ax, runtime_values, "Host-side residual time ratio", "float32 host residual time / int8 host residual time"),
-        (transfer_ax, transfer_values, "Host/DPU transfer ratio", "float32 bytes / int8 bytes"),
+        (
+            runtime_ax,
+            runtime_values,
+            "Host-side residual time ratio",
+            "float32 host residual time / int8 host residual time",
+        ),
+        (
+            transfer_ax,
+            transfer_values,
+            "Host/DPU transfer ratio",
+            "float32 bytes / int8 bytes",
+        ),
     ):
-        axis.bar(x, [float(value) if _positive(value) is not None else 0.0 for value in values], color="#0f766e")
+        axis.bar(
+            x,
+            [float(value) if _positive(value) is not None else 0.0 for value in values],
+            color="#0f766e",
+        )
         axis.axhline(1.0, color="#64748b", linestyle="--", linewidth=1.0)
         axis.set_title(title)
         axis.set_ylabel(ylabel)
@@ -3256,7 +5171,9 @@ def _plot_upmem_quantization_attribution(plt: Any, path: Path, rows: list[JsonDi
     return None
 
 
-def _plot_quantization_transfer_bytes(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
+def _plot_quantization_transfer_bytes(
+    plt: Any, path: Path, rows: list[JsonDict]
+) -> str | None:
     """Render application-visible directional SDK transfer evidence.
 
     The runtime can observe payload-level H2D/D2H accounting, but not physical
@@ -3279,10 +5196,19 @@ def _plot_quantization_transfer_bytes(plt: Any, path: Path, rows: list[JsonDict]
     ]
     if not usable:
         return "no_directional_application_visible_transfer_bytes"
-    ordered = sorted(usable, key=lambda row: (str(row["case_family"]), int(_plot_qubits(row) or 0), str(row["case_id"])))
+    ordered = sorted(
+        usable,
+        key=lambda row: (
+            str(row["case_family"]),
+            int(_plot_qubits(row) or 0),
+            str(row["case_id"]),
+        ),
+    )
     labels = [f"{row['case_family']}_{_plot_qubits(row)}q" for row in ordered]
     x = list(range(len(ordered)))
-    fig, (bytes_ax, ratio_ax) = plt.subplots(2, 1, figsize=(max(8.0, len(labels) * 0.6), 7.2), constrained_layout=True)
+    fig, (bytes_ax, ratio_ax) = plt.subplots(
+        2, 1, figsize=(max(8.0, len(labels) * 0.6), 7.2), constrained_layout=True
+    )
     width = 0.36
     float_h2d = [float(row.get("unquantized_h2d_bytes") or 0.0) for row in ordered]
     float_d2h = [float(row.get("unquantized_d2h_bytes") or 0.0) for row in ordered]
@@ -3291,16 +5217,24 @@ def _plot_quantization_transfer_bytes(plt: Any, path: Path, rows: list[JsonDict]
     left = [value - width / 2 for value in x]
     right = [value + width / 2 for value in x]
     bytes_ax.bar(left, float_h2d, width, label="float32 H2D", color="#2563eb")
-    bytes_ax.bar(left, float_d2h, width, bottom=float_h2d, label="float32 D2H", color="#93c5fd")
+    bytes_ax.bar(
+        left, float_d2h, width, bottom=float_h2d, label="float32 D2H", color="#93c5fd"
+    )
     bytes_ax.bar(right, int8_h2d, width, label="int8 H2D", color="#b45309")
-    bytes_ax.bar(right, int8_d2h, width, bottom=int8_h2d, label="int8 D2H", color="#fdba74")
+    bytes_ax.bar(
+        right, int8_d2h, width, bottom=int8_h2d, label="int8 D2H", color="#fdba74"
+    )
     bytes_ax.set_ylabel("Application-visible SDK bytes")
     bytes_ax.set_title("Software-recorded application-visible H2D/D2H bytes")
     bytes_ax.legend(fontsize="small", ncol=2)
     bytes_ax.grid(True, axis="y", alpha=0.3)
 
     ratios = [row.get("transfer_ratio_none_over_quantized") for row in ordered]
-    ratio_ax.bar(x, [float(value) if _positive(value) is not None else 0.0 for value in ratios], color="#0f766e")
+    ratio_ax.bar(
+        x,
+        [float(value) if _positive(value) is not None else 0.0 for value in ratios],
+        color="#0f766e",
+    )
     ratio_ax.axhline(1.0, color="#64748b", linestyle="--", linewidth=1.0)
     ratio_ax.set_ylabel("float32 total bytes / int8 total bytes")
     ratio_ax.set_xlabel("Case")
@@ -3312,16 +5246,287 @@ def _plot_quantization_transfer_bytes(plt: Any, path: Path, rows: list[JsonDict]
     return None
 
 
-def _plot_internal_parallelism(plt: Any, path: Path, rows: list[JsonDict]) -> str | None:
-    selected = [row for row in rows if row.get("route_id") in {"cpu_tn_frontier_exact", "cpu_tn_hybrid_sliced_frontier_exact"}]
+def _plot_physical_quantization_runtime(
+    plt: Any, path: Path, rows: list[JsonDict]
+) -> str | None:
+    selected = [
+        row
+        for row in rows
+        if _positive(row.get("float32_warm_runtime_s")) is not None
+        and _positive(row.get("int8_warm_runtime_s")) is not None
+        and row.get("float32_timing_class") == "measured_warm"
+        and row.get("int8_timing_class") == "measured_warm"
+    ]
+    if not selected:
+        return "no_matched_physical_measured_warm_runtime_rows"
+    ordered = sorted(
+        selected,
+        key=lambda row: (str(row.get("case_id") or ""), int(row.get("repeat_id") or 0)),
+    )
+    labels = [f"{row.get('case_id')}_{row.get('repeat_id')}" for row in ordered]
+    x = list(range(len(ordered)))
+    fig, ax = plt.subplots(
+        figsize=(max(8.0, len(labels) * 0.55), 5.2), constrained_layout=True
+    )
+    ax.bar(
+        [value - 0.18 for value in x],
+        [float(row["float32_warm_runtime_s"]) for row in ordered],
+        0.36,
+        label="float32",
+        color="#2563eb",
+    )
+    ax.bar(
+        [value + 0.18 for value in x],
+        [float(row["int8_warm_runtime_s"]) for row in ordered],
+        0.36,
+        label="int8",
+        color="#b45309",
+    )
+    ax.set_yscale("log")
+    ax.set_ylabel("Measured warm route time (s, log)")
+    ax.set_title("Physical UPMEM TaskGraph warm timing (not speedup)")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=60, ha="right", fontsize=8)
+    ax.legend(fontsize="small")
+    ax.grid(True, axis="y", alpha=0.3)
+    _save_plot(fig, path)
+    return None
+
+
+def _plot_physical_quantization_transfer(
+    plt: Any, path: Path, rows: list[JsonDict]
+) -> str | None:
+    selected = [
+        row
+        for row in rows
+        if _positive(row.get("float32_transfer_bytes")) is not None
+        and _positive(row.get("int8_transfer_bytes")) is not None
+    ]
+    if not selected:
+        return "no_matched_physical_transfer_rows"
+    ordered = sorted(
+        selected,
+        key=lambda row: (str(row.get("case_id") or ""), int(row.get("repeat_id") or 0)),
+    )
+    labels = [f"{row.get('case_id')}_{row.get('repeat_id')}" for row in ordered]
+    x = list(range(len(ordered)))
+    fig, ax = plt.subplots(
+        figsize=(max(8.0, len(labels) * 0.55), 5.2), constrained_layout=True
+    )
+    ax.bar(
+        [value - 0.18 for value in x],
+        [float(row["float32_transfer_bytes"]) for row in ordered],
+        0.36,
+        label="float32",
+        color="#2563eb",
+    )
+    ax.bar(
+        [value + 0.18 for value in x],
+        [float(row["int8_transfer_bytes"]) for row in ordered],
+        0.36,
+        label="int8",
+        color="#b45309",
+    )
+    ax.set_ylabel("Application-visible transfer bytes")
+    ax.set_title("Physical UPMEM TaskGraph transfer attribution")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=60, ha="right", fontsize=8)
+    ax.legend(fontsize="small")
+    ax.grid(True, axis="y", alpha=0.3)
+    _save_plot(fig, path)
+    return None
+
+
+def _plot_physical_quantization_error(
+    plt: Any, path: Path, rows: list[JsonDict]
+) -> str | None:
+    selected = [
+        row
+        for row in rows
+        if _float_or_none(row.get("float32_max_abs_error")) is not None
+        or _float_or_none(row.get("int8_max_abs_error")) is not None
+    ]
+    if not selected:
+        return "no_physical_error_metadata"
+    ordered = sorted(
+        selected,
+        key=lambda row: (str(row.get("case_id") or ""), int(row.get("repeat_id") or 0)),
+    )
+    labels = [f"{row.get('case_id')}_{row.get('repeat_id')}" for row in ordered]
+    x = list(range(len(ordered)))
+    fig, ax = plt.subplots(
+        figsize=(max(8.0, len(labels) * 0.55), 5.2), constrained_layout=True
+    )
+    ax.bar(
+        [value - 0.18 for value in x],
+        [float(row.get("float32_max_abs_error") or 0.0) for row in ordered],
+        0.36,
+        label="float32",
+        color="#2563eb",
+    )
+    ax.bar(
+        [value + 0.18 for value in x],
+        [float(row.get("int8_max_abs_error") or 0.0) for row in ordered],
+        0.36,
+        label="int8",
+        color="#b45309",
+    )
+    ax.set_ylabel("Recorded maximum absolute error")
+    ax.set_title("Physical UPMEM TaskGraph validation error")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=60, ha="right", fontsize=8)
+    ax.legend(fontsize="small")
+    ax.grid(True, axis="y", alpha=0.3)
+    _save_plot(fig, path)
+    return None
+
+
+def _plot_physical_taskgraph_validation(
+    plt: Any, path: Path, rows: list[JsonDict]
+) -> str | None:
+    selected = [row for row in rows if row.get("validation_passed") is not None]
+    if not selected:
+        return "no_physical_taskgraph_validation_rows"
+    ordered = sorted(
+        selected,
+        key=lambda row: (
+            str(row.get("case_id") or ""),
+            int(row.get("repeat_id") or 0),
+            str(row.get("quantization_mode") or ""),
+        ),
+    )
+    labels = [
+        f"{row.get('case_id')}_{row.get('repeat_id')}_{row.get('quantization_mode') or 'unknown'}"
+        for row in ordered
+    ]
+    fig, ax = plt.subplots(
+        figsize=(max(8.0, len(labels) * 0.55), 5.2), constrained_layout=True
+    )
+    ax.bar(
+        range(len(ordered)),
+        [1.0 if row.get("validation_passed") else 0.0 for row in ordered],
+        color="#0f766e",
+    )
+    ax.set_ylim(-0.05, 1.05)
+    ax.set_ylabel("Validation passed (1/0)")
+    ax.set_title("Physical UPMEM TaskGraph validation")
+    ax.set_xticks(range(len(ordered)))
+    ax.set_xticklabels(labels, rotation=65, ha="right", fontsize=8)
+    ax.grid(True, axis="y", alpha=0.3)
+    _save_plot(fig, path)
+    return None
+
+
+def _plot_physical_taskgraph_timing(
+    plt: Any, path: Path, rows: list[JsonDict]
+) -> str | None:
+    selected = [row for row in rows if row.get("timing_class") == "measured_warm"]
+    component_fields = (
+        "allocation_time_s",
+        "binary_load_time_s",
+        "h2d_time_s",
+        "d2h_time_s",
+        "total_quantization_time_s",
+        "total_dequantization_time_s",
+        "total_bridge_time_s",
+        "total_build_time_s",
+        "validation_time_s",
+        "output_materialization_time_s",
+    )
+    selected = [
+        row
+        for row in selected
+        if any(_positive(row.get(field)) is not None for field in component_fields)
+    ]
+    if not selected:
+        return "no_physical_measured_warm_timing_rows_bringup_excluded"
+    ordered = sorted(
+        selected,
+        key=lambda row: (
+            str(row.get("case_id") or ""),
+            int(row.get("repeat_id") or 0),
+            str(row.get("quantization_mode") or ""),
+        ),
+    )
+    labels = [
+        f"{row.get('case_id')}_{row.get('repeat_id')}_{row.get('quantization_mode') or 'unknown'}"
+        for row in ordered
+    ]
+    x = list(range(len(ordered)))
+    fig, ax = plt.subplots(
+        figsize=(max(8.0, len(labels) * 0.55), 5.8), constrained_layout=True
+    )
+    bottom = [0.0] * len(ordered)
+    colors = (
+        "#64748b",
+        "#94a3b8",
+        "#2563eb",
+        "#93c5fd",
+        "#b45309",
+        "#fdba74",
+        "#0f766e",
+        "#5eead4",
+        "#7c3aed",
+        "#c4b5fd",
+    )
+    labels_by_field = {
+        "allocation_time_s": "allocation",
+        "binary_load_time_s": "binary load",
+        "h2d_time_s": "H2D",
+        "d2h_time_s": "D2H",
+        "total_quantization_time_s": "quantization",
+        "total_dequantization_time_s": "dequantization",
+        "total_bridge_time_s": "bridge",
+        "total_build_time_s": "build",
+        "validation_time_s": "validation",
+        "output_materialization_time_s": "output",
+    }
+    for field, color in zip(component_fields, colors):
+        values = [float(row.get(field) or 0.0) for row in ordered]
+        ax.bar(x, values, 0.8, bottom=bottom, label=labels_by_field[field], color=color)
+        bottom = [left + value for left, value in zip(bottom, values)]
+    warm_values = [float(row.get("warm_runtime_s") or 0.0) for row in ordered]
+    if any(warm_values):
+        ax.plot(
+            x,
+            warm_values,
+            color="#111827",
+            marker="o",
+            linewidth=1.5,
+            label="warm route total",
+        )
+    ax.set_ylabel("Recorded measured warm time (s)")
+    ax.set_title("Physical UPMEM TaskGraph timing breakdown")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=65, ha="right", fontsize=8)
+    ax.legend(fontsize="small", ncol=3)
+    ax.grid(True, axis="y", alpha=0.3)
+    _save_plot(fig, path)
+    return None
+
+
+def _plot_internal_parallelism(
+    plt: Any, path: Path, rows: list[JsonDict]
+) -> str | None:
+    selected = [
+        row
+        for row in rows
+        if row.get("route_id")
+        in {"cpu_tn_frontier_exact", "cpu_tn_hybrid_sliced_frontier_exact"}
+    ]
     if not selected:
         return "no_internal_parallelism_rows"
     selected = [row for row in selected if _plot_qubits(row) is not None]
     if not selected:
         return "no_actual_qubit_metadata"
-    labels = [f"{row['route_id']}_{row['case_family']}_{_plot_qubits(row)}q" for row in selected]
+    labels = [
+        f"{row['route_id']}_{row['case_family']}_{_plot_qubits(row)}q"
+        for row in selected
+    ]
     widths = [float(row.get("max_frontier_width") or 0.0) for row in selected]
-    fig, ax = plt.subplots(figsize=(max(8.0, len(labels) * 0.5), 4.8), constrained_layout=True)
+    fig, ax = plt.subplots(
+        figsize=(max(8.0, len(labels) * 0.5), 4.8), constrained_layout=True
+    )
     ax.bar(range(len(labels)), widths, color="#0891b2")
     ax.set_xticks(range(len(labels)))
     ax.set_xticklabels(labels, rotation=65, ha="right", fontsize=8)
@@ -3364,6 +5569,11 @@ def _caption(filename: str) -> str:
         "quantization_error_by_family_size.png": "UPMEM SDK simulator int8 maximum absolute error against the full-precision TaskGraph reference.",
         "quantization_probability_error_by_family_size.png": "Recorded matched UPMEM SDK-simulator probability errors when validation records provide them; otherwise an explicit TODO figure.",
         "same_plan_cpu_upmem_runtime.png": "CPU replay and UPMEM SDK simulator rows share an identical contraction-plan hash; timing is not hardware speedup.",
+        "upmem_physical_quantization_runtime.png": "Matched physical UPMEM TaskGraph float32/int8 warm route timing; bring-up-only wall time is excluded and this is not a speedup claim.",
+        "upmem_physical_quantization_transfer.png": "Matched physical UPMEM TaskGraph application-visible float32/int8 transfer bytes; not physical bus traffic or a speedup claim.",
+        "upmem_physical_quantization_error.png": "Matched physical UPMEM TaskGraph recorded float32/int8 validation error; missing error metadata is not inferred.",
+        "upmem_physical_taskgraph_validation.png": "Physical UPMEM TaskGraph validation and task coverage, including bring-up rows; not a performance figure.",
+        "upmem_physical_taskgraph_timing_breakdown.png": "Physical UPMEM TaskGraph measured warm timing components; bring-up-only timing is labeled and excluded.",
         "planner_flops_vs_upmem_pressure.png": "Planner-estimated FLOPs versus normalized modeled PIM objective for feasible candidates.",
         "planner_component_scores.png": "Normalized modeled PIM objective components; scenario weights are not measured hardware constants.",
         "planner_selection.png": "Selected feasible planner candidate per modeled PIM objective profile.",
@@ -3403,7 +5613,11 @@ def _stats(prefix: str, values: list[float]) -> JsonDict:
 
 
 def _numbers(values: Iterable[Any]) -> list[float]:
-    return [number for number in (_float_or_none(value) for value in values) if number is not None]
+    return [
+        number
+        for number in (_float_or_none(value) for value in values)
+        if number is not None
+    ]
 
 
 def _positive(value: Any) -> float | None:
@@ -3525,7 +5739,10 @@ def _full_precision_errors(record: JsonDict) -> JsonDict:
 def _accuracy_errors_for_reporting(record: JsonDict) -> JsonDict:
     execution = _validation_errors(record)
     full_precision = _full_precision_errors(record)
-    if str(_record_value(record, "quantization_mode") or "") == "per_task_input_quantize":
+    if (
+        str(_record_value(record, "quantization_mode") or "")
+        == "per_task_input_quantize"
+    ):
         return {
             key: full_precision.get(key, execution.get(key))
             for key in ("max_abs_error", "l2_error", "norm_drift")
@@ -3586,7 +5803,8 @@ def _is_strict_generic_upmem_record(record: JsonDict) -> bool:
     return (
         record.get("contraction_execution_target") == "upmem"
         and str(_record_value(record, "policy") or "") == "generic-only"
-        and str(_record_value(record, "quantization_mode") or "") in {"none", "per_task_input_quantize"}
+        and str(_record_value(record, "quantization_mode") or "")
+        in {"none", "per_task_input_quantize"}
     )
 
 
@@ -3600,12 +5818,148 @@ def _is_hardware_mvp_record(record: JsonDict) -> bool:
 def _is_hardware_generic_mvp_record(record: JsonDict) -> bool:
     return (
         record.get("contraction_execution_target") == "upmem"
-        and record.get("benchmark_role") == "hardware_generic_taskgraph_functionality_mvp"
+        and record.get("benchmark_role")
+        == "hardware_generic_taskgraph_functionality_mvp"
     )
 
 
 def _is_physical_hardware_mvp_record(record: JsonDict) -> bool:
     return _is_hardware_mvp_record(record) or _is_hardware_generic_mvp_record(record)
+
+
+def _is_physical_upmem_taskgraph_record(record: JsonDict) -> bool:
+    """Recognize physical TaskGraph evidence while keeping bring-up separate."""
+    if record.get("contraction_execution_target") != "upmem":
+        return False
+    if _is_physical_hardware_mvp_record(record):
+        return False
+    mode = str(record.get("upmem_execution_mode") or "").lower()
+    physical = (
+        any(
+            (
+                record.get(field) is True
+                for field in ("hardware_execution", "hardware_kernel_executed")
+            )
+        )
+        or str(record.get("target_observed") or "").lower() == "hardware"
+        or "hardware" in mode
+    )
+    if not physical:
+        return False
+    scope = " ".join(
+        str(record.get(field) or "").lower()
+        for field in (
+            "execution_scope",
+            "execution_plan_kind",
+            "route_id",
+            "backend_id",
+        )
+    )
+    return (
+        "taskgraph" in scope
+        or _record_value(record, "task_count") is not None
+        or _record_value(record, "upmem_task_count") is not None
+    )
+
+
+def _physical_taskgraph_dtype(record: JsonDict) -> str | None:
+    mode = str(_record_value(record, "quantization_mode") or "").lower()
+    dtype = str(
+        _record_value(record, "input_dtype_on_dpu") or record.get("input_dtype") or ""
+    ).lower()
+    if (
+        mode in {"none", "float32", "float32_no_quant", "no_quantization"}
+        or dtype == "float32"
+    ):
+        return "float32"
+    if (
+        mode
+        in {
+            "per_task_input_quantize",
+            "int8",
+            "int8_scaled",
+            "fixed_scale_identity_int8",
+        }
+        or dtype == "int8"
+    ):
+        return "int8"
+    return None
+
+
+def _physical_bool(record: JsonDict, field: str) -> bool | None:
+    value = _record_value(record, field)
+    return value if isinstance(value, bool) else None
+
+
+def _physical_number(record: JsonDict, *fields: str) -> float | None:
+    for field in fields:
+        value = _float_or_none(_record_value(record, field))
+        if value is not None:
+            return value
+    return None
+
+
+def _physical_transfer_bytes(record: JsonDict) -> float | None:
+    return _physical_number(
+        record, "actual_transfer_bytes", "application_visible_transfer_bytes"
+    )
+
+
+def _physical_directional_transfer(record: JsonDict, direction: str) -> float | None:
+    return _physical_number(
+        record,
+        f"actual_{direction}_bytes",
+        f"application_visible_{direction}_bytes",
+        f"{direction}_bytes",
+    )
+
+
+def _physical_timing_class(record: JsonDict) -> str:
+    if (
+        bool(_record_value(record, "timing_is_bringup_only"))
+        or "bringup" in str(record.get("timing_scope") or "").lower()
+    ):
+        return "bringup_only"
+    if (
+        _record_value(record, "hardware_timing_available") is True
+        and _physical_warm_runtime(record) is not None
+    ):
+        return "measured_warm"
+    return "unavailable"
+
+
+def _physical_warm_runtime(record: JsonDict) -> float | None:
+    """Return only explicitly measured warm hardware timing, never bring-up wall time."""
+    if _record_value(record, "hardware_timing_available") is not True:
+        return None
+    if bool(_record_value(record, "timing_is_bringup_only")):
+        return None
+    for field in (
+        "warm_runtime_s",
+        "warm_total_route_time_s",
+        "warm_route_time_s",
+        "measured_warm_runtime_s",
+        "measured_warm_total_route_time_s",
+        "warm_total_wall_time_s",
+        "warm_runtime_wall_time_s",
+        "upmem_runtime_warm_time_s",
+        "total_route_time_s",
+    ):
+        value = _float_or_none(_record_value(record, field))
+        if value is not None and value > 0:
+            return value
+    return None
+
+
+def _physical_error(record: JsonDict) -> float | None:
+    return _physical_number(
+        record,
+        "quantization_max_abs_error",
+        "full_precision_max_abs_error",
+        "validation_max_abs_error",
+        "max_abs_error",
+        "execution_max_abs_error",
+    )
 
 
 def _hardware_mvp_issues(record: JsonDict) -> list[str]:
@@ -3637,9 +5991,13 @@ def _hardware_mvp_issues(record: JsonDict) -> list[str]:
         if record.get(field) is not True:
             issues.append(f"completed hardware MVP row lacks {field}: {case}/{route}")
     if str(record.get("target_observed") or "") != "hardware":
-        issues.append(f"completed hardware MVP row did not observe hardware: {case}/{route}")
+        issues.append(
+            f"completed hardware MVP row did not observe hardware: {case}/{route}"
+        )
     if str(record.get("validation_status") or "") != "passed":
-        issues.append(f"completed hardware MVP row did not pass validation: {case}/{route}")
+        issues.append(
+            f"completed hardware MVP row did not pass validation: {case}/{route}"
+        )
     if _int_or_none(record.get("requested_dpu_count")) != 1:
         issues.append(f"hardware MVP row requested other than one DPU: {case}/{route}")
     if _int_or_none(record.get("allocated_dpu_count")) != 1:
@@ -3661,34 +6019,62 @@ def _strict_generic_upmem_issues(record: JsonDict) -> list[str]:
     mode = str(_record_value(record, "quantization_mode") or "")
     issues: list[str] = []
     if policy != "generic-only":
-        issues.append(f"UPMEM research row is not generic-only: {case}/{route} policy={policy or 'missing'}")
+        issues.append(
+            f"UPMEM research row is not generic-only: {case}/{route} policy={policy or 'missing'}"
+        )
         return issues
     if mode not in {"none", "per_task_input_quantize"}:
-        issues.append(f"UPMEM generic research row has unsupported quantization mode: {case}/{route} mode={mode or 'missing'}")
+        issues.append(
+            f"UPMEM generic research row has unsupported quantization mode: {case}/{route} mode={mode or 'missing'}"
+        )
         return issues
     if str(record.get("upmem_execution_mode") or "") != "sdk_simulator":
-        issues.append(f"UPMEM generic research row is not SDK simulator execution: {case}/{route}")
+        issues.append(
+            f"UPMEM generic research row is not SDK simulator execution: {case}/{route}"
+        )
     if _bool(record.get("cpu_fallback_used")):
         issues.append(f"UPMEM generic research row used CPU fallback: {case}/{route}")
     if str(record.get("status") or "") != "completed":
         return issues
     if record.get("kernel_family") != "generic_loop_fallback":
-        issues.append(f"completed UPMEM generic research row is not generic-loop evidence: {case}/{route}")
+        issues.append(
+            f"completed UPMEM generic research row is not generic-loop evidence: {case}/{route}"
+        )
     if _record_value(record, "generic_only_all_tasks_used_generic_backend") is not True:
-        issues.append(f"completed UPMEM generic research row lacks all-task generic proof: {case}/{route}")
+        issues.append(
+            f"completed UPMEM generic research row lacks all-task generic proof: {case}/{route}"
+        )
     if _record_value(record, "valid_primary_upmem_codepath_result") is not True:
-        issues.append(f"completed UPMEM generic research row lacks primary SDK-path proof: {case}/{route}")
+        issues.append(
+            f"completed UPMEM generic research row lacks primary SDK-path proof: {case}/{route}"
+        )
     if _record_value(record, "upmem_program_executed") is not True:
-        issues.append(f"completed UPMEM generic research row lacks DPU program execution proof: {case}/{route}")
+        issues.append(
+            f"completed UPMEM generic research row lacks DPU program execution proof: {case}/{route}"
+        )
     if (_int_or_none(_record_value(record, "dpu_program_invocations")) or 0) <= 0:
-        issues.append(f"completed UPMEM generic research row lacks DPU invocations: {case}/{route}")
+        issues.append(
+            f"completed UPMEM generic research row lacks DPU invocations: {case}/{route}"
+        )
     return issues
 
 
 def _family_and_qubits(record: JsonDict) -> tuple[str, JsonDict]:
     case_id = str(record.get("case_id") or "")
-    family = case_id.split("_")[1] if case_id.startswith("quest_") and "_" in case_id else case_id.split("_")[0]
-    for key in ("actual_n_qubits", "benchmark_n_qubits", "case_n_qubits", "workload_n_qubits", "circuit_n_qubits", "n_qubits", "allocated_qubits"):
+    family = (
+        case_id.split("_")[1]
+        if case_id.startswith("quest_") and "_" in case_id
+        else case_id.split("_")[0]
+    )
+    for key in (
+        "actual_n_qubits",
+        "benchmark_n_qubits",
+        "case_n_qubits",
+        "workload_n_qubits",
+        "circuit_n_qubits",
+        "n_qubits",
+        "allocated_qubits",
+    ):
         value = _int_or_none(record.get(key))
         if value is not None:
             return family, _qubit_metadata(value, key, None)
@@ -3701,7 +6087,9 @@ def _family_and_qubits(record: JsonDict) -> tuple[str, JsonDict]:
     return family, _qubit_metadata(None, None, warning)
 
 
-def _qubit_metadata(value: int | None, source: str | None, warning: str | None) -> JsonDict:
+def _qubit_metadata(
+    value: int | None, source: str | None, warning: str | None
+) -> JsonDict:
     return {
         "actual_n_qubits": value,
         "benchmark_n_qubits": value,
@@ -3793,11 +6181,17 @@ def _is_unsupported(record: JsonDict) -> bool:
 
 
 def _valid_for_pair(record: JsonDict) -> bool:
-    return str(record.get("validation_status") or "") in {"passed", "passed_native_status", "passed_runtime_only"}
+    return str(record.get("validation_status") or "") in {
+        "passed",
+        "passed_native_status",
+        "passed_runtime_only",
+    }
 
 
 def _selected_suites(suite_filter: list[str] | None) -> list[str]:
-    return [key for key in SUITE_COMMAND_ORDER if not suite_filter or key in suite_filter]
+    return [
+        key for key in SUITE_COMMAND_ORDER if not suite_filter or key in suite_filter
+    ]
 
 
 def _research_suite_argv(key: str, root: Path) -> list[str]:
@@ -3815,9 +6209,20 @@ def _research_suite_argv(key: str, root: Path) -> list[str]:
             "--artifact-retention",
             "compact",
         ]
-    if key in {"planner_paths", "planner_sensitivity", "planner_paths_v1", "planner_sensitivity_v1"}:
+    if key in {
+        "planner_paths",
+        "planner_sensitivity",
+        "planner_paths_v1",
+        "planner_sensitivity_v1",
+    }:
         return ["compare-planners", "--suite", suite]
-    return ["simulation-backend-compare", "--suite", suite, "--artifact-retention", "compact"]
+    return [
+        "simulation-backend-compare",
+        "--suite",
+        suite,
+        "--artifact-retention",
+        "compact",
+    ]
 
 
 def _pack_dir(root: Path, out: Path | None, *, label: str | None = None) -> Path:
@@ -3833,7 +6238,9 @@ def _comparison_namespace(root: Path, label: str | None) -> Path:
         return DEFAULT_COMPARISON_ROOT
     value = str(label).strip()
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", value):
-        raise ValueError("comparison label must contain only letters, digits, '.', '_' or '-'")
+        raise ValueError(
+            "comparison label must contain only letters, digits, '.', '_' or '-'"
+        )
     return root / "runs" / "comparisons" / value
 
 
@@ -3860,9 +6267,15 @@ def _latest_evidence_for_suite(root: Path, suite_id: str) -> Path | None:
     if not suite_root.exists():
         return None
     latest = suite_root / "latest"
-    if latest.is_symlink() and latest.exists() and (latest.resolve() / "normalized_records.jsonl").is_file():
+    if (
+        latest.is_symlink()
+        and latest.exists()
+        and (latest.resolve() / "normalized_records.jsonl").is_file()
+    ):
         return latest.resolve()
-    candidates = [path.parent for path in suite_root.glob("*/*/normalized_records.jsonl")]
+    candidates = [
+        path.parent for path in suite_root.glob("*/*/normalized_records.jsonl")
+    ]
     if not candidates:
         return None
     return max(candidates, key=lambda path: path.stat().st_mtime).resolve()
@@ -3871,7 +6284,9 @@ def _latest_evidence_for_suite(root: Path, suite_id: str) -> Path | None:
 def _write_csv(path: Path, rows: list[JsonDict], fields: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore", lineterminator="\n")
+        writer = csv.DictWriter(
+            handle, fieldnames=fields, extrasaction="ignore", lineterminator="\n"
+        )
         writer.writeheader()
         for row in rows:
             writer.writerow({field: _csv_value(row.get(field)) for field in fields})
@@ -3885,7 +6300,9 @@ def _csv_value(value: Any) -> Any:
 
 def _write_json(path: Path, payload: JsonDict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def _read_optional_json(path: Path) -> JsonDict | None:
@@ -3904,7 +6321,9 @@ def _evidence_source_provenance(evidence_inputs: list[Path]) -> JsonDict:
     for evidence in evidence_inputs:
         root = evidence if evidence.is_dir() else evidence.parent
         manifest = _read_optional_json(root / "run_manifest.json") or {}
-        commit = str(manifest.get("benchmark_source_commit") or manifest.get("git_commit") or "")
+        commit = str(
+            manifest.get("benchmark_source_commit") or manifest.get("git_commit") or ""
+        )
         if commit:
             commits.add(commit)
         source_dirty = source_dirty or bool(
@@ -3912,7 +6331,9 @@ def _evidence_source_provenance(evidence_inputs: list[Path]) -> JsonDict:
             if manifest.get("benchmark_source_worktree_dirty") is not None
             else manifest.get("dirty_tree", manifest.get("dirty_worktree", False))
         )
-        repository_dirty = repository_dirty or bool(manifest.get("repository_worktree_dirty", False))
+        repository_dirty = repository_dirty or bool(
+            manifest.get("repository_worktree_dirty", False)
+        )
     ordered_commits = sorted(commits)
     return {
         "commit": ordered_commits[0] if len(ordered_commits) == 1 else None,
@@ -3923,13 +6344,28 @@ def _evidence_source_provenance(evidence_inputs: list[Path]) -> JsonDict:
 
 
 def _gpu_verification_passed(root: Path) -> bool:
-    payload = _read_optional_json(root / "build" / "gpu_verification" / "quest_gpu_full_state_exact.json")
-    return bool(payload and payload.get("gpu_backend_verified") is True and payload.get("gpu_program_executed") is True)
+    payload = _read_optional_json(
+        root / "build" / "gpu_verification" / "quest_gpu_full_state_exact.json"
+    )
+    return bool(
+        payload
+        and payload.get("gpu_backend_verified") is True
+        and payload.get("gpu_program_executed") is True
+    )
 
 
 def _gpu_blocker_reason(root: Path) -> str:
-    payload = _read_optional_json(root / "build" / "gpu_verification" / "quest_gpu_full_state_exact.json") or {}
-    return str(payload.get("blocker_reason") or payload.get("status") or "gpu_verification_failed")
+    payload = (
+        _read_optional_json(
+            root / "build" / "gpu_verification" / "quest_gpu_full_state_exact.json"
+        )
+        or {}
+    )
+    return str(
+        payload.get("blocker_reason")
+        or payload.get("status")
+        or "gpu_verification_failed"
+    )
 
 
 def _skipped_group_result(group: str, reason: str) -> JsonDict:
@@ -3966,17 +6402,27 @@ def _cpu_metadata() -> JsonDict:
             if line.lower().startswith("model name"):
                 model = line.split(":", 1)[1].strip()
                 break
-    return {"model": model or platform.processor() or None, "logical_count": os.cpu_count()}
+    return {
+        "model": model or platform.processor() or None,
+        "logical_count": os.cpu_count(),
+    }
 
 
 def _git(root: Path, args: list[str]) -> str | None:
-    result = subprocess.run(["git", *args], cwd=root, text=True, capture_output=True, check=False)
+    result = subprocess.run(
+        ["git", *args], cwd=root, text=True, capture_output=True, check=False
+    )
     return result.stdout.strip() if result.returncode == 0 else None
 
 
 def _run_capture(root: Path, argv: list[str]) -> JsonDict:
     result = subprocess.run(argv, cwd=root, text=True, capture_output=True, check=False)
-    return {"command": " ".join(argv), "returncode": result.returncode, "stdout": result.stdout[-4000:], "stderr": result.stderr[-4000:]}
+    return {
+        "command": " ".join(argv),
+        "returncode": result.returncode,
+        "stdout": result.stdout[-4000:],
+        "stderr": result.stderr[-4000:],
+    }
 
 
 def _bench_argv(args: list[str]) -> list[str]:
