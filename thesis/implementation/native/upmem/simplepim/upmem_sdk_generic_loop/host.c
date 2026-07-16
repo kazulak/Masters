@@ -1,4 +1,5 @@
 #include <dpu.h>
+#include <ctype.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -581,7 +582,526 @@ session_response:
     }
 }
 
+static int interactive_safe_relative(const char *path) {
+    const char *cursor = path;
+    if (path == NULL || path[0] == '\0' || path[0] == '/') return 1;
+    while (*cursor != '\0') {
+        const char *start = cursor;
+        while (*cursor != '\0' && *cursor != '/') cursor++;
+        if ((size_t)(cursor - start) == 2u && start[0] == '.' && start[1] == '.') return 1;
+        if (*cursor == '/') cursor++;
+    }
+    return 0;
+}
+
+static char *interactive_base(const char *manifest_path) {
+    const char *slash = strrchr(manifest_path, '/');
+    const size_t length = slash == NULL ? 1u : (size_t)(slash - manifest_path);
+    char *base = (char *)malloc(length + 1u);
+    if (base == NULL) return NULL;
+    if (slash == NULL) memcpy(base, ".", 2u);
+    else {
+        memcpy(base, manifest_path, length);
+        base[length] = '\0';
+    }
+    return base;
+}
+
+static char *interactive_resolve(const char *base, const char *relative) {
+    const size_t base_length = strlen(base);
+    const size_t relative_length = strlen(relative);
+    char *resolved;
+    if (interactive_safe_relative(relative) != 0) return NULL;
+    resolved = (char *)malloc(base_length + 1u + relative_length + 1u);
+    if (resolved == NULL) return NULL;
+    memcpy(resolved, base, base_length);
+    resolved[base_length] = '/';
+    memcpy(resolved + base_length + 1u, relative, relative_length + 1u);
+    return resolved;
+}
+
+static void interactive_json_string(const char *value) {
+    const unsigned char *cursor = (const unsigned char *)(value ? value : "");
+    fputc('"', stdout);
+    for (; *cursor != '\0'; cursor++) {
+        if (*cursor == '"' || *cursor == '\\') {
+            fputc('\\', stdout);
+            fputc(*cursor, stdout);
+        } else if (*cursor == '\n') fputs("\\n", stdout);
+        else if (*cursor == '\r') fputs("\\r", stdout);
+        else if (*cursor == '\t') fputs("\\t", stdout);
+        else if (*cursor < 0x20u) fprintf(stdout, "\\u%04x", (unsigned)*cursor);
+        else fputc(*cursor, stdout);
+    }
+    fputc('"', stdout);
+}
+
+static void interactive_event(
+    const char *event,
+    const char *status,
+    const char *failure_stage,
+    const char *error_message,
+    const char *response_path,
+    uint32_t allocated_dpus,
+    double allocation_time_s,
+    double binary_load_time_s,
+    double release_time_s,
+    int released
+) {
+    printf("{\"schema_version\":");
+    interactive_json_string(UPMEM_GENERIC_INTERACTIVE_SCHEMA);
+    printf(",\"event\":");
+    interactive_json_string(event);
+    printf(",\"status\":");
+    interactive_json_string(status);
+    printf(",\"failure_stage\":");
+    if (failure_stage) interactive_json_string(failure_stage); else fputs("null", stdout);
+    printf(",\"error\":");
+    if (error_message) interactive_json_string(error_message); else fputs("null", stdout);
+    printf(",\"response_path\":");
+    if (response_path) interactive_json_string(response_path); else fputs("null", stdout);
+    printf(",\"requested_dpus\":1,\"allocated_dpus\":%u,"
+           "\"allocation_time_s\":%.9f,\"binary_load_time_s\":%.9f,"
+           "\"released\":%s,\"release_time_s\":%.9f}\n",
+           allocated_dpus, allocation_time_s, binary_load_time_s,
+           released ? "true" : "false", release_time_s);
+    fflush(stdout);
+}
+
+static dpu_error_t interactive_release_and_event(
+    struct dpu_set_t set,
+    uint32_t allocated_dpus,
+    double allocation_time_s,
+    double binary_load_time_s
+) {
+    const double started = now_s();
+    const dpu_error_t error = dpu_free(set);
+    const double release_time_s = now_s() - started;
+    interactive_event(
+        "closed", error == DPU_OK ? "closed" : "failed",
+        error == DPU_OK ? NULL : "hardware_release_failed",
+        error == DPU_OK ? NULL : "interactive DPU release failed",
+        NULL, allocated_dpus, allocation_time_s, binary_load_time_s,
+        release_time_s, error == DPU_OK
+    );
+    return error;
+}
+
+static int run_interactive_request_tasks(
+    struct dpu_set_t set,
+    upmem_generic_session *request,
+    const char **failure_stage,
+    const char **failure_message
+) {
+    for (size_t index = 0; index < request->task_count; index++) {
+        upmem_generic_session_task *task = &request->tasks[index];
+        unsigned char *left = NULL;
+        unsigned char *right = NULL;
+        unsigned char *output = NULL;
+        const double task_started = now_s();
+        double stage_started;
+        dpu_error_t error = DPU_OK;
+
+        left = (unsigned char *)calloc(task->left_transfer_bytes, 1u);
+        right = (unsigned char *)calloc(task->right_transfer_bytes, 1u);
+        output = (unsigned char *)calloc(task->output_transfer_bytes, 1u);
+        if (left == NULL || right == NULL || output == NULL) {
+            mark_session_task_failure(task, "hardware_allocation_failed", -1);
+            *failure_stage = "hardware_allocation_failed";
+            *failure_message = "interactive request task buffers could not be allocated";
+            task->timing.total_time_s = now_s() - task_started;
+            free(left); free(right); free(output);
+            return 1;
+        }
+        stage_started = now_s();
+        if (read_exact(task->left_path, left, task->left_bytes) != 0 ||
+            read_exact(task->right_path, right, task->right_bytes) != 0) {
+            task->timing.input_read_time_s = now_s() - stage_started;
+            task->timing.total_time_s = now_s() - task_started;
+            mark_session_task_failure(task, "operand_transfer_failed", -1);
+            *failure_stage = "operand_transfer_failed";
+            *failure_message = "interactive request operands could not be read";
+            free(left); free(right); free(output);
+            return 1;
+        }
+        task->timing.input_read_time_s = now_s() - stage_started;
+
+        stage_started = now_s();
+        error = dpu_broadcast_to(set, "GENERIC_ARGS", 0, &task->args,
+                                 sizeof(task->args), DPU_XFER_DEFAULT);
+        if (error == DPU_OK) error = dpu_broadcast_to(
+            set, "GENERIC_A_RAW", 0, left, task->left_transfer_bytes, DPU_XFER_DEFAULT
+        );
+        if (error == DPU_OK) error = dpu_broadcast_to(
+            set, "GENERIC_B_RAW", 0, right, task->right_transfer_bytes, DPU_XFER_DEFAULT
+        );
+        task->timing.h2d_time_s = now_s() - stage_started;
+        if (error != DPU_OK) {
+            report_sdk_error("interactive request H2D", error);
+            task->sdk_error_code = (int)error;
+            task->timing.total_time_s = now_s() - task_started;
+            mark_session_task_failure(task, "operand_transfer_failed", (int)error);
+            *failure_stage = "operand_transfer_failed";
+            *failure_message = "interactive request H2D transfer failed";
+            free(left); free(right); free(output);
+            return 1;
+        }
+
+        stage_started = now_s();
+        error = dpu_launch(set, DPU_SYNCHRONOUS);
+        task->timing.kernel_time_s = now_s() - stage_started;
+        if (error != DPU_OK) {
+            report_sdk_error("interactive request dpu_launch", error);
+            task->sdk_error_code = (int)error;
+            task->timing.total_time_s = now_s() - task_started;
+            mark_session_task_failure(task, "kernel_launch_failed", (int)error);
+            *failure_stage = "kernel_launch_failed";
+            *failure_message = "interactive request synchronous launch failed";
+            free(left); free(right); free(output);
+            return 1;
+        }
+
+        stage_started = now_s();
+        {
+            struct dpu_set_t dpu;
+            DPU_FOREACH(set, dpu) {
+                error = dpu_copy_from(dpu, "GENERIC_C_RAW", 0, output,
+                                      task->output_transfer_bytes);
+                break;
+            }
+        }
+        task->timing.d2h_time_s = now_s() - stage_started;
+        if (error != DPU_OK) {
+            report_sdk_error("interactive request D2H", error);
+            task->sdk_error_code = (int)error;
+            task->timing.total_time_s = now_s() - task_started;
+            mark_session_task_failure(task, "result_transfer_failed", (int)error);
+            *failure_stage = "result_transfer_failed";
+            *failure_message = "interactive request D2H transfer failed";
+            free(left); free(right); free(output);
+            return 1;
+        }
+
+        stage_started = now_s();
+        if (write_exact(task->output_path, output, task->output_bytes) != 0) {
+            task->timing.output_write_time_s = now_s() - stage_started;
+            task->timing.total_time_s = now_s() - task_started;
+            mark_session_task_failure(task, "output_manifest_failed", -1);
+            *failure_stage = "output_manifest_failed";
+            *failure_message = "interactive request output could not be written";
+            free(left); free(right); free(output);
+            return 1;
+        }
+        task->timing.output_write_time_s = now_s() - stage_started;
+        task->timing.total_time_s = now_s() - task_started;
+        task->result_status = UPMEM_GENERIC_SESSION_TASK_COMPLETED;
+        task->sdk_error_code = 0;
+        free(left); free(right); free(output);
+    }
+    return 0;
+}
+
+static int run_interactive(const char *bootstrap_path) {
+    upmem_generic_interactive_bootstrap bootstrap;
+    char *manifest_error = NULL;
+    char *base = NULL;
+    struct dpu_set_t set;
+    dpu_error_t error = DPU_OK;
+    uint32_t allocated_dpus = 0u;
+    int set_allocated = 0;
+    double allocation_time_s = 0.0;
+    double binary_load_time_s = 0.0;
+    char line[4096];
+
+    if (upmem_generic_interactive_bootstrap_load(
+            bootstrap_path, &bootstrap, &manifest_error) != 0) {
+        interactive_event("error", "failed", "manifest_parse_failed", manifest_error,
+                          NULL, 0u, 0.0, 0.0, 0.0, 0);
+        free(manifest_error);
+        return 2;
+    }
+    base = interactive_base(bootstrap_path);
+    if (base == NULL) {
+        interactive_event("error", "failed", "protocol_error",
+                          "interactive session root unavailable", NULL, 0u, 0.0, 0.0, 0.0, 0);
+        upmem_generic_interactive_bootstrap_free(&bootstrap);
+        return 2;
+    }
+#if NR_TASKLETS != 1
+    interactive_event("error", "failed", "hardware_profile_violation",
+                      "interactive session requires NR_TASKLETS=1", NULL, 0u, 0.0, 0.0, 0.0, 0);
+    free(base);
+    upmem_generic_interactive_bootstrap_free(&bootstrap);
+    return 2;
+#endif
+    {
+        const double started = now_s();
+        error = dpu_alloc(bootstrap.requested_dpus, UPMEM_GENERIC_ALLOCATION_PROFILE, &set);
+        allocation_time_s = now_s() - started;
+    }
+    if (error != DPU_OK) {
+        report_sdk_error("interactive dpu_alloc", error);
+        interactive_event("error", "failed", "hardware_allocation_failed",
+                          "interactive DPU allocation failed", NULL, 0u,
+                          allocation_time_s, 0.0, 0.0, 0);
+        free(base);
+        upmem_generic_interactive_bootstrap_free(&bootstrap);
+        return 1;
+    }
+    set_allocated = 1;
+    error = dpu_get_nr_dpus(set, &allocated_dpus);
+    if (error != DPU_OK || allocated_dpus != 1u) {
+        if (error != DPU_OK) report_sdk_error("interactive dpu_get_nr_dpus", error);
+        interactive_event("error", "failed", "hardware_allocation_failed",
+                          "interactive session did not receive exactly one DPU", NULL,
+                          allocated_dpus, allocation_time_s, 0.0, 0.0, 0);
+        if (set_allocated) {
+            interactive_release_and_event(
+                set, allocated_dpus, allocation_time_s, binary_load_time_s
+            );
+        }
+        free(base);
+        upmem_generic_interactive_bootstrap_free(&bootstrap);
+        return 1;
+    }
+    {
+        const double started = now_s();
+        error = dpu_load(set, bootstrap.dpu_binary_path, NULL);
+        binary_load_time_s = now_s() - started;
+    }
+    if (error != DPU_OK) {
+        report_sdk_error("interactive dpu_load", error);
+        interactive_event("error", "failed", "binary_load_failed",
+                          "interactive DPU binary load failed", NULL, allocated_dpus,
+                          allocation_time_s, binary_load_time_s, 0.0, 0);
+        interactive_release_and_event(
+            set, allocated_dpus, allocation_time_s, binary_load_time_s
+        );
+        free(base);
+        upmem_generic_interactive_bootstrap_free(&bootstrap);
+        return 1;
+    }
+    interactive_event("ready", "ready", NULL, NULL, NULL, allocated_dpus,
+                      allocation_time_s, binary_load_time_s, 0.0, 0);
+
+    while (fgets(line, sizeof(line), stdin) != NULL) {
+        char *request_ref;
+        char *response_ref;
+        char *cursor;
+        char *request_path = NULL;
+        char *response_path = NULL;
+        upmem_generic_session request;
+        char *request_error = NULL;
+        const char *failure_stage = NULL;
+        const char *failure_message = NULL;
+        double request_time_s;
+        double release_time_s = 0.0;
+        int request_failed = 0;
+
+        line[strcspn(line, "\r\n")] = '\0';
+        if (strcmp(line, "CLOSE") == 0) {
+            const double started = now_s();
+            error = dpu_free(set);
+            release_time_s = now_s() - started;
+            set_allocated = 0;
+            if (error != DPU_OK) {
+                report_sdk_error("interactive dpu_free", error);
+                interactive_event("closed", "failed", "hardware_release_failed",
+                                  "interactive DPU release failed", NULL,
+                                  allocated_dpus, allocation_time_s, binary_load_time_s,
+                                  release_time_s, 0);
+                free(base);
+                upmem_generic_interactive_bootstrap_free(&bootstrap);
+                return 1;
+            }
+            interactive_event("closed", "closed", NULL, NULL, NULL,
+                              allocated_dpus, allocation_time_s, binary_load_time_s,
+                              release_time_s, 1);
+            free(base);
+            upmem_generic_interactive_bootstrap_free(&bootstrap);
+            return 0;
+        }
+        if (strncmp(line, "REQUEST ", 8) != 0) {
+            interactive_event("error", "failed", "protocol_error",
+                              "expected REQUEST or CLOSE", NULL,
+                              allocated_dpus, allocation_time_s, binary_load_time_s, 0.0, 0);
+            interactive_release_and_event(
+                set, allocated_dpus, allocation_time_s, binary_load_time_s
+            );
+            free(base);
+            upmem_generic_interactive_bootstrap_free(&bootstrap);
+            return 2;
+        }
+        cursor = line + 8;
+        request_ref = cursor;
+        while (*cursor != '\0' && !isspace((unsigned char)*cursor)) cursor++;
+        if (*cursor == '\0') {
+            interactive_event("error", "failed", "protocol_error",
+                              "REQUEST requires request and response paths", NULL,
+                              allocated_dpus, allocation_time_s, binary_load_time_s, 0.0, 0);
+            interactive_release_and_event(
+                set, allocated_dpus, allocation_time_s, binary_load_time_s
+            );
+            free(base);
+            upmem_generic_interactive_bootstrap_free(&bootstrap);
+            return 2;
+        }
+        *cursor++ = '\0';
+        while (isspace((unsigned char)*cursor)) cursor++;
+        response_ref = cursor;
+        while (*cursor != '\0' && !isspace((unsigned char)*cursor)) cursor++;
+        if (*cursor != '\0') {
+            interactive_event("error", "failed", "protocol_error",
+                              "REQUEST paths must be whitespace-free relative paths", NULL,
+                              allocated_dpus, allocation_time_s, binary_load_time_s, 0.0, 0);
+            interactive_release_and_event(
+                set, allocated_dpus, allocation_time_s, binary_load_time_s
+            );
+            free(base);
+            upmem_generic_interactive_bootstrap_free(&bootstrap);
+            return 2;
+        }
+        request_path = interactive_resolve(base, request_ref);
+        response_path = interactive_resolve(base, response_ref);
+        if (request_path == NULL || response_path == NULL) {
+            interactive_event("error", "failed", "path_containment_failed",
+                              "interactive request paths must be safe relative paths", NULL,
+                              allocated_dpus, allocation_time_s, binary_load_time_s, 0.0, 0);
+            free(request_path); free(response_path);
+            interactive_release_and_event(
+                set, allocated_dpus, allocation_time_s, binary_load_time_s
+            );
+            free(base);
+            upmem_generic_interactive_bootstrap_free(&bootstrap);
+            return 2;
+        }
+        memset(&request, 0, sizeof(request));
+        if (upmem_generic_interactive_request_load(
+                request_path, &request, &request_error) != 0) {
+            upmem_generic_interactive_request_write_error_response(
+                response_path, "manifest_parse_failed",
+                request_error ? request_error : "invalid interactive request manifest"
+            );
+            interactive_event("error", "failed", "manifest_parse_failed",
+                              request_error, response_ref, allocated_dpus,
+                              allocation_time_s, binary_load_time_s, 0.0, 0);
+            free(request_error);
+            free(request_path); free(response_path);
+            interactive_release_and_event(
+                set, allocated_dpus, allocation_time_s, binary_load_time_s
+            );
+            free(base);
+            upmem_generic_interactive_bootstrap_free(&bootstrap);
+            return 1;
+        }
+        for (size_t index = 0; index < request.task_count; index++) {
+            if (read_exact(request.tasks[index].args_path, &request.tasks[index].args,
+                           sizeof(request.tasks[index].args)) != 0 ||
+                validate_session_task(&request.tasks[index]) != 0) {
+                mark_session_task_failure(&request.tasks[index],
+                                          "hardware_profile_violation", -1);
+                failure_stage = "hardware_profile_violation";
+                failure_message = "interactive request metadata is invalid";
+                request_failed = 1;
+                break;
+            }
+        }
+        request_time_s = now_s();
+        if (!request_failed) {
+            request_failed = run_interactive_request_tasks(
+                set, &request, &failure_stage, &failure_message
+            );
+        }
+        request_time_s = now_s() - request_time_s;
+        if (request_failed) {
+            for (size_t index = 0; index < request.task_count; index++) {
+                if (request.tasks[index].result_status == UPMEM_GENERIC_SESSION_TASK_NOT_RUN) {
+                    snprintf(request.tasks[index].failure_stage,
+                             sizeof(request.tasks[index].failure_stage),
+                             "%s", "not_run_after_failure");
+                }
+            }
+        }
+        if (request_failed) {
+            const double started = now_s();
+            error = dpu_free(set);
+            release_time_s = now_s() - started;
+            set_allocated = 0;
+            if (error != DPU_OK) {
+                failure_stage = "hardware_release_failed";
+                failure_message = "interactive DPU release failed";
+            }
+        }
+        if (upmem_generic_interactive_request_write_response(
+                response_path, &request, request_failed ? "failed" : "completed",
+                request_failed ? failure_stage : NULL,
+                request_failed ? failure_message : NULL,
+                allocated_dpus, request_failed && error != DPU_OK ? (int)error : 0,
+                allocation_time_s, binary_load_time_s, request_time_s, release_time_s
+            ) != 0) {
+            interactive_event("error", "failed", "response_write_failed",
+                              "interactive response could not be written", response_ref,
+                              allocated_dpus, allocation_time_s, binary_load_time_s,
+                              release_time_s, 0);
+            upmem_generic_session_free(&request);
+            free(request_path); free(response_path);
+            if (set_allocated) {
+                interactive_release_and_event(
+                    set, allocated_dpus, allocation_time_s, binary_load_time_s
+                );
+            }
+            free(base);
+            upmem_generic_interactive_bootstrap_free(&bootstrap);
+            return 1;
+        }
+        interactive_event("response", request_failed ? "failed" : "completed",
+                          request_failed ? failure_stage : NULL,
+                          request_failed ? failure_message : NULL, response_ref,
+                          allocated_dpus, allocation_time_s, binary_load_time_s,
+                          release_time_s, request_failed ? 0 : 0);
+        upmem_generic_session_free(&request);
+        free(request_path); free(response_path);
+        if (request_failed) {
+            interactive_event("closed", error == DPU_OK ? "closed" : "failed",
+                              error == DPU_OK ? NULL : "hardware_release_failed",
+                              error == DPU_OK ? NULL : "interactive DPU release failed",
+                              NULL, allocated_dpus, allocation_time_s, binary_load_time_s,
+                              release_time_s, error == DPU_OK);
+            free(base);
+            upmem_generic_interactive_bootstrap_free(&bootstrap);
+            return 1;
+        }
+    }
+
+    if (set_allocated) {
+        const double started = now_s();
+        error = dpu_free(set);
+        {
+            const double release_time_s = now_s() - started;
+            interactive_event("closed", error == DPU_OK ? "closed" : "failed",
+                              error == DPU_OK ? NULL : "hardware_release_failed",
+                              error == DPU_OK ? NULL : "interactive DPU release failed",
+                              NULL, allocated_dpus, allocation_time_s, binary_load_time_s,
+                              release_time_s, error == DPU_OK);
+        }
+    }
+    free(base);
+    upmem_generic_interactive_bootstrap_free(&bootstrap);
+    return error == DPU_OK ? 0 : 1;
+}
+
 int main(int argc, char **argv) {
+    if (argc == 3 &&
+        strcmp(argv[1], "--interactive-session") == 0 &&
+        strcmp(argv[2], "--bootstrap-manifest") == 0) {
+        fprintf(stderr, "usage: %s --interactive-session --bootstrap-manifest <path>\n", argv[0]);
+        return 2;
+    }
+    if (argc == 4 &&
+        strcmp(argv[1], "--interactive-session") == 0 &&
+        strcmp(argv[2], "--bootstrap-manifest") == 0) {
+        return run_interactive(argv[3]);
+    }
     if (argc == 5 &&
         strcmp(argv[1], "--session-manifest") == 0 &&
         strcmp(argv[3], "--response-manifest") == 0) {

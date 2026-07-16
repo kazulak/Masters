@@ -14,9 +14,11 @@ from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
+import queue
 import shutil
 import struct
 import subprocess
+import threading
 import time
 from typing import Any, Mapping, Sequence
 
@@ -35,6 +37,10 @@ HARDWARE_GENERIC_SESSION_SCHEMA_VERSION = "upmem_generic_session_v1"
 HARDWARE_GENERIC_SESSION_INPUT_KIND = "upmem_generic_session_input"
 HARDWARE_GENERIC_SESSION_OUTPUT_KIND = "upmem_generic_session_response"
 HARDWARE_GENERIC_SESSION_MAX_TASKS = 1024
+HARDWARE_INTERACTIVE_SESSION_SCHEMA_VERSION = "generic_loop_interactive_session_v1"
+HARDWARE_INTERACTIVE_BOOTSTRAP_KIND = "bootstrap"
+HARDWARE_INTERACTIVE_REQUEST_KIND = "request"
+HARDWARE_INTERACTIVE_RESPONSE_KIND = "response"
 
 
 @dataclass(frozen=True)
@@ -81,6 +87,349 @@ class HardwareSessionExecution:
     command: tuple[str, ...]
     stdout_snippet: str
     stderr_snippet: str
+
+
+@dataclass(frozen=True)
+class HardwareSessionClose:
+    status: str
+    failure_stage: str | None
+    release_confirmed: bool
+    release_time_s: float | None
+    process_returncode: int | None
+    stdout_snippet: str
+    stderr_snippet: str
+
+
+class HardwareInteractiveSessionError(RuntimeError):
+    def __init__(
+        self, failure_stage: str, message: str, *, stdout: str = "", stderr: str = ""
+    ) -> None:
+        super().__init__(f"{failure_stage}: {message}")
+        self.failure_stage = failure_stage
+        self.stdout_snippet = stdout
+        self.stderr_snippet = stderr
+
+
+class HardwareInteractiveSession:
+    """Long-lived native host for ordered one- or four-component requests."""
+
+    def __init__(
+        self,
+        process: subprocess.Popen[str],
+        *,
+        session_root: Path,
+        command: tuple[str, ...],
+        session_id: str,
+        profile: HardwareTaskGraphProfile,
+        stdout_queue: "queue.Queue[str | None]",
+        stdout_chunks: list[str],
+        stderr_chunks: list[str],
+        stdout_lock: threading.Lock,
+        stderr_lock: threading.Lock,
+        startup_metadata: JsonDict,
+    ) -> None:
+        self._process = process
+        self._session_root = session_root.resolve()
+        self._command = command
+        self._session_id = session_id
+        self._profile = profile
+        self._stdout_queue = stdout_queue
+        self._stdout_chunks = stdout_chunks
+        self._stderr_chunks = stderr_chunks
+        self._stdout_lock = stdout_lock
+        self._stderr_lock = stderr_lock
+        self._startup_metadata = dict(startup_metadata)
+        self._request_sequence = 0
+        self._closed = False
+        self._close_result: HardwareSessionClose | None = None
+
+    @property
+    def process(self) -> subprocess.Popen[str]:
+        return self._process
+
+    @property
+    def command(self) -> tuple[str, ...]:
+        return self._command
+
+    @property
+    def startup_metadata(self) -> JsonDict:
+        """Read-only copy of native allocation/load readiness metadata."""
+
+        return dict(self._startup_metadata)
+
+    def submit(
+        self,
+        tasks: Sequence[HardwareSessionTask],
+        *,
+        request_id: str | None = None,
+        timeout_s: float | None = None,
+    ) -> HardwareSessionExecution:
+        if self._closed:
+            raise HardwareInteractiveSessionError(
+                "session_closed", "interactive session is closed"
+            )
+        if len(tasks) not in (1, 4):
+            raise ValueError(
+                "hardware_profile_violation: interactive requests require 1 or 4 tasks"
+            )
+        for task in tasks:
+            self._assert_contained(task.args_path)
+            self._assert_contained(task.left_path)
+            self._assert_contained(task.right_path)
+            self._assert_contained(task.output_path)
+
+        sequence = self._request_sequence
+        self._request_sequence += 1
+        request_name = request_id or f"request-{sequence:04d}"
+        request_dir = self._session_root
+        request_dir.mkdir(parents=True, exist_ok=True)
+        request_path = request_dir / f"{sequence:04d}_{_safe_name(request_name)}.json"
+        response_path = (
+            request_dir / f"{sequence:04d}_{_safe_name(request_name)}_response.json"
+        )
+        payload = {
+            "schema_version": HARDWARE_INTERACTIVE_SESSION_SCHEMA_VERSION,
+            "manifest_kind": HARDWARE_INTERACTIVE_REQUEST_KIND,
+            "request_id": request_name,
+            "requested_dpus": 1,
+            "tasklets": 1,
+            "tasks": [
+                {
+                    "task_id": task.task_id,
+                    "args_path": _relative(request_dir, task.args_path),
+                    "left_path": _relative(request_dir, task.left_path),
+                    "right_path": _relative(request_dir, task.right_path),
+                    "output_path": _relative(request_dir, task.output_path),
+                }
+                for task in tasks
+            ],
+        }
+        try:
+            request_path.write_text(
+                json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False)
+                + "\n",
+                encoding="utf-8",
+            )
+            request_ref = _relative(self._session_root, request_path)
+            response_ref = _relative(self._session_root, response_path)
+            self._write_control(f"REQUEST {request_ref} {response_ref}\n")
+            started = time.perf_counter()
+            event = self._wait_for_event(timeout_s or self._profile.timeout_s)
+            if event.get("event") != "response":
+                raise HardwareInteractiveSessionError(
+                    str(event.get("failure_stage") or "protocol_error"),
+                    str(
+                        event.get("error")
+                        or "native interactive protocol returned an unexpected event"
+                    ),
+                    stdout=self._stdout_snippet(),
+                    stderr=self._stderr_snippet(),
+                )
+            response = _load_response(response_path)
+            if not _interactive_response_shape_valid(
+                response, request_name, tasks, self._session_root
+            ):
+                raise HardwareInteractiveSessionError(
+                    "response_manifest_failed",
+                    "native interactive response was missing or invalid",
+                    stdout=self._stdout_snippet(),
+                    stderr=self._stderr_snippet(),
+                )
+            response_failure = response.get("failure_stage")
+            status = (
+                "completed"
+                if response.get("status") == "completed" and response_failure is None
+                else "failed"
+            )
+            if status == "failed":
+                self._consume_terminal_close()
+            return HardwareSessionExecution(
+                status=status,
+                failure_stage=str(response_failure) if response_failure else None,
+                response_path=response_path,
+                response=response,
+                process_time_s=time.perf_counter() - started,
+                command=self._command,
+                stdout_snippet=self._stdout_snippet(),
+                stderr_snippet=self._stderr_snippet(),
+            )
+        except subprocess.TimeoutExpired as exc:
+            self._abort_process()
+            raise HardwareInteractiveSessionError(
+                "request_timeout",
+                "timed out waiting for native interactive response",
+                stdout=self._stdout_snippet(),
+                stderr=self._stderr_snippet(),
+            ) from exc
+        except HardwareInteractiveSessionError:
+            self._consume_terminal_close()
+            raise
+        except queue.Empty as exc:
+            self._abort_process()
+            raise HardwareInteractiveSessionError(
+                "request_timeout",
+                "timed out waiting for native interactive response",
+                stdout=self._stdout_snippet(),
+                stderr=self._stderr_snippet(),
+            ) from exc
+        except OSError as exc:
+            raise HardwareInteractiveSessionError(
+                "request_protocol_failed",
+                str(exc),
+                stdout=self._stdout_snippet(),
+                stderr=self._stderr_snippet(),
+            ) from exc
+
+    def close(self, *, timeout_s: float | None = None) -> HardwareSessionClose:
+        if self._close_result is not None:
+            return self._close_result
+        if self._closed:
+            return self._make_close("release_unconfirmed", False, None)
+        try:
+            self._write_control("CLOSE\n")
+            event = self._wait_for_event(timeout_s or self._profile.timeout_s)
+            if event.get("event") != "closed":
+                # A protocol mismatch cannot safely leave a physical allocation
+                # alive.  Do not try another close command: terminate the host
+                # and preserve the failed release state for the caller.
+                self._abort_process()
+                return self._make_close(
+                    str(event.get("failure_stage") or "close_protocol_failed"),
+                    False,
+                    None,
+                )
+            confirmed = (
+                event.get("status") == "closed" and event.get("released") is True
+            )
+            self._process.wait(timeout=timeout_s or self._profile.timeout_s)
+            result = self._make_close(
+                None
+                if confirmed
+                else str(event.get("failure_stage") or "release_unconfirmed"),
+                confirmed,
+                float(event["release_time_s"])
+                if isinstance(event.get("release_time_s"), (int, float))
+                else None,
+            )
+            self._closed = True
+            self._close_result = result
+            return result
+        except HardwareInteractiveSessionError as exc:
+            self._abort_process()
+            return self._make_close(exc.failure_stage, False, None)
+        except (queue.Empty, subprocess.TimeoutExpired):
+            self._abort_process()
+            return self._make_close("close_timeout", False, None)
+        except (BrokenPipeError, OSError):
+            self._abort_process()
+            return self._make_close("close_protocol_failed", False, None)
+
+    def __enter__(self) -> "HardwareInteractiveSession":
+        return self
+
+    def __exit__(self, _type: object, _value: object, _traceback: object) -> None:
+        self.close()
+
+    def _assert_contained(self, path: Path) -> None:
+        try:
+            path.resolve().relative_to(self._session_root)
+        except ValueError as exc:
+            raise ValueError(
+                "hardware_profile_violation: session task paths must be inside the native session root"
+            ) from exc
+
+    def _write_control(self, line: str) -> None:
+        if self._process.stdin is None:
+            raise HardwareInteractiveSessionError(
+                "request_protocol_failed", "native stdin is unavailable"
+            )
+        self._process.stdin.write(line)
+        self._process.stdin.flush()
+
+    def _wait_for_event(self, timeout_s: float) -> JsonDict:
+        item = self._stdout_queue.get(timeout=timeout_s)
+        if item is None:
+            raise HardwareInteractiveSessionError(
+                "process_eof",
+                "native interactive host closed stdout",
+                stdout=self._stdout_snippet(),
+                stderr=self._stderr_snippet(),
+            )
+        try:
+            payload = json.loads(item)
+        except json.JSONDecodeError as exc:
+            raise HardwareInteractiveSessionError(
+                "protocol_error",
+                "native interactive host emitted invalid JSON",
+                stdout=self._stdout_snippet(),
+                stderr=self._stderr_snippet(),
+            ) from exc
+        if not isinstance(payload, dict):
+            raise HardwareInteractiveSessionError(
+                "protocol_error", "native event was not an object"
+            )
+        if payload.get("event") == "error":
+            raise HardwareInteractiveSessionError(
+                str(payload.get("failure_stage") or "protocol_error"),
+                str(payload.get("error") or "native interactive session failed"),
+                stdout=self._stdout_snippet(),
+                stderr=self._stderr_snippet(),
+            )
+        return payload
+
+    def _consume_terminal_close(self) -> None:
+        try:
+            event = self._wait_for_event(1.0)
+        except (HardwareInteractiveSessionError, queue.Empty):
+            self._closed = True
+            return
+        if event.get("event") == "closed":
+            self._closed = True
+            self._close_result = self._make_close(
+                None
+                if event.get("released") is True
+                else str(event.get("failure_stage") or "release_unconfirmed"),
+                event.get("released") is True,
+                float(event["release_time_s"])
+                if isinstance(event.get("release_time_s"), (int, float))
+                else None,
+            )
+
+    def _abort_process(self) -> None:
+        self._closed = True
+        if self._process.poll() is None:
+            self._process.terminate()
+            try:
+                self._process.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                self._process.kill()
+                self._process.wait(timeout=1.0)
+
+    def _stdout_snippet(self) -> str:
+        with self._stdout_lock:
+            return _snippet("".join(self._stdout_chunks))
+
+    def _stderr_snippet(self) -> str:
+        with self._stderr_lock:
+            return _snippet("".join(self._stderr_chunks))
+
+    def _make_close(
+        self, stage: str | None, confirmed: bool, release_time_s: float | None
+    ) -> HardwareSessionClose:
+        result = HardwareSessionClose(
+            status="closed" if confirmed else "failed",
+            failure_stage=stage,
+            release_confirmed=confirmed,
+            release_time_s=release_time_s,
+            process_returncode=self._process.poll(),
+            stdout_snippet=self._stdout_snippet(),
+            stderr_snippet=self._stderr_snippet(),
+        )
+        # The physical study never retries a release automatically. Cache both
+        # confirmed and failed outcomes so later callers observe one stable
+        # release verdict rather than sending another control command.
+        self._close_result = result
+        return result
 
 
 def build_hardware_session(
@@ -154,6 +503,141 @@ def build_hardware_session(
             for name, tool in required.items()
         },
     )
+
+
+def start_hardware_session(
+    build: HardwareSessionBuild,
+    *,
+    session_id: str,
+    profile: HardwareTaskGraphProfile,
+    environment: Mapping[str, str],
+    readiness_timeout_s: float | None = None,
+) -> HardwareInteractiveSession:
+    """Start one native host that owns one DPU until ``close`` is confirmed."""
+
+    if not session_id:
+        raise ValueError(
+            "hardware_profile_violation: interactive session_id must be non-empty"
+        )
+    if profile.requested_dpu_count != 1 or profile.tasklets_per_dpu != 1:
+        raise ValueError(
+            "hardware_profile_violation: interactive session requires one DPU and one tasklet"
+        )
+    root = build.session_root.resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    _relative(root, build.dpu_binary)
+    bootstrap_path = root / f"{_safe_name(session_id)}_interactive_bootstrap.json"
+    bootstrap_path.write_text(
+        json.dumps(
+            {
+                "schema_version": HARDWARE_INTERACTIVE_SESSION_SCHEMA_VERSION,
+                "manifest_kind": HARDWARE_INTERACTIVE_BOOTSTRAP_KIND,
+                "session_id": session_id,
+                "dpu_binary": _relative(root, build.dpu_binary),
+                "requested_dpus": 1,
+                "tasklets": 1,
+            },
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    command = (
+        str(build.host_binary),
+        "--interactive-session",
+        "--bootstrap-manifest",
+        str(bootstrap_path),
+    )
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=build.build_dir,
+            env=_sanitised_hardware_env(environment),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+    except OSError as exc:
+        raise HardwareInteractiveSessionError("startup_failed", str(exc)) from exc
+
+    stdout_queue: "queue.Queue[str | None]" = queue.Queue()
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+    stdout_lock = threading.Lock()
+    stderr_lock = threading.Lock()
+
+    def drain_stdout() -> None:
+        stream = process.stdout
+        if stream is not None:
+            for line in iter(stream.readline, ""):
+                with stdout_lock:
+                    stdout_chunks.append(line)
+                stdout_queue.put(line)
+        stdout_queue.put(None)
+
+    def drain_stderr() -> None:
+        stream = process.stderr
+        if stream is not None:
+            for chunk in iter(lambda: stream.read(4096), ""):
+                with stderr_lock:
+                    stderr_chunks.append(chunk)
+
+    threading.Thread(
+        target=drain_stdout, name="upmem-session-stdout", daemon=True
+    ).start()
+    threading.Thread(
+        target=drain_stderr, name="upmem-session-stderr", daemon=True
+    ).start()
+    session = HardwareInteractiveSession(
+        process,
+        session_root=root,
+        command=command,
+        session_id=session_id,
+        profile=profile,
+        stdout_queue=stdout_queue,
+        stdout_chunks=stdout_chunks,
+        stderr_chunks=stderr_chunks,
+        stdout_lock=stdout_lock,
+        stderr_lock=stderr_lock,
+        startup_metadata={},
+    )
+    try:
+        ready = session._wait_for_event(readiness_timeout_s or profile.timeout_s)
+        if (
+            ready.get("event") != "ready"
+            or ready.get("status") != "ready"
+            or ready.get("requested_dpus") != 1
+            or ready.get("allocated_dpus") != 1
+        ):
+            raise HardwareInteractiveSessionError(
+                str(ready.get("failure_stage") or "startup_protocol_failed"),
+                "native interactive host did not report one-DPU readiness",
+                stdout=session._stdout_snippet(),
+                stderr=session._stderr_snippet(),
+            )
+        session._startup_metadata.update(
+            {
+                "requested_dpus": ready.get("requested_dpus"),
+                "allocated_dpus": ready.get("allocated_dpus"),
+                "allocation_time_s": ready.get("allocation_time_s"),
+                "binary_load_time_s": ready.get("binary_load_time_s"),
+            }
+        )
+    except (queue.Empty, HardwareInteractiveSessionError) as exc:
+        session._abort_process()
+        if isinstance(exc, HardwareInteractiveSessionError):
+            raise
+        raise HardwareInteractiveSessionError(
+            "readiness_timeout",
+            "timed out waiting for native interactive readiness",
+            stdout=session._stdout_snippet(),
+            stderr=session._stderr_snippet(),
+        ) from exc
+    return session
 
 
 def write_session_task(
@@ -409,6 +893,39 @@ def _session_response_valid(
         item.get("task_id") == task.task_id and item.get("status") == "completed"
         for item, task in zip(raw_tasks, tasks)
     )
+
+
+def _interactive_response_shape_valid(
+    response: JsonDict,
+    request_id: str,
+    tasks: Sequence[HardwareSessionTask],
+    session_root: Path,
+) -> bool:
+    if (
+        response.get("schema_version") != HARDWARE_INTERACTIVE_SESSION_SCHEMA_VERSION
+        or response.get("manifest_kind") != HARDWARE_INTERACTIVE_RESPONSE_KIND
+        or response.get("request_id") != request_id
+        or response.get("requested_dpus") != 1
+        or response.get("allocated_dpus") != 1
+    ):
+        return False
+    raw_tasks = response.get("tasks")
+    if not isinstance(raw_tasks, list) or len(raw_tasks) != len(tasks):
+        return False
+    for item, task in zip(raw_tasks, tasks):
+        if (
+            not isinstance(item, dict)
+            or item.get("task_id") != task.task_id
+            or item.get("status") not in {"completed", "failed", "not_run"}
+        ):
+            return False
+        if item.get("status") == "completed":
+            output = item.get("output")
+            if not isinstance(output, dict) or output.get("path") != _relative(
+                session_root, task.output_path
+            ):
+                return False
+    return True
 
 
 def _output_scale(preparation: GenericTaskPreparationResult) -> float:

@@ -7,7 +7,8 @@
 #include "common.h"
 
 /*
- * Persistent host protocol, upmem_generic_session_v1.
+ * Persistent host protocols, upmem_generic_session_v1 and
+ * generic_loop_interactive_session_v1.
  *
  * Input is a JSON object with schema_version, manifest_kind,
  * dpu_binary, requested_dpus=1, tasklets=1, and an ordered tasks array.
@@ -27,6 +28,10 @@
 #define UPMEM_GENERIC_SESSION_INPUT_KIND "upmem_generic_session_input"
 #define UPMEM_GENERIC_SESSION_OUTPUT_KIND "upmem_generic_session_response"
 #define UPMEM_GENERIC_SESSION_MAX_TASKS 1024u
+#define UPMEM_GENERIC_INTERACTIVE_SCHEMA "generic_loop_interactive_session_v1"
+#define UPMEM_GENERIC_INTERACTIVE_BOOTSTRAP_KIND "bootstrap"
+#define UPMEM_GENERIC_INTERACTIVE_REQUEST_KIND "request"
+#define UPMEM_GENERIC_INTERACTIVE_RESPONSE_KIND "response"
 
 typedef struct {
     double input_read_time_s;
@@ -70,6 +75,14 @@ typedef struct {
     uint32_t tasklets;
 } upmem_generic_session;
 
+typedef struct {
+    char *session_id;
+    char *dpu_binary_ref;
+    char *dpu_binary_path;
+    uint32_t requested_dpus;
+    uint32_t tasklets;
+} upmem_generic_interactive_bootstrap;
+
 enum {
     UPMEM_GENERIC_SESSION_TASK_NOT_RUN = 0,
     UPMEM_GENERIC_SESSION_TASK_COMPLETED = 1,
@@ -99,6 +112,42 @@ int upmem_generic_session_write_response(
 );
 
 int upmem_generic_session_write_error_response(
+    const char *response_path,
+    const char *failure_stage,
+    const char *error_message
+);
+
+int upmem_generic_interactive_bootstrap_load(
+    const char *manifest_path,
+    upmem_generic_interactive_bootstrap *bootstrap,
+    char **error_message
+);
+
+void upmem_generic_interactive_bootstrap_free(
+    upmem_generic_interactive_bootstrap *bootstrap
+);
+
+int upmem_generic_interactive_request_load(
+    const char *manifest_path,
+    upmem_generic_session *request,
+    char **error_message
+);
+
+int upmem_generic_interactive_request_write_response(
+    const char *response_path,
+    const upmem_generic_session *request,
+    const char *status,
+    const char *failure_stage,
+    const char *error_message,
+    uint32_t allocated_dpus,
+    int sdk_error_code,
+    double allocation_time_s,
+    double binary_load_time_s,
+    double request_time_s,
+    double release_time_s
+);
+
+int upmem_generic_interactive_request_write_error_response(
     const char *response_path,
     const char *failure_stage,
     const char *error_message

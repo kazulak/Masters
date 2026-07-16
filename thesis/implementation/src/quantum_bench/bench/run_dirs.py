@@ -17,6 +17,7 @@ ROUTE_LABELS = {
     "quimb_tn_exact": "quimb_tn_exact",
     "upmem_tn_runtime": "upmem_tn_runtime",
     "upmem_tn_sdk_simulator_quantized": "upmem_generic_int8",
+    "upmem_tn_hardware_taskgraph_persistent": "upmem_hw_taskgraph_study",
 }
 
 # Evidence runs should not contain empty report/debug scaffolding. Writers create

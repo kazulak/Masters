@@ -186,6 +186,24 @@ def main() -> int:
         help="build the isolated native source during --prepare-only; never allocates a DPU",
     )
 
+    upmem_hardware_taskgraph_study_parser = sub.add_parser(
+        "upmem-hardware-taskgraph-study",
+        help="run the guarded physical UPMEM TaskGraph path/quantization study",
+    )
+    upmem_hardware_taskgraph_study_parser.add_argument(
+        "--suite", required=True, help="hardware TaskGraph study suite YAML"
+    )
+    upmem_hardware_taskgraph_study_mode = (
+        upmem_hardware_taskgraph_study_parser.add_mutually_exclusive_group(required=True)
+    )
+    upmem_hardware_taskgraph_study_mode.add_argument("--prepare-only", action="store_true")
+    upmem_hardware_taskgraph_study_mode.add_argument("--execute", action="store_true")
+    upmem_hardware_taskgraph_study_parser.add_argument(
+        "--build",
+        action="store_true",
+        help="build the isolated native source during --prepare-only; never allocates a DPU",
+    )
+
     upmem_generic_feasibility_parser = sub.add_parser("upmem-generic-feasibility")
     upmem_generic_feasibility_parser.add_argument(
         "--suite", required=True, help="Suite path or preset name under configs/suites"
@@ -736,6 +754,51 @@ def main() -> int:
             "status": result.status,
             "row_count": result.row_count,
         }, indent=2))
+        return 0 if result.status == "completed" else 2
+    if args.command == "upmem-hardware-taskgraph-study":
+        from quantum_bench.bench.upmem_hardware_taskgraph_study import (
+            prepare_upmem_hardware_taskgraph_study,
+            run_upmem_hardware_taskgraph_study,
+        )
+
+        if args.build and not args.prepare_only:
+            parser.error("--build is only valid with --prepare-only")
+        try:
+            if args.prepare_only:
+                result = prepare_upmem_hardware_taskgraph_study(
+                    root_dir,
+                    suite_path=suite_path(args.suite, root_dir),
+                    build=args.build,
+                )
+                print(
+                    json.dumps(
+                        {
+                            "plan_dir": str(result.plan_dir),
+                            "artifact": str(result.summary_path),
+                            "status": result.status,
+                            "dpu_allocation_attempted": False,
+                            "dpu_launch_attempted": False,
+                        },
+                        indent=2,
+                    )
+                )
+                return 0 if result.status == "prepared" else 2
+            result = run_upmem_hardware_taskgraph_study(
+                root_dir, suite_path=suite_path(args.suite, root_dir)
+            )
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
+        print(
+            json.dumps(
+                {
+                    "run_dir": str(result.run_dir),
+                    "artifact": str(result.summary_path),
+                    "status": result.status,
+                    "row_count": result.row_count,
+                },
+                indent=2,
+            )
+        )
         return 0 if result.status == "completed" else 2
     if args.command == "upmem-generic-feasibility":
         from quantum_bench.bench.upmem_generic_feasibility import (

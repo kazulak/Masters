@@ -286,6 +286,73 @@ def _physical_taskgraph_record(
     }
 
 
+def _one_dpu_record(*, path="path-a", mode="float32", runtime=2.0, repeat=0, **updates):
+    row = {
+        "route_id": "upmem_tn_hardware_taskgraph_persistent",
+        "status": "completed",
+        "case_id": "case-one-dpu",
+        "path_variant_id": path,
+        "planner_config_hash": "planner-hash",
+        "circuit_semantics_hash": "circuit-hash",
+        "tensor_network_hash": "tn-hash",
+        "contraction_plan_hash": "plan-hash",
+        "contraction_path_structure_hash": path + "-structure",
+        "quantization_mode": mode,
+        "input_dtype_on_dpu": mode,
+        "measurement_round": 1,
+        "session_scope": "case_benchmark_block",
+        "timing_scope": "steady_state_graph_execution",
+        "hardware_profile_version": "hardware_taskgraph_single_dpu_persistent_v1",
+        "session_protocol": "generic_loop_interactive_session_v1",
+        "host_binary_hash": "host-binary-hash",
+        "dpu_binary_hash": "dpu-binary-hash",
+        "native_source_tree_hash": "native-source-hash",
+        "timing_is_bringup_only": False,
+        "hardware_timing_available": True,
+        "validation_status": "passed",
+        "hardware_execution": True,
+        "hardware_kernel_executed": True,
+        "hardware_allocation_verified": True,
+        "hardware_release_verified": True,
+        "simulator_kernel_executed": False,
+        "cpu_fallback_used": False,
+        "requested_dpu_count": 1,
+        "allocated_dpu_count": 1,
+        "tasklets_per_dpu": 1,
+        "multi_dpu_execution": False,
+        "physical_dependency_chain_verified": True,
+        "persistent_session_reused": True,
+        "repeat_id": repeat,
+        "steady_state_graph_execution_s": runtime,
+        "h2d_time_s": 0.1,
+        "kernel_time_s": runtime - 0.3,
+        "d2h_time_s": 0.1,
+        "host_prepare_time_s": 0.05,
+        "host_reconstruction_time_s": 0.05,
+        "host_control_time_s": 0.0,
+        "application_visible_transfer_bytes": 100,
+        "max_abs_error": 0.01,
+        "l2_error": 0.02,
+    }
+    row.update(updates)
+    return row
+
+
+def _complete_one_dpu_records(
+    *, path: str = "path-a", mode: str = "float32", runtime: float = 2.0, **updates
+) -> list[dict]:
+    return [
+        _one_dpu_record(
+            path=path,
+            mode=mode,
+            runtime=runtime,
+            repeat=repeat,
+            **updates,
+        )
+        for repeat in range(7)
+    ]
+
+
 def test_plot_contract_generates_missing_and_zero_variance_placeholders(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -426,6 +493,148 @@ def test_physical_taskgraph_quantization_requires_same_plan_and_excludes_bringup
         "per_task_input_quantize", plan_hash="q" * 64
     )
     assert pack.upmem_physical_quantization_attribution([float32, mismatched]) == []
+
+
+def test_one_dpu_runtime_aggregation_uses_case_path_mode_medians_and_components() -> (
+    None
+):
+    rows = pack.upmem_one_dpu_runtime_summary(
+        [_one_dpu_record(runtime=1.0), _one_dpu_record(runtime=3.0, repeat=1)]
+    )
+    assert len(rows) == 1
+    assert rows[0]["repeat_count"] == 2
+    assert rows[0]["steady_state_graph_execution_s_median"] == 2.0
+    assert rows[0]["steady_state_graph_execution_s_iqr"] == 1.0
+    assert rows[0]["kernel_time_s_mean"] == pytest.approx(1.7)
+    assert rows[0]["study_comparison_ready"] is False
+    assert rows[0]["missing_repeat_ids"] == [2, 3, 4, 5, 6]
+
+
+def test_one_dpu_pairs_require_hashes_and_reject_bringup_timing() -> None:
+    left = _complete_one_dpu_records(mode="float32")
+    right = _complete_one_dpu_records(mode="int8", runtime=1.0)
+    assert (
+        len(
+            pack.upmem_one_dpu_quantization_pairs(
+                pack.upmem_one_dpu_runtime_summary([*left, *right])
+            )
+        )
+        == 1
+    )
+
+    mismatch = [dict(record, contraction_plan_hash="different") for record in right]
+    assert (
+        pack.upmem_one_dpu_quantization_pairs(
+            pack.upmem_one_dpu_runtime_summary([*left, *mismatch])
+        )
+        == []
+    )
+    bringup = [dict(record, timing_is_bringup_only=True) for record in right]
+    assert pack.upmem_one_dpu_runtime_summary([*left, *bringup])
+
+
+def test_one_dpu_pairs_reject_duplicate_repeats_and_binary_identity_mismatch() -> None:
+    left = _complete_one_dpu_records(mode="float32")
+    duplicate = _one_dpu_record(mode="float32", repeat=0, runtime=1.0)
+    right = _complete_one_dpu_records(mode="int8", runtime=1.0)
+    summary = pack.upmem_one_dpu_runtime_summary([*left, duplicate, *right])
+    float_row = next(row for row in summary if row["quantization_mode"] == "float32")
+    assert float_row["study_comparison_ready"] is False
+    assert float_row["duplicate_repeat_ids"] == [0]
+    assert pack.upmem_one_dpu_quantization_pairs(summary) == []
+
+    different_binary = _complete_one_dpu_records(mode="int8", host_binary_hash="other")
+    assert (
+        pack.upmem_one_dpu_quantization_pairs(
+            pack.upmem_one_dpu_runtime_summary([*left, *different_binary])
+        )
+        == []
+    )
+
+
+def test_one_dpu_summary_rejects_unverified_hardware_or_release_rows() -> None:
+    record = _one_dpu_record(hardware_release_verified=False)
+    assert pack.upmem_one_dpu_runtime_summary([record]) == []
+
+    record = _one_dpu_record(simulator_kernel_executed=True)
+    assert pack.upmem_one_dpu_runtime_summary([record]) == []
+
+    record = _one_dpu_record(allocated_dpu_count=2, multi_dpu_execution=True)
+    assert pack.upmem_one_dpu_runtime_summary([record]) == []
+
+
+def test_one_dpu_pairs_require_all_seven_fixed_repeat_ids() -> None:
+    left = _complete_one_dpu_records(mode="float32")
+    right = _complete_one_dpu_records(mode="int8", runtime=1.0)[:-1]
+    summary = pack.upmem_one_dpu_runtime_summary([*left, *right])
+    int8_row = next(row for row in summary if row["quantization_mode"] == "int8")
+    assert int8_row["study_comparison_ready"] is False
+    assert int8_row["missing_repeat_ids"] == [6]
+    assert pack.upmem_one_dpu_quantization_pairs(summary) == []
+
+
+def test_one_dpu_path_pairs_require_matching_circuit_tn_and_different_structure() -> (
+    None
+):
+    left = _complete_one_dpu_records(path="path-a")
+    right = _complete_one_dpu_records(path="path-b", runtime=1.0)
+    pairs = pack.upmem_one_dpu_path_pairs(
+        pack.upmem_one_dpu_runtime_summary([*left, *right])
+    )
+    assert len(pairs) == 1
+    assert pairs[0]["path_structure_differs"] is True
+    assert (
+        pack.upmem_one_dpu_path_pairs(
+            pack.upmem_one_dpu_runtime_summary(
+                [
+                    *left,
+                    *[dict(record, tensor_network_hash="other") for record in right],
+                ]
+            )
+        )
+        == []
+    )
+
+
+def test_one_dpu_plot_names_and_todos_with_fixture_records(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _install_fake_matplotlib(monkeypatch)
+    summary = pack.upmem_one_dpu_runtime_summary(
+        [
+            *_complete_one_dpu_records(),
+            *_complete_one_dpu_records(mode="int8", runtime=1.0),
+        ]
+    )
+    manifest = pack.write_plots(tmp_path, [], [], [], [], [], one_dpu_rows=summary)
+    names = {entry["plot"]: entry["status"] for entry in manifest["plots"]}
+    expected = {
+        "upmem_one_dpu_path_quantization_runtime.png",
+        "upmem_one_dpu_quantization_ratio_by_path.png",
+        "upmem_one_dpu_path_ratio_by_numeric_mode.png",
+        "upmem_one_dpu_timing_breakdown.png",
+        "upmem_one_dpu_transfer_by_path_mode.png",
+        "upmem_one_dpu_error_by_path_mode.png",
+        "upmem_one_dpu_path_characteristics.png",
+    }
+    assert expected <= names.keys()
+    assert names["upmem_one_dpu_path_quantization_runtime.png"] == "generated_valid"
+    assert names["upmem_one_dpu_quantization_ratio_by_path.png"].startswith(
+        "generated_todo_"
+    )
+    quantization_ratio_spec = next(
+        entry
+        for entry in manifest["plots"]
+        if entry["plot"] == "upmem_one_dpu_quantization_ratio_by_path.png"
+    )
+    assert (
+        "left_steady_state_graph_execution_s_median"
+        in quantization_ratio_spec["source_fields"]
+    )
+    assert (
+        "right_steady_state_graph_execution_s_iqr"
+        in quantization_ratio_spec["source_fields"]
+    )
 
 
 def test_physical_quantization_uses_float32_full_precision_error_when_not_quantized() -> (
@@ -696,6 +905,38 @@ def test_benchmark_summary_separates_completed_todo_and_failed_figures() -> None
     assert "`valid.png`: measured" in summary
     assert "`todo.png`: generated_todo_missing_data" in summary
     assert "`failed.png`: failed" in summary
+
+
+def test_benchmark_summary_explains_one_dpu_within_route_claim_boundary() -> None:
+    row = pack.upmem_one_dpu_runtime_summary(
+        [
+            *_complete_one_dpu_records(),
+            *_complete_one_dpu_records(mode="int8", runtime=1.0),
+        ]
+    )
+    quantization_pairs = pack.upmem_one_dpu_quantization_pairs(row)
+    summary = pack.benchmark_summary(
+        {"selected_suites": {}, "commands": []},
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        {"plots": []},
+        {"status": "ok"},
+        [],
+        one_dpu_rows=row,
+        one_dpu_quantization_pairs=quantization_pairs,
+        one_dpu_path_pairs=[],
+    )
+
+    assert "## Physical One-DPU Path And Quantization Study" in summary
+    assert "ratios are not speedups" in summary
+    assert "`upmem_one_dpu_quantization_pairs.csv`" in summary
 
 
 def test_per_case_route_stats_propagates_normalized_frontier_metadata() -> None:

@@ -209,3 +209,14 @@ Do not jump directly to hardware. The next implementation should either:
 
 Only after that passes validation should true hardware multi-DPU allocation be
 considered.
+
+## Readiness Tag: Prerequisites Only
+
+`UPMEM_MULTI_DPU_READINESS=prerequisites_only`.
+
+The physical one-DPU path/quantization study is steady-state route evidence
+only. It does not advance multi-DPU readiness and provides no multi-DPU
+execution, speedup, energy, communication, synchronization, reduction, or
+occupancy claim. A future multi-DPU implementation still requires the gates
+above, real DPU-group allocation and task assignment, explicit transfer and
+synchronization metadata, and final validation against the selected reference.

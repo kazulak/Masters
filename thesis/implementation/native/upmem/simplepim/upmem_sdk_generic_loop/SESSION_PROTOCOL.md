@@ -46,6 +46,41 @@ status, failure stage, SDK error code, stage timings, and an output reference
 (path and byte count) for successful tasks. The response is a host-side SDK
 record, not a physical bus counter or a performance claim.
 
+## Interactive session
+
+The additive interactive invocation is:
+
+    host --interactive-session --bootstrap-manifest bootstrap.json
+
+The bootstrap manifest is `generic_loop_interactive_session_v1` with
+`manifest_kind` `bootstrap`, a safe relative `dpu_binary`,
+`requested_dpus: 1`, and `tasklets: 1`. After one allocation and one binary
+load, the host writes one JSON readiness event to stdout and flushes it:
+
+    {"schema_version":"generic_loop_interactive_session_v1","event":"ready",
+     "status":"ready","requested_dpus":1,"allocated_dpus":1,
+     "allocation_time_s":0.0,"binary_load_time_s":0.0}
+
+The controller writes newline-delimited commands to stdin:
+
+    REQUEST request.json response.json
+    CLOSE
+
+Both command paths are safe relative paths under the bootstrap manifest
+directory. A request manifest uses `manifest_kind` `request`, a `request_id`,
+`requested_dpus: 1`, `tasklets: 1`, and an ordered `tasks` array containing
+exactly one or four component tasks. Task paths are safe relative paths under
+the request manifest directory. The response uses `manifest_kind` `response`
+and preserves each task's output path plus input-read, H2D, synchronous kernel,
+D2H, output-write, and total timings.
+
+Each request response is flushed to its response path and acknowledged by a
+JSON stdout event containing the actual response relative path. `CLOSE`,
+request failure, protocol failure, and EOF release the DPU set. The `closed`
+event reports `released: true` only after `dpu_free` succeeds. A timeout is not
+treated as proof of release. This protocol never selects a simulator or CPU
+fallback and does not alter the existing `--session-manifest` batch protocol.
+
 The initial contract deliberately requires one DPU and one tasklet. The
 compiled UPMEM_GENERIC_HARDWARE_MVP=1 profile continues to select the existing
 physical backend=hw allocation profile; simulator and hardware selection remain

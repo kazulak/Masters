@@ -364,10 +364,16 @@ static int read_manifest(const char *path, char **contents, size_t *length) {
     return 0;
 }
 
-int upmem_generic_session_load(
+static int load_task_manifest(
     const char *manifest_path,
     upmem_generic_session *session,
-    char **error_message
+    char **error_message,
+    const char *schema,
+    const char *kind,
+    const char *id_key,
+    int require_binary,
+    int require_nonempty_tasks,
+    int interactive_request
 ) {
     char *contents = NULL;
     char *base = NULL;
@@ -403,14 +409,14 @@ int upmem_generic_session_load(
         if (strcmp(key, "schema_version") == 0) {
             char *value = NULL;
             if (parse_string(&reader, &value) != 0) { free(key); goto parse_failed; }
-            has_schema = strcmp(value, UPMEM_GENERIC_SESSION_SCHEMA) == 0;
+            has_schema = strcmp(value, schema) == 0;
             free(value);
         } else if (strcmp(key, "manifest_kind") == 0) {
             char *value = NULL;
             if (parse_string(&reader, &value) != 0) { free(key); goto parse_failed; }
-            has_kind = strcmp(value, UPMEM_GENERIC_SESSION_INPUT_KIND) == 0;
+            has_kind = strcmp(value, kind) == 0;
             free(value);
-        } else if (strcmp(key, "session_id") == 0) {
+        } else if (strcmp(key, id_key) == 0) {
             free(session->session_id);
             if (parse_string(&reader, &session->session_id) != 0) { free(key); goto parse_failed; }
         } else if (strcmp(key, "dpu_binary") == 0) {
@@ -439,12 +445,16 @@ int upmem_generic_session_load(
         if (consume(&reader, ',') != 0) goto parse_failed;
     }
     skip_space(&reader);
-    if (reader.cursor != reader.end || !has_schema || !has_kind || !has_binary ||
-        !has_dpus || !has_tasklets || !has_tasks ||
+    if (reader.cursor != reader.end || !has_schema || !has_kind ||
+        (require_binary && !has_binary) || !has_dpus || !has_tasklets ||
+        (require_nonempty_tasks && (!has_tasks || session->task_count == 0u)) ||
         session->requested_dpus != 1u || session->tasklets != 1u ||
-        session->task_count == 0u) goto parse_failed;
-    session->dpu_binary_path = resolve_path(base, session->dpu_binary_ref);
-    if (session->dpu_binary_path == NULL) goto parse_failed;
+        (interactive_request && (session->session_id == NULL || session->session_id[0] == '\0')) ||
+        (interactive_request && session->task_count != 1u && session->task_count != 4u)) goto parse_failed;
+    if (require_binary) {
+        session->dpu_binary_path = resolve_path(base, session->dpu_binary_ref);
+        if (session->dpu_binary_path == NULL) goto parse_failed;
+    }
     free(base);
     free(contents);
     return 0;
@@ -455,6 +465,140 @@ parse_failed:
     set_error(error_message, "invalid upmem_generic_session_v1 manifest");
     upmem_generic_session_free(session);
     return 1;
+}
+
+int upmem_generic_session_load(
+    const char *manifest_path,
+    upmem_generic_session *session,
+    char **error_message
+) {
+    return load_task_manifest(
+        manifest_path, session, error_message,
+        UPMEM_GENERIC_SESSION_SCHEMA,
+        UPMEM_GENERIC_SESSION_INPUT_KIND,
+        "session_id", 1, 1, 0
+    );
+}
+
+int upmem_generic_interactive_request_load(
+    const char *manifest_path,
+    upmem_generic_session *request,
+    char **error_message
+) {
+    return load_task_manifest(
+        manifest_path, request, error_message,
+        UPMEM_GENERIC_INTERACTIVE_SCHEMA,
+        UPMEM_GENERIC_INTERACTIVE_REQUEST_KIND,
+        "request_id", 0, 1, 1
+    );
+}
+
+int upmem_generic_interactive_bootstrap_load(
+    const char *manifest_path,
+    upmem_generic_interactive_bootstrap *bootstrap,
+    char **error_message
+) {
+    char *contents = NULL;
+    char *base = NULL;
+    char *session_id = NULL;
+    char *binary_ref = NULL;
+    size_t length = 0u;
+    json_reader reader;
+    uint32_t requested_dpus = 0u;
+    uint32_t tasklets = 0u;
+    int has_schema = 0;
+    int has_kind = 0;
+    int has_id = 0;
+    int has_binary = 0;
+    int has_dpus = 0;
+    int has_tasklets = 0;
+
+    memset(bootstrap, 0, sizeof(*bootstrap));
+    if (read_manifest(manifest_path, &contents, &length) != 0) {
+        set_error(error_message, "unable to read interactive bootstrap manifest");
+        return 1;
+    }
+    base = manifest_base(manifest_path);
+    if (base == NULL) goto bootstrap_failed;
+    reader.cursor = contents;
+    reader.end = contents + length;
+    if (consume(&reader, '{') != 0) goto bootstrap_failed;
+    for (;;) {
+        char *key = NULL;
+        if (parse_string(&reader, &key) != 0 || consume(&reader, ':') != 0) {
+            free(key);
+            goto bootstrap_failed;
+        }
+        if (strcmp(key, "schema_version") == 0) {
+            char *value = NULL;
+            if (parse_string(&reader, &value) != 0) { free(key); goto bootstrap_failed; }
+            has_schema = strcmp(value, UPMEM_GENERIC_INTERACTIVE_SCHEMA) == 0;
+            free(value);
+        } else if (strcmp(key, "manifest_kind") == 0) {
+            char *value = NULL;
+            if (parse_string(&reader, &value) != 0) { free(key); goto bootstrap_failed; }
+            has_kind = strcmp(value, UPMEM_GENERIC_INTERACTIVE_BOOTSTRAP_KIND) == 0;
+            free(value);
+        } else if (strcmp(key, "session_id") == 0) {
+            free(session_id);
+            if (parse_string(&reader, &session_id) != 0) { free(key); goto bootstrap_failed; }
+            has_id = 1;
+        } else if (strcmp(key, "dpu_binary") == 0) {
+            free(binary_ref);
+            if (parse_string(&reader, &binary_ref) != 0) { free(key); goto bootstrap_failed; }
+            has_binary = 1;
+        } else if (strcmp(key, "requested_dpus") == 0) {
+            if (parse_uint(&reader, &requested_dpus) != 0) { free(key); goto bootstrap_failed; }
+            has_dpus = 1;
+        } else if (strcmp(key, "tasklets") == 0) {
+            if (parse_uint(&reader, &tasklets) != 0) { free(key); goto bootstrap_failed; }
+            has_tasklets = 1;
+        } else if (skip_value(&reader) != 0) {
+            free(key);
+            goto bootstrap_failed;
+        }
+        free(key);
+        skip_space(&reader);
+        if (reader.cursor < reader.end && *reader.cursor == '}') {
+            reader.cursor++;
+            break;
+        }
+        if (consume(&reader, ',') != 0) goto bootstrap_failed;
+    }
+    skip_space(&reader);
+    if (reader.cursor != reader.end || !has_schema || !has_kind || !has_id ||
+        !has_binary || !has_dpus || !has_tasklets || session_id == NULL ||
+        session_id[0] == '\0' || requested_dpus != 1u || tasklets != 1u) {
+        goto bootstrap_failed;
+    }
+    bootstrap->dpu_binary_path = resolve_path(base, binary_ref);
+    if (bootstrap->dpu_binary_path == NULL) goto bootstrap_failed;
+    bootstrap->session_id = session_id;
+    bootstrap->dpu_binary_ref = binary_ref;
+    bootstrap->requested_dpus = requested_dpus;
+    bootstrap->tasklets = tasklets;
+    free(base);
+    free(contents);
+    return 0;
+
+bootstrap_failed:
+    free(session_id);
+    free(binary_ref);
+    free(base);
+    free(contents);
+    set_error(error_message, "invalid generic_loop_interactive_session_v1 bootstrap manifest");
+    upmem_generic_interactive_bootstrap_free(bootstrap);
+    return 1;
+}
+
+void upmem_generic_interactive_bootstrap_free(
+    upmem_generic_interactive_bootstrap *bootstrap
+) {
+    if (bootstrap == NULL) return;
+    free(bootstrap->session_id);
+    free(bootstrap->dpu_binary_ref);
+    free(bootstrap->dpu_binary_path);
+    memset(bootstrap, 0, sizeof(*bootstrap));
 }
 
 void upmem_generic_session_free(upmem_generic_session *session) {
@@ -488,7 +632,7 @@ static const char *task_status(int status) {
         status == UPMEM_GENERIC_SESSION_TASK_FAILED ? "failed" : "not_run";
 }
 
-int upmem_generic_session_write_response(
+static int write_response_for_protocol(
     const char *response_path,
     const upmem_generic_session *session,
     const char *status,
@@ -498,8 +642,12 @@ int upmem_generic_session_write_response(
     int sdk_error_code,
     double allocation_time_s,
     double binary_load_time_s,
-    double batch_time_s,
-    double release_time_s
+    double work_time_s,
+    double release_time_s,
+    const char *schema,
+    const char *kind,
+    const char *id_field,
+    const char *work_field
 ) {
     FILE *file = fopen(response_path, "wb");
     size_t completed = 0u;
@@ -512,10 +660,11 @@ int upmem_generic_session_write_response(
     fprintf(
         file,
         "{\n  \"schema_version\": \"%s\",\n  \"manifest_kind\": \"%s\",\n"
-        "  \"session_id\": ",
-        UPMEM_GENERIC_SESSION_SCHEMA,
-        UPMEM_GENERIC_SESSION_OUTPUT_KIND
+        "  ",
+        schema,
+        kind
     );
+    fprintf(file, "\"%s\": ", id_field);
     write_json_string(file, session->session_id ? session->session_id : "");
     fprintf(file, ",\n  \"status\": ");
     write_json_string(file, status);
@@ -530,12 +679,12 @@ int upmem_generic_session_write_response(
         "  \"completed_task_count\": %zu,\n  \"sdk_error_code\": %d,\n"
         "  \"allocation_profile\": %s,\n"
         "  \"allocation_time_s\": %.9f,\n  \"binary_load_time_s\": %.9f,\n"
-        "  \"batch_time_s\": %.9f,\n  \"release_time_s\": %.9f,\n"
+        "  \"%s\": %.9f,\n  \"release_time_s\": %.9f,\n"
         "  \"tasks\": [\n",
         session->requested_dpus, allocated_dpus, session->tasklets,
         session->task_count, completed, sdk_error_code,
         SESSION_ALLOCATION_PROFILE_JSON, allocation_time_s,
-        binary_load_time_s, batch_time_s, release_time_s
+        binary_load_time_s, work_field, work_time_s, release_time_s
     );
     for (size_t i = 0; i < session->task_count; i++) {
         const upmem_generic_session_task *task = &session->tasks[i];
@@ -573,6 +722,51 @@ int upmem_generic_session_write_response(
     }
 }
 
+int upmem_generic_session_write_response(
+    const char *response_path,
+    const upmem_generic_session *session,
+    const char *status,
+    const char *failure_stage,
+    const char *error_message,
+    uint32_t allocated_dpus,
+    int sdk_error_code,
+    double allocation_time_s,
+    double binary_load_time_s,
+    double batch_time_s,
+    double release_time_s
+) {
+    return write_response_for_protocol(
+        response_path, session, status, failure_stage, error_message,
+        allocated_dpus, sdk_error_code, allocation_time_s, binary_load_time_s,
+        batch_time_s, release_time_s,
+        UPMEM_GENERIC_SESSION_SCHEMA, UPMEM_GENERIC_SESSION_OUTPUT_KIND,
+        "session_id", "batch_time_s"
+    );
+}
+
+int upmem_generic_interactive_request_write_response(
+    const char *response_path,
+    const upmem_generic_session *request,
+    const char *status,
+    const char *failure_stage,
+    const char *error_message,
+    uint32_t allocated_dpus,
+    int sdk_error_code,
+    double allocation_time_s,
+    double binary_load_time_s,
+    double request_time_s,
+    double release_time_s
+) {
+    return write_response_for_protocol(
+        response_path, request, status, failure_stage, error_message,
+        allocated_dpus, sdk_error_code, allocation_time_s, binary_load_time_s,
+        request_time_s, release_time_s,
+        UPMEM_GENERIC_INTERACTIVE_SCHEMA,
+        UPMEM_GENERIC_INTERACTIVE_RESPONSE_KIND,
+        "request_id", "request_time_s"
+    );
+}
+
 int upmem_generic_session_write_error_response(
     const char *response_path,
     const char *failure_stage,
@@ -583,6 +777,21 @@ int upmem_generic_session_write_error_response(
     empty.requested_dpus = 1u;
     empty.tasklets = 1u;
     return upmem_generic_session_write_response(
+        response_path, &empty, "failed", failure_stage, error_message,
+        0u, -1, 0.0, 0.0, 0.0, 0.0
+    );
+}
+
+int upmem_generic_interactive_request_write_error_response(
+    const char *response_path,
+    const char *failure_stage,
+    const char *error_message
+) {
+    upmem_generic_session empty;
+    memset(&empty, 0, sizeof(empty));
+    empty.requested_dpus = 1u;
+    empty.tasklets = 1u;
+    return upmem_generic_interactive_request_write_response(
         response_path, &empty, "failed", failure_stage, error_message,
         0u, -1, 0.0, 0.0, 0.0, 0.0
     );
