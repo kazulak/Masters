@@ -1,4 +1,6 @@
 PYTHON ?= ../.venv/bin/python
+PYTHON_BIN_DIR := $(abspath $(dir $(PYTHON)))
+export PATH := $(PYTHON_BIN_DIR):$(PATH)
 PY_ENV := PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src
 BENCH := $(PY_ENV) $(PYTHON) -m quantum_bench.bench
 BENCH_CPU_THREADS ?=

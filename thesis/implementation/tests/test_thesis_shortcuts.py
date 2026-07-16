@@ -46,6 +46,8 @@ def test_makefile_shortcuts_are_defined() -> None:
     assert "thesis-run: build-quest-cpu" in text
     assert "research_benchmark_pack.py run --full" in text
     assert "BENCH_CPU_THREADS ?=" in text
+    assert "PYTHON_BIN_DIR := $(abspath $(dir $(PYTHON)))" in text
+    assert "export PATH := $(PYTHON_BIN_DIR):$(PATH)" in text
     assert "OPENBLAS_NUM_THREADS=$(BENCH_CPU_THREADS)" in text
     assert "scripts/thesis_snapshot.py promote" in text
     assert "scripts/thesis_snapshot.py report" in text
