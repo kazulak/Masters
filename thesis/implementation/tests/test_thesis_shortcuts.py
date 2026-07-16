@@ -54,6 +54,12 @@ def test_makefile_shortcuts_are_defined() -> None:
     assert "scripts/thesis_runs.py prune" in text
     assert "scripts/thesis_runs.py list" in text
 
+    cpu_makefile = (ROOT / "native" / "quest_cpu" / "Makefile").read_text(encoding="utf-8")
+    assert "CC = gcc" in cpu_makefile
+    assert "CXX = g++" in cpu_makefile
+    assert "-DCMAKE_C_COMPILER=$(CC)" in cpu_makefile
+    assert "-DCMAKE_CXX_COMPILER=$(CXX)" in cpu_makefile
+
 
 def test_readme_documents_shortcut_targets() -> None:
     text = (ROOT / "README.md").read_text(encoding="utf-8")

@@ -17,8 +17,8 @@ QUEST_BUILD ?= $(THESIS_ROOT)/build/external/QuEST
 QUEST_BUILD_TYPE ?= Release
 QUEST_BUILD_JOBS ?= 2
 CMAKE ?= cmake
-
 CC = gcc
+CXX = g++
 
 # -O3: Max opt | -march=native: AVX2/AVX-512 | -fopenmp: Multithreading
 CFLAGS = -O3 -march=native -fopenmp -Wall \
@@ -57,7 +57,8 @@ TARGET = $(BIN_DIR)/quest_runner
 all: quest-lib prep $(TARGET)
 
 quest-lib:
-	$(CMAKE) -S $(QUEST_DIR) -B $(QUEST_BUILD) -DCMAKE_BUILD_TYPE=$(QUEST_BUILD_TYPE)
+	$(CMAKE) -S $(QUEST_DIR) -B $(QUEST_BUILD) -DCMAKE_BUILD_TYPE=$(QUEST_BUILD_TYPE) \
+		-DCMAKE_C_COMPILER=$(CC) -DCMAKE_CXX_COMPILER=$(CXX)
 	$(CMAKE) --build $(QUEST_BUILD) -j$(QUEST_BUILD_JOBS)
 
 prep:
