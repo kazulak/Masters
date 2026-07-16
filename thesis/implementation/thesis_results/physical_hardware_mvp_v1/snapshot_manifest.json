@@ -1,0 +1,77 @@
+{
+  "benchmark_source_commit": "8f936f022450b1ff89c08b9671f02b6fc75247e3",
+  "benchmark_source_worktree_dirty": false,
+  "created_at": "2026-07-16T09:32:19.968980+00:00",
+  "dirty_tree": false,
+  "dirty_worktree": false,
+  "evidence_level": "normalized_report_regenerable",
+  "git_commit": "8f936f022450b1ff89c08b9671f02b6fc75247e3",
+  "planner_semantics": {
+    "contexts": [],
+    "execution_policies": [],
+    "issues": [],
+    "legacy_score_models": [],
+    "normalizations": [],
+    "objective_versions": [],
+    "planner_config_hashes": [],
+    "planner_record_count": 0,
+    "score_models": [],
+    "semantic_versions": [],
+    "weight_profiles": []
+  },
+  "plots_dir": "plots",
+  "provenance_aliases": {
+    "dirty_tree": "alias of benchmark_source_worktree_dirty",
+    "dirty_worktree": "alias of benchmark_source_worktree_dirty",
+    "git_commit": "alias of benchmark_source_commit"
+  },
+  "provenance_scope": "thesis/implementation",
+  "provenance_stages": {
+    "benchmark_source": {
+      "commit": "8f936f022450b1ff89c08b9671f02b6fc75247e3",
+      "repository_worktree_dirty": false,
+      "scope": "thesis/implementation",
+      "worktree_dirty": false
+    },
+    "report_generation": {
+      "commit": "8f936f022450b1ff89c08b9671f02b6fc75247e3",
+      "repository_worktree_dirty": true,
+      "scope": "thesis/implementation",
+      "worktree_dirty": false
+    },
+    "snapshot_promotion": {
+      "commit": "8f936f022450b1ff89c08b9671f02b6fc75247e3",
+      "repository_worktree_dirty": true,
+      "scope": "thesis/implementation",
+      "worktree_dirty": false
+    }
+  },
+  "raw_tensor_artifacts_included": false,
+  "report_entrypoint": "README.md",
+  "report_generation_commit": "8f936f022450b1ff89c08b9671f02b6fc75247e3",
+  "report_generation_worktree_dirty": false,
+  "repository_worktree_dirty": true,
+  "schema_version": "thesis_result_snapshot_v1",
+  "selected_evidence": [
+    {
+      "benchmark_source_commit": "8f936f022450b1ff89c08b9671f02b6fc75247e3",
+      "benchmark_source_worktree_dirty": false,
+      "dirty_tree": false,
+      "dirty_worktree": false,
+      "git_commit": "8f936f022450b1ff89c08b9671f02b6fc75247e3",
+      "provenance_scope": "thesis/implementation",
+      "record_count": 10,
+      "repository_worktree_dirty": false,
+      "role": "upmem_hardware_functionality",
+      "run_id": "2026-07-16_09-21-38",
+      "snapshot_path": "evidence/upmem_hardware_functionality",
+      "source_run": "/home/tom/repos/Masters/thesis/upmem-investigation/upmem_hw_dense/2026-07-16_09-21-38",
+      "suite_id": "upmem_hardware_mvp"
+    }
+  ],
+  "snapshot_id": "current",
+  "snapshot_promotion_commit": "8f936f022450b1ff89c08b9671f02b6fc75247e3",
+  "snapshot_promotion_worktree_dirty": false,
+  "source_pack": "runs/comparisons/physical_upmem_mvp/2026-07-16_09-21-38",
+  "tables_dir": "tables"
+}

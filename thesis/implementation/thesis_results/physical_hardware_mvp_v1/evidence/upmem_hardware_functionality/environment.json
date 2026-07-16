@@ -1,0 +1,193 @@
+{
+  "benchmark_threads": {
+    "BENCH_CPU_THREADS": null,
+    "MKL_NUM_THREADS": null,
+    "NUMEXPR_NUM_THREADS": null,
+    "OMP_DYNAMIC": null,
+    "OMP_NUM_THREADS": null,
+    "OMP_PLACES": null,
+    "OMP_PROC_BIND": null,
+    "OPENBLAS_NUM_THREADS": null
+  },
+  "blas": {
+    "configuration": "OpenBLAS 0.3.29  USE64BITINT DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=64",
+    "name": "scipy-openblas",
+    "version": "0.3.29"
+  },
+  "compiler": "cc (Ubuntu 9.4.0-1ubuntu1~20.04.2) 9.4.0",
+  "cotengra": "0.7.5",
+  "cpu_affinity": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31
+  ],
+  "cpu_count": 32,
+  "cpu_frequency_governor": "powersave",
+  "git_commit": "8f936f022450b1ff89c08b9671f02b6fc75247e3",
+  "gpu": {
+    "amd_smi": null,
+    "cupy": null,
+    "gpu_execution_backend_added": false,
+    "hipcc": null,
+    "jax": null,
+    "rocm_smi": null,
+    "rocminfo": null,
+    "torch": null
+  },
+  "hostname": "safari-baguette1",
+  "machine": "x86_64",
+  "matplotlib": "3.10.8",
+  "mem_total_kib": 131104684,
+  "numpy": "2.2.6",
+  "openmp": {
+    "OMP_DYNAMIC": null,
+    "OMP_NUM_THREADS": null,
+    "OMP_PLACES": null,
+    "OMP_PROC_BIND": null
+  },
+  "opt_einsum": "3.4.0",
+  "physical_cpu_count": 16,
+  "platform": "Linux-5.4.0-216-generic-x86_64-with-glibc2.31",
+  "processor": "x86_64",
+  "python": "3.10.20",
+  "quantum_bench_version": "0.1.0",
+  "quimb": "1.11.2",
+  "rapl": {
+    "available": false,
+    "path": "/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj",
+    "powercap_energy_uj_paths": []
+  },
+  "simplepim": {
+    "SIMPLEPIM_BIN": null,
+    "SIMPLEPIM_HOME": null,
+    "SIMPLEPIM_LIB": null,
+    "available": false,
+    "command_path": null,
+    "probe_status": "unavailable",
+    "skip_reason": "SimplePIM is not configured; set SIMPLEPIM_BIN or put a SimplePIM command on PATH"
+  },
+  "sudo": {
+    "effective_uid": 1018,
+    "sudo_gid": null,
+    "sudo_uid": null
+  },
+  "upmem": {
+    "UPMEM_HOME": null,
+    "dpu_compiler": "/usr/bin/dpu-upmem-dpurte-clang"
+  },
+  "upmem_hardware_mvp": {
+    "DPU_BACKEND_present": false,
+    "UPMEM_ALLOW_PHYSICAL_HARDWARE": true,
+    "UPMEM_PROFILE_BASE_present": false,
+    "UPMEM_PROFILE_present": false,
+    "energy_measurement_status": "not_measured",
+    "hardware_timing_available": false,
+    "physical_child_environment_sanitized": true,
+    "sdk_allocation_profile": "backend=hw",
+    "sdk_discovery": {
+      "tools": [
+        {
+          "available": true,
+          "command": [
+            "/usr/bin/dpu-upmem-dpurte-clang",
+            "--version"
+          ],
+          "name": "dpu-upmem-dpurte-clang",
+          "path": "/usr/bin/dpu-upmem-dpurte-clang",
+          "probe_status": "passed",
+          "return_code": 0,
+          "stderr_snippet": "",
+          "stdout_snippet": "clang version 12.0.0 (https://github.com/upmem/llvm-project.git 60b8f628d9878b2690999bb237f3140c8defda60)\nTarget: dpu-upmem-dpurte\nThread model: posix\nInstalledDir: /usr/bin\n",
+          "timed_out": false
+        },
+        {
+          "available": true,
+          "command": [
+            "/usr/bin/dpu-pkg-config",
+            "--version"
+          ],
+          "name": "dpu-pkg-config",
+          "path": "/usr/bin/dpu-pkg-config",
+          "probe_status": "passed",
+          "return_code": 0,
+          "stderr_snippet": "",
+          "stdout_snippet": "0.29.1\n",
+          "timed_out": false
+        },
+        {
+          "available": true,
+          "command": [
+            "/usr/bin/dpu-lldb",
+            "--version"
+          ],
+          "name": "dpu-lldb",
+          "path": "/usr/bin/dpu-lldb",
+          "probe_status": "passed",
+          "return_code": 0,
+          "stderr_snippet": "",
+          "stdout_snippet": "lldb version 12.0.0 (https://github.com/upmem/llvm-project.git revision 60b8f628d9878b2690999bb237f3140c8defda60)\n  clang revision 60b8f628d9878b2690999bb237f3140c8defda60\n  llvm revision 60b8f628d9878b2690999bb237f3140c8defda60\n",
+          "timed_out": false
+        },
+        {
+          "available": true,
+          "command": [
+            "/usr/bin/dpu-diag",
+            "--help"
+          ],
+          "name": "dpu-diag",
+          "path": "/usr/bin/dpu-diag",
+          "probe_status": "failed",
+          "return_code": 1,
+          "stderr_snippet": "",
+          "stdout_snippet": "NAME\n        dpu-diag - Diagnose UPMEM SDK\n\nSYNOPSIS\n        dpu-diag [options]\n\nDESCRIPTION\n        Without option, dpu-diag verifies that everything from the SDK and the runtime is installed and working.\n\nOPTIONS\n        --sram-gen-vpd  Detect SRAM defects and produce a list in a file. By default, the files are stored\n                        in /usr/share/upmem/dimm-quirks, with files named after the DIMM serial number,\n                        ie UPM<serial_num>.vpd\n\n        --extensive-check\n                        Extensive detection of SRAM defects using a DPU program. This option is incompatible\n                        with --vpd-dir as VPD files will be searched in /usr/share/upmem/dimm-quirks\n\n        -f, --force     Force creation of vpd from scratch, without reading existing one.\n\n        --color         Force colorize the output\n\n        -h, --help      Print this help and exit\n",
+          "timed_out": false
+        },
+        {
+          "available": true,
+          "command": [
+            "/usr/bin/dpu-profiling",
+            "--help"
+          ],
+          "name": "dpu-profiling",
+          "path": "/usr/bin/dpu-profiling",
+          "probe_status": "failed",
+          "return_code": 1,
+          "stderr_snippet": "Traceback (most recent call last):\n  File \"/usr/bin/dpu-profiling\", line 11, in <module>\n    from dpu_profiling import post_process_json_file, extract_api_symbols_from_file, print_dpu_statistics, ctf_to_tef\n  File \"/usr/lib/python3/dist-packages/dpu_profiling/__init__.py\", line 2, in <module>\n    from .dpu_profiling_extract_api_symbols import extract_api_symbols_from_file\n  File \"/usr/lib/python3/dist-packages/dpu_profiling/dpu_profiling_extract_api_symbols.py\", line 9, in <module>\n    from elftools.common.py3compat import maxint, bytes2str\nModuleNotFoundError: No module named 'elftools'\n",
+          "stdout_snippet": "",
+          "timed_out": false
+        }
+      ],
+      "upmem_sdk_detected": true,
+      "upmem_sdk_home": null
+    }
+  }
+}

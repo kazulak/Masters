@@ -1,0 +1,2 @@
+schema_version,route_id,validation_status,record_count
+research_benchmark_pack_v1,upmem_dense_l1_int8_hardware_mvp,passed,10

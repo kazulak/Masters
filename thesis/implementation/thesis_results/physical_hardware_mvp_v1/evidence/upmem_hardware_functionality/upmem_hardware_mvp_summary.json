@@ -1,0 +1,31 @@
+{
+  "backend_id": "upmem_sdk_hardware_dense",
+  "case_statuses": [
+    {
+      "attempted_repeats": 5,
+      "case_id": "dense_l1_2x2",
+      "status": "passed"
+    },
+    {
+      "attempted_repeats": 5,
+      "case_id": "dense_l1_4x4",
+      "status": "passed"
+    }
+  ],
+  "hardware_profile_version": "hardware_mvp_l1_v2",
+  "normalized_records": "normalized_records.jsonl",
+  "route_id": "upmem_dense_l1_int8_hardware_mvp",
+  "row_count": 10,
+  "schema_version": "upmem_hardware_mvp_benchmark_v1",
+  "status": "completed",
+  "strict_scope": {
+    "hardware_functionality_evidence": true,
+    "hardware_speedup_applicable": false,
+    "no_cpu_fallback": true,
+    "no_simulator_fallback": true,
+    "requested_dpu_count": 1,
+    "synchronous_execution": true,
+    "tasklets_per_dpu": 1
+  },
+  "suite_id": "upmem_hardware_mvp"
+}

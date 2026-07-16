@@ -1,0 +1,38 @@
+schema_version: upmem_hardware_mvp_v1
+suite_id: upmem_hardware_mvp
+profile:
+  hardware_profile_version: hardware_mvp_l1_v2
+  target: hardware
+  execution_class: L1_WRAM
+  backend_id: upmem_sdk_hardware_dense
+  route_id: upmem_dense_l1_int8_hardware_mvp
+  kernel_strategy: l1_direct_int8_int32_v1
+  requested_dpu_count: 1
+  tasklets_per_dpu: 1
+  max_dim: 4
+  repetitions: 5
+  timeout_s: 30.0
+  input_dtype: int8
+  accumulator_dtype: int32
+  complex_policy: reject
+  synchronous_execution: true
+  performance_claim_applicable: false
+cases:
+  - id: dense_l1_2x2
+    left_int8:
+      - [2, -3]
+      - [4, 1]
+    right_int8:
+      - [5, 2]
+      - [-1, 3]
+  - id: dense_l1_4x4
+    left_int8:
+      - [1, -2, 3, 0]
+      - [4, 1, -1, 2]
+      - [0, 3, 2, -4]
+      - [-2, 5, 1, 3]
+    right_int8:
+      - [2, 1, -3, 4]
+      - [-1, 3, 2, 0]
+      - [4, -2, 1, 5]
+      - [3, 0, -4, 2]
