@@ -1,0 +1,66 @@
+schema_version: 2
+suite_id: upmem_hardware_taskgraph_resident_path_quantization
+metadata:
+  purpose: physical_one_dpu_mram_resident_path_and_quantization_timing_study
+  hardware_taskgraph_resident_schema_version: upmem_hardware_taskgraph_resident_v1
+  hardware_profile:
+    hardware_profile_version: hardware_taskgraph_single_dpu_mram_resident_v1
+    target: hardware
+    backend_id: upmem_sdk_hardware_taskgraph_resident
+    route_id: upmem_tn_hardware_taskgraph_resident
+    session_protocol: generic_loop_resident_graph_session_v1
+    timing_scope: one_dpu_mram_resident_full_taskgraph_v1
+    requested_dpu_count: 1
+    tasklets_per_dpu: 1
+    max_rank: 16
+    max_tensor_elements: 256
+    max_logical_tasks: 32
+    max_component_ops: 128
+    max_slot_descriptors: 128
+    mram_pool_bytes: 524288
+    max_contracted_combinations: 256
+    output_tile_elements: 256
+    numeric_modes: [none, per_task_resident_requantize]
+    complex_policy: split_real_imag_float32_dpu_complex_combine
+    synchronous_execution: true
+    timeout_s: 30.0
+    performance_claim_applicable: false
+  intended_timing_scope: one_dpu_mram_resident_full_taskgraph_v1
+  hardware_speedup_claim: forbidden
+  multi_dpu_execution: false
+defaults:
+  warmups: 2
+  repeats: 7
+  planner: {engine: opt_einsum, optimize: greedy}
+routes:
+  - id: upmem_tn_hardware_taskgraph_resident
+    role: hardware_one_dpu_mram_resident_path_quantization_study
+    required: false
+path_variants:
+  - id: opt_einsum_greedy
+    label: opt_einsum greedy
+    planner: {engine: opt_einsum, optimize: greedy}
+  - id: custom_upmem_v2_balanced
+    label: custom UPMEM v2 balanced
+    planner:
+      engine: custom_upmem
+      algorithm: greedy
+      objective_version: upmem_path_cost_v2
+      selection_scope: projected_prefix
+      weight_profile: balanced_literature_informed
+      normalization: fixed_log1p_generic_budgets_v2
+      execution_policy: generic_single_dpu_split_complex_v2
+workloads:
+  - {id: bv_3q_one_dpu, hardware_numeric_coverage: real, circuit: {kind: builtin, name: BV, n_qubits: 3}}
+  - {id: bv_4q_one_dpu, hardware_numeric_coverage: real, circuit: {kind: builtin, name: BV, n_qubits: 4}}
+  - {id: bv_5q_one_dpu, hardware_numeric_coverage: real, circuit: {kind: builtin, name: BV, n_qubits: 5}}
+  - {id: xor_3q_one_dpu, hardware_numeric_coverage: real, circuit: {kind: builtin, name: XOR, n_qubits: 3}}
+  - {id: xor_4q_one_dpu, hardware_numeric_coverage: real, circuit: {kind: builtin, name: XOR, n_qubits: 4}}
+  - {id: xor_5q_one_dpu, hardware_numeric_coverage: real, circuit: {kind: builtin, name: XOR, n_qubits: 5}}
+  - {id: edc_3q_one_dpu, hardware_numeric_coverage: real, circuit: {kind: builtin, name: EDC, n_qubits: 3}}
+  - {id: edc_4q_one_dpu, hardware_numeric_coverage: real, circuit: {kind: builtin, name: EDC, n_qubits: 4}}
+  - {id: edc_5q_one_dpu, hardware_numeric_coverage: real, circuit: {kind: builtin, name: EDC, n_qubits: 5}}
+  - {id: bb84_3q_one_dpu, hardware_numeric_coverage: real, circuit: {kind: builtin, name: BB84, n_qubits: 3}}
+  - {id: bb84_4q_one_dpu, hardware_numeric_coverage: real, circuit: {kind: builtin, name: BB84, n_qubits: 4}}
+  - {id: bb84_5q_one_dpu, hardware_numeric_coverage: real, circuit: {kind: builtin, name: BB84, n_qubits: 5}}
+  - {id: quantization_stress_2q_one_dpu, hardware_numeric_coverage: split_complex, circuit: {kind: builtin, name: quantization_stress, n_qubits: 2, repeat_layers: 1}}

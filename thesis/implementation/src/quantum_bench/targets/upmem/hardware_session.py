@@ -1040,3 +1040,244 @@ def _snippet(value: object, limit: int = 4000) -> str:
         else str(value)
     )
     return text if len(text) <= limit else text[:limit] + "\n...[truncated]"
+
+
+# ---------------------------------------------------------------------------
+# Additive MRAM-resident graph package protocol.
+# The legacy generic-loop and generic_loop_interactive_session_v1 APIs above
+# intentionally remain unchanged.  Resident callers use a sibling native
+# source tree and these separate entry points.
+
+RESIDENT_NATIVE_SOURCE_DIR = "upmem_sdk_generic_loop_resident"
+RESIDENT_NATIVE_SCHEMA_VERSION = "generic_loop_resident_graph_session_v1"
+RESIDENT_NATIVE_INPUT_KIND = "resident_graph_request"
+RESIDENT_NATIVE_OUTPUT_KIND = "resident_graph_response"
+
+
+@dataclass(frozen=True)
+class ResidentGraphSessionExecution:
+    status: str
+    failure_stage: str | None
+    response_path: Path
+    response: JsonDict
+    process_time_s: float
+    command: tuple[str, ...]
+    stdout_snippet: str
+    stderr_snippet: str
+
+
+def build_resident_hardware_session(
+    root_dir: Path,
+    session_root: Path,
+    *,
+    profile: Any,
+    environment: Mapping[str, str],
+) -> HardwareSessionBuild:
+    """Build the separate resident host/DPU binary pair once per run.
+
+    Building is a no-allocation preparation operation.  The physical guard is
+    enforced by the execute entry point and the native host immediately before
+    allocation, so a prepare-only build remains usable on a machine without a
+    DPU.
+    """
+    sdk = discover_upmem_sdk(env=environment)
+    required = {
+        tool.name: tool
+        for tool in sdk.tools
+        if tool.name in {"make", "dpu-upmem-dpurte-clang", "dpu-pkg-config"}
+    }
+    missing = sorted(name for name, tool in required.items() if not tool.available)
+    if missing:
+        raise RuntimeError(
+            "sdk_discovery_failed: missing required UPMEM SDK tools: "
+            + ", ".join(missing)
+        )
+
+    source = root_dir / "native" / "upmem" / "simplepim" / RESIDENT_NATIVE_SOURCE_DIR
+    source_snapshot = session_root / "native" / "src"
+    build_dir = session_root / "native" / "build"
+    if not source.is_dir():
+        raise RuntimeError("native_build_failed: resident native source tree is missing")
+    _copy_source_tree(source, source_snapshot)
+    _copy_source_tree(source, build_dir)
+    command = (
+        "make",
+        "clean",
+        "all",
+        f"MAX_RANK={int(profile.max_rank)}",
+        f"MAX_ELEMS={int(profile.max_tensor_elements)}",
+        f"RESIDENT_MAX_LOGICAL_TASKS={int(profile.max_logical_tasks)}",
+        f"RESIDENT_MAX_COMPONENT_OPS={int(profile.max_component_ops)}",
+        f"RESIDENT_MAX_SLOT_DESCRIPTORS={int(profile.max_slot_descriptors)}",
+        f"RESIDENT_MRAM_POOL_BYTES={int(profile.mram_pool_bytes)}",
+        f"RESIDENT_OUTPUT_TILE_ELEMS={int(profile.output_tile_elements)}",
+        "NR_TASKLETS=1",
+        "UPMEM_GENERIC_HARDWARE_MVP=1",
+    )
+    started = time.perf_counter()
+    completed = _run_command(
+        command,
+        cwd=build_dir,
+        env=_sanitised_hardware_env(environment),
+        timeout_s=float(profile.timeout_s),
+    )
+    build_time_s = time.perf_counter() - started
+    if completed["returncode"] != 0:
+        stage = "native_build_failed"
+        if completed.get("timed_out"):
+            stage = "kernel_timeout"
+        raise RuntimeError(f"{stage}: {completed['stderr_snippet']}")
+    host_binary = build_dir / "bin" / "host"
+    dpu_binary = build_dir / "bin" / "dpu_resident"
+    if not host_binary.is_file() or not dpu_binary.is_file():
+        raise RuntimeError(
+            "native_build_failed: expected resident host and DPU binaries were not produced"
+        )
+    return HardwareSessionBuild(
+        session_root=session_root,
+        source_snapshot=source_snapshot,
+        build_dir=build_dir,
+        host_binary=host_binary,
+        dpu_binary=dpu_binary,
+        source_tree_hash=_hash_tree(source_snapshot),
+        host_binary_hash=_hash_file(host_binary),
+        dpu_binary_hash=_hash_file(dpu_binary),
+        build_time_s=build_time_s,
+        build_command=command,
+        sdk_tools={
+            name: str(tool.path) if tool.path else None for name, tool in required.items()
+        },
+    )
+
+
+def execute_resident_graph_session(
+    build: HardwareSessionBuild,
+    *,
+    manifest_path: Path,
+    response_path: Path,
+    profile: Any,
+    environment: Mapping[str, str],
+) -> ResidentGraphSessionExecution:
+    """Run one complete graph request through the resident native host."""
+
+    if environment.get("UPMEM_ALLOW_PHYSICAL_HARDWARE") != "1":
+        raise ValueError(
+            "hardware_opt_in_missing: UPMEM_ALLOW_PHYSICAL_HARDWARE=1 is required"
+        )
+    if environment.get("DPU_BACKEND"):
+        raise ValueError("hardware_profile_violation: DPU_BACKEND must be unset")
+    root = build.session_root.resolve()
+    try:
+        manifest_path.resolve().relative_to(root)
+        response_path.resolve().relative_to(root)
+    except ValueError as exc:
+        raise ValueError(
+            "hardware_profile_violation: resident manifest paths must be inside session root"
+        ) from exc
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("manifest_parse_failed: resident request manifest is invalid") from exc
+    if not isinstance(manifest, dict):
+        raise ValueError("manifest_parse_failed: resident request manifest is not an object")
+    if manifest.get("schema_version") != RESIDENT_NATIVE_SCHEMA_VERSION:
+        raise ValueError("hardware_profile_violation: resident request schema mismatch")
+    if manifest.get("manifest_kind") != RESIDENT_NATIVE_INPUT_KIND:
+        raise ValueError("hardware_profile_violation: resident request kind mismatch")
+    if manifest.get("graph_request_count") != 1:
+        raise ValueError("hardware_profile_violation: resident graph request count must be one")
+    if manifest.get("requested_dpus") != 1 or manifest.get("tasklets") != 1:
+        raise ValueError("hardware_profile_violation: resident request requires one DPU and one tasklet")
+    package_ref = manifest.get("package_path")
+    if not isinstance(package_ref, str) or not package_ref:
+        raise ValueError("manifest_parse_failed: resident package path is missing")
+    try:
+        package_path = (manifest_path.parent / package_ref).resolve()
+        package_path.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("hardware_profile_violation: resident package path escapes session root") from exc
+    if not package_path.is_file():
+        raise ValueError("manifest_parse_failed: resident package file is missing")
+    from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
+        validate_resident_graph_package_file,
+    )
+
+    try:
+        package_metadata = validate_resident_graph_package_file(package_path, profile=profile)
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"hardware_profile_violation: resident package validation failed: {exc}") from exc
+    if package_metadata.get("graph_request_count") != 1:
+        raise ValueError("hardware_profile_violation: resident package graph request count must be one")
+    if manifest.get("component_operation_count") != package_metadata.get("operation_count"):
+        raise ValueError("hardware_profile_violation: resident manifest/package operation count mismatch")
+    command = (
+        str(build.host_binary),
+        "--resident-package",
+        str(manifest_path),
+        "--resident-response",
+        str(response_path),
+    )
+    completed = _run_command(
+        command,
+        cwd=build.build_dir,
+        env=_sanitised_hardware_env(environment),
+        timeout_s=float(profile.timeout_s) + 5.0,
+    )
+    response = _load_response(response_path)
+    failure_stage = response.get("failure_stage") if isinstance(response, dict) else None
+    if not _resident_response_valid(response, manifest, profile):
+        if not failure_stage:
+            failure_stage = "kernel_timeout" if completed.get("timed_out") else "response_manifest_failed"
+        status = "failed"
+    else:
+        status = "completed" if completed.get("returncode") == 0 else "failed"
+        if status == "failed" and not failure_stage:
+            failure_stage = "kernel_timeout" if completed.get("timed_out") else "kernel_launch_failed"
+    stderr = str(completed.get("stderr_snippet", ""))
+    if completed.get("timed_out"):
+        stderr += "\nphysical DPU release is unverified after resident host-process timeout; inspect allocation before rerunning"
+    return ResidentGraphSessionExecution(
+        status=status,
+        failure_stage=str(failure_stage) if failure_stage else None,
+        response_path=response_path,
+        response=response,
+        process_time_s=float(completed.get("elapsed_s", 0.0)),
+        command=command,
+        stdout_snippet=str(completed.get("stdout_snippet", "")),
+        stderr_snippet=stderr,
+    )
+
+
+def _resident_response_valid(response: JsonDict, manifest: Mapping[str, Any], profile: Any) -> bool:
+    if response.get("schema_version") != RESIDENT_NATIVE_SCHEMA_VERSION:
+        return False
+    if response.get("manifest_kind") != RESIDENT_NATIVE_OUTPUT_KIND:
+        return False
+    if response.get("status") != "completed" or response.get("failure_stage") is not None:
+        return False
+    if response.get("requested_dpus") != 1 or response.get("allocated_dpus") != 1:
+        return False
+    if response.get("tasklets") != 1 or response.get("graph_request_count") != 1:
+        return False
+    if response.get("native_launch_count") != manifest.get("component_operation_count"):
+        return False
+    if response.get("intermediate_h2d_bytes") != 0 or response.get("intermediate_d2h_bytes") != 0:
+        return False
+    final_outputs = response.get("final_outputs")
+    expected_outputs = manifest.get("final_outputs")
+    if not isinstance(final_outputs, list) or not isinstance(expected_outputs, list):
+        return False
+    if len(final_outputs) != len(expected_outputs):
+        return False
+    return all(
+        isinstance(actual, dict)
+        and actual.get("status") == "completed"
+        and actual.get("component") == expected.get("component")
+        and actual.get("output_path") == expected.get("output_path")
+        for actual, expected in zip(final_outputs, expected_outputs)
+    )
+
+
+# Names used by isolated resident tests and downstream callers.
+build_hardware_session_resident = build_resident_hardware_session
+execute_hardware_resident_graph_session = execute_resident_graph_session
