@@ -53,6 +53,10 @@ def test_circuit_library_is_deterministic_and_unitary() -> None:
         state /= np.linalg.norm(state)
         np.testing.assert_allclose(np.linalg.norm(matrix @ state), 1.0, atol=1.0e-12)
 
+    composed = build_tensor_network(first)
+    composed_state, _ = compute_reference(composed)
+    np.testing.assert_allclose(np.linalg.norm(composed_state.ravel()), 1.0, atol=1.0e-12)
+
 
 def test_tn_lowering_preserves_output_labels_and_einsum_contract(minimal_graph) -> None:
     case = minimal_graph

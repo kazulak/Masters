@@ -464,6 +464,16 @@ def hardware_evidence_records() -> list[dict[str, Any]]:
         "steady_state_graph_execution_s": 0.25,
         "status": "completed",
         "validation_status": "passed",
+        "policy_reference_validation": {
+            "status": "passed",
+            "passed": True,
+            "reference_kind": "resident_policy_reference",
+        },
+        "full_precision_accuracy": {
+            "status": "passed",
+            "passed": True,
+            "reference_kind": "cpu_exact_taskgraph_full_precision",
+        },
         "exact_integer_match": True,
         "hardware_speedup_applicable": False,
         "actual_h2d_bytes": 80,

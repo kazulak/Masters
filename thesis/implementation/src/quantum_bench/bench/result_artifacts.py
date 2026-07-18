@@ -517,7 +517,11 @@ def load_result_records(inputs: Iterable[Path]) -> list[JsonDict]:
         if path.is_dir():
             canonical = path / "normalized_records.jsonl"
             if canonical.exists():
-                records.extend(normalize_parallelism_metadata(record) for record in read_jsonl(canonical))
+                for record in read_jsonl(canonical):
+                    normalized = normalize_parallelism_metadata(record)
+                    if "thesis_results" in canonical.resolve().parts:
+                        normalized["legacy_snapshot_reader"] = True
+                    records.append(normalized)
                 continue
             for artifact in _discover_artifacts(path):
                 records.extend(_records_from_artifact(artifact))

@@ -2429,6 +2429,7 @@ _ONE_DPU_EXPECTED_REPEAT_IDS = tuple(range(7))
 def _is_valid_one_dpu_record(record: JsonDict) -> bool:
     return (
         not _physical_taskgraph_issues(record)
+        and _one_dpu_transfer_evidence_valid(record)
         and record.get("route_id") in _ONE_DPU_ROUTES
         and record.get("status") == "completed"
         and record.get("validation_status") == "passed"
@@ -2506,6 +2507,49 @@ def _report_accuracy_status(record: JsonDict, key: str) -> str:
             "threshold_failed" if key == "full_precision_accuracy" else "failed"
         )
     return "missing"
+
+
+def _is_active_resident_physical_record(record: JsonDict) -> bool:
+    return (
+        record.get("suite_id") == RESIDENT_SUITE_ID
+        and record.get("route_id") == RESIDENT_ROUTE_ID
+    )
+
+
+def _is_legacy_snapshot_reader_record(record: JsonDict) -> bool:
+    """Allow only tracked snapshot reads to retain pre-contract omissions."""
+    return record.get("legacy_snapshot_reader") is True and not _is_active_resident_physical_record(record)
+
+
+def _physical_accuracy_issues(record: JsonDict, prefix: str) -> list[str]:
+    issues: list[str] = []
+    for key, label in (
+        ("policy_reference_validation", "policy-reference validation"),
+        ("full_precision_accuracy", "full-precision accuracy"),
+    ):
+        payload = _accuracy_payload(record, key)
+        passed = payload.get("passed")
+        status = str(payload.get("status") or "").lower()
+        if passed is False or status in {"failed", "threshold_failed", "error"}:
+            issues.append(f"{prefix} has failed nested {label}")
+        if _is_active_resident_physical_record(record) and passed is not True:
+            issues.append(f"{prefix} lacks nested {label}=passed")
+    return issues
+
+
+def _one_dpu_transfer_evidence_valid(record: JsonDict) -> bool:
+    if _is_legacy_snapshot_reader_record(record):
+        return True
+    h2d = _physical_directional_transfer(record, "h2d")
+    d2h = _physical_directional_transfer(record, "d2h")
+    total = _physical_transfer_bytes(record)
+    return (
+        h2d is not None
+        and d2h is not None
+        and total is not None
+        and _record_value(record, "actual_transfer_bytes_invariant") == "passed"
+        and math.isclose(total, h2d + d2h, rel_tol=0.0, abs_tol=0.0)
+    )
 
 
 def _aggregate_report_status(statuses: Iterable[str]) -> str:
@@ -4873,6 +4917,7 @@ def _physical_taskgraph_issues(record: JsonDict) -> list[str]:
     if "failure_stage" in record and record.get("failure_stage") not in {None, ""}:
         issues.append(f"{prefix} has failure_stage={record.get('failure_stage')}")
 
+    issues.extend(_physical_accuracy_issues(record, prefix))
     _physical_timing_issues(record, prefix, issues)
     _physical_transfer_issues(record, prefix, issues)
     return issues
@@ -4952,13 +4997,15 @@ def _physical_transfer_issues(record: JsonDict, prefix: str, issues: list[str]) 
     if h2d is None and d2h is None and total is None:
         if any(value is not None and value != 0 for value in intermediate.values()):
             issues.append(f"{prefix} reports nonzero intermediate transfer without totals")
+        if _is_active_resident_physical_record(record):
+            issues.append(f"{prefix} lacks directional transfer evidence")
         return
     if h2d is None or d2h is None or total is None:
         issues.append(f"{prefix} has incomplete directional transfer accounting")
         return
     if min(h2d, d2h, total) < 0 or not math.isclose(total, h2d + d2h, rel_tol=0.0, abs_tol=0.0):
         issues.append(f"{prefix} failed the directional transfer invariant")
-    if record.get("actual_transfer_bytes_invariant") != "passed":
+    if _record_value(record, "actual_transfer_bytes_invariant") != "passed":
         issues.append(f"{prefix} lacks actual_transfer_bytes_invariant=passed")
     for field, value in intermediate.items():
         if value is not None and value != 0:

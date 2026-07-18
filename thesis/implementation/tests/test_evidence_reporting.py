@@ -138,6 +138,52 @@ def test_physical_report_does_not_promote_incomplete_rows() -> None:
     assert report_pack_module.upmem_physical_taskgraph_breakdown([incomplete]) == []
 
 
+@pytest.mark.parametrize("nested_field", ["policy_reference_validation", "full_precision_accuracy"])
+def test_physical_report_rejects_contradictory_nested_accuracy(nested_field: str) -> None:
+    row = record_with_updates(
+        hardware_evidence_records()[0],
+        validation_status="passed",
+        **{nested_field: {"status": "failed", "passed": False}},
+    )
+
+    assert report_pack_module._physical_taskgraph_issues(row)
+    assert report_pack_module.upmem_physical_taskgraph_breakdown([row]) == []
+    assert report_pack_module.upmem_one_dpu_runtime_summary([row]) == []
+
+
+def test_physical_report_rejects_completely_absent_transfer_evidence() -> None:
+    row = record_with_updates(
+        hardware_evidence_records()[0],
+        suite_id=report_pack_module.RESIDENT_SUITE_ID,
+        actual_h2d_bytes=None,
+        actual_d2h_bytes=None,
+        actual_transfer_bytes=None,
+        actual_transfer_bytes_invariant=None,
+    )
+
+    assert any("transfer" in issue for issue in report_pack_module._physical_taskgraph_issues(row))
+    assert report_pack_module.upmem_physical_taskgraph_breakdown([row]) == []
+    assert report_pack_module.upmem_one_dpu_runtime_summary([row]) == []
+
+
+def test_legacy_snapshot_reader_preserves_rows_without_new_evidence_fields() -> None:
+    row = record_with_updates(
+        hardware_evidence_records()[0],
+        suite_id="legacy_physical_taskgraph",
+        legacy_snapshot_reader=True,
+        actual_h2d_bytes=None,
+        actual_d2h_bytes=None,
+        actual_transfer_bytes=None,
+        actual_transfer_bytes_invariant=None,
+    )
+    row.pop("policy_reference_validation")
+    row.pop("full_precision_accuracy")
+
+    assert report_pack_module._physical_taskgraph_issues(row) == []
+    assert len(report_pack_module.upmem_physical_taskgraph_breakdown([row])) == 1
+    assert len(report_pack_module.upmem_one_dpu_runtime_summary([row])) == 1
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -252,6 +298,7 @@ def test_report_pack_agg_render_has_readable_correlated_outputs(tmp_path: Path) 
     manifest = json.loads((output / "plot_manifest.json").read_text(encoding="utf-8"))
     entries = manifest["plots"]
     assert entries
+    assert any(entry["status"] == "generated_valid" for entry in entries)
     for entry in entries:
         if not str(entry["status"]).startswith("generated"):
             continue
