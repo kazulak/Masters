@@ -90,9 +90,9 @@ help:
 		'  make upmem-hw-taskgraph-study-plan  Prepare/build the physical TaskGraph path/quantization study; never allocates a DPU' \
 		'  make upmem-hw-taskgraph-study  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; runs the physical TaskGraph path/quantization study' \
 		'  make upmem-hw-taskgraph-study-report  Generate the labeled report from the latest physical TaskGraph study evidence' \
-		'  make upmem-hw-taskgraph-resident-plan  Show the future resident-route suite/config without running a resident runtime' \
-		'  make upmem-hw-taskgraph-resident  Reserved future resident-route execution target; runtime is not implemented' \
-		'  make upmem-hw-taskgraph-resident-report  Generate a report from explicitly supplied future resident-route evidence' \
+		'  make upmem-hw-taskgraph-resident-plan  Prepare/build the one-DPU physical MRAM-resident diagnostic route; no performance claim' \
+		'  make upmem-hw-taskgraph-resident  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; run the one-DPU physical MRAM-resident diagnostic route; no performance claim' \
+		'  make upmem-hw-taskgraph-resident-report  Generate a report from explicitly supplied one-DPU physical MRAM-resident diagnostic evidence' \
 		'  make evidence-inbox     Create the ignored inbox for copied ETH evidence bundles' \
 		'  make research-plan      Show the research benchmark plan' \
 		'  make planner-evidence   Run modeled planner v2 evidence into runs/comparisons/planner_v2/' \
@@ -208,11 +208,10 @@ thesis-report:
 	$(PY_ENV) $(PYTHON) scripts/thesis_snapshot.py report --snapshot $(THESIS_SNAPSHOT)
 
 upmem-hw-taskgraph-resident-plan:
-	@printf '%s\n' 'Future resident TaskGraph route plan (no runtime invoked):' '  suite=$(UPMEM_HW_TASKGRAPH_RESIDENT_SUITE)' '  run=$(UPMEM_HW_TASKGRAPH_RESIDENT_RUN)' '  route=upmem_tn_hardware_taskgraph_resident'
+	$(BENCH) upmem-hardware-taskgraph-resident --suite $(UPMEM_HW_TASKGRAPH_RESIDENT_SUITE) --prepare-only --build
 
 upmem-hw-taskgraph-resident:
-	@echo 'Resident TaskGraph runtime is reserved for a future implementation; no runtime was invoked.' >&2
-	@exit 2
+	$(BENCH) upmem-hardware-taskgraph-resident --suite $(UPMEM_HW_TASKGRAPH_RESIDENT_SUITE) --execute
 
 upmem-hw-taskgraph-resident-report:
 	$(PY_ENV) $(PYTHON) scripts/research_benchmark_pack.py check-resident-evidence --input $(UPMEM_HW_TASKGRAPH_RESIDENT_RUN)

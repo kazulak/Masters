@@ -217,8 +217,16 @@ def test_makefile_targets_parse_with_dry_run() -> None:
             "normalized_records.jsonl" in result.stdout
             and "--label upmem_hw_taskgraph_study" in result.stdout
         )
-        assert target != "upmem-hw-taskgraph-resident-plan" or "upmem_hardware_taskgraph_resident_path_quantization.yml" in result.stdout
-        assert target != "upmem-hw-taskgraph-resident" or "Resident TaskGraph runtime is reserved" in result.stdout
+        assert target != "upmem-hw-taskgraph-resident-plan" or (
+            "upmem-hardware-taskgraph-resident" in result.stdout
+            and "--suite configs/suites/upmem_hardware_taskgraph_resident_path_quantization.yml" in result.stdout
+            and "--prepare-only --build" in result.stdout
+        )
+        assert target != "upmem-hw-taskgraph-resident" or (
+            "upmem-hardware-taskgraph-resident" in result.stdout
+            and "--suite configs/suites/upmem_hardware_taskgraph_resident_path_quantization.yml" in result.stdout
+            and "--execute" in result.stdout
+        )
         assert target != "upmem-hw-taskgraph-resident-report" or (
             "check-resident-evidence" in result.stdout
             and "upmem_hw_taskgraph_resident" in result.stdout
