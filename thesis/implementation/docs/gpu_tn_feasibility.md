@@ -1,8 +1,8 @@
 # GPU Tensor-Network Feasibility Plan
 
-This document defines the next tensor-network parallelization milestone after
-the implemented CPU slicing, frontier, and diagnostic hybrid routes. It is a
-feasibility plan, not a backend implementation claim.
+This document records a feasibility plan, not an active backend or benchmark
+claim. The former CPU frontier and diagnostic hybrid routes are historical
+read-only evidence; no GPU tensor-network route has been added.
 
 ## Current Boundary
 
@@ -14,7 +14,7 @@ That route is a QuEST HIP/CUDA full-state simulator route. It is useful for
 CPU/GPU full-state comparison, but it is not a GPU tensor-network route and
 must not be reported as GPU TN evidence.
 
-The current tensor-network routes are CPU routes:
+The readable historical tensor-network route labels include:
 
 - `quimb_tn_exact`: serious unsliced CPU TN baseline.
 - `quimb_tn_sliced_exact`: executed Quimb/cotengra slicing evidence.

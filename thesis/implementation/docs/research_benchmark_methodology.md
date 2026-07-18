@@ -46,7 +46,7 @@ Remaining limitations:
 | `configs/suites/manual/thesis_planner_sensitivity.yml` | Modeled-only scenario sensitivity for named custom UPMEM objective weight profiles. |
 | `configs/suites/manual/thesis_planner_semantic_v2.yml` | V2 projected-prefix modeled planner semantics on small quantum cases plus controlled synthetic motifs, with standard planning baselines. |
 | `configs/suites/manual/thesis_planner_sensitivity_v2.yml` | V2 projected-prefix sensitivity across named profiles, retaining standard opt_einsum/cotengra baselines. |
-| Historical `research_internal_parallelism` artifacts | Retained diagnostic schema and report compatibility; the runnable frontier/hybrid suite was retired in Phase A. |
+| Historical internal-parallelism artifacts | Retained diagnostic schema and report compatibility; no runnable frontier/hybrid suite remains. |
 | `configs/suites/manual/thesis_upmem_quantization_boundary.yml` | Strict generic-only UPMEM SDK simulator boundary and same-route float32/int8 attribution evidence. |
 
 ## Commands
@@ -83,9 +83,11 @@ make thesis-report
   current bounded generic behavior when `policy=generic-only`,
   `generic_only_all_tasks_used_generic_backend=true`, and
   `cpu_fallback_used=false`.
-- The UPMEM research group runs `upmem-mvp-benchmark`, not the dense-capable
-  route-comparison suite. It records `quantization_mode=none` and
+- The UPMEM simulator group runs the strict generic-only route. It records
+  `quantization_mode=none` and
   `per_task_input_quantize` separately for same-route attribution.
+- Physical UPMEM acceptance is manual and uses only the one-DPU MRAM-resident
+  TaskGraph route; dense and SimplePIM artifacts are historical/read-only.
 - A CPU/UPMEM row is labeled same-plan only when its
   `contraction_plan_hash` matches. Planner candidates are modeled evidence and
   remain separate from executor timing.

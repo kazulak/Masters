@@ -50,7 +50,6 @@ __all__ = [
     "TaskRouteIdentity",
     "TaskRoutingAnalysis",
     "default_task_routes",
-    "evaluate_shadow_route_policy",
     "generic_loop_reference_float32",
     "generic_loop_reference_int32",
     "prepare_generic_task",

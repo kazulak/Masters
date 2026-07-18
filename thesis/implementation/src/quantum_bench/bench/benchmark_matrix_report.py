@@ -564,7 +564,7 @@ def _summary_markdown(summary: JsonDict, resource_rows: list[JsonDict]) -> str:
     lines = [
         "# Benchmark Matrix Report",
         "",
-        "This report is a scaffold for final thesis evaluation. It does not execute providers, GPU code, UPMEM kernels, or SimplePIM commands.",
+        "This report is a scaffold for final thesis evaluation. It does not execute providers, GPU code, UPMEM kernels, or physical hardware.",
         "",
         "## Matrix Scope",
         "",
@@ -574,7 +574,7 @@ def _summary_markdown(summary: JsonDict, resource_rows: list[JsonDict]) -> str:
         f"- UPMEM full-circuit speedup available now: {summary['current_upmem_full_circuit_speedup_available']}",
         "",
         "UPMEM is one unified runtime in the final comparison. L1/L2/L3 are internal scheduler-selected execution classes, not separate top-level competitors.",
-        "Current UPMEM evidence is limited to L1 task-level simulator dense bridge subset evidence plus L2/L3 model-only pressure evidence.",
+        "Current UPMEM evidence is limited to strict generic SDK-simulator boundary evidence, planner models, and the guarded one-DPU MRAM-resident physical route.",
         "Current UPMEM task timings must not be reported as full-circuit speedup.",
         "",
         "## Resource Models",
@@ -596,7 +596,7 @@ def _summary_markdown(summary: JsonDict, resource_rows: list[JsonDict]) -> str:
             "",
             "## Next Backend Work Suggested",
             "",
-            "Use the internal UPMEM class distribution to choose between L2 tiling, L3 distributed GEMM, hardware execution, SimplePIM GEMM feasibility, SparseP, or route-aware path selection.",
+            "Use the internal UPMEM class distribution to refine the resident route and its planner model; historical dense/SimplePIM artifacts remain readable-only.",
             "",
         ]
     )

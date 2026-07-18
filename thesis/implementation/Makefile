@@ -28,6 +28,7 @@ APPLY ?= 0
 
 PUBLIC_TARGETS := \
 	help \
+	test \
 	setup \
 	build-quest-cpu \
 	doctor \
@@ -59,6 +60,7 @@ help:
 		'Thesis evidence shortcuts:' \
 		'  make help              Show this command summary' \
 		'  make setup             Require uv, create/reuse ../.venv, install dev dependencies, and run doctor' \
+		'  make test              Run the unified active Python test suite' \
 		'  make doctor             Check local benchmark prerequisites without creating evidence' \
 		'  make build-quest-cpu    Build the native QuEST CPU runner' \
 		'  make bench-cpu          Run the CPU evidence suite' \
@@ -95,6 +97,9 @@ build-quest-cpu:
 
 doctor:
 	$(PY_ENV) $(PYTHON) scripts/doctor.py
+
+test:
+	$(PY_ENV) $(PYTHON) -m pytest -q
 
 bench-cpu: build-quest-cpu
 	$(BENCH) simulation-backend-compare --suite $(CPU_SUITE) --artifact-retention compact

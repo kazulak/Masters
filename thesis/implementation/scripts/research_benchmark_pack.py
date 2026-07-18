@@ -69,9 +69,8 @@ RESEARCH_SUITES = {
     / "suites"
     / "manual"
     / "thesis_planner_sensitivity.yml",
-    # This group intentionally uses the strict generic-only MVP command rather
-    # than the route-comparison suite.  The latter permits dense bridge tasks,
-    # which is useful for route coverage but is not generic-TN boundary evidence.
+    # This group intentionally uses the strict generic-only command and keeps
+    # its bounded boundary evidence separate from planner and physical rows.
     "upmem_boundary": ROOT
     / "configs"
     / "suites"
@@ -82,11 +81,6 @@ RESEARCH_SUITES = {
     / "suites"
     / "manual"
     / "thesis_upmem_quantization_stress.yml",
-    "internal_parallelism": ROOT
-    / "configs"
-    / "suites"
-    / "manual"
-    / "research_internal_parallelism.yml",
 }
 
 SUITE_COMMAND_ORDER = (
@@ -98,7 +92,6 @@ SUITE_COMMAND_ORDER = (
     "planner_sensitivity",
     "upmem_boundary",
     "upmem_quantization_stress",
-    "internal_parallelism",
 )
 
 RELEVANT_ENV_VARS = (
@@ -7349,6 +7342,10 @@ def _valid_for_pair(record: JsonDict) -> bool:
 
 
 def _selected_suites(suite_filter: list[str] | None) -> list[str]:
+    if suite_filter:
+        unknown = sorted(set(suite_filter) - set(RESEARCH_SUITES))
+        if unknown:
+            raise ValueError(f"unknown research suite group: {', '.join(unknown)}")
     return [
         key for key in SUITE_COMMAND_ORDER if not suite_filter or key in suite_filter
     ]

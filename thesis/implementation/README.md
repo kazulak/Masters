@@ -38,7 +38,7 @@ when you intend to rebuild it.
 Run tests:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m pytest -q
+make test
 ```
 
 ## Thesis Workflow
@@ -163,6 +163,10 @@ The resident TaskGraph hardware command is correctness-only and does not claim
 speedup. Its report compares float32 and int8 via recorded application-visible
 transfer bytes and validation error. See [the resident ETH runbook](docs/upmem_hardware_taskgraph_resident_runbook.md).
 
+Resident hardware acceptance is a manual ETH-host activity outside pytest and
+CI. The active physical command is the resident route above; retired dense and
+legacy hardware runs are readable historical evidence only.
+
 The retired dense and legacy TaskGraph runs remain readable as historical
 evidence, but are no longer runnable through the public CLI or Makefile.
 Physical allocation uses the explicit SDK `backend=hw` contract. The runner
@@ -172,11 +176,10 @@ remains mandatory, with no fallback. The repaired evidence profile is
 `hardware_mvp_l1_v2`; failed v1 evidence is historical and must not be treated
 as a corrected run.
 
-The generic command is separate and runs only the fixed synthetic real-valued
-`A[a,b,c] x B[c,d,e] -> C[a,b,d,e]` TaskGraph node. It uses two bounded output
-tiles and exact int32 validation, but is not a quantum-circuit benchmark or a
-hardware speedup claim. See the generic MVP runbook for expected fields and
-failure handling.
+The active simulator command is strict generic-only UPMEM SDK evidence. It
+records bounded TaskGraph validation and simulator timing, never hardware
+timing or hardware speedup. Historical dense and SimplePIM bridge artifacts are
+readable through the normalized report/snapshot readers only.
 
 Modeled planner evidence has its own comparison namespace:
 
@@ -204,7 +207,8 @@ Valid group names are printed by `make research-plan`.
   verified GPU execution; it is not a GPU TN route.
 - `quimb_tn_exact`: serious external CPU TN baseline.
 - `quimb_tn_sliced_exact`: explicit Quimb/cotengra slicing evidence.
-- internal einsum/frontier/hybrid routes: diagnostics, not serious baselines.
+- historical internal frontier/hybrid routes: readable diagnostics only; they
+  are not active benchmark commands.
 - strict UPMEM generic SDK-simulator rows: code-path, boundary, transfer, and
   accuracy evidence; never hardware speedup.
 

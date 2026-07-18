@@ -57,7 +57,6 @@ route_categories:
     validation_policy: not_applicable
 
 planned_backend_families:
-  - simplepim_dense_backend
   - sparsep_sparse_backend
 
 upmem_runtime:
@@ -72,8 +71,8 @@ upmem_runtime:
     - L2_SINGLE_DPU_MRAM
     - L3_MULTI_DPU
   implementation_notes:
-    L1_WRAM: implemented for task-level simulator dense bridge subset only
-    L2_SINGLE_DPU_MRAM: implemented for task-level simulator real-valued dense bridge subset only; modeled outside that subset
+    L1_WRAM: historical dense bridge artifacts are readable-only; active simulator evidence uses the strict generic loop
+    L2_SINGLE_DPU_MRAM: active physical evidence uses the one-DPU MRAM-resident TaskGraph route; other classes remain modeled
     L3_MULTI_DPU: model-only multi-DPU distribution pressure class
     L4_OUT_OF_SCOPE: model-only aggregate memory boundary
 

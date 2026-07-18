@@ -33,8 +33,7 @@ jobs:
           python -m pip wheel --no-build-isolation --no-deps --wheel-dir /tmp/quantum-bench-wheel .
       - name: Run tests
         run: |
-          cd thesis/implementation
-          PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m pytest -q
+          make -C thesis/implementation PYTHON=python test
       - name: Run Ruff correctness checks
         run: |
           cd thesis/implementation

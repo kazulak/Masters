@@ -12,6 +12,10 @@ Legacy dense, generic/persistent, and taskgraph-study routes are historical
 artifacts. This resident route is the only physical TaskGraph command exposed
 by the current CLI and Makefile.
 
+Acceptance is manual on the ETH hardware host and is intentionally outside
+pytest and CI. Historical evidence remains reportable but is never re-run by
+the active test gate.
+
 ## Prepare
 
 From the implementation root:

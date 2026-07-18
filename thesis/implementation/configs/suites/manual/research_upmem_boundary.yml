@@ -60,7 +60,7 @@ routes:
     required: false
     options:
       execute_external: true
-      policy: dense-then-generic
+      policy: generic-only
       quantization_mode: per_task_input_quantize
 
 validation:
