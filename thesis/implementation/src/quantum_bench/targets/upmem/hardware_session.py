@@ -13,8 +13,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import math
 from pathlib import Path
 import queue
+import signal
 import shutil
 import struct
 import subprocess
@@ -31,6 +33,27 @@ from quantum_bench.routing.generic_prepare import (
 )
 from quantum_bench.targets.upmem.environment import discover_upmem_sdk
 from quantum_bench.targets.upmem.hardware_taskgraph import HardwareTaskGraphProfile
+from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
+    RESIDENT_ALLOCATION_PROFILE,
+    RESIDENT_BACKEND_ID,
+    RESIDENT_CONTROL_H2D_BYTES_PER_LAUNCH,
+    RESIDENT_COMPLEX_POLICY,
+    RESIDENT_DESCRIPTOR_CONTROL_BYTES,
+    RESIDENT_MAX_COMPONENT_OPS,
+    RESIDENT_MAX_CONTRACTED_COMBINATIONS,
+    RESIDENT_MAX_ELEMENTS,
+    RESIDENT_MAX_LOGICAL_TASKS,
+    RESIDENT_MAX_RANK,
+    RESIDENT_MAX_SLOT_DESCRIPTORS,
+    RESIDENT_MRAM_POOL_BYTES,
+    RESIDENT_NUMERIC_MODES,
+    RESIDENT_OPERATION_BYTES,
+    RESIDENT_PROFILE_VERSION,
+    RESIDENT_ROUTE_ID,
+    RESIDENT_SESSION_PROTOCOL,
+    RESIDENT_TIMING_SCOPE,
+    RESIDENT_OUTPUT_TILE_ELEMENTS,
+)
 
 
 HARDWARE_GENERIC_SESSION_SCHEMA_VERSION = "upmem_generic_session_v1"
@@ -442,17 +465,21 @@ def build_hardware_session(
     """Build the bounded native source once for a hardware TaskGraph run."""
 
     sdk = discover_upmem_sdk(env=environment)
-    required = {
-        tool.name: tool
-        for tool in sdk.tools
-        if tool.name in {"make", "dpu-upmem-dpurte-clang", "dpu-pkg-config"}
-    }
-    missing = sorted(name for name, tool in required.items() if not tool.available)
+    tools_by_name = {tool.name: tool for tool in sdk.tools}
+    make_path = shutil.which("make", path=environment.get("PATH"))
+    required_names = ("make", "dpu-upmem-dpurte-clang", "dpu-pkg-config")
+    missing = [
+        name for name in required_names
+        if (name == "make" and not make_path)
+        or (name != "make" and not tools_by_name.get(name))
+        or (name != "make" and not tools_by_name[name].available)
+    ]
     if missing:
         raise RuntimeError(
             "sdk_discovery_failed: missing required UPMEM SDK tools: "
-            + ", ".join(missing)
+            + ", ".join(sorted(missing))
         )
+    required = {name: tools_by_name[name] for name in required_names if name != "make"}
 
     source = root_dir / "native" / "upmem" / "simplepim" / "upmem_sdk_generic_loop"
     source_snapshot = session_root / "native" / "src"
@@ -1004,6 +1031,89 @@ def _run_command(
             "stdout_snippet": _snippet(exc.stdout),
             "stderr_snippet": _snippet(exc.stderr),
         }
+    except OSError as exc:
+        return {
+            "returncode": None,
+            "elapsed_s": time.perf_counter() - started,
+            "timed_out": False,
+            "stdout_snippet": "",
+            "stderr_snippet": _snippet(exc),
+            "error": str(exc),
+        }
+
+
+def _run_resident_command(
+    command: Sequence[str], *, cwd: Path, env: Mapping[str, str], timeout_s: float
+) -> JsonDict:
+    """Run the resident host with a bounded graceful cleanup window."""
+
+    started = time.perf_counter()
+    process: subprocess.Popen[str] | None = None
+    try:
+        process = subprocess.Popen(
+            tuple(command),
+            cwd=cwd,
+            env=dict(env),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        try:
+            stdout, stderr = process.communicate(timeout=float(timeout_s))
+            return {
+                "returncode": process.returncode,
+                "elapsed_s": time.perf_counter() - started,
+                "timed_out": False,
+                "cleanup_attempted": False,
+                "cleanup_confirmed": process.returncode == 0,
+                "stdout_snippet": _snippet(stdout),
+                "stderr_snippet": _snippet(stderr),
+            }
+        except subprocess.TimeoutExpired as exc:
+            process.terminate()
+            stdout = _snippet(exc.stdout)
+            stderr = _snippet(exc.stderr)
+            cleanup_confirmed = False
+            try:
+                out, err = process.communicate(timeout=RESIDENT_NATIVE_CLEANUP_GRACE_S)
+                stdout += _snippet(out)
+                stderr += _snippet(err)
+                cleanup_confirmed = process.returncode is not None
+            except subprocess.TimeoutExpired as grace_exc:
+                stdout += _snippet(grace_exc.stdout)
+                stderr += _snippet(grace_exc.stderr)
+                process.send_signal(signal.SIGINT)
+                try:
+                    out, err = process.communicate(timeout=RESIDENT_NATIVE_CLEANUP_GRACE_S)
+                    stdout += _snippet(out)
+                    stderr += _snippet(err)
+                    cleanup_confirmed = process.returncode is not None
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    out, err = process.communicate()
+                    stdout += _snippet(out)
+                    stderr += _snippet(err)
+            return {
+                "returncode": process.returncode,
+                "elapsed_s": time.perf_counter() - started,
+                "timed_out": True,
+                "cleanup_attempted": True,
+                "cleanup_confirmed": cleanup_confirmed,
+                "stdout_snippet": _snippet(stdout),
+                "stderr_snippet": _snippet(stderr),
+            }
+    except OSError as exc:
+        return {
+            "returncode": None,
+            "elapsed_s": time.perf_counter() - started,
+            "timed_out": False,
+            "cleanup_attempted": process is not None,
+            "cleanup_confirmed": False,
+            "stdout_snippet": "",
+            "stderr_snippet": _snippet(exc),
+            "error": str(exc),
+        }
 
 
 def _load_response(path: Path) -> JsonDict:
@@ -1052,6 +1162,43 @@ RESIDENT_NATIVE_SOURCE_DIR = "upmem_sdk_generic_loop_resident"
 RESIDENT_NATIVE_SCHEMA_VERSION = "generic_loop_resident_graph_session_v1"
 RESIDENT_NATIVE_INPUT_KIND = "resident_graph_request"
 RESIDENT_NATIVE_OUTPUT_KIND = "resident_graph_response"
+RESIDENT_NATIVE_BUILD_TIMEOUT_S = 120.0
+RESIDENT_NATIVE_CLEANUP_GRACE_S = 2.0
+
+
+def _validate_resident_profile(profile: Any) -> None:
+    expected = {
+        "hardware_profile_version": RESIDENT_PROFILE_VERSION,
+        "target": "hardware",
+        "backend_id": RESIDENT_BACKEND_ID,
+        "route_id": RESIDENT_ROUTE_ID,
+        "session_protocol": RESIDENT_SESSION_PROTOCOL,
+        "timing_scope": RESIDENT_TIMING_SCOPE,
+        "requested_dpu_count": 1,
+        "tasklets_per_dpu": 1,
+        "max_rank": RESIDENT_MAX_RANK,
+        "max_tensor_elements": RESIDENT_MAX_ELEMENTS,
+        "max_logical_tasks": RESIDENT_MAX_LOGICAL_TASKS,
+        "max_component_ops": RESIDENT_MAX_COMPONENT_OPS,
+        "max_slot_descriptors": RESIDENT_MAX_SLOT_DESCRIPTORS,
+        "mram_pool_bytes": RESIDENT_MRAM_POOL_BYTES,
+        "max_contracted_combinations": RESIDENT_MAX_CONTRACTED_COMBINATIONS,
+        "output_tile_elements": RESIDENT_OUTPUT_TILE_ELEMENTS,
+        "numeric_modes": list(RESIDENT_NUMERIC_MODES),
+        "complex_policy": RESIDENT_COMPLEX_POLICY,
+        "synchronous_execution": True,
+        "performance_claim_applicable": False,
+    }
+    try:
+        actual = profile.to_json_dict()
+    except AttributeError as exc:
+        raise ValueError("hardware_profile_violation: resident profile is not serializable") from exc
+    for key, value in expected.items():
+        if actual.get(key) != value:
+            raise ValueError(f"hardware_profile_violation: resident profile {key} mismatch")
+    timeout = actual.get("timeout_s")
+    if not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or not math.isfinite(float(timeout)) or float(timeout) <= 0:
+        raise ValueError("hardware_profile_violation: resident profile timeout must be finite and positive")
 
 
 @dataclass(frozen=True)
@@ -1080,18 +1227,25 @@ def build_resident_hardware_session(
     allocation, so a prepare-only build remains usable on a machine without a
     DPU.
     """
+    _validate_resident_profile(profile)
     sdk = discover_upmem_sdk(env=environment)
-    required = {
-        tool.name: tool
-        for tool in sdk.tools
-        if tool.name in {"make", "dpu-upmem-dpurte-clang", "dpu-pkg-config"}
-    }
-    missing = sorted(name for name, tool in required.items() if not tool.available)
+    tools_by_name = {tool.name: tool for tool in sdk.tools}
+    make_path = shutil.which("make", path=environment.get("PATH"))
+    required_names = ("dpu-upmem-dpurte-clang", "dpu-pkg-config")
+    missing = []
+    if not make_path:
+        missing.append("make")
+    missing.extend(
+        name
+        for name in required_names
+        if name not in tools_by_name or not tools_by_name[name].available
+    )
     if missing:
         raise RuntimeError(
             "sdk_discovery_failed: missing required UPMEM SDK tools: "
             + ", ".join(missing)
         )
+    required = {name: tools_by_name[name] for name in required_names}
 
     source = root_dir / "native" / "upmem" / "simplepim" / RESIDENT_NATIVE_SOURCE_DIR
     source_snapshot = session_root / "native" / "src"
@@ -1101,7 +1255,7 @@ def build_resident_hardware_session(
     _copy_source_tree(source, source_snapshot)
     _copy_source_tree(source, build_dir)
     command = (
-        "make",
+        str(make_path),
         "clean",
         "all",
         f"MAX_RANK={int(profile.max_rank)}",
@@ -1119,14 +1273,15 @@ def build_resident_hardware_session(
         command,
         cwd=build_dir,
         env=_sanitised_hardware_env(environment),
-        timeout_s=float(profile.timeout_s),
+        timeout_s=RESIDENT_NATIVE_BUILD_TIMEOUT_S,
     )
     build_time_s = time.perf_counter() - started
     if completed["returncode"] != 0:
         stage = "native_build_failed"
         if completed.get("timed_out"):
-            stage = "kernel_timeout"
-        raise RuntimeError(f"{stage}: {completed['stderr_snippet']}")
+            stage = "native_build_timeout"
+        detail = completed.get("stderr_snippet") or completed.get("error") or "native build command failed"
+        raise RuntimeError(f"{stage}: {detail}")
     host_binary = build_dir / "bin" / "host"
     dpu_binary = build_dir / "bin" / "dpu_resident"
     if not host_binary.is_file() or not dpu_binary.is_file():
@@ -1145,7 +1300,8 @@ def build_resident_hardware_session(
         build_time_s=build_time_s,
         build_command=command,
         sdk_tools={
-            name: str(tool.path) if tool.path else None for name, tool in required.items()
+            "make": str(make_path),
+            **{name: str(tool.path) if tool.path else None for name, tool in required.items()},
         },
     )
 
@@ -1160,6 +1316,7 @@ def execute_resident_graph_session(
 ) -> ResidentGraphSessionExecution:
     """Run one complete graph request through the resident native host."""
 
+    _validate_resident_profile(profile)
     if environment.get("UPMEM_ALLOW_PHYSICAL_HARDWARE") != "1":
         raise ValueError(
             "hardware_opt_in_missing: UPMEM_ALLOW_PHYSICAL_HARDWARE=1 is required"
@@ -1184,10 +1341,24 @@ def execute_resident_graph_session(
         raise ValueError("hardware_profile_violation: resident request schema mismatch")
     if manifest.get("manifest_kind") != RESIDENT_NATIVE_INPUT_KIND:
         raise ValueError("hardware_profile_violation: resident request kind mismatch")
+    if not isinstance(manifest.get("session_id"), str) or not manifest["session_id"] or not manifest["session_id"].isascii():
+        raise ValueError("hardware_profile_violation: resident session identifiers must be non-empty ASCII")
+    for key, expected in (
+        ("route_id", "upmem_tn_hardware_taskgraph_resident"),
+        ("backend_id", "upmem_sdk_hardware_taskgraph_resident"),
+        ("hardware_profile_version", "hardware_taskgraph_single_dpu_mram_resident_v1"),
+        ("target", "hardware"),
+        ("sdk_allocation_profile", "backend=hw"),
+        ("session_protocol", RESIDENT_NATIVE_SCHEMA_VERSION),
+    ):
+        if manifest.get(key) != expected:
+            raise ValueError(f"hardware_profile_violation: resident request {key} mismatch")
     if manifest.get("graph_request_count") != 1:
         raise ValueError("hardware_profile_violation: resident graph request count must be one")
     if manifest.get("requested_dpus") != 1 or manifest.get("tasklets") != 1:
         raise ValueError("hardware_profile_violation: resident request requires one DPU and one tasklet")
+    if manifest.get("target") != "hardware" or manifest.get("sdk_allocation_profile") != RESIDENT_ALLOCATION_PROFILE:
+        raise ValueError("hardware_profile_violation: resident request hardware allocation identity mismatch")
     package_ref = manifest.get("package_path")
     if not isinstance(package_ref, str) or not package_ref:
         raise ValueError("manifest_parse_failed: resident package path is missing")
@@ -1198,6 +1369,16 @@ def execute_resident_graph_session(
         raise ValueError("hardware_profile_violation: resident package path escapes session root") from exc
     if not package_path.is_file():
         raise ValueError("manifest_parse_failed: resident package file is missing")
+    dpu_ref = manifest.get("dpu_binary")
+    if not isinstance(dpu_ref, str) or not dpu_ref or not dpu_ref.isascii():
+        raise ValueError("manifest_parse_failed: resident DPU binary path is invalid")
+    try:
+        dpu_path = (manifest_path.parent / dpu_ref).resolve()
+        dpu_path.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("hardware_profile_violation: resident DPU binary path escapes session root") from exc
+    if not dpu_path.is_file() or dpu_path != build.dpu_binary.resolve():
+        raise ValueError("hardware_profile_violation: resident DPU binary path does not match the built binary")
     from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
         validate_resident_graph_package_file,
     )
@@ -1206,6 +1387,7 @@ def execute_resident_graph_session(
         package_metadata = validate_resident_graph_package_file(package_path, profile=profile)
     except (OSError, ValueError) as exc:
         raise ValueError(f"hardware_profile_violation: resident package validation failed: {exc}") from exc
+    _validate_resident_manifest(manifest, package_metadata, root, profile)
     if package_metadata.get("graph_request_count") != 1:
         raise ValueError("hardware_profile_violation: resident package graph request count must be one")
     if manifest.get("component_operation_count") != package_metadata.get("operation_count"):
@@ -1217,22 +1399,25 @@ def execute_resident_graph_session(
         "--resident-response",
         str(response_path),
     )
-    completed = _run_command(
+    completed = _run_resident_command(
         command,
         cwd=build.build_dir,
         env=_sanitised_hardware_env(environment),
-        timeout_s=float(profile.timeout_s) + 5.0,
+        timeout_s=float(profile.timeout_s),
     )
     response = _load_response(response_path)
     failure_stage = response.get("failure_stage") if isinstance(response, dict) else None
-    if not _resident_response_valid(response, manifest, profile):
+    if completed.get("timed_out"):
+        status = "failed"
+        failure_stage = "hardware_session_timeout"
+    elif not _resident_response_valid(response, manifest, profile):
         if not failure_stage:
-            failure_stage = "kernel_timeout" if completed.get("timed_out") else "response_manifest_failed"
+            failure_stage = "response_manifest_failed"
         status = "failed"
     else:
         status = "completed" if completed.get("returncode") == 0 else "failed"
         if status == "failed" and not failure_stage:
-            failure_stage = "kernel_timeout" if completed.get("timed_out") else "kernel_launch_failed"
+            failure_stage = "hardware_session_timeout" if completed.get("timed_out") else "kernel_launch_failed"
     stderr = str(completed.get("stderr_snippet", ""))
     if completed.get("timed_out"):
         stderr += "\nphysical DPU release is unverified after resident host-process timeout; inspect allocation before rerunning"
@@ -1248,21 +1433,194 @@ def execute_resident_graph_session(
     )
 
 
+def _validate_resident_manifest(
+    manifest: Mapping[str, Any],
+    package_metadata: Mapping[str, Any],
+    root: Path,
+    profile: Any,
+) -> None:
+    def integer(value: Any, key: str, *, positive: bool = False) -> int:
+        if not isinstance(value, int) or isinstance(value, bool) or (positive and value <= 0):
+            raise ValueError(f"manifest_parse_failed: resident manifest integer field {key} is invalid")
+        return value
+
+    logical_tasks = integer(manifest.get("logical_task_count"), "logical_task_count", positive=True)
+    if logical_tasks > profile.max_logical_tasks:
+        raise ValueError("hardware_profile_violation: resident logical task count exceeds profile")
+    operation_count = integer(manifest.get("component_operation_count"), "component_operation_count", positive=True)
+    slot_count = integer(manifest.get("slot_descriptor_count"), "slot_descriptor_count", positive=True)
+    if operation_count != package_metadata.get("operation_count") or slot_count != package_metadata.get("slot_count"):
+        raise ValueError("hardware_profile_violation: resident manifest/package descriptor count mismatch")
+    if manifest.get("mram_pool_bytes") != profile.mram_pool_bytes:
+        raise ValueError("hardware_profile_violation: resident manifest MRAM pool mismatch")
+    if manifest.get("quantization_mode") not in profile.numeric_modes:
+        raise ValueError("hardware_profile_violation: resident manifest numeric mode mismatch")
+    expected_mode = 0 if manifest.get("quantization_mode") == "none" else 1
+    if package_metadata.get("operation_modes") != [expected_mode] * operation_count:
+        raise ValueError("hardware_profile_violation: resident manifest mode does not match operation descriptors")
+    if manifest.get("timing_scope") != RESIDENT_TIMING_SCOPE:
+        raise ValueError("hardware_profile_violation: resident manifest timing scope mismatch")
+    if manifest.get("no_host_intermediate_output_files") is not True or manifest.get("intermediate_output_paths") != []:
+        raise ValueError("hardware_profile_violation: resident manifest permits host intermediate outputs")
+
+    descriptors = {
+        int(item["slot_id"]): item
+        for item in package_metadata.get("slot_descriptors", ())
+        if isinstance(item, Mapping) and isinstance(item.get("slot_id"), int)
+    }
+    initial_ids = {int(value) for value in package_metadata.get("initial_slot_ids", ())}
+    final_ids = {int(value) for value in package_metadata.get("final_slot_ids", ())}
+
+    def entry_ids(entries: Any, label: str) -> set[int]:
+        if not isinstance(entries, list):
+            raise ValueError(f"manifest_parse_failed: resident {label} entries are missing")
+        result: set[int] = set()
+        for entry in entries:
+            if not isinstance(entry, Mapping) or not isinstance(entry.get("slot_id"), int) or isinstance(entry.get("slot_id"), bool):
+                raise ValueError(f"manifest_parse_failed: resident {label} slot id is invalid")
+            result.add(int(entry["slot_id"]))
+        return result
+
+    def validate_path(value: Any, key: str) -> None:
+        if not isinstance(value, str) or not value or not value.isascii():
+            raise ValueError(f"manifest_parse_failed: resident manifest {key} path is invalid")
+        try:
+            resolved = (root / value).resolve()
+            resolved.relative_to(root)
+        except ValueError as exc:
+            raise ValueError(f"hardware_profile_violation: resident manifest {key} path escapes session root") from exc
+
+    def validate_bytes(entry: Mapping[str, Any], path_key: str) -> tuple[int, int, int]:
+        slot_id = integer(entry.get("slot_id"), "slot_id")
+        elements = integer(entry.get("elements"), "elements", positive=True)
+        raw_bytes = integer(entry.get("raw_bytes"), "raw_bytes")
+        transfer_bytes = integer(entry.get("transfer_bytes"), "transfer_bytes")
+        if raw_bytes != elements * 4 or transfer_bytes != _align8(raw_bytes):
+            raise ValueError("hardware_profile_violation: resident manifest byte fields are inconsistent")
+        validate_path(entry.get(path_key), path_key)
+        descriptor = descriptors.get(slot_id)
+        if descriptor is None or elements > int(descriptor["element_count"]):
+            raise ValueError("hardware_profile_violation: resident manifest entry exceeds its slot descriptor")
+        return slot_id, raw_bytes, transfer_bytes
+
+    initial_entries = manifest.get("initial_slots")
+    initial_entry_ids = entry_ids(initial_entries, "initial slot")
+    if len(initial_entries) != len(initial_ids) or initial_entry_ids != initial_ids:
+        raise ValueError("hardware_profile_violation: resident initial slot entries do not match package flags")
+    initial_transfer = 0
+    for entry in initial_entries:
+        if not isinstance(entry, Mapping) or entry.get("slot_id") not in initial_ids:
+            raise ValueError("manifest_parse_failed: resident initial slot entry is invalid")
+        slot_id, _raw, transfer = validate_bytes(entry, "input_path")
+        if descriptors[slot_id].get("initial") is not True or descriptors[slot_id].get("final") is True:
+            raise ValueError("hardware_profile_violation: resident initial slot flag binding is invalid")
+        initial_transfer += transfer
+
+    final_entries = manifest.get("final_outputs")
+    final_entry_ids = entry_ids(final_entries, "final output")
+    if len(final_entries) != len(final_ids) or final_entry_ids != final_ids:
+        raise ValueError("hardware_profile_violation: resident final output entries do not match package flags")
+    components: set[str] = set()
+    final_transfer = 0
+    for entry in final_entries:
+        if not isinstance(entry, Mapping):
+            raise ValueError("manifest_parse_failed: resident final output entry is invalid")
+        component = entry.get("component")
+        if component not in {"real", "imag"} or component in components:
+            raise ValueError("hardware_profile_violation: resident final output component flags are invalid")
+        components.add(component)
+        slot_id, _raw, transfer = validate_bytes(entry, "output_path")
+        if descriptors[slot_id].get("initial") is True or descriptors[slot_id].get("final") is not True:
+            raise ValueError("hardware_profile_violation: resident final output flag binding is invalid")
+        final_transfer += transfer
+    expected_components = {"real"} if len(final_ids) == 1 else {"real", "imag"}
+    if components != expected_components:
+        raise ValueError("hardware_profile_violation: resident final output components are incomplete")
+
+    expected_descriptor = _align8(slot_count * 16) + _align8(operation_count * RESIDENT_OPERATION_BYTES)
+    expected_control = RESIDENT_DESCRIPTOR_CONTROL_BYTES + operation_count * RESIDENT_CONTROL_H2D_BYTES_PER_LAUNCH
+    if manifest.get("initial_h2d_bytes") != initial_transfer:
+        raise ValueError("hardware_profile_violation: resident initial transfer accounting mismatch")
+    if manifest.get("descriptor_h2d_bytes") != expected_descriptor:
+        raise ValueError("hardware_profile_violation: resident descriptor transfer accounting mismatch")
+    if manifest.get("descriptor_control_bytes") != RESIDENT_DESCRIPTOR_CONTROL_BYTES:
+        raise ValueError("hardware_profile_violation: resident descriptor control accounting mismatch")
+    if manifest.get("control_h2d_bytes_per_launch") != RESIDENT_CONTROL_H2D_BYTES_PER_LAUNCH:
+        raise ValueError("hardware_profile_violation: resident control transfer accounting mismatch")
+    if manifest.get("final_d2h_bytes") != final_transfer or manifest.get("intermediate_h2d_bytes") != 0 or manifest.get("intermediate_d2h_bytes") != 0:
+        raise ValueError("hardware_profile_violation: resident final transfer accounting mismatch")
+    if manifest.get("control_h2d_bytes") not in (None, expected_control):
+        raise ValueError("hardware_profile_violation: resident control transfer total mismatch")
+
+
 def _resident_response_valid(response: JsonDict, manifest: Mapping[str, Any], profile: Any) -> bool:
+    def exact_integer(value: Any, expected: int) -> bool:
+        return isinstance(value, int) and not isinstance(value, bool) and value == expected
+
+    def finite_time(value: Any) -> bool:
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value)) and float(value) >= 0.0
+
     if response.get("schema_version") != RESIDENT_NATIVE_SCHEMA_VERSION:
         return False
     if response.get("manifest_kind") != RESIDENT_NATIVE_OUTPUT_KIND:
         return False
     if response.get("status") != "completed" or response.get("failure_stage") is not None:
         return False
-    if response.get("requested_dpus") != 1 or response.get("allocated_dpus") != 1:
+    if response.get("route_id") != RESIDENT_ROUTE_ID or response.get("backend_id") != RESIDENT_BACKEND_ID:
         return False
-    if response.get("tasklets") != 1 or response.get("graph_request_count") != 1:
+    if response.get("hardware_profile_version") != RESIDENT_PROFILE_VERSION or response.get("target_requested") != "hardware":
         return False
-    if response.get("native_launch_count") != manifest.get("component_operation_count"):
+    if response.get("target_observed") != "hardware" or response.get("sdk_allocation_profile") != RESIDENT_ALLOCATION_PROFILE:
         return False
-    if response.get("intermediate_h2d_bytes") != 0 or response.get("intermediate_d2h_bytes") != 0:
+    if response.get("sdk_allocation_profile_verified") is not True or response.get("session_protocol") != RESIDENT_NATIVE_SCHEMA_VERSION:
         return False
+    if response.get("quantization_mode") != manifest.get("quantization_mode"):
+        return False
+    if not exact_integer(response.get("requested_dpus"), 1) or not exact_integer(response.get("allocated_dpus"), 1):
+        return False
+    if not exact_integer(response.get("tasklets"), 1) or not exact_integer(response.get("graph_request_count"), 1):
+        return False
+    operation_count = manifest.get("component_operation_count")
+    if not isinstance(operation_count, int) or not exact_integer(response.get("native_launch_count"), operation_count) or not exact_integer(response.get("native_task_count"), operation_count):
+        return False
+    for key in (
+        "hardware_allocation_verified", "hardware_execution", "native_execution", "native_hardware_backend",
+        "hardware_backend_verified", "hardware_release_verified", "release_confirmed",
+        "physical_dependency_chain_verified", "hardware_timing_available", "hardware_kernel_executed",
+    ):
+        if response.get(key) is not True:
+            return False
+    if response.get("simulator_kernel_executed") is not False or response.get("cpu_fallback_used") is not False:
+        return False
+    if response.get("persistent_session_reused") is not False or response.get("resident_slots_persist_for_graph") is not True:
+        return False
+    if response.get("final_output_only_d2h") is not True or response.get("physical_bus_bytes_available") is not False:
+        return False
+    if not exact_integer(response.get("allocation_count"), 1):
+        return False
+    expected_control = RESIDENT_DESCRIPTOR_CONTROL_BYTES + operation_count * RESIDENT_CONTROL_H2D_BYTES_PER_LAUNCH
+    expected_values = {
+        "initial_h2d_bytes": manifest.get("initial_h2d_bytes"),
+        "descriptor_h2d_bytes": manifest.get("descriptor_h2d_bytes"),
+        "control_h2d_bytes": expected_control,
+        "final_d2h_bytes": manifest.get("final_d2h_bytes"),
+        "intermediate_h2d_bytes": 0,
+        "intermediate_d2h_bytes": 0,
+    }
+    for key, expected in expected_values.items():
+        if not exact_integer(response.get(key), int(expected)):
+            return False
+    actual_h2d = expected_values["initial_h2d_bytes"] + expected_values["descriptor_h2d_bytes"] + expected_values["control_h2d_bytes"]
+    actual_d2h = expected_values["final_d2h_bytes"]
+    if not exact_integer(response.get("actual_h2d_bytes"), actual_h2d) or not exact_integer(response.get("actual_d2h_bytes"), actual_d2h) or not exact_integer(response.get("actual_transfer_bytes"), actual_h2d + actual_d2h):
+        return False
+    for key in (
+        "package_parse_time_s", "allocation_time_s", "binary_load_time_s", "initial_h2d_time_s",
+        "descriptor_h2d_time_s", "control_h2d_time_s", "kernel_time_s", "final_d2h_time_s",
+        "output_write_time_s", "release_time_s", "steady_state_graph_execution_s",
+    ):
+        if not finite_time(response.get(key)):
+            return False
     final_outputs = response.get("final_outputs")
     expected_outputs = manifest.get("final_outputs")
     if not isinstance(final_outputs, list) or not isinstance(expected_outputs, list):
@@ -1273,7 +1631,11 @@ def _resident_response_valid(response: JsonDict, manifest: Mapping[str, Any], pr
         isinstance(actual, dict)
         and actual.get("status") == "completed"
         and actual.get("component") == expected.get("component")
+        and actual.get("slot_id") == expected.get("slot_id")
         and actual.get("output_path") == expected.get("output_path")
+        and actual.get("elements") == expected.get("elements")
+        and actual.get("raw_bytes") == expected.get("raw_bytes")
+        and actual.get("transfer_bytes") == expected.get("transfer_bytes")
         for actual, expected in zip(final_outputs, expected_outputs)
     )
 

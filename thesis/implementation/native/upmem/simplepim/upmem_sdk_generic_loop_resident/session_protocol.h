@@ -10,6 +10,11 @@
 #define RESIDENT_REQUEST_KIND "resident_graph_request"
 #define RESIDENT_RESPONSE_KIND "resident_graph_response"
 #define RESIDENT_MAX_PATH 4096u
+#define RESIDENT_ROUTE_ID "upmem_tn_hardware_taskgraph_resident"
+#define RESIDENT_BACKEND_ID "upmem_sdk_hardware_taskgraph_resident"
+#define RESIDENT_PROFILE_VERSION "hardware_taskgraph_single_dpu_mram_resident_v1"
+#define RESIDENT_ALLOCATION_PROFILE "backend=hw"
+#define RESIDENT_TARGET "hardware"
 
 typedef struct {
     uint32_t slot_id;
@@ -41,6 +46,12 @@ typedef struct {
     size_t final_count;
     uint32_t logical_task_count;
     char *manifest_root;
+    uint32_t *slot_flags;
+    char *route_id;
+    char *backend_id;
+    char *profile_version;
+    char *allocation_profile;
+    char *quantization_mode;
 } resident_request_t;
 
 typedef struct {

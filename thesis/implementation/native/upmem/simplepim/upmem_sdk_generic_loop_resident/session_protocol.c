@@ -113,30 +113,68 @@ static int resident_uint_field(const char *object, const char *key, uint64_t *va
     if (cursor == NULL) return 1;
     cursor++;
     while (*cursor != '\0' && isspace((unsigned char)*cursor)) cursor++;
+    if (!isdigit((unsigned char)*cursor)) return 1;
     errno = 0;
     parsed = strtoull(cursor, &end, 10);
     if (errno != 0 || end == cursor || parsed > UINT64_MAX) return 1;
+    while (*end != '\0' && isspace((unsigned char)*end)) end++;
+    if (*end != ',' && *end != '}' && *end != ']') return 1;
     *value = (uint64_t)parsed;
     return 0;
 }
 
+static const char *resident_skip_space(const char *cursor, const char *end) {
+    while (cursor < end && isspace((unsigned char)*cursor)) cursor++;
+    return cursor;
+}
+
+static int resident_matching_end(const char *start, const char *end, char opening, char closing, const char **match) {
+    int depth = 0;
+    int in_string = 0;
+    int escaped = 0;
+    for (const char *cursor = start; cursor < end; cursor++) {
+        const unsigned char character = (unsigned char)*cursor;
+        if (in_string) {
+            if (escaped) escaped = 0;
+            else if (character == '\\') escaped = 1;
+            else if (character == '"') in_string = 0;
+            continue;
+        }
+        if (character == '"') {
+            in_string = 1;
+            continue;
+        }
+        if (character == (unsigned char)opening) depth++;
+        else if (character == (unsigned char)closing) {
+            depth--;
+            if (depth == 0) {
+                *match = cursor;
+                return 0;
+            }
+            if (depth < 0) return 1;
+        }
+    }
+    return 1;
+}
+
 static int resident_manifest_array(const char *contents, const char *key, const char **begin, const char **end) {
     const char *cursor = resident_find_key(contents, key);
+    const char *array_end = NULL;
     if (cursor == NULL) return 1;
-    cursor = strchr(cursor, '[');
+    cursor = strchr(cursor, ':');
     if (cursor == NULL) return 1;
+    cursor++;
+    while (*cursor != '\0' && isspace((unsigned char)*cursor)) cursor++;
+    if (*cursor != '[' || resident_matching_end(cursor, contents + strlen(contents), '[', ']', &array_end) != 0) return 1;
     *begin = cursor + 1;
-    *end = strchr(*begin, ']');
-    return *end == NULL;
+    *end = array_end;
+    return 0;
 }
 
 static int resident_next_object(const char **cursor, const char *end, const char **object, const char **object_end) {
-    const char *start = *cursor;
-    while (start < end && *start != '{') start++;
-    if (start >= end) return 1;
+    const char *start = resident_skip_space(*cursor, end);
+    if (start >= end || *start != '{' || resident_matching_end(start, end, '{', '}', object_end) != 0) return 1;
     *object = start;
-    *object_end = strchr(start, '}');
-    if (*object_end == NULL || *object_end > end) return 1;
     *cursor = *object_end + 1;
     return 0;
 }
@@ -215,6 +253,14 @@ static int resident_transfer_size(uint32_t elements, size_t *raw, size_t *transf
     *raw = (size_t)bytes;
     if (bytes > UINT64_MAX - 7u || resident_align8(bytes) > SIZE_MAX) return 1;
     *transfer = (size_t)resident_align8(bytes);
+    return 0;
+}
+
+static int resident_ascii_identifier(const char *value) {
+    if (value == NULL || value[0] == '\0') return 1;
+    for (const unsigned char *cursor = (const unsigned char *)value; *cursor != '\0'; cursor++) {
+        if (*cursor < 0x20u || *cursor >= 0x80u) return 1;
+    }
     return 0;
 }
 
@@ -332,9 +378,11 @@ static int resident_validate_package(
         resident_error(error_message, "resident_package_unaligned_section");
         return 1;
     }
-    if (header.slot_count > RESIDENT_MAX_SLOT_DESCRIPTORS || header.operation_count > RESIDENT_MAX_COMPONENT_OPS ||
+    if (header.flags != 0u || header.reserved != 0u || header.slot_count == 0u ||
+        header.slot_count > RESIDENT_MAX_SLOT_DESCRIPTORS || header.operation_count == 0u || header.operation_count > RESIDENT_MAX_COMPONENT_OPS ||
         header.graph_request_count != 1u || header.pool_bytes != RESIDENT_MRAM_POOL_BYTES ||
-        header.max_rank != UPMEM_GENERIC_MAX_RANK || header.initial_slot_count > header.slot_count ||
+        header.max_rank != UPMEM_GENERIC_MAX_RANK || header.initial_slot_count == 0u ||
+        header.initial_slot_count > header.slot_count ||
         header.final_output_count == 0u || header.final_output_count > 2u) {
         resident_error(error_message, "resident_package_profile_cap_or_request_mismatch");
         return 1;
@@ -356,23 +404,31 @@ static int resident_validate_package(
     request->header = header;
     request->slots = (resident_slot_descriptor_t *)calloc(header.slot_count, sizeof(*request->slots));
     request->operations = (resident_operation_t *)calloc(header.operation_count, sizeof(*request->operations));
+    request->slot_flags = (uint32_t *)calloc(header.slot_count, sizeof(*request->slot_flags));
     if ((header.slot_count != 0u && request->slots == NULL) ||
-        (header.operation_count != 0u && request->operations == NULL)) {
+        (header.operation_count != 0u && request->operations == NULL) ||
+        (header.slot_count != 0u && request->slot_flags == NULL)) {
         resident_error(error_message, "resident_package_descriptor_allocation_failed");
         return 1;
     }
     memcpy(request->slots, payload + header.slot_offset, (size_t)header.slot_bytes);
     memcpy(request->operations, payload + header.operation_offset, (size_t)header.operation_bytes);
+    uint8_t slot_ready[RESIDENT_MAX_SLOT_DESCRIPTORS] = {0};
     for (uint32_t index = 0; index < header.slot_count; index++) {
         resident_slot_descriptor_t *slot = &request->slots[index];
         uint64_t bytes;
-        if (slot->slot_id != index || (slot->offset_bytes & 7u) != 0u || slot->capacity_elements == 0u ||
+        const uint32_t flags = slot->slot_id & ~(uint32_t)RESIDENT_SLOT_ID_MASK;
+        if ((slot->slot_id & RESIDENT_SLOT_ID_MASK) != index ||
+            (flags & ~(RESIDENT_SLOT_INITIAL_FLAG | RESIDENT_SLOT_FINAL_FLAG)) != 0u ||
+            (slot->offset_bytes & 7u) != 0u || slot->capacity_elements == 0u ||
             slot->element_count == 0u || slot->element_count > slot->capacity_elements ||
             resident_mul_overflow(slot->capacity_elements, sizeof(float), &bytes) ||
             resident_add_overflow(slot->offset_bytes, resident_align8(bytes), &section_end) || section_end > header.pool_bytes) {
             resident_error(error_message, "resident_package_slot_descriptor_invalid_or_overflow");
             return 1;
         }
+        request->slot_flags[index] = flags;
+        slot_ready[index] = (flags & RESIDENT_SLOT_INITIAL_FLAG) != 0u;
         for (uint32_t other = 0; other < index; other++) {
             uint64_t this_end = (uint64_t)slot->offset_bytes + resident_align8(bytes);
             uint64_t other_bytes;
@@ -386,6 +442,18 @@ static int resident_validate_package(
                 resident_error(error_message, "resident_package_slot_overlap");
                 return 1;
             }
+        }
+    }
+    {
+        uint32_t initial_flags = 0u;
+        uint32_t final_flags = 0u;
+        for (uint32_t index = 0; index < header.slot_count; index++) {
+            if ((request->slot_flags[index] & RESIDENT_SLOT_INITIAL_FLAG) != 0u) initial_flags++;
+            if ((request->slot_flags[index] & RESIDENT_SLOT_FINAL_FLAG) != 0u) final_flags++;
+        }
+        if (initial_flags != header.initial_slot_count || final_flags != header.final_output_count) {
+            resident_error(error_message, "resident_package_slot_flag_count_mismatch");
+            return 1;
         }
     }
     for (uint32_t index = 0; index < header.operation_count; index++) {
@@ -419,10 +487,12 @@ static int resident_validate_package(
                 request->slots[operation->slot_out_real].capacity_elements < operation->output_elements ||
                 request->slots[operation->slot_a].element_count < operation->args.left_elems ||
                 request->slots[operation->slot_b].element_count < operation->args.right_elems ||
-                request->slots[operation->slot_out_real].element_count < operation->output_elements) {
+                request->slots[operation->slot_out_real].element_count < operation->output_elements ||
+                !slot_ready[operation->slot_a] || !slot_ready[operation->slot_b]) {
                 resident_error(error_message, "resident_package_contract_metadata_invalid");
                 return 1;
             }
+            slot_ready[operation->slot_out_real] = 1;
         } else if (operation->slot_a == RESIDENT_INVALID_SLOT || operation->slot_b == RESIDENT_INVALID_SLOT ||
                    operation->slot_c == RESIDENT_INVALID_SLOT || operation->slot_d == RESIDENT_INVALID_SLOT ||
                    operation->slot_out_real == RESIDENT_INVALID_SLOT || operation->slot_out_imag == RESIDENT_INVALID_SLOT ||
@@ -439,6 +509,19 @@ static int resident_validate_package(
                    request->slots[operation->slot_out_real].element_count < operation->output_elements ||
                    request->slots[operation->slot_out_imag].element_count < operation->output_elements) {
             resident_error(error_message, "resident_package_complex_combine_metadata_invalid");
+            return 1;
+        }
+        if (!slot_ready[operation->slot_a] || !slot_ready[operation->slot_b] ||
+            !slot_ready[operation->slot_c] || !slot_ready[operation->slot_d]) {
+            resident_error(error_message, "hardware_profile_violation: resident package complex slot read before initialization");
+            return 1;
+        }
+        slot_ready[operation->slot_out_real] = 1;
+        slot_ready[operation->slot_out_imag] = 1;
+    }
+    for (uint32_t index = 0; index < header.slot_count; index++) {
+        if ((request->slot_flags[index] & RESIDENT_SLOT_FINAL_FLAG) != 0u && !slot_ready[index]) {
+            resident_error(error_message, "hardware_profile_violation: resident final slot was not produced");
             return 1;
         }
     }
@@ -479,13 +562,24 @@ static int resident_parse_file_entries(
         char *path_ref = NULL;
         uint64_t slot_id;
         uint64_t elements;
+        uint64_t raw_bytes_field;
+        uint64_t transfer_bytes_field;
+        const char *expected_component = NULL;
+        if (index != 0u) {
+            cursor = resident_skip_space(cursor, end);
+            if (cursor >= end || *cursor != ',') {
+                resident_error(error_message, "manifest_parse_failed: resident file entry count is short or malformed");
+                return 1;
+            }
+            cursor++;
+        }
         if (resident_next_object(&cursor, end, &object, &object_end) != 0 ||
             (object_copy = resident_copy_object(object, object_end)) == NULL ||
             resident_uint_field(object_copy, "slot_id", &slot_id) != 0 ||
             resident_uint_field(object_copy, "elements", &elements) != 0 ||
+            resident_uint_field(object_copy, "raw_bytes", &raw_bytes_field) != 0 ||
+            resident_uint_field(object_copy, "transfer_bytes", &transfer_bytes_field) != 0 ||
             slot_id >= request->header.slot_count || elements == 0u || elements > UINT32_MAX ||
-            (final_entries == 0 && elements > request->slots[slot_id].element_count) ||
-            (final_entries != 0 && elements > request->slots[slot_id].element_count) ||
             resident_string_field(object_copy, path_key, &path_ref) != 0) {
             free(path_ref);
             free(object_copy);
@@ -502,11 +596,51 @@ static int resident_parse_file_entries(
             resident_error(error_message, "hardware_profile_violation: resident file path or byte overflow");
             return 1;
         }
+        {
+            const uint32_t required_flag = final_entries ? RESIDENT_SLOT_FINAL_FLAG : RESIDENT_SLOT_INITIAL_FLAG;
+            const uint32_t forbidden_flag = final_entries ? RESIDENT_SLOT_INITIAL_FLAG : RESIDENT_SLOT_FINAL_FLAG;
+            const resident_slot_descriptor_t *slot = &request->slots[slot_id];
+            uint32_t expected_elements = 0u;
+            for (uint32_t operation_index = 0; operation_index < request->header.operation_count; operation_index++) {
+                const resident_operation_t *operation = &request->operations[operation_index];
+                if (final_entries) {
+                    if (operation->slot_out_real == slot_id || operation->slot_out_imag == slot_id) {
+                        expected_elements = operation->output_elements;
+                        expected_component = operation->slot_out_imag == slot_id ? "imag" : "real";
+                    }
+                } else if (operation->kind == RESIDENT_OPERATION_CONTRACT) {
+                    if (operation->slot_a == slot_id) expected_elements = operation->args.left_elems;
+                    if (operation->slot_b == slot_id) expected_elements = operation->args.right_elems;
+                    if (expected_elements != 0u) break;
+                } else if (operation->slot_a == slot_id || operation->slot_b == slot_id ||
+                           operation->slot_c == slot_id || operation->slot_d == slot_id) {
+                    expected_elements = slot->element_count;
+                    break;
+                }
+            }
+            if ((request->slot_flags[slot_id] & required_flag) == 0u ||
+                (request->slot_flags[slot_id] & forbidden_flag) != 0u ||
+                expected_elements == 0u || elements != expected_elements ||
+                elements > slot->element_count || raw_bytes_field != raw_bytes ||
+                transfer_bytes_field != transfer_bytes) {
+                free(path);
+                free(object_copy);
+                resident_error(error_message, "hardware_profile_violation: resident file entry does not bind the required slot descriptor");
+                return 1;
+            }
+        }
         if (final_entries) {
             char *component = NULL;
             if (resident_string_field(object_copy, "component", &component) != 0 || component == NULL || component[0] == '\0') {
                 free(path); free(component); free(object_copy);
                 resident_error(error_message, "manifest_parse_failed: resident final component missing");
+                return 1;
+            }
+            if (expected_component == NULL || strcmp(component, expected_component) != 0) {
+                free(path);
+                free(component);
+                free(object_copy);
+                resident_error(error_message, "hardware_profile_violation: resident final output component is substituted");
                 return 1;
             }
             request->final_outputs[index].component = component;
@@ -526,6 +660,11 @@ static int resident_parse_file_entries(
         free(object_copy);
         cursor = object_end + 1;
     }
+    cursor = resident_skip_space(cursor, end);
+    if (cursor != end) {
+        resident_error(error_message, "manifest_parse_failed: resident file entry array has extra or malformed entries");
+        return 1;
+    }
     return 0;
 }
 
@@ -539,6 +678,13 @@ int resident_request_load(const char *manifest_path, resident_request_t *request
     char *package_ref = NULL;
     char *session_id = NULL;
     char *package_path = NULL;
+    char *route_id = NULL;
+    char *backend_id = NULL;
+    char *profile_version = NULL;
+    char *allocation_profile = NULL;
+    char *target = NULL;
+    char *session_protocol = NULL;
+    char *quantization_mode = NULL;
     int failed = 1;
     memset(request, 0, sizeof(*request));
     if (resident_read_file(manifest_path, &manifest_bytes, &manifest_length) != 0) {
@@ -557,14 +703,34 @@ int resident_request_load(const char *manifest_path, resident_request_t *request
     free(package_ref); package_ref = NULL;
     if (resident_string_field((char *)manifest_bytes, "session_id", &session_id) != 0 ||
         resident_string_field((char *)manifest_bytes, "dpu_binary", &dpu_ref) != 0 ||
-        resident_string_field((char *)manifest_bytes, "package_path", &package_ref) != 0) {
+        resident_string_field((char *)manifest_bytes, "package_path", &package_ref) != 0 ||
+        resident_string_field((char *)manifest_bytes, "route_id", &route_id) != 0 ||
+        resident_string_field((char *)manifest_bytes, "backend_id", &backend_id) != 0 ||
+        resident_string_field((char *)manifest_bytes, "hardware_profile_version", &profile_version) != 0 ||
+        resident_string_field((char *)manifest_bytes, "target", &target) != 0 ||
+        resident_string_field((char *)manifest_bytes, "sdk_allocation_profile", &allocation_profile) != 0 ||
+        resident_string_field((char *)manifest_bytes, "session_protocol", &session_protocol) != 0 ||
+        resident_string_field((char *)manifest_bytes, "quantization_mode", &quantization_mode) != 0) {
         resident_error(error_message, "manifest_parse_failed: resident manifest identity missing");
+        goto done;
+    }
+    if (resident_ascii_identifier(session_id) != 0 || strcmp(route_id, RESIDENT_ROUTE_ID) != 0 ||
+        strcmp(backend_id, RESIDENT_BACKEND_ID) != 0 || strcmp(profile_version, RESIDENT_PROFILE_VERSION) != 0 ||
+        strcmp(target, RESIDENT_TARGET) != 0 || strcmp(allocation_profile, RESIDENT_ALLOCATION_PROFILE) != 0 ||
+        strcmp(session_protocol, RESIDENT_SESSION_SCHEMA) != 0 ||
+        (strcmp(quantization_mode, "none") != 0 && strcmp(quantization_mode, "per_task_resident_requantize") != 0)) {
+        resident_error(error_message, "hardware_profile_violation: resident manifest hardware identity mismatch");
         goto done;
     }
     base = resident_base(manifest_path);
     request->manifest_root = base;
     base = NULL;
     request->session_id = session_id; session_id = NULL;
+    request->route_id = route_id; route_id = NULL;
+    request->backend_id = backend_id; backend_id = NULL;
+    request->profile_version = profile_version; profile_version = NULL;
+    request->allocation_profile = allocation_profile; allocation_profile = NULL;
+    request->quantization_mode = quantization_mode; quantization_mode = NULL;
     request->dpu_binary_path = resident_resolve(request->manifest_root, dpu_ref);
     package_path = resident_resolve(request->manifest_root, package_ref);
     if (request->dpu_binary_path == NULL || package_path == NULL) {
@@ -584,6 +750,15 @@ int resident_request_load(const char *manifest_path, resident_request_t *request
         resident_validate_package(package_bytes, package_length, request, error_message) != 0) {
         if (error_message != NULL && *error_message == NULL) resident_error(error_message, "hardware_profile_violation: resident package validation failed");
         goto done;
+    }
+    {
+        const uint32_t expected_mode = strcmp(request->quantization_mode, "none") == 0 ? 0u : 1u;
+        for (uint32_t index = 0; index < request->header.operation_count; index++) {
+            if (request->operations[index].mode != expected_mode) {
+                resident_error(error_message, "hardware_profile_violation: resident manifest mode does not match operation descriptors");
+                goto done;
+            }
+        }
     }
     if (resident_parse_file_entries((char *)manifest_bytes, "initial_slots", "input_path", request->manifest_root, request, 0, error_message) != 0 ||
         resident_parse_file_entries((char *)manifest_bytes, "final_outputs", "output_path", request->manifest_root, request, 1, error_message) != 0) {
@@ -619,6 +794,25 @@ int resident_request_load(const char *manifest_path, resident_request_t *request
             }
         }
     }
+    if (request->final_count == 1u && strcmp(request->final_outputs[0].component, "real") != 0) {
+        resident_error(error_message, "hardware_profile_violation: resident real output component is missing");
+        goto done;
+    }
+    if (request->final_count == 2u) {
+        int real_seen = 0;
+        int imag_seen = 0;
+        for (size_t index = 0; index < request->final_count; index++) {
+            real_seen |= strcmp(request->final_outputs[index].component, "real") == 0;
+            imag_seen |= strcmp(request->final_outputs[index].component, "imag") == 0;
+        }
+        if (!real_seen || !imag_seen) {
+            resident_error(error_message, "hardware_profile_violation: resident split-complex output components are incomplete");
+            goto done;
+        }
+    }
+    for (uint32_t index = 0; index < request->header.slot_count; index++) {
+        request->slots[index].slot_id = index;
+    }
     failed = 0;
 done:
     free(manifest_bytes);
@@ -628,6 +822,13 @@ done:
     free(session_id);
     free(package_path);
     free(base);
+    free(route_id);
+    free(backend_id);
+    free(profile_version);
+    free(allocation_profile);
+    free(target);
+    free(session_protocol);
+    free(quantization_mode);
     if (failed) resident_request_free(request);
     return failed;
 }
@@ -638,7 +839,13 @@ void resident_request_free(resident_request_t *request) {
     free(request->dpu_binary_path);
     free(request->slots);
     free(request->operations);
+    free(request->slot_flags);
     free(request->manifest_root);
+    free(request->route_id);
+    free(request->backend_id);
+    free(request->profile_version);
+    free(request->allocation_profile);
+    free(request->quantization_mode);
     for (size_t index = 0; index < request->input_count; index++) free(request->inputs[index].path);
     for (size_t index = 0; index < request->final_count; index++) {
         free(request->final_outputs[index].component);
@@ -688,9 +895,13 @@ int resident_response_write(
     const resident_timing_t *current = timing == NULL ? &empty : timing;
     FILE *file = fopen(response_path, "w");
     if (file == NULL) return 1;
-    const int success = failure_stage == NULL && strcmp(status, "completed") == 0;
+    const int success = failure_stage == NULL && strcmp(status, "completed") == 0 &&
+        allocated_dpus == 1u && native_launch_count == request->header.operation_count && release_confirmed;
     fprintf(file, "{\n  \"schema_version\": \"%s\",\n  \"manifest_kind\": \"%s\",\n", RESIDENT_SESSION_SCHEMA, RESIDENT_RESPONSE_KIND);
     fprintf(file, "  \"session_id\": "); resident_json_string(file, request->session_id == NULL ? "resident-unknown" : request->session_id); fprintf(file, ",\n");
+    fprintf(file, "  \"route_id\": \"%s\",\n  \"backend_id\": \"%s\",\n  \"hardware_profile_version\": \"%s\",\n  \"target_requested\": \"%s\",\n  \"target_observed\": \"%s\",\n  \"sdk_allocation_profile\": \"%s\",\n  \"sdk_allocation_profile_verified\": %s,\n  \"session_protocol\": \"%s\",\n  \"quantization_mode\": ", RESIDENT_ROUTE_ID, RESIDENT_BACKEND_ID, RESIDENT_PROFILE_VERSION, RESIDENT_TARGET, success ? RESIDENT_TARGET : "hardware_unverified", RESIDENT_ALLOCATION_PROFILE, success ? "true" : "false", RESIDENT_SESSION_SCHEMA);
+    resident_json_string(file, request->quantization_mode == NULL ? "unknown" : request->quantization_mode);
+    fputs(",\n", file);
     fprintf(file, "  \"status\": \"%s\",\n  \"failure_stage\": ", status);
     if (failure_stage == NULL) fputs("null", file); else resident_json_string(file, failure_stage);
     fprintf(file, ",\n  \"error\": ");
@@ -699,7 +910,13 @@ int resident_response_write(
     fprintf(file, "  \"logical_task_count\": %u,\n  \"component_operation_count\": %u,\n  \"native_launch_count\": %u,\n  \"native_task_count\": %u,\n", request->logical_task_count, request->header.operation_count, native_launch_count, native_launch_count);
     fprintf(file, "  \"sdk_error_code\": %d,\n  \"package_parse_time_s\": %.9f,\n  \"allocation_time_s\": %.9f,\n  \"binary_load_time_s\": %.9f,\n  \"initial_h2d_time_s\": %.9f,\n  \"descriptor_h2d_time_s\": %.9f,\n  \"control_h2d_time_s\": %.9f,\n  \"kernel_time_s\": %.9f,\n  \"final_d2h_time_s\": %.9f,\n  \"output_write_time_s\": %.9f,\n  \"release_time_s\": %.9f,\n", sdk_error_code, current->package_parse_time_s, current->allocation_time_s, current->binary_load_time_s, current->initial_h2d_time_s, current->descriptor_h2d_time_s, current->control_h2d_time_s, current->kernel_time_s, current->final_d2h_time_s, current->output_write_time_s, current->release_time_s);
     fprintf(file, "  \"initial_h2d_bytes\": %llu,\n  \"descriptor_h2d_bytes\": %llu,\n  \"control_h2d_bytes\": %llu,\n  \"final_d2h_bytes\": %llu,\n  \"intermediate_h2d_bytes\": 0,\n  \"intermediate_d2h_bytes\": 0,\n  \"actual_h2d_bytes\": %llu,\n  \"actual_d2h_bytes\": %llu,\n  \"actual_transfer_bytes\": %llu,\n", (unsigned long long)initial_h2d_bytes, (unsigned long long)descriptor_h2d_bytes, (unsigned long long)control_h2d_bytes, (unsigned long long)final_d2h_bytes, (unsigned long long)(initial_h2d_bytes + descriptor_h2d_bytes + control_h2d_bytes), (unsigned long long)final_d2h_bytes, (unsigned long long)(initial_h2d_bytes + descriptor_h2d_bytes + control_h2d_bytes + final_d2h_bytes));
-    fprintf(file, "  \"release_confirmed\": %s,\n  \"final_output_only_d2h\": true,\n  \"physical_bus_bytes_available\": false,\n  \"native_hardware_backend\": true,\n  \"simulator_kernel_executed\": false,\n  \"cpu_fallback_used\": false,\n  \"final_outputs\": [", release_confirmed ? "true" : "false");
+    fprintf(file, "  \"allocation_count\": %u,\n  \"hardware_allocation_verified\": %s,\n  \"hardware_execution\": %s,\n  \"hardware_kernel_executed\": %s,\n  \"native_execution\": %s,\n  \"native_hardware_backend\": %s,\n  \"hardware_backend_verified\": %s,\n  \"simulator_kernel_executed\": false,\n  \"cpu_fallback_used\": false,\n  \"hardware_release_verified\": %s,\n  \"release_confirmed\": %s,\n  \"physical_dependency_chain_verified\": %s,\n  \"hardware_timing_available\": %s,\n  \"session_scope\": \"single_graph_request\",\n  \"persistent_session_reused\": false,\n  \"resident_slots_persist_for_graph\": true,\n  \"session_persistence_semantics\": \"one_native_graph_request_keeps_logical_slots_resident\",\n  \"steady_state_graph_execution_s\": %.9f,\n  \"final_output_only_d2h\": true,\n  \"physical_bus_bytes_available\": false,\n  \"final_outputs\": [",
+        allocated_dpus,
+        success ? "true" : "false", success ? "true" : "false", success ? "true" : "false", success ? "true" : "false",
+        success ? "true" : "false", success ? "true" : "false",
+        release_confirmed ? "true" : "false", release_confirmed ? "true" : "false",
+        success ? "true" : "false", success ? "true" : "false",
+        current->initial_h2d_time_s + current->descriptor_h2d_time_s + current->control_h2d_time_s + current->kernel_time_s + current->final_d2h_time_s + current->output_write_time_s);
     for (size_t index = 0; index < request->final_count; index++) {
         const resident_final_file_t *output = &request->final_outputs[index];
         if (index != 0u) fputs(",", file);

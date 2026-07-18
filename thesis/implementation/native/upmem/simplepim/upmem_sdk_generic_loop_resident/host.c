@@ -1,8 +1,10 @@
 #include <dpu.h>
 
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <signal.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -11,14 +13,21 @@
 #include "session_protocol.h"
 
 #ifndef UPMEM_GENERIC_HARDWARE_MVP
-#define UPMEM_GENERIC_HARDWARE_MVP 0
+#define UPMEM_GENERIC_HARDWARE_MVP 1
 #endif
 
-#if UPMEM_GENERIC_HARDWARE_MVP
-#define RESIDENT_ALLOCATION_PROFILE "backend=hw"
-#else
-#define RESIDENT_ALLOCATION_PROFILE NULL
+#if !UPMEM_GENERIC_HARDWARE_MVP
+#error "resident hardware evidence requires UPMEM_GENERIC_HARDWARE_MVP=1"
 #endif
+
+#define RESIDENT_ALLOCATION_PROFILE "backend=hw"
+
+static volatile sig_atomic_t resident_interrupted = 0;
+
+static void resident_signal_handler(int signal_number) {
+    (void)signal_number;
+    resident_interrupted = 1;
+}
 
 static double resident_now_s(void) {
     struct timeval value;
@@ -54,6 +63,15 @@ static int resident_file_size(const char *path, size_t expected) {
     return (uintmax_t)value.st_size == (uintmax_t)expected ? 0 : 1;
 }
 
+static int resident_buffer_finite(const unsigned char *buffer, size_t bytes) {
+    for (size_t offset = 0; offset < bytes; offset += sizeof(float)) {
+        float value;
+        memcpy(&value, buffer + offset, sizeof(value));
+        if (!isfinite(value)) return 1;
+    }
+    return 0;
+}
+
 static void resident_release(
     struct dpu_set_t *set,
     int allocated,
@@ -67,7 +85,9 @@ static void resident_release(
     const double started = resident_now_s();
     *error = dpu_free(*set);
     timing->release_time_s = resident_now_s() - started;
-    if (*error != DPU_OK) {
+    if (*error == DPU_OK) {
+        *release_confirmed = 1;
+    } else {
         *release_confirmed = 0;
         resident_report_sdk_error("resident dpu_free", *error);
         *sdk_error_code = (int)*error;
@@ -99,14 +119,18 @@ int main(int argc, char **argv) {
     struct dpu_set_t set;
     dpu_error_t error = DPU_OK;
     int set_allocated = 0;
-    int release_confirmed = 1;
+    int release_confirmed = 0;
     int rc = 1;
+    static char interrupted_message[] = "resident host interrupted; release confirmation is required";
+    static char output_nonfinite_message[] = "resident final output contains non-finite values";
 
     memset(&request, 0, sizeof(request));
     if (argc != 5 || strcmp(argv[1], "--resident-package") != 0 || strcmp(argv[3], "--resident-response") != 0) {
         fprintf(stderr, "usage: %s --resident-package request.json --resident-response response.json\n", argv[0]);
         return 2;
     }
+    signal(SIGTERM, resident_signal_handler);
+    signal(SIGINT, resident_signal_handler);
     request.session_id = (char *)malloc(20u);
     if (request.session_id != NULL) snprintf(request.session_id, 20u, "%s", "resident-unknown");
     {
@@ -133,6 +157,11 @@ int main(int argc, char **argv) {
         error_message = (char *)"resident host requires NR_TASKLETS=1 and bounded descriptors";
         goto release_and_write;
     }
+    if (resident_interrupted) {
+        failure_stage = "hardware_session_interrupted";
+        error_message = interrupted_message;
+        goto release_and_write;
+    }
 
     input_buffers = (unsigned char **)calloc(request.input_count, sizeof(*input_buffers));
     output_buffers = (unsigned char **)calloc(request.final_count, sizeof(*output_buffers));
@@ -141,6 +170,11 @@ int main(int argc, char **argv) {
         goto release_and_write;
     }
     for (size_t index = 0; index < request.input_count; index++) {
+        if (resident_interrupted) {
+            failure_stage = "hardware_session_interrupted";
+            error_message = interrupted_message;
+            goto release_and_write;
+        }
         const resident_input_file_t *input = &request.inputs[index];
         if (input->slot_id >= request.header.slot_count ||
             resident_file_size(input->path, input->raw_bytes) != 0) {
@@ -148,7 +182,8 @@ int main(int argc, char **argv) {
             goto release_and_write;
         }
         input_buffers[index] = (unsigned char *)calloc(input->transfer_bytes, 1u);
-        if (input_buffers[index] == NULL || resident_read_exact(input->path, input_buffers[index], input->raw_bytes) != 0) {
+        if (input_buffers[index] == NULL || resident_read_exact(input->path, input_buffers[index], input->raw_bytes) != 0 ||
+            resident_buffer_finite(input_buffers[index], input->raw_bytes) != 0) {
             failure_stage = "initial_transfer_failed";
             goto release_and_write;
         }
@@ -209,11 +244,20 @@ int main(int argc, char **argv) {
             request.header.slot_bytes, DPU_XFER_DEFAULT);
         if (error == DPU_OK) error = dpu_broadcast_to(set, "RESIDENT_OPERATIONS", 0, request.operations,
             request.header.operation_bytes, DPU_XFER_DEFAULT);
-        if (error == DPU_OK) error = dpu_broadcast_to(set, "RESIDENT_CONTROL", 0, &control, sizeof(control), DPU_XFER_DEFAULT);
         timing.descriptor_h2d_time_s = resident_now_s() - started;
-        descriptor_h2d_bytes = request.header.slot_bytes + request.header.operation_bytes + sizeof(control);
+        descriptor_h2d_bytes = request.header.slot_bytes + request.header.operation_bytes;
         if (error != DPU_OK) {
             resident_report_sdk_error("resident descriptor transfer", error);
+            sdk_error_code = (int)error;
+            failure_stage = "descriptor_transfer_failed";
+            goto release_and_write;
+        }
+        const double control_started = resident_now_s();
+        error = dpu_broadcast_to(set, "RESIDENT_CONTROL", 0, &control, sizeof(control), DPU_XFER_DEFAULT);
+        timing.control_h2d_time_s += resident_now_s() - control_started;
+        control_h2d_bytes = sizeof(control);
+        if (error != DPU_OK) {
+            resident_report_sdk_error("resident control transfer", error);
             sdk_error_code = (int)error;
             failure_stage = "descriptor_transfer_failed";
             goto release_and_write;
@@ -237,6 +281,11 @@ int main(int argc, char **argv) {
         }
     }
     for (uint32_t operation_index = 0; operation_index < request.header.operation_count; operation_index++) {
+        if (resident_interrupted) {
+            failure_stage = "hardware_session_interrupted";
+            error_message = interrupted_message;
+            goto release_and_write;
+        }
         const double control_started = resident_now_s();
         const uint64_t aligned_operation_index = operation_index;
         error = dpu_broadcast_to(set, "RESIDENT_ACTIVE_OPERATION", 0, &aligned_operation_index, sizeof(aligned_operation_index), DPU_XFER_DEFAULT);
@@ -259,6 +308,11 @@ int main(int argc, char **argv) {
         }
         native_launch_count++;
     }
+    if (resident_interrupted) {
+        failure_stage = "hardware_session_interrupted";
+        error_message = interrupted_message;
+        goto release_and_write;
+    }
     {
         const double started = resident_now_s();
         struct dpu_set_t dpu;
@@ -270,6 +324,11 @@ int main(int argc, char **argv) {
                 break;
             }
             if (error != DPU_OK) break;
+            if (resident_buffer_finite(output_buffers[index], output->raw_bytes) != 0) {
+                failure_stage = "output_validation_failed";
+                error_message = output_nonfinite_message;
+                goto release_and_write;
+            }
             final_d2h_bytes += output->transfer_bytes;
         }
         timing.final_d2h_time_s = resident_now_s() - started;
@@ -297,6 +356,9 @@ int main(int argc, char **argv) {
 
 release_and_write:
     resident_release(&set, set_allocated, &release_confirmed, &error, &failure_stage, &sdk_error_code, &timing);
+    if (set_allocated && !release_confirmed && failure_stage == NULL) {
+        failure_stage = "hardware_release_unverified";
+    }
     if (failure_stage != NULL) rc = 1;
 write_response:
     if (resident_response_write(
@@ -311,7 +373,7 @@ write_response:
     for (size_t index = 0; index < request.final_count; index++) free(output_buffers == NULL ? NULL : output_buffers[index]);
     free(input_buffers);
     free(output_buffers);
-    if (error_message != NULL && error_message != (char *)"UPMEM_ALLOW_PHYSICAL_HARDWARE=1 is required" && error_message != (char *)"DPU_BACKEND must be unset" && error_message != (char *)"resident host requires NR_TASKLETS=1 and bounded descriptors") free(error_message);
+    if (error_message != NULL && error_message != (char *)"UPMEM_ALLOW_PHYSICAL_HARDWARE=1 is required" && error_message != (char *)"DPU_BACKEND must be unset" && error_message != (char *)"resident host requires NR_TASKLETS=1 and bounded descriptors" && error_message != interrupted_message && error_message != output_nonfinite_message) free(error_message);
     resident_request_free(&request);
     return rc;
 }

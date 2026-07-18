@@ -18,22 +18,22 @@ from quantum_bench.bench.reporting import write_normalized_records, write_run_ma
 from quantum_bench.bench.run_dirs import EVIDENCE_ARTIFACT_KIND, create_run_dir, sanitize
 from quantum_bench.circuits import load_circuit
 from quantum_bench.core.jsonio import write_json, write_jsonl
-from quantum_bench.core.records import JsonDict, TaskGraph, TensorSpec, TensorValue, to_jsonable
+from quantum_bench.core.records import JsonDict, TaskGraph
 from quantum_bench.environment import capture_environment
 from quantum_bench.targets.upmem.hardware_session import (
     HardwareSessionBuild,
-    ResidentGraphSessionExecution,
     build_resident_hardware_session,
     execute_resident_graph_session,
 )
 from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
     RESIDENT_BACKEND_ID,
+    RESIDENT_CONTROL_H2D_BYTES_PER_LAUNCH,
+    RESIDENT_DESCRIPTOR_CONTROL_BYTES,
     RESIDENT_ROUTE_ID,
     RESIDENT_SESSION_PROTOCOL,
     RESIDENT_TIMING_SCOPE,
     HardwareTaskGraphResidentProfile,
     HardwareTaskGraphResidentSuite,
-    ResidentCapacityError,
     ResidentGraphPackage,
     build_resident_graph_package,
     build_resident_policy_reference,
@@ -367,22 +367,24 @@ def execute_resident_variant(
         _full_precision_tolerance(quantization_mode), "cpu_exact_taskgraph_full_precision",
     )
     response = native.response
-    initial_h2d = int(response.get("initial_h2d_bytes", _manifest_integer(artifact, "initial_h2d_bytes")))
-    descriptor_h2d = int(response.get("descriptor_h2d_bytes", _manifest_integer(artifact, "descriptor_h2d_bytes")))
-    control_h2d = int(response.get("control_h2d_bytes", artifact.descriptor_count * 8))
-    final_d2h = int(response.get("final_d2h_bytes", _manifest_integer(artifact, "final_d2h_bytes")))
-    actual_h2d = int(response.get("actual_h2d_bytes", initial_h2d + descriptor_h2d + control_h2d))
-    actual_d2h = int(response.get("actual_d2h_bytes", final_d2h))
+    initial_h2d = _manifest_integer(artifact, "initial_h2d_bytes")
+    descriptor_h2d = _manifest_integer(artifact, "descriptor_h2d_bytes")
+    control_h2d = RESIDENT_DESCRIPTOR_CONTROL_BYTES + artifact.descriptor_count * RESIDENT_CONTROL_H2D_BYTES_PER_LAUNCH
+    final_d2h = _manifest_integer(artifact, "final_d2h_bytes")
+    actual_h2d = initial_h2d + descriptor_h2d + control_h2d
+    actual_d2h = final_d2h
     accounting = {
         "initial_h2d_bytes": initial_h2d,
         "descriptor_h2d_bytes": descriptor_h2d,
         "control_h2d_bytes": control_h2d,
+        "descriptor_control_bytes": RESIDENT_DESCRIPTOR_CONTROL_BYTES,
+        "control_h2d_bytes_per_launch": RESIDENT_CONTROL_H2D_BYTES_PER_LAUNCH,
         "final_d2h_bytes": final_d2h,
-        "intermediate_h2d_bytes": int(response.get("intermediate_h2d_bytes", 0)),
-        "intermediate_d2h_bytes": int(response.get("intermediate_d2h_bytes", 0)),
+        "intermediate_h2d_bytes": 0,
+        "intermediate_d2h_bytes": 0,
         "actual_h2d_bytes": actual_h2d,
         "actual_d2h_bytes": actual_d2h,
-        "actual_transfer_bytes": int(response.get("actual_transfer_bytes", actual_h2d + actual_d2h)),
+        "actual_transfer_bytes": actual_h2d + actual_d2h,
     }
     accounting["bytes_invariant_status"] = "passed" if (
         accounting["intermediate_h2d_bytes"] == 0 and accounting["intermediate_d2h_bytes"] == 0 and
@@ -407,9 +409,18 @@ def execute_resident_variant(
         "failure_stage": None if validation_status == "passed" else "output_validation_failed",
         "route_id": RESIDENT_ROUTE_ID, "backend_id": RESIDENT_BACKEND_ID,
         "session_protocol": RESIDENT_SESSION_PROTOCOL, "timing_scope": RESIDENT_TIMING_SCOPE,
-        "hardware_execution": True, "hardware_kernel_executed": True,
-        "native_hardware_backend": True, "simulator_kernel_executed": False, "cpu_fallback_used": False,
-        "target_observed": "hardware", "graph_request_count": 1,
+        "hardware_execution": response["hardware_execution"],
+        "hardware_kernel_executed": response["hardware_kernel_executed"],
+        "native_hardware_backend": response["native_hardware_backend"],
+        "simulator_kernel_executed": response["simulator_kernel_executed"],
+        "cpu_fallback_used": response["cpu_fallback_used"],
+        "target_observed": response["target_observed"], "graph_request_count": response["graph_request_count"],
+        "hardware_allocation_verified": response["hardware_allocation_verified"],
+        "hardware_release_verified": response["hardware_release_verified"],
+        "release_confirmed": response["release_confirmed"],
+        "hardware_timing_available": response["hardware_timing_available"],
+        "persistent_session_reused": response["persistent_session_reused"],
+        "resident_slots_persist_for_graph": response["resident_slots_persist_for_graph"],
         "logical_task_count": len(graph.tasks), "component_operation_count": package.component_operation_count,
         "native_launch_count": int(response.get("native_launch_count", package.component_operation_count)),
         "native_task_count": int(response.get("native_task_count", package.component_operation_count)),
@@ -421,7 +432,7 @@ def execute_resident_variant(
         "peak_resident_bytes": package.allocation.peak_resident_bytes,
         "resident_slot_dtype": "float32",
         "final_output_component_count": len(package.allocation.final_components),
-        "final_output_only_d2h": True,
+        "final_output_only_d2h": response["final_output_only_d2h"],
         "no_host_intermediate_output_files": True,
         "intermediate_output_paths": [],
         "host_intermediate_combine": False,
@@ -521,18 +532,19 @@ def _normalized_record(case, suite, variant_id, mode, repeat_id, order_index, ex
         "path_variant_id": variant_id, "quantization_mode": mode, "repeat_id": repeat_id,
         "variant_order_index": order_index, "execution_model": "taskgraph_mram_resident",
         "execution_scope": "physical_single_dpu_mram_resident_full_taskgraph",
-        "timing_scope": RESIDENT_TIMING_SCOPE, "target_observed": "hardware",
-        "hardware_functionality_evidence": execution.status == "completed",
-        "hardware_timing_available": execution.status == "completed",
+        "timing_scope": RESIDENT_TIMING_SCOPE, "target_observed": summary.get("target_observed", "hardware_unverified"),
+        "hardware_functionality_evidence": execution.status == "completed" and summary.get("hardware_execution") is True,
+        "hardware_timing_available": summary.get("hardware_timing_available", False) if execution.status == "completed" else False,
         "hardware_kernel_executed": summary.get("hardware_kernel_executed", False),
-        "simulator_kernel_executed": False, "cpu_fallback_used": False,
+        "simulator_kernel_executed": summary.get("simulator_kernel_executed", False),
+        "cpu_fallback_used": summary.get("cpu_fallback_used", False),
         "multi_dpu_execution": False, "requested_dpu_count": 1, "tasklets_per_dpu": 1,
         "graph_request_count": summary.get("graph_request_count", 1),
         "native_launch_count": summary.get("native_launch_count", 0),
         "resident_slot_descriptor_count": summary.get("resident_slot_descriptor_count"),
         "resident_mram_pool_bytes": summary.get("resident_mram_pool_bytes"),
         "resident_mram_used_bytes": summary.get("resident_mram_used_bytes"),
-        "final_output_only_d2h": True, "intermediate_h2d_bytes": summary.get("intermediate_h2d_bytes", 0),
+        "final_output_only_d2h": summary.get("final_output_only_d2h", False), "intermediate_h2d_bytes": summary.get("intermediate_h2d_bytes", 0),
         "intermediate_d2h_bytes": summary.get("intermediate_d2h_bytes", 0),
         "actual_h2d_bytes": summary.get("actual_h2d_bytes", 0), "actual_d2h_bytes": summary.get("actual_d2h_bytes", 0),
         "modeled_host_rehydrated_equivalent_bytes": summary.get("modeled_host_rehydrated_equivalent_bytes", {}),
@@ -569,8 +581,12 @@ def _load_final_output(package: ResidentGraphPackage) -> np.ndarray:
         raw = np.fromfile(path, dtype="<f4")
         if raw.size != elements:
             raise RuntimeError("final_transfer_failed: resident native final output length mismatch")
+        if not np.all(np.isfinite(raw)):
+            raise RuntimeError("output_validation_failed: resident native final output is non-finite")
         values[component] = raw.reshape(tuple(int(item) for item in package.graph.tasks[-1].output_shape))
     if "imag" in values:
+        if "real" not in values:
+            raise RuntimeError("output_validation_failed: resident native real output component is missing")
         return np.asarray(values["real"] + 1j * values["imag"], dtype=np.complex64)
     return np.asarray(values["real"], dtype=np.float32)
 
@@ -595,8 +611,8 @@ def _modeled_host_rehydrated_bytes(package: ResidentGraphPackage) -> JsonDict:
         "transfer_bytes": h2d + d2h,
         "intermediate_h2d_bytes": h2d,
         "intermediate_d2h_bytes": d2h,
-        "route_id": "upmem_tn_hardware_taskgraph_persistent",
-        "definition": "modeled legacy host-rehydrated per-component generic-loop transfers; not resident hardware traffic",
+        "comparison_route_id": "upmem_tn_hardware_taskgraph_persistent",
+        "definition": "modeled legacy host-rehydrated per-component generic-loop transfers; comparison only, not resident hardware traffic",
     }
 
 
@@ -722,10 +738,11 @@ def _rotate(values, offset):
 
 def _failure_stage(reason: str, default: str) -> str:
     for stage in (
-        "hardware_opt_in_missing", "hardware_profile_violation", "sdk_discovery_failed", "native_build_failed",
+        "hardware_opt_in_missing", "hardware_profile_violation", "sdk_discovery_failed", "native_build_timeout", "native_build_failed",
         "manifest_parse_failed", "hardware_allocation_failed", "binary_load_failed", "initial_transfer_failed",
-        "descriptor_transfer_failed", "kernel_launch_failed", "kernel_timeout", "final_transfer_failed",
-        "response_manifest_failed", "output_validation_failed", "hardware_release_failed",
+        "descriptor_transfer_failed", "kernel_launch_failed", "kernel_timeout", "hardware_session_timeout",
+        "hardware_session_interrupted", "final_transfer_failed", "response_manifest_failed", "output_validation_failed",
+        "hardware_release_failed", "hardware_release_unverified",
     ):
         if stage in reason:
             return stage

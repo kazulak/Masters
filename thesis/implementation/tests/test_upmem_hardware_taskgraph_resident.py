@@ -243,6 +243,7 @@ def test_written_request_has_one_graph_no_intermediate_files_and_aligned_bytes(t
     assert manifest["intermediate_h2d_bytes"] == 0
     assert manifest["intermediate_d2h_bytes"] == 0
     assert manifest["control_h2d_bytes_per_launch"] == 8
+    assert manifest["control_h2d_bytes"] == 16 + manifest["component_operation_count"] * 8
     for key in (
         "initial_h2d_bytes",
         "descriptor_h2d_bytes",
@@ -311,6 +312,15 @@ def test_runner_validates_fake_resident_response_and_rejects_mismatch(
         response = {
             "schema_version": "generic_loop_resident_graph_session_v1",
             "manifest_kind": "resident_graph_response",
+            "route_id": "upmem_tn_hardware_taskgraph_resident",
+            "backend_id": "upmem_sdk_hardware_taskgraph_resident",
+            "hardware_profile_version": "hardware_taskgraph_single_dpu_mram_resident_v1",
+            "target_requested": "hardware",
+            "target_observed": "hardware",
+            "sdk_allocation_profile": "backend=hw",
+            "sdk_allocation_profile_verified": True,
+            "session_protocol": "generic_loop_resident_graph_session_v1",
+            "quantization_mode": manifest["quantization_mode"],
             "status": "completed",
             "failure_stage": None,
             "requested_dpus": 1,
@@ -319,20 +329,43 @@ def test_runner_validates_fake_resident_response_and_rejects_mismatch(
             "graph_request_count": 1,
             "native_launch_count": manifest["component_operation_count"],
             "native_task_count": manifest["component_operation_count"],
+            "allocation_count": 1,
+            "hardware_allocation_verified": True,
+            "hardware_execution": True,
+            "hardware_kernel_executed": True,
+            "native_execution": True,
+            "native_hardware_backend": True,
+            "hardware_backend_verified": True,
+            "simulator_kernel_executed": False,
+            "cpu_fallback_used": False,
+            "hardware_release_verified": True,
+            "release_confirmed": True,
+            "physical_dependency_chain_verified": True,
+            "hardware_timing_available": True,
+            "persistent_session_reused": False,
+            "resident_slots_persist_for_graph": True,
+            "final_output_only_d2h": True,
+            "physical_bus_bytes_available": False,
             "intermediate_h2d_bytes": 0,
             "intermediate_d2h_bytes": 0,
             "initial_h2d_bytes": manifest["initial_h2d_bytes"],
             "descriptor_h2d_bytes": manifest["descriptor_h2d_bytes"],
-            "control_h2d_bytes": manifest["component_operation_count"] * 8,
+            "control_h2d_bytes": manifest["control_h2d_bytes"],
             "final_d2h_bytes": manifest["final_d2h_bytes"],
-            "actual_h2d_bytes": manifest["initial_h2d_bytes"] + manifest["descriptor_h2d_bytes"] + manifest["component_operation_count"] * 8,
+            "actual_h2d_bytes": manifest["initial_h2d_bytes"] + manifest["descriptor_h2d_bytes"] + manifest["control_h2d_bytes"],
             "actual_d2h_bytes": manifest["final_d2h_bytes"],
-            "actual_transfer_bytes": manifest["initial_h2d_bytes"] + manifest["descriptor_h2d_bytes"] + manifest["component_operation_count"] * 8 + manifest["final_d2h_bytes"],
+            "actual_transfer_bytes": manifest["initial_h2d_bytes"] + manifest["descriptor_h2d_bytes"] + manifest["control_h2d_bytes"] + manifest["final_d2h_bytes"],
             "final_outputs": [
-                {"component": item["component"], "status": "completed", "output_path": item["output_path"]}
+                {"component": item["component"], "slot_id": item["slot_id"], "status": "completed", "output_path": item["output_path"], "elements": item["elements"], "raw_bytes": item["raw_bytes"], "transfer_bytes": item["transfer_bytes"]}
                 for item in manifest["final_outputs"]
             ],
         }
+        for key in (
+            "package_parse_time_s", "allocation_time_s", "binary_load_time_s", "initial_h2d_time_s",
+            "descriptor_h2d_time_s", "control_h2d_time_s", "kernel_time_s", "final_d2h_time_s",
+            "output_write_time_s", "release_time_s", "steady_state_graph_execution_s",
+        ):
+            response[key] = 0.0
         response_path.write_text(json.dumps(response), encoding="utf-8")
         return ResidentGraphSessionExecution(
             "completed", None, response_path, response, 0.001, ("fake",), "", ""

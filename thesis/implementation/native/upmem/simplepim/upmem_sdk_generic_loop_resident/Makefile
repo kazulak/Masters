@@ -1,7 +1,7 @@
 MAX_RANK ?= 16
 MAX_ELEMS ?= 256
 NR_TASKLETS ?= 1
-UPMEM_GENERIC_HARDWARE_MVP ?= 0
+UPMEM_GENERIC_HARDWARE_MVP ?= 1
 RESIDENT_MAX_LOGICAL_TASKS ?= 32
 RESIDENT_MAX_COMPONENT_OPS ?= 128
 RESIDENT_MAX_SLOT_DESCRIPTORS ?= 128
@@ -12,6 +12,10 @@ HOST_CC ?= gcc
 
 ifneq ($(NR_TASKLETS),1)
 $(error resident profile requires NR_TASKLETS=1)
+endif
+
+ifneq ($(UPMEM_GENERIC_HARDWARE_MVP),1)
+$(error resident profile requires UPMEM_GENERIC_HARDWARE_MVP=1; simulator builds are not valid evidence)
 endif
 
 .PHONY: all clean
