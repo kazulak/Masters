@@ -120,15 +120,10 @@ def test_upmem_mvp_benchmark_runs_suite_and_compare_results(monkeypatch, tmp_pat
     suite_path = tmp_path / "suite.yml"
     _write_suite(suite_path)
     monkeypatch.setattr("quantum_bench.targets.upmem.taskgraph_runtime.execute_generic_bridge", _fake_generic_execute_from_expected)
-    monkeypatch.setattr(
-        "quantum_bench.targets.upmem.taskgraph_runtime.dense_bridge_backend_manifest_eligibility",
-        lambda preparation, backend: (False, "forced_dense_reject"),
-    )
-
     result = run_upmem_mvp_benchmark(
         tmp_path,
         suite_path=suite_path,
-        policies=("generic-only", "dense-then-generic"),
+        policies=("generic-only",),
         quantization_modes=("per_task_input_quantize",),
         execute_external=True,
     )
@@ -140,7 +135,7 @@ def test_upmem_mvp_benchmark_runs_suite_and_compare_results(monkeypatch, tmp_pat
     assert payload["root_normalized_records_are_canonical"] is True
     assert payload["metadata"]["cpu_reference_used_to_feed_runtime_tensors"] is False
     assert len(payload["cpu_reference_records"]) == 2
-    assert len(payload["upmem_rows"]) == 4
+    assert len(payload["upmem_rows"]) == 2
     assert all(record["contraction_execution_target"] == "cpu" for record in payload["cpu_reference_records"])
     assert all(row["contraction_execution_target"] == "upmem" for row in payload["upmem_rows"])
     assert all(row["upmem_execution_mode"] == "sdk_simulator" for row in payload["upmem_rows"])
@@ -163,29 +158,29 @@ def test_upmem_mvp_benchmark_runs_suite_and_compare_results(monkeypatch, tmp_pat
     ):
         assert not (result.run_dir / derived_name).exists()
     assert not (result.run_dir / "plots").exists()
-    assert result.run_dir.parent == tmp_path / "runs" / "evidence" / "upmem_mvp_test" / "upmem_mvp"
+    assert result.run_dir.parent == tmp_path / "runs" / "evidence" / "upmem_mvp_test" / "upmem_generic_int8"
     manifest = json.loads((result.run_dir / "run_manifest.json").read_text(encoding="utf-8"))
     assert manifest["artifact_kind"] == "evidence_run"
-    assert manifest["route_label"] == "upmem_mvp"
+    assert manifest["route_label"] == "upmem_generic_int8"
     assert manifest["normalized_records"] == "normalized_records.jsonl"
     assert not list(result.run_dir.rglob("runner_work"))
 
     records = load_result_records([result.run_dir])
     upmem_records = [record for record in records if record["execution_target"] == "upmem"]
     cpu_records = [record for record in records if record["execution_target"] == "cpu"]
-    assert len(upmem_records) == 4
+    assert len(upmem_records) == 2
     assert len(cpu_records) == 2
     assert all(record["hardware_speedup"] == "not_applicable" for record in upmem_records)
     assert all(record["contraction_execution_target"] == "upmem" for record in upmem_records)
     assert all(record["upmem_execution_mode"] == "sdk_simulator" for record in upmem_records)
     assert all(record["upmem_program_executed"] is True for record in upmem_records)
-    assert all(record["policy"] in {"generic-only", "dense-then-generic"} for record in upmem_records)
+    assert all(record["policy"] == "generic-only" for record in upmem_records)
     assert all(record["valid_primary_upmem_codepath_result"] is True for record in upmem_records)
     assert all(record["dpu_program_invocations"] > 0 for record in upmem_records)
     assert all(record["contraction_execution_target"] == "cpu" for record in cpu_records)
 
     comparison = compare_results([result.run_dir], tmp_path / "comparison")
-    assert comparison.record_count == 6
+    assert comparison.record_count == 4
     assert (comparison.run_dir / "comparison_manifest.json").exists()
 
     report_dir = tmp_path / "reports" / "upmem_mvp"

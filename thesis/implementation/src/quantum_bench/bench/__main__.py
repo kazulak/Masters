@@ -23,40 +23,6 @@ def main() -> int:
         "--suite", required=True, help="Suite path or preset name under configs/suites"
     )
 
-    simplepim_parser = sub.add_parser("simplepim-microbench")
-    simplepim_parser.add_argument("--dry-run", action="store_true", required=True)
-    simplepim_parser.add_argument("--m", type=int, required=True)
-    simplepim_parser.add_argument("--k", type=int, required=True)
-    simplepim_parser.add_argument("--n", type=int, required=True)
-    simplepim_parser.add_argument(
-        "--route-dtype", default="int8", choices=("int8", "int16")
-    )
-    simplepim_parser.add_argument(
-        "--source-dtype", default="float32", choices=("float32", "float64")
-    )
-    simplepim_parser.add_argument("--seed", type=int, default=0)
-
-    dense_bridge_parser = sub.add_parser("dense-task-bridge")
-    dense_bridge_parser.add_argument("--case", default="bell_2q")
-    dense_bridge_parser.add_argument("--n-qubits", type=int)
-    dense_bridge_parser.add_argument("--task-index", type=int)
-    dense_bridge_parser.add_argument(
-        "--materialization",
-        default="initial-only",
-        choices=("initial-only", "cpu-replay"),
-    )
-    dense_bridge_parser.add_argument(
-        "--backend",
-        default="mock_numpy_dequantized",
-        choices=(
-            "mock_numpy_dequantized",
-            "simplepim_external",
-            "simplepim_external_stub",
-            "upmem_sdk_simulator_dense",
-        ),
-    )
-    dense_bridge_parser.add_argument("--execute-external", action="store_true")
-
     generic_bridge_parser = sub.add_parser("generic-task-bridge")
     generic_bridge_parser.add_argument("--case", default="bell_2q")
     generic_bridge_parser.add_argument("--n-qubits", type=int)
@@ -74,52 +40,20 @@ def main() -> int:
     upmem_runtime_parser.add_argument(
         "--policy",
         default="generic-only",
-        choices=("generic-only", "dense-then-generic", "dense-only"),
+        choices=("generic-only",),
     )
     upmem_runtime_parser.add_argument(
         "--quantization-mode",
         default="per_task_input_quantize",
-        choices=("per_task_input_quantize", "none", "persistent_network_quantized"),
+        choices=("per_task_input_quantize", "none"),
     )
     upmem_runtime_parser.add_argument("--execute-external", action="store_true")
-
-    upmem_frontier_runtime_parser = sub.add_parser("upmem-taskgraph-frontier-runtime")
-    upmem_frontier_runtime_parser.add_argument("--case", default="bell_2q")
-    upmem_frontier_runtime_parser.add_argument("--n-qubits", type=int)
-    upmem_frontier_runtime_parser.add_argument(
-        "--policy",
-        default="generic-only",
-        choices=("generic-only", "dense-then-generic", "dense-only"),
-    )
-    upmem_frontier_runtime_parser.add_argument(
-        "--quantization-mode",
-        default="per_task_input_quantize",
-        choices=("per_task_input_quantize", "none", "persistent_network_quantized"),
-    )
-    upmem_frontier_runtime_parser.add_argument("--dpu-groups", type=int, default=2)
-    upmem_frontier_runtime_parser.add_argument(
-        "--frontier-worker-count", type=int, default=1
-    )
-    upmem_frontier_runtime_parser.add_argument(
-        "--strategy",
-        default="frontier_round_robin_dpu_groups",
-        choices=(
-            "sequential_single_dpu",
-            "frontier_round_robin_dpu_groups",
-            "frontier_size_aware_dpu_groups",
-        ),
-    )
-    upmem_frontier_runtime_parser.add_argument(
-        "--execute-external", action="store_true"
-    )
 
     upmem_mvp_parser = sub.add_parser("upmem-mvp-benchmark")
     upmem_mvp_parser.add_argument(
         "--suite", required=True, help="Suite path or preset name under configs/suites"
     )
-    upmem_mvp_parser.add_argument(
-        "--policies", default="generic-only,dense-then-generic"
-    )
+    upmem_mvp_parser.add_argument("--policies", default="generic-only")
     upmem_mvp_parser.add_argument(
         "--quantization-modes", default="per_task_input_quantize"
     )
@@ -130,78 +64,6 @@ def main() -> int:
         "--artifact-retention",
         default="compact",
         choices=("full", "compact", "summary-only"),
-    )
-
-    upmem_hardware_mvp_parser = sub.add_parser(
-        "upmem-hardware-mvp",
-        help="run the guarded one-DPU dense UPMEM hardware functionality MVP",
-    )
-    upmem_hardware_mvp_parser.add_argument(
-        "--suite", required=True, help="hardware MVP suite YAML"
-    )
-    upmem_hardware_mvp_mode = upmem_hardware_mvp_parser.add_mutually_exclusive_group(
-        required=True
-    )
-    upmem_hardware_mvp_mode.add_argument("--prepare-only", action="store_true")
-    upmem_hardware_mvp_mode.add_argument("--execute", action="store_true")
-    upmem_hardware_mvp_parser.add_argument(
-        "--build",
-        action="store_true",
-        help="build the isolated native source during --prepare-only; never allocates a DPU",
-    )
-
-    upmem_hardware_generic_mvp_parser = sub.add_parser(
-        "upmem-hardware-generic-mvp",
-        help="run the guarded one-DPU generic TaskGraph UPMEM hardware functionality MVP",
-    )
-    upmem_hardware_generic_mvp_parser.add_argument(
-        "--suite", required=True, help="generic hardware MVP suite YAML"
-    )
-    upmem_hardware_generic_mvp_mode = upmem_hardware_generic_mvp_parser.add_mutually_exclusive_group(
-        required=True
-    )
-    upmem_hardware_generic_mvp_mode.add_argument("--prepare-only", action="store_true")
-    upmem_hardware_generic_mvp_mode.add_argument("--execute", action="store_true")
-    upmem_hardware_generic_mvp_parser.add_argument(
-        "--build",
-        action="store_true",
-        help="build the isolated native source during --prepare-only; never allocates a DPU",
-    )
-
-    upmem_hardware_taskgraph_parser = sub.add_parser(
-        "upmem-hardware-taskgraph",
-        help="run the guarded physical UPMEM TaskGraph correctness route",
-    )
-    upmem_hardware_taskgraph_parser.add_argument(
-        "--suite", required=True, help="hardware TaskGraph correctness suite YAML"
-    )
-    upmem_hardware_taskgraph_mode = upmem_hardware_taskgraph_parser.add_mutually_exclusive_group(
-        required=True
-    )
-    upmem_hardware_taskgraph_mode.add_argument("--prepare-only", action="store_true")
-    upmem_hardware_taskgraph_mode.add_argument("--execute", action="store_true")
-    upmem_hardware_taskgraph_parser.add_argument(
-        "--build",
-        action="store_true",
-        help="build the isolated native source during --prepare-only; never allocates a DPU",
-    )
-
-    upmem_hardware_taskgraph_study_parser = sub.add_parser(
-        "upmem-hardware-taskgraph-study",
-        help="run the guarded physical UPMEM TaskGraph path/quantization study",
-    )
-    upmem_hardware_taskgraph_study_parser.add_argument(
-        "--suite", required=True, help="hardware TaskGraph study suite YAML"
-    )
-    upmem_hardware_taskgraph_study_mode = (
-        upmem_hardware_taskgraph_study_parser.add_mutually_exclusive_group(required=True)
-    )
-    upmem_hardware_taskgraph_study_mode.add_argument("--prepare-only", action="store_true")
-    upmem_hardware_taskgraph_study_mode.add_argument("--execute", action="store_true")
-    upmem_hardware_taskgraph_study_parser.add_argument(
-        "--build",
-        action="store_true",
-        help="build the isolated native source during --prepare-only; never allocates a DPU",
     )
 
     upmem_hardware_taskgraph_resident_parser = sub.add_parser(
@@ -299,105 +161,13 @@ def main() -> int:
     compare_runs_parser.add_argument("--candidate", required=True)
     compare_runs_parser.add_argument("--out", required=True)
 
-    coverage_parser = sub.add_parser("dense-route-coverage")
-    coverage_input = coverage_parser.add_mutually_exclusive_group(required=True)
-    coverage_input.add_argument(
-        "--suite", help="Suite path or preset name under configs/suites"
-    )
-    coverage_input.add_argument("--case", help="Builtin circuit case name")
-    coverage_parser.add_argument("--n-qubits", type=int)
-    coverage_parser.add_argument(
-        "--bridge-backend", default="none", choices=("none", "simplepim_external_stub")
-    )
-    coverage_parser.add_argument("--execute-external", action="store_true")
-    coverage_parser.add_argument("--max-bridge-artifacts", type=int, default=0)
-
-    pim_eval_parser = sub.add_parser("pim-bridge-eval")
-    pim_eval_input = pim_eval_parser.add_mutually_exclusive_group(required=True)
-    pim_eval_input.add_argument(
-        "--suite", help="Suite path or preset name under configs/suites"
-    )
-    pim_eval_input.add_argument("--case", help="Builtin circuit case name")
-    pim_eval_parser.add_argument("--n-qubits", type=int)
-    pim_eval_parser.add_argument(
-        "--backend",
-        default="upmem_sdk_simulator_dense",
-        choices=("upmem_sdk_simulator_dense",),
-    )
-    pim_eval_parser.add_argument("--execute-external", action="store_true")
-    pim_eval_parser.add_argument("--dry-run", action="store_true")
-    pim_eval_parser.add_argument("--max-tasks-per-case", type=int, default=64)
-    pim_eval_parser.add_argument("--max-executed-tasks-per-case", type=int, default=2)
-    pim_eval_parser.add_argument(
-        "--task-selection",
-        default="eligible-only",
-        choices=("all", "eligible-only", "first-supported", "first-n"),
-    )
-    pim_eval_parser.add_argument("--timeout-seconds", type=float, default=60.0)
-    pim_eval_parser.add_argument("--planner")
-    pim_eval_parser.add_argument(
-        "--output-plots", action=argparse.BooleanOptionalAction, default=True
-    )
-    pim_eval_parser.add_argument("--debug-failures", action="store_true")
-    pim_eval_parser.add_argument("--compare-mock-on-failure", action="store_true")
-    pim_eval_parser.add_argument("--keep-failure-artifacts", action="store_true")
-
-    frontier_parser = sub.add_parser("pim-frontier-analysis")
-    frontier_input = frontier_parser.add_mutually_exclusive_group(required=True)
-    frontier_input.add_argument(
-        "--suite", help="Suite path or preset name under configs/suites"
-    )
-    frontier_input.add_argument("--case", help="Builtin circuit case name")
-    frontier_parser.add_argument("--n-qubits", type=int)
-    frontier_parser.add_argument("--available-dpus", type=int, default=64)
-    frontier_parser.add_argument("--per-dpu-wram-bytes", type=int, default=64 * 1024)
-    frontier_parser.add_argument("--effective-wram-bytes", type=int, default=60 * 1024)
-    frontier_parser.add_argument(
-        "--per-dpu-mram-bytes", type=int, default=64 * 1024 * 1024
-    )
-    frontier_parser.add_argument("--max-task-group-dpus", type=int, default=64)
-    frontier_parser.add_argument(
-        "--output-plots", action=argparse.BooleanOptionalAction, default=True
-    )
-
     matrix_parser = sub.add_parser("benchmark-matrix-report")
     matrix_parser.add_argument(
         "--matrix", required=True, help="Benchmark matrix YAML path"
     )
-    matrix_parser.add_argument("--external-libs-report")
     matrix_parser.add_argument(
         "--output-plots", action=argparse.BooleanOptionalAction, default=True
     )
-
-    shadow_parser = sub.add_parser("shadow-routed-runtime")
-    shadow_input = shadow_parser.add_mutually_exclusive_group(required=True)
-    shadow_input.add_argument(
-        "--suite", help="Suite path or preset name under configs/suites"
-    )
-    shadow_input.add_argument("--case", help="Builtin circuit case name")
-    shadow_parser.add_argument("--n-qubits", type=int)
-    shadow_parser.add_argument(
-        "--dense-shadow",
-        default="prepare",
-        choices=("none", "prepare", "bridge", "stub"),
-    )
-    shadow_parser.add_argument(
-        "--shadow-route-policy",
-        default="cpu-only",
-        choices=(
-            "cpu-only",
-            "dense-if-estimate-supported",
-            "dense-if-no-tiling",
-            "dense-if-bridge-ready",
-        ),
-    )
-    shadow_parser.add_argument(
-        "--bridge-backend",
-        default="none",
-        choices=("none", "mock_numpy_dequantized", "simplepim_external_stub"),
-    )
-    shadow_parser.add_argument("--execute-external", action="store_true")
-    shadow_parser.add_argument("--max-bridge-artifacts", type=int, default=0)
 
     upmem_env_parser = sub.add_parser("upmem-env-check")
     upmem_env_parser.add_argument("--run-sample", action="store_true")
@@ -405,13 +175,6 @@ def main() -> int:
         "--target", default="auto", choices=("auto", "simulator", "hardware")
     )
     upmem_env_parser.add_argument("--timeout-seconds", type=float, default=10.0)
-    upmem_env_parser.add_argument("--simplepim-home")
-
-    external_libs_parser = sub.add_parser("upmem-external-libs-check")
-    external_libs_parser.add_argument("--simplepim-home")
-    external_libs_parser.add_argument("--pid-comm-home")
-    external_libs_parser.add_argument("--timeout-seconds", type=float, default=10.0)
-    external_libs_parser.add_argument("--check-pid-comm-build", action="store_true")
 
     compare_results_parser = sub.add_parser("compare-results")
     compare_results_parser.add_argument("--inputs", nargs="+", required=True)
@@ -438,58 +201,6 @@ def main() -> int:
                     "planner_comparison_summary": str(
                         run_dir / "planner_comparison_summary.md"
                     ),
-                },
-                indent=2,
-            )
-        )
-        return 0
-    if args.command == "simplepim-microbench":
-        from quantum_bench.bench.simplepim_microbench import run_simplepim_microbench
-
-        run_dir, artifact_path, status = run_simplepim_microbench(
-            root_dir,
-            gemm_m=args.m,
-            gemm_k=args.k,
-            gemm_n=args.n,
-            route_dtype=args.route_dtype,
-            source_dtype=args.source_dtype,
-            seed=args.seed,
-            dry_run=args.dry_run,
-        )
-        print(
-            json.dumps(
-                {
-                    "run_dir": str(run_dir),
-                    "artifact": str(artifact_path),
-                    "status": status,
-                },
-                indent=2,
-            )
-        )
-        return 0
-    if args.command == "dense-task-bridge":
-        from quantum_bench.bench.dense_task_bridge import run_dense_task_bridge
-
-        if args.backend == "upmem_sdk_simulator_dense" and not args.execute_external:
-            parser.error(
-                "--backend upmem_sdk_simulator_dense requires --execute-external"
-            )
-        result = run_dense_task_bridge(
-            root_dir,
-            case=args.case,
-            n_qubits=args.n_qubits,
-            task_index=args.task_index,
-            backend=args.backend,
-            execute_external=args.execute_external,
-            materialization=args.materialization,
-        )
-        print(
-            json.dumps(
-                {
-                    "run_dir": str(result.run_dir),
-                    "summary_path": str(result.summary_path),
-                    "status": result.status,
-                    "reason": result.reason,
                 },
                 indent=2,
             )
@@ -534,10 +245,6 @@ def main() -> int:
             parser.error(
                 "upmem-taskgraph-runtime requires --execute-external for strict UPMEM SDK DPU execution"
             )
-        if args.quantization_mode == "persistent_network_quantized":
-            parser.error(
-                "--quantization-mode persistent_network_quantized is not implemented for upmem-taskgraph-runtime"
-            )
         if args.quantization_mode == "none" and args.policy != "generic-only":
             parser.error(
                 "--quantization-mode none currently requires --policy generic-only"
@@ -563,61 +270,6 @@ def main() -> int:
                     ),
                     "status": result.status,
                     "reason": result.reason,
-                },
-                indent=2,
-            )
-        )
-        return 0
-    if args.command == "upmem-taskgraph-frontier-runtime":
-        from quantum_bench.bench.upmem_taskgraph_runtime import (
-            run_upmem_taskgraph_runtime,
-        )
-
-        if not args.execute_external:
-            parser.error(
-                "upmem-taskgraph-frontier-runtime requires --execute-external for strict UPMEM SDK DPU execution"
-            )
-        if args.frontier_worker_count != 1:
-            parser.error(
-                "--frontier-worker-count > 1 is not implemented for the first SDK simulator frontier prototype"
-            )
-        if args.dpu_groups < 1:
-            parser.error("--dpu-groups must be >= 1")
-        if args.quantization_mode == "persistent_network_quantized":
-            parser.error(
-                "--quantization-mode persistent_network_quantized is not implemented for upmem-taskgraph-frontier-runtime"
-            )
-        if args.quantization_mode == "none" and args.policy != "generic-only":
-            parser.error(
-                "--quantization-mode none currently requires --policy generic-only"
-            )
-        result = run_upmem_taskgraph_runtime(
-            root_dir,
-            case=args.case,
-            n_qubits=args.n_qubits,
-            policy=args.policy,
-            quantization_mode=args.quantization_mode,
-            execute_external=args.execute_external,
-            schedule_mode="frontier",
-            frontier_worker_count=args.frontier_worker_count,
-            dpu_group_count=args.dpu_groups,
-            task_assignment_strategy=args.strategy,
-        )
-        print(
-            json.dumps(
-                {
-                    "run_dir": str(result.run_dir),
-                    "summary_path": str(result.summary_path),
-                    "task_metrics": str(
-                        result.run_dir
-                        / "cases"
-                        / result.case_id
-                        / "upmem_taskgraph_task_metrics.jsonl"
-                    ),
-                    "status": result.status,
-                    "reason": result.reason,
-                    "frontier_worker_count": args.frontier_worker_count,
-                    "dpu_groups": args.dpu_groups,
                 },
                 indent=2,
             )
@@ -654,174 +306,6 @@ def main() -> int:
             )
         )
         return 0
-    if args.command == "upmem-hardware-mvp":
-        from quantum_bench.bench.upmem_hardware_mvp import (
-            prepare_upmem_hardware_mvp,
-            run_upmem_hardware_mvp,
-        )
-
-        if args.build and not args.prepare_only:
-            parser.error("--build is only valid with --prepare-only")
-        try:
-            if args.prepare_only:
-                result = prepare_upmem_hardware_mvp(
-                    root_dir,
-                    suite_path=suite_path(args.suite, root_dir),
-                    build=args.build,
-                )
-                print(
-                    json.dumps(
-                        {
-                            "plan_dir": str(result.plan_dir),
-                            "artifact": str(result.summary_path),
-                            "status": result.status,
-                            "dpu_allocation_attempted": False,
-                            "dpu_launch_attempted": False,
-                        },
-                        indent=2,
-                    )
-                )
-                return 0 if result.status == "prepared" else 2
-            result = run_upmem_hardware_mvp(
-                root_dir, suite_path=suite_path(args.suite, root_dir)
-            )
-        except (OSError, ValueError) as exc:
-            parser.error(str(exc))
-        print(
-            json.dumps(
-                {
-                    "run_dir": str(result.run_dir),
-                    "artifact": str(result.summary_path),
-                    "status": result.status,
-                    "row_count": result.row_count,
-                },
-                indent=2,
-            )
-        )
-        return 0 if result.status == "completed" else 2
-    if args.command == "upmem-hardware-generic-mvp":
-        from quantum_bench.bench.upmem_hardware_generic_mvp import (
-            prepare_upmem_hardware_generic_mvp,
-            run_upmem_hardware_generic_mvp,
-        )
-
-        if args.build and not args.prepare_only:
-            parser.error("--build is only valid with --prepare-only")
-        try:
-            if args.prepare_only:
-                result = prepare_upmem_hardware_generic_mvp(
-                    root_dir,
-                    suite_path=suite_path(args.suite, root_dir),
-                    build=args.build,
-                )
-                print(
-                    json.dumps(
-                        {
-                            "plan_dir": str(result.plan_dir),
-                            "artifact": str(result.summary_path),
-                            "status": result.status,
-                            "dpu_allocation_attempted": False,
-                            "dpu_launch_attempted": False,
-                        },
-                        indent=2,
-                    )
-                )
-                return 0 if result.status == "prepared" else 2
-            result = run_upmem_hardware_generic_mvp(
-                root_dir, suite_path=suite_path(args.suite, root_dir)
-            )
-        except (OSError, ValueError) as exc:
-            parser.error(str(exc))
-        print(
-            json.dumps(
-                {
-                    "run_dir": str(result.run_dir),
-                    "artifact": str(result.summary_path),
-                    "status": result.status,
-                    "row_count": result.row_count,
-                },
-                indent=2,
-            )
-        )
-        return 0 if result.status == "completed" else 2
-    if args.command == "upmem-hardware-taskgraph":
-        from quantum_bench.bench.upmem_hardware_taskgraph import (
-            prepare_upmem_hardware_taskgraph,
-            run_upmem_hardware_taskgraph,
-        )
-
-        if args.build and not args.prepare_only:
-            parser.error("--build is only valid with --prepare-only")
-        try:
-            if args.prepare_only:
-                result = prepare_upmem_hardware_taskgraph(
-                    root_dir, suite_path=suite_path(args.suite, root_dir), build=args.build
-                )
-                print(json.dumps({
-                    "plan_dir": str(result.plan_dir),
-                    "artifact": str(result.summary_path),
-                    "status": result.status,
-                    "dpu_allocation_attempted": False,
-                    "dpu_launch_attempted": False,
-                }, indent=2))
-                return 0 if result.status == "prepared" else 2
-            result = run_upmem_hardware_taskgraph(
-                root_dir, suite_path=suite_path(args.suite, root_dir)
-            )
-        except (OSError, ValueError) as exc:
-            parser.error(str(exc))
-        print(json.dumps({
-            "run_dir": str(result.run_dir),
-            "artifact": str(result.summary_path),
-            "status": result.status,
-            "row_count": result.row_count,
-        }, indent=2))
-        return 0 if result.status == "completed" else 2
-    if args.command == "upmem-hardware-taskgraph-study":
-        from quantum_bench.bench.upmem_hardware_taskgraph_study import (
-            prepare_upmem_hardware_taskgraph_study,
-            run_upmem_hardware_taskgraph_study,
-        )
-
-        if args.build and not args.prepare_only:
-            parser.error("--build is only valid with --prepare-only")
-        try:
-            if args.prepare_only:
-                result = prepare_upmem_hardware_taskgraph_study(
-                    root_dir,
-                    suite_path=suite_path(args.suite, root_dir),
-                    build=args.build,
-                )
-                print(
-                    json.dumps(
-                        {
-                            "plan_dir": str(result.plan_dir),
-                            "artifact": str(result.summary_path),
-                            "status": result.status,
-                            "dpu_allocation_attempted": False,
-                            "dpu_launch_attempted": False,
-                        },
-                        indent=2,
-                    )
-                )
-                return 0 if result.status == "prepared" else 2
-            result = run_upmem_hardware_taskgraph_study(
-                root_dir, suite_path=suite_path(args.suite, root_dir)
-            )
-        except (OSError, ValueError) as exc:
-            parser.error(str(exc))
-        print(
-            json.dumps(
-                {
-                    "run_dir": str(result.run_dir),
-                    "artifact": str(result.summary_path),
-                    "status": result.status,
-                    "row_count": result.row_count,
-                },
-                indent=2,
-            )
-        )
-        return 0 if result.status == "completed" else 2
     if args.command == "upmem-hardware-taskgraph-resident":
         from quantum_bench.bench.upmem_hardware_taskgraph_resident import (
             prepare_upmem_hardware_taskgraph_resident,
@@ -1023,146 +507,6 @@ def main() -> int:
             )
         )
         return 0
-    if args.command == "dense-route-coverage":
-        from quantum_bench.bench.dense_route_coverage import (
-            run_dense_route_coverage,
-            validate_cli_options,
-        )
-
-        resolved_suite = suite_path(args.suite, root_dir) if args.suite else None
-        try:
-            validate_cli_options(
-                suite_path=resolved_suite,
-                case=args.case,
-                bridge_backend=args.bridge_backend,
-                execute_external=args.execute_external,
-                max_bridge_artifacts=args.max_bridge_artifacts,
-            )
-        except ValueError as exc:
-            parser.error(str(exc))
-        run_dir = run_dense_route_coverage(
-            root_dir,
-            suite_path=resolved_suite,
-            case=args.case,
-            n_qubits=args.n_qubits,
-            bridge_backend=args.bridge_backend,
-            execute_external=args.execute_external,
-            max_bridge_artifacts=args.max_bridge_artifacts,
-        )
-        print(
-            json.dumps(
-                {
-                    "run_dir": str(run_dir),
-                    "artifact": str(run_dir / "dense_route_coverage.json"),
-                    "csv": str(run_dir / "dense_route_coverage.csv"),
-                    "summary": str(run_dir / "dense_route_coverage_summary.md"),
-                    "status": "completed",
-                },
-                indent=2,
-            )
-        )
-        return 0
-    if args.command == "pim-bridge-eval":
-        from quantum_bench.bench.pim_bridge_eval import (
-            run_pim_bridge_eval,
-            validate_cli_options,
-        )
-
-        resolved_suite = suite_path(args.suite, root_dir) if args.suite else None
-        try:
-            validate_cli_options(
-                suite_path=resolved_suite,
-                case=args.case,
-                n_qubits=args.n_qubits,
-                backend=args.backend,
-                execute_external=args.execute_external,
-                dry_run=args.dry_run,
-                max_tasks_per_case=args.max_tasks_per_case,
-                max_executed_tasks_per_case=args.max_executed_tasks_per_case,
-                task_selection=args.task_selection,
-                timeout_seconds=args.timeout_seconds,
-            )
-        except ValueError as exc:
-            parser.error(str(exc))
-        run_dir = run_pim_bridge_eval(
-            root_dir,
-            suite_path=resolved_suite,
-            case=args.case,
-            n_qubits=args.n_qubits,
-            backend=args.backend,
-            execute_external=args.execute_external,
-            dry_run=args.dry_run,
-            max_tasks_per_case=args.max_tasks_per_case,
-            max_executed_tasks_per_case=args.max_executed_tasks_per_case,
-            task_selection=args.task_selection,
-            timeout_seconds=args.timeout_seconds,
-            planner=args.planner,
-            output_plots=args.output_plots,
-            debug_failures=args.debug_failures,
-            compare_mock_on_failure=args.compare_mock_on_failure,
-            keep_failure_artifacts=args.keep_failure_artifacts,
-        )
-        print(
-            json.dumps(
-                {
-                    "run_dir": str(run_dir),
-                    "artifact": str(run_dir / "pim_bridge_eval.json"),
-                    "csv": str(run_dir / "pim_bridge_eval.csv"),
-                    "cases_csv": str(run_dir / "pim_bridge_eval_cases.csv"),
-                    "summary": str(run_dir / "pim_bridge_eval_summary.md"),
-                    "status": "completed",
-                },
-                indent=2,
-            )
-        )
-        return 0
-    if args.command == "pim-frontier-analysis":
-        from quantum_bench.bench.pim_frontier_analysis import (
-            run_pim_frontier_analysis,
-            validate_cli_options,
-        )
-        from quantum_bench.targets.upmem import UpmemResourceModel
-
-        resolved_suite = suite_path(args.suite, root_dir) if args.suite else None
-        try:
-            resource_model = UpmemResourceModel(
-                available_dpus=args.available_dpus,
-                per_dpu_wram_bytes=args.per_dpu_wram_bytes,
-                effective_wram_bytes=args.effective_wram_bytes,
-                per_dpu_mram_bytes=args.per_dpu_mram_bytes,
-                max_task_group_dpus=args.max_task_group_dpus,
-            )
-            validate_cli_options(
-                suite_path=resolved_suite,
-                case=args.case,
-                n_qubits=args.n_qubits,
-                resource_model=resource_model,
-            )
-        except ValueError as exc:
-            parser.error(str(exc))
-        run_dir = run_pim_frontier_analysis(
-            root_dir,
-            suite_path=resolved_suite,
-            case=args.case,
-            n_qubits=args.n_qubits,
-            resource_model=resource_model,
-            output_plots=args.output_plots,
-        )
-        print(
-            json.dumps(
-                {
-                    "run_dir": str(run_dir),
-                    "artifact": str(run_dir / "pim_frontier_analysis.json"),
-                    "tasks_csv": str(run_dir / "pim_frontier_analysis_tasks.csv"),
-                    "cases_csv": str(run_dir / "pim_frontier_analysis_cases.csv"),
-                    "waves_csv": str(run_dir / "pim_frontier_analysis_waves.csv"),
-                    "summary": str(run_dir / "pim_frontier_analysis_summary.md"),
-                    "status": "completed",
-                },
-                indent=2,
-            )
-        )
-        return 0
     if args.command == "benchmark-matrix-report":
         from quantum_bench.bench.benchmark_matrix_report import (
             run_benchmark_matrix_report,
@@ -1171,20 +515,11 @@ def main() -> int:
         matrix_path = Path(args.matrix)
         if not matrix_path.is_absolute():
             matrix_path = root_dir / matrix_path
-        external_libs_report_path = (
-            Path(args.external_libs_report) if args.external_libs_report else None
-        )
-        if (
-            external_libs_report_path is not None
-            and not external_libs_report_path.is_absolute()
-        ):
-            external_libs_report_path = root_dir / external_libs_report_path
         try:
             run_dir = run_benchmark_matrix_report(
                 root_dir,
                 matrix_path,
                 output_plots=args.output_plots,
-                external_libs_report_path=external_libs_report_path,
             )
         except ValueError as exc:
             parser.error(str(exc))
@@ -1201,49 +536,6 @@ def main() -> int:
             )
         )
         return 0
-    if args.command == "shadow-routed-runtime":
-        from quantum_bench.bench.shadow_routed_runtime import (
-            run_shadow_routed_runtime,
-            validate_cli_options,
-        )
-
-        resolved_suite = suite_path(args.suite, root_dir) if args.suite else None
-        try:
-            validate_cli_options(
-                suite_path=resolved_suite,
-                case=args.case,
-                dense_shadow=args.dense_shadow,
-                bridge_backend=args.bridge_backend,
-                execute_external=args.execute_external,
-                max_bridge_artifacts=args.max_bridge_artifacts,
-                shadow_route_policy=args.shadow_route_policy,
-            )
-        except ValueError as exc:
-            parser.error(str(exc))
-        run_dir = run_shadow_routed_runtime(
-            root_dir,
-            suite_path=resolved_suite,
-            case=args.case,
-            n_qubits=args.n_qubits,
-            dense_shadow=args.dense_shadow,
-            bridge_backend=args.bridge_backend,
-            execute_external=args.execute_external,
-            max_bridge_artifacts=args.max_bridge_artifacts,
-            shadow_route_policy=args.shadow_route_policy,
-        )
-        print(
-            json.dumps(
-                {
-                    "run_dir": str(run_dir),
-                    "artifact": str(run_dir / "shadow_routed_runtime.json"),
-                    "csv": str(run_dir / "shadow_routed_runtime.csv"),
-                    "summary": str(run_dir / "shadow_routed_runtime_summary.md"),
-                    "status": "completed",
-                },
-                indent=2,
-            )
-        )
-        return 0
     if args.command == "upmem-env-check":
         from quantum_bench.bench.upmem_env_check import run_upmem_env_check
 
@@ -1253,7 +545,6 @@ def main() -> int:
                 run_sample=args.run_sample,
                 target=args.target,
                 timeout_seconds=args.timeout_seconds,
-                simplepim_home=args.simplepim_home,
             )
         except ValueError as exc:
             parser.error(str(exc))
@@ -1263,33 +554,6 @@ def main() -> int:
                     "run_dir": str(run_dir),
                     "artifact": str(artifact_path),
                     "summary": str(run_dir / "upmem_env_check_summary.md"),
-                    "status": status,
-                },
-                indent=2,
-            )
-        )
-        return 0
-    if args.command == "upmem-external-libs-check":
-        from quantum_bench.bench.upmem_external_libs_check import (
-            run_upmem_external_libs_check,
-        )
-
-        try:
-            run_dir, artifact_path, status = run_upmem_external_libs_check(
-                root_dir,
-                simplepim_home=args.simplepim_home,
-                pid_comm_home=args.pid_comm_home,
-                check_pid_comm_build=args.check_pid_comm_build,
-                timeout_seconds=args.timeout_seconds,
-            )
-        except ValueError as exc:
-            parser.error(str(exc))
-        print(
-            json.dumps(
-                {
-                    "run_dir": str(run_dir),
-                    "artifact": str(artifact_path),
-                    "summary": str(run_dir / "external_pim_libraries_summary.md"),
                     "status": status,
                 },
                 indent=2,

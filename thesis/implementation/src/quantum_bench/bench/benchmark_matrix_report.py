@@ -25,7 +25,6 @@ from quantum_bench.targets.upmem import (
     is_synthetic_pressure_case,
     synthetic_pressure_manifest,
 )
-from quantum_bench.targets.upmem.external_libs import candidate_status_payload_from_report
 from quantum_bench.tn import build_tensor_network, plan_task_graph_with_config, with_path_cost_summary
 from quantum_bench.targets.upmem import annotate_task_graph_with_upmem_estimates
 
@@ -150,18 +149,12 @@ def run_benchmark_matrix_report(
     matrix_path: Path,
     *,
     output_plots: bool = True,
-    external_libs_report_path: Path | None = None,
 ) -> Path:
     matrix = load_benchmark_matrix(matrix_path)
-    candidate_payload = _external_candidate_payload(external_libs_report_path)
+    candidate_payload = _external_candidate_payload()
     run_dir = create_run_dir(root_dir, "benchmark_matrix_report")
     write_json(run_dir / "environment.json", capture_environment(root_dir))
     (run_dir / "config" / "benchmark_matrix.yml").write_text(yaml.safe_dump(matrix, sort_keys=True), encoding="utf-8")
-    if external_libs_report_path is not None:
-        (run_dir / "config" / "external_pim_libraries_source.json").write_text(
-            json.dumps({"path": str(external_libs_report_path)}, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
 
     route_categories = list(matrix["route_categories"])
     resource_models = _resource_models(matrix)
@@ -206,7 +199,7 @@ def run_benchmark_matrix_report(
             "upmem_kernels_executed": False,
             "gpu_code_executed": False,
             "upmem_l1_l2_l3_are_internal_classes": True,
-            "external_libs_report_loaded": external_libs_report_path is not None,
+            "external_libs_report_loaded": False,
         },
     }
     write_json(run_dir / "benchmark_matrix.json", payload)
@@ -444,11 +437,17 @@ def _not_applicable_candidate_fields() -> JsonDict:
     }
 
 
-def _external_candidate_payload(external_libs_report_path: Path | None) -> JsonDict:
-    if external_libs_report_path is None:
-        return candidate_status_payload_from_report(None)
-    payload = json.loads(external_libs_report_path.read_text(encoding="utf-8"))
-    return candidate_status_payload_from_report(payload)
+def _external_candidate_payload() -> JsonDict:
+    # Keep the normalized candidate columns for historical reports without
+    # invoking the retired external-library probes.
+    return {
+        "l1_l2_compute_backend_candidates": "not_checked",
+        "l3_communication_backend_candidates": "not_checked",
+        "simplepim_candidate_status": "not_checked",
+        "pid_comm_candidate_status": "not_checked",
+        "native_sdk_control_status": "not_checked",
+        "recommended_next_backend_work": "not_checked",
+    }
 
 
 def _pressure_case_row(resource_model_id: str, base: JsonDict, summary: JsonDict) -> JsonDict:

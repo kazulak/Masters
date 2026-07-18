@@ -68,7 +68,7 @@ def run_upmem_mvp_benchmark(
     root_dir: Path,
     *,
     suite_path: Path,
-    policies: tuple[str, ...] = ("generic-only", "dense-then-generic"),
+    policies: tuple[str, ...] = ("generic-only",),
     quantization_modes: tuple[str, ...] = ("per_task_input_quantize",),
     execute_external: bool = False,
     max_taskgraph_tasks: int = 128,

@@ -8,8 +8,9 @@ This runbook covers the additive Phase 1B route:
 - protocol: `generic_loop_resident_graph_session_v1`
 - timing scope: `one_dpu_mram_resident_full_taskgraph_v1`
 
-The legacy `upmem_tn_hardware_taskgraph_persistent` route and its
-`generic_loop_interactive_session_v1` protocol are separate and unchanged.
+Legacy dense, generic/persistent, and taskgraph-study routes are historical
+artifacts. This resident route is the only physical TaskGraph command exposed
+by the current CLI and Makefile.
 
 ## Prepare
 

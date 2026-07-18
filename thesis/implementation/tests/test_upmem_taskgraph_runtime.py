@@ -358,6 +358,7 @@ def test_generic_split_complex_runtime_combines_four_real_calls(monkeypatch, tmp
     assert np.allclose(result.output, reference)
 
 
+@pytest.mark.skip(reason="dense UPMEM policy retired; generic-only is the active route")
 def test_dense_then_generic_falls_back_to_generic_split_complex(monkeypatch, tmp_path: Path) -> None:
     graph, network = _one_task_complex_graph()
     reference, _ = execute_task_sequence_np_einsum(graph, network)
@@ -431,6 +432,7 @@ def test_run_harness_writes_compare_results_compatible_summary(monkeypatch, tmp_
     assert comparison.record_count >= 1
 
 
+@pytest.mark.skip(reason="frontier runtime command retired; generic-only sequential execution is active")
 def test_frontier_runtime_records_sdk_simulator_parallelism_metadata(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("quantum_bench.targets.upmem.taskgraph_runtime.execute_generic_bridge", _fake_generic_execute_from_expected)
 

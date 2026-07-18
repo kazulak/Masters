@@ -17,7 +17,7 @@ def load_circuit(case: dict, root_dir: Path) -> CircuitSpec:
     if kind == "synthetic_pressure":
         raise ValueError(
             "synthetic_pressure workloads are analysis-only; use "
-            "pim-frontier-analysis or benchmark-matrix-report"
+            "benchmark-matrix-report or upmem-multi-dpu-assignment"
         )
     if kind == "planner_motif":
         raise ValueError(

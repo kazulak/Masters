@@ -72,17 +72,6 @@ class UpmemSdkDiscovery:
 
 
 @dataclass(frozen=True)
-class SimplePimSourceDiscovery:
-    simplepim_detected: bool
-    simplepim_home: str | None
-    simplepim_source: str
-    simplepim_stub_bin: str | None = None
-
-    def to_json_dict(self) -> JsonDict:
-        return to_jsonable(self)
-
-
-@dataclass(frozen=True)
 class SampleCheckRecord:
     attempted: bool
     status: str
@@ -236,42 +225,12 @@ def discover_upmem_sdk(
     )
 
 
-def discover_simplepim_source(
-    root_dir: Path,
-    *,
-    simplepim_home_override: str | None = None,
-    env: Mapping[str, str] | None = None,
-) -> SimplePimSourceDiscovery:
-    probe_env = env if env is not None else os.environ
-    stub_bin = _clean_path(probe_env.get("SIMPLEPIM_STUB_BIN"))
-    candidates: tuple[tuple[str, str | None], ...] = (
-        ("cli", simplepim_home_override),
-        ("environment", probe_env.get("SIMPLEPIM_HOME")),
-        ("implementation_external", str(root_dir / "external" / "SimplePIM")),
-    )
-    for source, raw_path in candidates:
-        cleaned = _clean_path(raw_path)
-        if cleaned and _looks_like_simplepim_home(Path(cleaned)):
-            return SimplePimSourceDiscovery(
-                simplepim_detected=True,
-                simplepim_home=cleaned,
-                simplepim_source=source,
-                simplepim_stub_bin=stub_bin,
-            )
-    return SimplePimSourceDiscovery(
-        simplepim_detected=False,
-        simplepim_home=None,
-        simplepim_source="none",
-        simplepim_stub_bin=stub_bin,
-    )
-
-
 def build_environment_check_result(
     *,
     target: str,
     timeout_seconds: float,
     sdk: UpmemSdkDiscovery,
-    simplepim: SimplePimSourceDiscovery,
+    simplepim: object | None = None,
     sample_build: SampleCheckRecord | None = None,
     sample_run: SampleCheckRecord | None = None,
     notes: Sequence[str] = (),
@@ -279,7 +238,7 @@ def build_environment_check_result(
     build_record = sample_build or SampleCheckRecord(attempted=False, status="not_requested")
     run_record = sample_run or SampleCheckRecord(attempted=False, status="not_requested", target=target)
     simulator_available = _simulator_availability(target, run_record)
-    status = _overall_status(sdk, simplepim, build_record, run_record)
+    status = _overall_status(sdk, build_record, run_record)
     return UpmemEnvironmentCheckResult(
         schema_version=UPMEM_ENV_CHECK_SCHEMA_VERSION,
         status=status,
@@ -287,10 +246,10 @@ def build_environment_check_result(
         timeout_seconds=float(timeout_seconds),
         upmem_sdk_detected=sdk.upmem_sdk_detected,
         upmem_sdk_home=sdk.upmem_sdk_home,
-        simplepim_detected=simplepim.simplepim_detected,
-        simplepim_home=simplepim.simplepim_home,
-        simplepim_source=simplepim.simplepim_source,
-        simplepim_stub_bin=simplepim.simplepim_stub_bin,
+        simplepim_detected=False,
+        simplepim_home=None,
+        simplepim_source="retired",
+        simplepim_stub_bin=None,
         simulator_available=simulator_available,
         hardware_probe_status="not_verified",
         tools=sdk.tools,
@@ -308,18 +267,17 @@ def sample_success_marker(stdout: str, stderr: str = "") -> bool:
 
 def _overall_status(
     sdk: UpmemSdkDiscovery,
-    simplepim: SimplePimSourceDiscovery,
     sample_build: SampleCheckRecord,
     sample_run: SampleCheckRecord,
 ) -> UpmemEnvCheckStatus:
-    if not sdk.upmem_sdk_detected and not simplepim.simplepim_detected:
+    if not sdk.upmem_sdk_detected:
         return "skipped"
     if sample_build.attempted and sample_build.status == "failed":
         return "failed"
     if sample_run.attempted and sample_run.status == "failed":
         return "failed"
     core_tools_ok = _core_tool_probes_passed(sdk.tools)
-    if not sdk.upmem_sdk_detected or not simplepim.simplepim_detected or not core_tools_ok:
+    if not sdk.upmem_sdk_detected or not core_tools_ok:
         return "partial"
     if sample_build.status == "skipped" or sample_run.status == "skipped":
         return "partial"
@@ -349,18 +307,14 @@ def _simulator_availability(target: str, sample_run: SampleCheckRecord) -> Simul
 
 def _next_step(status: str, sample_build: SampleCheckRecord, sample_run: SampleCheckRecord) -> str:
     if status == "completed" and sample_run.attempted:
-        return "Use the verified simulator sample path to start a minimal SimplePIM dense bridge experiment."
+        return "Use the strict generic UPMEM SDK-simulator route for bounded TaskGraph evidence."
     if status == "completed":
-        return "Run upmem-env-check --run-sample --target simulator before implementing a native dense backend."
+        return "Use upmem-mvp-benchmark for strict generic SDK-simulator evidence."
     if sample_build.status == "failed":
-        return "Fix SimplePIM sample build/toolchain configuration before native backend integration."
+        return "Fix the UPMEM SDK/toolchain configuration before generic simulator execution."
     if sample_run.status == "failed":
-        return "Fix SimplePIM simulator/runtime configuration before native backend integration."
-    return "Resolve missing UPMEM SDK or SimplePIM source configuration before native backend integration."
-
-
-def _looks_like_simplepim_home(path: Path) -> bool:
-    return path.exists() and (path / "benchmarks" / "va" / "Makefile").exists() and (path / "lib").exists()
+        return "Fix the UPMEM SDK simulator configuration before generic runtime execution."
+    return "Resolve the missing UPMEM SDK/toolchain configuration before generic simulator execution."
 
 
 def _bounded_snippet(value: str | None, limit: int = SNIPPET_LIMIT) -> str:

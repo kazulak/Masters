@@ -17,12 +17,6 @@ THESIS_BENCH_ENV := \
 CPU_SUITE ?= configs/suites/cpu_evidence.yml
 GPU_SUITE ?= configs/suites/gpu_evidence.yml
 UPMEM_SIM_SUITE ?= configs/suites/upmem_sim_evidence.yml
-UPMEM_HW_MVP_SUITE ?= configs/suites/upmem_hardware_mvp.yml
-UPMEM_HW_GENERIC_MVP_SUITE ?= configs/suites/upmem_hardware_generic_mvp.yml
-UPMEM_HW_TASKGRAPH_SUITE ?= configs/suites/upmem_hardware_taskgraph_correctness.yml
-UPMEM_HW_TASKGRAPH_RUN ?= runs/evidence/upmem_hardware_taskgraph_correctness/upmem_hw_taskgraph/latest
-UPMEM_HW_TASKGRAPH_STUDY_SUITE ?= configs/suites/upmem_hardware_taskgraph_path_quantization.yml
-UPMEM_HW_TASKGRAPH_STUDY_RUN ?= runs/evidence/upmem_hardware_taskgraph_path_quantization/upmem_hw_taskgraph_study/latest
 UPMEM_HW_TASKGRAPH_RESIDENT_SUITE ?= configs/suites/upmem_hardware_taskgraph_resident_path_quantization.yml
 UPMEM_HW_TASKGRAPH_RESIDENT_RUN ?= runs/evidence/upmem_hardware_taskgraph_resident_path_quantization/upmem_hw_taskgraph_resident/latest
 EVIDENCE_INBOX ?= runs/inbox/eth
@@ -40,16 +34,6 @@ PUBLIC_TARGETS := \
 	bench-cpu \
 	bench-gpu \
 	bench-upmem-sim \
-	upmem-hw-mvp-plan \
-	upmem-hw-mvp \
-	upmem-hw-generic-plan \
-	upmem-hw-generic-mvp \
-	upmem-hw-taskgraph-plan \
-	upmem-hw-taskgraph \
-	upmem-hw-taskgraph-report \
-	upmem-hw-taskgraph-study-plan \
-	upmem-hw-taskgraph-study \
-	upmem-hw-taskgraph-study-report \
 	upmem-hw-taskgraph-resident-plan \
 	upmem-hw-taskgraph-resident \
 	upmem-hw-taskgraph-resident-report \
@@ -80,18 +64,8 @@ help:
 		'  make bench-cpu          Run the CPU evidence suite' \
 		'  make bench-gpu          Verify the GPU and run the GPU evidence suite' \
 		'  make bench-upmem-sim    Check UPMEM simulator and run its evidence suite' \
-		'  make upmem-hw-mvp-plan  Prepare/build the guarded one-DPU hardware dense MVP; never allocates a DPU' \
-		'  make upmem-hw-mvp       Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; runs the one-DPU hardware dense MVP' \
-		'  make upmem-hw-generic-plan  Prepare/build the guarded generic TaskGraph MVP; never allocates a DPU' \
-		'  make upmem-hw-generic-mvp   Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; runs one real generic TaskGraph contraction' \
-		'  make upmem-hw-taskgraph-plan  Prepare/build the physical TaskGraph correctness route; never allocates a DPU' \
-		'  make upmem-hw-taskgraph  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; runs correctness-only TaskGraph evidence' \
-		'  make upmem-hw-taskgraph-report  Generate correctness/quantization plots from the latest physical TaskGraph evidence' \
-		'  make upmem-hw-taskgraph-study-plan  Prepare/build the physical TaskGraph path/quantization study; never allocates a DPU' \
-		'  make upmem-hw-taskgraph-study  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; runs the physical TaskGraph path/quantization study' \
-		'  make upmem-hw-taskgraph-study-report  Generate the labeled report from the latest physical TaskGraph study evidence' \
-		'  make upmem-hw-taskgraph-resident-plan  Prepare/build the one-DPU physical MRAM-resident diagnostic route; no performance claim' \
-		'  make upmem-hw-taskgraph-resident  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; run the one-DPU physical MRAM-resident diagnostic route; no performance claim' \
+		'  make upmem-hw-taskgraph-resident-plan  Prepare/build the active one-DPU physical MRAM-resident TaskGraph route; never allocates a DPU' \
+		'  make upmem-hw-taskgraph-resident  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; run the active one-DPU physical MRAM-resident TaskGraph route' \
 		'  make upmem-hw-taskgraph-resident-report  Generate a report from explicitly supplied one-DPU physical MRAM-resident diagnostic evidence' \
 		'  make evidence-inbox     Create the ignored inbox for copied ETH evidence bundles' \
 		'  make research-plan      Show the research benchmark plan' \
@@ -134,43 +108,6 @@ bench-upmem-sim:
 	$(BENCH) upmem-env-check --run-sample --target simulator
 	$(BENCH) simulation-backend-compare --suite $(UPMEM_SIM_SUITE) --artifact-retention compact
 	$(PY_ENV) $(PYTHON) scripts/evidence_shortcuts.py check-upmem runs/latest
-
-upmem-hw-mvp-plan:
-	$(BENCH) upmem-hardware-mvp --suite $(UPMEM_HW_MVP_SUITE) --prepare-only --build
-
-upmem-hw-mvp:
-	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1 to run physical UPMEM hardware' >&2; exit 2; }
-	$(BENCH) upmem-hardware-mvp --suite $(UPMEM_HW_MVP_SUITE) --execute
-	$(PY_ENV) $(PYTHON) scripts/evidence_shortcuts.py check-upmem-hardware runs/latest
-
-upmem-hw-generic-plan:
-	$(BENCH) upmem-hardware-generic-mvp --suite $(UPMEM_HW_GENERIC_MVP_SUITE) --prepare-only --build
-
-upmem-hw-generic-mvp:
-	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1 to run physical UPMEM hardware' >&2; exit 2; }
-	$(BENCH) upmem-hardware-generic-mvp --suite $(UPMEM_HW_GENERIC_MVP_SUITE) --execute
-
-upmem-hw-taskgraph-plan:
-	$(BENCH) upmem-hardware-taskgraph --suite $(UPMEM_HW_TASKGRAPH_SUITE) --prepare-only --build
-
-upmem-hw-taskgraph:
-	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1 to run physical UPMEM hardware' >&2; exit 2; }
-	$(BENCH) upmem-hardware-taskgraph --suite $(UPMEM_HW_TASKGRAPH_SUITE) --execute
-
-upmem-hw-taskgraph-report:
-	@test -f "$(UPMEM_HW_TASKGRAPH_RUN)/normalized_records.jsonl" || { echo 'Set UPMEM_HW_TASKGRAPH_RUN=<physical TaskGraph evidence directory>' >&2; exit 2; }
-	$(PY_ENV) $(PYTHON) scripts/research_benchmark_pack.py report --input $(UPMEM_HW_TASKGRAPH_RUN) --label upmem_hw_taskgraph
-
-upmem-hw-taskgraph-study-plan:
-	$(BENCH) upmem-hardware-taskgraph-study --suite $(UPMEM_HW_TASKGRAPH_STUDY_SUITE) --prepare-only --build
-
-upmem-hw-taskgraph-study:
-	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1 to run physical UPMEM hardware' >&2; exit 2; }
-	$(BENCH) upmem-hardware-taskgraph-study --suite $(UPMEM_HW_TASKGRAPH_STUDY_SUITE) --execute
-
-upmem-hw-taskgraph-study-report:
-	@test -f "$(UPMEM_HW_TASKGRAPH_STUDY_RUN)/normalized_records.jsonl" || { echo 'Set UPMEM_HW_TASKGRAPH_STUDY_RUN=<physical TaskGraph study evidence directory>' >&2; exit 2; }
-	$(PY_ENV) $(PYTHON) scripts/research_benchmark_pack.py report --input $(UPMEM_HW_TASKGRAPH_STUDY_RUN) --label upmem_hw_taskgraph_study
 
 evidence-inbox:
 	@mkdir -p "$(EVIDENCE_INBOX)"

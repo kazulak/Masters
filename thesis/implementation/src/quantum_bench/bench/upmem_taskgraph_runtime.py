@@ -70,10 +70,10 @@ def run_upmem_taskgraph_runtime(
     dpu_group_count: int = 1,
     task_assignment_strategy: str = "sequential_single_dpu",
 ) -> UpmemTaskGraphRuntimeRunResult:
-    route_label = _upmem_taskgraph_route_label(policy, quantization_mode, schedule_mode=schedule_mode)
-    route_id = "upmem_tn_frontier_sdk_simulator" if schedule_mode == "frontier" else "upmem_tn_runtime"
-    run_kind = "upmem_taskgraph_frontier_runtime" if schedule_mode == "frontier" else "upmem_taskgraph_runtime"
-    execution_scope = "frontier_taskgraph" if schedule_mode == "frontier" else "full_taskgraph"
+    route_label = _upmem_taskgraph_route_label(policy, quantization_mode)
+    route_id = "upmem_tn_runtime"
+    run_kind = "upmem_taskgraph_runtime"
+    execution_scope = "full_taskgraph"
     run_dir = create_run_dir(root_dir, case, artifact_kind=EVIDENCE_ARTIFACT_KIND, route_label=route_label)
     summary_path = run_dir / "upmem_taskgraph_runtime_summary.json"
     final_tensor_rel = Path("raw") / "final_tensor.npy"
@@ -234,7 +234,7 @@ def run_upmem_taskgraph_runtime(
                     "full_precision_reference_is_task_validation_target": primary_reference_kind == "cpu_exact_taskgraph_full_precision",
                     "whole_network_quantized_at_initialization": False,
                     "normal_benchmark_routes_unchanged": True,
-                    "upmem_frontier_runtime_prototype": schedule_mode == "frontier",
+                    "upmem_frontier_runtime_prototype": False,
                 },
             }
         )
@@ -255,12 +255,6 @@ def run_upmem_taskgraph_runtime(
 
 
 def _upmem_taskgraph_route_label(policy: str, quantization_mode: str, *, schedule_mode: str = "sequential") -> str:
-    if schedule_mode == "frontier":
-        if policy == "generic-only" and quantization_mode == "per_task_input_quantize":
-            return "upmem_frontier_generic_int8"
-        if policy == "generic-only" and quantization_mode == "none":
-            return "upmem_frontier_generic_float32"
-        return "upmem_frontier_taskgraph_runtime"
     if policy == "generic-only" and quantization_mode == "none":
         return "upmem_generic_float32"
     if policy == "generic-only" and quantization_mode == "per_task_input_quantize":

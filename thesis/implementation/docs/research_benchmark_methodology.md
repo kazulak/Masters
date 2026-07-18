@@ -46,7 +46,7 @@ Remaining limitations:
 | `configs/suites/manual/thesis_planner_sensitivity.yml` | Modeled-only scenario sensitivity for named custom UPMEM objective weight profiles. |
 | `configs/suites/manual/thesis_planner_semantic_v2.yml` | V2 projected-prefix modeled planner semantics on small quantum cases plus controlled synthetic motifs, with standard planning baselines. |
 | `configs/suites/manual/thesis_planner_sensitivity_v2.yml` | V2 projected-prefix sensitivity across named profiles, retaining standard opt_einsum/cotengra baselines. |
-| `configs/suites/manual/research_internal_parallelism.yml` | Diagnostic internal TaskGraph sequential/frontier/hybrid evidence. |
+| Historical `research_internal_parallelism` artifacts | Retained diagnostic schema and report compatibility; the runnable frontier/hybrid suite was retired in Phase A. |
 | `configs/suites/manual/thesis_upmem_quantization_boundary.yml` | Strict generic-only UPMEM SDK simulator boundary and same-route float32/int8 attribution evidence. |
 
 ## Commands
@@ -72,9 +72,9 @@ make thesis-report
   cotengra reported FLOPs.
 - `quimb_tn_sliced_exact` is executed slicing evidence, but it currently uses
   single-worker slice reconstruction unless a row explicitly records otherwise.
-- `cpu_tn_frontier_exact` and `cpu_tn_hybrid_sliced_frontier_exact` are
-  diagnostic internal TaskGraph routes. They support architecture evidence, not
-  serious TN baseline claims.
+- Historical `cpu_tn_frontier_exact` and
+  `cpu_tn_hybrid_sliced_frontier_exact` rows remain readable for old reports;
+  their runnable diagnostic routes were retired in Phase A.
 - `quest_gpu_full_state_exact` is full-state GPU evidence. It is not GPU
   tensor-network evidence.
 - GPU tensor-network rows are not thesis evidence until a separate GPU TN route
@@ -119,8 +119,9 @@ make thesis-report
 - No energy-efficiency claim without real measured energy metadata.
 - No speedup across incompatible route families, such as Quimb versus internal
   TaskGraph diagnostics.
-- No parallel speedup claim from diagnostic frontier or hybrid rows without a
-  separate matched performance/scaling methodology.
+- Historical frontier or hybrid rows do not support a parallel speedup claim;
+  current planning primitives remain modeled-only unless a future active route
+  records execution evidence.
 - No full-output exactness claim for `state_output_mode=none` rows.
 - No physical bus-traffic claim from `application_visible_sdk_recorded`
   transfer bytes. When directional fields exist, reports require

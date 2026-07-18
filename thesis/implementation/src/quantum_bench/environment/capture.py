@@ -12,14 +12,12 @@ from typing import Any
 import numpy as np
 
 import quantum_bench
-from quantum_bench.targets.upmem import probe_simplepim
 
 
 RAPL_PATH = Path("/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj")
 
 
 def capture_environment(root_dir: Path) -> dict[str, Any]:
-    simplepim_probe = probe_simplepim().to_json_dict()
     thread_variables = (
         "BENCH_CPU_THREADS",
         "OMP_NUM_THREADS",
@@ -69,10 +67,10 @@ def capture_environment(root_dir: Path) -> dict[str, Any]:
             "SIMPLEPIM_HOME": os.environ.get("SIMPLEPIM_HOME"),
             "SIMPLEPIM_BIN": os.environ.get("SIMPLEPIM_BIN"),
             "SIMPLEPIM_LIB": os.environ.get("SIMPLEPIM_LIB"),
-            "command_path": simplepim_probe["simplepim_command_path"],
-            "available": simplepim_probe["simplepim_available"],
-            "probe_status": simplepim_probe["simplepim_probe_status"],
-            "skip_reason": simplepim_probe["skip_reason"],
+            "command_path": None,
+            "available": False,
+            "probe_status": "retired",
+            "skip_reason": "SimplePIM probing is retired; the generic SDK loop is the active UPMEM simulator path",
         },
         "rapl": {
             "path": str(RAPL_PATH),

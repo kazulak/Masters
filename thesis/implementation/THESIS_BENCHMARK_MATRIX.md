@@ -34,7 +34,7 @@ semantic check; it is not the performance grid.
 | Planner semantic v2 | `configs/suites/manual/thesis_planner_semantic_v2.yml` | Standard opt_einsum/cotengra baselines plus `custom_upmem` `upmem_path_cost_v2` projected-prefix planner | planning once | Exercise small quantum cases and all controlled motifs under the v2 numeric/modeling contract |
 | Planner sensitivity v2 | `configs/suites/manual/thesis_planner_sensitivity_v2.yml` | Standard opt_einsum/cotengra baselines plus six v2 `custom_upmem` profiles | planning once | Measure modeled projected-prefix sensitivity; profile weights remain scenario assumptions, not hardware constants |
 | UPMEM boundary | `configs/suites/manual/thesis_upmem_quantization_boundary.yml` | Same internal TaskGraph, float32 and int8 strict generic UPMEM SDK simulator | 1 | Find supported/unsupported boundary and attribute transfer/error/runtime changes to quantization |
-| Internal parallelism | `configs/suites/manual/research_internal_parallelism.yml` | sequential/frontier/hybrid internal TaskGraph | 1 | Diagnostic architecture evidence only |
+| Internal parallelism | Historical resolved artifacts | sequential/frontier/hybrid internal TaskGraph | 1 | Historical diagnostic evidence; no longer a runnable Phase A route |
 
 The CPU/GPU performance suite uses deeper repeated circuits to reduce startup
 dominance. The CPU TN suite uses shallow exact circuits on the same canonical

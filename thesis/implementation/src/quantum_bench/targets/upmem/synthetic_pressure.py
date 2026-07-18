@@ -22,8 +22,8 @@ from quantum_bench.tn.task_graph import with_path_cost_summary
 
 SYNTHETIC_PRESSURE_KIND = "synthetic_pressure"
 SYNTHETIC_PRESSURE_ERROR = (
-    "synthetic_pressure workloads are analysis-only; use pim-frontier-analysis "
-    "or benchmark-matrix-report instead of normal circuit loading/execution"
+    "synthetic_pressure workloads are analysis-only; use benchmark-matrix-report "
+    "or upmem-multi-dpu-assignment instead of normal circuit loading/execution"
 )
 
 

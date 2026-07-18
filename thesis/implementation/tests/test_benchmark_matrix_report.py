@@ -12,15 +12,9 @@ from quantum_bench.bench.benchmark_matrix_report import (
     validate_benchmark_matrix,
 )
 import quantum_bench.bench.benchmark_matrix_report as matrix_module
-from quantum_bench.bench.pim_frontier_analysis import run_pim_frontier_analysis
-import quantum_bench.bench.pim_frontier_analysis as frontier_module
 from quantum_bench.bench.runner import run_suite
 from quantum_bench.circuits import load_circuit
 from quantum_bench.targets.upmem import (
-    MEMORY_LEVEL_L1_WRAM,
-    MEMORY_LEVEL_L2_SINGLE_DPU_MRAM,
-    MEMORY_LEVEL_L3_MULTI_DPU,
-    MEMORY_LEVEL_L4_OUT_OF_SCOPE,
     SYNTHETIC_PRESSURE_ERROR,
     UPMEM_DENSE_ESTIMATE_KEY,
     build_synthetic_pressure_task_graph,
@@ -179,30 +173,6 @@ validation: {}
     )
     with pytest.raises(ValueError, match=SYNTHETIC_PRESSURE_ERROR[:30]):
         run_suite(suite_path, tmp_path)
-
-
-def test_pim_frontier_pressure_suite_handles_synthetic_cases(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(frontier_module, "capture_environment", lambda root_dir: {})
-
-    run_dir = run_pim_frontier_analysis(
-        tmp_path,
-        suite_path=ROOT / "configs" / "suites" / "diagnostics" / "pim_frontier_pressure_quick.yml",
-        output_plots=False,
-    )
-    payload = json.loads((run_dir / "pim_frontier_analysis.json").read_text(encoding="utf-8"))
-    levels = payload["summary"]["memory_level_counts"]
-    synthetic = [
-        row
-        for row in payload["case_summaries"]
-        if row["circuit"].get("source", {}).get("metadata", {}).get("workload_type") == "synthetic_pressure"
-    ]
-
-    assert synthetic
-    assert levels[MEMORY_LEVEL_L1_WRAM] > 0
-    assert levels[MEMORY_LEVEL_L2_SINGLE_DPU_MRAM] > 0
-    assert levels[MEMORY_LEVEL_L3_MULTI_DPU] > 0
-    assert levels[MEMORY_LEVEL_L4_OUT_OF_SCOPE] > 0
-    assert payload["metadata"]["suite_routes_ignored"] is True
 
 
 def test_benchmark_matrix_report_writes_artifacts_and_preserves_semantics(tmp_path: Path, monkeypatch) -> None:

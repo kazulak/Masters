@@ -20,18 +20,6 @@ def test_makefile_shortcuts_are_defined() -> None:
 
     assert "CPU_SUITE ?= configs/suites/cpu_evidence.yml" in text
     assert "GPU_VERIFY ?= quest-hip" in text
-    assert (
-        "UPMEM_HW_TASKGRAPH_RUN ?= "
-        "runs/evidence/upmem_hardware_taskgraph_correctness/upmem_hw_taskgraph/latest"
-    ) in text
-    assert (
-        "UPMEM_HW_TASKGRAPH_STUDY_SUITE ?= configs/suites/upmem_hardware_taskgraph_path_quantization.yml"
-        in text
-    )
-    assert (
-        "UPMEM_HW_TASKGRAPH_STUDY_RUN ?= "
-        "runs/evidence/upmem_hardware_taskgraph_path_quantization/upmem_hw_taskgraph_study/latest"
-    ) in text
     assert "UPMEM_HW_TASKGRAPH_RESIDENT_SUITE ?= configs/suites/upmem_hardware_taskgraph_resident_path_quantization.yml" in text
     assert "UPMEM_HW_TASKGRAPH_RESIDENT_RUN ?= runs/evidence/upmem_hardware_taskgraph_resident_path_quantization/upmem_hw_taskgraph_resident/latest" in text
     for target in (
@@ -41,14 +29,6 @@ def test_makefile_shortcuts_are_defined() -> None:
         "bench-cpu",
         "bench-gpu",
         "bench-upmem-sim",
-        "upmem-hw-mvp-plan",
-        "upmem-hw-mvp",
-        "upmem-hw-taskgraph-plan",
-        "upmem-hw-taskgraph",
-        "upmem-hw-taskgraph-report",
-        "upmem-hw-taskgraph-study-plan",
-        "upmem-hw-taskgraph-study",
-        "upmem-hw-taskgraph-study-report",
         "upmem-hw-taskgraph-resident-plan",
         "upmem-hw-taskgraph-resident",
         "upmem-hw-taskgraph-resident-report",
@@ -130,16 +110,6 @@ def test_makefile_targets_parse_with_dry_run() -> None:
         "bench-cpu",
         "bench-gpu",
         "bench-upmem-sim",
-        "upmem-hw-mvp-plan",
-        "upmem-hw-mvp",
-        "upmem-hw-generic-plan",
-        "upmem-hw-generic-mvp",
-        "upmem-hw-taskgraph-plan",
-        "upmem-hw-taskgraph",
-        "upmem-hw-taskgraph-report",
-        "upmem-hw-taskgraph-study-plan",
-        "upmem-hw-taskgraph-study",
-        "upmem-hw-taskgraph-study-report",
         "upmem-hw-taskgraph-resident-plan",
         "upmem-hw-taskgraph-resident",
         "upmem-hw-taskgraph-resident-report",
@@ -175,47 +145,6 @@ def test_makefile_targets_parse_with_dry_run() -> None:
         assert (
             target != "bench-upmem-sim"
             or "configs/suites/upmem_sim_evidence.yml" in result.stdout
-        )
-        assert (
-            target != "upmem-hw-mvp-plan"
-            or "configs/suites/upmem_hardware_mvp.yml" in result.stdout
-        )
-        assert (
-            target != "upmem-hw-mvp" or "UPMEM_ALLOW_PHYSICAL_HARDWARE" in result.stdout
-        )
-        assert (
-            target != "upmem-hw-generic-plan"
-            or "configs/suites/upmem_hardware_generic_mvp.yml" in result.stdout
-        )
-        assert (
-            target != "upmem-hw-generic-mvp"
-            or "UPMEM_ALLOW_PHYSICAL_HARDWARE" in result.stdout
-        )
-        assert (
-            target != "upmem-hw-taskgraph-plan"
-            or "configs/suites/upmem_hardware_taskgraph_correctness.yml"
-            in result.stdout
-        )
-        assert (
-            target != "upmem-hw-taskgraph"
-            or "UPMEM_ALLOW_PHYSICAL_HARDWARE" in result.stdout
-        )
-        assert (
-            target != "upmem-hw-taskgraph-report"
-            or "research_benchmark_pack.py report" in result.stdout
-        )
-        assert (
-            target != "upmem-hw-taskgraph-study-plan"
-            or "configs/suites/upmem_hardware_taskgraph_path_quantization.yml"
-            in result.stdout
-        )
-        assert (
-            target != "upmem-hw-taskgraph-study"
-            or "UPMEM_ALLOW_PHYSICAL_HARDWARE" in result.stdout
-        )
-        assert target != "upmem-hw-taskgraph-study-report" or (
-            "normalized_records.jsonl" in result.stdout
-            and "--label upmem_hw_taskgraph_study" in result.stdout
         )
         assert target != "upmem-hw-taskgraph-resident-plan" or (
             "upmem-hardware-taskgraph-resident" in result.stdout
@@ -342,14 +271,10 @@ def test_top_level_suite_family_is_canonical() -> None:
         "cpu_gpu_sweep.yml",
         "upmem_sim_evidence.yml",
         "upmem_generic_sweep.yml",
-        "upmem_hardware_mvp.yml",
-        "upmem_hardware_generic_mvp.yml",
-        "upmem_hardware_taskgraph_correctness.yml",
-        "upmem_hardware_taskgraph_path_quantization.yml",
         "manual_large.yml",
     }
     assert canonical_top_level <= top_level
-    assert top_level - canonical_top_level <= {
+    assert top_level - canonical_top_level == {
         "upmem_hardware_taskgraph_resident_path_quantization.yml"
     }
     assert (

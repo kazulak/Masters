@@ -541,13 +541,9 @@ def test_simulation_backend_compare_suite_loads() -> None:
     thesis_cpu_gpu = load_suite(ROOT / "configs" / "suites" / "manual" / "thesis_full_state_cpu_gpu.yml")
     thesis_cpu_gpu_correctness = load_suite(ROOT / "configs" / "suites" / "manual" / "thesis_full_state_correctness.yml")
     thesis_cpu_tn = load_suite(ROOT / "configs" / "suites" / "manual" / "thesis_cpu_tn_quimb.yml")
-    research_internal_parallelism = load_suite(ROOT / "configs" / "suites" / "manual" / "research_internal_parallelism.yml")
     research_upmem_boundary = load_suite(ROOT / "configs" / "suites" / "manual" / "research_upmem_boundary.yml")
     upmem_sdk = load_suite(ROOT / "configs" / "suites" / "upmem_sim_evidence.yml")
     quimb_slicing = load_suite(ROOT / "configs" / "suites" / "diagnostics" / "quimb_slicing_quick.yml")
-    cpu_frontier = load_suite(ROOT / "configs" / "suites" / "diagnostics" / "cpu_frontier_quick.yml")
-    cpu_slicing_vs_frontier = load_suite(ROOT / "configs" / "suites" / "diagnostics" / "cpu_slicing_vs_frontier_quick.yml")
-    cpu_hybrid = load_suite(ROOT / "configs" / "suites" / "diagnostics" / "cpu_hybrid_quick.yml")
     for loaded in (thesis_small, scaling):
         assert loaded["route_policy"]["routes"] == ["cpu_tn_einsum_exact", "quest_cpu_full_state_exact", "quimb_tn_exact"]
         assert loaded["metadata"]["deterministic_unitary_only"] is True
@@ -593,31 +589,6 @@ def test_simulation_backend_compare_suite_loads() -> None:
     assert sliced_route["benchmark_role"] == "explicit_slicing_evidence"
     assert sliced_route["options"]["target_slices"] == 2
     assert sliced_route["options"]["require_slicing"] is True
-    assert cpu_frontier["metadata"]["intended_use"] == "diagnostics"
-    assert cpu_frontier["route_policy"]["routes"] == ["quest_cpu_full_state_exact", "cpu_tn_einsum_exact", "cpu_tn_frontier_exact"]
-    frontier_route = route_config_for(cpu_frontier, "cpu_tn_frontier_exact")
-    assert frontier_route["benchmark_role"] == "internal_frontier_diagnostic"
-    assert frontier_route["options"]["frontier_worker_count"] == 2
-    assert cpu_slicing_vs_frontier["metadata"]["intended_use"] == "diagnostics"
-    assert cpu_slicing_vs_frontier["route_policy"]["routes"] == [
-        "quest_cpu_full_state_exact",
-        "quimb_tn_exact",
-        "quimb_tn_sliced_exact",
-        "cpu_tn_einsum_exact",
-        "cpu_tn_frontier_exact",
-    ]
-    assert route_config_for(cpu_slicing_vs_frontier, "quimb_tn_sliced_exact")["options"]["require_slicing"] is True
-    assert route_config_for(cpu_slicing_vs_frontier, "cpu_tn_frontier_exact")["options"]["frontier_worker_count"] == 2
-    assert cpu_hybrid["metadata"]["intended_use"] == "diagnostics"
-    assert cpu_hybrid["route_policy"]["routes"] == [
-        "quest_cpu_full_state_exact",
-        "cpu_tn_einsum_exact",
-        "cpu_tn_hybrid_sliced_frontier_exact",
-    ]
-    hybrid_route = route_config_for(cpu_hybrid, "cpu_tn_hybrid_sliced_frontier_exact")
-    assert hybrid_route["benchmark_role"] == "internal_hybrid_diagnostic"
-    assert hybrid_route["options"]["frontier_worker_count"] == 2
-    assert hybrid_route["options"]["max_slice_count"] == 2
     assert cpu_gpu_sweep["suite_id"] == "cpu_gpu_sweep"
     assert cpu_gpu_sweep["route_policy"]["routes"] == ["quest_cpu_full_state_exact", "quest_gpu_full_state_exact"]
     assert cpu_gpu_sweep["warmups"] == 1
@@ -686,8 +657,6 @@ def test_simulation_backend_compare_suite_loads() -> None:
     assert route_config_for(thesis_cpu_tn, "quimb_tn_sliced_exact")["options"]["require_slicing"] is True
     skipped_cpu_tn_cases = {case["case_id"] for case in thesis_cpu_tn["cases"] if case.get("case_skip_reason")}
     assert skipped_cpu_tn_cases == set()
-    assert research_internal_parallelism["metadata"]["intended_use"] == "diagnostics"
-    assert "cpu_tn_hybrid_sliced_frontier_exact" in research_internal_parallelism["route_policy"]["routes"]
     assert research_upmem_boundary["route_policy"]["routes"] == ["quest_cpu_full_state_exact", "upmem_tn_sdk_simulator_quantized"]
     assert route_config_for(research_upmem_boundary, "upmem_tn_sdk_simulator_quantized")["options"]["execute_external"] is True
     assert upmem_sdk["route_policy"]["routes"] == [
@@ -1348,6 +1317,7 @@ def test_quimb_tn_exact_matches_internal_task_sequence() -> None:
     np.testing.assert_allclose(result.output.array, expected, atol=1.0e-12)
 
 
+@pytest.mark.skip(reason="CPU frontier diagnostic route retired in Phase A")
 def test_cpu_tn_frontier_exact_matches_sequential_with_worker_counts() -> None:
     routes = route_registry(ROOT)
     route = routes["cpu_tn_frontier_exact"]
@@ -1396,6 +1366,7 @@ def test_cpu_tn_frontier_exact_matches_sequential_with_worker_counts() -> None:
         np.testing.assert_allclose(result.output.array, expected, atol=1.0e-12)
 
 
+@pytest.mark.skip(reason="CPU frontier diagnostic route retired in Phase A")
 def test_cpu_frontier_executor_rejects_unresolved_dependencies() -> None:
     suite = load_suite(ROOT / "configs" / "suites" / "diagnostics" / "cpu_frontier_quick.yml")
     case = suite["cases"][0]
@@ -1409,6 +1380,7 @@ def test_cpu_frontier_executor_rejects_unresolved_dependencies() -> None:
         execute_task_frontier_np_einsum(broken_graph, network, frontier_worker_count=2)
 
 
+@pytest.mark.skip(reason="CPU frontier diagnostic route retired in Phase A")
 def test_cpu_frontier_diagnostic_suite_records_frontier_metadata(tmp_path: Path, monkeypatch) -> None:
     class FakeQuestRoute:
         name = "quest_cpu_full_state_exact"
@@ -1495,6 +1467,7 @@ def test_cpu_frontier_diagnostic_suite_records_frontier_metadata(tmp_path: Path,
     assert all(record["parallelism_mode"] == "sequential" for record in sequential_records)
 
 
+@pytest.mark.skip(reason="CPU hybrid diagnostic route retired in Phase A")
 def test_cpu_hybrid_diagnostic_suite_records_hybrid_metadata(tmp_path: Path, monkeypatch) -> None:
     class FakeQuestRoute:
         name = "quest_cpu_full_state_exact"
@@ -1587,6 +1560,7 @@ def test_cpu_hybrid_diagnostic_suite_records_hybrid_metadata(tmp_path: Path, mon
     assert all(record["parallelism_mode"] == "sequential" for record in sequential_records)
 
 
+@pytest.mark.skip(reason="CPU slicing/frontier diagnostic route retired in Phase A")
 def test_cpu_slicing_vs_frontier_diagnostic_suite_records_combined_parallelism_metadata(tmp_path: Path, monkeypatch) -> None:
     class FakeQuestRoute:
         name = "quest_cpu_full_state_exact"

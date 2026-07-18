@@ -21,10 +21,10 @@ make evidence-inbox
 ## Copy a Physical Run
 
 On ETH, archive the *completed evidence run directory*, not a source checkout.
-For the physical TaskGraph route, the source directory is normally:
+For the active physical resident TaskGraph route, the source directory is normally:
 
 ```bash
-RUN=$(readlink -f ~/work/Masters/thesis/implementation/runs/evidence/upmem_hardware_taskgraph_correctness/upmem_hw_taskgraph/latest)
+RUN=$(readlink -f ~/work/Masters/thesis/implementation/runs/evidence/upmem_hardware_taskgraph_resident_path_quantization/upmem_hw_taskgraph_resident/latest)
 tar -C "$(dirname "$RUN")" -czf ~/upmem_taskgraph_$(date -u +%Y-%m-%d_%H-%M-%S).tar.gz "$(basename "$RUN")"
 ```
 
@@ -35,9 +35,9 @@ make evidence-inbox
 scp safari-baguette1:~/upmem_taskgraph_<timestamp>.tar.gz runs/inbox/eth/
 tar -tzf runs/inbox/eth/upmem_taskgraph_<timestamp>.tar.gz | head
 
-mkdir -p runs/evidence/upmem_hardware_taskgraph_correctness/upmem_hw_taskgraph
+mkdir -p runs/evidence/upmem_hardware_taskgraph_resident_path_quantization/upmem_hw_taskgraph_resident
 tar -xzf runs/inbox/eth/upmem_taskgraph_<timestamp>.tar.gz \
-  -C runs/evidence/upmem_hardware_taskgraph_correctness/upmem_hw_taskgraph
+  -C runs/evidence/upmem_hardware_taskgraph_resident_path_quantization/upmem_hw_taskgraph_resident
 ```
 
 The archive must unpack to one timestamped run directory containing at least:
@@ -66,12 +66,12 @@ Report from the exact extracted run. Do not rerun the hardware benchmark just
 to make plots:
 
 ```bash
-RUN=runs/evidence/upmem_hardware_taskgraph_correctness/upmem_hw_taskgraph/<timestamp>
-make upmem-hw-taskgraph-report UPMEM_HW_TASKGRAPH_RUN="$RUN"
+RUN=runs/evidence/upmem_hardware_taskgraph_resident_path_quantization/upmem_hw_taskgraph_resident/<timestamp>
+make upmem-hw-taskgraph-resident-report UPMEM_HW_TASKGRAPH_RESIDENT_RUN="$RUN"
 ```
 
 The command prints a generated comparison directory under
-`runs/comparisons/research_pack/upmem_hw_taskgraph/<timestamp>/`. Inspect its
+`runs/comparisons/research_pack/upmem_hw_taskgraph_resident/<timestamp>/`. Inspect its
 `benchmark_summary.md`, `plot_manifest.json`, `tables/`, and `plots/`.
 
 For the first physical TaskGraph route, the transfer, error, and validation
@@ -86,7 +86,7 @@ push implementation changes before running ETH; do not use `--allow-dirty` for
 thesis results.
 
 ```bash
-PACK=runs/comparisons/research_pack/upmem_hw_taskgraph/<timestamp>
+PACK=runs/comparisons/research_pack/upmem_hw_taskgraph_resident/<timestamp>
 ../.venv/bin/python scripts/thesis_snapshot.py promote \
   --pack "$PACK" \
   --out thesis_results/physical_hardware_taskgraph_v1

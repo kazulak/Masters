@@ -88,9 +88,8 @@ different identities or objective settings but select the same structural path.
 | Serious CPU TN baseline | `thesis/implementation/src/quantum_bench/providers/exact_tn/quimb_tn.py` | Quimb/cotengra unsliced and sliced exact TN execution | Active |
 | Shared-plan CPU reference | `thesis/implementation/src/quantum_bench/providers/exact_tn/cpu_einsum.py`, `cpu_path_replay.py` | Execute the internal TaskGraph on CPU | Active; diagnostic/reference quality |
 | Strict UPMEM runtime | `thesis/implementation/src/quantum_bench/targets/upmem/taskgraph_runtime.py`, `numeric_reference.py`, `runtime_evidence.py` | Execute policy/scheduling while keeping CPU references, validation, and evidence construction reviewable | Active, SDK simulator |
-| Physical UPMEM bring-up | `targets/upmem/hardware_mvp.py`, `bench/upmem_hardware_mvp.py`, `native/upmem/simplepim/upmem_sdk_dense_hardware_mvp_runner.py` | Guarded one-DPU/one-tasklet dense int8 -> int32 exact functionality evidence | Phase 1A; fixed 2x2/4x4 L1 cases only, no speedup or energy claim |
-| Physical generic TaskGraph MVP | `targets/upmem/hardware_generic_mvp.py`, `bench/upmem_hardware_generic_mvp.py`, `targets/upmem/generic_bridge.py`, `native/upmem/simplepim/upmem_sdk_generic_loop_runner.py` | Guarded one-DPU/one-tasklet synthetic real rank-3 x rank-3 -> rank-4 generic contraction with two output tiles | Phase 1B; exact functionality evidence only, no general quantum-TN, speedup, energy, scaling, or scheduler claim |
-| Native DPU programs | `thesis/implementation/native/upmem/simplepim/` | Dense and bounded generic host/DPU programs | Active, bounded |
+| Physical UPMEM route | `targets/upmem/hardware_taskgraph_resident.py`, `bench/upmem_hardware_taskgraph_resident.py`, `native/upmem/simplepim/upmem_sdk_generic_loop_resident/` | Guarded one-DPU MRAM-resident full-TaskGraph execution | Active Phase A route; correctness evidence only, no speedup or energy claim |
+| Native DPU programs | `thesis/implementation/native/upmem/simplepim/` | Bounded generic loop and resident host/DPU programs | Active, bounded; legacy dense sources are historical and removed from the runnable tree |
 | UPMEM analysis | `thesis/implementation/src/quantum_bench/targets/upmem/tile_plan.py`, `schedule.py`, `tn/upmem_path_cost.py`, planner scoring | Estimate transfer, tiling, frontier, assignment pressure, and objective components | Active; execution coverage remains bounded |
 | Evidence writer | `thesis/implementation/src/quantum_bench/bench/simulation_backend_compare.py`, `upmem_mvp_benchmark.py` | Run fixed suites and write canonical normalized evidence | Active |
 | Derived analysis | `thesis/implementation/scripts/research_benchmark_pack.py` | Statistics, claim guards, source CSVs, and plots | Active |
@@ -125,20 +124,18 @@ flowchart TD
     F -->|unsupported| X[Explicit boundary record<br/>no CPU contraction fallback]
     F -->|supported| H[Host orchestration]
     H --> Q[Optional per-task quantization<br/>float32 or int8/int32]
-    Q --> D[DPU program invocation<br/>dense bridge or generic loop]
+    Q --> D[DPU program invocation<br/>strict generic loop]
     D --> R[Dequantization / tensor reconstruction]
     R --> V[CPU validation against the same TaskGraph]
     V --> E[Normalized evidence<br/>traffic, timing, error, invocation counts]
 ```
 
-Post-2E.65, the implementation has two explicit bounded tiling states. The
-planner exposes dense L1 direct and L2 single-DPU MRAM-resident/WRAM-tiled
-plans through `thesis/implementation/src/quantum_bench/targets/upmem/tile_plan.py`.
+The planner exposes bounded generic single-DPU MRAM-resident/WRAM-tiled plans
+through `thesis/implementation/src/quantum_bench/targets/upmem/tile_plan.py`.
 The strict generic path executes `mram_resident_output_tiled_v1` with output
-tiles bounded at 256 elements. The dense bridge has an executable bounded
-L2 real-valued tiled path, while complex L2 and shapes outside the recorded
-contracts remain explicit boundaries. The SDK simulator proves the native SDK
-control path and DPU program invocation, not physical PIM timing.
+tiles bounded at 256 elements. Shapes outside the recorded contracts remain
+explicit boundaries. The SDK simulator proves the native SDK control path and
+DPU program invocation, not physical PIM timing.
 
 Current limitation:
 
@@ -151,14 +148,14 @@ Current limitation:
 | Planned module | Purpose | Current state | Candidate source/inspiration |
 | --- | --- | --- | --- |
 | UPMEM-aware path objective | Score FLOPs, peak intermediate size, host/DPU and MRAM/WRAM movement, tiles, synchronization, and numerical pressure | Deterministic custom greedy planner plus standard baselines; modeled fixed single-DPU policy only | Thesis contribution on top of `opt_einsum`/cotengra |
-| Kernel classifier/selector | Choose dense GEMM, generic tiled contraction, permutation/layout, sparse, or collective path | Dense/generic routing scaffolding exists | Thesis architecture |
-| Tiled generic contraction | Stream operands/output through MRAM/WRAM under explicit caps | Implemented for bounded output tiling and bounded L2 dense real-valued execution; strict generic coverage remains capped | UPMEM programming model, SimplePIM/ATiM ideas |
+| Kernel classifier/selector | Choose generic tiled contraction, permutation/layout, sparse, or collective path | Generic/tile planning primitives exist; specialized selection remains future work | Thesis architecture |
+| Tiled generic contraction | Stream operands/output through MRAM/WRAM under explicit caps | Implemented for bounded output tiling; strict generic coverage remains capped | UPMEM programming model; legacy external references are historical |
 | Gate-aware permutation kernels | Replace arithmetic by row/index permutation for gates where mathematically valid | Missing | PIMutation-inspired specialization, thesis adaptation to TN tasks |
 | Layout/transpose/slicing kernels | Avoid host materialization and enable bounded subproblems | Missing | Standard TN/PIM techniques; implementation is thesis work |
 | Quantization formats | Compare same-plan float32 and integer execution with explicit scale/error | Float32 and int8 generic modes exist | Thesis evaluation; motivated by weak DPU floating point |
 | Multi-DPU scheduler | Assign ready contractions/tiles to DPU groups | Assignment/frontier evidence is modeled or simulator-serial | Thesis architecture |
 | DPU communication layer | Move intermediate data without unnecessary host round trips | Not integrated | PID-Comm candidate |
-| High-level PIM adapter | Reduce host/DPU boilerplate where it does not hide measurement | External code pinned, not active in strict route | SimplePIM candidate |
+| High-level PIM adapter | Reduce host/DPU boilerplate where it does not hide measurement | Retired from the runnable Phase A surface | Historical SimplePIM candidate |
 | Automatic kernel generation | Explore generated DPU kernels for selected contractions | Not integrated | ATiM candidate |
 | Sparse kernels | Exploit zero/sparsity structure when measured | Not integrated | SparseP candidate |
 
@@ -175,7 +172,7 @@ their expected benefit testable.
 | QuEST | External submodule | Full-state CPU and GPU baseline; no thesis ownership claim |
 | Quimb, cotengra, opt_einsum | External Python libraries | Serious CPU TN execution and path planning |
 | UPMEM SDK | External platform/toolchain | Simulator today; physical DPU DIMMs planned at ETH |
-| SimplePIM | External pinned repository | Candidate abstraction/reference; strict generic evidence currently records `simplepim_api_used=false` |
+| SimplePIM | External pinned repository | Historical abstraction/reference only; strict generic evidence retains `simplepim_api_used=false` for compatibility |
 | PID-Comm | External pinned repository | Candidate future multi-DPU communication layer, not currently executed |
 | ATiM, SparseP, related papers/tools | Literature/future dependencies | Design candidates only until a verified adapter exists |
 | PIMutation | Prior research and benchmark inspiration | Six circuit families, full-state PIM comparison context, quantization/specialized gate-operation motivation |

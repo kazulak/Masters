@@ -6,8 +6,6 @@ from dataclasses import replace
 import numpy as np
 
 from quantum_bench.circuits import builtin_circuit
-from quantum_bench.routing import DenseTaskPreparationInput, prepare_dense_task
-from quantum_bench.targets.upmem import SimplePimProbeResult
 from quantum_bench.tn import (
     TaskInputMaterializationRequest,
     build_tensor_network,
@@ -15,16 +13,6 @@ from quantum_bench.tn import (
     plan_task_graph,
 )
 from quantum_bench.tn.contract import contract_binary_task
-
-
-def _available_probe() -> SimplePimProbeResult:
-    return SimplePimProbeResult(
-        simplepim_available=True,
-        simplepim_probe_status="available",
-        simplepim_bin="/tmp/simplepim",
-        simplepim_command_path="/tmp/simplepim",
-        metadata={"external_command_executed": False, "source": "unit_test"},
-    )
 
 
 def _bell_graph_and_tensors():
@@ -71,29 +59,6 @@ def test_materializes_later_task_inputs_by_replaying_predecessors() -> None:
     assert result.right_tensor.spec.dtype == "complex128"
     np.testing.assert_allclose(result.left_tensor.array, direct_outputs[result.left_tensor.spec.id])
     np.testing.assert_allclose(result.right_tensor.array, direct_outputs[result.right_tensor.spec.id])
-
-
-def test_materialized_inputs_are_accepted_by_dense_preparation() -> None:
-    graph, initial = _bell_graph_and_tensors()
-    target_index = _first_task_with_intermediate_inputs(graph, initial)
-    materialized = materialize_task_inputs(
-        TaskInputMaterializationRequest(graph=graph, initial_tensors=initial, target_task_index=target_index)
-    )
-
-    assert materialized.left_tensor is not None
-    assert materialized.right_tensor is not None
-    prepared = prepare_dense_task(
-        DenseTaskPreparationInput(
-            task=graph.tasks[target_index],
-            left_tensor=materialized.left_tensor,
-            right_tensor=materialized.right_tensor,
-            simplepim_probe=_available_probe(),
-        )
-    )
-
-    assert prepared.status == "prepared"
-    assert prepared.input_tensor_ids == graph.tasks[target_index].input_tensor_ids
-    assert prepared.prepared_operands is not None
 
 
 def test_initial_input_task_returns_stable_input_sources_without_replay() -> None:

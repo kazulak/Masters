@@ -150,7 +150,7 @@ def test_smoke_suite_writes_raw_summary_without_plots(tmp_path: Path) -> None:
 
         task_route_decisions = _read_jsonl(case_dir / "task_route_decisions.jsonl")
         task_route_summary = json.loads((case_dir / "task_route_summary.json").read_text(encoding="utf-8"))
-        task_route_ids = ["dense_gemm", "sparse", "heuristic_bypass", "transpim_support", "cpu_fallback"]
+        task_route_ids = ["sparse", "heuristic_bypass", "transpim_support", "cpu_fallback"]
         assert task_route_summary["schema_version"] == "task_route_summary_v1"
         assert task_route_summary["router_id"] == "static_task_router_v1"
         assert task_route_summary["case_id"] == case_dir.name
@@ -170,9 +170,7 @@ def test_smoke_suite_writes_raw_summary_without_plots(tmp_path: Path) -> None:
         assert not decisions_artifact.is_absolute()
         assert (run_dir / decisions_artifact).exists()
         assert [decision["route_id"] for decision in task_route_decisions[: len(task_route_ids)]] == task_route_ids
-        dense_task_decisions = [decision for decision in task_route_decisions if decision["route_id"] == "dense_gemm"]
         fallback_task_decisions = [decision for decision in task_route_decisions if decision["route_id"] == "cpu_fallback"]
-        assert len(dense_task_decisions) == len(task_graph["tasks"])
         assert len(fallback_task_decisions) == len(task_graph["tasks"])
         for decision in task_route_decisions:
             assert decision["schema_version"] == "task_route_decision_v1"
@@ -185,38 +183,6 @@ def test_smoke_suite_writes_raw_summary_without_plots(tmp_path: Path) -> None:
             assert decision["status"] in {"selected", "rejected", "skipped", "unavailable", "fallback"}
             assert decision["execution_status"]["execution_implemented"] is False
             assert "estimate" in decision
-        for decision, task in zip(dense_task_decisions, task_graph["tasks"]):
-            estimate = task["target_estimates"][UPMEM_DENSE_ESTIMATE_KEY]
-            route_estimate = decision["estimate"]
-            assert decision["is_selected"] is False
-            assert decision["execution_status"]["state"] == "estimate_only"
-            assert route_estimate["metadata"]["target_estimate_key"] == UPMEM_DENSE_ESTIMATE_KEY
-            assert route_estimate["metadata"]["tile_plan_available"] is True
-            tile_plan_artifact = Path(route_estimate["metadata"]["tile_plan_artifact"])
-            assert not tile_plan_artifact.is_absolute()
-            assert (run_dir / tile_plan_artifact).exists()
-            assert route_estimate["metadata"]["tile_count"] == estimate["total_tile_count"]
-            assert route_estimate["metadata"]["working_set_bytes"] == estimate["max_working_set_bytes"]
-            assert route_estimate["metadata"]["double_buffer_possible"] == estimate["double_buffer_possible"]
-            assert route_estimate["metadata"]["requires_host_aggregation"] == estimate["requires_host_aggregation"]
-            assert route_estimate["metadata"]["backend"] in {"simplepim_unavailable", "simplepim_future"}
-            assert isinstance(route_estimate["metadata"]["simplepim_available"], bool)
-            assert route_estimate["metadata"]["simplepim_probe_status"] in {
-                "available",
-                "unavailable",
-                "configured_but_unverified",
-            }
-            assert "simplepim_version" in route_estimate["metadata"]
-            assert "simplepim_command_path" in route_estimate["metadata"]
-            assert "simplepim_library_path" in route_estimate["metadata"]
-            assert "simplepim_skip_reason" in route_estimate["metadata"]
-            assert route_estimate["supported"] == estimate["supported"]
-            assert route_estimate["wram_fit"] == estimate["wram_fit"]
-            assert route_estimate["requires_tiling"] == estimate["requires_tiling"]
-            assert route_estimate["tiling_implemented"] == estimate["tiling_implemented"]
-            assert route_estimate["host_to_dpu_bytes"] == estimate["host_to_dpu_bytes"]
-            assert route_estimate["dpu_to_host_bytes"] == estimate["dpu_to_host_bytes"]
-            assert route_estimate["mram_to_wram_bytes"] == estimate["mram_to_wram_bytes"]
         for decision in fallback_task_decisions:
             assert decision["status"] == "fallback"
             assert decision["is_selected"] is True

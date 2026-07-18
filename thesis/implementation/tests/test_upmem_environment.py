@@ -12,18 +12,10 @@ from quantum_bench.targets.upmem.environment import (
     CommandExecutionRecord,
     SampleCheckRecord,
     build_environment_check_result,
-    discover_simplepim_source,
     discover_upmem_sdk,
     run_command,
     sample_success_marker,
 )
-
-
-def _fake_simplepim_tree(path: Path) -> Path:
-    (path / "benchmarks" / "va").mkdir(parents=True)
-    (path / "benchmarks" / "va" / "Makefile").write_text("va:\n\t@true\n", encoding="utf-8")
-    (path / "lib").mkdir(parents=True)
-    return path
 
 
 def _passed(command: tuple[str, ...] | list[str], **kwargs: object) -> CommandExecutionRecord:
@@ -97,30 +89,6 @@ def test_discover_upmem_sdk_checks_upmem_home_bin(tmp_path: Path) -> None:
     assert available_paths["dpu-pkg-config"] == str(bin_dir / "dpu-pkg-config")
 
 
-def test_discover_simplepim_source_cli_env_fallback_and_missing(tmp_path: Path) -> None:
-    root_dir = tmp_path / "implementation"
-    root_dir.mkdir()
-    cli_tree = _fake_simplepim_tree(tmp_path / "cli_simplepim")
-    env_tree = _fake_simplepim_tree(tmp_path / "env_simplepim")
-    fallback_tree = _fake_simplepim_tree(root_dir / "external" / "SimplePIM")
-
-    cli = discover_simplepim_source(root_dir, simplepim_home_override=str(cli_tree), env={"SIMPLEPIM_HOME": str(env_tree)})
-    env = discover_simplepim_source(root_dir, env={"SIMPLEPIM_HOME": str(env_tree)})
-    fallback = discover_simplepim_source(root_dir, env={})
-    missing_root = tmp_path / "isolated" / "implementation"
-    missing_root.mkdir(parents=True)
-    missing = discover_simplepim_source(missing_root, env={})
-
-    assert cli.simplepim_source == "cli"
-    assert cli.simplepim_home == str(cli_tree)
-    assert env.simplepim_source == "environment"
-    assert env.simplepim_home == str(env_tree)
-    assert fallback.simplepim_source == "implementation_external"
-    assert fallback.simplepim_home == str(fallback_tree)
-    assert missing.simplepim_detected is False
-    assert missing.simplepim_source == "none"
-
-
 def test_command_runner_success_missing_and_timeout() -> None:
     success = run_command((sys.executable, "-c", "print('hello')"), timeout_seconds=5)
     missing = run_command(("definitely-missing-upmem-env-check-command",), timeout_seconds=1)
@@ -158,20 +126,17 @@ def test_build_result_simulator_availability_values(tmp_path: Path) -> None:
         path_lookup=lambda command: f"/sdk/{command}" if command in {"dpu-upmem-dpurte-clang", "dpu-pkg-config"} else None,
         command_runner=_passed,
     )
-    simplepim = discover_simplepim_source(tmp_path, simplepim_home_override=str(_fake_simplepim_tree(tmp_path / "SimplePIM")))
-    not_verified = build_environment_check_result(target="simulator", timeout_seconds=10, sdk=sdk, simplepim=simplepim)
+    not_verified = build_environment_check_result(target="simulator", timeout_seconds=10, sdk=sdk)
     failed_run = build_environment_check_result(
         target="simulator",
         timeout_seconds=10,
         sdk=sdk,
-        simplepim=simplepim,
         sample_run=SampleCheckRecord(attempted=True, status="failed", target="simulator"),
     )
     passed_run = build_environment_check_result(
         target="simulator",
         timeout_seconds=10,
         sdk=sdk,
-        simplepim=simplepim,
         sample_run=SampleCheckRecord(attempted=True, status="passed", target="simulator"),
     )
 
@@ -195,74 +160,6 @@ def test_run_upmem_env_check_unavailable_environment_writes_skipped_artifact(tmp
     assert payload["upmem_sdk_detected"] is False
     assert payload["simplepim_detected"] is False
     assert (run_dir / "environment.json").exists()
-
-
-def test_run_sample_failure_writes_failed_json_status(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(upmem_env_check_module, "capture_environment", lambda root_dir: {})
-    simplepim = _fake_simplepim_tree(tmp_path / "SimplePIM")
-
-    def copy_fake(src: Path, dst: Path) -> None:
-        _fake_simplepim_tree(dst)
-
-    def runner(command: tuple[str, ...] | list[str], **kwargs: object) -> CommandExecutionRecord:
-        if tuple(command) == ("make",):
-            return _failed(command, **kwargs)
-        return _passed(command, **kwargs)
-
-    run_dir, artifact_path, status = run_upmem_env_check(
-        tmp_path / "implementation",
-        run_sample=True,
-        target="simulator",
-        simplepim_home=str(simplepim),
-        env={"UPMEM_HOME": "/sdk"},
-        path_lookup=lambda command: f"/sdk/{command}" if command in {"dpu-upmem-dpurte-clang", "dpu-pkg-config"} else None,
-        command_runner=runner,
-        copy_simplepim_source_func=copy_fake,
-    )
-    payload = json.loads(artifact_path.read_text(encoding="utf-8"))
-
-    assert status == "failed"
-    assert payload["status"] == "failed"
-    assert payload["sample_build"]["attempted"] is True
-    assert payload["sample_build"]["status"] == "failed"
-    assert payload["sample_build"]["workspace_path"] == "sample_work/SimplePIM"
-    assert payload["sample_run"]["status"] == "skipped"
-    assert (run_dir / "simplepim_sample_build.json").exists()
-    assert (run_dir / "simplepim_sample_run.json").exists()
-
-
-def test_run_sample_success_uses_simulator_overlay_and_relative_workspace(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(upmem_env_check_module, "capture_environment", lambda root_dir: {})
-    simplepim = _fake_simplepim_tree(tmp_path / "SimplePIM")
-    seen_env: list[dict[str, str]] = []
-
-    def copy_fake(src: Path, dst: Path) -> None:
-        _fake_simplepim_tree(dst)
-
-    def runner(command: tuple[str, ...] | list[str], **kwargs: object) -> CommandExecutionRecord:
-        if tuple(command) == ("./bin/host",):
-            seen_env.append(dict(kwargs["env"]))
-            return CommandExecutionRecord(tuple(command), kwargs.get("cwd_label"), 0, False, "the result is correct", "", 0.001, "passed")
-        return _passed(command, **kwargs)
-
-    _, artifact_path, status = run_upmem_env_check(
-        tmp_path / "implementation",
-        run_sample=True,
-        target="auto",
-        simplepim_home=str(simplepim),
-        env={"UPMEM_HOME": "/sdk"},
-        path_lookup=lambda command: f"/sdk/{command}" if command in {"dpu-upmem-dpurte-clang", "dpu-pkg-config"} else None,
-        command_runner=runner,
-        copy_simplepim_source_func=copy_fake,
-    )
-    payload = json.loads(artifact_path.read_text(encoding="utf-8"))
-
-    assert status == "completed"
-    assert payload["simulator_available"] is True
-    assert payload["sample_run"]["target"] == "simulator"
-    assert payload["sample_run"]["result_detected"] is True
-    assert payload["sample_run"]["workspace_path"] == "sample_work/SimplePIM"
-    assert seen_env[0]["DPU_BACKEND"] == "simulator"
 
 
 def test_sample_success_marker_is_best_effort() -> None:

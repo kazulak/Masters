@@ -7,12 +7,7 @@ from typing import Literal, Mapping
 import numpy as np
 
 from quantum_bench.core.records import ContractionTask, JsonDict, TensorValue
-from quantum_bench.routing import DenseTaskPreparationInput, GenericTaskPreparationInput, prepare_dense_task, prepare_generic_task
-from quantum_bench.targets.upmem.dense_bridge import (
-    dense_bridge_backend_manifest_eligibility,
-    execute_dense_bridge,
-    write_dense_bridge_input_manifest,
-)
+from quantum_bench.routing import GenericTaskPreparationInput, prepare_generic_task
 from quantum_bench.targets.upmem.evidence import (
     CONTRACTION_EXECUTION_TARGET_UPMEM,
     UPMEM_EXECUTION_MODE_SDK_SIMULATOR,
@@ -36,7 +31,7 @@ from quantum_bench.targets.upmem.runtime_evidence import (
     _unsupported_result,
 )
 from quantum_bench.routing.generic_numeric_contract import classify_numeric
-from quantum_bench.tn.execution import frontier_waves, live_tensor_bytes, order_final_tensor, release_dead_inputs, remaining_input_uses
+from quantum_bench.tn.execution import live_tensor_bytes, order_final_tensor, release_dead_inputs, remaining_input_uses
 from quantum_bench.tn.execution_bundle import execution_identity_metadata, executor_config_hash, with_execution_identity
 from quantum_bench.tn.network import TensorNetworkValue
 
@@ -53,15 +48,15 @@ UpmemTaskGraphRuntimeResult = _runtime_evidence.UpmemTaskGraphRuntimeResult
 UpmemTaskGraphStatus = _runtime_evidence.UpmemTaskGraphStatus
 
 
-UPMEM_TASKGRAPH_POLICIES = ("generic-only", "dense-then-generic", "dense-only")
-UPMEM_TASKGRAPH_QUANTIZATION_MODES = ("per_task_input_quantize", "none", "persistent_network_quantized")
+UPMEM_TASKGRAPH_POLICIES = ("generic-only",)
+UPMEM_TASKGRAPH_QUANTIZATION_MODES = ("per_task_input_quantize", "none")
 GENERIC_KERNEL_STRATEGY = _runtime_evidence.GENERIC_KERNEL_STRATEGY
 GENERIC_NATIVE_MAX_RANK = _runtime_evidence.GENERIC_NATIVE_MAX_RANK
 GENERIC_NATIVE_MAX_TENSOR_ELEMENTS = _runtime_evidence.GENERIC_NATIVE_MAX_TENSOR_ELEMENTS
 GENERIC_OUTPUT_TILE_ELEMENTS = _runtime_evidence.GENERIC_OUTPUT_TILE_ELEMENTS
 
-UpmemTaskGraphPolicy = Literal["generic-only", "dense-then-generic", "dense-only"]
-UpmemTaskGraphQuantizationMode = Literal["per_task_input_quantize", "none", "persistent_network_quantized"]
+UpmemTaskGraphPolicy = Literal["generic-only"]
+UpmemTaskGraphQuantizationMode = Literal["per_task_input_quantize", "none"]
 
 
 def upmem_taskgraph_executor_config(
@@ -85,7 +80,7 @@ def upmem_taskgraph_executor_config(
         "native_max_tensor_elements": GENERIC_NATIVE_MAX_TENSOR_ELEMENTS,
         "generic_output_tile_elements": GENERIC_OUTPUT_TILE_ELEMENTS,
     }
-UpmemTaskGraphScheduleMode = Literal["sequential", "frontier"]
+UpmemTaskGraphScheduleMode = Literal["sequential"]
 
 CONTRACTION_EXECUTION_TARGET = CONTRACTION_EXECUTION_TARGET_UPMEM
 UPMEM_EXECUTION_MODE = UPMEM_EXECUTION_MODE_SDK_SIMULATOR
@@ -128,14 +123,12 @@ def execute_upmem_taskgraph_runtime(
     }
     if policy not in UPMEM_TASKGRAPH_POLICIES:
         return _unsupported_result(case_id, policy, quantization_mode, "unsupported_policy", started, execution_metadata)
-    if schedule_mode not in {"sequential", "frontier"}:
+    if schedule_mode != "sequential":
         return _unsupported_result(case_id, policy, quantization_mode, f"unsupported_schedule_mode:{schedule_mode}", started, execution_metadata)
     if frontier_worker_count < 1:
         return _unsupported_result(case_id, policy, quantization_mode, "frontier_worker_count_must_be_positive", started, execution_metadata)
     if dpu_group_count < 1:
         return _unsupported_result(case_id, policy, quantization_mode, "dpu_group_count_must_be_positive", started, execution_metadata)
-    if schedule_mode == "frontier" and frontier_worker_count > 1:
-        return _unsupported_result(case_id, policy, quantization_mode, "frontier_worker_count_gt_1_not_implemented", started, execution_metadata)
     if quantization_mode not in {"per_task_input_quantize", "none"}:
         return _unsupported_result(case_id, policy, quantization_mode, f"unsupported_quantization_mode:{quantization_mode}", started, execution_metadata)
     if quantization_mode == "none" and policy != "generic-only":
@@ -159,7 +152,7 @@ def execute_upmem_taskgraph_runtime(
     peak_live_bytes = live_tensor_bytes(tensors, live_ids)
     final_labels: tuple[int, ...] | None = None
     scheduler_started = time.perf_counter()
-    schedule_waves = frontier_waves(graph) if schedule_mode == "frontier" else tuple((task,) for task in graph.tasks)
+    schedule_waves = tuple((task,) for task in graph.tasks)
     scheduler_overhead_s = time.perf_counter() - scheduler_started
     frontier_widths = tuple(len(wave) for wave in schedule_waves)
     task_indices = {task.id: index for index, task in enumerate(graph.tasks)}
@@ -286,7 +279,7 @@ def execute_upmem_taskgraph_runtime(
 
             left_tensor = _tensor_value_for(task.input_tensor_ids[0], task, tensors, labels, side="left")
             right_tensor = _tensor_value_for(task.input_tensor_ids[1], task, tensors, labels, side="right")
-            bridge_dir = bridge_root / f"wave_{wave_index:04d}" / f"task_{task_index:04d}" if schedule_mode == "frontier" else bridge_root / f"task_{task_index:04d}"
+            bridge_dir = bridge_root / f"task_{task_index:04d}"
             task_result = _execute_task_by_policy(
                 task=task,
                 task_index=task_index,
@@ -301,9 +294,6 @@ def execute_upmem_taskgraph_runtime(
                 task_started=task_started,
             )
             metric = task_result["metric"]
-            if schedule_mode == "frontier":
-                metric["frontier_wave_index"] = int(wave_index)
-                metric["dpu_group_id"] = _assigned_dpu_group(wave_index, task_index, dpu_group_count, task_assignment_strategy)
             task_metrics.append(metric)
             if task_result["status"] != "completed":
                 return _stop_result(
@@ -427,27 +417,7 @@ def _execute_task_by_policy(
     env: Mapping[str, str] | None,
     task_started: float,
 ) -> JsonDict:
-    if policy in {"dense-only", "dense-then-generic"}:
-        dense = _execute_dense_task(
-            task=task,
-            task_index=task_index,
-            case_id=case_id,
-            left_tensor=left_tensor,
-            right_tensor=right_tensor,
-            bridge_dir=bridge_dir / "dense",
-            policy=policy,
-            quantization_mode=quantization_mode,
-            execute_external=execute_external,
-            env=env,
-            task_started=task_started,
-        )
-        if dense["status"] == "completed" or policy == "dense-only":
-            return dense
-        dense_reject_reason = str(dense["reason"])
-    else:
-        dense_reject_reason = "policy_generic_only"
-
-    generic = _execute_generic_task(
+    return _execute_generic_task(
         task=task,
         task_index=task_index,
         case_id=case_id,
@@ -459,101 +429,8 @@ def _execute_task_by_policy(
         execute_external=execute_external,
         env=env,
         task_started=task_started,
-        dense_reject_reason=dense_reject_reason,
+        dense_reject_reason="policy_generic_only",
     )
-    return generic
-
-
-def _execute_dense_task(
-    *,
-    task: ContractionTask,
-    task_index: int,
-    case_id: str,
-    left_tensor: TensorValue,
-    right_tensor: TensorValue,
-    bridge_dir: Path,
-    policy: str,
-    quantization_mode: str,
-    execute_external: bool,
-    env: Mapping[str, str] | None,
-    task_started: float,
-) -> JsonDict:
-    if quantization_mode == "none":
-        return {
-            "status": "unsupported",
-            "reason": "dense_quantization_none_not_implemented",
-            "metric": _base_task_metric(
-                case_id,
-                task_index,
-                task,
-                policy,
-                quantization_mode,
-                status="unsupported",
-                reason="dense_quantization_none_not_implemented",
-                task_started=task_started,
-                selected_kernel_family="dense_gemm",
-                backend_id="upmem_sdk_simulator_dense",
-            ),
-        }
-    preparation = prepare_dense_task(DenseTaskPreparationInput(task=task, left_tensor=left_tensor, right_tensor=right_tensor))
-    eligible, reason = dense_bridge_backend_manifest_eligibility(preparation, "upmem_sdk_simulator_dense")
-    if not eligible:
-        return {
-            "status": "unsupported",
-            "reason": reason or preparation.reason or preparation.status,
-            "metric": _base_task_metric(
-                case_id,
-                task_index,
-                task,
-                policy,
-                quantization_mode,
-                status="unsupported",
-                reason=reason or preparation.reason or preparation.status,
-                task_started=task_started,
-                selected_kernel_family="dense_gemm",
-                backend_id="upmem_sdk_simulator_dense",
-                preparation=preparation.to_json_dict(),
-            ),
-        }
-    write_dense_bridge_input_manifest(preparation, bridge_dir)
-    result = execute_dense_bridge(bridge_dir / "input_manifest.json", backend="upmem_sdk_simulator_dense", execute_external=execute_external, env=env)
-    output = _load_bridge_output(bridge_dir, result.output_blob_path)
-    if result.execution_status != "upmem_sdk_simulator_executed" or output is None:
-        return {
-            "status": "failed" if result.execution_status == "failed" else "unsupported",
-            "reason": result.reason or result.execution_status,
-            "metric": _base_task_metric(
-                case_id,
-                task_index,
-                task,
-                policy,
-                quantization_mode,
-                status="failed" if result.execution_status == "failed" else "unsupported",
-                reason=result.reason or result.execution_status,
-                task_started=task_started,
-                selected_kernel_family="dense_gemm",
-                backend_id="upmem_sdk_simulator_dense",
-                preparation=preparation.to_json_dict(),
-                bridge_result=result.to_json_dict(),
-            ),
-        }
-    metric = _base_task_metric(
-        case_id,
-        task_index,
-        task,
-        policy,
-        quantization_mode,
-        status="completed",
-        reason=None,
-        task_started=task_started,
-        selected_kernel_family="dense_gemm",
-        backend_id="upmem_sdk_simulator_dense",
-        preparation=preparation.to_json_dict(),
-        bridge_result=result.to_json_dict(),
-        output=output,
-        bridge_artifact_path=bridge_dir,
-    )
-    return {"status": "completed", "reason": None, "output": np.asarray(output), "metric": metric}
 
 
 def _execute_generic_task(
@@ -791,19 +668,6 @@ def _execute_generic_real_component(
             else preparation.prepared_operands.expected_quantized_reference_output
         )
     return {"status": status, "reason": reason, "output": output, "metric": metric, "expected_quantized_reference_output": expected}
-
-
-
-def _assigned_dpu_group(wave_index: int, task_index: int, dpu_group_count: int, task_assignment_strategy: str) -> int:
-    if dpu_group_count <= 1:
-        return 0
-    if task_assignment_strategy == "sequential_single_dpu":
-        return 0
-    if task_assignment_strategy == "frontier_size_aware_dpu_groups":
-        return int(task_index % dpu_group_count)
-    return int((wave_index + task_index) % dpu_group_count)
-
-
 
 
 

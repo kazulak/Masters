@@ -11,16 +11,6 @@ from quantum_bench.routing.records import (
     TaskRouteIdentity,
     TaskRoutingAnalysis,
 )
-from quantum_bench.routing.dense_prepare import (
-    DENSE_TASK_PREPARATION_SCHEMA_VERSION,
-    DENSE_TASK_ROUTE_ID,
-    DenseTaskPreparationInput,
-    DenseTaskPreparationResult,
-    DenseTaskPreparationStatus,
-    DenseTaskPreparedOperands,
-    DenseTaskValidationMetrics,
-    prepare_dense_task,
-)
 from quantum_bench.routing.generic_prepare import (
     GENERIC_MODE_FLOAT32_NO_QUANT,
     GENERIC_MODE_INT8_SCALED,
@@ -35,23 +25,10 @@ from quantum_bench.routing.generic_prepare import (
     generic_loop_reference_int32,
     prepare_generic_task,
 )
-from quantum_bench.routing.policy import (
-    SHADOW_ROUTE_POLICY_IDS,
-    SHADOW_POLICY_BLOCKERS,
-    ShadowRoutePolicyConfig,
-    ShadowRoutePolicyDecision,
-    ShadowRoutePolicyId,
-    ShadowRoutePolicyStatus,
-    ShadowRoutePolicySummary,
-    evaluate_shadow_route_policy,
-    summarize_shadow_route_policy,
-)
 from quantum_bench.routing.router import route_task_graph
 from quantum_bench.routing.task_routes import default_task_routes
 
 __all__ = [
-    "DENSE_TASK_PREPARATION_SCHEMA_VERSION",
-    "DENSE_TASK_ROUTE_ID",
     "GENERIC_TASK_PREPARATION_SCHEMA_VERSION",
     "GENERIC_TASK_ROUTE_ID",
     "GENERIC_MODE_FLOAT32_NO_QUANT",
@@ -60,13 +37,6 @@ __all__ = [
     "TASK_ROUTE_DECISION_SCHEMA_VERSION",
     "TASK_ROUTE_STATUSES",
     "TASK_ROUTE_SUMMARY_SCHEMA_VERSION",
-    "SHADOW_POLICY_BLOCKERS",
-    "SHADOW_ROUTE_POLICY_IDS",
-    "DenseTaskPreparationInput",
-    "DenseTaskPreparationResult",
-    "DenseTaskPreparationStatus",
-    "DenseTaskPreparedOperands",
-    "DenseTaskValidationMetrics",
     "GenericTaskPreparationCaps",
     "GenericTaskPreparationInput",
     "GenericTaskPreparationResult",
@@ -79,17 +49,10 @@ __all__ = [
     "TaskRouteExecutionStatus",
     "TaskRouteIdentity",
     "TaskRoutingAnalysis",
-    "ShadowRoutePolicyConfig",
-    "ShadowRoutePolicyDecision",
-    "ShadowRoutePolicyId",
-    "ShadowRoutePolicyStatus",
-    "ShadowRoutePolicySummary",
     "default_task_routes",
     "evaluate_shadow_route_policy",
     "generic_loop_reference_float32",
     "generic_loop_reference_int32",
-    "prepare_dense_task",
     "prepare_generic_task",
     "route_task_graph",
-    "summarize_shadow_route_policy",
 ]

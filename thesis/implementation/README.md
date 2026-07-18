@@ -10,12 +10,12 @@ GPU baselines, bounded UPMEM SDK-simulator execution, and reproducible evidence.
 It does **not** yet claim UPMEM hardware speedup or a fully general UPMEM tensor
 contraction kernel.
 
-The first physical one-DPU dense functionality run and the separate tiny
-generic TaskGraph MVP are documented in
-[docs/upmem_hardware_mvp_runbook.md](docs/upmem_hardware_mvp_runbook.md) and
-[docs/upmem_hardware_generic_mvp_runbook.md](docs/upmem_hardware_generic_mvp_runbook.md).
-Both are hardware correctness evidence only and are not part of the default
-thesis matrix.
+The active physical route is the one-DPU MRAM-resident TaskGraph documented in
+[docs/upmem_hardware_taskgraph_resident_runbook.md](docs/upmem_hardware_taskgraph_resident_runbook.md).
+Dense, legacy generic/persistent, CPU frontier/hybrid, PIM bridge/frontier,
+SimplePIM, and external-library probe artifacts are historical only. Their
+normalized readers, route labels, tables, plots, and snapshot compatibility
+remain available for existing evidence.
 
 Start with [ARCHITECTURE.md](ARCHITECTURE.md) for module ownership, external
 provenance, thesis contributions, and the planned UPMEM architecture. The fixed
@@ -81,7 +81,8 @@ The long run includes:
 - same-path float64/int8 internal TaskGraph replay for quantization attribution;
 - modeled `opt_einsum` contraction-path candidates with UPMEM pressure scores;
 - strict generic UPMEM SDK-simulator float32/int8 boundary evidence;
-- internal parallelism diagnostics, clearly excluded from serious baselines.
+- modeled TaskGraph scheduling and multi-DPU planning primitives, clearly
+  excluded from executed serious baselines.
 
 GPU execution requires a GPU-visible shell. On the local AMD machine the route
 uses QuEST HIP and verifies a real HIP program before emitting GPU rows. On a
@@ -144,10 +145,8 @@ make build-quest-cpu
 make bench-cpu
 make bench-gpu
 make bench-upmem-sim
-make upmem-hw-mvp-plan
-make upmem-hw-generic-plan
-make upmem-hw-taskgraph-plan
-make upmem-hw-taskgraph-report
+make upmem-hw-taskgraph-resident-plan
+make upmem-hw-taskgraph-resident-report
 make planner-report
 make research-plan
 ```
@@ -155,23 +154,17 @@ make research-plan
 On the ETH hardware host, after the preparation command succeeds:
 
 ```bash
-make upmem-hw-mvp-plan
-UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-mvp
-make upmem-hw-generic-plan
-UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-generic-mvp
-UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-taskgraph
-make upmem-hw-taskgraph-report
+make upmem-hw-taskgraph-resident-plan
+UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-taskgraph-resident
+make upmem-hw-taskgraph-resident-report
 ```
 
-The TaskGraph hardware command is correctness-only and does not claim speedup.
-Its report compares float32 and int8 via recorded application-visible transfer
-bytes and validation error. Its runtime figure remains an explicit TODO until
-the route uses a persistent whole-TaskGraph hardware session.
-See [the ETH runbook](docs/upmem_hardware_taskgraph_runbook.md).
+The resident TaskGraph hardware command is correctness-only and does not claim
+speedup. Its report compares float32 and int8 via recorded application-visible
+transfer bytes and validation error. See [the resident ETH runbook](docs/upmem_hardware_taskgraph_resident_runbook.md).
 
-The dense MVP remains separate: it runs only the fixed 2x2 then 4x4
-one-DPU/one-tasklet int8 cases. Neither hardware command promotes evidence or
-reports timing as speedup automatically.
+The retired dense and legacy TaskGraph runs remain readable as historical
+evidence, but are no longer runnable through the public CLI or Makefile.
 Physical allocation uses the explicit SDK `backend=hw` contract. The runner
 isolates `UPMEM_PROFILE` and `UPMEM_PROFILE_BASE` from child processes; do not
 set either variable to select hardware. `UPMEM_ALLOW_PHYSICAL_HARDWARE=1`
