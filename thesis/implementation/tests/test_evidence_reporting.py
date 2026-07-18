@@ -135,7 +135,63 @@ def test_physical_report_does_not_promote_incomplete_rows() -> None:
     incomplete = record_with_updates(row, hardware_release_verified=False)
 
     assert report_pack_module.upmem_one_dpu_runtime_summary([incomplete]) == []
-    assert report_pack_module.upmem_physical_taskgraph_breakdown([incomplete])
+    assert report_pack_module.upmem_physical_taskgraph_breakdown([incomplete]) == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("target_requested", "cpu"),
+        ("target_observed", "cpu"),
+        ("requested_dpu_count", 2),
+        ("allocated_dpu_count", 2),
+        ("tasklets_per_dpu", 2),
+        ("allocation_count", 2),
+        ("hardware_allocation_verified", False),
+        ("native_execution", False),
+        ("native_hardware_backend", False),
+        ("hardware_execution", False),
+        ("hardware_kernel_executed", False),
+        ("simulator_kernel_executed", True),
+        ("cpu_fallback_used", True),
+        ("hardware_release_verified", False),
+        ("release_confirmed", False),
+        ("physical_dependency_chain_verified", False),
+        ("validation_status", "failed"),
+        ("task_count", 0),
+        ("validated_task_count", 0),
+        ("hardware_timing_available", False),
+        ("timing_is_bringup_only", True),
+        ("steady_state_graph_execution_s", None),
+        ("actual_transfer_bytes", 95),
+        ("actual_transfer_bytes_invariant", "failed"),
+        ("intermediate_h2d_bytes", 8),
+    ],
+)
+def test_physical_taskgraph_guard_rejects_each_unsafe_provenance_flag(
+    field: str, value: object
+) -> None:
+    row = record_with_updates(hardware_evidence_records()[0], **{field: value})
+
+    assert report_pack_module._physical_taskgraph_issues(row)
+    assert report_pack_module.upmem_physical_taskgraph_breakdown([row]) == []
+
+
+def test_resident_evidence_check_applies_physical_guard(tmp_path: Path) -> None:
+    suite_id = report_pack_module.RESIDENT_SUITE_ID
+    row = record_with_updates(
+        hardware_evidence_records()[0],
+        suite_id=suite_id,
+        route_id=report_pack_module.RESIDENT_ROUTE_ID,
+    )
+    run = write_evidence_run(tmp_path, [row], suite_id=suite_id)
+
+    assert report_pack_module.check_resident_evidence(run) == 0
+    unsafe = record_with_updates(row, release_confirmed=False)
+    write_evidence_run(tmp_path / "unsafe", [unsafe], suite_id=suite_id)
+
+    with pytest.raises(ValueError, match="physical guard"):
+        report_pack_module.check_resident_evidence(tmp_path / "unsafe" / "run")
 
 
 def test_claim_guards_keep_physical_route_diagnostic_only() -> None:

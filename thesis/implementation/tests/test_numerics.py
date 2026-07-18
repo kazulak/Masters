@@ -6,9 +6,21 @@ import json
 import numpy as np
 import pytest
 
-from quantum_bench.circuits import builtin_circuit
-from quantum_bench.core.records import CircuitOperation, CircuitSpec, PathSummary, TaskGraph
-from quantum_bench.formats.fixed_point import FixedPointSpec, quantize_fixed_point
+from quantum_bench.circuits import builtin_circuit, gate_matrix
+from quantum_bench.core.records import (
+    CircuitOperation,
+    CircuitSpec,
+    PathSummary,
+    TaskGraph,
+    TensorSpec,
+    TensorValue,
+)
+from quantum_bench.formats.fixed_point import (
+    FixedPointSpec,
+    dequantize_fixed_point,
+    quantize_fixed_point,
+)
+from quantum_bench.routing import GenericTaskPreparationInput, prepare_generic_task
 from quantum_bench.tn import (
     build_execution_bundle,
     build_tensor_network,
@@ -23,7 +35,7 @@ from quantum_bench.tn import (
 from quantum_bench.tn.materialize import TaskInputMaterializationRequest, materialize_task_inputs
 from quantum_bench.validation import compute_reference, validate
 
-from .support import minimal_real_graph
+from .support import contraction_task, minimal_real_graph
 
 
 def test_circuit_library_is_deterministic_and_unitary() -> None:
@@ -33,6 +45,13 @@ def test_circuit_library_is_deterministic_and_unitary() -> None:
     assert first == second
     assert first.source["deterministic_unitary"] is True
     assert {operation.gate for operation in first.operations} == {"h", "rz", "cx"}
+    for gate, params in (("h", ()), ("rz", (0.37,)), ("cx", ())):
+        matrix = gate_matrix(gate, params)
+        identity = np.eye(matrix.shape[0], dtype=np.complex128)
+        np.testing.assert_allclose(matrix.conj().T @ matrix, identity, atol=1.0e-12)
+        state = np.arange(1, matrix.shape[0] + 1, dtype=np.complex128)
+        state /= np.linalg.norm(state)
+        np.testing.assert_allclose(np.linalg.norm(matrix @ state), 1.0, atol=1.0e-12)
 
 
 def test_tn_lowering_preserves_output_labels_and_einsum_contract(minimal_graph) -> None:
@@ -189,6 +208,63 @@ def test_fixed_point_rounding_and_clipping_boundaries() -> None:
     np.testing.assert_array_equal(converted.array, np.array([0, 2, 0, -2, 127, -127], dtype=np.int8))
     assert converted.record.clipping_count == 2
     assert converted.record.saturation_count == 2
+
+
+def test_int8_preparation_matches_einsum_int32_accumulation_and_dequantization() -> None:
+    task = contraction_task("int8_reference", shape=(2, 2, 2))
+    left = np.array([[0.5, 127.5], [-127.5, 1.5]], dtype=np.float32)
+    right = np.array([[1.5, -127.5], [127.5, -0.5]], dtype=np.float32)
+    preparation = GenericTaskPreparationInput(
+        task=task,
+        left_tensor=TensorValue(TensorSpec("int8_reference_left", task.left_labels, left.shape, "dense", dtype="float32"), left),
+        right_tensor=TensorValue(TensorSpec("int8_reference_right", task.right_labels, right.shape, "dense", dtype="float32"), right),
+        quantization_mode="per_task_input_quantize",
+        fixed_point_spec=FixedPointSpec(route_dtype="int8", scale=1.0),
+    )
+
+    result = prepare_generic_task(preparation)
+
+    assert result.status == "prepared"
+    assert result.left_conversion is not None and result.right_conversion is not None
+    operands = result.prepared_operands
+    assert operands is not None
+    expected_left = np.array([[0, 127], [-127, 2]], dtype=np.int8)
+    expected_right = np.array([[2, -127], [127, 0]], dtype=np.int8)
+    np.testing.assert_array_equal(operands.left_quantized, expected_left)
+    np.testing.assert_array_equal(operands.right_quantized, expected_right)
+    assert result.left_conversion.clipping_count == 2
+    assert result.right_conversion.clipping_count == 2
+
+    accumulator = np.einsum(
+        "ik,kj->ij",
+        expected_left.astype(np.int32),
+        expected_right.astype(np.int32),
+        dtype=np.int32,
+    )
+    np.testing.assert_array_equal(
+        operands.expected_quantized_reference_output,
+        accumulator.astype(np.float64),
+    )
+    np.testing.assert_allclose(
+        dequantize_fixed_point(operands.left_quantized, result.left_conversion, dtype=np.float64),
+        expected_left.astype(np.float64),
+    )
+    np.testing.assert_allclose(operands.expected_reference_output, accumulator.astype(np.float64))
+
+    zero = np.zeros((2, 2), dtype=np.float32)
+    zero_preparation = preparation.__class__(
+        task=task,
+        left_tensor=TensorValue(TensorSpec(task.input_tensor_ids[0], task.left_labels, zero.shape, "dense", dtype="float32"), zero),
+        right_tensor=TensorValue(TensorSpec(task.input_tensor_ids[1], task.right_labels, zero.shape, "dense", dtype="float32"), zero),
+        quantization_mode="per_task_input_quantize",
+    )
+    zero_result = prepare_generic_task(zero_preparation)
+    assert zero_result.status == "prepared"
+    assert zero_result.left_conversion is not None
+    assert zero_result.right_conversion is not None
+    assert zero_result.left_conversion.scale == 1.0
+    assert zero_result.right_conversion.scale == 1.0
+    np.testing.assert_array_equal(zero_result.prepared_operands.expected_reference_output, np.zeros((2, 2)))
 
 
 def test_fixed_point_zero_and_error_metrics_are_safe() -> None:

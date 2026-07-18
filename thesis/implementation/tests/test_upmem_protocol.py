@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import quantum_bench.bench.upmem_hardware_taskgraph_resident as resident_runner
 from quantum_bench.bench.generic_task_bridge import run_generic_task_bridge
 from quantum_bench.bench.upmem_hardware_taskgraph_resident import (
     prepare_upmem_hardware_taskgraph_resident,
@@ -30,7 +31,11 @@ from quantum_bench.targets.upmem.generic_bridge import (
     read_generic_bridge_output_manifest,
     write_generic_bridge_input_manifest,
 )
-from quantum_bench.targets.upmem.hardware_session import _resident_response_valid
+from quantum_bench.targets.upmem.hardware_session import (
+    HardwareSessionBuild,
+    ResidentGraphSessionExecution,
+    _resident_response_valid,
+)
 from quantum_bench.targets.upmem.runtime_checks import (
     strict_upmem_runtime_assertions,
     upmem_sdk_simulator_preflight_payload,
@@ -284,6 +289,98 @@ def test_resident_response_validator_rejects_unsafe_evidence(minimal_graph, resi
     response = valid_resident_response(manifest)
     assert _resident_response_valid(response, manifest, resident_hardware_suite.profile)
     assert not _resident_response_valid(record_with_updates(response, **updates), manifest, resident_hardware_suite.profile)
+
+
+def test_resident_variant_fake_native_session_enforces_opt_in_and_projects_contract(
+    minimal_graph, resident_hardware_suite, monkeypatch, tmp_path: Path
+) -> None:
+    reference, _ = execute_task_sequence_np_einsum(minimal_graph.graph, minimal_graph.network)
+    session_root = tmp_path / "native_session"
+    session_root.mkdir()
+    dpu_binary = session_root / "dpu_resident"
+    dpu_binary.write_bytes(b"fake-dpu")
+    native_build = HardwareSessionBuild(
+        session_root=session_root,
+        source_snapshot=session_root,
+        build_dir=session_root,
+        host_binary=session_root / "host",
+        dpu_binary=dpu_binary,
+        source_tree_hash="source",
+        host_binary_hash="host",
+        dpu_binary_hash="dpu",
+        build_time_s=0.0,
+        build_command=("fake-build",),
+        sdk_tools={"fake": "fixture"},
+    )
+    mismatch = False
+    captured_manifests: list[dict[str, object]] = []
+
+    def fake_native_session(build, *, manifest_path, response_path, profile, environment):
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        captured_manifests.append(manifest)
+        output = np.asarray(reference).copy()
+        if mismatch:
+            output.flat[0] += 1.0
+        for item in manifest["final_outputs"]:
+            component = str(item["component"])
+            values = output.imag if component == "imag" else output.real
+            np.asarray(values, dtype="<f4").ravel().tofile(build.session_root / str(item["output_path"]))
+        response = valid_resident_response(manifest)
+        response_path.write_text(json.dumps(response), encoding="utf-8")
+        return ResidentGraphSessionExecution(
+            status="completed",
+            failure_stage=None,
+            response_path=response_path,
+            response=response,
+            process_time_s=0.0,
+            command=("fake-native",),
+            stdout_snippet="",
+            stderr_snippet="",
+        )
+
+    monkeypatch.setattr(resident_runner, "execute_resident_graph_session", fake_native_session)
+    kwargs = {
+        "root_dir": tmp_path,
+        "run_dir": tmp_path / "run",
+        "native_build": native_build,
+        "profile": resident_hardware_suite.profile,
+        "suite_id": "fixture_resident",
+        "case_id": "fixture",
+        "variant_id": "fixture_variant",
+        "graph": minimal_graph.graph,
+        "network": minimal_graph.network,
+        "reference_output": reference,
+        "quantization_mode": "none",
+        "environment": {"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1"},
+    }
+
+    with pytest.raises(ValueError, match="UPMEM_ALLOW_PHYSICAL_HARDWARE=1"):
+        resident_runner.execute_resident_variant(**{**kwargs, "request_id": "missing-opt-in", "environment": {}})
+    assert captured_manifests == []
+
+    execution = resident_runner.execute_resident_variant(**{**kwargs, "request_id": "valid-request"})
+
+    assert execution.status == "completed"
+    assert execution.summary["policy_reference_validation"]["passed"] is True
+    assert execution.summary["full_precision_accuracy"]["passed"] is True
+    assert execution.summary["release_confirmed"] is True
+    assert execution.summary["physical_dependency_chain_verified"] is True
+    manifest = captured_manifests[0]
+    expected_h2d = (
+        int(manifest["initial_h2d_bytes"])
+        + int(manifest["descriptor_h2d_bytes"])
+        + int(manifest["control_h2d_bytes"])
+    )
+    expected_d2h = int(manifest["final_d2h_bytes"])
+    assert execution.summary["actual_h2d_bytes"] == expected_h2d
+    assert execution.summary["actual_d2h_bytes"] == expected_d2h
+    assert execution.summary["actual_transfer_bytes"] == expected_h2d + expected_d2h
+    assert execution.summary["actual_transfer_bytes_invariant"] == "passed"
+
+    mismatch = True
+    failed = resident_runner.execute_resident_variant(**{**kwargs, "request_id": "mismatch-request"})
+    assert failed.status == "failed"
+    assert failed.summary["policy_reference_validation"]["passed"] is False
 
 
 def test_resident_prepare_only_has_one_dpu_profile_and_no_allocation(tmp_path: Path) -> None:

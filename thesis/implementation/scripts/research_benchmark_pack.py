@@ -300,6 +300,15 @@ def check_resident_evidence(run_dir: Path) -> int:
         raise ValueError(
             "resident evidence normalized records must all carry the resident suite and route provenance"
         )
+    guard_issues = [
+        issue
+        for record in records
+        for issue in _physical_taskgraph_issues(record)
+    ]
+    if guard_issues:
+        raise ValueError(
+            "resident evidence physical guard failed: " + "; ".join(guard_issues)
+        )
     print(f"Verified resident evidence provenance for {len(records)} normalized records")
     return 0
 
@@ -2187,10 +2196,7 @@ def upmem_physical_quantization_attribution(records: list[JsonDict]) -> list[Jso
         defaultdict(dict)
     )
     for record in records:
-        if (
-            not _is_physical_upmem_taskgraph_record(record)
-            or str(record.get("status") or "") != "completed"
-        ):
+        if not _is_accepted_physical_upmem_taskgraph_record(record):
             continue
         dtype = _physical_taskgraph_dtype(record)
         plan_hash = str(record.get("contraction_plan_hash") or "")
@@ -2278,7 +2284,7 @@ def upmem_physical_taskgraph_breakdown(records: list[JsonDict]) -> list[JsonDict
     """Project physical TaskGraph validation and timing metadata verbatim."""
     rows: list[JsonDict] = []
     for record in records:
-        if not _is_physical_upmem_taskgraph_record(record):
+        if not _is_accepted_physical_upmem_taskgraph_record(record):
             continue
         family, qubits = _family_and_qubits(record)
         validation_status = str(record.get("validation_status") or "unknown")
@@ -2422,7 +2428,8 @@ _ONE_DPU_EXPECTED_REPEAT_IDS = tuple(range(7))
 
 def _is_valid_one_dpu_record(record: JsonDict) -> bool:
     return (
-        record.get("route_id") in _ONE_DPU_ROUTES
+        not _physical_taskgraph_issues(record)
+        and record.get("route_id") in _ONE_DPU_ROUTES
         and record.get("status") == "completed"
         and record.get("validation_status") == "passed"
         and record.get("hardware_execution") is True
@@ -4777,21 +4784,14 @@ def _claim_guard_issues(records: list[JsonDict]) -> list[str]:
         ) not in {"measured", "available"}:
             issues.append(f"energy value without measured status: {case}/{route}")
         issues.extend(_transfer_accounting_issues(record, case=case, route=route))
-        if record.get("contraction_execution_target") == "upmem":
+        if record.get("contraction_execution_target") == "upmem" or _is_one_dpu_route_record(record):
             if _is_physical_hardware_mvp_record(record):
                 issues.extend(_hardware_mvp_issues(record))
             elif _is_physical_upmem_taskgraph_record(record):
+                issues.extend(_physical_taskgraph_issues(record))
                 if bool(record.get("hardware_speedup_applicable", False)):
                     issues.append(
                         f"physical TaskGraph row marked hardware speedup applicable: {case}/{route}"
-                    )
-                if bool(record.get("cpu_fallback_used", False)):
-                    issues.append(
-                        f"physical TaskGraph row used CPU fallback: {case}/{route}"
-                    )
-                if bool(record.get("simulator_kernel_executed", False)):
-                    issues.append(
-                        f"physical TaskGraph row executed simulator kernel: {case}/{route}"
                     )
             elif str(record.get("upmem_execution_mode") or "") == "sdk_simulator":
                 issues.extend(_strict_generic_upmem_issues(record))
@@ -4801,6 +4801,168 @@ def _claim_guard_issues(records: list[JsonDict]) -> list[str]:
                     f"mode={record.get('upmem_execution_mode') or 'missing'}"
                 )
     return issues
+
+
+def _physical_taskgraph_issues(record: JsonDict) -> list[str]:
+    """Enforce the evidence contract before a physical TaskGraph row is reported.
+
+    Physical rows are deliberately stricter than historical readers.  A row can
+    still be inspected as an input, but it cannot enter an accepted physical
+    table unless its target, allocation, native execution, release, validation,
+    timing, and recorded transfer claims agree.
+    """
+
+    case = str(record.get("case_id") or "unknown")
+    route = str(record.get("route_id") or "unknown")
+    prefix = f"physical TaskGraph row {case}/{route}"
+    issues: list[str] = []
+
+    if record.get("status") != "completed":
+        issues.append(f"{prefix} is not completed")
+    if record.get("target_requested") != "hardware":
+        issues.append(f"{prefix} did not request hardware")
+    if record.get("target_observed") != "hardware":
+        issues.append(f"{prefix} did not observe hardware")
+
+    for field, expected in (
+        ("hardware_allocation_verified", True),
+        ("hardware_execution", True),
+        ("hardware_kernel_executed", True),
+        ("simulator_kernel_executed", False),
+        ("cpu_fallback_used", False),
+        ("hardware_release_verified", True),
+        ("release_confirmed", True),
+        ("physical_dependency_chain_verified", True),
+    ):
+        if record.get(field) is not expected:
+            value = "true" if expected else "false"
+            issues.append(f"{prefix} lacks {field}={value}")
+
+    _require_physical_bool_alias(
+        record, ("native_execution", "native_kernel_executed"), "native execution", prefix, issues
+    )
+    _require_physical_bool_alias(
+        record,
+        ("native_hardware_backend", "hardware_backend_verified"),
+        "native hardware backend",
+        prefix,
+        issues,
+    )
+    _require_physical_one_alias(
+        record, ("requested_dpu_count", "requested_dpus"), "requested DPU count", prefix, issues
+    )
+    _require_physical_one_alias(
+        record, ("allocated_dpu_count", "allocated_dpus"), "allocated DPU count", prefix, issues
+    )
+    _require_physical_one_alias(
+        record, ("tasklets_per_dpu", "tasklets"), "tasklet count", prefix, issues
+    )
+    _require_physical_one_alias(
+        record, ("allocation_count",), "allocation count", prefix, issues
+    )
+
+    validation_status = str(record.get("validation_status") or "")
+    if validation_status not in {"passed", "passed_native_status", "passed_runtime_only"}:
+        issues.append(f"{prefix} did not pass validation")
+    task_count = _physical_present_int(record, "task_count", "upmem_task_count")
+    validated_count = _physical_present_int(record, "validated_task_count")
+    if task_count is None or task_count <= 0:
+        issues.append(f"{prefix} lacks a positive task count")
+    if validated_count is None or task_count is None or validated_count != task_count:
+        issues.append(f"{prefix} lacks complete validated-task coverage")
+    if "failure_stage" in record and record.get("failure_stage") not in {None, ""}:
+        issues.append(f"{prefix} has failure_stage={record.get('failure_stage')}")
+
+    _physical_timing_issues(record, prefix, issues)
+    _physical_transfer_issues(record, prefix, issues)
+    return issues
+
+
+def _is_accepted_physical_upmem_taskgraph_record(record: JsonDict) -> bool:
+    return _is_physical_upmem_taskgraph_record(record) and not _physical_taskgraph_issues(record)
+
+
+def _physical_present_values(record: JsonDict, fields: tuple[str, ...]) -> list[Any]:
+    return [
+        _record_value(record, field)
+        for field in fields
+        if _record_value(record, field) is not None
+        and _record_value(record, field) != ""
+    ]
+
+
+def _require_physical_one_alias(
+    record: JsonDict,
+    fields: tuple[str, ...],
+    label: str,
+    prefix: str,
+    issues: list[str],
+) -> None:
+    values = _physical_present_values(record, fields)
+    if not values or any(
+        not isinstance(value, int) or isinstance(value, bool) or value != 1
+        for value in values
+    ) or len({value for value in values}) != 1:
+        issues.append(f"{prefix} lacks one {label}")
+
+
+def _require_physical_bool_alias(
+    record: JsonDict,
+    fields: tuple[str, ...],
+    label: str,
+    prefix: str,
+    issues: list[str],
+) -> None:
+    values = _physical_present_values(record, fields)
+    if not values or any(value is not True for value in values):
+        issues.append(f"{prefix} lacks {label}=true")
+
+
+def _physical_present_int(record: JsonDict, *fields: str) -> int | None:
+    values = _physical_present_values(record, tuple(fields))
+    if not values or any(
+        not isinstance(value, int) or isinstance(value, bool) for value in values
+    ) or len({value for value in values}) != 1:
+        return None
+    return int(values[0])
+
+
+def _physical_timing_issues(record: JsonDict, prefix: str, issues: list[str]) -> None:
+    available = record.get("hardware_timing_available")
+    bringup_only = record.get("timing_is_bringup_only")
+    scope = str(record.get("timing_scope") or "").lower()
+    if not isinstance(available, bool) or not isinstance(bringup_only, bool):
+        issues.append(f"{prefix} lacks explicit timing truthfulness flags")
+        return
+    if available:
+        if bringup_only or "bringup" in scope or _physical_warm_runtime(record) is None:
+            issues.append(f"{prefix} has untruthful measured timing metadata")
+    elif not bringup_only or "bringup" not in scope:
+        issues.append(f"{prefix} has untruthful bring-up timing metadata")
+
+
+def _physical_transfer_issues(record: JsonDict, prefix: str, issues: list[str]) -> None:
+    h2d = _physical_directional_transfer(record, "h2d")
+    d2h = _physical_directional_transfer(record, "d2h")
+    total = _physical_transfer_bytes(record)
+    intermediate = {
+        field: _float_or_none(_record_value(record, field))
+        for field in ("intermediate_h2d_bytes", "intermediate_d2h_bytes")
+    }
+    if h2d is None and d2h is None and total is None:
+        if any(value is not None and value != 0 for value in intermediate.values()):
+            issues.append(f"{prefix} reports nonzero intermediate transfer without totals")
+        return
+    if h2d is None or d2h is None or total is None:
+        issues.append(f"{prefix} has incomplete directional transfer accounting")
+        return
+    if min(h2d, d2h, total) < 0 or not math.isclose(total, h2d + d2h, rel_tol=0.0, abs_tol=0.0):
+        issues.append(f"{prefix} failed the directional transfer invariant")
+    if record.get("actual_transfer_bytes_invariant") != "passed":
+        issues.append(f"{prefix} lacks actual_transfer_bytes_invariant=passed")
+    for field, value in intermediate.items():
+        if value is not None and value != 0:
+            issues.append(f"{prefix} reports nonzero {field}")
 
 
 def _transfer_accounting_issues(
@@ -6982,7 +7144,7 @@ def _is_one_dpu_route_record(record: JsonDict) -> bool:
 
 def _is_physical_upmem_taskgraph_record(record: JsonDict) -> bool:
     """Recognize physical TaskGraph evidence while keeping bring-up separate."""
-    if record.get("contraction_execution_target") != "upmem":
+    if record.get("contraction_execution_target") != "upmem" and not _is_one_dpu_route_record(record):
         return False
     if _is_physical_hardware_mvp_record(record):
         return False
@@ -7097,6 +7259,7 @@ def _physical_warm_runtime(record: JsonDict) -> float | None:
         "warm_runtime_wall_time_s",
         "upmem_runtime_warm_time_s",
         "total_route_time_s",
+        "steady_state_graph_execution_s",
     ):
         value = _float_or_none(_record_value(record, field))
         if value is not None and value > 0:

@@ -46,9 +46,16 @@ PUBLIC_TARGETS = (
 )
 
 
-def _command(*args: str) -> subprocess.CompletedProcess[str]:
+def _command(
+    *args: str,
+    extra_env: dict[str, str] | None = None,
+    clear_env: tuple[str, ...] = (),
+) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env.update({"PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": "src"})
+    for name in clear_env:
+        env.pop(name, None)
+    env.update(extra_env or {})
     return subprocess.run(
         list(args),
         cwd=ROOT,
@@ -109,3 +116,37 @@ def test_public_cpu_smoke_executes_end_to_end() -> None:
     summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
     assert summary["record_count"] == 4
     assert all(row["status"] == "passed" for row in summary["rows"])
+
+
+def test_public_make_test_executes_a_safe_active_subset() -> None:
+    result = _command(
+        "make",
+        f"PYTHON={PYTHON}",
+        "test",
+        extra_env={
+            "PYTEST_ADDOPTS": "tests/test_public_workflow.py::test_public_cpu_smoke_executes_end_to_end",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "passed" in result.stdout
+
+
+def test_public_make_research_plan_executes_without_benchmarking() -> None:
+    result = _command("make", f"PYTHON={PYTHON}", "research-plan")
+
+    assert result.returncode == 0, result.stderr
+    assert "Research benchmark pack plan" in result.stdout
+    assert "internal_parallelism" not in result.stdout
+
+
+def test_public_resident_execute_rejects_missing_physical_opt_in() -> None:
+    result = _command(
+        "make",
+        f"PYTHON={PYTHON}",
+        "upmem-hw-taskgraph-resident",
+        clear_env=("UPMEM_ALLOW_PHYSICAL_HARDWARE", "DPU_BACKEND"),
+    )
+
+    assert result.returncode != 0
+    assert "UPMEM_ALLOW_PHYSICAL_HARDWARE=1" in result.stderr

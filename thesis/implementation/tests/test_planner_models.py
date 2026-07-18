@@ -42,6 +42,7 @@ from quantum_bench.tn.upmem_path_cost_v2 import (
 )
 from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
     ResidentCapacityError,
+    RESIDENT_INVALID_SLOT,
     build_resident_graph_package,
     build_resident_slot_lifetime_map,
     resident_requantize,
@@ -139,7 +140,15 @@ def test_v2_projected_prefix_selection_is_deterministic_and_traceable() -> None:
     assert len({entry["step_index"] for entry in trace}) == len(first.tasks)
     for step_index in range(len(first.tasks)):
         selected = [entry for entry in trace if entry["step_index"] == step_index and entry["selected"]]
+        candidates = [
+            entry
+            for entry in trace
+            if entry["step_index"] == step_index and entry["candidate_rank"] is not None
+        ]
         assert len(selected) == 1
+        assert candidates
+        assert all(entry["feasible"] is True for entry in candidates)
+        assert selected[0]["feasible"] is True
         assert selected[0]["candidate_rank"] == 1
         assert selected[0]["projected_cumulative_score"] is not None
 
@@ -276,6 +285,34 @@ def test_resident_allocator_is_deterministic_and_owns_nonoverlapping_slots(minim
         for left, right in zip(slot.lifetimes, slot.lifetimes[1:]):
             assert left.end_task < right.start_task or right.end_task < left.start_task
 
+    package = build_resident_graph_package(
+        minimal_graph.graph,
+        minimal_graph.network,
+        case_id="fixture",
+        suite_id="fixture",
+        quantization_mode="none",
+        profile=resident_hardware_suite.profile,
+    )
+    available_slots = set(package.initial_data)
+    for operation in package.operations:
+        inputs = {
+            slot
+            for slot in (
+                operation.slot_a,
+                operation.slot_b,
+                operation.slot_c,
+                operation.slot_d,
+            )
+            if slot != RESIDENT_INVALID_SLOT
+        }
+        assert inputs <= available_slots
+        outputs = {
+            slot
+            for slot in (operation.slot_out_real, operation.slot_out_imag)
+            if slot != RESIDENT_INVALID_SLOT
+        }
+        available_slots.update(outputs)
+
 
 def test_resident_allocator_reports_capacity_without_spill(minimal_graph, resident_hardware_suite) -> None:
     profile = resident_hardware_suite.profile.__class__(
@@ -335,14 +372,25 @@ def test_resident_tile_and_rounding_boundaries() -> None:
     assert scale == 1.0
     assert saturation == 0
     np.testing.assert_array_equal(quantized, np.zeros(4, dtype=np.int8))
+    for element_count in (0, 1, 255, 256, 257, 513):
+        ranges = resident_tile_ranges(element_count)
+        covered = [index for start, end in ranges for index in range(start, end + 1)]
+        assert covered == list(range(element_count))
+        assert len(covered) == len(set(covered))
 
 
-def test_multi_dpu_assignment_is_modeled_and_owns_each_task_once(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "strategy",
+    ["frontier_round_robin_dpu_groups", "frontier_size_aware_dpu_groups"],
+)
+def test_multi_dpu_assignment_is_modeled_and_owns_each_task_once(
+    tmp_path: Path, strategy: str
+) -> None:
     result = run_upmem_multi_dpu_assignment(
         tmp_path,
         suite_path=_assignment_suite(tmp_path / "suite.yml"),
         dpu_group_count=2,
-        strategy="frontier_round_robin_dpu_groups",
+        strategy=strategy,
     )
     plan = json.loads(result.plan_path.read_text(encoding="utf-8"))
     assignments = [assignment for case in plan["cases"] for wave in case["frontier_waves"] for assignment in wave["assignments"]]
@@ -355,6 +403,13 @@ def test_multi_dpu_assignment_is_modeled_and_owns_each_task_once(tmp_path: Path)
     assert plan["summary"]["assigned_task_count"] == plan["summary"]["task_count"]
     assert plan["summary"]["executed_dpu_task_count"] == 0
     assert {assignment["dpu_group_id"] for assignment in assignments} <= {0, 1}
+    assert all(
+        case["dpu_assignment_validation_status"] == "passed"
+        and case["assigned_task_count"] == case["task_count"]
+        and case["duplicate_assignment_check"] == "passed"
+        and case["missing_dependency_check"] == "passed"
+        for case in plan["cases"]
+    )
 
 
 def test_multi_dpu_sequential_strategy_keeps_single_owner(tmp_path: Path) -> None:
@@ -366,6 +421,10 @@ def test_multi_dpu_sequential_strategy_keeps_single_owner(tmp_path: Path) -> Non
     )
     plan = json.loads(result.plan_path.read_text(encoding="utf-8"))
     assignments = [assignment for case in plan["cases"] for wave in case["frontier_waves"] for assignment in wave["assignments"]]
+    task_ids = [assignment["task_id"] for assignment in assignments]
 
     assert {assignment["dpu_group_id"] for assignment in assignments} == {0}
     assert plan["dpu_group_count"] == 4
+    assert len(task_ids) == len(set(task_ids)) == plan["summary"]["task_count"]
+    assert plan["summary"]["assigned_task_count"] == plan["summary"]["task_count"]
+    assert all(case["dpu_assignment_validation_status"] == "passed" for case in plan["cases"])
