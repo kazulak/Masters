@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from quantum_bench.bench.result_artifacts import load_result_records
+from quantum_bench.bench.result_artifacts import load_result_records, validation_status_for_aggregation
 from quantum_bench.bench.run_dirs import is_within_evidence_root
 from quantum_bench.core.jsonio import read_jsonl, write_json, write_jsonl
 from quantum_bench.core.records import JsonDict, to_jsonable
@@ -162,6 +162,7 @@ REPORT_RESULT_FIELDS = [
     "kernel_family",
     "status",
     "validation_status",
+    "scientific_validation_status",
     "contraction_execution_target",
     "accelerator_kind",
     "gpu_backend_verified",
@@ -380,6 +381,7 @@ PLOT_DATA_FIELDS = [
     "accumulator_dtype",
     "status",
     "validation_status",
+    "scientific_validation_status",
     "total_wall_time_s",
     "kernel_time_s",
     "planning_time_s",
@@ -1215,7 +1217,8 @@ def _plot_data_row(record: JsonDict) -> JsonDict:
         "gpu_device_name": record.get("gpu_device_name"),
         "gpu_runtime_stack": record.get("gpu_runtime_stack"),
         "status": record.get("status"),
-        "validation_status": record.get("validation_status"),
+        "validation_status": validation_status_for_aggregation(record),
+        "scientific_validation_status": record.get("scientific_validation_status"),
         "total_wall_time_s": _float_or_none(record.get("total_wall_time_s_median") if record.get("total_wall_time_s_median") is not None else record.get("total_wall_time_s")),
         "kernel_time_s": _float_or_none(record.get("kernel_time_s")),
         "planning_time_s": _float_or_none(record.get("planning_time_s")),
@@ -1299,7 +1302,7 @@ def _backend_support_rows(rows: list[JsonDict]) -> list[JsonDict]:
         grouped[str(row.get("route_id") or "unknown")].append(row)
     out: list[JsonDict] = []
     for route_id, group in sorted(grouped.items()):
-        validation_statuses = {str(row.get("validation_status") or "") for row in group}
+        validation_statuses = {str(validation_status_for_aggregation(row) or "") for row in group}
         statuses = {str(row.get("status") or "") for row in group}
         out.append(
             {
@@ -1310,8 +1313,15 @@ def _backend_support_rows(rows: list[JsonDict]) -> list[JsonDict]:
                 "execution_model": next((row.get("execution_model") for row in group if row.get("execution_model")), None),
                 "backend_family": next((row.get("backend_family") for row in group if row.get("backend_family")), None),
                 "record_count": len(group),
-                "passed_count": sum(1 for row in group if row.get("validation_status") in {"passed", "reference"}),
-                "failed_count": sum(1 for row in group if row.get("validation_status") == "failed" or row.get("status") in {"failed", "validation_failed"}),
+                "passed_count": sum(
+                    1 for row in group if validation_status_for_aggregation(row) in {"passed", "reference"}
+                ),
+                "failed_count": sum(
+                    1
+                    for row in group
+                    if validation_status_for_aggregation(row) == "failed"
+                    or row.get("status") in {"failed", "validation_failed"}
+                ),
                 "unavailable_count": sum(1 for row in group if row.get("status") in {"unavailable", "skipped", "not_executed"}),
                 "validation_statuses": sorted(validation_statuses),
                 "statuses": sorted(statuses),
@@ -1626,7 +1636,7 @@ def _quantization_rows(records: list[JsonDict]) -> list[JsonDict]:
                 "case_id": record.get("case_id"),
                 "policy": notes.get("policy"),
                 "quantization_mode": notes.get("quantization_mode"),
-                "validation_status": record.get("validation_status"),
+                "validation_status": validation_status_for_aggregation(record),
                 "max_abs_error": metrics.get("max_abs_error"),
                 "l2_error": metrics.get("l2_error"),
             }
@@ -1720,14 +1730,14 @@ def _validation_summary(records: list[JsonDict]) -> JsonDict:
     return {
         "schema_version": REPORT_RUN_SCHEMA_VERSION,
         "record_count": len(records),
-        "passed_count": sum(1 for row in records if row.get("validation_status") in {"passed", "reference"}),
-        "failed_count": sum(1 for row in records if row.get("validation_status") == "failed"),
+        "passed_count": sum(1 for row in records if validation_status_for_aggregation(row) in {"passed", "reference"}),
+        "failed_count": sum(1 for row in records if validation_status_for_aggregation(row) == "failed"),
         "hardware_speedup_applicable": False,
     }
 
 
 def _validation_failures(records: list[JsonDict]) -> list[JsonDict]:
-    return [row for row in records if row.get("validation_status") == "failed"]
+    return [row for row in records if validation_status_for_aggregation(row) == "failed"]
 
 
 def _report_markdown(records: list[JsonDict], run_dir: Path | None = None) -> str:
@@ -1843,7 +1853,7 @@ def _report_markdown(records: list[JsonDict], run_dir: Path | None = None) -> st
     for record in records:
         metrics = _json_value(record.get("validation_error_metrics"))
         lines.append(
-            f"| {record.get('case_id')} | {record.get('route_id')} | {record.get('validation_status')} | "
+            f"| {record.get('case_id')} | {record.get('route_id')} | {validation_status_for_aggregation(record)} | "
             f"{metrics.get('max_abs_error')} | {metrics.get('l2_error')} |"
         )
     lines.extend(

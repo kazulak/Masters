@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import scripts.research_benchmark_pack as report_pack_module
 import quantum_bench.bench.upmem_hardware_taskgraph_resident as resident_runner
 from quantum_bench.bench.generic_task_bridge import run_generic_task_bridge
 from quantum_bench.bench.upmem_hardware_taskgraph_resident import (
@@ -325,7 +326,9 @@ def test_resident_variant_fake_native_session_enforces_opt_in_and_projects_contr
             component = str(item["component"])
             values = output.imag if component == "imag" else output.real
             np.asarray(values, dtype="<f4").ravel().tofile(build.session_root / str(item["output_path"]))
-        response = valid_resident_response(manifest)
+        response = valid_resident_response(
+            manifest, steady_state_graph_execution_s=0.001
+        )
         response_path.write_text(json.dumps(response), encoding="utf-8")
         return ResidentGraphSessionExecution(
             status="completed",
@@ -365,6 +368,19 @@ def test_resident_variant_fake_native_session_enforces_opt_in_and_projects_contr
     assert execution.summary["full_precision_accuracy"]["passed"] is True
     assert execution.summary["release_confirmed"] is True
     assert execution.summary["physical_dependency_chain_verified"] is True
+    assert execution.summary["execution_plan_hash"] == execution.summary["execution_plan"]["execution_plan_hash"]
+    assert execution.summary["provider_id"] == "upmem_resident_hardware"
+    assert execution.summary["provider_metadata"]["backend_id"] == resident_hardware_suite.profile.backend_id
+    assert execution.summary["execution_plan_provenance"] == "host_declared"
+    assert execution.summary["execution_plan_native_package_binding"] == "not_native_package_bound"
+    assert execution.summary["resource_context"]["allocation_status"] == "verified"
+    assert execution.summary["resource_context"]["allocated_dpu_count"] == 1
+    assert execution.summary["resource_context"]["allocated_tasklets_per_dpu"] == 1
+    assert execution.summary["execution_contract_status"] == "passed"
+    assert execution.summary["policy_reference_status"] == "passed"
+    assert execution.summary["full_precision_accuracy_status"] == "passed"
+    assert execution.summary["scientific_validation_status"] == "passed"
+    assert execution.summary["execution_plan"]["validation"]["scientific_validation_status"] == "passed"
     manifest = captured_manifests[0]
     expected_h2d = (
         int(manifest["initial_h2d_bytes"])
@@ -376,6 +392,62 @@ def test_resident_variant_fake_native_session_enforces_opt_in_and_projects_contr
     assert execution.summary["actual_d2h_bytes"] == expected_d2h
     assert execution.summary["actual_transfer_bytes"] == expected_h2d + expected_d2h
     assert execution.summary["actual_transfer_bytes_invariant"] == "passed"
+
+    quantized_plan, quantized_resources = resident_runner._resident_execution_plan(
+        minimal_graph.graph,
+        resident_hardware_suite.profile,
+        quantization_mode="per_task_resident_requantize",
+    )
+    assert quantized_plan.numeric.input_dtype == "int8"
+    assert quantized_plan.numeric.accumulator_dtype == "int32"
+    assert quantized_resources.allocation_status == "not_run"
+
+    normalized = resident_runner._normalized_record(
+        {"case_id": "fixture"},
+        resident_hardware_suite,
+        "fixture_variant",
+        "none",
+        0,
+        0,
+        execution,
+        tmp_path / "run",
+    )
+    assert normalized["suite_id"] == resident_hardware_suite.suite["suite_id"]
+    assert normalized["persistent_session_reused"] is False
+    assert normalized["execution_plan_provenance"] == "host_declared"
+    assert normalized["execution_plan_native_package_binding"] == "not_native_package_bound"
+    assert report_pack_module._is_valid_one_dpu_record(normalized)
+    run_resources = resident_runner._resident_run_resource_context(
+        resident_hardware_suite.profile, [normalized]
+    )
+    assert run_resources.allocation_status == "verified"
+    assert run_resources.requested_dpu_count == 1
+    assert run_resources.allocated_dpu_count == 1
+    assert run_resources.requested_tasklets_per_dpu == 1
+    assert run_resources.allocated_tasklets_per_dpu == 1
+    failed_record = resident_runner._failure_record(
+        resident_hardware_suite,
+        "native_build_failed",
+        {"case_id": "fixture"},
+    )
+    assert failed_record["suite_id"] == resident_hardware_suite.suite["suite_id"]
+
+    inaccurate_reference = np.asarray(reference).copy()
+    inaccurate_reference.flat[0] += 1.0
+    accuracy_failed = resident_runner.execute_resident_variant(
+        **{
+            **kwargs,
+            "request_id": "full-precision-mismatch-request",
+            "reference_output": inaccurate_reference,
+        }
+    )
+    assert accuracy_failed.status == "completed"
+    assert accuracy_failed.summary["policy_reference_status"] == "passed"
+    assert accuracy_failed.summary["full_precision_accuracy_status"] == "failed"
+    assert accuracy_failed.summary["scientific_validation_status"] == "failed"
+    assert accuracy_failed.summary["execution_plan"]["validation"]["scientific_validation_status"] == "failed"
+    # This field deliberately retains its historical policy-reference/transfer meaning.
+    assert accuracy_failed.summary["validation_status"] == "passed"
 
     mismatch = True
     failed = resident_runner.execute_resident_variant(**{**kwargs, "request_id": "mismatch-request"})
@@ -399,3 +471,92 @@ def test_resident_prepare_only_has_one_dpu_profile_and_no_allocation(tmp_path: P
     assert summary["profile"]["tasklets_per_dpu"] == 1
     assert summary["dpu_allocation_attempted"] is False
     assert summary["dpu_launch_attempted"] is False
+    assert summary["provider_id"] == "upmem_resident_hardware"
+    assert summary["prepared_cases"][0]["path_variants"][0]["execution_plan_hash"]
+    assert summary["prepared_cases"][0]["path_variants"][0]["execution_plan_provenance"] == "host_declared"
+    assert (
+        summary["prepared_cases"][0]["path_variants"][0][
+            "execution_plan_native_package_binding"
+        ]
+        == "not_native_package_bound"
+    )
+    assert summary["resource_context"]["allocation_status"] == "not_run"
+    assert summary["resource_context"]["allocated_dpu_count"] is None
+    assert summary["resource_context"]["allocated_tasklets_per_dpu"] is None
+    resource_context = summary["prepared_cases"][0]["path_variants"][0]["resource_context"]
+    assert resource_context["allocation_status"] == "not_run"
+    assert resource_context["requested_dpu_count"] == 1
+    assert resource_context["requested_tasklets_per_dpu"] == 1
+    assert resource_context["allocated_dpu_count"] is None
+    assert resource_context["allocated_tasklets_per_dpu"] is None
+
+
+def test_completed_resident_suite_summary_uses_verified_row_allocation(
+    resident_hardware_suite, monkeypatch, tmp_path: Path
+) -> None:
+    run_dir = tmp_path / "run"
+    (run_dir / "config").mkdir(parents=True)
+    session_root = tmp_path / "native_session"
+    session_root.mkdir()
+    native_build = HardwareSessionBuild(
+        session_root=session_root,
+        source_snapshot=session_root,
+        build_dir=session_root,
+        host_binary=session_root / "host",
+        dpu_binary=session_root / "dpu_resident",
+        source_tree_hash="source",
+        host_binary_hash="host",
+        dpu_binary_hash="dpu",
+        build_time_s=0.0,
+        build_command=("fake-build",),
+        sdk_tools={"fake": "fixture"},
+    )
+    suite = replace(
+        resident_hardware_suite,
+        suite={
+            **resident_hardware_suite.suite,
+            "cases": [{"case_id": "fixture"}],
+        },
+    )
+    record = {
+        "status": "completed",
+        "execution_plan_hash": "plan",
+        "resource_context": {
+            "requested_dpu_count": 1,
+            "allocated_dpu_count": 1,
+            "requested_tasklets_per_dpu": 1,
+            "allocated_tasklets_per_dpu": 1,
+            "allocation_status": "verified",
+        },
+    }
+
+    monkeypatch.setattr(
+        resident_runner, "build_resident_hardware_session", lambda *args, **kwargs: native_build
+    )
+    monkeypatch.setattr(
+        resident_runner, "prepare_resident_case", lambda *args, **kwargs: {}
+    )
+    monkeypatch.setattr(
+        resident_runner,
+        "_run_resident_case",
+        lambda **kwargs: (
+            [record],
+            [],
+            {"case_id": "fixture", "status": "passed"},
+        ),
+    )
+    monkeypatch.setattr(
+        resident_runner, "write_run_manifest", lambda *args, **kwargs: {}
+    )
+    monkeypatch.setattr(
+        resident_runner, "write_normalized_records", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(resident_runner, "capture_environment", lambda *args: {})
+
+    result = resident_runner.run_resident_suite(
+        tmp_path, run_dir, suite, environment={}
+    )
+    summary = json.loads(result.summary_path.read_text(encoding="utf-8"))
+
+    assert result.status == "completed"
+    assert summary["resource_context"] == record["resource_context"]

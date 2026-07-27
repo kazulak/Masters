@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 import hashlib
 import json
@@ -41,6 +41,16 @@ from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
     load_hardware_taskgraph_resident_suite,
     validate_hardware_taskgraph_resident_execution_request,
 )
+from quantum_bench.targets.upmem.execution_plan import (
+    DpuResourceContext,
+    UpmemCommunicationPlan,
+    UpmemExecutionPlan,
+    UpmemKernelPlan,
+    UpmemNumericPlan,
+    UpmemPlacementPlan,
+    UpmemSchedulePlan,
+    UpmemValidationStatuses,
+)
 from quantum_bench.tn import (
     build_execution_bundle,
     build_tensor_network,
@@ -54,6 +64,9 @@ from quantum_bench.tn.execution_bundle import execution_identity_metadata, execu
 
 RESIDENT_PLAN_SCHEMA_VERSION = "upmem_hardware_taskgraph_resident_plan_v1"
 RESIDENT_RUNTIME_SCHEMA_VERSION = "upmem_hardware_taskgraph_resident_runtime_v1"
+RESIDENT_PROVIDER_ID = "upmem_resident_hardware"
+RESIDENT_EXECUTION_PLAN_PROVENANCE = "host_declared"
+RESIDENT_EXECUTION_PLAN_NATIVE_PACKAGE_BINDING = "not_native_package_bound"
 
 
 @dataclass(frozen=True)
@@ -124,6 +137,8 @@ def prepare_upmem_hardware_taskgraph_resident(
         "suite_id": suite.suite["suite_id"],
         "route_id": RESIDENT_ROUTE_ID,
         "backend_id": RESIDENT_BACKEND_ID,
+        "provider_id": RESIDENT_PROVIDER_ID,
+        "resource_context": _resource_context_metadata(_resident_resource_context(suite.profile)),
         "profile": hardware_taskgraph_resident_profile_metadata(suite.profile),
         "prepared_cases": rows,
         "native_build": native_build,
@@ -152,6 +167,9 @@ def prepare_resident_case(
     hashes: tuple[str, str] | None = None
     for variant in suite.variants:
         graph = with_execution_identity(plan_task_graph_with_config(network, dict(variant.planner)))
+        execution_plan, resource_context = _resident_execution_plan(
+            graph, suite.profile, quantization_mode="none"
+        )
         reference, execution_metrics = execute_task_sequence_np_einsum(graph, network)
         reference_array = np.asarray(reference)
         reference_outputs.append(reference_array)
@@ -188,6 +206,7 @@ def prepare_resident_case(
             "tensor_network_hash": graph.tensor_network_hash,
             "contraction_plan_hash": graph.contraction_plan_hash,
             "contraction_path_structure_hash": contraction_path_structure_hash(graph),
+            **_execution_plan_metadata(execution_plan, suite.profile, resource_context),
             "no_host_intermediate_output_files": True,
             "intermediate_output_paths": [],
         })
@@ -198,6 +217,8 @@ def prepare_resident_case(
             "bundle_path": bundle_path,
             "reference_path": reference_path,
             "allocation": package.allocation,
+            "execution_plan": execution_plan,
+            "resource_context": resource_context,
         }
     if not reference_outputs:
         raise ValueError("hardware_profile_violation: resident suite has no path variants")
@@ -291,12 +312,16 @@ def run_resident_suite(
     write_jsonl(run_dir / "warmups.jsonl", warmups)
     write_normalized_records(run_dir, records)
     completed = bool(records) and all(item.get("status") == "completed" for item in records)
+    run_resource_context = _resident_run_resource_context(suite.profile, records)
     summary_path = run_dir / "upmem_hardware_taskgraph_resident_summary.json"
     write_json(summary_path, {
         "schema_version": RESIDENT_RUNTIME_SCHEMA_VERSION,
         "status": "completed" if completed else "failed",
         "suite_id": suite.suite["suite_id"], "route_id": RESIDENT_ROUTE_ID, "backend_id": RESIDENT_BACKEND_ID,
+        "provider_id": RESIDENT_PROVIDER_ID,
+        "resource_context": _resource_context_metadata(run_resource_context),
         "row_count": len(records), "warmup_count": len(warmups), "case_statuses": case_statuses,
+        "execution_plan_hashes": sorted({str(record.get("execution_plan_hash")) for record in records if record.get("execution_plan_hash")}),
         "hardware_profile": hardware_taskgraph_resident_profile_metadata(suite.profile),
         "native_build": _native_build_metadata(native_build, root_dir),
         "normalized_records": "normalized_records.jsonl", "warmups": "warmups.jsonl",
@@ -329,6 +354,9 @@ def execute_resident_variant(
     )
     started = time.perf_counter()
     graph = with_execution_identity(graph)
+    execution_plan, resource_context = _resident_execution_plan(
+        graph, profile, quantization_mode=quantization_mode
+    )
     execution_metadata = {
         **execution_identity_metadata(graph, plan_reused=True),
         "executor_config_hash": executor_config_hash(RESIDENT_ROUTE_ID, {
@@ -336,6 +364,7 @@ def execute_resident_variant(
             "session_protocol": profile.session_protocol, "quantization_mode": quantization_mode,
             "resident_pool_bytes": profile.mram_pool_bytes,
         }),
+        **_execution_plan_metadata(execution_plan, profile, resource_context),
     }
     try:
         package = build_resident_graph_package(
@@ -352,17 +381,41 @@ def execute_resident_variant(
             profile=profile, environment=execution_environment,
         )
     except Exception as exc:
-        return _failed_execution(graph, profile, quantization_mode, execution_metadata, str(exc), started)
+        return _failed_execution(
+            graph, profile, quantization_mode,
+            _failed_execution_metadata(execution_metadata, execution_plan, profile, resource_context),
+            str(exc), started,
+        )
     if native.status != "completed":
         return _failed_execution(
-            graph, profile, quantization_mode, execution_metadata,
+            graph, profile, quantization_mode,
+            _failed_execution_metadata(execution_metadata, execution_plan, profile, resource_context),
             native.failure_stage or "resident_native_execution_failed", started, native=native,
             package=artifact,
         )
     try:
+        verified_resource_context = _verified_resident_resource_context(
+            profile, native.response
+        )
+        verified_execution_plan = replace(
+            execution_plan,
+            placement=replace(
+                execution_plan.placement, resources=verified_resource_context
+            ),
+        )
+        resource_context = verified_resource_context
+        execution_plan = verified_execution_plan
+        execution_metadata = {
+            **execution_metadata,
+            **_execution_plan_metadata(execution_plan, profile, resource_context),
+        }
         output = _load_final_output(artifact)
     except Exception as exc:
-        return _failed_execution(graph, profile, quantization_mode, execution_metadata, str(exc), started, native=native, package=artifact)
+        return _failed_execution(
+            graph, profile, quantization_mode,
+            _failed_execution_metadata(execution_metadata, execution_plan, profile, resource_context),
+            str(exc), started, native=native, package=artifact,
+        )
     policy = build_resident_policy_reference(graph, network, quantization_mode=quantization_mode, profile=profile)
     policy_output = np.asarray(policy["output"])
     policy_validation = _accuracy(policy_output, output, _policy_tolerance(quantization_mode), "resident_policy_reference")
@@ -395,6 +448,19 @@ def execute_resident_variant(
         actual_h2d == initial_h2d + descriptor_h2d + control_h2d and actual_d2h == final_d2h and
         accounting["actual_transfer_bytes"] == actual_h2d + actual_d2h
     ) else "failed"
+    execution_contract = _execution_contract_passed(
+        response, resource_context, accounting["bytes_invariant_status"]
+    )
+    statuses = _resident_validation_statuses(
+        execution_contract=execution_contract,
+        policy_validation=policy_validation,
+        full_precision_accuracy=full_precision_accuracy,
+    )
+    execution_plan = replace(execution_plan, validation=statuses)
+    execution_metadata = {
+        **execution_metadata,
+        **_execution_plan_metadata(execution_plan, profile, resource_context),
+    }
     modeled = _modeled_host_rehydrated_bytes(package)
     scale_metrics = _scale_metrics(policy)
     task_metrics = tuple({
@@ -405,7 +471,7 @@ def execute_resident_variant(
         "resident_slot_output_ids": [package.allocation.slot_for(task.output_tensor_id, "real")],
         "native_component_operation_count": 5 if len(package.allocation.tensor_components[task.output_tensor_id]) == 2 else 1,
     } for index, task in enumerate(graph.tasks))
-    validation_status = "passed" if policy_validation["passed"] and accounting["bytes_invariant_status"] == "passed" else "failed"
+    validation_status = _legacy_validation_status(policy_validation, accounting["bytes_invariant_status"])
     summary: JsonDict = {
         "schema_version": RESIDENT_RUNTIME_SCHEMA_VERSION,
         "status": "completed" if validation_status == "passed" else "failed",
@@ -460,6 +526,10 @@ def execute_resident_variant(
         },
         "policy_reference_validation": policy_validation,
         "full_precision_accuracy": full_precision_accuracy,
+        "execution_contract_status": statuses.execution_contract_status,
+        "policy_reference_status": statuses.policy_reference_status,
+        "full_precision_accuracy_status": statuses.full_precision_accuracy_status,
+        "scientific_validation_status": statuses.scientific_validation_status,
         "validation_status": validation_status,
         "physical_dependency_chain_verified": response["physical_dependency_chain_verified"],
         "output_hash": _array_hash(output),
@@ -543,6 +613,7 @@ def _normalized_record(case, suite, variant_id, mode, repeat_id, order_index, ex
     return {
         "schema_version": "resident_normalized_record_v1",
         "status": execution.status,
+        "suite_id": suite.suite["suite_id"],
         "case_id": case["case_id"], "workload_id": case["case_id"],
         "route_id": RESIDENT_ROUTE_ID, "backend_id": RESIDENT_BACKEND_ID,
         "contraction_execution_target": "upmem",
@@ -555,6 +626,7 @@ def _normalized_record(case, suite, variant_id, mode, repeat_id, order_index, ex
         "target_observed": summary.get("target_observed", "hardware_unverified"),
         "hardware_functionality_evidence": execution.status == "completed" and summary.get("hardware_execution") is True,
         "hardware_timing_available": summary.get("hardware_timing_available", False) if execution.status == "completed" else False,
+        "persistent_session_reused": summary.get("persistent_session_reused"),
         "hardware_kernel_executed": summary.get("hardware_kernel_executed", False),
         "native_execution": summary.get("native_execution", False),
         "native_kernel_executed": summary.get("native_kernel_executed", False),
@@ -579,6 +651,18 @@ def _normalized_record(case, suite, variant_id, mode, repeat_id, order_index, ex
         "modeled_host_rehydrated_equivalent_bytes": summary.get("modeled_host_rehydrated_equivalent_bytes", {}),
         "policy_reference_validation": summary.get("policy_reference_validation"),
         "full_precision_accuracy": summary.get("full_precision_accuracy"),
+        "execution_plan": summary.get("execution_plan"),
+        "execution_plan_hash": summary.get("execution_plan_hash"),
+        "execution_plan_schema_version": summary.get("execution_plan_schema_version"),
+        "execution_plan_provenance": summary.get("execution_plan_provenance"),
+        "execution_plan_native_package_binding": summary.get("execution_plan_native_package_binding"),
+        "provider_id": summary.get("provider_id"),
+        "provider_metadata": summary.get("provider_metadata"),
+        "resource_context": summary.get("resource_context"),
+        "execution_contract_status": summary.get("execution_contract_status"),
+        "policy_reference_status": summary.get("policy_reference_status"),
+        "full_precision_accuracy_status": summary.get("full_precision_accuracy_status"),
+        "scientific_validation_status": summary.get("scientific_validation_status"),
         "validation_status": summary.get("validation_status"),
         "task_count": summary.get("task_count"),
         "validated_task_count": summary.get("validated_task_count"),
@@ -654,6 +738,212 @@ def _modeled_host_rehydrated_bytes(package: ResidentGraphPackage) -> JsonDict:
     }
 
 
+def _resident_resource_context(profile: HardwareTaskGraphResidentProfile) -> DpuResourceContext:
+    return DpuResourceContext(
+        requested_dpu_count=profile.requested_dpu_count,
+        requested_tasklets_per_dpu=profile.tasklets_per_dpu,
+    )
+
+
+def _resident_run_resource_context(
+    profile: HardwareTaskGraphResidentProfile,
+    records: Sequence[Mapping[str, Any]],
+) -> DpuResourceContext:
+    declared = _resident_resource_context(profile)
+    completed = [record for record in records if record.get("status") == "completed"]
+    if not completed:
+        return declared
+    contexts = [record.get("resource_context") for record in completed]
+    if any(
+        not isinstance(context, Mapping)
+        or context.get("allocation_status") != "verified"
+        for context in contexts
+    ):
+        return declared
+
+    requested_dpus = {context.get("requested_dpu_count") for context in contexts}
+    allocated_dpus = {context.get("allocated_dpu_count") for context in contexts}
+    requested_tasklets = {
+        context.get("requested_tasklets_per_dpu") for context in contexts
+    }
+    allocated_tasklets = {
+        context.get("allocated_tasklets_per_dpu") for context in contexts
+    }
+    if (
+        requested_dpus != {profile.requested_dpu_count}
+        or requested_tasklets != {profile.tasklets_per_dpu}
+        or len(allocated_dpus) != 1
+        or len(allocated_tasklets) != 1
+    ):
+        return declared
+    try:
+        return DpuResourceContext(
+            requested_dpu_count=profile.requested_dpu_count,
+            requested_tasklets_per_dpu=profile.tasklets_per_dpu,
+            allocated_dpu_count=next(iter(allocated_dpus)),
+            allocated_tasklets_per_dpu=next(iter(allocated_tasklets)),
+            allocation_status="verified",
+        )
+    except (TypeError, ValueError):
+        return declared
+
+
+def _verified_resident_resource_context(
+    profile: HardwareTaskGraphResidentProfile,
+    response: Mapping[str, Any],
+) -> DpuResourceContext:
+    return DpuResourceContext(
+        requested_dpu_count=profile.requested_dpu_count,
+        requested_tasklets_per_dpu=profile.tasklets_per_dpu,
+        allocated_dpu_count=int(response["allocated_dpus"]),
+        allocated_tasklets_per_dpu=int(response["tasklets"]),
+        allocation_status="verified",
+    )
+
+
+def _resident_execution_plan(
+    graph: TaskGraph,
+    profile: HardwareTaskGraphResidentProfile,
+    *,
+    quantization_mode: str,
+) -> tuple[UpmemExecutionPlan, DpuResourceContext]:
+    resource_context = _resident_resource_context(profile)
+    plan = UpmemExecutionPlan.for_task_graph(
+        graph,
+        kernel=UpmemKernelPlan(
+            provider_id=RESIDENT_PROVIDER_ID,
+            kernel_id="generic_loop_resident_graph",
+            kernel_version="generic_loop_resident_graph_v1",
+            implementation="explicit_sdk_resident",
+            resident=True,
+        ),
+        placement=UpmemPlacementPlan(
+            resources=resource_context,
+            assignment_policy="single_dpu",
+            topology="one_rank_one_dpu",
+        ),
+        communication=UpmemCommunicationPlan(
+            host_to_dpu="explicit_sdk",
+            dpu_to_host="explicit_sdk",
+            intermediate_transport="mram_resident",
+            reduction="host",
+        ),
+        numeric=UpmemNumericPlan(
+            input_dtype="float32" if quantization_mode == "none" else "int8",
+            accumulator_dtype=(
+                "int32"
+                if quantization_mode == "per_task_resident_requantize"
+                else "float32"
+            ),
+            output_dtype="float32",
+            quantization=quantization_mode,
+            complex_policy=profile.complex_policy,
+            full_precision_reference="complex128_cpu",
+        ),
+        schedule=UpmemSchedulePlan(
+            ordering="topological_task_id",
+            dependency_policy="strict",
+            parallelism="serial",
+            resident_lifetime="taskgraph",
+        ),
+    )
+    return plan, resource_context
+
+
+def _resource_context_metadata(context: DpuResourceContext) -> JsonDict:
+    return {
+        "requested_dpu_count": context.requested_dpu_count,
+        "allocated_dpu_count": context.allocated_dpu_count,
+        "requested_tasklets_per_dpu": context.requested_tasklets_per_dpu,
+        "allocated_tasklets_per_dpu": context.allocated_tasklets_per_dpu,
+        "allocation_status": context.allocation_status,
+    }
+
+
+def _execution_plan_metadata(
+    plan: UpmemExecutionPlan,
+    profile: HardwareTaskGraphResidentProfile,
+    resource_context: DpuResourceContext,
+) -> JsonDict:
+    return {
+        "execution_plan_schema_version": plan.schema_version,
+        "execution_plan_hash": plan.execution_plan_hash,
+        "execution_plan": plan.to_json_dict(),
+        "execution_plan_provenance": RESIDENT_EXECUTION_PLAN_PROVENANCE,
+        "execution_plan_native_package_binding": RESIDENT_EXECUTION_PLAN_NATIVE_PACKAGE_BINDING,
+        "provider_id": plan.kernel.provider_id,
+        "provider_metadata": {
+            "provider_id": plan.kernel.provider_id,
+            "backend_id": profile.backend_id,
+            "route_id": profile.route_id,
+            "implementation": plan.kernel.implementation,
+            "execution_mode": "physical_hardware",
+        },
+        "resource_context": _resource_context_metadata(resource_context),
+        "execution_contract_status": plan.validation.execution_contract_status,
+        "policy_reference_status": plan.validation.policy_reference_status,
+        "full_precision_accuracy_status": plan.validation.full_precision_accuracy_status,
+        "scientific_validation_status": plan.validation.scientific_validation_status,
+    }
+
+
+def _failed_execution_metadata(
+    base: Mapping[str, Any],
+    plan: UpmemExecutionPlan,
+    profile: HardwareTaskGraphResidentProfile,
+    resource_context: DpuResourceContext,
+) -> JsonDict:
+    failed_plan = replace(
+        plan,
+        validation=UpmemValidationStatuses.from_checks(execution_contract=False),
+    )
+    return {**base, **_execution_plan_metadata(failed_plan, profile, resource_context)}
+
+
+def _execution_contract_passed(
+    response: Mapping[str, Any],
+    resource_context: DpuResourceContext,
+    bytes_invariant_status: str,
+) -> bool:
+    return (
+        resource_context.allocation_status == "verified"
+        and response.get("requested_dpus") == resource_context.requested_dpu_count
+        and response.get("allocated_dpus") == resource_context.allocated_dpu_count
+        and response.get("tasklets") == resource_context.allocated_tasklets_per_dpu
+        and response.get("graph_request_count") == 1
+        and response.get("target_observed") == "hardware"
+        and response.get("hardware_allocation_verified") is True
+        and response.get("hardware_execution") is True
+        and response.get("native_execution") is True
+        and response.get("hardware_kernel_executed") is True
+        and response.get("cpu_fallback_used") is False
+        and response.get("simulator_kernel_executed") is False
+        and response.get("final_output_only_d2h") is True
+        and bytes_invariant_status == "passed"
+    )
+
+
+def _resident_validation_statuses(
+    *,
+    execution_contract: bool,
+    policy_validation: Mapping[str, Any],
+    full_precision_accuracy: Mapping[str, Any],
+) -> UpmemValidationStatuses:
+    return UpmemValidationStatuses.from_checks(
+        execution_contract=execution_contract,
+        policy_reference=bool(policy_validation.get("passed")),
+        full_precision_accuracy=bool(full_precision_accuracy.get("passed")),
+    )
+
+
+def _legacy_validation_status(
+    policy_validation: Mapping[str, Any], bytes_invariant_status: str
+) -> str:
+    """Keep the pre-plan policy-reference/transfer validation contract."""
+
+    return "passed" if policy_validation.get("passed") and bytes_invariant_status == "passed" else "failed"
+
+
 def _accuracy(reference, actual, tolerance, reference_kind):
     difference = np.asarray(actual, dtype=np.complex128) - np.asarray(reference, dtype=np.complex128)
     max_abs = float(np.max(np.abs(difference))) if difference.size else 0.0
@@ -723,11 +1013,25 @@ def _failed_execution(graph, profile, mode, metadata, reason, started, *, native
 def _failure_record(suite, reason, case):
     return {
         "schema_version": "resident_normalized_record_v1", "status": "failed",
+        "suite_id": suite.suite["suite_id"],
         "case_id": case.get("case_id") if case else None, "route_id": RESIDENT_ROUTE_ID,
         "backend_id": RESIDENT_BACKEND_ID, "kernel_family": "generic_loop_resident_graph",
         "hardware_functionality_evidence": False, "hardware_timing_available": False,
         "hardware_kernel_executed": False, "simulator_kernel_executed": False,
         "cpu_fallback_used": False, "requested_dpu_count": 1, "tasklets_per_dpu": 1,
+        "provider_id": RESIDENT_PROVIDER_ID,
+        "provider_metadata": {
+            "provider_id": RESIDENT_PROVIDER_ID,
+            "backend_id": RESIDENT_BACKEND_ID,
+            "route_id": RESIDENT_ROUTE_ID,
+            "implementation": "explicit_sdk_resident",
+            "execution_mode": "physical_hardware",
+        },
+        "resource_context": _resource_context_metadata(DpuResourceContext()),
+        "execution_contract_status": "failed",
+        "policy_reference_status": "not_run",
+        "full_precision_accuracy_status": "not_run",
+        "scientific_validation_status": "failed",
         "graph_request_count": 1, "failure_stage": _failure_stage(reason, "native_build_failed"),
         "reason": reason, "timing_scope": RESIDENT_TIMING_SCOPE,
         "claim_boundary": "no speedup, energy, scheduler, or multi-DPU claim",
@@ -754,7 +1058,13 @@ def _prepared_case_row(case, prepared):
              "slot_descriptor_count": value["allocation"].slot_descriptor_count,
              "mram_used_bytes": value["allocation"].mram_used_bytes,
              "contraction_plan_hash": value["graph"].contraction_plan_hash,
-             "contraction_path_structure_hash": contraction_path_structure_hash(value["graph"])}
+             "contraction_path_structure_hash": contraction_path_structure_hash(value["graph"]),
+             "execution_plan": value["execution_plan"].to_json_dict(),
+             "execution_plan_hash": value["execution_plan"].execution_plan_hash,
+             "execution_plan_provenance": RESIDENT_EXECUTION_PLAN_PROVENANCE,
+             "execution_plan_native_package_binding": RESIDENT_EXECUTION_PLAN_NATIVE_PACKAGE_BINDING,
+             "provider_id": value["execution_plan"].kernel.provider_id,
+             "resource_context": _resource_context_metadata(value["resource_context"])}
             for key, value in prepared["variants"].items()
         ],
     }

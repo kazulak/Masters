@@ -253,6 +253,7 @@ RESULT_FIELDS = [
     "simulator_or_hardware",
     "status",
     "validation_status",
+    "scientific_validation_status",
     "max_abs_error",
     "l2_error",
     "norm_drift",
@@ -449,6 +450,18 @@ PARALLELISM_MODE_SUMMARY_FIELDS = [
     "same_family_timing_group",
     "interpretation_note",
 ]
+
+SCIENTIFIC_VALIDATION_ROUTE_ID = "upmem_tn_hardware_taskgraph_resident"
+
+
+def validation_status_for_aggregation(record: JsonDict) -> Any:
+    """Select the generic validation status without changing legacy records."""
+    if (
+        record.get("route_id") == SCIENTIFIC_VALIDATION_ROUTE_ID
+        and record.get("scientific_validation_status") is not None
+    ):
+        return record["scientific_validation_status"]
+    return record.get("validation_status")
 
 PARALLELISM_CAPABILITY_MATRIX_FIELDS = [
     "schema_version",
@@ -963,6 +976,7 @@ def _upmem_taskgraph_runtime_record(
             "executed_dpu_task_count": summary.get("executed_dpu_task_count"),
             "unassigned_task_count": summary.get("unassigned_task_count"),
             "dpu_assignment_validation_status": summary.get("dpu_assignment_validation_status"),
+            "scientific_validation_status": summary.get("scientific_validation_status"),
             "hardware_execution": summary.get("hardware_execution", False),
             "hardware_timing_available": summary.get("hardware_timing_available", False),
             "hardware_speedup_applicable": summary.get("hardware_speedup_applicable", False),
@@ -1213,6 +1227,7 @@ def _base_record(
         "simulator_or_hardware": simulator_or_hardware,
         "status": status,
         "validation_status": validation_status,
+        "scientific_validation_status": None,
         "max_abs_error": validation_error_metrics.get("max_abs_error"),
         "l2_error": validation_error_metrics.get("l2_error"),
         "norm_drift": validation_error_metrics.get("norm_drift"),
@@ -1578,7 +1593,9 @@ def _parallelism_mode_summary(records: list[JsonDict]) -> list[JsonDict]:
                 "parallelism_mode": first.get("parallelism_mode"),
                 "parallelism_evidence_type": first.get("parallelism_evidence_type"),
                 "record_count": len(route_records),
-                "validation_passed_count": sum(1 for record in route_records if record.get("validation_status") == "passed"),
+                "validation_passed_count": sum(
+                    1 for record in route_records if validation_status_for_aggregation(record) == "passed"
+                ),
                 "task_count": sum(int(record.get("task_count", 0) or 0) for record in route_records),
                 "frontier_executed_task_count": _sum_ints(record.get("frontier_executed_task_count") for record in route_records),
                 "source_frontier_completed_task_count": _sum_ints(

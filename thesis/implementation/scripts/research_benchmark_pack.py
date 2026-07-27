@@ -2431,6 +2431,7 @@ def _is_valid_one_dpu_record(record: JsonDict) -> bool:
         not _physical_taskgraph_issues(record)
         and _one_dpu_transfer_evidence_valid(record)
         and record.get("route_id") in _ONE_DPU_ROUTES
+        and _nonempty_text(record.get("suite_id")) is not None
         and record.get("status") == "completed"
         and record.get("validation_status") == "passed"
         and record.get("hardware_execution") is True
@@ -2446,9 +2447,17 @@ def _is_valid_one_dpu_record(record: JsonDict) -> bool:
         and record.get("physical_dependency_chain_verified") is True
         and record.get("timing_is_bringup_only") is False
         and record.get("hardware_timing_available") is True
-        and record.get("session_scope") == "case_benchmark_block"
-        and record.get("persistent_session_reused") is True
+        and _one_dpu_session_contract_is_valid(record)
         and _float_or_none(record.get("steady_state_graph_execution_s")) is not None
+    )
+
+
+def _one_dpu_session_contract_is_valid(record: JsonDict) -> bool:
+    if _is_active_resident_physical_record(record):
+        return record.get("persistent_session_reused") is False
+    return (
+        record.get("session_scope") == "case_benchmark_block"
+        and record.get("persistent_session_reused") is True
     )
 
 
@@ -4469,7 +4478,7 @@ def benchmark_summary(
             if route_id == _ONE_DPU_ROUTE:
                 scope = "physical host-rehydrated, sequential, one DPU; no resident-session or multi-DPU claim"
             elif route_id == _ONE_DPU_RESIDENT_ROUTE:
-                scope = "future resident-route evidence only; no host-rehydrated or multi-DPU claim"
+                scope = "active bounded resident TaskGraph evidence, one DPU/one tasklet; no multi-DPU, speedup, energy, or general-TN claim"
             else:
                 scope = "unrecognized one-DPU route; route-specific interpretation required"
             lines.append(
@@ -5172,7 +5181,7 @@ def _upmem_readiness_lines(
         )
     if resident_records:
         lines.append(
-            f"- Future resident-route records loaded: {len(resident_records)}; these are reported separately and do not establish host-rehydrated or multi-DPU claims."
+            f"- Active bounded resident TaskGraph evidence records loaded: {len(resident_records)}; one DPU/one tasklet only, with no multi-DPU, speedup, energy, or general-TN claim."
         )
     lines.extend(
         [

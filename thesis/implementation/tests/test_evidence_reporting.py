@@ -279,6 +279,38 @@ def test_report_run_keeps_input_evidence_readable(tmp_path: Path) -> None:
     assert (run / "normalized_records.jsonl").read_text(encoding="utf-8") == before
 
 
+def test_generic_validation_aggregation_uses_scientific_status_only_for_active_resident_route(
+    tmp_path: Path,
+) -> None:
+    active = record_with_updates(
+        hardware_evidence_records()[0],
+        scientific_validation_status="failed",
+        upmem_parallelism_evidence_type="hardware_executed",
+    )
+    legacy = record_with_updates(
+        cpu_gpu_pair_records()[0],
+        scientific_validation_status="failed",
+    )
+    run = write_evidence_run(tmp_path, [active, legacy])
+
+    report_run(run, tmp_path / "report", output_plots=False, root_dir=tmp_path)
+    validation = json.loads(
+        (tmp_path / "report" / "validation" / "validation_summary.json").read_text(encoding="utf-8")
+    )
+    assert validation["passed_count"] == 1
+    assert validation["failed_count"] == 1
+    failures = (tmp_path / "report" / "validation" / "validation_failures.jsonl").read_text(encoding="utf-8")
+    assert active["case_id"] in failures
+    assert legacy["case_id"] not in failures
+
+    comparison = compare_results([run], tmp_path / "comparison", root_dir=tmp_path)
+    payload = json.loads(comparison.artifact_path.read_text(encoding="utf-8"))
+    resident_summary = next(
+        row for row in payload["parallelism_mode_summary"] if row["route_id"] == active["route_id"]
+    )
+    assert resident_summary["validation_passed_count"] == 0
+
+
 def test_report_pack_agg_render_has_readable_correlated_outputs(tmp_path: Path) -> None:
     import matplotlib
 
