@@ -17,9 +17,18 @@ SimplePIM, and external-library probe artifacts are historical only. Their
 normalized readers, route labels, tables, plots, and snapshot compatibility
 remain available for existing evidence.
 
+The historical status applies to those old runnable experiments, not to the
+target architecture. SimplePIM, PID-Comm, ATiM, and SparseP are central target
+providers behind thesis-owned planning and adapter interfaces, each for its own
+task class rather than as a universal execution route. Their physical
+qualification is an M1 gate in the roadmap; this wording does not claim that
+they are integrated into the current executor.
+
 Start with [ARCHITECTURE.md](ARCHITECTURE.md) for module ownership, external
 provenance, thesis contributions, and the planned UPMEM architecture. The fixed
 benchmark matrix is in [THESIS_BENCHMARK_MATRIX.md](THESIS_BENCHMARK_MATRIX.md).
+The SLR-derived long-term implementation sequence and completion criteria are
+in [docs/slr_architecture_implementation_roadmap.md](docs/slr_architecture_implementation_roadmap.md).
 
 ## Setup
 
@@ -53,7 +62,8 @@ BENCH_CPU_THREADS=6 make thesis-run
 # 2. Inspect generated evidence and comparisons.
 make list-runs
 
-# 3. Promote the latest successful pack into tracked, human-readable results.
+# 3. Reserved for the post-M9 reviewed evidence freeze; do not promote
+#    development evidence during M0--M8.
 make thesis-promote
 
 # 4. Verify or regenerate tables and plots without rerunning benchmarks.
@@ -131,10 +141,12 @@ make evidence-inbox
 ```
 
 Keep the archive there, extract the validated evidence run under
-`runs/evidence/`, then regenerate a report from that exact run. Only after the
-source commit, normalized rows, and report have been reviewed should a compact
-named snapshot be promoted into `thesis_results/`. The complete copy, audit,
-and promotion procedure is in [the evidence workflow](docs/evidence_workflow.md).
+`runs/evidence/`, then regenerate a report from that exact run. During M0--M8,
+copied archives and generated development evidence remain ignored and are not
+promoted. Only after M9, the source commit, normalized rows, and report have
+been reviewed should a compact named snapshot be promoted into
+`thesis_results/`. The complete copy, audit, and promotion procedure is in
+[the evidence workflow](docs/evidence_workflow.md).
 
 ## Individual Commands
 
@@ -227,8 +239,9 @@ silently change benchmark-source cleanliness.
 
 Current limitation:
 
-> Bounded generic UPMEM contraction exists, but fully general UPMEM TN
-> contraction does not yet exist.
+> The current UPMEM evidence is bounded to the documented generic simulator and
+> guarded resident route; fully general distributed, operation-aware, and
+> hardware-calibrated UPMEM TN execution does not yet exist.
 
 ## Generated Cleanup
 

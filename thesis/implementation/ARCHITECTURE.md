@@ -1,5 +1,10 @@
 # System Architecture
 
+The accepted current-to-target delivery sequence is maintained in
+[`docs/slr_architecture_implementation_roadmap.md`](docs/slr_architecture_implementation_roadmap.md).
+This file describes implemented ownership and claim boundaries; the roadmap
+defines the M0--M9 research gates and thesis completion criteria.
+
 ## Research Objective
 
 The implementation evaluates tensor-network (TN) quantum-circuit simulation on
@@ -88,12 +93,12 @@ different identities or objective settings but select the same structural path.
 | Serious CPU TN baseline | `thesis/implementation/src/quantum_bench/providers/exact_tn/quimb_tn.py` | Quimb/cotengra unsliced and sliced exact TN execution | Active |
 | Shared-plan CPU reference | `thesis/implementation/src/quantum_bench/providers/exact_tn/cpu_einsum.py`, `cpu_path_replay.py` | Execute the internal TaskGraph on CPU | Active; diagnostic/reference quality |
 | Strict UPMEM runtime | `thesis/implementation/src/quantum_bench/targets/upmem/taskgraph_runtime.py`, `numeric_reference.py`, `runtime_evidence.py` | Execute policy/scheduling while keeping CPU references, validation, and evidence construction reviewable | Active, SDK simulator |
-| Physical UPMEM route | `targets/upmem/hardware_taskgraph_resident.py`, `bench/upmem_hardware_taskgraph_resident.py`, `native/upmem/simplepim/upmem_sdk_generic_loop_resident/` | Guarded one-DPU MRAM-resident full-TaskGraph execution | Active Phase A route; correctness evidence only, no speedup or energy claim |
+| Physical UPMEM route | `targets/upmem/hardware_taskgraph_resident.py`, `bench/upmem_hardware_taskgraph_resident.py`, `native/upmem/simplepim/upmem_sdk_generic_loop_resident/` | Guarded one-DPU MRAM-resident full-TaskGraph execution | Active bounded route; correctness evidence only, no speedup or energy claim |
 | Native DPU programs | `thesis/implementation/native/upmem/simplepim/` | Bounded generic loop and resident host/DPU programs | Active, bounded; legacy dense sources are historical and removed from the runnable tree |
 | UPMEM analysis | `thesis/implementation/src/quantum_bench/targets/upmem/tile_plan.py`, `schedule.py`, `tn/upmem_path_cost.py`, planner scoring | Estimate transfer, tiling, frontier, assignment pressure, and objective components | Active; execution coverage remains bounded |
 | Evidence writer | `thesis/implementation/src/quantum_bench/bench/simulation_backend_compare.py`, `upmem_mvp_benchmark.py` | Run fixed suites and write canonical normalized evidence | Active |
 | Derived analysis | `thesis/implementation/scripts/research_benchmark_pack.py` | Statistics, claim guards, source CSVs, and plots | Active |
-| Thesis snapshot | `thesis/implementation/scripts/thesis_snapshot.py`, `thesis_runs.py` | Promote compact tracked evidence and prune stale generated runs | Active |
+| Thesis snapshot | `thesis/implementation/scripts/thesis_snapshot.py`, `thesis_runs.py` | Reserved M9 promotion of compact tracked evidence and pruning of stale generated runs | Tooling exists; development evidence is not promoted |
 
 ## Route Roles And Claim Boundaries
 
@@ -106,7 +111,7 @@ different identities or objective settings but select the same structural path.
 | `cpu_tn_einsum_exact` | Internal NumPy TaskGraph | Shared-plan reference/diagnostic | Correct execution of supported internal plans, not a SOTA TN baseline |
 | `cpu_tn_path_replay_*` | Internal NumPy TaskGraph | Quantization diagnostic | CPU cost/error of per-contraction replay; not UPMEM performance |
 | `upmem_tn_sdk_simulator_quantized` / strict runtime | UPMEM SDK simulator | Bounded PIM code-path evidence | SDK DPU program execution, support boundary, traffic, and error; no hardware speedup |
-| `upmem_tn_hardware_generic_loop_mvp` | UPMEM SDK physical hardware | Synthetic one-task generic TaskGraph functionality MVP | One-DPU/one-tasklet exact int32 validation only; not a quantum-circuit or performance result |
+| `upmem_tn_hardware_taskgraph_resident` | UPMEM SDK physical hardware | Active bounded MRAM-resident TaskGraph foundation | Physical one-DPU/one-tasklet full-TaskGraph correctness and diagnostic timing; no speedup, energy, or scaling claim |
 | `planner_candidate_model` | Host planning/model | Path candidate evidence | Standard objectives plus deterministic custom UPMEM-aware greedy selection; modeled only, no execution speedup |
 
 Full-state correctness and performance are separate tiers. `full_dump` rows can
@@ -116,32 +121,35 @@ exactness claims.
 
 ## UPMEM Architecture
 
-### Current Executed Path
+### Current Executed Paths
 
 ```mermaid
 flowchart TD
     G[Hashed TaskGraph] --> F[Feasibility scan<br/>rank, element, dtype and layout caps]
     F -->|unsupported| X[Explicit boundary record<br/>no CPU contraction fallback]
-    F -->|supported| H[Host orchestration]
-    H --> Q[Optional per-task quantization<br/>float32 or int8/int32]
-    Q --> D[DPU program invocation<br/>strict generic loop]
-    D --> R[Dequantization / tensor reconstruction]
-    R --> V[CPU validation against the same TaskGraph]
+    F -->|simulator supported| S[Strict generic SDK-simulator route]
+    F -->|physical resident supported| H[One-DPU resident package and lifetime plan]
+    H --> Q[Float32 or per-task int8/int32<br/>split real/imaginary where needed]
+    Q --> D[One tasklet executes ordered descriptors<br/>intermediates remain in MRAM]
+    D --> R[Final-output-only transfer]
+    S --> V[CPU validation against the same TaskGraph]
+    R --> V
     V --> E[Normalized evidence<br/>traffic, timing, error, invocation counts]
 ```
 
-The planner exposes bounded generic single-DPU MRAM-resident/WRAM-tiled plans
-through `thesis/implementation/src/quantum_bench/targets/upmem/tile_plan.py`.
-The strict generic path executes `mram_resident_output_tiled_v1` with output
-tiles bounded at 256 elements. Shapes outside the recorded contracts remain
-explicit boundaries. The SDK simulator proves the native SDK control path and
-DPU program invocation, not physical PIM timing.
+The planner and tile model expose bounded generic single-DPU
+MRAM-resident/WRAM-tiled plans. The strict simulator route proves the native SDK
+control path but not hardware speedup. The active physical resident route uses
+one DPU and one tasklet, keeps bounded intermediates in a 512 KiB MRAM pool,
+supports split-complex float32 and per-task int8/int32 execution, and transfers
+only final output components back to the host. Shapes outside the recorded
+contracts remain explicit boundaries.
 
 Current limitation:
 
-> Bounded generic and bounded tiled UPMEM contractions exist; fully general
-> UPMEM TN contraction, unrestricted layouts, and hardware timing do not yet
-> exist.
+> Bounded generic, tiled, and one-DPU resident physical TaskGraph execution
+> exist. Multi-tasklet, multi-DPU, specialized-kernel, unrestricted-layout, and
+> general distributed TN execution do not yet exist.
 
 ### Target Modular Architecture
 
@@ -154,27 +162,33 @@ Current limitation:
 | Layout/transpose/slicing kernels | Avoid host materialization and enable bounded subproblems | Missing | Standard TN/PIM techniques; implementation is thesis work |
 | Quantization formats | Compare same-plan float32 and integer execution with explicit scale/error | Float32 and int8 generic modes exist | Thesis evaluation; motivated by weak DPU floating point |
 | Multi-DPU scheduler | Assign ready contractions/tiles to DPU groups | Assignment/frontier evidence is modeled or simulator-serial | Thesis architecture |
-| DPU communication layer | Move intermediate data without unnecessary host round trips | Not integrated | PID-Comm candidate |
-| High-level PIM adapter | Reduce host/DPU boilerplate where it does not hide measurement | Retired from the runnable Phase A surface | Historical SimplePIM candidate |
-| Automatic kernel generation | Explore generated DPU kernels for selected contractions | Not integrated | ATiM candidate |
-| Sparse kernels | Exploit zero/sparsity structure when measured | Not integrated | SparseP candidate |
+| DPU communication layer | Move intermediates, tiles, and partial reductions across DPU groups | Not integrated; target architecture uses PID-Comm collectives behind an explicit communication plan | PID-Comm |
+| High-level PIM adapter | Manage distributed arrays and reuse map/zip/reduce plus host/DPU communication primitives | Old runnable experiments are retired; a new target-architecture adapter is planned | SimplePIM |
+| Automatic kernel generation | Generate and tune local tensor contractions, loop orders, tasklet counts, and tiles | Not integrated; target local-kernel provider | ATiM |
+| Sparse kernels | Execute measured sparse-eligible contractions with established formats and load balancing | Not integrated; target sparse-kernel provider | SparseP |
 
-The first kernel wave implements a conservative MRAM/WRAM-tiled generic binary
-contraction; current evidence can measure its effect using an unchanged
-TaskGraph and CPU reference. Specialized permutation, sparse, and
-communication kernels should follow only when a recorded workload class makes
-their expected benefit testable.
+The M3/M4 kernel work will extend the conservative MRAM/WRAM-tiled generic
+binary contraction with task-specific providers and intra-DPU execution.
+Specialized permutation, sparse, and communication kernels should follow only
+when a recorded workload class makes their expected benefit testable.
 
-## Provenance And Thesis Contribution
+## External Providers And Thesis Contribution
+
+SimplePIM, PID-Comm, ATiM, and SparseP are central components of the target
+architecture, but each is central only to the task class it can serve. They
+are not interchangeable runtimes, and qualification or use of one provider
+does not imply that it handles every contraction or route. The generic SDK
+path remains the explicit control and fallback.
 
 | Item | Provenance | How it is used here |
 | --- | --- | --- |
 | QuEST | External submodule | Full-state CPU and GPU baseline; no thesis ownership claim |
 | Quimb, cotengra, opt_einsum | External Python libraries | Serious CPU TN execution and path planning |
-| UPMEM SDK | External platform/toolchain | Simulator today; physical DPU DIMMs planned at ETH |
-| SimplePIM | External pinned repository | Historical abstraction/reference only; strict generic evidence retains `simplepim_api_used=false` for compatibility |
-| PID-Comm | External pinned repository | Candidate future multi-DPU communication layer, not currently executed |
-| ATiM, SparseP, related papers/tools | Literature/future dependencies | Design candidates only until a verified adapter exists |
+| UPMEM SDK | External platform/toolchain | Strict simulator route and bounded one-DPU resident physical execution at ETH |
+| SimplePIM | External pinned repository | Task-specific target for management, distribution, and bounded array/map/zip/reduce primitives; not claimed as current executor integration |
+| PID-Comm | External pinned repository | Task-specific target for multi-DPU relocation and collective reduction; not claimed as current executor integration |
+| ATiM | Official artifact to be pinned | Task-specific target for generated/autotuned dense local tensor kernels; qualification required before integration |
+| SparseP | External project to be pinned | Task-specific target for sparse formats, kernels, and load balancing; qualification required before integration |
 | PIMutation | Prior research and benchmark inspiration | Six circuit families, full-state PIM comparison context, quantization/specialized gate-operation motivation |
 | Circuit-to-TN TaskGraph, strict fallback rules, execution identities, UPMEM-aware evaluation | This thesis implementation | Engineering/research contribution to be evaluated; novelty claims remain bounded by experiments |
 
@@ -198,6 +212,11 @@ execution bundles, summaries, and bounded case/task artifacts. Derived plots and
 comparison tables are forbidden in evidence. `thesis_results/current` includes
 checksums and enough normalized evidence to regenerate its report without
 rerunning a simulator.
+
+During M0--M8, development evidence remains in ignored `runs/` directories and
+is not promoted to `thesis_results/`. The tracked snapshot surface is reserved
+for reviewed final evidence after M9; existing tracked material remains
+historical context until then.
 
 Final performance runs require an explicit physical-core count. The workflow
 sets and records OpenMP, OpenBLAS, MKL, and NumExpr thread counts, and captures
