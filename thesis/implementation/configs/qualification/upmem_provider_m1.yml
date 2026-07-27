@@ -1,0 +1,42 @@
+schema_version: provider_qualification_catalog_v1
+catalog_id: upmem_provider_m1
+milestone: M1
+purpose: independent_physical_upmem_provider_qualification
+providers:
+  - id: simplepim
+    name: SimplePIM
+    status: executable
+    executable: true
+    runner: native/upmem/simplepim/simplepim_qualification_runner.py
+    runner_contract:
+      schema_version: simplepim_provider_qualification_v1
+      probe_id: simplepim_va_map_zip_v1
+    source:
+      path: external/SimplePIM
+      pinned_commit: 1d639c53532555f01e9f71d872e7712b166d6cba
+    hardware:
+      requested_dpus: 1
+      requested_tasklets: 12
+    reason: Independent SimplePIM M1 probe; no alternate runner or fallback is permitted.
+
+  - id: pid-comm
+    name: PID-Comm
+    status: blocked
+    executable: false
+    reason: Blocked in its separate 2021.3.0/1024-DPU/AVX512 qualification lane.
+    lane:
+      upmem_sdk_release: '2021.3.0'
+      requested_dpus: 1024
+      cpu_features: AVX512
+
+  - id: atim
+    name: ATiM
+    status: blocked
+    executable: false
+    reason: Source is not pinned.
+
+  - id: sparsep
+    name: SparseP
+    status: blocked
+    executable: false
+    reason: Source is not pinned.

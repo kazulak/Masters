@@ -19,6 +19,7 @@ GPU_SUITE ?= configs/suites/gpu_evidence.yml
 UPMEM_SIM_SUITE ?= configs/suites/upmem_sim_evidence.yml
 UPMEM_HW_TASKGRAPH_RESIDENT_SUITE ?= configs/suites/upmem_hardware_taskgraph_resident_path_quantization.yml
 UPMEM_HW_TASKGRAPH_RESIDENT_RUN ?= runs/evidence/upmem_hardware_taskgraph_resident_path_quantization/upmem_hw_taskgraph_resident/latest
+UPMEM_PROVIDER_CATALOG ?= configs/qualification/upmem_provider_m1.yml
 EVIDENCE_INBOX ?= runs/inbox/eth
 GPU_VERIFY ?= quest-hip
 CLEAN_RUNS ?= 0
@@ -38,6 +39,8 @@ PUBLIC_TARGETS := \
 	upmem-hw-taskgraph-resident-plan \
 	upmem-hw-taskgraph-resident \
 	upmem-hw-taskgraph-resident-report \
+	upmem-provider-plan \
+	upmem-provider-qualify \
 	evidence-inbox \
 	research-plan \
 	planner-evidence \
@@ -69,6 +72,8 @@ help:
 		'  make upmem-hw-taskgraph-resident-plan  Prepare/build the active one-DPU physical MRAM-resident TaskGraph route; never allocates a DPU' \
 		'  make upmem-hw-taskgraph-resident  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; run the active one-DPU physical MRAM-resident TaskGraph route' \
 		'  make upmem-hw-taskgraph-resident-report  Generate a report from explicitly supplied one-DPU physical MRAM-resident diagnostic evidence' \
+		'  make upmem-provider-plan  Prepare a unique M1 provider qualification plan; never builds or allocates hardware' \
+		'  make upmem-provider-qualify PROVIDER=<id>  Execute one selected physical provider qualification' \
 		'  make evidence-inbox     Create the ignored inbox for copied ETH evidence bundles' \
 		'  make research-plan      Show the research benchmark plan' \
 		'  make planner-evidence   Run modeled planner v2 evidence into runs/comparisons/planner_v2/' \
@@ -113,6 +118,13 @@ bench-upmem-sim:
 	$(BENCH) upmem-env-check --run-sample --target simulator
 	$(BENCH) simulation-backend-compare --suite $(UPMEM_SIM_SUITE) --artifact-retention compact
 	$(PY_ENV) $(PYTHON) scripts/evidence_shortcuts.py check-upmem runs/latest
+
+upmem-provider-plan:
+	$(BENCH) provider-qualification --catalog $(UPMEM_PROVIDER_CATALOG) --prepare-only
+
+upmem-provider-qualify:
+	@test -n "$(PROVIDER)" || { echo 'Set PROVIDER=<id>, for example: make upmem-provider-qualify PROVIDER=simplepim' >&2; exit 2; }
+	$(BENCH) provider-qualification --catalog $(UPMEM_PROVIDER_CATALOG) --execute --provider $(PROVIDER)
 
 evidence-inbox:
 	@mkdir -p "$(EVIDENCE_INBOX)"

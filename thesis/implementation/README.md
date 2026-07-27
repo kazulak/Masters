@@ -94,6 +94,11 @@ The long run includes:
 - modeled TaskGraph scheduling and multi-DPU planning primitives, clearly
   excluded from executed serious baselines.
 
+The implemented M1 provider qualification workflow is documented in the
+[UPMEM provider qualification runbook](docs/upmem_provider_qualification_runbook.md).
+The harness and SimplePIM probe are implemented locally; physical qualification
+is pending, so M1 is not complete.
+
 GPU execution requires a GPU-visible shell. On the local AMD machine the route
 uses QuEST HIP and verifies a real HIP program before emitting GPU rows. On a
 future NVIDIA cluster the GPU software/build route must be adapted and verified
@@ -161,6 +166,7 @@ make upmem-hw-taskgraph-resident-plan
 make upmem-hw-taskgraph-resident-report
 make planner-report
 make research-plan
+make upmem-provider-plan
 ```
 
 On the ETH hardware host, after the preparation command succeeds:
@@ -178,6 +184,17 @@ transfer bytes and validation error. See [the resident ETH runbook](docs/upmem_h
 Resident hardware acceptance is a manual ETH-host activity outside pytest and
 CI. The active physical command is the resident route above; retired dense and
 legacy hardware runs are readable historical evidence only.
+
+For M1 SimplePIM qualification, prepare locally with
+`make upmem-provider-plan`, then on a clean ETH checkout run
+`UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-provider-qualify PROVIDER=simplepim`.
+This is a one-DPU, 12-tasklet, 256-`uint32` virtual-array map/zip functionality
+probe only. It has no simulator or fallback path and makes no performance
+claim. Artifacts are stored under
+`runs/evidence/provider_qualification/simplepim/`; admission requires the
+passed fields and fingerprints in the [runbook](docs/upmem_provider_qualification_runbook.md).
+PID-Comm is a separate 2021.3.0/AVX512/1024-DPU lane; ATiM's official artifact
+and SparseP source remain unpinned and blocked.
 
 The retired dense and legacy TaskGraph runs remain readable as historical
 evidence, but are no longer runnable through the public CLI or Makefile.

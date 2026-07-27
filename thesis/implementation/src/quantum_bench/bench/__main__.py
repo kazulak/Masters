@@ -176,6 +176,18 @@ def main() -> int:
     )
     upmem_env_parser.add_argument("--timeout-seconds", type=float, default=10.0)
 
+    provider_qualification_parser = sub.add_parser(
+        "provider-qualification",
+        help="prepare or execute the guarded M1 physical provider qualification",
+    )
+    provider_qualification_parser.add_argument("--catalog", required=True)
+    provider_qualification_mode = (
+        provider_qualification_parser.add_mutually_exclusive_group(required=True)
+    )
+    provider_qualification_mode.add_argument("--prepare-only", action="store_true")
+    provider_qualification_mode.add_argument("--execute", action="store_true")
+    provider_qualification_parser.add_argument("--provider")
+
     compare_results_parser = sub.add_parser("compare-results")
     compare_results_parser.add_argument("--inputs", nargs="+", required=True)
     compare_results_parser.add_argument("--out", required=True)
@@ -560,6 +572,46 @@ def main() -> int:
             )
         )
         return 0
+    if args.command == "provider-qualification":
+        from quantum_bench.bench.provider_qualification import (
+            execute_provider_qualification,
+            prepare_provider_qualification,
+        )
+
+        catalog = Path(args.catalog)
+        try:
+            if args.prepare_only:
+                result = prepare_provider_qualification(
+                    root_dir, catalog_path=catalog, provider_id=args.provider
+                )
+                print(
+                    json.dumps(
+                        {"plan": str(result.plan_path), "status": result.status},
+                        indent=2,
+                    )
+                )
+                return 0 if result.status == "prepared" else 2
+            result = execute_provider_qualification(
+                root_dir, catalog_path=catalog, provider_id=args.provider
+            )
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
+        print(
+            json.dumps(
+                {
+                    "run_dir": str(result.run_dir),
+                    "result": str(result.result_path),
+                    "raw_result": str(result.raw_result_path)
+                    if result.raw_result_path.is_file()
+                    else None,
+                    "normalized_records": str(result.normalized_records_path),
+                    "manifest": str(result.manifest_path),
+                    "status": result.status,
+                },
+                indent=2,
+            )
+        )
+        return 0 if result.status == "qualified" else 2
     if args.command == "compare-results":
         from quantum_bench.bench.result_artifacts import compare_results
 

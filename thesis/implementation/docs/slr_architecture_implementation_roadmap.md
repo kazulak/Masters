@@ -75,7 +75,7 @@ a small final architecture.
 | UPMEM hardware | One physical DPU, one tasklet, complete bounded MRAM-resident TaskGraph | Active starting point |
 | Numerical modes | Float32, per-task int8/int32, split real/imaginary complex | Active in bounded routes |
 | Evidence system | Normalized records, claim guards, reports, plots, snapshots | Active instrumentation |
-| External sources | QuEST, SimplePIM, and PID-Comm pinned | QuEST active; SimplePIM/PID-Comm are target providers and are not claimed as current executor integrations |
+| External sources | QuEST, SimplePIM, and PID-Comm pinned | QuEST active; SimplePIM harness/probe implemented locally, physical qualification pending; PID-Comm is a separate blocked lane |
 
 ### Central architecture not implemented
 
@@ -485,6 +485,28 @@ binding is currently host-declared, not cryptographically embedded in the
 native package.
 
 ### M1: physical qualification of all four central external providers
+
+The qualification harness and SimplePIM probe are implemented locally;
+physical qualification is pending. M1 is therefore not complete.
+
+The local workflow is `make upmem-provider-plan`. After a commit is checked out
+cleanly on ETH, the currently executable lane is:
+
+```bash
+UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-provider-qualify PROVIDER=simplepim
+```
+
+The [qualification runbook](upmem_provider_qualification_runbook.md) defines
+the artifact locations and passed-field contract. The SimplePIM probe is one
+DPU with 12 configured tasklets performing a 256-`uint32` virtual-array map
+and zip, functionality-only. It has no simulator or fallback path and makes
+no performance claim. A tracked staging patch is part of the source
+fingerprint; upstream `DPU_ASSERT` failure cleanup can leave release
+unconfirmed and cannot produce a passed qualification.
+
+PID-Comm is a separate 2021.3.0/AVX512/1024-DPU lane. The official ATiM
+artifact and SparseP source remain unpinned and blocked. These providers remain
+central to later architecture work.
 
 Qualify each provider independently on the target physical UPMEM system, with
 the smallest task-specific probe and no thesis-wide integration claim:

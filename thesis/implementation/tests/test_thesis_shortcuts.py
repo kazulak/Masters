@@ -1,0 +1,50 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+
+ROOT = Path(__file__).parents[1]
+
+
+def _run(*args: str) -> subprocess.CompletedProcess[str]:
+    env = {**os.environ, "PYTHONPATH": "src"}
+    return subprocess.run(
+        [sys.executable, *args],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_provider_qualification_cli_is_public() -> None:
+    result = _run("-m", "quantum_bench.bench", "--help")
+    assert result.returncode == 0
+    assert "provider-qualification" in result.stdout
+
+
+def test_provider_make_shortcuts_are_exposed() -> None:
+    plan = subprocess.run(
+        ["make", "-n", "upmem-provider-plan"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    qualify = subprocess.run(
+        ["make", "-n", "upmem-provider-qualify", "PROVIDER=simplepim"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert plan.returncode == 0
+    assert "provider-qualification" in plan.stdout
+    assert "--prepare-only" in plan.stdout
+    assert qualify.returncode == 0
+    assert "--execute" in qualify.stdout
+    assert "--provider simplepim" in qualify.stdout
