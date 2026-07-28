@@ -180,7 +180,7 @@ static int resident_next_object(const char **cursor, const char *end, const char
 }
 
 static char *resident_copy_object(const char *object, const char *object_end) {
-    const size_t length = (size_t)(object_end - object);
+    const size_t length = (size_t)(object_end - object) + 1u;
     char *copy = (char *)malloc(length + 1u);
     if (copy == NULL) return NULL;
     memcpy(copy, object, length);
@@ -493,6 +493,7 @@ static int resident_validate_package(
                 return 1;
             }
             slot_ready[operation->slot_out_real] = 1;
+            continue;
         } else if (operation->slot_a == RESIDENT_INVALID_SLOT || operation->slot_b == RESIDENT_INVALID_SLOT ||
                    operation->slot_c == RESIDENT_INVALID_SLOT || operation->slot_d == RESIDENT_INVALID_SLOT ||
                    operation->slot_out_real == RESIDENT_INVALID_SLOT || operation->slot_out_imag == RESIDENT_INVALID_SLOT ||
