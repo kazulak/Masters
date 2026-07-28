@@ -81,11 +81,35 @@ def main() -> int:
     upmem_hardware_taskgraph_resident_mode.add_argument(
         "--prepare-only", action="store_true"
     )
-    upmem_hardware_taskgraph_resident_mode.add_argument("--execute", action="store_true")
+    upmem_hardware_taskgraph_resident_mode.add_argument(
+        "--execute", action="store_true"
+    )
     upmem_hardware_taskgraph_resident_parser.add_argument(
         "--build",
         action="store_true",
         help="build the separate resident native source during --prepare-only; never allocates a DPU",
+    )
+
+    upmem_hardware_sliced_resident_parser = sub.add_parser(
+        "upmem-hardware-sliced-resident-mvp",
+        help="run the guarded internal/research two-DPU sliced-resident M2 MVP",
+    )
+    upmem_hardware_sliced_resident_parser.add_argument(
+        "--suite", required=True, help="committed M2 two-DPU sliced-resident suite YAML"
+    )
+    upmem_hardware_sliced_resident_mode = (
+        upmem_hardware_sliced_resident_parser.add_mutually_exclusive_group(
+            required=True
+        )
+    )
+    upmem_hardware_sliced_resident_mode.add_argument(
+        "--prepare-only", action="store_true"
+    )
+    upmem_hardware_sliced_resident_mode.add_argument("--execute", action="store_true")
+    upmem_hardware_sliced_resident_parser.add_argument(
+        "--build",
+        action="store_true",
+        help="build M2 native sources during --prepare-only; never allocates a DPU",
     )
 
     upmem_generic_feasibility_parser = sub.add_parser("upmem-generic-feasibility")
@@ -347,6 +371,51 @@ def main() -> int:
                 )
                 return 0 if result.status == "prepared" else 2
             result = run_upmem_hardware_taskgraph_resident(
+                root_dir, suite_path=suite_path(args.suite, root_dir)
+            )
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
+        print(
+            json.dumps(
+                {
+                    "run_dir": str(result.run_dir),
+                    "artifact": str(result.summary_path),
+                    "status": result.status,
+                    "row_count": result.row_count,
+                },
+                indent=2,
+            )
+        )
+        return 0 if result.status == "completed" else 2
+    if args.command == "upmem-hardware-sliced-resident-mvp":
+        from quantum_bench.bench.upmem_hardware_sliced_resident_mvp import (
+            prepare_upmem_hardware_sliced_resident_mvp,
+            run_upmem_hardware_sliced_resident_mvp,
+        )
+
+        if args.build and not args.prepare_only:
+            parser.error("--build is only valid with --prepare-only")
+        try:
+            if args.prepare_only:
+                result = prepare_upmem_hardware_sliced_resident_mvp(
+                    root_dir,
+                    suite_path=suite_path(args.suite, root_dir),
+                    build=args.build,
+                )
+                print(
+                    json.dumps(
+                        {
+                            "plan_dir": str(result.plan_dir),
+                            "artifact": str(result.summary_path),
+                            "status": result.status,
+                            "dpu_allocation_attempted": False,
+                            "dpu_launch_attempted": False,
+                        },
+                        indent=2,
+                    )
+                )
+                return 0 if result.status == "prepared" else 2
+            result = run_upmem_hardware_sliced_resident_mvp(
                 root_dir, suite_path=suite_path(args.suite, root_dir)
             )
         except (OSError, ValueError) as exc:
