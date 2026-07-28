@@ -93,7 +93,7 @@ different identities or objective settings but select the same structural path.
 | Serious CPU TN baseline | `thesis/implementation/src/quantum_bench/providers/exact_tn/quimb_tn.py` | Quimb/cotengra unsliced and sliced exact TN execution | Active |
 | Shared-plan CPU reference | `thesis/implementation/src/quantum_bench/providers/exact_tn/cpu_einsum.py`, `cpu_path_replay.py` | Execute the internal TaskGraph on CPU | Active; diagnostic/reference quality |
 | Strict UPMEM runtime | `thesis/implementation/src/quantum_bench/targets/upmem/taskgraph_runtime.py`, `numeric_reference.py`, `runtime_evidence.py` | Execute policy/scheduling while keeping CPU references, validation, and evidence construction reviewable | Active, SDK simulator |
-| Physical UPMEM route | `targets/upmem/hardware_taskgraph_resident.py`, `bench/upmem_hardware_taskgraph_resident.py`, `native/upmem/simplepim/upmem_sdk_generic_loop_resident/` | Guarded one-DPU MRAM-resident full-TaskGraph execution | Active bounded route; correctness evidence only, no speedup or energy claim |
+| Physical UPMEM route | `targets/upmem/hardware_taskgraph_sliced_resident.py`, `targets/upmem/hardware_sliced_resident_session.py`, `bench/upmem_hardware_sliced_resident_mvp.py`, `native/upmem/simplepim/upmem_sdk_generic_loop_resident_two_dpu/` | M2 foundation/MVP: two independent contraction-index slices on exactly two physical DPUs | Implementation complete; ETH physical acceptance pending; no speedup, energy, scaling, or general-TaskGraph claim |
 | Native DPU programs | `thesis/implementation/native/upmem/simplepim/` | Bounded generic loop and resident host/DPU programs | Active, bounded; legacy dense sources are historical and removed from the runnable tree |
 | UPMEM analysis | `thesis/implementation/src/quantum_bench/targets/upmem/tile_plan.py`, `schedule.py`, `tn/upmem_path_cost.py`, planner scoring | Estimate transfer, tiling, frontier, assignment pressure, and objective components | Active; execution coverage remains bounded |
 | Evidence writer | `thesis/implementation/src/quantum_bench/bench/simulation_backend_compare.py`, `upmem_mvp_benchmark.py` | Run fixed suites and write canonical normalized evidence | Active |
@@ -111,7 +111,8 @@ different identities or objective settings but select the same structural path.
 | `cpu_tn_einsum_exact` | Internal NumPy TaskGraph | Shared-plan reference/diagnostic | Correct execution of supported internal plans, not a SOTA TN baseline |
 | `cpu_tn_path_replay_*` | Internal NumPy TaskGraph | Quantization diagnostic | CPU cost/error of per-contraction replay; not UPMEM performance |
 | `upmem_tn_sdk_simulator_quantized` / strict runtime | UPMEM SDK simulator | Bounded PIM code-path evidence | SDK DPU program execution, support boundary, traffic, and error; no hardware speedup |
-| `upmem_tn_hardware_taskgraph_resident` | UPMEM SDK physical hardware | Active bounded MRAM-resident TaskGraph foundation | Physical one-DPU/one-tasklet full-TaskGraph correctness and diagnostic timing; no speedup, energy, or scaling claim |
+| `upmem_tn_hardware_sliced_resident_two_dpu` | UPMEM SDK physical hardware | M2 sliced-resident foundation/MVP | Exactly two independent slices, two physical DPUs, one tasklet per DPU, terminal one-operation real-valued boundary; ETH acceptance pending; no speedup, energy, scaling, or general-TaskGraph claim |
+| `upmem_tn_hardware_taskgraph_resident` | UPMEM SDK physical hardware | Previous bounded one-DPU resident route | Historical one-DPU correctness surface; not the current M2 route |
 | `planner_candidate_model` | Host planning/model | Path candidate evidence | Standard objectives plus deterministic custom UPMEM-aware greedy selection; modeled only, no execution speedup |
 
 Full-state correctness and performance are separate tiers. `full_dump` rows can
@@ -128,44 +129,53 @@ flowchart TD
     G[Hashed TaskGraph] --> F[Feasibility scan<br/>rank, element, dtype and layout caps]
     F -->|unsupported| X[Explicit boundary record<br/>no CPU contraction fallback]
     F -->|simulator supported| S[Strict generic SDK-simulator route]
-    F -->|physical resident supported| H[One-DPU resident package and lifetime plan]
-    H --> Q[Float32 or per-task int8/int32<br/>split real/imaginary where needed]
-    Q --> D[One tasklet executes ordered descriptors<br/>intermediates remain in MRAM]
-    D --> R[Final-output-only transfer]
+    F -->|M2 fixture| H[Two independent contraction-index slices]
+    H --> Q[Two resident packages<br/>one slice per physical DPU]
+    Q --> D[One tasklet per DPU<br/>async set launch plus sync]
+    D --> R[Read two float32 partial outputs]
+    R --> P[Python host sums partial outputs]
     S --> V[CPU validation against the same TaskGraph]
-    R --> V
+    P --> V
     V --> E[Normalized evidence<br/>traffic, timing, error, invocation counts]
 ```
 
 The planner and tile model expose bounded generic single-DPU
 MRAM-resident/WRAM-tiled plans. The strict simulator route proves the native SDK
-control path but not hardware speedup. The active physical resident route uses
-one DPU and one tasklet, keeps bounded intermediates in a 512 KiB MRAM pool,
-supports split-complex float32 and per-task int8/int32 execution, and transfers
-only final output components back to the host. Shapes outside the recorded
-contracts remain explicit boundaries.
+control path but not hardware speedup. The implemented M2 physical route is
+narrower: it restricts the terminal contraction of a one-qubit, one-operation
+real-valued X/H/Z circuit to two independent contraction-index slices, assigns
+one slice to each of exactly two physical DPUs, launches the DPU set
+asynchronously, synchronizes once, and reconstructs the result by summing the
+two float32 partial outputs in Python. The fixed suite and evidence contract
+are documented in the [M2 runbook](docs/upmem_hardware_sliced_resident_mvp_runbook.md).
+Shapes outside that boundary remain explicit failures.
+
+M2 implementation status: complete. Physical ETH acceptance is pending. A
+successful implementation review does not establish physical execution, speedup,
+energy, scaling, or general TaskGraph coverage.
 
 Current limitation:
 
-> Bounded generic, tiled, and one-DPU resident physical TaskGraph execution
-> exist. Multi-tasklet, multi-DPU, specialized-kernel, unrestricted-layout, and
+> The M2 two-DPU sliced-resident foundation/MVP exists. Terminal contractions in
+> larger graphs, ready-TaskGraph scheduling, multi-tasklet execution,
+> specialized kernels, unrestricted layouts, communication collectives, and
 > general distributed TN execution do not yet exist.
 
 ### Target Modular Architecture
 
 | Planned module | Purpose | Current state | Candidate source/inspiration |
 | --- | --- | --- | --- |
-| UPMEM-aware path objective | Score FLOPs, peak intermediate size, host/DPU and MRAM/WRAM movement, tiles, synchronization, and numerical pressure | Deterministic custom greedy planner plus standard baselines; modeled fixed single-DPU policy only | Thesis contribution on top of `opt_einsum`/cotengra |
+| UPMEM-aware path objective | Score FLOPs, peak intermediate size, host/DPU and MRAM/WRAM movement, tiles, synchronization, and numerical pressure | Deterministic custom greedy planner plus standard baselines; planner model remains single-DPU, while M2 uses a separate fixed two-slice policy | Thesis contribution on top of `opt_einsum`/cotengra |
 | Kernel classifier/selector | Choose generic tiled contraction, permutation/layout, sparse, or collective path | Generic/tile planning primitives exist; specialized selection remains future work | Thesis architecture |
 | Tiled generic contraction | Stream operands/output through MRAM/WRAM under explicit caps | Implemented for bounded output tiling; strict generic coverage remains capped | UPMEM programming model; legacy external references are historical |
 | Gate-aware permutation kernels | Replace arithmetic by row/index permutation for gates where mathematically valid | Missing | PIMutation-inspired specialization, thesis adaptation to TN tasks |
 | Layout/transpose/slicing kernels | Avoid host materialization and enable bounded subproblems | Missing | Standard TN/PIM techniques; implementation is thesis work |
 | Quantization formats | Compare same-plan float32 and integer execution with explicit scale/error | Float32 and int8 generic modes exist | Thesis evaluation; motivated by weak DPU floating point |
-| Multi-DPU scheduler | Assign ready contractions/tiles to DPU groups | Assignment/frontier evidence is modeled or simulator-serial | Thesis architecture |
-| DPU communication layer | Move intermediates, tiles, and partial reductions across DPU groups | Not integrated; target architecture uses PID-Comm collectives behind an explicit communication plan | PID-Comm |
-| High-level PIM adapter | Manage distributed arrays and reuse map/zip/reduce plus host/DPU communication primitives | Old runnable experiments are retired; a new target-architecture adapter is planned | SimplePIM |
-| Automatic kernel generation | Generate and tune local tensor contractions, loop orders, tasklet counts, and tiles | Not integrated; target local-kernel provider | ATiM |
-| Sparse kernels | Execute measured sparse-eligible contractions with established formats and load balancing | Not integrated; target sparse-kernel provider | SparseP |
+| Multi-DPU scheduler | Assign ready contractions/tiles to DPU groups | M2 has fixed slice-to-DPU ownership only; general scheduling remains future work | Thesis architecture |
+| DPU communication layer | Move intermediates, tiles, and partial reductions across DPU groups | M2 uses Python host sum reconstruction; PID-Comm collectives remain a planned central component | PID-Comm |
+| High-level PIM adapter | Manage distributed arrays and reuse map/zip/reduce plus host/DPU communication primitives | Planned central provider for subsequent distribution and array-management milestones | SimplePIM |
+| Automatic kernel generation | Generate and tune local tensor contractions, loop orders, tasklet counts, and tiles | Planned central provider for subsequent dense local-kernel milestones | ATiM |
+| Sparse kernels | Execute measured sparse-eligible contractions with established formats and load balancing | Planned central provider for subsequent sparse-kernel milestones | SparseP |
 
 The M3/M4 kernel work will extend the conservative MRAM/WRAM-tiled generic
 binary contraction with task-specific providers and intra-DPU execution.
@@ -174,17 +184,18 @@ when a recorded workload class makes their expected benefit testable.
 
 ## External Providers And Thesis Contribution
 
-SimplePIM, PID-Comm, ATiM, and SparseP are central components of the target
-architecture, but each is central only to the task class it can serve. They
-are not interchangeable runtimes, and qualification or use of one provider
-does not imply that it handles every contraction or route. The generic SDK
-path remains the explicit control and fallback.
+SimplePIM, PID-Comm, ATiM, and SparseP are central planned components of the
+target architecture, not optional curiosities. Each serves a task-specific
+provider, kernel, or communication boundary; they are not interchangeable
+runtimes, and qualification or use of one provider does not imply that it
+handles every contraction or route. The generic SDK path remains the explicit
+control and fallback until the later provider registry is implemented.
 
 | Item | Provenance | How it is used here |
 | --- | --- | --- |
 | QuEST | External submodule | Full-state CPU and GPU baseline; no thesis ownership claim |
 | Quimb, cotengra, opt_einsum | External Python libraries | Serious CPU TN execution and path planning |
-| UPMEM SDK | External platform/toolchain | Strict simulator route and bounded one-DPU resident physical execution at ETH |
+| UPMEM SDK | External platform/toolchain | Strict simulator route and bounded two-DPU sliced-resident physical M2 route at ETH |
 | SimplePIM | External pinned repository | Task-specific target for management, distribution, and bounded array/map/zip/reduce primitives; not claimed as current executor integration |
 | PID-Comm | External pinned repository | Task-specific target for multi-DPU relocation and collective reduction; not claimed as current executor integration |
 | ATiM | Official artifact to be pinned | Task-specific target for generated/autotuned dense local tensor kernels; qualification required before integration |

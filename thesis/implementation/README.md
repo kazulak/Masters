@@ -10,12 +10,20 @@ GPU baselines, bounded UPMEM SDK-simulator execution, and reproducible evidence.
 It does **not** yet claim UPMEM hardware speedup or a fully general UPMEM tensor
 contraction kernel.
 
-The active physical route is the one-DPU MRAM-resident TaskGraph documented in
-[docs/upmem_hardware_taskgraph_resident_runbook.md](docs/upmem_hardware_taskgraph_resident_runbook.md).
-Dense, legacy generic/persistent, CPU frontier/hybrid, PIM bridge/frontier,
-SimplePIM, and external-library probe artifacts are historical only. Their
-normalized readers, route labels, tables, plots, and snapshot compatibility
-remain available for existing evidence.
+The active physical route is the implemented M2 two-DPU sliced-resident MVP,
+documented in the [M2 ETH runbook](docs/upmem_hardware_sliced_resident_mvp_runbook.md).
+It is a foundation/MVP, not the full M2 architecture: two independent
+contraction-index slices are assigned to exactly two physical DPUs for the
+terminal one-operation real-valued X/H/Z boundary, then Python reconstructs the
+output by summing the two partial results. Implementation is complete; physical
+ETH acceptance is pending. The route makes no speedup, energy, scaling, or
+general TaskGraph claim.
+
+The previous one-DPU MRAM-resident route remains readable as historical context.
+Dense, legacy generic/persistent, CPU frontier/hybrid, PIM bridge/frontier, and
+external-library probe artifacts are historical only. Their normalized readers,
+route labels, tables, plots, and snapshot compatibility remain available for
+existing evidence.
 
 The historical status applies to those old runnable experiments, not to the
 target architecture. SimplePIM, PID-Comm, ATiM, and SparseP are central target
@@ -162,28 +170,17 @@ make build-quest-cpu
 make bench-cpu
 make bench-gpu
 make bench-upmem-sim
-make upmem-hw-taskgraph-resident-plan
-make upmem-hw-taskgraph-resident-report
+make upmem-hw-sliced-resident-plan
+make upmem-hw-sliced-resident
 make planner-report
 make research-plan
 make upmem-provider-plan
 ```
 
-On the ETH hardware host, after the preparation command succeeds:
-
-```bash
-make upmem-hw-taskgraph-resident-plan
-UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-taskgraph-resident
-make upmem-hw-taskgraph-resident-report
-```
-
-The resident TaskGraph hardware command is correctness-only and does not claim
-speedup. Its report compares float32 and int8 via recorded application-visible
-transfer bytes and validation error. See [the resident ETH runbook](docs/upmem_hardware_taskgraph_resident_runbook.md).
-
-Resident hardware acceptance is a manual ETH-host activity outside pytest and
-CI. The active physical command is the resident route above; retired dense and
-legacy hardware runs are readable historical evidence only.
+On the ETH hardware host, use the exact preparation/execution commands and
+acceptance fields in the [M2 ETH runbook](docs/upmem_hardware_sliced_resident_mvp_runbook.md).
+Acceptance is manual and outside pytest/CI. The runbook is the source of truth
+for the normalized evidence workflow; the M2 route has no CPU/simulator retry.
 
 For M1 SimplePIM qualification, prepare locally with
 `make upmem-provider-plan`, then on a clean ETH checkout run
@@ -194,16 +191,16 @@ claim. Artifacts are stored under
 `runs/evidence/provider_qualification/simplepim/`; admission requires the
 passed fields and fingerprints in the [runbook](docs/upmem_provider_qualification_runbook.md).
 PID-Comm is a separate 2021.3.0/AVX512/1024-DPU lane; ATiM's official artifact
-and SparseP source remain unpinned and blocked.
+and SparseP source remain unpinned and blocked, while all four remain central
+planned provider/kernel/communication components for later milestones.
 
 The retired dense and legacy TaskGraph runs remain readable as historical
-evidence, but are no longer runnable through the public CLI or Makefile.
-Physical allocation uses the explicit SDK `backend=hw` contract. The runner
-isolates `UPMEM_PROFILE` and `UPMEM_PROFILE_BASE` from child processes; do not
-set either variable to select hardware. `UPMEM_ALLOW_PHYSICAL_HARDWARE=1`
-remains mandatory, with no fallback. The repaired evidence profile is
-`hardware_mvp_l1_v2`; failed v1 evidence is historical and must not be treated
-as a corrected run.
+evidence, but are no longer runnable through the public CLI or Makefile. The
+M2 route uses the explicit physical SDK contract and requires
+`UPMEM_ALLOW_PHYSICAL_HARDWARE=1`; it rejects simulator selectors and has no
+CPU fallback. Its exact allocation, launch, synchronization, reconstruction,
+validation, and normalized-record acceptance fields are defined by the
+[M2 ETH runbook](docs/upmem_hardware_sliced_resident_mvp_runbook.md).
 
 The active simulator command is strict generic-only UPMEM SDK evidence. It
 records bounded TaskGraph validation and simulator timing, never hardware
@@ -257,8 +254,9 @@ silently change benchmark-source cleanliness.
 Current limitation:
 
 > The current UPMEM evidence is bounded to the documented generic simulator and
-> guarded resident route; fully general distributed, operation-aware, and
-> hardware-calibrated UPMEM TN execution does not yet exist.
+> the M2 two-DPU sliced-resident terminal boundary. Physical acceptance is
+> pending; fully general distributed, operation-aware, and hardware-calibrated
+> UPMEM TN execution does not yet exist.
 
 ## Generated Cleanup
 
