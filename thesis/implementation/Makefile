@@ -20,6 +20,7 @@ UPMEM_SIM_SUITE ?= configs/suites/upmem_sim_evidence.yml
 UPMEM_HW_TASKGRAPH_RESIDENT_SUITE ?= configs/suites/upmem_hardware_taskgraph_resident_path_quantization.yml
 UPMEM_HW_TASKGRAPH_RESIDENT_RUN ?= runs/evidence/upmem_hardware_taskgraph_resident_path_quantization/upmem_hw_taskgraph_resident/latest
 UPMEM_HW_SLICED_RESIDENT_MVP_SUITE ?= configs/suites/upmem_hardware_sliced_resident_mvp.yml
+UPMEM_HW_SLICED_RESIDENT_M2_1_SUITE ?= configs/suites/upmem_hardware_sliced_resident_m2_1.yml
 UPMEM_PROVIDER_CATALOG ?= configs/qualification/upmem_provider_m1.yml
 EVIDENCE_INBOX ?= runs/inbox/eth
 GPU_VERIFY ?= quest-hip
@@ -42,6 +43,8 @@ PUBLIC_TARGETS := \
 	upmem-hw-taskgraph-resident-report \
 	upmem-hw-sliced-resident-plan \
 	upmem-hw-sliced-resident \
+	upmem-hw-m2-1-plan \
+	upmem-hw-m2-1 \
 	upmem-provider-plan \
 	upmem-provider-qualify \
 	evidence-inbox \
@@ -77,6 +80,8 @@ help:
 		'  make upmem-hw-taskgraph-resident-report  Generate a report from explicitly supplied one-DPU physical MRAM-resident diagnostic evidence' \
 		'  make upmem-hw-sliced-resident-plan  Prepare/build the internal/research M2 two-DPU sliced-resident MVP; never allocates a DPU' \
 		'  make upmem-hw-sliced-resident  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; run the internal/research M2 two-DPU sliced-resident MVP' \
+		'  make upmem-hw-m2-1-plan  Prepare/build the M2.1 H-X useful-slice fixture; never allocates a DPU' \
+		'  make upmem-hw-m2-1  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; run the fixed M2.1 H-X two-DPU fixture' \
 		'  make upmem-provider-plan  Prepare a unique M1 provider qualification plan; never builds or allocates hardware' \
 		'  make upmem-provider-qualify PROVIDER=<id>  Execute one selected physical provider qualification' \
 		'  make evidence-inbox     Create the ignored inbox for copied ETH evidence bundles' \
@@ -178,6 +183,13 @@ upmem-hw-sliced-resident-plan:
 upmem-hw-sliced-resident:
 	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1 to execute physical hardware' >&2; exit 2; }
 	$(BENCH) upmem-hardware-sliced-resident-mvp --suite $(UPMEM_HW_SLICED_RESIDENT_MVP_SUITE) --execute
+
+upmem-hw-m2-1-plan:
+	$(BENCH) upmem-hardware-sliced-resident-mvp --suite $(UPMEM_HW_SLICED_RESIDENT_M2_1_SUITE) --prepare-only --build
+
+upmem-hw-m2-1:
+	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1 to execute physical hardware' >&2; exit 2; }
+	$(BENCH) upmem-hardware-sliced-resident-mvp --suite $(UPMEM_HW_SLICED_RESIDENT_M2_1_SUITE) --execute
 
 upmem-hw-taskgraph-resident-report:
 	$(PY_ENV) $(PYTHON) scripts/research_benchmark_pack.py check-resident-evidence --input $(UPMEM_HW_TASKGRAPH_RESIDENT_RUN)

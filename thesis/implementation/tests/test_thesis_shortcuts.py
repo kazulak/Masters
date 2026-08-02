@@ -48,3 +48,27 @@ def test_provider_make_shortcuts_are_exposed() -> None:
     assert qualify.returncode == 0
     assert "--execute" in qualify.stdout
     assert "--provider simplepim" in qualify.stdout
+
+
+def test_m2_1_make_shortcuts_use_canonical_suite() -> None:
+    plan = subprocess.run(
+        ["make", "-n", "upmem-hw-m2-1-plan"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    execute = subprocess.run(
+        ["make", "-n", "upmem-hw-m2-1"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    suite = "configs/suites/upmem_hardware_sliced_resident_m2_1.yml"
+    assert plan.returncode == 0
+    assert suite in plan.stdout
+    assert "--prepare-only --build" in plan.stdout
+    assert execute.returncode == 0
+    assert suite in execute.stdout
+    assert "--execute" in execute.stdout

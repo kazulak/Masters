@@ -71,6 +71,46 @@ each total equal to H2D plus D2H. Failed or unsupported operations retain their
 relative response/manifest paths and available native command, stdout, stderr,
 and failure evidence; do not delete them when reviewing evidence.
 
+## M2.1 useful-slice fixture
+
+The next fixture is kept separate from the historical M2 control fixture. It is
+the canonical:
+
+```text
+configs/suites/upmem_hardware_sliced_resident_m2_1.yml
+configs/circuits/upmem_m2/one_qubit_hx.qasm
+```
+
+It contains exactly one one-qubit circuit with the explicit gate sequence
+`h q[0]; x q[0];`. The expected TaskGraph has three source tensors, two
+contraction tasks, and a dependency from the H task to the X task. The sliced
+edge is the internal H-to-X contraction index. Both CPU slice references are
+nonzero and their sum equals the unsliced CPU result. Each physical package
+must execute both source tasks; an intermediate `result_0` must not be supplied
+as an initial package input.
+
+The ETH commands are:
+
+```text
+make upmem-hw-m2-1-plan
+
+UPMEM_ALLOW_PHYSICAL_HARDWARE=1 \
+make upmem-hw-m2-1
+```
+
+M2.1 uses a graph-wide internal H-to-X slice restriction. Each DPU receives
+the complete two-operation graph and computes its own prefix; the host only
+sums the two final partial outputs. The native host reads a DPU-written
+completion sentinel after every blocking synchronization. A successful M2.1
+row therefore requires two sentinel-verified operations per DPU, nonzero
+per-slice output, matching native and planned transfer totals, and final
+reconstruction validation.
+
+The acceptance remains one warmup and three measured repeats, exactly two
+physical DPUs, one tasklet per DPU, both nonzero per-slice references, full
+two-task execution on both DPUs, successful reconstruction, and no speedup,
+scaling, or energy claim.
+
 ## 2026-08-02 ETH Result
 
 The first physical run completed all three warmups and all nine measured rows

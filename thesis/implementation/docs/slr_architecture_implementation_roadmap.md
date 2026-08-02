@@ -553,6 +553,17 @@ the physical control-path gate but not the useful-work gate. M2.1 must execute a
 bounded case in which both DPU slices contribute nonzero partials and must fix
 the contradictory generic normalized metadata before any parallelism report.
 
+The M2.1 fixture/test half is now defined separately from the historical M2
+control fixture. It uses the canonical `one_qubit_hx.qasm` case, asserts the
+explicit H-then-X dependency, and validates the two nonzero CPU slice references
+and their reconstruction. The native path accepts the complete replicated
+two-operation graph, reads a DPU-written completion sentinel after each
+synchronization, and admits M2.1 only when both DPUs report both operations.
+The strict test `test_m2_1_scientific_validation_failure_controls_record_status`
+protects the requirement that failed scientific validation fails the normalized
+run status, not only a nested validation field. ETH execution is the remaining
+physical acceptance step.
+
 This is the M2 foundation/MVP, not the full M2 architecture. It makes no
 speedup, energy, scaling, or general TaskGraph claim. M2 expansion remains
 explicit: extend the same terminal contraction-index slicing contract to larger
