@@ -52,6 +52,12 @@ from quantum_bench.tn.slicing import (
 
 SLICED_RESIDENT_PLAN_SCHEMA_VERSION = "upmem_sliced_resident_plan_v1"
 SLICED_RESIDENT_EXECUTION_SCHEMA_VERSION = "upmem_sliced_resident_execution_v1"
+SLICED_RESIDENT_OUTER_ROUTE_ID = "upmem_tn_hardware_sliced_resident_two_dpu"
+SLICED_RESIDENT_OUTER_BACKEND_ID = "upmem_sdk_hardware_sliced_resident_two_dpu"
+SLICED_RESIDENT_OUTER_PROFILE_VERSION = "hardware_sliced_resident_two_dpu_m2_v1"
+SLICED_RESIDENT_OUTER_TIMING_SCOPE = (
+    "two_dpu_sliced_resident_host_observed_bringup_v1"
+)
 
 
 @dataclass(frozen=True)
@@ -135,11 +141,13 @@ def build_two_slice_resident_plan(
     *,
     model: SliceAwareTaskGraphModel | None = None,
 ) -> SlicedResidentPlan:
-    """Build exactly two independent resident slice assignments.
+    """Build exactly two resident slices under the bounded M2 contract.
 
-    Only a selected source task with no dependencies is supported.  A
-    dependent selected task would require an upstream resident graph or an
-    explicit transfer contract, neither of which M2 provides.
+    The historical M2 fixture slices a dependency-free terminal task.  M2.1
+    additionally permits one terminal task with a dependent prefix when the
+    model explicitly declares ``dependent_prefix_replicated``.  Each DPU then
+    receives and executes the complete restricted graph; no prefix result is
+    injected from the CPU.
     """
 
     if network.spec != graph.network:
@@ -162,10 +170,24 @@ def build_two_slice_resident_plan(
         or selected_model.reconstruction_step is None
     ):
         raise ValueError("sliced_resident_model_missing_selection")
-    if len(graph.tasks) != 1:
-        raise ValueError("sliced_resident_requires_terminal_single_task_graph")
-    if any(task.dependencies for task in selected_model.slice_tasks):
-        raise ValueError("sliced_resident_unsupported_dependent_selected_task")
+    selected_index = next(
+        (
+            index
+            for index, task in enumerate(graph.tasks)
+            if task.id == selected_model.sliced_task_id
+        ),
+        None,
+    )
+    if selected_index is None:
+        raise ValueError("sliced_resident_model_source_task_mismatch")
+    if selected_index != len(graph.tasks) - 1:
+        if selected_model.slice_model_kind != "dependent_prefix_replicated":
+            raise ValueError("sliced_resident_terminal_single_task_graph")
+        raise ValueError("sliced_resident_selected_task_must_be_terminal")
+    if len(graph.tasks) > 1 and selected_model.slice_model_kind != "dependent_prefix_replicated":
+        raise ValueError("sliced_resident_dependent_prefix_contract_missing")
+    if len(graph.tasks) > 2:
+        raise ValueError("sliced_resident_prefix_task_cap_exceeded")
     _validate_model_binding(graph, selected_model)
 
     slice_tasks = tuple(
@@ -376,12 +398,19 @@ def load_and_reconstruct_two_slice_native_outputs(
     plan: SlicedResidentPlan,
     packages: tuple[SlicedResidentGraphPackage, ...],
     native_response: Mapping[str, Any] | Path,
+    *,
+    reference_partials: Mapping[int, Any] | None = None,
 ) -> tuple[np.ndarray, JsonDict]:
     """Load two verified native float32 partials and reconstruct on the host."""
 
     package_validation = validate_written_two_slice_packages(plan, packages)
     response, response_path = _load_native_response(native_response)
     _validate_native_two_slice_response(response, packages, response_path)
+    requires_slice_references = (
+        plan.model.slice_model_kind == "dependent_prefix_replicated"
+    )
+    if requires_slice_references and reference_partials is None:
+        raise ValueError("sliced_resident_cpu_partial_reference_missing")
 
     partials: dict[int, np.ndarray] = {}
     output_hashes: dict[str, JsonDict] = {}
@@ -406,13 +435,81 @@ def load_and_reconstruct_two_slice_native_outputs(
         if not np.all(np.isfinite(partial)):
             raise ValueError("sliced_resident_native_partial_output_non_finite")
         partials[item.slice_id] = partial
+        if reference_partials is None:
+            reference = None
+        else:
+            try:
+                reference = np.asarray(
+                    reference_partials[item.slice_id], dtype=np.float32
+                )
+            except KeyError as exc:
+                raise ValueError("sliced_resident_cpu_partial_reference_missing") from exc
+        if reference is not None and reference.shape != partial.shape:
+            raise ValueError("sliced_resident_cpu_partial_shape_mismatch")
+        observed_operation_count = entry.get(
+            "observed_operation_completion_count"
+        )
+        if observed_operation_count is None:
+            observed_operation_count = (
+                entry.get("completed_operation_count")
+                or entry.get("operation_count")
+                or 1
+            )
+        completion_confirmed = (
+            entry.get(
+                "operation_completion_confirmed", entry.get("completion_confirmed")
+            )
+            is True
+        )
+        sentinel = entry.get("dpu_completion_sentinel")
+        sentinel_verified = (
+            isinstance(sentinel, Mapping)
+            and sentinel.get("verified") is True
+        )
+        max_abs_error = (
+            None
+            if reference is None
+            else float(np.max(np.abs(partial - reference)))
+        )
         output_hashes[str(item.slice_id)] = {
             "path": str(expected_path.resolve()),
             "sha256": _file_fingerprints(expected_path)["sha256"],
             "fnv1a64": _file_fingerprints(expected_path)["fnv1a64"],
             "bytes": expected_bytes,
+            "raw_bytes": expected_bytes,
+            "transfer_bytes": (expected_bytes + 7) & ~7,
+            "norm": float(np.linalg.norm(partial)),
+            "max_abs": float(np.max(np.abs(partial))) if partial.size else 0.0,
+            "nonzero_element_count": int(
+                np.count_nonzero(np.abs(partial) > 1.0e-7)
+            ),
+            "nonzero_threshold": 1.0e-7,
+            "operation_count": int(item.package.component_operation_count),
+            "planned_operation_count": int(item.package.component_operation_count),
+            "observed_operation_completion_count": int(observed_operation_count),
+            "completion_confirmed": completion_confirmed,
+            "dpu_completion_sentinel": sentinel,
+            "dpu_completion_sentinel_verified": sentinel_verified,
+            "cpu_reference_max_abs_error": max_abs_error,
+            "cpu_reference_l2_error": (
+                None
+                if reference is None
+                else float(np.linalg.norm(partial - reference))
+            ),
         }
-    return reconstruct_host_slice_outputs(plan, partials), {
+    output = reconstruct_host_slice_outputs(plan, partials)
+    useful = all(
+        output_hashes[str(slice_id)]["norm"] > 1.0e-7
+        and output_hashes[str(slice_id)]["nonzero_element_count"] > 0
+        and output_hashes[str(slice_id)]["completion_confirmed"]
+        and (
+            plan.model.slice_model_kind != "dependent_prefix_replicated"
+            or output_hashes[str(slice_id)]["dpu_completion_sentinel_verified"]
+        )
+        and output_hashes[str(slice_id)]["observed_operation_completion_count"] > 0
+        for slice_id in (0, 1)
+    )
+    return output, {
         "package_validation": package_validation,
         "native_response_sha256": _response_fingerprint(
             response, response_path, "sha256"
@@ -421,6 +518,31 @@ def load_and_reconstruct_two_slice_native_outputs(
             response, response_path, "fnv1a64"
         ),
         "partial_outputs": output_hashes,
+        "per_slice_output_validation_status": (
+            "passed"
+            if all(
+                item["cpu_reference_max_abs_error"] is None
+                or item["cpu_reference_max_abs_error"] <= 1.0e-5
+                for item in output_hashes.values()
+            )
+            else "failed"
+        ),
+        "slice_useful_work": {
+            "status": "passed" if useful else "failed",
+            "required": True,
+            "threshold": 1.0e-7,
+            "slice_count": 2,
+            "completed_slice_count": sum(
+                int(
+                    item["completion_confirmed"]
+                    and item["observed_operation_completion_count"] > 0
+                )
+                for item in output_hashes.values()
+            ),
+            "nonzero_slice_count": sum(
+                int(item["norm"] > 1.0e-7) for item in output_hashes.values()
+            ),
+        },
     }
 
 
@@ -472,8 +594,13 @@ def validate_two_slice_resident_plan(
         return False, "assignment_values_mismatch"
     if tuple(item.dpu_id for item in plan.slice_plans) != (0, 1):
         return False, "dpu_assignment_mismatch"
-    if any(item.slice_task.dependencies for item in plan.slice_plans):
-        return False, "dependent_selected_task"
+    selected_source = next(
+        task for task in plan.graph.tasks if task.id == plan.model.sliced_task_id
+    )
+    if any(item.slice_task.dependencies != selected_source.dependencies for item in plan.slice_plans):
+        return False, "slice_task_dependency_mismatch"
+    if selected_source.dependencies and plan.model.slice_model_kind != "dependent_prefix_replicated":
+        return False, "dependent_prefix_contract_missing"
     if plan.reconstruction_step.dependencies != tuple(
         item.slice_task.id for item in plan.slice_plans
     ):
@@ -491,7 +618,9 @@ def _materialize_restricted_slice(
     plan: SlicedResidentPlan,
     slice_plan: SlicedResidentSlicePlan,
 ) -> tuple[TaskGraph, TensorNetworkValue, dict[str, str], dict[str, str]]:
-    source_task = plan.graph.tasks[0]
+    source_task = next(
+        task for task in plan.graph.tasks if task.id == plan.model.sliced_task_id
+    )
     slice_task = slice_plan.slice_task
     tensors = {tensor.spec.id: tensor for tensor in plan.network.tensors}
     restricted_values: dict[str, np.ndarray] = {}
@@ -508,7 +637,8 @@ def _materialize_restricted_slice(
         if tensor is None:
             raise ValueError("sliced_resident_missing_restricted_input")
         if (
-            restriction.tensor_id not in source_task.input_tensor_ids
+            restriction.axis < 0
+            or restriction.axis >= len(tensor.spec.labels)
             or tensor.spec.labels[restriction.axis] != restriction.label
             or restriction.value < 0
             or restriction.value >= tensor.spec.shape[restriction.axis]
@@ -525,8 +655,8 @@ def _materialize_restricted_slice(
         hashes[restriction.tensor_id] = _array_sha256(value)
         fnv_hashes[restriction.tensor_id] = _array_fnv1a64(value)
 
-    if set(restricted_values) != set(source_task.input_tensor_ids):
-        raise ValueError("sliced_resident_restrictions_must_cover_task_inputs")
+    if len(restricted_values) != 2:
+        raise ValueError("sliced_resident_restrictions_must_cover_two_initial_inputs")
 
     network_tensors: list[TensorValue] = []
     network_specs: list[TensorSpec] = []
@@ -541,31 +671,85 @@ def _materialize_restricted_slice(
         output_labels=plan.network.spec.output_labels,
         einsum_expression=plan.network.spec.einsum_expression,
     )
-    input_shapes = tuple(
-        restricted_specs[tensor_id].shape for tensor_id in source_task.input_tensor_ids
-    )
-    restricted_task = replace(
-        source_task,
-        id=slice_task.id,
-        output_tensor_id=slice_task.partial_output_tensor_id,
-        input_shapes=input_shapes,
-        output_shape=source_task.output_shape,
-        gemm_k=1,
-        estimated_flops=2 * source_task.gemm_m * source_task.gemm_n,
-        estimated_bytes=sum(int(np.prod(shape)) for shape in input_shapes)
-        + int(np.prod(source_task.output_shape)),
-    )
+    shape_by_tensor = {tensor.spec.id: tensor.spec.shape for tensor in network_tensors}
+    restricted_tasks = []
+    for task in plan.graph.tasks:
+        task_input_tensor_ids = tuple(
+            slice_task.partial_output_tensor_id
+            if tensor_id == source_task.output_tensor_id
+            else tensor_id
+            for tensor_id in task.input_tensor_ids
+        )
+        task_dependencies = tuple(
+            slice_task.id if dependency == source_task.id else dependency
+            for dependency in task.dependencies
+        )
+        try:
+            input_shapes = tuple(
+                shape_by_tensor[tensor_id] for tensor_id in task_input_tensor_ids
+            )
+        except KeyError as exc:
+            raise ValueError("sliced_resident_restricted_graph_missing_input_shape") from exc
+        output_shape, gemm_m, gemm_k, gemm_n = _restricted_task_geometry(
+            task, input_shapes
+        )
+        output_tensor_id = task.output_tensor_id
+        task_id = task.id
+        if task.id == source_task.id:
+            task_id = slice_task.id
+            output_tensor_id = slice_task.partial_output_tensor_id
+        restricted_task = replace(
+            task,
+            id=task_id,
+            input_tensor_ids=task_input_tensor_ids,
+            dependencies=task_dependencies,
+            output_tensor_id=output_tensor_id,
+            input_shapes=input_shapes,
+            output_shape=output_shape,
+            gemm_m=gemm_m,
+            gemm_k=gemm_k,
+            gemm_n=gemm_n,
+            estimated_flops=2 * gemm_m * gemm_k * gemm_n,
+            estimated_bytes=sum(int(np.prod(shape)) for shape in input_shapes)
+            + int(np.prod(output_shape)),
+        )
+        restricted_tasks.append(restricted_task)
+        shape_by_tensor[output_tensor_id] = output_shape
     graph = with_execution_identity(
         replace(
             plan.graph,
             network=network_spec,
-            tasks=(restricted_task,),
+            tasks=tuple(restricted_tasks),
             circuit_semantics_hash="",
             tensor_network_hash="",
             contraction_plan_hash="",
         )
     )
     return graph, TensorNetworkValue(network_spec, network_tensors), hashes, fnv_hashes
+
+
+def _restricted_task_geometry(
+    task: Any,
+    input_shapes: tuple[tuple[int, ...], tuple[int, ...]],
+) -> tuple[tuple[int, ...], int, int, int]:
+    dimensions: dict[int, int] = {}
+    for labels, shape in zip(
+        (task.left_labels, task.right_labels), input_shapes, strict=True
+    ):
+        if len(labels) != len(shape):
+            raise ValueError("sliced_resident_restricted_input_rank_mismatch")
+        for label, dimension in zip(labels, shape, strict=True):
+            previous = dimensions.setdefault(int(label), int(dimension))
+            if previous != int(dimension):
+                raise ValueError("sliced_resident_restricted_label_dimension_mismatch")
+    try:
+        output_shape = tuple(dimensions[int(label)] for label in task.output_labels)
+        gemm_m = int(np.prod([dimensions[int(label)] for label in task.left_labels if label not in task.contracted_labels], dtype=np.int64))
+        gemm_k = int(np.prod([dimensions[int(label)] for label in task.contracted_labels], dtype=np.int64))
+        gemm_n = int(np.prod([dimensions[int(label)] for label in task.right_labels if label not in task.contracted_labels], dtype=np.int64))
+    except KeyError as exc:
+        raise ValueError("sliced_resident_restricted_task_label_missing") from exc
+    return output_shape, gemm_m, gemm_k, gemm_n
 
 
 def _slice_execution_manifest(
@@ -600,8 +784,27 @@ def _slice_execution_manifest(
         "resident_descriptor_sha256": resident_descriptor_sha256,
         "resident_descriptor_fnv1a64": resident_descriptor_fnv1a64,
         "reconstruction_contract": "python_sum_partials",
+        "source_task_count": plan_source_task_count(item),
+        "expanded_task_count": int(package.component_operation_count),
+        "outer_execution_identity": {
+            "route_id": SLICED_RESIDENT_OUTER_ROUTE_ID,
+            "backend_id": SLICED_RESIDENT_OUTER_BACKEND_ID,
+            "hardware_profile_version": SLICED_RESIDENT_OUTER_PROFILE_VERSION,
+            "timing_scope": SLICED_RESIDENT_OUTER_TIMING_SCOPE,
+        },
+        "nested_package_execution_identity": {
+            "route_id": "upmem_tn_hardware_taskgraph_resident",
+            "backend_id": "upmem_sdk_hardware_taskgraph_resident",
+            "profile_version": "hardware_taskgraph_single_dpu_mram_resident_v1",
+        },
     }
     return manifest
+
+
+def plan_source_task_count(item: SlicedResidentGraphPackage) -> int:
+    """Return the source graph count without duplicating it in package metadata."""
+
+    return int(item.package.graph.path_summary.task_count)
 
 
 def _array_sha256(value: np.ndarray) -> str:
@@ -613,12 +816,12 @@ def _array_fnv1a64(value: np.ndarray) -> str:
 
 
 def _validate_m2_source_inputs(plan: SlicedResidentPlan) -> None:
-    source_task = plan.graph.tasks[0]
     tensors = {tensor.spec.id: tensor for tensor in plan.network.tensors}
-    for tensor_id in source_task.input_tensor_ids:
-        tensor = tensors.get(tensor_id)
-        if tensor is None:
-            raise ValueError("sliced_resident_missing_source_input")
+    initial_tensors = [tensor for tensor in plan.network.tensors if tensor.spec.produced_by is None]
+    if not initial_tensors:
+        raise ValueError("sliced_resident_missing_source_input")
+    for tensor in initial_tensors:
+        tensor_id = tensor.spec.id
         if _has_nonzero_imaginary(tensor.array):
             raise ValueError(
                 f"sliced_resident_m2_nonzero_imaginary_source_input:{tensor_id}"
@@ -696,7 +899,7 @@ def _written_input_fingerprints(
         package.manifest_path, "sliced_resident_manifest_invalid"
     )
     entries = source.get("initial_slots")
-    if not isinstance(entries, list) or len(entries) != 2:
+    if not isinstance(entries, list) or len(entries) != len(package.initial_data):
         raise ValueError("sliced_resident_manifest_restricted_inputs_invalid")
     expected_slots = set(package.initial_data)
     paths: set[str] = set()
@@ -853,8 +1056,6 @@ def _validate_native_two_slice_response(
         or allocation.get("verified") is not True
         or not isinstance(launch, Mapping)
         or launch.get("mode") != "asynchronous"
-        or launch.get("async_launch_count") != 1
-        or launch.get("synchronize_count") != 1
         or launch.get("completed") is not True
         or not isinstance(release, Mapping)
         or release.get("attempted") is not True
@@ -871,6 +1072,52 @@ def _validate_native_two_slice_response(
         by_id[entry["slice_id"]] = entry
     if set(by_id) != {0, 1}:
         raise ValueError("sliced_resident_native_slice_assignments_invalid")
+    operation_count = int(packages[0].package.component_operation_count)
+    if operation_count < 1 or any(
+        int(item.package.component_operation_count) != operation_count
+        for item in packages
+    ):
+        raise ValueError("sliced_resident_native_operation_count_invalid")
+    if (
+        launch.get("async_launch_count") != operation_count
+        or launch.get("synchronize_count") != operation_count
+        or launch.get("operation_count", 1) != operation_count
+    ):
+        raise ValueError("sliced_resident_native_operation_execution_invalid")
+    observed_counts = response.get("observed_operation_completion_counts")
+    if operation_count > 1 and observed_counts != [operation_count, operation_count]:
+        raise ValueError("sliced_resident_native_observed_operation_count_invalid")
+    if operation_count > 1 and response.get("completion_sentinel_read_counts") != [
+        operation_count,
+        operation_count,
+    ]:
+        raise ValueError("sliced_resident_native_completion_sentinel_read_count_invalid")
+    if operation_count > 1 and (
+        response.get("native_execution_sentinel_available") is not True
+        or response.get("completion_evidence")
+        != "dpu_written_completion_sentinel_read_after_each_sync"
+        or response.get("device_completion_confirmed") is not True
+    ):
+        raise ValueError("sliced_resident_native_completion_sentinel_invalid")
+    if operation_count > 1:
+        observed_bytes = tuple(response.get(name) for name in (
+            "actual_h2d_bytes", "actual_d2h_bytes", "actual_transfer_bytes"
+        ))
+        if any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+            for value in observed_bytes
+        ) or observed_bytes[2] != observed_bytes[0] + observed_bytes[1]:
+            raise ValueError("sliced_resident_native_transfer_accounting_invalid")
+        planned_h2d = planned_d2h = 0
+        for item in packages:
+            payload = json.loads(item.package.manifest_path.read_text(encoding="utf-8"))
+            planned_h2d += sum(
+                int(payload.get(key, 0))
+                for key in ("initial_h2d_bytes", "descriptor_h2d_bytes", "control_h2d_bytes")
+            )
+            planned_d2h += int(payload.get("final_d2h_bytes", 0))
+        if observed_bytes != (planned_h2d, planned_d2h, planned_h2d + planned_d2h):
+            raise ValueError("sliced_resident_native_transfer_plan_mismatch")
     for item in packages:
         entry = by_id[item.slice_id]
         package = item.package
@@ -883,14 +1130,17 @@ def _validate_native_two_slice_response(
             or entry.get("allocated") is not True
             or entry.get("release_confirmed") is not True
             or entry.get("package_transferred") is not True
-            or entry.get("input_count") != 2
+            or entry.get("input_count") != len(package.initial_data)
+            or entry.get("operation_count", 1) != operation_count
+            or entry.get("completion_confirmed") is not True
+            or entry.get("operation_completion_confirmed", entry.get("completion_confirmed")) is not True
             or entry.get("inputs_transferred") is not True
             or entry.get("partial_output_elements")
             != int(np.prod(item.slice_plan.slice_task.output_shape))
-            or entry.get("partial_output_bytes") != expected_transfer_bytes
+            or entry.get("partial_output_raw_bytes", entry.get("partial_output_bytes")) != expected_bytes
+            or entry.get("partial_output_transfer_bytes", entry.get("partial_output_bytes")) != expected_transfer_bytes
             or entry.get("partial_output_read") is not True
             or entry.get("partial_output_written") is not True
-            or entry.get("completion_confirmed") is not True
             or not _response_path_matches(
                 entry.get("manifest_path"), package.manifest_path, response_path
             )
@@ -898,6 +1148,23 @@ def _validate_native_two_slice_response(
             != _file_fingerprints(package.manifest_path)["fnv1a64"]
         ):
             raise ValueError("sliced_resident_native_slice_evidence_invalid")
+        if operation_count > 1:
+            sentinel = entry.get("dpu_completion_sentinel")
+            if not isinstance(sentinel, Mapping) or sentinel.get("verified") is not True:
+                raise ValueError("sliced_resident_native_slice_completion_sentinel_invalid")
+            if entry.get("completion_sentinel_read_count") != operation_count:
+                raise ValueError("sliced_resident_native_slice_completion_sentinel_invalid")
+            if (
+                sentinel.get("active_operation_index") != operation_count - 1
+                or sentinel.get("completion_status") != 1
+                or sentinel.get("completed_operation_count") != operation_count
+                or sentinel.get("output_elements_processed")
+                != int(np.prod(item.slice_plan.slice_task.output_shape))
+            ):
+                raise ValueError("sliced_resident_native_slice_completion_sentinel_invalid")
+        observed_count = entry.get("observed_operation_completion_count")
+        if operation_count > 1 and observed_count != operation_count:
+            raise ValueError("sliced_resident_native_observed_slice_count_invalid")
 
 
 def _response_path_matches(
@@ -926,9 +1193,13 @@ def _response_fingerprint(
 
 
 def _validate_model_binding(graph: TaskGraph, model: SliceAwareTaskGraphModel) -> None:
-    if len(graph.tasks) != 1:
-        raise ValueError("sliced_resident_requires_terminal_single_task_graph")
-    source = graph.tasks[0]
+    if not graph.tasks:
+        raise ValueError("sliced_resident_requires_task_graph")
+    source = next(
+        (task for task in graph.tasks if task.id == model.sliced_task_id), None
+    )
+    if source is None or source is not graph.tasks[-1]:
+        raise ValueError("sliced_resident_selected_task_must_be_terminal")
     if model.sliced_task_id != source.id or model.source_task_count != len(graph.tasks):
         raise ValueError("sliced_resident_model_source_task_mismatch")
     if model.sliced_indices != (model.slice_tasks[0].assignment.label,):
@@ -951,6 +1222,8 @@ def _validate_model_binding(graph: TaskGraph, model: SliceAwareTaskGraphModel) -
         ):
             raise ValueError("sliced_resident_assignment_values_must_match_slice_ids")
         if slice_task.dependencies != source.dependencies:
+            if not source.dependencies and slice_task.dependencies:
+                raise ValueError("sliced_resident_dependent_selected_task")
             raise ValueError("sliced_resident_model_dependencies_mismatch")
         if slice_task.input_tensor_ids != source.input_tensor_ids:
             raise ValueError("sliced_resident_model_input_binding_mismatch")
@@ -964,22 +1237,45 @@ def _validate_model_binding(graph: TaskGraph, model: SliceAwareTaskGraphModel) -
             or slice_task.output_labels != source.output_labels
         ):
             raise ValueError("sliced_resident_model_output_binding_mismatch")
-        expected_restrictions = tuple(
-            SliceInputRestriction(
-                tensor_id=tensor_id,
-                label=label,
-                axis=labels.index(label),
-                value=slice_id,
+        tensors = {tensor.id: tensor for tensor in graph.network.tensors}
+        if model.slice_model_kind == "dependent_prefix_replicated":
+            if len(graph.tasks) != 2 or not source.dependencies:
+                raise ValueError("sliced_resident_dependent_prefix_contract_invalid")
+            if len(slice_task.input_restrictions) != 2:
+                raise ValueError("sliced_resident_model_restrictions_mismatch")
+            source_tensor_ids = {tensor.id for tensor in graph.network.tensors}
+            intermediate_tensor_ids = {
+                task.output_tensor_id for task in graph.tasks
+            }
+            for restriction in slice_task.input_restrictions:
+                tensor = tensors.get(restriction.tensor_id)
+                if (
+                    tensor is None
+                    or restriction.tensor_id not in source_tensor_ids
+                    or restriction.tensor_id in intermediate_tensor_ids
+                    or restriction.label != label
+                    or restriction.axis >= len(tensor.labels)
+                    or tensor.labels[restriction.axis] != label
+                    or restriction.value != slice_id
+                ):
+                    raise ValueError("sliced_resident_model_restrictions_mismatch")
+        else:
+            expected_restrictions = tuple(
+                SliceInputRestriction(
+                    tensor_id=tensor_id,
+                    label=label,
+                    axis=labels.index(label),
+                    value=slice_id,
+                )
+                for tensor_id, labels in zip(
+                    source.input_tensor_ids,
+                    (source.left_labels, source.right_labels),
+                    strict=True,
+                )
+                if label in labels
             )
-            for tensor_id, labels in zip(
-                source.input_tensor_ids,
-                (source.left_labels, source.right_labels),
-                strict=True,
-            )
-            if label in labels
-        )
-        if slice_task.input_restrictions != expected_restrictions:
-            raise ValueError("sliced_resident_model_restrictions_mismatch")
+            if slice_task.input_restrictions != expected_restrictions:
+                raise ValueError("sliced_resident_model_restrictions_mismatch")
 
     reconstruction = model.reconstruction_step
     if (

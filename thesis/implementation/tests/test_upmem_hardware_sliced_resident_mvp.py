@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -23,6 +24,7 @@ from quantum_bench.targets.upmem.hardware_taskgraph_sliced_resident import (
 
 ROOT = Path(__file__).resolve().parents[1]
 SUITE = ROOT / "configs" / "suites" / "upmem_hardware_sliced_resident_mvp.yml"
+M2_1_SUITE = ROOT / "configs" / "suites" / "upmem_hardware_sliced_resident_m2_1.yml"
 
 
 def _fake_build(root: Path, session_root: Path, **_: object) -> HardwareSessionBuild:
@@ -88,10 +90,16 @@ def _write_completed_native_response(manifest_paths, response_path: Path) -> dic
                 "inputs_transferred": True,
                 "partial_output_elements": 2,
                 "partial_output_bytes": 8,
+                "partial_output_raw_bytes": 8,
+                "partial_output_transfer_bytes": 8,
                 "partial_output_path": str(output_path),
                 "partial_output_read": True,
                 "partial_output_written": True,
                 "completion_confirmed": True,
+                "operation_count": 1,
+                "completed_operation_count": 1,
+                "observed_operation_completion_count": 1,
+                "operation_completion_confirmed": True,
                 "manifest_path": str(manifest_path),
                 "manifest_fnv1a64": _file_fingerprints(manifest_path)["fnv1a64"],
             }
@@ -101,9 +109,47 @@ def _write_completed_native_response(manifest_paths, response_path: Path) -> dic
         "manifest_kind": "resident_two_slice_response",
         "status": "completed",
         "failure_stage": None,
+        "backend_id": adapter.BACKEND_ID,
+        "target_requested": "hardware",
+        "target_observed": "hardware",
+        "hardware_profile_version": adapter.PROFILE_VERSION,
         "cpu_fallback_used": False,
         "topology": "two_dpu_allocation",
         "hardware_execution": True,
+        "hardware_kernel_executed": True,
+        "hardware_functionality_evidence": True,
+        "simulator_kernel_executed": False,
+        "tasklets_per_dpu": 1,
+        "operation_count": 1,
+        "async_launch_count": 1,
+        "synchronize_count": 1,
+        "observed_operation_completion_counts": [1, 1],
+        "device_launch_mode": "asynchronous_dpu_set",
+        "host_completion_mode": "blocking_sync",
+        "completion_evidence": "host_observed_dpu_set_sync_and_final_output_read",
+        "timing_scope": "host_observed_sdk_stage_boundaries",
+        "timing_is_bringup_only": True,
+        "timing": {
+            "clock": "clock_monotonic",
+            "sync_wait_is_not_pure_kernel_time": True,
+            "kernel_time_s": None,
+            **{
+                name: 0.001
+                for name in (
+                    "package_parse_time_s",
+                    "allocation_time_s",
+                    "binary_load_time_s",
+                    "initial_h2d_time_s",
+                    "operation_control_h2d_time_s",
+                    "launch_enqueue_time_s",
+                    "sync_wait_time_s",
+                    "final_d2h_time_s",
+                    "output_write_time_s",
+                    "release_time_s",
+                    "total_route_time_s",
+                )
+            },
+        },
         "native_reconstruction_performed": False,
         "reconstruction_contract": "python_sum_partials",
         "allocation": {
@@ -114,6 +160,9 @@ def _write_completed_native_response(manifest_paths, response_path: Path) -> dic
         },
         "launch": {
             "mode": "asynchronous",
+            "device_launch_mode": "asynchronous_dpu_set",
+            "host_completion_mode": "blocking_sync",
+            "operation_count": 1,
             "async_launch_count": 1,
             "synchronize_count": 1,
             "completed": True,
@@ -278,8 +327,340 @@ def test_runner_rejects_copied_or_noncanonical_suite_paths(tmp_path) -> None:
     copied = tmp_path / SUITE.name
     copied.write_text(SUITE.read_text(encoding="utf-8"), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="canonical"):
+    with pytest.raises(ValueError, match="canonical|committed"):
         mvp.load_m2_suite(copied)
+
+
+def test_m2_1_fixture_is_canonical_and_requires_the_new_contract() -> None:
+    loaded = mvp.load_m2_suite(M2_1_SUITE)
+
+    assert loaded.fixture_version == "upmem_hardware_sliced_resident_m2_1_v1"
+    assert loaded.fixture_scope == (
+        "two_operation_h_then_x_full_graph_replicated_prefix"
+    )
+    assert loaded.require_nonzero_slice_partials is True
+    assert loaded.suite["warmups"] == 1
+    assert loaded.suite["repeats"] == 3
+    assert [case["case_id"] for case in loaded.suite["cases"]] == [
+        "one_qubit_hx_m2_1"
+    ]
+
+
+def test_m2_1_core_integration_materializes_graph_wide_slices() -> None:
+    loaded = mvp.load_m2_suite(M2_1_SUITE)
+    prepared = mvp._prepare_case(ROOT, loaded.suite["cases"][0], loaded)
+
+    assert len(prepared["graph"].tasks) == 2
+    assert set(prepared["reference_partials"]) == {0, 1}
+    assert all(
+        np.linalg.norm(partial) > mvp.SLICE_NONZERO_THRESHOLD
+        for partial in prepared["reference_partials"].values()
+    )
+    np.testing.assert_allclose(
+        sum(prepared["reference_partials"].values()),
+        prepared["reference"],
+        atol=1.0e-6,
+        rtol=1.0e-6,
+    )
+
+
+def test_m2_1_record_contract_preserves_useful_slice_and_claim_metadata(tmp_path) -> None:
+    loaded = mvp.load_m2_suite(M2_1_SUITE)
+    case = loaded.suite["cases"][0]
+    circuit = mvp.load_circuit(case, ROOT)
+    network = mvp.build_tensor_network(circuit)
+    graph = mvp.with_execution_identity(
+        mvp.plan_task_graph_with_config(network, loaded.suite["planner"])
+    )
+    prepared = {
+        "circuit": circuit,
+        "graph": graph,
+        "fixture_version": loaded.fixture_version,
+        "fixture_scope": loaded.fixture_scope,
+        "source_task_count": 2,
+        "tensor_count": 3,
+        "selected_task_id": graph.tasks[-1].id,
+        "qasm_source_sha256": "qasm-hash",
+    }
+    manifest_paths = []
+    packages = []
+    for slice_id in (0, 1):
+        manifest_path = tmp_path / f"slice_{slice_id}.json"
+        write_json(
+            manifest_path,
+            {
+                "initial_h2d_bytes": 16,
+                "descriptor_h2d_bytes": 16,
+                "control_h2d_bytes": 0,
+                "final_d2h_bytes": 8,
+            },
+        )
+        manifest_paths.append(manifest_path)
+        packages.append(
+            SimpleNamespace(
+                slice_id=slice_id,
+                package=SimpleNamespace(
+                    descriptor_sha256=f"descriptor-{slice_id}",
+                    manifest_path=manifest_path,
+                ),
+            )
+        )
+    artifacts = {
+        "packages": packages,
+        "manifest_paths": tuple(manifest_paths),
+        "validation": {
+            "source_hashes": {
+                "circuit_semantics_hash": "circuit-hash",
+                "tensor_network_hash": "network-hash",
+                "contraction_plan_hash": "plan-hash",
+            },
+            "validated": True,
+        },
+    }
+    session = SimpleNamespace(
+        response={
+                "hardware_execution": True,
+                "cpu_fallback_used": False,
+                "operation_count": 2,
+                "observed_operation_completion_counts": [2, 2],
+                "completion_sentinel_read_counts": [2, 2],
+                "native_execution_sentinel_available": True,
+                "completion_evidence": "dpu_written_completion_sentinel_read_after_each_sync",
+                "device_completion_confirmed": True,
+                "actual_h2d_bytes": 64,
+                "actual_d2h_bytes": 16,
+                "actual_transfer_bytes": 80,
+                "allocation": {"allocated_dpus": 2, "verified": True},
+                "launch": {
+                    "completed": True,
+                    "operation_count": 2,
+                    "async_launch_count": 2,
+                    "synchronize_count": 2,
+                },
+                "release": {"confirmed": True},
+                "slices": [
+                    {
+                        "completion_confirmed": True,
+                        "dpu_completion_sentinel": {
+                            "verified": True,
+                            "active_operation_index": 1,
+                            "completion_status": 1,
+                            "completed_operation_count": 2,
+                            "output_elements_processed": 2,
+                        },
+                        "completion_sentinel_read_count": 2,
+                    },
+                    {
+                        "completion_confirmed": True,
+                        "dpu_completion_sentinel": {
+                            "verified": True,
+                            "active_operation_index": 1,
+                            "completion_status": 1,
+                            "completed_operation_count": 2,
+                            "output_elements_processed": 2,
+                        },
+                        "completion_sentinel_read_count": 2,
+                    },
+                ],
+            "timing": {"clock": "monotonic", "status": "aggregate"},
+        },
+        response_path=tmp_path / "response.json",
+        command=("host_two_dpu",),
+        stdout_snippet="",
+        stderr_snippet="",
+        failure_stage=None,
+        timed_out=False,
+        cleanup_confirmed=True,
+        process_time_s=0.1,
+    )
+    native = SimpleNamespace(
+        source_tree_hash="source-tree",
+        host_binary_hash="host-binary",
+        dpu_binary_hash="dpu-binary",
+        build_time_s=0.1,
+    )
+    output = np.asarray(case["expected_output"], dtype=np.float32)
+    record = mvp._record(
+        loaded,
+        case,
+        prepared,
+        "measured",
+        0,
+        run_dir=tmp_path,
+        status="completed",
+        failure_stage=None,
+        reason=None,
+        native=native,
+        session=session,
+        artifacts=artifacts,
+        reconstruction={
+            "partial_outputs": {
+                "0": [0.0, 0.70710678],
+                "1": [0.70710678, 0.0],
+            },
+            "per_slice_output_validation_status": "passed",
+            "slice_useful_work": {"status": "passed"},
+        },
+        output=output,
+        cpu_ok=True,
+        expected_ok=True,
+        reconstruction_time_s=0.01,
+        total_time_s=0.2,
+    )
+
+    assert record["execution_scope"] == (
+        "physical_two_dpu_two_slice_full_replicated_prefix_taskgraph"
+    )
+    assert record["gate_count"] == 2
+    assert record["task_count"] == 2
+    assert record["source_task_count"] == 2
+    assert record["expanded_task_count"] == 4
+    assert record["executed_task_count"] == 4
+    assert record["slice_model_task_count"] == 2
+    assert record["slice_model_executed_task_count"] == 4
+    assert record["slice_parallel_execution"] is False
+    assert record["slice_overlap_measured"] is False
+    assert record["device_launch_mode"] == "asynchronous_dpu_set"
+    assert record["host_completion_mode"] == "blocking_sync"
+    assert record["validation_status"] == "passed"
+    assert record["hardware_functionality_evidence"] is True
+    assert record["hardware_speedup_applicable"] is False
+    assert record["energy_measurement_available"] is False
+
+    # A self-consistent native byte total is still inadmissible when it does
+    # not match the planned manifest scope.
+    session.response["actual_h2d_bytes"] = 65
+    session.response["actual_transfer_bytes"] = 81
+    mismatched = mvp._record(
+        loaded,
+        case,
+        prepared,
+        "measured",
+        0,
+        run_dir=tmp_path,
+        status="completed",
+        failure_stage=None,
+        reason=None,
+        native=native,
+        session=session,
+        artifacts=artifacts,
+        reconstruction={
+            "partial_outputs": {
+                "0": [0.0, 0.70710678],
+                "1": [0.70710678, 0.0],
+            },
+            "per_slice_output_validation_status": "passed",
+            "slice_useful_work": {"status": "passed"},
+        },
+        output=output,
+        cpu_ok=True,
+        expected_ok=True,
+        reconstruction_time_s=0.01,
+        total_time_s=0.2,
+    )
+    assert mismatched["status"] == "failed"
+    assert mismatched["transfer_accounting_status"] == "failed"
+    assert mismatched["transfer_accounting_invariant"] is True
+    assert mismatched["transfer_matches_manifest_plan"] is False
+    assert mismatched["validation_status"] == "failed"
+
+
+def test_m2_1_scientific_validation_failure_controls_record_status(tmp_path) -> None:
+    loaded = mvp.load_m2_suite(M2_1_SUITE)
+    case = loaded.suite["cases"][0]
+    circuit = mvp.load_circuit(case, ROOT)
+    network = mvp.build_tensor_network(circuit)
+    graph = mvp.with_execution_identity(
+        mvp.plan_task_graph_with_config(network, loaded.suite["planner"])
+    )
+    prepared = {
+        "circuit": circuit,
+        "graph": graph,
+        "fixture_version": loaded.fixture_version,
+        "fixture_scope": loaded.fixture_scope,
+        "source_task_count": 2,
+        "tensor_count": 3,
+        "selected_task_id": graph.tasks[-1].id,
+        "qasm_source_sha256": "qasm-hash",
+    }
+    manifest_paths = []
+    packages = []
+    for slice_id in (0, 1):
+        manifest_path = tmp_path / f"invalid_slice_{slice_id}.json"
+        write_json(
+            manifest_path,
+            {
+                "initial_h2d_bytes": 16,
+                "descriptor_h2d_bytes": 16,
+                "control_h2d_bytes": 0,
+                "final_d2h_bytes": 8,
+            },
+        )
+        manifest_paths.append(manifest_path)
+        packages.append(
+            SimpleNamespace(
+                slice_id=slice_id,
+                package=SimpleNamespace(
+                    descriptor_sha256=f"descriptor-{slice_id}",
+                    manifest_path=manifest_path,
+                ),
+            )
+        )
+    session = SimpleNamespace(
+        response={
+            "hardware_execution": True,
+            "cpu_fallback_used": False,
+            "allocation": {"allocated_dpus": 2, "verified": True},
+            "launch": {"completed": True, "synchronize_count": 1},
+            "release": {"confirmed": True},
+        },
+        response_path=tmp_path / "invalid_response.json",
+        command=("host_two_dpu",),
+        stdout_snippet="",
+        stderr_snippet="",
+        failure_stage=None,
+        timed_out=False,
+        cleanup_confirmed=True,
+        process_time_s=0.1,
+    )
+    native = SimpleNamespace(
+        source_tree_hash="source-tree",
+        host_binary_hash="host-binary",
+        dpu_binary_hash="dpu-binary",
+        build_time_s=0.1,
+    )
+    record = mvp._record(
+        loaded,
+        case,
+        prepared,
+        "measured",
+        0,
+        run_dir=tmp_path,
+        status="completed",
+        failure_stage=None,
+        reason=None,
+        native=native,
+        session=session,
+        artifacts={
+            "packages": packages,
+            "manifest_paths": tuple(manifest_paths),
+            "validation": {"source_hashes": {}},
+        },
+        reconstruction={
+            "partial_outputs": {"0": [0.0, 0.0], "1": [0.0, 0.0]},
+            "per_slice_output_validation_status": "failed",
+            "slice_useful_work": {"status": "failed"},
+        },
+        output=np.asarray(case["expected_output"], dtype=np.float32),
+        cpu_ok=True,
+        expected_ok=True,
+        reconstruction_time_s=0.01,
+        total_time_s=0.2,
+    )
+
+    assert record["scientific_validation_status"] == "failed"
+    assert record["validation_status"] == "failed"
+    assert record["status"] == "failed"
 
 
 def test_runner_uses_real_adapter_session_path_and_command_contract(

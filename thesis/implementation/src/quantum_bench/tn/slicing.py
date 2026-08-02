@@ -127,10 +127,17 @@ class SliceAwareTaskGraphModel:
         }
 
 
-def build_slice_aware_taskgraph_model(graph: TaskGraph, *, max_slice_count: int = 4) -> SliceAwareTaskGraphModel:
+def build_slice_aware_taskgraph_model(
+    graph: TaskGraph,
+    *,
+    max_slice_count: int = 4,
+    sliced_task_id: str | None = None,
+) -> SliceAwareTaskGraphModel:
     if max_slice_count < 2:
         raise ValueError("max_slice_count must be >= 2")
-    selected = _select_sliced_task(graph, max_slice_count=max_slice_count)
+    selected = _select_sliced_task(
+        graph, max_slice_count=max_slice_count, sliced_task_id=sliced_task_id
+    )
     if selected is None:
         return _unavailable_model(graph, _unsupported_reason(graph, max_slice_count=max_slice_count))
     task, label, dim = selected
@@ -194,12 +201,23 @@ def validate_slice_aware_taskgraph_model(model: SliceAwareTaskGraphModel) -> tup
     return True, None
 
 
-def _select_sliced_task(graph: TaskGraph, *, max_slice_count: int) -> tuple[ContractionTask, int, int] | None:
+def _select_sliced_task(
+    graph: TaskGraph,
+    *,
+    max_slice_count: int,
+    sliced_task_id: str | None = None,
+) -> tuple[ContractionTask, int, int] | None:
     for task in graph.tasks:
+        if sliced_task_id is not None and task.id != sliced_task_id:
+            continue
         for label in task.contracted_labels:
             dim = _task_label_dim(task, label)
             if 1 < dim <= max_slice_count:
                 return task, label, dim
+    if sliced_task_id is not None and not any(
+        task.id == sliced_task_id for task in graph.tasks
+    ):
+        raise ValueError(f"Unknown sliced task id: {sliced_task_id}")
     return None
 
 
