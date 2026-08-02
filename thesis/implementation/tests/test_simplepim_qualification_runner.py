@@ -63,6 +63,16 @@ def _host() -> dict:
         "failure_stage": None,
         "reason": None,
     }
+
+
+def _provide_dpu_compiler(tmp_path: Path, monkeypatch) -> None:
+    """Provide deterministic compiler provenance for hardware-only mocks."""
+    toolchain = tmp_path / "toolchain"
+    toolchain.mkdir()
+    compiler = toolchain / runner.DPU_CC
+    compiler.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    compiler.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{toolchain}{os.pathsep}{os.environ.get('PATH', '')}")
 def _fake_commands(command, cwd, env, timeout_seconds):
     assert env["DPU_BACKEND"] == "hw"
     if command[0] == "make":
@@ -194,6 +204,7 @@ def test_independent_validation_checks_both_inputs_and_output(tmp_path: Path) ->
     assert runner._validate_artifacts(tmp_path / "a", tmp_path / "b", tmp_path / "result")["passed"] is False
 def test_valid_passed_payload_proves_physical_result(tmp_path: Path, monkeypatch, capsys) -> None:
     _physical(monkeypatch)
+    _provide_dpu_compiler(tmp_path, monkeypatch)
     monkeypatch.setattr(runner, "_hardware_device_preflight", _preflight)
     monkeypatch.setattr(runner, "_run_command", _fake_commands)
     assert runner.main(["--execute", "--workdir", str(tmp_path)]) == 0
@@ -218,6 +229,23 @@ def test_valid_passed_payload_proves_physical_result(tmp_path: Path, monkeypatch
     assert parse_runner_result(false_device, provider, expected_host_cc=resolve_host_cc(), expected_preflight=preflight).status == "failed"
     with pytest.raises(ValueError, match="lacks required physical qualification evidence"):
         runner._validate_output_schema(false_device)
+
+
+def test_missing_dpu_compiler_evidence_fails_closed(tmp_path: Path) -> None:
+    payload = runner._base_payload(runner.qualification_plan(tmp_path), "passed")
+    payload["reason"] = None
+    payload["effective_compilers"]["dpu_cc"] = {
+        "command": runner.DPU_CC,
+        "available": False,
+        "path": None,
+        "sha256": None,
+    }
+    provider = load_provider_catalog(ROOT / "configs/qualification/upmem_provider_m1.yml").get("simplepim")
+    result = parse_runner_result(payload, provider, expected_host_cc=resolve_host_cc(), expected_preflight=payload)
+    assert result.status == "failed"
+    assert any("compiler" in error for error in result.contract_errors)
+    with pytest.raises(ValueError, match="lacks required physical qualification evidence"):
+        runner._validate_output_schema(payload)
 def test_minimal_passed_payload_is_rejected(tmp_path: Path) -> None:
     payload = runner._base_payload(runner.qualification_plan(tmp_path), "passed")
     payload["reason"] = None
