@@ -120,6 +120,18 @@ def test_two_dpu_native_path_uses_two_distinct_contraction_packages() -> None:
     assert "dpu_broadcast_to" not in host
     assert "dpu_launch(set, DPU_ASYNCHRONOUS)" in host
     assert host.count("dpu_sync(set)") == 1
+    assert "for (uint32_t operation_index = 0; operation_index < operation_count; operation_index++)" in host
+    assert "completed_operation_count" in host
+    assert "observed_operation_completion_count" in host
+    assert "observed_operation_completion_counts" in host
+    assert "operation_completion_confirmed" in host
+    assert "device_launch_mode" in host
+    assert "host_completion_mode" in host
+    assert "dpu_written_completion_sentinel_read_after_each_sync" in host
+    assert "RESIDENT_COMPLETION" in host
+    assert "completion_sentinel_read_count" in host
+    assert "clock_gettime(CLOCK_MONOTONIC" in host
+    assert "sync_wait_is_not_pure_kernel_time" in host
     assert "python_sum_partials" in host
     assert "native_reconstruction_performed" in host
     assert "two_dpu_allocation" in host
@@ -139,6 +151,7 @@ def test_two_dpu_native_path_uses_two_distinct_contraction_packages() -> None:
     assert "requested_dpus" in host
     assert "asynchronous" in host
     assert "partial_output_transfer_bytes" in host
+    assert "partial_output_raw_bytes" in host
     assert "completion_confirmed" in host
     assert "hardware_execution" in host
     assert "dpu_alloc(RESIDENT_TWO_DPU_COUNT" in host

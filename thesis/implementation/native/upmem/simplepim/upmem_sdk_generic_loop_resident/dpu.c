@@ -18,6 +18,7 @@
 __host resident_slot_descriptor_t RESIDENT_SLOT_DESCRIPTORS[RESIDENT_MAX_SLOT_DESCRIPTORS];
 __host resident_control_t RESIDENT_CONTROL;
 __host uint64_t RESIDENT_ACTIVE_OPERATION;
+__host resident_completion_t RESIDENT_COMPLETION;
 __mram_noinit resident_operation_t RESIDENT_OPERATIONS[RESIDENT_MAX_COMPONENT_OPS];
 __mram_noinit uint8_t RESIDENT_SLOT_POOL[RESIDENT_MRAM_POOL_BYTES];
 
@@ -127,7 +128,19 @@ static void resident_decode_index(
     }
 }
 
-static void resident_contract(const resident_operation_t *operation) {
+static uint64_t resident_checksum_update(uint64_t checksum, float value) {
+    union {
+        float value;
+        uint32_t bits;
+    } encoded = {value};
+    for (uint32_t shift = 0; shift < sizeof(encoded.bits) * 8u; shift += 8u) {
+        checksum ^= (uint8_t)(encoded.bits >> shift);
+        checksum *= 1099511628211ULL;
+    }
+    return checksum;
+}
+
+static void resident_contract(const resident_operation_t *operation, uint64_t *checksum) {
     const upmem_generic_args_t *args = &operation->args;
     uint32_t output_coords[UPMEM_GENERIC_MAX_RANK] = {0};
     const int requantize = operation->mode == 1u;
@@ -174,6 +187,7 @@ static void resident_contract(const resident_operation_t *operation) {
             }
             resident_output_tile[tile_index] = requantize
                 ? (float)total_i32 * left_scale * right_scale : total_f32;
+            *checksum = resident_checksum_update(*checksum, resident_output_tile[tile_index]);
         }
         if ((tile_elems & 1u) != 0u) resident_output_tile[tile_elems] = 0.0f;
         const uint32_t tile_bytes = resident_align8(tile_elems * (uint32_t)sizeof(float));
@@ -188,7 +202,7 @@ static void resident_contract(const resident_operation_t *operation) {
     }
 }
 
-static void resident_complex_combine(const resident_operation_t *operation) {
+static void resident_complex_combine(const resident_operation_t *operation, uint64_t *checksum) {
     for (uint32_t tile_start = 0; tile_start < operation->output_elements; tile_start += RESIDENT_OUTPUT_TILE_ELEMS) {
         const uint32_t tile_elems = (operation->output_elements - tile_start) < RESIDENT_OUTPUT_TILE_ELEMS
             ? operation->output_elements - tile_start : RESIDENT_OUTPUT_TILE_ELEMS;
@@ -196,6 +210,7 @@ static void resident_complex_combine(const resident_operation_t *operation) {
             const uint32_t element = tile_start + index;
             resident_output_tile[index] = resident_read_f32(operation->slot_a, element)
                 - resident_read_f32(operation->slot_b, element);
+            *checksum = resident_checksum_update(*checksum, resident_output_tile[index]);
         }
         if ((tile_elems & 1u) != 0u) resident_output_tile[tile_elems] = 0.0f;
         const uint32_t tile_bytes = resident_align8(tile_elems * (uint32_t)sizeof(float));
@@ -207,6 +222,7 @@ static void resident_complex_combine(const resident_operation_t *operation) {
             const uint32_t element = tile_start + index;
             resident_output_tile[index] = resident_read_f32(operation->slot_c, element)
                 + resident_read_f32(operation->slot_d, element);
+            *checksum = resident_checksum_update(*checksum, resident_output_tile[index]);
         }
         if ((tile_elems & 1u) != 0u) resident_output_tile[tile_elems] = 0.0f;
         output = resident_slot(operation->slot_out_imag);
@@ -218,20 +234,32 @@ static void resident_complex_combine(const resident_operation_t *operation) {
 
 int main(void) {
     if (NR_TASKLETS != 1) return 2;
+    RESIDENT_COMPLETION.magic = RESIDENT_COMPLETION_MAGIC;
+    RESIDENT_COMPLETION.version = RESIDENT_COMPLETION_VERSION;
+    RESIDENT_COMPLETION.active_operation_index = (uint32_t)RESIDENT_ACTIVE_OPERATION;
+    RESIDENT_COMPLETION.completion_status = RESIDENT_COMPLETION_PENDING;
+    RESIDENT_COMPLETION.completed_operation_count = 0u;
+    RESIDENT_COMPLETION.output_elements_processed = 0u;
+    RESIDENT_COMPLETION.output_checksum_fnv1a64 = 14695981039346656037ULL;
     if (RESIDENT_ACTIVE_OPERATION >= RESIDENT_CONTROL.operation_count) return 3;
     resident_operation_t operation;
+    uint64_t checksum = 14695981039346656037ULL;
     mram_read(
         RESIDENT_OPERATIONS + RESIDENT_ACTIVE_OPERATION,
         &operation,
         sizeof(operation)
     );
     if (operation.kind == RESIDENT_OPERATION_CONTRACT) {
-        resident_contract(&operation);
-        return 0;
+        resident_contract(&operation, &checksum);
+    } else if (operation.kind == RESIDENT_OPERATION_COMPLEX_COMBINE) {
+        resident_complex_combine(&operation, &checksum);
+    } else {
+        return 4;
     }
-    if (operation.kind == RESIDENT_OPERATION_COMPLEX_COMBINE) {
-        resident_complex_combine(&operation);
-        return 0;
-    }
-    return 4;
+    RESIDENT_COMPLETION.active_operation_index = (uint32_t)RESIDENT_ACTIVE_OPERATION;
+    RESIDENT_COMPLETION.completion_status = RESIDENT_COMPLETION_COMPLETED;
+    RESIDENT_COMPLETION.completed_operation_count = (uint32_t)RESIDENT_ACTIVE_OPERATION + 1u;
+    RESIDENT_COMPLETION.output_elements_processed = operation.output_elements;
+    RESIDENT_COMPLETION.output_checksum_fnv1a64 = checksum;
+    return 0;
 }

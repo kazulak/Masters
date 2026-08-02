@@ -32,15 +32,107 @@ def _profile_mapping(**updates: object) -> dict[str, object]:
     return profile
 
 
-def _completed_response() -> dict[str, object]:
+def _completed_response(
+    operation_count: int = 2,
+    completed_operation_counts: tuple[int, int] | None = None,
+) -> dict[str, object]:
+    completed_operation_counts = completed_operation_counts or (
+        operation_count,
+        operation_count,
+    )
+    slices = [
+        {
+            "slice_id": slice_id,
+            "dpu_index": slice_id,
+            "allocated": True,
+            "release_confirmed": True,
+            "package_transferred": True,
+            "input_count": 3,
+            "inputs_transferred": True,
+            "operation_count": operation_count,
+            "completed_operation_count": completed_operation_counts[slice_id],
+            "observed_operation_completion_count": completed_operation_counts[slice_id],
+            "operation_completion_confirmed": completed_operation_counts[slice_id]
+            == operation_count,
+            "completion_sentinel_read_count": operation_count,
+            "dpu_completion_sentinel": {
+                "verified": True,
+                "active_operation_index": operation_count - 1,
+                "completion_status": 1,
+                "completed_operation_count": operation_count,
+                "output_elements_processed": 2,
+            },
+            "partial_output_elements": 2,
+            "partial_output_bytes": 8,
+            "partial_output_raw_bytes": 8,
+            "partial_output_transfer_bytes": 8,
+            "partial_output_read": True,
+            "partial_output_written": True,
+            "completion_confirmed": True,
+        }
+        for slice_id in range(2)
+    ]
     return {
+        "backend_id": session.BACKEND_ID,
+        "target_requested": "hardware",
+        "target_observed": "hardware",
+        "hardware_profile_version": session.PROFILE_VERSION,
         "status": "completed",
         "failure_stage": None,
         "hardware_execution": True,
+        "hardware_kernel_executed": True,
+        "hardware_functionality_evidence": True,
         "cpu_fallback_used": False,
+        "simulator_kernel_executed": False,
+        "tasklets_per_dpu": 1,
+        "operation_count": operation_count,
+        "async_launch_count": operation_count,
+        "synchronize_count": operation_count,
+        "observed_operation_completion_counts": list(completed_operation_counts),
+        "completion_sentinel_read_counts": [operation_count, operation_count],
+        "device_launch_mode": "asynchronous_dpu_set",
+        "host_completion_mode": "blocking_sync",
+        "completion_evidence": "dpu_written_completion_sentinel_read_after_each_sync",
+        "native_execution_sentinel_available": True,
+        "device_completion_confirmed": True,
+        "actual_h2d_bytes": 100,
+        "actual_d2h_bytes": 16,
+        "actual_transfer_bytes": 116,
+        "timing_scope": "host_observed_sdk_stage_boundaries",
+        "timing_is_bringup_only": True,
+        "timing": {
+            "clock": "clock_monotonic",
+            "sync_wait_is_not_pure_kernel_time": True,
+            "kernel_time_s": None,
+            **{
+                name: 0.001
+                for name in (
+                    "package_parse_time_s",
+                    "allocation_time_s",
+                    "binary_load_time_s",
+                    "initial_h2d_time_s",
+                    "operation_control_h2d_time_s",
+                    "launch_enqueue_time_s",
+                    "sync_wait_time_s",
+                    "final_d2h_time_s",
+                    "output_write_time_s",
+                    "release_time_s",
+                    "total_route_time_s",
+                )
+            },
+        },
         "allocation": {"requested_dpus": 2, "allocated_dpus": 2, "verified": True},
-        "launch": {"mode": "asynchronous", "completed": True},
-        "release": {"confirmed": True},
+        "launch": {
+            "mode": "asynchronous",
+            "device_launch_mode": "asynchronous_dpu_set",
+            "host_completion_mode": "blocking_sync",
+            "operation_count": operation_count,
+            "async_launch_count": operation_count,
+            "synchronize_count": operation_count,
+            "completed": True,
+        },
+        "release": {"confirmed": True, "device_completion_confirmed": True},
+        "slices": slices,
     }
 
 
@@ -257,6 +349,96 @@ def test_execute_constructs_host_command_and_admits_complete_response(
             },
         )
     ]
+
+
+def test_execute_admits_existing_one_operation_response(
+    tmp_path, monkeypatch
+) -> None:
+    build = _build(tmp_path, monkeypatch)
+    first, second, response = _paths(build)
+    _install_host(monkeypatch, response, _completed_response(operation_count=1))
+
+    result = session.execute_sliced_resident_hardware_session(
+        build,
+        manifest_paths=(first, second),
+        response_path=response,
+        profile=_profile_mapping(),
+        environment={"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1"},
+    )
+
+    assert result.status == "completed"
+    assert result.response["operation_count"] == 1
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    (
+        lambda response: response["slices"][0].update(
+            completed_operation_count=1, operation_completion_confirmed=False
+        ),
+        lambda response: response["observed_operation_completion_counts"].__setitem__(
+            1, 1
+        ),
+        lambda response: response["launch"].update(async_launch_count=1),
+    ),
+)
+def test_execute_rejects_planned_counts_without_observed_two_operation_completion(
+    tmp_path, monkeypatch, mutator
+) -> None:
+    build = _build(tmp_path, monkeypatch)
+    first, second, response = _paths(build)
+    payload = _completed_response()
+    mutator(payload)
+    _install_host(monkeypatch, response, payload)
+
+    result = session.execute_sliced_resident_hardware_session(
+        build,
+        manifest_paths=(first, second),
+        response_path=response,
+        profile=_profile_mapping(),
+        environment={"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1"},
+    )
+
+    assert result.status == "failed"
+    assert result.failure_stage == "response_evidence_invalid"
+
+
+def test_execute_rejects_missing_dpu_completion_sentinel(tmp_path, monkeypatch) -> None:
+    build = _build(tmp_path, monkeypatch)
+    first, second, response = _paths(build)
+    payload = _completed_response()
+    payload["slices"][0].pop("dpu_completion_sentinel")
+    _install_host(monkeypatch, response, payload)
+
+    result = session.execute_sliced_resident_hardware_session(
+        build,
+        manifest_paths=(first, second),
+        response_path=response,
+        profile=_profile_mapping(),
+        environment={"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1"},
+    )
+
+    assert result.status == "failed"
+    assert result.failure_stage == "response_evidence_invalid"
+
+
+def test_execute_rejects_native_transfer_invariant_mismatch(tmp_path, monkeypatch) -> None:
+    build = _build(tmp_path, monkeypatch)
+    first, second, response = _paths(build)
+    payload = _completed_response()
+    payload["actual_transfer_bytes"] += 8
+    _install_host(monkeypatch, response, payload)
+
+    result = session.execute_sliced_resident_hardware_session(
+        build,
+        manifest_paths=(first, second),
+        response_path=response,
+        profile=_profile_mapping(),
+        environment={"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1"},
+    )
+
+    assert result.status == "failed"
+    assert result.failure_stage == "response_evidence_invalid"
 
 
 def test_execute_rejects_empty_response_even_when_host_succeeds(

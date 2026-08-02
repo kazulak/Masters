@@ -43,6 +43,10 @@
 #define RESIDENT_SLOT_ID_MASK 0x3fffffffu
 #define RESIDENT_SLOT_INITIAL_FLAG 0x40000000u
 #define RESIDENT_SLOT_FINAL_FLAG 0x80000000u
+#define RESIDENT_COMPLETION_MAGIC 0x52534350u
+#define RESIDENT_COMPLETION_VERSION 1u
+#define RESIDENT_COMPLETION_PENDING 0u
+#define RESIDENT_COMPLETION_COMPLETED 1u
 
 typedef struct {
     uint32_t left_rank;
@@ -80,6 +84,17 @@ typedef struct {
     uint32_t pool_bytes;
     uint32_t reserved;
 } resident_control_t;
+
+/* Small host-visible ABI record. The host reads this only after dpu_sync(). */
+typedef struct {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t active_operation_index;
+    uint32_t completion_status;
+    uint32_t completed_operation_count;
+    uint32_t output_elements_processed;
+    uint64_t output_checksum_fnv1a64;
+} resident_completion_t;
 
 typedef struct {
     uint32_t kind;

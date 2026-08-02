@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include <dpu.h>
 
 #include <ctype.h>
@@ -8,7 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <sys/time.h>
+#include <time.h>
 
 #include "common.h"
 #include "../upmem_sdk_generic_loop_resident/session_protocol.h"
@@ -31,7 +33,6 @@ typedef struct {
     uint32_t label;
     uint32_t axis;
     uint32_t value;
-    uint64_t input_fnv1a64;
 } two_dpu_restriction_t;
 
 typedef struct {
@@ -48,6 +49,8 @@ typedef struct {
     two_dpu_restriction_t restrictions[2];
     uint64_t restrictions_hash;
     uint64_t inputs_hash;
+    uint64_t *input_fingerprints;
+    size_t input_fingerprint_count;
 } two_dpu_slice_execution_t;
 
 typedef struct {
@@ -63,17 +66,23 @@ typedef struct {
     uint64_t input_bytes;
     uint64_t partial_output_bytes;
     uint64_t partial_output_transfer_bytes;
+    uint64_t partial_output_fnv1a64;
+    uint32_t completed_operation_count;
+    resident_completion_t completion_sentinel;
+    uint32_t completion_sentinel_read_count;
     int package_transferred;
     int inputs_transferred;
+    int completion_sentinel_read;
+    int completion_sentinel_verified;
     int completion_confirmed;
     int partial_output_read;
     int partial_output_written;
 } two_dpu_slice_t;
 
 static double two_dpu_now_s(void) {
-    struct timeval value;
-    gettimeofday(&value, NULL);
-    return (double)value.tv_sec + (double)value.tv_usec / 1000000.0;
+    struct timespec value;
+    if (clock_gettime(CLOCK_MONOTONIC, &value) != 0) return 0.0;
+    return (double)value.tv_sec + (double)value.tv_nsec / 1000000000.0;
 }
 
 static void two_dpu_report_sdk_error(const char *operation, dpu_error_t error) {
@@ -324,7 +333,7 @@ static int two_dpu_validate_sha256_object(const char *object, const char *object
         if (cursor == object_end) break;
         if (*cursor++ != ',') return 1;
     }
-    return count == 2u ? 0 : 1;
+    return count >= 2u && count <= RESIDENT_MAX_SLOT_DESCRIPTORS ? 0 : 1;
 }
 
 static int two_dpu_validate_restrictions(const char *array, const char *array_end, two_dpu_slice_execution_t *execution) {
@@ -368,10 +377,11 @@ static void two_dpu_free_execution(two_dpu_slice_execution_t *execution) {
     free(execution->descriptor_sha256);
     free(execution->restrictions[0].tensor_id);
     free(execution->restrictions[1].tensor_id);
+    free(execution->input_fingerprints);
     memset(execution, 0, sizeof(*execution));
 }
 
-static int two_dpu_load_restricted_input_fingerprints(
+static int two_dpu_load_input_fingerprints(
     const char *fnv1a64,
     const char *fnv1a64_end,
     const char *input_files,
@@ -379,24 +389,41 @@ static int two_dpu_load_restricted_input_fingerprints(
     two_dpu_slice_execution_t *execution
 ) {
     const char *cursor = input_files + 1;
-    for (size_t index = 0; index < 2u; index++) {
+    size_t count = 0u;
+    while ((cursor = two_dpu_skip_space(cursor, input_files_end)) < input_files_end) {
         char *input_path = NULL;
         const char *object_end;
+        uint64_t fingerprint;
+        uint64_t *grown;
         cursor = two_dpu_skip_space(cursor, input_files_end);
         if (cursor >= input_files_end || *cursor != '{' ||
             two_dpu_matching_end(cursor, input_files_end, '{', '}', &object_end) != 0 ||
             two_dpu_json_string_field(cursor, object_end + 1, "input_path", &input_path) != 0 ||
-            two_dpu_json_fnv1a64_field(fnv1a64, fnv1a64_end + 1, input_path,
-                &execution->restrictions[index].input_fnv1a64) != 0) {
+            two_dpu_json_fnv1a64_field(fnv1a64, fnv1a64_end + 1, input_path, &fingerprint) != 0) {
             free(input_path);
             return 1;
         }
+        if (count >= RESIDENT_MAX_SLOT_DESCRIPTORS) {
+            free(input_path);
+            return 1;
+        }
+        grown = (uint64_t *)realloc(
+            execution->input_fingerprints,
+            (count + 1u) * sizeof(*execution->input_fingerprints)
+        );
+        if (grown == NULL) {
+            free(input_path);
+            return 1;
+        }
+        execution->input_fingerprints = grown;
+        execution->input_fingerprints[count++] = fingerprint;
         free(input_path);
         cursor = two_dpu_skip_space(object_end + 1, input_files_end);
-        if (index + 1u == 2u) break;
-        if (cursor >= input_files_end || *cursor++ != ',') return 1;
+        if (cursor == input_files_end) break;
+        if (*cursor++ != ',') return 1;
     }
-    return two_dpu_skip_space(cursor, input_files_end) == input_files_end ? 0 : 1;
+    execution->input_fingerprint_count = count;
+    return count >= 2u && two_dpu_skip_space(cursor, input_files_end) == input_files_end ? 0 : 1;
 }
 
 static int two_dpu_load_descriptor_path(const char *manifest_path, const char *manifest_root, char **package_path) {
@@ -430,12 +457,16 @@ static int two_dpu_verify_slice_fingerprints(const two_dpu_slice_t *slice, const
         return 1;
     }
     free(package_path);
+    if (slice->request.input_count != slice->execution.input_fingerprint_count) {
+        *reason = "slice_input_fingerprint_count_mismatch";
+        return 1;
+    }
     for (size_t index = 0; index < slice->request.input_count; index++) {
         uint64_t input_hash;
         const resident_input_file_t *input = &slice->request.inputs[index];
-        if (index >= 2u || two_dpu_file_size(input->path, input->raw_bytes) != 0 ||
+        if (two_dpu_file_size(input->path, input->raw_bytes) != 0 ||
             two_dpu_hash_file(input->path, &input_hash) != 0 ||
-            input_hash != slice->execution.restrictions[index].input_fnv1a64) {
+            input_hash != slice->execution.input_fingerprints[index]) {
             *reason = "slice_restricted_input_fingerprint_mismatch";
             return 1;
         }
@@ -490,7 +521,7 @@ static int two_dpu_load_slice_execution(const char *path, two_dpu_slice_executio
         two_dpu_json_container(object, object_end + 1, "restricted_input_fnv1a64", '{', '}', &input_fingerprints, &input_fingerprints_end) != 0 ||
         two_dpu_validate_sha256_object(inputs, inputs_end) != 0 ||
         two_dpu_json_container(bytes, bytes + length, "initial_slots", '[', ']', &input_files, &input_files_end) != 0 ||
-        two_dpu_load_restricted_input_fingerprints(input_fingerprints, input_fingerprints_end, input_files, input_files_end,
+        two_dpu_load_input_fingerprints(input_fingerprints, input_fingerprints_end, input_files, input_files_end,
             execution) != 0) goto done;
     execution->restrictions_hash = two_dpu_hash_bytes(restrictions, restrictions_end + 1);
     execution->inputs_hash = two_dpu_hash_bytes(inputs, inputs_end + 1);
@@ -515,18 +546,18 @@ static void two_dpu_json_string(FILE *file, const char *value) {
     fputc('"', file);
 }
 
-static int two_dpu_validate_single_slice(const two_dpu_slice_t *slice, const char **reason) {
+static int two_dpu_validate_slice_graph(const two_dpu_slice_t *slice, const char **reason) {
     const resident_operation_t *operation;
     const resident_final_file_t *output;
-    if (slice->request.header.operation_count != 1u || slice->request.final_count != 1u) {
-        *reason = "slice_package_requires_one_operation_and_one_partial_output";
+    if (slice->request.header.operation_count == 0u || slice->request.final_count != 1u) {
+        *reason = "slice_package_requires_operations_and_one_partial_output";
         return 1;
     }
-    operation = &slice->request.operations[0];
+    operation = &slice->request.operations[slice->request.header.operation_count - 1u];
     output = &slice->request.final_outputs[0];
     if (operation->kind != RESIDENT_OPERATION_CONTRACT || operation->slot_out_real != output->slot_id ||
         operation->output_elements != output->elements) {
-        *reason = "slice_package_requires_one_full_shape_contract_partial";
+        *reason = "slice_package_requires_one_real_final_contract_partial";
         return 1;
     }
     return 0;
@@ -561,9 +592,9 @@ static int two_dpu_validate_slice_pair(const two_dpu_slice_t slices[RESIDENT_TWO
         *reason = "slice_packages_must_be_distinct";
         return 1;
     }
-    if (two_dpu_validate_single_slice(&slices[0], reason) != 0 || two_dpu_validate_single_slice(&slices[1], reason) != 0) return 1;
-    if (slices[0].request.input_count != 2u || slices[1].request.input_count != 2u) {
-        *reason = "slice_packages_require_two_restricted_inputs";
+    if (two_dpu_validate_slice_graph(&slices[0], reason) != 0 || two_dpu_validate_slice_graph(&slices[1], reason) != 0) return 1;
+    if (slices[0].request.input_count < 2u || slices[1].request.input_count < 2u) {
+        *reason = "slice_packages_require_all_initial_inputs";
         return 1;
     }
     if (slices[0].execution.slice_id != 0u || slices[1].execution.slice_id != 1u ||
@@ -597,38 +628,44 @@ static int two_dpu_validate_slice_pair(const two_dpu_slice_t slices[RESIDENT_TWO
     }
     if (two_dpu_verify_slice_fingerprints(&slices[0], reason) != 0 ||
         two_dpu_verify_slice_fingerprints(&slices[1], reason) != 0) return 1;
+    if (slices[0].request.header.operation_count != slices[1].request.header.operation_count) {
+        *reason = "slice_packages_require_matching_operation_count";
+        return 1;
+    }
     {
-        const resident_operation_t *left = &slices[0].request.operations[0];
-        const resident_operation_t *right = &slices[1].request.operations[0];
+        const uint32_t operation_count = slices[0].request.header.operation_count;
+        const resident_operation_t *left = &slices[0].request.operations[operation_count - 1u];
+        const resident_operation_t *right = &slices[1].request.operations[operation_count - 1u];
         const resident_final_file_t *left_output = &slices[0].request.final_outputs[0];
         const resident_final_file_t *right_output = &slices[1].request.final_outputs[0];
-    if (strcmp(slices[0].request.dpu_binary_path, slices[1].request.dpu_binary_path) != 0) {
-        *reason = "slice_packages_require_the_same_dpu_binary";
-        return 1;
-    }
-    if (slices[0].request.header.pool_bytes != slices[1].request.header.pool_bytes ||
-        slices[0].request.header.max_rank != slices[1].request.header.max_rank ||
-        left->kind != right->kind || left->mode != right->mode || left->output_elements != right->output_elements ||
-        left->args.output_rank != right->args.output_rank ||
-        memcmp(left->args.output_shape, right->args.output_shape, sizeof(left->args.output_shape)) != 0 ||
-        memcmp(left->args.output_strides, right->args.output_strides, sizeof(left->args.output_strides)) != 0 ||
-        left_output->elements != right_output->elements || left_output->raw_bytes != right_output->raw_bytes ||
-        left_output->transfer_bytes != right_output->transfer_bytes) {
-        *reason = "slice_packages_require_compatible_full_shape_outputs";
-        return 1;
-    }
-    if (strcmp(left_output->path, right_output->path) == 0) {
-        *reason = "slice_partial_output_paths_must_be_distinct";
-        return 1;
-    }
-    for (size_t left_input = 0; left_input < slices[0].request.input_count; left_input++) {
-        for (size_t right_input = 0; right_input < slices[1].request.input_count; right_input++) {
-            if (strcmp(slices[0].request.inputs[left_input].path, slices[1].request.inputs[right_input].path) == 0) {
-                *reason = "slice_input_paths_must_be_distinct";
-                return 1;
+        if (strcmp(slices[0].request.dpu_binary_path, slices[1].request.dpu_binary_path) != 0) {
+            *reason = "slice_packages_require_the_same_dpu_binary";
+            return 1;
+        }
+        if (slices[0].request.header.pool_bytes != slices[1].request.header.pool_bytes ||
+            slices[0].request.header.max_rank != slices[1].request.header.max_rank ||
+            memcmp(slices[0].request.operations, slices[1].request.operations,
+                (size_t)operation_count * sizeof(resident_operation_t)) != 0 ||
+            left->args.output_rank != right->args.output_rank ||
+            memcmp(left->args.output_shape, right->args.output_shape, sizeof(left->args.output_shape)) != 0 ||
+            memcmp(left->args.output_strides, right->args.output_strides, sizeof(left->args.output_strides)) != 0 ||
+            left_output->elements != right_output->elements || left_output->raw_bytes != right_output->raw_bytes ||
+            left_output->transfer_bytes != right_output->transfer_bytes) {
+            *reason = "slice_packages_require_compatible_full_shape_outputs";
+            return 1;
+        }
+        if (strcmp(left_output->path, right_output->path) == 0) {
+            *reason = "slice_partial_output_paths_must_be_distinct";
+            return 1;
+        }
+        for (size_t left_input = 0; left_input < slices[0].request.input_count; left_input++) {
+            for (size_t right_input = 0; right_input < slices[1].request.input_count; right_input++) {
+                if (strcmp(slices[0].request.inputs[left_input].path, slices[1].request.inputs[right_input].path) == 0) {
+                    *reason = "slice_input_paths_must_be_distinct";
+                    return 1;
+                }
             }
         }
-    }
     }
     return 0;
 }
@@ -689,17 +726,15 @@ static void two_dpu_free_slice(two_dpu_slice_t *slice) {
 static int two_dpu_transfer_slice_package(struct dpu_set_t dpu, two_dpu_slice_t *slice, dpu_error_t *error) {
     const resident_control_t control = {
         slice->request.header.slot_count,
-        1u,
+        slice->request.header.operation_count,
         slice->request.header.pool_bytes,
         0u,
     };
-    const uint64_t active_operation = 0u;
     *error = dpu_copy_to(dpu, "RESIDENT_SLOT_DESCRIPTORS", 0u, slice->request.slots, slice->request.header.slot_bytes);
     if (*error == DPU_OK) *error = dpu_copy_to(dpu, "RESIDENT_OPERATIONS", 0u, slice->request.operations, slice->request.header.operation_bytes);
     if (*error == DPU_OK) *error = dpu_copy_to(dpu, "RESIDENT_CONTROL", 0u, &control, sizeof(control));
-    if (*error == DPU_OK) *error = dpu_copy_to(dpu, "RESIDENT_ACTIVE_OPERATION", 0u, &active_operation, sizeof(active_operation));
     if (*error != DPU_OK) return 1;
-    slice->package_bytes = slice->request.header.slot_bytes + slice->request.header.operation_bytes + sizeof(control) + sizeof(active_operation);
+    slice->package_bytes = slice->request.header.slot_bytes + slice->request.header.operation_bytes + sizeof(control);
     slice->package_transferred = 1;
     for (size_t index = 0; index < slice->request.input_count; index++) {
         const resident_input_file_t *input = &slice->request.inputs[index];
@@ -711,6 +746,18 @@ static int two_dpu_transfer_slice_package(struct dpu_set_t dpu, two_dpu_slice_t 
     return 0;
 }
 
+static int two_dpu_set_active_operation(
+    struct dpu_set_t dpu,
+    const two_dpu_slice_t *slice,
+    uint32_t operation_index,
+    dpu_error_t *error
+) {
+    const uint64_t active_operation = operation_index;
+    if (operation_index >= slice->request.header.operation_count) return 1;
+    *error = dpu_copy_to(dpu, "RESIDENT_ACTIVE_OPERATION", 0u, &active_operation, sizeof(active_operation));
+    return *error == DPU_OK ? 0 : 1;
+}
+
 static int two_dpu_read_slice_partial(struct dpu_set_t dpu, two_dpu_slice_t *slice, dpu_error_t *error) {
     const resident_final_file_t *output = &slice->request.final_outputs[0];
     *error = dpu_copy_from(dpu, "RESIDENT_SLOT_POOL", slice->request.slots[output->slot_id].offset_bytes,
@@ -718,8 +765,48 @@ static int two_dpu_read_slice_partial(struct dpu_set_t dpu, two_dpu_slice_t *sli
     if (*error != DPU_OK || two_dpu_buffer_finite(slice->partial_output, output->raw_bytes) != 0) return 1;
     slice->partial_output_bytes = output->raw_bytes;
     slice->partial_output_transfer_bytes = output->transfer_bytes;
+    {
+        uint64_t value = FNV1A64_OFFSET;
+        for (size_t index = 0; index < output->raw_bytes; index++) {
+            value ^= slice->partial_output[index];
+            value *= FNV1A64_PRIME;
+        }
+        slice->partial_output_fnv1a64 = value;
+    }
     slice->partial_output_read = 1;
-    if (two_dpu_write_exact(output->path, slice->partial_output, output->raw_bytes) != 0) return 1;
+    return 0;
+}
+
+static int two_dpu_read_completion_sentinel(
+    struct dpu_set_t dpu,
+    two_dpu_slice_t *slice,
+    uint32_t operation_index,
+    dpu_error_t *error
+) {
+    const resident_operation_t *operation = &slice->request.operations[operation_index];
+    resident_completion_t sentinel = {0};
+    *error = dpu_copy_from(dpu, "RESIDENT_COMPLETION", 0u, &sentinel, sizeof(sentinel));
+    if (*error != DPU_OK) return 1;
+    slice->completion_sentinel = sentinel;
+    slice->completion_sentinel_read = 1;
+    if (sentinel.magic != RESIDENT_COMPLETION_MAGIC ||
+        sentinel.version != RESIDENT_COMPLETION_VERSION ||
+        sentinel.active_operation_index != operation_index ||
+        sentinel.completion_status != RESIDENT_COMPLETION_COMPLETED ||
+        sentinel.completed_operation_count != operation_index + 1u ||
+        sentinel.output_elements_processed != operation->output_elements) {
+        return 1;
+    }
+    slice->completed_operation_count = sentinel.completed_operation_count;
+    slice->completion_sentinel_verified = 1;
+    slice->completion_sentinel_read_count++;
+    return 0;
+}
+
+static int two_dpu_write_slice_partial(two_dpu_slice_t *slice) {
+    const resident_final_file_t *output = &slice->request.final_outputs[0];
+    if (!slice->partial_output_read ||
+        two_dpu_write_exact(output->path, slice->partial_output, output->raw_bytes) != 0) return 1;
     slice->request.final_outputs[0].status = 1;
     slice->partial_output_written = 1;
     return 0;
@@ -734,6 +821,19 @@ static int two_dpu_write_validation_result(const two_dpu_slice_t slices[RESIDENT
     return reason == NULL ? 0 : 1;
 }
 
+typedef struct {
+    double package_parse_time_s;
+    double allocation_time_s;
+    double binary_load_time_s;
+    double initial_h2d_time_s;
+    double operation_control_h2d_time_s;
+    double launch_enqueue_time_s;
+    double sync_wait_time_s;
+    double final_d2h_time_s;
+    double output_write_time_s;
+    double release_time_s;
+} two_dpu_timing_t;
+
 static int two_dpu_write_response(
     const char *path,
     const two_dpu_slice_t slices[RESIDENT_TWO_DPU_COUNT],
@@ -743,26 +843,72 @@ static int two_dpu_write_response(
     uint32_t allocated_dpus,
     int release_attempted,
     int release_confirmed,
+    uint32_t operation_count,
     uint32_t async_launch_count,
     uint32_t synchronize_count,
-    double elapsed_s
+    uint64_t initial_h2d_bytes,
+    uint64_t descriptor_h2d_bytes,
+    uint64_t control_h2d_bytes,
+    uint64_t final_d2h_bytes,
+    const two_dpu_timing_t *timing,
+    double elapsed_s,
+    int launch_in_flight
 ) {
-    const int completed = strcmp(status, "completed") == 0 && failure_stage == NULL &&
-        allocated_dpus == RESIDENT_TWO_DPU_COUNT && release_confirmed && async_launch_count == 1u && synchronize_count == 1u;
+    const two_dpu_timing_t empty_timing = {0};
+    const two_dpu_timing_t *current = timing == NULL ? &empty_timing : timing;
+    int slices_completed = operation_count != 0u;
+    uint64_t actual_h2d_bytes;
+    uint64_t actual_transfer_bytes;
+    int completed;
+    const char *response_status;
+    actual_h2d_bytes = initial_h2d_bytes + descriptor_h2d_bytes + control_h2d_bytes;
+    actual_transfer_bytes = actual_h2d_bytes + final_d2h_bytes;
+    for (uint32_t index = 0; index < RESIDENT_TWO_DPU_COUNT; index++) {
+        const two_dpu_slice_t *slice = &slices[index];
+        slices_completed = slices_completed && slice->completed_operation_count == operation_count &&
+            slice->completion_sentinel_verified && slice->partial_output_read && slice->partial_output_written;
+    }
+    const int device_completion_confirmed = !launch_in_flight && slices_completed;
+    const char *device_completion_state = device_completion_confirmed
+        ? "confirmed"
+        : (launch_in_flight ? "unknown_after_launch" : "not_confirmed");
+    completed = strcmp(status, "completed") == 0 && failure_stage == NULL &&
+        allocated_dpus == RESIDENT_TWO_DPU_COUNT && release_confirmed &&
+        async_launch_count == operation_count && synchronize_count == operation_count &&
+        device_completion_confirmed;
+    response_status = completed ? "completed" : "failed";
     FILE *file = fopen(path, "w");
     if (file == NULL) return 1;
     fprintf(file, "{\n  \"schema_version\": \"generic_loop_resident_two_dpu_contraction_slice_v1\",\n");
     fprintf(file, "  \"manifest_kind\": \"resident_two_slice_response\",\n  \"session_id\": ");
     two_dpu_json_string(file, slices[0].request.session_id == NULL ? "resident-two-dpu-unknown" : slices[0].request.session_id);
-    fprintf(file, ",\n  \"status\": \"%s\",\n  \"failure_stage\": ", status);
+    fprintf(file, ",\n  \"status\": \"%s\",\n  \"failure_stage\": ", response_status);
     if (failure_stage == NULL) fputs("null", file); else two_dpu_json_string(file, failure_stage);
     fprintf(file, ",\n  \"error\": ");
     if (error_message == NULL) fputs("null", file); else two_dpu_json_string(file, error_message);
-    fprintf(file, ",\n  \"cpu_fallback_used\": false,\n  \"tasklets_per_dpu\": %u,\n  \"topology\": \"two_dpu_allocation\",\n", (unsigned)NR_TASKLETS);
+    fprintf(file, ",\n  \"target_requested\": \"hardware\",\n  \"target_observed\": \"%s\",\n  \"backend_id\": \"upmem_sdk_hardware_sliced_resident_two_dpu\",\n  \"backend_family\": \"upmem_sdk\",\n  \"execution_class\": \"two_dpu_sliced_resident\",\n  \"hardware_profile_version\": \"hardware_sliced_resident_two_dpu_m2_v1\",\n", completed ? "hardware" : "hardware_unverified");
+    fprintf(file, "  \"cpu_fallback_used\": false,\n  \"simulator_kernel_executed\": false,\n  \"tasklets_per_dpu\": %u,\n  \"topology\": \"two_dpu_allocation\",\n  \"operation_count\": %u,\n  \"async_launch_count\": %u,\n  \"synchronize_count\": %u,\n", (unsigned)NR_TASKLETS, operation_count, async_launch_count, synchronize_count);
+    fprintf(file, "  \"device_launch_mode\": \"asynchronous_dpu_set\",\n  \"host_completion_mode\": \"blocking_sync\",\n  \"completion_evidence\": \"dpu_written_completion_sentinel_read_after_each_sync\",\n  \"native_execution_sentinel_available\": true,\n  \"device_completion_confirmed\": %s,\n  \"device_completion_state\": \"%s\",\n", device_completion_confirmed ? "true" : "false", device_completion_state);
     fprintf(file, "  \"allocation\": {\"requested_dpus\":2,\"allocated_dpus\":%u,\"profile\":\"backend=hw\",\"verified\":%s},\n",
         allocated_dpus, allocated_dpus == RESIDENT_TWO_DPU_COUNT ? "true" : "false");
-    fprintf(file, "  \"launch\": {\"mode\":\"asynchronous\",\"async_launch_count\":%u,\"synchronize_count\":%u,\"completed\":%s},\n",
-        async_launch_count, synchronize_count, completed ? "true" : "false");
+    fprintf(file, "  \"launch\": {\"mode\":\"asynchronous\",\"device_launch_mode\":\"asynchronous_dpu_set\",\"host_completion_mode\":\"blocking_sync\",\"operation_count\":%u,\"async_launch_count\":%u,\"synchronize_count\":%u,\"completed\":%s},\n",
+        operation_count, async_launch_count, synchronize_count, completed ? "true" : "false");
+    fprintf(file, "  \"observed_operation_completion_counts\": [%u,%u],\n",
+        slices[0].completed_operation_count, slices[1].completed_operation_count);
+    fprintf(file, "  \"completion_sentinel_read_counts\": [%u,%u],\n",
+        slices[0].completion_sentinel_read_count, slices[1].completion_sentinel_read_count);
+    fprintf(file, "  \"timing_scope\": \"host_observed_sdk_stage_boundaries\",\n  \"timing_is_bringup_only\": true,\n  \"timing\": {\"clock\":\"clock_monotonic\",\"status\":\"host_stage_boundaries\",\"package_parse_time_s\":%.9f,\"allocation_time_s\":%.9f,\"binary_load_time_s\":%.9f,\"initial_h2d_time_s\":%.9f,\"operation_control_h2d_time_s\":%.9f,\"launch_enqueue_time_s\":%.9f,\"sync_wait_time_s\":%.9f,\"sync_wait_is_not_pure_kernel_time\":true,\"kernel_time_s\":null,\"final_d2h_time_s\":%.9f,\"output_write_time_s\":%.9f,\"release_time_s\":%.9f,\"total_route_time_s\":%.9f},\n",
+        current->package_parse_time_s, current->allocation_time_s, current->binary_load_time_s,
+        current->initial_h2d_time_s, current->operation_control_h2d_time_s,
+        current->launch_enqueue_time_s, current->sync_wait_time_s,
+        current->final_d2h_time_s, current->output_write_time_s, current->release_time_s, elapsed_s);
+    fprintf(file, "  \"initial_h2d_bytes\":%llu,\"descriptor_h2d_bytes\":%llu,\"control_h2d_bytes\":%llu,\"active_operation_h2d_bytes\":%llu,\"final_d2h_bytes\":%llu,\"actual_h2d_bytes\":%llu,\"actual_d2h_bytes\":%llu,\"actual_transfer_bytes\":%llu,\"transfer_bytes_are_application_visible\":true,\n",
+        (unsigned long long)initial_h2d_bytes, (unsigned long long)descriptor_h2d_bytes,
+        (unsigned long long)control_h2d_bytes,
+        (unsigned long long)(control_h2d_bytes >= (uint64_t)RESIDENT_TWO_DPU_COUNT * sizeof(resident_control_t)
+            ? control_h2d_bytes - (uint64_t)RESIDENT_TWO_DPU_COUNT * sizeof(resident_control_t) : 0u),
+        (unsigned long long)final_d2h_bytes, (unsigned long long)actual_h2d_bytes,
+        (unsigned long long)final_d2h_bytes, (unsigned long long)actual_transfer_bytes);
     fprintf(file, "  \"native_reconstruction_performed\": false,\n  \"reconstruction_contract\": \"python_sum_partials\",\n  \"slices\": [");
     for (uint32_t index = 0; index < RESIDENT_TWO_DPU_COUNT; index++) {
         const two_dpu_slice_t *slice = &slices[index];
@@ -775,14 +921,28 @@ static int two_dpu_write_response(
             (unsigned long long)slice->manifest_hash, slice->package_transferred ? "true" : "false", slice->request.input_count,
             (unsigned long long)slice->input_bytes, slice->inputs_transferred ? "true" : "false");
         two_dpu_json_string(file, output == NULL ? "" : output->path);
-        fprintf(file, ",\"partial_output_elements\":%u,\"partial_output_bytes\":%llu,\"partial_output_transfer_bytes\":%llu,\"partial_output_read\":%s,\"partial_output_written\":%s,\"completion_confirmed\":%s}",
-            output == NULL ? 0u : output->elements, (unsigned long long)(output == NULL ? 0u : output->transfer_bytes),
-            (unsigned long long)(output == NULL ? 0u : output->transfer_bytes),
+        fprintf(file, ",\"operation_count\":%u,\"completed_operation_count\":%u,\"observed_operation_completion_count\":%u,\"operation_completion_confirmed\":%s,\"completion_sentinel_read_count\":%u,\"dpu_completion_sentinel\":{\"magic\":%u,\"version\":%u,\"active_operation_index\":%u,\"completion_status\":%u,\"completed_operation_count\":%u,\"output_elements_processed\":%u,\"output_checksum_fnv1a64\":\"%016llx\",\"read\":%s,\"verified\":%s},\"partial_output_elements\":%u,\"partial_output_bytes\":%llu,\"partial_output_raw_bytes\":%llu,\"partial_output_transfer_bytes\":%llu,\"partial_output_fnv1a64\":\"%016llx\",\"partial_output_read\":%s,\"partial_output_written\":%s,\"completion_confirmed\":%s}",
+            operation_count, slice->completed_operation_count, slice->completed_operation_count,
+            slice->completion_sentinel_verified ? "true" : "false",
+            slice->completion_sentinel_read_count,
+            slice->completion_sentinel.magic, slice->completion_sentinel.version,
+            slice->completion_sentinel.active_operation_index, slice->completion_sentinel.completion_status,
+            slice->completion_sentinel.completed_operation_count,
+            slice->completion_sentinel.output_elements_processed,
+            (unsigned long long)slice->completion_sentinel.output_checksum_fnv1a64,
+            slice->completion_sentinel_read ? "true" : "false",
+            slice->completion_sentinel_verified ? "true" : "false",
+            output == NULL ? 0u : output->elements, (unsigned long long)slice->partial_output_bytes,
+            (unsigned long long)slice->partial_output_bytes, (unsigned long long)slice->partial_output_transfer_bytes,
+            (unsigned long long)slice->partial_output_fnv1a64,
             slice->partial_output_read ? "true" : "false", slice->partial_output_written ? "true" : "false",
             slice->completion_confirmed ? "true" : "false");
     }
-    fprintf(file, "],\n  \"release\": {\"attempted\":%s,\"confirmed\":%s},\n  \"hardware_execution\":%s,\n  \"elapsed_s\":%.9f\n}\n",
-        release_attempted ? "true" : "false", release_confirmed ? "true" : "false", completed ? "true" : "false", elapsed_s);
+    fprintf(file, "],\n  \"release\": {\"attempted\":%s,\"confirmed\":%s,\"device_completion_confirmed\":%s},\n  \"hardware_execution\":%s,\n  \"hardware_kernel_executed\":%s,\n  \"hardware_functionality_evidence\":%s,\n  \"elapsed_s\":%.9f\n}\n",
+        release_attempted ? "true" : "false", release_confirmed ? "true" : "false",
+        device_completion_confirmed ? "true" : "false",
+        completed ? "true" : "false", device_completion_confirmed ? "true" : "false",
+        completed ? "true" : "false", elapsed_s);
     {
         const int failed = ferror(file) != 0 || fclose(file) != 0;
         return failed ? 1 : 0;
@@ -791,17 +951,24 @@ static int two_dpu_write_response(
 
 int main(int argc, char **argv) {
     two_dpu_slice_t slices[RESIDENT_TWO_DPU_COUNT];
+    two_dpu_timing_t timing = {0};
     struct dpu_set_t set;
     dpu_error_t error = DPU_OK;
     const char *failure_stage = NULL;
     const char *error_message = NULL;
     const char *response_path = NULL;
     uint32_t allocated_dpus = 0u;
+    uint32_t operation_count = 0u;
     uint32_t async_launch_count = 0u;
     uint32_t synchronize_count = 0u;
+    uint64_t initial_h2d_bytes = 0u;
+    uint64_t descriptor_h2d_bytes = 0u;
+    uint64_t control_h2d_bytes = 0u;
+    uint64_t final_d2h_bytes = 0u;
     int set_allocated = 0;
     int release_attempted = 0;
     int release_confirmed = 0;
+    int launch_in_flight = 0;
     int rc = 1;
     const double started = two_dpu_now_s();
 
@@ -826,9 +993,19 @@ int main(int argc, char **argv) {
     response_path = argv[6];
     slices[0].slice_id = 0u;
     slices[1].slice_id = 1u;
-    if (two_dpu_load_slice(&slices[0], argv[2], &failure_stage) != 0 || two_dpu_load_slice(&slices[1], argv[4], &failure_stage) != 0 ||
-        two_dpu_validate_slice_pair(slices, &failure_stage) != 0) {
-        error_message = slices[0].parse_error != NULL ? slices[0].parse_error : slices[1].parse_error;
+    {
+        const double stage_started = two_dpu_now_s();
+        const int first_failed = two_dpu_load_slice(&slices[0], argv[2], &failure_stage);
+        const int second_failed = first_failed == 0 ? two_dpu_load_slice(&slices[1], argv[4], &failure_stage) : 1;
+        timing.package_parse_time_s = two_dpu_now_s() - stage_started;
+        if (first_failed != 0 || second_failed != 0) {
+            error_message = slices[0].parse_error != NULL ? slices[0].parse_error : slices[1].parse_error;
+            goto write_response;
+        }
+    }
+    operation_count = slices[0].request.header.operation_count;
+    if (two_dpu_validate_slice_pair(slices, &failure_stage) != 0) {
+        error_message = "slice packages do not describe the same operation stream";
         goto write_response;
     }
     if (getenv("UPMEM_ALLOW_PHYSICAL_HARDWARE") == NULL || strcmp(getenv("UPMEM_ALLOW_PHYSICAL_HARDWARE"), "1") != 0) {
@@ -843,70 +1020,137 @@ int main(int argc, char **argv) {
     }
     if (two_dpu_prepare_slice_inputs(&slices[0], &failure_stage) != 0 || two_dpu_prepare_slice_inputs(&slices[1], &failure_stage) != 0) goto write_response;
 
-    error = dpu_alloc(RESIDENT_TWO_DPU_COUNT, RESIDENT_TWO_DPU_ALLOCATION_PROFILE, &set);
-    if (error != DPU_OK) {
-        two_dpu_report_sdk_error("two-DPU dpu_alloc", error);
-        failure_stage = error == DPU_ERR_INVALID_PROFILE ? "hardware_profile_violation" : "hardware_allocation_failed";
-        goto release_and_write;
-    }
-    set_allocated = 1;
-    error = dpu_get_nr_dpus(set, &allocated_dpus);
-    if (error != DPU_OK || allocated_dpus != RESIDENT_TWO_DPU_COUNT) {
-        if (error != DPU_OK) two_dpu_report_sdk_error("two-DPU dpu_get_nr_dpus", error);
-        failure_stage = "hardware_allocation_failed";
-        goto release_and_write;
-    }
-    error = dpu_load(set, slices[0].request.dpu_binary_path, NULL);
-    if (error != DPU_OK) {
-        two_dpu_report_sdk_error("two-DPU dpu_load", error);
-        failure_stage = "binary_load_failed";
-        goto release_and_write;
+    {
+        const double stage_started = two_dpu_now_s();
+        error = dpu_alloc(RESIDENT_TWO_DPU_COUNT, RESIDENT_TWO_DPU_ALLOCATION_PROFILE, &set);
+        if (error == DPU_OK) set_allocated = 1;
+        if (error == DPU_OK) error = dpu_get_nr_dpus(set, &allocated_dpus);
+        timing.allocation_time_s = two_dpu_now_s() - stage_started;
+        if (error != DPU_OK || allocated_dpus != RESIDENT_TWO_DPU_COUNT) {
+            if (error != DPU_OK) two_dpu_report_sdk_error("two-DPU allocation", error);
+            failure_stage = error == DPU_ERR_INVALID_PROFILE ? "hardware_profile_violation" : "hardware_allocation_failed";
+            goto release_and_write;
+        }
     }
     {
+        const double stage_started = two_dpu_now_s();
+        error = dpu_load(set, slices[0].request.dpu_binary_path, NULL);
+        timing.binary_load_time_s = two_dpu_now_s() - stage_started;
+        if (error != DPU_OK) {
+            two_dpu_report_sdk_error("two-DPU dpu_load", error);
+            failure_stage = "binary_load_failed";
+            goto release_and_write;
+        }
+    }
+    {
+        const double stage_started = two_dpu_now_s();
         struct dpu_set_t dpu;
         uint32_t index;
         DPU_FOREACH(set, dpu, index) {
             if (two_dpu_transfer_slice_package(dpu, &slices[index], &error) != 0) break;
         }
+        timing.initial_h2d_time_s = two_dpu_now_s() - stage_started;
         if (error != DPU_OK) {
             two_dpu_report_sdk_error("two-DPU per-slice package transfer", error);
             failure_stage = "slice_package_transfer_failed";
             goto release_and_write;
         }
+        initial_h2d_bytes = slices[0].input_bytes + slices[1].input_bytes;
+        descriptor_h2d_bytes = (uint64_t)(slices[0].request.header.slot_bytes + slices[0].request.header.operation_bytes) * RESIDENT_TWO_DPU_COUNT;
+        control_h2d_bytes = (uint64_t)sizeof(resident_control_t) * RESIDENT_TWO_DPU_COUNT;
     }
-    error = dpu_launch(set, DPU_ASYNCHRONOUS);
-    if (error != DPU_OK) {
-        two_dpu_report_sdk_error("two-DPU asynchronous dpu_launch", error);
-        failure_stage = "kernel_launch_failed";
-        goto release_and_write;
-    }
-    async_launch_count = 1u;
-    error = dpu_sync(set);
-    synchronize_count = 1u;
-    if (error != DPU_OK) {
-        two_dpu_report_sdk_error("two-DPU dpu_sync", error);
-        failure_stage = "kernel_synchronize_failed";
-        goto release_and_write;
+    for (uint32_t operation_index = 0; operation_index < operation_count; operation_index++) {
+        {
+            const double stage_started = two_dpu_now_s();
+            struct dpu_set_t dpu;
+            uint32_t index;
+            DPU_FOREACH(set, dpu, index) {
+                if (two_dpu_set_active_operation(dpu, &slices[index], operation_index, &error) != 0) break;
+                control_h2d_bytes += sizeof(uint64_t);
+            }
+            timing.operation_control_h2d_time_s += two_dpu_now_s() - stage_started;
+            if (error != DPU_OK) {
+                two_dpu_report_sdk_error("two-DPU active operation transfer", error);
+                failure_stage = "operation_control_transfer_failed";
+                goto release_and_write;
+            }
+        }
+        {
+            const double stage_started = two_dpu_now_s();
+            error = dpu_launch(set, DPU_ASYNCHRONOUS);
+            timing.launch_enqueue_time_s += two_dpu_now_s() - stage_started;
+            if (error != DPU_OK) {
+                two_dpu_report_sdk_error("two-DPU asynchronous dpu_launch", error);
+                failure_stage = "kernel_launch_failed";
+                goto release_and_write;
+            }
+            async_launch_count++;
+            launch_in_flight = 1;
+        }
+        {
+            const double stage_started = two_dpu_now_s();
+            error = dpu_sync(set);
+            timing.sync_wait_time_s += two_dpu_now_s() - stage_started;
+            if (error != DPU_OK) {
+                two_dpu_report_sdk_error("two-DPU blocking dpu_sync", error);
+                failure_stage = "kernel_synchronize_failed";
+                goto release_and_write;
+            }
+            synchronize_count++;
+            launch_in_flight = 0;
+            {
+                struct dpu_set_t dpu;
+                uint32_t index;
+                DPU_FOREACH(set, dpu, index) {
+                    if (two_dpu_read_completion_sentinel(dpu, &slices[index], operation_index, &error) != 0) break;
+                }
+                if (error != DPU_OK) {
+                    two_dpu_report_sdk_error("two-DPU completion sentinel read", error);
+                    failure_stage = "kernel_completion_sentinel_failed";
+                    goto release_and_write;
+                }
+                if (!slices[0].completion_sentinel_verified || !slices[1].completion_sentinel_verified) {
+                    failure_stage = "kernel_completion_sentinel_failed";
+                    error_message = "DPU completion sentinel did not verify";
+                    goto release_and_write;
+                }
+            }
+        }
     }
     {
+        const double stage_started = two_dpu_now_s();
         struct dpu_set_t dpu;
         uint32_t index;
         DPU_FOREACH(set, dpu, index) {
             if (two_dpu_read_slice_partial(dpu, &slices[index], &error) != 0) break;
-            slices[index].completion_confirmed = 1;
+            final_d2h_bytes += slices[index].partial_output_transfer_bytes;
         }
+        timing.final_d2h_time_s = two_dpu_now_s() - stage_started;
         if (error != DPU_OK) two_dpu_report_sdk_error("two-DPU full partial-output read", error);
-        if (error != DPU_OK || !slices[0].completion_confirmed || !slices[1].completion_confirmed) {
+        if (error != DPU_OK || !slices[0].partial_output_read || !slices[1].partial_output_read) {
             failure_stage = "partial_output_read_failed";
             goto release_and_write;
         }
+    }
+    {
+        const double stage_started = two_dpu_now_s();
+        if (two_dpu_write_slice_partial(&slices[0]) != 0 || two_dpu_write_slice_partial(&slices[1]) != 0) {
+            timing.output_write_time_s = two_dpu_now_s() - stage_started;
+            failure_stage = "partial_output_write_failed";
+            goto release_and_write;
+        }
+        timing.output_write_time_s = two_dpu_now_s() - stage_started;
+        slices[0].completion_confirmed = slices[0].completion_sentinel_verified;
+        slices[1].completion_confirmed = slices[1].completion_sentinel_verified;
     }
     rc = 0;
 
 release_and_write:
     if (set_allocated) {
+        const double stage_started = two_dpu_now_s();
         release_attempted = 1;
         error = dpu_free(set);
+        timing.release_time_s = two_dpu_now_s() - stage_started;
         if (error == DPU_OK) release_confirmed = 1;
         else {
             two_dpu_report_sdk_error("two-DPU dpu_free", error);
@@ -916,7 +1160,9 @@ release_and_write:
     if (failure_stage != NULL) rc = 1;
 write_response:
     if (two_dpu_write_response(response_path, slices, failure_stage == NULL ? "completed" : "failed", failure_stage, error_message,
-        allocated_dpus, release_attempted, release_confirmed, async_launch_count, synchronize_count, two_dpu_now_s() - started) != 0) rc = 1;
+        allocated_dpus, release_attempted, release_confirmed, operation_count, async_launch_count, synchronize_count,
+        initial_h2d_bytes, descriptor_h2d_bytes, control_h2d_bytes, final_d2h_bytes, &timing,
+        two_dpu_now_s() - started, launch_in_flight) != 0) rc = 1;
 cleanup:
     two_dpu_free_slice(&slices[0]);
     two_dpu_free_slice(&slices[1]);

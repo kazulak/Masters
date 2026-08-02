@@ -62,6 +62,8 @@ class SlicedResidentHardwareProfile:
     tasklets_per_dpu: int
     numeric_mode: str
     synchronous_execution: bool
+    device_launch_mode: str
+    host_completion_mode: str
     timeout_s: float
     performance_claim_applicable: bool
     max_rank: int = RESIDENT_MAX_RANK
@@ -246,6 +248,8 @@ def parse_sliced_resident_hardware_profile(
         "tasklets_per_dpu": 1,
         "numeric_modes": ["none"],
         "synchronous_execution": True,
+        "device_launch_mode": "asynchronous_dpu_set",
+        "host_completion_mode": "blocking_sync",
         "performance_claim_applicable": False,
     }
     allowed = set(expected) | {"timeout_s"} | set(_BUILD_CAPS)
@@ -255,6 +259,8 @@ def parse_sliced_resident_hardware_profile(
             "hardware_profile_violation: sliced resident profile keys differ"
         )
     for key, expected_value in expected.items():
+        if key in {"device_launch_mode", "host_completion_mode"} and key not in value:
+            continue
         if value.get(key) != expected_value:
             raise ValueError(
                 f"hardware_profile_violation: {key} must be {expected_value!r}"
@@ -284,6 +290,8 @@ def parse_sliced_resident_hardware_profile(
         tasklets_per_dpu=1,
         numeric_mode="none",
         synchronous_execution=True,
+        device_launch_mode=str(value.get("device_launch_mode", "asynchronous_dpu_set")),
+        host_completion_mode=str(value.get("host_completion_mode", "blocking_sync")),
         timeout_s=float(timeout),
         performance_claim_applicable=False,
         **_BUILD_CAPS,
@@ -305,6 +313,8 @@ def _coerce_profile(
                 "tasklets_per_dpu": profile.tasklets_per_dpu,
                 "numeric_modes": [profile.numeric_mode],
                 "synchronous_execution": profile.synchronous_execution,
+                "device_launch_mode": profile.device_launch_mode,
+                "host_completion_mode": profile.host_completion_mode,
                 "timeout_s": profile.timeout_s,
                 "performance_claim_applicable": profile.performance_claim_applicable,
                 **{key: getattr(profile, key) for key in _BUILD_CAPS},
@@ -466,10 +476,138 @@ def _load_response(path: Path) -> JsonDict | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _finite_nonnegative(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+        and float(value) >= 0.0
+    )
+
+
 def _response_completed(response: Mapping[str, Any]) -> bool:
     allocation = response.get("allocation")
     launch = response.get("launch")
     release = response.get("release")
+    timing = response.get("timing")
+    slices = response.get("slices")
+    operation_count = response.get("operation_count")
+    observed_counts = response.get("observed_operation_completion_counts")
+    if not isinstance(operation_count, int) or isinstance(operation_count, bool) or operation_count < 1:
+        return False
+    if not isinstance(slices, list) or len(slices) != 2:
+        return False
+    if not isinstance(observed_counts, list) or observed_counts != [operation_count, operation_count]:
+        return False
+    timing_fields = (
+        "package_parse_time_s",
+        "allocation_time_s",
+        "binary_load_time_s",
+        "initial_h2d_time_s",
+        "operation_control_h2d_time_s",
+        "launch_enqueue_time_s",
+        "sync_wait_time_s",
+        "final_d2h_time_s",
+        "output_write_time_s",
+        "release_time_s",
+        "total_route_time_s",
+    )
+    if (
+        response.get("backend_id") != BACKEND_ID
+        or response.get("target_requested") != "hardware"
+        or response.get("target_observed") != "hardware"
+        or response.get("hardware_profile_version") != PROFILE_VERSION
+        or response.get("tasklets_per_dpu") != 1
+        or response.get("simulator_kernel_executed") is not False
+        or response.get("hardware_functionality_evidence") is not True
+        or (
+            operation_count > 1
+            and response.get("native_execution_sentinel_available") is not True
+        )
+        or (
+            operation_count > 1
+            and response.get("completion_evidence")
+            != "dpu_written_completion_sentinel_read_after_each_sync"
+        )
+        or (
+            operation_count > 1
+            and response.get("device_completion_confirmed") is not True
+        )
+        or response.get("device_launch_mode") != "asynchronous_dpu_set"
+        or response.get("host_completion_mode") != "blocking_sync"
+        or response.get("timing_scope") != "host_observed_sdk_stage_boundaries"
+        or response.get("timing_is_bringup_only") is not True
+        or not isinstance(timing, Mapping)
+        or timing.get("clock") != "clock_monotonic"
+        or timing.get("sync_wait_is_not_pure_kernel_time") is not True
+        or timing.get("kernel_time_s") is not None
+        or any(not _finite_nonnegative(timing.get(field)) for field in timing_fields)
+    ):
+        return False
+    if operation_count > 1 and any(
+        not isinstance(response.get(name), int)
+        or isinstance(response.get(name), bool)
+        or response.get(name) < 0
+        for name in ("actual_h2d_bytes", "actual_d2h_bytes", "actual_transfer_bytes")
+    ):
+        return False
+    if operation_count > 1 and response["actual_transfer_bytes"] != (
+        response["actual_h2d_bytes"] + response["actual_d2h_bytes"]
+    ):
+        return False
+    if operation_count > 1 and response.get("completion_sentinel_read_counts") != [
+        operation_count,
+        operation_count,
+    ]:
+        return False
+    for expected_slice_id, entry in enumerate(slices):
+        if not isinstance(entry, Mapping):
+            return False
+        if (
+            entry.get("slice_id") != expected_slice_id
+            or entry.get("dpu_index") != expected_slice_id
+            or entry.get("allocated") is not True
+            or entry.get("release_confirmed") is not True
+            or entry.get("package_transferred") is not True
+            or entry.get("inputs_transferred") is not True
+            or entry.get("partial_output_read") is not True
+            or entry.get("partial_output_written") is not True
+            or entry.get("completion_confirmed") is not True
+            or entry.get("operation_count") != operation_count
+            or entry.get("completed_operation_count") != operation_count
+            or entry.get("observed_operation_completion_count") != operation_count
+            or entry.get("operation_completion_confirmed") is not True
+            or (
+                operation_count > 1
+                and entry.get("completion_sentinel_read_count") != operation_count
+            )
+            or not isinstance(entry.get("input_count"), int)
+            or entry.get("input_count", 0) < 2
+        ):
+            return False
+        sentinel = entry.get("dpu_completion_sentinel")
+        if operation_count > 1 and (
+            not isinstance(sentinel, Mapping)
+            or sentinel.get("verified") is not True
+            or sentinel.get("active_operation_index") != operation_count - 1
+            or sentinel.get("completion_status") != 1
+            or sentinel.get("completed_operation_count") != operation_count
+            or sentinel.get("output_elements_processed") != entry.get("partial_output_elements")
+        ):
+            return False
+        raw_bytes = entry.get("partial_output_raw_bytes", entry.get("partial_output_bytes"))
+        legacy_bytes = entry.get("partial_output_bytes")
+        transfer_bytes = entry.get("partial_output_transfer_bytes")
+        if (
+            not isinstance(raw_bytes, int)
+            or isinstance(raw_bytes, bool)
+            or raw_bytes < 0
+            or legacy_bytes != raw_bytes
+            or not isinstance(transfer_bytes, int)
+            or isinstance(transfer_bytes, bool)
+            or transfer_bytes < raw_bytes
+        ):
+            return False
     return (
         response.get("status") == "completed"
         and response.get("failure_stage") is None
@@ -481,9 +619,28 @@ def _response_completed(response: Mapping[str, Any]) -> bool:
         and allocation.get("verified") is True
         and isinstance(launch, Mapping)
         and launch.get("mode") == "asynchronous"
+        and launch.get("device_launch_mode") == "asynchronous_dpu_set"
+        and launch.get("host_completion_mode") == "blocking_sync"
+        and launch.get("operation_count") == operation_count
+        and launch.get("async_launch_count") == operation_count
+        and launch.get("synchronize_count") == operation_count
         and launch.get("completed") is True
+        and response.get("async_launch_count") == operation_count
+        and response.get("synchronize_count") == operation_count
         and isinstance(release, Mapping)
         and release.get("confirmed") is True
+        and (
+            operation_count == 1
+            or release.get("device_completion_confirmed") is True
+        )
+        and (
+            operation_count == 1
+            or all(
+                isinstance(entry.get("dpu_completion_sentinel"), Mapping)
+                and entry["dpu_completion_sentinel"].get("verified") is True
+                for entry in slices
+            )
+        )
     )
 
 
