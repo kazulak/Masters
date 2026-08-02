@@ -16,8 +16,10 @@ It is a foundation/MVP, not the full M2 architecture: two independent
 contraction-index slices are assigned to exactly two physical DPUs for the
 terminal one-operation real-valued X/H/Z boundary, then Python reconstructs the
 output by summing the two partial results. Implementation is complete; physical
-ETH acceptance is pending. The route makes no speedup, energy, scaling, or
-general TaskGraph claim.
+dispatch/reconstruction acceptance passed on ETH, but the current `|0>` fixture
+produces an all-zero second partial. Balanced useful-slice acceptance is still
+open. See the [ETH evidence audit](docs/upmem_m2_eth_evidence_analysis.md). The
+route makes no speedup, energy, scaling, or general TaskGraph claim.
 
 The previous one-DPU MRAM-resident route remains readable as historical context.
 Dense, legacy generic/persistent, CPU frontier/hybrid, PIM bridge/frontier, and
@@ -254,9 +256,10 @@ silently change benchmark-source cleanliness.
 Current limitation:
 
 > The current UPMEM evidence is bounded to the documented generic simulator and
-> the M2 two-DPU sliced-resident terminal boundary. Physical acceptance is
-> pending; fully general distributed, operation-aware, and hardware-calibrated
-> UPMEM TN execution does not yet exist.
+> the M2 two-DPU sliced-resident terminal boundary. Physical control-path
+> acceptance passed, but balanced useful-slice execution is still pending;
+> fully general distributed, operation-aware, and hardware-calibrated UPMEM TN
+> execution does not yet exist.
 
 ## Generated Cleanup
 

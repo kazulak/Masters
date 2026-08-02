@@ -93,7 +93,7 @@ different identities or objective settings but select the same structural path.
 | Serious CPU TN baseline | `thesis/implementation/src/quantum_bench/providers/exact_tn/quimb_tn.py` | Quimb/cotengra unsliced and sliced exact TN execution | Active |
 | Shared-plan CPU reference | `thesis/implementation/src/quantum_bench/providers/exact_tn/cpu_einsum.py`, `cpu_path_replay.py` | Execute the internal TaskGraph on CPU | Active; diagnostic/reference quality |
 | Strict UPMEM runtime | `thesis/implementation/src/quantum_bench/targets/upmem/taskgraph_runtime.py`, `numeric_reference.py`, `runtime_evidence.py` | Execute policy/scheduling while keeping CPU references, validation, and evidence construction reviewable | Active, SDK simulator |
-| Physical UPMEM route | `targets/upmem/hardware_taskgraph_sliced_resident.py`, `targets/upmem/hardware_sliced_resident_session.py`, `bench/upmem_hardware_sliced_resident_mvp.py`, `native/upmem/simplepim/upmem_sdk_generic_loop_resident_two_dpu/` | M2 foundation/MVP: two independent contraction-index slices on exactly two physical DPUs | Implementation complete; ETH physical acceptance pending; no speedup, energy, scaling, or general-TaskGraph claim |
+| Physical UPMEM route | `targets/upmem/hardware_taskgraph_sliced_resident.py`, `targets/upmem/hardware_sliced_resident_session.py`, `bench/upmem_hardware_sliced_resident_mvp.py`, `native/upmem/simplepim/upmem_sdk_generic_loop_resident_two_dpu/` | M2 foundation/MVP: two contraction-index slices on exactly two physical DPUs | Physical control path passed on ETH; current fixture gives slice 1 zero useful work, so balanced useful-slice acceptance remains open; no speedup, energy, scaling, or general-TaskGraph claim |
 | Native DPU programs | `thesis/implementation/native/upmem/simplepim/` | Bounded generic loop and resident host/DPU programs | Active, bounded; legacy dense sources are historical and removed from the runnable tree |
 | UPMEM analysis | `thesis/implementation/src/quantum_bench/targets/upmem/tile_plan.py`, `schedule.py`, `tn/upmem_path_cost.py`, planner scoring | Estimate transfer, tiling, frontier, assignment pressure, and objective components | Active; execution coverage remains bounded |
 | Evidence writer | `thesis/implementation/src/quantum_bench/bench/simulation_backend_compare.py`, `upmem_mvp_benchmark.py` | Run fixed suites and write canonical normalized evidence | Active |
@@ -111,7 +111,7 @@ different identities or objective settings but select the same structural path.
 | `cpu_tn_einsum_exact` | Internal NumPy TaskGraph | Shared-plan reference/diagnostic | Correct execution of supported internal plans, not a SOTA TN baseline |
 | `cpu_tn_path_replay_*` | Internal NumPy TaskGraph | Quantization diagnostic | CPU cost/error of per-contraction replay; not UPMEM performance |
 | `upmem_tn_sdk_simulator_quantized` / strict runtime | UPMEM SDK simulator | Bounded PIM code-path evidence | SDK DPU program execution, support boundary, traffic, and error; no hardware speedup |
-| `upmem_tn_hardware_sliced_resident_two_dpu` | UPMEM SDK physical hardware | M2 sliced-resident foundation/MVP | Exactly two independent slices, two physical DPUs, one tasklet per DPU, terminal one-operation real-valued boundary; ETH acceptance pending; no speedup, energy, scaling, or general-TaskGraph claim |
+| `upmem_tn_hardware_sliced_resident_two_dpu` | UPMEM SDK physical hardware | M2 sliced-resident foundation/MVP | Exactly two slices, two physical DPUs, one tasklet per DPU, terminal one-operation real-valued boundary; physical dispatch/reconstruction passed, but the current second partial is zero; no speedup, energy, scaling, or general-TaskGraph claim |
 | `upmem_tn_hardware_taskgraph_resident` | UPMEM SDK physical hardware | Previous bounded one-DPU resident route | Historical one-DPU correctness surface; not the current M2 route |
 | `planner_candidate_model` | Host planning/model | Path candidate evidence | Standard objectives plus deterministic custom UPMEM-aware greedy selection; modeled only, no execution speedup |
 
@@ -150,9 +150,12 @@ two float32 partial outputs in Python. The fixed suite and evidence contract
 are documented in the [M2 runbook](docs/upmem_hardware_sliced_resident_mvp_runbook.md).
 Shapes outside that boundary remain explicit failures.
 
-M2 implementation status: complete. Physical ETH acceptance is pending. A
-successful implementation review does not establish physical execution, speedup,
-energy, scaling, or general TaskGraph coverage.
+M2 implementation status: bounded physical control path passed on ETH on
+2026-08-02. All nine measured rows completed and reconstructed correctly, but
+the selected one-gate `|0>` fixtures produce an all-zero second partial. The
+[ETH evidence audit](docs/upmem_m2_eth_evidence_analysis.md) therefore leaves
+balanced useful-slice acceptance open. This does not establish speedup, energy,
+scaling, or general TaskGraph coverage.
 
 Current limitation:
 

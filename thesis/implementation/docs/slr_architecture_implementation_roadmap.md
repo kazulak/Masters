@@ -1,6 +1,6 @@
 # SLR Architecture Implementation Roadmap
 
-Status: active architecture roadmap, revised 2026-07-28
+Status: active architecture roadmap, revised 2026-08-02
 
 ## Goal
 
@@ -70,9 +70,9 @@ a small final architecture.
 | Contraction planning | opt_einsum, cotengra, custom UPMEM planner v1/v2 | Active; custom objective not hardware calibrated |
 | TaskGraph | Hashed pairwise tasks with dependencies and execution identity | Active |
 | CPU/GPU baselines | QuEST full state, Quimb/cotengra TN, internal CPU replay | Active |
-| Slicing/frontier models | Internal slice-aware graph, reconstruction, frontier waves | M2 two-slice resident foundation implemented; larger-graph physical expansion remains future work |
+| Slicing/frontier models | Internal slice-aware graph, reconstruction, frontier waves | M2 two-slice physical control path passed; balanced useful-slice and larger-graph expansion remain future work |
 | UPMEM simulator | Strict bounded generic TaskGraph route | Active diagnostic |
-| UPMEM hardware | Two independent terminal contraction-index slices, exactly two physical DPUs, one tasklet per DPU | M2 foundation/MVP implementation complete; ETH physical acceptance pending |
+| UPMEM hardware | Two terminal contraction-index slices, exactly two physical DPUs, one tasklet per DPU | M2 physical control-path acceptance passed on ETH; second slice is zero-work in the current fixture, so useful two-slice acceptance remains open |
 | Numerical modes | Float32, per-task int8/int32, split real/imaginary complex | Active in bounded routes |
 | Evidence system | Normalized records, claim guards, reports, plots, snapshots | Active instrumentation |
 | External sources | QuEST, SimplePIM, and PID-Comm pinned | QuEST active; SimplePIM harness/probe implemented locally, physical qualification pending; PID-Comm is a separate blocked lane |
@@ -540,9 +540,18 @@ The fixed route is
 `upmem_tn_hardware_sliced_resident_two_dpu` with backend
 `upmem_sdk_hardware_sliced_resident_two_dpu`. The X/H/Z suite is configured for
 nine measured normalized rows after one warmup per case. The implementation is
-complete, but physical ETH acceptance is pending. The exact ETH commands,
+complete and the 2026-08-02 ETH run passed allocation, execution,
+reconstruction, validation, and release for all nine measured rows. The exact
+ETH commands,
 acceptance fields, artifacts, and failure handling are maintained in the
 [M2 runbook](upmem_hardware_sliced_resident_mvp_runbook.md).
+
+The [ETH evidence audit](upmem_m2_eth_evidence_analysis.md) found that every
+slice-1 partial is zero. This follows from slicing the input-state index of a
+single gate applied to `|0>`; it is not a native execution error. The run closes
+the physical control-path gate but not the useful-work gate. M2.1 must execute a
+bounded case in which both DPU slices contribute nonzero partials and must fix
+the contradictory generic normalized metadata before any parallelism report.
 
 This is the M2 foundation/MVP, not the full M2 architecture. It makes no
 speedup, energy, scaling, or general TaskGraph claim. M2 expansion remains
@@ -552,13 +561,13 @@ auditable. Do not relabel fixed slice ownership as a general scheduler.
 
 ### M3: operation-aware provider/kernel system
 
-After the M2 physical pass, add the operation-classification/provider registry
-and a deterministic classifier with eligibility, rejection, numeric contract,
-provider/version, and explicit generic fallback. The first specialized target
-is a PIMutation-inspired row-swap/permutation gate kernel; then add, task by
-task, ATiM dense/local kernels, SparseP sparse kernels, and SimplePIM
-map/zip/reduce primitives. PID-Comm remains the planned communication provider
-for relocation and reduction. These are central subsequent-milestone
+After the M2.1 useful-slice pass, add the operation-classification/provider
+registry and a deterministic classifier with eligibility, rejection, numeric
+contract, provider/version, and explicit generic fallback. The first
+specialized target is a PIMutation-inspired row-swap/permutation gate kernel;
+then add, task by task, ATiM dense/local kernels, SparseP sparse kernels, and
+SimplePIM map/zip/reduce primitives. PID-Comm remains the planned communication
+provider for relocation and reduction. These are central subsequent-milestone
 components, not optional alternatives to the architecture.
 
 Gate: every selected provider/kernel output matches the reference contract;
@@ -733,11 +742,16 @@ Each physical milestone has a separate ETH acceptance suite.
 
 ## Immediate Next Wave
 
-Run the M2 physical acceptance on ETH using the
-[M2 runbook](upmem_hardware_sliced_resident_mvp_runbook.md). After that pass,
-the next implementation target is M3: operation classification, the provider
-registry with generic fallback, and the first row-swap/specialized gate kernel.
-Keep M2 expansion to terminal contractions in larger graphs as an explicit
-parallel follow-up; it does not become general TaskGraph execution by
-implication. SimplePIM, PID-Comm, ATiM, and SparseP remain central planned
-components for the subsequent provider, kernel, and communication milestones.
+Complete M2.1 before interpreting two-DPU timing. Add the smallest deterministic
+real quantum/TN case whose two contraction-index slices both have nonzero
+partial outputs, without a hidden CPU prefix. Record per-slice useful work,
+correct the route's slicing/parallelism/functionality metadata, add honest stage
+timing, and repeat the bounded ETH acceptance. The full rationale and gate are
+in the [ETH evidence audit](upmem_m2_eth_evidence_analysis.md).
+
+After that short corrective wave, proceed to M3: operation classification, the
+provider registry with generic fallback, and the first row-swap/permutation
+kernel. Keep fixed-slice expansion to larger graphs as a parallel M2 lane; it
+does not become general TaskGraph execution by implication. SimplePIM,
+PID-Comm, ATiM, and SparseP remain central planned components for the subsequent
+provider, kernel, and communication milestones.

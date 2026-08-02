@@ -58,10 +58,14 @@ acceptance.
 
 ## Subsequent Milestones
 
-After the M2 physical pass, M3 is the next target: an operation-classification
+The M2 physical control path passed on ETH, but its fixed `|0>` fixtures leave
+the second slice with an all-zero partial. M2.1 must first demonstrate two
+nonzero slice contributions and correct the normalized parallelism metadata.
+After that bounded correction, M3 is the next target: an operation-classification
 and provider registry with an explicit generic fallback, followed by the first
 row-swap/permutation specialized gate kernel. M2 expansion to terminal
-contractions in larger graphs remains explicit alongside that work.
+contractions in larger graphs remains explicit alongside that work. See the
+[ETH evidence audit](upmem_m2_eth_evidence_analysis.md).
 
 SimplePIM, PID-Comm, ATiM, and SparseP are central planned components of the
 subsequent architecture: SimplePIM for management/distribution and array

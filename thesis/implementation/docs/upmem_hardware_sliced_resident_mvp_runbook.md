@@ -70,3 +70,17 @@ accounting includes application-visible and actual H2D/D2H/total fields, with
 each total equal to H2D plus D2H. Failed or unsupported operations retain their
 relative response/manifest paths and available native command, stdout, stderr,
 and failure evidence; do not delete them when reviewing evidence.
+
+## 2026-08-02 ETH Result
+
+The first physical run completed all three warmups and all nine measured rows
+with two allocated DPUs, one asynchronous set launch, one synchronization,
+successful release, no fallback, and correct reconstruction. The run is a
+physical control-path pass.
+
+It is not yet a useful-work pass: all slice-1 partials are zero because these
+single-gate circuits slice the input-state index of the fixed `|0>` state. The
+normalized rows also inherit several generic default fields that contradict the
+native slice evidence. Do not use those rows for a parallelism or speedup plot.
+The complete findings and M2.1 acceptance plan are in the
+[ETH evidence audit](upmem_m2_eth_evidence_analysis.md).

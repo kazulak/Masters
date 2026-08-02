@@ -2,6 +2,9 @@
 # deliberately outside Git until a reviewed compact snapshot is promoted under
 # thesis_results/.
 runs*/
+# Developer-local physical bundles copied from ETH for audit. Keep the raw
+# bundle available locally; commit only a reviewed analysis or final snapshot.
+eth-evidence/
 native/quest_cpu/bin/
 native/quest_gpu/bin/
 native/quest_gpu/build/
