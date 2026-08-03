@@ -259,6 +259,37 @@ def test_prepare_build_runs_native_parse_only_without_allocation_or_launch(
         assert validation["reason"] is None
 
 
+def test_prepare_native_validation_uses_execution_request_id_shape(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(mvp, "build_sliced_resident_hardware_session", _fake_build)
+    observed_request_ids: list[str] = []
+
+    def parse_only(command, **kwargs):
+        if "--validate-slice-packages" in command:
+            manifest = json.loads(Path(command[2]).read_text(encoding="utf-8"))
+            observed_request_ids.append(manifest["session_id"])
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"status": "valid", "reason": None}),
+                stderr="",
+            )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(mvp.subprocess, "run", parse_only)
+    result = mvp.prepare_upmem_hardware_sliced_resident_mvp(
+        tmp_path,
+        suite_path=M2_1_SUITE,
+        build=True,
+        environment={},
+    )
+
+    assert result.status == "prepared"
+    assert observed_request_ids
+    assert all(item.startswith("execute-") for item in observed_request_ids)
+    assert all(not item.startswith("plan-") for item in observed_request_ids)
+
+
 def test_prepare_without_build_keeps_native_validation_explicitly_unrun(tmp_path) -> None:
     result = mvp.prepare_upmem_hardware_sliced_resident_mvp(
         tmp_path,

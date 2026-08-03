@@ -371,7 +371,11 @@ def prepare_upmem_hardware_sliced_resident_mvp(
                             m2,
                             dpu_binary,
                             artifact_dir,
-                            prefix="plan",
+                            # Keep semantic request IDs identical to execution.
+                            # The plan root remains separate from the evidence
+                            # root, but the native parser must see the same
+                            # request-id shape and length during preflight.
+                            prefix="execute",
                             numeric_mode=numeric_mode,
                         )
                         if native.get("status") == "passed":

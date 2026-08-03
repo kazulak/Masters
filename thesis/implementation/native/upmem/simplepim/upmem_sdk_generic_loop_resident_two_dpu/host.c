@@ -200,20 +200,34 @@ static int two_dpu_matching_end(const char *start, const char *end, char opening
 }
 
 static int two_dpu_unique_value(const char *object, const char *end, const char *key, const char **value) {
-    char needle[96];
+    const size_t key_length = strlen(key);
+    size_t needle_length;
+    char *needle = NULL;
     const char *found = NULL;
     const char *cursor = object;
-    if (snprintf(needle, sizeof(needle), "\"%s\"", key) < 0) return 1;
+    int failed = 1;
+    if (key_length > SIZE_MAX - 3u) return 1;
+    needle_length = key_length + 2u;
+    needle = (char *)malloc(needle_length + 1u);
+    if (needle == NULL) return 1;
+    needle[0] = '"';
+    memcpy(needle + 1u, key, key_length);
+    needle[key_length + 1u] = '"';
+    needle[needle_length] = '\0';
     while ((cursor = strstr(cursor, needle)) != NULL && cursor < end) {
-        if (found != NULL) return 1;
-        found = cursor + strlen(needle);
+        if (found != NULL) goto done;
+        if ((size_t)(end - cursor) < needle_length) goto done;
+        found = cursor + needle_length;
         cursor = found;
     }
-    if (found == NULL || found >= end) return 1;
+    if (found == NULL || found >= end) goto done;
     found = two_dpu_skip_space(found, end);
-    if (found >= end || *found++ != ':') return 1;
+    if (found >= end || *found++ != ':') goto done;
     *value = two_dpu_skip_space(found, end);
-    return *value >= end;
+    failed = *value >= end;
+done:
+    free(needle);
+    return failed;
 }
 
 static int two_dpu_json_string_field(const char *object, const char *end, const char *key, char **value) {
@@ -687,9 +701,18 @@ static int two_dpu_load_slice(two_dpu_slice_t *slice, const char *path, const ch
     memset(slice, 0, sizeof(*slice));
     slice->slice_id = slice_id;
     slice->manifest_path = path;
-    if (two_dpu_hash_file(path, &slice->manifest_hash) != 0 || resident_request_load(path, &slice->request, &slice->parse_error) != 0 ||
-        two_dpu_load_slice_execution(path, &slice->execution) != 0) {
+    if (two_dpu_hash_file(path, &slice->manifest_hash) != 0) {
+        *reason = "slice_manifest_hash_failed";
+        return 1;
+    }
+    if (resident_request_load(path, &slice->request, &slice->parse_error) != 0) {
         *reason = "slice_manifest_parse_failed";
+        return 1;
+    }
+    if (two_dpu_load_slice_execution(path, &slice->execution) != 0) {
+        free(slice->parse_error);
+        slice->parse_error = strdup("slice_execution_parse_failed");
+        *reason = "slice_execution_parse_failed";
         return 1;
     }
     return 0;

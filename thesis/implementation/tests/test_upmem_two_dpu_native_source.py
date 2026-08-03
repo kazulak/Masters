@@ -188,11 +188,16 @@ def test_two_dpu_validate_slice_packages_accepts_genuine_one_contract_pair_via_s
     dpu_binary = tmp_path / "dpu_resident"
     dpu_binary.write_bytes(b"fixture")
     written = write_two_slice_resident_graph_packages(
-        packages, tmp_path, dpu_binary=dpu_binary
+        packages,
+        tmp_path,
+        dpu_binary=dpu_binary,
+        request_id_prefix="long-input-path-" + "x" * 80,
     )
     first, second = (item.package for item in written)
     assert first.manifest_path is not None
     assert second.manifest_path is not None
+    first_manifest = json.loads(first.manifest_path.read_text(encoding="utf-8"))
+    assert len(first_manifest["initial_slots"][0]["input_path"]) > 95
     _rewrite_canonical_fnv1a64(first.manifest_path)
     _rewrite_canonical_fnv1a64(second.manifest_path)
 
@@ -217,7 +222,6 @@ def test_two_dpu_validate_slice_packages_accepts_genuine_one_contract_pair_via_s
         "reconstruction_contract": "python_sum_partials",
     }
     assert first.manifest_path != second.manifest_path
-    first_manifest = json.loads(first.manifest_path.read_text(encoding="utf-8"))
     second_manifest = json.loads(second.manifest_path.read_text(encoding="utf-8"))
     assert first_manifest["slice_execution"]["slice_id"] == 0
     assert second_manifest["slice_execution"]["slice_id"] == 1
@@ -295,6 +299,14 @@ def test_two_dpu_validate_slice_packages_accepts_genuine_one_contract_pair_via_s
         mutate(mutated)
         second.manifest_path.write_text(json.dumps(mutated), encoding="utf-8")
         assert validate(first.manifest_path, second.manifest_path).returncode == 1
+    second.manifest_path.write_text(original_second, encoding="utf-8")
+
+    missing_execution = json.loads(original_second)
+    missing_execution.pop("slice_execution")
+    second.manifest_path.write_text(json.dumps(missing_execution), encoding="utf-8")
+    parse_failure = validate(first.manifest_path, second.manifest_path)
+    assert parse_failure.returncode == 1
+    assert json.loads(parse_failure.stdout)["reason"] == "slice_execution_parse_failed"
     second.manifest_path.write_text(original_second, encoding="utf-8")
 
     malformed_final_component = json.loads(original_second)
