@@ -50,11 +50,14 @@ from quantum_bench.tn.slicing import (
 )
 
 
+# M2.3 changes the admitted source-graph profile, not the serialized package or
+# native ABI.  Keep the v1 schemas and require the profile field to discriminate.
 SLICED_RESIDENT_PLAN_SCHEMA_VERSION = "upmem_sliced_resident_plan_v1"
 SLICED_RESIDENT_EXECUTION_SCHEMA_VERSION = "upmem_sliced_resident_execution_v1"
 SLICED_RESIDENT_OUTER_ROUTE_ID = "upmem_tn_hardware_sliced_resident_two_dpu"
 SLICED_RESIDENT_OUTER_BACKEND_ID = "upmem_sdk_hardware_sliced_resident_two_dpu"
 SLICED_RESIDENT_OUTER_PROFILE_VERSION = "hardware_sliced_resident_two_dpu_m2_v1"
+SLICED_RESIDENT_M2_3_PROFILE_VERSION = "hardware_sliced_resident_two_dpu_m2_3_v1"
 SLICED_RESIDENT_OUTER_TIMING_SCOPE = (
     "two_dpu_sliced_resident_host_observed_bringup_v1"
 )
@@ -71,6 +74,7 @@ class SlicedResidentGraphPackage:
     restricted_input_sha256: Mapping[str, str]
     restricted_input_fnv1a64: Mapping[str, str]
     source_hashes: Mapping[str, str]
+    hardware_profile_version: str
     resident_descriptor_fnv1a64: str | None = None
 
     @property
@@ -107,6 +111,7 @@ class SlicedResidentPlan:
     execution_plan: UpmemExecutionPlan
     slice_plans: tuple[SlicedResidentSlicePlan, ...]
     reconstruction_step: SliceReconstructionStep
+    hardware_profile_version: str
 
     @property
     def circuit_semantics_hash(self) -> str:
@@ -127,6 +132,7 @@ class SlicedResidentPlan:
                 "slice_count": len(self.slice_plans),
                 "slices": self.slice_plans,
                 "reconstruction": self.reconstruction_step,
+                "hardware_profile_version": self.hardware_profile_version,
                 "execution_plan": self.execution_plan,
                 "circuit_semantics_hash": self.circuit_semantics_hash,
                 "tensor_network_hash": self.tensor_network_hash,
@@ -140,21 +146,26 @@ def build_two_slice_resident_plan(
     network: TensorNetworkValue,
     *,
     model: SliceAwareTaskGraphModel | None = None,
+    profile_version: str = SLICED_RESIDENT_OUTER_PROFILE_VERSION,
 ) -> SlicedResidentPlan:
-    """Build exactly two resident slices under the bounded M2 contract.
+    """Build exactly two resident slices under an explicit M2 profile.
 
     The historical M2 fixture slices a dependency-free terminal task.  M2.1
     additionally permits one terminal task with a dependent prefix when the
     model explicitly declares ``dependent_prefix_replicated``.  Each DPU then
     receives and executes the complete restricted graph; no prefix result is
-    injected from the CPU.
+    injected from the CPU.  The versioned M2.3 profile admits exactly three
+    source tasks with the same replicated-prefix contract; no other profile
+    changes its source-task limit.
     """
 
+    _validate_profile_version(profile_version)
     if network.spec != graph.network:
         raise ValueError("sliced_resident_network_identity_mismatch")
     selected_model = model or build_slice_aware_taskgraph_model(
         graph, max_slice_count=2
     )
+    _validate_model_restriction_structure(selected_model)
     valid, reason = validate_slice_aware_taskgraph_model(selected_model)
     if not valid:
         raise ValueError(
@@ -186,9 +197,16 @@ def build_two_slice_resident_plan(
         raise ValueError("sliced_resident_selected_task_must_be_terminal")
     if len(graph.tasks) > 1 and selected_model.slice_model_kind != "dependent_prefix_replicated":
         raise ValueError("sliced_resident_dependent_prefix_contract_missing")
-    if len(graph.tasks) > 2:
+    if profile_version == SLICED_RESIDENT_M2_3_PROFILE_VERSION:
+        if len(graph.tasks) != 3:
+            raise ValueError("sliced_resident_m2_3_requires_exactly_three_source_tasks")
+        if selected_model.slice_model_kind != "dependent_prefix_replicated":
+            raise ValueError("sliced_resident_m2_3_dependent_prefix_contract_missing")
+    elif len(graph.tasks) > 2:
         raise ValueError("sliced_resident_prefix_task_cap_exceeded")
-    _validate_model_binding(graph, selected_model)
+    _validate_model_binding(
+        graph, selected_model, profile_version=profile_version
+    )
 
     slice_tasks = tuple(
         sorted(selected_model.slice_tasks, key=lambda task: task.slice_id)
@@ -213,6 +231,7 @@ def build_two_slice_resident_plan(
         execution_plan=execution_plan,
         slice_plans=slice_plans,
         reconstruction_step=selected_model.reconstruction_step,
+        hardware_profile_version=profile_version,
     )
     valid, reason = validate_two_slice_resident_plan(result)
     if not valid:
@@ -261,6 +280,7 @@ def build_two_slice_resident_graph_packages(
                 restricted_input_sha256=restricted_hashes,
                 restricted_input_fnv1a64=restricted_fnv,
                 source_hashes=source_hashes,
+                hardware_profile_version=plan.hardware_profile_version,
             )
         )
     return tuple(packages)
@@ -575,6 +595,10 @@ def validate_two_slice_resident_plan(
         return False, "execution_plan_graph_identity_mismatch"
     if plan.network.spec != plan.graph.network:
         return False, "network_identity_mismatch"
+    try:
+        _validate_model_restriction_structure(plan.model)
+    except ValueError as exc:
+        return False, str(exc)
     valid, reason = validate_slice_aware_taskgraph_model(plan.model)
     if not valid:
         return False, reason or "invalid_slice_model"
@@ -583,7 +607,12 @@ def validate_two_slice_resident_plan(
     if plan.reconstruction_step != plan.model.reconstruction_step:
         return False, "reconstruction_step_model_mismatch"
     try:
-        _validate_model_binding(plan.graph, plan.model)
+        _validate_profile_version(plan.hardware_profile_version)
+        _validate_model_binding(
+            plan.graph,
+            plan.model,
+            profile_version=plan.hardware_profile_version,
+        )
     except ValueError as exc:
         return False, str(exc)
     if len(plan.slice_plans) != 2:
@@ -789,7 +818,7 @@ def _slice_execution_manifest(
         "outer_execution_identity": {
             "route_id": SLICED_RESIDENT_OUTER_ROUTE_ID,
             "backend_id": SLICED_RESIDENT_OUTER_BACKEND_ID,
-            "hardware_profile_version": SLICED_RESIDENT_OUTER_PROFILE_VERSION,
+            "hardware_profile_version": item.hardware_profile_version,
             "timing_scope": SLICED_RESIDENT_OUTER_TIMING_SCOPE,
         },
         "nested_package_execution_identity": {
@@ -950,6 +979,9 @@ def _written_input_fingerprints(
 def _validate_written_package_assignments(
     plan: SlicedResidentPlan, packages: tuple[SlicedResidentGraphPackage, ...]
 ) -> None:
+    _validate_profile_version(plan.hardware_profile_version)
+    for item in packages:
+        _validate_profile_version(item.hardware_profile_version)
     if len(packages) != 2 or tuple(item.slice_id for item in packages) != (0, 1):
         raise ValueError("sliced_resident_packages_must_have_slice_ids_0_and_1")
     if (
@@ -967,6 +999,7 @@ def _validate_written_package_assignments(
     if any(
         item.restrictions != item.slice_plan.slice_task.input_restrictions
         or dict(item.source_hashes) != expected_source_hashes
+        or item.hardware_profile_version != plan.hardware_profile_version
         for item in packages
     ):
         raise ValueError("sliced_resident_written_slice_metadata_mismatch")
@@ -993,6 +1026,20 @@ def _validate_slice_execution_binding(
     resident_descriptor_fnv1a64: str,
 ) -> None:
     task = item.slice_plan.slice_task
+    outer_identity = binding.get("outer_execution_identity")
+    if not isinstance(outer_identity, Mapping):
+        raise ValueError("sliced_resident_profile_missing")
+    observed_profile = outer_identity.get("hardware_profile_version")
+    _validate_profile_version(observed_profile)
+    if observed_profile != item.hardware_profile_version:
+        raise ValueError("sliced_resident_manifest_outer_execution_identity_mismatch")
+    if outer_identity != {
+        "route_id": SLICED_RESIDENT_OUTER_ROUTE_ID,
+        "backend_id": SLICED_RESIDENT_OUTER_BACKEND_ID,
+        "hardware_profile_version": item.hardware_profile_version,
+        "timing_scope": SLICED_RESIDENT_OUTER_TIMING_SCOPE,
+    }:
+        raise ValueError("sliced_resident_manifest_outer_execution_identity_mismatch")
     source_hashes = {
         "circuit_semantics_hash": plan.circuit_semantics_hash,
         "tensor_network_hash": plan.tensor_network_hash,
@@ -1209,9 +1256,16 @@ def _response_fingerprint(
     return _sha256_bytes(raw) if algorithm == "sha256" else _fnv1a64_bytes(raw)
 
 
-def _validate_model_binding(graph: TaskGraph, model: SliceAwareTaskGraphModel) -> None:
+def _validate_model_binding(
+    graph: TaskGraph,
+    model: SliceAwareTaskGraphModel,
+    *,
+    profile_version: str = SLICED_RESIDENT_OUTER_PROFILE_VERSION,
+) -> None:
+    _validate_profile_version(profile_version)
     if not graph.tasks:
         raise ValueError("sliced_resident_requires_task_graph")
+    _validate_source_task_dependencies(graph)
     source = next(
         (task for task in graph.tasks if task.id == model.sliced_task_id), None
     )
@@ -1256,26 +1310,26 @@ def _validate_model_binding(graph: TaskGraph, model: SliceAwareTaskGraphModel) -
             raise ValueError("sliced_resident_model_output_binding_mismatch")
         tensors = {tensor.id: tensor for tensor in graph.network.tensors}
         if model.slice_model_kind == "dependent_prefix_replicated":
-            if len(graph.tasks) != 2 or not source.dependencies:
+            expected_source_task_count = (
+                3
+                if profile_version == SLICED_RESIDENT_M2_3_PROFILE_VERSION
+                else 2
+            )
+            if len(graph.tasks) != expected_source_task_count or not source.dependencies:
                 raise ValueError("sliced_resident_dependent_prefix_contract_invalid")
             if len(slice_task.input_restrictions) != 2:
                 raise ValueError("sliced_resident_model_restrictions_mismatch")
-            source_tensor_ids = {tensor.id for tensor in graph.network.tensors}
             intermediate_tensor_ids = {
                 task.output_tensor_id for task in graph.tasks
             }
-            for restriction in slice_task.input_restrictions:
-                tensor = tensors.get(restriction.tensor_id)
-                if (
-                    tensor is None
-                    or restriction.tensor_id not in source_tensor_ids
-                    or restriction.tensor_id in intermediate_tensor_ids
-                    or restriction.label != label
-                    or restriction.axis >= len(tensor.labels)
-                    or tensor.labels[restriction.axis] != label
-                    or restriction.value != slice_id
-                ):
-                    raise ValueError("sliced_resident_model_restrictions_mismatch")
+            _validate_dependent_prefix_restrictions(
+                graph,
+                slice_task,
+                label=label,
+                slice_id=slice_id,
+                tensors=tensors,
+                intermediate_tensor_ids=intermediate_tensor_ids,
+            )
         else:
             expected_restrictions = tuple(
                 SliceInputRestriction(
@@ -1302,6 +1356,113 @@ def _validate_model_binding(graph: TaskGraph, model: SliceAwareTaskGraphModel) -
         or reconstruction.operation != "sum_partials"
     ):
         raise ValueError("sliced_resident_model_reconstruction_output_mismatch")
+
+
+def _validate_source_task_dependencies(graph: TaskGraph) -> None:
+    task_ids = [task.id for task in graph.tasks]
+    output_ids = [task.output_tensor_id for task in graph.tasks]
+    if len(task_ids) != len(set(task_ids)) or len(output_ids) != len(set(output_ids)):
+        raise ValueError("sliced_resident_source_task_identity_duplicate")
+
+    producer_by_output = {
+        task.output_tensor_id: task.id for task in graph.tasks
+    }
+    seen_task_ids: set[str] = set()
+    for task in graph.tasks:
+        expected_dependencies: list[str] = []
+        for tensor_id in task.input_tensor_ids:
+            producer = producer_by_output.get(tensor_id)
+            if producer is None:
+                continue
+            if producer not in seen_task_ids:
+                raise ValueError("sliced_resident_source_task_order_invalid")
+            expected_dependencies.append(producer)
+        if task.dependencies != tuple(expected_dependencies):
+            raise ValueError("sliced_resident_source_task_dependencies_mismatch")
+        seen_task_ids.add(task.id)
+
+
+def _validate_model_restriction_structure(model: SliceAwareTaskGraphModel) -> None:
+    if not isinstance(model.slice_tasks, tuple) or any(
+        not isinstance(task, SliceModelTask)
+        or not isinstance(task.input_restrictions, tuple)
+        for task in model.slice_tasks
+    ):
+        raise ValueError("sliced_resident_model_restrictions_mismatch_malformed")
+
+
+def _validate_dependent_prefix_restrictions(
+    graph: TaskGraph,
+    slice_task: SliceModelTask,
+    *,
+    label: int,
+    slice_id: int,
+    tensors: Mapping[str, TensorSpec],
+    intermediate_tensor_ids: set[str],
+) -> None:
+    restrictions = slice_task.input_restrictions
+    if not isinstance(restrictions, tuple) or any(
+        not isinstance(item, SliceInputRestriction) for item in restrictions
+    ):
+        raise ValueError("sliced_resident_model_restrictions_mismatch_malformed")
+    tensor_ids = [item.tensor_id for item in restrictions]
+    if len(tensor_ids) != len(set(tensor_ids)):
+        raise ValueError(
+            "sliced_resident_model_restrictions_mismatch_duplicate_tensor_id"
+        )
+
+    for restriction in restrictions:
+        if (
+            not isinstance(restriction.tensor_id, str)
+            or not restriction.tensor_id
+            or not isinstance(restriction.label, int)
+            or isinstance(restriction.label, bool)
+            or not isinstance(restriction.value, int)
+            or isinstance(restriction.value, bool)
+        ):
+            raise ValueError("sliced_resident_model_restrictions_mismatch_malformed")
+        tensor = tensors.get(restriction.tensor_id)
+        if tensor is None or restriction.tensor_id in intermediate_tensor_ids:
+            raise ValueError("sliced_resident_model_restrictions_mismatch")
+        if (
+            not isinstance(restriction.axis, int)
+            or isinstance(restriction.axis, bool)
+            or restriction.axis < 0
+            or restriction.axis >= len(tensor.labels)
+            or restriction.axis >= len(tensor.shape)
+        ):
+            raise ValueError("sliced_resident_model_restrictions_mismatch_axis_invalid")
+        if (
+            restriction.label != label
+            or tensor.labels[restriction.axis] != label
+            or restriction.value != slice_id
+            or restriction.value < 0
+            or restriction.value >= tensor.shape[restriction.axis]
+        ):
+            raise ValueError("sliced_resident_model_restrictions_mismatch")
+
+    expected = tuple(
+        SliceInputRestriction(
+            tensor_id=tensor.id,
+            label=label,
+            axis=tensor.labels.index(label),
+            value=slice_id,
+        )
+        for tensor in graph.network.tensors
+        if tensor.id not in intermediate_tensor_ids and label in tensor.labels
+    )
+    if restrictions != expected:
+        raise ValueError("sliced_resident_model_restrictions_mismatch")
+
+
+def _validate_profile_version(profile_version: str | None) -> None:
+    if not isinstance(profile_version, str) or not profile_version:
+        raise ValueError("sliced_resident_profile_missing")
+    if profile_version not in {
+        SLICED_RESIDENT_OUTER_PROFILE_VERSION,
+        SLICED_RESIDENT_M2_3_PROFILE_VERSION,
+    }:
+        raise ValueError(f"sliced_resident_profile_unsupported:{profile_version}")
 
 
 def _build_execution_plan(graph: TaskGraph) -> UpmemExecutionPlan:
@@ -1337,6 +1498,7 @@ def _build_execution_plan(graph: TaskGraph) -> UpmemExecutionPlan:
 
 __all__ = [
     "SLICED_RESIDENT_EXECUTION_SCHEMA_VERSION",
+    "SLICED_RESIDENT_M2_3_PROFILE_VERSION",
     "SLICED_RESIDENT_PLAN_SCHEMA_VERSION",
     "SlicedResidentGraphPackage",
     "SlicedResidentPlan",

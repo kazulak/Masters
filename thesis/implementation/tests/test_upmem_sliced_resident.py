@@ -8,7 +8,13 @@ import warnings
 import numpy as np
 import pytest
 
+from quantum_bench.circuits import gate_matrix
+from quantum_bench.core.records import CircuitOperation, CircuitSpec
+from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
+    build_resident_policy_reference,
+)
 from quantum_bench.targets.upmem.hardware_taskgraph_sliced_resident import (
+    SLICED_RESIDENT_M2_3_PROFILE_VERSION,
     build_two_slice_resident_graph_packages,
     build_two_slice_resident_plan,
     load_and_reconstruct_two_slice_native_outputs,
@@ -24,9 +30,408 @@ from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
 from quantum_bench.tn import with_execution_identity
 from quantum_bench.tn.execution import execute_task_sequence_np_einsum
 from quantum_bench.tn.network import TensorNetworkValue
-from quantum_bench.tn.slicing import build_slice_aware_taskgraph_model
+from quantum_bench.tn.network import build_tensor_network
+from quantum_bench.tn.slicing import (
+    SliceInputRestriction,
+    build_slice_aware_taskgraph_model,
+)
+from quantum_bench.tn.task_graph import plan_task_graph_with_config
 
 from .support import split_complex_graph
+
+
+_M2_3_CUSTOM_PLANNER = {
+    "engine": "custom_upmem",
+    "algorithm": "greedy",
+    "objective_version": "upmem_path_cost_v2",
+    "selection_scope": "projected_prefix",
+    "weight_profile": "balanced_literature_informed",
+    "normalization": "fixed_log1p_generic_budgets_v2",
+    "execution_policy": "generic_single_dpu_split_complex_v2",
+}
+
+
+def _m2_3_case(angles: tuple[float, float], planner: dict) -> tuple[object, object]:
+    circuit = CircuitSpec(
+        "m2_3_ry_h_ry",
+        1,
+        (
+            CircuitOperation("ry", (0,), (angles[0],)),
+            CircuitOperation("h", (0,)),
+            CircuitOperation("ry", (0,), (angles[1],)),
+        ),
+        {"kind": "fixture", "m2_3": True},
+    )
+    network = build_tensor_network(circuit)
+    graph = plan_task_graph_with_config(network, planner)
+    return graph, network
+
+
+def _m2_3_dependent_prefix_model(graph):
+    model = build_slice_aware_taskgraph_model(
+        graph, max_slice_count=2, sliced_task_id=graph.tasks[-1].id
+    )
+    label = model.sliced_indices[0]
+    intermediate_ids = {task.output_tensor_id for task in graph.tasks}
+    restrictions = tuple(
+        tuple(
+            SliceInputRestriction(
+                tensor.id,
+                label,
+                tensor.labels.index(label),
+                slice_id,
+            )
+            for tensor in graph.network.tensors
+            if tensor.id not in intermediate_ids and label in tensor.labels
+        )
+        for slice_id in (0, 1)
+    )
+    return replace(
+        model,
+        slice_model_kind="dependent_prefix_replicated",
+        slice_tasks=tuple(
+            replace(task, input_restrictions=restriction)
+            for task, restriction in zip(model.slice_tasks, restrictions, strict=True)
+        ),
+    )
+
+
+def _m2_3_plan():
+    graph, network = _m2_3_case(
+        (np.pi / 5.0, np.pi / 9.0),
+        {"engine": "opt_einsum", "optimize": "greedy"},
+    )
+    model = _m2_3_dependent_prefix_model(graph)
+    return build_two_slice_resident_plan(
+        graph,
+        network,
+        model=model,
+        profile_version=SLICED_RESIDENT_M2_3_PROFILE_VERSION,
+    )
+
+
+def _replace_slice_task(plan, slice_index: int, slice_task):
+    model_tasks = list(plan.model.slice_tasks)
+    model_tasks[slice_index] = slice_task
+    slice_plans = list(plan.slice_plans)
+    slice_plans[slice_index] = replace(
+        slice_plans[slice_index], slice_task=slice_task
+    )
+    return replace(
+        plan,
+        model=replace(plan.model, slice_tasks=tuple(model_tasks)),
+        slice_plans=tuple(slice_plans),
+    )
+
+
+@pytest.mark.parametrize(
+    ("angles", "expected"),
+    [
+        (
+            (np.pi / 5.0, np.pi / 9.0),
+            np.array([0.7986355100472927, 0.6018150231520483]),
+        ),
+        (
+            (np.pi / 9.0, np.pi / 6.0),
+            np.array([0.6427876096865393, 0.766044443118978]),
+        ),
+    ],
+)
+def test_m2_3_ry_h_ry_cpu_reference(
+    angles: tuple[float, float], expected: np.ndarray
+) -> None:
+    graph, network = _m2_3_case(angles, {"engine": "opt_einsum", "optimize": "greedy"})
+    actual, _ = execute_task_sequence_np_einsum(graph, network)
+
+    np.testing.assert_allclose(actual, expected, atol=1.0e-12, rtol=1.0e-12)
+    assert graph.path == ((0, 1), (0, 1), (0, 1))
+    assert all(np.allclose(gate_matrix("ry", (theta,)).imag, 0.0) for theta in angles)
+
+
+@pytest.mark.parametrize(
+    ("planner", "expected_path"),
+    [
+        ({"engine": "opt_einsum", "optimize": "greedy"}, ((0, 1), (0, 1), (0, 1))),
+        (_M2_3_CUSTOM_PLANNER, ((0, 1), (0, 2), (0, 1))),
+    ],
+)
+@pytest.mark.parametrize("angles", ((np.pi / 5.0, np.pi / 9.0), (np.pi / 9.0, np.pi / 6.0)))
+def test_m2_3_paths_are_three_task_same_output_and_distinct_plan(
+    planner: dict, expected_path: tuple[tuple[int, int], ...], angles: tuple[float, float]
+) -> None:
+    graph, network = _m2_3_case(angles, planner)
+    actual, _ = execute_task_sequence_np_einsum(graph, network)
+    reference, _ = execute_task_sequence_np_einsum(
+        *_m2_3_case(angles, {"engine": "opt_einsum", "optimize": "greedy"})
+    )
+
+    assert len(graph.tasks) == 3
+    assert graph.path == expected_path
+    np.testing.assert_allclose(actual, reference, atol=1.0e-12, rtol=1.0e-12)
+
+
+@pytest.mark.parametrize("angles", ((np.pi / 5.0, np.pi / 9.0), (np.pi / 9.0, np.pi / 6.0)))
+def test_m2_3_path_variants_have_distinct_plan_hashes(
+    angles: tuple[float, float],
+) -> None:
+    greedy, _ = _m2_3_case(
+        angles, {"engine": "opt_einsum", "optimize": "greedy"}
+    )
+    custom, _ = _m2_3_case(angles, _M2_3_CUSTOM_PLANNER)
+
+    assert greedy.path != custom.path
+    assert greedy.contraction_plan_hash != custom.contraction_plan_hash
+
+
+def test_m2_3_profile_accepts_exactly_three_tasks_and_legacy_profile_rejects_them(
+    tmp_path,
+) -> None:
+    graph, network = _m2_3_case(
+        (np.pi / 5.0, np.pi / 9.0),
+        {"engine": "opt_einsum", "optimize": "greedy"},
+    )
+    model = _m2_3_dependent_prefix_model(graph)
+
+    plan = build_two_slice_resident_plan(
+        graph,
+        network,
+        model=model,
+        profile_version=SLICED_RESIDENT_M2_3_PROFILE_VERSION,
+    )
+    assert plan.hardware_profile_version == SLICED_RESIDENT_M2_3_PROFILE_VERSION
+    assert len(plan.graph.tasks) == 3
+    assert validate_two_slice_resident_plan(plan) == (True, None)
+    packages = build_two_slice_resident_graph_packages(
+        plan,
+        case_id="m2_3_fixture",
+        suite_id="m2_3_fixture",
+        quantization_mode="none",
+    )
+    dpu_binary = tmp_path / "dpu_resident"
+    dpu_binary.write_bytes(b"fixture")
+    written = write_two_slice_resident_graph_packages(
+        packages,
+        tmp_path,
+        dpu_binary=dpu_binary,
+        request_id_prefix="m2-3-profile",
+    )
+    for item in written:
+        manifest = json.loads(item.package.manifest_path.read_text(encoding="utf-8"))
+        assert (
+            manifest["slice_execution"]["outer_execution_identity"][
+                "hardware_profile_version"
+            ]
+            == SLICED_RESIDENT_M2_3_PROFILE_VERSION
+        )
+    assert validate_written_two_slice_packages(plan, written)["validated"] is True
+
+    with pytest.raises(ValueError, match="prefix_task_cap_exceeded"):
+        build_two_slice_resident_plan(graph, network, model=model)
+
+    two_task_circuit = CircuitSpec(
+        "m2_legacy_h_x",
+        1,
+        (CircuitOperation("h", (0,)), CircuitOperation("x", (0,))),
+        {"kind": "fixture"},
+    )
+    two_task_network = build_tensor_network(two_task_circuit)
+    two_task_graph = plan_task_graph_with_config(
+        two_task_network, {"engine": "opt_einsum", "optimize": "greedy"}
+    )
+    two_task_model = _m2_3_dependent_prefix_model(two_task_graph)
+    two_task_plan = build_two_slice_resident_plan(
+        two_task_graph, two_task_network, model=two_task_model
+    )
+    assert len(two_task_plan.graph.tasks) == 2
+    assert two_task_plan.hardware_profile_version != SLICED_RESIDENT_M2_3_PROFILE_VERSION
+
+
+@pytest.mark.parametrize(
+    "planner",
+    [
+        {"engine": "opt_einsum", "optimize": "greedy"},
+        _M2_3_CUSTOM_PLANNER,
+    ],
+)
+@pytest.mark.parametrize("angles", ((np.pi / 5.0, np.pi / 9.0), (np.pi / 9.0, np.pi / 6.0)))
+def test_m2_3_resident_policy_quantization_error_is_discriminating(
+    planner: dict, angles: tuple[float, float]
+) -> None:
+    graph, network = _m2_3_case(angles, planner)
+    model = _m2_3_dependent_prefix_model(graph)
+    plan = build_two_slice_resident_plan(
+        graph,
+        network,
+        model=model,
+        profile_version=SLICED_RESIDENT_M2_3_PROFILE_VERSION,
+    )
+    packages = build_two_slice_resident_graph_packages(
+        plan,
+        case_id="m2_3_fixture",
+        suite_id="m2_3_fixture",
+        quantization_mode="none",
+    )
+    full_precision, _ = execute_task_sequence_np_einsum(graph, network)
+
+    outputs = {}
+    for mode in ("none", "per_task_resident_requantize"):
+        partials = [
+            build_resident_policy_reference(
+                item.package.graph,
+                item.network,
+                quantization_mode=mode,
+            )["output"]
+            for item in packages
+        ]
+        outputs[mode] = np.sum(np.stack(partials), axis=0)
+
+    assert np.max(np.abs(outputs["none"] - full_precision)) <= 1.0e-6
+    quantized_error = float(
+        np.max(np.abs(outputs["per_task_resident_requantize"] - full_precision))
+    )
+    assert 1.0e-4 < quantized_error < 1.0e-2
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [
+        (
+            lambda restrictions: (restrictions[0], restrictions[0]),
+            "sliced_resident_model_restrictions_mismatch_duplicate_tensor_id",
+        ),
+        (
+            lambda restrictions: (
+                replace(restrictions[0], axis=-1),
+                restrictions[1],
+            ),
+            "sliced_resident_model_restrictions_mismatch_axis_invalid",
+        ),
+        (
+            lambda restrictions: (
+                replace(restrictions[0], axis=99),
+                restrictions[1],
+            ),
+            "sliced_resident_model_restrictions_mismatch_axis_invalid",
+        ),
+        (
+            lambda restrictions: (None, restrictions[1]),
+            "sliced_resident_model_restrictions_mismatch_malformed",
+        ),
+        (
+            lambda restrictions: None,
+            "sliced_resident_model_restrictions_mismatch_malformed",
+        ),
+    ],
+)
+def test_m2_3_plan_rejects_malformed_restrictions_at_plan_boundary(
+    mutation, reason: str
+) -> None:
+    plan = _m2_3_plan()
+    source_task = plan.model.slice_tasks[0]
+    malformed = replace(
+        source_task,
+        input_restrictions=mutation(source_task.input_restrictions),
+    )
+    malformed_plan = _replace_slice_task(plan, 0, malformed)
+
+    assert validate_two_slice_resident_plan(malformed_plan) == (False, reason)
+
+
+@pytest.mark.parametrize(
+    "dependencies",
+    [("task_0",), ("task_1", "task_0")],
+)
+def test_m2_3_source_dependencies_must_be_complete_and_input_ordered(
+    dependencies: tuple[str, ...],
+) -> None:
+    plan = _m2_3_plan()
+    malformed_source = replace(plan.graph.tasks[-1], dependencies=dependencies)
+    malformed_graph = with_execution_identity(
+        replace(
+            plan.graph,
+            tasks=(*plan.graph.tasks[:-1], malformed_source),
+            circuit_semantics_hash="",
+            tensor_network_hash="",
+            contraction_plan_hash="",
+        )
+    )
+    model = _m2_3_dependent_prefix_model(malformed_graph)
+    malformed_plan = replace(
+        plan,
+        graph=malformed_graph,
+        model=model,
+        execution_plan=replace(
+            plan.execution_plan,
+            circuit_semantics_hash=malformed_graph.circuit_semantics_hash,
+            tensor_network_hash=malformed_graph.tensor_network_hash,
+            contraction_plan_hash=malformed_graph.contraction_plan_hash,
+        ),
+        slice_plans=tuple(
+            replace(slice_plan, slice_task=slice_task)
+            for slice_plan, slice_task in zip(
+                plan.slice_plans, model.slice_tasks, strict=True
+            )
+        ),
+        reconstruction_step=model.reconstruction_step,
+    )
+
+    assert validate_two_slice_resident_plan(malformed_plan) == (
+        False,
+        "sliced_resident_source_task_dependencies_mismatch",
+    )
+
+
+@pytest.mark.parametrize(
+    ("profile_version", "reason"),
+    [
+        (None, "sliced_resident_profile_missing"),
+        ("unknown_m2_profile", "sliced_resident_profile_unsupported:unknown_m2_profile"),
+    ],
+)
+def test_m2_3_plan_rejects_missing_or_unknown_profile(
+    profile_version, reason: str
+) -> None:
+    plan = replace(_m2_3_plan(), hardware_profile_version=profile_version)
+
+    assert validate_two_slice_resident_plan(plan) == (False, reason)
+
+
+@pytest.mark.parametrize(
+    ("profile_version", "error"),
+    [
+        (None, "sliced_resident_profile_missing"),
+        ("unknown_m2_profile", "sliced_resident_profile_unsupported"),
+    ],
+)
+def test_m2_3_manifest_reader_rejects_missing_or_unknown_profile(
+    tmp_path, profile_version, error: str
+) -> None:
+    plan = _m2_3_plan()
+    packages = build_two_slice_resident_graph_packages(
+        plan,
+        case_id="m2_3_fixture",
+        suite_id="m2_3_fixture",
+        quantization_mode="none",
+    )
+    dpu_binary = tmp_path / "dpu_resident"
+    dpu_binary.write_bytes(b"fixture")
+    written = write_two_slice_resident_graph_packages(
+        packages,
+        tmp_path,
+        dpu_binary=dpu_binary,
+        request_id_prefix="m2-3-profile-validation",
+    )
+    manifest_path = written[0].package.manifest_path
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    outer = manifest["slice_execution"]["outer_execution_identity"]
+    if profile_version is None:
+        outer.pop("hardware_profile_version")
+    else:
+        outer["hardware_profile_version"] = profile_version
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=error):
+        validate_written_two_slice_packages(plan, written)
 
 
 def _zero_imag_case():

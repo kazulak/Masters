@@ -222,6 +222,16 @@ def gate_matrix(gate: str, params: Iterable[float] = ()) -> np.ndarray:
     if gate == "rz":
         (theta,) = params
         return np.array([[np.exp(-0.5j * theta), 0], [0, np.exp(0.5j * theta)]], dtype=np.complex128)
+    if gate == "ry":
+        (theta,) = params
+        half_theta = 0.5 * theta
+        return np.array(
+            [
+                [math.cos(half_theta), -math.sin(half_theta)],
+                [math.sin(half_theta), math.cos(half_theta)],
+            ],
+            dtype=np.complex128,
+        )
     if gate in {"cx", "cnot"}:
         return np.array([[one, zero, zero, zero], [zero, one, zero, zero], [zero, zero, zero, one], [zero, zero, one, zero]], dtype=np.complex128)
     if gate == "cz":

@@ -58,6 +58,23 @@ def test_circuit_library_is_deterministic_and_unitary() -> None:
     np.testing.assert_allclose(np.linalg.norm(composed_state.ravel()), 1.0, atol=1.0e-12)
 
 
+def test_ry_matrix_is_real_unitary_and_uses_gate_matrix_contract() -> None:
+    theta = 0.73
+    matrix = gate_matrix("ry", (theta,))
+    half_theta = theta / 2.0
+    expected = np.array(
+        [
+            [np.cos(half_theta), -np.sin(half_theta)],
+            [np.sin(half_theta), np.cos(half_theta)],
+        ],
+        dtype=np.complex128,
+    )
+
+    assert matrix.dtype == np.complex128
+    np.testing.assert_allclose(matrix, expected, atol=0.0, rtol=0.0)
+    np.testing.assert_allclose(matrix.conj().T @ matrix, np.eye(2), atol=1.0e-12)
+
+
 def test_tn_lowering_preserves_output_labels_and_einsum_contract(minimal_graph) -> None:
     case = minimal_graph
     assert case.graph.network.output_labels == case.network.spec.output_labels
