@@ -96,3 +96,25 @@ def test_m2_2_make_shortcuts_use_canonical_suite() -> None:
     assert execute.returncode == 0
     assert suite in execute.stdout
     assert "--execute" in execute.stdout
+
+
+def test_m2_2_report_shortcut_uses_configurable_evidence_run() -> None:
+    help_result = subprocess.run(
+        ["make", "help"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    report = subprocess.run(
+        ["make", "-n", "upmem-hw-m2-2-report", "UPMEM_HW_M2_2_RUN=/tmp/m2-2-run"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert help_result.returncode == 0
+    assert "UPMEM_HW_M2_2_RUN=runs/inbox/eth/m2_2/<timestamp>" in help_result.stdout
+    assert report.returncode == 0
+    assert "scripts/upmem_m2_2_report.py" in report.stdout
+    assert "--input /tmp/m2-2-run" in report.stdout
