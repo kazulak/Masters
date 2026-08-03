@@ -514,11 +514,14 @@ def _response_completed(response: Mapping[str, Any]) -> bool:
     )
     if (
         response.get("backend_id") != BACKEND_ID
+        or response.get("backend_family") != "upmem_sdk"
         or response.get("target_requested") != "hardware"
         or response.get("target_observed") != "hardware"
         or response.get("hardware_profile_version") != PROFILE_VERSION
         or response.get("tasklets_per_dpu") != 1
         or response.get("simulator_kernel_executed") is not False
+        or response.get("hardware_kernel_executed") is not True
+        or response.get("cpu_fallback_used") is not False
         or response.get("hardware_functionality_evidence") is not True
         or (
             operation_count > 1

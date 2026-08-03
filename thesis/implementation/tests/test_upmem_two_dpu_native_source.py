@@ -281,6 +281,19 @@ def test_two_dpu_validate_slice_packages_accepts_genuine_one_contract_pair_via_s
         assert validate(first.manifest_path, second.manifest_path).returncode == 1
     second.manifest_path.write_text(original_second, encoding="utf-8")
 
+    malformed_final_component = json.loads(original_second)
+    malformed_final_component["final_outputs"][0]["component"] = "imag"
+    second.manifest_path.write_text(
+        json.dumps(malformed_final_component), encoding="utf-8"
+    )
+    assert validate(first.manifest_path, second.manifest_path).returncode == 1
+
+    malformed_final_bytes = json.loads(original_second)
+    malformed_final_bytes["final_outputs"][0]["transfer_bytes"] += 8
+    second.manifest_path.write_text(json.dumps(malformed_final_bytes), encoding="utf-8")
+    assert validate(first.manifest_path, second.manifest_path).returncode == 1
+    second.manifest_path.write_text(original_second, encoding="utf-8")
+
     first_manifest = json.loads(first.manifest_path.read_text(encoding="utf-8"))
     second_manifest = json.loads(original_second)
 

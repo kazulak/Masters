@@ -110,6 +110,7 @@ def _write_completed_native_response(manifest_paths, response_path: Path) -> dic
         "status": "completed",
         "failure_stage": None,
         "backend_id": adapter.BACKEND_ID,
+        "backend_family": "upmem_sdk",
         "target_requested": "hardware",
         "target_observed": "hardware",
         "hardware_profile_version": adapter.PROFILE_VERSION,
@@ -200,6 +201,149 @@ def test_prepare_only_writes_all_plans_without_adapter_execution(
         / "measured_02"
         / "slice_0_manifest.json"
     ).is_file()
+
+
+@pytest.mark.parametrize(
+    ("returncode", "parser_status", "expected_status"),
+    ((0, "valid", "prepared"), (1, "invalid", "failed")),
+)
+def test_prepare_build_runs_native_parse_only_without_allocation_or_launch(
+    tmp_path, monkeypatch, returncode, parser_status, expected_status
+) -> None:
+    calls: list[tuple[object, dict[str, object]]] = []
+    monkeypatch.setattr(mvp, "build_sliced_resident_hardware_session", _fake_build)
+
+    def parse_only(command, **kwargs):
+        if "--validate-slice-packages" not in command:
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        calls.append((command, kwargs))
+        assert command[1] == "--validate-slice-packages"
+        assert "--slice-package-0" not in command
+        return SimpleNamespace(
+            returncode=returncode,
+            stdout=json.dumps({"status": parser_status, "reason": None}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(mvp.subprocess, "run", parse_only)
+    result = mvp.prepare_upmem_hardware_sliced_resident_mvp(
+        tmp_path,
+        suite_path=M2_1_SUITE,
+        build=True,
+        environment={},
+    )
+
+    assert result.status == expected_status
+    summary = json.loads(result.summary_path.read_text(encoding="utf-8"))
+    validation = summary["native_manifest_validation"]
+    assert validation["status"] == (
+        "passed" if expected_status == "prepared" else "failed"
+    )
+    assert len(validation["entries"]) == 4
+    assert len(calls) == 4
+    assert summary["dpu_allocation_attempted"] is False
+    assert summary["dpu_launch_attempted"] is False
+    assert all(
+        entry["dpu_allocation_attempted"] is False
+        and entry["dpu_launch_attempted"] is False
+        for entry in validation["entries"]
+    )
+    rows = summary["prepared_operations"]
+    assert all(
+        row["native_manifest_validation"]["status"]
+        == ("passed" if expected_status == "prepared" else "failed")
+        for row in rows
+    )
+    if expected_status == "prepared":
+        assert validation["reason"] is None
+
+
+def test_prepare_without_build_keeps_native_validation_explicitly_unrun(tmp_path) -> None:
+    result = mvp.prepare_upmem_hardware_sliced_resident_mvp(
+        tmp_path,
+        suite_path=M2_1_SUITE,
+        build=False,
+        environment={},
+    )
+    summary = json.loads(result.summary_path.read_text(encoding="utf-8"))
+
+    assert summary["native_manifest_validation"] == {
+        "status": "not_run",
+        "reason": "native host build was not requested",
+        "entries": [],
+        "dpu_allocation_attempted": False,
+        "dpu_launch_attempted": False,
+    }
+
+
+def test_failure_record_preserves_observed_native_identity_without_success(
+    tmp_path,
+) -> None:
+    m2 = mvp.load_m2_suite(M2_1_SUITE)
+    response = {
+        "backend_family": "upmem_sdk",
+        "target_observed": "hardware",
+        "hardware_execution": True,
+        "hardware_kernel_executed": True,
+        "simulator_kernel_executed": False,
+        "cpu_fallback_used": False,
+    }
+
+    record = mvp._failure_record(
+        m2,
+        "output_validation_failed",
+        {"case_id": "fixture", "workload_id": "fixture"},
+        "execute",
+        1,
+        "output_validation_failed",
+        observed_response=response,
+    )
+
+    assert record["status"] == "failed"
+    assert record["backend_family"] == "upmem_sdk"
+    assert record["target_observed"] == "hardware"
+    assert record["hardware_execution"] is True
+    assert record["native_kernel_executed"] is True
+    assert record["hardware_kernel_executed"] is True
+    assert record["simulator_kernel_executed"] is False
+    assert record["cpu_fallback_used"] is False
+    assert record["validation_status"] == "not_run"
+
+    pre_execution = mvp._failure_record(
+        m2,
+        "native_build_failed",
+        None,
+        "execute",
+        None,
+        "native_build_failed",
+    )
+    assert pre_execution["backend_family"] is None
+    assert pre_execution["target_observed"] == "not_observed"
+    assert pre_execution["hardware_execution"] is False
+    assert pre_execution["native_kernel_executed"] is False
+    assert pre_execution["simulator_kernel_executed"] is False
+    assert pre_execution["cpu_fallback_used"] is False
+
+
+def test_binary_manifest_binding_rejects_malformed_final_bytes(tmp_path) -> None:
+    m2 = mvp.load_m2_suite(M2_1_SUITE)
+    prepared = mvp._prepare_case(ROOT, m2.suite["cases"][0], m2)
+    dpu_binary = tmp_path / "dpu_resident"
+    dpu_binary.write_bytes(b"fixture")
+    artifacts = mvp._write_packages(
+        prepared,
+        m2,
+        dpu_binary,
+        tmp_path / "artifacts",
+        prefix="test",
+    )
+    manifest_path = artifacts["packages"][0].package.manifest_path
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["final_outputs"][0]["raw_bytes"] += 4
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="binary_mismatch"):
+        mvp._validate_manifest_bindings_against_binary(artifacts["packages"])
 
 
 def test_execution_uses_one_fake_session_and_preserves_m2_evidence(
@@ -419,54 +563,55 @@ def test_m2_1_record_contract_preserves_useful_slice_and_claim_metadata(tmp_path
     }
     session = SimpleNamespace(
         response={
-                "hardware_execution": True,
-                "target_requested": "hardware",
-                "target_observed": "hardware",
-                "backend_family": "upmem_sdk",
-                "hardware_kernel_executed": True,
-                "simulator_kernel_executed": False,
-                "cpu_fallback_used": False,
+            "backend_id": adapter.BACKEND_ID,
+            "hardware_execution": True,
+            "target_requested": "hardware",
+            "target_observed": "hardware",
+            "backend_family": "upmem_sdk",
+            "hardware_kernel_executed": True,
+            "simulator_kernel_executed": False,
+            "cpu_fallback_used": False,
+            "operation_count": 2,
+            "observed_operation_completion_counts": [2, 2],
+            "completion_sentinel_read_counts": [2, 2],
+            "native_execution_sentinel_available": True,
+            "completion_evidence": "dpu_written_completion_sentinel_read_after_each_sync",
+            "device_completion_confirmed": True,
+            "actual_h2d_bytes": 64,
+            "actual_d2h_bytes": 16,
+            "actual_transfer_bytes": 80,
+            "allocation": {"allocated_dpus": 2, "verified": True},
+            "launch": {
+                "completed": True,
                 "operation_count": 2,
-                "observed_operation_completion_counts": [2, 2],
-                "completion_sentinel_read_counts": [2, 2],
-                "native_execution_sentinel_available": True,
-                "completion_evidence": "dpu_written_completion_sentinel_read_after_each_sync",
-                "device_completion_confirmed": True,
-                "actual_h2d_bytes": 64,
-                "actual_d2h_bytes": 16,
-                "actual_transfer_bytes": 80,
-                "allocation": {"allocated_dpus": 2, "verified": True},
-                "launch": {
-                    "completed": True,
-                    "operation_count": 2,
-                    "async_launch_count": 2,
-                    "synchronize_count": 2,
+                "async_launch_count": 2,
+                "synchronize_count": 2,
+            },
+            "release": {"confirmed": True},
+            "slices": [
+                {
+                    "completion_confirmed": True,
+                    "dpu_completion_sentinel": {
+                        "verified": True,
+                        "active_operation_index": 1,
+                        "completion_status": 1,
+                        "completed_operation_count": 2,
+                        "output_elements_processed": 2,
+                    },
+                    "completion_sentinel_read_count": 2,
                 },
-                "release": {"confirmed": True},
-                "slices": [
-                    {
-                        "completion_confirmed": True,
-                        "dpu_completion_sentinel": {
-                            "verified": True,
-                            "active_operation_index": 1,
-                            "completion_status": 1,
-                            "completed_operation_count": 2,
-                            "output_elements_processed": 2,
-                        },
-                        "completion_sentinel_read_count": 2,
+                {
+                    "completion_confirmed": True,
+                    "dpu_completion_sentinel": {
+                        "verified": True,
+                        "active_operation_index": 1,
+                        "completion_status": 1,
+                        "completed_operation_count": 2,
+                        "output_elements_processed": 2,
                     },
-                    {
-                        "completion_confirmed": True,
-                        "dpu_completion_sentinel": {
-                            "verified": True,
-                            "active_operation_index": 1,
-                            "completion_status": 1,
-                            "completed_operation_count": 2,
-                            "output_elements_processed": 2,
-                        },
-                        "completion_sentinel_read_count": 2,
-                    },
-                ],
+                    "completion_sentinel_read_count": 2,
+                },
+            ],
             "timing": {"clock": "monotonic", "status": "aggregate"},
         },
         response_path=tmp_path / "response.json",

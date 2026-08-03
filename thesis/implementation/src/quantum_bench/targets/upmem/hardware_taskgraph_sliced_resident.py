@@ -816,7 +816,6 @@ def _array_fnv1a64(value: np.ndarray) -> str:
 
 
 def _validate_m2_source_inputs(plan: SlicedResidentPlan) -> None:
-    tensors = {tensor.spec.id: tensor for tensor in plan.network.tensors}
     initial_tensors = [tensor for tensor in plan.network.tensors if tensor.spec.produced_by is None]
     if not initial_tensors:
         raise ValueError("sliced_resident_missing_source_input")

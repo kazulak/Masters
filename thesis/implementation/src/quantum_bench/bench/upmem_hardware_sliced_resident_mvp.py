@@ -12,8 +12,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import platform
 import shutil
+import subprocess
 import time
 from typing import Any, Mapping
 
@@ -39,15 +39,14 @@ from quantum_bench.targets.upmem.hardware_sliced_resident_session import (
     parse_sliced_resident_hardware_profile,
 )
 from quantum_bench.targets.upmem.hardware_taskgraph_sliced_resident import (
-    SLICED_RESIDENT_OUTER_BACKEND_ID,
-    SLICED_RESIDENT_OUTER_PROFILE_VERSION,
-    SLICED_RESIDENT_OUTER_ROUTE_ID,
-    SLICED_RESIDENT_OUTER_TIMING_SCOPE,
     build_two_slice_resident_graph_packages,
     build_two_slice_resident_plan,
     load_and_reconstruct_two_slice_native_outputs,
     validate_written_two_slice_packages,
     write_two_slice_resident_graph_packages,
+)
+from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
+    validate_resident_graph_package_file,
 )
 from quantum_bench.tn import (
     build_tensor_network,
@@ -247,6 +246,13 @@ def prepare_upmem_hardware_sliced_resident_mvp(
     plan_dir.mkdir(parents=True)
     _write_common_artifacts(plan_dir, root_dir, m2)
     native = {"attempted": False, "status": "not_requested"}
+    native_manifest_validation: dict[str, Any] = {
+        "status": "not_run",
+        "reason": "native host build was not requested",
+        "entries": [],
+        "dpu_allocation_attempted": False,
+        "dpu_launch_attempted": False,
+    }
     dpu_binary = plan_dir / "native_session" / "unbuilt_dpu_resident_two_dpu"
     dpu_binary.parent.mkdir(parents=True, exist_ok=True)
     dpu_binary.touch()
@@ -267,6 +273,13 @@ def prepare_upmem_hardware_sliced_resident_mvp(
                 "failure_stage": _stage(str(exc), "native_build_failed"),
                 "reason": str(exc),
             }
+            native_manifest_validation = {
+                "status": "unavailable",
+                "reason": "native host build failed",
+                "entries": [],
+                "dpu_allocation_attempted": False,
+                "dpu_launch_attempted": False,
+            }
     rows: list[dict[str, Any]] = []
     if native.get("status") != "failed":
         for case in m2.suite["cases"]:
@@ -279,6 +292,31 @@ def prepare_upmem_hardware_sliced_resident_mvp(
                     artifacts = _write_packages(
                         prepared, m2, dpu_binary, artifact_dir, prefix="plan"
                     )
+                    if native.get("status") == "passed":
+                        validation = _validate_native_manifests(
+                            native["host_binary_path"],
+                            artifacts["manifest_paths"],
+                            timeout_s=float(m2.profile.timeout_s),
+                        )
+                        artifacts["native_manifest_validation"] = validation
+                        write_json(
+                            artifact_dir / "native_manifest_validation.json",
+                            validation,
+                        )
+                        native_manifest_validation["entries"].append(validation)
+                        if validation["status"] != "passed":
+                            row = _plan_row(case, prepared, phase, repeat_id, artifacts)
+                            row.update(
+                                {
+                                    "status": "failed",
+                                    "failure_stage": validation.get(
+                                        "failure_stage", "native_manifest_validation_failed"
+                                    ),
+                                    "reason": validation.get("reason"),
+                                }
+                            )
+                            rows.append(row)
+                            continue
                     rows.append(_plan_row(case, prepared, phase, repeat_id, artifacts))
             except Exception as exc:
                 rows.append(
@@ -289,6 +327,18 @@ def prepare_upmem_hardware_sliced_resident_mvp(
                         "reason": str(exc),
                     }
                 )
+    if native.get("status") == "passed":
+        entries = native_manifest_validation["entries"]
+        native_manifest_validation["status"] = (
+            "passed"
+            if entries and all(item.get("status") == "passed" for item in entries)
+            else "failed"
+        )
+        native_manifest_validation["reason"] = (
+            None
+            if native_manifest_validation["status"] == "passed"
+            else "native manifest parser rejected one or more packages"
+        )
     status = (
         "prepared"
         if native.get("status") != "failed"
@@ -307,6 +357,7 @@ def prepare_upmem_hardware_sliced_resident_mvp(
             "profile": _profile_metadata(m2.profile),
             "prepared_operations": rows,
             "native_build": native,
+            "native_manifest_validation": native_manifest_validation,
             "dpu_allocation_attempted": False,
             "dpu_launch_attempted": False,
             "claim_boundary": CLAIM_BOUNDARY,
@@ -693,6 +744,11 @@ def _run_operation(
             prepared=prepared,
             total_time_s=time.perf_counter() - started,
             operation_evidence=_operation_evidence(run_dir, session, artifacts),
+            observed_response=(
+                session.response
+                if session is not None and isinstance(session.response, Mapping)
+                else None
+            ),
         )
 
 
@@ -721,6 +777,9 @@ def _write_packages(
         request_id_prefix=request_prefix,
     )
     validation = validate_written_two_slice_packages(prepared["plan"], written)
+    validation["binary_manifest_bindings"] = _validate_manifest_bindings_against_binary(
+        written
+    )
     manifest_paths = tuple(item.package.manifest_path for item in written)
     if any(path is None for path in manifest_paths):
         raise ValueError("sliced_resident_package_write_incomplete")
@@ -736,6 +795,135 @@ def _write_packages(
         "validation": validation,
         "manifest_paths": tuple(manifest_paths),
     }
+
+
+def _validate_manifest_bindings_against_binary(
+    packages: tuple[Any, ...],
+) -> dict[str, Any]:
+    """Check JSON file entries against the encoded resident slot descriptors."""
+
+    validated: list[dict[str, Any]] = []
+    for item in packages:
+        package = item.package
+        if package.manifest_path is None or package.package_path is None:
+            raise ValueError("sliced_resident_package_write_incomplete")
+        manifest = json.loads(package.manifest_path.read_text(encoding="utf-8"))
+        binary = validate_resident_graph_package_file(package.package_path)
+        descriptors = {
+            int(item["slot_id"]): item for item in binary["slot_descriptors"]
+        }
+        initial = manifest.get("initial_slots")
+        final = manifest.get("final_outputs")
+        if not isinstance(initial, list) or not isinstance(final, list):
+            raise ValueError("sliced_resident_manifest_file_entries_missing")
+        initial_ids = {int(entry["slot_id"]) for entry in initial}
+        final_ids = {int(entry["slot_id"]) for entry in final}
+        if initial_ids != set(binary["initial_slot_ids"]):
+            raise ValueError("sliced_resident_manifest_initial_slots_binary_mismatch")
+        if final_ids != set(binary["final_slot_ids"]):
+            raise ValueError("sliced_resident_manifest_final_outputs_binary_mismatch")
+        if initial_ids & final_ids:
+            raise ValueError("sliced_resident_manifest_initial_final_slot_alias")
+        for entry in (*initial, *final):
+            slot_id = int(entry["slot_id"])
+            descriptor = descriptors.get(slot_id)
+            elements = int(entry["elements"])
+            raw_bytes = int(entry["raw_bytes"])
+            transfer_bytes = int(entry["transfer_bytes"])
+            if (
+                descriptor is None
+                or elements != int(descriptor["element_count"])
+                or raw_bytes != elements * 4
+                or transfer_bytes != ((raw_bytes + 7) // 8) * 8
+            ):
+                raise ValueError(
+                    "sliced_resident_manifest_file_entry_binary_mismatch"
+                )
+        validated.append(
+            {
+                "slice_id": int(item.slice_id),
+                "package_path": str(package.package_path),
+                "initial_slot_ids": sorted(initial_ids),
+                "final_slot_ids": sorted(final_ids),
+                "binary_metadata": binary,
+            }
+        )
+    return {"status": "passed", "packages": validated}
+
+
+def _validate_native_manifests(
+    host_binary: str | Path,
+    manifest_paths: tuple[Path, ...],
+    *,
+    timeout_s: float,
+) -> dict[str, Any]:
+    command = [
+        str(host_binary),
+        "--validate-slice-packages",
+        *(str(path) for path in manifest_paths),
+    ]
+    result: dict[str, Any] = {
+        "status": "failed",
+        "command": command,
+        "dpu_allocation_attempted": False,
+        "dpu_launch_attempted": False,
+    }
+    if not Path(host_binary).is_file():
+        result.update(
+            {
+                "status": "unavailable",
+                "reason": "native host binary is unavailable",
+                "failure_stage": "native_manifest_validation_unavailable",
+            }
+        )
+        return result
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+        )
+    except subprocess.TimeoutExpired as exc:
+        result.update(
+            {
+                "reason": "native manifest parser timed out",
+                "failure_stage": "native_manifest_validation_timeout",
+                "stdout": str(exc.stdout or ""),
+                "stderr": str(exc.stderr or ""),
+            }
+        )
+        return result
+    stdout = completed.stdout.strip()
+    stderr = completed.stderr.strip()
+    parsed: Any = None
+    try:
+        parsed = json.loads(stdout)
+    except json.JSONDecodeError:
+        pass
+    passed = completed.returncode == 0 and isinstance(parsed, Mapping) and parsed.get("status") == "valid"
+    result.update(
+        {
+            "status": "passed" if passed else "failed",
+            "returncode": completed.returncode,
+            "stdout": stdout,
+            "stderr": stderr,
+            "result": parsed,
+        }
+    )
+    if not passed:
+        result.update(
+            {
+                "reason": (
+                    parsed.get("reason")
+                    if isinstance(parsed, Mapping)
+                    else "native manifest parser returned no valid JSON verdict"
+                ),
+                "failure_stage": "native_manifest_validation_failed",
+            }
+        )
+    return result
 
 
 def _record(
@@ -807,6 +995,12 @@ def _record(
     execution_contract_status = (
         "passed"
         if response.get("hardware_execution") is True
+        and response.get("backend_id") == BACKEND_ID
+        and response.get("backend_family") == "upmem_sdk"
+        and response.get("target_requested") == "hardware"
+        and response.get("target_observed") == "hardware"
+        and response.get("hardware_kernel_executed") is True
+        and response.get("simulator_kernel_executed") is False
         and response.get("cpu_fallback_used") is False
         and allocation.get("verified") is True
         and launch.get("completed") is True
@@ -1029,7 +1223,9 @@ def _failure_record(
     prepared: Mapping[str, Any] | None = None,
     total_time_s: float | None = None,
     operation_evidence: Mapping[str, Any] | None = None,
+    observed_response: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    observed = observed_response or {}
     record = {
         "schema_version": "upmem_hardware_sliced_resident_mvp_record_v1",
         "status": "failed",
@@ -1040,6 +1236,17 @@ def _failure_record(
         "repeat_id": repeat_id,
         "route_id": ROUTE_ID,
         "backend_id": BACKEND_ID,
+        "backend_family": observed.get("backend_family"),
+        "target_requested": "hardware",
+        "target_observed": observed.get("target_observed", "not_observed"),
+        "hardware_execution": observed.get("hardware_execution", False),
+        "native_kernel_executed": observed.get("hardware_kernel_executed", False),
+        "hardware_kernel_executed": observed.get("hardware_kernel_executed", False),
+        "simulator_kernel_executed": observed.get("simulator_kernel_executed", False),
+        "cpu_fallback_used": observed.get("cpu_fallback_used", False),
+        "kernel_execution_status": observed.get(
+            "kernel_execution_status", "not_observed"
+        ),
         "quantization_mode": "none",
         "parallelism_mode": "slicing",
         "parallelism_evidence_type": "executed_dispatch_only",
@@ -1079,7 +1286,6 @@ def _failure_record(
         "validation_errors": [reason],
         "cpu_reference_validation": False,
         "expected_output_validation": False,
-        "cpu_fallback_used": False,
         "allocated_dpu_count": 0,
         "allocation_evidence": None,
         "launch_evidence": None,
@@ -1229,6 +1435,10 @@ def _plan_row(
         "selected_task_id": prepared["selected_task_id"],
         "slice_count": 2,
         "source_hashes": artifacts["validation"]["source_hashes"],
+        "native_manifest_validation": artifacts.get(
+            "native_manifest_validation",
+            {"status": "not_run", "reason": "native validation not requested"},
+        ),
     }
 
 
@@ -1388,6 +1598,7 @@ def _build_metadata(build: Any, root: Path) -> dict[str, Any]:
         "status": "passed",
         "source_tree_hash": build.source_tree_hash,
         "host_binary_hash": build.host_binary_hash,
+        "host_binary_path": str(build.host_binary),
         "dpu_binary_hash": build.dpu_binary_hash,
         "build_time_s": build.build_time_s,
         "build_command": list(build.build_command),

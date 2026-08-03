@@ -74,6 +74,7 @@ def _completed_response(
     ]
     return {
         "backend_id": session.BACKEND_ID,
+        "backend_family": "upmem_sdk",
         "target_requested": "hardware",
         "target_observed": "hardware",
         "hardware_profile_version": session.PROFILE_VERSION,
@@ -134,6 +135,24 @@ def _completed_response(
         "release": {"confirmed": True, "device_completion_confirmed": True},
         "slices": slices,
     }
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("backend_family", "cpu"),
+        ("hardware_kernel_executed", False),
+        ("simulator_kernel_executed", True),
+        ("cpu_fallback_used", True),
+    ),
+)
+def test_completed_response_requires_physical_execution_identity(
+    field: str, value: object
+) -> None:
+    response = _completed_response()
+    response[field] = value
+
+    assert session._response_completed(response) is False
 
 
 def _fake_build(monkeypatch) -> None:

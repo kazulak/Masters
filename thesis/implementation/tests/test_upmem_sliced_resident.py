@@ -16,6 +16,9 @@ from quantum_bench.targets.upmem.hardware_taskgraph_sliced_resident import (
     validate_written_two_slice_packages,
     write_two_slice_resident_graph_packages,
 )
+from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
+    allocate_resident_slots,
+)
 from quantum_bench.tn import with_execution_identity
 from quantum_bench.tn.execution import execute_task_sequence_np_einsum
 from quantum_bench.tn.network import TensorNetworkValue
@@ -253,6 +256,36 @@ def test_m2_rejects_nonzero_complex_source_inputs() -> None:
             suite_id="slice-suite",
             quantization_mode="none",
         )
+
+
+def test_mixed_complex_inputs_synthesize_zero_imaginary_operand_slots() -> None:
+    case = split_complex_graph()
+    tensors = list(case.network.tensors)
+    source_indices = [
+        index
+        for index, tensor in enumerate(tensors)
+        if tensor.spec.produced_by is None
+    ]
+    assert len(source_indices) >= 2
+    tensors[source_indices[0]] = replace(
+        tensors[source_indices[0]],
+        array=np.asarray(tensors[source_indices[0]].array.real, dtype=np.complex128),
+    )
+    mixed = replace(
+        case,
+        network=TensorNetworkValue(case.network.spec, tuple(tensors)),
+    )
+    allocation = allocate_resident_slots(mixed.graph, mixed.network)
+
+    zero_imag_id = tensors[source_indices[0]].spec.id
+    genuine_complex_ids = {
+        tensors[index].spec.id
+        for index in source_indices[1:]
+        if np.any(np.asarray(tensors[index].array).imag != 0.0)
+    }
+    assert genuine_complex_ids
+    assert "imag" in allocation.tensor_components[zero_imag_id]
+    assert all("imag" in allocation.tensor_components[item] for item in genuine_complex_ids)
 
 
 def test_written_packages_validate_actual_inputs_and_descriptor_bytes(tmp_path) -> None:
