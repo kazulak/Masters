@@ -439,8 +439,8 @@ def load_and_reconstruct_two_slice_native_outputs(
             reference = None
         else:
             try:
-                reference = np.asarray(
-                    reference_partials[item.slice_id], dtype=np.float32
+                reference = _m2_reference_real_float32(
+                    reference_partials[item.slice_id]
                 )
             except KeyError as exc:
                 raise ValueError("sliced_resident_cpu_partial_reference_missing") from exc
@@ -831,6 +831,24 @@ def _m2_real_float32(value: Any) -> np.ndarray:
     array = np.asarray(value)
     if _has_nonzero_imaginary(array):
         raise ValueError("sliced_resident_m2_nonzero_imaginary_source_input")
+    return np.asarray(array.real if np.iscomplexobj(array) else array, dtype=np.float32)
+
+
+_M2_REFERENCE_IMAGINARY_TOLERANCE = 1.0e-6
+
+
+def _m2_reference_real_float32(value: Any) -> np.ndarray:
+    """Convert a real-valued policy reference without discarding complex data.
+
+    Complex references are accepted only when every imaginary component has
+    magnitude at most ``1.0e-6``; this is the M2 real-valued policy tolerance.
+    """
+
+    array = np.asarray(value)
+    if np.iscomplexobj(array) and np.any(
+        np.abs(array.imag) > _M2_REFERENCE_IMAGINARY_TOLERANCE
+    ):
+        raise ValueError("sliced_resident_cpu_partial_reference_nonzero_imaginary")
     return np.asarray(array.real if np.iscomplexobj(array) else array, dtype=np.float32)
 
 

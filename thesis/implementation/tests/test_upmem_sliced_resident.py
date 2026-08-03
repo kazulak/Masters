@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 import hashlib
 import json
+import warnings
 
 import numpy as np
 import pytest
@@ -15,6 +16,7 @@ from quantum_bench.targets.upmem.hardware_taskgraph_sliced_resident import (
     validate_two_slice_resident_plan,
     validate_written_two_slice_packages,
     write_two_slice_resident_graph_packages,
+    _m2_reference_real_float32,
 )
 from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
     allocate_resident_slots,
@@ -334,6 +336,32 @@ def test_load_and_reconstruct_native_two_slice_outputs(tmp_path) -> None:
     np.testing.assert_array_equal(actual, np.full((2, 2), 3.0, dtype=np.float32))
     assert set(metadata["partial_outputs"]) == {"0", "1"}
     assert len(metadata["native_response_fnv1a64"]) == 16
+
+
+def test_policy_reference_zero_imaginary_complex_conversion_is_warning_free() -> None:
+    value = np.asarray([1.0, 2.0], dtype=np.complex128)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", np.exceptions.ComplexWarning)
+        converted = _m2_reference_real_float32(value)
+
+    np.testing.assert_array_equal(converted, np.asarray([1.0, 2.0], dtype=np.float32))
+
+
+def test_policy_reference_nonzero_imaginary_conversion_is_rejected() -> None:
+    value = np.asarray([1.0 + 1.0e-5j], dtype=np.complex128)
+
+    with pytest.raises(
+        ValueError, match="sliced_resident_cpu_partial_reference_nonzero_imaginary"
+    ):
+        _m2_reference_real_float32(value)
+
+
+def test_policy_reference_near_zero_imaginary_conversion_is_accepted() -> None:
+    value = np.asarray([1.0 + 1.0e-7j], dtype=np.complex128)
+
+    converted = _m2_reference_real_float32(value)
+
+    np.testing.assert_array_equal(converted, np.asarray([1.0], dtype=np.float32))
 
 
 @pytest.mark.parametrize(
