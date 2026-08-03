@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+import struct
 
 import numpy as np
 import pytest
@@ -13,6 +15,18 @@ from quantum_bench.targets.upmem.hardware_taskgraph_sliced_resident import (
     build_two_slice_resident_graph_packages,
     build_two_slice_resident_plan,
     reconstruct_host_slice_outputs,
+    validate_written_two_slice_packages,
+    write_two_slice_resident_graph_packages,
+)
+from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
+    RESIDENT_PACKAGE_HEADER_FORMAT,
+    RESIDENT_SLOT_FORMAT,
+    RESIDENT_SLOT_INITIAL_FLAG,
+    RESIDENT_SLOT_BYTES,
+    RESIDENT_OPERATION_BYTES,
+    _encode_package,
+    validate_resident_graph_package_file,
+    validate_resident_graph_package_bytes,
 )
 from quantum_bench.tn import (
     build_tensor_network,
@@ -113,7 +127,7 @@ def test_m2_qasm_files_are_single_gate_real_circuits(gate: str) -> None:
     ]
 
 
-def test_m2_1_fixture_builds_dependent_hx_graph_and_useful_cpu_slices() -> None:
+def test_m2_1_fixture_builds_dependent_hx_graph_and_useful_cpu_slices(tmp_path) -> None:
     raw = yaml.safe_load(M2_1_SUITE_PATH.read_text(encoding="utf-8"))
     suite = load_suite(M2_1_SUITE_PATH)
     profile = raw["metadata"]["hardware_profile"]
@@ -215,3 +229,83 @@ def test_m2_1_fixture_builds_dependent_hx_graph_and_useful_cpu_slices() -> None:
             f"{prefix_output_id}::real"
         ]
         assert prefix_slot not in item.package.initial_data
+
+    dpu_binary = tmp_path / "dpu_resident"
+    dpu_binary.write_bytes(b"fixture")
+    written = write_two_slice_resident_graph_packages(
+        packages,
+        tmp_path,
+        dpu_binary=dpu_binary,
+        request_id_prefix="m2-1-slot-alias-regression",
+    )
+    preflight = validate_written_two_slice_packages(plan, written)
+    assert preflight["validated"] is True
+
+    for item in written:
+        package = item.package
+        manifest = json.loads(package.manifest_path.read_text(encoding="utf-8"))
+        binary_metadata = validate_resident_graph_package_file(package.package_path)
+        initial_slots = {entry["slot_id"] for entry in manifest["initial_slots"]}
+        final_slots = {entry["slot_id"] for entry in manifest["final_outputs"]}
+
+        # The native parser requires these file-backed roles to be disjoint.
+        assert initial_slots.isdisjoint(final_slots)
+        assert initial_slots == set(binary_metadata["initial_slot_ids"])
+        assert final_slots == set(binary_metadata["final_slot_ids"])
+        assert binary_metadata["slot_count"] == 6
+        assert binary_metadata["initial_slot_count"] == 4
+        assert binary_metadata["final_output_component_count"] == 1
+        assert package.allocation.mram_used_bytes == 48
+        assert manifest["slot_descriptor_count"] == 6
+        assert manifest["initial_h2d_bytes"] == 32
+        assert manifest["descriptor_h2d_bytes"] == (
+            6 * RESIDENT_SLOT_BYTES + 2 * RESIDENT_OPERATION_BYTES
+        )
+        assert manifest["control_h2d_bytes"] == 32
+        assert manifest["final_d2h_bytes"] == 8
+        assert (
+            manifest["initial_h2d_bytes"]
+            + manifest["descriptor_h2d_bytes"]
+            + manifest["control_h2d_bytes"]
+            + manifest["final_d2h_bytes"]
+            == 1736
+        )
+
+
+def test_python_package_validator_rejects_native_dual_role_slot(tmp_path) -> None:
+    loaded = mvp.load_m2_suite(M2_1_SUITE_PATH)
+    case = loaded.suite["cases"][0]
+    prepared = mvp._prepare_case(ROOT, case, loaded)
+    packages = build_two_slice_resident_graph_packages(
+        prepared["plan"],
+        case_id=case["case_id"],
+        suite_id=loaded.suite["suite_id"],
+        quantization_mode="none",
+    )
+    package = packages[0].package
+    payload = bytearray(
+        _encode_package(package.allocation.slots, package.operations)
+    )
+    header = struct.unpack_from(RESIDENT_PACKAGE_HEADER_FORMAT, payload, 0)
+    slot_offset = int(header[6])
+    final_slot = package.allocation.final_components[0][1]
+    encoded_id, offset, capacity, elements = struct.unpack_from(
+        RESIDENT_SLOT_FORMAT,
+        payload,
+        slot_offset + final_slot * RESIDENT_SLOT_BYTES,
+    )
+    struct.pack_into(
+        RESIDENT_SLOT_FORMAT,
+        payload,
+        slot_offset + final_slot * RESIDENT_SLOT_BYTES,
+        encoded_id | RESIDENT_SLOT_INITIAL_FLAG,
+        offset,
+        capacity,
+        elements,
+    )
+    header_values = list(header)
+    header_values[14] += 1
+    struct.pack_into(RESIDENT_PACKAGE_HEADER_FORMAT, payload, 0, *header_values)
+
+    with pytest.raises(match="initial_final_slot_alias"):
+        validate_resident_graph_package_bytes(bytes(payload))

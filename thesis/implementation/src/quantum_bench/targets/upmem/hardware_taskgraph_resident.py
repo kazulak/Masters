@@ -445,6 +445,9 @@ class ResidentGraphPackage:
             )
 
         package_bytes = _encode_package(self.allocation.slots, self.operations)
+        # Apply the Python-side ABI validator before emitting any request
+        # manifest. This keeps preparation fail-closed with the native parser.
+        validate_resident_graph_package_bytes(package_bytes)
         package_path = request_dir / "resident_graph_package.bin"
         package_path.write_bytes(package_bytes)
         descriptor_sha256 = hashlib.sha256(package_bytes).hexdigest()
@@ -721,6 +724,14 @@ def allocate_resident_slots(
         chosen: int | None = None
         for slot_id, existing in enumerate(slot_lifetimes):
             if slot_capacity[slot_id] < lifetime.elements:
+                continue
+            # The native file-backed ABI gives initial and final slots
+            # disjoint roles. Keep final outputs out of every slot that has
+            # ever carried an initial input, even when live intervals no
+            # longer overlap. Ordinary intermediate reuse remains allowed.
+            if lifetime.final and any(item.initial for item in existing):
+                continue
+            if lifetime.initial and any(item.final for item in existing):
                 continue
             if all(
                 lifetime.end_task < other.start_task
@@ -1055,6 +1066,10 @@ def validate_resident_graph_package_bytes(
         raise ValueError("hardware_profile_violation: resident_package_slot_flag_count_mismatch")
     initial_slot_ids = {slot_id for slot_id, _offset, _capacity, _elements, flags in slots if flags & RESIDENT_SLOT_INITIAL_FLAG}
     final_slot_ids = {slot_id for slot_id, _offset, _capacity, _elements, flags in slots if flags & RESIDENT_SLOT_FINAL_FLAG}
+    if initial_slot_ids & final_slot_ids:
+        raise ValueError(
+            "hardware_profile_violation: resident_package_initial_final_slot_alias"
+        )
     for left, right in zip(sorted(slots, key=lambda item: item[1]), sorted(slots, key=lambda item: item[1])[1:]):
         if left[1] + _align8(left[2] * 4) > right[1]:
             raise ValueError("hardware_profile_violation: resident_package_slot_overlap")
