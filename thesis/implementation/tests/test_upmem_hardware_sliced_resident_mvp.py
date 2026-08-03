@@ -420,6 +420,11 @@ def test_m2_1_record_contract_preserves_useful_slice_and_claim_metadata(tmp_path
     session = SimpleNamespace(
         response={
                 "hardware_execution": True,
+                "target_requested": "hardware",
+                "target_observed": "hardware",
+                "backend_family": "upmem_sdk",
+                "hardware_kernel_executed": True,
+                "simulator_kernel_executed": False,
                 "cpu_fallback_used": False,
                 "operation_count": 2,
                 "observed_operation_completion_counts": [2, 2],
@@ -522,6 +527,13 @@ def test_m2_1_record_contract_preserves_useful_slice_and_claim_metadata(tmp_path
     assert record["slice_overlap_measured"] is False
     assert record["device_launch_mode"] == "asynchronous_dpu_set"
     assert record["host_completion_mode"] == "blocking_sync"
+    assert record["target_requested"] == "hardware"
+    assert record["target_observed"] == "hardware"
+    assert record["backend_family"] == "upmem_sdk"
+    assert record["operation_count"] == 2
+    assert record["native_kernel_executed"] is True
+    assert record["hardware_kernel_executed"] is True
+    assert record["simulator_kernel_executed"] is False
     assert record["validation_status"] == "passed"
     assert record["hardware_functionality_evidence"] is True
     assert record["hardware_speedup_applicable"] is False
