@@ -252,14 +252,14 @@ def test_m2_1_fixture_builds_dependent_hx_graph_and_useful_cpu_slices(tmp_path) 
         assert initial_slots.isdisjoint(final_slots)
         assert initial_slots == set(binary_metadata["initial_slot_ids"])
         assert final_slots == set(binary_metadata["final_slot_ids"])
-        assert binary_metadata["slot_count"] == 6
-        assert binary_metadata["initial_slot_count"] == 4
+        assert binary_metadata["slot_count"] == 5
+        assert binary_metadata["initial_slot_count"] == 3
         assert binary_metadata["final_output_component_count"] == 1
-        assert package.allocation.mram_used_bytes == 48
-        assert manifest["slot_descriptor_count"] == 6
-        assert manifest["initial_h2d_bytes"] == 32
+        assert package.allocation.mram_used_bytes == 40
+        assert manifest["slot_descriptor_count"] == 5
+        assert manifest["initial_h2d_bytes"] == 24
         assert manifest["descriptor_h2d_bytes"] == (
-            6 * RESIDENT_SLOT_BYTES + 2 * RESIDENT_OPERATION_BYTES
+            5 * RESIDENT_SLOT_BYTES + 2 * RESIDENT_OPERATION_BYTES
         )
         assert manifest["control_h2d_bytes"] == 32
         assert manifest["final_d2h_bytes"] == 8
@@ -268,7 +268,7 @@ def test_m2_1_fixture_builds_dependent_hx_graph_and_useful_cpu_slices(tmp_path) 
             + manifest["descriptor_h2d_bytes"]
             + manifest["control_h2d_bytes"]
             + manifest["final_d2h_bytes"]
-            == 1736
+            == 1712
         )
 
 

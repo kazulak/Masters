@@ -1074,6 +1074,7 @@ def validate_resident_graph_package_bytes(
         if left[1] + _align8(left[2] * 4) > right[1]:
             raise ValueError("hardware_profile_violation: resident_package_slot_overlap")
     produced_slots: set[int] = set()
+    referenced_initial_slots: set[int] = set()
     operation_modes: list[int] = []
     for index in range(operation_count):
         operation = struct.unpack_from(
@@ -1108,9 +1109,14 @@ def validate_resident_graph_package_bytes(
         else:
             read_slots = refs[:4]
             write_slots = refs[4:6]
+        referenced_initial_slots.update(read_slots)
         if any(slot_id not in initial_slot_ids | produced_slots for slot_id in read_slots):
             raise ValueError("hardware_profile_violation: resident_package_slot_read_before_initialization")
         produced_slots.update(write_slots)
+    if initial_slot_ids - referenced_initial_slots:
+        raise ValueError(
+            "hardware_profile_violation: resident_package_initial_slot_not_referenced"
+        )
     if not set(final_slot_ids).issubset(produced_slots):
         raise ValueError("hardware_profile_violation: resident_package_final_slot_not_produced")
     return {
@@ -1398,7 +1404,11 @@ def _check_shape_caps(shape: Sequence[int], profile: HardwareTaskGraphResidentPr
 
 
 def _components_for(array: np.ndarray) -> tuple[str, ...]:
-    return ("real", "imag") if np.iscomplexobj(np.asarray(array)) else ("real",)
+    # Complex storage with an exactly zero imaginary part follows the real
+    # execution path. Split components are allocated only when a complex
+    # operation actually requires them, avoiding dead initial input slots in
+    # the native manifest ABI.
+    return ("real", "imag") if _has_nonzero_imaginary(array) else ("real",)
 
 
 def _has_nonzero_imaginary(value: Any) -> bool:
