@@ -169,8 +169,11 @@ def test_two_dpu_native_path_uses_two_distinct_contraction_packages() -> None:
     or shutil.which("dpu-pkg-config") is None,
     reason="UPMEM SDK compiler is unavailable",
 )
+@pytest.mark.parametrize(
+    "quantization_mode", ("none", "per_task_resident_requantize")
+)
 def test_two_dpu_validate_slice_packages_accepts_genuine_one_contract_pair_via_shared_parser(
-    tmp_path: Path,
+    tmp_path: Path, quantization_mode: str,
 ) -> None:
     subprocess.run(["make", "clean", "all"], cwd=TWO_DPU_ROOT, check=True)
 
@@ -180,7 +183,7 @@ def test_two_dpu_validate_slice_packages_accepts_genuine_one_contract_pair_via_s
         plan,
         case_id="two_dpu_native_fixture",
         suite_id="two_dpu_native_fixture",
-        quantization_mode="none",
+        quantization_mode=quantization_mode,
     )
     dpu_binary = tmp_path / "dpu_resident"
     dpu_binary.write_bytes(b"fixture")
@@ -263,6 +266,19 @@ def test_two_dpu_validate_slice_packages_accepts_genuine_one_contract_pair_via_s
         )
 
     original_second = second.manifest_path.read_text(encoding="utf-8")
+    if quantization_mode == "per_task_resident_requantize":
+        mismatched_second = json.loads(original_second)
+        mismatched_second["quantization_mode"] = "none"
+        second.manifest_path.write_text(
+            json.dumps(mismatched_second), encoding="utf-8"
+        )
+        mismatch = validate(first.manifest_path, second.manifest_path)
+        assert mismatch.returncode == 1
+        mismatch_result = json.loads(mismatch.stdout)
+        assert mismatch_result["status"] == "invalid"
+        assert mismatch_result["reason"] == "slice_manifest_parse_failed"
+        second.manifest_path.write_text(original_second, encoding="utf-8")
+
     for mutate in (
         lambda manifest: manifest.pop("slice_execution"),
         lambda manifest: manifest["slice_execution"].update(

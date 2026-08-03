@@ -588,6 +588,18 @@ static int two_dpu_validate_restriction_pair(
 }
 
 static int two_dpu_validate_slice_pair(const two_dpu_slice_t slices[RESIDENT_TWO_DPU_COUNT], const char **reason) {
+    if (slices[0].request.quantization_mode == NULL || slices[1].request.quantization_mode == NULL ||
+        (strcmp(slices[0].request.quantization_mode, "none") != 0 &&
+            strcmp(slices[0].request.quantization_mode, "per_task_resident_requantize") != 0) ||
+        (strcmp(slices[1].request.quantization_mode, "none") != 0 &&
+            strcmp(slices[1].request.quantization_mode, "per_task_resident_requantize") != 0)) {
+        *reason = "slice_packages_require_supported_quantization_mode";
+        return 1;
+    }
+    if (strcmp(slices[0].request.quantization_mode, slices[1].request.quantization_mode) != 0) {
+        *reason = "slice_packages_require_matching_quantization_mode";
+        return 1;
+    }
     if (strcmp(slices[0].manifest_path, slices[1].manifest_path) == 0 || slices[0].manifest_hash == slices[1].manifest_hash) {
         *reason = "slice_packages_must_be_distinct";
         return 1;
@@ -861,6 +873,11 @@ static int two_dpu_write_response(
     uint64_t actual_transfer_bytes;
     int completed;
     const char *response_status;
+    const char *quantization_mode = "unknown";
+    if (slices[0].request.quantization_mode != NULL && slices[1].request.quantization_mode != NULL &&
+        strcmp(slices[0].request.quantization_mode, slices[1].request.quantization_mode) == 0) {
+        quantization_mode = slices[0].request.quantization_mode;
+    }
     actual_h2d_bytes = initial_h2d_bytes + descriptor_h2d_bytes + control_h2d_bytes;
     actual_transfer_bytes = actual_h2d_bytes + final_d2h_bytes;
     for (uint32_t index = 0; index < RESIDENT_TWO_DPU_COUNT; index++) {
@@ -887,6 +904,9 @@ static int two_dpu_write_response(
     fprintf(file, ",\n  \"error\": ");
     if (error_message == NULL) fputs("null", file); else two_dpu_json_string(file, error_message);
     fprintf(file, ",\n  \"target_requested\": \"hardware\",\n  \"target_observed\": \"%s\",\n  \"backend_id\": \"upmem_sdk_hardware_sliced_resident_two_dpu\",\n  \"backend_family\": \"upmem_sdk\",\n  \"execution_class\": \"two_dpu_sliced_resident\",\n  \"hardware_profile_version\": \"hardware_sliced_resident_two_dpu_m2_v1\",\n", completed ? "hardware" : "hardware_unverified");
+    fprintf(file, "  \"quantization_mode\": ");
+    two_dpu_json_string(file, quantization_mode);
+    fputs(",\n", file);
     fprintf(file, "  \"cpu_fallback_used\": false,\n  \"simulator_kernel_executed\": false,\n  \"tasklets_per_dpu\": %u,\n  \"topology\": \"two_dpu_allocation\",\n  \"operation_count\": %u,\n  \"async_launch_count\": %u,\n  \"synchronize_count\": %u,\n", (unsigned)NR_TASKLETS, operation_count, async_launch_count, synchronize_count);
     fprintf(file, "  \"device_launch_mode\": \"asynchronous_dpu_set\",\n  \"host_completion_mode\": \"blocking_sync\",\n  \"completion_evidence\": \"dpu_written_completion_sentinel_read_after_each_sync\",\n  \"native_execution_sentinel_available\": true,\n  \"device_completion_confirmed\": %s,\n  \"device_completion_state\": \"%s\",\n", device_completion_confirmed ? "true" : "false", device_completion_state);
     fprintf(file, "  \"allocation\": {\"requested_dpus\":2,\"allocated_dpus\":%u,\"profile\":\"backend=hw\",\"verified\":%s},\n",

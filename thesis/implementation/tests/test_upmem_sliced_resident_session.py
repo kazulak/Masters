@@ -187,8 +187,17 @@ def _paths(build: session.HardwareSessionBuild) -> tuple[Path, Path, Path]:
     first = build.session_root / "slice-0.json"
     second = build.session_root / "slice-1.json"
     response = build.session_root / "response.json"
-    first.write_text("{}", encoding="utf-8")
-    second.write_text("{}", encoding="utf-8")
+    first.write_text('{"quantization_mode": "none"}', encoding="utf-8")
+    second.write_text('{"quantization_mode": "none"}', encoding="utf-8")
+    return first, second, response
+
+
+def _mode_paths(
+    build: session.HardwareSessionBuild, mode: str
+) -> tuple[Path, Path, Path]:
+    first, second, response = _paths(build)
+    first.write_text(json.dumps({"quantization_mode": mode}), encoding="utf-8")
+    second.write_text(json.dumps({"quantization_mode": mode}), encoding="utf-8")
     return first, second, response
 
 
@@ -225,6 +234,54 @@ def test_profile_parser_supplies_frozen_canonical_build_caps() -> None:
     assert profile.max_tensor_elements == session.RESIDENT_MAX_ELEMENTS
     with pytest.raises(FrozenInstanceError):
         profile.timeout_s = 2.0
+
+
+def test_m2_2_session_requires_matching_manifest_and_response_mode(
+    tmp_path, monkeypatch
+) -> None:
+    mode = "per_task_resident_requantize"
+    build = _build(
+        tmp_path,
+        monkeypatch,
+    )
+    first, second, response = _mode_paths(build, mode)
+    payload = _completed_response()
+    payload["quantization_mode"] = mode
+    _install_host(monkeypatch, response, payload)
+
+    result = session.execute_sliced_resident_hardware_session(
+        build,
+        manifest_paths=(first, second),
+        response_path=response,
+        profile=_profile_mapping(
+            numeric_modes=["none", "per_task_resident_requantize"]
+        ),
+        environment={"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1"},
+    )
+
+    assert result.status == "completed"
+
+
+def test_m2_2_session_rejects_response_mode_mismatch(tmp_path, monkeypatch) -> None:
+    mode = "per_task_resident_requantize"
+    build = _build(tmp_path, monkeypatch)
+    first, second, response = _mode_paths(build, mode)
+    payload = _completed_response()
+    payload["quantization_mode"] = "none"
+    _install_host(monkeypatch, response, payload)
+
+    result = session.execute_sliced_resident_hardware_session(
+        build,
+        manifest_paths=(first, second),
+        response_path=response,
+        profile=_profile_mapping(
+            numeric_modes=["none", "per_task_resident_requantize"]
+        ),
+        environment={"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1"},
+    )
+
+    assert result.status == "failed"
+    assert result.failure_stage == "response_evidence_invalid"
 
 
 @pytest.mark.parametrize(

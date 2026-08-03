@@ -39,6 +39,7 @@ from quantum_bench.tn.slicing import build_slice_aware_taskgraph_model
 ROOT = Path(__file__).resolve().parents[1]
 SUITE_PATH = ROOT / "configs" / "suites" / "upmem_hardware_sliced_resident_mvp.yml"
 M2_1_SUITE_PATH = ROOT / "configs" / "suites" / "upmem_hardware_sliced_resident_m2_1.yml"
+M2_2_SUITE_PATH = ROOT / "configs" / "suites" / "upmem_hardware_sliced_resident_m2_2.yml"
 
 
 def test_m2_suite_is_strict_and_reconstructs_qasm_cases() -> None:
@@ -270,6 +271,86 @@ def test_m2_1_fixture_builds_dependent_hx_graph_and_useful_cpu_slices(tmp_path) 
             + manifest["final_d2h_bytes"]
             == 1712
         )
+
+
+def test_m2_2_fixture_has_two_modes_and_same_plan_identity(tmp_path) -> None:
+    raw = yaml.safe_load(M2_2_SUITE_PATH.read_text(encoding="utf-8"))
+    suite = load_suite(M2_2_SUITE_PATH)
+    loaded = mvp.load_m2_suite(M2_2_SUITE_PATH)
+
+    assert raw["suite_id"] == "upmem_hardware_sliced_resident_m2_2"
+    assert raw["metadata"]["numeric_modes"] == [
+        "none",
+        "per_task_resident_requantize",
+    ]
+    assert suite["warmups"] == 1
+    assert suite["repeats"] == 5
+    assert loaded.numeric_modes == (
+        "none",
+        "per_task_resident_requantize",
+    )
+
+    case = suite["cases"][0]
+    prepared = mvp._prepare_case(ROOT, case, loaded)
+    dpu_binary = tmp_path / "dpu_resident"
+    dpu_binary.write_bytes(b"fixture")
+    manifests_by_mode = {}
+    source_hashes_by_mode = {}
+    for mode in loaded.numeric_modes:
+        artifacts = mvp._write_packages(
+            prepared,
+            loaded,
+            dpu_binary,
+            tmp_path / mode,
+            prefix="m2-2-test",
+            numeric_mode=mode,
+        )
+        manifests_by_mode[mode] = artifacts["manifest_paths"]
+        source_hashes_by_mode[mode] = tuple(
+            item.source_hashes for item in artifacts["packages"]
+        )
+        assert artifacts["validation"]["validated"] is True
+        for manifest_path in artifacts["manifest_paths"]:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            assert manifest["quantization_mode"] == mode
+            assert manifest["numeric_mode"] == mode
+            assert manifest["executor_config_hash"] == mvp._executor_config_hash(mode)
+
+    assert manifests_by_mode["none"] != manifests_by_mode["per_task_resident_requantize"]
+    assert source_hashes_by_mode["none"] == source_hashes_by_mode[
+        "per_task_resident_requantize"
+    ]
+    assert mvp._executor_config_hash("none") != mvp._executor_config_hash(
+        "per_task_resident_requantize"
+    )
+
+
+def test_m2_2_profile_artifact_has_no_ambiguous_scalar_numeric_mode() -> None:
+    profile = mvp.parse_sliced_resident_hardware_profile(
+        yaml.safe_load(M2_2_SUITE_PATH.read_text(encoding="utf-8"))["metadata"][
+            "hardware_profile"
+        ],
+        allowed_numeric_modes=mvp.M2_2_NUMERIC_MODES,
+    )
+    metadata = mvp._profile_metadata(
+        profile, numeric_modes=mvp.M2_2_NUMERIC_MODES
+    )
+    assert metadata["numeric_mode"] is None
+    assert metadata["numeric_modes"] == list(mvp.M2_2_NUMERIC_MODES)
+
+
+def test_two_dpu_native_response_contract_echoes_and_validates_mode() -> None:
+    source = (
+        ROOT
+        / "native"
+        / "upmem"
+        / "simplepim"
+        / "upmem_sdk_generic_loop_resident_two_dpu"
+        / "host.c"
+    ).read_text(encoding="utf-8")
+    assert r'\"quantization_mode\"' in source
+    assert "slice_packages_require_matching_quantization_mode" in source
+    assert "slice_packages_require_supported_quantization_mode" in source
 
 
 def test_python_package_validator_rejects_native_dual_role_slot(tmp_path) -> None:

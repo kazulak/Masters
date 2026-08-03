@@ -38,6 +38,7 @@ RESIDENT_SOURCE_DIR = "upmem_sdk_generic_loop_resident"
 BUILD_TIMEOUT_S = 120.0
 CLEANUP_GRACE_S = 2.0
 PROFILE_VERSION = "hardware_sliced_resident_two_dpu_m2_v1"
+SUPPORTED_NUMERIC_MODES = ("none", "per_task_resident_requantize")
 BACKEND_ID = "upmem_sdk_hardware_sliced_resident_two_dpu"
 ROUTE_ID = "upmem_tn_hardware_sliced_resident_two_dpu"
 _BUILD_CAPS = {
@@ -66,6 +67,7 @@ class SlicedResidentHardwareProfile:
     host_completion_mode: str
     timeout_s: float
     performance_claim_applicable: bool
+    numeric_modes: tuple[str, ...] = ("none",)
     max_rank: int = RESIDENT_MAX_RANK
     max_tensor_elements: int = RESIDENT_MAX_ELEMENTS
     max_logical_tasks: int = RESIDENT_MAX_LOGICAL_TASKS
@@ -190,6 +192,16 @@ def execute_sliced_resident_hardware_session(
     )
     if manifests[0] == manifests[1]:
         raise ValueError("hardware_profile_violation: slice manifests must be distinct")
+    manifest_modes = tuple(_manifest_quantization_mode(path) for path in manifests)
+    if len(set(manifest_modes)) != 1:
+        raise ValueError(
+            "hardware_profile_violation: slice manifests must select one numeric mode"
+        )
+    selected_mode = manifest_modes[0]
+    if selected_mode not in profile.numeric_modes:
+        raise ValueError(
+            "hardware_profile_violation: manifest numeric mode is not enabled by the profile"
+        )
     response = _canonical_session_path(root, response_path, "response")
     command = (
         str(build.host_binary.resolve()),
@@ -209,7 +221,10 @@ def execute_sliced_resident_hardware_session(
     payload = _load_response(response)
     response_loaded = payload is not None
     payload = payload or {}
-    response_completed = response_loaded and _response_completed(payload)
+    response_completed = response_loaded and _response_completed(
+        payload,
+        expected_mode=selected_mode if len(profile.numeric_modes) > 1 else None,
+    )
     failure_stage = _execution_failure_stage(completed, payload, response_loaded)
     return SlicedResidentSessionExecution(
         status="completed"
@@ -231,12 +246,19 @@ def execute_sliced_resident_hardware_session(
 
 def parse_sliced_resident_hardware_profile(
     value: Mapping[str, Any],
+    *,
+    allowed_numeric_modes: Sequence[str] = ("none",),
 ) -> SlicedResidentHardwareProfile:
     """Parse the two-DPU suite profile and supply the frozen build caps."""
 
     if not isinstance(value, Mapping):
         raise ValueError(
             "hardware_profile_violation: sliced resident profile must be a mapping"
+        )
+    numeric_modes = tuple(str(mode) for mode in allowed_numeric_modes)
+    if not numeric_modes or len(set(numeric_modes)) != len(numeric_modes):
+        raise ValueError(
+            "hardware_profile_violation: allowed numeric modes must be non-empty and distinct"
         )
     expected = {
         "hardware_profile_version": PROFILE_VERSION,
@@ -246,7 +268,7 @@ def parse_sliced_resident_hardware_profile(
         "requested_dpu_count": 2,
         "slices": 2,
         "tasklets_per_dpu": 1,
-        "numeric_modes": ["none"],
+        "numeric_modes": list(numeric_modes),
         "synchronous_execution": True,
         "device_launch_mode": "asynchronous_dpu_set",
         "host_completion_mode": "blocking_sync",
@@ -294,6 +316,7 @@ def parse_sliced_resident_hardware_profile(
         host_completion_mode=str(value.get("host_completion_mode", "blocking_sync")),
         timeout_s=float(timeout),
         performance_claim_applicable=False,
+        numeric_modes=numeric_modes,
         **_BUILD_CAPS,
     )
 
@@ -311,16 +334,30 @@ def _coerce_profile(
                 "requested_dpu_count": profile.requested_dpu_count,
                 "slices": profile.slices,
                 "tasklets_per_dpu": profile.tasklets_per_dpu,
-                "numeric_modes": [profile.numeric_mode],
+                "numeric_modes": list(profile.numeric_modes),
                 "synchronous_execution": profile.synchronous_execution,
                 "device_launch_mode": profile.device_launch_mode,
                 "host_completion_mode": profile.host_completion_mode,
                 "timeout_s": profile.timeout_s,
                 "performance_claim_applicable": profile.performance_claim_applicable,
                 **{key: getattr(profile, key) for key in _BUILD_CAPS},
-            }
+            },
+            allowed_numeric_modes=profile.numeric_modes,
         )
-    return parse_sliced_resident_hardware_profile(profile)
+    configured_modes = profile.get("numeric_modes", ["none"])
+    if not isinstance(configured_modes, (list, tuple)):
+        raise ValueError(
+            "hardware_profile_violation: numeric_modes must be a list or tuple"
+        )
+    mode_tuple = tuple(str(mode) for mode in configured_modes)
+    if mode_tuple not in (("none",), SUPPORTED_NUMERIC_MODES):
+        raise ValueError(
+            "hardware_profile_violation: numeric_modes must be ['none'] or the canonical M2.2 pair"
+        )
+    return parse_sliced_resident_hardware_profile(
+        profile,
+        allowed_numeric_modes=mode_tuple,
+    )
 
 
 def _required_build_tools(environment: Mapping[str, str]) -> tuple[str, JsonDict]:
@@ -476,6 +513,21 @@ def _load_response(path: Path) -> JsonDict | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _manifest_quantization_mode(path: Path) -> str:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            "hardware_profile_violation: slice manifest is not valid JSON"
+        ) from exc
+    mode = payload.get("quantization_mode") if isinstance(payload, Mapping) else None
+    if not isinstance(mode, str) or not mode:
+        raise ValueError(
+            "hardware_profile_violation: slice manifest numeric mode is missing"
+        )
+    return mode
+
+
 def _finite_nonnegative(value: Any) -> bool:
     return (
         isinstance(value, (int, float))
@@ -485,7 +537,9 @@ def _finite_nonnegative(value: Any) -> bool:
     )
 
 
-def _response_completed(response: Mapping[str, Any]) -> bool:
+def _response_completed(
+    response: Mapping[str, Any], *, expected_mode: str | None = None
+) -> bool:
     allocation = response.get("allocation")
     launch = response.get("launch")
     release = response.get("release")
@@ -538,6 +592,10 @@ def _response_completed(response: Mapping[str, Any]) -> bool:
         )
         or response.get("device_launch_mode") != "asynchronous_dpu_set"
         or response.get("host_completion_mode") != "blocking_sync"
+        or (
+            expected_mode is not None
+            and response.get("quantization_mode") != expected_mode
+        )
         or response.get("timing_scope") != "host_observed_sdk_stage_boundaries"
         or response.get("timing_is_bringup_only") is not True
         or not isinstance(timing, Mapping)

@@ -42,16 +42,19 @@ from quantum_bench.targets.upmem.hardware_taskgraph_sliced_resident import (
     build_two_slice_resident_graph_packages,
     build_two_slice_resident_plan,
     load_and_reconstruct_two_slice_native_outputs,
+    reconstruct_host_slice_outputs,
     validate_written_two_slice_packages,
     write_two_slice_resident_graph_packages,
 )
 from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
+    build_resident_policy_reference,
     validate_resident_graph_package_file,
 )
 from quantum_bench.tn import (
     build_tensor_network,
     execute_task_sequence_np_einsum,
     plan_task_graph_with_config,
+    executor_config_hash,
     with_execution_identity,
 )
 from quantum_bench.tn.contract import contract_binary_task
@@ -64,12 +67,17 @@ from quantum_bench.tn.slicing import (
 
 MVP_SCHEMA_VERSION = "upmem_hardware_sliced_resident_m2_v1"
 M2_1_SCHEMA_VERSION = "upmem_hardware_sliced_resident_m2_1_v1"
+M2_2_SCHEMA_VERSION = "upmem_hardware_sliced_resident_m2_2_v1"
 PLAN_SCHEMA_VERSION = "upmem_hardware_sliced_resident_mvp_plan_v1"
 RUNTIME_SCHEMA_VERSION = "upmem_hardware_sliced_resident_mvp_runtime_v1"
 ROUTE_LABEL = "upmem_hw_sliced_resident"
 CLAIM_BOUNDARY = "internal/research MVP only; no speedup claim and no energy claim"
+M2_2_CLAIM_BOUNDARY = (
+    "internal/research M2.2 only; no speedup, scaling, or energy claim"
+)
 _WORKLOAD_IDS = ("one_qubit_x_m2", "one_qubit_h_m2", "one_qubit_z_m2")
 _M2_1_WORKLOAD_IDS = ("one_qubit_hx_m2_1",)
+_M2_2_WORKLOAD_IDS = ("one_qubit_hx_m2_2",)
 IMPLEMENTATION_ROOT = Path(__file__).resolve().parents[3]
 CANONICAL_M2_SUITE_PATH = (
     IMPLEMENTATION_ROOT
@@ -83,6 +91,12 @@ CANONICAL_M2_1_SUITE_PATH = (
     / "suites"
     / "upmem_hardware_sliced_resident_m2_1.yml"
 )
+CANONICAL_M2_2_SUITE_PATH = (
+    IMPLEMENTATION_ROOT
+    / "configs"
+    / "suites"
+    / "upmem_hardware_sliced_resident_m2_2.yml"
+)
 _CANONICAL_QASM_PATHS = {
     "one_qubit_x_m2": "configs/circuits/upmem_m2/one_qubit_x.qasm",
     "one_qubit_h_m2": "configs/circuits/upmem_m2/one_qubit_h.qasm",
@@ -91,7 +105,13 @@ _CANONICAL_QASM_PATHS = {
 _M2_1_QASM_PATHS = {
     "one_qubit_hx_m2_1": "configs/circuits/upmem_m2/one_qubit_hx.qasm",
 }
+_M2_2_QASM_PATHS = {
+    "one_qubit_hx_m2_2": "configs/circuits/upmem_m2/one_qubit_hx.qasm",
+}
+M2_2_NUMERIC_MODES = ("none", "per_task_resident_requantize")
 SLICE_NONZERO_THRESHOLD = 1.0e-7
+M2_2_NONE_VALIDATION_TOLERANCE = 1.0e-6
+M2_2_REQUANTIZED_VALIDATION_TOLERANCE = 1.0e-2
 
 
 @dataclass(frozen=True)
@@ -103,6 +123,11 @@ class M2Suite:
     fixture_version: str
     fixture_scope: str
     require_nonzero_slice_partials: bool
+    numeric_modes: tuple[str, ...] = ("none",)
+
+    @property
+    def is_m2_2(self) -> bool:
+        return self.fixture_version == M2_2_SCHEMA_VERSION
 
 
 @dataclass(frozen=True)
@@ -120,27 +145,54 @@ class M2RunResult:
     row_count: int
 
 
+def _claim_boundary(m2: M2Suite) -> str:
+    return M2_2_CLAIM_BOUNDARY if m2.is_m2_2 else CLAIM_BOUNDARY
+
+
 def load_m2_suite(path: Path) -> M2Suite:
-    """Load one of the two committed, deliberately narrow M2 fixtures."""
+    """Load one of the committed, deliberately narrow M2 fixtures."""
 
     resolved_path = path.resolve()
     if resolved_path not in {
         CANONICAL_M2_SUITE_PATH.resolve(),
         CANONICAL_M2_1_SUITE_PATH.resolve(),
+        CANONICAL_M2_2_SUITE_PATH.resolve(),
     }:
         raise ValueError(
             "hardware_profile_violation: M2 suite must be one of the committed "
             "sliced-resident fixtures"
         )
     is_m2_1 = resolved_path == CANONICAL_M2_1_SUITE_PATH.resolve()
+    is_m2_2 = resolved_path == CANONICAL_M2_2_SUITE_PATH.resolve()
     expected_suite_id = (
-        "upmem_hardware_sliced_resident_m2_1"
+        "upmem_hardware_sliced_resident_m2_2"
+        if is_m2_2
+        else "upmem_hardware_sliced_resident_m2_1"
         if is_m2_1
         else "upmem_hardware_sliced_resident_mvp"
     )
-    expected_schema = M2_1_SCHEMA_VERSION if is_m2_1 else MVP_SCHEMA_VERSION
-    expected_workload_ids = _M2_1_WORKLOAD_IDS if is_m2_1 else _WORKLOAD_IDS
-    expected_qasm_paths = _M2_1_QASM_PATHS if is_m2_1 else _CANONICAL_QASM_PATHS
+    expected_schema = (
+        M2_2_SCHEMA_VERSION
+        if is_m2_2
+        else M2_1_SCHEMA_VERSION
+        if is_m2_1
+        else MVP_SCHEMA_VERSION
+    )
+    expected_workload_ids = (
+        _M2_2_WORKLOAD_IDS
+        if is_m2_2
+        else _M2_1_WORKLOAD_IDS
+        if is_m2_1
+        else _WORKLOAD_IDS
+    )
+    expected_qasm_paths = (
+        _M2_2_QASM_PATHS
+        if is_m2_2
+        else _M2_1_QASM_PATHS
+        if is_m2_1
+        else _CANONICAL_QASM_PATHS
+    )
+    expected_numeric_modes = M2_2_NUMERIC_MODES if is_m2_2 else ("none",)
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise ValueError("hardware_profile_violation: M2 suite must be a mapping")
@@ -153,14 +205,24 @@ def load_m2_suite(path: Path) -> M2Suite:
         or raw.get("suite_id") != expected_suite_id
         or not isinstance(metadata, dict)
         or metadata.get(
-            "hardware_sliced_resident_m2_1_schema_version"
+            "hardware_sliced_resident_m2_2_schema_version"
+            if is_m2_2
+            else "hardware_sliced_resident_m2_1_schema_version"
             if is_m2_1
             else "hardware_sliced_resident_m2_schema_version"
         )
         != expected_schema
-        or metadata.get("quantization_mode") != "none"
+        or (
+            not is_m2_2
+            and metadata.get("quantization_mode") != "none"
+        )
+        or (
+            is_m2_2
+            and metadata.get("numeric_modes") != list(expected_numeric_modes)
+        )
         or raw.get("defaults", {}).get("warmups") != 1
-        or raw.get("defaults", {}).get("repeats") != 3
+        or raw.get("defaults", {}).get("repeats")
+        != (5 if is_m2_2 else 3)
         or raw.get("defaults", {}).get("planner")
         != {"engine": "opt_einsum", "optimize": "greedy"}
         or not isinstance(routes, list)
@@ -175,23 +237,27 @@ def load_m2_suite(path: Path) -> M2Suite:
         )
     route = routes[0]
     options = route.get("options") if isinstance(route, dict) else None
+    expected_route_options = {
+        "backend_id": BACKEND_ID,
+        "slices": 2,
+        "requested_dpu_count": 2,
+        "tasklets_per_dpu": 1,
+    }
+    if not is_m2_2:
+        expected_route_options["quantization_mode"] = "none"
+    else:
+        expected_route_options["numeric_modes"] = list(expected_numeric_modes)
     if (
         not isinstance(options, dict)
         or route.get("id") != ROUTE_ID
-        or options
-        != {
-            "backend_id": BACKEND_ID,
-            "quantization_mode": "none",
-            "slices": 2,
-            "requested_dpu_count": 2,
-            "tasklets_per_dpu": 1,
-        }
+        or options != expected_route_options
     ):
         raise ValueError(
             "hardware_profile_violation: M2 route differs from committed route"
         )
     profile = parse_sliced_resident_hardware_profile(
-        metadata.get("hardware_profile", {})
+        metadata.get("hardware_profile", {}),
+        allowed_numeric_modes=expected_numeric_modes,
     )
     for workload in workloads:
         circuit = workload.get("circuit") if isinstance(workload, dict) else None
@@ -201,7 +267,7 @@ def load_m2_suite(path: Path) -> M2Suite:
             or circuit.get("kind") != "qasm_file"
             or circuit.get("path") != expected_qasm_paths.get(workload_id)
             or circuit.get("name")
-            != str(workload_id).replace("_m2_1", "").replace("_m2", "")
+            != Path(str(expected_qasm_paths.get(workload_id))).stem
             or not isinstance(workload.get("expected_output"), list)
         ):
             raise ValueError(
@@ -211,12 +277,12 @@ def load_m2_suite(path: Path) -> M2Suite:
         metadata.get(
             "fixture_scope",
             "single_gate_operator_on_zero_initial_state"
-            if not is_m2_1
+            if not (is_m2_1 or is_m2_2)
             else "single_gate_operator_on_prepared_real_input_state",
         )
     )
     require_nonzero = bool(metadata.get("require_nonzero_slice_partials", False))
-    if is_m2_1 and not require_nonzero:
+    if (is_m2_1 or is_m2_2) and not require_nonzero:
         raise ValueError(
             "hardware_profile_violation: M2.1 must require nonzero slice partials"
         )
@@ -225,9 +291,14 @@ def load_m2_suite(path: Path) -> M2Suite:
         suite,
         raw,
         profile,
-        M2_1_SCHEMA_VERSION if is_m2_1 else MVP_SCHEMA_VERSION,
+        M2_2_SCHEMA_VERSION
+        if is_m2_2
+        else M2_1_SCHEMA_VERSION
+        if is_m2_1
+        else MVP_SCHEMA_VERSION,
         fixture_scope,
         require_nonzero,
+        expected_numeric_modes,
     )
 
 
@@ -285,39 +356,68 @@ def prepare_upmem_hardware_sliced_resident_mvp(
         for case in m2.suite["cases"]:
             try:
                 prepared = _prepare_case(_suite_root(m2), case, m2)
-                for phase, repeat_id in _phase_ids(m2.suite):
-                    artifact_dir = _artifact_dir(
-                        plan_dir, str(case["case_id"]), phase, repeat_id
-                    )
-                    artifacts = _write_packages(
-                        prepared, m2, dpu_binary, artifact_dir, prefix="plan"
-                    )
-                    if native.get("status") == "passed":
-                        validation = _validate_native_manifests(
-                            native["host_binary_path"],
-                            artifacts["manifest_paths"],
-                            timeout_s=float(m2.profile.timeout_s),
+                modes = m2.numeric_modes if m2.is_m2_2 else ("none",)
+                for numeric_mode in modes:
+                    for phase, repeat_id in _phase_ids(m2.suite):
+                        artifact_dir = _artifact_dir(
+                            plan_dir,
+                            str(case["case_id"]),
+                            phase,
+                            repeat_id,
+                            numeric_mode=numeric_mode if m2.is_m2_2 else None,
                         )
-                        artifacts["native_manifest_validation"] = validation
-                        write_json(
-                            artifact_dir / "native_manifest_validation.json",
-                            validation,
+                        artifacts = _write_packages(
+                            prepared,
+                            m2,
+                            dpu_binary,
+                            artifact_dir,
+                            prefix="plan",
+                            numeric_mode=numeric_mode,
                         )
-                        native_manifest_validation["entries"].append(validation)
-                        if validation["status"] != "passed":
-                            row = _plan_row(case, prepared, phase, repeat_id, artifacts)
-                            row.update(
-                                {
-                                    "status": "failed",
-                                    "failure_stage": validation.get(
-                                        "failure_stage", "native_manifest_validation_failed"
-                                    ),
-                                    "reason": validation.get("reason"),
-                                }
+                        if native.get("status") == "passed":
+                            validation = _validate_native_manifests(
+                                native["host_binary_path"],
+                                artifacts["manifest_paths"],
+                                timeout_s=float(m2.profile.timeout_s),
                             )
-                            rows.append(row)
-                            continue
-                    rows.append(_plan_row(case, prepared, phase, repeat_id, artifacts))
+                            validation["numeric_mode"] = numeric_mode
+                            artifacts["native_manifest_validation"] = validation
+                            write_json(
+                                artifact_dir / "native_manifest_validation.json",
+                                validation,
+                            )
+                            native_manifest_validation["entries"].append(validation)
+                            if validation["status"] != "passed":
+                                row = _plan_row(
+                                    case,
+                                    prepared,
+                                    phase,
+                                    repeat_id,
+                                    artifacts,
+                                    numeric_mode=numeric_mode,
+                                )
+                                row.update(
+                                    {
+                                        "status": "failed",
+                                        "failure_stage": validation.get(
+                                            "failure_stage",
+                                            "native_manifest_validation_failed",
+                                        ),
+                                        "reason": validation.get("reason"),
+                                    }
+                                )
+                                rows.append(row)
+                                continue
+                        rows.append(
+                            _plan_row(
+                                case,
+                                prepared,
+                                phase,
+                                repeat_id,
+                                artifacts,
+                                numeric_mode=numeric_mode,
+                            )
+                        )
             except Exception as exc:
                 rows.append(
                     {
@@ -354,13 +454,16 @@ def prepare_upmem_hardware_sliced_resident_mvp(
             "suite_id": m2.suite["suite_id"],
             "route_id": ROUTE_ID,
             "backend_id": BACKEND_ID,
-            "profile": _profile_metadata(m2.profile),
+            "profile": _profile_metadata(
+                m2.profile,
+                numeric_modes=m2.numeric_modes if m2.is_m2_2 else None,
+            ),
             "prepared_operations": rows,
             "native_build": native,
             "native_manifest_validation": native_manifest_validation,
             "dpu_allocation_attempted": False,
             "dpu_launch_attempted": False,
-            "claim_boundary": CLAIM_BOUNDARY,
+            "claim_boundary": _claim_boundary(m2),
         },
     )
     return M2PlanResult(plan_dir, summary_path, status)
@@ -392,12 +495,13 @@ def run_upmem_hardware_sliced_resident_mvp(
         backend_id=BACKEND_ID,
         execution_scope=(
             "physical_two_dpu_two_slice_full_replicated_prefix_taskgraph"
-            if m2.fixture_version == M2_1_SCHEMA_VERSION
+            if m2.fixture_version in {M2_1_SCHEMA_VERSION, M2_2_SCHEMA_VERSION}
             else "physical_two_dpu_two_slice_terminal_contraction"
         ),
         evidence_type="physical_hardware_internal_research_mvp",
         upmem_execution_mode="two_dpu_sliced_resident",
-        quantization_mode="none",
+        quantization_mode=None if m2.is_m2_2 else "none",
+        quantization_modes=m2.numeric_modes if m2.is_m2_2 else (),
         artifact_retention="full",
         summary="upmem_hardware_sliced_resident_mvp_summary.json",
         root_dir=root_dir,
@@ -406,12 +510,17 @@ def run_upmem_hardware_sliced_resident_mvp(
         {
             "execution_model": (
                 "dependent_prefix_replicated"
-                if m2.fixture_version == M2_1_SCHEMA_VERSION
+                if m2.fixture_version in {M2_1_SCHEMA_VERSION, M2_2_SCHEMA_VERSION}
                 else "terminal_contraction_input_restriction"
             ),
             "operation_count": None,
             "fixture_version": m2.fixture_version,
             "fixture_scope": m2.fixture_scope,
+            **(
+                {"numeric_modes": list(m2.numeric_modes)}
+                if m2.is_m2_2
+                else {}
+            ),
         }
     )
     records: list[dict[str, Any]] = []
@@ -466,13 +575,22 @@ def run_upmem_hardware_sliced_resident_mvp(
             }
         )
         for phase, repeat_id in _phase_ids(m2.suite):
-            record = _run_operation(
-                run_dir, native, m2, case, prepared, phase, repeat_id, env
-            )
-            if phase == "warmup":
-                warmups.append(record)
-            else:
-                records.append(record)
+            for numeric_mode in (m2.numeric_modes if m2.is_m2_2 else ("none",)):
+                record = _run_operation(
+                    run_dir,
+                    native,
+                    m2,
+                    case,
+                    prepared,
+                    phase,
+                    repeat_id,
+                    env,
+                    numeric_mode=numeric_mode,
+                )
+                if phase == "warmup":
+                    warmups.append(record)
+                else:
+                    records.append(record)
     return _finish_run(run_dir, manifest, m2, records, warmups, native=native)
 
 
@@ -486,8 +604,11 @@ def _prepare_case(
             network, {"engine": "opt_einsum", "optimize": "greedy"}
         )
     )
-    is_m2_1 = m2.fixture_version == M2_1_SCHEMA_VERSION
-    if is_m2_1:
+    is_two_operation_fixture = m2.fixture_version in {
+        M2_1_SCHEMA_VERSION,
+        M2_2_SCHEMA_VERSION,
+    }
+    if is_two_operation_fixture:
         if (
             circuit.n_qubits != 1
             or len(circuit.operations) != 2
@@ -496,12 +617,12 @@ def _prepare_case(
             or graph.tasks[1].dependencies != (graph.tasks[0].id,)
         ):
             raise ValueError(
-                "hardware_profile_violation: M2.1 requires a two-operation H-X dependent TaskGraph"
+                "hardware_profile_violation: strict M2.1/M2.2 requires a two-operation H-X dependent TaskGraph"
             )
         task = graph.tasks[-1]
         if task.gemm_k != 2 or not task.contracted_labels:
             raise ValueError(
-                "hardware_profile_violation: M2.1 requires a terminal dimension-2 contraction"
+                "hardware_profile_violation: strict M2.1/M2.2 requires a terminal dimension-2 contraction"
             )
         model = build_slice_aware_taskgraph_model(
             graph, max_slice_count=2, sliced_task_id=task.id
@@ -512,7 +633,7 @@ def _prepare_case(
         )
         if any(len(restrictions) != 2 for restrictions in restrictions_by_slice):
             raise ValueError(
-                "hardware_profile_violation: M2.1 requires two initial-input slice restrictions"
+                "hardware_profile_violation: strict M2.1/M2.2 requires two initial-input slice restrictions"
             )
         model = replace(
             model,
@@ -674,18 +795,35 @@ def _run_operation(
     phase: str,
     repeat_id: int,
     environment: Mapping[str, str],
+    *,
+    numeric_mode: str = "none",
 ) -> dict[str, Any]:
     started = time.perf_counter()
-    artifact_dir = _artifact_dir(run_dir, str(case["case_id"]), phase, repeat_id)
+    artifact_dir = _artifact_dir(
+        run_dir,
+        str(case["case_id"]),
+        phase,
+        repeat_id,
+        numeric_mode=numeric_mode if m2.is_m2_2 else None,
+    )
     artifacts: dict[str, Any] | None = None
     session: Any | None = None
     try:
         artifacts = _write_packages(
-            prepared, m2, native.dpu_binary, artifact_dir, prefix="execute"
+            prepared,
+            m2,
+            native.dpu_binary,
+            artifact_dir,
+            prefix="execute",
+            numeric_mode=numeric_mode,
         )
-        response_path = (
-            native.session_root
-            / f"{sanitize(str(case['case_id']))}-{phase}-{repeat_id:02d}-response.json"
+        response_path = _response_path(
+            native,
+            str(case["case_id"]),
+            phase,
+            repeat_id,
+            m2_2=m2.is_m2_2,
+            numeric_mode=numeric_mode,
         )
         session = execute_sliced_resident_hardware_session(
             native,
@@ -697,22 +835,80 @@ def _run_operation(
         write_json(artifact_dir / "native_response.json", session.response)
         if session.status != "completed":
             raise RuntimeError(session.failure_stage or "hardware_session_failed")
+        if m2.is_m2_2 and session.response.get("quantization_mode") != numeric_mode:
+            raise RuntimeError("response_numeric_mode_mismatch")
+        policy_output = None
+        policy_metrics = None
+        policy_partials = None
+        if m2.is_m2_2:
+            policy_partials = {}
+            for item in artifacts["packages"]:
+                policy = build_resident_policy_reference(
+                    item.package.graph,
+                    item.network,
+                    quantization_mode=numeric_mode,
+                )
+                policy_partials[item.slice_id] = np.asarray(policy["output"])
+            policy_output = reconstruct_host_slice_outputs(
+                prepared["plan"], policy_partials
+            )
         reconstruction_started = time.perf_counter()
         output, reconstruction = load_and_reconstruct_two_slice_native_outputs(
             prepared["plan"],
             artifacts["packages"],
             session.response_path,
-            reference_partials=prepared.get("reference_partials"),
+            reference_partials=(
+                policy_partials
+                if policy_partials is not None
+                else prepared.get("reference_partials")
+            ),
         )
         reconstruction_time = time.perf_counter() - reconstruction_started
         np.save(artifact_dir / "reconstructed_output.npy", output)
+        validation_tolerance = (
+            M2_2_REQUANTIZED_VALIDATION_TOLERANCE
+            if m2.is_m2_2 and numeric_mode == "per_task_resident_requantize"
+            else M2_2_NONE_VALIDATION_TOLERANCE
+        )
         cpu_ok = bool(
-            np.allclose(output, prepared["reference"], atol=1.0e-6, rtol=1.0e-6)
+            np.allclose(
+                output,
+                prepared["reference"],
+                atol=M2_2_NONE_VALIDATION_TOLERANCE,
+                rtol=M2_2_NONE_VALIDATION_TOLERANCE,
+            )
         )
-        expected_ok = bool(
-            np.allclose(output, prepared["expected"], atol=1.0e-6, rtol=1.0e-6)
-        )
-        status = "completed" if cpu_ok and expected_ok else "failed"
+        if m2.is_m2_2:
+            policy_metrics = _accuracy_metrics(
+                policy_output,
+                output,
+                tolerance=1.0e-5,
+                reference_kind="dpu_mirroring_policy_reference",
+            )
+            full_precision_metrics = _accuracy_metrics(
+                prepared["reference"],
+                output,
+                tolerance=validation_tolerance,
+                reference_kind=(
+                    "cpu_exact_taskgraph_full_precision"
+                    if numeric_mode == "none"
+                    else "cpu_exact_taskgraph_full_precision_with_fixed_hx_quantization_tolerance"
+                ),
+            )
+            expected_ok = bool(
+                np.allclose(
+                    output,
+                    prepared["expected"],
+                    atol=validation_tolerance,
+                    rtol=validation_tolerance,
+                )
+            )
+        else:
+            full_precision_metrics = None
+            expected_ok = bool(
+                np.allclose(output, prepared["expected"], atol=1.0e-6, rtol=1.0e-6)
+            )
+        status = "completed" if m2.is_m2_2 or (cpu_ok and expected_ok) else "failed"
         return _record(
             m2,
             case,
@@ -730,6 +926,9 @@ def _run_operation(
             output=output,
             cpu_ok=cpu_ok,
             expected_ok=expected_ok,
+            numeric_mode=numeric_mode,
+            policy_reference=policy_metrics,
+            full_precision_accuracy=full_precision_metrics,
             reconstruction_time_s=reconstruction_time,
             total_time_s=time.perf_counter() - started,
         )
@@ -743,6 +942,7 @@ def _run_operation(
             _stage(str(exc), "operation_failed"),
             prepared=prepared,
             total_time_s=time.perf_counter() - started,
+            numeric_mode=numeric_mode,
             operation_evidence=_operation_evidence(run_dir, session, artifacts),
             observed_response=(
                 session.response
@@ -759,13 +959,14 @@ def _write_packages(
     artifact_dir: Path,
     *,
     prefix: str,
+    numeric_mode: str = "none",
 ) -> dict[str, Any]:
     artifact_dir.mkdir(parents=True, exist_ok=True)
     packages = build_two_slice_resident_graph_packages(
         prepared["plan"],
         case_id=prepared["case_id"],
         suite_id=m2.suite["suite_id"],
-        quantization_mode="none",
+        quantization_mode=numeric_mode,
     )
     request_prefix = (
         f"{prefix}-{sanitize(artifact_dir.parent.name)}-{artifact_dir.name}"
@@ -776,6 +977,18 @@ def _write_packages(
         dpu_binary=dpu_binary,
         request_id_prefix=request_prefix,
     )
+    mode_hash = _executor_config_hash(numeric_mode)
+    for item in written:
+        if item.package.manifest_path is None:
+            raise ValueError("sliced_resident_package_write_incomplete")
+        manifest = json.loads(item.package.manifest_path.read_text(encoding="utf-8"))
+        manifest["executor_config_hash"] = mode_hash
+        manifest["numeric_mode"] = numeric_mode
+        binding = manifest.get("slice_execution")
+        if isinstance(binding, dict):
+            binding["numeric_mode"] = numeric_mode
+            binding["executor_config_hash"] = mode_hash
+        write_json(item.package.manifest_path, manifest)
     validation = validate_written_two_slice_packages(prepared["plan"], written)
     validation["binary_manifest_bindings"] = _validate_manifest_bindings_against_binary(
         written
@@ -926,6 +1139,55 @@ def _validate_native_manifests(
     return result
 
 
+def _executor_config_hash(numeric_mode: str) -> str:
+    return executor_config_hash(
+        ROUTE_ID,
+        {
+            "backend_id": BACKEND_ID,
+            "hardware_profile_version": "hardware_sliced_resident_two_dpu_m2_v1",
+            "slices": 2,
+            "requested_dpu_count": 2,
+            "tasklets_per_dpu": 1,
+            "operation_count": 2,
+            "numeric_mode": numeric_mode,
+            "resident_numeric_policy": (
+                "float32_accumulate"
+                if numeric_mode == "none"
+                else "per_task_resident_requantize"
+            ),
+        },
+    )
+
+
+def _accuracy_metrics(
+    reference: Any,
+    actual: Any,
+    *,
+    tolerance: float,
+    reference_kind: str,
+) -> dict[str, Any]:
+    difference = np.asarray(actual, dtype=np.complex128) - np.asarray(
+        reference, dtype=np.complex128
+    )
+    max_abs = float(np.max(np.abs(difference))) if difference.size else 0.0
+    l2 = float(np.linalg.norm(difference))
+    reference_norm = float(
+        np.linalg.norm(np.asarray(reference, dtype=np.complex128))
+    )
+    relative_l2 = l2 / reference_norm if reference_norm else l2
+    passed = max_abs <= tolerance
+    return {
+        "status": "passed" if passed else "failed",
+        "passed": passed,
+        "available": True,
+        "reference_kind": reference_kind,
+        "max_abs_error": max_abs,
+        "l2_error": l2,
+        "relative_l2_error": relative_l2,
+        "max_abs_tolerance": tolerance,
+    }
+
+
 def _record(
     m2: M2Suite,
     case: Mapping[str, Any],
@@ -946,6 +1208,9 @@ def _record(
     expected_ok: bool,
     reconstruction_time_s: float,
     total_time_s: float,
+    numeric_mode: str = "none",
+    policy_reference: Mapping[str, Any] | None = None,
+    full_precision_accuracy: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     response = session.response
     allocation = response.get("allocation", {})
@@ -973,7 +1238,7 @@ def _record(
         "passed"
         if transfer_matches_plan
         else "failed"
-        if m2.fixture_version == M2_1_SCHEMA_VERSION
+        if m2.fixture_version in {M2_1_SCHEMA_VERSION, M2_2_SCHEMA_VERSION}
         else "legacy_m2_planned_only"
         if not native_transfer_available
         else "failed"
@@ -982,7 +1247,11 @@ def _record(
     d2h = int(observed_d2h) if transfer_invariant else planned_d2h
     transfer = h2d + d2h
     partial_outputs = reconstruction.get("partial_outputs", {})
-    require_sentinel = m2.fixture_version == M2_1_SCHEMA_VERSION
+    is_m2_2 = m2.is_m2_2
+    require_sentinel = m2.fixture_version in {
+        M2_1_SCHEMA_VERSION,
+        M2_2_SCHEMA_VERSION,
+    }
     observed_counts = _observed_operation_completion_counts(
         response, require_sentinel=require_sentinel
     )
@@ -1006,7 +1275,14 @@ def _record(
         and launch.get("completed") is True
         and release.get("confirmed") is True
         and (
-            m2.fixture_version != M2_1_SCHEMA_VERSION
+            not is_m2_2
+            or (
+                response.get("operation_count") == 2
+                and response.get("quantization_mode") == numeric_mode
+            )
+        )
+        and (
+            m2.fixture_version not in {M2_1_SCHEMA_VERSION, M2_2_SCHEMA_VERSION}
             or (observed_counts is not None and observed_slice_count == 2)
         )
         else "failed"
@@ -1018,32 +1294,76 @@ def _record(
     )
     per_slice_status = (
         reconstruction.get("per_slice_output_validation_status", "not_run")
-        if m2.fixture_version == M2_1_SCHEMA_VERSION
+        if m2.fixture_version in {M2_1_SCHEMA_VERSION, M2_2_SCHEMA_VERSION}
         else "not_applicable_historical_m2"
     )
-    reconstruction_status = "passed" if cpu_ok else "failed"
+    reconstruction_status = (
+        "passed"
+        if is_m2_2 and np.all(np.isfinite(np.asarray(output)))
+        else "passed"
+        if cpu_ok
+        else "failed"
+    )
     final_status = "passed" if expected_ok else "failed"
     useful_status = reconstruction.get("slice_useful_work", {}).get(
         "status", "not_run"
     )
-    scientific_status = (
-        "passed"
-        if all(
-            value == "passed"
-            for value in (
-                execution_contract_status,
-                package_status,
-                per_slice_status
-                if m2.fixture_version == M2_1_SCHEMA_VERSION
-                else "passed",
-                reconstruction_status,
-                final_status,
-                useful_status if m2.require_nonzero_slice_partials else "passed",
-                transfer_status if m2.fixture_version == M2_1_SCHEMA_VERSION else "passed",
-            )
+    if is_m2_2:
+        policy_reference = policy_reference or {
+            "status": "not_run",
+            "passed": False,
+            "available": False,
+        }
+        full_precision_accuracy = full_precision_accuracy or {
+            "status": "not_run",
+            "passed": False,
+            "available": False,
+        }
+        policy_status = str(policy_reference.get("status", "not_run"))
+        full_precision_status = str(
+            full_precision_accuracy.get("status", "not_run")
         )
-        else "failed"
-    )
+        scientific_status = (
+            "passed"
+            if all(
+                value == "passed"
+                for value in (
+                    execution_contract_status,
+                    package_status,
+                    per_slice_status,
+                    reconstruction_status,
+                    final_status,
+                    useful_status,
+                    transfer_status,
+                    policy_status,
+                    full_precision_status,
+                )
+            )
+            else "failed"
+        )
+    else:
+        policy_status = "not_run"
+        full_precision_status = "not_run"
+        scientific_status = (
+            "passed"
+            if all(
+                value == "passed"
+                for value in (
+                    execution_contract_status,
+                    package_status,
+                    per_slice_status
+                    if m2.fixture_version == M2_1_SCHEMA_VERSION
+                    else "passed",
+                    reconstruction_status,
+                    final_status,
+                    useful_status if m2.require_nonzero_slice_partials else "passed",
+                    transfer_status
+                    if m2.fixture_version == M2_1_SCHEMA_VERSION
+                    else "passed",
+                )
+            )
+            else "failed"
+        )
     record_status = (
         "completed"
         if status == "completed" and scientific_status == "passed"
@@ -1075,7 +1395,7 @@ def _record(
         "backend_id": BACKEND_ID,
         "execution_scope": (
             "physical_two_dpu_two_slice_full_replicated_prefix_taskgraph"
-            if prepared["fixture_version"] == M2_1_SCHEMA_VERSION
+            if prepared["fixture_version"] in {M2_1_SCHEMA_VERSION, M2_2_SCHEMA_VERSION}
             else "physical_two_dpu_two_slice_terminal_contraction"
         ),
         "parallelism_mode": "slicing",
@@ -1084,7 +1404,7 @@ def _record(
         "slicing_backend": "internal_taskgraph",
         "slicing_strategy": (
             "contraction_index_restriction_with_replicated_prefix"
-            if prepared["fixture_version"] == M2_1_SCHEMA_VERSION
+            if prepared["fixture_version"] in {M2_1_SCHEMA_VERSION, M2_2_SCHEMA_VERSION}
             else "contraction_index_input_restriction"
         ),
         "slice_ids": [0, 1],
@@ -1106,7 +1426,8 @@ def _record(
         "fixture_version": prepared["fixture_version"],
         "fixture_scope": prepared["fixture_scope"],
         "selected_task_id": prepared["selected_task_id"],
-        "quantization_mode": "none",
+        "quantization_mode": numeric_mode,
+        **({"numeric_mode": numeric_mode} if is_m2_2 else {}),
         "n_qubits": prepared["circuit"].n_qubits,
         "gate_count": len(prepared["circuit"].operations),
         "task_count": len(prepared["graph"].tasks),
@@ -1143,6 +1464,11 @@ def _record(
         "circuit_semantics_hash": prepared["graph"].circuit_semantics_hash,
         "tensor_network_hash": prepared["graph"].tensor_network_hash,
         "contraction_plan_hash": prepared["graph"].contraction_plan_hash,
+        **(
+            {"executor_config_hash": _executor_config_hash(numeric_mode)}
+            if is_m2_2
+            else {}
+        ),
         "qasm_source_sha256": prepared["qasm_source_sha256"],
         "source_hashes": artifacts["validation"]["source_hashes"],
         "source_hashes_preserved": True,
@@ -1185,13 +1511,48 @@ def _record(
         "transfer_matches_manifest_plan": transfer_matches_plan,
         "actual_transfer_source": "native_response" if transfer_invariant else "manifest_compatibility",
         "execution_contract_status": execution_contract_status,
+        **(
+            {
+                "response_numeric_mode": response.get("quantization_mode"),
+                "policy_reference_validation": policy_reference,
+                "full_precision_accuracy": full_precision_accuracy,
+                "policy_reference_status": policy_status,
+                "full_precision_accuracy_status": full_precision_status,
+                "policy_reference_max_abs_error": policy_reference.get(
+                    "max_abs_error"
+                ),
+                "policy_reference_l2_error": policy_reference.get("l2_error"),
+                "policy_reference_relative_l2_error": policy_reference.get(
+                    "relative_l2_error"
+                ),
+                "full_precision_max_abs_error": full_precision_accuracy.get(
+                    "max_abs_error"
+                ),
+                "full_precision_l2_error": full_precision_accuracy.get("l2_error"),
+                "full_precision_relative_l2_error": full_precision_accuracy.get(
+                    "relative_l2_error"
+                ),
+            }
+            if is_m2_2
+            else {}
+        ),
         "slice_package_validation_status": package_status,
         "per_slice_output_validation_status": per_slice_status,
         "reconstruction_validation_status": reconstruction_status,
         "final_output_validation_status": final_status,
         "scientific_validation_status": scientific_status,
         "validation_status": "passed" if scientific_status == "passed" else "failed",
-        "cpu_reference_validation": cpu_ok,
+        "cpu_reference_validation": (
+            cpu_ok
+            if not is_m2_2 or numeric_mode == "none"
+            else policy_status == "passed"
+        ),
+        "strict_cpu_reference_validation": cpu_ok,
+        "cpu_reference_validation_kind": (
+            "strict_float32_full_precision"
+            if not is_m2_2 or numeric_mode == "none"
+            else "dpu_policy_reference_for_requantized_mode"
+        ),
         "expected_output_validation": expected_ok,
         "validation_errors": []
         if record_status == "completed"
@@ -1202,7 +1563,7 @@ def _record(
         "hardware_functionality_evidence": record_status == "completed",
         "hardware_speedup_applicable": False,
         "energy_measurement_available": False,
-        "claim_boundary": CLAIM_BOUNDARY,
+        "claim_boundary": _claim_boundary(m2),
         "speedup_claim": "not_applicable",
         "energy_claim": "not_applicable",
         "performance_claim_applicable": False,
@@ -1224,6 +1585,7 @@ def _failure_record(
     total_time_s: float | None = None,
     operation_evidence: Mapping[str, Any] | None = None,
     observed_response: Mapping[str, Any] | None = None,
+    numeric_mode: str = "none",
 ) -> dict[str, Any]:
     observed = observed_response or {}
     record = {
@@ -1247,7 +1609,8 @@ def _failure_record(
         "kernel_execution_status": observed.get(
             "kernel_execution_status", "not_observed"
         ),
-        "quantization_mode": "none",
+        "quantization_mode": numeric_mode,
+        **({"numeric_mode": numeric_mode} if m2.is_m2_2 else {}),
         "parallelism_mode": "slicing",
         "parallelism_evidence_type": "executed_dispatch_only",
         "slicing_enabled": True,
@@ -1283,6 +1646,24 @@ def _failure_record(
         "reconstruction_validation_status": "not_run",
         "final_output_validation_status": "not_run",
         "scientific_validation_status": "not_run",
+        **(
+            {
+                "response_numeric_mode": observed.get("quantization_mode"),
+                "policy_reference_validation": None,
+                "full_precision_accuracy": None,
+                "policy_reference_status": "not_run",
+                "full_precision_accuracy_status": "not_run",
+                "strict_cpu_reference_validation": False,
+                "cpu_reference_validation_kind": (
+                    "strict_float32_full_precision"
+                    if numeric_mode == "none"
+                    else "dpu_policy_reference_for_requantized_mode"
+                ),
+                "executor_config_hash": _executor_config_hash(numeric_mode),
+            }
+            if m2.is_m2_2
+            else {}
+        ),
         "validation_errors": [reason],
         "cpu_reference_validation": False,
         "expected_output_validation": False,
@@ -1312,7 +1693,7 @@ def _failure_record(
         "transfer_matches_manifest_plan": False,
         "actual_transfer_source": "not_run",
         "total_time_s": total_time_s,
-        "claim_boundary": CLAIM_BOUNDARY,
+        "claim_boundary": _claim_boundary(m2),
         "speedup_claim": "not_applicable",
         "energy_claim": "not_applicable",
         "performance_claim_applicable": False,
@@ -1356,10 +1737,36 @@ def _finish_run(
 ) -> M2RunResult:
     write_jsonl(run_dir / "warmups.jsonl", warmups)
     write_normalized_records(run_dir, records)
-    expected_measured_rows = len(m2.suite["cases"]) * int(m2.suite["repeats"])
-    completed = len(records) == expected_measured_rows and all(
-        row.get("status") == "completed" for row in records
+    expected_measured_rows = (
+        len(m2.suite["cases"])
+        * int(m2.suite["repeats"])
+        * (len(m2.numeric_modes) if m2.is_m2_2 else 1)
     )
+    expected_warmup_rows = (
+        len(m2.suite["cases"])
+        * int(m2.suite["warmups"])
+        * (len(m2.numeric_modes) if m2.is_m2_2 else 1)
+    )
+
+    def admitted(row: Mapping[str, Any]) -> bool:
+        return (
+            row.get("status") == "completed"
+            and row.get("validation_status") == "passed"
+        )
+
+    measured_passed_count = sum(admitted(row) for row in records)
+    warmup_passed_count = sum(admitted(row) for row in warmups)
+    measured_failed_count = len(records) - measured_passed_count
+    warmup_failed_count = len(warmups) - warmup_passed_count
+    measured_complete = (
+        len(records) == expected_measured_rows
+        and measured_passed_count == expected_measured_rows
+    )
+    warmup_complete = (
+        len(warmups) == expected_warmup_rows
+        and warmup_passed_count == expected_warmup_rows
+    )
+    completed = measured_complete and warmup_complete
     summary_path = run_dir / "upmem_hardware_sliced_resident_mvp_summary.json"
     write_json(
         summary_path,
@@ -1371,13 +1778,22 @@ def _finish_run(
             "backend_id": BACKEND_ID,
             "measured_row_count": len(records),
             "warmup_count": len(warmups),
+            "warmup_passed_count": warmup_passed_count,
+            "warmup_failed_count": warmup_failed_count,
+            "warmup_status": "passed" if warmup_complete else "failed",
+            "measured_passed_count": measured_passed_count,
+            "measured_failed_count": measured_failed_count,
+            "measured_status": "passed" if measured_complete else "failed",
+            "all_required_records_validated": completed,
             "expected_measured_row_count": expected_measured_rows,
+            "expected_warmup_row_count": expected_warmup_rows,
+            **({"numeric_modes": list(m2.numeric_modes)} if m2.is_m2_2 else {}),
             "normalized_records": "normalized_records.jsonl",
             "warmups": "warmups.jsonl",
             "native_build": _build_metadata(native, run_dir)
             if native
             else {"attempted": False, "status": "not_available"},
-            "claim_boundary": CLAIM_BOUNDARY,
+            "claim_boundary": _claim_boundary(m2),
         },
     )
     manifest.update(
@@ -1399,7 +1815,11 @@ def _write_common_artifacts(directory: Path, root_dir: Path, m2: M2Suite) -> Non
     shutil.copy2(m2.path, directory / "config" / "resolved_suite.yml")
     shutil.copy2(m2.path, directory / "resolved_suite.yml")
     write_json(
-        directory / "config" / "hardware_profile.json", _profile_metadata(m2.profile)
+        directory / "config" / "hardware_profile.json",
+        _profile_metadata(
+            m2.profile,
+            numeric_modes=m2.numeric_modes if m2.is_m2_2 else None,
+        ),
     )
     write_json(directory / "environment.json", capture_environment(root_dir))
 
@@ -1410,8 +1830,33 @@ def _phase_ids(suite: Mapping[str, Any]) -> tuple[tuple[str, int], ...]:
     )
 
 
-def _artifact_dir(root: Path, case_id: str, phase: str, repeat_id: int) -> Path:
-    return root / "cases" / sanitize(case_id) / f"{phase}_{repeat_id:02d}"
+def _artifact_dir(
+    root: Path,
+    case_id: str,
+    phase: str,
+    repeat_id: int,
+    *,
+    numeric_mode: str | None = None,
+) -> Path:
+    base = root / "cases" / sanitize(case_id)
+    if numeric_mode is not None:
+        base = base / sanitize(numeric_mode)
+    return base / f"{phase}_{repeat_id:02d}"
+
+
+def _response_path(
+    native: Any,
+    case_id: str,
+    phase: str,
+    repeat_id: int,
+    *,
+    m2_2: bool,
+    numeric_mode: str,
+) -> Path:
+    mode_suffix = f"-{sanitize(numeric_mode)}" if m2_2 else "-default"
+    return native.session_root / (
+        f"{sanitize(case_id)}-{phase}-{repeat_id:02d}{mode_suffix}-response.json"
+    )
 
 
 def _plan_row(
@@ -1420,8 +1865,10 @@ def _plan_row(
     phase: str,
     repeat_id: int,
     artifacts: Mapping[str, Any],
+    *,
+    numeric_mode: str = "none",
 ) -> dict[str, Any]:
-    return {
+    row = {
         "case_id": case["case_id"],
         "phase": phase,
         "repeat_id": repeat_id,
@@ -1440,6 +1887,18 @@ def _plan_row(
             {"status": "not_run", "reason": "native validation not requested"},
         ),
     }
+    if prepared.get("fixture_version") == M2_2_SCHEMA_VERSION:
+        row.update(
+            {
+                "numeric_mode": numeric_mode,
+                "quantization_mode": numeric_mode,
+                "executor_config_hash": _executor_config_hash(numeric_mode),
+                "circuit_semantics_hash": prepared["graph"].circuit_semantics_hash,
+                "tensor_network_hash": prepared["graph"].tensor_network_hash,
+                "contraction_plan_hash": prepared["graph"].contraction_plan_hash,
+            }
+        )
+    return row
 
 
 def _transfer_bytes(packages: Any) -> tuple[int, int]:
@@ -1574,8 +2033,12 @@ def _operation_evidence(
     }
 
 
-def _profile_metadata(profile: SlicedResidentHardwareProfile) -> dict[str, Any]:
-    return {
+def _profile_metadata(
+    profile: SlicedResidentHardwareProfile,
+    *,
+    numeric_modes: tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    result = {
         "hardware_profile_version": profile.version,
         "target": profile.target,
         "backend_id": profile.backend_id,
@@ -1583,13 +2046,16 @@ def _profile_metadata(profile: SlicedResidentHardwareProfile) -> dict[str, Any]:
         "requested_dpu_count": profile.requested_dpu_count,
         "slices": profile.slices,
         "tasklets_per_dpu": profile.tasklets_per_dpu,
-        "numeric_mode": profile.numeric_mode,
+        "numeric_mode": None if numeric_modes is not None else profile.numeric_mode,
         "synchronous_execution": profile.synchronous_execution,
         "device_launch_mode": profile.device_launch_mode,
         "host_completion_mode": profile.host_completion_mode,
         "timeout_s": profile.timeout_s,
         "performance_claim_applicable": profile.performance_claim_applicable,
     }
+    if numeric_modes is not None:
+        result["numeric_modes"] = list(numeric_modes)
+    return result
 
 
 def _build_metadata(build: Any, root: Path) -> dict[str, Any]:

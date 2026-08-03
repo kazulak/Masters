@@ -25,6 +25,7 @@ from quantum_bench.targets.upmem.hardware_taskgraph_sliced_resident import (
 ROOT = Path(__file__).resolve().parents[1]
 SUITE = ROOT / "configs" / "suites" / "upmem_hardware_sliced_resident_mvp.yml"
 M2_1_SUITE = ROOT / "configs" / "suites" / "upmem_hardware_sliced_resident_m2_1.yml"
+M2_2_SUITE = ROOT / "configs" / "suites" / "upmem_hardware_sliced_resident_m2_2.yml"
 
 
 def _fake_build(root: Path, session_root: Path, **_: object) -> HardwareSessionBuild:
@@ -399,6 +400,333 @@ def test_execution_uses_one_fake_session_and_preserves_m2_evidence(
         / "measured_01"
         / "reconstructed_output.npy"
     ).is_file()
+
+
+def test_m2_2_runner_dispatches_both_modes_for_warmup_and_repeats(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(mvp, "build_sliced_resident_hardware_session", _fake_build)
+    calls: list[tuple[str, int, str]] = []
+
+    def fake_run_operation(
+        _run_dir,
+        _native,
+        _m2,
+        _case,
+        _prepared,
+        phase,
+        repeat_id,
+        _environment,
+        *,
+        numeric_mode,
+    ):
+        calls.append((phase, repeat_id, numeric_mode))
+        return {
+            "status": "completed",
+            "validation_status": "passed",
+            "phase": phase,
+            "repeat_id": repeat_id,
+            "numeric_mode": numeric_mode,
+        }
+
+    monkeypatch.setattr(mvp, "_run_operation", fake_run_operation)
+    result = mvp.run_upmem_hardware_sliced_resident_mvp(
+        tmp_path,
+        suite_path=M2_2_SUITE,
+        environment={"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1"},
+    )
+
+    assert result.status == "completed"
+    assert result.row_count == 10
+    assert len(calls) == 12
+    assert sum(phase == "warmup" for phase, _, _ in calls) == 2
+    assert sum(phase == "measured" for phase, _, _ in calls) == 10
+    assert {
+        mode for _, _, mode in calls
+    } == {"none", "per_task_resident_requantize"}
+    assert all(
+        sum(phase == expected_phase and mode == expected_mode for phase, _, mode in calls)
+        == expected_count
+        for expected_phase, expected_mode, expected_count in (
+            ("warmup", "none", 1),
+            ("warmup", "per_task_resident_requantize", 1),
+            ("measured", "none", 5),
+            ("measured", "per_task_resident_requantize", 5),
+        )
+    )
+    summary = json.loads(
+        (result.run_dir / "upmem_hardware_sliced_resident_mvp_summary.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert summary["warmup_count"] == 2
+    assert summary["measured_row_count"] == 10
+    assert summary["expected_warmup_row_count"] == 2
+    assert summary["warmup_passed_count"] == 2
+    assert summary["warmup_failed_count"] == 0
+    assert summary["warmup_status"] == "passed"
+    assert summary["measured_passed_count"] == 10
+    assert summary["measured_failed_count"] == 0
+    assert "no speedup, scaling, or energy claim" in summary["claim_boundary"]
+
+
+def test_m2_2_failed_warmup_fails_run_and_is_not_verified(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(mvp, "build_sliced_resident_hardware_session", _fake_build)
+
+    def fake_run_operation(
+        _run_dir,
+        _native,
+        _m2,
+        _case,
+        _prepared,
+        phase,
+        repeat_id,
+        _environment,
+        *,
+        numeric_mode,
+    ):
+        failed = phase == "warmup" and numeric_mode == "none"
+        return {
+            "status": "failed" if failed else "completed",
+            "validation_status": "failed" if failed else "passed",
+            "failure_stage": "kernel_launch_failed" if failed else None,
+            "phase": phase,
+            "repeat_id": repeat_id,
+            "numeric_mode": numeric_mode,
+        }
+
+    monkeypatch.setattr(mvp, "_run_operation", fake_run_operation)
+    result = mvp.run_upmem_hardware_sliced_resident_mvp(
+        tmp_path,
+        suite_path=M2_2_SUITE,
+        environment={"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1"},
+    )
+
+    summary = json.loads(
+        (result.run_dir / "upmem_hardware_sliced_resident_mvp_summary.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    manifest = json.loads(
+        (result.run_dir / "run_manifest.json").read_text(encoding="utf-8")
+    )
+    assert result.status == "failed"
+    assert result.row_count == 10
+    assert summary["warmup_count"] == 2
+    assert summary["expected_warmup_row_count"] == 2
+    assert summary["warmup_passed_count"] == 1
+    assert summary["warmup_failed_count"] == 1
+    assert summary["warmup_status"] == "failed"
+    assert summary["measured_passed_count"] == 10
+    assert summary["measured_status"] == "passed"
+    assert summary["all_required_records_validated"] is False
+    assert manifest["hardware_available"] == "not_verified_by_execution"
+
+
+def test_m2_2_plan_validates_twelve_mode_labelled_entries_without_launch(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(mvp, "build_sliced_resident_hardware_session", _fake_build)
+    monkeypatch.setattr(
+        mvp,
+        "_validate_native_manifests",
+        lambda *_args, **_kwargs: {
+            "status": "passed",
+            "returncode": 0,
+            "reason": None,
+            "failure_stage": None,
+        },
+    )
+
+    result = mvp.prepare_upmem_hardware_sliced_resident_mvp(
+        tmp_path, suite_path=M2_2_SUITE, environment={}, build=True
+    )
+    summary = json.loads(result.summary_path.read_text(encoding="utf-8"))
+    entries = summary["native_manifest_validation"]["entries"]
+    assert result.status == "prepared"
+    assert len(summary["prepared_operations"]) == 12
+    assert len(entries) == 12
+    assert {entry["numeric_mode"] for entry in entries} == {
+        "none",
+        "per_task_resident_requantize",
+    }
+    assert summary["dpu_allocation_attempted"] is False
+    assert summary["dpu_launch_attempted"] is False
+
+
+def test_m2_2_response_paths_include_numeric_mode(tmp_path) -> None:
+    native = SimpleNamespace(session_root=tmp_path)
+    none_path = mvp._response_path(
+        native, "one_qubit_hx_m2_2", "measured", 0, m2_2=True, numeric_mode="none"
+    )
+    requantized_path = mvp._response_path(
+        native,
+        "one_qubit_hx_m2_2",
+        "measured",
+        0,
+        m2_2=True,
+        numeric_mode="per_task_resident_requantize",
+    )
+    assert none_path != requantized_path
+    assert none_path.name.endswith("-none-response.json")
+    assert requantized_path.name.endswith(
+        "-per_task_resident_requantize-response.json"
+    )
+
+
+def _m2_2_record_fixture(
+    tmp_path: Path,
+    mode: str,
+    *,
+    policy_mismatch: bool = False,
+    full_precision_mismatch: bool = False,
+) -> dict:
+    loaded = mvp.load_m2_suite(M2_2_SUITE)
+    case = loaded.suite["cases"][0]
+    prepared = mvp._prepare_case(ROOT, case, loaded)
+    binary = tmp_path / f"{mode}-dpu"
+    binary.write_bytes(b"dpu")
+    artifacts = mvp._write_packages(
+        prepared,
+        loaded,
+        binary,
+        tmp_path / mode,
+        prefix="record",
+        numeric_mode=mode,
+    )
+    h2d, d2h = mvp._transfer_bytes(artifacts["packages"])
+    slices = [
+        {
+            "completion_confirmed": True,
+            "dpu_completion_sentinel": {"verified": True},
+            "completion_sentinel_read_count": 2,
+        }
+        for _ in range(2)
+    ]
+    response = {
+        "backend_id": adapter.BACKEND_ID,
+        "backend_family": "upmem_sdk",
+        "target_requested": "hardware",
+        "target_observed": "hardware",
+        "hardware_profile_version": adapter.PROFILE_VERSION,
+        "quantization_mode": mode,
+        "hardware_execution": True,
+        "hardware_kernel_executed": True,
+        "simulator_kernel_executed": False,
+        "cpu_fallback_used": False,
+        "operation_count": 2,
+        "observed_operation_completion_counts": [2, 2],
+        "completion_sentinel_read_counts": [2, 2],
+        "native_execution_sentinel_available": True,
+        "completion_evidence": "dpu_written_completion_sentinel_read_after_each_sync",
+        "device_completion_confirmed": True,
+        "actual_h2d_bytes": h2d,
+        "actual_d2h_bytes": d2h,
+        "actual_transfer_bytes": h2d + d2h,
+        "allocation": {"allocated_dpus": 2, "verified": True},
+        "launch": {"completed": True, "synchronize_count": 2},
+        "release": {"confirmed": True},
+        "slices": slices,
+        "timing": {"clock": "clock_monotonic"},
+    }
+    session = SimpleNamespace(
+        response=response,
+        response_path=tmp_path / f"{mode}-response.json",
+        command=("host_two_dpu",),
+        stdout_snippet="",
+        stderr_snippet="",
+        failure_stage=None,
+        timed_out=False,
+        cleanup_confirmed=True,
+        process_time_s=0.1,
+    )
+    native = SimpleNamespace(
+        source_tree_hash="source-tree",
+        host_binary_hash="host-binary",
+        dpu_binary_hash="dpu-binary",
+        build_time_s=0.1,
+    )
+    output = np.asarray(case["expected_output"], dtype=np.float32)
+    policy_actual = output + (0.1 if policy_mismatch else 0.0)
+    full_actual = output + (0.02 if full_precision_mismatch else 0.0)
+    policy_reference = mvp._accuracy_metrics(
+        policy_actual,
+        output,
+        tolerance=1.0e-5,
+        reference_kind="dpu_mirroring_policy_reference",
+    )
+    full_precision = mvp._accuracy_metrics(
+        full_actual,
+        output,
+        tolerance=(
+            mvp.M2_2_REQUANTIZED_VALIDATION_TOLERANCE
+            if mode == "per_task_resident_requantize"
+            else mvp.M2_2_NONE_VALIDATION_TOLERANCE
+        ),
+        reference_kind="cpu_exact_taskgraph_full_precision",
+    )
+    return mvp._record(
+        loaded,
+        case,
+        prepared,
+        "measured",
+        0,
+        run_dir=tmp_path,
+        status="completed",
+        failure_stage=None,
+        reason=None,
+        native=native,
+        session=session,
+        artifacts=artifacts,
+        reconstruction={
+            "partial_outputs": {"0": [0.0, 0.70710678], "1": [0.70710678, 0.0]},
+            "per_slice_output_validation_status": "passed",
+            "slice_useful_work": {"status": "passed"},
+        },
+        output=output,
+        cpu_ok=mode == "none",
+        expected_ok=not full_precision_mismatch,
+        reconstruction_time_s=0.01,
+        total_time_s=0.2,
+        numeric_mode=mode,
+        policy_reference=policy_reference,
+        full_precision_accuracy=full_precision,
+    )
+
+
+def test_m2_2_records_keep_plan_identity_but_split_executor_identity(tmp_path) -> None:
+    records = [
+        _m2_2_record_fixture(tmp_path, mode)
+        for mode in ("none", "per_task_resident_requantize")
+    ]
+    assert all(
+        record["execution_contract_status"] == "passed"
+        and record["policy_reference_status"] == "passed"
+        and record["full_precision_accuracy_status"] == "passed"
+        and record["scientific_validation_status"] == "passed"
+        and record["validation_status"] == "passed"
+        for record in records
+    )
+    assert records[0]["contraction_plan_hash"] == records[1]["contraction_plan_hash"]
+    assert records[0]["executor_config_hash"] != records[1]["executor_config_hash"]
+    assert all(record["cpu_reference_validation"] is True for record in records)
+    assert records[0]["strict_cpu_reference_validation"] is True
+    assert records[1]["strict_cpu_reference_validation"] is False
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    ({"policy_mismatch": True}, {"full_precision_mismatch": True}),
+)
+def test_m2_2_validation_mismatch_fails_scientific_admission(tmp_path, kwargs) -> None:
+    record = _m2_2_record_fixture(
+        tmp_path, "per_task_resident_requantize", **kwargs
+    )
+    assert record["scientific_validation_status"] == "failed"
+    assert record["validation_status"] == "failed"
+    assert record["status"] == "failed"
 
 
 def test_execute_requires_opt_in_and_retains_failure_row(tmp_path, monkeypatch) -> None:
