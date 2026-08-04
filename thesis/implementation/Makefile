@@ -23,6 +23,8 @@ UPMEM_HW_SLICED_RESIDENT_MVP_SUITE ?= configs/suites/upmem_hardware_sliced_resid
 UPMEM_HW_SLICED_RESIDENT_M2_1_SUITE ?= configs/suites/upmem_hardware_sliced_resident_m2_1.yml
 UPMEM_HW_SLICED_RESIDENT_M2_2_SUITE ?= configs/suites/upmem_hardware_sliced_resident_m2_2.yml
 UPMEM_HW_M2_2_RUN ?= runs/evidence/upmem_hardware_sliced_resident_m2_2/upmem_hw_sliced_resident/latest
+UPMEM_HW_SLICED_RESIDENT_M2_3_SUITE ?= configs/suites/upmem_hardware_sliced_resident_m2_3.yml
+UPMEM_HW_M2_3_RUN ?= runs/evidence/upmem_hardware_sliced_resident_m2_3/upmem_hw_sliced_resident/latest
 UPMEM_PROVIDER_CATALOG ?= configs/qualification/upmem_provider_m1.yml
 EVIDENCE_INBOX ?= runs/inbox/eth
 GPU_VERIFY ?= quest-hip
@@ -50,6 +52,9 @@ PUBLIC_TARGETS := \
 	upmem-hw-m2-2-plan \
 	upmem-hw-m2-2 \
 	upmem-hw-m2-2-report \
+	upmem-hw-m2-3-plan \
+	upmem-hw-m2-3 \
+	upmem-hw-m2-3-report \
 	upmem-provider-plan \
 	upmem-provider-qualify \
 	evidence-inbox \
@@ -90,6 +95,9 @@ help:
 		'  make upmem-hw-m2-2-plan  Prepare/build the M2.2 same-plan numeric-mode fixture; never allocates a DPU' \
 		'  make upmem-hw-m2-2  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; run float32 and resident-requantized M2.2 modes' \
 		'  make upmem-hw-m2-2-report  Report M2.2 evidence; for copied ETH data use UPMEM_HW_M2_2_RUN=runs/inbox/eth/m2_2/<timestamp> make upmem-hw-m2-2-report' \
+		'  make upmem-hw-m2-3-plan  Prepare/build the M2.3 two-path, two-mode study; never allocates a DPU' \
+		'  make upmem-hw-m2-3  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; run the fixed M2.3 physical study' \
+		'  make upmem-hw-m2-3-report  Strictly report M2.3 evidence; for copied ETH data use UPMEM_HW_M2_3_RUN=runs/inbox/eth/m2_3/<timestamp> make upmem-hw-m2-3-report' \
 		'  make upmem-provider-plan  Prepare a unique M1 provider qualification plan; never builds or allocates hardware' \
 		'  make upmem-provider-qualify PROVIDER=<id>  Execute one selected physical provider qualification' \
 		'  make evidence-inbox     Create the ignored inbox for copied ETH evidence bundles' \
@@ -208,6 +216,16 @@ upmem-hw-m2-2:
 
 upmem-hw-m2-2-report:
 	$(PY_ENV) $(PYTHON) scripts/upmem_m2_2_report.py --input $(UPMEM_HW_M2_2_RUN)
+
+upmem-hw-m2-3-plan:
+	$(BENCH) upmem-hardware-sliced-resident-mvp --suite $(UPMEM_HW_SLICED_RESIDENT_M2_3_SUITE) --prepare-only --build
+
+upmem-hw-m2-3:
+	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1 to execute physical hardware' >&2; exit 2; }
+	$(BENCH) upmem-hardware-sliced-resident-mvp --suite $(UPMEM_HW_SLICED_RESIDENT_M2_3_SUITE) --execute
+
+upmem-hw-m2-3-report:
+	$(PY_ENV) $(PYTHON) scripts/upmem_m2_3_report.py --input $(UPMEM_HW_M2_3_RUN)
 
 upmem-hw-taskgraph-resident-report:
 	$(PY_ENV) $(PYTHON) scripts/research_benchmark_pack.py check-resident-evidence --input $(UPMEM_HW_TASKGRAPH_RESIDENT_RUN)

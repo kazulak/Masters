@@ -118,3 +118,49 @@ def test_m2_2_report_shortcut_uses_configurable_evidence_run() -> None:
     assert report.returncode == 0
     assert "scripts/upmem_m2_2_report.py" in report.stdout
     assert "--input /tmp/m2-2-run" in report.stdout
+
+
+def test_m2_3_make_shortcuts_use_canonical_suite() -> None:
+    plan = subprocess.run(
+        ["make", "-n", "upmem-hw-m2-3-plan"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    execute = subprocess.run(
+        ["make", "-n", "upmem-hw-m2-3", "UPMEM_ALLOW_PHYSICAL_HARDWARE=1"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    suite = "configs/suites/upmem_hardware_sliced_resident_m2_3.yml"
+    assert plan.returncode == 0
+    assert suite in plan.stdout
+    assert "--prepare-only --build" in plan.stdout
+    assert execute.returncode == 0
+    assert suite in execute.stdout
+    assert "--execute" in execute.stdout
+
+
+def test_m2_3_report_shortcut_documents_eth_inbox_override() -> None:
+    help_result = subprocess.run(
+        ["make", "help"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    report = subprocess.run(
+        ["make", "-n", "upmem-hw-m2-3-report", "UPMEM_HW_M2_3_RUN=/tmp/m2-3-run"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert help_result.returncode == 0
+    assert "UPMEM_HW_M2_3_RUN=runs/inbox/eth/m2_3/<timestamp>" in help_result.stdout
+    assert report.returncode == 0
+    assert "scripts/upmem_m2_3_report.py" in report.stdout
+    assert "--input /tmp/m2-3-run" in report.stdout
