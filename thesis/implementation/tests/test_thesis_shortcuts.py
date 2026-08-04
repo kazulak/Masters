@@ -164,3 +164,29 @@ def test_m2_3_report_shortcut_documents_eth_inbox_override() -> None:
     assert report.returncode == 0
     assert "scripts/upmem_m2_3_report.py" in report.stdout
     assert "--input /tmp/m2-3-run" in report.stdout
+
+
+def test_m3_1_frontier_shortcuts_use_canonical_suite_and_opt_in() -> None:
+    plan = subprocess.run(
+        ["make", "-n", "upmem-hw-frontier-m3-1-plan"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    execute = subprocess.run(
+        ["make", "-n", "upmem-hw-frontier-m3-1", "UPMEM_ALLOW_PHYSICAL_HARDWARE=1"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    suite = "configs/suites/upmem_hardware_frontier_m3_1.yml"
+    assert plan.returncode == 0
+    assert suite in plan.stdout
+    assert "upmem-hardware-frontier-m3-1" in plan.stdout
+    assert "--prepare-only --build" in plan.stdout
+    assert execute.returncode == 0
+    assert suite in execute.stdout
+    assert "--execute" in execute.stdout
+    assert "UPMEM_ALLOW_PHYSICAL_HARDWARE=1" in execute.stdout
