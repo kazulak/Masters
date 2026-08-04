@@ -8,12 +8,15 @@ import pytest
 
 from quantum_bench.core.records import TaskGraph, TensorValue
 from quantum_bench.circuits import load_circuit
+import quantum_bench.targets.upmem.hardware_frontier_session as frontier_session
 from quantum_bench.targets.upmem.hardware_taskgraph_frontier import (
     BACKEND_ID,
     NATIVE_SCHEMA,
     REQUEST_SCHEMA,
     PROFILE_ID,
     ROUTE_ID,
+    TIMING_ALIAS_FIELDS,
+    TIMING_COMPONENT_FIELDS,
     build_hardware_frontier_graph_package,
     build_hardware_frontier_plan,
     validate_frontier_package_validation_response,
@@ -124,9 +127,41 @@ def test_writer_replaces_identity_and_records_frontier_manifest(tmp_path: Path) 
     assert transfer["total_bytes"] == transfer["h2d_bytes"] + transfer["d2h_bytes"]
 
 
+@pytest.mark.parametrize("symlink_kind", ("parent", "file"))
+def test_prelaunch_manifest_rejects_output_symlink_escape(tmp_path: Path, symlink_kind: str) -> None:
+    root = tmp_path / "session"
+    root.mkdir()
+    binary = root / "dpu"
+    binary.write_bytes(b"dpu")
+    graph, network = _fixture()
+    package = build_hardware_frontier_graph_package(graph, network, case_id="c", suite_id="s")
+    written = write_hardware_frontier_graph_package(package, root, dpu_binary=binary, request_id=symlink_kind)
+    assert written.manifest_path is not None
+    manifest = json.loads(written.manifest_path.read_text(encoding="utf-8"))
+    relative = Path(manifest["final_output_binding"]["output_path"])
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "final.bin").write_bytes(b"outside")
+    if symlink_kind == "parent":
+        (root / relative.parent).rmdir()
+        (root / relative.parent).symlink_to(outside, target_is_directory=True)
+    else:
+        (root / relative.parent).mkdir(parents=True, exist_ok=True)
+        (root / relative).symlink_to(outside / "final.bin")
+
+    with pytest.raises(ValueError, match="symlink|escapes"):
+        frontier_session._validate_frontier_manifest(manifest, None, root)
+
+
 def _completed_response(manifest: dict[str, object]) -> dict[str, object]:
     operations = manifest["frontier_task_operations"]
     assert isinstance(operations, list)
+    timing = {
+        "clock": "clock_monotonic",
+        "overlap_measured": False,
+        **{field: 0.001 for field in (*TIMING_COMPONENT_FIELDS, *TIMING_ALIAS_FIELDS)},
+    }
+    timing["total_route_time_s"] = sum(timing[field] for field in TIMING_COMPONENT_FIELDS)
     return {
         "schema_version": NATIVE_SCHEMA,
         "native_schema_version": NATIVE_SCHEMA,
@@ -152,16 +187,7 @@ def _completed_response(manifest: dict[str, object]) -> dict[str, object]:
         "hardware_no_fallback": True,
         "performance_claim_applicable": False,
         "timing_scope": "two_dpu_frontier_resident_full_taskgraph_v1",
-        "timing": {
-            "clock": "clock_monotonic",
-            "overlap_measured": False,
-            **{field: 0.001 for field in (
-                "package_parse_time_s", "allocation_time_s", "binary_load_time_s",
-                "initial_h2d_time_s", "wave0_launch_time_s", "wave0_barrier_wait_time_s",
-                "wave1_launch_time_s", "wave1_barrier_wait_time_s", "final_d2h_time_s",
-                "release_time_s", "total_route_time_s",
-            )},
-        },
+        "timing": timing,
         "allocation": {"requested_dpus": 2, "allocated_dpus": 2, "verified": True},
         "load": {"confirmed": True, "hardware": True},
         "launch": {"completed": True, "task_count": 3, "barrier_count": 2},
@@ -195,8 +221,8 @@ def _completed_response(manifest: dict[str, object]) -> dict[str, object]:
         "final_output": {
             **manifest["final_output_binding"],
             "hash_fnv1a64": "0" * 16,
-            "path": "/session/" + manifest["final_output_binding"]["output_path"],
-            "output_path": "/session/" + manifest["final_output_binding"]["output_path"],
+            "path": manifest["final_output_binding"]["output_path"],
+            "output_path": manifest["final_output_binding"]["output_path"],
             "written": True,
         },
         "hashes": {
@@ -221,9 +247,14 @@ def test_response_validator_rejects_duplicate_order_and_transfer_mismatch(tmp_pa
     response["actual_transfer_bytes"] = 31
     with pytest.raises(ValueError, match="transfer"):
         validate_frontier_native_response(response, manifest)
+    for field in ("control_h2d_time_s", "total_route_time_s"):
+        response = _completed_response(manifest)
+        response["timing"][field] += 0.001
+        with pytest.raises(ValueError, match="timing"):
+            validate_frontier_native_response(response, manifest)
 
 
-def test_final_output_validation_requires_exact_absolute_binding_and_fnv(tmp_path: Path) -> None:
+def test_final_output_validation_requires_exact_relative_binding_and_fnv(tmp_path: Path) -> None:
     graph, network = _fixture()
     package = build_hardware_frontier_graph_package(graph, network, case_id="c", suite_id="s")
     binary = tmp_path / "dpu"
@@ -235,9 +266,6 @@ def test_final_output_validation_requires_exact_absolute_binding_and_fnv(tmp_pat
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_bytes(b"\x00" * manifest["final_output_binding"]["raw_bytes"])
     response = _completed_response(manifest)
-    absolute = str(output.resolve())
-    response["final_output"]["output_path"] = absolute
-    response["final_output"]["path"] = absolute
     response["final_output"]["hash_fnv1a64"] = "a8c7f832281a39c5"
     from quantum_bench.targets.upmem.hardware_taskgraph_frontier import validate_frontier_output_file
 
@@ -245,6 +273,23 @@ def test_final_output_validation_requires_exact_absolute_binding_and_fnv(tmp_pat
     response["final_output"]["path"] = str(tmp_path / "other.bin")
     with pytest.raises(ValueError, match="path"):
         validate_frontier_output_file(response, manifest, tmp_path)
+    response["final_output"]["path"] = "../other.bin"
+    with pytest.raises(ValueError, match="relative|path"):
+        validate_frontier_native_response(response, manifest)
+
+
+def test_native_response_rejects_absolute_output_binding(tmp_path: Path) -> None:
+    graph, network = _fixture()
+    package = build_hardware_frontier_graph_package(graph, network, case_id="c", suite_id="s")
+    binary = tmp_path / "dpu"
+    binary.write_bytes(b"dpu")
+    written = write_hardware_frontier_graph_package(package, tmp_path, dpu_binary=binary, request_id="absolute")
+    assert written.manifest_path is not None
+    manifest = json.loads(written.manifest_path.read_text(encoding="utf-8"))
+    response = _completed_response(manifest)
+    response["final_output"]["output_path"] = str(tmp_path / manifest["final_output_binding"]["output_path"])
+    with pytest.raises(ValueError, match="relative"):
+        validate_frontier_native_response(response, manifest)
 
 
 def test_validate_only_response_is_non_hardware_and_strict(tmp_path: Path) -> None:

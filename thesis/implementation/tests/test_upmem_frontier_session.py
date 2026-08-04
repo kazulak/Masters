@@ -141,3 +141,56 @@ def test_execute_preserves_native_failure_stage(tmp_path: Path, monkeypatch) -> 
     assert result.status == "failed"
     assert result.failure_stage == "hardware_allocation_failed"
     assert result.cleanup_confirmed is True
+
+
+def test_validate_copied_run_uses_explicit_local_session_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    copied_root = tmp_path / "copied-run" / "native_session"
+    output = copied_root / "outputs" / "final.bin"
+    output.parent.mkdir(parents=True)
+    output.write_bytes(b"\x00" * 8)
+    manifest_path = copied_root / "manifest.json"
+    response_path = copied_root / "response.json"
+    manifest_path.write_text(
+        json.dumps({"final_output_binding": {"output_path": "outputs/final.bin", "elements": 2}}),
+        encoding="utf-8",
+    )
+    response_path.write_text(
+        json.dumps(
+            {
+                "final_output": {
+                    "output_path": "outputs/final.bin",
+                    "path": "outputs/final.bin",
+                    "hash_fnv1a64": session._fnv1a64(output.read_bytes()),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(session, "_validate_manifest_identity", lambda _manifest: None)
+    monkeypatch.setattr(session, "_validate_frontier_manifest", lambda *_args: None)
+    monkeypatch.setattr(session, "validate_frontier_native_response", lambda *_args: None)
+    monkeypatch.setattr(session, "_validate_native_hashes", lambda *_args: None)
+
+    response = json.loads(response_path.read_text(encoding="utf-8"))
+    response["final_output"]["hash_fnv1a64"] = "0" * 16
+    response_path.write_text(json.dumps(response), encoding="utf-8")
+    with pytest.raises(ValueError, match="FNV-1a64"):
+        session.validate_hardware_frontier_session(
+            manifest_path,
+            response_path,
+            profile=_profile(),
+            session_root=copied_root,
+        )
+    response["final_output"]["hash_fnv1a64"] = session._fnv1a64(output.read_bytes())
+    response_path.write_text(json.dumps(response), encoding="utf-8")
+
+    result = session.validate_hardware_frontier_session(
+        manifest_path,
+        response_path,
+        profile=_profile(),
+        session_root=copied_root,
+    )
+
+    assert result["final_output"]["path"] == "outputs/final.bin"

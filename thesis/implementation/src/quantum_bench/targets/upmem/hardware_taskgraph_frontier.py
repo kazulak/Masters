@@ -35,10 +35,10 @@ from quantum_bench.tn.execution_bundle import with_execution_identity
 from quantum_bench.tn.network import TensorNetworkValue
 
 
-PROFILE_ID = "hardware_frontier_two_dpu_m3_1_v1"
+PROFILE_ID = "hardware_frontier_two_dpu_m3_1_v2"
 BACKEND_ID = "upmem_sdk_hardware_taskgraph_frontier_two_dpu"
 ROUTE_ID = "upmem_tn_hardware_taskgraph_frontier_two_dpu"
-NATIVE_SCHEMA = "generic_loop_resident_frontier_two_dpu_v1"
+NATIVE_SCHEMA = "generic_loop_resident_frontier_two_dpu_v2"
 REQUEST_SCHEMA = RESIDENT_SESSION_PROTOCOL
 SESSION_PROTOCOL = REQUEST_SCHEMA
 TARGET = "hardware"
@@ -46,17 +46,30 @@ NUMERIC_MODE = "none"
 TASKLETS_PER_DPU = 1
 REQUESTED_DPUS = 2
 TIMING_SCOPE = "two_dpu_frontier_resident_full_taskgraph_v1"
-TIMING_FIELDS = (
+TIMING_COMPONENT_FIELDS = (
     "package_parse_time_s",
     "allocation_time_s",
     "binary_load_time_s",
     "initial_h2d_time_s",
+    "descriptor_h2d_time_s",
+    "control_h2d_time_s",
     "wave0_launch_time_s",
-    "wave0_barrier_wait_time_s",
+    "wave0_sync_time_s",
+    "inter_wave_d2h_time_s",
+    "inter_wave_h2d_time_s",
     "wave1_launch_time_s",
-    "wave1_barrier_wait_time_s",
+    "wave1_sync_time_s",
     "final_d2h_time_s",
+    "output_write_time_s",
     "release_time_s",
+)
+TIMING_ALIAS_FIELDS = (
+    "wave0_barrier_wait_time_s",
+    "wave1_barrier_wait_time_s",
+)
+TIMING_FIELDS = (
+    *TIMING_COMPONENT_FIELDS,
+    *TIMING_ALIAS_FIELDS,
     "total_route_time_s",
 )
 OVERLAP_EVIDENCE = "co_dispatch_without_overlap_measurement"
@@ -254,6 +267,23 @@ def validate_frontier_native_response(
             and float(value) >= 0.0,
             f"timing field {field} is invalid",
         )
+    for alias, component in (
+        ("wave0_barrier_wait_time_s", "wave0_sync_time_s"),
+        ("wave1_barrier_wait_time_s", "wave1_sync_time_s"),
+    ):
+        _require(
+            math.isclose(
+                float(timing[alias]), float(timing[component]), rel_tol=1.0e-9, abs_tol=1.0e-12
+            ),
+            f"timing alias {alias} disagrees with {component}",
+        )
+    expected_total = sum(float(timing[field]) for field in TIMING_COMPONENT_FIELDS)
+    _require(
+        math.isclose(
+            float(timing["total_route_time_s"]), expected_total, rel_tol=1.0e-9, abs_tol=1.0e-8
+        ),
+        "timing total_route_time_s does not equal its component sum",
+    )
 
     allocation = _mapping(response, "allocation")
     _require(allocation.get("requested_dpus") == 2, "allocation requested DPU count mismatch")
@@ -607,7 +637,7 @@ def _validate_manifest_identity(manifest: Mapping[str, Any]) -> None:
     _require(final_output.get("component") == "real", "manifest final output component is invalid")
     _require(final_output.get("slot_id") == operations[2].get("output_slot_id"), "manifest final output slot drifted")
     _require(final_output.get("elements") == operations[2].get("output_elements"), "manifest final output elements drifted")
-    _require(isinstance(final_output.get("output_path"), str) and final_output.get("output_path"), "manifest final output path is invalid")
+    _require(_is_safe_relative_path(final_output.get("output_path")), "manifest final output path is invalid")
     _require(_is_nonnegative_int(final_output.get("raw_bytes")), "manifest final output raw byte count is invalid")
     transfer = manifest.get("expected_frontier_transfer")
     _require(isinstance(transfer, Mapping), "manifest transfer expectations are missing")
@@ -729,10 +759,11 @@ def _validate_final_output(response: Mapping[str, Any], manifest: Mapping[str, A
         _require(actual.get(key) == expected.get(key), f"final output {key} binding mismatch")
     output_path = actual.get("output_path")
     path = actual.get("path")
-    _require(
-        isinstance(output_path, str) and Path(output_path).is_absolute(),
-        "native final output_path must be absolute",
-    )
+    expected_path = expected.get("output_path")
+    _require(_is_safe_relative_path(expected_path), "manifest final output path is invalid")
+    _require(_is_safe_relative_path(output_path), "native final output_path must be relative")
+    _require(output_path == expected_path, "native final output_path does not match manifest binding")
+    _require(_is_safe_relative_path(path), "native final output path must be relative")
     _require(path == output_path, "final output path fields disagree")
     digest = actual.get("hash_fnv1a64")
     _require(isinstance(digest, str) and len(digest) == 16, "final output hash is missing")
@@ -777,7 +808,7 @@ def validate_frontier_output_file(
     expected = manifest.get("final_output_binding")
     _require(isinstance(actual, Mapping) and isinstance(expected, Mapping), "final output binding is missing")
     relative = expected.get("output_path")
-    _require(isinstance(relative, str) and relative, "final output path is invalid")
+    _require(_is_safe_relative_path(relative), "final output path is invalid")
     root = session_root.resolve()
     path = (root / relative).resolve()
     try:
@@ -788,19 +819,21 @@ def validate_frontier_output_file(
     _require(isinstance(actual, Mapping), "final output binding is missing")
     for key in ("output_path", "path"):
         emitted = actual.get(key)
-        _require(isinstance(emitted, str) and Path(emitted).is_absolute(), f"native final output {key} is not absolute")
-        try:
-            emitted_path = Path(emitted).resolve()
-            emitted_path.relative_to(root)
-        except ValueError as exc:
-            raise ValueError("response_evidence_invalid: final output escapes session root") from exc
-        _require(emitted_path == path, f"native final output {key} does not match manifest binding")
+        _require(_is_safe_relative_path(emitted), f"native final output {key} is not relative")
+        _require(emitted == relative, f"native final output {key} does not match manifest binding")
     _require(path.is_file(), "final output file is missing")
     elements = expected.get("elements")
     _require(_is_nonnegative_int(elements), "final output element count is invalid")
     raw = path.read_bytes()
     _require(len(raw) == elements * 4, "final output raw byte length mismatch")
     _require(_fnv1a64(raw) == actual.get("hash_fnv1a64"), "final output FNV-1a64 mismatch")
+
+
+def _is_safe_relative_path(value: Any) -> bool:
+    if not isinstance(value, str) or not value or "\\" in value or Path(value).is_absolute():
+        return False
+    parts = Path(value).parts
+    return bool(parts) and all(part not in (".", "..") for part in parts)
 
 
 def _mapping(value: Mapping[str, Any], key: str) -> Mapping[str, Any]:

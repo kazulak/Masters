@@ -14,7 +14,10 @@ from quantum_bench.targets.upmem.hardware_taskgraph_frontier import (
     BACKEND_ID,
     NATIVE_SCHEMA,
     PROFILE_ID,
+    REQUEST_SCHEMA,
     ROUTE_ID,
+    TIMING_ALIAS_FIELDS,
+    TIMING_COMPONENT_FIELDS,
 )
 
 
@@ -70,16 +73,12 @@ def _native_response(
     output.parent.mkdir(parents=True, exist_ok=True)
     raw_output = np.asarray([0.7986355, 0.6018150], dtype="<f4").tobytes()
     output.write_bytes(raw_output)
-    output_path = str(output.resolve())
+    output_path = final_binding["output_path"]
     output_hash = _fnv1a64(raw_output)
-    timing_fields = (
-        "package_parse_time_s", "allocation_time_s", "binary_load_time_s",
-        "initial_h2d_time_s", "wave0_launch_time_s", "wave0_barrier_wait_time_s",
-        "wave1_launch_time_s", "wave1_barrier_wait_time_s", "final_d2h_time_s",
-        "release_time_s", "total_route_time_s", "descriptor_h2d_time_s",
-        "control_h2d_time_s", "wave0_sync_time_s", "inter_wave_d2h_time_s",
-        "inter_wave_h2d_time_s", "wave1_sync_time_s", "output_write_time_s",
-    )
+    timing = {
+        key: 0.001 for key in (*TIMING_COMPONENT_FIELDS, *TIMING_ALIAS_FIELDS)
+    }
+    timing["total_route_time_s"] = sum(timing[key] for key in TIMING_COMPONENT_FIELDS)
     return {
         "schema_version": NATIVE_SCHEMA,
         "native_schema_version": NATIVE_SCHEMA,
@@ -115,7 +114,7 @@ def _native_response(
         "complex_combine_used": False,
         "quantization_mode": "none",
         "timing_scope": "two_dpu_frontier_resident_full_taskgraph_v1",
-        "timing": {"clock": "clock_monotonic", "overlap_measured": False, **{key: 0.001 for key in timing_fields}, "kernel_time_s": None},
+        "timing": {"clock": "clock_monotonic", "overlap_measured": False, **timing, "kernel_time_s": None},
         "allocation": {"attempted": True, "requested_dpus": 2, "allocated_dpus": 2, "profile": "backend=hw", "verified": True},
         "load": {"attempted": True, "succeeded": True, "confirmed": True, "hardware": True},
         "launch": {
@@ -258,7 +257,11 @@ def test_fake_run_has_one_warmup_and_exact_five_measured_requests(tmp_path: Path
         prepared = json.loads((run_dir / "cases" / suite.suite["cases"][0]["case_id"] / "task_graph.json").read_text(encoding="utf-8"))
         del prepared
         np.asarray([0.7986355, 0.6018150], dtype="<f4").tofile(output)
-        return SimpleNamespace(status="completed", failure_stage=None, response=_native_response(manifest, output_root=build.session_root))
+        response = _native_response(manifest, output_root=build.session_root)
+        response_path.write_text(json.dumps(response), encoding="utf-8")
+        return SimpleNamespace(
+            status="completed", failure_stage=None, response_path=response_path, response=response
+        )
 
     monkeypatch.setattr(m31, "create_run_dir", lambda *_args, **_kwargs: run_dir)
     monkeypatch.setattr(m31, "build_hardware_frontier_session", fake_build)
@@ -276,6 +279,37 @@ def test_fake_run_has_one_warmup_and_exact_five_measured_requests(tmp_path: Path
     assert len(warmups) == 1
     assert calls == ["warmup-00", "measured-00", "measured-01", "measured-02", "measured-03", "measured-04"]
     assert all(row["validation_status"] == "passed" for row in rows)
+    for row in rows:
+        assert row["hardware_functionality_evidence"] is True
+        assert row["hardware_kernel_executed"] is True
+        assert row["requested_dpu_count"] == 2
+        assert row["allocated_dpu_count"] == 2
+        assert row["tasklets_per_dpu"] == 1
+        assert row["co_dispatch_observed"] is True
+        assert row["co_dispatch_confirmed"] is True
+        assert row["overlap_measured"] is False
+        assert row["frontier_parallel_execution"] is False
+        assert row["timing_is_bringup_only"] is True
+        assert row["execution_plan_kind"] == "taskgraph_frontier_scheduler"
+        assert row["circuit_semantics_hash"]
+        assert row["tensor_network_hash"]
+        assert row["contraction_plan_hash"]
+        assert m31.M31_EXECUTOR_CONFIG["session_protocol"] == REQUEST_SCHEMA
+        assert m31.M31_EXECUTOR_CONFIG["native_schema"] == NATIVE_SCHEMA
+        assert row["executor_config_hash"] == m31.executor_config_hash(
+            ROUTE_ID, m31.M31_EXECUTOR_CONFIG
+        )
+        assert row["execution_bundle_artifact"]["relative_path"].endswith(
+            "/execution_bundle.json"
+        )
+        assert row["native_response_artifact"]["role"] == "native_response"
+        assert row["native_response_artifact"]["relative_path"] == (
+            f"native_session/{row['request_id']}_response.json"
+        )
+        assert row["native_response_artifact"]["retained"] is True
+        assert row["validation_max_abs_error"] <= row["validation_tolerance_abs"]
+    manifest = json.loads((run_dir / "run_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["upmem_sdk_available"] == "verified_by_execution"
 
 
 def test_fake_response_mismatch_is_a_failed_measured_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -311,6 +345,27 @@ def test_fake_response_mismatch_is_a_failed_measured_row(tmp_path: Path, monkeyp
     assert failed["native_response"]["failure_context"] == {"wave": 1, "dpu": 0}
     assert failed["parallelism_evidence_type"] == "not_observed"
     assert failed["source_task_count"] is None
+    assert failed["hardware_functionality_evidence"] is False
+    assert failed["hardware_kernel_executed"] is False
+    assert failed["requested_dpu_count"] is None
+    assert failed["co_dispatch_observed"] is False
+
+    def output_mismatch_execute(_build, *, manifest_path, **_kwargs):
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        response = _native_response(manifest, output_root=build.session_root)
+        output = build.session_root / manifest["final_output_binding"]["output_path"]
+        np.asarray([0.0, 0.0], dtype="<f4").tofile(output)
+        return SimpleNamespace(status="completed", failure_stage=None, response=response)
+
+    monkeypatch.setattr(m31, "execute_hardware_frontier_session", output_mismatch_execute)
+    output_failed = m31._execute_request(
+        build, prepared, suite, {"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1"}, "measured-02", warmup=False
+    )
+    assert output_failed["status"] == "failed"
+    assert output_failed["hardware_functionality_evidence"] is False
+    assert output_failed["hardware_kernel_executed"] is False
+    assert output_failed["source_task_count"] is None
+    assert output_failed["validation_max_abs_error"] is None
 
 
 def test_fail_fast_stops_after_failed_warmup_and_measured_repeat(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

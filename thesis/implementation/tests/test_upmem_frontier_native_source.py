@@ -67,6 +67,19 @@ def test_native_success_schema_uses_python_required_transfer_and_completion_keys
     assert all(key in source for key in required)
 
 
+def test_native_response_uses_manifest_relative_output_and_counts_control_h2d_time() -> None:
+    source = (NATIVE_ROOT / "host.c").read_text(encoding="ascii")
+
+    assert "frontier_output_reference" in source
+    assert "frontier_validate_output_path" in source
+    assert "realpath" in source
+    assert "lstat" in source
+    assert "frontier_json_string(file, final_output_reference)" in source
+    assert "timing->initial_h2d_time_s + timing->descriptor_h2d_time_s + timing->control_h2d_time_s" in source
+    assert "&timing.descriptor_h2d_time_s, &timing.initial_h2d_time_s" in source
+    assert "*descriptor_h2d_time_s += frontier_now_s()" in source
+
+
 def test_validate_only_malformed_request_is_parseable_and_never_allocates_hardware(
     native_host: Path, tmp_path: Path
 ) -> None:

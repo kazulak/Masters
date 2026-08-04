@@ -7,14 +7,14 @@ metadata:
   manual_invocation_required: true
   deterministic_unitary_only: true
   hardware_frontier_m3_1_schema_version: upmem_hardware_frontier_m3_1_v1
-  native_hardware_profile_version: hardware_frontier_two_dpu_m3_1_v1
+  native_hardware_profile_version: hardware_frontier_two_dpu_m3_1_v2
   claim_boundary: functionality_and_host_observed_bringup_timing_only_no_speedup_scaling_concurrency_or_energy_claim
   hardware_profile:
-    hardware_profile_version: hardware_frontier_two_dpu_m3_1_v1
+    hardware_profile_version: hardware_frontier_two_dpu_m3_1_v2
     target: hardware
     backend_id: upmem_sdk_hardware_taskgraph_frontier_two_dpu
     route_id: upmem_tn_hardware_taskgraph_frontier_two_dpu
-    native_schema: generic_loop_resident_frontier_two_dpu_v1
+    native_schema: generic_loop_resident_frontier_two_dpu_v2
     requested_dpu_count: 2
     tasklets_per_dpu: 1
     numeric_mode: none

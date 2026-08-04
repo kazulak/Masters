@@ -15,7 +15,7 @@ from typing import Any, Mapping
 import numpy as np
 import yaml
 
-from quantum_bench.bench.reporting import write_normalized_records, write_run_manifest
+from quantum_bench.bench.reporting import artifact_ref, write_normalized_records, write_run_manifest
 from quantum_bench.bench.run_dirs import EVIDENCE_ARTIFACT_KIND, create_run_dir, sanitize
 from quantum_bench.circuits import load_circuit, manifest as circuit_manifest
 from quantum_bench.core.jsonio import write_json, write_jsonl
@@ -29,7 +29,9 @@ from quantum_bench.targets.upmem.hardware_frontier_session import (
 )
 from quantum_bench.targets.upmem.hardware_taskgraph_frontier import (
     BACKEND_ID,
+    NATIVE_SCHEMA,
     NUMERIC_MODE,
+    REQUEST_SCHEMA,
     ROUTE_ID,
     TIMING_SCOPE,
     build_hardware_frontier_graph_package,
@@ -42,6 +44,7 @@ from quantum_bench.targets.upmem.hardware_taskgraph_frontier import (
 from quantum_bench.tn import (
     build_execution_bundle,
     build_tensor_network,
+    executor_config_hash,
     execute_task_frontier_np_einsum,
     plan_task_graph_with_config,
     with_execution_identity,
@@ -68,15 +71,15 @@ EXPECTED_METADATA = {
     "manual_invocation_required": True,
     "deterministic_unitary_only": True,
     "hardware_frontier_m3_1_schema_version": SUITE_SCHEMA_VERSION,
-    "native_hardware_profile_version": "hardware_frontier_two_dpu_m3_1_v1",
+    "native_hardware_profile_version": "hardware_frontier_two_dpu_m3_1_v2",
     "claim_boundary": "functionality_and_host_observed_bringup_timing_only_no_speedup_scaling_concurrency_or_energy_claim",
 }
 EXPECTED_PROFILE = {
-    "hardware_profile_version": "hardware_frontier_two_dpu_m3_1_v1",
+    "hardware_profile_version": "hardware_frontier_two_dpu_m3_1_v2",
     "target": "hardware",
     "backend_id": BACKEND_ID,
     "route_id": ROUTE_ID,
-    "native_schema": "generic_loop_resident_frontier_two_dpu_v1",
+    "native_schema": "generic_loop_resident_frontier_two_dpu_v2",
     "requested_dpu_count": 2,
     "tasklets_per_dpu": 1,
     "numeric_mode": NUMERIC_MODE,
@@ -85,6 +88,18 @@ EXPECTED_PROFILE = {
     "device_launch_mode": "asynchronous_dpu_set",
     "host_completion_mode": "blocking_sync",
     "performance_claim_applicable": False,
+}
+M31_EXECUTOR_CONFIG = {
+    "profile": EXPECTED_PROFILE["hardware_profile_version"],
+    "backend_id": BACKEND_ID,
+    "session_protocol": REQUEST_SCHEMA,
+    "native_schema": NATIVE_SCHEMA,
+    "numeric_mode": NUMERIC_MODE,
+    "requested_dpu_count": EXPECTED_PROFILE["requested_dpu_count"],
+    "tasklets_per_dpu": EXPECTED_PROFILE["tasklets_per_dpu"],
+    "execution_plan_kind": "taskgraph_frontier_scheduler",
+    "device_launch_mode": EXPECTED_PROFILE["device_launch_mode"],
+    "host_completion_mode": EXPECTED_PROFILE["host_completion_mode"],
 }
 CANONICAL_SUITE_PATH = (
     Path(__file__).resolve().parents[3]
@@ -368,6 +383,7 @@ def _run_suite(root_dir: Path, run_dir: Path, suite: M31Suite, env: Mapping[str,
     run_manifest.update({
         "summary": summary_path.name,
         "hardware_available": "verified_by_execution" if passed else "not_verified_by_execution",
+        "upmem_sdk_available": "verified_by_execution" if passed else "not_verified_by_execution",
         "evidence_type": "executed_dispatch_only",
         "claim_boundary": CLAIM_BOUNDARY,
         "overlap_measured": False,
@@ -464,6 +480,7 @@ def _execute_request(build: Any, prepared: PreparedCase, suite: M31Suite, env: M
                 started,
                 "failed",
                 native.failure_stage or "native frontier request failed",
+                run_dir=build.session_root.parent,
                 failure_stage=native.failure_stage or "native_host_failed",
             )
         validate_frontier_native_response(native.response, manifest)
@@ -481,6 +498,7 @@ def _execute_request(build: Any, prepared: PreparedCase, suite: M31Suite, env: M
             started,
             "completed",
             None,
+            run_dir=build.session_root.parent,
             validated_native_response=validated_native_response,
         )
     except Exception as exc:
@@ -494,6 +512,7 @@ def _execute_request(build: Any, prepared: PreparedCase, suite: M31Suite, env: M
             started,
             "failed",
             f"response_validation_error: {exc}",
+            run_dir=build.session_root.parent,
             failure_stage=(
                 native.failure_stage
                 if native is not None and native.failure_stage
@@ -514,14 +533,32 @@ def _record(
     status: str,
     reason: str | None,
     *,
+    run_dir: Path,
     failure_stage: str | None = None,
     validated_native_response: bool = False,
 ) -> JsonDict:
     response = native.response if native is not None else {}
     timing = response.get("timing") if isinstance(response.get("timing"), Mapping) else {}
-    observed = _observed_execution_metrics(response) if validated_native_response else _empty_execution_metrics()
-    response_artifact = str(getattr(native, "response_path", "")) if native is not None else None
     observed_execution = status == "completed" and validated_native_response
+    observed = _observed_execution_metrics(response) if observed_execution else _empty_execution_metrics()
+    response_artifact = None
+    if native is not None:
+        response_path = getattr(native, "response_path", None)
+        if response_path is not None:
+            try:
+                response_rel = Path(response_path).resolve().relative_to(run_dir.resolve())
+            except (OSError, ValueError):
+                pass
+            else:
+                response_artifact = artifact_ref(
+                    run_dir, response_rel, role="native_response"
+                )
+    execution_bundle_rel = prepared.case_dir.relative_to(run_dir) / "execution_bundle.json"
+    validation_max_abs_error = (
+        float(np.max(np.abs(np.asarray(actual) - prepared.reference)))
+        if observed_execution and actual is not None
+        else None
+    )
     return {
         "schema_version": "upmem_hardware_frontier_m3_1_record_v1",
         "status": status,
@@ -539,6 +576,8 @@ def _record(
         "execution_target": "hardware",
         "hardware": observed_execution and response.get("hardware_execution") is True,
         "hardware_execution": response.get("hardware_execution") is True if observed_execution else False,
+        "hardware_functionality_evidence": response.get("hardware_functionality_evidence") is True if observed_execution else False,
+        "hardware_kernel_executed": response.get("hardware_kernel_executed") is True if observed_execution else False,
         "simulator_kernel_executed": response.get("simulator_kernel_executed") is True if observed_execution else False,
         "cpu_fallback_used": response.get("cpu_fallback_used") is True if observed_execution else False,
         "fallback_used": (
@@ -549,30 +588,47 @@ def _record(
         "expected_physical_task_instance_count": EXPECTED_PHYSICAL_TASK_INSTANCE_COUNT,
         "expected_wave_count": EXPECTED_WAVE_COUNT,
         "expected_dpu_task_counts": list(EXPECTED_DPU_TASK_COUNTS),
+        "requested_dpu_count": response.get("requested_dpus") if observed_execution else None,
+        "allocated_dpu_count": response.get("allocated_dpus") if observed_execution else None,
+        "tasklets_per_dpu": response.get("tasklets_per_dpu") if observed_execution else None,
+        "co_dispatch_observed": response.get("co_dispatch_observed") is True if observed_execution else False,
+        "co_dispatch_confirmed": response.get("co_dispatch_confirmed") is True if observed_execution else False,
         **observed,
         "duplicate_contraction_check": "passed" if observed_execution else None,
         "missing_dependency_check": "passed" if observed_execution else None,
         "dependency_check": "passed" if observed_execution else None,
         "frontier_scheduler_enabled": True,
+        "frontier_parallel_execution": False,
         "parallelism_mode": "frontier",
-        "parallelism_evidence_type": "executed_dispatch_only" if validated_native_response else "not_observed",
-        "evidence_type": "executed_dispatch_only" if validated_native_response else "not_observed",
+        "parallelism_evidence_type": "executed_dispatch_only" if observed_execution else "not_observed",
+        "evidence_type": "executed_dispatch_only" if observed_execution else "not_observed",
         "overlap_measured": False,
         "transfer_accounting_scope": response.get("transfer_accounting_scope", "native_sdk_observed_application_visible"),
         "transfer_invariant_status": "passed" if observed_execution else None,
         "native_observed_transfer_only": observed_execution,
-        "actual_h2d_bytes": response.get("actual_h2d_bytes") if validated_native_response else None,
-        "actual_d2h_bytes": response.get("actual_d2h_bytes") if validated_native_response else None,
-        "actual_transfer_bytes": response.get("actual_transfer_bytes") if validated_native_response else None,
+        "actual_h2d_bytes": response.get("actual_h2d_bytes") if observed_execution else None,
+        "actual_d2h_bytes": response.get("actual_d2h_bytes") if observed_execution else None,
+        "actual_transfer_bytes": response.get("actual_transfer_bytes") if observed_execution else None,
         "timing_scope": TIMING_SCOPE,
         "timing_evidence": "host_observed",
+        "timing_is_bringup_only": True,
         "host_observed_timing": True,
         "kernel_timing_available": False,
         "native_timing": dict(timing),
         "validation_status": "passed" if observed_execution else "failed",
         "scientific_validation_status": "passed" if observed_execution else "failed",
         "validation_tolerance_abs": 1.0e-6,
+        "validation_max_abs_error": validation_max_abs_error,
         "output_shape": list(actual.shape) if actual is not None else None,
+        "execution_plan_kind": "taskgraph_frontier_scheduler",
+        "execution_plan_executed": observed_execution,
+        "circuit_semantics_hash": prepared.graph.circuit_semantics_hash,
+        "tensor_network_hash": prepared.graph.tensor_network_hash,
+        "contraction_plan_hash": prepared.graph.contraction_plan_hash,
+        "executor_config_hash": executor_config_hash(ROUTE_ID, M31_EXECUTOR_CONFIG),
+        "execution_bundle_artifact": artifact_ref(
+            run_dir, execution_bundle_rel, role="execution_bundle"
+        ),
         "hardware_timing_available": False,
         "speedup_claim_applicable": False,
         "scaling_claim_applicable": False,

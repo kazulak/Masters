@@ -284,11 +284,18 @@ def validate_hardware_frontier_session(
     *,
     profile: HardwareFrontierProfile | Mapping[str, Any],
     build: HardwareSessionBuild | None = None,
+    session_root: Path | None = None,
 ) -> JsonDict:
     """Validate an already-produced native response without executing it."""
 
     parse_hardware_frontier_profile(profile)
-    root = (build.session_root if build is not None else manifest_path.parent).resolve()
+    root = (
+        session_root
+        if session_root is not None
+        else build.session_root
+        if build is not None
+        else manifest_path.parent
+    ).resolve()
     manifest = _read_manifest(_inside_session(root, manifest_path, "frontier manifest"))
     _validate_manifest_identity(manifest)
     _validate_frontier_manifest(manifest, build, root)
@@ -379,6 +386,20 @@ def _validate_frontier_manifest(
         raise ValueError("hardware_profile_violation: frontier manifest DPU counts mismatch")
     if manifest.get("overlap_measured") is not False:
         raise ValueError("hardware_profile_violation: frontier overlap must be unmeasured")
+    output_binding = manifest.get("final_output_binding")
+    if not isinstance(output_binding, Mapping):
+        raise ValueError("manifest_parse_failed: frontier final output binding is missing")
+    output_ref = output_binding.get("output_path")
+    if not isinstance(output_ref, str) or not output_ref:
+        raise ValueError("manifest_parse_failed: frontier final output path is missing")
+    output_path = root / output_ref
+    resolved_root = root.resolve()
+    try:
+        output_path.resolve().relative_to(resolved_root)
+    except ValueError as exc:
+        raise ValueError("hardware_profile_violation: frontier final output escapes session root") from exc
+    if output_path.is_symlink():
+        raise ValueError("hardware_profile_violation: frontier final output is a symlink")
     package_ref = manifest.get("package_path")
     if not isinstance(package_ref, str) or not package_ref:
         raise ValueError("manifest_parse_failed: frontier package path is missing")

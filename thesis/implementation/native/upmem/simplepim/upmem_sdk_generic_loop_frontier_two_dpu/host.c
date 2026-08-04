@@ -247,6 +247,60 @@ static char *frontier_resolve(const char *root, const char *relative) {
     return path;
 }
 
+static int frontier_output_reference(const resident_request_t *request, const char *path, const char **relative) {
+    const size_t root_length = request == NULL || request->manifest_root == NULL
+        ? 0u : strlen(request->manifest_root);
+    if (root_length == 0u || path == NULL || strncmp(path, request->manifest_root, root_length) != 0 ||
+        path[root_length] != '/' || path[root_length + 1u] == '\0') return 1;
+    *relative = path + root_length + 1u;
+    return frontier_safe_relative(*relative);
+}
+
+static int frontier_path_contains(const char *root, const char *candidate) {
+    const size_t root_length = strlen(root);
+    const size_t candidate_length = strlen(candidate);
+    return candidate_length >= root_length &&
+        (strcmp(root, candidate) == 0 ||
+        (strncmp(root, candidate, root_length) == 0 && candidate[root_length] == '/'));
+}
+
+static int frontier_validate_output_path(const resident_request_t *request) {
+    const char *path;
+    const char *relative;
+    const char *slash;
+    char *parent = NULL;
+    char *canonical_root = NULL;
+    char *canonical_parent = NULL;
+    struct stat output_stat;
+    size_t parent_length;
+    int valid = 0;
+    if (request == NULL || request->final_count != 1u || request->final_outputs == NULL) return 1;
+    path = request->final_outputs[0].path;
+    if (frontier_output_reference(request, path, &relative) != 0) return 1;
+    (void)relative;
+    slash = strrchr(path, '/');
+    if (slash == NULL) return 1;
+    parent_length = slash == path ? 1u : (size_t)(slash - path);
+    parent = (char *)malloc(parent_length + 1u);
+    if (parent == NULL) return 1;
+    if (slash == path) parent[0] = '/';
+    else memcpy(parent, path, parent_length);
+    parent[parent_length] = '\0';
+    canonical_root = realpath(request->manifest_root, NULL);
+    canonical_parent = realpath(parent, NULL);
+    if (canonical_root == NULL || canonical_parent == NULL ||
+        !frontier_path_contains(canonical_root, canonical_parent)) goto done;
+    if (lstat(path, &output_stat) == 0) {
+        if (S_ISLNK(output_stat.st_mode)) goto done;
+    } else if (errno != ENOENT) goto done;
+    valid = 1;
+done:
+    free(parent);
+    free(canonical_root);
+    free(canonical_parent);
+    return valid ? 0 : 1;
+}
+
 static const char *frontier_field_start(const char *json, const char *key) {
     char needle[128];
     if (strlen(key) + 3u > sizeof(needle)) return NULL;
@@ -582,6 +636,8 @@ static int frontier_transfer_package(
     struct dpu_set_t dpu,
     frontier_request_t *frontier,
     uint64_t *descriptor_package_h2d_bytes,
+    double *descriptor_h2d_time_s,
+    double *initial_h2d_time_s,
     dpu_error_t *error
 ) {
     const resident_control_t control = {
@@ -590,6 +646,7 @@ static int frontier_transfer_package(
         frontier->request.header.pool_bytes,
         0u,
     };
+    const double descriptor_started = frontier_now_s();
     *error = dpu_copy_to(dpu, "RESIDENT_SLOT_DESCRIPTORS", 0u, frontier->request.slots, frontier->request.header.slot_bytes);
     if (*error != DPU_OK) return 1;
     *descriptor_package_h2d_bytes += frontier->request.header.slot_bytes;
@@ -599,12 +656,17 @@ static int frontier_transfer_package(
     *error = dpu_copy_to(dpu, "RESIDENT_CONTROL", 0u, &control, sizeof(control));
     if (*error != DPU_OK) return 1;
     *descriptor_package_h2d_bytes += sizeof(control);
+    *descriptor_h2d_time_s += frontier_now_s() - descriptor_started;
+    {
+        const double initial_started = frontier_now_s();
     for (size_t index = 0; index < frontier->request.input_count; index++) {
         const resident_input_file_t *input = &frontier->request.inputs[index];
         *error = dpu_copy_to(dpu, "RESIDENT_SLOT_POOL", frontier->request.slots[input->slot_id].offset_bytes,
             frontier->inputs[index], input->transfer_bytes);
         if (*error != DPU_OK) return 1;
         frontier->initial_h2d_bytes += input->transfer_bytes;
+    }
+        *initial_h2d_time_s += frontier_now_s() - initial_started;
     }
     return 0;
 }
@@ -732,6 +794,7 @@ static int frontier_write_response(
     uint64_t final_d2h_bytes
 ) {
     const resident_final_file_t *final_output = NULL;
+    const char *final_output_reference = NULL;
     uint64_t final_output_file_hash = 0u;
     int final_output_file_hash_valid = 0;
     const int completed = failure->stage == NULL && allocated_dpus == FRONTIER_TWO_DPU_COUNT && load_succeeded &&
@@ -740,7 +803,8 @@ static int frontier_write_response(
     const uint64_t actual_d2h = inter_wave_d2h_bytes + final_d2h_bytes;
     const uint64_t actual_transfer = actual_h2d + actual_d2h;
     const double total_route_time_s = timing->package_parse_time_s + timing->allocation_time_s + timing->binary_load_time_s +
-        timing->initial_h2d_time_s + timing->wave0_launch_time_s + timing->wave0_sync_time_s +
+        timing->initial_h2d_time_s + timing->descriptor_h2d_time_s + timing->control_h2d_time_s +
+        timing->wave0_launch_time_s + timing->wave0_sync_time_s +
         timing->inter_wave_d2h_time_s + timing->inter_wave_h2d_time_s + timing->wave1_launch_time_s +
         timing->wave1_sync_time_s + timing->final_d2h_time_s + timing->output_write_time_s + timing->release_time_s;
     FILE *file;
@@ -749,6 +813,7 @@ static int frontier_write_response(
         if (output_written && final_output->path != NULL && frontier_hash_file(final_output->path, &final_output_file_hash) == 0) {
             final_output_file_hash_valid = 1;
         }
+        if (frontier_output_reference(&frontier->request, final_output->path, &final_output_reference) != 0) return 1;
     }
     file = path == NULL ? NULL : fopen(path, "w");
     if (file == NULL) return 1;
@@ -827,9 +892,9 @@ static int frontier_write_response(
     } else {
         fprintf(file, "{\"component\":\"real\",\"slot_id\":%u,\"elements\":%u,\"output_path\":",
             final_output->slot_id, final_output->elements);
-        frontier_json_string(file, final_output->path);
+        frontier_json_string(file, final_output_reference);
         fputs(",\"path\":", file);
-        frontier_json_string(file, final_output->path);
+        frontier_json_string(file, final_output_reference);
         fputs(",\"raw_bytes\":", file);
         fprintf(file, "%zu,\"hash_fnv1a64\":", final_output->raw_bytes);
         if (final_d2h && frontier->final_output != NULL) {
@@ -917,6 +982,10 @@ int main(int argc, char **argv) {
         frontier_fail(&failure, "hardware_profile_violation", "DPU_BACKEND must be unset and NR_TASKLETS must equal one", -1, -1, -1, DPU_OK);
         goto write_response;
     }
+    if (frontier_validate_output_path(&frontier.request) != 0) {
+        frontier_fail(&failure, "final_output_path_validation_failed", "final output path is not safely contained by the manifest root", -1, -1, -1, DPU_OK);
+        goto write_response;
+    }
     if (frontier_interrupted || frontier_prepare_buffers(&frontier, &failure_stage) != 0) {
         frontier_fail(&failure, failure_stage == NULL ? "host_prepare_failed" : failure_stage, "frontier host preparation failed", -1, -1, -1, DPU_OK);
         goto write_response;
@@ -956,16 +1025,15 @@ int main(int argc, char **argv) {
         load_succeeded = 1;
     }
     {
-        const double stage_started = frontier_now_s();
         struct dpu_set_t dpu;
         uint32_t index;
         DPU_FOREACH(set, dpu, index) {
-            if (frontier_transfer_package(dpu, &frontier, &descriptor_package_h2d_bytes, &error) != 0) {
+            if (frontier_transfer_package(dpu, &frontier, &descriptor_package_h2d_bytes,
+                &timing.descriptor_h2d_time_s, &timing.initial_h2d_time_s, &error) != 0) {
                 frontier_fail(&failure, "initial_h2d_failed", "resident package or initial tensor transfer failed", 0, -1, (int)index, error);
                 break;
             }
         }
-        timing.initial_h2d_time_s = frontier_now_s() - stage_started;
         if (failure.stage != NULL) goto release_and_write;
     }
     {
@@ -1084,6 +1152,10 @@ int main(int argc, char **argv) {
     }
     {
         const double stage_started = frontier_now_s();
+        if (frontier_validate_output_path(&frontier.request) != 0) {
+            frontier_fail(&failure, "final_output_path_validation_failed", "final output path is not safely contained by the manifest root", 1, 2, 0, DPU_OK);
+            goto release_and_write;
+        }
         output_written = frontier_write_exact(frontier.request.final_outputs[0].path, frontier.final_output, frontier.request.final_outputs[0].raw_bytes) == 0;
         timing.output_write_time_s = frontier_now_s() - stage_started;
         if (!output_written) {
