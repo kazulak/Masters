@@ -292,8 +292,6 @@ def _source_run(root: Path, *, update: dict | None = None) -> Path:
                 "execution_scope": "physical_two_dpu_two_slice_full_replicated_prefix_taskgraph",
                 "route_id": "upmem_tn_hardware_sliced_resident_two_dpu",
                 "backend_id": "upmem_sdk_hardware_sliced_resident_two_dpu",
-                "requested_dpu_count": 2,
-                "tasklets_per_dpu": 1,
                 "numeric_modes": list(EXPECTED_MODES),
                 "operation_count": 3,
                 "source_task_count": 3,
@@ -416,6 +414,22 @@ def test_valid_m2_3_report_has_exact_outputs_and_readable_plots(tmp_path: Path) 
     assert "Claims not allowed" in summary
     assert "not speedup" in summary
     assert "host-observed native SDK stage" in summary
+
+
+def test_run_manifest_uses_hardware_profile_for_allocation_limits(
+    tmp_path: Path,
+) -> None:
+    source = _source_run(tmp_path / "source")
+    manifest = json.loads((source / "run_manifest.json").read_text())
+    profile = json.loads((source / "config/hardware_profile.json").read_text())
+    assert "requested_dpu_count" not in manifest
+    assert "tasklets_per_dpu" not in manifest
+    assert profile["requested_dpu_count"] == 2
+    assert profile["tasklets_per_dpu"] == 1
+    output = generate_report(source, comparison_root=tmp_path / "comparisons")
+    assert json.loads((output / "report_manifest.json").read_text())["status"] == (
+        "completed"
+    )
 
 
 def test_current_runner_schema_fields_are_admitted_and_mapped_directly(

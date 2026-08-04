@@ -627,8 +627,6 @@ def _manifest_errors(
         "execution_scope": EXPECTED_EXECUTION_SCOPE,
         "route_id": EXPECTED_ROUTE,
         "backend_id": EXPECTED_BACKEND,
-        "requested_dpu_count": 2,
-        "tasklets_per_dpu": 1,
         "numeric_modes": list(EXPECTED_MODES),
         "operation_count": 3,
         "source_task_count": 3,
