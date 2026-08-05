@@ -4,6 +4,7 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <limits.h>
 #include <math.h>
 #include <signal.h>
 #include <stdint.h>
@@ -16,6 +17,10 @@
 
 #include "common.h"
 #include "../upmem_sdk_generic_loop_resident/session_protocol.h"
+
+#if FRONTIER_PROVIDER_SIMPLEPIM_MANAGEMENT
+#include "simplepim_provider.h"
+#endif
 
 #if !UPMEM_GENERIC_HARDWARE_MVP
 #error "frontier hardware execution requires UPMEM_GENERIC_HARDWARE_MVP=1"
@@ -99,6 +104,36 @@ static double frontier_now_s(void) {
     if (clock_gettime(CLOCK_MONOTONIC, &value) != 0) return 0.0;
     return (double)value.tv_sec + (double)value.tv_nsec / 1000000000.0;
 }
+
+#if FRONTIER_PROVIDER_SIMPLEPIM_MANAGEMENT
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+
+static int frontier_resolve_sibling_binary(
+    const char *argv0,
+    const char *binary_name,
+    char *resolved_path,
+    size_t resolved_path_size
+) {
+    char executable_path[PATH_MAX];
+    ssize_t executable_length;
+    char *separator;
+    int written;
+
+    executable_length = readlink("/proc/self/exe", executable_path, sizeof(executable_path) - 1u);
+    if (executable_length > 0) {
+        executable_path[executable_length] = '\0';
+    } else if (argv0 == NULL || realpath(argv0, executable_path) == NULL) {
+        return 1;
+    }
+    separator = strrchr(executable_path, '/');
+    if (separator == NULL) return 1;
+    *separator = '\0';
+    written = snprintf(resolved_path, resolved_path_size, "%s/%s", executable_path, binary_name);
+    return written < 0 || (size_t)written >= resolved_path_size || access(resolved_path, R_OK) != 0;
+}
+#endif
 
 static void frontier_report_sdk_error(const char *operation, dpu_error_t error) {
     fprintf(stderr, "%s failed: %s\n", operation, dpu_error_to_string(error));
@@ -638,6 +673,7 @@ static int frontier_transfer_package(
     uint64_t *descriptor_package_h2d_bytes,
     double *descriptor_h2d_time_s,
     double *initial_h2d_time_s,
+    int *transfer_attempted,
     dpu_error_t *error
 ) {
     const resident_control_t control = {
@@ -647,12 +683,15 @@ static int frontier_transfer_package(
         0u,
     };
     const double descriptor_started = frontier_now_s();
+    *transfer_attempted = 1;
     *error = dpu_copy_to(dpu, "RESIDENT_SLOT_DESCRIPTORS", 0u, frontier->request.slots, frontier->request.header.slot_bytes);
     if (*error != DPU_OK) return 1;
     *descriptor_package_h2d_bytes += frontier->request.header.slot_bytes;
+    *transfer_attempted = 1;
     *error = dpu_copy_to(dpu, "RESIDENT_OPERATIONS", 0u, frontier->request.operations, frontier->request.header.operation_bytes);
     if (*error != DPU_OK) return 1;
     *descriptor_package_h2d_bytes += frontier->request.header.operation_bytes;
+    *transfer_attempted = 1;
     *error = dpu_copy_to(dpu, "RESIDENT_CONTROL", 0u, &control, sizeof(control));
     if (*error != DPU_OK) return 1;
     *descriptor_package_h2d_bytes += sizeof(control);
@@ -661,6 +700,7 @@ static int frontier_transfer_package(
         const double initial_started = frontier_now_s();
     for (size_t index = 0; index < frontier->request.input_count; index++) {
         const resident_input_file_t *input = &frontier->request.inputs[index];
+        *transfer_attempted = 1;
         *error = dpu_copy_to(dpu, "RESIDENT_SLOT_POOL", frontier->request.slots[input->slot_id].offset_bytes,
             frontier->inputs[index], input->transfer_bytes);
         if (*error != DPU_OK) return 1;
@@ -671,8 +711,10 @@ static int frontier_transfer_package(
     return 0;
 }
 
-static int frontier_set_active(struct dpu_set_t dpu, uint32_t operation, uint64_t *control_h2d_bytes, dpu_error_t *error) {
+static int frontier_set_active(struct dpu_set_t dpu, uint32_t operation, uint64_t *control_h2d_bytes,
+    int *transfer_attempted, dpu_error_t *error) {
     const uint64_t active_operation = operation;
+    *transfer_attempted = 1;
     *error = dpu_copy_to(dpu, "RESIDENT_ACTIVE_OPERATION", 0u, &active_operation, sizeof(active_operation));
     if (*error == DPU_OK) *control_h2d_bytes += sizeof(active_operation);
     return *error == DPU_OK ? 0 : 1;
@@ -683,9 +725,11 @@ static int frontier_read_completion(
     frontier_task_instance_t *task,
     const resident_operation_t *operation,
     frontier_failure_t *failure,
+    int *transfer_attempted,
     dpu_error_t *error
 ) {
     resident_completion_t completion = {0};
+    *transfer_attempted = 1;
     *error = dpu_copy_from(dpu, "RESIDENT_COMPLETION", 0u, &completion, sizeof(completion));
     task->completion_read = *error == DPU_OK;
     task->completion = completion;
@@ -772,6 +816,14 @@ static int frontier_write_response(
     const frontier_timing_t *timing,
     const frontier_task_instance_t tasks[FRONTIER_TWO_DPU_OPERATION_COUNT],
     uint32_t allocated_dpus,
+    int provider_init_called,
+    int provider_init_succeeded,
+    int simplepim_management_allocation_used,
+    int simplepim_management_object_created,
+    int provider_release_attempted,
+    int provider_release_succeeded,
+    int provider_release_error,
+    int allocation_still_owned,
     int allocation_attempted,
     int load_attempted,
     int load_succeeded,
@@ -785,6 +837,7 @@ static int frontier_write_response(
     int inter_wave_h2d,
     int final_d2h,
     int output_written,
+    int transfer_attempted,
     int release_attempted,
     int release_confirmed,
     uint64_t descriptor_package_h2d_bytes,
@@ -797,11 +850,22 @@ static int frontier_write_response(
     const char *final_output_reference = NULL;
     uint64_t final_output_file_hash = 0u;
     int final_output_file_hash_valid = 0;
+    const int any_task_completed = tasks[0].completion_verified || tasks[1].completion_verified || tasks[2].completion_verified;
+    const int all_tasks_completed = tasks[0].completion_verified && tasks[1].completion_verified && tasks[2].completion_verified;
+    const int complete_taskgraph_executed = all_tasks_completed;
     const int completed = failure->stage == NULL && allocated_dpus == FRONTIER_TWO_DPU_COUNT && load_succeeded &&
-        wave0_sync_succeeded && wave1_sync_succeeded && inter_wave_d2h && inter_wave_h2d && final_d2h && output_written && release_confirmed;
+        wave0_sync_succeeded && wave1_sync_succeeded && inter_wave_d2h && inter_wave_h2d && final_d2h &&
+        output_written && release_confirmed && complete_taskgraph_executed;
     const uint64_t actual_h2d = frontier->initial_h2d_bytes + descriptor_package_h2d_bytes + operation_control_h2d_bytes + inter_wave_h2d_bytes;
     const uint64_t actual_d2h = inter_wave_d2h_bytes + final_d2h_bytes;
     const uint64_t actual_transfer = actual_h2d + actual_d2h;
+    const int simplepim_management_init_called = FRONTIER_PROVIDER_SIMPLEPIM_MANAGEMENT && provider_init_called;
+    const int raw_sdk_direct_allocation_used = FRONTIER_PROVIDER_SIMPLEPIM_MANAGEMENT ? 0 : allocation_attempted;
+    const int raw_sdk_load_used = load_attempted;
+    const int raw_sdk_transfer_used = transfer_attempted;
+    const int raw_sdk_launch_used = wave0_launch_attempted || wave1_launch_attempted;
+    const int raw_sdk_sync_used = wave0_sync_attempted || wave1_sync_attempted;
+    const int raw_sdk_control_activity = raw_sdk_load_used || raw_sdk_transfer_used || raw_sdk_launch_used || raw_sdk_sync_used;
     const double total_route_time_s = timing->package_parse_time_s + timing->allocation_time_s + timing->binary_load_time_s +
         timing->initial_h2d_time_s + timing->descriptor_h2d_time_s + timing->control_h2d_time_s +
         timing->wave0_launch_time_s + timing->wave0_sync_time_s +
@@ -824,6 +888,28 @@ static int frontier_write_response(
     frontier_json_string(file, failure->message);
     fputs(",\n  \"failure_context\":", file);
     frontier_failure_context(file, failure);
+    fprintf(file, ",\n  \"provider_id\":\"%s\",\n  \"control_provider\":\"%s\",\n  \"kernel_provider\":\"%s\",\n  \"simplepim_management_api_used\":\"%s\",\n  \"provider_init_called\":%s,\n  \"provider_init_succeeded\":%s,\n  \"simplepim_management_init_called\":%s,\n  \"simplepim_management_allocation_used\":%s,\n  \"simplepim_management_object_created\":%s,\n  \"allocation_source\":\"%s\",\n  \"allocation_profile\":\"%s\",\n  \"simplepim_operator_api_used\":false,\n  \"simplepim_operator_names\":[],\n  \"simplepim_kernel_executed\":false,\n  \"raw_sdk_direct_allocation_used\":%s,\n  \"raw_sdk_load_used\":%s,\n  \"raw_sdk_transfer_used\":%s,\n  \"raw_sdk_launch_used\":%s,\n  \"raw_sdk_sync_used\":%s,\n  \"raw_sdk_control_calls_used\":%s,\n  \"any_task_completed\":%s,\n  \"all_tasks_completed\":%s,\n  \"complete_taskgraph_executed\":%s,\n  \"thesis_owned_kernel_executed\":%s,\n  \"thesis_resident_kernel_executed\":%s,\n  \"provider_release_attempted\":%s,\n  \"provider_release_succeeded\":%s,\n  \"provider_release_error\":%d,\n  \"simplepim_heap_used\":false,\n  \"simplepim_table_transport_used\":false,\n  \"timing_is_bringup_only\":true,\n  \"hardware_speedup_applicable\":false",
+        FRONTIER_PROVIDER_ID, FRONTIER_CONTROL_PROVIDER, FRONTIER_KERNEL_PROVIDER, FRONTIER_SIMPLEPIM_MANAGEMENT_API,
+        provider_init_called ? "true" : "false",
+        provider_init_succeeded ? "true" : "false",
+        simplepim_management_init_called ? "true" : "false",
+        simplepim_management_allocation_used ? "true" : "false",
+        simplepim_management_object_created ? "true" : "false",
+        FRONTIER_ALLOCATION_SOURCE, FRONTIER_ALLOCATION_PROFILE,
+        raw_sdk_direct_allocation_used ? "true" : "false",
+        raw_sdk_load_used ? "true" : "false",
+        raw_sdk_transfer_used ? "true" : "false",
+        raw_sdk_launch_used ? "true" : "false",
+        raw_sdk_sync_used ? "true" : "false",
+        raw_sdk_control_activity ? "true" : "false",
+        any_task_completed ? "true" : "false",
+        all_tasks_completed ? "true" : "false",
+        complete_taskgraph_executed ? "true" : "false",
+        complete_taskgraph_executed ? "true" : "false",
+        complete_taskgraph_executed ? "true" : "false",
+        provider_release_attempted ? "true" : "false",
+        provider_release_succeeded ? "true" : "false",
+        provider_release_error);
     fprintf(file, ",\n  \"sdk_error_code\":%d,\n  \"route_id\":\"%s\",\n  \"profile_id\":\"%s\",\n  \"backend_id\":\"%s\",\n  \"hardware_profile_version\":\"%s\",\n  \"target\":\"hardware\",\n  \"target_requested\":\"hardware\",\n  \"target_observed\":\"%s\",\n  \"requested_dpus\":2,\n  \"allocated_dpus\":%u,\n  \"hardware_execution\":%s,\n  \"hardware_kernel_executed\":%s,\n  \"hardware_functionality_evidence\":%s,\n  \"cpu_fallback_used\":false,\n  \"simulator_kernel_executed\":false,\n  \"no_cpu_fallback\":true,\n  \"no_simulator_fallback\":true,\n  \"native_failure_fallback_used\":false,\n  \"hardware_no_fallback\":true,\n  \"performance_claim_applicable\":false,\n  \"tasklets_per_dpu\":1,\n  \"physical_dpu_count\":2,\n  \"operation_count\":3,\n  \"numeric_contract\":\"float32_real\",\n  \"numeric_mode\":\"none\",\n  \"complex_combine_used\":false,\n  \"quantization_mode\":\"none\",\n  \"allocation\":{\"attempted\":%s,\"requested_dpus\":2,\"allocated_dpus\":%u,\"profile\":\"backend=hw\",\"verified\":%s},\n  \"load\":{\"attempted\":%s,\"succeeded\":%s,\"confirmed\":%s,\"hardware\":%s},\n",
         failure->sdk_error_code, FRONTIER_ROUTE_ID, FRONTIER_PROFILE_ID, FRONTIER_BACKEND_ID, FRONTIER_PROFILE_ID,
         completed ? "hardware" : "hardware_unverified", allocated_dpus,
@@ -840,12 +926,14 @@ static int frontier_write_response(
     fputs("},{\"barrier_index\":1,\"wave_index\":1,\"completed\":", file);
     fputs(wave1_sync_succeeded ? "true" : "false", file);
     fputs("}],\n  \"observed_dpu_task_counts\":[", file);
-    fprintf(file, "%u,%u],\n  \"launch\":{\"wave0_attempted\":%s,\"wave0_synchronized\":%s,\"wave1_attempted\":%s,\"wave1_synchronized\":%s,\"async_launch_count\":%u,\"completed\":%s,\"task_count\":3,\"barrier_count\":2},\n",
+    fprintf(file, "%u,%u],\n  \"launch\":{\"wave0_attempted\":%s,\"wave0_synchronized\":%s,\"wave1_attempted\":%s,\"wave1_synchronized\":%s,\"async_launch_count\":%u,\"completed\":%s,\"any_task_completed\":%s,\"all_tasks_completed\":%s,\"complete_taskgraph_executed\":%s,\"task_count\":3,\"barrier_count\":2},\n",
         tasks[0].completion_verified && tasks[2].completion_verified ? 2u : 0u,
         tasks[1].completion_verified ? 1u : 0u,
         wave0_launch_attempted ? "true" : "false", wave0_sync_attempted && wave0_sync_succeeded ? "true" : "false",
         wave1_launch_attempted ? "true" : "false", wave1_sync_attempted && wave1_sync_succeeded ? "true" : "false",
-        (wave0_launch_attempted ? 1u : 0u) + (wave1_launch_attempted ? 1u : 0u), completed ? "true" : "false");
+        (wave0_launch_attempted ? 1u : 0u) + (wave1_launch_attempted ? 1u : 0u), completed ? "true" : "false",
+        any_task_completed ? "true" : "false", all_tasks_completed ? "true" : "false",
+        complete_taskgraph_executed ? "true" : "false");
     fprintf(file, "  \"physical_task_instances\":[{\"instance\":0,\"dpu\":0,\"operation\":0},{\"instance\":1,\"dpu\":1,\"operation\":1},{\"instance\":2,\"dpu\":0,\"operation\":2}],\n  \"per_dpu_completed_operations\":[%s,%s],\n  \"completion_sentinels\":[",
         tasks[0].completion_verified && tasks[2].completion_verified ? "2" : "0",
         tasks[1].completion_verified ? "1" : "0");
@@ -875,8 +963,10 @@ static int frontier_write_response(
         timing->final_d2h_time_s, timing->release_time_s, total_route_time_s, timing->descriptor_h2d_time_s,
         timing->control_h2d_time_s, timing->wave0_sync_time_s, timing->inter_wave_d2h_time_s, timing->inter_wave_h2d_time_s,
         timing->wave1_sync_time_s, timing->output_write_time_s);
-    fprintf(file, "  \"release\":{\"attempted\":%s,\"confirmed\":%s},\n  \"hashes\":{\"manifest_fnv1a64\":",
-        release_attempted ? "true" : "false", release_confirmed ? "true" : "false");
+    fprintf(file, "  \"release\":{\"attempted\":%s,\"confirmed\":%s,\"allocation_still_owned\":%s,\"provider_attempted\":%s,\"provider_succeeded\":%s,\"provider_error\":%d},\n  \"hashes\":{\"manifest_fnv1a64\":",
+        release_attempted ? "true" : "false", release_confirmed ? "true" : "false",
+        allocation_still_owned ? "true" : "false", provider_release_attempted ? "true" : "false",
+        provider_release_succeeded ? "true" : "false", provider_release_error);
     frontier_hash_json(file, frontier->manifest_hash, frontier->manifest_hash_valid);
     fputs(",\"package_fnv1a64\":", file);
     frontier_hash_json(file, frontier->package_hash, frontier->package_hash_valid);
@@ -919,6 +1009,9 @@ int main(int argc, char **argv) {
         {0u, 0u, 0, 0, 0, 0, {0}}, {1u, 1u, 0, 0, 0, 0, {0}}, {0u, 2u, 0, 0, 0, 0, {0}}
     };
     struct dpu_set_t set = {0};
+#if FRONTIER_PROVIDER_SIMPLEPIM_MANAGEMENT
+    simplepim_frontier_provider_t simplepim_provider = {0};
+#endif
     struct dpu_set_t dpu0 = {0};
     struct dpu_set_t dpu1 = {0};
     dpu_error_t error = DPU_OK;
@@ -930,6 +1023,13 @@ int main(int argc, char **argv) {
     uint64_t inter_wave_d2h_bytes = 0u;
     uint64_t inter_wave_h2d_bytes = 0u;
     uint64_t final_d2h_bytes = 0u;
+    int provider_init_called = 0;
+    int provider_init_succeeded = 0;
+    int simplepim_management_allocation_used = 0;
+    int simplepim_management_object_created = 0;
+    int provider_release_attempted = 0;
+    int provider_release_succeeded = 0;
+    dpu_error_t provider_release_error = DPU_OK;
     int allocation_attempted = 0;
     int set_allocated = 0;
     int load_attempted = 0;
@@ -944,8 +1044,10 @@ int main(int argc, char **argv) {
     int inter_wave_h2d = 0;
     int final_d2h = 0;
     int output_written = 0;
+    int transfer_attempted = 0;
     int release_attempted = 0;
     int release_confirmed = 0;
+    int allocation_still_owned = 0;
     int rc = 1;
     const double started = frontier_now_s();
 
@@ -992,14 +1094,51 @@ int main(int argc, char **argv) {
     }
     {
         const double stage_started = frontier_now_s();
+#if FRONTIER_PROVIDER_SIMPLEPIM_MANAGEMENT
+        char initialization_binary[PATH_MAX];
+        if (frontier_resolve_sibling_binary(argv[0], "dpu_simplepim_management_init",
+            initialization_binary, sizeof(initialization_binary)) != 0) {
+            frontier_fail(&failure, "initialization_binary_resolution_failed",
+                "SimplePIM initialization binary was not found beside the host executable", -1, -1, -1, DPU_OK);
+            goto release_and_write;
+        }
+        provider_init_called = 1;
+        allocation_attempted = 1;
+        error = simplepim_frontier_provider_init(
+            &simplepim_provider,
+            FRONTIER_TWO_DPU_COUNT,
+            FRONTIER_ALLOCATION_PROFILE,
+            initialization_binary);
+        provider_init_succeeded = error == DPU_OK;
+        simplepim_management_allocation_used = simplepim_provider.allocation_used;
+        simplepim_management_object_created = simplepim_provider.management != NULL;
+        provider_release_attempted = simplepim_provider.release_attempted;
+        provider_release_succeeded = simplepim_provider.release_succeeded;
+        provider_release_error = simplepim_provider.release_error;
+        release_attempted = provider_release_attempted;
+        release_confirmed = provider_release_succeeded;
+        if (error == DPU_OK) {
+            set = simplepim_provider.set;
+            set_allocated = 1;
+            allocated_dpus = simplepim_provider.observed_dpus;
+        } else {
+            set_allocated = simplepim_provider.allocation_active;
+            allocated_dpus = simplepim_provider.observed_dpus;
+        }
+#else
         allocation_attempted = 1;
         error = dpu_alloc(FRONTIER_TWO_DPU_COUNT, FRONTIER_ALLOCATION_PROFILE, &set);
         if (error == DPU_OK) set_allocated = 1;
         if (error == DPU_OK) error = dpu_get_nr_dpus(set, &allocated_dpus);
+#endif
         timing.allocation_time_s = frontier_now_s() - stage_started;
         if (error != DPU_OK || allocated_dpus != FRONTIER_TWO_DPU_COUNT) {
             if (error != DPU_OK) frontier_report_sdk_error("frontier dpu_alloc", error);
-            frontier_fail(&failure, error == DPU_ERR_INVALID_PROFILE ? "hardware_profile_violation" : "hardware_allocation_failed",
+            frontier_fail(&failure,
+#if FRONTIER_PROVIDER_SIMPLEPIM_MANAGEMENT
+                simplepim_provider.release_attempted && !simplepim_provider.release_succeeded ? "hardware_release_failed" :
+#endif
+                error == DPU_ERR_INVALID_PROFILE ? "hardware_profile_violation" : "hardware_allocation_failed",
                 "exactly two physical DPUs were not allocated", -1, -1, -1, error);
             goto release_and_write;
         }
@@ -1029,7 +1168,7 @@ int main(int argc, char **argv) {
         uint32_t index;
         DPU_FOREACH(set, dpu, index) {
             if (frontier_transfer_package(dpu, &frontier, &descriptor_package_h2d_bytes,
-                &timing.descriptor_h2d_time_s, &timing.initial_h2d_time_s, &error) != 0) {
+                &timing.descriptor_h2d_time_s, &timing.initial_h2d_time_s, &transfer_attempted, &error) != 0) {
                 frontier_fail(&failure, "initial_h2d_failed", "resident package or initial tensor transfer failed", 0, -1, (int)index, error);
                 break;
             }
@@ -1038,11 +1177,11 @@ int main(int argc, char **argv) {
     }
     {
         const double stage_started = frontier_now_s();
-        if (frontier_set_active(dpu0, 0u, &operation_control_h2d_bytes, &error) != 0) {
+        if (frontier_set_active(dpu0, 0u, &operation_control_h2d_bytes, &transfer_attempted, &error) != 0) {
             frontier_fail(&failure, "operation_control_h2d_failed", "wave zero operation assignment failed", 0, 0, 0, error);
             goto release_and_write;
         }
-        if (frontier_set_active(dpu1, 1u, &operation_control_h2d_bytes, &error) != 0) {
+        if (frontier_set_active(dpu1, 1u, &operation_control_h2d_bytes, &transfer_attempted, &error) != 0) {
             frontier_fail(&failure, "operation_control_h2d_failed", "wave zero operation assignment failed", 0, 1, 1, error);
             goto release_and_write;
         }
@@ -1074,11 +1213,12 @@ int main(int argc, char **argv) {
             goto release_and_write;
         }
         wave0_sync_succeeded = 1;
-        if (frontier_read_completion(dpu0, &tasks[0], &frontier.request.operations[0], &failure, &error) != 0 ||
-            frontier_read_completion(dpu1, &tasks[1], &frontier.request.operations[1], &failure, &error) != 0) goto release_and_write;
+        if (frontier_read_completion(dpu0, &tasks[0], &frontier.request.operations[0], &failure, &transfer_attempted, &error) != 0 ||
+            frontier_read_completion(dpu1, &tasks[1], &frontier.request.operations[1], &failure, &transfer_attempted, &error) != 0) goto release_and_write;
     }
     {
         const double stage_started = frontier_now_s();
+        transfer_attempted = 1;
         error = dpu_copy_from(dpu1, "RESIDENT_SLOT_POOL", frontier.request.slots[frontier.request.operations[1].slot_out_real].offset_bytes,
             frontier.intermediate, frontier.intermediate_transfer_bytes);
         timing.inter_wave_d2h_time_s = frontier_now_s() - stage_started;
@@ -1092,6 +1232,7 @@ int main(int argc, char **argv) {
     }
     {
         const double stage_started = frontier_now_s();
+        transfer_attempted = 1;
         error = dpu_copy_to(dpu0, "RESIDENT_SLOT_POOL", frontier.request.slots[frontier.request.operations[1].slot_out_real].offset_bytes,
             frontier.intermediate, frontier.intermediate_transfer_bytes);
         timing.inter_wave_h2d_time_s = frontier_now_s() - stage_started;
@@ -1105,7 +1246,7 @@ int main(int argc, char **argv) {
     }
     {
         const double stage_started = frontier_now_s();
-        if (frontier_set_active(dpu0, 2u, &operation_control_h2d_bytes, &error) != 0) {
+        if (frontier_set_active(dpu0, 2u, &operation_control_h2d_bytes, &transfer_attempted, &error) != 0) {
             frontier_fail(&failure, "operation_control_h2d_failed", "wave one operation assignment failed", 1, 2, 0, error);
             goto release_and_write;
         }
@@ -1135,10 +1276,11 @@ int main(int argc, char **argv) {
             goto release_and_write;
         }
         wave1_sync_succeeded = 1;
-        if (frontier_read_completion(dpu0, &tasks[2], &frontier.request.operations[2], &failure, &error) != 0) goto release_and_write;
+        if (frontier_read_completion(dpu0, &tasks[2], &frontier.request.operations[2], &failure, &transfer_attempted, &error) != 0) goto release_and_write;
     }
     {
         const double stage_started = frontier_now_s();
+        transfer_attempted = 1;
         error = dpu_copy_from(dpu0, "RESIDENT_SLOT_POOL", frontier.request.slots[frontier.request.final_outputs[0].slot_id].offset_bytes,
             frontier.final_output, frontier.final_transfer_bytes);
         timing.final_d2h_time_s = frontier_now_s() - stage_started;
@@ -1169,19 +1311,37 @@ release_and_write:
     if (set_allocated) {
         const double stage_started = frontier_now_s();
         release_attempted = 1;
+#if FRONTIER_PROVIDER_SIMPLEPIM_MANAGEMENT
+        if (simplepim_provider.release_attempted) {
+            error = simplepim_provider.release_error;
+        } else {
+            error = simplepim_frontier_provider_release(&simplepim_provider);
+            provider_release_attempted = simplepim_provider.release_attempted;
+            provider_release_succeeded = simplepim_provider.release_succeeded;
+            provider_release_error = simplepim_provider.release_error;
+        }
+#else
         error = dpu_free(set);
+#endif
         timing.release_time_s = frontier_now_s() - stage_started;
-        if (error == DPU_OK) release_confirmed = 1;
+        if (error == DPU_OK) {
+            release_confirmed = 1;
+            set_allocated = 0;
+        }
         else {
             frontier_report_sdk_error("frontier dpu_free", error);
             frontier_fail(&failure, "hardware_release_failed", "DPU set release was not confirmed", failure.wave, failure.operation, failure.dpu, error);
         }
     }
+    allocation_still_owned = set_allocated;
 write_response:
     if (frontier_write_response(response_path, &frontier, &failure, &timing, tasks, allocated_dpus,
-        allocation_attempted, load_attempted, load_succeeded, wave0_launch_attempted, wave0_sync_attempted,
+        provider_init_called, provider_init_succeeded, simplepim_management_allocation_used,
+        simplepim_management_object_created, provider_release_attempted, provider_release_succeeded,
+        provider_release_error, allocation_still_owned, allocation_attempted,
+        load_attempted, load_succeeded, wave0_launch_attempted, wave0_sync_attempted,
         wave0_sync_succeeded, wave1_launch_attempted, wave1_sync_attempted, wave1_sync_succeeded,
-        inter_wave_d2h, inter_wave_h2d, final_d2h, output_written, release_attempted, release_confirmed,
+        inter_wave_d2h, inter_wave_h2d, final_d2h, output_written, transfer_attempted, release_attempted, release_confirmed,
         descriptor_package_h2d_bytes, operation_control_h2d_bytes, inter_wave_d2h_bytes, inter_wave_h2d_bytes, final_d2h_bytes) != 0) rc = 1;
     else rc = failure.stage == NULL && release_confirmed ? 0 : 1;
     frontier_free_request(&frontier);
