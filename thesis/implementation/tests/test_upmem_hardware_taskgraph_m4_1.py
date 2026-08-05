@@ -1,16 +1,22 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import os
 from pathlib import Path
+import shutil
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from quantum_bench.bench import upmem_hardware_taskgraph_m4_1 as m41
+import quantum_bench.targets.upmem.simplepim_frontier_session as simplepim_session
 from scripts import upmem_m4_1_report
 from quantum_bench.targets.upmem.simplepim_frontier_session import (
+    M41_BACKEND_ID,
     M41_PROFILE_ID,
+    M41_ROUTE_ID,
     SIMPLEPIM_MANAGEMENT_API,
     SIMPLEPIM_PROVIDER_ID,
     parse_simplepim_frontier_profile,
@@ -82,6 +88,56 @@ def test_m41_prepare_does_not_allocate_or_build(tmp_path: Path, monkeypatch: pyt
     assert payload["prepared_case"]["path"] == [[0, 1], [0, 1], [0, 1]]
 
 
+@pytest.mark.skipif(
+    shutil.which("dpu-pkg-config") is None
+    or shutil.which("dpu-upmem-dpurte-clang") is None
+    or not os.environ.get("UPMEM_HOME"),
+    reason="UPMEM SDK compiler is unavailable",
+)
+def test_m41_prepared_simplepim_manifest_passes_native_validation_without_allocation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan_dir = tmp_path / "plan"
+    monkeypatch.setattr(m41, "_unique_dir", lambda _parent: plan_dir)
+
+    result = m41.prepare_upmem_hardware_taskgraph_m4_1(
+        ROOT,
+        suite_path=SUITE_PATH,
+        build=True,
+        environment=dict(os.environ),
+    )
+
+    assert result["status"] == "prepared"
+    summary = json.loads(Path(result["summary_path"]).read_text(encoding="utf-8"))
+    validation = summary["simplepim_manifest_validation"]
+    assert validation["status"] == "passed"
+    assert validation["allocation_attempted"] is False
+    assert validation["launch_attempted"] is False
+
+    manifest_path = next(
+        path
+        for path in (plan_dir / "native_session").rglob("*.json")
+        if json.loads(path.read_text(encoding="utf-8")).get("manifest_kind")
+        == "frontier_graph_request"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["route_id"] == m41.M41_ROUTE_ID
+    assert manifest["backend_id"] == m41.M41_BACKEND_ID
+    assert manifest["hardware_profile_version"] == m41.M41_PROFILE_ID
+    assert manifest["frontier_identity"]["route_id"] == m41.M41_ROUTE_ID
+    assert manifest["frontier_identity"]["backend_id"] == m41.M41_BACKEND_ID
+    assert manifest["frontier_identity"]["profile_id"] == m41.M41_PROFILE_ID
+
+    package_path = (manifest_path.parent / manifest["package_path"]).resolve()
+    assert manifest["resident_package_binding"]["package_sha256"] == hashlib.sha256(
+        package_path.read_bytes()
+    ).hexdigest()
+    assert summary["prepared_case"]["frontier_manifest"]["resident_package_binding"] == manifest[
+        "resident_package_binding"
+    ]
+
+
 def test_m41_execution_requires_explicit_physical_opt_in() -> None:
     with pytest.raises(ValueError, match="hardware_opt_in_missing"):
         m41._require_execution_environment({})
@@ -94,6 +150,10 @@ def test_m41_execution_requires_explicit_physical_opt_in() -> None:
 def test_simplepim_response_requires_complete_taskgraph(monkeypatch: pytest.MonkeyPatch) -> None:
     required = {
         "provider_id": SIMPLEPIM_PROVIDER_ID,
+        "route_id": M41_ROUTE_ID,
+        "backend_id": M41_BACKEND_ID,
+        "hardware_profile_version": M41_PROFILE_ID,
+        "profile_id": M41_PROFILE_ID,
         "control_provider": SIMPLEPIM_PROVIDER_ID,
         "kernel_provider": "thesis_resident_generic_contract",
         "simplepim_management_api_used": SIMPLEPIM_MANAGEMENT_API,
@@ -169,6 +229,129 @@ def test_simplepim_response_rejects_incorrect_authoritative_flags(
     )
     with pytest.raises(ValueError, match=field):
         validate_simplepim_frontier_response(response, {})
+
+
+@pytest.mark.parametrize(
+    ("field", "stale_value"),
+    [
+        ("route_id", m41.m31.ROUTE_ID),
+        ("backend_id", m41.m31.BACKEND_ID),
+        ("hardware_profile_version", m41.RAW_PROFILE_ID),
+        ("profile_id", m41.RAW_PROFILE_ID),
+    ],
+)
+def test_simplepim_execution_response_rejects_stale_provider_identity(
+    field: str,
+    stale_value: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = _simplepim_success_response()
+    response[field] = stale_value
+    monkeypatch.setattr(simplepim_session, "validate_frontier_native_response", lambda *_: None)
+
+    with pytest.raises(ValueError, match=field):
+        validate_simplepim_frontier_response(response, {})
+
+
+@pytest.mark.parametrize(
+    ("field", "stale_value"),
+    [
+        ("route_id", m41.m31.ROUTE_ID),
+        ("backend_id", m41.m31.BACKEND_ID),
+        ("hardware_profile_version", m41.RAW_PROFILE_ID),
+        ("profile_id", m41.RAW_PROFILE_ID),
+    ],
+)
+def test_simplepim_parser_response_rejects_stale_provider_identity(
+    field: str,
+    stale_value: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest_path = tmp_path / "request.json"
+    manifest_path.write_text("{}\n", encoding="ascii")
+    host_binary = tmp_path / "host"
+    build = SimpleNamespace(
+        simplepim=SimpleNamespace(
+            session_root=tmp_path,
+            build_dir=tmp_path,
+            host_binary=host_binary,
+        )
+    )
+    response = {
+        "route_id": M41_ROUTE_ID,
+        "backend_id": M41_BACKEND_ID,
+        "hardware_profile_version": M41_PROFILE_ID,
+        "profile_id": M41_PROFILE_ID,
+    }
+    response[field] = stale_value
+    monkeypatch.setattr(
+        simplepim_session,
+        "_run_command",
+        lambda *_args, **_kwargs: {
+            "returncode": 0,
+            "stdout_snippet": json.dumps(response),
+            "stderr_snippet": "",
+        },
+    )
+    monkeypatch.setattr(
+        simplepim_session,
+        "validate_frontier_package_validation_response",
+        lambda *_args: None,
+    )
+
+    with pytest.raises(ValueError, match=field):
+        simplepim_session.validate_simplepim_frontier_manifest(
+            build,
+            manifest_path=manifest_path,
+            profile=m41.load_upmem_hardware_taskgraph_m4_1_suite(SUITE_PATH).profile,
+            environment={},
+        )
+
+
+@pytest.mark.parametrize(
+    ("outer_identity", "nested_identity"),
+    [
+        (
+            (m41.m31.ROUTE_ID, m41.m31.BACKEND_ID, m41.RAW_PROFILE_ID),
+            (M41_ROUTE_ID, M41_BACKEND_ID, M41_PROFILE_ID),
+        ),
+        (
+            (M41_ROUTE_ID, M41_BACKEND_ID, M41_PROFILE_ID),
+            (m41.m31.ROUTE_ID, m41.m31.BACKEND_ID, m41.RAW_PROFILE_ID),
+        ),
+    ],
+)
+def test_simplepim_manifest_rewrite_rejects_mixed_outer_and_nested_identity(
+    outer_identity: tuple[str, str, str],
+    nested_identity: tuple[str, str, str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest_path = tmp_path / "request.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "route_id": outer_identity[0],
+                "backend_id": outer_identity[1],
+                "hardware_profile_version": outer_identity[2],
+                "frontier_identity": {
+                    "route_id": nested_identity[0],
+                    "backend_id": nested_identity[1],
+                    "profile_id": nested_identity[2],
+                },
+            }
+        ),
+        encoding="ascii",
+    )
+    build = SimpleNamespace(simplepim=SimpleNamespace(session_root=tmp_path))
+    monkeypatch.setattr(simplepim_session, "_validate_frontier_manifest", lambda *_: None)
+
+    with pytest.raises(ValueError, match="outer and nested"):
+        simplepim_session.rewrite_simplepim_frontier_manifest(
+            manifest_path,
+            build=build,
+        )
 
 
 def test_cpu_reference_contract_accepts_float32_rounding() -> None:
@@ -325,6 +508,10 @@ def test_m41_report_rejects_invalid_pair_error_metrics(tmp_path: Path) -> None:
 def _simplepim_success_response() -> dict[str, object]:
     return {
         "provider_id": SIMPLEPIM_PROVIDER_ID,
+        "route_id": M41_ROUTE_ID,
+        "backend_id": M41_BACKEND_ID,
+        "hardware_profile_version": M41_PROFILE_ID,
+        "profile_id": M41_PROFILE_ID,
         "control_provider": SIMPLEPIM_PROVIDER_ID,
         "kernel_provider": "thesis_resident_generic_contract",
         "simplepim_management_api_used": SIMPLEPIM_MANAGEMENT_API,

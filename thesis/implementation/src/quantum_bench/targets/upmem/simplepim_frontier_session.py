@@ -16,6 +16,7 @@ import subprocess
 import time
 from typing import Any, Mapping
 
+from quantum_bench.core.jsonio import write_json
 from quantum_bench.core.records import JsonDict
 from quantum_bench.targets.upmem.hardware_frontier_session import (
     BUILD_TIMEOUT_S,
@@ -43,6 +44,7 @@ from quantum_bench.targets.upmem.hardware_taskgraph_frontier import (
     BACKEND_ID as RAW_BACKEND_ID,
     PROFILE_ID as RAW_PROFILE_ID,
     ROUTE_ID as RAW_ROUTE_ID,
+    validate_frontier_package_validation_response,
     validate_frontier_native_response,
     validate_frontier_output_file,
 )
@@ -252,6 +254,141 @@ def build_simplepim_frontier_session(
     )
 
 
+def _raw_identity_manifest(manifest: Mapping[str, Any]) -> JsonDict:
+    """Return the shared ABI view used by the frozen raw frontier validator."""
+
+    normalized = dict(manifest)
+    normalized.update(
+        route_id=RAW_ROUTE_ID,
+        backend_id=RAW_BACKEND_ID,
+        hardware_profile_version=RAW_PROFILE_ID,
+        profile_id=RAW_PROFILE_ID,
+    )
+    identity = normalized.get("frontier_identity")
+    if isinstance(identity, Mapping):
+        normalized["frontier_identity"] = {
+            **dict(identity),
+            "route_id": RAW_ROUTE_ID,
+            "backend_id": RAW_BACKEND_ID,
+            "profile_id": RAW_PROFILE_ID,
+        }
+    return normalized
+
+
+def rewrite_simplepim_frontier_manifest(
+    manifest_path: Path,
+    *,
+    build: SimplePimFrontierBuild,
+) -> JsonDict:
+    """Rewrite only provider identity fields for the SimplePIM host binary.
+
+    The resident package and all scientific inputs remain byte-identical. The
+    SimplePIM binary validates its M4.1 envelope before it normalizes that
+    envelope to the frozen M3.1 resident ABI internally.
+    """
+
+    root = build.simplepim.session_root.resolve()
+    manifest_file = _inside_session(root, manifest_path, "frontier manifest")
+    manifest = _read_manifest(manifest_file)
+    raw_view = _raw_identity_manifest(manifest)
+    identity = manifest.get("frontier_identity")
+    if not isinstance(identity, Mapping):
+        raise ValueError("manifest_parse_failed: frontier identity is missing")
+    current_identity = (
+        manifest.get("route_id"),
+        manifest.get("backend_id"),
+        manifest.get("hardware_profile_version"),
+    )
+    nested_identity = (
+        identity.get("route_id"),
+        identity.get("backend_id"),
+        identity.get("profile_id"),
+    )
+    expected_raw = (RAW_ROUTE_ID, RAW_BACKEND_ID, RAW_PROFILE_ID)
+    expected_simplepim = (M41_ROUTE_ID, M41_BACKEND_ID, M41_PROFILE_ID)
+    if current_identity != nested_identity:
+        raise ValueError(
+            "hardware_profile_violation: frontier outer and nested provider identities differ"
+        )
+    if current_identity not in (expected_raw, expected_simplepim):
+        raise ValueError("hardware_profile_violation: frontier provider identity is invalid")
+
+    # Validate package, slot, operation, DPU-count and path contracts through
+    # the unchanged M3.1 validator before changing the provider envelope.
+    _validate_frontier_manifest(raw_view, build.simplepim, root)
+    rewritten = dict(manifest)
+    rewritten.update(
+        route_id=M41_ROUTE_ID,
+        backend_id=M41_BACKEND_ID,
+        hardware_profile_version=M41_PROFILE_ID,
+    )
+    rewritten["frontier_identity"] = {
+        **dict(identity),
+        "route_id": M41_ROUTE_ID,
+        "backend_id": M41_BACKEND_ID,
+        "profile_id": M41_PROFILE_ID,
+    }
+    write_json(manifest_file, rewritten)
+    return rewritten
+
+
+def _last_json_object(value: str) -> JsonDict | None:
+    for line in reversed(value.splitlines()):
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return None
+
+
+def validate_simplepim_frontier_manifest(
+    build: SimplePimFrontierBuild,
+    *,
+    manifest_path: Path,
+    profile: SimplePimFrontierProfile | Mapping[str, Any],
+    environment: Mapping[str, str],
+) -> JsonDict:
+    """Run the native parser-only check; it must not allocate a DPU."""
+
+    selected = parse_simplepim_frontier_profile(profile)
+    root = build.simplepim.session_root.resolve()
+    manifest_file = _inside_session(root, manifest_path, "frontier manifest")
+    manifest = _read_manifest(manifest_file)
+    command = (
+        str(build.simplepim.host_binary.resolve()),
+        "--validate-frontier-package",
+        str(manifest_file.resolve()),
+    )
+    completed = _run_command(
+        command,
+        cwd=build.simplepim.build_dir,
+        env=_sanitised_hardware_env(environment),
+        timeout_s=min(BUILD_TIMEOUT_S, selected.timeout_s),
+    )
+    payload = _last_json_object(str(completed.get("stdout_snippet", "")))
+    if completed.get("returncode") != 0 or payload is None:
+        detail = completed.get("stderr_snippet") or "native manifest validation failed"
+        raise RuntimeError(f"manifest_parse_failed: {detail}")
+    _require_simplepim_response_identity(payload)
+    normalized = dict(payload)
+    normalized.update(
+        route_id=RAW_ROUTE_ID,
+        backend_id=RAW_BACKEND_ID,
+        hardware_profile_version=RAW_PROFILE_ID,
+        profile_id=RAW_PROFILE_ID,
+    )
+    validate_frontier_package_validation_response(normalized, _raw_identity_manifest(manifest))
+    return {
+        "status": "passed",
+        "command": list(command),
+        "allocation_attempted": False,
+        "launch_attempted": False,
+        "response": payload,
+    }
+
+
 def execute_simplepim_frontier_session(
     build: SimplePimFrontierBuild,
     *,
@@ -268,8 +405,14 @@ def execute_simplepim_frontier_session(
     root = base.session_root.resolve()
     manifest_file = _inside_session(root, manifest_path, "frontier manifest")
     response_file = _inside_session(root, response_path, "frontier response")
+    rewrite_simplepim_frontier_manifest(manifest_file, build=build)
     manifest = _read_manifest(manifest_file)
-    _validate_frontier_manifest(manifest, base, root)
+    validate_simplepim_frontier_manifest(
+        build,
+        manifest_path=manifest_file,
+        profile=selected,
+        environment=environment,
+    )
     command = (
         str(base.host_binary.resolve()),
         "--frontier-package",
@@ -329,6 +472,7 @@ def validate_simplepim_frontier_response(
 
     if response.get("provider_id") != SIMPLEPIM_PROVIDER_ID:
         raise ValueError("response_evidence_invalid: SimplePIM provider identity mismatch")
+    _require_simplepim_response_identity(response)
     required = {
         "control_provider": SIMPLEPIM_PROVIDER_ID,
         "kernel_provider": "thesis_resident_generic_contract",
@@ -370,8 +514,22 @@ def validate_simplepim_frontier_response(
         route_id=RAW_ROUTE_ID,
         backend_id=RAW_BACKEND_ID,
         hardware_profile_version=RAW_PROFILE_ID,
+        profile_id=RAW_PROFILE_ID,
     )
-    validate_frontier_native_response(normalized, manifest)
+    validate_frontier_native_response(normalized, _raw_identity_manifest(manifest))
+
+
+def _require_simplepim_response_identity(response: Mapping[str, Any]) -> None:
+    for key, expected in (
+        ("route_id", M41_ROUTE_ID),
+        ("backend_id", M41_BACKEND_ID),
+        ("hardware_profile_version", M41_PROFILE_ID),
+        ("profile_id", M41_PROFILE_ID),
+    ):
+        if response.get(key) != expected:
+            raise ValueError(
+                f"response_evidence_invalid: SimplePIM response {key} mismatch"
+            )
 
 
 def simplepim_build_metadata(build: SimplePimFrontierBuild, root: Path) -> JsonDict:
@@ -441,6 +599,8 @@ __all__ = [
     "build_simplepim_frontier_session",
     "execute_simplepim_frontier_session",
     "parse_simplepim_frontier_profile",
+    "rewrite_simplepim_frontier_manifest",
     "simplepim_build_metadata",
+    "validate_simplepim_frontier_manifest",
     "validate_simplepim_frontier_response",
 ]

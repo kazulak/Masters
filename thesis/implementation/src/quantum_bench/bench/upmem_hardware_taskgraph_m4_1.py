@@ -38,7 +38,9 @@ from quantum_bench.targets.upmem.simplepim_frontier_session import (
     build_simplepim_frontier_session,
     execute_simplepim_frontier_session,
     parse_simplepim_frontier_profile,
+    rewrite_simplepim_frontier_manifest,
     simplepim_build_metadata,
+    validate_simplepim_frontier_manifest,
 )
 
 
@@ -155,6 +157,7 @@ def prepare_upmem_hardware_taskgraph_m4_1(
     status = "prepared"
     failure_stage = None
     failure_reason = None
+    manifest_validation: JsonDict | None = None
     try:
         case = suite.suite["cases"][0]
         prepared = m31._prepare_case(root_dir, plan_dir / "cases" / sanitize(case["case_id"]), suite, case)
@@ -165,6 +168,13 @@ def prepare_upmem_hardware_taskgraph_m4_1(
             )
             package = m31._write_package(
                 prepared, built.session_root, built.simplepim.dpu_binary, request_id="prepare"
+            )
+            rewrite_simplepim_frontier_manifest(package.manifest_path, build=built)
+            manifest_validation = validate_simplepim_frontier_manifest(
+                built,
+                manifest_path=package.manifest_path,
+                profile=suite.profile,
+                environment=env,
             )
             prepared = replace(prepared, package=package)
     except Exception as exc:
@@ -187,6 +197,7 @@ def prepare_upmem_hardware_taskgraph_m4_1(
             if built
             else {"attempted": build_attempted, "status": "failed" if build_attempted else "not_requested"}
         ),
+        "simplepim_manifest_validation": manifest_validation,
         "dpu_allocation_attempted": False,
         "dpu_launch_attempted": False,
         "raw_sdk_route_present": True,
