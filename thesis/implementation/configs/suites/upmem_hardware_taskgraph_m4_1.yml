@@ -1,0 +1,40 @@
+schema_version: 1
+suite_id: upmem_hardware_taskgraph_m4_1
+fail_fast: true
+
+metadata:
+  purpose: simplepim_management_assisted_two_dpu_taskgraph_differential
+  manual_invocation_required: true
+  deterministic_unitary_only: true
+  claim_boundary: functionality_and_host_observed_bringup_timing_only_no_speedup_scaling_concurrency_or_energy_claim
+  hardware_profile:
+    hardware_profile_version: hardware_frontier_two_dpu_m4_1_v1
+    target: hardware
+    requested_dpu_count: 2
+    tasklets_per_dpu: 1
+    numeric_mode: none
+    timeout_s: 30.0
+    performance_claim_applicable: false
+
+defaults:
+  warmups: 1
+  repeats: 5
+  timeout_s: 30.0
+  planner: {engine: opt_einsum, optimize: greedy}
+
+routes:
+  - id: raw_sdk
+    role: frozen_m3_1_raw_sdk_reference
+    required: true
+  - id: simplepim_management
+    role: simplepim_management_assisted_physical_allocation
+    required: true
+
+workloads:
+  - id: m4_1_ry_h_ry_a_opt_einsum_greedy
+    fixture_id: ry_h_ry_a
+    hardware_numeric_coverage: real
+    numeric_mode: none
+    circuit: {kind: qasm_file, name: one_qubit_ry_h_ry_a, path: configs/circuits/upmem_m2/one_qubit_ry_h_ry_a.qasm}
+    expected_path: [[0, 1], [0, 1], [0, 1]]
+    expected_output: [0.7986355100472927, 0.6018150231520483]

@@ -130,6 +130,24 @@ def main() -> int:
         help="build the M3.1 native source during --prepare-only; never allocates a DPU",
     )
 
+    upmem_hardware_taskgraph_m4_1_parser = sub.add_parser(
+        "upmem-hardware-taskgraph-m4-1",
+        help="run the guarded M4.1 raw-SDK/SimplePIM-management differential route",
+    )
+    upmem_hardware_taskgraph_m4_1_parser.add_argument(
+        "--suite", required=True, help="committed M4.1 differential hardware suite YAML"
+    )
+    upmem_hardware_taskgraph_m4_1_mode = (
+        upmem_hardware_taskgraph_m4_1_parser.add_mutually_exclusive_group(required=True)
+    )
+    upmem_hardware_taskgraph_m4_1_mode.add_argument("--prepare-only", action="store_true")
+    upmem_hardware_taskgraph_m4_1_mode.add_argument("--execute", action="store_true")
+    upmem_hardware_taskgraph_m4_1_parser.add_argument(
+        "--build",
+        action="store_true",
+        help="build both provider binaries during --prepare-only; never allocates a DPU",
+    )
+
     upmem_generic_feasibility_parser = sub.add_parser("upmem-generic-feasibility")
     upmem_generic_feasibility_parser.add_argument(
         "--suite", required=True, help="Suite path or preset name under configs/suites"
@@ -495,6 +513,30 @@ def main() -> int:
             )
         )
         return 0 if result.status == "completed" else 2
+    if args.command == "upmem-hardware-taskgraph-m4-1":
+        from quantum_bench.bench.upmem_hardware_taskgraph_m4_1 import (
+            prepare_upmem_hardware_taskgraph_m4_1,
+            run_upmem_hardware_taskgraph_m4_1,
+        )
+
+        if args.build and not args.prepare_only:
+            parser.error("--build is only valid with --prepare-only")
+        try:
+            if args.prepare_only:
+                result = prepare_upmem_hardware_taskgraph_m4_1(
+                    root_dir,
+                    suite_path=suite_path(args.suite, root_dir),
+                    build=args.build,
+                )
+                print(json.dumps(result, indent=2))
+                return 0 if result["status"] == "prepared" else 2
+            result = run_upmem_hardware_taskgraph_m4_1(
+                root_dir, suite_path=suite_path(args.suite, root_dir)
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(result, indent=2))
+        return 0 if result["status"] == "completed" else 2
     if args.command == "upmem-generic-feasibility":
         from quantum_bench.bench.upmem_generic_feasibility import (
             parse_csv_choices,
