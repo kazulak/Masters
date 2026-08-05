@@ -108,6 +108,14 @@ def qualification_plan(workdir: Path) -> dict[str, Any]:
             str(build_root / "outputs/result_u32.bin"),
         ],
     }
+    command_environment = {
+        "patch": {
+            # Git 2.25 can discover an enclosing worktree even with
+            # --no-index and silently skip this patch. Stop discovery above
+            # the isolated staged tree for deterministic patch application.
+            "GIT_CEILING_DIRECTORIES": str(staged_simplepim.parent),
+        }
+    }
     owned_hash = _hash_tree(source_root)
     library_hash = _hash_tree(external_root / "lib")
     patch_hash = _hash_file(source_root / PATCH_RELATIVE_PATH)
@@ -125,7 +133,8 @@ def qualification_plan(workdir: Path) -> dict[str, Any]:
         "staged_patch_path": staged_benchmark / PATCH_RELATIVE_PATH,
         "host_cc": host_cc,
         "commands": commands,
-        "command_fingerprint": _hash_json(commands),
+        "command_environment": command_environment,
+        "command_fingerprint": _hash_json({"commands": commands, "environment": command_environment}),
         "effective_compilers": {
             "host_cc": _compiler_identity(HOST_CC, Path(host_cc)),
             "dpu_cc": _compiler_identity(DPU_CC),
@@ -147,7 +156,10 @@ def qualification_plan(workdir: Path) -> dict[str, Any]:
             "staged_sha256": None,
             "applied": False,
             "replacement_count": 0,
-            "command_fingerprint": _hash_json(commands["patch"]),
+            "command_fingerprint": _hash_json(
+                {"command": commands["patch"], "environment": command_environment["patch"]}
+            ),
+            "environment": dict(command_environment["patch"]),
             "staged_source_before_sha256": None,
             "staged_source_after_sha256": None,
             "staged_target_sha256": None,
@@ -250,6 +262,7 @@ def _stage_sources(plan: Mapping[str, Any]) -> dict[str, Any]:
     result = subprocess.run(
         plan["commands"]["patch"],
         cwd=plan["staged_simplepim"],
+        env={**os.environ, **plan["command_environment"]["patch"]},
         capture_output=True,
         text=True,
         check=False,
@@ -269,7 +282,13 @@ def _stage_sources(plan: Mapping[str, Any]) -> dict[str, Any]:
         "staged_sha256": _hash_file(plan["staged_patch_path"]),
         "applied": True,
         "replacement_count": 2,
-        "command_fingerprint": _hash_json(plan["commands"]["patch"]),
+        "command_fingerprint": _hash_json(
+            {
+                "command": plan["commands"]["patch"],
+                "environment": plan["command_environment"]["patch"],
+            }
+        ),
+        "environment": dict(plan["command_environment"]["patch"]),
         "staged_source_before_sha256": source_before,
         "staged_source_after_sha256": source_after,
         "staged_target_sha256": _hash_file(staged_target),
@@ -562,6 +581,9 @@ def _base_payload(plan: Mapping[str, Any], status: str) -> dict[str, Any]:
         "source_hash": plan["source_fingerprint"]["combined_sha256"],
         "source_hashes": dict(plan["source_fingerprint"]),
         "command_fingerprint": plan["command_fingerprint"],
+        "command_environment": {
+            key: dict(value) for key, value in plan.get("command_environment", {}).items()
+        },
         "effective_compilers": plan["effective_compilers"],
         "staged_patch": dict(plan["staged_patch"]),
         "binary_hashes": {},

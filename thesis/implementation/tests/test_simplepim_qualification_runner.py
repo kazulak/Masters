@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import pytest
 from quantum_bench.providers.qualification import (
@@ -162,6 +163,35 @@ def test_staging_is_fresh_patched_and_does_not_mutate_upstream(tmp_path: Path) -
     drifted["source_fingerprint"]["patch_sha256"] = "0" * 64
     with pytest.raises(ValueError, match="changed since qualification plan"):
         runner._stage_sources(drifted)
+
+
+def test_staging_applies_patch_inside_parent_git_worktree(tmp_path: Path) -> None:
+    parent_worktree = tmp_path / "parent-worktree"
+    parent_worktree.mkdir()
+    subprocess.run(["git", "init", "--quiet", str(parent_worktree)], check=True)
+
+    plan = runner.qualification_plan(parent_worktree / "qualification")
+    evidence = runner._stage_sources(plan)
+    target = plan["staged_simplepim"] / runner.PATCH_TARGET
+
+    assert evidence["applied"] is True
+    assert evidence["replacement_count"] == 2
+    assert target.read_text(encoding="utf-8").count(runner.FIXED_UNROLL_LINE) == 2
+    assert runner.BUGGY_UNROLL_LINE not in target.read_text(encoding="utf-8")
+    assert plan["command_environment"]["patch"]["GIT_CEILING_DIRECTORIES"] == str(
+        plan["staged_simplepim"].parent
+    )
+    assert evidence["environment"] == plan["command_environment"]["patch"]
+
+    expected_fingerprint = runner._hash_json(
+        {
+            "command": plan["commands"]["patch"],
+            "environment": plan["command_environment"]["patch"],
+        }
+    )
+    assert evidence["command_fingerprint"] == expected_fingerprint
+
+
 def test_patch_timeout_emits_structured_failure(tmp_path: Path, monkeypatch, capsys) -> None:
     _physical(monkeypatch)
     monkeypatch.setattr(runner, "_hardware_device_preflight", _preflight)
