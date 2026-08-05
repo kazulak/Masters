@@ -192,6 +192,15 @@ def test_staging_applies_patch_inside_parent_git_worktree(tmp_path: Path) -> Non
     assert evidence["command_fingerprint"] == expected_fingerprint
 
 
+def test_qualification_host_links_libdl_after_upmem_libraries() -> None:
+    makefile = (ROOT / "native/upmem/simplepim/qualification/Makefile").read_text(encoding="utf-8")
+    link_line = next(line for line in makefile.splitlines() if "$(HOST_CC)" in line and "-o $@" in line)
+
+    assert "`dpu-pkg-config --cflags --libs dpu`" in link_line
+    assert "-ldl" in link_line
+    assert link_line.index("`dpu-pkg-config --cflags --libs dpu`") < link_line.index("-ldl")
+
+
 def test_patch_timeout_emits_structured_failure(tmp_path: Path, monkeypatch, capsys) -> None:
     _physical(monkeypatch)
     monkeypatch.setattr(runner, "_hardware_device_preflight", _preflight)

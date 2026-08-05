@@ -21,7 +21,7 @@ bin:
 	mkdir -p bin
 
 bin/host: host.c Param.h small_table_init.c $(LIB_HOST) | bin
-	$(HOST_CC) $(HOST_CFLAGS) -o $@ host.c small_table_init.c $(LIB_HOST) -fopenmp -lm `dpu-pkg-config --cflags --libs dpu`
+	$(HOST_CC) $(HOST_CFLAGS) -fopenmp -o $@ host.c small_table_init.c $(LIB_HOST) `dpu-pkg-config --cflags --libs dpu` -lm -ldl
 
 bin/dpu_init_binary: ../../lib/management/SmallTableInit_dpu.c | bin
 	$(DPU_CC) $(DPU_CFLAGS) -o $@ $<
