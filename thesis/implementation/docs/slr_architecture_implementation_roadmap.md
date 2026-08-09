@@ -75,7 +75,7 @@ a small final architecture.
 | UPMEM hardware | Two terminal contraction-index slices, exactly two physical DPUs, one tasklet per DPU | M2 physical control-path acceptance passed on ETH; second slice is zero-work in the current fixture, so useful two-slice acceptance remains open |
 | Numerical modes | Float32, per-task int8/int32, split real/imaginary complex | Active in bounded routes |
 | Evidence system | Normalized records, claim guards, reports, plots, snapshots | Active instrumentation |
-| External sources | QuEST, SimplePIM, and PID-Comm pinned | QuEST active; SimplePIM harness/probe implemented locally, physical qualification pending; PID-Comm is a separate blocked lane |
+| External sources | QuEST, SimplePIM, and PID-Comm pinned | QuEST active; SimplePIM M4.2/M4.3 physical qualification passed; PID-Comm remains central, with current integration pending |
 
 ### Central architecture not implemented
 
@@ -487,8 +487,9 @@ native package.
 
 ### M1: physical qualification of all four central external providers
 
-The qualification harness and SimplePIM probe are implemented locally;
-physical qualification is pending. M1 is therefore not complete.
+The qualification harness and SimplePIM probe are implemented locally. The
+broader four-provider M1 gate is not complete; the later M4.2/M4.3 SimplePIM
+physical qualification is recorded below.
 
 The local workflow is `make upmem-provider-plan`. After a commit is checked out
 cleanly on ETH, the currently executable lane is:
@@ -588,18 +589,29 @@ tasks.
 
 ### M4: SimplePIM operators, resident execution, tiling and tasklets
 
-M4.2 now qualifies the pinned SimplePIM map/zip/reduce operator API on two
-physical DPUs using one fixed rank-one kernel qualification fixture. It is not
-a `ContractionTask` or `TaskGraph` adapter. Its communication provider is
-`host_mediated`; PID-Comm and ATiM are not yet invoked. This is a qualification
-step, not general TaskGraph execution.
+M4.2 is physically qualified on two DPUs with explicit
+`allocation_profile=backend=hw`: the pinned SimplePIM rank-one primitive
+completed with exact `result_int64=209` across the declared repetitions. This
+is a bounded operator qualification with host-mediated reduction, not a
+speedup, energy, scaling, persistence, or general TaskGraph claim.
 
-The next M4 step is a real `ContractionTask`/`TaskGraph` adapter that transports
-its operands and preserves plan identity at the native operator interface.
-After that, add resident intermediates,
-bounded tiling, and tasklet measurement without expanding the claim boundary.
+M4.3 is physically qualified as a TaskGraph-derived operand adapter on two
+DPUs, with exact `reference_int64=320` and one source task completing once. It
+is a host-orchestrated adapter into the M4.2 native route, not a native or
+general TaskGraph protocol. PID-Comm remains a central upcoming architecture
+layer; only its current integration is blocked/pending, not optional. ATiM also
+remains an upcoming central layer.
 
-### M4.3: intra-DPU tiling and tasklets
+### M4.4: bounded persistent two-task chain
+
+Implement a bounded two-task dependency chain over one persistent SimplePIM
+allocation. Make tensor/table ownership explicit for both tasks and their
+intermediate, and use host-orchestrated dispatch with auditable dependency
+completion and exact final validation. This is the next KISS integration
+target; it does not claim native/general TaskGraph support, speedup, energy, or
+scaling.
+
+### M4.5: intra-DPU tiling and tasklets
 
 Introduce bounded output/input tiling and configurable tasklet partitioning
 inside one DPU. Measure tile shape, WRAM use, synchronization, ownership,
