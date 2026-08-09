@@ -1,0 +1,36 @@
+schema_version: 1
+suite_id: upmem_hardware_simplepim_rank1_m4_2
+fail_fast: true
+
+metadata:
+  purpose: simplepim_rank1_operator_qualification
+  manual_invocation_required: true
+  claim_boundary: functionality_only_no_general_taskgraph_operand_transport_speedup_scaling_or_energy
+  hardware_profile:
+    hardware_profile_version: hardware_simplepim_rank1_dot_m4_2_v1
+    target: hardware
+    backend_id: upmem_sdk_hardware_simplepim_rank1_dot_m4_2
+    route_id: upmem_tn_hardware_simplepim_rank1_dot_m4_2
+    requested_dpu_count: 2
+    initialization_tasklets_per_dpu: 1
+    operator_tasklets_per_dpu: 12
+    numeric_mode: int32_inputs_int64_accumulator
+    vector_length: 256
+    synchronous_execution: true
+    performance_claim_applicable: false
+
+defaults:
+  warmups: 1
+  repeats: 5
+  timeout_s: 120.0
+
+workloads:
+  - id: m4_2_rank1_dot_fixed_256
+    numeric_mode: int32_inputs_int64_accumulator
+    fixture_version: fixed_rank1_dot_v1
+    qualification_fixture:
+      task_count: 1
+      task_kind: rank1_contraction
+      rank: 1
+      vector_length: 256
+      operand_transport: native_fixed_deterministic_operands

@@ -586,7 +586,20 @@ coverage, skipped arithmetic, avoided bytes, fallback rate, and rejection
 reasons are reported. Provider results are not generalized beyond eligible
 tasks.
 
-### M4: intra-DPU tiling and tasklets
+### M4: SimplePIM operators, resident execution, tiling and tasklets
+
+M4.2 now qualifies the pinned SimplePIM map/zip/reduce operator API on two
+physical DPUs using one fixed rank-one kernel qualification fixture. It is not
+a `ContractionTask` or `TaskGraph` adapter. Its communication provider is
+`host_mediated`; PID-Comm and ATiM are not yet invoked. This is a qualification
+step, not general TaskGraph execution.
+
+The next M4 step is a real `ContractionTask`/`TaskGraph` adapter that transports
+its operands and preserves plan identity at the native operator interface.
+After that, add resident intermediates,
+bounded tiling, and tasklet measurement without expanding the claim boundary.
+
+### M4.3: intra-DPU tiling and tasklets
 
 Introduce bounded output/input tiling and configurable tasklet partitioning
 inside one DPU. Measure tile shape, WRAM use, synchronization, ownership,

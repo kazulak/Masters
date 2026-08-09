@@ -27,6 +27,8 @@ UPMEM_HW_SLICED_RESIDENT_M2_3_SUITE ?= configs/suites/upmem_hardware_sliced_resi
 UPMEM_HW_FRONTIER_M3_1_SUITE ?= configs/suites/upmem_hardware_frontier_m3_1.yml
 UPMEM_HW_TASKGRAPH_M4_1_SUITE ?= configs/suites/upmem_hardware_taskgraph_m4_1.yml
 UPMEM_HW_TASKGRAPH_M4_1_RUN ?= runs/evidence/upmem_hardware_taskgraph_m4_1/upmem_hw_taskgraph_m4_1/latest
+UPMEM_HW_M4_2_SUITE ?= configs/suites/upmem_hardware_simplepim_rank1_m4_2.yml
+UPMEM_HW_M4_2_RUN ?= runs/evidence/upmem_hardware_simplepim_rank1_m4_2/upmem_hw_m4_2/latest
 UPMEM_HW_M2_3_RUN ?= runs/evidence/upmem_hardware_sliced_resident_m2_3/upmem_hw_sliced_resident/latest
 UPMEM_PROVIDER_CATALOG ?= configs/qualification/upmem_provider_m1.yml
 EVIDENCE_INBOX ?= runs/inbox/eth
@@ -63,6 +65,9 @@ PUBLIC_TARGETS := \
 	upmem-hw-m4-1-plan \
 	upmem-hw-m4-1 \
 	upmem-hw-m4-1-report \
+	upmem-hw-m4-2-plan \
+	upmem-hw-m4-2 \
+	upmem-hw-m4-2-report \
 	upmem-provider-plan \
 	upmem-provider-qualify \
 	evidence-inbox \
@@ -111,6 +116,9 @@ help:
 		'  make upmem-hw-m4-1-plan  Prepare/build the M4.1 raw/SimplePIM differential fixture; never allocates a DPU' \
 		'  make upmem-hw-m4-1  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; execute the M4.1 differential fixture' \
 		'  make upmem-hw-m4-1-report  Inspect M4.1 differential evidence; no speedup report is generated' \
+		'  make upmem-hw-m4-2-plan  Prepare/build/parser-check the fixed SimplePIM rank-1 qualification; never allocates a DPU' \
+		'  make upmem-hw-m4-2  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; execute the M4.2 SimplePIM operator qualification' \
+		'  make upmem-hw-m4-2-report  Inspect M4.2 functionality evidence; no speedup report is generated' \
 		'  make upmem-provider-plan  Prepare a unique M1 provider qualification plan; never builds or allocates hardware' \
 		'  make upmem-provider-qualify PROVIDER=<id>  Execute one selected physical provider qualification' \
 		'  make evidence-inbox     Create the ignored inbox for copied ETH evidence bundles' \
@@ -256,6 +264,17 @@ upmem-hw-m4-1:
 
 upmem-hw-m4-1-report:
 	$(PY_ENV) $(PYTHON) scripts/upmem_m4_1_report.py --input $(UPMEM_HW_TASKGRAPH_M4_1_RUN)
+
+upmem-hw-m4-2-plan:
+	$(BENCH) upmem-hardware-simplepim-rank1-m4-2 --suite $(UPMEM_HW_M4_2_SUITE) --prepare-only --build
+
+upmem-hw-m4-2:
+	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1 to execute physical hardware' >&2; exit 2; }
+	$(BENCH) upmem-hardware-simplepim-rank1-m4-2 --suite $(UPMEM_HW_M4_2_SUITE) --execute
+
+upmem-hw-m4-2-report:
+	@test -n "$(UPMEM_HW_M4_2_RUN)" || { echo 'Set UPMEM_HW_M4_2_RUN=<physical M4.2 evidence directory>' >&2; exit 2; }
+	$(PY_ENV) $(PYTHON) scripts/upmem_m4_2_report.py --input $(UPMEM_HW_M4_2_RUN)
 
 upmem-hw-taskgraph-resident-report:
 	$(PY_ENV) $(PYTHON) scripts/research_benchmark_pack.py check-resident-evidence --input $(UPMEM_HW_TASKGRAPH_RESIDENT_RUN)
