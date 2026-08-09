@@ -16,6 +16,7 @@ CHAIN_CASE_ID = "simplepim_two_task_chain_fixture"
 CHAIN_INPUT_IDS = ("chain_a", "chain_b", "chain_c")
 CHAIN_INTERMEDIATE_ID = "result_0"
 CHAIN_OUTPUT_ID = "result_1"
+CHAIN_EXPECTED_PATH = ((0, 1), (0, 1))
 
 
 @dataclass(frozen=True)
@@ -86,14 +87,15 @@ def validate_simplepim_chain_workload(workload: SimplePimChainWorkload) -> None:
     graph = workload.graph
     if graph.network != workload.network.spec or len(graph.tasks) != 2:
         raise ValueError("simplepim_chain_graph_shape_mismatch")
-    if graph.path != ((0, 1), (0, 1)):
+    # This fixture is intentionally deterministic; keep the exact path pinned.
+    if graph.path != CHAIN_EXPECTED_PATH:
         raise ValueError("simplepim_chain_path_mismatch")
     first, second = graph.tasks
     if first.input_tensor_ids != CHAIN_INPUT_IDS[:2] or first.output_tensor_id != CHAIN_INTERMEDIATE_ID:
         raise ValueError("simplepim_chain_first_task_mismatch")
     if second.dependencies != (first.id,) or second.output_tensor_id != CHAIN_OUTPUT_ID:
         raise ValueError("simplepim_chain_dependency_mismatch")
-    if set(second.input_tensor_ids) != {CHAIN_INPUT_IDS[2], CHAIN_INTERMEDIATE_ID}:
+    if second.input_tensor_ids != (CHAIN_INPUT_IDS[2], CHAIN_INTERMEDIATE_ID):
         raise ValueError("simplepim_chain_second_inputs_mismatch")
     if first.input_shapes != ((CHAIN_LENGTH,), (CHAIN_LENGTH,)) or first.output_shape != (CHAIN_LENGTH,):
         raise ValueError("simplepim_chain_intermediate_shape_mismatch")
@@ -106,4 +108,3 @@ def validate_simplepim_chain_workload(workload: SimplePimChainWorkload) -> None:
     expected = int(np.sum(workload.operands[0].astype(np.int64) * workload.operands[1] * workload.operands[2], dtype=np.int64))
     if workload.reference_int64 != expected:
         raise ValueError("simplepim_chain_reference_mismatch")
-
