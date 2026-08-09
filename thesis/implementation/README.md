@@ -10,16 +10,14 @@ GPU baselines, bounded UPMEM SDK-simulator execution, and reproducible evidence.
 It does **not** yet claim UPMEM hardware speedup or a fully general UPMEM tensor
 contraction kernel.
 
-The active physical route is the implemented M2 two-DPU sliced-resident MVP,
-documented in the [M2 ETH runbook](docs/upmem_hardware_sliced_resident_mvp_runbook.md).
-It is a foundation/MVP, not the full M2 architecture: two independent
-contraction-index slices are assigned to exactly two physical DPUs for the
-terminal one-operation real-valued X/H/Z boundary, then Python reconstructs the
-output by summing the two partial results. Implementation is complete; physical
-dispatch/reconstruction acceptance passed on ETH, but the current `|0>` fixture
-produces an all-zero second partial. Balanced useful-slice acceptance is still
-open. See the [ETH evidence audit](docs/upmem_m2_eth_evidence_analysis.md). The
-route makes no speedup, energy, scaling, or general TaskGraph claim.
+The active physical evidence is a sequence of bounded qualification lanes. M2.1
+useful-slice execution, M2.2 float32/requantized execution, M2.3 two-path/two-
+numeric-mode execution, M3.1 two-wave frontier dispatch, and M4.2--M4.4
+SimplePIM lanes have passed their declared physical functionality checks on ETH.
+These are separate fixtures and adapters, not one general executor. The M2
+sliced-resident foundation remains documented in the [M2 ETH runbook](docs/upmem_hardware_sliced_resident_mvp_runbook.md),
+and the M4 lanes are documented in their individual runbooks. None of these
+results supports a speedup, energy, scaling, or general-TaskGraph claim.
 
 The previous one-DPU MRAM-resident route remains readable as historical context.
 Dense, legacy generic/persistent, CPU frontier/hybrid, PIM bridge/frontier, and
@@ -28,11 +26,12 @@ route labels, tables, plots, and snapshot compatibility remain available for
 existing evidence.
 
 The historical status applies to those old runnable experiments, not to the
-target architecture. SimplePIM, PID-Comm, ATiM, and SparseP are central target
-providers behind thesis-owned planning and adapter interfaces, each for its own
-task class rather than as a universal execution route. Their physical
-qualification is an M1 gate in the roadmap; this wording does not claim that
-they are integrated into the current executor.
+target architecture. SimplePIM is physically qualified only for the bounded
+management/operator lanes demonstrated by M4.2--M4.4. The shared descriptor-
+driven M4.5 runtime is the active next phase; it has not yet passed physical
+acceptance. PID-Comm, ATiM, and SparseP remain subsequent provider/kernel/
+communication components behind thesis-owned interfaces, each for its own task
+class rather than as a universal execution route.
 
 Start with [ARCHITECTURE.md](ARCHITECTURE.md) for module ownership, external
 provenance, thesis contributions, and the planned UPMEM architecture. The fixed
@@ -104,10 +103,11 @@ The long run includes:
 - modeled TaskGraph scheduling and multi-DPU planning primitives, clearly
   excluded from executed serious baselines.
 
-The implemented M1 provider qualification workflow is documented in the
+The separate M1 provider qualification workflow is documented in the
 [UPMEM provider qualification runbook](docs/upmem_provider_qualification_runbook.md).
-The harness and SimplePIM probe are implemented locally; physical qualification
-is pending, so M1 is not complete.
+The SimplePIM physical probe passed its bounded functionality contract. The
+broader M1 gate remains incomplete because PID-Comm, ATiM, and SparseP have not
+yet passed their provider-specific physical qualification lanes.
 
 GPU execution requires a GPU-visible shell. On the local AMD machine the route
 uses QuEST HIP and verifies a real HIP program before emitting GPU rows. On a
@@ -192,13 +192,13 @@ probe only. It has no simulator or fallback path and makes no performance
 claim. Artifacts are stored under
 `runs/evidence/provider_qualification/simplepim/`; admission requires the
 passed fields and fingerprints in the [runbook](docs/upmem_provider_qualification_runbook.md).
-PID-Comm is a separate 2021.3.0/AVX512/1024-DPU lane; ATiM's official artifact
-and SparseP source remain unpinned and blocked, while all four remain central
-planned provider/kernel/communication components for later milestones.
+That broader M1 catalog gate remains separate from the passed M4 SimplePIM
+lanes. PID-Comm is a separate 2021.3.0/AVX512/1024-DPU lane; ATiM's official
+artifact and SparseP source remain unpinned and blocked.
 
 The retired dense and legacy TaskGraph runs remain readable as historical
 evidence, but are no longer runnable through the public CLI or Makefile. The
-M2 route uses the explicit physical SDK contract and requires
+bounded physical routes use explicit SDK/SimplePIM contracts and require
 `UPMEM_ALLOW_PHYSICAL_HARDWARE=1`; it rejects simulator selectors and has no
 CPU fallback. Its exact allocation, launch, synchronization, reconstruction,
 validation, and normalized-record acceptance fields are defined by the
@@ -206,8 +206,8 @@ validation, and normalized-record acceptance fields are defined by the
 
 The active simulator command is strict generic-only UPMEM SDK evidence. It
 records bounded TaskGraph validation and simulator timing, never hardware
-timing or hardware speedup. Historical dense and SimplePIM bridge artifacts are
-readable through the normalized report/snapshot readers only.
+timing or hardware speedup. Older dense and bridge artifacts remain readable
+through the normalized report/snapshot readers only.
 
 Modeled planner evidence has its own comparison namespace:
 
@@ -256,10 +256,9 @@ silently change benchmark-source cleanliness.
 Current limitation:
 
 > The current UPMEM evidence is bounded to the documented generic simulator and
-> the M2 two-DPU sliced-resident terminal boundary. Physical control-path
-> acceptance passed, but balanced useful-slice execution is still pending;
-> fully general distributed, operation-aware, and hardware-calibrated UPMEM TN
-> execution does not yet exist.
+> separate physical M2--M4 qualification lanes. The descriptor-driven M4.5
+> shared runtime, fully general distributed operation-aware execution, provider
+> collectives, and hardware-calibrated UPMEM TN execution do not yet exist.
 
 ## Generated Cleanup
 

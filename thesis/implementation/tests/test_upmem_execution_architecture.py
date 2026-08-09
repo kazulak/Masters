@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError, replace
+from pathlib import Path
 
 import pytest
 
@@ -155,7 +156,13 @@ def test_upmem_provider_registry_is_fixed_and_truthful() -> None:
     assert resident.route_id is None
     assert resident.benchmark_surface_id == "upmem_tn_hardware_taskgraph_resident"
     assert resident.qualification_status == "guarded"
-    assert all(UPMEM_PROVIDER_REGISTRY[name].qualification_status == "planned" for name in ("simplepim", "pid_comm", "atim", "sparsep"))
+    simplepim = UPMEM_PROVIDER_REGISTRY["simplepim"]
+    assert simplepim.qualification_scope == "bounded_physical_management_operator_qualification"
+    assert simplepim.qualification_status == "guarded"
+    assert simplepim.availability_status == "environment_dependent"
+    assert simplepim.benchmark_surface_id == "upmem_tn_hardware_simplepim_bounded"
+    assert "general TaskGraph executor" in " ".join(simplepim.notes)
+    assert all(UPMEM_PROVIDER_REGISTRY[name].qualification_status == "planned" for name in ("pid_comm", "atim", "sparsep"))
     with pytest.raises(TypeError):
         UPMEM_PROVIDER_REGISTRY["new"] = UPMEM_PROVIDER_REGISTRY["simplepim"]  # type: ignore[index]
 
@@ -165,3 +172,21 @@ def test_provider_route_ids_are_referentially_integral(tmp_path) -> None:
     for descriptor in UPMEM_PROVIDER_REGISTRY.values():
         if descriptor.route_id is not None:
             assert descriptor.route_id in routes
+
+
+def test_public_status_docs_do_not_keep_superseded_milestone_claims() -> None:
+    root = Path(__file__).parents[1]
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    architecture = (root / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    roadmap = (root / "docs" / "slr_architecture_implementation_roadmap.md").read_text(encoding="utf-8")
+
+    assert "balanced useful-slice acceptance is still open" not in readme
+    assert "physical qualification\nis pending" not in readme
+    assert "SimplePIM | External pinned repository | Task-specific target" not in architecture
+    assert "Bounded physical management/operator qualification" in architecture
+    assert "the current second partial is zero" not in architecture
+    assert "does not prove that either planner optimized physical" in architecture
+    assert "host-mediated transfer is the initial communication provider" in architecture
+    assert "M4.5: descriptor-driven shared runtime" in roadmap
+    assert "Complete M2.1 before interpreting" not in roadmap
+    assert "bounded_taskgraph_executed" in architecture

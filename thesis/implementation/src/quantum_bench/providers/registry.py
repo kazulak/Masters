@@ -21,6 +21,7 @@ UPMEM_PROVIDER_DESCRIPTOR_SCHEMA_VERSION = "upmem_provider_descriptor_v1"
 ProviderQualificationScope = Literal[
     "sdk_simulator_execution_contract",
     "resident_hardware_correctness_foundation",
+    "bounded_physical_management_operator_qualification",
     "not_integrated",
 ]
 ProviderQualificationStatus = Literal["validated", "guarded", "planned"]
@@ -79,14 +80,18 @@ _UPMEM_PROVIDER_DESCRIPTORS = (
         provider_id="simplepim",
         display_name="SimplePIM",
         route_id=None,
-        benchmark_surface_id=None,
-        backend_id="simplepim",
-        qualification_scope="not_integrated",
-        qualification_status="planned",
-        availability_status="planned",
+        benchmark_surface_id="upmem_tn_hardware_simplepim_bounded",
+        backend_id="simplepim_bounded_physical",
+        qualification_scope="bounded_physical_management_operator_qualification",
+        qualification_status="guarded",
+        availability_status="environment_dependent",
         implementation="external_adapter",
         execution_modes=("upmem_hardware",),
-        notes=("Target adapter; not integrated into the current executor.",),
+        correctness_scope="bounded_physical_management_and_operator_lanes",
+        notes=(
+            "Physically qualified only for bounded M4.2/M4.3/M4.4 management and operator lanes.",
+            "Not a general TaskGraph executor and not a performance claim.",
+        ),
     ),
     UpmemProviderDescriptor(
         provider_id="pid_comm",

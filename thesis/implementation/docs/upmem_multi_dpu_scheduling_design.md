@@ -1,7 +1,8 @@
 # UPMEM Multi-DPU Scheduling Design
 
-Status: M2 foundation/MVP implementation complete; physical ETH acceptance
-pending.
+Status: M2 foundation/MVP and M2.1 useful-slice physical acceptance complete.
+M3.1 also passed its bounded two-wave frontier qualification. This document
+still describes the bounded contract, not a general scheduler.
 
 This document separates the committed M2 execution contract from the target
 multi-DPU scheduler. M2 proves one fixed form of coarse parallelism. It does
@@ -39,7 +40,9 @@ those details here.
 The implementation records route/backend/profile identity, source hashes, slice
 and DPU ownership, allocation, asynchronous launch, synchronization, release,
 partial-output reconstruction, validation, transfer accounting, timings, and
-failure evidence in normalized records. Physical acceptance is still pending.
+failure evidence in normalized records. Physical acceptance passed for the
+declared bounded M2/M2.1 contract. The result is functionality evidence only;
+it is not a general scheduler or a scaling result.
 
 The M2 MVP permits only a functionality and diagnostic timing statement. It
 does not support a speedup, energy, scaling, communication-performance, or
@@ -58,18 +61,18 @@ acceptance.
 
 ## Subsequent Milestones
 
-The M2 physical control path passed on ETH, but its fixed `|0>` fixtures leave
-the second slice with an all-zero partial. M2.1 must first demonstrate two
-nonzero slice contributions and correct the normalized parallelism metadata.
-After that bounded correction, M3 is the next target: an operation-classification
-and provider registry with an explicit generic fallback, followed by the first
-row-swap/permutation specialized gate kernel. M2 expansion to terminal
-contractions in larger graphs remains explicit alongside that work. See the
-[ETH evidence audit](upmem_m2_eth_evidence_analysis.md).
+The original M2 control fixture used a `|0>` case whose second slice was zero;
+the separate M2.1 fixture corrected this and passed with two nonzero useful
+partials. M3.1 then passed dependency-safe three-task/two-wave dispatch on two
+DPUs, without an overlap or scaling claim. The next architecture target is the
+descriptor-driven M4.5 shared runtime, which must use explicit provider and
+execution-plan terminology rather than treating these fixed lanes as a general
+TaskGraph executor. See the [ETH evidence audit](upmem_m2_eth_evidence_analysis.md).
 
-SimplePIM, PID-Comm, ATiM, and SparseP are central planned components of the
-subsequent architecture: SimplePIM for management/distribution and array
-primitives, PID-Comm for relocation and collectives, ATiM for generated dense
-local kernels, and SparseP for sparse formats, kernels, and load balancing. They
-are provider/kernel/communication components behind thesis-owned planning and
-adapter interfaces, not optional curiosities or current M2 substitutes.
+SimplePIM, PID-Comm, ATiM, and SparseP are central components of the subsequent
+architecture: SimplePIM is physically qualified only for bounded
+management/operator lanes, PID-Comm is for relocation and collectives, ATiM is
+for generated dense local kernels, and SparseP is for sparse formats, kernels,
+and load balancing. They are provider/kernel/communication components behind
+thesis-owned planning and adapter interfaces, not interchangeable runtimes or
+current M2 substitutes.

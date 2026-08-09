@@ -70,12 +70,12 @@ a small final architecture.
 | Contraction planning | opt_einsum, cotengra, custom UPMEM planner v1/v2 | Active; custom objective not hardware calibrated |
 | TaskGraph | Hashed pairwise tasks with dependencies and execution identity | Active |
 | CPU/GPU baselines | QuEST full state, Quimb/cotengra TN, internal CPU replay | Active |
-| Slicing/frontier models | Internal slice-aware graph, reconstruction, frontier waves | M2 two-slice physical control path passed; balanced useful-slice and larger-graph expansion remain future work |
+| Slicing/frontier models | Internal slice-aware graph, reconstruction, frontier waves | M2.1 useful-slice and M3.1 bounded two-wave physical qualifications passed; general expansion remains future work |
 | UPMEM simulator | Strict bounded generic TaskGraph route | Active diagnostic |
-| UPMEM hardware | Two terminal contraction-index slices, exactly two physical DPUs, one tasklet per DPU | M2 physical control-path acceptance passed on ETH; second slice is zero-work in the current fixture, so useful two-slice acceptance remains open |
+| UPMEM hardware | Bounded M2/M3.1/M4.2--M4.4 physical qualification lanes | Declared functionality checks passed on ETH; routes remain separate fixtures and do not form a general executor |
 | Numerical modes | Float32, per-task int8/int32, split real/imaginary complex | Active in bounded routes |
 | Evidence system | Normalized records, claim guards, reports, plots, snapshots | Active instrumentation |
-| External sources | QuEST, SimplePIM, and PID-Comm pinned | QuEST active; SimplePIM M4.2/M4.3 physical qualification passed; PID-Comm remains central, with current integration pending |
+| External sources | QuEST, SimplePIM, and PID-Comm pinned | QuEST active; SimplePIM M4.2--M4.4 bounded physical qualification passed; PID-Comm remains central, with current integration pending |
 
 ### Central architecture not implemented
 
@@ -488,8 +488,9 @@ native package.
 ### M1: physical qualification of all four central external providers
 
 The qualification harness and SimplePIM probe are implemented locally. The
-broader four-provider M1 gate is not complete; the later M4.2/M4.3 SimplePIM
-physical qualification is recorded below.
+broader four-provider M1 gate is not complete; the later M4.2--M4.4
+SimplePIM physical qualification is recorded below as bounded
+management/operator use, not as closure of the M1 catalog gate.
 
 The local workflow is `make upmem-provider-plan`. After a commit is checked out
 cleanly on ETH, the currently executable lane is:
@@ -547,12 +548,10 @@ ETH commands,
 acceptance fields, artifacts, and failure handling are maintained in the
 [M2 runbook](upmem_hardware_sliced_resident_mvp_runbook.md).
 
-The [ETH evidence audit](upmem_m2_eth_evidence_analysis.md) found that every
-slice-1 partial is zero. This follows from slicing the input-state index of a
-single gate applied to `|0>`; it is not a native execution error. The run closes
-the physical control-path gate but not the useful-work gate. M2.1 must execute a
-bounded case in which both DPU slices contribute nonzero partials and must fix
-the contradictory generic normalized metadata before any parallelism report.
+The original control fixture produced an all-zero second partial because its
+single gate was applied to `|0>`; this was not a native execution error. The
+separate M2.1 useful-slice fixture subsequently passed on ETH with both DPU
+partials contributing nonzero work and corrected the acceptance metadata.
 
 The M2.1 fixture/test half is now defined separately from the historical M2
 control fixture. It uses the canonical `one_qubit_hx.qasm` case, asserts the
@@ -562,8 +561,8 @@ two-operation graph, reads a DPU-written completion sentinel after each
 synchronization, and admits M2.1 only when both DPUs report both operations.
 The strict test `test_m2_1_scientific_validation_failure_controls_record_status`
 protects the requirement that failed scientific validation fails the normalized
-run status, not only a nested validation field. ETH execution is the remaining
-physical acceptance step.
+run status, not only a nested validation field. M2.1 is now a passed bounded
+physical qualification.
 
 This is the M2 foundation/MVP, not the full M2 architecture. It makes no
 speedup, energy, scaling, or general TaskGraph claim. M2 expansion remains
@@ -573,9 +572,16 @@ auditable. Do not relabel fixed slice ownership as a general scheduler.
 
 ### M3: operation-aware provider/kernel system
 
-After the M2.1 useful-slice pass, add the operation-classification/provider
-registry and a deterministic classifier with eligibility, rejection, numeric
-contract, provider/version, and explicit generic fallback. The first
+M2.3 physically executed two candidate contraction paths under two numerical
+modes on one fixed 1q route. This establishes bounded path/mode execution only;
+it is not evidence that the custom planner optimized the physical route or
+selected the fastest path.
+
+The physical M3.1 lane passed dependency-safe three-task/two-wave dispatch on
+two DPUs. It remains a fixed frontier qualification and makes no overlap or
+scaling claim. Add the operation-classification/provider registry and a
+deterministic classifier with eligibility, rejection, numeric contract,
+provider/version, and explicit generic fallback. The first
 specialized target is a PIMutation-inspired row-swap/permutation gate kernel;
 then add, task by task, ATiM dense/local kernels, SparseP sparse kernels, and
 SimplePIM map/zip/reduce primitives. PID-Comm remains the planned communication
@@ -598,24 +604,42 @@ speedup, energy, scaling, persistence, or general TaskGraph claim.
 M4.3 is physically qualified as a TaskGraph-derived operand adapter on two
 DPUs, with exact `reference_int64=320` and one source task completing once. It
 is a host-orchestrated adapter into the M4.2 native route, not a native or
-general TaskGraph protocol. PID-Comm remains a central upcoming architecture
-layer; only its current integration is blocked/pending, not optional. ATiM also
-remains an upcoming central layer.
+general TaskGraph protocol. M4.4 is also physically qualified as a fixed
+one-DPU, two-task resident operator chain. SimplePIM is therefore qualified
+only for these bounded management/operator lanes; this is not general SimplePIM
+executor integration. PID-Comm remains a central upcoming architecture layer,
+and ATiM remains an upcoming central layer.
 
 ### M4.4: bounded persistent two-task chain
 
-Implement a bounded two-task dependency chain over one persistent SimplePIM
+The bounded two-task dependency chain over one persistent SimplePIM
 allocation. Make tensor/table ownership explicit for both tasks and their
 intermediate, and use host-orchestrated dispatch with auditable dependency
-completion and exact final validation. This is the next KISS integration
-target; it does not claim native/general TaskGraph support, speedup, energy, or
-scaling.
+completion and exact final validation passed one-DPU physical functionality on
+ETH. It remains a fixed TaskGraph-bound operator chain and does not claim
+native/general TaskGraph support, speedup, energy, or scaling.
 
-### M4.5: intra-DPU tiling and tasklets
+### M4.5: descriptor-driven shared runtime
 
-Introduce bounded output/input tiling and configurable tasklet partitioning
-inside one DPU. Measure tile shape, WRAM use, synchronization, ownership,
-tasklet count, and load balance against the one-tasklet control.
+Build the active descriptor-driven shared runtime phase. Compile one bounded
+TaskGraph into explicit kernel, placement, numeric, communication, and schedule
+descriptors, then execute it through SimplePIM management/allocation and the
+thesis-owned resident generic contraction kernel. Start with one DPU and extend
+to the existing two-DPU frontier fixture without changing the scientific plan.
+Use `bounded_taskgraph_executed` and explicit provider identities in evidence;
+do not reuse `task_graph_integrated` as a general claim.
+
+SimplePIM owns bounded management/allocation and qualified operator APIs. The
+thesis resident generic contraction kernel owns TaskGraph compute, and
+host-mediated transfer is the initial communication provider. PID-Comm is the
+future communication provider; ATiM and SparseP are future generated-dense and
+sparse kernel providers.
+
+This phase has not passed physical acceptance yet. It does not add tasklets,
+tiling, PID-Comm, ATiM, SparseP, speedup, energy, or scaling claims. Those are
+subsequent extensions after the shared runtime executes the bounded plan.
+
+### M4.6: intra-DPU tiling and tasklets
 
 Gate: tasklet ownership is exact, observed tasklets match the plan, no hidden
 host computation occurs, and float32/int8/split-complex validation remains
@@ -778,16 +802,14 @@ Each physical milestone has a separate ETH acceptance suite.
 
 ## Immediate Next Wave
 
-Complete M2.1 before interpreting two-DPU timing. Add the smallest deterministic
-real quantum/TN case whose two contraction-index slices both have nonzero
-partial outputs, without a hidden CPU prefix. Record per-slice useful work,
-correct the route's slicing/parallelism/functionality metadata, add honest stage
-timing, and repeat the bounded ETH acceptance. The full rationale and gate are
-in the [ETH evidence audit](upmem_m2_eth_evidence_analysis.md).
+Build M4.5: a bounded descriptor-driven shared runtime. Compile one unchanged
+TaskGraph into explicit kernel, placement, numeric, communication, and schedule
+descriptors; execute it through SimplePIM management/allocation and the
+thesis-owned resident generic contraction kernel; and support the existing one-
+and two-DPU qualification shapes without changing the scientific plan. Use
+`bounded_taskgraph_executed` and explicit provider identities in evidence.
 
-After that short corrective wave, proceed to M3: operation classification, the
-provider registry with generic fallback, and the first row-swap/permutation
-kernel. Keep fixed-slice expansion to larger graphs as a parallel M2 lane; it
-does not become general TaskGraph execution by implication. SimplePIM,
-PID-Comm, ATiM, and SparseP remain central planned components for the subsequent
-provider, kernel, and communication milestones.
+M2.1, M2.2, M2.3, M3.1, and M4.2--M4.4 remain frozen compatibility surfaces.
+Do not add another milestone-specific fixture runner. M4.5 has no physical
+acceptance, speedup, energy, scaling, tasklet, tiling, PID-Comm, ATiM, or SparseP
+claim until its shared execution plan passes its own ETH gate.
