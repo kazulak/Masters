@@ -22,7 +22,7 @@ HOST_BINARY := $(STAGE_BENCH)/bin/chain_host
 INIT_BINARY := $(STAGE_BENCH)/bin/dpu_init_binary
 EXECUTE_RESPONSE := $(abspath build/simplepim_chain_m4_4/execute_response.json)
 
-.PHONY: all stage build execute clean
+.PHONY: all stage build execute clean FORCE
 
 all: build
 
@@ -30,20 +30,25 @@ stage: $(STAGE_MANIFEST)
 
 build: $(HOST_BINARY) $(INIT_BINARY)
 
-$(STAGE_MANIFEST): simplepim_rank1_hardening.patch simplepim_chain_tasklets.patch benchmark/product_i8_i8/map.h benchmark/product_i32_i8/map.h benchmark/reduce_i32/map_to_val_func.h benchmark/reduce_i32/init_combine_func.h
+# Always rebuild the staged copy so a changed pinned checkout cannot be hidden
+# by an older manifest timestamp.
+# The pinned source has legacy trailing spaces; the overlay ignores only
+# whitespace while retaining zero context fuzz.
+$(STAGE_MANIFEST): FORCE simplepim_chain_m4_4_overlay.patch benchmark/product_i8_i8/map.h benchmark/product_i32_i8/map.h benchmark/reduce_i32/map_to_val_func.h benchmark/reduce_i32/init_combine_func.h
 	set -eu; \
 	test -d "$(SIMPLEPIM_ROOT)/.git" -o -f "$(SIMPLEPIM_ROOT)/.git"; \
 	actual_commit=$$(git -C "$(SIMPLEPIM_ROOT)" rev-parse --verify HEAD); \
 	test "$$actual_commit" = "$(SIMPLEPIM_SOURCE_COMMIT)" || { echo "SimplePIM commit mismatch" >&2; exit 1; }; \
 	dirty=$$(git -C "$(SIMPLEPIM_ROOT)" status --porcelain --untracked-files=all); test -z "$$dirty" || { echo "SimplePIM source is dirty" >&2; exit 1; }; \
-	patch_sha256=$$(sha256sum simplepim_rank1_hardening.patch | cut -d ' ' -f1); \
+	overlay_sha256=$$(sha256sum simplepim_chain_m4_4_overlay.patch | cut -d ' ' -f1); \
 	rm -rf "$(STAGE_ROOT)"; mkdir -p "$(STAGE_LIB)" "$(STAGE_BENCH)"; \
 	cp -R "$(SIMPLEPIM_ROOT)/lib/." "$(STAGE_LIB)/"; \
-	(cd "$(STAGE_ROOT)" && patch --batch --forward --strip=1 < "$(ROUTE_ROOT)/simplepim_rank1_hardening.patch"); \
-	(cd "$(STAGE_ROOT)" && patch --batch --forward --strip=1 < "$(ROUTE_ROOT)/simplepim_chain_tasklets.patch"); \
+	(cd "$(STAGE_ROOT)" && patch --batch --forward --fuzz=0 --ignore-whitespace --reject-file=- --strip=1 < "$(ROUTE_ROOT)/simplepim_chain_m4_4_overlay.patch"); \
+	if find "$(STAGE_ROOT)" -type f \( -name '*.rej' -o -name '*.orig' \) -print -quit | grep -q .; then echo 'overlay produced reject/original files' >&2; exit 1; fi; \
 	cp -R benchmark/. "$(STAGE_BENCH)/"; mkdir -p "$(STAGE_BENCH)/bin"; \
-	tasklet_patch_sha256=$$(sha256sum simplepim_chain_tasklets.patch | cut -d ' ' -f1); \
-	printf '{"schema_version":"simplepim_chain_m4_4_stage_v1","source_commit":"%s","expected_source_commit":"%s","source_worktree_dirty":false,"hardening_patch_sha256":"%s","tasklet_patch_sha256":"%s","patches_applied":true,"effective_operator_tasklets":1,"effective_initialization_tasklets":1}\n' "$$actual_commit" "$(SIMPLEPIM_SOURCE_COMMIT)" "$$patch_sha256" "$$tasklet_patch_sha256" > "$(STAGE_MANIFEST)"
+	printf '{"schema_version":"simplepim_chain_m4_4_stage_v2","source_commit":"%s","expected_source_commit":"%s","source_worktree_dirty":false,"overlay_patch_sha256":"%s","patches_applied":true,"effective_operator_tasklets":1,"effective_initialization_tasklets":1}\n' "$$actual_commit" "$(SIMPLEPIM_SOURCE_COMMIT)" "$$overlay_sha256" > "$(STAGE_MANIFEST)"
+
+FORCE:
 
 $(HOST_BINARY): host.c $(STAGE_MANIFEST) | $(STAGE_BENCH)/bin
 	$(HOST_CC) -std=c99 -O2 -Wall -Wextra -fopenmp -I$(STAGE_LIB) -I$(STAGE_LIB)/management -I$(STAGE_LIB)/processing -I$(DPU_SYSLIB_INCLUDE) -DNR_TASKLETS=1 -DTHESIS_SIMPLEPIM_OPERATOR_TASKLETS=1 -o $@ host.c \

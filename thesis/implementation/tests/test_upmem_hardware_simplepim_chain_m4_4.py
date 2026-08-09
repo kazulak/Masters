@@ -86,6 +86,16 @@ def test_suite_is_fixed_chain_profile() -> None:
     assert suite["workload"]["task_graph"]["binding_protocol"] == "M44_GRAPH_BINDING_V1"
 
 
+def test_native_route_uses_one_fresh_composite_overlay() -> None:
+    makefile = (ROOT / m44.NATIVE_REL / "Makefile").read_text(encoding="utf-8")
+    assert "simplepim_chain_m4_4_overlay.patch" in makefile
+    assert "simplepim_rank1_hardening.patch" not in makefile
+    assert "simplepim_chain_tasklets.patch" not in makefile
+    assert "--fuzz=0" in makefile
+    assert "--reject-file=-" in makefile
+    assert "$(STAGE_MANIFEST): FORCE" in makefile
+
+
 def test_hardware_requires_opt_in_and_rejects_simulator(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(ValueError, match="hardware_opt_in_missing"):
         m44.execute(ROOT, suite_path=SUITE, environment={})
