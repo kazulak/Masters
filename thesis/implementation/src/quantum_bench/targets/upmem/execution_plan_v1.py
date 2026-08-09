@@ -526,12 +526,30 @@ def build_request_manifest(
     requested_dpu_count: int | None = None,
     tasklets_per_dpu: int | None = None,
     final_outputs: tuple[FinalOutput, ...] | None = None,
+    source_graph: TaskGraph | None = None,
 ) -> JsonDict:
-    """Create the complete Block 2 request without later manifest mutation."""
+    """Create the complete request without later manifest mutation.
+
+    ``plan`` owns the source and lowered-package identities.  When the source
+    graph is available, validate it independently so a lowered package cannot
+    accidentally be reported as the scientific source.
+    """
 
     package_bytes = package_bytes_for(package)
     validate_plan(plan, package=package, package_bytes=package_bytes)
     validate_schedule(schedule_bytes, plan, package_bytes=package_bytes)
+    if source_graph is not None:
+        source = with_execution_identity(source_graph)
+        if (
+            plan.source_circuit_semantics_hash,
+            plan.source_tensor_network_hash,
+            plan.source_contraction_plan_hash,
+        ) != (
+            source.circuit_semantics_hash,
+            source.tensor_network_hash,
+            source.contraction_plan_hash,
+        ):
+            raise ValueError("source graph identity mismatch")
     if requested_dpu_count is not None and requested_dpu_count != plan.requested_dpu_count:
         raise ValueError("request DPU count does not match execution plan")
     if tasklets_per_dpu is not None and tasklets_per_dpu != plan.tasklets_per_dpu:
@@ -565,6 +583,12 @@ def build_request_manifest(
             "tensor_network_hash": plan.package_tensor_network_hash,
             "contraction_plan_hash": plan.package_contraction_plan_hash,
         },
+        "source_circuit_semantics_hash": plan.source_circuit_semantics_hash,
+        "source_tensor_network_hash": plan.source_tensor_network_hash,
+        "source_contraction_plan_hash": plan.source_contraction_plan_hash,
+        "package_circuit_semantics_hash": plan.package_circuit_semantics_hash,
+        "package_tensor_network_hash": plan.package_tensor_network_hash,
+        "package_contraction_plan_hash": plan.package_contraction_plan_hash,
         "final_outputs": [to_jsonable(item) for item in (final_outputs or plan.final_outputs)],
     }
 

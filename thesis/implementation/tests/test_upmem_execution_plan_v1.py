@@ -110,10 +110,39 @@ def test_json_round_trip_and_request_manifest_keep_sidecar_out_of_h2d() -> None:
     )
 
     assert parsed.execution_plan_hash == plan.execution_plan_hash
+    assert manifest["source_identity"] == {
+        "circuit_semantics_hash": plan.source_circuit_semantics_hash,
+        "tensor_network_hash": plan.source_tensor_network_hash,
+        "contraction_plan_hash": plan.source_contraction_plan_hash,
+    }
+    assert manifest["package_identity"] == {
+        "circuit_semantics_hash": plan.package_circuit_semantics_hash,
+        "tensor_network_hash": plan.package_tensor_network_hash,
+        "contraction_plan_hash": plan.package_contraction_plan_hash,
+    }
+    assert manifest["source_tensor_network_hash"] == graph.tensor_network_hash
+    assert manifest["package_tensor_network_hash"] == package.graph.tensor_network_hash
+    assert manifest["source_tensor_network_hash"] != manifest["package_tensor_network_hash"]
     assert manifest["package_file_sha256"] == plan.package_file_sha256
     assert manifest["schedule_sidecar_sha256"] == plan.schedule_sidecar_sha256
     assert manifest["schedule_sidecar_h2d_bytes"] == 0
     assert manifest["schedule_sidecar_scope"] == "host_metadata_not_h2d"
+
+
+def test_request_manifest_rejects_lowered_graph_as_source_identity() -> None:
+    graph, package = _fixture()
+    plan = compile_plan(graph, package, placement_policy=PLACEMENT_FRONTIER)
+
+    with pytest.raises(ValueError, match="source graph identity mismatch"):
+        build_request_manifest(
+            plan,
+            package,
+            serialize_schedule(plan),
+            package_path="resident_graph_package.bin",
+            schedule_path="execution_plan.bin",
+            dpu_binary="dpu.bin",
+            source_graph=package.graph,
+        )
 
 
 def test_malformed_schedule_and_caps_are_rejected() -> None:
