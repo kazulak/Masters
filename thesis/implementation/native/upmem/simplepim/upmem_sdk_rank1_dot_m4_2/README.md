@@ -47,6 +47,39 @@ The generated response is under the route-local ignored `build/` directory.
 It is qualification/functionality evidence only; it must not be used for
 speedup, energy, or scaling claims.
 
+## External operand file
+
+The default `execute` target keeps the deterministic M4.2 operands unchanged.
+For a bounded input-transport check, invoke the staged host directly with
+`--operands-file PATH`. The file must be exactly 512 bytes:
+
+```text
+bytes 0..255:   left int8[256]
+bytes 256..511: right int8[256]
+```
+
+The host converts these values to the existing int32 SimplePIM table contract,
+computes the int64 CPU reference, hashes the exact 512 input bytes, and reports
+`external_operand_transport`, `operand_input_length_bytes`, and
+`operand_input_hash`. Missing, short, trailing, or unreadable files fail before
+physical allocation; the host never falls back to the fixed operands when this
+option is present.
+
+After `make -C native/upmem/simplepim/upmem_sdk_rank1_dot_m4_2 build`, run on
+physical hardware with the normal guards and an explicit response path:
+
+```sh
+UPMEM_ALLOW_PHYSICAL_HARDWARE=1 \
+  build/simplepim_rank1_dot_m4_2/staged/benchmarks/rank1_dot/bin/rank1_dot_host \
+  --mode execute \
+  --operands-file /path/to/exactly-512-byte-operands.bin \
+  --response build/simplepim_rank1_dot_m4_2/external_execute_response.json \
+  --stage-manifest build/simplepim_rank1_dot_m4_2/staged/simplepim_stage_manifest.json
+```
+
+This remains the same two-DPU, one-operator-fixture qualification route; it
+does not add general tensor shapes or TaskGraph transport.
+
 Pinned SimplePIM still uses `DPU_ASSERT` around SDK operations. Structured JSON
 is therefore guaranteed for host-controlled failures and successful runs; an
 SDK abort can terminate without a response and must be classified by the

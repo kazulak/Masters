@@ -34,6 +34,7 @@
 #define M42_WARMUPS 1u
 #define M42_REPEATS 5u
 #define M42_ITERATIONS (M42_WARMUPS + M42_REPEATS)
+#define M42_EXTERNAL_OPERAND_BYTES (2u * M42_VECTOR_LENGTH * sizeof(int8_t))
 #define M42_TABLES_PER_ITERATION 5u
 #define M42_EXPECTED_TABLE_COUNT (M42_ITERATIONS * M42_TABLES_PER_ITERATION)
 #define M42_SCATTER_CALLS (2u * M42_ITERATIONS)
@@ -111,6 +112,9 @@ typedef struct {
     bool exact_validation;
     bool hardware_execution;
     bool hardware_functionality_evidence;
+    bool external_operand_transport;
+    uint32_t operand_input_length_bytes;
+    char operand_input_hash[17];
     const char *validation_status;
     repeat_record_t records[M42_WARMUPS + M42_REPEATS];
     size_t record_count;
@@ -309,6 +313,9 @@ static int write_response(
     json_bool(file, state->persistent_allocation_observed);
     fprintf(file, ",\"warmup_count\":%u,\"repeat_count\":%u", M42_WARMUPS, M42_REPEATS);
     fprintf(file, ",\"operator_sequence\":[\"simplepim_scatter\",\"simplepim_scatter\",\"table_zip_virtual\",\"table_map_pair_product\",\"table_gen_red_host_reduce\"]");
+    fprintf(file, ",\"external_operand_transport\":"); json_bool(file, state->external_operand_transport);
+    fprintf(file, ",\"operand_input_length_bytes\":%u,\"operand_input_hash\":", state->operand_input_length_bytes);
+    if (state->external_operand_transport) json_string(file, state->operand_input_hash); else fputs("null", file);
     fprintf(file, ",\"simplepim_operator_api_used\":"); json_bool(file, state->operator_api_used);
     fprintf(file, ",\"simplepim_operator_names\":[\"simplepim_scatter\",\"table_zip\",\"table_map\",\"table_gen_red\"]");
     fprintf(file, ",\"scatter_attempted\":"); json_bool(file, state->scatter_attempted);
@@ -394,6 +401,39 @@ static void fill_inputs(int32_t *a, int32_t *b, int64_t *reference) {
         value += (int64_t)a[i] * (int64_t)b[i];
     }
     *reference = value;
+}
+
+static const char *load_operand_file(
+    const char *path,
+    int32_t *a,
+    int32_t *b,
+    int64_t *reference,
+    uint64_t *input_hash
+) {
+    unsigned char raw[M42_EXTERNAL_OPERAND_BYTES];
+    FILE *file = fopen(path, "rb");
+    if (file == NULL) return "operand_file_open_failed";
+    size_t read_count = fread(raw, 1, sizeof(raw), file);
+    if (read_count != sizeof(raw)) {
+        const bool read_error = ferror(file) != 0;
+        (void)fclose(file);
+        return read_error ? "operand_file_read_failed" : "operand_file_short";
+    }
+    int trailing = fgetc(file);
+    if (trailing != EOF || ferror(file) != 0) {
+        (void)fclose(file);
+        return trailing != EOF ? "operand_file_trailing_data" : "operand_file_read_failed";
+    }
+    if (fclose(file) != 0) return "operand_file_read_failed";
+
+    *input_hash = fnv1a_bytes(raw, sizeof(raw));
+    *reference = 0;
+    for (uint32_t i = 0; i < M42_VECTOR_LENGTH; ++i) {
+        a[i] = (int32_t)(int8_t)raw[i];
+        b[i] = (int32_t)(int8_t)raw[M42_VECTOR_LENGTH + i];
+        *reference += (int64_t)a[i] * (int64_t)b[i];
+    }
+    return NULL;
 }
 
 static const char *simulator_selector_reason(void) {
@@ -582,14 +622,23 @@ static void initialise_state(response_state_t *state) {
     state->validation_status = "not_run";
 }
 
-static int parse_arguments(int argc, char **argv, const char **mode, const char **response, const char **stage_manifest) {
+static int parse_arguments(
+    int argc,
+    char **argv,
+    const char **mode,
+    const char **response,
+    const char **stage_manifest,
+    const char **operands_file
+) {
     *mode = NULL;
     *response = "build/simplepim_rank1_dot_m4_2/response.json";
     *stage_manifest = NULL;
+    *operands_file = NULL;
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--mode") == 0 && i + 1 < argc) *mode = argv[++i];
         else if (strcmp(argv[i], "--response") == 0 && i + 1 < argc) *response = argv[++i];
         else if (strcmp(argv[i], "--stage-manifest") == 0 && i + 1 < argc) *stage_manifest = argv[++i];
+        else if (strcmp(argv[i], "--operands-file") == 0 && i + 1 < argc) *operands_file = argv[++i];
         else return 1;
     }
     return *mode == NULL || *stage_manifest == NULL;
@@ -599,6 +648,7 @@ int main(int argc, char **argv) {
     const char *mode;
     const char *response_path;
     const char *stage_manifest_path;
+    const char *operands_file_path;
     response_state_t state;
     provenance_t provenance;
     char hostname[256] = "unknown";
@@ -617,6 +667,10 @@ int main(int argc, char **argv) {
     double handle_compile_s = 0.0;
     double release_s = 0.0;
     bool parser_mode = false;
+    int32_t external_values_a[M42_VECTOR_LENGTH];
+    int32_t external_values_b[M42_VECTOR_LENGTH];
+    int64_t external_reference = 0;
+    uint64_t external_input_hash = 0;
     simplepim_management_t *management = NULL;
     handle_t *map_handle = NULL;
     handle_t *red_handle = NULL;
@@ -627,7 +681,7 @@ int main(int argc, char **argv) {
     initialise_state(&state);
     memset(&provenance, 0, sizeof(provenance));
     (void)gethostname(hostname, sizeof(hostname) - 1u);
-    if (parse_arguments(argc, argv, &mode, &response_path, &stage_manifest_path) != 0) {
+    if (parse_arguments(argc, argv, &mode, &response_path, &stage_manifest_path, &operands_file_path) != 0) {
         state.failure_stage = "arguments";
         state.reason = "expected_mode_response_and_stage_manifest";
         (void)write_response(response_path, &state, &provenance, hostname, NULL, NULL, NULL, NULL, NULL, 0.0, 0.0, 0.0, false);
@@ -645,6 +699,23 @@ int main(int argc, char **argv) {
         state.reason = "invalid_simplepim_stage_manifest";
         (void)write_response(response_path, &state, &provenance, hostname, NULL, NULL, NULL, NULL, NULL, 0.0, 0.0, 0.0, parser_mode);
         return exit_code;
+    }
+    if (operands_file_path != NULL) {
+        const char *input_error = load_operand_file(
+            operands_file_path,
+            external_values_a,
+            external_values_b,
+            &external_reference,
+            &external_input_hash);
+        state.external_operand_transport = true;
+        if (input_error != NULL) {
+            state.failure_stage = "input";
+            state.reason = input_error;
+            (void)write_response(response_path, &state, &provenance, hostname, NULL, NULL, NULL, NULL, NULL, 0.0, 0.0, 0.0, parser_mode);
+            return exit_code;
+        }
+        state.operand_input_length_bytes = M42_EXTERNAL_OPERAND_BYTES;
+        hash_hex(external_input_hash, state.operand_input_hash);
     }
     if (parser_mode) {
         state.status = "prepared";
@@ -744,13 +815,23 @@ int main(int argc, char **argv) {
         uint32_t input_pad = calculate_pad_len(M42_VECTOR_LENGTH, (uint32_t)sizeof(int32_t), M42_DPU_COUNT);
         uint32_t input_extent = (M42_VECTOR_LENGTH * (uint32_t)sizeof(int32_t) + input_pad) / M42_DPU_COUNT;
         uint64_t input_hash = UINT64_C(14695981039346656037);
-        fill_inputs(values_a, values_b, &reference);
+        if (operands_file_path != NULL) {
+            memcpy(values_a, external_values_a, sizeof(values_a));
+            memcpy(values_b, external_values_b, sizeof(values_b));
+            reference = external_reference;
+        } else {
+            fill_inputs(values_a, values_b, &reference);
+        }
         memset(record, 0, sizeof(*record));
         record->repeat_id = iteration == 0 ? 0u : iteration - 1u;
         record->warmup = iteration == 0;
         record->reference = reference;
-        input_hash = hash_int32_values_le(input_hash, values_a, M42_VECTOR_LENGTH);
-        input_hash = hash_int32_values_le(input_hash, values_b, M42_VECTOR_LENGTH);
+        if (operands_file_path != NULL) {
+            input_hash = external_input_hash;
+        } else {
+            input_hash = hash_int32_values_le(input_hash, values_a, M42_VECTOR_LENGTH);
+            input_hash = hash_int32_values_le(input_hash, values_b, M42_VECTOR_LENGTH);
+        }
         hash_hex(input_hash, record->input_hash);
         (void)snprintf(name_a, sizeof(name_a), "m42_r%u_a", iteration);
         (void)snprintf(name_b, sizeof(name_b), "m42_r%u_b", iteration);

@@ -45,6 +45,7 @@ def test_route_patch_changes_exactly_both_uninitialized_expressions():
     assert patch.count("+    uint32_t unroll_block_rest = copy_block_size-unroll_block_size;") == 2
     assert "MapProcessing.h" in patch
     assert "Map.c" in patch and "free_space_start_pos" in patch
+    assert 'dpu_alloc(num_dpus, "backend=hw", &set)' in patch
     assert "ProcessingHelperHost.c" in patch and "if(succ != 0)" in patch
     assert "GenRed.c" in patch and "dlerror()" in patch
 
@@ -128,6 +129,7 @@ def test_stage_applies_patch_without_mutating_submodule():
     patched_map = (staged / "lib" / "processing" / "map" / "Map.c").read_text()
     patched_helper = (staged / "lib" / "processing" / "ProcessingHelperHost.c").read_text()
     patched_genred = (staged / "lib" / "processing" / "gen_red" / "GenRed.c").read_text()
+    patched_management = (staged / "lib" / "management" / "Management.c").read_text()
     manifest = json.loads((staged / "simplepim_stage_manifest.json").read_text())
     assert (staged / "benchmarks" / "rank1_dot" / "dot_funcs" / "map.h").is_file()
     assert (staged / "benchmarks" / "rank1_dot" / "dot_reduce_funcs" / "map_to_val_func.h").is_file()
@@ -138,6 +140,8 @@ def test_stage_applies_patch_without_mutating_submodule():
     assert patched_helper.count("if(succ != 0)") >= 7
     assert "failure:" in patched_helper
     assert "init_error != NULL || combine_error != NULL" in patched_genred
+    assert 'dpu_alloc(num_dpus, "backend=hw", &set)' in patched_management
+    assert 'dpu_alloc(num_dpus, NULL, &set)' not in patched_management
     assert manifest["source_commit"] == PINNED_COMMIT
     assert manifest["expected_source_commit"] == PINNED_COMMIT
     assert manifest["source_worktree_dirty"] is False

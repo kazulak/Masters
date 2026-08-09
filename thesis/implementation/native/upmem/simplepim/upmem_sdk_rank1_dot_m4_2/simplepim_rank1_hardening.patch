@@ -114,3 +114,74 @@ diff -U0 -r a/lib/processing/map/MapProcessing.h b/lib/processing/map/MapProcess
 @@ -172 +172 @@
 -    uint32_t unroll_block_rest = copy_block_size-unroll_block_rest;
 +    uint32_t unroll_block_rest = copy_block_size-unroll_block_size;
+
+diff -U0 -r a/lib/communication/CommOps.c b/lib/communication/CommOps.c
+--- a/lib/communication/CommOps.c
++++ b/lib/communication/CommOps.c
+@@ -42 +42 @@
+-        printf(table_id);
++        printf("%s", table_id);
+@@ -99 +99 @@
+-        printf(table_id);
++        printf("%s", table_id);
+@@ -178 +178 @@
+-        printf(table_id);
++        printf("%s", table_id);
+@@ -209 +209 @@
+-            printf(table_id);
++            printf("%s", table_id);
+@@ -252 +252 @@
+-        printf(binary_handle->bin_location);
++        printf("%s", binary_handle->bin_location);
+
+diff -U0 -r a/lib/management/Management.c b/lib/management/Management.c
+--- a/lib/management/Management.c
++++ b/lib/management/Management.c
+@@ -10 +10 @@
+-    DPU_ASSERT(dpu_alloc(num_dpus, NULL, &set));
++    DPU_ASSERT(dpu_alloc(num_dpus, "backend=hw", &set));
+@@ -78 +78 @@
+-    printf(name);
++    printf("%s", name);
+
+diff -U0 -r a/lib/processing/map/Map.c b/lib/processing/map/Map.c
+--- a/lib/processing/map/Map.c
++++ b/lib/processing/map/Map.c
+@@ -16 +16 @@
+-            printf(src_name);
++            printf("%s", src_name);
+@@ -89 +89 @@
+-        printf(binary);
++        printf("%s", binary);
+@@ -165 +165 @@
+-        printf(binary);
++        printf("%s", binary);
+@@ -172 +172 @@
+-        printf(binary_handle->bin_location);
++        printf("%s", binary_handle->bin_location);
+
+diff -U0 -r a/lib/processing/zip/Zip.c b/lib/processing/zip/Zip.c
+--- a/lib/processing/zip/Zip.c
++++ b/lib/processing/zip/Zip.c
+@@ -22 +22 @@
+-            printf(src1_name);
++            printf("%s", src1_name);
+@@ -29 +29 @@
+-            printf(src2_name);
++            printf("%s", src2_name);
+@@ -158 +158 @@
+-        printf(binary_handle->bin_location);
++        printf("%s", binary_handle->bin_location);
+
+diff -U0 -r a/lib/processing/gen_red/GenRed.c b/lib/processing/gen_red/GenRed.c
+--- a/lib/processing/gen_red/GenRed.c
++++ b/lib/processing/gen_red/GenRed.c
+@@ -97 +97 @@
+-            printf(src_name);
++            printf("%s", src_name);
+@@ -196 +196 @@
+-        printf(binary);
++        printf("%s", binary);
+@@ -206 +206 @@
+-        printf(binary_handle->bin_location);
++        printf("%s", binary_handle->bin_location);

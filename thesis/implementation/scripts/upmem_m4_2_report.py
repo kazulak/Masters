@@ -13,6 +13,32 @@ from quantum_bench.bench.upmem_hardware_simplepim_rank1_m4_2 import (
     ROUTE_ID,
 )
 
+REPORT_TIME_FIELD = "per_iteration_operator_time_s"
+CONDITIONAL_STATUS = "host_reported_functionality_evidence_conditional"
+
+
+def _record_csv_fields() -> list[str]:
+    """Return the deliberately narrow, non-total timing export schema."""
+
+    return [
+        "case_id",
+        "repeat_id",
+        REPORT_TIME_FIELD,
+        "application_visible_h2d_bytes",
+        "application_visible_d2h_bytes",
+        "exact_integer_match",
+        "simplepim_operator_api_used",
+    ]
+
+
+def _record_csv_row(row: dict[str, object]) -> dict[str, object]:
+    """Map the normalized per-iteration timing to its precise report name."""
+
+    return {
+        key: row.get("total_route_time_s") if key == REPORT_TIME_FIELD else row.get(key)
+        for key in _record_csv_fields()
+    }
+
 
 def inspect(run: Path) -> dict[str, object]:
     run = run.resolve()
@@ -60,7 +86,19 @@ def inspect(run: Path) -> dict[str, object]:
         ),
         "layout_bound_only": all(row.get("mram_capacity_verified") is False for row in rows),
     }
-    return {"status": "valid_functionality_evidence" if all(checks.values()) else "invalid_or_incomplete", "run_dir": str(run), "row_count": len(rows), "checks": checks, "claim_boundary": summary.get("claim_boundary"), "next_blocker": "genuine operand transport from a real ContractionTask"}
+    return {
+        "status": CONDITIONAL_STATUS if all(checks.values()) else "invalid_or_incomplete",
+        "run_dir": str(run),
+        "row_count": len(rows),
+        "checks": checks,
+        "claim_boundary": summary.get("claim_boundary"),
+        "allocation_observation": (
+            "inferred from physical-only selector rejection, default SDK allocation, "
+            "and observed allocated DPU count; native allocation profile enforcement "
+            "is not independently recorded"
+        ),
+        "next_blocker": "genuine operand transport from a real ContractionTask",
+    }
 
 
 def write_report(run: Path, root: Path) -> Path:
@@ -73,15 +111,23 @@ def write_report(run: Path, root: Path) -> Path:
     (target / "inspection.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     with (target / "m4_2_records.csv").open("w", newline="", encoding="utf-8") as handle:
         rows = [json.loads(line) for line in (run / "normalized_records.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
-        fields = ["case_id", "repeat_id", "total_route_time_s", "application_visible_h2d_bytes", "application_visible_d2h_bytes", "exact_integer_match", "simplepim_operator_api_used"]
+        fields = _record_csv_fields()
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
-        writer.writerows({key: row.get(key) for key in fields} for row in rows)
+        writer.writerows(_record_csv_row(row) for row in rows)
     (target / "README.md").write_text(
         "# M4.2 SimplePIM rank-1 qualification\n\n"
         "This report is functionality evidence for one rank-1 operator on two DPUs. "
         "It contains no speedup, energy, scaling, or general TaskGraph claim.\n\n"
         f"Inspection: `{result['status']}`\n\n"
+        "The verdict is conditional host-reported functionality evidence, not "
+        "independent physical verification. Allocation is inferred from the "
+        "physical-only selector rejection, default SDK allocation, and observed "
+        "DPU count; the native allocation profile is not explicitly enforced in "
+        "this route.\n\n"
+        "The exported `per_iteration_operator_time_s` excludes setup, allocation, "
+        "release, and other whole-route work; it is validated against each native "
+        "repetition's `total_time_s`.\n\n"
         "The fixed-vector route is not a complete TaskGraph adapter: genuine "
         "operand transport from a real ContractionTask remains missing. The "
         "native route records SimplePIM-managed allocation and metadata checks; "
@@ -99,7 +145,7 @@ def main() -> int:
     target = write_report(args.input, root)
     print(target)
     inspection = json.loads((target / "inspection.json").read_text(encoding="utf-8"))
-    return 0 if inspection.get("status") == "valid_functionality_evidence" else 2
+    return 0 if inspection.get("status") == CONDITIONAL_STATUS else 2
 
 
 if __name__ == "__main__":
