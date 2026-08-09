@@ -158,6 +158,29 @@ def test_prepare_uses_workload_operands_and_writes_identity(monkeypatch: pytest.
     assert manifest["contraction_plan_hash"] == workload.graph.contraction_plan_hash
 
 
+def test_execute_runs_native_host_from_staged_benchmark_directory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    calls: list[tuple[list[str], Path]] = []
+
+    def fake_run(command: list[str], *, cwd: Path, env: object, timeout_s: float) -> dict[str, object]:
+        calls.append((command, cwd))
+        return {"command": command, "returncode": 0, "timed_out": False, "elapsed_s": 0.0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setenv("UPMEM_ALLOW_PHYSICAL_HARDWARE", "1")
+    monkeypatch.setattr(m43, "_run", fake_run)
+    monkeypatch.setattr(m43, "_m4_3_environment", lambda root: {"upmem_sdk": {"available": True}, "simplepim_source_commit": "simplepim", "thesis_source_commit": "thesis"})
+    monkeypatch.setattr(m43, "_native_response", lambda native: {"repetitions": []})
+    monkeypatch.setattr(m43, "_require_response", lambda *args, **kwargs: None)
+    result = m43.execute(tmp_path, suite_path=SUITE, environment={"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1"})
+
+    assert result["status"] == "completed"
+    assert len(calls) == 2
+    native = tmp_path / m43.NATIVE_REL
+    stage_bench = native / "build" / "simplepim_rank1_dot_m4_2" / "staged" / "benchmarks" / "rank1_dot"
+    assert calls[0][1] == native
+    assert calls[1][1] == stage_bench
+    assert Path(calls[1][0][4]) == stage_bench / "bin" / "rank1_dot_host"
+
+
 def test_report_rejects_incomplete_run(tmp_path: Path) -> None:
     from scripts import upmem_m4_3_report
 

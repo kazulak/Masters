@@ -517,7 +517,8 @@ def execute(root_dir: Path, *, suite_path: Path, environment: Mapping[str, str] 
     build_result = _run(["make", "clean", "build"], cwd=native, env=env, timeout_s=TIMEOUT_S)
     command_result = build_result
     if build_result["returncode"] == 0 and not build_result["timed_out"]:
-        command_result = _run(["timeout", "--signal=TERM", "--kill-after=5s", f"{int(TIMEOUT_S)}s", str(binary), "--mode", "execute", "--response", str(response), "--stage-manifest", str(stage), "--operands-file", str(operands)], cwd=native, env=env, timeout_s=TIMEOUT_S + 10)
+        stage_bench = native / "build" / "simplepim_rank1_dot_m4_2" / "staged" / "benchmarks" / "rank1_dot"
+        command_result = _run(["timeout", "--signal=TERM", "--kill-after=5s", f"{int(TIMEOUT_S)}s", str(binary), "--mode", "execute", "--response", str(response), "--stage-manifest", str(stage), "--operands-file", str(operands)], cwd=stage_bench, env=env, timeout_s=TIMEOUT_S + 10)
     summary: dict[str, Any] = {"schema_version": SCHEMA_VERSION, "suite_id": SUITE_ID, "route_id": ROUTE_ID, "backend_id": BACKEND_ID, "status": "failed", "claim_boundary": CLAIM_BOUNDARY, "command": command_result, "native_interface": "M4.2 host must accept --operands-file and report operand_input_hash", "task_graph_integrated": False, "taskgraph_derived_operand_adapter": True, "host_taskgraph_operand_binding": True, "native_taskgraph_protocol": False, "native_plan_identity_binding": False, "operand_binding_hash": identities["operand_binding"]["binding_hash"], "execution_bundle_artifact": "execution_bundle.json", "source_task_count": 1, "source_task_completion_count": 0, "input_dtype": "int8", "native_table_dtype": "int32", "input_transport_dtype": "int32", "input_to_table_expansion_factor": 4, "cpu_fallback_used": False, "simulator_kernel_executed": False, "hardware_available": False}
     if response.exists():
         shutil.copy2(response, run_dir / "native_execute_response.json")
