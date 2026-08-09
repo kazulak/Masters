@@ -6,6 +6,10 @@ from quantum_bench.targets.upmem.simplepim_chain_task import (
     build_simplepim_chain_workload,
     validate_simplepim_chain_workload,
 )
+from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
+    build_resident_graph_package,
+    build_resident_policy_reference,
+)
 
 
 def test_chain_fixture_is_deterministic_and_exact() -> None:
@@ -37,3 +41,28 @@ def test_chain_rejects_wrong_dependency() -> None:
     broken = workload.__class__(**{**workload.__dict__, "graph": workload.graph.__class__(**{**workload.graph.__dict__, "tasks": tuple(tasks)})})
     with pytest.raises(ValueError, match="dependency"):
         validate_simplepim_chain_workload(broken)
+
+
+def test_chain_lowers_to_resident_package_with_intermediate_slot() -> None:
+    workload = build_simplepim_chain_workload()
+    package = build_resident_graph_package(
+        workload.graph,
+        workload.network,
+        case_id=workload.graph.network.circuit.name,
+        suite_id="phase_a_local",
+        quantization_mode="none",
+    )
+    assert len(package.operations) == 2
+    assert package.allocation.logical_to_slot[CHAIN_INTERMEDIATE_ID + "::real"] not in {
+        package.allocation.logical_to_slot[tensor.spec.id + "::real"] for tensor in workload.network.tensors
+    }
+    assert package.allocation.mram_used_bytes > 0
+
+
+def test_chain_resident_policy_reference_matches_fixture_reference() -> None:
+    workload = build_simplepim_chain_workload()
+    result = build_resident_policy_reference(workload.graph, workload.network, quantization_mode="none")
+    assert result["status"] == "completed"
+    assert result["output_hash"]
+    assert int(np.real(np.asarray(result["output"]).reshape(()))) == workload.reference_int64
+    assert result["task_metrics"][-1]["task_id"] == workload.graph.tasks[-1].id
