@@ -597,6 +597,7 @@ def allocate_resident_slots(
     network: Any,
     *,
     profile: HardwareTaskGraphResidentProfile | None = None,
+    allow_slot_reuse: bool = True,
 ) -> ResidentAllocation:
     """Build a deterministic interval allocator for float32 resident slots."""
 
@@ -722,24 +723,25 @@ def allocate_resident_slots(
     logical_to_slot: dict[str, int] = {}
     for lifetime in ordered:
         chosen: int | None = None
-        for slot_id, existing in enumerate(slot_lifetimes):
-            if slot_capacity[slot_id] < lifetime.elements:
-                continue
-            # The native file-backed ABI gives initial and final slots
-            # disjoint roles. Keep final outputs out of every slot that has
-            # ever carried an initial input, even when live intervals no
-            # longer overlap. Ordinary intermediate reuse remains allowed.
-            if lifetime.final and any(item.initial for item in existing):
-                continue
-            if lifetime.initial and any(item.final for item in existing):
-                continue
-            if all(
-                lifetime.end_task < other.start_task
-                or lifetime.start_task > other.end_task
-                for other in existing
-            ):
-                chosen = slot_id
-                break
+        if allow_slot_reuse:
+            for slot_id, existing in enumerate(slot_lifetimes):
+                if slot_capacity[slot_id] < lifetime.elements:
+                    continue
+                # The native file-backed ABI gives initial and final slots
+                # disjoint roles. Keep final outputs out of every slot that has
+                # ever carried an initial input, even when live intervals no
+                # longer overlap. Ordinary intermediate reuse remains allowed.
+                if lifetime.final and any(item.initial for item in existing):
+                    continue
+                if lifetime.initial and any(item.final for item in existing):
+                    continue
+                if all(
+                    lifetime.end_task < other.start_task
+                    or lifetime.start_task > other.end_task
+                    for other in existing
+                ):
+                    chosen = slot_id
+                    break
         if chosen is None:
             chosen = len(slot_lifetimes)
             slot_lifetimes.append([])
@@ -797,13 +799,19 @@ def build_resident_graph_package(
     quantization_mode: str,
     profile: HardwareTaskGraphResidentProfile | None = None,
     full_precision_output: np.ndarray | None = None,
+    allow_slot_reuse: bool = True,
 ) -> ResidentGraphPackage:
     selected = profile or _canonical_profile()
     _require_canonical_profile(selected)
     if quantization_mode not in selected.numeric_modes:
         raise ResidentCapacityError("hardware_profile_violation: unsupported_numeric_mode")
     _validate_finite_inputs(network)
-    allocation = allocate_resident_slots(graph, network, profile=selected)
+    allocation = allocate_resident_slots(
+        graph,
+        network,
+        profile=selected,
+        allow_slot_reuse=allow_slot_reuse,
+    )
     operations: list[ResidentOperationDescriptor] = []
     component_index = 0
     tensor_complexity = {

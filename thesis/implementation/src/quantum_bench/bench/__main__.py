@@ -165,6 +165,19 @@ def main() -> int:
     upmem_hardware_m4_4_mode.add_argument("--prepare-only", action="store_true")
     upmem_hardware_m4_4_mode.add_argument("--execute", action="store_true")
     upmem_hardware_m4_4_parser.add_argument("--build", action="store_true")
+    upmem_simplepim_taskgraph_parser = sub.add_parser(
+        "upmem-simplepim-taskgraph",
+        help="prepare or execute the bounded M4.5 SimplePIM TaskGraph route",
+    )
+    upmem_simplepim_taskgraph_parser.add_argument("--suite", required=True)
+    upmem_simplepim_taskgraph_mode = upmem_simplepim_taskgraph_parser.add_mutually_exclusive_group(required=True)
+    upmem_simplepim_taskgraph_mode.add_argument("--prepare-only", action="store_true")
+    upmem_simplepim_taskgraph_mode.add_argument("--execute", action="store_true")
+    upmem_simplepim_taskgraph_parser.add_argument(
+        "--build",
+        action="store_true",
+        help="build the native target during --prepare-only; never allocates a DPU",
+    )
     upmem_hardware_taskgraph_m4_1_mode = (
         upmem_hardware_taskgraph_m4_1_parser.add_mutually_exclusive_group(required=True)
     )
@@ -601,6 +614,24 @@ def main() -> int:
         try:
             if args.prepare_only:
                 result = prepare(root_dir, suite_path=suite_path(args.suite, root_dir), build=args.build)
+            else:
+                result = execute(root_dir, suite_path=suite_path(args.suite, root_dir))
+        except (OSError, RuntimeError, ValueError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(result, indent=2))
+        return 0 if result["status"] in {"prepared", "completed"} else 2
+    if args.command == "upmem-simplepim-taskgraph":
+        from quantum_bench.bench.upmem_simplepim_taskgraph import execute, prepare
+
+        if args.build and not args.prepare_only:
+            parser.error("--build is only valid with --prepare-only")
+        try:
+            if args.prepare_only:
+                result = prepare(
+                    root_dir,
+                    suite_path=suite_path(args.suite, root_dir),
+                    build=args.build,
+                )
             else:
                 result = execute(root_dir, suite_path=suite_path(args.suite, root_dir))
         except (OSError, RuntimeError, ValueError) as exc:

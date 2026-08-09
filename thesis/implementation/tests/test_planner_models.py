@@ -323,6 +323,49 @@ def test_resident_allocator_reports_capacity_without_spill(minimal_graph, reside
         build_resident_slot_lifetime_map(minimal_graph.graph, minimal_graph.network, profile=profile)
 
 
+def test_resident_allocator_can_disable_slot_reuse(minimal_graph, resident_hardware_suite) -> None:
+    reused = build_resident_slot_lifetime_map(
+        minimal_graph.graph,
+        minimal_graph.network,
+        profile=resident_hardware_suite.profile,
+    )
+    distinct = build_resident_slot_lifetime_map(
+        minimal_graph.graph,
+        minimal_graph.network,
+        profile=resident_hardware_suite.profile,
+        allow_slot_reuse=False,
+    )
+
+    assert distinct.slot_descriptor_count == len(distinct.lifetimes)
+    assert distinct.slot_descriptor_count > reused.slot_descriptor_count
+    assert len(set(distinct.logical_to_slot.values())) == len(distinct.lifetimes)
+
+    package = build_resident_graph_package(
+        minimal_graph.graph,
+        minimal_graph.network,
+        case_id="fixture",
+        suite_id="fixture",
+        quantization_mode="none",
+        profile=resident_hardware_suite.profile,
+        allow_slot_reuse=False,
+    )
+    assert package.allocation.slot_descriptor_count == len(package.allocation.lifetimes)
+
+    limited_profile = resident_hardware_suite.profile.__class__(
+        **{
+            **resident_hardware_suite.profile.__dict__,
+            "max_slot_descriptors": distinct.slot_descriptor_count - 1,
+        }
+    )
+    with pytest.raises(ResidentCapacityError, match="slot_descriptor_cap_exceeded"):
+        build_resident_slot_lifetime_map(
+            minimal_graph.graph,
+            minimal_graph.network,
+            profile=limited_profile,
+            allow_slot_reuse=False,
+        )
+
+
 def test_resident_package_round_trip_is_schema_checked(minimal_graph, resident_hardware_suite, tmp_path: Path) -> None:
     package = build_resident_graph_package(minimal_graph.graph, minimal_graph.network, case_id="case", suite_id="suite", quantization_mode="none", profile=resident_hardware_suite.profile)
     binary = tmp_path / "dpu"

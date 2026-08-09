@@ -669,7 +669,12 @@ static int resident_parse_file_entries(
     return 0;
 }
 
-int resident_request_load(const char *manifest_path, resident_request_t *request, char **error_message) {
+static int resident_request_load_profile(
+    const char *manifest_path,
+    uint32_t max_requested_dpus,
+    resident_request_t *request,
+    char **error_message
+) {
     unsigned char *manifest_bytes = NULL;
     size_t manifest_length = 0u;
     unsigned char *package_bytes = NULL;
@@ -687,6 +692,10 @@ int resident_request_load(const char *manifest_path, resident_request_t *request
     char *session_protocol = NULL;
     char *quantization_mode = NULL;
     int failed = 1;
+    if (request == NULL || manifest_path == NULL || max_requested_dpus == 0u) {
+        resident_error(error_message, "manifest_parse_failed: resident request arguments invalid");
+        return 1;
+    }
     memset(request, 0, sizeof(*request));
     if (resident_read_file(manifest_path, &manifest_bytes, &manifest_length) != 0) {
         resident_error(error_message, "manifest_parse_failed: resident manifest unreadable");
@@ -738,16 +747,28 @@ int resident_request_load(const char *manifest_path, resident_request_t *request
         resident_error(error_message, "hardware_profile_violation: resident manifest path containment failed");
         goto done;
     }
+    request->package_path = package_path;
+    package_path = NULL;
     uint64_t value;
-    if (resident_uint_field((char *)manifest_bytes, "requested_dpus", &value) != 0 || value != 1u ||
+    if (resident_uint_field((char *)manifest_bytes, "requested_dpus", &value) != 0 ||
+        value == 0u || value > max_requested_dpus ||
         resident_uint_field((char *)manifest_bytes, "tasklets", &value) != 0 || value != 1u ||
         resident_uint_field((char *)manifest_bytes, "graph_request_count", &value) != 0 || value != 1u ||
         resident_uint_field((char *)manifest_bytes, "logical_task_count", &value) != 0 || value == 0u || value > RESIDENT_MAX_LOGICAL_TASKS) {
-        resident_error(error_message, "hardware_profile_violation: resident request requires one DPU, one tasklet, one graph request");
+        resident_error(error_message, "hardware_profile_violation: resident request DPU/tasklet/graph limits exceeded");
+        goto done;
+    }
+    if (resident_uint_field((char *)manifest_bytes, "requested_dpus", &value) != 0) {
+        resident_error(error_message, "manifest_parse_failed: resident requested DPU count missing");
+        goto done;
+    }
+    request->requested_dpus = (uint32_t)value;
+    if (resident_uint_field((char *)manifest_bytes, "logical_task_count", &value) != 0) {
+        resident_error(error_message, "manifest_parse_failed: resident logical task count missing");
         goto done;
     }
     request->logical_task_count = (uint32_t)value;
-    if (resident_read_file(package_path, &package_bytes, &package_length) != 0 ||
+    if (resident_read_file(request->package_path, &package_bytes, &package_length) != 0 ||
         resident_validate_package(package_bytes, package_length, request, error_message) != 0) {
         if (error_message != NULL && *error_message == NULL) resident_error(error_message, "hardware_profile_violation: resident package validation failed");
         goto done;
@@ -834,10 +855,23 @@ done:
     return failed;
 }
 
+int resident_request_load(const char *manifest_path, resident_request_t *request, char **error_message) {
+    return resident_request_load_profile(manifest_path, 1u, request, error_message);
+}
+
+int resident_request_load_execution_plan(
+    const char *manifest_path,
+    resident_request_t *request,
+    char **error_message
+) {
+    return resident_request_load_profile(manifest_path, 2u, request, error_message);
+}
+
 void resident_request_free(resident_request_t *request) {
     if (request == NULL) return;
     free(request->session_id);
     free(request->dpu_binary_path);
+    free(request->package_path);
     free(request->slots);
     free(request->operations);
     free(request->slot_flags);

@@ -45,8 +45,10 @@ typedef struct {
     size_t input_count;
     size_t final_count;
     uint32_t logical_task_count;
+    uint32_t requested_dpus;
     char *manifest_root;
     uint32_t *slot_flags;
+    char *package_path;
     char *route_id;
     char *backend_id;
     char *profile_version;
@@ -68,6 +70,12 @@ typedef struct {
 } resident_timing_t;
 
 int resident_request_load(
+    const char *manifest_path,
+    resident_request_t *request,
+    char **error_message
+);
+
+int resident_request_load_execution_plan(
     const char *manifest_path,
     resident_request_t *request,
     char **error_message
