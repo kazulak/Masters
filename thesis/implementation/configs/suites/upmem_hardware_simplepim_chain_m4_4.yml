@@ -1,0 +1,44 @@
+schema_version: 1
+suite_id: upmem_hardware_simplepim_chain_m4_4
+fail_fast: true
+
+metadata:
+  purpose: physical_simplepim_two_task_chain_fixture
+  manual_invocation_required: true
+  claim_boundary: one_dpu_device_resident_intermediate_host_final_reduction_functionality_only
+  hardware_profile:
+    hardware_profile_version: hardware_simplepim_chain_m4_4_v1
+    target: hardware
+    backend_id: upmem_sdk_hardware_simplepim_chain_m4_4
+    route_id: upmem_tn_hardware_simplepim_chain_m4_4
+    requested_dpu_count: 1
+    tasklets_per_dpu: 1
+    effective_operator_tasklets: 1
+    final_reduction_location: host
+    intermediate_residency: device_mram
+    numeric_mode: real_int8_int32_accumulator
+    chain_length: 256
+    task_count: 2
+    synchronous_execution: true
+    performance_claim_applicable: false
+
+defaults:
+  warmups: 1
+  repeats: 5
+  timeout_s: 120.0
+
+workloads:
+  - id: simplepim_two_task_chain_fixture
+    fixture_version: simplepim_chain_fixture_v1
+    task_graph:
+      binding_protocol: M44_GRAPH_BINDING_V1
+      task_count: 2
+      dependencies: [[task_1, task_0]]
+      input_shapes: [[256], [256], [256]]
+      output_shape: []
+      operation_kinds:
+        - elementwise_product_i8_i8
+        - scalar_product_i32_i8_reduce_i64
+    operands:
+      dtype: int8
+      byte_layout: chain_a_int8_256_then_chain_b_int8_256_then_chain_c_int8_256

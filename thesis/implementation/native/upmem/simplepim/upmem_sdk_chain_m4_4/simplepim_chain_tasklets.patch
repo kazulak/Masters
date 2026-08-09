@@ -1,0 +1,20 @@
+diff -U0 -r a/lib/processing/ProcessingHelperHost.c b/lib/processing/ProcessingHelperHost.c
+--- a/lib/processing/ProcessingHelperHost.c
++++ b/lib/processing/ProcessingHelperHost.c
+@@ -1,2 +1,7 @@
+ #include "ProcessingHelperHost.h"
++#ifndef THESIS_SIMPLEPIM_OPERATOR_TASKLETS
++#define THESIS_SIMPLEPIM_OPERATOR_TASKLETS 1
++#endif
++#define THESIS_SIMPLEPIM_STRINGIFY_IMPL(value) #value
++#define THESIS_SIMPLEPIM_STRINGIFY(value) THESIS_SIMPLEPIM_STRINGIFY_IMPL(value)
+ handle_t* create_handle(const char* func_pathname, uint32_t func_type){
+@@ -16 +24 @@
+-        char compile_cmd[2048] = "dpu-upmem-dpurte-clang -O2 -DNR_TASKLETS=12 -I./ -D__mapfunc_filename__=\"<";
++        char compile_cmd[2048] = "dpu-upmem-dpurte-clang -O2 -DNR_TASKLETS=" THESIS_SIMPLEPIM_STRINGIFY(THESIS_SIMPLEPIM_OPERATOR_TASKLETS) " -I./ -D__mapfunc_filename__=\"<";
+@@ -28 +36 @@
+-        char compile_cmd[2048] = "dpu-upmem-dpurte-clang -O2 -DNR_TASKLETS=12 -I./ -D__mapredfunc_pathname__=\"<";
++        char compile_cmd[2048] = "dpu-upmem-dpurte-clang -O2 -DNR_TASKLETS=" THESIS_SIMPLEPIM_STRINGIFY(THESIS_SIMPLEPIM_OPERATOR_TASKLETS) " -I./ -D__mapredfunc_pathname__=\"<";
+@@ -131 +139 @@
+-        char compile_cmd[2048] = "dpu-upmem-dpurte-clang -O2 -DNR_TASKLETS=12 -o bin/dpu_zip";
++        char compile_cmd[2048] = "dpu-upmem-dpurte-clang -O2 -DNR_TASKLETS=" THESIS_SIMPLEPIM_STRINGIFY(THESIS_SIMPLEPIM_OPERATOR_TASKLETS) " -o bin/dpu_zip";

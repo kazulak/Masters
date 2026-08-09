@@ -31,6 +31,7 @@ UPMEM_HW_M4_2_SUITE ?= configs/suites/upmem_hardware_simplepim_rank1_m4_2.yml
 UPMEM_HW_M4_2_RUN ?= runs/evidence/upmem_hardware_simplepim_rank1_m4_2/upmem_hw_m4_2/latest
 UPMEM_HW_M4_3_SUITE ?= configs/suites/upmem_hardware_simplepim_taskgraph_m4_3.yml
 UPMEM_HW_M4_3_RUN ?= runs/evidence/upmem_hardware_simplepim_taskgraph_m4_3/upmem_hw_m4_3/latest
+UPMEM_HW_M4_4_SUITE ?= configs/suites/upmem_hardware_simplepim_chain_m4_4.yml
 UPMEM_HW_M2_3_RUN ?= runs/evidence/upmem_hardware_sliced_resident_m2_3/upmem_hw_sliced_resident/latest
 UPMEM_PROVIDER_CATALOG ?= configs/qualification/upmem_provider_m1.yml
 EVIDENCE_INBOX ?= runs/inbox/eth
@@ -73,6 +74,8 @@ PUBLIC_TARGETS := \
 	upmem-hw-m4-3-plan \
 	upmem-hw-m4-3 \
 	upmem-hw-m4-3-report \
+	upmem-hw-m4-4-plan \
+	upmem-hw-m4-4 \
 	upmem-provider-plan \
 	upmem-provider-qualify \
 	evidence-inbox \
@@ -127,6 +130,8 @@ help:
 		'  make upmem-hw-m4-3-plan  Prepare/build the one real TaskGraph M4.3 adapter; never allocates a DPU' \
 		'  make upmem-hw-m4-3  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; execute the bounded M4.3 TaskGraph fixture' \
 		'  make upmem-hw-m4-3-report  Validate M4.3 functionality evidence; no speedup report is generated' \
+		'  make upmem-hw-m4-4-plan  Prepare/build the one-DPU SimplePIM chain; never allocates a DPU' \
+		'  make upmem-hw-m4-4  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; execute the one-DPU SimplePIM chain' \
 		'  make upmem-provider-plan  Prepare a unique M1 provider qualification plan; never builds or allocates hardware' \
 		'  make upmem-provider-qualify PROVIDER=<id>  Execute one selected physical provider qualification' \
 		'  make evidence-inbox     Create the ignored inbox for copied ETH evidence bundles' \
@@ -294,6 +299,13 @@ upmem-hw-m4-3:
 upmem-hw-m4-3-report:
 	@test -n "$(UPMEM_HW_M4_3_RUN)" || { echo 'Set UPMEM_HW_M4_3_RUN=<physical M4.3 evidence directory>' >&2; exit 2; }
 	$(PY_ENV) $(PYTHON) scripts/upmem_m4_3_report.py --input $(UPMEM_HW_M4_3_RUN)
+
+upmem-hw-m4-4-plan:
+	$(BENCH) upmem-hardware-simplepim-chain-m4-4 --suite $(UPMEM_HW_M4_4_SUITE) --prepare-only --build
+
+upmem-hw-m4-4:
+	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1 to execute physical hardware' >&2; exit 2; }
+	$(BENCH) upmem-hardware-simplepim-chain-m4-4 --suite $(UPMEM_HW_M4_4_SUITE) --execute
 
 upmem-hw-taskgraph-resident-report:
 	$(PY_ENV) $(PYTHON) scripts/research_benchmark_pack.py check-resident-evidence --input $(UPMEM_HW_TASKGRAPH_RESIDENT_RUN)

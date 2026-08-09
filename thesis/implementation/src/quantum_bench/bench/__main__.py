@@ -156,6 +156,15 @@ def main() -> int:
     upmem_hardware_m4_3_mode.add_argument("--prepare-only", action="store_true")
     upmem_hardware_m4_3_mode.add_argument("--execute", action="store_true")
     upmem_hardware_m4_3_parser.add_argument("--build", action="store_true")
+    upmem_hardware_m4_4_parser = sub.add_parser(
+        "upmem-hardware-simplepim-chain-m4-4",
+        help="run the guarded physical M4.4 SimplePIM two-task chain fixture",
+    )
+    upmem_hardware_m4_4_parser.add_argument("--suite", required=True)
+    upmem_hardware_m4_4_mode = upmem_hardware_m4_4_parser.add_mutually_exclusive_group(required=True)
+    upmem_hardware_m4_4_mode.add_argument("--prepare-only", action="store_true")
+    upmem_hardware_m4_4_mode.add_argument("--execute", action="store_true")
+    upmem_hardware_m4_4_parser.add_argument("--build", action="store_true")
     upmem_hardware_taskgraph_m4_1_mode = (
         upmem_hardware_taskgraph_m4_1_parser.add_mutually_exclusive_group(required=True)
     )
@@ -572,6 +581,20 @@ def main() -> int:
         return 0 if result["status"] in {"prepared", "completed"} else 2
     if args.command == "upmem-hardware-simplepim-taskgraph-m4-3":
         from quantum_bench.bench.upmem_hardware_simplepim_taskgraph_m4_3 import execute, prepare
+
+        if args.build and not args.prepare_only:
+            parser.error("--build is only valid with --prepare-only")
+        try:
+            if args.prepare_only:
+                result = prepare(root_dir, suite_path=suite_path(args.suite, root_dir), build=args.build)
+            else:
+                result = execute(root_dir, suite_path=suite_path(args.suite, root_dir))
+        except (OSError, RuntimeError, ValueError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(result, indent=2))
+        return 0 if result["status"] in {"prepared", "completed"} else 2
+    if args.command == "upmem-hardware-simplepim-chain-m4-4":
+        from quantum_bench.bench.upmem_hardware_simplepim_chain_m4_4 import execute, prepare
 
         if args.build and not args.prepare_only:
             parser.error("--build is only valid with --prepare-only")

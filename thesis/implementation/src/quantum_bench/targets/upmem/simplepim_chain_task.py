@@ -6,6 +6,7 @@ import hashlib
 import numpy as np
 
 from quantum_bench.core.records import CircuitSpec, TensorNetworkSpec, TensorSpec, TensorValue, TaskGraph
+from quantum_bench.tn.execution_bundle import build_execution_bundle, contraction_path_structure_hash
 from quantum_bench.tn.network import TensorNetworkValue
 from quantum_bench.tn.task_graph import plan_task_graph
 
@@ -13,6 +14,8 @@ from quantum_bench.tn.task_graph import plan_task_graph
 CHAIN_LENGTH = 256
 CHAIN_TILE_LENGTH = 64
 CHAIN_CASE_ID = "simplepim_two_task_chain_fixture"
+CHAIN_FIXTURE_VERSION = "simplepim_chain_fixture_v1"
+GRAPH_BINDING_SCHEMA = "M44_GRAPH_BINDING_V1"
 CHAIN_INPUT_IDS = ("chain_a", "chain_b", "chain_c")
 CHAIN_INTERMEDIATE_ID = "result_0"
 CHAIN_OUTPUT_ID = "result_1"
@@ -34,6 +37,13 @@ class SimplePimChainWorkload:
     reference_int64: int
     tiles: tuple[ChainTile, ...]
     operand_sha256: str
+
+
+@dataclass(frozen=True)
+class SimplePimChainGraphBinding:
+    text: str
+    sha256: str
+    fields: dict[str, str]
 
 
 def _operands() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -108,3 +118,59 @@ def validate_simplepim_chain_workload(workload: SimplePimChainWorkload) -> None:
     expected = int(np.sum(workload.operands[0].astype(np.int64) * workload.operands[1] * workload.operands[2], dtype=np.int64))
     if workload.reference_int64 != expected:
         raise ValueError("simplepim_chain_reference_mismatch")
+
+
+def build_simplepim_chain_graph_binding(
+    workload: SimplePimChainWorkload,
+    *,
+    input_sha256: str,
+) -> SimplePimChainGraphBinding:
+    """Build the exact ASCII contract consumed by the native M4.4 worker."""
+
+    validate_simplepim_chain_workload(workload)
+    if len(input_sha256) != 64 or any(character not in "0123456789abcdef" for character in input_sha256):
+        raise ValueError("simplepim_chain_input_hash_mismatch")
+    bundle = build_execution_bundle(
+        workload.graph,
+        case_id=CHAIN_CASE_ID,
+        suite_id="upmem_hardware_simplepim_chain_m4_4",
+    )
+    fields = {
+        "case_id": CHAIN_CASE_ID,
+        "fixture_version": CHAIN_FIXTURE_VERSION,
+        "circuit_semantics_hash": bundle["circuit_semantics_hash"],
+        "tensor_network_hash": bundle["tensor_network_hash"],
+        "contraction_plan_hash": bundle["contraction_plan_hash"],
+        "contraction_path_structure_hash": contraction_path_structure_hash(workload.graph),
+        "input_sha256": input_sha256,
+        "reference_int64": str(workload.reference_int64),
+    }
+    lines = [
+        GRAPH_BINDING_SCHEMA,
+        f"CASE_ID\t{fields['case_id']}",
+        "TASK_COUNT\t2",
+        f"CIRCUIT_SEMANTICS_HASH\t{fields['circuit_semantics_hash']}",
+        f"TENSOR_NETWORK_HASH\t{fields['tensor_network_hash']}",
+        f"CONTRACTION_PLAN_HASH\t{fields['contraction_plan_hash']}",
+        f"CONTRACTION_PATH_STRUCTURE_HASH\t{fields['contraction_path_structure_hash']}",
+        f"INPUT_SHA256\t{fields['input_sha256']}",
+        f"EXPECTED_SCALAR\t{fields['reference_int64']}",
+        "INPUT_DTYPE\tint8",
+        "ACCUMULATOR_DTYPE\tint32",
+        f"LENGTH\t{CHAIN_LENGTH}",
+        "PATH_COUNT\t2",
+        "PATH\t0\t0\t1",
+        "PATH\t1\t0\t1",
+        "TASK\t0\ttask_0\t-\tchain_a,chain_b\tresult_0\telementwise_product_i8_i8",
+        "TASK\t1\ttask_1\ttask_0\tchain_c,result_0\tresult_1\tscalar_product_i32_i8_reduce_i64",
+        "END",
+    ]
+    text = "\n".join(lines) + "\n"
+    encoded = text.encode("ascii")
+    if len(encoded) > 16 * 1024 or "\n\n" in text or "\r" in text:
+        raise ValueError("simplepim_chain_graph_binding_format_mismatch")
+    return SimplePimChainGraphBinding(
+        text=text,
+        sha256=hashlib.sha256(encoded).hexdigest(),
+        fields=fields,
+    )
