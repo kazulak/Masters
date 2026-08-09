@@ -40,7 +40,7 @@ def _response(*, parser: bool = False) -> dict[str, object]:
         "simulator_kernel_executed": False,
         "hardware_speedup_applicable": False,
         "timing_is_bringup_only": True,
-        "hardware_target_observation_method": "default_sdk_allocation_and_observed_dpu_count_after_simulator_selector_rejection",
+        "hardware_target_observation_method": "explicit_backend_hw_request_and_observed_dpu_count",
         "allocation_attempted": not parser,
         "provider_initialized": not parser,
         "simplepim_operator_api_used": not parser,

@@ -192,7 +192,7 @@ def _require_response(payload: Mapping[str, Any], *, parser: bool) -> None:
         "simulator_kernel_executed": False,
         "hardware_speedup_applicable": False,
         "timing_is_bringup_only": True,
-        "hardware_target_observation_method": "default_sdk_allocation_and_observed_dpu_count_after_simulator_selector_rejection",
+        "hardware_target_observation_method": "explicit_backend_hw_request_and_observed_dpu_count",
     }
     for key, expected in checks.items():
         if payload.get(key) != expected:

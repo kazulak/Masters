@@ -17,6 +17,29 @@ from quantum_bench.bench.upmem_hardware_simplepim_taskgraph_m4_3 import (
     SUITE_ID,
 )
 from quantum_bench.tn import execution_identity_metadata
+from quantum_bench.tn.execution_bundle import canonical_hash
+
+
+def _canonical_json(value: object) -> str:
+    """Normalize JSON round-trip differences such as tuple versus list."""
+
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _validate_operand_binding(actual: object, expected: dict[str, object], label: str) -> None:
+    if not isinstance(actual, dict):
+        raise ValueError(f"M4.3 {label} operand binding must be an object")
+    stored_hash = actual.get("binding_hash")
+    if not isinstance(stored_hash, str):
+        raise ValueError(f"M4.3 {label} operand binding is missing binding_hash")
+    payload = {key: value for key, value in actual.items() if key != "binding_hash"}
+    if canonical_hash(payload) != stored_hash:
+        raise ValueError(f"M4.3 {label} operand binding hash mismatch")
+    expected_payload = {key: value for key, value in expected.items() if key != "binding_hash"}
+    if _canonical_json(payload) != _canonical_json(expected_payload):
+        raise ValueError(f"M4.3 {label} operand binding mismatch")
+    if stored_hash != expected["binding_hash"]:
+        raise ValueError(f"M4.3 {label} operand binding hash does not match expected binding")
 
 
 def inspect(run: Path) -> dict[str, object]:
@@ -40,11 +63,9 @@ def inspect(run: Path) -> dict[str, object]:
     actual_input_sha256 = hashlib.sha256(operands_path.read_bytes()).hexdigest()
     if actual_input_sha256 != manifest["input_file_sha256"]:
         raise ValueError("M4.3 operands.bin SHA-256 does not match input manifest")
-    if manifest.get("operand_binding") != expected_binding:
-        raise ValueError("M4.3 input manifest operand binding mismatch")
+    _validate_operand_binding(manifest.get("operand_binding"), expected_binding, "input manifest")
     bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
-    if bundle.get("operand_binding") != expected_binding:
-        raise ValueError("M4.3 execution bundle operand binding mismatch")
+    _validate_operand_binding(bundle.get("operand_binding"), expected_binding, "execution bundle")
     if not _is_integer(manifest.get("reference_int64")):
         raise ValueError("M4.3 manifest reference_int64 must be an integer")
     response = json.loads(response_path.read_text(encoding="utf-8"))

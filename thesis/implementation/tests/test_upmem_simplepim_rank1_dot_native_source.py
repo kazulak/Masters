@@ -89,6 +89,7 @@ def test_native_contract_is_physical_two_dpu_persistent_simplepim_only():
         "mram_high_water_bytes_per_dpu",
         "hardware_speedup_applicable\\\":false",
         "host_mediated_reduction\\\":",
+        "hardware_target_observation_method\\\":\\\"explicit_backend_hw_request_and_observed_dpu_count",
     ):
         assert required in source, required
     assert "simplepim_allreduce(" not in source

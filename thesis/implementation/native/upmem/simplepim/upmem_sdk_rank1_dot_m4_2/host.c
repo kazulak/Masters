@@ -362,7 +362,7 @@ static int write_response(
     fprintf(file, ",\"logical_payload_h2d_bytes_per_iteration\":%zu,\"logical_payload_d2h_bytes_per_iteration\":%zu,\"logical_payload_transfer_bytes_per_iteration\":%zu", (size_t)M42_LOGICAL_H2D_BYTES_PER_ITERATION, (size_t)M42_LOGICAL_D2H_BYTES_PER_ITERATION, (size_t)M42_LOGICAL_TRANSFER_BYTES_PER_ITERATION);
     fprintf(file, ",\"logical_payload_h2d_bytes_total_session\":%zu,\"logical_payload_d2h_bytes_total_session\":%zu,\"logical_payload_transfer_bytes_total_session\":%zu", (size_t)M42_LOGICAL_H2D_BYTES_TOTAL_SESSION, (size_t)M42_LOGICAL_D2H_BYTES_TOTAL_SESSION, (size_t)M42_LOGICAL_TRANSFER_BYTES_TOTAL_SESSION);
     fprintf(file, ",\"transfer_bytes_scope\":\"application-visible logical operand payloads and per-DPU scalar partials across warmup plus measured iterations; SDK argument, control, alignment, and runtime-internal transfers excluded\"");
-    fprintf(file, ",\"hardware_target_observation_method\":\"default_sdk_allocation_and_observed_dpu_count_after_simulator_selector_rejection\"");
+    fprintf(file, ",\"hardware_target_observation_method\":\"explicit_backend_hw_request_and_observed_dpu_count\"");
     fprintf(file, ",\"timing_scope\":\"physical hardware SimplePIM qualification; operator timings include API orchestration\",\"timing_is_bringup_only\":true,\"hardware_speedup_applicable\":false,\"hardware_functionality_evidence\":"); json_bool(file, state->hardware_functionality_evidence);
     fprintf(file, ",\"source_commit\":"); json_nullable_string(file, provenance->valid ? provenance->source_commit : NULL);
     fprintf(file, ",\"staged_source_tree_sha256\":"); json_nullable_string(file, provenance->valid ? provenance->staged_source_tree_sha256 : NULL);

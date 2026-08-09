@@ -308,6 +308,7 @@ def _require_response(
         "target_requested": "physical_hardware",
         "target_observed": "physical_hardware",
         "allocation_profile": "backend=hw",
+        "hardware_target_observation_method": "explicit_backend_hw_request_and_observed_dpu_count",
         "requested_dpu_count": DPUS,
         "allocated_dpu_count": DPUS,
         "cpu_fallback_used": False,

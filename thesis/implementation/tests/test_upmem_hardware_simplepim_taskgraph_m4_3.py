@@ -48,6 +48,7 @@ def _response(input_sha256: str, reference: int, identities: dict[str, object]) 
         "requested_dpu_count": 2,
         "allocated_dpu_count": 2,
         "allocation_profile": "backend=hw",
+        "hardware_target_observation_method": "explicit_backend_hw_request_and_observed_dpu_count",
         "cpu_fallback_used": False,
         "simulator_kernel_executed": False,
         "hardware_speedup_applicable": False,
@@ -145,6 +146,17 @@ def test_production_fixture_binding_contains_plan_task_and_operand_sha256(tmp_pa
     assert manifest["operand_binding"]["contraction_plan_hash"] == workload.graph.contraction_plan_hash
     assert manifest["operand_binding"]["task"]["id"] == workload.graph.tasks[0].id
     assert manifest["operand_binding"]["input_file_sha256"] == manifest["input_file_sha256"]
+
+
+def test_report_accepts_json_round_tripped_production_binding() -> None:
+    from scripts import upmem_m4_3_report
+
+    workload = _workload()
+    graph = m43._graph(workload)
+    binding = m43._operand_binding(graph, graph.tasks[0], input_sha256="a" * 64)
+    persisted_binding = json.loads(json.dumps(binding))
+
+    upmem_m4_3_report._validate_operand_binding(persisted_binding, binding, "input manifest")
 
 
 def test_prepare_uses_workload_operands_and_writes_identity(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
