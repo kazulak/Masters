@@ -603,15 +603,22 @@ def _validate_native_transfers(value: Any, plan: ExecutionPlan) -> None:
 def _validate_native_metrics(value: Any, plan: ExecutionPlan, request: Mapping[str, Any]) -> None:
     if not isinstance(value, Mapping):
         raise NativeAdapterError("output_manifest_failed", "native metrics are missing")
-    repetitions = request["requested_warmups"] + request["requested_repetitions"]
-    expected_counts = [sum(item.dpu_id == dpu for item in plan.assignments) * repetitions for dpu in range(plan.requested_dpu_count)]
-    if value.get("completed_per_dpu") != expected_counts:
+    total_iterations = request["requested_warmups"] + request["requested_repetitions"]
+    expected_counts = [
+        sum(item.dpu_id == dpu for item in plan.assignments) * total_iterations
+        for dpu in range(plan.requested_dpu_count)
+    ]
+    completed_per_dpu = value.get("completed_per_dpu")
+    if completed_per_dpu != expected_counts:
         raise NativeAdapterError("output_manifest_failed", "native completion counts differ from schedule")
+    expected_total = plan.logical_task_count * total_iterations
+    if sum(completed_per_dpu) != expected_total:
+        raise NativeAdapterError("output_manifest_failed", "native aggregate completion total differs from schedule")
     for key, expected in (
-        ("launch_count", plan.logical_task_count * repetitions),
-        ("synchronize_count", plan.logical_task_count * repetitions),
-        ("completion_reads", plan.logical_task_count * repetitions),
-        ("cross_dpu_edge_count", len(plan.transfer_edges) * repetitions),
+        ("launch_count", expected_total),
+        ("synchronize_count", expected_total),
+        ("completion_reads", expected_total),
+        ("cross_dpu_edge_count", len(plan.transfer_edges) * total_iterations),
     ):
         if value.get(key) != expected:
             raise NativeAdapterError("output_manifest_failed", f"native metric {key} differs from schedule")
@@ -628,7 +635,7 @@ def _validate_native_metrics(value: Any, plan: ExecutionPlan, request: Mapping[s
     if value["actual_d2h_bytes"] != value["cross_d2h_bytes"] + value["final_d2h_bytes"] or value["actual_transfer_bytes"] != value["actual_h2d_bytes"] + value["actual_d2h_bytes"]:
         raise NativeAdapterError("output_manifest_failed", "native transfer byte invariant failed")
     for key in ("reset_h2d_bytes", "cross_d2h_bytes", "cross_h2d_bytes", "final_d2h_bytes"):
-        if value[key] % repetitions != 0:
+        if value[key] % total_iterations != 0:
             raise NativeAdapterError("output_manifest_failed", f"native metric {key} is not repetition-aligned")
 
 
@@ -685,12 +692,11 @@ def _normalize_session(
     command: tuple[str, ...],
 ) -> dict[str, Any]:
     metrics = response["metrics"]
-    repetitions = request["requested_warmups"] + request["requested_repetitions"]
-    repeat_h2d = metrics["reset_h2d_bytes"] // repetitions + metrics["cross_h2d_bytes"] // repetitions
-    repeat_d2h = metrics["cross_d2h_bytes"] // repetitions + metrics["final_d2h_bytes"] // repetitions
+    total_iterations = request["requested_warmups"] + request["requested_repetitions"]
+    repeat_h2d = metrics["reset_h2d_bytes"] // total_iterations + metrics["cross_h2d_bytes"] // total_iterations
+    repeat_d2h = metrics["cross_d2h_bytes"] // total_iterations + metrics["final_d2h_bytes"] // total_iterations
     assignments = [to_jsonable(item) for item in plan.assignments]
     transfers = [to_jsonable(item) for item in plan.transfer_edges]
-    completed_ids = [item.task_id for item in plan.assignments]
     final_path_ref = final_output_path.relative_to(response_path.parent).as_posix()
     final_output = _read_float32_output(
         final_output_path, plan.final_outputs[0].element_count
@@ -698,6 +704,17 @@ def _normalize_session(
     output_hash = _sha256(_read_bytes(final_output_path, "native final output"))
     validation_id = "final_session_output:" + hashlib.sha256(
         f"{plan.execution_plan_hash}:{output_hash}".encode("ascii")
+    ).hexdigest()
+    aggregate_completion_id = "aggregate_session_completion:" + hashlib.sha256(
+        json.dumps(
+            {
+                "execution_plan_hash": plan.execution_plan_hash,
+                "completed_per_dpu": metrics["completed_per_dpu"],
+                "total_iterations": total_iterations,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("ascii")
     ).hexdigest()
     native_timing = response.get("timing")
     if not isinstance(native_timing, Mapping):
@@ -710,16 +727,13 @@ def _normalize_session(
         "total_session_time_s": elapsed_s,
     }
     repetitions_out = []
-    for index in range(repetitions):
+    for index in range(total_iterations):
         repetitions_out.append(
             {
                 "repeat_id": index if index < request["requested_warmups"] else index - request["requested_warmups"],
                 "warmup": index < request["requested_warmups"],
                 "status": "completed",
-                "completed_task_count": plan.logical_task_count,
-                "completed_task_ids": completed_ids,
-                "task_completion_counts": {task_id: 1 for task_id in completed_ids},
-                "exactly_once_execution_verified": True,
+                "scheduled_task_count": plan.logical_task_count,
                 "wave_barrier_count": plan.wave_count,
                 "launch_count": plan.logical_task_count,
                 "synchronize_count": plan.logical_task_count,
@@ -743,6 +757,10 @@ def _normalize_session(
                 },
                 "validation_id": validation_id,
                 "repeat_output_validation_status": "not_individually_collected",
+                "session_completion_scope": "aggregate_across_warmups_and_repetitions",
+                "repeat_completion_observation_status": "not_individually_collected",
+                "aggregate_session_completion_id": aggregate_completion_id,
+                "aggregate_session_completion_status": "passed",
             }
         )
     return {
@@ -780,9 +798,14 @@ def _normalize_session(
         "requested_repetitions": request["requested_repetitions"],
         "native_session_count": 1,
         "logical_task_count": plan.logical_task_count,
-        "total_task_completion_count": plan.logical_task_count * repetitions,
+        "session_completion_scope": "aggregate_across_warmups_and_repetitions",
+        "aggregate_completed_per_dpu": list(metrics["completed_per_dpu"]),
+        "aggregate_total_task_completion_count": sum(metrics["completed_per_dpu"]),
+        "aggregate_session_completion_id": aggregate_completion_id,
+        "aggregate_session_completion_status": "passed",
+        "total_task_completion_count": plan.logical_task_count * total_iterations,
         "exactly_once_execution_verified": True,
-        "wave_barrier_count_total": plan.wave_count * repetitions,
+        "wave_barrier_count_total": plan.wave_count * total_iterations,
         "operation_assignments": assignments,
         "cross_dpu_transfer": {
             "count": len(plan.transfer_edges),

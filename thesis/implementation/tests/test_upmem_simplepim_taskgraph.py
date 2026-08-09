@@ -73,9 +73,13 @@ class FakeNativeTarget:
             return {"status": "completed"}
 
         reference = np.load(request_path.parent / "cpu_reference.npy", allow_pickle=False)
-        task_ids = [item["task_id"] for item in plan["task_assignments"]]
         repetitions: list[dict[str, object]] = []
         total_repetitions = request["requested_warmups"] + request["requested_repetitions"]
+        aggregate_completed_per_dpu = [
+            sum(item["dpu_id"] == dpu for item in plan["task_assignments"])
+            * total_repetitions
+            for dpu in range(request["requested_dpu_count"])
+        ]
         for index in range(total_repetitions):
             warmup = index < request["requested_warmups"]
             h2d_bytes = 64
@@ -85,10 +89,7 @@ class FakeNativeTarget:
                     "repeat_id": index if warmup else index - request["requested_warmups"],
                     "warmup": warmup,
                     "status": "completed",
-                    "completed_task_count": plan["logical_task_count"],
-                    "completed_task_ids": task_ids,
-                    "task_completion_counts": {task_id: 1 for task_id in task_ids},
-                    "exactly_once_execution_verified": True,
+                    "scheduled_task_count": plan["logical_task_count"],
                     "wave_barrier_count": plan["wave_count"],
                     "launch_count": plan["logical_task_count"],
                     "synchronize_count": plan["logical_task_count"],
@@ -109,6 +110,10 @@ class FakeNativeTarget:
                     },
                     "validation_id": "fake-final-session-output",
                     "repeat_output_validation_status": "not_individually_collected",
+                    "session_completion_scope": "aggregate_across_warmups_and_repetitions",
+                    "repeat_completion_observation_status": "not_individually_collected",
+                    "aggregate_session_completion_id": "aggregate_session_completion:fake",
+                    "aggregate_session_completion_status": "passed",
                 }
             )
         return {
@@ -146,6 +151,11 @@ class FakeNativeTarget:
             "requested_repetitions": request["requested_repetitions"],
             "native_session_count": 1,
             "logical_task_count": plan["logical_task_count"],
+            "session_completion_scope": "aggregate_across_warmups_and_repetitions",
+            "aggregate_completed_per_dpu": aggregate_completed_per_dpu,
+            "aggregate_total_task_completion_count": sum(aggregate_completed_per_dpu),
+            "aggregate_session_completion_id": "aggregate_session_completion:fake",
+            "aggregate_session_completion_status": "passed",
             "total_task_completion_count": plan["logical_task_count"] * total_repetitions,
             "exactly_once_execution_verified": True,
             "wave_barrier_count_total": plan["wave_count"] * total_repetitions,
@@ -237,6 +247,18 @@ def test_execute_keeps_warmups_out_of_normalized_records(tmp_path: Path) -> None
     assert all(row["validation_status"] == "not_individually_collected" for row in measured)
     assert all(row["session_validation_status"] == "passed" for row in measured)
     assert all(row["repeat_output_validation_status"] == "not_individually_collected" for row in measured)
+    assert all(row["session_completion_scope"] == "aggregate_across_warmups_and_repetitions" for row in measured)
+    assert all(row["repeat_completion_observation_status"] == "not_individually_collected" for row in measured)
+    assert all(row["aggregate_session_completion_status"] == "passed" for row in measured)
+    assert all(row["scheduled_task_count"] == 3 for row in measured)
+    assert all(row["aggregate_session_completion_id"] == "aggregate_session_completion:fake" for row in measured)
+    forbidden = {
+        "completed_task_count", "completed_task_ids", "task_completion_counts",
+        "exactly_once_execution_verified",
+    }
+    assert all(forbidden.isdisjoint(row) for row in measured)
+    assert {tuple(row["aggregate_completed_per_dpu"]) for row in measured} == {(12,), (8, 4)}
+    assert {row["aggregate_total_task_completion_count"] for row in measured} == {12}
     assert all("output" not in row for row in measured)
     assert target.build_calls == 1
     assert len(target.execute_calls) == 2

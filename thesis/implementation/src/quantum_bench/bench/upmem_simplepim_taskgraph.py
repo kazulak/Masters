@@ -587,6 +587,9 @@ def _validate_adapter_session(session: Mapping[str, Any], prepared: PreparedPlac
         "cpu_fallback_used", "hardware_speedup_applicable", "device_launch_mode",
         "synchronization_policy", "fully_synchronous_kernel_launch", "requested_warmups",
         "requested_repetitions", "native_session_count", "logical_task_count",
+        "session_completion_scope", "aggregate_completed_per_dpu",
+        "aggregate_total_task_completion_count", "aggregate_session_completion_id",
+        "aggregate_session_completion_status",
         "total_task_completion_count", "exactly_once_execution_verified",
         "wave_barrier_count_total", "operation_assignments", "cross_dpu_transfer",
         "schedule_h2d_bytes", "session_timing", "session_transfer", "session_validation", "repetitions",
@@ -622,6 +625,14 @@ def _validate_adapter_session(session: Mapping[str, Any], prepared: PreparedPlac
         "requested_repetitions": REPEATS,
         "native_session_count": 1,
         "logical_task_count": prepared.plan.logical_task_count,
+        "session_completion_scope": "aggregate_across_warmups_and_repetitions",
+        "aggregate_completed_per_dpu": [
+            sum(item.dpu_id == dpu for item in prepared.plan.assignments)
+            * (WARMUPS + REPEATS)
+            for dpu in range(prepared.plan.requested_dpu_count)
+        ],
+        "aggregate_total_task_completion_count": prepared.plan.logical_task_count * (WARMUPS + REPEATS),
+        "aggregate_session_completion_status": "passed",
         "total_task_completion_count": prepared.plan.logical_task_count * (WARMUPS + REPEATS),
         "exactly_once_execution_verified": True,
         "wave_barrier_count_total": prepared.plan.wave_count * (WARMUPS + REPEATS),
@@ -631,6 +642,9 @@ def _validate_adapter_session(session: Mapping[str, Any], prepared: PreparedPlac
     for key, value in expected.items():
         if session[key] != value:
             raise NativeExecutionFailure("output_manifest_failed", f"adapter session field {key} mismatch")
+    aggregate_completion_id = session["aggregate_session_completion_id"]
+    if not isinstance(aggregate_completion_id, str) or not aggregate_completion_id.startswith("aggregate_session_completion:"):
+        raise NativeExecutionFailure("output_manifest_failed", "aggregate session completion ID is invalid")
     for identity_name, expected_identity in (
         ("source_identity", {
             "circuit_semantics_hash": prepared.plan.source_circuit_semantics_hash,
@@ -664,7 +678,7 @@ def _validate_adapter_session(session: Mapping[str, Any], prepared: PreparedPlac
     if warmup_ids != list(range(WARMUPS)) or measured_ids != list(range(REPEATS)):
         raise NativeExecutionFailure("output_manifest_failed", "adapter repetition identities mismatch")
     for repetition in repetitions:
-        _validate_repetition(repetition, prepared)
+        _validate_repetition(repetition, prepared, aggregate_completion_id)
         if repetition["validation_id"] != session["session_validation"]["validation_id"]:
             raise NativeExecutionFailure("output_manifest_failed", "repetition validation ID differs from session")
     _validate_session_transfer(session["session_transfer"], repetitions)
@@ -723,27 +737,32 @@ def _validate_completed_session_validation(
         raise NativeExecutionFailure("output_validation_failed", "session validation error is invalid")
 
 
-def _validate_repetition(repetition: Mapping[str, Any], prepared: PreparedPlacement) -> None:
+def _validate_repetition(
+    repetition: Mapping[str, Any],
+    prepared: PreparedPlacement,
+    aggregate_completion_id: str,
+) -> None:
     _require_fields(repetition, (
-        "repeat_id", "warmup", "status", "completed_task_count", "completed_task_ids",
-        "task_completion_counts", "exactly_once_execution_verified", "wave_barrier_count",
+        "repeat_id", "warmup", "status", "scheduled_task_count", "wave_barrier_count",
         "launch_count", "synchronize_count", "device_launch_mode", "synchronization_policy",
         "fully_synchronous_kernel_launch", "timing", "transfer", "validation_id",
-        "repeat_output_validation_status",
+        "repeat_output_validation_status", "session_completion_scope",
+        "repeat_completion_observation_status", "aggregate_session_completion_id",
+        "aggregate_session_completion_status",
     ), "adapter repetition")
-    task_ids = [item.task_id for item in prepared.plan.assignments]
-    expected_counts = {task_id: 1 for task_id in task_ids}
     expected = {
         "status": "completed",
-        "completed_task_count": prepared.plan.logical_task_count,
-        "task_completion_counts": expected_counts,
-        "exactly_once_execution_verified": True,
+        "scheduled_task_count": prepared.plan.logical_task_count,
         "wave_barrier_count": prepared.plan.wave_count,
         "launch_count": prepared.plan.logical_task_count,
         "synchronize_count": prepared.plan.logical_task_count,
         "device_launch_mode": DEVICE_LAUNCH_MODE,
         "synchronization_policy": SYNCHRONIZATION_POLICY,
         "fully_synchronous_kernel_launch": False,
+        "session_completion_scope": "aggregate_across_warmups_and_repetitions",
+        "repeat_completion_observation_status": "not_individually_collected",
+        "aggregate_session_completion_id": aggregate_completion_id,
+        "aggregate_session_completion_status": "passed",
     }
     for key, value in expected.items():
         if repetition[key] != value:
@@ -752,9 +771,6 @@ def _validate_repetition(repetition: Mapping[str, Any], prepared: PreparedPlacem
         raise NativeExecutionFailure("output_manifest_failed", "adapter repetition validation ID is invalid")
     if repetition["repeat_output_validation_status"] != "not_individually_collected":
         raise NativeExecutionFailure("output_manifest_failed", "adapter repetition claims output validation")
-    completed_ids = repetition["completed_task_ids"]
-    if not isinstance(completed_ids, list) or sorted(completed_ids) != sorted(task_ids) or len(completed_ids) != len(set(completed_ids)):
-        raise NativeExecutionFailure("output_manifest_failed", "tasks were not completed exactly once")
     _validate_timing(repetition["timing"], (
         "operand_h2d_time_s", "cross_dpu_transfer_time_s", "wave_launch_sync_time_s",
         "final_d2h_time_s", "total_repetition_time_s",
@@ -834,7 +850,7 @@ def _base_record(
     row.update({f"source_{key}": value for key, value in source.items()})
     row.update({f"package_{key}": value for key, value in package.items()})
     row.update({key: source[key] for key in ("circuit_semantics_hash", "tensor_network_hash", "contraction_plan_hash")})
-    row.update({key: None for key in ("allocated_dpu_count", "source_task_completion_count", "timing_scope", "allocation_time_s", "binary_load_time_s", "initial_h2d_time_s", "kernel_time_s", "inter_wave_transfer_time_s", "final_d2h_time_s", "total_route_time_s", "actual_h2d_bytes", "actual_d2h_bytes", "actual_transfer_bytes")})
+    row.update({key: None for key in ("allocated_dpu_count", "timing_scope", "allocation_time_s", "binary_load_time_s", "initial_h2d_time_s", "kernel_time_s", "inter_wave_transfer_time_s", "final_d2h_time_s", "total_route_time_s", "actual_h2d_bytes", "actual_d2h_bytes", "actual_transfer_bytes")})
     row.update({"host_binary_hash": _binary_hash(_path_value(native_build, "host_binary")), "dpu_binary_hash": _binary_hash(_path_value(native_build, "dpu_binary"))})
     return row
 
@@ -850,9 +866,14 @@ def _adapter_record(
     transfer = repetition["transfer"]
     return {
         "allocated_dpu_count": session["allocated_dpu_count"],
-        "source_task_completion_count": repetition["completed_task_count"],
-        "task_completion_counts": repetition["task_completion_counts"],
-        "exactly_once_execution_verified": repetition["exactly_once_execution_verified"],
+        "scheduled_task_count": repetition["scheduled_task_count"],
+        "session_completion_scope": session["session_completion_scope"],
+        "aggregate_completed_per_dpu": session["aggregate_completed_per_dpu"],
+        "aggregate_total_task_completion_count": session["aggregate_total_task_completion_count"],
+        "aggregate_session_completion_id": session["aggregate_session_completion_id"],
+        "aggregate_session_completion_status": repetition["aggregate_session_completion_status"],
+        "aggregate_exactly_once_execution_verified": session["exactly_once_execution_verified"],
+        "repeat_completion_observation_status": repetition["repeat_completion_observation_status"],
         "native_session_count": session["native_session_count"],
         "persistent_allocation_observed": session["persistent_allocation_observed"],
         "native_kernel_executed": session["native_kernel_executed"],
