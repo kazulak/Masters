@@ -494,7 +494,7 @@ def _validate_native_response(
         raise NativeAdapterError("output_manifest_failed", "native DPU binary hash is stale")
     _validate_native_assignments(response.get("operation_assignments"), plan)
     _validate_native_transfers(response.get("cross_dpu_transfers"), plan)
-    _validate_native_metrics(response.get("metrics"), plan, request)
+    _validate_native_metrics(response, plan, request)
     if _manifest_package_path(manifest_path, _read_object(manifest_path, "resident package manifest")) != package_path.resolve():
         raise NativeAdapterError("output_manifest_failed", "native manifest package binding changed")
 
@@ -600,15 +600,23 @@ def _validate_native_transfers(value: Any, plan: ExecutionPlan) -> None:
         raise NativeAdapterError("output_manifest_failed", "native transfer set is incomplete")
 
 
-def _validate_native_metrics(value: Any, plan: ExecutionPlan, request: Mapping[str, Any]) -> None:
-    if not isinstance(value, Mapping):
+def _validate_native_metrics(response: Any, plan: ExecutionPlan, request: Mapping[str, Any]) -> None:
+    if not isinstance(response, Mapping):
+        raise NativeAdapterError("output_manifest_failed", "native response is missing")
+    metrics = response.get("metrics")
+    if not isinstance(metrics, Mapping):
         raise NativeAdapterError("output_manifest_failed", "native metrics are missing")
+    if "completed_per_dpu" in metrics:
+        raise NativeAdapterError(
+            "output_manifest_failed",
+            "native completion counts must be top-level response fields",
+        )
     total_iterations = request["requested_warmups"] + request["requested_repetitions"]
     expected_counts = [
         sum(item.dpu_id == dpu for item in plan.assignments) * total_iterations
         for dpu in range(plan.requested_dpu_count)
     ]
-    completed_per_dpu = value.get("completed_per_dpu")
+    completed_per_dpu = response.get("completed_per_dpu")
     if completed_per_dpu != expected_counts:
         raise NativeAdapterError("output_manifest_failed", "native completion counts differ from schedule")
     expected_total = plan.logical_task_count * total_iterations
@@ -620,7 +628,7 @@ def _validate_native_metrics(value: Any, plan: ExecutionPlan, request: Mapping[s
         ("completion_reads", expected_total),
         ("cross_dpu_edge_count", len(plan.transfer_edges) * total_iterations),
     ):
-        if value.get(key) != expected:
+        if metrics.get(key) != expected:
             raise NativeAdapterError("output_manifest_failed", f"native metric {key} differs from schedule")
     integer_keys = (
         "descriptor_h2d_bytes", "operand_h2d_bytes", "reset_h2d_bytes",
@@ -628,14 +636,14 @@ def _validate_native_metrics(value: Any, plan: ExecutionPlan, request: Mapping[s
         "actual_h2d_bytes", "actual_d2h_bytes", "actual_transfer_bytes",
     )
     for key in integer_keys:
-        if not isinstance(value.get(key), int) or isinstance(value.get(key), bool) or value[key] < 0:
+        if not isinstance(metrics.get(key), int) or isinstance(metrics.get(key), bool) or metrics[key] < 0:
             raise NativeAdapterError("output_manifest_failed", f"native metric {key} is invalid")
-    if value["actual_h2d_bytes"] != value["descriptor_h2d_bytes"] + value["operand_h2d_bytes"] + value["reset_h2d_bytes"] + value["cross_h2d_bytes"]:
+    if metrics["actual_h2d_bytes"] != metrics["descriptor_h2d_bytes"] + metrics["operand_h2d_bytes"] + metrics["reset_h2d_bytes"] + metrics["cross_h2d_bytes"]:
         raise NativeAdapterError("output_manifest_failed", "native H2D byte invariant failed")
-    if value["actual_d2h_bytes"] != value["cross_d2h_bytes"] + value["final_d2h_bytes"] or value["actual_transfer_bytes"] != value["actual_h2d_bytes"] + value["actual_d2h_bytes"]:
+    if metrics["actual_d2h_bytes"] != metrics["cross_d2h_bytes"] + metrics["final_d2h_bytes"] or metrics["actual_transfer_bytes"] != metrics["actual_h2d_bytes"] + metrics["actual_d2h_bytes"]:
         raise NativeAdapterError("output_manifest_failed", "native transfer byte invariant failed")
     for key in ("reset_h2d_bytes", "cross_d2h_bytes", "cross_h2d_bytes", "final_d2h_bytes"):
-        if value[key] % total_iterations != 0:
+        if metrics[key] % total_iterations != 0:
             raise NativeAdapterError("output_manifest_failed", f"native metric {key} is not repetition-aligned")
 
 
@@ -709,7 +717,7 @@ def _normalize_session(
         json.dumps(
             {
                 "execution_plan_hash": plan.execution_plan_hash,
-                "completed_per_dpu": metrics["completed_per_dpu"],
+                "completed_per_dpu": response["completed_per_dpu"],
                 "total_iterations": total_iterations,
             },
             sort_keys=True,
@@ -799,8 +807,8 @@ def _normalize_session(
         "native_session_count": 1,
         "logical_task_count": plan.logical_task_count,
         "session_completion_scope": "aggregate_across_warmups_and_repetitions",
-        "aggregate_completed_per_dpu": list(metrics["completed_per_dpu"]),
-        "aggregate_total_task_completion_count": sum(metrics["completed_per_dpu"]),
+        "aggregate_completed_per_dpu": list(response["completed_per_dpu"]),
+        "aggregate_total_task_completion_count": sum(response["completed_per_dpu"]),
         "aggregate_session_completion_id": aggregate_completion_id,
         "aggregate_session_completion_status": "passed",
         "total_task_completion_count": plan.logical_task_count * total_iterations,

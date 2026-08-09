@@ -305,9 +305,9 @@ def test_real_normalized_session_passes_route_validator(tmp_path: Path) -> None:
         "synchronize_count": plan.logical_task_count * repetitions,
         "completion_reads": plan.logical_task_count * repetitions,
         "cross_dpu_edge_count": 0,
-        "completed_per_dpu": [plan.logical_task_count * repetitions],
     }
     native_response = {
+        "completed_per_dpu": [plan.logical_task_count * repetitions],
         "allocated_dpu_count": plan.requested_dpu_count,
         "allocation": {
             "attempted": True,
@@ -387,24 +387,26 @@ def test_native_completion_counts_are_aggregate_over_the_session(
         transfer_edges=(),
     )
     request = {"requested_warmups": 1, "requested_repetitions": 3}
-    metrics = {
+    response = {
         "completed_per_dpu": expected_completed_per_dpu,
-        "launch_count": 12,
-        "synchronize_count": 12,
-        "completion_reads": 12,
-        "cross_dpu_edge_count": 0,
-        "descriptor_h2d_bytes": 0,
-        "operand_h2d_bytes": 0,
-        "reset_h2d_bytes": 0,
-        "cross_d2h_bytes": 0,
-        "cross_h2d_bytes": 0,
-        "final_d2h_bytes": 0,
-        "actual_h2d_bytes": 0,
-        "actual_d2h_bytes": 0,
-        "actual_transfer_bytes": 0,
+        "metrics": {
+            "launch_count": 12,
+            "synchronize_count": 12,
+            "completion_reads": 12,
+            "cross_dpu_edge_count": 0,
+            "descriptor_h2d_bytes": 0,
+            "operand_h2d_bytes": 0,
+            "reset_h2d_bytes": 0,
+            "cross_d2h_bytes": 0,
+            "cross_h2d_bytes": 0,
+            "final_d2h_bytes": 0,
+            "actual_h2d_bytes": 0,
+            "actual_d2h_bytes": 0,
+            "actual_transfer_bytes": 0,
+        },
     }
 
-    executor._validate_native_metrics(metrics, plan, request)
+    executor._validate_native_metrics(response, plan, request)
 
 
 def test_native_completion_count_mismatch_is_rejected() -> None:
@@ -415,22 +417,55 @@ def test_native_completion_count_mismatch_is_rejected() -> None:
         transfer_edges=(),
     )
     request = {"requested_warmups": 1, "requested_repetitions": 3}
-    metrics = {
+    response = {
         "completed_per_dpu": [2, 1],
-        "launch_count": 12,
-        "synchronize_count": 12,
-        "completion_reads": 12,
-        "cross_dpu_edge_count": 0,
-        "descriptor_h2d_bytes": 0,
-        "operand_h2d_bytes": 0,
-        "reset_h2d_bytes": 0,
-        "cross_d2h_bytes": 0,
-        "cross_h2d_bytes": 0,
-        "final_d2h_bytes": 0,
-        "actual_h2d_bytes": 0,
-        "actual_d2h_bytes": 0,
-        "actual_transfer_bytes": 0,
+        "metrics": {
+            "launch_count": 12,
+            "synchronize_count": 12,
+            "completion_reads": 12,
+            "cross_dpu_edge_count": 0,
+            "descriptor_h2d_bytes": 0,
+            "operand_h2d_bytes": 0,
+            "reset_h2d_bytes": 0,
+            "cross_d2h_bytes": 0,
+            "cross_h2d_bytes": 0,
+            "final_d2h_bytes": 0,
+            "actual_h2d_bytes": 0,
+            "actual_d2h_bytes": 0,
+            "actual_transfer_bytes": 0,
+        },
     }
 
     with pytest.raises(executor.NativeAdapterError, match="completion counts differ"):
-        executor._validate_native_metrics(metrics, plan, request)
+        executor._validate_native_metrics(response, plan, request)
+
+
+def test_native_completion_counts_must_not_be_nested_in_metrics() -> None:
+    plan = SimpleNamespace(
+        assignments=[SimpleNamespace(dpu_id=dpu_id) for dpu_id in (0, 0, 0)],
+        requested_dpu_count=1,
+        logical_task_count=3,
+        transfer_edges=(),
+    )
+    request = {"requested_warmups": 1, "requested_repetitions": 3}
+    response = {
+        "metrics": {
+            "completed_per_dpu": [12],
+            "launch_count": 12,
+            "synchronize_count": 12,
+            "completion_reads": 12,
+            "cross_dpu_edge_count": 0,
+            "descriptor_h2d_bytes": 0,
+            "operand_h2d_bytes": 0,
+            "reset_h2d_bytes": 0,
+            "cross_d2h_bytes": 0,
+            "cross_h2d_bytes": 0,
+            "final_d2h_bytes": 0,
+            "actual_h2d_bytes": 0,
+            "actual_d2h_bytes": 0,
+            "actual_transfer_bytes": 0,
+        }
+    }
+
+    with pytest.raises(executor.NativeAdapterError, match="top-level response fields"):
+        executor._validate_native_metrics(response, plan, request)
