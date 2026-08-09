@@ -6,7 +6,8 @@ This directory is the active thesis implementation. Its research question is:
 > way that is correct, measurable, and eventually faster on real DPU hardware?
 
 The current code establishes the circuit-to-TaskGraph pipeline, serious CPU and
-GPU baselines, bounded UPMEM SDK-simulator execution, and reproducible evidence.
+GPU baselines, bounded UPMEM SDK-simulator execution, and a hardware-free
+qualified descriptor-driven M4.5 runtime.
 It does **not** yet claim UPMEM hardware speedup or a fully general UPMEM tensor
 contraction kernel.
 
@@ -26,12 +27,15 @@ route labels, tables, plots, and snapshot compatibility remain available for
 existing evidence.
 
 The historical status applies to those old runnable experiments, not to the
-target architecture. SimplePIM is physically qualified only for the bounded
-management/operator lanes demonstrated by M4.2--M4.4. The shared descriptor-
-driven M4.5 runtime is the active next phase; it has not yet passed physical
-acceptance. PID-Comm, ATiM, and SparseP remain subsequent provider/kernel/
-communication components behind thesis-owned interfaces, each for its own task
-class rather than as a universal execution route.
+target architecture. SimplePIM is physically qualified for the bounded
+management/operator lanes demonstrated by M4.2--M4.4. M4.5 is implemented and
+qualified through hardware-free build, ABI, and schedule validation: one
+resident package is used with separate one-DPU and two-DPU schedules; SimplePIM
+handles management/allocation, the thesis resident kernel handles contraction,
+and the host performs the initial handoff. Each session validates one final
+output. ETH physical acceptance is still pending, and the route makes no
+scaling or speedup claim. PID-Comm, ATiM, and SparseP remain subsequent
+provider/kernel/communication components behind thesis-owned interfaces.
 
 Start with [ARCHITECTURE.md](ARCHITECTURE.md) for module ownership, external
 provenance, thesis contributions, and the planned UPMEM architecture. The fixed
@@ -257,7 +261,8 @@ Current limitation:
 
 > The current UPMEM evidence is bounded to the documented generic simulator and
 > separate physical M2--M4 qualification lanes. The descriptor-driven M4.5
-> shared runtime, fully general distributed operation-aware execution, provider
+> shared runtime is implemented and hardware-free qualified, but awaits ETH
+> acceptance. Fully general distributed operation-aware execution, provider
 > collectives, and hardware-calibrated UPMEM TN execution do not yet exist.
 
 ## Generated Cleanup

@@ -621,13 +621,14 @@ native/general TaskGraph support, speedup, energy, or scaling.
 
 ### M4.5: descriptor-driven shared runtime
 
-Build the active descriptor-driven shared runtime phase. Compile one bounded
-TaskGraph into explicit kernel, placement, numeric, communication, and schedule
-descriptors, then execute it through SimplePIM management/allocation and the
-thesis-owned resident generic contraction kernel. Start with one DPU and extend
-to the existing two-DPU frontier fixture without changing the scientific plan.
-Use `bounded_taskgraph_executed` and explicit provider identities in evidence;
-do not reuse `task_graph_integrated` as a general claim.
+M4.5 is implemented and hardware-free qualified. The descriptor-driven shared
+runtime compiles one bounded TaskGraph into explicit kernel, placement, numeric,
+communication, and schedule descriptors, then executes it through SimplePIM
+management/allocation and the thesis-owned resident generic contraction kernel.
+It supports the existing one-DPU and two-DPU qualification shapes without
+changing the scientific plan. Evidence uses `bounded_taskgraph_executed` and
+explicit provider identities; `task_graph_integrated` remains a non-general
+historical claim.
 
 SimplePIM owns bounded management/allocation and qualified operator APIs. The
 thesis resident generic contraction kernel owns TaskGraph compute, and
@@ -635,9 +636,9 @@ host-mediated transfer is the initial communication provider. PID-Comm is the
 future communication provider; ATiM and SparseP are future generated-dense and
 sparse kernel providers.
 
-This phase has not passed physical acceptance yet. It does not add tasklets,
-tiling, PID-Comm, ATiM, SparseP, speedup, energy, or scaling claims. Those are
-subsequent extensions after the shared runtime executes the bounded plan.
+The immediate next action is ETH physical acceptance of the bounded runtime.
+M4.5 makes no tasklet, tiling, PID-Comm, ATiM, SparseP, speedup, energy, or
+scaling claim. Those are subsequent extensions after physical acceptance.
 
 ### M4.6: intra-DPU tiling and tasklets
 
@@ -802,14 +803,11 @@ Each physical milestone has a separate ETH acceptance suite.
 
 ## Immediate Next Wave
 
-Build M4.5: a bounded descriptor-driven shared runtime. Compile one unchanged
-TaskGraph into explicit kernel, placement, numeric, communication, and schedule
-descriptors; execute it through SimplePIM management/allocation and the
-thesis-owned resident generic contraction kernel; and support the existing one-
-and two-DPU qualification shapes without changing the scientific plan. Use
-`bounded_taskgraph_executed` and explicit provider identities in evidence.
+Run the ETH physical acceptance of the implemented, hardware-free-qualified
+M4.5 descriptor-driven shared runtime. Use the existing one-DPU and two-DPU
+qualification shapes without changing the scientific plan, and retain
+`bounded_taskgraph_executed` plus explicit provider identities in the evidence.
 
 M2.1, M2.2, M2.3, M3.1, and M4.2--M4.4 remain frozen compatibility surfaces.
-Do not add another milestone-specific fixture runner. M4.5 has no physical
-acceptance, speedup, energy, scaling, tasklet, tiling, PID-Comm, ATiM, or SparseP
-claim until its shared execution plan passes its own ETH gate.
+M4.5 remains functionality evidence only: no speedup, energy, scaling,
+tasklet, tiling, PID-Comm, ATiM, or SparseP claim is allowed.

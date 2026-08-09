@@ -153,16 +153,20 @@ M4.2--M4.4 SimplePIM results add physical qualifications for dependency-safe
 dispatch, a SimplePIM operator, a TaskGraph-derived adapter, and a fixed
 resident operator chain. They do not share one native general executor yet.
 
-The active M4.5 target is a descriptor-driven shared runtime. Its evidence
-terminology must use `bounded_taskgraph_executed` plus explicit runtime, kernel,
-numeric, placement, and communication providers. The ambiguous
-`task_graph_integrated` field is not a general scientific claim for this phase.
-SimplePIM supplies bounded management/allocation and qualified operator APIs;
-the thesis-owned resident generic contraction kernel supplies TaskGraph compute;
-host-mediated transfer is the initial communication provider. PID-Comm is the
-future communication provider, while ATiM and SparseP are future generated-dense
-and sparse kernel providers. M4.5 remains unimplemented and physically
-unqualified until its ETH acceptance run passes.
+M4.5 is implemented and hardware-free qualified as a descriptor-driven shared
+runtime. Its evidence terminology uses `bounded_taskgraph_executed` plus
+explicit runtime, kernel, numeric, placement, and communication providers. The
+ambiguous `task_graph_integrated` field is not a general scientific claim for
+this phase. One resident package is shared by separate one-DPU sequential and
+two-DPU frontier schedules. SimplePIM supplies bounded management/allocation
+and qualified operator APIs; the thesis-owned resident generic contraction
+kernel supplies TaskGraph compute; host-mediated transfer is the initial communication provider.
+It is host-mediated handoff only; no direct DPU-to-DPU communication is claimed.
+Each session validates one final output, with warmups and repetitions recorded
+separately. PID-Comm is the future communication provider,
+while ATiM and SparseP are future generated-dense and sparse kernel providers.
+M4.5 remains physically unqualified until its ETH acceptance run passes and
+makes no scaling or speedup claim.
 
 M2 implementation status: the bounded useful-slice acceptance passed on ETH.
 M2.2 and M2.3 additionally provide physical float32/requantized and
@@ -191,7 +195,7 @@ Current limitation:
 | Quantization formats | Compare same-plan float32 and integer execution with explicit scale/error | Float32 and int8 generic modes exist | Thesis evaluation; motivated by weak DPU floating point |
 | Multi-DPU scheduler | Assign ready contractions/tiles to DPU groups | M2 has fixed slice-to-DPU ownership only; general scheduling remains future work | Thesis architecture |
 | DPU communication layer | Move intermediates, tiles, and partial reductions across DPU groups | M2 uses Python host sum reconstruction; PID-Comm collectives remain a planned central component | PID-Comm |
-| High-level PIM adapter | Manage distributed arrays and reuse map/zip/reduce plus host/DPU communication primitives | Bounded physical management/operator lanes qualified; shared descriptor-driven executor integration is the active M4.5 target | SimplePIM |
+| High-level PIM adapter | Manage distributed arrays and reuse map/zip/reduce plus host/DPU communication primitives | Bounded physical management/operator lanes qualified; descriptor-driven M4.5 runtime is implemented and hardware-free qualified, pending ETH acceptance | SimplePIM |
 | Automatic kernel generation | Generate and tune local tensor contractions, loop orders, tasklet counts, and tiles | Planned central provider for subsequent dense local-kernel milestones | ATiM |
 | Sparse kernels | Execute measured sparse-eligible contractions with established formats and load balancing | Planned central provider for subsequent sparse-kernel milestones | SparseP |
 
@@ -209,14 +213,15 @@ subsequent components. Each serves a task-specific
 provider, kernel, or communication boundary; they are not interchangeable
 runtimes, and qualification or use of one provider does not imply that it
 handles every contraction or route. The generic SDK path remains the explicit
-control route while the shared M4.5 executor is built.
+control route; M4.5 adds the hardware-free-qualified shared executor with
+host-mediated handoff and remains pending ETH physical acceptance.
 
 | Item | Provenance | How it is used here |
 | --- | --- | --- |
 | QuEST | External submodule | Full-state CPU and GPU baseline; no thesis ownership claim |
 | Quimb, cotengra, opt_einsum | External Python libraries | Serious CPU TN execution and path planning |
 | UPMEM SDK | External platform/toolchain | Strict simulator route and bounded two-DPU sliced-resident physical M2 route at ETH |
-| SimplePIM | External pinned repository | Bounded physical management/operator qualification exists for M4.2--M4.4; the descriptor-driven M4.5 shared runtime is not yet physically accepted |
+| SimplePIM | External pinned repository | Bounded physical management/operator qualification exists for M4.2--M4.4; M4.5 uses it for management/allocation while thesis code supplies resident contraction |
 | PID-Comm | External pinned repository | Task-specific target for multi-DPU relocation and collective reduction; not claimed as current executor integration |
 | ATiM | Official artifact to be pinned | Task-specific target for generated/autotuned dense local tensor kernels; qualification required before integration |
 | SparseP | External project to be pinned | Task-specific target for sparse formats, kernels, and load balancing; qualification required before integration |
