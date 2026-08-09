@@ -316,6 +316,7 @@ static int write_response(const char *path, const response_state_t *state) {
     FILE *file = fopen(path, "w");
     if (file == NULL) return 1;
     const bool task_graph_integrated = state->graph_binding_validated && state->native_taskgraph_protocol;
+    const bool native_kernel_executed = state->all_tasks_completed;
     fprintf(file, "{\"schema_version\":"); json_string(file, M44_SCHEMA);
     fprintf(file, ",\"profile_id\":"); json_string(file, M44_PROFILE);
     fprintf(file, ",\"backend_id\":"); json_string(file, M44_BACKEND);
@@ -344,7 +345,8 @@ static int write_response(const char *path, const response_state_t *state) {
     fprintf(file, ",\"fixture_version\":\"simplepim_chain_fixture_v1\",\"task_graph_integrated\":"); json_bool(file, task_graph_integrated);
     fprintf(file, ",\"length\":%u,\"path\":[[0,1],[0,1]],\"task_order\":[\"task_0\",\"task_1\"],\"task_dependencies\":[[],[\"task_0\"]]", M44_LENGTH);
     fprintf(file, ",\"operation_kinds\":[\"elementwise_product_i8_i8\",\"scalar_product_i32_i8_reduce_i64\"]");
-    fprintf(file, ",\"hardware_kernel_executed\":"); json_bool(file, state->all_tasks_completed);
+    fprintf(file, ",\"hardware_kernel_executed\":"); json_bool(file, state->map_attempted || state->genred_attempted);
+    fprintf(file, ",\"native_kernel_executed\":"); json_bool(file, native_kernel_executed);
     fprintf(file, ",\"simulator_kernel_executed\":false,\"cpu_fallback_used\":false,\"hardware_speedup_applicable\":false");
     fprintf(file, ",\"task_count\":2,\"map_task_count\":2,\"genred_task_count\":1,\"map_attempt_count\":%u,\"map_completed_count\":%u,\"genred_attempt_count\":%u,\"genred_completed_count\":%u", state->map_attempt_count, state->map_completed_count, state->genred_attempt_count, state->genred_completed_count);
     fprintf(file, ",\"final_reduction_location\":\"host\",\"intermediate_residency\":\"device_mram\",\"all_tasks_completed\":"); json_bool(file, state->all_tasks_completed);
@@ -705,7 +707,7 @@ finish:
     state.all_tasks_completed = state.repetition_count == M44_ITERATIONS && state.map_completed && state.genred_completed;
     state.exact_integer_match = state.repetition_count == M44_ITERATIONS;
     for (size_t i = 0; i < state.repetition_count; ++i) state.exact_integer_match = state.exact_integer_match && state.repetitions[i].exact;
-    state.simplepim_operator_api_used = state.all_tasks_completed && state.exact_integer_match;
+    state.simplepim_operator_api_used = state.map_attempted || state.genred_attempted;
     if (management != NULL) {
         state.release_attempted = true;
         state.release_confirmed = dpu_free(management->set) == DPU_OK;

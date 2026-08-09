@@ -65,6 +65,8 @@ def _response(manifest: dict[str, object]) -> dict[str, object]:
         "hardware_kernel_executed": True,
         "all_tasks_completed": True,
         "exact_integer_match": True,
+        "allocation_attempted": True,
+        "release_attempted": True,
         "release_confirmed": True,
         "hardware_functionality_evidence": True,
         "input_sha256": manifest["input_sha256"],
@@ -96,6 +98,40 @@ def test_native_route_uses_one_fresh_composite_overlay() -> None:
     assert "$(STAGE_MANIFEST): FORCE" in makefile
 
 
+def test_overlay_copies_mixed_width_tails_after_full_words() -> None:
+    overlay = (ROOT / m44.NATIVE_REL / "simplepim_chain_m4_4_overlay.patch").read_text(encoding="utf-8")
+    assert overlay.count("+                for(int k=(input_type_1_div_4 << 2); k<input_type1; k++)") == 1
+    assert overlay.count("+                for(int k=(input_type_2_div_4 << 2); k<input_type2; k++)") == 1
+    assert overlay.count("+            for(int k=(input_type_1_div_4 << 2); k<input_type1; k++)") == 1
+    assert overlay.count("+            for(int k=(input_type_2_div_4 << 2); k<input_type2; k++)") == 1
+
+
+def test_native_response_flags_distinguish_attempts_from_success() -> None:
+    host = (ROOT / m44.NATIVE_REL / "host.c").read_text(encoding="utf-8")
+    assert "state.map_attempted || state.genred_attempted" in host
+    assert "state.simplepim_operator_api_used = state.map_attempted || state.genred_attempted;" in host
+    assert "state.simplepim_operator_api_used = state.all_tasks_completed && state.exact_integer_match;" not in host
+    assert "const bool native_kernel_executed = state->all_tasks_completed;" in host
+    assert 'fprintf(file, ",\\\"native_kernel_executed\\\":"); json_bool(file, native_kernel_executed);' in host
+    assert "json_bool(file, state->all_tasks_completed);" in host
+    assert "json_bool(file, state->exact_integer_match);" in host
+
+
+def test_native_response_serializer_contains_validator_required_fields() -> None:
+    host = (ROOT / m44.NATIVE_REL / "host.c").read_text(encoding="ascii")
+    required_serializers = (
+        'fprintf(file, ",\\\"provider_initialized\\\":");',
+        'fprintf(file, ",\\\"simplepim_operator_api_used\\\":");',
+        'fprintf(file, ",\\\"hardware_kernel_executed\\\":");',
+        'fprintf(file, ",\\\"native_kernel_executed\\\":");',
+        '\",\\\"all_tasks_completed\\\":"); json_bool(file, state->all_tasks_completed);',
+        'fprintf(file, ",\\\"exact_integer_match\\\":");',
+        'fprintf(file, ",\\\"release_confirmed\\\":");',
+        'fprintf(file, ",\\\"hardware_functionality_evidence\\\":");',
+    )
+    assert all(serializer in host for serializer in required_serializers)
+
+
 def test_hardware_requires_opt_in_and_rejects_simulator(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(ValueError, match="hardware_opt_in_missing"):
         m44.execute(ROOT, suite_path=SUITE, environment={})
@@ -111,6 +147,31 @@ def test_response_requires_device_resident_intermediate_and_host_reduction(tmp_p
     m44._validate_response(payload, manifest=manifest)
     payload["final_reduction_location"] = "device"
     with pytest.raises(ValueError, match="final host reduction"):
+        m44._validate_response(payload, manifest=manifest)
+
+
+def test_response_requires_native_execution_evidence(tmp_path: Path) -> None:
+    result = m44.prepare(tmp_path, suite_path=SUITE)
+    manifest = json.loads((Path(result["plan_dir"]) / "input_manifest.json").read_text())
+    payload = _response(manifest)
+    payload.pop("native_kernel_executed")
+    with pytest.raises(ValueError, match="native_kernel_executed"):
+        m44._validate_response(payload, manifest=manifest)
+
+
+@pytest.mark.parametrize("field", ["allocation_attempted", "release_attempted"])
+@pytest.mark.parametrize("value", [None, False])
+def test_response_requires_allocation_and_release_attempts(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    result = m44.prepare(tmp_path, suite_path=SUITE)
+    manifest = json.loads((Path(result["plan_dir"]) / "input_manifest.json").read_text())
+    payload = _response(manifest)
+    if value is None:
+        payload.pop(field)
+    else:
+        payload[field] = value
+    with pytest.raises(ValueError, match=field):
         m44._validate_response(payload, manifest=manifest)
 
 

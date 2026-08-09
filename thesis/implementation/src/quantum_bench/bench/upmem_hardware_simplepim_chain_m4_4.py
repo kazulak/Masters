@@ -265,7 +265,7 @@ def _validate_response(payload: Mapping[str, Any], *, manifest: Mapping[str, Any
         raise ValueError("response_evidence_invalid: graph binding was not validated")
     if payload.get("native_taskgraph_protocol") is not True or payload.get("task_graph_integrated") is not True:
         raise ValueError("response_evidence_invalid: native TaskGraph integration was not admitted")
-    for key in ("provider_initialized", "simplepim_operator_api_used", "native_kernel_executed", "hardware_kernel_executed", "all_tasks_completed", "exact_integer_match", "release_confirmed", "hardware_functionality_evidence"):
+    for key in ("provider_initialized", "simplepim_operator_api_used", "native_kernel_executed", "hardware_kernel_executed", "all_tasks_completed", "exact_integer_match", "allocation_attempted", "release_attempted", "release_confirmed", "hardware_functionality_evidence"):
         if payload.get(key) is not True:
             raise ValueError(f"response_evidence_invalid: {key} must be true")
     if payload.get("effective_operator_tasklets") != TASKLETS:
