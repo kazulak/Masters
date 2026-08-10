@@ -1,0 +1,49 @@
+{
+  "schema_version": "physical_functionality_evidence_capsule_v1",
+  "capsule_id": "physical_simplepim_taskgraph_m4_5",
+  "evidence_level": "physical_hardware_functionality_only",
+  "report_kind": "none_raw_normalized_capsule",
+  "source_run": "eth-evidence/2026-08-09_22-19-27",
+  "source_commit": "c7bbf957d17346e819c52fc45ca592c3bcb691ca",
+  "source_worktree_dirty": false,
+  "run_id": "2026-08-09_22-19-27",
+  "suite_id": "upmem_hardware_simplepim_taskgraph",
+  "route_id": "upmem_tn_hardware_simplepim_taskgraph",
+  "backend_id": "upmem_hardware_simplepim_taskgraph",
+  "hardware_profile_version": "hardware_simplepim_taskgraph_m4_5_v1",
+  "measured_record_count": 6,
+  "warmup_record_count": 2,
+  "placements": [
+    "single_dpu_sequential_v1",
+    "two_dpu_frontier_round_robin_v1"
+  ],
+  "validation_scope": "final_session_output_only",
+  "completion_scope": "aggregate_across_warmups_and_repetitions",
+  "allowed_claims": [
+    "bounded physical one-DPU and two-DPU TaskGraph execution",
+    "dependency-preserving two-DPU frontier execution with host-mediated handoff",
+    "final-session CPU-reference validation",
+    "aggregate exact-once completion",
+    "application-visible transfer accounting",
+    "allocation, native execution, and release without simulator or CPU fallback"
+  ],
+  "disallowed_claims": [
+    "per-repeat output or completion validation",
+    "runtime, speedup, scaling, or overlap",
+    "energy or tasklet-parallelism",
+    "multi-rank or multi-DIMM execution",
+    "PID-Comm, ATiM, or SparseP execution",
+    "general quantum-TN performance"
+  ],
+  "files": [
+    "normalized_records.jsonl",
+    "warmup_records.jsonl",
+    "run_manifest.json",
+    "environment.json",
+    "upmem_hardware_simplepim_taskgraph_summary.json",
+    "hardware_profile.json",
+    "resolved_suite.yml",
+    "one_qubit_ry_h_ry_a_resident_request.json",
+    "session_failures.jsonl"
+  ]
+}

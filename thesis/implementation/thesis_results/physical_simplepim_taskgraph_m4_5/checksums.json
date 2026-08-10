@@ -1,0 +1,13 @@
+{
+  "README.md": "b49768bf1a93fe33ea4f6b460e2a4e5af8b1da3a267b7e07f42872db571e4fc6",
+  "capsule_manifest.json": "c40bd6a7b51c76136f1e3245a51b6824a1f81bb4aed290b8e3526c38505618cb",
+  "environment.json": "e42d950ff33c84c0d553d7fa8e62b2732da869a6ed62377497b17427ab13325f",
+  "hardware_profile.json": "dc8de49be1c7a6edeb2f115eb5b200b67a0b7d7932d11fb5c8692ced3961062c",
+  "normalized_records.jsonl": "4bd3ad50816245029ccfca773510cd4d18ba706e67dd7fcbe131befa829dd12f",
+  "one_qubit_ry_h_ry_a_resident_request.json": "a9f874ae55d3fc455658c6e53fb67f763cdcdb90f9fff00202921829264d1bfa",
+  "resolved_suite.yml": "797c8fc8573bf257e1e24ec92ee398ff157a199492f07037bb60fe32159eb9d3",
+  "run_manifest.json": "94810511789ac41b409271b2cd4e3ca68700fa47c236544db78cbaea434b82c8",
+  "session_failures.jsonl": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "upmem_hardware_simplepim_taskgraph_summary.json": "1e057941182e8af7df1abf7fa86f24528e7d6c0fe4934a277ce7002ae8ca3c1b",
+  "warmup_records.jsonl": "628ddbbdaec341932f40e58b71d7f5e0d1772df2a7fbd60bec1a022312dd5fa3"
+}

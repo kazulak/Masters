@@ -1,0 +1,17 @@
+{
+  "allowed_dpu_counts": [
+    1,
+    2
+  ],
+  "backend_id": "upmem_hardware_simplepim_taskgraph",
+  "device_launch_mode": "asynchronous_per_dpu",
+  "fully_synchronous_kernel_launch": false,
+  "hardware_profile_version": "hardware_simplepim_taskgraph_m4_5_v1",
+  "numeric_mode": "none",
+  "performance_claim_applicable": false,
+  "real_only": true,
+  "route_id": "upmem_tn_hardware_simplepim_taskgraph",
+  "synchronization_policy": "synchronous_wave_barriers",
+  "target": "hardware",
+  "tasklets_per_dpu": 1
+}

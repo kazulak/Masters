@@ -1,0 +1,79 @@
+{
+  "backend_id": "upmem_sdk_hardware_taskgraph_resident",
+  "component_operation_count": 3,
+  "control_h2d_bytes": 40,
+  "control_h2d_bytes_per_launch": 8,
+  "descriptor_control_bytes": 16,
+  "descriptor_h2d_bytes": 2464,
+  "dpu_binary": "native_build/source/native/upmem/simplepim/upmem_sdk_execution_plan/bin/dpu_resident",
+  "final_d2h_bytes": 8,
+  "final_outputs": [
+    {
+      "component": "real",
+      "elements": 2,
+      "output_path": "resident_requests/one_qubit_ry_h_ry_a/outputs/final_real.bin",
+      "raw_bytes": 8,
+      "slot_id": 6,
+      "transfer_bytes": 8
+    }
+  ],
+  "graph_request_count": 1,
+  "hardware_profile_version": "hardware_taskgraph_single_dpu_mram_resident_v1",
+  "initial_h2d_bytes": 56,
+  "initial_slots": [
+    {
+      "elements": 2,
+      "input_path": "resident_requests/one_qubit_ry_h_ry_a/inputs/slot_0000.bin",
+      "raw_bytes": 8,
+      "slot_id": 0,
+      "transfer_bytes": 8
+    },
+    {
+      "elements": 4,
+      "input_path": "resident_requests/one_qubit_ry_h_ry_a/inputs/slot_0001.bin",
+      "raw_bytes": 16,
+      "slot_id": 1,
+      "transfer_bytes": 16
+    },
+    {
+      "elements": 4,
+      "input_path": "resident_requests/one_qubit_ry_h_ry_a/inputs/slot_0002.bin",
+      "raw_bytes": 16,
+      "slot_id": 2,
+      "transfer_bytes": 16
+    },
+    {
+      "elements": 4,
+      "input_path": "resident_requests/one_qubit_ry_h_ry_a/inputs/slot_0003.bin",
+      "raw_bytes": 16,
+      "slot_id": 3,
+      "transfer_bytes": 16
+    }
+  ],
+  "intermediate_d2h_bytes": 0,
+  "intermediate_h2d_bytes": 0,
+  "intermediate_output_paths": [],
+  "logical_task_count": 3,
+  "manifest_kind": "resident_graph_request",
+  "mram_pool_bytes": 524288,
+  "no_host_intermediate_output_files": true,
+  "numeric_policy": {
+    "mode": "none",
+    "requantization": "none",
+    "resident_slot_dtype": "float32",
+    "saturation_count_observed": false
+  },
+  "package_parse_timing_boundary": "native_process_start_through_validated_binary_package_before_dpu_alloc",
+  "package_path": "resident_requests/one_qubit_ry_h_ry_a/resident_graph_package.bin",
+  "quantization_mode": "none",
+  "requested_dpus": 1,
+  "route_id": "upmem_tn_hardware_taskgraph_resident",
+  "schema_version": "generic_loop_resident_graph_session_v1",
+  "sdk_allocation_profile": "backend=hw",
+  "session_id": "one_qubit_ry_h_ry_a",
+  "session_protocol": "generic_loop_resident_graph_session_v1",
+  "slot_descriptor_count": 7,
+  "target": "hardware",
+  "tasklets": 1,
+  "timing_scope": "one_dpu_mram_resident_full_taskgraph_v1"
+}

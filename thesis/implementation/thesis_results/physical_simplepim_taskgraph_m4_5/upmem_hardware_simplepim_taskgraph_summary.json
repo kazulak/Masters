@@ -1,0 +1,176 @@
+{
+  "backend_id": "upmem_hardware_simplepim_taskgraph",
+  "claim_boundary": "physical_functionality_and_bringup_timing_only",
+  "hardware_speedup_applicable": false,
+  "native_build": {
+    "allocation_attempted": false,
+    "build_command": [
+      "/usr/bin/make",
+      "clean",
+      "all",
+      "SIMPLEPIM_ROOT=/home/tkazulak/work/Masters/thesis/implementation/external/SimplePIM",
+      "NR_TASKLETS=1",
+      "UPMEM_GENERIC_HARDWARE_MVP=1"
+    ],
+    "build_dir": "/home/tkazulak/work/Masters/thesis/implementation/runs/evidence/upmem_hardware_simplepim_taskgraph/upmem_simplepim_taskgraph/2026-08-09_22-19-27/native_build",
+    "dpu_binary": "/home/tkazulak/work/Masters/thesis/implementation/runs/evidence/upmem_hardware_simplepim_taskgraph/upmem_simplepim_taskgraph/2026-08-09_22-19-27/native_build/source/native/upmem/simplepim/upmem_sdk_execution_plan/bin/dpu_resident",
+    "host_binary": "/home/tkazulak/work/Masters/thesis/implementation/runs/evidence/upmem_hardware_simplepim_taskgraph/upmem_simplepim_taskgraph/2026-08-09_22-19-27/native_build/source/native/upmem/simplepim/upmem_sdk_execution_plan/bin/host_upmem_execution_plan",
+    "launch_attempted": false,
+    "native_source_dir": "/home/tkazulak/work/Masters/thesis/implementation/runs/evidence/upmem_hardware_simplepim_taskgraph/upmem_simplepim_taskgraph/2026-08-09_22-19-27/native_build/source/native/upmem/simplepim/upmem_sdk_execution_plan",
+    "prepare_only": true,
+    "status": "built",
+    "stderr": "Checking patch lib/management/Management.h...\nChecking patch lib/management/Management.c...\nApplied patch lib/management/Management.h cleanly.\nApplied patch lib/management/Management.c cleanly.\nbuild/simplepim_execution_plan/staged/SimplePIM/lib/management/Management.c: In function \u2018add_table\u2019:\nbuild/simplepim_execution_plan/staged/SimplePIM/lib/management/Management.c:122:19: warning: comparison of integer expressions of different signedness: \u2018int\u2019 and \u2018uint32_t\u2019 {aka \u2018unsigned int\u2019} [-Wsign-compare]\n  122 |     for(int i=0; i<num_tables; i++){\n      |                   ^\nbuild/simplepim_execution_plan/staged/SimplePIM/lib/management/Management.c: In function \u2018contains_table\u2019:\nbuild/simplepim_execution_plan/staged/SimplePIM/lib/management/Management.c:147:19: warning: comparison of integer expressions of different signedness: \u2018int\u2019 and \u2018uint32_t\u2019 {aka \u2018unsigned int\u2019} [-Wsign-compare]\n  147 |     for(int i=0; i<num_tables; i++){\n      |                   ^\nbuild/simplepim_execution_plan/staged/SimplePIM/lib/management/Management.c: In function \u2018lookup_table\u2019:\nbuild/simplepim_execution_plan/staged/SimplePIM/lib/management/Management.c:165:19: warning: comparison of integer expressions of different signedness: \u2018int\u2019 and \u2018uint32_t\u2019 {aka \u2018unsigned int\u2019} [-Wsign-compare]\n  165 |     for(int i=0; i<num_tables; i++){\n      |                   ^\nbuild/simplepim_execution_plan/staged/SimplePIM/lib/management/Management.c:172:5: warning: format not a string literal and no format arguments [-Wformat-security]\n  172 |     printf(name);\n      |     ^~~~~~\nbuild/simplepim_execution_plan/staged/SimplePIM/lib/management/Management.c: In function \u2018max_len_dpu\u2019:\nbuild/simplepim_execution_plan/staged/SimplePIM/lib/management/Management.c:179:19: warning: comparison of integer expressions of different signedness: \u2018int\u2019 and \u2018uint32_t\u2019 {aka \u2018unsigned int\u2019} [-Wsign-compare]\n  179 |     for(int i=0; i<num_dpus; i++){\n      |                   ^\nbuild/simplepim_execution_plan/staged/SimplePIM/lib/management/SmallTableInit.c: In function \u2018small_table_init\u2019:\nbuild/simplepim_execution_plan/staged/SimplePIM/lib/management/SmallTableInit.c:5:5: warning: ignoring return value of \u2018system\u2019, declared with attribute warn_unused_result [-Wunused-result]\n    5 |     system(\"dpu-upmem-dpurte-clang -O2 -DNR_TASKLETS=1 -o bin/dpu_init_binary ../../lib/management/SmallTableInit_dpu.c\");\n      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n",
+    "stdout": "runs/evidence/upmem_hardware_simplepim_taskgraph/upmem_simplepim_taskgraph/2026-08-09_22-19-27/native_build/source/native/upmem/simplepim/upmem_sdk_execution_plan'\nrm -rf bin build/simplepim_execution_plan\nset -eu; \\\nactual_commit=$(git -C \"/home/tkazulak/work/Masters/thesis/implementation/external/SimplePIM\" rev-parse --verify HEAD 2>/dev/null) || { echo \"SimplePIM source is not a Git checkout\" >&2; exit 1; }; \\\ntest \"$actual_commit\" = \"1d639c53532555f01e9f71d872e7712b166d6cba\" || { echo \"SimplePIM commit mismatch: expected 1d639c53532555f01e9f71d872e7712b166d6cba, got $actual_commit\" >&2; exit 1; }; \\\ndirty=$(git -C \"/home/tkazulak/work/Masters/thesis/implementation/external/SimplePIM\" status --porcelain --untracked-files=all); \\\ntest -z \"$dirty\" || { echo \"SimplePIM source worktree is dirty; refusing to stage it\" >&2; printf '%s\\n' \"$dirty\" >&2; exit 1; }; \\\npatch_path=\"/home/tkazulak/work/Masters/thesis/implementation/runs/evidence/upmem_hardware_simplepim_taskgraph/upmem_simplepim_taskgraph/2026-08-09_22-19-27/native_build/source/native/upmem/simplepim/upmem_sdk_generic_loop_frontier_two_dpu/simplepim_management_profile.patch\"; \\\npatch_sha256=$(sha256sum \"$patch_path\" | cut -d ' ' -f1); \\\nrm -rf \"build/simplepim_execution_plan/staged/SimplePIM\"; mkdir -p \"build/simplepim_execution_plan/staged/SimplePIM/lib\"; cp -R \"/home/tkazulak/work/Masters/thesis/implementation/external/SimplePIM/lib/.\" \"build/simplepim_execution_plan/staged/SimplePIM/lib/\"; \\\n(cd \"build/simplepim_execution_plan/staged/SimplePIM\" && GIT_CEILING_DIRECTORIES=$(realpath ..) git apply --recount --no-index --verbose \"$patch_path\"); \\\nstage_root=$(cd \"build/simplepim_execution_plan/staged/SimplePIM\" && pwd); \\\ntree_sha256=$(find \"$stage_root\" -type f ! -name management_profile_manifest.json -print | LC_ALL=C sort | while IFS= read -r file; do rel=\"${file#$stage_root/}\"; printf '%s  %s\\n' \"$(sha256sum \"$file\" | cut -d ' ' -f1)\" \"$rel\"; done | sha256sum | cut -d ' ' -f1); \\\nprintf '{\"schema_version\":\"simplepim_management_stage_v1\",\"source_commit\":\"%s\",\"expected_source_commit\":\"%s\",\"source_worktree_dirty\":false,\"staged_source_tree_sha256\":\"%s\",\"patch_sha256\":\"%s\",\"patch_applied\":true}\\n' \"$actual_commit\" \"1d639c53532555f01e9f71d872e7712b166d6cba\" \"$tree_sha256\" \"$patch_sha256\" > \"build/simplepim_execution_plan/staged/SimplePIM/management_profile_manifest.json\"\nmkdir -p bin\ngcc -std=c99 -O2 -Wall -Wextra -D_POSIX_C_SOURCE=200809L -DNR_TASKLETS=1 -DUPMEM_GENERIC_HARDWARE_MVP=1 -DUPMEM_GENERIC_MAX_RANK=16 -DUPMEM_GENERIC_MAX_ELEMS=256 -DRESIDENT_MAX_LOGICAL_TASKS=32 -DRESIDENT_MAX_COMPONENT_OPS=128 -DRESIDENT_MAX_SLOT_DESCRIPTORS=128 -DRESIDENT_MRAM_POOL_BYTES=524288 -DRESIDENT_OUTPUT_TILE_ELEMS=256 -Ibuild/simplepim_execution_plan/staged/SimplePIM/lib/management -o bin/host_upmem_execution_plan host.c plan_request.c plan_schedule.c execution_plan_provider.c ../upmem_sdk_generic_loop_frontier_two_dpu/../upmem_sdk_generic_loop_resident/session_protocol.c build/simplepim_execution_plan/staged/SimplePIM/lib/management/Management.c build/simplepim_execution_plan/staged/SimplePIM/lib/management/SmallTableInit.c $(dpu-pkg-config --cflags --libs dpu) -ldl\ndpu-upmem-dpurte-clang -O2 -DNR_TASKLETS=1 -DUPMEM_GENERIC_HARDWARE_MVP=1 -DUPMEM_GENERIC_MAX_RANK=16 -DUPMEM_GENERIC_MAX_ELEMS=256 -DRESIDENT_MAX_LOGICAL_TASKS=32 -DRESIDENT_MAX_COMPONENT_OPS=128 -DRESIDENT_MAX_SLOT_DESCRIPTORS=128 -DRESIDENT_MRAM_POOL_BYTES=524288 -DRESIDENT_OUTPUT_TILE_ELEMS=256 -o bin/dpu_resident ../upmem_sdk_generic_loop_frontier_two_dpu/../upmem_sdk_generic_loop_resident/dpu.c\ndpu-upmem-dpurte-clang -O2 -DNR_TASKLETS=1 -o bin/dpu_simplepim_management_init /home/tkazulak/work/Masters/thesis/implementation/external/SimplePIM/lib/management/SmallTableInit_dpu.c\nmake[1]: Leaving directory '/home/tkazulak/work/Masters/thesis/implementation/runs/evidence/upmem_hardware_simplepim_taskgraph/upmem_simplepim_taskgraph/2026-08-09_22-19-27/native_build/source/native/upmem/simplepim/upmem_sdk_execution_plan'\n"
+  },
+  "normalized_records": "normalized_records.jsonl",
+  "placements": [
+    {
+      "assignments": [
+        {
+          "component": "real",
+          "dependency_bitmask": 0,
+          "dependency_operation_ids": [],
+          "dpu_id": 0,
+          "input_slot_ids": [
+            0,
+            1
+          ],
+          "operation_id": 0,
+          "output_elements": 2,
+          "output_slot_id": 4,
+          "package_operation_index": 0,
+          "task_id": "task_0",
+          "wave_index": 0
+        },
+        {
+          "component": "real",
+          "dependency_bitmask": 0,
+          "dependency_operation_ids": [],
+          "dpu_id": 0,
+          "input_slot_ids": [
+            2,
+            3
+          ],
+          "operation_id": 1,
+          "output_elements": 4,
+          "output_slot_id": 5,
+          "package_operation_index": 1,
+          "task_id": "task_1",
+          "wave_index": 1
+        },
+        {
+          "component": "real",
+          "dependency_bitmask": 3,
+          "dependency_operation_ids": [
+            0,
+            1
+          ],
+          "dpu_id": 0,
+          "input_slot_ids": [
+            4,
+            5
+          ],
+          "operation_id": 2,
+          "output_elements": 2,
+          "output_slot_id": 6,
+          "package_operation_index": 2,
+          "task_id": "task_2",
+          "wave_index": 2
+        }
+      ],
+      "case_id": "one_qubit_ry_h_ry_a",
+      "cross_dpu_transfer_bytes": 0,
+      "cross_dpu_transfer_count": 0,
+      "package_file_sha256": "06eecc55535d0ffb9bff1de16cc8184adc624515fca57fa9a9ad3e803082a548",
+      "package_path": "/home/tkazulak/work/Masters/thesis/implementation/runs/evidence/upmem_hardware_simplepim_taskgraph/upmem_simplepim_taskgraph/2026-08-09_22-19-27/resident_requests/one_qubit_ry_h_ry_a/resident_graph_package.bin",
+      "placement_policy": "single_dpu_sequential_v1",
+      "plan_path": "/home/tkazulak/work/Masters/thesis/implementation/runs/evidence/upmem_hardware_simplepim_taskgraph/upmem_simplepim_taskgraph/2026-08-09_22-19-27/cases/one_qubit_ry_h_ry_a/single_dpu_sequential_v1/execution_plan.json",
+      "request_path": "/home/tkazulak/work/Masters/thesis/implementation/runs/evidence/upmem_hardware_simplepim_taskgraph/upmem_simplepim_taskgraph/2026-08-09_22-19-27/cases/one_qubit_ry_h_ry_a/single_dpu_sequential_v1/block2_request.json",
+      "requested_dpu_count": 1,
+      "schedule_path": "/home/tkazulak/work/Masters/thesis/implementation/runs/evidence/upmem_hardware_simplepim_taskgraph/upmem_simplepim_taskgraph/2026-08-09_22-19-27/cases/one_qubit_ry_h_ry_a/single_dpu_sequential_v1/execution_schedule.bin",
+      "schedule_sidecar_sha256": "d56a187c1bdcb9f495e0de166c23d3a8a6696349cb800ea1b94568aeb365394d",
+      "task_count": 3,
+      "upmem_execution_plan_hash": "886c2baa2322cd79db4401b516aab65db7eb40573cb12a642126f47498d3b639",
+      "wave_count": 3
+    },
+    {
+      "assignments": [
+        {
+          "component": "real",
+          "dependency_bitmask": 0,
+          "dependency_operation_ids": [],
+          "dpu_id": 0,
+          "input_slot_ids": [
+            0,
+            1
+          ],
+          "operation_id": 0,
+          "output_elements": 2,
+          "output_slot_id": 4,
+          "package_operation_index": 0,
+          "task_id": "task_0",
+          "wave_index": 0
+        },
+        {
+          "component": "real",
+          "dependency_bitmask": 0,
+          "dependency_operation_ids": [],
+          "dpu_id": 1,
+          "input_slot_ids": [
+            2,
+            3
+          ],
+          "operation_id": 1,
+          "output_elements": 4,
+          "output_slot_id": 5,
+          "package_operation_index": 1,
+          "task_id": "task_1",
+          "wave_index": 0
+        },
+        {
+          "component": "real",
+          "dependency_bitmask": 3,
+          "dependency_operation_ids": [
+            0,
+            1
+          ],
+          "dpu_id": 0,
+          "input_slot_ids": [
+            4,
+            5
+          ],
+          "operation_id": 2,
+          "output_elements": 2,
+          "output_slot_id": 6,
+          "package_operation_index": 2,
+          "task_id": "task_2",
+          "wave_index": 1
+        }
+      ],
+      "case_id": "one_qubit_ry_h_ry_a",
+      "cross_dpu_transfer_bytes": 32,
+      "cross_dpu_transfer_count": 1,
+      "package_file_sha256": "06eecc55535d0ffb9bff1de16cc8184adc624515fca57fa9a9ad3e803082a548",
+      "package_path": "/home/tkazulak/work/Masters/thesis/implementation/runs/evidence/upmem_hardware_simplepim_taskgraph/upmem_simplepim_taskgraph/2026-08-09_22-19-27/resident_requests/one_qubit_ry_h_ry_a/resident_graph_package.bin",
+      "placement_policy": "two_dpu_frontier_round_robin_v1",
+      "plan_path": "/home/tkazulak/work/Masters/thesis/implementation/runs/evidence/upmem_hardware_simplepim_taskgraph/upmem_simplepim_taskgraph/2026-08-09_22-19-27/cases/one_qubit_ry_h_ry_a/two_dpu_frontier_round_robin_v1/execution_plan.json",
+      "request_path": "/home/tkazulak/work/Masters/thesis/implementation/runs/evidence/upmem_hardware_simplepim_taskgraph/upmem_simplepim_taskgraph/2026-08-09_22-19-27/cases/one_qubit_ry_h_ry_a/two_dpu_frontier_round_robin_v1/block2_request.json",
+      "requested_dpu_count": 2,
+      "schedule_path": "/home/tkazulak/work/Masters/thesis/implementation/runs/evidence/upmem_hardware_simplepim_taskgraph/upmem_simplepim_taskgraph/2026-08-09_22-19-27/cases/one_qubit_ry_h_ry_a/two_dpu_frontier_round_robin_v1/execution_schedule.bin",
+      "schedule_sidecar_sha256": "698b581b28a2c1c03228dd2460c5fa7e2bc47ba102a7676530783941e834834a",
+      "task_count": 3,
+      "upmem_execution_plan_hash": "16c4f2d7be45052adc3555ee8c50cb6bbc92543d08b04edabe0d7dbbda05650f",
+      "wave_count": 2
+    }
+  ],
+  "repeat_count": 6,
+  "route_id": "upmem_tn_hardware_simplepim_taskgraph",
+  "row_count": 6,
+  "schema_version": "upmem_hardware_simplepim_taskgraph_v1",
+  "session_failure_count": 0,
+  "session_failures": "session_failures.jsonl",
+  "status": "completed",
+  "suite_id": "upmem_hardware_simplepim_taskgraph",
+  "warmup_count": 2,
+  "warmup_records": "warmup_records.jsonl"
+}

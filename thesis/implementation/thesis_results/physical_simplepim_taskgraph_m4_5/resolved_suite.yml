@@ -1,0 +1,48 @@
+schema_version: 2
+suite_id: upmem_hardware_simplepim_taskgraph
+fail_fast: true
+
+metadata:
+  purpose: one_fixed_taskgraph_two_physical_placement_policies
+  manual_invocation_required: true
+  physical_opt_in: UPMEM_ALLOW_PHYSICAL_HARDWARE=1
+  claim_boundary: physical_functionality_and_bringup_timing_only
+  hardware_profile:
+    hardware_profile_version: hardware_simplepim_taskgraph_m4_5_v1
+    target: hardware
+    backend_id: upmem_hardware_simplepim_taskgraph
+    route_id: upmem_tn_hardware_simplepim_taskgraph
+    allowed_dpu_counts: [1, 2]
+    tasklets_per_dpu: 1
+    numeric_mode: none
+    real_only: true
+    device_launch_mode: asynchronous_per_dpu
+    synchronization_policy: synchronous_wave_barriers
+    fully_synchronous_kernel_launch: false
+    performance_claim_applicable: false
+
+defaults:
+  warmups: 1
+  repeats: 3
+  timeout_s: 120.0
+  planner: {engine: opt_einsum, optimize: greedy}
+
+routes:
+  - id: upmem_tn_hardware_simplepim_taskgraph
+    role: physical_simplepim_taskgraph_functionality
+    required: true
+
+workloads:
+  - id: one_qubit_ry_h_ry_a
+    circuit:
+      kind: qasm_file
+      name: one_qubit_ry_h_ry_a
+      path: configs/circuits/upmem_m2/one_qubit_ry_h_ry_a.qasm
+    numeric_mode: none
+    placements:
+      - single_dpu_sequential_v1
+      - two_dpu_frontier_round_robin_v1
+
+validation:
+  tolerances:
+    max_abs_error: 1.0e-6

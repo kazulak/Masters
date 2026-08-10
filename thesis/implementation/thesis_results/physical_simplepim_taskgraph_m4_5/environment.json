@@ -1,0 +1,106 @@
+{
+  "benchmark_threads": {
+    "BENCH_CPU_THREADS": null,
+    "MKL_NUM_THREADS": null,
+    "NUMEXPR_NUM_THREADS": null,
+    "OMP_DYNAMIC": null,
+    "OMP_NUM_THREADS": null,
+    "OMP_PLACES": null,
+    "OMP_PROC_BIND": null,
+    "OPENBLAS_NUM_THREADS": null
+  },
+  "blas": {
+    "configuration": "OpenBLAS 0.3.29  USE64BITINT DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=64",
+    "name": "scipy-openblas",
+    "version": "0.3.29"
+  },
+  "compiler": "cc (Ubuntu 9.4.0-1ubuntu1~20.04.2) 9.4.0",
+  "cotengra": "0.7.5",
+  "cpu_affinity": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31
+  ],
+  "cpu_count": 32,
+  "cpu_frequency_governor": "powersave",
+  "git_commit": "c7bbf957d17346e819c52fc45ca592c3bcb691ca",
+  "gpu": {
+    "amd_smi": null,
+    "cupy": null,
+    "gpu_execution_backend_added": false,
+    "hipcc": null,
+    "jax": null,
+    "rocm_smi": null,
+    "rocminfo": null,
+    "torch": null
+  },
+  "machine": "x86_64",
+  "matplotlib": "3.10.8",
+  "mem_total_kib": 131104688,
+  "numpy": "2.2.6",
+  "openmp": {
+    "OMP_DYNAMIC": null,
+    "OMP_NUM_THREADS": null,
+    "OMP_PLACES": null,
+    "OMP_PROC_BIND": null
+  },
+  "opt_einsum": "3.4.0",
+  "physical_cpu_count": 16,
+  "platform": "Linux-5.4.0-216-generic-x86_64-with-glibc2.31",
+  "processor": "x86_64",
+  "python": "3.10.20",
+  "quantum_bench_version": "0.1.0",
+  "quimb": "1.11.2",
+  "rapl": {
+    "available": false,
+    "path": "/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj",
+    "powercap_energy_uj_paths": []
+  },
+  "simplepim": {
+    "SIMPLEPIM_BIN": null,
+    "SIMPLEPIM_HOME": null,
+    "SIMPLEPIM_LIB": null,
+    "available": false,
+    "command_path": null,
+    "probe_status": "retired",
+    "skip_reason": "SimplePIM probing is retired; the generic SDK loop is the active UPMEM simulator path"
+  },
+  "sudo": {
+    "effective_uid": 1018,
+    "sudo_gid": null,
+    "sudo_uid": null
+  },
+  "upmem": {
+    "UPMEM_HOME": null,
+    "dpu_compiler": "/usr/bin/dpu-upmem-dpurte-clang"
+  }
+}
