@@ -20,6 +20,7 @@ from quantum_bench.circuits import load_circuit
 from quantum_bench.core.jsonio import write_json, write_jsonl
 from quantum_bench.core.records import JsonDict, TaskGraph
 from quantum_bench.environment import capture_environment
+from quantum_bench.tn.execution import order_final_tensor
 from quantum_bench.targets.upmem.hardware_session import (
     HardwareSessionBuild,
     build_resident_hardware_session,
@@ -709,8 +710,16 @@ def _load_final_output(package: ResidentGraphPackage) -> np.ndarray:
     if "imag" in values:
         if "real" not in values:
             raise RuntimeError("output_validation_failed: resident native real output component is missing")
-        return np.asarray(values["real"] + 1j * values["imag"], dtype=np.complex64)
-    return np.asarray(values["real"], dtype=np.float32)
+        raw_array = np.asarray(values["real"] + 1j * values["imag"], dtype=np.complex64)
+    else:
+        raw_array = np.asarray(values["real"], dtype=np.float32)
+    final_task = package.graph.tasks[-1]
+    ordered_array, _ = order_final_tensor(
+        raw_array,
+        final_task.output_labels,
+        package.graph.network.output_labels,
+    )
+    return np.asarray(ordered_array)
 
 
 def _modeled_host_rehydrated_bytes(package: ResidentGraphPackage) -> JsonDict:
