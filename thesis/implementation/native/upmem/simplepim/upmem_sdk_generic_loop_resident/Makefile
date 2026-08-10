@@ -10,8 +10,8 @@ RESIDENT_OUTPUT_TILE_ELEMS ?= 256
 DPU_CC ?= dpu-upmem-dpurte-clang
 HOST_CC ?= gcc
 
-ifneq ($(NR_TASKLETS),1)
-$(error resident profile requires NR_TASKLETS=1)
+ifeq ($(shell test $(NR_TASKLETS) -ge 1 -a $(NR_TASKLETS) -le 16 && echo ok),)
+$(error resident profile requires 1 <= NR_TASKLETS <= 16)
 endif
 
 ifneq ($(UPMEM_GENERIC_HARDWARE_MVP),1)

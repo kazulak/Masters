@@ -30,6 +30,7 @@ UpmemTaskGraphStatus = Literal["completed", "unsupported", "failed", "validation
 
 CONTRACTION_EXECUTION_TARGET = CONTRACTION_EXECUTION_TARGET_UPMEM
 UPMEM_EXECUTION_MODE = UPMEM_EXECUTION_MODE_SDK_SIMULATOR
+UPMEM_DPU_CLOCK_HZ = 350_000_000
 
 
 def transfer_accounting(
@@ -368,6 +369,7 @@ def _base_task_metric(
     validation_metrics: JsonDict | None = None,
     full_precision_metrics: JsonDict | None = None,
     dense_reject_reason: str | None = None,
+    dpu_run_time_cycles: int = 0,
 ) -> JsonDict:
     output_array = np.asarray(output) if output is not None else None
     bridge_manifest = dict((bridge_result or {}).get("output_manifest") or {})
@@ -459,6 +461,7 @@ def _base_task_metric(
             "bridge_validation_metrics": validation_metrics or bridge_validation,
             "bridge_total_time_s": float(bridge_manifest.get("total_time_s", 0.0) or 0.0),
             "kernel_time_s": float(bridge_manifest.get("compute_time_s", 0.0) or 0.0),
+            "dpu_run_time_cycles": int(dpu_run_time_cycles),
             "build_time_s": float(bridge_metadata.get("build_time_s", 0.0) or 0.0),
             "quantization_time_s": float(prep_metadata.get("quantization_time_s", 0.0) or 0.0),
             "dequantization_time_s": float(prep_metadata.get("dequantization_time_s", 0.0) or 0.0),
@@ -616,6 +619,8 @@ def _summary_payload(
         and final_validation.get("passed") is True
         and all(row.get("cpu_contraction_fallback_used") is False for row in task_metrics)
     )
+    total_dpu_run_time_cycles = sum(int(row.get("dpu_run_time_cycles", 0) or 0) for row in task_metrics)
+    dpu_compute_seconds = (total_dpu_run_time_cycles / UPMEM_DPU_CLOCK_HZ) if (total_dpu_run_time_cycles > 0) else None
     return to_jsonable(
         {
             "schema_version": UPMEM_TASKGRAPH_RUNTIME_SCHEMA_VERSION,
@@ -630,6 +635,8 @@ def _summary_payload(
             "upmem_execution_mode": UPMEM_EXECUTION_MODE,
             "native_sdk_control_path": True,
             "simplepim_api_used": False,
+            "dpu_run_time_cycles": total_dpu_run_time_cycles,
+            "dpu_compute_seconds": dpu_compute_seconds,
             "input_dtype_on_dpu": _unique_or_none(task_metrics, "input_dtype_on_dpu"),
             "accumulator_dtype_on_dpu": _unique_or_none(task_metrics, "accumulator_dtype_on_dpu"),
             "output_dtype_on_dpu": _unique_or_none(task_metrics, "output_dtype_on_dpu"),

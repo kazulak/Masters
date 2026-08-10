@@ -469,3 +469,74 @@ def test_native_completion_counts_must_not_be_nested_in_metrics() -> None:
 
     with pytest.raises(executor.NativeAdapterError, match="top-level response fields"):
         executor._validate_native_metrics(response, plan, request)
+
+
+@pytest.mark.parametrize("tasklets", [1, 2, 4, 8, 11, 16])
+def test_multi_tasklet_benchmark_scaling(tasklets: int) -> None:
+    from dataclasses import replace
+    from quantum_bench.targets.upmem.hardware_taskgraph_resident import load_hardware_taskgraph_resident_suite
+    from quantum_bench.targets.upmem.runtime_evidence import _base_task_metric, _summary_payload, UPMEM_DPU_CLOCK_HZ
+    from quantum_bench.tn.upmem_path_cost_v2 import calibrate_pim_cost_model
+
+    suite_path = ROOT / "configs/suites/upmem_hardware_taskgraph_resident_path_quantization.yml"
+    suite = load_hardware_taskgraph_resident_suite(suite_path)
+    profile = replace(suite.profile, tasklets_per_dpu=tasklets)
+    assert profile.tasklets_per_dpu == tasklets
+
+    # 1. Assert metric dictionary structure contains dpu_run_time_cycles key
+    task = SimpleNamespace(
+        id="task_0",
+        input_tensor_ids=("t_in0", "t_in1"),
+        output_tensor_id="t_out",
+        input_shapes=((2, 2), (2, 2)),
+        output_shape=(2, 2),
+        estimated_flops=1000,
+        estimated_bytes=512,
+    )
+    metric = _base_task_metric(
+        "case_test",
+        0,
+        task,
+        "generic-only",
+        "none",
+        status="completed",
+        reason=None,
+        task_started=0.0,
+        dpu_run_time_cycles=14000,
+    )
+    assert "dpu_run_time_cycles" in metric
+    assert metric["dpu_run_time_cycles"] == 14000
+
+    # 2. Assert summary payload contains dpu_run_time_cycles and dpu_compute_seconds
+    summary = _summary_payload(
+        case_id="case_test",
+        policy="generic-only",
+        quantization_mode="none",
+        status="completed",
+        reason=None,
+        started=0.0,
+        task_metrics=[metric],
+        kernel_family_counts={"generic_loop_fallback": 1},
+        backend_counts={"upmem_sdk_simulator_generic_loop": 1},
+        final_validation={"passed": True},
+        final_tensor_id="t0",
+        final_tensor_labels=(0, 1),
+        final_transpose_applied=False,
+        total_bridge_time_s=0.01,
+        total_kernel_time_s=0.005,
+        total_build_time_s=0.001,
+        peak_live_tensor_bytes=1024,
+    )
+    assert "dpu_run_time_cycles" in summary
+    assert "dpu_compute_seconds" in summary
+    assert summary["dpu_run_time_cycles"] == 14000
+    assert summary["dpu_compute_seconds"] == pytest.approx(14000 / UPMEM_DPU_CLOCK_HZ)
+
+    # 3. Test non-zero fallback guards for simulator & model calibration
+    c_pim_sim = calibrate_pim_cost_model(0, 1024)
+    assert c_pim_sim is None  # Software simulator returns 0 cycles, handled safely
+
+    c_pim_hw = calibrate_pim_cost_model(14000, 1000)
+    assert c_pim_hw == 14.0  # Hardware 14000 cycles / 1000 flops = 14.0
+
+

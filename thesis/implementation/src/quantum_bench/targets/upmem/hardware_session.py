@@ -546,9 +546,9 @@ def start_hardware_session(
         raise ValueError(
             "hardware_profile_violation: interactive session_id must be non-empty"
         )
-    if profile.requested_dpu_count != 1 or profile.tasklets_per_dpu != 1:
+    if profile.requested_dpu_count != 1 or profile.tasklets_per_dpu < 1 or profile.tasklets_per_dpu > 16:
         raise ValueError(
-            "hardware_profile_violation: interactive session requires one DPU and one tasklet"
+            "hardware_profile_violation: interactive session requires one DPU and 1..16 tasklets"
         )
     root = build.session_root.resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -562,7 +562,7 @@ def start_hardware_session(
                 "session_id": session_id,
                 "dpu_binary": _relative(root, build.dpu_binary),
                 "requested_dpus": 1,
-                "tasklets": 1,
+                "tasklets": profile.tasklets_per_dpu,
             },
             indent=2,
             sort_keys=True,
@@ -1211,6 +1211,7 @@ class ResidentGraphSessionExecution:
     command: tuple[str, ...]
     stdout_snippet: str
     stderr_snippet: str
+    dpu_run_time_cycles: int = 0
 
 
 def build_resident_hardware_session(
@@ -1355,8 +1356,8 @@ def execute_resident_graph_session(
             raise ValueError(f"hardware_profile_violation: resident request {key} mismatch")
     if manifest.get("graph_request_count") != 1:
         raise ValueError("hardware_profile_violation: resident graph request count must be one")
-    if manifest.get("requested_dpus") != 1 or manifest.get("tasklets") != 1:
-        raise ValueError("hardware_profile_violation: resident request requires one DPU and one tasklet")
+    if manifest.get("requested_dpus") != 1 or not isinstance(manifest.get("tasklets"), int) or manifest.get("tasklets") < 1 or manifest.get("tasklets") > 16:
+        raise ValueError("hardware_profile_violation: resident request requires one DPU and 1..16 tasklets")
     if manifest.get("target") != "hardware" or manifest.get("sdk_allocation_profile") != RESIDENT_ALLOCATION_PROFILE:
         raise ValueError("hardware_profile_violation: resident request hardware allocation identity mismatch")
     package_ref = manifest.get("package_path")
@@ -1430,6 +1431,7 @@ def execute_resident_graph_session(
         command=command,
         stdout_snippet=str(completed.get("stdout_snippet", "")),
         stderr_snippet=stderr,
+        dpu_run_time_cycles=int(response.get("dpu_run_time_cycles", 0) if isinstance(response, dict) else 0),
     )
 
 
@@ -1578,7 +1580,7 @@ def _resident_response_valid(response: JsonDict, manifest: Mapping[str, Any], pr
         return False
     if not exact_integer(response.get("requested_dpus"), 1) or not exact_integer(response.get("allocated_dpus"), 1):
         return False
-    if not exact_integer(response.get("tasklets"), 1) or not exact_integer(response.get("graph_request_count"), 1):
+    if not exact_integer(response.get("tasklets"), profile.tasklets_per_dpu) or not exact_integer(response.get("tasklets"), manifest.get("tasklets")) or not exact_integer(response.get("graph_request_count"), 1):
         return False
     operation_count = manifest.get("component_operation_count")
     if not isinstance(operation_count, int) or not exact_integer(response.get("native_launch_count"), operation_count) or not exact_integer(response.get("native_task_count"), operation_count):

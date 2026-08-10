@@ -67,6 +67,7 @@ typedef struct {
     double final_d2h_time_s;
     double output_write_time_s;
     double release_time_s;
+    uint64_t dpu_run_time_cycles;
 } resident_timing_t;
 
 int resident_request_load(

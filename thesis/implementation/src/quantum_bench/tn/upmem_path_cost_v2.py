@@ -564,6 +564,21 @@ def _fixed_log1p(value: float, cap: float) -> float:
     return float(math.log1p(max(0.0, value)) / math.log1p(cap))
 
 
+def calibrate_pim_cost_model(empirical_dpu_cycles: int | None, modeled_flops: int | None) -> float | None:
+    """Calculate C_PIM operational calibration ratio safely.
+
+    C_PIM = empirical_dpu_cycles / modeled_flops
+    Returns None if empirical_dpu_cycles or modeled_flops is <= 0 or None.
+    """
+    if empirical_dpu_cycles is None or modeled_flops is None:
+        return None
+    cycles = int(empirical_dpu_cycles)
+    flops = int(modeled_flops)
+    if cycles > 0 and flops > 0:
+        return float(cycles) / float(flops)
+    return None
+
+
 __all__ = [
     "DEFAULT_UPMEM_PATH_COST_NORMALIZATION_V2",
     "DEFAULT_UPMEM_PATH_COST_POLICY_V2",
@@ -576,6 +591,7 @@ __all__ = [
     "UPMEM_PATH_OBJECTIVE_V2",
     "UpmemPathCostPolicyV2",
     "UpmemPathCostProfileV2",
+    "calibrate_pim_cost_model",
     "combine_path_cost_components_v2",
     "fixed_log1p_generic_budgets_v2",
     "model_upmem_network_path_cost_v2",

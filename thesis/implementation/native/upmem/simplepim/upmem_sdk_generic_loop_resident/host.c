@@ -152,9 +152,9 @@ int main(int argc, char **argv) {
         error_message = (char *)"DPU_BACKEND must be unset";
         goto release_and_write;
     }
-    if (NR_TASKLETS != 1 || request.header.operation_count == 0u || request.header.operation_count > RESIDENT_MAX_COMPONENT_OPS) {
+    if (NR_TASKLETS < 1 || NR_TASKLETS > 16 || request.header.operation_count == 0u || request.header.operation_count > RESIDENT_MAX_COMPONENT_OPS) {
         failure_stage = "hardware_profile_violation";
-        error_message = (char *)"resident host requires NR_TASKLETS=1 and bounded descriptors";
+        error_message = (char *)"resident host requires 1 <= NR_TASKLETS <= 16 and bounded descriptors";
         goto release_and_write;
     }
     if (resident_interrupted) {
@@ -306,6 +306,16 @@ int main(int argc, char **argv) {
             failure_stage = "kernel_launch_failed";
             goto release_and_write;
         }
+        {
+            resident_completion_t completion;
+            struct dpu_set_t dpu_first;
+            DPU_FOREACH(set, dpu_first) {
+                if (dpu_copy_from(dpu_first, "RESIDENT_COMPLETION", 0, &completion, sizeof(completion)) == DPU_OK) {
+                    timing.dpu_run_time_cycles += completion.dpu_run_time_cycles;
+                }
+                break;
+            }
+        }
         native_launch_count++;
     }
     if (resident_interrupted) {
@@ -373,7 +383,7 @@ write_response:
     for (size_t index = 0; index < request.final_count; index++) free(output_buffers == NULL ? NULL : output_buffers[index]);
     free(input_buffers);
     free(output_buffers);
-    if (error_message != NULL && error_message != (char *)"UPMEM_ALLOW_PHYSICAL_HARDWARE=1 is required" && error_message != (char *)"DPU_BACKEND must be unset" && error_message != (char *)"resident host requires NR_TASKLETS=1 and bounded descriptors" && error_message != interrupted_message && error_message != output_nonfinite_message) free(error_message);
+    if (error_message != NULL && error_message != (char *)"UPMEM_ALLOW_PHYSICAL_HARDWARE=1 is required" && error_message != (char *)"DPU_BACKEND must be unset" && error_message != (char *)"resident host requires 1 <= NR_TASKLETS <= 16 and bounded descriptors" && error_message != interrupted_message && error_message != output_nonfinite_message) free(error_message);
     resident_request_free(&request);
     return rc;
 }

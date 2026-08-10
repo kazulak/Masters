@@ -67,6 +67,7 @@ def upmem_taskgraph_executor_config(
     frontier_worker_count: int = 1,
     dpu_group_count: int = 1,
     task_assignment_strategy: str = "sequential_single_dpu",
+    tasklets_per_dpu: int = 1,
 ) -> JsonDict:
     return {
         "policy": policy,
@@ -75,6 +76,7 @@ def upmem_taskgraph_executor_config(
         "frontier_worker_count": frontier_worker_count,
         "dpu_group_count": dpu_group_count,
         "task_assignment_strategy": task_assignment_strategy,
+        "tasklets_per_dpu": tasklets_per_dpu,
         "generic_kernel_strategy": GENERIC_KERNEL_STRATEGY,
         "native_max_rank": GENERIC_NATIVE_MAX_RANK,
         "native_max_tensor_elements": GENERIC_NATIVE_MAX_TENSOR_ELEMENTS,
@@ -659,6 +661,7 @@ def _execute_generic_real_component(
         bridge_artifact_path=bridge_dir,
         component=component,
         dense_reject_reason=dense_reject_reason,
+        dpu_run_time_cycles=getattr(result, "dpu_run_time_cycles", 0),
     )
     expected = None
     if preparation.prepared_operands is not None:

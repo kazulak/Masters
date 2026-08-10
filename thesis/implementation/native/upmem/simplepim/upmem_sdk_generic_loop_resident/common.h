@@ -7,8 +7,8 @@
 #define NR_TASKLETS 1
 #endif
 
-#if NR_TASKLETS != 1
-#error "generic_loop_resident_graph_session_v1 requires NR_TASKLETS=1"
+#if NR_TASKLETS < 1 || NR_TASKLETS > 16
+#error "generic_loop_resident_graph_session_v1 requires 1 <= NR_TASKLETS <= 16"
 #endif
 
 #ifndef UPMEM_GENERIC_MAX_RANK
@@ -86,6 +86,17 @@ typedef struct {
 } resident_control_t;
 
 /* Small host-visible ABI record. The host reads this only after dpu_sync(). */
+/* ABI Alignment Map:
+ * Offset 00: magic (uint32_t, 4 bytes)
+ * Offset 04: version (uint32_t, 4 bytes)
+ * Offset 08: active_operation_index (uint32_t, 4 bytes)
+ * Offset 12: completion_status (uint32_t, 4 bytes)
+ * Offset 16: completed_operation_count (uint32_t, 4 bytes)
+ * Offset 20: output_elements_processed (uint32_t, 4 bytes)
+ * Offset 24: output_checksum_fnv1a64 (uint64_t, 8 bytes)
+ * Offset 32: dpu_run_time_cycles (uint64_t, 8 bytes)
+ * Total Size: 40 bytes (perfectly aligned without padding on 32-bit & 64-bit)
+ */
 typedef struct {
     uint32_t magic;
     uint32_t version;
@@ -94,6 +105,7 @@ typedef struct {
     uint32_t completed_operation_count;
     uint32_t output_elements_processed;
     uint64_t output_checksum_fnv1a64;
+    uint64_t dpu_run_time_cycles;
 } resident_completion_t;
 
 typedef struct {
