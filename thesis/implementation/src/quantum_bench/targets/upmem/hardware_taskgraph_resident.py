@@ -1340,7 +1340,7 @@ def _descriptor_transfer_bytes(slot_count: int, operation_count: int) -> int:
     )
 
 
-def _canonical_profile() -> HardwareTaskGraphResidentProfile:
+def _canonical_profile(tasklets_per_dpu: int = 1) -> HardwareTaskGraphResidentProfile:
     return HardwareTaskGraphResidentProfile(
         version=RESIDENT_PROFILE_VERSION,
         target="hardware",
@@ -1349,7 +1349,7 @@ def _canonical_profile() -> HardwareTaskGraphResidentProfile:
         session_protocol=RESIDENT_SESSION_PROTOCOL,
         timing_scope=RESIDENT_TIMING_SCOPE,
         requested_dpu_count=1,
-        tasklets_per_dpu=1,
+        tasklets_per_dpu=tasklets_per_dpu,
         max_rank=RESIDENT_MAX_RANK,
         max_tensor_elements=RESIDENT_MAX_ELEMENTS,
         max_logical_tasks=RESIDENT_MAX_LOGICAL_TASKS,
@@ -1369,14 +1369,17 @@ def _canonical_profile() -> HardwareTaskGraphResidentProfile:
 def _parse_profile(value: object) -> HardwareTaskGraphResidentProfile:
     if not isinstance(value, Mapping):
         raise ValueError("hardware_profile_violation: resident hardware_profile must be a mapping")
-    expected = _canonical_profile().to_json_dict()
+    tasklets = int(value.get("tasklets_per_dpu", 1))
+    if tasklets < 1 or tasklets > 16:
+        raise ValueError("hardware_profile_violation: tasklets_per_dpu must be between 1 and 16")
+    expected = _canonical_profile(tasklets).to_json_dict()
     if set(value) != set(expected):
         raise ValueError("hardware_profile_violation: resident profile keys differ")
     for key, expected_value in expected.items():
         actual_value = value.get(key)
         if type(actual_value) is not type(expected_value) or actual_value != expected_value:
             raise ValueError(f"hardware_profile_violation: {key} must be {expected_value!r}")
-    return _canonical_profile()
+    return _canonical_profile(tasklets)
 
 
 def _parse_variants(value: object) -> tuple[HardwareTaskGraphResidentVariant, ...]:
@@ -1501,7 +1504,7 @@ def _encoded_slot_id(slot: ResidentSlotDescriptor) -> int:
 
 
 def _require_canonical_profile(profile: HardwareTaskGraphResidentProfile) -> None:
-    if profile.to_json_dict() != _canonical_profile().to_json_dict():
+    if profile.to_json_dict() != _canonical_profile(profile.tasklets_per_dpu).to_json_dict():
         raise ResidentCapacityError(
             "hardware_profile_violation: resident package ABI requires the canonical frozen profile"
         )
