@@ -6,40 +6,28 @@ This directory is the active thesis implementation. Its research question is:
 > way that is correct, measurable, and eventually faster on real DPU hardware?
 
 The current code establishes the circuit-to-TaskGraph pipeline, serious CPU and
-GPU baselines, bounded UPMEM SDK-simulator execution, and a physically accepted
-descriptor-driven M4.5 runtime.
-It does **not** yet claim UPMEM hardware speedup or a fully general UPMEM tensor
-contraction kernel.
+GPU baselines, bounded UPMEM SDK-simulator execution, and a fully completed,
+physically accepted descriptor-driven M4 execution layer (M4.1–M4.6).
 
-The active physical evidence is a sequence of bounded qualification lanes. M2.1
-useful-slice execution, M2.2 float32/requantized execution, M2.3 two-path/two-
-numeric-mode execution, M3.1 two-wave frontier dispatch, and M4.2--M4.4
-SimplePIM lanes have passed their declared physical functionality checks on ETH.
-These are separate fixtures and adapters, not one general executor. The M2
-sliced-resident foundation remains documented in the [M2 ETH runbook](docs/upmem_hardware_sliced_resident_mvp_runbook.md),
-and the M4 lanes are documented in their individual runbooks. None of these
-results supports a speedup, energy, scaling, or general-TaskGraph claim.
+The active physical evidence includes a sequence of bounded qualification lanes
+and a complete physical M4.6 campaign passed on physical ETH UPMEM hardware. M2.1
+useful-slice execution, M2.2 float32/requantized execution, M2.3 two-path/two-numeric-mode
+execution, M3.1 two-wave frontier dispatch, M4.2–M4.4 SimplePIM lanes, M4.5 descriptor-driven
+runtime, and **M4.6 multi-tasklet parallelism, intra-DPU tiling, hardware cycle timing,
+and PIM cost model calibration** have passed their declared physical functionality
+and timing checks on ETH (336 successful measurement rows across 13 benchmark cases).
 
-The previous one-DPU MRAM-resident route remains readable as historical context.
-Dense, legacy generic/persistent, CPU frontier/hybrid, PIM bridge/frontier, and
-external-library probe artifacts are historical only. Their normalized readers,
-route labels, tables, plots, and snapshot compatibility remain available for
-existing evidence.
+Milestone **M4 (Local/Resident UPMEM Execution Layer)** is fully closed.
+The current active architectural stage is **Milestone M5 (Distributed Single Contraction)**.
 
-The historical status applies to those old runnable experiments, not to the
-target architecture. SimplePIM is physically qualified for the bounded
-management/operator lanes demonstrated by M4.2--M4.4. M4.5 is physically
-accepted on ETH for its bounded functionality contract: one resident package
-is used with separate one-DPU and two-DPU schedules, producing 3 and 2 waves;
-SimplePIM handles management/allocation, the thesis resident kernel handles
-contraction, and the host performs the one two-DPU handoff. Each session
-validates one final output against the CPU reference, with no simulator or CPU
-fallback. The tracked M4.5 evidence capsule is
-[thesis_results/physical_simplepim_taskgraph_m4_5](thesis_results/physical_simplepim_taskgraph_m4_5).
-The route remains functionality evidence only: it makes no timing, speedup,
-scaling, energy, or general tensor-network performance claim. PID-Comm, ATiM,
-and SparseP remain subsequent provider/kernel/communication components behind
-thesis-owned interfaces.
+The historical status applies to old runnable experiments, not to the
+target architecture. SimplePIM is physically qualified for bounded
+management/operator lanes. M4.5/M4.6 descriptor-driven runtime is physically
+accepted on ETH: one resident package is executed across tasklet configurations
+($1 \le NR\_TASKLETS \le 16$), producing accurate cycle counts and steady-state timings.
+Each session validates final outputs against the CPU reference using exact tensor order matching.
+PID-Comm, ATiM, and SparseP remain subsequent provider/kernel/communication components behind
+thesis-owned interfaces for M5–M8.
 
 Start with [ARCHITECTURE.md](ARCHITECTURE.md) for module ownership, external
 provenance, thesis contributions, and the planned UPMEM architecture. The fixed

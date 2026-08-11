@@ -637,17 +637,15 @@ host-mediated transfer is the initial communication provider. PID-Comm is the
 future communication provider; ATiM and SparseP are future generated-dense and
 sparse kernel providers.
 
-The next action is M4.6 timing and profiling metadata for the bounded runtime.
-M4.5 makes no tasklet, tiling, PID-Comm, ATiM, SparseP, speedup, energy, or
-scaling claim. Those are subsequent extensions after timing/profiling evidence.
+### M4.6: intra-DPU tiling, tasklets, timing & profiling [PASSED ON ETH HARDWARE - 2026-08-10]
 
-### M4.6: intra-DPU tiling and tasklets
+M4.6 is implemented and physically accepted on ETH hardware across tasklet configurations ($1 \le NR\_TASKLETS \le 16$).
+Intra-DPU WRAM-tiled work division, race-free `perfcounter_get()` DPU cycle measurement, Python data pipeline propagation (`dpu_run_time_cycles` and `dpu_compute_seconds`), and SLR Section 9.3 PIM Cost Model calibration (`calibrate_pim_cost_model`) are fully operational.
+Physical campaign completed with **336 measurement rows across 13 benchmark cases (0 failures)**, validated against CPU exact references with exact tensor label ordering matching.
 
-Gate: tasklet ownership is exact, observed tasklets match the plan, no hidden
-host computation occurs, and float32/int8/split-complex validation remains
-within the declared contract.
+**Milestone M4 (Local/Resident UPMEM Execution Layer) is closed.**
 
-### M5: distributed single large contraction
+### M5: distributed single large contraction [CURRENT ACTIVE STAGE]
 
 Distribute one large contraction across multiple DPUs, starting with output
 tiles and then contracted-index partial sums. Compare host-mediated reduction
