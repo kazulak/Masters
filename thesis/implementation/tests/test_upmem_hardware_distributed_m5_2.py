@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -92,6 +93,11 @@ def _response(request: Mapping[str, Any]) -> dict[str, Any]:
         "error": None,
         "target_requested": "hardware",
         "target_observed": "physical_hardware",
+        "backend_id": "upmem_sdk_hardware_execution_plan",
+        "backend_family": "upmem_sdk",
+        "execution_class": "resident_taskgraph",
+        "kernel_strategy": "resident_generic_contract",
+        "timing_scope": "host_observed_sdk_stage_boundaries",
         "requested_dpu_count": dpu_count,
         "allocated_dpu_count": dpu_count,
         "tasklets_per_dpu": 1,
@@ -108,7 +114,11 @@ def _response(request: Mapping[str, Any]) -> dict[str, Any]:
         "cpu_fallback_used": False,
         "hardware_speedup_applicable": False,
         "timing_is_bringup_only": True,
-        "provider_identities": {"communication": "host_mediated_sum_v1"},
+        "provider_identities": {
+            "runtime": "simplepim_management_v1",
+            "kernel": "thesis_resident_generic_contract_v1",
+            "communication": "host_mediated_sum_v1",
+        },
         "allocation": {"attempted": True, "confirmed": True, "release_confirmed": True},
         "metrics": {
             "descriptor_h2d_bytes": descriptor,
@@ -195,12 +205,14 @@ class FakeM52NativeTarget:
         return _response(request)
 
 
-@pytest.mark.parametrize("dpu_count", (1, 2, 4))
-def test_m52_fake_workflow_covers_explicit_contracted_1_2_4(tmp_path: Path, dpu_count: int) -> None:
+def test_m52_fake_workflow_covers_explicit_contracted_1_2_4(tmp_path: Path) -> None:
     target = FakeM52NativeTarget()
     result = m52.execute(
         tmp_path,
-        environment={"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1"},
+        environment={
+            "UPMEM_ALLOW_PHYSICAL_HARDWARE": "1",
+            "UPMEM_HW_RANK_PATH": "/dev/dpu_rank1",
+        },
         native_target=target,
     )
 
@@ -210,6 +222,43 @@ def test_m52_fake_workflow_covers_explicit_contracted_1_2_4(tmp_path: Path, dpu_
     assert [row["requested_dpu_count"] for row in rows] == [1, 2, 4]
     assert all(row["partition_kind"] == "contracted_partial_sum" for row in rows)
     assert all(row["communication_provider"] == "host_mediated_sum_v1" for row in rows)
+    assert all(row["native_backend_id"] == "upmem_sdk_hardware_execution_plan" for row in rows)
+    assert all(row["backend_id"] == m52.BACKEND_ID for row in rows)
+    assert all(row["provider_identities"]["communication"] == "host_mediated_sum_v1" for row in rows)
+    assert all(row["reduction_time_s"] > 0.0 for row in rows)
+
+
+def test_physical_execute_requires_rank_path_for_m51_and_m52(tmp_path: Path) -> None:
+    for execute in (m51.execute, m52.execute):
+        with pytest.raises(ValueError, match="hardware_rank_path_missing"):
+            execute(tmp_path, environment={"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1"})
+
+
+def _m52_validation_item(tmp_path: Path) -> dict[str, Any]:
+    result = m52.prepare(tmp_path, build=True, native_target=FakeM52NativeTarget())
+    return result["plans"]["2"]
+
+
+def test_m52_provider_mismatch_is_controlled_value_error(tmp_path: Path) -> None:
+    item = _m52_validation_item(tmp_path)
+    response = _response(item["request"])
+    response["provider_identities"]["communication"] = "none"
+
+    with pytest.raises(ValueError, match="provider identities"):
+        m51._validate_execute_response(
+            response, item, partition_kind="contracted_partial_sum"
+        )
+
+
+def test_m52_nested_reduction_mismatch_is_controlled_value_error(tmp_path: Path) -> None:
+    item = _m52_validation_item(tmp_path)
+    response = _response(item["request"])
+    response["reduction"]["participant_count"] = 1
+
+    with pytest.raises(ValueError, match="nested reduction participant count"):
+        m51._validate_execute_response(
+            response, item, partition_kind="contracted_partial_sum"
+        )
 
 
 def test_m52_prepare_result_and_artifact_are_prepared(tmp_path: Path) -> None:
@@ -234,6 +283,14 @@ def test_cli_and_make_plan_targets_are_wired() -> None:
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
     assert "upmem-hw-m5-1-plan:" in makefile
     assert "upmem-hw-m5-2-plan:" in makefile
+    for target in (
+        "upmem-hw-m4-6-tasklet-scaling",
+        "upmem-hw-m5-1",
+        "upmem-hw-m5-2",
+    ):
+        recipe = makefile.split(f"{target}:\n", 1)[1].split("\n\n", 1)[0]
+        assert "UPMEM_HW_RANK_PATH" in recipe
+        assert "Set UPMEM_HW_RANK_PATH=/dev/dpu_rankN" in recipe
     completed = subprocess.run(
         [sys.executable, "-m", "quantum_bench.bench", "--help"],
         cwd=ROOT,
@@ -244,3 +301,21 @@ def test_cli_and_make_plan_targets_are_wired() -> None:
     )
     assert completed.returncode == 0
     assert "upmem-hardware-distributed-m5-2" in completed.stdout
+
+
+@pytest.mark.parametrize(
+    "target",
+    ("upmem-hw-m4-6-tasklet-scaling", "upmem-hw-m5-1", "upmem-hw-m5-2"),
+)
+def test_physical_make_targets_require_rank_path(target: str) -> None:
+    completed = subprocess.run(
+        ["make", "-s", "UPMEM_ALLOW_PHYSICAL_HARDWARE=1", target],
+        cwd=ROOT,
+        env={**os.environ, "UPMEM_HW_RANK_PATH": ""},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 2
+    assert "Set UPMEM_HW_RANK_PATH=/dev/dpu_rankN" in completed.stderr

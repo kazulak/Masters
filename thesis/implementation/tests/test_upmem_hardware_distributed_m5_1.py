@@ -85,6 +85,16 @@ def _response(request: Mapping[str, Any]) -> dict[str, Any]:
         "error": None,
         "target_requested": "hardware",
         "target_observed": "physical_hardware",
+        "backend_id": "upmem_sdk_hardware_execution_plan",
+        "backend_family": "upmem_sdk",
+        "execution_class": "resident_taskgraph",
+        "kernel_strategy": "resident_generic_contract",
+        "timing_scope": "host_observed_sdk_stage_boundaries",
+        "provider_identities": {
+            "runtime": "simplepim_management_v1",
+            "kernel": "thesis_resident_generic_contract_v1",
+            "communication": "none",
+        },
         "requested_dpu_count": dpu_count,
         "allocated_dpu_count": dpu_count,
         "tasklets_per_dpu": 1,
@@ -208,7 +218,11 @@ def _request_for_item(item: Mapping[str, Any]) -> dict[str, Any]:
 
 def test_m51_fake_native_response_writes_strict_normalized_rows(tmp_path: Path) -> None:
     target = FakeM51NativeTarget()
-    environment = {"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1", "UPMEM_HOME": "/fake/upmem"}
+    environment = {
+        "UPMEM_ALLOW_PHYSICAL_HARDWARE": "1",
+        "UPMEM_HOME": "/fake/upmem",
+        "UPMEM_HW_RANK_PATH": "/dev/dpu_rank1",
+    }
 
     result = m51.execute(tmp_path, environment=environment, native_target=target)
 
@@ -223,8 +237,21 @@ def test_m51_fake_native_response_writes_strict_normalized_rows(tmp_path: Path) 
     assert [row["requested_dpu_count"] for row in records] == [1, 2, 4]
     assert all(row["actual_transfer_bytes"] > 0 for row in records)
     assert all(row["timing_is_bringup_only"] is True for row in records)
+    assert all(row["target_requested"] == "hardware" for row in records)
+    assert all(row["target_observed"] == "physical_hardware" for row in records)
+    assert all(row["backend_id"] == m51.BACKEND_ID for row in records)
+    assert all(row["backend_family"] == "upmem_sdk" for row in records)
+    assert all(row["native_backend_id"] == "upmem_sdk_hardware_execution_plan" for row in records)
+    assert all(row["execution_class"] == "resident_taskgraph" for row in records)
+    assert all(row["kernel_strategy"] == "resident_generic_contract" for row in records)
+    assert all(row["tasklets_per_dpu"] == 1 for row in records)
+    assert all(row["hardware_functionality_evidence"] is True for row in records)
+    assert all(row["timing_scope"] == "host_observed_sdk_stage_boundaries" for row in records)
+    assert all(row["provider_identities"]["communication"] == "none" for row in records)
     captured = json.loads((run_dir / "environment.json").read_text())
     assert captured["m5_1_native_environment"]["UPMEM_HOME"] == "/fake/upmem"
+    manifest = json.loads((run_dir / "run_manifest.json").read_text())
+    assert manifest["upmem_rank_path_requested"] == "/dev/dpu_rank1"
 
 
 def test_m51_rank_metadata_is_copied_to_native_response_and_record(tmp_path: Path) -> None:
@@ -259,7 +286,10 @@ def test_m51_does_not_accept_stale_or_response_synthesized_output(tmp_path: Path
 
     result = m51.execute(
         tmp_path,
-        environment={"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1"},
+        environment={
+            "UPMEM_ALLOW_PHYSICAL_HARDWARE": "1",
+            "UPMEM_HW_RANK_PATH": "/dev/dpu_rank1",
+        },
         native_target=target,
     )
 
@@ -267,6 +297,24 @@ def test_m51_does_not_accept_stale_or_response_synthesized_output(tmp_path: Path
     run_dir = Path(result["run_dir"])
     rows = [json.loads(line) for line in (run_dir / "normalized_records.jsonl").read_text().splitlines()]
     assert all(row["failure_stage"] == "result_transfer_failed" for row in rows)
+
+
+def test_m51_physical_execute_requires_rank_path(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="hardware_rank_path_missing"):
+        m51.execute(
+            tmp_path,
+            environment={"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1"},
+            native_target=FakeM51NativeTarget(),
+        )
+
+
+def test_m51_native_identity_mismatch_is_controlled_value_error() -> None:
+    item = _item(1)
+    response = _response(_request_for_item(item))
+    response["backend_id"] = "wrong-native-backend"
+
+    with pytest.raises(ValueError, match="native identity"):
+        m51._validate_execute_response(response, item)
 
 
 def _delete(path: tuple[Any, ...]) -> Callable[[dict[str, Any]], None]:

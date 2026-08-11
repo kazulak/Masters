@@ -167,6 +167,8 @@ def execute(
     env = dict(os.environ if environment is None else environment)
     if env.get("UPMEM_ALLOW_PHYSICAL_HARDWARE") != "1":
         raise ValueError("hardware_opt_in_missing: UPMEM_ALLOW_PHYSICAL_HARDWARE=1 is required")
+    if not env.get("UPMEM_HW_RANK_PATH", "").strip():
+        raise ValueError("hardware_rank_path_missing: UPMEM_HW_RANK_PATH is required")
     if env.get("DPU_BACKEND"):
         raise ValueError("hardware_profile_violation: DPU_BACKEND must be unset for physical M5.1")
     rank_metadata = hardware_environment_metadata(env)
@@ -206,6 +208,9 @@ def execute(
         command="UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-m5-1",
         root_dir=root_dir,
     )
+    manifest["upmem_rank_path_requested"] = rank_metadata["upmem_rank_path_requested"]
+    manifest["upmem_sdk_profile_effective"] = rank_metadata["upmem_sdk_profile_effective"]
+    write_json(run_dir / "run_manifest.json", manifest)
     bundle = _prepare_bundle(run_dir, target=target, build=True)
     records: list[dict[str, Any]] = []
     for dpu_count in DPUS:
@@ -447,6 +452,25 @@ def _validate_execute_response(
         if response.get(key) is not expected:
             raise ValueError(f"output_manifest_failed: invalid native response flag {key}")
 
+    expected_native_identity = {
+        "backend_id": "upmem_sdk_hardware_execution_plan",
+        "backend_family": "upmem_sdk",
+        "execution_class": "resident_taskgraph",
+        "kernel_strategy": "resident_generic_contract",
+        "timing_scope": "host_observed_sdk_stage_boundaries",
+    }
+    for key, expected in expected_native_identity.items():
+        if response.get(key) != expected:
+            raise ValueError(f"output_manifest_failed: invalid native identity field {key}")
+
+    expected_provider_identities = {
+        "runtime": "simplepim_management_v1",
+        "kernel": "thesis_resident_generic_contract_v1",
+        "communication": "host_mediated_sum_v1" if contracted_reduction else "none",
+    }
+    if response.get("provider_identities") != expected_provider_identities:
+        raise ValueError("output_manifest_failed: native provider identities are invalid")
+
     allocation = _required_mapping(response, "allocation")
     for key, expected in {"attempted": True, "release_confirmed": True}.items():
         if allocation.get(key) is not expected:
@@ -532,6 +556,14 @@ def _validate_execute_response(
         reduction = _required_mapping(response, "reduction")
         if reduction.get("provider") != "host_mediated_sum_v1" or reduction.get("order") != "ascending_dpu_id":
             raise ValueError("output_manifest_failed: deterministic host reduction contract is missing")
+        if reduction.get("participant_count") != metric_values["reduction_participant_count"]:
+            raise ValueError("output_manifest_failed: nested reduction participant count is inconsistent")
+        if reduction.get("partial_buffers_read") != metric_values["reduction_partial_reads"]:
+            raise ValueError("output_manifest_failed: nested reduction buffer count is inconsistent")
+        if reduction.get("d2h_bytes") != metric_values["reduction_d2h_bytes"]:
+            raise ValueError("output_manifest_failed: nested reduction transfer count is inconsistent")
+        if reduction.get("accumulator_reset_per_repetition") is not True:
+            raise ValueError("output_manifest_failed: nested reduction reset evidence is inconsistent")
         if reduction.get("element_additions") != expected_additions:
             raise ValueError("output_manifest_failed: reduction addition evidence is inconsistent")
     elif any(metric_values[name] != 0 for name in (
@@ -613,6 +645,16 @@ def _record(
         "package_file_sha256": item["package_sha256"],
         "work_units": item["work_units"],
         "native_response": dict(response),
+        "target_requested": response["target_requested"],
+        "target_observed": response["target_observed"],
+        "backend_family": response["backend_family"],
+        "native_backend_id": response["backend_id"],
+        "execution_class": response["execution_class"],
+        "kernel_strategy": response["kernel_strategy"],
+        "tasklets_per_dpu": response["tasklets_per_dpu"],
+        "hardware_functionality_evidence": response["hardware_functionality_evidence"],
+        "timing_scope": response["timing_scope"],
+        "provider_identities": dict(response["provider_identities"]),
         "upmem_rank_path_requested": response.get("upmem_rank_path_requested"),
         "upmem_sdk_profile_effective": response.get("upmem_sdk_profile_effective"),
         "hardware_allocation_verified": response["hardware_allocation_verified"],

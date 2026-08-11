@@ -85,6 +85,8 @@ def execute(
     env = dict(os.environ if environment is None else environment)
     if env.get("UPMEM_ALLOW_PHYSICAL_HARDWARE") != "1":
         raise ValueError("hardware_opt_in_missing: UPMEM_ALLOW_PHYSICAL_HARDWARE=1 is required")
+    if not env.get("UPMEM_HW_RANK_PATH", "").strip():
+        raise ValueError("hardware_rank_path_missing: UPMEM_HW_RANK_PATH is required")
     if env.get("DPU_BACKEND"):
         raise ValueError("hardware_profile_violation: DPU_BACKEND must be unset for physical M5.2")
     rank_metadata = m51.hardware_environment_metadata(env)
@@ -123,6 +125,9 @@ def execute(
         command="UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-m5-2",
         root_dir=root_dir,
     )
+    manifest["upmem_rank_path_requested"] = rank_metadata["upmem_rank_path_requested"]
+    manifest["upmem_sdk_profile_effective"] = rank_metadata["upmem_sdk_profile_effective"]
+    write_json(run_dir / "run_manifest.json", manifest)
     bundle = m51._prepare_bundle(
         run_dir,
         target=target,
@@ -162,7 +167,9 @@ def execute(
                     "execution_plan_kind": "distributed_plan_v2_contracted_partition",
                     "partition_kind": CONTRACTED_PARTIAL_SUM,
                     "communication_provider": "host_mediated_sum_v1",
+                    "provider_identities": dict(response["provider_identities"]),
                     "reduction_order": "ascending_dpu_id",
+                    "reduction_time_s": response["timing"]["reduction_time_s"],
                     "reduction_d2h_bytes": response["metrics"]["reduction_d2h_bytes"],
                     "reduction_partial_reads": response["metrics"]["reduction_partial_reads"],
                     "reduction_element_additions": response["metrics"]["reduction_element_additions"],

@@ -273,6 +273,7 @@ upmem-hw-m4-6-tasklet-scaling-plan:
 
 upmem-hw-m4-6-tasklet-scaling:
 	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1 to execute physical hardware' >&2; exit 2; }
+	@test -n "$(UPMEM_HW_RANK_PATH)" || { echo 'Set UPMEM_HW_RANK_PATH=/dev/dpu_rankN to select a physical UPMEM rank' >&2; exit 2; }
 	@for tasklets in $(UPMEM_HW_M4_6_TASKLETS); do \
 		$(BENCH) upmem-hardware-taskgraph-resident --suite $(UPMEM_HW_M4_6_SUITE) --execute --tasklets $$tasklets || exit $$?; \
 	done
@@ -374,6 +375,7 @@ upmem-hw-m5-1-plan:
 
 upmem-hw-m5-1:
 	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1 to execute physical hardware' >&2; exit 2; }
+	@test -n "$(UPMEM_HW_RANK_PATH)" || { echo 'Set UPMEM_HW_RANK_PATH=/dev/dpu_rankN to select a physical UPMEM rank' >&2; exit 2; }
 	$(BENCH) upmem-hardware-distributed-m5-1 --execute
 
 upmem-hw-m5-1-report:
@@ -384,6 +386,7 @@ upmem-hw-m5-2-plan:
 
 upmem-hw-m5-2:
 	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1 to execute physical hardware' >&2; exit 2; }
+	@test -n "$(UPMEM_HW_RANK_PATH)" || { echo 'Set UPMEM_HW_RANK_PATH=/dev/dpu_rankN to select a physical UPMEM rank' >&2; exit 2; }
 	$(BENCH) upmem-hardware-distributed-m5-2 --execute
 
 upmem-hw-m5-2-report:
