@@ -63,3 +63,27 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m pytest -q
 .................................................................        [100%]
 641 passed in 29.86s
 ```
+
+---
+
+## 3. Milestone M5 (Distributed Single Contraction) Verification
+
+> **Status:** Fully Implemented & Verified  
+> **Test Suite Result:** **644 / 644 pytest tests passed** (29.67s)
+
+### Summary of M5 Features Implemented:
+1. **Multi-DPU Native ABI (`common.h`)**:
+   - Added `dpu_slice_offset`, `dpu_slice_elements`, `contracted_offset`, `contracted_elements_slice` to `upmem_generic_args_t`.
+   - Updated `execution_plan_common.h` static assertion to 800 bytes for `resident_operation_t`.
+2. **DPU Kernel Bounded Work Division (`dpu.c`)**:
+   - Constrained contract and combine tile loops to `dpu_slice_elements`.
+   - Applied `dpu_slice_offset` to output coordinate decoding and MRAM slot writes.
+3. **Host Driver Multi-DPU Operations (`host.c`)**:
+   - Replaced single DPU allocation with `dpu_alloc(request.requested_dpus, ...)`.
+   - Added graceful error handling (`hardware_allocation_failed`) without hard aborts.
+   - Aggregated critical path `dpu_run_time_cycles` across the DPU set.
+4. **Python Planner Descriptors (`hardware_taskgraph_resident.py`)**:
+   - Implemented `PlacementPlan` and `CommunicationPlan` dataclasses and helper constructors (`build_m5_placement_plan`, `build_m5_communication_plan`).
+5. **Unit & Integration Tests (`test_upmem_simplepim_taskgraph_executor.py`)**:
+   - Added `test_m5_output_tile_multi_dpu_placement_plan`, `test_m5_partial_sum_host_reduction_communication_plan`, and `test_m5_multi_dpu_reference_validation`.
+
