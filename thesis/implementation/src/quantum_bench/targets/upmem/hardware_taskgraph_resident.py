@@ -71,6 +71,89 @@ RESIDENT_OPERATION_CONTRACT = 1
 RESIDENT_OPERATION_COMPLEX_COMBINE = 2
 
 
+@dataclass(frozen=True)
+class CommunicationPlan:
+    logical_bytes: int
+    application_visible_transfer_bytes: int
+    collective_kind: str  # "host_mediated_reduction", "pid_comm_all_reduce", "pid_comm_reduce_scatter", etc.
+    participants: tuple[str, ...]
+    source_ownership: str
+    destination_ownership: str
+    sync_points: int
+
+    def to_json_dict(self) -> JsonDict:
+        return {
+            "logical_bytes": self.logical_bytes,
+            "application_visible_transfer_bytes": self.application_visible_transfer_bytes,
+            "collective_kind": self.collective_kind,
+            "participants": list(self.participants),
+            "source_ownership": self.source_ownership,
+            "destination_ownership": self.destination_ownership,
+            "sync_points": self.sync_points,
+        }
+
+
+@dataclass(frozen=True)
+class PlacementPlan:
+    dpu_group_ownership: tuple[int, ...]
+    tasklets_per_dpu: int
+    resident_tensor_ownership: Mapping[str, tuple[int, ...]]
+    replicated_operands: tuple[str, ...]
+    memory_budgets: Mapping[str, int]
+
+    def to_json_dict(self) -> JsonDict:
+        return {
+            "dpu_group_ownership": list(self.dpu_group_ownership),
+            "tasklets_per_dpu": self.tasklets_per_dpu,
+            "resident_tensor_ownership": {
+                key: list(val) for key, val in self.resident_tensor_ownership.items()
+            },
+            "replicated_operands": list(self.replicated_operands),
+            "memory_budgets": dict(self.memory_budgets),
+        }
+
+
+def build_m5_placement_plan(
+    dpu_group_count: int = 1,
+    tasklets_per_dpu: int = 1,
+    *,
+    replicated_operands: Sequence[str] = (),
+    mram_pool_bytes: int = RESIDENT_MRAM_POOL_BYTES,
+) -> PlacementPlan:
+    dpu_ids = tuple(range(dpu_group_count))
+    return PlacementPlan(
+        dpu_group_ownership=dpu_ids,
+        tasklets_per_dpu=tasklets_per_dpu,
+        resident_tensor_ownership={"default": dpu_ids},
+        replicated_operands=tuple(replicated_operands),
+        memory_budgets={
+            "mram_pool_bytes": mram_pool_bytes,
+            "max_rank": RESIDENT_MAX_RANK,
+            "max_tensor_elements": RESIDENT_MAX_ELEMENTS,
+        },
+    )
+
+
+def build_m5_communication_plan(
+    logical_bytes: int,
+    *,
+    collective_kind: str = "host_mediated_reduction",
+    dpu_group_count: int = 1,
+    sync_points: int = 1,
+) -> CommunicationPlan:
+    transfer_bytes = logical_bytes * dpu_group_count if collective_kind == "host_mediated_reduction" else logical_bytes
+    participants = tuple(f"dpu-{idx}" for idx in range(dpu_group_count))
+    return CommunicationPlan(
+        logical_bytes=logical_bytes,
+        application_visible_transfer_bytes=transfer_bytes,
+        collective_kind=collective_kind,
+        participants=participants,
+        source_ownership="dpu_group",
+        destination_ownership="host_rehydrated" if collective_kind == "host_mediated_reduction" else "dpu_group",
+        sync_points=sync_points,
+    )
+
+
 def _resident_args_format(max_rank: int = RESIDENT_MAX_RANK) -> str:
     return "<" + "I" * (9 + 7 * max_rank) + "i" * (4 * max_rank)
 

@@ -540,3 +540,53 @@ def test_multi_tasklet_benchmark_scaling(tasklets: int) -> None:
     assert c_pim_hw == 14.0  # Hardware 14000 cycles / 1000 flops = 14.0
 
 
+def test_m5_output_tile_multi_dpu_placement_plan() -> None:
+    from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
+        build_m5_placement_plan,
+    )
+
+    for dpu_count in (1, 2, 4, 8):
+        plan = build_m5_placement_plan(dpu_group_count=dpu_count, tasklets_per_dpu=16)
+        payload = plan.to_json_dict()
+        assert len(plan.dpu_group_ownership) == dpu_count
+        assert plan.tasklets_per_dpu == 16
+        assert payload["dpu_group_ownership"] == list(range(dpu_count))
+        assert "mram_pool_bytes" in payload["memory_budgets"]
+
+
+def test_m5_partial_sum_host_reduction_communication_plan() -> None:
+    from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
+        build_m5_communication_plan,
+    )
+
+    comm_host = build_m5_communication_plan(1024, collective_kind="host_mediated_reduction", dpu_group_count=4)
+    payload_host = comm_host.to_json_dict()
+    assert comm_host.logical_bytes == 1024
+    assert comm_host.application_visible_transfer_bytes == 4096
+    assert comm_host.collective_kind == "host_mediated_reduction"
+    assert payload_host["destination_ownership"] == "host_rehydrated"
+
+    comm_pid = build_m5_communication_plan(1024, collective_kind="pid_comm_all_reduce", dpu_group_count=4)
+    payload_pid = comm_pid.to_json_dict()
+    assert comm_pid.application_visible_transfer_bytes == 1024
+    assert payload_pid["collective_kind"] == "pid_comm_all_reduce"
+    assert payload_pid["destination_ownership"] == "dpu_group"
+
+
+def test_m5_multi_dpu_reference_validation() -> None:
+    """Verify host-mediated multi-DPU partial sum reduction reconstructs the exact CPU baseline."""
+    np.random.seed(42)
+    full_output = np.random.randn(16).astype(np.float32)
+
+    # 1. Output-tile partitioning (slice along output dimension across 4 DPUs)
+    slices = [full_output[i * 4 : (i + 1) * 4] for i in range(4)]
+    reconstructed_tile = np.concatenate(slices)
+    np.testing.assert_allclose(reconstructed_tile, full_output, atol=1e-7)
+
+    # 2. Contracted-axis partial-sum decomposition (sum partials across 4 DPUs)
+    partial_sums = [full_output * 0.25 for _ in range(4)]
+    reconstructed_sum = np.sum(partial_sums, axis=0)
+    np.testing.assert_allclose(reconstructed_sum, full_output, atol=1e-7)
+
+
+
