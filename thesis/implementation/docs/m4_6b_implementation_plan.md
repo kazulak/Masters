@@ -1,5 +1,11 @@
 # Audited & Approved Implementation Plan: Milestone M4.6b
 
+> **Historical plan:** M4.6b has since been implemented and physically
+> accepted as a bounded development sweep. See
+> [m4_m5_physical_acceptance.md](m4_m5_physical_acceptance.md) for the ETH
+> commands, run IDs, and claim boundary. The active tasklet set is
+> `1/2/4/8/16`; this document is retained as the original design record.
+
 > **Status:** AGREED - PLAN APPROVED BY AUDITOR & PLANNER AGENTS  
 > **Target:** Milestone M4.6b (Multi-Tasklet Work Division & Parallel Execution, $1 \le \text{NR\_TASKLETS} \le 16$)  
 > **Source Document:** [docs/m4_6b_implementation_plan.md](file:///home/tom/repos/Masters/thesis/implementation/docs/m4_6b_implementation_plan.md)

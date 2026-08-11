@@ -1,5 +1,11 @@
 # Critical Audit & Refined Implementation Plan: Milestone M4.6
 
+> **Historical plan:** This document retains the original 12-tasklet design and
+> risk analysis. The accepted active tasklet set is `1/2/4/8/16`; see
+> [m4_m5_physical_acceptance.md](m4_m5_physical_acceptance.md) for the verified
+> ETH commands, run IDs, non-monotonic development diagnostics, and claim
+> boundary. This is not the current execution specification.
+
 > **Audit Summary:** The initial draft bundled hardware timing, multi-tasklet execution, and WRAM tiling simultaneously. This violated the project's **KISS principle** (*"Add one capability at a time and validate it locally before combining it"*).  
 > Below is the critical failure mode analysis and the **refined 3-stage KISS implementation plan**.
 

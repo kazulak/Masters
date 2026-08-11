@@ -1,9 +1,9 @@
 # Comprehensive Audit: Thesis Implementation vs. Scoping Literature Review (SLR)
 
-> **Audit Date:** August 10, 2026 *(Updated with M4.5 ETH Physical Acceptance)*  
+> **Audit Date:** August 11, 2026 *(Updated with M4.6/M5 development acceptance)*
 > **Target Repository:** [implementation](file:///home/tom/repos/Masters/thesis/implementation)  
 > **Source Base (SLR PDF):** [Scoping Literature Review Thesis.pdf](file:///home/tom/repos/Masters/thesis/Scoping%20Literature%20Review%20Thesis.pdf)  
-> **Test Suite Status:** 635 / 635 pytest unit & integration tests passing.  
+> **Test Suite Status:** See current CI; this audit intentionally does not pin a stale test count.
 > **Latest Tracked Physical Capsule:** [thesis_results/physical_simplepim_taskgraph_m4_5](file:///home/tom/repos/Masters/thesis/implementation/thesis_results/physical_simplepim_taskgraph_m4_5) *(ETH Physical Acceptance Passed)*
 
 ---
@@ -29,7 +29,7 @@ The codebase is an active, highly disciplined **research system**. It establishe
 4. Physical UPMEM hardware qualification lanes (M2.1, M2.2, M2.3, M3.1, M4.2–M4.4) passed on real ETH hardware.
 5. **M4.5 current baseline:** The descriptor-driven shared runtime has passed **ETH physical acceptance** (tracked in `thesis_results/physical_simplepim_taskgraph_m4_5/`). It is the current accepted SimplePIM-managed baseline and remains bounded functionality evidence.
 
-The authoritative current milestone status is in [README.md](README.md#current-milestone-status). M4.1--M4.5 are physically accepted. M4.6 is implementation-ready locally but incomplete until the `1/2/4/8/16` ETH tasklet sweep passes; the 336-row Aug-10 run is one tasklet path/quantization evidence run, not scaling evidence. M5.1 output partitioning is under development and not physically accepted. M5.2 host-contracted reduction and M5.3 PID-Comm are pending. PID-Comm's pinned UPMEM SDK 2021.3 versus the ETH SDK 2023.1 requires qualification; no compatibility claim is made.
+The authoritative current milestone status is in [README.md](README.md#current-milestone-status). M4.1--M5.2 have bounded physical development acceptance; M4.6 passed the 1/2/4/8/16 tasklet sweep with 1680 validated rows, M5.1 passed bounded output partitioning, and M5.2 passed bounded host-mediated contracted-axis reduction. These are not final thesis results, general distributed TN evidence, or performance/scaling claims. M5.3 PID-Comm is blocked before allocation under ETH SDK 2023.1. See [docs/m4_m5_physical_acceptance.md](docs/m4_m5_physical_acceptance.md) for commands and run IDs.
 
 ---
 
@@ -126,17 +126,17 @@ The thesis roadmap ([docs/slr_architecture_implementation_roadmap.md](file:///ho
   │   └── M2.3: Two-path / Two-numeric-mode execution [PASSED ON ETH]
   ├── M3: Operation-Aware Provider/Kernel System [IN PROGRESS]
   │   └── M3.1: Two-wave frontier dispatch [PASSED ON ETH]
-  ├── M4: SimplePIM Operators & Shared Runtime [M4.1-M4.5 PHYSICALLY ACCEPTED]
+  ├── M4: SimplePIM Operators & Shared Runtime [M4.1-M4.6 BOUNDED PHYSICAL ACCEPTANCE]
   │   ├── M4.1: Bounded physical qualification [ACCEPTED ON ETH]
   │   ├── M4.2: SimplePIM rank1 primitive [ACCEPTED ON ETH]
   │   ├── M4.3: TaskGraph-derived operand adapter [ACCEPTED ON ETH]
   │   ├── M4.4: Bounded two-task persistent chain [ACCEPTED ON ETH]
   │   ├── M4.5: Descriptor-driven shared runtime [CURRENT ACCEPTED BASELINE]
-  │   └── M4.6: Intra-DPU tiling, tasklets, timing & profiling [READY LOCALLY; SWEEP PENDING]
-  ├── M5: Distributed Single Large Contraction [IN PROGRESS]
-  │   ├── M5.1: Output partition [UNDER DEVELOPMENT; NOT PHYSICALLY ACCEPTED]
-  │   ├── M5.2: Host-contracted reduction [PENDING]
-  │   └── M5.3: PID-Comm [PENDING; SDK QUALIFICATION REQUIRED]
+  │   └── M4.6: Intra-DPU tiling, tasklets, timing & profiling [PHYSICAL DEVELOPMENT ACCEPTANCE]
+  ├── M5: Distributed Single Large Contraction [M5.1-M5.2 BOUNDED PROBES]
+  │   ├── M5.1: Output partition [PHYSICAL DEVELOPMENT ACCEPTANCE]
+  │   ├── M5.2: Host-contracted reduction [PHYSICAL DEVELOPMENT ACCEPTANCE]
+  │   └── M5.3: PID-Comm [BLOCKED; SDK QUALIFICATION REQUIRED]
   ├── M6: Frontier/Subtree Concurrency [PLANNED]
   ├── M7: Hierarchical Hybrid Parallelism [PLANNED]
   ├── M8: Hardware Calibration of Cost Model [PLANNED]
@@ -160,8 +160,8 @@ The thesis implementation demonstrates **exceptional fidelity** to the design gu
 3. **Hardware Realism & Physical Acceptance:** M4.5 physically accepted on ETH hardware; bounded qualification runs prevent premature claims of speedup.
 
 ### Recommended Next Actions
-1. **Advance to Milestone M4.6**: Implement multi-tasklet intra-DPU tiling and collect timing/profiling metadata for the M4.5 shared runtime.
+1. **Advance beyond bounded M4/M5 probes**: implement general distributed TaskGraph scheduling, then qualify external communication and kernel providers. The detailed ETH development acceptance record is in `docs/m4_m5_physical_acceptance.md`.
 2. **Complete M1 Provider Pinning**: Pin official source releases for ATiM (ISCA '25 artifact) and SparseP (CMU-SAFARI repository) alongside PID-Comm and SimplePIM.
-3. **Advance to M5**: Implement multi-DPU distributed contractions with PID-Comm collective reductions.
+3. **Advance to M5.3/M6**: qualify communication-provider options, then implement general distributed TaskGraph scheduling and multi-DPU execution.
 4. **Calibrate Cost Model (M8)**: Execute physical microbenchmarks on UPMEM hardware to empirically calibrate the penalty coefficients ($\alpha, \beta, \gamma, \delta, \eta, \theta$).
 5. **Rerun & Promote Snapshot (M9)**: Rerun the research suite (`make thesis-run`), regenerate comparison plots (`make thesis-report`), and promote the updated results into `thesis_results/current`.

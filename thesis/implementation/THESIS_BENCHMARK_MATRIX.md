@@ -35,6 +35,10 @@ semantic check; it is not the performance grid.
 | Planner sensitivity v2 | `configs/suites/manual/thesis_planner_sensitivity_v2.yml` | Standard opt_einsum/cotengra baselines plus six v2 `custom_upmem` profiles | planning once | Measure modeled projected-prefix sensitivity; profile weights remain scenario assumptions, not hardware constants |
 | UPMEM boundary | `configs/suites/manual/thesis_upmem_quantization_boundary.yml` | Same internal TaskGraph, float32 and int8 strict generic UPMEM SDK simulator | 1 | Find supported/unsupported boundary and attribute transfer/error/runtime changes to quantization |
 | Internal parallelism | Historical resolved artifacts | sequential/frontier/hybrid internal TaskGraph | 1 | Historical diagnostic evidence; no longer a runnable Phase A route |
+| M4.6 tasklet development sweep | `configs/suites/upmem_hardware_taskgraph_resident_m4_6_tasklet_scaling.yml` | Physical resident TaskGraph, one DPU, tasklets 1/2/4/8/16, two paths, two numeric modes | 7 | Validate tasklet ownership, DPU-cycle metadata, and correctness on small development cases; no final scaling claim |
+| M5.1 output partition probe | Fixed CLI fixture: `make upmem-hw-m5-1` | One bounded real float32 contraction, 1/2/4 DPUs, exclusive output-tile ownership | 1 | Validate bounded multi-DPU output ownership and exact CPU agreement; functionality only |
+| M5.2 contracted partition probe | Fixed CLI fixture: `make upmem-hw-m5-2` | One bounded real float32 contraction, 1/2/4 DPUs, host-mediated ascending-DPU reduction | 1 | Validate bounded partial-sum reconstruction; functionality only |
+| M5.3 PID-Comm qualification | `make upmem-pidcomm-compatibility` | Pinned PID-Comm compile/link qualification under the installed ETH SDK | allocation-free | Record compatibility or an explicit blocker; current SDK 2023.1 blocker prevents physical execution |
 
 The CPU/GPU performance suite uses deeper repeated circuits to reduce startup
 dominance. The CPU TN suite uses shallow exact circuits on the same canonical
@@ -215,6 +219,12 @@ same suite semantics where possible. Environment/device records must identify:
 NVIDIA full-state or TN software is added only after real execution is verified.
 Physical UPMEM rows use a distinct hardware execution mode and are never merged
 with SDK-simulator timing.
+
+The M4.6/M5.1/M5.2 rows above are development acceptance probes copied from
+ETH, not promoted thesis evidence. Physical commands require
+`UPMEM_HW_RANK_PATH=/dev/dpu_rankN` and
+`UPMEM_ALLOW_PHYSICAL_HARDWARE=1`; requested/effective rank selection is
+recorded, but is not an independent observed-rank measurement.
 
 ## Stop/Boundary Rules
 

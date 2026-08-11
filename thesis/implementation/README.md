@@ -6,8 +6,8 @@ This directory is the active thesis implementation. Its research question is:
 > way that is correct, measurable, and eventually faster on real DPU hardware?
 
 The current code establishes the circuit-to-TaskGraph pipeline, serious CPU and
-GPU baselines, bounded UPMEM SDK-simulator execution, and a physically accepted
-descriptor-driven M4.5 runtime.
+GPU baselines, bounded UPMEM SDK-simulator execution, and physically validated
+M4/M5 development routes on ETH hardware.
 It does **not** yet claim UPMEM hardware speedup or a fully general UPMEM tensor
 contraction kernel.
 
@@ -39,13 +39,18 @@ fallback. The tracked M4.5 evidence capsule is
 The route remains functionality evidence only: it makes no timing, speedup,
 scaling, energy, or general tensor-network performance claim. PID-Comm, ATiM,
 and SparseP remain subsequent provider/kernel/communication components behind
-thesis-owned interfaces.
+thesis-owned interfaces. The later M4.6, M5.1, and M5.2 observations below are
+audited development runs copied from ETH, not promoted or tracked thesis
+results.
 
 Start with [ARCHITECTURE.md](ARCHITECTURE.md) for module ownership, external
 provenance, thesis contributions, and the planned UPMEM architecture. The fixed
 benchmark matrix is in [THESIS_BENCHMARK_MATRIX.md](THESIS_BENCHMARK_MATRIX.md).
 The SLR-derived long-term implementation sequence and completion criteria are
 in [docs/slr_architecture_implementation_roadmap.md](docs/slr_architecture_implementation_roadmap.md).
+The exact recent ETH observations are consolidated in the
+[M4/M5 physical development acceptance record](docs/m4_m5_physical_acceptance.md);
+they are not promoted thesis results.
 
 ## Current Milestone Status
 
@@ -60,13 +65,34 @@ baseline.
 | M4.3 | Physically accepted | TaskGraph-derived SimplePIM operand adapter. |
 | M4.4 | Physically accepted | Bounded persistent SimplePIM-managed operator chain. |
 | M4.5 | Physically accepted; current baseline | SimplePIM-managed descriptor-driven shared runtime with bounded one- and two-DPU functionality. |
-| M4.6 | Implementation ready locally; incomplete | Physical acceptance requires the `1/2/4/8/16` ETH tasklet sweep to pass. The 336-row Aug-10 run is one tasklet path/quantization evidence run, not scaling evidence. |
-| M5.1 | Under development; not physically accepted | Output-partition implementation remains in development. |
-| M5.2 | Pending | Host-contracted reduction has not been accepted. |
-| M5.3 | Pending | PID-Comm integration and physical qualification have not been accepted. PID-Comm's pinned UPMEM SDK 2021.3 versus the thesis ETH SDK 2023.1 requires qualification; no compatibility claim is made. |
+| M4.6 | Physically validated development run | One physical DPU, tasklets `1/2/4/8/16`, 12 small circuit cases, two path variants, two numeric modes, and 7 repeats per configuration. All 1680 rows passed validation; functionality and diagnostic tasklet evidence only. |
+| M5.1 | Physically validated bounded probe | One bounded real `float32` contraction on 1/2/4 DPUs with exclusive output-tile ownership. Exact CPU agreement; SimplePIM management plus thesis-owned kernel; one repetition and zero warmups; functionality only. |
+| M5.2 | Physically validated bounded probe | The same contraction on 1/2/4 DPUs with contracted-axis partials and deterministic `host_mediated_sum_v1` reduction. Maximum absolute error `2.98e-08`; one repetition and zero warmups; functionality only. |
+| M5.3 | Blocked before physical execution | PID-Comm compile/link qualification is blocked under ETH SDK 2023.1 by missing `dpu_alloc_comm`, `DPU_FOREACH_ENTANGLED_GROUP`, and old PID-Comm API/source macros. No fallback and no physical PID-Comm execution. |
 
-M4.1--M4.5 are accepted bounded physical milestones, not a claim of complete
-M4 architecture, scaling, speedup, energy, or general distributed execution.
+M4.1--M5.2 are bounded physical functionality milestones, not a claim of
+complete M4/M5 architecture, general distributed TN execution, performance,
+speedup, energy, or scaling. The M4.6 development sweep showed a small-workload
+tasklet optimum near 8 tasklets with lower efficiency at 16; this observation is
+not a final benchmark result.
+
+Physical ETH runs require an explicit rank selection. Use a healthy rank chosen
+on the server, for example:
+
+```bash
+UPMEM_HW_RANK_PATH=/dev/dpu_rank1 \
+UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-m4-6-tasklet-scaling
+UPMEM_HW_RANK_PATH=/dev/dpu_rank1 \
+UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-m5-1
+UPMEM_HW_RANK_PATH=/dev/dpu_rank1 \
+UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-m5-2
+```
+
+The runner records the requested rank path and effective SDK profile. These
+fields document selection, not an independent observation of the physical rank.
+On the 2026-08-11 ETH host, `/dev/dpu_rank0` failed vendor diagnostics while
+ranks 1, 20, and 39 passed; this is an environment observation, not a software
+performance conclusion.
 
 ## Setup
 

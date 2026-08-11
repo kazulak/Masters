@@ -21,7 +21,7 @@ the active test gate.
 From the implementation root:
 
 ```text
-PYTHONPATH=src python3 -m quantum_bench.bench \
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench \
   upmem-hardware-taskgraph-resident \
   --suite configs/suites/upmem_hardware_taskgraph_resident_path_quantization.yml \
   --prepare-only --build
@@ -37,8 +37,8 @@ Physical execution is deliberately opt-in and does not accept simulator
 configuration:
 
 ```text
-UPMEM_ALLOW_PHYSICAL_HARDWARE=1 DPU_BACKEND= \
-  PYTHONPATH=src python3 -m quantum_bench.bench \
+UPMEM_HW_RANK_PATH=/dev/dpu_rank1 UPMEM_ALLOW_PHYSICAL_HARDWARE=1 DPU_BACKEND= \
+  PYTHONPATH=src ../.venv/bin/python -m quantum_bench.bench \
   upmem-hardware-taskgraph-resident \
   --suite configs/suites/upmem_hardware_taskgraph_resident_path_quantization.yml \
   --execute
@@ -51,7 +51,7 @@ on every post-allocation path; a timeout reports release as unconfirmed.
 
 ## Profile And Evidence
 
-The bounded profile is one DPU, one tasklet, rank at most 16, tensors at most
+The base bounded profile is one DPU, one tasklet, rank at most 16, tensors at most
 256 elements, 32 logical tasks, 128 component operations, 128 slot descriptors,
 and a 512 KiB MRAM pool. A capacity miss is a structured
 `hardware_profile_violation`; there is no host spill or CPU fallback.
@@ -69,3 +69,13 @@ H2D/D2H, modeled legacy host-rehydrated-equivalent bytes, slot/lifetime data,
 launch/task counts, numeric scales/saturation, output hashes, and separate
 resident-policy and full-precision accuracy statuses. The route makes no
 speedup, energy, scheduler, or multi-DPU claim.
+
+M4.6 extends this resident route with a separate one-DPU tasklet development
+sweep for `1/2/4/8/16` tasklets. M5.1 and M5.2 are separate bounded physical
+single-contraction probes for output and contracted-axis partitioning; they are
+not general resident TaskGraph distribution. Their audited commands and run
+IDs are recorded in [m4_m5_physical_acceptance.md](m4_m5_physical_acceptance.md).
+
+`UPMEM_HW_RANK_PATH` must match `/dev/dpu_rank<digits>`. The requested path and
+effective SDK profile are recorded, but do not independently prove observed
+rank identity. There is no retry or simulator/CPU fallback.

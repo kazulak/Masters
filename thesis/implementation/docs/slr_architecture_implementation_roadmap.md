@@ -598,9 +598,10 @@ tasks.
 The authoritative current status table is in
 [README.md](../README.md#current-milestone-status). M4.1--M4.5 are physically
 accepted bounded milestones, with M4.5 the current accepted SimplePIM-managed
-baseline. M4.6 is implementation-ready locally but incomplete until the
-`1/2/4/8/16` ETH tasklet sweep passes. The 336-row Aug-10 run is one tasklet
-path/quantization evidence run, not scaling evidence.
+baseline. M4.6 has a development acceptance run on one physical DPU for
+tasklets `1/2/4/8/16`, with 1680 validated rows across 12 small cases, two
+paths, two numeric modes, and seven repeats. It is functionality and diagnostic
+tasklet evidence, not final scaling evidence.
 
 M4.2 is physically qualified on two DPUs with explicit
 `allocation_profile=backend=hw`: the pinned SimplePIM rank-one primitive
@@ -649,17 +650,27 @@ tasklet, tiling, PID-Comm, ATiM, SparseP, speedup, energy, or scaling claim.
 
 ### M4.6: intra-DPU tiling and tasklets
 
-M4.6 is implementation-ready locally. Its physical gate is a passing
-`1/2/4/8/16` ETH tasklet sweep with exact tasklet ownership, no hidden host
-computation, and validation within the declared contract. The existing 336-row
-Aug-10 run is one tasklet path/quantization evidence run, not scaling evidence.
+M4.6 passed its bounded ETH development gate for tasklets `1/2/4/8/16`. The
+shared-operation fix kept the maximum DPU stack at `256/1024`; all 1680 rows
+passed physical and validation checks without simulator or CPU fallback. DPU
+cycle and host-observed development diagnostics suggest saturation near eight
+tasklets for these small workloads. This does not establish general tasklet
+scaling or final performance.
 
 ### M5: distributed single large contraction
 
-M5.1 output partitioning is under development and is not physically accepted.
-M5.2 host-contracted reduction and M5.3 PID-Comm are pending. PID-Comm's pinned
-UPMEM SDK 2021.3 differs from the thesis ETH SDK 2023.1 and requires
-qualification; no compatibility claim is made.
+M5.1 and M5.2 are bounded parts of M5, while general M5 distributed execution
+remains incomplete. M5.1 passed a bounded real-float32 output-partition probe
+on 1/2/4 DPUs. M5.2 passed a bounded
+contracted-axis partial-sum probe on 1/2/4 DPUs using deterministic
+host-mediated reduction, with maximum absolute error `2.98e-08`. Both use one
+repetition and zero warmups and provide functionality evidence only. The
+ATiM production integration and general kernel selection belong to the
+incomplete M3 operation-aware kernel/provider work; general distributed TN
+execution remains incomplete in M5.
+M5.3 PID-Comm is blocked before allocation because the pinned source expects
+missing communication symbols and old API/source macros under ETH SDK 2023.1.
+See [the consolidated M4/M5 acceptance record](m4_m5_physical_acceptance.md).
 
 Distribute one large contraction across multiple DPUs, starting with output
 tiles and then contracted-index partial sums. Compare host-mediated reduction
@@ -817,11 +828,13 @@ Each physical milestone has a separate ETH acceptance suite.
 ## Immediate Next Wave
 
 Use the completed ETH physical functionality evidence for the implemented
-M4.5 descriptor-driven shared runtime as the baseline. The next wave is M4.6:
-add timing and profiling metadata to the existing one-DPU and two-DPU
-qualification shapes without changing the scientific plan, and retain
-`bounded_taskgraph_executed` plus explicit provider identities in the evidence.
+M4.5 descriptor-driven shared runtime as the baseline. M4.6 and M5.1/M5.2 now
+provide bounded physical development acceptance for tasklet execution and two
+single-contraction partition policies. The next architecture work is general
+distributed TaskGraph scheduling and external communication/kernel providers,
+not re-running these acceptance probes as final benchmarks.
 
 M2.1, M2.2, M2.3, M3.1, and M4.2--M4.4 remain frozen compatibility surfaces.
-M4.5 remains functionality evidence only: no speedup, energy, scaling,
-tasklet, tiling, PID-Comm, ATiM, or SparseP claim is allowed.
+M4.5, M4.6, M5.1, and M5.2 remain functionality/development evidence only: no
+speedup, energy, general scaling, PID-Comm, ATiM, SparseP, multi-rank, or
+multi-DIMM claim is allowed.

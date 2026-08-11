@@ -11,6 +11,14 @@ For active use, follow the implementation documentation:
   resident route on the ETH host, as described in
   `docs/upmem_hardware_taskgraph_resident_runbook.md`.
 
-The resident route is one DPU and one tasklet, is correctness-only, and does
-not claim hardware speedup. No retired runner in this directory should be
-invoked to produce new thesis evidence.
+The base resident route is one DPU and one tasklet, is correctness-only, and
+does not claim hardware speedup. M4.6 adds a versioned one-DPU tasklet sweep for
+`1/2/4/8/16` tasklets; M5.1 and M5.2 are separate one-contraction distributed
+probes using one tasklet per DPU. These are bounded development functionality
+routes, not general distributed TN execution or performance evidence. No
+retired runner in this directory should be invoked to produce new thesis
+evidence.
+
+Physical ETH runs must set `UPMEM_HW_RANK_PATH=/dev/dpu_rankN` together with
+`UPMEM_ALLOW_PHYSICAL_HARDWARE=1`. The requested path and effective SDK profile
+are recorded; they do not independently prove observed rank identity.
