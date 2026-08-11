@@ -7,6 +7,8 @@ This record covers the ETH UPMEM observations made on 2026-08-11 from branch
 `feature/m4-m5-recovery`, source commit `2c09984`. The runs were copied/audited
 as development evidence; they are intentionally not included in
 `thesis_results/current`.
+Current-head provenance validation was rerun from commit `7175ccb` after the
+evidence-contract patch.
 
 ## Rank and Environment
 
@@ -61,7 +63,7 @@ Run:
 
 ```text
 runs/evidence/upmem_hardware_distributed_m5_1/
-  upmem_hw_m5_1/2026-08-11_15-49-13
+  upmem_hw_m5_1/2026-08-11_16-28-05
 ```
 
 The bounded real-float32 contraction passed on 1/2/4 physical DPUs using
@@ -77,7 +79,7 @@ Run:
 
 ```text
 runs/evidence/upmem_hardware_distributed_m5_2/
-  upmem_hw_m5_2/2026-08-11_15-49-29
+  upmem_hw_m5_2/2026-08-11_16-28-15
 ```
 
 The same bounded real-float32 contraction passed on 1/2/4 physical DPUs using
@@ -86,6 +88,14 @@ contracted-axis partials and deterministic ascending-DPU
 probe used zero warmups and one repetition. It proves host-mediated reduction
 functionality only; it does not prove PID-Comm, DPU-to-DPU communication,
 general distributed TaskGraph execution, scaling, or speedup.
+
+Across all six M5 rows, requested and allocated DPU counts matched exactly,
+`target_observed=physical_hardware`, `tasklets_per_dpu=1`, the expected
+SimplePIM/kernel/communication provider identities were recorded,
+`hardware_kernel_executed=true`, simulator execution and CPU fallback were
+false, release was confirmed, scientific validation and the transfer invariant
+passed, and rank 1 was explicitly requested; the M5.2 maximum absolute error
+remains `2.98e-08`.
 
 ## PID-Comm Qualification
 
