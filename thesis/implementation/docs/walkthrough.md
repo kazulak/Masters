@@ -1,65 +1,21 @@
-# Milestone M4.6 & Audit Fixes Walkthrough: Complete Multi-Tasklet Parallelism, Timing Data Pipeline & Scaling Evidence
+# Current Milestone Walkthrough
 
-> **Status:** All M4.6 Sub-Steps & M4.6 Audit Fixes Fully Implemented & Verified  
-> **Test Suite Result:** **641 / 641 pytest tests passed** (29.86s)
+The authoritative milestone status is maintained in
+[README.md](../README.md#current-milestone-status).
 
----
+M4.1--M4.5 are physically accepted bounded milestones. M4.5 is the current
+accepted SimplePIM-managed baseline: it provides the bounded descriptor-driven
+shared runtime and one- and two-DPU functionality evidence.
 
-## 1. Summary of M4.6 Audit Fixes Implemented
+M4.6 is implementation-ready locally but is not complete. Physical acceptance
+requires the `1/2/4/8/16` ETH tasklet sweep to pass. The 336-row Aug-10 run was
+one tasklet path/quantization evidence run, not a scaling run.
 
-### Fix 1: Python Data Pipeline (`dpu_run_time_cycles`)
-- **[hardware_session.py](file:///home/tom/repos/Masters/thesis/implementation/src/quantum_bench/targets/upmem/hardware_session.py)**: Added `dpu_run_time_cycles: int` to `ResidentGraphSessionExecution` dataclass and extracted `dpu_run_time_cycles = int(response.get("dpu_run_time_cycles", 0))` from the native JSON response.
-- **[taskgraph_runtime.py](file:///home/tom/repos/Masters/thesis/implementation/src/quantum_bench/targets/upmem/taskgraph_runtime.py)**: Surfaced `tasklets_per_dpu` in `upmem_taskgraph_executor_config` and passed `dpu_run_time_cycles` into `_base_task_metric`.
-- **[runtime_evidence.py](file:///home/tom/repos/Masters/thesis/implementation/src/quantum_bench/targets/upmem/runtime_evidence.py)**: Included `"dpu_run_time_cycles"` in individual task metric dictionaries and populated `"dpu_run_time_cycles"` and `"dpu_compute_seconds"` in summary payloads.
+M5.1 output partitioning is under development and has not been physically
+accepted. M5.2 host-contracted reduction and M5.3 PID-Comm are pending.
+PID-Comm's pinned UPMEM SDK 2021.3 differs from the thesis ETH SDK 2023.1 and
+requires qualification; no compatibility claim is made.
 
----
-
-### Fix 2: Perfcounter Race Condition (`dpu.c`)
-- **[dpu.c](file:///home/tom/repos/Masters/thesis/implementation/native/upmem/simplepim/upmem_sdk_generic_loop_resident/dpu.c)**:
-  - Declared `static perfcounter_t start_cycles_shared;`.
-  - Moved `perfcounter_config(COUNT_CYCLES, true);` and start cycle sampling into a single Tasklet 0 block (`if (me() == 0)`) **after** `barrier_wait(&tasklet_barrier);`, eliminating multi-tasklet counter reset races.
-
----
-
-### Fix 3: Barrier Safety & Unconditional Control Flow (`dpu.c`)
-- **[dpu.c](file:///home/tom/repos/Masters/thesis/implementation/native/upmem/simplepim/upmem_sdk_generic_loop_resident/dpu.c)**:
-  - Eliminated early returns (`return 3;`, `return 4;`) before synchronization barriers.
-  - Implemented a static `status_code` variable so tasklets evaluate errors uniformly and proceed through `barrier_wait(&tasklet_barrier);` unconditionally without hanging or deadlocking.
-
----
-
-### Fix 4: Scaling Benchmark Test Verification
-- **[test_upmem_simplepim_taskgraph_executor.py](file:///home/tom/repos/Masters/thesis/implementation/tests/test_upmem_simplepim_taskgraph_executor.py)**:
-  - Expanded `test_multi_tasklet_benchmark_scaling` across $NR\_TASKLETS \in \{1, 2, 4, 8, 11, 16\}$.
-  - Asserted presence and values of `"dpu_run_time_cycles"` and `"dpu_compute_seconds"` keys in metric dicts and summary payloads.
-  - Verified non-zero fallback logic for software simulator and hardware modes.
-
----
-
-### Fix 5: Scoped DPU Clock Frequency Constant
-- **[runtime_evidence.py](file:///home/tom/repos/Masters/thesis/implementation/src/quantum_bench/targets/upmem/runtime_evidence.py)**:
-  - Defined `UPMEM_DPU_CLOCK_HZ = 350_000_000` at module scope for reliable, maintainable cycle-to-second conversion.
-
----
-
-## 2. Full Test Suite Verification
-
-Executed full pytest regression suite:
-
-```bash
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m pytest -q
-```
-
-**Result:**
-```text
-........................................................................ [ 11%]
-........................................................................ [ 22%]
-........................................................................ [ 33%]
-........................................................................ [ 44%]
-........................................................................ [ 56%]
-........................................................................ [ 67%]
-........................................................................ [ 78%]
-........................................................................ [ 89%]
-.................................................................        [100%]
-641 passed in 29.86s
-```
+SimplePIM remains central: it supplies the accepted bounded management/operator
+surface and the M4.5 managed baseline. These milestones do not claim speedup,
+energy, general distributed execution, or completed scaling evidence.

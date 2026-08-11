@@ -47,6 +47,27 @@ benchmark matrix is in [THESIS_BENCHMARK_MATRIX.md](THESIS_BENCHMARK_MATRIX.md).
 The SLR-derived long-term implementation sequence and completion criteria are
 in [docs/slr_architecture_implementation_roadmap.md](docs/slr_architecture_implementation_roadmap.md).
 
+## Current Milestone Status
+
+This is the authoritative current status table. SimplePIM remains central to
+the implementation, and M4.5 is the current accepted SimplePIM-managed
+baseline.
+
+| Milestone | Current status | Boundary or next gate |
+| --- | --- | --- |
+| M4.1 | Physically accepted | Bounded physical qualification; no general executor or performance claim. |
+| M4.2 | Physically accepted | SimplePIM rank-1 operator qualification. |
+| M4.3 | Physically accepted | TaskGraph-derived SimplePIM operand adapter. |
+| M4.4 | Physically accepted | Bounded persistent SimplePIM-managed operator chain. |
+| M4.5 | Physically accepted; current baseline | SimplePIM-managed descriptor-driven shared runtime with bounded one- and two-DPU functionality. |
+| M4.6 | Implementation ready locally; incomplete | Physical acceptance requires the `1/2/4/8/16` ETH tasklet sweep to pass. The 336-row Aug-10 run is one tasklet path/quantization evidence run, not scaling evidence. |
+| M5.1 | Under development; not physically accepted | Output-partition implementation remains in development. |
+| M5.2 | Pending | Host-contracted reduction has not been accepted. |
+| M5.3 | Pending | PID-Comm integration and physical qualification have not been accepted. PID-Comm's pinned UPMEM SDK 2021.3 versus the thesis ETH SDK 2023.1 requires qualification; no compatibility claim is made. |
+
+M4.1--M4.5 are accepted bounded physical milestones, not a claim of complete
+M4 architecture, scaling, speedup, energy, or general distributed execution.
+
 ## Setup
 
 From `thesis/implementation`:

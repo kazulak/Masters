@@ -595,6 +595,13 @@ tasks.
 
 ### M4: SimplePIM operators, resident execution, tiling and tasklets
 
+The authoritative current status table is in
+[README.md](../README.md#current-milestone-status). M4.1--M4.5 are physically
+accepted bounded milestones, with M4.5 the current accepted SimplePIM-managed
+baseline. M4.6 is implementation-ready locally but incomplete until the
+`1/2/4/8/16` ETH tasklet sweep passes. The 336-row Aug-10 run is one tasklet
+path/quantization evidence run, not scaling evidence.
+
 M4.2 is physically qualified on two DPUs with explicit
 `allocation_profile=backend=hw`: the pinned SimplePIM rank-one primitive
 completed with exact `result_int64=209` across the declared repetitions. This
@@ -637,17 +644,22 @@ host-mediated transfer is the initial communication provider. PID-Comm is the
 future communication provider; ATiM and SparseP are future generated-dense and
 sparse kernel providers.
 
-The next action is M4.6 timing and profiling metadata for the bounded runtime.
-M4.5 makes no tasklet, tiling, PID-Comm, ATiM, SparseP, speedup, energy, or
-scaling claim. Those are subsequent extensions after timing/profiling evidence.
+M4.5 remains the current accepted SimplePIM-managed baseline. It makes no
+tasklet, tiling, PID-Comm, ATiM, SparseP, speedup, energy, or scaling claim.
 
 ### M4.6: intra-DPU tiling and tasklets
 
-Gate: tasklet ownership is exact, observed tasklets match the plan, no hidden
-host computation occurs, and float32/int8/split-complex validation remains
-within the declared contract.
+M4.6 is implementation-ready locally. Its physical gate is a passing
+`1/2/4/8/16` ETH tasklet sweep with exact tasklet ownership, no hidden host
+computation, and validation within the declared contract. The existing 336-row
+Aug-10 run is one tasklet path/quantization evidence run, not scaling evidence.
 
 ### M5: distributed single large contraction
+
+M5.1 output partitioning is under development and is not physically accepted.
+M5.2 host-contracted reduction and M5.3 PID-Comm are pending. PID-Comm's pinned
+UPMEM SDK 2021.3 differs from the thesis ETH SDK 2023.1 and requires
+qualification; no compatibility claim is made.
 
 Distribute one large contraction across multiple DPUs, starting with output
 tiles and then contracted-index partial sums. Compare host-mediated reduction

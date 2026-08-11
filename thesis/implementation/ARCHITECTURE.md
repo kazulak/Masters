@@ -5,6 +5,14 @@ The accepted current-to-target delivery sequence is maintained in
 This file describes implemented ownership and claim boundaries; the roadmap
 defines the M0--M9 research gates and thesis completion criteria.
 
+The authoritative current milestone table is in [README.md](README.md#current-milestone-status).
+M4.5 is the current accepted SimplePIM-managed baseline. M4.1--M4.5 are
+physically accepted bounded milestones; M4.6 is locally implementation-ready
+but awaits the passing `1/2/4/8/16` ETH tasklet sweep. M5.1 is under development
+and not physically accepted, while M5.2 host-contracted reduction and M5.3
+PID-Comm remain pending. PID-Comm's pinned UPMEM SDK 2021.3 and the ETH SDK
+2023.1 require qualification; no compatibility claim is made.
+
 ## Research Objective
 
 The implementation evaluates tensor-network (TN) quantum-circuit simulation on
@@ -153,7 +161,13 @@ M4.2--M4.4 SimplePIM results add physical qualifications for dependency-safe
 dispatch, a SimplePIM operator, a TaskGraph-derived adapter, and a fixed
 resident operator chain. They do not share one native general executor yet.
 
-M4.5 is implemented and physically accepted for bounded functionality as a
+M4.5 is implemented and physically accepted for bounded functionality as the
+current SimplePIM-managed baseline. M4.1--M4.5 are physically accepted bounded
+milestones. M4.6 is implementation-ready locally, but remains incomplete until
+the `1/2/4/8/16` ETH tasklet sweep passes. The 336-row Aug-10 run is one
+tasklet path/quantization evidence run, not scaling evidence.
+
+The descriptor-driven shared runtime
 descriptor-driven shared runtime. Its evidence terminology uses
 `bounded_taskgraph_executed` plus
 explicit runtime, kernel, numeric, placement, and communication providers. The

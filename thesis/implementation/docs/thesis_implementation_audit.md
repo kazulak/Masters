@@ -27,7 +27,9 @@ The codebase is an active, highly disciplined **research system**. It establishe
 2. Serious CPU (QuEST full-state, Quimb/cotengra TN, internal NumPy replay) and GPU (QuEST HIP/CUDA) baselines.
 3. Bounded UPMEM SDK-simulator execution for generic TaskGraph paths.
 4. Physical UPMEM hardware qualification lanes (M2.1, M2.2, M2.3, M3.1, M4.2–M4.4) passed on real ETH hardware.
-5. **MAJOR MILESTONE ACHIEVED (M4.5):** The descriptor-driven shared runtime (M4.5) has passed **ETH physical acceptance** (tracked in `thesis_results/physical_simplepim_taskgraph_m4_5/`). A 3-task real-valued contraction TaskGraph executed on physical ETH UPMEM hardware across 1-DPU (3 waves) and 2-DPU (2 waves) placements using a shared resident package, passing CPU-reference validation (max error $3.788 \times 10^{-8} < 10^{-6}$) with no CPU or simulator fallback.
+5. **M4.5 current baseline:** The descriptor-driven shared runtime has passed **ETH physical acceptance** (tracked in `thesis_results/physical_simplepim_taskgraph_m4_5/`). It is the current accepted SimplePIM-managed baseline and remains bounded functionality evidence.
+
+The authoritative current milestone status is in [README.md](../README.md#current-milestone-status). M4.1--M4.5 are physically accepted. M4.6 is implementation-ready locally but incomplete until the `1/2/4/8/16` ETH tasklet sweep passes; the 336-row Aug-10 run is one tasklet path/quantization evidence run, not scaling evidence. M5.1 output partitioning is under development and not physically accepted. M5.2 host-contracted reduction and M5.3 PID-Comm are pending. PID-Comm's pinned UPMEM SDK 2021.3 versus the ETH SDK 2023.1 requires qualification; no compatibility claim is made.
 
 ---
 
@@ -124,13 +126,17 @@ The thesis roadmap ([docs/slr_architecture_implementation_roadmap.md](file:///ho
   │   └── M2.3: Two-path / Two-numeric-mode execution [PASSED ON ETH]
   ├── M3: Operation-Aware Provider/Kernel System [IN PROGRESS]
   │   └── M3.1: Two-wave frontier dispatch [PASSED ON ETH]
-  ├── M4: SimplePIM Operators & Shared Runtime [ACTIVE]
-  │   ├── M4.2: SimplePIM rank1 primitive [PASSED ON ETH]
-  │   ├── M4.3: TaskGraph-derived operand adapter [PASSED ON ETH]
-  │   ├── M4.4: Bounded two-task persistent chain [PASSED ON ETH]
-  │   ├── M4.5: Descriptor-driven shared runtime [PASSED ON ETH HARDWARE - 2026-08-09]
-  │   └── M4.6: Intra-DPU tiling, tasklets, timing & profiling [NEXT IMMEDIATE TARGET]
-  ├── M5: Distributed Single Large Contraction [PLANNED - PID-Comm all-reduce]
+  ├── M4: SimplePIM Operators & Shared Runtime [M4.1-M4.5 PHYSICALLY ACCEPTED]
+  │   ├── M4.1: Bounded physical qualification [ACCEPTED ON ETH]
+  │   ├── M4.2: SimplePIM rank1 primitive [ACCEPTED ON ETH]
+  │   ├── M4.3: TaskGraph-derived operand adapter [ACCEPTED ON ETH]
+  │   ├── M4.4: Bounded two-task persistent chain [ACCEPTED ON ETH]
+  │   ├── M4.5: Descriptor-driven shared runtime [CURRENT ACCEPTED BASELINE]
+  │   └── M4.6: Intra-DPU tiling, tasklets, timing & profiling [READY LOCALLY; SWEEP PENDING]
+  ├── M5: Distributed Single Large Contraction [IN PROGRESS]
+  │   ├── M5.1: Output partition [UNDER DEVELOPMENT; NOT PHYSICALLY ACCEPTED]
+  │   ├── M5.2: Host-contracted reduction [PENDING]
+  │   └── M5.3: PID-Comm [PENDING; SDK QUALIFICATION REQUIRED]
   ├── M6: Frontier/Subtree Concurrency [PLANNED]
   ├── M7: Hierarchical Hybrid Parallelism [PLANNED]
   ├── M8: Hardware Calibration of Cost Model [PLANNED]
