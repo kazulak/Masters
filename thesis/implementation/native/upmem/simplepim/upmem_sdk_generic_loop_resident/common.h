@@ -69,6 +69,10 @@ typedef struct {
     int32_t output_to_right_axes[UPMEM_GENERIC_MAX_RANK];
     int32_t contracted_to_left_axes[UPMEM_GENERIC_MAX_RANK];
     int32_t contracted_to_right_axes[UPMEM_GENERIC_MAX_RANK];
+    uint32_t dpu_slice_offset;
+    uint32_t dpu_slice_elements;
+    uint32_t contracted_offset;
+    uint32_t contracted_elements_slice;
 } upmem_generic_args_t;
 
 typedef struct {

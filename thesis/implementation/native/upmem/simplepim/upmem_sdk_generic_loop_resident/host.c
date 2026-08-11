@@ -204,7 +204,8 @@ int main(int argc, char **argv) {
 
     {
         const double started = resident_now_s();
-        error = dpu_alloc(1, RESIDENT_ALLOCATION_PROFILE, &set);
+        const uint32_t target_dpus = request.requested_dpus > 0 ? request.requested_dpus : 1u;
+        error = dpu_alloc(target_dpus, RESIDENT_ALLOCATION_PROFILE, &set);
         timing.allocation_time_s = resident_now_s() - started;
         if (error != DPU_OK) {
             resident_report_sdk_error("resident dpu_alloc", error);
@@ -214,7 +215,7 @@ int main(int argc, char **argv) {
         }
         set_allocated = 1;
         error = dpu_get_nr_dpus(set, &allocated_dpus);
-        if (error != DPU_OK || allocated_dpus != 1u) {
+        if (error != DPU_OK || allocated_dpus != target_dpus) {
             if (error != DPU_OK) {
                 resident_report_sdk_error("resident dpu_get_nr_dpus", error);
                 sdk_error_code = (int)error;
@@ -308,13 +309,16 @@ int main(int argc, char **argv) {
         }
         {
             resident_completion_t completion;
-            struct dpu_set_t dpu_first;
-            DPU_FOREACH(set, dpu_first) {
-                if (dpu_copy_from(dpu_first, "RESIDENT_COMPLETION", 0, &completion, sizeof(completion)) == DPU_OK) {
-                    timing.dpu_run_time_cycles += completion.dpu_run_time_cycles;
+            struct dpu_set_t dpu_item;
+            uint64_t max_cycles = 0;
+            DPU_FOREACH(set, dpu_item) {
+                if (dpu_copy_from(dpu_item, "RESIDENT_COMPLETION", 0, &completion, sizeof(completion)) == DPU_OK) {
+                    if (completion.dpu_run_time_cycles > max_cycles) {
+                        max_cycles = completion.dpu_run_time_cycles;
+                    }
                 }
-                break;
             }
+            timing.dpu_run_time_cycles += max_cycles;
         }
         native_launch_count++;
     }

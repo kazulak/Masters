@@ -138,11 +138,16 @@ static void resident_contract(const resident_operation_t *operation) {
     const float left_scale = requantize ? resident_scale(operation->slot_a, args->left_elems) : 1.0f;
     const float right_scale = requantize ? resident_scale(operation->slot_b, args->right_elems) : 1.0f;
 
-    for (uint32_t tile_start = tid * RESIDENT_OUTPUT_TILE_ELEMS; tile_start < operation->output_elements; tile_start += NR_TASKLETS * RESIDENT_OUTPUT_TILE_ELEMS) {
-        const uint32_t tile_elems = (operation->output_elements - tile_start) < RESIDENT_OUTPUT_TILE_ELEMS
-            ? operation->output_elements - tile_start : RESIDENT_OUTPUT_TILE_ELEMS;
+    const uint32_t dpu_slice_elements = (args->dpu_slice_elements > 0) ? args->dpu_slice_elements : operation->output_elements;
+    const uint32_t dpu_slice_offset = args->dpu_slice_offset;
+    const uint32_t contracted_elements = (args->contracted_elements_slice > 0) ? args->contracted_elements_slice : args->contracted_elems;
+    const uint32_t contracted_offset = args->contracted_offset;
+
+    for (uint32_t tile_start = tid * RESIDENT_OUTPUT_TILE_ELEMS; tile_start < dpu_slice_elements; tile_start += NR_TASKLETS * RESIDENT_OUTPUT_TILE_ELEMS) {
+        const uint32_t tile_elems = (dpu_slice_elements - tile_start) < RESIDENT_OUTPUT_TILE_ELEMS
+            ? dpu_slice_elements - tile_start : RESIDENT_OUTPUT_TILE_ELEMS;
         for (uint32_t tile_index = 0; tile_index < tile_elems; tile_index++) {
-            const uint32_t output_linear = tile_start + tile_index;
+            const uint32_t output_linear = dpu_slice_offset + tile_start + tile_index;
             resident_decode_index(output_linear, args->output_rank, args->output_shape, args->output_strides, output_coords);
             uint32_t left_base = 0;
             uint32_t right_base = 0;
@@ -154,7 +159,8 @@ static void resident_contract(const resident_operation_t *operation) {
             }
             int32_t total_i32 = 0;
             float total_f32 = 0.0f;
-            for (uint32_t contracted_linear = 0; contracted_linear < args->contracted_elems; contracted_linear++) {
+            for (uint32_t c_idx = 0; c_idx < contracted_elements; c_idx++) {
+                const uint32_t contracted_linear = contracted_offset + c_idx;
                 uint32_t left_offset = left_base;
                 uint32_t right_offset = right_base;
                 uint32_t remaining = contracted_linear;
@@ -185,7 +191,7 @@ static void resident_contract(const resident_operation_t *operation) {
         if (output != NULL) {
             mram_write(
                 resident_output_tile[tid],
-                RESIDENT_SLOT_POOL + output->offset_bytes + tile_start * sizeof(float),
+                RESIDENT_SLOT_POOL + output->offset_bytes + (dpu_slice_offset + tile_start) * sizeof(float),
                 tile_bytes
             );
         }
@@ -194,11 +200,15 @@ static void resident_contract(const resident_operation_t *operation) {
 
 static void resident_complex_combine(const resident_operation_t *operation) {
     const uint32_t tid = me();
-    for (uint32_t tile_start = tid * RESIDENT_OUTPUT_TILE_ELEMS; tile_start < operation->output_elements; tile_start += NR_TASKLETS * RESIDENT_OUTPUT_TILE_ELEMS) {
-        const uint32_t tile_elems = (operation->output_elements - tile_start) < RESIDENT_OUTPUT_TILE_ELEMS
-            ? operation->output_elements - tile_start : RESIDENT_OUTPUT_TILE_ELEMS;
+    const upmem_generic_args_t *args = &operation->args;
+    const uint32_t dpu_slice_elements = (args->dpu_slice_elements > 0) ? args->dpu_slice_elements : operation->output_elements;
+    const uint32_t dpu_slice_offset = args->dpu_slice_offset;
+
+    for (uint32_t tile_start = tid * RESIDENT_OUTPUT_TILE_ELEMS; tile_start < dpu_slice_elements; tile_start += NR_TASKLETS * RESIDENT_OUTPUT_TILE_ELEMS) {
+        const uint32_t tile_elems = (dpu_slice_elements - tile_start) < RESIDENT_OUTPUT_TILE_ELEMS
+            ? dpu_slice_elements - tile_start : RESIDENT_OUTPUT_TILE_ELEMS;
         for (uint32_t index = 0; index < tile_elems; index++) {
-            const uint32_t element = tile_start + index;
+            const uint32_t element = dpu_slice_offset + tile_start + index;
             resident_output_tile[tid][index] = resident_read_f32(operation->slot_a, element)
                 - resident_read_f32(operation->slot_b, element);
         }
@@ -206,17 +216,17 @@ static void resident_complex_combine(const resident_operation_t *operation) {
         const uint32_t tile_bytes = resident_align8(tile_elems * (uint32_t)sizeof(float));
         const resident_slot_descriptor_t *output = resident_slot(operation->slot_out_real);
         if (output != NULL) {
-            mram_write(resident_output_tile[tid], RESIDENT_SLOT_POOL + output->offset_bytes + tile_start * sizeof(float), tile_bytes);
+            mram_write(resident_output_tile[tid], RESIDENT_SLOT_POOL + output->offset_bytes + (dpu_slice_offset + tile_start) * sizeof(float), tile_bytes);
         }
         for (uint32_t index = 0; index < tile_elems; index++) {
-            const uint32_t element = tile_start + index;
+            const uint32_t element = dpu_slice_offset + tile_start + index;
             resident_output_tile[tid][index] = resident_read_f32(operation->slot_c, element)
                 + resident_read_f32(operation->slot_d, element);
         }
         if ((tile_elems & 1u) != 0u) resident_output_tile[tid][tile_elems] = 0.0f;
         output = resident_slot(operation->slot_out_imag);
         if (output != NULL) {
-            mram_write(resident_output_tile[tid], RESIDENT_SLOT_POOL + output->offset_bytes + tile_start * sizeof(float), tile_bytes);
+            mram_write(resident_output_tile[tid], RESIDENT_SLOT_POOL + output->offset_bytes + (dpu_slice_offset + tile_start) * sizeof(float), tile_bytes);
         }
     }
 }

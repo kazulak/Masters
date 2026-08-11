@@ -78,7 +78,7 @@ def _resident_args_format(max_rank: int = RESIDENT_MAX_RANK) -> str:
 def _resident_operation_format(max_rank: int = RESIDENT_MAX_RANK) -> str:
     # kind, mode, output elements, six slot references, two float scales,
     # followed by the unchanged generic-loop index metadata ABI.
-    return "<" + "I" * 9 + "ff" + "I" * (9 + 7 * max_rank) + "i" * (4 * max_rank)
+    return "<" + "I" * 9 + "ff" + "I" * (9 + 7 * max_rank) + "i" * (4 * max_rank) + "I" * 4
 
 
 RESIDENT_OPERATION_BYTES = struct.calcsize(_resident_operation_format())
@@ -1281,7 +1281,13 @@ def _pack_native_args(args: Mapping[str, Any], *, mode: str, max_rank: int = RES
     signed_fields: list[int] = []
     for name in ("output_to_left_axes", "output_to_right_axes", "contracted_to_left_axes", "contracted_to_right_axes"):
         signed_fields.extend(signed(name))
-    return tuple(fields + signed_fields)
+    slice_fields = [
+        int(args.get("dpu_slice_offset", 0)),
+        int(args.get("dpu_slice_elements", 0)),
+        int(args.get("contracted_offset", 0)),
+        int(args.get("contracted_elements_slice", 0)),
+    ]
+    return tuple(fields + signed_fields + slice_fields)
 
 
 def _encode_package(
