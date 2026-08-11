@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace as dataclass_replace
 from pathlib import Path
 import shutil
 import struct
@@ -587,6 +588,61 @@ def test_m5_multi_dpu_reference_validation() -> None:
     partial_sums = [full_output * 0.25 for _ in range(4)]
     reconstructed_sum = np.sum(partial_sums, axis=0)
     np.testing.assert_allclose(reconstructed_sum, full_output, atol=1e-7)
+
+
+def test_m5_resident_graph_package_multi_dpu() -> None:
+    from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
+        _canonical_profile,
+        build_resident_graph_package,
+    )
+
+    circuit = load_circuit({"circuit": {"kind": "qasm_file", "path": QASM}}, ROOT)
+    network = build_tensor_network(circuit)
+    graph = plan_task_graph_with_config(network, {"planner_id": "opt_einsum_greedy"})
+
+    # Single-DPU package must have placement_plan and communication_plan set to None
+    prof1 = _canonical_profile(tasklets_per_dpu=1)
+    pkg1 = build_resident_graph_package(
+        graph, network, case_id="bell_1dpu", suite_id="test", quantization_mode="none", profile=prof1
+    )
+    assert pkg1.placement_plan is None
+    assert pkg1.communication_plan is None
+    payload1 = pkg1.to_json_dict()
+    assert "placement_plan" not in payload1
+    assert "communication_plan" not in payload1
+
+    # Multi-DPU package must generate valid placement_plan and communication_plan
+    prof2_multi = _canonical_profile(tasklets_per_dpu=1, requested_dpu_count=2)
+    pkg2 = build_resident_graph_package(
+        graph, network, case_id="bell_2dpu", suite_id="test", quantization_mode="none", profile=prof2_multi
+    )
+    assert pkg2.placement_plan is not None
+    assert pkg2.communication_plan is not None
+    payload2 = pkg2.to_json_dict()
+    assert payload2["placement_plan"]["dpu_group_ownership"] == [0, 1]
+    assert payload2["communication_plan"]["collective_kind"] == "host_mediated_reduction"
+
+
+def test_m5_quantized_int32_host_reduction() -> None:
+    from quantum_bench.targets.upmem.runtime_evidence import reduce_multi_dpu_partial_sums
+
+    # Simulate 4 DPU int32 partial sums
+    np.random.seed(42)
+    partials_i32 = [np.random.randint(-100, 100, size=16, dtype=np.int32) for _ in range(4)]
+
+    # Reduce partial sums in int32 space
+    reduced_int8, scale, sat = reduce_multi_dpu_partial_sums(partials_i32, quantized=True, scale=1.0)
+    assert reduced_int8.dtype == np.int8
+    assert len(reduced_int8) == 16
+    assert isinstance(scale, float)
+    assert isinstance(sat, int)
+
+    # Compare with explicit float reference
+    expected_sum = np.sum(partials_i32, axis=0).astype(np.float32)
+    expected_max = np.max(np.abs(expected_sum))
+    expected_scale = 1.0 if expected_max == 0 else expected_max / 127.0
+    assert scale == pytest.approx(expected_scale)
+
 
 
 

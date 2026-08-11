@@ -33,6 +33,34 @@ UPMEM_EXECUTION_MODE = UPMEM_EXECUTION_MODE_SDK_SIMULATOR
 UPMEM_DPU_CLOCK_HZ = 350_000_000
 
 
+def reduce_multi_dpu_partial_sums(
+    partial_sums: Sequence[np.ndarray],
+    *,
+    quantized: bool = False,
+    scale: float = 1.0,
+) -> tuple[np.ndarray, float, int]:
+    """Reduce multi-DPU partial sums.
+
+    If quantized is True, inputs are int32 partial sums accumulated in int32 space
+    before applying ties-to-even requantization to int8.
+    """
+    if not partial_sums:
+        raise ValueError("reduce_multi_dpu_partial_sums requires at least one partial sum array")
+    if not quantized:
+        total = np.sum(partial_sums, axis=0).astype(np.float32)
+        return total, 1.0, 0
+
+    from quantum_bench.targets.upmem.hardware_taskgraph_resident import resident_round_nearest_even
+    accumulated_i32 = np.sum([np.asarray(item, dtype=np.int32) for item in partial_sums], axis=0)
+    total_f32 = accumulated_i32.astype(np.float32) * scale
+    max_abs = float(np.max(np.abs(total_f32))) if total_f32.size else 0.0
+    scale32 = 1.0 if max_abs == 0.0 else float(np.float32(max_abs) / np.float32(127.0))
+    rounded = resident_round_nearest_even(total_f32 / np.float32(scale32))
+    saturation = int(np.count_nonzero((rounded < -127.0) | (rounded > 127.0)))
+    quantized_int8 = np.asarray(np.clip(rounded, -127.0, 127.0), dtype=np.int8)
+    return quantized_int8, scale32, saturation
+
+
 def transfer_accounting(
     actual_h2d_bytes: int | None,
     actual_d2h_bytes: int | None,
@@ -554,6 +582,8 @@ def _summary_payload(
     peak_live_tensor_bytes: int,
     schedule_metadata: JsonDict | None = None,
     execution_metadata: JsonDict | None = None,
+    placement_plan: Any | None = None,
+    communication_plan: Any | None = None,
 ) -> JsonDict:
     schedule_metadata = schedule_metadata or _schedule_metadata(
         schedule_mode="sequential",
@@ -637,6 +667,8 @@ def _summary_payload(
             "simplepim_api_used": False,
             "dpu_run_time_cycles": total_dpu_run_time_cycles,
             "dpu_compute_seconds": dpu_compute_seconds,
+            "placement_plan": placement_plan.to_json_dict() if hasattr(placement_plan, "to_json_dict") else placement_plan,
+            "communication_plan": communication_plan.to_json_dict() if hasattr(communication_plan, "to_json_dict") else communication_plan,
             "input_dtype_on_dpu": _unique_or_none(task_metrics, "input_dtype_on_dpu"),
             "accumulator_dtype_on_dpu": _unique_or_none(task_metrics, "accumulator_dtype_on_dpu"),
             "output_dtype_on_dpu": _unique_or_none(task_metrics, "output_dtype_on_dpu"),

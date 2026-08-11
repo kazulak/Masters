@@ -426,6 +426,8 @@ class ResidentGraphPackage:
     package_path: Path | None = None
     final_output_paths: Mapping[str, Path] = field(default_factory=dict)
     descriptor_sha256: str | None = None
+    placement_plan: PlacementPlan | None = None
+    communication_plan: CommunicationPlan | None = None
 
     @property
     def graph_request_count(self) -> int:
@@ -440,7 +442,7 @@ class ResidentGraphPackage:
         return len(self.operations)
 
     def to_json_dict(self) -> JsonDict:
-        return {
+        payload = {
             "schema_version": RESIDENT_SESSION_PROTOCOL,
             "manifest_kind": "resident_graph_package",
             "case_id": self.case_id,
@@ -466,6 +468,11 @@ class ResidentGraphPackage:
                 key: str(value) for key, value in self.final_output_paths.items()
             },
         }
+        if self.placement_plan is not None:
+            payload["placement_plan"] = self.placement_plan.to_json_dict()
+        if self.communication_plan is not None:
+            payload["communication_plan"] = self.communication_plan.to_json_dict()
+        return payload
 
     def write(
         self,
@@ -602,6 +609,8 @@ class ResidentGraphPackage:
             package_path=package_path,
             final_output_paths=final_paths,
             descriptor_sha256=descriptor_sha256,
+            placement_plan=self.placement_plan,
+            communication_plan=self.communication_plan,
         )
 
 
@@ -958,6 +967,22 @@ def build_resident_graph_package(
         tensor_complexity[task.output_tensor_id] = True
     if len(operations) != allocation.component_operation_count:
         raise ResidentCapacityError("hardware_profile_violation: component_operation_count_mismatch")
+    placement_plan = (
+        build_m5_placement_plan(
+            dpu_group_count=selected.requested_dpu_count,
+            tasklets_per_dpu=selected.tasklets_per_dpu,
+        )
+        if selected.requested_dpu_count > 1
+        else None
+    )
+    communication_plan = (
+        build_m5_communication_plan(
+            logical_bytes=allocation.mram_used_bytes,
+            dpu_group_count=selected.requested_dpu_count,
+        )
+        if selected.requested_dpu_count > 1
+        else None
+    )
     return ResidentGraphPackage(
         graph=graph,
         case_id=case_id,
@@ -967,6 +992,8 @@ def build_resident_graph_package(
         operations=tuple(operations),
         initial_data=allocation.initial_data,
         full_precision_output=full_precision_output,
+        placement_plan=placement_plan,
+        communication_plan=communication_plan,
     )
 
 
@@ -1429,7 +1456,7 @@ def _descriptor_transfer_bytes(slot_count: int, operation_count: int) -> int:
     )
 
 
-def _canonical_profile(tasklets_per_dpu: int = 1) -> HardwareTaskGraphResidentProfile:
+def _canonical_profile(tasklets_per_dpu: int = 1, requested_dpu_count: int = 1) -> HardwareTaskGraphResidentProfile:
     return HardwareTaskGraphResidentProfile(
         version=RESIDENT_PROFILE_VERSION,
         target="hardware",
@@ -1437,7 +1464,7 @@ def _canonical_profile(tasklets_per_dpu: int = 1) -> HardwareTaskGraphResidentPr
         route_id=RESIDENT_ROUTE_ID,
         session_protocol=RESIDENT_SESSION_PROTOCOL,
         timing_scope=RESIDENT_TIMING_SCOPE,
-        requested_dpu_count=1,
+        requested_dpu_count=requested_dpu_count,
         tasklets_per_dpu=tasklets_per_dpu,
         max_rank=RESIDENT_MAX_RANK,
         max_tensor_elements=RESIDENT_MAX_ELEMENTS,
@@ -1593,7 +1620,7 @@ def _encoded_slot_id(slot: ResidentSlotDescriptor) -> int:
 
 
 def _require_canonical_profile(profile: HardwareTaskGraphResidentProfile) -> None:
-    if profile.to_json_dict() != _canonical_profile(profile.tasklets_per_dpu).to_json_dict():
+    if profile.to_json_dict() != _canonical_profile(profile.tasklets_per_dpu, profile.requested_dpu_count).to_json_dict():
         raise ResidentCapacityError(
             "hardware_profile_violation: resident package ABI requires the canonical frozen profile"
         )
