@@ -25,6 +25,7 @@ from quantum_bench.targets.upmem.hardware_session import (
     HardwareSessionBuild,
     build_resident_hardware_session,
     execute_resident_graph_session,
+    hardware_environment_metadata,
 )
 from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
     RESIDENT_BACKEND_ID,
@@ -148,7 +149,10 @@ def prepare_upmem_hardware_taskgraph_resident(
         tasklets_cli_override=tasklets_per_dpu,
     )
     write_json(plan_dir / "config" / "hardware_profile.json", hardware_taskgraph_resident_profile_metadata(suite.profile))
-    write_json(plan_dir / "environment.json", capture_environment(root_dir))
+    environment_metadata = hardware_environment_metadata(env)
+    captured_environment = capture_environment(root_dir)
+    captured_environment["hardware_environment_metadata"] = environment_metadata
+    write_json(plan_dir / "environment.json", captured_environment)
     rows: list[JsonDict] = []
     status = "prepared"
     failure_stage = None
@@ -159,7 +163,13 @@ def prepare_upmem_hardware_taskgraph_resident(
         except Exception as exc:
             status = "failed"
             failure_stage = _failure_stage(str(exc), "hardware_profile_violation")
-            rows.append({"case_id": case.get("case_id"), "status": "failed", "failure_stage": failure_stage, "reason": str(exc)})
+            rows.append({
+                "case_id": case.get("case_id"),
+                "status": "failed",
+                "failure_stage": failure_stage,
+                "reason": str(exc),
+                "hardware_environment_metadata": environment_metadata,
+            })
             break
     native_build: JsonDict = {"attempted": False, "status": "not_requested"}
     if status == "prepared" and build:
@@ -309,7 +319,10 @@ def run_resident_suite(
         tasklets_cli_override=tasklets_cli_override,
     )
     write_json(run_dir / "config" / "hardware_profile.json", hardware_taskgraph_resident_profile_metadata(suite.profile))
-    write_json(run_dir / "environment.json", capture_environment(root_dir))
+    environment_metadata = hardware_environment_metadata(environment)
+    captured_environment = capture_environment(root_dir)
+    captured_environment["hardware_environment_metadata"] = environment_metadata
+    write_json(run_dir / "environment.json", captured_environment)
     manifest = write_run_manifest(
         run_dir,
         run_kind="upmem_hardware_taskgraph_resident_path_quantization_study",
@@ -325,6 +338,7 @@ def run_resident_suite(
     )
     manifest.update(
         {
+            "hardware_environment_metadata": environment_metadata,
             "tasklets_per_dpu": suite.profile.tasklets_per_dpu,
             "effective_tasklets_per_dpu": suite.profile.tasklets_per_dpu,
             "effective_cli_tasklets_override": tasklets_cli_override,
@@ -334,7 +348,7 @@ def run_resident_suite(
     try:
         native_build = build_resident_hardware_session(root_dir, run_dir / "native_session", profile=suite.profile, environment=environment)
     except Exception as exc:
-        failure = _failure_record(suite, str(exc), None)
+        failure = _failure_record(suite, str(exc), None, environment=environment)
         write_normalized_records(run_dir, [failure])
         summary_path = run_dir / "upmem_hardware_taskgraph_resident_summary.json"
         write_json(summary_path, {
@@ -363,7 +377,7 @@ def run_resident_suite(
                 prepared=prepared, native_build=native_build, environment=environment,
             )
         except Exception as exc:
-            case_records = [_failure_record(suite, str(exc), case)]
+            case_records = [_failure_record(suite, str(exc), case, environment=environment)]
             case_warmups = []
             case_status = {"case_id": case_id, "status": "failed", "failure_stage": _failure_stage(str(exc), "hardware_profile_violation"), "reason": str(exc)}
         records.extend(case_records)
@@ -421,6 +435,7 @@ def execute_resident_variant(
     )
     execution_metadata = {
         **execution_identity_metadata(graph, plan_reused=True),
+        **hardware_environment_metadata(execution_environment),
         "executor_config_hash": executor_config_hash(RESIDENT_ROUTE_ID, {
             "profile": profile.version, "backend_id": profile.backend_id,
             "session_protocol": profile.session_protocol, "quantization_mode": quantization_mode,
@@ -736,6 +751,8 @@ def _normalized_record(case, suite, variant_id, mode, repeat_id, order_index, ex
         "execution_scope": "physical_single_dpu_mram_resident_full_taskgraph",
         "timing_scope": RESIDENT_TIMING_SCOPE, "target_requested": summary.get("target_requested", "hardware"),
         "target_observed": summary.get("target_observed", "hardware_unverified"),
+        "upmem_rank_path_requested": summary.get("upmem_rank_path_requested"),
+        "upmem_sdk_profile_effective": summary.get("upmem_sdk_profile_effective"),
         "hardware_functionality_evidence": execution.status == "completed" and summary.get("hardware_execution") is True,
         "hardware_timing_available": summary.get("hardware_timing_available", False) if execution.status == "completed" else False,
         "persistent_session_reused": summary.get("persistent_session_reused"),
@@ -1148,7 +1165,8 @@ def _failed_execution(graph, profile, mode, metadata, reason, started, *, native
     return ResidentGraphExecution("failed", str(reason), None, summary, ())
 
 
-def _failure_record(suite, reason, case):
+def _failure_record(suite, reason, case, *, environment=None):
+    environment_metadata = hardware_environment_metadata(environment or {})
     return {
         "schema_version": "resident_normalized_record_v1", "status": "failed",
         "suite_id": suite.suite["suite_id"],
@@ -1158,6 +1176,8 @@ def _failure_record(suite, reason, case):
         "hardware_kernel_executed": False, "simulator_kernel_executed": False,
         "cpu_fallback_used": False, "requested_dpu_count": 1,
         "tasklets_per_dpu": suite.profile.tasklets_per_dpu,
+        "upmem_rank_path_requested": environment_metadata["upmem_rank_path_requested"],
+        "upmem_sdk_profile_effective": environment_metadata["upmem_sdk_profile_effective"],
         "provider_id": RESIDENT_PROVIDER_ID,
         "provider_metadata": {
             "provider_id": RESIDENT_PROVIDER_ID,

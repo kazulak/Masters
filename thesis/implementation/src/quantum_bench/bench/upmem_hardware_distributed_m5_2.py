@@ -87,6 +87,7 @@ def execute(
         raise ValueError("hardware_opt_in_missing: UPMEM_ALLOW_PHYSICAL_HARDWARE=1 is required")
     if env.get("DPU_BACKEND"):
         raise ValueError("hardware_profile_violation: DPU_BACKEND must be unset for physical M5.2")
+    rank_metadata = m51.hardware_environment_metadata(env)
 
     target = native_target or m51._DefaultNativeTarget()
     target.set_environment(env)
@@ -101,6 +102,7 @@ def execute(
         "UPMEM_ALLOW_PHYSICAL_HARDWARE": env.get("UPMEM_ALLOW_PHYSICAL_HARDWARE"),
         "DPU_BACKEND": env.get("DPU_BACKEND"),
         "UPMEM_HOME": env.get("UPMEM_HOME"),
+        **rank_metadata,
     }
     write_json(run_dir / "environment.json", captured_environment)
     summary_name = f"{SUITE_ID}_summary.json"
@@ -186,6 +188,7 @@ def execute(
                     "execution_plan_kind": "distributed_plan_v2_contracted_partition",
                     "communication_provider": "host_mediated_sum_v1",
                     "execution_plan_executed": False,
+                    **rank_metadata,
                 }
             )
     write_normalized_records(run_dir, records)

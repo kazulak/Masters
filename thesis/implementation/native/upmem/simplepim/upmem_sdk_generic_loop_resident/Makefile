@@ -20,9 +20,11 @@ ifneq ($(UPMEM_GENERIC_HARDWARE_MVP),1)
 $(error resident profile requires UPMEM_GENERIC_HARDWARE_MVP=1; simulator builds are not valid evidence)
 endif
 
-.PHONY: all v2 clean
+.PHONY: all v1 v2 clean
 
-all: bin/host bin/dpu_resident bin/host_v2 bin/dpu_resident_v2
+all: v1
+
+v1: bin/host bin/dpu_resident
 
 bin:
 	mkdir -p bin

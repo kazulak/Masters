@@ -34,6 +34,10 @@ from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
     build_resident_graph_package,
 )
 from quantum_bench.targets.upmem.simplepim_taskgraph_executor import build as build_native
+from quantum_bench.targets.upmem.hardware_session import (
+    hardware_environment_metadata,
+    sanitised_hardware_environment,
+)
 from quantum_bench.bench.upmem_simplepim_taskgraph import _lower_real_float32
 from quantum_bench.tn.contract import contract_binary_task
 
@@ -70,7 +74,9 @@ class _DefaultNativeTarget:
         self._environment = dict(environment)
 
     def build(self, build_dir: Path) -> Mapping[str, Any]:
-        built = build_native(build_dir, prepare_only=True)
+        built = build_native(
+            build_dir, prepare_only=True, environment=self._environment
+        )
         source = Path(str(built["native_source_dir"]))
         host = source / "bin" / "host_upmem_execution_plan_v2"
         dpu = source / "bin" / "dpu_resident_v2"
@@ -114,7 +120,7 @@ class _DefaultNativeTarget:
         completed = subprocess.run(
             command,
             cwd=host.parent.parent,
-            env=self._environment,
+            env=sanitised_hardware_environment(self._environment),
             capture_output=True,
             text=True,
             timeout=timeout_s,
@@ -125,6 +131,7 @@ class _DefaultNativeTarget:
         payload = json.loads(response_path.read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
             raise RuntimeError("output_manifest_failed: native M5.1 response is not an object")
+        payload.update(hardware_environment_metadata(self._environment))
         if completed.returncode != 0 or payload.get("status") != expected:
             raise RuntimeError(str(payload.get("error") or "native M5.1 request failed"))
         return payload
@@ -162,6 +169,7 @@ def execute(
         raise ValueError("hardware_opt_in_missing: UPMEM_ALLOW_PHYSICAL_HARDWARE=1 is required")
     if env.get("DPU_BACKEND"):
         raise ValueError("hardware_profile_violation: DPU_BACKEND must be unset for physical M5.1")
+    rank_metadata = hardware_environment_metadata(env)
 
     target = native_target or _DefaultNativeTarget()
     target.set_environment(env)
@@ -177,6 +185,7 @@ def execute(
         "UPMEM_ALLOW_PHYSICAL_HARDWARE": env.get("UPMEM_ALLOW_PHYSICAL_HARDWARE"),
         "DPU_BACKEND": env.get("DPU_BACKEND"),
         "UPMEM_HOME": env.get("UPMEM_HOME"),
+        **rank_metadata,
     }
     write_json(run_dir / "environment.json", captured_environment)
     summary_name = f"{SUITE_ID}_summary.json"
@@ -232,6 +241,7 @@ def execute(
                     "reason": str(exc),
                     "execution_plan_kind": "distributed_plan_v2_output_partition",
                     "execution_plan_executed": False,
+                    **rank_metadata,
                 }
             )
     write_normalized_records(run_dir, records)
@@ -603,6 +613,8 @@ def _record(
         "package_file_sha256": item["package_sha256"],
         "work_units": item["work_units"],
         "native_response": dict(response),
+        "upmem_rank_path_requested": response.get("upmem_rank_path_requested"),
+        "upmem_sdk_profile_effective": response.get("upmem_sdk_profile_effective"),
         "hardware_allocation_verified": response["hardware_allocation_verified"],
         "native_kernel_executed": response["native_kernel_executed"],
         "hardware_kernel_executed": response["hardware_kernel_executed"],

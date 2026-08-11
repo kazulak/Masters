@@ -319,8 +319,8 @@ int main(void) {
         RESIDENT_COMPLETION.completed_operation_count = 0u;
         RESIDENT_COMPLETION.output_elements_processed = 0u;
         RESIDENT_COMPLETION.output_checksum_fnv1a64 = 14695981039346656037ULL;
-#if RESIDENT_COMPLETION_VERSION >= 2
         RESIDENT_COMPLETION.dpu_run_time_cycles = 0ULL;
+#if RESIDENT_COMPLETION_VERSION >= 2
         for (uint32_t index = 0; index < 16u; index++) {
             RESIDENT_COMPLETION.tasklet_processed_elements[index] = 0u;
         }
@@ -366,9 +366,7 @@ int main(void) {
 
         if (status_code == 0 && me() == 0) {
             const perfcounter_t end_cycles = perfcounter_get();
-#if RESIDENT_COMPLETION_VERSION >= 2
             RESIDENT_COMPLETION.dpu_run_time_cycles = (uint64_t)(end_cycles - start_cycles_shared);
-#endif
             RESIDENT_COMPLETION.active_operation_index = (uint32_t)RESIDENT_ACTIVE_OPERATION;
             RESIDENT_COMPLETION.completion_status = RESIDENT_COMPLETION_COMPLETED;
             RESIDENT_COMPLETION.completed_operation_count = (uint32_t)RESIDENT_ACTIVE_OPERATION + 1u;

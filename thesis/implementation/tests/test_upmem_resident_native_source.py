@@ -53,6 +53,25 @@ def test_resident_output_write_implementation_is_abi_selected(tmp_path: Path) ->
     assert "resident_output_window[NR_TASKLETS][2]" in source
 
 
+def test_resident_completion_cycles_are_populated_for_both_abis(tmp_path: Path) -> None:
+    v1 = _compile_variant(tmp_path, 1)
+    v2 = _compile_variant(tmp_path, 2)
+
+    assert v1.count("RESIDENT_COMPLETION.dpu_run_time_cycles = 0ULL") == 1
+    assert v2.count("RESIDENT_COMPLETION.dpu_run_time_cycles = 0ULL") == 1
+    assert v1.count("RESIDENT_COMPLETION.dpu_run_time_cycles = (uint64_t)(end_cycles - start_cycles_shared)") == 1
+    assert v2.count("RESIDENT_COMPLETION.dpu_run_time_cycles = (uint64_t)(end_cycles - start_cycles_shared)") == 1
+
+
+def test_resident_makefile_defaults_to_explicit_v1_build() -> None:
+    makefile = (SOURCE.parent / "Makefile").read_text(encoding="ascii")
+
+    assert ".PHONY: all v1 v2 clean" in makefile
+    assert "all: v1" in makefile
+    assert "v1: bin/host bin/dpu_resident" in makefile
+    assert "v2: bin/host_v2 bin/dpu_resident_v2" in makefile
+
+
 def test_resident_output_tile_rejects_odd_size(tmp_path: Path) -> None:
     compiler = _dpu_compiler()
     completed = subprocess.run(

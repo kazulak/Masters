@@ -179,7 +179,9 @@ class FakeM51NativeTarget:
         if self.write_output:
             output_path.parent.mkdir(parents=True, exist_ok=True)
             _output().tofile(output_path)
-        return _response(request)
+        response = _response(request)
+        response.update(m51.hardware_environment_metadata(self.environment or {}))
+        return response
 
 
 def _item(dpu_count: int = 2) -> dict[str, Any]:
@@ -223,6 +225,33 @@ def test_m51_fake_native_response_writes_strict_normalized_rows(tmp_path: Path) 
     assert all(row["timing_is_bringup_only"] is True for row in records)
     captured = json.loads((run_dir / "environment.json").read_text())
     assert captured["m5_1_native_environment"]["UPMEM_HOME"] == "/fake/upmem"
+
+
+def test_m51_rank_metadata_is_copied_to_native_response_and_record(tmp_path: Path) -> None:
+    target = FakeM51NativeTarget()
+    environment = {
+        "UPMEM_ALLOW_PHYSICAL_HARDWARE": "1",
+        "UPMEM_HW_RANK_PATH": "/dev/dpu_rank1",
+    }
+
+    result = m51.execute(tmp_path, environment=environment, native_target=target)
+
+    assert result["status"] == "completed"
+    run_dir = Path(result["run_dir"])
+    rows = [
+        json.loads(line)
+        for line in (run_dir / "normalized_records.jsonl").read_text().splitlines()
+    ]
+    assert all(row["upmem_rank_path_requested"] == "/dev/dpu_rank1" for row in rows)
+    assert all(
+        row["upmem_sdk_profile_effective"]
+        == "backend=hw,rankPath=/dev/dpu_rank1,ignoreVpd=true"
+        for row in rows
+    )
+    assert all(
+        row["native_response"]["upmem_rank_path_requested"] == "/dev/dpu_rank1"
+        for row in rows
+    )
 
 
 def test_m51_does_not_accept_stale_or_response_synthesized_output(tmp_path: Path) -> None:

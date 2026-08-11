@@ -35,6 +35,8 @@ from quantum_bench.targets.upmem.generic_bridge import (
 from quantum_bench.targets.upmem.hardware_session import (
     HardwareSessionBuild,
     ResidentGraphSessionExecution,
+    hardware_environment_metadata,
+    sanitised_hardware_environment,
     _resident_response_valid,
 )
 from quantum_bench.targets.upmem.runtime_checks import (
@@ -51,6 +53,87 @@ from .support import (
     resident_package_fixture,
     valid_resident_response,
 )
+
+
+def test_rank_selector_absent_preserves_default_profile_behavior() -> None:
+    environment = {
+        "DPU_PROFILE": "simulator",
+        "SIMPLEPIM_BACKEND": "simulator",
+        "UPMEM_BACKEND": "simulator",
+        "UPMEM_MODE": "simulator",
+        "UPMEM_TARGET": "simulator",
+        "UPMEM_EXECUTION_MODE": "simulator",
+        "UPMEM_PROFILE": "backend=simulator",
+        "UPMEM_PROFILE_BASE": "simulator",
+        "DPU_BACKEND": "simulator",
+    }
+
+    child = sanitised_hardware_environment(environment)
+
+    assert "UPMEM_PROFILE" not in child
+    assert "UPMEM_PROFILE_BASE" not in child
+    assert "DPU_BACKEND" not in child
+    for name in (
+        "DPU_PROFILE",
+        "SIMPLEPIM_BACKEND",
+        "UPMEM_BACKEND",
+        "UPMEM_MODE",
+        "UPMEM_TARGET",
+        "UPMEM_EXECUTION_MODE",
+    ):
+        assert name not in child
+    assert hardware_environment_metadata(environment) == {
+        "upmem_rank_path_requested": None,
+        "upmem_sdk_profile_effective": None,
+    }
+
+
+def test_rank_selector_sets_only_the_project_controlled_sdk_profile() -> None:
+    environment = {
+        "UPMEM_HW_RANK_PATH": "/dev/dpu_rank20",
+        "DPU_PROFILE": "simulator",
+        "SIMPLEPIM_BACKEND": "simulator",
+        "UPMEM_BACKEND": "simulator",
+        "UPMEM_MODE": "simulator",
+        "UPMEM_TARGET": "simulator",
+        "UPMEM_EXECUTION_MODE": "simulator",
+        "UPMEM_PROFILE": "backend=simulator",
+        "UPMEM_PROFILE_BASE": "simulator",
+        "DPU_BACKEND": "simulator",
+    }
+
+    child = sanitised_hardware_environment(environment)
+
+    assert child["UPMEM_PROFILE"] == (
+        "backend=hw,rankPath=/dev/dpu_rank20,ignoreVpd=true"
+    )
+    assert "UPMEM_HW_RANK_PATH" not in child
+    assert "UPMEM_PROFILE_BASE" not in child
+    assert "DPU_BACKEND" not in child
+    for name in (
+        "DPU_PROFILE",
+        "SIMPLEPIM_BACKEND",
+        "UPMEM_BACKEND",
+        "UPMEM_MODE",
+        "UPMEM_TARGET",
+        "UPMEM_EXECUTION_MODE",
+    ):
+        assert name not in child
+    assert hardware_environment_metadata(environment) == {
+        "upmem_rank_path_requested": "/dev/dpu_rank20",
+        "upmem_sdk_profile_effective": child["UPMEM_PROFILE"],
+    }
+
+
+@pytest.mark.parametrize(
+    "rank_path",
+    ("", "/dev/dpu_rank", "/dev/dpu_rank-1", "/dev/dpu_rank1/", "/tmp/dpu_rank1"),
+)
+def test_rank_selector_rejects_invalid_values_before_native_execution(
+    rank_path: str,
+) -> None:
+    with pytest.raises(ValueError, match="hardware_profile_violation: UPMEM_HW_RANK_PATH"):
+        sanitised_hardware_environment({"UPMEM_HW_RANK_PATH": rank_path})
 
 
 def _prepared_input(*, quantization_mode: str = "per_task_input_quantize") -> GenericTaskPreparationInput:
@@ -429,8 +512,13 @@ def test_resident_variant_fake_native_session_enforces_opt_in_and_projects_contr
         resident_hardware_suite,
         "native_build_failed",
         {"case_id": "fixture"},
+        environment={"UPMEM_HW_RANK_PATH": "/dev/dpu_rank20"},
     )
     assert failed_record["suite_id"] == resident_hardware_suite.suite["suite_id"]
+    assert failed_record["upmem_rank_path_requested"] == "/dev/dpu_rank20"
+    assert failed_record["upmem_sdk_profile_effective"] == (
+        "backend=hw,rankPath=/dev/dpu_rank20,ignoreVpd=true"
+    )
 
     inaccurate_reference = np.asarray(reference).copy()
     inaccurate_reference.flat[0] += 1.0
@@ -546,17 +634,31 @@ def test_completed_resident_suite_summary_uses_verified_row_allocation(
         ),
     )
     monkeypatch.setattr(
-        resident_runner, "write_run_manifest", lambda *args, **kwargs: {}
-    )
-    monkeypatch.setattr(
         resident_runner, "write_normalized_records", lambda *args, **kwargs: None
     )
     monkeypatch.setattr(resident_runner, "capture_environment", lambda *args: {})
 
     result = resident_runner.run_resident_suite(
-        tmp_path, run_dir, suite, environment={}
+        tmp_path,
+        run_dir,
+        suite,
+        environment={"UPMEM_HW_RANK_PATH": "/dev/dpu_rank20"},
     )
     summary = json.loads(result.summary_path.read_text(encoding="utf-8"))
+    environment_artifact = json.loads(
+        (run_dir / "environment.json").read_text(encoding="utf-8")
+    )
+    manifest = json.loads(
+        (run_dir / "run_manifest.json").read_text(encoding="utf-8")
+    )
 
     assert result.status == "completed"
     assert summary["resource_context"] == record["resource_context"]
+    expected_environment_metadata = {
+        "upmem_rank_path_requested": "/dev/dpu_rank20",
+        "upmem_sdk_profile_effective": (
+            "backend=hw,rankPath=/dev/dpu_rank20,ignoreVpd=true"
+        ),
+    }
+    assert environment_artifact["hardware_environment_metadata"] == expected_environment_metadata
+    assert manifest["hardware_environment_metadata"] == expected_environment_metadata

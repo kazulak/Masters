@@ -26,6 +26,9 @@ from quantum_bench.targets.upmem.execution_plan_v1 import (
     parse_plan_json,
     validate_schedule,
 )
+from quantum_bench.targets.upmem.hardware_session import (
+    sanitised_hardware_environment,
+)
 
 
 IMPLEMENTATION_ROOT = Path(__file__).resolve().parents[4]
@@ -62,7 +65,11 @@ class _Build:
 _LAST_BUILD: _Build | None = None
 
 
-def build(build_dir: Path, prepare_only: bool = True) -> dict[str, Any]:
+def build(
+    build_dir: Path,
+    prepare_only: bool = True,
+    environment: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
     """Build the host/DPU pair without allocating or launching hardware."""
 
     if not isinstance(prepare_only, bool):
@@ -97,11 +104,14 @@ def build(build_dir: Path, prepare_only: bool = True) -> dict[str, Any]:
         "NR_TASKLETS=1",
         "UPMEM_GENERIC_HARDWARE_MVP=1",
     )
+    child_env = sanitised_hardware_environment(
+        os.environ if environment is None else environment
+    )
     try:
         completed = subprocess.run(
             command,
             cwd=source,
-            env=dict(os.environ),
+            env=child_env,
             capture_output=True,
             text=True,
             timeout=BUILD_TIMEOUT_S,
@@ -174,12 +184,13 @@ def execute(request_path: Path, timeout_s: float) -> dict[str, Any]:
         "--timeout-s",
         str(max(1, int(math.ceil(timeout)))),
     )
+    child_env = sanitised_hardware_environment(os.environ)
     started = time.perf_counter()
     try:
         completed = subprocess.run(
             command,
             cwd=host_binary.parent.parent,
-            env=dict(os.environ),
+            env=child_env,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -265,11 +276,12 @@ def validate(request_path: Path, timeout_s: float) -> dict[str, Any]:
         "--timeout-s",
         str(max(1, int(math.ceil(timeout)))),
     )
+    child_env = sanitised_hardware_environment(os.environ)
     try:
         completed = subprocess.run(
             command,
             cwd=host_binary.parent.parent,
-            env=dict(os.environ),
+            env=child_env,
             capture_output=True,
             text=True,
             timeout=timeout,

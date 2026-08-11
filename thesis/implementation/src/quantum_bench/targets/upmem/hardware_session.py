@@ -16,6 +16,7 @@ import json
 import math
 from pathlib import Path
 import queue
+import re
 import signal
 import shutil
 import struct
@@ -67,6 +68,8 @@ HARDWARE_INTERACTIVE_SESSION_SCHEMA_VERSION = "generic_loop_interactive_session_
 HARDWARE_INTERACTIVE_BOOTSTRAP_KIND = "bootstrap"
 HARDWARE_INTERACTIVE_REQUEST_KIND = "request"
 HARDWARE_INTERACTIVE_RESPONSE_KIND = "response"
+UPMEM_HW_RANK_PATH_ENV = "UPMEM_HW_RANK_PATH"
+_UPMEM_HW_RANK_PATH_RE = re.compile(r"/dev/dpu_rank[0-9]+\Z")
 
 
 @dataclass(frozen=True)
@@ -252,6 +255,7 @@ class HardwareInteractiveSession:
                     stderr=self._stderr_snippet(),
                 )
             response = _load_response(response_path)
+            response.update(self._startup_metadata)
             if not _interactive_response_shape_valid(
                 response, request_name, tasks, self._session_root
             ):
@@ -467,6 +471,7 @@ def build_hardware_session(
 ) -> HardwareSessionBuild:
     """Build the bounded native source once for a hardware TaskGraph run."""
 
+    child_env = sanitised_hardware_environment(environment)
     sdk = discover_upmem_sdk(env=environment)
     tools_by_name = {tool.name: tool for tool in sdk.tools}
     make_path = shutil.which("make", path=environment.get("PATH"))
@@ -489,7 +494,6 @@ def build_hardware_session(
     build_dir = session_root / "native" / "build"
     _copy_source_tree(source, source_snapshot)
     _copy_source_tree(source, build_dir)
-    child_env = _sanitised_hardware_env(environment)
     command = (
         "make",
         "clean",
@@ -545,6 +549,7 @@ def start_hardware_session(
 ) -> HardwareInteractiveSession:
     """Start one native host that owns one DPU until ``close`` is confirmed."""
 
+    child_env = sanitised_hardware_environment(environment)
     if not session_id:
         raise ValueError(
             "hardware_profile_violation: interactive session_id must be non-empty"
@@ -584,7 +589,7 @@ def start_hardware_session(
         process = subprocess.Popen(
             command,
             cwd=build.build_dir,
-            env=_sanitised_hardware_env(environment),
+            env=child_env,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -633,7 +638,7 @@ def start_hardware_session(
         stderr_chunks=stderr_chunks,
         stdout_lock=stdout_lock,
         stderr_lock=stderr_lock,
-        startup_metadata={},
+        startup_metadata=hardware_environment_metadata(environment),
     )
     try:
         ready = session._wait_for_event(readiness_timeout_s or profile.timeout_s)
@@ -750,6 +755,7 @@ def execute_hardware_session(
     profile: HardwareTaskGraphProfile,
     environment: Mapping[str, str],
 ) -> HardwareSessionExecution:
+    child_env = sanitised_hardware_environment(environment)
     if not tasks:
         raise ValueError(
             "hardware_profile_violation: native session requires at least one task"
@@ -803,10 +809,12 @@ def execute_hardware_session(
     completed = _run_command(
         command,
         cwd=build.build_dir,
-        env=_sanitised_hardware_env(environment),
+        env=child_env,
         timeout_s=profile.timeout_s + 5.0,
     )
     response = _load_response(response_path)
+    if isinstance(response, dict):
+        response.update(hardware_environment_metadata(environment))
     failure_stage = (
         response.get("failure_stage") if isinstance(response, dict) else None
     )
@@ -998,11 +1006,60 @@ def _copy_source_tree(source: Path, destination: Path) -> None:
     )
 
 
-def _sanitised_hardware_env(environment: Mapping[str, str]) -> dict[str, str]:
+def _validated_hardware_rank_path(environment: Mapping[str, str]) -> str | None:
+    value = environment.get(UPMEM_HW_RANK_PATH_ENV)
+    if value is None:
+        return None
+    if not isinstance(value, str) or _UPMEM_HW_RANK_PATH_RE.fullmatch(value) is None:
+        raise ValueError(
+            "hardware_profile_violation: UPMEM_HW_RANK_PATH must match "
+            "/dev/dpu_rank followed by decimal digits"
+        )
+    return value
+
+
+def _effective_sdk_profile(environment: Mapping[str, str]) -> str | None:
+    rank_path = _validated_hardware_rank_path(environment)
+    if rank_path is None:
+        return None
+    return f"backend=hw,rankPath={rank_path},ignoreVpd=true"
+
+
+def hardware_environment_metadata(environment: Mapping[str, str]) -> JsonDict:
+    """Return truthful project-requested and subprocess-effective metadata."""
+
+    rank_path = _validated_hardware_rank_path(environment)
+    return {
+        "upmem_rank_path_requested": rank_path,
+        "upmem_sdk_profile_effective": _effective_sdk_profile(environment),
+    }
+
+
+def sanitised_hardware_environment(environment: Mapping[str, str]) -> dict[str, str]:
+    """Build the fail-closed environment used by physical native processes."""
+
     result = dict(environment)
-    for name in ("UPMEM_PROFILE", "UPMEM_PROFILE_BASE", "DPU_BACKEND"):
+    effective_profile = _effective_sdk_profile(environment)
+    for name in (
+        "DPU_PROFILE",
+        "SIMPLEPIM_BACKEND",
+        "UPMEM_BACKEND",
+        "UPMEM_MODE",
+        "UPMEM_TARGET",
+        "UPMEM_EXECUTION_MODE",
+        "UPMEM_PROFILE",
+        "UPMEM_PROFILE_BASE",
+        "DPU_BACKEND",
+        UPMEM_HW_RANK_PATH_ENV,
+    ):
         result.pop(name, None)
+    if effective_profile is not None:
+        result["UPMEM_PROFILE"] = effective_profile
     return result
+
+
+# Keep the old private name for existing route adapters and tests.
+_sanitised_hardware_env = sanitised_hardware_environment
 
 
 def _run_command(
@@ -1243,6 +1300,7 @@ def build_resident_hardware_session(
     DPU.
     """
     _validate_resident_profile(profile)
+    child_env = sanitised_hardware_environment(environment)
     sdk = discover_upmem_sdk(env=environment)
     tools_by_name = {tool.name: tool for tool in sdk.tools}
     make_path = shutil.which("make", path=environment.get("PATH"))
@@ -1289,7 +1347,7 @@ def build_resident_hardware_session(
     completed = _run_command(
         command,
         cwd=build_dir,
-        env=_sanitised_hardware_env(environment),
+        env=child_env,
         timeout_s=RESIDENT_NATIVE_BUILD_TIMEOUT_S,
     )
     build_time_s = time.perf_counter() - started
@@ -1334,6 +1392,7 @@ def execute_resident_graph_session(
     """Run one complete graph request through the resident native host."""
 
     _validate_resident_profile(profile)
+    child_env = sanitised_hardware_environment(environment)
     if environment.get("UPMEM_ALLOW_PHYSICAL_HARDWARE") != "1":
         raise ValueError(
             "hardware_opt_in_missing: UPMEM_ALLOW_PHYSICAL_HARDWARE=1 is required"
@@ -1423,10 +1482,12 @@ def execute_resident_graph_session(
     completed = _run_resident_command(
         command,
         cwd=build.build_dir,
-        env=_sanitised_hardware_env(environment),
+        env=child_env,
         timeout_s=float(profile.timeout_s),
     )
     response = _load_response(response_path)
+    if isinstance(response, dict):
+        response.update(hardware_environment_metadata(environment))
     failure_stage = response.get("failure_stage") if isinstance(response, dict) else None
     if completed.get("timed_out"):
         status = "failed"
