@@ -7,6 +7,11 @@
 
 #include "common.h"
 
+_Static_assert(
+    RESIDENT_OUTPUT_TILE_ELEMS > 0u && (RESIDENT_OUTPUT_TILE_ELEMS % 2u) == 0u,
+    "RESIDENT_OUTPUT_TILE_ELEMS must be positive and even"
+);
+
 #ifndef UPMEM_GENERIC_HARDWARE_MVP
 #define UPMEM_GENERIC_HARDWARE_MVP 0
 #endif
@@ -24,8 +29,10 @@ __mram_noinit uint8_t RESIDENT_SLOT_POOL[RESIDENT_MRAM_POOL_BYTES];
 
 __dma_aligned uint8_t resident_operation_window[sizeof(resident_operation_t)];
 /* Each tasklet owns an even-sized row, keeping every tail transfer aligned. */
-__dma_aligned float resident_output_tile[NR_TASKLETS][RESIDENT_OUTPUT_TILE_ELEMS + (RESIDENT_OUTPUT_TILE_ELEMS & 1u)];
+__dma_aligned float resident_output_tile[NR_TASKLETS][RESIDENT_OUTPUT_TILE_ELEMS + 2u];
+#if RESIDENT_OPERATION_ABI_VERSION >= RESIDENT_OPERATION_ABI_V2
 __dma_aligned float resident_output_window[NR_TASKLETS][2];
+#endif
 __dma_aligned uint8_t resident_input_window[NR_TASKLETS][8];
 
 static uint32_t resident_align8(uint32_t bytes) {
@@ -132,6 +139,7 @@ static uint64_t resident_checksum_update(uint64_t checksum, float value) {
     return checksum;
 }
 
+#if RESIDENT_OPERATION_ABI_VERSION >= RESIDENT_OPERATION_ABI_V2
 /* MRAM transfers are eight-byte aligned. A distributed output range may
  * start or end on an odd float, so preserve the adjacent float in a local
  * pair while writing only the assigned range. */
@@ -165,6 +173,7 @@ static void resident_write_output_range(
         );
     }
 }
+#endif
 
 static void resident_contract(const resident_operation_t *operation) {
     const uint32_t tid = me();
@@ -232,7 +241,18 @@ static void resident_contract(const resident_operation_t *operation) {
         }
         if ((tile_elems & 1u) != 0u) resident_output_tile[tid][tile_elems] = 0.0f;
         const resident_slot_descriptor_t *output = resident_slot(operation->slot_out_real);
+#if RESIDENT_OPERATION_ABI_VERSION >= RESIDENT_OPERATION_ABI_V2
         resident_write_output_range(output, dpu_slice_offset + tile_start, resident_output_tile[tid], tile_elems);
+#else
+        const uint32_t tile_bytes = resident_align8(tile_elems * (uint32_t)sizeof(float));
+        if (output != NULL) {
+            mram_write(
+                resident_output_tile[tid],
+                RESIDENT_SLOT_POOL + output->offset_bytes + tile_start * sizeof(float),
+                tile_bytes
+            );
+        }
+#endif
     }
 }
 
@@ -258,7 +278,14 @@ static void resident_complex_combine(const resident_operation_t *operation) {
         }
         if ((tile_elems & 1u) != 0u) resident_output_tile[tid][tile_elems] = 0.0f;
         const resident_slot_descriptor_t *output = resident_slot(operation->slot_out_real);
+#if RESIDENT_OPERATION_ABI_VERSION >= RESIDENT_OPERATION_ABI_V2
         resident_write_output_range(output, dpu_slice_offset + tile_start, resident_output_tile[tid], tile_elems);
+#else
+        const uint32_t tile_bytes = resident_align8(tile_elems * (uint32_t)sizeof(float));
+        if (output != NULL) {
+            mram_write(resident_output_tile[tid], RESIDENT_SLOT_POOL + output->offset_bytes + tile_start * sizeof(float), tile_bytes);
+        }
+#endif
         for (uint32_t index = 0; index < tile_elems; index++) {
             const uint32_t element = dpu_slice_offset + tile_start + index;
             resident_output_tile[tid][index] = resident_read_f32(operation->slot_c, element)
@@ -269,7 +296,13 @@ static void resident_complex_combine(const resident_operation_t *operation) {
         }
         if ((tile_elems & 1u) != 0u) resident_output_tile[tid][tile_elems] = 0.0f;
         output = resident_slot(operation->slot_out_imag);
+#if RESIDENT_OPERATION_ABI_VERSION >= RESIDENT_OPERATION_ABI_V2
         resident_write_output_range(output, dpu_slice_offset + tile_start, resident_output_tile[tid], tile_elems);
+#else
+        if (output != NULL) {
+            mram_write(resident_output_tile[tid], RESIDENT_SLOT_POOL + output->offset_bytes + tile_start * sizeof(float), tile_bytes);
+        }
+#endif
     }
 }
 
