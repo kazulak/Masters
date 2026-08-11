@@ -63,6 +63,20 @@ def test_resident_completion_cycles_are_populated_for_both_abis(tmp_path: Path) 
     assert v2.count("RESIDENT_COMPLETION.dpu_run_time_cycles = (uint64_t)(end_cycles - start_cycles_shared)") == 1
 
 
+def test_resident_operation_is_one_shared_dma_aligned_object(tmp_path: Path) -> None:
+    source = SOURCE.read_text(encoding="ascii")
+    assert "__dma_aligned resident_operation_t resident_operation_shared;" in source
+    assert "resident_operation_window" not in source
+    assert not re.search(r"\bresident_operation_t\s+operation\s*;", source)
+    assert "const resident_operation_t *operation = &resident_operation_shared;" in source
+
+    for abi_version in (1, 2):
+        preprocessed = _compile_variant(tmp_path, abi_version)
+        assert "resident_operation_shared" in preprocessed
+        assert not re.search(r"\bresident_operation_t\s+operation\s*;", preprocessed)
+        assert "const resident_operation_t *operation = &resident_operation_shared;" in preprocessed
+
+
 def test_resident_makefile_defaults_to_explicit_v1_build() -> None:
     makefile = (SOURCE.parent / "Makefile").read_text(encoding="ascii")
 

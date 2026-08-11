@@ -27,7 +27,9 @@ __host resident_completion_t RESIDENT_COMPLETION;
 __mram_noinit resident_operation_t RESIDENT_OPERATIONS[RESIDENT_MAX_COMPONENT_OPS];
 __mram_noinit uint8_t RESIDENT_SLOT_POOL[RESIDENT_MRAM_POOL_BYTES];
 
-__dma_aligned uint8_t resident_operation_window[sizeof(resident_operation_t)];
+/* Tasklet 0 loads the operation once into shared WRAM.  Keeping this object
+ * out of main() avoids copying the 784/800-byte ABI object onto every stack. */
+__dma_aligned resident_operation_t resident_operation_shared;
 /* Each tasklet owns an even-sized row, keeping every tail transfer aligned. */
 __dma_aligned float resident_output_tile[NR_TASKLETS][RESIDENT_OUTPUT_TILE_ELEMS + 2u];
 #if RESIDENT_OPERATION_ABI_VERSION >= RESIDENT_OPERATION_ABI_V2
@@ -335,16 +337,15 @@ int main(void) {
     barrier_wait(&tasklet_barrier);
 
     if (status_code == 0) {
-        resident_operation_t operation;
         if (me() == 0) {
             mram_read(
                 RESIDENT_OPERATIONS + RESIDENT_ACTIVE_OPERATION,
-                &resident_operation_window,
-                sizeof(operation)
+                &resident_operation_shared,
+                sizeof(resident_operation_shared)
             );
         }
         barrier_wait(&tasklet_barrier);
-        __builtin_memcpy(&operation, resident_operation_window, sizeof(operation));
+        const resident_operation_t *operation = &resident_operation_shared;
 
         if (me() == 0) {
             perfcounter_config(COUNT_CYCLES, true);
@@ -352,10 +353,10 @@ int main(void) {
         }
         barrier_wait(&tasklet_barrier);
 
-        if (operation.kind == RESIDENT_OPERATION_CONTRACT) {
-            resident_contract(&operation);
-        } else if (operation.kind == RESIDENT_OPERATION_COMPLEX_COMBINE) {
-            resident_complex_combine(&operation);
+        if (operation->kind == RESIDENT_OPERATION_CONTRACT) {
+            resident_contract(operation);
+        } else if (operation->kind == RESIDENT_OPERATION_COMPLEX_COMBINE) {
+            resident_complex_combine(operation);
         } else {
             if (me() == 0) {
                 status_code = 4;
@@ -371,38 +372,38 @@ int main(void) {
             RESIDENT_COMPLETION.completion_status = RESIDENT_COMPLETION_COMPLETED;
             RESIDENT_COMPLETION.completed_operation_count = (uint32_t)RESIDENT_ACTIVE_OPERATION + 1u;
 #if RESIDENT_OPERATION_ABI_VERSION >= RESIDENT_OPERATION_ABI_V2
-            RESIDENT_COMPLETION.output_elements_processed = operation.args.dpu_slice_elements;
+            RESIDENT_COMPLETION.output_elements_processed = operation->args.dpu_slice_elements;
 #else
-            RESIDENT_COMPLETION.output_elements_processed = operation.output_elements;
+            RESIDENT_COMPLETION.output_elements_processed = operation->output_elements;
 #endif
 
             uint64_t checksum = 14695981039346656037ULL;
-            const resident_slot_descriptor_t *out_slot = resident_slot(operation.slot_out_real);
+            const resident_slot_descriptor_t *out_slot = resident_slot(operation->slot_out_real);
             if (out_slot != NULL) {
 #if RESIDENT_OPERATION_ABI_VERSION >= RESIDENT_OPERATION_ABI_V2
-                const uint32_t output_offset = operation.args.dpu_slice_offset;
-                const uint32_t output_elements = operation.args.dpu_slice_elements;
+                const uint32_t output_offset = operation->args.dpu_slice_offset;
+                const uint32_t output_elements = operation->args.dpu_slice_elements;
 #else
                 const uint32_t output_offset = 0u;
-                const uint32_t output_elements = operation.output_elements;
+                const uint32_t output_elements = operation->output_elements;
 #endif
                 for (uint32_t idx = 0; idx < output_elements; idx++) {
-                    const float val = resident_read_f32(operation.slot_out_real, output_offset + idx);
+                    const float val = resident_read_f32(operation->slot_out_real, output_offset + idx);
                     checksum = resident_checksum_update(checksum, val);
                 }
             }
-            if (operation.kind == RESIDENT_OPERATION_COMPLEX_COMBINE) {
-                const resident_slot_descriptor_t *out_imag_slot = resident_slot(operation.slot_out_imag);
+            if (operation->kind == RESIDENT_OPERATION_COMPLEX_COMBINE) {
+                const resident_slot_descriptor_t *out_imag_slot = resident_slot(operation->slot_out_imag);
                 if (out_imag_slot != NULL) {
 #if RESIDENT_OPERATION_ABI_VERSION >= RESIDENT_OPERATION_ABI_V2
-                    const uint32_t output_offset = operation.args.dpu_slice_offset;
-                    const uint32_t output_elements = operation.args.dpu_slice_elements;
+                    const uint32_t output_offset = operation->args.dpu_slice_offset;
+                    const uint32_t output_elements = operation->args.dpu_slice_elements;
 #else
                     const uint32_t output_offset = 0u;
-                    const uint32_t output_elements = operation.output_elements;
+                    const uint32_t output_elements = operation->output_elements;
 #endif
                     for (uint32_t idx = 0; idx < output_elements; idx++) {
-                        const float val = resident_read_f32(operation.slot_out_imag, output_offset + idx);
+                        const float val = resident_read_f32(operation->slot_out_imag, output_offset + idx);
                         checksum = resident_checksum_update(checksum, val);
                     }
                 }
