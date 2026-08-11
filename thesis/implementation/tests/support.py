@@ -146,6 +146,10 @@ def resident_package_fixture(case: GraphCase, root: Path) -> tuple[Any, dict[str
 
 def valid_resident_response(manifest: dict[str, Any], **updates: Any) -> dict[str, Any]:
     operation_count = int(manifest["component_operation_count"])
+    tasklets = int(manifest.get("tasklets", 1))
+    profile_version = str(
+        manifest.get("hardware_profile_version", "hardware_taskgraph_single_dpu_mram_resident_v1")
+    )
     initial_h2d = int(manifest["initial_h2d_bytes"])
     descriptor_h2d = int(manifest["descriptor_h2d_bytes"])
     control_h2d = RESIDENT_DESCRIPTOR_CONTROL_BYTES + operation_count * RESIDENT_CONTROL_H2D_BYTES_PER_LAUNCH
@@ -155,7 +159,7 @@ def valid_resident_response(manifest: dict[str, Any], **updates: Any) -> dict[st
         "manifest_kind": "resident_graph_response",
         "route_id": "upmem_tn_hardware_taskgraph_resident",
         "backend_id": "upmem_sdk_hardware_taskgraph_resident",
-        "hardware_profile_version": "hardware_taskgraph_single_dpu_mram_resident_v1",
+        "hardware_profile_version": profile_version,
         "target_requested": "hardware",
         "target_observed": "hardware",
         "sdk_allocation_profile": "backend=hw",
@@ -166,10 +170,12 @@ def valid_resident_response(manifest: dict[str, Any], **updates: Any) -> dict[st
         "failure_stage": None,
         "requested_dpus": 1,
         "allocated_dpus": 1,
-        "tasklets": 1,
+        "tasklets": tasklets,
         "graph_request_count": 1,
         "native_launch_count": operation_count,
         "native_task_count": operation_count,
+        "completion_abi_version": 1,
+        "dpu_run_time_cycles": 0,
         "allocation_count": 1,
         "hardware_allocation_verified": True,
         "hardware_execution": True,
@@ -216,6 +222,15 @@ def valid_resident_response(manifest: dict[str, Any], **updates: Any) -> dict[st
             )
         }
     )
+    if profile_version.endswith("m4_6_v1"):
+        response["completion_abi_version"] = 2
+        response["graph_cycle_sum"] = 0
+        response["dpu_operation_cycles"] = [0] * operation_count
+        response["tasklet_processed_elements"] = [[0] * tasklets for _ in range(operation_count)]
+        response["active_tasklet_count"] = [0] * operation_count
+        response["idle_tasklet_count"] = [tasklets] * operation_count
+        response["tasklet_utilization"] = [0.0] * operation_count
+        response["tasklet_work_imbalance"] = [0.0] * operation_count
     response.update(updates)
     return response
 

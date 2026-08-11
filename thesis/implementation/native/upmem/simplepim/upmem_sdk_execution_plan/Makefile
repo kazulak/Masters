@@ -1,6 +1,7 @@
 MAX_RANK ?= 16
 MAX_ELEMS ?= 256
 NR_TASKLETS ?= 1
+RESIDENT_COMPLETION_VERSION ?= 2
 UPMEM_GENERIC_HARDWARE_MVP ?= 1
 RESIDENT_MAX_LOGICAL_TASKS ?= 32
 RESIDENT_MAX_COMPONENT_OPS ?= 128
@@ -18,28 +19,37 @@ SIMPLEPIM_MANAGEMENT_C := $(SIMPLEPIM_STAGE)/lib/management/Management.c
 SIMPLEPIM_MANAGEMENT_H := $(SIMPLEPIM_STAGE)/lib/management/Management.h
 SIMPLEPIM_SMALLTABLE_C := $(SIMPLEPIM_STAGE)/lib/management/SmallTableInit.c
 
-ifneq ($(filter 1 2,$(NR_TASKLETS)),1)
+ifneq ($(NR_TASKLETS),1)
 $(error execution-plan profile requires NR_TASKLETS=1)
 endif
 ifneq ($(UPMEM_GENERIC_HARDWARE_MVP),1)
 $(error execution-plan profile requires UPMEM_GENERIC_HARDWARE_MVP=1)
 endif
+ifneq ($(RESIDENT_COMPLETION_VERSION),2)
+$(error execution-plan profile requires RESIDENT_COMPLETION_VERSION=2)
+endif
 
-.PHONY: all simplepim-stage clean
+.PHONY: all simplepim-stage v2 clean
 
-all: bin/host_upmem_execution_plan bin/dpu_resident bin/dpu_simplepim_management_init
+all: bin/host_upmem_execution_plan bin/dpu_resident bin/host_upmem_execution_plan_v2 bin/dpu_resident_v2 bin/dpu_simplepim_management_init
 
 bin:
 	mkdir -p bin
 
 bin/dpu_resident: $(SIMPLEPIM_SOURCE_DIR)/../upmem_sdk_generic_loop_resident/dpu.c $(SIMPLEPIM_SOURCE_DIR)/../upmem_sdk_generic_loop_resident/common.h | bin
-	$(DPU_CC) -O2 -DNR_TASKLETS=$(NR_TASKLETS) -DUPMEM_GENERIC_HARDWARE_MVP=$(UPMEM_GENERIC_HARDWARE_MVP) -DUPMEM_GENERIC_MAX_RANK=$(MAX_RANK) -DUPMEM_GENERIC_MAX_ELEMS=$(MAX_ELEMS) -DRESIDENT_MAX_LOGICAL_TASKS=$(RESIDENT_MAX_LOGICAL_TASKS) -DRESIDENT_MAX_COMPONENT_OPS=$(RESIDENT_MAX_COMPONENT_OPS) -DRESIDENT_MAX_SLOT_DESCRIPTORS=$(RESIDENT_MAX_SLOT_DESCRIPTORS) -DRESIDENT_MRAM_POOL_BYTES=$(RESIDENT_MRAM_POOL_BYTES) -DRESIDENT_OUTPUT_TILE_ELEMS=$(RESIDENT_OUTPUT_TILE_ELEMS) -o $@ $<
+	$(DPU_CC) -O2 -DRESIDENT_OPERATION_ABI_VERSION=1 -DNR_TASKLETS=$(NR_TASKLETS) -DRESIDENT_COMPLETION_VERSION=$(RESIDENT_COMPLETION_VERSION) -DUPMEM_GENERIC_HARDWARE_MVP=$(UPMEM_GENERIC_HARDWARE_MVP) -DUPMEM_GENERIC_MAX_RANK=$(MAX_RANK) -DUPMEM_GENERIC_MAX_ELEMS=$(MAX_ELEMS) -DRESIDENT_MAX_LOGICAL_TASKS=$(RESIDENT_MAX_LOGICAL_TASKS) -DRESIDENT_MAX_COMPONENT_OPS=$(RESIDENT_MAX_COMPONENT_OPS) -DRESIDENT_MAX_SLOT_DESCRIPTORS=$(RESIDENT_MAX_SLOT_DESCRIPTORS) -DRESIDENT_MRAM_POOL_BYTES=$(RESIDENT_MRAM_POOL_BYTES) -DRESIDENT_OUTPUT_TILE_ELEMS=$(RESIDENT_OUTPUT_TILE_ELEMS) -o $@ $<
+
+bin/dpu_resident_v2: $(SIMPLEPIM_SOURCE_DIR)/../upmem_sdk_generic_loop_resident/dpu.c $(SIMPLEPIM_SOURCE_DIR)/../upmem_sdk_generic_loop_resident/common.h | bin
+	$(DPU_CC) -O2 -DRESIDENT_OPERATION_ABI_VERSION=2 -DNR_TASKLETS=$(NR_TASKLETS) -DRESIDENT_COMPLETION_VERSION=$(RESIDENT_COMPLETION_VERSION) -DUPMEM_GENERIC_HARDWARE_MVP=$(UPMEM_GENERIC_HARDWARE_MVP) -DUPMEM_GENERIC_MAX_RANK=$(MAX_RANK) -DUPMEM_GENERIC_MAX_ELEMS=$(MAX_ELEMS) -DRESIDENT_MAX_LOGICAL_TASKS=$(RESIDENT_MAX_LOGICAL_TASKS) -DRESIDENT_MAX_COMPONENT_OPS=$(RESIDENT_MAX_COMPONENT_OPS) -DRESIDENT_MAX_SLOT_DESCRIPTORS=$(RESIDENT_MAX_SLOT_DESCRIPTORS) -DRESIDENT_MRAM_POOL_BYTES=$(RESIDENT_MRAM_POOL_BYTES) -DRESIDENT_OUTPUT_TILE_ELEMS=$(RESIDENT_OUTPUT_TILE_ELEMS) -o $@ $<
 
 bin/dpu_simplepim_management_init: $(SIMPLEPIM_ROOT)/lib/management/SmallTableInit_dpu.c | bin
 	$(DPU_CC) -O2 -DNR_TASKLETS=$(NR_TASKLETS) -o $@ $<
 
-bin/host_upmem_execution_plan: host.c plan_request.c plan_request.h plan_schedule.c plan_schedule.h execution_plan_common.h execution_plan_provider.c execution_plan_provider.h $(SIMPLEPIM_SOURCE_DIR)/../upmem_sdk_generic_loop_resident/session_protocol.c $(SIMPLEPIM_SOURCE_DIR)/../upmem_sdk_generic_loop_resident/session_protocol.h $(SIMPLEPIM_SOURCE_DIR)/../upmem_sdk_generic_loop_resident/common.h $(SIMPLEPIM_STAGE_MARKER) | bin
-	$(HOST_CC) -std=c99 -O2 -Wall -Wextra -D_POSIX_C_SOURCE=200809L -DNR_TASKLETS=$(NR_TASKLETS) -DUPMEM_GENERIC_HARDWARE_MVP=$(UPMEM_GENERIC_HARDWARE_MVP) -DUPMEM_GENERIC_MAX_RANK=$(MAX_RANK) -DUPMEM_GENERIC_MAX_ELEMS=$(MAX_ELEMS) -DRESIDENT_MAX_LOGICAL_TASKS=$(RESIDENT_MAX_LOGICAL_TASKS) -DRESIDENT_MAX_COMPONENT_OPS=$(RESIDENT_MAX_COMPONENT_OPS) -DRESIDENT_MAX_SLOT_DESCRIPTORS=$(RESIDENT_MAX_SLOT_DESCRIPTORS) -DRESIDENT_MRAM_POOL_BYTES=$(RESIDENT_MRAM_POOL_BYTES) -DRESIDENT_OUTPUT_TILE_ELEMS=$(RESIDENT_OUTPUT_TILE_ELEMS) -I$(SIMPLEPIM_STAGE)/lib/management -o $@ host.c plan_request.c plan_schedule.c execution_plan_provider.c $(SIMPLEPIM_SOURCE_DIR)/../upmem_sdk_generic_loop_resident/session_protocol.c $(SIMPLEPIM_MANAGEMENT_C) $(SIMPLEPIM_SMALLTABLE_C) $$(dpu-pkg-config --cflags --libs dpu) -ldl
+bin/host_upmem_execution_plan: host.c plan_request.c plan_request.h plan_schedule.c plan_schedule.h distributed_plan_v2.c distributed_plan_v2.h execution_plan_v2_common.h execution_plan_common.h execution_plan_provider.c execution_plan_provider.h $(SIMPLEPIM_SOURCE_DIR)/../upmem_sdk_generic_loop_resident/session_protocol.c $(SIMPLEPIM_SOURCE_DIR)/../upmem_sdk_generic_loop_resident/session_protocol.h $(SIMPLEPIM_SOURCE_DIR)/../upmem_sdk_generic_loop_resident/common.h $(SIMPLEPIM_STAGE_MARKER) | bin
+	$(HOST_CC) -std=c99 -O2 -Wall -Wextra -D_POSIX_C_SOURCE=200809L -DRESIDENT_OPERATION_ABI_VERSION=1 -DNR_TASKLETS=$(NR_TASKLETS) -DRESIDENT_COMPLETION_VERSION=$(RESIDENT_COMPLETION_VERSION) -DUPMEM_GENERIC_HARDWARE_MVP=$(UPMEM_GENERIC_HARDWARE_MVP) -DUPMEM_GENERIC_MAX_RANK=$(MAX_RANK) -DUPMEM_GENERIC_MAX_ELEMS=$(MAX_ELEMS) -DRESIDENT_MAX_LOGICAL_TASKS=$(RESIDENT_MAX_LOGICAL_TASKS) -DRESIDENT_MAX_COMPONENT_OPS=$(RESIDENT_MAX_COMPONENT_OPS) -DRESIDENT_MAX_SLOT_DESCRIPTORS=$(RESIDENT_MAX_SLOT_DESCRIPTORS) -DRESIDENT_MRAM_POOL_BYTES=$(RESIDENT_MRAM_POOL_BYTES) -DRESIDENT_OUTPUT_TILE_ELEMS=$(RESIDENT_OUTPUT_TILE_ELEMS) -I$(SIMPLEPIM_STAGE)/lib/management -o $@ host.c plan_request.c plan_schedule.c execution_plan_provider.c $(SIMPLEPIM_SOURCE_DIR)/../upmem_sdk_generic_loop_resident/session_protocol.c $(SIMPLEPIM_MANAGEMENT_C) $(SIMPLEPIM_SMALLTABLE_C) $$(dpu-pkg-config --cflags --libs dpu) -ldl
+
+bin/host_upmem_execution_plan_v2: host.c plan_request.c plan_request.h plan_schedule.c plan_schedule.h distributed_plan_v2.c distributed_plan_v2.h execution_plan_v2_common.h execution_plan_common.h execution_plan_provider.c execution_plan_provider.h $(SIMPLEPIM_SOURCE_DIR)/../upmem_sdk_generic_loop_resident/session_protocol.c $(SIMPLEPIM_SOURCE_DIR)/../upmem_sdk_generic_loop_resident/session_protocol.h $(SIMPLEPIM_SOURCE_DIR)/../upmem_sdk_generic_loop_resident/common.h $(SIMPLEPIM_STAGE_MARKER) | bin
+	$(HOST_CC) -std=c99 -O2 -Wall -Wextra -D_POSIX_C_SOURCE=200809L -DRESIDENT_OPERATION_ABI_VERSION=2 -DNR_TASKLETS=$(NR_TASKLETS) -DRESIDENT_COMPLETION_VERSION=$(RESIDENT_COMPLETION_VERSION) -DUPMEM_GENERIC_HARDWARE_MVP=$(UPMEM_GENERIC_HARDWARE_MVP) -DUPMEM_GENERIC_MAX_RANK=$(MAX_RANK) -DUPMEM_GENERIC_MAX_ELEMS=$(MAX_ELEMS) -DRESIDENT_MAX_LOGICAL_TASKS=$(RESIDENT_MAX_LOGICAL_TASKS) -DRESIDENT_MAX_COMPONENT_OPS=$(RESIDENT_MAX_COMPONENT_OPS) -DRESIDENT_MAX_SLOT_DESCRIPTORS=$(RESIDENT_MAX_SLOT_DESCRIPTORS) -DRESIDENT_MRAM_POOL_BYTES=$(RESIDENT_MRAM_POOL_BYTES) -DRESIDENT_OUTPUT_TILE_ELEMS=$(RESIDENT_OUTPUT_TILE_ELEMS) -I$(SIMPLEPIM_STAGE)/lib/management -o $@ host.c plan_request.c plan_schedule.c distributed_plan_v2.c execution_plan_provider.c $(SIMPLEPIM_SOURCE_DIR)/../upmem_sdk_generic_loop_resident/session_protocol.c $(SIMPLEPIM_MANAGEMENT_C) $(SIMPLEPIM_SMALLTABLE_C) $$(dpu-pkg-config --cflags --libs dpu) -ldl
 
 $(SIMPLEPIM_STAGE_MARKER): $(SIMPLEPIM_ROOT)/lib/management/Management.c $(SIMPLEPIM_ROOT)/lib/management/Management.h $(SIMPLEPIM_SOURCE_DIR)/simplepim_management_profile.patch
 	set -eu; \
@@ -57,6 +67,8 @@ $(SIMPLEPIM_STAGE_MARKER): $(SIMPLEPIM_ROOT)/lib/management/Management.c $(SIMPL
 
 simplepim-stage:
 	$(MAKE) -B $(SIMPLEPIM_STAGE_MARKER)
+
+v2: bin/host_upmem_execution_plan_v2 bin/dpu_resident_v2
 
 clean:
 	rm -rf bin build/simplepim_execution_plan

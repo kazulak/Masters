@@ -8,11 +8,11 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import shutil
 import time
 from typing import Any, Mapping, Sequence
 
 import numpy as np
+import yaml
 
 from quantum_bench.bench.reporting import write_normalized_records, write_run_manifest
 from quantum_bench.bench.run_dirs import EVIDENCE_ARTIFACT_KIND, create_run_dir, sanitize
@@ -32,6 +32,7 @@ from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
     RESIDENT_DESCRIPTOR_CONTROL_BYTES,
     RESIDENT_ROUTE_ID,
     RESIDENT_SESSION_PROTOCOL,
+    RESIDENT_SUPPORTED_TASKLETS,
     RESIDENT_TIMING_SCOPE,
     HardwareTaskGraphResidentProfile,
     HardwareTaskGraphResidentSuite,
@@ -94,19 +95,58 @@ class ResidentGraphExecution:
     task_metrics: tuple[JsonDict, ...]
 
 
+def _profile_with_tasklets(
+    suite: HardwareTaskGraphResidentSuite,
+    tasklets_per_dpu: int | None,
+) -> HardwareTaskGraphResidentSuite:
+    if tasklets_per_dpu is None:
+        return suite
+    tasklets = int(tasklets_per_dpu)
+    if tasklets not in RESIDENT_SUPPORTED_TASKLETS:
+        raise ValueError("hardware_profile_violation: tasklets_per_dpu must be one of 1, 2, 4, 8, 16")
+    if suite.profile.version.endswith("_v1") and "m4_6" not in suite.profile.version and tasklets != 1:
+        raise ValueError("hardware_profile_violation: resident v1 profile is one-tasklet only")
+    return replace(suite, profile=replace(suite.profile, tasklets_per_dpu=tasklets))
+
+
+def _write_resolved_suite(
+    path: Path,
+    suite: HardwareTaskGraphResidentSuite,
+    *,
+    tasklets_cli_override: int | None,
+) -> None:
+    payload = dict(suite.suite)
+    metadata = dict(payload.get("metadata") or {})
+    profile = dict(metadata.get("hardware_profile") or {})
+    profile["tasklets_per_dpu"] = suite.profile.tasklets_per_dpu
+    profile["effective_cli_tasklets_override"] = tasklets_cli_override
+    metadata["hardware_profile"] = profile
+    metadata["effective_cli_overrides"] = {
+        "tasklets_per_dpu": tasklets_cli_override,
+    }
+    payload["metadata"] = metadata
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+
 def prepare_upmem_hardware_taskgraph_resident(
     root_dir: Path,
     *,
     suite_path: Path,
     build: bool = False,
+    tasklets_per_dpu: int | None = None,
     environment: Mapping[str, str] | None = None,
 ) -> UpmemHardwareTaskGraphResidentPlanResult:
     suite = load_hardware_taskgraph_resident_suite(suite_path)
+    suite = _profile_with_tasklets(suite, tasklets_per_dpu)
     env = dict(os.environ if environment is None else environment)
     plan_dir = _unique_dir(root_dir / "build" / "upmem_hardware_taskgraph_resident_plan")
     plan_dir.mkdir(parents=True, exist_ok=False)
     (plan_dir / "config").mkdir()
-    shutil.copy2(suite.suite_path, plan_dir / "config" / "resolved_suite.yml")
+    _write_resolved_suite(
+        plan_dir / "config" / "resolved_suite.yml",
+        suite,
+        tasklets_cli_override=tasklets_per_dpu,
+    )
     write_json(plan_dir / "config" / "hardware_profile.json", hardware_taskgraph_resident_profile_metadata(suite.profile))
     write_json(plan_dir / "environment.json", capture_environment(root_dir))
     rows: list[JsonDict] = []
@@ -239,12 +279,20 @@ def run_upmem_hardware_taskgraph_resident(
     *,
     suite_path: Path,
     environment: Mapping[str, str] | None = None,
+    tasklets_per_dpu: int | None = None,
 ) -> UpmemHardwareTaskGraphResidentResult:
     env = dict(os.environ if environment is None else environment)
     validate_hardware_taskgraph_resident_execution_request(execute=True, environment=env)
     suite = load_hardware_taskgraph_resident_suite(suite_path)
+    suite = _profile_with_tasklets(suite, tasklets_per_dpu)
     run_dir = create_run_dir(root_dir, str(suite.suite["suite_id"]), artifact_kind=EVIDENCE_ARTIFACT_KIND, route_label="upmem_hw_taskgraph_resident")
-    return run_resident_suite(root_dir, run_dir, suite, environment=env)
+    return run_resident_suite(
+        root_dir,
+        run_dir,
+        suite,
+        environment=env,
+        tasklets_cli_override=tasklets_per_dpu,
+    )
 
 
 def run_resident_suite(
@@ -253,8 +301,13 @@ def run_resident_suite(
     suite: HardwareTaskGraphResidentSuite,
     *,
     environment: Mapping[str, str],
+    tasklets_cli_override: int | None = None,
 ) -> UpmemHardwareTaskGraphResidentResult:
-    shutil.copy2(suite.suite_path, run_dir / "config" / "resolved_suite.yml")
+    _write_resolved_suite(
+        run_dir / "config" / "resolved_suite.yml",
+        suite,
+        tasklets_cli_override=tasklets_cli_override,
+    )
     write_json(run_dir / "config" / "hardware_profile.json", hardware_taskgraph_resident_profile_metadata(suite.profile))
     write_json(run_dir / "environment.json", capture_environment(root_dir))
     manifest = write_run_manifest(
@@ -270,6 +323,14 @@ def run_resident_suite(
         policies=("opt_einsum_greedy", "custom_upmem_v2_balanced"),
         quantization_modes=suite.profile.numeric_modes, root_dir=root_dir,
     )
+    manifest.update(
+        {
+            "tasklets_per_dpu": suite.profile.tasklets_per_dpu,
+            "effective_tasklets_per_dpu": suite.profile.tasklets_per_dpu,
+            "effective_cli_tasklets_override": tasklets_cli_override,
+        }
+    )
+    write_json(run_dir / "run_manifest.json", manifest)
     try:
         native_build = build_resident_hardware_session(root_dir, run_dir / "native_session", profile=suite.profile, environment=environment)
     except Exception as exc:
@@ -464,6 +525,37 @@ def execute_resident_variant(
     }
     modeled = _modeled_host_rehydrated_bytes(package)
     scale_metrics = _scale_metrics(policy)
+    operation_cycles = [int(value) for value in response.get("dpu_operation_cycles", ())]
+    processed_counters = response.get("tasklet_processed_elements", ())
+    active_tasklet_counts = response.get("active_tasklet_count", ())
+    idle_tasklet_counts = response.get("idle_tasklet_count", ())
+    tasklet_utilization = response.get("tasklet_utilization", ())
+    work_imbalance = response.get("tasklet_work_imbalance", ())
+    real_pass_count = sum(
+        1 for operation in package.operations
+        if operation.component in {"real", "ar_br", "ai_bi"}
+    )
+    imaginary_pass_count = sum(
+        1 for operation in package.operations
+        if operation.component in {"ar_bi", "ai_br"}
+    )
+    complex_combine_pass_count = sum(
+        1 for operation in package.operations if operation.component == "complex_combine"
+    )
+    operation_timing = [
+        {
+            "operation_id": operation.operation_id,
+            "task_id": operation.task_id,
+            "component": operation.component,
+            "dpu_cycles": operation_cycles[index] if index < len(operation_cycles) else None,
+            "tasklet_processed_elements": list(processed_counters[index]) if index < len(processed_counters) else [],
+            "active_tasklet_count": active_tasklet_counts[index] if index < len(active_tasklet_counts) else None,
+            "idle_tasklet_count": idle_tasklet_counts[index] if index < len(idle_tasklet_counts) else None,
+            "tasklet_utilization": tasklet_utilization[index] if index < len(tasklet_utilization) else None,
+            "work_imbalance": work_imbalance[index] if index < len(work_imbalance) else None,
+        }
+        for index, operation in enumerate(package.operations)
+    ]
     task_metrics = tuple({
         "task_id": task.id,
         "task_index": index,
@@ -471,6 +563,7 @@ def execute_resident_variant(
         "resident_slot_input_ids": [package.allocation.slot_for(task.input_tensor_ids[0], "real"), package.allocation.slot_for(task.input_tensor_ids[1], "real")],
         "resident_slot_output_ids": [package.allocation.slot_for(task.output_tensor_id, "real")],
         "native_component_operation_count": 5 if len(package.allocation.tensor_components[task.output_tensor_id]) == 2 else 1,
+        "dpu_operation_ids": [item["operation_id"] for item in operation_timing if item["task_id"] == task.id],
     } for index, task in enumerate(graph.tasks))
     validation_status = _legacy_validation_status(policy_validation, accounting["bytes_invariant_status"])
     summary: JsonDict = {
@@ -479,6 +572,7 @@ def execute_resident_variant(
         "reason": None if validation_status == "passed" else "output_validation_failed",
         "failure_stage": None if validation_status == "passed" else "output_validation_failed",
         "route_id": RESIDENT_ROUTE_ID, "backend_id": RESIDENT_BACKEND_ID,
+        "hardware_profile_version": profile.version,
         "session_protocol": RESIDENT_SESSION_PROTOCOL, "timing_scope": RESIDENT_TIMING_SCOPE,
         "hardware_execution": response["hardware_execution"],
         "hardware_kernel_executed": response["hardware_kernel_executed"],
@@ -549,6 +643,23 @@ def execute_resident_variant(
         "kernel_time_s": response.get("kernel_time_s"),
         "final_d2h_time_s": response.get("final_d2h_time_s"),
         "output_write_time_s": response.get("output_write_time_s"),
+        "completion_abi_version": response.get("completion_abi_version"),
+        "dpu_run_time_cycles": response.get("dpu_run_time_cycles", 0),
+        "dpu_graph_cycle_sum": response.get("graph_cycle_sum", response.get("dpu_run_time_cycles", 0)),
+        "dpu_operation_cycles": operation_cycles,
+        "tasklet_processed_elements": [list(row) for row in processed_counters],
+        "active_tasklet_count": list(active_tasklet_counts),
+        "idle_tasklet_count": list(idle_tasklet_counts),
+        "tasklet_utilization": list(tasklet_utilization),
+        "tasklet_work_imbalance": list(work_imbalance),
+        "tasklet_work_imbalance_basis": "configured_tasklets_max_minus_min_over_max",
+        "tasklet_utilization_basis": "active_tasklets_over_configured_tasklets",
+        "real_pass_count": real_pass_count,
+        "imaginary_pass_count": imaginary_pass_count,
+        "complex_contract_pass_count": real_pass_count + imaginary_pass_count,
+        "complex_combine_pass_count": complex_combine_pass_count,
+        "complex_pass_count": real_pass_count + imaginary_pass_count + complex_combine_pass_count,
+        "operation_timing": operation_timing,
         **accounting,
         "modeled_host_rehydrated_equivalent_bytes": modeled,
         "task_metrics": list(task_metrics),
@@ -638,6 +749,7 @@ def _normalized_record(case, suite, variant_id, mode, repeat_id, order_index, ex
         "multi_dpu_execution": False, "requested_dpu_count": summary.get("requested_dpu_count", 1),
         "allocated_dpu_count": summary.get("allocated_dpu_count", 0),
         "tasklets_per_dpu": summary.get("tasklets_per_dpu", 1),
+        "hardware_profile_version": summary.get("hardware_profile_version"),
         "allocation_count": summary.get("allocation_count", 0),
         "graph_request_count": summary.get("graph_request_count", 1),
         "native_launch_count": summary.get("native_launch_count", 0),
@@ -674,6 +786,23 @@ def _normalized_record(case, suite, variant_id, mode, repeat_id, order_index, ex
         "hardware_execution": summary.get("hardware_execution", False),
         "timing_is_bringup_only": summary.get("timing_is_bringup_only", False),
         "steady_state_graph_execution_s": summary.get("steady_state_graph_execution_s"),
+        "completion_abi_version": summary.get("completion_abi_version"),
+        "dpu_run_time_cycles": summary.get("dpu_run_time_cycles", 0),
+        "dpu_graph_cycle_sum": summary.get("dpu_graph_cycle_sum", 0),
+        "dpu_operation_cycles": summary.get("dpu_operation_cycles", []),
+        "tasklet_processed_elements": summary.get("tasklet_processed_elements", []),
+        "active_tasklet_count": summary.get("active_tasklet_count", []),
+        "idle_tasklet_count": summary.get("idle_tasklet_count", []),
+        "tasklet_utilization": summary.get("tasklet_utilization", []),
+        "tasklet_work_imbalance": summary.get("tasklet_work_imbalance", []),
+        "tasklet_work_imbalance_basis": summary.get("tasklet_work_imbalance_basis"),
+        "tasklet_utilization_basis": summary.get("tasklet_utilization_basis"),
+        "real_pass_count": summary.get("real_pass_count", 0),
+        "imaginary_pass_count": summary.get("imaginary_pass_count", 0),
+        "complex_contract_pass_count": summary.get("complex_contract_pass_count", 0),
+        "complex_combine_pass_count": summary.get("complex_combine_pass_count", 0),
+        "complex_pass_count": summary.get("complex_pass_count", 0),
+        "operation_timing": summary.get("operation_timing", []),
         "circuit_semantics_hash": summary.get("circuit_semantics_hash"),
         "tensor_network_hash": summary.get("tensor_network_hash"),
         "contraction_plan_hash": summary.get("contraction_plan_hash"),
@@ -1027,7 +1156,8 @@ def _failure_record(suite, reason, case):
         "backend_id": RESIDENT_BACKEND_ID, "kernel_family": "generic_loop_resident_graph",
         "hardware_functionality_evidence": False, "hardware_timing_available": False,
         "hardware_kernel_executed": False, "simulator_kernel_executed": False,
-        "cpu_fallback_used": False, "requested_dpu_count": 1, "tasklets_per_dpu": 1,
+        "cpu_fallback_used": False, "requested_dpu_count": 1,
+        "tasklets_per_dpu": suite.profile.tasklets_per_dpu,
         "provider_id": RESIDENT_PROVIDER_ID,
         "provider_metadata": {
             "provider_id": RESIDENT_PROVIDER_ID,

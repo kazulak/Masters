@@ -19,6 +19,12 @@ GPU_SUITE ?= configs/suites/gpu_evidence.yml
 UPMEM_SIM_SUITE ?= configs/suites/upmem_sim_evidence.yml
 UPMEM_HW_TASKGRAPH_RESIDENT_SUITE ?= configs/suites/upmem_hardware_taskgraph_resident_path_quantization.yml
 UPMEM_HW_TASKGRAPH_RESIDENT_RUN ?= runs/evidence/upmem_hardware_taskgraph_resident_path_quantization/upmem_hw_taskgraph_resident/latest
+UPMEM_HW_M4_6_SUITE ?= configs/suites/upmem_hardware_taskgraph_resident_m4_6_tasklet_scaling.yml
+# The parent is intentional: the scaling target creates one immutable child
+# evidence run per tasklet value, while the report aggregates that sweep.
+UPMEM_HW_M4_6_RUN ?= runs/evidence/upmem_hardware_taskgraph_resident_m4_6_tasklet_scaling/upmem_hw_taskgraph_resident
+UPMEM_HW_M4_6_REPORT ?= runs/comparisons/upmem_hardware_taskgraph_resident_m4_6_tasklet_scaling/latest
+UPMEM_HW_M4_6_TASKLETS ?= 1 2 4 8 16
 UPMEM_HW_SLICED_RESIDENT_MVP_SUITE ?= configs/suites/upmem_hardware_sliced_resident_mvp.yml
 UPMEM_HW_SLICED_RESIDENT_M2_1_SUITE ?= configs/suites/upmem_hardware_sliced_resident_m2_1.yml
 UPMEM_HW_SLICED_RESIDENT_M2_2_SUITE ?= configs/suites/upmem_hardware_sliced_resident_m2_2.yml
@@ -35,6 +41,10 @@ UPMEM_HW_M4_4_SUITE ?= configs/suites/upmem_hardware_simplepim_chain_m4_4.yml
 UPMEM_SIMPLEPIM_TASKGRAPH_SUITE ?= configs/suites/upmem_hardware_simplepim_taskgraph.yml
 UPMEM_HW_M2_3_RUN ?= runs/evidence/upmem_hardware_sliced_resident_m2_3/upmem_hw_sliced_resident/latest
 UPMEM_PROVIDER_CATALOG ?= configs/qualification/upmem_provider_m1.yml
+UPMEM_HW_M5_1_RUN ?= runs/evidence/upmem_hardware_distributed_m5_1/upmem_hw_m5_1/latest
+UPMEM_HW_M5_1_REPORT ?= runs/comparisons/upmem_hardware_distributed_m5_1/latest
+UPMEM_HW_M5_2_RUN ?= runs/evidence/upmem_hardware_distributed_m5_2/upmem_hw_m5_2/latest
+UPMEM_HW_M5_2_REPORT ?= runs/comparisons/upmem_hardware_distributed_m5_2/latest
 EVIDENCE_INBOX ?= runs/inbox/eth
 GPU_VERIFY ?= quest-hip
 CLEAN_RUNS ?= 0
@@ -54,6 +64,9 @@ PUBLIC_TARGETS := \
 	upmem-hw-taskgraph-resident-plan \
 	upmem-hw-taskgraph-resident \
 	upmem-hw-taskgraph-resident-report \
+	upmem-hw-m4-6-tasklet-scaling-plan \
+	upmem-hw-m4-6-tasklet-scaling \
+	upmem-hw-m4-6-tasklet-scaling-report \
 	upmem-hw-sliced-resident-plan \
 	upmem-hw-sliced-resident \
 	upmem-hw-m2-1-plan \
@@ -79,6 +92,15 @@ PUBLIC_TARGETS := \
 	upmem-hw-m4-4 \
 	upmem-simplepim-plan \
 	upmem-simplepim-run \
+	upmem-hw-m5-1-plan \
+	upmem-hw-m5-1 \
+	upmem-hw-m5-1-report \
+	upmem-hw-m5-2-plan \
+	upmem-hw-m5-2 \
+	upmem-hw-m5-2-report \
+	upmem-pidcomm-compatibility \
+	upmem-pidcomm-plan \
+	upmem-pidcomm-run \
 	upmem-provider-plan \
 	upmem-provider-qualify \
 	evidence-inbox \
@@ -112,6 +134,9 @@ help:
 		'  make upmem-hw-taskgraph-resident-plan  Prepare/build the active one-DPU physical MRAM-resident TaskGraph route; never allocates a DPU' \
 		'  make upmem-hw-taskgraph-resident  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; run the active one-DPU physical MRAM-resident TaskGraph route' \
 		'  make upmem-hw-taskgraph-resident-report  Generate a report from explicitly supplied one-DPU physical MRAM-resident diagnostic evidence' \
+		'  make upmem-hw-m4-6-tasklet-scaling-plan  Prepare the versioned M4.6 tile-2 resident profile for tasklets 1,2,4,8,16' \
+		'  make upmem-hw-m4-6-tasklet-scaling  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; run the one-DPU M4.6 tasklet scaling suite' \
+		'  make upmem-hw-m4-6-tasklet-scaling-report  Report one explicitly supplied M4.6 scaling run' \
 		'  make upmem-hw-sliced-resident-plan  Prepare/build the internal/research M2 two-DPU sliced-resident MVP; never allocates a DPU' \
 		'  make upmem-hw-sliced-resident  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; run the internal/research M2 two-DPU sliced-resident MVP' \
 		'  make upmem-hw-m2-1-plan  Prepare/build the M2.1 H-X useful-slice fixture; never allocates a DPU' \
@@ -137,6 +162,15 @@ help:
 		'  make upmem-hw-m4-4  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; execute the one-DPU SimplePIM chain' \
 		'  make upmem-simplepim-plan  Prepare/validate the fixed M4.5 one/two-DPU plans; never allocates a DPU' \
 		'  make upmem-simplepim-run  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; execute the fixed M4.5 route' \
+		'  make upmem-hw-m5-1-plan  Prepare/native-validate one real float32 output-partition contraction on 1,2,4 DPUs; never allocates a DPU' \
+		'  make upmem-hw-m5-1  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; execute the M5.1 output-partition contraction' \
+		'  make upmem-hw-m5-1-report  Report the explicitly supplied M5.1 evidence run' \
+		'  make upmem-hw-m5-2-plan  Prepare/native-validate one real float32 contracted-partition reduction on 1,2,4 DPUs; never allocates a DPU' \
+		'  make upmem-hw-m5-2  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; execute the M5.2 host-mediated reduction' \
+		'  make upmem-hw-m5-2-report  Report the explicitly supplied M5.2 evidence run' \
+		'  make upmem-pidcomm-compatibility  Stage and compile/link PID-Comm; never allocates a DPU' \
+		'  make upmem-pidcomm-plan  Record PID-Comm CPU/SDK/source facts and stage no hardware; never allocates a DPU' \
+		'  make upmem-pidcomm-run  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; qualify PID-Comm physical all-reduce candidates' \
 		'  make upmem-provider-plan  Prepare a unique M1 provider qualification plan; never builds or allocates hardware' \
 		'  make upmem-provider-qualify PROVIDER=<id>  Execute one selected physical provider qualification' \
 		'  make evidence-inbox     Create the ignored inbox for copied ETH evidence bundles' \
@@ -232,6 +266,22 @@ upmem-hw-taskgraph-resident-plan:
 upmem-hw-taskgraph-resident:
 	$(BENCH) upmem-hardware-taskgraph-resident --suite $(UPMEM_HW_TASKGRAPH_RESIDENT_SUITE) --execute
 
+upmem-hw-m4-6-tasklet-scaling-plan:
+	@for tasklets in $(UPMEM_HW_M4_6_TASKLETS); do \
+		$(BENCH) upmem-hardware-taskgraph-resident --suite $(UPMEM_HW_M4_6_SUITE) --prepare-only --build --tasklets $$tasklets || exit $$?; \
+	done
+
+upmem-hw-m4-6-tasklet-scaling:
+	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1 to execute physical hardware' >&2; exit 2; }
+	@for tasklets in $(UPMEM_HW_M4_6_TASKLETS); do \
+		$(BENCH) upmem-hardware-taskgraph-resident --suite $(UPMEM_HW_M4_6_SUITE) --execute --tasklets $$tasklets || exit $$?; \
+	done
+
+upmem-hw-m4-6-tasklet-scaling-report:
+	@test -n "$(UPMEM_HW_M4_6_RUN)" || { echo 'Set UPMEM_HW_M4_6_RUN=<physical M4.6 evidence directory>' >&2; exit 2; }
+	@test -n "$(UPMEM_HW_M4_6_REPORT)" || { echo 'Set UPMEM_HW_M4_6_REPORT=<comparison output directory>' >&2; exit 2; }
+	$(BENCH) report-run --input $(UPMEM_HW_M4_6_RUN) --out $(UPMEM_HW_M4_6_REPORT) --no-output-plots
+
 upmem-hw-sliced-resident-plan:
 	$(BENCH) upmem-hardware-sliced-resident-mvp --suite $(UPMEM_HW_SLICED_RESIDENT_MVP_SUITE) --prepare-only --build
 
@@ -318,6 +368,36 @@ upmem-simplepim-plan:
 upmem-simplepim-run:
 	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1 to execute physical hardware' >&2; exit 2; }
 	$(BENCH) upmem-simplepim-taskgraph --suite $(UPMEM_SIMPLEPIM_TASKGRAPH_SUITE) --execute
+
+upmem-hw-m5-1-plan:
+	$(BENCH) upmem-hardware-distributed-m5-1 --prepare-only --build
+
+upmem-hw-m5-1:
+	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1 to execute physical hardware' >&2; exit 2; }
+	$(BENCH) upmem-hardware-distributed-m5-1 --execute
+
+upmem-hw-m5-1-report:
+	$(BENCH) report-run --input $(UPMEM_HW_M5_1_RUN) --out $(UPMEM_HW_M5_1_REPORT) --no-output-plots
+
+upmem-hw-m5-2-plan:
+	$(BENCH) upmem-hardware-distributed-m5-2 --prepare-only --build
+
+upmem-hw-m5-2:
+	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1 to execute physical hardware' >&2; exit 2; }
+	$(BENCH) upmem-hardware-distributed-m5-2 --execute
+
+upmem-hw-m5-2-report:
+	$(BENCH) report-run --input $(UPMEM_HW_M5_2_RUN) --out $(UPMEM_HW_M5_2_REPORT) --no-output-plots
+
+upmem-pidcomm-compatibility:
+	$(PY_ENV) $(PYTHON) native/upmem/pidcomm_qualification/pidcomm_qualification_runner.py --compatibility-only --workdir .
+
+upmem-pidcomm-plan:
+	$(PY_ENV) $(PYTHON) native/upmem/pidcomm_qualification/pidcomm_qualification_runner.py --prepare-only --workdir .
+
+upmem-pidcomm-run:
+	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1 to execute physical hardware' >&2; exit 2; }
+	$(PY_ENV) $(PYTHON) native/upmem/pidcomm_qualification/pidcomm_qualification_runner.py --execute --workdir .
 
 upmem-hw-taskgraph-resident-report:
 	$(PY_ENV) $(PYTHON) scripts/research_benchmark_pack.py check-resident-evidence --input $(UPMEM_HW_TASKGRAPH_RESIDENT_RUN)

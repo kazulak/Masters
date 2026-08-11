@@ -39,6 +39,7 @@ UPMEM_HARDWARE_TASKGRAPH_RESIDENT_SUITE_SCHEMA_VERSION = (
 RESIDENT_BACKEND_ID = "upmem_sdk_hardware_taskgraph_resident"
 RESIDENT_ROUTE_ID = "upmem_tn_hardware_taskgraph_resident"
 RESIDENT_PROFILE_VERSION = "hardware_taskgraph_single_dpu_mram_resident_v1"
+RESIDENT_M46_PROFILE_VERSION = "hardware_taskgraph_single_dpu_mram_resident_m4_6_v1"
 RESIDENT_SESSION_PROTOCOL = "generic_loop_resident_graph_session_v1"
 RESIDENT_ALLOCATION_PROFILE = "backend=hw"
 RESIDENT_TIMING_SCOPE = "one_dpu_mram_resident_full_taskgraph_v1"
@@ -52,10 +53,16 @@ RESIDENT_MAX_SLOT_DESCRIPTORS = 128
 RESIDENT_MRAM_POOL_BYTES = 512 * 1024
 RESIDENT_MAX_CONTRACTED_COMBINATIONS = 256
 RESIDENT_OUTPUT_TILE_ELEMENTS = 256
+RESIDENT_M46_OUTPUT_TILE_ELEMENTS = 2
+RESIDENT_SUPPORTED_TASKLETS = (1, 2, 4, 8, 16)
 RESIDENT_TIMEOUT_S = 30.0
 
-RESIDENT_PACKAGE_MAGIC = b"UPRGPCK1"
-RESIDENT_PACKAGE_VERSION = 1
+RESIDENT_OPERATION_ABI_V1 = 1
+RESIDENT_OPERATION_ABI_V2 = 2
+RESIDENT_PACKAGE_MAGIC_V1 = b"UPRGPCK1"
+RESIDENT_PACKAGE_MAGIC_V2 = b"UPRGPCK2"
+RESIDENT_PACKAGE_VERSION_V1 = 1
+RESIDENT_PACKAGE_VERSION_V2 = 2
 RESIDENT_PACKAGE_ENDIAN = 0x01020304
 RESIDENT_PACKAGE_HEADER_FORMAT = "<8s4I5Q8I"
 RESIDENT_PACKAGE_HEADER_BYTES = struct.calcsize(RESIDENT_PACKAGE_HEADER_FORMAT)
@@ -72,16 +79,51 @@ RESIDENT_OPERATION_COMPLEX_COMBINE = 2
 
 
 def _resident_args_format(max_rank: int = RESIDENT_MAX_RANK) -> str:
-    return "<" + "I" * (9 + 7 * max_rank) + "i" * (4 * max_rank)
+    return "<" + "I" * (9 + 7 * max_rank) + "i" * (4 * max_rank) + "I" * 4
 
 
-def _resident_operation_format(max_rank: int = RESIDENT_MAX_RANK) -> str:
+def _resident_operation_format(
+    max_rank: int = RESIDENT_MAX_RANK,
+    operation_abi_version: int = RESIDENT_OPERATION_ABI_V1,
+) -> str:
     # kind, mode, output elements, six slot references, two float scales,
     # followed by the unchanged generic-loop index metadata ABI.
-    return "<" + "I" * 9 + "ff" + "I" * (9 + 7 * max_rank) + "i" * (4 * max_rank)
+    if operation_abi_version not in {RESIDENT_OPERATION_ABI_V1, RESIDENT_OPERATION_ABI_V2}:
+        raise ValueError("hardware_profile_violation: unsupported resident operation ABI")
+    fmt = "<" + "I" * 9 + "ff" + "I" * (9 + 7 * max_rank) + "i" * (4 * max_rank)
+    if operation_abi_version == RESIDENT_OPERATION_ABI_V2:
+        fmt += "I" * 4
+    return fmt
 
 
-RESIDENT_OPERATION_BYTES = struct.calcsize(_resident_operation_format())
+RESIDENT_OPERATION_BYTES_V1 = struct.calcsize(
+    _resident_operation_format(operation_abi_version=RESIDENT_OPERATION_ABI_V1)
+)
+RESIDENT_OPERATION_BYTES_V2 = struct.calcsize(
+    _resident_operation_format(operation_abi_version=RESIDENT_OPERATION_ABI_V2)
+)
+# Frozen M4.x callers intentionally retain the v1 defaults.
+RESIDENT_PACKAGE_MAGIC = RESIDENT_PACKAGE_MAGIC_V1
+RESIDENT_PACKAGE_VERSION = RESIDENT_PACKAGE_VERSION_V1
+RESIDENT_OPERATION_BYTES = RESIDENT_OPERATION_BYTES_V1
+
+
+def _resident_abi_metadata(operation_abi_version: int) -> tuple[bytes, int, int, str]:
+    if operation_abi_version == RESIDENT_OPERATION_ABI_V1:
+        return (
+            RESIDENT_PACKAGE_MAGIC_V1,
+            RESIDENT_PACKAGE_VERSION_V1,
+            RESIDENT_OPERATION_BYTES_V1,
+            "dpu_resident",
+        )
+    if operation_abi_version == RESIDENT_OPERATION_ABI_V2:
+        return (
+            RESIDENT_PACKAGE_MAGIC_V2,
+            RESIDENT_PACKAGE_VERSION_V2,
+            RESIDENT_OPERATION_BYTES_V2,
+            "dpu_resident_v2",
+        )
+    raise ValueError("hardware_profile_violation: unsupported resident operation ABI")
 
 
 @dataclass(frozen=True)
@@ -260,12 +302,22 @@ class ResidentOperationDescriptor:
             "intermediate_output_path": None,
         }
 
-    def to_bytes(self, *, max_rank: int = RESIDENT_MAX_RANK) -> bytes:
+    def to_bytes(
+        self,
+        *,
+        max_rank: int = RESIDENT_MAX_RANK,
+        operation_abi_version: int = RESIDENT_OPERATION_ABI_V1,
+    ) -> bytes:
         if not math.isfinite(float(self.left_scale)) or not math.isfinite(float(self.right_scale)):
             raise ValueError("hardware_profile_violation: resident operation scale must be finite")
-        values = _pack_native_args(self.args, mode=GENERIC_MODE_FLOAT32_NO_QUANT)
+        values = _pack_native_args(
+            self.args,
+            mode=GENERIC_MODE_FLOAT32_NO_QUANT,
+            output_elements=self.output_elements,
+            operation_abi_version=operation_abi_version,
+        )
         return struct.pack(
-            _resident_operation_format(max_rank),
+            _resident_operation_format(max_rank, operation_abi_version),
             self.native_kind,
             self.native_mode,
             int(self.output_elements),
@@ -343,6 +395,8 @@ class ResidentGraphPackage:
     package_path: Path | None = None
     final_output_paths: Mapping[str, Path] = field(default_factory=dict)
     descriptor_sha256: str | None = None
+    profile: HardwareTaskGraphResidentProfile | None = None
+    operation_abi_version: int = RESIDENT_OPERATION_ABI_V1
 
     @property
     def graph_request_count(self) -> int:
@@ -357,6 +411,9 @@ class ResidentGraphPackage:
         return len(self.operations)
 
     def to_json_dict(self) -> JsonDict:
+        package_magic, package_version, operation_bytes, dpu_binary_abi = _resident_abi_metadata(
+            self.operation_abi_version
+        )
         return {
             "schema_version": RESIDENT_SESSION_PROTOCOL,
             "manifest_kind": "resident_graph_package",
@@ -365,6 +422,13 @@ class ResidentGraphPackage:
             "route_id": RESIDENT_ROUTE_ID,
             "backend_id": RESIDENT_BACKEND_ID,
             "quantization_mode": self.quantization_mode,
+            "package_magic": package_magic.decode("ascii"),
+            "package_version": package_version,
+            "operation_abi_version": self.operation_abi_version,
+            "operation_bytes": operation_bytes,
+            "dpu_binary_abi": dpu_binary_abi,
+            "hardware_profile_version": (self.profile or _canonical_profile()).version,
+            "tasklets_per_dpu": (self.profile or _canonical_profile()).tasklets_per_dpu,
             "graph_request_count": 1,
             "logical_task_count": len(self.graph.tasks),
             "component_operation_count": len(self.operations),
@@ -444,19 +508,33 @@ class ResidentGraphPackage:
                 }
             )
 
-        package_bytes = _encode_package(self.allocation.slots, self.operations)
+        package_bytes = _encode_package(
+            self.allocation.slots,
+            self.operations,
+            operation_abi_version=self.operation_abi_version,
+        )
         # Apply the Python-side ABI validator before emitting any request
         # manifest. This keeps preparation fail-closed with the native parser.
-        validate_resident_graph_package_bytes(package_bytes)
+        selected_profile = self.profile or _canonical_profile()
+        validate_resident_graph_package_bytes(
+            package_bytes,
+            profile=selected_profile,
+            operation_abi_version=self.operation_abi_version,
+        )
         package_path = request_dir / "resident_graph_package.bin"
         package_path.write_bytes(package_bytes)
         descriptor_sha256 = hashlib.sha256(package_bytes).hexdigest()
         descriptor_h2d_bytes = _descriptor_transfer_bytes(
-            len(self.allocation.slots), len(self.operations)
+            len(self.allocation.slots),
+            len(self.operations),
+            self.operation_abi_version,
         )
         final_d2h_bytes = sum(int(item["transfer_bytes"]) for item in final_entries)
         dpu_ref = _relative(root, dpu_binary)
         _require_ascii(dpu_ref, "resident DPU binary path")
+        package_magic, package_version, operation_bytes, dpu_binary_abi = _resident_abi_metadata(
+            self.operation_abi_version
+        )
         manifest_path = root / f"{safe}_resident_request.json"
         payload: JsonDict = {
             "schema_version": RESIDENT_SESSION_PROTOCOL,
@@ -464,14 +542,19 @@ class ResidentGraphPackage:
             "session_id": request_id,
             "route_id": RESIDENT_ROUTE_ID,
             "backend_id": RESIDENT_BACKEND_ID,
-            "hardware_profile_version": RESIDENT_PROFILE_VERSION,
+            "hardware_profile_version": selected_profile.version,
             "target": "hardware",
             "sdk_allocation_profile": RESIDENT_ALLOCATION_PROFILE,
-            "session_protocol": RESIDENT_SESSION_PROTOCOL,
+            "session_protocol": selected_profile.session_protocol,
+            "package_magic": package_magic.decode("ascii"),
+            "package_version": package_version,
+            "operation_abi_version": self.operation_abi_version,
+            "operation_bytes": operation_bytes,
+            "dpu_binary_abi": dpu_binary_abi,
             "dpu_binary": dpu_ref,
             "package_path": _relative(root, package_path),
             "requested_dpus": 1,
-            "tasklets": 1,
+            "tasklets": selected_profile.tasklets_per_dpu,
             "graph_request_count": 1,
             "logical_task_count": len(self.graph.tasks),
             "component_operation_count": len(self.operations),
@@ -519,6 +602,8 @@ class ResidentGraphPackage:
             package_path=package_path,
             final_output_paths=final_paths,
             descriptor_sha256=descriptor_sha256,
+            profile=selected_profile,
+            operation_abi_version=self.operation_abi_version,
         )
 
 
@@ -565,6 +650,7 @@ def hardware_taskgraph_resident_profile_metadata(
         "cross_backend_speedup_applicable": False,
         "native_build_reuse_required": True,
         "graph_request_count_per_record": 1,
+        "completion_abi_version": 2 if profile.version == RESIDENT_M46_PROFILE_VERSION else 1,
         "resident_mram_slots": True,
         "host_rehydrated_equivalent_bytes_separate": True,
         "final_output_only_d2h": True,
@@ -800,9 +886,11 @@ def build_resident_graph_package(
     profile: HardwareTaskGraphResidentProfile | None = None,
     full_precision_output: np.ndarray | None = None,
     allow_slot_reuse: bool = True,
+    operation_abi_version: int = RESIDENT_OPERATION_ABI_V1,
 ) -> ResidentGraphPackage:
     selected = profile or _canonical_profile()
     _require_canonical_profile(selected)
+    _resident_abi_metadata(operation_abi_version)
     if quantization_mode not in selected.numeric_modes:
         raise ResidentCapacityError("hardware_profile_violation: unsupported_numeric_mode")
     _validate_finite_inputs(network)
@@ -884,6 +972,8 @@ def build_resident_graph_package(
         operations=tuple(operations),
         initial_data=allocation.initial_data,
         full_precision_output=full_precision_output,
+        profile=selected,
+        operation_abi_version=operation_abi_version,
     )
 
 
@@ -1003,6 +1093,7 @@ def validate_resident_graph_package_bytes(
     payload: bytes,
     *,
     profile: HardwareTaskGraphResidentProfile | None = None,
+    operation_abi_version: int | None = None,
 ) -> JsonDict:
     """Validate binary package framing and every slot interval before upload."""
 
@@ -1017,9 +1108,22 @@ def validate_resident_graph_package_bytes(
         slot_count, operation_count, pool_bytes, request_count,
         initial_count, final_count, max_rank, reserved,
     ) = header
-    if magic != RESIDENT_PACKAGE_MAGIC:
+    package_abi_by_header = {
+        RESIDENT_PACKAGE_MAGIC_V1: RESIDENT_OPERATION_ABI_V1,
+        RESIDENT_PACKAGE_MAGIC_V2: RESIDENT_OPERATION_ABI_V2,
+    }
+    header_operation_abi = package_abi_by_header.get(magic)
+    if header_operation_abi is None:
         raise ValueError("hardware_profile_violation: resident_package_bad_magic")
-    if version != RESIDENT_PACKAGE_VERSION:
+    if operation_abi_version is None:
+        operation_abi_version = header_operation_abi
+    _resident_abi_metadata(operation_abi_version)
+    if header_operation_abi != operation_abi_version:
+        raise ValueError("hardware_profile_violation: resident_package_abi_mismatch")
+    _, expected_package_version, expected_operation_bytes, _ = _resident_abi_metadata(
+        operation_abi_version
+    )
+    if version != expected_package_version:
         raise ValueError("hardware_profile_violation: resident_package_bad_version")
     if endian != RESIDENT_PACKAGE_ENDIAN:
         raise ValueError("hardware_profile_violation: resident_package_bad_endian")
@@ -1037,7 +1141,7 @@ def validate_resident_graph_package_bytes(
         raise ValueError("hardware_profile_violation: resident_package_operation_section_overlap")
     if slot_bytes != slot_count * RESIDENT_SLOT_BYTES:
         raise ValueError("hardware_profile_violation: resident_package_slot_length_mismatch")
-    if operation_bytes != operation_count * RESIDENT_OPERATION_BYTES:
+    if operation_bytes != operation_count * expected_operation_bytes:
         raise ValueError("hardware_profile_violation: resident_package_operation_length_mismatch")
     if slot_count == 0 or operation_count == 0:
         raise ValueError("hardware_profile_violation: resident_package_descriptor_count_invalid")
@@ -1086,9 +1190,9 @@ def validate_resident_graph_package_bytes(
     operation_modes: list[int] = []
     for index in range(operation_count):
         operation = struct.unpack_from(
-            _resident_operation_format(selected.max_rank),
+            _resident_operation_format(selected.max_rank, operation_abi_version),
             payload,
-            operation_offset + index * RESIDENT_OPERATION_BYTES,
+            operation_offset + index * expected_operation_bytes,
         )
         kind, mode, output_elements = operation[:3]
         refs = operation[3:9]
@@ -1101,6 +1205,12 @@ def validate_resident_graph_package_bytes(
             raise ValueError("hardware_profile_violation: resident_package_operation_empty_output")
         if not math.isfinite(left_scale) or not math.isfinite(right_scale):
             raise ValueError("hardware_profile_violation: resident_package_operation_scale_invalid")
+        args = operation[11:]
+        if operation_abi_version == RESIDENT_OPERATION_ABI_V2:
+            if args[-4:] != (0, args[6], 0, args[7]):
+                raise ValueError(
+                    "hardware_profile_violation: resident_package_operation_v2_range_invalid"
+                )
         operation_modes.append(mode)
         for slot_id in refs:
             if slot_id != RESIDENT_INVALID_SLOT and slot_id >= slot_count:
@@ -1130,6 +1240,10 @@ def validate_resident_graph_package_bytes(
     return {
         "magic": magic.decode("ascii"),
         "version": version,
+        "package_magic": magic.decode("ascii"),
+        "package_version": version,
+        "operation_abi_version": operation_abi_version,
+        "operation_bytes": expected_operation_bytes,
         "endian": endian,
         "file_bytes": file_bytes,
         "slot_count": slot_count,
@@ -1156,8 +1270,17 @@ def validate_resident_graph_package_bytes(
     }
 
 
-def validate_resident_graph_package_file(path: Path, *, profile: HardwareTaskGraphResidentProfile | None = None) -> JsonDict:
-    return validate_resident_graph_package_bytes(path.read_bytes(), profile=profile)
+def validate_resident_graph_package_file(
+    path: Path,
+    *,
+    profile: HardwareTaskGraphResidentProfile | None = None,
+    operation_abi_version: int | None = None,
+) -> JsonDict:
+    return validate_resident_graph_package_bytes(
+        path.read_bytes(),
+        profile=profile,
+        operation_abi_version=operation_abi_version,
+    )
 
 
 def resident_tile_ranges(element_count: int, tile_elements: int = RESIDENT_OUTPUT_TILE_ELEMENTS) -> tuple[tuple[int, int], ...]:
@@ -1260,7 +1383,15 @@ def _index_args(task, caps):
     }
 
 
-def _pack_native_args(args: Mapping[str, Any], *, mode: str, max_rank: int = RESIDENT_MAX_RANK) -> tuple[int, ...]:
+def _pack_native_args(
+    args: Mapping[str, Any],
+    *,
+    mode: str,
+    output_elements: int | None = None,
+    max_rank: int = RESIDENT_MAX_RANK,
+    operation_abi_version: int = RESIDENT_OPERATION_ABI_V1,
+) -> tuple[int, ...]:
+    _resident_abi_metadata(operation_abi_version)
     def unsigned(name: str) -> list[int]:
         return ([int(value) for value in args.get(name, ())] + [0] * max_rank)[:max_rank]
 
@@ -1281,7 +1412,17 @@ def _pack_native_args(args: Mapping[str, Any], *, mode: str, max_rank: int = RES
     signed_fields: list[int] = []
     for name in ("output_to_left_axes", "output_to_right_axes", "contracted_to_left_axes", "contracted_to_right_axes"):
         signed_fields.extend(signed(name))
-    return tuple(fields + signed_fields)
+    if operation_abi_version == RESIDENT_OPERATION_ABI_V1:
+        return tuple(fields + signed_fields)
+    # v2 descriptors always carry the complete range. Distributed execution
+    # replaces these values in a per-DPU descriptor copy after validation.
+    slice_fields = [
+        int(args.get("dpu_slice_offset", 0)),
+        int(args.get("dpu_slice_elements", args.get("output_element_count", output_elements or 0))),
+        int(args.get("contracted_offset", 0)),
+        int(args.get("contracted_elements_slice", args.get("contracted_combination_count", 0))),
+    ]
+    return tuple(fields + signed_fields + slice_fields)
 
 
 def _encode_package(
@@ -1289,9 +1430,13 @@ def _encode_package(
     operations: Sequence[ResidentOperationDescriptor],
     *,
     profile: HardwareTaskGraphResidentProfile | None = None,
+    operation_abi_version: int = RESIDENT_OPERATION_ABI_V1,
 ) -> bytes:
     selected = profile or _canonical_profile()
     _require_canonical_profile(selected)
+    package_magic, package_version, _operation_bytes, _dpu_binary_abi = _resident_abi_metadata(
+        operation_abi_version
+    )
     slot_payload = b"".join(
         struct.pack(
             RESIDENT_SLOT_FORMAT,
@@ -1304,12 +1449,14 @@ def _encode_package(
     )
     slot_offset = RESIDENT_PACKAGE_HEADER_BYTES
     operation_offset = _align8(slot_offset + len(slot_payload))
-    operation_payload = b"".join(item.to_bytes() for item in operations)
+    operation_payload = b"".join(
+        item.to_bytes(operation_abi_version=operation_abi_version) for item in operations
+    )
     file_bytes = operation_offset + len(operation_payload)
     header = struct.pack(
         RESIDENT_PACKAGE_HEADER_FORMAT,
-        RESIDENT_PACKAGE_MAGIC,
-        RESIDENT_PACKAGE_VERSION,
+        package_magic,
+        package_version,
         RESIDENT_PACKAGE_ENDIAN,
         RESIDENT_PACKAGE_HEADER_BYTES,
         0,
@@ -1330,19 +1477,36 @@ def _encode_package(
     return header + slot_payload + (b"\0" * (operation_offset - slot_offset - len(slot_payload))) + operation_payload
 
 
-def _descriptor_transfer_bytes(slot_count: int, operation_count: int) -> int:
+def _descriptor_transfer_bytes(
+    slot_count: int,
+    operation_count: int,
+    operation_abi_version: int = RESIDENT_OPERATION_ABI_V1,
+) -> int:
     # Descriptor bytes are reported separately from the 16-byte control block
     # and the 8-byte active-operation writes so application-visible H2D is
     # exactly initial + descriptor + control.
     return (
         _align8(slot_count * RESIDENT_SLOT_BYTES)
-        + _align8(operation_count * RESIDENT_OPERATION_BYTES)
+        + _align8(
+            operation_count
+            * _resident_abi_metadata(operation_abi_version)[2]
+        )
     )
 
 
-def _canonical_profile(tasklets_per_dpu: int = 1) -> HardwareTaskGraphResidentProfile:
+def _canonical_profile(
+    tasklets_per_dpu: int = 1,
+    *,
+    version: str = RESIDENT_PROFILE_VERSION,
+) -> HardwareTaskGraphResidentProfile:
+    if version == RESIDENT_PROFILE_VERSION:
+        output_tile_elements = RESIDENT_OUTPUT_TILE_ELEMENTS
+    elif version == RESIDENT_M46_PROFILE_VERSION:
+        output_tile_elements = RESIDENT_M46_OUTPUT_TILE_ELEMENTS
+    else:
+        raise ValueError(f"hardware_profile_violation: unsupported resident profile {version}")
     return HardwareTaskGraphResidentProfile(
-        version=RESIDENT_PROFILE_VERSION,
+        version=version,
         target="hardware",
         backend_id=RESIDENT_BACKEND_ID,
         route_id=RESIDENT_ROUTE_ID,
@@ -1357,7 +1521,7 @@ def _canonical_profile(tasklets_per_dpu: int = 1) -> HardwareTaskGraphResidentPr
         max_slot_descriptors=RESIDENT_MAX_SLOT_DESCRIPTORS,
         mram_pool_bytes=RESIDENT_MRAM_POOL_BYTES,
         max_contracted_combinations=RESIDENT_MAX_CONTRACTED_COMBINATIONS,
-        output_tile_elements=RESIDENT_OUTPUT_TILE_ELEMENTS,
+        output_tile_elements=output_tile_elements,
         numeric_modes=RESIDENT_NUMERIC_MODES,
         complex_policy=RESIDENT_COMPLEX_POLICY,
         synchronous_execution=True,
@@ -1369,17 +1533,24 @@ def _canonical_profile(tasklets_per_dpu: int = 1) -> HardwareTaskGraphResidentPr
 def _parse_profile(value: object) -> HardwareTaskGraphResidentProfile:
     if not isinstance(value, Mapping):
         raise ValueError("hardware_profile_violation: resident hardware_profile must be a mapping")
+    version = value.get("hardware_profile_version")
+    if version not in {RESIDENT_PROFILE_VERSION, RESIDENT_M46_PROFILE_VERSION}:
+        raise ValueError(f"hardware_profile_violation: unsupported resident profile {version}")
     tasklets = int(value.get("tasklets_per_dpu", 1))
-    if tasklets < 1 or tasklets > 16:
-        raise ValueError("hardware_profile_violation: tasklets_per_dpu must be between 1 and 16")
-    expected = _canonical_profile(tasklets).to_json_dict()
+    if tasklets not in RESIDENT_SUPPORTED_TASKLETS:
+        raise ValueError(
+            "hardware_profile_violation: tasklets_per_dpu must be one of 1, 2, 4, 8, 16"
+        )
+    if version == RESIDENT_PROFILE_VERSION and tasklets != 1:
+        raise ValueError("hardware_profile_violation: resident v1 profile is one-tasklet only")
+    expected = _canonical_profile(tasklets, version=version).to_json_dict()
     if set(value) != set(expected):
         raise ValueError("hardware_profile_violation: resident profile keys differ")
     for key, expected_value in expected.items():
         actual_value = value.get(key)
         if type(actual_value) is not type(expected_value) or actual_value != expected_value:
             raise ValueError(f"hardware_profile_violation: {key} must be {expected_value!r}")
-    return _canonical_profile(tasklets)
+    return _canonical_profile(tasklets, version=version)
 
 
 def _parse_variants(value: object) -> tuple[HardwareTaskGraphResidentVariant, ...]:
@@ -1504,7 +1675,21 @@ def _encoded_slot_id(slot: ResidentSlotDescriptor) -> int:
 
 
 def _require_canonical_profile(profile: HardwareTaskGraphResidentProfile) -> None:
-    if profile.to_json_dict() != _canonical_profile(profile.tasklets_per_dpu).to_json_dict():
+    if profile.tasklets_per_dpu not in RESIDENT_SUPPORTED_TASKLETS:
+        raise ResidentCapacityError(
+            "hardware_profile_violation: tasklets_per_dpu must be one of 1, 2, 4, 8, 16"
+        )
+    if profile.version == RESIDENT_PROFILE_VERSION and profile.tasklets_per_dpu != 1:
+        raise ResidentCapacityError(
+            "hardware_profile_violation: resident v1 profile is one-tasklet only"
+        )
+    if profile.version not in {RESIDENT_PROFILE_VERSION, RESIDENT_M46_PROFILE_VERSION}:
+        raise ResidentCapacityError(
+            "hardware_profile_violation: unsupported resident profile version"
+        )
+    if profile.to_json_dict() != _canonical_profile(
+        profile.tasklets_per_dpu, version=profile.version
+    ).to_json_dict():
         raise ResidentCapacityError(
             "hardware_profile_violation: resident package ABI requires the canonical frozen profile"
         )

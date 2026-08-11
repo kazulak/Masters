@@ -89,6 +89,9 @@ def main() -> int:
         action="store_true",
         help="build the separate resident native source during --prepare-only; never allocates a DPU",
     )
+    upmem_hardware_taskgraph_resident_parser.add_argument(
+        "--tasklets", type=int, help="M4.6 resident tasklets per DPU override"
+    )
 
     upmem_hardware_sliced_resident_parser = sub.add_parser(
         "upmem-hardware-sliced-resident-mvp",
@@ -178,6 +181,26 @@ def main() -> int:
         action="store_true",
         help="build the native target during --prepare-only; never allocates a DPU",
     )
+    upmem_hardware_distributed_m5_1_parser = sub.add_parser(
+        "upmem-hardware-distributed-m5-1",
+        help="prepare or execute the guarded M5.1 output-partition contraction",
+    )
+    upmem_hardware_distributed_m5_1_mode = (
+        upmem_hardware_distributed_m5_1_parser.add_mutually_exclusive_group(required=True)
+    )
+    upmem_hardware_distributed_m5_1_mode.add_argument("--prepare-only", action="store_true")
+    upmem_hardware_distributed_m5_1_mode.add_argument("--execute", action="store_true")
+    upmem_hardware_distributed_m5_1_parser.add_argument("--build", action="store_true")
+    upmem_hardware_distributed_m5_2_parser = sub.add_parser(
+        "upmem-hardware-distributed-m5-2",
+        help="prepare or execute the guarded M5.2 contracted-partition host reduction",
+    )
+    upmem_hardware_distributed_m5_2_mode = (
+        upmem_hardware_distributed_m5_2_parser.add_mutually_exclusive_group(required=True)
+    )
+    upmem_hardware_distributed_m5_2_mode.add_argument("--prepare-only", action="store_true")
+    upmem_hardware_distributed_m5_2_mode.add_argument("--execute", action="store_true")
+    upmem_hardware_distributed_m5_2_parser.add_argument("--build", action="store_true")
     upmem_hardware_taskgraph_m4_1_mode = (
         upmem_hardware_taskgraph_m4_1_parser.add_mutually_exclusive_group(required=True)
     )
@@ -433,6 +456,7 @@ def main() -> int:
                     root_dir,
                     suite_path=suite_path(args.suite, root_dir),
                     build=args.build,
+                    tasklets_per_dpu=args.tasklets,
                 )
                 print(
                     json.dumps(
@@ -448,7 +472,8 @@ def main() -> int:
                 )
                 return 0 if result.status == "prepared" else 2
             result = run_upmem_hardware_taskgraph_resident(
-                root_dir, suite_path=suite_path(args.suite, root_dir)
+                root_dir, suite_path=suite_path(args.suite, root_dir),
+                tasklets_per_dpu=args.tasklets,
             )
         except (OSError, ValueError) as exc:
             parser.error(str(exc))
@@ -635,6 +660,36 @@ def main() -> int:
             else:
                 result = execute(root_dir, suite_path=suite_path(args.suite, root_dir))
         except (OSError, RuntimeError, ValueError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(result, indent=2))
+        return 0 if result["status"] in {"prepared", "completed"} else 2
+    if args.command == "upmem-hardware-distributed-m5-1":
+        from quantum_bench.bench.upmem_hardware_distributed_m5_1 import execute, prepare
+
+        if args.build and not args.prepare_only:
+            parser.error("--build is only valid with --prepare-only")
+        if args.prepare_only and not args.build:
+            parser.error("--prepare-only requires --build for native plan validation")
+        try:
+            result = (
+                prepare(root_dir, build=args.build)
+                if args.prepare_only
+                else execute(root_dir)
+            )
+        except (OSError, RuntimeError, ValueError, TimeoutError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(result, indent=2))
+        return 0 if result["status"] in {"prepared", "completed"} else 2
+    if args.command == "upmem-hardware-distributed-m5-2":
+        from quantum_bench.bench.upmem_hardware_distributed_m5_2 import execute, prepare
+
+        if args.build and not args.prepare_only:
+            parser.error("--build is only valid with --prepare-only")
+        if args.prepare_only and not args.build:
+            parser.error("--prepare-only requires --build for native plan validation")
+        try:
+            result = prepare(root_dir, build=args.build) if args.prepare_only else execute(root_dir)
+        except (OSError, RuntimeError, ValueError, TimeoutError) as exc:
             parser.error(str(exc))
         print(json.dumps(result, indent=2))
         return 0 if result["status"] in {"prepared", "completed"} else 2

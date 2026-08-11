@@ -1,14 +1,15 @@
 #ifndef UPMEM_SDK_GENERIC_LOOP_RESIDENT_COMMON_H
 #define UPMEM_SDK_GENERIC_LOOP_RESIDENT_COMMON_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifndef NR_TASKLETS
 #define NR_TASKLETS 1
 #endif
 
-#if NR_TASKLETS < 1 || NR_TASKLETS > 16
-#error "generic_loop_resident_graph_session_v1 requires 1 <= NR_TASKLETS <= 16"
+#if NR_TASKLETS != 1 && NR_TASKLETS != 2 && NR_TASKLETS != 4 && NR_TASKLETS != 8 && NR_TASKLETS != 16
+#error "resident M4.6 profile requires NR_TASKLETS in {1,2,4,8,16}"
 #endif
 
 #ifndef UPMEM_GENERIC_MAX_RANK
@@ -38,13 +39,35 @@
 #define RESIDENT_INVALID_SLOT 0xffffffffu
 #define RESIDENT_OPERATION_CONTRACT 1u
 #define RESIDENT_OPERATION_COMPLEX_COMBINE 2u
-#define RESIDENT_PACKAGE_VERSION 1u
+#define RESIDENT_OPERATION_ABI_V1 1u
+#define RESIDENT_OPERATION_ABI_V2 2u
+#ifndef RESIDENT_OPERATION_ABI_VERSION
+#define RESIDENT_OPERATION_ABI_VERSION RESIDENT_OPERATION_ABI_V1
+#endif
+#if RESIDENT_OPERATION_ABI_VERSION != RESIDENT_OPERATION_ABI_V1 && RESIDENT_OPERATION_ABI_VERSION != RESIDENT_OPERATION_ABI_V2
+#error "resident operation ABI must be version 1 or 2"
+#endif
+#define RESIDENT_PACKAGE_MAGIC_V1 "UPRGPCK1"
+#define RESIDENT_PACKAGE_MAGIC_V2 "UPRGPCK2"
+#define RESIDENT_PACKAGE_VERSION_V1 1u
+#define RESIDENT_PACKAGE_VERSION_V2 2u
+#if RESIDENT_OPERATION_ABI_VERSION == RESIDENT_OPERATION_ABI_V1
+#define RESIDENT_PACKAGE_MAGIC RESIDENT_PACKAGE_MAGIC_V1
+#define RESIDENT_PACKAGE_VERSION RESIDENT_PACKAGE_VERSION_V1
+#define RESIDENT_OPERATION_BYTES 784u
+#else
+#define RESIDENT_PACKAGE_MAGIC RESIDENT_PACKAGE_MAGIC_V2
+#define RESIDENT_PACKAGE_VERSION RESIDENT_PACKAGE_VERSION_V2
+#define RESIDENT_OPERATION_BYTES 800u
+#endif
 #define RESIDENT_PACKAGE_ENDIAN 0x01020304u
 #define RESIDENT_SLOT_ID_MASK 0x3fffffffu
 #define RESIDENT_SLOT_INITIAL_FLAG 0x40000000u
 #define RESIDENT_SLOT_FINAL_FLAG 0x80000000u
 #define RESIDENT_COMPLETION_MAGIC 0x52534350u
+#ifndef RESIDENT_COMPLETION_VERSION
 #define RESIDENT_COMPLETION_VERSION 1u
+#endif
 #define RESIDENT_COMPLETION_PENDING 0u
 #define RESIDENT_COMPLETION_COMPLETED 1u
 
@@ -69,7 +92,35 @@ typedef struct {
     int32_t output_to_right_axes[UPMEM_GENERIC_MAX_RANK];
     int32_t contracted_to_left_axes[UPMEM_GENERIC_MAX_RANK];
     int32_t contracted_to_right_axes[UPMEM_GENERIC_MAX_RANK];
-} upmem_generic_args_t;
+} upmem_generic_args_v1_t;
+
+typedef struct {
+    uint32_t left_rank;
+    uint32_t right_rank;
+    uint32_t output_rank;
+    uint32_t contracted_rank;
+    uint32_t left_elems;
+    uint32_t right_elems;
+    uint32_t output_elems;
+    uint32_t contracted_elems;
+    uint32_t operand_mode;
+    uint32_t left_shape[UPMEM_GENERIC_MAX_RANK];
+    uint32_t right_shape[UPMEM_GENERIC_MAX_RANK];
+    uint32_t output_shape[UPMEM_GENERIC_MAX_RANK];
+    uint32_t contracted_dims[UPMEM_GENERIC_MAX_RANK];
+    uint32_t left_strides[UPMEM_GENERIC_MAX_RANK];
+    uint32_t right_strides[UPMEM_GENERIC_MAX_RANK];
+    uint32_t output_strides[UPMEM_GENERIC_MAX_RANK];
+    int32_t output_to_left_axes[UPMEM_GENERIC_MAX_RANK];
+    int32_t output_to_right_axes[UPMEM_GENERIC_MAX_RANK];
+    int32_t contracted_to_left_axes[UPMEM_GENERIC_MAX_RANK];
+    int32_t contracted_to_right_axes[UPMEM_GENERIC_MAX_RANK];
+    /* v2 only: distributed execution range, never implicit zero/full. */
+    uint32_t dpu_slice_offset;
+    uint32_t dpu_slice_elements;
+    uint32_t contracted_offset;
+    uint32_t contracted_elements_slice;
+} upmem_generic_args_v2_t;
 
 typedef struct {
     uint32_t slot_id;
@@ -85,18 +136,7 @@ typedef struct {
     uint32_t reserved;
 } resident_control_t;
 
-/* Small host-visible ABI record. The host reads this only after dpu_sync(). */
-/* ABI Alignment Map:
- * Offset 00: magic (uint32_t, 4 bytes)
- * Offset 04: version (uint32_t, 4 bytes)
- * Offset 08: active_operation_index (uint32_t, 4 bytes)
- * Offset 12: completion_status (uint32_t, 4 bytes)
- * Offset 16: completed_operation_count (uint32_t, 4 bytes)
- * Offset 20: output_elements_processed (uint32_t, 4 bytes)
- * Offset 24: output_checksum_fnv1a64 (uint64_t, 8 bytes)
- * Offset 32: dpu_run_time_cycles (uint64_t, 8 bytes)
- * Total Size: 40 bytes (perfectly aligned without padding on 32-bit & 64-bit)
- */
+/* Completion ABI is independent of the package/operation ABI above. */
 typedef struct {
     uint32_t magic;
     uint32_t version;
@@ -105,7 +145,14 @@ typedef struct {
     uint32_t completed_operation_count;
     uint32_t output_elements_processed;
     uint64_t output_checksum_fnv1a64;
+    /* This field is part of both completion ABIs. */
     uint64_t dpu_run_time_cycles;
+#if RESIDENT_COMPLETION_VERSION >= 2
+    uint32_t tasklet_processed_elements[16];
+    uint32_t active_tasklet_count;
+    uint32_t tasklet_min_processed_elements;
+    uint32_t tasklet_max_processed_elements;
+#endif
 } resident_completion_t;
 
 typedef struct {
@@ -120,8 +167,31 @@ typedef struct {
     uint32_t slot_out_imag;
     float left_scale;
     float right_scale;
-    upmem_generic_args_t args;
-} resident_operation_t;
+    upmem_generic_args_v1_t args;
+} resident_operation_v1_t;
+
+typedef struct {
+    uint32_t kind;
+    uint32_t mode;
+    uint32_t output_elements;
+    uint32_t slot_a;
+    uint32_t slot_b;
+    uint32_t slot_c;
+    uint32_t slot_d;
+    uint32_t slot_out_real;
+    uint32_t slot_out_imag;
+    float left_scale;
+    float right_scale;
+    upmem_generic_args_v2_t args;
+} resident_operation_v2_t;
+
+#if RESIDENT_OPERATION_ABI_VERSION == RESIDENT_OPERATION_ABI_V1
+typedef upmem_generic_args_v1_t upmem_generic_args_t;
+typedef resident_operation_v1_t resident_operation_t;
+#else
+typedef upmem_generic_args_v2_t upmem_generic_args_t;
+typedef resident_operation_v2_t resident_operation_t;
+#endif
 
 typedef struct {
     char magic[8];
@@ -143,5 +213,28 @@ typedef struct {
     uint32_t max_rank;
     uint32_t reserved;
 } resident_package_header_t;
+
+_Static_assert(sizeof(upmem_generic_args_v1_t) == 740u, "resident generic args v1 ABI drifted");
+_Static_assert(sizeof(upmem_generic_args_v2_t) == 756u, "resident generic args v2 ABI drifted");
+#ifndef __DPU__
+_Static_assert(offsetof(upmem_generic_args_v1_t, left_rank) == 0u, "resident generic args v1 offset drifted");
+_Static_assert(offsetof(upmem_generic_args_v1_t, contracted_to_right_axes) == 676u, "resident generic args v1 offset drifted");
+_Static_assert(offsetof(upmem_generic_args_v2_t, dpu_slice_offset) == 740u, "resident generic args v2 slice offset drifted");
+_Static_assert(offsetof(upmem_generic_args_v2_t, contracted_elements_slice) == 752u, "resident generic args v2 slice offset drifted");
+#endif
+_Static_assert(sizeof(resident_operation_v1_t) == 784u, "resident operation v1 ABI drifted");
+_Static_assert(sizeof(resident_operation_v2_t) == 800u, "resident operation v2 ABI drifted");
+#ifndef __DPU__
+_Static_assert(offsetof(resident_operation_v1_t, args) == 44u, "resident operation v1 args offset drifted");
+_Static_assert(offsetof(resident_operation_v2_t, args) == 44u, "resident operation v2 args offset drifted");
+_Static_assert(offsetof(resident_operation_v2_t, args) + offsetof(upmem_generic_args_v2_t, dpu_slice_offset) == 784u, "resident operation v2 slice offset drifted");
+_Static_assert(offsetof(resident_operation_v2_t, args) + offsetof(upmem_generic_args_v2_t, contracted_elements_slice) == 796u, "resident operation v2 slice offset drifted");
+#endif
+_Static_assert(sizeof(resident_package_header_t) == 96u, "resident package header ABI drifted");
+#if RESIDENT_COMPLETION_VERSION == 1
+_Static_assert(sizeof(resident_completion_t) == 40u, "resident completion v1 ABI drifted");
+#else
+_Static_assert(sizeof(resident_completion_t) == 120u, "resident completion v2 ABI drifted");
+#endif
 
 #endif

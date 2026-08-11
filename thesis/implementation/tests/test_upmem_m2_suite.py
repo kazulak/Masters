@@ -269,7 +269,7 @@ def test_m2_1_fixture_builds_dependent_hx_graph_and_useful_cpu_slices(tmp_path) 
             + manifest["descriptor_h2d_bytes"]
             + manifest["control_h2d_bytes"]
             + manifest["final_d2h_bytes"]
-            == 1712
+                == 1712
         )
 
 

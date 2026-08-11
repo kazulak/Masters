@@ -766,6 +766,12 @@ def _load_run_records(run_dir: Path) -> list[JsonDict]:
     normalized = run_dir / "normalized_records.jsonl"
     if normalized.exists():
         return read_jsonl(normalized)
+    nested = sorted(run_dir.rglob("normalized_records.jsonl"))
+    if nested:
+        records: list[JsonDict] = []
+        for path in nested:
+            records.extend(read_jsonl(path))
+        return records
     return load_result_records([run_dir])
 
 
@@ -776,6 +782,18 @@ def _write_report_artifacts(run_dir: Path, records: list[JsonDict], *, input_run
     _write_csv(run_dir / "quantization_accuracy_summary.csv", _quantization_rows(records), ["case_id", "policy", "quantization_mode", "validation_status", "max_abs_error", "l2_error"])
     _write_csv(run_dir / "unsupported_reasons.csv", _unsupported_rows(records), ["case_id", "policy", "quantization_mode", "reason", "count"])
     _write_csv(run_dir / "metrics" / "per_task_metrics.csv", _per_task_rows(input_run_dir), sorted(_per_task_fieldnames(input_run_dir)))
+    _write_csv(
+        run_dir / "metrics" / "resident_observability.csv",
+        _resident_observability_rows(records),
+        RESIDENT_OBSERVABILITY_FIELDS,
+    )
+    write_json(
+        run_dir / "metrics" / "resident_operation_tasklet_metrics.json",
+        {
+            "schema_version": "resident_operation_tasklet_metrics_v1",
+            "records": _resident_operation_tasklet_rows(records),
+        },
+    )
     _write_csv(run_dir / "metrics" / "per_case_metrics.csv", _per_case_rows(records), ["case_id", "policy", "quantization_mode", "task_count", "validated_task_count", "unsupported_task_count", "status"])
     _write_csv(run_dir / "metrics" / "timing_breakdown.csv", _timing_rows(records), ["case_id", "policy", "quantization_mode", *TIMING_FIELDS, "timing_status"])
     write_json(run_dir / "validation" / "validation_summary.json", _validation_summary(records))
@@ -1665,6 +1683,88 @@ def _per_task_rows(run_dir: Path) -> list[JsonDict]:
     rows: list[JsonDict] = []
     for path in sorted(run_dir.rglob("upmem_taskgraph_task_metrics.jsonl")):
         rows.extend(read_jsonl(path))
+    return rows
+
+
+RESIDENT_OBSERVABILITY_FIELDS = [
+    "run_id", "suite_id", "case_id", "repeat_id", "path_variant_id",
+    "quantization_mode", "hardware_profile_version", "completion_abi_version",
+    "tasklets_per_dpu", "component_operation_count", "real_pass_count",
+    "imaginary_pass_count", "complex_contract_pass_count",
+    "complex_combine_pass_count", "complex_pass_count", "dpu_run_time_cycles",
+    "dpu_graph_cycle_sum", "total_active_tasklet_count", "total_idle_tasklet_count",
+    "mean_tasklet_utilization", "max_tasklet_work_imbalance",
+    "tasklet_work_imbalance_basis", "tasklet_utilization_basis",
+]
+
+
+def _resident_operation_tasklet_rows(records: list[JsonDict]) -> list[JsonDict]:
+    rows: list[JsonDict] = []
+    for record in records:
+        timings = record.get("operation_timing")
+        if not isinstance(timings, list):
+            continue
+        for operation in timings:
+            if not isinstance(operation, dict):
+                continue
+            rows.append({
+                "run_id": record.get("run_id"),
+                "suite_id": record.get("suite_id"),
+                "case_id": record.get("case_id"),
+                "repeat_id": record.get("repeat_id"),
+                "path_variant_id": record.get("path_variant_id"),
+                "quantization_mode": record.get("quantization_mode"),
+                "tasklets_per_dpu": record.get("tasklets_per_dpu"),
+                "operation_id": operation.get("operation_id"),
+                "task_id": operation.get("task_id"),
+                "component": operation.get("component"),
+                "dpu_cycles": operation.get("dpu_cycles"),
+                "tasklet_processed_elements": operation.get("tasklet_processed_elements", []),
+                "active_tasklet_count": operation.get("active_tasklet_count"),
+                "idle_tasklet_count": operation.get("idle_tasklet_count"),
+                "tasklet_utilization": operation.get("tasklet_utilization"),
+                "work_imbalance": operation.get("work_imbalance"),
+                "tasklet_work_imbalance_basis": record.get("tasklet_work_imbalance_basis"),
+                "tasklet_utilization_basis": record.get("tasklet_utilization_basis"),
+            })
+    return rows
+
+
+def _resident_observability_rows(records: list[JsonDict]) -> list[JsonDict]:
+    rows: list[JsonDict] = []
+    for record in records:
+        timings = record.get("operation_timing")
+        if not isinstance(timings, list) or not timings:
+            continue
+        active = [item["active_tasklet_count"] for item in timings if isinstance(item, dict) and isinstance(item.get("active_tasklet_count"), int)]
+        idle = [item["idle_tasklet_count"] for item in timings if isinstance(item, dict) and isinstance(item.get("idle_tasklet_count"), int)]
+        utilization = [float(item["tasklet_utilization"]) for item in timings if isinstance(item, dict) and isinstance(item.get("tasklet_utilization"), (int, float))]
+        imbalance = [float(item["work_imbalance"]) for item in timings if isinstance(item, dict) and isinstance(item.get("work_imbalance"), (int, float))]
+        rows.append({
+            "run_id": record.get("run_id"),
+            "suite_id": record.get("suite_id"),
+            "case_id": record.get("case_id"),
+            "repeat_id": record.get("repeat_id"),
+            "path_variant_id": record.get("path_variant_id"),
+            "quantization_mode": record.get("quantization_mode"),
+            "hardware_profile_version": record.get("hardware_profile_version"),
+            "completion_abi_version": record.get("completion_abi_version"),
+            "tasklets_per_dpu": record.get("tasklets_per_dpu"),
+            "component_operation_count": record.get("component_operation_count", len(timings)),
+            "real_pass_count": record.get("real_pass_count"),
+            "imaginary_pass_count": record.get("imaginary_pass_count"),
+            "complex_contract_pass_count": record.get("complex_contract_pass_count"),
+            "complex_combine_pass_count": record.get("complex_combine_pass_count"),
+            "complex_pass_count": record.get("complex_pass_count"),
+            "dpu_run_time_cycles": record.get("dpu_run_time_cycles"),
+            "dpu_graph_cycle_sum": record.get("dpu_graph_cycle_sum"),
+            "total_active_tasklet_count": sum(active) if active else None,
+            "total_idle_tasklet_count": sum(idle) if idle else None,
+            "mean_tasklet_utilization": sum(utilization) / len(utilization) if utilization else None,
+            "max_tasklet_work_imbalance": max(imbalance) if imbalance else None,
+            "tasklet_work_imbalance_basis": record.get("tasklet_work_imbalance_basis"),
+            "tasklet_utilization_basis": record.get("tasklet_utilization_basis"),
+        })
     return rows
 
 

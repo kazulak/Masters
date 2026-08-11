@@ -49,6 +49,9 @@ from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
     RESIDENT_NUMERIC_MODES,
     RESIDENT_OPERATION_BYTES,
     RESIDENT_PROFILE_VERSION,
+    RESIDENT_M46_PROFILE_VERSION,
+    RESIDENT_M46_OUTPUT_TILE_ELEMENTS,
+    RESIDENT_SUPPORTED_TASKLETS,
     RESIDENT_ROUTE_ID,
     RESIDENT_SESSION_PROTOCOL,
     RESIDENT_TIMING_SCOPE,
@@ -1167,15 +1170,32 @@ RESIDENT_NATIVE_CLEANUP_GRACE_S = 2.0
 
 
 def _validate_resident_profile(profile: Any) -> None:
-    expected = {
-        "hardware_profile_version": RESIDENT_PROFILE_VERSION,
+    try:
+        actual = profile.to_json_dict()
+    except AttributeError as exc:
+        raise ValueError("hardware_profile_violation: resident profile is not serializable") from exc
+    if actual.get("hardware_profile_version") not in {
+        RESIDENT_PROFILE_VERSION,
+        RESIDENT_M46_PROFILE_VERSION,
+    }:
+        raise ValueError("hardware_profile_violation: resident profile version is unsupported")
+    if actual.get("requested_dpu_count") != 1:
+        raise ValueError("hardware_profile_violation: resident profile must request one DPU")
+    tasklets = actual.get("tasklets_per_dpu")
+    if tasklets not in RESIDENT_SUPPORTED_TASKLETS:
+        raise ValueError("hardware_profile_violation: resident profile tasklet count is unsupported")
+    if actual.get("hardware_profile_version") == RESIDENT_PROFILE_VERSION and tasklets != 1:
+        raise ValueError("hardware_profile_violation: resident v1 profile is one-tasklet only")
+    expected_tile = RESIDENT_OUTPUT_TILE_ELEMENTS if actual["hardware_profile_version"] == RESIDENT_PROFILE_VERSION else RESIDENT_M46_OUTPUT_TILE_ELEMENTS
+    if actual.get("output_tile_elements") != expected_tile:
+        raise ValueError("hardware_profile_violation: resident output tile does not match profile")
+    if actual.get("session_protocol") != RESIDENT_SESSION_PROTOCOL:
+        raise ValueError("hardware_profile_violation: resident session protocol is unsupported")
+    for key, value in {
         "target": "hardware",
         "backend_id": RESIDENT_BACKEND_ID,
         "route_id": RESIDENT_ROUTE_ID,
-        "session_protocol": RESIDENT_SESSION_PROTOCOL,
         "timing_scope": RESIDENT_TIMING_SCOPE,
-        "requested_dpu_count": 1,
-        "tasklets_per_dpu": 1,
         "max_rank": RESIDENT_MAX_RANK,
         "max_tensor_elements": RESIDENT_MAX_ELEMENTS,
         "max_logical_tasks": RESIDENT_MAX_LOGICAL_TASKS,
@@ -1183,17 +1203,11 @@ def _validate_resident_profile(profile: Any) -> None:
         "max_slot_descriptors": RESIDENT_MAX_SLOT_DESCRIPTORS,
         "mram_pool_bytes": RESIDENT_MRAM_POOL_BYTES,
         "max_contracted_combinations": RESIDENT_MAX_CONTRACTED_COMBINATIONS,
-        "output_tile_elements": RESIDENT_OUTPUT_TILE_ELEMENTS,
         "numeric_modes": list(RESIDENT_NUMERIC_MODES),
         "complex_policy": RESIDENT_COMPLEX_POLICY,
         "synchronous_execution": True,
         "performance_claim_applicable": False,
-    }
-    try:
-        actual = profile.to_json_dict()
-    except AttributeError as exc:
-        raise ValueError("hardware_profile_violation: resident profile is not serializable") from exc
-    for key, value in expected.items():
+    }.items():
         if actual.get(key) != value:
             raise ValueError(f"hardware_profile_violation: resident profile {key} mismatch")
     timeout = actual.get("timeout_s")
@@ -1266,7 +1280,9 @@ def build_resident_hardware_session(
         f"RESIDENT_MAX_SLOT_DESCRIPTORS={int(profile.max_slot_descriptors)}",
         f"RESIDENT_MRAM_POOL_BYTES={int(profile.mram_pool_bytes)}",
         f"RESIDENT_OUTPUT_TILE_ELEMS={int(profile.output_tile_elements)}",
-        "NR_TASKLETS=1",
+        f"NR_TASKLETS={int(profile.tasklets_per_dpu)}",
+        f"PROFILE_VERSION={profile.version}",
+        f"COMPLETION_VERSION={2 if profile.version == RESIDENT_M46_PROFILE_VERSION else 1}",
         "UPMEM_GENERIC_HARDWARE_MVP=1",
     )
     started = time.perf_counter()
@@ -1347,7 +1363,7 @@ def execute_resident_graph_session(
     for key, expected in (
         ("route_id", "upmem_tn_hardware_taskgraph_resident"),
         ("backend_id", "upmem_sdk_hardware_taskgraph_resident"),
-        ("hardware_profile_version", "hardware_taskgraph_single_dpu_mram_resident_v1"),
+        ("hardware_profile_version", profile.version),
         ("target", "hardware"),
         ("sdk_allocation_profile", "backend=hw"),
         ("session_protocol", RESIDENT_NATIVE_SCHEMA_VERSION),
@@ -1356,8 +1372,10 @@ def execute_resident_graph_session(
             raise ValueError(f"hardware_profile_violation: resident request {key} mismatch")
     if manifest.get("graph_request_count") != 1:
         raise ValueError("hardware_profile_violation: resident graph request count must be one")
-    if manifest.get("requested_dpus") != 1 or not isinstance(manifest.get("tasklets"), int) or manifest.get("tasklets") < 1 or manifest.get("tasklets") > 16:
-        raise ValueError("hardware_profile_violation: resident request requires one DPU and 1..16 tasklets")
+    if manifest.get("requested_dpus") != 1 or manifest.get("tasklets") not in RESIDENT_SUPPORTED_TASKLETS:
+        raise ValueError("hardware_profile_violation: resident request requires one DPU and 1, 2, 4, 8, or 16 tasklets")
+    if manifest.get("tasklets") != profile.tasklets_per_dpu:
+        raise ValueError("hardware_profile_violation: resident request tasklet count does not match profile")
     if manifest.get("target") != "hardware" or manifest.get("sdk_allocation_profile") != RESIDENT_ALLOCATION_PROFILE:
         raise ValueError("hardware_profile_violation: resident request hardware allocation identity mismatch")
     package_ref = manifest.get("package_path")
@@ -1385,7 +1403,9 @@ def execute_resident_graph_session(
     )
 
     try:
-        package_metadata = validate_resident_graph_package_file(package_path, profile=profile)
+        package_metadata = validate_resident_graph_package_file(
+            package_path, profile=profile, operation_abi_version=1
+        )
     except (OSError, ValueError) as exc:
         raise ValueError(f"hardware_profile_violation: resident package validation failed: {exc}") from exc
     _validate_resident_manifest(manifest, package_metadata, root, profile)
@@ -1451,6 +1471,16 @@ def _validate_resident_manifest(
         raise ValueError("hardware_profile_violation: resident logical task count exceeds profile")
     operation_count = integer(manifest.get("component_operation_count"), "component_operation_count", positive=True)
     slot_count = integer(manifest.get("slot_descriptor_count"), "slot_descriptor_count", positive=True)
+    if (
+        manifest.get("package_magic") != "UPRGPCK1"
+        or manifest.get("package_version") != 1
+        or manifest.get("operation_abi_version") != 1
+        or manifest.get("operation_bytes") != 784
+        or manifest.get("dpu_binary_abi") != "dpu_resident"
+        or package_metadata.get("package_magic") != "UPRGPCK1"
+        or package_metadata.get("operation_abi_version") != 1
+    ):
+        raise ValueError("hardware_profile_violation: resident manifest ABI identity mismatch")
     if operation_count != package_metadata.get("operation_count") or slot_count != package_metadata.get("slot_count"):
         raise ValueError("hardware_profile_violation: resident manifest/package descriptor count mismatch")
     if manifest.get("mram_pool_bytes") != profile.mram_pool_bytes:
@@ -1570,7 +1600,7 @@ def _resident_response_valid(response: JsonDict, manifest: Mapping[str, Any], pr
         return False
     if response.get("route_id") != RESIDENT_ROUTE_ID or response.get("backend_id") != RESIDENT_BACKEND_ID:
         return False
-    if response.get("hardware_profile_version") != RESIDENT_PROFILE_VERSION or response.get("target_requested") != "hardware":
+    if response.get("hardware_profile_version") != profile.version or response.get("target_requested") != "hardware":
         return False
     if response.get("target_observed") != "hardware" or response.get("sdk_allocation_profile") != RESIDENT_ALLOCATION_PROFILE:
         return False
@@ -1623,6 +1653,62 @@ def _resident_response_valid(response: JsonDict, manifest: Mapping[str, Any], pr
     ):
         if not finite_time(response.get(key)):
             return False
+    completion_version = response.get("completion_abi_version")
+    expected_completion_version = 2 if profile.version == RESIDENT_M46_PROFILE_VERSION else 1
+    if completion_version != expected_completion_version:
+        return False
+    if not isinstance(response.get("dpu_run_time_cycles"), int) or isinstance(response.get("dpu_run_time_cycles"), bool):
+        return False
+    if response.get("dpu_run_time_cycles", 0) < 0:
+        return False
+    if expected_completion_version >= 2:
+        operation_cycles = response.get("dpu_operation_cycles")
+        graph_cycle_sum = response.get("graph_cycle_sum")
+        counters = response.get("tasklet_processed_elements")
+        active_counts = response.get("active_tasklet_count")
+        idle_counts = response.get("idle_tasklet_count")
+        utilization = response.get("tasklet_utilization")
+        imbalance = response.get("tasklet_work_imbalance")
+        if (
+            not isinstance(operation_cycles, list)
+            or len(operation_cycles) != operation_count
+            or not isinstance(counters, list)
+            or len(counters) != operation_count
+            or not isinstance(active_counts, list)
+            or len(active_counts) != operation_count
+            or not isinstance(idle_counts, list)
+            or len(idle_counts) != operation_count
+            or not isinstance(utilization, list)
+            or len(utilization) != operation_count
+            or not isinstance(imbalance, list)
+            or len(imbalance) != operation_count
+            or graph_cycle_sum != response.get("dpu_run_time_cycles")
+            or sum(operation_cycles) != graph_cycle_sum
+        ):
+            return False
+        for cycle, row, active, idle, used, ratio in zip(
+            operation_cycles, counters, active_counts, idle_counts, utilization, imbalance
+        ):
+            if (
+                not isinstance(cycle, int)
+                or isinstance(cycle, bool)
+                or cycle < 0
+                or not isinstance(row, list)
+                or len(row) != profile.tasklets_per_dpu
+                or any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in row)
+                or not isinstance(active, int)
+                or isinstance(active, bool)
+                or active < 0
+                or active > profile.tasklets_per_dpu
+                or not isinstance(idle, int)
+                or isinstance(idle, bool)
+                or idle != profile.tasklets_per_dpu - active
+                or not finite_time(used)
+                or float(used) > 1.0
+                or not finite_time(ratio)
+                or float(ratio) > 1.0
+            ):
+                return False
     final_outputs = response.get("final_outputs")
     expected_outputs = manifest.get("final_outputs")
     if not isinstance(final_outputs, list) or not isinstance(expected_outputs, list):

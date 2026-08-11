@@ -152,9 +152,9 @@ int main(int argc, char **argv) {
         error_message = (char *)"DPU_BACKEND must be unset";
         goto release_and_write;
     }
-    if (NR_TASKLETS < 1 || NR_TASKLETS > 16 || request.header.operation_count == 0u || request.header.operation_count > RESIDENT_MAX_COMPONENT_OPS) {
+    if ((NR_TASKLETS != 1 && NR_TASKLETS != 2 && NR_TASKLETS != 4 && NR_TASKLETS != 8 && NR_TASKLETS != 16) || request.header.operation_count == 0u || request.header.operation_count > RESIDENT_MAX_COMPONENT_OPS) {
         failure_stage = "hardware_profile_violation";
-        error_message = (char *)"resident host requires 1 <= NR_TASKLETS <= 16 and bounded descriptors";
+            error_message = (char *)"resident host requires NR_TASKLETS in 1, 2, 4, 8, 16 and bounded descriptors";
         goto release_and_write;
     }
     if (resident_interrupted) {
@@ -310,9 +310,45 @@ int main(int argc, char **argv) {
             resident_completion_t completion;
             struct dpu_set_t dpu_first;
             DPU_FOREACH(set, dpu_first) {
-                if (dpu_copy_from(dpu_first, "RESIDENT_COMPLETION", 0, &completion, sizeof(completion)) == DPU_OK) {
-                    timing.dpu_run_time_cycles += completion.dpu_run_time_cycles;
+                const dpu_error_t completion_error = dpu_copy_from(dpu_first, "RESIDENT_COMPLETION", 0, &completion, sizeof(completion));
+                if (completion_error != DPU_OK) {
+                    resident_report_sdk_error("resident completion transfer", completion_error);
+                    sdk_error_code = (int)completion_error;
+                    failure_stage = "completion_transfer_failed";
+                    goto release_and_write;
                 }
+#if RESIDENT_COMPLETION_VERSION >= 2
+                    if (completion.magic != RESIDENT_COMPLETION_MAGIC ||
+                        completion.version != RESIDENT_COMPLETION_VERSION ||
+                        completion.completion_status != RESIDENT_COMPLETION_COMPLETED ||
+                        completion.active_operation_index != operation_index) {
+                        failure_stage = "completion_abi_validation_failed";
+                        goto release_and_write;
+                    }
+                    timing.operation_dpu_cycles[operation_index] = completion.dpu_run_time_cycles;
+                    timing.operation_active_tasklet_count[operation_index] = completion.active_tasklet_count;
+                    for (uint32_t tasklet = 0; tasklet < 16u; tasklet++) {
+                        timing.operation_tasklet_processed_elements[operation_index][tasklet] = completion.tasklet_processed_elements[tasklet];
+                    }
+                    timing.operation_idle_tasklet_count[operation_index] = (uint32_t)NR_TASKLETS - completion.active_tasklet_count;
+                    timing.operation_tasklet_utilization_ppm[operation_index] =
+                        (uint32_t)(((uint64_t)completion.active_tasklet_count * 1000000ULL) / (uint32_t)NR_TASKLETS);
+                    if (completion.tasklet_max_processed_elements > 0u) {
+                        timing.operation_tasklet_work_imbalance_ppm[operation_index] =
+                            (uint32_t)(((uint64_t)(completion.tasklet_max_processed_elements - completion.tasklet_min_processed_elements) * 1000000ULL) /
+                                completion.tasklet_max_processed_elements);
+                    }
+#else
+                    if (completion.magic != RESIDENT_COMPLETION_MAGIC || completion.version != RESIDENT_COMPLETION_VERSION ||
+                        completion.completion_status != RESIDENT_COMPLETION_COMPLETED || completion.active_operation_index != operation_index) {
+                        failure_stage = "completion_abi_validation_failed";
+                        goto release_and_write;
+                    }
+#endif
+                    timing.dpu_run_time_cycles += completion.dpu_run_time_cycles;
+#if RESIDENT_COMPLETION_VERSION < 2
+                    timing.operation_dpu_cycles[operation_index] = completion.dpu_run_time_cycles;
+#endif
                 break;
             }
         }
@@ -383,7 +419,7 @@ write_response:
     for (size_t index = 0; index < request.final_count; index++) free(output_buffers == NULL ? NULL : output_buffers[index]);
     free(input_buffers);
     free(output_buffers);
-    if (error_message != NULL && error_message != (char *)"UPMEM_ALLOW_PHYSICAL_HARDWARE=1 is required" && error_message != (char *)"DPU_BACKEND must be unset" && error_message != (char *)"resident host requires 1 <= NR_TASKLETS <= 16 and bounded descriptors" && error_message != interrupted_message && error_message != output_nonfinite_message) free(error_message);
+    if (error_message != NULL && error_message != (char *)"UPMEM_ALLOW_PHYSICAL_HARDWARE=1 is required" && error_message != (char *)"DPU_BACKEND must be unset" && error_message != (char *)"resident host requires NR_TASKLETS in 1, 2, 4, 8, 16 and bounded descriptors" && error_message != interrupted_message && error_message != output_nonfinite_message) free(error_message);
     resident_request_free(&request);
     return rc;
 }

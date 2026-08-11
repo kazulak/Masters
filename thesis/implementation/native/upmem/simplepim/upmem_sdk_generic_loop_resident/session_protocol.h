@@ -6,15 +6,26 @@
 
 #include "common.h"
 
+#ifndef RESIDENT_SESSION_SCHEMA
 #define RESIDENT_SESSION_SCHEMA "generic_loop_resident_graph_session_v1"
+#endif
 #define RESIDENT_REQUEST_KIND "resident_graph_request"
 #define RESIDENT_RESPONSE_KIND "resident_graph_response"
 #define RESIDENT_MAX_PATH 4096u
 #define RESIDENT_ROUTE_ID "upmem_tn_hardware_taskgraph_resident"
 #define RESIDENT_BACKEND_ID "upmem_sdk_hardware_taskgraph_resident"
+#ifndef RESIDENT_PROFILE_VERSION
 #define RESIDENT_PROFILE_VERSION "hardware_taskgraph_single_dpu_mram_resident_v1"
+#endif
 #define RESIDENT_ALLOCATION_PROFILE "backend=hw"
 #define RESIDENT_TARGET "hardware"
+#ifndef RESIDENT_DPU_BINARY_NAME
+#if RESIDENT_OPERATION_ABI_VERSION == RESIDENT_OPERATION_ABI_V2
+#define RESIDENT_DPU_BINARY_NAME "dpu_resident_v2"
+#else
+#define RESIDENT_DPU_BINARY_NAME "dpu_resident"
+#endif
+#endif
 
 typedef struct {
     uint32_t slot_id;
@@ -68,6 +79,12 @@ typedef struct {
     double output_write_time_s;
     double release_time_s;
     uint64_t dpu_run_time_cycles;
+    uint64_t operation_dpu_cycles[RESIDENT_MAX_COMPONENT_OPS];
+    uint32_t operation_tasklet_processed_elements[RESIDENT_MAX_COMPONENT_OPS][16];
+    uint32_t operation_active_tasklet_count[RESIDENT_MAX_COMPONENT_OPS];
+    uint32_t operation_idle_tasklet_count[RESIDENT_MAX_COMPONENT_OPS];
+    uint32_t operation_tasklet_utilization_ppm[RESIDENT_MAX_COMPONENT_OPS];
+    uint32_t operation_tasklet_work_imbalance_ppm[RESIDENT_MAX_COMPONENT_OPS];
 } resident_timing_t;
 
 int resident_request_load(
@@ -77,6 +94,14 @@ int resident_request_load(
 );
 
 int resident_request_load_execution_plan(
+    const char *manifest_path,
+    resident_request_t *request,
+    char **error_message
+);
+
+/* The raw resident host remains single-DPU.  The execution-plan v2 host uses
+ * this separate loader solely to admit its 1/2/4-DPU work-unit sidecar. */
+int resident_request_load_execution_plan_v2(
     const char *manifest_path,
     resident_request_t *request,
     char **error_message

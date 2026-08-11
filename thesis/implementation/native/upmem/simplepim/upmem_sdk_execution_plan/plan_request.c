@@ -14,6 +14,14 @@ static void request_error(char **message, const char *value) {
     if (message != NULL && *message == NULL) *message = strdup(value);
 }
 
+#if RESIDENT_OPERATION_ABI_VERSION == RESIDENT_OPERATION_ABI_V2
+static int resident_binary_name_matches_abi(const char *path) {
+    const char *base = path == NULL ? NULL : strrchr(path, '/');
+    const char *name = base == NULL ? path : base + 1;
+    return name != NULL && strcmp(name, "dpu_resident_v2") == 0;
+}
+#endif
+
 static int valid_slot(const resident_request_t *resident, uint32_t slot_id) {
     return resident != NULL && slot_id < resident->header.slot_count;
 }
@@ -82,7 +90,7 @@ static int validate_schedule(execution_plan_request_t *request, char **error_mes
     int dpu_seen[EXECUTION_PLAN_MAX_WAVES][EXECUTION_PLAN_MAX_DPUS] = {{0}};
     int wave_seen[EXECUTION_PLAN_MAX_WAVES] = {0};
     if (request->schedule.record_count != operation_count ||
-        request->schedule.header.dpu_count < 1u || request->schedule.header.dpu_count > EXECUTION_PLAN_MAX_DPUS ||
+        request->schedule.header.dpu_count < 1u || request->schedule.header.dpu_count > EXECUTION_PLAN_V1_MAX_DPUS ||
         request->schedule.header.tasklets_per_dpu != 1u) {
         request_error(error_message, "hardware_profile_violation: schedule/package operation or resource counts differ");
         return 1;
@@ -236,13 +244,79 @@ failed:
     return 1;
 }
 
+int execution_plan_request_load_v2(
+    const char *resident_manifest_path,
+    const char *distributed_plan_path,
+    uint32_t warmup_repetitions,
+    uint32_t measured_repetitions,
+    execution_plan_request_t *request,
+    char **error_message
+) {
+#if RESIDENT_OPERATION_ABI_VERSION != RESIDENT_OPERATION_ABI_V2
+    (void)resident_manifest_path;
+    (void)distributed_plan_path;
+    (void)warmup_repetitions;
+    (void)measured_repetitions;
+    (void)request;
+    request_error(error_message, "hardware_profile_violation: distributed v2 requires the resident package ABI v2 host");
+    return 1;
+#else
+    if (request == NULL || resident_manifest_path == NULL || distributed_plan_path == NULL ||
+        warmup_repetitions > 1u || measured_repetitions == 0u || measured_repetitions > EXECUTION_PLAN_MAX_REPETITIONS) {
+        request_error(error_message, "hardware_profile_violation: invalid distributed v2 request arguments");
+        return 1;
+    }
+    memset(request, 0, sizeof(*request));
+    request->distributed_v2_mode = 1;
+    request->warmup_repetitions = warmup_repetitions;
+    request->measured_repetitions = measured_repetitions;
+    request->resident_manifest_path = strdup(resident_manifest_path);
+    if (request->resident_manifest_path == NULL ||
+        resident_request_load_execution_plan_v2(resident_manifest_path, &request->resident, error_message) != 0) {
+        if (error_message != NULL && *error_message == NULL) request_error(error_message, "resident_package_parse_failed: resident request could not be loaded");
+        goto failed;
+    }
+    if (!resident_binary_name_matches_abi(request->resident.dpu_binary_path)) {
+        request_error(error_message, "hardware_profile_violation: distributed v2 requires dpu_resident_v2");
+        goto failed;
+    }
+    if (execution_plan_sha256_file(request->resident.package_path, request->actual_package_file_sha256) != 0 ||
+        execution_plan_hash_file(request->resident.package_path, &request->package_file_fnv1a64_runtime) != 0) {
+        request_error(error_message, "package_hash_failed: resident package identity could not be computed");
+        goto failed;
+    }
+    {
+        unsigned char digest[32];
+        if (hex_digest_bytes(request->actual_package_file_sha256, digest) != 0 ||
+            execution_plan_distributed_v2_load(distributed_plan_path, digest, &request->resident,
+                &request->distributed_v2, error_message) != 0) goto failed;
+    }
+    if (validate_package(request, error_message) != 0) goto failed;
+    if (request->resident.requested_dpus != 1u &&
+        request->resident.requested_dpus != request->distributed_v2.header.dpu_count) {
+        request_error(error_message, "hardware_profile_violation: resident request DPU count conflicts with distributed v2 sidecar");
+        goto failed;
+    }
+    request->producer_by_slot[request->resident.final_outputs[0].slot_id] = 0;
+    return 0;
+failed:
+    execution_plan_request_free(request);
+    return 1;
+#endif
+}
+
 int execution_plan_request_validate(execution_plan_request_t *request, char **error_message) {
-    return request == NULL || validate_package(request, error_message) != 0 || validate_schedule(request, error_message) != 0;
+    if (request == NULL || validate_package(request, error_message) != 0) return 1;
+    if (request->distributed_v2_mode) return 0;
+    return validate_schedule(request, error_message);
 }
 
 void execution_plan_request_free(execution_plan_request_t *request) {
     if (request == NULL) return;
     free(request->resident_manifest_path);
+#if RESIDENT_OPERATION_ABI_VERSION == RESIDENT_OPERATION_ABI_V2
+    execution_plan_distributed_v2_free(&request->distributed_v2);
+#endif
     execution_plan_schedule_free(&request->schedule);
     resident_request_free(&request->resident);
     memset(request, 0, sizeof(*request));

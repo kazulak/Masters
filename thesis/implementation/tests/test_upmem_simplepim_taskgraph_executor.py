@@ -471,14 +471,14 @@ def test_native_completion_counts_must_not_be_nested_in_metrics() -> None:
         executor._validate_native_metrics(response, plan, request)
 
 
-@pytest.mark.parametrize("tasklets", [1, 2, 4, 8, 11, 16])
+@pytest.mark.parametrize("tasklets", [1, 2, 4, 8, 16])
 def test_multi_tasklet_benchmark_scaling(tasklets: int) -> None:
     from dataclasses import replace
     from quantum_bench.targets.upmem.hardware_taskgraph_resident import load_hardware_taskgraph_resident_suite
     from quantum_bench.targets.upmem.runtime_evidence import _base_task_metric, _summary_payload, UPMEM_DPU_CLOCK_HZ
     from quantum_bench.tn.upmem_path_cost_v2 import calibrate_pim_cost_model
 
-    suite_path = ROOT / "configs/suites/upmem_hardware_taskgraph_resident_path_quantization.yml"
+    suite_path = ROOT / "configs/suites/upmem_hardware_taskgraph_resident_m4_6_tasklet_scaling.yml"
     suite = load_hardware_taskgraph_resident_suite(suite_path)
     profile = replace(suite.profile, tasklets_per_dpu=tasklets)
     assert profile.tasklets_per_dpu == tasklets
@@ -538,5 +538,4 @@ def test_multi_tasklet_benchmark_scaling(tasklets: int) -> None:
 
     c_pim_hw = calibrate_pim_cost_model(14000, 1000)
     assert c_pim_hw == 14.0  # Hardware 14000 cycles / 1000 flops = 14.0
-
 

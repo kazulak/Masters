@@ -28,5 +28,6 @@ void execution_plan_schedule_free(execution_plan_schedule_t *schedule);
 uint64_t execution_plan_fnv1a64(const unsigned char *data, size_t length);
 int execution_plan_hash_file(const char *path, uint64_t *hash);
 int execution_plan_sha256_file(const char *path, char output[65]);
+int execution_plan_sha256_bytes(const unsigned char *data, size_t length, char output[65]);
 
 #endif

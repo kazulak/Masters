@@ -185,6 +185,18 @@ int execution_plan_sha256_file(const char *path, char output[65]) {
     return 0;
 }
 
+int execution_plan_sha256_bytes(const unsigned char *data, size_t length, char output[65]) {
+    execution_plan_sha256_t ctx;
+    unsigned char digest[32];
+    if (data == NULL || output == NULL) return 1;
+    sha256_init(&ctx);
+    sha256_update(&ctx, data, length);
+    sha256_final(&ctx, digest);
+    for (uint32_t index = 0; index < 32u; index++) snprintf(output + index * 2u, 3u, "%02x", digest[index]);
+    output[64] = '\0';
+    return 0;
+}
+
 int execution_plan_schedule_load(
     const char *path,
     const unsigned char expected_package_sha256[32],
@@ -213,7 +225,7 @@ int execution_plan_schedule_load(
         header.provider_count != 3u ||
         header.operation_count == 0u || header.operation_count > EXECUTION_PLAN_MAX_TASKS ||
         header.wave_count == 0u || header.wave_count > EXECUTION_PLAN_MAX_WAVES ||
-        header.dpu_count == 0u || header.dpu_count > EXECUTION_PLAN_MAX_DPUS ||
+        header.dpu_count == 0u || header.dpu_count > EXECUTION_PLAN_V1_MAX_DPUS ||
         header.tasklets_per_dpu != 1u) {
         schedule_error(error_message, "hardware_profile_violation: schedule header is invalid");
         free(payload);

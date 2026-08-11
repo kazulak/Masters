@@ -14,7 +14,8 @@
 #define EXECUTION_PLAN_PROFILE "upmem_execution_plan_v1"
 #define EXECUTION_PLAN_MAX_TASKS 8u
 #define EXECUTION_PLAN_MAX_WAVES 8u
-#define EXECUTION_PLAN_MAX_DPUS 2u
+#define EXECUTION_PLAN_V1_MAX_DPUS 2u
+#define EXECUTION_PLAN_MAX_DPUS 4u
 #define EXECUTION_PLAN_MAX_REPETITIONS 16u
 #define EXECUTION_PLAN_MAX_PATH 4096u
 
@@ -51,7 +52,11 @@ typedef struct __attribute__((packed)) {
 
 _Static_assert(sizeof(resident_package_header_t) == 96u, "resident package header ABI drifted");
 _Static_assert(sizeof(resident_slot_descriptor_t) == 16u, "resident slot ABI drifted");
-_Static_assert(sizeof(resident_operation_t) == 784u, "resident operation ABI drifted");
+#if RESIDENT_OPERATION_ABI_VERSION == RESIDENT_OPERATION_ABI_V1
+_Static_assert(sizeof(resident_operation_t) == 784u, "resident operation v1 ABI drifted");
+#else
+_Static_assert(sizeof(resident_operation_t) == 800u, "resident operation v2 ABI drifted");
+#endif
 _Static_assert(sizeof(execution_plan_schedule_header_t) == EXECUTION_PLAN_SCHEDULE_HEADER_BYTES, "execution plan header ABI drifted");
 _Static_assert(sizeof(execution_plan_schedule_record_t) == EXECUTION_PLAN_SCHEDULE_RECORD_BYTES, "execution plan record ABI drifted");
 

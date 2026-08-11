@@ -18,6 +18,22 @@ static void resident_error(char **message, const char *value) {
     if (message != NULL && *message == NULL) *message = resident_copy(value);
 }
 
+static int resident_supported_tasklets(uint64_t value) {
+    return value == 1u || value == 2u || value == 4u || value == 8u || value == 16u;
+}
+
+#if RESIDENT_OPERATION_ABI_VERSION == RESIDENT_OPERATION_ABI_V2
+static const char *resident_binary_basename(const char *path) {
+    const char *slash = path == NULL ? NULL : strrchr(path, '/');
+    return slash == NULL ? path : slash + 1;
+}
+
+static int resident_binary_matches_abi(const char *path) {
+    const char *basename = resident_binary_basename(path);
+    return basename != NULL && strcmp(basename, RESIDENT_DPU_BINARY_NAME) == 0;
+}
+#endif
+
 static int resident_read_file(const char *path, unsigned char **payload, size_t *length) {
     FILE *file = fopen(path, "rb");
     long size;
@@ -334,7 +350,12 @@ static int resident_validate_args(const resident_operation_t *operation) {
         if (args->contracted_dims[axis] == 0u || contracted_product > UINT32_MAX / args->contracted_dims[axis]) return 1;
         contracted_product *= args->contracted_dims[axis];
     }
-    return contracted_product != args->contracted_elems || args->output_elems != operation->output_elements;
+    if (contracted_product != args->contracted_elems || args->output_elems != operation->output_elements) return 1;
+#if RESIDENT_OPERATION_ABI_VERSION >= RESIDENT_OPERATION_ABI_V2
+    if (args->dpu_slice_offset != 0u || args->dpu_slice_elements != args->output_elems ||
+        args->contracted_offset != 0u || args->contracted_elements_slice != args->contracted_elems) return 1;
+#endif
+    return 0;
 }
 
 static int resident_validate_package(
@@ -350,12 +371,8 @@ static int resident_validate_package(
         return 1;
     }
     memcpy(&header, payload, sizeof(header));
-    if (memcmp(header.magic, "UPRGPCK1", 8u) != 0) {
-        resident_error(error_message, "resident_package_bad_magic");
-        return 1;
-    }
-    if (header.version != RESIDENT_PACKAGE_VERSION) {
-        resident_error(error_message, "resident_package_bad_version");
+    if (memcmp(header.magic, RESIDENT_PACKAGE_MAGIC, 8u) != 0 || header.version != RESIDENT_PACKAGE_VERSION) {
+        resident_error(error_message, "resident_package_abi_magic_or_version_mismatch");
         return 1;
     }
     if (header.endian != RESIDENT_PACKAGE_ENDIAN) {
@@ -389,7 +406,7 @@ static int resident_validate_package(
     }
     if (resident_mul_overflow(header.slot_count, sizeof(resident_slot_descriptor_t), &section_end) ||
         section_end != header.slot_bytes ||
-        resident_mul_overflow(header.operation_count, sizeof(resident_operation_t), &section_end) ||
+        resident_mul_overflow(header.operation_count, RESIDENT_OPERATION_BYTES, &section_end) ||
         section_end != header.operation_bytes) {
         resident_error(error_message, "resident_package_descriptor_length_overflow");
         return 1;
@@ -468,6 +485,12 @@ static int resident_validate_package(
             resident_error(error_message, "resident_package_operation_mode_or_output_invalid");
             return 1;
         }
+#if RESIDENT_OPERATION_ABI_VERSION >= RESIDENT_OPERATION_ABI_V2
+        if (operation->args.dpu_slice_offset != 0u || operation->args.dpu_slice_elements != operation->output_elements) {
+            resident_error(error_message, "resident_package_operation_v2_slice_metadata_invalid");
+            return 1;
+        }
+#endif
         for (size_t ref = 0; ref < 6u; ref++) {
             if (refs[ref] != RESIDENT_INVALID_SLOT && refs[ref] >= header.slot_count) {
                 resident_error(error_message, "resident_package_operation_slot_reference_invalid");
@@ -691,6 +714,8 @@ static int resident_request_load_profile(
     char *target = NULL;
     char *session_protocol = NULL;
     char *quantization_mode = NULL;
+    char *package_magic = NULL;
+    char *dpu_binary_abi = NULL;
     int failed = 1;
     if (request == NULL || manifest_path == NULL || max_requested_dpus == 0u) {
         resident_error(error_message, "manifest_parse_failed: resident request arguments invalid");
@@ -720,7 +745,9 @@ static int resident_request_load_profile(
         resident_string_field((char *)manifest_bytes, "target", &target) != 0 ||
         resident_string_field((char *)manifest_bytes, "sdk_allocation_profile", &allocation_profile) != 0 ||
         resident_string_field((char *)manifest_bytes, "session_protocol", &session_protocol) != 0 ||
-        resident_string_field((char *)manifest_bytes, "quantization_mode", &quantization_mode) != 0) {
+        resident_string_field((char *)manifest_bytes, "quantization_mode", &quantization_mode) != 0 ||
+        resident_string_field((char *)manifest_bytes, "package_magic", &package_magic) != 0 ||
+        resident_string_field((char *)manifest_bytes, "dpu_binary_abi", &dpu_binary_abi) != 0) {
         resident_error(error_message, "manifest_parse_failed: resident manifest identity missing");
         goto done;
     }
@@ -728,8 +755,19 @@ static int resident_request_load_profile(
         strcmp(backend_id, RESIDENT_BACKEND_ID) != 0 || strcmp(profile_version, RESIDENT_PROFILE_VERSION) != 0 ||
         strcmp(target, RESIDENT_TARGET) != 0 || strcmp(allocation_profile, RESIDENT_ALLOCATION_PROFILE) != 0 ||
         strcmp(session_protocol, RESIDENT_SESSION_SCHEMA) != 0 ||
+        strcmp(package_magic, RESIDENT_PACKAGE_MAGIC) != 0 ||
+        strcmp(dpu_binary_abi,
+#if RESIDENT_OPERATION_ABI_VERSION == RESIDENT_OPERATION_ABI_V2
+            "dpu_resident_v2"
+#else
+            "dpu_resident"
+#endif
+        ) != 0 ||
+#if RESIDENT_OPERATION_ABI_VERSION == RESIDENT_OPERATION_ABI_V2
+        resident_binary_matches_abi(dpu_ref) == 0 ||
+#endif
         (strcmp(quantization_mode, "none") != 0 && strcmp(quantization_mode, "per_task_resident_requantize") != 0)) {
-        resident_error(error_message, "hardware_profile_violation: resident manifest hardware identity mismatch");
+        resident_error(error_message, "hardware_profile_violation: resident manifest ABI or hardware identity mismatch");
         goto done;
     }
     base = resident_base(manifest_path);
@@ -750,9 +788,21 @@ static int resident_request_load_profile(
     request->package_path = package_path;
     package_path = NULL;
     uint64_t value;
+    uint64_t manifest_package_version;
+    uint64_t manifest_operation_abi_version;
+    uint64_t manifest_operation_bytes;
+    if (resident_uint_field((char *)manifest_bytes, "package_version", &manifest_package_version) != 0 ||
+        resident_uint_field((char *)manifest_bytes, "operation_abi_version", &manifest_operation_abi_version) != 0 ||
+        resident_uint_field((char *)manifest_bytes, "operation_bytes", &manifest_operation_bytes) != 0 ||
+        manifest_package_version != RESIDENT_PACKAGE_VERSION ||
+        manifest_operation_abi_version != RESIDENT_OPERATION_ABI_VERSION ||
+        manifest_operation_bytes != RESIDENT_OPERATION_BYTES) {
+        resident_error(error_message, "hardware_profile_violation: resident manifest ABI identity mismatch");
+        goto done;
+    }
     if (resident_uint_field((char *)manifest_bytes, "requested_dpus", &value) != 0 ||
         value == 0u || value > max_requested_dpus ||
-        resident_uint_field((char *)manifest_bytes, "tasklets", &value) != 0 || value != 1u ||
+        resident_uint_field((char *)manifest_bytes, "tasklets", &value) != 0 || !resident_supported_tasklets(value) || value != NR_TASKLETS ||
         resident_uint_field((char *)manifest_bytes, "graph_request_count", &value) != 0 || value != 1u ||
         resident_uint_field((char *)manifest_bytes, "logical_task_count", &value) != 0 || value == 0u || value > RESIDENT_MAX_LOGICAL_TASKS) {
         resident_error(error_message, "hardware_profile_violation: resident request DPU/tasklet/graph limits exceeded");
@@ -851,6 +901,8 @@ done:
     free(target);
     free(session_protocol);
     free(quantization_mode);
+    free(package_magic);
+    free(dpu_binary_abi);
     if (failed) resident_request_free(request);
     return failed;
 }
@@ -865,6 +917,14 @@ int resident_request_load_execution_plan(
     char **error_message
 ) {
     return resident_request_load_profile(manifest_path, 2u, request, error_message);
+}
+
+int resident_request_load_execution_plan_v2(
+    const char *manifest_path,
+    resident_request_t *request,
+    char **error_message
+) {
+    return resident_request_load_profile(manifest_path, 4u, request, error_message);
 }
 
 void resident_request_free(resident_request_t *request) {
@@ -944,6 +1004,45 @@ int resident_response_write(
     fprintf(file, ",\n  \"requested_dpus\": 1,\n  \"allocated_dpus\": %u,\n  \"tasklets\": %u,\n  \"graph_request_count\": 1,\n", allocated_dpus, (unsigned)NR_TASKLETS);
     fprintf(file, "  \"logical_task_count\": %u,\n  \"component_operation_count\": %u,\n  \"native_launch_count\": %u,\n  \"native_task_count\": %u,\n", request->logical_task_count, request->header.operation_count, native_launch_count, native_launch_count);
     fprintf(file, "  \"sdk_error_code\": %d,\n  \"package_parse_time_s\": %.9f,\n  \"allocation_time_s\": %.9f,\n  \"binary_load_time_s\": %.9f,\n  \"initial_h2d_time_s\": %.9f,\n  \"descriptor_h2d_time_s\": %.9f,\n  \"control_h2d_time_s\": %.9f,\n  \"kernel_time_s\": %.9f,\n  \"final_d2h_time_s\": %.9f,\n  \"output_write_time_s\": %.9f,\n  \"release_time_s\": %.9f,\n  \"dpu_run_time_cycles\": %llu,\n", sdk_error_code, current->package_parse_time_s, current->allocation_time_s, current->binary_load_time_s, current->initial_h2d_time_s, current->descriptor_h2d_time_s, current->control_h2d_time_s, current->kernel_time_s, current->final_d2h_time_s, current->output_write_time_s, current->release_time_s, (unsigned long long)current->dpu_run_time_cycles);
+    fprintf(file, "  \"completion_abi_version\": %u,\n", (unsigned)RESIDENT_COMPLETION_VERSION);
+#if RESIDENT_COMPLETION_VERSION >= 2
+    fprintf(file, "  \"graph_cycle_sum\": %llu,\n  \"dpu_operation_cycles\": [", (unsigned long long)current->dpu_run_time_cycles);
+    for (uint32_t operation = 0; operation < request->header.operation_count; operation++) {
+        if (operation != 0u) fputs(",", file);
+        fprintf(file, "%llu", (unsigned long long)current->operation_dpu_cycles[operation]);
+    }
+    fputs("],\n  \"tasklet_processed_elements\": [", file);
+    for (uint32_t operation = 0; operation < request->header.operation_count; operation++) {
+        if (operation != 0u) fputs(",", file);
+        fputs("[", file);
+        for (uint32_t tasklet = 0; tasklet < NR_TASKLETS; tasklet++) {
+            if (tasklet != 0u) fputs(",", file);
+            fprintf(file, "%u", current->operation_tasklet_processed_elements[operation][tasklet]);
+        }
+        fputs("]", file);
+    }
+    fputs("],\n  \"active_tasklet_count\": [", file);
+    for (uint32_t operation = 0; operation < request->header.operation_count; operation++) {
+        if (operation != 0u) fputs(",", file);
+        fprintf(file, "%u", current->operation_active_tasklet_count[operation]);
+    }
+    fputs("],\n  \"idle_tasklet_count\": [", file);
+    for (uint32_t operation = 0; operation < request->header.operation_count; operation++) {
+        if (operation != 0u) fputs(",", file);
+        fprintf(file, "%u", current->operation_idle_tasklet_count[operation]);
+    }
+    fputs("],\n  \"tasklet_utilization\": [", file);
+    for (uint32_t operation = 0; operation < request->header.operation_count; operation++) {
+        if (operation != 0u) fputs(",", file);
+        fprintf(file, "%.6f", (double)current->operation_tasklet_utilization_ppm[operation] / 1000000.0);
+    }
+    fputs("],\n  \"tasklet_work_imbalance\": [", file);
+    for (uint32_t operation = 0; operation < request->header.operation_count; operation++) {
+        if (operation != 0u) fputs(",", file);
+        fprintf(file, "%.6f", (double)current->operation_tasklet_work_imbalance_ppm[operation] / 1000000.0);
+    }
+    fputs("],\n", file);
+#endif
     fprintf(file, "  \"initial_h2d_bytes\": %llu,\n  \"descriptor_h2d_bytes\": %llu,\n  \"control_h2d_bytes\": %llu,\n  \"final_d2h_bytes\": %llu,\n  \"intermediate_h2d_bytes\": 0,\n  \"intermediate_d2h_bytes\": 0,\n  \"actual_h2d_bytes\": %llu,\n  \"actual_d2h_bytes\": %llu,\n  \"actual_transfer_bytes\": %llu,\n", (unsigned long long)initial_h2d_bytes, (unsigned long long)descriptor_h2d_bytes, (unsigned long long)control_h2d_bytes, (unsigned long long)final_d2h_bytes, (unsigned long long)(initial_h2d_bytes + descriptor_h2d_bytes + control_h2d_bytes), (unsigned long long)final_d2h_bytes, (unsigned long long)(initial_h2d_bytes + descriptor_h2d_bytes + control_h2d_bytes + final_d2h_bytes));
     fprintf(file, "  \"allocation_count\": %u,\n  \"hardware_allocation_verified\": %s,\n  \"hardware_execution\": %s,\n  \"hardware_kernel_executed\": %s,\n  \"native_execution\": %s,\n  \"native_hardware_backend\": %s,\n  \"hardware_backend_verified\": %s,\n  \"simulator_kernel_executed\": false,\n  \"cpu_fallback_used\": false,\n  \"hardware_release_verified\": %s,\n  \"release_confirmed\": %s,\n  \"physical_dependency_chain_verified\": %s,\n  \"hardware_timing_available\": %s,\n  \"session_scope\": \"single_graph_request\",\n  \"persistent_session_reused\": false,\n  \"resident_slots_persist_for_graph\": true,\n  \"session_persistence_semantics\": \"one_native_graph_request_keeps_logical_slots_resident\",\n  \"steady_state_graph_execution_s\": %.9f,\n  \"final_output_only_d2h\": true,\n  \"physical_bus_bytes_available\": false,\n  \"final_outputs\": [",
         allocated_dpus,
