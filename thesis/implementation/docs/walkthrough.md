@@ -68,10 +68,10 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m pytest -q
 
 ## 3. Milestone M5 (Distributed Single Contraction) Verification
 
-> **Status:** Fully Implemented & Verified  
-> **Test Suite Result:** **644 / 644 pytest tests passed** (29.67s)
+> **Status:** Fully Implemented & Verified via Dual-Agent Audit Loop  
+> **Test Suite Result:** **646 / 646 pytest tests passed** (29.75s)
 
-### Summary of M5 Features Implemented:
+### Summary of M5 Features Implemented & Audited:
 1. **Multi-DPU Native ABI (`common.h`)**:
    - Added `dpu_slice_offset`, `dpu_slice_elements`, `contracted_offset`, `contracted_elements_slice` to `upmem_generic_args_t`.
    - Updated `execution_plan_common.h` static assertion to 800 bytes for `resident_operation_t`.
@@ -82,8 +82,12 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python -m pytest -q
    - Replaced single DPU allocation with `dpu_alloc(request.requested_dpus, ...)`.
    - Added graceful error handling (`hardware_allocation_failed`) without hard aborts.
    - Aggregated critical path `dpu_run_time_cycles` across the DPU set.
-4. **Python Planner Descriptors (`hardware_taskgraph_resident.py`)**:
-   - Implemented `PlacementPlan` and `CommunicationPlan` dataclasses and helper constructors (`build_m5_placement_plan`, `build_m5_communication_plan`).
-5. **Unit & Integration Tests (`test_upmem_simplepim_taskgraph_executor.py`)**:
-   - Added `test_m5_output_tile_multi_dpu_placement_plan`, `test_m5_partial_sum_host_reduction_communication_plan`, and `test_m5_multi_dpu_reference_validation`.
+4. **Python Planner Descriptors & Backward Compatibility (`hardware_taskgraph_resident.py`)**:
+   - Added `PlacementPlan` and `CommunicationPlan` dataclasses with optional fields and `None` defaults on `ResidentGraphPackage` for 100% M4.6 backward compatibility.
+   - Auto-instantiated placement and communication plans in `build_resident_graph_package` when `requested_dpu_count > 1`.
+5. **Host-Mediated Int32 Quantized Reduction (`runtime_evidence.py`)**:
+   - Implemented `reduce_multi_dpu_partial_sums` to accumulate DPU partial sums in `int32` space before applying ties-to-even `int8` requantization.
+   - Propagated optional placement and communication plans to `_summary_payload` without polluting single-DPU manifests.
+6. **Unit & Integration Tests (`test_upmem_simplepim_taskgraph_executor.py`)**:
+   - Added `test_m5_output_tile_multi_dpu_placement_plan`, `test_m5_partial_sum_host_reduction_communication_plan`, `test_m5_multi_dpu_reference_validation`, `test_m5_resident_graph_package_multi_dpu`, and `test_m5_quantized_int32_host_reduction`.
 
