@@ -85,7 +85,12 @@ class OptEinsumPlanner:
 
     def plan(self, network: TensorNetworkValue) -> PlannerResult:
         start = time.perf_counter()
-        path, path_info = oe.contract_path(*interleaved_einsum_args(network), optimize=self.optimize)
+        optimize_arg: Any = self.optimize
+        if self.optimize == "upmem_pim_cost_greedy":
+            from quantum_bench.tn.upmem_path_optimizer import PIMPathCostOptimizer
+
+            optimize_arg = PIMPathCostOptimizer(config=self.identity.planner_config)
+        path, path_info = oe.contract_path(*interleaved_einsum_args(network), optimize=optimize_arg)
         planning_time_s = time.perf_counter() - start
         return PlannerResult(
             identity=self.identity,
@@ -243,6 +248,9 @@ def planner_from_config(config: dict[str, Any] | None) -> PathPlanner:
             seed=int(config.get("seed", 0)),
         )
     if engine == "custom_upmem":
+        optimize_mode = str(config.get("optimize", "greedy"))
+        if optimize_mode == "upmem_pim_cost_greedy":
+            return OptEinsumPlanner(optimize="upmem_pim_cost_greedy", options=dict(config))
         objective_version = str(config.get("objective_version", "upmem_path_cost_v1"))
         if objective_version == "upmem_path_cost_v2":
             from quantum_bench.tn.upmem_planner import UpmemAwareProjectedPrefixPlanner
