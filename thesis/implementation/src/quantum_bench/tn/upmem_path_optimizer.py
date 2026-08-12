@@ -7,6 +7,7 @@ to find optimal tensor network contraction paths for UPMEM PIM target hardware.
 from __future__ import annotations
 
 import math
+from collections import Counter
 from dataclasses import dataclass, replace
 from typing import Any, Mapping, Sequence
 
@@ -21,10 +22,32 @@ from quantum_bench.tn.upmem_path_cost_v2 import (
     upmem_path_cost_policy_v2,
 )
 
+# Empirical scaling penalty ratio applied to WRAM memory pressure ratios (wram_bytes_used / wram_capacity)
+# to heavily penalize candidate steps that threaten WRAM overflow.
+WRAM_PRESSURE_SCALING_PENALTY: float = 1000.0
+
+
+def _sort_key(label: Any) -> tuple[int, Any]:
+    """Type-aware sort key ensuring integers sort numerically (2 < 10) and strings sort alphabetically."""
+    return (1 if isinstance(label, str) else 0, label)
+
 
 @dataclass(frozen=True)
 class PIMCostParameters:
-    """Centralized immutable registry of all PIM path cost weights and policy parameters."""
+    """Centralized immutable registry of all PIM path cost weights and policy parameters.
+
+    Attributes:
+        w_flops: Scalar weight for FLOP cost component.
+        w_h2d: Scalar weight per Host-to-DPU transfer byte.
+        w_d2h: Scalar weight per DPU-to-Host transfer byte.
+        w_mram_dma: Scalar weight for MRAM DMA transfer volume.
+        w_wram: Scalar weight for WRAM tile pressure ratio.
+        w_sync: Scalar weight for host completion synchronization events.
+        w_complex_penalty: Scalar penalty for split-complex numeric representations.
+        scale_h2d: Multiplicative latency scale for Host-to-DPU transfers.
+        scale_d2h: Multiplicative latency scale for DPU-to-Host transfers.
+        memory_limit: Global upper memory budget in bytes across transfer payloads (H2D + D2H).
+    """
 
     w_flops: float = 1.0
     w_h2d: float = 1.0
@@ -47,15 +70,21 @@ class PIMCostParameters:
         return cls(**filtered)
 
     def compute_scalar_cost(self, components: PathCostComponentsV2) -> float:
-        """Pure calculation of scalar cost from PathCostComponentsV2."""
+        """Pure calculation of scalar cost from PathCostComponentsV2 with global memory enforcement."""
         if not components.feasibility:
             return math.inf
+
+        # Enforce global memory limit across all payload transfers (H2D input + D2H output)
+        total_transfer_bytes = components.host_to_dpu_payload_bytes + components.dpu_to_host_payload_bytes
+        if self.memory_limit is not None and total_transfer_bytes > self.memory_limit:
+            return math.inf
+
         return (
             self.w_flops * float(components.estimated_flops)
             + self.w_h2d * float(components.host_to_dpu_payload_bytes) * self.scale_h2d
             + self.w_d2h * float(components.dpu_to_host_payload_bytes) * self.scale_d2h
             + self.w_mram_dma * float(components.mram_dma_window_bytes_model)
-            + self.w_wram * float(components.wram_known_pressure_ratio) * 1000.0
+            + self.w_wram * float(components.wram_known_pressure_ratio) * WRAM_PRESSURE_SCALING_PENALTY
             + self.w_sync * float(components.host_completion_events)
             + self.w_complex_penalty * float(components.numeric_representation_penalty)
         )
@@ -65,12 +94,12 @@ class PIMCostParameters:
 class PathSearchState:
     """Immutable state container during functional path optimization."""
 
-    active_tensors: tuple[tuple[str, ...], ...]
-    size_dict: Mapping[str, int]
+    active_tensors: tuple[tuple[Any, ...], ...]
+    size_dict: Mapping[Any, int]
     history: tuple[tuple[int, int], ...]
     total_cost: float
     parameters: PIMCostParameters
-    output_labels: tuple[str, ...] = ()
+    output_labels: tuple[Any, ...] = ()
 
 
 def _shape_product(shape: Sequence[int]) -> int:
@@ -82,26 +111,41 @@ def _shape_product(shape: Sequence[int]) -> int:
 
 def make_sim_contraction_task(
     task_id: str,
-    left_labels: tuple[str, ...],
-    right_labels: tuple[str, ...],
-    output_labels: tuple[str, ...],
-    size_dict: Mapping[str, int],
+    left_labels: tuple[Any, ...],
+    right_labels: tuple[Any, ...],
+    output_labels: tuple[Any, ...],
+    size_dict: Mapping[Any, int],
+    dtype_bytes: int = 8,
 ) -> ContractionTask:
-    """Pure helper constructing a mock ContractionTask for cost evaluation."""
+    """Pure helper constructing a mock ContractionTask for cost evaluation.
+
+    Derives exact GEMM dimensions (B, M, N, K) accounting for:
+    - Batched indices (B): indices present in left, right, AND output.
+    - Contracted indices (K): indices present in left and right, but absent from output.
+    - Left-only indices (M): indices present in left only.
+    - Right-only indices (N): indices present in right only.
+    """
     set_i = set(left_labels)
     set_j = set(right_labels)
     out_set = set(output_labels)
-    contracted_labels = tuple(sorted((set_i & set_j) - out_set))
+
+    batch_labels = tuple(sorted((set_i & set_j) & out_set, key=_sort_key))
+    contracted_labels = tuple(sorted((set_i & set_j) - out_set, key=_sort_key))
+    left_only = tuple(sorted(set_i - set_j, key=_sort_key))
+    right_only = tuple(sorted(set_j - set_i, key=_sort_key))
 
     left_shape = tuple(size_dict[idx] for idx in left_labels)
     right_shape = tuple(size_dict[idx] for idx in right_labels)
     output_shape = tuple(size_dict[idx] for idx in output_labels)
 
-    m = _shape_product(output_shape)
-    k = max(1, _shape_product(tuple(size_dict[idx] for idx in contracted_labels)))
-    n = 1
-    flops = 8 * m * k
-    bytes_est = (_shape_product(left_shape) + _shape_product(right_shape) + _shape_product(output_shape)) * 8
+    b = _shape_product(tuple(size_dict[idx] for idx in batch_labels))
+    m = _shape_product(tuple(size_dict[idx] for idx in left_only))
+    n = _shape_product(tuple(size_dict[idx] for idx in right_only))
+    k = _shape_product(tuple(size_dict[idx] for idx in contracted_labels))
+
+    # Complex GEMM FLOP count: 2 ops (add/mul) * 4 float muls per complex mul = 8 * B * M * N * K
+    flops = 8 * b * m * n * k
+    bytes_est = (_shape_product(left_shape) + _shape_product(right_shape) + _shape_product(output_shape)) * dtype_bytes
 
     return ContractionTask(
         id=task_id,
@@ -115,7 +159,7 @@ def make_sim_contraction_task(
         right_labels=right_labels,
         contracted_labels=contracted_labels,
         output_labels=output_labels,
-        gemm_m=m,
+        gemm_m=b * m,
         gemm_k=k,
         gemm_n=n,
         structure="dense",
@@ -125,10 +169,10 @@ def make_sim_contraction_task(
 
 
 def calculate_pim_step_cost(
-    left_labels: tuple[str, ...],
-    right_labels: tuple[str, ...],
-    out_labels: tuple[str, ...],
-    size_dict: Mapping[str, int],
+    left_labels: tuple[Any, ...],
+    right_labels: tuple[Any, ...],
+    out_labels: tuple[Any, ...],
+    size_dict: Mapping[Any, int],
     params: PIMCostParameters,
     policy: UpmemPathCostPolicyV2 | None = None,
 ) -> float:
@@ -140,19 +184,19 @@ def calculate_pim_step_cost(
 
 
 def _derive_next_active(
-    active: tuple[tuple[str, ...], ...],
+    active: tuple[tuple[Any, ...], ...],
     pair: tuple[int, int],
-    new_tensor: tuple[str, ...],
-) -> tuple[tuple[str, ...], ...]:
+    new_tensor: tuple[Any, ...],
+) -> tuple[tuple[Any, ...], ...]:
+    """Pure tuple slicing helper generating the next sequence of active tensors without list allocations or iteration."""
     i, j = pair
-    remaining = [t for idx, t in enumerate(active) if idx not in {i, j}]
-    remaining.append(new_tensor)
-    return tuple(remaining)
+    return active[:i] + active[i + 1 : j] + active[j + 1 :] + (new_tensor,)
 
 
 def eval_pair_step(
     state: PathSearchState,
     pair: tuple[int, int],
+    all_label_counts: Mapping[Any, int] | None = None,
 ) -> tuple[PathSearchState, float]:
     """Pure state transformation evaluating the cost of contracting a pair."""
     i, j = pair
@@ -163,13 +207,23 @@ def eval_pair_step(
     set_i = set(left_labels)
     set_j = set(right_labels)
 
-    other_indices: set[str] = set()
-    for k, s in enumerate(state.active_tensors):
-        if k != i and k != j:
-            other_indices |= set(s)
+    if all_label_counts is not None:
+        out_set: set[Any] = set()
+        for idx in set_i | set_j:
+            if idx in output_set:
+                out_set.add(idx)
+            else:
+                in_pair_count = (idx in set_i) + (idx in set_j)
+                if all_label_counts[idx] > in_pair_count:
+                    out_set.add(idx)
+    else:
+        other_indices: set[Any] = set()
+        for k, s in enumerate(state.active_tensors):
+            if k != i and k != j:
+                other_indices |= set(s)
+        out_set = (set_i | set_j) & (output_set | other_indices)
 
-    out_set = (set_i | set_j) & (output_set | other_indices)
-    out_labels = tuple(sorted(out_set))
+    out_labels = tuple(sorted(out_set, key=_sort_key))
 
     step_cost = calculate_pim_step_cost(
         left_labels,
@@ -193,30 +247,37 @@ def eval_pair_step(
     return next_state, step_cost
 
 
-def _greedy_search_pure(state: PathSearchState) -> PathSearchState:
-    """Pure recursive greedy path search state transformer."""
-    if len(state.active_tensors) <= 1:
-        return state
+def _greedy_search_pure(initial_state: PathSearchState) -> PathSearchState:
+    """Iterative state accumulator executing pure greedy search state transitions without recursion or silent failure."""
+    current_state = initial_state
+    while len(current_state.active_tensors) > 1:
+        best_pair: tuple[int, int] | None = None
+        best_next_state: PathSearchState | None = None
+        best_step_cost = math.inf
 
-    best_pair: tuple[int, int] | None = None
-    best_next_state: PathSearchState | None = None
-    best_step_cost = math.inf
+        # Precompute label counts across active tensors once per step for O(N^3) overall path search
+        all_label_counts = Counter(label for tensor in current_state.active_tensors for label in tensor)
 
-    n_active = len(state.active_tensors)
-    for i in range(n_active):
-        for j in range(i + 1, n_active):
-            pair = (i, j)
-            candidate_state, step_cost = eval_pair_step(state, pair)
-            if step_cost < best_step_cost:
-                best_step_cost = step_cost
-                best_pair = pair
-                best_next_state = candidate_state
+        n_active = len(current_state.active_tensors)
+        for i in range(n_active):
+            for j in range(i + 1, n_active):
+                pair = (i, j)
+                candidate_state, step_cost = eval_pair_step(current_state, pair, all_label_counts=all_label_counts)
+                if step_cost < best_step_cost:
+                    best_step_cost = step_cost
+                    best_pair = pair
+                    best_next_state = candidate_state
 
-    if best_next_state is None:
-        # Fallback to first-pair if all evaluation costs fail
-        best_next_state, _ = eval_pair_step(state, (0, 1))
+        if best_next_state is None or math.isinf(best_step_cost):
+            # Explicit failure when memory limit or feasibility constraints reject all candidate pairs
+            raise ValueError(
+                f"Contraction path search failed: no valid candidate tensor pair satisfies memory or hardware constraints "
+                f"among {len(current_state.active_tensors)} active tensors (memory_limit={current_state.parameters.memory_limit})."
+            )
 
-    return _greedy_search_pure(best_next_state)
+        current_state = best_next_state
+
+    return current_state
 
 
 class PIMPathCostOptimizer(PathOptimizer):
@@ -227,28 +288,28 @@ class PIMPathCostOptimizer(PathOptimizer):
 
     def __call__(
         self,
-        inputs: list[set[str]],
-        output: set[str],
-        size_dict: dict[str, int],
+        inputs: list[set[Any]],
+        output: set[Any],
+        size_dict: dict[Any, int],
         memory_limit: int | None = None,
         **kwargs: Any,
     ) -> list[tuple[int, int]]:
         actual_params = replace(self.parameters, memory_limit=memory_limit) if memory_limit is not None else self.parameters
         initial_state = PathSearchState(
-            active_tensors=tuple(tuple(sorted(s)) for s in inputs),
+            active_tensors=tuple(tuple(sorted(s, key=_sort_key)) for s in inputs),
             size_dict=size_dict,
             history=(),
             total_cost=0.0,
             parameters=actual_params,
-            output_labels=tuple(sorted(output)),
+            output_labels=tuple(sorted(output, key=_sort_key)),
         )
         final_state = _greedy_search_pure(initial_state)
         return list(final_state.history)
 
 
 def pim_path_finder_functional(
-    inputs: list[set[str]],
-    output: set[str],
+    inputs: list[set[Any]],
+    output: set[Any],
     size_dict: dict[str, int],
     memory_limit: int | None = None,
     **kwargs: Any,

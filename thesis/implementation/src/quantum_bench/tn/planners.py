@@ -233,6 +233,44 @@ class CotengraPlanner:
         )
 
 
+class UpmemPIMCostGreedyPlanner:
+    """Dedicated PathPlanner using pure functional PIMPathCostOptimizer."""
+
+    def __init__(self, options: Mapping[str, Any] | None = None) -> None:
+        self.options = dict(options) if options else {}
+        base_options = {"engine": "custom_upmem", "optimize": "upmem_pim_cost_greedy"}
+        base_options.update(self.options)
+        self.identity = PlannerIdentity(
+            planner_engine="custom_upmem",
+            planner_id="upmem_pim_cost_greedy",
+            planner_kind="external_path_optimizer",
+            optimize_mode="upmem_pim_cost_greedy",
+            objective="pim_cost",
+            cost_basis="upmem_pim_model",
+            target_estimate_key=None,
+            options=base_options,
+            planner_config=base_options,
+        )
+
+    def plan(self, network: TensorNetworkValue) -> PlannerResult:
+        from quantum_bench.tn.upmem_path_optimizer import PIMPathCostOptimizer
+
+        start = time.perf_counter()
+        optimizer = PIMPathCostOptimizer(config=self.identity.planner_config)
+        path, path_info = oe.contract_path(*interleaved_einsum_args(network), optimize=optimizer)
+        planning_time_s = time.perf_counter() - start
+        return PlannerResult(
+            identity=self.identity,
+            path=tuple(tuple(int(item) for item in step) for step in path),
+            path_info_text=str(path_info),
+            largest_intermediate=_safe_int(getattr(path_info, "largest_intermediate", None)),
+            naive_flops=_safe_float(getattr(path_info, "naive_cost", None)),
+            optimized_flops=_safe_float(getattr(path_info, "opt_cost", None)),
+            planning_time_s=planning_time_s,
+            metadata={"planner_config_hash": self.identity.planner_config_hash},
+        )
+
+
 def planner_from_config(config: dict[str, Any] | None) -> PathPlanner:
     config = config or {}
     engine = str(config.get("engine", "opt_einsum"))
@@ -250,7 +288,7 @@ def planner_from_config(config: dict[str, Any] | None) -> PathPlanner:
     if engine == "custom_upmem":
         optimize_mode = str(config.get("optimize", "greedy"))
         if optimize_mode == "upmem_pim_cost_greedy":
-            return OptEinsumPlanner(optimize="upmem_pim_cost_greedy", options=dict(config))
+            return UpmemPIMCostGreedyPlanner(options=config)
         objective_version = str(config.get("objective_version", "upmem_path_cost_v1"))
         if objective_version == "upmem_path_cost_v2":
             from quantum_bench.tn.upmem_planner import UpmemAwareProjectedPrefixPlanner
