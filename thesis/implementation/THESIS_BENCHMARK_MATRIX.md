@@ -38,6 +38,7 @@ semantic check; it is not the performance grid.
 | M4.6 tasklet development sweep | `configs/suites/upmem_hardware_taskgraph_resident_m4_6_tasklet_scaling.yml` | Physical resident TaskGraph, one DPU, tasklets 1/2/4/8/16, two paths, two numeric modes | 7 | Validate tasklet ownership, DPU-cycle metadata, and correctness on small development cases; no final scaling claim |
 | M5.1 output partition probe | Fixed CLI fixture: `make upmem-hw-m5-1` | One bounded real float32 contraction, 1/2/4 DPUs, exclusive output-tile ownership | 1 | Validate bounded multi-DPU output ownership and exact CPU agreement; functionality only |
 | M5.2 contracted partition probe | Fixed CLI fixture: `make upmem-hw-m5-2` | One bounded real float32 contraction, 1/2/4 DPUs, host-mediated ascending-DPU reduction | 1 | Validate bounded partial-sum reconstruction; functionality only |
+| M5 execution-plan-v3 lane | `make upmem-hw-m5-plan` / future `make upmem-hw-m5` | One-rank configured 1..64 DPUs and 1..24 tasklets; real highest-work contractions plus synthetic strong/weak diagnostics; output/contracted partitioning; float32/per-task int8 | 2 + 7 | Local plan validation only until ETH execution; no physical performance or scaling claim |
 | M5.3 PID-Comm qualification | `make upmem-pidcomm-compatibility` | Pinned PID-Comm compile/link qualification under the installed ETH SDK | allocation-free | Record compatibility or an explicit blocker; current SDK 2023.1 blocker prevents physical execution |
 
 The CPU/GPU performance suite uses deeper repeated circuits to reduce startup
@@ -220,11 +221,29 @@ NVIDIA full-state or TN software is added only after real execution is verified.
 Physical UPMEM rows use a distinct hardware execution mode and are never merged
 with SDK-simulator timing.
 
-The M4.6/M5.1/M5.2 rows above are development acceptance probes copied from
-ETH, not promoted thesis evidence. Physical commands require
+The M4.6/M5.1/M5.2 rows above are historical development acceptance probes
+copied from ETH, not promoted thesis evidence. The M5 execution-plan-v3 row is
+an additive pending lane, not an accepted physical result. Its local check is:
+
+```bash
+UPMEM_HW_M5_DPU_COUNTS=3 UPMEM_HW_M5_TASKLETS=3 make upmem-hw-m5-plan
+```
+
+This prepares 14 plans, preserves 6 unsupported cases, reports 0 failed cases,
+and performs no DPU allocation or launch; local validation has 793 passing
+tests. Future ETH execution requires:
+
+```bash
+UPMEM_HW_RANK_PATH=/dev/dpu_rank1 \
+UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-m5
+```
+
+Physical commands require
 `UPMEM_HW_RANK_PATH=/dev/dpu_rankN` and
 `UPMEM_ALLOW_PHYSICAL_HARDWARE=1`; requested/effective rank selection is
 recorded, but is not an independent observed-rank measurement.
+The broad `thesis_results/current` snapshot is historical and does not contain
+the pending M5 execution-plan-v3 route.
 
 ## Stop/Boundary Rules
 

@@ -10,6 +10,10 @@ as development evidence; they are intentionally not included in
 Current-head provenance validation was rerun from commit `7175ccb` after the
 evidence-contract patch.
 
+The M5.1/M5.2 entries below are historical bounded physical probes. The
+additive M5 execution-plan-v3 lane is documented separately below and remains
+pending physical ETH execution.
+
 ## Rank and Environment
 
 Commands selected the requested physical rank explicitly:
@@ -97,6 +101,39 @@ false, release was confirmed, scientific validation and the transfer invariant
 passed, and rank 1 was explicitly requested; the M5.2 maximum absolute error
 remains `2.98e-08`.
 
+## Additive M5 execution-plan-v3 Lane
+
+The new v3 route is a one-rank single-contraction design supporting configured
+DPU counts `1..64` and tasklets `1..24`, output or contracted-axis partitioning,
+float32 or per-task int8, real highest-work contractions, and synthetic
+strong/weak diagnostics.
+
+Local hardware-free validation is complete. The exact command:
+
+```bash
+UPMEM_HW_M5_DPU_COUNTS=3 UPMEM_HW_M5_TASKLETS=3 make upmem-hw-m5-plan
+```
+
+prepares the configured plan set, preserves unsupported cases, reports failures
+explicitly, and performs no DPU allocation or launch. Physical ETH execution is
+pending. The future command is:
+
+```bash
+UPMEM_HW_RANK_PATH=/dev/dpu_rank1 \
+UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-m5
+```
+
+This is not physical acceptance and supports no performance or scaling claim.
+The active target is one-rank multi-DPU execution of one contraction, not full
+distributed TaskGraph execution. For this route SimplePIM is
+`initialization_binary_and_management_state_only`; allocation, transfer, and
+launch use raw synchronous UPMEM SDK calls. The thesis-owned C kernel performs
+the contraction and the host performs the `float64` reduction. Both float32
+and per-task resident int8 use float32 MRAM transport.
+
+Output-versus-contracted-axis partitioning compares execution layout under a
+fixed contraction plan. It is not a contraction-path comparison.
+
 ## PID-Comm Qualification
 
 The allocation-free qualification commands were:
@@ -113,9 +150,10 @@ no simulator fallback, CPU fallback, allocation, or physical PID-Comm launch.
 
 ## Claims Allowed From This Record
 
-This record supports only that the bounded M4.6 tasklet route and M5.1/M5.2
-single-contraction physical probes executed and validated on a selected ETH
-UPMEM rank under their declared profiles. It does not support claims of a
+This record supports only that the bounded M4.6 tasklet route and historical
+M5.1/M5.2 single-contraction physical probes executed and validated on a
+selected ETH UPMEM rank under their declared profiles. It does not support
+claims that the pending M5 v3 route has executed, or claims of a
 complete UPMEM TN simulator, final architecture completion, ATiM or SparseP
 execution, PID-Comm integration, multi-rank/DIMM execution, performance
 advantage, energy efficiency, or final benchmark scaling.

@@ -72,24 +72,27 @@ a small final architecture.
 | CPU/GPU baselines | QuEST full state, Quimb/cotengra TN, internal CPU replay | Active |
 | Slicing/frontier models | Internal slice-aware graph, reconstruction, frontier waves | M2.1 useful-slice and M3.1 bounded two-wave physical qualifications passed; general expansion remains future work |
 | UPMEM simulator | Strict bounded generic TaskGraph route | Active diagnostic |
-| UPMEM hardware | Bounded M2/M3.1/M4.2--M4.4 physical qualification lanes | Declared functionality checks passed on ETH; routes remain separate fixtures and do not form a general executor |
+| UPMEM hardware | Bounded M2/M3.1/M4.2--M4.4 physical qualification lanes plus additive M5 execution-plan-v3 route | Existing functionality checks passed on ETH; M5 v3 is a locally validated, pending one-rank multi-DPU single-contraction study, not a general distributed executor |
 | Numerical modes | Float32, per-task int8/int32, split real/imaginary complex | Active in bounded routes |
 | Evidence system | Normalized records, claim guards, reports, plots, snapshots | Active instrumentation |
-| External sources | QuEST, SimplePIM, and PID-Comm pinned | QuEST active; SimplePIM M4.2--M4.4 bounded physical qualification passed; PID-Comm remains central, with current integration pending |
+| External sources | QuEST, SimplePIM, and PID-Comm pinned | QuEST active; SimplePIM M4.2--M4.4 bounded physical qualification passed and is initialization/management-state-only for M5 v3; PID-Comm remains central, with current integration pending |
 
 ### Central architecture not implemented
 
 - General parallel execution of independent ready contractions on different DPUs
-  (the M2 slice assignment is a fixed terminal-case contract, not a scheduler).
-- Parallel execution of one large contraction across tasklets, DPUs, ranks, or
-  UPMEM DIMMs.
+  (the M2 slice assignment and M5 v3 single-contraction plan are fixed
+  contracts, not a general scheduler).
+- General physical execution of one large contraction across tasklets, DPUs,
+  ranks, or UPMEM DIMMs; M5 v3 currently provides local plan/contract
+  validation only.
 - A hybrid scheduler that uses both forms of parallelism.
 - A production kernel classifier and dispatcher.
 - ATiM-generated/tuned tensor kernels.
 - SparseP-backed sparse execution.
 - PIMutation-inspired gate merging, row swapping/permutation, and vector
   partitioning adapted to TN tasks.
-- SimplePIM-backed array management and processing routes.
+- General SimplePIM-backed array processing routes beyond the bounded
+  management/allocation surfaces.
 - PID-Comm-backed collectives and data relocation.
 - Hardware-calibrated planner weights and schedule selection.
 - Physical strong/weak scaling and energy evaluation.
@@ -142,7 +145,7 @@ flowchart TD
     MP --> SC[Hierarchical scheduler]
     SC --> RT[UPMEM runtime adapters]
 
-    RT --> SP[SimplePIM management and processing]
+    RT --> SP[SimplePIM management and allocation]
     RT --> SDK[Explicit UPMEM SDK control route]
     RT --> PC[PID-Comm collectives]
 
@@ -335,8 +338,8 @@ level at a time.
 ## External Systems Are Central Components
 
 SimplePIM, PID-Comm, ATiM, and SparseP are all central external systems in the
-target architecture, but each is task-specific. SimplePIM handles management,
-distribution, and selected array primitives; PID-Comm handles distributed
+target architecture, but each is task-specific. SimplePIM handles bounded
+management/allocation and selected array primitives; PID-Comm handles distributed
 relocation and collectives; ATiM handles generated dense local kernels; and
 SparseP handles sparse formats, kernels, and load balancing. None is a generic
 replacement for the explicit SDK control or for the generic fallback.
@@ -353,21 +356,27 @@ Integration sources:
 
 ### SimplePIM
 
-Role:
+Current role:
 
 - DPU allocation/management abstraction;
-- array partitioning and metadata;
-- host-DPU scatter/gather/broadcast;
-- array map/zip/reduce primitives;
+- bounded array partitioning and metadata;
+- bounded host-DPU setup operations; and
 - a productivity and maintainability layer for kernels that fit its model.
+
+For M5 execution-plan-v3, the role is explicitly
+`initialization_binary_and_management_state_only`. Allocation, transfer, and
+launch use raw synchronous UPMEM SDK calls owned by the thesis route. The
+thesis-owned C kernel performs the contraction, and the host performs the
+`float64` reduction. These are not SimplePIM compute operators.
 
 Integration target:
 
-1. build and run pinned upstream examples on ETH;
-2. create a thesis adapter with the same placement and evidence plans as the
+1. preserve the bounded M4.2--M4.5 qualification and its evidence boundary;
+2. build and run pinned upstream examples on ETH;
+3. create a thesis adapter with the same placement and evidence plans as the
    explicit SDK route;
-3. implement one SimplePIM-backed elementwise/zip/reduction path;
-4. use SimplePIM distribution primitives for an initial multi-DPU route; and
+4. implement one SimplePIM-backed elementwise/zip/reduction path beyond the
+   v3 initialization/management-state-only route; and
 5. compare code complexity, setup cost, bytes, and runtime with the explicit
    SDK control.
 
@@ -659,13 +668,41 @@ scaling or final performance.
 
 ### M5: distributed single large contraction
 
-M5.1 and M5.2 are bounded parts of M5, while general M5 distributed execution
-remains incomplete. M5.1 passed a bounded real-float32 output-partition probe
-on 1/2/4 DPUs. M5.2 passed a bounded
+M5.1 and M5.2 are historical bounded parts of M5. M5.1 passed a bounded
+real-float32 output-partition probe on 1/2/4 DPUs. M5.2 passed a bounded
 contracted-axis partial-sum probe on 1/2/4 DPUs using deterministic
 host-mediated reduction, with maximum absolute error `2.98e-08`. Both use one
-repetition and zero warmups and provide functionality evidence only. The
-ATiM production integration and general kernel selection belong to the
+repetition and zero warmups and provide functionality evidence only.
+
+The additive execution-plan-v3 lane now exists locally. It is a one-rank
+one-rank multi-DPU single-contraction route with output/contracted-axis
+partitioning, float32 and per-task resident int8 requantization, real
+highest-work contractions, and synthetic strong/weak diagnostics. Both modes
+use float32 MRAM transport. Partitioning is an execution-layout comparison
+under a fixed contraction plan, not a contraction-path comparison. The
+exact local preparation check is:
+
+```bash
+UPMEM_HW_M5_DPU_COUNTS=3 UPMEM_HW_M5_TASKLETS=3 make upmem-hw-m5-plan
+```
+
+It prepares the configured plan set, preserves unsupported cases, reports
+failures explicitly, and performs no DPU allocation or launch. Physical ETH
+execution is pending. The future command is:
+
+```bash
+UPMEM_HW_RANK_PATH=/dev/dpu_rank1 \
+UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-m5
+```
+
+No physical performance or scaling claim is allowed. For v3, SimplePIM is
+`initialization_binary_and_management_state_only`; raw synchronous SDK calls
+own allocation, transfer, and launch, while thesis-owned C compute and host
+`float64` reduction are outside SimplePIM compute operators. The broad
+`thesis_results/current` snapshot is historical and does not contain this
+pending route.
+
+The ATiM production integration and general kernel selection belong to the
 incomplete M3 operation-aware kernel/provider work; general distributed TN
 execution remains incomplete in M5.
 M5.3 PID-Comm is blocked before allocation because the pinned source expects
@@ -828,13 +865,17 @@ Each physical milestone has a separate ETH acceptance suite.
 ## Immediate Next Wave
 
 Use the completed ETH physical functionality evidence for the implemented
-M4.5 descriptor-driven shared runtime as the baseline. M4.6 and M5.1/M5.2 now
-provide bounded physical development acceptance for tasklet execution and two
-single-contraction partition policies. The next architecture work is general
-distributed TaskGraph scheduling and external communication/kernel providers,
-not re-running these acceptance probes as final benchmarks.
+M4.5 descriptor-driven shared runtime as the baseline. M4.6 and historical
+M5.1/M5.2 provide bounded physical development acceptance for tasklet execution
+and two single-contraction partition policies. M5 execution-plan-v3 is a new
+locally validated route awaiting ETH execution. Its active study varies numeric
+mode and output-versus-contracted-axis partitioning for one contraction on one
+rank; partitioning is not a contraction-path comparison. The next architecture
+work is general distributed TaskGraph scheduling and external
+communication/kernel providers, not treating the existing probes as final
+benchmarks.
 
 M2.1, M2.2, M2.3, M3.1, and M4.2--M4.4 remain frozen compatibility surfaces.
-M4.5, M4.6, M5.1, and M5.2 remain functionality/development evidence only: no
-speedup, energy, general scaling, PID-Comm, ATiM, SparseP, multi-rank, or
-multi-DIMM claim is allowed.
+M4.5, M4.6, M5.1, and M5.2 remain functionality/development evidence only, and
+M5 v3 remains pending physical execution: no speedup, energy, general scaling,
+PID-Comm, ATiM, SparseP, multi-rank, or multi-DIMM claim is allowed.
