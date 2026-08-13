@@ -201,6 +201,25 @@ def main() -> int:
     upmem_hardware_distributed_m5_2_mode.add_argument("--prepare-only", action="store_true")
     upmem_hardware_distributed_m5_2_mode.add_argument("--execute", action="store_true")
     upmem_hardware_distributed_m5_2_parser.add_argument("--build", action="store_true")
+    upmem_hardware_distributed_m5_parser = sub.add_parser(
+        "upmem-hardware-distributed-m5",
+        help="run the guarded physical execution-plan-v3 distributed M5 study",
+    )
+    upmem_hardware_distributed_m5_parser.add_argument(
+        "--suite", required=True, help="committed M5 execution-plan-v3 suite YAML"
+    )
+    upmem_hardware_distributed_m5_mode = (
+        upmem_hardware_distributed_m5_parser.add_mutually_exclusive_group(required=True)
+    )
+    upmem_hardware_distributed_m5_mode.add_argument("--prepare-only", action="store_true")
+    upmem_hardware_distributed_m5_mode.add_argument("--execute", action="store_true")
+    upmem_hardware_distributed_m5_parser.add_argument("--build", action="store_true")
+    upmem_hardware_distributed_m5_parser.add_argument(
+        "--dpu-counts", help="comma-separated DPU counts; defaults to 1,2,4,8,16,32,64"
+    )
+    upmem_hardware_distributed_m5_parser.add_argument(
+        "--tasklets", type=int, help="tasklets per DPU override, from 1 through 24"
+    )
     upmem_hardware_taskgraph_m4_1_mode = (
         upmem_hardware_taskgraph_m4_1_parser.add_mutually_exclusive_group(required=True)
     )
@@ -689,6 +708,35 @@ def main() -> int:
             parser.error("--prepare-only requires --build for native plan validation")
         try:
             result = prepare(root_dir, build=args.build) if args.prepare_only else execute(root_dir)
+        except (OSError, RuntimeError, ValueError, TimeoutError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(result, indent=2))
+        return 0 if result["status"] in {"prepared", "completed"} else 2
+    if args.command == "upmem-hardware-distributed-m5":
+        from quantum_bench.bench.upmem_hardware_distributed_m5 import execute, prepare
+
+        if args.build and not args.prepare_only:
+            parser.error("--build is only valid with --prepare-only")
+        if args.prepare_only and not args.build:
+            parser.error("--prepare-only requires --build for native plan validation")
+        counts = args.dpu_counts
+        try:
+            result = (
+                prepare(
+                    root_dir,
+                    suite_path=suite_path(args.suite, root_dir),
+                    build=args.build,
+                    dpu_counts=counts,
+                    tasklets=args.tasklets,
+                )
+                if args.prepare_only
+                else execute(
+                    root_dir,
+                    suite_path=suite_path(args.suite, root_dir),
+                    dpu_counts=counts,
+                    tasklets=args.tasklets,
+                )
+            )
         except (OSError, RuntimeError, ValueError, TimeoutError) as exc:
             parser.error(str(exc))
         print(json.dumps(result, indent=2))

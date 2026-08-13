@@ -1,0 +1,1285 @@
+"""Public M5 distributed-plan-v3 hardware study.
+
+This module deliberately owns orchestration only.  Circuit lowering and task
+input replay belong to ``m5_task_selection``; native plan construction and
+execution belong to the v3 target.  Keeping those boundaries here makes the
+study useful with a fake target in CI and prevents accidental CPU/simulator
+substitution on a physical run.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import hashlib
+import importlib
+import inspect
+import json
+import math
+import os
+from pathlib import Path
+import subprocess
+from typing import Any, Callable, Mapping, Protocol, Sequence
+
+import numpy as np
+import yaml
+
+from quantum_bench.bench.reporting import write_normalized_records, write_run_manifest
+from quantum_bench.bench.run_dirs import EVIDENCE_ARTIFACT_KIND, create_run_dir
+from quantum_bench.circuits import load_circuit
+from quantum_bench.core.jsonio import write_json
+from quantum_bench.environment import capture_environment
+from quantum_bench.targets.upmem.hardware_session import hardware_environment_metadata
+from quantum_bench.tn import build_tensor_network, plan_task_graph_with_config
+from quantum_bench.tn.execution_bundle import canonical_hash
+from quantum_bench.core.records import to_jsonable
+from quantum_bench.formats import conversion_error_metrics
+
+
+SUITE_ID = "upmem_hardware_distributed_m5"
+ROUTE_LABEL = "upmem_hw_m5"
+ROUTE_ID = "upmem_tn_hardware_distributed_m5"
+BACKEND_ID = "upmem_sdk_hardware_distributed_m5"
+SCHEMA_VERSION = "upmem_hardware_distributed_m5_v1"
+NATIVE_PLAN_KIND = "distributed_plan_v3"
+NATIVE_RESPONSE_SCHEMA = "upmem_execution_plan_native_v3"
+DEFAULT_DPU_COUNTS = (1, 2, 4, 8, 16, 32, 64)
+DEFAULT_TASKLETS = 8
+MIN_TASKLETS = 1
+MAX_TASKLETS = 24
+WARMUPS = 2
+REPEATS = 7
+TOTAL_REPETITIONS = WARMUPS + REPEATS
+DEFAULT_CAPACITY = 64
+QUANTIZATION_MODES = ("none", "per_task_resident_requantize")
+PARTITION_STRATEGIES = ("output", "contracted")
+
+
+class NativeExecutionError(RuntimeError):
+    """A native invocation failed but still produced a structured response."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        response: Mapping[str, Any] | None = None,
+        returncode: int | None = None,
+    ) -> None:
+        self.response = dict(response) if isinstance(response, Mapping) else None
+        self.returncode = returncode
+        failure_stage = self.response.get("failure_stage") if self.response else None
+        self.failure_stage = failure_stage if isinstance(failure_stage, str) and failure_stage else None
+        super().__init__(message)
+
+
+class M5NativeTarget(Protocol):
+    """Native seam used by the physical runner and hardware-free tests."""
+
+    def set_environment(self, environment: Mapping[str, str]) -> None: ...
+
+    def build(self, build_dir: Path, *, tasklets: int) -> Mapping[str, Any]: ...
+
+    def prepare_request(
+        self,
+        *,
+        case: Mapping[str, Any],
+        materialized: Mapping[str, Any],
+        dpu_count: int,
+        tasklets: int,
+        quantization_mode: str,
+        partition_strategy: str,
+        build: Mapping[str, Any],
+        root: Path,
+    ) -> Mapping[str, Any]: ...
+
+    def validate(self, request: Mapping[str, Any], *, timeout_s: float) -> Mapping[str, Any]: ...
+
+    def execute(self, request: Mapping[str, Any], *, timeout_s: float) -> Mapping[str, Any]: ...
+
+
+@dataclass(frozen=True)
+class M5StudyConfig:
+    suite_id: str
+    dpu_counts: tuple[int, ...]
+    tasklets: int
+    warmups: int
+    repeats: int
+    capacity: int
+    cases: tuple[Mapping[str, Any], ...]
+    suite_path: Path
+
+
+class _DefaultNativeTarget:
+    """Exact adapter for the additive execution-plan v3 target."""
+
+    def __init__(self) -> None:
+        self._environment = dict(os.environ)
+        self._module: Any | None = None
+
+    def set_environment(self, environment: Mapping[str, str]) -> None:
+        self._environment = dict(environment)
+
+    def _load(self) -> Any:
+        if self._module is None:
+            self._module = importlib.import_module(
+                "quantum_bench.targets.upmem.execution_plan_v3"
+            )
+        return self._module
+
+    def build(self, build_dir: Path, *, tasklets: int) -> Mapping[str, Any]:
+        result = self._load().build(
+            build_dir, tasklets=tasklets, environment=self._environment
+        )
+        return {
+            **dict(result),
+            "selected_rank_path": self._environment.get("UPMEM_HW_RANK_PATH"),
+        }
+
+    def prepare_request(self, **kwargs: Any) -> Mapping[str, Any]:
+        return self._load().prepare_request(**kwargs)
+
+    def validate(self, request: Mapping[str, Any], *, timeout_s: float) -> Mapping[str, Any]:
+        return self._invoke(request, "--validate-plan", timeout_s=timeout_s, expected="validated")
+
+    def execute(self, request: Mapping[str, Any], *, timeout_s: float) -> Mapping[str, Any]:
+        return self._invoke(request, "--execute-plan", timeout_s=timeout_s, expected="completed")
+
+    def _invoke(
+        self,
+        request: Mapping[str, Any],
+        mode: str,
+        *,
+        timeout_s: float,
+        expected: str,
+    ) -> Mapping[str, Any]:
+        host = Path(str(request.get("host_binary") or request.get("runner")))
+        response_path = Path(str(request["response_path"]))
+        policy_reference = _reference_binding(request, "policy_reference")
+        response_path.unlink(missing_ok=True)
+        command = [
+            str(host),
+            mode,
+            "--resident-package",
+            str(request["resident_manifest"]),
+            "--distributed-plan-v3",
+            str(request["distributed_plan"]),
+            "--policy-reference",
+            policy_reference["path"],
+            "--policy-reference-sha256",
+            policy_reference["sha256"],
+            "--policy-tolerance",
+            str(policy_reference["max_abs_tolerance"]),
+            "--response",
+            str(response_path),
+            "--warmups",
+            str(WARMUPS),
+            "--repetitions",
+            str(REPEATS),
+            "--timeout-s",
+            str(max(1, math.ceil(timeout_s))),
+        ]
+        completed = subprocess.run(
+            command,
+            cwd=host.parent,
+            env=dict(self._environment),
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            check=False,
+        )
+        if not response_path.is_file():
+            raise RuntimeError("native_response_missing: v3 response was not written")
+        payload = json.loads(response_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise RuntimeError("native_response_invalid: v3 response is not an object")
+        if completed.returncode != 0 or payload.get("status") != expected:
+            raise NativeExecutionError(
+                str(payload.get("error") or "native v3 request failed"),
+                response=payload,
+                returncode=completed.returncode,
+            )
+        policy_validation = payload.get("policy_reference_validation")
+        if not isinstance(policy_validation, Mapping):
+            raise NativeExecutionError(
+                "policy_reference_validation_failed: native response lacks policy-reference evidence",
+                response=payload,
+                returncode=completed.returncode,
+            )
+        if expected == "validated":
+            if (
+                policy_validation.get("status") != "not_run"
+                or policy_validation.get("passed") is not False
+            ):
+                raise NativeExecutionError(
+                    "policy_reference_validation_failed: validate-only response must not claim reference execution",
+                    response=payload,
+                    returncode=completed.returncode,
+                )
+        else:
+            if (
+                policy_validation.get("status") != "passed"
+                or policy_validation.get("passed") is not True
+                or policy_validation.get("reference_sha256")
+                != policy_reference["sha256"]
+            ):
+                raise NativeExecutionError(
+                    "policy_reference_validation_failed: native response did not pass the prepared policy reference",
+                    response=payload,
+                    returncode=completed.returncode,
+                )
+            payload["full_precision_accuracy"] = _full_precision_accuracy(request)
+        payload.update(hardware_environment_metadata(self._environment))
+        return payload
+
+
+def load_m5_suite(path: Path, *, dpu_counts: Sequence[int] | None = None, tasklets: int | None = None) -> M5StudyConfig:
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict) or raw.get("suite_id") != SUITE_ID:
+        raise ValueError("suite_invalid: expected the committed upmem_hardware_distributed_m5 suite")
+    defaults = raw.get("defaults")
+    if not isinstance(defaults, dict):
+        raise ValueError("suite_invalid: defaults must be a mapping")
+    warmups = int(defaults.get("warmups", WARMUPS))
+    repeats = int(defaults.get("repeats", REPEATS))
+    if (warmups, repeats) != (WARMUPS, REPEATS):
+        raise ValueError("suite_invalid: M5 requires warmups=2 and repeats=7")
+    capacity = int((raw.get("metadata") or {}).get("hardware_profile", {}).get("max_dpu_count", DEFAULT_CAPACITY))
+    if capacity < 1:
+        raise ValueError("suite_invalid: max_dpu_count must be positive")
+    selected_counts = _parse_positive_ints(dpu_counts) if dpu_counts is not None else tuple(
+        int(value) for value in defaults.get("dpu_counts", DEFAULT_DPU_COUNTS)
+    )
+    if not selected_counts:
+        raise ValueError("dpu_counts_invalid: at least one DPU count is required")
+    selected_tasklets = DEFAULT_TASKLETS if tasklets is None else int(tasklets)
+    _validate_tasklets(selected_tasklets)
+    cases = raw.get("workloads")
+    if not isinstance(cases, list) or not cases:
+        raise ValueError("suite_invalid: workloads must be non-empty")
+    normalized_cases: list[Mapping[str, Any]] = []
+    for case in cases:
+        if not isinstance(case, dict) or not case.get("id"):
+            raise ValueError("suite_invalid: every workload needs an id")
+        normalized_cases.append({**case, "case_id": str(case["id"]), "workload_id": str(case["id"])})
+    return M5StudyConfig(
+        suite_id=str(raw["suite_id"]),
+        dpu_counts=tuple(selected_counts),
+        tasklets=selected_tasklets,
+        warmups=warmups,
+        repeats=repeats,
+        capacity=capacity,
+        cases=tuple(normalized_cases),
+        suite_path=path,
+    )
+
+
+def prepare(
+    root_dir: Path,
+    *,
+    suite_path: Path,
+    build: bool = False,
+    dpu_counts: Sequence[int] | None = None,
+    tasklets: int | None = None,
+    native_target: M5NativeTarget | None = None,
+    task_selector: Any | None = None,
+) -> dict[str, Any]:
+    if not build:
+        raise ValueError("prepare_requires_build: --prepare-only requires --build")
+    config = load_m5_suite(suite_path, dpu_counts=dpu_counts, tasklets=tasklets)
+    target = native_target or _DefaultNativeTarget()
+    plan_dir = _unique_dir(root_dir / "build" / f"{SUITE_ID}_plan")
+    target.set_environment(dict(os.environ))
+    native_build = target.build(plan_dir / "native_build", tasklets=config.tasklets)
+    plans, preparation_rows = _prepare_plans(
+        root_dir, plan_dir, config, target, native_build, task_selector=task_selector
+    )
+    counts = _status_counts(preparation_rows)
+    status = (
+        "failed"
+        if counts["failed_count"]
+        else "prepared"
+        if counts["prepared_count"]
+        else "failed"
+    )
+    artifact = plan_dir / f"{SUITE_ID}_plan.json"
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "status": status,
+        "suite_id": config.suite_id,
+        "suite_path": str(suite_path),
+        "dpu_counts": list(config.dpu_counts),
+        "tasklets": config.tasklets,
+        "warmups": config.warmups,
+        "repeats": config.repeats,
+        "capacity": config.capacity,
+        "native_plan_kind": NATIVE_PLAN_KIND,
+        "dpu_allocation_attempted": False,
+        "dpu_launch_attempted": False,
+        "plans": plans,
+        "preparation_rows": preparation_rows,
+        **counts,
+    }
+    write_json(artifact, payload)
+    return {
+        "plan_dir": str(plan_dir),
+        "artifact": str(artifact),
+        "status": status,
+        "prepared_count": counts["prepared_count"],
+        "unsupported_count": counts["unsupported_count"],
+        "failed_count": counts["failed_count"],
+        "dpu_allocation_attempted": False,
+        "dpu_launch_attempted": False,
+    }
+
+
+def execute(
+    root_dir: Path,
+    *,
+    suite_path: Path,
+    dpu_counts: Sequence[int] | None = None,
+    tasklets: int | None = None,
+    environment: Mapping[str, str] | None = None,
+    native_target: M5NativeTarget | None = None,
+    task_selector: Any | None = None,
+) -> dict[str, Any]:
+    env = dict(os.environ if environment is None else environment)
+    _require_physical_environment(env)
+    config = load_m5_suite(suite_path, dpu_counts=dpu_counts, tasklets=tasklets)
+    target = native_target or _DefaultNativeTarget()
+    target.set_environment(env)
+    run_dir = create_run_dir(root_dir, SUITE_ID, artifact_kind=EVIDENCE_ARTIFACT_KIND, route_label=ROUTE_LABEL)
+    environment_payload = capture_environment(root_dir)
+    environment_payload["m5_native_environment"] = {
+        "UPMEM_ALLOW_PHYSICAL_HARDWARE": env.get("UPMEM_ALLOW_PHYSICAL_HARDWARE"),
+        "DPU_BACKEND": env.get("DPU_BACKEND"),
+        "UPMEM_EXECUTION_MODE": env.get("UPMEM_EXECUTION_MODE"),
+        **hardware_environment_metadata(env),
+    }
+    write_json(run_dir / "environment.json", environment_payload)
+    summary_name = f"{SUITE_ID}_summary.json"
+    manifest = write_run_manifest(
+        run_dir,
+        run_kind=SCHEMA_VERSION,
+        suite_id=config.suite_id,
+        suite_path=str(suite_path),
+        artifact_kind=EVIDENCE_ARTIFACT_KIND,
+        route_label=ROUTE_LABEL,
+        route_id=ROUTE_ID,
+        backend_id=BACKEND_ID,
+        execution_scope="execution_plan_v3_distributed_study",
+        evidence_type="physical_hardware_functionality_and_repeat_timing",
+        normalized_records="normalized_records.jsonl",
+        summary=summary_name,
+        upmem_execution_mode=NATIVE_PLAN_KIND,
+        policies=PARTITION_STRATEGIES,
+        quantization_modes=QUANTIZATION_MODES,
+        command="UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-m5",
+        root_dir=root_dir,
+    )
+    manifest.update(hardware_environment_metadata(env))
+    manifest["claims"] = _false_claims()
+    write_json(run_dir / "run_manifest.json", manifest)
+
+    native_build = target.build(run_dir / "native_build", tasklets=config.tasklets)
+    plans, preparation_rows = _prepare_plans(
+        root_dir, run_dir, config, target, native_build, task_selector=task_selector
+    )
+    records: list[dict[str, Any]] = []
+    for row in preparation_rows:
+        if row["status"] != "prepared":
+            records.append(_failure_record(row, env))
+            continue
+        plan = plans[row["plan_key"]]
+        request = plan["request"]
+        response: Mapping[str, Any] | None = None
+        try:
+            response = target.execute(request, timeout_s=float(request.get("timeout_s", 120.0)))
+            _validate_execute_response(response, request, config)
+            repetitions = _measured_repetitions(response, config)
+            for repeat_id, timing in repetitions:
+                records.append(_normalized_record(plan, response, timing, repeat_id, env))
+        except (OSError, RuntimeError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
+            native_response = (
+                dict(response) if isinstance(response, Mapping)
+                else getattr(exc, "response", None)
+            )
+            records.append(_failure_record({
+                **row,
+                "status": "failed",
+                "reason": str(exc),
+                "failure_stage": _failure_stage(exc),
+                "native_response": native_response,
+            }, env))
+    write_normalized_records(run_dir, records)
+    preparation_counts = _status_counts(preparation_rows)
+    failed_count = sum(row["status"] == "failed" for row in records)
+    completed_count = sum(row["status"] == "completed" for row in records)
+    if failed_count:
+        status = "failed"
+    elif completed_count:
+        status = "completed"
+    else:
+        status = "unsupported"
+    allocation_attempted, launch_attempted = _native_attempt_flags(records)
+    summary = {
+        "schema_version": SCHEMA_VERSION,
+        "status": status,
+        "suite_id": config.suite_id,
+        "suite_path": str(suite_path),
+        "route_id": ROUTE_ID,
+        "backend_id": BACKEND_ID,
+        "native_plan_kind": NATIVE_PLAN_KIND,
+        "dpu_counts": list(config.dpu_counts),
+        "tasklets": config.tasklets,
+        "warmups": config.warmups,
+        "repeats": config.repeats,
+        "row_count": len(records),
+        "preparation_row_count": len(preparation_rows),
+        "unsupported_count": sum(row["status"] == "unsupported" for row in records),
+        "failed_count": failed_count,
+        "completed_count": completed_count,
+        "prepared_count": preparation_counts["prepared_count"],
+        "preparation_unsupported_count": preparation_counts["unsupported_count"],
+        "preparation_failed_count": preparation_counts["failed_count"],
+        "claims": _false_claims(),
+        "dpu_allocation_attempted": allocation_attempted,
+        "dpu_launch_attempted": launch_attempted,
+        "normalized_records": "normalized_records.jsonl",
+    }
+    summary_path = run_dir / summary_name
+    write_json(summary_path, summary)
+    manifest["hardware_available"] = "verified_by_execution" if status == "completed" else "not_verified"
+    write_json(run_dir / "run_manifest.json", manifest)
+    return {
+        "run_dir": str(run_dir),
+        "artifact": str(summary_path),
+        "status": status,
+        "row_count": len(records),
+        "dpu_allocation_attempted": allocation_attempted,
+        "dpu_launch_attempted": launch_attempted,
+    }
+
+
+def _prepare_plans(
+    root_dir: Path,
+    output_root: Path,
+    config: M5StudyConfig,
+    target: M5NativeTarget,
+    native_build: Mapping[str, Any],
+    *,
+    task_selector: Any | None,
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+    plans: dict[str, dict[str, Any]] = {}
+    rows: list[dict[str, Any]] = []
+    for case in config.cases:
+        selection: Mapping[str, Any] | None = None
+        try:
+            selection = _select_and_materialize(case, root_dir, task_selector)
+        except (OSError, RuntimeError, ValueError, TypeError) as exc:
+            for dpu_count in config.dpu_counts:
+                for mode in QUANTIZATION_MODES:
+                    for strategy in _strategies_for(case):
+                        rows.append(_base_row(case, dpu_count, config.tasklets, mode, strategy) | {
+                            "status": "failed", "failure_stage": "task_selection", "reason": str(exc)
+                        })
+            continue
+        for dpu_count in config.dpu_counts:
+            for mode in QUANTIZATION_MODES:
+                for strategy in _strategies_for(case):
+                    row = _base_row(case, dpu_count, config.tasklets, mode, strategy) | {
+                        "selection": _selection_evidence(selection),
+                        **_identity_hashes(selection),
+                    }
+                    key = _plan_key(row)
+                    if dpu_count > config.capacity:
+                        rows.append(row | {
+                            "status": "unsupported", "failure_stage": "capacity",
+                            "reason": f"requested_dpu_count={dpu_count} exceeds capacity={config.capacity}",
+                            "plan_key": key,
+                        })
+                        continue
+                    try:
+                        case_root = output_root / "plans" / _safe_name(key)
+                        request = target.prepare_request(
+                            case=case,
+                            materialized=selection,
+                            dpu_count=dpu_count,
+                            tasklets=config.tasklets,
+                            quantization_mode=mode,
+                            partition_strategy=strategy,
+                            build=native_build,
+                            root=case_root,
+                        )
+                        if not isinstance(request, Mapping):
+                            raise ValueError("native_v3_plan_invalid: request builder returned a non-mapping")
+                        validation = target.validate(request, timeout_s=float(request.get("timeout_s", 120.0)))
+                        _validate_plan_response(validation, dpu_count, config.tasklets)
+                        plan = {
+                            **row,
+                            "status": "prepared",
+                            "plan_key": key,
+                            "request": dict(request),
+                            "native_validation": dict(validation),
+                            "selection": _selection_evidence(selection),
+                            "hashes": _identity_hashes(selection, request),
+                        }
+                        plans[key] = plan
+                        rows.append(plan)
+                    except (OSError, RuntimeError, TimeoutError, ValueError, TypeError) as exc:
+                        rows.append(_preparation_failure_row(row, key, exc))
+    return plans, rows
+
+
+def _preparation_failure_row(
+    row: Mapping[str, Any], plan_key: str, exc: BaseException
+) -> dict[str, Any]:
+    reason = str(exc)
+    stage = _failure_stage(exc)
+    classification = _unsupported_preparation_stage(stage, reason)
+    return {
+        **row,
+        "status": "unsupported" if classification is not None else "failed",
+        "failure_stage": classification or stage,
+        "reason": reason,
+        "plan_key": plan_key,
+    }
+
+
+def _unsupported_preparation_stage(stage: str, reason: str) -> str | None:
+    """Classify non-runnable resource and partition cases without masking defects."""
+
+    detail = f"{stage}: {reason}".lower()
+    if stage == "partition_unsupported" or "partition" in detail:
+        return "partition_incompatible"
+    if any(token in detail for token in ("capacity", "resource", "mram", "dpu count", "tasklet")):
+        return "resource_limited"
+    if stage in {"hardware_profile_violation", "unsupported", "not_supported"}:
+        return "hardware_profile_violation"
+    return None
+
+
+def _status_counts(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    return {
+        "prepared_count": sum(row.get("status") == "prepared" for row in rows),
+        "unsupported_count": sum(row.get("status") == "unsupported" for row in rows),
+        "failed_count": sum(row.get("status") == "failed" for row in rows),
+    }
+
+
+def _select_and_materialize(case: Mapping[str, Any], root_dir: Path, helper: Any | None) -> Mapping[str, Any]:
+    if helper is None:
+        try:
+            helper = importlib.import_module("quantum_bench.targets.upmem.m5_task_selection")
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "task_selection_unavailable: quantum_bench.targets.upmem.m5_task_selection is required"
+            ) from exc
+    if case.get("non_quantum") is True or case.get("quantum_case") == "non_quantum":
+        # Diagnostics intentionally have no circuit identity, but retain the
+        # same materialized-input boundary in their request metadata.
+        return {
+            "status": "selected",
+            "case_id": case["case_id"],
+            "non_quantum": True,
+            "matrix_shapes": case.get("matrix_shapes"),
+            **_diagnostic_hashes(case),
+        }
+    function = helper if callable(helper) else getattr(helper, "select_and_materialize_task", None)
+    if function is None:
+        function = getattr(helper, "select_and_materialize", None)
+    if function is None:
+        function = getattr(helper, "select_highest_work_supported_task", None)
+    if function is None:
+        function = getattr(helper, "select_and_materialize_highest_work_task", None)
+    if function is None:
+        raise RuntimeError("task_selection_unavailable: shared helper has no selection entry point")
+    try:
+        result = _invoke_flexible(function, case=case, root_dir=root_dir, root=root_dir)
+    except TypeError:
+        circuit = load_circuit(dict(case), root_dir)
+        network = build_tensor_network(circuit)
+        graph = plan_task_graph_with_config(network, dict(case.get("planner") or {}))
+        result = _invoke_flexible(function, graph, network)
+    if isinstance(result, Mapping):
+        status = str(result.get("status", "materialized"))
+        if status not in {"materialized", "initial_inputs_available", "selected", "prepared"}:
+            raise ValueError(f"task_selection_{status}: {result.get('reason') or result.get('error') or status}")
+        return _retain_real_selection_context(case, dict(result), root_dir)
+    if hasattr(result, "to_json_dict"):
+        return _retain_real_selection_context(
+            case, {**result.to_json_dict(), "selection_object": result}, root_dir
+        )
+    raise TypeError("task_selection_invalid: shared helper returned an unsupported result")
+
+
+def _retain_real_selection_context(
+    case: Mapping[str, Any], selection: dict[str, Any], root_dir: Path
+) -> Mapping[str, Any]:
+    """Keep the selected graph/task and arrays live through native preparation."""
+
+    if case.get("non_quantum") is True or case.get("quantum_case") == "non_quantum":
+        return selection
+    try:
+        circuit = load_circuit(dict(case), root_dir)
+        network = build_tensor_network(circuit)
+        graph = plan_task_graph_with_config(network, dict(case.get("planner") or {}))
+        task_id = selection.get("task_id") or getattr(selection.get("selection_object"), "task_id", None)
+        task = next((item for item in graph.tasks if item.id == task_id), None)
+        selected_object = selection.get("selection_object")
+        left = selection.get("left_operand")
+        if left is None:
+            left = getattr(selected_object, "left_operand", None)
+        right = selection.get("right_operand")
+        if right is None:
+            right = getattr(selected_object, "right_operand", None)
+        if task is not None and left is not None and right is not None:
+            selection.update({
+                "_source_graph": graph,
+                "_source_network": network,
+                "_selected_task": task,
+                "_left_operand": left,
+                "_right_operand": right,
+                "task_hash": selection.get("task_hash") or canonical_hash(to_jsonable(task)),
+            })
+    except (OSError, RuntimeError, TypeError, ValueError):
+        # Custom test selectors may intentionally provide only identity fields;
+        # their fake target does not need the real lowering context.
+        pass
+    return selection
+
+
+def _selection_evidence(selection: Mapping[str, Any]) -> dict[str, Any]:
+    """Drop live graph/array objects before writing the plan artifact."""
+
+    excluded = {
+        "selection_object", "_source_graph", "_source_network", "_selected_task",
+        "_left_operand", "_right_operand", "graph", "network", "task",
+        "left_operand", "right_operand",
+    }
+    return {key: value for key, value in selection.items() if key not in excluded}
+
+
+def _validate_plan_response(response: Mapping[str, Any], dpu_count: int, tasklets: int) -> None:
+    if response.get("status") != "validated":
+        raise ValueError("native_v3_validation_failed: response is not validated")
+    if response.get("schema_version") not in {NATIVE_RESPONSE_SCHEMA, "upmem_execution_plan_native_v3"}:
+        raise ValueError("native_v3_validation_failed: response schema is not v3")
+    if response.get("target_observed") not in {"not_allocated", "hardware_unallocated"}:
+        raise ValueError("native_v3_validation_failed: validation allocated or selected a target")
+    if response.get("requested_dpu_count") != dpu_count or response.get("allocated_dpu_count") != 0:
+        raise ValueError("native_v3_validation_failed: allocation evidence is not zero")
+    if response.get("tasklets_per_dpu", tasklets) != tasklets:
+        raise ValueError("native_v3_validation_failed: tasklet count mismatch")
+
+
+def _validate_execute_response(response: Mapping[str, Any], request: Mapping[str, Any], config: M5StudyConfig) -> None:
+    partition_strategy = str(request["partition_strategy"])
+    if partition_strategy == "output":
+        expected_collective = "none"
+        expected_reconstruction = "host_owned_range_assembly_v1"
+    else:
+        expected_collective = "host_mediated_sum_v1"
+        expected_reconstruction = "host_float64_reduction_v1"
+    quantization_mode = request.get("quantization_mode")
+    if quantization_mode == "none":
+        expected_numeric_mode = "float32"
+        expected_numeric_arithmetic = "float32"
+        expected_requantization_scope = "none"
+    elif quantization_mode == "per_task_resident_requantize":
+        expected_numeric_mode = "per_task_resident_requantize"
+        expected_numeric_arithmetic = "int8_requantized"
+        expected_requantization_scope = "per_task_on_dpu"
+    else:
+        raise ValueError(
+            f"native_v3_request_invalid: unsupported quantization_mode={quantization_mode!r}"
+        )
+    expected = {
+        "status": "completed",
+        "target_requested": "hardware",
+        "target_observed": "physical_hardware",
+        "requested_dpu_count": int(request["dpu_count"]),
+        "allocated_dpu_count": int(request["dpu_count"]),
+        "tasklets_per_dpu": config.tasklets,
+        "observed_rank_count": 1,
+        "requested_warmups": WARMUPS,
+        "requested_repetitions": REPEATS,
+        "cpu_fallback_used": False,
+        "simulator_kernel_executed": False,
+        "partition_strategy": partition_strategy,
+        "numeric_mode": expected_numeric_mode,
+        "numeric_arithmetic": expected_numeric_arithmetic,
+        "numeric_transport": "float32_mram",
+        "requantization_scope": expected_requantization_scope,
+        "packed_int8_transfer": False,
+        "allocation_provider": "upmem_sdk_rank_profile_v1",
+        "simplepim_role": "initialization_binary_and_management_state_only",
+        "kernel_provider": "thesis_resident_generic_c_v3",
+        "transfer_provider": "upmem_sdk_synchronous_v1",
+        "collective_provider": expected_collective,
+        "reconstruction_provider": expected_reconstruction,
+    }
+    for key, value in expected.items():
+        if response.get(key) != value:
+            raise ValueError(f"native_v3_response_invalid: {key}={response.get(key)!r}, expected {value!r}")
+    if response.get("schema_version") != NATIVE_RESPONSE_SCHEMA:
+        raise ValueError("native_v3_response_invalid: native response is not execution-plan-v3")
+    if response.get("failure_stage") not in {None, ""} or response.get("error") not in {None, ""}:
+        raise ValueError("native_v3_response_invalid: native response reports a failure")
+    if response.get("fallback_used", False) is not False:
+        raise ValueError("native_v3_response_invalid: fallback is forbidden")
+    for key in (
+        "hardware_allocation_verified",
+        "native_kernel_executed",
+        "hardware_kernel_executed",
+        "hardware_release_verified",
+    ):
+        if response.get(key) is not True:
+            raise ValueError(f"native_v3_response_invalid: {key} must be true")
+    expected_hashes = {
+        "package_file_sha256": "package_sha256",
+        "distributed_plan_v3_sha256": "sidecar_sha256",
+        "host_binary_sha256": "host_binary_sha256",
+        "staged_dpu_binary_sha256": "dpu_binary_sha256",
+    }
+    for response_key, request_key in expected_hashes.items():
+        expected_hash = request.get(request_key)
+        if not isinstance(expected_hash, str) or response.get(response_key) != expected_hash:
+            raise ValueError(
+                "native_v3_response_invalid: "
+                f"{response_key} does not match the prepared request"
+            )
+    allocation = response.get("allocation")
+    if not isinstance(allocation, Mapping) or allocation.get("confirmed") is not True or allocation.get("release_confirmed") is not True:
+        raise ValueError("native_v3_response_invalid: allocation/release confirmation is missing")
+    policy_validation = response.get("policy_reference_validation")
+    if not isinstance(policy_validation, Mapping) or policy_validation.get("passed") is not True:
+        raise ValueError("native_v3_response_invalid: policy reference validation did not pass")
+    policy_reference = _reference_binding(request, "policy_reference")
+    if policy_validation.get("reference_sha256") != policy_reference["sha256"]:
+        raise ValueError("native_v3_response_invalid: policy reference hash does not match the prepared request")
+    if not _is_finite_nonnegative(policy_validation.get("max_abs_error")):
+        raise ValueError("native_v3_response_invalid: policy reference error is not numeric")
+    if _full_precision_required(request, response):
+        full_precision = response.get("full_precision_accuracy")
+        if (
+            not isinstance(full_precision, Mapping)
+            or full_precision.get("passed") is not True
+            or not _is_finite_nonnegative(full_precision.get("max_abs_error"))
+        ):
+            raise ValueError("full_precision_accuracy_failed: mandatory full-precision accuracy did not pass")
+
+
+def _measured_repetitions(response: Mapping[str, Any], config: M5StudyConfig) -> list[tuple[int, Mapping[str, Any]]]:
+    repetitions = response.get("repetitions")
+    if not isinstance(repetitions, list) or len(repetitions) != config.warmups + config.repeats:
+        raise ValueError("repeat_evidence_invalid: native response must contain 2 warmups and 7 repeats")
+    if any(not isinstance(item, Mapping) for item in repetitions):
+        raise ValueError("repeat_evidence_invalid: repetitions must be mappings")
+    if any(item.get("warmup") is not True for item in repetitions[:config.warmups]):
+        raise ValueError("repeat_evidence_invalid: warmups must precede measured repetitions")
+    if any(item.get("warmup") is not False for item in repetitions[config.warmups:]):
+        raise ValueError("repeat_evidence_invalid: measured repetitions are not canonical")
+    # Native repeat IDs are evidence, but normalized rows use the canonical
+    # measured sequence 0..repeats-1 across all providers.
+    measured = [(index, item) for index, item in enumerate(repetitions[config.warmups:])]
+    if len(measured) != config.repeats:
+        raise ValueError("repeat_evidence_invalid: measured repeat count is not seven")
+    return measured
+
+
+def _normalized_record(
+    plan: Mapping[str, Any],
+    response: Mapping[str, Any],
+    timing: Mapping[str, Any],
+    repeat_id: int,
+    environment: Mapping[str, str],
+) -> dict[str, Any]:
+    native_evidence = _native_evidence(response)
+    policy_validation = _validation_payload(response.get("policy_reference_validation"))
+    full_precision_accuracy, quantization_error_vs_float32, scientific_status = _scientific_validation_fields(
+        plan.get("request", {}), response
+    )
+    per_repeat_transfers = timing.get("transfers", timing.get("transfer", {}))
+    if not isinstance(per_repeat_transfers, Mapping):
+        per_repeat_transfers = {}
+    run_global_transfers = response.get(
+        "run_total_transfers", response.get("transfers", response.get("transfer", {}))
+    )
+    if not isinstance(run_global_transfers, Mapping):
+        run_global_transfers = {}
+    row = {
+        "schema_version": SCHEMA_VERSION,
+        "status": "completed",
+        "suite_id": SUITE_ID,
+        "case_id": plan["case_id"],
+        "workload_id": plan["workload_id"],
+        "benchmark_role": plan["benchmark_role"],
+        "quantum_case": plan["quantum_case"],
+        "route_id": ROUTE_ID,
+        "backend_id": BACKEND_ID,
+        "backend_family": "upmem_sdk",
+        "target_requested": "hardware",
+        "target_observed": "physical_hardware",
+        "upmem_execution_mode": NATIVE_PLAN_KIND,
+        "execution_plan_kind": NATIVE_PLAN_KIND,
+        "execution_plan_hash": plan.get("execution_plan_hash") or response.get("execution_plan_hash"),
+        "execution_input_hash": plan.get("request", {}).get("execution_input_hash"),
+        "partition_strategy": plan["partition_strategy"],
+        "partition_mode": "output_tile" if plan["partition_strategy"] == "output" else "contracted_partial_sum",
+        "quantization_mode": plan["quantization_mode"],
+        "numeric_mode": response.get("numeric_mode"),
+        "numeric_arithmetic": response.get("numeric_arithmetic"),
+        "numeric_transport": response.get("numeric_transport"),
+        "requantization_scope": response.get("requantization_scope"),
+        "packed_int8_transfer": response.get("packed_int8_transfer"),
+        "requested_dpu_count": plan["requested_dpu_count"],
+        "allocated_dpu_count": response.get("allocated_dpu_count"),
+        "observed_rank_count": response.get("observed_rank_count"),
+        "tasklets_per_dpu": plan["tasklets_per_dpu"],
+        "scaling_kind": plan.get("request", {}).get("scaling_kind", plan.get("scaling_kind", "strong_scaling")),
+        "transport": plan.get("request", {}).get("transport", "float32_mram"),
+        "timing_scope": plan.get("request", {}).get("timing_scope"),
+        "repeat_id": repeat_id,
+        "warmup": False,
+        "persistent_session_intent": True,
+        "persistent_session_reused": response.get("persistent_session_reused"),
+        "hardware_allocation_verified": response.get("hardware_allocation_verified"),
+        "native_kernel_executed": response.get("native_kernel_executed"),
+        "hardware_kernel_executed": response.get("hardware_kernel_executed"),
+        "hardware_release_verified": response.get("hardware_release_verified"),
+        "allocation_provider": response.get("allocation_provider"),
+        "simplepim_role": response.get("simplepim_role"),
+        "kernel_provider": response.get("kernel_provider"),
+        "transfer_provider": response.get("transfer_provider"),
+        "collective_provider": response.get("collective_provider"),
+        "reconstruction_provider": response.get("reconstruction_provider"),
+        "timing": dict(timing),
+        "per_repeat_timing": dict(timing),
+        "transfers": dict(per_repeat_transfers),
+        "per_repeat_transfers": dict(per_repeat_transfers),
+        "run_metadata": {
+            "transfers": dict(run_global_transfers),
+            "timing": dict(response.get("timing", {})) if isinstance(response.get("timing"), Mapping) else {},
+        },
+        "run_global_transfers": dict(run_global_transfers),
+        "load_balance": response.get("load_balance", response.get("load_balance_metrics", {})),
+        "validation": response.get("validation", {}),
+        "policy_reference_validation": policy_validation,
+        "policy_reference_status": "passed",
+        "full_precision_accuracy": full_precision_accuracy,
+        "full_precision_accuracy_status": full_precision_accuracy["status"],
+        "quantization_error_vs_float32": quantization_error_vs_float32,
+        "scientific_validation_status": scientific_status,
+        "validation_status": response.get("validation_status", "native_completion_verified"),
+        "reference_error": response.get("reference_error", response.get("validation", {}).get("reference_error")),
+        "output_error": response.get("output_error", response.get("validation", {}).get("output_error")),
+        "allocation": native_evidence.get("allocation", {}),
+        "launch_attempted": native_evidence.get("launch_attempted", False),
+        "launch_count": native_evidence.get("launch_count", 0),
+        "cpu_fallback_used": native_evidence.get("cpu_fallback_used", False),
+        "simulator_kernel_executed": native_evidence.get("simulator_kernel_executed", False),
+        "fallback_used": native_evidence.get("fallback_used", False),
+        "claims": _false_claims(),
+        "native_response": dict(response),
+        **_identity_hashes(plan.get("selection", {}), plan.get("request", {})),
+        **_request_hashes(plan.get("request", {})),
+        **hardware_environment_metadata(environment),
+    }
+    transfers = row["transfers"]
+    if isinstance(transfers, Mapping):
+        for name in ("h2d_bytes", "d2h_bytes", "actual_h2d_bytes", "actual_d2h_bytes", "actual_transfer_bytes"):
+            if transfers.get(name) is not None:
+                row[name] = transfers[name]
+    validation = row["validation"]
+    if isinstance(validation, Mapping):
+        for name in ("max_abs_error", "l2_error", "reference_error", "output_error"):
+            if validation.get(name) is not None:
+                row[name] = validation[name]
+    row["timing_s"] = timing.get("total_time_s", timing.get("elapsed_s"))
+    return row
+
+
+def _validation_payload(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {"passed": False, "status": "failed"}
+
+
+def _reference_binding(request: Mapping[str, Any], name: str) -> dict[str, Any]:
+    reference = request.get(name)
+    if not isinstance(reference, Mapping):
+        raise ValueError(f"native_v3_request_invalid: {name} is missing")
+    path = reference.get("path")
+    sha256 = reference.get("sha256")
+    tolerance = reference.get("max_abs_tolerance")
+    if not isinstance(path, str) or not path:
+        raise ValueError(f"native_v3_request_invalid: {name} path is missing")
+    if not isinstance(sha256, str) or len(sha256) != 64:
+        raise ValueError(f"native_v3_request_invalid: {name} SHA-256 is invalid")
+    if not _is_finite_nonnegative(tolerance):
+        raise ValueError(f"native_v3_request_invalid: {name} tolerance is invalid")
+    return {"path": path, "sha256": sha256, "max_abs_tolerance": float(tolerance)}
+
+
+def _full_precision_accuracy(request: Mapping[str, Any]) -> dict[str, Any]:
+    reference = _reference_binding(request, "full_precision_reference")
+    output_path = Path(str(request.get("output_path", "")))
+    reference_path = Path(reference["path"])
+    if not output_path.is_file() or not reference_path.is_file():
+        raise RuntimeError("full_precision_accuracy_failed: output or reference file is missing")
+    output = np.fromfile(output_path, dtype="<f4")
+    expected = np.fromfile(reference_path, dtype="<f4")
+    if output.size != expected.size or not np.all(np.isfinite(output)):
+        raise RuntimeError("full_precision_accuracy_failed: output does not match full-precision reference shape")
+    metrics = conversion_error_metrics(expected, output)
+    passed = metrics.max_abs_error <= reference["max_abs_tolerance"]
+    return {
+        "status": "passed" if passed else "failed",
+        "passed": passed,
+        "required": request.get("quantization_mode") == "none",
+        "reference_kind": "cpu_full_precision_float32_reference",
+        "reference_path": str(reference_path),
+        "reference_sha256": reference["sha256"],
+        "tolerance": reference["max_abs_tolerance"],
+        "max_abs_error": metrics.max_abs_error,
+        "l2_error": metrics.l2_error,
+        "relative_l2_error": metrics.relative_l2_error,
+    }
+
+
+def _is_finite_nonnegative(value: Any) -> bool:
+    return (
+        isinstance(value, (float, int))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+        and float(value) >= 0.0
+    )
+
+
+def _full_precision_required(request: Mapping[str, Any], response: Mapping[str, Any]) -> bool:
+    accuracy = response.get("full_precision_accuracy")
+    if isinstance(accuracy, Mapping) and isinstance(accuracy.get("required"), bool):
+        return accuracy["required"]
+    reference = request.get("full_precision_reference")
+    if isinstance(reference, Mapping) and isinstance(reference.get("required"), bool):
+        return reference["required"]
+    return request.get("quantization_mode") == "none"
+
+
+def _scientific_validation_fields(
+    request: Mapping[str, Any], response: Mapping[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any] | None, str]:
+    required = _full_precision_required(request, response)
+    raw = response.get("full_precision_accuracy")
+    accuracy = dict(raw) if isinstance(raw, Mapping) else {"passed": False, "status": "not_run"}
+    accuracy["required"] = required
+    if not _is_finite_nonnegative(accuracy.get("max_abs_error")):
+        accuracy["passed"] = False
+        accuracy["status"] = "failed" if required else "not_run"
+        accuracy.setdefault("max_abs_error", None)
+    if required:
+        accuracy["interpretation"] = "mandatory_full_precision_accuracy"
+        status = "passed" if accuracy.get("passed") is True else "failed"
+        accuracy["status"] = status
+        return accuracy, None, status
+    accuracy["interpretation"] = "descriptive_quantization_difference"
+    accuracy["status"] = "descriptive"
+    quantization_error_vs_float32 = {
+        key: accuracy.get(key)
+        for key in (
+            "reference_kind", "reference_path", "reference_sha256", "max_abs_error",
+            "l2_error", "relative_l2_error", "tolerance",
+        )
+    }
+    quantization_error_vs_float32.update({
+        "status": "descriptive",
+        "interpretation": "descriptive_quantization_difference",
+    })
+    return accuracy, quantization_error_vs_float32, "passed_with_descriptive_quantization_difference"
+
+
+def _failure_record(row: Mapping[str, Any], environment: Mapping[str, str]) -> dict[str, Any]:
+    native_response = row.get("native_response")
+    native_evidence = _native_evidence(native_response)
+    if isinstance(native_response, Mapping):
+        policy_validation = _validation_payload(native_response.get("policy_reference_validation"))
+        full_precision_accuracy, quantization_error_vs_float32, scientific_status = _scientific_validation_fields(
+            row.get("request", {}), native_response
+        )
+        policy_status = "passed" if policy_validation.get("passed") is True else "failed"
+    else:
+        policy_validation = None
+        policy_status = "failed"
+        full_precision_accuracy = None
+        quantization_error_vs_float32 = None
+        scientific_status = "failed"
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "status": row.get("status", "failed"),
+        "suite_id": SUITE_ID,
+        "case_id": row.get("case_id"),
+        "workload_id": row.get("workload_id"),
+        "benchmark_role": row.get("benchmark_role"),
+        "quantum_case": row.get("quantum_case"),
+        "route_id": ROUTE_ID,
+        "backend_id": BACKEND_ID,
+        "execution_plan_kind": NATIVE_PLAN_KIND,
+        "partition_strategy": row.get("partition_strategy"),
+        "partition_mode": "output_tile" if row.get("partition_strategy") == "output" else "contracted_partial_sum" if row.get("partition_strategy") == "contracted" else row.get("partition_strategy"),
+        "quantization_mode": row.get("quantization_mode"),
+        "numeric_mode": "float32" if row.get("quantization_mode") == "none" else row.get("quantization_mode"),
+        "scaling_kind": row.get("scaling_kind", "strong_scaling"),
+        "requested_dpu_count": row.get("requested_dpu_count"),
+        "allocated_dpu_count": native_evidence.get("allocated_dpu_count", 0),
+        "observed_rank_count": native_evidence.get("observed_rank_count"),
+        "tasklets_per_dpu": row.get("tasklets_per_dpu"),
+        "failure_stage": row.get("failure_stage", "unknown"),
+        "reason": row.get("reason", "unknown failure"),
+        "validation_status": "failed",
+        "policy_reference_validation": policy_validation,
+        "policy_reference_status": policy_status,
+        "full_precision_accuracy": full_precision_accuracy,
+        "full_precision_accuracy_status": (
+            full_precision_accuracy["status"] if full_precision_accuracy is not None else "failed"
+        ),
+        "quantization_error_vs_float32": quantization_error_vs_float32,
+        "scientific_validation_status": scientific_status,
+        "reference_error": None,
+        "output_error": None,
+        "transfers": {},
+        "per_repeat_transfers": {},
+        "run_metadata": {"transfers": {}, "timing": {}},
+        "run_global_transfers": {},
+        "load_balance": {},
+        "hardware_allocation_verified": native_evidence.get("hardware_allocation_verified"),
+        "native_kernel_executed": native_evidence.get("native_kernel_executed"),
+        "hardware_kernel_executed": native_evidence.get("hardware_kernel_executed"),
+        "hardware_release_verified": native_evidence.get("hardware_release_verified"),
+        "allocation": native_evidence.get("allocation", {}),
+        "launch_attempted": native_evidence.get("launch_attempted", False),
+        "launch_count": native_evidence.get("launch_count", 0),
+        "cpu_fallback_used": native_evidence.get("cpu_fallback_used", False),
+        "simulator_kernel_executed": native_evidence.get("simulator_kernel_executed", False),
+        "fallback_used": native_evidence.get("fallback_used", False),
+        "claims": _false_claims(),
+        "native_response": dict(native_response) if isinstance(native_response, Mapping) else None,
+        **_identity_hashes(row.get("selection", {}), row.get("request", {})),
+        **_request_hashes(row.get("request", {})),
+        **hardware_environment_metadata(environment),
+    }
+
+
+def _base_row(case: Mapping[str, Any], dpu_count: int, tasklets: int, mode: str, strategy: str) -> dict[str, Any]:
+    quantum_case = str(case.get("quantum_case", case.get("kind", "real_circuit")))
+    return {
+        "case_id": str(case["case_id"]),
+        "workload_id": str(case.get("workload_id", case["case_id"])),
+        "benchmark_role": str(case.get("benchmark_role", "m5_distributed_hardware")),
+        "quantum_case": quantum_case,
+        "requested_dpu_count": dpu_count,
+        "tasklets_per_dpu": tasklets,
+        "quantization_mode": mode,
+        "partition_strategy": strategy,
+        "scaling_kind": _canonical_scaling_kind(case),
+    }
+
+
+def _strategies_for(case: Mapping[str, Any]) -> tuple[str, ...]:
+    values = case.get("partition_strategies", PARTITION_STRATEGIES)
+    if not isinstance(values, (list, tuple)):
+        raise ValueError("suite_invalid: partition_strategies must be a list")
+    result = tuple(str(value) for value in values)
+    if not result or any(value not in PARTITION_STRATEGIES for value in result):
+        raise ValueError("suite_invalid: partition strategy must be output or contracted")
+    return result
+
+
+def _canonical_scaling_kind(case: Mapping[str, Any]) -> str:
+    return "weak_scaling" if str(case.get("diagnostic")) in {"weak", "weak_scaling"} else "strong_scaling"
+
+
+def _identity_hashes(*values: Any) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    aliases = {
+        "circuit_semantics_hash": ("circuit_semantics_hash", "circuit_hash"),
+        "tensor_network_hash": ("tensor_network_hash", "network_hash"),
+        "contraction_plan_hash": ("contraction_plan_hash", "task_graph_hash"),
+        "contraction_path_structure_hash": (
+            "contraction_path_structure_hash", "path_hash", "contraction_path_hash"
+        ),
+        "task_hash": ("task_hash", "selected_task_hash"),
+    }
+    for name, keys in aliases.items():
+        for value in values:
+            if isinstance(value, Mapping):
+                for key in keys:
+                    if value.get(key) is not None:
+                        result[name] = value[key]
+                        break
+            if name in result:
+                break
+    return result
+
+
+def _diagnostic_hashes(case: Mapping[str, Any]) -> dict[str, str]:
+    encoded = json.dumps(dict(case), sort_keys=True, separators=(",", ":")).encode("utf-8")
+    digest = hashlib.sha256(encoded).hexdigest()
+    return {
+        "circuit_semantics_hash": f"non_quantum:{digest}",
+        "tensor_network_hash": f"non_quantum:{digest}",
+        "contraction_plan_hash": f"non_quantum:{digest}",
+        "contraction_path_structure_hash": f"non_quantum:{digest}",
+        "task_hash": f"non_quantum:{digest}",
+    }
+
+
+def _identity_hashes_from_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
+    return _identity_hashes(plan.get("selection", {}), plan.get("request", {}), plan)
+
+
+def _plan_key(row: Mapping[str, Any]) -> str:
+    return ":".join(str(row[key]) for key in ("case_id", "requested_dpu_count", "tasklets_per_dpu", "quantization_mode", "partition_strategy"))
+
+
+def _false_claims() -> dict[str, bool]:
+    return {
+        "speedup": False,
+        "cpu_speedup": False,
+        "gpu_speedup": False,
+        "planner_superiority": False,
+        "multi_rank": False,
+        "energy": False,
+        "same_route_dpu_scaling_ratios": True,
+        "scaling": False,
+        "performance": False,
+    }
+
+
+def _request_hashes(request: Mapping[str, Any]) -> dict[str, Any]:
+    result = {
+        key: request[key]
+        for key in (
+            "package_sha256", "operation_sha256", "sidecar_sha256", "task_hash",
+            "package_circuit_semantics_hash", "package_tensor_network_hash",
+            "package_contraction_plan_hash",
+            "host_binary_hash", "dpu_binary_hash", "host_binary_sha256", "dpu_binary_sha256",
+            "simplepim_role", "collective_provider", "selected_rank_path", "rank_path",
+        )
+        if request.get(key) is not None
+    }
+    for name in ("policy_reference", "full_precision_reference"):
+        reference = request.get(name)
+        if isinstance(reference, Mapping):
+            result[f"{name}_path"] = reference.get("path")
+            result[f"{name}_sha256"] = reference.get("sha256")
+            result[f"{name}_tolerance"] = reference.get("max_abs_tolerance")
+    return result
+
+
+def _native_evidence(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {}
+    allocation = value.get("allocation")
+    return {
+        "target_observed": value.get("target_observed"),
+        "allocated_dpu_count": value.get("allocated_dpu_count"),
+        "observed_rank_count": value.get("observed_rank_count"),
+        "hardware_allocation_verified": value.get("hardware_allocation_verified"),
+        "native_kernel_executed": value.get("native_kernel_executed"),
+        "hardware_kernel_executed": value.get("hardware_kernel_executed"),
+        "hardware_release_verified": value.get("hardware_release_verified"),
+        "cpu_fallback_used": value.get("cpu_fallback_used", False),
+        "simulator_kernel_executed": value.get("simulator_kernel_executed", False),
+        "fallback_used": value.get("fallback_used", False),
+        "allocation": dict(allocation) if isinstance(allocation, Mapping) else {},
+        "launch_attempted": value.get("launch_attempted"),
+        "launch_count": value.get("launch_count", 0),
+    }
+
+
+def _native_attempt_flags(records: Sequence[Mapping[str, Any]]) -> tuple[bool, bool]:
+    allocation_attempted = False
+    launch_attempted = False
+    for record in records:
+        evidence = _native_evidence(record.get("native_response"))
+        allocation = evidence.get("allocation", {})
+        allocation_attempted = allocation_attempted or allocation.get("attempted") is True
+        if isinstance(evidence.get("launch_attempted"), bool):
+            launch_attempted = launch_attempted or evidence["launch_attempted"]
+            continue
+        launch_count = evidence.get("launch_count")
+        launch_attempted = launch_attempted or (
+            isinstance(launch_count, (int, float))
+            and not isinstance(launch_count, bool)
+            and launch_count > 0
+        )
+    return allocation_attempted, launch_attempted
+
+
+def _require_physical_environment(environment: Mapping[str, str]) -> None:
+    if environment.get("UPMEM_ALLOW_PHYSICAL_HARDWARE") != "1":
+        raise ValueError("hardware_opt_in_missing: UPMEM_ALLOW_PHYSICAL_HARDWARE=1 is required")
+    if not str(environment.get("UPMEM_HW_RANK_PATH", "")).strip():
+        raise ValueError("hardware_rank_path_missing: UPMEM_HW_RANK_PATH is required")
+    for key in ("DPU_BACKEND", "UPMEM_EXECUTION_MODE"):
+        value = str(environment.get(key, "")).lower()
+        if value in {"simulator", "sdk_simulator", "cpu", "mock"}:
+            raise ValueError(f"hardware_profile_violation: {key} selects {value}, physical hardware is required")
+
+
+def _parse_positive_ints(values: Sequence[int] | str) -> tuple[int, ...]:
+    raw = values.split(",") if isinstance(values, str) else values
+    result = tuple(int(value) for value in raw)
+    if not result or any(value < 1 for value in result):
+        raise ValueError("dpu_counts_invalid: values must be positive integers")
+    if len(set(result)) != len(result):
+        raise ValueError("dpu_counts_invalid: values must be unique")
+    return result
+
+
+def _validate_tasklets(value: int) -> None:
+    if not MIN_TASKLETS <= value <= MAX_TASKLETS:
+        raise ValueError(f"tasklets_invalid: tasklets must be in {MIN_TASKLETS}..{MAX_TASKLETS}")
+
+
+def _invoke_flexible(function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    try:
+        signature = inspect.signature(function)
+    except (TypeError, ValueError):
+        return function(*args, **kwargs)
+    accepts_kwargs = any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values())
+    if accepts_kwargs:
+        return function(*args, **kwargs)
+    filtered = {key: value for key, value in kwargs.items() if key in signature.parameters}
+    return function(*args, **filtered)
+
+
+def _safe_name(value: str) -> str:
+    return "".join(char if char.isalnum() or char in "._-" else "_" for char in value)
+
+
+def _unique_dir(parent: Path) -> Path:
+    parent.mkdir(parents=True, exist_ok=True)
+    candidate = parent / "latest"
+    if not candidate.exists():
+        candidate.mkdir()
+        return candidate
+    index = 1
+    while True:
+        candidate = parent / f"run_{index:03d}"
+        if not candidate.exists():
+            candidate.mkdir()
+            return candidate
+        index += 1
+
+
+def _failure_stage(exc: BaseException) -> str:
+    explicit = getattr(exc, "failure_stage", None)
+    if isinstance(explicit, str) and explicit:
+        return explicit
+    return str(exc).split(":", 1)[0] or "runner"
+
+
+__all__ = [
+    "BACKEND_ID", "DEFAULT_DPU_COUNTS", "DEFAULT_TASKLETS", "M5StudyConfig",
+    "M5NativeTarget", "NATIVE_PLAN_KIND", "PARTITION_STRATEGIES", "QUANTIZATION_MODES",
+    "REPEATS", "ROUTE_ID", "SCHEMA_VERSION", "SUITE_ID", "WARMUPS", "execute",
+    "load_m5_suite", "prepare",
+]

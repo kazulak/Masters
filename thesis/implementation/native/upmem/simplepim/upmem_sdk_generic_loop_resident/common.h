@@ -8,15 +8,25 @@
 #define NR_TASKLETS 1
 #endif
 
+#if defined(RESIDENT_V3)
+#if NR_TASKLETS < 1 || NR_TASKLETS > 24
+#error "resident v3 profile requires NR_TASKLETS in [1,24]"
+#endif
+#else
 #if NR_TASKLETS != 1 && NR_TASKLETS != 2 && NR_TASKLETS != 4 && NR_TASKLETS != 8 && NR_TASKLETS != 16
 #error "resident M4.6 profile requires NR_TASKLETS in {1,2,4,8,16}"
+#endif
 #endif
 
 #ifndef UPMEM_GENERIC_MAX_RANK
 #define UPMEM_GENERIC_MAX_RANK 16
 #endif
 #ifndef UPMEM_GENERIC_MAX_ELEMS
+#if defined(RESIDENT_V3)
+#define UPMEM_GENERIC_MAX_ELEMS 65536
+#else
 #define UPMEM_GENERIC_MAX_ELEMS 256
+#endif
 #endif
 #ifndef RESIDENT_MAX_LOGICAL_TASKS
 #define RESIDENT_MAX_LOGICAL_TASKS 32
@@ -31,7 +41,23 @@
 #define RESIDENT_MRAM_POOL_BYTES (512u * 1024u)
 #endif
 #ifndef RESIDENT_OUTPUT_TILE_ELEMS
+#if defined(RESIDENT_V3)
+#define RESIDENT_OUTPUT_TILE_ELEMS 2
+#else
 #define RESIDENT_OUTPUT_TILE_ELEMS 256
+#endif
+#endif
+
+#if defined(RESIDENT_V3)
+#if UPMEM_GENERIC_MAX_ELEMS != 65536
+#error "resident v3 profile requires UPMEM_GENERIC_MAX_ELEMS=65536"
+#endif
+#if RESIDENT_MRAM_POOL_BYTES != (512u * 1024u)
+#error "resident v3 profile requires a 512 KiB MRAM pool"
+#endif
+#if RESIDENT_OUTPUT_TILE_ELEMS != 2
+#error "resident v3 profile requires RESIDENT_OUTPUT_TILE_ELEMS=2"
+#endif
 #endif
 
 #define UPMEM_GENERIC_MODE_INT8_SCALED 0u
@@ -148,7 +174,11 @@ typedef struct {
     /* This field is part of both completion ABIs. */
     uint64_t dpu_run_time_cycles;
 #if RESIDENT_COMPLETION_VERSION >= 2
+#if RESIDENT_COMPLETION_VERSION >= 3
+    uint32_t tasklet_processed_elements[24];
+#else
     uint32_t tasklet_processed_elements[16];
+#endif
     uint32_t active_tasklet_count;
     uint32_t tasklet_min_processed_elements;
     uint32_t tasklet_max_processed_elements;
@@ -233,8 +263,12 @@ _Static_assert(offsetof(resident_operation_v2_t, args) + offsetof(upmem_generic_
 _Static_assert(sizeof(resident_package_header_t) == 96u, "resident package header ABI drifted");
 #if RESIDENT_COMPLETION_VERSION == 1
 _Static_assert(sizeof(resident_completion_t) == 40u, "resident completion v1 ABI drifted");
-#else
+#elif RESIDENT_COMPLETION_VERSION == 2
 _Static_assert(sizeof(resident_completion_t) == 120u, "resident completion v2 ABI drifted");
+#elif RESIDENT_COMPLETION_VERSION == 3
+_Static_assert(sizeof(resident_completion_t) == 152u, "resident completion v3 ABI drifted");
+#else
+#error "unsupported resident completion ABI"
 #endif
 
 #endif

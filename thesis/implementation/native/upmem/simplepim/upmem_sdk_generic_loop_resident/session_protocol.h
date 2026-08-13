@@ -107,6 +107,14 @@ int resident_request_load_execution_plan_v2(
     char **error_message
 );
 
+/* The additive execution-plan v3 route admits the full bounded physical
+ * profile and binds the manifest to the tasklet-keyed v3 DPU artifact. */
+int resident_request_load_execution_plan_v3(
+    const char *manifest_path,
+    resident_request_t *request,
+    char **error_message
+);
+
 void resident_request_free(resident_request_t *request);
 
 int resident_response_write(

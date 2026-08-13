@@ -166,6 +166,48 @@ def test_m2_3_report_shortcut_documents_eth_inbox_override() -> None:
     assert "--input /tmp/m2-3-run" in report.stdout
 
 
+def test_m5_shortcuts_use_plan_execute_and_focused_report_contract() -> None:
+    plan = subprocess.run(
+        ["make", "-n", "upmem-hw-m5-plan"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    execute = subprocess.run(
+        ["make", "-n", "upmem-hw-m5"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    report = subprocess.run(
+        [
+            "make",
+            "-n",
+            "upmem-hw-m5-report",
+            "UPMEM_HW_M5_RUN=/tmp/m5-physical-latest",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    suite = "configs/suites/upmem_hardware_distributed_m5.yml"
+    assert plan.returncode == 0
+    assert suite in plan.stdout
+    assert "--prepare-only --build" in plan.stdout
+    assert execute.returncode == 0
+    assert suite in execute.stdout
+    assert "--execute" in execute.stdout
+    assert report.returncode == 0
+    assert "scripts/upmem_m5_report.py" in report.stdout
+    assert "--input /tmp/m5-physical-latest" in report.stdout
+    assert "--output-root ." in report.stdout
+    assert "report-run" not in report.stdout
+    assert " --out " not in report.stdout
+
+
 def test_m3_1_frontier_shortcuts_use_canonical_suite_and_opt_in() -> None:
     plan = subprocess.run(
         ["make", "-n", "upmem-hw-frontier-m3-1-plan"],

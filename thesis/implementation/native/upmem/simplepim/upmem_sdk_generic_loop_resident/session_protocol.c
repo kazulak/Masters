@@ -34,6 +34,17 @@ static int resident_binary_matches_abi(const char *path) {
 }
 #endif
 
+static int resident_binary_matches_v3_tasklets(const char *path, uint64_t tasklets) {
+    char expected[32];
+    const char *basename;
+    if (tasklets < 1u || tasklets > 24u ||
+        snprintf(expected, sizeof(expected), "dpu_resident_v3_t%llu",
+            (unsigned long long)tasklets) < 0) return 0;
+    basename = path == NULL ? NULL : strrchr(path, '/');
+    basename = basename == NULL ? path : basename + 1;
+    return basename != NULL && strcmp(basename, expected) == 0;
+}
+
 static int resident_read_file(const char *path, unsigned char **payload, size_t *length) {
     FILE *file = fopen(path, "rb");
     long size;
@@ -695,6 +706,7 @@ static int resident_parse_file_entries(
 static int resident_request_load_profile(
     const char *manifest_path,
     uint32_t max_requested_dpus,
+    int v3_profile,
     resident_request_t *request,
     char **error_message
 ) {
@@ -716,6 +728,8 @@ static int resident_request_load_profile(
     char *quantization_mode = NULL;
     char *package_magic = NULL;
     char *dpu_binary_abi = NULL;
+    uint64_t manifest_requested_dpus = 0u;
+    uint64_t manifest_tasklets = 0u;
     int failed = 1;
     if (request == NULL || manifest_path == NULL || max_requested_dpus == 0u) {
         resident_error(error_message, "manifest_parse_failed: resident request arguments invalid");
@@ -751,24 +765,40 @@ static int resident_request_load_profile(
         resident_error(error_message, "manifest_parse_failed: resident manifest identity missing");
         goto done;
     }
-    if (resident_ascii_identifier(session_id) != 0 || strcmp(route_id, RESIDENT_ROUTE_ID) != 0 ||
+    if (resident_uint_field((char *)manifest_bytes, "requested_dpus", &manifest_requested_dpus) != 0 ||
+        resident_uint_field((char *)manifest_bytes, "tasklets", &manifest_tasklets) != 0) {
+        resident_error(error_message, "manifest_parse_failed: resident request DPU/tasklet identity missing");
+        goto done;
+    }
+    {
+        int binary_identity_valid;
+        if (v3_profile != 0) {
+            /* The package remains operation ABI v2; the loaded artifact is a
+             * separate, tasklet-keyed v3 binary identity. */
+            binary_identity_valid = strcmp(dpu_binary_abi, "dpu_resident_v2") == 0 &&
+                resident_binary_matches_v3_tasklets(dpu_ref, manifest_tasklets);
+        } else {
+            binary_identity_valid = strcmp(dpu_binary_abi,
+#if RESIDENT_OPERATION_ABI_VERSION == RESIDENT_OPERATION_ABI_V2
+                "dpu_resident_v2"
+#else
+                "dpu_resident"
+#endif
+                ) == 0;
+#if RESIDENT_OPERATION_ABI_VERSION == RESIDENT_OPERATION_ABI_V2
+            binary_identity_valid = binary_identity_valid && resident_binary_matches_abi(dpu_ref);
+#endif
+        }
+        if (resident_ascii_identifier(session_id) != 0 || strcmp(route_id, RESIDENT_ROUTE_ID) != 0 ||
         strcmp(backend_id, RESIDENT_BACKEND_ID) != 0 || strcmp(profile_version, RESIDENT_PROFILE_VERSION) != 0 ||
         strcmp(target, RESIDENT_TARGET) != 0 || strcmp(allocation_profile, RESIDENT_ALLOCATION_PROFILE) != 0 ||
         strcmp(session_protocol, RESIDENT_SESSION_SCHEMA) != 0 ||
         strcmp(package_magic, RESIDENT_PACKAGE_MAGIC) != 0 ||
-        strcmp(dpu_binary_abi,
-#if RESIDENT_OPERATION_ABI_VERSION == RESIDENT_OPERATION_ABI_V2
-            "dpu_resident_v2"
-#else
-            "dpu_resident"
-#endif
-        ) != 0 ||
-#if RESIDENT_OPERATION_ABI_VERSION == RESIDENT_OPERATION_ABI_V2
-        resident_binary_matches_abi(dpu_ref) == 0 ||
-#endif
+        binary_identity_valid == 0 ||
         (strcmp(quantization_mode, "none") != 0 && strcmp(quantization_mode, "per_task_resident_requantize") != 0)) {
-        resident_error(error_message, "hardware_profile_violation: resident manifest ABI or hardware identity mismatch");
-        goto done;
+            resident_error(error_message, "hardware_profile_violation: resident manifest ABI or hardware identity mismatch");
+            goto done;
+        }
     }
     base = resident_base(manifest_path);
     request->manifest_root = base;
@@ -800,19 +830,17 @@ static int resident_request_load_profile(
         resident_error(error_message, "hardware_profile_violation: resident manifest ABI identity mismatch");
         goto done;
     }
-    if (resident_uint_field((char *)manifest_bytes, "requested_dpus", &value) != 0 ||
-        value == 0u || value > max_requested_dpus ||
-        resident_uint_field((char *)manifest_bytes, "tasklets", &value) != 0 || !resident_supported_tasklets(value) || value != NR_TASKLETS ||
+    if (manifest_requested_dpus == 0u || manifest_requested_dpus > max_requested_dpus ||
+        (v3_profile != 0
+            ? (manifest_tasklets < 1u || manifest_tasklets > 24u)
+            : !resident_supported_tasklets(manifest_tasklets)) ||
+        manifest_tasklets != NR_TASKLETS ||
         resident_uint_field((char *)manifest_bytes, "graph_request_count", &value) != 0 || value != 1u ||
         resident_uint_field((char *)manifest_bytes, "logical_task_count", &value) != 0 || value == 0u || value > RESIDENT_MAX_LOGICAL_TASKS) {
         resident_error(error_message, "hardware_profile_violation: resident request DPU/tasklet/graph limits exceeded");
         goto done;
     }
-    if (resident_uint_field((char *)manifest_bytes, "requested_dpus", &value) != 0) {
-        resident_error(error_message, "manifest_parse_failed: resident requested DPU count missing");
-        goto done;
-    }
-    request->requested_dpus = (uint32_t)value;
+    request->requested_dpus = (uint32_t)manifest_requested_dpus;
     if (resident_uint_field((char *)manifest_bytes, "logical_task_count", &value) != 0) {
         resident_error(error_message, "manifest_parse_failed: resident logical task count missing");
         goto done;
@@ -908,7 +936,7 @@ done:
 }
 
 int resident_request_load(const char *manifest_path, resident_request_t *request, char **error_message) {
-    return resident_request_load_profile(manifest_path, 1u, request, error_message);
+    return resident_request_load_profile(manifest_path, 1u, 0, request, error_message);
 }
 
 int resident_request_load_execution_plan(
@@ -916,7 +944,7 @@ int resident_request_load_execution_plan(
     resident_request_t *request,
     char **error_message
 ) {
-    return resident_request_load_profile(manifest_path, 2u, request, error_message);
+    return resident_request_load_profile(manifest_path, 2u, 0, request, error_message);
 }
 
 int resident_request_load_execution_plan_v2(
@@ -924,7 +952,22 @@ int resident_request_load_execution_plan_v2(
     resident_request_t *request,
     char **error_message
 ) {
-    return resident_request_load_profile(manifest_path, 4u, request, error_message);
+    return resident_request_load_profile(manifest_path, 4u, 0, request, error_message);
+}
+
+int resident_request_load_execution_plan_v3(
+    const char *manifest_path,
+    resident_request_t *request,
+    char **error_message
+) {
+#if defined(RESIDENT_V3)
+    return resident_request_load_profile(manifest_path, 64u, 1, request, error_message);
+#else
+    (void)manifest_path;
+    (void)request;
+    resident_error(error_message, "hardware_profile_violation: v3 resident loader requires RESIDENT_V3");
+    return 1;
+#endif
 }
 
 void resident_request_free(resident_request_t *request) {

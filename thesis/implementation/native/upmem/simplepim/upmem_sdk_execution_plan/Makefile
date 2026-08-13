@@ -18,9 +18,15 @@ SIMPLEPIM_STAGE_MARKER := $(SIMPLEPIM_STAGE)/management_profile_manifest.json
 SIMPLEPIM_MANAGEMENT_C := $(SIMPLEPIM_STAGE)/lib/management/Management.c
 SIMPLEPIM_MANAGEMENT_H := $(SIMPLEPIM_STAGE)/lib/management/Management.h
 SIMPLEPIM_SMALLTABLE_C := $(SIMPLEPIM_STAGE)/lib/management/SmallTableInit.c
+V3_MAX_ELEMS := 65536
+V3_MRAM_POOL_BYTES := 524288
+V3_OUTPUT_TILE_ELEMS := 2
 
+V3_GOAL := $(filter v3 bin/host_upmem_execution_plan_v3_t% bin/dpu_resident_v3_t%,$(MAKECMDGOALS))
+ifeq ($(V3_GOAL),)
 ifneq ($(NR_TASKLETS),1)
-$(error execution-plan profile requires NR_TASKLETS=1)
+$(error v1/v2 execution-plan targets require NR_TASKLETS=1; use the v3 target for configurable tasklets)
+endif
 endif
 ifneq ($(UPMEM_GENERIC_HARDWARE_MVP),1)
 $(error execution-plan profile requires UPMEM_GENERIC_HARDWARE_MVP=1)
@@ -29,7 +35,7 @@ ifneq ($(RESIDENT_COMPLETION_VERSION),2)
 $(error execution-plan profile requires RESIDENT_COMPLETION_VERSION=2)
 endif
 
-.PHONY: all simplepim-stage v2 clean
+.PHONY: all simplepim-stage v2 v3 clean
 
 all: bin/host_upmem_execution_plan bin/dpu_resident bin/host_upmem_execution_plan_v2 bin/dpu_resident_v2 bin/dpu_simplepim_management_init
 
@@ -69,6 +75,16 @@ simplepim-stage:
 	$(MAKE) -B $(SIMPLEPIM_STAGE_MARKER)
 
 v2: bin/host_upmem_execution_plan_v2 bin/dpu_resident_v2
+
+v3:
+	@test "$(NR_TASKLETS)" -ge 1 -a "$(NR_TASKLETS)" -le 24 || { echo "v3 requires NR_TASKLETS in [1,24]" >&2; exit 1; }
+	$(MAKE) bin/host_upmem_execution_plan_v3_t$(NR_TASKLETS) bin/dpu_resident_v3_t$(NR_TASKLETS) NR_TASKLETS=$(NR_TASKLETS) MAX_ELEMS=$(V3_MAX_ELEMS) RESIDENT_MRAM_POOL_BYTES=$(V3_MRAM_POOL_BYTES) RESIDENT_OUTPUT_TILE_ELEMS=$(V3_OUTPUT_TILE_ELEMS)
+
+bin/dpu_resident_v3_t%: $(SIMPLEPIM_SOURCE_DIR)/../upmem_sdk_generic_loop_resident/dpu.c $(SIMPLEPIM_SOURCE_DIR)/../upmem_sdk_generic_loop_resident/common.h | bin
+	$(DPU_CC) -O2 -DRESIDENT_V3=1 -DRESIDENT_OPERATION_ABI_VERSION=2 -DRESIDENT_COMPLETION_VERSION=3 -DNR_TASKLETS=$* -DUPMEM_GENERIC_HARDWARE_MVP=$(UPMEM_GENERIC_HARDWARE_MVP) -DUPMEM_GENERIC_MAX_RANK=$(MAX_RANK) -DUPMEM_GENERIC_MAX_ELEMS=$(V3_MAX_ELEMS) -DRESIDENT_MAX_LOGICAL_TASKS=$(RESIDENT_MAX_LOGICAL_TASKS) -DRESIDENT_MAX_COMPONENT_OPS=$(RESIDENT_MAX_COMPONENT_OPS) -DRESIDENT_MAX_SLOT_DESCRIPTORS=$(RESIDENT_MAX_SLOT_DESCRIPTORS) -DRESIDENT_MRAM_POOL_BYTES=$(V3_MRAM_POOL_BYTES) -DRESIDENT_OUTPUT_TILE_ELEMS=$(V3_OUTPUT_TILE_ELEMS) -o $@ $<
+
+bin/host_upmem_execution_plan_v3_t%: host_v3.c distributed_plan_v3.c distributed_plan_v3.h execution_plan_v3_common.h execution_plan_v2_common.h execution_plan_common.h execution_plan_provider.c execution_plan_provider.h plan_request.c plan_request.h plan_schedule.c plan_schedule.h distributed_plan_v2.c distributed_plan_v2.h $(SIMPLEPIM_SOURCE_DIR)/../upmem_sdk_generic_loop_resident/session_protocol.c $(SIMPLEPIM_SOURCE_DIR)/../upmem_sdk_generic_loop_resident/session_protocol.h $(SIMPLEPIM_SOURCE_DIR)/../upmem_sdk_generic_loop_resident/common.h $(SIMPLEPIM_STAGE_MARKER) | bin
+	$(HOST_CC) -std=c99 -O2 -Wall -Wextra -D_POSIX_C_SOURCE=200809L -DRESIDENT_V3=1 -DRESIDENT_OPERATION_ABI_VERSION=2 -DRESIDENT_COMPLETION_VERSION=3 -DNR_TASKLETS=$* -DUPMEM_GENERIC_HARDWARE_MVP=$(UPMEM_GENERIC_HARDWARE_MVP) -DUPMEM_GENERIC_MAX_RANK=$(MAX_RANK) -DUPMEM_GENERIC_MAX_ELEMS=$(V3_MAX_ELEMS) -DRESIDENT_MAX_LOGICAL_TASKS=$(RESIDENT_MAX_LOGICAL_TASKS) -DRESIDENT_MAX_COMPONENT_OPS=$(RESIDENT_MAX_COMPONENT_OPS) -DRESIDENT_MAX_SLOT_DESCRIPTORS=$(RESIDENT_MAX_SLOT_DESCRIPTORS) -DRESIDENT_MRAM_POOL_BYTES=$(V3_MRAM_POOL_BYTES) -DRESIDENT_OUTPUT_TILE_ELEMS=$(V3_OUTPUT_TILE_ELEMS) -I$(SIMPLEPIM_STAGE)/lib/management -o $@ host_v3.c distributed_plan_v3.c plan_request.c plan_schedule.c distributed_plan_v2.c execution_plan_provider.c $(SIMPLEPIM_SOURCE_DIR)/../upmem_sdk_generic_loop_resident/session_protocol.c $(SIMPLEPIM_MANAGEMENT_C) $(SIMPLEPIM_SMALLTABLE_C) $$(dpu-pkg-config --cflags --libs dpu) -ldl
 
 clean:
 	rm -rf bin build/simplepim_execution_plan

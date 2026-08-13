@@ -17,6 +17,8 @@ from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
     RESIDENT_M46_OUTPUT_TILE_ELEMENTS,
     RESIDENT_M46_PROFILE_VERSION,
     RESIDENT_SUPPORTED_TASKLETS,
+    RESIDENT_V3_PROFILE_VERSION,
+    _canonical_profile,
     _parse_profile,
     build_resident_graph_package,
     load_hardware_taskgraph_resident_suite,
@@ -45,6 +47,18 @@ def test_m46_profile_is_versioned_and_restricts_tasklets() -> None:
     invalid["tasklets_per_dpu"] = 3
     with pytest.raises(ValueError, match="one of 1, 2, 4, 8, 16"):
         _parse_profile(invalid)
+
+    invalid_dpus = dict(suite.profile.to_json_dict())
+    invalid_dpus["requested_dpu_count"] = 2
+    with pytest.raises(ValueError, match="requested_dpu_count=1"):
+        _parse_profile(invalid_dpus)
+
+    v3 = _canonical_profile(
+        3, version=RESIDENT_V3_PROFILE_VERSION, requested_dpu_count=3
+    ).to_json_dict()
+    parsed_v3 = _parse_profile(v3)
+    assert parsed_v3.requested_dpu_count == 3
+    assert parsed_v3.tasklets_per_dpu == 3
 
 
 def test_m46_package_request_carries_tasklets_and_aligned_slots(tmp_path: Path) -> None:
