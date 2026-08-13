@@ -329,7 +329,8 @@ def load_m5_suite(path: Path, *, dpu_counts: Sequence[int] | None = None, taskle
     )
     if not selected_counts:
         raise ValueError("dpu_counts_invalid: at least one DPU count is required")
-    selected_tasklets = DEFAULT_TASKLETS if tasklets is None else int(tasklets)
+    configured_tasklets = defaults.get("tasklets", DEFAULT_TASKLETS)
+    selected_tasklets = configured_tasklets if tasklets is None else tasklets
     _validate_tasklets(selected_tasklets)
     cases = raw.get("workloads")
     if not isinstance(cases, list) or not cases:
@@ -1628,7 +1629,9 @@ def _parse_positive_ints(values: Sequence[int] | str) -> tuple[int, ...]:
     return result
 
 
-def _validate_tasklets(value: int) -> None:
+def _validate_tasklets(value: Any) -> None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("tasklets_invalid: tasklets must be an integer")
     if not MIN_TASKLETS <= value <= MAX_TASKLETS:
         raise ValueError(f"tasklets_invalid: tasklets must be in {MIN_TASKLETS}..{MAX_TASKLETS}")
 

@@ -512,6 +512,34 @@ def test_suite_defaults_and_overrides() -> None:
     assert custom.tasklets == 24
 
 
+def test_suite_tasklets_yaml_default_is_authoritative(tmp_path: Path) -> None:
+    payload = yaml.safe_load(SUITE.read_text(encoding="utf-8"))
+    payload["defaults"]["tasklets"] = 24
+    suite_path = tmp_path / "tasklets_24.yml"
+    suite_path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+
+    config = m5.load_m5_suite(suite_path)
+
+    assert config.tasklets == 24
+
+
+@pytest.mark.parametrize("invalid_tasklets", (0, 25, True, "8", 8.0))
+def test_suite_rejects_invalid_yaml_tasklets(tmp_path: Path, invalid_tasklets: Any) -> None:
+    payload = yaml.safe_load(SUITE.read_text(encoding="utf-8"))
+    payload["defaults"]["tasklets"] = invalid_tasklets
+    suite_path = tmp_path / "invalid_tasklets.yml"
+    suite_path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="tasklets_invalid"):
+        m5.load_m5_suite(suite_path)
+
+
+@pytest.mark.parametrize("invalid_tasklets", (0, 25, True, "8", 8.0))
+def test_suite_rejects_invalid_tasklet_overrides(tmp_path: Path, invalid_tasklets: Any) -> None:
+    with pytest.raises(ValueError, match="tasklets_invalid"):
+        m5.load_m5_suite(SUITE, tasklets=invalid_tasklets)
+
+
 @pytest.mark.parametrize("timeout", ("0", "-1", "1800.1", "nan", "inf"))
 def test_suite_rejects_unbounded_or_nonpositive_timeout(tmp_path: Path, timeout: str) -> None:
     suite_path = tmp_path / "invalid_m5.yml"
@@ -611,6 +639,49 @@ def test_prepare_has_no_native_execute_or_allocation(tmp_path: Path) -> None:
     assert payload["prepared_count"] > 0
     assert payload["unsupported_count"] == 0
     assert payload["failed_count"] == 0
+
+
+def test_resolved_yaml_tasklets_propagate_to_plan_request_summary_and_rows(
+    tmp_path: Path,
+) -> None:
+    payload = yaml.safe_load(SUITE.read_text(encoding="utf-8"))
+    payload["defaults"]["tasklets"] = 24
+    payload["defaults"]["quantization_modes"] = ["none"]
+    payload["defaults"]["partition_strategies"] = ["output"]
+    payload["workloads"] = payload["workloads"][:1]
+    payload["workloads"][0].pop("partition_strategies", None)
+    suite_path = tmp_path / "tasklets_24.yml"
+    suite_path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+    target = FakeM5NativeTarget()
+
+    prepared = m5.prepare(
+        tmp_path / "prepared",
+        suite_path=suite_path,
+        build=True,
+        dpu_counts=(1,),
+        native_target=target,
+        task_selector=_selection,
+    )
+    plan_payload = json.loads(Path(prepared["artifact"]).read_text(encoding="utf-8"))
+    assert plan_payload["tasklets"] == 24
+    assert all(plan["request"]["tasklets"] == 24 for plan in plan_payload["plans"].values())
+
+    executed = m5.execute(
+        tmp_path / "executed",
+        suite_path=suite_path,
+        dpu_counts=(1,),
+        environment=_physical_env(),
+        native_target=target,
+        task_selector=_selection,
+    )
+    summary = json.loads(Path(executed["artifact"]).read_text(encoding="utf-8"))
+    rows = [
+        json.loads(line)
+        for line in Path(executed["run_dir"], "normalized_records.jsonl").read_text().splitlines()
+    ]
+    assert summary["tasklets"] == 24
+    assert target.requests[-1]["tasklets"] == 24
+    assert {row["tasklets_per_dpu"] for row in rows} == {24}
 
 
 def test_all_unsupported_execution_keeps_native_attempt_flags_false(tmp_path: Path) -> None:
