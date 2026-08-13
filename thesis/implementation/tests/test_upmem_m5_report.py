@@ -131,6 +131,46 @@ def _write_run(tmp_path: Path, rows: list[dict[str, object]]) -> Path:
     return run
 
 
+def _m54_row(*, packed: bool, dpu_count: int, runtime_s: float, weak: bool = False) -> dict[str, object]:
+    row = _row(
+        case_id="synthetic-m54-strong" if not weak else "synthetic-m54-weak",
+        workload_kind="synthetic",
+        numeric_mode="host_packed_int8" if packed else "float32",
+        dpu_count=dpu_count,
+        runtime_s=runtime_s,
+        scaling_kind="weak" if weak else "strong",
+    )
+    row.update(
+        {
+            "run_operand_h2d_bytes": 25 if packed else 100,
+            "max_dpu_cycles": 1000 / dpu_count,
+            "total_dpu_cycles": 1000 / dpu_count,
+            "launch_sync_time_s": runtime_s,
+            "dispatch_mode": "bulk_set_synchronous_v1",
+            "kernel_launch_api_calls": 1,
+            "explicit_sync_api_calls": 0,
+            "host_quantization": packed,
+            "dpu_intermediate_requantization": False,
+            "mac_count": 1000,
+        }
+    )
+    if packed:
+        row.update(
+            {
+                "quantization_mode": "host_packed_int8",
+                "numeric_arithmetic": "int8_multiply_int32_accumulate",
+                "numeric_transport": "packed_int8_mram",
+                "requantization_scope": "none",
+                "packed_int8_transfer": True,
+                "exact_integer_validation_status": "passed",
+                "exact_integer_passed": True,
+                "exact_integer_match": True,
+                "exact_integer_mismatch_count": 0,
+            }
+        )
+    return row
+
+
 def _csv_rows(path: Path) -> list[dict[str, str]]:
     with path.open(newline="", encoding="utf-8") as handle:
         return list(csv.DictReader(handle))
@@ -216,7 +256,7 @@ def test_statistics_ratios_and_incompatible_pairing(tmp_path: Path) -> None:
     manifest = json.loads((output / "plot_manifest.json").read_text(encoding="utf-8"))
     assert manifest["supported_dpu_counts"] == [1, 2]
     assert manifest["failed_or_unsupported_dpu_counts"] == [4]
-    assert len(manifest["plots"]) == 9
+    assert len(manifest["plots"]) == 10
     assert manifest["source_sha256"]
     assert next(plot for plot in manifest["plots"] if "weak_scaling_runtime" in plot["path"])["status"] == "generated"
     quant_plot = next(plot for plot in manifest["plots"] if "quantization_accuracy" in plot["path"])
@@ -538,7 +578,7 @@ def test_missing_data_has_todo_plots_and_respects_output_boundary(tmp_path: Path
     assert not output.is_relative_to(run)
     manifest = json.loads((output / "plot_manifest.json").read_text(encoding="utf-8"))
     assert manifest["status"] == "todo_missing_data"
-    assert len(manifest["plots"]) == 9
+    assert len(manifest["plots"]) == 10
     assert all(entry["status"] == "todo_missing_data" for entry in manifest["plots"])
     assert "TODO: no measured data" in (output / "m5_summary.md").read_text(encoding="utf-8")
     assert all((output / entry["path"]).is_file() for entry in manifest["plots"])
@@ -576,6 +616,40 @@ def test_numeric_ratio_requires_canonical_quantization_evidence(tmp_path: Path) 
     plot = next(entry for entry in manifest["plots"] if "numeric_mode_runtime_ratio" in entry["path"])
     assert plot["status"] == "todo_missing_data"
     assert plot["caption"].startswith("TODO:")
+
+
+def test_host_packed_ratio_and_m54_acceptance_are_additive(tmp_path: Path) -> None:
+    rows: list[dict[str, object]] = []
+    for dpu_count, runtime in ((1, 1.0), (2, 0.5), (4, 0.25), (8, 0.125)):
+        rows.extend(
+            [
+                _m54_row(packed=False, dpu_count=dpu_count, runtime_s=runtime * 2.0),
+                _m54_row(packed=True, dpu_count=dpu_count, runtime_s=runtime),
+            ]
+        )
+    rows.extend(
+        [
+            _m54_row(packed=True, dpu_count=1, runtime_s=1.0, weak=True),
+            _m54_row(packed=True, dpu_count=2, runtime_s=1.1, weak=True),
+        ]
+    )
+
+    output = generate_report(_write_run(tmp_path, rows), tmp_path / "report-root", timestamp="m54")
+
+    packed_ratios = _csv_rows(output / "tables/m5_host_packed_int8_ratios.csv")
+    assert len(packed_ratios) == 4
+    assert packed_ratios[0]["host_packed_int8_runtime_median_s"]
+    assert (output / "plots/m5_host_packed_int8_runtime_ratio.png").is_file()
+    acceptance = json.loads((output / "m5_4_acceptance.json").read_text(encoding="utf-8"))
+    assert acceptance["overall_status"] == "passed"
+    assert acceptance["source_sha256"]
+    assert all(item["status"] == "passed" for item in acceptance["criteria"].values())
+    manifest = json.loads((output / "plot_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["acceptance_artifact"] == "m5_4_acceptance.json"
+    assert manifest["acceptance_status"] == "passed"
+    assert manifest["claims"]["host_packed_int8_ratio"] is True
+    summary = (output / "m5_summary.md").read_text(encoding="utf-8")
+    assert "## M5.4 acceptance" in summary
 
 
 def test_partition_ratio_requires_canonical_reduction_evidence(tmp_path: Path) -> None:

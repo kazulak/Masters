@@ -90,11 +90,29 @@ is `initialization_binary_and_management_state_only`; allocation, transfer,
 and launch use raw synchronous UPMEM SDK calls. The thesis-owned C kernel, SDK
 transfers, and host `float64` reduction are not SimplePIM compute operators.
 
+## Corrected M5.4 lane
+
+M5.4 preserves the route, partition policies, workloads, and claim boundary,
+but changes two executor dimensions explicitly:
+
+- `dispatch_mode=bulk_set_synchronous_v1`, with one set-level launch API call
+  per warmup or measured repetition and no explicit `dpu_sync` call;
+- `numeric_mode=host_packed_int8`, where initial values are quantized once on
+  the host, payloads are padded to 8-byte MRAM transfer boundaries, DPU
+  arithmetic is `int8 * int8 -> int32`, and only the final result is
+  dequantized on the host.
+
+The old `per_task_resident_requantize` mode remains historical and is not
+relabeled. M5.4 packed rows require a byte-identical CPU int32 reference before
+their descriptive float32 error is considered. The active commands and
+acceptance order are defined in `docs/upmem_m5_4_runbook.md`.
+
 ## Tables and statistics
 
 The report writes CSV tables for source rows, runtime, accuracy, transfer, and
-strong-scaling ratios, plus `m5_numeric_mode_ratios.csv` and
-`m5_partition_ratios.csv`. Runtime and auxiliary metric tables group by the exact
+strong-scaling ratios, plus historical `m5_numeric_mode_ratios.csv`, additive
+host-packed-int8 comparisons, and `m5_partition_ratios.csv`. Runtime and
+auxiliary metric tables group by the exact
 tuple:
 
 `case_id + route_id + numeric_mode + partition_mode + tasklets_per_dpu + timing_scope + workload_kind + scaling_kind + dpu_count`
@@ -153,9 +171,10 @@ restricted to a single safe path component, so report generation cannot
 traverse outside the comparison directory.
 
 `plot_manifest.json` records per-plot generated/TODO status, source hash,
-artifact hashes, and the supported and failed DPU counts. `m5_summary.md`
-records the source run path and SHA-256, allowed claims, and not-allowed
-claims.
+artifact hashes, and the supported and failed DPU counts. M5.4 reports also
+write `m5_4_acceptance.json`; missing criteria are `not_evaluated`, never
+implicitly passed. `m5_summary.md` records the source run path and SHA-256,
+allowed claims, and not-allowed claims.
 
 ## Allowed claims
 
@@ -169,8 +188,9 @@ claims.
 
 - Cross-route or otherwise incompatible speedup, efficiency, or accuracy
   pairing.
-- PID-Comm communication, multi-rank execution, packed-int8 transport, or
-  general distributed TaskGraph support.
+- PID-Comm communication, multi-rank execution, or general distributed
+  TaskGraph support. Packed-int8 claims require admitted M5.4 evidence and do
+  not apply to the historical M5 run.
 - Energy, CPU/GPU speedup, general UPMEM performance, broad hardware speedup, or extrapolated
   scaling claims.
 
@@ -183,8 +203,9 @@ by this report:
   or relocation path under a compatible SDK.
 - **Multi-rank:** execute and validate multiple ranks or DIMMs rather than the
   physical one-rank report boundary.
-- **Packed-int8:** measure packed-int8 transport and its memory/transfer
-  accounting; float32 MRAM transport must not be relabeled as packed-int8.
+- **Resident intermediate int8:** M5.4 packs only the two initial operands of
+  one contraction. General resident TaskGraphs still require one-time DPU
+  requantization of produced intermediates.
 - **Distributed TaskGraph:** implement general distributed TaskGraph
   scheduling, ownership, dependency movement, and validation beyond the
   bounded single-contraction v3 lane and historical M5.1/M5.2 probes.

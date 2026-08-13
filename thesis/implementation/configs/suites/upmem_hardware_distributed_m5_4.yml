@@ -27,7 +27,7 @@ metadata:
     dispatch_mode: bulk_set_synchronous_v1
     no_simulator_or_cpu_fallback: true
     operation_abi_version: 2
-    package_versions: [2, 3]
+    package_version: 3
     numeric_transports: [float32_mram, host_packed_int8_mram]
     resident_profile: hardware_taskgraph_distributed_single_contraction_m5_v3
 

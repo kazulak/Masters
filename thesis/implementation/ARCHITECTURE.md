@@ -130,6 +130,7 @@ different identities or objective settings but select the same structural path.
 | `upmem_tn_hardware_sliced_resident_two_dpu` | UPMEM SDK physical hardware | Historical M2 control plus M2.1 useful-slice fixture | The original one-operation control had a zero second partial; the separate M2.1 fixture passed with two useful nonzero slice contributions. Both remain fixed two-DPU functionality lanes with no speedup, energy, scaling, or general-TaskGraph claim |
 | `upmem_tn_hardware_taskgraph_resident` | UPMEM SDK physical hardware | Previous bounded one-DPU resident route | Historical one-DPU correctness surface; not the current M2 route |
 | `upmem_tn_hardware_distributed_m5` | UPMEM SDK physical hardware | Additive execution-plan-v3 one-rank single-contraction lane | Physical development acceptance for the audited admitted configurations; descriptive same-route ratios only; no broad performance, energy, or scaling claim |
+| `upmem_tn_hardware_distributed_m5` with M5.4 suite | UPMEM SDK physical hardware | Corrected bulk-set and host-packed-int8 single-contraction lane | Local preparation complete; physical acceptance pending; exact int32 and no-fallback evidence required |
 | `planner_candidate_model` | Host planning/model | Path candidate evidence | Standard objectives plus deterministic custom UPMEM-aware greedy selection; modeled only, no execution speedup |
 
 Full-state correctness and performance are separate tiers. `full_dump` rows can
@@ -203,6 +204,11 @@ It covered five workloads, DPU counts `1/2/4/8/16/32/64`, tasklets `8`, two
 numeric modes, two partitions, two warmups, and seven measured repeats. It
 produced 644 measured rows and 48 partition-incompatible unsupported rows from
 140 plan cells, with zero failures.
+
+M5.4 is an additive correction, not a reinterpretation of that run. Its suite
+uses one set-wide synchronous launch per repetition and host-packed int8
+operands with exact int32 validation. Physical acceptance remains pending until
+the `1/2/4/8` smoke gate in `docs/upmem_m5_4_runbook.md` passes on ETH.
 
 For this v3 route, SimplePIM has role
 `initialization_binary_and_management_state_only`. Allocation, transfer, and
