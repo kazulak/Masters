@@ -24,9 +24,31 @@ def test_v3_runtime_uses_dynamic_dpu_metadata_and_safe_reduction() -> None:
     source = (PLAN / "host_v3.c").read_text(encoding="ascii")
     sidecar = (PLAN / "distributed_plan_v3.c").read_text(encoding="ascii")
     assert "struct dpu_set_t handles[EXECUTION_PLAN_V3_MAX_DPUS]" in source
-    assert "dpu_launch(handles[dpu_id], DPU_ASYNCHRONOUS)" in source
+    assert "dpu_launch(set, DPU_SYNCHRONOUS)" in source
+    assert "dpu_launch(handles[dpu_id], DPU_ASYNCHRONOUS)" not in source
+    assert "dpu_sync(handles[dpu_id])" not in source
+    assert 'dpu_copy_to(handles[dpu_id], "RESIDENT_ACTIVE_OPERATION"' not in source
+    setup_body = source.split("static int v3_copy_package_to_dpu(", 1)[1].split(
+        "static int v3_validate_completion(", 1
+    )[0]
+    assert 'dpu_copy_to(dpu, "RESIDENT_ACTIVE_OPERATION"' in setup_body
+    assert "metrics->descriptor_h2d_bytes += sizeof(active_operation)" in setup_body
+    execute_body = source.split("static int v3_execute_repetition(", 1)[1].split(
+        "static void v3_write_response(", 1
+    )[0]
+    assert "RESIDENT_ACTIVE_OPERATION" not in execute_body
+    assert "v3_reset_dpu" not in source
     assert "metrics->launch_attempted = 1" in source
-    assert source.index("DPU_ASYNCHRONOUS") < source.index("dpu_sync(handles[dpu_id])")
+    assert source.index("const double launch_started") < source.index("dpu_launch(set, DPU_SYNCHRONOUS)")
+    assert source.index("completion_started = now_s()") > source.index("dpu_launch(set, DPU_SYNCHRONOUS)")
+    assert r'\"dispatch_mode\":\"bulk_set_synchronous_v1\"' in source
+    assert r'\"kernel_launch_api_calls\"' in source
+    assert r'\"dpu_program_instances\"' in source
+    assert r'\"explicit_sync_api_calls\"' in source
+    assert r'\"completion_read_and_validation_time_s\"' in source
+    assert r'\"launch_count_semantics\":\"set_launch_api_calls\"' in source
+    assert r'\"synchronize_count_semantics\":\"explicit_dpu_sync_api_calls\"' in source
+    assert "metrics->repeats[repeat_index].reset_h2d_bytes" not in execute_body
     assert "double *accumulator" in source
     assert "result[index] = (float)accumulator[index]" in source
     assert "output_offset % 2u" in sidecar
