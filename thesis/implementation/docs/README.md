@@ -12,7 +12,7 @@ benchmark policies, and active hardware runbooks for the thesis implementation.
 
 * **Root Command / Milestone Entrypoint:** [README.md](../README.md) is the current command and milestone entrypoint.
 * **Target Architecture:** [slr_architecture_implementation_roadmap.md](slr_architecture_implementation_roadmap.md) is the target architecture.
-* **M4/M5 Development Record:** [m4_m5_physical_acceptance.md](m4_m5_physical_acceptance.md) separates historical M4/M5.1/M5.2 ETH acceptance from the pending M5 v3 lane.
+* **M4/M5 Development Record:** [m4_m5_physical_acceptance.md](m4_m5_physical_acceptance.md) separates historical M4/M5.1/M5.2 ETH acceptance from the accepted bounded M5 v3 development lane.
 * **M5 v3 Contract:** [upmem_m5_benchmark_contract.md](upmem_m5_benchmark_contract.md) defines admission, reporting, and claim limits for the additive execution-plan-v3 route.
 * **Benchmark Policy:** [research_benchmark_methodology.md](research_benchmark_methodology.md) is the benchmark policy.
 * **Evidence Workflow:** [evidence_workflow.md](evidence_workflow.md) is the evidence workflow.
@@ -31,7 +31,8 @@ benchmark policies, and active hardware runbooks for the thesis implementation.
 
 ## M5 v3 Status
 
-The additive `upmem-hw-m5-plan` lane is locally hardware-free validated. The
+The additive `upmem-hw-m5-plan` lane is locally hardware-free validated, and
+the canonical physical development run passed its admission contract. The
 exact command below prepares its configured plan set, preserves unsupported
 cases, reports failures explicitly, and performs no DPU allocation or launch.
 
@@ -42,16 +43,21 @@ UPMEM_HW_M5_DPU_COUNTS=3 UPMEM_HW_M5_TASKLETS=3 make upmem-hw-m5-plan
 The active target is one-rank multi-DPU execution of one contraction. The route
 supports output/contracted-axis partitioning, float32 and per-task resident
 int8 requantization, real highest-work contractions, and synthetic strong/weak
-diagnostics. Both numeric modes use float32 MRAM transport. Physical ETH
-execution is pending. The future execution command is:
+diagnostics. Both numeric modes use float32 MRAM transport. The audited run
+used one selected rank, DPU counts `1/2/4/8/16/32/64`, tasklets `8`, five
+workloads, two warmups, and seven measured repeats. It produced 644 measured
+rows and 48 partition-incompatible unsupported rows from 140 plan cells, with
+zero failures.
 
 ```bash
 UPMEM_HW_RANK_PATH=/dev/dpu_rank1 \
 UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-m5
 ```
 
-No physical acceptance, performance, or scaling claim is allowed before that
-lane is executed and reviewed. For M5 v3, SimplePIM is
+This is development acceptance only, not a promoted thesis result. The report
+provides descriptive same-route numeric and partition ratios, transfer,
+accuracy, and bounded DPU-count diagnostics. It does not establish broad
+performance or scaling. For M5 v3, SimplePIM is
 `initialization_binary_and_management_state_only`; allocation, transfer, and
 launch use raw synchronous UPMEM SDK calls. The thesis-owned C kernel and host
 `float64` reduction are outside SimplePIM compute operators. This lane is not

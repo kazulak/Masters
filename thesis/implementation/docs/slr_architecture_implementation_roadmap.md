@@ -72,10 +72,10 @@ a small final architecture.
 | CPU/GPU baselines | QuEST full state, Quimb/cotengra TN, internal CPU replay | Active |
 | Slicing/frontier models | Internal slice-aware graph, reconstruction, frontier waves | M2.1 useful-slice and M3.1 bounded two-wave physical qualifications passed; general expansion remains future work |
 | UPMEM simulator | Strict bounded generic TaskGraph route | Active diagnostic |
-| UPMEM hardware | Bounded M2/M3.1/M4.2--M4.4 physical qualification lanes plus additive M5 execution-plan-v3 route | Existing functionality checks passed on ETH; M5 v3 is a locally validated, pending one-rank multi-DPU single-contraction study, not a general distributed executor |
+| UPMEM hardware | Bounded M2/M3.1/M4.2--M4.4 physical qualification lanes plus additive M5 execution-plan-v3 route | Existing functionality checks passed on ETH; M5 v3 passed bounded one-rank multi-DPU single-contraction development acceptance, not general distributed execution |
 | Numerical modes | Float32, per-task int8/int32, split real/imaginary complex | Active in bounded routes |
 | Evidence system | Normalized records, claim guards, reports, plots, snapshots | Active instrumentation |
-| External sources | QuEST, SimplePIM, and PID-Comm pinned | QuEST active; SimplePIM M4.2--M4.4 bounded physical qualification passed and is initialization/management-state-only for M5 v3; PID-Comm remains central, with current integration pending |
+| External sources | QuEST, SimplePIM, and PID-Comm pinned | QuEST active; SimplePIM M4.2--M4.4 bounded physical qualification passed and is initialization/management-state-only for M5 v3; PID-Comm remains central but is blocked under ETH SDK 2023.1 pending a compatible SDK/API |
 
 ### Central architecture not implemented
 
@@ -83,8 +83,8 @@ a small final architecture.
   (the M2 slice assignment and M5 v3 single-contraction plan are fixed
   contracts, not a general scheduler).
 - General physical execution of one large contraction across tasklets, DPUs,
-  ranks, or UPMEM DIMMs; M5 v3 currently provides local plan/contract
-  validation only.
+  ranks, or UPMEM DIMMs; M5 v3 covers only a bounded one-rank
+  single-contraction study.
 - A hybrid scheduler that uses both forms of parallelism.
 - A production kernel classifier and dispatcher.
 - ATiM-generated/tuned tensor kernels.
@@ -674,9 +674,12 @@ contracted-axis partial-sum probe on 1/2/4 DPUs using deterministic
 host-mediated reduction, with maximum absolute error `2.98e-08`. Both use one
 repetition and zero warmups and provide functionality evidence only.
 
-The additive execution-plan-v3 lane now exists locally. It is a one-rank
-one-rank multi-DPU single-contraction route with output/contracted-axis
-partitioning, float32 and per-task resident int8 requantization, real
+The additive execution-plan-v3 lane has passed its bounded physical development
+gate. It is a one-rank multi-DPU single-contraction route accepting configured
+DPU counts from `1..64` and tasklet counts from `1..24`; the accepted run used
+the default `1/2/4/8/16/32/64` DPU counts and `8` tasklets. It supports
+output/contracted-axis partitioning, float32 and per-task resident int8
+requantization, real
 highest-work contractions, and synthetic strong/weak diagnostics. Both modes
 use float32 MRAM transport. Partitioning is an execution-layout comparison
 under a fixed contraction plan, not a contraction-path comparison. The
@@ -687,20 +690,26 @@ UPMEM_HW_M5_DPU_COUNTS=3 UPMEM_HW_M5_TASKLETS=3 make upmem-hw-m5-plan
 ```
 
 It prepares the configured plan set, preserves unsupported cases, reports
-failures explicitly, and performs no DPU allocation or launch. Physical ETH
-execution is pending. The future command is:
+failures explicitly, and performs no DPU allocation or launch. The audited
+physical run used source commit `5401597fdc2458087e112f5bd2e1869a5a0a5ab0`.
+It covered five workloads, DPU counts `1/2/4/8/16/32/64`, tasklets `8`, two
+numeric modes, two partitions, two warmups, and seven measured repeats. It
+produced 644 measured rows, 48 partition-incompatible unsupported rows, and 0
+failures from 140 plan cells. The run is retained in ignored development
+evidence; the report is complete and all nine plots are generated.
 
 ```bash
 UPMEM_HW_RANK_PATH=/dev/dpu_rank1 \
 UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-m5
 ```
 
-No physical performance or scaling claim is allowed. For v3, SimplePIM is
+No broad performance advantage or general scaling claim is allowed. For v3,
+SimplePIM is
 `initialization_binary_and_management_state_only`; raw synchronous SDK calls
 own allocation, transfer, and launch, while thesis-owned C compute and host
 `float64` reduction are outside SimplePIM compute operators. The broad
 `thesis_results/current` snapshot is historical and does not contain this
-pending route.
+M5 v3 development run.
 
 The ATiM production integration and general kernel selection belong to the
 incomplete M3 operation-aware kernel/provider work; general distributed TN
@@ -867,15 +876,28 @@ Each physical milestone has a separate ETH acceptance suite.
 Use the completed ETH physical functionality evidence for the implemented
 M4.5 descriptor-driven shared runtime as the baseline. M4.6 and historical
 M5.1/M5.2 provide bounded physical development acceptance for tasklet execution
-and two single-contraction partition policies. M5 execution-plan-v3 is a new
-locally validated route awaiting ETH execution. Its active study varies numeric
+and two single-contraction partition policies. M5 execution-plan-v3 has now
+passed its bounded one-rank physical development gate. Its study varies numeric
 mode and output-versus-contracted-axis partitioning for one contraction on one
 rank; partitioning is not a contraction-path comparison. The next architecture
-work is general distributed TaskGraph scheduling and external
-communication/kernel providers, not treating the existing probes as final
-benchmarks.
+work is M6a: bounded general frontier execution with deterministic ownership,
+host-mediated handoffs, exact-once/dependency-safe execution, and CPU same-plan
+validation.
+
+M6a is intentionally bounded. It will execute one fixed real-float32 five-task
+TaskGraph on exactly two physical DPUs in one rank, with one tasklet per DPU and
+frontier waves of widths `2/2/1`. The implementation contract allows at most
+eight logical tasks, eight waves, and frontier width two. Tasks in each wave are
+sorted by stable task ID and assigned deterministically to DPU 0 then DPU 1;
+cross-DPU dependencies use an explicit host-mediated D2H/H2D handoff, while
+same-owner intermediates remain resident. One warmup and five measured repeats
+must complete with every task executed exactly once, no dependency violation,
+no CPU/simulator fallback, and final CPU same-plan error at most `1e-6`.
+M6a does not add PID-Comm, ATiM, SparseP, quantization, planner integration,
+tasklet or DPU scaling, multi-rank/DIMM execution, or performance claims.
 
 M2.1, M2.2, M2.3, M3.1, and M4.2--M4.4 remain frozen compatibility surfaces.
 M4.5, M4.6, M5.1, and M5.2 remain functionality/development evidence only, and
-M5 v3 remains pending physical execution: no speedup, energy, general scaling,
-PID-Comm, ATiM, SparseP, multi-rank, or multi-DIMM claim is allowed.
+M5 v3 remains development acceptance only: no broad hardware speedup, energy,
+general distributed TaskGraph, PID-Comm, ATiM, SparseP, multi-rank, multi-DIMM,
+CPU/GPU, or planner-superiority claim is allowed. The next gate is M6a.

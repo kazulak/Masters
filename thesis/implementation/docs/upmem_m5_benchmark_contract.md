@@ -65,16 +65,27 @@ UPMEM_HW_M5_DPU_COUNTS=3 UPMEM_HW_M5_TASKLETS=3 make upmem-hw-m5-plan
 ```
 
 It prepares the configured plan set, preserves unsupported cases, reports
-failures explicitly, and performs no DPU allocation or launch. Physical ETH execution is pending;
-the future command is:
+failures explicitly, and performs no DPU allocation or launch. The canonical
+physical development command is:
 
 ```bash
 UPMEM_HW_RANK_PATH=/dev/dpu_rank1 \
 UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-m5
 ```
 
-The command is an execution route, not physical acceptance. Until it is run
-and reviewed, no performance or scaling claim is allowed. SimplePIM's v3 role
+The command has been run and reviewed for source commit
+`5401597fdc2458087e112f5bd2e1869a5a0a5ab0` with a clean worktree. The admitted
+run used one selected rank, five workloads, DPU counts `1/2/4/8/16/32/64`,
+tasklets `8`, modes float32/int8, output/contracted partitions, two warmups,
+and seven measured repeats. It produced 644 completed measured rows and 48
+partition-incompatible unsupported rows from 140 plan cells, with zero
+failures. The normalized hash is
+`1a7714b8dce25b0b0959ed08cae73aaf47e6d7084b90200d4895bf4c521202a0`; the suite
+hash is `e71ec4518a99a8c7f463926da845b1c67bef7242c72233c0c0cfdc107177e26c`.
+All physical, validation, transfer, and no-fallback checks pass, and the
+complete report contains all nine generated plots with valid hashes. This is
+development acceptance only; no broad performance or scaling claim is allowed.
+SimplePIM's v3 role
 is `initialization_binary_and_management_state_only`; allocation, transfer,
 and launch use raw synchronous UPMEM SDK calls. The thesis-owned C kernel, SDK
 transfers, and host `float64` reduction are not SimplePIM compute operators.

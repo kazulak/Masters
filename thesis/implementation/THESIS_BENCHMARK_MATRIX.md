@@ -38,7 +38,7 @@ semantic check; it is not the performance grid.
 | M4.6 tasklet development sweep | `configs/suites/upmem_hardware_taskgraph_resident_m4_6_tasklet_scaling.yml` | Physical resident TaskGraph, one DPU, tasklets 1/2/4/8/16, two paths, two numeric modes | 7 | Validate tasklet ownership, DPU-cycle metadata, and correctness on small development cases; no final scaling claim |
 | M5.1 output partition probe | Fixed CLI fixture: `make upmem-hw-m5-1` | One bounded real float32 contraction, 1/2/4 DPUs, exclusive output-tile ownership | 1 | Validate bounded multi-DPU output ownership and exact CPU agreement; functionality only |
 | M5.2 contracted partition probe | Fixed CLI fixture: `make upmem-hw-m5-2` | One bounded real float32 contraction, 1/2/4 DPUs, host-mediated ascending-DPU reduction | 1 | Validate bounded partial-sum reconstruction; functionality only |
-| M5 execution-plan-v3 lane | `make upmem-hw-m5-plan` / future `make upmem-hw-m5` | One-rank configured 1..64 DPUs and 1..24 tasklets; real highest-work contractions plus synthetic strong/weak diagnostics; output/contracted partitioning; float32/per-task int8 | 2 + 7 | Local plan validation only until ETH execution; no physical performance or scaling claim |
+| M5 execution-plan-v3 lane | `make upmem-hw-m5-plan` / `make upmem-hw-m5` | One-rank configured 1/2/4/8/16/32/64 DPUs and tasklets 8; 5 workloads; real and synthetic diagnostics; output/contracted partitioning; float32/per-task int8 | 2 + 7 | Physically accepted bounded development study: 140 cells, 644 measured rows, 48 partition-incompatible unsupported rows, 0 failures; same-route diagnostics only |
 | M5.3 PID-Comm qualification | `make upmem-pidcomm-compatibility` | Pinned PID-Comm compile/link qualification under the installed ETH SDK | allocation-free | Record compatibility or an explicit blocker; current SDK 2023.1 blocker prevents physical execution |
 
 The CPU/GPU performance suite uses deeper repeated circuits to reduce startup
@@ -223,15 +223,28 @@ with SDK-simulator timing.
 
 The M4.6/M5.1/M5.2 rows above are historical development acceptance probes
 copied from ETH, not promoted thesis evidence. The M5 execution-plan-v3 row is
-an additive pending lane, not an accepted physical result. Its local check is:
+an additive physically accepted development lane, not a promoted thesis result.
+Its hardware-free check remains:
 
 ```bash
 UPMEM_HW_M5_DPU_COUNTS=3 UPMEM_HW_M5_TASKLETS=3 make upmem-hw-m5-plan
 ```
 
-This prepares 14 plans, preserves 6 unsupported cases, reports 0 failed cases,
-and performs no DPU allocation or launch; local validation has 793 passing
-tests. Future ETH execution requires:
+This prepares a selected plan set, preserves unsupported cases, reports failures
+explicitly, and performs no DPU allocation or launch. The audited physical run
+used source commit `5401597fdc2458087e112f5bd2e1869a5a0a5ab0`, clean worktree,
+and normalized-record hash
+`1a7714b8dce25b0b0959ed08cae73aaf47e6d7084b90200d4895bf4c521202a0`. Its
+suite hash is `e71ec4518a99a8c7f463926da845b1c67bef7242c72233c0c0cfdc107177e26c`.
+The ETH run and fixed report are retained in ignored `runs/` at:
+
+```text
+runs/evidence/upmem_hardware_distributed_m5/upmem_hw_m5/2026-08-13_15-01-11
+runs/comparisons/upmem_m5/2026-08-13_16-29-36_450221
+```
+
+All physical/provider/rank/allocation/kernel/release/no-fallback/transfer/
+validation checks pass; all nine plots and table/plot hashes are valid.
 
 ```bash
 UPMEM_HW_RANK_PATH=/dev/dpu_rank1 \
@@ -243,7 +256,7 @@ Physical commands require
 `UPMEM_ALLOW_PHYSICAL_HARDWARE=1`; requested/effective rank selection is
 recorded, but is not an independent observed-rank measurement.
 The broad `thesis_results/current` snapshot is historical and does not contain
-the pending M5 execution-plan-v3 route.
+the M5 v3 development run. Do not promote it during development.
 
 ## Stop/Boundary Rules
 

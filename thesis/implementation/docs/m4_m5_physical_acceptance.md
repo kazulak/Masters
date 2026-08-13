@@ -3,16 +3,17 @@
 Status: **development acceptance record**, not a final evidence capsule and not
 a promoted thesis result.
 
-This record covers the ETH UPMEM observations made on 2026-08-11 from branch
-`feature/m4-m5-recovery`, source commit `2c09984`. The runs were copied/audited
-as development evidence; they are intentionally not included in
-`thesis_results/current`.
-Current-head provenance validation was rerun from commit `7175ccb` after the
-evidence-contract patch.
+The historical M4/M5.1/M5.2 observations were made on 2026-08-11 from branch
+`feature/m4-m5-recovery`, source commit `2c09984`; their current-source
+provenance checks were rerun from commit `7175ccb` after the evidence-contract
+patch. The separate M5 v3 observation was made on 2026-08-13 from clean source
+commit `5401597fdc2458087e112f5bd2e1869a5a0a5ab0`. All runs were copied and
+audited as ignored development evidence; they are intentionally not included
+in `thesis_results/current`.
 
 The M5.1/M5.2 entries below are historical bounded physical probes. The
-additive M5 execution-plan-v3 lane is documented separately below and remains
-pending physical ETH execution.
+additive M5 execution-plan-v3 lane is documented separately below and has now
+passed its bounded physical development-acceptance gate.
 
 ## Rank and Environment
 
@@ -103,10 +104,11 @@ remains `2.98e-08`.
 
 ## Additive M5 execution-plan-v3 Lane
 
-The new v3 route is a one-rank single-contraction design supporting configured
-DPU counts `1..64` and tasklets `1..24`, output or contracted-axis partitioning,
-float32 or per-task int8, real highest-work contractions, and synthetic
-strong/weak diagnostics.
+The v3 route is a one-rank single-contraction design accepting configured DPU
+counts from `1..64` and tasklet counts from `1..24`. The accepted run used the
+default DPU counts `1/2/4/8/16/32/64` and `8` tasklets, output or
+contracted-axis partitioning, float32 or per-task int8, five workloads, and
+synthetic strong/weak diagnostics.
 
 Local hardware-free validation is complete. The exact command:
 
@@ -115,17 +117,30 @@ UPMEM_HW_M5_DPU_COUNTS=3 UPMEM_HW_M5_TASKLETS=3 make upmem-hw-m5-plan
 ```
 
 prepares the configured plan set, preserves unsupported cases, reports failures
-explicitly, and performs no DPU allocation or launch. Physical ETH execution is
-pending. The future command is:
+explicitly, and performs no DPU allocation or launch. The canonical physical
+development command was:
 
 ```bash
 UPMEM_HW_RANK_PATH=/dev/dpu_rank1 \
 UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-m5
 ```
 
-This is not physical acceptance and supports no performance or scaling claim.
-The active target is one-rank multi-DPU execution of one contraction, not full
-distributed TaskGraph execution. For this route SimplePIM is
+The audited source commit was
+`5401597fdc2458087e112f5bd2e1869a5a0a5ab0` with a clean worktree. The ETH run
+was `runs/evidence/upmem_hardware_distributed_m5/upmem_hw_m5/2026-08-13_15-01-11`;
+the local ignored copy is
+`runs/inbox/eth/m5_v3/canonical-2026-08-13_15-01-11`; and the fixed report is
+`runs/comparisons/upmem_m5/2026-08-13_16-29-36_450221`. The normalized-record
+hash is `1a7714b8dce25b0b0959ed08cae73aaf47e6d7084b90200d4895bf4c521202a0` and
+the suite hash is `e71ec4518a99a8c7f463926da845b1c67bef7242c72233c0c0cfdc107177e26c`.
+
+The 140 plan cells produced 92 prepared/executed cells, 644 completed
+measured rows, 48 partition-incompatible unsupported rows, and 0 failures.
+All physical/provider/rank/allocation/kernel/release/no-fallback/transfer/
+validation checks passed. The report is complete; all nine plots and all
+table/plot hashes are valid. This is bounded development acceptance only. The
+route is one-rank multi-DPU execution of one contraction, not full distributed
+TaskGraph execution. For this route SimplePIM is
 `initialization_binary_and_management_state_only`; allocation, transfer, and
 launch use raw synchronous UPMEM SDK calls. The thesis-owned C kernel performs
 the contraction and the host performs the `float64` reduction. Both float32
@@ -150,10 +165,14 @@ no simulator fallback, CPU fallback, allocation, or physical PID-Comm launch.
 
 ## Claims Allowed From This Record
 
-This record supports only that the bounded M4.6 tasklet route and historical
-M5.1/M5.2 single-contraction physical probes executed and validated on a
-selected ETH UPMEM rank under their declared profiles. It does not support
-claims that the pending M5 v3 route has executed, or claims of a
-complete UPMEM TN simulator, final architecture completion, ATiM or SparseP
-execution, PID-Comm integration, multi-rank/DIMM execution, performance
-advantage, energy efficiency, or final benchmark scaling.
+This record supports bounded M5 v3 physical development execution and
+descriptive same-route measurements for the admitted configurations, in
+addition to the historical M4.6/M5.1/M5.2 functionality observations. The
+float/int8 median runtime ratio is `0.165` (range `0.109--0.799`), the
+output/contracted ratio is `0.980` (range `0.492--1.092`), and same-route
+`T1/TN` is `0.634` (range `0.073--0.999`); none of these is a broad hardware
+speedup claim. Float32 maximum error is `7.15e-06` within `1e-05`; int8 error
+`0.0303011` is descriptive. The record does not support claims of a complete
+UPMEM TN simulator, final architecture completion, general TaskGraph,
+ATiM/SparseP execution, PID-Comm integration, multi-rank/DIMM execution,
+energy efficiency, CPU/GPU speedup, planner superiority, or final scaling.

@@ -7,10 +7,10 @@ This directory is the active thesis implementation. Its research question is:
 
 The current code establishes the circuit-to-TaskGraph pipeline, serious CPU and
 GPU baselines, bounded UPMEM SDK-simulator execution, physically validated
-M4/M5 development routes on ETH hardware, and an additive M5
-execution-plan-v3 lane that is locally validated but pending physical ETH
-execution. The active M5 target is a one-rank, multi-DPU, single-contraction
-study; it is not the full distributed TaskGraph architecture.
+M4/M5 development routes on ETH hardware, and a bounded physical M5
+execution-plan-v3 development acceptance. The active M5 route is a one-rank,
+multi-DPU, single-contraction study; it is not the full distributed TaskGraph
+architecture.
 It does **not** yet claim UPMEM hardware speedup or a fully general UPMEM tensor
 contraction kernel.
 
@@ -44,8 +44,10 @@ scaling, energy, or general tensor-network performance claim. PID-Comm, ATiM,
 and SparseP remain subsequent provider/kernel/communication components behind
 thesis-owned interfaces. The later M4.6, M5.1, and M5.2 observations below are
 audited development runs copied from ETH, not promoted or tracked thesis
-results. The additive M5 execution-plan-v3 lane is separate: local
-hardware-free validation passes, but physical ETH execution is pending.
+results. The additive M5 execution-plan-v3 lane is separate and has passed its
+bounded physical development-acceptance checks on the audited ETH run. Its
+evidence remains in ignored `runs/` and is not promoted or tracked as thesis
+results.
 For M5 v3, SimplePIM's role is
 `initialization_binary_and_management_state_only`. Allocation, transfer, and
 launch use the thesis-owned raw synchronous UPMEM SDK route. The thesis-owned C
@@ -77,16 +79,16 @@ baseline.
 | M4.6 | Physically validated development run | One physical DPU, tasklets `1/2/4/8/16`, 12 small circuit cases, two path variants, two numeric modes, and 7 repeats per configuration. All 1680 rows passed validation; functionality and diagnostic tasklet evidence only. |
 | M5.1 | Physically validated bounded probe | One bounded real `float32` contraction on 1/2/4 DPUs with exclusive output-tile ownership. Exact CPU agreement; SimplePIM management plus thesis-owned kernel; one repetition and zero warmups; functionality only. |
 | M5.2 | Physically validated bounded probe | The same contraction on 1/2/4 DPUs with contracted-axis partials and deterministic `host_mediated_sum_v1` reduction. Maximum absolute error `2.98e-08`; one repetition and zero warmups; functionality only. |
-| M5 execution-plan-v3 | Locally validated; ETH execution pending | Active one-rank multi-DPU single-contraction study with output/contracted-axis partitioning, float32 and per-task resident int8 requantization, and synthetic strong/weak diagnostics. Both numeric modes use float32 MRAM transport. No physical performance or scaling claim. |
+| M5 execution-plan-v3 | Physically accepted bounded development study | One-rank, one selected ETH rank, DPU counts 1/2/4/8/16/32/64, tasklets 8, 5 workloads, float32/int8 modes, output/contracted partitions, 2 warmups and 7 measured repeats. The 140-cell matrix produced 644 measured rows and 48 partition-incompatible unsupported rows, with 0 failures. Same-route diagnostics only; no broad performance claim. |
 | M5.3 | Blocked before physical execution | PID-Comm compile/link qualification is blocked under ETH SDK 2023.1 by missing `dpu_alloc_comm`, `DPU_FOREACH_ENTANGLED_GROUP`, and old PID-Comm API/source macros. No fallback and no physical PID-Comm execution. |
 
 M4.1--M5.2 are bounded physical functionality milestones, not a claim of
 complete M4/M5 architecture, general distributed TN execution, performance,
 speedup, energy, or scaling. The M4.6 development sweep showed a small-workload
 tasklet optimum near 8 tasklets with lower efficiency at 16; this observation is
-not a final benchmark result. M5 execution-plan-v3 is an additive pending lane;
-its configured range and diagnostic workloads do not establish physical
-performance or scaling.
+not a final benchmark result. M5 execution-plan-v3 is an additive physical
+development study; its measured ratios are descriptive within-route evidence
+and do not establish general physical performance or acceleration.
 
 Physical ETH runs require an explicit rank selection. Use a healthy rank chosen
 on the server, for example:
@@ -99,7 +101,7 @@ UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-m5-1
 UPMEM_HW_RANK_PATH=/dev/dpu_rank1 \
 UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-m5-2
 
-# Additive M5 execution-plan-v3; physical ETH execution is pending.
+# Additive M5 execution-plan-v3 physical development study.
 UPMEM_HW_RANK_PATH=/dev/dpu_rank1 \
 UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-m5
 ```
@@ -111,9 +113,18 @@ UPMEM_HW_M5_DPU_COUNTS=3 UPMEM_HW_M5_TASKLETS=3 make upmem-hw-m5-plan
 ```
 
 It prepares the configured plan set, preserves unsupported cases, reports
-failures explicitly, and performs no DPU allocation or launch. The ETH command
-above remains a future execution command; no physical acceptance, performance,
-or scaling result is available yet.
+failures explicitly, and performs no DPU allocation or launch. The audited
+source revision is `5401597fdc2458087e112f5bd2e1869a5a0a5ab0` with a clean
+worktree. The ETH run was
+`runs/evidence/upmem_hardware_distributed_m5/upmem_hw_m5/2026-08-13_15-01-11`;
+the local ignored copy is
+`runs/inbox/eth/m5_v3/canonical-2026-08-13_15-01-11`, and the fixed report is
+`runs/comparisons/upmem_m5/2026-08-13_16-29-36_450221`. The normalized-record
+hash is `1a7714b8dce25b0b0959ed08cae73aaf47e6d7084b90200d4895bf4c521202a0` and
+the suite hash is `e71ec4518a99a8c7f463926da845b1c67bef7242c72233c0c0cfdc107177e26c`.
+All physical/provider/rank/allocation/kernel/release/no-fallback/transfer/
+validation checks passed; the report is complete and all nine plots and table
+hashes are valid. This is development acceptance only, not a promoted result.
 
 The runner records the requested rank path and effective SDK profile. These
 fields document selection, not an independent observation of the physical rank.
@@ -225,7 +236,7 @@ thesis_results/
 ```
 
 The broad `thesis_results/current` snapshot is historical and does not contain
-the pending M5 execution-plan-v3 route.
+the M5 v3 development run.
 
 Reports are regenerated from `normalized_records.jsonl`; benchmark execution is
 not repeated. Generated plots and comparison tables never belong in
@@ -342,13 +353,17 @@ silently change benchmark-source cleanliness.
 
 Current limitation:
 
-> The current UPMEM evidence is bounded to the documented generic simulator and
-> separate physical M2--M4 qualification lanes plus the physically accepted,
-> bounded M4.5 shared runtime. M4.5 proves one- and two-DPU functionality,
-> shared-package execution, wave scheduling, host-mediated handoff, and final
-> CPU-reference validation. It does not provide timing, speedup, scaling,
-> energy, or general distributed operation-aware evidence. Provider collectives
-> and hardware-calibrated UPMEM TN execution do not yet exist.
+> The current UPMEM evidence is bounded to the documented generic simulator,
+> physical M2--M4 qualification lanes, the accepted M4.5 shared runtime, and
+> the accepted M5 v3 one-rank single-contraction development study. M5 v3
+> provides same-route numeric, partition, transfer, accuracy, and bounded
+> DPU-count diagnostics: `T_float32/T_int8` has median `0.165` (range
+> `0.109--0.799`), `T_output/T_contracted` has median `0.980` (range
+> `0.492--1.092`), and same-route `T1/TN` has median `0.634` (range
+> `0.073--0.999`). No broad hardware speedup, energy, general distributed
+> TaskGraph, PID-Comm, ATiM, SparseP, multi-rank, or planner-superiority claim
+> is supported. Float32 maximum error was `7.15e-06` against a `1e-05`
+> threshold; int8 error `0.0303011` is descriptive.
 
 ## Generated Cleanup
 
