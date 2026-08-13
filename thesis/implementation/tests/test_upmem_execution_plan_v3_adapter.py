@@ -116,6 +116,12 @@ def test_synthetic_weak_resolves_shape_and_int8_code_without_allocation(tmp_path
         Path(full_precision_reference["path"]).read_bytes()
     ).hexdigest()
     assert request["policy_reference_metadata"]["quantization_mode"] == "host_packed_int8"
+    assert "output" not in request["policy_reference_metadata"]
+    assert "raw_output" not in request["policy_reference_metadata"]
+    component = request["policy_reference_metadata"]["task_metrics"][0][
+        "component_metrics"
+    ]["real"]
+    assert "raw_output" not in component
     assert request["full_precision_reference_metadata"]["quantization_mode"] == "none"
     assert policy_reference["max_abs_tolerance"] == pytest.approx(1.0e-5)
     assert request["full_precision_reference"]["required"] is False

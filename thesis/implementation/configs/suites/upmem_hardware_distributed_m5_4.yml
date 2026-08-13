@@ -1,0 +1,82 @@
+schema_version: 1
+suite_id: upmem_hardware_distributed_m5
+
+metadata:
+  milestone: M5.4
+  purpose: physical_bulk_launch_and_host_packed_int8_scaling_study
+  manual_invocation_required: true
+  claim_boundary: descriptive_same_route_dpu_scaling_and_numeric_transport_ratios_only
+  claims_allowed:
+    - descriptive_same_route_dpu_scaling_ratios
+    - descriptive_same_route_numeric_transport_ratios
+  claims_forbidden:
+    - cpu_speedup
+    - gpu_speedup
+    - energy
+    - planner_superiority
+    - multi_rank
+  native_plan_kind: distributed_plan_v3
+  hardware_profile:
+    target: hardware
+    backend_id: upmem_sdk_hardware_distributed_m5
+    route_id: upmem_tn_hardware_distributed_m5
+    max_dpu_count: 64
+    min_tasklets_per_dpu: 1
+    max_tasklets_per_dpu: 24
+    session_protocol: persistent_execution_plan_v3
+    dispatch_mode: bulk_set_synchronous_v1
+    no_simulator_or_cpu_fallback: true
+    operation_abi_version: 2
+    package_versions: [2, 3]
+    numeric_transports: [float32_mram, host_packed_int8_mram]
+    resident_profile: hardware_taskgraph_distributed_single_contraction_m5_v3
+
+defaults:
+  dpu_counts: [1, 2, 4, 8, 16, 32, 64]
+  tasklets: 8
+  warmups: 2
+  repeats: 7
+  timeout_s: 900
+  quantization_modes: [none, host_packed_int8]
+  partition_strategies: [output, contracted]
+
+workloads:
+  - id: bv_8q_custom_upmem_v2
+    benchmark_role: real_circuit_applicability
+    quantum_case: real_circuit
+    circuit: {kind: builtin, name: BV, n_qubits: 8}
+    planner:
+      engine: custom_upmem
+      algorithm: greedy
+      objective_version: upmem_path_cost_v2
+    partition_strategies: [output, contracted]
+
+  - id: xor_12q_opt_einsum_greedy
+    benchmark_role: real_circuit_applicability
+    quantum_case: real_circuit
+    circuit: {kind: builtin, name: XOR, n_qubits: 12}
+    planner: {engine: opt_einsum, optimize: greedy}
+    partition_strategies: [output, contracted]
+
+  - id: edc_12q_opt_einsum_greedy
+    benchmark_role: real_circuit_applicability
+    quantum_case: real_circuit
+    circuit: {kind: builtin, name: EDC, n_qubits: 12}
+    planner: {engine: opt_einsum, optimize: greedy}
+    partition_strategies: [output, contracted]
+
+  - id: synthetic_strong_64x256x256x64
+    benchmark_role: non_quantum_diagnostic
+    quantum_case: non_quantum
+    diagnostic: strong_scaling
+    non_quantum: true
+    matrix_shapes: [[64, 256], [256, 64]]
+    partition_strategies: [output, contracted]
+
+  - id: synthetic_weak_4n_x256x256x64
+    benchmark_role: non_quantum_diagnostic
+    quantum_case: non_quantum
+    diagnostic: weak_scaling
+    non_quantum: true
+    matrix_shapes: [[4*dpu_count, 256], [256, 64]]
+    partition_strategies: [output, contracted]

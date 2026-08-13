@@ -14,6 +14,7 @@ import hashlib
 import math
 from pathlib import Path
 import struct
+from time import perf_counter
 from typing import Any, Mapping, Sequence
 
 import numpy as np
@@ -496,6 +497,7 @@ class ResidentGraphPackage:
     typed_slots: tuple[ResidentV3SlotDescriptor, ...] = ()
     storage_initial_data: Mapping[int, np.ndarray] | None = None
     input_scales: Mapping[int, float] = field(default_factory=dict)
+    host_quantization_time_s: float = 0.0
     raw_final_output_paths: Mapping[str, Path] = field(default_factory=dict)
     dequant_final_output_paths: Mapping[str, Path] = field(default_factory=dict)
 
@@ -564,6 +566,7 @@ class ResidentGraphPackage:
             "package_flags": self.package_flags,
             "typed_slots": [item.to_json_dict() for item in self.typed_slots],
             "input_scales": {str(key): float(value) for key, value in self.input_scales.items()},
+            "host_quantization_time_s": self.host_quantization_time_s,
         }
 
     def write(
@@ -1108,7 +1111,9 @@ def build_resident_graph_package(
                 "hardware_profile_violation: resident v3 requires one real contraction"
             )
         input_scales: dict[int, float] = {}
+        host_quantization_time_s = 0.0
         if quantization_mode == "host_packed_int8":
+            quantization_started = perf_counter()
             storage_initial_data: dict[int, np.ndarray] = {}
             for slot_id, values in allocation.initial_data.items():
                 quantized, scale, _saturation = resident_requantize(values)
@@ -1118,6 +1123,7 @@ def build_resident_graph_package(
                     )
                 storage_initial_data[int(slot_id)] = np.ascontiguousarray(quantized, dtype=np.int8)
                 input_scales[int(slot_id)] = float(np.float32(scale))
+            host_quantization_time_s = perf_counter() - quantization_started
             operation = replace(
                 operations[0],
                 left_scale=input_scales[int(operations[0].slot_a)],
@@ -1146,6 +1152,7 @@ def build_resident_graph_package(
             initial_data=allocation.initial_data,
             storage_initial_data=storage_initial_data,
             input_scales=input_scales,
+            host_quantization_time_s=host_quantization_time_s,
             full_precision_output=full_precision_output,
             profile=selected,
             operation_abi_version=RESIDENT_OPERATION_ABI_V2,
@@ -2077,6 +2084,7 @@ def _write_v3_package_request(
                 "int32" if package.package_flags == RESIDENT_V3_FLAG_HOST_PACKED_INT8 else "float32"
             ),
             "host_quantization": package.package_flags == RESIDENT_V3_FLAG_HOST_PACKED_INT8,
+            "host_quantization_time_s": package.host_quantization_time_s,
             "dpu_intermediate_requantization": False,
             "rounding": "nearest_even",
             "clip_range": [-127, 127],

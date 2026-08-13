@@ -57,6 +57,7 @@ DEFAULT_CAPACITY = 64
 MAX_TIMEOUT_S = 1800.0
 SUBPROCESS_TIMEOUT_GRACE_S = 30.0
 QUANTIZATION_MODES = ("none", "per_task_resident_requantize")
+SUPPORTED_QUANTIZATION_MODES = (*QUANTIZATION_MODES, "host_packed_int8")
 PARTITION_STRATEGIES = ("output", "contracted")
 NATIVE_OUTPUT_LIMIT_BYTES = 64 * 1024
 ERROR_TEXT_LIMIT_BYTES = 4 * 1024
@@ -340,7 +341,7 @@ def load_m5_suite(path: Path, *, dpu_counts: Sequence[int] | None = None, taskle
     quantization_modes = _parse_suite_options(
         defaults.get("quantization_modes", QUANTIZATION_MODES),
         "quantization_modes",
-        QUANTIZATION_MODES,
+        SUPPORTED_QUANTIZATION_MODES,
     )
     partition_strategies = _parse_suite_options(
         defaults.get("partition_strategies", PARTITION_STRATEGIES),
@@ -954,6 +955,11 @@ def _validate_execute_response(response: Mapping[str, Any], request: Mapping[str
         "transfer_provider": "upmem_sdk_synchronous_v1",
         "collective_provider": expected_collective,
         "reconstruction_provider": expected_reconstruction,
+        "dispatch_mode": "bulk_set_synchronous_v1",
+        "kernel_launch_api_calls": TOTAL_REPETITIONS,
+        "explicit_sync_api_calls": 0,
+        "host_quantization": expected_packed_transfer,
+        "dpu_intermediate_requantization": False,
     }
     for key, value in expected.items():
         if response.get(key) != value:
@@ -1011,6 +1017,10 @@ def _validate_execute_response(response: Mapping[str, Any], request: Mapping[str
             raise ValueError(
                 "integer_reference_validation_failed: exact int32 evidence did not pass"
             )
+    elif isinstance(integer_validation, Mapping) and integer_validation.get("required") is True:
+        raise ValueError(
+            "integer_reference_validation_failed: float32 execution cannot require int32 evidence"
+        )
     _validate_repetition_transfer_invariants(response)
     if _full_precision_required(request, response):
         full_precision = response.get("full_precision_accuracy")
@@ -1062,6 +1072,10 @@ def _validate_repetition_transfer_invariants(response: Mapping[str, Any]) -> Non
             raise ValueError(
                 f"transfer_evidence_invalid: repetition {index} total does not equal h2d+d2h"
             )
+        if _first_transfer_number(transfers, "reset_h2d_bytes") != 0:
+            raise ValueError(
+                f"transfer_evidence_invalid: repetition {index} re-uploaded resident state"
+            )
 
 
 def _normalized_record(
@@ -1077,6 +1091,9 @@ def _normalized_record(
     policy_validation = _validation_payload(response.get("policy_reference_validation"))
     full_precision_accuracy, quantization_error_vs_float32, scientific_status = _scientific_validation_fields(
         plan.get("request", {}), response
+    )
+    exact_integer_validation = _validation_payload(
+        response.get("exact_integer_validation")
     )
     per_repeat_transfers = timing.get("transfers", timing.get("transfer", {}))
     if not isinstance(per_repeat_transfers, Mapping):
@@ -1125,17 +1142,31 @@ def _normalized_record(
         "numeric_transport": response.get("numeric_transport"),
         "requantization_scope": response.get("requantization_scope"),
         "packed_int8_transfer": response.get("packed_int8_transfer"),
+        "host_quantization": response.get("host_quantization"),
+        "host_quantization_time_s": plan.get("request", {}).get(
+            "host_quantization_time_s"
+        ),
+        "dpu_intermediate_requantization": response.get(
+            "dpu_intermediate_requantization"
+        ),
         "requested_dpu_count": plan["requested_dpu_count"],
         "allocated_dpu_count": response.get("allocated_dpu_count"),
         "observed_rank_count": response.get("observed_rank_count"),
         "tasklets_per_dpu": plan["tasklets_per_dpu"],
         "scaling_kind": plan.get("request", {}).get("scaling_kind", plan.get("scaling_kind", "strong_scaling")),
+        "output_elements": plan.get("request", {}).get("output_elements"),
+        "contracted_elements": plan.get("request", {}).get("contracted_elements"),
+        "mac_count": plan.get("request", {}).get("mac_count"),
         "transport": plan.get("request", {}).get("transport", "float32_mram"),
         "timing_scope": plan.get("request", {}).get("timing_scope"),
         "repeat_id": repeat_id,
         "warmup": False,
         "persistent_session_intent": True,
         "persistent_session_reused": response.get("persistent_session_reused"),
+        "dispatch_mode": response.get("dispatch_mode"),
+        "kernel_launch_api_calls": response.get("kernel_launch_api_calls"),
+        "explicit_sync_api_calls": response.get("explicit_sync_api_calls"),
+        "synchronize_count": response.get("synchronize_count"),
         "hardware_allocation_verified": response.get("hardware_allocation_verified"),
         "native_kernel_executed": response.get("native_kernel_executed"),
         "hardware_kernel_executed": response.get("hardware_kernel_executed"),
@@ -1160,6 +1191,14 @@ def _normalized_record(
         "validation": response.get("validation", {}),
         "policy_reference_validation": policy_validation,
         "policy_reference_status": "passed",
+        "exact_integer_validation": exact_integer_validation,
+        "exact_integer_validation_status": exact_integer_validation.get("status"),
+        "exact_integer_passed": exact_integer_validation.get("passed"),
+        "exact_integer_match": exact_integer_validation.get("exact_match"),
+        "exact_integer_mismatch_count": exact_integer_validation.get("mismatch_count"),
+        "exact_integer_reference_sha256": exact_integer_validation.get(
+            "reference_sha256"
+        ),
         "full_precision_accuracy": full_precision_accuracy,
         "full_precision_accuracy_status": full_precision_accuracy["status"],
         "quantization_error_vs_float32": quantization_error_vs_float32,
@@ -1170,6 +1209,8 @@ def _normalized_record(
         "allocation": native_evidence.get("allocation", {}),
         "launch_attempted": native_evidence.get("launch_attempted", False),
         "launch_count": native_evidence.get("launch_count", 0),
+        "output_sha256": response.get("output_sha256"),
+        "raw_int32_output_sha256": response.get("raw_int32_output_sha256"),
         "cpu_fallback_used": native_evidence.get("cpu_fallback_used", False),
         "simulator_kernel_executed": native_evidence.get("simulator_kernel_executed", False),
         "fallback_used": native_evidence.get("fallback_used", False),
@@ -1191,6 +1232,45 @@ def _normalized_record(
             if validation.get(name) is not None:
                 row[name] = validation[name]
     row["timing_s"] = timing.get("total_time_s", timing.get("elapsed_s"))
+    row["launch_sync_time_s"] = timing.get("launch_sync_time_s")
+    row["host_dequantization_time_s"] = timing.get("host_dequantization_time_s")
+    row["reset_h2d_bytes"] = _first_transfer_number(
+        per_repeat_transfers, "reset_h2d_bytes"
+    )
+    row["completion_d2h_bytes"] = _first_transfer_number(
+        per_repeat_transfers, "completion_d2h_bytes"
+    )
+    row["final_d2h_bytes"] = _first_transfer_number(
+        per_repeat_transfers, "final_d2h_bytes", "output_d2h_bytes"
+    )
+    per_dpu = timing.get("per_dpu")
+    if isinstance(per_dpu, list):
+        cycles = [
+            int(item["runtime_cycles"])
+            for item in per_dpu
+            if isinstance(item, Mapping)
+            and isinstance(item.get("runtime_cycles"), int)
+            and not isinstance(item.get("runtime_cycles"), bool)
+            and int(item["runtime_cycles"]) >= 0
+        ]
+        row["max_dpu_cycles"] = max(cycles) if cycles else None
+        row["total_dpu_cycles"] = sum(cycles) if cycles else None
+        work = [
+            int(item["work_elements"])
+            for item in per_dpu
+            if isinstance(item, Mapping)
+            and isinstance(item.get("work_elements"), int)
+            and not isinstance(item.get("work_elements"), bool)
+            and int(item["work_elements"]) >= 0
+        ]
+        row["total_assigned_work_elements"] = sum(work) if work else None
+    else:
+        row["max_dpu_cycles"] = None
+        row["total_dpu_cycles"] = None
+        row["total_assigned_work_elements"] = None
+    row["run_operand_h2d_bytes"] = _first_transfer_number(
+        run_global_transfers, "operand_h2d_bytes"
+    )
     return row
 
 
@@ -1510,12 +1590,13 @@ def _request_hashes(request: Mapping[str, Any]) -> dict[str, Any]:
         )
         if request.get(key) is not None
     }
-    for name in ("policy_reference", "full_precision_reference"):
+    for name in ("policy_reference", "integer_reference", "full_precision_reference"):
         reference = request.get(name)
         if isinstance(reference, Mapping):
             result[f"{name}_path"] = reference.get("path")
             result[f"{name}_sha256"] = reference.get("sha256")
-            result[f"{name}_tolerance"] = reference.get("max_abs_tolerance")
+            if reference.get("max_abs_tolerance") is not None:
+                result[f"{name}_tolerance"] = reference.get("max_abs_tolerance")
     return result
 
 

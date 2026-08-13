@@ -203,6 +203,64 @@ def test_m5_shortcuts_use_plan_execute_and_focused_report_contract() -> None:
     assert report.returncode == 0
     assert "scripts/upmem_m5_report.py" in report.stdout
     assert "--input /tmp/m5-physical-latest" in report.stdout
+
+
+def test_m5_4_shortcuts_use_corrected_suite_and_bounded_smoke_gate() -> None:
+    plan = subprocess.run(
+        ["make", "-n", "upmem-hw-m5-4-plan"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    smoke = subprocess.run(
+        [
+            "make",
+            "-n",
+            "upmem-hw-m5-4-smoke",
+            "UPMEM_ALLOW_PHYSICAL_HARDWARE=1",
+            "UPMEM_HW_RANK_PATH=/dev/dpu_rank0",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    full = subprocess.run(
+        [
+            "make",
+            "-n",
+            "upmem-hw-m5-4",
+            "UPMEM_ALLOW_PHYSICAL_HARDWARE=1",
+            "UPMEM_HW_RANK_PATH=/dev/dpu_rank0",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    report = subprocess.run(
+        [
+            "make",
+            "-n",
+            "upmem-hw-m5-4-report",
+            "UPMEM_HW_M5_4_RUN=/tmp/m5-4-physical-latest",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    suite = "configs/suites/upmem_hardware_distributed_m5_4.yml"
+    assert suite in plan.stdout
+    assert "--prepare-only --build" in plan.stdout
+    assert suite in smoke.stdout
+    assert "--execute --dpu-counts 1,2,4,8" in smoke.stdout
+    assert suite in full.stdout
+    assert "--execute" in full.stdout
+    assert "scripts/upmem_m5_report.py" in report.stdout
+    assert "--input /tmp/m5-4-physical-latest" in report.stdout
     assert "--output-root ." in report.stdout
     assert "report-run" not in report.stdout
     assert " --out " not in report.stdout

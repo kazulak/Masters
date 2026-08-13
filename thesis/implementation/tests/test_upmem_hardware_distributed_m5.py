@@ -17,6 +17,7 @@ from quantum_bench.targets.upmem.distributed_plan_v3 import UnsupportedPartition
 
 ROOT = Path(__file__).resolve().parents[1]
 SUITE = ROOT / "configs" / "suites" / "upmem_hardware_distributed_m5.yml"
+M5_4_SUITE = ROOT / "configs" / "suites" / "upmem_hardware_distributed_m5_4.yml"
 
 
 class FakeM5NativeTarget:
@@ -64,6 +65,15 @@ class FakeM5NativeTarget:
                 "max_abs_tolerance": 1.0e-5,
                 "required": kwargs["quantization_mode"] == "none",
             },
+            "integer_reference": {
+                "path": str(kwargs["root"] / "integer_reference_i32.bin")
+                if kwargs["quantization_mode"] == "host_packed_int8"
+                else None,
+                "sha256": "1" * 64
+                if kwargs["quantization_mode"] == "host_packed_int8"
+                else None,
+                "required": kwargs["quantization_mode"] == "host_packed_int8",
+            },
         }
         self.requests.append(request)
         return request
@@ -85,12 +95,18 @@ class FakeM5NativeTarget:
         self.execution_timeouts.append(timeout_s)
         contracted = request["partition_strategy"] == "contracted"
         int8_requantization = request["quantization_mode"] == "per_task_resident_requantize"
+        packed_int8 = request["quantization_mode"] == "host_packed_int8"
         repetitions = [
             {
                 "warmup": True,
                 "repeat_id": index,
                 "total_time_s": 0.01,
-                "transfers": {"h2d_bytes": 10 + index, "d2h_bytes": 2},
+                "transfers": {
+                    "h2d_bytes": 0,
+                    "d2h_bytes": 2,
+                    "total_bytes": 2,
+                    "reset_h2d_bytes": 0,
+                },
             }
             for index in range(m5.WARMUPS)
         ] + [
@@ -98,7 +114,23 @@ class FakeM5NativeTarget:
                 "warmup": False,
                 "repeat_id": index,
                 "total_time_s": 0.02 + index / 1000,
-                "transfers": {"h2d_bytes": 20 + index, "d2h_bytes": 4},
+                "launch_sync_time_s": 0.01 + index / 2000,
+                "host_dequantization_time_s": 0.001 if packed_int8 else 0.0,
+                "transfers": {
+                    "h2d_bytes": 0,
+                    "d2h_bytes": 4,
+                    "total_bytes": 4,
+                    "reset_h2d_bytes": 0,
+                },
+                "per_dpu": [
+                    {
+                        "dpu_id": dpu_id,
+                        "runtime_cycles": 1000 // request["dpu_count"],
+                        "work_elements": 16,
+                        "completion_count": 1,
+                    }
+                    for dpu_id in range(request["dpu_count"])
+                ],
             }
             for index in range(m5.REPEATS)
         ]
@@ -126,19 +158,42 @@ class FakeM5NativeTarget:
             "fallback_used": False,
             "partition_strategy": request["partition_strategy"],
             "numeric_mode": (
-                "per_task_resident_requantize" if int8_requantization else "float32"
+                "host_packed_int8"
+                if packed_int8
+                else "per_task_resident_requantize"
+                if int8_requantization
+                else "float32"
             ),
-            "numeric_arithmetic": "int8_requantized" if int8_requantization else "float32",
-            "numeric_transport": "float32_mram",
-            "requantization_scope": "per_task_on_dpu" if int8_requantization else "none",
-            "packed_int8_transfer": False,
+            "numeric_arithmetic": (
+                "int8_multiply_int32_accumulate"
+                if packed_int8
+                else "int8_requantized"
+                if int8_requantization
+                else "float32"
+            ),
+            "numeric_transport": "host_packed_int8_mram" if packed_int8 else "float32_mram",
+            "requantization_scope": (
+                "host_initial_once_final_host_dequantize"
+                if packed_int8
+                else "per_task_on_dpu"
+                if int8_requantization
+                else "none"
+            ),
+            "packed_int8_transfer": packed_int8,
+            "host_quantization": packed_int8,
+            "dpu_intermediate_requantization": False,
+            "dispatch_mode": "bulk_set_synchronous_v1",
+            "kernel_launch_api_calls": m5.TOTAL_REPETITIONS,
+            "explicit_sync_api_calls": 0,
             "allocation_provider": "upmem_sdk_rank_profile_v1",
             "simplepim_role": "initialization_binary_and_management_state_only",
             "kernel_provider": "thesis_resident_generic_c_v3",
             "transfer_provider": "upmem_sdk_synchronous_v1",
             "collective_provider": "host_mediated_sum_v1" if contracted else "none",
             "reconstruction_provider": (
-                "host_float64_reduction_v1"
+                "host_int64_reduction_v1"
+                if contracted and packed_int8
+                else "host_float64_reduction_v1"
                 if contracted
                 else "host_owned_range_assembly_v1"
             ),
@@ -154,7 +209,13 @@ class FakeM5NativeTarget:
             },
             "persistent_session_reused": True,
             "repetitions": repetitions,
-            "run_total_transfers": {"h2d_bytes": 100, "d2h_bytes": 20},
+            "run_total_transfers": {
+                "h2d_bytes": 100,
+                "d2h_bytes": 20,
+                "total_bytes": 120,
+                "operand_h2d_bytes": 25 if packed_int8 else 100,
+                "reset_h2d_bytes": 0,
+            },
             "load_balance": {"ratio": 1.0},
             "validation": {"reference_error": 0.0, "output_error": 0.0},
             "policy_reference_validation": {
@@ -162,6 +223,14 @@ class FakeM5NativeTarget:
                 "status": "passed",
                 "reference_sha256": request["policy_reference"]["sha256"],
                 "max_abs_error": 0.0,
+            },
+            "exact_integer_validation": {
+                "status": "passed" if packed_int8 else "not_applicable",
+                "required": packed_int8,
+                "passed": packed_int8,
+                "exact_match": packed_int8,
+                "mismatch_count": 0,
+                "reference_sha256": request["integer_reference"]["sha256"] or "",
             },
             "full_precision_accuracy": {
                 "passed": self.full_precision_passed,
@@ -177,7 +246,9 @@ class FakeM5NativeTarget:
             "staged_dpu_binary_sha256": request["dpu_binary_sha256"],
             "initialization_binary_sha256": request["initialization_binary_sha256"],
             "launch_attempted": True,
-            "launch_count": 1,
+            "launch_count": m5.TOTAL_REPETITIONS,
+            "output_sha256": "2" * 64,
+            "raw_int32_output_sha256": "3" * 64 if packed_int8 else "",
         }
 
 
@@ -750,7 +821,7 @@ def test_fake_execution_writes_repeat_rows_and_preserves_identity(tmp_path: Path
     assert {row["scaling_kind"] for row in rows} == {"strong_scaling", "weak_scaling"}
     assert all(row["transfers"]["h2d_bytes"] != 100 for row in rows)
     assert all(row["run_metadata"]["transfers"]["h2d_bytes"] == 100 for row in rows)
-    assert all(row["application_visible_h2d_bytes"] >= 20 for row in rows)
+    assert all(row["application_visible_h2d_bytes"] == 0 for row in rows)
     assert all(row["application_visible_d2h_bytes"] == 4 for row in rows)
     assert all(
         row["application_visible_transfer_bytes"]
@@ -838,6 +909,16 @@ def test_kernel_timeout_failure_is_recorded_and_execution_continues(tmp_path: Pa
                 "packed_int8_transfer": False,
             },
         ),
+        (
+            "host_packed_int8",
+            {
+                "quantization_mode": "host_packed_int8",
+                "numeric_arithmetic": "int8_multiply_int32_accumulate",
+                "numeric_transport": "host_packed_int8_mram",
+                "requantization_scope": "host_initial_once_final_host_dequantize",
+                "packed_int8_transfer": True,
+            },
+        ),
     ),
 )
 def test_completed_rows_have_canonical_numeric_evidence(
@@ -880,6 +961,48 @@ def test_completed_rows_have_canonical_numeric_evidence(
     assert {field: row[field] for field in expected} == expected
     assert row["initialization_binary"] == request["initialization_binary"]
     assert row["initialization_binary_sha256"] == request["initialization_binary_sha256"]
+    if quantization_mode == "host_packed_int8":
+        assert row["exact_integer_passed"] is True
+        assert row["exact_integer_match"] is True
+        assert row["exact_integer_mismatch_count"] == 0
+        assert row["max_dpu_cycles"] == 333
+        assert row["run_operand_h2d_bytes"] == 25
+
+
+def test_m5_4_suite_selects_only_float32_and_host_packed_int8() -> None:
+    config = m5.load_m5_suite(M5_4_SUITE)
+
+    assert config.dpu_counts == m5.DEFAULT_DPU_COUNTS
+    assert config.quantization_modes == ("none", "host_packed_int8")
+    assert "per_task_resident_requantize" not in config.quantization_modes
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid"),
+    (
+        ("dispatch_mode", "singleton_loop"),
+        ("kernel_launch_api_calls", m5.TOTAL_REPETITIONS + 1),
+        ("explicit_sync_api_calls", 1),
+    ),
+)
+def test_success_acceptance_requires_bulk_set_launch_contract(
+    field: str,
+    invalid: Any,
+    tmp_path: Path,
+) -> None:
+    target = FakeM5NativeTarget()
+    request = target.prepare_request(
+        dpu_count=8,
+        tasklets=m5.DEFAULT_TASKLETS,
+        quantization_mode="host_packed_int8",
+        partition_strategy="output",
+        root=tmp_path,
+    )
+    response = dict(target.execute(request, timeout_s=1.0))
+    response[field] = invalid
+
+    with pytest.raises(ValueError, match=field):
+        m5._validate_execute_response(response, request, m5.load_m5_suite(M5_4_SUITE))
 
 
 @pytest.mark.parametrize(

@@ -51,6 +51,11 @@ UPMEM_HW_M5_RUN ?= runs/evidence/upmem_hardware_distributed_m5/upmem_hw_m5/lates
 UPMEM_HW_M5_DPU_COUNTS ?=
 UPMEM_HW_M5_TASKLETS ?=
 UPMEM_HW_M5_ARGS = $(if $(UPMEM_HW_M5_DPU_COUNTS),--dpu-counts $(UPMEM_HW_M5_DPU_COUNTS),) $(if $(UPMEM_HW_M5_TASKLETS),--tasklets $(UPMEM_HW_M5_TASKLETS),)
+UPMEM_HW_M5_4_SUITE ?= configs/suites/upmem_hardware_distributed_m5_4.yml
+UPMEM_HW_M5_4_RUN ?= runs/evidence/upmem_hardware_distributed_m5/upmem_hw_m5/latest
+UPMEM_HW_M5_4_DPU_COUNTS ?=
+UPMEM_HW_M5_4_TASKLETS ?=
+UPMEM_HW_M5_4_ARGS = $(if $(UPMEM_HW_M5_4_DPU_COUNTS),--dpu-counts $(UPMEM_HW_M5_4_DPU_COUNTS),) $(if $(UPMEM_HW_M5_4_TASKLETS),--tasklets $(UPMEM_HW_M5_4_TASKLETS),)
 EVIDENCE_INBOX ?= runs/inbox/eth
 GPU_VERIFY ?= quest-hip
 CLEAN_RUNS ?= 0
@@ -109,6 +114,10 @@ PUBLIC_TARGETS := \
 	upmem-hw-m5-plan \
 	upmem-hw-m5 \
 	upmem-hw-m5-report \
+	upmem-hw-m5-4-plan \
+	upmem-hw-m5-4-smoke \
+	upmem-hw-m5-4 \
+	upmem-hw-m5-4-report \
 	upmem-pidcomm-compatibility \
 	upmem-pidcomm-plan \
 	upmem-pidcomm-run \
@@ -184,6 +193,10 @@ help:
 		'  make upmem-hw-m5-plan  Prepare/build the M5 execution-plan-v3 distributed study; never allocates or launches a DPU' \
 		'  make upmem-hw-m5  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1 and UPMEM_HW_RANK_PATH; execute the M5 study' \
 		'  make upmem-hw-m5-report  Report the explicitly supplied M5 evidence run' \
+		'  make upmem-hw-m5-4-plan  Prepare/build the corrected bulk-launch and host-packed-int8 M5.4 study; never allocates a DPU' \
+		'  make upmem-hw-m5-4-smoke  Requires physical opt-in/rank; execute the M5.4 1/2/4/8-DPU acceptance gate' \
+		'  make upmem-hw-m5-4  Requires physical opt-in/rank; execute the full M5.4 1..64-DPU matrix' \
+		'  make upmem-hw-m5-4-report  Report and evaluate one explicitly supplied M5.4 evidence run' \
 		'  make upmem-pidcomm-compatibility  Stage and compile/link PID-Comm; never allocates a DPU' \
 		'  make upmem-pidcomm-plan  Record PID-Comm CPU/SDK/source facts and stage no hardware; never allocates a DPU' \
 		'  make upmem-pidcomm-run  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; qualify PID-Comm physical all-reduce candidates' \
@@ -427,6 +440,22 @@ upmem-hw-m5:
 
 upmem-hw-m5-report:
 	$(PY_ENV) $(PYTHON) scripts/upmem_m5_report.py --input $(UPMEM_HW_M5_RUN) --output-root .
+
+upmem-hw-m5-4-plan:
+	$(BENCH) upmem-hardware-distributed-m5 --suite $(UPMEM_HW_M5_4_SUITE) --prepare-only --build $(UPMEM_HW_M5_4_ARGS)
+
+upmem-hw-m5-4-smoke:
+	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1 to execute physical hardware' >&2; exit 2; }
+	@test -n "$(UPMEM_HW_RANK_PATH)" || { echo 'Set UPMEM_HW_RANK_PATH=/dev/dpu_rankN to select a physical UPMEM rank' >&2; exit 2; }
+	$(BENCH) upmem-hardware-distributed-m5 --suite $(UPMEM_HW_M5_4_SUITE) --execute --dpu-counts 1,2,4,8 $(if $(UPMEM_HW_M5_4_TASKLETS),--tasklets $(UPMEM_HW_M5_4_TASKLETS),)
+
+upmem-hw-m5-4:
+	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1 to execute physical hardware' >&2; exit 2; }
+	@test -n "$(UPMEM_HW_RANK_PATH)" || { echo 'Set UPMEM_HW_RANK_PATH=/dev/dpu_rankN to select a physical UPMEM rank' >&2; exit 2; }
+	$(BENCH) upmem-hardware-distributed-m5 --suite $(UPMEM_HW_M5_4_SUITE) --execute $(UPMEM_HW_M5_4_ARGS)
+
+upmem-hw-m5-4-report:
+	$(PY_ENV) $(PYTHON) scripts/upmem_m5_report.py --input $(UPMEM_HW_M5_4_RUN) --output-root .
 
 upmem-pidcomm-compatibility:
 	$(PY_ENV) $(PYTHON) native/upmem/pidcomm_qualification/pidcomm_qualification_runner.py --compatibility-only --workdir .

@@ -302,10 +302,17 @@ def prepare_request(
         ),
         "packed_int8_transfer": quantization_mode == NUMERIC_INT8,
         "host_quantization": quantization_mode == NUMERIC_INT8,
+        "host_quantization_time_s": package.host_quantization_time_s,
         "dpu_intermediate_requantization": False,
         "partition_strategy": partition_strategy,
         "partition_kind": plan.partition_kind,
         "scaling_kind": _scaling_kind(case),
+        "output_elements": int(operation.output_elements),
+        "contracted_elements": int(operation.args["contracted_combination_count"]),
+        "mac_count": int(
+            operation.output_elements
+            * int(operation.args["contracted_combination_count"])
+        ),
         "timing_scope": TIMING_SCOPE,
         "simplepim_role": "initialization_binary_and_management_state_only",
         "collective_provider": "none" if partition_strategy == PARTITION_OUTPUT else "host_mediated_sum_v1",
@@ -313,12 +320,10 @@ def prepare_request(
         "execution_plan_hash": plan.execution_plan_hash,
         "execution_input_hash": evidence["package_sha256"],
         "sidecar_validation": sidecar_validation,
-        "policy_reference_metadata": {
-            key: value for key, value in policy_reference.items() if key != "output"
-        },
-        "full_precision_reference_metadata": {
-            key: value for key, value in full_precision_reference.items() if key != "output"
-        },
+        "policy_reference_metadata": _reference_metadata(policy_reference),
+        "full_precision_reference_metadata": _reference_metadata(
+            full_precision_reference
+        ),
         "non_quantum": bool(case.get("non_quantum") is True or case.get("quantum_case") == "non_quantum"),
         **evidence,
         "host_binary_sha256": evidence["host_binary_hash"],
@@ -539,6 +544,26 @@ def _real_float32_reference(reference: Mapping[str, Any]) -> dict[str, Any]:
             raise ValueError("hardware_profile_violation: v3 reference is not real")
         output = output.real
     return {**reference, "output": np.asarray(output, dtype=np.float32)}
+
+
+def _reference_metadata(value: Any) -> Any:
+    """Remove numerical output arrays while preserving scalar reference evidence."""
+
+    if isinstance(value, Mapping):
+        return {
+            str(key): _reference_metadata(item)
+            for key, item in value.items()
+            if key not in {"output", "raw_output"}
+        }
+    if isinstance(value, (list, tuple)):
+        return [_reference_metadata(item) for item in value]
+    if isinstance(value, np.ndarray):
+        raise ValueError(
+            "native_v3_request_invalid: unexpected array in reference metadata"
+        )
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
 
 
 def _full_precision_tolerance(quantization_mode: str) -> float:
