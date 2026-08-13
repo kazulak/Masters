@@ -447,6 +447,19 @@ def test_incompatible_binary_hashes_do_not_pair(tmp_path: Path) -> None:
     assert not _csv_rows(output / "tables/m5_strong_scaling.csv")
 
 
+def test_manifest_distinguishes_same_route_ratio_from_broad_speedup(tmp_path: Path) -> None:
+    output = generate_report(
+        _write_run(tmp_path, [_row(dpu_count=1, runtime_s=2.0), _row(dpu_count=2, runtime_s=1.0)]),
+        tmp_path / "report-root",
+        timestamp="claim-boundary",
+    )
+
+    claims = json.loads((output / "plot_manifest.json").read_text(encoding="utf-8"))["claims"]
+    assert claims["same_route_dpu_scaling_ratio"] is True
+    assert claims["broad_hardware_speedup"] is False
+    assert claims["speedup"] is False
+
+
 def test_incompatible_numeric_task_and_binary_identities_are_todo(tmp_path: Path) -> None:
     incompatible_task = _row(numeric_mode="int8", runtime_s=2.0)
     incompatible_task["task_hash"] = "task-b"

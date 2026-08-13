@@ -1777,7 +1777,9 @@ def generate_report(input_path: Path, output_root: Path, *, timestamp: str | Non
                 for view in views
             ),
             "host_mediated_reduction": "where recorded",
-            "speedup": bool(ratios),
+            "same_route_dpu_scaling_ratio": bool(ratios),
+            "broad_hardware_speedup": False,
+            "speedup": False,
             "numeric_mode_ratio": bool(numeric_ratios),
             "partition_runtime_ratio": bool(partition_ratios),
             "cross_route_pairing": False,
