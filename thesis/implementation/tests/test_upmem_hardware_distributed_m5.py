@@ -9,6 +9,7 @@ from typing import Any, Mapping
 
 import pytest
 import numpy as np
+import yaml
 
 from quantum_bench.bench import upmem_hardware_distributed_m5 as m5
 from quantum_bench.targets.upmem.distributed_plan_v3 import UnsupportedPartitionError
@@ -108,9 +109,15 @@ class FakeM5NativeTarget:
             "error": None,
             "target_requested": "hardware",
             "target_observed": "physical_hardware",
+            "execution_class": "resident_taskgraph",
+            "kernel_strategy": "resident_generic_contract",
+            "requested_rank_path": "/dev/dpu_rank1",
             "requested_dpu_count": request["dpu_count"],
             "allocated_dpu_count": request["dpu_count"],
             "observed_rank_count": 1,
+            "rank_count": 1,
+            "one_rank": True,
+            "single_rank": True,
             "tasklets_per_dpu": request["tasklets"],
             "requested_warmups": m5.WARMUPS,
             "requested_repetitions": m5.REPEATS,
@@ -191,13 +198,19 @@ def _physical_env() -> dict[str, str]:
     }
 
 
+def _response_path(tmp_path: Path) -> Path:
+    path = tmp_path / "run" / "plans" / "plan-1" / "response.json"
+    path.parent.mkdir(parents=True)
+    return path
+
+
 def test_default_executor_binds_prepared_policy_reference_and_computes_accuracy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     policy_path = tmp_path / "policy_reference_f32.bin"
     full_precision_path = tmp_path / "full_precision_reference_f32.bin"
     output_path = tmp_path / "output.bin"
-    response_path = tmp_path / "response.json"
+    response_path = _response_path(tmp_path)
     np.asarray([1.0, 2.0], dtype="<f4").tofile(policy_path)
     np.asarray([1.0, 2.0], dtype="<f4").tofile(full_precision_path)
     np.asarray([1.0, 2.0], dtype="<f4").tofile(output_path)
@@ -216,7 +229,11 @@ def test_default_executor_binds_prepared_policy_reference_and_computes_accuracy(
                 "reference_sha256": policy_sha256,
             },
         }), encoding="utf-8")
-        return type("Completed", (), {"returncode": 0})()
+        return type(
+            "Completed",
+            (),
+            {"returncode": 0, "stdout": "native stdout\n", "stderr": "native stderr\n"},
+        )()
 
     monkeypatch.setattr(m5.subprocess, "run", fake_run)
     request = {
@@ -244,12 +261,20 @@ def test_default_executor_binds_prepared_policy_reference_and_computes_accuracy(
     assert command[command.index("--timeout-s") + 1] == "18"
     assert captured["outer_timeout_s"] == 17.25 + m5.SUBPROCESS_TIMEOUT_GRACE_S
     assert response["full_precision_accuracy"]["max_abs_error"] == 0.0
+    artifacts = response["native_output_artifacts"]
+    run_dir = response_path.parent.parent.parent
+    assert artifacts["stdout"]["path"] == "plans/plan-1/native_stdout.txt"
+    assert artifacts["stderr"]["path"] == "plans/plan-1/native_stderr.txt"
+    assert (run_dir / artifacts["stdout"]["path"]).read_text() == "native stdout\n"
+    assert (run_dir / artifacts["stderr"]["path"]).read_text() == "native stderr\n"
+    assert artifacts["stdout"]["sha256"]
+    assert artifacts["stderr"]["sha256"]
 
 
 def test_default_executor_converts_timeout_and_preserves_native_response(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    response_path = tmp_path / "response.json"
+    response_path = _response_path(tmp_path)
     native_response = {
         "schema_version": m5.NATIVE_RESPONSE_SCHEMA,
         "status": "failed",
@@ -275,20 +300,70 @@ def test_default_executor_converts_timeout_and_preserves_native_response(
         },
     }
 
-    with pytest.raises(m5.NativeExecutionError, match="kernel_timeout") as failure:
+    with pytest.raises(m5.NativeExecutionError, match="native_alarm_timeout") as failure:
         target.execute(request, timeout_s=10.0)
 
-    assert failure.value.failure_stage == "kernel_timeout"
+    assert failure.value.failure_stage == "native_alarm_timeout"
     assert failure.value.response["error"] == native_response["error"]
-    assert failure.value.response["failure_stage"] == "kernel_timeout"
+    assert failure.value.response["failure_stage"] == "native_alarm_timeout"
     assert failure.value.response["native_timeout_s"] == 10.0
     assert failure.value.response["outer_timeout_s"] == 40.0
+    assert response_path.parent.joinpath("native_stdout.txt").is_file()
+    assert response_path.parent.joinpath("native_stderr.txt").is_file()
+
+
+def test_default_executor_uses_outer_process_timeout_without_native_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response_path = _response_path(tmp_path)
+
+    def fake_run(*_: Any, **__: Any) -> Any:
+        raise subprocess.TimeoutExpired("host", timeout=40.0)
+
+    monkeypatch.setattr(m5.subprocess, "run", fake_run)
+    target = m5._DefaultNativeTarget()
+    request = {
+        "host_binary": str(tmp_path / "host"),
+        "resident_manifest": str(tmp_path / "manifest.json"),
+        "distributed_plan": str(tmp_path / "plan.bin"),
+        "response_path": str(response_path),
+        "policy_reference": {
+            "path": str(tmp_path / "policy.bin"),
+            "sha256": "a" * 64,
+            "max_abs_tolerance": 1.0e-5,
+        },
+    }
+
+    with pytest.raises(m5.NativeExecutionError, match="outer_process_timeout") as failure:
+        target.execute(request, timeout_s=10.0)
+
+    assert failure.value.failure_stage == "outer_process_timeout"
+    assert failure.value.response["failure_stage"] == "outer_process_timeout"
+    assert failure.value.response["native_timeout_s"] == 10.0
+    assert failure.value.response["outer_timeout_s"] == 40.0
+
+
+def test_native_output_artifacts_are_bounded_and_relative(tmp_path: Path) -> None:
+    artifacts = m5._write_native_output_artifacts(
+        _response_path(tmp_path),
+        "stdout" * m5.NATIVE_OUTPUT_LIMIT_BYTES,
+        "stderr" * m5.NATIVE_OUTPUT_LIMIT_BYTES,
+    )
+    for artifact in artifacts.values():
+        assert not Path(artifact["path"]).is_absolute()
+        assert artifact["path"].startswith("plans/plan-1/")
+        assert artifact["bytes"] <= m5.NATIVE_OUTPUT_LIMIT_BYTES
+
+
+def test_native_output_artifacts_fail_closed_for_ambiguous_layout(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="response must be under"):
+        m5._write_native_output_artifacts(tmp_path / "response.json", "out", "err")
 
 
 def test_default_executor_rejects_mismatched_policy_reference_hash(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    response_path = tmp_path / "response.json"
+    response_path = _response_path(tmp_path)
 
     def fake_run(*_: Any, **__: Any) -> Any:
         response_path.write_text(json.dumps({
@@ -317,10 +392,78 @@ def test_default_executor_rejects_mismatched_policy_reference_hash(
     assert failure.value.response["policy_reference_validation"]["reference_sha256"] == "0" * 64
 
 
+def test_suite_matrix_options_drive_generation_and_are_validated(tmp_path: Path) -> None:
+    payload = yaml.safe_load(SUITE.read_text(encoding="utf-8"))
+    payload["defaults"]["quantization_modes"] = ["none"]
+    payload["defaults"]["partition_strategies"] = ["output"]
+    for workload in payload["workloads"]:
+        workload.pop("partition_strategies", None)
+    suite = tmp_path / "m5_subset.yml"
+    suite.write_text(yaml.safe_dump(payload), encoding="utf-8")
+
+    config = m5.load_m5_suite(suite)
+    assert config.quantization_modes == ("none",)
+    assert config.partition_strategies == ("output",)
+    result = m5.execute(
+        tmp_path / "run",
+        suite_path=suite,
+        dpu_counts=(3,),
+        environment=_physical_env(),
+        native_target=FakeM5NativeTarget(),
+        task_selector=_selection,
+    )
+    rows = [
+        json.loads(line)
+        for line in (Path(result["run_dir"]) / "normalized_records.jsonl").read_text().splitlines()
+    ]
+    assert len(rows) == 5 * 7
+    assert {row["quantization_mode"] for row in rows} == {"none"}
+    assert {row["partition_strategy"] for row in rows} == {"output"}
+
+    payload["defaults"]["quantization_modes"] = ["not_a_mode"]
+    suite.write_text(yaml.safe_dump(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="quantization_modes"):
+        m5.load_m5_suite(suite)
+
+
+def test_native_build_failure_writes_structured_run_artifacts(tmp_path: Path) -> None:
+    class BuildFailTarget(FakeM5NativeTarget):
+        def build(self, build_dir: Path, *, tasklets: int) -> Mapping[str, Any]:
+            raise RuntimeError("native_build_failed: compiler unavailable")
+
+    result = m5.execute(
+        tmp_path,
+        suite_path=SUITE,
+        dpu_counts=(3,),
+        environment=_physical_env(),
+        native_target=BuildFailTarget(),
+        task_selector=_selection,
+    )
+    run_dir = Path(result["run_dir"])
+    summary = json.loads(Path(result["artifact"]).read_text(encoding="utf-8"))
+    manifest = json.loads((run_dir / "run_manifest.json").read_text(encoding="utf-8"))
+    rows = [json.loads(line) for line in (run_dir / "normalized_records.jsonl").read_text().splitlines()]
+
+    assert result["status"] == "failed"
+    assert summary["status"] == "failed"
+    assert summary["row_count"] == 1
+    assert summary["failure_stage"] == "native_build_failed"
+    assert manifest["failure_stage"] == "native_build_failed"
+    assert manifest["status"] == "failed"
+    assert manifest["upmem_sdk_available"] == "not_verified_by_execution"
+    assert len(rows) == 1
+    assert rows[0]["status"] == "failed"
+    assert rows[0]["failure_stage"] == "native_build_failed"
+    artifact = rows[0]["native_output_artifacts"]["build_failure"]
+    assert artifact["path"] == "native_build/build_failure.log"
+    assert (run_dir / artifact["path"]).is_file()
+    assert "Traceback" not in rows[0]["reason"]
+
+
 def test_default_validator_accepts_not_run_policy_reference(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    response_path = tmp_path / "response.json"
+    response_path = _response_path(tmp_path)
 
     def fake_run(*_: Any, **__: Any) -> Any:
         response_path.write_text(json.dumps({
@@ -392,6 +535,42 @@ def test_physical_admission_is_fail_closed(tmp_path: Path) -> None:
             suite_path=SUITE,
             environment={**_physical_env(), "DPU_BACKEND": "simulator"},
         )
+
+
+def test_sdk_provenance_uses_bounded_fake_version_commands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    for name in m5.CORE_UPMEM_SDK_TOOLS:
+        path = fake_bin / name
+        path.write_text("#!/bin/sh\nprintf fake-version\n", encoding="utf-8")
+        path.chmod(0o755)
+    calls: list[tuple[list[str], float]] = []
+
+    def fake_run(command: list[str], **kwargs: Any) -> Any:
+        calls.append((command, kwargs["timeout"]))
+        return type("Completed", (), {
+            "returncode": 0,
+            "stdout": "v" + ("x" * 2048),
+            "stderr": "",
+        })()
+
+    monkeypatch.setattr(m5.subprocess, "run", fake_run)
+    metadata = m5._upmem_sdk_provenance({
+        **_physical_env(),
+        "PATH": str(fake_bin),
+    })
+
+    assert len(calls) == len(m5.CORE_UPMEM_SDK_TOOLS)
+    assert all(timeout == m5.SDK_PROBE_TIMEOUT_S for _, timeout in calls)
+    assert metadata["requested_rank_path"] == "/dev/dpu_rank1"
+    assert metadata["effective_profile"].endswith("ignoreVpd=true")
+    for name in m5.CORE_UPMEM_SDK_TOOLS:
+        tool = metadata["tools"][name]
+        assert tool["path"] == str(fake_bin / name)
+        assert tool["version_probe_status"] == "passed"
+        assert len(tool["version_output"]) <= m5.SDK_VERSION_OUTPUT_LIMIT_BYTES
 
 
 def test_prepare_has_no_native_execute_or_allocation(tmp_path: Path) -> None:
@@ -467,6 +646,18 @@ def test_fake_execution_writes_repeat_rows_and_preserves_identity(tmp_path: Path
     manifest = json.loads(Path(result["run_dir"], "run_manifest.json").read_text(encoding="utf-8"))
     assert summary["timeout_s"] == m5.DEFAULT_TIMEOUT_S
     assert manifest["timeout_s"] == m5.DEFAULT_TIMEOUT_S
+    assert manifest["status"] == "completed"
+    assert manifest["upmem_sdk_available"] == "not_verified_by_execution"
+    assert manifest["hardware_available"] == "not_verified"
+    assert manifest["native_provider_kind"] == "injected_test_only"
+    assert manifest["requested_rank_path"] == "/dev/dpu_rank1"
+    assert manifest["effective_profile"].endswith("ignoreVpd=true")
+    assert set(manifest["upmem_sdk_tools"]) == set(m5.CORE_UPMEM_SDK_TOOLS)
+    environment = json.loads(Path(result["run_dir"], "environment.json").read_text(encoding="utf-8"))
+    assert environment["hostname"]
+    assert environment["python_version"]
+    assert environment["upmem_sdk_provenance"]["requested_rank_path"] == "/dev/dpu_rank1"
+    assert set(environment["upmem_sdk_provenance"]["tools"]) == set(m5.CORE_UPMEM_SDK_TOOLS)
     assert set(target.execution_timeouts) == {m5.DEFAULT_TIMEOUT_S}
     rows = [
         json.loads(line)
@@ -477,6 +668,8 @@ def test_fake_execution_writes_repeat_rows_and_preserves_identity(tmp_path: Path
     assert {row["quantization_mode"] for row in rows} == set(m5.QUANTIZATION_MODES)
     assert {row["partition_strategy"] for row in rows} == set(m5.PARTITION_STRATEGIES)
     assert all(row["cpu_fallback_used"] is False for row in rows)
+    assert all(row["hardware_functionality_evidence"] is False for row in rows)
+    assert all(row["native_provider_kind"] == "injected_test_only" for row in rows)
     assert all(row["claims"]["speedup"] is False for row in rows)
     assert all(row["circuit_semantics_hash"] for row in rows)
     assert all(row["tensor_network_hash"] for row in rows)
@@ -486,6 +679,19 @@ def test_fake_execution_writes_repeat_rows_and_preserves_identity(tmp_path: Path
     assert {row["scaling_kind"] for row in rows} == {"strong_scaling", "weak_scaling"}
     assert all(row["transfers"]["h2d_bytes"] != 100 for row in rows)
     assert all(row["run_metadata"]["transfers"]["h2d_bytes"] == 100 for row in rows)
+    assert all(row["application_visible_h2d_bytes"] >= 20 for row in rows)
+    assert all(row["application_visible_d2h_bytes"] == 4 for row in rows)
+    assert all(
+        row["application_visible_transfer_bytes"]
+        == row["application_visible_h2d_bytes"] + row["application_visible_d2h_bytes"]
+        for row in rows
+    )
+    assert all(row["execution_plan_hash"] for row in rows)
+    assert all(row["execution_class"] == "resident_taskgraph" for row in rows)
+    assert all(row["kernel_strategy"] == "resident_generic_contract" for row in rows)
+    assert all(row["requested_rank_path"] == "/dev/dpu_rank1" for row in rows)
+    assert all(row["rank_count"] == 1 for row in rows)
+    assert all(row["one_rank"] is True and row["single_rank"] is True for row in rows)
     assert all(row["policy_reference_validation"]["passed"] is True for row in rows)
     assert all(isinstance(row["policy_reference_validation"]["max_abs_error"], (float, int)) for row in rows)
     float32 = [row for row in rows if row["quantization_mode"] == "none"]
@@ -635,6 +841,27 @@ def test_success_acceptance_rejects_mismatched_numeric_evidence(
         m5._validate_execute_response(response, request, m5.load_m5_suite(SUITE))
 
 
+def test_success_acceptance_rejects_contradictory_repetition_transfer_bytes(tmp_path: Path) -> None:
+    target = FakeM5NativeTarget()
+    request = target.prepare_request(
+        dpu_count=3,
+        tasklets=m5.DEFAULT_TASKLETS,
+        quantization_mode="none",
+        partition_strategy="output",
+        root=tmp_path,
+    )
+    response = dict(target.execute(request, timeout_s=1.0))
+    repetitions = [dict(item) for item in response["repetitions"]]
+    repetitions[m5.WARMUPS]["transfers"] = {
+        **repetitions[m5.WARMUPS]["transfers"],
+        "total_bytes": 999,
+    }
+    response["repetitions"] = repetitions
+
+    with pytest.raises(ValueError, match=r"total does not equal h2d\+d2h"):
+        m5._validate_execute_response(response, request, m5.load_m5_suite(SUITE))
+
+
 def test_failed_native_response_is_preserved_as_structured_evidence(tmp_path: Path) -> None:
     class FailingTarget(FakeM5NativeTarget):
         def execute(self, request: Mapping[str, Any], *, timeout_s: float) -> Mapping[str, Any]:
@@ -738,6 +965,10 @@ def test_capacity_is_an_explicit_unsupported_row(tmp_path: Path) -> None:
     assert all(row["status"] == "unsupported" for row in rows)
     assert all(row["failure_stage"] == "capacity" for row in rows)
     assert target.execute_calls == 0
+    manifest = json.loads(Path(result["run_dir"], "run_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "unsupported"
+    assert manifest["upmem_sdk_available"] == "not_verified_by_execution"
+    assert all(row.get("hardware_functionality_evidence") is False for row in rows)
 
 
 def test_prepare_keeps_mixed_capacity_results_prepared(tmp_path: Path) -> None:

@@ -51,6 +51,7 @@ PARTITION_OUTPUT = "output"
 PARTITION_CONTRACTED = "contracted"
 TRANSPORT_FLOAT32_MRAM = "float32_mram"
 TIMING_SCOPE = "one_task_resident_v3_full_execution"
+DEFAULT_TIMEOUT_S = 900.0
 # The additive v3 host is compiled against the resident session loader's
 # existing manifest identity.  Keep the v3 package/profile identity alongside
 # it so the package remains v3 while the native request parser accepts it.
@@ -278,7 +279,7 @@ def prepare_request(
         "timing_scope": TIMING_SCOPE,
         "simplepim_role": "initialization_binary_and_management_state_only",
         "collective_provider": "none" if partition_strategy == PARTITION_OUTPUT else "host_mediated_sum_v1",
-        "timeout_s": 120.0,
+        "timeout_s": DEFAULT_TIMEOUT_S,
         "execution_plan_hash": plan.execution_plan_hash,
         "execution_input_hash": evidence["package_sha256"],
         "sidecar_validation": sidecar_validation,
@@ -554,4 +555,4 @@ def _first(values: Mapping[str, Any], *keys: str) -> Any:
     return None
 
 
-__all__ = ["build", "prepare_request", "validate_request"]
+__all__ = ["DEFAULT_TIMEOUT_S", "build", "prepare_request", "validate_request"]

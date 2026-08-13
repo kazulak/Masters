@@ -55,6 +55,7 @@ def test_real_selection_builds_without_retained_network(tmp_path: Path) -> None:
     assert manifest["resident_v3_profile_version"] == v3.RESIDENT_V3_PROFILE_VERSION
     assert request["task_id"] == selection.task_id
     assert request["simplepim_role"] == "initialization_binary_and_management_state_only"
+    assert request["timeout_s"] == v3.DEFAULT_TIMEOUT_S == 900.0
     assert Path(request["initialization_binary"]).name == "dpu_simplepim_management_init"
     assert request["initialization_binary_sha256"] == hashlib.sha256(
         Path(request["initialization_binary"]).read_bytes()

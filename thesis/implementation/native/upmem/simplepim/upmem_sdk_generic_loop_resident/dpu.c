@@ -323,7 +323,8 @@ int main(void) {
         RESIDENT_COMPLETION.output_checksum_fnv1a64 = 14695981039346656037ULL;
         RESIDENT_COMPLETION.dpu_run_time_cycles = 0ULL;
 #if RESIDENT_COMPLETION_VERSION >= 2
-        for (uint32_t index = 0; index < 16u; index++) {
+        for (uint32_t index = 0; index < sizeof(RESIDENT_COMPLETION.tasklet_processed_elements) /
+                sizeof(RESIDENT_COMPLETION.tasklet_processed_elements[0]); index++) {
             RESIDENT_COMPLETION.tasklet_processed_elements[index] = 0u;
         }
         RESIDENT_COMPLETION.active_tasklet_count = 0u;

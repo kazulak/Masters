@@ -69,6 +69,13 @@ def test_v3_requires_exact_resident_and_sidecar_dpu_counts() -> None:
     assert "request.resident.requested_dpus != 1u &&" not in source
 
 
+def test_v3_observes_physical_hardware_after_confirmed_allocation() -> None:
+    source = (PLAN / "host_v3.c").read_text(encoding="ascii")
+    target_line = next(line for line in source.splitlines() if '\\"target_observed\\"' in line)
+    assert 'provider != NULL && provider->allocation_used ? "physical_hardware" : "not_allocated"' in target_line
+    assert 'status != NULL && strcmp(status, "completed")' not in target_line
+
+
 def test_v3_response_and_build_contract_are_canonical() -> None:
     source = (PLAN / "host_v3.c").read_text(encoding="ascii")
     common = (NATIVE / "upmem_sdk_generic_loop_resident/common.h").read_text(encoding="ascii")
@@ -111,6 +118,9 @@ def test_completion_v3_has_capacity_for_all_tasklets() -> None:
     common = (NATIVE / "upmem_sdk_generic_loop_resident/common.h").read_text(encoding="ascii")
     assert "tasklet_processed_elements[24]" in common
     assert "sizeof(resident_completion_t) == 152u" in common
+    dpu = (NATIVE / "upmem_sdk_generic_loop_resident/dpu.c").read_text(encoding="ascii")
+    assert "sizeof(RESIDENT_COMPLETION.tasklet_processed_elements)" in dpu
+    assert "index < 16u" not in dpu
     makefile = (PLAN / "Makefile").read_text(encoding="ascii")
     assert "dpu_resident_v3_t%" in makefile
     assert "host_upmem_execution_plan_v3_t%" in makefile

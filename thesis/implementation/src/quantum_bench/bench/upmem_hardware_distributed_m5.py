@@ -16,7 +16,10 @@ import inspect
 import json
 import math
 import os
+import platform
 from pathlib import Path
+import shutil
+import socket
 import subprocess
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
@@ -28,6 +31,7 @@ from quantum_bench.bench.run_dirs import EVIDENCE_ARTIFACT_KIND, create_run_dir
 from quantum_bench.circuits import load_circuit
 from quantum_bench.core.jsonio import write_json
 from quantum_bench.environment import capture_environment
+from quantum_bench.targets.upmem.execution_plan_v3 import DEFAULT_TIMEOUT_S
 from quantum_bench.targets.upmem.hardware_session import hardware_environment_metadata
 from quantum_bench.tn import build_tensor_network, plan_task_graph_with_config
 from quantum_bench.tn.execution_bundle import canonical_hash
@@ -50,11 +54,15 @@ WARMUPS = 2
 REPEATS = 7
 TOTAL_REPETITIONS = WARMUPS + REPEATS
 DEFAULT_CAPACITY = 64
-DEFAULT_TIMEOUT_S = 900.0
 MAX_TIMEOUT_S = 1800.0
 SUBPROCESS_TIMEOUT_GRACE_S = 30.0
 QUANTIZATION_MODES = ("none", "per_task_resident_requantize")
 PARTITION_STRATEGIES = ("output", "contracted")
+NATIVE_OUTPUT_LIMIT_BYTES = 64 * 1024
+ERROR_TEXT_LIMIT_BYTES = 4 * 1024
+SDK_PROBE_TIMEOUT_S = 2.0
+SDK_VERSION_OUTPUT_LIMIT_BYTES = 512
+CORE_UPMEM_SDK_TOOLS = ("dpu-upmem-dpurte-clang", "dpu-pkg-config")
 
 
 class NativeExecutionError(RuntimeError):
@@ -108,6 +116,8 @@ class M5StudyConfig:
     repeats: int
     timeout_s: float
     capacity: int
+    quantization_modes: tuple[str, ...]
+    partition_strategies: tuple[str, ...]
     cases: tuple[Mapping[str, Any], ...]
     suite_path: Path
 
@@ -192,23 +202,63 @@ class _DefaultNativeTarget:
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
+            output_artifacts = _write_native_output_artifacts(
+                response_path, getattr(exc, "stdout", None), getattr(exc, "stderr", None)
+            )
             payload = _read_native_response(response_path) or {
                 "schema_version": NATIVE_RESPONSE_SCHEMA,
                 "status": "failed",
             }
-            payload["failure_stage"] = "kernel_timeout"
+            payload["native_output_artifacts"] = output_artifacts
+            failure_stage = payload.get("failure_stage")
+            if not isinstance(failure_stage, str) or not failure_stage:
+                failure_stage = "outer_process_timeout"
+            payload["failure_stage"] = failure_stage
             payload.setdefault("error", "native subprocess exceeded the outer timeout")
             payload["native_timeout_s"] = timeout_s
             payload["outer_timeout_s"] = timeout_s + SUBPROCESS_TIMEOUT_GRACE_S
+            _write_native_response(response_path, payload)
             raise NativeExecutionError(
-                f"kernel_timeout: native subprocess exceeded {timeout_s + SUBPROCESS_TIMEOUT_GRACE_S}s",
+                f"{failure_stage}: native subprocess exceeded {timeout_s + SUBPROCESS_TIMEOUT_GRACE_S}s",
                 response=payload,
             ) from exc
+        output_artifacts = _write_native_output_artifacts(
+            response_path, getattr(completed, "stdout", None), getattr(completed, "stderr", None)
+        )
         if not response_path.is_file():
-            raise RuntimeError("native_response_missing: v3 response was not written")
-        payload = json.loads(response_path.read_text(encoding="utf-8"))
+            payload = {
+                "schema_version": NATIVE_RESPONSE_SCHEMA,
+                "status": "failed",
+                "failure_stage": "output_manifest_failed",
+                "error": "native_response_missing: v3 response was not written",
+                "native_output_artifacts": output_artifacts,
+            }
+            _write_native_response(response_path, payload)
+            raise NativeExecutionError(payload["error"], response=payload, returncode=completed.returncode)
+        try:
+            payload = json.loads(response_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            payload = {
+                "schema_version": NATIVE_RESPONSE_SCHEMA,
+                "status": "failed",
+                "failure_stage": "output_manifest_failed",
+                "error": f"native_response_invalid: {exc}",
+                "native_output_artifacts": output_artifacts,
+            }
+            _write_native_response(response_path, payload)
+            raise NativeExecutionError(payload["error"], response=payload, returncode=completed.returncode) from exc
         if not isinstance(payload, dict):
-            raise RuntimeError("native_response_invalid: v3 response is not an object")
+            payload = {
+                "schema_version": NATIVE_RESPONSE_SCHEMA,
+                "status": "failed",
+                "failure_stage": "output_manifest_failed",
+                "error": "native_response_invalid: v3 response is not an object",
+                "native_output_artifacts": output_artifacts,
+            }
+            _write_native_response(response_path, payload)
+            raise NativeExecutionError(payload["error"], response=payload, returncode=completed.returncode)
+        payload["native_output_artifacts"] = output_artifacts
+        _write_native_response(response_path, payload)
         if completed.returncode != 0 or payload.get("status") != expected:
             raise NativeExecutionError(
                 str(payload.get("error") or "native v3 request failed"),
@@ -261,6 +311,16 @@ def load_m5_suite(path: Path, *, dpu_counts: Sequence[int] | None = None, taskle
     if (warmups, repeats) != (WARMUPS, REPEATS):
         raise ValueError("suite_invalid: M5 requires warmups=2 and repeats=7")
     timeout_s = _validate_timeout(defaults.get("timeout_s", DEFAULT_TIMEOUT_S))
+    quantization_modes = _parse_suite_options(
+        defaults.get("quantization_modes", QUANTIZATION_MODES),
+        "quantization_modes",
+        QUANTIZATION_MODES,
+    )
+    partition_strategies = _parse_suite_options(
+        defaults.get("partition_strategies", PARTITION_STRATEGIES),
+        "partition_strategies",
+        PARTITION_STRATEGIES,
+    )
     capacity = int((raw.get("metadata") or {}).get("hardware_profile", {}).get("max_dpu_count", DEFAULT_CAPACITY))
     if capacity < 1:
         raise ValueError("suite_invalid: max_dpu_count must be positive")
@@ -278,7 +338,9 @@ def load_m5_suite(path: Path, *, dpu_counts: Sequence[int] | None = None, taskle
     for case in cases:
         if not isinstance(case, dict) or not case.get("id"):
             raise ValueError("suite_invalid: every workload needs an id")
-        normalized_cases.append({**case, "case_id": str(case["id"]), "workload_id": str(case["id"])})
+        normalized_case = {**case, "case_id": str(case["id"]), "workload_id": str(case["id"])}
+        _strategies_for(normalized_case, partition_strategies)
+        normalized_cases.append(normalized_case)
     return M5StudyConfig(
         suite_id=str(raw["suite_id"]),
         dpu_counts=tuple(selected_counts),
@@ -287,6 +349,8 @@ def load_m5_suite(path: Path, *, dpu_counts: Sequence[int] | None = None, taskle
         repeats=repeats,
         timeout_s=timeout_s,
         capacity=capacity,
+        quantization_modes=quantization_modes,
+        partition_strategies=partition_strategies,
         cases=tuple(normalized_cases),
         suite_path=path,
     )
@@ -332,6 +396,8 @@ def prepare(
         "repeats": config.repeats,
         "timeout_s": config.timeout_s,
         "capacity": config.capacity,
+        "quantization_modes": list(config.quantization_modes),
+        "partition_strategies": list(config.partition_strategies),
         "native_plan_kind": NATIVE_PLAN_KIND,
         "dpu_allocation_attempted": False,
         "dpu_launch_attempted": False,
@@ -365,14 +431,28 @@ def execute(
     env = dict(os.environ if environment is None else environment)
     _require_physical_environment(env)
     config = load_m5_suite(suite_path, dpu_counts=dpu_counts, tasklets=tasklets)
-    target = native_target or _DefaultNativeTarget()
+    using_default_native_target = native_target is None
+    provider_kind = "default_native" if using_default_native_target else "injected_test_only"
+    target = _DefaultNativeTarget() if using_default_native_target else native_target
+    assert target is not None
     target.set_environment(env)
     run_dir = create_run_dir(root_dir, SUITE_ID, artifact_kind=EVIDENCE_ARTIFACT_KIND, route_label=ROUTE_LABEL)
+    sdk_provenance = _upmem_sdk_provenance(env)
     environment_payload = capture_environment(root_dir)
+    environment_payload.update({
+        "hostname": socket.gethostname(),
+        "python_version": platform.python_version(),
+        "m5_native_provider_kind": provider_kind,
+        "upmem_sdk_provenance": sdk_provenance,
+    })
     environment_payload["m5_native_environment"] = {
         "UPMEM_ALLOW_PHYSICAL_HARDWARE": env.get("UPMEM_ALLOW_PHYSICAL_HARDWARE"),
         "DPU_BACKEND": env.get("DPU_BACKEND"),
         "UPMEM_EXECUTION_MODE": env.get("UPMEM_EXECUTION_MODE"),
+        "provider_kind": provider_kind,
+        "requested_rank_path": sdk_provenance["requested_rank_path"],
+        "effective_profile": sdk_provenance["effective_profile"],
+        "upmem_sdk_tools": sdk_provenance["tools"],
         **hardware_environment_metadata(env),
     }
     write_json(run_dir / "environment.json", environment_payload)
@@ -391,24 +471,101 @@ def execute(
         normalized_records="normalized_records.jsonl",
         summary=summary_name,
         upmem_execution_mode=NATIVE_PLAN_KIND,
-        policies=PARTITION_STRATEGIES,
-        quantization_modes=QUANTIZATION_MODES,
+        policies=config.partition_strategies,
+        quantization_modes=config.quantization_modes,
         command="UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-m5",
         root_dir=root_dir,
     )
     manifest.update(hardware_environment_metadata(env))
+    manifest.update({
+        "hostname": socket.gethostname(),
+        "python_version": platform.python_version(),
+        "requested_rank_path": sdk_provenance["requested_rank_path"],
+        "effective_profile": sdk_provenance["effective_profile"],
+        "upmem_sdk_tools": sdk_provenance["tools"],
+    })
     manifest["timeout_s"] = config.timeout_s
+    manifest["native_provider_kind"] = provider_kind
     manifest["claims"] = _false_claims()
+    manifest["status"] = "running"
     write_json(run_dir / "run_manifest.json", manifest)
 
-    native_build = target.build(run_dir / "native_build", tasklets=config.tasklets)
+    native_build_dir = run_dir / "native_build"
+    try:
+        native_build = target.build(native_build_dir, tasklets=config.tasklets)
+    except Exception as exc:
+        failure_artifacts = _write_build_failure_artifact(native_build_dir, exc)
+        failure_stage = _failure_stage(exc)
+        failure_row = _failure_record(
+            {
+                "status": "failed",
+                "case_id": "__native_build__",
+                "workload_id": "__native_build__",
+                "benchmark_role": "m5_native_build",
+                "quantum_case": "not_applicable",
+                "failure_stage": failure_stage,
+                "reason": str(exc),
+                "native_output_artifacts": failure_artifacts,
+                "native_response": getattr(exc, "response", None),
+                "native_provider_kind": provider_kind,
+            },
+            env,
+            provider_kind=provider_kind,
+        )
+        write_normalized_records(run_dir, [failure_row])
+        summary = {
+            "schema_version": SCHEMA_VERSION,
+            "status": "failed",
+            "suite_id": config.suite_id,
+            "suite_path": str(suite_path),
+            "route_id": ROUTE_ID,
+            "backend_id": BACKEND_ID,
+            "native_plan_kind": NATIVE_PLAN_KIND,
+            "dpu_counts": list(config.dpu_counts),
+            "tasklets": config.tasklets,
+            "warmups": config.warmups,
+            "repeats": config.repeats,
+            "timeout_s": config.timeout_s,
+            "quantization_modes": list(config.quantization_modes),
+            "partition_strategies": list(config.partition_strategies),
+            "row_count": 1,
+            "preparation_row_count": 0,
+            "unsupported_count": 0,
+            "failed_count": 1,
+            "completed_count": 0,
+            "prepared_count": 0,
+            "preparation_unsupported_count": 0,
+            "preparation_failed_count": 1,
+            "failure_stage": failure_stage,
+            "failure_artifacts": failure_artifacts,
+            "claims": _false_claims(),
+            "dpu_allocation_attempted": False,
+            "dpu_launch_attempted": False,
+            "normalized_records": "normalized_records.jsonl",
+        }
+        summary_path = run_dir / summary_name
+        write_json(summary_path, summary)
+        manifest["status"] = "failed"
+        manifest["failure_stage"] = failure_stage
+        manifest["failure_artifacts"] = failure_artifacts
+        manifest["hardware_available"] = "not_verified"
+        manifest["upmem_sdk_available"] = "not_verified_by_execution"
+        write_json(run_dir / "run_manifest.json", manifest)
+        return {
+            "run_dir": str(run_dir),
+            "artifact": str(summary_path),
+            "status": "failed",
+            "row_count": 1,
+            "dpu_allocation_attempted": False,
+            "dpu_launch_attempted": False,
+        }
     plans, preparation_rows = _prepare_plans(
         root_dir, run_dir, config, target, native_build, task_selector=task_selector
     )
     records: list[dict[str, Any]] = []
     for row in preparation_rows:
         if row["status"] != "prepared":
-            records.append(_failure_record(row, env))
+            records.append(_failure_record(row, env, provider_kind=provider_kind))
             continue
         plan = plans[row["plan_key"]]
         request = plan["request"]
@@ -418,7 +575,11 @@ def execute(
             _validate_execute_response(response, request, config)
             repetitions = _measured_repetitions(response, config)
             for repeat_id, timing in repetitions:
-                records.append(_normalized_record(plan, response, timing, repeat_id, env))
+                records.append(
+                    _normalized_record(
+                        plan, response, timing, repeat_id, env, provider_kind=provider_kind
+                    )
+                )
         except (OSError, RuntimeError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
             native_response = (
                 dict(response) if isinstance(response, Mapping)
@@ -430,7 +591,8 @@ def execute(
                 "reason": str(exc),
                 "failure_stage": _failure_stage(exc),
                 "native_response": native_response,
-            }, env))
+                "native_provider_kind": provider_kind,
+            }, env, provider_kind=provider_kind))
     write_normalized_records(run_dir, records)
     preparation_counts = _status_counts(preparation_rows)
     failed_count = sum(row["status"] == "failed" for row in records)
@@ -455,6 +617,8 @@ def execute(
         "warmups": config.warmups,
         "repeats": config.repeats,
         "timeout_s": config.timeout_s,
+        "quantization_modes": list(config.quantization_modes),
+        "partition_strategies": list(config.partition_strategies),
         "row_count": len(records),
         "preparation_row_count": len(preparation_rows),
         "unsupported_count": sum(row["status"] == "unsupported" for row in records),
@@ -470,7 +634,18 @@ def execute(
     }
     summary_path = run_dir / summary_name
     write_json(summary_path, summary)
-    manifest["hardware_available"] = "verified_by_execution" if status == "completed" else "not_verified"
+    physical_completed = _has_completed_physical_rows(records)
+    manifest["status"] = status
+    manifest["hardware_available"] = (
+        "verified_by_execution"
+        if physical_completed and using_default_native_target
+        else "not_verified"
+    )
+    manifest["upmem_sdk_available"] = (
+        "verified_by_execution"
+        if physical_completed and using_default_native_target
+        else "not_verified_by_execution"
+    )
     write_json(run_dir / "run_manifest.json", manifest)
     return {
         "run_dir": str(run_dir),
@@ -499,15 +674,15 @@ def _prepare_plans(
             selection = _select_and_materialize(case, root_dir, task_selector)
         except (OSError, RuntimeError, ValueError, TypeError) as exc:
             for dpu_count in config.dpu_counts:
-                for mode in QUANTIZATION_MODES:
-                    for strategy in _strategies_for(case):
+                for mode in config.quantization_modes:
+                    for strategy in _strategies_for(case, config.partition_strategies):
                         rows.append(_base_row(case, dpu_count, config.tasklets, mode, strategy) | {
                             "status": "failed", "failure_stage": "task_selection", "reason": str(exc)
                         })
             continue
         for dpu_count in config.dpu_counts:
-            for mode in QUANTIZATION_MODES:
-                for strategy in _strategies_for(case):
+            for mode in config.quantization_modes:
+                for strategy in _strategies_for(case, config.partition_strategies):
                     row = _base_row(case, dpu_count, config.tasklets, mode, strategy) | {
                         "selection": _selection_evidence(selection),
                         **_identity_hashes(selection),
@@ -783,6 +958,7 @@ def _validate_execute_response(response: Mapping[str, Any], request: Mapping[str
         raise ValueError("native_v3_response_invalid: policy reference hash does not match the prepared request")
     if not _is_finite_nonnegative(policy_validation.get("max_abs_error")):
         raise ValueError("native_v3_response_invalid: policy reference error is not numeric")
+    _validate_repetition_transfer_invariants(response)
     if _full_precision_required(request, response):
         full_precision = response.get("full_precision_accuracy")
         if (
@@ -811,12 +987,38 @@ def _measured_repetitions(response: Mapping[str, Any], config: M5StudyConfig) ->
     return measured
 
 
+def _validate_repetition_transfer_invariants(response: Mapping[str, Any]) -> None:
+    repetitions = response.get("repetitions")
+    if not isinstance(repetitions, list):
+        raise ValueError("transfer_evidence_invalid: native response has no repetitions")
+    for index, repetition in enumerate(repetitions):
+        if not isinstance(repetition, Mapping):
+            raise ValueError(f"transfer_evidence_invalid: repetition {index} is not a mapping")
+        transfers = repetition.get("transfers", repetition.get("transfer", {}))
+        if not isinstance(transfers, Mapping):
+            raise ValueError(f"transfer_evidence_invalid: repetition {index} has no transfers")
+        fields = _application_visible_transfer_fields(transfers)
+        if any(fields[name] is None for name in fields):
+            raise ValueError(
+                f"transfer_evidence_invalid: repetition {index} lacks finite nonnegative transfer bytes"
+            )
+        if fields["application_visible_transfer_bytes"] != (
+            fields["application_visible_h2d_bytes"]
+            + fields["application_visible_d2h_bytes"]
+        ):
+            raise ValueError(
+                f"transfer_evidence_invalid: repetition {index} total does not equal h2d+d2h"
+            )
+
+
 def _normalized_record(
     plan: Mapping[str, Any],
     response: Mapping[str, Any],
     timing: Mapping[str, Any],
     repeat_id: int,
     environment: Mapping[str, str],
+    *,
+    provider_kind: str = "default_native",
 ) -> dict[str, Any]:
     native_evidence = _native_evidence(response)
     policy_validation = _validation_payload(response.get("policy_reference_validation"))
@@ -844,9 +1046,23 @@ def _normalized_record(
         "backend_family": "upmem_sdk",
         "target_requested": "hardware",
         "target_observed": "physical_hardware",
+        "hardware_functionality_evidence": _physical_functionality_evidence(
+            response, provider_kind=provider_kind
+        ),
+        "native_provider_kind": provider_kind,
+        "execution_class": response.get("execution_class"),
+        "kernel_strategy": response.get("kernel_strategy"),
+        "requested_rank_path": response.get("requested_rank_path"),
+        "rank_count": response.get("rank_count"),
+        "one_rank": response.get("one_rank"),
+        "single_rank": response.get("single_rank"),
         "upmem_execution_mode": NATIVE_PLAN_KIND,
         "execution_plan_kind": NATIVE_PLAN_KIND,
-        "execution_plan_hash": plan.get("execution_plan_hash") or response.get("execution_plan_hash"),
+        "execution_plan_hash": (
+            plan.get("execution_plan_hash")
+            or response.get("execution_plan_hash")
+            or plan.get("request", {}).get("execution_plan_hash")
+        ),
         "execution_input_hash": plan.get("request", {}).get("execution_input_hash"),
         "partition_strategy": plan["partition_strategy"],
         "partition_mode": "output_tile" if plan["partition_strategy"] == "output" else "contracted_partial_sum",
@@ -881,6 +1097,7 @@ def _normalized_record(
         "per_repeat_timing": dict(timing),
         "transfers": dict(per_repeat_transfers),
         "per_repeat_transfers": dict(per_repeat_transfers),
+        **_application_visible_transfer_fields(per_repeat_transfers),
         "run_metadata": {
             "transfers": dict(run_global_transfers),
             "timing": dict(response.get("timing", {})) if isinstance(response.get("timing"), Mapping) else {},
@@ -904,7 +1121,8 @@ def _normalized_record(
         "simulator_kernel_executed": native_evidence.get("simulator_kernel_executed", False),
         "fallback_used": native_evidence.get("fallback_used", False),
         "claims": _false_claims(),
-        "native_response": dict(response),
+        "native_output_artifacts": response.get("native_output_artifacts"),
+        "native_response": _compact_native_response(response),
         **_identity_hashes(plan.get("selection", {}), plan.get("request", {})),
         **_request_hashes(plan.get("request", {})),
         **hardware_environment_metadata(environment),
@@ -1020,7 +1238,12 @@ def _scientific_validation_fields(
     return accuracy, quantization_error_vs_float32, "passed_with_descriptive_quantization_difference"
 
 
-def _failure_record(row: Mapping[str, Any], environment: Mapping[str, str]) -> dict[str, Any]:
+def _failure_record(
+    row: Mapping[str, Any],
+    environment: Mapping[str, str],
+    *,
+    provider_kind: str = "default_native",
+) -> dict[str, Any]:
     native_response = row.get("native_response")
     native_evidence = _native_evidence(native_response)
     if isinstance(native_response, Mapping):
@@ -1056,7 +1279,7 @@ def _failure_record(row: Mapping[str, Any], environment: Mapping[str, str]) -> d
         "observed_rank_count": native_evidence.get("observed_rank_count"),
         "tasklets_per_dpu": row.get("tasklets_per_dpu"),
         "failure_stage": row.get("failure_stage", "unknown"),
-        "reason": row.get("reason", "unknown failure"),
+        "reason": _bounded_text(row.get("reason", "unknown failure"), ERROR_TEXT_LIMIT_BYTES),
         "validation_status": "failed",
         "policy_reference_validation": policy_validation,
         "policy_reference_status": policy_status,
@@ -1073,6 +1296,17 @@ def _failure_record(row: Mapping[str, Any], environment: Mapping[str, str]) -> d
         "run_metadata": {"transfers": {}, "timing": {}},
         "run_global_transfers": {},
         "load_balance": {},
+        "hardware_functionality_evidence": False,
+        "native_provider_kind": provider_kind,
+        "execution_class": native_response.get("execution_class") if isinstance(native_response, Mapping) else None,
+        "kernel_strategy": native_response.get("kernel_strategy") if isinstance(native_response, Mapping) else None,
+        "requested_rank_path": native_response.get("requested_rank_path") if isinstance(native_response, Mapping) else None,
+        "rank_count": native_response.get("rank_count") if isinstance(native_response, Mapping) else None,
+        "one_rank": native_response.get("one_rank") if isinstance(native_response, Mapping) else None,
+        "single_rank": native_response.get("single_rank") if isinstance(native_response, Mapping) else None,
+        "application_visible_h2d_bytes": None,
+        "application_visible_d2h_bytes": None,
+        "application_visible_transfer_bytes": None,
         "hardware_allocation_verified": native_evidence.get("hardware_allocation_verified"),
         "native_kernel_executed": native_evidence.get("native_kernel_executed"),
         "hardware_kernel_executed": native_evidence.get("hardware_kernel_executed"),
@@ -1084,7 +1318,8 @@ def _failure_record(row: Mapping[str, Any], environment: Mapping[str, str]) -> d
         "simulator_kernel_executed": native_evidence.get("simulator_kernel_executed", False),
         "fallback_used": native_evidence.get("fallback_used", False),
         "claims": _false_claims(),
-        "native_response": dict(native_response) if isinstance(native_response, Mapping) else None,
+        "native_output_artifacts": row.get("native_output_artifacts"),
+        "native_response": _compact_native_response(native_response),
         **_identity_hashes(row.get("selection", {}), row.get("request", {})),
         **_request_hashes(row.get("request", {})),
         **hardware_environment_metadata(environment),
@@ -1106,13 +1341,25 @@ def _base_row(case: Mapping[str, Any], dpu_count: int, tasklets: int, mode: str,
     }
 
 
-def _strategies_for(case: Mapping[str, Any]) -> tuple[str, ...]:
-    values = case.get("partition_strategies", PARTITION_STRATEGIES)
-    if not isinstance(values, (list, tuple)):
-        raise ValueError("suite_invalid: partition_strategies must be a list")
-    result = tuple(str(value) for value in values)
-    if not result or any(value not in PARTITION_STRATEGIES for value in result):
-        raise ValueError("suite_invalid: partition strategy must be output or contracted")
+def _strategies_for(
+    case: Mapping[str, Any], defaults: Sequence[str] = PARTITION_STRATEGIES
+) -> tuple[str, ...]:
+    return _parse_suite_options(
+        case.get("partition_strategies", defaults),
+        "partition_strategies",
+        defaults,
+    )
+
+
+def _parse_suite_options(
+    value: Any, name: str, allowed: Sequence[str]
+) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"suite_invalid: {name} must be a list")
+    result = tuple(str(item) for item in value)
+    if not result or len(set(result)) != len(result) or any(item not in allowed for item in result):
+        allowed_text = ", ".join(allowed)
+        raise ValueError(f"suite_invalid: {name} must contain unique values from {allowed_text}")
     return result
 
 
@@ -1220,6 +1467,127 @@ def _native_evidence(value: Any) -> dict[str, Any]:
     }
 
 
+def _physical_functionality_evidence(
+    response: Mapping[str, Any], *, provider_kind: str = "default_native"
+) -> bool:
+    """Admit functionality evidence only from an already validated physical response."""
+
+    return provider_kind == "default_native" and (
+        response.get("status") == "completed"
+        and response.get("target_observed") == "physical_hardware"
+        and response.get("hardware_allocation_verified") is True
+        and response.get("native_kernel_executed") is True
+        and response.get("hardware_kernel_executed") is True
+        and response.get("hardware_release_verified") is True
+        and response.get("cpu_fallback_used", False) is False
+        and response.get("simulator_kernel_executed", False) is False
+        and response.get("fallback_used", False) is False
+    )
+
+
+def _has_completed_physical_rows(records: Sequence[Mapping[str, Any]]) -> bool:
+    return any(
+        row.get("status") == "completed"
+        and row.get("target_observed") == "physical_hardware"
+        and row.get("hardware_functionality_evidence") is True
+        for row in records
+    )
+
+
+def _application_visible_transfer_fields(transfers: Mapping[str, Any]) -> dict[str, Any]:
+    """Expose per-repeat application-visible bytes without mixing run totals."""
+
+    h2d = _first_transfer_number(
+        transfers,
+        "application_visible_h2d_bytes",
+        "actual_h2d_bytes",
+        "h2d_bytes",
+    )
+    d2h = _first_transfer_number(
+        transfers,
+        "application_visible_d2h_bytes",
+        "actual_d2h_bytes",
+        "d2h_bytes",
+    )
+    total = _first_transfer_number(
+        transfers,
+        "application_visible_transfer_bytes",
+        "actual_transfer_bytes",
+        "total_bytes",
+    )
+    if total is None and h2d is not None and d2h is not None:
+        total = h2d + d2h
+    if (
+        total is not None
+        and h2d is not None
+        and d2h is not None
+        and total != h2d + d2h
+    ):
+        raise ValueError("transfer_evidence_invalid: total does not equal h2d+d2h")
+    return {
+        "application_visible_h2d_bytes": h2d,
+        "application_visible_d2h_bytes": d2h,
+        "application_visible_transfer_bytes": total,
+    }
+
+
+def _first_transfer_number(transfers: Mapping[str, Any], *names: str) -> int | float | None:
+    for name in names:
+        if name not in transfers:
+            continue
+        value = transfers[name]
+        if not (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(float(value))
+            and value >= 0
+        ):
+            raise ValueError(f"transfer_evidence_invalid: {name} is not finite and nonnegative")
+        return value
+    return None
+
+
+def _upmem_sdk_provenance(environment: Mapping[str, str]) -> dict[str, Any]:
+    tools: dict[str, dict[str, Any]] = {}
+    for name in CORE_UPMEM_SDK_TOOLS:
+        path = shutil.which(name, path=environment.get("PATH"))
+        if path is None:
+            tools[name] = {
+                "path": None,
+                "version_output": None,
+                "version_probe_status": "not_found",
+            }
+            continue
+        try:
+            completed = subprocess.run(
+                [path, "--version"],
+                env=dict(environment),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=SDK_PROBE_TIMEOUT_S,
+            )
+            output = completed.stdout.strip() or completed.stderr.strip()
+            version_output = output.splitlines()[0][:SDK_VERSION_OUTPUT_LIMIT_BYTES] if output else None
+            tools[name] = {
+                "path": path,
+                "version_output": version_output,
+                "version_probe_status": "passed" if completed.returncode == 0 else "failed",
+            }
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            tools[name] = {
+                "path": path,
+                "version_output": None,
+                "version_probe_status": "timeout" if isinstance(exc, subprocess.TimeoutExpired) else "failed",
+            }
+    rank_path = environment.get("UPMEM_HW_RANK_PATH")
+    return {
+        "requested_rank_path": rank_path,
+        "effective_profile": hardware_environment_metadata(environment)["upmem_sdk_profile_effective"],
+        "tools": tools,
+    }
+
+
 def _native_attempt_flags(records: Sequence[Mapping[str, Any]]) -> tuple[bool, bool]:
     allocation_attempted = False
     launch_attempted = False
@@ -1297,10 +1665,88 @@ def _unique_dir(parent: Path) -> Path:
 
 
 def _failure_stage(exc: BaseException) -> str:
-    explicit = getattr(exc, "failure_stage", None)
+    explicit = getattr(exc, "failure_stage", None) or getattr(exc, "stage", None)
     if isinstance(explicit, str) and explicit:
         return explicit
     return str(exc).split(":", 1)[0] or "runner"
+
+
+def _write_native_response(path: Path, payload: Mapping[str, Any]) -> None:
+    path.write_text(json.dumps(dict(payload), sort_keys=True, indent=2), encoding="utf-8")
+
+
+def _bounded_text(value: Any, limit: int) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        text = value.decode("utf-8", errors="replace")
+    else:
+        text = str(value)
+    encoded = text.encode("utf-8")
+    if len(encoded) <= limit:
+        return text
+    return encoded[-limit:].decode("utf-8", errors="replace")
+
+
+def _bounded_output(value: Any) -> str:
+    return _bounded_text(value, NATIVE_OUTPUT_LIMIT_BYTES)
+
+
+def _compact_native_response(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    response = dict(value)
+    if response.get("error") is not None:
+        response["error"] = _bounded_text(response["error"], ERROR_TEXT_LIMIT_BYTES)
+    return response
+
+
+def _artifact_metadata(path: Path, *, relative_path: str) -> dict[str, Any]:
+    data = path.read_bytes()
+    return {
+        "path": relative_path,
+        "bytes": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+    }
+
+
+def _write_native_output_artifacts(
+    response_path: Path, stdout: Any, stderr: Any
+) -> dict[str, dict[str, Any]]:
+    response_path = response_path.resolve()
+    plan_dir = response_path.parent
+    plans_dir = plan_dir.parent
+    if plans_dir.name != "plans" or response_path.name != "response.json":
+        raise RuntimeError(
+            "native_output_artifact_path_invalid: response must be under "
+            "run_dir/plans/<plan_id>/response.json"
+        )
+    run_dir = plans_dir.parent
+    plan_dir.mkdir(parents=True, exist_ok=True)
+    stdout_path = response_path.parent / "native_stdout.txt"
+    stderr_path = response_path.parent / "native_stderr.txt"
+    stdout_path.write_text(_bounded_output(stdout), encoding="utf-8")
+    stderr_path.write_text(_bounded_output(stderr), encoding="utf-8")
+    return {
+        "stdout": _artifact_metadata(
+            stdout_path, relative_path=stdout_path.relative_to(run_dir).as_posix()
+        ),
+        "stderr": _artifact_metadata(
+            stderr_path, relative_path=stderr_path.relative_to(run_dir).as_posix()
+        ),
+    }
+
+
+def _write_build_failure_artifact(build_dir: Path, exc: BaseException) -> dict[str, dict[str, Any]]:
+    build_dir.mkdir(parents=True, exist_ok=True)
+    path = build_dir / "build_failure.log"
+    path.write_text(
+        _bounded_text(f"{_failure_stage(exc)}: {exc}\n", ERROR_TEXT_LIMIT_BYTES),
+        encoding="utf-8",
+    )
+    metadata = _artifact_metadata(path, relative_path="native_build/build_failure.log")
+    metadata["path"] = "native_build/build_failure.log"
+    return {"build_failure": metadata}
 
 
 def _read_native_response(path: Path) -> dict[str, Any] | None:
