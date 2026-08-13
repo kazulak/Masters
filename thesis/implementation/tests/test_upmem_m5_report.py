@@ -1,12 +1,25 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 from pathlib import Path
+import warnings
 
 import pytest
 
-from scripts.upmem_m5_report import M5_RECORD_FIELDS, ReportError, generate_report
+from scripts.upmem_m5_report import (
+    M5_RECORD_FIELDS,
+    ReportError,
+    _bar_plot,
+    _comparison_ratio_points,
+    _heatmap_plot,
+    _heatmap_series,
+    _plot,
+    _plot_points,
+    _table_groups,
+    generate_report,
+)
 
 
 HOST_BINARY_SHA256 = "a" * 64
@@ -16,7 +29,7 @@ DPU_BINARY_SHA256 = "b" * 64
 def _row(
     *,
     case_id: str = "case-a",
-    route_id: str = "route-a",
+    route_id: str = "upmem_tn_hardware_distributed_m5",
     workload_kind: str = "quantum_case",
     numeric_mode: str = "float32",
     partition_mode: str = "output",
@@ -41,6 +54,8 @@ def _row(
         "schema_version": "upmem_m5_record_v3",
         "route_version": "upmem_route_v3",
         "route_id": route_id,
+        "backend_id": "upmem_sdk_hardware_distributed_m5",
+        "native_provider_kind": "default_native",
         "workload_kind": workload_kind,
         "quantum_case": workload_kind,
         "numeric_mode": numeric_mode,
@@ -54,6 +69,7 @@ def _row(
         "hardware_allocation_verified": True,
         "native_execution": True,
         "hardware_execution": True,
+        "hardware_functionality_evidence": True,
         "hardware_release_verified": True,
         "policy_reference_validation": {"passed": True},
         "simulator": False,
@@ -143,7 +159,7 @@ def test_statistics_ratios_and_incompatible_pairing(tmp_path: Path) -> None:
     baseline = next(
         row
         for row in runtime
-        if row["route_id"] == "route-a"
+        if row["route_id"] == "upmem_tn_hardware_distributed_m5"
         and row["numeric_mode"] == "float32"
         and row["partition_mode"] == "output"
         and row["dpu_count"] == "1"
@@ -164,7 +180,9 @@ def test_statistics_ratios_and_incompatible_pairing(tmp_path: Path) -> None:
     route_a_dpu2 = next(
         row
         for row in ratios
-        if row["route_id"] == "route-a" and row["dpu_count"] == "2" and row["tasklets_per_dpu"] == "1"
+        if row["route_id"] == "upmem_tn_hardware_distributed_m5"
+        and row["dpu_count"] == "2"
+        and row["tasklets_per_dpu"] == "1"
     )
     assert float(route_a_dpu2["speedup"]) == 2.0
     assert float(route_a_dpu2["efficiency"]) == 1.0
@@ -183,6 +201,11 @@ def test_statistics_ratios_and_incompatible_pairing(tmp_path: Path) -> None:
     assert float(partition["runtime_ratio_output_over_contracted"]) == 11.0 / 5.0
     assert (output / "plots/m5_numeric_mode_runtime_ratio.png").is_file()
     assert (output / "plots/m5_partition_runtime_ratio.png").is_file()
+
+    manifest = json.loads((output / "plot_manifest.json").read_text(encoding="utf-8"))
+    assert set(manifest["table_sha256"]) == set(manifest["tables"])
+    for relative_path, digest in manifest["table_sha256"].items():
+        assert digest == hashlib.sha256((output / relative_path).read_bytes()).hexdigest()
 
     records = _csv_rows(output / "tables/m5_records.csv")
     failed = next(row for row in records if row["status"] == "unsupported" and row["dpu_count"] == "4")
@@ -228,6 +251,188 @@ def test_claimed_but_unverified_physical_row_is_not_admitted(tmp_path: Path) -> 
     manifest = json.loads((output / "plot_manifest.json").read_text(encoding="utf-8"))
     assert manifest["claims"]["physical_one_rank_measured"] is False
     assert all(entry["status"] == "todo_missing_data" for entry in manifest["plots"])
+
+
+def test_false_hardware_functionality_evidence_is_not_admitted(tmp_path: Path) -> None:
+    row = _row()
+    row["hardware_functionality_evidence"] = False
+
+    output = generate_report(_write_run(tmp_path, [row]), tmp_path / "report-root", timestamp="functionality-false")
+
+    record = _csv_rows(output / "tables/m5_records.csv")[0]
+    assert record["physical_one_rank_valid"] == "False"
+    assert record["runtime_s"] == ""
+    manifest = json.loads((output / "plot_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["claims"]["physical_one_rank_measured"] is False
+
+
+def test_missing_hardware_functionality_evidence_is_not_admitted(tmp_path: Path) -> None:
+    row = _row()
+    row.pop("hardware_functionality_evidence")
+
+    output = generate_report(_write_run(tmp_path, [row]), tmp_path / "report-root", timestamp="functionality-missing")
+
+    record = _csv_rows(output / "tables/m5_records.csv")[0]
+    assert record["physical_one_rank_valid"] == "False"
+    assert record["runtime_s"] == ""
+
+
+def test_injected_native_provider_is_not_admitted(tmp_path: Path) -> None:
+    row = _row()
+    row["native_provider_kind"] = "injected_test_only"
+
+    output = generate_report(_write_run(tmp_path, [row]), tmp_path / "report-root", timestamp="injected-provider")
+
+    record = _csv_rows(output / "tables/m5_records.csv")[0]
+    assert record["physical_one_rank_valid"] == "False"
+    assert record["runtime_s"] == ""
+
+
+def test_wrong_route_is_not_admitted(tmp_path: Path) -> None:
+    row = _row(route_id="upmem_tn_hardware_other_route")
+
+    output = generate_report(_write_run(tmp_path, [row]), tmp_path / "report-root", timestamp="wrong-route")
+
+    record = _csv_rows(output / "tables/m5_records.csv")[0]
+    assert record["physical_one_rank_valid"] == "False"
+    assert record["runtime_s"] == ""
+
+
+def test_wrong_backend_is_not_admitted(tmp_path: Path) -> None:
+    row = _row()
+    row["backend_id"] = "upmem_sdk_hardware_other_backend"
+
+    output = generate_report(_write_run(tmp_path, [row]), tmp_path / "report-root", timestamp="wrong-backend")
+
+    record = _csv_rows(output / "tables/m5_records.csv")[0]
+    assert record["physical_one_rank_valid"] == "False"
+    assert record["runtime_s"] == ""
+
+
+def test_plot_labels_use_case_and_varied_comparison_dimensions_only() -> None:
+    rows = [
+        {"case_id": "bv_8q_custom", "partition_mode": "output_tile", "numeric_mode": "float32", "dpu_count": 1, "runtime_ratio": 0.8},
+        {"case_id": "bv_8q_custom", "partition_mode": "contracted_partial_sum", "numeric_mode": "float32", "dpu_count": 1, "runtime_ratio": 0.9},
+        {"case_id": "edc_12q", "partition_mode": "output_tile", "numeric_mode": "float32", "dpu_count": 2, "runtime_ratio": 1.1},
+    ]
+    groups = _comparison_ratio_points(
+        rows,
+        "runtime_ratio",
+        ("case_id", "route_id", "partition_mode", "timing_scope", "workload_kind", "scaling_kind"),
+    )
+
+    assert set(groups) == {
+        "bv 8q custom / output",
+        "bv 8q custom / contracted",
+        "edc 12q / output",
+    }
+    assert all("route" not in label and "timing" not in label and "scaling" not in label for label in groups)
+    assert groups["edc 12q / output"] == [(2, 1.1)]
+
+
+def test_all_plot_group_helpers_keep_labels_concise() -> None:
+    rows = [
+        {"case_id": "case_10q", "numeric_mode": "float32", "partition_mode": "output_tile", "tasklets_per_dpu": 3, "dpu_count": 1, "runtime_s": 1.0, "accuracy": 0.1, "scaling_kind": "strong_scaling", "physical_one_rank_valid": True},
+        {"case_id": "case_10q", "numeric_mode": "per_task_resident_requantize", "partition_mode": "contracted_partial_sum", "tasklets_per_dpu": 3, "dpu_count": 2, "runtime_s": 2.0, "accuracy": 0.2, "scaling_kind": "strong_scaling", "physical_one_rank_valid": True},
+    ]
+    labels = set(_plot_points(rows, "runtime_s")) | set(_table_groups(rows, "accuracy"))
+
+    assert labels
+    assert all("case 10q" in label for label in labels)
+    assert all("route" not in label and "timing" not in label and "workload" not in label and "scaling" not in label for label in labels)
+
+
+def test_plot_helpers_use_stable_layout_without_tight_layout_warning(tmp_path: Path) -> None:
+    line_groups = {f"case {index} / output": [(1, 1.0 + index / 10.0)] for index in range(10)}
+    bar_groups = {f"case {index} / output": {"metric": 1.0 + index / 10.0} for index in range(10)}
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        assert _plot(tmp_path / "line.png", "Readable title", "A short caption.", line_groups, "Runtime") == "generated"
+        assert _bar_plot(tmp_path / "bar.png", "Readable title", "A short caption.", bar_groups, "Bytes") == "generated"
+
+    assert not any("tight_layout" in str(item.message).lower() for item in caught)
+
+
+def test_line_plot_supports_log_scale_and_rejects_nonpositive_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import matplotlib.axes
+
+    observed_scales: list[str] = []
+    original = matplotlib.axes.Axes.set_yscale
+
+    def record_scale(axis: object, value: str, *args: object, **kwargs: object) -> None:
+        observed_scales.append(value)
+        original(axis, value, *args, **kwargs)
+
+    monkeypatch.setattr(matplotlib.axes.Axes, "set_yscale", record_scale)
+
+    assert _plot(
+        tmp_path / "runtime-log.png",
+        "Runtime",
+        "Measured runtime.",
+        {"small": [(1, 0.001)], "large": [(1, 30.0)]},
+        "Runtime (s)",
+        y_scale="log",
+    ) == "generated"
+    assert observed_scales == ["log"]
+    assert _plot(
+        tmp_path / "runtime-invalid.png",
+        "Runtime",
+        "Measured runtime.",
+        {"invalid": [(1, 0.0), (2, -1.0)]},
+        "Runtime (s)",
+        y_scale="log",
+    ) == "todo_missing_data"
+
+
+def test_heatmap_layout_scales_to_canonical_matrix_without_warnings(tmp_path: Path) -> None:
+    rows: list[dict[str, object]] = []
+    for case_index in range(5):
+        for numeric_mode in ("float32", "per_task_resident_requantize"):
+            for partition_mode in ("output_tile", "contracted_partial_sum"):
+                for dpu_count in (1, 2, 4, 8, 16, 32, 64):
+                    rows.append(
+                        {
+                            "case_id": f"case_{case_index}_10q",
+                            "numeric_mode": numeric_mode,
+                            "partition_mode": partition_mode,
+                            "tasklets_per_dpu": 8,
+                            "dpu_count": dpu_count,
+                            "status": "completed",
+                            "physical_one_rank_valid": True,
+                            "h2d_bytes": float(dpu_count),
+                            "d2h_bytes": float(dpu_count + 1),
+                            "reduction_bytes": float(dpu_count + 2),
+                            "load_balance": 1.0,
+                            "accuracy": 0.001 if numeric_mode != "float32" else 0.0,
+                        }
+                    )
+
+    panels = _heatmap_series(
+        rows,
+        {
+            "H2D bytes": "h2d_bytes",
+            "D2H bytes": "d2h_bytes",
+            "Host reduction bytes": "reduction_bytes",
+        },
+    )
+    assert set(panels) == {"H2D bytes", "D2H bytes", "Host reduction bytes"}
+    assert len(panels["H2D bytes"]) == 20
+    assert all(set(values) == {1, 2, 4, 8, 16, 32, 64} for values in panels["H2D bytes"].values())
+
+    output = tmp_path / "canonical-heatmap.png"
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        assert _heatmap_plot(output, "Canonical M5 matrix", "Measured physical one-rank data.", panels) == "generated"
+
+    assert output.is_file()
+    assert not any("layout" in str(item.message).lower() or "overlap" in str(item.message).lower() for item in caught)
+    from PIL import Image
+
+    assert Image.open(output).size[0] >= 1000
 
 
 def test_incompatible_binary_hashes_do_not_pair(tmp_path: Path) -> None:

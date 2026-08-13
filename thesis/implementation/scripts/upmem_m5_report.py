@@ -18,6 +18,7 @@ import math
 from pathlib import Path
 import re
 import sys
+import textwrap
 from typing import Any, Iterable, Mapping
 
 
@@ -629,6 +630,9 @@ def _physical_one_rank_valid(row: Mapping[str, Any], allocated_dpu_count: int | 
     allocated_evidence = _integer(_pick(row, "allocated_dpu_count", "observed_dpu_count"))
     return (
         _schema_and_route_v3(row)
+        and row.get("route_id") == "upmem_tn_hardware_distributed_m5"
+        and row.get("backend_id") == "upmem_sdk_hardware_distributed_m5"
+        and row.get("native_provider_kind") == "default_native"
         and _top_pick(row, "target_observed") == "physical_hardware"
         and requested_evidence is not None
         and allocated_evidence is not None
@@ -652,6 +656,7 @@ def _physical_one_rank_valid(row: Mapping[str, Any], allocated_dpu_count: int | 
             ("hardware_execution", "hardware_execution_verified", "hardware_kernel_executed", "hardware_verified"),
             ("hardware_execution_status", "hardware_verification_status"),
         )
+        and _verified(row, ("hardware_functionality_evidence",))
         and _verified(
             row,
             ("hardware_release_verified", "release_verified", "release_confirmed"),
@@ -1121,6 +1126,54 @@ def _record_rows(views: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return rows
 
 
+_LABEL_FIELDS = ("numeric_mode", "partition_mode", "tasklets_per_dpu")
+
+
+def _label_value(field: str, value: Any) -> str:
+    text = str(value)
+    if field == "case_id":
+        return textwrap.shorten(text.replace("_", " "), width=28, placeholder="...")
+    if field == "numeric_mode":
+        return {"per_task_resident_requantize": "int8", "none": "float32"}.get(text, text)
+    if field == "partition_mode":
+        return {
+            "output_tile": "output",
+            "contracted_partial_sum": "contracted",
+        }.get(text, text)
+    if field == "tasklets_per_dpu":
+        return f"{text} tasklets"
+    if field == "dpu_count":
+        return f"{text} DPU" if text == "1" else f"{text} DPUs"
+    return text
+
+
+def _varied_label_fields(records: Iterable[Mapping[str, Any]], fields: Iterable[str]) -> tuple[str, ...]:
+    rows = list(records)
+    return tuple(
+        field
+        for field in fields
+        if len({str(row.get(field, "")) for row in rows}) > 1
+    )
+
+
+def _concise_label(row: Mapping[str, Any], varied_fields: Iterable[str]) -> str:
+    parts = [_label_value("case_id", row.get("case_id", "unknown case"))]
+    for field in varied_fields:
+        parts.append(_label_value(field, row.get(field, "unknown")))
+    return textwrap.shorten(" / ".join(parts), width=48, placeholder="...")
+
+
+def _key_record(key: tuple[Any, ...]) -> dict[str, Any]:
+    return dict(zip(DIMENSION_FIELDS, key))
+
+
+def _labels_for_keys(keys: Iterable[tuple[Any, ...]], *, include_dpu: bool = False) -> dict[tuple[Any, ...], str]:
+    key_list = list(keys)
+    fields = (*_LABEL_FIELDS, "dpu_count") if include_dpu else _LABEL_FIELDS
+    varied = _varied_label_fields((_key_record(key) for key in key_list), fields)
+    return {key: _concise_label(_key_record(key), varied) for key in key_list}
+
+
 def _plot_points(views: Iterable[Mapping[str, Any]], metric: str, *, weak: bool = False) -> dict[str, list[tuple[int, float]]]:
     selected = [
         view
@@ -1131,11 +1184,13 @@ def _plot_points(views: Iterable[Mapping[str, Any]], metric: str, *, weak: bool 
         and view.get("scaling_kind") == ("weak_scaling" if weak else "strong_scaling")
         and isinstance(view.get("dpu_count"), int)
     ]
+    grouped = _group_views(selected)
+    labels = _labels_for_keys(grouped)
     groups: dict[str, list[tuple[int, float]]] = {}
-    for key, group in _group_views(selected).items():
+    for key, group in grouped.items():
         values = [float(view[metric]) for view in group]
         dpu_count = key[-1]
-        label = "/".join(str(value) for value in key[:-1])
+        label = labels[key]
         groups.setdefault(label, []).append((int(dpu_count), _stats(values)["median"]))  # type: ignore[arg-type]
     for values in groups.values():
         values.sort(key=lambda item: item[0])
@@ -1151,7 +1206,15 @@ def _plot(
     *,
     empty_status: str = "todo_missing_data",
     reference_line: float | None = None,
+    y_scale: str = "linear",
 ) -> str:
+    if y_scale not in {"linear", "log"}:
+        raise ValueError(f"unsupported y scale: {y_scale}")
+    plotted_groups = {
+        label: [point for point in points if y_scale != "log" or point[1] > 0.0]
+        for label, points in groups.items()
+    }
+    plotted_groups = {label: points for label, points in plotted_groups.items() if points}
     try:
         import matplotlib
 
@@ -1162,7 +1225,7 @@ def _plot(
             path,
             title,
             caption,
-            groups,
+            plotted_groups,
             ylabel,
             bars=False,
             empty_status=empty_status,
@@ -1170,26 +1233,34 @@ def _plot(
         )
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    figure, axis = plt.subplots(figsize=(7.5, 4.5))
-    if groups:
-        for label in sorted(groups):
-            points = groups[label]
+    figure, axis = plt.subplots(figsize=(14.0, 6.0))
+    if plotted_groups:
+        for label in sorted(plotted_groups):
+            points = plotted_groups[label]
             axis.plot([point[0] for point in points], [point[1] for point in points], marker="o", label=label)
         if reference_line is not None:
             axis.axhline(reference_line, color="black", linestyle="--", linewidth=1.0)
-        axis.legend(fontsize=7, loc="best")
+        axis.legend(fontsize=8, loc="upper left", bbox_to_anchor=(1.02, 1.0), borderaxespad=0.0)
         axis.set_xlabel("DPU count")
         axis.set_ylabel(ylabel)
+        axis.set_yscale(y_scale)
         axis.grid(True, alpha=0.25)
     else:
         axis.text(0.5, 0.5, "TODO: no measured data available", ha="center", va="center", transform=axis.transAxes)
         axis.set_axis_off()
     axis.set_title(title)
-    figure.text(0.01, 0.01, caption, ha="left", va="bottom", fontsize=8, wrap=True)
-    figure.tight_layout(rect=(0, 0.07, 1, 1))
-    figure.savefig(path, dpi=120)
+    figure.text(
+        0.01,
+        0.02,
+        textwrap.fill(caption, width=140),
+        ha="left",
+        va="bottom",
+        fontsize=8,
+    )
+    figure.subplots_adjust(left=0.08, right=0.58, bottom=0.24, top=0.84)
+    figure.savefig(path, dpi=120, bbox_inches="tight")
     plt.close(figure)
-    return "generated" if groups else empty_status
+    return "generated" if plotted_groups else empty_status
 
 
 def _bar_plot(
@@ -1218,7 +1289,7 @@ def _bar_plot(
         )
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    figure, axis = plt.subplots(figsize=(8, 4.5))
+    figure, axis = plt.subplots(figsize=(12.0, 8.0))
     labels = sorted(groups)
     categories = sorted({category for values in groups.values() for category in values})
     if labels and categories:
@@ -1231,19 +1302,137 @@ def _bar_plot(
                 width=width,
                 label=category,
             )
-        axis.set_xticks([position + width * (len(categories) - 1) / 2 for position in positions], labels, rotation=30, ha="right")
+        axis.set_xticks(
+            [position + width * (len(categories) - 1) / 2 for position in positions],
+            labels,
+            rotation=45,
+            ha="right",
+            fontsize=8,
+        )
         axis.set_ylabel(ylabel)
-        axis.legend(fontsize=8)
+        axis.legend(fontsize=8, loc="upper left", bbox_to_anchor=(1.02, 1.0), borderaxespad=0.0)
         axis.grid(True, axis="y", alpha=0.25)
     else:
         axis.text(0.5, 0.5, "TODO: no measured data available", ha="center", va="center", transform=axis.transAxes)
         axis.set_axis_off()
     axis.set_title(title)
-    figure.text(0.01, 0.01, caption, ha="left", va="bottom", fontsize=8, wrap=True)
-    figure.tight_layout(rect=(0, 0.07, 1, 1))
+    figure.text(
+        0.01,
+        0.01,
+        textwrap.fill(caption, width=145),
+        ha="left",
+        va="bottom",
+        fontsize=8,
+    )
+    figure.subplots_adjust(left=0.09, right=0.72, bottom=0.44, top=0.84)
     figure.savefig(path, dpi=120)
     plt.close(figure)
     return "generated" if labels and categories else empty_status
+
+
+def _heatmap_series(
+    views: Iterable[Mapping[str, Any]],
+    metrics: Mapping[str, str],
+) -> dict[str, dict[str, dict[int, float]]]:
+    """Group measured values as panel -> row label -> DPU count -> median."""
+
+    selected = [
+        view
+        for view in views
+        if view.get("physical_one_rank_valid") is True
+        and view.get("status") in SUCCESS_STATUSES
+        and isinstance(view.get("dpu_count"), int)
+    ]
+    grouped = _group_views(selected)
+    labels = _labels_for_keys(grouped)
+    panels: dict[str, dict[str, dict[int, float]]] = {name: {} for name in metrics}
+    for key, group in grouped.items():
+        dpu_count = int(key[-1])
+        row_label = labels[key]
+        for panel, metric in metrics.items():
+            values = [float(view[metric]) for view in group if view.get(metric) is not None]
+            if values:
+                panels[panel].setdefault(row_label, {})[dpu_count] = float(_stats(values)["median"])
+    return {panel: rows for panel, rows in panels.items() if rows}
+
+
+def _heatmap_plot(
+    path: Path,
+    title: str,
+    caption: str,
+    panels: Mapping[str, Mapping[str, Mapping[int, float]]],
+    *,
+    empty_status: str = "todo_missing_data",
+) -> str:
+    """Render bounded case rows against DPU-count columns."""
+
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import numpy as np
+    except ModuleNotFoundError:
+        return _fallback_plot(
+            path,
+            title,
+            caption,
+            {},
+            "DPU count",
+            bars=True,
+            empty_status=empty_status,
+        )
+
+    if not panels:
+        return _fallback_plot(
+            path,
+            title,
+            caption,
+            {},
+            "DPU count",
+            bars=True,
+            empty_status=empty_status,
+        )
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    row_labels = sorted({label for rows in panels.values() for label in rows})
+    dpu_counts = sorted({count for rows in panels.values() for values in rows.values() for count in values})
+    figure_height = max(5.5, 0.34 * len(row_labels) + 2.4)
+    figure_width = max(10.0, 5.8 * len(panels))
+    figure, axes = plt.subplots(
+        1,
+        len(panels),
+        figsize=(figure_width, figure_height),
+        squeeze=False,
+        sharey=True,
+    )
+    axes_list = list(axes[0])
+    for index, (panel, rows) in enumerate(sorted(panels.items())):
+        matrix = np.full((len(row_labels), len(dpu_counts)), np.nan, dtype=float)
+        for row_index, row_label in enumerate(row_labels):
+            for column_index, dpu_count in enumerate(dpu_counts):
+                value = rows.get(row_label, {}).get(dpu_count)
+                if value is not None:
+                    matrix[row_index, column_index] = value
+        axis = axes_list[index]
+        image = axis.imshow(matrix, aspect="auto", interpolation="nearest")
+        axis.set_title(panel)
+        axis.set_xlabel("DPU count")
+        axis.set_xticks(range(len(dpu_counts)), [str(count) for count in dpu_counts])
+        axis.tick_params(axis="x", labelrotation=0)
+        axis.set_yticks(range(len(row_labels)))
+        if index == 0:
+            axis.set_yticklabels(row_labels, fontsize=7)
+            axis.set_ylabel("Case / comparison series")
+        else:
+            axis.tick_params(axis="y", labelleft=False)
+        figure.colorbar(image, ax=axis, fraction=0.046, pad=0.04)
+    figure.suptitle(title)
+    figure.text(0.01, 0.01, textwrap.fill(caption, width=120), ha="left", va="bottom", fontsize=8)
+    figure.subplots_adjust(left=0.30, right=0.88, bottom=0.20, top=0.88, wspace=0.34)
+    figure.savefig(path, dpi=120, bbox_inches="tight")
+    plt.close(figure)
+    return "generated"
 
 
 def _fallback_plot(
@@ -1315,8 +1504,10 @@ def _fallback_plot(
 def _table_groups(views: Iterable[Mapping[str, Any]], metric: str) -> dict[str, dict[str, float]]:
     selected = [view for view in views if view.get("physical_one_rank_valid") is True and view.get(metric) is not None]
     result: dict[str, dict[str, float]] = {}
-    for key, group in _group_views(selected).items():
-        label = "/".join(str(value) for value in key)
+    grouped = _group_views(selected)
+    labels = _labels_for_keys(grouped, include_dpu=True)
+    for key, group in grouped.items():
+        label = labels[key]
         result[label] = {metric: float(_stats(float(view[metric]) for view in group)["median"])}  # type: ignore[arg-type]
     return result
 
@@ -1416,6 +1607,22 @@ def generate_report(input_path: Path, output_root: Path, *, timestamp: str | Non
         partition_ratios,
         PARTITION_RATIO_FIELDS,
     )
+    table_paths = [
+        f"tables/{name}"
+        for name in (
+            "m5_records.csv",
+            "m5_runtime_statistics.csv",
+            "m5_accuracy_statistics.csv",
+            "m5_transfer_statistics.csv",
+            "m5_strong_scaling.csv",
+            "m5_numeric_mode_ratios.csv",
+            "m5_partition_ratios.csv",
+        )
+    ]
+    table_sha256 = {
+        relative_path: _artifact_hash(output / relative_path)
+        for relative_path in table_paths
+    }
 
     common = (
         "Same-route measured one-rank physical diagnostics only; no CPU/GPU speedup or multi-rank claim. "
@@ -1434,15 +1641,15 @@ def generate_report(input_path: Path, output_root: Path, *, timestamp: str | Non
         if has_int8_evidence
         else common + " Quantization error versus float32 requires canonical quantization/full-precision evidence; policy-reference validation is separate."
     )
-    plot_specs: list[tuple[str, str, str, Mapping[str, list[tuple[int, float]]], str]] = [
-        ("m5_strong_scaling_runtime.png", "M5 strong-scaling runtime (physical one-rank, measured)", common, _plot_points(views, "runtime_s"), "Runtime (s), median"),
-        ("m5_strong_scaling_speedup.png", "M5 strong-scaling speedup T1/TN (physical one-rank, measured)", common, _ratio_points(ratios, "speedup"), "Speedup T1/TN"),
-        ("m5_strong_scaling_efficiency.png", "M5 strong-scaling efficiency speedup/N (physical one-rank, measured)", common, _ratio_points(ratios, "efficiency"), "Efficiency speedup/N"),
-        ("m5_weak_scaling_runtime.png", "M5 weak-scaling runtime (physical one-rank, measured)", common, _plot_points(views, "runtime_s", weak=True), "Runtime (s), median"),
+    plot_specs: list[tuple[str, str, str, Mapping[str, list[tuple[int, float]]], str, str]] = [
+        ("m5_strong_scaling_runtime.png", "M5 strong-scaling runtime (physical one-rank, measured)", common, _plot_points(views, "runtime_s"), "Runtime (s), median", "log"),
+        ("m5_strong_scaling_speedup.png", "M5 strong-scaling speedup T1/TN (physical one-rank, measured)", common, _ratio_points(ratios, "speedup"), "Speedup T1/TN", "linear"),
+        ("m5_strong_scaling_efficiency.png", "M5 strong-scaling efficiency speedup/N (physical one-rank, measured)", common, _ratio_points(ratios, "efficiency"), "Efficiency speedup/N", "linear"),
+        ("m5_weak_scaling_runtime.png", "M5 weak-scaling runtime (physical one-rank, measured)", common, _plot_points(views, "runtime_s", weak=True), "Runtime (s), median", "log"),
     ]
     plot_entries: list[dict[str, Any]] = []
-    for name, title, caption, groups, ylabel in plot_specs:
-        status = _plot(plots / name, title, caption, groups, ylabel)
+    for name, title, caption, groups, ylabel, y_scale in plot_specs:
+        status = _plot(plots / name, title, caption, groups, ylabel, y_scale=y_scale)
         plot_entries.append({"path": f"plots/{name}", "status": status, "title": title, "caption": caption, "metric": ylabel})
 
     numeric_ratio_caption = (
@@ -1521,33 +1728,25 @@ def generate_report(input_path: Path, output_root: Path, *, timestamp: str | Non
         }
     )
 
-    transfer_groups: dict[str, dict[str, float]] = {}
-    for key, group in _group_views(
-        [
-            view
-            for view in views
-            if view.get("physical_one_rank_valid") is True
-            and view.get("status") in SUCCESS_STATUSES
-        ]
-    ).items():
-        values: dict[str, float] = {}
-        for label, field in (("H2D bytes", "h2d_bytes"), ("D2H bytes", "d2h_bytes"), ("host reduction bytes", "reduction_bytes")):
-            metric_values = [float(view[field]) for view in group if view.get(field) is not None]
-            if metric_values:
-                values[label] = float(_stats(metric_values)["median"])
-        if values:
-            transfer_groups["/".join(str(value) for value in key)] = values
+    transfer_groups = _heatmap_series(
+        views,
+        {
+            "H2D bytes": "h2d_bytes",
+            "D2H bytes": "d2h_bytes",
+            "Host reduction bytes": "reduction_bytes",
+        },
+    )
     transfer_caption = common
-    status = _bar_plot(plots / "m5_transfer_breakdown.png", "M5 transfer breakdown (physical one-rank, measured)", transfer_caption, transfer_groups, "Bytes, median")
+    status = _heatmap_plot(plots / "m5_transfer_breakdown.png", "M5 transfer breakdown (physical one-rank, measured)", transfer_caption, transfer_groups)
     plot_entries.append({"path": "plots/m5_transfer_breakdown.png", "status": status, "title": "M5 transfer breakdown (physical one-rank, measured)", "caption": transfer_caption, "metric": "H2D/D2H/host reduction bytes"})
 
-    balance_groups = _table_groups(views, "load_balance")
-    status = _bar_plot(plots / "m5_load_balance.png", "M5 load balance (physical one-rank, measured)", common, balance_groups, "Max/min DPU work or runtime, median")
+    balance_groups = _heatmap_series(views, {"Load-balance ratio": "load_balance"})
+    status = _heatmap_plot(plots / "m5_load_balance.png", "M5 load balance (physical one-rank, measured)", common, balance_groups)
     plot_entries.append({"path": "plots/m5_load_balance.png", "status": status, "title": "M5 load balance (physical one-rank, measured)", "caption": common, "metric": "load_balance"})
 
-    accuracy_groups = _table_groups(views, "accuracy")
+    accuracy_groups = _heatmap_series(views, {"Maximum absolute error": "accuracy"})
     accuracy_title = "M5 quantization error versus float32 (physical one-rank, measured)"
-    status = _bar_plot(plots / "m5_quantization_accuracy.png", accuracy_title, quant, accuracy_groups, "Maximum absolute error versus float32, median")
+    status = _heatmap_plot(plots / "m5_quantization_accuracy.png", accuracy_title, quant, accuracy_groups)
     plot_entries.append({"path": "plots/m5_quantization_accuracy.png", "status": status, "title": accuracy_title, "caption": quant, "metric": "accuracy"})
 
     for entry in plot_entries:
@@ -1570,18 +1769,8 @@ def generate_report(input_path: Path, output_root: Path, *, timestamp: str | Non
         ),
         "failed_or_unsupported_dpu_counts": sorted({view["dpu_count"] for view in views if view.get("status") not in SUCCESS_STATUSES and isinstance(view.get("dpu_count"), int)}),
         "plots": plot_entries,
-        "tables": [
-            f"tables/{name}"
-            for name in (
-                "m5_records.csv",
-                "m5_runtime_statistics.csv",
-                "m5_accuracy_statistics.csv",
-                "m5_transfer_statistics.csv",
-                "m5_strong_scaling.csv",
-                "m5_numeric_mode_ratios.csv",
-                "m5_partition_ratios.csv",
-            )
-        ],
+        "tables": table_paths,
+        "table_sha256": table_sha256,
         "claims": {
             "physical_one_rank_measured": any(
                 view.get("physical_one_rank_valid") is True and view.get("runtime_s") is not None
@@ -1600,13 +1789,15 @@ def generate_report(input_path: Path, output_root: Path, *, timestamp: str | Non
 
 
 def _ratio_points(rows: Iterable[Mapping[str, Any]], metric: str) -> dict[str, list[tuple[int, float]]]:
+    rows = list(rows)
+    varied = _varied_label_fields(rows, _LABEL_FIELDS)
     groups: dict[str, list[tuple[int, float]]] = {}
     for row in rows:
         value = _float(row.get(metric))
         count = _integer(row.get("dpu_count"))
         if value is None or count is None:
             continue
-        label = "/".join(str(row.get(field)) for field in DIMENSION_FIELDS[:-1])
+        label = _concise_label(row, varied)
         groups.setdefault(label, []).append((count, value))
     for values in groups.values():
         values.sort(key=lambda item: item[0])
@@ -1618,13 +1809,16 @@ def _comparison_ratio_points(
     metric: str,
     label_fields: tuple[str, ...],
 ) -> dict[str, list[tuple[int, float]]]:
+    rows = list(rows)
+    allowed_fields = tuple(field for field in label_fields if field in _LABEL_FIELDS)
+    varied = _varied_label_fields(rows, allowed_fields)
     groups: dict[str, list[tuple[int, float]]] = {}
     for row in rows:
         value = _float(row.get(metric))
         count = _integer(row.get("dpu_count"))
         if value is None or count is None:
             continue
-        label = "/".join(str(row.get(field)) for field in label_fields)
+        label = _concise_label(row, varied)
         groups.setdefault(label, []).append((count, value))
     for values in groups.values():
         values.sort(key=lambda item: item[0])
