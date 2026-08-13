@@ -11,6 +11,17 @@
 
 #include <float.h>
 
+/* v3 builds provide these through V3_RESIDENT_DEFINES in the Makefile. */
+#ifndef RESIDENT_ROUTE_ID
+#define RESIDENT_ROUTE_ID "upmem_tn_hardware_taskgraph_resident"
+#endif
+#ifndef RESIDENT_BACKEND_ID
+#define RESIDENT_BACKEND_ID "upmem_sdk_hardware_taskgraph_resident"
+#endif
+#ifndef RESIDENT_PROFILE_VERSION
+#define RESIDENT_PROFILE_VERSION "hardware_taskgraph_distributed_single_contraction_m5_v3"
+#endif
+
 typedef struct {
     double total_time_s;
     double launch_sync_time_s;
@@ -610,7 +621,13 @@ static void v3_write_response(
     v3_json_string(file, status == NULL ? "failed" : status);
     fputs(",\"failure_stage\":", file); if (failure_stage == NULL) fputs("null", file); else v3_json_string(file, failure_stage);
     fputs(",\"error\":", file); if (error_message == NULL) fputs("null", file); else v3_json_string(file, error_message);
-    fprintf(file, ",\"target_requested\":\"hardware\",\"target_observed\":\"%s\",\"backend_id\":\"upmem_sdk_hardware_execution_plan_v3\",\"backend_family\":\"upmem_sdk\",\"execution_class\":\"resident_taskgraph\",\"kernel_strategy\":\"resident_generic_contract\",\"requested_dpu_count\":%u,\"allocated_dpu_count\":%u,\"requested_rank_path\":", provider != NULL && provider->allocation_used ? "physical_hardware" : "not_allocated", dpu_count, provider != NULL && provider->allocation_used ? provider->observed_dpus : 0u);
+    fprintf(file, ",\"target_requested\":\"hardware\",\"target_observed\":\"%s\",\"route_id\":", provider != NULL && provider->allocation_used ? "physical_hardware" : "not_allocated");
+    v3_json_string(file, RESIDENT_ROUTE_ID);
+    fputs(",\"backend_id\":", file);
+    v3_json_string(file, RESIDENT_BACKEND_ID);
+    fputs(",\"hardware_profile_version\":", file);
+    v3_json_string(file, RESIDENT_PROFILE_VERSION);
+    fprintf(file, ",\"backend_family\":\"upmem_sdk\",\"execution_class\":\"resident_taskgraph\",\"kernel_strategy\":\"resident_generic_contract\",\"requested_dpu_count\":%u,\"allocated_dpu_count\":%u,\"requested_rank_path\":", dpu_count, provider != NULL && provider->allocation_used ? provider->observed_dpus : 0u);
     v3_json_string(file, provider == NULL ? "" : provider->requested_rank_path);
     fprintf(file, ",\"observed_rank_count\":%u,\"tasklets_per_dpu\":%u,\"rank_count\":%u,\"one_rank\":%s,\"single_rank\":%s,\"partition_strategy\":\"%s\",\"dispatch_mode\":\"bulk_set_synchronous_v1\",\"kernel_launch_api_calls\":%llu,\"dpu_program_instances\":%u,\"explicit_sync_api_calls\":%llu,\"launch_count_semantics\":\"set_launch_api_calls\",\"synchronize_count_semantics\":\"explicit_dpu_sync_api_calls\",\"numeric_mode\":\"%s\",\"numeric_transport\":\"%s\",\"numeric_arithmetic\":\"%s\",\"requantization_scope\":\"%s\",\"packed_int8_transfer\":%s,\"host_quantization\":%s,\"dpu_intermediate_requantization\":false,\"simulator_kernel_executed\":false,\"cpu_fallback_used\":false,\"hardware_kernel_executed\":%s,\"native_kernel_executed\":%s,\"hardware_allocation_verified\":%s,\"hardware_release_verified\":%s,\"allocation_provider\":\"upmem_sdk_rank_profile_v1\",\"simplepim_role\":\"initialization_binary_and_management_state_only\",\"kernel_provider\":\"thesis_resident_generic_c_v3\",\"transfer_provider\":\"upmem_sdk_synchronous_v1\",\"collective_provider\":\"%s\",\"reconstruction_provider\":\"%s\",\"allocation\":{\"attempted\":%s,\"confirmed\":%s,\"release_attempted\":%s,\"release_confirmed\":%s},\"timing_scope\":\"per_repetition_total_time_s_includes_set_launch_completion_reads_and_validation_output_d2h_assembly_and_output_write; kernel_launch_sync_time_s_covers_only_dpu_launch_set_synchronous; completion_read_and_validation_time_s_covers_completion_d2h_reads_and_contract_validation\",\"timing\":{\"allocation_time_s\":%.9f,\"binary_load_time_s\":%.9f,\"release_time_s\":%.9f},\"requested_warmups\":%u,\"requested_repetitions\":%u,\"run_total_transfers\":{\"h2d_bytes\":%llu,\"d2h_bytes\":%llu,\"total_bytes\":%llu,\"descriptor_h2d_bytes\":%llu,\"operand_h2d_bytes\":%llu,\"reset_h2d_bytes\":%llu,\"completion_d2h_bytes\":%llu,\"final_d2h_bytes\":%llu,\"reduction_d2h_bytes\":%llu},\"transfers\":{\"h2d_bytes\":%llu,\"d2h_bytes\":%llu,\"actual_h2d_bytes\":%llu,\"actual_d2h_bytes\":%llu,\"actual_transfer_bytes\":%llu,\"descriptor_h2d_bytes\":%llu,\"operand_h2d_bytes\":%llu,\"reset_h2d_bytes\":%llu,\"completion_d2h_bytes\":%llu,\"final_d2h_bytes\":%llu,\"reduction_d2h_bytes\":%llu},\"load_balance\":{\"dpu_count\":%u,\"assigned_work_elements_min\":%llu,\"assigned_work_elements_max\":%llu,\"assigned_work_elements_total\":%llu,\"ratio\":%.9f},\"repetitions\":[",
         provider == NULL ? 0u : provider->observed_ranks,

@@ -43,6 +43,11 @@ SUITE_ID = "upmem_hardware_distributed_m5"
 ROUTE_LABEL = "upmem_hw_m5"
 ROUTE_ID = "upmem_tn_hardware_distributed_m5"
 BACKEND_ID = "upmem_sdk_hardware_distributed_m5"
+# These values mirror V3_ROUTE_ID/V3_BACKEND_ID/V3_PROFILE_VERSION in the
+# native Makefile, which are passed to host_v3.c as RESIDENT_* macros.
+NATIVE_ROUTE_ID = "upmem_tn_hardware_taskgraph_resident"
+NATIVE_BACKEND_ID = "upmem_sdk_hardware_taskgraph_resident"
+NATIVE_HARDWARE_PROFILE_VERSION = "hardware_taskgraph_distributed_single_contraction_m5_v3"
 SCHEMA_VERSION = "upmem_hardware_distributed_m5_v1"
 NATIVE_PLAN_KIND = "distributed_plan_v3"
 NATIVE_RESPONSE_SCHEMA = "upmem_execution_plan_native_v3"
@@ -935,6 +940,9 @@ def _validate_execute_response(response: Mapping[str, Any], request: Mapping[str
         "status": "completed",
         "target_requested": "hardware",
         "target_observed": "physical_hardware",
+        "route_id": NATIVE_ROUTE_ID,
+        "backend_id": NATIVE_BACKEND_ID,
+        "hardware_profile_version": NATIVE_HARDWARE_PROFILE_VERSION,
         "requested_dpu_count": int(request["dpu_count"]),
         "allocated_dpu_count": int(request["dpu_count"]),
         "tasklets_per_dpu": config.tasklets,
@@ -1111,8 +1119,16 @@ def _normalized_record(
         "workload_id": plan["workload_id"],
         "benchmark_role": plan["benchmark_role"],
         "quantum_case": plan["quantum_case"],
+        "workload_kind": (
+            "synthetic"
+            if plan["quantum_case"] == "non_quantum"
+            else "quantum_circuit"
+        ),
         "route_id": ROUTE_ID,
         "backend_id": BACKEND_ID,
+        "native_route_id": response.get("route_id"),
+        "native_backend_id": response.get("backend_id"),
+        "native_hardware_profile_version": response.get("hardware_profile_version"),
         "backend_family": "upmem_sdk",
         "target_requested": "hardware",
         "target_observed": "physical_hardware",
@@ -1232,6 +1248,7 @@ def _normalized_record(
             if validation.get(name) is not None:
                 row[name] = validation[name]
     row["timing_s"] = timing.get("total_time_s", timing.get("elapsed_s"))
+    row["steady_state_execution_time_s"] = row["timing_s"]
     row["launch_sync_time_s"] = timing.get("launch_sync_time_s")
     row["host_dequantization_time_s"] = timing.get("host_dequantization_time_s")
     row["reset_h2d_bytes"] = _first_transfer_number(
@@ -1421,6 +1438,13 @@ def _failure_record(
         "quantum_case": row.get("quantum_case"),
         "route_id": ROUTE_ID,
         "backend_id": BACKEND_ID,
+        "native_route_id": native_response.get("route_id") if isinstance(native_response, Mapping) else None,
+        "native_backend_id": native_response.get("backend_id") if isinstance(native_response, Mapping) else None,
+        "native_hardware_profile_version": (
+            native_response.get("hardware_profile_version")
+            if isinstance(native_response, Mapping)
+            else None
+        ),
         "execution_plan_kind": NATIVE_PLAN_KIND,
         "partition_strategy": row.get("partition_strategy"),
         "partition_mode": "output_tile" if row.get("partition_strategy") == "output" else "contracted_partial_sum" if row.get("partition_strategy") == "contracted" else row.get("partition_strategy"),
@@ -1932,7 +1956,8 @@ def _validate_timeout(value: Any) -> float:
 __all__ = [
     "BACKEND_ID", "DEFAULT_DPU_COUNTS", "DEFAULT_TASKLETS", "DEFAULT_TIMEOUT_S",
     "M5StudyConfig",
-    "M5NativeTarget", "NATIVE_PLAN_KIND", "PARTITION_STRATEGIES", "QUANTIZATION_MODES",
+    "M5NativeTarget", "NATIVE_BACKEND_ID", "NATIVE_HARDWARE_PROFILE_VERSION",
+    "NATIVE_PLAN_KIND", "NATIVE_ROUTE_ID", "PARTITION_STRATEGIES", "QUANTIZATION_MODES",
     "REPEATS", "ROUTE_ID", "SCHEMA_VERSION", "SUITE_ID", "WARMUPS", "execute",
     "load_m5_suite", "prepare",
 ]

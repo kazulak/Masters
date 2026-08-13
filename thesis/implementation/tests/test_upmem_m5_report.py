@@ -147,7 +147,7 @@ def _m54_row(*, packed: bool, dpu_count: int, runtime_s: float, weak: bool = Fal
             "total_dpu_cycles": 1000 / dpu_count,
             "launch_sync_time_s": runtime_s,
             "dispatch_mode": "bulk_set_synchronous_v1",
-            "kernel_launch_api_calls": 1,
+            "kernel_launch_api_calls": 9,
             "explicit_sync_api_calls": 0,
             "host_quantization": packed,
             "dpu_intermediate_requantization": False,
@@ -159,8 +159,8 @@ def _m54_row(*, packed: bool, dpu_count: int, runtime_s: float, weak: bool = Fal
             {
                 "quantization_mode": "host_packed_int8",
                 "numeric_arithmetic": "int8_multiply_int32_accumulate",
-                "numeric_transport": "packed_int8_mram",
-                "requantization_scope": "none",
+                "numeric_transport": "host_packed_int8_mram",
+                "requantization_scope": "host_initial_once_final_host_dequantize",
                 "packed_int8_transfer": True,
                 "exact_integer_validation_status": "passed",
                 "exact_integer_passed": True,
@@ -256,7 +256,7 @@ def test_statistics_ratios_and_incompatible_pairing(tmp_path: Path) -> None:
     manifest = json.loads((output / "plot_manifest.json").read_text(encoding="utf-8"))
     assert manifest["supported_dpu_counts"] == [1, 2]
     assert manifest["failed_or_unsupported_dpu_counts"] == [4]
-    assert len(manifest["plots"]) == 10
+    assert len(manifest["plots"]) == 11
     assert manifest["source_sha256"]
     assert next(plot for plot in manifest["plots"] if "weak_scaling_runtime" in plot["path"])["status"] == "generated"
     quant_plot = next(plot for plot in manifest["plots"] if "quantization_accuracy" in plot["path"])
@@ -578,7 +578,7 @@ def test_missing_data_has_todo_plots_and_respects_output_boundary(tmp_path: Path
     assert not output.is_relative_to(run)
     manifest = json.loads((output / "plot_manifest.json").read_text(encoding="utf-8"))
     assert manifest["status"] == "todo_missing_data"
-    assert len(manifest["plots"]) == 10
+    assert len(manifest["plots"]) == 11
     assert all(entry["status"] == "todo_missing_data" for entry in manifest["plots"])
     assert "TODO: no measured data" in (output / "m5_summary.md").read_text(encoding="utf-8")
     assert all((output / entry["path"]).is_file() for entry in manifest["plots"])
@@ -627,21 +627,33 @@ def test_host_packed_ratio_and_m54_acceptance_are_additive(tmp_path: Path) -> No
                 _m54_row(packed=True, dpu_count=dpu_count, runtime_s=runtime),
             ]
         )
-    rows.extend(
-        [
-            _m54_row(packed=True, dpu_count=1, runtime_s=1.0, weak=True),
-            _m54_row(packed=True, dpu_count=2, runtime_s=1.1, weak=True),
-        ]
-    )
+    weak_one = _m54_row(packed=True, dpu_count=1, runtime_s=1.0, weak=True)
+    weak_two = _m54_row(packed=True, dpu_count=2, runtime_s=100.0, weak=True)
+    weak_one["launch_sync_time_s"] = 1.0
+    weak_two["launch_sync_time_s"] = 1.1
+    rows.extend([weak_one, weak_two])
+    for row in rows:
+        if row["numeric_mode"] == "host_packed_int8" and row["requested_dpu_count"] == 8 and row["scaling_kind"] == "strong":
+            row["timing_s"] = 100.0
+            row["per_repeat_timing"]["total_time_s"] = 100.0  # type: ignore[index]
 
     output = generate_report(_write_run(tmp_path, rows), tmp_path / "report-root", timestamp="m54")
 
     packed_ratios = _csv_rows(output / "tables/m5_host_packed_int8_ratios.csv")
     assert len(packed_ratios) == 4
-    assert packed_ratios[0]["host_packed_int8_runtime_median_s"]
+    assert packed_ratios[0]["host_packed_int8_steady_state_runtime_median_s"]
+    assert packed_ratios[0]["steady_state_runtime_ratio_float32_over_host_packed_int8"]
+    assert packed_ratios[0]["timing_contract"] == "steady_state_repeated_execution"
+    assert packed_ratios[0]["one_time_host_quantization_included"] == "False"
+    assert packed_ratios[0]["initial_operand_staging_included"] == "False"
     assert (output / "plots/m5_host_packed_int8_runtime_ratio.png").is_file()
+    payload_ratios = _csv_rows(output / "tables/m5_host_packed_operand_payload_ratios.csv")
+    assert len(payload_ratios) == 4
+    assert float(payload_ratios[0]["packed_over_float32_operand_h2d_ratio"]) == 0.25
+    assert (output / "plots/m5_host_packed_operand_payload_ratio.png").is_file()
     acceptance = json.loads((output / "m5_4_acceptance.json").read_text(encoding="utf-8"))
     assert acceptance["overall_status"] == "passed"
+    assert acceptance["criteria"]["t8_over_t1"]["status"] == "passed"
     assert acceptance["source_sha256"]
     assert all(item["status"] == "passed" for item in acceptance["criteria"].values())
     manifest = json.loads((output / "plot_manifest.json").read_text(encoding="utf-8"))
@@ -650,6 +662,105 @@ def test_host_packed_ratio_and_m54_acceptance_are_additive(tmp_path: Path) -> No
     assert manifest["claims"]["host_packed_int8_ratio"] is True
     summary = (output / "m5_summary.md").read_text(encoding="utf-8")
     assert "## M5.4 acceptance" in summary
+
+
+def test_m54_missing_dispatch_and_exact_evidence_is_not_evaluated(tmp_path: Path) -> None:
+    packed = _m54_row(packed=True, dpu_count=1, runtime_s=1.0)
+    packed["workload_kind"] = "quantum_case"
+    packed["exact_integer_validation_status"] = "failed"
+    packed["kernel_launch_api_calls"] = None
+    output = generate_report(_write_run(tmp_path, [packed]), tmp_path / "report-root", timestamp="m54-missing")
+
+    acceptance = json.loads((output / "m5_4_acceptance.json").read_text(encoding="utf-8"))
+    assert acceptance["criteria"]["exact_integer_validation"]["status"] == "failed"
+    assert acceptance["criteria"]["dispatch_contract"]["status"] == "not_evaluated"
+    assert acceptance["criteria"]["max_cycle_scaling"]["status"] == "not_evaluated"
+    assert acceptance["criteria"]["weak_runtime_stability"]["status"] == "not_evaluated"
+    assert acceptance["overall_status"] == "failed"
+
+
+def test_m54_scaling_thresholds_use_per_dpu_medians(tmp_path: Path) -> None:
+    rows: list[dict[str, object]] = []
+    for repeat_id, cycles, launch in ((0, 100.0, 10.0), (1, 300.0, 30.0)):
+        one = _m54_row(packed=True, dpu_count=1, runtime_s=launch)
+        one["repeat_id"] = repeat_id
+        one["max_dpu_cycles"] = cycles
+        one["launch_sync_time_s"] = launch
+        rows.append(one)
+    for repeat_id, cycles, launch in ((0, 50.0, 5.0), (1, 150.0, 15.0)):
+        two = _m54_row(packed=True, dpu_count=2, runtime_s=launch)
+        two["repeat_id"] = repeat_id
+        two["max_dpu_cycles"] = cycles
+        two["launch_sync_time_s"] = launch
+        rows.append(two)
+
+    output = generate_report(_write_run(tmp_path, rows), tmp_path / "report-root", timestamp="m54-medians")
+    acceptance = json.loads((output / "m5_4_acceptance.json").read_text(encoding="utf-8"))
+    assert acceptance["criteria"]["max_cycle_scaling"]["status"] == "passed"
+    assert acceptance["criteria"]["wall_vs_cycle_scaling"]["status"] == "passed"
+    observation = acceptance["criteria"]["max_cycle_scaling"]["observations"][0]
+    assert observation["observed_ratio"] == 0.5
+
+
+def test_m54_cycle_scaling_does_not_require_launch_timing(tmp_path: Path) -> None:
+    one = _m54_row(packed=True, dpu_count=1, runtime_s=1.0)
+    two = _m54_row(packed=True, dpu_count=2, runtime_s=0.5)
+    one.pop("launch_sync_time_s")
+    two.pop("launch_sync_time_s")
+
+    output = generate_report(
+        _write_run(tmp_path, [one, two]),
+        tmp_path / "report-root",
+        timestamp="m54-cycle-only",
+    )
+    acceptance = json.loads((output / "m5_4_acceptance.json").read_text(encoding="utf-8"))
+    assert acceptance["criteria"]["max_cycle_scaling"]["status"] == "passed"
+    assert acceptance["criteria"]["wall_vs_cycle_scaling"]["status"] == "not_evaluated"
+
+
+def test_m54_declared_packed_row_with_malformed_transport_fails(tmp_path: Path) -> None:
+    packed = _m54_row(packed=True, dpu_count=1, runtime_s=1.0)
+    packed["numeric_transport"] = "float32_mram"
+
+    output = generate_report(
+        _write_run(tmp_path, [packed]),
+        tmp_path / "report-root",
+        timestamp="m54-malformed-packed",
+    )
+    acceptance = json.loads((output / "m5_4_acceptance.json").read_text(encoding="utf-8"))
+    criterion = acceptance["criteria"]["packed_transport_contract"]
+    assert criterion["status"] == "failed"
+    assert criterion["observations"][0]["passed"] is False
+    assert acceptance["overall_status"] == "failed"
+
+
+def test_m54_payload_pairing_rejects_mismatched_base_contract(tmp_path: Path) -> None:
+    float_row = _m54_row(packed=False, dpu_count=1, runtime_s=1.0)
+    packed = _m54_row(packed=True, dpu_count=1, runtime_s=1.0)
+    packed["tasklets_per_dpu"] = 2
+
+    output = generate_report(
+        _write_run(tmp_path, [float_row, packed]),
+        tmp_path / "report-root",
+        timestamp="m54-payload-pairing",
+    )
+    assert _csv_rows(output / "tables/m5_host_packed_operand_payload_ratios.csv") == []
+
+
+def test_m54_payload_pairing_requires_binary_hashes(tmp_path: Path) -> None:
+    float_row = _m54_row(packed=False, dpu_count=1, runtime_s=1.0)
+    packed = _m54_row(packed=True, dpu_count=1, runtime_s=1.0)
+    float_row.pop("host_binary_hash")
+    float_row.pop("dpu_binary_hash")
+    packed.pop("host_binary_hash")
+    packed.pop("dpu_binary_hash")
+
+    output = generate_report(
+        _write_run(tmp_path, [float_row, packed]),
+        tmp_path / "report-root",
+        timestamp="m54-payload-hashes",
+    )
+    assert _csv_rows(output / "tables/m5_host_packed_operand_payload_ratios.csv") == []
 
 
 def test_partition_ratio_requires_canonical_reduction_evidence(tmp_path: Path) -> None:
@@ -723,3 +834,7 @@ def test_m5_record_schema_is_stable_for_populated_and_empty_runs(tmp_path: Path)
     assert headers[0] == list(M5_RECORD_FIELDS)
     assert headers[1] == list(M5_RECORD_FIELDS)
     assert len(headers[1]) == len(set(headers[1]))
+    assert "native_route_id" in headers[0]
+    assert "native_backend_id" in headers[0]
+    assert "native_hardware_profile_version" in headers[0]
+    assert "steady_state_execution_time_s" in headers[0]

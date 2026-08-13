@@ -141,6 +141,9 @@ class FakeM5NativeTarget:
             "error": None,
             "target_requested": "hardware",
             "target_observed": "physical_hardware",
+            "route_id": m5.NATIVE_ROUTE_ID,
+            "backend_id": m5.NATIVE_BACKEND_ID,
+            "hardware_profile_version": m5.NATIVE_HARDWARE_PROFILE_VERSION,
             "execution_class": "resident_taskgraph",
             "kernel_strategy": "resident_generic_contract",
             "requested_rank_path": "/dev/dpu_rank1",
@@ -812,12 +815,22 @@ def test_fake_execution_writes_repeat_rows_and_preserves_identity(tmp_path: Path
     assert all(row["cpu_fallback_used"] is False for row in rows)
     assert all(row["hardware_functionality_evidence"] is False for row in rows)
     assert all(row["native_provider_kind"] == "injected_test_only" for row in rows)
+    assert all(row["native_route_id"] == m5.NATIVE_ROUTE_ID for row in rows)
+    assert all(row["native_backend_id"] == m5.NATIVE_BACKEND_ID for row in rows)
+    assert all(
+        row["native_hardware_profile_version"] == m5.NATIVE_HARDWARE_PROFILE_VERSION
+        for row in rows
+    )
     assert all(row["claims"]["speedup"] is False for row in rows)
     assert all(row["circuit_semantics_hash"] for row in rows)
     assert all(row["tensor_network_hash"] for row in rows)
     assert all(row["contraction_plan_hash"] for row in rows)
     assert all(row["task_hash"] for row in rows)
     assert all(row["per_repeat_timing"]["total_time_s"] > 0 for row in rows)
+    assert all(
+        row["steady_state_execution_time_s"] == row["per_repeat_timing"]["total_time_s"]
+        for row in rows
+    )
     assert {row["scaling_kind"] for row in rows} == {"strong_scaling", "weak_scaling"}
     assert all(row["transfers"]["h2d_bytes"] != 100 for row in rows)
     assert all(row["run_metadata"]["transfers"]["h2d_bytes"] == 100 for row in rows)
@@ -993,6 +1006,32 @@ def test_success_acceptance_requires_bulk_set_launch_contract(
     target = FakeM5NativeTarget()
     request = target.prepare_request(
         dpu_count=8,
+        tasklets=m5.DEFAULT_TASKLETS,
+        quantization_mode="host_packed_int8",
+        partition_strategy="output",
+        root=tmp_path,
+    )
+    response = dict(target.execute(request, timeout_s=1.0))
+    response[field] = invalid
+
+    with pytest.raises(ValueError, match=field):
+        m5._validate_execute_response(response, request, m5.load_m5_suite(M5_4_SUITE))
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid"),
+    (
+        ("route_id", "wrong-native-route"),
+        ("backend_id", "wrong-native-backend"),
+        ("hardware_profile_version", "wrong-native-profile"),
+    ),
+)
+def test_success_acceptance_requires_exact_native_identity(
+    field: str, invalid: str, tmp_path: Path
+) -> None:
+    target = FakeM5NativeTarget()
+    request = target.prepare_request(
+        dpu_count=1,
         tasklets=m5.DEFAULT_TASKLETS,
         quantization_mode="host_packed_int8",
         partition_strategy="output",

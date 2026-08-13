@@ -106,11 +106,28 @@ HOST_PACKED_RATIO_FIELDS = [
     "workload_kind",
     "scaling_kind",
     "dpu_count",
-    "float32_runtime_median_s",
-    "host_packed_int8_runtime_median_s",
-    "runtime_ratio_float32_over_host_packed_int8",
-    "float32_repeat_count",
-    "host_packed_int8_repeat_count",
+    "float32_steady_state_runtime_median_s",
+    "host_packed_int8_steady_state_runtime_median_s",
+    "steady_state_runtime_ratio_float32_over_host_packed_int8",
+    "float32_steady_state_repeat_count",
+    "host_packed_int8_steady_state_repeat_count",
+    "timing_contract",
+    "one_time_host_quantization_included",
+    "initial_operand_staging_included",
+    "pairing_rule",
+]
+HOST_PACKED_PAYLOAD_FIELDS = [
+    "case_id",
+    "route_id",
+    "partition_mode",
+    "tasklets_per_dpu",
+    "timing_scope",
+    "workload_kind",
+    "scaling_kind",
+    "dpu_count",
+    "float32_operand_h2d_bytes",
+    "host_packed_int8_operand_h2d_bytes",
+    "packed_over_float32_operand_h2d_ratio",
     "pairing_rule",
 ]
 PARTITION_RATIO_FIELDS = [
@@ -131,12 +148,16 @@ PARTITION_RATIO_FIELDS = [
 ]
 M5_RECORD_FIELDS = (
     *DIMENSION_FIELDS,
+    "native_route_id",
+    "native_backend_id",
+    "native_hardware_profile_version",
     "requested_dpu_count",
     "allocated_dpu_count",
     "repeat_id",
     "status",
     "reason",
     "runtime_s",
+    "steady_state_execution_time_s",
     "accuracy_max_abs_error",
     "h2d_bytes",
     "d2h_bytes",
@@ -524,6 +545,49 @@ def _pair_compatible(
     )
 
 
+PAYLOAD_PAIR_FIELDS = (
+    "case_id",
+    "route_id",
+    "partition_mode",
+    "tasklets_per_dpu",
+    "timing_scope",
+    "workload_kind",
+    "scaling_kind",
+    "dpu_count",
+)
+
+
+def _payload_pair_compatible(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
+    """Require every non-numeric payload pairing field before identity checks."""
+
+    for field in PAYLOAD_PAIR_FIELDS:
+        left_value = left.get(field)
+        right_value = right.get(field)
+        if (
+            left_value is None
+            or right_value is None
+            or str(left_value).strip().lower() in {"", "unknown"}
+            or str(right_value).strip().lower() in {"", "unknown"}
+        ):
+            return False
+        if left_value != right_value:
+            return False
+    if not _pair_compatible(left, right, ignored_identities=frozenset({"operation"})):
+        return False
+    left_hashes = left.get("binary_hashes")
+    right_hashes = right.get("binary_hashes")
+    if not isinstance(left_hashes, Mapping) or not isinstance(right_hashes, Mapping):
+        return False
+    return all(
+        isinstance(left_hashes.get(name), str)
+        and isinstance(right_hashes.get(name), str)
+        and SHA256_PATTERN.fullmatch(left_hashes[name])
+        and SHA256_PATTERN.fullmatch(right_hashes[name])
+        and left_hashes[name] == right_hashes[name]
+        for name in BINARY_HASH_ALIASES
+    )
+
+
 def _load_balance(row: Mapping[str, Any], *, valid_figure: bool) -> float | None:
     if not valid_figure or _status(row) not in SUCCESS_STATUSES:
         return None
@@ -727,8 +791,11 @@ def _host_packed_int8_evidence(row: Mapping[str, Any]) -> bool:
     transport = str(row["numeric_transport"]).lower().replace("-", "_")
     return (
         mode == "host_packed_int8"
-        and arithmetic in {"int8", "int8_accumulate", "int8_int32", "int8_multiply_int32_accumulate"}
-        and transport in {"host_packed_int8_mram", "packed_int8_mram", "packed_int8", "int8_mram"}
+        and arithmetic == "int8_multiply_int32_accumulate"
+        and transport == "host_packed_int8_mram"
+        and row.get("requantization_scope") == "host_initial_once_final_host_dequantize"
+        and row.get("host_quantization") is True
+        and row.get("dpu_intermediate_requantization") is False
         and row["packed_int8_transfer"] is True
     )
 
@@ -811,6 +878,11 @@ def _view(row: Mapping[str, Any], source_index: int) -> dict[str, Any]:
         "physical_one_rank_valid": physical_one_rank_valid,
         "quantization_evidence": _quantization_evidence(row),
         "host_packed_int8_evidence": _host_packed_int8_evidence(row),
+        "quantization_mode": _pick(row, "quantization_mode"),
+        "numeric_arithmetic": _pick(row, "numeric_arithmetic"),
+        "numeric_transport": _pick(row, "numeric_transport"),
+        "requantization_scope": _pick(row, "requantization_scope"),
+        "packed_int8_transfer": _pick(row, "packed_int8_transfer"),
         "run_operand_h2d_bytes": _top_float(row, "run_operand_h2d_bytes"),
         "max_dpu_cycles": _top_float(row, "max_dpu_cycles"),
         "total_dpu_cycles": _top_float(row, "total_dpu_cycles"),
@@ -1136,7 +1208,7 @@ def host_packed_int8_ratios(views: Iterable[Mapping[str, Any]]) -> list[dict[str
         float_views = variants.get("float32", [])
         packed_views = variants.get("host_packed_int8", [])
         if not float_views or not packed_views or not all(
-            _pair_compatible(left, right, ignored_identities=frozenset({"operation"}))
+            _payload_pair_compatible(left, right)
             for left in float_views
             for right in packed_views
         ):
@@ -1150,14 +1222,72 @@ def host_packed_int8_ratios(views: Iterable[Mapping[str, Any]]) -> list[dict[str
         result.append(
             {
                 **dict(zip(base_fields, key)),
-                "float32_runtime_median_s": float_median,
-                "host_packed_int8_runtime_median_s": packed_median,
-                "runtime_ratio_float32_over_host_packed_int8": float_median / packed_median,
-                "float32_repeat_count": float_stats["repeat_count"],
-                "host_packed_int8_repeat_count": packed_stats["repeat_count"],
+                "float32_steady_state_runtime_median_s": float_median,
+                "host_packed_int8_steady_state_runtime_median_s": packed_median,
+                "steady_state_runtime_ratio_float32_over_host_packed_int8": float_median / packed_median,
+                "float32_steady_state_repeat_count": float_stats["repeat_count"],
+                "host_packed_int8_steady_state_repeat_count": packed_stats["repeat_count"],
+                "timing_contract": "steady_state_repeated_execution",
+                "one_time_host_quantization_included": False,
+                "initial_operand_staging_included": False,
                 "pairing_rule": (
                     "same physical one-rank route, case, plan, path, partition, DPU count, tasklets, timing scope, "
-                    "workload, scaling kind, and host/DPU binaries; operation policy descriptor may differ"
+                    "workload, scaling kind, and host/DPU binaries; operation policy descriptor may differ; "
+                    "steady-state repeated execution excludes one-time host quantization and initial operand staging"
+                ),
+            }
+        )
+    return result
+
+
+def host_packed_payload_ratios(views: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Compare explicit one-time operand H2D payloads for admitted packed rows."""
+
+    base_fields = (
+        "case_id",
+        "route_id",
+        "partition_mode",
+        "tasklets_per_dpu",
+        "timing_scope",
+        "workload_kind",
+        "scaling_kind",
+        "dpu_count",
+    )
+    groups: dict[tuple[Any, ...], dict[str, list[Mapping[str, Any]]]] = {}
+    for view in _comparison_views(views):
+        family = _numeric_family(view.get("numeric_mode"))
+        if family not in {"float32", "host_packed_int8"}:
+            continue
+        if family == "host_packed_int8" and view.get("host_packed_int8_evidence") is not True:
+            continue
+        if view.get("run_operand_h2d_bytes") is None:
+            continue
+        key = tuple(view[field] for field in base_fields)
+        groups.setdefault(key, {}).setdefault(family, []).append(view)
+
+    result: list[dict[str, Any]] = []
+    for key, variants in sorted(groups.items(), key=lambda item: tuple(map(str, item[0]))):
+        float_views = variants.get("float32", [])
+        packed_views = variants.get("host_packed_int8", [])
+        if not float_views or not packed_views or not all(
+            _payload_pair_compatible(left, right)
+            for left in float_views
+            for right in packed_views
+        ):
+            continue
+        float_bytes = float(_stats(float(view["run_operand_h2d_bytes"]) for view in float_views)["median"])
+        packed_bytes = float(_stats(float(view["run_operand_h2d_bytes"]) for view in packed_views)["median"])
+        if float_bytes <= 0.0:
+            continue
+        result.append(
+            {
+                **dict(zip(base_fields, key)),
+                "float32_operand_h2d_bytes": float_bytes,
+                "host_packed_int8_operand_h2d_bytes": packed_bytes,
+                "packed_over_float32_operand_h2d_ratio": packed_bytes / float_bytes,
+                "pairing_rule": (
+                    "same physical one-rank route, case, plan, path, partition, DPU count, tasklets, timing scope, "
+                    "workload, scaling kind, and host/DPU binaries; run-level operand H2D bytes only"
                 ),
             }
         )
@@ -1690,14 +1820,21 @@ def _acceptance_group_key(
     ) + tuple(str(hashes.get(name, "")) for name in BINARY_HASH_ALIASES)
 
 
-def _successful_host_packed(views: Iterable[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+def _successful_declared_host_packed(views: Iterable[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
     return [
         view
         for view in views
-        if view.get("physical_one_rank_valid") is True
-        and view.get("status") in SUCCESS_STATUSES
-        and view.get("host_packed_int8_evidence") is True
+        if view.get("status") in SUCCESS_STATUSES
+        and _declares_host_packed_int8(view)
     ]
+
+
+def _declares_host_packed_int8(view: Mapping[str, Any]) -> bool:
+    raw = view.get("raw")
+    declared = [view.get("numeric_mode")]
+    if isinstance(raw, Mapping):
+        declared.extend((raw.get("numeric_mode"), raw.get("quantization_mode")))
+    return any(str(value).strip().lower().replace("-", "_") == "host_packed_int8" for value in declared)
 
 
 def _acceptance_criterion(
@@ -1724,9 +1861,18 @@ def _acceptance_report(
     """Evaluate only measured M5.4 claims; absent evidence is never a pass."""
 
     views = list(views)
-    packed = _successful_host_packed(views)
-    strong = [view for view in packed if view.get("scaling_kind") == "strong_scaling"]
-    weak = [view for view in packed if view.get("scaling_kind") == "weak_scaling"]
+    declared_packed = _successful_declared_host_packed(views)
+    packed = [
+        view for view in declared_packed
+        if view.get("physical_one_rank_valid") is True
+        and view.get("host_packed_int8_evidence") is True
+    ]
+    synthetic_packed = [
+        view for view in packed
+        if str(view.get("workload_kind", "")).lower() == "synthetic"
+    ]
+    strong = [view for view in synthetic_packed if view.get("scaling_kind") == "strong_scaling"]
+    weak = [view for view in synthetic_packed if view.get("scaling_kind") == "weak_scaling"]
     criteria: dict[str, dict[str, Any]] = {}
 
     payload_observations: list[dict[str, Any]] = []
@@ -1747,7 +1893,7 @@ def _acceptance_report(
             and _numeric_family(view.get("numeric_mode")) == "float32"
             and view.get("case_id") == packed_view.get("case_id")
             and view.get("dpu_count") == packed_view.get("dpu_count")
-            and _pair_compatible(view, packed_view, ignored_identities=frozenset({"operation"}))
+            and _payload_pair_compatible(view, packed_view)
             and view.get("run_operand_h2d_bytes") is not None
         ]
         if matching_float:
@@ -1777,6 +1923,45 @@ def _acceptance_report(
         ),
     )
 
+    transport_observations: list[dict[str, Any]] = []
+    transport_failed = False
+    for view in declared_packed:
+        expected = {
+            "numeric_mode": "host_packed_int8",
+            "quantization_mode": "host_packed_int8",
+            "numeric_arithmetic": "int8_multiply_int32_accumulate",
+            "numeric_transport": "host_packed_int8_mram",
+            "requantization_scope": "host_initial_once_final_host_dequantize",
+            "packed_int8_transfer": True,
+            "host_quantization": True,
+            "dpu_intermediate_requantization": False,
+        }
+        missing = [field for field, value in expected.items() if view.get(field) is None]
+        passed = not missing and all(view.get(field) == value for field, value in expected.items())
+        transport_failed |= not passed
+        transport_observations.append(
+            {
+                "case_id": view.get("case_id"),
+                "dpu_count": view.get("dpu_count"),
+                "passed": passed,
+                "missing_fields": missing,
+                "numeric_transport": view.get("numeric_transport"),
+                "host_quantization": view.get("host_quantization"),
+                "requantization_scope": view.get("requantization_scope"),
+                "dpu_intermediate_requantization": view.get("dpu_intermediate_requantization"),
+            }
+        )
+    criteria["packed_transport_contract"] = _acceptance_criterion(
+        "failed" if transport_failed else ("passed" if transport_observations else "not_evaluated"),
+        threshold=(
+            "numeric_mode=host_packed_int8, numeric_transport=host_packed_int8_mram, "
+            "host_quantization=true, requantization_scope=host_initial_once_final_host_dequantize, "
+            "dpu_intermediate_requantization=false, packed_int8_transfer=true for every successful declared row"
+        ),
+        observations=transport_observations,
+        reason="strict host-packed transport fields are required and malformed or missing fields fail",
+    )
+
     def _scaling_observations(metric: str, *, compare_wall: bool = False) -> list[dict[str, Any]]:
         groups: dict[tuple[str, ...], list[Mapping[str, Any]]] = {}
         for view in strong:
@@ -1784,21 +1969,28 @@ def _acceptance_report(
                 groups.setdefault(_acceptance_group_key(view, include_numeric=True, include_dpu=False), []).append(view)
         observations: list[dict[str, Any]] = []
         for group in groups.values():
-            baseline = [view for view in group if view.get("dpu_count") == 1]
+            by_count: dict[int, list[Mapping[str, Any]]] = {}
+            for view in group:
+                count = view.get("dpu_count")
+                if isinstance(count, int):
+                    by_count.setdefault(count, []).append(view)
+            baseline = by_count.get(1, [])
             if not baseline:
                 continue
             baseline_value = float(_stats(float(view[metric]) for view in baseline)["median"])
-            baseline_runtime = float(_stats(float(view["launch_sync_time_s"]) for view in baseline)["median"])
-            for view in group:
-                count = view.get("dpu_count")
-                if not isinstance(count, int) or count <= 1:
+            baseline_runtime = None
+            if compare_wall:
+                baseline_runtime = float(_stats(float(view["launch_sync_time_s"]) for view in baseline)["median"])
+            for count, count_views in sorted(by_count.items()):
+                if count <= 1:
                     continue
-                value = float(view[metric])
+                value = float(_stats(float(view[metric]) for view in count_views)["median"])
                 observed_ratio = value / baseline_value
                 ideal = 1.0 / count
-                row = {"case_id": view.get("case_id"), "dpu_count": count, "observed_ratio": observed_ratio, "ideal_ratio": ideal}
+                row = {"case_id": count_views[0].get("case_id"), "dpu_count": count, "observed_ratio": observed_ratio, "ideal_ratio": ideal}
                 if compare_wall:
-                    wall_ratio = float(view["launch_sync_time_s"]) / baseline_runtime
+                    launch_median = float(_stats(float(view["launch_sync_time_s"]) for view in count_views)["median"])
+                    wall_ratio = launch_median / float(baseline_runtime)
                     row["wall_ratio"] = wall_ratio
                     row["relative_difference"] = abs(wall_ratio - observed_ratio) / observed_ratio if observed_ratio else None
                 observations.append(row)
@@ -1819,7 +2011,7 @@ def _acceptance_report(
         "failed" if wall_cycle_bad else ("passed" if wall_cycle_observations else "not_evaluated"),
         threshold="launch wall/max-cycle scaling within 50%",
         observations=wall_cycle_observations,
-        reason="explicit runtime_s and max_dpu_cycles from compatible packed strong-scaling rows",
+        reason="explicit launch_sync_time_s and max_dpu_cycles from compatible packed strong-scaling rows",
     )
 
     t8_observations: list[dict[str, Any]] = []
@@ -1829,9 +2021,9 @@ def _acceptance_report(
     for group in groups.values():
         one = [view for view in group if view.get("dpu_count") == 1]
         eight = [view for view in group if view.get("dpu_count") == 8]
-        if one and eight:
-            t1 = float(_stats(float(view["runtime_s"]) for view in one)["median"])
-            t8 = float(_stats(float(view["runtime_s"]) for view in eight)["median"])
+        if one and eight and all(view.get("launch_sync_time_s") is not None for view in (*one, *eight)):
+            t1 = float(_stats(float(view["launch_sync_time_s"]) for view in one)["median"])
+            t8 = float(_stats(float(view["launch_sync_time_s"]) for view in eight)["median"])
             t8_observations.append({"case_id": eight[0].get("case_id"), "t8_over_t1": t8 / t1})
     criteria["t8_over_t1"] = _acceptance_criterion(
         "failed" if any(row["t8_over_t1"] > 0.35 for row in t8_observations) else (
@@ -1839,7 +2031,7 @@ def _acceptance_report(
         ),
         threshold="<= 0.35",
         observations=t8_observations,
-        reason="packed strong-scaling runtime medians with compatible DPU-count 1 and 8 rows",
+        reason="packed strong-scaling launch_sync_time_s medians with compatible DPU-count 1 and 8 rows",
     )
 
     weak_observations: list[dict[str, Any]] = []
@@ -1849,36 +2041,47 @@ def _acceptance_report(
         key = _acceptance_group_key(view, include_numeric=True, include_dpu=False)
         weak_groups.setdefault(key, []).append(view)
     for group in weak_groups.values():
-        values = [float(view["runtime_s"]) for view in group if view.get("runtime_s") is not None]
+        by_count: dict[int, list[Mapping[str, Any]]] = {}
+        for view in group:
+            count = view.get("dpu_count")
+            if isinstance(count, int) and view.get("launch_sync_time_s") is not None:
+                by_count.setdefault(count, []).append(view)
+        values = [float(_stats(float(view["launch_sync_time_s"]) for view in count_views)["median"]) for count_views in by_count.values()]
         if values and min(values) > 0.0:
-            weak_observations.append({"case_id": group[0].get("case_id"), "runtime_max_min": max(values) / min(values)})
+            weak_observations.append({"case_id": group[0].get("case_id"), "launch_sync_max_min": max(values) / min(values)})
     criteria["weak_runtime_stability"] = _acceptance_criterion(
-        "failed" if any(row["runtime_max_min"] > 1.5 for row in weak_observations) else (
+        "failed" if any(row["launch_sync_max_min"] > 1.5 for row in weak_observations) else (
             "passed" if weak_observations else "not_evaluated"
         ),
         threshold="<= 1.5",
         observations=weak_observations,
-        reason="packed weak-scaling runtime spread over explicitly measured DPU counts",
+        reason="packed weak-scaling launch_sync_time_s medians over explicitly measured DPU counts",
     )
 
     exact_observations = []
     exact_missing = False
     exact_failed = False
-    for view in packed:
+    for view in declared_packed:
         fields = (
+            view.get("exact_integer_validation_status"),
             view.get("exact_integer_passed"),
             view.get("exact_integer_match"),
             view.get("exact_integer_mismatch_count"),
         )
-        if fields[0] is None or fields[1] is None or fields[2] is None:
+        if any(value is None for value in fields):
             exact_missing = True
             continue
-        passed = fields[0] is True and fields[1] is True and fields[2] == 0
+        passed = (
+            fields[0] == "passed"
+            and fields[1] is True
+            and fields[2] is True
+            and fields[3] == 0
+        )
         exact_failed |= not passed
-        exact_observations.append({"case_id": view.get("case_id"), "dpu_count": view.get("dpu_count"), "passed": passed, "mismatch_count": fields[2]})
+        exact_observations.append({"case_id": view.get("case_id"), "dpu_count": view.get("dpu_count"), "passed": passed, "status": fields[0], "mismatch_count": fields[3]})
     criteria["exact_integer_validation"] = _acceptance_criterion(
-        "not_evaluated" if exact_missing else ("failed" if exact_failed else ("passed" if exact_observations else "not_evaluated")),
-        threshold="passed=true, match=true, mismatch_count=0 for every packed row",
+        "failed" if exact_failed else ("not_evaluated" if exact_missing else ("passed" if exact_observations else "not_evaluated")),
+        threshold="status=passed, passed=true, match=true, mismatch_count=0 for every successful packed row",
         observations=exact_observations,
         reason="top-level exact-integer validation fields; missing fields are not inferred",
     )
@@ -1886,7 +2089,7 @@ def _acceptance_report(
     fallback_observations = []
     fallback_missing = False
     fallback_failed = False
-    for view in packed:
+    for view in declared_packed:
         raw = view.get("raw", {})
         values = [raw.get(field) for field in CANONICAL_FALLBACK_FIELDS]
         if any(value is not False for value in values):
@@ -1894,10 +2097,43 @@ def _acceptance_report(
             fallback_failed |= any(value is not None and value is not False for value in values)
         fallback_observations.append({"case_id": view.get("case_id"), "dpu_count": view.get("dpu_count"), "no_fallback": values == [False, False, False]})
     criteria["no_fallback"] = _acceptance_criterion(
-        "not_evaluated" if fallback_missing else ("failed" if fallback_failed else ("passed" if fallback_observations else "not_evaluated")),
+        "failed" if fallback_failed else ("not_evaluated" if fallback_missing else ("passed" if fallback_observations else "not_evaluated")),
         threshold="cpu_fallback_used=false, simulator_kernel_executed=false, fallback_used=false",
         observations=fallback_observations,
         reason="explicit canonical fallback fields on every successful packed row",
+    )
+
+    dispatch_observations = []
+    dispatch_missing = False
+    dispatch_failed = False
+    for view in declared_packed:
+        dispatch = view.get("dispatch_mode")
+        launch_calls = view.get("kernel_launch_api_calls")
+        explicit_sync_calls = view.get("explicit_sync_api_calls")
+        complete = dispatch is not None and launch_calls is not None and explicit_sync_calls is not None
+        dispatch_missing |= not complete
+        passed = (
+            complete
+            and dispatch == "bulk_set_synchronous_v1"
+            and launch_calls == 9
+            and explicit_sync_calls == 0
+        )
+        dispatch_failed |= complete and not passed
+        dispatch_observations.append(
+            {
+                "case_id": view.get("case_id"),
+                "dpu_count": view.get("dpu_count"),
+                "dispatch_mode": dispatch,
+                "kernel_launch_api_calls": launch_calls,
+                "explicit_sync_api_calls": explicit_sync_calls,
+                "passed": passed,
+            }
+        )
+    criteria["dispatch_contract"] = _acceptance_criterion(
+        "failed" if dispatch_failed else ("not_evaluated" if dispatch_missing else ("passed" if dispatch_observations else "not_evaluated")),
+        threshold="dispatch_mode=bulk_set_synchronous_v1, kernel_launch_api_calls=9, explicit_sync_api_calls=0",
+        observations=dispatch_observations,
+        reason="explicit bulk-launch contract on every successful packed row",
     )
 
     statuses = [criterion["status"] for criterion in criteria.values()]
@@ -1909,7 +2145,8 @@ def _acceptance_report(
         "overall_status": overall,
         "criteria": criteria,
         "eligible_group_counts": {
-            "successful_host_packed_rows": len(packed),
+            "successful_declared_host_packed_rows": len(declared_packed),
+            "admitted_host_packed_rows": len(packed),
             "strong_rows": len(strong),
             "weak_rows": len(weak),
         },
@@ -1960,12 +2197,13 @@ def _summary(
         "- Per-case, route, numeric-mode, partition, and DPU-count measured summaries from the supplied rows.\n"
         "- Within-key strong-scaling ratios using `T1/TN` and efficiency `speedup/N` when a measured one-rank DPU-count-1 baseline exists.\n"
         "- Dedicated same-route `T_float32/T_int8` and `T_output/T_contracted` ratios when every non-varied execution and identity field is compatible.\n"
+        "- Dedicated same-route `T_float32/T_host-packed-int8` ratios and packed transfer observations when the M5.4 admission contract passes.\n"
         "- Host-observed transfer, load-balance, and accuracy observations where those fields are present.\n\n"
         "## Not allowed\n\n"
         "- Cross-route or otherwise incompatible pairing; numeric mode and partition may differ only in their dedicated controlled comparisons.\n"
-        "- PID-Comm, multi-rank, packed-int8, distributed TaskGraph, energy, or general hardware-performance claims.\n"
+        "- PID-Comm, multi-rank, energy, or general hardware-performance claims beyond the explicitly admitted M5.4 rows.\n"
         "- Filling missing, unsupported, or failed measurements with estimates or fake values.\n\n"
-        "The plot captions identify physical one-rank measured evidence. Host-mediated reduction is stated where applicable; quantization plots identify on-DPU int8 requantization with float32 MRAM transport.\n"
+        "The plot captions identify physical one-rank measured evidence. Historical quantization plots identify on-DPU int8 requantization with float32 MRAM transport; M5.4 plots identify host-packed int8 transport and its explicit admission contract.\n"
     )
 
 
@@ -1997,6 +2235,7 @@ def generate_report(input_path: Path, output_root: Path, *, timestamp: str | Non
     ratios = strong_scaling_ratios(views)
     numeric_ratios = numeric_mode_ratios(views)
     host_packed_ratios = host_packed_int8_ratios(views)
+    host_packed_payloads = host_packed_payload_ratios(views)
     partition_ratios = partition_runtime_ratios(views)
     _write_csv(tables / "m5_records.csv", records, list(M5_RECORD_FIELDS))
     _write_csv(tables / "m5_runtime_statistics.csv", runtime_rows, STAT_FIELDS)
@@ -2014,6 +2253,11 @@ def generate_report(input_path: Path, output_root: Path, *, timestamp: str | Non
         HOST_PACKED_RATIO_FIELDS,
     )
     _write_csv(
+        tables / "m5_host_packed_operand_payload_ratios.csv",
+        host_packed_payloads,
+        HOST_PACKED_PAYLOAD_FIELDS,
+    )
+    _write_csv(
         tables / "m5_partition_ratios.csv",
         partition_ratios,
         PARTITION_RATIO_FIELDS,
@@ -2028,6 +2272,7 @@ def generate_report(input_path: Path, output_root: Path, *, timestamp: str | Non
             "m5_strong_scaling.csv",
             "m5_numeric_mode_ratios.csv",
             "m5_host_packed_int8_ratios.csv",
+            "m5_host_packed_operand_payload_ratios.csv",
             "m5_partition_ratios.csv",
         )
     ]
@@ -2046,13 +2291,20 @@ def generate_report(input_path: Path, output_root: Path, *, timestamp: str | Non
         and view.get("quantization_evidence") is True
         for view in views
     )
-    quant = (
-        "Same-route measured one-rank physical diagnostics only; no CPU/GPU speedup or multi-rank claim. "
-        "Quantization error versus float32 from canonical quantization/full-precision evidence; "
-        "policy-reference validation is separate. on-DPU int8 requantization with float32 MRAM transport."
-        if has_int8_evidence
-        else common + " Quantization error versus float32 requires canonical quantization/full-precision evidence; policy-reference validation is separate."
+    has_host_packed_evidence = any(
+        view.get("physical_one_rank_valid") is True
+        and view.get("accuracy") is not None
+        and view.get("host_packed_int8_evidence") is True
+        for view in views
     )
+    quant_parts = [
+        "Quantization error versus float32 from canonical quantization/full-precision evidence; policy-reference validation is separate."
+    ]
+    if has_int8_evidence:
+        quant_parts.append("Historical route: on-DPU int8 requantization with float32 MRAM transport.")
+    if has_host_packed_evidence:
+        quant_parts.append("M5.4 route: host-side initial quantization, packed int8 MRAM transport, and host final dequantization.")
+    quant = common + " " + " ".join(quant_parts) if (has_int8_evidence or has_host_packed_evidence) else common + " Quantization error requires canonical quantization/full-precision evidence; policy-reference validation is separate."
     plot_specs: list[tuple[str, str, str, Mapping[str, list[tuple[int, float]]], str, str]] = [
         ("m5_strong_scaling_runtime.png", "M5 strong-scaling runtime (physical one-rank, measured)", common, _plot_points(views, "runtime_s"), "Runtime (s), median", "log"),
         ("m5_strong_scaling_speedup.png", "M5 strong-scaling speedup T1/TN (physical one-rank, measured)", common, _ratio_points(ratios, "speedup"), "Speedup T1/TN", "linear"),
@@ -2102,21 +2354,60 @@ def generate_report(input_path: Path, output_root: Path, *, timestamp: str | Non
         }
     )
 
+    payload_ratio_caption = (
+        "Same-route measured one-rank physical comparison of explicit run-level initial operand payloads. "
+        "Ratio = packed-int8 operand H2D bytes / float32 operand H2D bytes; this is software-recorded application "
+        "payload accounting, not physical bus traffic, and excludes repeat reset/control bytes."
+        if host_packed_payloads
+        else "TODO: compatible rows with explicit run_operand_h2d_bytes are required; no payload ratio is inferred."
+    )
+    payload_ratio_title = "M5.4 initial operand H2D payload ratio: host-packed int8 / float32"
+    status = _plot(
+        plots / "m5_host_packed_operand_payload_ratio.png",
+        payload_ratio_title,
+        payload_ratio_caption,
+        _comparison_ratio_points(
+            host_packed_payloads,
+            "packed_over_float32_operand_h2d_ratio",
+            (
+                "case_id",
+                "route_id",
+                "partition_mode",
+                "tasklets_per_dpu",
+                "timing_scope",
+                "workload_kind",
+                "scaling_kind",
+            ),
+        ),
+        "Payload ratio packed int8 / float32",
+        reference_line=1.0,
+    )
+    plot_entries.append(
+        {
+            "path": "plots/m5_host_packed_operand_payload_ratio.png",
+            "status": status,
+            "title": payload_ratio_title,
+            "caption": payload_ratio_caption,
+            "metric": "packed_over_float32_operand_h2d_ratio",
+        }
+    )
+
     host_packed_ratio_caption = (
-        "Same-route measured one-rank physical comparison. Ratio = T_float32/T_host-packed-int8; values above 1 "
-        "favour host-packed int8. Initial operands were quantized on the host and transferred as packed int8; "
-        "this plot does not claim a speedup or exclude host quantization time unless the timing scope says so."
+        "Same-route measured one-rank physical comparison of steady-state repeated execution. Ratio = "
+        "T_float32/T_host-packed-int8; values above 1 favour host-packed int8. The timing explicitly excludes "
+        "one-time host quantization and initial operand staging; no cold-route time is inferred. Initial operands "
+        "were quantized on the host and transferred as packed int8."
         if host_packed_ratios
         else "TODO: compatible float32 and host-packed-int8 physical rows with explicit paired evidence are required."
     )
-    host_packed_ratio_title = "M5 host-packed int8/float32 runtime ratio (physical one-rank, measured)"
+    host_packed_ratio_title = "M5 host-packed int8/float32 steady-state runtime ratio (physical one-rank, measured)"
     status = _plot(
         plots / "m5_host_packed_int8_runtime_ratio.png",
         host_packed_ratio_title,
         host_packed_ratio_caption,
         _comparison_ratio_points(
             host_packed_ratios,
-            "runtime_ratio_float32_over_host_packed_int8",
+            "steady_state_runtime_ratio_float32_over_host_packed_int8",
             (
                 "case_id",
                 "route_id",
@@ -2136,7 +2427,7 @@ def generate_report(input_path: Path, output_root: Path, *, timestamp: str | Non
             "status": status,
             "title": host_packed_ratio_title,
             "caption": host_packed_ratio_caption,
-            "metric": "runtime_ratio_float32_over_host_packed_int8",
+            "metric": "steady_state_runtime_ratio_float32_over_host_packed_int8",
         }
     )
 
@@ -2238,6 +2529,7 @@ def generate_report(input_path: Path, output_root: Path, *, timestamp: str | Non
             "speedup": False,
             "numeric_mode_ratio": bool(numeric_ratios),
             "host_packed_int8_ratio": bool(host_packed_ratios),
+            "host_packed_operand_payload_ratio": bool(host_packed_payloads),
             "partition_runtime_ratio": bool(partition_ratios),
             "cross_route_pairing": False,
         },

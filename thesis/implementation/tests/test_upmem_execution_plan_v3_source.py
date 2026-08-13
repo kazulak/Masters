@@ -27,6 +27,10 @@ def test_v3_runtime_uses_dynamic_dpu_metadata_and_safe_reduction() -> None:
     assert "dpu_launch(set, DPU_SYNCHRONOUS)" in source
     assert "dpu_launch(handles[dpu_id], DPU_ASYNCHRONOUS)" not in source
     assert "dpu_sync(handles[dpu_id])" not in source
+    assert "v3_json_string(file, RESIDENT_ROUTE_ID)" in source
+    assert "v3_json_string(file, RESIDENT_BACKEND_ID)" in source
+    assert "v3_json_string(file, RESIDENT_PROFILE_VERSION)" in source
+    assert "upmem_sdk_hardware_execution_plan_v3" not in source
     assert 'dpu_copy_to(handles[dpu_id], "RESIDENT_ACTIVE_OPERATION"' not in source
     setup_body = source.split("static int v3_copy_package_to_dpu(", 1)[1].split(
         "static int v3_validate_completion(", 1
