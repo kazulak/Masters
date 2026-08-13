@@ -62,9 +62,13 @@
 
 #define UPMEM_GENERIC_MODE_INT8_SCALED 0u
 #define UPMEM_GENERIC_MODE_FLOAT32_NO_QUANT 1u
+#define UPMEM_GENERIC_MODE_HOST_PACKED_INT8 2u
 #define RESIDENT_INVALID_SLOT 0xffffffffu
 #define RESIDENT_OPERATION_CONTRACT 1u
 #define RESIDENT_OPERATION_COMPLEX_COMBINE 2u
+#define RESIDENT_MODE_FLOAT32 0u
+#define RESIDENT_MODE_PER_TASK_REQUANTIZE 1u
+#define RESIDENT_MODE_HOST_PACKED_INT8 2u
 #define RESIDENT_OPERATION_ABI_V1 1u
 #define RESIDENT_OPERATION_ABI_V2 2u
 #ifndef RESIDENT_OPERATION_ABI_VERSION
@@ -75,21 +79,51 @@
 #endif
 #define RESIDENT_PACKAGE_MAGIC_V1 "UPRGPCK1"
 #define RESIDENT_PACKAGE_MAGIC_V2 "UPRGPCK2"
+#define RESIDENT_PACKAGE_MAGIC_V3 "UPRGPCK3"
 #define RESIDENT_PACKAGE_VERSION_V1 1u
 #define RESIDENT_PACKAGE_VERSION_V2 2u
-#if RESIDENT_OPERATION_ABI_VERSION == RESIDENT_OPERATION_ABI_V1
+#define RESIDENT_PACKAGE_VERSION_V3 3u
+#ifndef RESIDENT_PACKAGE_ABI_VERSION
+#if defined(RESIDENT_V3)
+#define RESIDENT_PACKAGE_ABI_VERSION RESIDENT_PACKAGE_VERSION_V3
+#else
+#define RESIDENT_PACKAGE_ABI_VERSION RESIDENT_OPERATION_ABI_VERSION
+#endif
+#endif
+#if RESIDENT_PACKAGE_ABI_VERSION != RESIDENT_PACKAGE_VERSION_V1 && \
+    RESIDENT_PACKAGE_ABI_VERSION != RESIDENT_PACKAGE_VERSION_V2 && \
+    RESIDENT_PACKAGE_ABI_VERSION != RESIDENT_PACKAGE_VERSION_V3
+#error "resident package ABI must be version 1, 2, or 3"
+#endif
+#if RESIDENT_PACKAGE_ABI_VERSION == RESIDENT_PACKAGE_VERSION_V3 && \
+    RESIDENT_OPERATION_ABI_VERSION != RESIDENT_OPERATION_ABI_V2
+#error "resident package ABI v3 requires operation ABI v2"
+#endif
+#if RESIDENT_PACKAGE_ABI_VERSION == RESIDENT_PACKAGE_VERSION_V1
 #define RESIDENT_PACKAGE_MAGIC RESIDENT_PACKAGE_MAGIC_V1
 #define RESIDENT_PACKAGE_VERSION RESIDENT_PACKAGE_VERSION_V1
-#define RESIDENT_OPERATION_BYTES 784u
-#else
+#elif RESIDENT_PACKAGE_ABI_VERSION == RESIDENT_PACKAGE_VERSION_V2
 #define RESIDENT_PACKAGE_MAGIC RESIDENT_PACKAGE_MAGIC_V2
 #define RESIDENT_PACKAGE_VERSION RESIDENT_PACKAGE_VERSION_V2
+#else
+#define RESIDENT_PACKAGE_MAGIC RESIDENT_PACKAGE_MAGIC_V3
+#define RESIDENT_PACKAGE_VERSION RESIDENT_PACKAGE_VERSION_V3
+#endif
+#if RESIDENT_OPERATION_ABI_VERSION == RESIDENT_OPERATION_ABI_V1
+#define RESIDENT_OPERATION_BYTES 784u
+#else
 #define RESIDENT_OPERATION_BYTES 800u
 #endif
 #define RESIDENT_PACKAGE_ENDIAN 0x01020304u
+#define RESIDENT_PACKAGE_FLAG_PACKED_INT8 0x00000001u
 #define RESIDENT_SLOT_ID_MASK 0x3fffffffu
 #define RESIDENT_SLOT_INITIAL_FLAG 0x40000000u
 #define RESIDENT_SLOT_FINAL_FLAG 0x80000000u
+#define RESIDENT_STORAGE_FLOAT32 1u
+#define RESIDENT_STORAGE_PACKED_INT8 2u
+#define RESIDENT_STORAGE_INT32 3u
+#define RESIDENT_PACKED_INT8_MAX_ABS 127u
+#define RESIDENT_PACKED_INT8_MAX_CONTRACTED 65536u
 #define RESIDENT_COMPLETION_MAGIC 0x52534350u
 #ifndef RESIDENT_COMPLETION_VERSION
 #define RESIDENT_COMPLETION_VERSION 1u
@@ -153,7 +187,24 @@ typedef struct {
     uint32_t offset_bytes;
     uint32_t capacity_elements;
     uint32_t element_count;
-} resident_slot_descriptor_t;
+} resident_slot_descriptor_v1_t;
+
+typedef struct {
+    uint32_t slot_id;
+    uint32_t offset_bytes;
+    uint32_t capacity_elements;
+    uint32_t element_count;
+    uint32_t element_bytes;
+    uint32_t storage_kind;
+    uint32_t logical_bytes;
+    uint32_t transfer_bytes;
+} resident_slot_descriptor_v3_t;
+
+#if RESIDENT_PACKAGE_ABI_VERSION == RESIDENT_PACKAGE_VERSION_V3
+typedef resident_slot_descriptor_v3_t resident_slot_descriptor_t;
+#else
+typedef resident_slot_descriptor_v1_t resident_slot_descriptor_t;
+#endif
 
 typedef struct {
     uint32_t slot_count;
@@ -254,6 +305,14 @@ _Static_assert(offsetof(upmem_generic_args_v2_t, contracted_elements_slice) == 7
 #endif
 _Static_assert(sizeof(resident_operation_v1_t) == 784u, "resident operation v1 ABI drifted");
 _Static_assert(sizeof(resident_operation_v2_t) == 800u, "resident operation v2 ABI drifted");
+_Static_assert(sizeof(resident_slot_descriptor_v1_t) == 16u, "resident slot v1 ABI drifted");
+_Static_assert(sizeof(resident_slot_descriptor_v3_t) == 32u, "resident slot v3 ABI drifted");
+_Static_assert(
+    (uint64_t)RESIDENT_PACKED_INT8_MAX_CONTRACTED *
+        (uint64_t)RESIDENT_PACKED_INT8_MAX_ABS *
+        (uint64_t)RESIDENT_PACKED_INT8_MAX_ABS <= INT32_MAX,
+    "packed int8 accumulation exceeds int32"
+);
 #ifndef __DPU__
 _Static_assert(offsetof(resident_operation_v1_t, args) == 44u, "resident operation v1 args offset drifted");
 _Static_assert(offsetof(resident_operation_v2_t, args) == 44u, "resident operation v2 args offset drifted");

@@ -38,9 +38,11 @@ V3_PARTITION_OUTPUT = 1
 V3_PARTITION_CONTRACTED = 2
 V3_NUMERIC_FLOAT32 = 0
 V3_NUMERIC_INT8_REQUANTIZE = 1
+V3_NUMERIC_HOST_PACKED_INT8 = 2
 V3_NUMERIC_NAMES = {
     V3_NUMERIC_FLOAT32: "float32",
     V3_NUMERIC_INT8_REQUANTIZE: "per_task_resident_requantize",
+    V3_NUMERIC_HOST_PACKED_INT8: "host_packed_int8",
 }
 
 
@@ -285,6 +287,7 @@ def execute(
     environment: Mapping[str, str] | None = None,
     policy_reference: Path | None = None,
     policy_tolerance: float = 1.0e-5,
+    integer_reference: Path | None = None,
 ) -> dict[str, Any]:
     requested_environment = dict(os.environ if environment is None else environment)
     if requested_environment.get("UPMEM_ALLOW_PHYSICAL_HARDWARE") != "1":
@@ -306,15 +309,44 @@ def execute(
     if not reference_path.is_file():
         raise V3RunnerError("policy_reference_validation_failed", "supplied CPU policy reference is missing")
     reference_sha256 = hashlib.sha256(reference_path.read_bytes()).hexdigest()
-    command = (
+    packed_int8 = integer_reference is not None
+    manifest_path = Path(resident_manifest)
+    if manifest_path.is_file():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        packed_int8 = manifest.get("quantization_mode") == "host_packed_int8"
+    integer_reference_path: Path | None = None
+    integer_reference_sha256: str | None = None
+    if packed_int8:
+        integer_reference_path = Path(
+            integer_reference
+            or Path(sidecar).resolve().parent / "integer_reference_i32.bin"
+        ).resolve()
+        if not integer_reference_path.is_file():
+            raise V3RunnerError(
+                "integer_reference_validation_failed",
+                "packed int8 execution requires the exact CPU int32 reference",
+            )
+        integer_reference_sha256 = hashlib.sha256(
+            integer_reference_path.read_bytes()
+        ).hexdigest()
+    command = [
         str(Path(host_binary).resolve()), "--execute-plan", "--resident-package", str(Path(resident_manifest).resolve()),
         "--distributed-plan-v3", str(Path(sidecar).resolve()), "--policy-reference", str(reference_path),
         "--policy-reference-sha256", reference_sha256, "--policy-tolerance", str(float(policy_tolerance)),
         "--response", str(Path(response).resolve()), "--warmups", str(warmups), "--repetitions", str(repetitions),
         "--timeout-s", str(max(1, int(timeout_s))),
-    )
+    ]
+    if integer_reference_path is not None and integer_reference_sha256 is not None:
+        command.extend(
+            [
+                "--integer-reference",
+                str(integer_reference_path),
+                "--integer-reference-sha256",
+                integer_reference_sha256,
+            ]
+        )
     started = time.perf_counter()
-    completed = subprocess.run(command, cwd=Path(host_binary).resolve().parent, env=_hardware_environment(requested_environment), capture_output=True, text=True, timeout=timeout_s, check=False)
+    completed = subprocess.run(tuple(command), cwd=Path(host_binary).resolve().parent, env=_hardware_environment(requested_environment), capture_output=True, text=True, timeout=timeout_s, check=False)
     if not Path(response).is_file():
         raise V3RunnerError("output_manifest_failed", "v3 native response is missing")
     payload = json.loads(Path(response).read_text(encoding="utf-8"))
@@ -334,7 +366,9 @@ def execute(
         expected_reconstruction = "host_owned_range_assembly_v1"
     elif partition_strategy == "contracted":
         expected_collective = "host_mediated_sum_v1"
-        expected_reconstruction = "host_float64_reduction_v1"
+        expected_reconstruction = (
+            "host_int64_reduction_v1" if packed_int8 else "host_float64_reduction_v1"
+        )
     else:
         raise V3RunnerError("output_manifest_failed", "v3 response lacks a valid partition strategy")
     expected_providers = {
@@ -367,6 +401,27 @@ def execute(
         or max_abs_error > response_tolerance
     ):
         raise V3RunnerError("policy_reference_validation_failed", "v3 policy-reference error exceeds its tolerance")
+    integer_validation = payload.get("exact_integer_validation")
+    if packed_int8:
+        if (
+            not isinstance(integer_validation, Mapping)
+            or integer_validation.get("required") is not True
+            or integer_validation.get("passed") is not True
+            or integer_validation.get("exact_match") is not True
+            or integer_validation.get("mismatch_count") != 0
+            or integer_validation.get("reference_sha256") != integer_reference_sha256
+            or payload.get("packed_int8_transfer") is not True
+            or payload.get("numeric_transport") != "host_packed_int8_mram"
+        ):
+            raise V3RunnerError(
+                "integer_reference_validation_failed",
+                "v3 response did not prove exact packed-int8 int32 execution",
+            )
+    elif isinstance(integer_validation, Mapping) and integer_validation.get("required") is True:
+        raise V3RunnerError(
+            "output_manifest_failed",
+            "float32 execution incorrectly required integer validation",
+        )
     if (
         not isinstance(payload.get("host_binary_sha256"), str)
         or not isinstance(payload.get("staged_dpu_binary_sha256"), str)

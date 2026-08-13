@@ -110,7 +110,8 @@ int execution_plan_distributed_v3_load(
         (header.partition_mode != EXECUTION_PLAN_V3_PARTITION_OUTPUT &&
          header.partition_mode != EXECUTION_PLAN_V3_PARTITION_CONTRACTED) ||
         (header.numeric_mode != EXECUTION_PLAN_V3_NUMERIC_FLOAT32 &&
-         header.numeric_mode != EXECUTION_PLAN_V3_NUMERIC_INT8_REQUANTIZE)) {
+         header.numeric_mode != EXECUTION_PLAN_V3_NUMERIC_INT8_REQUANTIZE &&
+         header.numeric_mode != EXECUTION_PLAN_V3_NUMERIC_HOST_PACKED_INT8)) {
         v3_error(error_message, "hardware_profile_violation: distributed v3 sidecar header is invalid");
         free(payload);
         return 1;
@@ -132,9 +133,13 @@ int execution_plan_distributed_v3_load(
     }
     {
         const resident_operation_t *operation = &resident->operations[header.package_operation_index];
-        const uint32_t expected_numeric = operation->mode == 0u
-            ? EXECUTION_PLAN_V3_NUMERIC_FLOAT32 : EXECUTION_PLAN_V3_NUMERIC_INT8_REQUANTIZE;
-        if (operation->kind != RESIDENT_OPERATION_CONTRACT || operation->mode > 1u ||
+        const uint32_t expected_numeric = operation->mode == RESIDENT_MODE_FLOAT32
+            ? EXECUTION_PLAN_V3_NUMERIC_FLOAT32
+            : (operation->mode == RESIDENT_MODE_PER_TASK_REQUANTIZE
+                ? EXECUTION_PLAN_V3_NUMERIC_INT8_REQUANTIZE
+                : EXECUTION_PLAN_V3_NUMERIC_HOST_PACKED_INT8);
+        if (operation->kind != RESIDENT_OPERATION_CONTRACT ||
+            operation->mode > RESIDENT_MODE_HOST_PACKED_INT8 ||
             expected_numeric != header.numeric_mode || operation->slot_out_real != header.output_slot ||
             operation->output_elements != header.output_elements ||
             operation->args.output_elems != header.output_elements ||

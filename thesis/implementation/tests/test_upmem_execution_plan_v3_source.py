@@ -59,11 +59,15 @@ def test_v3_runtime_uses_dynamic_dpu_metadata_and_safe_reduction() -> None:
 def test_v3_numeric_and_target_claims_are_explicit() -> None:
     source = (PLAN / "host_v3.c").read_text(encoding="ascii")
     runner = (NATIVE / "upmem_sdk_execution_plan_runner.py").read_text(encoding="ascii")
-    assert r'\"numeric_transport\":\"float32_mram\"' in source
+    assert r'\"numeric_transport\":\"%s\"' in source
     assert r'\"numeric_arithmetic\":\"%s\"' in source
     assert r'\"requantization_scope\":\"%s\"' in source
-    assert r'\"packed_int8_transfer\":false' in source
-    assert 'int8_requantization ? "per_task_on_dpu" : "none"' in source
+    assert r'\"packed_int8_transfer\":%s' in source
+    assert 'packed_int8 ? "host_packed_int8_mram" : "float32_mram"' in source
+    assert '"int8_multiply_int32_accumulate"' in source
+    assert "v3_validate_integer_reference" in source
+    assert "int64_t *accumulator" in source
+    assert "INT32_MIN" in source and "INT32_MAX" in source
     assert "UPMEM_ALLOW_PHYSICAL_HARDWARE" in source
     assert "DPU_BACKEND" in runner
     assert "no simulator or CPU fallback" in runner

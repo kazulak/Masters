@@ -39,6 +39,7 @@ UPXDPV3_PROFILE_DEFAULT = "upmem_execution_plan_v3_distributed_partition"
 UPXDPV3_MAX_ELEMENTS = 65536
 NUMERIC_MODE_FLOAT32 = "float32"
 NUMERIC_MODE_PER_TASK_RESIDENT_REQUANTIZE = "per_task_resident_requantize"
+NUMERIC_MODE_HOST_PACKED_INT8 = "host_packed_int8"
 # ``float32_real`` was used by the first Python-only draft.  Keep accepting it
 # at the boundary while emitting the native contract's canonical name.
 NUMERIC_MODE_FLOAT32_REAL = NUMERIC_MODE_FLOAT32
@@ -51,6 +52,7 @@ UPXDPV3_PARTITION_CONTRACTED = 2
 UPXDPV3_PROVIDER_COUNT = 1
 UPXDPV3_NUMERIC_FLOAT32 = 0
 UPXDPV3_NUMERIC_INT8_REQUANTIZE = 1
+UPXDPV3_NUMERIC_HOST_PACKED_INT8 = 2
 # Compatibility alias for callers of the additive draft.
 UPXDPV3_NUMERIC_FLOAT32_REAL = UPXDPV3_NUMERIC_FLOAT32
 UPXDPV3_PROFILE_DEFAULT_CODE = 1
@@ -71,11 +73,13 @@ _CODE_TO_PROFILE = {value: key for key, value in _PROFILE_TO_CODE.items()}
 _NUMERIC_TO_CODE = {
     NUMERIC_MODE_FLOAT32: UPXDPV3_NUMERIC_FLOAT32,
     NUMERIC_MODE_PER_TASK_RESIDENT_REQUANTIZE: UPXDPV3_NUMERIC_INT8_REQUANTIZE,
+    NUMERIC_MODE_HOST_PACKED_INT8: UPXDPV3_NUMERIC_HOST_PACKED_INT8,
     "float32_real": UPXDPV3_NUMERIC_FLOAT32,
 }
 _CODE_TO_NUMERIC = {
     UPXDPV3_NUMERIC_FLOAT32: NUMERIC_MODE_FLOAT32,
     UPXDPV3_NUMERIC_INT8_REQUANTIZE: NUMERIC_MODE_PER_TASK_RESIDENT_REQUANTIZE,
+    UPXDPV3_NUMERIC_HOST_PACKED_INT8: NUMERIC_MODE_HOST_PACKED_INT8,
 }
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _UINT32_MAX = (1 << 32) - 1
@@ -279,8 +283,8 @@ def validate_distributed_plan_v3(plan: DistributedSingleContractionPlanV3) -> No
         raise ValueError("tasklets_per_dpu must be an integer in the range 1..24")
     if plan.numeric_mode not in _NUMERIC_TO_CODE:
         raise ValueError(
-            "unsupported numeric_mode; expected 'float32' or "
-            "'per_task_resident_requantize'"
+            "unsupported numeric_mode; expected 'float32', "
+            "'per_task_resident_requantize', or 'host_packed_int8'"
         )
     if plan.partition_kind not in _PARTITION_TO_CODE:
         raise ValueError(f"unsupported partition_kind: {plan.partition_kind!r}")
@@ -612,8 +616,8 @@ def _canonical_numeric_mode(value: str) -> str:
         code = _NUMERIC_TO_CODE[value]
     except (KeyError, TypeError) as exc:
         raise ValueError(
-            "unsupported numeric_mode; expected 'float32' or "
-            "'per_task_resident_requantize'"
+            "unsupported numeric_mode; expected 'float32', "
+            "'per_task_resident_requantize', or 'host_packed_int8'"
         ) from exc
     return _CODE_TO_NUMERIC[code]
 

@@ -3,6 +3,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <limits.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -274,13 +275,44 @@ static int resident_mul_overflow(uint64_t left, uint64_t right, uint64_t *result
     return 0;
 }
 
-static int resident_transfer_size(uint32_t elements, size_t *raw, size_t *transfer) {
+static int resident_transfer_size(
+    uint32_t elements,
+    uint32_t element_bytes,
+    size_t *raw,
+    size_t *transfer
+) {
     uint64_t bytes;
-    if (resident_mul_overflow(elements, sizeof(float), &bytes) || bytes > SIZE_MAX) return 1;
+    if ((element_bytes != 1u && element_bytes != sizeof(float)) ||
+        resident_mul_overflow(elements, element_bytes, &bytes) || bytes > SIZE_MAX) return 1;
     *raw = (size_t)bytes;
     if (bytes > UINT64_MAX - 7u || resident_align8(bytes) > SIZE_MAX) return 1;
     *transfer = (size_t)resident_align8(bytes);
     return 0;
+}
+
+static uint32_t resident_slot_element_bytes(const resident_slot_descriptor_t *slot) {
+#if RESIDENT_PACKAGE_ABI_VERSION == RESIDENT_PACKAGE_VERSION_V3
+    return slot->element_bytes;
+#else
+    (void)slot;
+    return (uint32_t)sizeof(float);
+#endif
+}
+
+static uint32_t resident_slot_storage_kind(const resident_slot_descriptor_t *slot) {
+#if RESIDENT_PACKAGE_ABI_VERSION == RESIDENT_PACKAGE_VERSION_V3
+    return slot->storage_kind;
+#else
+    (void)slot;
+    return RESIDENT_STORAGE_FLOAT32;
+#endif
+}
+
+static const char *resident_storage_dtype(uint32_t storage_kind) {
+    if (storage_kind == RESIDENT_STORAGE_FLOAT32) return "float32";
+    if (storage_kind == RESIDENT_STORAGE_PACKED_INT8) return "int8";
+    if (storage_kind == RESIDENT_STORAGE_INT32) return "int32";
+    return NULL;
 }
 
 static int resident_ascii_identifier(const char *value) {
@@ -352,7 +384,8 @@ static int resident_validate_args(const resident_operation_t *operation) {
         args->left_elems > UPMEM_GENERIC_MAX_ELEMS || args->right_elems > UPMEM_GENERIC_MAX_ELEMS ||
         args->output_elems > UPMEM_GENERIC_MAX_ELEMS || args->contracted_elems > UPMEM_GENERIC_MAX_ELEMS ||
         (args->operand_mode != UPMEM_GENERIC_MODE_FLOAT32_NO_QUANT &&
-         args->operand_mode != UPMEM_GENERIC_MODE_INT8_SCALED) ||
+         args->operand_mode != UPMEM_GENERIC_MODE_INT8_SCALED &&
+         args->operand_mode != UPMEM_GENERIC_MODE_HOST_PACKED_INT8) ||
         resident_validate_row_major(args->left_shape, args->left_strides, args->left_rank, args->left_elems) != 0 ||
         resident_validate_row_major(args->right_shape, args->right_strides, args->right_rank, args->right_elems) != 0 ||
         resident_validate_index_maps(args) != 0 ||
@@ -377,6 +410,7 @@ static int resident_validate_package(
 ) {
     resident_package_header_t header;
     uint64_t section_end;
+    int packed_package;
     if (sizeof(resident_package_header_t) != 96u || length < sizeof(header)) {
         resident_error(error_message, "resident_package_truncated_header");
         return 1;
@@ -390,6 +424,7 @@ static int resident_validate_package(
         resident_error(error_message, "resident_package_bad_endian");
         return 1;
     }
+    packed_package = (header.flags & RESIDENT_PACKAGE_FLAG_PACKED_INT8) != 0u;
     if (header.header_bytes != sizeof(header) || (header.header_bytes & 7u) != 0u || header.file_bytes != length) {
         resident_error(error_message, "resident_package_file_length_or_header_mismatch");
         return 1;
@@ -406,7 +441,12 @@ static int resident_validate_package(
         resident_error(error_message, "resident_package_unaligned_section");
         return 1;
     }
-    if (header.flags != 0u || header.reserved != 0u || header.slot_count == 0u ||
+#if RESIDENT_PACKAGE_ABI_VERSION == RESIDENT_PACKAGE_VERSION_V3
+    if ((header.flags & ~RESIDENT_PACKAGE_FLAG_PACKED_INT8) != 0u ||
+#else
+    if (header.flags != 0u ||
+#endif
+        header.reserved != 0u || header.slot_count == 0u ||
         header.slot_count > RESIDENT_MAX_SLOT_DESCRIPTORS || header.operation_count == 0u || header.operation_count > RESIDENT_MAX_COMPONENT_OPS ||
         header.graph_request_count != 1u || header.pool_bytes != RESIDENT_MRAM_POOL_BYTES ||
         header.max_rank != UPMEM_GENERIC_MAX_RANK || header.initial_slot_count == 0u ||
@@ -445,22 +485,44 @@ static int resident_validate_package(
     for (uint32_t index = 0; index < header.slot_count; index++) {
         resident_slot_descriptor_t *slot = &request->slots[index];
         uint64_t bytes;
+        const uint32_t element_bytes = resident_slot_element_bytes(slot);
+        const uint32_t storage_kind = resident_slot_storage_kind(slot);
         const uint32_t flags = slot->slot_id & ~(uint32_t)RESIDENT_SLOT_ID_MASK;
         if ((slot->slot_id & RESIDENT_SLOT_ID_MASK) != index ||
             (flags & ~(RESIDENT_SLOT_INITIAL_FLAG | RESIDENT_SLOT_FINAL_FLAG)) != 0u ||
             (slot->offset_bytes & 7u) != 0u || slot->capacity_elements == 0u ||
             slot->element_count == 0u || slot->element_count > slot->capacity_elements ||
-            resident_mul_overflow(slot->capacity_elements, sizeof(float), &bytes) ||
+            resident_storage_dtype(storage_kind) == NULL ||
+            ((storage_kind == RESIDENT_STORAGE_PACKED_INT8) != (element_bytes == 1u)) ||
+            ((storage_kind == RESIDENT_STORAGE_FLOAT32 || storage_kind == RESIDENT_STORAGE_INT32) &&
+                element_bytes != sizeof(float)) ||
+            resident_mul_overflow(slot->capacity_elements, element_bytes, &bytes) ||
             resident_add_overflow(slot->offset_bytes, resident_align8(bytes), &section_end) || section_end > header.pool_bytes) {
             resident_error(error_message, "resident_package_slot_descriptor_invalid_or_overflow");
             return 1;
         }
+#if RESIDENT_PACKAGE_ABI_VERSION == RESIDENT_PACKAGE_VERSION_V3
+        {
+            uint64_t logical_bytes;
+            if (resident_mul_overflow(slot->element_count, element_bytes, &logical_bytes) ||
+                logical_bytes != slot->logical_bytes ||
+                resident_align8(bytes) != slot->transfer_bytes ||
+                (slot->transfer_bytes & 7u) != 0u ||
+                slot->logical_bytes > slot->transfer_bytes) {
+                resident_error(error_message, "resident_package_typed_slot_bytes_invalid");
+                return 1;
+            }
+        }
+#endif
         request->slot_flags[index] = flags;
         slot_ready[index] = (flags & RESIDENT_SLOT_INITIAL_FLAG) != 0u;
         for (uint32_t other = 0; other < index; other++) {
             uint64_t this_end = (uint64_t)slot->offset_bytes + resident_align8(bytes);
             uint64_t other_bytes;
-            if (resident_mul_overflow(request->slots[other].capacity_elements, sizeof(float), &other_bytes)) {
+            if (resident_mul_overflow(
+                    request->slots[other].capacity_elements,
+                    resident_slot_element_bytes(&request->slots[other]),
+                    &other_bytes)) {
                 resident_error(error_message, "resident_package_slot_capacity_overflow");
                 return 1;
             }
@@ -492,7 +554,13 @@ static int resident_validate_package(
             resident_error(error_message, "resident_package_operation_kind_invalid");
             return 1;
         }
-        if (operation->mode > 1u || operation->output_elements == 0u || operation->output_elements > UPMEM_GENERIC_MAX_ELEMS) {
+        if (operation->mode >
+#if RESIDENT_PACKAGE_ABI_VERSION == RESIDENT_PACKAGE_VERSION_V3
+                RESIDENT_MODE_HOST_PACKED_INT8 ||
+#else
+                RESIDENT_MODE_PER_TASK_REQUANTIZE ||
+#endif
+            operation->output_elements == 0u || operation->output_elements > UPMEM_GENERIC_MAX_ELEMS) {
             resident_error(error_message, "resident_package_operation_mode_or_output_invalid");
             return 1;
         }
@@ -526,6 +594,32 @@ static int resident_validate_package(
                 resident_error(error_message, "resident_package_contract_metadata_invalid");
                 return 1;
             }
+#if RESIDENT_PACKAGE_ABI_VERSION == RESIDENT_PACKAGE_VERSION_V3
+            if (operation->mode == RESIDENT_MODE_HOST_PACKED_INT8) {
+                const resident_slot_descriptor_t *left = &request->slots[operation->slot_a];
+                const resident_slot_descriptor_t *right = &request->slots[operation->slot_b];
+                const resident_slot_descriptor_t *output = &request->slots[operation->slot_out_real];
+                if (!packed_package || operation->args.operand_mode != UPMEM_GENERIC_MODE_HOST_PACKED_INT8 ||
+                    !isfinite(operation->left_scale) || !isfinite(operation->right_scale) ||
+                    operation->left_scale <= 0.0f || operation->right_scale <= 0.0f ||
+                    operation->args.contracted_elems > RESIDENT_PACKED_INT8_MAX_CONTRACTED ||
+                    operation->args.contracted_elems >
+                        (uint32_t)(INT32_MAX /
+                            (RESIDENT_PACKED_INT8_MAX_ABS * RESIDENT_PACKED_INT8_MAX_ABS)) ||
+                    left->storage_kind != RESIDENT_STORAGE_PACKED_INT8 ||
+                    right->storage_kind != RESIDENT_STORAGE_PACKED_INT8 ||
+                    output->storage_kind != RESIDENT_STORAGE_INT32) {
+                    resident_error(error_message, "resident_package_packed_int8_contract_invalid");
+                    return 1;
+                }
+            } else if (packed_package ||
+                       request->slots[operation->slot_a].storage_kind != RESIDENT_STORAGE_FLOAT32 ||
+                       request->slots[operation->slot_b].storage_kind != RESIDENT_STORAGE_FLOAT32 ||
+                       request->slots[operation->slot_out_real].storage_kind != RESIDENT_STORAGE_FLOAT32) {
+                resident_error(error_message, "resident_package_float32_storage_contract_invalid");
+                return 1;
+            }
+#endif
             slot_ready[operation->slot_out_real] = 1;
             continue;
         } else if (operation->slot_a == RESIDENT_INVALID_SLOT || operation->slot_b == RESIDENT_INVALID_SLOT ||
@@ -551,9 +645,35 @@ static int resident_validate_package(
             resident_error(error_message, "hardware_profile_violation: resident package complex slot read before initialization");
             return 1;
         }
+#if RESIDENT_PACKAGE_ABI_VERSION == RESIDENT_PACKAGE_VERSION_V3
+        if (packed_package ||
+            request->slots[operation->slot_a].storage_kind != RESIDENT_STORAGE_FLOAT32 ||
+            request->slots[operation->slot_b].storage_kind != RESIDENT_STORAGE_FLOAT32 ||
+            request->slots[operation->slot_c].storage_kind != RESIDENT_STORAGE_FLOAT32 ||
+            request->slots[operation->slot_d].storage_kind != RESIDENT_STORAGE_FLOAT32 ||
+            request->slots[operation->slot_out_real].storage_kind != RESIDENT_STORAGE_FLOAT32 ||
+            request->slots[operation->slot_out_imag].storage_kind != RESIDENT_STORAGE_FLOAT32) {
+            resident_error(error_message, "resident_package_complex_storage_contract_invalid");
+            return 1;
+        }
+#endif
         slot_ready[operation->slot_out_real] = 1;
         slot_ready[operation->slot_out_imag] = 1;
     }
+#if RESIDENT_PACKAGE_ABI_VERSION == RESIDENT_PACKAGE_VERSION_V3
+    if (packed_package) {
+        const resident_operation_t *operation = &request->operations[0];
+        if (header.slot_count != 3u || header.operation_count != 1u ||
+            header.initial_slot_count != 2u || header.final_output_count != 1u ||
+            operation->kind != RESIDENT_OPERATION_CONTRACT ||
+            operation->mode != RESIDENT_MODE_HOST_PACKED_INT8 ||
+            operation->slot_c != RESIDENT_INVALID_SLOT || operation->slot_d != RESIDENT_INVALID_SLOT ||
+            operation->slot_out_imag != RESIDENT_INVALID_SLOT) {
+            resident_error(error_message, "resident_package_packed_int8_profile_invalid");
+            return 1;
+        }
+    }
+#endif
     for (uint32_t index = 0; index < header.slot_count; index++) {
         if ((request->slot_flags[index] & RESIDENT_SLOT_FINAL_FLAG) != 0u && !slot_ready[index]) {
             resident_error(error_message, "hardware_profile_violation: resident final slot was not produced");
@@ -595,6 +715,8 @@ static int resident_parse_file_entries(
         const char *object_end;
         char *object_copy = NULL;
         char *path_ref = NULL;
+        char *storage_dtype_ref = NULL;
+        char *raw_output_ref = NULL;
         uint64_t slot_id;
         uint64_t elements;
         uint64_t raw_bytes_field;
@@ -625,7 +747,28 @@ static int resident_parse_file_entries(
         free(path_ref);
         size_t raw_bytes = 0u;
         size_t transfer_bytes = 0u;
-        if (path == NULL || resident_transfer_size((uint32_t)elements, &raw_bytes, &transfer_bytes) != 0) {
+        const resident_slot_descriptor_t *slot = &request->slots[slot_id];
+        const uint32_t element_bytes = resident_slot_element_bytes(slot);
+        const uint32_t storage_kind = resident_slot_storage_kind(slot);
+        const char *expected_storage_dtype = resident_storage_dtype(storage_kind);
+#if RESIDENT_PACKAGE_ABI_VERSION == RESIDENT_PACKAGE_VERSION_V3
+        if (resident_string_field(object_copy, "storage_dtype", &storage_dtype_ref) != 0 ||
+            expected_storage_dtype == NULL || strcmp(storage_dtype_ref, expected_storage_dtype) != 0) {
+            free(path);
+            free(storage_dtype_ref);
+            free(object_copy);
+            resident_error(error_message, "hardware_profile_violation: resident file storage dtype mismatch");
+            return 1;
+        }
+#endif
+#if RESIDENT_PACKAGE_ABI_VERSION != RESIDENT_PACKAGE_VERSION_V3
+        (void)storage_dtype_ref;
+        (void)raw_output_ref;
+        (void)expected_storage_dtype;
+#endif
+        free(storage_dtype_ref);
+        if (path == NULL || resident_transfer_size((uint32_t)elements, element_bytes,
+                &raw_bytes, &transfer_bytes) != 0) {
             free(path);
             free(object_copy);
             resident_error(error_message, "hardware_profile_violation: resident file path or byte overflow");
@@ -634,7 +777,6 @@ static int resident_parse_file_entries(
         {
             const uint32_t required_flag = final_entries ? RESIDENT_SLOT_FINAL_FLAG : RESIDENT_SLOT_INITIAL_FLAG;
             const uint32_t forbidden_flag = final_entries ? RESIDENT_SLOT_INITIAL_FLAG : RESIDENT_SLOT_FINAL_FLAG;
-            const resident_slot_descriptor_t *slot = &request->slots[slot_id];
             uint32_t expected_elements = 0u;
             for (uint32_t operation_index = 0; operation_index < request->header.operation_count; operation_index++) {
                 const resident_operation_t *operation = &request->operations[operation_index];
@@ -681,14 +823,41 @@ static int resident_parse_file_entries(
             request->final_outputs[index].component = component;
             request->final_outputs[index].slot_id = (uint32_t)slot_id;
             request->final_outputs[index].elements = (uint32_t)elements;
+            request->final_outputs[index].element_bytes = element_bytes;
+            request->final_outputs[index].storage_kind = storage_kind;
             request->final_outputs[index].path = path;
+#if RESIDENT_PACKAGE_ABI_VERSION == RESIDENT_PACKAGE_VERSION_V3
+            if (storage_kind == RESIDENT_STORAGE_INT32) {
+                if (resident_string_field(object_copy, "raw_output_path", &raw_output_ref) != 0 ||
+                    (request->final_outputs[index].raw_output_path =
+                        resident_resolve(base, raw_output_ref)) == NULL) {
+                    free(raw_output_ref);
+                    free(object_copy);
+                    resident_error(error_message, "manifest_parse_failed: packed int32 raw output path missing");
+                    return 1;
+                }
+                free(raw_output_ref);
+            }
+#endif
             request->final_outputs[index].raw_bytes = raw_bytes;
             request->final_outputs[index].transfer_bytes = transfer_bytes;
             request->final_outputs[index].status = 0;
         } else {
             request->inputs[index].slot_id = (uint32_t)slot_id;
             request->inputs[index].elements = (uint32_t)elements;
+            request->inputs[index].element_bytes = element_bytes;
+            request->inputs[index].storage_kind = storage_kind;
             request->inputs[index].path = path;
+#if RESIDENT_PACKAGE_ABI_VERSION == RESIDENT_PACKAGE_VERSION_V3
+            if (resident_string_field(object_copy, "logical_sha256",
+                    &request->inputs[index].logical_sha256) != 0 ||
+                request->inputs[index].logical_sha256 == NULL ||
+                strlen(request->inputs[index].logical_sha256) != 64u) {
+                free(object_copy);
+                resident_error(error_message, "manifest_parse_failed: resident input hash missing");
+                return 1;
+            }
+#endif
             request->inputs[index].raw_bytes = raw_bytes;
             request->inputs[index].transfer_bytes = transfer_bytes;
         }
@@ -779,9 +948,9 @@ static int resident_request_load_profile(
     {
         int binary_identity_valid;
         if (v3_profile != 0) {
-            /* The package remains operation ABI v2; the loaded artifact is a
-             * separate, tasklet-keyed v3 binary identity. */
-            binary_identity_valid = strcmp(dpu_binary_abi, "dpu_resident_v2") == 0 &&
+            /* Package v3 retains operation ABI v2 but has typed slots and a
+             * separate tasklet-keyed binary identity. */
+            binary_identity_valid = strcmp(dpu_binary_abi, "dpu_resident_v3") == 0 &&
                 resident_binary_matches_v3_tasklets(dpu_ref, manifest_tasklets);
         } else {
             binary_identity_valid = strcmp(dpu_binary_abi,
@@ -801,7 +970,9 @@ static int resident_request_load_profile(
         strcmp(session_protocol, RESIDENT_SESSION_SCHEMA) != 0 ||
         strcmp(package_magic, RESIDENT_PACKAGE_MAGIC) != 0 ||
         binary_identity_valid == 0 ||
-        (strcmp(quantization_mode, "none") != 0 && strcmp(quantization_mode, "per_task_resident_requantize") != 0)) {
+        (strcmp(quantization_mode, "none") != 0 &&
+         strcmp(quantization_mode, "per_task_resident_requantize") != 0 &&
+         strcmp(quantization_mode, "host_packed_int8") != 0)) {
             resident_error(error_message, "hardware_profile_violation: resident manifest ABI or hardware identity mismatch");
             goto done;
         }
@@ -858,7 +1029,17 @@ static int resident_request_load_profile(
         goto done;
     }
     {
-        const uint32_t expected_mode = strcmp(request->quantization_mode, "none") == 0 ? 0u : 1u;
+        uint32_t expected_mode;
+        if (strcmp(request->quantization_mode, "none") == 0) {
+            expected_mode = RESIDENT_MODE_FLOAT32;
+        } else if (strcmp(request->quantization_mode, "per_task_resident_requantize") == 0) {
+            expected_mode = RESIDENT_MODE_PER_TASK_REQUANTIZE;
+        } else if (strcmp(request->quantization_mode, "host_packed_int8") == 0) {
+            expected_mode = RESIDENT_MODE_HOST_PACKED_INT8;
+        } else {
+            resident_error(error_message, "hardware_profile_violation: unsupported resident numeric mode");
+            goto done;
+        }
         for (uint32_t index = 0; index < request->header.operation_count; index++) {
             if (request->operations[index].mode != expected_mode) {
                 resident_error(error_message, "hardware_profile_violation: resident manifest mode does not match operation descriptors");
@@ -990,10 +1171,14 @@ void resident_request_free(resident_request_t *request) {
     free(request->profile_version);
     free(request->allocation_profile);
     free(request->quantization_mode);
-    for (size_t index = 0; index < request->input_count; index++) free(request->inputs[index].path);
+    for (size_t index = 0; index < request->input_count; index++) {
+        free(request->inputs[index].path);
+        free(request->inputs[index].logical_sha256);
+    }
     for (size_t index = 0; index < request->final_count; index++) {
         free(request->final_outputs[index].component);
         free(request->final_outputs[index].path);
+        free(request->final_outputs[index].raw_output_path);
     }
     free(request->inputs);
     free(request->final_outputs);

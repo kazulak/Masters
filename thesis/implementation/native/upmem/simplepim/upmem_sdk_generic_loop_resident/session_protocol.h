@@ -34,7 +34,10 @@
 typedef struct {
     uint32_t slot_id;
     uint32_t elements;
+    uint32_t element_bytes;
+    uint32_t storage_kind;
     char *path;
+    char *logical_sha256;
     size_t raw_bytes;
     size_t transfer_bytes;
 } resident_input_file_t;
@@ -43,7 +46,10 @@ typedef struct {
     char *component;
     uint32_t slot_id;
     uint32_t elements;
+    uint32_t element_bytes;
+    uint32_t storage_kind;
     char *path;
+    char *raw_output_path;
     size_t raw_bytes;
     size_t transfer_bytes;
     int status;

@@ -22,11 +22,11 @@
 #define EXECUTION_PLAN_V3_PARTITION_OUTPUT EXECUTION_PLAN_V2_PARTITION_OUTPUT
 #define EXECUTION_PLAN_V3_PARTITION_CONTRACTED EXECUTION_PLAN_V2_PARTITION_CONTRACTED
 
-/* The sidecar describes transport and arithmetic separately.  Both modes
- * move float32 slots through MRAM; mode 1 performs per-task int8 arithmetic
- * and requantizes the result on the DPU. */
+/* Numeric mode is independent of partitioning. Mode 2 binds package-v3
+ * packed-int8 inputs and int32 output. */
 #define EXECUTION_PLAN_V3_NUMERIC_FLOAT32 0u
 #define EXECUTION_PLAN_V3_NUMERIC_INT8_REQUANTIZE 1u
+#define EXECUTION_PLAN_V3_NUMERIC_HOST_PACKED_INT8 2u
 
 typedef struct __attribute__((packed)) {
     char magic[8];

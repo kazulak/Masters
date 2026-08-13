@@ -29,7 +29,6 @@ from quantum_bench.core.records import (
 from quantum_bench.targets.upmem import distributed_plan_v3
 from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
     RESIDENT_OPERATION_ABI_V2,
-    RESIDENT_PROFILE_VERSION,
     RESIDENT_PACKAGE_HEADER_FORMAT,
     RESIDENT_V3_PROFILE_VERSION,
     _canonical_profile,
@@ -46,16 +45,15 @@ MAX_DPUS = 64
 MIN_TASKLETS = 1
 MAX_TASKLETS = 24
 NUMERIC_FLOAT32 = "float32"
-NUMERIC_INT8 = "per_task_resident_requantize"
+NUMERIC_INT8 = "host_packed_int8"
+NUMERIC_INT8_REQUANTIZE = "per_task_resident_requantize"
 PARTITION_OUTPUT = "output"
 PARTITION_CONTRACTED = "contracted"
 TRANSPORT_FLOAT32_MRAM = "float32_mram"
+TRANSPORT_PACKED_INT8_MRAM = "host_packed_int8_mram"
 TIMING_SCOPE = "one_task_resident_v3_full_execution"
 DEFAULT_TIMEOUT_S = 900.0
-# The additive v3 host is compiled against the resident session loader's
-# existing manifest identity.  Keep the v3 package/profile identity alongside
-# it so the package remains v3 while the native request parser accepts it.
-NATIVE_V3_MANIFEST_PROFILE_VERSION = RESIDENT_PROFILE_VERSION
+NATIVE_V3_MANIFEST_PROFILE_VERSION = RESIDENT_V3_PROFILE_VERSION
 
 
 def _native_runner() -> Any:
@@ -118,8 +116,12 @@ def prepare_request(
     """Lower one retained task or deterministic matrix into a v3 request."""
 
     _validate_resources(dpu_count, tasklets)
-    if quantization_mode not in {"none", NUMERIC_INT8}:
+    if quantization_mode not in {"none", NUMERIC_INT8, NUMERIC_INT8_REQUANTIZE}:
         raise ValueError("hardware_profile_violation: unsupported numeric mode")
+    if quantization_mode == NUMERIC_INT8_REQUANTIZE and dpu_count != 1:
+        raise ValueError(
+            "hardware_profile_violation: legacy DPU requantization is a one-DPU diagnostic"
+        )
     if partition_strategy not in {PARTITION_OUTPUT, PARTITION_CONTRACTED}:
         raise ValueError("hardware_profile_violation: unsupported partition strategy")
     root = Path(root).resolve()
@@ -171,15 +173,22 @@ def prepare_request(
 
     policy_reference_path = root / "policy_reference_f32.bin"
     np.asarray(policy_reference["output"], dtype="<f4").ravel().tofile(policy_reference_path)
+    integer_reference_path: Path | None = None
+    if quantization_mode == NUMERIC_INT8:
+        integer_reference_path = root / "integer_reference_i32.bin"
+        np.asarray(policy_reference["raw_output"], dtype="<i4").ravel().tofile(
+            integer_reference_path
+        )
     full_precision_reference_path = root / "full_precision_reference_f32.bin"
     np.asarray(full_precision_reference["output"], dtype="<f4").ravel().tofile(
         full_precision_reference_path
     )
     output_path = package.final_output_paths["real"]
+    raw_output_path = package.raw_final_output_paths.get("real")
     package_bytes = package.package_path.read_bytes() if package.package_path else b""
     operation_bytes = _operation_bytes(package_bytes)
     operation = package.operations[0]
-    numeric_mode = NUMERIC_FLOAT32 if quantization_mode == "none" else NUMERIC_INT8
+    numeric_mode = NUMERIC_FLOAT32 if quantization_mode == "none" else quantization_mode
     if partition_strategy == PARTITION_OUTPUT:
         plan = distributed_plan_v3.build_output_tile_plan_v3(
             logical_operation_id=operation.task_id,
@@ -232,6 +241,9 @@ def prepare_request(
         "dpu_binary_hash": _sha256_file(staged_dpu),
     }
     policy_reference_sha256 = _sha256_file(policy_reference_path)
+    integer_reference_sha256 = (
+        _sha256_file(integer_reference_path) if integer_reference_path is not None else None
+    )
     full_precision_reference_sha256 = _sha256_file(full_precision_reference_path)
     policy_tolerance = _policy_reference_tolerance(quantization_mode)
     full_precision_tolerance = _full_precision_tolerance(quantization_mode)
@@ -249,11 +261,18 @@ def prepare_request(
         "sidecar_path": str(sidecar_path),
         "response_path": str(response_path),
         "output_path": str(output_path),
+        "raw_output_path": str(raw_output_path) if raw_output_path is not None else None,
         "policy_reference": {
             "path": str(policy_reference_path),
             "sha256": policy_reference_sha256,
             "max_abs_tolerance": policy_tolerance,
             "reference_kind": "cpu_active_numeric_policy_reference",
+        },
+        "integer_reference": {
+            "path": str(integer_reference_path) if integer_reference_path is not None else None,
+            "sha256": integer_reference_sha256,
+            "required": quantization_mode == NUMERIC_INT8,
+            "reference_kind": "cpu_exact_packed_int8_int32_reference",
         },
         "full_precision_reference": {
             "path": str(full_precision_reference_path),
@@ -271,8 +290,19 @@ def prepare_request(
         "tasklets_per_dpu": tasklets,
         "quantization_mode": quantization_mode,
         "numeric_mode": numeric_mode,
-        "numeric_transport": TRANSPORT_FLOAT32_MRAM,
-        "transport": TRANSPORT_FLOAT32_MRAM,
+        "numeric_transport": (
+            TRANSPORT_PACKED_INT8_MRAM
+            if quantization_mode == NUMERIC_INT8
+            else TRANSPORT_FLOAT32_MRAM
+        ),
+        "transport": (
+            TRANSPORT_PACKED_INT8_MRAM
+            if quantization_mode == NUMERIC_INT8
+            else TRANSPORT_FLOAT32_MRAM
+        ),
+        "packed_int8_transfer": quantization_mode == NUMERIC_INT8,
+        "host_quantization": quantization_mode == NUMERIC_INT8,
+        "dpu_intermediate_requantization": False,
         "partition_strategy": partition_strategy,
         "partition_kind": plan.partition_kind,
         "scaling_kind": _scaling_kind(case),
@@ -476,13 +506,12 @@ def _stage_dpu_binary(value: Any, root: Path) -> Path:
 
 
 def _write_native_v3_manifest_identity(manifest_path: Path | None) -> None:
-    """Add the v3 package identity without changing the native loader ABI."""
+    """Record the v3 identity without rewriting the request contract."""
 
     if manifest_path is None:
         raise ValueError("native_v3_manifest_invalid: manifest path is missing")
     path = Path(manifest_path)
     manifest = json.loads(path.read_text(encoding="utf-8"))
-    manifest["hardware_profile_version"] = NATIVE_V3_MANIFEST_PROFILE_VERSION
     manifest["resident_v3_profile_version"] = RESIDENT_V3_PROFILE_VERSION
     path.write_text(json.dumps(manifest, sort_keys=True, indent=2), encoding="utf-8")
 

@@ -168,6 +168,7 @@ class _DefaultNativeTarget:
         host = Path(str(request.get("host_binary") or request.get("runner")))
         response_path = Path(str(request["response_path"]))
         policy_reference = _reference_binding(request, "policy_reference")
+        integer_reference = _integer_reference_binding(request)
         response_path.unlink(missing_ok=True)
         command = [
             str(host),
@@ -191,6 +192,15 @@ class _DefaultNativeTarget:
             "--timeout-s",
             str(max(1, math.ceil(timeout_s))),
         ]
+        if integer_reference is not None:
+            command.extend(
+                [
+                    "--integer-reference",
+                    integer_reference["path"],
+                    "--integer-reference-sha256",
+                    integer_reference["sha256"],
+                ]
+            )
         try:
             completed = subprocess.run(
                 command,
@@ -295,6 +305,22 @@ class _DefaultNativeTarget:
                     returncode=completed.returncode,
                 )
             payload["full_precision_accuracy"] = _full_precision_accuracy(request)
+            if integer_reference is not None:
+                integer_validation = payload.get("exact_integer_validation")
+                if (
+                    not isinstance(integer_validation, Mapping)
+                    or integer_validation.get("required") is not True
+                    or integer_validation.get("passed") is not True
+                    or integer_validation.get("exact_match") is not True
+                    or integer_validation.get("mismatch_count") != 0
+                    or integer_validation.get("reference_sha256")
+                    != integer_reference["sha256"]
+                ):
+                    raise NativeExecutionError(
+                        "integer_reference_validation_failed: native response did not prove exact int32 output",
+                        response=payload,
+                        returncode=completed.returncode,
+                    )
         payload.update(hardware_environment_metadata(self._environment))
         return payload
 
@@ -884,10 +910,22 @@ def _validate_execute_response(response: Mapping[str, Any], request: Mapping[str
         expected_numeric_mode = "float32"
         expected_numeric_arithmetic = "float32"
         expected_requantization_scope = "none"
+        expected_transport = "float32_mram"
+        expected_packed_transfer = False
     elif quantization_mode == "per_task_resident_requantize":
         expected_numeric_mode = "per_task_resident_requantize"
         expected_numeric_arithmetic = "int8_requantized"
         expected_requantization_scope = "per_task_on_dpu"
+        expected_transport = "float32_mram"
+        expected_packed_transfer = False
+    elif quantization_mode == "host_packed_int8":
+        expected_numeric_mode = "host_packed_int8"
+        expected_numeric_arithmetic = "int8_multiply_int32_accumulate"
+        expected_requantization_scope = "host_initial_once_final_host_dequantize"
+        expected_transport = "host_packed_int8_mram"
+        expected_packed_transfer = True
+        if partition_strategy == "contracted":
+            expected_reconstruction = "host_int64_reduction_v1"
     else:
         raise ValueError(
             f"native_v3_request_invalid: unsupported quantization_mode={quantization_mode!r}"
@@ -907,9 +945,9 @@ def _validate_execute_response(response: Mapping[str, Any], request: Mapping[str
         "partition_strategy": partition_strategy,
         "numeric_mode": expected_numeric_mode,
         "numeric_arithmetic": expected_numeric_arithmetic,
-        "numeric_transport": "float32_mram",
+        "numeric_transport": expected_transport,
         "requantization_scope": expected_requantization_scope,
-        "packed_int8_transfer": False,
+        "packed_int8_transfer": expected_packed_transfer,
         "allocation_provider": "upmem_sdk_rank_profile_v1",
         "simplepim_role": "initialization_binary_and_management_state_only",
         "kernel_provider": "thesis_resident_generic_c_v3",
@@ -959,6 +997,20 @@ def _validate_execute_response(response: Mapping[str, Any], request: Mapping[str
         raise ValueError("native_v3_response_invalid: policy reference hash does not match the prepared request")
     if not _is_finite_nonnegative(policy_validation.get("max_abs_error")):
         raise ValueError("native_v3_response_invalid: policy reference error is not numeric")
+    integer_reference = _integer_reference_binding(request)
+    integer_validation = response.get("exact_integer_validation")
+    if integer_reference is not None:
+        if (
+            not isinstance(integer_validation, Mapping)
+            or integer_validation.get("required") is not True
+            or integer_validation.get("passed") is not True
+            or integer_validation.get("exact_match") is not True
+            or integer_validation.get("mismatch_count") != 0
+            or integer_validation.get("reference_sha256") != integer_reference["sha256"]
+        ):
+            raise ValueError(
+                "integer_reference_validation_failed: exact int32 evidence did not pass"
+            )
     _validate_repetition_transfer_invariants(response)
     if _full_precision_required(request, response):
         full_precision = response.get("full_precision_accuracy")
@@ -1160,6 +1212,26 @@ def _reference_binding(request: Mapping[str, Any], name: str) -> dict[str, Any]:
     if not _is_finite_nonnegative(tolerance):
         raise ValueError(f"native_v3_request_invalid: {name} tolerance is invalid")
     return {"path": path, "sha256": sha256, "max_abs_tolerance": float(tolerance)}
+
+
+def _integer_reference_binding(request: Mapping[str, Any]) -> dict[str, str] | None:
+    reference = request.get("integer_reference")
+    if not isinstance(reference, Mapping):
+        return None
+    required = reference.get("required") is True
+    path = reference.get("path")
+    sha256 = reference.get("sha256")
+    if not required:
+        if path is not None or sha256 is not None:
+            raise ValueError(
+                "native_v3_request_invalid: optional integer reference must be empty"
+            )
+        return None
+    if not isinstance(path, str) or not path:
+        raise ValueError("native_v3_request_invalid: integer reference path is missing")
+    if not isinstance(sha256, str) or len(sha256) != 64:
+        raise ValueError("native_v3_request_invalid: integer reference SHA-256 is invalid")
+    return {"path": path, "sha256": sha256}
 
 
 def _full_precision_accuracy(request: Mapping[str, Any]) -> dict[str, Any]:

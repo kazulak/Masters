@@ -51,7 +51,11 @@ typedef struct __attribute__((packed)) {
 } execution_plan_schedule_record_t;
 
 _Static_assert(sizeof(resident_package_header_t) == 96u, "resident package header ABI drifted");
+#if RESIDENT_PACKAGE_ABI_VERSION == RESIDENT_PACKAGE_VERSION_V3
+_Static_assert(sizeof(resident_slot_descriptor_t) == 32u, "resident slot v3 ABI drifted");
+#else
 _Static_assert(sizeof(resident_slot_descriptor_t) == 16u, "resident slot ABI drifted");
+#endif
 #if RESIDENT_OPERATION_ABI_VERSION == RESIDENT_OPERATION_ABI_V1
 _Static_assert(sizeof(resident_operation_t) == 784u, "resident operation v1 ABI drifted");
 #else

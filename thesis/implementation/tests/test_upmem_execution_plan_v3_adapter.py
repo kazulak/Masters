@@ -5,9 +5,11 @@ import hashlib
 from pathlib import Path
 
 import pytest
+import numpy as np
 
 from quantum_bench.circuits import builtin_circuit
 from quantum_bench.targets.upmem import execution_plan_v3 as v3
+from quantum_bench.targets.upmem.hardware_taskgraph_resident import resident_requantize
 from quantum_bench.targets.upmem.m5_task_selection import select_highest_work_supported_task
 from quantum_bench.tn import build_tensor_network, plan_task_graph
 
@@ -81,7 +83,7 @@ def test_synthetic_weak_resolves_shape_and_int8_code_without_allocation(tmp_path
         materialized={"status": "selected"},
         dpu_count=3,
         tasklets=3,
-        quantization_mode="per_task_resident_requantize",
+        quantization_mode="host_packed_int8",
         partition_strategy="output",
         build=_build_metadata(tmp_path / "build"),
         root=tmp_path,
@@ -92,10 +94,12 @@ def test_synthetic_weak_resolves_shape_and_int8_code_without_allocation(tmp_path
     assert manifest["requested_dpus"] == 3
     assert manifest["tasklets"] == 3
     assert plan["total_output_elements"] == 12 * 64
-    assert plan["numeric_mode"] == "per_task_resident_requantize"
+    assert plan["numeric_mode"] == "host_packed_int8"
     assert "allocation" not in manifest
     assert manifest["package_parse_timing_boundary"].endswith("before_dpu_alloc")
-    assert request["numeric_mode"] == "per_task_resident_requantize"
+    assert request["numeric_mode"] == "host_packed_int8"
+    assert request["numeric_transport"] == "host_packed_int8_mram"
+    assert request["packed_int8_transfer"] is True
     assert request["dpu_count"] == request["requested_dpus"] == 3
     assert request["tasklets"] == request["tasklets_per_dpu"] == 3
     assert request["non_quantum"] is True
@@ -111,7 +115,7 @@ def test_synthetic_weak_resolves_shape_and_int8_code_without_allocation(tmp_path
     assert full_precision_reference["sha256"] == hashlib.sha256(
         Path(full_precision_reference["path"]).read_bytes()
     ).hexdigest()
-    assert request["policy_reference_metadata"]["quantization_mode"] == "per_task_resident_requantize"
+    assert request["policy_reference_metadata"]["quantization_mode"] == "host_packed_int8"
     assert request["full_precision_reference_metadata"]["quantization_mode"] == "none"
     assert policy_reference["max_abs_tolerance"] == pytest.approx(1.0e-5)
     assert request["full_precision_reference"]["required"] is False
@@ -123,6 +127,69 @@ def test_synthetic_weak_resolves_shape_and_int8_code_without_allocation(tmp_path
         Path(request["initialization_binary"]).read_bytes()
     ).hexdigest()
     assert request["collective_provider"] == "none"
+    integer_reference = request["integer_reference"]
+    assert integer_reference["required"] is True
+    assert integer_reference["sha256"] == hashlib.sha256(
+        Path(integer_reference["path"]).read_bytes()
+    ).hexdigest()
+    assert Path(request["raw_output_path"]).name.endswith("_i32.bin")
+
+
+def test_legacy_dpu_requantization_is_one_dpu_only(tmp_path: Path) -> None:
+    case = {
+        "case_id": "legacy_requantize",
+        "quantum_case": "non_quantum",
+        "non_quantum": True,
+        "matrix_shapes": [[4, 4], [4, 2]],
+    }
+    with pytest.raises(ValueError, match="one-DPU diagnostic"):
+        v3.prepare_request(
+            case=case,
+            materialized={"status": "selected"},
+            dpu_count=2,
+            tasklets=1,
+            quantization_mode="per_task_resident_requantize",
+            partition_strategy="output",
+            build=_build_metadata(tmp_path / "build"),
+            root=tmp_path / "request",
+        )
+
+
+def test_packed_v3_slots_are_typed_aligned_and_zero_safe(tmp_path: Path) -> None:
+    request = v3.prepare_request(
+        case={
+            "case_id": "packed_odd_dimensions",
+            "quantum_case": "non_quantum",
+            "non_quantum": True,
+            "matrix_shapes": [[3, 5], [5, 3]],
+        },
+        materialized={"status": "selected"},
+        dpu_count=1,
+        tasklets=1,
+        quantization_mode="host_packed_int8",
+        partition_strategy="output",
+        build=_build_metadata(tmp_path / "build"),
+        root=tmp_path / "request",
+    )
+    manifest = json.loads(Path(request["resident_manifest"]).read_text(encoding="utf-8"))
+    assert manifest["package_magic"] == "UPRGPCK3"
+    assert manifest["package_version"] == 3
+    assert manifest["package_flags"] == 1
+    slots = manifest["typed_slots"]
+    assert [slot["storage_dtype"] for slot in slots] == ["int8", "int8", "int32"]
+    assert all(slot["offset_bytes"] % 8 == 0 for slot in slots)
+    assert all(slot["transfer_bytes"] % 8 == 0 for slot in slots)
+    assert [slot["logical_bytes"] for slot in slots] == [15, 15, 36]
+    assert [slot["transfer_bytes"] for slot in slots] == [16, 16, 40]
+    validation = v3.validate_request(request)
+    assert validation["dpu_count"] == 1
+    assert request["numeric_mode"] == "host_packed_int8"
+    assert np.fromfile(request["integer_reference"]["path"], dtype="<i4").size == 9
+
+    quantized, scale, saturation = resident_requantize(np.zeros(9, dtype=np.float32))
+    assert scale == 1.0
+    assert saturation == 0
+    assert np.array_equal(quantized, np.zeros(9, dtype=np.int8))
 
 
 def test_missing_dpu_binary_is_rejected(tmp_path: Path) -> None:

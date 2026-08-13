@@ -9,7 +9,7 @@ descriptor.  It never writes an intermediate result file.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import hashlib
 import math
 from pathlib import Path
@@ -49,6 +49,7 @@ RESIDENT_SESSION_PROTOCOL = "generic_loop_resident_graph_session_v1"
 RESIDENT_ALLOCATION_PROFILE = "backend=hw"
 RESIDENT_TIMING_SCOPE = "one_dpu_mram_resident_full_taskgraph_v1"
 RESIDENT_NUMERIC_MODES = ("none", "per_task_resident_requantize")
+RESIDENT_V3_NUMERIC_MODES = (*RESIDENT_NUMERIC_MODES, "host_packed_int8")
 RESIDENT_COMPLEX_POLICY = "split_real_imag_float32_dpu_complex_combine"
 RESIDENT_MAX_RANK = 16
 RESIDENT_MAX_ELEMENTS = 256
@@ -73,13 +74,23 @@ RESIDENT_OPERATION_ABI_V2 = 2
 RESIDENT_V3_OPERATION_ABI_VERSION = RESIDENT_OPERATION_ABI_V2
 RESIDENT_PACKAGE_MAGIC_V1 = b"UPRGPCK1"
 RESIDENT_PACKAGE_MAGIC_V2 = b"UPRGPCK2"
+RESIDENT_PACKAGE_MAGIC_V3 = b"UPRGPCK3"
 RESIDENT_PACKAGE_VERSION_V1 = 1
 RESIDENT_PACKAGE_VERSION_V2 = 2
+RESIDENT_PACKAGE_VERSION_V3 = 3
 RESIDENT_PACKAGE_ENDIAN = 0x01020304
 RESIDENT_PACKAGE_HEADER_FORMAT = "<8s4I5Q8I"
 RESIDENT_PACKAGE_HEADER_BYTES = struct.calcsize(RESIDENT_PACKAGE_HEADER_FORMAT)
 RESIDENT_SLOT_FORMAT = "<4I"
 RESIDENT_SLOT_BYTES = struct.calcsize(RESIDENT_SLOT_FORMAT)
+RESIDENT_V3_SLOT_FORMAT = "<8I"
+RESIDENT_V3_SLOT_BYTES = struct.calcsize(RESIDENT_V3_SLOT_FORMAT)
+RESIDENT_V3_FLAG_FLOAT32 = 0
+RESIDENT_V3_FLAG_HOST_PACKED_INT8 = 1
+RESIDENT_V3_STORAGE_F32 = 1
+RESIDENT_V3_STORAGE_PACKED_I8 = 2
+RESIDENT_V3_STORAGE_I32 = 3
+RESIDENT_V3_OPERATION_ABI_VERSION = RESIDENT_OPERATION_ABI_V2
 RESIDENT_INVALID_SLOT = 0xFFFFFFFF
 RESIDENT_SLOT_ID_MASK = 0x3FFFFFFF
 RESIDENT_SLOT_INITIAL_FLAG = 0x40000000
@@ -136,6 +147,17 @@ def _resident_abi_metadata(operation_abi_version: int) -> tuple[bytes, int, int,
             "dpu_resident_v2",
         )
     raise ValueError("hardware_profile_violation: unsupported resident operation ABI")
+
+
+def _resident_v3_package_metadata(package_flags: int) -> tuple[bytes, int, int, str]:
+    if package_flags not in {RESIDENT_V3_FLAG_FLOAT32, RESIDENT_V3_FLAG_HOST_PACKED_INT8}:
+        raise ValueError("hardware_profile_violation: unsupported resident v3 package flags")
+    return (
+        RESIDENT_PACKAGE_MAGIC_V3,
+        RESIDENT_PACKAGE_VERSION_V3,
+        RESIDENT_OPERATION_BYTES_V2,
+        "dpu_resident_v3",
+    )
 
 
 @dataclass(frozen=True)
@@ -261,6 +283,59 @@ class ResidentSlotDescriptor:
 
 
 @dataclass(frozen=True)
+class ResidentV3SlotDescriptor:
+    """Typed UPRGPCK3 slot record.
+
+    ``logical_bytes`` excludes MRAM/file padding.  ``transfer_bytes`` is the
+    host-visible 8-byte-aligned transfer size.
+    """
+
+    slot_id: int
+    offset_bytes: int
+    capacity_elements: int
+    element_count: int
+    element_bytes: int
+    storage_kind: int
+    logical_bytes: int
+    transfer_bytes: int
+    initial: bool
+    final: bool
+
+    @property
+    def capacity_bytes(self) -> int:
+        return _align8(self.capacity_elements * self.element_bytes)
+
+    @property
+    def storage_dtype(self) -> str:
+        return {
+            RESIDENT_V3_STORAGE_F32: "float32",
+            RESIDENT_V3_STORAGE_PACKED_I8: "int8",
+            RESIDENT_V3_STORAGE_I32: "int32",
+        }[self.storage_kind]
+
+    def to_json_dict(self) -> JsonDict:
+        return {
+            "slot_id": self.slot_id,
+            "offset_bytes": self.offset_bytes,
+            "capacity_elements": self.capacity_elements,
+            "element_count": self.element_count,
+            "element_bytes": self.element_bytes,
+            "storage_kind": self.storage_kind,
+            "storage_dtype": self.storage_dtype,
+            "logical_bytes": self.logical_bytes,
+            "transfer_bytes": self.transfer_bytes,
+            "initial": self.initial,
+            "final": self.final,
+        }
+
+
+# Explicit aliases make the additive record easy to discover without
+# changing the frozen ResidentSlotDescriptor used by V1/V2 callers.
+RESIDENT_SLOT_V3 = ResidentV3SlotDescriptor
+ResidentSlotDescriptorV3 = ResidentV3SlotDescriptor
+
+
+@dataclass(frozen=True)
 class ResidentOperationDescriptor:
     operation_id: int
     task_id: str
@@ -292,6 +367,8 @@ class ResidentOperationDescriptor:
             return 0
         if self.mode == "per_task_resident_requantize":
             return 1
+        if self.mode == "host_packed_int8":
+            return 2
         raise ValueError(f"hardware_profile_violation: unknown resident numeric mode {self.mode}")
 
     def to_json_dict(self) -> JsonDict:
@@ -324,7 +401,11 @@ class ResidentOperationDescriptor:
             raise ValueError("hardware_profile_violation: resident operation scale must be finite")
         values = _pack_native_args(
             self.args,
-            mode=GENERIC_MODE_FLOAT32_NO_QUANT,
+            mode=(
+                "host_packed_int8"
+                if self.mode == "host_packed_int8"
+                else GENERIC_MODE_FLOAT32_NO_QUANT
+            ),
             output_elements=self.output_elements,
             operation_abi_version=operation_abi_version,
         )
@@ -409,6 +490,14 @@ class ResidentGraphPackage:
     descriptor_sha256: str | None = None
     profile: HardwareTaskGraphResidentProfile | None = None
     operation_abi_version: int = RESIDENT_OPERATION_ABI_V1
+    package_magic: bytes | None = None
+    package_version: int | None = None
+    package_flags: int = RESIDENT_V3_FLAG_FLOAT32
+    typed_slots: tuple[ResidentV3SlotDescriptor, ...] = ()
+    storage_initial_data: Mapping[int, np.ndarray] | None = None
+    input_scales: Mapping[int, float] = field(default_factory=dict)
+    raw_final_output_paths: Mapping[str, Path] = field(default_factory=dict)
+    dequant_final_output_paths: Mapping[str, Path] = field(default_factory=dict)
 
     @property
     def graph_request_count(self) -> int:
@@ -422,11 +511,20 @@ class ResidentGraphPackage:
     def component_operation_count(self) -> int:
         return len(self.operations)
 
+    @property
+    def is_v3(self) -> bool:
+        return self.package_version == RESIDENT_PACKAGE_VERSION_V3
+
     def to_json_dict(self) -> JsonDict:
         selected_profile = self.profile or _canonical_profile()
-        package_magic, package_version, operation_bytes, dpu_binary_abi = _resident_abi_metadata(
-            self.operation_abi_version
-        )
+        if self.is_v3:
+            package_magic, package_version, operation_bytes, dpu_binary_abi = (
+                _resident_v3_package_metadata(self.package_flags)
+            )
+        else:
+            package_magic, package_version, operation_bytes, dpu_binary_abi = (
+                _resident_abi_metadata(self.operation_abi_version)
+            )
         return {
             "schema_version": RESIDENT_SESSION_PROTOCOL,
             "manifest_kind": "resident_graph_package",
@@ -460,6 +558,12 @@ class ResidentGraphPackage:
             "final_output_paths": {
                 key: str(value) for key, value in self.final_output_paths.items()
             },
+            "raw_output_paths": {
+                key: str(value) for key, value in self.raw_final_output_paths.items()
+            },
+            "package_flags": self.package_flags,
+            "typed_slots": [item.to_json_dict() for item in self.typed_slots],
+            "input_scales": {str(key): float(value) for key, value in self.input_scales.items()},
         }
 
     def write(
@@ -484,6 +588,17 @@ class ResidentGraphPackage:
         output_dir = request_dir / "outputs"
         input_dir.mkdir()
         output_dir.mkdir()
+
+        if self.is_v3:
+            return _write_v3_package_request(
+                self,
+                root=root,
+                request_dir=request_dir,
+                input_dir=input_dir,
+                output_dir=output_dir,
+                dpu_binary=dpu_binary,
+                request_id=request_id,
+            )
 
         input_entries: list[JsonDict] = []
         initial_h2d_bytes = 0
@@ -925,8 +1040,12 @@ def build_resident_graph_package(
     tensor_complexity = {
         tensor.spec.id: _has_nonzero_imaginary(tensor.array) for tensor in network.tensors
     }
+    if quantization_mode == "host_packed_int8" and len(graph.tasks) != 1:
+        raise ValueError("hardware_profile_violation: host_packed_int8 requires one contraction")
     for task_index, task in enumerate(graph.tasks):
         complex_task = any(tensor_complexity[item] for item in task.input_tensor_ids)
+        if quantization_mode == "host_packed_int8" and complex_task:
+            raise ValueError("hardware_profile_violation: host_packed_int8 requires real inputs")
         if not complex_task:
             operations.append(
                 _contract_operation(
@@ -983,6 +1102,58 @@ def build_resident_graph_package(
         tensor_complexity[task.output_tensor_id] = True
     if len(operations) != allocation.component_operation_count:
         raise ResidentCapacityError("hardware_profile_violation: component_operation_count_mismatch")
+    if selected.version == RESIDENT_V3_PROFILE_VERSION:
+        if len(graph.tasks) != 1 or len(operations) != 1 or operations[0].kind != "contract":
+            raise ResidentCapacityError(
+                "hardware_profile_violation: resident v3 requires one real contraction"
+            )
+        input_scales: dict[int, float] = {}
+        if quantization_mode == "host_packed_int8":
+            storage_initial_data: dict[int, np.ndarray] = {}
+            for slot_id, values in allocation.initial_data.items():
+                quantized, scale, _saturation = resident_requantize(values)
+                if not math.isfinite(scale) or scale <= 0.0:
+                    raise ResidentCapacityError(
+                        "hardware_profile_violation: packed int8 scale must be finite and positive"
+                    )
+                storage_initial_data[int(slot_id)] = np.ascontiguousarray(quantized, dtype=np.int8)
+                input_scales[int(slot_id)] = float(np.float32(scale))
+            operation = replace(
+                operations[0],
+                left_scale=input_scales[int(operations[0].slot_a)],
+                right_scale=input_scales[int(operations[0].slot_b)],
+            )
+            package_flags = RESIDENT_V3_FLAG_HOST_PACKED_INT8
+        else:
+            operation = operations[0]
+            storage_initial_data = {
+                int(slot_id): np.ascontiguousarray(values, dtype=np.float32)
+                for slot_id, values in allocation.initial_data.items()
+            }
+            package_flags = RESIDENT_V3_FLAG_FLOAT32
+        typed_slots = _build_v3_slot_descriptors(allocation, package_flags)
+        if len(typed_slots) != 3 or len(storage_initial_data) != 2:
+            raise ResidentCapacityError(
+                "hardware_profile_violation: resident v3 requires two initial slots and one final slot"
+            )
+        return ResidentGraphPackage(
+            graph=graph,
+            case_id=case_id,
+            suite_id=suite_id,
+            quantization_mode=quantization_mode,
+            allocation=allocation,
+            operations=(operation,),
+            initial_data=allocation.initial_data,
+            storage_initial_data=storage_initial_data,
+            input_scales=input_scales,
+            full_precision_output=full_precision_output,
+            profile=selected,
+            operation_abi_version=RESIDENT_OPERATION_ABI_V2,
+            package_magic=RESIDENT_PACKAGE_MAGIC_V3,
+            package_version=RESIDENT_PACKAGE_VERSION_V3,
+            package_flags=package_flags,
+            typed_slots=typed_slots,
+        )
     return ResidentGraphPackage(
         graph=graph,
         case_id=case_id,
@@ -1093,7 +1264,7 @@ def build_resident_policy_reference(
         raise ValueError("hardware_profile_violation: empty_task_graph_not_supported")
     final = tensors[graph.tasks[-1].output_tensor_id]
     ordered = order_final_tensor(np.asarray(final), graph.tasks[-1].output_labels, graph.network.output_labels)[0]
-    return {
+    result: JsonDict = {
         "status": "completed",
         "reference_kind": "cpu_resident_policy_reference",
         "quantization_mode": quantization_mode,
@@ -1107,6 +1278,32 @@ def build_resident_policy_reference(
         "output": np.asarray(ordered),
         "output_hash": _array_hash(ordered),
     }
+    if quantization_mode == "host_packed_int8":
+        metric = task_metrics[0]["component_metrics"]["real"]
+        raw_output = np.asarray(metric["raw_output"], dtype=np.int32)
+        raw_ordered = order_final_tensor(
+            raw_output,
+            graph.tasks[-1].output_labels,
+            graph.network.output_labels,
+        )[0]
+        if np.iscomplexobj(raw_ordered):
+            if np.any(np.asarray(raw_ordered).imag != 0):
+                raise ValueError(
+                    "hardware_profile_violation: packed int32 reference became complex"
+                )
+            raw_ordered = np.asarray(raw_ordered).real
+        result.update(
+            {
+                "reference_kind": "cpu_host_packed_int8_reference",
+                "resident_slot_dtype": "int8_inputs_int32_output",
+                "dpu_local_requantization": False,
+                "raw_output": np.asarray(raw_ordered, dtype=np.int32),
+                "raw_output_hash": _array_hash(raw_ordered),
+                "input_scales": metric["input_scales"],
+                "scale_metadata": metric["scale_metadata"],
+            }
+        )
+    return result
 
 
 def validate_resident_graph_package_bytes(
@@ -1133,23 +1330,35 @@ def validate_resident_graph_package_bytes(
     package_abi_by_header = {
         RESIDENT_PACKAGE_MAGIC_V1: RESIDENT_OPERATION_ABI_V1,
         RESIDENT_PACKAGE_MAGIC_V2: RESIDENT_OPERATION_ABI_V2,
+        RESIDENT_PACKAGE_MAGIC_V3: RESIDENT_OPERATION_ABI_V2,
     }
     header_operation_abi = package_abi_by_header.get(magic)
     if header_operation_abi is None:
         raise ValueError("hardware_profile_violation: resident_package_bad_magic")
     if operation_abi_version is None:
         operation_abi_version = header_operation_abi
-    _resident_abi_metadata(operation_abi_version)
     if header_operation_abi != operation_abi_version:
         raise ValueError("hardware_profile_violation: resident_package_abi_mismatch")
-    _, expected_package_version, expected_operation_bytes, _ = _resident_abi_metadata(
-        operation_abi_version
-    )
+    is_v3 = magic == RESIDENT_PACKAGE_MAGIC_V3
+    if is_v3:
+        if selected.version != RESIDENT_V3_PROFILE_VERSION:
+            raise ValueError("hardware_profile_violation: resident_package_profile_mismatch")
+        _, expected_package_version, expected_operation_bytes, _ = (
+            _resident_v3_package_metadata(flags)
+        )
+        expected_slot_bytes = RESIDENT_V3_SLOT_BYTES
+    else:
+        if flags != 0:
+            raise ValueError("hardware_profile_violation: resident_package_header_flags_invalid")
+        _, expected_package_version, expected_operation_bytes, _ = _resident_abi_metadata(
+            operation_abi_version
+        )
+        expected_slot_bytes = RESIDENT_SLOT_BYTES
     if version != expected_package_version:
         raise ValueError("hardware_profile_violation: resident_package_bad_version")
     if endian != RESIDENT_PACKAGE_ENDIAN:
         raise ValueError("hardware_profile_violation: resident_package_bad_endian")
-    if flags != 0 or reserved != 0:
+    if reserved != 0:
         raise ValueError("hardware_profile_violation: resident_package_header_flags_invalid")
     if header_bytes != RESIDENT_PACKAGE_HEADER_BYTES or header_bytes % 8:
         raise ValueError("hardware_profile_violation: resident_package_bad_header_alignment")
@@ -1161,7 +1370,7 @@ def validate_resident_graph_package_bytes(
         raise ValueError("hardware_profile_violation: resident_package_slot_section_overflow")
     if operation_offset < slot_offset + slot_bytes or operation_offset + operation_bytes != file_bytes:
         raise ValueError("hardware_profile_violation: resident_package_operation_section_overlap")
-    if slot_bytes != slot_count * RESIDENT_SLOT_BYTES:
+    if slot_bytes != slot_count * expected_slot_bytes:
         raise ValueError("hardware_profile_violation: resident_package_slot_length_mismatch")
     if operation_bytes != operation_count * expected_operation_bytes:
         raise ValueError("hardware_profile_violation: resident_package_operation_length_mismatch")
@@ -1179,33 +1388,107 @@ def validate_resident_graph_package_bytes(
         raise ValueError("hardware_profile_violation: resident_package_rank_profile_mismatch")
     if initial_count == 0 or initial_count > slot_count or final_count == 0 or final_count > 2:
         raise ValueError("hardware_profile_violation: resident_package_output_count_invalid")
-    slots: list[tuple[int, int, int, int, int]] = []
+    slots: list[JsonDict] = []
     observed_initial = 0
     observed_final = 0
     for index in range(slot_count):
-        slot = struct.unpack_from(RESIDENT_SLOT_FORMAT, payload, slot_offset + index * RESIDENT_SLOT_BYTES)
-        encoded_id, offset, capacity, elements = slot
-        flags = encoded_id & ~RESIDENT_SLOT_ID_MASK
+        record_offset = slot_offset + index * expected_slot_bytes
+        if is_v3:
+            (
+                encoded_id,
+                offset,
+                capacity,
+                elements,
+                element_bytes,
+                storage_kind,
+                logical_bytes,
+                transfer_bytes,
+            ) = struct.unpack_from(RESIDENT_V3_SLOT_FORMAT, payload, record_offset)
+        else:
+            encoded_id, offset, capacity, elements = struct.unpack_from(
+                RESIDENT_SLOT_FORMAT, payload, record_offset
+            )
+            element_bytes = 4
+            storage_kind = RESIDENT_V3_STORAGE_F32
+            logical_bytes = elements * element_bytes
+            transfer_bytes = _align8(capacity * element_bytes)
+        slot_flags = encoded_id & ~RESIDENT_SLOT_ID_MASK
         slot_id = encoded_id & RESIDENT_SLOT_ID_MASK
-        if slot_id != index or flags & ~(RESIDENT_SLOT_INITIAL_FLAG | RESIDENT_SLOT_FINAL_FLAG):
+        if slot_id != index or slot_flags & ~(
+            RESIDENT_SLOT_INITIAL_FLAG | RESIDENT_SLOT_FINAL_FLAG
+        ):
             raise ValueError("hardware_profile_violation: resident_package_slot_ids_not_dense")
-        observed_initial += bool(flags & RESIDENT_SLOT_INITIAL_FLAG)
-        observed_final += bool(flags & RESIDENT_SLOT_FINAL_FLAG)
+        initial = bool(slot_flags & RESIDENT_SLOT_INITIAL_FLAG)
+        final = bool(slot_flags & RESIDENT_SLOT_FINAL_FLAG)
+        observed_initial += initial
+        observed_final += final
         if offset % 8 or capacity == 0 or elements == 0 or elements > capacity:
             raise ValueError("hardware_profile_violation: resident_package_slot_descriptor_invalid")
-        if offset + _align8(capacity * 4) > pool_bytes:
+        if is_v3:
+            expected_width = {
+                RESIDENT_V3_STORAGE_F32: 4,
+                RESIDENT_V3_STORAGE_PACKED_I8: 1,
+                RESIDENT_V3_STORAGE_I32: 4,
+            }.get(storage_kind)
+            if expected_width is None or element_bytes != expected_width:
+                raise ValueError(
+                    "hardware_profile_violation: resident_package_slot_storage_invalid"
+                )
+            if logical_bytes != elements * element_bytes:
+                raise ValueError(
+                    "hardware_profile_violation: resident_package_slot_logical_bytes_invalid"
+                )
+            if transfer_bytes != _align8(capacity * element_bytes):
+                raise ValueError(
+                    "hardware_profile_violation: resident_package_slot_transfer_bytes_invalid"
+                )
+            if transfer_bytes % 8:
+                raise ValueError(
+                    "hardware_profile_violation: resident_package_slot_transfer_unaligned"
+                )
+            if flags == RESIDENT_V3_FLAG_HOST_PACKED_INT8:
+                expected_storage = (
+                    RESIDENT_V3_STORAGE_PACKED_I8
+                    if initial
+                    else RESIDENT_V3_STORAGE_I32 if final else None
+                )
+                if storage_kind != expected_storage:
+                    raise ValueError(
+                        "hardware_profile_violation: resident_package_packed_slot_storage_invalid"
+                    )
+            elif storage_kind != RESIDENT_V3_STORAGE_F32:
+                raise ValueError(
+                    "hardware_profile_violation: resident_package_float_slot_storage_invalid"
+                )
+        if offset + transfer_bytes > pool_bytes:
             raise ValueError("hardware_profile_violation: resident_package_slot_overflow")
-        slots.append((slot_id, offset, capacity, elements, flags))
+        slots.append(
+            {
+                "slot_id": slot_id,
+                "offset_bytes": offset,
+                "capacity_elements": capacity,
+                "element_count": elements,
+                "element_bytes": element_bytes,
+                "storage_kind": storage_kind,
+                "logical_bytes": logical_bytes,
+                "transfer_bytes": transfer_bytes,
+                "initial": initial,
+                "final": final,
+            }
+        )
     if observed_initial != initial_count or observed_final != final_count:
         raise ValueError("hardware_profile_violation: resident_package_slot_flag_count_mismatch")
-    initial_slot_ids = {slot_id for slot_id, _offset, _capacity, _elements, flags in slots if flags & RESIDENT_SLOT_INITIAL_FLAG}
-    final_slot_ids = {slot_id for slot_id, _offset, _capacity, _elements, flags in slots if flags & RESIDENT_SLOT_FINAL_FLAG}
+    initial_slot_ids = {int(slot["slot_id"]) for slot in slots if slot["initial"]}
+    final_slot_ids = {int(slot["slot_id"]) for slot in slots if slot["final"]}
     if initial_slot_ids & final_slot_ids:
         raise ValueError(
             "hardware_profile_violation: resident_package_initial_final_slot_alias"
         )
-    for left, right in zip(sorted(slots, key=lambda item: item[1]), sorted(slots, key=lambda item: item[1])[1:]):
-        if left[1] + _align8(left[2] * 4) > right[1]:
+    sorted_slots = sorted(slots, key=lambda item: int(item["offset_bytes"]))
+    for left, right in zip(sorted_slots, sorted_slots[1:]):
+        if int(left["offset_bytes"]) + int(left["transfer_bytes"]) > int(
+            right["offset_bytes"]
+        ):
             raise ValueError("hardware_profile_violation: resident_package_slot_overlap")
     produced_slots: set[int] = set()
     referenced_initial_slots: set[int] = set()
@@ -1221,7 +1504,8 @@ def validate_resident_graph_package_bytes(
         left_scale, right_scale = operation[9:11]
         if kind not in {RESIDENT_OPERATION_CONTRACT, RESIDENT_OPERATION_COMPLEX_COMBINE}:
             raise ValueError("hardware_profile_violation: resident_package_operation_kind_invalid")
-        if mode not in {0, 1}:
+        allowed_modes = {0, 1, 2} if is_v3 else {0, 1}
+        if mode not in allowed_modes:
             raise ValueError("hardware_profile_violation: resident_package_operation_mode_invalid")
         if output_elements == 0 or output_elements > selected.max_tensor_elements:
             raise ValueError("hardware_profile_violation: resident_package_operation_empty_output")
@@ -1253,17 +1537,58 @@ def validate_resident_graph_package_bytes(
         if any(slot_id not in initial_slot_ids | produced_slots for slot_id in read_slots):
             raise ValueError("hardware_profile_violation: resident_package_slot_read_before_initialization")
         produced_slots.update(write_slots)
+        if is_v3 and flags == RESIDENT_V3_FLAG_HOST_PACKED_INT8:
+            if kind != RESIDENT_OPERATION_CONTRACT or mode != 2:
+                raise ValueError(
+                    "hardware_profile_violation: resident_package_packed_operation_invalid"
+                )
+            if left_scale <= 0.0 or right_scale <= 0.0:
+                raise ValueError(
+                    "hardware_profile_violation: resident_package_packed_scale_invalid"
+                )
+            contracted_elements = int(args[7])
+            if contracted_elements > RESIDENT_V3_MAX_ELEMENTS:
+                raise ValueError(
+                    "hardware_profile_violation: resident_package_int32_bound_exceeded"
+                )
+            if contracted_elements * 127 * 127 > np.iinfo(np.int32).max:
+                raise ValueError(
+                    "hardware_profile_violation: resident_package_int32_bound_exceeded"
+                )
+            slot_by_id = {int(slot["slot_id"]): slot for slot in slots}
+            if any(
+                int(slot_by_id[int(slot_id)]["storage_kind"])
+                != RESIDENT_V3_STORAGE_PACKED_I8
+                for slot_id in read_slots
+            ) or any(
+                int(slot_by_id[int(slot_id)]["storage_kind"])
+                != RESIDENT_V3_STORAGE_I32
+                for slot_id in write_slots
+            ):
+                raise ValueError(
+                    "hardware_profile_violation: resident_package_packed_operation_storage_mismatch"
+                )
     if initial_slot_ids - referenced_initial_slots:
         raise ValueError(
             "hardware_profile_violation: resident_package_initial_slot_not_referenced"
         )
     if not set(final_slot_ids).issubset(produced_slots):
         raise ValueError("hardware_profile_violation: resident_package_final_slot_not_produced")
+    if is_v3 and flags == RESIDENT_V3_FLAG_HOST_PACKED_INT8:
+        if slot_count != 3 or initial_count != 2 or final_count != 1 or operation_count != 1:
+            raise ValueError(
+                "hardware_profile_violation: resident_package_packed_shape_invalid"
+            )
+    if is_v3 and flags == RESIDENT_V3_FLAG_FLOAT32 and 2 in operation_modes:
+        raise ValueError(
+            "hardware_profile_violation: resident_package_float_mode_storage_mismatch"
+        )
     return {
         "magic": magic.decode("ascii"),
         "version": version,
         "package_magic": magic.decode("ascii"),
         "package_version": version,
+        "package_flags": flags,
         "operation_abi_version": operation_abi_version,
         "operation_bytes": expected_operation_bytes,
         "endian": endian,
@@ -1278,17 +1603,7 @@ def validate_resident_graph_package_bytes(
         "operation_modes": operation_modes,
         "initial_slot_ids": sorted(initial_slot_ids),
         "final_slot_ids": sorted(final_slot_ids),
-        "slot_descriptors": [
-            {
-                "slot_id": slot_id,
-                "offset_bytes": offset,
-                "capacity_elements": capacity,
-                "element_count": elements,
-                "initial": bool(flags & RESIDENT_SLOT_INITIAL_FLAG),
-                "final": bool(flags & RESIDENT_SLOT_FINAL_FLAG),
-            }
-            for slot_id, offset, capacity, elements, flags in slots
-        ],
+        "slot_descriptors": slots,
     }
 
 
@@ -1371,6 +1686,41 @@ def _resident_policy_component(task, left, right, left_part, right_part, mode, c
             "left_saturation_count": 0,
             "right_saturation_count": 0,
         }
+    if mode == "host_packed_int8":
+        left_q, left_scale, left_sat = resident_requantize(left_value)
+        right_q, right_scale, right_sat = resident_requantize(right_value)
+        raw = np.asarray(
+            generic_loop_reference_int32(
+                left_q,
+                right_q,
+                output_shape=task.output_shape,
+                **_index_args(task, caps),
+            ),
+            dtype=np.int32,
+        )
+        output_scale = np.float32(np.float32(left_scale) * np.float32(right_scale))
+        if not np.isfinite(output_scale) or output_scale <= 0.0:
+            raise ValueError(
+                "hardware_profile_violation: packed int8 output scale must be finite and positive"
+            )
+        output = np.asarray(raw.astype(np.float32) * output_scale, dtype=np.float32)
+        return output, {
+            "mode": mode,
+            "left_scale": float(np.float32(left_scale)),
+            "right_scale": float(np.float32(right_scale)),
+            "output_scale": float(output_scale),
+            "left_saturation_count": left_sat,
+            "right_saturation_count": right_sat,
+            "raw_output": raw,
+            "input_scales": {
+                "left": float(np.float32(left_scale)),
+                "right": float(np.float32(right_scale)),
+            },
+            "scale_metadata": {
+                "left": _host_scale_metadata(left_value, left_scale, left_sat),
+                "right": _host_scale_metadata(right_value, right_scale, right_sat),
+            },
+        }
     left_q, left_scale, left_sat = resident_requantize(left_value)
     right_q, right_scale, right_sat = resident_requantize(right_value)
     raw = generic_loop_reference_int32(
@@ -1388,6 +1738,20 @@ def _resident_policy_component(task, left, right, left_part, right_part, mode, c
         "right_scale": right_scale,
         "left_saturation_count": left_sat,
         "right_saturation_count": right_sat,
+    }
+
+
+def _host_scale_metadata(values: np.ndarray, scale: float, saturation_count: int) -> JsonDict:
+    array = np.asarray(values, dtype=np.float32)
+    max_abs = float(np.max(np.abs(array))) if array.size else 0.0
+    return {
+        "max_abs": max_abs,
+        "scale": float(np.float32(scale)),
+        "scale_formula": "max_abs/127_or_1_for_exact_zero",
+        "rounding": "nearest_even",
+        "clip_min": -127,
+        "clip_max": 127,
+        "saturation_count": int(saturation_count),
     }
 
 
@@ -1427,7 +1791,11 @@ def _pack_native_args(
         _product(tuple(int(value) for value in args.get("right_shape", ()))),
         int(args.get("output_element_count", 0)),
         int(args.get("contracted_combination_count", 0)),
-        1 if mode == GENERIC_MODE_FLOAT32_NO_QUANT else 0,
+        (
+            2
+            if mode == "host_packed_int8"
+            else 1 if mode == GENERIC_MODE_FLOAT32_NO_QUANT else 0
+        ),
     ]
     for name in ("left_shape", "right_shape", "output_shape", "contracted_dims", "left_strides", "right_strides", "output_strides"):
         fields.extend(unsigned(name))
@@ -1445,6 +1813,305 @@ def _pack_native_args(
         int(args.get("contracted_elements_slice", args.get("contracted_combination_count", 0))),
     ]
     return tuple(fields + signed_fields + slice_fields)
+
+
+def _build_v3_slot_descriptors(
+    allocation: ResidentAllocation,
+    package_flags: int,
+) -> tuple[ResidentV3SlotDescriptor, ...]:
+    if package_flags not in {RESIDENT_V3_FLAG_FLOAT32, RESIDENT_V3_FLAG_HOST_PACKED_INT8}:
+        raise ResidentCapacityError("hardware_profile_violation: unsupported resident v3 flags")
+    descriptors: list[ResidentV3SlotDescriptor] = []
+    offset = 0
+    for slot in sorted(allocation.slots, key=lambda item: item.slot_id):
+        flags = _slot_flags(slot)
+        initial = bool(flags & RESIDENT_SLOT_INITIAL_FLAG)
+        final = bool(flags & RESIDENT_SLOT_FINAL_FLAG)
+        if initial and final:
+            raise ResidentCapacityError(
+                "hardware_profile_violation: resident v3 initial/final slot alias"
+            )
+        if package_flags == RESIDENT_V3_FLAG_HOST_PACKED_INT8:
+            if initial:
+                element_bytes, storage_kind = 1, RESIDENT_V3_STORAGE_PACKED_I8
+            elif final:
+                element_bytes, storage_kind = 4, RESIDENT_V3_STORAGE_I32
+            else:
+                raise ResidentCapacityError(
+                    "hardware_profile_violation: packed v3 does not admit intermediate slots"
+                )
+        else:
+            element_bytes, storage_kind = 4, RESIDENT_V3_STORAGE_F32
+        offset = _align8(offset)
+        logical_bytes = int(slot.element_count) * element_bytes
+        transfer_bytes = _align8(int(slot.capacity_elements) * element_bytes)
+        descriptors.append(
+            ResidentV3SlotDescriptor(
+                slot_id=int(slot.slot_id),
+                offset_bytes=offset,
+                capacity_elements=int(slot.capacity_elements),
+                element_count=int(slot.element_count),
+                element_bytes=element_bytes,
+                storage_kind=storage_kind,
+                logical_bytes=logical_bytes,
+                transfer_bytes=transfer_bytes,
+                initial=initial,
+                final=final,
+            )
+        )
+        offset += transfer_bytes
+    if offset > allocation.mram_pool_bytes:
+        raise ResidentCapacityError(
+            f"hardware_profile_violation: resident_v3_mram_capacity_exceeded:{offset}>{allocation.mram_pool_bytes}"
+        )
+    return tuple(descriptors)
+
+
+def _encoded_v3_slot_id(slot: ResidentV3SlotDescriptor) -> int:
+    flags = 0
+    if slot.initial:
+        flags |= RESIDENT_SLOT_INITIAL_FLAG
+    if slot.final:
+        flags |= RESIDENT_SLOT_FINAL_FLAG
+    return int(slot.slot_id) | flags
+
+
+def _encode_package_v3(
+    slots: Sequence[ResidentV3SlotDescriptor],
+    operations: Sequence[ResidentOperationDescriptor],
+    *,
+    profile: HardwareTaskGraphResidentProfile,
+    package_flags: int,
+) -> bytes:
+    _resident_v3_package_metadata(package_flags)
+    slot_payload = b"".join(
+        struct.pack(
+            RESIDENT_V3_SLOT_FORMAT,
+            _encoded_v3_slot_id(item),
+            item.offset_bytes,
+            item.capacity_elements,
+            item.element_count,
+            item.element_bytes,
+            item.storage_kind,
+            item.logical_bytes,
+            item.transfer_bytes,
+        )
+        for item in slots
+    )
+    operation_payload = b"".join(
+        item.to_bytes(operation_abi_version=RESIDENT_OPERATION_ABI_V2)
+        for item in operations
+    )
+    slot_offset = RESIDENT_PACKAGE_HEADER_BYTES
+    operation_offset = _align8(slot_offset + len(slot_payload))
+    file_bytes = operation_offset + len(operation_payload)
+    header = struct.pack(
+        RESIDENT_PACKAGE_HEADER_FORMAT,
+        RESIDENT_PACKAGE_MAGIC_V3,
+        RESIDENT_PACKAGE_VERSION_V3,
+        RESIDENT_PACKAGE_ENDIAN,
+        RESIDENT_PACKAGE_HEADER_BYTES,
+        package_flags,
+        file_bytes,
+        slot_offset,
+        len(slot_payload),
+        operation_offset,
+        len(operation_payload),
+        len(slots),
+        len(operations),
+        profile.mram_pool_bytes,
+        1,
+        sum(item.initial for item in slots),
+        sum(item.final for item in slots),
+        profile.max_rank,
+        0,
+    )
+    return (
+        header
+        + slot_payload
+        + (b"\0" * (operation_offset - slot_offset - len(slot_payload)))
+        + operation_payload
+    )
+
+
+def _write_v3_package_request(
+    package: ResidentGraphPackage,
+    *,
+    root: Path,
+    request_dir: Path,
+    input_dir: Path,
+    output_dir: Path,
+    dpu_binary: Path,
+    request_id: str,
+) -> ResidentGraphPackage:
+    profile = package.profile or _canonical_profile()
+    if profile.version != RESIDENT_V3_PROFILE_VERSION or len(package.operations) != 1:
+        raise ValueError("hardware_profile_violation: typed v3 package requires the v3 profile")
+    slots = {item.slot_id: item for item in package.typed_slots}
+    storage_data = package.storage_initial_data or package.initial_data
+    input_entries: list[JsonDict] = []
+    initial_h2d_bytes = 0
+    for slot_id in sorted(storage_data):
+        slot = slots[int(slot_id)]
+        if not slot.initial:
+            raise ValueError("hardware_profile_violation: v3 input is not an initial slot")
+        dtype = np.dtype("i1") if slot.storage_kind == RESIDENT_V3_STORAGE_PACKED_I8 else np.dtype("<f4")
+        array = np.ascontiguousarray(np.asarray(storage_data[slot_id], dtype=dtype).ravel())
+        payload = array.tobytes(order="C")
+        if len(payload) != slot.logical_bytes:
+            raise ValueError("hardware_profile_violation: v3 input logical byte count mismatch")
+        path = input_dir / f"slot_{int(slot_id):04d}.bin"
+        _require_ascii(_relative(root, path), "resident v3 input path")
+        path.write_bytes(payload)
+        logical_sha256 = hashlib.sha256(payload).hexdigest()
+        source = np.ascontiguousarray(
+            np.asarray(package.initial_data[int(slot_id)], dtype="<f4").ravel()
+        ).tobytes(order="C")
+        initial_h2d_bytes += slot.transfer_bytes
+        input_entries.append(
+            {
+                "slot_id": int(slot_id),
+                "elements": int(slot.element_count),
+                "storage_kind": int(slot.storage_kind),
+                "storage_dtype": slot.storage_dtype,
+                "element_bytes": int(slot.element_bytes),
+                "input_path": _relative(root, path),
+                "raw_bytes": int(slot.logical_bytes),
+                "transfer_bytes": int(slot.transfer_bytes),
+                "logical_sha256": logical_sha256,
+                "source_float32_sha256": hashlib.sha256(source).hexdigest(),
+                "packed_input_sha256": (
+                    logical_sha256
+                    if slot.storage_kind == RESIDENT_V3_STORAGE_PACKED_I8
+                    else None
+                ),
+                "scale": package.input_scales.get(int(slot_id)),
+            }
+        )
+
+    final_paths: dict[str, Path] = {}
+    raw_paths: dict[str, Path] = {}
+    final_entries: list[JsonDict] = []
+    for component, slot_id, elements in package.allocation.final_components:
+        slot = slots[int(slot_id)]
+        dequant_path = output_dir / f"final_{_safe_name(component)}_f32.bin"
+        _require_ascii(_relative(root, dequant_path), "resident v3 output path")
+        final_paths[component] = dequant_path
+        entry: JsonDict = {
+            "component": component,
+            "slot_id": int(slot_id),
+            "elements": int(elements),
+            "storage_kind": int(slot.storage_kind),
+            "storage_dtype": slot.storage_dtype,
+            "element_bytes": int(slot.element_bytes),
+            "output_path": _relative(root, dequant_path),
+            "raw_bytes": int(slot.logical_bytes),
+            "transfer_bytes": int(slot.transfer_bytes),
+        }
+        if slot.storage_kind == RESIDENT_V3_STORAGE_I32:
+            raw_path = output_dir / f"final_{_safe_name(component)}_i32.bin"
+            _require_ascii(_relative(root, raw_path), "resident v3 raw output path")
+            raw_paths[component] = raw_path
+            entry["raw_output_path"] = _relative(root, raw_path)
+        final_entries.append(entry)
+
+    package_bytes = _encode_package_v3(
+        package.typed_slots,
+        package.operations,
+        profile=profile,
+        package_flags=package.package_flags,
+    )
+    validate_resident_graph_package_bytes(
+        package_bytes,
+        profile=profile,
+        operation_abi_version=RESIDENT_OPERATION_ABI_V2,
+    )
+    package_path = request_dir / "resident_graph_package.bin"
+    package_path.write_bytes(package_bytes)
+    descriptor_sha256 = hashlib.sha256(package_bytes).hexdigest()
+    descriptor_h2d_bytes = _align8(len(package.typed_slots) * RESIDENT_V3_SLOT_BYTES) + _align8(
+        len(package.operations) * RESIDENT_OPERATION_BYTES_V2
+    )
+    final_d2h_bytes = sum(int(item["transfer_bytes"]) for item in final_entries)
+    dpu_ref = _relative(root, dpu_binary)
+    _require_ascii(dpu_ref, "resident v3 DPU binary path")
+    scale_payload = {
+        str(slot_id): float(np.float32(value))
+        for slot_id, value in sorted(package.input_scales.items())
+    }
+    scale_metadata_sha256 = canonical_hash(scale_payload)
+    manifest_path = root / f"{_safe_name(request_id)}_resident_request.json"
+    payload: JsonDict = {
+        "schema_version": RESIDENT_SESSION_PROTOCOL,
+        "manifest_kind": "resident_graph_request",
+        "session_id": request_id,
+        "route_id": profile.route_id,
+        "backend_id": profile.backend_id,
+        "hardware_profile_version": profile.version,
+        "target": "hardware",
+        "sdk_allocation_profile": RESIDENT_ALLOCATION_PROFILE,
+        "session_protocol": profile.session_protocol,
+        "package_magic": RESIDENT_PACKAGE_MAGIC_V3.decode("ascii"),
+        "package_version": RESIDENT_PACKAGE_VERSION_V3,
+        "package_flags": package.package_flags,
+        "operation_abi_version": RESIDENT_OPERATION_ABI_V2,
+        "operation_bytes": RESIDENT_OPERATION_BYTES_V2,
+        "dpu_binary_abi": "dpu_resident_v3",
+        "dpu_binary": dpu_ref,
+        "package_path": _relative(root, package_path),
+        "requested_dpus": profile.requested_dpu_count,
+        "requested_dpu_count": profile.requested_dpu_count,
+        "tasklets": profile.tasklets_per_dpu,
+        "graph_request_count": 1,
+        "logical_task_count": 1,
+        "component_operation_count": 1,
+        "slot_descriptor_count": len(package.typed_slots),
+        "mram_pool_bytes": profile.mram_pool_bytes,
+        "quantization_mode": package.quantization_mode,
+        "numeric_policy": {
+            "mode": package.quantization_mode,
+            "initial_storage_dtype": (
+                "int8" if package.package_flags == RESIDENT_V3_FLAG_HOST_PACKED_INT8 else "float32"
+            ),
+            "output_storage_dtype": (
+                "int32" if package.package_flags == RESIDENT_V3_FLAG_HOST_PACKED_INT8 else "float32"
+            ),
+            "host_quantization": package.package_flags == RESIDENT_V3_FLAG_HOST_PACKED_INT8,
+            "dpu_intermediate_requantization": False,
+            "rounding": "nearest_even",
+            "clip_range": [-127, 127],
+            "scale_formula": "max_abs/127_or_1_for_exact_zero",
+            "input_scales": scale_payload,
+            "scale_metadata_sha256": scale_metadata_sha256,
+        },
+        "typed_slots": [item.to_json_dict() for item in package.typed_slots],
+        "initial_slots": input_entries,
+        "final_outputs": final_entries,
+        "initial_h2d_bytes": initial_h2d_bytes,
+        "descriptor_h2d_bytes": descriptor_h2d_bytes,
+        "descriptor_control_bytes": RESIDENT_DESCRIPTOR_CONTROL_BYTES,
+        "control_h2d_bytes_per_launch": RESIDENT_CONTROL_H2D_BYTES_PER_LAUNCH,
+        "control_h2d_bytes": RESIDENT_DESCRIPTOR_CONTROL_BYTES + RESIDENT_CONTROL_H2D_BYTES_PER_LAUNCH,
+        "final_d2h_bytes": final_d2h_bytes,
+        "intermediate_h2d_bytes": 0,
+        "intermediate_d2h_bytes": 0,
+        "no_host_intermediate_output_files": True,
+        "intermediate_output_paths": [],
+        "package_parse_timing_boundary": (
+            "native_process_start_through_validated_binary_package_before_dpu_alloc"
+        ),
+        "timing_scope": RESIDENT_TIMING_SCOPE,
+    }
+    write_json(manifest_path, payload)
+    return replace(
+        package,
+        manifest_path=manifest_path,
+        package_path=package_path,
+        final_output_paths=final_paths,
+        raw_final_output_paths=raw_paths,
+        dequant_final_output_paths=final_paths,
+        descriptor_sha256=descriptor_sha256,
+    )
 
 
 def _encode_package(
@@ -1586,7 +2253,11 @@ def _canonical_profile(
         mram_pool_bytes=RESIDENT_MRAM_POOL_BYTES,
         max_contracted_combinations=max_contracted_combinations,
         output_tile_elements=output_tile_elements,
-        numeric_modes=RESIDENT_NUMERIC_MODES,
+        numeric_modes=(
+            RESIDENT_V3_NUMERIC_MODES
+            if version == RESIDENT_V3_PROFILE_VERSION
+            else RESIDENT_NUMERIC_MODES
+        ),
         complex_policy=RESIDENT_COMPLEX_POLICY,
         synchronous_execution=True,
         timeout_s=RESIDENT_TIMEOUT_S,

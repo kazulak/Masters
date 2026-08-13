@@ -32,8 +32,14 @@ __mram_noinit uint8_t RESIDENT_SLOT_POOL[RESIDENT_MRAM_POOL_BYTES];
 __dma_aligned resident_operation_t resident_operation_shared;
 /* Each tasklet owns an even-sized row, keeping every tail transfer aligned. */
 __dma_aligned float resident_output_tile[NR_TASKLETS][RESIDENT_OUTPUT_TILE_ELEMS + 2u];
+#if RESIDENT_PACKAGE_ABI_VERSION == RESIDENT_PACKAGE_VERSION_V3
+__dma_aligned int32_t resident_output_i32_tile[NR_TASKLETS][RESIDENT_OUTPUT_TILE_ELEMS + 2u];
+#endif
 #if RESIDENT_OPERATION_ABI_VERSION >= RESIDENT_OPERATION_ABI_V2
 __dma_aligned float resident_output_window[NR_TASKLETS][2];
+#if RESIDENT_PACKAGE_ABI_VERSION == RESIDENT_PACKAGE_VERSION_V3
+__dma_aligned int32_t resident_output_i32_window[NR_TASKLETS][2];
+#endif
 #endif
 __dma_aligned uint8_t resident_input_window[NR_TASKLETS][8];
 
@@ -63,6 +69,44 @@ static float resident_read_f32(uint32_t slot_id, uint32_t element) {
     __builtin_memcpy(&value, &resident_input_window[tid][byte_offset - aligned_offset], sizeof(value));
     return value;
 }
+
+#if RESIDENT_PACKAGE_ABI_VERSION == RESIDENT_PACKAGE_VERSION_V3
+static int32_t resident_read_i8(uint32_t slot_id, uint32_t element) {
+    const uint32_t tid = me();
+    const resident_slot_descriptor_t *slot = resident_slot(slot_id);
+    if (slot == NULL || slot->storage_kind != RESIDENT_STORAGE_PACKED_INT8 ||
+        slot->element_bytes != 1u || element >= slot->element_count) {
+        return 0;
+    }
+    const uint32_t byte_offset = slot->offset_bytes + element;
+    const uint32_t aligned_offset = byte_offset & ~7u;
+    mram_read(
+        RESIDENT_SLOT_POOL + aligned_offset,
+        resident_input_window[tid],
+        sizeof(resident_input_window[tid])
+    );
+    return (int32_t)(int8_t)resident_input_window[tid][byte_offset - aligned_offset];
+}
+
+static int32_t resident_read_i32(uint32_t slot_id, uint32_t element) {
+    const uint32_t tid = me();
+    const resident_slot_descriptor_t *slot = resident_slot(slot_id);
+    int32_t value;
+    if (slot == NULL || slot->storage_kind != RESIDENT_STORAGE_INT32 ||
+        slot->element_bytes != sizeof(int32_t) || element >= slot->element_count) {
+        return 0;
+    }
+    const uint32_t byte_offset = slot->offset_bytes + element * (uint32_t)sizeof(int32_t);
+    const uint32_t aligned_offset = byte_offset & ~7u;
+    mram_read(
+        RESIDENT_SLOT_POOL + aligned_offset,
+        resident_input_window[tid],
+        sizeof(resident_input_window[tid])
+    );
+    __builtin_memcpy(&value, &resident_input_window[tid][byte_offset - aligned_offset], sizeof(value));
+    return value;
+}
+#endif
 
 static float resident_scale(uint32_t slot_id, uint32_t elements) {
     float max_abs = 0.0f;
@@ -141,6 +185,17 @@ static uint64_t resident_checksum_update(uint64_t checksum, float value) {
     return checksum;
 }
 
+#if RESIDENT_PACKAGE_ABI_VERSION == RESIDENT_PACKAGE_VERSION_V3
+static uint64_t resident_checksum_update_i32(uint64_t checksum, int32_t value) {
+    const uint32_t encoded = (uint32_t)value;
+    for (uint32_t shift = 0; shift < sizeof(encoded) * 8u; shift += 8u) {
+        checksum ^= (uint8_t)(encoded >> shift);
+        checksum *= 1099511628211ULL;
+    }
+    return checksum;
+}
+#endif
+
 #if RESIDENT_OPERATION_ABI_VERSION >= RESIDENT_OPERATION_ABI_V2
 /* MRAM transfers are eight-byte aligned. A distributed output range may
  * start or end on an odd float, so preserve the adjacent float in a local
@@ -175,13 +230,53 @@ static void resident_write_output_range(
         );
     }
 }
+
+
+#if RESIDENT_PACKAGE_ABI_VERSION == RESIDENT_PACKAGE_VERSION_V3
+static void resident_write_output_range_i32(
+    const resident_slot_descriptor_t *output,
+    uint32_t element_offset,
+    const int32_t *values,
+    uint32_t elements
+) {
+    const uint32_t tid = me();
+    const uint32_t end = element_offset + elements;
+    const uint32_t first_pair = element_offset & ~1u;
+    const uint32_t end_pair = (end + 1u) & ~1u;
+    if (output == NULL || output->storage_kind != RESIDENT_STORAGE_INT32 ||
+        output->element_bytes != sizeof(int32_t) || elements == 0u || end < element_offset) return;
+    for (uint32_t pair = first_pair; pair < end_pair; pair += 2u) {
+        mram_read(
+            RESIDENT_SLOT_POOL + output->offset_bytes + pair * (uint32_t)sizeof(int32_t),
+            resident_output_i32_window[tid],
+            sizeof(resident_output_i32_window[tid])
+        );
+        for (uint32_t lane = 0u; lane < 2u; lane++) {
+            const uint32_t element = pair + lane;
+            if (element >= element_offset && element < end) {
+                resident_output_i32_window[tid][lane] = values[element - element_offset];
+            }
+        }
+        mram_write(
+            resident_output_i32_window[tid],
+            RESIDENT_SLOT_POOL + output->offset_bytes + pair * (uint32_t)sizeof(int32_t),
+            sizeof(resident_output_i32_window[tid])
+        );
+    }
+}
+#endif
 #endif
 
 static void resident_contract(const resident_operation_t *operation) {
     const uint32_t tid = me();
     const upmem_generic_args_t *args = &operation->args;
     uint32_t output_coords[UPMEM_GENERIC_MAX_RANK] = {0};
-    const int requantize = operation->mode == 1u;
+    const int requantize = operation->mode == RESIDENT_MODE_PER_TASK_REQUANTIZE;
+#if RESIDENT_PACKAGE_ABI_VERSION == RESIDENT_PACKAGE_VERSION_V3
+    const int packed_int8 = operation->mode == RESIDENT_MODE_HOST_PACKED_INT8;
+#else
+    const int packed_int8 = 0;
+#endif
 #if RESIDENT_OPERATION_ABI_VERSION >= RESIDENT_OPERATION_ABI_V2
     const uint32_t dpu_slice_offset = args->dpu_slice_offset;
     const uint32_t dpu_slice_elements = args->dpu_slice_elements;
@@ -227,7 +322,12 @@ static void resident_contract(const resident_operation_t *operation) {
                     left_offset += coordinate * args->left_strides[(uint32_t)args->contracted_to_left_axes[contracted_axis]];
                     right_offset += coordinate * args->right_strides[(uint32_t)args->contracted_to_right_axes[contracted_axis]];
                 }
-                if (requantize) {
+                if (packed_int8) {
+#if RESIDENT_PACKAGE_ABI_VERSION == RESIDENT_PACKAGE_VERSION_V3
+                    total_i32 += resident_read_i8(operation->slot_a, left_offset)
+                        * resident_read_i8(operation->slot_b, right_offset);
+#endif
+                } else if (requantize) {
                     total_i32 += resident_quantized(operation->slot_a, left_offset, left_scale)
                         * resident_quantized(operation->slot_b, right_offset, right_scale);
                 } else {
@@ -235,17 +335,41 @@ static void resident_contract(const resident_operation_t *operation) {
                         * resident_read_f32(operation->slot_b, right_offset);
                 }
             }
-            resident_output_tile[tid][tile_index] = requantize
-                ? (float)total_i32 * left_scale * right_scale : total_f32;
+            if (packed_int8) {
+#if RESIDENT_PACKAGE_ABI_VERSION == RESIDENT_PACKAGE_VERSION_V3
+                resident_output_i32_tile[tid][tile_index] = total_i32;
+#endif
+            } else {
+                resident_output_tile[tid][tile_index] = requantize
+                    ? (float)total_i32 * left_scale * right_scale : total_f32;
+            }
 #if RESIDENT_COMPLETION_VERSION >= 2
             RESIDENT_COMPLETION.tasklet_processed_elements[tid]++;
 #endif
         }
-        if ((tile_elems & 1u) != 0u) resident_output_tile[tid][tile_elems] = 0.0f;
         const resident_slot_descriptor_t *output = resident_slot(operation->slot_out_real);
 #if RESIDENT_OPERATION_ABI_VERSION >= RESIDENT_OPERATION_ABI_V2
-        resident_write_output_range(output, dpu_slice_offset + tile_start, resident_output_tile[tid], tile_elems);
+        if (packed_int8) {
+#if RESIDENT_PACKAGE_ABI_VERSION == RESIDENT_PACKAGE_VERSION_V3
+            if ((tile_elems & 1u) != 0u) resident_output_i32_tile[tid][tile_elems] = 0;
+            resident_write_output_range_i32(
+                output,
+                dpu_slice_offset + tile_start,
+                resident_output_i32_tile[tid],
+                tile_elems
+            );
+#endif
+        } else {
+            if ((tile_elems & 1u) != 0u) resident_output_tile[tid][tile_elems] = 0.0f;
+            resident_write_output_range(
+                output,
+                dpu_slice_offset + tile_start,
+                resident_output_tile[tid],
+                tile_elems
+            );
+        }
 #else
+        if ((tile_elems & 1u) != 0u) resident_output_tile[tid][tile_elems] = 0.0f;
         const uint32_t tile_bytes = resident_align8(tile_elems * (uint32_t)sizeof(float));
         if (output != NULL) {
             mram_write(
@@ -389,8 +513,19 @@ int main(void) {
                 const uint32_t output_elements = operation->output_elements;
 #endif
                 for (uint32_t idx = 0; idx < output_elements; idx++) {
-                    const float val = resident_read_f32(operation->slot_out_real, output_offset + idx);
-                    checksum = resident_checksum_update(checksum, val);
+                    if (operation->mode == RESIDENT_MODE_HOST_PACKED_INT8) {
+#if RESIDENT_PACKAGE_ABI_VERSION == RESIDENT_PACKAGE_VERSION_V3
+                        const int32_t val = resident_read_i32(
+                            operation->slot_out_real, output_offset + idx
+                        );
+                        checksum = resident_checksum_update_i32(checksum, val);
+#endif
+                    } else {
+                        const float val = resident_read_f32(
+                            operation->slot_out_real, output_offset + idx
+                        );
+                        checksum = resident_checksum_update(checksum, val);
+                    }
                 }
             }
             if (operation->kind == RESIDENT_OPERATION_COMPLEX_COMBINE) {
