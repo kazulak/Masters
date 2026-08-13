@@ -217,8 +217,7 @@ int execution_plan_request_load(
         if (hex_digest_bytes(request->actual_package_file_sha256, digest) != 0 ||
             execution_plan_schedule_load(schedule_path, digest, &request->schedule, error_message) != 0) goto failed;
     }
-    if (request->resident.requested_dpus != 1u &&
-        request->resident.requested_dpus != request->schedule.header.dpu_count) {
+    if (request->resident.requested_dpus != request->schedule.header.dpu_count) {
         request_error(error_message, "hardware_profile_violation: resident request DPU count conflicts with schedule");
         goto failed;
     }
@@ -292,8 +291,7 @@ int execution_plan_request_load_v2(
                 &request->distributed_v2, error_message) != 0) goto failed;
     }
     if (validate_package(request, error_message) != 0) goto failed;
-    if (request->resident.requested_dpus != 1u &&
-        request->resident.requested_dpus != request->distributed_v2.header.dpu_count) {
+    if (request->resident.requested_dpus != request->distributed_v2.header.dpu_count) {
         request_error(error_message, "hardware_profile_violation: resident request DPU count conflicts with distributed v2 sidecar");
         goto failed;
     }

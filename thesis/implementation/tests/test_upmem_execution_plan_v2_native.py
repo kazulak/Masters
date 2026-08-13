@@ -83,6 +83,21 @@ def _sidecar(package, path: Path, dpu_count: int) -> Path:
     return path
 
 
+def _execution_plan_manifest(path: Path, dpu_count: int) -> Path:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.update(
+        {
+            "route_id": "upmem_tn_hardware_execution_plan_resident",
+            "backend_id": "upmem_sdk_hardware_execution_plan_resident",
+            "hardware_profile_version": "hardware_taskgraph_execution_plan_resident_v1",
+            "requested_dpus": dpu_count,
+            "requested_dpu_count": dpu_count,
+        }
+    )
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
 def _v1_schedule(package, path: Path) -> Path:
     operation = package.operations[0]
     package_hash = hashlib.sha256(package.package_path.read_bytes()).digest()
@@ -135,6 +150,7 @@ def _native_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
     )
     assert package.manifest_path is not None
     assert package.package_path is not None
+    _execution_plan_manifest(package.manifest_path, 4)
     sidecar = _sidecar(package, tmp_path / "output_partition_v2.bin", 4)
     return Path(str(build["host_binary"])).with_name("host_upmem_execution_plan_v2"), package.manifest_path, sidecar
 
@@ -157,6 +173,7 @@ def _native_v1_fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     )
     assert package.manifest_path is not None
     assert package.package_path is not None
+    _execution_plan_manifest(package.manifest_path, 1)
     schedule = _v1_schedule(package, tmp_path / "execution_plan_v1.bin")
     v2_sidecar = _sidecar(package, tmp_path / "cross_version_v2.bin", 4)
     return Path(str(build["host_binary"])), package.manifest_path, schedule, v2_sidecar
@@ -345,6 +362,42 @@ def test_native_v2_validate_only_rejects_output_coverage_gap(tmp_path: Path) -> 
     assert response["status"] == "failed"
     assert "coverage" in response["error"] or "range" in response["error"]
     assert response["allocated_dpu_count"] == 0
+
+
+def test_native_v2_validate_only_rejects_manifest_dpu_count_conflict_before_allocation(tmp_path: Path) -> None:
+    host, manifest, sidecar = _native_fixture(tmp_path)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["requested_dpu_count"] = payload["requested_dpus"] + 1
+    conflicting_manifest = manifest.parent / "conflicting_dpu_count_request.json"
+    conflicting_manifest.write_text(json.dumps(payload), encoding="utf-8")
+    response_path = tmp_path / "conflicting-dpu-count.response.json"
+
+    completed = _run_validate(host, conflicting_manifest, sidecar, response_path)
+
+    assert completed.returncode != 0
+    response = json.loads(response_path.read_text(encoding="utf-8"))
+    assert response["status"] == "failed"
+    assert response["failure_stage"] == "hardware_profile_violation"
+    assert response["allocated_dpu_count"] == 0
+    assert "DPU counts conflict" in response["error"]
+
+
+def test_native_v2_validate_only_rejects_missing_manifest_dpu_count_before_allocation(tmp_path: Path) -> None:
+    host, manifest, sidecar = _native_fixture(tmp_path)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    del payload["requested_dpu_count"]
+    incomplete_manifest = manifest.parent / "missing_dpu_count_request.json"
+    incomplete_manifest.write_text(json.dumps(payload), encoding="utf-8")
+    response_path = tmp_path / "missing-dpu-count.response.json"
+
+    completed = _run_validate(host, incomplete_manifest, sidecar, response_path)
+
+    assert completed.returncode != 0
+    response = json.loads(response_path.read_text(encoding="utf-8"))
+    assert response["status"] == "failed"
+    assert response["failure_stage"] == "hardware_profile_violation"
+    assert response["allocated_dpu_count"] == 0
+    assert "identity missing" in response["error"]
 
 
 def test_native_v1_fixture_remains_validate_only_compatible(tmp_path: Path) -> None:

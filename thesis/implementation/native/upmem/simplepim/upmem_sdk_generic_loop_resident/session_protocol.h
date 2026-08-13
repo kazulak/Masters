@@ -12,8 +12,12 @@
 #define RESIDENT_REQUEST_KIND "resident_graph_request"
 #define RESIDENT_RESPONSE_KIND "resident_graph_response"
 #define RESIDENT_MAX_PATH 4096u
+#ifndef RESIDENT_ROUTE_ID
 #define RESIDENT_ROUTE_ID "upmem_tn_hardware_taskgraph_resident"
+#endif
+#ifndef RESIDENT_BACKEND_ID
 #define RESIDENT_BACKEND_ID "upmem_sdk_hardware_taskgraph_resident"
+#endif
 #ifndef RESIDENT_PROFILE_VERSION
 #define RESIDENT_PROFILE_VERSION "hardware_taskgraph_single_dpu_mram_resident_v1"
 #endif

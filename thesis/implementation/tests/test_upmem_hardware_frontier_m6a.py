@@ -10,7 +10,11 @@ import pytest
 
 from quantum_bench.bench import upmem_hardware_frontier_m6a as m6a
 from quantum_bench.bench import upmem_simplepim_taskgraph as engine
+from quantum_bench.targets.upmem import simplepim_taskgraph_executor as executor
 from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
+    RESIDENT_EXECUTION_PLAN_BACKEND_ID,
+    RESIDENT_EXECUTION_PLAN_PROFILE_VERSION,
+    RESIDENT_EXECUTION_PLAN_ROUTE_ID,
     RESIDENT_PACKAGE_HEADER_BYTES,
     RESIDENT_PACKAGE_HEADER_FORMAT,
 )
@@ -166,6 +170,13 @@ class FakeTarget:
             "backend_id": engine.NATIVE_BACKEND_ID,
             "target_requested": "hardware",
             "target_observed": "physical_hardware",
+            "hardware_profile_version": executor.NATIVE_HARDWARE_PROFILE_VERSION,
+            "native_hardware_profile_version": executor.NATIVE_HARDWARE_PROFILE_VERSION,
+            "resident_manifest_route_id": request["resident_route_id"],
+            "resident_manifest_backend_id": request["resident_backend_id"],
+            "resident_manifest_hardware_profile_version": request["resident_hardware_profile_version"],
+            "resident_manifest_requested_dpu_count": request["resident_requested_dpu_count"],
+            "resident_manifest_tasklets_per_dpu": request["resident_tasklets_per_dpu"],
             "execution_plan_hash": request["execution_plan_hash"],
             "upmem_execution_plan_hash": request["execution_plan_hash"],
             "package_file_sha256": request["package_file_sha256"],
@@ -287,6 +298,14 @@ def test_m6a_prepare_is_dry_and_enforces_frontier_shape(tmp_path: Path) -> None:
     assert [len(wave) for wave in json.loads(Path(placement["plan_path"]).read_text())["waves"]] == [2, 2, 1]
     assert [sum(item["dpu_id"] == dpu for item in placement["assignments"]) for dpu in (0, 1)] == [3, 2]
     plan = json.loads(Path(placement["plan_path"]).read_text(encoding="utf-8"))
+    manifests = list(Path(result["plan_dir"]).rglob("*_resident_request.json"))
+    assert len(manifests) == 1
+    manifest = json.loads(manifests[0].read_text(encoding="utf-8"))
+    assert manifest["route_id"] == RESIDENT_EXECUTION_PLAN_ROUTE_ID
+    assert manifest["backend_id"] == RESIDENT_EXECUTION_PLAN_BACKEND_ID
+    assert manifest["hardware_profile_version"] == RESIDENT_EXECUTION_PLAN_PROFILE_VERSION
+    assert manifest["requested_dpu_count"] == 2
+    assert manifest["tasklets"] == 1
     assert [item["dpu_id"] for item in plan["task_assignments"]] == [0, 1, 0, 1, 0]
     assert plan["transfer_summary"] == {
         "edge_count": 1,
@@ -328,6 +347,16 @@ def test_m6a_completed_execution_records_frontier_and_rank_evidence(tmp_path: Pa
     assert all(row["cross_dpu_transfer_count"] == 1 for row in records)
     assert all(row["cross_dpu_transfer_bytes"] == 16 for row in records)
     assert all(row["cpu_fallback_used"] is False for row in records)
+    assert all(row["target_requested"] == "hardware" for row in records)
+    assert all(row["target_observed"] == "physical_hardware" for row in records)
+    assert all(row["hardware_allocation_verified"] is True for row in records)
+    assert all(row["route_hardware_profile_version"] == m6a.M6A_CONTRACT.profile_version for row in records)
+    assert all(row["native_hardware_profile_version"] == executor.NATIVE_HARDWARE_PROFILE_VERSION for row in records)
+    assert all(row["resident_manifest_route_id"] == RESIDENT_EXECUTION_PLAN_ROUTE_ID for row in records)
+    assert all(row["resident_manifest_backend_id"] == RESIDENT_EXECUTION_PLAN_BACKEND_ID for row in records)
+    assert all(row["resident_manifest_hardware_profile_version"] == RESIDENT_EXECUTION_PLAN_PROFILE_VERSION for row in records)
+    assert all(row["resident_manifest_requested_dpu_count"] == 2 for row in records)
+    assert all(row["resident_manifest_tasklets_per_dpu"] == 1 for row in records)
     assert all(row["hardware_kernel_executed"] is True for row in records)
     assert all(row["resident_slot_reuse_limited"] is True for row in records)
     assert {row["actual_h2d_bytes"] for row in records} == {560}

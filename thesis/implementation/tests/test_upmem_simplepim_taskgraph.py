@@ -30,6 +30,7 @@ class FakeNativeTarget:
         returncode: int | None = None,
         unsafe_prepare: bool = False,
         session_validation_status: str | None = "collected",
+        missing_session_field: str | None = None,
     ) -> None:
         self.failure = failure
         self.write_response = write_response
@@ -38,6 +39,7 @@ class FakeNativeTarget:
         self.returncode = returncode
         self.unsafe_prepare = unsafe_prepare
         self.session_validation_status = session_validation_status
+        self.missing_session_field = missing_session_field
         self.build_calls = 0
         self.validate_calls: list[tuple[Path, float]] = []
         self.execute_calls: list[tuple[Path, float]] = []
@@ -121,7 +123,7 @@ class FakeNativeTarget:
                     "aggregate_session_completion_status": "passed",
                 }
             )
-        return {
+        session = {
             "schema_version": route.ADAPTER_SESSION_SCHEMA,
             "status": "completed",
             "returncode": 0 if self.returncode is None else self.returncode,
@@ -129,6 +131,13 @@ class FakeNativeTarget:
             "backend_id": route.NATIVE_BACKEND_ID,
             "target_requested": "hardware",
             "target_observed": "physical_hardware",
+            "hardware_profile_version": route.NATIVE_HARDWARE_PROFILE_VERSION,
+            "native_hardware_profile_version": route.NATIVE_HARDWARE_PROFILE_VERSION,
+            "resident_manifest_route_id": request["resident_route_id"],
+            "resident_manifest_backend_id": request["resident_backend_id"],
+            "resident_manifest_hardware_profile_version": request["resident_hardware_profile_version"],
+            "resident_manifest_requested_dpu_count": request["resident_requested_dpu_count"],
+            "resident_manifest_tasklets_per_dpu": request["resident_tasklets_per_dpu"],
             "execution_plan_hash": request["execution_plan_hash"],
             "upmem_execution_plan_hash": request["execution_plan_hash"],
             "package_file_sha256": "0" * 64 if self.bad_hash else request["package_file_sha256"],
@@ -202,6 +211,9 @@ class FakeNativeTarget:
             ),
             "repetitions": repetitions,
         }
+        if self.missing_session_field is not None:
+            session.pop(self.missing_session_field, None)
+        return session
 
 
 def test_suite_is_fixed_and_prepare_is_parser_only(tmp_path: Path) -> None:
@@ -223,7 +235,10 @@ def test_suite_is_fixed_and_prepare_is_parser_only(tmp_path: Path) -> None:
         (Path(item["request_path"]).parent / json.loads(Path(item["request_path"]).read_text())["package_path"]).resolve()
         for item in placements
     }
-    assert len(package_paths) == 1
+    assert len(package_paths) == 2
+    manifests = list(Path(result["plan_dir"]).rglob("*_resident_request.json"))
+    assert len(manifests) == 2
+    assert {json.loads(path.read_text())["requested_dpu_count"] for path in manifests} == {1, 2}
     for item in placements:
         request = json.loads(Path(item["request_path"]).read_text(encoding="utf-8"))
         plan = json.loads(Path(item["plan_path"]).read_text(encoding="utf-8"))
@@ -253,6 +268,11 @@ def test_execute_keeps_warmups_out_of_normalized_records(tmp_path: Path) -> None
     assert {row["requested_dpu_count"] for row in measured} == {1, 2}
     assert all(row["requested_rank_path"] == RANK_PATH for row in measured)
     assert all(row["observed_rank_count"] == 1 for row in measured)
+    assert all(row["route_hardware_profile_version"] == route.PROFILE_VERSION for row in measured)
+    assert all(row["native_hardware_profile_version"] == route.NATIVE_HARDWARE_PROFILE_VERSION for row in measured)
+    assert all(row["resident_manifest_requested_dpu_count"] == row["requested_dpu_count"] for row in measured)
+    assert all(row["resident_manifest_tasklets_per_dpu"] == 1 for row in measured)
+    assert all(row["hardware_allocation_verified"] is True for row in measured)
     assert all(row["hardware_speedup_applicable"] is False for row in measured)
     assert all(row["validation_status"] == "not_individually_collected" for row in measured)
     assert all(row["session_validation_status"] == "passed" for row in measured)
@@ -364,6 +384,37 @@ def test_malformed_native_hash_is_not_admitted(tmp_path: Path) -> None:
     )
     assert result["status"] == "failed"
     assert failure["failure_stage"] == "output_manifest_failed"
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "native_hardware_profile_version",
+        "resident_manifest_route_id",
+        "resident_manifest_backend_id",
+        "resident_manifest_hardware_profile_version",
+        "resident_manifest_requested_dpu_count",
+        "resident_manifest_tasklets_per_dpu",
+        "target_requested",
+        "target_observed",
+        "hardware_allocation_verified",
+    ],
+)
+def test_required_profile_layer_fields_are_admission_requirements(
+    tmp_path: Path, field: str
+) -> None:
+    result = route.execute(
+        tmp_path,
+        suite_path=SUITE,
+        environment=PHYSICAL_ENVIRONMENT,
+        native_target=FakeNativeTarget(missing_session_field=field),
+    )
+    failure = json.loads(
+        (Path(result["run_dir"]) / "session_failures.jsonl").read_text().splitlines()[0]
+    )
+    assert result["status"] == "failed"
+    assert failure["failure_stage"] == "output_manifest_failed"
+    assert field in failure["reason"]
 
 
 def test_nonzero_native_returncode_is_not_admitted(tmp_path: Path) -> None:

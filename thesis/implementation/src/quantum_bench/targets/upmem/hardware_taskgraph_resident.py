@@ -39,6 +39,9 @@ UPMEM_HARDWARE_TASKGRAPH_RESIDENT_SUITE_SCHEMA_VERSION = (
 RESIDENT_BACKEND_ID = "upmem_sdk_hardware_taskgraph_resident"
 RESIDENT_ROUTE_ID = "upmem_tn_hardware_taskgraph_resident"
 RESIDENT_PROFILE_VERSION = "hardware_taskgraph_single_dpu_mram_resident_v1"
+RESIDENT_EXECUTION_PLAN_BACKEND_ID = "upmem_sdk_hardware_execution_plan_resident"
+RESIDENT_EXECUTION_PLAN_ROUTE_ID = "upmem_tn_hardware_execution_plan_resident"
+RESIDENT_EXECUTION_PLAN_PROFILE_VERSION = "hardware_taskgraph_execution_plan_resident_v1"
 RESIDENT_M46_PROFILE_VERSION = "hardware_taskgraph_single_dpu_mram_resident_m4_6_v1"
 RESIDENT_V3_PROFILE_VERSION = "hardware_taskgraph_distributed_single_contraction_m5_v3"
 RESIDENT_M5_V3_PROFILE_VERSION = RESIDENT_V3_PROFILE_VERSION
@@ -420,6 +423,7 @@ class ResidentGraphPackage:
         return len(self.operations)
 
     def to_json_dict(self) -> JsonDict:
+        selected_profile = self.profile or _canonical_profile()
         package_magic, package_version, operation_bytes, dpu_binary_abi = _resident_abi_metadata(
             self.operation_abi_version
         )
@@ -428,17 +432,17 @@ class ResidentGraphPackage:
             "manifest_kind": "resident_graph_package",
             "case_id": self.case_id,
             "suite_id": self.suite_id,
-            "route_id": RESIDENT_ROUTE_ID,
-            "backend_id": RESIDENT_BACKEND_ID,
+            "route_id": selected_profile.route_id,
+            "backend_id": selected_profile.backend_id,
             "quantization_mode": self.quantization_mode,
             "package_magic": package_magic.decode("ascii"),
             "package_version": package_version,
             "operation_abi_version": self.operation_abi_version,
             "operation_bytes": operation_bytes,
             "dpu_binary_abi": dpu_binary_abi,
-            "hardware_profile_version": (self.profile or _canonical_profile()).version,
-            "tasklets_per_dpu": (self.profile or _canonical_profile()).tasklets_per_dpu,
-            "requested_dpu_count": (self.profile or _canonical_profile()).requested_dpu_count,
+            "hardware_profile_version": selected_profile.version,
+            "tasklets_per_dpu": selected_profile.tasklets_per_dpu,
+            "requested_dpu_count": selected_profile.requested_dpu_count,
             "graph_request_count": 1,
             "logical_task_count": len(self.graph.tasks),
             "component_operation_count": len(self.operations),
@@ -553,8 +557,8 @@ class ResidentGraphPackage:
             "schema_version": RESIDENT_SESSION_PROTOCOL,
             "manifest_kind": "resident_graph_request",
             "session_id": request_id,
-            "route_id": RESIDENT_ROUTE_ID,
-            "backend_id": RESIDENT_BACKEND_ID,
+            "route_id": selected_profile.route_id,
+            "backend_id": selected_profile.backend_id,
             "hardware_profile_version": selected_profile.version,
             "target": "hardware",
             "sdk_allocation_profile": RESIDENT_ALLOCATION_PROFILE,
@@ -1518,13 +1522,17 @@ def _canonical_profile(
     version: str = RESIDENT_PROFILE_VERSION,
     requested_dpu_count: int = 1,
 ) -> HardwareTaskGraphResidentProfile:
-    if version == RESIDENT_PROFILE_VERSION:
+    if version in {RESIDENT_PROFILE_VERSION, RESIDENT_EXECUTION_PLAN_PROFILE_VERSION}:
         output_tile_elements = RESIDENT_OUTPUT_TILE_ELEMENTS
         max_elements = RESIDENT_MAX_ELEMENTS
         max_logical_tasks = RESIDENT_MAX_LOGICAL_TASKS
         max_component_ops = RESIDENT_MAX_COMPONENT_OPS
         max_contracted_combinations = RESIDENT_MAX_CONTRACTED_COMBINATIONS
-        supported_tasklets = RESIDENT_SUPPORTED_TASKLETS
+        supported_tasklets = (
+            (1,)
+            if version == RESIDENT_EXECUTION_PLAN_PROFILE_VERSION
+            else RESIDENT_SUPPORTED_TASKLETS
+        )
     elif version == RESIDENT_M46_PROFILE_VERSION:
         output_tile_elements = RESIDENT_M46_OUTPUT_TILE_ELEMENTS
         max_elements = RESIDENT_MAX_ELEMENTS
@@ -1547,7 +1555,7 @@ def _canonical_profile(
                 "hardware_profile_violation: tasklets_per_dpu must be one of 1, 2, 4, 8, 16"
             )
         raise ValueError("hardware_profile_violation: unsupported resident tasklet count")
-    if version != RESIDENT_V3_PROFILE_VERSION and int(requested_dpu_count) != 1:
+    if version in {RESIDENT_PROFILE_VERSION, RESIDENT_M46_PROFILE_VERSION} and int(requested_dpu_count) != 1:
         raise ValueError(
             "hardware_profile_violation: legacy resident profiles require requested_dpu_count=1"
         )
@@ -1556,8 +1564,16 @@ def _canonical_profile(
     return HardwareTaskGraphResidentProfile(
         version=version,
         target="hardware",
-        backend_id=RESIDENT_BACKEND_ID,
-        route_id=RESIDENT_ROUTE_ID,
+        backend_id=(
+            RESIDENT_EXECUTION_PLAN_BACKEND_ID
+            if version == RESIDENT_EXECUTION_PLAN_PROFILE_VERSION
+            else RESIDENT_BACKEND_ID
+        ),
+        route_id=(
+            RESIDENT_EXECUTION_PLAN_ROUTE_ID
+            if version == RESIDENT_EXECUTION_PLAN_PROFILE_VERSION
+            else RESIDENT_ROUTE_ID
+        ),
         session_protocol=RESIDENT_SESSION_PROTOCOL,
         timing_scope=RESIDENT_TIMING_SCOPE,
         requested_dpu_count=int(requested_dpu_count),
@@ -1578,15 +1594,36 @@ def _canonical_profile(
     )
 
 
+def canonical_execution_plan_resident_profile(
+    requested_dpu_count: int,
+) -> HardwareTaskGraphResidentProfile:
+    """Return the exact-count profile used by execution-plan packages."""
+
+    return _canonical_profile(
+        1,
+        version=RESIDENT_EXECUTION_PLAN_PROFILE_VERSION,
+        requested_dpu_count=requested_dpu_count,
+    )
+
+
 def _parse_profile(value: object) -> HardwareTaskGraphResidentProfile:
     if not isinstance(value, Mapping):
         raise ValueError("hardware_profile_violation: resident hardware_profile must be a mapping")
     version = value.get("hardware_profile_version")
-    if version not in {RESIDENT_PROFILE_VERSION, RESIDENT_M46_PROFILE_VERSION, RESIDENT_V3_PROFILE_VERSION}:
+    if version not in {
+        RESIDENT_PROFILE_VERSION,
+        RESIDENT_M46_PROFILE_VERSION,
+        RESIDENT_EXECUTION_PLAN_PROFILE_VERSION,
+        RESIDENT_V3_PROFILE_VERSION,
+    }:
         raise ValueError(f"hardware_profile_violation: unsupported resident profile {version}")
     tasklets = int(value.get("tasklets_per_dpu", 1))
     requested_dpus = int(value.get("requested_dpu_count", 1))
-    supported_tasklets = RESIDENT_V3_SUPPORTED_TASKLETS if version == RESIDENT_V3_PROFILE_VERSION else RESIDENT_SUPPORTED_TASKLETS
+    supported_tasklets = (
+        RESIDENT_V3_SUPPORTED_TASKLETS
+        if version == RESIDENT_V3_PROFILE_VERSION
+        else (1,) if version == RESIDENT_EXECUTION_PLAN_PROFILE_VERSION else RESIDENT_SUPPORTED_TASKLETS
+    )
     if tasklets not in supported_tasklets:
         message = (
             "hardware_profile_violation: tasklets_per_dpu must be one of 1, 2, 4, 8, 16"
@@ -1596,9 +1633,9 @@ def _parse_profile(value: object) -> HardwareTaskGraphResidentProfile:
         raise ValueError(
             message
         )
-    if version == RESIDENT_PROFILE_VERSION and tasklets != 1:
+    if version in {RESIDENT_PROFILE_VERSION, RESIDENT_EXECUTION_PLAN_PROFILE_VERSION} and tasklets != 1:
         raise ValueError("hardware_profile_violation: resident v1 profile is one-tasklet only")
-    if version != RESIDENT_V3_PROFILE_VERSION and requested_dpus != 1:
+    if version in {RESIDENT_PROFILE_VERSION, RESIDENT_M46_PROFILE_VERSION} and requested_dpus != 1:
         raise ValueError(
             "hardware_profile_violation: legacy resident profiles require requested_dpu_count=1"
         )
@@ -1736,7 +1773,13 @@ def _encoded_slot_id(slot: ResidentSlotDescriptor) -> int:
 
 
 def _require_canonical_profile(profile: HardwareTaskGraphResidentProfile) -> None:
-    supported_tasklets = RESIDENT_V3_SUPPORTED_TASKLETS if profile.version == RESIDENT_V3_PROFILE_VERSION else RESIDENT_SUPPORTED_TASKLETS
+    supported_tasklets = (
+        RESIDENT_V3_SUPPORTED_TASKLETS
+        if profile.version == RESIDENT_V3_PROFILE_VERSION
+        else (1,)
+        if profile.version == RESIDENT_EXECUTION_PLAN_PROFILE_VERSION
+        else RESIDENT_SUPPORTED_TASKLETS
+    )
     if profile.tasklets_per_dpu not in supported_tasklets:
         message = (
             "hardware_profile_violation: tasklets_per_dpu must be one of 1, 2, 4, 8, 16"
@@ -1746,15 +1789,20 @@ def _require_canonical_profile(profile: HardwareTaskGraphResidentProfile) -> Non
         raise ResidentCapacityError(
             message
         )
-    if profile.version == RESIDENT_PROFILE_VERSION and profile.tasklets_per_dpu != 1:
+    if profile.version in {RESIDENT_PROFILE_VERSION, RESIDENT_EXECUTION_PLAN_PROFILE_VERSION} and profile.tasklets_per_dpu != 1:
         raise ResidentCapacityError(
             "hardware_profile_violation: resident v1 profile is one-tasklet only"
         )
-    if profile.version not in {RESIDENT_PROFILE_VERSION, RESIDENT_M46_PROFILE_VERSION, RESIDENT_V3_PROFILE_VERSION}:
+    if profile.version not in {
+        RESIDENT_PROFILE_VERSION,
+        RESIDENT_M46_PROFILE_VERSION,
+        RESIDENT_EXECUTION_PLAN_PROFILE_VERSION,
+        RESIDENT_V3_PROFILE_VERSION,
+    }:
         raise ResidentCapacityError(
             "hardware_profile_violation: unsupported resident profile version"
         )
-    if profile.version != RESIDENT_V3_PROFILE_VERSION and profile.requested_dpu_count != 1:
+    if profile.version in {RESIDENT_PROFILE_VERSION, RESIDENT_M46_PROFILE_VERSION} and profile.requested_dpu_count != 1:
         raise ResidentCapacityError(
             "hardware_profile_violation: legacy resident profiles require requested_dpu_count=1"
         )

@@ -41,9 +41,13 @@ from quantum_bench.targets.upmem.execution_plan_v1 import (
 from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
     ResidentGraphPackage,
     build_resident_graph_package,
+    canonical_execution_plan_resident_profile,
     validate_resident_graph_package_file,
 )
 from quantum_bench.targets.upmem.hardware_session import hardware_environment_metadata
+from quantum_bench.targets.upmem.simplepim_taskgraph_executor import (
+    NATIVE_HARDWARE_PROFILE_VERSION,
+)
 from quantum_bench.tn import (
     build_tensor_network,
     execute_task_sequence_np_einsum,
@@ -63,6 +67,15 @@ NATIVE_TARGET_MODULE = "quantum_bench.targets.upmem.simplepim_taskgraph_executor
 ADAPTER_SESSION_SCHEMA = "upmem_execution_plan_adapter_session_v1"
 NATIVE_BACKEND_ID = "upmem_sdk_hardware_execution_plan"
 PLACEMENTS = (PLACEMENT_SINGLE, PLACEMENT_FRONTIER)
+
+
+def _requested_dpu_count_for_placement(placement: str) -> int:
+    """Return the exact v1 resident package cardinality for a placement."""
+
+    count = {PLACEMENT_SINGLE: 1, PLACEMENT_FRONTIER: 2}.get(placement)
+    if count is None:
+        raise ValueError(f"unsupported execution-plan placement policy: {placement}")
+    return count
 TASKLETS_PER_DPU = 1
 WARMUPS = 1
 REPEATS = 3
@@ -377,9 +390,6 @@ def prepare_route_study(
     )
     case = suite["cases"][0]
     source, package_graph, package_network, reference = _build_case(root_dir, suite, case, contract)
-    package = _write_package(
-        plan_dir, case, package_graph, package_network, reference, dpu_binary, contract
-    )
     compiler = plan_compiler or compile_plan
     placements: list[PreparedPlacement] = []
     for placement in contract.placements:
@@ -389,7 +399,7 @@ def prepare_route_study(
             placement,
             source_graph=source,
             package_graph=package_graph,
-            package=package,
+            package_network=package_network,
             source_output=reference,
             dpu_binary=dpu_binary,
             plan_compiler=compiler,
@@ -488,9 +498,6 @@ def execute_route_study(
         raise NativeExecutionFailure("native_build_failed", "native target did not return dpu_binary")
     case = suite["cases"][0]
     source, package_graph, package_network, reference = _build_case(root_dir, suite, case, contract)
-    package = _write_package(
-        run_dir, case, package_graph, package_network, reference, dpu_binary, contract
-    )
     compiler = plan_compiler or compile_plan
     placements = [
         _prepare_placement(
@@ -499,7 +506,7 @@ def execute_route_study(
             placement,
             source_graph=source,
             package_graph=package_graph,
-            package=package,
+            package_network=package_network,
             source_output=reference,
             dpu_binary=dpu_binary,
             plan_compiler=compiler,
@@ -585,7 +592,7 @@ def _prepare_placement(
     *,
     source_graph: TaskGraph,
     package_graph: TaskGraph,
-    package: ResidentGraphPackage,
+    package_network: TensorNetworkValue,
     source_output: np.ndarray,
     dpu_binary: Path,
     plan_compiler: Callable[..., ExecutionPlan],
@@ -594,6 +601,17 @@ def _prepare_placement(
 ) -> PreparedPlacement:
     directory = output_root / "cases" / sanitize(str(case["case_id"])) / sanitize(placement)
     directory.mkdir(parents=True, exist_ok=False)
+    package = _write_package(
+        output_root,
+        case,
+        package_graph,
+        package_network,
+        source_output,
+        dpu_binary,
+        contract,
+        requested_dpu_count=_requested_dpu_count_for_placement(placement),
+        request_id=f"{case['case_id']}-{placement}",
+    )
     package_path = package.package_path
     if package_path is None:
         raise ValueError("manifest_parse_failed: resident package path is missing")
@@ -651,6 +669,11 @@ def _prepare_placement(
             "package_tensor_network_hash": plan.package_tensor_network_hash,
             "package_contraction_plan_hash": plan.package_contraction_plan_hash,
             "requested_rank_path": requested_rank_path,
+            "resident_route_id": package.profile.route_id if package.profile else None,
+            "resident_backend_id": package.profile.backend_id if package.profile else None,
+            "resident_hardware_profile_version": package.profile.version if package.profile else None,
+            "resident_requested_dpu_count": package.profile.requested_dpu_count if package.profile else None,
+            "resident_tasklets_per_dpu": package.profile.tasklets_per_dpu if package.profile else None,
         }
     )
     request_path = directory / "block2_request.json"
@@ -747,6 +770,8 @@ def _write_package(
     reference: np.ndarray,
     dpu_binary: Path,
     contract: RouteStudyContract,
+    requested_dpu_count: int,
+    request_id: str,
 ) -> ResidentGraphPackage:
     package = build_resident_graph_package(
         package_graph,
@@ -755,13 +780,14 @@ def _write_package(
         suite_id=contract.suite_id,
         quantization_mode="none",
         full_precision_output=reference,
+        profile=canonical_execution_plan_resident_profile(requested_dpu_count),
         allow_slot_reuse=contract.allow_slot_reuse,
     )
     _validate_real_package(package)
     artifact = package.write(
         output_root,
         dpu_binary=dpu_binary,
-        request_id=str(case["case_id"]),
+        request_id=request_id,
     )
     if artifact.package_path is None:
         raise ValueError("manifest_parse_failed: package writer returned no package")
@@ -799,7 +825,7 @@ def _session_records(
                 repeat_id=repetition["repeat_id"],
                 contract=contract,
             )
-            row.update(_adapter_record(session, repetition, session_path, run_dir))
+            row.update(_adapter_record(session, repetition, session_path, run_dir, contract))
             row.update({
                 "status": "completed",
                 "validation_status": "not_individually_collected",
@@ -843,6 +869,9 @@ def _validate_adapter_session(
         "total_task_completion_count", "exactly_once_execution_verified",
         "wave_barrier_count_total", "operation_assignments", "cross_dpu_transfer",
         "schedule_h2d_bytes", "session_timing", "session_transfer", "session_validation", "repetitions",
+        "native_hardware_profile_version", "resident_manifest_route_id",
+        "resident_manifest_backend_id", "resident_manifest_hardware_profile_version",
+        "resident_manifest_requested_dpu_count", "resident_manifest_tasklets_per_dpu",
     ), "adapter session")
     expected = {
         "schema_version": ADAPTER_SESSION_SCHEMA,
@@ -892,6 +921,26 @@ def _validate_adapter_session(
     for key, value in expected.items():
         if session[key] != value:
             raise NativeExecutionFailure("output_manifest_failed", f"adapter session field {key} mismatch")
+    package = getattr(prepared, "package", None)
+    profile = getattr(package, "profile", None)
+    if profile is None:
+        raise NativeExecutionFailure("output_manifest_failed", "resident package profile is missing")
+    expected_identity = {
+        "native_hardware_profile_version": NATIVE_HARDWARE_PROFILE_VERSION,
+        "resident_manifest_route_id": profile.route_id,
+        "resident_manifest_backend_id": profile.backend_id,
+        "resident_manifest_hardware_profile_version": profile.version,
+        "resident_manifest_requested_dpu_count": profile.requested_dpu_count,
+        "resident_manifest_tasklets_per_dpu": profile.tasklets_per_dpu,
+    }
+    for key, value in expected_identity.items():
+        if session[key] != value:
+            raise NativeExecutionFailure("output_manifest_failed", f"adapter session field {key} mismatch")
+    if "hardware_profile_version" in session and session["hardware_profile_version"] not in {
+        NATIVE_HARDWARE_PROFILE_VERSION,
+        None,
+    }:
+        raise NativeExecutionFailure("output_manifest_failed", "adapter native profile identity mismatch")
     _validate_rank_evidence(session, prepared, contract)
     aggregate_completion_id = session["aggregate_session_completion_id"]
     if not isinstance(aggregate_completion_id, str) or not aggregate_completion_id.startswith("aggregate_session_completion:"):
@@ -1136,12 +1185,26 @@ def _adapter_record(
     repetition: Mapping[str, Any],
     session_path: Path,
     run_dir: Path,
+    contract: RouteStudyContract,
 ) -> JsonDict:
     session_timing = session["session_timing"]
     timing = repetition["timing"]
     transfer = repetition["transfer"]
     return {
         "allocated_dpu_count": session["allocated_dpu_count"],
+        "target_requested": session.get("target_requested"),
+        "target_observed": session.get("target_observed"),
+        # Compatibility alias for older consumers; use the explicit route,
+        # native, and resident profile fields for new evidence.
+        "hardware_profile_version": session.get("hardware_profile_version"),
+        "route_hardware_profile_version": contract.profile_version,
+        "native_hardware_profile_version": session.get("native_hardware_profile_version"),
+        "hardware_allocation_verified": session.get("hardware_allocation_verified"),
+        "resident_manifest_route_id": session.get("resident_manifest_route_id"),
+        "resident_manifest_backend_id": session.get("resident_manifest_backend_id"),
+        "resident_manifest_hardware_profile_version": session.get("resident_manifest_hardware_profile_version"),
+        "resident_manifest_requested_dpu_count": session.get("resident_manifest_requested_dpu_count"),
+        "resident_manifest_tasklets_per_dpu": session.get("resident_manifest_tasklets_per_dpu"),
         "scheduled_task_count": repetition["scheduled_task_count"],
         "session_completion_scope": session["session_completion_scope"],
         "aggregate_completed_per_dpu": session["aggregate_completed_per_dpu"],

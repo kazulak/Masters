@@ -729,6 +729,7 @@ static int resident_request_load_profile(
     char *package_magic = NULL;
     char *dpu_binary_abi = NULL;
     uint64_t manifest_requested_dpus = 0u;
+    uint64_t manifest_requested_dpu_count = 0u;
     uint64_t manifest_tasklets = 0u;
     int failed = 1;
     if (request == NULL || manifest_path == NULL || max_requested_dpus == 0u) {
@@ -766,8 +767,13 @@ static int resident_request_load_profile(
         goto done;
     }
     if (resident_uint_field((char *)manifest_bytes, "requested_dpus", &manifest_requested_dpus) != 0 ||
+        resident_uint_field((char *)manifest_bytes, "requested_dpu_count", &manifest_requested_dpu_count) != 0 ||
         resident_uint_field((char *)manifest_bytes, "tasklets", &manifest_tasklets) != 0) {
-        resident_error(error_message, "manifest_parse_failed: resident request DPU/tasklet identity missing");
+        resident_error(error_message, "hardware_profile_violation: distributed package resident request DPU/tasklet identity missing");
+        goto done;
+    }
+    if (manifest_requested_dpus != manifest_requested_dpu_count) {
+        resident_error(error_message, "hardware_profile_violation: distributed package resident request DPU counts conflict");
         goto done;
     }
     {

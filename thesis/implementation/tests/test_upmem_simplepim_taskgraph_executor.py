@@ -23,6 +23,13 @@ from quantum_bench.targets.upmem.execution_plan_v1 import (
 )
 from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
     build_resident_graph_package,
+    canonical_execution_plan_resident_profile,
+    RESIDENT_BACKEND_ID,
+    RESIDENT_EXECUTION_PLAN_BACKEND_ID,
+    RESIDENT_EXECUTION_PLAN_PROFILE_VERSION,
+    RESIDENT_EXECUTION_PLAN_ROUTE_ID,
+    RESIDENT_PROFILE_VERSION,
+    RESIDENT_ROUTE_ID,
 )
 from quantum_bench.tn import (
     build_tensor_network,
@@ -70,6 +77,9 @@ def _native_validation_inputs(
         case_id="adapter-parser",
         suite_id="adapter-parser",
         quantization_mode="none",
+        profile=canonical_execution_plan_resident_profile(
+            1 if placement == PLACEMENT_SINGLE else 2
+        ),
         allow_slot_reuse=allow_slot_reuse,
     ).write(
         tmp_path,
@@ -130,6 +140,31 @@ def test_execute_requires_explicit_hardware_opt_in(tmp_path: Path, monkeypatch: 
     monkeypatch.delenv("UPMEM_ALLOW_PHYSICAL_HARDWARE", raising=False)
     with pytest.raises(executor.NativeAdapterError, match="hardware_opt_in_missing"):
         executor.execute(request_path, timeout_s=1.0)
+
+
+def test_resident_manifest_uses_exact_execution_plan_identity_and_count() -> None:
+    plan = SimpleNamespace(requested_dpu_count=2, tasklets_per_dpu=1)
+    legacy = {
+        "target": "hardware",
+        "route_id": RESIDENT_ROUTE_ID,
+        "backend_id": RESIDENT_BACKEND_ID,
+        "hardware_profile_version": RESIDENT_PROFILE_VERSION,
+        "requested_dpu_count": 2,
+        "requested_dpus": 2,
+        "tasklets": 1,
+    }
+    with pytest.raises(executor.NativeAdapterError, match="identity is invalid"):
+        executor._validate_resident_manifest_identity(legacy, request={}, plan=plan)
+
+    exact = {
+        **legacy,
+        "route_id": RESIDENT_EXECUTION_PLAN_ROUTE_ID,
+        "backend_id": RESIDENT_EXECUTION_PLAN_BACKEND_ID,
+        "hardware_profile_version": RESIDENT_EXECUTION_PLAN_PROFILE_VERSION,
+        "requested_dpu_count": 2,
+        "requested_dpus": 2,
+    }
+    executor._validate_resident_manifest_identity(exact, request={}, plan=plan)
 
 
 def test_physical_environment_requires_a_valid_rank_path(
@@ -369,6 +404,9 @@ def test_real_normalized_session_passes_route_validator(tmp_path: Path) -> None:
         "cross_dpu_edge_count": 0,
     }
     native_response = {
+        "target_requested": "hardware",
+        "target_observed": "physical_hardware",
+        "hardware_profile_version": executor.NATIVE_HARDWARE_PROFILE_VERSION,
         "completed_per_dpu": [plan.logical_task_count * repetitions],
         "allocated_dpu_count": plan.requested_dpu_count,
         "requested_rank_path": "/dev/dpu_rank1",
@@ -402,7 +440,9 @@ def test_real_normalized_session_passes_route_validator(tmp_path: Path) -> None:
         final_output_path=output_path,
         command=(str(host_binary), "--execute-plan"),
         requested_rank_path="/dev/dpu_rank1",
+        manifest_path=manifest_path,
     )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     prepared = SimpleNamespace(
         request_id=request["request_id"],
         plan=plan,
@@ -410,6 +450,17 @@ def test_real_normalized_session_passes_route_validator(tmp_path: Path) -> None:
         schedule_sidecar_sha256=plan.schedule_sidecar_sha256,
         request_path=request_path,
         source_output=np.asarray(output_values, dtype=np.float32),
+        # Route admission validates the profile carried by the real package.
+        # Reuse the fixture manifest rather than inventing a second identity.
+        package=SimpleNamespace(
+            profile=SimpleNamespace(
+                route_id=manifest["route_id"],
+                backend_id=manifest["backend_id"],
+                version=manifest["hardware_profile_version"],
+                requested_dpu_count=manifest["requested_dpu_count"],
+                tasklets_per_dpu=manifest["tasklets"],
+            )
+        ),
     )
 
     route._complete_session_validation(session, prepared, route.M45_CONTRACT)

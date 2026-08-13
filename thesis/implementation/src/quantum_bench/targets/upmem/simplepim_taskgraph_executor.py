@@ -30,6 +30,11 @@ from quantum_bench.targets.upmem.hardware_session import (
     hardware_environment_metadata,
     sanitised_hardware_environment,
 )
+from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
+    RESIDENT_EXECUTION_PLAN_BACKEND_ID,
+    RESIDENT_EXECUTION_PLAN_PROFILE_VERSION,
+    RESIDENT_EXECUTION_PLAN_ROUTE_ID,
+)
 
 
 IMPLEMENTATION_ROOT = Path(__file__).resolve().parents[4]
@@ -41,6 +46,9 @@ DPU_BINARY_NAME = "dpu_resident"
 NATIVE_RESPONSE_SCHEMA = "upmem_execution_plan_native_v1"
 ADAPTER_SESSION_SCHEMA = "upmem_execution_plan_adapter_session_v1"
 NATIVE_BACKEND_ID = "upmem_sdk_hardware_execution_plan"
+# This is the native host/DPU ABI profile. It is intentionally distinct from
+# the inner resident package profile carried by the package manifest.
+NATIVE_HARDWARE_PROFILE_VERSION = "upmem_execution_plan_v1"
 DEVICE_LAUNCH_MODE = "asynchronous_per_dpu"
 SYNCHRONIZATION_POLICY = "synchronous_wave_barriers"
 BUILD_TIMEOUT_S = 180.0
@@ -251,6 +259,7 @@ def execute(request_path: Path, timeout_s: float) -> dict[str, Any]:
         final_output_path=final_output,
         command=command,
         requested_rank_path=requested_rank_path,
+        manifest_path=manifest_path,
     )
 
 
@@ -311,7 +320,8 @@ def validate(request_path: Path, timeout_s: float) -> dict[str, Any]:
             stage,
             str(response.get("error") or "native plan validation failed"),
         )
-    _validate_native_validation_response(response, plan=plan)
+    manifest = _read_object(manifest_path, "resident package manifest")
+    _validate_native_validation_response(response, plan=plan, manifest=manifest)
     return {
         **response,
         # The native host reports its parser state as ``validated``.  The
@@ -369,6 +379,7 @@ def _load_request(
     manifest = _read_object(manifest_path, "resident package manifest")
     if _manifest_package_path(manifest_path, manifest) != package_path.resolve():
         raise NativeAdapterError("package_preparation_failed", "resident manifest package binding mismatch")
+    _validate_resident_manifest_identity(manifest, request=request, plan=plan)
     dpu_path = _resolve_ref(request_file.parent, request.get("dpu_binary"), "DPU binary")
     manifest_dpu = manifest.get("dpu_binary")
     if not isinstance(manifest_dpu, str) or not manifest_dpu:
@@ -428,6 +439,52 @@ def _validate_request_binding(request: Mapping[str, Any], plan: ExecutionPlan) -
             raise NativeAdapterError("execution_plan_compile_failed", f"request {key} is invalid")
     if request["requested_warmups"] > 1 or request["requested_repetitions"] > 16:
         raise NativeAdapterError("execution_plan_compile_failed", "request repetition cap exceeded")
+
+
+def _validate_resident_manifest_identity(
+    manifest: Mapping[str, Any],
+    *,
+    request: Mapping[str, Any],
+    plan: ExecutionPlan,
+) -> None:
+    """Bind the inner resident profile to the outer execution plan exactly."""
+
+    if manifest.get("target") != "hardware":
+        raise NativeAdapterError("hardware_profile_violation", "resident manifest target is not hardware")
+    count = manifest.get("requested_dpu_count")
+    if count is None:
+        count = manifest.get("requested_dpus")
+    if count != plan.requested_dpu_count or manifest.get("requested_dpus") != count:
+        raise NativeAdapterError(
+            "hardware_profile_violation",
+            "resident manifest DPU count differs from execution plan",
+        )
+    if manifest.get("tasklets") != plan.tasklets_per_dpu:
+        raise NativeAdapterError(
+            "hardware_profile_violation",
+            "resident manifest tasklet count differs from execution plan",
+        )
+    identity = (
+        manifest.get("route_id"),
+        manifest.get("backend_id"),
+        manifest.get("hardware_profile_version"),
+    )
+    execution_plan_identity = (
+        RESIDENT_EXECUTION_PLAN_ROUTE_ID,
+        RESIDENT_EXECUTION_PLAN_BACKEND_ID,
+        RESIDENT_EXECUTION_PLAN_PROFILE_VERSION,
+    )
+    if identity != execution_plan_identity:
+        raise NativeAdapterError("hardware_profile_violation", "resident manifest identity is invalid")
+    for key, value in (
+        ("resident_route_id", identity[0]),
+        ("resident_backend_id", identity[1]),
+        ("resident_hardware_profile_version", identity[2]),
+        ("resident_requested_dpu_count", count),
+        ("resident_tasklets_per_dpu", manifest.get("tasklets")),
+    ):
+        if key in request and request[key] != value:
+            raise NativeAdapterError("hardware_profile_violation", f"request {key} differs from resident manifest")
 
 
 def _find_resident_manifest(
@@ -501,6 +558,13 @@ def _validate_native_response(
             raise NativeAdapterError("output_manifest_failed", f"native response {key} is unsafe")
     if response.get("backend_id") != NATIVE_BACKEND_ID:
         raise NativeAdapterError("output_manifest_failed", "native backend identity is invalid")
+    manifest = _read_object(manifest_path, "resident package manifest")
+    _validate_resident_manifest_identity(manifest, request=request, plan=plan)
+    if response.get("hardware_profile_version") != NATIVE_HARDWARE_PROFILE_VERSION:
+        raise NativeAdapterError(
+            "output_manifest_failed",
+            "native execution-plan profile identity is invalid",
+        )
     _validate_native_rank_response(response, requested_rank_path)
     if response.get("requested_dpu_count") != plan.requested_dpu_count or response.get("allocated_dpu_count") != plan.requested_dpu_count:
         raise NativeAdapterError("output_manifest_failed", "native DPU count does not match request")
@@ -527,7 +591,10 @@ def _validate_native_response(
 
 
 def _validate_native_validation_response(
-    response: Mapping[str, Any], *, plan: ExecutionPlan
+    response: Mapping[str, Any],
+    *,
+    plan: ExecutionPlan,
+    manifest: Mapping[str, Any] | None = None,
 ) -> None:
     if response.get("schema_version") != NATIVE_RESPONSE_SCHEMA:
         raise NativeAdapterError("output_manifest_failed", "native validation response schema is invalid")
@@ -558,6 +625,13 @@ def _validate_native_validation_response(
                 "output_manifest_failed",
                 f"native validation response {key} is invalid",
             )
+    if manifest is not None:
+        _validate_resident_manifest_identity(manifest, request={}, plan=plan)
+    if response.get("hardware_profile_version") != NATIVE_HARDWARE_PROFILE_VERSION:
+        raise NativeAdapterError(
+            "output_manifest_failed",
+            "native validation execution-plan profile identity is invalid",
+        )
     if response.get("requested_dpu_count") != plan.requested_dpu_count:
         raise NativeAdapterError("output_manifest_failed", "native validation DPU count differs from plan")
     allocation = response.get("allocation")
@@ -809,8 +883,14 @@ def _normalize_session(
     final_output_path: Path,
     command: tuple[str, ...],
     requested_rank_path: str,
+    manifest_path: Path | None = None,
 ) -> dict[str, Any]:
     metrics = response["metrics"]
+    resident_manifest = (
+        _read_object(manifest_path, "resident package manifest")
+        if manifest_path is not None
+        else {}
+    )
     _validate_native_rank_response(response, requested_rank_path)
     total_iterations = request["requested_warmups"] + request["requested_repetitions"]
     repeat_h2d = (
@@ -897,8 +977,16 @@ def _normalize_session(
         "returncode": 0,
         "request_id": request["request_id"],
         "backend_id": NATIVE_BACKEND_ID,
-        "target_requested": "hardware",
-        "target_observed": "physical_hardware",
+        "target_requested": response["target_requested"],
+        "target_observed": response["target_observed"],
+        "hardware_profile_version": response.get("hardware_profile_version"),
+        "native_hardware_profile_version": response.get("hardware_profile_version"),
+        "hardware_allocation_verified": response["hardware_allocation_verified"],
+        "resident_manifest_route_id": resident_manifest.get("route_id"),
+        "resident_manifest_backend_id": resident_manifest.get("backend_id"),
+        "resident_manifest_hardware_profile_version": resident_manifest.get("hardware_profile_version"),
+        "resident_manifest_requested_dpu_count": resident_manifest.get("requested_dpu_count"),
+        "resident_manifest_tasklets_per_dpu": resident_manifest.get("tasklets"),
         "execution_plan_hash": plan.execution_plan_hash,
         "upmem_execution_plan_hash": plan.execution_plan_hash,
         "package_file_sha256": plan.package_file_sha256,
@@ -915,7 +1003,6 @@ def _normalize_session(
         "allocation_succeeded": _allocation_succeeded(response),
         "persistent_allocation_observed": _allocation_succeeded(response),
         "release_confirmed": response["allocation"]["release_confirmed"],
-        "hardware_allocation_verified": response["hardware_allocation_verified"],
         "native_kernel_executed": response["native_kernel_executed"],
         "hardware_kernel_executed": response["hardware_kernel_executed"],
         "simulator_kernel_executed": response["simulator_kernel_executed"],
