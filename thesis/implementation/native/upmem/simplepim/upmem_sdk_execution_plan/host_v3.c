@@ -399,7 +399,8 @@ static void v3_write_response(
     const execution_plan_request_t *request, const execution_plan_distributed_v3_t *plan,
     const execution_plan_provider_t *provider, const v3_metrics_t *metrics,
     const v3_policy_reference_t *policy_validation, const char host_binary_sha256[65],
-    const char staged_dpu_binary_sha256[65], double allocation_s, double binary_load_s,
+    const char staged_dpu_binary_sha256[65], const char initialization_binary_sha256[65],
+    double allocation_s, double binary_load_s,
     double release_s
 ) {
     FILE *file = path == NULL ? stdout : fopen(path, "wb");
@@ -516,7 +517,7 @@ static void v3_write_response(
         policy_validation != NULL && policy_validation->finite ? "true" : "false",
         policy_validation != NULL && policy_validation->exact_match ? "true" : "false");
     v3_json_string(file, policy_validation == NULL ? "" : policy_validation->path);
-    fprintf(file, ",\"reference_sha256\":\"%s\"},\"launch_attempted\":%s,\"launch_count\":%llu,\"synchronize_count\":%llu,\"completion_reads\":%llu,\"reduction_d2h_bytes\":%llu,\"reduction_element_additions\":%llu,\"reduction_accumulator\":\"float64_then_float32\",\"package_file_sha256\":\"%s\",\"distributed_plan_v3_sha256\":\"%s\",\"host_binary_sha256\":\"%s\",\"staged_dpu_binary_sha256\":\"%s\"}\n",
+    fprintf(file, ",\"reference_sha256\":\"%s\"},\"launch_attempted\":%s,\"launch_count\":%llu,\"synchronize_count\":%llu,\"completion_reads\":%llu,\"reduction_d2h_bytes\":%llu,\"reduction_element_additions\":%llu,\"reduction_accumulator\":\"float64_then_float32\",\"package_file_sha256\":\"%s\",\"distributed_plan_v3_sha256\":\"%s\",\"host_binary_sha256\":\"%s\",\"staged_dpu_binary_sha256\":\"%s\",\"initialization_binary_sha256\":\"%s\"}\n",
         policy_validation == NULL ? "" : policy_validation->actual_sha256,
         metrics != NULL && metrics->launch_attempted ? "true" : "false",
         metrics == NULL ? 0ull : (unsigned long long)metrics->launch_count,
@@ -527,7 +528,8 @@ static void v3_write_response(
         request == NULL ? "" : request->actual_package_file_sha256,
         plan == NULL || plan->file_sha256 == NULL ? "" : plan->file_sha256,
         host_binary_sha256 == NULL ? "" : host_binary_sha256,
-        staged_dpu_binary_sha256 == NULL ? "" : staged_dpu_binary_sha256);
+        staged_dpu_binary_sha256 == NULL ? "" : staged_dpu_binary_sha256,
+        initialization_binary_sha256 == NULL ? "" : initialization_binary_sha256);
     if (path == NULL) fflush(file); else fclose(file);
 }
 
@@ -540,6 +542,7 @@ int main(int argc, char **argv) {
     const char *policy_reference_path = NULL, *policy_reference_sha256 = NULL;
     char default_policy_reference[PATH_MAX] = {0};
     char host_binary_sha256[65] = {0}, staged_dpu_binary_sha256[65] = {0};
+    char initialization_binary_sha256[65] = {0};
     uint32_t warmups = 1u, repetitions = 1u, timeout_s = 60u;
     int validate_only = 0, execute = 0, rc = 1;
     char *owned_error = NULL;
@@ -621,8 +624,9 @@ int main(int argc, char **argv) {
         failure_stage = "policy_reference_validation_failed"; error_message = owned_error; goto release;
     }
     if (execution_plan_sha256_file(argv[0], host_binary_sha256) != 0 ||
-        execution_plan_sha256_file(request.resident.dpu_binary_path, staged_dpu_binary_sha256) != 0) {
-        failure_stage = "binary_hash_failed"; error_message = "host or staged DPU binary hash failed"; goto release;
+        execution_plan_sha256_file(request.resident.dpu_binary_path, staged_dpu_binary_sha256) != 0 ||
+        execution_plan_sha256_file(initialization_binary, initialization_binary_sha256) != 0) {
+        failure_stage = "binary_hash_failed"; error_message = "host, staged DPU, or SimplePIM initialization binary hash failed"; goto release;
     }
     {
         const double started = now_s();
@@ -684,6 +688,7 @@ done:
     v3_write_response(response_path, failure_stage == NULL ? (validate_only ? "validated" : "completed") : "failed",
         failure_stage, error_message, request.resident_manifest_path == NULL ? NULL : &request, &plan,
         &provider, &metrics, &policy_validation, host_binary_sha256, staged_dpu_binary_sha256,
+        initialization_binary_sha256,
         allocation_s, binary_load_s, release_s);
     alarm(0u);
     for (size_t index = 0u; index < request.resident.input_count; index++) free(inputs == NULL ? NULL : inputs[index]);

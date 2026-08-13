@@ -140,6 +140,7 @@ def test_execute_accepts_two_warmups_and_sixteen_repetitions_with_passed_environ
                 "reference_sha256": hashlib.sha256(reference.read_bytes()).hexdigest(),
             },
             "host_binary_sha256": "host", "staged_dpu_binary_sha256": "dpu",
+            "initialization_binary_sha256": "initialization",
         }), encoding="utf-8")
         return type("Completed", (), {"returncode": 0})()
 

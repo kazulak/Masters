@@ -47,6 +47,8 @@ class FakeM5NativeTarget:
             "sidecar_sha256": "d" * 64,
             "host_binary_sha256": "e" * 64,
             "dpu_binary_sha256": "f" * 64,
+            "initialization_binary": str(kwargs["root"] / "dpu_simplepim_management_init"),
+            "initialization_binary_sha256": "g" * 64,
             "execution_plan_hash": f"plan-{kwargs['dpu_count']}-{kwargs['partition_strategy']}",
             "policy_reference": {
                 "path": str(kwargs["root"] / "policy_reference_f32.bin"),
@@ -162,6 +164,7 @@ class FakeM5NativeTarget:
             "distributed_plan_v3_sha256": request["sidecar_sha256"],
             "host_binary_sha256": request["host_binary_sha256"],
             "staged_dpu_binary_sha256": request["dpu_binary_sha256"],
+            "initialization_binary_sha256": request["initialization_binary_sha256"],
             "launch_attempted": True,
             "launch_count": 1,
         }
@@ -486,6 +489,8 @@ def test_completed_rows_have_canonical_numeric_evidence(
 
     assert row["status"] == "completed"
     assert {field: row[field] for field in expected} == expected
+    assert row["initialization_binary"] == request["initialization_binary"]
+    assert row["initialization_binary_sha256"] == request["initialization_binary_sha256"]
 
 
 @pytest.mark.parametrize(
@@ -580,6 +585,7 @@ def test_failed_native_response_is_preserved_as_structured_evidence(tmp_path: Pa
         "distributed_plan_v3_sha256",
         "host_binary_sha256",
         "staged_dpu_binary_sha256",
+        "initialization_binary_sha256",
     ),
 )
 def test_success_acceptance_requires_prepared_native_artifact_hashes(

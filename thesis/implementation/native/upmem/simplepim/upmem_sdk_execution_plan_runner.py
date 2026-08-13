@@ -254,14 +254,19 @@ def build(build_dir: Path, *, tasklets_per_dpu: int, source_dir: Path | None = N
         raise V3RunnerError("native_build_failed", (completed.stderr or completed.stdout or "v3 build failed")[-4000:])
     host = staged / "bin" / f"host_upmem_execution_plan_v3_t{tasklets_per_dpu}"
     dpu = staged / "bin" / f"dpu_resident_v3_t{tasklets_per_dpu}"
-    if not host.is_file() or not dpu.is_file():
+    initialization = staged / "bin" / "dpu_simplepim_management_init"
+    if not host.is_file() or not dpu.is_file() or not initialization.is_file():
         raise V3RunnerError("native_build_failed", "v3 build did not produce tasklet-keyed artifacts")
+    if host.parent != initialization.parent:
+        raise V3RunnerError("native_build_failed", "v3 initialization binary is not beside the host")
     return {
         "status": "built", "tasklets_per_dpu": tasklets_per_dpu, "build_dir": str(keyed),
         "host_binary": str(host), "dpu_binary": str(dpu),
+        "initialization_binary": str(initialization),
         "host_binary_identity": host.name, "dpu_binary_identity": dpu.name,
         "host_binary_sha256": hashlib.sha256(host.read_bytes()).hexdigest(),
         "staged_dpu_binary_sha256": hashlib.sha256(dpu.read_bytes()).hexdigest(),
+        "initialization_binary_sha256": hashlib.sha256(initialization.read_bytes()).hexdigest(),
         "max_elements": V3_MAX_ELEMS, "mram_pool_bytes": V3_MRAM_POOL_BYTES,
         "output_tile_elements": V3_OUTPUT_TILE_ELEMS, "build_command": list(command),
     }
@@ -362,7 +367,11 @@ def execute(
         or max_abs_error > response_tolerance
     ):
         raise V3RunnerError("policy_reference_validation_failed", "v3 policy-reference error exceeds its tolerance")
-    if not isinstance(payload.get("host_binary_sha256"), str) or not isinstance(payload.get("staged_dpu_binary_sha256"), str):
+    if (
+        not isinstance(payload.get("host_binary_sha256"), str)
+        or not isinstance(payload.get("staged_dpu_binary_sha256"), str)
+        or not isinstance(payload.get("initialization_binary_sha256"), str)
+    ):
         raise V3RunnerError("output_manifest_failed", "v3 response lacks binary hashes")
     return payload
 

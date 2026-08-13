@@ -739,6 +739,7 @@ def _validate_execute_response(response: Mapping[str, Any], request: Mapping[str
         "distributed_plan_v3_sha256": "sidecar_sha256",
         "host_binary_sha256": "host_binary_sha256",
         "staged_dpu_binary_sha256": "dpu_binary_sha256",
+        "initialization_binary_sha256": "initialization_binary_sha256",
     }
     for response_key, request_key in expected_hashes.items():
         expected_hash = request.get(request_key)
@@ -1160,6 +1161,7 @@ def _request_hashes(request: Mapping[str, Any]) -> dict[str, Any]:
             "package_circuit_semantics_hash", "package_tensor_network_hash",
             "package_contraction_plan_hash",
             "host_binary_hash", "dpu_binary_hash", "host_binary_sha256", "dpu_binary_sha256",
+            "initialization_binary", "initialization_binary_sha256",
             "simplepim_role", "collective_provider", "selected_rank_path", "rank_path",
         )
         if request.get(key) is not None

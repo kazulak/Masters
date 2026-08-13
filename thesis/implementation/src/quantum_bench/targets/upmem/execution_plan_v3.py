@@ -79,12 +79,21 @@ def build(build_dir: Path, *, tasklets: int, environment: Mapping[str, str] | No
         raise RuntimeError("native_v3_build_failed: runner returned a non-mapping")
     host = result.get("host_binary") or result.get("runner")
     dpu = result.get("dpu_binary")
-    if not host or not dpu:
-        raise RuntimeError("native_v3_build_failed: build metadata lacks host_binary/dpu_binary")
+    initialization = result.get("initialization_binary")
+    if not host or not dpu or not initialization:
+        raise RuntimeError(
+            "native_v3_build_failed: build metadata lacks host_binary/dpu_binary/initialization_binary"
+        )
+    if Path(str(host)).resolve().parent != Path(str(initialization)).resolve().parent:
+        raise RuntimeError("native_v3_build_failed: initialization binary is not beside host_binary")
     return {
         **dict(result),
         "host_binary": str(host),
         "dpu_binary": str(dpu),
+        "initialization_binary": str(initialization),
+        "host_binary_sha256": _sha256_file(host),
+        "dpu_binary_sha256": _sha256_file(dpu),
+        "initialization_binary_sha256": _sha256_file(initialization),
         "selected_rank_path": (environment or {}).get("UPMEM_HW_RANK_PATH"),
         "tasklets_per_dpu": tasklets,
         "max_dpus": MAX_DPUS,
@@ -149,6 +158,12 @@ def prepare_request(
         operation_abi_version=RESIDENT_OPERATION_ABI_V2,
     )
     staged_dpu = _stage_dpu_binary(build.get("dpu_binary"), root)
+    initialization_binary = _required_binary_binding(
+        build, "initialization_binary", "initialization_binary_sha256", "SimplePIM initialization binary"
+    )
+    host_binary = Path(str(build.get("host_binary") or build.get("runner"))).resolve()
+    if host_binary.parent != initialization_binary.resolve().parent:
+        raise ValueError("native_v3_build_invalid: initialization binary is not beside host_binary")
     request_id = _request_id(case, dpu_count, tasklets, quantization_mode, partition_strategy)
     package = package.write(root, dpu_binary=staged_dpu, request_id=request_id)
     _write_native_v3_manifest_identity(package.manifest_path)
@@ -222,8 +237,10 @@ def prepare_request(
     return {
         "schema_version": SCHEMA_VERSION,
         "native_response_schema": NATIVE_RESPONSE_SCHEMA,
-        "host_binary": str(build.get("host_binary") or build.get("runner")),
+        "host_binary": str(host_binary),
         "dpu_binary": str(build.get("dpu_binary")),
+        "initialization_binary": str(initialization_binary),
+        "initialization_binary_sha256": build["initialization_binary_sha256"],
         "resident_manifest": str(package.manifest_path),
         "resident_package": str(package.package_path),
         "distributed_plan": str(sidecar_path),
@@ -505,6 +522,22 @@ def _sha256_file(value: Any) -> str:
     if not path.is_file():
         raise ValueError(f"native_v3_build_invalid: binary does not exist: {path}")
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _required_binary_binding(
+    build: Mapping[str, Any], path_key: str, hash_key: str, label: str
+) -> Path:
+    value = build.get(path_key)
+    expected = build.get(hash_key)
+    if not value:
+        raise ValueError(f"native_v3_build_invalid: {label} path is required")
+    path = Path(str(value))
+    if not path.is_file():
+        raise ValueError(f"native_v3_build_invalid: {label} does not exist: {path}")
+    actual = _sha256_file(path)
+    if not isinstance(expected, str) or actual != expected:
+        raise ValueError(f"native_v3_build_invalid: {label} SHA-256 does not match build metadata")
+    return path
 
 
 def _validate_resources(dpu_count: int, tasklets: int) -> None:

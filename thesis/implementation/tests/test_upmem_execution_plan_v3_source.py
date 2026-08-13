@@ -102,6 +102,9 @@ def test_v3_response_and_build_contract_are_canonical() -> None:
     assert "V3_MAX_ELEMS := 65536" in makefile
     assert "V3_MRAM_POOL_BYTES := 524288" in makefile
     assert "V3_OUTPUT_TILE_ELEMS := 2" in makefile
+    assert "bin/dpu_simplepim_management_init" in makefile.split("v3:", 1)[1]
+    assert "initialization_binary_sha256" in source
+    assert "execution_plan_sha256_file(initialization_binary" in source
 
 
 def test_completion_v3_has_capacity_for_all_tasklets() -> None:
@@ -111,3 +114,4 @@ def test_completion_v3_has_capacity_for_all_tasklets() -> None:
     makefile = (PLAN / "Makefile").read_text(encoding="ascii")
     assert "dpu_resident_v3_t%" in makefile
     assert "host_upmem_execution_plan_v3_t%" in makefile
+    assert "bin/dpu_simplepim_management_init" in makefile
