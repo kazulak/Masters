@@ -444,7 +444,7 @@ int main(void) {
         RESIDENT_COMPLETION.completion_status = RESIDENT_COMPLETION_PENDING;
         RESIDENT_COMPLETION.completed_operation_count = 0u;
         RESIDENT_COMPLETION.output_elements_processed = 0u;
-        RESIDENT_COMPLETION.output_checksum_fnv1a64 = 14695981039346656037ULL;
+        RESIDENT_COMPLETION.output_checksum_fnv1a64 = RESIDENT_CHECKSUM_FNV1A64_OFFSET_BASIS;
         RESIDENT_COMPLETION.dpu_run_time_cycles = 0ULL;
 #if RESIDENT_COMPLETION_VERSION >= 2
         for (uint32_t index = 0; index < sizeof(RESIDENT_COMPLETION.tasklet_processed_elements) /
@@ -502,9 +502,12 @@ int main(void) {
             RESIDENT_COMPLETION.output_elements_processed = operation->output_elements;
 #endif
 
-            uint64_t checksum = 14695981039346656037ULL;
+            const int final_reference_validation_only =
+                (RESIDENT_CONTROL.reserved &
+                 RESIDENT_CONTROL_FLAG_CONTRACTED_FINAL_REFERENCE_VALIDATION_ONLY) != 0u;
+            uint64_t checksum = RESIDENT_CHECKSUM_FNV1A64_OFFSET_BASIS;
             const resident_slot_descriptor_t *out_slot = resident_slot(operation->slot_out_real);
-            if (out_slot != NULL) {
+            if (!final_reference_validation_only && out_slot != NULL) {
 #if RESIDENT_OPERATION_ABI_VERSION >= RESIDENT_OPERATION_ABI_V2
                 const uint32_t output_offset = operation->args.dpu_slice_offset;
                 const uint32_t output_elements = operation->args.dpu_slice_elements;
@@ -528,7 +531,7 @@ int main(void) {
                     }
                 }
             }
-            if (operation->kind == RESIDENT_OPERATION_COMPLEX_COMBINE) {
+            if (!final_reference_validation_only && operation->kind == RESIDENT_OPERATION_COMPLEX_COMBINE) {
                 const resident_slot_descriptor_t *out_imag_slot = resident_slot(operation->slot_out_imag);
                 if (out_imag_slot != NULL) {
 #if RESIDENT_OPERATION_ABI_VERSION >= RESIDENT_OPERATION_ABI_V2

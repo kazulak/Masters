@@ -133,6 +133,10 @@ def test_v3_response_and_build_contract_are_canonical() -> None:
     assert r'\"transfer_provider\":\"upmem_sdk_synchronous_v1\"' in source
     assert r'\"collective_provider\":\"%s\"' in source
     assert r'\"reconstruction_provider\":\"%s\"' in source
+    assert "RESIDENT_CONTROL_FLAG_CONTRACTED_FINAL_REFERENCE_VALIDATION_ONLY" in common
+    assert "RESIDENT_CHECKSUM_FNV1A64_OFFSET_BASIS" in common
+    assert "output_checksum_policy" in source
+    assert 'contracted_partition ? "final_reference_validation_only" : "output_slice_per_dpu"' in source
     assert r'\"load_balance\"' in source
     assert "UPMEM_GENERIC_MAX_ELEMS 65536" in common
     assert "RESIDENT_OUTPUT_TILE_ELEMS 2" in common
@@ -142,6 +146,39 @@ def test_v3_response_and_build_contract_are_canonical() -> None:
     assert "bin/dpu_simplepim_management_init" in makefile.split("v3:", 1)[1]
     assert "initialization_binary_sha256" in source
     assert "execution_plan_sha256_file(initialization_binary" in source
+
+
+def test_v3_checksum_policy_preserves_output_checksums_and_skips_contracted_checksums() -> None:
+    host = (PLAN / "host_v3.c").read_text(encoding="ascii")
+    dpu = (NATIVE / "upmem_sdk_generic_loop_resident/dpu.c").read_text(encoding="ascii")
+    common = (NATIVE / "upmem_sdk_generic_loop_resident/common.h").read_text(encoding="ascii")
+
+    assert "RESIDENT_CONTROL_FLAG_CONTRACTED_FINAL_REFERENCE_VALIDATION_ONLY" in common
+    assert "control.reserved" not in host
+    assert "? RESIDENT_CONTROL_FLAG_CONTRACTED_FINAL_REFERENCE_VALIDATION_ONLY : 0u" in host
+
+    execute_body = host.split("static int v3_execute_repetition(", 1)[1].split(
+        "static void v3_write_response(", 1
+    )[0]
+    contracted_body = execute_body.split("if (contracted_partition) {", 1)[1].split(
+        "\n        } else {", 1
+    )[0]
+    assert "checksum_f32_bytes" not in contracted_body
+    assert "int64_t *accumulator" in contracted_body
+    assert "double *accumulator" in contracted_body
+
+    output_body = execute_body.split("\n        } else {", 1)[1].split(
+        "metrics->repeats[repeat_index].assembly_time_s", 1
+    )[0]
+    assert "checksum_f32_bytes" in output_body
+
+    checksum_body = dpu.split("const int final_reference_validation_only =", 1)[1].split(
+        "RESIDENT_COMPLETION.output_checksum_fnv1a64", 1
+    )[0]
+    assert "RESIDENT_CONTROL_FLAG_CONTRACTED_FINAL_REFERENCE_VALIDATION_ONLY" in checksum_body
+    assert "if (!final_reference_validation_only && out_slot != NULL)" in checksum_body
+    assert "!final_reference_validation_only && operation->kind == RESIDENT_OPERATION_COMPLEX_COMBINE" in checksum_body
+    assert "contracted v3 DPU did not acknowledge final-reference-only checksum policy" in host
 
 
 def test_completion_v3_has_capacity_for_all_tasklets() -> None:

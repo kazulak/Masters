@@ -274,7 +274,8 @@ static int v3_copy_package_to_dpu(
         request->resident.header.slot_count,
         request->resident.header.operation_count,
         request->resident.header.pool_bytes,
-        0u,
+        plan->header.partition_mode == EXECUTION_PLAN_V3_PARTITION_CONTRACTED
+            ? RESIDENT_CONTROL_FLAG_CONTRACTED_FINAL_REFERENCE_VALIDATION_ONLY : 0u,
     };
     if (unit == NULL || unit->package_operation_index >= request->resident.header.operation_count) {
         *error = DPU_ERR_INVALID_PROFILE;
@@ -365,10 +366,12 @@ static int v3_execute_repetition(
     const resident_slot_descriptor_t *output_slot = &request->resident.slots[plan->header.output_slot];
     const int packed_int8 =
         plan->header.numeric_mode == EXECUTION_PLAN_V3_NUMERIC_HOST_PACKED_INT8;
+    const int contracted_partition =
+        plan->header.partition_mode == EXECUTION_PLAN_V3_PARTITION_CONTRACTED;
     const double started = now_s();
     double completion_started;
     memset(completions, 0, sizeof(completions));
-    if (plan->header.partition_mode == EXECUTION_PLAN_V3_PARTITION_CONTRACTED) {
+    if (contracted_partition) {
         memset(packed_int8 ? (unsigned char *)raw_i32_buffer : final_buffer, 0,
             output->transfer_bytes);
     }
@@ -401,6 +404,14 @@ static int v3_execute_repetition(
         metrics->repeats[repeat_index].completion_d2h_bytes += sizeof(completions[dpu_id]);
         if (unit == NULL || v3_validate_completion(&completions[dpu_id], unit,
                 plan->header.package_operation_index, failure_message, error) != 0) return 1;
+        if (contracted_partition &&
+            completions[dpu_id].output_checksum_fnv1a64 !=
+                RESIDENT_CHECKSUM_FNV1A64_OFFSET_BASIS) {
+            if (failure_message != NULL && *failure_message == NULL) *failure_message = strdup(
+                "contracted v3 DPU did not acknowledge final-reference-only checksum policy");
+            *error = DPU_ERR_INVALID_PROFILE;
+            return 1;
+        }
         metrics->repeats[repeat_index].dpu_cycles[dpu_id] = completions[dpu_id].dpu_run_time_cycles;
         metrics->repeats[repeat_index].dpu_work_elements[dpu_id] = completions[dpu_id].output_elements_processed;
         metrics->repeats[repeat_index].dpu_completions[dpu_id] = 1u;
@@ -410,7 +421,7 @@ static int v3_execute_repetition(
         now_s() - completion_started;
     {
         const double assembly_started = now_s();
-        if (plan->header.partition_mode == EXECUTION_PLAN_V3_PARTITION_CONTRACTED) {
+        if (contracted_partition) {
             unsigned char *partial = (unsigned char *)calloc(output->transfer_bytes, 1u);
             if (partial == NULL) { *error = DPU_ERR_INTERNAL; return 1; }
             if (packed_int8) {
@@ -419,17 +430,11 @@ static int v3_execute_repetition(
                     free(partial); *error = DPU_ERR_INTERNAL; return 1;
                 }
                 for (uint32_t dpu_id = 0u; dpu_id < plan->header.dpu_count; dpu_id++) {
-                    const execution_plan_v3_work_unit_t *unit =
-                        execution_plan_distributed_v3_work_unit_for_dpu(plan, dpu_id);
                     *error = dpu_copy_from(handles[dpu_id], "RESIDENT_SLOT_POOL",
                         output_slot->offset_bytes, partial, output->transfer_bytes);
                     if (*error != DPU_OK) break;
                     metrics->reduction_d2h_bytes += output->transfer_bytes;
                     metrics->repeats[repeat_index].output_d2h_bytes += output->transfer_bytes;
-                    if (checksum_f32_bytes(14695981039346656037ULL, partial,
-                            unit->output_elements) != completions[dpu_id].output_checksum_fnv1a64) {
-                        *error = DPU_ERR_INVALID_PROFILE; break;
-                    }
                     const int32_t *values = (const int32_t *)partial;
                     for (uint32_t index = 0u; index < output->elements; index++) {
                         accumulator[index] += (int64_t)values[index];
@@ -451,16 +456,12 @@ static int v3_execute_repetition(
                     free(partial); *error = DPU_ERR_INTERNAL; return 1;
                 }
                 for (uint32_t dpu_id = 0u; dpu_id < plan->header.dpu_count; dpu_id++) {
-                    const execution_plan_v3_work_unit_t *unit =
-                        execution_plan_distributed_v3_work_unit_for_dpu(plan, dpu_id);
                     *error = dpu_copy_from(handles[dpu_id], "RESIDENT_SLOT_POOL",
                         output_slot->offset_bytes, partial, output->transfer_bytes);
                     if (*error != DPU_OK) break;
                     metrics->reduction_d2h_bytes += output->transfer_bytes;
                     metrics->repeats[repeat_index].output_d2h_bytes += output->transfer_bytes;
-                    if (buffer_is_finite(partial, output->raw_bytes) != 0 ||
-                        checksum_f32_bytes(14695981039346656037ULL, partial,
-                            unit->output_elements) != completions[dpu_id].output_checksum_fnv1a64) {
+                    if (buffer_is_finite(partial, output->raw_bytes) != 0) {
                         *error = DPU_ERR_INVALID_PROFILE; break;
                     }
                     const float *values = (const float *)partial;
@@ -501,7 +502,7 @@ static int v3_execute_repetition(
                 if (*error == DPU_OK) {
                     if ((!packed_int8 && buffer_is_finite(
                             scratch + raw_start - aligned_start, (size_t)raw_bytes) != 0) ||
-                        checksum_f32_bytes(14695981039346656037ULL,
+                        checksum_f32_bytes(RESIDENT_CHECKSUM_FNV1A64_OFFSET_BASIS,
                             scratch + raw_start - aligned_start, unit->output_elements) !=
                             completions[dpu_id].output_checksum_fnv1a64) {
                         *error = DPU_ERR_INVALID_PROFILE;
@@ -629,13 +630,14 @@ static void v3_write_response(
     v3_json_string(file, RESIDENT_PROFILE_VERSION);
     fprintf(file, ",\"backend_family\":\"upmem_sdk\",\"execution_class\":\"resident_taskgraph\",\"kernel_strategy\":\"resident_generic_contract\",\"requested_dpu_count\":%u,\"allocated_dpu_count\":%u,\"requested_rank_path\":", dpu_count, provider != NULL && provider->allocation_used ? provider->observed_dpus : 0u);
     v3_json_string(file, provider == NULL ? "" : provider->requested_rank_path);
-    fprintf(file, ",\"observed_rank_count\":%u,\"tasklets_per_dpu\":%u,\"rank_count\":%u,\"one_rank\":%s,\"single_rank\":%s,\"partition_strategy\":\"%s\",\"dispatch_mode\":\"bulk_set_synchronous_v1\",\"kernel_launch_api_calls\":%llu,\"dpu_program_instances\":%u,\"explicit_sync_api_calls\":%llu,\"launch_count_semantics\":\"set_launch_api_calls\",\"synchronize_count_semantics\":\"explicit_dpu_sync_api_calls\",\"numeric_mode\":\"%s\",\"numeric_transport\":\"%s\",\"numeric_arithmetic\":\"%s\",\"requantization_scope\":\"%s\",\"packed_int8_transfer\":%s,\"host_quantization\":%s,\"dpu_intermediate_requantization\":false,\"simulator_kernel_executed\":false,\"cpu_fallback_used\":false,\"hardware_kernel_executed\":%s,\"native_kernel_executed\":%s,\"hardware_allocation_verified\":%s,\"hardware_release_verified\":%s,\"allocation_provider\":\"upmem_sdk_rank_profile_v1\",\"simplepim_role\":\"initialization_binary_and_management_state_only\",\"kernel_provider\":\"thesis_resident_generic_c_v3\",\"transfer_provider\":\"upmem_sdk_synchronous_v1\",\"collective_provider\":\"%s\",\"reconstruction_provider\":\"%s\",\"allocation\":{\"attempted\":%s,\"confirmed\":%s,\"release_attempted\":%s,\"release_confirmed\":%s},\"timing_scope\":\"per_repetition_total_time_s_includes_set_launch_completion_reads_and_validation_output_d2h_assembly_and_output_write; kernel_launch_sync_time_s_covers_only_dpu_launch_set_synchronous; completion_read_and_validation_time_s_covers_completion_d2h_reads_and_contract_validation\",\"timing\":{\"allocation_time_s\":%.9f,\"binary_load_time_s\":%.9f,\"release_time_s\":%.9f},\"requested_warmups\":%u,\"requested_repetitions\":%u,\"run_total_transfers\":{\"h2d_bytes\":%llu,\"d2h_bytes\":%llu,\"total_bytes\":%llu,\"descriptor_h2d_bytes\":%llu,\"operand_h2d_bytes\":%llu,\"reset_h2d_bytes\":%llu,\"completion_d2h_bytes\":%llu,\"final_d2h_bytes\":%llu,\"reduction_d2h_bytes\":%llu},\"transfers\":{\"h2d_bytes\":%llu,\"d2h_bytes\":%llu,\"actual_h2d_bytes\":%llu,\"actual_d2h_bytes\":%llu,\"actual_transfer_bytes\":%llu,\"descriptor_h2d_bytes\":%llu,\"operand_h2d_bytes\":%llu,\"reset_h2d_bytes\":%llu,\"completion_d2h_bytes\":%llu,\"final_d2h_bytes\":%llu,\"reduction_d2h_bytes\":%llu},\"load_balance\":{\"dpu_count\":%u,\"assigned_work_elements_min\":%llu,\"assigned_work_elements_max\":%llu,\"assigned_work_elements_total\":%llu,\"ratio\":%.9f},\"repetitions\":[",
+    fprintf(file, ",\"observed_rank_count\":%u,\"tasklets_per_dpu\":%u,\"rank_count\":%u,\"one_rank\":%s,\"single_rank\":%s,\"partition_strategy\":\"%s\",\"output_checksum_policy\":\"%s\",\"dispatch_mode\":\"bulk_set_synchronous_v1\",\"kernel_launch_api_calls\":%llu,\"dpu_program_instances\":%u,\"explicit_sync_api_calls\":%llu,\"launch_count_semantics\":\"set_launch_api_calls\",\"synchronize_count_semantics\":\"explicit_dpu_sync_api_calls\",\"numeric_mode\":\"%s\",\"numeric_transport\":\"%s\",\"numeric_arithmetic\":\"%s\",\"requantization_scope\":\"%s\",\"packed_int8_transfer\":%s,\"host_quantization\":%s,\"dpu_intermediate_requantization\":false,\"simulator_kernel_executed\":false,\"cpu_fallback_used\":false,\"hardware_kernel_executed\":%s,\"native_kernel_executed\":%s,\"hardware_allocation_verified\":%s,\"hardware_release_verified\":%s,\"allocation_provider\":\"upmem_sdk_rank_profile_v1\",\"simplepim_role\":\"initialization_binary_and_management_state_only\",\"kernel_provider\":\"thesis_resident_generic_c_v3\",\"transfer_provider\":\"upmem_sdk_synchronous_v1\",\"collective_provider\":\"%s\",\"reconstruction_provider\":\"%s\",\"allocation\":{\"attempted\":%s,\"confirmed\":%s,\"release_attempted\":%s,\"release_confirmed\":%s},\"timing_scope\":\"per_repetition_total_time_s_includes_set_launch_completion_reads_and_validation_output_d2h_assembly_and_output_write; kernel_launch_sync_time_s_covers_only_dpu_launch_set_synchronous; completion_read_and_validation_time_s_covers_completion_d2h_reads_and_contract_validation\",\"timing\":{\"allocation_time_s\":%.9f,\"binary_load_time_s\":%.9f,\"release_time_s\":%.9f},\"requested_warmups\":%u,\"requested_repetitions\":%u,\"run_total_transfers\":{\"h2d_bytes\":%llu,\"d2h_bytes\":%llu,\"total_bytes\":%llu,\"descriptor_h2d_bytes\":%llu,\"operand_h2d_bytes\":%llu,\"reset_h2d_bytes\":%llu,\"completion_d2h_bytes\":%llu,\"final_d2h_bytes\":%llu,\"reduction_d2h_bytes\":%llu},\"transfers\":{\"h2d_bytes\":%llu,\"d2h_bytes\":%llu,\"actual_h2d_bytes\":%llu,\"actual_d2h_bytes\":%llu,\"actual_transfer_bytes\":%llu,\"descriptor_h2d_bytes\":%llu,\"operand_h2d_bytes\":%llu,\"reset_h2d_bytes\":%llu,\"completion_d2h_bytes\":%llu,\"final_d2h_bytes\":%llu,\"reduction_d2h_bytes\":%llu},\"load_balance\":{\"dpu_count\":%u,\"assigned_work_elements_min\":%llu,\"assigned_work_elements_max\":%llu,\"assigned_work_elements_total\":%llu,\"ratio\":%.9f},\"repetitions\":[",
         provider == NULL ? 0u : provider->observed_ranks,
         plan == NULL ? 0u : plan->header.tasklets_per_dpu,
         provider == NULL ? 0u : provider->observed_ranks,
         provider != NULL && provider->observed_ranks == 1u ? "true" : "false",
         provider != NULL && provider->observed_ranks == 1u ? "true" : "false",
         partition_strategy,
+        contracted_partition ? "final_reference_validation_only" : "output_slice_per_dpu",
         metrics == NULL ? 0ull : (unsigned long long)metrics->kernel_launch_api_calls,
         dpu_count,
         metrics == NULL ? 0ull : (unsigned long long)metrics->explicit_sync_api_calls,

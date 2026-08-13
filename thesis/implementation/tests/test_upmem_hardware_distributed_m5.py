@@ -200,6 +200,11 @@ class FakeM5NativeTarget:
                 if contracted
                 else "host_owned_range_assembly_v1"
             ),
+            "output_checksum_policy": (
+                "final_reference_validation_only"
+                if contracted
+                else "output_slice_per_dpu"
+            ),
             "hardware_allocation_verified": True,
             "native_kernel_executed": True,
             "hardware_kernel_executed": True,
@@ -825,6 +830,15 @@ def test_fake_execution_writes_repeat_rows_and_preserves_identity(tmp_path: Path
         row["native_hardware_profile_version"] == m5.NATIVE_HARDWARE_PROFILE_VERSION
         for row in rows
     )
+    assert all(
+        row["output_checksum_policy"]
+        == (
+            "final_reference_validation_only"
+            if row["partition_strategy"] == "contracted"
+            else "output_slice_per_dpu"
+        )
+        for row in rows
+    )
     assert all(row["claims"]["speedup"] is False for row in rows)
     assert all(row["circuit_semantics_hash"] for row in rows)
     assert all(row["tensor_network_hash"] for row in rows)
@@ -1017,6 +1031,7 @@ def test_public_execution_command_tracks_suite_and_smoke_scope() -> None:
         ("dispatch_mode", "singleton_loop"),
         ("kernel_launch_api_calls", m5.TOTAL_REPETITIONS + 1),
         ("explicit_sync_api_calls", 1),
+        ("output_checksum_policy", "final_reference_validation_only"),
     ),
 )
 def test_success_acceptance_requires_bulk_set_launch_contract(

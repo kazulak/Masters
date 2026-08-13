@@ -151,7 +151,8 @@ def _m54_row(*, packed: bool, dpu_count: int, runtime_s: float, weak: bool = Fal
             "explicit_sync_api_calls": 0,
             "host_quantization": packed,
             "dpu_intermediate_requantization": False,
-            "mac_count": 1000,
+            "mac_count": 1000 * dpu_count if weak else 1000,
+            "output_checksum_policy": "output_slice_per_dpu",
         }
     )
     if packed:
@@ -716,6 +717,123 @@ def test_m54_cycle_scaling_does_not_require_launch_timing(tmp_path: Path) -> Non
     acceptance = json.loads((output / "m5_4_acceptance.json").read_text(encoding="utf-8"))
     assert acceptance["criteria"]["max_cycle_scaling"]["status"] == "passed"
     assert acceptance["criteria"]["wall_vs_cycle_scaling"]["status"] == "not_evaluated"
+
+
+def test_m54_weak_scaling_groups_changing_semantic_hashes_across_dpu_counts(
+    tmp_path: Path,
+) -> None:
+    rows: list[dict[str, object]] = []
+    for dpu_count, launch in ((1, 1.0), (2, 1.1), (4, 1.2), (8, 1.3)):
+        row = _m54_row(
+            packed=True,
+            dpu_count=dpu_count,
+            runtime_s=launch,
+            weak=True,
+        )
+        row["launch_sync_time_s"] = launch
+        changing_hash = f"{dpu_count:064x}"
+        row["task_hash"] = changing_hash
+        row["circuit_semantics_hash"] = changing_hash
+        row["tensor_network_hash"] = changing_hash
+        row["contraction_plan_hash"] = changing_hash
+        row["contraction_path_structure_hash"] = changing_hash
+        rows.append(row)
+
+    output = generate_report(
+        _write_run(tmp_path, rows),
+        tmp_path / "report-root",
+        timestamp="m54-weak-changing-shapes",
+    )
+    acceptance = json.loads(
+        (output / "m5_4_acceptance.json").read_text(encoding="utf-8")
+    )
+    criterion = acceptance["criteria"]["weak_runtime_stability"]
+
+    assert criterion["status"] == "passed"
+    assert len(criterion["observations"]) == 1
+    assert criterion["observations"][0]["dpu_counts"] == [1, 2, 4, 8]
+    assert criterion["observations"][0]["launch_sync_max_min"] == 1.3
+
+
+def test_m54_weak_scaling_failure_is_not_hidden_by_changing_hashes(
+    tmp_path: Path,
+) -> None:
+    rows: list[dict[str, object]] = []
+    for dpu_count, launch in ((1, 1.0), (64, 3.315)):
+        row = _m54_row(
+            packed=True,
+            dpu_count=dpu_count,
+            runtime_s=launch,
+            weak=True,
+        )
+        row["partition_mode"] = "contracted_partial_sum"
+        row["output_checksum_policy"] = "final_reference_validation_only"
+        row["launch_sync_time_s"] = launch
+        changing_hash = f"{dpu_count:064x}"
+        row["task_hash"] = changing_hash
+        row["circuit_semantics_hash"] = changing_hash
+        row["tensor_network_hash"] = changing_hash
+        row["contraction_plan_hash"] = changing_hash
+        row["contraction_path_structure_hash"] = changing_hash
+        rows.append(row)
+
+    output = generate_report(
+        _write_run(tmp_path, rows),
+        tmp_path / "report-root",
+        timestamp="m54-weak-failure",
+    )
+    acceptance = json.loads(
+        (output / "m5_4_acceptance.json").read_text(encoding="utf-8")
+    )
+    criterion = acceptance["criteria"]["weak_runtime_stability"]
+
+    assert criterion["status"] == "failed"
+    assert criterion["observations"][0]["launch_sync_max_min"] == 3.315
+    assert acceptance["overall_status"] == "failed"
+
+
+def test_m54_weak_scaling_requires_constant_per_dpu_work(tmp_path: Path) -> None:
+    rows: list[dict[str, object]] = []
+    for dpu_count, launch in ((1, 1.0), (2, 1.1), (4, 1.2)):
+        row = _m54_row(
+            packed=True,
+            dpu_count=dpu_count,
+            runtime_s=launch,
+            weak=True,
+        )
+        row["launch_sync_time_s"] = launch
+        row["mac_count"] = 1000
+        rows.append(row)
+
+    output = generate_report(
+        _write_run(tmp_path, rows),
+        tmp_path / "report-root",
+        timestamp="m54-weak-incompatible-work",
+    )
+    acceptance = json.loads(
+        (output / "m5_4_acceptance.json").read_text(encoding="utf-8")
+    )
+    criterion = acceptance["criteria"]["weak_runtime_stability"]
+
+    assert criterion["status"] == "not_evaluated"
+    assert criterion["observations"][0]["per_dpu_work_invariant"] is False
+
+
+def test_m54_checksum_policy_is_required_by_report_acceptance(tmp_path: Path) -> None:
+    row = _m54_row(packed=True, dpu_count=1, runtime_s=1.0)
+    row.pop("output_checksum_policy")
+
+    output = generate_report(
+        _write_run(tmp_path, [row]),
+        tmp_path / "report-root",
+        timestamp="m54-missing-checksum-policy",
+    )
+    acceptance = json.loads(
+        (output / "m5_4_acceptance.json").read_text(encoding="utf-8")
+    )
+
+    assert acceptance["criteria"]["output_checksum_policy"]["status"] == "not_evaluated"
+    assert acceptance["overall_status"] == "not_evaluated"
 
 
 def test_m54_declared_packed_row_with_malformed_transport_fails(tmp_path: Path) -> None:

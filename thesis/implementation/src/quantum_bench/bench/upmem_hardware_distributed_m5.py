@@ -923,9 +923,11 @@ def _validate_execute_response(response: Mapping[str, Any], request: Mapping[str
     if partition_strategy == "output":
         expected_collective = "none"
         expected_reconstruction = "host_owned_range_assembly_v1"
+        expected_checksum_policy = "output_slice_per_dpu"
     else:
         expected_collective = "host_mediated_sum_v1"
         expected_reconstruction = "host_float64_reduction_v1"
+        expected_checksum_policy = "final_reference_validation_only"
     quantization_mode = request.get("quantization_mode")
     if quantization_mode == "none":
         expected_numeric_mode = "float32"
@@ -978,6 +980,7 @@ def _validate_execute_response(response: Mapping[str, Any], request: Mapping[str
         "transfer_provider": "upmem_sdk_synchronous_v1",
         "collective_provider": expected_collective,
         "reconstruction_provider": expected_reconstruction,
+        "output_checksum_policy": expected_checksum_policy,
         "dispatch_mode": "bulk_set_synchronous_v1",
         "kernel_launch_api_calls": TOTAL_REPETITIONS,
         "explicit_sync_api_calls": 0,
@@ -1144,6 +1147,7 @@ def _normalized_record(
         "native_route_id": response.get("route_id"),
         "native_backend_id": response.get("backend_id"),
         "native_hardware_profile_version": response.get("hardware_profile_version"),
+        "output_checksum_policy": response.get("output_checksum_policy"),
         "backend_family": "upmem_sdk",
         "target_requested": "hardware",
         "target_observed": "physical_hardware",
@@ -1457,6 +1461,11 @@ def _failure_record(
         "native_backend_id": native_response.get("backend_id") if isinstance(native_response, Mapping) else None,
         "native_hardware_profile_version": (
             native_response.get("hardware_profile_version")
+            if isinstance(native_response, Mapping)
+            else None
+        ),
+        "output_checksum_policy": (
+            native_response.get("output_checksum_policy")
             if isinstance(native_response, Mapping)
             else None
         ),

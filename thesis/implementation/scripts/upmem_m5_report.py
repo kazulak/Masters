@@ -151,6 +151,7 @@ M5_RECORD_FIELDS = (
     "native_route_id",
     "native_backend_id",
     "native_hardware_profile_version",
+    "output_checksum_policy",
     "requested_dpu_count",
     "allocated_dpu_count",
     "repeat_id",
@@ -855,6 +856,7 @@ def _view(row: Mapping[str, Any], source_index: int) -> dict[str, Any]:
         "route_id": _text(_pick(row, "route_id", "route", "route_label")),
         "numeric_mode": _text(_pick(row, "numeric_mode", "quantization_mode", "precision_mode")),
         "partition_mode": _text(_pick(row, "partition_mode", "partition", "partition_strategy")),
+        "output_checksum_policy": _top_pick(row, "output_checksum_policy"),
         "tasklets_per_dpu": _integer(_pick(row, "tasklets_per_dpu", "tasklets", "tasklet_count")) or "unknown",
         "timing_scope": _text(_pick(row, "timing_scope")),
         "workload_kind": _text(_pick(row, "workload_kind", "workload_type", "quantum_case")),
@@ -1853,6 +1855,167 @@ def _acceptance_criterion(
     }
 
 
+def _scaling_acceptance_observations(
+    rows: Iterable[Mapping[str, Any]],
+    metric: str,
+    *,
+    compare_wall: bool = False,
+) -> list[dict[str, Any]]:
+    groups: dict[tuple[str, ...], list[Mapping[str, Any]]] = {}
+    for view in rows:
+        if view.get(metric) is None or (
+            compare_wall and view.get("launch_sync_time_s") is None
+        ):
+            continue
+        key = _acceptance_group_key(view, include_numeric=True, include_dpu=False)
+        groups.setdefault(key, []).append(view)
+
+    observations: list[dict[str, Any]] = []
+    for group in groups.values():
+        by_count: dict[int, list[Mapping[str, Any]]] = {}
+        for view in group:
+            count = view.get("dpu_count")
+            if isinstance(count, int):
+                by_count.setdefault(count, []).append(view)
+        baseline = by_count.get(1, [])
+        if not baseline:
+            continue
+        baseline_value = float(
+            _stats(float(view[metric]) for view in baseline)["median"]
+        )
+        baseline_runtime = None
+        if compare_wall:
+            baseline_runtime = float(
+                _stats(float(view["launch_sync_time_s"]) for view in baseline)[
+                    "median"
+                ]
+            )
+        for count, count_views in sorted(by_count.items()):
+            if count <= 1:
+                continue
+            value = float(
+                _stats(float(view[metric]) for view in count_views)["median"]
+            )
+            observed_ratio = value / baseline_value
+            ideal = 1.0 / count
+            first = count_views[0]
+            row = {
+                "case_id": first.get("case_id"),
+                "numeric_mode": first.get("numeric_mode"),
+                "partition_mode": first.get("partition_mode"),
+                "tasklets_per_dpu": first.get("tasklets_per_dpu"),
+                "dpu_count": count,
+                "observed_ratio": observed_ratio,
+                "ideal_ratio": ideal,
+            }
+            if compare_wall:
+                launch_median = float(
+                    _stats(
+                        float(view["launch_sync_time_s"]) for view in count_views
+                    )["median"]
+                )
+                wall_ratio = launch_median / float(baseline_runtime)
+                row["wall_ratio"] = wall_ratio
+                row["relative_difference"] = (
+                    abs(wall_ratio - observed_ratio) / observed_ratio
+                    if observed_ratio
+                    else None
+                )
+            observations.append(row)
+    return observations
+
+
+def _weak_acceptance_group_key(view: Mapping[str, Any]) -> tuple[str, ...]:
+    fields = (
+        "case_id",
+        "route_id",
+        "numeric_mode",
+        "partition_mode",
+        "tasklets_per_dpu",
+        "timing_scope",
+        "workload_kind",
+        "scaling_kind",
+    )
+    hashes = view.get("binary_hashes", {})
+    return tuple(str(view.get(field, "")) for field in fields) + tuple(
+        str(hashes.get(name, "")) for name in BINARY_HASH_ALIASES
+    )
+
+
+def _weak_launch_observations(
+    rows: Iterable[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    groups: dict[tuple[str, ...], list[Mapping[str, Any]]] = {}
+    for view in rows:
+        groups.setdefault(_weak_acceptance_group_key(view), []).append(view)
+
+    observations: list[dict[str, Any]] = []
+    for group in groups.values():
+        by_count: dict[int, list[Mapping[str, Any]]] = {}
+        for view in group:
+            count = view.get("dpu_count")
+            if isinstance(count, int) and view.get("launch_sync_time_s") is not None:
+                by_count.setdefault(count, []).append(view)
+        if len(by_count) < 2:
+            continue
+        mac_values = {
+            count: {
+                value
+                for view in count_views
+                if (value := _integer(view.get("mac_count"))) is not None
+            }
+            for count, count_views in by_count.items()
+        }
+        total_macs = {
+            count: next(iter(values)) if len(values) == 1 else None
+            for count, values in mac_values.items()
+        }
+        per_dpu_macs = {
+            count: (float(total_macs[count]) / count if total_macs[count] is not None else None)
+            for count in by_count
+        }
+        finite_per_dpu_macs = [
+            value for value in per_dpu_macs.values() if value is not None and value > 0.0
+        ]
+        comparable_work = (
+            len(finite_per_dpu_macs) == len(per_dpu_macs)
+            and max(finite_per_dpu_macs) / min(finite_per_dpu_macs) <= 1.000001
+        )
+        medians = {
+            count: float(
+                _stats(
+                    float(view["launch_sync_time_s"]) for view in count_views
+                )["median"]
+            )
+            for count, count_views in by_count.items()
+        }
+        values = list(medians.values())
+        if min(values) <= 0.0:
+            continue
+        first = group[0]
+        observations.append(
+            {
+                "case_id": first.get("case_id"),
+                "numeric_mode": first.get("numeric_mode"),
+                "partition_mode": first.get("partition_mode"),
+                "tasklets_per_dpu": first.get("tasklets_per_dpu"),
+                "dpu_counts": sorted(medians),
+                "total_mac_counts": {
+                    str(count): total_macs[count] for count in sorted(total_macs)
+                },
+                "per_dpu_mac_counts": {
+                    str(count): per_dpu_macs[count] for count in sorted(per_dpu_macs)
+                },
+                "per_dpu_work_invariant": comparable_work,
+                "launch_sync_medians_s": {
+                    str(count): medians[count] for count in sorted(medians)
+                },
+                "launch_sync_max_min": max(values) / min(values),
+            }
+        )
+    return observations
+
+
 def _acceptance_report(
     views: Iterable[Mapping[str, Any]],
     source_run: Path,
@@ -1962,41 +2125,55 @@ def _acceptance_report(
         reason="strict host-packed transport fields are required and malformed or missing fields fail",
     )
 
-    def _scaling_observations(metric: str, *, compare_wall: bool = False) -> list[dict[str, Any]]:
-        groups: dict[tuple[str, ...], list[Mapping[str, Any]]] = {}
-        for view in strong:
-            if view.get(metric) is not None and (not compare_wall or view.get("launch_sync_time_s") is not None):
-                groups.setdefault(_acceptance_group_key(view, include_numeric=True, include_dpu=False), []).append(view)
-        observations: list[dict[str, Any]] = []
-        for group in groups.values():
-            by_count: dict[int, list[Mapping[str, Any]]] = {}
-            for view in group:
-                count = view.get("dpu_count")
-                if isinstance(count, int):
-                    by_count.setdefault(count, []).append(view)
-            baseline = by_count.get(1, [])
-            if not baseline:
-                continue
-            baseline_value = float(_stats(float(view[metric]) for view in baseline)["median"])
-            baseline_runtime = None
-            if compare_wall:
-                baseline_runtime = float(_stats(float(view["launch_sync_time_s"]) for view in baseline)["median"])
-            for count, count_views in sorted(by_count.items()):
-                if count <= 1:
-                    continue
-                value = float(_stats(float(view[metric]) for view in count_views)["median"])
-                observed_ratio = value / baseline_value
-                ideal = 1.0 / count
-                row = {"case_id": count_views[0].get("case_id"), "dpu_count": count, "observed_ratio": observed_ratio, "ideal_ratio": ideal}
-                if compare_wall:
-                    launch_median = float(_stats(float(view["launch_sync_time_s"]) for view in count_views)["median"])
-                    wall_ratio = launch_median / float(baseline_runtime)
-                    row["wall_ratio"] = wall_ratio
-                    row["relative_difference"] = abs(wall_ratio - observed_ratio) / observed_ratio if observed_ratio else None
-                observations.append(row)
-        return observations
+    checksum_observations: list[dict[str, Any]] = []
+    checksum_missing = False
+    checksum_failed = False
+    for view in declared_packed:
+        partition_mode = view.get("partition_mode")
+        expected = (
+            "output_slice_per_dpu"
+            if partition_mode in {"output", "output_tile"}
+            else "final_reference_validation_only"
+            if partition_mode in {"contracted", "contracted_partial_sum"}
+            else None
+        )
+        observed = view.get("output_checksum_policy")
+        complete = expected is not None and observed is not None
+        checksum_missing |= not complete
+        passed = complete and observed == expected
+        checksum_failed |= complete and not passed
+        checksum_observations.append(
+            {
+                "case_id": view.get("case_id"),
+                "dpu_count": view.get("dpu_count"),
+                "partition_mode": partition_mode,
+                "expected": expected,
+                "observed": observed,
+                "passed": passed,
+            }
+        )
+    criteria["output_checksum_policy"] = _acceptance_criterion(
+        "failed"
+        if checksum_failed
+        else (
+            "not_evaluated"
+            if checksum_missing
+            else ("passed" if checksum_observations else "not_evaluated")
+        ),
+        threshold=(
+            "output_tile=output_slice_per_dpu; "
+            "contracted_partial_sum=final_reference_validation_only"
+        ),
+        observations=checksum_observations,
+        reason=(
+            "output partitions validate each DPU-owned slice; contracted partitions "
+            "validate only the reconstructed final output"
+        ),
+    )
 
-    cycle_observations = _scaling_observations("max_dpu_cycles")
+    cycle_observations = _scaling_acceptance_observations(
+        strong, "max_dpu_cycles"
+    )
     cycle_bad = [row for row in cycle_observations if abs(row["observed_ratio"] - row["ideal_ratio"]) / row["ideal_ratio"] > 0.50]
     criteria["max_cycle_scaling"] = _acceptance_criterion(
         "failed" if cycle_bad else ("passed" if cycle_observations else "not_evaluated"),
@@ -2005,7 +2182,9 @@ def _acceptance_report(
         reason="explicit max_dpu_cycles from packed strong-scaling rows",
     )
 
-    wall_cycle_observations = _scaling_observations("max_dpu_cycles", compare_wall=True)
+    wall_cycle_observations = _scaling_acceptance_observations(
+        strong, "max_dpu_cycles", compare_wall=True
+    )
     wall_cycle_bad = [row for row in wall_cycle_observations if row.get("relative_difference") is None or row["relative_difference"] > 0.50]
     criteria["wall_vs_cycle_scaling"] = _acceptance_criterion(
         "failed" if wall_cycle_bad else ("passed" if wall_cycle_observations else "not_evaluated"),
@@ -2024,7 +2203,15 @@ def _acceptance_report(
         if one and eight and all(view.get("launch_sync_time_s") is not None for view in (*one, *eight)):
             t1 = float(_stats(float(view["launch_sync_time_s"]) for view in one)["median"])
             t8 = float(_stats(float(view["launch_sync_time_s"]) for view in eight)["median"])
-            t8_observations.append({"case_id": eight[0].get("case_id"), "t8_over_t1": t8 / t1})
+            t8_observations.append(
+                {
+                    "case_id": eight[0].get("case_id"),
+                    "numeric_mode": eight[0].get("numeric_mode"),
+                    "partition_mode": eight[0].get("partition_mode"),
+                    "tasklets_per_dpu": eight[0].get("tasklets_per_dpu"),
+                    "t8_over_t1": t8 / t1,
+                }
+            )
     criteria["t8_over_t1"] = _acceptance_criterion(
         "failed" if any(row["t8_over_t1"] > 0.35 for row in t8_observations) else (
             "passed" if t8_observations else "not_evaluated"
@@ -2034,28 +2221,31 @@ def _acceptance_report(
         reason="packed strong-scaling launch_sync_time_s medians with compatible DPU-count 1 and 8 rows",
     )
 
-    weak_observations: list[dict[str, Any]] = []
-    # A weak group is keyed without DPU count so its runtime spread is observable.
-    weak_groups: dict[tuple[str, ...], list[Mapping[str, Any]]] = {}
-    for view in weak:
-        key = _acceptance_group_key(view, include_numeric=True, include_dpu=False)
-        weak_groups.setdefault(key, []).append(view)
-    for group in weak_groups.values():
-        by_count: dict[int, list[Mapping[str, Any]]] = {}
-        for view in group:
-            count = view.get("dpu_count")
-            if isinstance(count, int) and view.get("launch_sync_time_s") is not None:
-                by_count.setdefault(count, []).append(view)
-        values = [float(_stats(float(view["launch_sync_time_s"]) for view in count_views)["median"]) for count_views in by_count.values()]
-        if values and min(values) > 0.0:
-            weak_observations.append({"case_id": group[0].get("case_id"), "launch_sync_max_min": max(values) / min(values)})
+    weak_observations = _weak_launch_observations(weak)
+    weak_incomparable = any(
+        observation.get("per_dpu_work_invariant") is not True
+        for observation in weak_observations
+    )
+    weak_failed = any(
+        row["launch_sync_max_min"] > 1.5
+        for row in weak_observations
+        if row.get("per_dpu_work_invariant") is True
+    )
     criteria["weak_runtime_stability"] = _acceptance_criterion(
-        "failed" if any(row["launch_sync_max_min"] > 1.5 for row in weak_observations) else (
-            "passed" if weak_observations else "not_evaluated"
+        "failed"
+        if weak_failed
+        else (
+            "not_evaluated"
+            if weak_incomparable
+            else ("passed" if weak_observations else "not_evaluated")
         ),
         threshold="<= 1.5",
         observations=weak_observations,
-        reason="packed weak-scaling launch_sync_time_s medians over explicitly measured DPU counts",
+        reason=(
+            "packed weak-scaling launch_sync_time_s medians over explicitly measured "
+            "DPU counts with constant mac_count/dpu_count; semantic hashes may differ "
+            "because weak-scaling shapes change"
+        ),
     )
 
     exact_observations = []
