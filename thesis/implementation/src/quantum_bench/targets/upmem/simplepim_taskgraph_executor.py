@@ -27,6 +27,7 @@ from quantum_bench.targets.upmem.execution_plan_v1 import (
     validate_schedule,
 )
 from quantum_bench.targets.upmem.hardware_session import (
+    hardware_environment_metadata,
     sanitised_hardware_environment,
 )
 
@@ -44,6 +45,11 @@ DEVICE_LAUNCH_MODE = "asynchronous_per_dpu"
 SYNCHRONIZATION_POLICY = "synchronous_wave_barriers"
 BUILD_TIMEOUT_S = 180.0
 MAX_TIMEOUT_S = 24 * 60 * 60
+NATIVE_TIMEOUT_GRACE_S = 5
+# The non-v3 native host writes one uint64_t active-operation selector before
+# every dispatched logical task. Its Makefile fixes the completion ABI at v2.
+ACTIVE_OPERATION_H2D_BYTES = struct.calcsize("Q")
+RESIDENT_COMPLETION_D2H_BYTES = 120
 
 
 class NativeAdapterError(RuntimeError):
@@ -151,7 +157,7 @@ def execute(request_path: Path, timeout_s: float) -> dict[str, Any]:
     if not request_file.is_file():
         raise NativeAdapterError("manifest_parse_failed", "Block 2 request is missing")
     timeout = _positive_timeout(timeout_s)
-    _require_physical_environment()
+    requested_rank_path = _require_physical_environment()
     request = _read_object(request_file, "Block 2 request")
     plan, schedule_path, package_path, manifest_path, dpu_path = _load_request(
         request_file, request
@@ -185,6 +191,9 @@ def execute(request_path: Path, timeout_s: float) -> dict[str, Any]:
         str(max(1, int(math.ceil(timeout)))),
     )
     child_env = sanitised_hardware_environment(os.environ)
+    # The native host builds its hardware profile directly, so it needs the
+    # requested rank after the shared environment sanitizer removes it.
+    child_env["UPMEM_HW_RANK_PATH"] = requested_rank_path
     started = time.perf_counter()
     try:
         completed = subprocess.run(
@@ -193,7 +202,9 @@ def execute(request_path: Path, timeout_s: float) -> dict[str, Any]:
             env=child_env,
             capture_output=True,
             text=True,
-            timeout=timeout,
+            # Let the native alarm fire first so its cleanup path can release
+            # the allocated rank. A forced parent timeout is still fail-closed.
+            timeout=_native_process_timeout(timeout),
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
@@ -223,6 +234,7 @@ def execute(request_path: Path, timeout_s: float) -> dict[str, Any]:
         schedule_path=schedule_path,
         dpu_path=dpu_path,
         manifest_path=manifest_path,
+        requested_rank_path=requested_rank_path,
     )
     final_output = _stage_native_output(
         request_file.parent,
@@ -238,6 +250,7 @@ def execute(request_path: Path, timeout_s: float) -> dict[str, Any]:
         response_path=response_path,
         final_output_path=final_output,
         command=command,
+        requested_rank_path=requested_rank_path,
     )
 
 
@@ -284,7 +297,7 @@ def validate(request_path: Path, timeout_s: float) -> dict[str, Any]:
             env=child_env,
             capture_output=True,
             text=True,
-            timeout=timeout,
+            timeout=_native_process_timeout(timeout),
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
@@ -467,6 +480,7 @@ def _validate_native_response(
     schedule_path: Path,
     dpu_path: Path,
     manifest_path: Path,
+    requested_rank_path: str,
 ) -> None:
     if response.get("schema_version") != NATIVE_RESPONSE_SCHEMA:
         raise NativeAdapterError("output_manifest_failed", "native response schema is invalid")
@@ -487,6 +501,7 @@ def _validate_native_response(
             raise NativeAdapterError("output_manifest_failed", f"native response {key} is unsafe")
     if response.get("backend_id") != NATIVE_BACKEND_ID:
         raise NativeAdapterError("output_manifest_failed", "native backend identity is invalid")
+    _validate_native_rank_response(response, requested_rank_path)
     if response.get("requested_dpu_count") != plan.requested_dpu_count or response.get("allocated_dpu_count") != plan.requested_dpu_count:
         raise NativeAdapterError("output_manifest_failed", "native DPU count does not match request")
     if response.get("tasklets_per_dpu") != plan.tasklets_per_dpu:
@@ -522,6 +537,8 @@ def _validate_native_validation_response(
         "target_observed": "not_allocated",
         "backend_id": NATIVE_BACKEND_ID,
         "allocated_dpu_count": 0,
+        "requested_rank_path": None,
+        "observed_rank_count": 0,
         "tasklets_per_dpu": plan.tasklets_per_dpu,
         "hardware_allocation_verified": False,
         "native_kernel_executed": False,
@@ -644,19 +661,100 @@ def _validate_native_metrics(response: Any, plan: ExecutionPlan, request: Mappin
             raise NativeAdapterError("output_manifest_failed", f"native metric {key} differs from schedule")
     integer_keys = (
         "descriptor_h2d_bytes", "operand_h2d_bytes", "reset_h2d_bytes",
-        "cross_d2h_bytes", "cross_h2d_bytes", "final_d2h_bytes",
+        "active_operation_h2d_bytes", "completion_d2h_bytes", "cross_d2h_bytes",
+        "cross_h2d_bytes", "final_d2h_bytes",
         "actual_h2d_bytes", "actual_d2h_bytes", "actual_transfer_bytes",
     )
     for key in integer_keys:
         if not isinstance(metrics.get(key), int) or isinstance(metrics.get(key), bool) or metrics[key] < 0:
             raise NativeAdapterError("output_manifest_failed", f"native metric {key} is invalid")
-    if metrics["actual_h2d_bytes"] != metrics["descriptor_h2d_bytes"] + metrics["operand_h2d_bytes"] + metrics["reset_h2d_bytes"] + metrics["cross_h2d_bytes"]:
+    expected_active_operation_h2d = (
+        plan.logical_task_count * total_iterations * ACTIVE_OPERATION_H2D_BYTES
+    )
+    if metrics["active_operation_h2d_bytes"] != expected_active_operation_h2d:
+        raise NativeAdapterError(
+            "output_manifest_failed",
+            "native active-operation control byte count differs from schedule",
+        )
+    expected_completion_d2h = (
+        plan.logical_task_count * total_iterations * RESIDENT_COMPLETION_D2H_BYTES
+    )
+    if metrics["completion_d2h_bytes"] != expected_completion_d2h:
+        raise NativeAdapterError(
+            "output_manifest_failed",
+            "native completion byte count differs from schedule",
+        )
+    # ``total_cross_dpu_transfer_bytes`` is the round-trip plan total. Each
+    # native direction must therefore carry exactly half of that total for
+    # every warmup and measured repetition.
+    expected_cross_total = plan.total_cross_dpu_transfer_bytes * total_iterations
+    if expected_cross_total % 2 != 0:
+        raise NativeAdapterError(
+            "output_manifest_failed",
+            "planned cross-DPU transfer total is not directionally divisible",
+        )
+    expected_cross_per_direction = expected_cross_total // 2
+    if (
+        metrics["cross_h2d_bytes"] != expected_cross_per_direction
+        or metrics["cross_d2h_bytes"] != expected_cross_per_direction
+    ):
+        raise NativeAdapterError(
+            "output_manifest_failed",
+            "native cross-DPU bytes differ from the execution plan",
+        )
+    reduction_d2h = metrics.get("reduction_d2h_bytes")
+    if reduction_d2h is not None:
+        if (
+            not isinstance(reduction_d2h, int)
+            or isinstance(reduction_d2h, bool)
+            or reduction_d2h != 0
+        ):
+            raise NativeAdapterError(
+                "output_manifest_failed",
+                "distributed reduction bytes are invalid for an execution-plan v1 response",
+            )
+    expected_h2d = sum(
+        metrics[key]
+        for key in (
+            "descriptor_h2d_bytes",
+            "operand_h2d_bytes",
+            "reset_h2d_bytes",
+            "active_operation_h2d_bytes",
+            "cross_h2d_bytes",
+        )
+    )
+    if metrics["actual_h2d_bytes"] != expected_h2d:
         raise NativeAdapterError("output_manifest_failed", "native H2D byte invariant failed")
-    if metrics["actual_d2h_bytes"] != metrics["cross_d2h_bytes"] + metrics["final_d2h_bytes"] or metrics["actual_transfer_bytes"] != metrics["actual_h2d_bytes"] + metrics["actual_d2h_bytes"]:
+    expected_d2h = sum(
+        metrics[key]
+        for key in ("completion_d2h_bytes", "cross_d2h_bytes", "final_d2h_bytes")
+    )
+    if (
+        metrics["actual_d2h_bytes"] != expected_d2h
+        or metrics["actual_transfer_bytes"]
+        != metrics["actual_h2d_bytes"] + metrics["actual_d2h_bytes"]
+    ):
         raise NativeAdapterError("output_manifest_failed", "native transfer byte invariant failed")
-    for key in ("reset_h2d_bytes", "cross_d2h_bytes", "cross_h2d_bytes", "final_d2h_bytes"):
+    for key in (
+        "reset_h2d_bytes", "active_operation_h2d_bytes", "completion_d2h_bytes",
+        "cross_d2h_bytes", "cross_h2d_bytes", "final_d2h_bytes",
+    ):
         if metrics[key] % total_iterations != 0:
             raise NativeAdapterError("output_manifest_failed", f"native metric {key} is not repetition-aligned")
+
+
+def _validate_native_rank_response(
+    response: Mapping[str, Any], requested_rank_path: str
+) -> None:
+    if response.get("requested_rank_path") != requested_rank_path:
+        raise NativeAdapterError(
+            "output_manifest_failed",
+            "native requested rank path differs from the physical request",
+        )
+    if response.get("observed_rank_count") != 1:
+        raise NativeAdapterError(
+            "output_manifest_failed", "native allocation is not exactly one SDK rank"
+        )
 
 
 def _stage_native_output(root: Path, manifest_path: Path, plan: ExecutionPlan, destination: Path) -> Path:
@@ -710,11 +808,21 @@ def _normalize_session(
     response_path: Path,
     final_output_path: Path,
     command: tuple[str, ...],
+    requested_rank_path: str,
 ) -> dict[str, Any]:
     metrics = response["metrics"]
+    _validate_native_rank_response(response, requested_rank_path)
     total_iterations = request["requested_warmups"] + request["requested_repetitions"]
-    repeat_h2d = metrics["reset_h2d_bytes"] // total_iterations + metrics["cross_h2d_bytes"] // total_iterations
-    repeat_d2h = metrics["cross_d2h_bytes"] // total_iterations + metrics["final_d2h_bytes"] // total_iterations
+    repeat_h2d = (
+        metrics["reset_h2d_bytes"] // total_iterations
+        + metrics["active_operation_h2d_bytes"] // total_iterations
+        + metrics["cross_h2d_bytes"] // total_iterations
+    )
+    repeat_d2h = (
+        metrics["completion_d2h_bytes"] // total_iterations
+        + metrics["cross_d2h_bytes"] // total_iterations
+        + metrics["final_d2h_bytes"] // total_iterations
+    )
     assignments = [to_jsonable(item) for item in plan.assignments]
     transfers = [to_jsonable(item) for item in plan.transfer_edges]
     final_path_ref = final_output_path.relative_to(response_path.parent).as_posix()
@@ -799,6 +907,8 @@ def _normalize_session(
         "package_identity": dict(request["package_identity"]),
         "requested_dpu_count": plan.requested_dpu_count,
         "allocated_dpu_count": response["allocated_dpu_count"],
+        "requested_rank_path": requested_rank_path,
+        "observed_rank_count": response["observed_rank_count"],
         "tasklets_per_dpu": plan.tasklets_per_dpu,
         "allocation_attempted": response["allocation"]["attempted"],
         "allocation_count": 1,
@@ -931,13 +1041,30 @@ def _positive_timeout(value: float) -> float:
     return result
 
 
-def _require_physical_environment() -> None:
+def _native_process_timeout(native_timeout_s: float) -> int:
+    """Give the native alarm a small cleanup window before parent termination."""
+
+    return int(math.ceil(native_timeout_s)) + NATIVE_TIMEOUT_GRACE_S
+
+
+def _require_physical_environment() -> str:
     if os.environ.get("UPMEM_ALLOW_PHYSICAL_HARDWARE") != "1":
         raise NativeAdapterError("hardware_opt_in_missing", "UPMEM_ALLOW_PHYSICAL_HARDWARE=1 is required")
     if os.environ.get("DPU_BACKEND"):
         raise NativeAdapterError("hardware_profile_violation", "DPU_BACKEND is forbidden for physical execution")
     if os.environ.get("UPMEM_EXECUTION_MODE", "").lower() in {"simulator", "cpu", "mock"}:
         raise NativeAdapterError("hardware_profile_violation", "simulator/CPU execution mode is forbidden")
+    try:
+        metadata = hardware_environment_metadata(os.environ)
+    except ValueError as exc:
+        raise NativeAdapterError("hardware_profile_violation", str(exc)) from exc
+    rank_path = metadata.get("upmem_rank_path_requested")
+    if not isinstance(rank_path, str) or not rank_path:
+        raise NativeAdapterError(
+            "hardware_profile_violation",
+            "UPMEM_HW_RANK_PATH is required for physical execution",
+        )
+    return rank_path
 
 
 __all__ = [

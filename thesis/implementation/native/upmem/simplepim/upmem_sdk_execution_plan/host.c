@@ -830,11 +830,15 @@ static int write_response(
     write_null_or_string(file, failure_stage);
     fprintf(file, ",\"error\":");
     write_null_or_string(file, error_message);
-    fprintf(file, ",\"target_requested\":\"hardware\",\"target_observed\":%s,\"backend_id\":\"upmem_sdk_hardware_execution_plan\",\"backend_family\":\"upmem_sdk\",\"execution_class\":\"resident_taskgraph\",\"kernel_strategy\":\"resident_generic_contract\",\"hardware_profile_version\":\"%s\",\"requested_dpu_count\":%u,\"allocated_dpu_count\":%u,\"tasklets_per_dpu\":%u,\"hardware_allocation_verified\":%s,\"native_kernel_executed\":%s,\"simulator_kernel_executed\":false,\"hardware_kernel_executed\":%s,\"cpu_fallback_used\":false,\"hardware_speedup_applicable\":false,\"timing_is_bringup_only\":true,\"kernel_time_s\":null,\"timing_scope\":\"host_observed_sdk_stage_boundaries\",\"validation_status\":",
+    fprintf(file, ",\"target_requested\":\"hardware\",\"target_observed\":%s,\"backend_id\":\"upmem_sdk_hardware_execution_plan\",\"backend_family\":\"upmem_sdk\",\"execution_class\":\"resident_taskgraph\",\"kernel_strategy\":\"resident_generic_contract\",\"hardware_profile_version\":\"%s\",\"requested_dpu_count\":%u,\"allocated_dpu_count\":%u,\"requested_rank_path\":",
         target_observed,
         distributed ? EXECUTION_PLAN_V2_PROFILE : EXECUTION_PLAN_PROFILE,
         dpu_count,
-        provider != NULL && provider->allocation_used ? provider->observed_dpus : 0u,
+        provider != NULL && provider->allocation_used ? provider->observed_dpus : 0u);
+    write_null_or_string(file, provider != NULL && provider->requested_rank_path[0] != '\0' ?
+        provider->requested_rank_path : NULL);
+    fprintf(file, ",\"observed_rank_count\":%u,\"tasklets_per_dpu\":%u,\"hardware_allocation_verified\":%s,\"native_kernel_executed\":%s,\"simulator_kernel_executed\":false,\"hardware_kernel_executed\":%s,\"cpu_fallback_used\":false,\"hardware_speedup_applicable\":false,\"timing_is_bringup_only\":true,\"kernel_time_s\":null,\"timing_scope\":\"host_observed_sdk_stage_boundaries\",\"validation_status\":",
+        provider != NULL && provider->allocation_used ? provider->observed_ranks : 0u,
         (unsigned)NR_TASKLETS,
         allocation_was_confirmed ? "true" : "false",
         metrics != NULL && metrics->native_kernel_executed ? "true" : "false",
@@ -981,6 +985,7 @@ int main(int argc, char **argv) {
     const char *schedule_path = NULL;
     const char *distributed_plan_path = NULL;
     const char *response_path = NULL;
+    const char *requested_rank_path = NULL;
     const char *failure_stage = NULL;
     const char *error_message = NULL;
     char *owned_error = NULL;
@@ -1048,6 +1053,12 @@ int main(int argc, char **argv) {
         error_message = "DPU_BACKEND must be unset for the physical route";
         goto write_response;
     }
+    requested_rank_path = getenv("UPMEM_HW_RANK_PATH");
+    if (requested_rank_path == NULL || requested_rank_path[0] == '\0') {
+        failure_stage = "hardware_profile_violation";
+        error_message = "UPMEM_HW_RANK_PATH is required for the physical route";
+        goto write_response;
+    }
     if (resolve_sibling("dpu_simplepim_management_init", initialization_binary) != 0) {
         failure_stage = "sdk_discovery_failed";
         error_message = "SimplePIM initialization binary is missing beside the host executable";
@@ -1071,11 +1082,13 @@ int main(int argc, char **argv) {
     {
         const double stage = now_s();
         const uint32_t requested_dpus = request.distributed_v2_mode ? request.distributed_v2.header.dpu_count : request.schedule.header.dpu_count;
-        error = execution_plan_provider_init(&provider, requested_dpus, "backend=hw", initialization_binary);
+        error = execution_plan_provider_init_on_rank(
+            &provider, requested_dpus, requested_rank_path, initialization_binary
+        );
         timing.allocation_time_s = now_s() - stage;
         allocation_succeeded = provider.allocation_used && provider.management != NULL;
         allocation_was_confirmed = allocation_succeeded && error == DPU_OK &&
-            provider.observed_dpus == requested_dpus;
+            provider.observed_dpus == requested_dpus && provider.observed_ranks == 1u;
         if (error != DPU_OK) {
             failure_stage = "hardware_allocation_failed";
             error_message = "SimplePIM management allocation or initialization failed";

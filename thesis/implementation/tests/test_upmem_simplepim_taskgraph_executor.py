@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import shutil
 import struct
@@ -14,6 +15,7 @@ from quantum_bench.bench import upmem_simplepim_taskgraph as route
 from quantum_bench.circuits import load_circuit
 from quantum_bench.targets.upmem import simplepim_taskgraph_executor as executor
 from quantum_bench.targets.upmem.execution_plan_v1 import (
+    CrossDpuTransfer,
     PLACEMENT_FRONTIER,
     PLACEMENT_SINGLE,
     compile_plan,
@@ -130,6 +132,24 @@ def test_execute_requires_explicit_hardware_opt_in(tmp_path: Path, monkeypatch: 
         executor.execute(request_path, timeout_s=1.0)
 
 
+def test_physical_environment_requires_a_valid_rank_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("UPMEM_ALLOW_PHYSICAL_HARDWARE", "1")
+    monkeypatch.delenv("DPU_BACKEND", raising=False)
+    monkeypatch.delenv("UPMEM_EXECUTION_MODE", raising=False)
+    monkeypatch.delenv("UPMEM_HW_RANK_PATH", raising=False)
+    with pytest.raises(executor.NativeAdapterError, match="UPMEM_HW_RANK_PATH is required"):
+        executor._require_physical_environment()
+
+    monkeypatch.setenv("UPMEM_HW_RANK_PATH", "not-a-rank")
+    with pytest.raises(executor.NativeAdapterError, match="UPMEM_HW_RANK_PATH"):
+        executor._require_physical_environment()
+
+    monkeypatch.setenv("UPMEM_HW_RANK_PATH", "/dev/dpu_rank1")
+    assert executor._require_physical_environment() == "/dev/dpu_rank1"
+
+
 def test_native_parser_accepts_python_generated_schedule(
     tmp_path: Path,
 ) -> None:
@@ -159,6 +179,8 @@ def test_native_parser_accepts_python_generated_schedule(
     assert response["status"] == "validated"
     assert response["target_observed"] == "not_allocated"
     assert response["allocated_dpu_count"] == 0
+    assert response["requested_rank_path"] is None
+    assert response["observed_rank_count"] == 0
     assert response["hardware_allocation_verified"] is False
     assert response["simulator_kernel_executed"] is False
     assert response["cpu_fallback_used"] is False
@@ -191,6 +213,44 @@ def test_native_parser_rejects_frontier_schedule_with_live_slot_alias(tmp_path: 
     assert response["status"] == "failed"
     assert "same-wave output slot aliases" in response["error"]
     assert response["allocated_dpu_count"] == 0
+
+
+def test_native_execute_rejects_missing_rank_before_allocation(tmp_path: Path) -> None:
+    build = _build_fixture(tmp_path)
+    host_binary, manifest_path, schedule_path = _native_validation_inputs(
+        tmp_path, build, PLACEMENT_SINGLE
+    )
+    response_path = tmp_path / "missing-rank.response.json"
+    environment = dict(os.environ)
+    environment["UPMEM_ALLOW_PHYSICAL_HARDWARE"] = "1"
+    environment.pop("UPMEM_HW_RANK_PATH", None)
+    environment.pop("DPU_BACKEND", None)
+    completed = subprocess.run(
+        [
+            str(host_binary),
+            "--execute-plan",
+            "--resident-package",
+            str(manifest_path),
+            "--schedule",
+            str(schedule_path),
+            "--response",
+            str(response_path),
+        ],
+        cwd=host_binary.parent,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    response = json.loads(response_path.read_text(encoding="utf-8"))
+    assert response["status"] == "failed"
+    assert response["failure_stage"] == "hardware_profile_violation"
+    assert response["requested_rank_path"] is None
+    assert response["observed_rank_count"] == 0
+    assert response["allocated_dpu_count"] == 0
+    assert response["allocation"]["attempted"] is False
 
 
 def test_native_parser_rejects_malformed_python_schedule(tmp_path: Path) -> None:
@@ -295,12 +355,14 @@ def test_real_normalized_session_passes_route_validator(tmp_path: Path) -> None:
         "descriptor_h2d_bytes": 64,
         "operand_h2d_bytes": 0,
         "reset_h2d_bytes": repetitions * 64,
+        "active_operation_h2d_bytes": plan.logical_task_count * repetitions * 8,
+        "completion_d2h_bytes": plan.logical_task_count * repetitions * 120,
         "cross_d2h_bytes": 0,
         "cross_h2d_bytes": 0,
         "final_d2h_bytes": repetitions * 8,
-        "actual_h2d_bytes": 64 + repetitions * 64,
-        "actual_d2h_bytes": repetitions * 8,
-        "actual_transfer_bytes": 64 + repetitions * (64 + 8),
+        "actual_h2d_bytes": 64 + repetitions * (64 + plan.logical_task_count * 8),
+        "actual_d2h_bytes": repetitions * (plan.logical_task_count * 120 + 8),
+        "actual_transfer_bytes": 64 + repetitions * (64 + plan.logical_task_count * 8 + plan.logical_task_count * 120 + 8),
         "launch_count": plan.logical_task_count * repetitions,
         "synchronize_count": plan.logical_task_count * repetitions,
         "completion_reads": plan.logical_task_count * repetitions,
@@ -309,6 +371,8 @@ def test_real_normalized_session_passes_route_validator(tmp_path: Path) -> None:
     native_response = {
         "completed_per_dpu": [plan.logical_task_count * repetitions],
         "allocated_dpu_count": plan.requested_dpu_count,
+        "requested_rank_path": "/dev/dpu_rank1",
+        "observed_rank_count": 1,
         "allocation": {
             "attempted": True,
             "confirmed": False,
@@ -337,6 +401,7 @@ def test_real_normalized_session_passes_route_validator(tmp_path: Path) -> None:
         response_path=tmp_path / "native.response.json",
         final_output_path=output_path,
         command=(str(host_binary), "--execute-plan"),
+        requested_rank_path="/dev/dpu_rank1",
     )
     prepared = SimpleNamespace(
         request_id=request["request_id"],
@@ -347,10 +412,12 @@ def test_real_normalized_session_passes_route_validator(tmp_path: Path) -> None:
         source_output=np.asarray(output_values, dtype=np.float32),
     )
 
-    route._complete_session_validation(session, prepared)
-    validator(session, prepared)
+    route._complete_session_validation(session, prepared, route.M45_CONTRACT)
+    validator(session, prepared, route.M45_CONTRACT)
     assert session["allocation_succeeded"] is True
     assert session["persistent_allocation_observed"] is True
+    assert session["requested_rank_path"] == "/dev/dpu_rank1"
+    assert session["observed_rank_count"] == 1
     assert session["session_validation"]["status"] == "passed"
     assert session["session_validation"]["scope"] == "final_session_output_only"
     assert session["session_validation"]["output"] == output_values
@@ -385,6 +452,7 @@ def test_native_completion_counts_are_aggregate_over_the_session(
         requested_dpu_count=len(expected_completed_per_dpu),
         logical_task_count=3,
         transfer_edges=(),
+        total_cross_dpu_transfer_bytes=0,
     )
     request = {"requested_warmups": 1, "requested_repetitions": 3}
     response = {
@@ -397,12 +465,14 @@ def test_native_completion_counts_are_aggregate_over_the_session(
             "descriptor_h2d_bytes": 0,
             "operand_h2d_bytes": 0,
             "reset_h2d_bytes": 0,
+            "active_operation_h2d_bytes": 96,
+            "completion_d2h_bytes": 1440,
             "cross_d2h_bytes": 0,
             "cross_h2d_bytes": 0,
             "final_d2h_bytes": 0,
-            "actual_h2d_bytes": 0,
-            "actual_d2h_bytes": 0,
-            "actual_transfer_bytes": 0,
+            "actual_h2d_bytes": 96,
+            "actual_d2h_bytes": 1440,
+            "actual_transfer_bytes": 1536,
         },
     }
 
@@ -415,6 +485,7 @@ def test_native_completion_count_mismatch_is_rejected() -> None:
         requested_dpu_count=2,
         logical_task_count=3,
         transfer_edges=(),
+        total_cross_dpu_transfer_bytes=0,
     )
     request = {"requested_warmups": 1, "requested_repetitions": 3}
     response = {
@@ -427,12 +498,14 @@ def test_native_completion_count_mismatch_is_rejected() -> None:
             "descriptor_h2d_bytes": 0,
             "operand_h2d_bytes": 0,
             "reset_h2d_bytes": 0,
+            "active_operation_h2d_bytes": 96,
+            "completion_d2h_bytes": 1440,
             "cross_d2h_bytes": 0,
             "cross_h2d_bytes": 0,
             "final_d2h_bytes": 0,
-            "actual_h2d_bytes": 0,
-            "actual_d2h_bytes": 0,
-            "actual_transfer_bytes": 0,
+            "actual_h2d_bytes": 96,
+            "actual_d2h_bytes": 1440,
+            "actual_transfer_bytes": 1536,
         },
     }
 
@@ -446,6 +519,7 @@ def test_native_completion_counts_must_not_be_nested_in_metrics() -> None:
         requested_dpu_count=1,
         logical_task_count=3,
         transfer_edges=(),
+        total_cross_dpu_transfer_bytes=0,
     )
     request = {"requested_warmups": 1, "requested_repetitions": 3}
     response = {
@@ -458,17 +532,130 @@ def test_native_completion_counts_must_not_be_nested_in_metrics() -> None:
             "descriptor_h2d_bytes": 0,
             "operand_h2d_bytes": 0,
             "reset_h2d_bytes": 0,
+            "active_operation_h2d_bytes": 96,
+            "completion_d2h_bytes": 1440,
             "cross_d2h_bytes": 0,
             "cross_h2d_bytes": 0,
             "final_d2h_bytes": 0,
-            "actual_h2d_bytes": 0,
-            "actual_d2h_bytes": 0,
-            "actual_transfer_bytes": 0,
+            "actual_h2d_bytes": 96,
+            "actual_d2h_bytes": 1440,
+            "actual_transfer_bytes": 1536,
         }
     }
 
     with pytest.raises(executor.NativeAdapterError, match="top-level response fields"):
         executor._validate_native_metrics(response, plan, request)
+
+
+def _control_and_completion_response() -> tuple[SimpleNamespace, dict[str, int], dict[str, object]]:
+    edge = CrossDpuTransfer(
+        producer_operation_id=1,
+        consumer_operation_id=2,
+        producer_task_id="task_1",
+        consumer_task_id="task_2",
+        producer_dpu_id=1,
+        consumer_dpu_id=0,
+        slot_id=3,
+        element_count=1,
+        transfer_bytes=4,
+    )
+    plan = SimpleNamespace(
+        assignments=[SimpleNamespace(dpu_id=dpu_id) for dpu_id in (0, 1, 0)],
+        requested_dpu_count=2,
+        logical_task_count=3,
+        transfer_edges=(edge,),
+        total_cross_dpu_transfer_bytes=2 * edge.transfer_bytes,
+    )
+    request = {"requested_warmups": 1, "requested_repetitions": 3}
+    response = {
+        "completed_per_dpu": [8, 4],
+        "metrics": {
+            "launch_count": 12,
+            "synchronize_count": 12,
+            "completion_reads": 12,
+            "cross_dpu_edge_count": 4,
+            "descriptor_h2d_bytes": 64,
+            "operand_h2d_bytes": 16,
+            "reset_h2d_bytes": 32,
+            "active_operation_h2d_bytes": 96,
+            "completion_d2h_bytes": 1440,
+            "cross_d2h_bytes": 16,
+            "cross_h2d_bytes": 16,
+            "final_d2h_bytes": 8,
+            "actual_h2d_bytes": 224,
+            "actual_d2h_bytes": 1464,
+            "actual_transfer_bytes": 1688,
+        },
+    }
+    return plan, request, response
+
+
+def test_native_metrics_include_per_operation_control_and_completion_bytes() -> None:
+    plan, request, response = _control_and_completion_response()
+
+    executor._validate_native_metrics(response, plan, request)
+
+
+@pytest.mark.parametrize("metric", ["cross_h2d_bytes", "cross_d2h_bytes"])
+def test_native_metrics_reject_cross_dpu_bytes_not_bound_to_plan(metric: str) -> None:
+    plan, request, response = _control_and_completion_response()
+    metrics = dict(response["metrics"])
+    metrics[metric] += 4
+    response = {**response, "metrics": metrics}
+
+    with pytest.raises(executor.NativeAdapterError, match="cross-DPU bytes differ"):
+        executor._validate_native_metrics(response, plan, request)
+
+
+def test_native_process_timeout_allows_native_cleanup_grace() -> None:
+    assert executor._native_process_timeout(1.1) == 7
+
+
+@pytest.mark.parametrize(
+    ("metric", "value", "message"),
+    [
+        ("active_operation_h2d_bytes", 88, "active-operation control byte count"),
+        ("completion_d2h_bytes", 1432, "completion byte count"),
+        ("reduction_d2h_bytes", 8, "distributed reduction bytes"),
+    ],
+)
+def test_native_metrics_reject_inconsistent_control_or_completion_bytes(
+    metric: str, value: int, message: str
+) -> None:
+    plan, request, response = _control_and_completion_response()
+    metrics = dict(response["metrics"])
+    metrics[metric] = value
+    response = {**response, "metrics": metrics}
+
+    with pytest.raises(executor.NativeAdapterError, match=message):
+        executor._validate_native_metrics(response, plan, request)
+
+
+def test_native_rank_response_requires_exact_requested_rank_and_one_sdk_rank() -> None:
+    response = {"requested_rank_path": "/dev/dpu_rank1", "observed_rank_count": 1}
+    executor._validate_native_rank_response(response, "/dev/dpu_rank1")
+
+    with pytest.raises(executor.NativeAdapterError, match="requested rank path differs"):
+        executor._validate_native_rank_response(response, "/dev/dpu_rank2")
+    with pytest.raises(executor.NativeAdapterError, match="exactly one SDK rank"):
+        executor._validate_native_rank_response(
+            {**response, "observed_rank_count": 2}, "/dev/dpu_rank1"
+        )
+
+
+def test_native_execution_plan_host_requires_rank_pinned_provider() -> None:
+    source = (
+        ROOT
+        / "native/upmem/simplepim/upmem_sdk_execution_plan/host.c"
+    ).read_text(encoding="ascii")
+
+    assert 'getenv("UPMEM_HW_RANK_PATH")' in source
+    assert "UPMEM_HW_RANK_PATH is required for the physical route" in source
+    assert "execution_plan_provider_init_on_rank(" in source
+    assert "execution_plan_provider_init(&provider" not in source
+    assert "provider.observed_ranks == 1u" in source
+    assert "requested_rank_path" in source
+    assert "observed_rank_count" in source
 
 
 @pytest.mark.parametrize("tasklets", [1, 2, 4, 8, 16])
@@ -538,4 +725,3 @@ def test_multi_tasklet_benchmark_scaling(tasklets: int) -> None:
 
     c_pim_hw = calibrate_pim_cost_model(14000, 1000)
     assert c_pim_hw == 14.0  # Hardware 14000 cycles / 1000 flops = 14.0
-

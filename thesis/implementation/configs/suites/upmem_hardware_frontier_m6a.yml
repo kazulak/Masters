@@ -1,18 +1,18 @@
 schema_version: 2
-suite_id: upmem_hardware_simplepim_taskgraph
+suite_id: upmem_hardware_frontier_m6a
 fail_fast: true
 
 metadata:
-  purpose: one_fixed_taskgraph_two_physical_placement_policies
+  purpose: bounded_two_dpu_frontier_taskgraph_functionality
   manual_invocation_required: true
   physical_opt_in: UPMEM_ALLOW_PHYSICAL_HARDWARE=1
-  claim_boundary: physical_functionality_and_bringup_timing_only
+  claim_boundary: physical_frontier_functionality_only_no_scaling_claim
   hardware_profile:
-    hardware_profile_version: hardware_simplepim_taskgraph_m4_5_v1
+    hardware_profile_version: hardware_frontier_m6a_v1
     target: hardware
-    backend_id: upmem_hardware_simplepim_taskgraph
-    route_id: upmem_tn_hardware_simplepim_taskgraph
-    allowed_dpu_counts: [1, 2]
+    backend_id: upmem_hardware_frontier_m6a
+    route_id: upmem_tn_hardware_frontier_m6a
+    requested_dpu_count: 2
     tasklets_per_dpu: 1
     numeric_mode: none
     real_only: true
@@ -20,30 +20,30 @@ metadata:
     synchronization_policy: synchronous_wave_barriers
     fully_synchronous_kernel_launch: false
     performance_claim_applicable: false
+    allow_slot_reuse: false
     max_logical_tasks: 8
     max_waves: 8
     max_frontier_width: 2
 
 defaults:
   warmups: 1
-  repeats: 3
+  repeats: 5
   timeout_s: 120.0
   planner: {engine: opt_einsum, optimize: greedy}
 
 routes:
-  - id: upmem_tn_hardware_simplepim_taskgraph
-    role: physical_simplepim_taskgraph_functionality
+  - id: upmem_tn_hardware_frontier_m6a
+    role: physical_two_dpu_frontier_taskgraph_functionality
     required: true
 
 workloads:
-  - id: one_qubit_ry_h_ry_a
+  - id: two_qubit_frontier_2_2_1
     circuit:
       kind: qasm_file
-      name: one_qubit_ry_h_ry_a
-      path: configs/circuits/upmem_m2/one_qubit_ry_h_ry_a.qasm
+      name: two_qubit_frontier_2_2_1
+      path: configs/circuits/upmem_m6a/two_qubit_frontier_2_2_1.qasm
     numeric_mode: none
     placements:
-      - single_dpu_sequential_v1
       - two_dpu_frontier_round_robin_v1
 
 validation:

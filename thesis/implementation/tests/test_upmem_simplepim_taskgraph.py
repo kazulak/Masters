@@ -12,6 +12,11 @@ from quantum_bench.bench import upmem_simplepim_taskgraph as route
 
 ROOT = Path(__file__).resolve().parents[1]
 SUITE = ROOT / "configs" / "suites" / "upmem_hardware_simplepim_taskgraph.yml"
+RANK_PATH = "/dev/dpu_rank1"
+PHYSICAL_ENVIRONMENT = {
+    "UPMEM_ALLOW_PHYSICAL_HARDWARE": "1",
+    "UPMEM_HW_RANK_PATH": RANK_PATH,
+}
 
 
 class FakeNativeTarget:
@@ -178,6 +183,8 @@ class FakeNativeTarget:
                 "actual_d2h_bytes": total_repetitions * 8,
                 "actual_transfer_bytes": 64 + total_repetitions * (64 + 8),
             },
+            "requested_rank_path": request["requested_rank_path"],
+            "observed_rank_count": 1,
             **(
                 {}
                 if self.session_validation_status is None
@@ -204,6 +211,7 @@ def test_suite_is_fixed_and_prepare_is_parser_only(tmp_path: Path) -> None:
     assert result["dpu_allocation_attempted"] is False
     assert result["dpu_launch_attempted"] is False
     assert result["preparation_mode"] == "parser_only_and_plan_validation"
+    assert route.M45_CONTRACT.require_rank_evidence is True
     placements = result["placements"]
     assert [item["requested_dpu_count"] for item in placements] == [1, 2]
     assert placements[0]["package_file_sha256"] == placements[1]["package_file_sha256"]
@@ -231,7 +239,7 @@ def test_execute_keeps_warmups_out_of_normalized_records(tmp_path: Path) -> None
     result = route.execute(
         tmp_path,
         suite_path=SUITE,
-        environment={"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1"},
+        environment=PHYSICAL_ENVIRONMENT,
         native_target=target,
     )
     assert result["status"] == "completed"
@@ -243,6 +251,8 @@ def test_execute_keeps_warmups_out_of_normalized_records(tmp_path: Path) -> None
     assert all(row["warmup"] is False for row in measured)
     assert all(row["warmup"] is True for row in warmups)
     assert {row["requested_dpu_count"] for row in measured} == {1, 2}
+    assert all(row["requested_rank_path"] == RANK_PATH for row in measured)
+    assert all(row["observed_rank_count"] == 1 for row in measured)
     assert all(row["hardware_speedup_applicable"] is False for row in measured)
     assert all(row["validation_status"] == "not_individually_collected" for row in measured)
     assert all(row["session_validation_status"] == "passed" for row in measured)
@@ -270,12 +280,40 @@ def test_hardware_opt_in_is_required_before_native_target_load(tmp_path: Path) -
         route.execute(tmp_path, suite_path=SUITE, environment={})
 
 
+@pytest.mark.parametrize(
+    "environment, message",
+    [
+        ({"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1"}, "UPMEM_HW_RANK_PATH is required"),
+        (
+            {
+                "UPMEM_ALLOW_PHYSICAL_HARDWARE": "1",
+                "UPMEM_HW_RANK_PATH": "/tmp/not-a-rank",
+            },
+            "must match",
+        ),
+    ],
+)
+def test_m45_requires_valid_rank_before_native_target_build(
+    tmp_path: Path, environment: dict[str, str], message: str
+) -> None:
+    target = FakeNativeTarget()
+    with pytest.raises(route.NativeExecutionFailure, match=message):
+        route.execute(
+            tmp_path,
+            suite_path=SUITE,
+            environment=environment,
+            native_target=target,
+        )
+    assert target.build_calls == 0
+    assert target.execute_calls == []
+
+
 def test_native_failure_stage_is_preserved_and_no_retry_occurs(tmp_path: Path) -> None:
     target = FakeNativeTarget(failure="kernel_timeout")
     result = route.execute(
         tmp_path,
         suite_path=SUITE,
-        environment={"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1"},
+        environment=PHYSICAL_ENVIRONMENT,
         native_target=target,
     )
     assert result["status"] == "failed"
@@ -291,7 +329,7 @@ def test_missing_response_is_failed_closed(tmp_path: Path) -> None:
     result = route.execute(
         tmp_path,
         suite_path=SUITE,
-        environment={"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1"},
+        environment=PHYSICAL_ENVIRONMENT,
         native_target=target,
     )
     run_dir = Path(result["run_dir"])
@@ -304,7 +342,7 @@ def test_transfer_invariant_rejects_inconsistent_native_evidence(tmp_path: Path)
     result = route.execute(
         tmp_path,
         suite_path=SUITE,
-        environment={"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1"},
+        environment=PHYSICAL_ENVIRONMENT,
         native_target=FakeNativeTarget(bad_transfer=True),
     )
     failure = json.loads(
@@ -318,7 +356,7 @@ def test_malformed_native_hash_is_not_admitted(tmp_path: Path) -> None:
     result = route.execute(
         tmp_path,
         suite_path=SUITE,
-        environment={"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1"},
+        environment=PHYSICAL_ENVIRONMENT,
         native_target=FakeNativeTarget(bad_hash=True),
     )
     failure = json.loads(
@@ -332,7 +370,7 @@ def test_nonzero_native_returncode_is_not_admitted(tmp_path: Path) -> None:
     result = route.execute(
         tmp_path,
         suite_path=SUITE,
-        environment={"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1"},
+        environment=PHYSICAL_ENVIRONMENT,
         native_target=FakeNativeTarget(returncode=1),
     )
     failure = json.loads(
@@ -349,7 +387,7 @@ def test_missing_or_failed_session_validation_is_not_admitted(
     result = route.execute(
         tmp_path,
         suite_path=SUITE,
-        environment={"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1"},
+        environment=PHYSICAL_ENVIRONMENT,
         native_target=FakeNativeTarget(session_validation_status=status),
     )
     failure = json.loads(

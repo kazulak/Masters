@@ -383,11 +383,16 @@ def test_m51_prepare_result_is_explicitly_prepared(tmp_path: Path) -> None:
     assert json.loads(Path(result["artifact"]).read_text())["status"] == "prepared"
 
 
-def test_default_target_passes_injected_environment_to_subprocess(
+def test_default_target_restores_rank_path_only_for_native_execution(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     target = m51._DefaultNativeTarget()
-    environment = {"PATH": "/fake/bin", "M5_1_ENV_MARKER": "present"}
+    environment = {
+        "PATH": "/fake/bin",
+        "M5_1_ENV_MARKER": "present",
+        "UPMEM_ALLOW_PHYSICAL_HARDWARE": "1",
+        "UPMEM_HW_RANK_PATH": "/dev/dpu_rank1",
+    }
     target.set_environment(environment)
     response_path = tmp_path / "response.json"
     observed: dict[str, Any] = {}
@@ -408,7 +413,37 @@ def test_default_target_passes_injected_environment_to_subprocess(
         timeout_s=1.0,
     )
 
-    assert observed["env"] == environment
+    assert observed["env"]["UPMEM_HW_RANK_PATH"] == "/dev/dpu_rank1"
+    assert observed["env"]["UPMEM_PROFILE"] == "backend=hw,rankPath=/dev/dpu_rank1,ignoreVpd=true"
+    assert observed["timeout"] == 6
+
+
+def test_default_target_validate_only_does_not_require_or_restore_rank_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = m51._DefaultNativeTarget()
+    target.set_environment({"PATH": "/fake/bin", "M5_1_ENV_MARKER": "present"})
+    response_path = tmp_path / "response.json"
+    observed: dict[str, Any] = {}
+
+    def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        observed.update(kwargs)
+        response_path.write_text(json.dumps({"status": "validated"}), encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(m51.subprocess, "run", fake_run)
+    target.validate(
+        {
+            "host_binary": str(tmp_path / "bin" / "host"),
+            "resident_manifest": str(tmp_path / "manifest.json"),
+            "distributed_plan": str(tmp_path / "plan.bin"),
+            "response_path": str(response_path),
+        },
+        timeout_s=1.1,
+    )
+
+    assert "UPMEM_HW_RANK_PATH" not in observed["env"]
+    assert observed["timeout"] == 7
 
 
 def test_native_metrics_json_argument_order_matches_field_order() -> None:

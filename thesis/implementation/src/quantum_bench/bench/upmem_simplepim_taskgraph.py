@@ -1,9 +1,8 @@
-"""Small unified route for the M4.5 SimplePIM TaskGraph fixture.
+"""Small contract-driven engine for bounded physical SimplePIM TaskGraph studies.
 
-This route deliberately supports one committed circuit, two Block 1 placement
-policies, and the real-only ``numeric_mode=none`` package contract.  It reuses
-the normal suite, run-manifest, resident-package, and normalized-record APIs;
-it does not provide a second report generator or a generic workload framework.
+M4.5 remains the default public route. New, immutable study contracts can
+reuse the same suite, plan, resident-package, native adapter, and normalized
+record flow without cloning this physical route.
 """
 
 from __future__ import annotations
@@ -44,6 +43,7 @@ from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
     build_resident_graph_package,
     validate_resident_graph_package_file,
 )
+from quantum_bench.targets.upmem.hardware_session import hardware_environment_metadata
 from quantum_bench.tn import (
     build_tensor_network,
     execute_task_sequence_np_einsum,
@@ -89,6 +89,74 @@ class NativeExecutionFailure(RuntimeError):
 
 
 @dataclass(frozen=True)
+class TransferEdgeExpectation:
+    """One immutable host-mediated edge required by a route study."""
+
+    producer_task_id: str
+    consumer_task_id: str
+    producer_dpu_id: int
+    consumer_dpu_id: int
+    slot_id: int
+    element_count: int
+    transfer_bytes: int
+
+
+@dataclass(frozen=True)
+class RouteStudyContract:
+    """Immutable limits and identities for one thin physical route study."""
+
+    suite_id: str
+    schema_version: str
+    profile_version: str
+    route_id: str
+    backend_id: str
+    claim_boundary: str
+    route_label: str
+    execution_scope: str
+    benchmark_role: str
+    placements: tuple[str, ...]
+    case_id: str
+    qasm_path: str
+    warmups: int
+    repeats: int
+    tolerance: float
+    max_logical_tasks: int
+    max_waves: int
+    max_frontier_width: int
+    expected_path: tuple[tuple[int, int], ...] | None = None
+    expected_wave_widths: tuple[int, ...] | None = None
+    expected_dpu_task_counts: tuple[int, ...] | None = None
+    expected_assignment_dpu_ids: tuple[int, ...] | None = None
+    expected_transfer_edges: tuple[TransferEdgeExpectation, ...] | None = None
+    require_rank_evidence: bool = False
+    allow_slot_reuse: bool = False
+    include_failures_in_normalized_records: bool = False
+
+
+M45_CONTRACT = RouteStudyContract(
+    suite_id=SUITE_ID,
+    schema_version=SCHEMA_VERSION,
+    profile_version=PROFILE_VERSION,
+    route_id=ROUTE_ID,
+    backend_id=BACKEND_ID,
+    claim_boundary=CLAIM_BOUNDARY,
+    route_label="upmem_simplepim_taskgraph",
+    execution_scope="one_or_two_dpu_descriptor_driven_taskgraph",
+    benchmark_role="physical_simplepim_shared_taskgraph_functionality",
+    placements=PLACEMENTS,
+    case_id="one_qubit_ry_h_ry_a",
+    qasm_path="configs/circuits/upmem_m2/one_qubit_ry_h_ry_a.qasm",
+    warmups=WARMUPS,
+    repeats=REPEATS,
+    tolerance=DEFAULT_TOLERANCE,
+    max_logical_tasks=8,
+    max_waves=8,
+    max_frontier_width=2,
+    require_rank_evidence=True,
+)
+
+
+@dataclass(frozen=True)
 class PreparedPlacement:
     case_id: str
     request_id: str
@@ -104,19 +172,26 @@ class PreparedPlacement:
     source_output: np.ndarray
     package_file_sha256: str
     schedule_sidecar_sha256: str
+    requested_rank_path: str | None
 
 
 def load_upmem_simplepim_taskgraph_suite(path: Path) -> dict[str, Any]:
     """Resolve and enforce the one fixed physical M4.5 suite."""
+    return load_route_study_suite(path, M45_CONTRACT)
+
+
+def load_route_study_suite(path: Path, contract: RouteStudyContract) -> dict[str, Any]:
+    """Resolve one bounded study without allowing its hardware profile to drift."""
+
     suite = load_suite(path)
     profile = suite.get("metadata", {}).get("hardware_profile")
-    if suite.get("suite_id") != SUITE_ID or not isinstance(profile, Mapping):
+    if suite.get("suite_id") != contract.suite_id or not isinstance(profile, Mapping):
         raise ValueError("hardware_profile_violation: unexpected SimplePIM TaskGraph suite")
     expected = {
-        "hardware_profile_version": PROFILE_VERSION,
+        "hardware_profile_version": contract.profile_version,
         "target": "hardware",
-        "backend_id": BACKEND_ID,
-        "route_id": ROUTE_ID,
+        "backend_id": contract.backend_id,
+        "route_id": contract.route_id,
         "tasklets_per_dpu": TASKLETS_PER_DPU,
         "numeric_mode": "none",
         "device_launch_mode": DEVICE_LAUNCH_MODE,
@@ -125,27 +200,128 @@ def load_upmem_simplepim_taskgraph_suite(path: Path) -> dict[str, Any]:
         "performance_claim_applicable": False,
     }
     if any(profile.get(key) != value for key, value in expected.items()):
-        raise ValueError("hardware_profile_violation: M4.5 hardware profile is not fixed")
-    if (suite.get("warmups"), suite.get("repeats")) != (WARMUPS, REPEATS):
-        raise ValueError("hardware_profile_violation: M4.5 requires warmups=1 and repeats=3")
+        raise ValueError("hardware_profile_violation: study hardware profile is not fixed")
+    if bool(profile.get("allow_slot_reuse", False)) != contract.allow_slot_reuse:
+        raise ValueError("hardware_profile_violation: study slot-reuse policy differs")
+    if (suite.get("warmups"), suite.get("repeats")) != (contract.warmups, contract.repeats):
+        raise ValueError("hardware_profile_violation: study warmup/repeat contract differs")
     if suite.get("planner") != {"engine": "opt_einsum", "optimize": "greedy"}:
-        raise ValueError("hardware_profile_violation: M4.5 requires opt_einsum greedy")
-    if suite.get("route_policy", {}).get("routes") != [ROUTE_ID]:
-        raise ValueError("hardware_profile_violation: M4.5 route identity differs")
+        raise ValueError("hardware_profile_violation: study requires opt_einsum greedy")
+    if suite.get("route_policy", {}).get("routes") != [contract.route_id]:
+        raise ValueError("hardware_profile_violation: study route identity differs")
     cases = suite.get("cases")
     if not isinstance(cases, list) or len(cases) != 1:
-        raise ValueError("hardware_profile_violation: M4.5 requires one workload")
+        raise ValueError("hardware_profile_violation: study requires one workload")
     case = cases[0]
-    if case.get("case_id") != "one_qubit_ry_h_ry_a":
-        raise ValueError("hardware_profile_violation: M4.5 case differs")
+    if case.get("case_id") != contract.case_id:
+        raise ValueError("hardware_profile_violation: study case differs")
     circuit = case.get("circuit")
-    if not isinstance(circuit, Mapping) or circuit.get("name") != case["case_id"]:
-        raise ValueError("hardware_profile_violation: M4.5 circuit differs")
-    if case.get("placements") != list(PLACEMENTS):
-        raise ValueError("hardware_profile_violation: M4.5 placements differ")
-    if float(suite.get("tolerances", {}).get("max_abs_error", 0.0)) != DEFAULT_TOLERANCE:
-        raise ValueError("hardware_profile_violation: M4.5 tolerance must be 1e-6")
+    if (
+        not isinstance(circuit, Mapping)
+        or circuit.get("name") != contract.case_id
+        or circuit.get("path") != contract.qasm_path
+    ):
+        raise ValueError("hardware_profile_violation: study circuit differs")
+    if case.get("placements") != list(contract.placements):
+        raise ValueError("hardware_profile_violation: study placements differ")
+    if float(suite.get("tolerances", {}).get("max_abs_error", 0.0)) != contract.tolerance:
+        raise ValueError("hardware_profile_violation: study tolerance differs")
+    for key, expected_value in (
+        ("max_logical_tasks", contract.max_logical_tasks),
+        ("max_waves", contract.max_waves),
+        ("max_frontier_width", contract.max_frontier_width),
+    ):
+        if profile.get(key) != expected_value:
+            raise ValueError(f"hardware_profile_violation: study {key} differs")
+    if contract.expected_dpu_task_counts is not None and profile.get("requested_dpu_count") != len(contract.expected_dpu_task_counts):
+        raise ValueError("hardware_profile_violation: study requested DPU count differs")
     return suite
+
+
+def _contract_json(contract: RouteStudyContract) -> JsonDict:
+    return {
+        "suite_id": contract.suite_id,
+        "profile_version": contract.profile_version,
+        "route_id": contract.route_id,
+        "backend_id": contract.backend_id,
+        "placements": list(contract.placements),
+        "case_id": contract.case_id,
+        "qasm_path": contract.qasm_path,
+        "warmups": contract.warmups,
+        "repeats": contract.repeats,
+        "tolerance": contract.tolerance,
+        "max_logical_tasks": contract.max_logical_tasks,
+        "max_waves": contract.max_waves,
+        "max_frontier_width": contract.max_frontier_width,
+        "expected_path": None if contract.expected_path is None else [list(step) for step in contract.expected_path],
+        "expected_wave_widths": None if contract.expected_wave_widths is None else list(contract.expected_wave_widths),
+        "expected_dpu_task_counts": None if contract.expected_dpu_task_counts is None else list(contract.expected_dpu_task_counts),
+        "expected_assignment_dpu_ids": None
+        if contract.expected_assignment_dpu_ids is None
+        else list(contract.expected_assignment_dpu_ids),
+        "expected_transfer_edges": None
+        if contract.expected_transfer_edges is None
+        else [
+            {
+                "producer_task_id": edge.producer_task_id,
+                "consumer_task_id": edge.consumer_task_id,
+                "producer_dpu_id": edge.producer_dpu_id,
+                "consumer_dpu_id": edge.consumer_dpu_id,
+                "slot_id": edge.slot_id,
+                "element_count": edge.element_count,
+                "transfer_bytes": edge.transfer_bytes,
+            }
+            for edge in contract.expected_transfer_edges
+        ],
+        "require_rank_evidence": contract.require_rank_evidence,
+        "allow_slot_reuse": contract.allow_slot_reuse,
+        "include_failures_in_normalized_records": contract.include_failures_in_normalized_records,
+    }
+
+
+def _validate_study_graph(contract: RouteStudyContract, graph: TaskGraph) -> None:
+    if not 1 <= len(graph.tasks) <= contract.max_logical_tasks:
+        raise ValueError("hardware_profile_violation: study logical-task cap exceeded")
+    if contract.expected_path is not None and graph.path != contract.expected_path:
+        raise ValueError("hardware_profile_violation: study contraction path differs")
+
+
+def _validate_study_plan(contract: RouteStudyContract, graph: TaskGraph, plan: ExecutionPlan) -> None:
+    _validate_study_graph(contract, graph)
+    widths = tuple(len(wave) for wave in plan.waves)
+    if not 1 <= plan.wave_count <= contract.max_waves:
+        raise ValueError("hardware_profile_violation: study wave cap exceeded")
+    if any(width > contract.max_frontier_width for width in widths):
+        raise ValueError("hardware_profile_violation: study frontier-width cap exceeded")
+    if contract.expected_wave_widths is not None and widths != contract.expected_wave_widths:
+        raise ValueError("hardware_profile_violation: study wave widths differ")
+    if contract.expected_dpu_task_counts is not None:
+        expected = contract.expected_dpu_task_counts
+        observed = tuple(
+            sum(item.dpu_id == dpu for item in plan.assignments)
+            for dpu in range(plan.requested_dpu_count)
+        )
+        if plan.requested_dpu_count != len(expected) or observed != expected:
+            raise ValueError("hardware_profile_violation: study DPU task counts differ")
+    if contract.expected_assignment_dpu_ids is not None:
+        observed_assignment = tuple(item.dpu_id for item in plan.assignments)
+        if observed_assignment != contract.expected_assignment_dpu_ids:
+            raise ValueError("hardware_profile_violation: study DPU assignment differs")
+    if contract.expected_transfer_edges is not None:
+        observed_edges = tuple(
+            TransferEdgeExpectation(
+                producer_task_id=edge.producer_task_id,
+                consumer_task_id=edge.consumer_task_id,
+                producer_dpu_id=edge.producer_dpu_id,
+                consumer_dpu_id=edge.consumer_dpu_id,
+                slot_id=edge.slot_id,
+                element_count=edge.element_count,
+                transfer_bytes=edge.transfer_bytes,
+            )
+            for edge in plan.transfer_edges
+        )
+        if observed_edges != contract.expected_transfer_edges:
+            raise ValueError("hardware_profile_violation: study transfer edges differ")
 
 
 def prepare(
@@ -159,8 +335,31 @@ def prepare(
 ) -> dict[str, Any]:
     """Build/parser-check plans only; never allocate or launch a DPU."""
 
-    suite = load_upmem_simplepim_taskgraph_suite(suite_path)
-    plan_dir = _unique_dir(root_dir / "build" / f"{SUITE_ID}_plan")
+    return prepare_route_study(
+        root_dir,
+        suite_path=suite_path,
+        contract=M45_CONTRACT,
+        build=build,
+        environment=environment,
+        native_target=native_target,
+        plan_compiler=plan_compiler,
+    )
+
+
+def prepare_route_study(
+    root_dir: Path,
+    *,
+    suite_path: Path,
+    contract: RouteStudyContract,
+    build: bool = False,
+    environment: Mapping[str, str] | None = None,
+    native_target: Block2NativeTarget | None = None,
+    plan_compiler: Callable[..., ExecutionPlan] | None = None,
+) -> dict[str, Any]:
+    """Prepare a contract-bound route without allocating or launching a DPU."""
+
+    suite = load_route_study_suite(suite_path, contract)
+    plan_dir = _unique_dir(root_dir / "build" / f"{contract.suite_id}_plan")
     (plan_dir / "config").mkdir(parents=True)
     write_json(plan_dir / "config" / "resolved_suite.json", suite)
     write_json(plan_dir / "environment.json", capture_environment(root_dir))
@@ -177,11 +376,13 @@ def prepare(
         plan_dir / "native_session" / "unbuilt_dpu_binary"
     )
     case = suite["cases"][0]
-    source, package_graph, package_network, reference = _build_case(root_dir, suite, case)
-    package = _write_package(plan_dir, case, package_graph, package_network, reference, dpu_binary)
+    source, package_graph, package_network, reference = _build_case(root_dir, suite, case, contract)
+    package = _write_package(
+        plan_dir, case, package_graph, package_network, reference, dpu_binary, contract
+    )
     compiler = plan_compiler or compile_plan
     placements: list[PreparedPlacement] = []
-    for placement in PLACEMENTS:
+    for placement in contract.placements:
         prepared = _prepare_placement(
             plan_dir,
             case,
@@ -192,16 +393,19 @@ def prepare(
             source_output=reference,
             dpu_binary=dpu_binary,
             plan_compiler=compiler,
+            contract=contract,
+            requested_rank_path=None,
         )
         _validate_prepared_request(target, prepared.request_path, float(suite["timeout_s"]))
         placements.append(prepared)
     result: JsonDict = {
-        "schema_version": SCHEMA_VERSION,
-        "suite_id": SUITE_ID,
-        "route_id": ROUTE_ID,
-        "backend_id": BACKEND_ID,
+        "schema_version": contract.schema_version,
+        "suite_id": contract.suite_id,
+        "route_id": contract.route_id,
+        "backend_id": contract.backend_id,
         "status": "prepared",
-        "claim_boundary": CLAIM_BOUNDARY,
+        "claim_boundary": contract.claim_boundary,
+        "study_contract": _contract_json(contract),
         "placements": [_placement_json(item) for item in placements],
         "native_build": dict(native_build),
         "preparation_mode": "parser_only_and_plan_validation",
@@ -211,7 +415,7 @@ def prepare(
         "launch_status": "not_attempted",
         "package_file_sha256": _sha256_file(placements[0].package_path),
     }
-    artifact = plan_dir / f"{SUITE_ID}_plan.json"
+    artifact = plan_dir / f"{contract.suite_id}_plan.json"
     write_json(artifact, result)
     return {"plan_dir": str(plan_dir), "artifact": str(artifact), **result}
 
@@ -226,33 +430,55 @@ def execute(
 ) -> dict[str, Any]:
     """Execute both placements through Block 2 with no fallback or retry."""
 
+    return execute_route_study(
+        root_dir,
+        suite_path=suite_path,
+        contract=M45_CONTRACT,
+        environment=environment,
+        native_target=native_target,
+        plan_compiler=plan_compiler,
+    )
+
+
+def execute_route_study(
+    root_dir: Path,
+    *,
+    suite_path: Path,
+    contract: RouteStudyContract,
+    environment: Mapping[str, str] | None = None,
+    native_target: Block2NativeTarget | None = None,
+    plan_compiler: Callable[..., ExecutionPlan] | None = None,
+) -> dict[str, Any]:
+    """Execute one contract-bound physical route study with no fallback or retry."""
+
     env = dict(os.environ if environment is None else environment)
     _require_hardware_opt_in(env)
-    suite = load_upmem_simplepim_taskgraph_suite(suite_path)
+    _require_contract_environment(contract, env)
+    suite = load_route_study_suite(suite_path, contract)
     profile = dict(suite["metadata"]["hardware_profile"])
     run_dir = create_run_dir(
         root_dir,
-        SUITE_ID,
+        contract.suite_id,
         artifact_kind=EVIDENCE_ARTIFACT_KIND,
-        route_label="upmem_simplepim_taskgraph",
+        route_label=contract.route_label,
     )
     shutil.copy2(suite_path, run_dir / "config" / "resolved_suite.yml")
     write_json(run_dir / "config" / "hardware_profile.json", profile)
     write_json(run_dir / "environment.json", capture_environment(root_dir))
     manifest = write_run_manifest(
         run_dir,
-        run_kind=SCHEMA_VERSION,
-        suite_id=SUITE_ID,
+        run_kind=contract.schema_version,
+        suite_id=contract.suite_id,
         suite_path=str(suite_path),
         artifact_kind=EVIDENCE_ARTIFACT_KIND,
-        route_label="upmem_simplepim_taskgraph",
-        route_id=ROUTE_ID,
-        backend_id=BACKEND_ID,
-        execution_scope="one_or_two_dpu_descriptor_driven_taskgraph",
+        route_label=contract.route_label,
+        route_id=contract.route_id,
+        backend_id=contract.backend_id,
+        execution_scope=contract.execution_scope,
         evidence_type="physical_hardware_functionality_only",
         upmem_execution_mode="simplepim_taskgraph_block2",
         artifact_retention="full",
-        summary=f"{SUITE_ID}_summary.json",
+        summary=f"{contract.suite_id}_summary.json",
         root_dir=root_dir,
     )
     target = native_target or _load_block2_target()
@@ -261,8 +487,10 @@ def execute(
     if dpu_binary is None:
         raise NativeExecutionFailure("native_build_failed", "native target did not return dpu_binary")
     case = suite["cases"][0]
-    source, package_graph, package_network, reference = _build_case(root_dir, suite, case)
-    package = _write_package(run_dir, case, package_graph, package_network, reference, dpu_binary)
+    source, package_graph, package_network, reference = _build_case(root_dir, suite, case, contract)
+    package = _write_package(
+        run_dir, case, package_graph, package_network, reference, dpu_binary, contract
+    )
     compiler = plan_compiler or compile_plan
     placements = [
         _prepare_placement(
@@ -275,8 +503,10 @@ def execute(
             source_output=reference,
             dpu_binary=dpu_binary,
             plan_compiler=compiler,
+            contract=contract,
+            requested_rank_path=env.get("UPMEM_HW_RANK_PATH"),
         )
-        for placement in PLACEMENTS
+        for placement in contract.placements
     ]
     measured: list[JsonDict] = []
     warmups: list[JsonDict] = []
@@ -290,47 +520,53 @@ def execute(
                 item,
                 session,
                 native_build=native_build,
+                contract=contract,
             )
             warmups.extend(session_warmups)
             measured.extend(session_measured)
         except TimeoutError as exc:
-            failures.append(_failure_record(item, native_build, "kernel_timeout", str(exc)))
+            failures.append(_failure_record(item, native_build, "kernel_timeout", str(exc), contract))
             stopped = True
         except NativeExecutionFailure as exc:
-            failures.append(_failure_record(item, native_build, exc.stage, str(exc)))
+            failures.append(_failure_record(item, native_build, exc.stage, str(exc), contract))
             stopped = True
         except (OSError, RuntimeError, TypeError, ValueError, KeyError) as exc:
             stage = getattr(exc, "failure_stage", _failure_stage(str(exc)))
-            failures.append(_failure_record(item, native_build, str(stage), str(exc)))
+            failures.append(_failure_record(item, native_build, str(stage), str(exc), contract))
             stopped = True
         if stopped:
             break
-    write_normalized_records(run_dir, measured)
+    normalized_records = measured + failures if contract.include_failures_in_normalized_records else measured
+    write_normalized_records(run_dir, normalized_records)
     write_jsonl(run_dir / "warmup_records.jsonl", warmups)
     write_jsonl(run_dir / "session_failures.jsonl", failures)
-    expected_rows = len(PLACEMENTS) * int(suite["repeats"])
+    expected_rows = len(contract.placements) * int(suite["repeats"])
     completed = not stopped and len(measured) == expected_rows and all(
         row["status"] == "completed" for row in measured
     )
     summary: JsonDict = {
-        "schema_version": SCHEMA_VERSION,
-        "suite_id": SUITE_ID,
-        "route_id": ROUTE_ID,
-        "backend_id": BACKEND_ID,
+        "schema_version": contract.schema_version,
+        "suite_id": contract.suite_id,
+        "route_id": contract.route_id,
+        "backend_id": contract.backend_id,
         "status": "completed" if completed else "failed",
         "row_count": len(measured),
+        "measured_row_count": len(measured),
+        "failure_record_count": len(failures),
+        "normalized_record_count": len(normalized_records),
         "warmup_count": len(warmups),
         "repeat_count": len(measured),
         "normalized_records": "normalized_records.jsonl",
         "warmup_records": "warmup_records.jsonl",
         "session_failures": "session_failures.jsonl",
         "session_failure_count": len(failures),
-        "claim_boundary": CLAIM_BOUNDARY,
+        "claim_boundary": contract.claim_boundary,
         "hardware_speedup_applicable": False,
         "placements": [_placement_json(item) for item in placements],
         "native_build": native_build,
+        "study_contract": _contract_json(contract),
     }
-    artifact = run_dir / f"{SUITE_ID}_summary.json"
+    artifact = run_dir / f"{contract.suite_id}_summary.json"
     write_json(artifact, summary)
     manifest.update(
         {
@@ -353,6 +589,8 @@ def _prepare_placement(
     source_output: np.ndarray,
     dpu_binary: Path,
     plan_compiler: Callable[..., ExecutionPlan],
+    contract: RouteStudyContract,
+    requested_rank_path: str | None,
 ) -> PreparedPlacement:
     directory = output_root / "cases" / sanitize(str(case["case_id"])) / sanitize(placement)
     directory.mkdir(parents=True, exist_ok=False)
@@ -363,6 +601,7 @@ def _prepare_placement(
     package_hash = _sha256_bytes(package_bytes)
     validate_resident_graph_package_file(package_path)
     plan = plan_compiler(source_graph, package, placement_policy=placement)
+    _validate_study_plan(contract, source_graph, plan)
     validate_plan(
         plan,
         graph=source_graph,
@@ -391,14 +630,14 @@ def _prepare_placement(
     )
     request.update({
             "target": "hardware",
-            "route_id": ROUTE_ID,
-            "backend_id": BACKEND_ID,
-            "hardware_profile_version": PROFILE_VERSION,
+            "route_id": contract.route_id,
+            "backend_id": contract.backend_id,
+            "hardware_profile_version": contract.profile_version,
             "placement_policy": plan.placement_policy,
             "request_id": f"{case['case_id']}-{sanitize(placement)}",
             "upmem_execution_plan_hash": plan.execution_plan_hash,
-            "requested_warmups": WARMUPS,
-            "requested_repetitions": REPEATS,
+            "requested_warmups": contract.warmups,
+            "requested_repetitions": contract.repeats,
             "device_launch_mode": DEVICE_LAUNCH_MODE,
             "synchronization_policy": SYNCHRONIZATION_POLICY,
             "fully_synchronous_kernel_launch": False,
@@ -411,6 +650,7 @@ def _prepare_placement(
             "package_circuit_semantics_hash": plan.package_circuit_semantics_hash,
             "package_tensor_network_hash": plan.package_tensor_network_hash,
             "package_contraction_plan_hash": plan.package_contraction_plan_hash,
+            "requested_rank_path": requested_rank_path,
         }
     )
     request_path = directory / "block2_request.json"
@@ -430,11 +670,15 @@ def _prepare_placement(
         source_output=np.asarray(source_output),
         package_file_sha256=package_hash,
         schedule_sidecar_sha256=schedule_hash,
+        requested_rank_path=requested_rank_path,
     )
 
 
 def _build_case(
-    root_dir: Path, suite: Mapping[str, Any], case: Mapping[str, Any]
+    root_dir: Path,
+    suite: Mapping[str, Any],
+    case: Mapping[str, Any],
+    contract: RouteStudyContract,
 ) -> tuple[TaskGraph, TaskGraph, TensorNetworkValue, np.ndarray]:
     circuit_root = root_dir
     circuit_path = case.get("circuit", {}).get("path")
@@ -443,6 +687,7 @@ def _build_case(
     circuit = load_circuit(dict(case), circuit_root)
     network = build_tensor_network(circuit)
     source = with_execution_identity(plan_task_graph_with_config(network, dict(suite["planner"])))
+    _validate_study_graph(contract, source)
     _require_real_network(network)
     reference, _ = execute_task_sequence_np_einsum(source, network)
     package_graph, package_network = _lower_real_float32(source, network)
@@ -501,15 +746,16 @@ def _write_package(
     package_network: TensorNetworkValue,
     reference: np.ndarray,
     dpu_binary: Path,
+    contract: RouteStudyContract,
 ) -> ResidentGraphPackage:
     package = build_resident_graph_package(
         package_graph,
         package_network,
         case_id=str(case["case_id"]),
-        suite_id=SUITE_ID,
+        suite_id=contract.suite_id,
         quantization_mode="none",
         full_precision_output=reference,
-        allow_slot_reuse=False,
+        allow_slot_reuse=contract.allow_slot_reuse,
     )
     _validate_real_package(package)
     artifact = package.write(
@@ -529,13 +775,14 @@ def _session_records(
     session: Mapping[str, Any],
     *,
     native_build: Mapping[str, Any],
+    contract: RouteStudyContract,
 ) -> tuple[list[JsonDict], list[JsonDict]]:
     if not isinstance(session, dict):
         raise NativeExecutionFailure("output_manifest_failed", "adapter session is not mutable")
     if session.get("status") != "completed":
-        _validate_adapter_session(session, prepared)
-    _complete_session_validation(session, prepared)
-    _validate_adapter_session(session, prepared)
+        _validate_adapter_session(session, prepared, contract)
+    _complete_session_validation(session, prepared, contract)
+    _validate_adapter_session(session, prepared, contract)
     session_path = prepared.request_path.parent / "adapter_session.json"
     write_json(session_path, dict(session))
     warmups: list[JsonDict] = []
@@ -550,6 +797,7 @@ def _session_records(
                 native_build=native_build,
                 warmup=warmup,
                 repeat_id=repetition["repeat_id"],
+                contract=contract,
             )
             row.update(_adapter_record(session, repetition, session_path, run_dir))
             row.update({
@@ -562,14 +810,16 @@ def _session_records(
                 "validation_max_abs_error": None,
                 "validation_tolerance_abs": None,
                 "session_validation_max_abs_error": session["session_validation"]["max_abs_error"],
-                "session_validation_tolerance_abs": DEFAULT_TOLERANCE,
+                "session_validation_tolerance_abs": contract.tolerance,
                 "failure_stage": None,
             })
             (warmups if warmup else measured).append(row)
     return warmups, measured
 
 
-def _validate_adapter_session(session: Mapping[str, Any], prepared: PreparedPlacement) -> None:
+def _validate_adapter_session(
+    session: Mapping[str, Any], prepared: PreparedPlacement, contract: RouteStudyContract
+) -> None:
     if not isinstance(session, Mapping):
         raise NativeExecutionFailure("output_manifest_failed", "adapter session is not a mapping")
     if session.get("status") != "completed":
@@ -621,27 +871,28 @@ def _validate_adapter_session(session: Mapping[str, Any], prepared: PreparedPlac
         "device_launch_mode": DEVICE_LAUNCH_MODE,
         "synchronization_policy": SYNCHRONIZATION_POLICY,
         "fully_synchronous_kernel_launch": False,
-        "requested_warmups": WARMUPS,
-        "requested_repetitions": REPEATS,
+        "requested_warmups": contract.warmups,
+        "requested_repetitions": contract.repeats,
         "native_session_count": 1,
         "logical_task_count": prepared.plan.logical_task_count,
         "session_completion_scope": "aggregate_across_warmups_and_repetitions",
         "aggregate_completed_per_dpu": [
             sum(item.dpu_id == dpu for item in prepared.plan.assignments)
-            * (WARMUPS + REPEATS)
+            * (contract.warmups + contract.repeats)
             for dpu in range(prepared.plan.requested_dpu_count)
         ],
-        "aggregate_total_task_completion_count": prepared.plan.logical_task_count * (WARMUPS + REPEATS),
+        "aggregate_total_task_completion_count": prepared.plan.logical_task_count * (contract.warmups + contract.repeats),
         "aggregate_session_completion_status": "passed",
-        "total_task_completion_count": prepared.plan.logical_task_count * (WARMUPS + REPEATS),
+        "total_task_completion_count": prepared.plan.logical_task_count * (contract.warmups + contract.repeats),
         "exactly_once_execution_verified": True,
-        "wave_barrier_count_total": prepared.plan.wave_count * (WARMUPS + REPEATS),
+        "wave_barrier_count_total": prepared.plan.wave_count * (contract.warmups + contract.repeats),
         "operation_assignments": [to_jsonable(item) for item in prepared.plan.assignments],
         "schedule_h2d_bytes": 0,
     }
     for key, value in expected.items():
         if session[key] != value:
             raise NativeExecutionFailure("output_manifest_failed", f"adapter session field {key} mismatch")
+    _validate_rank_evidence(session, prepared, contract)
     aggregate_completion_id = session["aggregate_session_completion_id"]
     if not isinstance(aggregate_completion_id, str) or not aggregate_completion_id.startswith("aggregate_session_completion:"):
         raise NativeExecutionFailure("output_manifest_failed", "aggregate session completion ID is invalid")
@@ -662,7 +913,7 @@ def _validate_adapter_session(session: Mapping[str, Any], prepared: PreparedPlac
                 "output_manifest_failed",
                 f"adapter session {identity_name} differs from execution plan",
             )
-    _validate_completed_session_validation(session["session_validation"], prepared)
+    _validate_completed_session_validation(session["session_validation"], prepared, contract)
     transfer = session["cross_dpu_transfer"]
     if not isinstance(transfer, Mapping) or transfer.get("count") != len(prepared.plan.transfer_edges) or transfer.get("bytes") != prepared.plan.total_cross_dpu_transfer_bytes:
         raise NativeExecutionFailure("output_manifest_failed", "cross-DPU transfer evidence mismatch")
@@ -671,11 +922,11 @@ def _validate_adapter_session(session: Mapping[str, Any], prepared: PreparedPlac
         "release_time_s", "total_session_time_s",
     ))
     repetitions = session["repetitions"]
-    if not isinstance(repetitions, list) or len(repetitions) != WARMUPS + REPEATS:
+    if not isinstance(repetitions, list) or len(repetitions) != contract.warmups + contract.repeats:
         raise NativeExecutionFailure("output_manifest_failed", "adapter repetition count mismatch")
     warmup_ids = [item.get("repeat_id") for item in repetitions if item.get("warmup") is True]
     measured_ids = [item.get("repeat_id") for item in repetitions if item.get("warmup") is False]
-    if warmup_ids != list(range(WARMUPS)) or measured_ids != list(range(REPEATS)):
+    if warmup_ids != list(range(contract.warmups)) or measured_ids != list(range(contract.repeats)):
         raise NativeExecutionFailure("output_manifest_failed", "adapter repetition identities mismatch")
     for repetition in repetitions:
         _validate_repetition(repetition, prepared, aggregate_completion_id)
@@ -684,8 +935,28 @@ def _validate_adapter_session(session: Mapping[str, Any], prepared: PreparedPlac
     _validate_session_transfer(session["session_transfer"], repetitions)
 
 
+def _validate_rank_evidence(
+    session: Mapping[str, Any], prepared: PreparedPlacement, contract: RouteStudyContract
+) -> None:
+    """Require rank identity only for studies that execute against a fixed rank."""
+
+    if not contract.require_rank_evidence:
+        return
+    _require_fields(session, ("requested_rank_path", "observed_rank_count"), "adapter session")
+    # Physical execution always uses PreparedPlacement, which records the
+    # requested rank before native build. Keep the validator reusable for
+    # parser-only adapter fixtures that predate that field.
+    requested_rank_path = getattr(prepared, "requested_rank_path", session["requested_rank_path"])
+    if not isinstance(requested_rank_path, str) or not requested_rank_path:
+        raise NativeExecutionFailure("hardware_profile_violation", "M6a rank path was not requested")
+    if session["requested_rank_path"] != requested_rank_path:
+        raise NativeExecutionFailure("output_manifest_failed", "native rank path differs from request")
+    if session["observed_rank_count"] != 1:
+        raise NativeExecutionFailure("output_manifest_failed", "native session did not observe one rank")
+
+
 def _complete_session_validation(
-    session: dict[str, Any], prepared: PreparedPlacement
+    session: dict[str, Any], prepared: PreparedPlacement, contract: RouteStudyContract
 ) -> None:
     """Validate the one final output retained by a persistent native session."""
 
@@ -705,18 +976,18 @@ def _complete_session_validation(
         raise NativeExecutionFailure("output_validation_failed", "session output validation did not complete")
     output = _extract_output(validation, prepared.request_path.parent, prepared.source_output.shape)
     error = _max_abs_error(output, prepared.source_output.real)
-    if error > DEFAULT_TOLERANCE:
+    if error > contract.tolerance:
         raise NativeExecutionFailure("output_validation_failed", f"max_abs_error={error}")
     session["session_validation"] = {
         **validation,
         "status": "passed",
         "max_abs_error": error,
-        "tolerance_abs": DEFAULT_TOLERANCE,
+        "tolerance_abs": contract.tolerance,
     }
 
 
 def _validate_completed_session_validation(
-    validation: Any, prepared: PreparedPlacement
+    validation: Any, prepared: PreparedPlacement, contract: RouteStudyContract
 ) -> None:
     value = _require_fields(
         validation,
@@ -730,10 +1001,10 @@ def _validate_completed_session_validation(
         raise NativeExecutionFailure("output_validation_failed", "session validation is not passed")
     if not isinstance(value["validation_id"], str) or not value["validation_id"]:
         raise NativeExecutionFailure("output_manifest_failed", "completed session validation ID is invalid")
-    if value["tolerance_abs"] != DEFAULT_TOLERANCE:
+    if value["tolerance_abs"] != contract.tolerance:
         raise NativeExecutionFailure("output_manifest_failed", "session validation tolerance differs")
     error = value["max_abs_error"]
-    if isinstance(error, bool) or not isinstance(error, (int, float)) or not math.isfinite(float(error)) or error < 0 or error > DEFAULT_TOLERANCE:
+    if isinstance(error, bool) or not isinstance(error, (int, float)) or not math.isfinite(float(error)) or error < 0 or error > contract.tolerance:
         raise NativeExecutionFailure("output_validation_failed", "session validation error is invalid")
 
 
@@ -814,13 +1085,14 @@ def _base_record(
     native_build: Mapping[str, Any],
     warmup: bool,
     repeat_id: int | None,
+    contract: RouteStudyContract,
 ) -> JsonDict:
     source = _identity(prepared.source_graph)
     package = _identity(prepared.package_graph)
     row: JsonDict = {
         "schema_version": "normalized_records_v1", "case_id": prepared.case_id,
-        "route_id": ROUTE_ID, "backend_id": BACKEND_ID,
-        "benchmark_role": "physical_simplepim_shared_taskgraph_functionality",
+        "route_id": contract.route_id, "backend_id": contract.backend_id,
+        "benchmark_role": contract.benchmark_role,
         "execution_model": "descriptor_driven_simplepim_taskgraph",
         "placement_policy": prepared.placement_policy,
         "device_launch_mode": DEVICE_LAUNCH_MODE,
@@ -846,6 +1118,10 @@ def _base_record(
         "release_confirmed": False, "warmup": warmup, "repeat_id": repeat_id,
         "validation_status": "not_run", "scientific_validation_status": "not_run",
         "failure_stage": None,
+        "allow_slot_reuse": contract.allow_slot_reuse,
+        "resident_slot_reuse_limited": not contract.allow_slot_reuse,
+        "requested_rank_path": prepared.requested_rank_path,
+        "observed_rank_count": None,
     }
     row.update({f"source_{key}": value for key, value in source.items()})
     row.update({f"package_{key}": value for key, value in package.items()})
@@ -881,6 +1157,8 @@ def _adapter_record(
         "simulator_kernel_executed": session["simulator_kernel_executed"],
         "cpu_fallback_used": session["cpu_fallback_used"],
         "release_confirmed": session["release_confirmed"],
+        "requested_rank_path": session.get("requested_rank_path"),
+        "observed_rank_count": session.get("observed_rank_count"),
         "timing_scope": "host_observed_wave_launch_and_barrier_boundaries",
         "adapter_session_path": str(session_path.relative_to(run_dir)),
         "allocation_time_s": session_timing["allocation_time_s"],
@@ -907,8 +1185,11 @@ def _failure_record(
     native_build: Mapping[str, Any],
     stage: str,
     reason: str,
+    contract: RouteStudyContract,
 ) -> JsonDict:
-    row = _base_record(prepared, native_build=native_build, warmup=False, repeat_id=None)
+    row = _base_record(
+        prepared, native_build=native_build, warmup=False, repeat_id=None, contract=contract
+    )
     row.update({"status": "failed", "failure_stage": stage, "reason": reason})
     return row
 
@@ -1028,6 +1309,19 @@ def _require_hardware_opt_in(environment: Mapping[str, str]) -> None:
         raise NativeExecutionFailure("hardware_opt_in_missing", "UPMEM_ALLOW_PHYSICAL_HARDWARE=1 is required")
     if environment.get("DPU_BACKEND", "").lower() in {"simulator", "cpu", "mock"} or environment.get("UPMEM_EXECUTION_MODE", "").lower() in {"simulator", "cpu", "mock"}:
         raise NativeExecutionFailure("hardware_profile_violation", "simulator/CPU selectors are forbidden")
+
+
+def _require_contract_environment(
+    contract: RouteStudyContract, environment: Mapping[str, str]
+) -> None:
+    try:
+        rank_path = hardware_environment_metadata(environment)["upmem_rank_path_requested"]
+    except ValueError as exc:
+        raise NativeExecutionFailure("hardware_profile_violation", str(exc)) from exc
+    if contract.require_rank_evidence and not rank_path:
+        raise NativeExecutionFailure(
+            "hardware_profile_violation", "UPMEM_HW_RANK_PATH is required for this route"
+        )
 
 
 def _validate_prepare_build(value: Mapping[str, Any]) -> None:
@@ -1156,13 +1450,18 @@ __all__ = [
     "Block2NativeTarget",
     "CLAIM_BOUNDARY",
     "FAILURE_STAGES",
+    "M45_CONTRACT",
     "PLACEMENT_FRONTIER",
     "PLACEMENT_SINGLE",
     "PROFILE_VERSION",
     "ROUTE_ID",
     "SCHEMA_VERSION",
     "SUITE_ID",
+    "RouteStudyContract",
     "execute",
+    "execute_route_study",
+    "load_route_study_suite",
     "load_upmem_simplepim_taskgraph_suite",
     "prepare",
+    "prepare_route_study",
 ]

@@ -232,3 +232,123 @@ def test_m3_1_frontier_shortcuts_use_canonical_suite_and_opt_in() -> None:
     assert suite in execute.stdout
     assert "--execute" in execute.stdout
     assert "UPMEM_ALLOW_PHYSICAL_HARDWARE=1" in execute.stdout
+
+
+def test_m6a_frontier_shortcuts_use_canonical_suite_and_opt_in() -> None:
+    clean_env = os.environ.copy()
+    clean_env.pop("UPMEM_ALLOW_PHYSICAL_HARDWARE", None)
+    clean_env.pop("UPMEM_HW_RANK_PATH", None)
+
+    missing_opt_in = subprocess.run(
+        [
+            "make",
+            "upmem-hw-m6a",
+            "UPMEM_ALLOW_PHYSICAL_HARDWARE=",
+            "UPMEM_HW_RANK_PATH=",
+        ],
+        cwd=ROOT,
+        env=clean_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    missing_rank = subprocess.run(
+        [
+            "make",
+            "upmem-hw-m6a",
+            "UPMEM_ALLOW_PHYSICAL_HARDWARE=1",
+            "UPMEM_HW_RANK_PATH=",
+        ],
+        cwd=ROOT,
+        env=clean_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    plan = subprocess.run(
+        ["make", "-n", "upmem-hw-m6a-plan"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    execute = subprocess.run(
+        [
+            "make",
+            "-n",
+            "upmem-hw-m6a",
+            "UPMEM_ALLOW_PHYSICAL_HARDWARE=1",
+            "UPMEM_HW_RANK_PATH=/dev/dpu_rank1",
+        ],
+        cwd=ROOT,
+        env=clean_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    suite = "configs/suites/upmem_hardware_frontier_m6a.yml"
+    assert missing_opt_in.returncode == 2
+    assert "UPMEM_ALLOW_PHYSICAL_HARDWARE=1" in missing_opt_in.stderr
+    assert "quantum_bench.bench" not in missing_opt_in.stdout
+    assert missing_rank.returncode == 2
+    assert "UPMEM_HW_RANK_PATH" in missing_rank.stderr
+    assert "quantum_bench.bench" not in missing_rank.stdout
+    assert plan.returncode == 0
+    assert suite in plan.stdout
+    assert "upmem-hardware-frontier-m6a" in plan.stdout
+    assert "--prepare-only --build" in plan.stdout
+    assert execute.returncode == 0
+    assert suite in execute.stdout
+    assert "--execute" in execute.stdout
+    assert "UPMEM_ALLOW_PHYSICAL_HARDWARE=1" in execute.stdout
+    assert "UPMEM_HW_RANK_PATH" in execute.stdout
+
+
+def test_m45_simplepim_execution_requires_rank_and_plan_remains_rank_free() -> None:
+    clean_env = os.environ.copy()
+    clean_env.pop("UPMEM_ALLOW_PHYSICAL_HARDWARE", None)
+    clean_env.pop("UPMEM_HW_RANK_PATH", None)
+    missing_rank = subprocess.run(
+        [
+            "make",
+            "upmem-simplepim-run",
+            "UPMEM_ALLOW_PHYSICAL_HARDWARE=1",
+            "UPMEM_HW_RANK_PATH=",
+        ],
+        cwd=ROOT,
+        env=clean_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    plan = subprocess.run(
+        ["make", "-n", "upmem-simplepim-plan"],
+        cwd=ROOT,
+        env=clean_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    execute = subprocess.run(
+        [
+            "make",
+            "-n",
+            "upmem-simplepim-run",
+            "UPMEM_ALLOW_PHYSICAL_HARDWARE=1",
+            "UPMEM_HW_RANK_PATH=/dev/dpu_rank1",
+        ],
+        cwd=ROOT,
+        env=clean_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert missing_rank.returncode == 2
+    assert "UPMEM_HW_RANK_PATH" in missing_rank.stderr
+    assert "quantum_bench.bench" not in missing_rank.stdout
+    assert plan.returncode == 0
+    assert "upmem-simplepim-taskgraph" in plan.stdout
+    assert "--prepare-only --build" in plan.stdout
+    assert "UPMEM_HW_RANK_PATH" not in plan.stdout
+    assert execute.returncode == 0
+    assert "UPMEM_HW_RANK_PATH" in execute.stdout

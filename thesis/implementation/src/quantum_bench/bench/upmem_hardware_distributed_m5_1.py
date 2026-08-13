@@ -52,6 +52,7 @@ DPUS = (1, 2, 4)
 WARMUPS = 0
 REPETITIONS = 1
 TOLERANCE = 1.0e-6
+NATIVE_TIMEOUT_GRACE_S = 5
 
 
 class M51NativeTarget(Protocol):
@@ -117,13 +118,24 @@ class _DefaultNativeTarget:
             "--timeout-s",
             str(max(1, math.ceil(timeout_s))),
         ]
+        child_env = sanitised_hardware_environment(self._environment)
+        if mode == "--execute-plan":
+            rank_metadata = hardware_environment_metadata(self._environment)
+            requested_rank_path = rank_metadata["upmem_rank_path_requested"]
+            if not isinstance(requested_rank_path, str) or not requested_rank_path:
+                raise RuntimeError(
+                    "hardware_rank_path_missing: UPMEM_HW_RANK_PATH is required"
+                )
+            child_env["UPMEM_HW_RANK_PATH"] = requested_rank_path
         completed = subprocess.run(
             command,
             cwd=host.parent.parent,
-            env=sanitised_hardware_environment(self._environment),
+            env=child_env,
             capture_output=True,
             text=True,
-            timeout=timeout_s,
+            # The native host owns DPU release on its alarm path. Preserve a
+            # small window for that cleanup before the parent kills it.
+            timeout=int(math.ceil(timeout_s)) + NATIVE_TIMEOUT_GRACE_S,
             check=False,
         )
         if not response_path.is_file():

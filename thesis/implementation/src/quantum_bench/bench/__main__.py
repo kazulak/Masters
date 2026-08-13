@@ -133,6 +133,26 @@ def main() -> int:
         help="build the M3.1 native source during --prepare-only; never allocates a DPU",
     )
 
+    upmem_hardware_frontier_m6a_parser = sub.add_parser(
+        "upmem-hardware-frontier-m6a",
+        help="run the guarded physical M6a bounded frontier route",
+    )
+    upmem_hardware_frontier_m6a_parser.add_argument(
+        "--suite", required=True, help="committed M6a frontier hardware suite YAML"
+    )
+    upmem_hardware_frontier_m6a_mode = (
+        upmem_hardware_frontier_m6a_parser.add_mutually_exclusive_group(required=True)
+    )
+    upmem_hardware_frontier_m6a_mode.add_argument(
+        "--prepare-only", action="store_true"
+    )
+    upmem_hardware_frontier_m6a_mode.add_argument("--execute", action="store_true")
+    upmem_hardware_frontier_m6a_parser.add_argument(
+        "--build",
+        action="store_true",
+        help="build the M6a native source during --prepare-only; never allocates a DPU",
+    )
+
     upmem_hardware_taskgraph_m4_1_parser = sub.add_parser(
         "upmem-hardware-taskgraph-m4-1",
         help="run the guarded M4.1 raw-SDK/SimplePIM-management differential route",
@@ -598,6 +618,27 @@ def main() -> int:
             )
         )
         return 0 if result.status == "completed" else 2
+    if args.command == "upmem-hardware-frontier-m6a":
+        if args.build and not args.prepare_only:
+            parser.error("--build is only valid with --prepare-only")
+        from quantum_bench.bench.upmem_hardware_frontier_m6a import execute, prepare
+
+        try:
+            if args.prepare_only:
+                result = prepare(
+                    root_dir,
+                    suite_path=suite_path(args.suite, root_dir),
+                    build=args.build,
+                )
+            else:
+                result = execute(
+                    root_dir,
+                    suite_path=suite_path(args.suite, root_dir),
+                )
+        except (OSError, RuntimeError, ValueError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(result, indent=2))
+        return 0 if result["status"] in {"prepared", "completed"} else 2
     if args.command == "upmem-hardware-taskgraph-m4-1":
         from quantum_bench.bench.upmem_hardware_taskgraph_m4_1 import (
             prepare_upmem_hardware_taskgraph_m4_1,

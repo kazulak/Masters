@@ -31,6 +31,7 @@ UPMEM_HW_SLICED_RESIDENT_M2_2_SUITE ?= configs/suites/upmem_hardware_sliced_resi
 UPMEM_HW_M2_2_RUN ?= runs/evidence/upmem_hardware_sliced_resident_m2_2/upmem_hw_sliced_resident/latest
 UPMEM_HW_SLICED_RESIDENT_M2_3_SUITE ?= configs/suites/upmem_hardware_sliced_resident_m2_3.yml
 UPMEM_HW_FRONTIER_M3_1_SUITE ?= configs/suites/upmem_hardware_frontier_m3_1.yml
+UPMEM_HW_M6A_SUITE ?= configs/suites/upmem_hardware_frontier_m6a.yml
 UPMEM_HW_TASKGRAPH_M4_1_SUITE ?= configs/suites/upmem_hardware_taskgraph_m4_1.yml
 UPMEM_HW_TASKGRAPH_M4_1_RUN ?= runs/evidence/upmem_hardware_taskgraph_m4_1/upmem_hw_taskgraph_m4_1/latest
 UPMEM_HW_M4_2_SUITE ?= configs/suites/upmem_hardware_simplepim_rank1_m4_2.yml
@@ -84,6 +85,8 @@ PUBLIC_TARGETS := \
 	upmem-hw-m2-3-report \
 	upmem-hw-frontier-m3-1-plan \
 	upmem-hw-frontier-m3-1 \
+	upmem-hw-m6a-plan \
+	upmem-hw-m6a \
 	upmem-hw-m4-1-plan \
 	upmem-hw-m4-1 \
 	upmem-hw-m4-1-report \
@@ -157,6 +160,8 @@ help:
 		'  make upmem-hw-m2-3-report  Strictly report M2.3 evidence; for copied ETH data use UPMEM_HW_M2_3_RUN=runs/inbox/eth/m2_3/<timestamp> make upmem-hw-m2-3-report' \
 		'  make upmem-hw-frontier-m3-1-plan  Prepare/build the strict M3.1 two-DPU frontier fixture; never allocates a DPU' \
 		'  make upmem-hw-frontier-m3-1  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; execute the strict M3.1 two-DPU frontier fixture' \
+		'  make upmem-hw-m6a-plan  Prepare/build the bounded M6a frontier fixture; never allocates a DPU' \
+		'  make upmem-hw-m6a  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1 and UPMEM_HW_RANK_PATH; execute the bounded M6a frontier fixture' \
 		'  make upmem-hw-m4-1-plan  Prepare/build the M4.1 raw/SimplePIM differential fixture; never allocates a DPU' \
 		'  make upmem-hw-m4-1  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; execute the M4.1 differential fixture' \
 		'  make upmem-hw-m4-1-report  Inspect M4.1 differential evidence; no speedup report is generated' \
@@ -169,7 +174,7 @@ help:
 		'  make upmem-hw-m4-4-plan  Prepare/build the one-DPU SimplePIM chain; never allocates a DPU' \
 		'  make upmem-hw-m4-4  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; execute the one-DPU SimplePIM chain' \
 		'  make upmem-simplepim-plan  Prepare/validate the fixed M4.5 one/two-DPU plans; never allocates a DPU' \
-		'  make upmem-simplepim-run  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; execute the fixed M4.5 route' \
+		'  make upmem-simplepim-run  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1 and UPMEM_HW_RANK_PATH; execute the fixed M4.5 route' \
 		'  make upmem-hw-m5-1-plan  Prepare/native-validate one real float32 output-partition contraction on 1,2,4 DPUs; never allocates a DPU' \
 		'  make upmem-hw-m5-1  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; execute the M5.1 output-partition contraction' \
 		'  make upmem-hw-m5-1-report  Report the explicitly supplied M5.1 evidence run' \
@@ -335,6 +340,14 @@ upmem-hw-frontier-m3-1:
 	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1 to execute physical hardware' >&2; exit 2; }
 	$(BENCH) upmem-hardware-frontier-m3-1 --suite $(UPMEM_HW_FRONTIER_M3_1_SUITE) --execute
 
+upmem-hw-m6a-plan:
+	$(BENCH) upmem-hardware-frontier-m6a --suite $(UPMEM_HW_M6A_SUITE) --prepare-only --build
+
+upmem-hw-m6a:
+	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1 to execute physical hardware' >&2; exit 2; }
+	@test -n "$(UPMEM_HW_RANK_PATH)" || { echo 'Set UPMEM_HW_RANK_PATH=/dev/dpu_rankN to select a physical UPMEM rank' >&2; exit 2; }
+	$(BENCH) upmem-hardware-frontier-m6a --suite $(UPMEM_HW_M6A_SUITE) --execute
+
 upmem-hw-m4-1-plan:
 	$(BENCH) upmem-hardware-taskgraph-m4-1 --suite $(UPMEM_HW_TASKGRAPH_M4_1_SUITE) --prepare-only --build
 
@@ -379,6 +392,7 @@ upmem-simplepim-plan:
 
 upmem-simplepim-run:
 	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1 to execute physical hardware' >&2; exit 2; }
+	@test -n "$(UPMEM_HW_RANK_PATH)" || { echo 'Set UPMEM_HW_RANK_PATH=/dev/dpu_rankN to select a physical UPMEM rank' >&2; exit 2; }
 	$(BENCH) upmem-simplepim-taskgraph --suite $(UPMEM_SIMPLEPIM_TASKGRAPH_SUITE) --execute
 
 upmem-hw-m5-1-plan:
