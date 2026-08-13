@@ -80,7 +80,7 @@ baseline.
 | M5.1 | Physically validated bounded probe | One bounded real `float32` contraction on 1/2/4 DPUs with exclusive output-tile ownership. Exact CPU agreement; SimplePIM management plus thesis-owned kernel; one repetition and zero warmups; functionality only. |
 | M5.2 | Physically validated bounded probe | The same contraction on 1/2/4 DPUs with contracted-axis partials and deterministic `host_mediated_sum_v1` reduction. Maximum absolute error `2.98e-08`; one repetition and zero warmups; functionality only. |
 | M5 execution-plan-v3 | Physically accepted bounded development study | One-rank, one selected ETH rank, DPU counts 1/2/4/8/16/32/64, tasklets 8, 5 workloads, float32/int8 modes, output/contracted partitions, 2 warmups and 7 measured repeats. The 140-cell matrix produced 644 measured rows and 48 partition-incompatible unsupported rows, with 0 failures. Same-route diagnostics only; no broad performance claim. |
-| M5.4 | Locally prepared; physical acceptance pending | Corrected bulk set launch plus host-packed int8 transport, exact int32 validation, and explicit scaling acceptance gates. The historical M5 route remains unchanged. |
+| M5.4 | Physically accepted bounded development study; current corrected lane | Source `eef42e4`: bulk set launch plus host-packed int8 transport on one selected rank, DPU counts 1/2/4/8/16/32/64, tasklets 8, 5 workloads, two partitions, 2 warmups and 7 measured repeats. All 10 acceptance criteria passed; 644 measured rows, 48 explicit unsupported rows, and 0 failed rows. The historical M5 route remains unchanged. |
 | M5.3 | Blocked before physical execution | PID-Comm compile/link qualification is blocked under ETH SDK 2023.1 by missing `dpu_alloc_comm`, `DPU_FOREACH_ENTANGLED_GROUP`, and old PID-Comm API/source macros. No fallback and no physical PID-Comm execution. |
 
 M4.1--M5.2 are bounded physical functionality milestones, not a claim of
@@ -89,7 +89,11 @@ speedup, energy, or scaling. The M4.6 development sweep showed a small-workload
 tasklet optimum near 8 tasklets with lower efficiency at 16; this observation is
 not a final benchmark result. M5 execution-plan-v3 is an additive physical
 development study; its measured ratios are descriptive within-route evidence
-and do not establish general physical performance or acceleration.
+and do not establish general physical performance or acceleration. M5.4 is the
+current corrected one-rank lane: its same-route scaling and numeric-transport
+diagnostics passed their explicit acceptance thresholds, but remain bounded
+single-contraction observations rather than CPU/GPU speedup or general TN
+architecture evidence.
 
 Physical ETH runs require an explicit rank selection. Use a healthy rank chosen
 on the server, for example:

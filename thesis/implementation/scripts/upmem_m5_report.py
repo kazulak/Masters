@@ -1439,10 +1439,16 @@ def _varied_label_fields(records: Iterable[Mapping[str, Any]], fields: Iterable[
 
 
 def _concise_label(row: Mapping[str, Any], varied_fields: Iterable[str]) -> str:
-    parts = [_label_value("case_id", row.get("case_id", "unknown case"))]
-    for field in varied_fields:
-        parts.append(_label_value(field, row.get(field, "unknown")))
-    return textwrap.shorten(" / ".join(parts), width=48, placeholder="...")
+    case_label = _label_value("case_id", row.get("case_id", "unknown case"))
+    suffix = [
+        _label_value(field, row.get(field, "unknown")) for field in varied_fields
+    ]
+    if not suffix:
+        return textwrap.shorten(case_label, width=64, placeholder="...")
+    suffix_text = " / ".join(suffix)
+    case_width = max(8, 64 - len(suffix_text) - 3)
+    short_case = textwrap.shorten(case_label, width=case_width, placeholder="...")
+    return f"{short_case} / {suffix_text}"
 
 
 def _key_record(key: tuple[Any, ...]) -> dict[str, Any]:
@@ -1453,7 +1459,24 @@ def _labels_for_keys(keys: Iterable[tuple[Any, ...]], *, include_dpu: bool = Fal
     key_list = list(keys)
     fields = (*_LABEL_FIELDS, "dpu_count") if include_dpu else _LABEL_FIELDS
     varied = _varied_label_fields((_key_record(key) for key in key_list), fields)
-    return {key: _concise_label(_key_record(key), varied) for key in key_list}
+    labels = {key: _concise_label(_key_record(key), varied) for key in key_list}
+    identities = {key: key if include_dpu else key[:-1] for key in key_list}
+    collisions: dict[str, set[tuple[Any, ...]]] = {}
+    for key, label in labels.items():
+        collisions.setdefault(label, set()).add(identities[key])
+    for label, matching_identities in collisions.items():
+        if len(matching_identities) < 2:
+            continue
+        suffixes = {
+            identity: index
+            for index, identity in enumerate(
+                sorted(matching_identities, key=repr), start=1
+            )
+        }
+        for key in key_list:
+            if labels[key] == label:
+                labels[key] = f"{label} [{suffixes[identities[key]]}]"
+    return labels
 
 
 def _plot_points(views: Iterable[Mapping[str, Any]], metric: str, *, weak: bool = False) -> dict[str, list[tuple[int, float]]]:
@@ -2362,10 +2385,26 @@ def _summary(
             and isinstance(view.get("dpu_count"), int)
         }
     )
-    failed = sorted({int(view["dpu_count"]) for view in views if view.get("status") not in SUCCESS_STATUSES and isinstance(view.get("dpu_count"), int)})
+    unsupported = sorted(
+        {
+            int(view["dpu_count"])
+            for view in views
+            if view.get("status") == "unsupported"
+            and isinstance(view.get("dpu_count"), int)
+        }
+    )
+    failed = sorted(
+        {
+            int(view["dpu_count"])
+            for view in views
+            if view.get("status") not in SUCCESS_STATUSES | {"unsupported"}
+            and isinstance(view.get("dpu_count"), int)
+        }
+    )
     measured_count = sum(1 for view in views if view.get("runtime_s") is not None)
     todo = measured_count == 0
     supported_text = ", ".join(map(str, supported)) if supported else "TODO: none observed"
+    unsupported_text = ", ".join(map(str, unsupported)) if unsupported else "none observed"
     failed_text = ", ".join(map(str, failed)) if failed else "none observed"
     plot_lines = "\n".join(f"- `{entry['path']}`: {entry['status']}" for entry in plot_manifest["plots"])
     return (
@@ -2375,7 +2414,8 @@ def _summary(
         f"- Source `normalized_records.jsonl` SHA-256: `{source_hash or 'TODO: source absent'}`\n"
         f"- Source rows: **{len(views)}**; measured runtime rows: **{measured_count}**\n"
         f"- Supported DPU counts: **{supported_text}**\n"
-        f"- Failed or unsupported DPU counts: **{failed_text}**\n"
+        f"- DPU counts with at least one unsupported cell: **{unsupported_text}**\n"
+        f"- DPU counts with at least one failed cell: **{failed_text}**\n"
         f"- Report directory: `{output}`\n\n"
         + ("**TODO: no measured data was available; numeric fields and ratios are intentionally absent.**\n\n" if todo else "")
         + "## Plot status\n\n"
@@ -2701,7 +2741,30 @@ def generate_report(input_path: Path, output_root: Path, *, timestamp: str | Non
                 and isinstance(view.get("dpu_count"), int)
             }
         ),
-        "failed_or_unsupported_dpu_counts": sorted({view["dpu_count"] for view in views if view.get("status") not in SUCCESS_STATUSES and isinstance(view.get("dpu_count"), int)}),
+        "unsupported_dpu_counts": sorted(
+            {
+                view["dpu_count"]
+                for view in views
+                if view.get("status") == "unsupported"
+                and isinstance(view.get("dpu_count"), int)
+            }
+        ),
+        "failed_dpu_counts": sorted(
+            {
+                view["dpu_count"]
+                for view in views
+                if view.get("status") not in SUCCESS_STATUSES | {"unsupported"}
+                and isinstance(view.get("dpu_count"), int)
+            }
+        ),
+        "failed_or_unsupported_dpu_counts": sorted(
+            {
+                view["dpu_count"]
+                for view in views
+                if view.get("status") not in SUCCESS_STATUSES
+                and isinstance(view.get("dpu_count"), int)
+            }
+        ),
         "plots": plot_entries,
         "tables": table_paths,
         "table_sha256": table_sha256,
@@ -2735,13 +2798,14 @@ def generate_report(input_path: Path, output_root: Path, *, timestamp: str | Non
 def _ratio_points(rows: Iterable[Mapping[str, Any]], metric: str) -> dict[str, list[tuple[int, float]]]:
     rows = list(rows)
     varied = _varied_label_fields(rows, _LABEL_FIELDS)
+    labels = _labels_for_rows(rows, _LABEL_FIELDS, varied)
     groups: dict[str, list[tuple[int, float]]] = {}
     for row in rows:
         value = _float(row.get(metric))
         count = _integer(row.get("dpu_count"))
         if value is None or count is None:
             continue
-        label = _concise_label(row, varied)
+        label = labels[_row_label_identity(row, _LABEL_FIELDS)]
         groups.setdefault(label, []).append((count, value))
     for values in groups.values():
         values.sort(key=lambda item: item[0])
@@ -2756,17 +2820,50 @@ def _comparison_ratio_points(
     rows = list(rows)
     allowed_fields = tuple(field for field in label_fields if field in _LABEL_FIELDS)
     varied = _varied_label_fields(rows, allowed_fields)
+    labels = _labels_for_rows(rows, allowed_fields, varied)
     groups: dict[str, list[tuple[int, float]]] = {}
     for row in rows:
         value = _float(row.get(metric))
         count = _integer(row.get("dpu_count"))
         if value is None or count is None:
             continue
-        label = _concise_label(row, varied)
+        label = labels[_row_label_identity(row, allowed_fields)]
         groups.setdefault(label, []).append((count, value))
     for values in groups.values():
         values.sort(key=lambda item: item[0])
     return groups
+
+
+def _row_label_identity(
+    row: Mapping[str, Any], label_fields: Iterable[str]
+) -> tuple[str, ...]:
+    return tuple(str(row.get(field, "")) for field in ("case_id", *label_fields))
+
+
+def _labels_for_rows(
+    rows: Iterable[Mapping[str, Any]],
+    label_fields: Iterable[str],
+    varied_fields: Iterable[str],
+) -> dict[tuple[str, ...], str]:
+    rows = list(rows)
+    label_fields = tuple(label_fields)
+    labels: dict[tuple[str, ...], str] = {}
+    collisions: dict[str, set[tuple[str, ...]]] = {}
+    for row in rows:
+        identity = _row_label_identity(row, label_fields)
+        label = _concise_label(row, varied_fields)
+        labels[identity] = label
+        collisions.setdefault(label, set()).add(identity)
+    for label, identities in collisions.items():
+        if len(identities) < 2:
+            continue
+        suffixes = {
+            identity: index
+            for index, identity in enumerate(sorted(identities), start=1)
+        }
+        for identity in identities:
+            labels[identity] = f"{label} [{suffixes[identity]}]"
+    return labels
 
 
 def main(argv: list[str] | None = None) -> int:

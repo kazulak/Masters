@@ -130,7 +130,7 @@ different identities or objective settings but select the same structural path.
 | `upmem_tn_hardware_sliced_resident_two_dpu` | UPMEM SDK physical hardware | Historical M2 control plus M2.1 useful-slice fixture | The original one-operation control had a zero second partial; the separate M2.1 fixture passed with two useful nonzero slice contributions. Both remain fixed two-DPU functionality lanes with no speedup, energy, scaling, or general-TaskGraph claim |
 | `upmem_tn_hardware_taskgraph_resident` | UPMEM SDK physical hardware | Previous bounded one-DPU resident route | Historical one-DPU correctness surface; not the current M2 route |
 | `upmem_tn_hardware_distributed_m5` | UPMEM SDK physical hardware | Additive execution-plan-v3 one-rank single-contraction lane | Physical development acceptance for the audited admitted configurations; descriptive same-route ratios only; no broad performance, energy, or scaling claim |
-| `upmem_tn_hardware_distributed_m5` with M5.4 suite | UPMEM SDK physical hardware | Corrected bulk-set and host-packed-int8 single-contraction lane | Local preparation complete; physical acceptance pending; exact int32 and no-fallback evidence required |
+| `upmem_tn_hardware_distributed_m5` with M5.4 suite | UPMEM SDK physical hardware | Current corrected bulk-set and host-packed-int8 single-contraction lane | Physical one-rank acceptance passed at source `eef42e4`; descriptive same-route scaling and numeric-transport observations only; no CPU/GPU speedup, energy, multi-rank, or general TaskGraph claim |
 | `planner_candidate_model` | Host planning/model | Path candidate evidence | Standard objectives plus deterministic custom UPMEM-aware greedy selection; modeled only, no execution speedup |
 
 Full-state correctness and performance are separate tiers. `full_dump` rows can
@@ -207,8 +207,18 @@ produced 644 measured rows and 48 partition-incompatible unsupported rows from
 
 M5.4 is an additive correction, not a reinterpretation of that run. Its suite
 uses one set-wide synchronous launch per repetition and host-packed int8
-operands with exact int32 validation. Physical acceptance remains pending until
-the `1/2/4/8` smoke gate in `docs/upmem_m5_4_runbook.md` passes on ETH.
+operands with exact int32 validation. The corrected physical run at source
+`eef42e4` passed the `1/2/4/8` smoke gate and the full
+`1/2/4/8/16/32/64` matrix on one selected ETH rank. It produced 644 measured
+rows and 48 explicit partition-incompatible rows with zero failures, and all
+ten M5.4 acceptance criteria passed. Output partitions retain per-DPU owned-slice
+checksums. Contracted partitions omit the redundant full-output checksum on
+every DPU, acknowledge that policy in completion metadata, and rely on the
+mandatory reconstructed final-output reference validation. This removes
+validation work from the timed DPU launch while preserving final-output
+validation. It deliberately gives up independent per-partial corruption
+detection in contracted mode; a compensating partial error could only be
+detected if it changes the reconstructed result.
 
 For this v3 route, SimplePIM has role
 `initialization_binary_and_management_state_only`. Allocation, transfer, and

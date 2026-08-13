@@ -17,6 +17,7 @@ from scripts.upmem_m5_report import (
     _heatmap_series,
     _plot,
     _plot_points,
+    _ratio_points,
     _table_groups,
     generate_report,
 )
@@ -371,6 +372,35 @@ def test_plot_labels_use_case_and_varied_comparison_dimensions_only() -> None:
     assert groups["edc 12q / output"] == [(2, 1.1)]
 
 
+def test_truncated_case_labels_remain_distinct_ratio_series() -> None:
+    prefix = "synthetic_case_with_a_deliberately_long_shared_prefix_"
+    rows = [
+        {
+            "case_id": prefix + suffix,
+            "numeric_mode": "host_packed_int8",
+            "partition_mode": "output_tile",
+            "tasklets_per_dpu": 8,
+            "dpu_count": dpu_count,
+            "speedup": float(dpu_count),
+            "runtime_ratio": float(dpu_count),
+        }
+        for suffix in ("alpha", "beta")
+        for dpu_count in (1, 2)
+    ]
+
+    scaling = _ratio_points(rows, "speedup")
+    comparison = _comparison_ratio_points(
+        rows,
+        "runtime_ratio",
+        ("numeric_mode", "partition_mode", "tasklets_per_dpu"),
+    )
+
+    assert len(scaling) == 2
+    assert len(comparison) == 2
+    assert all(len(points) == 2 for points in scaling.values())
+    assert all(len(points) == 2 for points in comparison.values())
+
+
 def test_all_plot_group_helpers_keep_labels_concise() -> None:
     rows = [
         {"case_id": "case_10q", "numeric_mode": "float32", "partition_mode": "output_tile", "tasklets_per_dpu": 3, "dpu_count": 1, "runtime_s": 1.0, "accuracy": 0.1, "scaling_kind": "strong_scaling", "physical_one_rank_valid": True},
@@ -381,6 +411,56 @@ def test_all_plot_group_helpers_keep_labels_concise() -> None:
     assert labels
     assert all("case 10q" in label for label in labels)
     assert all("route" not in label and "timing" not in label and "workload" not in label and "scaling" not in label for label in labels)
+
+
+def test_long_plot_labels_do_not_merge_partition_series() -> None:
+    rows: list[dict[str, object]] = []
+    for partition in ("output_tile", "contracted_partial_sum"):
+        for dpu_count in (1, 2):
+            rows.append(
+                {
+                    "case_id": "synthetic_weak_4n_x256x256x64",
+                    "numeric_mode": "host_packed_int8",
+                    "partition_mode": partition,
+                    "tasklets_per_dpu": 8,
+                    "dpu_count": dpu_count,
+                    "runtime_s": float(dpu_count),
+                    "scaling_kind": "weak_scaling",
+                    "physical_one_rank_valid": True,
+                }
+            )
+
+    groups = _plot_points(rows, "runtime_s", weak=True)
+
+    assert len(groups) == 2
+    assert all(len(points) == 2 for points in groups.values())
+    assert any("output" in label for label in groups)
+    assert any("contracted" in label for label in groups)
+
+
+def test_truncated_case_labels_remain_distinct_plot_series() -> None:
+    common_prefix = "synthetic_case_with_a_deliberately_long_shared_prefix_"
+    rows: list[dict[str, object]] = []
+    for suffix in ("alpha", "beta"):
+        for dpu_count in (1, 2):
+            rows.append(
+                {
+                    "case_id": common_prefix + suffix,
+                    "numeric_mode": "host_packed_int8",
+                    "partition_mode": "output_tile",
+                    "tasklets_per_dpu": 8,
+                    "dpu_count": dpu_count,
+                    "runtime_s": float(dpu_count),
+                    "scaling_kind": "strong_scaling",
+                    "physical_one_rank_valid": True,
+                }
+            )
+
+    groups = _plot_points(rows, "runtime_s")
+
+    assert len(groups) == 2
+    assert len(set(groups)) == 2
+    assert all(len(points) == 2 for points in groups.values())
 
 
 def test_plot_helpers_use_stable_layout_without_tight_layout_warning(tmp_path: Path) -> None:
@@ -587,6 +667,32 @@ def test_missing_data_has_todo_plots_and_respects_output_boundary(tmp_path: Path
 
     with pytest.raises(ReportError, match="inside the source evidence run"):
         generate_report(run, run, timestamp="rejected")
+
+
+def test_summary_separates_unsupported_cells_from_failed_dpu_counts(
+    tmp_path: Path,
+) -> None:
+    rows = [
+        _row(dpu_count=4),
+        _row(dpu_count=4, status="unsupported", runtime_s=None),
+        _row(dpu_count=8),
+        _row(dpu_count=8, status="failed", runtime_s=None),
+    ]
+    output = generate_report(
+        _write_run(tmp_path, rows), tmp_path / "report-root", timestamp="statuses"
+    )
+
+    summary = (output / "m5_summary.md").read_text(encoding="utf-8")
+    assert "Supported DPU counts: **4, 8**" in summary
+    assert "DPU counts with at least one unsupported cell: **4**" in summary
+    assert "DPU counts with at least one failed cell: **8**" in summary
+    assert "Failed or unsupported DPU counts" not in summary
+
+    manifest = json.loads((output / "plot_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["supported_dpu_counts"] == [4, 8]
+    assert manifest["unsupported_dpu_counts"] == [4]
+    assert manifest["failed_dpu_counts"] == [8]
+    assert manifest["failed_or_unsupported_dpu_counts"] == [4, 8]
 
 
 @pytest.mark.parametrize("missing_field", ["cpu_fallback_used", "simulator_kernel_executed", "fallback_used"])

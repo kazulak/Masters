@@ -107,6 +107,25 @@ relabeled. M5.4 packed rows require a byte-identical CPU int32 reference before
 their descriptive float32 error is considered. The active commands and
 acceptance order are defined in `docs/upmem_m5_4_runbook.md`.
 
+Symmetric int8 quantization uses `scale=max_abs/127` when
+`max_abs > 1e-12`; otherwise it uses scale `1.0` and the tiny values round to
+zero. The host policy reference and the legacy DPU requantization helper use
+the same threshold.
+
+Future M5 run manifests preserve legacy `suite_path` source provenance and add
+`retained_source_suite`, `resolved_suite_path`, and their SHA-256 fields. The
+resolved suite records effective DPU-count and tasklet overrides, while the
+manifest command records matching Make variables.
+
+Checksum policy is partition-specific and admitted explicitly. Output
+partitioning requires `output_checksum_policy=output_slice_per_dpu`.
+Contracted partitioning requires
+`output_checksum_policy=final_reference_validation_only`: the DPU completion
+acknowledges that it skipped the redundant full partial-output checksum, while
+the host still performs the required reduction and final exact/policy
+reference validation. Missing or contradictory policy fields are never
+accepted by inference.
+
 ## Tables and statistics
 
 The report writes CSV tables for source rows, runtime, accuracy, transfer, and
@@ -140,17 +159,22 @@ efficiency = speedup / N
 numeric-mode fallback, partition fallback, tasklet/timing-scope fallback, or
 cross-case pairing. Weak-scaling plots use only rows explicitly marked
 `weak`/`weak_scaling` or with `weak_scaling=true`; otherwise the plot is a TODO
-rather than an inferred experiment.
+rather than an inferred experiment. Weak-scaling acceptance groups changing
+shapes without using DPU-dependent semantic or plan hashes, but requires
+constant `mac_count / dpu_count` across every compared count. Missing or
+non-constant per-DPU work makes the criterion `not_evaluated`.
 
 ## Plot wording and evidence boundary
 
-The nine fixed plot names are:
+The eleven fixed plot names are:
 
 `m5_strong_scaling_runtime.png`, `m5_strong_scaling_speedup.png`,
 `m5_strong_scaling_efficiency.png`, `m5_weak_scaling_runtime.png`,
 `m5_numeric_mode_runtime_ratio.png`, `m5_partition_runtime_ratio.png`,
 `m5_transfer_breakdown.png`, `m5_load_balance.png`, and
-`m5_quantization_accuracy.png`.
+`m5_quantization_accuracy.png`, plus the M5.4-specific
+`m5_host_packed_operand_payload_ratio.png` and
+`m5_host_packed_int8_runtime_ratio.png`.
 
 The ratio CSVs and plots use same-route, same-plan paired medians. Numeric-mode
 ratio is `T_float32/T_int8`; values greater than 1 mean int8 is faster under
