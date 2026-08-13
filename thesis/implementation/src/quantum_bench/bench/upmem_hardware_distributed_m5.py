@@ -18,6 +18,7 @@ import math
 import os
 import platform
 from pathlib import Path
+import shlex
 import shutil
 import socket
 import subprocess
@@ -389,6 +390,48 @@ def load_m5_suite(path: Path, *, dpu_counts: Sequence[int] | None = None, taskle
     )
 
 
+def _retain_suite(output_root: Path, config: M5StudyConfig) -> dict[str, str]:
+    """Retain both the source suite and its effective execution overrides."""
+
+    config_dir = output_root / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    source_path = config_dir / "source_suite.yml"
+    resolved_path = config_dir / "resolved_suite.yml"
+    shutil.copy2(config.suite_path, source_path)
+
+    resolved = yaml.safe_load(config.suite_path.read_text(encoding="utf-8"))
+    if not isinstance(resolved, dict):
+        raise ValueError("suite_invalid: retained suite must be a mapping")
+    defaults = dict(resolved.get("defaults") or {})
+    defaults.update(
+        {
+            "dpu_counts": list(config.dpu_counts),
+            "tasklets": config.tasklets,
+            "warmups": config.warmups,
+            "repeats": config.repeats,
+            "timeout_s": config.timeout_s,
+            "quantization_modes": list(config.quantization_modes),
+            "partition_strategies": list(config.partition_strategies),
+        }
+    )
+    resolved["defaults"] = defaults
+    resolved_path.write_text(
+        yaml.safe_dump(resolved, sort_keys=False), encoding="utf-8"
+    )
+
+    return {
+        "source_suite_path": str(config.suite_path),
+        "retained_source_suite": source_path.relative_to(output_root).as_posix(),
+        "retained_source_suite_sha256": hashlib.sha256(
+            source_path.read_bytes()
+        ).hexdigest(),
+        "resolved_suite_path": resolved_path.relative_to(output_root).as_posix(),
+        "resolved_suite_sha256": hashlib.sha256(
+            resolved_path.read_bytes()
+        ).hexdigest(),
+    }
+
+
 def prepare(
     root_dir: Path,
     *,
@@ -404,6 +447,7 @@ def prepare(
     config = load_m5_suite(suite_path, dpu_counts=dpu_counts, tasklets=tasklets)
     target = native_target or _DefaultNativeTarget()
     plan_dir = _unique_dir(root_dir / "build" / f"{SUITE_ID}_plan")
+    suite_artifacts = _retain_suite(plan_dir, config)
     target.set_environment(dict(os.environ))
     native_build = target.build(plan_dir / "native_build", tasklets=config.tasklets)
     plans, preparation_rows = _prepare_plans(
@@ -423,6 +467,7 @@ def prepare(
         "status": status,
         "suite_id": config.suite_id,
         "suite_path": str(suite_path),
+        **suite_artifacts,
         "dpu_counts": list(config.dpu_counts),
         "tasklets": config.tasklets,
         "warmups": config.warmups,
@@ -470,6 +515,7 @@ def execute(
     assert target is not None
     target.set_environment(env)
     run_dir = create_run_dir(root_dir, SUITE_ID, artifact_kind=EVIDENCE_ARTIFACT_KIND, route_label=ROUTE_LABEL)
+    suite_artifacts = _retain_suite(run_dir, config)
     sdk_provenance = _upmem_sdk_provenance(env)
     environment_payload = capture_environment(root_dir)
     environment_payload.update({
@@ -510,6 +556,7 @@ def execute(
         root_dir=root_dir,
     )
     manifest.update(hardware_environment_metadata(env))
+    manifest.update(suite_artifacts)
     manifest.update({
         "hostname": socket.gethostname(),
         "python_version": platform.python_version(),
@@ -551,6 +598,7 @@ def execute(
             "status": "failed",
             "suite_id": config.suite_id,
             "suite_path": str(suite_path),
+            **suite_artifacts,
             "route_id": ROUTE_ID,
             "backend_id": BACKEND_ID,
             "native_plan_kind": NATIVE_PLAN_KIND,
@@ -642,6 +690,7 @@ def execute(
         "status": status,
         "suite_id": config.suite_id,
         "suite_path": str(suite_path),
+        **suite_artifacts,
         "route_id": ROUTE_ID,
         "backend_id": BACKEND_ID,
         "native_plan_kind": NATIVE_PLAN_KIND,
@@ -692,17 +741,26 @@ def execute(
 
 def _public_execution_command(config: M5StudyConfig, rank_path: str) -> str:
     if "host_packed_int8" in config.quantization_modes:
+        variable_prefix = "UPMEM_HW_M5_4"
         target = (
             "upmem-hw-m5-4-smoke"
             if config.dpu_counts == (1, 2, 4, 8)
             else "upmem-hw-m5-4"
         )
     else:
+        variable_prefix = "UPMEM_HW_M5"
         target = "upmem-hw-m5"
-    return (
-        f"UPMEM_HW_RANK_PATH={rank_path} "
-        f"UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make {target}"
+    values = {
+        "UPMEM_HW_RANK_PATH": rank_path,
+        "UPMEM_ALLOW_PHYSICAL_HARDWARE": "1",
+        f"{variable_prefix}_SUITE": str(config.suite_path),
+        f"{variable_prefix}_DPU_COUNTS": ",".join(map(str, config.dpu_counts)),
+        f"{variable_prefix}_TASKLETS": str(config.tasklets),
+    }
+    assignments = " ".join(
+        f"{name}={shlex.quote(value)}" for name, value in values.items()
     )
+    return f"{assignments} make {target}"
 
 
 def _prepare_plans(

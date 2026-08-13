@@ -64,6 +64,7 @@ RESIDENT_M46_OUTPUT_TILE_ELEMENTS = 2
 RESIDENT_SUPPORTED_TASKLETS = (1, 2, 4, 8, 16)
 RESIDENT_V3_SUPPORTED_TASKLETS = tuple(range(1, 25))
 RESIDENT_V3_MAX_ELEMENTS = 65536
+RESIDENT_QUANTIZATION_ZERO_THRESHOLD = 1.0e-12
 RESIDENT_V3_MAX_LOGICAL_TASKS = 1
 RESIDENT_V3_MAX_COMPONENT_OPS = 1
 RESIDENT_V3_OUTPUT_TILE_ELEMENTS = 2
@@ -1200,7 +1201,11 @@ def resident_requantize(values: Any) -> tuple[np.ndarray, float, int]:
     if not np.all(np.isfinite(array)):
         raise ValueError("hardware_profile_violation: resident quantization input must be finite")
     max_abs = float(np.max(np.abs(array))) if array.size else 0.0
-    scale32 = 1.0 if max_abs == 0.0 else float(np.float32(max_abs) / np.float32(127.0))
+    scale32 = (
+        1.0
+        if max_abs <= RESIDENT_QUANTIZATION_ZERO_THRESHOLD
+        else float(np.float32(max_abs) / np.float32(127.0))
+    )
     rounded = resident_round_nearest_even(array / np.float32(scale32))
     saturation = int(np.count_nonzero((rounded < -127.0) | (rounded > 127.0)))
     quantized = np.asarray(np.clip(rounded, -127.0, 127.0), dtype=np.int8)
@@ -1279,7 +1284,7 @@ def build_resident_policy_reference(
         "dpu_local_requantization": quantization_mode == "per_task_resident_requantize",
         "rounding": "nearest_even",
         "clip_range": [-127, 127],
-        "scale_formula": "max_abs/127_or_1_for_all_zero",
+        "scale_formula": "max_abs/127_or_1_for_abs_le_1e-12",
         "saturation_observed": True,
         "task_metrics": task_metrics,
         "output": np.asarray(ordered),
@@ -1754,7 +1759,7 @@ def _host_scale_metadata(values: np.ndarray, scale: float, saturation_count: int
     return {
         "max_abs": max_abs,
         "scale": float(np.float32(scale)),
-        "scale_formula": "max_abs/127_or_1_for_exact_zero",
+        "scale_formula": "max_abs/127_or_1_for_abs_le_1e-12",
         "rounding": "nearest_even",
         "clip_min": -127,
         "clip_max": 127,
@@ -2088,7 +2093,7 @@ def _write_v3_package_request(
             "dpu_intermediate_requantization": False,
             "rounding": "nearest_even",
             "clip_range": [-127, 127],
-            "scale_formula": "max_abs/127_or_1_for_exact_zero",
+            "scale_formula": "max_abs/127_or_1_for_abs_le_1e-12",
             "input_scales": scale_payload,
             "scale_metadata_sha256": scale_metadata_sha256,
         },

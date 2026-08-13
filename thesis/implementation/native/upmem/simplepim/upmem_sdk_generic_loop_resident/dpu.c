@@ -115,7 +115,9 @@ static float resident_scale(uint32_t slot_id, uint32_t elements) {
         const float absolute = value < 0.0f ? -value : value;
         if (absolute > max_abs) max_abs = absolute;
     }
-    return max_abs == 0.0f ? 1.0f : max_abs / 127.0f;
+    return max_abs <= RESIDENT_QUANTIZATION_ZERO_THRESHOLD
+        ? 1.0f
+        : max_abs / 127.0f;
 }
 
 static float resident_floor(float value) {

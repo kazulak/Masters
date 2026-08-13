@@ -197,6 +197,19 @@ def test_packed_v3_slots_are_typed_aligned_and_zero_safe(tmp_path: Path) -> None
     assert saturation == 0
     assert np.array_equal(quantized, np.zeros(9, dtype=np.int8))
 
+    tiny = np.asarray([0.0, 1.0e-12, -1.0e-13], dtype=np.float32)
+    quantized, scale, saturation = resident_requantize(tiny)
+    assert scale == 1.0
+    assert saturation == 0
+    assert np.array_equal(quantized, np.zeros(3, dtype=np.int8))
+
+    quantized, scale, saturation = resident_requantize(
+        np.asarray([2.0e-12], dtype=np.float32)
+    )
+    assert 0.0 < scale < 1.0
+    assert saturation == 0
+    assert np.array_equal(quantized, np.asarray([127], dtype=np.int8))
+
 
 def test_missing_dpu_binary_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="does not exist"):

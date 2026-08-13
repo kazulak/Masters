@@ -629,7 +629,7 @@ def execute_resident_variant(
         "numeric_policy": {
             "mode": quantization_mode,
             "dpu_local_requantization": quantization_mode == "per_task_resident_requantize",
-            "scale_formula": "max_abs/127_or_1_for_all_zero",
+            "scale_formula": "max_abs/127_or_1_for_abs_le_1e-12",
             "rounding": "nearest_even",
             "clip_range": [-127, 127],
             "scales_and_saturation": scale_metrics,

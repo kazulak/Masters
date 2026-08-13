@@ -794,6 +794,7 @@ def test_fake_execution_writes_repeat_rows_and_preserves_identity(tmp_path: Path
     assert result["status"] == "completed"
     summary = json.loads(Path(result["artifact"]).read_text(encoding="utf-8"))
     manifest = json.loads(Path(result["run_dir"], "run_manifest.json").read_text(encoding="utf-8"))
+    run_dir = Path(result["run_dir"])
     assert summary["timeout_s"] == m5.DEFAULT_TIMEOUT_S
     assert manifest["timeout_s"] == m5.DEFAULT_TIMEOUT_S
     assert manifest["status"] == "completed"
@@ -803,10 +804,23 @@ def test_fake_execution_writes_repeat_rows_and_preserves_identity(tmp_path: Path
     assert manifest["requested_rank_path"] == "/dev/dpu_rank1"
     assert manifest["command"] == (
         "UPMEM_HW_RANK_PATH=/dev/dpu_rank1 "
-        "UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-m5"
+        "UPMEM_ALLOW_PHYSICAL_HARDWARE=1 "
+        f"UPMEM_HW_M5_SUITE={SUITE} "
+        "UPMEM_HW_M5_DPU_COUNTS=3,5 "
+        "UPMEM_HW_M5_TASKLETS=12 make upmem-hw-m5"
     )
     assert manifest["effective_profile"].endswith("ignoreVpd=true")
     assert set(manifest["upmem_sdk_tools"]) == set(m5.CORE_UPMEM_SDK_TOOLS)
+    assert manifest["suite_path"] == str(SUITE)
+    assert manifest["retained_source_suite"] == "config/source_suite.yml"
+    source_suite = run_dir / manifest["retained_source_suite"]
+    resolved_suite = run_dir / manifest["resolved_suite_path"]
+    assert source_suite.read_bytes() == SUITE.read_bytes()
+    assert hashlib.sha256(source_suite.read_bytes()).hexdigest() == manifest["retained_source_suite_sha256"]
+    assert hashlib.sha256(resolved_suite.read_bytes()).hexdigest() == manifest["resolved_suite_sha256"]
+    resolved_payload = yaml.safe_load(resolved_suite.read_text(encoding="utf-8"))
+    assert resolved_payload["defaults"]["dpu_counts"] == [3, 5]
+    assert resolved_payload["defaults"]["tasklets"] == 12
     environment = json.loads(Path(result["run_dir"], "environment.json").read_text(encoding="utf-8"))
     assert environment["hostname"]
     assert environment["python_version"]
@@ -1018,11 +1032,15 @@ def test_public_execution_command_tracks_suite_and_smoke_scope() -> None:
     )
     assert m5._public_execution_command(smoke, "/dev/dpu_rank1") == (
         "UPMEM_HW_RANK_PATH=/dev/dpu_rank1 "
-        "UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-m5-4-smoke"
+        "UPMEM_ALLOW_PHYSICAL_HARDWARE=1 "
+        f"UPMEM_HW_M5_4_SUITE={M5_4_SUITE} "
+        "UPMEM_HW_M5_4_DPU_COUNTS=1,2,4,8 "
+        "UPMEM_HW_M5_4_TASKLETS=8 make upmem-hw-m5-4-smoke"
     )
-    assert m5._public_execution_command(full, "/dev/dpu_rank1").endswith(
-        "make upmem-hw-m5-4"
-    )
+    full_command = m5._public_execution_command(full, "/dev/dpu_rank1")
+    assert f"UPMEM_HW_M5_4_SUITE={M5_4_SUITE}" in full_command
+    assert "UPMEM_HW_M5_4_DPU_COUNTS=1,2,4,8,16,32,64" in full_command
+    assert full_command.endswith("make upmem-hw-m5-4")
 
 
 @pytest.mark.parametrize(

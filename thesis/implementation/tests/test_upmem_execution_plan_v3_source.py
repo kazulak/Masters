@@ -77,6 +77,19 @@ def test_v3_numeric_and_target_claims_are_explicit() -> None:
     assert "no simulator or CPU fallback" in runner
 
 
+def test_resident_quantization_zero_scale_guard_matches_host_policy() -> None:
+    common = (NATIVE / "upmem_sdk_generic_loop_resident/common.h").read_text(
+        encoding="ascii"
+    )
+    dpu = (NATIVE / "upmem_sdk_generic_loop_resident/dpu.c").read_text(
+        encoding="ascii"
+    )
+
+    assert "RESIDENT_QUANTIZATION_ZERO_THRESHOLD 1.0e-12f" in common
+    assert "max_abs <= RESIDENT_QUANTIZATION_ZERO_THRESHOLD" in dpu
+    assert "max_abs == 0.0f ? 1.0f" not in dpu
+
+
 def test_v3_loader_identity_and_limits_are_separate_from_v2() -> None:
     host = (PLAN / "host_v3.c").read_text(encoding="ascii")
     protocol = (NATIVE / "upmem_sdk_generic_loop_resident/session_protocol.c").read_text(encoding="ascii")
