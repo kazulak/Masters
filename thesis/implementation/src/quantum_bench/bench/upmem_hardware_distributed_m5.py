@@ -50,6 +50,9 @@ WARMUPS = 2
 REPEATS = 7
 TOTAL_REPETITIONS = WARMUPS + REPEATS
 DEFAULT_CAPACITY = 64
+DEFAULT_TIMEOUT_S = 900.0
+MAX_TIMEOUT_S = 1800.0
+SUBPROCESS_TIMEOUT_GRACE_S = 30.0
 QUANTIZATION_MODES = ("none", "per_task_resident_requantize")
 PARTITION_STRATEGIES = ("output", "contracted")
 
@@ -103,6 +106,7 @@ class M5StudyConfig:
     tasklets: int
     warmups: int
     repeats: int
+    timeout_s: float
     capacity: int
     cases: tuple[Mapping[str, Any], ...]
     suite_path: Path
@@ -177,15 +181,29 @@ class _DefaultNativeTarget:
             "--timeout-s",
             str(max(1, math.ceil(timeout_s))),
         ]
-        completed = subprocess.run(
-            command,
-            cwd=host.parent,
-            env=dict(self._environment),
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-            check=False,
-        )
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=host.parent,
+                env=dict(self._environment),
+                capture_output=True,
+                text=True,
+                timeout=timeout_s + SUBPROCESS_TIMEOUT_GRACE_S,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            payload = _read_native_response(response_path) or {
+                "schema_version": NATIVE_RESPONSE_SCHEMA,
+                "status": "failed",
+            }
+            payload["failure_stage"] = "kernel_timeout"
+            payload.setdefault("error", "native subprocess exceeded the outer timeout")
+            payload["native_timeout_s"] = timeout_s
+            payload["outer_timeout_s"] = timeout_s + SUBPROCESS_TIMEOUT_GRACE_S
+            raise NativeExecutionError(
+                f"kernel_timeout: native subprocess exceeded {timeout_s + SUBPROCESS_TIMEOUT_GRACE_S}s",
+                response=payload,
+            ) from exc
         if not response_path.is_file():
             raise RuntimeError("native_response_missing: v3 response was not written")
         payload = json.loads(response_path.read_text(encoding="utf-8"))
@@ -242,6 +260,7 @@ def load_m5_suite(path: Path, *, dpu_counts: Sequence[int] | None = None, taskle
     repeats = int(defaults.get("repeats", REPEATS))
     if (warmups, repeats) != (WARMUPS, REPEATS):
         raise ValueError("suite_invalid: M5 requires warmups=2 and repeats=7")
+    timeout_s = _validate_timeout(defaults.get("timeout_s", DEFAULT_TIMEOUT_S))
     capacity = int((raw.get("metadata") or {}).get("hardware_profile", {}).get("max_dpu_count", DEFAULT_CAPACITY))
     if capacity < 1:
         raise ValueError("suite_invalid: max_dpu_count must be positive")
@@ -266,6 +285,7 @@ def load_m5_suite(path: Path, *, dpu_counts: Sequence[int] | None = None, taskle
         tasklets=selected_tasklets,
         warmups=warmups,
         repeats=repeats,
+        timeout_s=timeout_s,
         capacity=capacity,
         cases=tuple(normalized_cases),
         suite_path=path,
@@ -310,6 +330,7 @@ def prepare(
         "tasklets": config.tasklets,
         "warmups": config.warmups,
         "repeats": config.repeats,
+        "timeout_s": config.timeout_s,
         "capacity": config.capacity,
         "native_plan_kind": NATIVE_PLAN_KIND,
         "dpu_allocation_attempted": False,
@@ -376,6 +397,7 @@ def execute(
         root_dir=root_dir,
     )
     manifest.update(hardware_environment_metadata(env))
+    manifest["timeout_s"] = config.timeout_s
     manifest["claims"] = _false_claims()
     write_json(run_dir / "run_manifest.json", manifest)
 
@@ -392,7 +414,7 @@ def execute(
         request = plan["request"]
         response: Mapping[str, Any] | None = None
         try:
-            response = target.execute(request, timeout_s=float(request.get("timeout_s", 120.0)))
+            response = target.execute(request, timeout_s=float(request["timeout_s"]))
             _validate_execute_response(response, request, config)
             repetitions = _measured_repetitions(response, config)
             for repeat_id, timing in repetitions:
@@ -432,6 +454,7 @@ def execute(
         "tasklets": config.tasklets,
         "warmups": config.warmups,
         "repeats": config.repeats,
+        "timeout_s": config.timeout_s,
         "row_count": len(records),
         "preparation_row_count": len(preparation_rows),
         "unsupported_count": sum(row["status"] == "unsupported" for row in records),
@@ -511,7 +534,8 @@ def _prepare_plans(
                         )
                         if not isinstance(request, Mapping):
                             raise ValueError("native_v3_plan_invalid: request builder returned a non-mapping")
-                        validation = target.validate(request, timeout_s=float(request.get("timeout_s", 120.0)))
+                        request = {**request, "timeout_s": config.timeout_s}
+                        validation = target.validate(request, timeout_s=float(request["timeout_s"]))
                         _validate_plan_response(validation, dpu_count, config.tasklets)
                         plan = {
                             **row,
@@ -1279,8 +1303,33 @@ def _failure_stage(exc: BaseException) -> str:
     return str(exc).split(":", 1)[0] or "runner"
 
 
+def _read_native_response(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return dict(payload) if isinstance(payload, Mapping) else None
+
+
+def _validate_timeout(value: Any) -> float:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        or float(value) <= 0.0
+        or float(value) > MAX_TIMEOUT_S
+    ):
+        raise ValueError(
+            f"timeout_invalid: timeout_s must be finite, positive, and <= {MAX_TIMEOUT_S}"
+        )
+    return float(value)
+
+
 __all__ = [
-    "BACKEND_ID", "DEFAULT_DPU_COUNTS", "DEFAULT_TASKLETS", "M5StudyConfig",
+    "BACKEND_ID", "DEFAULT_DPU_COUNTS", "DEFAULT_TASKLETS", "DEFAULT_TIMEOUT_S",
+    "M5StudyConfig",
     "M5NativeTarget", "NATIVE_PLAN_KIND", "PARTITION_STRATEGIES", "QUANTIZATION_MODES",
     "REPEATS", "ROUTE_ID", "SCHEMA_VERSION", "SUITE_ID", "WARMUPS", "execute",
     "load_m5_suite", "prepare",

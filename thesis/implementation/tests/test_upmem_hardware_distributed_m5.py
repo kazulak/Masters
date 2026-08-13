@@ -24,6 +24,8 @@ class FakeM5NativeTarget:
         self.build_calls = 0
         self.validate_calls = 0
         self.execute_calls = 0
+        self.validation_timeouts: list[float] = []
+        self.execution_timeouts: list[float] = []
         self.requests: list[Mapping[str, Any]] = []
         self.full_precision_passed = True
 
@@ -67,6 +69,7 @@ class FakeM5NativeTarget:
 
     def validate(self, request: Mapping[str, Any], *, timeout_s: float) -> Mapping[str, Any]:
         self.validate_calls += 1
+        self.validation_timeouts.append(timeout_s)
         return {
             "schema_version": m5.NATIVE_RESPONSE_SCHEMA,
             "status": "validated",
@@ -78,6 +81,7 @@ class FakeM5NativeTarget:
 
     def execute(self, request: Mapping[str, Any], *, timeout_s: float) -> Mapping[str, Any]:
         self.execute_calls += 1
+        self.execution_timeouts.append(timeout_s)
         contracted = request["partition_strategy"] == "contracted"
         int8_requantization = request["quantization_mode"] == "per_task_resident_requantize"
         repetitions = [
@@ -199,10 +203,11 @@ def test_default_executor_binds_prepared_policy_reference_and_computes_accuracy(
     np.asarray([1.0, 2.0], dtype="<f4").tofile(output_path)
     policy_sha256 = hashlib.sha256(policy_path.read_bytes()).hexdigest()
     full_precision_sha256 = hashlib.sha256(full_precision_path.read_bytes()).hexdigest()
-    captured: dict[str, list[str]] = {}
+    captured: dict[str, Any] = {}
 
-    def fake_run(command: list[str], **_: Any) -> Any:
+    def fake_run(command: list[str], **kwargs: Any) -> Any:
         captured["command"] = command
+        captured["outer_timeout_s"] = kwargs["timeout"]
         response_path.write_text(json.dumps({
             "status": "completed",
             "policy_reference_validation": {
@@ -231,12 +236,53 @@ def test_default_executor_binds_prepared_policy_reference_and_computes_accuracy(
     }
     target = m5._DefaultNativeTarget()
     target.set_environment(_physical_env())
-    response = target.execute(request, timeout_s=1.0)
+    response = target.execute(request, timeout_s=17.25)
     command = captured["command"]
     assert command[command.index("--policy-reference") + 1] == str(policy_path)
     assert command[command.index("--policy-reference-sha256") + 1] == policy_sha256
     assert command[command.index("--policy-tolerance") + 1] == "1e-05"
+    assert command[command.index("--timeout-s") + 1] == "18"
+    assert captured["outer_timeout_s"] == 17.25 + m5.SUBPROCESS_TIMEOUT_GRACE_S
     assert response["full_precision_accuracy"]["max_abs_error"] == 0.0
+
+
+def test_default_executor_converts_timeout_and_preserves_native_response(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response_path = tmp_path / "response.json"
+    native_response = {
+        "schema_version": m5.NATIVE_RESPONSE_SCHEMA,
+        "status": "failed",
+        "failure_stage": "native_alarm_timeout",
+        "error": "native alarm released resources",
+    }
+
+    def fake_run(*_: Any, **__: Any) -> Any:
+        response_path.write_text(json.dumps(native_response), encoding="utf-8")
+        raise subprocess.TimeoutExpired("host", timeout=40.0)
+
+    monkeypatch.setattr(m5.subprocess, "run", fake_run)
+    target = m5._DefaultNativeTarget()
+    request = {
+        "host_binary": str(tmp_path / "host"),
+        "resident_manifest": str(tmp_path / "manifest.json"),
+        "distributed_plan": str(tmp_path / "plan.bin"),
+        "response_path": str(response_path),
+        "policy_reference": {
+            "path": str(tmp_path / "policy.bin"),
+            "sha256": "a" * 64,
+            "max_abs_tolerance": 1.0e-5,
+        },
+    }
+
+    with pytest.raises(m5.NativeExecutionError, match="kernel_timeout") as failure:
+        target.execute(request, timeout_s=10.0)
+
+    assert failure.value.failure_stage == "kernel_timeout"
+    assert failure.value.response["error"] == native_response["error"]
+    assert failure.value.response["failure_stage"] == "kernel_timeout"
+    assert failure.value.response["native_timeout_s"] == 10.0
+    assert failure.value.response["outer_timeout_s"] == 40.0
 
 
 def test_default_executor_rejects_mismatched_policy_reference_hash(
@@ -317,9 +363,22 @@ def test_suite_defaults_and_overrides() -> None:
     assert default.dpu_counts == m5.DEFAULT_DPU_COUNTS
     assert default.tasklets == 8
     assert (default.warmups, default.repeats) == (2, 7)
+    assert default.timeout_s == m5.DEFAULT_TIMEOUT_S == 900.0
     custom = m5.load_m5_suite(SUITE, dpu_counts="3,5,12", tasklets=24)
     assert custom.dpu_counts == (3, 5, 12)
     assert custom.tasklets == 24
+
+
+@pytest.mark.parametrize("timeout", ("0", "-1", "1800.1", "nan", "inf"))
+def test_suite_rejects_unbounded_or_nonpositive_timeout(tmp_path: Path, timeout: str) -> None:
+    suite_path = tmp_path / "invalid_m5.yml"
+    suite_path.write_text(
+        SUITE.read_text(encoding="utf-8").replace("timeout_s: 900", f"timeout_s: {timeout}"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="timeout_invalid"):
+        m5.load_m5_suite(suite_path)
 
 
 def test_physical_admission_is_fail_closed(tmp_path: Path) -> None:
@@ -360,8 +419,14 @@ def test_prepare_has_no_native_execute_or_allocation(tmp_path: Path) -> None:
     assert "preparation_rows" not in result
     assert target.build_calls == 1
     assert target.validate_calls > 0
+    assert set(target.validation_timeouts) == {m5.DEFAULT_TIMEOUT_S}
     assert target.execute_calls == 0
     payload = json.loads(Path(result["artifact"]).read_text(encoding="utf-8"))
+    assert payload["timeout_s"] == m5.DEFAULT_TIMEOUT_S
+    assert all(
+        plan["request"]["timeout_s"] == m5.DEFAULT_TIMEOUT_S
+        for plan in payload["plans"].values()
+    )
     assert payload["dpu_allocation_attempted"] is False
     assert payload["dpu_launch_attempted"] is False
     assert payload["prepared_count"] > 0
@@ -398,6 +463,11 @@ def test_fake_execution_writes_repeat_rows_and_preserves_identity(tmp_path: Path
         task_selector=_selection,
     )
     assert result["status"] == "completed"
+    summary = json.loads(Path(result["artifact"]).read_text(encoding="utf-8"))
+    manifest = json.loads(Path(result["run_dir"], "run_manifest.json").read_text(encoding="utf-8"))
+    assert summary["timeout_s"] == m5.DEFAULT_TIMEOUT_S
+    assert manifest["timeout_s"] == m5.DEFAULT_TIMEOUT_S
+    assert set(target.execution_timeouts) == {m5.DEFAULT_TIMEOUT_S}
     rows = [
         json.loads(line)
         for line in (Path(result["run_dir"]) / "normalized_records.jsonl").read_text().splitlines()
@@ -424,6 +494,48 @@ def test_fake_execution_writes_repeat_rows_and_preserves_identity(tmp_path: Path
     assert all(row["quantization_error_vs_float32"] is None for row in float32)
     assert int8 and all(isinstance(row["quantization_error_vs_float32"]["max_abs_error"], (float, int)) for row in int8)
     assert all(row["observed_rank_count"] == 1 for row in rows)
+
+
+def test_kernel_timeout_failure_is_recorded_and_execution_continues(tmp_path: Path) -> None:
+    class TimeoutOnceTarget(FakeM5NativeTarget):
+        def execute(self, request: Mapping[str, Any], *, timeout_s: float) -> Mapping[str, Any]:
+            if self.execute_calls == 0:
+                self.execute_calls += 1
+                self.execution_timeouts.append(timeout_s)
+                raise m5.NativeExecutionError(
+                    "kernel_timeout: native alarm expired",
+                    response={
+                        "status": "failed",
+                        "failure_stage": "kernel_timeout",
+                        "error": "native alarm expired",
+                        "allocation": {"attempted": True, "confirmed": False},
+                        "launch_attempted": True,
+                        "launch_count": 1,
+                    },
+                )
+            return super().execute(request, timeout_s=timeout_s)
+
+    target = TimeoutOnceTarget()
+    result = m5.execute(
+        tmp_path,
+        suite_path=SUITE,
+        dpu_counts=(3,),
+        environment=_physical_env(),
+        native_target=target,
+        task_selector=_selection,
+    )
+    rows = [
+        json.loads(line)
+        for line in (Path(result["run_dir"]) / "normalized_records.jsonl").read_text().splitlines()
+    ]
+
+    assert result["status"] == "failed"
+    failed_rows = [row for row in rows if row["status"] == "failed"]
+    assert len(failed_rows) == 1
+    assert failed_rows[0]["failure_stage"] == "kernel_timeout"
+    assert sum(row["status"] == "completed" for row in rows) == (5 * 2 * 2 - 1) * m5.REPEATS
+    assert all("Traceback" not in row["reason"] for row in failed_rows)
+    assert target.execute_calls == 5 * 2 * 2
 
 
 @pytest.mark.parametrize(

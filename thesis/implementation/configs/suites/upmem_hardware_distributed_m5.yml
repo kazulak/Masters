@@ -32,7 +32,7 @@ defaults:
   tasklets: 8
   warmups: 2
   repeats: 7
-  timeout_s: 120
+  timeout_s: 900
   quantization_modes: [none, per_task_resident_requantize]
   partition_strategies: [output, contracted]
 
