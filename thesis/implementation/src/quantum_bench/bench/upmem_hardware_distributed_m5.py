@@ -506,7 +506,7 @@ def execute(
         upmem_execution_mode=NATIVE_PLAN_KIND,
         policies=config.partition_strategies,
         quantization_modes=config.quantization_modes,
-        command="UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-m5",
+        command=_public_execution_command(config, sdk_provenance["requested_rank_path"]),
         root_dir=root_dir,
     )
     manifest.update(hardware_environment_metadata(env))
@@ -688,6 +688,21 @@ def execute(
         "dpu_allocation_attempted": allocation_attempted,
         "dpu_launch_attempted": launch_attempted,
     }
+
+
+def _public_execution_command(config: M5StudyConfig, rank_path: str) -> str:
+    if "host_packed_int8" in config.quantization_modes:
+        target = (
+            "upmem-hw-m5-4-smoke"
+            if config.dpu_counts == (1, 2, 4, 8)
+            else "upmem-hw-m5-4"
+        )
+    else:
+        target = "upmem-hw-m5"
+    return (
+        f"UPMEM_HW_RANK_PATH={rank_path} "
+        f"UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make {target}"
+    )
 
 
 def _prepare_plans(

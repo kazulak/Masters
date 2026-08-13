@@ -796,6 +796,10 @@ def test_fake_execution_writes_repeat_rows_and_preserves_identity(tmp_path: Path
     assert manifest["hardware_available"] == "not_verified"
     assert manifest["native_provider_kind"] == "injected_test_only"
     assert manifest["requested_rank_path"] == "/dev/dpu_rank1"
+    assert manifest["command"] == (
+        "UPMEM_HW_RANK_PATH=/dev/dpu_rank1 "
+        "UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-m5"
+    )
     assert manifest["effective_profile"].endswith("ignoreVpd=true")
     assert set(manifest["upmem_sdk_tools"]) == set(m5.CORE_UPMEM_SDK_TOOLS)
     environment = json.loads(Path(result["run_dir"], "environment.json").read_text(encoding="utf-8"))
@@ -988,6 +992,23 @@ def test_m5_4_suite_selects_only_float32_and_host_packed_int8() -> None:
     assert config.dpu_counts == m5.DEFAULT_DPU_COUNTS
     assert config.quantization_modes == ("none", "host_packed_int8")
     assert "per_task_resident_requantize" not in config.quantization_modes
+
+
+def test_public_execution_command_tracks_suite_and_smoke_scope() -> None:
+    historical = m5.load_m5_suite(SUITE, dpu_counts=(1, 2, 4, 8))
+    smoke = m5.load_m5_suite(M5_4_SUITE, dpu_counts=(1, 2, 4, 8))
+    full = m5.load_m5_suite(M5_4_SUITE)
+
+    assert m5._public_execution_command(historical, "/dev/dpu_rank1").endswith(
+        "make upmem-hw-m5"
+    )
+    assert m5._public_execution_command(smoke, "/dev/dpu_rank1") == (
+        "UPMEM_HW_RANK_PATH=/dev/dpu_rank1 "
+        "UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-m5-4-smoke"
+    )
+    assert m5._public_execution_command(full, "/dev/dpu_rank1").endswith(
+        "make upmem-hw-m5-4"
+    )
 
 
 @pytest.mark.parametrize(
