@@ -72,16 +72,26 @@ a small final architecture.
 | CPU/GPU baselines | QuEST full state, Quimb/cotengra TN, internal CPU replay | Active |
 | Slicing/frontier models | Internal slice-aware graph, reconstruction, frontier waves | M2.1 useful-slice and M3.1 bounded two-wave physical qualifications passed; general expansion remains future work |
 | UPMEM simulator | Strict bounded generic TaskGraph route | Active diagnostic |
-| UPMEM hardware | Bounded M2/M3.1/M4.2--M4.4 physical qualification lanes plus additive M5 execution-plan-v3 route | Existing functionality checks passed on ETH; M5 v3 passed bounded one-rank multi-DPU single-contraction development acceptance, not general distributed execution |
+| UPMEM hardware | Bounded M2/M3.1/M4.2--M4.4 qualification lanes, frozen M5.4 control, and additive M5.5 whole-circuit v4 route | M5.5 local implementation and hardware-free validation are in progress; final physical ETH acceptance is pending. It is not graph-wide DPU residency or a performance claim |
 | Numerical modes | Float32, per-task int8/int32, split real/imaginary complex | Active in bounded routes |
 | Evidence system | Normalized records, claim guards, reports, plots, snapshots | Active instrumentation |
-| External sources | QuEST, SimplePIM, and PID-Comm pinned | QuEST active; SimplePIM M4.2--M4.4 bounded physical qualification passed and is initialization/management-state-only for M5 v3; PID-Comm remains central but is blocked under ETH SDK 2023.1 pending a compatible SDK/API |
+| External sources | QuEST, SimplePIM, and PID-Comm pinned | QuEST active; SimplePIM remains a bounded management/operator provider; PID-Comm remains central but is blocked under ETH SDK 2023.1 pending a compatible SDK/API. M5.5 does not claim provider compute integration |
 
 ### Central architecture not implemented
 
+M5.5 now supplies the first modular whole-circuit execution surface: the same
+hashed circuit/TN/TaskGraph can be sent to a CPU reference or physical v4
+engine, with float32 or host-packed int8 policy selection. The physical route
+uses output/K tiling, deterministic sequential TaskGraph execution, one
+persistent session per selected rank, and concurrent rank submission within a
+single contraction. Its whole-graph intermediate store is still on the Python
+host, so downstream tasks re-upload operands. This is an integration baseline,
+not completion of the target architecture.
+
+- Graph-wide DPU-resident intermediate management and transfer avoidance.
 - General parallel execution of independent ready contractions on different DPUs
-  (the M2 slice assignment and M5 v3 single-contraction plan are fixed
-  contracts, not a general scheduler).
+  (M5.5 has intra-task DPU/rank concurrency, but its TaskGraph tasks are
+  sequential and its intermediates are host-managed).
 - General physical execution of one large contraction across tasklets, DPUs,
   ranks, or UPMEM DIMMs; M5 v3 covers only a bounded one-rank
   single-contraction study.
@@ -873,31 +883,27 @@ Each physical milestone has a separate ETH acceptance suite.
 
 ## Immediate Next Wave
 
-Use the completed ETH physical functionality evidence for the implemented
-M4.5 descriptor-driven shared runtime as the baseline. M4.6 and historical
-M5.1/M5.2 provide bounded physical development acceptance for tasklet execution
-and two single-contraction partition policies. M5 execution-plan-v3 has now
-passed its bounded one-rank physical development gate. Its study varies numeric
-mode and output-versus-contracted-axis partitioning for one contraction on one
-rank; partitioning is not a contraction-path comparison. The next architecture
-work is M6a: bounded general frontier execution with deterministic ownership,
-host-mediated handoffs, exact-once/dependency-safe execution, and CPU same-plan
-validation.
+M5.5 is the current implementation wave. Its scope is a whole-circuit
+benchmarking baseline, not another qualification fixture: six circuit families
+over seven canonical sizes, two planner variants, two numeric policies, a CPU
+same-plan reference, and the physical v4 engine. The smoke profile validates
+resolution and one small circuit; the canonical profile supplies the main
+comparison grid; the large profile records explicit support boundaries; and
+the scaling profile exercises one-rank 1--64 DPU and two-rank 128-DPU
+topologies. The exact commands and staged acceptance are in
+`docs/upmem_m5_5_whole_circuit_runbook.md`.
 
-M6a is intentionally bounded. It will execute one fixed real-float32 five-task
-TaskGraph on exactly two physical DPUs in one rank, with one tasklet per DPU and
-frontier waves of widths `2/2/1`. The implementation contract allows at most
-eight logical tasks, eight waves, and frontier width two. Tasks in each wave are
-sorted by stable task ID and assigned deterministically to DPU 0 then DPU 1;
-cross-DPU dependencies use an explicit host-mediated D2H/H2D handoff, while
-same-owner intermediates remain resident. One warmup and five measured repeats
-must complete with every task executed exactly once, no dependency violation,
-no CPU/simulator fallback, and final CPU same-plan error at most `1e-6`.
-M6a does not add PID-Comm, ATiM, SparseP, quantization, planner integration,
-tasklet or DPU scaling, multi-rank/DIMM execution, or performance claims.
+M5.5 is complete for this wave when local tests and hardware-free preparation
+pass, the physical smoke run is accepted on ETH, and canonical/scaling runs
+produce valid normalized records and reports. Same-plan CPU/UPMEM timing is
+admitted only for repeated physical rows that pass allocation, native-kernel,
+release, validation, and timing eligibility checks. Energy remains a stable
+TODO until a physical measurement source exists.
 
-M2.1, M2.2, M2.3, M3.1, and M4.2--M4.4 remain frozen compatibility surfaces.
-M4.5, M4.6, M5.1, and M5.2 remain functionality/development evidence only, and
-M5 v3 remains development acceptance only: no broad hardware speedup, energy,
-general distributed TaskGraph, PID-Comm, ATiM, SparseP, multi-rank, multi-DIMM,
-CPU/GPU, or planner-superiority claim is allowed. The next gate is M6a.
+After M5.5, the next architecture wave should add one capability at a time:
+first DPU-resident intermediate ownership and transfer avoidance, then
+provider-backed kernels or collectives where SimplePIM, PID-Comm, ATiM, or
+SparseP offer a compatible interface. M6a is retained as historical roadmap
+context and compatibility material, not as the current immediate-next wording.
+M2.1, M2.2, M2.3, M3.1, M4.2--M4.4, and M5.4 remain frozen compatibility
+surfaces; M5.5 does not retroactively change their evidence.

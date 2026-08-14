@@ -1,0 +1,76 @@
+schema_version: m5_circuit_study_v1
+study_id: m5_circuit_smoke
+
+metadata:
+  purpose: whole_circuit_taskgraph_integration_smoke
+  claim_boundary: smoke_validation_only
+  claims_allowed:
+    - schema_and_plan_resolution
+    - same_plan_cpu_physical_route_validation_when_hardware_is_run
+  claims_forbidden:
+    - speedup
+    - energy
+    - planner_superiority
+    - scaling
+  route_description: host_managed_graph_intermediates_with_tiled_physical_v4_tasks
+  physical_rank_paths_are_placeholders: true
+
+cases:
+  - id: smoke_bv_4q
+    family: BV
+    circuit: {kind: quest_compatible, name: BV, n_qubits: 4}
+
+planner_variants:
+  - id: opt_einsum_greedy
+    label: opt_einsum greedy
+    planner: {engine: opt_einsum, optimize: greedy}
+
+numeric_policies:
+  - id: float32_real
+    label: float32 real
+    policy: float32_real
+  - id: host_packed_int8
+    label: host packed int8
+    policy: host_packed_int8
+
+engine_variants:
+  - id: numpy_cpu
+    engine: numpy_cpu
+    label: NumPy CPU reference
+    topology: {backend: cpu}
+    timeout_enforcement: posthoc_observation
+
+  - id: upmem_physical_1rank_1dpu
+    engine: m5_whole_circuit_v4
+    label: UPMEM physical, 1 rank, 1 DPU
+    topology:
+      backend: upmem
+      rank_paths: [/dev/dpu_rank0]
+      dpus: 1
+      tasklets_per_device: 1
+    timeout_enforcement: engine_subprocess
+    executor_config:
+      profile: m5_whole_circuit_v4_v1
+      abi: execution_plan_v4
+      session_protocol: persistent_rank_session_v1
+      dispatch_mode: bulk_set_synchronous_v1
+      kernel_identity: dpu_gemm_tile_v4
+      execution_class: physical_v4_output_tile
+
+warmups: 1
+repeats: 1
+timeout_s: 300
+resource_limits:
+  max_live_bytes: 67108864
+  max_output_bytes: 16777216
+  element_bytes: 4
+  max_tasks: 128
+tolerances:
+  max_abs_error: 1.0e-5
+  l2_error: 1.0e-5
+  max_rel_error: 1.0e-4
+  norm_drift: 1.0e-5
+  quantized_max_abs_error: 0.25
+  quantized_l2_error: 0.25
+  quantized_max_rel_error: 1.0
+  quantized_norm_drift: 0.25

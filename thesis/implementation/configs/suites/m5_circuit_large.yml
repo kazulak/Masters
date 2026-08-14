@@ -1,0 +1,85 @@
+schema_version: m5_circuit_study_v1
+study_id: m5_circuit_large
+
+metadata:
+  purpose: whole_circuit_taskgraph_large_boundary_benchmark
+  claim_boundary: same_plan_measured_physical_route
+  claims_allowed:
+    - supported_boundary
+    - same_plan_runtime_when_cpu_and_physical_rows_are_available
+    - standard_path_baseline_boundary_comparison
+  claims_forbidden:
+    - energy
+    - speedup_without_matched_cpu_rows
+    - planner_optimality
+    - multi_rank_scaling
+  route_description: host_managed_graph_intermediates_with_tiled_physical_v4_tasks
+  physical_rank_paths_are_placeholders: true
+  large_output_retention: compact_metadata_only
+  path_comparison: two_standard_executable_baselines_not_upmem_aware_planning
+
+cases:
+  - {id: bv_22q, family: BV, circuit: {kind: quest_compatible, name: BV, n_qubits: 22}}
+  - {id: bv_24q, family: BV, circuit: {kind: quest_compatible, name: BV, n_qubits: 24}}
+  - {id: bv_26q, family: BV, circuit: {kind: quest_compatible, name: BV, n_qubits: 26}}
+  - {id: bv_28q, family: BV, circuit: {kind: quest_compatible, name: BV, n_qubits: 28}}
+  - {id: bv_30q, family: BV, circuit: {kind: quest_compatible, name: BV, n_qubits: 30}}
+  - {id: edc_22q, family: EDC, circuit: {kind: quest_compatible, name: EDC, n_qubits: 22}}
+  - {id: edc_24q, family: EDC, circuit: {kind: quest_compatible, name: EDC, n_qubits: 24}}
+  - {id: edc_26q, family: EDC, circuit: {kind: quest_compatible, name: EDC, n_qubits: 26}}
+  - {id: edc_28q, family: EDC, circuit: {kind: quest_compatible, name: EDC, n_qubits: 28}}
+  - {id: edc_30q, family: EDC, circuit: {kind: quest_compatible, name: EDC, n_qubits: 30}}
+  - {id: hs_22q, family: HS, circuit: {kind: quest_compatible, name: HS, allocated_qubits: 22, logical_qubits: 11}}
+  - {id: hs_24q, family: HS, circuit: {kind: quest_compatible, name: HS, allocated_qubits: 24, logical_qubits: 12}}
+  - {id: hs_26q, family: HS, circuit: {kind: quest_compatible, name: HS, allocated_qubits: 26, logical_qubits: 13}}
+  - {id: hs_28q, family: HS, circuit: {kind: quest_compatible, name: HS, allocated_qubits: 28, logical_qubits: 14}}
+  - {id: hs_30q, family: HS, circuit: {kind: quest_compatible, name: HS, allocated_qubits: 30, logical_qubits: 15}}
+
+planner_variants:
+  - id: opt_einsum_greedy
+    label: opt_einsum greedy
+    planner: {engine: opt_einsum, optimize: greedy}
+  - id: cotengra_flops_seed0
+    label: cotengra FLOPs greedy (seed 0)
+    planner:
+      engine: cotengra
+      objective: flops
+      methods: greedy
+      max_repeats: 1
+      seed: 0
+
+numeric_policies:
+  - {id: float32_real, label: float32 real, policy: float32_real}
+  - {id: host_packed_int8, label: host packed int8, policy: host_packed_int8}
+
+engine_variants:
+  - id: numpy_cpu
+    engine: numpy_cpu
+    label: NumPy CPU reference
+    topology: {backend: cpu}
+    timeout_enforcement: posthoc_observation
+  - id: upmem_physical_1rank_64dpu
+    engine: m5_whole_circuit_v4
+    label: UPMEM physical, 1 rank, 64 DPU
+    topology:
+      backend: upmem
+      rank_paths: [/dev/dpu_rank0]
+      dpus: 64
+      tasklets_per_device: 1
+    timeout_enforcement: engine_subprocess
+    executor_config:
+      profile: m5_whole_circuit_v4_v1
+      abi: execution_plan_v4
+      session_protocol: persistent_rank_session_v1
+      dispatch_mode: bulk_set_synchronous_v1
+      kernel_identity: dpu_gemm_tile_v4
+      execution_class: physical_v4_output_tile
+
+warmups: 0
+repeats: 1
+timeout_s: 1800
+resource_limits:
+  max_live_bytes: 2147483648
+  max_output_bytes: 2147483648
+  element_bytes: 4
+  max_tasks: 1024

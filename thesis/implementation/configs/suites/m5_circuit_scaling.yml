@@ -1,0 +1,100 @@
+schema_version: m5_circuit_study_v1
+study_id: m5_circuit_scaling
+
+metadata:
+  purpose: same_plan_dpu_and_rank_scaling
+  claim_boundary: descriptive_same_plan_physical_scaling
+  claims_allowed:
+    - same_plan_dpu_scaling
+    - same_plan_rank_scaling_when_multiple_rank_paths_are_available
+  claims_forbidden:
+    - cpu_speedup
+    - gpu_speedup
+    - energy
+    - planner_superiority
+  route_description: host_managed_graph_intermediates_with_tiled_physical_v4_tasks
+  physical_rank_paths_are_placeholders: true
+  scaling_dimension: topology_only
+
+cases:
+  - id: edc_20q_scaling
+    family: EDC
+    circuit: {kind: quest_compatible, name: EDC, n_qubits: 20}
+
+planner_variants:
+  - id: opt_einsum_greedy
+    label: opt_einsum greedy
+    planner: {engine: opt_einsum, optimize: greedy}
+
+numeric_policies:
+  - {id: float32_real, label: float32 real, policy: float32_real}
+  - {id: host_packed_int8, label: host packed int8, policy: host_packed_int8}
+
+engine_variants:
+  - id: upmem_physical_1rank_1dpu
+    engine: m5_whole_circuit_v4
+    label: UPMEM physical, 1 rank, 1 DPU
+    topology:
+      backend: upmem
+      rank_paths: [/dev/dpu_rank0]
+      dpus: 1
+      tasklets_per_device: 1
+    timeout_enforcement: engine_subprocess
+    executor_config:
+      profile: m5_whole_circuit_v4_v1
+      abi: execution_plan_v4
+      session_protocol: persistent_rank_session_v1
+      dispatch_mode: bulk_set_synchronous_v1
+      kernel_identity: dpu_gemm_tile_v4
+      execution_class: physical_v4_output_tile
+  - id: upmem_physical_1rank_2dpu
+    engine: m5_whole_circuit_v4
+    label: UPMEM physical, 1 rank, 2 DPU
+    topology: {backend: upmem, rank_paths: [/dev/dpu_rank0], dpus: 2, tasklets_per_device: 1}
+    timeout_enforcement: engine_subprocess
+    executor_config: {profile: m5_whole_circuit_v4_v1, abi: execution_plan_v4, session_protocol: persistent_rank_session_v1, dispatch_mode: bulk_set_synchronous_v1, kernel_identity: dpu_gemm_tile_v4, execution_class: physical_v4_output_tile}
+  - id: upmem_physical_1rank_4dpu
+    engine: m5_whole_circuit_v4
+    label: UPMEM physical, 1 rank, 4 DPU
+    topology: {backend: upmem, rank_paths: [/dev/dpu_rank0], dpus: 4, tasklets_per_device: 1}
+    timeout_enforcement: engine_subprocess
+    executor_config: {profile: m5_whole_circuit_v4_v1, abi: execution_plan_v4, session_protocol: persistent_rank_session_v1, dispatch_mode: bulk_set_synchronous_v1, kernel_identity: dpu_gemm_tile_v4, execution_class: physical_v4_output_tile}
+  - id: upmem_physical_1rank_8dpu
+    engine: m5_whole_circuit_v4
+    label: UPMEM physical, 1 rank, 8 DPU
+    topology: {backend: upmem, rank_paths: [/dev/dpu_rank0], dpus: 8, tasklets_per_device: 1}
+    timeout_enforcement: engine_subprocess
+    executor_config: {profile: m5_whole_circuit_v4_v1, abi: execution_plan_v4, session_protocol: persistent_rank_session_v1, dispatch_mode: bulk_set_synchronous_v1, kernel_identity: dpu_gemm_tile_v4, execution_class: physical_v4_output_tile}
+  - id: upmem_physical_1rank_16dpu
+    engine: m5_whole_circuit_v4
+    label: UPMEM physical, 1 rank, 16 DPU
+    topology: {backend: upmem, rank_paths: [/dev/dpu_rank0], dpus: 16, tasklets_per_device: 1}
+    timeout_enforcement: engine_subprocess
+    executor_config: {profile: m5_whole_circuit_v4_v1, abi: execution_plan_v4, session_protocol: persistent_rank_session_v1, dispatch_mode: bulk_set_synchronous_v1, kernel_identity: dpu_gemm_tile_v4, execution_class: physical_v4_output_tile}
+  - id: upmem_physical_1rank_32dpu
+    engine: m5_whole_circuit_v4
+    label: UPMEM physical, 1 rank, 32 DPU
+    topology: {backend: upmem, rank_paths: [/dev/dpu_rank0], dpus: 32, tasklets_per_device: 1}
+    timeout_enforcement: engine_subprocess
+    executor_config: {profile: m5_whole_circuit_v4_v1, abi: execution_plan_v4, session_protocol: persistent_rank_session_v1, dispatch_mode: bulk_set_synchronous_v1, kernel_identity: dpu_gemm_tile_v4, execution_class: physical_v4_output_tile}
+  - id: upmem_physical_1rank_64dpu
+    engine: m5_whole_circuit_v4
+    label: UPMEM physical, 1 rank, 64 DPU
+    topology: {backend: upmem, rank_paths: [/dev/dpu_rank0], dpus: 64, tasklets_per_device: 1}
+    timeout_enforcement: engine_subprocess
+    executor_config: {profile: m5_whole_circuit_v4_v1, abi: execution_plan_v4, session_protocol: persistent_rank_session_v1, dispatch_mode: bulk_set_synchronous_v1, kernel_identity: dpu_gemm_tile_v4, execution_class: physical_v4_output_tile}
+  - id: upmem_physical_2rank_128dpu
+    engine: m5_whole_circuit_v4
+    label: UPMEM physical, 2 ranks, 128 DPU
+    topology: {backend: upmem, rank_paths: [/dev/dpu_rank0, /dev/dpu_rank1], dpus: 128, tasklets_per_device: 1}
+    timeout_enforcement: engine_subprocess
+    executor_config: {profile: m5_whole_circuit_v4_v1, abi: execution_plan_v4, session_protocol: persistent_rank_session_v1, dispatch_mode: bulk_set_synchronous_v1, kernel_identity: dpu_gemm_tile_v4, execution_class: physical_v4_output_tile}
+
+warmups: 1
+repeats: 5
+timeout_s: 900
+resource_limits:
+  max_live_bytes: 536870912
+  max_output_bytes: 536870912
+  element_bytes: 4
+  max_tasks: 512

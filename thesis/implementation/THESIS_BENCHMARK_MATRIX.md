@@ -40,6 +40,7 @@ semantic check; it is not the performance grid.
 | M5.2 contracted partition probe | Fixed CLI fixture: `make upmem-hw-m5-2` | One bounded real float32 contraction, 1/2/4 DPUs, host-mediated ascending-DPU reduction | 1 | Validate bounded partial-sum reconstruction; functionality only |
 | M5 execution-plan-v3 lane | `make upmem-hw-m5-plan` / `make upmem-hw-m5` | One-rank configured 1/2/4/8/16/32/64 DPUs and tasklets 8; 5 workloads; real and synthetic diagnostics; output/contracted partitioning; float32/per-task int8 | 2 + 7 | Physically accepted bounded development study: 140 cells, 644 measured rows, 48 partition-incompatible unsupported rows, 0 failures; same-route diagnostics only |
 | M5.4 corrected execution-plan-v3 lane | `make upmem-hw-m5-4-plan` / `make upmem-hw-m5-4-smoke` / `make upmem-hw-m5-4` | Same bounded one-rank single-contraction matrix; float32 versus host-packed int8; one bulk set launch per repetition | 2 + 7 | Physically accepted at source `eef42e4`: all 10 exact-int32, no-fallback, checksum-policy, payload, cycle, strong-scaling, and weak-scaling gates passed; 644 measured rows, 48 explicit unsupported rows, and 0 failures; bounded same-route diagnostics only |
+| M5.5 whole-circuit baseline | `make m5-circuit-plan` / `make m5-circuit-smoke` / `make m5-circuit-study` | Same circuit/TN/plan through NumPy CPU and physical v4 engines; opt_einsum greedy and pinned cotengra FLOP-greedy paths; float32 and host-packed int8; host-managed graph intermediates; sequential TaskGraph tasks; output/K-tiled intra-task DPU/rank execution | smoke 1 + canonical 42 cases, warmup 1 + 3 repeats; scaling 1 + 5 repeats; large boundary 1 | Local implementation and hardware-free validation; final physical ETH acceptance pending. Valid same-plan CPU/UPMEM timing comparisons require admitted repeated physical rows. No energy, provider, calibrated-planner, frontier-concurrency, or graph-wide DPU-residency claim |
 | M5.3 PID-Comm qualification | `make upmem-pidcomm-compatibility` | Pinned PID-Comm compile/link qualification under the installed ETH SDK | allocation-free | Record compatibility or an explicit blocker; current SDK 2023.1 blocker prevents physical execution |
 
 The CPU/GPU performance suite uses deeper repeated circuits to reduce startup
@@ -221,6 +222,17 @@ same suite semantics where possible. Environment/device records must identify:
 NVIDIA full-state or TN software is added only after real execution is verified.
 Physical UPMEM rows use a distinct hardware execution mode and are never merged
 with SDK-simulator timing.
+
+M5.5 is the first whole-circuit benchmark surface for the architecture. Its
+CPU and physical UPMEM rows share circuit, tensor-network, and contraction-plan
+hashes when the same plan is selected. The CPU route is a same-plan reference;
+QuEST full-state, Quimb/cotengra TN, and verified GPU routes remain contextual
+or cross-algorithm baselines and are not silently converted into same-plan
+speedups. The physical v4 engine uses output/K tiling, one persistent session
+per selected rank, one bulk set launch per request, and unique DPU descriptors.
+Its whole-graph intermediate tensors are currently held by the Python host
+store and re-uploaded for downstream tasks. Development evidence remains in
+ignored `runs/`; it is not promoted while M5.5 is still changing.
 
 The M4.6/M5.1/M5.2 rows above are historical development acceptance probes
 copied from ETH, not promoted thesis evidence. The M5 execution-plan-v3 row is

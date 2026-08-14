@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -410,3 +411,161 @@ def test_m45_simplepim_execution_requires_rank_and_plan_remains_rank_free() -> N
     assert "UPMEM_HW_RANK_PATH" not in plan.stdout
     assert execute.returncode == 0
     assert "UPMEM_HW_RANK_PATH" in execute.stdout
+
+
+def test_m5_circuit_shortcuts_keep_plan_free_and_execution_guarded() -> None:
+    clean_env = os.environ.copy()
+    clean_env.pop("UPMEM_ALLOW_PHYSICAL_HARDWARE", None)
+    clean_env.pop("UPMEM_HW_RANK_PATH", None)
+    clean_env.pop("UPMEM_HW_RANK_PATHS", None)
+    plan = subprocess.run(
+        ["make", "-n", "m5-circuit-plan"],
+        cwd=ROOT,
+        env=clean_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    missing_opt_in = subprocess.run(
+        [
+            "make",
+            "m5-circuit-smoke",
+            "UPMEM_ALLOW_PHYSICAL_HARDWARE=",
+            "UPMEM_HW_RANK_PATH=",
+        ],
+        cwd=ROOT,
+        env=clean_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    execute = subprocess.run(
+        [
+            "make",
+            "-n",
+            "m5-circuit-study",
+            "UPMEM_ALLOW_PHYSICAL_HARDWARE=1",
+            "UPMEM_HW_RANK_PATH=/dev/dpu_rank0",
+        ],
+        cwd=ROOT,
+        env=clean_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert plan.returncode == 0
+    assert "--prepare-only --build" in plan.stdout
+    assert "configs/suites/m5_circuit_smoke.yml" in plan.stdout
+    assert "UPMEM_ALLOW_PHYSICAL_HARDWARE" not in plan.stdout
+    assert missing_opt_in.returncode == 2
+    assert "UPMEM_ALLOW_PHYSICAL_HARDWARE=1" in missing_opt_in.stderr
+    assert "quantum_bench.bench" not in missing_opt_in.stdout
+    assert execute.returncode == 0
+    assert "--rank-paths /dev/dpu_rank0" in execute.stdout
+    assert "env -u DPU_BACKEND -u UPMEM_EXECUTION_MODE" not in execute.stdout
+
+
+def test_m5_circuit_plan_suite_is_overridable() -> None:
+    result = subprocess.run(
+        [
+            "make",
+            "-n",
+            "m5-circuit-plan",
+            "M5_CIRCUIT_PLAN_SUITE=configs/suites/m5_circuit_scaling.yml",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert "configs/suites/m5_circuit_scaling.yml" in result.stdout
+    assert "configs/suites/m5_circuit_smoke.yml" not in result.stdout
+
+
+def test_m5_circuit_physical_shortcuts_reject_backend_environment() -> None:
+    clean_env = os.environ.copy()
+    clean_env.pop("UPMEM_ALLOW_PHYSICAL_HARDWARE", None)
+    clean_env.pop("UPMEM_HW_RANK_PATH", None)
+    clean_env.pop("UPMEM_HW_RANK_PATHS", None)
+    for variable in ("DPU_BACKEND", "UPMEM_EXECUTION_MODE"):
+        for value in ("simulator", ""):
+            assignment = f"{variable}={value}"
+            result = subprocess.run(
+                [
+                    "make",
+                    "m5-circuit-smoke",
+                    "UPMEM_ALLOW_PHYSICAL_HARDWARE=1",
+                    "UPMEM_HW_RANK_PATH=/dev/dpu_rank0",
+                    assignment,
+                ],
+                cwd=ROOT,
+                env=clean_env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            assert result.returncode == 2
+            assert variable in result.stderr
+            assert "quantum_bench.bench" not in result.stdout
+
+
+def test_m5_circuit_report_default_is_timestamped_and_overrideable() -> None:
+    default = subprocess.run(
+        ["make", "-n", "m5-circuit-report", "M5_CIRCUIT_RUN=/tmp/m5-run"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    override = subprocess.run(
+        [
+            "make",
+            "-n",
+            "m5-circuit-report",
+            "M5_CIRCUIT_RUN=/tmp/m5-run",
+            "M5_CIRCUIT_REPORT=/tmp/m5-report",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert default.returncode == 0
+    match = re.search(
+        r"--output runs/comparisons/m5_circuit_study/"
+        r"(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_\d{9})",
+        default.stdout,
+    )
+    assert match is not None
+    assert "latest" not in match.group(0)
+    assert override.returncode == 0
+    assert "--output /tmp/m5-report" in override.stdout
+
+
+def test_m5_circuit_report_requires_an_explicit_run_and_accepts_baselines() -> None:
+    missing = subprocess.run(
+        ["make", "m5-circuit-report"],
+        cwd=ROOT,
+        env=os.environ.copy(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    report = subprocess.run(
+        [
+            "make",
+            "-n",
+            "m5-circuit-report",
+            "M5_CIRCUIT_RUN=/tmp/m5-run",
+            "M5_CIRCUIT_BASELINES=/tmp/quest.jsonl,/tmp/quimb.jsonl",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert missing.returncode == 2
+    assert "M5_CIRCUIT_RUN" in missing.stderr
+    assert report.returncode == 0
+    assert 'M5_CIRCUIT_BASELINES="/tmp/quest.jsonl,/tmp/quimb.jsonl"' in report.stdout

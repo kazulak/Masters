@@ -23,6 +23,36 @@ def main() -> int:
         "--suite", required=True, help="Suite path or preset name under configs/suites"
     )
 
+    m5_circuit_parser = sub.add_parser(
+        "m5-circuit-study",
+        help="prepare or execute the additive M5.5 whole-circuit TaskGraph study",
+    )
+    m5_circuit_parser.add_argument("--suite", required=True)
+    m5_circuit_mode = m5_circuit_parser.add_mutually_exclusive_group(required=True)
+    m5_circuit_mode.add_argument("--prepare-only", action="store_true")
+    m5_circuit_mode.add_argument("--execute", action="store_true")
+    m5_circuit_parser.add_argument(
+        "--build",
+        action="store_true",
+        help="build tasklet-keyed native v4 binaries during --prepare-only",
+    )
+    m5_circuit_parser.add_argument(
+        "--rank-paths",
+        help="comma-separated explicit /dev/dpu_rankN paths for physical variants",
+    )
+
+    m5_circuit_report_parser = sub.add_parser(
+        "m5-circuit-report", help="report an existing M5.5 normalized study run"
+    )
+    m5_circuit_report_parser.add_argument("--input", required=True)
+    m5_circuit_report_parser.add_argument("--output", required=True)
+    m5_circuit_report_parser.add_argument(
+        "--baseline",
+        action="append",
+        default=[],
+        help="optional external normalized JSONL or run directory; repeatable",
+    )
+
     generic_bridge_parser = sub.add_parser("generic-task-bridge")
     generic_bridge_parser.add_argument("--case", default="bell_2q")
     generic_bridge_parser.add_argument("--n-qubits", type=int)
@@ -125,7 +155,9 @@ def main() -> int:
     upmem_hardware_frontier_m3_1_mode = (
         upmem_hardware_frontier_m3_1_parser.add_mutually_exclusive_group(required=True)
     )
-    upmem_hardware_frontier_m3_1_mode.add_argument("--prepare-only", action="store_true")
+    upmem_hardware_frontier_m3_1_mode.add_argument(
+        "--prepare-only", action="store_true"
+    )
     upmem_hardware_frontier_m3_1_mode.add_argument("--execute", action="store_true")
     upmem_hardware_frontier_m3_1_parser.add_argument(
         "--build",
@@ -143,9 +175,7 @@ def main() -> int:
     upmem_hardware_frontier_m6a_mode = (
         upmem_hardware_frontier_m6a_parser.add_mutually_exclusive_group(required=True)
     )
-    upmem_hardware_frontier_m6a_mode.add_argument(
-        "--prepare-only", action="store_true"
-    )
+    upmem_hardware_frontier_m6a_mode.add_argument("--prepare-only", action="store_true")
     upmem_hardware_frontier_m6a_mode.add_argument("--execute", action="store_true")
     upmem_hardware_frontier_m6a_parser.add_argument(
         "--build",
@@ -166,7 +196,9 @@ def main() -> int:
         help="run the guarded physical M4.2 SimplePIM rank-1 operator qualification",
     )
     upmem_hardware_m4_2_parser.add_argument("--suite", required=True)
-    upmem_hardware_m4_2_mode = upmem_hardware_m4_2_parser.add_mutually_exclusive_group(required=True)
+    upmem_hardware_m4_2_mode = upmem_hardware_m4_2_parser.add_mutually_exclusive_group(
+        required=True
+    )
     upmem_hardware_m4_2_mode.add_argument("--prepare-only", action="store_true")
     upmem_hardware_m4_2_mode.add_argument("--execute", action="store_true")
     upmem_hardware_m4_2_parser.add_argument("--build", action="store_true")
@@ -175,7 +207,9 @@ def main() -> int:
         help="run the guarded physical M4.3 one-task SimplePIM TaskGraph fixture",
     )
     upmem_hardware_m4_3_parser.add_argument("--suite", required=True)
-    upmem_hardware_m4_3_mode = upmem_hardware_m4_3_parser.add_mutually_exclusive_group(required=True)
+    upmem_hardware_m4_3_mode = upmem_hardware_m4_3_parser.add_mutually_exclusive_group(
+        required=True
+    )
     upmem_hardware_m4_3_mode.add_argument("--prepare-only", action="store_true")
     upmem_hardware_m4_3_mode.add_argument("--execute", action="store_true")
     upmem_hardware_m4_3_parser.add_argument("--build", action="store_true")
@@ -184,7 +218,9 @@ def main() -> int:
         help="run the guarded physical M4.4 SimplePIM two-task chain fixture",
     )
     upmem_hardware_m4_4_parser.add_argument("--suite", required=True)
-    upmem_hardware_m4_4_mode = upmem_hardware_m4_4_parser.add_mutually_exclusive_group(required=True)
+    upmem_hardware_m4_4_mode = upmem_hardware_m4_4_parser.add_mutually_exclusive_group(
+        required=True
+    )
     upmem_hardware_m4_4_mode.add_argument("--prepare-only", action="store_true")
     upmem_hardware_m4_4_mode.add_argument("--execute", action="store_true")
     upmem_hardware_m4_4_parser.add_argument("--build", action="store_true")
@@ -193,7 +229,9 @@ def main() -> int:
         help="prepare or execute the bounded M4.5 SimplePIM TaskGraph route",
     )
     upmem_simplepim_taskgraph_parser.add_argument("--suite", required=True)
-    upmem_simplepim_taskgraph_mode = upmem_simplepim_taskgraph_parser.add_mutually_exclusive_group(required=True)
+    upmem_simplepim_taskgraph_mode = (
+        upmem_simplepim_taskgraph_parser.add_mutually_exclusive_group(required=True)
+    )
     upmem_simplepim_taskgraph_mode.add_argument("--prepare-only", action="store_true")
     upmem_simplepim_taskgraph_mode.add_argument("--execute", action="store_true")
     upmem_simplepim_taskgraph_parser.add_argument(
@@ -206,9 +244,13 @@ def main() -> int:
         help="prepare or execute the guarded M5.1 output-partition contraction",
     )
     upmem_hardware_distributed_m5_1_mode = (
-        upmem_hardware_distributed_m5_1_parser.add_mutually_exclusive_group(required=True)
+        upmem_hardware_distributed_m5_1_parser.add_mutually_exclusive_group(
+            required=True
+        )
     )
-    upmem_hardware_distributed_m5_1_mode.add_argument("--prepare-only", action="store_true")
+    upmem_hardware_distributed_m5_1_mode.add_argument(
+        "--prepare-only", action="store_true"
+    )
     upmem_hardware_distributed_m5_1_mode.add_argument("--execute", action="store_true")
     upmem_hardware_distributed_m5_1_parser.add_argument("--build", action="store_true")
     upmem_hardware_distributed_m5_2_parser = sub.add_parser(
@@ -216,9 +258,13 @@ def main() -> int:
         help="prepare or execute the guarded M5.2 contracted-partition host reduction",
     )
     upmem_hardware_distributed_m5_2_mode = (
-        upmem_hardware_distributed_m5_2_parser.add_mutually_exclusive_group(required=True)
+        upmem_hardware_distributed_m5_2_parser.add_mutually_exclusive_group(
+            required=True
+        )
     )
-    upmem_hardware_distributed_m5_2_mode.add_argument("--prepare-only", action="store_true")
+    upmem_hardware_distributed_m5_2_mode.add_argument(
+        "--prepare-only", action="store_true"
+    )
     upmem_hardware_distributed_m5_2_mode.add_argument("--execute", action="store_true")
     upmem_hardware_distributed_m5_2_parser.add_argument("--build", action="store_true")
     upmem_hardware_distributed_m5_parser = sub.add_parser(
@@ -231,7 +277,9 @@ def main() -> int:
     upmem_hardware_distributed_m5_mode = (
         upmem_hardware_distributed_m5_parser.add_mutually_exclusive_group(required=True)
     )
-    upmem_hardware_distributed_m5_mode.add_argument("--prepare-only", action="store_true")
+    upmem_hardware_distributed_m5_mode.add_argument(
+        "--prepare-only", action="store_true"
+    )
     upmem_hardware_distributed_m5_mode.add_argument("--execute", action="store_true")
     upmem_hardware_distributed_m5_parser.add_argument("--build", action="store_true")
     upmem_hardware_distributed_m5_parser.add_argument(
@@ -243,7 +291,9 @@ def main() -> int:
     upmem_hardware_taskgraph_m4_1_mode = (
         upmem_hardware_taskgraph_m4_1_parser.add_mutually_exclusive_group(required=True)
     )
-    upmem_hardware_taskgraph_m4_1_mode.add_argument("--prepare-only", action="store_true")
+    upmem_hardware_taskgraph_m4_1_mode.add_argument(
+        "--prepare-only", action="store_true"
+    )
     upmem_hardware_taskgraph_m4_1_mode.add_argument("--execute", action="store_true")
     upmem_hardware_taskgraph_m4_1_parser.add_argument(
         "--build",
@@ -359,6 +409,39 @@ def main() -> int:
     )
 
     args = parser.parse_args()
+    if args.command == "m5-circuit-study":
+        from quantum_bench.bench.m5_circuit_commands import execute, prepare
+
+        if args.build and not args.prepare_only:
+            parser.error("--build is only valid with --prepare-only")
+        try:
+            suite = suite_path(args.suite, root_dir)
+            result = (
+                prepare(root_dir, suite, build=args.build)
+                if args.prepare_only
+                else execute(root_dir, suite, rank_paths=args.rank_paths)
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(result, indent=2))
+        return (
+            0
+            if result["status"] == ("prepared" if args.prepare_only else "completed")
+            else 2
+        )
+    if args.command == "m5-circuit-report":
+        from quantum_bench.bench.m5_circuit_commands import baseline_paths, report
+
+        try:
+            result = report(
+                Path(args.input),
+                Path(args.output),
+                baselines=baseline_paths(args.baseline),
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(result, indent=2))
+        return 0
     if args.command == "run":
         from quantum_bench.bench.runner import run_suite
 
@@ -511,7 +594,8 @@ def main() -> int:
                 )
                 return 0 if result.status == "prepared" else 2
             result = run_upmem_hardware_taskgraph_resident(
-                root_dir, suite_path=suite_path(args.suite, root_dir),
+                root_dir,
+                suite_path=suite_path(args.suite, root_dir),
                 tasklets_per_dpu=args.tasklets,
             )
         except (OSError, ValueError) as exc:
@@ -664,13 +748,20 @@ def main() -> int:
         print(json.dumps(result, indent=2))
         return 0 if result["status"] == "completed" else 2
     if args.command == "upmem-hardware-simplepim-rank1-m4-2":
-        from quantum_bench.bench.upmem_hardware_simplepim_rank1_m4_2 import execute, prepare
+        from quantum_bench.bench.upmem_hardware_simplepim_rank1_m4_2 import (
+            execute,
+            prepare,
+        )
 
         if args.build and not args.prepare_only:
             parser.error("--build is only valid with --prepare-only")
         try:
             if args.prepare_only:
-                result = prepare(root_dir, suite_path=suite_path(args.suite, root_dir), build=args.build)
+                result = prepare(
+                    root_dir,
+                    suite_path=suite_path(args.suite, root_dir),
+                    build=args.build,
+                )
             else:
                 result = execute(root_dir, suite_path=suite_path(args.suite, root_dir))
         except (OSError, RuntimeError, ValueError) as exc:
@@ -678,13 +769,20 @@ def main() -> int:
         print(json.dumps(result, indent=2))
         return 0 if result["status"] in {"prepared", "completed"} else 2
     if args.command == "upmem-hardware-simplepim-taskgraph-m4-3":
-        from quantum_bench.bench.upmem_hardware_simplepim_taskgraph_m4_3 import execute, prepare
+        from quantum_bench.bench.upmem_hardware_simplepim_taskgraph_m4_3 import (
+            execute,
+            prepare,
+        )
 
         if args.build and not args.prepare_only:
             parser.error("--build is only valid with --prepare-only")
         try:
             if args.prepare_only:
-                result = prepare(root_dir, suite_path=suite_path(args.suite, root_dir), build=args.build)
+                result = prepare(
+                    root_dir,
+                    suite_path=suite_path(args.suite, root_dir),
+                    build=args.build,
+                )
             else:
                 result = execute(root_dir, suite_path=suite_path(args.suite, root_dir))
         except (OSError, RuntimeError, ValueError) as exc:
@@ -692,13 +790,20 @@ def main() -> int:
         print(json.dumps(result, indent=2))
         return 0 if result["status"] in {"prepared", "completed"} else 2
     if args.command == "upmem-hardware-simplepim-chain-m4-4":
-        from quantum_bench.bench.upmem_hardware_simplepim_chain_m4_4 import execute, prepare
+        from quantum_bench.bench.upmem_hardware_simplepim_chain_m4_4 import (
+            execute,
+            prepare,
+        )
 
         if args.build and not args.prepare_only:
             parser.error("--build is only valid with --prepare-only")
         try:
             if args.prepare_only:
-                result = prepare(root_dir, suite_path=suite_path(args.suite, root_dir), build=args.build)
+                result = prepare(
+                    root_dir,
+                    suite_path=suite_path(args.suite, root_dir),
+                    build=args.build,
+                )
             else:
                 result = execute(root_dir, suite_path=suite_path(args.suite, root_dir))
         except (OSError, RuntimeError, ValueError) as exc:
@@ -748,7 +853,11 @@ def main() -> int:
         if args.prepare_only and not args.build:
             parser.error("--prepare-only requires --build for native plan validation")
         try:
-            result = prepare(root_dir, build=args.build) if args.prepare_only else execute(root_dir)
+            result = (
+                prepare(root_dir, build=args.build)
+                if args.prepare_only
+                else execute(root_dir)
+            )
         except (OSError, RuntimeError, ValueError, TimeoutError) as exc:
             parser.error(str(exc))
         print(json.dumps(result, indent=2))

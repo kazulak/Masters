@@ -56,6 +56,11 @@ UPMEM_HW_M5_4_RUN ?= runs/evidence/upmem_hardware_distributed_m5/upmem_hw_m5/lat
 UPMEM_HW_M5_4_DPU_COUNTS ?=
 UPMEM_HW_M5_4_TASKLETS ?=
 UPMEM_HW_M5_4_ARGS = $(if $(UPMEM_HW_M5_4_DPU_COUNTS),--dpu-counts $(UPMEM_HW_M5_4_DPU_COUNTS),) $(if $(UPMEM_HW_M5_4_TASKLETS),--tasklets $(UPMEM_HW_M5_4_TASKLETS),)
+M5_CIRCUIT_SUITE ?= configs/suites/m5_circuit_canonical.yml
+M5_CIRCUIT_PLAN_SUITE ?= configs/suites/m5_circuit_smoke.yml
+M5_CIRCUIT_RUN ?=
+M5_CIRCUIT_REPORT ?= runs/comparisons/m5_circuit_study/$(shell date +%Y-%m-%d_%H-%M-%S_%N)
+M5_CIRCUIT_RANK_ARGS = $(if $(UPMEM_HW_RANK_PATHS),--rank-paths $(UPMEM_HW_RANK_PATHS),$(if $(UPMEM_HW_RANK_PATH),--rank-paths $(UPMEM_HW_RANK_PATH),))
 EVIDENCE_INBOX ?= runs/inbox/eth
 GPU_VERIFY ?= quest-hip
 CLEAN_RUNS ?= 0
@@ -132,6 +137,10 @@ PUBLIC_TARGETS := \
 	thesis-promote-historical \
 	thesis-verify \
 	thesis-report \
+	m5-circuit-plan \
+	m5-circuit-smoke \
+	m5-circuit-study \
+	m5-circuit-report \
 	list-runs \
 	thesis-clean \
 	archive-evidence \
@@ -197,6 +206,10 @@ help:
 		'  make upmem-hw-m5-4-smoke  Requires physical opt-in/rank; execute the M5.4 1/2/4/8-DPU acceptance gate' \
 		'  make upmem-hw-m5-4  Requires physical opt-in/rank; execute the full M5.4 1..64-DPU matrix' \
 		'  make upmem-hw-m5-4-report  Report and evaluate one explicitly supplied M5.4 evidence run' \
+		'  make m5-circuit-plan  Prepare/build M5.5 plan suite (M5_CIRCUIT_PLAN_SUITE=... overrides smoke); never allocates or launches a DPU' \
+		'  make m5-circuit-smoke  Requires physical opt-in and explicit rank paths; run the M5.5 smoke study' \
+		'  make m5-circuit-study  Requires physical opt-in and explicit rank paths; run the selected M5.5 whole-circuit suite' \
+		'  make m5-circuit-report M5_CIRCUIT_RUN=<run>  Report an existing M5.5 run without rerunning it' \
 		'  make upmem-pidcomm-compatibility  Stage and compile/link PID-Comm; never allocates a DPU' \
 		'  make upmem-pidcomm-plan  Record PID-Comm CPU/SDK/source facts and stage no hardware; never allocates a DPU' \
 		'  make upmem-pidcomm-run  Requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1; qualify PID-Comm physical all-reduce candidates' \
@@ -456,6 +469,27 @@ upmem-hw-m5-4:
 
 upmem-hw-m5-4-report:
 	$(PY_ENV) $(PYTHON) scripts/upmem_m5_report.py --input $(UPMEM_HW_M5_4_RUN) --output-root .
+
+m5-circuit-plan:
+	$(BENCH) m5-circuit-study --suite $(M5_CIRCUIT_PLAN_SUITE) --prepare-only --build
+
+m5-circuit-smoke:
+	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1 to execute the physical M5.5 smoke study' >&2; exit 2; }
+	@test -n "$(UPMEM_HW_RANK_PATHS)$(UPMEM_HW_RANK_PATH)" || { echo 'Set UPMEM_HW_RANK_PATH or UPMEM_HW_RANK_PATHS to select explicit physical ranks' >&2; exit 2; }
+	@test "$(origin DPU_BACKEND)" = "undefined" || { echo 'DPU_BACKEND must be unset for physical M5.5 execution' >&2; exit 2; }
+	@test "$(origin UPMEM_EXECUTION_MODE)" = "undefined" || { echo 'UPMEM_EXECUTION_MODE must be unset for physical M5.5 execution' >&2; exit 2; }
+	$(BENCH) m5-circuit-study --suite configs/suites/m5_circuit_smoke.yml --execute $(M5_CIRCUIT_RANK_ARGS)
+
+m5-circuit-study:
+	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1 to execute the physical M5.5 study' >&2; exit 2; }
+	@test -n "$(UPMEM_HW_RANK_PATHS)$(UPMEM_HW_RANK_PATH)" || { echo 'Set UPMEM_HW_RANK_PATH or UPMEM_HW_RANK_PATHS to select explicit physical ranks' >&2; exit 2; }
+	@test "$(origin DPU_BACKEND)" = "undefined" || { echo 'DPU_BACKEND must be unset for physical M5.5 execution' >&2; exit 2; }
+	@test "$(origin UPMEM_EXECUTION_MODE)" = "undefined" || { echo 'UPMEM_EXECUTION_MODE must be unset for physical M5.5 execution' >&2; exit 2; }
+	$(BENCH) m5-circuit-study --suite $(M5_CIRCUIT_SUITE) --execute $(M5_CIRCUIT_RANK_ARGS)
+
+m5-circuit-report:
+	@test -n "$(M5_CIRCUIT_RUN)" || { echo 'Set M5_CIRCUIT_RUN=<M5.5 evidence run>' >&2; exit 2; }
+	M5_CIRCUIT_BASELINES="$(M5_CIRCUIT_BASELINES)" $(BENCH) m5-circuit-report --input $(M5_CIRCUIT_RUN) --output $(M5_CIRCUIT_REPORT)
 
 upmem-pidcomm-compatibility:
 	$(PY_ENV) $(PYTHON) native/upmem/pidcomm_qualification/pidcomm_qualification_runner.py --compatibility-only --workdir .

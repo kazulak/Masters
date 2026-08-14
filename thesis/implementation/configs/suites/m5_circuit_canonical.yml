@@ -1,0 +1,113 @@
+schema_version: m5_circuit_study_v1
+study_id: m5_circuit_canonical
+
+metadata:
+  purpose: whole_circuit_taskgraph_canonical_benchmark
+  claim_boundary: same_plan_measured_physical_route
+  claims_allowed:
+    - same_plan_cpu_physical_runtime_comparison
+    - standard_path_baseline_runtime_comparison
+    - numeric_policy_runtime_and_accuracy_comparison
+  claims_forbidden:
+    - energy
+    - cross_algorithm_speedup_without_matched_baselines
+    - planner_optimality
+    - multi_rank_scaling
+  route_description: host_managed_graph_intermediates_with_tiled_physical_v4_tasks
+  physical_rank_paths_are_placeholders: true
+  report_pairing_required: true
+  energy_measurement: unavailable
+  path_comparison: two_standard_executable_baselines_not_upmem_aware_planning
+
+cases:
+  - {id: qrng_8q, family: QRNG, circuit: {kind: quest_compatible, name: QRNG, n_qubits: 8}}
+  - {id: qrng_10q, family: QRNG, circuit: {kind: quest_compatible, name: QRNG, n_qubits: 10}}
+  - {id: qrng_12q, family: QRNG, circuit: {kind: quest_compatible, name: QRNG, n_qubits: 12}}
+  - {id: qrng_14q, family: QRNG, circuit: {kind: quest_compatible, name: QRNG, n_qubits: 14}}
+  - {id: qrng_16q, family: QRNG, circuit: {kind: quest_compatible, name: QRNG, n_qubits: 16}}
+  - {id: qrng_18q, family: QRNG, circuit: {kind: quest_compatible, name: QRNG, n_qubits: 18}}
+  - {id: qrng_20q, family: QRNG, circuit: {kind: quest_compatible, name: QRNG, n_qubits: 20}}
+  - {id: bv_8q, family: BV, circuit: {kind: quest_compatible, name: BV, n_qubits: 8}}
+  - {id: bv_10q, family: BV, circuit: {kind: quest_compatible, name: BV, n_qubits: 10}}
+  - {id: bv_12q, family: BV, circuit: {kind: quest_compatible, name: BV, n_qubits: 12}}
+  - {id: bv_14q, family: BV, circuit: {kind: quest_compatible, name: BV, n_qubits: 14}}
+  - {id: bv_16q, family: BV, circuit: {kind: quest_compatible, name: BV, n_qubits: 16}}
+  - {id: bv_18q, family: BV, circuit: {kind: quest_compatible, name: BV, n_qubits: 18}}
+  - {id: bv_20q, family: BV, circuit: {kind: quest_compatible, name: BV, n_qubits: 20}}
+  - {id: xor_8q, family: XOR, circuit: {kind: quest_compatible, name: XOR, n_qubits: 8}}
+  - {id: xor_10q, family: XOR, circuit: {kind: quest_compatible, name: XOR, n_qubits: 10}}
+  - {id: xor_12q, family: XOR, circuit: {kind: quest_compatible, name: XOR, n_qubits: 12}}
+  - {id: xor_14q, family: XOR, circuit: {kind: quest_compatible, name: XOR, n_qubits: 14}}
+  - {id: xor_16q, family: XOR, circuit: {kind: quest_compatible, name: XOR, n_qubits: 16}}
+  - {id: xor_18q, family: XOR, circuit: {kind: quest_compatible, name: XOR, n_qubits: 18}}
+  - {id: xor_20q, family: XOR, circuit: {kind: quest_compatible, name: XOR, n_qubits: 20}}
+  - {id: bb84_8q, family: BB84, circuit: {kind: quest_compatible, name: BB84, n_qubits: 8}}
+  - {id: bb84_10q, family: BB84, circuit: {kind: quest_compatible, name: BB84, n_qubits: 10}}
+  - {id: bb84_12q, family: BB84, circuit: {kind: quest_compatible, name: BB84, n_qubits: 12}}
+  - {id: bb84_14q, family: BB84, circuit: {kind: quest_compatible, name: BB84, n_qubits: 14}}
+  - {id: bb84_16q, family: BB84, circuit: {kind: quest_compatible, name: BB84, n_qubits: 16}}
+  - {id: bb84_18q, family: BB84, circuit: {kind: quest_compatible, name: BB84, n_qubits: 18}}
+  - {id: bb84_20q, family: BB84, circuit: {kind: quest_compatible, name: BB84, n_qubits: 20}}
+  - {id: edc_8q, family: EDC, circuit: {kind: quest_compatible, name: EDC, n_qubits: 8}}
+  - {id: edc_10q, family: EDC, circuit: {kind: quest_compatible, name: EDC, n_qubits: 10}}
+  - {id: edc_12q, family: EDC, circuit: {kind: quest_compatible, name: EDC, n_qubits: 12}}
+  - {id: edc_14q, family: EDC, circuit: {kind: quest_compatible, name: EDC, n_qubits: 14}}
+  - {id: edc_16q, family: EDC, circuit: {kind: quest_compatible, name: EDC, n_qubits: 16}}
+  - {id: edc_18q, family: EDC, circuit: {kind: quest_compatible, name: EDC, n_qubits: 18}}
+  - {id: edc_20q, family: EDC, circuit: {kind: quest_compatible, name: EDC, n_qubits: 20}}
+  - {id: hs_8q, family: HS, circuit: {kind: quest_compatible, name: HS, allocated_qubits: 8, logical_qubits: 4}}
+  - {id: hs_10q, family: HS, circuit: {kind: quest_compatible, name: HS, allocated_qubits: 10, logical_qubits: 5}}
+  - {id: hs_12q, family: HS, circuit: {kind: quest_compatible, name: HS, allocated_qubits: 12, logical_qubits: 6}}
+  - {id: hs_14q, family: HS, circuit: {kind: quest_compatible, name: HS, allocated_qubits: 14, logical_qubits: 7}}
+  - {id: hs_16q, family: HS, circuit: {kind: quest_compatible, name: HS, allocated_qubits: 16, logical_qubits: 8}}
+  - {id: hs_18q, family: HS, circuit: {kind: quest_compatible, name: HS, allocated_qubits: 18, logical_qubits: 9}}
+  - {id: hs_20q, family: HS, circuit: {kind: quest_compatible, name: HS, allocated_qubits: 20, logical_qubits: 10}}
+
+planner_variants:
+  - id: opt_einsum_greedy
+    label: opt_einsum greedy
+    planner: {engine: opt_einsum, optimize: greedy}
+  - id: cotengra_flops_seed0
+    label: cotengra FLOPs greedy (seed 0)
+    planner:
+      engine: cotengra
+      objective: flops
+      methods: greedy
+      max_repeats: 1
+      seed: 0
+
+numeric_policies:
+  - {id: float32_real, label: float32 real, policy: float32_real}
+  - {id: host_packed_int8, label: host packed int8, policy: host_packed_int8}
+
+engine_variants:
+  - id: numpy_cpu
+    engine: numpy_cpu
+    label: NumPy CPU reference
+    topology: {backend: cpu}
+    timeout_enforcement: posthoc_observation
+  - id: upmem_physical_1rank_8dpu
+    engine: m5_whole_circuit_v4
+    label: UPMEM physical, 1 rank, 8 DPU
+    topology:
+      backend: upmem
+      rank_paths: [/dev/dpu_rank0]
+      dpus: 8
+      tasklets_per_device: 1
+    timeout_enforcement: engine_subprocess
+    executor_config:
+      profile: m5_whole_circuit_v4_v1
+      abi: execution_plan_v4
+      session_protocol: persistent_rank_session_v1
+      dispatch_mode: bulk_set_synchronous_v1
+      kernel_identity: dpu_gemm_tile_v4
+      execution_class: physical_v4_output_tile
+
+warmups: 1
+repeats: 3
+timeout_s: 900
+resource_limits:
+  max_live_bytes: 536870912
+  max_output_bytes: 536870912
+  element_bytes: 4
+  max_tasks: 512
