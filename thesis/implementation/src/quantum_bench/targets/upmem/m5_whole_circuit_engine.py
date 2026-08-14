@@ -900,6 +900,16 @@ class M5WholeCircuitSession:
             ),
             "stdout": stdout if isinstance(stdout, str) else "",
             "stderr": stderr if isinstance(stderr, str) else "",
+            "stdout_truncated": bool(getattr(release, "stdout_truncated", False)),
+            "stderr_truncated": bool(getattr(release, "stderr_truncated", False)),
+            "stdout_total_bytes": int(getattr(release, "stdout_total_bytes", 0)),
+            "stderr_total_bytes": int(getattr(release, "stderr_total_bytes", 0)),
+            "stdout_limit_exceeded": bool(
+                getattr(release, "stdout_limit_exceeded", False)
+            ),
+            "stderr_limit_exceeded": bool(
+                getattr(release, "stderr_limit_exceeded", False)
+            ),
             "returncode": returncode,
             "release_confirmed": bool(getattr(release, "release_confirmed", False)),
         }

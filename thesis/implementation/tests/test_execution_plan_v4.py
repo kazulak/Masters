@@ -19,11 +19,13 @@ TASK_HASH = "ab" * 32
 class FakeStream:
     def __init__(self) -> None:
         self._lines: queue.Queue[str] = queue.Queue()
+        self.read_sizes: list[int] = []
 
     def emit(self, line: str) -> None:
         self._lines.put(line)
 
-    def readline(self) -> str:
+    def readline(self, size: int = -1) -> str:
+        self.read_sizes.append(size)
         return self._lines.get()
 
 
@@ -93,6 +95,8 @@ class FakeProcess:
                 + "\n"
             )
             self._returncode = 0
+            self.stdout.emit("")
+            self.stderr.emit("")
 
     def poll(self) -> int | None:
         return self._returncode
@@ -123,7 +127,10 @@ def _int8_payload(count: int) -> bytes:
 
 
 def _artifact(
-    tmp_path: Path, *, numeric_mode: str = v4.NUMERIC_FLOAT32
+    tmp_path: Path,
+    *,
+    numeric_mode: str = v4.NUMERIC_FLOAT32,
+    request_sequence: int = 0,
 ) -> v4.V4RequestArtifact:
     profile = v4.V4Profile(dpu_count=2, numeric_mode=numeric_mode)
     element_bytes = 4 if numeric_mode == v4.NUMERIC_FLOAT32 else 1
@@ -151,7 +158,7 @@ def _artifact(
             )
         ],
         task_contract_sha256=TASK_HASH,
-        request_sequence=0,
+        request_sequence=request_sequence,
     )
 
 
@@ -212,6 +219,8 @@ def _session(
     tmp_path: Path,
     artifact: v4.V4RequestArtifact,
     response_factory: Callable[[str], str | dict[str, object] | None],
+    *,
+    profile: v4.V4Profile | None = None,
 ) -> tuple[v4.V4Session, FakeProcess]:
     process: FakeProcess | None = None
 
@@ -224,7 +233,8 @@ def _session(
     session = v4.V4Session.start(
         ["fake-v4-host"],
         session_root=tmp_path,
-        profile=v4.V4Profile(dpu_count=2, rank_path="/dev/dpu_rank0", timeout_s=0.2),
+        profile=profile
+        or v4.V4Profile(dpu_count=2, rank_path="/dev/dpu_rank0", timeout_s=0.2),
         environment={"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1"},
         popen_factory=factory,
     )
@@ -413,6 +423,137 @@ def test_successful_submit_and_release(tmp_path: Path) -> None:
     assert release.release_confirmed is True
     assert release.event["event"] == "RELEASE"
     assert process.stdin.commands[-1] == "CLOSE\n"
+
+
+def test_persistent_session_bounds_each_event_not_cumulative_stdout(
+    tmp_path: Path,
+) -> None:
+    artifacts = tuple(
+        _artifact(tmp_path, request_sequence=sequence) for sequence in range(8)
+    )
+    by_hash = {artifact.manifest_sha256: artifact for artifact in artifacts}
+
+    def response(command: str) -> dict[str, object]:
+        artifact = next(item for digest, item in by_hash.items() if digest in command)
+        return _valid_response(artifact)
+
+    profile = v4.V4Profile(
+        dpu_count=2,
+        rank_path="/dev/dpu_rank0",
+        timeout_s=0.2,
+        max_stdout_bytes=2048,
+        max_retained_output_bytes=512,
+    )
+    session, _ = _session(tmp_path, artifacts[0], response, profile=profile)
+    for artifact in artifacts:
+        assert session.submit(artifact)["status"] == "completed"
+    release = session.close()
+    assert release.release_confirmed is True
+    assert release.stdout_total_bytes > profile.max_stdout_bytes
+    assert release.stdout_truncated is True
+    assert len(release.stdout.encode("utf-8")) <= profile.max_retained_output_bytes
+
+
+def test_persistent_session_still_rejects_one_oversized_event(tmp_path: Path) -> None:
+    artifact = _artifact(tmp_path)
+    response = _valid_response(artifact)
+    response["padding"] = "x" * 4096
+    profile = v4.V4Profile(
+        dpu_count=2,
+        rank_path="/dev/dpu_rank0",
+        timeout_s=0.2,
+        max_stdout_bytes=2048,
+        max_retained_output_bytes=512,
+    )
+    session, process = _session(
+        tmp_path, artifact, lambda command: response, profile=profile
+    )
+    with pytest.raises(v4.V4ProtocolError) as exc_info:
+        session.submit(artifact)
+    assert exc_info.value.failure_stage == "protocol_output_limit"
+    assert profile.max_stdout_bytes + 1 in process.stdout.read_sizes
+
+
+def test_non_protocol_output_is_drained_and_retained_within_byte_limit() -> None:
+    stderr = FakeStream()
+    pump = v4._OutputPump(
+        stderr,
+        line_limit=16,
+        retained_limit=8,
+        output_queue=None,
+    )
+    pump.start()
+    stderr.emit("x" * 64 + "\n")
+    stderr.emit("sentinel\n")
+    stderr.emit("")
+    pump.thread.join(timeout=1.0)
+    assert not pump.thread.is_alive()
+    assert pump.overflowed is True
+    assert pump.total_size == 74
+    assert pump.retained_truncated is True
+    assert len("".join(pump.chunks).encode("utf-8")) <= 8
+    assert "".join(pump.chunks).endswith("inel\n")
+
+
+def test_protocol_event_queue_overflow_fails_closed_without_growing() -> None:
+    stdout = FakeStream()
+    events: queue.Queue[tuple[str, str | None]] = queue.Queue(maxsize=1)
+    pump = v4._OutputPump(
+        stdout,
+        line_limit=64,
+        retained_limit=32,
+        output_queue=events,
+    )
+    stdout.emit("{}\n")
+    stdout.emit("{}\n")
+    pump.start()
+    pump.thread.join(timeout=1.0)
+    assert not pump.thread.is_alive()
+    assert events.qsize() == 1
+    assert pump.overflowed is True
+    assert pump.queue_overflowed is True
+    assert len("".join(pump.chunks).encode("utf-8")) <= 32
+
+
+def test_oversized_stderr_invalidates_physical_release(tmp_path: Path) -> None:
+    artifact = _artifact(tmp_path)
+    profile = v4.V4Profile(
+        dpu_count=2,
+        rank_path="/dev/dpu_rank0",
+        timeout_s=0.2,
+        max_stderr_bytes=64,
+        max_retained_output_bytes=32,
+    )
+    session, process = _session(
+        tmp_path,
+        artifact,
+        lambda command: _valid_response(artifact),
+        profile=profile,
+    )
+    process.stderr.emit("x" * 128 + "\n")
+    assert session.submit(artifact)["status"] == "completed"
+    release = session.close()
+    assert release.release_confirmed is False
+    assert release.stderr_limit_exceeded is True
+    assert release.stderr_truncated is True
+    assert len(release.stderr.encode("utf-8")) <= profile.max_retained_output_bytes
+
+
+def test_multibyte_diagnostic_tail_respects_byte_limit() -> None:
+    stream = FakeStream()
+    pump = v4._OutputPump(
+        stream,
+        line_limit=64,
+        retained_limit=7,
+        output_queue=None,
+    )
+    pump.start()
+    stream.emit("é" * 10 + "\n")
+    stream.emit("")
+    pump.thread.join(timeout=1.0)
+    assert not pump.thread.is_alive()
+    assert pump.retained_truncated is True
+    assert len("".join(pump.chunks).encode("utf-8")) <= 7
 
 
 def test_manifest_hash_mismatch_is_rejected(tmp_path: Path) -> None:

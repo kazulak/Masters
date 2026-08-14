@@ -176,10 +176,12 @@ class V4Profile:
     numeric_mode: str | int = NUMERIC_FLOAT32
     rank_path: str | None = None
     timeout_s: float = 60.0
+    # stdout is the line-delimited protocol: bound each event independently.
     max_stdout_bytes: int = 256 * 1024
     max_stderr_bytes: int = 256 * 1024
     mram_pool_bytes: int = MRAM_POOL_BYTES
     partition_mode: int = PARTITION_OUTPUT_TILE
+    max_retained_output_bytes: int = 16 * 1024
 
     def __post_init__(self) -> None:
         if not 1 <= self.dpu_count <= MAX_DPUS:
@@ -193,6 +195,8 @@ class V4Profile:
             raise ValueError("v4 timeout_s must be positive")
         if self.max_stdout_bytes <= 0 or self.max_stderr_bytes <= 0:
             raise ValueError("v4 output limits must be positive")
+        if self.max_retained_output_bytes <= 0:
+            raise ValueError("v4 retained output limit must be positive")
         if self.mram_pool_bytes != MRAM_POOL_BYTES:
             raise ValueError("v4 native ABI uses a fixed 512 KiB MRAM pool")
         if self.partition_mode != PARTITION_OUTPUT_TILE:
@@ -851,15 +855,20 @@ class _OutputPump:
         self,
         stream: Any,
         *,
-        limit: int,
-        output_queue: "queue.Queue[tuple[str, str | None]]",
+        line_limit: int,
+        retained_limit: int,
+        output_queue: "queue.Queue[tuple[str, str | None]] | None",
     ) -> None:
         self.stream = stream
-        self.limit = limit
+        self.line_limit = line_limit
+        self.retained_limit = retained_limit
         self.output_queue = output_queue
         self.chunks: list[str] = []
         self.size = 0
+        self.total_size = 0
+        self.retained_truncated = False
         self.overflowed = False
+        self.queue_overflowed = False
         self.thread = threading.Thread(target=self._run, daemon=True)
 
     def start(self) -> None:
@@ -868,9 +877,9 @@ class _OutputPump:
     def _run(self) -> None:
         try:
             while True:
-                line = self.stream.readline()
+                line = self.stream.readline(self.line_limit + 1)
                 if line in ("", b""):
-                    self.output_queue.put(("eof", None))
+                    self._emit("eof", None)
                     return
                 text = (
                     line.decode(errors="replace")
@@ -878,15 +887,45 @@ class _OutputPump:
                     else str(line)
                 )
                 encoded = len(text.encode("utf-8", errors="replace"))
-                if self.size + encoded > self.limit:
+                if encoded > self.line_limit:
                     self.overflowed = True
-                    self.output_queue.put(("overflow", None))
+                    if self.output_queue is not None:
+                        self._emit("overflow", None)
+                        return
+                    self._retain(text, encoded)
+                    continue
+                self._retain(text, encoded)
+                if not self._emit("line", text):
                     return
-                self.size += encoded
-                self.chunks.append(text)
-                self.output_queue.put(("line", text))
         except BaseException:
-            self.output_queue.put(("eof", None))
+            self._emit("eof", None)
+
+    def _emit(self, kind: str, value: str | None) -> bool:
+        if self.output_queue is None:
+            return True
+        try:
+            self.output_queue.put_nowait((kind, value))
+        except queue.Full:
+            self.overflowed = True
+            self.queue_overflowed = True
+            return False
+        return True
+
+    def _retain(self, text: str, encoded: int) -> None:
+        self.total_size += encoded
+        self.size += encoded
+        self.chunks.append(text)
+        if self.size <= self.retained_limit:
+            return
+        self.retained_truncated = True
+        while len(self.chunks) > 1:
+            removed = self.chunks.pop(0)
+            self.size -= len(removed.encode("utf-8", errors="replace"))
+            if self.size <= self.retained_limit:
+                return
+        tail = self.chunks[0].encode("utf-8", errors="replace")[-self.retained_limit :]
+        self.chunks[0] = tail.decode("utf-8", errors="ignore")
+        self.size = len(self.chunks[0].encode("utf-8", errors="replace"))
 
 
 @dataclass(frozen=True)
@@ -895,6 +934,12 @@ class V4Release:
     release_confirmed: bool
     stdout: str
     stderr: str
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
+    stdout_total_bytes: int = 0
+    stderr_total_bytes: int = 0
+    stdout_limit_exceeded: bool = False
+    stderr_limit_exceeded: bool = False
 
 
 class V4Session:
@@ -974,12 +1019,18 @@ class V4Session:
             )
         except OSError as exc:
             raise V4Error("sdk_discovery_failed", str(exc)) from exc
-        events: "queue.Queue[tuple[str, str | None]]" = queue.Queue()
+        events: "queue.Queue[tuple[str, str | None]]" = queue.Queue(maxsize=2)
         stdout_pump = _OutputPump(
-            process.stdout, limit=profile.max_stdout_bytes, output_queue=events
+            process.stdout,
+            line_limit=profile.max_stdout_bytes,
+            retained_limit=profile.max_retained_output_bytes,
+            output_queue=events,
         )
         stderr_pump = _OutputPump(
-            process.stderr, limit=profile.max_stderr_bytes, output_queue=queue.Queue()
+            process.stderr,
+            line_limit=profile.max_stderr_bytes,
+            retained_limit=profile.max_retained_output_bytes,
+            output_queue=None,
         )
         stdout_pump.start()
         stderr_pump.start()
@@ -1010,9 +1061,31 @@ class V4Session:
     def _stderr_text(self) -> str:
         return "".join(self._stderr_pump.chunks)
 
+    def _release_record(
+        self, event: Mapping[str, Any], release_confirmed: bool
+    ) -> V4Release:
+        return V4Release(
+            event,
+            release_confirmed,
+            self._stdout_text(),
+            self._stderr_text(),
+            stdout_truncated=self._stdout_pump.retained_truncated,
+            stderr_truncated=self._stderr_pump.retained_truncated,
+            stdout_total_bytes=self._stdout_pump.total_size,
+            stderr_total_bytes=self._stderr_pump.total_size,
+            stdout_limit_exceeded=self._stdout_pump.overflowed,
+            stderr_limit_exceeded=self._stderr_pump.overflowed,
+        )
+
     def _next_event(self, timeout_s: float) -> Mapping[str, Any]:
         deadline = time.monotonic() + timeout_s
         while True:
+            if self._stdout_pump.queue_overflowed:
+                self._poisoned = True
+                self._terminate()
+                raise V4ProtocolError(
+                    "protocol_output_limit", "v4 stdout event queue exceeded its limit"
+                )
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 self._poisoned = True
@@ -1028,6 +1101,12 @@ class V4Session:
                 raise V4ProtocolError(
                     "kernel_timeout", "timed out waiting for v4 native event"
                 ) from exc
+            if self._stdout_pump.queue_overflowed:
+                self._poisoned = True
+                self._terminate()
+                raise V4ProtocolError(
+                    "protocol_output_limit", "v4 stdout event queue exceeded its limit"
+                )
             if kind == "overflow":
                 self._poisoned = True
                 self._terminate()
@@ -1315,7 +1394,7 @@ class V4Session:
         if self._release is not None:
             return self._release
         if self._closed:
-            return V4Release({}, False, self._stdout_text(), self._stderr_text())
+            return self._release_record({}, False)
         alive_before_close = self.process.poll() is None
         self._closed = True
         sent_close = True
@@ -1324,24 +1403,43 @@ class V4Session:
         except V4Error:
             self._poisoned = True
             sent_close = False
-        release: V4Release | None = None
+        close_deadline = time.monotonic() + (timeout_s or self.profile.timeout_s)
+        event: Mapping[str, Any] = {}
+        confirmed = False
         if alive_before_close and sent_close:
             try:
-                event = self._next_event(timeout_s or self.profile.timeout_s)
+                event = self._next_event(max(0.001, close_deadline - time.monotonic()))
                 confirmed = (
                     event.get("event") == "RELEASE"
                     and event.get("status") == "released"
                     and event.get("release_succeeded") is True
                     and event.get("dpu_free_called_once") is True
                 )
-                release = V4Release(
-                    event, confirmed, self._stdout_text(), self._stderr_text()
-                )
             except V4Error:
                 self._poisoned = True
-        if release is None:
+        if confirmed:
+            try:
+                returncode = self.process.wait(
+                    timeout=max(0.001, close_deadline - time.monotonic())
+                )
+                confirmed = returncode == 0
+            except (OSError, subprocess.SubprocessError):
+                confirmed = False
+        if not confirmed:
             self._terminate()
-            release = V4Release({}, False, self._stdout_text(), self._stderr_text())
+        for pump in (self._stdout_pump, self._stderr_pump):
+            pump.thread.join(timeout=max(0.0, close_deadline - time.monotonic()))
+        pumps_finished = all(
+            not pump.thread.is_alive()
+            for pump in (self._stdout_pump, self._stderr_pump)
+        )
+        confirmed = bool(
+            confirmed
+            and pumps_finished
+            and not self._stdout_pump.overflowed
+            and not self._stderr_pump.overflowed
+        )
+        release = self._release_record(event, confirmed)
         self._release = release
         return release
 

@@ -58,6 +58,12 @@ class _Release:
     release_confirmed: bool = True
     stdout: str = ""
     stderr: str = ""
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
+    stdout_total_bytes: int = 0
+    stderr_total_bytes: int = 0
+    stdout_limit_exceeded: bool = False
+    stderr_limit_exceeded: bool = False
     event: dict[str, Any] = field(default_factory=dict)
 
 
@@ -71,6 +77,12 @@ class _FakeSession:
     release_confirmed: bool = True
     stdout: str = ""
     stderr: str = ""
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
+    stdout_total_bytes: int = 0
+    stderr_total_bytes: int = 0
+    stdout_limit_exceeded: bool = False
+    stderr_limit_exceeded: bool = False
     returncode: int | None = 0
     closed: bool = False
     submissions: list[Any] = field(default_factory=list)
@@ -155,6 +167,12 @@ class _FakeSession:
             release_confirmed=self.release_confirmed,
             stdout=self.stdout,
             stderr=self.stderr,
+            stdout_truncated=self.stdout_truncated,
+            stderr_truncated=self.stderr_truncated,
+            stdout_total_bytes=self.stdout_total_bytes,
+            stderr_total_bytes=self.stderr_total_bytes,
+            stdout_limit_exceeded=self.stdout_limit_exceeded,
+            stderr_limit_exceeded=self.stderr_limit_exceeded,
             event={"returncode": self.returncode},
         )
 
@@ -350,6 +368,8 @@ def test_close_retains_bounded_rank_diagnostics_on_success(tmp_path: Path) -> No
     native = session.ranks[0].session
     native.stdout = "native stdout\n"
     native.stderr = "native stderr\n"
+    native.stdout_truncated = True
+    native.stdout_total_bytes = 100_000
     native.returncode = 0
     terminal = session.close()
     assert terminal["native_diagnostics"] == [
@@ -358,6 +378,12 @@ def test_close_retains_bounded_rank_diagnostics_on_success(tmp_path: Path) -> No
             "rank_path": "/dev/dpu_rank0",
             "stdout": "native stdout\n",
             "stderr": "native stderr\n",
+            "stdout_truncated": True,
+            "stderr_truncated": False,
+            "stdout_total_bytes": 100_000,
+            "stderr_total_bytes": 0,
+            "stdout_limit_exceeded": False,
+            "stderr_limit_exceeded": False,
             "returncode": 0,
             "release_confirmed": True,
         }
@@ -380,6 +406,12 @@ def test_close_retains_rank_diagnostics_on_release_failure(tmp_path: Path) -> No
         "rank_path": "/dev/dpu_rank0",
         "stdout": "release stdout\n",
         "stderr": "release stderr\n",
+        "stdout_truncated": False,
+        "stderr_truncated": False,
+        "stdout_total_bytes": 0,
+        "stderr_total_bytes": 0,
+        "stdout_limit_exceeded": False,
+        "stderr_limit_exceeded": False,
         "returncode": 7,
         "release_confirmed": False,
     }
