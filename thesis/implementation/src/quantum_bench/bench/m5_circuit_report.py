@@ -1585,25 +1585,35 @@ def _timing_rows(rows: list[JsonDict]) -> list[JsonDict]:
 
 
 def _transfer_row(row: Mapping[str, Any]) -> JsonDict:
-    transfers = (
-        row.get("transfers") if isinstance(row.get("transfers"), Mapping) else {}
-    )
+    raw_transfers = row.get("transfer", row.get("transfers"))
+    transfers = raw_transfers if isinstance(raw_transfers, Mapping) else {}
     h2d = _float(_first(row, "actual_h2d_bytes", "application_visible_h2d_bytes"))
     d2h = _float(_first(row, "actual_d2h_bytes", "application_visible_d2h_bytes"))
     total = _float(
         _first(row, "actual_transfer_bytes", "application_visible_transfer_bytes")
     )
     if h2d is None:
-        h2d = _float(transfers.get("h2d_bytes"))
+        h2d = _float(_first(transfers, "application_visible_h2d_bytes", "h2d_bytes"))
     if d2h is None:
-        d2h = _float(transfers.get("d2h_bytes"))
+        d2h = _float(_first(transfers, "application_visible_d2h_bytes", "d2h_bytes"))
     if total is None:
-        total = _float(transfers.get("transfer_bytes"))
-    invariant = (
+        total = _float(
+            _first(
+                transfers,
+                "application_visible_transfer_bytes",
+                "transfer_bytes",
+                "total_bytes",
+            )
+        )
+    arithmetic_invariant = (
         h2d is not None
         and d2h is not None
         and total is not None
         and math.isclose(total, h2d + d2h, rel_tol=0, abs_tol=1e-9)
+    )
+    recorded_verification = row.get("transfer_accounting_verified")
+    invariant = arithmetic_invariant and (
+        recorded_verification is True if recorded_verification is not None else True
     )
     return {
         "case_id": _case(row),

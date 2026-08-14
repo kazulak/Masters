@@ -343,6 +343,29 @@ def test_report_preserves_study_timing_field_names(tmp_path: Path) -> None:
     }
 
 
+def test_transfer_table_reads_physical_study_transfer_contract(tmp_path: Path) -> None:
+    row = _row(engine="upmem_m5", runtime=2.0, dpu_count=1)
+    for key in ("actual_h2d_bytes", "actual_d2h_bytes", "actual_transfer_bytes"):
+        row.pop(key)
+    row["transfer"] = {
+        "application_visible_h2d_bytes": 80,
+        "application_visible_d2h_bytes": 20,
+        "application_visible_transfer_bytes": 100,
+    }
+    generate_report([row], tmp_path / "report")
+    transfers = _csv(tmp_path / "report" / "tables" / "transfer_bytes.csv")
+    assert len(transfers) == 1
+    assert float(transfers[0]["h2d_bytes"]) == 80
+    assert float(transfers[0]["d2h_bytes"]) == 20
+    assert float(transfers[0]["transfer_bytes"]) == 100
+    assert transfers[0]["invariant_passed"] == "True"
+
+    row["transfer_accounting_verified"] = False
+    generate_report([row], tmp_path / "unverified-report")
+    unverified = _csv(tmp_path / "unverified-report" / "tables" / "transfer_bytes.csv")
+    assert unverified[0]["invariant_passed"] == "False"
+
+
 def test_cross_algorithm_rows_are_retained_but_not_same_plan_claims(
     tmp_path: Path,
 ) -> None:

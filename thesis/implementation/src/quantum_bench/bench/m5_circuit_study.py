@@ -631,13 +631,40 @@ def _execute_combo(
     timing = metadata.get("timing", {})
     if not isinstance(timing, Mapping):
         timing = {}
-    transfer = metadata.get("transfer", engine_metadata.get("transfer", {}))
-    if not isinstance(transfer, Mapping) or not transfer:
-        transfer = {
-            key: engine_metadata[key]
-            for key in ("h2d_bytes", "d2h_bytes", "transfer_bytes")
-            if key in engine_metadata
-        }
+    raw_transfer = metadata.get("transfer", engine_metadata.get("transfer", {}))
+    transfer = dict(raw_transfer) if isinstance(raw_transfer, Mapping) else {}
+    h2d_bytes = _first_byte_count(
+        transfer,
+        engine_metadata,
+        keys=("application_visible_h2d_bytes", "h2d_bytes"),
+    )
+    d2h_bytes = _first_byte_count(
+        transfer,
+        engine_metadata,
+        keys=("application_visible_d2h_bytes", "d2h_bytes"),
+    )
+    transfer_bytes = _first_byte_count(
+        transfer,
+        engine_metadata,
+        keys=("application_visible_transfer_bytes", "transfer_bytes", "total_bytes"),
+    )
+    transfer_accounting_verified = bool(
+        h2d_bytes is not None
+        and d2h_bytes is not None
+        and transfer_bytes is not None
+        and h2d_bytes >= 0
+        and d2h_bytes >= 0
+        and transfer_bytes == h2d_bytes + d2h_bytes
+    )
+    if h2d_bytes is not None:
+        transfer["application_visible_h2d_bytes"] = h2d_bytes
+        transfer["h2d_bytes"] = h2d_bytes
+    if d2h_bytes is not None:
+        transfer["application_visible_d2h_bytes"] = d2h_bytes
+        transfer["d2h_bytes"] = d2h_bytes
+    if transfer_bytes is not None:
+        transfer["application_visible_transfer_bytes"] = transfer_bytes
+        transfer["transfer_bytes"] = transfer_bytes
     measurement_repetitions_sufficient = (
         config["warmups"] >= 1 and config["repeats"] >= 3
     )
@@ -645,15 +672,6 @@ def _execute_combo(
     exact_once = set(metadata.get("executed_order", ())) == {
         task.id for task in planned.graph.tasks
     } and len(metadata.get("executed_order", ())) == len(planned.graph.tasks)
-    hardware_speedup_applicable = bool(
-        topology.backend != "cpu"
-        and hardware["verified"]
-        and measurement_repetitions_sufficient
-        and not failed_validation
-        and exact_once
-        and not bool(engine_metadata.get("cpu_fallback_used", False))
-        and not bool(engine_metadata.get("simulator_kernel_executed", False))
-    )
     timing_breakdown = {
         stage: value
         for stage, aliases in {
@@ -669,6 +687,18 @@ def _execute_combo(
         if (value := _first_number(metadata, timing, engine_metadata, keys=aliases))
         is not None
     }
+    physical_timing_complete = _physical_timing_complete(timing_breakdown)
+    hardware_speedup_applicable = bool(
+        topology.backend != "cpu"
+        and hardware["verified"]
+        and measurement_repetitions_sufficient
+        and not failed_validation
+        and exact_once
+        and transfer_accounting_verified
+        and physical_timing_complete
+        and not bool(engine_metadata.get("cpu_fallback_used", False))
+        and not bool(engine_metadata.get("simulator_kernel_executed", False))
+    )
     return {
         "status": "failed" if failed_validation or hardware_failure else "completed",
         "support_status": "supported",
@@ -755,6 +785,10 @@ def _execute_combo(
         "observed_tasklets_per_dpu": engine_metadata.get(
             "observed_tasklets_per_dpu", engine_metadata.get("tasklets_per_dpu")
         ),
+        "application_visible_h2d_bytes": h2d_bytes,
+        "application_visible_d2h_bytes": d2h_bytes,
+        "application_visible_transfer_bytes": transfer_bytes,
+        "transfer_accounting_verified": transfer_accounting_verified,
         "transfer": dict(transfer),
         "engine_metadata": engine_metadata,
         "energy_joules": None,
@@ -866,6 +900,10 @@ def _row_base(
         "d2h_time_s": None,
         "host_quantization_time_s": None,
         "host_dequantization_time_s": None,
+        "application_visible_h2d_bytes": None,
+        "application_visible_d2h_bytes": None,
+        "application_visible_transfer_bytes": None,
+        "transfer_accounting_verified": False,
         "timing_breakdown": {},
         "outer_elapsed_s": None,
         "energy_joules": None,
@@ -1110,9 +1148,24 @@ def _engine_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
                     or key.endswith("executed")
                     or key.endswith("verified")
                 ) and isinstance(value, bool):
-                    boolean_any[key] = boolean_any.get(key, False) or value
+                    existing = result.get(key)
+                    boolean_any[key] = (
+                        boolean_any.get(key, False)
+                        or (existing if isinstance(existing, bool) else False)
+                        or value
+                    )
                 if key in identity_keys and value is not None:
                     result.setdefault(key, value)
+            nested_timing = item.get("timing")
+            if isinstance(nested_timing, Mapping):
+                for key, value in nested_timing.items():
+                    if (
+                        key.endswith("_s")
+                        and key not in item
+                        and isinstance(value, (int, float))
+                        and not isinstance(value, bool)
+                    ):
+                        timing_totals[key] = timing_totals.get(key, 0.0) + float(value)
     result.update(byte_totals)
     result.update(timing_totals)
     result.update(boolean_any)
@@ -1281,6 +1334,32 @@ def _first_number(*sources: Mapping[str, Any], keys: Iterable[str]) -> float | N
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 return float(value)
     return None
+
+
+def _first_byte_count(*sources: Mapping[str, Any], keys: Iterable[str]) -> int | None:
+    for source in sources:
+        for key in keys:
+            if key not in source:
+                continue
+            value = source[key]
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return None
+            number = float(value)
+            if not np.isfinite(number) or number < 0 or not number.is_integer():
+                return None
+            return int(value)
+    return None
+
+
+def _physical_timing_complete(timing: Mapping[str, Any]) -> bool:
+    required = ("h2d_time_s", "kernel_time_s", "d2h_time_s")
+    return all(
+        isinstance(timing.get(key), (int, float))
+        and not isinstance(timing.get(key), bool)
+        and np.isfinite(float(timing[key]))
+        and float(timing[key]) >= 0.0
+        for key in required
+    )
 
 
 def _array_hash(array: np.ndarray) -> str:

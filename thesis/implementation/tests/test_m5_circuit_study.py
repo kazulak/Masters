@@ -9,8 +9,11 @@ import yaml
 
 from quantum_bench.bench.m5_circuit_study import (
     DEFAULT_TOLERANCES,
+    _engine_metadata,
     _executor_config_hash,
+    _first_byte_count,
     _is_quantized_policy,
+    _physical_timing_complete,
     _policy,
     _validation,
     load_study_config,
@@ -130,11 +133,19 @@ class _VerifiedPhysicalEngine(NumpyCpuEngine):
                         "session_protocol": "test-session-v1",
                         "dispatch_mode": "bulk-synchronous",
                         "kernel_identity": "test-kernel-v1",
-                        "h2d_bytes": 2,
-                        "d2h_bytes": 3,
-                        "h2d_time_s": 0.01,
-                        "kernel_time_s": 0.02,
-                        "d2h_time_s": 0.03,
+                        "application_visible_h2d_bytes": 2,
+                        "application_visible_d2h_bytes": 3,
+                        "application_visible_transfer_bytes": 5,
+                        "timing": {
+                            "h2d_time_s": 0.01,
+                            "kernel_time_s": 0.02,
+                            "d2h_time_s": 0.03,
+                            "host_quantization_time_s": 0.04,
+                            "host_dequantization_time_s": 0.05,
+                        },
+                        # The physical engine currently exposes host conversion
+                        # times both directly and in its nested timing object.
+                        # Aggregation must count each stage once.
                         "host_quantization_time_s": 0.04,
                         "host_dequantization_time_s": 0.05,
                         "request_level_speedup_applicable": False,
@@ -311,8 +322,21 @@ def test_physical_success_requires_native_metadata_and_sums_task_bytes(
     assert all(row["allocated_dpu_count"] == 2 for row in rows)
     assert all(row["observed_tasklets_per_dpu"] == 1 for row in rows)
     assert len({row["executor_config_hash"] for row in rows}) == 1
-    assert rows[0]["engine_metadata"]["h2d_bytes"] == 6
-    assert rows[0]["engine_metadata"]["d2h_bytes"] == 9
+    assert rows[0]["engine_metadata"]["application_visible_h2d_bytes"] == 6
+    assert rows[0]["engine_metadata"]["application_visible_d2h_bytes"] == 9
+    assert rows[0]["engine_metadata"]["application_visible_transfer_bytes"] == 15
+    assert rows[0]["application_visible_h2d_bytes"] == 6
+    assert rows[0]["application_visible_d2h_bytes"] == 9
+    assert rows[0]["application_visible_transfer_bytes"] == 15
+    assert rows[0]["transfer"] == {
+        "application_visible_h2d_bytes": 6,
+        "h2d_bytes": 6,
+        "application_visible_d2h_bytes": 9,
+        "d2h_bytes": 9,
+        "application_visible_transfer_bytes": 15,
+        "transfer_bytes": 15,
+    }
+    assert rows[0]["transfer_accounting_verified"] is True
     assert rows[0]["h2d_time_s"] == pytest.approx(0.03)
     assert rows[0]["kernel_time_s"] == pytest.approx(0.06)
     assert rows[0]["d2h_time_s"] == pytest.approx(0.09)
@@ -350,6 +374,35 @@ def test_repeated_verified_physical_route_is_admitted_only_at_study_level(
         )
         for row in rows
     )
+
+
+def test_physical_evidence_helpers_reject_unsafe_values() -> None:
+    assert _first_byte_count({"h2d_bytes": 8}, keys=("h2d_bytes",)) == 8
+    assert _first_byte_count({"h2d_bytes": 1.5}, keys=("h2d_bytes",)) is None
+    assert _first_byte_count({"h2d_bytes": -1}, keys=("h2d_bytes",)) is None
+    assert _first_byte_count({"h2d_bytes": True}, keys=("h2d_bytes",)) is None
+
+    valid = {"h2d_time_s": 0.1, "kernel_time_s": 0.2, "d2h_time_s": 0.3}
+    assert _physical_timing_complete(valid)
+    for invalid in (-1.0, float("nan"), float("inf"), True):
+        assert not _physical_timing_complete({**valid, "kernel_time_s": invalid})
+
+
+def test_engine_metadata_preserves_session_level_fallback_flags() -> None:
+    result = _engine_metadata(
+        {
+            "cpu_fallback_used": True,
+            "simulator_kernel_executed": True,
+            "task_metrics": (
+                {
+                    "cpu_fallback_used": False,
+                    "simulator_kernel_executed": False,
+                },
+            ),
+        }
+    )
+    assert result["cpu_fallback_used"] is True
+    assert result["simulator_kernel_executed"] is True
 
 
 def test_physical_topology_without_rank_paths_is_rejected(tmp_path: Path) -> None:
