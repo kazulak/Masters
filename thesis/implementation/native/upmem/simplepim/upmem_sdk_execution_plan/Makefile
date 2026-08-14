@@ -29,9 +29,17 @@ V3_ROUTE_ID := upmem_tn_hardware_taskgraph_resident
 V3_BACKEND_ID := upmem_sdk_hardware_taskgraph_resident
 V3_PROFILE_VERSION := hardware_taskgraph_distributed_single_contraction_m5_v3
 V3_RESIDENT_DEFINES := -DRESIDENT_ROUTE_ID=\"$(V3_ROUTE_ID)\" -DRESIDENT_BACKEND_ID=\"$(V3_BACKEND_ID)\" -DRESIDENT_PROFILE_VERSION=\"$(V3_PROFILE_VERSION)\"
+V4_MAX_DPUS := 64
+V4_MAX_TASKLETS := 24
+V4_MRAM_POOL_BYTES := 524288
+V4_ROUTE_ID := upmem_tn_hardware_taskgraph_tile_session_v4
+V4_BACKEND_ID := upmem_sdk_hardware_taskgraph_tile_session_v4
+V4_PROFILE_VERSION := hardware_taskgraph_output_tile_session_m5_5_v1
+V4_RESIDENT_DEFINES := -DRESIDENT_V3=1 -DRESIDENT_PACKAGE_ABI_VERSION=3 -DRESIDENT_OPERATION_ABI_VERSION=2 -DRESIDENT_COMPLETION_VERSION=3 -DRESIDENT_ROUTE_ID=\"$(V4_ROUTE_ID)\" -DRESIDENT_BACKEND_ID=\"$(V4_BACKEND_ID)\" -DRESIDENT_PROFILE_VERSION=\"$(V4_PROFILE_VERSION)\"
 
 V3_GOAL := $(filter v3 bin/host_upmem_execution_plan_v3_t% bin/dpu_resident_v3_t%,$(MAKECMDGOALS))
-ifeq ($(V3_GOAL),)
+V4_GOAL := $(filter v4 bin/host_upmem_execution_plan_v4_t% bin/dpu_gemm_tile_v4_t%,$(MAKECMDGOALS))
+ifeq ($(V3_GOAL)$(V4_GOAL),)
 ifneq ($(NR_TASKLETS),1)
 $(error v1/v2 execution-plan targets require NR_TASKLETS=1; use the v3 target for configurable tasklets)
 endif
@@ -43,7 +51,7 @@ ifneq ($(RESIDENT_COMPLETION_VERSION),2)
 $(error execution-plan profile requires RESIDENT_COMPLETION_VERSION=2)
 endif
 
-.PHONY: all simplepim-stage v2 v3 clean
+.PHONY: all simplepim-stage v2 v3 v4 clean
 
 all: bin/host_upmem_execution_plan bin/dpu_resident bin/host_upmem_execution_plan_v2 bin/dpu_resident_v2 bin/dpu_simplepim_management_init
 
@@ -88,11 +96,23 @@ v3:
 	@test "$(NR_TASKLETS)" -ge 1 -a "$(NR_TASKLETS)" -le 24 || { echo "v3 requires NR_TASKLETS in [1,24]" >&2; exit 1; }
 	$(MAKE) bin/host_upmem_execution_plan_v3_t$(NR_TASKLETS) bin/dpu_resident_v3_t$(NR_TASKLETS) bin/dpu_simplepim_management_init NR_TASKLETS=$(NR_TASKLETS) MAX_ELEMS=$(V3_MAX_ELEMS) RESIDENT_MRAM_POOL_BYTES=$(V3_MRAM_POOL_BYTES) RESIDENT_OUTPUT_TILE_ELEMS=$(V3_OUTPUT_TILE_ELEMS)
 
+v4:
+	@test "$(NR_TASKLETS)" -ge 1 -a "$(NR_TASKLETS)" -le $(V4_MAX_TASKLETS) || { echo "v4 requires NR_TASKLETS in [1,24]" >&2; exit 1; }
+	$(MAKE) bin/host_upmem_execution_plan_v4_t$(NR_TASKLETS) bin/dpu_gemm_tile_v4_t$(NR_TASKLETS) bin/dpu_simplepim_management_init NR_TASKLETS=$(NR_TASKLETS)
+
 bin/dpu_resident_v3_t%: $(SIMPLEPIM_SOURCE_DIR)/../upmem_sdk_generic_loop_resident/dpu.c $(SIMPLEPIM_SOURCE_DIR)/../upmem_sdk_generic_loop_resident/common.h | bin
 	$(DPU_CC) -O2 -DRESIDENT_V3=1 -DRESIDENT_PACKAGE_ABI_VERSION=3 -DRESIDENT_OPERATION_ABI_VERSION=2 -DRESIDENT_COMPLETION_VERSION=3 -DNR_TASKLETS=$* -DUPMEM_GENERIC_HARDWARE_MVP=$(UPMEM_GENERIC_HARDWARE_MVP) -DUPMEM_GENERIC_MAX_RANK=$(MAX_RANK) -DUPMEM_GENERIC_MAX_ELEMS=$(V3_MAX_ELEMS) -DRESIDENT_MAX_LOGICAL_TASKS=$(RESIDENT_MAX_LOGICAL_TASKS) -DRESIDENT_MAX_COMPONENT_OPS=$(RESIDENT_MAX_COMPONENT_OPS) -DRESIDENT_MAX_SLOT_DESCRIPTORS=$(RESIDENT_MAX_SLOT_DESCRIPTORS) -DRESIDENT_MRAM_POOL_BYTES=$(V3_MRAM_POOL_BYTES) -DRESIDENT_OUTPUT_TILE_ELEMS=$(V3_OUTPUT_TILE_ELEMS) -o $@ $<
 
 bin/host_upmem_execution_plan_v3_t%: host_v3.c distributed_plan_v3.c distributed_plan_v3.h execution_plan_v3_common.h execution_plan_v2_common.h execution_plan_common.h execution_plan_provider.c execution_plan_provider.h plan_request.c plan_request.h plan_schedule.c plan_schedule.h distributed_plan_v2.c distributed_plan_v2.h $(SIMPLEPIM_SOURCE_DIR)/../upmem_sdk_generic_loop_resident/session_protocol.c $(SIMPLEPIM_SOURCE_DIR)/../upmem_sdk_generic_loop_resident/session_protocol.h $(SIMPLEPIM_SOURCE_DIR)/../upmem_sdk_generic_loop_resident/common.h $(SIMPLEPIM_STAGE_MARKER) | bin
 	$(HOST_CC) -std=c99 -O2 -Wall -Wextra -D_POSIX_C_SOURCE=200809L -DRESIDENT_V3=1 -DRESIDENT_PACKAGE_ABI_VERSION=3 -DRESIDENT_OPERATION_ABI_VERSION=2 -DRESIDENT_COMPLETION_VERSION=3 $(V3_RESIDENT_DEFINES) -DNR_TASKLETS=$* -DUPMEM_GENERIC_HARDWARE_MVP=$(UPMEM_GENERIC_HARDWARE_MVP) -DUPMEM_GENERIC_MAX_RANK=$(MAX_RANK) -DUPMEM_GENERIC_MAX_ELEMS=$(V3_MAX_ELEMS) -DRESIDENT_MAX_LOGICAL_TASKS=$(RESIDENT_MAX_LOGICAL_TASKS) -DRESIDENT_MAX_COMPONENT_OPS=$(RESIDENT_MAX_COMPONENT_OPS) -DRESIDENT_MAX_SLOT_DESCRIPTORS=$(RESIDENT_MAX_SLOT_DESCRIPTORS) -DRESIDENT_MRAM_POOL_BYTES=$(V3_MRAM_POOL_BYTES) -DRESIDENT_OUTPUT_TILE_ELEMS=$(V3_OUTPUT_TILE_ELEMS) -I$(SIMPLEPIM_STAGE)/lib/management -o $@ host_v3.c distributed_plan_v3.c plan_request.c plan_schedule.c distributed_plan_v2.c execution_plan_provider.c $(SIMPLEPIM_SOURCE_DIR)/../upmem_sdk_generic_loop_resident/session_protocol.c $(SIMPLEPIM_MANAGEMENT_C) $(SIMPLEPIM_SMALLTABLE_C) $$(dpu-pkg-config --cflags --libs dpu) -ldl
+
+bin/dpu_gemm_tile_v4_t%: dpu_gemm_tile_v4.c execution_plan_v4_common.h | bin
+	@test "$*" -ge 1 -a "$*" -le $(V4_MAX_TASKLETS) || { echo "v4 DPU binary requires tasklets in [1,24]" >&2; exit 1; }
+	$(DPU_CC) -O2 -DNR_TASKLETS=$* -o $@ $<
+
+bin/host_upmem_execution_plan_v4_t%: host_v4_session.c plan_request_v4.c plan_request_v4.h distributed_plan_v4.c distributed_plan_v4.h execution_plan_v4_common.h execution_plan_provider.c execution_plan_provider.h plan_schedule.c plan_schedule.h execution_plan_common.h $(SIMPLEPIM_STAGE_MARKER) | bin
+	@test "$*" -ge 1 -a "$*" -le $(V4_MAX_TASKLETS) || { echo "v4 host binary requires tasklets in [1,24]" >&2; exit 1; }
+	$(HOST_CC) -std=c99 -O2 -Wall -Wextra -D_POSIX_C_SOURCE=200809L $(V4_RESIDENT_DEFINES) -DNR_TASKLETS=$* -DUPMEM_GENERIC_HARDWARE_MVP=$(UPMEM_GENERIC_HARDWARE_MVP) -DUPMEM_GENERIC_MAX_RANK=$(MAX_RANK) -DUPMEM_GENERIC_MAX_ELEMS=65536 -DRESIDENT_MAX_LOGICAL_TASKS=$(RESIDENT_MAX_LOGICAL_TASKS) -DRESIDENT_MAX_COMPONENT_OPS=$(RESIDENT_MAX_COMPONENT_OPS) -DRESIDENT_MAX_SLOT_DESCRIPTORS=$(RESIDENT_MAX_SLOT_DESCRIPTORS) -DRESIDENT_MRAM_POOL_BYTES=$(V4_MRAM_POOL_BYTES) -DRESIDENT_OUTPUT_TILE_ELEMS=2 -I$(SIMPLEPIM_STAGE)/lib/management -o $@ host_v4_session.c plan_request_v4.c distributed_plan_v4.c plan_schedule.c execution_plan_provider.c $(SIMPLEPIM_MANAGEMENT_C) $(SIMPLEPIM_SMALLTABLE_C) $$(dpu-pkg-config --cflags --libs dpu) -ldl
 
 clean:
 	rm -rf bin build/simplepim_execution_plan
