@@ -1,399 +1,146 @@
 # UPMEM Tensor-Network Quantum Simulation
 
-This directory is the active thesis implementation. Its research question is:
+This directory is the active implementation for the thesis. It is a research
+system, not a production simulator. Its purpose is to execute and compare
+explicit tensor-network contraction routes while keeping circuit semantics,
+contraction plans, executors, measurements, and claim boundaries separate.
 
-> Can quantum-circuit tensor-network contraction be mapped to UPMEM PIM in a
-> way that is correct, measurable, and eventually faster on real DPU hardware?
+```text
+quantum circuit
+  -> tensor network
+  -> contraction planner
+  -> immutable TaskGraph
+  -> selected route modules
+  -> CPU / GPU / UPMEM executor
+  -> normalized records
+  -> tables and plots
+```
 
-The current code establishes the circuit-to-TN-to-TaskGraph pipeline, serious
-CPU and GPU baselines, bounded UPMEM SDK-simulator execution, and additive
-whole-circuit M5.5 execution through interchangeable same-plan CPU and
-physical UPMEM engines. M5.5 is the current implementation baseline and its
-canonical, scaling, and large-boundary profiles have passed their physical ETH
-development contracts. It does **not** yet claim UPMEM speedup over CPU/GPU,
-energy efficiency, or a fully general UPMEM tensor contraction architecture.
+## What Is Active
 
-The active physical evidence is a sequence of bounded qualification lanes. M2.1
-useful-slice execution, M2.2 float32/requantized execution, M2.3 two-path/two-
-numeric-mode execution, M3.1 two-wave frontier dispatch, and M4.2--M4.4
-SimplePIM lanes have passed their declared physical functionality checks on ETH.
-These are separate fixtures and adapters, not one general executor. The M2
-sliced-resident foundation remains documented in the [M2 ETH runbook](docs/upmem_hardware_sliced_resident_mvp_runbook.md),
-and the M4 lanes are documented in their individual runbooks. None of these
-results supports a speedup, energy, scaling, or general-TaskGraph claim.
+The current whole-circuit lane is **M5.5**. It lowers a circuit to a hashed
+TaskGraph, runs a NumPy same-plan CPU reference or the bounded physical UPMEM
+v4 engine, and writes normalized records. The physical route uses explicit
+ranks, bulk request launches, and host-packed int8 or float32 numeric modes.
+It keeps the plan fixed while route dimensions change.
 
-The previous one-DPU MRAM-resident route remains readable as historical context.
-Dense, legacy generic/persistent, CPU frontier/hybrid, PIM bridge/frontier, and
-external-library probe artifacts are historical only. Their normalized readers,
-route labels, tables, plots, and snapshot compatibility remain available for
-existing evidence.
+M5.5 has passed bounded ETH development contracts for canonical, scaling, and
+large-boundary profiles. It supports same-plan functionality and timing
+evidence only within its recorded admission rules. It does **not** establish
+general UPMEM acceleration over CPU/GPU, energy efficiency, fully active
+scaling beyond the recorded active-DPU limits, graph-wide DPU residency,
+PID-Comm, ATiM, or a complete multi-DIMM architecture.
 
-The historical status applies to those old runnable experiments, not to the
-target architecture. SimplePIM is physically qualified for the bounded
-management/operator lanes demonstrated by M4.2--M4.4. M4.5 is physically
-accepted on ETH for its bounded functionality contract: one resident package
-is used with separate one-DPU and two-DPU schedules, producing 3 and 2 waves;
-SimplePIM handles management/allocation, the thesis resident kernel handles
-contraction, and the host performs the one two-DPU handoff. Each session
-validates one final output against the CPU reference, with no simulator or CPU
-fallback. The tracked M4.5 evidence capsule is
-[thesis_results/physical_simplepim_taskgraph_m4_5](thesis_results/physical_simplepim_taskgraph_m4_5).
-The route remains functionality evidence only: it makes no timing, speedup,
-scaling, energy, or general tensor-network performance claim. PID-Comm, ATiM,
-and SparseP remain subsequent provider/kernel/communication components behind
-thesis-owned interfaces. The later M4.6, M5.1, and M5.2 observations below are
-audited development runs copied from ETH, not promoted or tracked thesis
-results. M5.4/v3 remains a frozen, replayable single-contraction compatibility
-surface. M5.5 is the additive whole-circuit implementation baseline described
-below. Its three physical profiles passed on clean source `b550c46`, while the
-raw development evidence remains in ignored `runs/` and is not promoted or
-tracked as thesis results.
-For M5 v3, SimplePIM's role is
-`initialization_binary_and_management_state_only`. Allocation, transfer, and
-launch use the thesis-owned raw synchronous UPMEM SDK route. The thesis-owned C
-kernel performs the contraction and the host performs the `float64` reduction;
-none of these are SimplePIM compute operators.
+Supported execution families are:
 
-Start with [ARCHITECTURE.md](ARCHITECTURE.md) for module ownership, external
-provenance, thesis contributions, and the planned UPMEM architecture. The fixed
-benchmark matrix is in [THESIS_BENCHMARK_MATRIX.md](THESIS_BENCHMARK_MATRIX.md).
-The SLR-derived long-term implementation sequence and completion criteria are
-in [docs/slr_architecture_implementation_roadmap.md](docs/slr_architecture_implementation_roadmap.md).
-The earlier ETH observations are consolidated in the
-[M4/M5 physical development acceptance record](docs/m4_m5_physical_acceptance.md).
-M5.5 commands, observations, and claim limits are in its
-[whole-circuit runbook](docs/upmem_m5_5_whole_circuit_runbook.md). These are
-development records, not promoted thesis results.
-
-## Current Milestone Status
-
-This is the authoritative current status table. SimplePIM remains central to
-the implementation, and M4.5 is the current accepted SimplePIM-managed
-baseline.
-
-| Milestone | Current status | Boundary or next gate |
+| Family | Purpose | Comparison boundary |
 | --- | --- | --- |
-| M4.1 | Physically accepted | Bounded physical qualification; no general executor or performance claim. |
-| M4.2 | Physically accepted | SimplePIM rank-1 operator qualification. |
-| M4.3 | Physically accepted | TaskGraph-derived SimplePIM operand adapter. |
-| M4.4 | Physically accepted | Bounded persistent SimplePIM-managed operator chain. |
-| M4.5 | Physically accepted; current baseline | SimplePIM-managed descriptor-driven shared runtime with bounded one- and two-DPU functionality. |
-| M4.6 | Physically validated development run | One physical DPU, tasklets `1/2/4/8/16`, 12 small circuit cases, two path variants, two numeric modes, and 7 repeats per configuration. All 1680 rows passed validation; functionality and diagnostic tasklet evidence only. |
-| M5.1 | Physically validated bounded probe | One bounded real `float32` contraction on 1/2/4 DPUs with exclusive output-tile ownership. Exact CPU agreement; SimplePIM management plus thesis-owned kernel; one repetition and zero warmups; functionality only. |
-| M5.2 | Physically validated bounded probe | The same contraction on 1/2/4 DPUs with contracted-axis partials and deterministic `host_mediated_sum_v1` reduction. Maximum absolute error `2.98e-08`; one repetition and zero warmups; functionality only. |
-| M5 execution-plan-v3 | Physically accepted bounded development study | One-rank, one selected ETH rank, DPU counts 1/2/4/8/16/32/64, tasklets 8, 5 workloads, float32/int8 modes, output/contracted partitions, 2 warmups and 7 measured repeats. The 140-cell matrix produced 644 measured rows and 48 partition-incompatible unsupported rows, with 0 failures. Same-route diagnostics only; no broad performance claim. |
-| M5.4 | Physically accepted bounded development study; current corrected lane | Source `eef42e4`: bulk set launch plus host-packed int8 transport on one selected rank, DPU counts 1/2/4/8/16/32/64, tasklets 8, 5 workloads, two partitions, 2 warmups and 7 measured repeats. All 10 acceptance criteria passed; 644 measured rows, 48 explicit unsupported rows, and 0 failed rows. The historical M5 route remains unchanged. |
-| M5.5 | Physically accepted development baseline | Clean source `b550c46`: canonical `1008/1008` and scaling `80/80` rows completed; the large profile produced 96 completed and 24 explicit 30q resource-limit rows with 0 failures. Fully active same-plan DPU scaling is valid through 16 DPUs; larger provisioned scaling rows were not fully active. The large profile used all 64 allocated DPUs but is a one-repeat boundary study. Whole-graph intermediates remain host-managed. |
-| M5.3 | Blocked before physical execution | PID-Comm compile/link qualification is blocked under ETH SDK 2023.1 by missing `dpu_alloc_comm`, `DPU_FOREACH_ENTANGLED_GROUP`, and old PID-Comm API/source macros. No fallback and no physical PID-Comm execution. |
+| QuEST CPU/GPU full state | Serious full-state baseline | Same algorithm family; GPU requires a verified physical backend. |
+| Quimb/cotengra CPU TN | Serious external TN baseline | Cross-implementation and generally cross-plan context. |
+| Internal NumPy TaskGraph | Same-plan CPU reference | Direct reference for internal UPMEM routes. |
+| UPMEM SDK simulator | Contract and boundary validation | Never hardware-performance evidence. |
+| Physical UPMEM M5.5 | Bounded same-plan whole-circuit route | Requires explicit hardware admission; no fallback. |
 
-M4.1--M5.2 are bounded physical functionality milestones, not a claim of
-complete M4/M5 architecture, general distributed TN execution, performance,
-speedup, energy, or scaling. The M4.6 development sweep showed a small-workload
-tasklet optimum near 8 tasklets with lower efficiency at 16; this observation is
-not a final benchmark result. M5 execution-plan-v3 is an additive physical
-development study; its measured ratios are descriptive within-route evidence
-and do not establish general physical performance or acceleration. M5.4 is the
-current corrected one-rank lane: its same-route scaling and numeric-transport
-diagnostics passed their explicit acceptance thresholds, but remain bounded
-single-contraction observations rather than CPU/GPU speedup or general TN
-architecture evidence. M5.5 is the current whole-circuit development lane and
-has passed its bounded physical development contracts. Its canonical size
-curves use a fixed eight-DPU allocation with workload-dependent active DPU
-counts; the separate scaling profile supports a fully active scaling claim only
-through 16 DPUs. It has no CPU/GPU speedup or energy claim.
+A route is selected before preparation. Its tensor-network and planner roles
+produce the immutable TaskGraph; M5 then executes that graph through one
+verified CPU or UPMEM executor profile. Numeric and topology choices are
+selected route dimensions. Kernel, partitioning, scheduling, and communication
+are fixed profile declarations today, verified against observed native metadata
+for physical rows; future engines may make them selectable. A numeric policy
+must not silently change the contraction plan.
 
-Physical ETH runs require an explicit rank selection. Use a healthy rank chosen
-on the server, for example:
+## Start Here
 
-```bash
-UPMEM_HW_RANK_PATH=/dev/dpu_rank1 \
-UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-m4-6-tasklet-scaling
-UPMEM_HW_RANK_PATH=/dev/dpu_rank1 \
-UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-m5-1
-UPMEM_HW_RANK_PATH=/dev/dpu_rank1 \
-UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-m5-2
-
-# Additive M5 execution-plan-v3 physical development study.
-UPMEM_HW_RANK_PATH=/dev/dpu_rank1 \
-UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-m5
-
-# Corrected M5.4: run the 1/2/4/8-DPU gate before the full matrix.
-make upmem-hw-m5-4-plan
-UPMEM_HW_RANK_PATH=/dev/dpu_rank1 \
-UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-hw-m5-4-smoke
-
-# Additive M5.5 whole-circuit baseline; see its runbook for staged profiles.
-make m5-circuit-plan
-UPMEM_HW_RANK_PATH=/dev/dpu_rank1 \
-UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make m5-circuit-smoke
-```
-
-The corrected procedure and acceptance thresholds are in
-[docs/upmem_m5_4_runbook.md](docs/upmem_m5_4_runbook.md).
-
-The exact hardware-free preparation check for the new lane is:
-
-```bash
-UPMEM_HW_M5_DPU_COUNTS=3 UPMEM_HW_M5_TASKLETS=3 make upmem-hw-m5-plan
-```
-
-It prepares the configured plan set, preserves unsupported cases, reports
-failures explicitly, and performs no DPU allocation or launch. The audited
-source revision is `5401597fdc2458087e112f5bd2e1869a5a0a5ab0` with a clean
-worktree. The ETH run was
-`runs/evidence/upmem_hardware_distributed_m5/upmem_hw_m5/2026-08-13_15-01-11`;
-the local ignored copy is
-`runs/inbox/eth/m5_v3/canonical-2026-08-13_15-01-11`, and the fixed report is
-`runs/comparisons/upmem_m5/2026-08-13_16-29-36_450221`. The normalized-record
-hash is `1a7714b8dce25b0b0959ed08cae73aaf47e6d7084b90200d4895bf4c521202a0` and
-the suite hash is `e71ec4518a99a8c7f463926da845b1c67bef7242c72233c0c0cfdc107177e26c`.
-All physical/provider/rank/allocation/kernel/release/no-fallback/transfer/
-validation checks passed; the report is complete and all nine plots and table
-hashes are valid. This is development acceptance only, not a promoted result.
-
-The runner records the requested rank path and effective SDK profile. These
-fields document selection, not an independent observation of the physical rank.
-On the 2026-08-11 ETH host, `/dev/dpu_rank0` failed vendor diagnostics while
-ranks 1, 20, and 39 passed; this is an environment observation, not a software
-performance conclusion.
+- [Architecture](ARCHITECTURE.md): active layers, ownership, and claim
+  boundaries.
+- [Pipeline contract](docs/PIPELINE_CONTRACT.md): concrete symbols, inputs,
+  outputs, parameters, hashes, mutable state, and adapter limits.
+- [Benchmark matrix](THESIS_BENCHMARK_MATRIX.md): thesis comparisons and
+  required measurements.
+- [M5.5 runbook](docs/upmem_m5_5_whole_circuit_runbook.md): current ETH
+  whole-circuit procedure and physical acceptance rules.
+- [Documentation index](docs/README.md): active references and historical
+  compatibility material.
 
 ## Setup
 
-From `thesis/implementation`:
+From this directory, with `uv` available:
 
 ```bash
-# Requires uv. It creates/reuses ../.venv with .python-version, installs
-# constrained dev dependencies, initializes submodules, then runs doctor.
 make setup
-```
-
-`make setup` refuses to replace an existing incompatible environment. Its
-diagnostic prints the exact environment path; remove that path explicitly only
-when you intend to rebuild it.
-
-Run tests:
-
-```bash
+make doctor
 make test
 ```
 
-## Thesis Workflow
+`make setup` creates or reuses the repository-managed parent environment
+`../.venv`, installs constrained dependencies, initializes submodules, builds
+the CPU QuEST runner, and runs the doctor. Do not substitute system Python for
+the documented workflow.
 
-The Makefile is the public execution surface.
+## Primary Commands
 
 ```bash
-# 1. Run the complete local research matrix.
-# Use the physical-core count printed by `make doctor`.
-BENCH_CPU_THREADS=6 make thesis-run
+# Local baseline matrix. Use the physical-core count printed by make doctor.
+BENCH_CPU_THREADS=<physical-cores> make thesis-run
 
-# 2. Inspect generated evidence and comparisons.
-make list-runs
-
-# 3. Reserved for the post-M9 reviewed evidence freeze; do not promote
-#    development evidence during M0--M8.
-make thesis-promote
-
-# 4. Verify or regenerate tables and plots without rerunning benchmarks.
+# Verify or regenerate the tracked snapshot without rerunning benchmarks.
 make thesis-verify
 make thesis-report
 
-# 5. Preview stale generated runs, then remove them after promotion succeeds.
-make thesis-clean
-make thesis-clean APPLY=1
+# Prepare M5.5 without allocating or launching a DPU.
+make m5-circuit-plan
 
-# Optional immutable named thesis milestone.
-make thesis-release NAME=upmem-baseline-v1
-```
+# Execute one CPU-only route locally; no hardware environment is required.
+M5_CIRCUIT_ROUTES=opt_einsum_greedy__float32_real__numpy_cpu \
+make m5-circuit-smoke
 
-`make thesis-run` requires an explicit physical-core count, fixes the OpenMP,
-OpenBLAS, MKL, and NumExpr thread settings for every subprocess, runs fixed
-suite files, and saves every execution automatically. No run path needs to be
-copied manually.
+# Run the small physical M5.5 acceptance profile.
+UPMEM_ALLOW_PHYSICAL_HARDWARE=1 \
+UPMEM_HW_RANK_PATH=/dev/dpu_rankN \
+make m5-circuit-smoke
 
-The long run includes:
+# Run a selected M5.5 suite on explicit physical ranks.
+UPMEM_ALLOW_PHYSICAL_HARDWARE=1 \
+UPMEM_HW_RANK_PATH=/dev/dpu_rankN \
+M5_CIRCUIT_SUITE=configs/suites/m5_circuit_canonical.yml \
+make m5-circuit-study
 
-- QuEST CPU/GPU correctness evidence;
-- QuEST CPU/GPU 8--20q performance evidence across seven sizes;
-- QuEST CPU plus Quimb unsliced/sliced 8--20q CPU TN evidence;
-- same-path float64/int8 internal TaskGraph replay for quantization attribution;
-- modeled `opt_einsum` contraction-path candidates with UPMEM pressure scores;
-- strict generic UPMEM SDK-simulator float32/int8 boundary evidence;
-- modeled TaskGraph scheduling and multi-DPU planning primitives, clearly
-  excluded from executed serious baselines.
+# Report an existing M5.5 run without repeating hardware execution.
+M5_CIRCUIT_RUN=runs/evidence/<study>/m5_circuit_study/<timestamp> \
+make m5-circuit-report
 
-The separate M1 provider qualification workflow is documented in the
-[UPMEM provider qualification runbook](docs/upmem_provider_qualification_runbook.md).
-The SimplePIM physical probe passed its bounded functionality contract. The
-broader M1 gate remains incomplete because PID-Comm, ATiM, and SparseP have not
-yet passed their provider-specific physical qualification lanes.
-
-GPU execution requires a GPU-visible shell. On the local AMD machine the route
-uses QuEST HIP and verifies a real HIP program before emitting GPU rows. On a
-future NVIDIA cluster the GPU software/build route must be adapted and verified
-there; no row is created merely because CUDA support exists in source code.
-
-## Results Layout
-
-Generated runs use readable local timestamps:
-
-```text
-runs/
-  inbox/eth/<experiment-id>/              # copied raw ETH archives; ignored
-  evidence/<suite>/<route>/2026-07-10_18-30-00/
-  comparisons/research_pack/2026-07-10_19-15-00/
-```
-
-Each suite and route directory has a `latest` link. `runs/latest` points to the
-latest evidence run only. These generated directories are ignored by Git.
-
-The selected thesis result is compact and tracked:
-
-```text
-thesis_results/
-  current/
-    README.md                 # generated interpretation and claim limits
-    snapshot_manifest.json   # selected run IDs, commits, and checksums
-    evidence/                 # normalized records and compact manifests
-    suites/                   # exact resolved suite files
-    tables/                   # source CSVs for every figure
-    plots/                    # human-readable figures
-  releases/<name>/            # optional immutable milestones
-```
-
-The broad `thesis_results/current` snapshot is historical and does not contain
-M5.4 or M5.5 development runs. M5.5 reports remain in ignored `runs/` until
-the architecture and benchmark questions are stable.
-
-Reports are regenerated from `normalized_records.jsonl`; benchmark execution is
-not repeated. Generated plots and comparison tables never belong in
-`runs/evidence`.
-
-## Importing ETH Evidence
-
-Raw results copied from the ETH UPMEM host belong in the ignored
-`runs/inbox/eth/` staging area, not beside source code. Create it with:
-
-```bash
+# Create the ignored local inbox used for copied ETH archives.
 make evidence-inbox
 ```
 
-Keep the archive there, extract the validated evidence run under
-`runs/evidence/`, then regenerate a report from that exact run. During M0--M8,
-copied archives and generated development evidence remain ignored and are not
-promoted. Only after M9, the source commit, normalized rows, and report have
-been reviewed should a compact named snapshot be promoted into
-`thesis_results/`. The complete copy, audit, and promotion procedure is in
-[the evidence workflow](docs/evidence_workflow.md).
+The Makefile retains historical qualification targets for replay and
+compatibility. They are intentionally not the primary workflow.
 
-## Individual Commands
+## Results Layout
 
-The full matrix is preferred, but focused commands remain useful:
+Runs are written automatically; no manual output path is required.
 
-```bash
-make build-quest-cpu
-make bench-cpu
-make bench-gpu
-make bench-upmem-sim
-make upmem-hw-sliced-resident-plan
-make upmem-hw-sliced-resident
-make upmem-hw-m5-plan
-make upmem-hw-m5
-make planner-report
-make research-plan
-make upmem-provider-plan
+```text
+runs/                                      # ignored generated data
+  evidence/<suite>/<route>/<timestamp>/    # raw execution records
+  comparisons/<report>/<timestamp>/        # tables, plots, manifest
+  inbox/eth/<experiment>/                  # copied ETH archives
+
+thesis_results/                            # tracked selected snapshots
+  current/                                 # reviewed current snapshot
+  releases/<name>/                         # named immutable snapshots
 ```
 
-On the ETH hardware host, use the exact preparation/execution commands and
-acceptance fields in the [M2 ETH runbook](docs/upmem_hardware_sliced_resident_mvp_runbook.md).
-Acceptance is manual and outside pytest/CI. The runbook is the source of truth
-for the normalized evidence workflow; the M2 route has no CPU/simulator retry.
+Each execution directory contains its resolved suite, normalized records,
+manifests, and bounded logs. Reports are generated from records, not edited by
+hand. Development runs stay in ignored `runs/`; only a reviewed snapshot is
+promoted into `thesis_results/`.
 
-For M1 SimplePIM qualification, prepare locally with
-`make upmem-provider-plan`, then on a clean ETH checkout run
-`UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make upmem-provider-qualify PROVIDER=simplepim`.
-This is a one-DPU, 12-tasklet, 256-`uint32` virtual-array map/zip functionality
-probe only. It has no simulator or fallback path and makes no performance
-claim. Artifacts are stored under
-`runs/evidence/provider_qualification/simplepim/`; admission requires the
-passed fields and fingerprints in the [runbook](docs/upmem_provider_qualification_runbook.md).
-That broader M1 catalog gate remains separate from the passed M4 SimplePIM
-lanes. PID-Comm is a separate 2021.3.0/AVX512/1024-DPU lane; ATiM's official
-artifact and SparseP source remain unpinned and blocked.
+## Scientific Boundaries
 
-The retired dense and legacy TaskGraph runs remain readable as historical
-evidence, but are no longer runnable through the public CLI or Makefile. The
-bounded physical routes use explicit SDK/SimplePIM contracts and require
-`UPMEM_ALLOW_PHYSICAL_HARDWARE=1`; it rejects simulator selectors and has no
-CPU fallback. Its exact allocation, launch, synchronization, reconstruction,
-validation, and normalized-record acceptance fields are defined by the
-[M2 ETH runbook](docs/upmem_hardware_sliced_resident_mvp_runbook.md).
-
-The active simulator command is strict generic-only UPMEM SDK evidence. It
-records bounded TaskGraph validation and simulator timing, never hardware
-timing or hardware speedup. Older dense and bridge artifacts remain readable
-through the normalized report/snapshot readers only.
-
-Modeled planner evidence has its own comparison namespace:
-
-```bash
-make planner-evidence
-make planner-report
-```
-
-These commands write under `runs/comparisons/planner_v2/`; their scores are
-model-based path-selection hypotheses, not hardware-calibrated timing.
-
-For a specific research group:
-
-```bash
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python \
-  scripts/research_benchmark_pack.py run --full --suite cpu_tn
-```
-
-Valid group names are printed by `make research-plan`.
-
-## Evidence Rules
-
-- `quest_cpu_full_state_exact`: serious CPU full-state baseline.
-- `quest_gpu_full_state_exact`: serious full-state GPU comparison only after
-  verified GPU execution; it is not a GPU TN route.
-- `quimb_tn_exact`: serious external CPU TN baseline.
-- `quimb_tn_sliced_exact`: explicit Quimb/cotengra slicing evidence.
-- historical internal frontier/hybrid routes: readable diagnostics only; they
-  are not active benchmark commands.
-- strict UPMEM generic SDK-simulator rows: code-path, boundary, transfer, and
-  accuracy evidence; never hardware speedup.
-
-TaskGraph-based CPU and UPMEM records carry
-`circuit_semantics_hash`, `tensor_network_hash`, and
-`contraction_plan_hash`. A CPU/UPMEM execution comparison is called same-plan
-only when those hashes match. Planning time is recorded separately from route
-execution time.
-
-Evidence provenance is stage-specific. `benchmark_source_*` fields identify
-the code that executed the workload, `report_generation_*` fields identify the
-revision that derived tables and plots, and `snapshot_promotion_*` fields
-identify the clean base revision used to select tracked evidence. Repository
-dirtiness outside `thesis/implementation` is recorded separately and does not
-silently change benchmark-source cleanliness.
-
-Current limitation:
-
-> The current UPMEM evidence is bounded to the documented generic simulator,
-> physical M2--M4 qualification lanes, the accepted M4.5 shared runtime, and
-> the accepted M5 v3 one-rank single-contraction development study. M5 v3
-> provides same-route numeric, partition, transfer, accuracy, and bounded
-> DPU-count diagnostics: `T_float32/T_int8` has median `0.165` (range
-> `0.109--0.799`), `T_output/T_contracted` has median `0.980` (range
-> `0.492--1.092`), and same-route `T1/TN` has median `0.634` (range
-> `0.073--0.999`). No broad hardware speedup, energy, general distributed
-> TaskGraph, PID-Comm, ATiM, SparseP, multi-rank, or planner-superiority claim
-> is supported. Float32 maximum error was `7.15e-06` against a `1e-05`
-> threshold; int8 error `0.0303011` is descriptive.
-
-## Generated Cleanup
-
-`make thesis-clean APPLY=1` retains the evidence selected by
-`thesis_results/current`, its source research pack, and removes older generated
-run directories. `make clean-generated` removes build/cache output and keeps
-`runs/` unless `CLEAN_RUNS=1` is explicitly supplied.
+Only compare timings when the records show compatible circuit, tensor-network,
+contraction-plan, numeric-policy, topology, timing-scope, validation, and
+hardware-admission identities. QuEST and Quimb remain serious baselines but
+are not automatically same-plan comparisons with the internal TaskGraph.
+Simulator, modeled-planner, and unsupported rows are retained as their own
+evidence categories and must not be presented as physical speedup.

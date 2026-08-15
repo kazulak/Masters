@@ -9,7 +9,7 @@ For active use, follow the implementation documentation:
 - strict generic-only SDK simulator evidence: `make bench-upmem-sim`;
 - manual physical acceptance: `make upmem-hw-taskgraph-resident-plan`, then the
   resident route on the ETH host, as described in
-  `docs/upmem_hardware_taskgraph_resident_runbook.md`.
+  [the historical taskgraph runbook](../../../docs/history/upmem_hardware_taskgraph_resident_runbook.md).
 
 The base resident route is one DPU and one tasklet, is correctness-only, and
 does not claim hardware speedup. M4.6 adds a versioned one-DPU tasklet sweep for

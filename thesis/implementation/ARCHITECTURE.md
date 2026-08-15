@@ -1,431 +1,154 @@
 # System Architecture
 
-The accepted current-to-target delivery sequence is maintained in
-[`docs/slr_architecture_implementation_roadmap.md`](docs/slr_architecture_implementation_roadmap.md).
-This file describes implemented ownership and claim boundaries; the roadmap
-defines the M0--M9 research gates and thesis completion criteria.
-
-The authoritative current milestone table is in [README.md](README.md#current-milestone-status).
-The exact ETH development observations for M4.6, M5.1, M5.2, and the PID-Comm
-blocker are consolidated in
-[docs/m4_m5_physical_acceptance.md](docs/m4_m5_physical_acceptance.md).
-M4.5 is the current accepted SimplePIM-managed baseline. M4.1--M5.2 have
-bounded physical functionality evidence from ETH development runs. M4.6
-passed the `1/2/4/8/16` tasklet sweep; M5.1 passed bounded output partitioning;
-M5.2 passed bounded contracted-axis partitioning with host reduction. These
-results are not promoted thesis evidence and do not establish general
-distributed execution, performance, scaling, or energy claims. PID-Comm M5.3
-is blocked before allocation under ETH SDK 2023.1 because the pinned API/source
-expects missing communication symbols and macros. The additive M5
-execution-plan-v3 lane has passed bounded physical development acceptance on
-one selected ETH rank. It remains a single-contraction route, not a general
-distributed executor.
-
-## Research Objective
-
-The implementation evaluates tensor-network (TN) quantum-circuit simulation on
-UPMEM processing-in-memory devices. The immediate objective is not a production
-simulator. It is a controlled research system in which circuit semantics,
-contraction plans, executor configuration, validation, and measurements remain
-separable enough to attribute a result to the component being studied.
-
-The central invariant is:
+This is a compact research architecture for evaluating tensor-network quantum
+simulation routes. The system is deliberately split into an immutable planning
+path and a stateful execution path so that one circuit and one contraction plan
+can be evaluated by several engines without implying that those engines are
+algorithmically identical.
 
 ```text
-one circuit semantics + one tensor network + one contraction plan
-                         -> multiple explicit executors
-                         -> normalized, comparable evidence
+CircuitSpec
+  -> TensorNetworkValue
+  -> PipelineRoute planner role -> TaskGraph
+  -> remaining PipelineRoute execution roles
+  -> execution records
+  -> normalized_records.jsonl
+  -> report CSVs, plots, and manifests
 ```
 
-## End-To-End Data Flow
+## Ownership At A Glance
 
-```mermaid
-flowchart LR
-    C[Quantum circuit<br/>six PIMutation-compatible families<br/>or controlled synthetic case]
-    TN[Tensor-network lowering<br/>tensor values, labels, output order]
-    P[Contraction planner<br/>opt_einsum / cotengra / custom UPMEM greedy]
-    G[TaskGraph<br/>binary contractions + dependencies]
-    B[Execution bundle<br/>semantic, TN and plan hashes]
+| Stage | Main symbols/files | Input | Output | State and side effects |
+| --- | --- | --- | --- | --- |
+| Circuit definition | `circuits/`, `CircuitSpec` | suite case/configuration | immutable operation sequence | Pure construction. |
+| TN lowering | `tn/network.py:build_tensor_network` | `CircuitSpec` | `TensorNetworkValue` | Creates tensor arrays; source arrays are read-only in the generic pipeline. |
+| Path planning | `tn/planners.py`, `tn/task_graph.py` | TN and planner config | immutable `TaskGraph` | Planner search is local computation; no hardware side effect. |
+| Plan identity | `tn/execution_bundle.py` | graph and route-independent plan data | semantic/TN/plan hashes | Pure canonical serialization and hashing. |
+| Route composition | `whole_circuit/pipeline.py` | module declarations | immutable `PipelineRoute` / `ComparisonSpec` | Pure JSON-safe specification and hashing only. |
+| Execution | `bench/m5_circuit_study.py`, `whole_circuit/core.py`, target engines | circuit, graph, selected route | output plus task/session metadata | M5 is the single public execution pipeline; owns tensor store, sessions, subprocesses, device allocation, and transfers. |
+| Evidence | `bench/*`, `core/records.py` | execution metadata | normalized records/manifests | Writes run directories. |
+| Reporting | `bench/m5_circuit_report.py`, `scripts/` | normalized records | CSVs, plots, report manifest | Writes comparison artifacts only. |
 
-    C --> TN --> P --> G --> B
+The detailed symbol-level contract is in
+[docs/PIPELINE_CONTRACT.md](docs/PIPELINE_CONTRACT.md).
 
-    B --> CPU[Internal CPU TaskGraph replay]
-    C --> QCPU[QuEST CPU full-state]
-    C --> QGPU[QuEST HIP/CUDA full-state]
-    C --> QUIMB[Quimb/cotengra CPU TN]
-    B --> UPMEM[Strict UPMEM TaskGraph runtime]
+## Immutable Planning Path
 
-    CPU --> N[normalized_records.jsonl]
-    QCPU --> N
-    QGPU --> N
-    QUIMB --> N
-    UPMEM --> N
+`CircuitSpec` is the semantic input. `build_tensor_network()` converts it into
+gate tensors, index labels, output order, and a full einsum expression.
+`plan_task_graph_with_config()` chooses a pairwise contraction path and lowers
+it into a `TaskGraph` whose `ContractionTask` items carry dependencies, shapes,
+index expressions, and estimates.
 
-    N --> R[Research pack<br/>statistics, source CSVs, plots]
-    R --> S[Tracked thesis_results/current]
+The identity boundary is intentionally before execution:
+
+```text
+circuit_semantics_hash
+  -> tensor_network_hash
+  -> contraction_plan_hash
 ```
 
-QuEST and Quimb are independent serious baselines. The internal TaskGraph is the
-shared representation used for direct CPU-replay versus UPMEM comparisons. It
-is not asserted that a Quimb contraction tree has the same plan as the internal
-TaskGraph unless a future adapter proves that identity explicitly.
+`contraction_plan_hash` does not include executor-specific settings. Therefore
+CPU float32, UPMEM float32, and UPMEM int8 can prove that they consumed one
+selected plan while retaining distinct executor and route identities. A change
+of planner or path produces a different plan identity.
 
-## Execution Identity
+## Route Modules
 
-`src/quantum_bench/tn/execution_bundle.py` serializes the scientific identity
-of an internal execution:
+`PipelineRoute` is a frozen declaration of the complete composition. It is
+selected before preparation: its lowering and planner roles create the graph,
+then its remaining roles execute that graph. Every route contains these
+required `ModuleSpec` roles:
 
-```mermaid
-flowchart TD
-    O[Ordered gate sequence<br/>wires + parameters] --> CH[circuit_semantics_hash]
-    CH --> T[Tensor IDs, labels, shapes,<br/>output labels and einsum form]
-    T --> NH[tensor_network_hash]
-    NH --> CP[Planner identity + ordered path<br/>+ semantic contraction tasks]
-    CP --> PH[contraction_plan_hash]
-
-    PH --> EC1[CPU executor config hash]
-    PH --> EC2[UPMEM executor config hash]
-    PH --> EC3[Quantized UPMEM config hash]
-```
-
-Executor settings are deliberately excluded from `contraction_plan_hash`.
-Thus float32 and int8 UPMEM runs can prove that they execute the same plan while
-retaining distinct `executor_config_hash` values. Timings, host paths, and
-machine metadata are also excluded from semantic hashes.
-
-`contraction_path_structure_hash` additionally captures only the ordered
-pairwise path and lowered task structure. It is useful when two planners carry
-different identities or objective settings but select the same structural path.
-
-## Module Ownership
-
-| Layer | Active modules | Responsibility | Status |
-| --- | --- | --- | --- |
-| Circuit semantics | `thesis/implementation/src/quantum_bench/circuits/` | Deterministic circuit definitions and QuEST-compatible semantic mapping | Active |
-| TN lowering | `thesis/implementation/src/quantum_bench/tn/network.py` | Convert ordered gates into tensors, labels, and output convention | Active, thesis infrastructure |
-| Planning | `thesis/implementation/src/quantum_bench/tn/planners.py`, `upmem_planner.py`, `upmem_path_cost.py`, `upmem_path_cost_v2.py`, `task_graph.py` | Obtain standard-library or versioned custom modeled paths and lower them into dependency tasks | Active; v1 historical and v2 projected-prefix UPMEM objectives are modeled, not hardware-calibrated |
-| Execution identity | `thesis/implementation/src/quantum_bench/tn/execution_bundle.py` | Canonical serialization and SHA-256 identities | Active, thesis contribution |
-| Serious full-state baseline | `thesis/implementation/src/quantum_bench/providers/full_state/` + `thesis/implementation/external/QuEST/` | QuEST CPU and verified GPU execution | Active |
-| Serious CPU TN baseline | `thesis/implementation/src/quantum_bench/providers/exact_tn/quimb_tn.py` | Quimb/cotengra unsliced and sliced exact TN execution | Active |
-| Shared-plan CPU reference | `thesis/implementation/src/quantum_bench/providers/exact_tn/cpu_einsum.py`, `cpu_path_replay.py` | Execute the internal TaskGraph on CPU | Active; diagnostic/reference quality |
-| Strict UPMEM runtime | `thesis/implementation/src/quantum_bench/targets/upmem/taskgraph_runtime.py`, `numeric_reference.py`, `runtime_evidence.py` | Execute policy/scheduling while keeping CPU references, validation, and evidence construction reviewable | Active, SDK simulator |
-| Whole-circuit study contracts | `thesis/implementation/src/quantum_bench/whole_circuit/`, `bench/m5_circuit_study.py`, `bench/m5_circuit_report.py` | Keep circuit/TN/planner/TaskGraph identity separate from replaceable CPU and physical engines; write normalized study evidence and plots | Active M5.5; canonical, scaling, and large-boundary physical development contracts passed on clean source `b550c46` |
-| M5.5 physical engine | `targets/upmem/m5_whole_circuit_engine.py`, `m5_whole_circuit_tiles.py`, `execution_plan_v4.py` | Execute bounded tiled tasks through persistent per-rank v4 sessions with float32 or host-packed int8 policies | Active additive baseline; whole-graph intermediates are host-managed and re-uploaded |
-| Physical UPMEM qualification lanes | M2 sliced-resident, M3.1 frontier, M4.2/M4.3/M4.4 routes under `bench/`, `targets/upmem/`, and `native/upmem/simplepim/`; additive M5 execution-plan-v3 route | Bounded physical functionality, operator, adapter, dependency-dispatch, and single-contraction study | Declared lanes passed on ETH; M5 v3 passed its bounded one-rank physical development gate; it is not a general executor and supports no broad speedup, energy, or scaling claim |
-| Native DPU programs | `thesis/implementation/native/upmem/simplepim/` | Bounded generic loop and resident host/DPU programs | Active, bounded; legacy dense sources are historical and removed from the runnable tree |
-| UPMEM analysis | `thesis/implementation/src/quantum_bench/targets/upmem/tile_plan.py`, `schedule.py`, `tn/upmem_path_cost.py`, planner scoring | Estimate transfer, tiling, frontier, assignment pressure, and objective components | Active; execution coverage remains bounded |
-| Evidence writer | `thesis/implementation/src/quantum_bench/bench/simulation_backend_compare.py`, `upmem_mvp_benchmark.py` | Run fixed suites and write canonical normalized evidence | Active |
-| Derived analysis | `thesis/implementation/scripts/research_benchmark_pack.py` | Statistics, claim guards, source CSVs, and plots | Active |
-| Thesis snapshot | `thesis/implementation/scripts/thesis_snapshot.py`, `thesis_runs.py` | Reserved M9 promotion of compact tracked evidence and pruning of stale generated runs | Tooling exists; development evidence is not promoted |
-
-## Route Roles And Claim Boundaries
-
-| Route | Execution | Research role | Permitted claim |
-| --- | --- | --- | --- |
-| `quest_cpu_full_state_exact` | QuEST CPU | Serious full-state anchor | CPU full-state correctness/runtime under the recorded timing scope |
-| `quest_gpu_full_state_exact` | QuEST HIP/CUDA | Serious optional GPU full-state baseline | GPU full-state runtime only when real GPU execution is verified |
-| `quimb_tn_exact` | Quimb/cotengra CPU | Serious CPU TN baseline | External exact TN correctness, planning, contraction, and memory proxy |
-| `quimb_tn_sliced_exact` | Quimb/cotengra CPU | Slicing evidence | Executed sliced TN reconstruction; current slices use one worker |
-| `cpu_tn_einsum_exact` | Internal NumPy TaskGraph | Shared-plan reference/diagnostic | Correct execution of supported internal plans, not a SOTA TN baseline |
-| `cpu_tn_path_replay_*` | Internal NumPy TaskGraph | Quantization diagnostic | CPU cost/error of per-contraction replay; not UPMEM performance |
-| `upmem_tn_sdk_simulator_quantized` / strict runtime | UPMEM SDK simulator | Bounded PIM code-path evidence | SDK DPU program execution, support boundary, traffic, and error; no hardware speedup |
-| `upmem_tn_hardware_sliced_resident_two_dpu` | UPMEM SDK physical hardware | Historical M2 control plus M2.1 useful-slice fixture | The original one-operation control had a zero second partial; the separate M2.1 fixture passed with two useful nonzero slice contributions. Both remain fixed two-DPU functionality lanes with no speedup, energy, scaling, or general-TaskGraph claim |
-| `upmem_tn_hardware_taskgraph_resident` | UPMEM SDK physical hardware | Previous bounded one-DPU resident route | Historical one-DPU correctness surface; not the current M2 route |
-| `upmem_tn_hardware_distributed_m5` | UPMEM SDK physical hardware | Additive execution-plan-v3 one-rank single-contraction lane | Physical development acceptance for the audited admitted configurations; descriptive same-route ratios only; no broad performance, energy, or scaling claim |
-| `upmem_tn_hardware_distributed_m5` with M5.4 suite | UPMEM SDK physical hardware | Frozen/replayable corrected bulk-set and host-packed-int8 single-contraction lane | Physical one-rank acceptance passed at source `eef42e4`; descriptive same-route scaling and numeric-transport observations only; no CPU/GPU speedup, energy, multi-rank, or general TaskGraph claim |
-| M5.5 whole-circuit v4 study | UPMEM SDK physical hardware plus same-plan CPU reference | Additive circuit-to-TN-to-TaskGraph study with interchangeable engines, sequential TaskGraph execution, and intra-task output/K tiling across DPUs/ranks | Physical development contracts passed. Repeated canonical CPU comparisons and fully active 1--16 DPU scaling are admitted; 32/64/128 provisioned scaling rows were not fully active. The one-repeat large run is boundary evidence only. No energy, provider, frontier-concurrency, or calibrated-planner claim |
-| `planner_candidate_model` | Host planning/model | Path candidate evidence | Standard objectives plus deterministic custom UPMEM-aware greedy selection; modeled only, no execution speedup |
-
-Full-state correctness and performance are separate tiers. `full_dump` rows can
-support exact statevector comparison under their cap. `state_output_mode=none`
-rows are `metrics_only` and may support compute timing, but not full-output
-exactness claims.
-
-## UPMEM Architecture
-
-### Current Executed Paths
-
-```mermaid
-flowchart TD
-    G[Hashed TaskGraph] --> F[Feasibility scan<br/>rank, element, dtype and layout caps]
-    F -->|unsupported| X[Explicit boundary record<br/>no CPU contraction fallback]
-    F -->|simulator supported| S[Strict generic SDK-simulator route]
-    F -->|bounded physical lanes| H[Provider-specific qualification routes]
-    H --> Q[Two resident packages<br/>one slice per physical DPU]
-    Q --> D[One tasklet per DPU<br/>async set launch plus sync]
-    D --> R[Read two float32 partial outputs]
-    R --> P[Python host sums partial outputs]
-    S --> V[CPU validation against the same TaskGraph]
-    P --> V
-    V --> E[Normalized evidence<br/>traffic, timing, error, invocation counts]
-```
-
-The planner and tile model expose bounded generic single-DPU
-MRAM-resident/WRAM-tiled plans. The strict simulator route proves the native SDK
-control path but not hardware speedup. The implemented M2 physical route is
-narrower: it restricts the terminal contraction of a one-qubit, one-operation
-real-valued X/H/Z circuit to two independent contraction-index slices, assigns
-one slice to each of exactly two physical DPUs, launches the DPU set
-asynchronously, synchronizes once, and reconstructs the result by summing the
-two float32 partial outputs in Python. The fixed suite and evidence contract
-are documented in the [M2 runbook](docs/upmem_hardware_sliced_resident_mvp_runbook.md).
-Shapes outside those boundaries remain explicit failures. The M3.1 frontier and
-M4.2--M4.4 SimplePIM results add physical qualifications for dependency-safe
-dispatch, a SimplePIM operator, a TaskGraph-derived adapter, and a fixed
-resident operator chain. They do not share one native general executor yet.
-
-M4.5 is implemented and physically accepted for bounded functionality as the
-current SimplePIM-managed baseline. M4.6 then passed on one physical DPU for
-tasklets `1/2/4/8/16`: 12 BV/BB84/EDC/XOR cases at 3/4/5q, two path variants,
-two numeric modes, and seven repeats, producing 1680 validated development
-rows. DPU-cycle medians improved through eight tasklets and declined at 16;
-host-observed graph execution showed the same small-workload saturation. This
-is diagnostic development evidence, not a final scaling benchmark.
-
-M5.1 passed a bounded real-float32 contraction on 1/2/4 DPUs using exclusive
-output-tile ownership. M5.2 passed the same contraction using contracted-axis
-partials and deterministic `host_mediated_sum_v1` host reduction, with maximum
-absolute error `2.98e-08`. Both use one tasklet per DPU, one repetition, and zero
-warmups, and are functionality probes only. The runs were selected with
-`UPMEM_HW_RANK_PATH=/dev/dpu_rank1`; this records requested/effective selection,
-not independently observed rank identity.
-
-The additive M5 execution-plan-v3 route is a one-rank, multi-DPU,
-single-contraction study. It supports output and contracted-axis partitioning,
-float32 and per-task resident int8 requantization, the current real
-highest-work contractions, and synthetic strong/weak diagnostics. Both numeric
-modes use float32 MRAM transport. Output-versus-contracted partitioning is an
-execution-layout comparison, not a contraction-path comparison; paired rows
-hold the contraction plan fixed. Local hardware-free validation is complete,
-and the canonical physical development run has also passed its admission
-contract;
-`UPMEM_HW_M5_DPU_COUNTS=3 UPMEM_HW_M5_TASKLETS=3 make upmem-hw-m5-plan`
-prepares the configured plan set, preserves unsupported cases, reports
-failures explicitly, and performs no DPU allocation or launch. The audited
-physical run used source commit `5401597fdc2458087e112f5bd2e1869a5a0a5ab0`.
-It covered five workloads, DPU counts `1/2/4/8/16/32/64`, tasklets `8`, two
-numeric modes, two partitions, two warmups, and seven measured repeats. It
-produced 644 measured rows and 48 partition-incompatible unsupported rows from
-140 plan cells, with zero failures.
-
-M5.4 is an additive correction, not a reinterpretation of that run. Its suite
-uses one set-wide synchronous launch per repetition and host-packed int8
-operands with exact int32 validation. The corrected physical run at source
-`eef42e4` passed the `1/2/4/8` smoke gate and the full
-`1/2/4/8/16/32/64` matrix on one selected ETH rank. It produced 644 measured
-rows and 48 explicit partition-incompatible rows with zero failures, and all
-ten M5.4 acceptance criteria passed. Output partitions retain per-DPU owned-slice
-checksums. Contracted partitions omit the redundant full-output checksum on
-every DPU, acknowledge that policy in completion metadata, and rely on the
-mandatory reconstructed final-output reference validation. This removes
-validation work from the timed DPU launch while preserving final-output
-validation. It deliberately gives up independent per-partial corruption
-detection in contracted mode; a compensating partial error could only be
-detected if it changes the reconstructed result.
-
-M5.5 adds the first whole-circuit study lane. A circuit is lowered to a hashed
-tensor network and TaskGraph, then the same plan can be executed by the NumPy
-CPU reference or by the physical v4 engine. The v4 protocol uses one persistent
-session per selected rank, a bulk synchronous set launch for each request, and
-unique descriptors for each DPU. Tasks are tiled over output elements and the
-contracted axis. Float32 requests use float32 operands; host-packed int8
-requests transfer int8 operands and use pure int8 x int8 -> int32 DPU MACs,
-int64 host reduction of K-partials, and one host dequantization per output.
-TaskGraph tasks execute in deterministic sequential order. Within each task,
-tiles are distributed across DPUs and separate rank sessions can be submitted
-concurrently. This is intra-contraction parallelism, not ready-frontier
-TaskGraph concurrency.
-
-This is deliberately not a graph-wide DPU-resident runtime. The Python host
-tensor store owns whole-graph intermediates and re-uploads the required
-operands for downstream contractions. M5.5 therefore demonstrates a modular
-whole-circuit execution and comparison surface, not persistent intermediate
-placement, PID-Comm communication, SimplePIM compute, ATiM/SparseP kernels,
-energy measurement, or hardware-calibrated planning.
-
-For this v3 route, SimplePIM has role
-`initialization_binary_and_management_state_only`. Allocation, transfer, and
-launch use raw synchronous UPMEM SDK calls owned by the thesis route. The
-thesis-owned C kernel performs the contraction and the host performs the
-`float64` reduction; these are outside SimplePIM compute operators.
-
-The M4.5 descriptor-driven shared runtime records
-`bounded_taskgraph_executed` plus
-explicit runtime, kernel, numeric, placement, and communication providers. The
-ambiguous `task_graph_integrated` field is not a general scientific claim for
-this phase. One resident package is shared by separate one-DPU sequential and
-two-DPU frontier schedules. SimplePIM supplies bounded management/allocation
-and qualified operator APIs; the thesis-owned resident generic contraction
-kernel supplies TaskGraph compute; host-mediated transfer is the initial communication provider.
-It is host-mediated handoff only; no direct DPU-to-DPU communication is claimed.
-Each session validates one final output, with warmups and repetitions recorded
-separately. PID-Comm is the future communication provider,
-while ATiM and SparseP are future generated-dense and sparse kernel providers.
-M4.5 physical functionality acceptance passed on ETH. The run used one shared
-resident package with separate one-DPU sequential and two-DPU frontier
-schedules, executing 3 and 2 waves respectively. The two-DPU schedule used one
-host-mediated handoff per execution; both placements completed without
-simulator or CPU fallback and passed final CPU-reference validation. The
-tracked evidence capsule is
-[thesis_results/physical_simplepim_taskgraph_m4_5](thesis_results/physical_simplepim_taskgraph_m4_5).
-This is bounded functionality evidence only. It provides no timing, speedup,
-scaling, energy, or general tensor-network performance claim.
-
-M2 implementation status: the bounded useful-slice acceptance passed on ETH.
-M2.2 and M2.3 additionally provide physical float32/requantized and
-two-path/two-numeric-mode evidence. M2.3 executed two candidate paths on one
-fixed 1q route; it does not prove that either planner optimized physical
-execution or selected the fastest path. M3.1 provides dependency-safe
-three-task, two-wave dispatch on two DPUs. These results do not establish
-speedup, energy, scaling, or general TaskGraph coverage.
-
-Current limitation:
-
-> The M2 two-DPU sliced-resident foundation/MVP exists, bounded M4/M5.4 routes
-> execute physically, and M5.5 now provides the additive whole-circuit study
-> surface with bounded physical development acceptance. Whole-graph DPU
-> residency, specialized kernels, unrestricted layouts, communication
-> collectives, energy measurement, and calibrated planning do not yet exist.
-
-### Target Modular Architecture
-
-| Planned module | Purpose | Current state | Candidate source/inspiration |
-| --- | --- | --- | --- |
-| UPMEM-aware path objective | Score FLOPs, peak intermediate size, host/DPU and MRAM/WRAM movement, tiles, synchronization, and numerical pressure | Deterministic custom greedy planner plus standard baselines; planner model remains single-DPU, while M2 uses a separate fixed two-slice policy | Thesis contribution on top of `opt_einsum`/cotengra |
-| Kernel classifier/selector | Choose generic tiled contraction, permutation/layout, sparse, or collective path | Generic/tile planning primitives exist; specialized selection remains future work | Thesis architecture |
-| Tiled generic contraction | Stream operands/output through MRAM/WRAM under explicit caps | Implemented for bounded output tiling; strict generic coverage remains capped | UPMEM programming model; legacy external references are historical |
-| Gate-aware permutation kernels | Replace arithmetic by row/index permutation for gates where mathematically valid | Missing | PIMutation-inspired specialization, thesis adaptation to TN tasks |
-| Layout/transpose/slicing kernels | Avoid host materialization and enable bounded subproblems | Missing | Standard TN/PIM techniques; implementation is thesis work |
-| Quantization formats | Compare same-plan float32 and integer execution with explicit scale/error | Float32 and int8 generic modes exist | Thesis evaluation; motivated by weak DPU floating point |
-| Multi-DPU scheduler | Assign ready contractions/tiles to DPU groups | M5.1/M5.2 are historical fixed probes; M5 v3 physically executes bounded one-rank single-contraction plans for configured DPU counts, while general ready-task scheduling remains future work | Thesis architecture |
-| DPU communication layer | Move intermediates, tiles, and partial reductions across DPU groups | M5.2 uses deterministic host-mediated reduction; PID-Comm qualification is blocked under ETH SDK 2023.1 | PID-Comm |
-| High-level PIM adapter | Manage distributed arrays and reuse map/zip/reduce plus host/DPU communication primitives | Bounded M4.2--M4.5 management/operator paths are validated; M5 v3 uses SimplePIM only for `initialization_binary_and_management_state_only`; timing and scaling remain unclaimed | SimplePIM |
-| Automatic kernel generation | Generate and tune local tensor contractions, loop orders, tasklet counts, and tiles | Planned central provider for subsequent dense local-kernel milestones | ATiM |
-| Sparse kernels | Execute measured sparse-eligible contractions with established formats and load balancing | Planned central provider for subsequent sparse-kernel milestones | SparseP |
-
-The M3/M4 kernel work will extend the conservative MRAM/WRAM-tiled generic
-binary contraction with task-specific providers and intra-DPU execution.
-Specialized permutation, sparse, and communication kernels should follow only
-when a recorded workload class makes their expected benefit testable.
-
-## External Providers And Thesis Contribution
-
-SimplePIM, PID-Comm, ATiM, and SparseP are central components of the target
-architecture, not optional curiosities. SimplePIM now has bounded physical
-management/operator qualification, while PID-Comm, ATiM, and SparseP remain
-subsequent components. Each serves a task-specific
-provider, kernel, or communication boundary; they are not interchangeable
-runtimes, and qualification or use of one provider does not imply that it
-handles every contraction or route. The generic SDK path remains the explicit
-control route; M4.5 adds the physically accepted bounded shared executor with
-host-mediated handoff. Its ETH evidence is functionality-only and does not
-support timing, speedup, scaling, energy, or general TN performance claims.
-
-| Item | Provenance | How it is used here |
+| Role | Meaning | Current examples |
 | --- | --- | --- |
-| QuEST | External submodule | Full-state CPU and GPU baseline; no thesis ownership claim |
-| Quimb, cotengra, opt_einsum | External Python libraries | Serious CPU TN execution and path planning |
-| UPMEM SDK | External platform/toolchain | Strict simulator route and bounded two-DPU sliced-resident physical M2 route at ETH |
-| SimplePIM | External pinned repository | Bounded physical management/operator qualification exists for M4.2--M4.4; M4.5 and historical M5.1/M5.2 use it for management/allocation. M5 v3 is `initialization_binary_and_management_state_only`; raw synchronous SDK calls own allocation, transfer, and launch, while thesis code owns the C kernel and host `float64` reduction |
-| PID-Comm | External pinned repository | Task-specific target for multi-DPU relocation and collective reduction; compile/link qualification is blocked under ETH SDK 2023.1, with no fallback or physical execution claim |
-| ATiM | Official artifact to be pinned | Task-specific target for generated/autotuned dense local tensor kernels; qualification required before integration |
-| SparseP | External project to be pinned | Task-specific target for sparse formats, kernels, and load balancing; qualification required before integration |
-| PIMutation | Prior research and benchmark inspiration | Six circuit families, full-state PIM comparison context, quantization/specialized gate-operation motivation |
-| Circuit-to-TN TaskGraph, strict fallback rules, execution identities, UPMEM-aware evaluation | This thesis implementation | Engineering/research contribution to be evaluated; novelty claims remain bounded by experiments |
+| `tensor_network` | lowering implementation | `quantum_gate_tn_v1` |
+| `planner` | selected path algorithm and parameters | `opt_einsum`, cotengra, custom modeled planner |
+| `numeric` | numeric representation/policy | float32, host-packed int8 |
+| `executor` | engine that consumes tasks | NumPy reference, UPMEM v4 |
+| `topology` | target placement | CPU device or explicit UPMEM ranks/DPUs |
 
-PIMutation simulates state vectors on PIM. This thesis changes the execution
-object to a TN contraction plan. The comparison to PIMutation is therefore
-relative and methodological: shared circuit families and a QuEST full-state
-anchor are used to explain where TN changes memory and work. It is not presented
-as a direct rerun of PIMutation on identical hardware.
+For M5, these are fixed verified declarations of the executor profile, not
+independently dispatchable implementations. The physical admission check
+compares the declared profile with observed native metadata. A later engine may
+make a role selectable only when it executes that selection:
 
-## Evidence And Artifact Boundaries
+| Optional role | Intended responsibility | Current boundary |
+| --- | --- | --- |
+| `kernel` | contraction/permutation kernel profile | fixed by the current UPMEM executor profile. |
+| `partitioner` | task-to-device partition profile | fixed by the current physical route. |
+| `scheduler` | ready-work and device-wave profile | fixed by the current physical route. |
+| `communication` | transfer/reduce/broadcast profile | host-managed today; no PID-Comm claim unless execution records real use. |
 
-```text
-runs/evidence/      generated executions; ignored by Git
-runs/comparisons/   generated derived analysis; ignored by Git
-thesis_results/     selected compact evidence, source CSVs and plots; tracked
-build/              generated native/cache output; ignored by Git
-```
+This makes ablations explicit: a valid `ComparisonSpec` states the two routes
+and the exact changed roles. Numeric choice, topology, and kernel selection
+must not modify the already selected `TaskGraph`.
 
-An evidence run may contain manifests, environment metadata, normalized rows,
-execution bundles, summaries, and bounded case/task artifacts. Derived plots and
-comparison tables are forbidden in evidence. `thesis_results/current` includes
-checksums and enough normalized evidence to regenerate its report without
-rerunning a simulator.
+The M5 route adapter is deliberately strict rather than general: it accepts
+only the built-in verified executor profiles. Physical admission compares the
+requested profile, ABI, session, dispatch mode, kernel, execution class, and
+intermediate placement with native metadata. A mismatch is a failed row, not a
+silent fallback.
 
-During M0--M8, development evidence remains in ignored `runs/` directories and
-is not promoted to `thesis_results/`. The tracked snapshot surface is reserved
-for reviewed final evidence after M9; the broad existing `thesis_results/current`
-snapshot is historical and does not contain the M5 v3 development run.
+## Stateful Execution Path
 
-Final performance runs require an explicit physical-core count. The workflow
-sets and records OpenMP, OpenBLAS, MKL, and NumExpr thread counts, and captures
-the active CPU affinity, frequency governor, and NumPy BLAS implementation.
-Tables report repeat dispersion as quartiles/IQR in addition to medians.
+Execution starts only after a graph and route have been prepared. The primary
+replaceable boundary is `TaskExecutionEngine.open_session(policy, topology)`.
+`WholeGraphExecutor` creates a fresh `TensorStore`, consumes input lifetimes,
+and invokes a session once per ready task.
 
-Provenance has three explicit stages: benchmark source, report generation, and
-snapshot promotion. All selected evidence must share one clean implementation
-source commit. Repository-wide dirtiness is retained as context, but files
-outside `thesis/implementation` do not invalidate the implementation-scoped
-source check.
+| Object | Owner | Mutable state |
+| --- | --- | --- |
+| `InMemoryTensorStore` | one `WholeGraphExecutor` run | live arrays, remaining uses, released IDs |
+| `TaskExecutionSession` | selected engine | device/session state, native process and timing state |
+| physical UPMEM engine | target module | SDK allocation, MRAM slots, transfer buffers, native subprocesses |
+| reporter | report command | output directories, tables, images, manifests |
 
-## Modeled Planner And Report Contract
+No prepared graph, route specification, or hash is mutated by normal
+execution. Output arrays and evidence files are new owned artifacts.
 
-Planner objective versions are preserved rather than silently rewritten. The
-existing `upmem_path_cost_v1` suites are historical v1 evidence. V1 evaluates
-the fixed `generic_single_dpu_float32_v1` policy, and complex quantum tensor
-networks remain standard-planner baseline evidence with modeled UPMEM
-infeasibility under that contract.
+## Execution Families
 
-The additive v2 suites use `custom_upmem` with
-`objective_version: upmem_path_cost_v2` and
-`selection_scope: projected_prefix`. V2 is a deterministic greedy planner: at
-each step it scores the already selected prefix plus each candidate, so it does
-not claim a globally optimal complete path. Its
-`PathCostComponentsV2` records modeled FLOPs, largest tensor bytes,
-split-complex component invocations and recombination, host payloads, modeled
-MRAM/DMA windows, tile iterations, host completion events, and explicit memory
-assumptions. Those assumptions distinguish logical task payload, fixed native
-MRAM reservation, total configured MRAM capacity, maximum per-buffer payload
-ratio, known static WRAM bytes, and configured WRAM budget. They are modeled
-capacity fields, not measured DPU occupancy. Infeasible steps carry explicit
-rejection reasons.
+| Family | Purpose | Same-plan status |
+| --- | --- | --- |
+| QuEST CPU/GPU full state | External serious full-state baseline | Same algorithm family, not an internal TaskGraph plan. |
+| Quimb/cotengra CPU TN | External serious TN baseline | TN comparison context; path identity is distinct unless an adapter proves otherwise. |
+| NumPy TaskGraph | Internal CPU reference | Same-plan reference for internal routes. |
+| UPMEM SDK simulator | Layout, protocol, and boundary validation | Not physical performance evidence. |
+| Physical UPMEM M5.5 | Bounded same-plan whole-circuit execution | Hardware evidence only when its admission fields pass. |
 
-The v2 numeric contract accepts real inputs and complex-typed inputs with zero
-imaginary values as real-valued work. Nonzero complex inputs are represented as
-split real/imaginary components and are modeled where the bounded policy
-supports them. This is a modeled numeric/execution-policy contract, not a claim
-that every arbitrary complex layout or workload is executable.
+SimplePIM, PID-Comm, ATiM, and SparseP are external components behind
+thesis-owned route boundaries. They are not credited as active compute,
+communication, or kernel providers unless a normalized record identifies the
+actual provider invocation. The raw UPMEM SDK remains a valid explicit fallback
+engine where the route says so; it is not silently substituted.
 
-`configs/suites/diagnostics/planner_objective_motifs.yml` and the v2 manual
-planner suites contain controlled real-valued chain, tree, star, cycle, grid,
-and FLOP/memory trade-off networks. They exist only to test the modeled
-objective. Their records are marked `not_real_quantum_circuit=true` and must
-never be used as circuit runtime or UPMEM hardware evidence.
+## Current M5.5 Boundary
 
-Both v1 and v2 planner rows are evidence of path selection and modeled cost
-components only. Neither version supplies a UPMEM hardware performance claim;
-SDK-simulator or physical timing requires a separate executor route and an
-explicitly recorded execution mode.
+M5.5 is the current active physical whole-circuit lane. It executes a selected
+TaskGraph with a NumPy CPU reference or a bounded UPMEM v4 route. The physical
+route uses explicit rank paths, a persistent bounded session, bulk request
+launches, float32 or host-packed int8 task inputs, and host-managed graph
+intermediates. It records hardware allocation, native execution, transfer,
+validation, timing scope, and no-fallback state.
 
-Derived figures always remain in the report surface. A figure with no valid
-data, no variance, or no implementation is emitted as a visible TODO PNG and
-is marked `generated_todo_*` in `plot_manifest.json`; it is listed separately
-from valid scientific figures. Plot captions identify measured values,
-planner-estimated values, modeled values, software-recorded SDK bytes, SDK
-simulator timing, or physical-hardware timing as appropriate.
+It does not yet provide graph-wide DPU-resident intermediates, general DAG
+scheduling, PID-Comm collectives, ATiM-generated kernels, multi-DIMM scaling,
+energy data, or hardware-calibrated planning. These are future route modules,
+not hidden behavior of the current executor.
 
-## Scientific Safety Rules
+## Evidence And Claims
 
-- A matching case name is insufficient: same-plan claims require matching
-  circuit, TN, and contraction-plan hashes.
-- Planning and execution timings are reported separately.
-- CPU/GPU speedup uses matched repeats and identical timing/output contracts.
-- Quimb and internal TaskGraph timings are different implementation families;
-  they are not silently treated as same-plan speedup.
-- UPMEM SDK simulator timing is never hardware speedup.
-- Modeled DPU assignment or pressure is never labeled executed parallelism.
-- Unsupported rows remain in tables; they define the architecture boundary.
-- Energy remains unavailable unless a real sensor interval is measured and its
-  source is recorded.
+Every execution writes structured data first. `normalized_records.jsonl` is
+the reporting input; plots and tables are derived artifacts. A report can
+compare only rows whose recorded identities and admission fields are compatible.
+Unsupported and failed rows stay visible. Simulator, modeled, cross-algorithm,
+and physical records remain labelled as different evidence classes.
+
+`route_config_hash` identifies the requested module composition. It does not
+claim which binary ran; executor, host/DPU binary, and observed hardware
+provenance remain separate evidence fields.
+
+The benchmark choices and allowed comparisons are specified in
+[THESIS_BENCHMARK_MATRIX.md](THESIS_BENCHMARK_MATRIX.md). The active physical
+procedure is [docs/upmem_m5_5_whole_circuit_runbook.md](docs/upmem_m5_5_whole_circuit_runbook.md).

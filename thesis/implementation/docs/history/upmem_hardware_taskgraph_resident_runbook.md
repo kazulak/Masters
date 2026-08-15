@@ -74,7 +74,7 @@ M4.6 extends this resident route with a separate one-DPU tasklet development
 sweep for `1/2/4/8/16` tasklets. M5.1 and M5.2 are separate bounded physical
 single-contraction probes for output and contracted-axis partitioning; they are
 not general resident TaskGraph distribution. Their audited commands and run
-IDs are recorded in [m4_m5_physical_acceptance.md](m4_m5_physical_acceptance.md).
+IDs are recorded in [m4_m5_physical_acceptance.md](../m4_m5_physical_acceptance.md).
 
 `UPMEM_HW_RANK_PATH` must match `/dev/dpu_rank<digits>`. The requested path and
 effective SDK profile are recorded, but do not independently prove observed

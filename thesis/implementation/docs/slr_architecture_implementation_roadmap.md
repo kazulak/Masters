@@ -565,7 +565,7 @@ complete and the 2026-08-02 ETH run passed allocation, execution,
 reconstruction, validation, and release for all nine measured rows. The exact
 ETH commands,
 acceptance fields, artifacts, and failure handling are maintained in the
-[M2 runbook](upmem_hardware_sliced_resident_mvp_runbook.md).
+[M2 runbook](history/upmem_hardware_sliced_resident_mvp_runbook.md).
 
 The original control fixture produced an all-zero second partial because its
 single gate was applied to `|0>`; this was not a native execution error. The

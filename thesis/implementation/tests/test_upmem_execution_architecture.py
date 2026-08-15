@@ -19,13 +19,18 @@ from quantum_bench.tn.execution_bundle import execution_hashes
 from .support import minimal_real_graph, split_complex_graph
 
 
-def test_execution_plan_hash_is_deterministic_and_separate_from_task_graph_hashes() -> None:
+def test_execution_plan_hash_is_deterministic_and_separate_from_task_graph_hashes() -> (
+    None
+):
     graph = minimal_real_graph().graph
     plan = UpmemExecutionPlan.for_task_graph(graph)
     before = execution_hashes(graph)
 
     assert plan.execution_plan_hash == execution_plan_hash(plan)
-    assert plan.execution_plan_hash == UpmemExecutionPlan.for_task_graph(graph).execution_plan_hash
+    assert (
+        plan.execution_plan_hash
+        == UpmemExecutionPlan.for_task_graph(graph).execution_plan_hash
+    )
     assert execution_hashes(graph) == before
     assert {
         graph.circuit_semantics_hash,
@@ -37,7 +42,9 @@ def test_execution_plan_hash_is_deterministic_and_separate_from_task_graph_hashe
 def test_changed_execution_choice_changes_only_execution_plan_hash() -> None:
     graph = minimal_real_graph().graph
     original = UpmemExecutionPlan.for_task_graph(graph)
-    changed = replace(original, schedule=replace(original.schedule, parallelism="tasklet_parallel"))
+    changed = replace(
+        original, schedule=replace(original.schedule, parallelism="tasklet_parallel")
+    )
 
     assert changed.execution_plan_hash != original.execution_plan_hash
     assert execution_hashes(graph) == {
@@ -150,19 +157,31 @@ def test_upmem_provider_registry_is_fixed_and_truthful() -> None:
         "atim",
         "sparsep",
     )
-    assert UPMEM_PROVIDER_REGISTRY["upmem_sdk_simulator"].qualification_scope == "sdk_simulator_execution_contract"
-    assert UPMEM_PROVIDER_REGISTRY["upmem_sdk_simulator"].qualification_status == "validated"
+    assert (
+        UPMEM_PROVIDER_REGISTRY["upmem_sdk_simulator"].qualification_scope
+        == "sdk_simulator_execution_contract"
+    )
+    assert (
+        UPMEM_PROVIDER_REGISTRY["upmem_sdk_simulator"].qualification_status
+        == "validated"
+    )
     resident = UPMEM_PROVIDER_REGISTRY["upmem_resident_hardware"]
     assert resident.route_id is None
     assert resident.benchmark_surface_id == "upmem_tn_hardware_taskgraph_resident"
     assert resident.qualification_status == "guarded"
     simplepim = UPMEM_PROVIDER_REGISTRY["simplepim"]
-    assert simplepim.qualification_scope == "bounded_physical_management_operator_qualification"
+    assert (
+        simplepim.qualification_scope
+        == "bounded_physical_management_operator_qualification"
+    )
     assert simplepim.qualification_status == "guarded"
     assert simplepim.availability_status == "environment_dependent"
     assert simplepim.benchmark_surface_id == "upmem_tn_hardware_simplepim_bounded"
     assert "general TaskGraph executor" in " ".join(simplepim.notes)
-    assert all(UPMEM_PROVIDER_REGISTRY[name].qualification_status == "planned" for name in ("pid_comm", "atim", "sparsep"))
+    assert all(
+        UPMEM_PROVIDER_REGISTRY[name].qualification_status == "planned"
+        for name in ("pid_comm", "atim", "sparsep")
+    )
     with pytest.raises(TypeError):
         UPMEM_PROVIDER_REGISTRY["new"] = UPMEM_PROVIDER_REGISTRY["simplepim"]  # type: ignore[index]
 
@@ -178,15 +197,25 @@ def test_public_status_docs_do_not_keep_superseded_milestone_claims() -> None:
     root = Path(__file__).parents[1]
     readme = (root / "README.md").read_text(encoding="utf-8")
     architecture = (root / "ARCHITECTURE.md").read_text(encoding="utf-8")
-    roadmap = (root / "docs" / "slr_architecture_implementation_roadmap.md").read_text(encoding="utf-8")
+    roadmap = (root / "docs" / "slr_architecture_implementation_roadmap.md").read_text(
+        encoding="utf-8"
+    )
+    architecture_text = " ".join(architecture.split())
 
     assert "balanced useful-slice acceptance is still open" not in readme
     assert "physical qualification\nis pending" not in readme
-    assert "SimplePIM | External pinned repository | Task-specific target" not in architecture
-    assert "Bounded physical management/operator qualification" in architecture
+    assert (
+        "SimplePIM | External pinned repository | Task-specific target"
+        not in architecture
+    )
+    assert (
+        "SimplePIM, PID-Comm, ATiM, and SparseP are external components"
+        in architecture_text
+    )
+    assert "not credited as active compute" in architecture_text
     assert "the current second partial is zero" not in architecture
-    assert "does not prove that either planner optimized physical" in architecture
-    assert "host-mediated transfer is the initial communication provider" in architecture
+    assert "hardware-calibrated planning" in architecture_text
+    assert "host-managed graph intermediates" in architecture_text
     assert "M4.5: descriptor-driven shared runtime" in roadmap
     assert "Complete M2.1 before interpreting" not in roadmap
-    assert "bounded_taskgraph_executed" in architecture
+    assert "bounded_taskgraph_executed" in roadmap

@@ -105,7 +105,7 @@ but changes two executor dimensions explicitly:
 The old `per_task_resident_requantize` mode remains historical and is not
 relabeled. M5.4 packed rows require a byte-identical CPU int32 reference before
 their descriptive float32 error is considered. The active commands and
-acceptance order are defined in `docs/upmem_m5_4_runbook.md`.
+acceptance order are defined in `docs/history/upmem_m5_4_runbook.md`.
 
 Symmetric int8 quantization uses `scale=max_abs/127` when
 `max_abs > 1e-12`; otherwise it uses scale `1.0` and the tiny values round to
