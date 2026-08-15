@@ -144,6 +144,8 @@ PUBLIC_TARGETS := \
 	m5-circuit-smoke \
 	m5-circuit-study \
 	m5-circuit-report \
+	milestones-render \
+	milestones-verify \
 	list-runs \
 	thesis-clean \
 	archive-evidence \
@@ -160,7 +162,9 @@ help:
 		'  make test               Run the active Python test suite' \
 		'  make thesis-run         Run the controlled CPU/GPU/TN benchmark matrix' \
 		'  make thesis-report      Regenerate tracked tables and plots' \
-		'  make thesis-verify      Verify tracked results without rerunning benchmarks' \
+		'  make thesis-verify      Verify the milestone ledger and tracked results' \
+		'  make milestones-render  Regenerate the milestone truth ledger' \
+		'  make milestones-verify  Verify milestone provenance and tracked evidence' \
 		'  make m5-circuit-plan    Prepare/build the M5.5 plan suite' \
 		'  make m5-circuit-smoke   Run the bounded M5.5 physical smoke study' \
 		'  make m5-circuit-study   Run the selected M5.5 whole-circuit suite' \
@@ -246,7 +250,7 @@ help-all:
 		'  make thesis-promote     Promote the latest research pack into tracked thesis_results/current' \
 		'  make thesis-promote-historical THESIS_SNAPSHOT=thesis_results/<name>' \
 		'                           Explicitly promote clean historical evidence into a named snapshot; never use current' \
-		'  make thesis-verify      Verify tracked thesis results without rerunning benchmarks' \
+		'  make thesis-verify      Verify the milestone ledger and tracked thesis results' \
 		'  make thesis-report      Regenerate tracked tables and plots from thesis_results/current' \
 		'  make thesis-clean       Preview stale generated run cleanup; add APPLY=1 to remove' \
 		'  make archive-evidence RUN=<path> APPLY=1  Checksum-archive one raw run outside Git, then remove the source' \
@@ -318,8 +322,14 @@ thesis-promote-historical:
 	@test "$(THESIS_SNAPSHOT)" != "thesis_results/current" && test "$(notdir $(THESIS_SNAPSHOT))" != "current" || { echo 'Set THESIS_SNAPSHOT=thesis_results/<named-snapshot>; historical promotion cannot target current' >&2; exit 2; }
 	$(PY_ENV) $(PYTHON) scripts/thesis_snapshot.py promote --historical --pack $(THESIS_PACK) --out $(THESIS_SNAPSHOT)
 
-thesis-verify:
+thesis-verify: milestones-verify
 	$(PY_ENV) $(PYTHON) scripts/thesis_snapshot.py verify --snapshot $(THESIS_SNAPSHOT)
+
+milestones-render:
+	$(BENCH) milestones render --config configs/milestones.yml --output docs/MILESTONES.md
+
+milestones-verify:
+	$(BENCH) milestones verify --config configs/milestones.yml
 
 thesis-report:
 	$(PY_ENV) $(PYTHON) scripts/thesis_snapshot.py report --snapshot $(THESIS_SNAPSHOT)

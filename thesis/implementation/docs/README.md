@@ -11,6 +11,7 @@ the repository [README](../README.md).
 | [../ARCHITECTURE.md](../ARCHITECTURE.md) | Current ownership, route boundaries, and evidence classes. |
 | [PIPELINE_CONTRACT.md](PIPELINE_CONTRACT.md) | Symbol-level stage contract, mutable state, parameters, and hashes. |
 | [../THESIS_BENCHMARK_MATRIX.md](../THESIS_BENCHMARK_MATRIX.md) | Required thesis comparisons, measurements, and stop rules. |
+| [MILESTONES.md](MILESTONES.md) | Generated truth ledger for milestone implementation and evidence status. |
 | [upmem_m5_5_whole_circuit_runbook.md](upmem_m5_5_whole_circuit_runbook.md) | Current physical M5.5 planning, execution, reporting, and claim limits. |
 | [research_benchmark_methodology.md](research_benchmark_methodology.md) | Methodology and allowed claims. |
 | [evidence_workflow.md](evidence_workflow.md) | Copying ETH runs, report generation, promotion, and cleanup. |

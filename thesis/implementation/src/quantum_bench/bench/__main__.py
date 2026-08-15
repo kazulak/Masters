@@ -414,7 +414,43 @@ def main() -> int:
         "--comparison-type", default="generic_comparison"
     )
 
+    milestones_parser = sub.add_parser(
+        "milestones", help="render or verify the milestone truth ledger"
+    )
+    milestones_sub = milestones_parser.add_subparsers(
+        dest="milestones_command", required=True
+    )
+    milestones_render_parser = milestones_sub.add_parser("render")
+    milestones_render_parser.add_argument(
+        "--config", default="configs/milestones.yml", help="Milestone ledger YAML path"
+    )
+    milestones_render_parser.add_argument(
+        "--output", default="docs/MILESTONES.md", help="Generated Markdown path"
+    )
+    milestones_verify_parser = milestones_sub.add_parser("verify")
+    milestones_verify_parser.add_argument(
+        "--config", default="configs/milestones.yml", help="Milestone ledger YAML path"
+    )
+
     args = parser.parse_args()
+    if args.command == "milestones":
+        from quantum_bench.bench.milestones import verify_ledger, write_rendered_ledger
+
+        config = Path(args.config)
+        if not config.is_absolute():
+            config = root_dir / config
+        try:
+            if args.milestones_command == "render":
+                output = Path(args.output)
+                if not output.is_absolute():
+                    output = root_dir / output
+                result = write_rendered_ledger(config, output, root_dir)
+            else:
+                result = verify_ledger(config, root_dir)
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(result, indent=2))
+        return 0
     if args.command == "m5-circuit-study":
         from quantum_bench.bench.m5_circuit_commands import execute, prepare
 
