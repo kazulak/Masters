@@ -16,11 +16,11 @@ This ledger separates tracked, checksum-verifiable evidence from documented deve
 
 ## Current Records
 
-### M4.5: Descriptor-driven SimplePIM TaskGraph runtime
+### M4.5: Descriptor-driven raw-SDK TaskGraph route
 
 **Status:** `tracked_verified`
 
-Tracked ETH physical functionality capsule for a fixed three-task TaskGraph on one and two DPUs, with final-session CPU-reference validation and no simulator or CPU fallback. It is not timing, speedup, or scaling evidence.
+Tracked ETH physical functionality capsule for a fixed three-task TaskGraph on one and two DPUs. The route uses SimplePIM-derived initialization and raw UPMEM SDK allocation, transfer, and launch, with final-session CPU-reference validation and no simulator or CPU fallback. It is not timing, speedup, or scaling evidence.
 
 **Source commit:** `c7bbf957d17346e819c52fc45ca592c3bcb691ca`
 

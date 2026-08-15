@@ -654,7 +654,7 @@ completion and exact final validation passed one-DPU physical functionality on
 ETH. It remains a fixed TaskGraph-bound operator chain and does not claim
 native/general TaskGraph support, speedup, energy, or scaling.
 
-### M4.5: descriptor-driven shared runtime
+### M4.5: descriptor-driven raw-SDK route
 
 M4.5 is implemented and tracked as the verified bounded functionality capsule
 on ETH. The descriptor-driven shared
@@ -673,8 +673,9 @@ provider. Host-mediated transfer is the current communication path. PID-Comm
 is a future communication provider; ATiM and SparseP are future generated-dense
 and sparse kernel providers.
 
-M4.5 remains the current tracked SimplePIM-managed baseline. It makes no
-tasklet, tiling, PID-Comm, ATiM, SparseP, speedup, energy, or scaling claim.
+M4.5 remains the current tracked raw-SDK baseline with SimplePIM-derived
+initialization. It makes no tasklet, tiling, PID-Comm, ATiM, SparseP, speedup,
+energy, or scaling claim.
 
 ### M4.6: intra-DPU tiling and tasklets
 

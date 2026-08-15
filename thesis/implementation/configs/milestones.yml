@@ -1,13 +1,14 @@
 schema_version: 1
 milestones:
   - id: M4.5
-    title: Descriptor-driven SimplePIM TaskGraph runtime
+    title: Descriptor-driven raw-SDK TaskGraph route
     status: tracked_verified
     summary: >-
       Tracked ETH physical functionality capsule for a fixed three-task
-      TaskGraph on one and two DPUs, with final-session CPU-reference
-      validation and no simulator or CPU fallback. It is not timing, speedup,
-      or scaling evidence.
+      TaskGraph on one and two DPUs. The route uses SimplePIM-derived
+      initialization and raw UPMEM SDK allocation, transfer, and launch, with
+      final-session CPU-reference validation and no simulator or CPU fallback.
+      It is not timing, speedup, or scaling evidence.
     source_commit: c7bbf957d17346e819c52fc45ca592c3bcb691ca
     record_commit: 1a98cfb92068b0c87e112a9455c5d317dda4e0d7
     source_commands:

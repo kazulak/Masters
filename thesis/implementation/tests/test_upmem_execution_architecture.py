@@ -233,6 +233,6 @@ def test_public_status_docs_do_not_keep_superseded_milestone_claims() -> None:
     assert "the current second partial is zero" not in architecture
     assert "hardware-calibrated planning" in architecture_text
     assert "host-managed graph intermediates" in architecture_text
-    assert "M4.5: descriptor-driven shared runtime" in roadmap
+    assert "M4.5: descriptor-driven raw-SDK route" in roadmap
     assert "Complete M2.1 before interpreting" not in roadmap
     assert "bounded_taskgraph_executed" in roadmap
