@@ -72,14 +72,14 @@ a small final architecture.
 | CPU/GPU baselines | QuEST full state, Quimb/cotengra TN, internal CPU replay | Active |
 | Slicing/frontier models | Internal slice-aware graph, reconstruction, frontier waves | M2.1 useful-slice and M3.1 bounded two-wave physical qualifications passed; general expansion remains future work |
 | UPMEM simulator | Strict bounded generic TaskGraph route | Active diagnostic |
-| UPMEM hardware | Bounded M2/M3.1/M4.2--M4.4 qualification lanes, frozen M5.4 control, and additive M5.5 whole-circuit v4 route | M5.5 canonical, scaling, and large-boundary physical development contracts passed on clean source `b550c46`. This is not graph-wide DPU residency, CPU/GPU speedup, or energy evidence |
+| UPMEM hardware | Bounded historical lanes, the tracked M4.5 capsule, and the active M5.5 whole-circuit implementation | M5.5 has code and documented untracked ETH development observations. It is not accepted or verified evidence, graph-wide DPU residency, CPU/GPU speedup, or energy evidence |
 | Numerical modes | Float32, per-task int8/int32, split real/imaginary complex | Active in bounded routes |
 | Evidence system | Normalized records, claim guards, reports, plots, snapshots | Active instrumentation |
-| External sources | QuEST, SimplePIM, and PID-Comm pinned | QuEST active; SimplePIM remains a bounded management/operator provider; PID-Comm remains central but is blocked under ETH SDK 2023.1 pending a compatible SDK/API. M5.5 does not claim provider compute integration |
+| External sources | QuEST, SimplePIM, and PID-Comm pinned | QuEST is active. M5.5 uses a SimplePIM-derived initialization binary, raw UPMEM SDK allocation/transfer/launch, and thesis-owned kernels. PID-Comm and ATiM are not invoked by M5.5; provider adapters remain future work |
 
 ### Central architecture not implemented
 
-M5.5 now supplies the first modular whole-circuit execution surface: the same
+M5.5 supplies the active modular whole-circuit implementation surface: the same
 hashed circuit/TN/TaskGraph can be sent to a CPU reference or physical v4
 engine, with float32 or host-packed int8 policy selection. The physical route
 uses output/K tiling, deterministic sequential TaskGraph execution, one
@@ -108,6 +108,12 @@ not completion of the target architecture.
 - Physical strong/weak scaling and energy evaluation.
 
 This is therefore an architecture foundation, not a nearly finished system.
+
+Evidence status is maintained only in the generated
+[milestone ledger](MILESTONES.md). The ledger records M4.5 as the only
+`tracked_verified` physical capsule. M4.6, M5.1, M5.2, M5.4, and M5.5 are
+`development_observed`: their code and documented untracked observations are
+useful engineering feedback, but they are not accepted or verified evidence.
 
 ## Important Current Defects
 
@@ -353,6 +359,10 @@ management/allocation and selected array primitives; PID-Comm handles distribute
 relocation and collectives; ATiM handles generated dense local kernels; and
 SparseP handles sparse formats, kernels, and load balancing. None is a generic
 replacement for the explicit SDK control or for the generic fallback.
+The active M5.5 route invokes only a SimplePIM-derived
+initialization/management binary; raw UPMEM SDK calls own allocation,
+transfers, launch, and synchronization, and thesis-owned kernels own
+contraction. PID-Comm and ATiM are not invoked there.
 
 Integration sources:
 
@@ -381,7 +391,7 @@ thesis-owned C kernel performs the contraction, and the host performs the
 
 Integration target:
 
-1. preserve the bounded M4.2--M4.5 qualification and its evidence boundary;
+1. preserve the bounded M4.2--M4.5 code and the M4.5 tracked evidence boundary;
 2. build and run pinned upstream examples on ETH;
 3. create a thesis adapter with the same placement and evidence plans as the
    explicit SDK route;
@@ -614,28 +624,26 @@ tasks.
 
 ### M4: SimplePIM operators, resident execution, tiling and tasklets
 
-The authoritative current status table is in
-[README.md](../README.md#current-milestone-status). M4.1--M4.5 are physically
-accepted bounded milestones, with M4.5 the current accepted SimplePIM-managed
-baseline. M4.6 has a development acceptance run on one physical DPU for
-tasklets `1/2/4/8/16`, with 1680 validated rows across 12 small cases, two
-paths, two numeric modes, and seven repeats. It is functionality and diagnostic
-tasklet evidence, not final scaling evidence.
+The sole current evidence-status source is
+[docs/MILESTONES.md](MILESTONES.md). M4.5 is the only `tracked_verified`
+physical capsule. M4.1--M4.4 remain historical development records, while
+M4.6 is `development_observed`: code and an untracked ETH tasklet observation
+exist, but it is not accepted or verified evidence.
 
-M4.2 is physically qualified on two DPUs with explicit
+The historical M4.2 code is qualified on two DPUs with explicit
 `allocation_profile=backend=hw`: the pinned SimplePIM rank-one primitive
 completed with exact `result_int64=209` across the declared repetitions. This
 is a bounded operator qualification with host-mediated reduction, not a
 speedup, energy, scaling, persistence, or general TaskGraph claim.
 
-M4.3 is physically qualified as a TaskGraph-derived operand adapter on two
+The historical M4.3 code is a TaskGraph-derived operand adapter on two
 DPUs, with exact `reference_int64=320` and one source task completing once. It
 is a host-orchestrated adapter into the M4.2 native route, not a native or
 general TaskGraph protocol. M4.4 is also physically qualified as a fixed
 one-DPU, two-task resident operator chain. SimplePIM is therefore qualified
 only for these bounded management/operator lanes; this is not general SimplePIM
-executor integration. PID-Comm remains a central upcoming architecture layer,
-and ATiM remains an upcoming central layer.
+executor integration. PID-Comm and ATiM remain planned provider layers, not
+invoked components of the active M5.5 route.
 
 ### M4.4: bounded persistent two-task chain
 
@@ -648,44 +656,43 @@ native/general TaskGraph support, speedup, energy, or scaling.
 
 ### M4.5: descriptor-driven shared runtime
 
-M4.5 is implemented and physically accepted for bounded functionality on ETH,
-as recorded in `eth-evidence/2026-08-09_22-19-27`. The descriptor-driven shared
+M4.5 is implemented and tracked as the verified bounded functionality capsule
+on ETH. The descriptor-driven shared
 runtime compiles one bounded TaskGraph into explicit kernel, placement, numeric,
-communication, and schedule descriptors, then executes it through SimplePIM
-management/allocation and the thesis-owned resident generic contraction kernel.
+communication, and schedule descriptors. It uses a SimplePIM-derived
+initialization/management binary, while raw UPMEM SDK calls own allocation,
+transfers, launch, and synchronization and the thesis-owned resident generic
+contraction kernel owns compute.
 It supports the existing one-DPU and two-DPU qualification shapes without
 changing the scientific plan. Evidence uses `bounded_taskgraph_executed` and
 explicit provider identities; `task_graph_integrated` remains a non-general
 historical claim.
 
-SimplePIM owns bounded management/allocation and qualified operator APIs. The
-thesis resident generic contraction kernel owns TaskGraph compute, and
-host-mediated transfer is the initial communication provider. PID-Comm is the
-future communication provider; ATiM and SparseP are future generated-dense and
-sparse kernel providers.
+SimplePIM is not the active M4.5 allocation, transfer, launch, or compute
+provider. Host-mediated transfer is the current communication path. PID-Comm
+is a future communication provider; ATiM and SparseP are future generated-dense
+and sparse kernel providers.
 
-M4.5 remains the current accepted SimplePIM-managed baseline. It makes no
+M4.5 remains the current tracked SimplePIM-managed baseline. It makes no
 tasklet, tiling, PID-Comm, ATiM, SparseP, speedup, energy, or scaling claim.
 
 ### M4.6: intra-DPU tiling and tasklets
 
-M4.6 passed its bounded ETH development gate for tasklets `1/2/4/8/16`. The
-shared-operation fix kept the maximum DPU stack at `256/1024`; all 1680 rows
-passed physical and validation checks without simulator or CPU fallback. DPU
-cycle and host-observed development diagnostics suggest saturation near eight
-tasklets for these small workloads. This does not establish general tasklet
-scaling or final performance.
+M4.6 has code and a documented untracked ETH development observation for
+tasklets `1/2/4/8/16`. The observation is not accepted or verified evidence;
+the ledger records its retained-run and workload-count gaps. It does not
+establish general tasklet scaling or final performance.
 
 ### M5: distributed single large contraction
 
-M5.1 and M5.2 are historical bounded parts of M5. M5.1 passed a bounded
-real-float32 output-partition probe on 1/2/4 DPUs. M5.2 passed a bounded
-contracted-axis partial-sum probe on 1/2/4 DPUs using deterministic
-host-mediated reduction, with maximum absolute error `2.98e-08`. Both use one
-repetition and zero warmups and provide functionality evidence only.
+M5.1 and M5.2 are historical bounded parts of M5 and are recorded as
+`development_observed`. Their code and documented untracked ETH observations
+cover real-float32 output partitioning and contracted-axis partial sums with
+host-mediated reduction on 1/2/4 DPUs. They provide functionality feedback
+only, not accepted or verified evidence.
 
-The additive execution-plan-v3 lane has passed its bounded physical development
-gate. It is a one-rank multi-DPU single-contraction route accepting configured
+The additive execution-plan-v3 lane is historical development code. It is a
+one-rank multi-DPU single-contraction route accepting configured
 DPU counts from `1..64` and tasklet counts from `1..24`; the accepted run used
 the default `1/2/4/8/16/32/64` DPU counts and `8` tasklets. It supports
 output/contracted-axis partitioning, float32 and per-task resident int8
@@ -721,10 +728,9 @@ own allocation, transfer, and launch, while thesis-owned C compute and host
 `thesis_results/current` snapshot is historical and does not contain this
 M5 v3 development run.
 
-The ATiM production integration and general kernel selection belong to the
-incomplete M3 operation-aware kernel/provider work; general distributed TN
-execution remains incomplete in M5.
-M5.3 PID-Comm is blocked before allocation because the pinned source expects
+The M5.5 route does not invoke ATiM or PID-Comm. General distributed TN
+execution and provider integration remain incomplete. PID-Comm is blocked
+before allocation because the pinned source expects
 missing communication symbols and old API/source macros under ETH SDK 2023.1.
 See [the consolidated M4/M5 acceptance record](m4_m5_physical_acceptance.md).
 
@@ -893,20 +899,22 @@ the scaling profile provisions one-rank 1--64 DPU and two-rank 128-DPU
 topologies. The exact commands and staged acceptance are in
 `docs/upmem_m5_5_whole_circuit_runbook.md`.
 
-M5.5 has completed this wave's bounded physical development gate. The clean
-canonical run completed `1008/1008` rows, the scaling run completed `80/80`,
-and the large profile completed 96 rows while retaining 24 explicit 30q
-resource-limit rows, with no failures. Same-plan CPU/UPMEM timing is admitted
-only for repeated physical rows that pass allocation, native-kernel, release,
-validation, and timing eligibility checks. Fully active DPU scaling is valid
-through 16 DPUs; the larger provisioned rows are overprovisioning evidence,
-not full-device or multi-rank scaling. Energy remains a stable TODO until a
-physical measurement source exists.
+M5.5 has code and documented untracked ETH development observations. The
+canonical, scaling, and large profiles are useful engineering feedback, but
+they are not accepted or verified evidence. The runbook is retained as a
+historical/development record. The active lane does not claim CPU/UPMEM
+speedup, full-device scaling, graph-wide residency, provider integration, or
+energy. Energy remains a TODO until a physical measurement source exists.
+
+M5.4 is likewise `development_observed` in the ledger: its code and documented
+untracked one-rank single-contraction observations remain useful control data,
+but are not a verified evidence capsule.
 
 After M5.5, the next architecture wave should add one capability at a time:
-first DPU-resident intermediate ownership and transfer avoidance, then
-provider-backed kernels or collectives where SimplePIM, PID-Comm, ATiM, or
-SparseP offer a compatible interface. M6a is retained as historical roadmap
-context and compatibility material, not as the current immediate-next wording.
+first typed boundaries and strategy adapters for decomposition, placement,
+kernel selection, reduction, and scheduling; then real provider-backed
+kernels or collectives where SimplePIM, PID-Comm, ATiM, or SparseP offer a
+compatible interface. M6a is retained as historical roadmap context and
+compatibility material, not as the current immediate-next wording.
 M2.1, M2.2, M2.3, M3.1, M4.2--M4.4, and M5.4 remain frozen compatibility
 surfaces; M5.5 does not retroactively change their evidence.

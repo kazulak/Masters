@@ -197,10 +197,16 @@ def test_public_status_docs_do_not_keep_superseded_milestone_claims() -> None:
     root = Path(__file__).parents[1]
     readme = (root / "README.md").read_text(encoding="utf-8")
     architecture = (root / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    audit = (root / "docs" / "thesis_implementation_audit.md").read_text(
+        encoding="utf-8"
+    )
     roadmap = (root / "docs" / "slr_architecture_implementation_roadmap.md").read_text(
         encoding="utf-8"
     )
+    readme_text = " ".join(readme.split())
     architecture_text = " ".join(architecture.split())
+    audit_text = " ".join(audit.split())
+    roadmap_text = " ".join(roadmap.split())
 
     assert "balanced useful-slice acceptance is still open" not in readme
     assert "physical qualification\nis pending" not in readme
@@ -208,11 +214,22 @@ def test_public_status_docs_do_not_keep_superseded_milestone_claims() -> None:
         "SimplePIM | External pinned repository | Task-specific target"
         not in architecture
     )
-    assert (
-        "SimplePIM, PID-Comm, ATiM, and SparseP are external components"
-        in architecture_text
-    )
-    assert "not credited as active compute" in architecture_text
+    assert "The current provider boundary is deliberately narrow" in architecture_text
+    assert "A provider is credited only when" in architecture_text
+    assert "docs/MILESTONES.md" in readme_text
+    assert "sole authority for implementation and evidence status" in readme_text
+    assert "SimplePIM-derived initialization/management binary" in architecture_text
+    assert "allocation, transfers, launch, and synchronization are performed through the raw UPMEM SDK" in architecture_text
+    assert "PID-Comm and ATiM are not invoked by M5.5" in architecture_text
+    assert "authoritative current milestone status is in README" not in audit_text
+    assert "It records M4.5 as `tracked_verified`" in audit_text
+    assert "M4.6, M5.1, M5.2, M5.4, and M5.5 as `development_observed`" in audit_text
+    assert "General slicing, distributed scheduling, provider selection" in audit_text
+    assert "hardware-calibrated numeric selection remain incomplete" in audit_text
+    assert "not accepted or verified evidence" in roadmap_text
+    assert "M5.5 route invokes only a SimplePIM-derived" in roadmap_text
+    assert "raw UPMEM SDK calls own allocation, transfers, launch" in roadmap_text
+    assert "executes it through SimplePIM management/allocation" not in roadmap_text
     assert "the current second partial is zero" not in architecture
     assert "hardware-calibrated planning" in architecture_text
     assert "host-managed graph intermediates" in architecture_text

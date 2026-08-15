@@ -68,8 +68,8 @@ required `ModuleSpec` roles:
 | `executor` | engine that consumes tasks | NumPy reference, UPMEM v4 |
 | `topology` | target placement | CPU device or explicit UPMEM ranks/DPUs |
 
-For M5, these are fixed verified declarations of the executor profile, not
-independently dispatchable implementations. The physical admission check
+For M5.5, these are fixed declarations of the active implementation profile,
+not independently dispatchable implementations. The physical admission check
 compares the declared profile with observed native metadata. A later engine may
 make a role selectable only when it executes that selection:
 
@@ -117,11 +117,13 @@ execution. Output arrays and evidence files are new owned artifacts.
 | UPMEM SDK simulator | Layout, protocol, and boundary validation | Not physical performance evidence. |
 | Physical UPMEM M5.5 | Bounded same-plan whole-circuit execution | Hardware evidence only when its admission fields pass. |
 
-SimplePIM, PID-Comm, ATiM, and SparseP are external components behind
-thesis-owned route boundaries. They are not credited as active compute,
-communication, or kernel providers unless a normalized record identifies the
-actual provider invocation. The raw UPMEM SDK remains a valid explicit fallback
-engine where the route says so; it is not silently substituted.
+The current provider boundary is deliberately narrow. M5.5 uses a
+SimplePIM-derived initialization/management binary, but allocation, transfers,
+launch, and synchronization are performed through the raw UPMEM SDK and the
+contraction kernel is thesis-owned. PID-Comm and ATiM are not invoked by M5.5;
+they remain future provider adapters. A provider is credited only when a
+normalized record identifies its actual invocation. The raw SDK is therefore
+the explicit M5.5 execution provider, not a silent fallback.
 
 ## Current M5.5 Boundary
 
@@ -135,7 +137,11 @@ validation, timing scope, and no-fallback state.
 It does not yet provide graph-wide DPU-resident intermediates, general DAG
 scheduling, PID-Comm collectives, ATiM-generated kernels, multi-DIMM scaling,
 energy data, or hardware-calibrated planning. These are future route modules,
-not hidden behavior of the current executor.
+not hidden behavior of the current executor. The next implementation boundary
+is a small set of typed strategy interfaces and adapters for decomposition,
+placement, kernel selection, reduction, and scheduling; real SimplePIM,
+PID-Comm, and ATiM providers can then be added behind those adapters without
+changing the scientific TaskGraph.
 
 ## Evidence And Claims
 
@@ -150,5 +156,7 @@ claim which binary ran; executor, host/DPU binary, and observed hardware
 provenance remain separate evidence fields.
 
 The benchmark choices and allowed comparisons are specified in
-[THESIS_BENCHMARK_MATRIX.md](THESIS_BENCHMARK_MATRIX.md). The active physical
-procedure is [docs/upmem_m5_5_whole_circuit_runbook.md](docs/upmem_m5_5_whole_circuit_runbook.md).
+[THESIS_BENCHMARK_MATRIX.md](THESIS_BENCHMARK_MATRIX.md). Evidence status is
+specified only by [docs/MILESTONES.md](docs/MILESTONES.md). The M5.5 physical
+procedure is preserved as a development record in
+[docs/upmem_m5_5_whole_circuit_runbook.md](docs/upmem_m5_5_whole_circuit_runbook.md).

@@ -24,12 +24,14 @@ v4 engine, and writes normalized records. The physical route uses explicit
 ranks, bulk request launches, and host-packed int8 or float32 numeric modes.
 It keeps the plan fixed while route dimensions change.
 
-M5.5 has passed bounded ETH development contracts for canonical, scaling, and
-large-boundary profiles. It supports same-plan functionality and timing
-evidence only within its recorded admission rules. It does **not** establish
-general UPMEM acceleration over CPU/GPU, energy efficiency, fully active
-scaling beyond the recorded active-DPU limits, graph-wide DPU residency,
-PID-Comm, ATiM, or a complete multi-DIMM architecture.
+M5.5 is the active implementation lane. It has code and documented ETH
+development observations for canonical, scaling, and large-boundary profiles,
+but those ignored runs are not accepted or verified evidence. The only
+tracked verified physical capsule is M4.5, as recorded in
+[docs/MILESTONES.md](docs/MILESTONES.md). M5.5 does **not** establish general
+UPMEM acceleration over CPU/GPU, energy efficiency, fully active scaling,
+graph-wide DPU residency, PID-Comm, ATiM, or a complete multi-DIMM
+architecture.
 
 Supported execution families are:
 
@@ -39,7 +41,7 @@ Supported execution families are:
 | Quimb/cotengra CPU TN | Serious external TN baseline | Cross-implementation and generally cross-plan context. |
 | Internal NumPy TaskGraph | Same-plan CPU reference | Direct reference for internal UPMEM routes. |
 | UPMEM SDK simulator | Contract and boundary validation | Never hardware-performance evidence. |
-| Physical UPMEM M5.5 | Bounded same-plan whole-circuit route | Requires explicit hardware admission; no fallback. |
+| Physical UPMEM M5.5 | Active bounded same-plan whole-circuit implementation lane | Development observations only; no tracked evidence claim and no fallback. |
 
 A route is selected before preparation. Its tensor-network and planner roles
 produce the immutable TaskGraph; M5 then executes that graph through one
@@ -61,6 +63,8 @@ must not silently change the contraction plan.
   whole-circuit procedure and physical acceptance rules.
 - [Documentation index](docs/README.md): active references and historical
   compatibility material.
+- [Milestone ledger](docs/MILESTONES.md): sole authority for implementation
+  and evidence status.
 
 ## Setup
 
@@ -94,7 +98,7 @@ make m5-circuit-plan
 M5_CIRCUIT_ROUTES=opt_einsum_greedy__float32_real__numpy_cpu \
 make m5-circuit-smoke
 
-# Run the small physical M5.5 acceptance profile.
+# Run the small physical M5.5 development profile.
 UPMEM_ALLOW_PHYSICAL_HARDWARE=1 \
 UPMEM_HW_RANK_PATH=/dev/dpu_rankN \
 make m5-circuit-smoke
@@ -114,7 +118,8 @@ make evidence-inbox
 ```
 
 The Makefile retains historical qualification targets for replay and
-compatibility. They are intentionally not the primary workflow.
+compatibility. They are development and historical workflows, not evidence
+status declarations.
 
 ## Results Layout
 
