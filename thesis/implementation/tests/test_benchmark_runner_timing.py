@@ -354,7 +354,7 @@ def test_validation_exception_is_wrapped_with_partial_timing(tmp_path, monkeypat
     assert failure.value.profile.total_s == 13.0
 
 
-def test_summary_rejects_mixed_timing_contracts_and_keeps_contract_in_rows(tmp_path) -> None:
+def test_summary_preserves_mixed_timing_contracts_as_separate_rows(tmp_path) -> None:
     base = {
         "case_id": "case-1",
         "route": "route-a",
@@ -365,18 +365,41 @@ def test_summary_rejects_mixed_timing_contracts_and_keeps_contract_in_rows(tmp_p
         "timing_schema_version": TIMING_SCHEMA_VERSION,
         "timing_scope": TimingScope.ROUTE_TOTAL.value,
     }
-    for field, other in (("timing_schema_version", TIMING_SCHEMA_VERSION + 1), ("timing_scope", "kernel_only")):
-        run_dir = tmp_path / f"mixed-{field}"
-        append_jsonl(run_dir / "raw" / "case.jsonl", base)
-        append_jsonl(run_dir / "raw" / "case.jsonl", {**base, "route": "route-b", field: other})
-        with pytest.raises(ValueError, match=f"Mixed {field}"):
-            write_summary(run_dir)
-
-    run_dir = tmp_path / "consistent"
+    run_dir = tmp_path / "mixed-contracts"
     append_jsonl(run_dir / "raw" / "case.jsonl", base)
+    append_jsonl(run_dir / "raw" / "case.jsonl", {**base, "route": "route-b", "timing_scope": "kernel_only"})
+    append_jsonl(run_dir / "raw" / "case.jsonl", {**base, "route": "route-c", "timing_schema_version": TIMING_SCHEMA_VERSION + 1})
     summary = write_summary(run_dir)
-    assert summary["rows"][0]["timing_schema_version"] == TIMING_SCHEMA_VERSION
-    assert summary["rows"][0]["timing_scope"] == TimingScope.ROUTE_TOTAL.value
+
+    assert summary["timing_schema_version"] is None
+    assert summary["timing_scope"] is None
+    assert summary["timing_contracts"] == [
+        {"timing_schema_version": TIMING_SCHEMA_VERSION, "timing_scope": "kernel_only"},
+        {"timing_schema_version": TIMING_SCHEMA_VERSION, "timing_scope": TimingScope.ROUTE_TOTAL.value},
+        {"timing_schema_version": TIMING_SCHEMA_VERSION + 1, "timing_scope": TimingScope.ROUTE_TOTAL.value},
+    ]
+    rows = {row["route"]: row for row in summary["rows"]}
+    assert rows["route-a"]["timing_scope"] == TimingScope.ROUTE_TOTAL.value
+    assert rows["route-b"]["timing_scope"] == "kernel_only"
+    assert rows["route-c"]["timing_schema_version"] == TIMING_SCHEMA_VERSION + 1
+
+
+def test_summary_rejects_inconsistent_contract_within_case_route_group(tmp_path) -> None:
+    base = {
+        "case_id": "case-1",
+        "route": "route-a",
+        "status": "passed",
+        "total_time_s": 1.0,
+        "energy_joules": None,
+        "energy_source": "unavailable",
+        "timing_schema_version": TIMING_SCHEMA_VERSION,
+        "timing_scope": TimingScope.ROUTE_TOTAL.value,
+    }
+    append_jsonl(tmp_path / "raw" / "case.jsonl", base)
+    append_jsonl(tmp_path / "raw" / "case.jsonl", {**base, "timing_scope": "kernel_only"})
+
+    with pytest.raises(ValueError, match="Inconsistent timing contract"):
+        write_summary(tmp_path)
 
 
 def test_suite_validation_rejects_duplicate_case_ids() -> None:

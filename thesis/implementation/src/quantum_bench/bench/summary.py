@@ -18,14 +18,19 @@ def collect_raw_records(run_dir: Path) -> list[dict[str, Any]]:
 
 def write_summary(run_dir: Path) -> dict[str, Any]:
     records = collect_raw_records(run_dir)
-    timing_schema_version = _consistent_timing_value(records, "timing_schema_version")
-    timing_scope = _consistent_timing_value(records, "timing_scope")
+    timing_contracts = _timing_contracts(records)
+    timing_schema_version = timing_contracts[0]["timing_schema_version"] if len(timing_contracts) == 1 else None
+    timing_scope = timing_contracts[0]["timing_scope"] if len(timing_contracts) == 1 else None
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for record in records:
         grouped[(record["case_id"], record["route"])].append(record)
 
     rows = []
     for (case_id, route), group in sorted(grouped.items()):
+        group_contracts = _timing_contracts(group)
+        if len(group_contracts) != 1:
+            raise ValueError(f"Inconsistent timing contract for case_id={case_id!r}, route={route!r}")
+        group_contract = group_contracts[0]
         passed = [r for r in group if r["status"] == "passed"]
         failed = [r for r in group if r["status"] == "failed"]
         skipped = [r for r in group if r["status"] == "skipped"]
@@ -46,8 +51,8 @@ def write_summary(run_dir: Path) -> dict[str, Any]:
                 "execution_mode": group[0].get("execution_mode"),
                 "output_contract": group[0].get("output_contract"),
                 "validation_mode": group[0].get("validation_mode"),
-                "timing_schema_version": timing_schema_version,
-                "timing_scope": timing_scope,
+                "timing_schema_version": group_contract["timing_schema_version"],
+                "timing_scope": group_contract["timing_scope"],
                 "n_qubits": group[0].get("n_qubits"),
                 "depth": group[0].get("depth"),
                 "circuit_family": group[0].get("circuit_family"),
@@ -71,6 +76,7 @@ def write_summary(run_dir: Path) -> dict[str, Any]:
         "schema_version": "quantum_bench_summary_v2",
         "run_dir": str(run_dir),
         "record_count": len(records),
+        "timing_contracts": timing_contracts,
         "timing_schema_version": timing_schema_version,
         "timing_scope": timing_scope,
         "rows": rows,
@@ -173,9 +179,7 @@ def _energy_source(records: list[dict[str, Any]]) -> str:
     return ",".join(sources) if sources else "unavailable"
 
 
-def _consistent_timing_value(records: list[dict[str, Any]], key: str) -> Any:
-    values = {record.get(key) for record in records}
-    if len(values) > 1:
-        rendered = ", ".join(sorted(repr(value) for value in values))
-        raise ValueError(f"Mixed {key} values in raw records: {rendered}")
-    return next(iter(values), None)
+def _timing_contracts(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    pairs = {(record.get("timing_schema_version"), record.get("timing_scope")) for record in records}
+    ordered = sorted(pairs, key=lambda pair: (repr(pair[0]), repr(pair[1])))
+    return [{"timing_schema_version": version, "timing_scope": scope} for version, scope in ordered]
