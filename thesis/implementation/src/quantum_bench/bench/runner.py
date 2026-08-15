@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 import traceback
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +16,7 @@ from quantum_bench.bench.run_dirs import EVIDENCE_ARTIFACT_KIND, create_run_dir,
 from quantum_bench.bench.summary import write_summary
 from quantum_bench.circuits import load_circuit, manifest
 from quantum_bench.core.jsonio import append_jsonl, write_json, write_jsonl
-from quantum_bench.core.records import BenchmarkCaseResult, BenchmarkContext, ExecutionProfile, RouteDecision, RouteIdentity, RouteOutput, RouteResult, TaskGraph, to_jsonable
+from quantum_bench.core.records import TIMING_SCHEMA_VERSION, BenchmarkCaseResult, BenchmarkContext, ExecutionProfile, RouteDecision, RouteIdentity, RouteOutput, RouteResult, TaskGraph, TimingScope, to_jsonable
 from quantum_bench.environment import capture_environment
 from quantum_bench.routing import TaskRouteContext, route_task_graph
 from quantum_bench.tn import build_tensor_network, plan_task_graph_with_config, with_path_cost_summary
@@ -29,6 +32,51 @@ from quantum_bench.targets.upmem import (
 )
 from quantum_bench.validation import compute_reference, validate
 from quantum_bench.validation.statevectors import tensor_to_quest_statevector
+
+
+@dataclass(frozen=True)
+class _ReferenceComponent:
+    """Immutable value and timing for one case-scoped reference operation."""
+
+    value: Any
+    timing_s: float
+
+
+@dataclass(frozen=True)
+class _ReferenceComponentFailure:
+    timing_s: float
+    error: str
+
+
+@dataclass(frozen=True)
+class _CaseReferenceBundle:
+    reference_id: str
+    components: dict[str, _ReferenceComponent | _ReferenceComponentFailure]
+    artifact: str
+    artifact_sha256: str
+
+
+@dataclass(frozen=True)
+class _RouteReference:
+    reference_id: str
+    artifact: str
+    artifact_sha256: str
+    component: str
+    value: Any | None
+
+
+class _ReferenceGenerationError(RuntimeError):
+    def __init__(self, reference: _RouteReference, failed_component: str, error: str) -> None:
+        super().__init__(f"{failed_component} failed: {error}")
+        self.reference = reference
+        self.failed_component = failed_component
+
+
+class _RouteAttemptError(RuntimeError):
+    def __init__(self, phase: str, cause: Exception, profile: ExecutionProfile) -> None:
+        super().__init__(f"{phase} failed: {cause}")
+        self.phase = phase
+        self.profile = profile
 
 
 def run_suite(suite_path: Path, root_dir: Path) -> Path:
@@ -68,6 +116,12 @@ def run_suite(suite_path: Path, root_dir: Path) -> Path:
                 raise
             continue
 
+        reference_modes = _declared_reference_modes(routes, suite)
+        reference_bundle = (
+            _precompute_case_references(generated, suite, case, case_dir, run_dir, reference_modes)
+            if reference_modes
+            else None
+        )
         for route_name in suite["route_policy"]["routes"]:
             route_config = route_config_for(suite, route_name)
             route = routes.get(route_name)
@@ -110,13 +164,54 @@ def run_suite(suite_path: Path, root_dir: Path) -> Path:
                     _record_skip(run_dir, suite, case, generated, identity, route.backend_family, skip_reason, repeat_id, route_config)
                 continue
 
+            reference = None
+            if _requires_reference(identity.validation_mode):
+                try:
+                    if reference_bundle is None:
+                        raise RuntimeError("required case reference bundle was not precomputed")
+                    reference = _select_reference(reference_bundle, identity.validation_mode)
+                except _ReferenceGenerationError as exc:
+                    for repeat_id in range(int(suite["repeats"])):
+                        _record_repeat_failure(
+                            run_dir,
+                            suite,
+                            case,
+                            generated,
+                            identity,
+                            route.backend_family,
+                            repeat_id,
+                            exc,
+                            route_config,
+                            failure_phase="reference_generation",
+                            reference=exc.reference,
+                            reference_failure_component=exc.failed_component,
+                        )
+                    if suite["route_policy"].get("fail_fast"):
+                        raise
+                    continue
             for warmup_id in range(int(suite["warmups"])):
-                _run_repeat(route, generated, suite, case, route_config, root_dir, run_dir, -(warmup_id + 1), persist=False)
+                try:
+                    _run_repeat(route, generated, suite, case, route_config, root_dir, run_dir, -(warmup_id + 1), persist=False, reference=reference)
+                except Exception as exc:
+                    _write_warmup_failure(run_dir, case, identity, route.backend_family, warmup_id, exc, reference)
+                    if suite["route_policy"].get("fail_fast"):
+                        raise
             for repeat_id in range(int(suite["repeats"])):
                 try:
-                    _run_repeat(route, generated, suite, case, route_config, root_dir, run_dir, repeat_id, persist=True)
+                    _run_repeat(route, generated, suite, case, route_config, root_dir, run_dir, repeat_id, persist=True, reference=reference)
                 except Exception as exc:
-                    _record_repeat_failure(run_dir, suite, case, generated, identity, route.backend_family, repeat_id, exc, route_config)
+                    _record_repeat_failure(
+                        run_dir,
+                        suite,
+                        case,
+                        generated,
+                        identity,
+                        route.backend_family,
+                        repeat_id,
+                        exc,
+                        route_config,
+                        reference=reference,
+                    )
                     if suite["route_policy"].get("fail_fast"):
                         raise
 
@@ -147,67 +242,114 @@ def _generate_case(case: dict[str, Any], suite: dict[str, Any], root_dir: Path, 
     }
 
 
-def _run_repeat(route: object, generated: dict[str, Any], suite: dict[str, Any], case: dict[str, Any], route_config: dict[str, Any], root_dir: Path, run_dir: Path, repeat_id: int, persist: bool) -> RouteResult:
+def _run_repeat(route: object, generated: dict[str, Any], suite: dict[str, Any], case: dict[str, Any], route_config: dict[str, Any], root_dir: Path, run_dir: Path, repeat_id: int, persist: bool, reference: _RouteReference | None = None) -> RouteResult:
+    """Run one route attempt; route.prepare must not mutate graph or network."""
+
     context = _context(root_dir, run_dir, suite, case, route_config, repeat_id)
     identity = _effective_identity(route.identity, route_config)
-    start = time.perf_counter()
-    prepared = route.prepare(generated["graph"], generated["network"], context)
-    result = route.execute(prepared, context)
+    # Scientific inputs are shared with the case reference cache. Routes must
+    # treat them as immutable; enforcement is intentionally outside this patch.
+    route_start = time.perf_counter()
+    try:
+        prepared = route.prepare(generated["graph"], generated["network"], context)
+    except Exception as exc:
+        elapsed_s = time.perf_counter() - route_start
+        profile = _merged_profile(ExecutionProfile(), generated["generate_s"], generated["graph"].planning_time_s, 0.0, elapsed_s, elapsed_s)
+        raise _RouteAttemptError("prepare", exc, profile) from exc
+    try:
+        result = route.execute(prepared, context)
+    except Exception as exc:
+        elapsed_s = time.perf_counter() - route_start
+        profile = _merged_profile(ExecutionProfile(), generated["generate_s"], generated["graph"].planning_time_s, 0.0, elapsed_s, elapsed_s)
+        raise _RouteAttemptError("execute", exc, profile) from exc
+    route_host_wall_s = time.perf_counter() - route_start
     validation = None
     validation_s = 0.0
-    reference_s = 0.0
-    if identity.validation_mode == "compare_output":
-        reference, reference_s = compute_reference(generated["network"], suite["planner"]["optimize"])
-        validation_start = time.perf_counter()
-        if result.output.array is None:
-            validation = None
-            validation_s = time.perf_counter() - validation_start
-            status = "failed"
-            error = result.error or "validation required but route did not return an output array"
+    validation_start: float | None = None
+    try:
+        if identity.validation_mode == "compare_output":
+            validation_start = time.perf_counter()
+            if reference is None:
+                raise RuntimeError("compare_output route requires a cached reference")
+            if result.output.array is None:
+                validation = None
+                validation_s = time.perf_counter() - validation_start
+                status = "failed"
+                error = result.error or "validation required but route did not return an output array"
+            else:
+                validation = validate(result.output.array, reference.value, suite["tolerances"])
+                validation_s = time.perf_counter() - validation_start
+                status = result.status if validation.passed else "failed"
+                error = result.error if validation.passed else "validation failed"
+        elif identity.validation_mode == "compare_statevector":
+            validation_start = time.perf_counter()
+            if reference is None:
+                raise RuntimeError("compare_statevector route requires a cached reference")
+            if result.output.array is None:
+                validation = None
+                validation_s = time.perf_counter() - validation_start
+                status = "failed"
+                error = result.error or "statevector validation required but route did not return an output array"
+            else:
+                validation = validate(result.output.array, reference.value, suite["tolerances"])
+                validation_s = time.perf_counter() - validation_start
+                status = result.status if validation.passed else "failed"
+                error = result.error if validation.passed else "statevector validation failed"
+        elif identity.validation_mode == "benchmark_only":
+            result.output.metadata.setdefault("validation_policy", "benchmark_only: route returns metrics only")
+            status = result.status
+            error = result.error
+        elif identity.validation_mode == "skip_with_reason":
+            result.output.metadata.setdefault("validation_policy", "skip_with_reason")
+            status = result.status
+            error = result.error
         else:
-            validation = validate(result.output.array, reference, suite["tolerances"])
-            validation_s = time.perf_counter() - validation_start
-            status = result.status if validation.passed else "failed"
-            error = result.error if validation.passed else "validation failed"
-    elif identity.validation_mode == "compare_statevector":
-        reference_tensor, reference_s = compute_reference(generated["network"], suite["planner"]["optimize"])
-        reference = tensor_to_quest_statevector(reference_tensor)
-        validation_start = time.perf_counter()
-        if result.output.array is None:
-            validation = None
-            validation_s = time.perf_counter() - validation_start
-            status = "failed"
-            error = result.error or "statevector validation required but route did not return an output array"
-        else:
-            validation = validate(result.output.array, reference, suite["tolerances"])
-            validation_s = time.perf_counter() - validation_start
-            status = result.status if validation.passed else "failed"
-            error = result.error if validation.passed else "statevector validation failed"
-    elif identity.validation_mode == "benchmark_only":
-        result.output.metadata.setdefault("validation_policy", "benchmark_only: route returns metrics only")
-        status = result.status
-        error = result.error
-    elif identity.validation_mode == "skip_with_reason":
-        result.output.metadata.setdefault("validation_policy", "skip_with_reason")
-        status = result.status
-        error = result.error
-    else:
-        status = result.status
-        error = result.error
-    total_s = time.perf_counter() - start
-    profile = _merged_profile(result.profile, generated["generate_s"], generated["graph"].planning_time_s, reference_s, validation_s, total_s)
+            status = result.status
+            error = result.error
+    except Exception as exc:
+        failed_at = time.perf_counter()
+        validation_s = failed_at - validation_start if validation_start is not None else 0.0
+        profile = _merged_profile(
+            result.profile,
+            generated["generate_s"],
+            generated["graph"].planning_time_s,
+            validation_s,
+            route_host_wall_s,
+            failed_at - route_start,
+        )
+        raise _RouteAttemptError("validation", exc, profile) from exc
+    route_total_s = time.perf_counter() - route_start
+    profile = _merged_profile(
+        result.profile,
+        generated["generate_s"],
+        generated["graph"].planning_time_s,
+        validation_s,
+        route_host_wall_s,
+        route_total_s,
+    )
     result.profile = profile
     result.status = status
     result.error = error
     if persist:
         _persist_route_artifacts(run_dir, case, result, repeat_id)
-        record = _case_record(run_dir.name, suite, case, generated, result, validation, repeat_id, identity, route_config)
+        record = _case_record(
+            run_dir.name,
+            suite,
+            case,
+            generated,
+            result,
+            validation,
+            repeat_id,
+            identity,
+            route_config,
+            reference=reference,
+        )
         append_jsonl(run_dir / "raw" / f"{case['case_id']}.jsonl", record)
         write_json(run_dir / "validation" / f"{case['case_id']}_{result.route}_{repeat_id}.json", validation)
     return result
 
 
-def _case_record(run_id: str, suite: dict[str, Any], case: dict[str, Any], generated: dict[str, Any], result: RouteResult, validation: object, repeat_id: int, identity: RouteIdentity, route_config: dict[str, Any]) -> BenchmarkCaseResult:
+def _case_record(run_id: str, suite: dict[str, Any], case: dict[str, Any], generated: dict[str, Any], result: RouteResult, validation: object, repeat_id: int, identity: RouteIdentity, route_config: dict[str, Any], reference: _RouteReference | None = None) -> BenchmarkCaseResult:
     circuit = generated["circuit"]
     graph = generated["graph"]
     return BenchmarkCaseResult(
@@ -241,6 +383,12 @@ def _case_record(run_id: str, suite: dict[str, Any], case: dict[str, Any], gener
         validation=to_jsonable(validation) if validation is not None else None,
         error=result.error if result.status != "skipped" else None,
         route_metadata=to_jsonable(result.metadata),
+        reference_id=reference.reference_id if reference is not None else None,
+        reference_artifact=reference.artifact if reference is not None else None,
+        reference_artifact_sha256=reference.artifact_sha256 if reference is not None else None,
+        reference_component=reference.component if reference is not None else None,
+        timing_schema_version=result.profile.timing_schema_version,
+        timing_scope=result.profile.timing_contract.route_total_scope.value,
     )
 
 
@@ -287,13 +435,56 @@ def _record_case_setup_failure(run_dir: Path, suite: dict[str, Any], case: dict[
         "validation": None,
         "error": f"{exc}\n{traceback.format_exc()}",
         "route_metadata": {},
+        "reference_id": None,
+        "reference_artifact": None,
+        "reference_artifact_sha256": None,
+        "reference_component": None,
+        "timing_schema_version": TIMING_SCHEMA_VERSION,
+        "timing_scope": TimingScope.ROUTE_TOTAL.value,
     }
     append_jsonl(run_dir / "raw" / f"{record['case_id']}.jsonl", record)
 
 
-def _record_repeat_failure(run_dir: Path, suite: dict[str, Any], case: dict[str, Any], generated: dict[str, Any], identity: RouteIdentity, backend_family: str, repeat_id: int, exc: Exception, route_config: dict[str, Any]) -> None:
-    result = RouteResult(identity.route_id, backend_family, "failed", RouteOutput(identity.output_contract), ExecutionProfile(), None, "unavailable", f"{exc}\n{traceback.format_exc()}")
-    append_jsonl(run_dir / "raw" / f"{case['case_id']}.jsonl", _case_record(run_dir.name, suite, case, generated, result, None, repeat_id, identity, route_config))
+def _record_repeat_failure(run_dir: Path, suite: dict[str, Any], case: dict[str, Any], generated: dict[str, Any], identity: RouteIdentity, backend_family: str, repeat_id: int, exc: Exception, route_config: dict[str, Any], failure_phase: str | None = None, reference: _RouteReference | None = None, reference_failure_component: str | None = None) -> None:
+    metadata: dict[str, Any] = {}
+    profile = ExecutionProfile()
+    if isinstance(exc, _RouteAttemptError):
+        profile = exc.profile
+        failure_phase = failure_phase or exc.phase
+    if failure_phase is not None:
+        metadata["failure_phase"] = failure_phase
+    if reference_failure_component is not None:
+        metadata["reference_failure_component"] = reference_failure_component
+    result = RouteResult(identity.route_id, backend_family, "failed", RouteOutput(identity.output_contract), profile, None, "unavailable", f"{exc}\n{traceback.format_exc()}", metadata)
+    append_jsonl(
+        run_dir / "raw" / f"{case['case_id']}.jsonl",
+        _case_record(run_dir.name, suite, case, generated, result, None, repeat_id, identity, route_config, reference=reference),
+    )
+
+
+def _write_warmup_failure(run_dir: Path, case: dict[str, Any], identity: RouteIdentity, backend_family: str, warmup_id: int, exc: Exception, reference: _RouteReference | None) -> None:
+    profile = exc.profile if isinstance(exc, _RouteAttemptError) else ExecutionProfile()
+    failure_phase = exc.phase if isinstance(exc, _RouteAttemptError) else "warmup"
+    write_json(
+        run_dir / "cases" / str(case["case_id"]) / "warmup_failures" / f"{sanitize(identity.route_id)}_warmup_{warmup_id}.json",
+        {
+            "schema_version": 1,
+            "case_id": str(case["case_id"]),
+            "route": identity.route_id,
+            "backend_family": backend_family,
+            "warmup_id": warmup_id,
+            "status": "failed",
+            "failure_phase": failure_phase,
+            "error": f"{exc}\n{traceback.format_exc()}",
+            "timings": to_jsonable(profile),
+            "timing_schema_version": profile.timing_schema_version,
+            "timing_scope": profile.timing_contract.route_total_scope.value,
+            "reference_id": reference.reference_id if reference is not None else None,
+            "reference_artifact": reference.artifact if reference is not None else None,
+            "reference_artifact_sha256": reference.artifact_sha256 if reference is not None else None,
+            "reference_component": reference.component if reference is not None else None,
+        },
+    )
 
 
 def _context(root_dir: Path, run_dir: Path, suite: dict[str, Any], case: dict[str, Any], route_config: dict[str, Any], repeat_id: int) -> BenchmarkContext:
@@ -358,7 +549,118 @@ def _persist_route_artifacts(run_dir: Path, case: dict[str, Any], result: RouteR
     result.metadata = metadata
 
 
-def _merged_profile(profile: ExecutionProfile, generate_s: float, planning_s: float, reference_s: float, validation_s: float, total_s: float) -> ExecutionProfile:
+def _declared_reference_modes(routes: dict[str, Any], suite: dict[str, Any]) -> set[str]:
+    modes: set[str] = set()
+    for route_name in suite["route_policy"]["routes"]:
+        route = routes.get(route_name)
+        if route is None:
+            continue
+        identity = _effective_identity(route.identity, route_config_for(suite, route_name))
+        if _requires_reference(identity.validation_mode):
+            modes.add(identity.validation_mode)
+    return modes
+
+
+def _precompute_case_references(
+    generated: dict[str, Any],
+    suite: dict[str, Any],
+    case: dict[str, Any],
+    case_dir: Path,
+    run_dir: Path,
+    validation_modes: set[str],
+) -> _CaseReferenceBundle:
+    """Finalize every declared reference component before route execution."""
+
+    reference_id = _reference_id(generated, suite, case)
+    components: dict[str, _ReferenceComponent | _ReferenceComponentFailure] = {}
+    tensor = _compute_tensor_reference(generated, suite)
+    components["tensor_reference"] = tensor
+    if "compare_statevector" in validation_modes and isinstance(tensor, _ReferenceComponent):
+        components["statevector_adaptation"] = _compute_statevector_adaptation(tensor)
+    artifact_path = case_dir / f"reference_{reference_id}.json"
+    write_json(
+        artifact_path,
+        {
+            "schema_version": 1,
+            "timing_schema_version": TIMING_SCHEMA_VERSION,
+            "reference_id": reference_id,
+            "case_id": str(case["case_id"]),
+            "planner": to_jsonable(suite["planner"]),
+            "components": {
+                "tensor_reference": _reference_component_record(
+                    components.get("tensor_reference"),
+                    TimingScope.CASE_TENSOR_REFERENCE,
+                ),
+                "statevector_adaptation": _reference_component_record(
+                    components.get("statevector_adaptation"),
+                    TimingScope.CASE_STATEVECTOR_ADAPTATION,
+                ),
+            },
+        },
+    )
+    artifact = artifact_path.relative_to(run_dir).as_posix()
+    artifact_sha256 = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+    return _CaseReferenceBundle(reference_id, components, artifact, artifact_sha256)
+
+
+def _reference_id(generated: dict[str, Any], suite: dict[str, Any], case: dict[str, Any]) -> str:
+    identity = {
+        "case_id": str(case["case_id"]),
+        "planner": to_jsonable(suite["planner"]),
+        "tensor_network_hash": str(getattr(generated["graph"], "tensor_network_hash", "")),
+    }
+    encoded = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _compute_tensor_reference(generated: dict[str, Any], suite: dict[str, Any]) -> _ReferenceComponent | _ReferenceComponentFailure:
+    start = time.perf_counter()
+    try:
+        value, timing_s = compute_reference(generated["network"], suite["planner"]["optimize"])
+    except Exception as exc:
+        return _ReferenceComponentFailure(time.perf_counter() - start, str(exc))
+    return _ReferenceComponent(value, timing_s)
+
+
+def _compute_statevector_adaptation(tensor: _ReferenceComponent) -> _ReferenceComponent | _ReferenceComponentFailure:
+    start = time.perf_counter()
+    try:
+        value = tensor_to_quest_statevector(tensor.value)
+    except Exception as exc:
+        return _ReferenceComponentFailure(time.perf_counter() - start, str(exc))
+    return _ReferenceComponent(value, time.perf_counter() - start)
+
+
+def _select_reference(bundle: _CaseReferenceBundle, validation_mode: str) -> _RouteReference:
+    selected = "statevector_adaptation" if validation_mode == "compare_statevector" else "tensor_reference"
+    reference = _RouteReference(bundle.reference_id, bundle.artifact, bundle.artifact_sha256, selected, None)
+    component = bundle.components.get(selected)
+    if component is None:
+        tensor = bundle.components.get("tensor_reference")
+        if isinstance(tensor, _ReferenceComponentFailure):
+            raise _ReferenceGenerationError(reference, "tensor_reference", tensor.error)
+        raise _ReferenceGenerationError(reference, selected, "component was not precomputed")
+    if isinstance(component, _ReferenceComponentFailure):
+        raise _ReferenceGenerationError(reference, selected, component.error)
+    return _RouteReference(bundle.reference_id, bundle.artifact, bundle.artifact_sha256, selected, component.value)
+
+
+def _reference_component_record(
+    component: _ReferenceComponent | _ReferenceComponentFailure | None,
+    scope: TimingScope,
+) -> dict[str, Any]:
+    if component is None:
+        return {"status": "not_computed", "scope": scope.value, "timing_s": None}
+    if isinstance(component, _ReferenceComponentFailure):
+        return {"status": "failed", "scope": scope.value, "timing_s": component.timing_s, "error": component.error}
+    return {"status": "completed", "scope": scope.value, "timing_s": component.timing_s}
+
+
+def _requires_reference(validation_mode: str) -> bool:
+    return validation_mode in {"compare_output", "compare_statevector"}
+
+
+def _merged_profile(profile: ExecutionProfile, generate_s: float, planning_s: float, validation_s: float, route_host_wall_s: float, route_total_s: float) -> ExecutionProfile:
     return ExecutionProfile(
         generate_s=generate_s,
         planning_s=planning_s,
@@ -367,9 +669,11 @@ def _merged_profile(profile: ExecutionProfile, generate_s: float, planning_s: fl
         h2d_s=profile.h2d_s,
         kernel_s=profile.kernel_s,
         d2h_s=profile.d2h_s,
-        reduction_s=profile.reduction_s + reference_s,
+        reduction_s=profile.reduction_s,
         validation_s=validation_s,
-        total_s=total_s,
+        total_s=route_total_s,
+        route_host_wall_s=route_host_wall_s,
+        route_total_s=route_total_s,
     )
 
 

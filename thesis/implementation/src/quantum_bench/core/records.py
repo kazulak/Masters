@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, is_dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
 
 JsonDict = dict[str, Any]
+TIMING_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -206,8 +208,38 @@ class RouteEstimate:
     metadata: JsonDict = field(default_factory=dict)
 
 
+class TimingScope(str, Enum):
+    """Ownership boundary for an ExecutionProfile timing value."""
+
+    CASE_TENSOR_REFERENCE = "case_tensor_reference_once_per_case_planner"
+    CASE_STATEVECTOR_ADAPTATION = "case_statevector_adaptation_once_per_case_planner"
+    ROUTE_HOST_WALL = "route_host_wall_prepare_through_execute"
+    VALIDATION = "validation_only"
+    ROUTE_TOTAL = "route_attempt_prepare_through_execute_and_validation"
+
+
+@dataclass(frozen=True)
+class TimingContract:
+    """Scopes for profile timings emitted by the suite runner.
+
+    ``route_total_s`` is the route-attempt wall time and excludes case-scoped
+    reference work. ``total_s`` is retained as an exact compatibility alias.
+    """
+
+    route_host_wall_scope: TimingScope = TimingScope.ROUTE_HOST_WALL
+    validation_scope: TimingScope = TimingScope.VALIDATION
+    route_total_scope: TimingScope = TimingScope.ROUTE_TOTAL
+    total_s_alias_of: str = "route_total_s"
+
+
 @dataclass(frozen=True)
 class ExecutionProfile:
+    """Versioned route timing breakdown.
+
+    The first ten fields retain their legacy order for positional callers.
+    Case-reference timings live in ``cases/<case_id>/reference_<id>.json``.
+    """
+
     generate_s: float = 0.0
     planning_s: float = 0.0
     lowering_s: float = 0.0
@@ -218,6 +250,10 @@ class ExecutionProfile:
     reduction_s: float = 0.0
     validation_s: float = 0.0
     total_s: float = 0.0
+    route_host_wall_s: float = 0.0
+    route_total_s: float = 0.0
+    timing_schema_version: int = TIMING_SCHEMA_VERSION
+    timing_contract: TimingContract = field(default_factory=TimingContract)
 
 
 @dataclass
@@ -278,6 +314,12 @@ class BenchmarkCaseResult:
     validation: JsonDict | None
     error: str | None
     route_metadata: JsonDict = field(default_factory=dict)
+    reference_id: str | None = None
+    reference_artifact: str | None = None
+    reference_artifact_sha256: str | None = None
+    reference_component: str | None = None
+    timing_schema_version: int | None = None
+    timing_scope: str | None = None
 
 
 @dataclass(frozen=True)
@@ -294,6 +336,8 @@ class BenchmarkContext:
 
 
 def to_jsonable(value: Any) -> Any:
+    if isinstance(value, Enum):
+        return value.value
     if is_dataclass(value):
         return {key: to_jsonable(item) for key, item in asdict(value).items()}
     if isinstance(value, Path):

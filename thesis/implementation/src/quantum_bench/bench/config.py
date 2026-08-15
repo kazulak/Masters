@@ -172,11 +172,16 @@ def validate_suite(suite: dict[str, Any]) -> None:
     routes = suite["route_policy"].get("routes")
     if not isinstance(routes, list) or not routes:
         raise ValueError("route_policy.routes must be a non-empty list")
+    case_ids: set[str] = set()
     for idx, case in enumerate(suite["cases"]):
         if not isinstance(case, dict):
             raise ValueError(f"Case {idx} must be a mapping")
         if not case.get("case_id"):
             raise ValueError(f"Case {idx} must define case_id")
+        case_id = str(case["case_id"])
+        if case_id in case_ids:
+            raise ValueError(f"Duplicate case_id: {case_id}")
+        case_ids.add(case_id)
         circuit = case.get("circuit")
         if not isinstance(circuit, dict) or not circuit.get("name"):
             raise ValueError(f"Case {case.get('case_id', idx)} must define circuit.name")

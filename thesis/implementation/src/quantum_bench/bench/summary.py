@@ -18,6 +18,8 @@ def collect_raw_records(run_dir: Path) -> list[dict[str, Any]]:
 
 def write_summary(run_dir: Path) -> dict[str, Any]:
     records = collect_raw_records(run_dir)
+    timing_schema_version = _consistent_timing_value(records, "timing_schema_version")
+    timing_scope = _consistent_timing_value(records, "timing_scope")
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for record in records:
         grouped[(record["case_id"], record["route"])].append(record)
@@ -44,6 +46,8 @@ def write_summary(run_dir: Path) -> dict[str, Any]:
                 "execution_mode": group[0].get("execution_mode"),
                 "output_contract": group[0].get("output_contract"),
                 "validation_mode": group[0].get("validation_mode"),
+                "timing_schema_version": timing_schema_version,
+                "timing_scope": timing_scope,
                 "n_qubits": group[0].get("n_qubits"),
                 "depth": group[0].get("depth"),
                 "circuit_family": group[0].get("circuit_family"),
@@ -67,6 +71,8 @@ def write_summary(run_dir: Path) -> dict[str, Any]:
         "schema_version": "quantum_bench_summary_v2",
         "run_dir": str(run_dir),
         "record_count": len(records),
+        "timing_schema_version": timing_schema_version,
+        "timing_scope": timing_scope,
         "rows": rows,
         "validated_routes": [row for row in rows if row.get("validation_mode") == "compare_output"],
         "benchmark_only_baselines": [row for row in rows if row.get("validation_mode") == "benchmark_only"],
@@ -92,6 +98,8 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "execution_mode",
         "output_contract",
         "validation_mode",
+        "timing_schema_version",
+        "timing_scope",
         "n_qubits",
         "depth",
         "circuit_family",
@@ -163,3 +171,11 @@ def _first(records: list[dict[str, Any]], key: str) -> Any:
 def _energy_source(records: list[dict[str, Any]]) -> str:
     sources = sorted({str(record.get("energy_source")) for record in records if record.get("energy_source")})
     return ",".join(sources) if sources else "unavailable"
+
+
+def _consistent_timing_value(records: list[dict[str, Any]], key: str) -> Any:
+    values = {record.get(key) for record in records}
+    if len(values) > 1:
+        rendered = ", ".join(sorted(repr(value) for value in values))
+        raise ValueError(f"Mixed {key} values in raw records: {rendered}")
+    return next(iter(values), None)
