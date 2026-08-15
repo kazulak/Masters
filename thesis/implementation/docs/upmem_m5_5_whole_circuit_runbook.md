@@ -1,7 +1,9 @@
 # M5.5 Whole-Circuit UPMEM Runbook
 
-Status: additive implementation baseline; local implementation and
-hardware-free validation are in progress. Physical ETH acceptance is pending.
+Status: additive implementation baseline; canonical, scaling, and
+large-boundary physical development contracts passed on clean source
+`b550c46`. Raw runs remain ignored development evidence, not promoted thesis
+results.
 
 M5.5 exercises the complete research path:
 
@@ -145,6 +147,14 @@ make m5-circuit-study
 The suite has one warmup and five measured repetitions. The report must keep
 one-rank and two-rank topology series distinct.
 
+The accepted ETH scaling run completed all 80 measured rows. Fully active
+same-plan scaling is valid for 1/2/4/8/16 DPUs. The 32/64-DPU one-rank rows and
+128-DPU two-rank rows provisioned those resources but used only 16 active DPUs;
+the two-rank row used one active rank. Retain their measured runtimes as
+overprovisioning evidence, but do not calculate full-DPU or rank speedup from
+them. The observed end-to-end maxima were `4.73x` for float32 at 16 active
+DPUs and `3.14x` for int8 at 8 active DPUs relative to their one-DPU runs.
+
 ### Large boundary profile
 
 The large profile contains BV, EDC, and HS at 22, 24, 26, 28, and 30 qubits,
@@ -165,6 +175,15 @@ make m5-circuit-study
 Do not turn a large-profile unsupported row into a CPU fallback or omit it
 from the report.
 
+The accepted ETH large run produced 120 rows: 96 completed and 24 explicit
+unsupported rows, with 0 failures. All supported 22--28q physical rows used all
+64 allocated DPUs and passed physical execution, release, transfer, and
+validation contracts. BV, EDC, and HS at 30q were rejected for a 4 GiB final
+output and peak-live requirement against the configured 2 GiB limits. The
+maximum full-precision error was `1.67e-6`. Because the suite has one repeat,
+its timing remains boundary observation and is not admitted as speedup
+evidence.
+
 ## 4. Report A Completed Run
 
 Each execution prints its run directory and writes
@@ -173,7 +192,7 @@ configuration, and plan metadata below `runs/evidence/`. Generate the report
 without rerunning hardware:
 
 ```bash
-M5_CIRCUIT_RUN=runs/evidence/m5_circuit_study/m5_circuit_study/<timestamp> \
+M5_CIRCUIT_RUN=runs/evidence/<study_id>/m5_circuit_study/<timestamp> \
 M5_CIRCUIT_REPORT=runs/comparisons/m5_circuit_study/<timestamp> \
 make m5-circuit-report
 ```
@@ -183,7 +202,7 @@ The direct equivalent is:
 ```bash
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src ../.venv/bin/python \
   -m quantum_bench.bench m5-circuit-report \
-  --input runs/evidence/m5_circuit_study/m5_circuit_study/<timestamp> \
+  --input runs/evidence/<study_id>/m5_circuit_study/<timestamp> \
   --output runs/comparisons/m5_circuit_study/<timestamp>
 ```
 
@@ -228,7 +247,7 @@ editing its contents:
 
 ```bash
 tar -czf /tmp/m5_circuit_<timestamp>.tar.gz \
-  runs/evidence/m5_circuit_study/m5_circuit_study/<timestamp>
+  runs/evidence/<study_id>/m5_circuit_study/<timestamp>
 ```
 
 Copy that archive into the local ignored inbox under `runs/inbox/eth/m5_5/` and

@@ -8,10 +8,10 @@ This directory is the active thesis implementation. Its research question is:
 The current code establishes the circuit-to-TN-to-TaskGraph pipeline, serious
 CPU and GPU baselines, bounded UPMEM SDK-simulator execution, and additive
 whole-circuit M5.5 execution through interchangeable same-plan CPU and
-physical UPMEM engines. M5.5 is the current implementation baseline, but its
-physical ETH acceptance is still pending. It does **not** yet claim UPMEM
-hardware speedup, energy efficiency, or a fully general UPMEM tensor
-contraction architecture.
+physical UPMEM engines. M5.5 is the current implementation baseline and its
+canonical, scaling, and large-boundary profiles have passed their physical ETH
+development contracts. It does **not** yet claim UPMEM speedup over CPU/GPU,
+energy efficiency, or a fully general UPMEM tensor contraction architecture.
 
 The active physical evidence is a sequence of bounded qualification lanes. M2.1
 useful-slice execution, M2.2 float32/requantized execution, M2.3 two-path/two-
@@ -44,10 +44,10 @@ and SparseP remain subsequent provider/kernel/communication components behind
 thesis-owned interfaces. The later M4.6, M5.1, and M5.2 observations below are
 audited development runs copied from ETH, not promoted or tracked thesis
 results. M5.4/v3 remains a frozen, replayable single-contraction compatibility
-surface. M5.5 is the additive whole-circuit implementation baseline described below; its
-local implementation and hardware-free validation are in progress, with final
-physical ETH acceptance still outstanding. Its evidence remains in ignored
-`runs/` and is not promoted or tracked as thesis results.
+surface. M5.5 is the additive whole-circuit implementation baseline described
+below. Its three physical profiles passed on clean source `b550c46`, while the
+raw development evidence remains in ignored `runs/` and is not promoted or
+tracked as thesis results.
 For M5 v3, SimplePIM's role is
 `initialization_binary_and_management_state_only`. Allocation, transfer, and
 launch use the thesis-owned raw synchronous UPMEM SDK route. The thesis-owned C
@@ -59,9 +59,11 @@ provenance, thesis contributions, and the planned UPMEM architecture. The fixed
 benchmark matrix is in [THESIS_BENCHMARK_MATRIX.md](THESIS_BENCHMARK_MATRIX.md).
 The SLR-derived long-term implementation sequence and completion criteria are
 in [docs/slr_architecture_implementation_roadmap.md](docs/slr_architecture_implementation_roadmap.md).
-The exact recent ETH observations are consolidated in the
-[M4/M5 physical development acceptance record](docs/m4_m5_physical_acceptance.md);
-they are not promoted thesis results.
+The earlier ETH observations are consolidated in the
+[M4/M5 physical development acceptance record](docs/m4_m5_physical_acceptance.md).
+M5.5 commands, observations, and claim limits are in its
+[whole-circuit runbook](docs/upmem_m5_5_whole_circuit_runbook.md). These are
+development records, not promoted thesis results.
 
 ## Current Milestone Status
 
@@ -81,7 +83,7 @@ baseline.
 | M5.2 | Physically validated bounded probe | The same contraction on 1/2/4 DPUs with contracted-axis partials and deterministic `host_mediated_sum_v1` reduction. Maximum absolute error `2.98e-08`; one repetition and zero warmups; functionality only. |
 | M5 execution-plan-v3 | Physically accepted bounded development study | One-rank, one selected ETH rank, DPU counts 1/2/4/8/16/32/64, tasklets 8, 5 workloads, float32/int8 modes, output/contracted partitions, 2 warmups and 7 measured repeats. The 140-cell matrix produced 644 measured rows and 48 partition-incompatible unsupported rows, with 0 failures. Same-route diagnostics only; no broad performance claim. |
 | M5.4 | Physically accepted bounded development study; current corrected lane | Source `eef42e4`: bulk set launch plus host-packed int8 transport on one selected rank, DPU counts 1/2/4/8/16/32/64, tasklets 8, 5 workloads, two partitions, 2 warmups and 7 measured repeats. All 10 acceptance criteria passed; 644 measured rows, 48 explicit unsupported rows, and 0 failed rows. The historical M5 route remains unchanged. |
-| M5.5 | Local implementation and hardware-free validation; physical ETH acceptance pending | Whole-circuit circuit -> TN -> planner -> TaskGraph study with interchangeable CPU and physical v4 engines; float32 and host-packed int8 policies; smoke, canonical, large-boundary, and scaling profiles. Whole-graph intermediates remain in the Python host tensor store and are re-uploaded for downstream tasks. |
+| M5.5 | Physically accepted development baseline | Clean source `b550c46`: canonical `1008/1008` and scaling `80/80` rows completed; the large profile produced 96 completed and 24 explicit 30q resource-limit rows with 0 failures. Fully active same-plan DPU scaling is valid through 16 DPUs; larger provisioned scaling rows were not fully active. The large profile used all 64 allocated DPUs but is a one-repeat boundary study. Whole-graph intermediates remain host-managed. |
 | M5.3 | Blocked before physical execution | PID-Comm compile/link qualification is blocked under ETH SDK 2023.1 by missing `dpu_alloc_comm`, `DPU_FOREACH_ENTANGLED_GROUP`, and old PID-Comm API/source macros. No fallback and no physical PID-Comm execution. |
 
 M4.1--M5.2 are bounded physical functionality milestones, not a claim of
@@ -94,8 +96,11 @@ and do not establish general physical performance or acceleration. M5.4 is the
 current corrected one-rank lane: its same-route scaling and numeric-transport
 diagnostics passed their explicit acceptance thresholds, but remain bounded
 single-contraction observations rather than CPU/GPU speedup or general TN
-architecture evidence. M5.5 is the current whole-circuit development lane;
-its physical results are not yet accepted.
+architecture evidence. M5.5 is the current whole-circuit development lane and
+has passed its bounded physical development contracts. Its canonical size
+curves use a fixed eight-DPU allocation with workload-dependent active DPU
+counts; the separate scaling profile supports a fully active scaling claim only
+through 16 DPUs. It has no CPU/GPU speedup or energy claim.
 
 Physical ETH runs require an explicit rank selection. Use a healthy rank chosen
 on the server, for example:

@@ -72,7 +72,7 @@ a small final architecture.
 | CPU/GPU baselines | QuEST full state, Quimb/cotengra TN, internal CPU replay | Active |
 | Slicing/frontier models | Internal slice-aware graph, reconstruction, frontier waves | M2.1 useful-slice and M3.1 bounded two-wave physical qualifications passed; general expansion remains future work |
 | UPMEM simulator | Strict bounded generic TaskGraph route | Active diagnostic |
-| UPMEM hardware | Bounded M2/M3.1/M4.2--M4.4 qualification lanes, frozen M5.4 control, and additive M5.5 whole-circuit v4 route | M5.5 local implementation and hardware-free validation are in progress; final physical ETH acceptance is pending. It is not graph-wide DPU residency or a performance claim |
+| UPMEM hardware | Bounded M2/M3.1/M4.2--M4.4 qualification lanes, frozen M5.4 control, and additive M5.5 whole-circuit v4 route | M5.5 canonical, scaling, and large-boundary physical development contracts passed on clean source `b550c46`. This is not graph-wide DPU residency, CPU/GPU speedup, or energy evidence |
 | Numerical modes | Float32, per-task int8/int32, split real/imaginary complex | Active in bounded routes |
 | Evidence system | Normalized records, claim guards, reports, plots, snapshots | Active instrumentation |
 | External sources | QuEST, SimplePIM, and PID-Comm pinned | QuEST active; SimplePIM remains a bounded management/operator provider; PID-Comm remains central but is blocked under ETH SDK 2023.1 pending a compatible SDK/API. M5.5 does not claim provider compute integration |
@@ -889,16 +889,19 @@ over seven canonical sizes, two planner variants, two numeric policies, a CPU
 same-plan reference, and the physical v4 engine. The smoke profile validates
 resolution and one small circuit; the canonical profile supplies the main
 comparison grid; the large profile records explicit support boundaries; and
-the scaling profile exercises one-rank 1--64 DPU and two-rank 128-DPU
+the scaling profile provisions one-rank 1--64 DPU and two-rank 128-DPU
 topologies. The exact commands and staged acceptance are in
 `docs/upmem_m5_5_whole_circuit_runbook.md`.
 
-M5.5 is complete for this wave when local tests and hardware-free preparation
-pass, the physical smoke run is accepted on ETH, and canonical/scaling runs
-produce valid normalized records and reports. Same-plan CPU/UPMEM timing is
-admitted only for repeated physical rows that pass allocation, native-kernel,
-release, validation, and timing eligibility checks. Energy remains a stable
-TODO until a physical measurement source exists.
+M5.5 has completed this wave's bounded physical development gate. The clean
+canonical run completed `1008/1008` rows, the scaling run completed `80/80`,
+and the large profile completed 96 rows while retaining 24 explicit 30q
+resource-limit rows, with no failures. Same-plan CPU/UPMEM timing is admitted
+only for repeated physical rows that pass allocation, native-kernel, release,
+validation, and timing eligibility checks. Fully active DPU scaling is valid
+through 16 DPUs; the larger provisioned rows are overprovisioning evidence,
+not full-device or multi-rank scaling. Energy remains a stable TODO until a
+physical measurement source exists.
 
 After M5.5, the next architecture wave should add one capability at a time:
 first DPU-resident intermediate ownership and transfer avoidance, then
