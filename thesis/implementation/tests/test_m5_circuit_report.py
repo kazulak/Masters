@@ -188,6 +188,47 @@ def test_bringup_and_non_applicable_upmem_rows_stay_out_of_performance_ratios(
     assert sum(row["scientific_admitted"] == "True" for row in raw) == 4
 
 
+def test_speedup_todo_reason_reports_matched_but_ineligible_rows(
+    tmp_path: Path,
+) -> None:
+    cpu = _row(engine="cpu_numpy", runtime=10.0)
+    bringup = _row(engine="upmem_m5", runtime=2.0, dpu_count=1)
+    bringup["timing_is_bringup_only"] = True
+    non_applicable = _row(engine="upmem_m5", runtime=3.0, dpu_count=2)
+    non_applicable["hardware_speedup_applicable"] = False
+    generate_report([cpu, bringup, non_applicable], tmp_path / "report")
+    manifest = json.loads((tmp_path / "report" / "plot_manifest.json").read_text())
+    speedup_plot = next(
+        item
+        for item in manifest["plots"]
+        if item["name"] == "same_plan_cpu_upmem_speedup"
+    )
+    assert speedup_plot["status"] == "generated_todo_missing_data"
+    assert (
+        speedup_plot["reason"]
+        == "matching CPU/UPMEM rows exist, but no CPU/UPMEM pairs are "
+        "performance-eligible/repeated"
+    )
+
+
+def test_speedup_todo_reason_preserves_identity_mismatch_classification(
+    tmp_path: Path,
+) -> None:
+    cpu = _row(engine="cpu_numpy", runtime=10.0)
+    upmem = _row(engine="upmem_m5", runtime=5.0, hashes=False)
+    generate_report([cpu, upmem], tmp_path / "report")
+    manifest = json.loads((tmp_path / "report" / "plot_manifest.json").read_text())
+    speedup_plot = next(
+        item
+        for item in manifest["plots"]
+        if item["name"] == "same_plan_cpu_upmem_speedup"
+    )
+    assert (
+        speedup_plot["reason"]
+        == "no matching CPU/UPMEM rows with all hashes and timing_scope"
+    )
+
+
 def test_ratios_and_scaling_use_the_declared_baselines(tmp_path: Path) -> None:
     rows = [
         _row(
@@ -487,6 +528,45 @@ def test_single_qubit_topology_matrix_uses_todo_general_plots(
         "energy_todo.png",
     }
     assert expected_pngs <= {path.name for path in (output / "plots").glob("*.png")}
+
+
+def test_supported_boundary_preserves_cpu_and_upmem_engine_labels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import matplotlib.pyplot as plt
+
+    saved: list[object] = []
+    monkeypatch.setattr(
+        plt.Figure,
+        "savefig",
+        lambda figure, *args, **kwargs: saved.append(figure),
+    )
+    generate_report(
+        [
+            _row(engine="cpu_numpy", runtime=1.0),
+            _row(
+                engine="upmem_physical_1rank_64dpu",
+                runtime=2.0,
+                dpu_count=64,
+            ),
+        ],
+        tmp_path / "report",
+    )
+    boundary = next(
+        figure
+        for figure in saved
+        if figure._suptitle is not None
+        and figure._suptitle.get_text() == "M5.5 supported boundary"
+    )
+    labels = {
+        text.get_text()
+        for legend in boundary.legends
+        for text in legend.texts
+    }
+    assert "CPU" in labels
+    assert "UPMEM / 64DPU/1R" in labels
+    assert "unknown" not in labels
+    plt.close(boundary)
 
 
 def test_path_and_numeric_pairing_separate_active_topologies(tmp_path: Path) -> None:

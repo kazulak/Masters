@@ -651,6 +651,29 @@ def _pair_rows(
     return pairs
 
 
+def _has_matching_engine_rows(
+    rows: list[JsonDict], left_class: str, right_class: str
+) -> bool:
+    """Return whether both engines share an identity/timing-scope key.
+
+    This deliberately ignores performance admission.  It is used only to
+    explain an empty performance table without changing which rows may enter
+    measured ratios.
+    """
+    engines_by_key: dict[tuple[Any, ...], set[str]] = {}
+    for row in rows:
+        engine_class = _engine_class(row)
+        if engine_class not in {left_class, right_class}:
+            continue
+        key = _same_plan_key(row)
+        if key is not None:
+            engines_by_key.setdefault(key, set()).add(engine_class)
+    return any(
+        {left_class, right_class}.issubset(engine_classes)
+        for engine_classes in engines_by_key.values()
+    )
+
+
 def _write_csv(path: Path, rows: list[JsonDict], fields: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:
@@ -1305,7 +1328,12 @@ def generate_report(
             speed_csv,
             speed_title,
             valid,
-            "no matching CPU/UPMEM rows with all hashes and timing_scope",
+            (
+                "matching CPU/UPMEM rows exist, but no CPU/UPMEM pairs are "
+                "performance-eligible/repeated"
+                if _has_matching_engine_rows(rows, "cpu", "upmem")
+                else "no matching CPU/UPMEM rows with all hashes and timing_scope"
+            ),
         )
     )
 
@@ -1870,6 +1898,7 @@ def generate_report(
         "qubits",
         "supported",
         "engine",
+        collapse_activity=False,
     )
     entries.append(
         _entry(
