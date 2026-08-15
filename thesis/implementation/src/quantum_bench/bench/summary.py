@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import csv
+import math
 import statistics
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
 from quantum_bench.core.jsonio import read_jsonl, write_json
+from quantum_bench.evidence import Claim, ClaimPolicy
+
+
+_CLAIM_POLICY = ClaimPolicy()
 
 
 def collect_raw_records(run_dir: Path) -> list[dict[str, Any]]:
@@ -35,11 +40,8 @@ def write_summary(run_dir: Path) -> dict[str, Any]:
         failed = [r for r in group if r["status"] == "failed"]
         skipped = [r for r in group if r["status"] == "skipped"]
         times = [float(r["total_time_s"]) for r in passed if r.get("total_time_s") is not None]
-        energies = [
-            float(r["energy_joules"])
-            for r in passed
-            if r.get("energy_joules") is not None and float(r["energy_joules"]) > 0 and r.get("energy_source") not in {None, "unavailable"}
-        ]
+        group_energy, admitted_energy_records = _energy_evidence(group)
+        energies = [float(record["energy_joules"]) for record in admitted_energy_records]
         rows.append(
             {
                 "case_id": case_id,
@@ -65,8 +67,12 @@ def write_summary(run_dir: Path) -> dict[str, Any]:
                 "time_min_s": min(times) if times else None,
                 "time_max_s": max(times) if times else None,
                 "time_stdev_s": statistics.stdev(times) if len(times) > 1 else 0.0 if times else None,
-                "energy_median_j": _median(energies),
+                "energy_median_j": _median(energies) if group_energy["status"] == "measured" else None,
                 "energy_source": _energy_source(group),
+                "energy_status": group_energy["status"],
+                "energy_measured_count": group_energy["measured_records"],
+                "energy_rejected_count": group_energy["rejected_records"],
+                "energy_rejection_reasons": group_energy.get("reasons", []),
                 "skip_reason": _first(group, "skip_reason"),
                 "error": _first(group, "error"),
             }
@@ -120,6 +126,10 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "time_stdev_s",
         "energy_median_j",
         "energy_source",
+        "energy_status",
+        "energy_measured_count",
+        "energy_rejected_count",
+        "energy_rejection_reasons",
         "skip_reason",
         "error",
     ]
@@ -149,14 +159,49 @@ def write_markdown(path: Path, rows: list[dict[str, Any]], energy: dict[str, Any
 
 
 def energy_status(records: list[dict[str, Any]]) -> dict[str, Any]:
-    measured = [
-        record
-        for record in records
-        if record.get("energy_joules") is not None and float(record["energy_joules"]) > 0 and record.get("energy_source") not in {None, "unavailable"}
-    ]
-    if measured:
-        return {"status": "measured", "measured_records": len(measured), "total_records": len(records)}
-    return {"status": "unavailable_or_zero", "measured_records": 0, "total_records": len(records)}
+    status, _ = _energy_evidence(records)
+    return status
+
+
+def _energy_evidence(records: list[dict[str, Any]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    admitted: list[dict[str, Any]] = []
+    rejected: list[tuple[dict[str, Any], tuple[str, ...]]] = []
+    for record in records:
+        decision = _CLAIM_POLICY.evaluate_row(Claim.ENERGY, record)
+        if decision.allowed:
+            admitted.append(record)
+        elif _positive_energy(record.get("energy_joules")):
+            rejected.append((record, decision.reasons))
+    if rejected:
+        reasons = sorted({reason for _, decision_reasons in rejected for reason in decision_reasons})
+        return {
+            "status": "rejected",
+            "measured_records": len(admitted),
+            "rejected_records": len(rejected),
+            "total_records": len(records),
+            "reasons": reasons,
+        }, admitted
+    if admitted:
+        return {
+            "status": "measured",
+            "measured_records": len(admitted),
+            "rejected_records": 0,
+            "total_records": len(records),
+        }, admitted
+    return {
+        "status": "unavailable",
+        "measured_records": 0,
+        "rejected_records": 0,
+        "total_records": len(records),
+    }, admitted
+
+
+def _positive_energy(value: Any) -> bool:
+    try:
+        energy = float(value)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(energy) and energy > 0
 
 
 def _median(values: list[float]) -> float | None:
