@@ -125,6 +125,7 @@ class PathCostComponentsV2:
             "memory_budget_scope": "configured_modeled_budget_not_measured_runtime_occupancy",
             "feasibility": bool(self.feasibility),
             "rejection_reasons": list(self.rejection_reasons),
+            "metric_contract": metric_contract_v2(),
         }
 
 
@@ -579,6 +580,129 @@ def calibrate_pim_cost_model(empirical_dpu_cycles: int | None, modeled_flops: in
     return None
 
 
+def metric_contract_v2() -> dict[str, JsonDict]:
+    """Compact machine-readable V2 metric contract mapping primitive metrics.
+
+    Each metric maps to unit, origin analytic_model, scope, and model_id.
+    """
+    return {
+        "estimated_flops": {
+            "unit": "flops",
+            "origin": "analytic_model",
+            "scope": "path_total_modeled_floating_point_operations",
+            "model_id": UPMEM_PATH_OBJECTIVE_V2,
+        },
+        "largest_tensor_bytes": {
+            "unit": "bytes",
+            "origin": "analytic_model",
+            "scope": "maximum_single_tensor_payload_bytes",
+            "model_id": UPMEM_PATH_OBJECTIVE_V2,
+        },
+        "host_to_dpu_payload_bytes": {
+            "unit": "bytes",
+            "origin": "analytic_model",
+            "scope": "modeled_host_to_dpu_operand_transfer_volume",
+            "model_id": UPMEM_PATH_OBJECTIVE_V2,
+        },
+        "dpu_to_host_payload_bytes": {
+            "unit": "bytes",
+            "origin": "analytic_model",
+            "scope": "modeled_dpu_to_host_result_transfer_volume",
+            "model_id": UPMEM_PATH_OBJECTIVE_V2,
+        },
+        "mram_dma_window_bytes_model": {
+            "unit": "bytes",
+            "origin": "analytic_model",
+            "scope": "modeled_aligned_request_volume_not_physical_bus_bytes",
+            "model_id": UPMEM_PATH_OBJECTIVE_V2,
+        },
+        "tile_iterations": {
+            "unit": "iterations",
+            "origin": "analytic_model",
+            "scope": "modeled_output_tile_execution_iterations",
+            "model_id": UPMEM_PATH_OBJECTIVE_V2,
+        },
+        "host_completion_events": {
+            "unit": "events",
+            "origin": "analytic_model",
+            "scope": "one_synchronous_dpu_launch_per_real_component",
+            "model_id": UPMEM_PATH_OBJECTIVE_V2,
+        },
+        "numeric_component_invocations": {
+            "unit": "count",
+            "origin": "analytic_model",
+            "scope": "dpu_kernel_launches_for_real_split_components",
+            "model_id": UPMEM_PATH_OBJECTIVE_V2,
+        },
+        "numeric_recombination_flops": {
+            "unit": "flops",
+            "origin": "analytic_model",
+            "scope": "host_recombination_floating_point_operations",
+            "model_id": UPMEM_PATH_OBJECTIVE_V2,
+        },
+        "numeric_representation_penalty": {
+            "unit": "ratio",
+            "origin": "analytic_model",
+            "scope": "penalty_for_split_complex_representation",
+            "model_id": UPMEM_PATH_OBJECTIVE_V2,
+        },
+        "task_mram_payload_bytes": {
+            "unit": "bytes",
+            "origin": "analytic_model",
+            "scope": "modeled_task_mram_working_set_payload",
+            "model_id": UPMEM_PATH_OBJECTIVE_V2,
+        },
+        "native_static_mram_reservation_bytes": {
+            "unit": "bytes",
+            "origin": "analytic_model",
+            "scope": "fixed_native_mram_buffer_reservation",
+            "model_id": UPMEM_PATH_OBJECTIVE_V2,
+        },
+        "mram_capacity_bytes": {
+            "unit": "bytes",
+            "origin": "analytic_model",
+            "scope": "configured_modeled_budget_not_measured_runtime_occupancy",
+            "model_id": UPMEM_PATH_OBJECTIVE_V2,
+        },
+        "mram_static_reservation_pressure_ratio": {
+            "unit": "ratio",
+            "origin": "analytic_model",
+            "scope": "native_static_reservation_divided_by_mram_capacity",
+            "model_id": UPMEM_PATH_OBJECTIVE_V2,
+        },
+        "mram_max_region_payload_ratio": {
+            "unit": "ratio",
+            "origin": "analytic_model",
+            "scope": "maximum_single_buffer_payload_divided_by_fixed_native_buffer_capacity",
+            "model_id": UPMEM_PATH_OBJECTIVE_V2,
+        },
+        "mram_payload_pressure_ratio": {
+            "unit": "ratio",
+            "origin": "analytic_model",
+            "scope": "maximum_single_buffer_payload_divided_by_fixed_native_buffer_capacity",
+            "model_id": UPMEM_PATH_OBJECTIVE_V2,
+        },
+        "known_wram_static_bytes": {
+            "unit": "bytes",
+            "origin": "analytic_model",
+            "scope": "known_wram_static_reservation_bytes",
+            "model_id": UPMEM_PATH_OBJECTIVE_V2,
+        },
+        "wram_budget_bytes": {
+            "unit": "bytes",
+            "origin": "analytic_model",
+            "scope": "configured_modeled_budget_not_measured_runtime_occupancy",
+            "model_id": UPMEM_PATH_OBJECTIVE_V2,
+        },
+        "wram_known_pressure_ratio": {
+            "unit": "ratio",
+            "origin": "analytic_model",
+            "scope": "known_wram_static_bytes_divided_by_wram_budget",
+            "model_id": UPMEM_PATH_OBJECTIVE_V2,
+        },
+    }
+
+
 __all__ = [
     "DEFAULT_UPMEM_PATH_COST_NORMALIZATION_V2",
     "DEFAULT_UPMEM_PATH_COST_POLICY_V2",
@@ -594,6 +718,7 @@ __all__ = [
     "calibrate_pim_cost_model",
     "combine_path_cost_components_v2",
     "fixed_log1p_generic_budgets_v2",
+    "metric_contract_v2",
     "model_upmem_network_path_cost_v2",
     "model_upmem_path_cost_v2",
     "model_upmem_task_cost_v2",

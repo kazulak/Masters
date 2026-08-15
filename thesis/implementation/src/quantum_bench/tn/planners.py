@@ -251,6 +251,10 @@ def planner_from_config(config: dict[str, Any] | None) -> PathPlanner:
         from quantum_bench.tn.upmem_planner import UpmemAwareGreedyPlanner
 
         return UpmemAwareGreedyPlanner.from_config(dict(config))
+    if engine == "exact_modeled":
+        from quantum_bench.tn.exact_modeled_planner import ExactModeledPlanner
+
+        return ExactModeledPlanner.from_config(dict(config))
     raise ValueError(f"Unsupported planner engine: {engine}")
 
 

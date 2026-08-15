@@ -14,12 +14,10 @@ from quantum_bench.bench.run_dirs import EVIDENCE_ARTIFACT_KIND, create_run_dir,
 from quantum_bench.circuits import load_circuit
 from quantum_bench.core.jsonio import write_json, write_jsonl
 from quantum_bench.core.records import TaskGraph
+from quantum_bench.core.target_estimates import TargetEstimateSet
 from quantum_bench.environment import capture_environment
-from quantum_bench.targets.upmem import (
-    UPMEM_DENSE_ESTIMATE_KEY,
-    annotate_task_graph_with_upmem_estimates,
-    upmem_task_estimate_rows,
-)
+from quantum_bench.targets.upmem import UPMEM_DENSE_ESTIMATE_KEY
+from quantum_bench.targets.upmem.schedule import UPMEM_DENSE_MODEL, estimate_dense_task_graph_sidecar, upmem_target_path_summary
 from quantum_bench.tn import (
     build_execution_bundle,
     build_tensor_network,
@@ -101,6 +99,7 @@ COMPARISON_FIELDS = [
     "task_graph_artifact",
     "path_summary_artifact",
     "target_estimates_artifact",
+    "target_path_summary_artifact",
     "planner_cost_components_artifact",
     "planner_step_trace_artifact",
     "score_model",
@@ -118,6 +117,7 @@ COMPARISON_FIELDS = [
     "pim_rejection_reasons",
     "pim_estimated_flops",
     "pim_peak_intermediate_bytes",
+    "pim_peak_intermediate_bytes_alias_definition",
     "pim_total_intermediate_write_bytes",
     "pim_estimated_host_to_dpu_bytes",
     "pim_estimated_dpu_to_host_bytes",
@@ -271,8 +271,9 @@ def _compare_case(
         objective_version, profile = _pim_profile_for_config(planner_config, pim_objective_config)
         try:
             graph = plan_task_graph_with_config(network, planner_config)
-            graph, _ = annotate_task_graph_with_upmem_estimates(graph)
             graph = with_path_cost_summary(graph)
+            target_estimates, target_schedule = estimate_dense_task_graph_sidecar(graph)
+            target_summary = upmem_target_path_summary(target_estimates, target_schedule)
             components = _model_pim_components(objective_version, network, graph.tasks, profile)
             planner_config_hash = str(graph.path_summary.options.get("planner_config_hash") or "")
             planner_dir_name = _unique_planner_dir_name(
@@ -287,6 +288,8 @@ def _compare_case(
                 case_id,
                 planner_dir_name,
                 graph,
+                target_estimates,
+                target_summary,
                 components,
             )
             rows.append(
@@ -298,6 +301,8 @@ def _compare_case(
                     workload_id,
                     workload_metadata,
                     graph,
+                    target_estimates,
+                    target_summary,
                     artifacts,
                     components,
                     profile,
@@ -348,18 +353,29 @@ def _write_planner_artifacts(
     case_id: str,
     planner_dir_name: str,
     graph: TaskGraph,
+    target_estimates: TargetEstimateSet,
+    target_summary: dict[str, Any],
     components: PathCostComponents | PathCostComponentsV2,
 ) -> dict[str, str]:
+    if any(task.target_estimates for task in graph.tasks):
+        raise ValueError("Planner comparison TaskGraph must remain target-neutral")
+    target_estimates.validate_graph(
+        graph,
+        expected_target_id="upmem_dense_gemm",
+        expected_model_id=UPMEM_DENSE_MODEL,
+    )
     planner_root = Path("cases") / case_id / "planners" / planner_dir_name
     task_graph_artifact = planner_root / "task_graph.json"
     path_summary_artifact = planner_root / "path_summary.json"
     target_estimates_artifact = planner_root / "target_estimates" / f"{UPMEM_DENSE_ESTIMATE_KEY}.jsonl"
+    target_path_summary_artifact = planner_root / "target_estimates" / "upmem_path_summary.json"
     execution_bundle_artifact = planner_root / "execution_bundle.json"
     planner_cost_components_artifact = planner_root / "planner_cost_components.json"
     planner_step_trace_artifact = planner_root / "planner_step_trace.json"
     write_json(run_dir / task_graph_artifact, graph)
     write_json(run_dir / path_summary_artifact, graph.path_summary)
-    write_jsonl(run_dir / target_estimates_artifact, upmem_task_estimate_rows(graph))
+    write_jsonl(run_dir / target_estimates_artifact, target_estimates.jsonl_rows())
+    write_json(run_dir / target_path_summary_artifact, target_summary)
     write_json(
         run_dir / execution_bundle_artifact,
         build_execution_bundle(graph, case_id=case_id, suite_id=suite_id),
@@ -373,6 +389,7 @@ def _write_planner_artifacts(
         "task_graph_artifact": task_graph_artifact.as_posix(),
         "path_summary_artifact": path_summary_artifact.as_posix(),
         "target_estimates_artifact": target_estimates_artifact.as_posix(),
+        "target_path_summary_artifact": target_path_summary_artifact.as_posix(),
         "execution_bundle_artifact": execution_bundle_artifact.as_posix(),
         "planner_cost_components_artifact": planner_cost_components_artifact.as_posix(),
         "planner_step_trace_artifact": planner_step_trace_artifact.as_posix(),
@@ -387,12 +404,15 @@ def _comparison_row(
     workload_id: str,
     workload_metadata: dict[str, Any],
     graph: TaskGraph,
+    target_estimates: TargetEstimateSet,
+    target_summary: dict[str, Any],
     artifacts: dict[str, str],
     components: PathCostComponents | PathCostComponentsV2,
     profile: Any,
     objective_version: str,
 ) -> dict[str, Any]:
     summary = graph.path_summary
+    missing_target_estimates = len(graph.tasks) - len(target_estimates.rows)
     return {
         "case_id": str(case["case_id"]),
         "workload_id": workload_id,
@@ -409,20 +429,20 @@ def _comparison_row(
         "optimize_mode": summary.optimize_mode,
         "objective": summary.objective,
         "cost_basis": summary.cost_basis,
-        "target_estimate_key": summary.target_estimate_key,
+        "target_estimate_key": UPMEM_DENSE_ESTIMATE_KEY,
         "candidate_status": "completed",
         "candidate_failure_reason": None,
         "task_count": summary.task_count,
         "total_estimated_flops": summary.total_estimated_flops,
         "peak_intermediate_bytes": summary.peak_intermediate_bytes,
-        "total_host_to_dpu_bytes": summary.total_host_to_dpu_bytes,
-        "total_dpu_to_host_bytes": summary.total_dpu_to_host_bytes,
-        "total_mram_to_wram_bytes": summary.total_mram_to_wram_bytes,
-        "unsupported_task_count": summary.unsupported_task_count,
-        "tiling_required_task_count": summary.tiling_required_task_count,
-        "missing_target_estimate_count": summary.missing_target_estimate_count,
-        "estimated_total_tile_count": summary.estimated_total_tile_count,
-        "estimated_max_parallel_tiles": summary.estimated_max_parallel_tiles,
+        "total_host_to_dpu_bytes": target_summary["total_host_to_dpu_bytes"],
+        "total_dpu_to_host_bytes": target_summary["total_dpu_to_host_bytes"],
+        "total_mram_to_wram_bytes": target_summary["total_mram_to_wram_bytes"],
+        "unsupported_task_count": target_summary["unsupported_tasks"],
+        "tiling_required_task_count": target_summary["tasks_requiring_tiling"],
+        "missing_target_estimate_count": missing_target_estimates,
+        "estimated_total_tile_count": target_summary["total_estimated_tile_count"],
+        "estimated_max_parallel_tiles": target_summary["max_estimated_parallel_tiles"],
         "circuit_semantics_hash": graph.circuit_semantics_hash,
         "tensor_network_hash": graph.tensor_network_hash,
         "contraction_plan_hash": graph.contraction_plan_hash,
@@ -468,6 +488,9 @@ def _pim_component_fields(
         "pim_rejection_reasons": list(components.rejection_reasons),
         "pim_estimated_flops": int(components.flops),
         "pim_peak_intermediate_bytes": int(components.peak_bytes),
+        "pim_peak_intermediate_bytes_alias_definition": (
+            "compatibility_alias_for_pim_largest_tensor_bytes_not_path_level_peak_memory"
+        ),
         "pim_total_intermediate_write_bytes": int(components.intermediate_writes),
         "pim_estimated_host_to_dpu_bytes": int(components.host_to_dpu_bytes),
         "pim_estimated_dpu_to_host_bytes": int(components.dpu_to_host_bytes),
@@ -478,6 +501,7 @@ def _pim_component_fields(
         "pim_estimated_numerical_penalty": float(components.numeric_penalty),
         "pim_estimated_wram_pressure": float(components.wram_pressure),
         "pim_estimated_tile_count": int(components.tiles),
+        "pim_largest_tensor_bytes": int(components.peak_bytes),
         "pim_objective_components": components.to_json_dict(),
         "pim_normalized_components": profile.normalize(components) if components.feasibility else None,
         "pim_objective_score": float(score) if math.isfinite(score) else None,
@@ -503,6 +527,9 @@ def _pim_component_fields_v2(
         # below carry the precise v2 meanings used by the weighted objective.
         "pim_estimated_flops": int(components.estimated_flops),
         "pim_peak_intermediate_bytes": int(components.largest_tensor_bytes),
+        "pim_peak_intermediate_bytes_alias_definition": (
+            "compatibility_alias_for_pim_largest_tensor_bytes_not_path_level_peak_memory"
+        ),
         "pim_total_intermediate_write_bytes": int(components.dpu_to_host_payload_bytes),
         "pim_estimated_host_to_dpu_bytes": int(components.host_to_dpu_payload_bytes),
         "pim_estimated_dpu_to_host_bytes": int(components.dpu_to_host_payload_bytes),
@@ -605,6 +632,7 @@ def _rejected_comparison_row(
         "task_graph_artifact": None,
         "path_summary_artifact": None,
         "target_estimates_artifact": None,
+        "target_path_summary_artifact": None,
         "planner_cost_components_artifact": None,
         "planner_step_trace_artifact": None,
         "score_model": None,
@@ -664,6 +692,19 @@ def _planner_identity_fields(planner_config: dict[str, Any], profile: Any, objec
             "planner_selection_scope": UPMEM_PATH_SELECTION_SCOPE_V2 if is_v2 else UPMEM_PATH_SELECTION_SCOPE_V1,
             "planner_kind": "native_target_projected_prefix_greedy" if is_v2 else "native_target_greedy",
             "optimize_mode": "greedy",
+            "objective": objective_version,
+            "cost_basis": profile.policy.policy_id,
+            "target_estimate_key": profile.policy.policy_id,
+        }
+    if engine == "exact_modeled":
+        return {
+            "planner_engine": engine,
+            "planner_id": f"exact_modeled.{profile.profile_id}",
+            "planner_config_hash": config_hash,
+            "planner_config": resolved,
+            "planner_selection_scope": "exact_finite_search",
+            "planner_kind": "exact_modeled_exhaustive",
+            "optimize_mode": "exact_modeled",
             "objective": objective_version,
             "cost_basis": profile.policy.policy_id,
             "target_estimate_key": profile.policy.policy_id,
@@ -814,8 +855,10 @@ def _normalized_planner_record(payload: dict[str, Any], row: dict[str, Any]) -> 
             },
         ),
         "execution_bundle_artifact": row.get("execution_bundle_artifact"),
+        "target_estimates_artifact": row.get("target_estimates_artifact"),
         "planner_cost_components_artifact": row.get("planner_cost_components_artifact"),
         "planner_step_trace_artifact": row.get("planner_step_trace_artifact"),
+        "target_path_summary_artifact": row.get("target_path_summary_artifact"),
         "contraction_execution_target": "modeled",
         "accelerator_kind": "none",
         "execution_scope": "contraction_planning",
@@ -859,6 +902,9 @@ def _normalized_planner_record(payload: dict[str, Any], row: dict[str, Any]) -> 
         "pim_selected": row.get("pim_selected"),
         "pim_estimated_flops": row.get("pim_estimated_flops"),
         "pim_peak_intermediate_bytes": row.get("pim_peak_intermediate_bytes"),
+        "pim_peak_intermediate_bytes_alias_definition": row.get(
+            "pim_peak_intermediate_bytes_alias_definition"
+        ),
         "pim_total_intermediate_write_bytes": row.get("pim_total_intermediate_write_bytes"),
         "pim_estimated_host_to_dpu_bytes": row.get("pim_estimated_host_to_dpu_bytes"),
         "pim_estimated_dpu_to_host_bytes": row.get("pim_estimated_dpu_to_host_bytes"),

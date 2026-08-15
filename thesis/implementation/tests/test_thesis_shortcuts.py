@@ -61,7 +61,8 @@ def test_make_help_is_a_concise_current_workflow_summary() -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    assert len(result.stdout.splitlines()) <= 18
+    lines = [line for line in result.stdout.splitlines() if not line.startswith("make[")]
+    assert len(lines) <= 18
     for text in (
         "make setup",
         "make doctor",

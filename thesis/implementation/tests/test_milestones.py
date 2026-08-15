@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -90,9 +91,11 @@ def test_committed_ledger_and_generated_document_verify() -> None:
 
 
 def test_cli_verifies_committed_ledger() -> None:
+    env = {**os.environ, "PYTHONPATH": "src"}
     result = subprocess.run(
         [sys.executable, "-m", "quantum_bench.bench", "milestones", "verify"],
         cwd=ROOT,
+        env=env,
         text=True,
         capture_output=True,
         check=False,
