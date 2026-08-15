@@ -31,18 +31,30 @@ from quantum_bench.targets.upmem.execution_plan_v4 import (
     V4Profile,
     V4ProtocolError,
     V4Session,
-    V4WorkUnit,
-    build_v4_request,
 )
 from quantum_bench.targets.upmem.m5_whole_circuit_tiles import (
     M5Tile,
     M5TileLimits,
-    lower_binary_contraction,
+)
+from quantum_bench.targets.upmem.m5_strategies import (
+    M5DecompositionStrategy,
+    M5KernelProvider,
+    M5PlacementStrategy,
+    M5ReductionProvider,
+    M5StrategyBundle,
 )
 from quantum_bench.whole_circuit.core import (
     DeviceTopology,
     EngineTaskResult,
     NumericPolicy,
+)
+from quantum_bench.whole_circuit.strategies import (
+    DecompositionStrategy,
+    KernelProvider,
+    PlacementStrategy,
+    ReductionProvider,
+    StrategyConfiguration,
+    StrategyRole,
 )
 
 
@@ -133,6 +145,7 @@ def _request_contract_hash(
     right_scale: float,
     left_payload: np.ndarray,
     right_payload: np.ndarray,
+    strategy_config_hash: str,
 ) -> str:
     """Bind the native request to structure, numeric mode, scales, and data.
 
@@ -143,7 +156,8 @@ def _request_contract_hash(
     """
 
     mode = numeric_transport.encode("utf-8")
-    payload = b"m5_request_contract_v1\0" + bytes.fromhex(task_structure_sha256)
+    payload = b"m5_request_contract_v2\0" + bytes.fromhex(task_structure_sha256)
+    payload += bytes.fromhex(strategy_config_hash)
     payload += struct.pack("<I", len(mode)) + mode
     payload += struct.pack("<dd", float(left_scale), float(right_scale))
     payload += bytes.fromhex(_sha256_bytes(np.asarray(left_payload).tobytes(order="C")))
@@ -199,6 +213,10 @@ class M5WholeCircuitEngine:
         tasklets_per_dpu: int = 1,
         timeout_s: float = 60.0,
         session_factory: Callable[..., _V4SessionLike] = V4Session.start,
+        decomposition_strategy: DecompositionStrategy | None = None,
+        placement_strategy: PlacementStrategy | None = None,
+        kernel_provider: KernelProvider | None = None,
+        reduction_provider: ReductionProvider | None = None,
     ) -> None:
         self.session_root = Path(session_root)
         self.host_binary = Path(host_binary)
@@ -209,6 +227,31 @@ class M5WholeCircuitEngine:
         self.tasklets_per_dpu = int(tasklets_per_dpu)
         self.timeout_s = float(timeout_s)
         self.session_factory = session_factory
+        self.decomposition_strategy = (
+            decomposition_strategy
+            if decomposition_strategy is not None
+            else M5DecompositionStrategy()
+        )
+        self.placement_strategy = (
+            placement_strategy
+            if placement_strategy is not None
+            else M5PlacementStrategy()
+        )
+        self.kernel_provider = (
+            kernel_provider if kernel_provider is not None else M5KernelProvider()
+        )
+        self.reduction_provider = (
+            reduction_provider
+            if reduction_provider is not None
+            else M5ReductionProvider()
+        )
+        self._strategy_bundle = M5StrategyBundle(
+            decomposition=self.decomposition_strategy,
+            placement=self.placement_strategy,
+            kernel=self.kernel_provider,
+            reduction=self.reduction_provider,
+        )
+        self._strategy_configuration = self._strategy_bundle.identity_configuration()
         self._binary_provenance = {
             **_validated_binary_provenance(
                 self.host_binary, label="host_binary", executable=True
@@ -237,9 +280,24 @@ class M5WholeCircuitEngine:
         if self.dpu_count // len(self.rank_paths) > 64:
             raise ValueError("v4 supports at most 64 local DPUs per rank")
 
+    @property
+    def strategy_identity(self) -> dict[str, Any]:
+        return self._strategy_configuration.to_record()
+
+    @property
+    def strategy_config_hash(self) -> str:
+        return self._strategy_configuration.sha256
+
     def open_session(
-        self, policy: NumericPolicy, topology: DeviceTopology = DeviceTopology()
-    ) -> "M5WholeCircuitSession":
+        self,
+        policy: NumericPolicy,
+        topology: DeviceTopology = DeviceTopology(),
+        *,
+        decomposition_strategy: DecompositionStrategy | None = None,
+        placement_strategy: PlacementStrategy | None = None,
+        kernel_provider: KernelProvider | None = None,
+        reduction_provider: ReductionProvider | None = None,
+    ) -> M5WholeCircuitSession:
         if topology.backend != "upmem":
             raise ValueError("M5WholeCircuitEngine requires an upmem topology")
         if len(topology.device_ids) != self.dpu_count:
@@ -250,6 +308,28 @@ class M5WholeCircuitEngine:
             )
         if policy.name not in {"float32_real", "host_packed_int8_per_task_v1"}:
             raise ValueError(f"unsupported M5 numeric policy: {policy.name}")
+
+        strategy_bundle = M5StrategyBundle(
+            decomposition=(
+                decomposition_strategy
+                if decomposition_strategy is not None
+                else self.decomposition_strategy
+            ),
+            placement=(
+                placement_strategy
+                if placement_strategy is not None
+                else self.placement_strategy
+            ),
+            kernel=(
+                kernel_provider if kernel_provider is not None else self.kernel_provider
+            ),
+            reduction=(
+                reduction_provider
+                if reduction_provider is not None
+                else self.reduction_provider
+            ),
+        )
+        strategy_configuration = strategy_bundle.identity_configuration()
 
         deadline = time.monotonic() + self.timeout_s
         self.session_root.mkdir(parents=True, exist_ok=True)
@@ -326,6 +406,8 @@ class M5WholeCircuitEngine:
             ranks=tuple(ranks),
             engine=self,
             deadline=deadline,
+            strategy_bundle=strategy_bundle,
+            strategy_configuration=strategy_configuration,
         )
 
 
@@ -339,11 +421,23 @@ class M5WholeCircuitSession:
         ranks: tuple[_RankSession, ...],
         engine: M5WholeCircuitEngine,
         deadline: float,
+        strategy_bundle: M5StrategyBundle,
+        strategy_configuration: StrategyConfiguration,
     ) -> None:
         self.policy = policy
         self.ranks = ranks
         self.engine = engine
         self._deadline = float(deadline)
+        self.strategy_bundle = strategy_bundle
+        self.decomposition_strategy = strategy_bundle.decomposition
+        self.placement_strategy = strategy_bundle.placement
+        self.kernel_provider = strategy_bundle.kernel
+        self.reduction_provider = strategy_bundle.reduction
+        self._strategy_configuration = strategy_configuration
+        self._strategy_implementation_ids = {
+            identity.role: identity.implementation_id
+            for identity in strategy_configuration.strategies
+        }
         self._closed = False
         self._failed = False
         self._failure_stage: str | None = None
@@ -351,7 +445,19 @@ class M5WholeCircuitSession:
         self._successful_request_count = 0
         self._active_rank_indices: set[int] = set()
         self._active_dpu_ids: set[tuple[int, int]] = set()
+        self._test_double_execution = any(
+            rank.session.startup.get("test_double_execution") is True
+            for rank in self.ranks
+        )
         self._terminal_metadata: dict[str, Any] = {}
+
+    @property
+    def strategy_identity(self) -> dict[str, Any]:
+        return self._strategy_configuration.to_record()
+
+    @property
+    def strategy_config_hash(self) -> str:
+        return self._strategy_configuration.sha256
 
     def execute(
         self, task: ContractionTask, left: np.ndarray, right: np.ndarray
@@ -362,7 +468,9 @@ class M5WholeCircuitSession:
         started = time.perf_counter()
         packed = self.policy.name == "host_packed_int8_per_task_v1"
         limits = M5TileLimits.host_packed_int8() if packed else M5TileLimits.float32()
-        lowering = lower_binary_contraction(task, left, right, limits=limits)
+        lowering = self.decomposition_strategy.decompose(
+            task, left, right, limits=limits
+        )
         canonical_left = lowering.canonical.left
         canonical_right = lowering.canonical.right
         quantization_metadata: dict[str, Any] = {}
@@ -418,7 +526,9 @@ class M5WholeCircuitSession:
         request_hashes: list[str] = []
         parallel_rank_waves = 0
         bulk_verified = True
-        waves = self._waves(lowering.tiles)
+        total_dpus = sum(rank.local_dpus for rank in self.ranks)
+        waves = self.placement_strategy.place_waves(lowering.tiles, total_dpus)
+        self._validate_waves(lowering.tiles, waves, total_dpus)
         task_structure_sha256 = _task_structure_hash(task)
         numeric_transport = "host_packed_int8_mram" if packed else "float32_mram"
         request_contract = _request_contract_hash(
@@ -428,6 +538,7 @@ class M5WholeCircuitSession:
             right_scale=right_scale,
             left_payload=canonical_left,
             right_payload=canonical_right,
+            strategy_config_hash=self.strategy_config_hash,
         )
         try:
             for wave in waves:
@@ -463,15 +574,10 @@ class M5WholeCircuitSession:
             )
             raise
         self._remaining_timeout()
-        output_dtype: np.dtype[Any] = np.int64 if packed else np.float64
-        canonical = lowering.assemble(partials, dtype=output_dtype)
         dequantization_started = time.perf_counter()
-        if packed:
-            # Match HostPackedInt8Policy's public numerical contract after
-            # the int64 host reduction has protected K-chunk aggregation.
-            output = np.asarray(canonical, dtype=np.float32) * np.float32(scale)
-        else:
-            output = np.asarray(canonical, dtype=np.float32)
+        output = self.reduction_provider.reduce(
+            lowering, partials, packed=packed, scale=scale
+        )
         host_dequantization_time_s = (
             time.perf_counter() - dequantization_started if packed else 0.0
         )
@@ -489,6 +595,23 @@ class M5WholeCircuitSession:
                 },
                 **_PROVENANCE,
                 **self.engine._provenance,
+                "strategy_identity": self.strategy_identity,
+                "strategy_config_hash": self.strategy_config_hash,
+                "decomposition_strategy": self._strategy_implementation_ids[
+                    StrategyRole.DECOMPOSITION
+                ],
+                "placement_strategy": self._strategy_implementation_ids[
+                    StrategyRole.PLACEMENT
+                ],
+                "kernel_provider": self._strategy_implementation_ids[
+                    StrategyRole.KERNEL
+                ],
+                "reduction_provider": self._strategy_implementation_ids[
+                    StrategyRole.REDUCTION
+                ],
+                "reduction_strategy": self._strategy_implementation_ids[
+                    StrategyRole.REDUCTION
+                ],
                 "numeric_transport": numeric_transport,
                 "packed_int8_transfer": packed,
                 "host_quantization_time_s": host_quantization_time_s,
@@ -503,6 +626,7 @@ class M5WholeCircuitSession:
                 "wave_count": len(waves),
                 "request_manifest_hashes": tuple(request_hashes),
                 "task_structure_sha256": task_structure_sha256,
+                "request_contract_version": "m5_request_contract_v2",
                 "request_contract_sha256": request_contract,
                 # ABI compatibility name: v4 carries the request contract.
                 "task_contract_sha256": request_contract,
@@ -511,28 +635,17 @@ class M5WholeCircuitSession:
                 "concurrent_rank_wave_count": parallel_rank_waves,
                 "whole_graph_deadline_enforced": True,
                 "whole_graph_timeout_s": self.engine.timeout_s,
+                "target_observed": (
+                    "not_verified"
+                    if self._test_double_execution
+                    else "physical_hardware"
+                ),
+                "test_double_execution": self._test_double_execution,
                 "cpu_fallback_used": False,
                 "simulator_kernel_executed": False,
                 **quantization_metadata,
             },
         )
-
-    def _waves(self, tiles: tuple[M5Tile, ...]) -> tuple[tuple[M5Tile, ...], ...]:
-        width = sum(rank.local_dpus for rank in self.ranks)
-        # A v4 request represents disjoint output tiles.  K chunks are partial
-        # sums for the same output tile and must therefore be in separate
-        # requests, even when spare DPUs are available in a wave.
-        by_chunk: dict[str, list[M5Tile]] = {}
-        for tile in tiles:
-            by_chunk.setdefault(tile.k_chunk_id, []).append(tile)
-        waves: list[tuple[M5Tile, ...]] = []
-        for chunk_id in sorted(
-            by_chunk, key=lambda value: int(value.removeprefix("k_"))
-        ):
-            chunk_tiles = by_chunk[chunk_id]
-            for index in range(0, len(chunk_tiles), width):
-                waves.append(tuple(chunk_tiles[index : index + width]))
-        return tuple(waves)
 
     def _submit_wave(
         self,
@@ -544,29 +657,20 @@ class M5WholeCircuitSession:
         request_contract: str,
         wave: tuple[M5Tile, ...],
     ) -> tuple[list[tuple[M5Tile, np.ndarray]], dict[str, Any], bool, bool]:
-        requests: list[tuple[_RankSession, list[tuple[M5Tile, int]], Any]] = []
-        local_width = self.ranks[0].local_dpus
-        for global_slot, tile in enumerate(wave):
-            rank = self.ranks[global_slot // local_width]
-            local_id = global_slot % local_width
-            found = next((item for item in requests if item[0] is rank), None)
-            if found is None:
-                found = (rank, [], None)
-                requests.append(found)
-            found[1].append((tile, local_id))
+        requests = self.placement_strategy.map_wave_to_ranks(wave, self.ranks)
+        self._validate_rank_assignments(wave, requests)
         prepared: list[tuple[_RankSession, list[tuple[M5Tile, int]], Any]] = []
-        for rank, assignments, _ in requests:
+        for rank, assignments in requests:
             units = [
-                self._work_unit(tile, local_id, canonical_left, canonical_right, packed)
+                self.kernel_provider.build_work_unit(
+                    tile, local_id, canonical_left, canonical_right, packed
+                )
                 for tile, local_id in assignments
             ]
-            artifact = build_v4_request(
+            artifact = self.kernel_provider.prepare_request(
                 rank.root,
                 profile=rank.session.profile,
-                canonical_batch_count=lowering.canonical.b,
-                canonical_m=lowering.canonical.m,
-                canonical_n=lowering.canonical.n,
-                canonical_k=lowering.canonical.k,
+                lowering=lowering,
                 work_units=units,
                 task_contract_sha256=request_contract,
                 request_sequence=self._sequence,
@@ -642,7 +746,7 @@ class M5WholeCircuitSession:
                 }
                 for tile, local_id in assignments:
                     record = records[local_id]
-                    value = self._read_output(
+                    value = self.kernel_provider.read_output(
                         artifact.root / record.c_path,
                         tile,
                         packed=packed,
@@ -658,56 +762,71 @@ class M5WholeCircuitSession:
                 self._delete_request_dir(artifact)
 
     @staticmethod
-    def _work_unit(
-        tile: M5Tile,
-        local_id: int,
-        left: np.ndarray,
-        right: np.ndarray,
-        packed: bool,
-    ) -> V4WorkUnit:
-        left_tile = np.ascontiguousarray(
-            left[
-                tile.batch_index,
-                tile.m_start : tile.m_start + tile.m_size,
-                tile.k_start : tile.k_start + tile.k_size,
-            ]
-        )
-        right_tile = np.ascontiguousarray(
-            right[
-                tile.batch_index,
-                tile.k_start : tile.k_start + tile.k_size,
-                tile.n_start : tile.n_start + tile.n_size,
-            ]
-        )
-        dtype = np.int8 if packed else np.dtype("<f4")
-        return V4WorkUnit(
-            local_dpu_id=local_id,
-            tile_id=int.from_bytes(
-                hashlib.sha256(tile.id.encode("utf-8")).digest()[:8], "little"
-            ),
-            batch_index=tile.batch_index,
-            m_offset=tile.m_start,
-            n_offset=tile.n_start,
-            k_offset=tile.k_start,
-            m_elements=tile.m_size,
-            n_elements=tile.n_size,
-            k_elements=tile.k_size,
-            a_payload=np.asarray(left_tile, dtype=dtype).tobytes(order="C"),
-            b_payload=np.asarray(right_tile, dtype=dtype).tobytes(order="C"),
-        )
+    def _validate_waves(
+        tiles: tuple[M5Tile, ...],
+        waves: tuple[tuple[M5Tile, ...], ...],
+        total_dpu_count: int,
+    ) -> None:
+        if not isinstance(waves, tuple):
+            raise TypeError("placement strategy must return a tuple of waves")
+        expected = [id(tile) for tile in tiles]
+        if len(expected) != len(set(expected)):
+            raise ValueError("lowering contains duplicate tile objects")
+        actual: list[int] = []
+        for wave in waves:
+            if not isinstance(wave, tuple) or not wave:
+                raise ValueError("placement strategy returned an empty or invalid wave")
+            if len(wave) > total_dpu_count:
+                raise ValueError("placement wave exceeds available DPU count")
+            actual.extend(id(tile) for tile in wave)
+        if len(actual) != len(set(actual)):
+            raise ValueError("placement strategy duplicated a tile across waves")
+        if set(actual) != set(expected):
+            raise ValueError("placement strategy omitted or replaced a tile")
 
-    @staticmethod
-    def _read_output(path: Path, tile: M5Tile, *, packed: bool) -> np.ndarray:
-        dtype = np.dtype("<i4") if packed else np.dtype("<f4")
-        expected = tile.output_element_count
-        raw = path.read_bytes()
-        if len(raw) < expected * dtype.itemsize:
-            raise RuntimeError(f"v4 output is truncated: {path}")
-        values = np.frombuffer(raw[: expected * dtype.itemsize], dtype=dtype)
-        return np.asarray(
-            values.reshape(tile.m_size, tile.n_size),
-            dtype=np.int64 if packed else np.float64,
-        )
+    def _validate_rank_assignments(
+        self,
+        wave: tuple[M5Tile, ...],
+        requests: list[tuple[Any, list[tuple[M5Tile, int]]]],
+    ) -> None:
+        if not isinstance(requests, list) or not requests:
+            raise ValueError("placement strategy returned no rank assignments")
+        expected_tiles = {id(tile) for tile in wave}
+        assigned_tiles: list[int] = []
+        assigned_ranks: set[int] = set()
+        for request in requests:
+            if not isinstance(request, tuple) or len(request) != 2:
+                raise TypeError("rank assignment must be a (rank, assignments) tuple")
+            rank, assignments = request
+            if not any(rank is candidate for candidate in self.ranks):
+                raise ValueError("placement strategy returned a foreign rank object")
+            rank_identity = id(rank)
+            if rank_identity in assigned_ranks:
+                raise ValueError("placement strategy returned a rank more than once")
+            assigned_ranks.add(rank_identity)
+            if not isinstance(assignments, list) or not assignments:
+                raise ValueError("placement strategy returned an empty rank assignment")
+            local_ids: set[int] = set()
+            for assignment in assignments:
+                if not isinstance(assignment, tuple) or len(assignment) != 2:
+                    raise TypeError("tile assignment must be a (tile, local_id) tuple")
+                tile, local_id = assignment
+                if id(tile) not in expected_tiles:
+                    raise ValueError(
+                        "placement strategy assigned a tile outside the wave"
+                    )
+                if not isinstance(local_id, int) or isinstance(local_id, bool):
+                    raise TypeError("local DPU ID must be an integer")
+                if not 0 <= local_id < rank.local_dpus:
+                    raise ValueError("local DPU ID is outside the assigned rank")
+                if local_id in local_ids:
+                    raise ValueError("placement strategy reused a local DPU ID")
+                local_ids.add(local_id)
+                assigned_tiles.append(id(tile))
+        if len(assigned_tiles) != len(set(assigned_tiles)):
+            raise ValueError("placement strategy assigned a wave tile more than once")
+        if set(assigned_tiles) != expected_tiles:
+            raise ValueError("placement strategy omitted a wave tile")
 
     @staticmethod
     def _delete_request_dir(artifact: Any) -> None:
@@ -791,7 +910,7 @@ class M5WholeCircuitSession:
         confirmed = len(diagnostics) == len(self.ranks) and all(
             diagnostic["release_confirmed"] for diagnostic in diagnostics
         )
-        physical_target_verified = all(
+        physical_target_verified = not self._test_double_execution and all(
             rank.session.startup.get("target_observed") == "physical_hardware"
             for rank in self.ranks
         )
@@ -813,7 +932,9 @@ class M5WholeCircuitSession:
             for rank in self.ranks
         )
         ready_verified = allocation_verified and binary_identity_verified
-        native_execution = self._successful_request_count > 0
+        native_execution = (
+            self._successful_request_count > 0 and not self._test_double_execution
+        )
         verified = (
             physical_target_verified
             and allocation_verified
@@ -825,6 +946,8 @@ class M5WholeCircuitSession:
         self._terminal_metadata = {
             **_PROVENANCE,
             **self.engine._provenance,
+            "strategy_identity": self.strategy_identity,
+            "strategy_config_hash": self.strategy_config_hash,
             "target_observed": "physical_hardware" if verified else "not_verified",
             "observed_rank_count": len(self.ranks),
             "allocated_dpu_count": sum(rank.local_dpus for rank in self.ranks),

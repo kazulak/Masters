@@ -8,6 +8,10 @@ import numpy as np
 
 from quantum_bench.core.records import ContractionTask, TaskGraph, TensorValue
 from quantum_bench.tn.execution_bundle import contraction_path_structure_hash
+from quantum_bench.whole_circuit.strategies import (
+    ReadyTaskOrderPolicy,
+    SerialReadyTaskOrderPolicy,
+)
 
 
 @dataclass(frozen=True)
@@ -204,11 +208,19 @@ class WholeGraphExecutor:
         *,
         topology: DeviceTopology | None = None,
         store: TensorStore | None = None,
+        task_order_policy: ReadyTaskOrderPolicy | None = None,
+        scheduler: ReadyTaskOrderPolicy | None = None,
     ) -> None:
+        if task_order_policy is not None and scheduler is not None:
+            raise ValueError("provide task_order_policy or scheduler, not both")
         self.engine = engine
         self.policy = policy
         self.topology = topology or DeviceTopology()
         self.store = store or InMemoryTensorStore()
+        self.task_order_policy = (
+            task_order_policy or scheduler or SerialReadyTaskOrderPolicy()
+        )
+        self.scheduler = self.task_order_policy
 
     def execute(self, graph: TaskGraph, network: Any) -> WholeGraphExecution:
         self._validate_graph(graph)
@@ -227,14 +239,7 @@ class WholeGraphExecutor:
         session_metadata: dict[str, Any] = {}
         try:
             while pending:
-                ready = sorted(
-                    (
-                        task
-                        for task in pending.values()
-                        if set(task.dependencies) <= completed
-                    ),
-                    key=lambda task: task.id,
-                )
+                ready = self.task_order_policy.select_ready_tasks(pending, completed)
                 if not ready:
                     unresolved = {
                         task_id: task.dependencies
@@ -243,7 +248,26 @@ class WholeGraphExecutor:
                     raise ValueError(
                         f"TaskGraph dependencies are cyclic or unresolved: {unresolved}"
                     )
-                for task in ready:
+                ready_ids = tuple(task.id for task in ready)
+                if len(set(ready_ids)) != len(ready_ids):
+                    raise ValueError("Task order policy returned duplicate task ids")
+                if any(task_id not in pending for task_id in ready_ids):
+                    raise ValueError(
+                        "Task order policy returned a task that is not pending"
+                    )
+                if any(
+                    not set(pending[task_id].dependencies) <= completed
+                    for task_id in ready_ids
+                ):
+                    raise ValueError(
+                        "Task order policy returned a task with unresolved dependencies"
+                    )
+                if any(task is not pending[task.id] for task in ready):
+                    raise ValueError(
+                        "Task order policy must return canonical pending task objects"
+                    )
+                for task_id in ready_ids:
+                    task = pending[task_id]
                     left_id, right_id = task.input_tensor_ids
                     left = self.store.get(left_id)
                     right = self.store.get(right_id)
@@ -290,6 +314,8 @@ class WholeGraphExecutor:
         metadata = {
             "execution_engine": self.engine.name,
             "numeric_policy": self.policy.name,
+            "task_order_policy": self.task_order_policy.name,
+            "task_execution_mode": "serial",
             "device_topology": {
                 "backend": self.topology.backend,
                 "device_ids": self.topology.device_ids,
