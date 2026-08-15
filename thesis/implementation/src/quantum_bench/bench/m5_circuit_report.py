@@ -21,6 +21,33 @@ from typing import Any, Iterable, Mapping
 
 JsonDict = dict[str, Any]
 
+_MAX_TIMING_ROUTE_PANELS = 8
+_TIMING_STAGE_ORDER = (
+    "planning",
+    "session_open",
+    "host_quantization",
+    "h2d",
+    "kernel",
+    "d2h",
+    "assembly",
+    "host_dequantization",
+    "validation",
+    "session_close",
+)
+_TIMING_STAGE_LABELS = {
+    "planning": "Planning",
+    "session_open": "Session open",
+    "host_quantization": "Host quantization",
+    "h2d": "H2D",
+    "kernel": "Kernel",
+    "d2h": "D2H",
+    "assembly": "Assembly",
+    "host_dequantization": "Host dequantization",
+    "validation": "Validation",
+    "session_close": "Session close",
+}
+_PLOT_MARKERS = ("o", "s", "^", "D", "P", "X", "v", "<", ">", "h")
+
 
 @dataclass(frozen=True)
 class PlotEntry:
@@ -326,10 +353,7 @@ def _activity_label(row: Mapping[str, Any]) -> str | None:
         return None
     if active_dpus == provisioned_dpus and active_ranks == provisioned_ranks:
         return f"{provisioned_dpus}DPU/{provisioned_ranks}R"
-    return (
-        f"{active_dpus}/{provisioned_dpus}DPU + "
-        f"{active_ranks}/{provisioned_ranks}R"
-    )
+    return f"{active_dpus}/{provisioned_dpus}DPU + {active_ranks}/{provisioned_ranks}R"
 
 
 def _fully_active_topology(row: Mapping[str, Any]) -> bool:
@@ -467,6 +491,9 @@ def _record_row(row: Mapping[str, Any]) -> JsonDict:
         "family": _family(row),
         "qubits": _qubits(row),
         "engine": _engine(row),
+        "route_id": str(row.get("route_id") or ""),
+        "route_config_hash": str(row.get("route_config_hash") or ""),
+        "executor_config_hash": _executor_config_hash(row),
         "engine_class": _engine_class(row),
         "path": _path(row),
         "numeric_policy": _numeric(row),
@@ -478,7 +505,7 @@ def _record_row(row: Mapping[str, Any]) -> JsonDict:
         "circuit_semantics_hash": row.get("circuit_semantics_hash"),
         "tensor_network_hash": row.get("tensor_network_hash"),
         "contraction_plan_hash": row.get("contraction_plan_hash"),
-        "executor_config_hash": _executor_config_hash(row),
+        "admission_identity": _admission_identity(row),
         "cross_algorithm": _engine_class(row) == "cross_algorithm",
         "local_dpu_count": local_dpus,
         "rank_count": ranks,
@@ -541,6 +568,40 @@ def _aggregate_matched_rows(
     return result
 
 
+def _aggregate_medians(
+    rows: list[JsonDict],
+    *,
+    group_fields: tuple[str, ...],
+    value_fields: tuple[str, ...],
+    all_true_fields: tuple[tuple[str, str], ...] = (),
+    drop_fields: tuple[str, ...] = ("repeat_id",),
+) -> list[JsonDict]:
+    """Summarize repeated records with median-only numeric fields."""
+    groups: dict[tuple[Any, ...], list[JsonDict]] = {}
+    for row in rows:
+        groups.setdefault(tuple(row.get(field) for field in group_fields), []).append(
+            row
+        )
+    result: list[JsonDict] = []
+    for group in groups.values():
+        summary = {
+            key: value for key, value in group[0].items() if key not in drop_fields
+        }
+        summary["aggregation"] = "median_matched_repetitions"
+        summary["repeat_count"] = len(group)
+        for field in value_fields:
+            values = [
+                value for row in group if (value := _float(row.get(field))) is not None
+            ]
+            if not values:
+                continue
+            summary[field] = statistics.median(values)
+        for source_field, summary_field in all_true_fields:
+            summary[summary_field] = all(row.get(source_field) is True for row in group)
+        result.append(summary)
+    return result
+
+
 def _runtime_summaries(rows: list[JsonDict]) -> list[JsonDict]:
     groups: dict[tuple[Any, ...], list[JsonDict]] = {}
     for row in rows:
@@ -559,6 +620,8 @@ def _runtime_summaries(rows: list[JsonDict]) -> list[JsonDict]:
             normalized["circuit_semantics_hash"],
             normalized["tensor_network_hash"],
             normalized["contraction_plan_hash"],
+            normalized["route_id"],
+            normalized["route_config_hash"],
             normalized["executor_config_hash"],
             normalized["local_dpu_count"],
             normalized["rank_count"],
@@ -568,6 +631,7 @@ def _runtime_summaries(rows: list[JsonDict]) -> list[JsonDict]:
             normalized["active_dpu_count"],
             normalized["active_rank_count"],
             normalized["activity_label"],
+            normalized["admission_identity"],
         )
         groups.setdefault(key, []).append(row)
     summaries = []
@@ -591,7 +655,10 @@ def _runtime_summaries(rows: list[JsonDict]) -> list[JsonDict]:
                     "circuit_semantics_hash",
                     "tensor_network_hash",
                     "contraction_plan_hash",
+                    "route_id",
+                    "route_config_hash",
                     "executor_config_hash",
+                    "admission_identity",
                     "cross_algorithm",
                     "local_dpu_count",
                     "rank_count",
@@ -634,6 +701,13 @@ def _pair_rows(
         left_rows = group.get(left_class, [])
         right_rows = group.get(right_class, [])
         if not left_rows or not right_rows:
+            continue
+        left_identities = {
+            json.dumps(_source_identity(row), sort_keys=True) for row in left_rows
+        }
+        if len(left_identities) != 1:
+            # A comparison must not choose an arbitrary executor profile when
+            # more than one baseline satisfies the scientific-plan key.
             continue
         # A CPU measurement is a reusable baseline for every matching UPMEM
         # topology.  Never collapse the right-hand rows into one dictionary.
@@ -711,10 +785,10 @@ def _short_series_label(value: Any, family: str | None = None) -> str:
         lowered = part.lower()
         match = re.fullmatch(r"upmem_physical_(\d+)rank_(\d+)dpu", lowered)
         if match:
-            return "UPMEM", (int(match.group(2)), int(match.group(1)))
+            return "UPMEM physical", (int(match.group(2)), int(match.group(1)))
         if lowered in {"numpy_cpu", "cpu_numpy"}:
             return "CPU", None
-        if "upmem" in lowered or "dpu" in lowered:
+        if "upmem" in lowered or re.fullmatch(r"[a-z0-9_]*dpu[a-z0-9_]*", lowered):
             return "UPMEM", None
         if lowered == "quest_cpu_full_state":
             return "QuEST CPU", None
@@ -723,16 +797,26 @@ def _short_series_label(value: Any, family: str | None = None) -> str:
         return None, None
 
     def compact_token(part: str) -> str:
+        lowered = part.lower()
+        if re.fullmatch(r"upmem_physical_(\d+)rank_(\d+)dpu", lowered):
+            return "UPMEM physical"
+        if lowered in {"numpy_cpu", "cpu_numpy"}:
+            return "CPU"
+        if lowered == "quest_cpu_full_state":
+            return "QuEST CPU"
+        if lowered == "quimb_tn":
+            return "Quimb TN"
         replacements = (
             ("opt_einsum_greedy", "greedy"),
-            ("cotengra_flops_seed0", "cotengra"),
-            ("host_packed_int8", "int8"),
-            ("float32_real", "f32_real"),
-            ("real_float32", "f32_real"),
-            ("float32", "f32"),
-            ("cpu_numpy", "CPU"),
-            ("numpy_cpu", "CPU"),
+            ("cotengra_flops_seed0", "cotengra FLOPs"),
+            ("host_packed_int8", "host-packed Int8"),
+            ("float32_real", "Float32"),
+            ("real_float32", "Float32"),
+            ("f32_real", "Float32"),
+            ("float32", "Float32"),
             ("upmem_m5", "UPMEM"),
+            ("whole_route_including_session_lifecycle", "whole route"),
+            ("whole_circuit_steady_state_v1", "steady state"),
         )
         result = part
         for source, target in replacements:
@@ -748,6 +832,12 @@ def _short_series_label(value: Any, family: str | None = None) -> str:
         topology = embedded_topology
         parts = parts[1:]
     for part in parts:
+        nested_engine, nested_topology = engine_token(part)
+        if nested_engine is not None:
+            tokens.append(nested_engine)
+            if nested_topology is not None:
+                topology = nested_topology
+            continue
         partial_match = re.fullmatch(
             r"(\d+)\s*/\s*(\d+)DPU\s*\+\s*(\d+)\s*/\s*(\d+)R",
             part,
@@ -775,6 +865,49 @@ def _short_series_label(value: Any, family: str | None = None) -> str:
     elif engine != "CPU" and topology is not None:
         tokens.append(f"{topology[0]}DPU/{topology[1]}R")
     return " / ".join(tokens) or "unknown"
+
+
+def _identity_series(
+    row: Mapping[str, Any], *, include_stage: str | None = None
+) -> str:
+    """Build a stable series identity from record fields already present in rows."""
+    scope = _timing_scope(row)
+    topology = _activity_label(row) or _topology_label(row) or "host"
+    parts = [
+        _case(row) or "unknown_case",
+        _engine(row),
+        _path(row),
+        _numeric(row),
+        scope or "unspecified",
+        topology,
+    ]
+    if include_stage is not None:
+        parts.append(include_stage)
+    return " | ".join(parts)
+
+
+def _admission_identity(row: Mapping[str, Any]) -> str:
+    """Serialize the raw fields that determine scientific admission."""
+    return json.dumps(
+        {
+            "status": row.get("status", "completed"),
+            "validation_status": row.get("validation_status"),
+            "scientific_validation_status": row.get("scientific_validation_status"),
+            "exact_once": row.get("exact_once"),
+            "no_fallback_used": row.get("no_fallback_used"),
+            "target_observed": row.get("target_observed"),
+            "hardware_allocation_verified": row.get("hardware_allocation_verified"),
+            "native_kernel_executed": row.get("native_kernel_executed"),
+            "hardware_kernel_executed": row.get("hardware_kernel_executed"),
+            "simulator": row.get("simulator"),
+            "simulator_kernel_executed": row.get("simulator_kernel_executed"),
+            "cpu_fallback": row.get("cpu_fallback"),
+            "cpu_fallback_used": row.get("cpu_fallback_used"),
+            "release_succeeded": _release_succeeded(row),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def _plot_provisioned_topology(row: Mapping[str, Any]) -> tuple[int, int] | None:
@@ -844,9 +977,7 @@ def _plot_activity_range(
     if len(active_dpus) == 1 and len(active_ranks) == 1:
         if active_dpus[0] == provisioned_dpus and active_ranks[0] == provisioned_ranks:
             return f"{provisioned_dpus}DPU/{provisioned_ranks}R"
-        dpu_text = (
-            f"{active_dpus[0]} active of {provisioned_dpus} provisioned DPU"
-        )
+        dpu_text = f"{active_dpus[0]} active of {provisioned_dpus} provisioned DPU"
         rank_text = f"{active_ranks[0]} of {provisioned_ranks} rank"
         return f"{dpu_text} / {rank_text}"
     dpu_text = (
@@ -874,6 +1005,107 @@ def _plot_display_label(
     return f"{label} / {activity}" if activity else label
 
 
+def _plot_exact_identity(row: Mapping[str, Any], group: str) -> tuple[Any, ...]:
+    """Return the evidence fields that figures must never collapse."""
+    return (
+        str(row.get(group) or ""),
+        str(row.get("engine") or ""),
+        str(row.get("route_id") or ""),
+        str(row.get("route_config_hash") or ""),
+        str(row.get("executor_config_hash") or ""),
+        str(row.get("timing_scope") or ""),
+        _int(row.get("provisioned_dpu_count")),
+        _int(row.get("provisioned_rank_count")),
+        _int(row.get("active_dpu_count")),
+        _int(row.get("active_rank_count")),
+        str(row.get("admission_identity") or ""),
+        str(row.get("status") or ""),
+        str(row.get("validation_status") or ""),
+        str(row.get("scientific_validation_status") or ""),
+        row.get("scientific_admitted"),
+        str(row.get("comparison_identity") or ""),
+    )
+
+
+def _plot_semantic_label(row: Mapping[str, Any], group: str, family: str) -> str:
+    """Return the compact human comparison label, independent of topology."""
+    return _short_series_label(str(row.get(group) or "unknown"), family)
+
+
+def _visual_engine_label(row: Mapping[str, Any]) -> str:
+    """Return an engine label without embedding one topology in the legend."""
+    engine_class = _engine_class(row)
+    if engine_class == "upmem":
+        return "UPMEM physical"
+    if engine_class == "cpu":
+        return "CPU"
+    return _short_series_label(_engine(row))
+
+
+def _plot_topology_key(row: Mapping[str, Any]) -> tuple[int, int, int, int] | None:
+    provisioned = _plot_provisioned_topology(row)
+    active_dpus = _int(row.get("active_dpu_count"))
+    active_ranks = _int(row.get("active_rank_count"))
+    if provisioned is None or active_dpus is None or active_ranks is None:
+        return None
+    return provisioned[0], provisioned[1], active_dpus, active_ranks
+
+
+def _plot_topology_label(topology: tuple[int, int, int, int] | None) -> str:
+    if topology is None:
+        return "host"
+    provisioned_dpus, provisioned_ranks, active_dpus, active_ranks = topology
+    return f"{active_dpus}/{provisioned_dpus} DPU, {active_ranks}/{provisioned_ranks} R"
+
+
+def _timing_bar_label(qubits: int, topology: str) -> str:
+    """Keep timing x labels compact while retaining the active DPU count."""
+    partial = re.fullmatch(
+        r"(\d+)/(\d+)\s*DPU(?:\s*\+|,)\s*(\d+)/(\d+)\s*R",
+        topology,
+    )
+    full = re.fullmatch(r"(\d+)\s*DPU/(\d+)\s*R", topology)
+    if partial is not None:
+        active_dpus, provisioned_dpus, active_ranks, provisioned_ranks = (
+            partial.groups()
+        )
+    elif full is not None:
+        provisioned_dpus, provisioned_ranks = full.groups()
+        active_dpus, active_ranks = provisioned_dpus, provisioned_ranks
+    else:
+        return f"{qubits}q\n{topology}"
+    ranks = (
+        ""
+        if active_ranks == provisioned_ranks == "1"
+        else f" {active_ranks}/{provisioned_ranks}R"
+    )
+    return f"{qubits}q\n{active_dpus}/{provisioned_dpus} DPU{ranks}"
+
+
+def _is_upmem_plot_row(row: Mapping[str, Any]) -> bool:
+    return _engine_class(row) == "upmem"
+
+
+def _source_identity(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the source identity retained by a derived comparison row."""
+    return {
+        "engine": _engine(row),
+        "route_id": str(row.get("route_id") or ""),
+        "route_config_hash": str(row.get("route_config_hash") or ""),
+        "executor_config_hash": _executor_config_hash(row),
+        "timing_scope": _timing_scope(row),
+        "provisioned_dpu_count": _total_dpu_count(row),
+        "provisioned_rank_count": _rank_count(row),
+        "active_dpu_count": _active_dpu_count(row),
+        "active_rank_count": _active_rank_count(row),
+        "admission_identity": _admission_identity(row),
+    }
+
+
+def _comparison_identity(*rows: Mapping[str, Any]) -> str:
+    return json.dumps([_source_identity(row) for row in rows], sort_keys=True)
+
+
 def _faceted_plot(
     path: Path,
     title: str,
@@ -885,8 +1117,17 @@ def _faceted_plot(
     reference_y: float | None = None,
     log_y: bool = False,
     panel_title: str | None = None,
-    collapse_activity: bool = True,
+    semantic_group: str | None = None,
+    collapse_activity: bool = False,
 ) -> bool:
+    """Plot exact rows with compact semantic legends and explicit topology.
+
+    Tables retain one row for every evidence identity.  The figure deliberately
+    uses a shorter semantic label (engine/planner/numeric mode) for colour, and
+    uses marker shape plus a dedicated legend for active/provisioned topology.
+    UPMEM points are only connected when one exact execution identity spans the
+    complete series; changing topology or configuration is rendered as points.
+    """
     if not rows:
         return False
     try:
@@ -896,20 +1137,22 @@ def _faceted_plot(
         import matplotlib.pyplot as plt
     except ImportError:
         return False
+    semantic_group = semantic_group or group
     by_family: dict[
-        str, dict[tuple[str, tuple[int, int] | None], list[tuple[float, float, JsonDict]]]
+        str, dict[str, dict[tuple[Any, ...], list[tuple[float, float, JsonDict]]]]
     ] = {}
+    plot_rows: list[tuple[JsonDict, float, float, str, str, tuple[Any, ...]]] = []
     for row in rows:
         xv, yv = _float(row.get(x)), _float(row.get(y))
         if xv is None or yv is None:
             continue
         family = str(row.get("family") or "unknown")
-        series_key = _plot_series_key(
-            row, group, collapse_activity=collapse_activity
-        )
-        by_family.setdefault(family, {}).setdefault(series_key, []).append(
-            (xv, yv, row)
-        )
+        semantic = _plot_semantic_label(row, semantic_group, family)
+        exact = _plot_exact_identity(row, group)
+        plot_rows.append((row, xv, yv, family, semantic, exact))
+        by_family.setdefault(family, {}).setdefault(semantic, {}).setdefault(
+            exact, []
+        ).append((xv, yv, row))
     if not by_family:
         return False
     families = sorted(by_family)
@@ -923,45 +1166,98 @@ def _faceted_plot(
         sharex=False,
         sharey=False,
     )
-    display_labels = {}
-    for family in families:
-        for (base_series, topology), points in by_family[family].items():
-            display_labels[(family, (base_series, topology))] = _plot_display_label(
-                family,
-                base_series,
-                topology,
-                [point[2] for point in points],
-            )
-    # Resolve collisions only within a family. The same semantic series in
-    # different facets must retain one shared label and color.
-    raw_by_family_label: dict[tuple[str, str], set[tuple[str, tuple[int, int] | None]]] = {}
-    for (family, series), label in display_labels.items():
-        raw_by_family_label.setdefault((family, label), set()).add(series)
-    for key, label in list(display_labels.items()):
-        family, series = key
-        raw_values = sorted(raw_by_family_label[(family, label)], key=str)
-        if len(raw_values) > 1:
-            display_labels[key] = f"{label} ({raw_values.index(series) + 1})"
-    short_labels = sorted(set(display_labels.values()))
+    short_labels = sorted(
+        {semantic for values in by_family.values() for semantic in values}
+    )
     colors = {
         label: plt.get_cmap("tab10")(index % 10)
         for index, label in enumerate(short_labels)
     }
-    handles: dict[str, Any] = {}
+    from matplotlib.lines import Line2D
+
+    semantic_handles = {
+        label: Line2D([0], [0], color=colors[label], marker="o", label=label)
+        for label in short_labels
+    }
+    topologies = sorted(
+        {
+            topology
+            for row, _xv, _yv, _family, _semantic, _exact in plot_rows
+            if _is_upmem_plot_row(row)
+            if (topology := _plot_topology_key(row)) is not None
+        }
+    )
+    topology_markers = {
+        topology: _PLOT_MARKERS[index % len(_PLOT_MARKERS)]
+        for index, topology in enumerate(topologies)
+    }
+    topology_handles = {
+        topology: Line2D(
+            [0],
+            [0],
+            color="black",
+            linestyle="None",
+            marker=topology_markers[topology],
+            label=_plot_topology_label(topology),
+        )
+        for topology in topologies
+    }
+    offset_index: dict[tuple[str, float, tuple[Any, ...]], int] = {}
+    offset_width: dict[tuple[str, float], int] = {}
+    by_x: dict[tuple[str, float], set[tuple[Any, ...]]] = {}
+    for row, xv, _yv, family, _semantic, exact in plot_rows:
+        if _is_upmem_plot_row(row):
+            by_x.setdefault((family, xv), set()).add(exact)
+    for key, identities in by_x.items():
+        ordered = sorted(identities, key=repr)
+        offset_width[key] = len(ordered)
+        for position, identity in enumerate(ordered):
+            offset_index[(key[0], key[1], identity)] = position
+
     metric_title = panel_title or y.replace("_", " ").title()
     for index, family in enumerate(families):
         axis = axes[index // ncols][index % ncols]
-        for series, points in sorted(by_family[family].items(), key=lambda item: str(item[0])):
-            points.sort(key=lambda point: point[0])
-            label = display_labels[(family, series)]
-            (line,) = axis.plot(
-                [point[0] for point in points],
-                [point[1] for point in points],
-                marker="o",
-                color=colors[label],
-                label=label,
-            )
-            handles.setdefault(label, line)
+        for semantic, exact_series in sorted(by_family[family].items()):
+            for exact, points in sorted(
+                exact_series.items(), key=lambda item: repr(item[0])
+            ):
+                points.sort(key=lambda point: point[0])
+                first_row = points[0][2]
+                is_upmem = _is_upmem_plot_row(first_row)
+                topology = _plot_topology_key(first_row)
+                marker = topology_markers.get(topology, "o")
+                active = topology[2] if topology is not None else 1
+                marker_size = 28 + 10 * math.sqrt(max(active, 1))
+                x_values = [point[0] for point in points]
+                y_values = [point[1] for point in points]
+                # Any UPMEM series with a second identity under this semantic
+                # label is intentionally point-only. It prevents visual lines
+                # from implying a fixed topology/configuration experiment.
+                connect = not is_upmem and len(exact_series) == 1
+                if connect:
+                    axis.plot(
+                        x_values,
+                        y_values,
+                        marker="o",
+                        color=colors[semantic],
+                        linewidth=1.6,
+                    )
+                else:
+                    shifted = []
+                    for xv in x_values:
+                        width = offset_width.get((family, xv), 1)
+                        position = offset_index.get((family, xv, exact), 0)
+                        shifted.append(xv + (position - (width - 1) / 2.0) * 0.12)
+                    axis.scatter(
+                        shifted,
+                        y_values,
+                        marker=marker,
+                        s=marker_size,
+                        color=colors[semantic],
+                        edgecolors="black" if is_upmem else colors[semantic],
+                        linewidths=0.35 if is_upmem else 0.0,
+                        zorder=3,
+                    )
         if reference_y is not None:
             axis.axhline(
                 reference_y,
@@ -980,27 +1276,50 @@ def _faceted_plot(
         axes[index // ncols][index % ncols].set_visible(False)
     fig.suptitle(title, y=0.995, fontsize="large")
     legend_rows = 0
-    if handles:
-        ordered = sorted(handles)
+    if semantic_handles:
+        ordered = sorted(semantic_handles)
         legend_columns = min(4, len(ordered))
-        legend_rows = math.ceil(len(ordered) / legend_columns)
-        fig.legend(
-            [handles[series] for series in ordered],
+        legend_rows += math.ceil(len(ordered) / legend_columns)
+        semantic_legend = fig.legend(
+            [semantic_handles[label] for label in ordered],
             ordered,
             loc="upper center",
-            bbox_to_anchor=(0.5, 0.945),
-            ncol=min(4, len(ordered)),
+            bbox_to_anchor=(0.5, 0.965),
+            ncol=legend_columns,
             fontsize="small",
             frameon=False,
+            title="Comparison",
         )
+        fig.add_artist(semantic_legend)
+    if topology_handles:
+        ordered = sorted(topology_handles)
+        legend_columns = min(4, len(ordered))
+        legend_rows += math.ceil(len(ordered) / legend_columns)
+        fig.legend(
+            [topology_handles[topology] for topology in ordered],
+            [_plot_topology_label(topology) for topology in ordered],
+            loc="upper center",
+            bbox_to_anchor=(0.5, 0.875),
+            ncol=legend_columns,
+            fontsize="x-small",
+            frameon=False,
+            title="UPMEM active/provisioned topology",
+        )
+    fig.text(
+        0.5,
+        0.015,
+        "Exact route identities remain separate in source CSVs. UPMEM points are unconnected when topology/configuration differs.",
+        ha="center",
+        fontsize="x-small",
+    )
     # Explicit margins keep the external legend and panel titles clear without
     # relying on tight_layout, which is unstable for dynamic facet grids.
     fig.subplots_adjust(
         left=0.08,
         right=0.98,
-        bottom=0.12,
-        top=(max(0.20, min(0.86, 0.88 - 0.055 * legend_rows)))
-        if handles
+        bottom=0.16,
+        top=(max(0.24, min(0.80, 0.89 - 0.085 * legend_rows)))
+        if semantic_handles
         else 0.90,
         wspace=0.32,
         hspace=0.42,
@@ -1021,7 +1340,8 @@ def _plot(
     reference_y: float | None = None,
     log_y: bool = False,
     panel_title: str | None = None,
-    collapse_activity: bool = True,
+    semantic_group: str | None = None,
+    collapse_activity: bool = False,
 ) -> bool:
     """Compatibility wrapper for the family-faceted renderer."""
     return _faceted_plot(
@@ -1034,8 +1354,317 @@ def _plot(
         reference_y=reference_y,
         log_y=log_y,
         panel_title=panel_title,
+        semantic_group=semantic_group,
         collapse_activity=collapse_activity,
     )
+
+
+def _timing_execution_identity(row: Mapping[str, Any]) -> tuple[Any, ...]:
+    """Return every execution field that must remain distinct in timing plots."""
+    return (
+        str(row.get("path") or "unspecified"),
+        str(row.get("numeric_policy") or "unspecified"),
+        str(row.get("engine") or "unknown"),
+        str(row.get("route_id") or ""),
+        str(row.get("route_config_hash") or ""),
+        str(row.get("executor_config_hash") or ""),
+        str(row.get("timing_scope") or ""),
+        _int(row.get("provisioned_dpu_count")),
+        _int(row.get("provisioned_rank_count")),
+        _int(row.get("active_dpu_count")),
+        _int(row.get("active_rank_count")),
+        str(row.get("admission_identity") or ""),
+    )
+
+
+def _timing_topology_label(row: Mapping[str, Any]) -> str:
+    """Format the explicit topology fields retained by timing summaries."""
+    provisioned_dpus = _int(row.get("provisioned_dpu_count"))
+    provisioned_ranks = _int(row.get("provisioned_rank_count"))
+    active_dpus = _int(row.get("active_dpu_count"))
+    active_ranks = _int(row.get("active_rank_count"))
+    if provisioned_dpus is None or provisioned_ranks is None:
+        embedded = re.fullmatch(
+            r"upmem_physical_(\d+)rank_(\d+)dpu",
+            str(row.get("engine") or ""),
+            flags=re.IGNORECASE,
+        )
+        if embedded is not None:
+            return f"{embedded.group(2)}DPU/{embedded.group(1)}R"
+        return _activity_label(row) or "topology unspecified"
+    if active_dpus is None or active_ranks is None:
+        return f"{provisioned_dpus}DPU/{provisioned_ranks}R provisioned"
+    if active_dpus == provisioned_dpus and active_ranks == provisioned_ranks:
+        return f"{provisioned_dpus}DPU/{provisioned_ranks}R"
+    return f"{active_dpus}/{provisioned_dpus}DPU + {active_ranks}/{provisioned_ranks}R"
+
+
+def _timing_route_label(row: Mapping[str, Any]) -> str:
+    """Return a readable, unambiguous label for one physical timing identity."""
+    planner_numeric = _short_series_label(
+        f"{row.get('path', 'unspecified')} | {row.get('numeric_policy', 'unspecified')}"
+    )
+    topology = _timing_topology_label(row)
+    scope_value = str(row.get("timing_scope") or "").strip()
+    scope = _short_series_label(scope_value) if scope_value else ""
+    engine_value = str(row.get("engine") or "unknown")
+    engine = (
+        "UPMEM physical"
+        if re.fullmatch(
+            r"upmem_physical_\d+rank_\d+dpu", engine_value, flags=re.IGNORECASE
+        )
+        else _short_series_label(engine_value)
+    )
+    identifiers = []
+    route_id = str(row.get("route_id") or "").strip()
+    route_hash = str(row.get("route_config_hash") or "").strip()
+    executor_hash = str(row.get("executor_config_hash") or "").strip()
+    if route_id:
+        identifiers.append(f"route {route_id}")
+    if route_hash:
+        identifiers.append(f"route cfg {route_hash[:8]}")
+    if executor_hash:
+        identifiers.append(f"executor {executor_hash[:8]}")
+    suffix = "; ".join([engine, topology, *([scope] if scope else []), *identifiers])
+    return f"{planner_numeric}\n{suffix}"
+
+
+def _timing_plot_summary(rows: list[JsonDict]) -> list[JsonDict]:
+    """Median physical timing leaves across equally weighted circuit families."""
+    by_case: dict[tuple[tuple[Any, ...], str, str, int, str], list[float]] = {}
+    for row in rows:
+        if (
+            _engine_class(row) != "upmem"
+            or row.get("timing_coverage") != "execution_stage_leaves"
+        ):
+            continue
+        qubits = _int(row.get("qubits"))
+        value = _float(row.get("time_s"))
+        stage = str(row.get("stage") or "")
+        if (
+            qubits is None
+            or value is None
+            or value < 0
+            or stage not in _TIMING_STAGE_ORDER
+        ):
+            continue
+        key = (
+            _timing_execution_identity(row),
+            str(row.get("case_id") or "unknown_case"),
+            str(row.get("family") or "unknown"),
+            qubits,
+            stage,
+        )
+        by_case.setdefault(key, []).append(value)
+
+    by_family: dict[tuple[tuple[Any, ...], str, int, str], list[float]] = {}
+    for (identity, _case_id, family, qubits, stage), values in by_case.items():
+        by_family.setdefault((identity, family, qubits, stage), []).append(
+            statistics.median(values)
+        )
+
+    across_families: dict[tuple[tuple[Any, ...], int, str], list[float]] = {}
+    for (identity, _family, qubits, stage), values in by_family.items():
+        across_families.setdefault((identity, qubits, stage), []).append(
+            statistics.median(values)
+        )
+
+    result = []
+    for (identity, qubits, stage), values in sorted(
+        across_families.items(), key=lambda item: repr(item[0])
+    ):
+        (
+            path_id,
+            numeric_policy,
+            engine,
+            route_id,
+            route_config_hash,
+            executor_config_hash,
+            timing_scope,
+            provisioned_dpus,
+            provisioned_ranks,
+            active_dpus,
+            active_ranks,
+            admission_identity,
+        ) = identity
+        result.append(
+            {
+                "path": path_id,
+                "numeric_policy": numeric_policy,
+                "engine": engine,
+                "route_id": route_id,
+                "route_config_hash": route_config_hash,
+                "executor_config_hash": executor_config_hash,
+                "timing_scope": timing_scope,
+                "provisioned_dpu_count": provisioned_dpus,
+                "provisioned_rank_count": provisioned_ranks,
+                "active_dpu_count": active_dpus,
+                "active_rank_count": active_ranks,
+                "admission_identity": admission_identity,
+                "qubits": qubits,
+                "stage": stage,
+                "median_time_s": statistics.median(values),
+                "family_count": len(values),
+            }
+        )
+    return result
+
+
+def _timing_breakdown_plot(
+    path: Path, title: str, rows: list[JsonDict]
+) -> tuple[bool, str]:
+    """Render bounded planner/numeric panels with stacked physical timing leaves."""
+    plot_rows = _timing_plot_summary(rows)
+    if not plot_rows:
+        reason = "no recorded physical execution-stage timing leaves"
+        _todo_plot(path, title, reason)
+        return False, reason
+
+    panels = sorted(
+        {(str(row["path"]), str(row["numeric_policy"])) for row in plot_rows}
+    )
+    if len(panels) > _MAX_TIMING_ROUTE_PANELS:
+        reason = (
+            f"{len(panels)} planner/numeric timing panels exceed the "
+            f"{_MAX_TIMING_ROUTE_PANELS}-panel readability limit"
+        )
+        _todo_plot(path, title, reason)
+        return False, reason
+
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Patch
+    except ImportError:
+        return False, "matplotlib is unavailable"
+
+    stages = [
+        stage
+        for stage in _TIMING_STAGE_ORDER
+        if any(row["stage"] == stage for row in plot_rows)
+    ]
+    colors = {
+        stage: plt.get_cmap("tab10")(index % 10)
+        for index, stage in enumerate(_TIMING_STAGE_ORDER)
+    }
+    ncols = 1 if len(panels) == 1 else 2
+    nrows = math.ceil(len(panels) / ncols)
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(8.0 * ncols, 4.2 * nrows + 1.6),
+        squeeze=False,
+        sharex=False,
+        sharey=False,
+    )
+
+    for index, panel in enumerate(panels):
+        axis = axes[index // ncols][index % ncols]
+        panel_rows = [
+            row
+            for row in plot_rows
+            if (str(row["path"]), str(row["numeric_policy"])) == panel
+        ]
+        bars: dict[tuple[Any, ...], list[JsonDict]] = {}
+        for row in panel_rows:
+            topology = _timing_topology_label(row)
+            # A bar deliberately remains one exact execution identity. If two
+            # identities would need the same human x-label, a figure would
+            # conceal a configuration difference and is therefore invalid.
+            bar_key = (int(row["qubits"]), topology)
+            bars.setdefault(bar_key, []).append(row)
+        collisions = []
+        for bar_key, candidates in bars.items():
+            identities = {
+                _timing_execution_identity(candidate) for candidate in candidates
+            }
+            if len(identities) > 1:
+                collisions.append(f"{bar_key[0]}q {bar_key[1]}")
+        if collisions:
+            reason = (
+                "incompatible physical timing identities share intended bar(s): "
+                + ", ".join(collisions)
+            )
+            _todo_plot(path, title, reason)
+            return False, reason
+        ordered_bars = sorted(
+            bars,
+            key=lambda key: (
+                key[0],
+                _int(bars[key][0].get("active_dpu_count")) or 0,
+                _int(bars[key][0].get("provisioned_dpu_count")) or 0,
+                key[1],
+            ),
+        )
+        values_by_key = {
+            (bar_key, str(row["stage"])): float(row["median_time_s"])
+            for bar_key in ordered_bars
+            for row in bars[bar_key]
+        }
+        positions = list(range(len(ordered_bars)))
+        bottoms = [0.0] * len(ordered_bars)
+        for stage in stages:
+            values = [
+                values_by_key.get((bar_key, stage), 0.0) for bar_key in ordered_bars
+            ]
+            axis.bar(
+                positions,
+                values,
+                bottom=bottoms,
+                width=0.72,
+                color=colors[stage],
+                label=_TIMING_STAGE_LABELS[stage],
+            )
+            bottoms = [bottom + value for bottom, value in zip(bottoms, values)]
+        axis.set_title(
+            _short_series_label(f"{panel[0]} | {panel[1]}"), fontsize="small"
+        )
+        axis.set_xlabel("Qubits and active/provisioned topology")
+        axis.set_ylabel("Seconds")
+        axis.set_xticks(positions)
+        axis.set_xticklabels(
+            [_timing_bar_label(qubits, topology) for qubits, topology in ordered_bars],
+            fontsize=8,
+        )
+        axis.tick_params(axis="x", pad=8)
+        axis.grid(axis="y", alpha=0.25)
+
+    for index in range(len(panels), nrows * ncols):
+        axes[index // ncols][index % ncols].set_visible(False)
+
+    legend_handles = [
+        Patch(facecolor=colors[stage], label=_TIMING_STAGE_LABELS[stage])
+        for stage in stages
+    ]
+    fig.suptitle(title, y=0.995, fontsize="large")
+    fig.legend(
+        handles=legend_handles,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.91),
+        ncol=min(5, len(legend_handles)),
+        fontsize="small",
+        frameon=False,
+    )
+    fig.text(
+        0.5,
+        0.015,
+        "Absolute seconds; each bar is one exact topology/configuration identity, with medians across circuit families only.",
+        ha="center",
+        fontsize="small",
+    )
+    fig.subplots_adjust(
+        left=0.08,
+        right=0.98,
+        bottom=0.15,
+        top=0.76,
+        wspace=0.24,
+        hspace=0.38,
+    )
+    fig.savefig(path, dpi=140, bbox_inches="tight")
+    plt.close(fig)
+    return True, ""
 
 
 def _todo_plot(path: Path, title: str, reason: str) -> None:
@@ -1078,11 +1707,7 @@ def _entry(
 
 
 def _one_qubit_multiple_topologies(rows: list[JsonDict]) -> bool:
-    qubits = {
-        value
-        for row in rows
-        if (value := _qubits(row)) is not None
-    }
+    qubits = {value for row in rows if (value := _qubits(row)) is not None}
     topologies = {
         topology
         for row in rows
@@ -1187,12 +1812,21 @@ def generate_report(
         valid = _plot(
             runtime_plot,
             runtime_title,
-            runtime_summaries,
+            [
+                dict(
+                    row,
+                    _visual_series=(
+                        f"{_visual_engine_label(row)} | {row['path']} | {row['numeric_policy']}"
+                    ),
+                )
+                for row in runtime_summaries
+            ],
             "qubits",
             "median_runtime_s",
             "series",
             log_y=True,
             panel_title="median runtime (s)",
+            semantic_group="_visual_series",
         )
         runtime_reason = "no valid runtime records"
     entries.append(
@@ -1230,6 +1864,10 @@ def generate_report(
                     "active_rank_count": _active_rank_count(upmem),
                     "activity_label": _activity_label(upmem),
                     "topology": _topology_label(upmem),
+                    "route_id": str(upmem.get("route_id") or ""),
+                    "route_config_hash": str(upmem.get("route_config_hash") or ""),
+                    "admission_identity": _admission_identity(upmem),
+                    "comparison_identity": _comparison_identity(cpu, upmem),
                     "series": (
                         f"{_path(upmem)} | {_numeric(upmem)} | "
                         f"{_activity_label(upmem) or _topology_label(upmem)}"
@@ -1261,6 +1899,10 @@ def generate_report(
             "active_rank_count",
             "activity_label",
             "topology",
+            "route_id",
+            "route_config_hash",
+            "admission_identity",
+            "comparison_identity",
             "series",
             "circuit_semantics_hash",
             "tensor_network_hash",
@@ -1314,12 +1956,16 @@ def generate_report(
     valid = _plot(
         speed_plot,
         speed_title,
-        speedups,
+        [
+            dict(row, _visual_series=f"{row['path']} | {row['numeric_policy']}")
+            for row in speedups
+        ],
         "qubits",
         "speedup_cpu_over_upmem",
         "series",
         reference_y=1.0,
         panel_title="CPU / UPMEM speedup",
+        semantic_group="_visual_series",
     )
     entries.append(
         _entry(
@@ -1554,7 +2200,7 @@ def generate_report(
         "_plot_series",
         reference_y=1.0,
         panel_title="DPU scaling",
-        collapse_activity=False,
+        semantic_group="_plot_series",
     )
     entries.append(
         _entry(
@@ -1589,7 +2235,7 @@ def generate_report(
         "_plot_series",
         reference_y=1.0,
         panel_title="rank scaling",
-        collapse_activity=False,
+        semantic_group="_plot_series",
     )
     entries.append(
         _entry(
@@ -1635,7 +2281,7 @@ def generate_report(
     path_plot = plots / "path_runtime_ratio.png"
     path_title = (
         "Measured same-circuit/TN standard-path median ratio "
-        "(opt_einsum_greedy time / cotengra_flops_seed0 time; >1 favors cotengra_flops_seed0; "
+        "(greedy time / cotengra FLOPs time; >1 favors cotengra FLOPs; "
         f"{execution_model})"
     )
     valid = _plot(
@@ -1644,10 +2290,7 @@ def generate_report(
         [
             dict(
                 row,
-                _plot_series=(
-                    f"{row['engine']} | {row['numeric_policy']} | "
-                    f"{row['activity_label'] or row['topology']}"
-                ),
+                _plot_series=f"{_visual_engine_label(row)} | {row['numeric_policy']}",
             )
             for row in path_rows
         ],
@@ -1656,6 +2299,7 @@ def generate_report(
         "_plot_series",
         reference_y=1.0,
         panel_title="greedy / cotengra ratio",
+        semantic_group="_plot_series",
     )
     entries.append(
         _entry(
@@ -1664,7 +2308,7 @@ def generate_report(
             path_csv,
             path_title,
             valid,
-            "no matched opt_einsum_greedy and cotengra_flops_seed0 path records",
+            "no matched greedy and cotengra FLOPs path records",
         )
     )
 
@@ -1698,8 +2342,8 @@ def generate_report(
     )
     numeric_plot = plots / "float32_int8_ratio.png"
     numeric_title = (
-        "Measured same-plan float32/int8 median ratio "
-        f"(float32 time / int8 time; >1 favors int8; {execution_model})"
+        "Measured same-plan Float32 / host-packed Int8 median ratio "
+        f"(Float32 time / host-packed Int8 time; >1 favors host-packed Int8; {execution_model})"
     )
     if topology_dimension_ambiguous:
         _todo_plot(numeric_plot, numeric_title, topology_dimension_reason)
@@ -1712,10 +2356,7 @@ def generate_report(
             [
                 dict(
                     row,
-                    _plot_series=(
-                        f"{row['engine']} | {row['path']} | "
-                        f"{row['activity_label'] or row['topology']}"
-                    ),
+                    _plot_series=f"{_visual_engine_label(row)} | {row['path']}",
                 )
                 for row in numeric_rows
             ],
@@ -1723,9 +2364,10 @@ def generate_report(
             "runtime_ratio_float32_over_int8",
             "_plot_series",
             reference_y=1.0,
-            panel_title="float32 / int8 ratio",
+            panel_title="Float32 / host-packed Int8 ratio",
+            semantic_group="_plot_series",
         )
-        numeric_reason = "no matched float32 and host-packed-int8 records"
+        numeric_reason = "no matched Float32 and host-packed Int8 records"
     entries.append(
         _entry(
             "float32_int8_ratio",
@@ -1737,7 +2379,34 @@ def generate_report(
         )
     )
 
-    validation_rows = [_validation_row(row) for row in rows]
+    validation_rows = _aggregate_medians(
+        [_validation_row(row) for row in rows],
+        group_fields=(
+            "case_id",
+            "family",
+            "qubits",
+            "engine",
+            "route_id",
+            "route_config_hash",
+            "executor_config_hash",
+            "path",
+            "numeric_policy",
+            "timing_scope",
+            "provisioned_dpu_count",
+            "provisioned_rank_count",
+            "active_dpu_count",
+            "active_rank_count",
+            "activity_label",
+            "status",
+            "validation_status",
+            "scientific_validation_status",
+            "admission_identity",
+            "scientific_admitted",
+            "series",
+        ),
+        value_fields=("max_abs_error", "l2_error", "fidelity", "normalization_drift"),
+        drop_fields=("repeat_id",),
+    )
     validation_csv = tables / "validation_accuracy.csv"
     _write_csv(
         validation_csv,
@@ -1748,36 +2417,84 @@ def generate_report(
             "case_id",
             "family",
             "engine",
+            "route_id",
+            "route_config_hash",
+            "executor_config_hash",
+            "path",
             "numeric_policy",
+            "timing_scope",
+            "provisioned_dpu_count",
+            "provisioned_rank_count",
+            "active_dpu_count",
+            "active_rank_count",
+            "activity_label",
             "status",
             "validation_status",
+            "scientific_admitted",
             "max_abs_error",
             "l2_error",
             "fidelity",
             "normalization_drift",
+            "repeat_count",
+            "series",
         ],
     )
     validation_plot = plots / "validation_accuracy.png"
     valid = _plot(
         validation_plot,
-        "M5.5 validation maximum absolute error",
-        [row for row in validation_rows if row["scientific_admitted"]],
+        "M5.5 maximum absolute error against the full-precision reference",
+        [
+            dict(
+                row,
+                _visual_series=(
+                    f"{_visual_engine_label(row)} | {row['path']} | {row['numeric_policy']}"
+                ),
+            )
+            for row in validation_rows
+            if row["scientific_admitted"]
+        ],
         "qubits",
         "max_abs_error",
-        "engine",
+        "series",
+        semantic_group="_visual_series",
     )
     entries.append(
         _entry(
             "validation_accuracy",
             validation_plot,
             validation_csv,
-            "Validation accuracy",
+            "M5.5 maximum absolute error against the full-precision reference",
             valid,
             "no finite validation errors",
         )
     )
 
-    timing_rows = _timing_rows(admitted_rows)
+    timing_rows = _aggregate_medians(
+        _timing_rows(admitted_rows),
+        group_fields=(
+            "case_id",
+            "family",
+            "qubits",
+            "engine",
+            "route_id",
+            "route_config_hash",
+            "executor_config_hash",
+            "path",
+            "numeric_policy",
+            "timing_scope",
+            "provisioned_dpu_count",
+            "provisioned_rank_count",
+            "active_dpu_count",
+            "active_rank_count",
+            "activity_label",
+            "timing_coverage",
+            "admission_identity",
+            "stage",
+            "series",
+        ),
+        value_fields=("time_s",),
+        drop_fields=("repeat_id",),
+    )
     timing_csv = tables / "timing_breakdown.csv"
     _write_csv(
         timing_csv,
@@ -1786,33 +2503,34 @@ def generate_report(
         if timing_rows
         else [
             "case_id",
+            "family",
             "engine",
+            "route_id",
+            "route_config_hash",
+            "executor_config_hash",
+            "path",
+            "numeric_policy",
+            "timing_scope",
             "active_dpu_count",
             "active_rank_count",
             "provisioned_dpu_count",
             "provisioned_rank_count",
             "activity_label",
+            "timing_coverage",
             "stage",
             "time_s",
+            "repeat_count",
             "series",
         ],
     )
     timing_plot = plots / "timing_breakdown.png"
-    timing_title = "M5.5 timing breakdown"
-    if topology_dimension_ambiguous:
-        _todo_plot(timing_plot, timing_title, topology_dimension_reason)
-        valid = False
-        timing_reason = topology_dimension_reason
-    else:
-        valid = _plot(
-            timing_plot,
-            timing_title,
-            timing_rows,
-            "qubits",
-            "time_s",
-            "series",
-        )
-        timing_reason = "no timing-stage fields"
+    timing_title = (
+        "M5.5 measured non-overlapping physical execution stages\n"
+        "Medians across circuit families"
+    )
+    valid, timing_reason = _timing_breakdown_plot(
+        timing_plot, timing_title, timing_rows
+    )
     entries.append(
         _entry(
             "timing_breakdown",
@@ -1824,7 +2542,46 @@ def generate_report(
         )
     )
 
-    transfer_rows = [_transfer_row(row) for row in rows]
+    transfer_rows = _aggregate_medians(
+        [_transfer_row(row) for row in rows],
+        group_fields=(
+            "case_id",
+            "family",
+            "qubits",
+            "engine",
+            "route_id",
+            "route_config_hash",
+            "executor_config_hash",
+            "path",
+            "numeric_policy",
+            "timing_scope",
+            "provisioned_dpu_count",
+            "provisioned_rank_count",
+            "active_dpu_count",
+            "active_rank_count",
+            "activity_label",
+            "status",
+            "validation_status",
+            "scientific_validation_status",
+            "admission_identity",
+            "scientific_admitted",
+            "series",
+        ),
+        value_fields=("h2d_bytes", "d2h_bytes", "transfer_bytes"),
+        all_true_fields=(("invariant_passed", "raw_invariants_all_passed"),),
+        drop_fields=("repeat_id",),
+    )
+    for row in transfer_rows:
+        row["invariant_passed"] = row["raw_invariants_all_passed"]
+        h2d = _float(row.get("h2d_bytes"))
+        d2h = _float(row.get("d2h_bytes"))
+        total = _float(row.get("transfer_bytes"))
+        row["aggregate_component_medians_additive"] = (
+            h2d is not None
+            and d2h is not None
+            and total is not None
+            and math.isclose(h2d + d2h, total, rel_tol=0, abs_tol=1e-9)
+        )
     transfer_csv = tables / "transfer_bytes.csv"
     _write_csv(
         transfer_csv,
@@ -1834,20 +2591,30 @@ def generate_report(
         else [
             "case_id",
             "engine",
+            "route_id",
+            "route_config_hash",
+            "executor_config_hash",
+            "path",
+            "numeric_policy",
+            "timing_scope",
             "active_dpu_count",
             "active_rank_count",
             "provisioned_dpu_count",
             "provisioned_rank_count",
+            "scientific_admitted",
             "activity_label",
             "h2d_bytes",
             "d2h_bytes",
             "transfer_bytes",
             "invariant_passed",
+            "raw_invariants_all_passed",
+            "aggregate_component_medians_additive",
+            "repeat_count",
             "series",
         ],
     )
     transfer_plot = plots / "transfer_bytes.png"
-    transfer_title = "Application-visible H2D/D2H transfer bytes"
+    transfer_title = "M5.5 application-visible software-recorded transfer bytes"
     if topology_dimension_ambiguous:
         _todo_plot(transfer_plot, transfer_title, topology_dimension_reason)
         valid = False
@@ -1856,10 +2623,20 @@ def generate_report(
         valid = _plot(
             transfer_plot,
             transfer_title,
-            [row for row in transfer_rows if row["scientific_admitted"]],
+            [
+                dict(
+                    row,
+                    _visual_series=(
+                        f"{_visual_engine_label(row)} | {row['path']} | {row['numeric_policy']}"
+                    ),
+                )
+                for row in transfer_rows
+                if row["scientific_admitted"] and row["raw_invariants_all_passed"]
+            ],
             "qubits",
             "transfer_bytes",
             "series",
+            semantic_group="_visual_series",
         )
         transfer_reason = "no finite transfer-byte records"
     entries.append(
@@ -1998,6 +2775,15 @@ def _variant_ratios(rows: list[JsonDict], path_a: str, path_b: str) -> list[Json
                     "activity_label": _activity_label(a_row),
                     "topology": _topology_label(a_row),
                     "executor_config_hash": _executor_config_hash(a_row),
+                    "route_id_a": str(a_row.get("route_id") or ""),
+                    "route_config_hash_a": str(a_row.get("route_config_hash") or ""),
+                    "executor_config_hash_a": _executor_config_hash(a_row),
+                    "admission_identity_a": _admission_identity(a_row),
+                    "route_id_b": str(b_row.get("route_id") or ""),
+                    "route_config_hash_b": str(b_row.get("route_config_hash") or ""),
+                    "executor_config_hash_b": _executor_config_hash(b_row),
+                    "admission_identity_b": _admission_identity(b_row),
+                    "comparison_identity": _comparison_identity(a_row, b_row),
                     "circuit_semantics_hash": a_hashes[0],
                     "tensor_network_hash": a_hashes[1],
                     "contraction_plan_hash_a": a_hashes[2],
@@ -2033,6 +2819,15 @@ def _variant_ratios(rows: list[JsonDict], path_a: str, path_b: str) -> list[Json
             "activity_label",
             "topology",
             "executor_config_hash",
+            "route_id_a",
+            "route_config_hash_a",
+            "executor_config_hash_a",
+            "admission_identity_a",
+            "route_id_b",
+            "route_config_hash_b",
+            "executor_config_hash_b",
+            "admission_identity_b",
+            "comparison_identity",
             "circuit_semantics_hash",
             "tensor_network_hash",
             "contraction_plan_hash_a",
@@ -2105,6 +2900,23 @@ def _numeric_ratios(rows: list[JsonDict]) -> list[JsonDict]:
                     "activity_label": _activity_label(group["float32"]),
                     "topology": _topology_label(group["float32"]),
                     "executor_config_hash": _executor_config_hash(group["float32"]),
+                    "route_id_float32": str(group["float32"].get("route_id") or ""),
+                    "route_config_hash_float32": str(
+                        group["float32"].get("route_config_hash") or ""
+                    ),
+                    "executor_config_hash_float32": _executor_config_hash(
+                        group["float32"]
+                    ),
+                    "admission_identity_float32": _admission_identity(group["float32"]),
+                    "route_id_int8": str(group["int8"].get("route_id") or ""),
+                    "route_config_hash_int8": str(
+                        group["int8"].get("route_config_hash") or ""
+                    ),
+                    "executor_config_hash_int8": _executor_config_hash(group["int8"]),
+                    "admission_identity_int8": _admission_identity(group["int8"]),
+                    "comparison_identity": _comparison_identity(
+                        group["float32"], group["int8"]
+                    ),
                     "circuit_semantics_hash": group["float32"].get(
                         "circuit_semantics_hash"
                     ),
@@ -2140,6 +2952,15 @@ def _numeric_ratios(rows: list[JsonDict]) -> list[JsonDict]:
             "activity_label",
             "topology",
             "executor_config_hash",
+            "route_id_float32",
+            "route_config_hash_float32",
+            "executor_config_hash_float32",
+            "admission_identity_float32",
+            "route_id_int8",
+            "route_config_hash_int8",
+            "executor_config_hash_int8",
+            "admission_identity_int8",
+            "comparison_identity",
             "circuit_semantics_hash",
             "tensor_network_hash",
             "contraction_plan_hash",
@@ -2165,10 +2986,21 @@ def _validation_row(row: Mapping[str, Any]) -> JsonDict:
         "family": _family(row),
         "qubits": _qubits(row),
         "engine": _engine(row),
+        "route_id": str(row.get("route_id") or ""),
+        "route_config_hash": str(row.get("route_config_hash") or ""),
+        "executor_config_hash": _executor_config_hash(row),
+        "path": _path(row),
         "numeric_policy": _numeric(row),
+        "timing_scope": _timing_scope(row),
+        "activity_label": _activity_label(row),
+        "active_dpu_count": _active_dpu_count(row),
+        "active_rank_count": _active_rank_count(row),
+        "provisioned_dpu_count": _total_dpu_count(row),
+        "provisioned_rank_count": _rank_count(row),
         "status": row.get("status"),
         "validation_status": row.get("validation_status"),
         "scientific_validation_status": row.get("scientific_validation_status"),
+        "admission_identity": _admission_identity(row),
         "scientific_admitted": _valid(row),
         "max_abs_error": max_abs
         if max_abs is not None
@@ -2178,45 +3010,67 @@ def _validation_row(row: Mapping[str, Any]) -> JsonDict:
         "normalization_drift": _float(
             _first(row, "normalization_drift", "validation_normalization_drift")
         ),
+        "series": _identity_series(row),
     }
 
 
 def _timing_rows(rows: list[JsonDict]) -> list[JsonDict]:
     result = []
-    known = {
-        "planning": ("planning_time_s", "planning_s", "planning"),
-        "session_open": ("session_open_s",),
-        "host_quantization": ("host_quantization_time_s", "host_quantization_s"),
-        "h2d": ("h2d_time_s", "h2d_s"),
-        "kernel": ("kernel_time_s", "kernel_s", "launch_time_s"),
-        "dpu_kernel": ("dpu_kernel_time_s", "dpu_kernel_s"),
-        "d2h": ("d2h_time_s", "d2h_s"),
-        "assembly": ("assembly_time_s", "assembly_s"),
-        "host_dequantization": (
-            "host_dequantization_time_s",
-            "host_dequantization_s",
+    leaf_stages = (
+        ("planning", ("planning_time_s", "planning_s", "planning")),
+        ("session_open", ("session_open_s", "session_open_time_s")),
+        (
+            "host_quantization",
+            ("host_quantization_time_s", "host_quantization_s"),
         ),
-        "graph_execution": ("graph_execution_s",),
-        "validation": ("validation_time_s", "validation_s"),
-        "session_close": ("session_close_s",),
-        "total": (
-            "total_route_time_s",
-            "total_time_s",
-            "total_s",
-            "total",
-            "timing_s",
+        ("h2d", ("h2d_time_s", "h2d_s")),
+        ("d2h", ("d2h_time_s", "d2h_s")),
+        ("assembly", ("assembly_time_s", "assembly_s")),
+        (
+            "host_dequantization",
+            ("host_dequantization_time_s", "host_dequantization_s"),
         ),
-    }
+        ("validation", ("validation_time_s", "validation_s")),
+        ("session_close", ("session_close_s", "session_close_time_s")),
+    )
+    kernel_aliases = (
+        "dpu_kernel_time_s",
+        "dpu_kernel_s",
+        "kernel_time_s",
+        "kernel_s",
+        "launch_time_s",
+    )
+    execution_stage_aliases = (
+        ("host_quantization_time_s", "host_quantization_s"),
+        ("h2d_time_s", "h2d_s"),
+        kernel_aliases,
+        ("d2h_time_s", "d2h_s"),
+        ("assembly_time_s", "assembly_s"),
+        ("host_dequantization_time_s", "host_dequantization_s"),
+    )
+
+    def stage_value(
+        breakdown: Mapping[str, Any], row: Mapping[str, Any], aliases: tuple[str, ...]
+    ) -> Any:
+        value = _first(breakdown, *aliases)
+        return value if value is not None else _first(row, *aliases)
+
     for row in rows:
         breakdown = (
             row.get("timing_breakdown") or row.get("timings") or row.get("timing")
         )
         if not isinstance(breakdown, Mapping):
             breakdown = {}
-        for stage, aliases in known.items():
-            value = _first(breakdown, *aliases)
-            if value is None:
-                value = _first(row, *aliases)
+        timing_coverage = (
+            "execution_stage_leaves"
+            if any(
+                _float(stage_value(breakdown, row, aliases)) is not None
+                for aliases in execution_stage_aliases
+            )
+            else "lifecycle_only"
+        )
+        for stage, aliases in leaf_stages:
+            value = stage_value(breakdown, row, aliases)
             number = _float(value)
             if number is not None:
                 result.append(
@@ -2225,6 +3079,13 @@ def _timing_rows(rows: list[JsonDict]) -> list[JsonDict]:
                         "family": _family(row),
                         "qubits": _qubits(row),
                         "engine": _engine(row),
+                        "route_id": str(row.get("route_id") or ""),
+                        "route_config_hash": str(row.get("route_config_hash") or ""),
+                        "executor_config_hash": _executor_config_hash(row),
+                        "path": _path(row),
+                        "numeric_policy": _numeric(row),
+                        "timing_scope": _timing_scope(row),
+                        "timing_coverage": timing_coverage,
                         "activity_label": _activity_label(row),
                         "active_dpu_count": _active_dpu_count(row),
                         "active_rank_count": _active_rank_count(row),
@@ -2232,12 +3093,50 @@ def _timing_rows(rows: list[JsonDict]) -> list[JsonDict]:
                         "provisioned_rank_count": _rank_count(row),
                         "stage": stage,
                         "time_s": number,
-                        "series": (
-                            f"{_engine(row)} | "
-                            f"{_activity_label(row) or 'host'} | {stage}"
-                        ),
+                        "admission_identity": _admission_identity(row),
+                        "series": _identity_series(row, include_stage=stage),
                     }
                 )
+    for row in rows:
+        breakdown = (
+            row.get("timing_breakdown") or row.get("timings") or row.get("timing")
+        )
+        if not isinstance(breakdown, Mapping):
+            breakdown = {}
+        timing_coverage = (
+            "execution_stage_leaves"
+            if any(
+                _float(stage_value(breakdown, row, aliases)) is not None
+                for aliases in execution_stage_aliases
+            )
+            else "lifecycle_only"
+        )
+        kernel = _float(stage_value(breakdown, row, kernel_aliases))
+        if kernel is not None:
+            result.append(
+                {
+                    "case_id": _case(row),
+                    "family": _family(row),
+                    "qubits": _qubits(row),
+                    "engine": _engine(row),
+                    "route_id": str(row.get("route_id") or ""),
+                    "route_config_hash": str(row.get("route_config_hash") or ""),
+                    "executor_config_hash": _executor_config_hash(row),
+                    "path": _path(row),
+                    "numeric_policy": _numeric(row),
+                    "timing_scope": _timing_scope(row),
+                    "timing_coverage": timing_coverage,
+                    "activity_label": _activity_label(row),
+                    "active_dpu_count": _active_dpu_count(row),
+                    "active_rank_count": _active_rank_count(row),
+                    "provisioned_dpu_count": _total_dpu_count(row),
+                    "provisioned_rank_count": _rank_count(row),
+                    "stage": "kernel",
+                    "time_s": kernel,
+                    "admission_identity": _admission_identity(row),
+                    "series": _identity_series(row, include_stage="kernel"),
+                }
+            )
     return result
 
 
@@ -2277,15 +3176,25 @@ def _transfer_row(row: Mapping[str, Any]) -> JsonDict:
         "family": _family(row),
         "qubits": _qubits(row),
         "engine": _engine(row),
+        "route_id": str(row.get("route_id") or ""),
+        "route_config_hash": str(row.get("route_config_hash") or ""),
+        "executor_config_hash": _executor_config_hash(row),
+        "path": _path(row),
+        "numeric_policy": _numeric(row),
+        "timing_scope": _timing_scope(row),
         "activity_label": _activity_label(row),
         "active_dpu_count": _active_dpu_count(row),
         "active_rank_count": _active_rank_count(row),
         "provisioned_dpu_count": _total_dpu_count(row),
         "provisioned_rank_count": _rank_count(row),
         "scientific_admitted": _valid(row),
+        "status": row.get("status"),
+        "validation_status": row.get("validation_status"),
+        "scientific_validation_status": row.get("scientific_validation_status"),
+        "admission_identity": _admission_identity(row),
         "h2d_bytes": h2d,
         "d2h_bytes": d2h,
         "transfer_bytes": total,
         "invariant_passed": invariant,
-        "series": f"{_engine(row)} | {_activity_label(row) or 'host'}",
+        "series": _identity_series(row),
     }
