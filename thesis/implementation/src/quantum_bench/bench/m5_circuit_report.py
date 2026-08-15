@@ -667,20 +667,69 @@ def _pair_rows(
         groups.setdefault(key, {}).setdefault(_engine_class(row), []).append(row)
     pairs: list[JsonDict] = []
     for group in groups.values():
-        left_rows = group.get(left_class, [])
-        right_rows = group.get(right_class, [])
-        if not left_rows or not right_rows:
+        raw_left_rows = group.get(left_class, [])
+        raw_right_rows = group.get(right_class, [])
+        if not raw_left_rows or not raw_right_rows:
             continue
-        left_identities = {
-            json.dumps(_source_identity(row), sort_keys=True) for row in left_rows
-        }
-        if len(left_identities) != 1:
-            # A comparison must not choose an arbitrary executor profile when
-            # more than one baseline satisfies the scientific-plan key.
+        left_rows, left_conflicts = _deduplicate_pair_rows(
+            raw_left_rows
+        )
+        right_rows, right_conflicts = _deduplicate_pair_rows(
+            raw_right_rows
+        )
+        right_representative = right_rows[0] if right_rows else raw_right_rows[0]
+        if left_conflicts:
+            for conflict in left_conflicts:
+                _append_claim_rejection(
+                    claim_rejections,
+                    Claim.SPEEDUP,
+                    conflict[0],
+                    right_representative,
+                    ClaimDecision(
+                        False,
+                        (
+                            f"conflicting duplicate {left_class.upper()} rows for "
+                            "one run/repeat/comparison identity",
+                        ),
+                    ),
+                )
+            continue
+        if not left_rows:
+            continue
+        if len(left_rows) != 1:
+            _append_claim_rejection(
+                claim_rejections,
+                Claim.SPEEDUP,
+                left_rows[0],
+                right_representative,
+                ClaimDecision(
+                    False,
+                    (
+                        f"ambiguous {left_class.upper()} baselines for one "
+                        "repeat/comparison identity",
+                    ),
+                ),
+            )
             continue
         # A CPU measurement is a reusable baseline for every matching UPMEM
         # topology.  Never collapse the right-hand rows into one dictionary.
         baseline = left_rows[0]
+        for conflict in right_conflicts:
+            _append_claim_rejection(
+                claim_rejections,
+                Claim.SPEEDUP,
+                baseline,
+                conflict[0],
+                ClaimDecision(
+                    False,
+                    (
+                        f"conflicting duplicate {right_class.upper()} rows for "
+                        "one run/repeat/comparison identity",
+                    ),
+                ),
+            )
+        if not right_rows:
+            continue
         for right in sorted(
             right_rows,
             key=lambda row: (
@@ -703,6 +752,34 @@ def _pair_rows(
                 continue
             pairs.append({left_class: baseline, right_class: right})
     return pairs
+
+
+def _deduplicate_pair_rows(
+    rows: list[JsonDict],
+) -> tuple[list[JsonDict], list[list[JsonDict]]]:
+    buckets: dict[str, list[JsonDict]] = {}
+    for row in rows:
+        run_identity = str(
+            row.get("run_id")
+            or row.get("evidence_run_id")
+            or row.get("campaign_run_id")
+            or row.get("study_id")
+            or ""
+        )
+        identity = json.dumps(
+            {"run_identity": run_identity, "source": _source_identity(row)},
+            sort_keys=True,
+        )
+        buckets.setdefault(identity, []).append(row)
+    unique: list[JsonDict] = []
+    conflicts: list[list[JsonDict]] = []
+    for bucket in buckets.values():
+        row = _unambiguous_variant(bucket)
+        if row is None:
+            conflicts.append(bucket)
+        else:
+            unique.append(row)
+    return unique, conflicts
 
 
 def _append_claim_rejection(

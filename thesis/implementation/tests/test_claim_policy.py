@@ -79,6 +79,34 @@ def test_cpu_and_physical_upmem_rows_are_timing_admissible() -> None:
     modeled_cpu["execution_mode"] = "model"
     assert not policy.evaluate_row(Claim.TIMING, modeled_cpu).allowed
 
+    spoofed_cpu = _row(engine="cpu_numpy")
+    spoofed_cpu.update(execution_mode="cpu_host", modeled=True)
+    assert policy.execution_mode(spoofed_cpu) is ExecutionMode.MODEL
+    assert not policy.evaluate_row(Claim.TIMING, spoofed_cpu).allowed
+
+    measured_cpu = _row(engine="cpu_numpy")
+    measured_cpu["timing_origin"] = "host_timer"
+    assert policy.evaluate_row(Claim.TIMING, measured_cpu).allowed
+    measured_cpu["timing_origin"] = "analytic_model"
+    assert not policy.evaluate_row(Claim.TIMING, measured_cpu).allowed
+
+    physical_with_planner_model = _row(engine="upmem_m5")
+    physical_with_planner_model.update(
+        model_id="planner-model-v2",
+        cost_model_id="upmem-path-cost-v2",
+        resource_model_id="mram-wram-v1",
+    )
+    assert (
+        policy.execution_mode(physical_with_planner_model)
+        is ExecutionMode.PHYSICAL_HARDWARE
+    )
+    assert policy.evaluate_row(Claim.TIMING, physical_with_planner_model).allowed
+
+    analytic_cpu = _row(engine="cpu_numpy")
+    analytic_cpu.update(execution_mode="cpu_host", simulation_method="analytic_model")
+    assert policy.execution_mode(analytic_cpu) is ExecutionMode.MODEL
+    assert not policy.evaluate_row(Claim.TIMING, analytic_cpu).allowed
+
 
 def test_speedup_requires_matching_scope_hashes_and_repeat_context() -> None:
     policy = ClaimPolicy()
@@ -127,19 +155,43 @@ def test_energy_requires_positive_measured_non_tdp_source() -> None:
         energy_measurement_boundary="host_and_dimm",
         energy_sensor_id="meter-1",
         energy_measurement_interval_s=1.0,
+        energy_sample_count=2,
     )
     assert policy.evaluate_row(Claim.ENERGY, row).allowed
 
     row["energy_source"] = "tdp_estimate"
     decision = policy.evaluate_row(Claim.ENERGY, row)
     assert not decision.allowed
-    assert "energy source is not a measured non-TDP source" in decision.reasons
+    assert "energy source is not an approved measured source" in decision.reasons
 
     row["energy_source"] = "external_meter_measured"
     row["energy_measurement_status"] = "not_measured"
     decision = policy.evaluate_row(Claim.ENERGY, row)
     assert not decision.allowed
     assert "energy measurement status is not measured" in decision.reasons
+
+    row["energy_measurement_status"] = "measured"
+    row["energy_measurement_interval_s"] = "soon"
+    decision = policy.evaluate_row(Claim.ENERGY, row)
+    assert not decision.allowed
+    assert "energy measurement interval is missing or non-positive" in decision.reasons
+
+    row["energy_measurement_interval_s"] = 1.0
+    row["energy_source"] = "magic_source"
+    decision = policy.evaluate_row(Claim.ENERGY, row)
+    assert not decision.allowed
+    assert "energy source is not an approved measured source" in decision.reasons
+
+    row["energy_source"] = "external_meter_measured"
+    row["energy_measurement_status"] = "passed"
+    row.pop("energy_sample_count")
+    decision = policy.evaluate_row(Claim.ENERGY, row)
+    assert not decision.allowed
+    assert "energy measurement status is not measured" in decision.reasons
+    assert (
+        "energy measurement lacks positive samples or counter readings"
+        in decision.reasons
+    )
 
 
 def test_path_numeric_and_scaling_pairs_require_exact_changed_module_role() -> None:

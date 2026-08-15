@@ -60,6 +60,9 @@ class ClaimPolicy:
             mode = self.execution_mode(row)
             if mode in {ExecutionMode.MODEL, ExecutionMode.SDK_SIMULATOR}:
                 reasons.append("timing claim rejects modeled or simulator execution")
+            origins = self._timing_origins(row)
+            if origins and not all(self._measured_timing_origin(value) for value in origins):
+                reasons.append("timing metric origin is not a measured timer or counter")
             if self._engine_class(row) == "upmem":
                 if row.get("hardware_speedup_applicable") is not True:
                     reasons.append("hardware timing is not speedup-applicable")
@@ -75,37 +78,37 @@ class ClaimPolicy:
             if energy is None:
                 reasons.append("measured energy_joules is missing or non-positive")
             source = str(row.get("energy_source") or "").strip().lower()
-            if not source or source in {"unavailable", "unknown", "none"}:
-                reasons.append("measured energy source is missing")
-            elif "tdp" in source or "estimated" in source or "model" in source:
-                reasons.append("energy source is not a measured non-TDP source")
+            if source not in {
+                "rapl_measured",
+                "external_meter_measured",
+                "external_power_meter_measured",
+                "hardware_counter_measured",
+                "sensor_measured",
+                "upmem_power_meter_measured",
+            }:
+                reasons.append("energy source is not an approved measured source")
             status = str(row.get("energy_measurement_status") or "").strip().lower()
-            if not status:
-                reasons.append("energy measurement status is missing")
-            elif status not in {
+            if status not in {
                 "measured",
                 "measured_valid",
                 "measurement_completed",
-                "passed",
-                "verified",
             }:
                 reasons.append("energy measurement status is not measured")
             if not self._energy_field(
-                row, "energy_measurement_boundary", "energy_boundary"
+                row,
+                "energy_measurement_boundary",
+                "energy_boundary",
+                "energy_scope",
             ):
-                reasons.append("energy measurement boundary is missing")
+                reasons.append("energy measurement boundary or scope is missing")
             if not self._energy_field(
                 row, "energy_sensor_id", "energy_counter_id", "energy_meter_id"
             ):
                 reasons.append("energy sensor or counter identity is missing")
-            if not self._energy_field(
-                row,
-                "energy_measurement_interval_s",
-                "energy_interval_s",
-                "energy_timing_scope",
-                "energy_scope",
-            ):
-                reasons.append("energy measurement interval or scope is missing")
+            if not self._positive_energy_interval(row):
+                reasons.append("energy measurement interval is missing or non-positive")
+            if not self._energy_counter_provenance(row):
+                reasons.append("energy measurement lacks positive samples or counter readings")
             return self._decision(reasons)
         if claim in {Claim.SPEEDUP, Claim.PATH_ABLATION, Claim.NUMERIC_ABLATION}:
             return ClaimDecision(False, (f"{claim.value} requires a baseline/candidate pair",))
@@ -286,6 +289,9 @@ class ClaimPolicy:
 
     @staticmethod
     def execution_mode(row: Mapping[str, Any]) -> ExecutionMode:
+        marker_mode = ClaimPolicy._marker_execution_mode(row)
+        if marker_mode is not None:
+            return marker_mode
         explicit = str(row.get("execution_mode") or "").strip().lower()
         if explicit in {"model", "modeled", "analytic_model"}:
             return ExecutionMode.MODEL
@@ -295,8 +301,6 @@ class ClaimPolicy:
             return ExecutionMode.PHYSICAL_HARDWARE
         if explicit in {"cpu", "cpu_host", "host"}:
             return ExecutionMode.CPU_HOST
-        if row.get("simulator") is True or row.get("simulator_kernel_executed") is True:
-            return ExecutionMode.SDK_SIMULATOR
         target = str(row.get("target_observed") or "").strip().lower()
         if target in {"physical_hardware", "physical", "hardware"}:
             return ExecutionMode.PHYSICAL_HARDWARE
@@ -628,6 +632,131 @@ class ClaimPolicy:
         return None
 
     @staticmethod
+    def _positive_energy_interval(row: Mapping[str, Any]) -> bool:
+        interval = ClaimPolicy._energy_field(
+            row,
+            "energy_measurement_interval_s",
+            "energy_interval_s",
+            "energy_duration_s",
+        )
+        if ClaimPolicy._finite_positive(interval) is not None:
+            return True
+        for start_key, end_key in (
+            ("energy_measurement_start_s", "energy_measurement_end_s"),
+            ("energy_start_time_s", "energy_end_time_s"),
+            ("energy_interval_start_s", "energy_interval_end_s"),
+        ):
+            start = ClaimPolicy._finite_number(
+                ClaimPolicy._energy_field(row, start_key)
+            )
+            end = ClaimPolicy._finite_number(ClaimPolicy._energy_field(row, end_key))
+            if start is not None and end is not None and end > start:
+                return True
+        return False
+
+    @staticmethod
+    def _energy_counter_provenance(row: Mapping[str, Any]) -> bool:
+        sample_count = ClaimPolicy._energy_field(
+            row,
+            "energy_sample_count",
+            "energy_measurement_sample_count",
+            "energy_counter_sample_count",
+            "energy_counter_count",
+        )
+        if ClaimPolicy._finite_positive(sample_count) is not None:
+            return True
+        for before_key, after_key in (
+            ("energy_counter_before", "energy_counter_after"),
+            ("energy_counter_before_uj", "energy_counter_after_uj"),
+            ("energy_before_uj", "energy_after_uj"),
+            ("energy_reading_before", "energy_reading_after"),
+        ):
+            before = ClaimPolicy._finite_number(
+                ClaimPolicy._energy_field(row, before_key)
+            )
+            after = ClaimPolicy._finite_number(
+                ClaimPolicy._energy_field(row, after_key)
+            )
+            if before is not None and after is not None and after > before:
+                return True
+        return False
+
+    @staticmethod
+    def _marker_execution_mode(row: Mapping[str, Any]) -> ExecutionMode | None:
+        simulator_flags = (
+            "simulator",
+            "simulator_kernel_executed",
+            "sdk_simulator_executed",
+        )
+        if any(
+            value is True
+            for key in simulator_flags
+            for value in ClaimPolicy._nested_values(row, key)
+        ):
+            return ExecutionMode.SDK_SIMULATOR
+        if any(
+            value is True
+            for key in ("modeled", "modeled_only")
+            for value in ClaimPolicy._nested_values(row, key)
+        ):
+            return ExecutionMode.MODEL
+        for key in (
+            "simulation_method",
+            "metric_origin",
+            "timing_origin",
+            "runtime_origin",
+            "execution_origin",
+            "simulation_origin",
+        ):
+            for value in ClaimPolicy._nested_values(row, key):
+                normalized = str(value).strip().lower()
+                tokens = normalized.replace("-", "_").replace(".", "_").split("_")
+                if "simulator" in tokens or "simulation" in tokens:
+                    return ExecutionMode.SDK_SIMULATOR
+                if "model" in tokens or "modeled" in tokens:
+                    return ExecutionMode.MODEL
+        for value in ClaimPolicy._nested_values(row, "simulation_model_id"):
+            normalized = str(value).strip().lower()
+            tokens = normalized.replace("-", "_").replace(".", "_").split("_")
+            if "simulator" in tokens or "simulation" in tokens:
+                return ExecutionMode.SDK_SIMULATOR
+        return None
+
+    @staticmethod
+    def _timing_origins(row: Mapping[str, Any]) -> tuple[Any, ...]:
+        return tuple(
+            value
+            for key in (
+                "timing_origin",
+                "runtime_origin",
+                "metric_origin",
+                "runtime_metric_origin",
+                "timer_source",
+                "timing_source",
+            )
+            for value in ClaimPolicy._nested_values(row, key)
+        )
+
+    @staticmethod
+    def _measured_timing_origin(value: Any) -> bool:
+        normalized = str(value).strip().lower().split(".")[-1]
+        return normalized in {
+            "host_timer",
+            "host_wall_timer",
+            "host_wall_clock",
+            "runtime_counter",
+            "device_counter",
+            "device_cycles",
+            "hardware_counter",
+            "perf_counter",
+            "python_perf_counter",
+            "monotonic_clock",
+            "wall_clock",
+            "measured",
+            "measured_timer",
+        }
+
+    @staticmethod
     def _engine_class(row: Mapping[str, Any]) -> str:
         value = str(
             row.get("engine_id")
@@ -699,6 +828,14 @@ class ClaimPolicy:
         except (TypeError, ValueError):
             return None
         return number if math.isfinite(number) and number > 0 else None
+
+    @staticmethod
+    def _finite_number(value: Any) -> float | None:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return number if math.isfinite(number) else None
 
     @staticmethod
     def _explicitly_false(row: Mapping[str, Any], *keys: str) -> bool:

@@ -297,6 +297,40 @@ def test_same_plan_pairing_rejects_ambiguous_cpu_executor_baselines(
     assert (
         _csv(tmp_path / "report" / "tables" / "same_plan_cpu_upmem_speedup.csv") == []
     )
+    rejections = _csv(tmp_path / "report" / "tables" / "claim_rejections.csv")
+    assert any("ambiguous CPU baselines" in row["reasons"] for row in rejections)
+
+
+def test_same_plan_pairing_deduplicates_identical_rows(tmp_path: Path) -> None:
+    cpu = _row(engine="cpu_numpy", runtime=10.0)
+    upmem = _row(engine="upmem_m5", runtime=5.0)
+
+    generate_report([cpu, dict(cpu), upmem, dict(upmem)], tmp_path / "report")
+
+    pairs = _csv(tmp_path / "report" / "tables" / "same_plan_cpu_upmem_speedup.csv")
+    assert len(pairs) == 1
+    assert float(pairs[0]["speedup_cpu_over_upmem"]) == pytest.approx(2.0)
+    assert _csv(tmp_path / "report" / "tables" / "claim_rejections.csv") == []
+
+
+@pytest.mark.parametrize("conflicting_engine", ["cpu_numpy", "upmem_m5"])
+def test_same_plan_pairing_rejects_conflicting_duplicate_rows(
+    tmp_path: Path, conflicting_engine: str
+) -> None:
+    cpu = _row(engine="cpu_numpy", runtime=10.0)
+    upmem = _row(engine="upmem_m5", runtime=5.0)
+    conflicting = dict(cpu if conflicting_engine == "cpu_numpy" else upmem)
+    conflicting["timing_s"] = 7.0
+
+    generate_report([cpu, upmem, conflicting], tmp_path / "report")
+
+    assert _csv(tmp_path / "report" / "tables" / "same_plan_cpu_upmem_speedup.csv") == []
+    rejections = _csv(tmp_path / "report" / "tables" / "claim_rejections.csv")
+    expected_class = "CPU" if conflicting_engine == "cpu_numpy" else "UPMEM"
+    assert any(
+        f"conflicting duplicate {expected_class} rows" in row["reasons"]
+        for row in rejections
+    )
 
 
 def test_bringup_and_non_applicable_upmem_rows_stay_out_of_performance_ratios(
