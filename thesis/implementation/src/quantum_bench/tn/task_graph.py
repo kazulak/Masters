@@ -70,6 +70,8 @@ def plan_task_graph_with_planner(network: TensorNetworkValue, planner: PathPlann
         path_summary=summary,
         planning_time_s=planner_result.planning_time_s,
     )
+    # Scientific planning owns only path structure and logical tensor volume.
+    # Target estimates are produced later by an explicit target compiler.
     return with_execution_identity(with_path_cost_summary(graph))
 
 
@@ -140,12 +142,24 @@ def derive_binary_contraction_step(
     return BinaryContractionStep(task=task, output_tensor=output_tensor, next_active=tuple((*remaining, output_tensor)))
 
 
-def with_path_cost_summary(graph: TaskGraph, target_estimate_key: str = DEFAULT_TARGET_ESTIMATE_KEY) -> TaskGraph:
+def with_path_cost_summary(graph: TaskGraph, target_estimate_key: str | None = None) -> TaskGraph:
+    """Decorate a graph with scientific path metrics only.
+
+    ``target_estimate_key`` remains accepted for source compatibility with
+    historical callers, but target-specific metrics are no longer read from
+    tasks or written to ``PathSummary`` here.
+    """
     costs = derive_path_costs(graph, target_estimate_key)
     return replace(graph, path_summary=replace(graph.path_summary, **costs))
 
 
-def derive_path_costs(graph: TaskGraph, target_estimate_key: str = DEFAULT_TARGET_ESTIMATE_KEY) -> dict[str, int]:
+def derive_path_costs(graph: TaskGraph, target_estimate_key: str | None = None) -> dict[str, int]:
+    """Return target-neutral logical complex128 path metrics.
+
+    ``ContractionTask.estimated_bytes`` and the derived byte fields below are
+    logical tensor-volume estimates, not UPMEM transfer, MRAM, WRAM, or bus
+    measurements. The optional argument is a deprecated compatibility slot.
+    """
     max_intermediate_bytes = max((_output_bytes(task) for task in graph.tasks), default=0)
     opt_einsum_peak_bytes = (
         graph.path_summary.largest_intermediate * np.dtype(np.complex128).itemsize
@@ -153,41 +167,11 @@ def derive_path_costs(graph: TaskGraph, target_estimate_key: str = DEFAULT_TARGE
         else max_intermediate_bytes
     )
     peak_intermediate_bytes = max(int(opt_einsum_peak_bytes), max_intermediate_bytes)
-    total_host_to_dpu_bytes = 0
-    total_dpu_to_host_bytes = 0
-    total_mram_to_wram_bytes = 0
-    unsupported_task_count = 0
-    tiling_required_task_count = 0
-    missing_target_estimate_count = 0
-    estimated_total_tile_count = 0
-    estimated_max_parallel_tiles = 0
-
-    for task in graph.tasks:
-        estimate = task.target_estimates.get(target_estimate_key)
-        if estimate is None:
-            missing_target_estimate_count += 1
-            continue
-        total_host_to_dpu_bytes += int(estimate.get("host_to_dpu_bytes", 0) or 0)
-        total_dpu_to_host_bytes += int(estimate.get("dpu_to_host_bytes", 0) or 0)
-        total_mram_to_wram_bytes += int(estimate.get("mram_to_wram_bytes", 0) or 0)
-        unsupported_task_count += 0 if estimate.get("supported", False) else 1
-        tiling_required_task_count += 1 if estimate.get("requires_tiling", False) else 0
-        estimated_total_tile_count += int(estimate.get("estimated_tile_count", 0) or 0)
-        estimated_max_parallel_tiles = max(estimated_max_parallel_tiles, int(estimate.get("estimated_parallel_tiles", 0) or 0))
-
     return {
         "task_count": len(graph.tasks),
         "total_estimated_flops": sum(task.estimated_flops for task in graph.tasks),
         "peak_intermediate_bytes": int(peak_intermediate_bytes),
         "max_intermediate_bytes": int(max_intermediate_bytes),
-        "total_host_to_dpu_bytes": total_host_to_dpu_bytes,
-        "total_dpu_to_host_bytes": total_dpu_to_host_bytes,
-        "total_mram_to_wram_bytes": total_mram_to_wram_bytes,
-        "unsupported_task_count": unsupported_task_count,
-        "tiling_required_task_count": tiling_required_task_count,
-        "missing_target_estimate_count": missing_target_estimate_count,
-        "estimated_total_tile_count": estimated_total_tile_count,
-        "estimated_max_parallel_tiles": estimated_max_parallel_tiles,
     }
 
 
@@ -207,7 +191,7 @@ def _base_path_summary(planner_result: PlannerResult) -> PathSummary:
         optimize_mode=identity.optimize_mode,
         objective=identity.objective,
         cost_basis=identity.cost_basis,
-        target_estimate_key=identity.target_estimate_key,
+        target_estimate_key=None,
         options=identity.options,
         planner_metadata=planner_result.metadata,
     )

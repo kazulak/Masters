@@ -81,7 +81,7 @@ def test_tn_lowering_preserves_output_labels_and_einsum_contract(minimal_graph) 
     assert case.graph.network.einsum_expression
     assert len(case.graph.tasks) == len(case.graph.path)
     assert all(task.output_labels for task in case.graph.tasks)
-    assert case.graph.path_summary.missing_target_estimate_count == len(case.graph.tasks)
+    assert case.graph.path_summary.missing_target_estimate_count == 0
 
 
 def test_task_graph_identity_is_deterministic(minimal_graph) -> None:

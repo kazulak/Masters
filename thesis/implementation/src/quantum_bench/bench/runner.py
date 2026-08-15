@@ -17,6 +17,7 @@ from quantum_bench.bench.summary import write_summary
 from quantum_bench.circuits import load_circuit, manifest
 from quantum_bench.core.jsonio import append_jsonl, write_json, write_jsonl
 from quantum_bench.core.records import TIMING_SCHEMA_VERSION, BenchmarkCaseResult, BenchmarkContext, ExecutionProfile, RouteDecision, RouteIdentity, RouteOutput, RouteResult, TaskGraph, TimingScope, to_jsonable
+from quantum_bench.core.target_estimates import TargetEstimateSet
 from quantum_bench.environment import capture_environment
 from quantum_bench.routing import TaskRouteContext, route_task_graph
 from quantum_bench.tn import build_tensor_network, plan_task_graph_with_config, with_path_cost_summary
@@ -25,10 +26,15 @@ from quantum_bench.targets.upmem import (
     SYNTHETIC_PRESSURE_ERROR,
     UPMEM_DENSE_ESTIMATE_KEY,
     UPMEM_DENSE_TILE_PLAN_ARTIFACT_KEY,
-    annotate_task_graph_with_upmem_estimates,
     is_synthetic_pressure_case,
     upmem_dense_tile_plan_rows,
     upmem_task_estimate_rows,
+)
+from quantum_bench.targets.upmem.schedule import (
+    UpmemScheduleEstimate,
+    annotate_task_graph_with_upmem_estimates,
+    estimate_dense_task_graph_sidecar,
+    upmem_target_path_summary,
 )
 from quantum_bench.validation import compute_reference, validate
 from quantum_bench.validation.statevectors import tensor_to_quest_statevector
@@ -225,10 +231,19 @@ def _generate_case(case: dict[str, Any], suite: dict[str, Any], root_dir: Path, 
     network = build_tensor_network(circuit)
     generate_s = time.perf_counter() - start
     graph = plan_task_graph_with_config(network, suite["planner"])
-    graph, _ = annotate_task_graph_with_upmem_estimates(graph)
     graph = with_path_cost_summary(graph)
-    target_estimate_artifacts = _write_target_estimate_artifacts(case_dir, graph)
-    task_route_artifacts = _write_task_route_artifacts(case_dir, graph, suite, target_estimate_artifacts)
+    target_estimates, target_schedule = estimate_dense_task_graph_sidecar(graph)
+    target_estimate_artifacts = _write_target_estimate_artifacts(
+        case_dir, graph, target_estimates, target_schedule
+    )
+    task_route_artifacts = _write_task_route_artifacts(
+        case_dir,
+        graph,
+        suite,
+        target_estimate_artifacts,
+        target_estimates,
+        target_schedule,
+    )
     write_json(case_dir / "circuit.json", manifest(circuit))
     write_json(case_dir / "task_graph.json", graph)
     write_json(case_dir / "path_summary.json", graph.path_summary)
@@ -237,6 +252,8 @@ def _generate_case(case: dict[str, Any], suite: dict[str, Any], root_dir: Path, 
         "network": network,
         "graph": graph,
         "generate_s": generate_s,
+        "target_estimates": target_estimates,
+        "target_schedule": target_schedule,
         "target_estimate_artifacts": target_estimate_artifacts,
         "task_route_artifacts": task_route_artifacts,
     }
@@ -501,15 +518,23 @@ def _context(root_dir: Path, run_dir: Path, suite: dict[str, Any], case: dict[st
     )
 
 
-def _write_target_estimate_artifacts(case_dir: Path, graph: TaskGraph) -> dict[str, str]:
+def _write_target_estimate_artifacts(
+    case_dir: Path,
+    graph: TaskGraph,
+    estimates: TargetEstimateSet,
+    schedule: UpmemScheduleEstimate,
+) -> dict[str, str]:
     rel_path = Path("cases") / case_dir.name / "target_estimates" / f"{UPMEM_DENSE_ESTIMATE_KEY}.jsonl"
     tile_plan_rel_path = Path("cases") / case_dir.name / "target_estimates" / f"{UPMEM_DENSE_TILE_PLAN_ARTIFACT_KEY}.jsonl"
+    summary_rel_path = Path("cases") / case_dir.name / "target_estimates" / "upmem_path_summary.json"
     run_dir = case_dir.parents[1]
-    write_jsonl(run_dir / rel_path, upmem_task_estimate_rows(graph))
+    write_jsonl(run_dir / rel_path, upmem_task_estimate_rows(graph, estimates))
     write_jsonl(run_dir / tile_plan_rel_path, upmem_dense_tile_plan_rows(graph))
+    write_json(run_dir / summary_rel_path, upmem_target_path_summary(estimates, schedule))
     return {
         UPMEM_DENSE_ESTIMATE_KEY: rel_path.as_posix(),
         UPMEM_DENSE_TILE_PLAN_ARTIFACT_KEY: tile_plan_rel_path.as_posix(),
+        "upmem_target_path_summary": summary_rel_path.as_posix(),
     }
 
 
@@ -518,6 +543,8 @@ def _write_task_route_artifacts(
     graph: TaskGraph,
     suite: dict[str, Any],
     target_estimate_artifacts: dict[str, str],
+    estimates: TargetEstimateSet,
+    schedule: UpmemScheduleEstimate,
 ) -> dict[str, str]:
     run_dir = case_dir.parents[1]
     decisions_path = Path("cases") / case_dir.name / "task_route_decisions.jsonl"
@@ -530,7 +557,12 @@ def _write_task_route_artifacts(
         target_artifacts=target_estimate_artifacts,
         backend_probes={},
     )
-    analysis = route_task_graph(graph, context)
+    # The legacy router still reads inline fields. Keep this compatibility
+    # view transient; the generated scientific graph remains target-neutral.
+    route_graph, _ = annotate_task_graph_with_upmem_estimates(
+        graph, estimates=estimates, schedule=schedule
+    )
+    analysis = route_task_graph(route_graph, context)
     write_jsonl(run_dir / decisions_path, list(analysis.decisions))
     write_json(run_dir / summary_path, analysis.summary)
     return {
