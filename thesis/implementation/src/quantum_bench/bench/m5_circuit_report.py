@@ -18,8 +18,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from quantum_bench.evidence import Claim, ClaimDecision, ClaimPolicy
+
 
 JsonDict = dict[str, Any]
+
+_CLAIM_POLICY = ClaimPolicy()
 
 _MAX_TIMING_ROUTE_PANELS = 8
 _TIMING_STAGE_ORDER = (
@@ -402,38 +406,7 @@ def _explicitly_false(row: Mapping[str, Any], *keys: str) -> bool:
 
 
 def _valid(row: Mapping[str, Any]) -> bool:
-    status = str(row.get("status", "completed")).lower()
-    if (
-        status not in {"completed", "passed", "success", "verified"}
-        or _runtime(row) is None
-    ):
-        return False
-    engine_class = _engine_class(row)
-    if engine_class == "cross_algorithm":
-        return str(row.get("validation_status") or "").lower() in {
-            "passed",
-            "passed_native_status",
-            "passed_runtime_only",
-        }
-    if engine_class not in {"cpu", "upmem"}:
-        return False
-    if (
-        str(row.get("scientific_validation_status") or "").lower() != "passed"
-        or row.get("exact_once") is not True
-        or row.get("no_fallback_used") is not True
-    ):
-        return False
-    if engine_class == "cpu":
-        return True
-    return (
-        row.get("target_observed") == "physical_hardware"
-        and row.get("hardware_allocation_verified") is True
-        and row.get("native_kernel_executed") is True
-        and row.get("hardware_kernel_executed") is True
-        and _explicitly_false(row, "simulator", "simulator_kernel_executed")
-        and _explicitly_false(row, "cpu_fallback", "cpu_fallback_used")
-        and _release_succeeded(row)
-    )
+    return _CLAIM_POLICY.evaluate_row(Claim.FUNCTIONAL_CORRECTNESS, row).allowed
 
 
 def _performance_valid(row: Mapping[str, Any]) -> bool:
@@ -444,14 +417,7 @@ def _performance_valid(row: Mapping[str, Any]) -> bool:
     runtime, validation, and transfer tables, but cannot support speedup or
     comparative runtime claims.
     """
-    if not _valid(row):
-        return False
-    if _engine_class(row) != "upmem":
-        return True
-    return (
-        row.get("hardware_speedup_applicable") is True
-        and row.get("timing_is_bringup_only") is False
-    )
+    return _CLAIM_POLICY.evaluate_row(Claim.TIMING, row).allowed
 
 
 def _hashes(row: Mapping[str, Any]) -> tuple[str, str, str] | None:
@@ -683,7 +649,10 @@ def _runtime_summaries(rows: list[JsonDict]) -> list[JsonDict]:
 
 
 def _pair_rows(
-    rows: list[JsonDict], left_class: str, right_class: str
+    rows: list[JsonDict],
+    left_class: str,
+    right_class: str,
+    claim_rejections: list[JsonDict] | None = None,
 ) -> list[JsonDict]:
     groups: dict[tuple[Any, ...], dict[str, list[JsonDict]]] = {}
     for row in rows:
@@ -721,8 +690,51 @@ def _pair_rows(
                 _engine(row),
             ),
         ):
+            decision = _CLAIM_POLICY.evaluate_pair(
+                Claim.SPEEDUP,
+                baseline,
+                right,
+                require_repeat_context=True,
+            )
+            if not decision.allowed:
+                _append_claim_rejection(
+                    claim_rejections, Claim.SPEEDUP, baseline, right, decision
+                )
+                continue
             pairs.append({left_class: baseline, right_class: right})
     return pairs
+
+
+def _append_claim_rejection(
+    rejections: list[JsonDict] | None,
+    claim: Claim,
+    baseline: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+    decision: ClaimDecision,
+) -> None:
+    if rejections is None or decision.allowed:
+        return
+    rejections.append(
+        {
+            "claim": claim.value,
+            "case_id": _case(baseline) or _case(candidate),
+            "baseline_route": str(
+                baseline.get("route_id") or baseline.get("engine_id") or ""
+            ),
+            "candidate_route": str(
+                candidate.get("route_id") or candidate.get("engine_id") or ""
+            ),
+            "repeat_id": _repeat(baseline),
+            "reasons": "; ".join(decision.reasons),
+        }
+    )
+
+
+def _unambiguous_variant(rows: list[JsonDict]) -> JsonDict | None:
+    if not rows:
+        return None
+    first = rows[0]
+    return first if all(row == first for row in rows[1:]) else None
 
 
 def _has_matching_engine_rows(
@@ -1730,6 +1742,7 @@ def generate_report(
     runtime_summaries = _runtime_summaries(rows)
     admitted_rows = [row for row in rows if _valid(row)]
     entries: list[PlotEntry] = []
+    claim_rejections: list[JsonDict] = []
     topology_dimension_reason = (
         "selected evidence has one qubit size and multiple topologies; use the "
         "dedicated strong-scaling figure and source CSV"
@@ -1840,7 +1853,7 @@ def generate_report(
         )
     )
 
-    pairs = _pair_rows(rows, "cpu", "upmem")
+    pairs = _pair_rows(rows, "cpu", "upmem", claim_rejections)
     speedups = []
     for pair in pairs:
         cpu, upmem = pair["cpu"], pair["upmem"]
@@ -2049,6 +2062,8 @@ def generate_report(
             active_ranks = _active_rank_count(row)
             runtime = _runtime(row)
             fully_active = _fully_active_topology(row)
+            comparison_baseline: JsonDict | None = None
+            scaling_allowed = False
             if rank_count == 1:
                 scale_dimension = "dpu"
                 baseline_local = 1
@@ -2056,9 +2071,25 @@ def generate_report(
                 baseline_total = 1
                 baseline_time = dpu_base_time
                 scale_value = active_dpus
+                comparison_baseline = dpu_baseline
+                scaling_allowed = row is dpu_baseline
+                if comparison_baseline is not None and row is not comparison_baseline:
+                    decision = _CLAIM_POLICY.evaluate_pair(
+                        Claim.SCALING, comparison_baseline, row
+                    )
+                    scaling_allowed = decision.allowed
+                    if not decision.allowed:
+                        _append_claim_rejection(
+                            claim_rejections,
+                            Claim.SCALING,
+                            comparison_baseline,
+                            row,
+                            decision,
+                        )
                 speedup = (
                     baseline_time / runtime
-                    if fully_active
+                    if scaling_allowed
+                    and fully_active
                     and baseline_time is not None
                     and runtime is not None
                     and scale_value is not None
@@ -2072,10 +2103,25 @@ def generate_report(
                 baseline_total = local_dpus
                 baseline = rank_baselines.get(local_dpus)
                 baseline_time = baseline[0] if baseline else None
+                comparison_baseline = baseline[1] if baseline else None
                 scale_value = active_ranks
+                if comparison_baseline is not None:
+                    decision = _CLAIM_POLICY.evaluate_pair(
+                        Claim.SCALING, comparison_baseline, row
+                    )
+                    scaling_allowed = decision.allowed
+                    if not decision.allowed:
+                        _append_claim_rejection(
+                            claim_rejections,
+                            Claim.SCALING,
+                            comparison_baseline,
+                            row,
+                            decision,
+                        )
                 speedup = (
                     baseline_time / runtime
-                    if fully_active
+                    if scaling_allowed
+                    and fully_active
                     and baseline_time is not None
                     and runtime is not None
                     and scale_value is not None
@@ -2248,7 +2294,12 @@ def generate_report(
         )
     )
 
-    path_rows = _variant_ratios(rows, "opt_einsum_greedy", "cotengra_flops_seed0")
+    path_rows = _variant_ratios(
+        rows,
+        "opt_einsum_greedy",
+        "cotengra_flops_seed0",
+        claim_rejections,
+    )
     path_csv = tables / "path_runtime_ratio.csv"
     _write_csv(
         path_csv,
@@ -2312,7 +2363,7 @@ def generate_report(
         )
     )
 
-    numeric_rows = _numeric_ratios(rows)
+    numeric_rows = _numeric_ratios(rows, claim_rejections)
     numeric_csv = tables / "float32_int8_ratios.csv"
     _write_csv(
         numeric_csv,
@@ -2703,6 +2754,29 @@ def generate_report(
         )
     )
 
+    rejection_fields = (
+        "claim",
+        "case_id",
+        "baseline_route",
+        "candidate_route",
+        "repeat_id",
+        "reasons",
+    )
+    unique_rejections = [
+        dict(zip(rejection_fields, identity, strict=True))
+        for identity in sorted(
+            {
+                tuple(str(row.get(field, "")) for field in rejection_fields)
+                for row in claim_rejections
+            }
+        )
+    ]
+    _write_csv(
+        tables / "claim_rejections.csv",
+        unique_rejections,
+        list(rejection_fields),
+    )
+
     manifest = PlotManifest("m5_circuit_report_v1", tuple(entries))
     (output / "plot_manifest.json").write_text(
         json.dumps(manifest.to_dict(), indent=2, sort_keys=True) + "\n",
@@ -2711,8 +2785,13 @@ def generate_report(
     return ReportResult(output, manifest)
 
 
-def _variant_ratios(rows: list[JsonDict], path_a: str, path_b: str) -> list[JsonDict]:
-    groups: dict[tuple[Any, ...], dict[str, JsonDict]] = {}
+def _variant_ratios(
+    rows: list[JsonDict],
+    path_a: str,
+    path_b: str,
+    claim_rejections: list[JsonDict] | None = None,
+) -> list[JsonDict]:
+    groups: dict[tuple[Any, ...], dict[str, list[JsonDict]]] = {}
     for row in rows:
         if (
             not _performance_valid(row)
@@ -2740,12 +2819,37 @@ def _variant_ratios(rows: list[JsonDict], path_a: str, path_b: str) -> list[Json
             _active_dpu_count(row),
             _active_rank_count(row),
         )
-        groups.setdefault(key, {})[_path(row)] = row
+        groups.setdefault(key, {}).setdefault(_path(row), []).append(row)
     result: list[JsonDict] = []
     for group in groups.values():
         if path_a not in group or path_b not in group:
             continue
-        a_row, b_row = group[path_a], group[path_b]
+        a_rows, b_rows = group[path_a], group[path_b]
+        a_row = _unambiguous_variant(a_rows)
+        b_row = _unambiguous_variant(b_rows)
+        if a_row is None or b_row is None:
+            baseline = a_rows[0]
+            candidate = b_rows[0]
+            _append_claim_rejection(
+                claim_rejections,
+                Claim.PATH_ABLATION,
+                baseline,
+                candidate,
+                ClaimDecision(
+                    False,
+                    (
+                        "ambiguous duplicate path variants: "
+                        f"{path_a}={len(a_rows)}, {path_b}={len(b_rows)}",
+                    ),
+                ),
+            )
+            continue
+        decision = _CLAIM_POLICY.evaluate_pair(Claim.PATH_ABLATION, a_row, b_row)
+        if not decision.allowed:
+            _append_claim_rejection(
+                claim_rejections, Claim.PATH_ABLATION, a_row, b_row, decision
+            )
+            continue
         a, b = _runtime(a_row), _runtime(b_row)
         a_hashes, b_hashes = _hashes(a_row), _hashes(b_row)
         if (
@@ -2841,8 +2945,10 @@ def _variant_ratios(rows: list[JsonDict], path_a: str, path_b: str) -> list[Json
     )
 
 
-def _numeric_ratios(rows: list[JsonDict]) -> list[JsonDict]:
-    groups: dict[tuple[Any, ...], dict[str, JsonDict]] = {}
+def _numeric_ratios(
+    rows: list[JsonDict], claim_rejections: list[JsonDict] | None = None
+) -> list[JsonDict]:
+    groups: dict[tuple[Any, ...], dict[str, list[JsonDict]]] = {}
     for row in rows:
         if not _performance_valid(row) or _engine_class(row) == "cross_algorithm":
             continue
@@ -2874,59 +2980,81 @@ def _numeric_ratios(rows: list[JsonDict]) -> list[JsonDict]:
             _active_dpu_count(row),
             _active_rank_count(row),
         )
-        groups.setdefault(key, {})[kind] = row
+        groups.setdefault(key, {}).setdefault(kind, []).append(row)
     result: list[JsonDict] = []
     for group in groups.values():
         if "float32" not in group or "int8" not in group:
             continue
-        a, b = _runtime(group["float32"]), _runtime(group["int8"])
+        float_rows, int8_rows = group["float32"], group["int8"]
+        float_row = _unambiguous_variant(float_rows)
+        int8_row = _unambiguous_variant(int8_rows)
+        if float_row is None or int8_row is None:
+            _append_claim_rejection(
+                claim_rejections,
+                Claim.NUMERIC_ABLATION,
+                float_rows[0],
+                int8_rows[0],
+                ClaimDecision(
+                    False,
+                    (
+                        "ambiguous duplicate numeric variants: "
+                        f"float32={len(float_rows)}, int8={len(int8_rows)}",
+                    ),
+                ),
+            )
+            continue
+        decision = _CLAIM_POLICY.evaluate_pair(
+            Claim.NUMERIC_ABLATION, float_row, int8_row
+        )
+        if not decision.allowed:
+            _append_claim_rejection(
+                claim_rejections,
+                Claim.NUMERIC_ABLATION,
+                float_row,
+                int8_row,
+                decision,
+            )
+            continue
+        a, b = _runtime(float_row), _runtime(int8_row)
         if a and b:
             result.append(
                 {
-                    "case_id": _case(group["float32"]),
-                    "family": _family(group["float32"]),
-                    "qubits": _qubits(group["float32"]),
-                    "engine": _engine(group["float32"]),
-                    "path": _path(group["float32"]),
-                    "timing_scope": _timing_scope(group["float32"]),
-                    "repeat_id": _repeat(group["float32"]),
-                    "local_dpu_count": _local_dpu_count(group["float32"]),
-                    "rank_count": _rank_count(group["float32"]),
-                    "total_dpu_count": _total_dpu_count(group["float32"]),
-                    "provisioned_dpu_count": _total_dpu_count(group["float32"]),
-                    "provisioned_rank_count": _rank_count(group["float32"]),
-                    "active_dpu_count": _active_dpu_count(group["float32"]),
-                    "active_rank_count": _active_rank_count(group["float32"]),
-                    "activity_label": _activity_label(group["float32"]),
-                    "topology": _topology_label(group["float32"]),
-                    "executor_config_hash": _executor_config_hash(group["float32"]),
-                    "route_id_float32": str(group["float32"].get("route_id") or ""),
+                    "case_id": _case(float_row),
+                    "family": _family(float_row),
+                    "qubits": _qubits(float_row),
+                    "engine": _engine(float_row),
+                    "path": _path(float_row),
+                    "timing_scope": _timing_scope(float_row),
+                    "repeat_id": _repeat(float_row),
+                    "local_dpu_count": _local_dpu_count(float_row),
+                    "rank_count": _rank_count(float_row),
+                    "total_dpu_count": _total_dpu_count(float_row),
+                    "provisioned_dpu_count": _total_dpu_count(float_row),
+                    "provisioned_rank_count": _rank_count(float_row),
+                    "active_dpu_count": _active_dpu_count(float_row),
+                    "active_rank_count": _active_rank_count(float_row),
+                    "activity_label": _activity_label(float_row),
+                    "topology": _topology_label(float_row),
+                    "executor_config_hash": _executor_config_hash(float_row),
+                    "route_id_float32": str(float_row.get("route_id") or ""),
                     "route_config_hash_float32": str(
-                        group["float32"].get("route_config_hash") or ""
+                        float_row.get("route_config_hash") or ""
                     ),
-                    "executor_config_hash_float32": _executor_config_hash(
-                        group["float32"]
-                    ),
-                    "admission_identity_float32": _admission_identity(group["float32"]),
-                    "route_id_int8": str(group["int8"].get("route_id") or ""),
+                    "executor_config_hash_float32": _executor_config_hash(float_row),
+                    "admission_identity_float32": _admission_identity(float_row),
+                    "route_id_int8": str(int8_row.get("route_id") or ""),
                     "route_config_hash_int8": str(
-                        group["int8"].get("route_config_hash") or ""
+                        int8_row.get("route_config_hash") or ""
                     ),
-                    "executor_config_hash_int8": _executor_config_hash(group["int8"]),
-                    "admission_identity_int8": _admission_identity(group["int8"]),
-                    "comparison_identity": _comparison_identity(
-                        group["float32"], group["int8"]
-                    ),
-                    "circuit_semantics_hash": group["float32"].get(
-                        "circuit_semantics_hash"
-                    ),
-                    "tensor_network_hash": group["float32"].get("tensor_network_hash"),
-                    "contraction_plan_hash": group["float32"].get(
-                        "contraction_plan_hash"
-                    ),
+                    "executor_config_hash_int8": _executor_config_hash(int8_row),
+                    "admission_identity_int8": _admission_identity(int8_row),
+                    "comparison_identity": _comparison_identity(float_row, int8_row),
+                    "circuit_semantics_hash": float_row.get("circuit_semantics_hash"),
+                    "tensor_network_hash": float_row.get("tensor_network_hash"),
+                    "contraction_plan_hash": float_row.get("contraction_plan_hash"),
                     "series": (
-                        f"{_path(group['float32'])} | "
-                        f"{_activity_label(group['float32']) or _topology_label(group['float32'])}"
+                        f"{_path(float_row)} | "
+                        f"{_activity_label(float_row) or _topology_label(float_row)}"
                     ),
                     "float32_runtime_s": a,
                     "int8_runtime_s": b,

@@ -37,6 +37,8 @@ def _row(
     timing_breakdown: dict[str, float] | None = None,
     status: str = "completed",
 ) -> dict[str, object]:
+    is_upmem = "upmem" in engine or "dpu" in engine
+    topology_id = f"upmem:{dpu_count or 'unspecified'}:1" if is_upmem else "cpu"
     row: dict[str, object] = {
         "case_id": "bv-8",
         "circuit_family": "BV",
@@ -52,6 +54,13 @@ def _row(
         "exact_once": True,
         "no_fallback_used": True,
         "executor_config_hash": "executor-config-a",
+        "route_modules": {
+            "tensor_network": {"implementation": "quantum_gate_tn_v1"},
+            "planner": {"implementation": path},
+            "numeric": {"implementation": numeric},
+            "executor": {"implementation": engine},
+            "topology": {"implementation": topology_id},
+        },
         "timing_s": runtime,
         "actual_h2d_bytes": 80,
         "actual_d2h_bytes": 20,
@@ -60,7 +69,13 @@ def _row(
         "timing_breakdown": timing_breakdown
         or {"h2d_s": 0.1, "kernel_s": runtime / 2, "d2h_s": 0.1},
     }
-    if "upmem" in engine or "dpu" in engine:
+    if "int8" in numeric.lower() or "quant" in numeric.lower():
+        row.update(
+            numeric_policy_id=numeric,
+            packed_int8_transfer=True,
+            numeric_transport="host_packed_int8_mram",
+        )
+    if is_upmem:
         row.update(
             target_observed="physical_hardware",
             hardware_allocation_verified=True,
@@ -222,6 +237,18 @@ def test_same_plan_pairing_requires_all_hashes_and_timing_scope(tmp_path: Path) 
     pairs = _csv(tmp_path / "report" / "tables" / "same_plan_cpu_upmem_speedup.csv")
     assert len(pairs) == 1
     assert float(pairs[0]["speedup_cpu_over_upmem"]) == pytest.approx(2.0)
+
+
+def test_same_plan_pairing_uses_claim_policy_for_speedup_admission(
+    tmp_path: Path,
+) -> None:
+    cpu = _row(engine="cpu_numpy", runtime=10.0)
+    simulator = _row(engine="upmem_m5", runtime=5.0)
+    simulator["simulator_kernel_executed"] = True
+
+    generate_report([cpu, simulator], tmp_path / "report")
+
+    assert _csv(tmp_path / "report" / "tables" / "same_plan_cpu_upmem_speedup.csv") == []
 
 
 def test_same_plan_pairing_keeps_each_upmem_topology(tmp_path: Path) -> None:
@@ -1590,6 +1617,20 @@ def test_path_ratio_is_same_circuit_tn_but_not_same_plan(tmp_path: Path) -> None
     )
     assert "same-circuit/TN" in entry["title"]
     assert "same-plan" not in entry["title"]
+
+
+def test_ambiguous_path_variants_are_rejected_and_recorded(tmp_path: Path) -> None:
+    path_a = _row(engine="upmem_m5", runtime=8.0, path="opt_einsum_greedy")
+    conflicting_a = dict(path_a, timing_s=9.0)
+    path_b = _row(engine="upmem_m5", runtime=4.0, path="cotengra_flops_seed0")
+
+    generate_report([path_a, conflicting_a, path_b], tmp_path / "report")
+
+    assert _csv(tmp_path / "report" / "tables" / "path_runtime_ratio.csv") == []
+    rejections = _csv(tmp_path / "report" / "tables" / "claim_rejections.csv")
+    assert len(rejections) == 1
+    assert rejections[0]["claim"] == "path_ablation"
+    assert "ambiguous duplicate path variants" in rejections[0]["reasons"]
 
 
 @pytest.mark.parametrize(
