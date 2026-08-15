@@ -10,12 +10,165 @@ from types import SimpleNamespace
 
 import pytest
 
+from quantum_bench.bench import __main__ as bench_main
 from quantum_bench.bench.m5_circuit_commands import (
     _physical_factory,
     baseline_paths,
     parse_rank_paths,
     report,
 )
+
+
+ROOT = Path(__file__).parents[1]
+SMOKE_SUITE = ROOT / "configs/suites/m5_circuit_smoke.yml"
+
+
+def test_cli_forwards_repeatable_route_selection_to_prepare(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_prepare(
+        root: Path, suite: Path, *, build: bool, route_ids: list[str] | None
+    ) -> dict[str, object]:
+        captured.update(
+            {"root": root, "suite": suite, "build": build, "route_ids": route_ids}
+        )
+        return {"status": "prepared"}
+
+    import quantum_bench.bench.m5_circuit_commands as commands
+
+    monkeypatch.setattr(commands, "prepare", fake_prepare)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "quantum_bench.bench",
+            "m5-circuit-study",
+            "--suite",
+            "configs/suites/m5_circuit_smoke.yml",
+            "--prepare-only",
+            "--route",
+            "opt_einsum_greedy__float32_real__numpy_cpu",
+            "--route",
+            "opt_einsum_greedy__host_packed_int8__numpy_cpu",
+        ],
+    )
+
+    assert bench_main.main() == 0
+    assert captured["build"] is False
+    assert captured["route_ids"] == [
+        "opt_einsum_greedy__float32_real__numpy_cpu",
+        "opt_einsum_greedy__host_packed_int8__numpy_cpu",
+    ]
+
+
+def test_prepare_cpu_only_route_does_not_build_native_v4(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import quantum_bench.bench.m5_circuit_commands as commands
+
+    plan = tmp_path / "plan.json"
+    plan.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(commands, "plan_study", lambda *_args, **_kwargs: plan)
+
+    def fail_build(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("CPU-only selection must not build native v4 binaries")
+
+    monkeypatch.setattr(commands, "build_native_v4", fail_build)
+    result = commands.prepare(
+        ROOT,
+        SMOKE_SUITE,
+        build=True,
+        route_ids=["opt_einsum_greedy__float32_real__numpy_cpu"],
+    )
+
+    assert result["built_tasklets"] == []
+
+
+def test_prepare_physical_route_builds_only_selected_physical_variants(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import quantum_bench.bench.m5_circuit_commands as commands
+
+    plan = tmp_path / "plan.json"
+    plan.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(commands, "plan_study", lambda *_args, **_kwargs: plan)
+    captured: list[list[object]] = []
+
+    def fake_build(_root: Path, variants: list[object]) -> list[int]:
+        captured.append(variants)
+        return [1]
+
+    monkeypatch.setattr(commands, "build_native_v4", fake_build)
+    result = commands.prepare(
+        ROOT,
+        SMOKE_SUITE,
+        build=True,
+        route_ids=["opt_einsum_greedy__float32_real__upmem_physical_1rank_1dpu"],
+    )
+
+    assert result["built_tasklets"] == [1]
+    assert len(captured) == 1
+    assert [variant["id"] for variant in captured[0]] == ["upmem_physical_1rank_1dpu"]
+
+
+def test_execute_cpu_only_route_skips_hardware_checks_and_factories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import quantum_bench.bench.m5_circuit_commands as commands
+
+    summary = tmp_path / "m5_circuit_study_summary.json"
+    summary.write_text('{"status":"completed","record_count":1}', encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def fail_hardware(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("CPU-only selection must not check UPMEM environment")
+
+    def fake_run(*_args: object, **kwargs: object) -> Path:
+        captured.update(kwargs)
+        return tmp_path
+
+    monkeypatch.setattr(commands, "require_physical_environment", fail_hardware)
+    monkeypatch.setattr(commands, "run_study", fake_run)
+    result = commands.execute(
+        ROOT,
+        SMOKE_SUITE,
+        route_ids=["opt_einsum_greedy__float32_real__numpy_cpu"],
+    )
+
+    assert result["status"] == "completed"
+    assert captured["rank_paths"] is None
+    assert captured["engine_factories"] == {}
+
+
+def test_execute_physical_route_retains_fail_closed_environment_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import quantum_bench.bench.m5_circuit_commands as commands
+
+    summary = tmp_path / "m5_circuit_study_summary.json"
+    summary.write_text('{"status":"completed","record_count":1}', encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def fake_run(*_args: object, **kwargs: object) -> Path:
+        captured.update(kwargs)
+        return tmp_path
+
+    monkeypatch.setattr(
+        commands,
+        "require_physical_environment",
+        lambda _paths=None: ["/dev/dpu_rank0"],
+    )
+    monkeypatch.setattr(commands, "run_study", fake_run)
+    commands.execute(
+        ROOT,
+        SMOKE_SUITE,
+        route_ids=["opt_einsum_greedy__float32_real__upmem_physical_1rank_1dpu"],
+    )
+
+    assert captured["rank_paths"] == ["/dev/dpu_rank0"]
+    assert set(captured["engine_factories"]) == {"upmem_physical_1rank_1dpu"}
 
 
 def test_rank_paths_require_exact_device_names_and_unique_values() -> None:

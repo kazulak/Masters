@@ -51,6 +51,55 @@ def test_provider_make_shortcuts_are_exposed() -> None:
     assert "--provider simplepim" in qualify.stdout
 
 
+def test_make_help_is_a_concise_current_workflow_summary() -> None:
+    result = subprocess.run(
+        ["make", "help"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert len(result.stdout.splitlines()) <= 18
+    for text in (
+        "make setup",
+        "make doctor",
+        "make test",
+        "make thesis-run",
+        "make thesis-report",
+        "make thesis-verify",
+        "make m5-circuit-plan",
+        "make m5-circuit-smoke",
+        "make m5-circuit-study",
+        "make m5-circuit-report",
+        "M5_CIRCUIT_ROUTES=",
+        "make evidence-inbox",
+        "make list-runs",
+        "make help-all",
+    ):
+        assert text in result.stdout
+
+
+def test_make_help_all_keeps_historical_catalog() -> None:
+    result = subprocess.run(
+        ["make", "help-all"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    for target in (
+        "make upmem-hw-m2-1-plan",
+        "make upmem-hw-m4-1-plan",
+        "make upmem-hw-m5-4-plan",
+        "make upmem-provider-plan",
+    ):
+        assert target in result.stdout
+
+
 def test_m2_1_make_shortcuts_use_canonical_suite() -> None:
     plan = subprocess.run(
         ["make", "-n", "upmem-hw-m2-1-plan"],
@@ -101,7 +150,7 @@ def test_m2_2_make_shortcuts_use_canonical_suite() -> None:
 
 def test_m2_2_report_shortcut_uses_configurable_evidence_run() -> None:
     help_result = subprocess.run(
-        ["make", "help"],
+        ["make", "help-all"],
         cwd=ROOT,
         capture_output=True,
         text=True,
@@ -147,7 +196,7 @@ def test_m2_3_make_shortcuts_use_canonical_suite() -> None:
 
 def test_m2_3_report_shortcut_documents_eth_inbox_override() -> None:
     help_result = subprocess.run(
-        ["make", "help"],
+        ["make", "help-all"],
         cwd=ROOT,
         capture_output=True,
         text=True,
@@ -413,7 +462,7 @@ def test_m45_simplepim_execution_requires_rank_and_plan_remains_rank_free() -> N
     assert "UPMEM_HW_RANK_PATH" in execute.stdout
 
 
-def test_m5_circuit_shortcuts_keep_plan_free_and_execution_guarded() -> None:
+def test_m5_circuit_shortcuts_delegate_route_aware_guards_to_the_cli() -> None:
     clean_env = os.environ.copy()
     clean_env.pop("UPMEM_ALLOW_PHYSICAL_HARDWARE", None)
     clean_env.pop("UPMEM_HW_RANK_PATH", None)
@@ -459,7 +508,7 @@ def test_m5_circuit_shortcuts_keep_plan_free_and_execution_guarded() -> None:
     assert "UPMEM_ALLOW_PHYSICAL_HARDWARE" not in plan.stdout
     assert missing_opt_in.returncode == 2
     assert "UPMEM_ALLOW_PHYSICAL_HARDWARE=1" in missing_opt_in.stderr
-    assert "quantum_bench.bench" not in missing_opt_in.stdout
+    assert "quantum_bench.bench m5-circuit-study" in missing_opt_in.stdout
     assert execute.returncode == 0
     assert "--rank-paths /dev/dpu_rank0" in execute.stdout
     assert "env -u DPU_BACKEND -u UPMEM_EXECUTION_MODE" not in execute.stdout
@@ -481,6 +530,31 @@ def test_m5_circuit_plan_suite_is_overridable() -> None:
     assert result.returncode == 0
     assert "configs/suites/m5_circuit_scaling.yml" in result.stdout
     assert "configs/suites/m5_circuit_smoke.yml" not in result.stdout
+
+
+def test_m5_circuit_make_routes_expand_to_repeatable_cli_arguments() -> None:
+    route_ids = (
+        "opt_einsum_greedy__float32_real__numpy_cpu "
+        "opt_einsum_greedy__host_packed_int8__numpy_cpu"
+    )
+    for target in ("m5-circuit-plan", "m5-circuit-smoke", "m5-circuit-study"):
+        result = subprocess.run(
+            [
+                "make",
+                "-n",
+                target,
+                "UPMEM_ALLOW_PHYSICAL_HARDWARE=1",
+                "UPMEM_HW_RANK_PATH=/dev/dpu_rank0",
+                f"M5_CIRCUIT_ROUTES={route_ids}",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0
+        assert "--route opt_einsum_greedy__float32_real__numpy_cpu" in result.stdout
+        assert "--route opt_einsum_greedy__host_packed_int8__numpy_cpu" in result.stdout
 
 
 def test_m5_circuit_physical_shortcuts_reject_backend_environment() -> None:
@@ -507,7 +581,7 @@ def test_m5_circuit_physical_shortcuts_reject_backend_environment() -> None:
             )
             assert result.returncode == 2
             assert variable in result.stderr
-            assert "quantum_bench.bench" not in result.stdout
+            assert "quantum_bench.bench m5-circuit-study" in result.stdout
 
 
 def test_m5_circuit_report_default_is_timestamped_and_overrideable() -> None:

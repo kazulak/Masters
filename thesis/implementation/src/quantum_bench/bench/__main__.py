@@ -40,6 +40,12 @@ def main() -> int:
         "--rank-paths",
         help="comma-separated explicit /dev/dpu_rankN paths for physical variants",
     )
+    m5_circuit_parser.add_argument(
+        "--route",
+        action="append",
+        dest="route_ids",
+        help="route ID to include; repeatable",
+    )
 
     m5_circuit_report_parser = sub.add_parser(
         "m5-circuit-report", help="report an existing M5.5 normalized study run"
@@ -417,9 +423,14 @@ def main() -> int:
         try:
             suite = suite_path(args.suite, root_dir)
             result = (
-                prepare(root_dir, suite, build=args.build)
+                prepare(root_dir, suite, build=args.build, route_ids=args.route_ids)
                 if args.prepare_only
-                else execute(root_dir, suite, rank_paths=args.rank_paths)
+                else execute(
+                    root_dir,
+                    suite,
+                    rank_paths=args.rank_paths,
+                    route_ids=args.route_ids,
+                )
             )
         except (OSError, RuntimeError, ValueError) as exc:
             parser.error(str(exc))

@@ -82,6 +82,20 @@ def _study(
                             "rank_paths": ["/dev/dpu_rank0"] if physical else [],
                             "tasklets_per_device": 1,
                         },
+                        **(
+                            {
+                                "executor_config": {
+                                    "profile": "test-profile-v1",
+                                    "abi": "test-abi-v1",
+                                    "session_protocol": "test-session-v1",
+                                    "dispatch_mode": "bulk-synchronous",
+                                    "kernel_identity": "test-kernel-v1",
+                                    "execution_class": "physical_test",
+                                }
+                            }
+                            if physical
+                            else {}
+                        ),
                     },
                 ],
                 "warmups": 1,
@@ -128,11 +142,15 @@ class _VerifiedPhysicalEngine(NumpyCpuEngine):
                         "hardware_release_verified": True,
                         "target_observed": "physical-test-dpu",
                         "physical_profile": "test-profile-v1",
+                        "profile": "test-profile-v1",
+                        "abi": "test-abi-v1",
                         "abi_version": "test-abi-v1",
                         "numeric_transport": policy.name,
                         "session_protocol": "test-session-v1",
                         "dispatch_mode": "bulk-synchronous",
                         "kernel_identity": "test-kernel-v1",
+                        "execution_class": "physical_test",
+                        "graph_intermediate_placement": "host_managed",
                         "application_visible_h2d_bytes": 2,
                         "application_visible_d2h_bytes": 3,
                         "application_visible_transfer_bytes": 5,
@@ -193,6 +211,78 @@ def test_config_plans_all_case_planner_combinations_without_engine_calls(
     assert len(payload["plans"]) == 2
     assert payload["hardware_opened"] is False
     assert all(item["task_count"] > 0 for item in payload["plans"])
+
+
+def test_route_selection_filters_rows_and_rejects_unknown_or_empty_ids(
+    tmp_path: Path,
+) -> None:
+    study = tmp_path / "study.yml"
+    _study(study)
+    route_id = "greedy__float__cpu"
+
+    plan = json.loads(
+        plan_study(tmp_path, study, route_ids=[route_id]).read_text(encoding="utf-8")
+    )
+    assert plan["selected_route_ids"] == [route_id]
+    assert len(plan["pipeline_routes"]) == 1
+    assert plan["pipeline_comparisons"] == []
+
+    run_dir = run_study(tmp_path, study, route_ids=[route_id])
+    rows = _records(run_dir)
+    assert rows and {row["route_id"] for row in rows} == {route_id}
+    assert all(
+        row["route_label"] and row["route_config_hash"] and row["route_modules"]
+        for row in rows
+    )
+    assert all(row["comparison_ids"] == [] for row in rows)
+    summary = json.loads((run_dir / "m5_circuit_study_summary.json").read_text())
+    manifest = json.loads((run_dir / "run_manifest.json").read_text())
+    assert summary["selected_route_ids"] == [route_id]
+    assert manifest["selected_route_ids"] == [route_id]
+    assert len(manifest["pipeline_routes"]) == 1
+    assert manifest["pipeline_comparisons"] == []
+
+    with pytest.raises(ValueError, match="unknown route ids"):
+        plan_study(tmp_path, study, route_ids=["not-a-route"])
+    with pytest.raises(ValueError, match="selection cannot be empty"):
+        plan_study(tmp_path, study, route_ids=[])
+    with pytest.raises(ValueError, match="duplicate route ids"):
+        plan_study(tmp_path, study, route_ids=[route_id, route_id])
+
+
+def test_numeric_policy_rejects_unknown_configuration_keys(tmp_path: Path) -> None:
+    study = tmp_path / "study.yml"
+    _study(study)
+    value = yaml.safe_load(study.read_text())
+    value["numeric_policies"][0]["rounding"] = "nearest"
+    study.write_text(yaml.safe_dump(value), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="unsupported keys: rounding"):
+        load_study_config(study)
+
+
+def test_rank_override_regenerates_route_contract_without_changing_plan_hash(
+    tmp_path: Path,
+) -> None:
+    study = tmp_path / "study.yml"
+    _study(study, physical=True)
+    route_id = "greedy__float__injected"
+    base_run = run_study(
+        tmp_path,
+        study,
+        engine_factories={"fake": _FakeEngine},
+        route_ids=[route_id],
+    )
+    overridden_run = run_study(
+        tmp_path,
+        study,
+        engine_factories={"fake": _FakeEngine},
+        rank_paths=["/dev/dpu_rank1"],
+        route_ids=[route_id],
+    )
+    assert {row["contraction_plan_hash"] for row in _records(base_run)} == {
+        row["contraction_plan_hash"] for row in _records(overridden_run)
+    }
 
 
 def test_run_records_warmups_repeats_and_same_plan_hashes(tmp_path: Path) -> None:
@@ -347,6 +437,29 @@ def test_physical_success_requires_native_metadata_and_sums_task_bytes(
     assert rows[0]["timing_breakdown"]["session_close_s"] >= 0.0
     manifest = json.loads((run_dir / "run_manifest.json").read_text())
     assert manifest["hardware_opened"] is True
+
+
+def test_physical_route_rejects_observed_kernel_identity_mismatch(
+    tmp_path: Path,
+) -> None:
+    study = tmp_path / "study.yml"
+    _study(study, physical=True)
+    value = yaml.safe_load(study.read_text())
+    physical = next(
+        item for item in value["engine_variants"] if item["id"] == "injected"
+    )
+    physical["executor_config"]["kernel_identity"] = "different-kernel-v1"
+    study.write_text(yaml.safe_dump(value), encoding="utf-8")
+
+    run_dir = run_study(
+        tmp_path, study, engine_factories={"fake": _VerifiedPhysicalEngine}
+    )
+    rows = [row for row in _records(run_dir) if row["engine_id"] == "injected"]
+    assert rows and all(row["status"] == "failed" for row in rows)
+    assert all(row["failure_stage"] == "route_observation_mismatch" for row in rows)
+    assert all(row["route_adapter_validation"]["status"] == "passed" for row in rows)
+    assert all(row["route_observation_admission"]["status"] == "failed" for row in rows)
+    assert all("kernel_identity" in row["error"] for row in rows)
 
 
 def test_repeated_verified_physical_route_is_admitted_only_at_study_level(

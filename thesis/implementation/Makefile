@@ -61,6 +61,8 @@ M5_CIRCUIT_PLAN_SUITE ?= configs/suites/m5_circuit_smoke.yml
 M5_CIRCUIT_RUN ?=
 M5_CIRCUIT_REPORT ?= runs/comparisons/m5_circuit_study/$(shell date +%Y-%m-%d_%H-%M-%S_%N)
 M5_CIRCUIT_RANK_ARGS = $(if $(UPMEM_HW_RANK_PATHS),--rank-paths $(UPMEM_HW_RANK_PATHS),$(if $(UPMEM_HW_RANK_PATH),--rank-paths $(UPMEM_HW_RANK_PATH),))
+M5_CIRCUIT_ROUTES ?=
+M5_CIRCUIT_ROUTE_ARGS = $(foreach route,$(M5_CIRCUIT_ROUTES),--route $(route))
 EVIDENCE_INBOX ?= runs/inbox/eth
 GPU_VERIFY ?= quest-hip
 CLEAN_RUNS ?= 0
@@ -70,6 +72,7 @@ APPLY ?= 0
 
 PUBLIC_TARGETS := \
 	help \
+	help-all \
 	test \
 	setup \
 	build-quest-cpu \
@@ -151,6 +154,24 @@ PUBLIC_TARGETS := \
 
 help:
 	@printf '%s\n' \
+		'Thesis workflow:' \
+		'  make setup              Create/reuse ../.venv, install dependencies, and run doctor' \
+		'  make doctor             Check benchmark prerequisites' \
+		'  make test               Run the active Python test suite' \
+		'  make thesis-run         Run the controlled CPU/GPU/TN benchmark matrix' \
+		'  make thesis-report      Regenerate tracked tables and plots' \
+		'  make thesis-verify      Verify tracked results without rerunning benchmarks' \
+		'  make m5-circuit-plan    Prepare/build the M5.5 plan suite' \
+		'  make m5-circuit-smoke   Run the bounded M5.5 physical smoke study' \
+		'  make m5-circuit-study   Run the selected M5.5 whole-circuit suite' \
+		'  make m5-circuit-report M5_CIRCUIT_RUN=<run>  Report an existing M5.5 run' \
+		'  M5_CIRCUIT_ROUTES="<route-id> ..."  Select explicit M5.5 routes' \
+		'  make evidence-inbox     Create the ignored inbox for copied ETH evidence' \
+		'  make list-runs          Show generated evidence and comparisons' \
+		'  make help-all           Show the complete historical and qualification catalog'
+
+help-all:
+	@printf '%s\n' \
 		'Thesis evidence shortcuts:' \
 		'  make help              Show this command summary' \
 		'  make setup             Require uv, create/reuse ../.venv, install dev dependencies, and run doctor' \
@@ -207,6 +228,7 @@ help:
 		'  make upmem-hw-m5-4  Requires physical opt-in/rank; execute the full M5.4 1..64-DPU matrix' \
 		'  make upmem-hw-m5-4-report  Report and evaluate one explicitly supplied M5.4 evidence run' \
 		'  make m5-circuit-plan  Prepare/build M5.5 plan suite (M5_CIRCUIT_PLAN_SUITE=... overrides smoke); never allocates or launches a DPU' \
+		'  M5_CIRCUIT_ROUTES="<route-id> ..." limits M5.5 plan/smoke/study to explicit routes' \
 		'  make m5-circuit-smoke  Requires physical opt-in and explicit rank paths; run the M5.5 smoke study' \
 		'  make m5-circuit-study  Requires physical opt-in and explicit rank paths; run the selected M5.5 whole-circuit suite' \
 		'  make m5-circuit-report M5_CIRCUIT_RUN=<run>  Report an existing M5.5 run without rerunning it' \
@@ -471,21 +493,13 @@ upmem-hw-m5-4-report:
 	$(PY_ENV) $(PYTHON) scripts/upmem_m5_report.py --input $(UPMEM_HW_M5_4_RUN) --output-root .
 
 m5-circuit-plan:
-	$(BENCH) m5-circuit-study --suite $(M5_CIRCUIT_PLAN_SUITE) --prepare-only --build
+	$(BENCH) m5-circuit-study --suite $(M5_CIRCUIT_PLAN_SUITE) --prepare-only --build $(M5_CIRCUIT_ROUTE_ARGS)
 
 m5-circuit-smoke:
-	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1 to execute the physical M5.5 smoke study' >&2; exit 2; }
-	@test -n "$(UPMEM_HW_RANK_PATHS)$(UPMEM_HW_RANK_PATH)" || { echo 'Set UPMEM_HW_RANK_PATH or UPMEM_HW_RANK_PATHS to select explicit physical ranks' >&2; exit 2; }
-	@test "$(origin DPU_BACKEND)" = "undefined" || { echo 'DPU_BACKEND must be unset for physical M5.5 execution' >&2; exit 2; }
-	@test "$(origin UPMEM_EXECUTION_MODE)" = "undefined" || { echo 'UPMEM_EXECUTION_MODE must be unset for physical M5.5 execution' >&2; exit 2; }
-	$(BENCH) m5-circuit-study --suite configs/suites/m5_circuit_smoke.yml --execute $(M5_CIRCUIT_RANK_ARGS)
+	$(BENCH) m5-circuit-study --suite configs/suites/m5_circuit_smoke.yml --execute $(M5_CIRCUIT_RANK_ARGS) $(M5_CIRCUIT_ROUTE_ARGS)
 
 m5-circuit-study:
-	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1 to execute the physical M5.5 study' >&2; exit 2; }
-	@test -n "$(UPMEM_HW_RANK_PATHS)$(UPMEM_HW_RANK_PATH)" || { echo 'Set UPMEM_HW_RANK_PATH or UPMEM_HW_RANK_PATHS to select explicit physical ranks' >&2; exit 2; }
-	@test "$(origin DPU_BACKEND)" = "undefined" || { echo 'DPU_BACKEND must be unset for physical M5.5 execution' >&2; exit 2; }
-	@test "$(origin UPMEM_EXECUTION_MODE)" = "undefined" || { echo 'UPMEM_EXECUTION_MODE must be unset for physical M5.5 execution' >&2; exit 2; }
-	$(BENCH) m5-circuit-study --suite $(M5_CIRCUIT_SUITE) --execute $(M5_CIRCUIT_RANK_ARGS)
+	$(BENCH) m5-circuit-study --suite $(M5_CIRCUIT_SUITE) --execute $(M5_CIRCUIT_RANK_ARGS) $(M5_CIRCUIT_ROUTE_ARGS)
 
 m5-circuit-report:
 	@test -n "$(M5_CIRCUIT_RUN)" || { echo 'Set M5_CIRCUIT_RUN=<M5.5 evidence run>' >&2; exit 2; }

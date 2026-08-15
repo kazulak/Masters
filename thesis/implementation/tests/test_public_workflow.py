@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PYTHON = sys.executable
 PUBLIC_TARGETS = (
     "help",
+    "help-all",
     "test",
     "setup",
     "build-quest-cpu",
@@ -111,7 +112,14 @@ def test_public_cli_help_and_research_plan() -> None:
 
 
 def test_public_cpu_smoke_executes_end_to_end() -> None:
-    result = _command(PYTHON, "-m", "quantum_bench.bench", "run", "--suite", "configs/suites/smoke.yml")
+    result = _command(
+        PYTHON,
+        "-m",
+        "quantum_bench.bench",
+        "run",
+        "--suite",
+        "configs/suites/smoke.yml",
+    )
 
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)

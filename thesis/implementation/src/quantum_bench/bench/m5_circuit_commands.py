@@ -10,8 +10,11 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from quantum_bench.bench.m5_circuit_report import generate_report, load_records
-from quantum_bench.bench.m5_circuit_study import (
+from quantum_bench.bench.m5_circuit_routes import (
     apply_rank_path_override,
+    select_pipeline_routes,
+)
+from quantum_bench.bench.m5_circuit_study import (
     load_study_config,
     plan_study,
     run_study,
@@ -53,11 +56,33 @@ def require_physical_environment(rank_paths: str | None = None) -> list[str]:
     return parse_rank_paths(rank_paths)
 
 
-def _tasklet_counts(config: Mapping[str, Any]) -> list[int]:
-    values = {
-        int(variant["topology"]["tasklets_per_device"])
+def _selected_engine_variants(
+    config: Mapping[str, Any], route_ids: list[str] | None
+) -> list[dict[str, Any]]:
+    """Resolve the declared engine variants used by the selected routes."""
+
+    selected_routes = select_pipeline_routes(config, route_ids)
+    selected_engine_ids = {str(route["engine_id"]) for route in selected_routes}
+    return [
+        variant
         for variant in config["engine_variants"]
+        if variant["id"] in selected_engine_ids
+    ]
+
+
+def _physical_engine_variants(
+    config: Mapping[str, Any], route_ids: list[str] | None
+) -> list[dict[str, Any]]:
+    return [
+        variant
+        for variant in _selected_engine_variants(config, route_ids)
         if variant["topology"]["backend"] != "cpu"
+    ]
+
+
+def _tasklet_counts(engine_variants: list[Mapping[str, Any]]) -> list[int]:
+    values = {
+        int(variant["topology"]["tasklets_per_device"]) for variant in engine_variants
     }
     if not values:
         return []
@@ -66,10 +91,10 @@ def _tasklet_counts(config: Mapping[str, Any]) -> list[int]:
     return sorted(values)
 
 
-def build_native_v4(root: Path, config: Mapping[str, Any]) -> list[int]:
-    """Build each declared tasklet-keyed v4 host/DPU binary."""
+def build_native_v4(root: Path, engine_variants: list[Mapping[str, Any]]) -> list[int]:
+    """Build only tasklet-keyed v4 binaries needed by selected physical routes."""
 
-    tasklets = _tasklet_counts(config)
+    tasklets = _tasklet_counts(engine_variants)
     native = Path(root) / "native" / "upmem" / "simplepim" / "upmem_sdk_execution_plan"
     for count in tasklets:
         completed = subprocess.run(
@@ -82,12 +107,21 @@ def build_native_v4(root: Path, config: Mapping[str, Any]) -> list[int]:
     return tasklets
 
 
-def prepare(root: Path, suite: Path, *, build: bool) -> dict[str, Any]:
+def prepare(
+    root: Path,
+    suite: Path,
+    *,
+    build: bool,
+    route_ids: list[str] | None = None,
+) -> dict[str, Any]:
     """Plan a study, optionally build native v4, and never allocate hardware."""
 
     config = load_study_config(suite)
-    plan_path = plan_study(root, suite)
-    tasklets = build_native_v4(root, config) if build else []
+    plan_path = plan_study(root, suite, route_ids=route_ids)
+    physical_variants = _physical_engine_variants(config, route_ids)
+    tasklets = (
+        build_native_v4(root, physical_variants) if build and physical_variants else []
+    )
     return {
         "plan": str(plan_path),
         "status": "prepared",
@@ -143,22 +177,27 @@ def execute(
     suite: Path,
     *,
     rank_paths: str | None = None,
+    route_ids: list[str] | None = None,
 ) -> dict[str, Any]:
-    paths = require_physical_environment(rank_paths)
-    config = apply_rank_path_override(load_study_config(suite), paths)
+    config = load_study_config(suite)
+    physical_variants = _physical_engine_variants(config, route_ids)
+    paths: list[str] | None = None
+    if physical_variants:
+        paths = require_physical_environment(rank_paths)
+        config = apply_rank_path_override(config, paths)
+        physical_variants = _physical_engine_variants(config, route_ids)
     # run_study accepts a path to keep its artifact contract stable.  Write the
     # resolved configuration only through the normal study hook by passing the
     # explicit paths; the original suite remains the source of record.
     factories = {
-        variant["id"]: _physical_factory(root)
-        for variant in config["engine_variants"]
-        if variant["topology"]["backend"] != "cpu"
+        variant["id"]: _physical_factory(root) for variant in physical_variants
     }
     run_dir = run_study(
         root,
         suite,
         engine_factories=factories,
         rank_paths=paths,
+        route_ids=route_ids,
     )
     summary_path = run_dir / "m5_circuit_study_summary.json"
     import json

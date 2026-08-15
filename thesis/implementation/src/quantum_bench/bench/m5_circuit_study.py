@@ -14,7 +14,6 @@ import inspect
 import json
 import re
 import time
-from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +24,15 @@ import yaml
 
 from quantum_bench.bench.reporting import write_normalized_records, write_run_manifest
 from quantum_bench.bench.run_dirs import EVIDENCE_ARTIFACT_KIND, create_run_dir
+from quantum_bench.bench.m5_circuit_routes import (
+    admit_route_observation,
+    apply_rank_path_override,
+    build_pipeline_catalog,
+    route_comparison_ids,
+    select_pipeline_routes,
+    selected_pipeline_comparisons,
+    validate_route_adapter,
+)
 from quantum_bench.circuits import load_circuit, manifest as circuit_manifest
 from quantum_bench.core.jsonio import write_json
 from quantum_bench.core.records import ContractionTask, TaskGraph
@@ -120,6 +128,13 @@ def load_study_config(path: Path) -> dict[str, Any]:
 
     normalized_policies = []
     for entry in policies:
+        allowed_policy_keys = {"id", "label", "policy", "name"}
+        unknown_policy_keys = sorted(set(entry) - allowed_policy_keys)
+        if unknown_policy_keys:
+            raise ValueError(
+                f"Numeric policy {entry['id']} has unsupported keys: "
+                f"{', '.join(unknown_policy_keys)}"
+            )
         policy_name = str(entry.get("policy", entry.get("name", entry["id"])))
         policy_name = {
             "float32": "float32_real",
@@ -200,15 +215,22 @@ def load_study_config(path: Path) -> dict[str, Any]:
         raise ValueError(
             "warmups must be >= 0, repeats >= 1, and timeout_s must be positive"
         )
+    routes, comparisons = build_pipeline_catalog(result)
+    result["pipeline_routes"] = routes
+    result["pipeline_comparisons"] = comparisons
     return result
 
 
-def plan_study(root: Path, path: Path) -> Path:
+def plan_study(
+    root: Path, path: Path, *, route_ids: Iterable[str] | None = None
+) -> Path:
     """Resolve every circuit/planner combination without opening an engine."""
 
     root = Path(root).resolve()
     config = load_study_config(Path(path))
-    plans = _build_plans(root, config)
+    selected_routes = select_pipeline_routes(config, route_ids)
+    config["selected_route_ids"] = [route["route_id"] for route in selected_routes]
+    plans = _build_plans(root, config, config["selected_route_ids"])
     plan_parent = root / "build" / "m5_circuit_study_plan"
     plan_parent.mkdir(parents=True, exist_ok=True)
     plan_dir = plan_parent / _timestamp()
@@ -217,7 +239,13 @@ def plan_study(root: Path, path: Path) -> Path:
         plan_dir = plan_parent / f"{_timestamp()}_{suffix:02d}"
         suffix += 1
     plan_dir.mkdir(parents=True, exist_ok=False)
-    payload = _plan_manifest(config, plans, plan_dir, hardware_opened=False)
+    payload = _plan_manifest(
+        config,
+        plans,
+        plan_dir,
+        hardware_opened=False,
+        selected_route_ids=config["selected_route_ids"],
+    )
     write_json(plan_dir / "resolved_study.yml.json", config)
     write_json(plan_dir / "resolved_plan.json", payload)
     return plan_dir / "resolved_plan.json"
@@ -229,6 +257,7 @@ def run_study(
     *,
     engine_factories: Mapping[str, Any] | None = None,
     rank_paths: list[str] | None = None,
+    route_ids: Iterable[str] | None = None,
 ) -> Path:
     """Run all declared combinations and persist normalized study evidence."""
 
@@ -236,7 +265,12 @@ def run_study(
     config = load_study_config(Path(path))
     if rank_paths is not None:
         config = apply_rank_path_override(config, rank_paths)
-    plans = _build_plans(root, config)
+    selected_routes = select_pipeline_routes(config, route_ids)
+    config["selected_route_ids"] = [route["route_id"] for route in selected_routes]
+    selected_comparisons = selected_pipeline_comparisons(
+        config, set(config["selected_route_ids"])
+    )
+    plans = _build_plans(root, config, config["selected_route_ids"])
     run_dir = create_run_dir(
         root,
         config["study_id"],
@@ -259,20 +293,35 @@ def run_study(
     write_json(run_dir / "config" / "resolved_study.json", config)
     write_json(
         run_dir / "plan_manifest.json",
-        _plan_manifest(config, plans, run_dir, hardware_opened=False),
+        _plan_manifest(
+            config,
+            plans,
+            run_dir,
+            hardware_opened=False,
+            selected_route_ids=config["selected_route_ids"],
+        ),
     )
 
     factories = dict(engine_factories or {})
+    engines_by_id = {item["id"]: item for item in config["engine_variants"]}
+    policies_by_id = {item["id"]: item for item in config["numeric_policies"]}
+    selected_route_ids_set = set(config["selected_route_ids"])
     records: list[dict[str, Any]] = []
     warmup_failures: list[dict[str, Any]] = []
     for planned in plans:
         case = planned.case
+        planned_routes = [
+            route
+            for route in selected_routes
+            if route["planner_id"] == planned.planner["id"]
+        ]
         anchor: dict[str, Any] | None = None
         policy_anchors: dict[str, dict[str, Any]] = {}
         if planned.preflight["status"] == "supported":
             anchor = _run_anchor(planned, config, Float32RealPolicy())
             declared_policies = {
-                str(item["policy"]) for item in config["numeric_policies"]
+                str(policies_by_id[route["numeric_policy_id"]]["policy"])
+                for route in planned_routes
             }
             for policy_name, policy in (
                 ("float32_real", Float32RealPolicy()),
@@ -286,91 +335,104 @@ def run_study(
                     else _run_anchor(planned, config, policy)
                 )
 
-        for engine_variant in config["engine_variants"]:
-            for policy_variant in config["numeric_policies"]:
-                for repeat_id in range(config["repeats"]):
-                    row_base = _row_base(
-                        config,
+        for route in planned_routes:
+            engine_variant = engines_by_id[route["engine_id"]]
+            policy_variant = policies_by_id[route["numeric_policy_id"]]
+            comparison_ids = route_comparison_ids(
+                config,
+                route["route_id"],
+                selected_route_ids_set,
+            )
+            for repeat_id in range(config["repeats"]):
+                row_base = _row_base(
+                    config,
+                    planned,
+                    engine_variant,
+                    policy_variant,
+                    route,
+                    comparison_ids,
+                    repeat_id,
+                    anchor,
+                )
+                if planned.preflight["status"] != "supported":
+                    records.append(
+                        {
+                            **row_base,
+                            "status": "unsupported",
+                            "support_status": "unsupported",
+                            "failure_stage": "preflight_resource_limit",
+                            "error": planned.preflight["reason"],
+                            "repeat_count": 0,
+                        }
+                    )
+                    break
+                anchor_failure = _anchor_failure(
+                    anchor=anchor,
+                    policy_anchor=policy_anchors.get(str(policy_variant["policy"])),
+                )
+                if anchor_failure is not None:
+                    records.append(
+                        {
+                            **row_base,
+                            "status": "failed",
+                            "support_status": "failed",
+                            "failure_stage": anchor_failure[0],
+                            "error": anchor_failure[1],
+                        }
+                    )
+                    continue
+                if repeat_id == 0:
+                    for warmup_id in range(config["warmups"]):
+                        try:
+                            _execute_combo(
+                                planned,
+                                config,
+                                route,
+                                engine_variant,
+                                policy_variant,
+                                factories,
+                                warmup_id,
+                                anchor,
+                                policy_anchors.get(str(policy_variant["policy"])),
+                            )
+                        except Exception as exc:
+                            warmup_failures.append(
+                                {
+                                    "case_id": case["case_id"],
+                                    "planner_id": planned.planner["id"],
+                                    "engine_id": engine_variant["id"],
+                                    "numeric_policy_id": policy_variant["id"],
+                                    "route_id": route["route_id"],
+                                    "warmup_id": warmup_id,
+                                    "error": str(exc),
+                                }
+                            )
+                try:
+                    executed = _execute_combo(
                         planned,
+                        config,
+                        route,
                         engine_variant,
                         policy_variant,
+                        factories,
                         repeat_id,
                         anchor,
+                        policy_anchors.get(str(policy_variant["policy"])),
                     )
-                    if planned.preflight["status"] != "supported":
-                        records.append(
-                            {
-                                **row_base,
-                                "status": "unsupported",
-                                "support_status": "unsupported",
-                                "failure_stage": "preflight_resource_limit",
-                                "error": planned.preflight["reason"],
-                                "repeat_count": 0,
-                            }
-                        )
-                        break
-                    anchor_failure = _anchor_failure(
-                        anchor=anchor,
-                        policy_anchor=policy_anchors.get(str(policy_variant["policy"])),
+                    records.append({**row_base, **executed})
+                except Exception as exc:
+                    adapter_validation = getattr(exc, "details", None)
+                    records.append(
+                        {
+                            **row_base,
+                            "status": "failed",
+                            "support_status": "failed",
+                            "failure_stage": _failure_stage(exc),
+                            "error": str(exc),
+                            "no_fallback_used": True,
+                            "route_adapter_validation": adapter_validation,
+                        }
                     )
-                    if anchor_failure is not None:
-                        records.append(
-                            {
-                                **row_base,
-                                "status": "failed",
-                                "support_status": "failed",
-                                "failure_stage": anchor_failure[0],
-                                "error": anchor_failure[1],
-                            }
-                        )
-                        continue
-                    if repeat_id == 0:
-                        for warmup_id in range(config["warmups"]):
-                            try:
-                                _execute_combo(
-                                    planned,
-                                    config,
-                                    engine_variant,
-                                    policy_variant,
-                                    factories,
-                                    warmup_id,
-                                    anchor,
-                                    policy_anchors.get(str(policy_variant["policy"])),
-                                )
-                            except Exception as exc:
-                                warmup_failures.append(
-                                    {
-                                        "case_id": case["case_id"],
-                                        "planner_id": planned.planner["id"],
-                                        "engine_id": engine_variant["id"],
-                                        "numeric_policy_id": policy_variant["id"],
-                                        "warmup_id": warmup_id,
-                                        "error": str(exc),
-                                    }
-                                )
-                    try:
-                        executed = _execute_combo(
-                            planned,
-                            config,
-                            engine_variant,
-                            policy_variant,
-                            factories,
-                            repeat_id,
-                            anchor,
-                            policy_anchors.get(str(policy_variant["policy"])),
-                        )
-                        records.append({**row_base, **executed})
-                    except Exception as exc:
-                        records.append(
-                            {
-                                **row_base,
-                                "status": "failed",
-                                "support_status": "failed",
-                                "failure_stage": _failure_stage(exc),
-                                "error": str(exc),
-                                "no_fallback_used": True,
-                            }
-                        )
         # Do not retain full state arrays across planner/case iterations.
         anchor = None
         policy_anchors.clear()
@@ -387,6 +449,9 @@ def run_study(
         "unsupported_count": sum(row["status"] == "unsupported" for row in records),
         "failed_count": sum(row["status"] == "failed" for row in records),
         "warmup_failures": warmup_failures,
+        "selected_route_ids": config["selected_route_ids"],
+        "pipeline_routes": selected_routes,
+        "pipeline_comparisons": selected_comparisons,
         "normalized_records": "normalized_records.jsonl",
         "plan_manifest": "plan_manifest.json",
         "energy": {
@@ -409,57 +474,34 @@ def run_study(
             ),
             "rank_paths_resolved": list(config.get("_rank_paths_resolved", [])),
             "energy_status": "unavailable",
+            "selected_route_ids": config["selected_route_ids"],
+            "pipeline_routes": selected_routes,
+            "pipeline_comparisons": selected_comparisons,
         }
     )
     write_json(run_dir / "run_manifest.json", manifest)
     return run_dir
 
 
-def apply_rank_path_override(
-    config: Mapping[str, Any], rank_paths: Iterable[str]
-) -> dict[str, Any]:
-    """Resolve explicit physical rank placeholders for an execution.
-
-    Study YAML keeps portable placeholder paths so ``plan`` never needs a
-    device.  Execution supplies the actual paths explicitly.  The first N
-    supplied paths are used for each physical variant requiring N ranks; no
-    discovery or implicit simulator substitution is performed.
-    """
-
-    supplied = [str(path).strip() for path in rank_paths if str(path).strip()]
-    if not supplied:
-        raise ValueError("at least one explicit UPMEM rank path is required")
-    if any(RANK_PATH_PATTERN.fullmatch(path) is None for path in supplied):
-        raise ValueError("rank paths must match ^/dev/dpu_rank[0-9]+$")
-    if len(set(supplied)) != len(supplied):
-        raise ValueError("UPMEM rank paths must be unique")
-    resolved = deepcopy(dict(config))
-    for variant in resolved.get("engine_variants", []):
-        topology = variant.get("topology", {})
-        if topology.get("backend") == "cpu":
-            continue
-        expected = len(topology.get("rank_paths", []))
-        if expected < 1:
-            raise ValueError(
-                f"physical engine {variant.get('id', '<unknown>')} has no declared rank count"
-            )
-        if len(supplied) < expected:
-            raise ValueError(
-                f"physical engine {variant.get('id', '<unknown>')} requires {expected} rank paths; "
-                f"received {len(supplied)}"
-            )
-        topology["rank_paths"] = supplied[:expected]
-        variant["topology"] = topology
-    resolved["_rank_paths_resolved"] = supplied
-    return resolved
-
-
-def _build_plans(root: Path, config: dict[str, Any]) -> list[_Plan]:
+def _build_plans(
+    root: Path, config: dict[str, Any], selected_route_ids: Iterable[str] | None = None
+) -> list[_Plan]:
     plans: list[_Plan] = []
+    selected_planner_ids: set[str] | None = None
+    if selected_route_ids is not None:
+        selected_planner_ids = {
+            route["planner_id"]
+            for route in select_pipeline_routes(config, selected_route_ids)
+        }
     for case in config["cases"]:
         circuit = load_circuit(case, root)
         network = build_tensor_network(circuit)
         for planner in config["planner_variants"]:
+            if (
+                selected_planner_ids is not None
+                and planner["id"] not in selected_planner_ids
+            ):
+                continue
             graph = plan_task_graph_with_config(network, planner["planner"])
             resources = _estimate_resources(graph, config["resource_limits"])
             preflight = _preflight(resources, config["resource_limits"])
@@ -575,6 +617,7 @@ def _anchor_failure(
 def _execute_combo(
     planned: _Plan,
     config: dict[str, Any],
+    route: Mapping[str, Any],
     engine_variant: dict[str, Any],
     policy_variant: dict[str, Any],
     factories: dict[str, Any],
@@ -582,6 +625,9 @@ def _execute_combo(
     anchor: dict[str, Any] | None,
     policy_anchor: dict[str, Any] | None,
 ) -> dict[str, Any]:
+    adapter_validation = validate_route_adapter(
+        route, planned.planner, policy_variant, engine_variant
+    )
     topology = DeviceTopology(
         **{
             key: value
@@ -624,6 +670,10 @@ def _execute_combo(
     engine_metadata = _engine_metadata(metadata)
     hardware = _hardware_contract(engine_metadata, engine_variant["topology"])
     hardware_failure = topology.backend != "cpu" and not hardware["verified"]
+    route_observation = admit_route_observation(
+        route, engine_metadata, backend=topology.backend
+    )
+    route_observation_failure = not bool(route_observation["passed"])
     output_hash = _array_hash(output)
     executor_hash = _executor_config_hash(
         engine_variant, policy, topology, engine_metadata
@@ -696,21 +746,28 @@ def _execute_combo(
         and exact_once
         and transfer_accounting_verified
         and physical_timing_complete
+        and not route_observation_failure
         and not bool(engine_metadata.get("cpu_fallback_used", False))
         and not bool(engine_metadata.get("simulator_kernel_executed", False))
     )
     return {
-        "status": "failed" if failed_validation or hardware_failure else "completed",
+        "status": "failed"
+        if failed_validation or hardware_failure or route_observation_failure
+        else "completed",
         "support_status": "supported",
         "failure_stage": (
-            hardware["failure_stage"]
+            "route_observation_mismatch"
+            if route_observation_failure
+            else hardware["failure_stage"]
             if hardware_failure
             else "output_validation_failed"
             if failed_validation
             else None
         ),
         "error": (
-            hardware["reason"]
+            route_observation["reason"]
+            if route_observation_failure
+            else hardware["reason"]
             if hardware_failure
             else "output validation failed"
             if failed_validation
@@ -748,6 +805,8 @@ def _execute_combo(
         "output_norm": float(np.linalg.norm(output.ravel())),
         "validation_max_abs_error": full_validation.get("max_abs_error"),
         "validation_l2_error": full_validation.get("l2_error"),
+        "route_adapter_validation": adapter_validation,
+        "route_observation_admission": route_observation,
         "validation_norm_drift": full_validation.get("norm_drift"),
         "task_metrics": metadata.get("task_metrics", ()),
         "complete_task_count": int(
@@ -801,6 +860,8 @@ def _row_base(
     planned: _Plan,
     engine: dict[str, Any],
     policy: dict[str, Any],
+    route: Mapping[str, Any],
+    comparison_ids: list[str],
     repeat_id: int,
     anchor: dict[str, Any] | None,
 ) -> dict[str, Any]:
@@ -823,6 +884,11 @@ def _row_base(
         "planner_id": planned.planner["id"],
         "planner_config": planned.planner["planner"],
         "planner_hash": planned.graph.contraction_plan_hash,
+        "route_id": route["route_id"],
+        "route_label": route["label"],
+        "route_config_hash": route["route_config_hash"],
+        "route_modules": route["modules"],
+        "comparison_ids": comparison_ids,
         "engine_id": engine["id"],
         "engine": engine["engine"],
         "backend_id": engine["engine"],
@@ -1129,6 +1195,7 @@ def _engine_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
         "kernel_identity",
         "kernel_family",
         "kernel_strategy",
+        "graph_intermediate_placement",
         "backend_id",
         "execution_class",
         "observed_rank_count",
@@ -1389,12 +1456,21 @@ def _plan_manifest(
     artifact_dir: Path,
     *,
     hardware_opened: bool,
+    selected_route_ids: Iterable[str],
 ) -> dict[str, Any]:
+    selected_ids = set(selected_route_ids)
     return {
         "schema_version": STUDY_SCHEMA_VERSION,
         "study_id": config["study_id"],
         "hardware_opened": hardware_opened,
         "artifact_dir": str(artifact_dir),
+        "selected_route_ids": list(selected_route_ids),
+        "pipeline_routes": [
+            route
+            for route in config["pipeline_routes"]
+            if route["route_id"] in selected_ids
+        ],
+        "pipeline_comparisons": selected_pipeline_comparisons(config, selected_ids),
         "plans": [
             {
                 "case_id": plan.case["case_id"],
@@ -1423,7 +1499,6 @@ def _timestamp() -> str:
 
 
 __all__ = [
-    "apply_rank_path_override",
     "load_study_config",
     "plan_study",
     "run_study",
