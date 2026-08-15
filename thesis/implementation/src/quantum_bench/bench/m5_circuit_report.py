@@ -11,7 +11,9 @@ from __future__ import annotations
 import csv
 import json
 import math
+import re
 import statistics
+import textwrap
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -220,6 +222,44 @@ def _rank_count(row: Mapping[str, Any]) -> int | None:
     return value if value is not None and value > 0 else None
 
 
+def _engine_metadata(row: Mapping[str, Any]) -> Mapping[str, Any]:
+    value = row.get("engine_metadata")
+    return value if isinstance(value, Mapping) else {}
+
+
+def _active_id_count(metadata: Mapping[str, Any], *keys: str) -> int | None:
+    for key in keys:
+        value = metadata.get(key)
+        if isinstance(value, (list, tuple, set, frozenset)):
+            return len({str(item) for item in value})
+        count = _int(value)
+        if count is not None and count >= 0:
+            return count
+    return None
+
+
+def _active_dpu_count(row: Mapping[str, Any]) -> int | None:
+    metadata = _engine_metadata(row)
+    return _active_id_count(
+        metadata,
+        "active_dpu_ids",
+        "active_dpu_count",
+        "observed_dpu_count",
+    )
+
+
+def _active_rank_count(row: Mapping[str, Any]) -> int | None:
+    metadata = _engine_metadata(row)
+    return _active_id_count(
+        metadata,
+        "active_rank_indices",
+        "active_rank_ids",
+        "active_ranks",
+        "active_rank_count",
+        "observed_rank_count",
+    )
+
+
 def _local_dpu_count(row: Mapping[str, Any]) -> int | None:
     explicit = _int(
         _first(
@@ -233,11 +273,12 @@ def _local_dpu_count(row: Mapping[str, Any]) -> int | None:
     if explicit is not None and explicit > 0:
         return explicit
     ranks = _rank_count(row)
-    requested = _int(
-        _first(row, "requested_dpu_count", "allocated_dpu_count", "dpu_count")
-    )
-    if ranks in {None, 1} and requested is not None and requested > 0:
-        return requested
+    provisioned_total = _int(_first(row, "allocated_dpu_count", "requested_dpu_count"))
+    if ranks and provisioned_total and provisioned_total > 0:
+        if provisioned_total % ranks == 0:
+            return provisioned_total // ranks
+    if ranks in {None, 1} and provisioned_total is not None and provisioned_total > 0:
+        return provisioned_total
     total = _int(_first(row, "total_dpu_count", "allocated_total_dpu_count"))
     if ranks and total and total % ranks == 0:
         return total // ranks
@@ -245,7 +286,15 @@ def _local_dpu_count(row: Mapping[str, Any]) -> int | None:
 
 
 def _total_dpu_count(row: Mapping[str, Any]) -> int | None:
-    explicit = _int(_first(row, "total_dpu_count", "allocated_total_dpu_count"))
+    explicit = _int(
+        _first(
+            row,
+            "total_dpu_count",
+            "allocated_total_dpu_count",
+            "allocated_dpu_count",
+            "requested_dpu_count",
+        )
+    )
     if explicit is not None and explicit > 0:
         return explicit
     local = _local_dpu_count(row)
@@ -260,6 +309,42 @@ def _topology_label(row: Mapping[str, Any]) -> str:
     ranks = _rank_count(row)
     total = _total_dpu_count(row)
     return f"{local or '?'}DPU x {ranks or '?'} rank(s) = {total or '?'} total"
+
+
+def _activity_label(row: Mapping[str, Any]) -> str | None:
+    """Return a compact label that distinguishes active from provisioned devices."""
+    provisioned_dpus = _total_dpu_count(row)
+    provisioned_ranks = _rank_count(row)
+    active_dpus = _active_dpu_count(row)
+    active_ranks = _active_rank_count(row)
+    if (
+        provisioned_dpus is None
+        or provisioned_ranks is None
+        or active_dpus is None
+        or active_ranks is None
+    ):
+        return None
+    if active_dpus == provisioned_dpus and active_ranks == provisioned_ranks:
+        return f"{provisioned_dpus}DPU/{provisioned_ranks}R"
+    return (
+        f"{active_dpus}/{provisioned_dpus}DPU + "
+        f"{active_ranks}/{provisioned_ranks}R"
+    )
+
+
+def _fully_active_topology(row: Mapping[str, Any]) -> bool:
+    provisioned_ranks = _rank_count(row)
+    provisioned_dpus = _total_dpu_count(row)
+    active_ranks = _active_rank_count(row)
+    active_dpus = _active_dpu_count(row)
+    return (
+        provisioned_ranks is not None
+        and provisioned_dpus is not None
+        and active_ranks is not None
+        and active_dpus is not None
+        and active_ranks == provisioned_ranks
+        and active_dpus == provisioned_dpus
+    )
 
 
 def _executor_config_hash(row: Mapping[str, Any]) -> str | None:
@@ -369,6 +454,9 @@ def _record_row(row: Mapping[str, Any]) -> JsonDict:
     local_dpus = _local_dpu_count(row)
     ranks = _rank_count(row)
     total_dpus = _total_dpu_count(row)
+    active_dpus = _active_dpu_count(row)
+    active_ranks = _active_rank_count(row)
+    activity = _activity_label(row)
     topology = (
         f" | {local_dpus} local / {ranks} ranks / {total_dpus} total"
         if local_dpus
@@ -395,7 +483,16 @@ def _record_row(row: Mapping[str, Any]) -> JsonDict:
         "local_dpu_count": local_dpus,
         "rank_count": ranks,
         "total_dpu_count": total_dpus,
-        "series": f"{_family(row)} | {_engine(row)} | {_path(row)} | {_numeric(row)}{topology}",
+        "provisioned_dpu_count": total_dpus,
+        "provisioned_rank_count": ranks,
+        "active_dpu_count": active_dpus,
+        "active_rank_count": active_ranks,
+        "fully_active_topology": _fully_active_topology(row),
+        "activity_label": activity,
+        "series": (
+            f"{_family(row)} | {_engine(row)} | {_path(row)} | {_numeric(row)}"
+            f"{(' | ' + activity) if activity else topology}"
+        ),
     }
 
 
@@ -466,6 +563,11 @@ def _runtime_summaries(rows: list[JsonDict]) -> list[JsonDict]:
             normalized["local_dpu_count"],
             normalized["rank_count"],
             normalized["total_dpu_count"],
+            normalized["provisioned_dpu_count"],
+            normalized["provisioned_rank_count"],
+            normalized["active_dpu_count"],
+            normalized["active_rank_count"],
+            normalized["activity_label"],
         )
         groups.setdefault(key, []).append(row)
     summaries = []
@@ -494,6 +596,12 @@ def _runtime_summaries(rows: list[JsonDict]) -> list[JsonDict]:
                     "local_dpu_count",
                     "rank_count",
                     "total_dpu_count",
+                    "provisioned_dpu_count",
+                    "provisioned_rank_count",
+                    "active_dpu_count",
+                    "active_rank_count",
+                    "fully_active_topology",
+                    "activity_label",
                     "series",
                 )
             }
@@ -551,7 +659,199 @@ def _write_csv(path: Path, rows: list[JsonDict], fields: list[str]) -> None:
         writer.writerows(rows)
 
 
-def _plot(
+def _short_series_label(value: Any, family: str | None = None) -> str:
+    """Return a compact, deterministic label for a shared figure legend."""
+    label = str(value or "unknown")
+    if family and label.startswith(f"{family} | "):
+        label = label[len(family) + 3 :]
+    parts = [part.strip() for part in label.split("|") if part.strip()]
+
+    def topology_token(part: str) -> tuple[int, int] | None:
+        match = re.search(
+            r"(\d+)DPU\s*x\s*(\d+)\s*rank\(s\)\s*=\s*\d+\s*total",
+            part,
+            flags=re.IGNORECASE,
+        )
+        if match is None:
+            match = re.search(
+                r"(\d+)\s*local\s*/\s*(\d+)\s*ranks?\s*/\s*\d+\s*total",
+                part,
+                flags=re.IGNORECASE,
+            )
+        if match is None:
+            match = re.search(r"(\d+)DPU\s*/\s*(\d+)R", part)
+        if match is None:
+            return None
+        return int(match.group(1)), int(match.group(2))
+
+    def engine_token(part: str) -> tuple[str | None, tuple[int, int] | None]:
+        lowered = part.lower()
+        match = re.fullmatch(r"upmem_physical_(\d+)rank_(\d+)dpu", lowered)
+        if match:
+            return "UPMEM", (int(match.group(2)), int(match.group(1)))
+        if lowered in {"numpy_cpu", "cpu_numpy"}:
+            return "CPU", None
+        if "upmem" in lowered or "dpu" in lowered:
+            return "UPMEM", None
+        if lowered == "quest_cpu_full_state":
+            return "QuEST CPU", None
+        if lowered == "quimb_tn":
+            return "Quimb TN", None
+        return None, None
+
+    def compact_token(part: str) -> str:
+        replacements = (
+            ("opt_einsum_greedy", "greedy"),
+            ("cotengra_flops_seed0", "cotengra"),
+            ("host_packed_int8", "int8"),
+            ("float32_real", "f32_real"),
+            ("real_float32", "f32_real"),
+            ("float32", "f32"),
+            ("cpu_numpy", "CPU"),
+            ("numpy_cpu", "CPU"),
+            ("upmem_m5", "UPMEM"),
+        )
+        result = part
+        for source, target in replacements:
+            result = result.replace(source, target)
+        return result
+
+    tokens: list[str] = []
+    topology: tuple[int, int] | None = None
+    activity: str | None = None
+    engine, embedded_topology = engine_token(parts[0]) if parts else (None, None)
+    if engine is not None:
+        tokens.append(engine)
+        topology = embedded_topology
+        parts = parts[1:]
+    for part in parts:
+        partial_match = re.fullmatch(
+            r"(\d+)\s*/\s*(\d+)DPU\s*\+\s*(\d+)\s*/\s*(\d+)R",
+            part,
+            flags=re.IGNORECASE,
+        )
+        if partial_match:
+            activity = (
+                f"{partial_match.group(1)}/{partial_match.group(2)}DPU + "
+                f"{partial_match.group(3)}/{partial_match.group(4)}R"
+            )
+            continue
+        parsed_topology = topology_token(part)
+        looks_like_topology = (
+            ("dpu" in part.lower() and "rank" in part.lower())
+            or ("local" in part.lower() and "total" in part.lower())
+            or re.search(r"\d+DPU\s*/\s*\d+R", part, flags=re.IGNORECASE) is not None
+        )
+        if parsed_topology is not None or looks_like_topology:
+            if parsed_topology is not None:
+                topology = parsed_topology
+        else:
+            tokens.append(compact_token(part))
+    if activity is not None:
+        tokens.append(activity)
+    elif engine != "CPU" and topology is not None:
+        tokens.append(f"{topology[0]}DPU/{topology[1]}R")
+    return " / ".join(tokens) or "unknown"
+
+
+def _plot_provisioned_topology(row: Mapping[str, Any]) -> tuple[int, int] | None:
+    dpus = _int(row.get("provisioned_dpu_count"))
+    if dpus is None:
+        dpus = _int(row.get("total_dpu_count"))
+    if dpus is None:
+        dpus = _int(row.get("allocated_dpu_count"))
+    if dpus is None:
+        dpus = _int(row.get("requested_dpu_count"))
+    ranks = _int(row.get("provisioned_rank_count"))
+    if ranks is None:
+        ranks = _int(row.get("rank_count"))
+    if dpus is None or ranks is None or dpus <= 0 or ranks <= 0:
+        return None
+    return dpus, ranks
+
+
+def _plot_topology_fragment(part: str) -> bool:
+    """Identify old or compact topology/activity tokens in a series label."""
+    if re.fullmatch(
+        r"\d+\s*/\s*\d+DPU\s*\+\s*\d+\s*/\s*\d+R",
+        part,
+        flags=re.IGNORECASE,
+    ):
+        return True
+    if re.search(r"\d+DPU\s*/\s*\d+R", part, flags=re.IGNORECASE):
+        return True
+    if "dpu" in part.lower() and "rank" in part.lower():
+        return True
+    return "local" in part.lower() and "total" in part.lower()
+
+
+def _plot_series_key(
+    row: Mapping[str, Any], group: str, *, collapse_activity: bool
+) -> tuple[str, tuple[int, int] | None]:
+    raw = str(row.get(group, "unknown"))
+    if not collapse_activity:
+        return raw, None
+    parts = [part.strip() for part in raw.split("|") if part.strip()]
+    parts = [part for part in parts if not _plot_topology_fragment(part)]
+    return " | ".join(parts) or "unknown", _plot_provisioned_topology(row)
+
+
+def _plot_activity_range(
+    rows: list[Mapping[str, Any]], topology: tuple[int, int] | None
+) -> str | None:
+    if topology is None:
+        return None
+    active_dpus = sorted(
+        {
+            value
+            for row in rows
+            if (value := _int(row.get("active_dpu_count"))) is not None
+        }
+    )
+    active_ranks = sorted(
+        {
+            value
+            for row in rows
+            if (value := _int(row.get("active_rank_count"))) is not None
+        }
+    )
+    if not active_dpus or not active_ranks:
+        return None
+    provisioned_dpus, provisioned_ranks = topology
+    if len(active_dpus) == 1 and len(active_ranks) == 1:
+        if active_dpus[0] == provisioned_dpus and active_ranks[0] == provisioned_ranks:
+            return f"{provisioned_dpus}DPU/{provisioned_ranks}R"
+        dpu_text = (
+            f"{active_dpus[0]} active of {provisioned_dpus} provisioned DPU"
+        )
+        rank_text = f"{active_ranks[0]} of {provisioned_ranks} rank"
+        return f"{dpu_text} / {rank_text}"
+    dpu_text = (
+        f"{active_dpus[0]}-{active_dpus[-1]} active of "
+        f"{provisioned_dpus} provisioned DPU"
+        if len(active_dpus) > 1
+        else f"{active_dpus[0]} active of {provisioned_dpus} provisioned DPU"
+    )
+    rank_text = (
+        f"{active_ranks[0]}-{active_ranks[-1]} of {provisioned_ranks} ranks"
+        if len(active_ranks) > 1
+        else f"{active_ranks[0]} of {provisioned_ranks} rank"
+    )
+    return f"{dpu_text} / {rank_text}"
+
+
+def _plot_display_label(
+    family: str,
+    base_series: str,
+    topology: tuple[int, int] | None,
+    rows: list[Mapping[str, Any]],
+) -> str:
+    label = _short_series_label(base_series, family)
+    activity = _plot_activity_range(rows, topology)
+    return f"{label} / {activity}" if activity else label
+
+
+def _faceted_plot(
     path: Path,
     title: str,
     rows: list[JsonDict],
@@ -560,6 +860,9 @@ def _plot(
     group: str,
     *,
     reference_y: float | None = None,
+    log_y: bool = False,
+    panel_title: str | None = None,
+    collapse_activity: bool = True,
 ) -> bool:
     if not rows:
         return False
@@ -570,35 +873,146 @@ def _plot(
         import matplotlib.pyplot as plt
     except ImportError:
         return False
-    grouped: dict[str, list[tuple[float, float]]] = {}
+    by_family: dict[
+        str, dict[tuple[str, tuple[int, int] | None], list[tuple[float, float, JsonDict]]]
+    ] = {}
     for row in rows:
         xv, yv = _float(row.get(x)), _float(row.get(y))
         if xv is None or yv is None:
             continue
-        grouped.setdefault(str(row.get(group, "unknown")), []).append((xv, yv))
-    if not grouped:
-        return False
-    fig, axis = plt.subplots(figsize=(8, 4.5))
-    for label, points in sorted(grouped.items()):
-        points.sort()
-        axis.plot(
-            [point[0] for point in points],
-            [point[1] for point in points],
-            marker="o",
-            label=label,
+        family = str(row.get("family") or "unknown")
+        series_key = _plot_series_key(
+            row, group, collapse_activity=collapse_activity
         )
-    if reference_y is not None:
-        axis.axhline(reference_y, color="black", linestyle="--", linewidth=1, alpha=0.7)
-    axis.set_title(title)
-    axis.set_xlabel(x.replace("_", " ").title())
-    axis.set_ylabel(y.replace("_", " ").title())
-    axis.grid(True, alpha=0.25)
-    if len(grouped) > 1:
-        axis.legend(fontsize="small")
-    fig.tight_layout()
-    fig.savefig(path, dpi=140)
+        by_family.setdefault(family, {}).setdefault(series_key, []).append(
+            (xv, yv, row)
+        )
+    if not by_family:
+        return False
+    families = sorted(by_family)
+    ncols = min(3, len(families))
+    nrows = math.ceil(len(families) / ncols)
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(4.6 * ncols, 3.3 * nrows),
+        squeeze=False,
+        sharex=False,
+        sharey=False,
+    )
+    display_labels = {}
+    for family in families:
+        for (base_series, topology), points in by_family[family].items():
+            display_labels[(family, (base_series, topology))] = _plot_display_label(
+                family,
+                base_series,
+                topology,
+                [point[2] for point in points],
+            )
+    # Resolve collisions only within a family. The same semantic series in
+    # different facets must retain one shared label and color.
+    raw_by_family_label: dict[tuple[str, str], set[tuple[str, tuple[int, int] | None]]] = {}
+    for (family, series), label in display_labels.items():
+        raw_by_family_label.setdefault((family, label), set()).add(series)
+    for key, label in list(display_labels.items()):
+        family, series = key
+        raw_values = sorted(raw_by_family_label[(family, label)], key=str)
+        if len(raw_values) > 1:
+            display_labels[key] = f"{label} ({raw_values.index(series) + 1})"
+    short_labels = sorted(set(display_labels.values()))
+    colors = {
+        label: plt.get_cmap("tab10")(index % 10)
+        for index, label in enumerate(short_labels)
+    }
+    handles: dict[str, Any] = {}
+    metric_title = panel_title or y.replace("_", " ").title()
+    for index, family in enumerate(families):
+        axis = axes[index // ncols][index % ncols]
+        for series, points in sorted(by_family[family].items(), key=lambda item: str(item[0])):
+            points.sort(key=lambda point: point[0])
+            label = display_labels[(family, series)]
+            (line,) = axis.plot(
+                [point[0] for point in points],
+                [point[1] for point in points],
+                marker="o",
+                color=colors[label],
+                label=label,
+            )
+            handles.setdefault(label, line)
+        if reference_y is not None:
+            axis.axhline(
+                reference_y,
+                color="black",
+                linestyle="--",
+                linewidth=1,
+                alpha=0.7,
+            )
+        if log_y:
+            axis.set_yscale("log")
+        axis.set_title(f"{family} | {metric_title}", fontsize="medium")
+        axis.set_xlabel(x.replace("_", " ").title())
+        axis.set_ylabel(y.replace("_", " ").title())
+        axis.grid(True, alpha=0.25)
+    for index in range(len(families), nrows * ncols):
+        axes[index // ncols][index % ncols].set_visible(False)
+    fig.suptitle(title, y=0.995, fontsize="large")
+    legend_rows = 0
+    if handles:
+        ordered = sorted(handles)
+        legend_columns = min(4, len(ordered))
+        legend_rows = math.ceil(len(ordered) / legend_columns)
+        fig.legend(
+            [handles[series] for series in ordered],
+            ordered,
+            loc="upper center",
+            bbox_to_anchor=(0.5, 0.945),
+            ncol=min(4, len(ordered)),
+            fontsize="small",
+            frameon=False,
+        )
+    # Explicit margins keep the external legend and panel titles clear without
+    # relying on tight_layout, which is unstable for dynamic facet grids.
+    fig.subplots_adjust(
+        left=0.08,
+        right=0.98,
+        bottom=0.12,
+        top=(max(0.20, min(0.86, 0.88 - 0.055 * legend_rows)))
+        if handles
+        else 0.90,
+        wspace=0.32,
+        hspace=0.42,
+    )
+    fig.savefig(path, dpi=140, bbox_inches="tight")
     plt.close(fig)
     return True
+
+
+def _plot(
+    path: Path,
+    title: str,
+    rows: list[JsonDict],
+    x: str,
+    y: str,
+    group: str,
+    *,
+    reference_y: float | None = None,
+    log_y: bool = False,
+    panel_title: str | None = None,
+    collapse_activity: bool = True,
+) -> bool:
+    """Compatibility wrapper for the family-faceted renderer."""
+    return _faceted_plot(
+        path,
+        title,
+        rows,
+        x,
+        y,
+        group,
+        reference_y=reference_y,
+        log_y=log_y,
+        panel_title=panel_title,
+        collapse_activity=collapse_activity,
+    )
 
 
 def _todo_plot(path: Path, title: str, reason: str) -> None:
@@ -611,7 +1025,7 @@ def _todo_plot(path: Path, title: str, reason: str) -> None:
     axis.text(
         0.5,
         0.5,
-        f"TODO\n{reason}",
+        f"TODO\n{textwrap.fill(reason, width=68)}",
         ha="center",
         va="center",
         fontsize=14,
@@ -620,14 +1034,16 @@ def _todo_plot(path: Path, title: str, reason: str) -> None:
     axis.set_title(title)
     axis.set_xticks([])
     axis.set_yticks([])
-    fig.tight_layout()
-    fig.savefig(path, dpi=140)
+    fig.subplots_adjust(left=0.08, right=0.98, bottom=0.1, top=0.88)
+    fig.savefig(path, dpi=140, bbox_inches="tight")
     plt.close(fig)
 
 
 def _entry(
     name: str, plot: Path, csv_path: Path, title: str, valid: bool, reason: str = ""
 ) -> PlotEntry:
+    if not valid and not plot.is_file():
+        _todo_plot(plot, title, reason or "no valid plot records")
     return PlotEntry(
         name,
         str(plot.name),
@@ -636,6 +1052,20 @@ def _entry(
         title,
         None if valid else reason,
     )
+
+
+def _one_qubit_multiple_topologies(rows: list[JsonDict]) -> bool:
+    qubits = {
+        value
+        for row in rows
+        if (value := _qubits(row)) is not None
+    }
+    topologies = {
+        topology
+        for row in rows
+        if (topology := _plot_provisioned_topology(row)) is not None
+    }
+    return len(qubits) == 1 and len(topologies) > 1
 
 
 def generate_report(
@@ -652,6 +1082,11 @@ def generate_report(
     runtime_summaries = _runtime_summaries(rows)
     admitted_rows = [row for row in rows if _valid(row)]
     entries: list[PlotEntry] = []
+    topology_dimension_reason = (
+        "selected evidence has one qubit size and multiple topologies; use the "
+        "dedicated strong-scaling figure and source CSV"
+    )
+    topology_dimension_ambiguous = _one_qubit_multiple_topologies(rows)
 
     runtime_csv = tables / "runtime_by_qubits.csv"
     _write_csv(
@@ -671,6 +1106,16 @@ def generate_report(
             "timing_scope",
             "runtime_s",
             "status",
+            "local_dpu_count",
+            "rank_count",
+            "total_dpu_count",
+            "provisioned_dpu_count",
+            "provisioned_rank_count",
+            "active_dpu_count",
+            "active_rank_count",
+            "fully_active_topology",
+            "activity_label",
+            "series",
             "circuit_semantics_hash",
             "tensor_network_hash",
             "contraction_plan_hash",
@@ -692,6 +1137,16 @@ def generate_report(
             "path",
             "numeric_policy",
             "timing_scope",
+            "local_dpu_count",
+            "rank_count",
+            "total_dpu_count",
+            "provisioned_dpu_count",
+            "provisioned_rank_count",
+            "active_dpu_count",
+            "active_rank_count",
+            "fully_active_topology",
+            "activity_label",
+            "series",
             "median_runtime_s",
             "repeat_count",
         ],
@@ -701,14 +1156,22 @@ def generate_report(
         "sequential TaskGraph task scheduling; intra-task DPU tile/rank parallelism"
     )
     runtime_title = f"M5.5 whole-circuit median runtime ({execution_model})"
-    valid = _plot(
-        runtime_plot,
-        runtime_title,
-        runtime_summaries,
-        "qubits",
-        "median_runtime_s",
-        "series",
-    )
+    if topology_dimension_ambiguous:
+        _todo_plot(runtime_plot, runtime_title, topology_dimension_reason)
+        valid = False
+        runtime_reason = topology_dimension_reason
+    else:
+        valid = _plot(
+            runtime_plot,
+            runtime_title,
+            runtime_summaries,
+            "qubits",
+            "median_runtime_s",
+            "series",
+            log_y=True,
+            panel_title="median runtime (s)",
+        )
+        runtime_reason = "no valid runtime records"
     entries.append(
         _entry(
             "runtime_by_qubits",
@@ -716,7 +1179,7 @@ def generate_report(
             runtime_summary_csv,
             runtime_title,
             valid,
-            "no valid runtime records",
+            runtime_reason,
         )
     )
 
@@ -738,8 +1201,16 @@ def generate_report(
                     "local_dpu_count": _local_dpu_count(upmem),
                     "rank_count": _rank_count(upmem),
                     "total_dpu_count": _total_dpu_count(upmem),
+                    "provisioned_dpu_count": _total_dpu_count(upmem),
+                    "provisioned_rank_count": _rank_count(upmem),
+                    "active_dpu_count": _active_dpu_count(upmem),
+                    "active_rank_count": _active_rank_count(upmem),
+                    "activity_label": _activity_label(upmem),
                     "topology": _topology_label(upmem),
-                    "series": f"{_path(upmem)} | {_numeric(upmem)} | {_topology_label(upmem)}",
+                    "series": (
+                        f"{_path(upmem)} | {_numeric(upmem)} | "
+                        f"{_activity_label(upmem) or _topology_label(upmem)}"
+                    ),
                     "cpu_runtime_s": cpu_time,
                     "upmem_runtime_s": upmem_time,
                     "speedup_cpu_over_upmem": cpu_time / upmem_time,
@@ -761,6 +1232,11 @@ def generate_report(
             "local_dpu_count",
             "rank_count",
             "total_dpu_count",
+            "provisioned_dpu_count",
+            "provisioned_rank_count",
+            "active_dpu_count",
+            "active_rank_count",
+            "activity_label",
             "topology",
             "series",
             "circuit_semantics_hash",
@@ -791,6 +1267,11 @@ def generate_report(
             "local_dpu_count",
             "rank_count",
             "total_dpu_count",
+            "provisioned_dpu_count",
+            "provisioned_rank_count",
+            "active_dpu_count",
+            "active_rank_count",
+            "activity_label",
             "topology",
             "series",
             "cpu_runtime_s",
@@ -815,6 +1296,7 @@ def generate_report(
         "speedup_cpu_over_upmem",
         "series",
         reference_y=1.0,
+        panel_title="CPU / UPMEM speedup",
     )
     entries.append(
         _entry(
@@ -854,52 +1336,12 @@ def generate_report(
                 if _rank_count(row) == 1
                 and _local_dpu_count(row) == 1
                 and _total_dpu_count(row) == 1
+                and _fully_active_topology(row)
             ),
             None,
         )
         dpu_base_time = _runtime(dpu_baseline) if dpu_baseline else None
-        for row in group:
-            local_dpus = _local_dpu_count(row)
-            rank_count = _rank_count(row)
-            total_dpus = _total_dpu_count(row)
-            runtime = _runtime(row)
-            if (
-                dpu_base_time is None
-                or rank_count != 1
-                or local_dpus is None
-                or local_dpus <= 1
-                or total_dpus != local_dpus
-                or runtime is None
-            ):
-                continue
-            speedup = dpu_base_time / runtime
-            scaling.append(
-                {
-                    "case_id": _case(row),
-                    "family": _family(row),
-                    "qubits": _qubits(row),
-                    "path": _path(row),
-                    "numeric_policy": _numeric(row),
-                    "timing_scope": _timing_scope(row),
-                    "executor_config_hash": _executor_config_hash(row),
-                    "circuit_semantics_hash": row.get("circuit_semantics_hash"),
-                    "tensor_network_hash": row.get("tensor_network_hash"),
-                    "contraction_plan_hash": row.get("contraction_plan_hash"),
-                    "scale_dimension": "dpu",
-                    "local_dpu_count": local_dpus,
-                    "rank_count": rank_count,
-                    "total_dpu_count": total_dpus,
-                    "topology": _topology_label(row),
-                    "series": f"{_path(row)} | {_numeric(row)} | {_topology_label(row)}",
-                    "baseline_local_dpu_count": 1,
-                    "baseline_rank_count": 1,
-                    "baseline_total_dpu_count": 1,
-                    "baseline_runtime_s": dpu_base_time,
-                    "runtime_s": runtime,
-                    "speedup": speedup,
-                    "efficiency": speedup / local_dpus,
-                }
-            )
+        rank_baselines: dict[int, tuple[float, JsonDict] | None] = {}
         local_counts = sorted(
             {
                 count
@@ -916,52 +1358,89 @@ def generate_report(
                     if _rank_count(row) == 1
                     and _local_dpu_count(row) == local_dpus
                     and _total_dpu_count(row) == local_dpus
+                    and _fully_active_topology(row)
                 ),
                 None,
             )
-            rank_base_time = _runtime(rank_baseline) if rank_baseline else None
-            if rank_base_time is None:
-                continue
-            for row in group:
-                rank_count = _rank_count(row)
-                total_dpus = _total_dpu_count(row)
-                runtime = _runtime(row)
-                if (
-                    rank_count is None
-                    or rank_count <= 1
-                    or _local_dpu_count(row) != local_dpus
-                    or total_dpus != local_dpus * rank_count
-                    or runtime is None
-                ):
-                    continue
-                speedup = rank_base_time / runtime
-                scaling.append(
-                    {
-                        "case_id": _case(row),
-                        "family": _family(row),
-                        "qubits": _qubits(row),
-                        "path": _path(row),
-                        "numeric_policy": _numeric(row),
-                        "timing_scope": _timing_scope(row),
-                        "executor_config_hash": _executor_config_hash(row),
-                        "circuit_semantics_hash": row.get("circuit_semantics_hash"),
-                        "tensor_network_hash": row.get("tensor_network_hash"),
-                        "contraction_plan_hash": row.get("contraction_plan_hash"),
-                        "scale_dimension": "rank",
-                        "local_dpu_count": local_dpus,
-                        "rank_count": rank_count,
-                        "total_dpu_count": total_dpus,
-                        "topology": _topology_label(row),
-                        "series": f"{_path(row)} | {_numeric(row)} | {_topology_label(row)}",
-                        "baseline_local_dpu_count": local_dpus,
-                        "baseline_rank_count": 1,
-                        "baseline_total_dpu_count": local_dpus,
-                        "baseline_runtime_s": rank_base_time,
-                        "runtime_s": runtime,
-                        "speedup": speedup,
-                        "efficiency": speedup / rank_count,
-                    }
+            rank_baselines[local_dpus] = (
+                (_runtime(rank_baseline), rank_baseline)
+                if rank_baseline and _runtime(rank_baseline) is not None
+                else None
+            )
+        for row in group:
+            local_dpus = _local_dpu_count(row)
+            rank_count = _rank_count(row)
+            total_dpus = _total_dpu_count(row)
+            active_dpus = _active_dpu_count(row)
+            active_ranks = _active_rank_count(row)
+            runtime = _runtime(row)
+            fully_active = _fully_active_topology(row)
+            if rank_count == 1:
+                scale_dimension = "dpu"
+                baseline_local = 1
+                baseline_ranks = 1
+                baseline_total = 1
+                baseline_time = dpu_base_time
+                scale_value = active_dpus
+                speedup = (
+                    baseline_time / runtime
+                    if fully_active
+                    and baseline_time is not None
+                    and runtime is not None
+                    and scale_value is not None
+                    else None
                 )
+                efficiency = speedup / scale_value if speedup and scale_value else None
+            elif rank_count is not None and rank_count > 1 and local_dpus is not None:
+                scale_dimension = "rank"
+                baseline_local = local_dpus
+                baseline_ranks = 1
+                baseline_total = local_dpus
+                baseline = rank_baselines.get(local_dpus)
+                baseline_time = baseline[0] if baseline else None
+                scale_value = active_ranks
+                speedup = (
+                    baseline_time / runtime
+                    if fully_active
+                    and baseline_time is not None
+                    and runtime is not None
+                    and scale_value is not None
+                    else None
+                )
+                efficiency = speedup / scale_value if speedup and scale_value else None
+            else:
+                continue
+            topology = _topology_label(row)
+            scaling.append(
+                {
+                    "case_id": _case(row),
+                    "family": _family(row),
+                    "qubits": _qubits(row),
+                    "path": _path(row),
+                    "numeric_policy": _numeric(row),
+                    "timing_scope": _timing_scope(row),
+                    "executor_config_hash": _executor_config_hash(row),
+                    "circuit_semantics_hash": row.get("circuit_semantics_hash"),
+                    "tensor_network_hash": row.get("tensor_network_hash"),
+                    "contraction_plan_hash": row.get("contraction_plan_hash"),
+                    "scale_dimension": scale_dimension,
+                    "local_dpu_count": local_dpus,
+                    "rank_count": rank_count,
+                    "total_dpu_count": total_dpus,
+                    "active_dpu_count": active_dpus,
+                    "active_rank_count": active_ranks,
+                    "fully_active_topology": fully_active,
+                    "topology": topology,
+                    "series": f"{_path(row)} | {_numeric(row)} | {topology}",
+                    "baseline_local_dpu_count": baseline_local,
+                    "baseline_rank_count": baseline_ranks,
+                    "baseline_total_dpu_count": baseline_total,
+                    "baseline_runtime_s": baseline_time,
+                    "runtime_s": runtime,
+                    "speedup": speedup,
+                    "efficiency": efficiency,
+                }
+            )
     scaling = _aggregate_matched_rows(
         scaling,
         group_fields=(
@@ -979,6 +1458,9 @@ def generate_report(
             "local_dpu_count",
             "rank_count",
             "total_dpu_count",
+            "active_dpu_count",
+            "active_rank_count",
+            "fully_active_topology",
             "topology",
             "series",
             "baseline_local_dpu_count",
@@ -1004,6 +1486,9 @@ def generate_report(
             "local_dpu_count",
             "rank_count",
             "total_dpu_count",
+            "active_dpu_count",
+            "active_rank_count",
+            "fully_active_topology",
             "topology",
             "series",
             "baseline_local_dpu_count",
@@ -1017,7 +1502,17 @@ def generate_report(
         ],
     )
     scale_plot = plots / "upmem_strong_scaling.png"
-    dpu_scaling = [row for row in scaling if row["scale_dimension"] == "dpu"]
+    dpu_scaling = [
+        row
+        for row in scaling
+        if row["scale_dimension"] == "dpu"
+        and row["fully_active_topology"] is True
+        and row["active_rank_count"] == 1
+    ]
+    dpu_plot_rows = [
+        dict(row, _plot_series=f"{row['path']} | {row['numeric_policy']}")
+        for row in dpu_scaling
+    ]
     dpu_title = (
         "Measured same-plan UPMEM DPU median scaling "
         f"(baseline time / runtime; >1 is faster; {execution_model})"
@@ -1025,11 +1520,13 @@ def generate_report(
     valid = _plot(
         scale_plot,
         dpu_title,
-        dpu_scaling,
-        "local_dpu_count",
+        dpu_plot_rows,
+        "active_dpu_count",
         "speedup",
-        "series",
+        "_plot_series",
         reference_y=1.0,
+        panel_title="DPU scaling",
+        collapse_activity=False,
     )
     entries.append(
         _entry(
@@ -1038,11 +1535,19 @@ def generate_report(
             scale_csv,
             dpu_title,
             valid,
-            "no completed one-DPU baseline with larger-DPU rows",
+            "no fully active one-rank rows with measured active DPU counts",
         )
     )
     rank_plot = plots / "upmem_rank_scaling.png"
-    rank_scaling = [row for row in scaling if row["scale_dimension"] == "rank"]
+    rank_scaling = [
+        row
+        for row in scaling
+        if row["scale_dimension"] == "rank" and row["fully_active_topology"] is True
+    ]
+    rank_plot_rows = [
+        dict(row, _plot_series=f"{row['path']} | {row['numeric_policy']}")
+        for row in rank_scaling
+    ]
     rank_title = (
         "Measured same-plan UPMEM rank median scaling "
         f"(baseline time / runtime; >1 is faster; {execution_model})"
@@ -1050,11 +1555,13 @@ def generate_report(
     valid = _plot(
         rank_plot,
         rank_title,
-        rank_scaling,
+        rank_plot_rows,
         "rank_count",
         "speedup",
-        "series",
+        "_plot_series",
         reference_y=1.0,
+        panel_title="rank scaling",
+        collapse_activity=False,
     )
     entries.append(
         _entry(
@@ -1063,7 +1570,7 @@ def generate_report(
             scale_csv,
             rank_title,
             valid,
-            "no rank_count=1 baseline with equal local DPU count",
+            "no fully active multi-rank rows: active rank/DPU counts are below provisioned topology",
         )
     )
 
@@ -1080,6 +1587,15 @@ def generate_report(
             "engine",
             "numeric_policy",
             "timing_scope",
+            "local_dpu_count",
+            "rank_count",
+            "total_dpu_count",
+            "provisioned_dpu_count",
+            "provisioned_rank_count",
+            "active_dpu_count",
+            "active_rank_count",
+            "activity_label",
+            "topology",
             "path_a",
             "path_b",
             "runtime_a_s",
@@ -1097,11 +1613,21 @@ def generate_report(
     valid = _plot(
         path_plot,
         path_title,
-        path_rows,
+        [
+            dict(
+                row,
+                _plot_series=(
+                    f"{row['engine']} | {row['numeric_policy']} | "
+                    f"{row['activity_label'] or row['topology']}"
+                ),
+            )
+            for row in path_rows
+        ],
         "qubits",
         "runtime_ratio_a_over_b",
-        "series",
+        "_plot_series",
         reference_y=1.0,
+        panel_title="greedy / cotengra ratio",
     )
     entries.append(
         _entry(
@@ -1127,6 +1653,16 @@ def generate_report(
             "engine",
             "path",
             "timing_scope",
+            "local_dpu_count",
+            "rank_count",
+            "total_dpu_count",
+            "provisioned_dpu_count",
+            "provisioned_rank_count",
+            "active_dpu_count",
+            "active_rank_count",
+            "activity_label",
+            "topology",
+            "series",
             "float32_runtime_s",
             "int8_runtime_s",
             "runtime_ratio_float32_over_int8",
@@ -1137,15 +1673,31 @@ def generate_report(
         "Measured same-plan float32/int8 median ratio "
         f"(float32 time / int8 time; >1 favors int8; {execution_model})"
     )
-    valid = _plot(
-        numeric_plot,
-        numeric_title,
-        numeric_rows,
-        "qubits",
-        "runtime_ratio_float32_over_int8",
-        "engine",
-        reference_y=1.0,
-    )
+    if topology_dimension_ambiguous:
+        _todo_plot(numeric_plot, numeric_title, topology_dimension_reason)
+        valid = False
+        numeric_reason = topology_dimension_reason
+    else:
+        valid = _plot(
+            numeric_plot,
+            numeric_title,
+            [
+                dict(
+                    row,
+                    _plot_series=(
+                        f"{row['engine']} | {row['path']} | "
+                        f"{row['activity_label'] or row['topology']}"
+                    ),
+                )
+                for row in numeric_rows
+            ],
+            "qubits",
+            "runtime_ratio_float32_over_int8",
+            "_plot_series",
+            reference_y=1.0,
+            panel_title="float32 / int8 ratio",
+        )
+        numeric_reason = "no matched float32 and host-packed-int8 records"
     entries.append(
         _entry(
             "float32_int8_ratio",
@@ -1153,7 +1705,7 @@ def generate_report(
             numeric_csv,
             numeric_title,
             valid,
-            "no matched float32 and host-packed-int8 records",
+            numeric_reason,
         )
     )
 
@@ -1204,20 +1756,43 @@ def generate_report(
         timing_rows,
         list(timing_rows[0])
         if timing_rows
-        else ["case_id", "engine", "stage", "time_s"],
+        else [
+            "case_id",
+            "engine",
+            "active_dpu_count",
+            "active_rank_count",
+            "provisioned_dpu_count",
+            "provisioned_rank_count",
+            "activity_label",
+            "stage",
+            "time_s",
+            "series",
+        ],
     )
     timing_plot = plots / "timing_breakdown.png"
-    valid = _plot(
-        timing_plot, "M5.5 timing breakdown", timing_rows, "qubits", "time_s", "stage"
-    )
+    timing_title = "M5.5 timing breakdown"
+    if topology_dimension_ambiguous:
+        _todo_plot(timing_plot, timing_title, topology_dimension_reason)
+        valid = False
+        timing_reason = topology_dimension_reason
+    else:
+        valid = _plot(
+            timing_plot,
+            timing_title,
+            timing_rows,
+            "qubits",
+            "time_s",
+            "series",
+        )
+        timing_reason = "no timing-stage fields"
     entries.append(
         _entry(
             "timing_breakdown",
             timing_plot,
             timing_csv,
-            "Timing breakdown",
+            timing_title,
             valid,
-            "no timing-stage fields",
+            timing_reason,
         )
     )
 
@@ -1231,29 +1806,42 @@ def generate_report(
         else [
             "case_id",
             "engine",
+            "active_dpu_count",
+            "active_rank_count",
+            "provisioned_dpu_count",
+            "provisioned_rank_count",
+            "activity_label",
             "h2d_bytes",
             "d2h_bytes",
             "transfer_bytes",
             "invariant_passed",
+            "series",
         ],
     )
     transfer_plot = plots / "transfer_bytes.png"
-    valid = _plot(
-        transfer_plot,
-        "Application-visible H2D/D2H transfer bytes",
-        [row for row in transfer_rows if row["scientific_admitted"]],
-        "qubits",
-        "transfer_bytes",
-        "engine",
-    )
+    transfer_title = "Application-visible H2D/D2H transfer bytes"
+    if topology_dimension_ambiguous:
+        _todo_plot(transfer_plot, transfer_title, topology_dimension_reason)
+        valid = False
+        transfer_reason = topology_dimension_reason
+    else:
+        valid = _plot(
+            transfer_plot,
+            transfer_title,
+            [row for row in transfer_rows if row["scientific_admitted"]],
+            "qubits",
+            "transfer_bytes",
+            "series",
+        )
+        transfer_reason = "no finite transfer-byte records"
     entries.append(
         _entry(
             "transfer_bytes",
             transfer_plot,
             transfer_csv,
-            "Transfer bytes",
+            transfer_title,
             valid,
-            "no finite transfer-byte records",
+            transfer_reason,
         )
     )
 
@@ -1343,6 +1931,8 @@ def _variant_ratios(rows: list[JsonDict], path_a: str, path_b: str) -> list[Json
             _local_dpu_count(row),
             _rank_count(row),
             _total_dpu_count(row),
+            _active_dpu_count(row),
+            _active_rank_count(row),
         )
         groups.setdefault(key, {})[_path(row)] = row
     result: list[JsonDict] = []
@@ -1372,6 +1962,11 @@ def _variant_ratios(rows: list[JsonDict], path_a: str, path_b: str) -> list[Json
                     "local_dpu_count": _local_dpu_count(a_row),
                     "rank_count": _rank_count(a_row),
                     "total_dpu_count": _total_dpu_count(a_row),
+                    "provisioned_dpu_count": _total_dpu_count(a_row),
+                    "provisioned_rank_count": _rank_count(a_row),
+                    "active_dpu_count": _active_dpu_count(a_row),
+                    "active_rank_count": _active_rank_count(a_row),
+                    "activity_label": _activity_label(a_row),
                     "topology": _topology_label(a_row),
                     "executor_config_hash": _executor_config_hash(a_row),
                     "circuit_semantics_hash": a_hashes[0],
@@ -1380,7 +1975,10 @@ def _variant_ratios(rows: list[JsonDict], path_a: str, path_b: str) -> list[Json
                     "contraction_plan_hash_b": b_hashes[2],
                     "path_a": path_a,
                     "path_b": path_b,
-                    "series": f"{path_a} / {path_b}",
+                    "series": (
+                        f"{path_a} / {path_b} | "
+                        f"{_activity_label(a_row) or _topology_label(a_row)}"
+                    ),
                     "direction": "runtime_a_over_b; >1 favors path_b",
                     "runtime_a_s": a,
                     "runtime_b_s": b,
@@ -1399,6 +1997,11 @@ def _variant_ratios(rows: list[JsonDict], path_a: str, path_b: str) -> list[Json
             "local_dpu_count",
             "rank_count",
             "total_dpu_count",
+            "provisioned_dpu_count",
+            "provisioned_rank_count",
+            "active_dpu_count",
+            "active_rank_count",
+            "activity_label",
             "topology",
             "executor_config_hash",
             "circuit_semantics_hash",
@@ -1444,6 +2047,8 @@ def _numeric_ratios(rows: list[JsonDict]) -> list[JsonDict]:
             _local_dpu_count(row),
             _rank_count(row),
             _total_dpu_count(row),
+            _active_dpu_count(row),
+            _active_rank_count(row),
         )
         groups.setdefault(key, {})[kind] = row
     result: list[JsonDict] = []
@@ -1464,6 +2069,11 @@ def _numeric_ratios(rows: list[JsonDict]) -> list[JsonDict]:
                     "local_dpu_count": _local_dpu_count(group["float32"]),
                     "rank_count": _rank_count(group["float32"]),
                     "total_dpu_count": _total_dpu_count(group["float32"]),
+                    "provisioned_dpu_count": _total_dpu_count(group["float32"]),
+                    "provisioned_rank_count": _rank_count(group["float32"]),
+                    "active_dpu_count": _active_dpu_count(group["float32"]),
+                    "active_rank_count": _active_rank_count(group["float32"]),
+                    "activity_label": _activity_label(group["float32"]),
                     "topology": _topology_label(group["float32"]),
                     "executor_config_hash": _executor_config_hash(group["float32"]),
                     "circuit_semantics_hash": group["float32"].get(
@@ -1472,6 +2082,10 @@ def _numeric_ratios(rows: list[JsonDict]) -> list[JsonDict]:
                     "tensor_network_hash": group["float32"].get("tensor_network_hash"),
                     "contraction_plan_hash": group["float32"].get(
                         "contraction_plan_hash"
+                    ),
+                    "series": (
+                        f"{_path(group['float32'])} | "
+                        f"{_activity_label(group['float32']) or _topology_label(group['float32'])}"
                     ),
                     "float32_runtime_s": a,
                     "int8_runtime_s": b,
@@ -1490,6 +2104,11 @@ def _numeric_ratios(rows: list[JsonDict]) -> list[JsonDict]:
             "local_dpu_count",
             "rank_count",
             "total_dpu_count",
+            "provisioned_dpu_count",
+            "provisioned_rank_count",
+            "active_dpu_count",
+            "active_rank_count",
+            "activity_label",
             "topology",
             "executor_config_hash",
             "circuit_semantics_hash",
@@ -1577,8 +2196,17 @@ def _timing_rows(rows: list[JsonDict]) -> list[JsonDict]:
                         "family": _family(row),
                         "qubits": _qubits(row),
                         "engine": _engine(row),
+                        "activity_label": _activity_label(row),
+                        "active_dpu_count": _active_dpu_count(row),
+                        "active_rank_count": _active_rank_count(row),
+                        "provisioned_dpu_count": _total_dpu_count(row),
+                        "provisioned_rank_count": _rank_count(row),
                         "stage": stage,
                         "time_s": number,
+                        "series": (
+                            f"{_engine(row)} | "
+                            f"{_activity_label(row) or 'host'} | {stage}"
+                        ),
                     }
                 )
     return result
@@ -1620,9 +2248,15 @@ def _transfer_row(row: Mapping[str, Any]) -> JsonDict:
         "family": _family(row),
         "qubits": _qubits(row),
         "engine": _engine(row),
+        "activity_label": _activity_label(row),
+        "active_dpu_count": _active_dpu_count(row),
+        "active_rank_count": _active_rank_count(row),
+        "provisioned_dpu_count": _total_dpu_count(row),
+        "provisioned_rank_count": _rank_count(row),
         "scientific_admitted": _valid(row),
         "h2d_bytes": h2d,
         "d2h_bytes": d2h,
         "transfer_bytes": total,
         "invariant_passed": invariant,
+        "series": f"{_engine(row)} | {_activity_label(row) or 'host'}",
     }

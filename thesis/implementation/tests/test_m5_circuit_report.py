@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import json
+import warnings
 from pathlib import Path
 
 import pytest
 
-from quantum_bench.bench.m5_circuit_report import generate_report, load_records
+from quantum_bench.bench.m5_circuit_report import (
+    _faceted_plot,
+    _record_row,
+    _short_series_label,
+    generate_report,
+    load_records,
+)
 
 
 def _row(
@@ -56,6 +63,12 @@ def _row(
             hardware_speedup_applicable=True,
             timing_is_bringup_only=False,
         )
+        if dpu_count is not None:
+            row["engine_metadata"] = {
+                "active_dpu_ids": list(range(dpu_count)),
+                "active_rank_indices": [0],
+                "active_rank_count": 1,
+            }
     if hashes:
         row.update(
             circuit_semantics_hash="circuit-bv-8",
@@ -166,7 +179,10 @@ def test_bringup_and_non_applicable_upmem_rows_stay_out_of_performance_ratios(
     pairs = _csv(tmp_path / "report" / "tables" / "same_plan_cpu_upmem_speedup.csv")
     assert len(pairs) == 1
     assert pairs[0]["local_dpu_count"] == "4"
-    assert len(_csv(tmp_path / "report" / "tables" / "upmem_strong_scaling.csv")) == 0
+    scaling = _csv(tmp_path / "report" / "tables" / "upmem_strong_scaling.csv")
+    assert len(scaling) == 1
+    assert scaling[0]["fully_active_topology"] == "True"
+    assert scaling[0]["speedup"] == ""
     raw = _csv(tmp_path / "report" / "tables" / "runtime_by_qubits.csv")
     assert len(raw) == 4
     assert sum(row["scientific_admitted"] == "True" for row in raw) == 4
@@ -205,10 +221,20 @@ def test_ratios_and_scaling_use_the_declared_baselines(tmp_path: Path) -> None:
     ]
     generate_report(rows, tmp_path / "report")
     scaling = _csv(tmp_path / "report" / "tables" / "upmem_strong_scaling.csv")
-    assert len(scaling) == 1
-    assert float(scaling[0]["speedup"]) == pytest.approx(2.0)
-    assert float(scaling[0]["efficiency"]) == pytest.approx(1.0)
-    assert scaling[0]["series"] == (
+    assert len(scaling) == 4
+    baseline = next(row for row in scaling if row["active_dpu_count"] == "1")
+    assert float(baseline["speedup"]) == pytest.approx(1.0)
+    assert float(baseline["efficiency"]) == pytest.approx(1.0)
+    scaled = next(
+        row
+        for row in scaling
+        if row["path"] == "opt_einsum_greedy"
+        and row["numeric_policy"] == "float32"
+        and row["active_dpu_count"] == "2"
+    )
+    assert float(scaled["speedup"]) == pytest.approx(2.0)
+    assert float(scaled["efficiency"]) == pytest.approx(1.0)
+    assert scaled["series"] == (
         "opt_einsum_greedy | float32 | 2DPU x 1 rank(s) = 2 total"
     )
     numeric = _csv(tmp_path / "report" / "tables" / "float32_int8_ratios.csv")
@@ -235,6 +261,324 @@ def test_runtime_curve_uses_per_case_medians_without_duplicating_raw_rows(
         item for item in manifest["plots"] if item["name"] == "runtime_by_qubits"
     )
     assert runtime_plot["source_csv"] == "tables/runtime_by_case_median.csv"
+
+
+def test_faceted_plot_is_family_local_and_layout_is_warning_free(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import matplotlib.pyplot as plt
+
+    families = ["BV", "GHZ", "QFT", "Random", "XOR", "WState"]
+    rows = [
+        {
+            "family": family,
+            "qubits": qubits,
+            "series": series,
+            "runtime_s": runtime,
+        }
+        for family in families
+        for series, runtime in (
+            ("cpu_numpy | float32", 1.0),
+            ("upmem_m5 | float32", 2.0),
+        )
+        for qubits in (4, 8)
+    ]
+    saved: list[object] = []
+    monkeypatch.setattr(
+        plt.Figure,
+        "savefig",
+        lambda figure, *args, **kwargs: saved.append(figure),
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        detailed_title = "Detailed scientific runtime title retained in the figure"
+        assert _faceted_plot(
+            tmp_path / "runtime.png",
+            detailed_title,
+            rows,
+            "qubits",
+            "runtime_s",
+            "series",
+            log_y=True,
+            panel_title="median runtime (s)",
+        )
+    assert not [warning for warning in caught if "tight_layout" in str(warning.message)]
+    figure = saved[0]
+    assert figure._suptitle is not None
+    assert figure._suptitle.get_text() == detailed_title
+    assert any(legend is not None for legend in figure.legends)
+    visible_axes = [axis for axis in figure.axes if axis.get_visible()]
+    assert len(visible_axes) == 6
+    assert all(axis.get_yscale() == "log" for axis in visible_axes)
+    assert all(len(axis.lines) == 2 for axis in visible_axes)
+    assert {axis.get_title().split(" | ", 1)[0] for axis in visible_axes} == set(
+        families
+    )
+    assert all(
+        "|" not in line.get_label() for axis in visible_axes for line in axis.lines
+    )
+    plt.close(figure)
+
+
+def test_short_series_labels_are_stable_and_compact() -> None:
+    assert (
+        _short_series_label(
+            "BV | opt_einsum_greedy | float32 | 2DPU x 1 rank(s) = 2 total",
+            "BV",
+        )
+        == "greedy / f32 / 2DPU/1R"
+    )
+    assert (
+        _short_series_label(
+            "BV | numpy_cpu | opt_einsum_greedy | f32_real | "
+            "1 local / None ranks / 1 total",
+            "BV",
+        )
+        == "CPU / greedy / f32_real"
+    )
+    assert (
+        _short_series_label(
+            "BV | upmem_physical_1rank_8dpu | opt_einsum_greedy | f32_real | "
+            "8DPU x 1 rank(s) = 8 total",
+            "BV",
+        )
+        == "UPMEM / greedy / f32_real / 8DPU/1R"
+    )
+    assert (
+        _short_series_label(
+            "BV | numpy_cpu | f32_real | 1DPU x ? rank(s) = 1 total",
+            "BV",
+        )
+        == "CPU / f32_real"
+    )
+    assert (
+        _short_series_label(
+            "BV | upmem_physical_1rank_8dpu | host_packed_int8 | "
+            "8DPU x 1 rank(s) = 8 total",
+            "BV",
+        )
+        == "UPMEM / int8 / 8DPU/1R"
+    )
+    assert (
+        _short_series_label(
+            "BV | numpy_cpu | opt_einsum_greedy",
+            "BV",
+        )
+        == "CPU / greedy"
+    )
+    assert (
+        _short_series_label(
+            "BV | upmem_physical_1rank_8dpu | cotengra_flops_seed0 | "
+            "8DPU x 1 rank(s) = 8 total",
+            "BV",
+        )
+        == "UPMEM / cotengra / 8DPU/1R"
+    )
+
+
+def test_partial_activity_is_explicit_in_record_and_legend_label() -> None:
+    row = _row(engine="upmem_m5", runtime=1.0, dpu_count=32)
+    row["engine_metadata"] = {
+        "active_dpu_ids": list(range(16)),
+        "active_rank_indices": [0],
+        "active_rank_count": 1,
+    }
+    normalized = _record_row(row)
+    assert normalized["provisioned_dpu_count"] == 32
+    assert normalized["provisioned_rank_count"] == 1
+    assert normalized["active_dpu_count"] == 16
+    assert normalized["active_rank_count"] == 1
+    assert normalized["activity_label"] == "16/32DPU + 1/1R"
+    assert "16/32DPU + 1/1R" in normalized["series"]
+    assert _short_series_label(normalized["series"], "BV").endswith(
+        "16/32DPU + 1/1R"
+    )
+
+
+def test_plot_collapses_active_counts_into_one_provisioned_topology_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import matplotlib.pyplot as plt
+
+    saved: list[object] = []
+    monkeypatch.setattr(
+        plt.Figure,
+        "savefig",
+        lambda figure, *args, **kwargs: saved.append(figure),
+    )
+    rows = [
+        {
+            "family": "BV",
+            "qubits": qubits,
+            "runtime_s": float(qubits),
+            "series": (
+                "BV | upmem_m5 | opt_einsum_greedy | f32_real | "
+                f"{active}/8DPU + 1/1R"
+            ),
+            "provisioned_dpu_count": 8,
+            "provisioned_rank_count": 1,
+            "active_dpu_count": active,
+            "active_rank_count": 1,
+        }
+        for qubits, active in zip((8, 12, 16, 20), (1, 2, 4, 8))
+    ]
+    assert _faceted_plot(
+        tmp_path / "activity-range.png",
+        "Activity range regression",
+        rows,
+        "qubits",
+        "runtime_s",
+        "series",
+    )
+    figure = saved[0]
+    axis = next(axis for axis in figure.axes if axis.get_visible())
+    data_lines = [line for line in axis.lines if not line.get_label().startswith("_")]
+    assert len(data_lines) == 1
+    assert list(data_lines[0].get_xdata()) == [8, 12, 16, 20]
+    assert [text.get_text() for text in figure.legends[0].texts] == [
+        "UPMEM / greedy / f32_real / 1-8 active of 8 provisioned DPU / 1 of 1 rank"
+    ]
+    plt.close(figure)
+
+
+def test_single_qubit_topology_matrix_uses_todo_general_plots(
+    tmp_path: Path,
+) -> None:
+    rows: list[dict[str, object]] = []
+    for dpu_count in (1, 2, 4, 8, 16, 32, 64, 128):
+        for numeric in ("float32", "host_packed_int8"):
+            rows.append(
+                _row(
+                    engine="upmem_m5",
+                    runtime=float(dpu_count),
+                    numeric=numeric,
+                    dpu_count=dpu_count,
+                )
+            )
+
+    output = tmp_path / "scaling-report"
+    generate_report(rows, output)
+    manifest = json.loads((output / "plot_manifest.json").read_text())
+    entries = {item["name"]: item for item in manifest["plots"]}
+    reason = (
+        "selected evidence has one qubit size and multiple topologies; use the "
+        "dedicated strong-scaling figure and source CSV"
+    )
+    for name in (
+        "runtime_by_qubits",
+        "timing_breakdown",
+        "transfer_bytes",
+        "float32_int8_ratio",
+    ):
+        assert entries[name]["status"] == "generated_todo_missing_data"
+        assert entries[name]["reason"] == reason
+    assert entries["upmem_strong_scaling"]["status"] == "generated_valid"
+    expected_pngs = {
+        "runtime_by_qubits.png",
+        "same_plan_cpu_upmem_speedup.png",
+        "upmem_strong_scaling.png",
+        "upmem_rank_scaling.png",
+        "path_runtime_ratio.png",
+        "float32_int8_ratio.png",
+        "validation_accuracy.png",
+        "timing_breakdown.png",
+        "transfer_bytes.png",
+        "supported_boundary.png",
+        "energy_todo.png",
+    }
+    assert expected_pngs <= {path.name for path in (output / "plots").glob("*.png")}
+
+
+def test_path_and_numeric_pairing_separate_active_topologies(tmp_path: Path) -> None:
+    rows: list[dict[str, object]] = []
+    for active_count, suffix in ((16, "partial"), (32, "full")):
+        metadata = {
+            "active_dpu_ids": list(range(active_count)),
+            "active_rank_indices": [0],
+            "active_rank_count": 1,
+        }
+        path_a = _row(
+            engine="upmem_m5", runtime=8.0, path="opt_einsum_greedy", dpu_count=32
+        )
+        path_b = _row(
+            engine="upmem_m5", runtime=4.0, path="cotengra_flops_seed0", dpu_count=32
+        )
+        float32 = _row(
+            engine="upmem_m5", runtime=8.0, numeric="float32", dpu_count=32
+        )
+        int8 = _row(
+            engine="upmem_m5",
+            runtime=4.0,
+            numeric="host_packed_int8",
+            dpu_count=32,
+        )
+        for row in (path_a, path_b, float32, int8):
+            row["engine_metadata"] = metadata
+            row["case_id"] = f"bv-8-{suffix}"
+            row["circuit_semantics_hash"] = "circuit-shared"
+            row["tensor_network_hash"] = "network-shared"
+            rows.append(row)
+
+    generate_report(rows, tmp_path / "report")
+    path_rows = _csv(tmp_path / "report" / "tables" / "path_runtime_ratio.csv")
+    numeric_rows = _csv(tmp_path / "report" / "tables" / "float32_int8_ratios.csv")
+    assert len(path_rows) == 2
+    assert len(numeric_rows) == 2
+    assert {row["active_dpu_count"] for row in path_rows} == {"16", "32"}
+    assert {row["activity_label"] for row in path_rows} == {
+        "16/32DPU + 1/1R",
+        "32DPU/1R",
+    }
+    assert {row["active_dpu_count"] for row in numeric_rows} == {"16", "32"}
+
+
+def test_ratio_facets_use_independent_engine_numeric_path_series(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import matplotlib.pyplot as plt
+
+    saved: dict[str, object] = {}
+    monkeypatch.setattr(
+        plt.Figure,
+        "savefig",
+        lambda figure, filename, *args, **kwargs: saved.__setitem__(
+            Path(filename).name, figure
+        ),
+    )
+    rows: list[dict[str, object]] = []
+    for qubits in (8, 12):
+        for engine, dpu_count in (("cpu_numpy", None), ("upmem_m5", 1)):
+            for numeric in ("float32", "host_packed_int8"):
+                for path in ("opt_einsum_greedy", "cotengra_flops_seed0"):
+                    row = _row(
+                        engine=engine,
+                        runtime=float(qubits),
+                        path=path,
+                        numeric=numeric,
+                        dpu_count=dpu_count,
+                    )
+                    row.update(
+                        case_id=f"bv-{qubits}",
+                        qubits=qubits,
+                        circuit_semantics_hash=f"circuit-bv-{qubits}",
+                        tensor_network_hash=f"network-bv-{qubits}",
+                    )
+                    rows.append(row)
+
+    generate_report(rows, tmp_path / "report")
+
+    for filename in ("path_runtime_ratio.png", "float32_int8_ratio.png"):
+        figure = saved[filename]
+        axes = [axis for axis in figure.axes if axis.get_visible()]
+        assert len(axes) == 1
+        data_lines = [
+            line for line in axes[0].lines if not line.get_label().startswith("_")
+        ]
+        assert len(data_lines) == 4
+        assert all(
+            len(set(line.get_xdata())) == len(line.get_xdata()) for line in data_lines
+        )
+        plt.close(figure)
 
 
 def test_ratio_tables_aggregate_only_matched_repetitions_with_quartiles(
@@ -300,9 +644,16 @@ def test_ratio_tables_aggregate_only_matched_repetitions_with_quartiles(
     assert float(numeric[0]["runtime_ratio_float32_over_int8"]) == pytest.approx(1.25)
 
     scaling = _csv(tmp_path / "report" / "tables" / "upmem_strong_scaling.csv")
-    assert len(scaling) == 1
-    assert scaling[0]["repeat_count"] == "2"
-    assert float(scaling[0]["speedup"]) == pytest.approx(1.05)
+    assert len(scaling) == 4
+    scaled = next(
+        row
+        for row in scaling
+        if row["active_dpu_count"] == "2"
+        and row["path"] == "opt_einsum_greedy"
+        and row["numeric_policy"] == "float32"
+    )
+    assert scaled["repeat_count"] == "2"
+    assert float(scaled["speedup"]) == pytest.approx(1.05)
 
 
 def test_report_preserves_study_timing_field_names(tmp_path: Path) -> None:
@@ -390,6 +741,11 @@ def test_rank_scaling_is_reported_separately(tmp_path: Path) -> None:
     ]
     rows[0].update(local_dpu_count=64, rank_count=1, total_dpu_count=64)
     rows[1].update(local_dpu_count=64, rank_count=2, total_dpu_count=128)
+    rows[1]["engine_metadata"] = {
+        "active_dpu_ids": list(range(128)),
+        "active_rank_indices": [0, 1],
+        "active_rank_count": 2,
+    }
     generate_report(rows, tmp_path / "report")
     scaling = _csv(tmp_path / "report" / "tables" / "upmem_strong_scaling.csv")
     rank = [row for row in scaling if row["scale_dimension"] == "rank"]
@@ -400,7 +756,9 @@ def test_rank_scaling_is_reported_separately(tmp_path: Path) -> None:
     assert rank[0]["baseline_total_dpu_count"] == "64"
     assert rank[0]["local_dpu_count"] == "64"
     assert rank[0]["total_dpu_count"] == "128"
-    assert not [row for row in scaling if row["scale_dimension"] == "dpu"]
+    dpu = [row for row in scaling if row["scale_dimension"] == "dpu"]
+    assert len(dpu) == 1
+    assert dpu[0]["speedup"] == ""
     assert (tmp_path / "report" / "plots" / "upmem_rank_scaling.png").is_file()
 
 
@@ -411,6 +769,11 @@ def test_scaling_keeps_dpu_and_rank_topologies_distinct(tmp_path: Path) -> None:
         _row(engine="upmem_m5", runtime=8.0, dpu_count=2),
     ]
     rows[2].update(local_dpu_count=1, rank_count=2, total_dpu_count=2)
+    rows[2]["engine_metadata"] = {
+        "active_dpu_ids": [0, 1],
+        "active_rank_indices": [0, 1],
+        "active_rank_count": 2,
+    }
     generate_report(rows, tmp_path / "report")
     scaling = _csv(tmp_path / "report" / "tables" / "upmem_strong_scaling.csv")
     assert {
@@ -422,9 +785,75 @@ def test_scaling_keeps_dpu_and_rank_topologies_distinct(tmp_path: Path) -> None:
         )
         for row in scaling
     } == {
+        ("dpu", "1", "1", "1"),
         ("dpu", "2", "1", "2"),
         ("rank", "1", "2", "2"),
     }
+
+
+def test_scaling_admission_uses_active_metadata_and_provisioned_total(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import matplotlib.pyplot as plt
+
+    saved: dict[str, object] = {}
+    monkeypatch.setattr(
+        plt.Figure,
+        "savefig",
+        lambda figure, filename, *args, **kwargs: saved.__setitem__(
+            Path(filename).name, figure
+        ),
+    )
+    baseline = _row(engine="upmem_m5", runtime=10.0, dpu_count=1)
+    active_two = _row(engine="upmem_m5", runtime=5.0, dpu_count=2)
+    overprovisioned = _row(engine="upmem_m5", runtime=1.0, dpu_count=32)
+    overprovisioned["engine_metadata"] = {
+        "active_dpu_ids": list(range(16)),
+        "active_rank_indices": [0],
+        "active_rank_count": 1,
+    }
+    inactive_rank = _row(engine="upmem_m5", runtime=4.0, dpu_count=128)
+    inactive_rank.update(rank_count=2)
+    inactive_rank["engine_metadata"] = {
+        "active_dpu_ids": list(range(64)),
+        "active_rank_indices": [0],
+        "active_rank_count": 1,
+    }
+    generate_report(
+        [baseline, active_two, overprovisioned, inactive_rank],
+        tmp_path / "report",
+    )
+
+    scaling = _csv(tmp_path / "report" / "tables" / "upmem_strong_scaling.csv")
+    assert len(scaling) == 4
+    by_dimension = {
+        (row["scale_dimension"], row["total_dpu_count"]): row for row in scaling
+    }
+    assert float(by_dimension[("dpu", "1")]["speedup"]) == pytest.approx(1.0)
+    assert float(by_dimension[("dpu", "2")]["speedup"]) == pytest.approx(2.0)
+    over = by_dimension[("dpu", "32")]
+    assert over["active_dpu_count"] == "16"
+    assert over["fully_active_topology"] == "False"
+    assert over["speedup"] == ""
+    rank = by_dimension[("rank", "128")]
+    assert rank["local_dpu_count"] == "64"
+    assert rank["active_dpu_count"] == "64"
+    assert rank["active_rank_count"] == "1"
+    assert rank["fully_active_topology"] == "False"
+    assert rank["speedup"] == ""
+
+    scaling_figure = saved["upmem_strong_scaling.png"]
+    axis = next(axis for axis in scaling_figure.axes if axis.get_visible())
+    data_lines = [line for line in axis.lines if not line.get_label().startswith("_")]
+    assert len(data_lines) == 1
+    assert list(data_lines[0].get_xdata()) == [1, 2]
+    manifest = json.loads((tmp_path / "report" / "plot_manifest.json").read_text())
+    rank_plot = next(
+        item for item in manifest["plots"] if item["name"] == "upmem_rank_scaling"
+    )
+    assert rank_plot["status"] == "generated_todo_missing_data"
+    assert "fully active multi-rank" in rank_plot["reason"]
+    plt.close("all")
 
 
 def test_ratio_pairing_requires_matching_evidence_hashes(tmp_path: Path) -> None:
@@ -556,7 +985,9 @@ def test_pairing_rejects_missing_or_mismatched_executor_configuration(
     )
     assert _csv(tmp_path / "report" / "tables" / "path_runtime_ratio.csv") == []
     assert _csv(tmp_path / "report" / "tables" / "float32_int8_ratios.csv") == []
-    assert _csv(tmp_path / "report" / "tables" / "upmem_strong_scaling.csv") == []
+    scaling = _csv(tmp_path / "report" / "tables" / "upmem_strong_scaling.csv")
+    assert len(scaling) == 2
+    assert sorted(row["speedup"] for row in scaling) == ["", "1.0"]
 
     baseline.pop("executor_config_hash")
     target.pop("executor_config_hash")
