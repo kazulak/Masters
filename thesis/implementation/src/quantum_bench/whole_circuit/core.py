@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any, Protocol
 
 import numpy as np
@@ -239,7 +240,9 @@ class WholeGraphExecutor:
         session_metadata: dict[str, Any] = {}
         try:
             while pending:
-                ready = self.task_order_policy.select_ready_tasks(pending, completed)
+                ready = self.task_order_policy.select_ready_tasks(
+                    MappingProxyType(dict(pending)), frozenset(completed)
+                )
                 if not ready:
                     unresolved = {
                         task_id: task.dependencies

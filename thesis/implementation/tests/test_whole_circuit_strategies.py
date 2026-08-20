@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any, Mapping
+from typing import AbstractSet, Any, Mapping
 
 import numpy as np
 import pytest
@@ -320,6 +320,26 @@ class ReverseReadyTaskOrderPolicy:
         return ready
 
 
+class ReadOnlyStateTaskOrderPolicy:
+    name = "read_only_state_task_order"
+
+    def __init__(self) -> None:
+        self.pending_was_read_only = False
+        self.completed_was_immutable = False
+
+    def select_ready_tasks(
+        self,
+        pending: Mapping[str, ContractionTask],
+        completed: AbstractSet[str],
+    ) -> list[ContractionTask]:
+        self.pending_was_read_only = not hasattr(pending, "__setitem__")
+        self.completed_was_immutable = not hasattr(completed, "add")
+        return sorted(
+            (task for task in pending.values() if set(task.dependencies) <= completed),
+            key=lambda task: task.id,
+        )
+
+
 def test_injected_task_order_policy_is_invoked_and_alters_execution_order() -> None:
     graph, network = _diamond_graph()
     policy = ReverseReadyTaskOrderPolicy()
@@ -339,6 +359,19 @@ def test_injected_task_order_policy_is_invoked_and_alters_execution_order() -> N
         "t1_branch_first",
         "t3_join",
     )
+    assert result.output == pytest.approx(187.0)
+
+
+def test_task_order_policy_receives_read_only_state_snapshots() -> None:
+    graph, network = _diamond_graph()
+    policy = ReadOnlyStateTaskOrderPolicy()
+
+    result = WholeGraphExecutor(
+        NumpyCpuEngine(), Float32RealPolicy(), task_order_policy=policy
+    ).execute(graph, network)
+
+    assert policy.pending_was_read_only
+    assert policy.completed_was_immutable
     assert result.output == pytest.approx(187.0)
 
 

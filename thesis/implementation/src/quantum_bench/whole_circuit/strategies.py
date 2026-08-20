@@ -9,7 +9,7 @@ import inspect
 import json
 import math
 from pathlib import Path
-from typing import Any, Mapping, Protocol, runtime_checkable
+from typing import AbstractSet, Any, Mapping, Protocol, runtime_checkable
 
 import numpy as np
 
@@ -161,8 +161,8 @@ class ReadyTaskOrderPolicy(Protocol):
 
     def select_ready_tasks(
         self,
-        pending: dict[str, ContractionTask],
-        completed: set[str],
+        pending: Mapping[str, ContractionTask],
+        completed: AbstractSet[str],
     ) -> list[ContractionTask]:
         """Select and order ready tasks from pending tasks given completed task IDs."""
         ...
@@ -176,8 +176,8 @@ class SerialReadyTaskOrderPolicy:
 
     def select_ready_tasks(
         self,
-        pending: dict[str, ContractionTask],
-        completed: set[str],
+        pending: Mapping[str, ContractionTask],
+        completed: AbstractSet[str],
     ) -> list[ContractionTask]:
         return sorted(
             (task for task in pending.values() if set(task.dependencies) <= completed),
