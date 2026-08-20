@@ -11,13 +11,18 @@ from quantum_bench.bench import runner
 from quantum_bench.bench.config import validate_suite
 from quantum_bench.bench.summary import write_summary
 from quantum_bench.core.jsonio import append_jsonl
-from quantum_bench.core.records import TIMING_SCHEMA_VERSION, BenchmarkCaseResult, ExecutionProfile, RouteEstimate, RouteIdentity, RouteOutput, RouteResult, TimingScope
+from quantum_bench.core.records import TIMING_SCHEMA_VERSION, BenchmarkCaseResult, ExecutionProfile, RouteEstimate, RouteIdentity, RouteOutput, RouteResult, TimingContract, TimingScope
 
 
 class _Route:
     backend_family = "test"
 
-    def __init__(self, route_id: str, validation_mode: str) -> None:
+    def __init__(
+        self,
+        route_id: str,
+        validation_mode: str,
+        profile: ExecutionProfile | None = None,
+    ) -> None:
         self.identity = RouteIdentity(
             route_id=route_id,
             display_name=route_id,
@@ -34,6 +39,7 @@ class _Route:
         self.events: list[str] | None = None
         self.fail_warmup_prepare = False
         self.fail_execute = False
+        self.profile = profile or ExecutionProfile(reduction_s=0.125)
 
     def can_execute(self, graph: object, context: object) -> tuple[bool, None]:
         return True, None
@@ -60,7 +66,7 @@ class _Route:
             self.backend_family,
             "completed",
             RouteOutput("tensor", array=np.asarray([1.0 + 0.0j])),
-            ExecutionProfile(reduction_s=0.125),
+            self.profile,
             None,
             "unavailable",
         )
@@ -257,6 +263,38 @@ def test_route_total_has_explicit_field_and_legacy_total_alias(tmp_path, monkeyp
     assert result.profile.reduction_s == 0.125
     assert result.profile.timing_schema_version == TIMING_SCHEMA_VERSION
     assert result.profile.timing_contract.total_s_alias_of == "route_total_s"
+
+
+def test_route_profile_preserves_nondefault_timing_contract(tmp_path, monkeypatch) -> None:
+    generated = {
+        "network": object(),
+        "graph": SimpleNamespace(planning_time_s=0.0),
+        "generate_s": 0.0,
+    }
+    contract = TimingContract(route_total_scope=TimingScope.ROUTE_HOST_WALL)
+    route = _Route(
+        "custom-timing",
+        "benchmark_only",
+        ExecutionProfile(timing_schema_version=99, timing_contract=contract),
+    )
+    ticks = iter((10.0, 14.0, 20.0))
+    monkeypatch.setattr(runner.time, "perf_counter", lambda: next(ticks))
+
+    result = runner._run_repeat(
+        route,
+        generated,
+        {"tolerances": {}},
+        {"case_id": "case-1"},
+        {},
+        tmp_path,
+        tmp_path,
+        0,
+        persist=False,
+    )
+
+    assert result.profile.timing_schema_version == 99
+    assert result.profile.timing_contract is contract
+    assert result.profile.timing_contract.route_total_scope is TimingScope.ROUTE_HOST_WALL
 
 
 def test_warmup_failure_is_separate_and_measured_attempts_continue(tmp_path, monkeypatch) -> None:

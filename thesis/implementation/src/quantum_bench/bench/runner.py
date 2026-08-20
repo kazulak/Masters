@@ -706,6 +706,8 @@ def _merged_profile(profile: ExecutionProfile, generate_s: float, planning_s: fl
         total_s=route_total_s,
         route_host_wall_s=route_host_wall_s,
         route_total_s=route_total_s,
+        timing_schema_version=profile.timing_schema_version,
+        timing_contract=profile.timing_contract,
     )
 
 
