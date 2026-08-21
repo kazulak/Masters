@@ -36,7 +36,7 @@ from quantum_bench.bench.m5_circuit_routes import (
 )
 from quantum_bench.circuits import load_circuit, manifest as circuit_manifest
 from quantum_bench.core.jsonio import write_json
-from quantum_bench.core.records import ContractionTask, TaskGraph, TensorValue
+from quantum_bench.core.records import TensorNetworkSpec
 from quantum_bench.execution import (
     CpuCompileRequest,
     ExecutionFailure,
@@ -48,6 +48,7 @@ from quantum_bench.execution import (
     UpmemCompileRequest,
     UpmemRuntimeResources,
     UpmemTopology,
+    canonical_serialize,
     compile_execution,
     execute,
     execution_plan_hash,
@@ -57,11 +58,11 @@ from quantum_bench.tn import (
     build_contraction_dag,
     build_tensor_network_data,
     contraction_dag_hash,
-    contraction_path_structure_hash,
     plan_contractions,
 )
-from quantum_bench.tn.network import TensorNetworkValue
-from quantum_bench.tn.task_graph import materialize_task_graph_from_planner_result
+from quantum_bench.tn.graph import ContractionDAG, ContractNode, ReduceNode, TensorView
+from quantum_bench.tn.network import TensorInputs
+from quantum_bench.tn.planners import PlannerResult
 from quantum_bench.whole_circuit import (
     DeviceTopology,
     Float32RealPolicy,
@@ -69,8 +70,11 @@ from quantum_bench.whole_circuit import (
 )
 
 
-SCHEMA_VERSION = 1
-STUDY_SCHEMA_VERSION = "m5_circuit_study_v1"
+SCHEMA_VERSION = 2
+LEGACY_SCHEMA_VERSION = 1
+LEGACY_STUDY_SCHEMA_VERSION = "m5_circuit_study_v1"
+STUDY_SCHEMA_VERSION = "m5_circuit_study_v2"
+STUDY_RECORD_SCHEMA_VERSION = "m5_circuit_study_record_v2"
 RANK_PATH_PATTERN = re.compile(r"^/dev/dpu_rank[0-9]+$")
 ROUTE_LABEL = "m5_circuit_study"
 DEFAULT_TIMEOUT_S = 300.0
@@ -92,14 +96,13 @@ class _Plan:
     case: dict[str, Any]
     planner: dict[str, Any]
     circuit: Any
-    spec: Any
-    inputs: Any
-    planner_result: Any
-    dag: Any
-    # Legacy values are retained only for existing scientific identity fields
-    # and reports while consumers migrate to ContractionDAG v2.
-    network: Any
-    graph: TaskGraph
+    spec: TensorNetworkSpec
+    inputs: TensorInputs
+    planner_result: PlannerResult
+    dag: ContractionDAG
+    dag_hash: str
+    circuit_semantics_hash: str
+    tensor_network_hash: str
     resources: dict[str, Any]
     preflight: dict[str, Any]
 
@@ -112,7 +115,12 @@ def load_study_config(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"Study {path} must contain a mapping")
     raw_version = value.get("schema_version", SCHEMA_VERSION)
-    if raw_version not in {SCHEMA_VERSION, STUDY_SCHEMA_VERSION}:
+    if raw_version not in {
+        SCHEMA_VERSION,
+        LEGACY_SCHEMA_VERSION,
+        STUDY_SCHEMA_VERSION,
+        LEGACY_STUDY_SCHEMA_VERSION,
+    }:
         raise ValueError(
             f"Study {path} must use schema_version: {STUDY_SCHEMA_VERSION}"
         )
@@ -220,7 +228,7 @@ def load_study_config(path: Path) -> dict[str, Any]:
         )
 
     result = {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": STUDY_SCHEMA_VERSION,
         "study_id": str(value.get("study_id") or path.stem),
         "metadata": dict(value.get("metadata") or {}),
         "cases": normalized_cases,
@@ -309,7 +317,7 @@ def run_study(
         suite_path=config["_study_path"],
         artifact_kind=EVIDENCE_ARTIFACT_KIND,
         route_label=ROUTE_LABEL,
-        execution_scope="whole_circuit_taskgraph",
+        execution_scope="whole_circuit_contraction_dag",
         evidence_type="benchmark_execution",
         normalized_records="normalized_records.jsonl",
         summary="m5_circuit_study_summary.json",
@@ -567,18 +575,6 @@ def _build_plans(
     for case in config["cases"]:
         circuit = load_circuit(case, root)
         spec, inputs = build_tensor_network_data(circuit)
-        # This adapter is deliberately local to M5 evidence compatibility.
-        # Planning is performed only against ``spec`` below.
-        network = TensorNetworkValue(
-            spec=spec,
-            tensors=[
-                TensorValue(
-                    next(tensor for tensor in spec.tensors if tensor.id == value.tensor_id),
-                    value.array,
-                )
-                for value in inputs.values
-            ],
-        )
         for planner in config["planner_variants"]:
             if (
                 selected_planner_ids is not None
@@ -588,8 +584,10 @@ def _build_plans(
             request = PlannerRequest.from_config(planner["planner"])
             planner_result = plan_contractions(spec, request)
             dag = build_contraction_dag(spec, planner_result.path)
-            graph = materialize_task_graph_from_planner_result(network, planner_result)
-            resources = _estimate_resources(graph, config["resource_limits"])
+            dag_hash = contraction_dag_hash(dag)
+            circuit_hash = _circuit_semantics_hash(circuit)
+            network_hash = _tensor_network_hash(spec, circuit_hash)
+            resources = _estimate_resources(dag, config["resource_limits"])
             preflight = _preflight(resources, config["resource_limits"])
             plans.append(
                 _Plan(
@@ -600,8 +598,9 @@ def _build_plans(
                     inputs,
                     planner_result,
                     dag,
-                    network,
-                    graph,
+                    dag_hash,
+                    circuit_hash,
+                    network_hash,
                     resources,
                     preflight,
                 )
@@ -609,46 +608,97 @@ def _build_plans(
     return plans
 
 
-def _estimate_resources(graph: TaskGraph, limits: dict[str, int]) -> dict[str, Any]:
+def _estimate_resources(dag: ContractionDAG, limits: dict[str, int]) -> dict[str, Any]:
+    """Estimate configured execution storage while caller inputs remain live."""
+
     element_bytes = limits["element_bytes"]
+    initial_tensor_ids = {spec.id for spec in dag.tensors}
     sizes = {
         spec.id: int(np.prod(spec.shape, dtype=np.int64)) * element_bytes
-        for spec in graph.network.tensors
+        for spec in dag.tensors
     }
     remaining: dict[str, int] = {}
-    for task in graph.tasks:
-        for tensor_id in task.input_tensor_ids:
-            remaining[tensor_id] = remaining.get(tensor_id, 0) + 1
+    ordered_nodes = _topological_dag_nodes(dag)
+    for node in ordered_nodes:
+        for view in _node_views(node):
+            remaining[view.tensor_id] = remaining.get(view.tensor_id, 0) + 1
     live = sum(sizes.values())
     peak = live
-    for task in graph.tasks:
-        live += int(np.prod(task.output_shape, dtype=np.int64)) * element_bytes
-        for tensor_id in task.input_tensor_ids:
-            remaining[tensor_id] -= 1
-            if remaining[tensor_id] == 0:
-                live -= sizes.get(
-                    tensor_id,
-                    int(np.prod(task.input_shapes[0], dtype=np.int64)) * element_bytes,
-                )
-        sizes[task.output_tensor_id] = (
-            int(np.prod(task.output_shape, dtype=np.int64)) * element_bytes
-        )
+    for node in ordered_nodes:
+        output_bytes = _tensor_bytes(node.output.shape, element_bytes)
+        sizes[node.output.id] = output_bytes
+        live += output_bytes
         peak = max(peak, live)
-    final_task = _final_task(graph)
-    final_bytes = int(np.prod(final_task.output_shape, dtype=np.int64)) * element_bytes
+        for view in _node_views(node):
+            remaining[view.tensor_id] -= 1
+            if (
+                remaining[view.tensor_id] == 0
+                and view.tensor_id not in initial_tensor_ids
+            ):
+                live -= sizes[view.tensor_id]
+    final_node = _final_dag_node(dag)
+    if final_node is None and dag.nodes:
+        raise ValueError("DAG output must be produced by exactly one final node")
+    final_bytes = _tensor_bytes(dag.output.shape, element_bytes)
     return {
         "final_output_bytes": final_bytes,
         "peak_live_bytes": peak,
         "initial_tensor_bytes": sum(
-            int(v)
-            for v in {
-                spec.id: int(np.prod(spec.shape, dtype=np.int64)) * element_bytes
-                for spec in graph.network.tensors
-            }.values()
+            _tensor_bytes(spec.shape, element_bytes) for spec in dag.tensors
         ),
-        "task_count": len(graph.tasks),
+        "initial_host_input_bytes": sum(
+            _tensor_bytes(spec.shape, np.dtype(spec.dtype).itemsize)
+            for spec in dag.tensors
+        ),
+        "byte_accounting_basis": "configured_execution_element_width",
+        "configured_execution_element_bytes": element_bytes,
+        "dag_node_count": len(dag.nodes),
+        # Compatibility alias for report consumers; this is a DAG-node count.
+        "task_count": len(dag.nodes),
+        # Compatibility alias for the configured execution element width.
         "element_bytes": element_bytes,
     }
+
+
+def _node_views(node: ContractNode | ReduceNode) -> tuple[TensorView, ...]:
+    if isinstance(node, ContractNode):
+        return node.left, node.right
+    return node.inputs
+
+
+def _tensor_bytes(shape: tuple[int, ...], element_bytes: int) -> int:
+    return int(np.prod(shape, dtype=np.int64)) * element_bytes
+
+
+def _topological_dag_nodes(dag: ContractionDAG) -> tuple[ContractNode | ReduceNode, ...]:
+    """Return a deterministic dependency order without trusting ``dag.nodes`` order."""
+
+    nodes = {node.node_id: node for node in dag.nodes}
+    if len(nodes) != len(dag.nodes):
+        raise ValueError("ContractionDAG contains duplicate node IDs")
+    indegree = {node_id: len(node.dependencies) for node_id, node in nodes.items()}
+    dependants: dict[str, list[str]] = {node_id: [] for node_id in nodes}
+    for node in dag.nodes:
+        for dependency in node.dependencies:
+            if dependency not in nodes:
+                raise ValueError(
+                    f"DAG node {node.node_id} has unknown dependency {dependency}"
+                )
+            dependants[dependency].append(node.node_id)
+
+    ready = sorted(node_id for node_id, count in indegree.items() if count == 0)
+    ordered: list[ContractNode | ReduceNode] = []
+    while ready:
+        node_id = ready.pop(0)
+        ordered.append(nodes[node_id])
+        for dependant in sorted(dependants[node_id]):
+            indegree[dependant] -= 1
+            if indegree[dependant] == 0:
+                ready.append(dependant)
+        ready.sort()
+    if len(ordered) != len(dag.nodes):
+        raise ValueError("ContractionDAG dependencies contain a cycle")
+    return tuple(ordered)
 
 
 def _preflight(resources: dict[str, Any], limits: dict[str, int]) -> dict[str, Any]:
@@ -681,7 +731,7 @@ def _run_anchor(planned: _Plan, config: dict[str, Any], policy: Any) -> dict[str
         compiled = compile_execution(
             planned.dag,
             CpuCompileRequest(
-                contraction_dag_hash=contraction_dag_hash(planned.dag),
+                contraction_dag_hash=planned.dag_hash,
                 numeric_mode=numeric_mode,
             ),
         )
@@ -973,7 +1023,7 @@ def _execute_combo(
         "execution_plan_hash": execution_plan_hash(execution_plan),
         "execution_plan_schema_version": "tn_execution_plan_v1",
         "execution_target": execution_plan.target.value,
-        "contraction_dag_hash": contraction_dag_hash(planned.dag),
+        "contraction_dag_hash": planned.dag_hash,
         "contraction_dag_schema_version": "contraction_dag_v2",
         "planner_config_hash": planned.planner_result.identity.planner_config_hash,
     }
@@ -1001,7 +1051,7 @@ def _compile_route_plan(
     numeric_mode: NumericMode,
     engine_variant: Mapping[str, Any],
 ) -> Any:
-    dag_hash = contraction_dag_hash(planned.dag)
+    dag_hash = planned.dag_hash
     if backend == "cpu":
         if str(engine_variant["engine"]) != "numpy_cpu":
             raise ValueError(
@@ -1204,7 +1254,7 @@ def _row_base(
     cm = circuit_manifest(circuit)
     topology = engine["topology"]
     return {
-        "normalized_record_schema_version": "m5_circuit_study_record_v1",
+        "normalized_record_schema_version": STUDY_RECORD_SCHEMA_VERSION,
         "study_id": config["study_id"],
         "case_id": planned.case["case_id"],
         "family": planned.case.get("family", circuit.source.get("name", circuit.name)),
@@ -1219,7 +1269,7 @@ def _row_base(
         "planner_id": planned.planner["id"],
         "planner_config": planned.planner["planner"],
         "planner_config_hash": planned.planner_result.identity.planner_config_hash,
-        "planner_hash": planned.graph.contraction_plan_hash,
+        "planner_hash": planned.planner_result.identity.planner_config_hash,
         "route_id": route["route_id"],
         "route_label": route["label"],
         "route_config_hash": route["route_config_hash"],
@@ -1254,31 +1304,33 @@ def _row_base(
         "rank_count": len(topology.get("rank_paths", [])),
         "dpu_count": len(topology.get("device_ids", [])),
         "tasklets_per_dpu": topology.get("tasklets_per_device", 1),
-        "circuit_semantics_hash": planned.graph.circuit_semantics_hash,
-        "tensor_network_hash": planned.graph.tensor_network_hash,
-        "contraction_plan_hash": planned.graph.contraction_plan_hash,
-        "contraction_path_structure_hash": contraction_path_structure_hash(
-            planned.graph
-        ),
-        "contraction_dag_hash": contraction_dag_hash(planned.dag),
+        "circuit_semantics_hash": planned.circuit_semantics_hash,
+        "tensor_network_hash": planned.tensor_network_hash,
+        # Compatibility aliases: historical plan fields now carry the
+        # canonical semantic ContractionDAG identity.
+        "contraction_plan_hash": planned.dag_hash,
+        "contraction_path_structure_hash": planned.dag_hash,
+        "contraction_dag_hash": planned.dag_hash,
         "contraction_dag_schema_version": "contraction_dag_v2",
         "execution_plan_hash": None,
         "execution_plan_schema_version": "tn_execution_plan_v1",
         "execution_target": "upmem" if topology["backend"] != "cpu" else "cpu",
-        "complete_task_count": len(planned.graph.tasks),
-        "planning_time_s": planned.graph.planning_time_s,
+        "dag_node_count": len(planned.dag.nodes),
+        # Compatibility alias for report consumers; this is a DAG-node count.
+        "complete_task_count": len(planned.dag.nodes),
+        "planning_time_s": planned.planner_result.planning_time_s,
         "preflight": planned.preflight,
         "anchor_status": "available"
         if anchor and anchor.get("output") is not None
         else "unavailable",
         "anchor_case_planner_key": [
             planned.case["case_id"],
-            planned.graph.contraction_plan_hash,
+            planned.dag_hash,
         ],
         "anchor_match_key": {
             "case_id": planned.case["case_id"],
-            "circuit_semantics_hash": planned.graph.circuit_semantics_hash,
-            "planner_hash": planned.graph.contraction_plan_hash,
+            "circuit_semantics_hash": planned.circuit_semantics_hash,
+            "planner_hash": planned.planner_result.identity.planner_config_hash,
         },
         "repeat_id": repeat_id,
         "exact_once": None,
@@ -1501,14 +1553,59 @@ def _named_entries(
     return result
 
 
-def _final_task(graph: TaskGraph) -> ContractionTask:
-    consumed = {
-        tensor_id for task in graph.tasks for tensor_id in task.input_tensor_ids
-    }
-    final = [task for task in graph.tasks if task.output_tensor_id not in consumed]
-    if len(final) != 1:
-        raise ValueError(f"Expected one final task, found {len(final)}")
-    return final[0]
+def _final_dag_node(dag: ContractionDAG) -> ContractNode | ReduceNode | None:
+    """Return the unique node producing the DAG output, when it exists."""
+
+    final = [node for node in dag.nodes if node.output.id == dag.output.tensor_id]
+    if len(final) > 1:
+        raise ValueError(f"Expected one final DAG node, found {len(final)}")
+    return final[0] if final else None
+
+
+def _circuit_semantics_hash(circuit: Any) -> str:
+    return _semantic_hash(
+        {
+            "schema": "m5_circuit_semantics_v2",
+            "name": circuit.name,
+            "n_qubits": int(circuit.n_qubits),
+            "operations": [
+                {
+                    "gate": operation.gate,
+                    "wires": operation.wires,
+                    "params": operation.params,
+                }
+                for operation in circuit.operations
+            ],
+        }
+    )
+
+
+def _tensor_network_hash(spec: TensorNetworkSpec, circuit_hash: str) -> str:
+    return _semantic_hash(
+        {
+            "schema": "m5_tensor_network_v2",
+            "circuit_semantics_hash": circuit_hash,
+            "tensors": [
+                {
+                    "id": tensor.id,
+                    "labels": tensor.labels,
+                    "shape": tensor.shape,
+                    "structure": tensor.structure,
+                    "dtype": tensor.dtype,
+                    "produced_by": tensor.produced_by,
+                }
+                for tensor in spec.tensors
+            ],
+            "output_labels": spec.output_labels,
+            "einsum_expression": spec.einsum_expression,
+        }
+    )
+
+
+def _semantic_hash(payload: Any) -> str:
+    """Hash an explicit M5 v2 semantic payload using the shared serializer."""
+
+    return hashlib.sha256(canonical_serialize(payload).encode("utf-8")).hexdigest()
 
 
 def _engine_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
@@ -1820,17 +1917,19 @@ def _plan_manifest(
                 "planner_config": plan.planner["planner"],
                 "planner_config_hash": plan.planner_result.identity.planner_config_hash,
                 "circuit": circuit_manifest(plan.circuit),
-                "circuit_semantics_hash": plan.graph.circuit_semantics_hash,
-                "tensor_network_hash": plan.graph.tensor_network_hash,
-                "contraction_plan_hash": plan.graph.contraction_plan_hash,
-                "contraction_path_structure_hash": contraction_path_structure_hash(
-                    plan.graph
-                ),
-                "contraction_dag_hash": contraction_dag_hash(plan.dag),
+                "circuit_semantics_hash": plan.circuit_semantics_hash,
+                "tensor_network_hash": plan.tensor_network_hash,
+                # Compatibility aliases: historical plan fields now carry the
+                # canonical semantic ContractionDAG identity.
+                "contraction_plan_hash": plan.dag_hash,
+                "contraction_path_structure_hash": plan.dag_hash,
+                "contraction_dag_hash": plan.dag_hash,
                 "contraction_dag_schema_version": "contraction_dag_v2",
                 "execution_plan_schema_version": "tn_execution_plan_v1",
-                "task_count": len(plan.graph.tasks),
-                "planning_time_s": plan.graph.planning_time_s,
+                "dag_node_count": len(plan.dag.nodes),
+                # Compatibility alias for report consumers; this is a DAG-node count.
+                "task_count": len(plan.dag.nodes),
+                "planning_time_s": plan.planner_result.planning_time_s,
                 "resources": plan.resources,
                 "preflight": plan.preflight,
             }

@@ -9,7 +9,7 @@ from quantum_bench.bench.m5_circuit_study import (
     load_study_config,
     plan_study,
 )
-from quantum_bench.tn import contraction_path_structure_hash
+from quantum_bench.tn import contraction_dag_hash
 
 
 ROOT = Path(__file__).parents[1]
@@ -58,7 +58,7 @@ def test_all_m5_profiles_load_and_use_explicit_unique_case_ids() -> None:
         case_ids = [case["case_id"] for case in config["cases"]]
         assert case_ids
         assert len(case_ids) == len(set(case_ids)), name
-        assert config["schema_version"] == 1
+        assert config["schema_version"] == "m5_circuit_study_v2"
         assert config["metadata"]["physical_rank_paths_are_placeholders"] is True
         for engine in _physical_engines(config):
             _assert_physical_contract(engine)
@@ -144,11 +144,11 @@ def test_canonical_planning_resolves_two_distinct_standard_paths_per_case() -> N
     assert len(plans) == 84
     by_case: dict[str, list[object]] = {}
     for plan in plans:
-        by_case.setdefault(plan.case["case_id"], []).append(plan.graph)
+        by_case.setdefault(plan.case["case_id"], []).append(plan.dag)
     assert set(by_case) == {case["case_id"] for case in config["cases"]}
-    for graphs in by_case.values():
-        assert len(graphs) == 2
-        assert len({contraction_path_structure_hash(graph) for graph in graphs}) == 2
+    for dags in by_case.values():
+        assert len(dags) == 2
+        assert len({contraction_dag_hash(dag) for dag in dags}) == 2
 
 
 @pytest.mark.parametrize(

@@ -11,6 +11,7 @@ import yaml
 from quantum_bench.bench.m5_circuit_study import (
     DEFAULT_TOLERANCES,
     _engine_metadata,
+    _estimate_resources,
     _executor_config_hash,
     _first_byte_count,
     _is_quantized_policy,
@@ -21,7 +22,11 @@ from quantum_bench.bench.m5_circuit_study import (
     plan_study,
     run_study,
 )
-from quantum_bench.whole_circuit import DeviceTopology, EngineTaskResult, NumpyCpuEngine
+from quantum_bench.core.records import TensorSpec
+from quantum_bench.execution import NumericMode
+from quantum_bench.execution.numeric import contract_node
+from quantum_bench.tn.graph import ContractionDAG, ContractNode, TensorView
+from quantum_bench.whole_circuit import DeviceTopology, EngineTaskResult
 
 
 def _study(
@@ -111,14 +116,11 @@ def _study(
     )
 
 
-class _FakeEngine(NumpyCpuEngine):
+class _FakeEngine:
     name = "fake"
 
-    def open_session(self, policy: object, topology: DeviceTopology):
-        return super().open_session(policy, DeviceTopology())
 
-
-class _VerifiedPhysicalEngine(NumpyCpuEngine):
+class _VerifiedPhysicalEngine:
     name = "verified_physical"
     target_observed = "physical_hardware"
     observed_rank_count = 1
@@ -131,15 +133,22 @@ class _VerifiedPhysicalEngine(NumpyCpuEngine):
     rank_paths = ("/dev/dpu_rank0",)
 
     def open_session(self, policy: object, topology: DeviceTopology):
-        inner = super().open_session(policy, DeviceTopology())
-
         class Session:
-            def execute(self, task, left, right):
-                result = inner.execute(task, left, right)
+            def execute(self, task: ContractNode, left, right):
+                mode = (
+                    NumericMode.HOST_PACKED_INT8_PER_TASK_V1
+                    if policy.name == "host_packed_int8_per_task_v1"
+                    else NumericMode.FLOAT32_REAL
+                )
+                output = contract_node(task, left, right, mode)
                 return EngineTaskResult(
-                    result.output,
+                    output,
                     {
-                        **result.metadata,
+                        "engine": "verified_physical",
+                        "device": "physical-test-dpu",
+                        "input_dtype": "int8"
+                        if mode is NumericMode.HOST_PACKED_INT8_PER_TASK_V1
+                        else "float32",
                         "native_kernel_executed": True,
                         "hardware_kernel_executed": True,
                         "hardware_allocation_verified": True,
@@ -178,7 +187,6 @@ class _VerifiedPhysicalEngine(NumpyCpuEngine):
                 )
 
             def close(self):
-                inner.close()
                 return {
                     "backend_id": "upmem_sdk_hardware_v4_tile_session",
                     "target_observed": self_owner.target_observed,
@@ -230,12 +238,20 @@ def test_config_plans_all_case_planner_combinations_without_engine_calls(
     _study(study)
     config = load_study_config(study)
     assert config["study_id"] == "m5_test"
+    assert config["schema_version"] == "m5_circuit_study_v2"
 
     manifest = plan_study(tmp_path, study)
     payload = json.loads(manifest.read_text())
     assert len(payload["plans"]) == 2
     assert payload["hardware_opened"] is False
-    assert all(item["task_count"] > 0 for item in payload["plans"])
+    assert all(item["dag_node_count"] > 0 for item in payload["plans"])
+    assert all(
+        item["contraction_plan_hash"]
+        == item["contraction_path_structure_hash"]
+        == item["contraction_dag_hash"]
+        for item in payload["plans"]
+    )
+    assert all(item["task_count"] == item["dag_node_count"] for item in payload["plans"])
 
 
 def test_route_selection_filters_rows_and_rejects_unknown_or_empty_ids(
@@ -348,7 +364,15 @@ def test_run_records_warmups_repeats_and_same_plan_hashes(tmp_path: Path) -> Non
     assert len(records) == 4  # 2 planners x CPU x 2 measured repeats
     assert all(row["repeat_id"] in {0, 1} for row in records)
     assert all(row["status"] == "completed" for row in records)
-    assert all(row["complete_task_count"] > 0 and row["exact_once"] for row in records)
+    assert all(row["dag_node_count"] > 0 and row["exact_once"] for row in records)
+    assert all(row["complete_task_count"] == row["dag_node_count"] for row in records)
+    assert all(row["planner_hash"] == row["planner_config_hash"] for row in records)
+    assert all(
+        row["contraction_plan_hash"]
+        == row["contraction_path_structure_hash"]
+        == row["contraction_dag_hash"]
+        for row in records
+    )
     assert all(
         row["exact_once_scope"] == "host_dag_node_completion_per_route"
         and row["host_dag_node_completion_coverage"] is True
@@ -357,10 +381,56 @@ def test_run_records_warmups_repeats_and_same_plan_hashes(tmp_path: Path) -> Non
     for planner_id in {"greedy", "auto"}:
         selected = [row for row in records if row["planner_id"] == planner_id]
         assert len({row["contraction_plan_hash"] for row in selected}) == 1
+        assert {row["contraction_plan_hash"] for row in selected} == {
+            row["contraction_dag_hash"] for row in selected
+        }
         assert len({row["circuit_semantics_hash"] for row in selected}) == 1
         assert len({row["executor_config_hash"] for row in selected}) == 1
     assert (run_dir / "m5_circuit_study_summary.json").exists()
     assert (run_dir / "run_manifest.json").exists()
+
+
+def test_resource_estimate_keeps_initial_inputs_live_and_labels_width() -> None:
+    left = TensorSpec("left", (0,), (2,), "dense", dtype="float64")
+    right = TensorSpec("right", (0,), (2,), "dense", dtype="float64")
+    scale = TensorSpec("scale", (), (), "dense", dtype="float64")
+    partial = TensorSpec(
+        "partial", (), (), "dense", dtype="float64", produced_by="contract_0"
+    )
+    output = TensorSpec(
+        "output", (), (), "dense", dtype="float64", produced_by="contract_1"
+    )
+    first = ContractNode(
+        node_id="contract_0",
+        left=TensorView(tensor_id="left", labels=(0,), shape=(2,)),
+        right=TensorView(tensor_id="right", labels=(0,), shape=(2,)),
+        output=partial,
+        contracted_labels=(0,),
+        output_labels=(),
+    )
+    second = ContractNode(
+        node_id="contract_1",
+        left=TensorView(tensor_id="partial", labels=(), shape=()),
+        right=TensorView(tensor_id="scale", labels=(), shape=()),
+        output=output,
+        contracted_labels=(),
+        output_labels=(),
+        dependencies=("contract_0",),
+    )
+    dag = ContractionDAG(
+        tensors=(left, right, scale),
+        nodes=(first, second),
+        output=TensorView(tensor_id="output", labels=(), shape=()),
+    )
+
+    resources = _estimate_resources(dag, {"element_bytes": 4})
+
+    assert resources["initial_tensor_bytes"] == 20
+    assert resources["peak_live_bytes"] == 28
+    assert resources["initial_host_input_bytes"] == 40
+    assert resources["byte_accounting_basis"] == "configured_execution_element_width"
+    assert resources["configured_execution_element_bytes"] == 4
+    assert resources["element_bytes"] == 4
 
 
 def test_route_compilation_is_once_per_route_outside_warmups_and_repeats(

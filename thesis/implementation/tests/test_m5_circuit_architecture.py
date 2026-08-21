@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+from dataclasses import replace
 from pathlib import Path
 
 from quantum_bench.bench import m5_circuit_study
@@ -28,6 +29,17 @@ def test_active_m5_study_plans_once_then_uses_functional_dag(
 
     assert calls == len(plans)
     assert all(plan.dag.nodes for plan in plans)
+    reversed_dag = replace(plans[0].dag, nodes=tuple(reversed(plans[0].dag.nodes)))
+    resources = m5_circuit_study._estimate_resources(
+        reversed_dag, config["resource_limits"]
+    )
+    assert resources["dag_node_count"] == len(reversed_dag.nodes)
     source = inspect.getsource(m5_circuit_study)
     assert "WholeGraphExecutor" not in source
     assert "plan_task_graph_with_config" not in source
+    assert "TaskGraph" not in source
+    assert "ContractionTask" not in source
+    assert "TensorNetworkValue" not in source
+    assert "TensorValue" not in source
+    assert "materialize_task_graph_from_planner_result" not in source
+    assert all(not hasattr(plan, "graph") and not hasattr(plan, "network") for plan in plans)

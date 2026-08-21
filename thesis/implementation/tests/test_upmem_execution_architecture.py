@@ -177,7 +177,14 @@ def test_upmem_provider_registry_is_fixed_and_truthful() -> None:
     assert simplepim.qualification_status == "guarded"
     assert simplepim.availability_status == "environment_dependent"
     assert simplepim.benchmark_surface_id == "upmem_tn_hardware_simplepim_bounded"
-    assert "general TaskGraph executor" in " ".join(simplepim.notes)
+    assert simplepim.route_id is None
+    assert all(
+        UPMEM_PROVIDER_REGISTRY[name].route_id is None
+        and UPMEM_PROVIDER_REGISTRY[name].benchmark_surface_id is None
+        and UPMEM_PROVIDER_REGISTRY[name].qualification_scope == "not_integrated"
+        and UPMEM_PROVIDER_REGISTRY[name].qualification_status == "planned"
+        for name in ("pid_comm", "atim")
+    )
     assert all(
         UPMEM_PROVIDER_REGISTRY[name].qualification_status == "planned"
         for name in ("pid_comm", "atim", "sparsep")
@@ -193,46 +200,21 @@ def test_provider_route_ids_are_referentially_integral(tmp_path) -> None:
             assert descriptor.route_id in routes
 
 
-def test_public_status_docs_do_not_keep_superseded_milestone_claims() -> None:
+def test_public_status_requires_evidence_and_leaves_frameworks_unclaimed() -> None:
     root = Path(__file__).parents[1]
     readme = (root / "README.md").read_text(encoding="utf-8")
     architecture = (root / "ARCHITECTURE.md").read_text(encoding="utf-8")
-    audit = (root / "docs" / "thesis_implementation_audit.md").read_text(
-        encoding="utf-8"
-    )
-    roadmap = (root / "docs" / "slr_architecture_implementation_roadmap.md").read_text(
-        encoding="utf-8"
-    )
     readme_text = " ".join(readme.split())
     architecture_text = " ".join(architecture.split())
-    audit_text = " ".join(audit.split())
-    roadmap_text = " ".join(roadmap.split())
 
-    assert "balanced useful-slice acceptance is still open" not in readme
-    assert "physical qualification\nis pending" not in readme
+    assert "bounded physical UPMEM execution with strict provenance checks" in readme_text
+    assert "Simulator timings are never physical performance evidence" in readme_text
+    assert "PID-Comm or ATiM production use" in readme_text
+    assert "Physical execution fails closed" in architecture_text
     assert (
-        "SimplePIM | External pinned repository | Task-specific target"
-        not in architecture
+        "observed native identity, allocation, kernel execution, release, and validation agree"
+        in architecture_text
     )
-    assert "The current provider boundary is deliberately narrow" in architecture_text
-    assert "A provider is credited only when" in architecture_text
-    assert "docs/MILESTONES.md" in readme_text
-    assert "sole authority for implementation and evidence status" in readme_text
-    assert "SimplePIM-derived initialization/management binary" in architecture_text
-    assert "allocation, transfers, launch, and synchronization are performed through the raw UPMEM SDK" in architecture_text
-    assert "PID-Comm and ATiM are not invoked by M5.5" in architecture_text
-    assert "authoritative current milestone status is in README" not in audit_text
-    assert "It records M4.5 as `tracked_verified`" in audit_text
-    assert "M4.6, M5.1, M5.2, M5.4, and M5.5 as `development_observed`" in audit_text
-    assert "General slicing, distributed scheduling, provider selection" in audit_text
-    assert "hardware-calibrated numeric selection remain incomplete" in audit_text
-    assert "not accepted or verified evidence" in roadmap_text
-    assert "M5.5 route invokes only a SimplePIM-derived" in roadmap_text
-    assert "raw UPMEM SDK calls own allocation, transfers, launch" in roadmap_text
-    assert "executes it through SimplePIM management/allocation" not in roadmap_text
-    assert "the current second partial is zero" not in architecture
-    assert "hardware-calibrated planning" in architecture_text
-    assert "host-managed graph intermediates" in architecture_text
-    assert "M4.5: descriptor-driven raw-SDK route" in roadmap
-    assert "Complete M2.1 before interpreting" not in roadmap
-    assert "bounded_taskgraph_executed" in roadmap
+    assert "Simulator rows cannot support physical speedup" in architecture_text
+    assert "uncalibrated candidate estimator" in architecture_text
+    assert "memory and intermediate residency decisions" in architecture_text
