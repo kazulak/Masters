@@ -12,7 +12,9 @@ from quantum_bench.bench.upmem_hardware_taskgraph_resident import (
 )
 from quantum_bench.circuits import load_circuit
 from quantum_bench.core.jsonio import write_jsonl
-from quantum_bench.tn import build_tensor_network, plan_task_graph_with_config, with_execution_identity
+from quantum_bench.tn.execution_bundle import with_execution_identity
+from quantum_bench.tn.network import build_tensor_network
+from quantum_bench.tn.task_graph import plan_task_graph_with_config
 from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
     RESIDENT_M46_OUTPUT_TILE_ELEMENTS,
     RESIDENT_M46_PROFILE_VERSION,

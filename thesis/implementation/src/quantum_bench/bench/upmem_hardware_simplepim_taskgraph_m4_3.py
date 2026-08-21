@@ -28,8 +28,12 @@ from quantum_bench.bench.run_dirs import EVIDENCE_ARTIFACT_KIND, create_run_dir
 from quantum_bench.core.jsonio import write_json
 from quantum_bench.core.records import ContractionTask, JsonDict, TaskGraph
 from quantum_bench.environment import capture_environment
-from quantum_bench.tn import build_execution_bundle, execution_identity_metadata, with_execution_identity
-from quantum_bench.tn.execution_bundle import canonical_hash
+from quantum_bench.tn.execution_bundle import (
+    build_execution_bundle,
+    canonical_hash,
+    execution_identity_metadata,
+    with_execution_identity,
+)
 
 
 SCHEMA_VERSION = "upmem_hardware_simplepim_taskgraph_m4_3_v1"

@@ -18,8 +18,14 @@ from quantum_bench.execution.contracts import (
     validate_execution_result,
 )
 from quantum_bench.execution.numeric import contract_node, reduce_values
-from quantum_bench.tn.graph import ContractNode, ContractionDAG, ReduceNode, TensorView
-from quantum_bench.tn.graph import contraction_dag_hash, validate_contraction_dag
+from quantum_bench.tn.graph import (
+    ContractNode,
+    ContractionDAG,
+    ReduceNode,
+    TensorView,
+    contraction_dag_hash,
+    validate_contraction_dag,
+)
 from quantum_bench.tn.network import validate_dag_inputs
 
 

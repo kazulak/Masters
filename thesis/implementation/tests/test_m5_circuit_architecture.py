@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import inspect
+import os
+import subprocess
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -8,6 +11,25 @@ from quantum_bench.bench import m5_circuit_study
 
 
 ROOT = Path(__file__).parents[1]
+
+
+def test_active_imports_do_not_load_historical_taskgraph() -> None:
+    script = """
+import sys
+import quantum_bench.tn.graph
+import quantum_bench.execution.compiler
+import quantum_bench.targets.upmem.m5_whole_circuit_engine
+import quantum_bench.bench.m5_circuit_study
+assert 'quantum_bench.tn.task_graph' not in sys.modules
+"""
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=ROOT,
+        env={**os.environ, "PYTHONPATH": "src"},
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 def test_active_m5_study_plans_once_then_uses_functional_dag(

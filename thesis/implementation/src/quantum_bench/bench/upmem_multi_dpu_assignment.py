@@ -15,8 +15,9 @@ from quantum_bench.circuits import load_circuit, manifest
 from quantum_bench.core.jsonio import write_json
 from quantum_bench.core.records import ContractionTask, JsonDict, to_jsonable
 from quantum_bench.environment import capture_environment
-from quantum_bench.targets.upmem import UPMEM_DENSE_ESTIMATE_KEY, annotate_task_graph_with_upmem_estimates
-from quantum_bench.tn import build_tensor_network, plan_task_graph_with_config, with_path_cost_summary
+from quantum_bench.targets.upmem.schedule import UPMEM_DENSE_ESTIMATE_KEY, annotate_task_graph_with_upmem_estimates
+from quantum_bench.tn.network import build_tensor_network
+from quantum_bench.tn.task_graph import plan_task_graph_with_config, with_path_cost_summary
 from quantum_bench.tn.execution import frontier_waves
 
 

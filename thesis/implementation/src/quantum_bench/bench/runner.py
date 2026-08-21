@@ -20,22 +20,22 @@ from quantum_bench.core.records import TIMING_SCHEMA_VERSION, BenchmarkCaseResul
 from quantum_bench.core.target_estimates import TargetEstimateSet
 from quantum_bench.environment import capture_environment
 from quantum_bench.routing import TaskRouteContext, route_task_graph
-from quantum_bench.tn import build_tensor_network, plan_task_graph_with_config, with_path_cost_summary
+from quantum_bench.tn.network import build_tensor_network
+from quantum_bench.tn.task_graph import plan_task_graph_with_config, with_path_cost_summary
 from quantum_bench.providers import route_registry
-from quantum_bench.targets.upmem import (
+from quantum_bench.targets.upmem.synthetic_pressure import (
     SYNTHETIC_PRESSURE_ERROR,
-    UPMEM_DENSE_ESTIMATE_KEY,
-    UPMEM_DENSE_TILE_PLAN_ARTIFACT_KEY,
     is_synthetic_pressure_case,
-    upmem_dense_tile_plan_rows,
-    upmem_task_estimate_rows,
 )
 from quantum_bench.targets.upmem.schedule import (
+    UPMEM_DENSE_ESTIMATE_KEY,
     UpmemScheduleEstimate,
     annotate_task_graph_with_upmem_estimates,
     estimate_dense_task_graph_sidecar,
+    upmem_task_estimate_rows,
     upmem_target_path_summary,
 )
+from quantum_bench.targets.upmem.tile_plan import UPMEM_DENSE_TILE_PLAN_ARTIFACT_KEY, upmem_dense_tile_plan_rows
 from quantum_bench.validation import compute_reference, validate
 from quantum_bench.validation.statevectors import tensor_to_quest_statevector
 

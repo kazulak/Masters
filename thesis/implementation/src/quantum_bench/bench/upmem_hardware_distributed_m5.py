@@ -34,7 +34,8 @@ from quantum_bench.core.jsonio import write_json
 from quantum_bench.environment import capture_environment
 from quantum_bench.targets.upmem.execution_plan_v3 import DEFAULT_TIMEOUT_S
 from quantum_bench.targets.upmem.hardware_session import hardware_environment_metadata
-from quantum_bench.tn import build_tensor_network, plan_task_graph_with_config
+from quantum_bench.tn.network import build_tensor_network
+from quantum_bench.tn.task_graph import plan_task_graph_with_config
 from quantum_bench.tn.execution_bundle import canonical_hash
 from quantum_bench.core.records import to_jsonable
 from quantum_bench.formats import conversion_error_metrics

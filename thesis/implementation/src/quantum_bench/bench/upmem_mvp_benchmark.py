@@ -24,7 +24,8 @@ from quantum_bench.circuits import load_circuit, manifest
 from quantum_bench.core.jsonio import write_json, write_jsonl
 from quantum_bench.core.records import JsonDict, to_jsonable
 from quantum_bench.environment import capture_environment
-from quantum_bench.targets.upmem import SYNTHETIC_PRESSURE_ERROR, annotate_task_graph_with_upmem_estimates, is_synthetic_pressure_case
+from quantum_bench.targets.upmem.schedule import annotate_task_graph_with_upmem_estimates
+from quantum_bench.targets.upmem.synthetic_pressure import SYNTHETIC_PRESSURE_ERROR, is_synthetic_pressure_case
 from quantum_bench.targets.upmem.taskgraph_runtime import (
     UPMEM_EXECUTION_MODE,
     UPMEM_TASKGRAPH_POLICIES,
@@ -33,16 +34,15 @@ from quantum_bench.targets.upmem.taskgraph_runtime import (
     execute_upmem_taskgraph_runtime,
     upmem_taskgraph_executor_config,
 )
-from quantum_bench.tn import (
+from quantum_bench.tn.execution import execute_task_sequence_np_einsum
+from quantum_bench.tn.execution_bundle import (
     build_execution_bundle,
-    build_tensor_network,
-    execute_task_sequence_np_einsum,
     execution_identity_metadata,
     executor_config_hash,
-    plan_task_graph_with_config,
     with_execution_identity,
-    with_path_cost_summary,
 )
+from quantum_bench.tn.network import build_tensor_network
+from quantum_bench.tn.task_graph import plan_task_graph_with_config, with_path_cost_summary
 
 
 UPMEM_MVP_BENCHMARK_SCHEMA_VERSION = "upmem_mvp_benchmark_v1"

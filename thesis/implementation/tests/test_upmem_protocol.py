@@ -45,7 +45,7 @@ from quantum_bench.targets.upmem.runtime_checks import (
 )
 from quantum_bench.targets.upmem.runtime_evidence import transfer_accounting
 from quantum_bench.targets.upmem.taskgraph_runtime import execute_upmem_taskgraph_runtime
-from quantum_bench.tn import execute_task_sequence_np_einsum
+from quantum_bench.tn.execution import execute_task_sequence_np_einsum
 
 from .support import (
     contraction_task,

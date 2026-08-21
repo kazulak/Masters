@@ -20,7 +20,7 @@ from quantum_bench.circuits import load_circuit
 from quantum_bench.core.jsonio import write_json, write_jsonl
 from quantum_bench.core.records import JsonDict, TaskGraph
 from quantum_bench.environment import capture_environment
-from quantum_bench.tn.execution import order_final_tensor
+from quantum_bench.tn.execution import execute_task_sequence_np_einsum, order_final_tensor
 from quantum_bench.targets.upmem.hardware_session import (
     HardwareSessionBuild,
     build_resident_hardware_session,
@@ -54,15 +54,15 @@ from quantum_bench.targets.upmem.execution_plan import (
     UpmemSchedulePlan,
     UpmemValidationStatuses,
 )
-from quantum_bench.tn import (
+from quantum_bench.tn.execution_bundle import (
     build_execution_bundle,
-    build_tensor_network,
     contraction_path_structure_hash,
-    execute_task_sequence_np_einsum,
-    plan_task_graph_with_config,
+    execution_identity_metadata,
+    executor_config_hash,
     with_execution_identity,
 )
-from quantum_bench.tn.execution_bundle import execution_identity_metadata, executor_config_hash
+from quantum_bench.tn.network import build_tensor_network
+from quantum_bench.tn.task_graph import plan_task_graph_with_config
 
 
 RESIDENT_PLAN_SCHEMA_VERSION = "upmem_hardware_taskgraph_resident_plan_v1"

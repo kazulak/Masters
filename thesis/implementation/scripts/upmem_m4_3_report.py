@@ -16,8 +16,7 @@ from quantum_bench.bench.upmem_hardware_simplepim_taskgraph_m4_3 import (
     _require_response,
     SUITE_ID,
 )
-from quantum_bench.tn import execution_identity_metadata
-from quantum_bench.tn.execution_bundle import canonical_hash
+from quantum_bench.tn.execution_bundle import canonical_hash, execution_identity_metadata
 
 
 def _canonical_json(value: object) -> str:

@@ -10,7 +10,7 @@ import pytest
 
 from quantum_bench.bench import upmem_hardware_frontier_m6a as m6a
 from quantum_bench.bench import upmem_simplepim_taskgraph as engine
-from quantum_bench.targets.upmem import simplepim_taskgraph_executor as executor
+import quantum_bench.targets.upmem.simplepim_taskgraph_executor as executor
 from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
     RESIDENT_EXECUTION_PLAN_BACKEND_ID,
     RESIDENT_EXECUTION_PLAN_PROFILE_VERSION,

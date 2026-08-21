@@ -27,10 +27,9 @@ from quantum_bench.targets.upmem.hardware_taskgraph_sliced_resident import (
 from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
     allocate_resident_slots,
 )
-from quantum_bench.tn import with_execution_identity
 from quantum_bench.tn.execution import execute_task_sequence_np_einsum
-from quantum_bench.tn.network import TensorNetworkValue
-from quantum_bench.tn.network import build_tensor_network
+from quantum_bench.tn.execution_bundle import with_execution_identity
+from quantum_bench.tn.network import TensorNetworkValue, build_tensor_network
 from quantum_bench.tn.slicing import (
     SliceInputRestriction,
     build_slice_aware_taskgraph_model,

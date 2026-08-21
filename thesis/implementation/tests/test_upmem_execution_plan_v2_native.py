@@ -10,9 +10,9 @@ import subprocess
 import pytest
 
 from quantum_bench.targets.upmem.generic_boundary import build_generic_boundary_workload
-from quantum_bench.targets.upmem import hardware_taskgraph_resident as resident
+import quantum_bench.targets.upmem.hardware_taskgraph_resident as resident
 from quantum_bench.targets.upmem.hardware_taskgraph_resident import build_resident_graph_package
-from quantum_bench.targets.upmem import simplepim_taskgraph_executor as executor
+import quantum_bench.targets.upmem.simplepim_taskgraph_executor as executor
 
 
 ROOT = Path(__file__).resolve().parents[1]

@@ -25,15 +25,13 @@ from quantum_bench.core.records import BenchmarkContext, JsonDict, PathSummary, 
 from quantum_bench.environment import capture_environment
 from quantum_bench.providers import route_registry
 from quantum_bench.providers.base import ExecutionRoute
-from quantum_bench.targets.upmem import SYNTHETIC_PRESSURE_ERROR, is_synthetic_pressure_case
-from quantum_bench.tn import (
+from quantum_bench.targets.upmem.synthetic_pressure import SYNTHETIC_PRESSURE_ERROR, is_synthetic_pressure_case
+from quantum_bench.tn.execution_bundle import build_execution_bundle, with_execution_identity
+from quantum_bench.tn.network import (
     TensorNetworkValue,
-    build_execution_bundle,
     build_tensor_network,
-    plan_task_graph_with_config,
-    with_execution_identity,
-    with_path_cost_summary,
 )
+from quantum_bench.tn.task_graph import plan_task_graph_with_config, with_path_cost_summary
 from quantum_bench.validation import probability_error_metrics, tensor_to_quest_statevector, validate, validation_result_to_dict
 
 

@@ -19,12 +19,9 @@ from quantum_bench.core.records import (
     TensorSpec,
     TensorValue,
 )
-from quantum_bench.tn import (
-    build_tensor_network,
-    plan_task_graph,
-    with_execution_identity,
-)
-from quantum_bench.tn.network import TensorNetworkValue
+from quantum_bench.tn.execution_bundle import with_execution_identity
+from quantum_bench.tn.network import TensorNetworkValue, build_tensor_network
+from quantum_bench.tn.task_graph import plan_task_graph
 from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
     RESIDENT_CONTROL_H2D_BYTES_PER_LAUNCH,
     RESIDENT_DESCRIPTOR_CONTROL_BYTES,

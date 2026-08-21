@@ -22,7 +22,7 @@ from quantum_bench.bench.run_dirs import EVIDENCE_ARTIFACT_KIND, create_run_dir,
 from quantum_bench.core.jsonio import write_json, write_jsonl
 from quantum_bench.core.records import JsonDict
 from quantum_bench.environment import capture_environment
-from quantum_bench.tn import executor_config_hash
+from quantum_bench.tn.execution_bundle import executor_config_hash
 from quantum_bench.targets.upmem.hardware_frontier_session import (
     execute_hardware_frontier_session,
     parse_hardware_frontier_profile,

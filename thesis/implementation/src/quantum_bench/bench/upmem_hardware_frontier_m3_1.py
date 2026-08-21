@@ -41,14 +41,14 @@ from quantum_bench.targets.upmem.hardware_taskgraph_frontier import (
     validate_hardware_frontier_graph,
     write_hardware_frontier_graph_package,
 )
-from quantum_bench.tn import (
+from quantum_bench.tn.execution import execute_task_frontier_np_einsum
+from quantum_bench.tn.execution_bundle import (
     build_execution_bundle,
-    build_tensor_network,
     executor_config_hash,
-    execute_task_frontier_np_einsum,
-    plan_task_graph_with_config,
     with_execution_identity,
 )
+from quantum_bench.tn.network import build_tensor_network
+from quantum_bench.tn.task_graph import plan_task_graph_with_config
 
 
 SUITE_SCHEMA_VERSION = "upmem_hardware_frontier_m3_1_v1"

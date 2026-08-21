@@ -53,14 +53,16 @@ from quantum_bench.execution import (
     execute,
     execution_plan_hash,
 )
-from quantum_bench.tn import (
-    PlannerRequest,
+from quantum_bench.tn.graph import (
+    ContractionDAG,
+    ContractNode,
+    ReduceNode,
+    TensorView,
     build_contraction_dag,
-    build_tensor_network_data,
     contraction_dag_hash,
-    plan_contractions,
 )
-from quantum_bench.tn.graph import ContractionDAG, ContractNode, ReduceNode, TensorView
+from quantum_bench.tn.network import build_tensor_network_data
+from quantum_bench.tn.planning import PlannerRequest, plan_contractions
 from quantum_bench.tn.planner_records import PlannerResult
 from quantum_bench.whole_circuit import (
     DeviceTopology,

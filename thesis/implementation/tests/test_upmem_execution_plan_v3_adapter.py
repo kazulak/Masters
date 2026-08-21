@@ -8,10 +8,11 @@ import pytest
 import numpy as np
 
 from quantum_bench.circuits import builtin_circuit
-from quantum_bench.targets.upmem import execution_plan_v3 as v3
+import quantum_bench.targets.upmem.execution_plan_v3 as v3
 from quantum_bench.targets.upmem.hardware_taskgraph_resident import resident_requantize
 from quantum_bench.targets.upmem.m5_task_selection import select_highest_work_supported_task
-from quantum_bench.tn import build_tensor_network, plan_task_graph
+from quantum_bench.tn.network import build_tensor_network
+from quantum_bench.tn.task_graph import plan_task_graph
 
 
 def _build_metadata(root: Path) -> dict[str, str]:

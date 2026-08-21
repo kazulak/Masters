@@ -16,16 +16,14 @@ from quantum_bench.core.jsonio import write_json, write_jsonl
 from quantum_bench.core.records import TaskGraph
 from quantum_bench.core.target_estimates import TargetEstimateSet
 from quantum_bench.environment import capture_environment
-from quantum_bench.targets.upmem import UPMEM_DENSE_ESTIMATE_KEY
-from quantum_bench.targets.upmem.schedule import UPMEM_DENSE_MODEL, estimate_dense_task_graph_sidecar, upmem_target_path_summary
-from quantum_bench.tn import (
+from quantum_bench.targets.upmem.schedule import UPMEM_DENSE_ESTIMATE_KEY, UPMEM_DENSE_MODEL, estimate_dense_task_graph_sidecar, upmem_target_path_summary
+from quantum_bench.tn.execution_bundle import (
     build_execution_bundle,
-    build_tensor_network,
     contraction_path_structure_hash,
     executor_config_hash,
-    plan_task_graph_with_config,
-    with_path_cost_summary,
 )
+from quantum_bench.tn.network import build_tensor_network
+from quantum_bench.tn.task_graph import plan_task_graph_with_config, with_path_cost_summary
 from quantum_bench.tn.planner_motifs import build_planner_motif_workload, is_planner_motif_case
 from quantum_bench.tn.upmem_path_cost import (
     DEFAULT_UPMEM_PATH_COST_NORMALIZATION_ID,

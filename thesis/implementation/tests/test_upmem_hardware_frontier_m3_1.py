@@ -9,7 +9,8 @@ import pytest
 
 from quantum_bench.bench import upmem_hardware_frontier_m3_1 as m31
 from quantum_bench.circuits import load_circuit
-from quantum_bench.tn import build_tensor_network, plan_task_graph_with_config
+from quantum_bench.tn.network import build_tensor_network
+from quantum_bench.tn.task_graph import plan_task_graph_with_config
 from quantum_bench.targets.upmem.hardware_taskgraph_frontier import (
     BACKEND_ID,
     NATIVE_SCHEMA,

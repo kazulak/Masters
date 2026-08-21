@@ -14,19 +14,22 @@ from quantum_bench.circuits import load_circuit, manifest
 from quantum_bench.core.jsonio import write_json
 from quantum_bench.core.records import JsonDict, TaskGraph, to_jsonable
 from quantum_bench.environment import capture_environment
-from quantum_bench.targets.upmem import (
+from quantum_bench.targets.upmem.frontier import (
     MEMORY_LEVEL_L1_WRAM,
     MEMORY_LEVEL_L2_SINGLE_DPU_MRAM,
     MEMORY_LEVEL_L3_MULTI_DPU,
     MEMORY_LEVEL_L4_OUT_OF_SCOPE,
     UpmemResourceModel,
     analyze_task_graph,
+)
+from quantum_bench.targets.upmem.schedule import annotate_task_graph_with_upmem_estimates
+from quantum_bench.targets.upmem.synthetic_pressure import (
     build_synthetic_pressure_task_graph,
     is_synthetic_pressure_case,
     synthetic_pressure_manifest,
 )
-from quantum_bench.tn import build_tensor_network, plan_task_graph_with_config, with_path_cost_summary
-from quantum_bench.targets.upmem import annotate_task_graph_with_upmem_estimates
+from quantum_bench.tn.network import build_tensor_network
+from quantum_bench.tn.task_graph import plan_task_graph_with_config, with_path_cost_summary
 
 
 BENCHMARK_MATRIX_SCHEMA_VERSION = "benchmark_matrix_v1"

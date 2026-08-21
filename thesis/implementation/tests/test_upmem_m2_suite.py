@@ -28,11 +28,9 @@ from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
     validate_resident_graph_package_file,
     validate_resident_graph_package_bytes,
 )
-from quantum_bench.tn import (
-    build_tensor_network,
-    execute_task_sequence_np_einsum,
-    plan_task_graph_with_config,
-)
+from quantum_bench.tn.execution import execute_task_sequence_np_einsum
+from quantum_bench.tn.network import build_tensor_network
+from quantum_bench.tn.task_graph import plan_task_graph_with_config
 from quantum_bench.tn.slicing import build_slice_aware_taskgraph_model
 
 

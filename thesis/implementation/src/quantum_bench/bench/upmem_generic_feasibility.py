@@ -12,9 +12,11 @@ from quantum_bench.circuits import load_circuit
 from quantum_bench.core.jsonio import write_json, write_jsonl
 from quantum_bench.core.records import JsonDict, to_jsonable
 from quantum_bench.environment import capture_environment
-from quantum_bench.targets.upmem import SYNTHETIC_PRESSURE_ERROR, annotate_task_graph_with_upmem_estimates, is_synthetic_pressure_case
+from quantum_bench.targets.upmem.schedule import annotate_task_graph_with_upmem_estimates
+from quantum_bench.targets.upmem.synthetic_pressure import SYNTHETIC_PRESSURE_ERROR, is_synthetic_pressure_case
 from quantum_bench.targets.upmem.taskgraph_runtime import UPMEM_TASKGRAPH_QUANTIZATION_MODES, build_generic_taskgraph_reference
-from quantum_bench.tn import build_tensor_network, plan_task_graph_with_config, with_path_cost_summary
+from quantum_bench.tn.network import build_tensor_network
+from quantum_bench.tn.task_graph import plan_task_graph_with_config, with_path_cost_summary
 
 
 UPMEM_GENERIC_FEASIBILITY_SCHEMA_VERSION = "upmem_generic_feasibility_v1"

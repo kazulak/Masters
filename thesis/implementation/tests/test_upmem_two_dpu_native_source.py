@@ -26,7 +26,7 @@ from quantum_bench.targets.upmem.hardware_taskgraph_sliced_resident import (
     build_two_slice_resident_plan,
     write_two_slice_resident_graph_packages,
 )
-from quantum_bench.tn import with_execution_identity
+from quantum_bench.tn.execution_bundle import with_execution_identity
 from quantum_bench.tn.network import TensorNetworkValue
 
 

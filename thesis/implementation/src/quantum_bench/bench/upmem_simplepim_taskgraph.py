@@ -48,13 +48,10 @@ from quantum_bench.targets.upmem.hardware_session import hardware_environment_me
 from quantum_bench.targets.upmem.simplepim_taskgraph_executor import (
     NATIVE_HARDWARE_PROFILE_VERSION,
 )
-from quantum_bench.tn import (
-    build_tensor_network,
-    execute_task_sequence_np_einsum,
-    plan_task_graph_with_config,
-    with_execution_identity,
-)
-from quantum_bench.tn.network import TensorNetworkValue
+from quantum_bench.tn.execution import execute_task_sequence_np_einsum
+from quantum_bench.tn.execution_bundle import with_execution_identity
+from quantum_bench.tn.network import TensorNetworkValue, build_tensor_network
+from quantum_bench.tn.task_graph import plan_task_graph_with_config
 
 
 SUITE_ID = "upmem_hardware_simplepim_taskgraph"

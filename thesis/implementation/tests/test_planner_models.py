@@ -24,11 +24,12 @@ from quantum_bench.targets.upmem.tile_plan import (
     plan_dense_task,
     plan_l2_tiled_execution,
 )
-from quantum_bench.tn import build_tensor_network, execute_task_sequence_np_einsum, plan_task_graph_with_config
+from quantum_bench.tn.execution import execute_task_sequence_np_einsum
 from quantum_bench.tn.graph import build_contraction_dag
-from quantum_bench.tn.network import TensorNetworkValue
+from quantum_bench.tn.network import TensorNetworkValue, build_tensor_network
 from quantum_bench.tn.planning import plan_contractions
 from quantum_bench.tn.planner_motifs import build_planner_motif_workload
+from quantum_bench.tn.task_graph import plan_task_graph_with_config
 from quantum_bench.tn.upmem_path_cost import (
     FIXED_LOG1P_GENERIC_CAPS_V1,
     PathCostComponents,

@@ -33,7 +33,8 @@ from quantum_bench.targets.upmem.distributed_plan_v3 import (
     validate_distributed_plan_v3,
 )
 from quantum_bench.targets.upmem.m5_task_selection import select_highest_work_supported_task
-from quantum_bench.tn import build_tensor_network, plan_task_graph
+from quantum_bench.tn.network import build_tensor_network
+from quantum_bench.tn.task_graph import plan_task_graph
 
 
 PACKAGE = b"package-v3"

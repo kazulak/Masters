@@ -21,17 +21,16 @@ from quantum_bench.formats.fixed_point import (
     quantize_fixed_point,
 )
 from quantum_bench.routing import GenericTaskPreparationInput, prepare_generic_task
-from quantum_bench.tn import (
+from quantum_bench.tn.execution import execute_task_sequence_np_einsum
+from quantum_bench.tn.execution_bundle import (
     build_execution_bundle,
-    build_tensor_network,
     contraction_path_structure_hash,
-    execute_task_sequence_np_einsum,
-    execute_task_sliced_sequence_np_einsum,
-    plan_task_graph,
-    plan_task_graph_with_config,
     validate_execution_bundle,
     with_execution_identity,
 )
+from quantum_bench.tn.network import build_tensor_network
+from quantum_bench.tn.slice_execution import execute_task_sliced_sequence_np_einsum
+from quantum_bench.tn.task_graph import plan_task_graph, plan_task_graph_with_config
 from quantum_bench.tn.materialize import TaskInputMaterializationRequest, materialize_task_inputs
 from quantum_bench.validation import compute_reference, validate
 

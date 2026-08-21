@@ -26,7 +26,7 @@ from quantum_bench.core.records import (
     TensorValue,
     to_jsonable,
 )
-from quantum_bench.targets.upmem import distributed_plan_v3
+import quantum_bench.targets.upmem.distributed_plan_v3 as distributed_plan_v3
 from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
     RESIDENT_OPERATION_ABI_V2,
     RESIDENT_PACKAGE_HEADER_FORMAT,

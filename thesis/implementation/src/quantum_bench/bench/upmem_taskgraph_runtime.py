@@ -30,7 +30,9 @@ from quantum_bench.targets.upmem.taskgraph_runtime import (
     build_generic_taskgraph_reference,
     execute_upmem_taskgraph_runtime,
 )
-from quantum_bench.tn import build_tensor_network, execute_task_sequence_np_einsum, plan_task_graph_with_config, with_path_cost_summary
+from quantum_bench.tn.execution import execute_task_sequence_np_einsum
+from quantum_bench.tn.network import build_tensor_network
+from quantum_bench.tn.task_graph import plan_task_graph_with_config, with_path_cost_summary
 from quantum_bench.validation import validate
 
 

@@ -10,7 +10,7 @@ import time
 
 import pytest
 
-from quantum_bench.targets.upmem import execution_plan_v4 as v4
+import quantum_bench.targets.upmem.execution_plan_v4 as v4
 
 
 TASK_HASH = "ab" * 32

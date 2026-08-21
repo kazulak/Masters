@@ -51,15 +51,11 @@ from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
     build_resident_policy_reference,
     validate_resident_graph_package_file,
 )
-from quantum_bench.tn import (
-    build_tensor_network,
-    execute_task_sequence_np_einsum,
-    plan_task_graph_with_config,
-    executor_config_hash,
-    with_execution_identity,
-)
 from quantum_bench.tn.contract import contract_binary_task
-from quantum_bench.tn.execution import order_final_tensor
+from quantum_bench.tn.execution import execute_task_sequence_np_einsum, order_final_tensor
+from quantum_bench.tn.execution_bundle import executor_config_hash, with_execution_identity
+from quantum_bench.tn.network import build_tensor_network
+from quantum_bench.tn.task_graph import plan_task_graph_with_config
 from quantum_bench.tn.slicing import (
     SliceInputRestriction,
     build_slice_aware_taskgraph_model,

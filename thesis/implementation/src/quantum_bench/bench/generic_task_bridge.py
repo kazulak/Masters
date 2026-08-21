@@ -10,19 +10,18 @@ from quantum_bench.core.jsonio import write_json
 from quantum_bench.core.records import JsonDict, to_jsonable
 from quantum_bench.environment import capture_environment
 from quantum_bench.routing import GenericTaskPreparationInput, prepare_generic_task
-from quantum_bench.targets.upmem import (
+from quantum_bench.targets.upmem.generic_boundary import build_generic_boundary_workload, is_generic_boundary_case
+from quantum_bench.targets.upmem.generic_bridge import (
     GENERIC_LOOP_BACKEND_ID,
-    build_generic_boundary_workload,
     execute_generic_bridge,
-    is_generic_boundary_case,
     write_generic_bridge_input_manifest,
 )
-from quantum_bench.tn import (
+from quantum_bench.tn.materialize import (
     TaskInputMaterializationRequest,
-    build_tensor_network,
     materialize_task_inputs,
-    plan_task_graph,
 )
+from quantum_bench.tn.network import build_tensor_network
+from quantum_bench.tn.task_graph import plan_task_graph
 
 
 GENERIC_TASK_BRIDGE_SCHEMA_VERSION = "generic_task_bridge_v1"

@@ -13,7 +13,7 @@ import pytest
 
 from quantum_bench.bench import upmem_simplepim_taskgraph as route
 from quantum_bench.circuits import load_circuit
-from quantum_bench.targets.upmem import simplepim_taskgraph_executor as executor
+import quantum_bench.targets.upmem.simplepim_taskgraph_executor as executor
 from quantum_bench.targets.upmem.execution_plan_v1 import (
     CrossDpuTransfer,
     PLACEMENT_FRONTIER,
@@ -31,11 +31,9 @@ from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
     RESIDENT_PROFILE_VERSION,
     RESIDENT_ROUTE_ID,
 )
-from quantum_bench.tn import (
-    build_tensor_network,
-    plan_task_graph_with_config,
-    with_execution_identity,
-)
+from quantum_bench.tn.execution_bundle import with_execution_identity
+from quantum_bench.tn.network import build_tensor_network
+from quantum_bench.tn.task_graph import plan_task_graph_with_config
 
 
 ROOT = Path(__file__).resolve().parents[1]

@@ -25,6 +25,8 @@ final documentation set.
 - Unsupported and failed runs remain explicit evidence rows.
 - Hashing and validation remain outside kernel timing.
 - Historical evidence is not rewritten by this migration.
+- Package-level convenience re-exports are not preserved; active callers import
+  symbols from their owning modules so dependencies remain visible.
 
 ## Work Packages
 
@@ -53,7 +55,8 @@ final documentation set.
 | `TensorInputs` wrapper | removed in `e66e2a3` | complete |
 | one-implementation M5 strategy registry | removed in current WP6 batch | complete |
 | projected-prefix planner to `ContractionTask` | removed in current WP3 batch | complete |
-| eager legacy imports from `tn/__init__.py` | `tn/__init__.py` | WP10 |
+| eager legacy imports from `tn/__init__.py` | removed; callers use owning modules | complete |
+| eager legacy imports from `targets/upmem/__init__.py` | removed; callers use owning modules | complete |
 | M5/v4 defaults in generic contracts | `execution/contracts.py` | WP5/WP6 |
 | milestone CLI and Make targets | `bench/__main__.py`, `Makefile` | WP9 |
 

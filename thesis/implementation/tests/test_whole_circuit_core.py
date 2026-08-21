@@ -12,7 +12,8 @@ from quantum_bench.core.records import (
     TensorSpec,
     TensorValue,
 )
-from quantum_bench.tn import build_tensor_network, plan_task_graph
+from quantum_bench.tn.network import build_tensor_network
+from quantum_bench.tn.task_graph import plan_task_graph
 from quantum_bench.tn.contract import contract_binary_task
 from quantum_bench.tn.execution import execute_task_sequence_np_einsum
 from quantum_bench.whole_circuit import (

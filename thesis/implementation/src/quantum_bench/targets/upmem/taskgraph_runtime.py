@@ -13,8 +13,8 @@ from quantum_bench.targets.upmem.evidence import (
     UPMEM_EXECUTION_MODE_SDK_SIMULATOR,
 )
 from quantum_bench.targets.upmem.generic_bridge import execute_generic_bridge, write_generic_bridge_input_manifest
-from quantum_bench.targets.upmem import numeric_reference as _numeric_reference
-from quantum_bench.targets.upmem import runtime_evidence as _runtime_evidence
+import quantum_bench.targets.upmem.numeric_reference as _numeric_reference
+import quantum_bench.targets.upmem.runtime_evidence as _runtime_evidence
 from quantum_bench.targets.upmem.numeric_reference import (
     _component_tensor,
     _complex_split_reference_metrics,
