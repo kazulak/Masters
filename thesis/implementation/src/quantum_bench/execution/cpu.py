@@ -20,13 +20,13 @@ from quantum_bench.execution.contracts import (
 from quantum_bench.execution.numeric import contract_node, reduce_values
 from quantum_bench.tn.graph import ContractNode, ContractionDAG, ReduceNode, TensorView
 from quantum_bench.tn.graph import contraction_dag_hash, validate_contraction_dag
-from quantum_bench.tn.network import TensorInputs, tensor_input_map, validate_dag_inputs
+from quantum_bench.tn.network import validate_dag_inputs
 
 
 def run_cpu(
     plan: ExecutionPlan,
     dag: ContractionDAG,
-    inputs: Mapping[str, np.ndarray] | TensorInputs,
+    inputs: Mapping[str, np.ndarray],
     context: RunContext,
 ) -> ExecutionResult:
     """Execute a compiled CPU plan without mutating source arrays.
@@ -173,13 +173,7 @@ def _validate_runtime_node_order(dag: ContractionDAG, order: tuple[str, ...]) ->
                 )
 
 
-def _input_map(
-    inputs: Mapping[str, np.ndarray] | TensorInputs,
-) -> dict[str, np.ndarray]:
-    if isinstance(inputs, TensorInputs):
-        if len({value.tensor_id for value in inputs.values}) != len(inputs.values):
-            raise ValueError("Tensor inputs contain duplicate tensor ids")
-        return tensor_input_map(inputs)
+def _input_map(inputs: Mapping[str, np.ndarray]) -> dict[str, np.ndarray]:
     return {tensor_id: np.asarray(array) for tensor_id, array in inputs.items()}
 
 

@@ -6,7 +6,7 @@ transformations. It deliberately does not introduce a ScientificPlan layer.
 ~~~text
 CircuitSpec
   -> build_tensor_network_data
-  -> TensorNetworkSpec + TensorInputs
+  -> TensorNetworkSpec + Mapping[str, ndarray]
   -> plan_contractions / PlannerResult
   -> build_contraction_dag / ContractionDAG
   -> compile_execution / ExecutionPlan
@@ -20,12 +20,12 @@ CircuitSpec
 | Stage and symbol | Input | Output | Parameters | Mutable state/side effects |
 | --- | --- | --- | --- | --- |
 | Circuit factories in circuits/ | Suite case/config | CircuitSpec | Family, qubits, depth/repetitions, seed, gate parameters | Local construction only; returned operations are immutable. |
-| build_tensor_network_data in tn/network.py | CircuitSpec | (TensorNetworkSpec, TensorInputs) | Gate tensor definitions and output ordering | Allocates input NumPy arrays. Arrays are mutable Python objects but are read-only inputs after this stage. |
+| build_tensor_network_data in tn/network.py | CircuitSpec | (TensorNetworkSpec, Mapping[str, ndarray]) | Gate tensor definitions and output ordering | Allocates a plain tensor-id lookup and NumPy arrays. Callers and executors treat the arrays as read-only. |
 | plan_contractions in tn/planning.py | TensorNetworkSpec, PlannerRequest or config mapping | PlannerResult | Engine, algorithm, objective, seed/repeats, UPMEM profile, normalization, representation assumption | Planner-local memory and external planner state only; no device I/O. |
 | build_contraction_dag in tn/graph.py | TensorNetworkSpec, PlannerResult.path | ContractionDAG | Pairwise dynamic active-list path | None; no arrays are inspected. |
 | apply_slicing in tn/graph.py | ContractionDAG, SliceSpec | New ContractionDAG | One supported global contracted-label slice | None; original DAG is not mutated. |
 | compile_execution in execution/compiler.py | ContractionDAG, CpuCompileRequest or UpmemCompileRequest | ExecutionPlan or UnsupportedExecution | Target, numeric mode, logical topology, kernel/decomposition/placement/reduction and profile IDs | None; it does not allocate devices, access binaries, or transfer data. |
-| execute in execution/runner.py | ExecutionPlan, DAG, TensorInputs, RunContext | ExecutionResult or deterministic dispatch ExecutionFailure | Run ID, target, warmups/repetitions, timeout, target runtime resources | Dispatches exactly one target. Malformed inputs and native/session failures raise unchanged so experiment orchestration can retain their failure stage. |
+| execute in execution/runner.py | ExecutionPlan, DAG, Mapping[str, ndarray], RunContext | ExecutionResult or deterministic dispatch ExecutionFailure | Run ID, target, warmups/repetitions, timeout, target runtime resources | Dispatches exactly one target. Malformed inputs and native/session failures raise unchanged so experiment orchestration can retain their failure stage. |
 | run_cpu in execution/cpu.py | CPU plan, DAG, inputs, context | ExecutionResult | Numeric mode, node order, repetitions | Fresh local tensor map and output buffer per call; no source mutation. |
 | run_upmem in execution/upmem.py | UPMEM plan, DAG, inputs, context with UpmemRuntimeResources | ExecutionResult; malformed/native/session failures raise | Logical topology in plan; rank paths/binaries/session opener in runtime resources; timeout and repetitions | UPMEM allocation/session, MRAM buffers, subprocess/device state, and local graph values. No CPU/simulator fallback. |
 | m5_circuit_study.run_study | Suite config and injected engine factories | Run directory and normalized records | Route variants, tolerances, warmups/repeats, timeout | Study worklist, reference arrays, injected sessions, and files under ignored runs/. |
@@ -37,9 +37,10 @@ explicit unsupported target in this slice, not a CPU fallback.
 ## Data Records
 
 TensorNetworkSpec contains circuit identity, tensor descriptors, output labels,
-and the einsum expression. TensorInputs contains (tensor_id, array) values with
-exact ID, shape, and dtype validation. The separation allows a planner to
-operate on metadata while an executor receives numerical payloads.
+and the einsum expression. A plain mapping contains tensor-id-to-array values
+with exact ID, shape, and dtype validation. The separation allows a planner to
+operate on metadata while an executor receives numerical payloads without a
+wrapper type.
 
 PlannerResult contains the selected pairwise path, planner identity, path
 summary, planning time, and planner metadata. It is planning output, not an

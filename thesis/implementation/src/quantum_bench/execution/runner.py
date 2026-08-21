@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
+import numpy as np
+
 from quantum_bench.execution.contracts import (
     ExecutionFailure,
     ExecutionPlan,
@@ -12,13 +16,10 @@ from quantum_bench.execution.contracts import (
 from quantum_bench.execution.cpu import run_cpu
 from quantum_bench.execution.upmem import run_upmem
 from quantum_bench.tn.graph import ContractionDAG
-from quantum_bench.tn.network import TensorInputs
-
-
 def execute(
     plan: ExecutionPlan,
     dag: ContractionDAG,
-    inputs: TensorInputs,
+    inputs: Mapping[str, np.ndarray],
     context: RunContext,
 ) -> ExecutionResult | ExecutionFailure:
     """Dispatch one compiled plan without fallback.

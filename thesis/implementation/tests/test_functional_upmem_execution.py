@@ -27,7 +27,6 @@ from quantum_bench.tn.graph import (
     contraction_dag_hash,
     apply_slicing,
 )
-from quantum_bench.tn.network import TensorInput, TensorInputs
 from quantum_bench.targets.upmem.execution_plan_v4 import MAX_CONTRACTED
 
 
@@ -163,10 +162,8 @@ class _FakeSession:
         return self.terminal_metadata
 
 
-def _inputs(*items: tuple[str, np.ndarray]) -> TensorInputs:
-    return TensorInputs(
-        values=tuple(TensorInput(tensor_id=name, array=value) for name, value in items)
-    )
+def _inputs(*items: tuple[str, np.ndarray]) -> dict[str, np.ndarray]:
+    return dict(items)
 
 
 def test_compile_upmem_is_deterministic_and_portable() -> None:

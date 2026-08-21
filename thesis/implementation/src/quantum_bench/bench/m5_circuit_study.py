@@ -61,7 +61,6 @@ from quantum_bench.tn import (
     plan_contractions,
 )
 from quantum_bench.tn.graph import ContractionDAG, ContractNode, ReduceNode, TensorView
-from quantum_bench.tn.network import TensorInputs
 from quantum_bench.tn.planners import PlannerResult
 from quantum_bench.whole_circuit import (
     DeviceTopology,
@@ -97,7 +96,7 @@ class _Plan:
     planner: dict[str, Any]
     circuit: Any
     spec: TensorNetworkSpec
-    inputs: TensorInputs
+    inputs: dict[str, np.ndarray]
     planner_result: PlannerResult
     dag: ContractionDAG
     dag_hash: str

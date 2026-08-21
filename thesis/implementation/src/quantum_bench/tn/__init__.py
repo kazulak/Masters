@@ -27,12 +27,9 @@ from quantum_bench.tn.graph import (
     validate_contraction_dag,
 )
 from quantum_bench.tn.network import (
-    TensorInput,
-    TensorInputs,
     TensorNetworkValue,
     build_tensor_network,
     build_tensor_network_data,
-    tensor_input_map,
     validate_tensor_inputs,
 )
 from quantum_bench.tn.planning import (
@@ -61,8 +58,6 @@ __all__ = [
     "ContractionDAG",
     "ReduceNode",
     "SliceSpec",
-    "TensorInput",
-    "TensorInputs",
     "TensorView",
     "TensorNetworkValue",
     "build_tensor_network",
@@ -96,7 +91,6 @@ __all__ = [
     "validate_tensor_inputs",
     "validate_execution_bundle",
     "contraction_dag_hash",
-    "tensor_input_map",
     "with_execution_identity",
     "with_path_cost_summary",
 ]

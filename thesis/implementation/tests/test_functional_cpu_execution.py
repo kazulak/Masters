@@ -32,7 +32,6 @@ from quantum_bench.tn.graph import (
     contraction_dag_hash,
     apply_slicing,
 )
-from quantum_bench.tn.network import TensorInput, TensorInputs
 from quantum_bench.whole_circuit.policies import Float32RealPolicy, HostPackedInt8Policy
 
 
@@ -49,10 +48,8 @@ def _dag(spec: TensorNetworkSpec, path: tuple[tuple[int, int], ...]) -> Contract
     return build_contraction_dag(spec, path)
 
 
-def _inputs(*arrays: tuple[str, np.ndarray]) -> TensorInputs:
-    return TensorInputs(
-        values=tuple(TensorInput(tensor_id=tensor_id, array=array) for tensor_id, array in arrays)
-    )
+def _inputs(*arrays: tuple[str, np.ndarray]) -> dict[str, np.ndarray]:
+    return dict(arrays)
 
 
 def _compile(

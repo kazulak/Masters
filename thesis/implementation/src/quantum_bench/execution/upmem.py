@@ -41,7 +41,7 @@ from quantum_bench.tn.graph import (
     contraction_dag_hash,
     validate_contraction_dag,
 )
-from quantum_bench.tn.network import TensorInputs, tensor_input_map, validate_dag_inputs
+from quantum_bench.tn.network import validate_dag_inputs
 
 
 @dataclass
@@ -107,7 +107,7 @@ class _Aggregate:
 def run_upmem(
     plan: ExecutionPlan,
     dag: ContractionDAG,
-    inputs: TensorInputs,
+    inputs: Mapping[str, np.ndarray],
     context: RunContext,
 ) -> ExecutionResult:
     """Execute a compiled M5 plan with one persistent session and no fallback.
@@ -118,9 +118,7 @@ def run_upmem(
     orchestrator.
     """
 
-    if len({value.tensor_id for value in inputs.values}) != len(inputs.values):
-        raise ValueError("Tensor inputs contain duplicate tensor ids")
-    tensors = tensor_input_map(inputs)
+    tensors = {tensor_id: np.asarray(array) for tensor_id, array in inputs.items()}
     _validate_invocation(plan, dag, tensors, context)
     upmem_plan = plan.payload
     assert isinstance(upmem_plan, UpmemPlan)
