@@ -8,8 +8,10 @@ import numpy as np
 import pytest
 
 from quantum_bench.core.records import ContractionTask, TensorNetworkSpec, TensorSpec
-from quantum_bench.execution import (
+from quantum_bench.execution.compiler import compile_cpu, compile_execution
+from quantum_bench.execution.contracts import (
     CpuCompileRequest,
+    ExecutionFailure,
     ExecutionPlan,
     NumericMode,
     RunContext,
@@ -17,11 +19,9 @@ from quantum_bench.execution import (
     UpmemCompileRequest,
     UpmemPlan,
     UpmemTopology,
-    compile_execution,
-    compile_cpu,
-    execute,
+    UnsupportedExecution,
 )
-from quantum_bench.execution.contracts import ExecutionFailure, UnsupportedExecution
+from quantum_bench.execution.runner import execute
 from quantum_bench.tn.graph import (
     ContractNode,
     ContractionDAG,
@@ -321,7 +321,7 @@ def test_execution_plan_hash_changes_for_each_numeric_mode() -> None:
             NumericMode.HOST_PACKED_INT8_PER_TASK_V1,
         )
     }
-    from quantum_bench.execution import execution_plan_hash
+    from quantum_bench.execution.contracts import execution_plan_hash
 
     assert len({execution_plan_hash(plan) for plan in plans.values()}) == 3
 
@@ -585,6 +585,10 @@ def test_upmem_execution_is_explicitly_unsupported_without_fallback() -> None:
             decomposition_id="test",
             placement_id="test",
             reduction_id="test",
+            profile_id="test_profile_v1",
+            abi_id="test_abi_v1",
+            session_id="test_session_v1",
+            dispatch_id="test_dispatch_v1",
         ),
     )
     failure = execute(

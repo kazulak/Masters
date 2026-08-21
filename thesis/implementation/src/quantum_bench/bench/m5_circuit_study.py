@@ -37,7 +37,8 @@ from quantum_bench.bench.m5_circuit_routes import (
 from quantum_bench.circuits import load_circuit, manifest as circuit_manifest
 from quantum_bench.core.jsonio import write_json
 from quantum_bench.core.records import TensorNetworkSpec
-from quantum_bench.execution import (
+from quantum_bench.execution.compiler import compile_execution
+from quantum_bench.execution.contracts import (
     CpuCompileRequest,
     ExecutionFailure,
     ExecutionResult,
@@ -49,10 +50,9 @@ from quantum_bench.execution import (
     UpmemRuntimeResources,
     UpmemTopology,
     canonical_serialize,
-    compile_execution,
-    execute,
     execution_plan_hash,
 )
+from quantum_bench.execution.runner import execute
 from quantum_bench.tn.graph import (
     ContractionDAG,
     ContractNode,

@@ -106,10 +106,10 @@ class UpmemPlan:
     placement_id: str
     reduction_id: str
     node_plans: tuple[UpmemNodePlan, ...] = ()
-    profile_id: str = "m5_whole_circuit_v4_v1"
-    abi_id: str = "execution_plan_v4"
-    session_id: str = "persistent_rank_session_v1"
-    dispatch_id: str = "bulk_set_synchronous_v1"
+    profile_id: str
+    abi_id: str
+    session_id: str
+    dispatch_id: str
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

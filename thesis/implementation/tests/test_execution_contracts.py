@@ -83,6 +83,10 @@ def upmem_plan() -> ExecutionPlan:
                     arithmetic_imbalance=1.0,
                 ),
             ),
+            profile_id="test_profile_v1",
+            abi_id="test_abi_v1",
+            session_id="test_session_v1",
+            dispatch_id="test_dispatch_v1",
         ),
     )
 

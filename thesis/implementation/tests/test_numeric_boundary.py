@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from quantum_bench.core.records import TensorSpec
-from quantum_bench.execution import NumericMode
+from quantum_bench.execution.contracts import NumericMode
 from quantum_bench.execution.numeric import (
     MAX_INT32_SAFE_K,
     contract_encoded_node,

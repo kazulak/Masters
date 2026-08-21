@@ -7,7 +7,8 @@ import numpy as np
 import pytest
 
 from quantum_bench.core.records import TensorNetworkSpec, TensorSpec
-from quantum_bench.execution import (
+from quantum_bench.execution.compiler import compile_execution
+from quantum_bench.execution.contracts import (
     ExecutionPlan,
     NumericMode,
     RunContext,
@@ -15,11 +16,10 @@ from quantum_bench.execution import (
     UpmemCompileRequest,
     UpmemRuntimeResources,
     UpmemTopology,
-    compile_execution,
     execution_plan_hash,
-    run_upmem,
     UnsupportedExecution,
 )
+from quantum_bench.execution.upmem import run_upmem
 from quantum_bench.tn.graph import (
     ContractNode,
     SliceSpec,
@@ -175,6 +175,17 @@ def test_compile_upmem_is_deterministic_and_portable() -> None:
     assert len(node_plan.work_units) == 1
     assert node_plan.work_units[0].stable_tile_id == "b_0:out_0_0:k_0"
     assert execution_plan_hash(first) == execution_plan_hash(second)
+
+
+def test_v4_plan_identity_hash_remains_stable() -> None:
+    dag = _dag()
+    compiled = compile_execution(dag, _request(dag))
+
+    assert isinstance(compiled, ExecutionPlan)
+    # Captured from the pre-WP5 baseline at commit 96db76c.
+    assert execution_plan_hash(compiled) == (
+        "b2aff6cd57b66aba3116b1f8516f1bb26f3e1725adc806bc12e0688255dbb54a"
+    )
 
 
 def test_compile_upmem_assigns_static_units_in_k_wave_rank_dpu_order() -> None:

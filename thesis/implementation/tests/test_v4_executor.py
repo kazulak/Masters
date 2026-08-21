@@ -12,12 +12,12 @@ import numpy as np
 import pytest
 
 from quantum_bench.core.records import TensorSpec
-from quantum_bench.execution import (
+from quantum_bench.execution.compiler import compile_execution
+from quantum_bench.execution.contracts import (
     ExecutionPlan,
     NumericMode,
     UpmemCompileRequest,
     UpmemTopology,
-    compile_execution,
 )
 from quantum_bench.formats.fixed_point import FixedPointSpec, quantize_fixed_point
 from quantum_bench.tn.graph import (

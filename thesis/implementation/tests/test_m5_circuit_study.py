@@ -23,7 +23,7 @@ from quantum_bench.bench.m5_circuit_study import (
     run_study,
 )
 from quantum_bench.core.records import TensorSpec
-from quantum_bench.execution import NumericMode, UpmemTopology
+from quantum_bench.execution.contracts import NumericMode, UpmemTopology
 from quantum_bench.execution.numeric import contract_node
 from quantum_bench.tn.graph import ContractionDAG, ContractNode, TensorView
 

@@ -33,7 +33,6 @@ from quantum_bench.execution.contracts import (
     validate_transfer_bytes,
     validate_upmem_runtime_resources,
 )
-from quantum_bench.execution.compiler import validate_upmem_plan_for_dag
 from quantum_bench.tn.graph import (
     ContractNode,
     ContractionDAG,
@@ -43,6 +42,10 @@ from quantum_bench.tn.graph import (
     validate_contraction_dag,
 )
 from quantum_bench.tn.network import validate_dag_inputs
+from quantum_bench.targets.upmem.compiler import (
+    validate_active_upmem_plan,
+    validate_upmem_plan_for_dag,
+)
 
 
 @dataclass
@@ -367,27 +370,15 @@ def _validate_invocation(
                 )
     validate_dag_inputs(dag, inputs)
     validate_upmem_plan_for_dag(dag, plan.payload)
+    validate_active_upmem_plan(plan.payload)
     if context.target_resources is None:
         raise ValueError("UPMEM runtime resources are required")
-    _validate_m5_plan(plan.payload, dag, context.target_resources)
+    _validate_upmem_resources(plan.payload, context.target_resources)
 
 
-def _validate_m5_plan(
-    plan: UpmemPlan, dag: ContractionDAG, resources: UpmemRuntimeResources | None
+def _validate_upmem_resources(
+    plan: UpmemPlan, resources: UpmemRuntimeResources | None
 ) -> None:
-    expected = (
-        ("profile_id", "m5_whole_circuit_v4_v1"),
-        ("abi_id", "execution_plan_v4"),
-        ("session_id", "persistent_rank_session_v1"),
-        ("dispatch_id", "bulk_set_synchronous_v1"),
-        ("kernel_id", "dpu_gemm_tile_v4"),
-        ("decomposition_id", "m5_v4_tile_decomposition"),
-        ("placement_id", "m5_rank_wave_placement"),
-        ("reduction_id", "m5_tile_host_reduction"),
-    )
-    for field, expected_value in expected:
-        if getattr(plan, field) != expected_value:
-            raise ValueError(f"unsupported M5 UPMEM {field}: {getattr(plan, field)!r}")
     topology = plan.topology
     if resources is None:
         raise ValueError("UPMEM runtime resources are required")

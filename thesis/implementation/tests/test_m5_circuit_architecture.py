@@ -17,7 +17,10 @@ def test_active_imports_do_not_load_historical_taskgraph() -> None:
     script = """
 import sys
 import quantum_bench.tn.graph
+import quantum_bench.execution.contracts
 import quantum_bench.execution.compiler
+assert 'quantum_bench.targets.upmem.v4_tiling' not in sys.modules
+assert 'quantum_bench.targets.upmem.execution_plan_v4' not in sys.modules
 import quantum_bench.targets.upmem.v4_executor
 import quantum_bench.bench.m5_circuit_study
 assert 'quantum_bench.tn.task_graph' not in sys.modules

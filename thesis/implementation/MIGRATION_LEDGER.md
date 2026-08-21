@@ -25,8 +25,9 @@ final documentation set.
 - Unsupported and failed runs remain explicit evidence rows.
 - Hashing and validation remain outside kernel timing.
 - Historical evidence is not rewritten by this migration.
-- Package-level convenience re-exports are not preserved; active callers import
-  symbols from their owning modules so dependencies remain visible.
+- `execution`, `tn`, and `targets/upmem` package initializers are inert;
+  callers import symbols from their owning modules so dependencies remain
+  visible.
 
 ## Work Packages
 
@@ -37,7 +38,7 @@ final documentation set.
 | WP2 semantic model | complete | direct DAG input validation; no active reverse TaskGraph adapter |
 | WP3 planning | complete | active planners consume tensor metadata and emit one planner result/provenance record without TaskGraph lowering |
 | WP4 numerics | complete | shared pure encode/contract/decode boundary; conversion, kernel, reduction, and decode timings are non-overlapping |
-| WP5 mapping | in progress | deterministic `UpmemPlan` owns work and assignment; active compiler still imports v4 helpers |
+| WP5 mapping | complete (bounded v4 ownership) | `targets/upmem/compiler.py` owns v4 lowering, identity, geometry, tiling and work assignment; this does not claim slice/tasklet/residency scheduling |
 | WP6 runtime | complete | active runtime uses `UpmemV4Executor`/`UpmemV4Session`, `NumericMode`, `UpmemTopology`, and tuple node results; obsolete whole-circuit package removed |
 | WP7 baselines | in progress | same-DAG CPU timing is symmetric; external baseline adapters remain to simplify |
 | WP8 evidence | pending | one timing/evidence schema and compatibility policy |
@@ -57,7 +58,7 @@ final documentation set.
 | projected-prefix planner to `ContractionTask` | removed in current WP3 batch | complete |
 | eager legacy imports from `tn/__init__.py` | removed; callers use owning modules | complete |
 | eager legacy imports from `targets/upmem/__init__.py` | removed; callers use owning modules | complete |
-| M5/v4 defaults in generic contracts | `execution/contracts.py` | WP5/WP6 |
+| M5/v4 defaults in generic contracts | removed in `execution/contracts.py` | complete |
 | milestone CLI and Make targets | `bench/__main__.py`, `Makefile` | WP9 |
 
 ## Complexity Delta
@@ -66,7 +67,7 @@ Update this table after each integration batch.
 
 | Metric | Baseline | Current | Target |
 |---|---:|---:|---:|
-| Active Python modules | 138 | 134 | 12-16 |
+| Active Python modules | 138 | 135 | 12-16 |
 | Class declarations | 307 | 279 | only stable boundary types |
 | Test modules | 78 | 76 | about 10 |
 | Config files | 63 | 63 | 2 principal experiments |
