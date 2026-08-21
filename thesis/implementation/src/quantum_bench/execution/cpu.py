@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import time
+from collections.abc import Mapping
 
 import numpy as np
 
@@ -19,14 +20,13 @@ from quantum_bench.execution.contracts import (
 from quantum_bench.execution.numeric import contract_node, reduce_values
 from quantum_bench.tn.graph import ContractNode, ContractionDAG, ReduceNode, TensorView
 from quantum_bench.tn.graph import contraction_dag_hash, validate_contraction_dag
-from quantum_bench.core.records import TensorNetworkSpec
-from quantum_bench.tn.network import TensorInputs, validate_tensor_inputs
+from quantum_bench.tn.network import TensorInputs, tensor_input_map, validate_dag_inputs
 
 
 def run_cpu(
     plan: ExecutionPlan,
     dag: ContractionDAG,
-    inputs: TensorInputs,
+    inputs: Mapping[str, np.ndarray] | TensorInputs,
     context: RunContext,
 ) -> ExecutionResult:
     """Execute a compiled CPU plan without mutating source arrays.
@@ -36,22 +36,23 @@ def run_cpu(
     mutated through a later internal reference.
     """
 
-    _validate_cpu_invocation(plan, dag, inputs, context)
-    tensors = _input_map(dag, inputs)
+    tensors = _input_map(inputs)
+    _validate_cpu_invocation(plan, dag, tensors, context)
     for _ in range(context.warmups):
         _execute_nodes(plan, dag, tensors)
 
-    start = time.perf_counter()
-    output = None
-    output_digest = None
+    output: np.ndarray | None = None
+    output_digest: str | None = None
+    kernel_elapsed = 0.0
     for _ in range(context.repetitions):
+        kernel_start = time.perf_counter()
         output = _execute_nodes(plan, dag, tensors)
+        kernel_elapsed += time.perf_counter() - kernel_start
         digest = _array_hash(output)
         if output_digest is None:
             output_digest = digest
         elif digest != output_digest:
             raise RuntimeError("CPU execution produced non-deterministic output")
-    elapsed = time.perf_counter() - start
 
     if output is None or output_digest is None:  # guarded by repetitions validation
         raise RuntimeError("CPU execution did not produce an output")
@@ -62,8 +63,8 @@ def run_cpu(
         output=returned_output,
         executed_node_ids=tuple(plan.payload.node_order),
         timing=TimingBreakdown(
-            kernel_s=elapsed,
-            route_total_s=elapsed,
+            kernel_s=kernel_elapsed,
+            route_total_s=kernel_elapsed,
         ),
         output_hash=output_digest,
     )
@@ -104,7 +105,7 @@ def _execute_nodes(
 def _validate_cpu_invocation(
     plan: ExecutionPlan,
     dag: ContractionDAG,
-    inputs: TensorInputs,
+    inputs: Mapping[str, np.ndarray],
     context: RunContext,
 ) -> None:
     validate_contraction_dag(dag)
@@ -120,10 +121,7 @@ def _validate_cpu_invocation(
         raise ValueError("execution plan hash does not match the supplied contraction DAG")
     _validate_runtime_node_order(dag, tuple(plan.payload.node_order))
 
-    validate_tensor_inputs(
-        TensorNetworkSpec(None, dag.tensors, dag.output.labels, ""),
-        inputs,
-    )
+    validate_dag_inputs(dag, inputs)
 
 
 def _validate_runtime_node_order(dag: ContractionDAG, order: tuple[str, ...]) -> None:
@@ -141,13 +139,14 @@ def _validate_runtime_node_order(dag: ContractionDAG, order: tuple[str, ...]) ->
                 )
 
 
-def _input_map(dag: ContractionDAG, inputs: TensorInputs) -> dict[str, np.ndarray]:
-    expected_ids = {tensor.id for tensor in dag.tensors}
-    return {
-        value.tensor_id: np.asarray(value.array)
-        for value in inputs.values
-        if value.tensor_id in expected_ids
-    }
+def _input_map(
+    inputs: Mapping[str, np.ndarray] | TensorInputs,
+) -> dict[str, np.ndarray]:
+    if isinstance(inputs, TensorInputs):
+        if len({value.tensor_id for value in inputs.values}) != len(inputs.values):
+            raise ValueError("Tensor inputs contain duplicate tensor ids")
+        return tensor_input_map(inputs)
+    return {tensor_id: np.asarray(array) for tensor_id, array in inputs.items()}
 
 
 def _resolve_view(view: TensorView, tensors: dict[str, np.ndarray]) -> np.ndarray:

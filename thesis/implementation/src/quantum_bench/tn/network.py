@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from quantum_bench.circuits.library import gate_structure, gate_tensor
 from quantum_bench.core.indices import LABEL_LIST_EINSUM_SENTINEL, index_symbols, label_count, supports_string_einsum
 from quantum_bench.core.records import CircuitSpec, TensorNetworkSpec, TensorSpec, TensorValue
+
+if TYPE_CHECKING:
+    from quantum_bench.tn.graph import ContractionDAG
 
 
 @dataclass
@@ -131,6 +136,36 @@ def validate_tensor_inputs(network: TensorNetworkSpec, inputs: TensorInputs) -> 
             raise ValueError(
                 f"Tensor input {tensor_id} dtype {array.dtype} "
                 f"does not match descriptor {specs[tensor_id].dtype}"
+            )
+
+
+def validate_dag_inputs(
+    dag: ContractionDAG,
+    inputs: Mapping[str, np.ndarray],
+) -> None:
+    """Validate input arrays against the tensor descriptors in a DAG."""
+
+    specs = {tensor.id: tensor for tensor in dag.tensors}
+    if len(specs) != len(dag.tensors):
+        raise ValueError("ContractionDAG contains duplicate input tensor IDs")
+    actual_ids = set(inputs)
+    expected_ids = set(specs)
+    if actual_ids != expected_ids:
+        missing = sorted(expected_ids - actual_ids)
+        extra = sorted(actual_ids - expected_ids)
+        raise ValueError(f"Tensor input ids do not match DAG: missing={missing} extra={extra}")
+    for tensor_id, value in inputs.items():
+        array = np.asarray(value)
+        descriptor = specs[tensor_id]
+        if tuple(array.shape) != descriptor.shape:
+            raise ValueError(
+                f"Tensor input {tensor_id} shape {array.shape} "
+                f"does not match descriptor {descriptor.shape}"
+            )
+        if array.dtype != np.dtype(descriptor.dtype):
+            raise ValueError(
+                f"Tensor input {tensor_id} dtype {array.dtype} "
+                f"does not match descriptor {descriptor.dtype}"
             )
 
 

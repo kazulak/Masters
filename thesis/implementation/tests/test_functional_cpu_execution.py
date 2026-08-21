@@ -168,6 +168,69 @@ def test_numeric_execution_does_not_mutate_inputs() -> None:
     np.testing.assert_array_equal(right, right_before)
 
 
+def test_cpu_mapping_validation_rejects_missing_extra_shape_and_dtype() -> None:
+    dag = _matrix_dag()
+    plan = _compile(dag)
+    valid = {
+        "a": np.ones((2, 3), dtype=np.float64),
+        "b": np.ones((3, 2), dtype=np.float64),
+    }
+    invalid_inputs = (
+        ({"a": valid["a"]}, "missing"),
+        ({**valid, "extra": np.ones((1,), dtype=np.float64)}, "extra"),
+        ({**valid, "a": np.ones((3, 2), dtype=np.float64)}, "shape"),
+        ({**valid, "a": np.ones((2, 3), dtype=np.float32)}, "dtype"),
+    )
+
+    for inputs, message in invalid_inputs:
+        with pytest.raises(ValueError, match=message):
+            execute(
+                plan,
+                dag,
+                inputs,
+                RunContext(run_id=f"invalid-{message}", target=Target.CPU),
+            )
+
+
+def test_cpu_hashes_outputs_after_measured_execution(monkeypatch: pytest.MonkeyPatch) -> None:
+    import quantum_bench.execution.cpu as cpu_module
+
+    dag = _matrix_dag()
+    plan = _compile(dag)
+    events: list[str] = []
+    clock = [0.0]
+
+    def perf_counter() -> float:
+        return clock[0]
+
+    def execute_nodes(*args: object, **kwargs: object) -> np.ndarray:
+        del args, kwargs
+        events.append("execute")
+        clock[0] += 2.0
+        return np.ones((2, 2), dtype=np.float32)
+
+    def array_hash(array: np.ndarray) -> str:
+        del array
+        events.append("hash")
+        clock[0] += 100.0
+        return "digest"
+
+    monkeypatch.setattr(cpu_module.time, "perf_counter", perf_counter)
+    monkeypatch.setattr(cpu_module, "_execute_nodes", execute_nodes)
+    monkeypatch.setattr(cpu_module, "_array_hash", array_hash)
+    result = execute(
+        plan,
+        dag,
+        {"a": np.ones((2, 3), dtype=np.float64), "b": np.ones((3, 2), dtype=np.float64)},
+        RunContext(run_id="hash-order", target=Target.CPU, repetitions=2),
+    )
+
+    assert events == ["execute", "hash", "execute", "hash"]
+    assert result.output_hash == "digest"
+    assert result.timing.kernel_s == 4.0
+    assert result.timing.route_total_s == 4.0
+
+
 def test_execution_plan_hash_changes_for_each_numeric_mode() -> None:
     dag = _matrix_dag()
     plans = {
