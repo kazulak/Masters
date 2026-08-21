@@ -81,6 +81,10 @@ def _execute_nodes(
 
     node_by_id = {node.node_id: node for node in dag.nodes}
     working = dict(tensors)
+    remaining_uses = _tensor_consumer_counts(dag)
+    evictable_tensor_ids = {
+        node.output.id for node in dag.nodes if node.output.id not in tensors
+    }
     for node_id in plan.payload.node_order:  # type: ignore[union-attr]
         node = node_by_id[node_id]
         if isinstance(node, ContractNode):
@@ -98,8 +102,38 @@ def _execute_nodes(
                 f"Node {node.node_id} produced shape {result.shape}; expected {expected}"
             )
         working[node.output.id] = result
+        if (
+            remaining_uses.get(node.output.id, 0) == 0
+            and node.output.id != dag.output.tensor_id
+        ):
+            del working[node.output.id]
+        for tensor_id in _node_input_ids(node):
+            if tensor_id not in evictable_tensor_ids:
+                continue
+            remaining_uses[tensor_id] -= 1
+            if (
+                remaining_uses[tensor_id] == 0
+                and tensor_id != dag.output.tensor_id
+            ):
+                del working[tensor_id]
 
     return _resolve_view(dag.output, working)
+
+
+def _node_input_ids(node: ContractNode | ReduceNode) -> tuple[str, ...]:
+    if isinstance(node, ContractNode):
+        return node.left.tensor_id, node.right.tensor_id
+    return tuple(view.tensor_id for view in node.inputs)
+
+
+def _tensor_consumer_counts(dag: ContractionDAG) -> dict[str, int]:
+    """Count node-input references for produced tensors in the DAG."""
+
+    counts: dict[str, int] = {}
+    for node in dag.nodes:
+        for tensor_id in _node_input_ids(node):
+            counts[tensor_id] = counts.get(tensor_id, 0) + 1
+    return counts
 
 
 def _validate_cpu_invocation(

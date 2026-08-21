@@ -32,6 +32,7 @@ from quantum_bench.execution.contracts import (
     validate_transfer_bytes,
     validate_upmem_runtime_resources,
 )
+from quantum_bench.execution.compiler import validate_upmem_plan_for_dag
 from quantum_bench.tn.graph import (
     ContractNode,
     ContractionDAG,
@@ -118,6 +119,7 @@ def run_upmem(
     validate_upmem_runtime_resources(resources, upmem_plan.topology)
     aggregate = _Aggregate()
     output: np.ndarray | None = None
+    output_digest: str | None = None
     session: Any | None = None
     terminal_metadata: Mapping[str, Any] | None = None
     completed_node_ids: tuple[str, ...] = ()
@@ -153,6 +155,12 @@ def run_upmem(
                 aggregate=aggregate,
             )
             aggregate.route_total_s += time.perf_counter() - route_started
+            # This reproducibility check is intentionally outside route timing.
+            digest = _array_hash(output)
+            if output_digest is None:
+                output_digest = digest
+            elif digest != output_digest:
+                raise RuntimeError("UPMEM execution produced non-deterministic output")
     except BaseException as exc:
         execution_error = exc
     finally:
@@ -176,7 +184,7 @@ def run_upmem(
         raise RuntimeError("UPMEM session close failed") from close_error
     _validate_terminal_metadata(terminal_metadata, upmem_plan)
 
-    if output is None:
+    if output is None or output_digest is None:
         raise RuntimeError("UPMEM execution did not produce an output")
     h2d = aggregate.h2d_bytes
     d2h = aggregate.d2h_bytes
@@ -206,7 +214,7 @@ def run_upmem(
         h2d_bytes=h2d,
         d2h_bytes=d2h,
         transfer_bytes=transfer,
-        output_hash=_array_hash(output),
+        output_hash=output_digest,
         backend_facts=facts,
     )
     validate_execution_result(result)
@@ -266,8 +274,11 @@ def _execute_once(
 ) -> tuple[np.ndarray, tuple[str, ...]]:
     tensors = dict(inputs)
     nodes = {node.node_id: node for node in dag.nodes}
+    remaining_consumers = _remaining_consumers(dag)
+    produced_tensor_ids = {node.output.id for node in dag.nodes}
     completed_node_ids: list[str] = []
-    for node_id in plan.node_order:
+    for node_plan in plan.node_plans:
+        node_id = node_plan.node_id
         node = nodes[node_id]
         if isinstance(node, ContractNode):
             left = _resolve_view(node.left, tensors)
@@ -292,6 +303,19 @@ def _execute_once(
                 f"UPMEM node {node_id} produced shape {value.shape}; expected {node.output.shape}"
             )
         tensors[node.output.id] = value
+        if (
+            remaining_consumers.get(node.output.id, 0) == 0
+            and node.output.id != dag.output.tensor_id
+        ):
+            tensors.pop(node.output.id, None)
+        for tensor_id in _node_input_tensor_ids(node):
+            remaining_consumers[tensor_id] -= 1
+            if (
+                remaining_consumers[tensor_id] == 0
+                and tensor_id in produced_tensor_ids
+                and tensor_id != dag.output.tensor_id
+            ):
+                tensors.pop(tensor_id, None)
         # The host coordinator has validated and published this node output
         # for its dependants. This does not claim native-kernel exactly once.
         completed_node_ids.append(node_id)
@@ -330,14 +354,7 @@ def _validate_invocation(
                     "M5 real-valued UPMEM numeric modes reject nonzero imaginary inputs"
                 )
     validate_dag_inputs(dag, inputs)
-    node_ids = tuple(node.node_id for node in dag.nodes)
-    if plan.payload.node_order != _topological_order(dag):
-        raise ValueError("UPMEM plan node_order is not the deterministic DAG order")
-    if set(plan.payload.node_order) != set(node_ids):
-        raise ValueError("UPMEM plan node_order does not match the DAG")
-    work_ids = tuple(item.node_id for item in plan.payload.node_work_plans)
-    if work_ids != plan.payload.node_order:
-        raise ValueError("UPMEM work plans do not match the exact DAG order")
+    validate_upmem_plan_for_dag(dag, plan.payload)
     if context.target_resources is None:
         raise ValueError("UPMEM runtime resources are required")
     _validate_m5_plan(plan.payload, dag, context.target_resources)
@@ -367,27 +384,29 @@ def _validate_m5_plan(
         raise ValueError("UPMEM plan exceeds 64 DPUs per rank")
     if not 1 <= topology.tasklets_per_dpu <= 24:
         raise ValueError("UPMEM plan tasklets_per_dpu must be in [1, 24]")
-    work = {item.node_id: item for item in plan.node_work_plans}
+
+
+def _node_input_tensor_ids(node: ContractNode | ReduceNode) -> tuple[str, ...]:
+    if isinstance(node, ContractNode):
+        return (node.left.tensor_id, node.right.tensor_id)
+    return tuple(view.tensor_id for view in node.inputs)
+
+
+def _remaining_consumers(dag: ContractionDAG) -> dict[str, int]:
+    remaining: dict[str, int] = {}
     for node in dag.nodes:
-        item = work[node.node_id]
-        if isinstance(node, ContractNode):
-            if (
-                item.kernel_id != "dpu_gemm_tile_v4"
-                or item.decomposition_id != "m5_v4_tile_decomposition"
-                or item.placement_id != "m5_rank_wave_placement"
-                or item.reduction_id != "m5_tile_host_reduction"
-                or item.tile_count is not None
-                or item.dpu_ids != tuple(range(topology.dpu_count))
-            ):
-                raise ValueError(f"UPMEM work plan for {node.node_id} is not an M5 contract plan")
-        elif (
-            item.kernel_id,
-            item.decomposition_id,
-            item.placement_id,
-            item.reduction_id,
-            item.tile_count,
-        ) != ("host_reduce_v1", "host_reduce_v1", "host", "host_sum_v1", 0):
-            raise ValueError(f"UPMEM work plan for {node.node_id} is not a host reduce plan")
+        for tensor_id in _node_input_tensor_ids(node):
+            remaining[tensor_id] = remaining.get(tensor_id, 0) + 1
+    return remaining
+
+
+def _array_hash(value: np.ndarray) -> str:
+    array = np.ascontiguousarray(value)
+    digest = hashlib.sha256()
+    digest.update(str(array.dtype).encode("ascii"))
+    digest.update(repr(tuple(array.shape)).encode("ascii"))
+    digest.update(array.tobytes(order="C"))
+    return digest.hexdigest()
 
 
 def _validate_resources(resources: UpmemRuntimeResources) -> dict[str, str]:

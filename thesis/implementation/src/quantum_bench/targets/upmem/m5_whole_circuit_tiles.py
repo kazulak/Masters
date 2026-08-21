@@ -236,6 +236,55 @@ def lower_binary_contraction(
     return M5TileLowering(canonical, output_tiles, k_chunks, tiles, preflight)
 
 
+def tile_limits_for_numeric_mode(numeric_mode: str) -> M5TileLimits:
+    """Return the fixed v4 limits for a compiler numeric mode."""
+
+    if numeric_mode == NUMERIC_MODE_FLOAT32:
+        return M5TileLimits.float32()
+    if numeric_mode == NUMERIC_MODE_HOST_PACKED_INT8:
+        return M5TileLimits.host_packed_int8()
+    raise ValueError(f"unsupported numeric_mode: {numeric_mode}")
+
+
+def plan_tile_shapes(
+    b: int, m: int, k: int, n: int, *, limits: M5TileLimits
+) -> tuple[M5Tile, ...]:
+    """Plan v4 tile geometry from canonical B/M/K/N dimensions without arrays."""
+
+    if any(value < 1 for value in (b, m, k, n)):
+        raise TileLoweringError("canonical_dimension_is_not_positive")
+    tile_m, tile_k, tile_n = _choose_tile_shape(m, k, n, limits)
+    output_tiles = _output_tiles(b, m, n, tile_m, tile_n)
+    k_chunks = _k_chunks(k, tile_k)
+    return tuple(
+        _make_tile(output_tile, k_chunk, limits)
+        for output_tile in output_tiles
+        for k_chunk in k_chunks
+    )
+
+
+def order_tile_waves(
+    tiles: tuple[M5Tile, ...], total_dpu_count: int
+) -> tuple[tuple[M5Tile, ...], ...]:
+    """Order v4 tiles by ascending K chunk and bounded DPU waves."""
+
+    if total_dpu_count < 1:
+        raise ValueError("total_dpu_count must be positive")
+    by_chunk: dict[str, list[M5Tile]] = {}
+    chunk_order: list[str] = []
+    for tile in tiles:
+        if tile.k_chunk_id not in by_chunk:
+            by_chunk[tile.k_chunk_id] = []
+            chunk_order.append(tile.k_chunk_id)
+        by_chunk[tile.k_chunk_id].append(tile)
+    return tuple(
+        tuple(chunk_tiles[index : index + total_dpu_count])
+        for chunk_id in chunk_order
+        for chunk_tiles in (by_chunk[chunk_id],)
+        for index in range(0, len(chunk_tiles), total_dpu_count)
+    )
+
+
 def canonicalize_binary_contraction(
     node: ContractNode,
     left: np.ndarray,

@@ -41,14 +41,38 @@ class UpmemTopology:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class UpmemNodeWorkPlan:
+class UpmemWorkUnit:
+    """One statically assigned bounded v4 tile invocation."""
+
     node_id: str
-    kernel_id: str
-    decomposition_id: str
-    placement_id: str
-    reduction_id: str
-    dpu_ids: tuple[int, ...] = ()
-    tile_count: int | None = None
+    stable_tile_id: str
+    wave: int
+    logical_rank: int
+    logical_dpu: int
+    batch_start: int
+    batch_size: int
+    m_start: int
+    m_size: int
+    n_start: int
+    n_size: int
+    k_start: int
+    k_size: int
+    estimated_input_bytes: int
+    estimated_output_bytes: int
+    aligned_mram_bytes: int
+    estimated_arithmetic_work: int
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class UpmemNodePlan:
+    """Static physical plan for one semantic DAG node."""
+
+    node_id: str
+    node_kind: str
+    canonical_shape: tuple[int, int, int, int] | None
+    work_units: tuple[UpmemWorkUnit, ...]
+    reduction_mode: str
+    arithmetic_imbalance: float
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -64,15 +88,6 @@ class UpmemCompileRequest:
     contraction_dag_hash: str
     numeric_mode: NumericMode
     topology: UpmemTopology
-    kernel_id: str = "dpu_gemm_tile_v4"
-    decomposition_id: str = "m5_v4_tile_decomposition"
-    placement_id: str = "m5_rank_wave_placement"
-    reduction_id: str = "m5_tile_host_reduction"
-    node_work_plans: tuple[UpmemNodeWorkPlan, ...] = ()
-    profile_id: str = "m5_whole_circuit_v4_v1"
-    abi_id: str = "execution_plan_v4"
-    session_id: str = "persistent_rank_session_v1"
-    dispatch_id: str = "bulk_set_synchronous_v1"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -90,8 +105,7 @@ class UpmemPlan:
     decomposition_id: str
     placement_id: str
     reduction_id: str
-    node_work_plans: tuple[UpmemNodeWorkPlan, ...] = ()
-    node_order: tuple[str, ...] = ()
+    node_plans: tuple[UpmemNodePlan, ...] = ()
     profile_id: str = "m5_whole_circuit_v4_v1"
     abi_id: str = "execution_plan_v4"
     session_id: str = "persistent_rank_session_v1"
@@ -274,19 +288,154 @@ def validate_execution_plan(plan: ExecutionPlan) -> None:
         ):
             if not getattr(plan.payload, name):
                 raise ValueError(f"UPMEM {name} must be non-empty")
-        node_ids = [work.node_id for work in plan.payload.node_work_plans]
-        if len(node_ids) != len(set(node_ids)):
-            raise ValueError("UPMEM work plans contain duplicate node ids")
-        for work in plan.payload.node_work_plans:
-            if not work.node_id or not work.kernel_id:
-                raise ValueError("UPMEM work plan ids must be non-empty")
-            if (
-                (work.tile_count is not None and work.tile_count < 0)
-                or any(dpu_id < 0 for dpu_id in work.dpu_ids)
+        if plan.payload.numeric_mode not in {
+            NumericMode.FLOAT32_REAL,
+            NumericMode.HOST_PACKED_INT8_PER_TASK_V1,
+        }:
+            raise ValueError("UPMEM numeric mode is not supported by v4")
+        _validate_upmem_node_plans(plan.payload)
+
+
+def _validate_upmem_node_plans(plan: UpmemPlan) -> None:
+    node_ids = [node_plan.node_id for node_plan in plan.node_plans]
+    if len(node_ids) != len(set(node_ids)):
+        raise ValueError("UPMEM node plans contain duplicate node ids")
+    for node_plan in plan.node_plans:
+        if not node_plan.node_id or node_plan.node_kind not in {"contract", "reduce"}:
+            raise ValueError("UPMEM node plan identity is invalid")
+        if not node_plan.reduction_mode:
+            raise ValueError("UPMEM node plan reduction_mode must be non-empty")
+        if not math.isfinite(node_plan.arithmetic_imbalance) or node_plan.arithmetic_imbalance < 0:
+            raise ValueError("UPMEM node plan arithmetic_imbalance must be finite and non-negative")
+        if node_plan.node_kind == "reduce":
+            if node_plan.canonical_shape is not None or node_plan.work_units:
+                raise ValueError("UPMEM reduce node plans cannot contain tile geometry")
+            if node_plan.arithmetic_imbalance != 0.0:
+                raise ValueError("UPMEM reduce node plan arithmetic_imbalance must be zero")
+            continue
+        _validate_contract_node_plan(plan, node_plan)
+
+
+def _validate_contract_node_plan(plan: UpmemPlan, node_plan: UpmemNodePlan) -> None:
+    shape = node_plan.canonical_shape
+    if shape is None or len(shape) != 4 or any(value < 1 for value in shape):
+        raise ValueError("UPMEM contract node plan requires positive canonical B/M/K/N shape")
+    if not node_plan.work_units:
+        raise ValueError("UPMEM contract node plan requires work units")
+    batch, m, k, n = shape
+    input_element_bytes = (
+        1
+        if plan.numeric_mode is NumericMode.HOST_PACKED_INT8_PER_TASK_V1
+        else 4
+    )
+    dpus_per_rank = plan.topology.dpu_count // plan.topology.rank_count
+    by_output: dict[tuple[int, int, int, int, int, int], list[tuple[int, int]]] = {}
+    wave_slots: dict[int, set[tuple[int, int]]] = {}
+    seen_tile_ids: set[str] = set()
+    dpu_work = [0] * plan.topology.dpu_count
+    for unit in node_plan.work_units:
+        if unit.node_id != node_plan.node_id or not unit.stable_tile_id:
+            raise ValueError("UPMEM work unit node or tile identity is invalid")
+        if unit.stable_tile_id in seen_tile_ids:
+            raise ValueError("UPMEM work units contain duplicate stable tile ids")
+        seen_tile_ids.add(unit.stable_tile_id)
+        if unit.wave < 0 or not 0 <= unit.logical_rank < plan.topology.rank_count:
+            raise ValueError("UPMEM work unit wave or rank is out of bounds")
+        if not 0 <= unit.logical_dpu < dpus_per_rank:
+            raise ValueError("UPMEM work unit logical DPU is out of bounds")
+        slot = (unit.logical_rank, unit.logical_dpu)
+        if slot in wave_slots.setdefault(unit.wave, set()):
+            raise ValueError("UPMEM work units reuse a logical DPU in one wave")
+        wave_slots[unit.wave].add(slot)
+        extents = (
+            (unit.batch_start, unit.batch_size, batch),
+            (unit.m_start, unit.m_size, m),
+            (unit.n_start, unit.n_size, n),
+            (unit.k_start, unit.k_size, k),
+        )
+        if any(start < 0 or size < 1 or start + size > limit for start, size, limit in extents):
+            raise ValueError("UPMEM work unit extent is outside canonical geometry")
+        left_bytes = unit.m_size * unit.k_size * input_element_bytes
+        right_bytes = unit.k_size * unit.n_size * input_element_bytes
+        output_bytes = unit.m_size * unit.n_size * 4
+        aligned_mram = _align(left_bytes) + _align(right_bytes) + _align(output_bytes)
+        if any(_align(value) > 512 * 1024 for value in (left_bytes, right_bytes, output_bytes)) or aligned_mram > 512 * 1024:
+            raise ValueError("UPMEM work unit aligned A/B/C footprint exceeds 512 KiB")
+        if plan.numeric_mode is NumericMode.HOST_PACKED_INT8_PER_TASK_V1 and unit.k_size * 128 * 128 > (1 << 31) - 1:
+            raise ValueError("UPMEM packed K chunk exceeds int32 accumulation safety")
+        expected_input = left_bytes + right_bytes
+        expected_work = unit.m_size * unit.n_size * unit.k_size
+        if (
+            unit.estimated_input_bytes != expected_input
+            or unit.estimated_output_bytes != output_bytes
+            or unit.aligned_mram_bytes != aligned_mram
+            or unit.estimated_arithmetic_work != expected_work
+        ):
+            raise ValueError("UPMEM work unit stored estimates do not match geometry")
+        by_output.setdefault(
+            (
+                unit.batch_start,
+                unit.batch_size,
+                unit.m_start,
+                unit.m_size,
+                unit.n_start,
+                unit.n_size,
+            ),
+            [],
+        ).append((unit.k_start, unit.k_size))
+        dpu_work[unit.logical_rank * dpus_per_rank + unit.logical_dpu] += expected_work
+    for intervals in by_output.values():
+        cursor = 0
+        for start, size in sorted(intervals):
+            if start != cursor:
+                raise ValueError("UPMEM K chunks contain a gap or overlap")
+            cursor += size
+        if cursor != k:
+            raise ValueError("UPMEM K chunks do not cover canonical K")
+    _validate_output_coverage(by_output, batch, m, n)
+    total_work = sum(dpu_work)
+    expected_imbalance = max(dpu_work) / (total_work / len(dpu_work)) if total_work else 0.0
+    if node_plan.arithmetic_imbalance != expected_imbalance:
+        raise ValueError("UPMEM node plan arithmetic_imbalance does not match work units")
+
+
+def _validate_output_coverage(
+    by_output: dict[tuple[int, int, int, int, int, int], list[tuple[int, int]]],
+    batch: int,
+    m: int,
+    n: int,
+) -> None:
+    batch_bounds = {0, batch}
+    m_bounds = {0, m}
+    n_bounds = {0, n}
+    for batch_start, batch_size, m_start, m_size, n_start, n_size in by_output:
+        batch_bounds.update((batch_start, batch_start + batch_size))
+        m_bounds.update((m_start, m_start + m_size))
+        n_bounds.update((n_start, n_start + n_size))
+    sorted_batch_bounds = sorted(batch_bounds)
+    sorted_m_bounds = sorted(m_bounds)
+    sorted_n_bounds = sorted(n_bounds)
+    for batch_start, batch_end in zip(
+        sorted_batch_bounds[:-1], sorted_batch_bounds[1:], strict=True
+    ):
+        for m_start, m_end in zip(
+            sorted_m_bounds[:-1], sorted_m_bounds[1:], strict=True
+        ):
+            for n_start, n_end in zip(
+                sorted_n_bounds[:-1], sorted_n_bounds[1:], strict=True
             ):
-                raise ValueError("UPMEM work plan counts and ids must be non-negative")
-        if len(set(plan.payload.node_order)) != len(plan.payload.node_order):
-            raise ValueError("UPMEM node_order contains duplicate node ids")
+                covering = sum(
+                    output_batch <= batch_start and batch_end <= output_batch + batch_size
+                    and output_m <= m_start and m_end <= output_m + m_size
+                    and output_n <= n_start and n_end <= output_n + n_size
+                    for output_batch, batch_size, output_m, m_size, output_n, n_size in by_output
+                )
+                if covering != 1:
+                    raise ValueError("UPMEM output tiles contain a gap or overlap")
+
+
+def _align(value: int) -> int:
+    return ((value + 7) // 8) * 8
 
 
 def validate_upmem_runtime_resources(

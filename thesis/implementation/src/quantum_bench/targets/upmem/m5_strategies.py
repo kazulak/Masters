@@ -23,6 +23,7 @@ from quantum_bench.targets.upmem.m5_whole_circuit_tiles import (
     M5TileLimits,
     M5TileLowering,
     lower_binary_contraction,
+    order_tile_waves,
 )
 from quantum_bench.tn.graph import ContractNode
 from quantum_bench.whole_circuit.strategies import (
@@ -91,17 +92,7 @@ class M5PlacementStrategy:
         total_dpu_count: int,
     ) -> tuple[tuple[M5Tile, ...], ...]:
         """Group tiles into waves such that K-chunks are separated and rank capacity is respected."""
-        by_chunk: dict[str, list[M5Tile]] = {}
-        for tile in tiles:
-            by_chunk.setdefault(tile.k_chunk_id, []).append(tile)
-        waves: list[tuple[M5Tile, ...]] = []
-        for chunk_id in sorted(
-            by_chunk, key=lambda value: int(value.removeprefix("k_"))
-        ):
-            chunk_tiles = by_chunk[chunk_id]
-            for index in range(0, len(chunk_tiles), total_dpu_count):
-                waves.append(tuple(chunk_tiles[index : index + total_dpu_count]))
-        return tuple(waves)
+        return order_tile_waves(tiles, total_dpu_count)
 
     def map_wave_to_ranks(
         self,

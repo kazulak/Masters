@@ -170,9 +170,44 @@ def test_compile_upmem_is_deterministic_and_portable() -> None:
 
     assert isinstance(first, ExecutionPlan)
     assert first == second
-    assert first.payload.node_order == ("contract_0",)
-    assert first.payload.node_work_plans[0].tile_count is None
+    assert tuple(node.node_id for node in first.payload.node_plans) == ("contract_0",)
+    node_plan = first.payload.node_plans[0]
+    assert node_plan.canonical_shape == (1, 2, 3, 2)
+    assert len(node_plan.work_units) == 1
+    assert node_plan.work_units[0].stable_tile_id == "b_0:out_0_0:k_0"
     assert execution_plan_hash(first) == execution_plan_hash(second)
+
+
+def test_compile_upmem_assigns_static_units_in_k_wave_rank_dpu_order() -> None:
+    dag = build_contraction_dag(
+        TensorNetworkSpec(
+            None,
+            (
+                TensorSpec("a", (0, 1), (300, 300), "dense", dtype="float64"),
+                TensorSpec("b", (1, 2), (300, 300), "dense", dtype="float64"),
+            ),
+            (0, 2),
+            "ab,bc->ac",
+        ),  # type: ignore[arg-type]
+        ((0, 1),),
+    )
+    compiled = compile_execution(
+        dag,
+        replace(
+            _request(dag),
+            topology=UpmemTopology(dpu_count=4, tasklets_per_dpu=1, rank_count=2),
+        ),
+    )
+    assert isinstance(compiled, ExecutionPlan)
+    units = compiled.payload.node_plans[0].work_units
+    assert len(units) > 4
+    assert [unit.k_start for unit in units] == sorted(unit.k_start for unit in units)
+    for wave in {unit.wave for unit in units}:
+        assigned = [unit for unit in units if unit.wave == wave]
+        assert len(assigned) <= 4
+        assert [(unit.logical_rank, unit.logical_dpu) for unit in assigned] == [
+            (slot // 2, slot % 2) for slot in range(len(assigned))
+        ]
 
 
 def test_compile_rejects_unsupported_topology_and_int8_k() -> None:
@@ -411,6 +446,124 @@ def test_run_upmem_reports_completed_host_nodes_not_planned_node_order(
     )
 
     assert result.executed_node_ids == ("host-completed-node",)
+
+
+def test_run_upmem_rejects_static_plan_tampering_before_session_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import quantum_bench.execution.upmem as module
+
+    dag = _dag()
+    compiled = compile_execution(dag, _request(dag))
+    assert isinstance(compiled, ExecutionPlan)
+    node_plan = compiled.payload.node_plans[0]
+    unit = node_plan.work_units[0]
+    tampered = replace(
+        compiled,
+        payload=replace(
+            compiled.payload,
+            node_plans=(
+                replace(
+                    node_plan,
+                    work_units=(replace(unit, stable_tile_id="tampered"),),
+                ),
+            ),
+        ),
+    )
+    opened = False
+
+    def opener(plan: object, context: object) -> _FakeSession:
+        nonlocal opened
+        opened = True
+        return _FakeSession()
+
+    monkeypatch.setattr(module, "_open_session", opener)
+    with pytest.raises(ValueError, match="pure v4 recomputation"):
+        run_upmem(
+            tampered,
+            dag,
+            _inputs(("a", np.ones((2, 3))), ("b", np.ones((3, 2)))),
+            RunContext(
+                run_id="tampered",
+                target=Target.UPMEM,
+                target_resources=_resources(tmp_path),
+            ),
+        )
+    assert not opened
+
+
+def test_execute_once_evicts_only_produced_intermediates_after_last_consumer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import quantum_bench.execution.upmem as module
+
+    dag = _chain_dag()
+    compiled = compile_execution(dag, _request(dag))
+    assert isinstance(compiled, ExecutionPlan)
+    observed_final_tensor_maps: list[set[str]] = []
+    original_resolve = module._resolve_view
+
+    def capture(view, tensors):
+        if view.tensor_id == dag.output.tensor_id:
+            observed_final_tensor_maps.append(set(tensors))
+        return original_resolve(view, tensors)
+
+    monkeypatch.setattr(module, "_resolve_view", capture)
+    module._execute_once(
+        _FakeSession(),
+        dag,
+        {
+            "a": np.ones((2, 3)),
+            "b": np.ones((3, 4)),
+            "c": np.ones((4, 2)),
+        },
+        compiled.payload,
+        resources=None,
+        aggregate=None,
+    )
+
+    assert observed_final_tensor_maps
+    assert dag.nodes[0].output.id not in observed_final_tensor_maps[-1]
+    assert {"a", "b", "c"} <= observed_final_tensor_maps[-1]
+
+
+def test_run_upmem_hashes_every_measured_output_and_rejects_nondeterminism(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import quantum_bench.execution.upmem as module
+
+    dag = _dag()
+    compiled = compile_execution(dag, _request(dag))
+    assert isinstance(compiled, ExecutionPlan)
+    session = _FakeSession()
+    monkeypatch.setattr(module, "_open_session", lambda plan, context: session)
+    outputs = iter((np.zeros((2, 2), dtype=np.float32), np.ones((2, 2), dtype=np.float32)))
+
+    def nondeterministic_once(*args, **kwargs):
+        return next(outputs), ("contract_0",)
+
+    hashes: list[str] = []
+    original_hash = module._array_hash
+    monkeypatch.setattr(module, "_execute_once", nondeterministic_once)
+    monkeypatch.setattr(
+        module,
+        "_array_hash",
+        lambda value: hashes.append(original_hash(value)) or hashes[-1],
+    )
+    with pytest.raises(RuntimeError, match="non-deterministic"):
+        run_upmem(
+            compiled,
+            dag,
+            _inputs(("a", np.ones((2, 3))), ("b", np.ones((3, 2)))),
+            RunContext(
+                run_id="nondeterministic",
+                target=Target.UPMEM,
+                repetitions=2,
+                target_resources=_resources(tmp_path),
+            ),
+        )
+    assert len(hashes) == 2
+    assert session.closed
 
 
 def test_run_upmem_reduces_sliced_contracts_on_host(

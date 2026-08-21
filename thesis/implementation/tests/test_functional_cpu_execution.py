@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import gc
+import weakref
 
 import numpy as np
 import pytest
@@ -271,6 +273,51 @@ def test_chain_matches_einsum_and_does_not_mutate_inputs() -> None:
     assert result.output_hash == _hash(expected)
     assert result.executed_node_ids == ("contract_0", "contract_1")
     assert all(np.array_equal(current, original) for current, original in zip((a, b, c), originals))
+
+
+def test_cpu_releases_produced_intermediate_after_last_consumer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import quantum_bench.execution.cpu as cpu_module
+
+    dag = _dag(
+        TensorNetworkSpec(
+            None,
+            (
+                TensorSpec("a", (0, 1), (2, 2), "dense", dtype="float64"),
+                TensorSpec("b", (1, 2), (2, 2), "dense", dtype="float64"),
+                TensorSpec("c", (2, 3), (2, 2), "dense", dtype="float64"),
+            ),
+            (0, 3),
+            "ab,bc,cd->ad",
+        ),  # type: ignore[arg-type]
+        ((0, 1), (0, 1)),
+    )
+    plan = _compile(dag)
+    produced: list[weakref.ReferenceType[np.ndarray]] = []
+    original_contract = cpu_module.contract_node
+
+    def tracked_contract(*args: object, **kwargs: object) -> np.ndarray:
+        result = original_contract(*args, **kwargs)
+        produced.append(weakref.ref(result))
+        return result
+
+    monkeypatch.setattr(cpu_module, "contract_node", tracked_contract)
+    result = execute(
+        plan,
+        dag,
+        _inputs(
+            ("a", np.eye(2)),
+            ("b", np.ones((2, 2))),
+            ("c", np.eye(2)),
+        ),
+        RunContext(run_id="cpu-lifetime", target=Target.CPU),
+    )
+
+    gc.collect()
+    assert np.array_equal(result.output, np.ones((2, 2), dtype=np.float32))
+    assert produced[0]() is None
+    assert produced[1]() is None
 
 
 def test_topological_order_comes_from_dependencies() -> None:

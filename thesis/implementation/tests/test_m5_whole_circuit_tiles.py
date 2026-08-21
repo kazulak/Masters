@@ -11,6 +11,9 @@ from quantum_bench.targets.upmem.m5_whole_circuit_tiles import (
     assemble_output_tiles,
     canonical_label_geometry,
     lower_binary_contraction,
+    order_tile_waves,
+    plan_tile_shapes,
+    tile_limits_for_numeric_mode,
 )
 
 
@@ -224,6 +227,29 @@ def test_numeric_modes_use_true_mram_widths_and_int8_only_safety_fields():
 def test_numeric_mode_is_validated():
     with pytest.raises(ValueError, match="unsupported numeric_mode"):
         M5TileLimits(numeric_mode="implicit")
+
+
+def test_shape_only_tile_planning_matches_array_lowering_and_v4_wave_order():
+    task = _task((0, 1), (5, 300), (1, 2), (300, 6), (0, 2), (5, 6))
+    limits = tile_limits_for_numeric_mode("float32")
+    shape_tiles = plan_tile_shapes(1, 5, 300, 6, limits=limits)
+    lowered = lower_binary_contraction(
+        task,
+        np.ones((5, 300), dtype=np.float32),
+        np.ones((300, 6), dtype=np.float32),
+        limits=limits,
+    )
+
+    assert shape_tiles == lowered.tiles
+    waves = order_tile_waves(shape_tiles, total_dpu_count=2)
+    assert all(1 <= len(wave) <= 2 for wave in waves)
+    assert [tile.k_start for wave in waves for tile in wave] == sorted(
+        tile.k_start for wave in waves for tile in wave
+    )
+    for wave in waves:
+        assert [
+            (tile.batch_index, tile.m_start, tile.n_start) for tile in wave
+        ] == sorted((tile.batch_index, tile.m_start, tile.n_start) for tile in wave)
 
 
 @pytest.mark.parametrize(

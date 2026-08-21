@@ -1,4 +1,4 @@
-from dataclasses import FrozenInstanceError, replace
+from dataclasses import FrozenInstanceError, fields, replace
 
 import pytest
 import numpy as np
@@ -11,9 +11,12 @@ from quantum_bench.execution.contracts import (
     NumericMode,
     Target,
     TimingBreakdown,
+    UpmemCompileRequest,
+    UpmemNodePlan,
     UpmemPlan,
     UpmemRuntimeResources,
     UpmemTopology,
+    UpmemWorkUnit,
     execution_plan_hash,
     validate_execution_plan,
     validate_execution_result,
@@ -50,6 +53,36 @@ def upmem_plan() -> ExecutionPlan:
             decomposition_id="output_tile_v1",
             placement_id="contiguous_dpu_v1",
             reduction_id="host_reduction_v1",
+            node_plans=(
+                UpmemNodePlan(
+                    node_id="node-1",
+                    node_kind="contract",
+                    canonical_shape=(1, 1, 1, 1),
+                    work_units=(
+                        UpmemWorkUnit(
+                            node_id="node-1",
+                            stable_tile_id="b_0:out_0_0:k_0",
+                            wave=0,
+                            logical_rank=0,
+                            logical_dpu=0,
+                            batch_start=0,
+                            batch_size=1,
+                            m_start=0,
+                            m_size=1,
+                            n_start=0,
+                            n_size=1,
+                            k_start=0,
+                            k_size=1,
+                            estimated_input_bytes=8,
+                            estimated_output_bytes=4,
+                            aligned_mram_bytes=24,
+                            estimated_arithmetic_work=1,
+                        ),
+                    ),
+                    reduction_mode="host_reduction_v1",
+                    arithmetic_imbalance=1.0,
+                ),
+            ),
         ),
     )
 
@@ -83,10 +116,17 @@ def test_target_and_payload_mismatch_is_rejected():
 
 def test_plan_hash_changes_for_numeric_topology_and_kernel_changes():
     baseline = upmem_plan()
-    numeric = replace(baseline.payload, numeric_mode=NumericMode.HOST_PACKED_INT8)
+    node_plan = baseline.payload.node_plans[0]
+    unit = node_plan.work_units[0]
+    numeric = replace(
+        baseline.payload,
+        numeric_mode=NumericMode.HOST_PACKED_INT8,
+        node_plans=(replace(node_plan, work_units=(replace(unit, estimated_input_bytes=2),)),),
+    )
     topology = replace(
         baseline.payload,
         topology=replace(baseline.payload.topology, dpu_count=2, rank_count=1),
+        node_plans=(replace(node_plan, arithmetic_imbalance=2.0),),
     )
     kernel = replace(baseline.payload, kernel_id="kernel-v2")
 
@@ -135,6 +175,18 @@ def test_rank_paths_are_runtime_bindings_and_session_opener_is_not_identity():
             replace(resources, rank_paths=("/dev/dpu_rank0", "/dev/dpu_rank1")),
             upmem_plan().payload.topology,
         )
+
+
+def test_upmem_compile_request_has_no_backend_or_machine_selection_fields():
+    assert tuple(field.name for field in fields(UpmemCompileRequest)) == (
+        "contraction_dag_hash",
+        "numeric_mode",
+        "topology",
+    )
+    assert all(
+        not hasattr(upmem_plan().payload, field)
+        for field in ("rank_paths", "host_binary", "dpu_binary", "initialization_binary")
+    )
 
 
 def test_timing_keeps_reference_separate_from_reduction():
@@ -194,3 +246,37 @@ def test_invalid_upmem_topology_and_negative_timing_are_rejected():
 
     with pytest.raises(ValueError, match="kernel_s"):
         validate_timing(TimingBreakdown(kernel_s=-0.1))
+
+
+def test_static_upmem_work_unit_estimates_and_wave_assignment_are_validated():
+    baseline = upmem_plan()
+    unit = baseline.payload.node_plans[0].work_units[0]
+    invalid_estimate = replace(unit, estimated_input_bytes=7)
+    invalid_plan = replace(
+        baseline,
+        payload=replace(
+            baseline.payload,
+            node_plans=(
+                replace(
+                    baseline.payload.node_plans[0], work_units=(invalid_estimate,)
+                ),
+            ),
+        ),
+    )
+    with pytest.raises(ValueError, match="stored estimates"):
+        validate_execution_plan(invalid_plan)
+
+    duplicated = replace(unit, stable_tile_id="second", k_start=0)
+    duplicated_plan = replace(
+        baseline,
+        payload=replace(
+            baseline.payload,
+            node_plans=(
+                replace(
+                    baseline.payload.node_plans[0], work_units=(unit, duplicated)
+                ),
+            ),
+        ),
+    )
+    with pytest.raises(ValueError, match="logical DPU"):
+        validate_execution_plan(duplicated_plan)
