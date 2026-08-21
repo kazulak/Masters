@@ -12,7 +12,7 @@ from typing import Mapping
 
 import numpy as np
 
-from quantum_bench.core.records import ContractionTask
+from quantum_bench.tn.graph import ContractNode
 
 
 DEFAULT_MAX_ELEMENTS = 65_536
@@ -81,7 +81,7 @@ class M5TileLimits:
 class CanonicalContraction:
     """Arrays and labels for canonical batched ``(B,M,K) @ (B,K,N)``."""
 
-    task: ContractionTask
+    node: ContractNode
     left: np.ndarray
     right: np.ndarray
     b: int
@@ -213,15 +213,15 @@ class M5TileLowering:
 
 
 def lower_binary_contraction(
-    task: ContractionTask,
+    node: ContractNode,
     left: np.ndarray,
     right: np.ndarray,
     *,
     limits: M5TileLimits = M5TileLimits(),
 ) -> M5TileLowering:
-    """Lower a real binary task into deterministic bounded matrix tiles."""
+    """Lower a real binary contract node into deterministic bounded matrix tiles."""
 
-    canonical = canonicalize_binary_contraction(task, left, right)
+    canonical = canonicalize_binary_contraction(node, left, right)
     tile_m, tile_k, tile_n = _choose_tile_shape(
         canonical.m, canonical.k, canonical.n, limits
     )
@@ -237,7 +237,7 @@ def lower_binary_contraction(
 
 
 def canonicalize_binary_contraction(
-    task: ContractionTask,
+    node: ContractNode,
     left: np.ndarray,
     right: np.ndarray,
 ) -> CanonicalContraction:
@@ -245,18 +245,18 @@ def canonicalize_binary_contraction(
 
     left_array = _real_float32(left, "left")
     right_array = _real_float32(right, "right")
-    if tuple(left_array.shape) != tuple(task.input_shapes[0]):
+    if tuple(left_array.shape) != tuple(node.left.shape):
         raise TileLoweringError(
-            f"left_shape_mismatch:{left_array.shape}!={task.input_shapes[0]}"
+            f"left_shape_mismatch:{left_array.shape}!={node.left.shape}"
         )
-    if tuple(right_array.shape) != tuple(task.input_shapes[1]):
+    if tuple(right_array.shape) != tuple(node.right.shape):
         raise TileLoweringError(
-            f"right_shape_mismatch:{right_array.shape}!={task.input_shapes[1]}"
+            f"right_shape_mismatch:{right_array.shape}!={node.right.shape}"
         )
 
-    left_labels = tuple(task.left_labels)
-    right_labels = tuple(task.right_labels)
-    output_labels = tuple(task.output_labels)
+    left_labels = node.left.labels
+    right_labels = node.right.labels
+    output_labels = node.output_labels
     _validate_labels(left_labels, right_labels, output_labels)
     dimensions = _label_dimensions(left_labels, right_labels, left_array, right_array)
 
@@ -320,9 +320,9 @@ def canonicalize_binary_contraction(
         second_split=len(batch) + len(contracted),
     )
     expected_output_shape = tuple(dimensions[label] for label in output_labels)
-    if tuple(task.output_shape) != expected_output_shape:
+    if tuple(node.output.shape) != expected_output_shape:
         raise TileLoweringError(
-            f"output_shape_mismatch:{task.output_shape}!={expected_output_shape}"
+            f"output_shape_mismatch:{node.output.shape}!={expected_output_shape}"
         )
     if tuple(left_matrix.shape) != (b, m, k) or tuple(right_matrix.shape) != (
         b,
@@ -331,7 +331,7 @@ def canonicalize_binary_contraction(
     ):
         raise TileLoweringError("canonical_matrix_shape_mismatch")
     return CanonicalContraction(
-        task=task,
+        node=node,
         left=left_matrix,
         right=right_matrix,
         b=b,
@@ -420,15 +420,15 @@ def assemble_output_tiles(
     canonical_output = canonical_output.reshape(canonical_shape or ())
     if (
         lowering.canonical.canonical_output_labels
-        != lowering.canonical.task.output_labels
+        != lowering.canonical.node.output_labels
     ):
         axes = tuple(
             lowering.canonical.canonical_output_labels.index(label)
-            for label in lowering.canonical.task.output_labels
+            for label in lowering.canonical.node.output_labels
         )
         canonical_output = np.transpose(canonical_output, axes)
     return np.asarray(canonical_output, dtype=dtype).reshape(
-        lowering.canonical.task.output_shape
+        lowering.canonical.node.output.shape
     )
 
 
@@ -702,7 +702,7 @@ def _preflight(
     limits: M5TileLimits,
 ) -> M5PreflightSummary:
     output_elements = canonical.b * canonical.m * canonical.n
-    output_shape = tuple(_shape_for_labels(canonical, canonical.task.output_labels))
+    output_shape = tuple(_shape_for_labels(canonical, canonical.node.output_labels))
     return M5PreflightSummary(
         supported=True,
         reason=None,

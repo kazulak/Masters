@@ -16,13 +16,6 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from quantum_bench.core.indices import (
-    LABEL_LIST_EINSUM_SENTINEL,
-    index_symbols,
-    shape_product,
-    supports_string_einsum,
-)
-from quantum_bench.core.records import ContractionTask
 from quantum_bench.execution.contracts import (
     BackendFacts,
     ExecutionPlan,
@@ -47,7 +40,7 @@ from quantum_bench.tn.graph import (
     contraction_dag_hash,
     validate_contraction_dag,
 )
-from quantum_bench.tn.network import TensorInputs, validate_tensor_inputs
+from quantum_bench.tn.network import TensorInputs, tensor_input_map, validate_dag_inputs
 
 
 @dataclass
@@ -113,7 +106,10 @@ def run_upmem(
     orchestrator.
     """
 
-    _validate_invocation(plan, dag, inputs, context)
+    if len({value.tensor_id for value in inputs.values}) != len(inputs.values):
+        raise ValueError("Tensor inputs contain duplicate tensor ids")
+    tensors = tensor_input_map(inputs)
+    _validate_invocation(plan, dag, tensors, context)
     upmem_plan = plan.payload
     assert isinstance(upmem_plan, UpmemPlan)
     resources = context.target_resources
@@ -141,7 +137,7 @@ def run_upmem(
             _execute_once(
                 session,
                 dag,
-                inputs,
+                tensors,
                 upmem_plan,
                 resources=None,
                 aggregate=None,
@@ -151,7 +147,7 @@ def run_upmem(
             output, completed_node_ids = _execute_once(
                 session,
                 dag,
-                inputs,
+                tensors,
                 upmem_plan,
                 resources=resources,
                 aggregate=aggregate,
@@ -262,13 +258,13 @@ def _open_session(plan: ExecutionPlan, context: RunContext) -> Any:
 def _execute_once(
     session: Any,
     dag: ContractionDAG,
-    inputs: TensorInputs,
+    inputs: Mapping[str, np.ndarray],
     plan: UpmemPlan,
     *,
     resources: UpmemRuntimeResources | None,
     aggregate: _Aggregate | None,
 ) -> tuple[np.ndarray, tuple[str, ...]]:
-    tensors = {value.tensor_id: np.asarray(value.array) for value in inputs.values}
+    tensors = dict(inputs)
     nodes = {node.node_id: node for node in dag.nodes}
     completed_node_ids: list[str] = []
     for node_id in plan.node_order:
@@ -276,8 +272,7 @@ def _execute_once(
         if isinstance(node, ContractNode):
             left = _resolve_view(node.left, tensors)
             right = _resolve_view(node.right, tensors)
-            task = _legacy_task(node)
-            task_result = session.execute(task, left, right)
+            task_result = session.execute(node, left, right)
             if aggregate is not None:
                 assert resources is not None
                 aggregate.add(task_result)
@@ -303,47 +298,10 @@ def _execute_once(
     return _resolve_view(dag.output, tensors), tuple(completed_node_ids)
 
 
-def _legacy_task(node: ContractNode) -> ContractionTask:
-    left = node.left
-    right = node.right
-    free_left = tuple(label for label in left.labels if label in node.output_labels)
-    free_right = tuple(
-        label
-        for label in right.labels
-        if label in node.output_labels and label not in free_left
-    )
-    m = _product_labels(free_left, left, right)
-    k = _product_labels(node.contracted_labels, left, right)
-    n = _product_labels(free_right, left, right)
-    output_elements = shape_product(node.output.shape)
-    return ContractionTask(
-        id=node.node_id,
-        input_tensor_ids=(left.tensor_id, right.tensor_id),
-        output_tensor_id=node.output.id,
-        dependencies=node.dependencies,
-        index_expression=_index_expression(left.labels, right.labels, node.output_labels),
-        input_shapes=(left.shape, right.shape),
-        output_shape=node.output.shape,
-        left_labels=left.labels,
-        right_labels=right.labels,
-        contracted_labels=node.contracted_labels,
-        output_labels=node.output_labels,
-        gemm_m=m,
-        gemm_k=k,
-        gemm_n=n,
-        structure=node.output.structure,
-        estimated_flops=int(2 * output_elements * max(1, k)),
-        estimated_bytes=int(
-            (shape_product(left.shape) + shape_product(right.shape) + output_elements)
-            * np.dtype(np.float32).itemsize
-        ),
-    )
-
-
 def _validate_invocation(
     plan: ExecutionPlan,
     dag: ContractionDAG,
-    inputs: TensorInputs,
+    inputs: Mapping[str, np.ndarray],
     context: RunContext,
 ) -> None:
     validate_contraction_dag(dag)
@@ -365,13 +323,13 @@ def _validate_invocation(
         NumericMode.FLOAT32_REAL,
         NumericMode.HOST_PACKED_INT8_PER_TASK_V1,
     }:
-        for value in inputs.values:
-            array = np.asarray(value.array)
+        for value in inputs.values():
+            array = np.asarray(value)
             if np.iscomplexobj(array) and np.any(np.imag(array) != 0):
                 raise ValueError(
                     "M5 real-valued UPMEM numeric modes reject nonzero imaginary inputs"
                 )
-    validate_tensor_inputs(_as_network_spec(dag), inputs)
+    validate_dag_inputs(dag, inputs)
     node_ids = tuple(node.node_id for node in dag.nodes)
     if plan.payload.node_order != _topological_order(dag):
         raise ValueError("UPMEM plan node_order is not the deterministic DAG order")
@@ -430,12 +388,6 @@ def _validate_m5_plan(
             item.tile_count,
         ) != ("host_reduce_v1", "host_reduce_v1", "host", "host_sum_v1", 0):
             raise ValueError(f"UPMEM work plan for {node.node_id} is not a host reduce plan")
-
-
-def _as_network_spec(dag: ContractionDAG) -> Any:
-    from quantum_bench.core.records import TensorNetworkSpec
-
-    return TensorNetworkSpec(None, dag.tensors, dag.output.labels, "")
 
 
 def _validate_resources(resources: UpmemRuntimeResources) -> dict[str, str]:
@@ -595,31 +547,6 @@ def _resolve_view(view: TensorView, tensors: Mapping[str, np.ndarray]) -> np.nda
     if tuple(sliced.shape) != view.shape:
         raise ValueError(f"UPMEM sliced tensor {view.tensor_id} has wrong shape")
     return sliced
-
-
-def _product_labels(labels: tuple[int, ...], left: TensorView, right: TensorView) -> int:
-    product = 1
-    for label in labels:
-        if label in left.labels:
-            product *= left.shape[left.labels.index(label)]
-        elif label in right.labels:
-            product *= right.shape[right.labels.index(label)]
-    return product
-
-
-def _index_expression(
-    left: tuple[int, ...], right: tuple[int, ...], output: tuple[int, ...]
-) -> str:
-    if not supports_string_einsum([left, right], output):
-        return f"{LABEL_LIST_EINSUM_SENTINEL}:upmem_adapter"
-    symbols = index_symbols([left, right], output)
-    return (
-        "".join(symbols[label] for label in left)
-        + ","
-        + "".join(symbols[label] for label in right)
-        + "->"
-        + "".join(symbols[label] for label in output)
-    )
 
 
 def _topological_order(dag: ContractionDAG) -> tuple[str, ...]:

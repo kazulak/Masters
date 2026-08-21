@@ -3,9 +3,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from quantum_bench.core.indices import LABEL_LIST_EINSUM_SENTINEL
-from quantum_bench.core.records import ContractionTask
-from quantum_bench.tn.contract import contract_binary_task
+from quantum_bench.core.records import TensorSpec
+from quantum_bench.tn.graph import ContractNode, TensorView
 from quantum_bench.targets.upmem.m5_whole_circuit_tiles import (
     M5TileLimits,
     TileLoweringError,
@@ -22,31 +21,34 @@ def _task(
     right_shape: tuple[int, ...],
     output_labels: tuple[int, ...],
     output_shape: tuple[int, ...],
-    *,
-    index_expression: str | None = None,
-) -> ContractionTask:
-    return ContractionTask(
-        id="task",
-        input_tensor_ids=("left", "right"),
-        output_tensor_id="output",
-        dependencies=(),
-        index_expression=index_expression or f"{LABEL_LIST_EINSUM_SENTINEL}:fixture",
-        input_shapes=(left_shape, right_shape),
-        output_shape=output_shape,
-        left_labels=left_labels,
-        right_labels=right_labels,
+) -> ContractNode:
+    return ContractNode(
+        node_id="task",
+        left=TensorView(tensor_id="left", labels=left_labels, shape=left_shape),
+        right=TensorView(tensor_id="right", labels=right_labels, shape=right_shape),
+        output=TensorSpec(
+            id="output",
+            labels=output_labels,
+            shape=output_shape,
+            structure="dense",
+        ),
         contracted_labels=tuple(
             label
             for label in left_labels
             if label in right_labels and label not in output_labels
         ),
         output_labels=output_labels,
-        gemm_m=1,
-        gemm_k=1,
-        gemm_n=1,
-        structure="dense",
-        estimated_flops=0,
-        estimated_bytes=0,
+    )
+
+
+def _contract(node: ContractNode, left: np.ndarray, right: np.ndarray) -> np.ndarray:
+    return np.einsum(
+        left,
+        list(node.left.labels),
+        right,
+        list(node.right.labels),
+        list(node.output_labels),
+        optimize=True,
     )
 
 
@@ -71,17 +73,17 @@ def test_label_lowering_matches_contract_with_one_sided_reductions():
     right = np.arange(105, dtype=np.float32).reshape(5, 3, 7)
     lowering = lower_binary_contraction(task, left, right)
 
-    expected = contract_binary_task(task, left, right, dtype=np.float32)
+    expected = _contract(task, left, right)
     actual = assemble_output_tiles(lowering, _tile_partials(lowering))
     np.testing.assert_allclose(actual, expected, rtol=0, atol=0)
     assert lowering.canonical.left.shape == (1, 2, 3)
     assert lowering.canonical.right.shape == (1, 3, 1)
     assert lowering.canonical.canonical_output_labels == (10,)
     assert canonical_label_geometry(
-        task.left_labels,
-        task.input_shapes[0],
-        task.right_labels,
-        task.input_shapes[1],
+        task.left.labels,
+        task.left.shape,
+        task.right.labels,
+        task.right.shape,
         task.output_labels,
     ) == (
         lowering.canonical.b,
@@ -96,7 +98,7 @@ def test_label_lowering_restores_permuted_output_labels():
     left = np.arange(6, dtype=np.float32).reshape(2, 3)
     right = np.arange(12, dtype=np.float32).reshape(3, 4)
     lowering = lower_binary_contraction(task, left, right)
-    expected = contract_binary_task(task, left, right, dtype=np.float32)
+    expected = _contract(task, left, right)
     actual = assemble_output_tiles(lowering, _tile_partials(lowering))
     np.testing.assert_allclose(actual, expected, rtol=0, atol=0)
     assert lowering.canonical.canonical_output_labels == (10, 30)
@@ -110,7 +112,6 @@ def test_shared_output_label_is_lowered_as_batch_and_permuted_back():
         (2, 4, 5),
         (2, 5, 0),
         (5, 2, 3),
-        index_expression="bmk,bkn->nbm",
     )
     left = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
     right = np.arange(40, dtype=np.float32).reshape(2, 4, 5)
@@ -122,7 +123,7 @@ def test_shared_output_label_is_lowered_as_batch_and_permuted_back():
     assert lowering.canonical.left.shape == (2, 3, 4)
     assert lowering.canonical.right.shape == (2, 4, 5)
     assert {tile.batch_index for tile in lowering.tiles} == {0, 1}
-    expected = contract_binary_task(task, left, right, dtype=np.float32)
+    expected = _contract(task, left, right)
     actual = assemble_output_tiles(lowering, _tile_partials(lowering))
     np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-6)
 
@@ -157,7 +158,7 @@ def test_remainder_tiles_are_contiguous_and_cover_output_without_overlap():
         assert tile.k_size <= 65_536
         assert tile.aligned_mram_bytes <= 512 * 1024
 
-    expected = contract_binary_task(task, left, right, dtype=np.float32)
+    expected = _contract(task, left, right)
     np.testing.assert_allclose(
         assemble_output_tiles(lowering, _tile_partials(lowering)),
         expected,

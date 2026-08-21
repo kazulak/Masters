@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import hashlib
 import json
 from pathlib import Path
@@ -11,11 +11,13 @@ from typing import Any
 import numpy as np
 import pytest
 
-from quantum_bench.core.indices import LABEL_LIST_EINSUM_SENTINEL
-from quantum_bench.core.records import ContractionTask
+from quantum_bench.core.records import TensorSpec
+from quantum_bench.formats.fixed_point import FixedPointSpec, quantize_fixed_point
+from quantum_bench.tn.graph import ContractNode, TensorView
 from quantum_bench.targets.upmem.m5_whole_circuit_engine import (
     M5WholeCircuitEngine,
     M5WholeCircuitSession,
+    _task_structure_hash,
 )
 from quantum_bench.targets.upmem.execution_plan_v4 import (
     NATIVE_EXECUTION_IDENTITY,
@@ -25,26 +27,33 @@ from quantum_bench.whole_circuit.core import DeviceTopology
 from quantum_bench.whole_circuit.policies import Float32RealPolicy, HostPackedInt8Policy
 
 
-def _task(k: int = 5, *, m: int = 3, n: int = 4) -> ContractionTask:
-    return ContractionTask(
-        id="fixture",
-        input_tensor_ids=("left", "right"),
-        output_tensor_id="out",
-        dependencies=(),
-        index_expression=f"{LABEL_LIST_EINSUM_SENTINEL}:fixture",
-        input_shapes=((m, k), (k, n)),
-        output_shape=(m, n),
-        left_labels=(0, 1),
-        right_labels=(1, 2),
+def _task(k: int = 5, *, m: int = 3, n: int = 4) -> ContractNode:
+    return ContractNode(
+        node_id="fixture",
+        left=TensorView(tensor_id="left", labels=(0, 1), shape=(m, k)),
+        right=TensorView(tensor_id="right", labels=(1, 2), shape=(k, n)),
+        output=TensorSpec(id="out", labels=(0, 2), shape=(m, n), structure="dense"),
         contracted_labels=(1,),
         output_labels=(0, 2),
-        gemm_m=m,
-        gemm_k=k,
-        gemm_n=n,
-        structure="dense",
-        estimated_flops=0,
-        estimated_bytes=0,
     )
+
+
+def _packed_expected(
+    node: ContractNode, left: np.ndarray, right: np.ndarray
+) -> np.ndarray:
+    left_q = quantize_fixed_point(left, FixedPointSpec(route_dtype="int8"))
+    right_q = quantize_fixed_point(right, FixedPointSpec(route_dtype="int8"))
+    return np.asarray(
+        np.einsum(
+            left_q.array,
+            list(node.left.labels),
+            right_q.array,
+            list(node.right.labels),
+            list(node.output_labels),
+            dtype=np.int32,
+        ),
+        dtype=np.float32,
+    ) * np.float32(left_q.record.scale * right_q.record.scale)
 
 
 def _binaries(root: Path) -> tuple[Path, Path, Path]:
@@ -277,7 +286,7 @@ def test_float_and_packed_int8_match_reference_across_k_chunks(tmp_path: Path) -
     assert float_session.close()["hardware_release_confirmed"]
     packed_session = engine.open_session(HostPackedInt8Policy(), _topology(2))
     packed_result = packed_session.execute(task, left, right)
-    expected, _ = HostPackedInt8Policy().contract(task, left, right)
+    expected = _packed_expected(task, left, right)
     np.testing.assert_allclose(packed_result.output, expected, rtol=0, atol=1e-5)
     assert packed_result.metadata["packed_int8_transport"]
     assert packed_result.metadata["host_quantization_time_s"] >= 0.0
@@ -300,6 +309,29 @@ def test_float_and_packed_int8_match_reference_across_k_chunks(tmp_path: Path) -
         float_result.metadata["request_contract_sha256"]
         != packed_result.metadata["request_contract_sha256"]
     )
+
+
+def test_node_structure_hash_binds_all_contraction_fields() -> None:
+    node = _task()
+    variants = (
+        replace(node, node_id="other"),
+        replace(node, left=replace(node.left, tensor_id="other_left")),
+        replace(node, right=replace(node.right, tensor_id="other_right")),
+        replace(node, output=replace(node.output, id="other_output")),
+        replace(node, left=replace(node.left, shape=(1, 5))),
+        replace(node, right=replace(node.right, shape=(5, 1))),
+        replace(node, output=replace(node.output, shape=(1, 1))),
+        replace(node, left=replace(node.left, labels=(3, 1))),
+        replace(node, right=replace(node.right, labels=(1, 4))),
+        replace(node, contracted_labels=(4,)),
+        replace(node, output_labels=(0, 4)),
+    )
+
+    hashes = {
+        _task_structure_hash(node),
+        *(_task_structure_hash(value) for value in variants),
+    }
+    assert len(hashes) == len(variants) + 1
 
 
 def test_request_contract_is_deterministic_and_binds_int8_data(tmp_path: Path) -> None:
@@ -696,24 +728,15 @@ def test_cleanup_rejects_requests_root(tmp_path: Path) -> None:
 
 
 def test_engine_supports_batched_permuted_output_labels(tmp_path: Path) -> None:
-    task = ContractionTask(
-        id="batched",
-        input_tensor_ids=("left", "right"),
-        output_tensor_id="out",
-        dependencies=(),
-        index_expression="bmk,bkn->nbm",
-        input_shapes=((2, 3, 4), (2, 4, 5)),
-        output_shape=(5, 2, 3),
-        left_labels=(5, 0, 1),
-        right_labels=(5, 1, 2),
+    task = ContractNode(
+        node_id="batched",
+        left=TensorView(tensor_id="left", labels=(5, 0, 1), shape=(2, 3, 4)),
+        right=TensorView(tensor_id="right", labels=(5, 1, 2), shape=(2, 4, 5)),
+        output=TensorSpec(
+            id="out", labels=(2, 5, 0), shape=(5, 2, 3), structure="dense"
+        ),
         contracted_labels=(1,),
         output_labels=(2, 5, 0),
-        gemm_m=1,
-        gemm_k=1,
-        gemm_n=1,
-        structure="dense",
-        estimated_flops=0,
-        estimated_bytes=0,
     )
     left = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
     right = np.arange(40, dtype=np.float32).reshape(2, 4, 5)

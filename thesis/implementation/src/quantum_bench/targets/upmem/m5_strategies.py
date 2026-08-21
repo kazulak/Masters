@@ -17,7 +17,6 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from quantum_bench.core.records import ContractionTask
 from quantum_bench.targets.upmem.execution_plan_v4 import V4WorkUnit, build_v4_request
 from quantum_bench.targets.upmem.m5_whole_circuit_tiles import (
     M5Tile,
@@ -25,6 +24,7 @@ from quantum_bench.targets.upmem.m5_whole_circuit_tiles import (
     M5TileLowering,
     lower_binary_contraction,
 )
+from quantum_bench.tn.graph import ContractNode
 from quantum_bench.whole_circuit.strategies import (
     DecompositionStrategy,
     KernelProvider,
@@ -39,7 +39,7 @@ from quantum_bench.whole_circuit.strategies import (
 
 @dataclass(frozen=True)
 class M5DecompositionStrategy:
-    """M5 strategy for decomposing binary contraction tasks into bounded M5 tiles."""
+    """Decompose one semantic contract node into bounded physical tiles."""
 
     name: str = "m5_v4_tile_decomposition"
 
@@ -55,7 +55,7 @@ class M5DecompositionStrategy:
 
     def decompose(
         self,
-        task: ContractionTask,
+        node: ContractNode,
         left: np.ndarray,
         right: np.ndarray,
         *,
@@ -63,7 +63,7 @@ class M5DecompositionStrategy:
     ) -> M5TileLowering:
         if limits is None:
             limits = M5TileLimits()
-        return lower_binary_contraction(task, left, right, limits=limits)
+        return lower_binary_contraction(node, left, right, limits=limits)
 
 
 @dataclass(frozen=True)

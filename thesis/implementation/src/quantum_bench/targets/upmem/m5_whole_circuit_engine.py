@@ -1,11 +1,10 @@
-"""Bounded physical v4 execution engine for whole-circuit TaskGraphs.
+"""Bounded physical v4 execution engine for contraction DAG nodes.
 
-The engine deliberately owns only one binary contraction at a time.  The
-``WholeGraphExecutor`` owns graph dependencies and the host tensor store;
-this module lowers a task to bounded v4 output/K tiles, submits those tiles to
-one or more persistent physical rank sessions, and reconstructs the output.
-It is therefore an additive M5 baseline, not a claim of DPU-resident graph
-intermediates.
+The engine deliberately owns only one binary contraction at a time. The caller
+owns DAG dependencies and the host tensor store; this module lowers one
+``ContractNode`` to bounded v4 output/K tiles, submits those tiles to persistent
+physical rank sessions, and reconstructs the output. It does not claim
+DPU-resident graph intermediates.
 """
 
 from __future__ import annotations
@@ -22,8 +21,8 @@ from typing import Any, Callable, Mapping, Protocol
 
 import numpy as np
 
-from quantum_bench.core.records import ContractionTask
 from quantum_bench.formats.fixed_point import FixedPointSpec, quantize_fixed_point
+from quantum_bench.tn.graph import ContractNode
 from quantum_bench.targets.upmem.execution_plan_v4 import (
     MAX_INT32_SAFE_K,
     NATIVE_EXECUTION_IDENTITY,
@@ -86,18 +85,18 @@ def _sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
-def _task_structure_hash(task: ContractionTask) -> str:
+def _task_structure_hash(node: ContractNode) -> str:
     payload = repr(
         (
-            task.id,
-            task.input_tensor_ids,
-            task.output_tensor_id,
-            task.input_shapes,
-            task.output_shape,
-            task.left_labels,
-            task.right_labels,
-            task.contracted_labels,
-            task.output_labels,
+            node.node_id,
+            (node.left.tensor_id, node.right.tensor_id),
+            node.output.id,
+            (node.left.shape, node.right.shape),
+            node.output.shape,
+            node.left.labels,
+            node.right.labels,
+            node.contracted_labels,
+            node.output_labels,
         )
     ).encode("utf-8")
     return _sha256_bytes(payload)
@@ -507,7 +506,7 @@ class M5WholeCircuitSession:
         return self._strategy_configuration.sha256
 
     def execute(
-        self, task: ContractionTask, left: np.ndarray, right: np.ndarray
+        self, node: ContractNode, left: np.ndarray, right: np.ndarray
     ) -> EngineTaskResult:
         if self._closed:
             raise RuntimeError("M5 whole-circuit session is closed")
@@ -516,7 +515,7 @@ class M5WholeCircuitSession:
         packed = self.policy.name == "host_packed_int8_per_task_v1"
         limits = M5TileLimits.host_packed_int8() if packed else M5TileLimits.float32()
         lowering = self.decomposition_strategy.decompose(
-            task, left, right, limits=limits
+            node, left, right, limits=limits
         )
         canonical_left = lowering.canonical.left
         canonical_right = lowering.canonical.right
@@ -576,7 +575,7 @@ class M5WholeCircuitSession:
         total_dpus = sum(rank.local_dpus for rank in self.ranks)
         waves = self.placement_strategy.place_waves(lowering.tiles, total_dpus)
         self._validate_waves(lowering.tiles, waves, total_dpus)
-        task_structure_sha256 = _task_structure_hash(task)
+        task_structure_sha256 = _task_structure_hash(node)
         numeric_transport = "host_packed_int8_mram" if packed else "float32_mram"
         request_contract = _request_contract_hash(
             task_structure_sha256,

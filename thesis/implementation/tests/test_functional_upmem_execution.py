@@ -21,6 +21,7 @@ from quantum_bench.execution import (
     UnsupportedExecution,
 )
 from quantum_bench.tn.graph import (
+    ContractNode,
     SliceSpec,
     build_contraction_dag,
     contraction_dag_hash,
@@ -118,16 +119,18 @@ class _FakeSession:
             "failure_stage": None,
         }
 
-    def execute(self, task: object, left: np.ndarray, right: np.ndarray) -> object:
+    def execute(
+        self, node: ContractNode, left: np.ndarray, right: np.ndarray
+    ) -> object:
         from quantum_bench.whole_circuit.core import EngineTaskResult
 
-        self.calls.append(task.id)
+        self.calls.append(node.node_id)
         output = np.einsum(
             left,
-            list(task.left_labels),
+            list(node.left.labels),
             right,
-            list(task.right_labels),
-            list(task.output_labels),
+            list(node.right.labels),
+            list(node.output_labels),
         )
         return EngineTaskResult(
             output=np.asarray(output),
@@ -449,8 +452,10 @@ def test_run_upmem_closes_session_on_failure(
     import quantum_bench.execution.upmem as module
 
     class FailingSession(_FakeSession):
-        def execute(self, task: object, left: np.ndarray, right: np.ndarray) -> object:
-            self.calls.append(task.id)
+        def execute(
+            self, node: ContractNode, left: np.ndarray, right: np.ndarray
+        ) -> object:
+            self.calls.append(node.node_id)
             raise RuntimeError("native failure")
 
     dag = _dag()

@@ -8,8 +8,8 @@ from typing import Any, Mapping
 import numpy as np
 import pytest
 
-from quantum_bench.core.indices import LABEL_LIST_EINSUM_SENTINEL
-from quantum_bench.core.records import ContractionTask
+from quantum_bench.core.records import TensorSpec
+from quantum_bench.tn.graph import ContractNode, TensorView
 from quantum_bench.targets.upmem.execution_plan_v4 import (
     NATIVE_EXECUTION_IDENTITY,
     NUMERIC_FLOAT32,
@@ -55,25 +55,14 @@ def _strategy_identity(
     )
 
 
-def _task(k: int = 5, *, m: int = 3, n: int = 4) -> ContractionTask:
-    return ContractionTask(
-        id="fixture",
-        input_tensor_ids=("left", "right"),
-        output_tensor_id="out",
-        dependencies=(),
-        index_expression=f"{LABEL_LIST_EINSUM_SENTINEL}:fixture",
-        input_shapes=((m, k), (k, n)),
-        output_shape=(m, n),
-        left_labels=(0, 1),
-        right_labels=(1, 2),
+def _task(k: int = 5, *, m: int = 3, n: int = 4) -> ContractNode:
+    return ContractNode(
+        node_id="fixture",
+        left=TensorView(tensor_id="left", labels=(0, 1), shape=(m, k)),
+        right=TensorView(tensor_id="right", labels=(1, 2), shape=(k, n)),
+        output=TensorSpec(id="out", labels=(0, 2), shape=(m, n), structure="dense"),
         contracted_labels=(1,),
         output_labels=(0, 2),
-        gemm_m=m,
-        gemm_k=k,
-        gemm_n=n,
-        structure="dense",
-        estimated_flops=0,
-        estimated_bytes=0,
     )
 
 
@@ -543,7 +532,7 @@ def test_custom_strategy_injection_direct_dispatch(tmp_path: Path) -> None:
 
         def decompose(
             self,
-            task: ContractionTask,
+            node: ContractNode,
             left: np.ndarray,
             right: np.ndarray,
             *,
@@ -551,7 +540,7 @@ def test_custom_strategy_injection_direct_dispatch(tmp_path: Path) -> None:
         ) -> M5TileLowering:
             invocations.append("decompose")
             return lower_binary_contraction(
-                task, left, right, limits=limits or M5TileLimits()
+                node, left, right, limits=limits or M5TileLimits()
             )
 
     @dataclass(frozen=True)
