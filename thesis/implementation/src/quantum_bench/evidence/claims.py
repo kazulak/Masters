@@ -41,9 +41,10 @@ class ClaimDecision:
 class ClaimPolicy:
     """Admission policy for M5 normalized-row claims."""
 
-    def evaluate_row(
-        self, claim: Claim, row: Mapping[str, Any]
-    ) -> ClaimDecision:
+    _DAG_V2_SCHEMA = "contraction_dag_v2"
+    _M5_EXACT_ONCE_SCOPE = "host_dag_node_completion_per_route"
+
+    def evaluate_row(self, claim: Claim, row: Mapping[str, Any]) -> ClaimDecision:
         if claim is Claim.FUNCTIONAL_CORRECTNESS:
             return self._functional(row)
         if claim is Claim.PHYSICAL_EXECUTION:
@@ -61,8 +62,12 @@ class ClaimPolicy:
             if mode in {ExecutionMode.MODEL, ExecutionMode.SDK_SIMULATOR}:
                 reasons.append("timing claim rejects modeled or simulator execution")
             origins = self._timing_origins(row)
-            if origins and not all(self._measured_timing_origin(value) for value in origins):
-                reasons.append("timing metric origin is not a measured timer or counter")
+            if origins and not all(
+                self._measured_timing_origin(value) for value in origins
+            ):
+                reasons.append(
+                    "timing metric origin is not a measured timer or counter"
+                )
             if self._engine_class(row) == "upmem":
                 if row.get("hardware_speedup_applicable") is not True:
                     reasons.append("hardware timing is not speedup-applicable")
@@ -108,10 +113,14 @@ class ClaimPolicy:
             if not self._positive_energy_interval(row):
                 reasons.append("energy measurement interval is missing or non-positive")
             if not self._energy_counter_provenance(row):
-                reasons.append("energy measurement lacks positive samples or counter readings")
+                reasons.append(
+                    "energy measurement lacks positive samples or counter readings"
+                )
             return self._decision(reasons)
         if claim in {Claim.SPEEDUP, Claim.PATH_ABLATION, Claim.NUMERIC_ABLATION}:
-            return ClaimDecision(False, (f"{claim.value} requires a baseline/candidate pair",))
+            return ClaimDecision(
+                False, (f"{claim.value} requires a baseline/candidate pair",)
+            )
         return ClaimDecision(False, (f"unsupported claim: {claim.value}",))
 
     def evaluate_pair(
@@ -134,7 +143,9 @@ class ClaimPolicy:
             return self._numeric_pair(baseline, candidate)
         if claim is Claim.SCALING:
             return self._scaling_pair(baseline, candidate)
-        return ClaimDecision(False, (f"pair admission is not defined for {claim.value}",))
+        return ClaimDecision(
+            False, (f"pair admission is not defined for {claim.value}",)
+        )
 
     def _speedup_pair(
         self,
@@ -171,7 +182,10 @@ class ClaimPolicy:
         if baseline_hashes is None or candidate_hashes is None:
             reasons.append("speedup requires semantic, tensor-network, and plan hashes")
         elif baseline_hashes != candidate_hashes:
-            reasons.append("speedup requires matching semantic, tensor-network, and plan hashes")
+            reasons.append(
+                "speedup requires matching semantic, tensor-network, and plan hashes"
+            )
+        self._require_dag_pair(reasons, "speedup", baseline, candidate)
 
         baseline_repeat = self._repeat_id(baseline)
         candidate_repeat = self._repeat_id(candidate)
@@ -206,9 +220,14 @@ class ClaimPolicy:
         if baseline_hashes is None or candidate_hashes is None:
             reasons.append("path ablation requires complete scientific hashes")
         elif baseline_hashes[:2] != candidate_hashes[:2]:
-            reasons.append("path ablation requires matching semantic and tensor-network hashes")
+            reasons.append(
+                "path ablation requires matching semantic and tensor-network hashes"
+            )
         elif baseline_hashes[2] == candidate_hashes[2]:
             reasons.append("path ablation requires distinct contraction-plan hashes")
+        self._require_dag_pair(
+            reasons, "path ablation", baseline, candidate, require_distinct_v2=True
+        )
         self._require_equal_nonempty(
             reasons,
             "path ablation",
@@ -226,7 +245,9 @@ class ClaimPolicy:
     def _numeric_pair(
         self, baseline: Mapping[str, Any], candidate: Mapping[str, Any]
     ) -> ClaimDecision:
-        reasons = self._comparison_timing_reasons("numeric ablation", baseline, candidate)
+        reasons = self._comparison_timing_reasons(
+            "numeric ablation", baseline, candidate
+        )
         self._require_equal_executor(reasons, baseline, candidate)
         baseline_hashes = self._hashes(baseline)
         candidate_hashes = self._hashes(candidate)
@@ -234,6 +255,7 @@ class ClaimPolicy:
             reasons.append("numeric ablation requires complete scientific hashes")
         elif baseline_hashes != candidate_hashes:
             reasons.append("numeric ablation requires matching full scientific hashes")
+        self._require_dag_pair(reasons, "numeric ablation", baseline, candidate)
         self._require_equal_nonempty(
             reasons,
             "numeric ablation",
@@ -242,7 +264,9 @@ class ClaimPolicy:
             self._path(candidate),
         )
         if not self._is_float32_policy(baseline):
-            reasons.append("numeric ablation baseline must be an explicit float32 policy")
+            reasons.append(
+                "numeric ablation baseline must be an explicit float32 policy"
+            )
         if not self._host_packed_int8(candidate):
             reasons.append(
                 "numeric ablation candidate must be explicit host-packed Int8 with packed MRAM transport"
@@ -268,6 +292,7 @@ class ClaimPolicy:
             reasons.append("scaling requires complete scientific hashes")
         elif baseline_hashes != candidate_hashes:
             reasons.append("scaling requires matching full scientific hashes")
+        self._require_dag_pair(reasons, "scaling", baseline, candidate)
         self._require_equal_nonempty(
             reasons, "scaling", "path", self._path(baseline), self._path(candidate)
         )
@@ -344,11 +369,31 @@ class ClaimPolicy:
             return self._decision(reasons)
         if str(row.get("scientific_validation_status") or "").lower() != "passed":
             reasons.append("scientific validation did not pass")
-        if row.get("exact_once") is not True:
+        if self._is_current_m5_dag_v2(row):
+            if row.get("host_dag_node_completion_coverage") is not True:
+                reasons.append(
+                    "host DAG completion coverage was not verified; "
+                    "host DAG coverage is not native kernel exact-once evidence"
+                )
+            if row.get("exact_once_scope") != self._M5_EXACT_ONCE_SCOPE:
+                reasons.append(
+                    "exact_once_scope is not host_dag_node_completion_per_route; "
+                    "host DAG coverage is not native kernel exact-once evidence"
+                )
+        elif row.get("exact_once") is not True:
             reasons.append("exact-once execution was not verified")
         if row.get("no_fallback_used") is not True:
             reasons.append("no-fallback contract was not verified")
         if engine_class == "upmem":
+            if (
+                self._is_current_m5_dag_v2(row)
+                and self.execution_mode(row) is ExecutionMode.PHYSICAL_HARDWARE
+                and row.get("native_identity_verified") is not True
+            ):
+                reasons.append(
+                    "DAG-v2 physical UPMEM/M5 admission requires "
+                    "native_identity_verified=True"
+                )
             if row.get("target_observed") != "physical_hardware":
                 reasons.append("UPMEM target was not observed as physical hardware")
             if row.get("hardware_allocation_verified") is not True:
@@ -357,13 +402,19 @@ class ClaimPolicy:
                 reasons.append("UPMEM native kernel execution was not verified")
             if row.get("hardware_kernel_executed") is not True:
                 reasons.append("UPMEM hardware kernel execution was not verified")
-            if not self._explicitly_false(row, "simulator", "simulator_kernel_executed"):
+            if not self._explicitly_false(
+                row, "simulator", "simulator_kernel_executed"
+            ):
                 reasons.append("UPMEM simulator state is not explicitly false")
             if not self._explicitly_false(row, "cpu_fallback", "cpu_fallback_used"):
                 reasons.append("UPMEM CPU fallback state is not explicitly false")
             if not self._release_succeeded(row):
                 reasons.append("UPMEM resource release was not verified")
         return self._decision(reasons)
+
+    @classmethod
+    def _is_current_m5_dag_v2(cls, row: Mapping[str, Any]) -> bool:
+        return row.get("contraction_dag_schema_version") == cls._DAG_V2_SCHEMA
 
     @staticmethod
     def _decision(reasons: list[str]) -> ClaimDecision:
@@ -428,9 +479,56 @@ class ClaimPolicy:
         baseline_hash = str(baseline.get("executor_config_hash") or "").strip()
         candidate_hash = str(candidate.get("executor_config_hash") or "").strip()
         if not baseline_hash or not candidate_hash:
-            reasons.append("comparison requires complete executor_config_hash identities")
+            reasons.append(
+                "comparison requires complete executor_config_hash identities"
+            )
         elif baseline_hash != candidate_hash:
             reasons.append("comparison requires equal executor_config_hash identities")
+
+    @staticmethod
+    def _dag_identity(row: Mapping[str, Any]) -> tuple[str, str] | None:
+        """Return a valid v2 or legacy DAG identity for pair admission."""
+
+        schema = str(row.get("contraction_dag_schema_version") or "").strip()
+        dag_hash = str(row.get("contraction_dag_hash") or "").strip()
+        if schema == "contraction_dag_v2":
+            return (schema, dag_hash) if dag_hash else None
+        if not schema and not dag_hash:
+            return ("legacy_unversioned", "")
+        if schema.startswith("legacy") and not dag_hash:
+            return (schema, "")
+        return None
+
+    def _require_dag_pair(
+        self,
+        reasons: list[str],
+        label: str,
+        baseline: Mapping[str, Any],
+        candidate: Mapping[str, Any],
+        *,
+        require_distinct_v2: bool = False,
+    ) -> None:
+        baseline_identity = self._dag_identity(baseline)
+        candidate_identity = self._dag_identity(candidate)
+        if baseline_identity is None or candidate_identity is None:
+            reasons.append(
+                f"{label} requires complete valid contraction DAG identities"
+            )
+            return
+        baseline_schema, baseline_hash = baseline_identity
+        candidate_schema, candidate_hash = candidate_identity
+        if baseline_schema != candidate_schema:
+            reasons.append(
+                f"{label} requires matching contraction DAG schema; legacy and v2 rows cannot mix"
+            )
+            return
+        if baseline_schema != "contraction_dag_v2":
+            return
+        if require_distinct_v2:
+            if baseline_hash == candidate_hash:
+                reasons.append(f"{label} requires distinct contraction DAG hashes")
+        elif baseline_hash != candidate_hash:
+            reasons.append(f"{label} requires matching contraction DAG hashes")
 
     def _module_or_legacy_reasons(
         self,
@@ -444,7 +542,13 @@ class ClaimPolicy:
             candidate_modules, Mapping
         ):
             return ["comparison requires complete route_modules on both rows"]
-        required_roles = {"tensor_network", "planner", "numeric", "executor", "topology"}
+        required_roles = {
+            "tensor_network",
+            "planner",
+            "numeric",
+            "executor",
+            "topology",
+        }
         baseline_roles = set(baseline_modules)
         candidate_roles = set(candidate_modules)
         if not required_roles.issubset(baseline_roles) or not required_roles.issubset(
@@ -468,7 +572,10 @@ class ClaimPolicy:
     @staticmethod
     def _case_id(row: Mapping[str, Any]) -> str:
         return str(
-            row.get("case_id") or row.get("workload_id") or row.get("quantum_case") or ""
+            row.get("case_id")
+            or row.get("workload_id")
+            or row.get("quantum_case")
+            or ""
         ).strip()
 
     @staticmethod
@@ -597,7 +704,9 @@ class ClaimPolicy:
             return False
         _local, ranks, total = topology
         dpu_ids = metadata.get("active_dpu_ids")
-        rank_ids = metadata.get("active_rank_indices") or metadata.get("active_rank_ids")
+        rank_ids = metadata.get("active_rank_indices") or metadata.get(
+            "active_rank_ids"
+        )
         active_dpus = (
             len(set(dpu_ids))
             if isinstance(dpu_ids, (list, tuple, set, frozenset))

@@ -115,6 +115,17 @@ def _csv(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(handle))
 
 
+def _valid_dag_v2(row: dict[str, object], dag_hash: str) -> None:
+    row.update(
+        contraction_dag_schema_version="contraction_dag_v2",
+        contraction_dag_hash=dag_hash,
+        host_dag_node_completion_coverage=True,
+        exact_once_scope="host_dag_node_completion_per_route",
+    )
+    if row.get("target_observed") == "physical_hardware":
+        row["native_identity_verified"] = True
+
+
 def _assert_no_duplicate_plot_identities(report_dir: Path) -> None:
     manifest = json.loads((report_dir / "plot_manifest.json").read_text())
     x_axis = {
@@ -239,6 +250,33 @@ def test_same_plan_pairing_requires_all_hashes_and_timing_scope(tmp_path: Path) 
     assert float(pairs[0]["speedup_cpu_over_upmem"]) == pytest.approx(2.0)
 
 
+def test_same_plan_pairing_requires_matching_dag_identity(tmp_path: Path) -> None:
+    cpu = _row(engine="cpu_numpy", runtime=10.0)
+    upmem = _row(engine="upmem_m5", runtime=5.0)
+    _valid_dag_v2(cpu, "dag-a")
+    _valid_dag_v2(upmem, "dag-a")
+    generate_report([cpu, upmem], tmp_path / "matched")
+    assert len(
+        _csv(tmp_path / "matched" / "tables" / "same_plan_cpu_upmem_speedup.csv")
+    ) == 1
+
+    mismatched = dict(upmem, contraction_dag_hash="dag-b")
+    generate_report([cpu, mismatched], tmp_path / "mismatched")
+    assert _csv(
+        tmp_path / "mismatched" / "tables" / "same_plan_cpu_upmem_speedup.csv"
+    ) == []
+
+    legacy = _row(engine="cpu_numpy", runtime=10.0)
+    generate_report([legacy, upmem], tmp_path / "mixed")
+    assert _csv(tmp_path / "mixed" / "tables" / "same_plan_cpu_upmem_speedup.csv") == []
+
+    broken_v2 = dict(cpu, contraction_dag_hash="")
+    generate_report([broken_v2, upmem], tmp_path / "broken-v2")
+    assert _csv(
+        tmp_path / "broken-v2" / "tables" / "same_plan_cpu_upmem_speedup.csv"
+    ) == []
+
+
 def test_same_plan_pairing_uses_claim_policy_for_speedup_admission(
     tmp_path: Path,
 ) -> None:
@@ -249,6 +287,35 @@ def test_same_plan_pairing_uses_claim_policy_for_speedup_admission(
     generate_report([cpu, simulator], tmp_path / "report")
 
     assert _csv(tmp_path / "report" / "tables" / "same_plan_cpu_upmem_speedup.csv") == []
+
+
+def test_numeric_pairing_requires_one_complete_matching_dag_v2_identity(
+    tmp_path: Path,
+) -> None:
+    float32 = _row(engine="upmem_m5", runtime=10.0, numeric="float32")
+    int8 = _row(engine="upmem_m5", runtime=5.0, numeric="host_packed_int8")
+    for row in (float32, int8):
+        _valid_dag_v2(row, "dag-a")
+    generate_report([float32, int8], tmp_path / "matched")
+    assert len(_csv(tmp_path / "matched" / "tables" / "float32_int8_ratios.csv")) == 1
+
+    broken = dict(int8, contraction_dag_hash="")
+    generate_report([float32, broken], tmp_path / "broken")
+    assert _csv(tmp_path / "broken" / "tables" / "float32_int8_ratios.csv") == []
+    assert len(_csv(tmp_path / "broken" / "tables" / "runtime_by_case_median.csv")) == 1
+
+
+def test_path_pairing_requires_distinct_dag_v2_hashes(tmp_path: Path) -> None:
+    greedy = _row(engine="upmem_m5", runtime=10.0, path="opt_einsum_greedy")
+    cotengra = _row(engine="upmem_m5", runtime=5.0, path="cotengra_flops_seed0")
+    for row, dag_hash in ((greedy, "dag-greedy"), (cotengra, "dag-cotengra")):
+        _valid_dag_v2(row, dag_hash)
+    generate_report([greedy, cotengra], tmp_path / "distinct")
+    assert len(_csv(tmp_path / "distinct" / "tables" / "path_runtime_ratio.csv")) == 1
+
+    same_dag = dict(cotengra, contraction_dag_hash="dag-greedy")
+    generate_report([greedy, same_dag], tmp_path / "same")
+    assert _csv(tmp_path / "same" / "tables" / "path_runtime_ratio.csv") == []
 
 
 def test_same_plan_pairing_keeps_each_upmem_topology(tmp_path: Path) -> None:

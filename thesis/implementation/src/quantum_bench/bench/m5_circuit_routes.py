@@ -155,7 +155,7 @@ def build_pipeline_route(
             ),
         )
         scheduler_parameters = {
-            "task_graph_execution": "deterministic_sequential",
+            "contraction_dag_execution": "functional_sequential_v2",
             "intra_task_execution": "v4 output/K tiles dispatched in rank waves",
             "frontier_concurrency": False,
         }
@@ -174,7 +174,7 @@ def build_pipeline_route(
         kernel_implementation = "numpy_binary_contraction_policy_v1"
         partitioner = ModuleSpec("partitioner", "none", PipelineParameters({}))
         scheduler_parameters = {
-            "task_graph_execution": "deterministic_sequential",
+            "contraction_dag_execution": "functional_sequential_v2",
             "frontier_concurrency": False,
         }
         communication = ModuleSpec(
@@ -202,7 +202,7 @@ def build_pipeline_route(
             partitioner,
             ModuleSpec(
                 "scheduler",
-                "deterministic_sequential_task_graph_v1",
+                "functional_contraction_dag_sequential_v2",
                 PipelineParameters(scheduler_parameters),
             ),
             communication,

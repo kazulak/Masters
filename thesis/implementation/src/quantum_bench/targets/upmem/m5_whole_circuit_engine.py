@@ -26,6 +26,7 @@ from quantum_bench.core.records import ContractionTask
 from quantum_bench.formats.fixed_point import FixedPointSpec, quantize_fixed_point
 from quantum_bench.targets.upmem.execution_plan_v4 import (
     MAX_INT32_SAFE_K,
+    NATIVE_EXECUTION_IDENTITY,
     NUMERIC_FLOAT32,
     NUMERIC_HOST_PACKED_INT8,
     V4Profile,
@@ -60,25 +61,12 @@ from quantum_bench.whole_circuit.strategies import (
 
 _INT64_MAX = (1 << 63) - 1
 
-_PROVENANCE = {
-    "profile": "m5_whole_circuit_v4_v1",
-    "physical_profile": "m5_whole_circuit_v4_v1",
-    "hardware_profile": "m5_whole_circuit_v4_v1",
-    "hardware_profile_version": "m5_whole_circuit_v4_v1",
-    "abi": "execution_plan_v4",
-    "abi_version": "execution_plan_v4",
-    "session": "persistent_rank_session_v1",
-    "session_protocol": "persistent_rank_session_v1",
-    "dispatch": "bulk_set_synchronous_v1",
-    "dispatch_mode": "bulk_set_synchronous_v1",
-    "kernel": "dpu_gemm_tile_v4",
-    "kernel_identity": "dpu_gemm_tile_v4",
-    "kernel_strategy": "dpu_gemm_tile_v4",
-    "backend_id": "upmem_sdk_hardware_v4_tile_session",
-    "backend_family": "upmem_sdk",
-    "execution_class": "physical_v4_output_tile",
+_EXPECTED_NATIVE_IDENTITY = dict(NATIVE_EXECUTION_IDENTITY)
+
+_COORDINATOR_PROVENANCE = {
     "transfer_accounting_scope": "application_visible_sdk_recorded",
     "graph_intermediate_placement": "host_managed",
+    "graph_intermediate_placement_origin": "m5_host_coordinator_v1",
     "request_level_speedup_applicable": False,
     "energy_claim_applicable": False,
 }
@@ -185,6 +173,55 @@ class _RankSession:
     root: Path
     session: _V4SessionLike
     local_dpus: int
+
+
+def _native_identity(event: Mapping[str, Any], *, source: str) -> dict[str, str]:
+    """Read the identity emitted by native v4 code, never Python provenance."""
+
+    observed: dict[str, str] = {}
+    for field, expected in _EXPECTED_NATIVE_IDENTITY.items():
+        value = event.get(field)
+        if not isinstance(value, str) or not value:
+            raise RuntimeError(f"{source} is missing native identity {field}")
+        if value != expected:
+            raise RuntimeError(
+                f"{source} native identity {field}={value!r} does not match "
+                f"the compiled v4 contract"
+            )
+        observed[field] = value
+    return observed
+
+
+def _agreed_native_identity(
+    observations: tuple[tuple[str, Mapping[str, Any]], ...],
+) -> dict[str, str]:
+    """Return one identity only when every rank/event reported the same contract."""
+
+    if not observations:
+        raise RuntimeError("no native identity observations were recorded")
+    identities = [
+        _native_identity(event, source=source) for source, event in observations
+    ]
+    first = identities[0]
+    if any(identity != first for identity in identities[1:]):
+        raise RuntimeError("native v4 identity observations disagree across ranks")
+    return first
+
+
+def _native_identity_metadata(identity: Mapping[str, str]) -> dict[str, str]:
+    """Expose compatibility aliases derived from observed native fields."""
+
+    return {
+        **identity,
+        "physical_profile": identity["profile"],
+        "hardware_profile": identity["profile"],
+        "hardware_profile_version": identity["profile"],
+        "abi_version": identity["abi"],
+        "session": identity["session_protocol"],
+        "dispatch": identity["dispatch_mode"],
+        "kernel": identity["kernel_identity"],
+        "kernel_strategy": identity["kernel_identity"],
+    }
 
 
 def _close_rank_before_deadline(rank: _RankSession, deadline: float) -> Any:
@@ -377,6 +414,9 @@ class M5WholeCircuitEngine:
                     command, session_root=root, profile=profile
                 )
                 ranks.append(_RankSession(index, root, session, local_dpus))
+                _native_identity(
+                    session.startup, source=f"READY rank {index}"
+                )
                 if time.monotonic() >= deadline:
                     raise V4ProtocolError(
                         "kernel_timeout",
@@ -445,6 +485,13 @@ class M5WholeCircuitSession:
         self._successful_request_count = 0
         self._active_rank_indices: set[int] = set()
         self._active_dpu_ids: set[tuple[int, int]] = set()
+        self._startup_native_identity = _agreed_native_identity(
+            tuple(
+                (f"READY rank {rank.index}", rank.session.startup)
+                for rank in self.ranks
+            )
+        )
+        self._response_native_identity_events: list[tuple[str, Mapping[str, Any]]] = []
         self._test_double_execution = any(
             rank.session.startup.get("test_double_execution") is True
             for rank in self.ranks
@@ -593,7 +640,8 @@ class M5WholeCircuitSession:
                     "host_dequantization_time_s": host_dequantization_time_s,
                     "total_route_time_s": elapsed,
                 },
-                **_PROVENANCE,
+                **_native_identity_metadata(self._startup_native_identity),
+                **_COORDINATOR_PROVENANCE,
                 **self.engine._provenance,
                 "strategy_identity": self.strategy_identity,
                 "strategy_config_hash": self.strategy_config_hash,
@@ -705,6 +753,9 @@ class M5WholeCircuitSession:
             for rank, assignments, artifact in prepared:
                 response = responses[rank.index]
                 self._validate_successful_response(response, rank, artifact)
+                self._response_native_identity_events.append(
+                    (f"RESPONSE rank {rank.index}", response)
+                )
                 transfer = response.get("transfer", {})
                 h2d_bytes = int(transfer.get("h2d_bytes", 0))
                 d2h_bytes = int(transfer.get("d2h_bytes", 0))
@@ -854,9 +905,8 @@ class M5WholeCircuitSession:
             )
         shutil.rmtree(request_dir)
 
-    @staticmethod
     def _validate_successful_response(
-        response: Mapping[str, Any], rank: _RankSession, artifact: Any
+        self, response: Mapping[str, Any], rank: _RankSession, artifact: Any
     ) -> None:
         expected = {
             "status": "completed",
@@ -877,6 +927,16 @@ class M5WholeCircuitSession:
                 raise RuntimeError(
                     f"unverified v4 response field {key}: {response.get(key)!r}"
                 )
+        startup_identity = _native_identity(
+            rank.session.startup, source=f"READY rank {rank.index}"
+        )
+        response_identity = _native_identity(
+            response, source=f"RESPONSE rank {rank.index}"
+        )
+        if response_identity != startup_identity:
+            raise RuntimeError(
+                f"RESPONSE rank {rank.index} native identity disagrees with READY"
+            )
 
     def close(self) -> dict[str, Any]:
         if self._closed:
@@ -906,6 +966,19 @@ class M5WholeCircuitSession:
             self._rank_diagnostics(rank, releases.get(rank.index))
             for rank in self.ranks
         ]
+
+        native_identity_error: str | None = None
+        try:
+            observed_native_identity = _agreed_native_identity(
+                tuple(
+                    (f"READY rank {rank.index}", rank.session.startup)
+                    for rank in self.ranks
+                )
+                + tuple(self._response_native_identity_events)
+            )
+        except RuntimeError as exc:
+            observed_native_identity = None
+            native_identity_error = str(exc)
 
         confirmed = len(diagnostics) == len(self.ranks) and all(
             diagnostic["release_confirmed"] for diagnostic in diagnostics
@@ -939,16 +1012,23 @@ class M5WholeCircuitSession:
             physical_target_verified
             and allocation_verified
             and binary_identity_verified
+            and observed_native_identity is not None
             and confirmed
             and not release_failed
             and native_execution
         )
         self._terminal_metadata = {
-            **_PROVENANCE,
+            **(
+                _native_identity_metadata(observed_native_identity)
+                if observed_native_identity is not None
+                else {}
+            ),
+            **_COORDINATOR_PROVENANCE,
             **self.engine._provenance,
             "strategy_identity": self.strategy_identity,
             "strategy_config_hash": self.strategy_config_hash,
             "target_observed": "physical_hardware" if verified else "not_verified",
+            "requested_dpu_count": sum(rank.local_dpus for rank in self.ranks),
             "observed_rank_count": len(self.ranks),
             "allocated_dpu_count": sum(rank.local_dpus for rank in self.ranks),
             "observed_dpu_count": sum(rank.local_dpus for rank in self.ranks),
@@ -964,6 +1044,10 @@ class M5WholeCircuitSession:
             "ready_verified": ready_verified,
             "physical_target_verified": physical_target_verified,
             "binary_identity_verified": binary_identity_verified,
+            "native_identity_verified": observed_native_identity is not None,
+            "native_identity_failure": native_identity_error,
+            "native_identity_observation_count": len(self.ranks)
+            + len(self._response_native_identity_events),
             "successful_request_count": self._successful_request_count,
             "active_rank_indices": tuple(sorted(self._active_rank_indices)),
             "active_dpu_ids": tuple(sorted(self._active_dpu_ids)),

@@ -11,6 +11,7 @@ import pytest
 from quantum_bench.core.indices import LABEL_LIST_EINSUM_SENTINEL
 from quantum_bench.core.records import ContractionTask
 from quantum_bench.targets.upmem.execution_plan_v4 import (
+    NATIVE_EXECUTION_IDENTITY,
     NUMERIC_FLOAT32,
     NUMERIC_HOST_PACKED_INT8,
     V4Profile,
@@ -107,6 +108,7 @@ class _NumpyV4AbiTestDoubleSession:
             "allocated_dpu_count": self.profile.dpu_count,
             "tasklets_per_dpu": self.profile.tasklets_per_dpu,
             "hardware_allocation_verified": True,
+            **NATIVE_EXECUTION_IDENTITY,
             **self.binary_provenance,
         }
 
@@ -155,6 +157,7 @@ class _NumpyV4AbiTestDoubleSession:
             "tasklets_per_dpu": self.profile.tasklets_per_dpu,
             "request_sequence": artifact.request_sequence,
             "bulk_set_launch_verified": True,
+            **NATIVE_EXECUTION_IDENTITY,
             "transfer": {"h2d_bytes": 10, "d2h_bytes": 5, "total_bytes": 15},
             "timing": {
                 "h2d_time_s": 0.01,

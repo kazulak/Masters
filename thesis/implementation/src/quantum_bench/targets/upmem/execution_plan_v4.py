@@ -27,6 +27,19 @@ VERSION = 4
 PROFILE = "upmem_execution_plan_v4_tile_session"
 RESPONSE_SCHEMA = "upmem_execution_plan_native_v4"
 
+# These values are compiled into host_v4_session.c.  They are protocol
+# expectations, not Python observations: READY and RESPONSE must report them.
+NATIVE_EXECUTION_IDENTITY = {
+    "backend_id": "upmem_sdk_hardware_v4_tile_session",
+    "backend_family": "upmem_sdk",
+    "profile": "m5_whole_circuit_v4_v1",
+    "abi": "execution_plan_v4",
+    "session_protocol": "persistent_rank_session_v1",
+    "dispatch_mode": "bulk_set_synchronous_v1",
+    "kernel_identity": "dpu_gemm_tile_v4",
+    "execution_class": "physical_v4_output_tile",
+}
+
 MAX_DPUS = 64
 MAX_TASKLETS = 24
 MRAM_POOL_BYTES = 512 * 1024
@@ -1152,6 +1165,20 @@ class V4Session:
                     "hardware_allocation_failed",
                     f"READY field {field!r} is not verified",
                 )
+        self._validate_native_identity(event, event_name="READY")
+
+    @staticmethod
+    def _validate_native_identity(
+        event: Mapping[str, Any], *, event_name: str
+    ) -> None:
+        """Require the identity compiled into the native host protocol."""
+
+        for field, expected in NATIVE_EXECUTION_IDENTITY.items():
+            if event.get(field) != expected:
+                raise V4ProtocolError(
+                    "protocol_error",
+                    f"{event_name} native identity field {field!r} is not verified",
+                )
 
     def _write(self, text: str) -> None:
         if self._closed or self._poisoned:
@@ -1258,6 +1285,7 @@ class V4Session:
     def _validate_response(
         self, event: Mapping[str, Any], artifact: V4RequestArtifact
     ) -> None:
+        self._validate_native_identity(event, event_name="RESPONSE")
         if event.get("status") != "completed":
             raise V4ProtocolError(
                 str(event.get("failure_stage") or "kernel_launch_failed"),
@@ -1480,6 +1508,7 @@ __all__ = [
     "MAX_TASKLETS",
     "MRAM_ALIGNMENT",
     "MRAM_POOL_BYTES",
+    "NATIVE_EXECUTION_IDENTITY",
     "NUMERIC_FLOAT32",
     "NUMERIC_HOST_PACKED_INT8",
     "NUMERIC_MODE_FLOAT32",

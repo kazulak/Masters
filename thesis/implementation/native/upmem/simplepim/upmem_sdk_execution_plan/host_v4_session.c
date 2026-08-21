@@ -143,7 +143,23 @@ static void v4_emit_ready(
     char init_hash[65] = {0};
     (void)execution_plan_sha256_file(dpu_binary, dpu_hash);
     (void)execution_plan_sha256_file(initialization_binary, init_hash);
-    printf("{\"event\":\"READY\",\"status\":\"ready\",\"backend_id\":\"upmem_sdk_hardware_v4_tile_session\",\"backend_family\":\"upmem_sdk\",\"target_observed\":\"physical_hardware\",\"execution_class\":\"physical_v4_output_tile\",\"rank_path\":");
+    printf("{\"event\":\"READY\",\"status\":\"ready\",\"backend_id\":\"");
+    fputs(EXECUTION_PLAN_V4_NATIVE_BACKEND_ID, stdout);
+    fputs("\",\"backend_family\":\"", stdout);
+    fputs(EXECUTION_PLAN_V4_NATIVE_BACKEND_FAMILY, stdout);
+    fputs("\",\"profile\":\"", stdout);
+    fputs(EXECUTION_PLAN_V4_NATIVE_M5_PROFILE, stdout);
+    fputs("\",\"abi\":\"", stdout);
+    fputs(EXECUTION_PLAN_V4_NATIVE_ABI, stdout);
+    fputs("\",\"session_protocol\":\"", stdout);
+    fputs(EXECUTION_PLAN_V4_NATIVE_SESSION, stdout);
+    fputs("\",\"dispatch_mode\":\"", stdout);
+    fputs(EXECUTION_PLAN_V4_NATIVE_DISPATCH, stdout);
+    fputs("\",\"kernel_identity\":\"", stdout);
+    fputs(EXECUTION_PLAN_V4_NATIVE_KERNEL, stdout);
+    fputs("\",\"execution_class\":\"", stdout);
+    fputs(EXECUTION_PLAN_V4_NATIVE_EXECUTION_CLASS, stdout);
+    fputs("\",\"target_observed\":\"physical_hardware\",\"rank_path\":", stdout);
     json_string(stdout, rank_path);
     printf(",\"requested_dpu_count\":%u,\"allocated_dpu_count\":%u,\"tasklets_per_dpu\":%u,\"hardware_allocation_verified\":true,\"native_kernel_executed\":false,\"simulator_kernel_executed\":false,\"cpu_fallback_used\":false,\"dpu_binary_sha256\":", dpus, dpus, tasklets);
     json_string(stdout, dpu_hash);
@@ -268,9 +284,25 @@ static void v4_emit_response(
     json_string(stdout, failure_stage);
     fputs(",\"error\":", stdout);
     json_string(stdout, error_message);
-    printf(",\"backend_id\":\"upmem_sdk_hardware_v4_tile_session\",\"target_requested\":\"hardware\",\"target_observed\":\"physical_hardware\",\"execution_class\":\"physical_v4_output_tile\",\"rank_path\":");
+    fputs(",\"backend_id\":\"", stdout);
+    fputs(EXECUTION_PLAN_V4_NATIVE_BACKEND_ID, stdout);
+    fputs("\",\"backend_family\":\"", stdout);
+    fputs(EXECUTION_PLAN_V4_NATIVE_BACKEND_FAMILY, stdout);
+    fputs("\",\"profile\":\"", stdout);
+    fputs(EXECUTION_PLAN_V4_NATIVE_M5_PROFILE, stdout);
+    fputs("\",\"abi\":\"", stdout);
+    fputs(EXECUTION_PLAN_V4_NATIVE_ABI, stdout);
+    fputs("\",\"session_protocol\":\"", stdout);
+    fputs(EXECUTION_PLAN_V4_NATIVE_SESSION, stdout);
+    fputs("\",\"dispatch_mode\":\"", stdout);
+    fputs(EXECUTION_PLAN_V4_NATIVE_DISPATCH, stdout);
+    fputs("\",\"kernel_identity\":\"", stdout);
+    fputs(EXECUTION_PLAN_V4_NATIVE_KERNEL, stdout);
+    fputs("\",\"target_requested\":\"hardware\",\"target_observed\":\"physical_hardware\",\"execution_class\":\"", stdout);
+    fputs(EXECUTION_PLAN_V4_NATIVE_EXECUTION_CLASS, stdout);
+    fputs("\",\"rank_path\":", stdout);
     json_string(stdout, v4_session_rank_path);
-    printf(",\"request_sequence\":%llu,\"request_output_elements\":%llu,\"global_output_elements\":%llu,\"global_completeness\":false,\"task_contract_sha256\":\"%s\",\"request_sha256\":\"%s\",\"request_manifest_sha256\":\"%s\",\"sidecar_sha256\":\"%s\",\"dispatch_mode\":\"bulk_set_synchronous_v1\",\"bulk_set_launch_verified\":%s,\"requested_dpu_count\":%u,\"allocated_dpu_count\":%u,\"tasklets_per_dpu\":%u,\"hardware_allocation_verified\":true,\"native_kernel_executed\":%s,\"simulator_kernel_executed\":false,\"hardware_kernel_executed\":%s,\"cpu_fallback_used\":false,\"session_release_pending\":true,\"timing_scope\":\"one_bulk_request_in_persistent_session\",\"request_timing_is_bringup_only\":true,\"request_level_speedup_applicable\":false,\"hardware_functionality_evidence\":%s,\"timing\":{\"h2d_time_s\":%.9f,\"launch_time_s\":%.9f,\"d2h_time_s\":%.9f,\"output_time_s\":%.9f,\"total_route_time_s\":%.9f},\"transfer\":{\"h2d_bytes\":%llu,\"d2h_bytes\":%llu,\"total_bytes\":%llu},\"per_dpu\":[",
+    printf(",\"request_sequence\":%llu,\"request_output_elements\":%llu,\"global_output_elements\":%llu,\"global_completeness\":false,\"task_contract_sha256\":\"%s\",\"request_sha256\":\"%s\",\"request_manifest_sha256\":\"%s\",\"sidecar_sha256\":\"%s\",\"bulk_set_launch_verified\":%s,\"requested_dpu_count\":%u,\"allocated_dpu_count\":%u,\"tasklets_per_dpu\":%u,\"hardware_allocation_verified\":true,\"native_kernel_executed\":%s,\"simulator_kernel_executed\":false,\"hardware_kernel_executed\":%s,\"cpu_fallback_used\":false,\"session_release_pending\":true,\"timing_scope\":\"one_bulk_request_in_persistent_session\",\"request_timing_is_bringup_only\":true,\"request_level_speedup_applicable\":false,\"hardware_functionality_evidence\":%s,\"timing\":{\"h2d_time_s\":%.9f,\"launch_time_s\":%.9f,\"d2h_time_s\":%.9f,\"output_time_s\":%.9f,\"total_route_time_s\":%.9f},\"transfer\":{\"h2d_bytes\":%llu,\"d2h_bytes\":%llu,\"total_bytes\":%llu},\"per_dpu\":[",
         request == NULL ? 0ull : (unsigned long long)request->header.request_sequence,
         request == NULL ? 0ull : (unsigned long long)request->header.request_output_elements,
         request == NULL ? 0ull : (unsigned long long)request->header.global_output_elements,

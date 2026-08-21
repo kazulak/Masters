@@ -5,6 +5,14 @@
 
 #define EXECUTION_PLAN_V4_RESPONSE_SCHEMA "upmem_execution_plan_native_v4"
 #define EXECUTION_PLAN_V4_PROFILE "upmem_execution_plan_v4_tile_session"
+#define EXECUTION_PLAN_V4_NATIVE_BACKEND_ID "upmem_sdk_hardware_v4_tile_session"
+#define EXECUTION_PLAN_V4_NATIVE_BACKEND_FAMILY "upmem_sdk"
+#define EXECUTION_PLAN_V4_NATIVE_M5_PROFILE "m5_whole_circuit_v4_v1"
+#define EXECUTION_PLAN_V4_NATIVE_ABI "execution_plan_v4"
+#define EXECUTION_PLAN_V4_NATIVE_SESSION "persistent_rank_session_v1"
+#define EXECUTION_PLAN_V4_NATIVE_DISPATCH "bulk_set_synchronous_v1"
+#define EXECUTION_PLAN_V4_NATIVE_KERNEL "dpu_gemm_tile_v4"
+#define EXECUTION_PLAN_V4_NATIVE_EXECUTION_CLASS "physical_v4_output_tile"
 #define EXECUTION_PLAN_V4_MAGIC "UPXDPV4"
 #define EXECUTION_PLAN_V4_VERSION 4u
 #define EXECUTION_PLAN_V4_MAX_DPUS 64u

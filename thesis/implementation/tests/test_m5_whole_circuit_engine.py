@@ -17,7 +17,10 @@ from quantum_bench.targets.upmem.m5_whole_circuit_engine import (
     M5WholeCircuitEngine,
     M5WholeCircuitSession,
 )
-from quantum_bench.targets.upmem.execution_plan_v4 import V4ProtocolError
+from quantum_bench.targets.upmem.execution_plan_v4 import (
+    NATIVE_EXECUTION_IDENTITY,
+    V4ProtocolError,
+)
 from quantum_bench.whole_circuit.core import DeviceTopology
 from quantum_bench.whole_circuit.policies import Float32RealPolicy, HostPackedInt8Policy
 
@@ -88,6 +91,7 @@ class _FakeSession:
     submissions: list[Any] = field(default_factory=list)
     submitted_timeouts: list[float] = field(default_factory=list)
     barrier: Any = None
+    response_identity_overrides: dict[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.startup = {
@@ -98,6 +102,7 @@ class _FakeSession:
             "allocated_dpu_count": self.profile.dpu_count,
             "tasklets_per_dpu": self.profile.tasklets_per_dpu,
             "hardware_allocation_verified": True,
+            **NATIVE_EXECUTION_IDENTITY,
             **self.binary_provenance,
         }
 
@@ -156,6 +161,8 @@ class _FakeSession:
             "tasklets_per_dpu": self.profile.tasklets_per_dpu,
             "request_sequence": artifact.request_sequence,
             "bulk_set_launch_verified": True,
+            **NATIVE_EXECUTION_IDENTITY,
+            **self.response_identity_overrides,
             "transfer": {"h2d_bytes": 10, "d2h_bytes": 5, "total_bytes": 15},
             "timing": {"h2d_time_s": 0.01, "launch_time_s": 0.02, "d2h_time_s": 0.01},
         }
@@ -588,7 +595,9 @@ def test_request_cleanup_and_release_are_required(tmp_path: Path) -> None:
         _task(), np.ones((3, 5), dtype=np.float32), np.ones((5, 4), dtype=np.float32)
     )
     assert not list((tmp_path / "rank_00" / "requests").iterdir())
-    assert session.close()["target_observed"] == "physical_hardware"
+    terminal = session.close()
+    assert terminal["target_observed"] == "physical_hardware"
+    assert terminal["requested_dpu_count"] == 1
     failed_release = _engine(tmp_path / "failed-release", dpu_count=1)
     failed_session = failed_release.open_session(Float32RealPolicy(), _topology(1))
     failed_session.ranks[0].session.release_confirmed = False
@@ -607,9 +616,66 @@ def test_close_without_submitted_request_cannot_claim_hardware_execution(
     assert terminal["hardware_kernel_executed"] is False
     assert terminal["successful_request_count"] == 0
     assert terminal["allocated_dpu_count"] == 1
+    assert terminal["requested_dpu_count"] == 1
     assert terminal["hardware_release_verified"] is True
     assert terminal["observed_rank_count"] == 1
     assert terminal["observed_tasklets_per_dpu"] == 1
+
+
+def test_conflicting_native_ready_identity_fails_before_execution(tmp_path: Path) -> None:
+    calls = 0
+
+    def factory(command: Any, *, session_root: Path, profile: Any) -> _FakeSession:
+        nonlocal calls
+        del command, session_root
+        calls += 1
+        session = _FakeSession(profile=profile)
+        if calls == 2:
+            session.startup["kernel_identity"] = "wrong-native-kernel"
+        return session
+
+    host_binary, dpu_binary, initialization_binary = _binaries(tmp_path / "binaries")
+    engine = M5WholeCircuitEngine(
+        session_root=tmp_path / "session",
+        host_binary=host_binary,
+        dpu_binary=dpu_binary,
+        initialization_binary=initialization_binary,
+        rank_paths=("/dev/dpu_rank0", "/dev/dpu_rank1"),
+        dpu_count=2,
+        session_factory=factory,
+    )
+    with pytest.raises(RuntimeError, match="native identity kernel_identity"):
+        engine.open_session(Float32RealPolicy(), _topology(2))
+
+
+def test_conflicting_native_response_identity_fails_closed(tmp_path: Path) -> None:
+    engine = _engine(tmp_path, dpu_count=1)
+    session = engine.open_session(Float32RealPolicy(), _topology(1))
+    session.ranks[0].session.response_identity_overrides["profile"] = "wrong-native-profile"
+    with pytest.raises(RuntimeError, match="native identity profile"):
+        session.execute(
+            _task(),
+            np.ones((3, 5), dtype=np.float32),
+            np.ones((5, 4), dtype=np.float32),
+        )
+    terminal = session.close()
+    assert terminal["target_observed"] == "not_verified"
+    assert terminal["native_identity_verified"] is True
+
+
+def test_terminal_never_uses_python_identity_when_native_ready_conflicts(
+    tmp_path: Path,
+) -> None:
+    engine = _engine(tmp_path, dpu_count=1)
+    session = engine.open_session(Float32RealPolicy(), _topology(1))
+    session.execute(
+        _task(), np.ones((3, 5), dtype=np.float32), np.ones((5, 4), dtype=np.float32)
+    )
+    session.ranks[0].session.startup["profile"] = "wrong-native-profile"
+    terminal = session.close()
+    assert terminal["target_observed"] == "not_verified"
+    assert terminal["native_identity_verified"] is False
+    assert "profile" not in terminal
 
 
 def test_cleanup_rejects_requests_root(tmp_path: Path) -> None:

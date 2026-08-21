@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -70,33 +71,31 @@ def _study(
                             "tasklets_per_device": 1,
                         },
                     },
-                    {
-                        "id": "injected",
-                        "engine": "fake",
-                        "timeout_enforcement": "engine_subprocess"
-                        if physical
-                        else "posthoc_observation",
-                        "topology": {
-                            "backend": "upmem" if physical else "cpu",
-                            "device_ids": ["dpu:0", "dpu:1"],
-                            "rank_paths": ["/dev/dpu_rank0"] if physical else [],
-                            "tasklets_per_device": 1,
-                        },
-                        **(
+                    *(
+                        [
                             {
+                                "id": "injected",
+                                "engine": "fake",
+                                "timeout_enforcement": "engine_subprocess",
+                                "topology": {
+                                    "backend": "upmem",
+                                    "device_ids": ["dpu:0", "dpu:1"],
+                                    "rank_paths": ["/dev/dpu_rank0"],
+                                    "tasklets_per_device": 1,
+                                },
                                 "executor_config": {
-                                    "profile": "test-profile-v1",
-                                    "abi": "test-abi-v1",
-                                    "session_protocol": "test-session-v1",
-                                    "dispatch_mode": "bulk-synchronous",
-                                    "kernel_identity": "test-kernel-v1",
-                                    "execution_class": "physical_test",
-                                }
+                                    "profile": "m5_whole_circuit_v4_v1",
+                                    "abi": "execution_plan_v4",
+                                    "session_protocol": "persistent_rank_session_v1",
+                                    "dispatch_mode": "bulk_set_synchronous_v1",
+                                    "kernel_identity": "dpu_gemm_tile_v4",
+                                    "execution_class": "physical_v4_output_tile",
+                                },
                             }
-                            if physical
-                            else {}
-                        ),
-                    },
+                        ]
+                        if physical
+                        else []
+                    ),
                 ],
                 "warmups": 1,
                 "repeats": 2,
@@ -125,6 +124,11 @@ class _VerifiedPhysicalEngine(NumpyCpuEngine):
     observed_rank_count = 1
     allocated_dpu_count = 2
     observed_tasklets_per_dpu = 1
+    session_root = Path("/tmp/m5-functional-study-fake")
+    host_binary = Path(sys.executable)
+    dpu_binary = Path(__file__)
+    initialization_binary = Path(__file__)
+    rank_paths = ("/dev/dpu_rank0",)
 
     def open_session(self, policy: object, topology: DeviceTopology):
         inner = super().open_session(policy, DeviceTopology())
@@ -141,16 +145,18 @@ class _VerifiedPhysicalEngine(NumpyCpuEngine):
                         "hardware_allocation_verified": True,
                         "hardware_release_verified": True,
                         "target_observed": "physical-test-dpu",
-                        "physical_profile": "test-profile-v1",
-                        "profile": "test-profile-v1",
-                        "abi": "test-abi-v1",
-                        "abi_version": "test-abi-v1",
+                        "physical_profile": "m5_whole_circuit_v4_v1",
+                        "profile": "m5_whole_circuit_v4_v1",
+                        "abi": "execution_plan_v4",
+                        "abi_version": "execution_plan_v4",
                         "numeric_transport": policy.name,
-                        "session_protocol": "test-session-v1",
-                        "dispatch_mode": "bulk-synchronous",
-                        "kernel_identity": "test-kernel-v1",
-                        "execution_class": "physical_test",
+                        "session_protocol": "persistent_rank_session_v1",
+                        "dispatch_mode": "bulk_set_synchronous_v1",
+                        "kernel_identity": "dpu_gemm_tile_v4",
+                        "execution_class": "physical_v4_output_tile",
                         "graph_intermediate_placement": "host_managed",
+                        "graph_intermediate_placement_origin": "m5_host_coordinator_v1",
+                        "native_identity_verified": True,
                         "application_visible_h2d_bytes": 2,
                         "application_visible_d2h_bytes": 3,
                         "application_visible_transfer_bytes": 5,
@@ -174,10 +180,29 @@ class _VerifiedPhysicalEngine(NumpyCpuEngine):
             def close(self):
                 inner.close()
                 return {
+                    "backend_id": "upmem_sdk_hardware_v4_tile_session",
                     "target_observed": self_owner.target_observed,
                     "observed_rank_count": self_owner.observed_rank_count,
+                    "requested_dpu_count": self_owner.allocated_dpu_count,
                     "allocated_dpu_count": self_owner.allocated_dpu_count,
                     "observed_tasklets_per_dpu": self_owner.observed_tasklets_per_dpu,
+                    "tasklets_per_dpu": self_owner.observed_tasklets_per_dpu,
+                    "hardware_allocation_verified": True,
+                    "native_kernel_executed": True,
+                    "hardware_kernel_executed": True,
+                    "simulator_kernel_executed": False,
+                    "cpu_fallback_used": False,
+                    "hardware_release_verified": True,
+                    "hardware_release_confirmed": True,
+                    "profile": "m5_whole_circuit_v4_v1",
+                    "abi": "execution_plan_v4",
+                    "session_protocol": "persistent_rank_session_v1",
+                    "dispatch_mode": "bulk_set_synchronous_v1",
+                    "kernel_identity": "dpu_gemm_tile_v4",
+                    "execution_class": "physical_v4_output_tile",
+                    "graph_intermediate_placement": "host_managed",
+                    "graph_intermediate_placement_origin": "m5_host_coordinator_v1",
+                    "native_identity_verified": True,
                 }
 
         self_owner = self
@@ -270,13 +295,13 @@ def test_rank_override_regenerates_route_contract_without_changing_plan_hash(
     base_run = run_study(
         tmp_path,
         study,
-        engine_factories={"fake": _FakeEngine},
+        engine_factories={"fake": _VerifiedPhysicalEngine},
         route_ids=[route_id],
     )
     overridden_run = run_study(
         tmp_path,
         study,
-        engine_factories={"fake": _FakeEngine},
+        engine_factories={"fake": _VerifiedPhysicalEngine},
         rank_paths=["/dev/dpu_rank1"],
         route_ids=[route_id],
     )
@@ -285,23 +310,81 @@ def test_rank_override_regenerates_route_contract_without_changing_plan_hash(
     }
 
 
+def test_physical_engine_rank_paths_must_match_suite_binding(tmp_path: Path) -> None:
+    study = tmp_path / "study.yml"
+    _study(study, physical=True)
+    value = yaml.safe_load(study.read_text())
+    value["engine_variants"][1]["topology"]["rank_paths"] = ["/dev/dpu_rank1"]
+    study.write_text(yaml.safe_dump(value), encoding="utf-8")
+
+    run_dir = run_study(
+        tmp_path, study, engine_factories={"fake": _VerifiedPhysicalEngine}
+    )
+    rows = [row for row in _records(run_dir) if row["engine_id"] == "injected"]
+    assert rows and all(row["status"] == "failed" for row in rows)
+    assert all("rank_paths do not match suite-resolved topology" in row["error"] for row in rows)
+
+
+def test_cpu_route_rejects_non_numpy_engine_before_execution(tmp_path: Path) -> None:
+    study = tmp_path / "study.yml"
+    _study(study)
+    value = yaml.safe_load(study.read_text())
+    value["engine_variants"][0]["engine"] = "not_numpy"
+    study.write_text(yaml.safe_dump(value), encoding="utf-8")
+
+    run_dir = run_study(tmp_path, study)
+    rows = _records(run_dir)
+    assert rows and all(row["status"] == "failed" for row in rows)
+    assert all(row["failure_stage"] == "execution_plan_compilation_failed" for row in rows)
+    assert all("numpy_cpu" in row["error"] for row in rows)
+
+
 def test_run_records_warmups_repeats_and_same_plan_hashes(tmp_path: Path) -> None:
     study = tmp_path / "study.yml"
     _study(study)
     run_dir = run_study(tmp_path, study, engine_factories={"fake": _FakeEngine})
     records = _records(run_dir)
 
-    assert len(records) == 8  # 2 planners x 2 engines x 2 measured repeats
+    assert len(records) == 4  # 2 planners x CPU x 2 measured repeats
     assert all(row["repeat_id"] in {0, 1} for row in records)
     assert all(row["status"] == "completed" for row in records)
     assert all(row["complete_task_count"] > 0 and row["exact_once"] for row in records)
+    assert all(
+        row["exact_once_scope"] == "host_dag_node_completion_per_route"
+        and row["host_dag_node_completion_coverage"] is True
+        for row in records
+    )
     for planner_id in {"greedy", "auto"}:
         selected = [row for row in records if row["planner_id"] == planner_id]
         assert len({row["contraction_plan_hash"] for row in selected}) == 1
         assert len({row["circuit_semantics_hash"] for row in selected}) == 1
-        assert len({row["executor_config_hash"] for row in selected}) == 2
+        assert len({row["executor_config_hash"] for row in selected}) == 1
     assert (run_dir / "m5_circuit_study_summary.json").exists()
     assert (run_dir / "run_manifest.json").exists()
+
+
+def test_route_compilation_is_once_per_route_outside_warmups_and_repeats(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import quantum_bench.bench.m5_circuit_study as module
+
+    study = tmp_path / "study.yml"
+    _study(study)
+    original = module.compile_execution
+    calls = 0
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(module, "compile_execution", counted)
+    run_dir = run_study(tmp_path, study)
+    rows = _records(run_dir)
+    # Two CPU anchors plus two planned CPU routes, independent of 1 warmup and
+    # two measured repetitions for each route.
+    assert calls == 4
+    assert all(row["compilation_time_s"] >= 0.0 for row in rows)
 
 
 def test_timing_admission_requires_warmup_and_three_repeats(tmp_path: Path) -> None:
@@ -331,7 +414,7 @@ def test_preflight_unsupported_is_recorded_without_engine_factory(
     _study(study, max_live_bytes=1)
     run_dir = run_study(tmp_path, study, engine_factories={"injected": _FakeEngine})
     records = _records(run_dir)
-    assert len(records) == 4  # one row per planner and engine/policy combination
+    assert len(records) == 2  # one row per planner and CPU policy combination
     assert all(row["status"] == "unsupported" for row in records)
     assert all(row["failure_stage"] == "preflight_resource_limit" for row in records)
     assert all(row["error"] for row in records)
@@ -339,7 +422,7 @@ def test_preflight_unsupported_is_recorded_without_engine_factory(
 
 def test_engine_failure_is_preserved_without_fallback(tmp_path: Path) -> None:
     study = tmp_path / "study.yml"
-    _study(study)
+    _study(study, physical=True)
     run_dir = run_study(tmp_path, study, engine_factories={"fake": _FailingEngine})
     records = _records(run_dir)
     failed = [row for row in records if row["engine_id"] == "injected"]
@@ -411,6 +494,12 @@ def test_physical_success_requires_native_metadata_and_sums_task_bytes(
     assert all(row["observed_rank_count"] == 1 for row in rows)
     assert all(row["allocated_dpu_count"] == 2 for row in rows)
     assert all(row["observed_tasklets_per_dpu"] == 1 for row in rows)
+    assert all(row["rank_binding_sha256"] for row in rows)
+    assert all(row["native_identity_verified"] is True for row in rows)
+    assert all(
+        row["graph_intermediate_placement_origin"] == "m5_host_coordinator_v1"
+        for row in rows
+    )
     assert len({row["executor_config_hash"] for row in rows}) == 1
     assert rows[0]["engine_metadata"]["application_visible_h2d_bytes"] == 6
     assert rows[0]["engine_metadata"]["application_visible_d2h_bytes"] == 9
@@ -573,7 +662,6 @@ def test_physical_timeout_must_be_engine_enforced(tmp_path: Path) -> None:
     [
         {"target_observed": None},
         {"allocated_dpu_count": 1},
-        {"observed_rank_count": 2},
         {"observed_tasklets_per_dpu": 2},
     ],
 )

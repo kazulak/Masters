@@ -68,6 +68,7 @@ class FakeProcess:
                     "hardware_allocation_verified": True,
                     "simulator_kernel_executed": False,
                     "cpu_fallback_used": False,
+                    **v4.NATIVE_EXECUTION_IDENTITY,
                 }
             )
             + "\n"
@@ -210,6 +211,7 @@ def _valid_response(artifact: v4.V4RequestArtifact) -> dict[str, object]:
         "simulator_kernel_executed": False,
         "cpu_fallback_used": False,
         "hardware_functionality_evidence": True,
+        **v4.NATIVE_EXECUTION_IDENTITY,
         "transfer": {"h2d_bytes": h2d, "d2h_bytes": d2h, "total_bytes": h2d + d2h},
         "per_dpu": per_dpu,
     }
@@ -251,6 +253,15 @@ def test_native_struct_formats_and_field_order_match_c() -> None:
     assert v4.WORK_UNIT_BYTES == 84
     assert v4.CONTROL_BYTES == 72
     assert v4.COMPLETION_BYTES == 40
+
+
+def test_session_rejects_conflicting_native_response_identity(tmp_path: Path) -> None:
+    artifact = _artifact(tmp_path)
+    response = _valid_response(artifact)
+    response["kernel_identity"] = "wrong-native-kernel"
+    session, _ = _session(tmp_path, artifact, lambda command: response)
+    with pytest.raises(v4.V4ProtocolError, match="native identity field 'kernel_identity'"):
+        session.submit(artifact)
 
     header = v4.V4Header(
         canonical_batch_count=2,

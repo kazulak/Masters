@@ -437,7 +437,24 @@ def _same_plan_key(row: Mapping[str, Any]) -> tuple[str, ...] | None:
     scope = _timing_scope(row)
     if hashes is None or not scope or not _case(row):
         return None
-    return (*hashes, _case(row), _repeat(row), scope, _path(row), _numeric(row))
+    dag_identity = _dag_identity(row)
+    if dag_identity is None:
+        return None
+    return (*hashes, *dag_identity, _case(row), _repeat(row), scope, _path(row), _numeric(row))
+
+
+def _dag_identity(row: Mapping[str, Any]) -> tuple[str, str] | None:
+    """Return a pairable DAG identity without treating broken v2 rows as legacy."""
+
+    schema = str(row.get("contraction_dag_schema_version") or "")
+    dag_hash = str(row.get("contraction_dag_hash") or "")
+    if schema == "contraction_dag_v2":
+        return ("contraction_dag_v2", dag_hash) if dag_hash else None
+    if not schema and not dag_hash:
+        return ("legacy_unversioned", "")
+    if schema.startswith("legacy") and not dag_hash:
+        return (schema, "")
+    return None
 
 
 def _record_row(row: Mapping[str, Any]) -> JsonDict:
@@ -471,6 +488,9 @@ def _record_row(row: Mapping[str, Any]) -> JsonDict:
         "circuit_semantics_hash": row.get("circuit_semantics_hash"),
         "tensor_network_hash": row.get("tensor_network_hash"),
         "contraction_plan_hash": row.get("contraction_plan_hash"),
+        "contraction_dag_hash": row.get("contraction_dag_hash"),
+        "contraction_dag_schema_version": row.get("contraction_dag_schema_version"),
+        "contraction_dag_identity": _dag_identity(row),
         "admission_identity": _admission_identity(row),
         "cross_algorithm": _engine_class(row) == "cross_algorithm",
         "local_dpu_count": local_dpus,
@@ -571,7 +591,7 @@ def _aggregate_medians(
 def _runtime_summaries(rows: list[JsonDict]) -> list[JsonDict]:
     groups: dict[tuple[Any, ...], list[JsonDict]] = {}
     for row in rows:
-        if not _valid(row):
+        if not _valid(row) or _dag_identity(row) is None:
             continue
         normalized = _record_row(row)
         key = (
@@ -586,6 +606,7 @@ def _runtime_summaries(rows: list[JsonDict]) -> list[JsonDict]:
             normalized["circuit_semantics_hash"],
             normalized["tensor_network_hash"],
             normalized["contraction_plan_hash"],
+            normalized["contraction_dag_identity"],
             normalized["route_id"],
             normalized["route_config_hash"],
             normalized["executor_config_hash"],
@@ -621,6 +642,9 @@ def _runtime_summaries(rows: list[JsonDict]) -> list[JsonDict]:
                     "circuit_semantics_hash",
                     "tensor_network_hash",
                     "contraction_plan_hash",
+                    "contraction_dag_hash",
+                    "contraction_dag_schema_version",
+                    "contraction_dag_identity",
                     "route_id",
                     "route_config_hash",
                     "executor_config_hash",
@@ -1968,6 +1992,7 @@ def generate_report(
                     "circuit_semantics_hash": cpu.get("circuit_semantics_hash"),
                     "tensor_network_hash": cpu.get("tensor_network_hash"),
                     "contraction_plan_hash": cpu.get("contraction_plan_hash"),
+                    "contraction_dag_hash": cpu.get("contraction_dag_hash"),
                     "executor_config_hash": _executor_config_hash(upmem),
                 }
             )
@@ -1997,6 +2022,7 @@ def generate_report(
             "circuit_semantics_hash",
             "tensor_network_hash",
             "contraction_plan_hash",
+            "contraction_dag_hash",
             "executor_config_hash",
         ),
         value_fields=(
@@ -2035,6 +2061,7 @@ def generate_report(
             "circuit_semantics_hash",
             "tensor_network_hash",
             "contraction_plan_hash",
+            "contraction_dag_hash",
             "executor_config_hash",
         ],
     )
@@ -2080,10 +2107,12 @@ def generate_report(
             continue
         hashes = _hashes(row)
         executor_hash = _executor_config_hash(row)
-        if hashes is None or executor_hash is None:
+        dag_identity = _dag_identity(row)
+        if hashes is None or executor_hash is None or dag_identity is None:
             continue
         key = (
             *hashes,
+            *dag_identity,
             executor_hash,
             _case(row),
             _path(row),
@@ -2220,6 +2249,10 @@ def generate_report(
                     "circuit_semantics_hash": row.get("circuit_semantics_hash"),
                     "tensor_network_hash": row.get("tensor_network_hash"),
                     "contraction_plan_hash": row.get("contraction_plan_hash"),
+                    "contraction_dag_hash": row.get("contraction_dag_hash"),
+                    "contraction_dag_schema_version": row.get(
+                        "contraction_dag_schema_version"
+                    ),
                     "scale_dimension": scale_dimension,
                     "local_dpu_count": local_dpus,
                     "rank_count": rank_count,
@@ -2251,6 +2284,8 @@ def generate_report(
             "circuit_semantics_hash",
             "tensor_network_hash",
             "contraction_plan_hash",
+            "contraction_dag_hash",
+            "contraction_dag_schema_version",
             "scale_dimension",
             "local_dpu_count",
             "rank_count",
@@ -2879,11 +2914,18 @@ def _variant_ratios(
         circuit_hash = str(row.get("circuit_semantics_hash") or "")
         network_hash = str(row.get("tensor_network_hash") or "")
         executor_hash = _executor_config_hash(row)
-        if not circuit_hash or not network_hash or executor_hash is None:
+        dag_identity = _dag_identity(row)
+        if (
+            not circuit_hash
+            or not network_hash
+            or executor_hash is None
+            or dag_identity is None
+        ):
             continue
         key = (
             circuit_hash,
             network_hash,
+            dag_identity[0],
             executor_hash,
             _case(row),
             _engine(row),
@@ -2929,6 +2971,7 @@ def _variant_ratios(
             continue
         a, b = _runtime(a_row), _runtime(b_row)
         a_hashes, b_hashes = _hashes(a_row), _hashes(b_row)
+        a_dag, b_dag = _dag_identity(a_row), _dag_identity(b_row)
         if (
             a
             and b
@@ -2936,6 +2979,13 @@ def _variant_ratios(
             and b_hashes is not None
             and a_hashes[:2] == b_hashes[:2]
             and a_hashes[2] != b_hashes[2]
+            and a_dag is not None
+            and b_dag is not None
+            and a_dag[0] == b_dag[0]
+            and (
+                (a_dag[0] == "contraction_dag_v2" and a_dag[1] != b_dag[1])
+                or a_dag[0] != "contraction_dag_v2"
+            )
         ):
             result.append(
                 {
@@ -2969,6 +3019,9 @@ def _variant_ratios(
                     "tensor_network_hash": a_hashes[1],
                     "contraction_plan_hash_a": a_hashes[2],
                     "contraction_plan_hash_b": b_hashes[2],
+                    "contraction_dag_hash_a": a_dag[1],
+                    "contraction_dag_hash_b": b_dag[1],
+                    "contraction_dag_schema_version": a_dag[0],
                     "path_a": path_a,
                     "path_b": path_b,
                     "series": (
@@ -3041,10 +3094,12 @@ def _numeric_ratios(
             continue
         hashes = _hashes(row)
         executor_hash = _executor_config_hash(row)
-        if hashes is None or executor_hash is None:
+        dag_identity = _dag_identity(row)
+        if hashes is None or executor_hash is None or dag_identity is None:
             continue
         key = (
             *hashes,
+            *dag_identity,
             executor_hash,
             _case(row),
             _engine(row),
@@ -3129,6 +3184,10 @@ def _numeric_ratios(
                     "circuit_semantics_hash": float_row.get("circuit_semantics_hash"),
                     "tensor_network_hash": float_row.get("tensor_network_hash"),
                     "contraction_plan_hash": float_row.get("contraction_plan_hash"),
+                    "contraction_dag_hash": float_row.get("contraction_dag_hash"),
+                    "contraction_dag_schema_version": float_row.get(
+                        "contraction_dag_schema_version"
+                    ),
                     "series": (
                         f"{_path(float_row)} | "
                         f"{_activity_label(float_row) or _topology_label(float_row)}"
@@ -3169,6 +3228,8 @@ def _numeric_ratios(
             "circuit_semantics_hash",
             "tensor_network_hash",
             "contraction_plan_hash",
+            "contraction_dag_hash",
+            "contraction_dag_schema_version",
         ),
         value_fields=(
             "float32_runtime_s",

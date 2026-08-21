@@ -2,9 +2,10 @@
 
 This module is intentionally a coordinator, not another execution engine.  A
 study expands explicit planner, numeric-policy, engine and topology variants,
-then sends every task graph through :mod:`quantum_bench.whole_circuit`.
-Physical engines are injected by the caller so planning and CI never open a
-device or silently substitute a simulator.
+then sends one :class:`~quantum_bench.tn.graph.ContractionDAG` through the
+functional compile/execute boundary.  Physical engines are injected by the
+caller so planning and CI never open a device or silently substitute a
+simulator.
 """
 
 from __future__ import annotations
@@ -35,18 +36,36 @@ from quantum_bench.bench.m5_circuit_routes import (
 )
 from quantum_bench.circuits import load_circuit, manifest as circuit_manifest
 from quantum_bench.core.jsonio import write_json
-from quantum_bench.core.records import ContractionTask, TaskGraph
-from quantum_bench.tn import (
-    build_tensor_network,
-    contraction_path_structure_hash,
-    plan_task_graph_with_config,
+from quantum_bench.core.records import ContractionTask, TaskGraph, TensorValue
+from quantum_bench.execution import (
+    CpuCompileRequest,
+    ExecutionFailure,
+    ExecutionResult,
+    NumericMode,
+    RunContext,
+    Target,
+    UnsupportedExecution,
+    UpmemCompileRequest,
+    UpmemRuntimeResources,
+    UpmemTopology,
+    compile_execution,
+    execute,
+    execution_plan_hash,
 )
+from quantum_bench.tn import (
+    PlannerRequest,
+    build_contraction_dag,
+    build_tensor_network_data,
+    contraction_dag_hash,
+    contraction_path_structure_hash,
+    plan_contractions,
+)
+from quantum_bench.tn.network import TensorNetworkValue
+from quantum_bench.tn.task_graph import materialize_task_graph_from_planner_result
 from quantum_bench.whole_circuit import (
     DeviceTopology,
     Float32RealPolicy,
     HostPackedInt8Policy,
-    NumpyCpuEngine,
-    WholeGraphExecutor,
 )
 
 
@@ -73,6 +92,12 @@ class _Plan:
     case: dict[str, Any]
     planner: dict[str, Any]
     circuit: Any
+    spec: Any
+    inputs: Any
+    planner_result: Any
+    dag: Any
+    # Legacy values are retained only for existing scientific identity fields
+    # and reports while consumers migrate to ContractionDAG v2.
     network: Any
     graph: TaskGraph
     resources: dict[str, Any]
@@ -343,6 +368,33 @@ def run_study(
                 route["route_id"],
                 selected_route_ids_set,
             )
+            compilation_started = time.perf_counter()
+            try:
+                execution_plan = _compile_route_plan(
+                    planned,
+                    str(engine_variant["topology"]["backend"]),
+                    _numeric_mode_from_policy(_policy(str(policy_variant["policy"]))),
+                    engine_variant,
+                )
+                compilation_time_s = time.perf_counter() - compilation_started
+            except Exception as exc:
+                compilation_time_s = time.perf_counter() - compilation_started
+                for repeat_id in range(config["repeats"]):
+                    row_base = _row_base(
+                        config, planned, engine_variant, policy_variant, route,
+                        comparison_ids, repeat_id, anchor,
+                    )
+                    records.append(
+                        {
+                            **row_base,
+                            "status": "failed",
+                            "support_status": "failed",
+                            "failure_stage": "execution_plan_compilation_failed",
+                            "error": str(exc),
+                            "compilation_time_s": compilation_time_s,
+                        }
+                    )
+                continue
             for repeat_id in range(config["repeats"]):
                 row_base = _row_base(
                     config,
@@ -363,6 +415,20 @@ def run_study(
                             "failure_stage": "preflight_resource_limit",
                             "error": planned.preflight["reason"],
                             "repeat_count": 0,
+                            "compilation_time_s": compilation_time_s,
+                        }
+                    )
+                    break
+                if isinstance(execution_plan, UnsupportedExecution):
+                    records.append(
+                        {
+                            **row_base,
+                            "status": "unsupported",
+                            "support_status": "unsupported",
+                            "failure_stage": "execution_plan_unsupported",
+                            "error": execution_plan.reason,
+                            "execution_target": execution_plan.target.value,
+                            "compilation_time_s": compilation_time_s,
                         }
                     )
                     break
@@ -391,6 +457,8 @@ def run_study(
                                 engine_variant,
                                 policy_variant,
                                 factories,
+                                execution_plan,
+                                compilation_time_s,
                                 warmup_id,
                                 anchor,
                                 policy_anchors.get(str(policy_variant["policy"])),
@@ -415,6 +483,8 @@ def run_study(
                         engine_variant,
                         policy_variant,
                         factories,
+                        execution_plan,
+                        compilation_time_s,
                         repeat_id,
                         anchor,
                         policy_anchors.get(str(policy_variant["policy"])),
@@ -429,6 +499,7 @@ def run_study(
                             "support_status": "failed",
                             "failure_stage": _failure_stage(exc),
                             "error": str(exc),
+                            "compilation_time_s": compilation_time_s,
                             "no_fallback_used": True,
                             "route_adapter_validation": adapter_validation,
                         }
@@ -495,18 +566,45 @@ def _build_plans(
         }
     for case in config["cases"]:
         circuit = load_circuit(case, root)
-        network = build_tensor_network(circuit)
+        spec, inputs = build_tensor_network_data(circuit)
+        # This adapter is deliberately local to M5 evidence compatibility.
+        # Planning is performed only against ``spec`` below.
+        network = TensorNetworkValue(
+            spec=spec,
+            tensors=[
+                TensorValue(
+                    next(tensor for tensor in spec.tensors if tensor.id == value.tensor_id),
+                    value.array,
+                )
+                for value in inputs.values
+            ],
+        )
         for planner in config["planner_variants"]:
             if (
                 selected_planner_ids is not None
                 and planner["id"] not in selected_planner_ids
             ):
                 continue
-            graph = plan_task_graph_with_config(network, planner["planner"])
+            request = PlannerRequest.from_config(planner["planner"])
+            planner_result = plan_contractions(spec, request)
+            dag = build_contraction_dag(spec, planner_result.path)
+            graph = materialize_task_graph_from_planner_result(network, planner_result)
             resources = _estimate_resources(graph, config["resource_limits"])
             preflight = _preflight(resources, config["resource_limits"])
             plans.append(
-                _Plan(case, planner, circuit, network, graph, resources, preflight)
+                _Plan(
+                    case,
+                    planner,
+                    circuit,
+                    spec,
+                    inputs,
+                    planner_result,
+                    dag,
+                    network,
+                    graph,
+                    resources,
+                    preflight,
+                )
             )
     return plans
 
@@ -579,9 +677,24 @@ def _preflight(resources: dict[str, Any], limits: dict[str, int]) -> dict[str, A
 def _run_anchor(planned: _Plan, config: dict[str, Any], policy: Any) -> dict[str, Any]:
     start = time.perf_counter()
     try:
-        result = WholeGraphExecutor(
-            NumpyCpuEngine(), policy, topology=DeviceTopology()
-        ).execute(planned.graph, planned.network)
+        numeric_mode = _numeric_mode_from_policy(policy)
+        compiled = compile_execution(
+            planned.dag,
+            CpuCompileRequest(
+                contraction_dag_hash=contraction_dag_hash(planned.dag),
+                numeric_mode=numeric_mode,
+            ),
+        )
+        if isinstance(compiled, UnsupportedExecution):
+            raise RuntimeError(f"CPU anchor unsupported: {compiled.reason}")
+        result = execute(
+            compiled,
+            planned.dag,
+            planned.inputs,
+            RunContext(run_id="m5_cpu_anchor", target=Target.CPU),
+        )
+        if isinstance(result, ExecutionFailure):
+            raise RuntimeError(f"CPU anchor failed: {result.stage}: {result.reason}")
     except Exception as exc:
         return {
             "output": None,
@@ -592,8 +705,9 @@ def _run_anchor(planned: _Plan, config: dict[str, Any], policy: Any) -> dict[str
         }
     return {
         "output": result.output,
-        "metadata": result.metadata,
+        "metadata": _execution_metadata(result, None, None),
         "time_s": time.perf_counter() - start,
+        "reference_s": result.timing.route_total_s,
         "status": "available",
     }
 
@@ -621,6 +735,8 @@ def _execute_combo(
     engine_variant: dict[str, Any],
     policy_variant: dict[str, Any],
     factories: dict[str, Any],
+    execution_plan: Any,
+    compilation_time_s: float,
     repeat_id: int,
     anchor: dict[str, Any] | None,
     policy_anchor: dict[str, Any] | None,
@@ -628,28 +744,46 @@ def _execute_combo(
     adapter_validation = validate_route_adapter(
         route, planned.planner, policy_variant, engine_variant
     )
-    topology = DeviceTopology(
-        **{
-            key: value
-            for key, value in engine_variant["topology"].items()
-            if key in {"backend", "device_ids", "tasklets_per_device"}
-        }
-    )
-    engine = _resolve_engine(
-        engine_variant, topology, factories, timeout_s=config["timeout_s"]
-    )
+    topology = _legacy_topology(engine_variant["topology"])
     policy = _policy(str(policy_variant["policy"]))
-    started = time.perf_counter()
-    execution = WholeGraphExecutor(engine, policy, topology=topology).execute(
-        planned.graph, planned.network
+    backend = str(engine_variant["topology"]["backend"])
+    if isinstance(execution_plan, UnsupportedExecution):
+        raise RuntimeError("unsupported execution plans must be handled before execution")
+
+    resources = None
+    if execution_plan.target is Target.UPMEM:
+        engine = _resolve_engine(
+            engine_variant, topology, factories, timeout_s=config["timeout_s"]
+        )
+        resources = _upmem_runtime_resources(
+            engine,
+            topology,
+            execution_plan,
+            expected_rank_paths=tuple(
+                str(path) for path in engine_variant["topology"]["rank_paths"]
+            ),
+            timeout_s=config["timeout_s"],
+        )
+    result = execute(
+        execution_plan,
+        planned.dag,
+        planned.inputs,
+        RunContext(
+            run_id=f"{planned.case['case_id']}:{route['route_id']}:{repeat_id}",
+            target=execution_plan.target,
+            timeout_s=config["timeout_s"],
+            target_resources=resources,
+        ),
     )
-    elapsed = time.perf_counter() - started
-    if elapsed > config["timeout_s"]:
+    if isinstance(result, ExecutionFailure):
+        raise RuntimeError(f"{result.stage}: {result.reason}")
+    elapsed = result.timing.route_total_s
+    if elapsed is not None and elapsed > config["timeout_s"]:
         raise TimeoutError(
             f"whole-circuit route exceeded timeout_s={config['timeout_s']}"
         )
-    output = np.asarray(execution.output)
-    metadata = dict(execution.metadata)
+    output = np.asarray(result.output)
+    metadata = _execution_metadata(result, execution_plan, engine_variant)
     expected_policy = policy_anchor["output"] if policy_anchor else None
     expected_full = anchor["output"] if anchor else None
     policy_validation = _validation(
@@ -669,35 +803,20 @@ def _execute_combo(
     )
     engine_metadata = _engine_metadata(metadata)
     hardware = _hardware_contract(engine_metadata, engine_variant["topology"])
-    hardware_failure = topology.backend != "cpu" and not hardware["verified"]
+    hardware_failure = backend != "cpu" and not hardware["verified"]
     route_observation = admit_route_observation(
-        route, engine_metadata, backend=topology.backend
+        route, engine_metadata, backend=backend
     )
     route_observation_failure = not bool(route_observation["passed"])
     output_hash = _array_hash(output)
     executor_hash = _executor_config_hash(
         engine_variant, policy, topology, engine_metadata
     )
-    timing = metadata.get("timing", {})
-    if not isinstance(timing, Mapping):
-        timing = {}
-    raw_transfer = metadata.get("transfer", engine_metadata.get("transfer", {}))
-    transfer = dict(raw_transfer) if isinstance(raw_transfer, Mapping) else {}
-    h2d_bytes = _first_byte_count(
-        transfer,
-        engine_metadata,
-        keys=("application_visible_h2d_bytes", "h2d_bytes"),
-    )
-    d2h_bytes = _first_byte_count(
-        transfer,
-        engine_metadata,
-        keys=("application_visible_d2h_bytes", "d2h_bytes"),
-    )
-    transfer_bytes = _first_byte_count(
-        transfer,
-        engine_metadata,
-        keys=("application_visible_transfer_bytes", "transfer_bytes", "total_bytes"),
-    )
+    timing = _timing_metadata(result)
+    transfer = _transfer_metadata(result)
+    h2d_bytes = result.h2d_bytes
+    d2h_bytes = result.d2h_bytes
+    transfer_bytes = result.transfer_bytes
     transfer_accounting_verified = bool(
         h2d_bytes is not None
         and d2h_bytes is not None
@@ -706,44 +825,35 @@ def _execute_combo(
         and d2h_bytes >= 0
         and transfer_bytes == h2d_bytes + d2h_bytes
     )
-    if h2d_bytes is not None:
-        transfer["application_visible_h2d_bytes"] = h2d_bytes
-        transfer["h2d_bytes"] = h2d_bytes
-    if d2h_bytes is not None:
-        transfer["application_visible_d2h_bytes"] = d2h_bytes
-        transfer["d2h_bytes"] = d2h_bytes
-    if transfer_bytes is not None:
-        transfer["application_visible_transfer_bytes"] = transfer_bytes
-        transfer["transfer_bytes"] = transfer_bytes
     measurement_repetitions_sufficient = (
         config["warmups"] >= 1 and config["repeats"] >= 3
     )
     timing_is_bringup_only = not measurement_repetitions_sufficient
-    exact_once = set(metadata.get("executed_order", ())) == {
-        task.id for task in planned.graph.tasks
-    } and len(metadata.get("executed_order", ())) == len(planned.graph.tasks)
+    host_dag_node_completion_coverage = set(result.executed_node_ids) == {
+        node.node_id for node in planned.dag.nodes
+    } and len(result.executed_node_ids) == len(planned.dag.nodes)
     timing_breakdown = {
-        stage: value
-        for stage, aliases in {
-            "h2d_time_s": ("h2d_time_s", "h2d_s"),
-            "kernel_time_s": ("kernel_time_s", "kernel_s", "launch_time_s"),
-            "d2h_time_s": ("d2h_time_s", "d2h_s"),
-            "host_quantization_time_s": ("host_quantization_time_s",),
-            "host_dequantization_time_s": ("host_dequantization_time_s",),
-            "graph_execution_s": ("graph_execution_s",),
-            "session_open_s": ("session_open_s",),
-            "session_close_s": ("session_close_s",),
+        key: value
+        for key, value in {
+            "h2d_time_s": result.timing.h2d_s,
+            "kernel_time_s": result.timing.kernel_s,
+            "d2h_time_s": result.timing.d2h_s,
+            "host_quantization_time_s": result.timing.host_quantization_s,
+            "host_dequantization_time_s": result.timing.host_dequantization_s,
+            "reduction_time_s": result.timing.reduction_s,
+            "session_open_s": result.timing.session_open_s,
+            "session_close_s": result.timing.session_close_s,
+            "graph_execution_s": _graph_execution_time(result),
         }.items()
-        if (value := _first_number(metadata, timing, engine_metadata, keys=aliases))
-        is not None
+        if value is not None
     }
     physical_timing_complete = _physical_timing_complete(timing_breakdown)
     hardware_speedup_applicable = bool(
-        topology.backend != "cpu"
+        backend != "cpu"
         and hardware["verified"]
         and measurement_repetitions_sufficient
         and not failed_validation
-        and exact_once
+        and host_dag_node_completion_coverage
         and transfer_accounting_verified
         and physical_timing_complete
         and not route_observation_failure
@@ -773,15 +883,14 @@ def _execute_combo(
             if failed_validation
             else None
         ),
-        "planning_time_s": planned.graph.planning_time_s,
-        "whole_route_including_session_lifecycle_s": float(
-            timing.get("total_s", elapsed)
-        ),
+        "planning_time_s": planned.planner_result.planning_time_s,
+        "compilation_time_s": compilation_time_s,
+        "whole_route_including_session_lifecycle_s": result.timing.route_total_s,
         "graph_execution_s": timing_breakdown.get("graph_execution_s"),
         "session_open_s": timing_breakdown.get("session_open_s"),
         "session_close_s": timing_breakdown.get("session_close_s"),
-        "outer_elapsed_s": elapsed,
-        "total_route_time_s": elapsed,
+        "outer_elapsed_s": result.timing.route_total_s,
+        "total_route_time_s": result.timing.route_total_s,
         "timing_scope": "whole_route_including_session_lifecycle",
         "timeout_enforcement": engine_variant["timeout_enforcement"],
         "executor_config_hash": executor_hash,
@@ -808,12 +917,14 @@ def _execute_combo(
         "route_adapter_validation": adapter_validation,
         "route_observation_admission": route_observation,
         "validation_norm_drift": full_validation.get("norm_drift"),
-        "task_metrics": metadata.get("task_metrics", ()),
-        "complete_task_count": int(
-            metadata.get("task_count", len(planned.graph.tasks))
-        ),
-        "executed_task_count": len(metadata.get("executed_order", ())),
-        "exact_once": exact_once,
+        "task_metrics": (),
+        "complete_task_count": len(planned.dag.nodes),
+        "executed_task_count": len(result.executed_node_ids),
+        # Backward-compatible field: this records host-coordinator DAG-node
+        # completion coverage, not native-kernel exactly-once proof.
+        "exact_once": host_dag_node_completion_coverage,
+        "exact_once_scope": "host_dag_node_completion_per_route",
+        "host_dag_node_completion_coverage": host_dag_node_completion_coverage,
         "cpu_fallback_used": bool(engine_metadata.get("cpu_fallback_used", False)),
         "simulator_kernel_executed": bool(
             engine_metadata.get("simulator_kernel_executed", False)
@@ -823,7 +934,7 @@ def _execute_combo(
             or engine_metadata.get("simulator_kernel_executed", False)
         ),
         "hardware_execution_attempted": bool(
-            topology.backend != "cpu"
+            backend != "cpu"
             and (
                 hardware["native_kernel_executed"]
                 or hardware["allocation_verified"]
@@ -839,11 +950,18 @@ def _execute_combo(
         "hardware_allocation_verified": hardware["allocation_verified"],
         "hardware_release_verified": hardware["release_verified"],
         "target_observed": _target_observed(engine_metadata),
+        "native_identity_verified": bool(
+            engine_metadata.get("native_identity_verified", False)
+        ),
+        "graph_intermediate_placement_origin": engine_metadata.get(
+            "graph_intermediate_placement_origin"
+        ),
         "observed_rank_count": engine_metadata.get("observed_rank_count"),
         "allocated_dpu_count": engine_metadata.get("allocated_dpu_count"),
         "observed_tasklets_per_dpu": engine_metadata.get(
             "observed_tasklets_per_dpu", engine_metadata.get("tasklets_per_dpu")
         ),
+        "rank_binding_sha256": engine_metadata.get("rank_binding_sha256"),
         "application_visible_h2d_bytes": h2d_bytes,
         "application_visible_d2h_bytes": d2h_bytes,
         "application_visible_transfer_bytes": transfer_bytes,
@@ -852,7 +970,224 @@ def _execute_combo(
         "engine_metadata": engine_metadata,
         "energy_joules": None,
         "energy_status": "unavailable",
+        "execution_plan_hash": execution_plan_hash(execution_plan),
+        "execution_plan_schema_version": "tn_execution_plan_v1",
+        "execution_target": execution_plan.target.value,
+        "contraction_dag_hash": contraction_dag_hash(planned.dag),
+        "contraction_dag_schema_version": "contraction_dag_v2",
+        "planner_config_hash": planned.planner_result.identity.planner_config_hash,
     }
+
+
+def _numeric_mode_from_policy(policy: Any) -> NumericMode:
+    if _is_quantized_policy(policy):
+        return NumericMode.HOST_PACKED_INT8_PER_TASK_V1
+    if str(getattr(policy, "name", "")) == "float32_real":
+        return NumericMode.FLOAT32_REAL
+    raise ValueError(f"unsupported M5 numeric policy {getattr(policy, 'name', None)!r}")
+
+
+def _legacy_topology(topology: Mapping[str, Any]) -> DeviceTopology:
+    return DeviceTopology(
+        backend=str(topology["backend"]),
+        device_ids=tuple(str(value) for value in topology["device_ids"]),
+        tasklets_per_device=int(topology["tasklets_per_device"]),
+    )
+
+
+def _compile_route_plan(
+    planned: _Plan,
+    backend: str,
+    numeric_mode: NumericMode,
+    engine_variant: Mapping[str, Any],
+) -> Any:
+    dag_hash = contraction_dag_hash(planned.dag)
+    if backend == "cpu":
+        if str(engine_variant["engine"]) != "numpy_cpu":
+            raise ValueError(
+                "CPU functional routes require engine: numpy_cpu before execution"
+            )
+        return compile_execution(
+            planned.dag,
+            CpuCompileRequest(
+                contraction_dag_hash=dag_hash,
+                numeric_mode=numeric_mode,
+                executor_id=str(engine_variant["engine"]),
+            ),
+        )
+    topology = engine_variant["topology"]
+    return compile_execution(
+        planned.dag,
+        UpmemCompileRequest(
+            contraction_dag_hash=dag_hash,
+            numeric_mode=numeric_mode,
+            topology=UpmemTopology(
+                dpu_count=len(topology["device_ids"]),
+                tasklets_per_dpu=int(topology["tasklets_per_device"]),
+                rank_count=len(topology["rank_paths"]),
+            ),
+        ),
+    )
+
+
+def _upmem_runtime_resources(
+    engine: Any,
+    topology: DeviceTopology,
+    execution_plan: Any,
+    *,
+    expected_rank_paths: tuple[str, ...],
+    timeout_s: float,
+) -> UpmemRuntimeResources:
+    """Bind a public M5 engine instance to the functional UPMEM adapter.
+
+    Machine-local binary paths and rank device paths deliberately remain in the
+    run context.  The compiled plan contains only logical topology and v4
+    execution choices.
+    """
+
+    required = (
+        "session_root",
+        "host_binary",
+        "dpu_binary",
+        "initialization_binary",
+        "rank_paths",
+    )
+    missing = [name for name in required if not getattr(engine, name, None)]
+    if missing:
+        raise RuntimeError(
+            "injected M5 engine does not expose required runtime resources: "
+            + ", ".join(missing)
+        )
+    if not expected_rank_paths:
+        raise RuntimeError("M5 runtime binding requires suite-resolved rank paths")
+    actual_rank_paths = tuple(str(path) for path in engine.rank_paths)
+    if actual_rank_paths != expected_rank_paths:
+        raise RuntimeError(
+            "injected M5 engine rank_paths do not match suite-resolved topology"
+        )
+
+    def open_session(_plan: Any, _context: RunContext) -> Any:
+        return engine.open_session(
+            _policy_for_mode(execution_plan.payload.numeric_mode), topology
+        )
+
+    return UpmemRuntimeResources(
+        session_root=str(engine.session_root),
+        host_binary=str(engine.host_binary),
+        dpu_binary=str(engine.dpu_binary),
+        initialization_binary=str(engine.initialization_binary),
+        rank_paths=actual_rank_paths,
+        session_opener=open_session,
+    )
+
+
+def _policy_for_mode(mode: NumericMode) -> Any:
+    return (
+        HostPackedInt8Policy()
+        if mode is NumericMode.HOST_PACKED_INT8_PER_TASK_V1
+        else Float32RealPolicy()
+    )
+
+
+def _execution_metadata(
+    result: ExecutionResult,
+    execution_plan: Any | None,
+    engine_variant: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Translate the narrow functional result into the historic M5 row surface."""
+
+    if result.target is Target.CPU:
+        return {
+            "execution_engine": "numpy_cpu",
+            "engine": "numpy_cpu",
+            "task_metrics": (),
+            "executed_order": result.executed_node_ids,
+        }
+    facts = result.backend_facts
+    if facts is None or execution_plan is None:
+        raise RuntimeError("UPMEM execution result is missing backend facts")
+    return {
+        "backend_id": facts.backend_id,
+        "physical_profile": facts.profile_id,
+        "profile": facts.profile_id,
+        "abi": facts.abi_id,
+        "abi_version": facts.abi_id,
+        "session_protocol": facts.session_id,
+        "dispatch_mode": facts.dispatch_id,
+        "kernel_identity": facts.kernel_id,
+        "execution_class": facts.execution_class,
+        "graph_intermediate_placement": facts.intermediate_placement,
+        "graph_intermediate_placement_origin": facts.intermediate_placement_origin,
+        "native_identity_verified": facts.native_identity_verified,
+        "target_observed": facts.target_observed,
+        "hardware_allocation_verified": facts.hardware_allocation_verified,
+        "hardware_release_verified": facts.hardware_release_verified,
+        "hardware_release_confirmed": facts.hardware_release_confirmed,
+        "requested_dpu_count": facts.requested_dpu_count,
+        "allocated_dpu_count": facts.allocated_dpu_count,
+        "observed_rank_count": facts.observed_rank_count,
+        "tasklets_per_dpu": facts.tasklets_per_dpu,
+        "observed_tasklets_per_dpu": facts.tasklets_per_dpu,
+        "native_kernel_executed": facts.native_kernel_executed,
+        "hardware_kernel_executed": facts.hardware_kernel_executed,
+        "simulator_kernel_executed": facts.simulator_kernel_executed,
+        "cpu_fallback_used": facts.cpu_fallback_used,
+        "host_binary_sha256": facts.host_binary_sha256,
+        "dpu_binary_sha256": facts.dpu_binary_sha256,
+        "initialization_binary_sha256": facts.initialization_binary_sha256,
+        "rank_binding_sha256": facts.rank_binding_sha256,
+        "application_visible_h2d_bytes": result.h2d_bytes,
+        "application_visible_d2h_bytes": result.d2h_bytes,
+        "application_visible_transfer_bytes": result.transfer_bytes,
+        "h2d_bytes": result.h2d_bytes,
+        "d2h_bytes": result.d2h_bytes,
+        "transfer_bytes": result.transfer_bytes,
+        "task_metrics": (),
+        "executed_order": result.executed_node_ids,
+    }
+
+
+def _timing_metadata(result: ExecutionResult) -> dict[str, float]:
+    timing = result.timing
+    return {
+        key: value
+        for key, value in {
+            "total_s": timing.route_total_s,
+            "h2d_time_s": timing.h2d_s,
+            "kernel_time_s": timing.kernel_s,
+            "d2h_time_s": timing.d2h_s,
+            "host_quantization_time_s": timing.host_quantization_s,
+            "host_dequantization_time_s": timing.host_dequantization_s,
+            "reduction_time_s": timing.reduction_s,
+            "session_open_s": timing.session_open_s,
+            "session_close_s": timing.session_close_s,
+        }.items()
+        if value is not None
+    }
+
+
+def _transfer_metadata(result: ExecutionResult) -> dict[str, int]:
+    values = {
+        "application_visible_h2d_bytes": result.h2d_bytes,
+        "h2d_bytes": result.h2d_bytes,
+        "application_visible_d2h_bytes": result.d2h_bytes,
+        "d2h_bytes": result.d2h_bytes,
+        "application_visible_transfer_bytes": result.transfer_bytes,
+        "transfer_bytes": result.transfer_bytes,
+    }
+    return {key: value for key, value in values.items() if value is not None}
+
+
+def _graph_execution_time(result: ExecutionResult) -> float | None:
+    total = result.timing.route_total_s
+    if total is None:
+        return None
+    return max(
+        0.0,
+        total
+        - float(result.timing.session_open_s or 0.0)
+        - float(result.timing.session_close_s or 0.0),
+    )
 
 
 def _row_base(
@@ -883,6 +1218,7 @@ def _row_base(
         ),
         "planner_id": planned.planner["id"],
         "planner_config": planned.planner["planner"],
+        "planner_config_hash": planned.planner_result.identity.planner_config_hash,
         "planner_hash": planned.graph.contraction_plan_hash,
         "route_id": route["route_id"],
         "route_label": route["label"],
@@ -924,6 +1260,11 @@ def _row_base(
         "contraction_path_structure_hash": contraction_path_structure_hash(
             planned.graph
         ),
+        "contraction_dag_hash": contraction_dag_hash(planned.dag),
+        "contraction_dag_schema_version": "contraction_dag_v2",
+        "execution_plan_hash": None,
+        "execution_plan_schema_version": "tn_execution_plan_v1",
+        "execution_target": "upmem" if topology["backend"] != "cpu" else "cpu",
         "complete_task_count": len(planned.graph.tasks),
         "planning_time_s": planned.graph.planning_time_s,
         "preflight": planned.preflight,
@@ -941,6 +1282,8 @@ def _row_base(
         },
         "repeat_id": repeat_id,
         "exact_once": None,
+        "exact_once_scope": "host_dag_node_completion_per_route",
+        "host_dag_node_completion_coverage": None,
         "validation_status": "not_run",
         "scientific_validation_status": "not_run",
         "policy_reference_validation": {"status": "not_run"},
@@ -1050,12 +1393,8 @@ def _resolve_engine(
     timeout_s: float,
 ) -> Any:
     engine_id = str(variant["engine"])
-    if (
-        engine_id == "numpy_cpu"
-        and engine_id not in factories
-        and variant["id"] not in factories
-    ):
-        return NumpyCpuEngine()
+    if engine_id == "numpy_cpu":
+        raise RuntimeError("CPU routes execute through the functional CPU adapter")
     factory = factories.get(variant["id"], factories.get(engine_id))
     if factory is None:
         raise RuntimeError(f"No engine factory registered for {engine_id}")
@@ -1439,6 +1778,8 @@ def _failure_stage(exc: Exception) -> str:
         return failure_stage
     if "No engine factory registered" in str(exc):
         return "engine_factory_missing"
+    if "terminal metadata is not physically verified" in str(exc):
+        return "hardware_execution_unverified"
     if isinstance(exc, TimeoutError):
         return "timeout"
     if isinstance(exc, ValueError):
@@ -1477,6 +1818,7 @@ def _plan_manifest(
                 "family": plan.case.get("family"),
                 "planner_id": plan.planner["id"],
                 "planner_config": plan.planner["planner"],
+                "planner_config_hash": plan.planner_result.identity.planner_config_hash,
                 "circuit": circuit_manifest(plan.circuit),
                 "circuit_semantics_hash": plan.graph.circuit_semantics_hash,
                 "tensor_network_hash": plan.graph.tensor_network_hash,
@@ -1484,6 +1826,9 @@ def _plan_manifest(
                 "contraction_path_structure_hash": contraction_path_structure_hash(
                     plan.graph
                 ),
+                "contraction_dag_hash": contraction_dag_hash(plan.dag),
+                "contraction_dag_schema_version": "contraction_dag_v2",
+                "execution_plan_schema_version": "tn_execution_plan_v1",
                 "task_count": len(plan.graph.tasks),
                 "planning_time_s": plan.graph.planning_time_s,
                 "resources": plan.resources,
