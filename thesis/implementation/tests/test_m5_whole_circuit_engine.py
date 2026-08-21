@@ -31,6 +31,7 @@ from quantum_bench.targets.upmem.m5_whole_circuit_engine import (
     M5WholeCircuitSession,
     _task_structure_hash,
 )
+import quantum_bench.targets.upmem.m5_whole_circuit_engine as engine_module
 from quantum_bench.targets.upmem.execution_plan_v4 import (
     NATIVE_EXECUTION_IDENTITY,
     V4ProtocolError,
@@ -68,7 +69,12 @@ def _packed_expected(
     ) * np.float32(left_q.record.scale * right_q.record.scale)
 
 
-def _compiled_node_plan(node: ContractNode, dpu_count: int):
+def _compiled_node_plan(
+    node: ContractNode,
+    dpu_count: int,
+    rank_count: int = 1,
+    numeric_mode: NumericMode = NumericMode.FLOAT32_REAL,
+) -> Any:
     dag = ContractionDAG(
         tensors=(
             TensorSpec(
@@ -97,10 +103,11 @@ def _compiled_node_plan(node: ContractNode, dpu_count: int):
         dag,
         UpmemCompileRequest(
             contraction_dag_hash=contraction_dag_hash(dag),
-            numeric_mode=NumericMode.FLOAT32_REAL,
+            numeric_mode=numeric_mode,
             topology=UpmemTopology(
                 dpu_count=dpu_count,
                 tasklets_per_dpu=1,
+                rank_count=rank_count,
             ),
         ),
     )
@@ -256,7 +263,7 @@ def _engine(
     timeout_s: float = 60.0,
     startup_delay_s: float = 0.0,
     startup_delays_s: tuple[float, ...] = (),
-) -> M5WholeCircuitEngine:
+) -> "_PlannedEngine":
     created: list[_FakeSession] = sessions if sessions is not None else []
     host_binary, dpu_binary, initialization_binary = _binaries(tmp_path / "binaries")
     binary_provenance = {
@@ -285,15 +292,17 @@ def _engine(
         time.sleep(delay)
         return session
 
-    return M5WholeCircuitEngine(
-        session_root=tmp_path,
-        host_binary=host_binary,
-        dpu_binary=dpu_binary,
-        initialization_binary=initialization_binary,
-        rank_paths=tuple(f"/dev/dpu_rank{i}" for i in range(ranks)),
-        dpu_count=dpu_count,
-        timeout_s=timeout_s,
-        session_factory=factory,
+    return _PlannedEngine(
+        M5WholeCircuitEngine(
+            session_root=tmp_path,
+            host_binary=host_binary,
+            dpu_binary=dpu_binary,
+            initialization_binary=initialization_binary,
+            rank_paths=tuple(f"/dev/dpu_rank{i}" for i in range(ranks)),
+            dpu_count=dpu_count,
+            timeout_s=timeout_s,
+            session_factory=factory,
+        )
     )
 
 
@@ -317,6 +326,54 @@ class _SubmissionBarrier:
                 self.both_entered.set()
         if not self.both_entered.wait(timeout=2.0):
             raise AssertionError("rank submissions were serialized")
+
+
+@dataclass(frozen=True)
+class _PlannedSession:
+    """Test helper that supplies a compiled placement to the real session."""
+
+    session: M5WholeCircuitSession
+
+    def execute(
+        self,
+        node: ContractNode,
+        left: np.ndarray,
+        right: np.ndarray,
+        *,
+        node_plan: Any = None,
+    ) -> Any:
+        if node_plan is None:
+            mode = (
+                NumericMode.HOST_PACKED_INT8
+                if self.session.policy.name == "host_packed_int8_per_task_v1"
+                else NumericMode.FLOAT32_REAL
+            )
+            node_plan = _compiled_node_plan(
+                node,
+                sum(rank.local_dpus for rank in self.session.ranks),
+                len(self.session.ranks),
+                numeric_mode=mode,
+            )
+        return self.session.execute(
+            node,
+            left,
+            right,
+            node_plan=node_plan,
+        )
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.session, name)
+
+
+@dataclass(frozen=True)
+class _PlannedEngine:
+    engine: M5WholeCircuitEngine
+
+    def open_session(self, *args: Any, **kwargs: Any) -> _PlannedSession:
+        return _PlannedSession(self.engine.open_session(*args, **kwargs))
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.engine, name)
 
 
 def test_float_and_packed_int8_match_reference_across_k_chunks(tmp_path: Path) -> None:
@@ -385,6 +442,32 @@ def test_compiled_work_units_reach_native_request_artifact(tmp_path: Path) -> No
     assert result.metadata["physical_plan_consumed"] is True
     np.testing.assert_allclose(result.output, left @ right, rtol=1e-6, atol=1e-6)
     session.close()
+
+
+def test_fixed_strategy_identity_binds_active_engine_source(tmp_path: Path) -> None:
+    engine = _engine(tmp_path, dpu_count=1).engine
+    expected_source_hash = hashlib.sha256(
+        Path(engine_module.__file__).read_bytes()
+    ).hexdigest()
+    identity = engine.strategy_identity
+    records = identity["strategies"]
+
+    assert len(expected_source_hash) == 64
+    assert expected_source_hash.islower()
+    assert all(
+        record["implementation_type"] == "fixed_direct_mechanism"
+        and record["module_source_sha256"] == expected_source_hash
+        for record in records
+    )
+    expected_config_hash = hashlib.sha256(
+        json.dumps(
+            identity,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("ascii")
+    ).hexdigest()
+    assert engine.strategy_config_hash == expected_config_hash
 
 
 def test_node_structure_hash_binds_all_contraction_fields() -> None:
@@ -730,7 +813,9 @@ def test_close_without_submitted_request_cannot_claim_hardware_execution(
     assert terminal["observed_tasklets_per_dpu"] == 1
 
 
-def test_conflicting_native_ready_identity_fails_before_execution(tmp_path: Path) -> None:
+def test_conflicting_native_ready_identity_fails_before_execution(
+    tmp_path: Path,
+) -> None:
     calls = 0
 
     def factory(command: Any, *, session_root: Path, profile: Any) -> _FakeSession:
@@ -759,7 +844,9 @@ def test_conflicting_native_ready_identity_fails_before_execution(tmp_path: Path
 def test_conflicting_native_response_identity_fails_closed(tmp_path: Path) -> None:
     engine = _engine(tmp_path, dpu_count=1)
     session = engine.open_session(Float32RealPolicy(), _topology(1))
-    session.ranks[0].session.response_identity_overrides["profile"] = "wrong-native-profile"
+    session.ranks[0].session.response_identity_overrides["profile"] = (
+        "wrong-native-profile"
+    )
     with pytest.raises(RuntimeError, match="native identity profile"):
         session.execute(
             _task(),
@@ -823,3 +910,210 @@ def test_engine_supports_batched_permuted_output_labels(tmp_path: Path) -> None:
     )
     expected = np.einsum("bmk,bkn->nbm", left, right)
     np.testing.assert_allclose(result.output, expected, rtol=1e-6, atol=1e-6)
+
+
+def test_missing_node_plan_rejected(tmp_path: Path) -> None:
+    host_binary, dpu_binary, initialization_binary = _binaries(tmp_path / "binaries")
+    engine = M5WholeCircuitEngine(
+        session_root=tmp_path / "session",
+        host_binary=host_binary,
+        dpu_binary=dpu_binary,
+        initialization_binary=initialization_binary,
+        rank_paths=("/dev/dpu_rank0",),
+        dpu_count=1,
+        session_factory=lambda cmd, *, session_root, profile: _FakeSession(
+            profile=profile
+        ),
+    )
+    session = engine.open_session(Float32RealPolicy(), _topology(1))
+    task = _task()
+    left = np.ones((3, 5), dtype=np.float32)
+    right = np.ones((5, 4), dtype=np.float32)
+
+    with pytest.raises(TypeError):
+        session.execute(task, left, right)  # type: ignore[call-arg]
+
+    with pytest.raises(ValueError, match="requires a valid UpmemNodePlan"):
+        session.execute(task, left, right, node_plan=None)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="requires a valid UpmemNodePlan"):
+        session.execute(task, left, right, node_plan="not_a_plan")  # type: ignore[arg-type]
+
+    plan = _compiled_node_plan(task, 1)
+    wrong_id_plan = replace(plan, node_id="other_node")
+    with pytest.raises(ValueError, match="does not match contract node"):
+        session.execute(task, left, right, node_plan=wrong_id_plan)
+
+    wrong_shape_plan = replace(plan, canonical_shape=(1, 999, 5, 4))
+    with pytest.raises(ValueError, match="canonical B/M/K/N shape differs"):
+        session.execute(task, left, right, node_plan=wrong_shape_plan)
+
+    session.close()
+
+
+def test_no_regenerated_placement_and_direct_plan_consumption(tmp_path: Path) -> None:
+    task = _task(k=5, m=300, n=4)
+    left = np.ones((300, 5), dtype=np.float32)
+    right = np.ones((5, 4), dtype=np.float32)
+
+    plan = _compiled_node_plan(task, 4)
+    assert len(plan.work_units) > 1
+
+    first_unit = plan.work_units[0]
+    modified_unit = replace(first_unit, logical_dpu=3)
+    modified_units = (modified_unit, *plan.work_units[1:])
+    custom_plan = replace(plan, work_units=modified_units)
+
+    created_sessions: list[_FakeSession] = []
+    engine_wrapper = _engine(tmp_path, dpu_count=4, sessions=created_sessions)
+    real_session = engine_wrapper.engine.open_session(Float32RealPolicy(), _topology(4))
+
+    result = real_session.execute(task, left, right, node_plan=custom_plan)
+    assert result.metadata["physical_plan_consumed"] is True
+    np.testing.assert_allclose(result.output, left @ right, rtol=1e-5)
+
+    first_submission = created_sessions[0].submissions[0]
+    submitted_dpu_ids = [
+        u.local_dpu_id for u in first_submission.work_units if not u.flags
+    ]
+    assert 3 in submitted_dpu_ids
+    real_session.close()
+
+
+def test_direct_compiled_plan_controls_local_ids_on_two_ranks(tmp_path: Path) -> None:
+    task = _task(k=5, m=600, n=4)
+    left = np.ones((600, 5), dtype=np.float32)
+    right = np.ones((5, 4), dtype=np.float32)
+    compiled_plan = _compiled_node_plan(task, dpu_count=4, rank_count=2)
+    assert {unit.logical_rank for unit in compiled_plan.work_units} == {0, 1}
+
+    # Keep the compiled geometry and wave intact, but select a different valid
+    # local slot on rank 1 so a regenerated default placement would be visible.
+    explicit_units = tuple(
+        replace(unit, logical_dpu=1) if unit.logical_rank == 1 else unit
+        for unit in compiled_plan.work_units
+    )
+    explicit_plan = replace(compiled_plan, work_units=explicit_units)
+    expected_by_rank = {
+        rank: [
+            unit.logical_dpu
+            for unit in explicit_plan.work_units
+            if unit.logical_rank == rank
+        ]
+        for rank in (0, 1)
+    }
+
+    sessions: list[_FakeSession] = []
+    engine = _engine(
+        tmp_path,
+        ranks=2,
+        dpu_count=4,
+        sessions=sessions,
+    ).engine
+    session = engine.open_session(Float32RealPolicy(), _topology(4))
+    result = session.execute(task, left, right, node_plan=explicit_plan)
+
+    assert result.metadata["physical_plan_consumed"] is True
+    for rank_index, native in enumerate(sessions):
+        actual_ids = [
+            record.local_dpu_id
+            for artifact in native.submissions
+            for record in artifact.work_units
+            if not record.flags
+        ]
+        assert actual_ids == expected_by_rank[rank_index]
+    np.testing.assert_allclose(result.output, left @ right, rtol=1e-6, atol=1e-6)
+    session.close()
+
+
+def test_request_work_units_and_payload_bytes() -> None:
+    from quantum_bench.targets.upmem.m5_whole_circuit_engine import _build_work_unit
+    from quantum_bench.targets.upmem.m5_whole_circuit_tiles import (
+        lower_binary_contraction,
+    )
+
+    task = _task(k=8, m=4, n=4)
+    left_f32 = np.arange(32, dtype=np.float32).reshape(4, 8)
+    right_f32 = np.arange(32, dtype=np.float32).reshape(8, 4)
+    lowering = lower_binary_contraction(task, left_f32, right_f32)
+    tile = lowering.tiles[0]
+
+    unit_f32 = _build_work_unit(
+        tile, 2, lowering.canonical.left, lowering.canonical.right, packed=False
+    )
+    expected_left_f32 = np.ascontiguousarray(
+        lowering.canonical.left[0, : tile.m_size, : tile.k_size]
+    )
+    expected_right_f32 = np.ascontiguousarray(
+        lowering.canonical.right[0, : tile.k_size, : tile.n_size]
+    )
+    assert unit_f32.a_payload == expected_left_f32.astype("<f4").tobytes()
+    assert unit_f32.b_payload == expected_right_f32.astype("<f4").tobytes()
+    assert unit_f32.local_dpu_id == 2
+    assert unit_f32.m_offset == tile.m_start
+    assert unit_f32.n_offset == tile.n_start
+    assert unit_f32.k_offset == tile.k_start
+    assert unit_f32.m_elements == tile.m_size
+    assert unit_f32.n_elements == tile.n_size
+    assert unit_f32.k_elements == tile.k_size
+
+    left_i8 = np.arange(32, dtype=np.int8).reshape(1, 4, 8)
+    right_i8 = np.arange(32, dtype=np.int8).reshape(1, 8, 4)
+    unit_i8 = _build_work_unit(tile, 3, left_i8, right_i8, packed=True)
+    assert unit_i8.a_payload == left_i8[0, : tile.m_size, : tile.k_size].tobytes()
+    assert unit_i8.b_payload == right_i8[0, : tile.k_size, : tile.n_size].tobytes()
+    assert unit_i8.local_dpu_id == 3
+
+
+def test_decoding_and_host_reduction(tmp_path: Path) -> None:
+    from quantum_bench.targets.upmem.m5_whole_circuit_engine import (
+        _assemble_output,
+        _read_output,
+    )
+    from quantum_bench.targets.upmem.m5_whole_circuit_tiles import (
+        M5TileLimits,
+        lower_binary_contraction,
+    )
+
+    task = _task(k=16, m=4, n=4)
+    left = np.arange(64, dtype=np.float32).reshape(4, 16)
+    right = np.arange(64, dtype=np.float32).reshape(16, 4)
+    limits = M5TileLimits(max_tile_dim=2, max_elements=4, max_packed_k=8)
+    lowering = lower_binary_contraction(task, left, right, limits=limits)
+    tile = lowering.tiles[0]
+
+    f32_data = np.arange(tile.output_element_count, dtype="<f4")
+    f32_file = tmp_path / "f32_out.bin"
+    f32_file.write_bytes(f32_data.tobytes())
+    decoded_f32 = _read_output(f32_file, tile, packed=False)
+    np.testing.assert_array_equal(
+        decoded_f32, f32_data.reshape(tile.m_size, tile.n_size)
+    )
+    assert decoded_f32.dtype == np.float64
+
+    i32_data = np.arange(tile.output_element_count, dtype="<i4") * 10
+    i32_file = tmp_path / "i32_out.bin"
+    i32_file.write_bytes(i32_data.tobytes())
+    decoded_i8 = _read_output(i32_file, tile, packed=True)
+    np.testing.assert_array_equal(
+        decoded_i8, i32_data.reshape(tile.m_size, tile.n_size)
+    )
+    assert decoded_i8.dtype == np.int64
+
+    trunc_file = tmp_path / "trunc.bin"
+    trunc_file.write_bytes(b"short")
+    with pytest.raises(RuntimeError, match="truncated"):
+        _read_output(trunc_file, tile, packed=False)
+
+    partials: dict[str, np.ndarray] = {}
+    for t in lowering.tiles:
+        left_sub, right_sub = lowering.extract_tile_operands(t)
+        partials[t.id] = left_sub @ right_sub
+
+    expected_f32 = left @ right
+    res_f32 = _assemble_output(lowering, partials, packed=False, scale=1.0)
+    np.testing.assert_allclose(res_f32, expected_f32, rtol=1e-5)
+
+    scale = 0.125
+    res_packed = _assemble_output(lowering, partials, packed=True, scale=scale)
+    np.testing.assert_allclose(res_packed, expected_f32 * scale, rtol=1e-5)

@@ -220,15 +220,17 @@ def test_engine_plan_assignment_drives_rank_local_dpu_request() -> None:
     from quantum_bench.targets.upmem.m5_whole_circuit_engine import (
         M5WholeCircuitSession,
     )
-    from quantum_bench.targets.upmem.m5_strategies import M5DecompositionStrategy
-    from quantum_bench.targets.upmem.m5_whole_circuit_tiles import M5TileLimits
+    from quantum_bench.targets.upmem.m5_whole_circuit_tiles import (
+        M5TileLimits,
+        lower_binary_contraction,
+    )
 
     dag = _dag()
     compiled = compile_execution(dag, _request(dag))
     assert isinstance(compiled, ExecutionPlan)
     node = dag.nodes[0]
     assert isinstance(node, ContractNode)
-    lowering = M5DecompositionStrategy().decompose(
+    lowering = lower_binary_contraction(
         node,
         np.ones((2, 3), dtype=np.float32),
         np.ones((3, 2), dtype=np.float32),
@@ -239,9 +241,7 @@ def test_engine_plan_assignment_drives_rank_local_dpu_request() -> None:
     moved = replace(unit, logical_dpu=1)
     moved_plan = replace(node_plan, work_units=(moved,))
     session = object.__new__(M5WholeCircuitSession)
-    session.ranks = (
-        SimpleNamespace(index=0, local_dpus=2),
-    )
+    session.ranks = (SimpleNamespace(index=0, local_dpus=2),)
 
     waves, requests = session._requests_from_plan(node, lowering, moved_plan)
 
@@ -257,15 +257,17 @@ def test_engine_rejects_plan_tile_extent_tampering_before_requests() -> None:
     from quantum_bench.targets.upmem.m5_whole_circuit_engine import (
         M5WholeCircuitSession,
     )
-    from quantum_bench.targets.upmem.m5_strategies import M5DecompositionStrategy
-    from quantum_bench.targets.upmem.m5_whole_circuit_tiles import M5TileLimits
+    from quantum_bench.targets.upmem.m5_whole_circuit_tiles import (
+        M5TileLimits,
+        lower_binary_contraction,
+    )
 
     dag = _dag()
     compiled = compile_execution(dag, _request(dag))
     assert isinstance(compiled, ExecutionPlan)
     node = dag.nodes[0]
     assert isinstance(node, ContractNode)
-    lowering = M5DecompositionStrategy().decompose(
+    lowering = lower_binary_contraction(
         node,
         np.ones((2, 3), dtype=np.float32),
         np.ones((3, 2), dtype=np.float32),
@@ -476,8 +478,7 @@ def test_run_upmem_uses_one_session_in_plan_order_and_aggregates(
     assert result.backend_facts.hardware_release_confirmed
     assert result.backend_facts.native_identity_verified is True
     assert (
-        result.backend_facts.intermediate_placement_origin
-        == "m5_host_coordinator_v1"
+        result.backend_facts.intermediate_placement_origin == "m5_host_coordinator_v1"
     )
     assert result.backend_facts.observed_rank_count == 1
     assert result.backend_facts.rank_binding_sha256
@@ -609,7 +610,9 @@ def test_run_upmem_hashes_every_measured_output_and_rejects_nondeterminism(
     assert isinstance(compiled, ExecutionPlan)
     session = _FakeSession()
     monkeypatch.setattr(module, "_open_session", lambda plan, context: session)
-    outputs = iter((np.zeros((2, 2), dtype=np.float32), np.ones((2, 2), dtype=np.float32)))
+    outputs = iter(
+        (np.zeros((2, 2), dtype=np.float32), np.ones((2, 2), dtype=np.float32))
+    )
 
     def nondeterministic_once(*args, **kwargs):
         return next(outputs), ("contract_0",)

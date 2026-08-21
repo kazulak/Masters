@@ -12,6 +12,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 import hashlib
+import json
 import os
 from pathlib import Path
 import shutil
@@ -32,30 +33,19 @@ from quantum_bench.targets.upmem.execution_plan_v4 import (
     V4Profile,
     V4ProtocolError,
     V4Session,
+    V4WorkUnit,
+    build_v4_request,
 )
 from quantum_bench.targets.upmem.m5_whole_circuit_tiles import (
     M5Tile,
     M5TileLimits,
-)
-from quantum_bench.targets.upmem.m5_strategies import (
-    M5DecompositionStrategy,
-    M5KernelProvider,
-    M5PlacementStrategy,
-    M5ReductionProvider,
-    M5StrategyBundle,
+    M5TileLowering,
+    lower_binary_contraction,
 )
 from quantum_bench.whole_circuit.core import (
     DeviceTopology,
     EngineTaskResult,
     NumericPolicy,
-)
-from quantum_bench.whole_circuit.strategies import (
-    DecompositionStrategy,
-    KernelProvider,
-    PlacementStrategy,
-    ReductionProvider,
-    StrategyConfiguration,
-    StrategyRole,
 )
 
 
@@ -70,6 +60,76 @@ _COORDINATOR_PROVENANCE = {
     "request_level_speedup_applicable": False,
     "energy_claim_applicable": False,
 }
+
+# The active runtime has one fixed lowering, placement, kernel, and reduction
+# mechanism.  Keep the historical metadata fields for evidence compatibility,
+# but do not retain a strategy registry for a single implementation.
+_ACTIVE_MECHANISM_IDS = {
+    "decomposition": "m5_v4_tile_decomposition",
+    "placement": "m5_rank_wave_placement",
+    "kernel": "upmem_sdk_hardware_v4_tile_kernel",
+    "reduction": "m5_tile_host_reduction",
+}
+_ACTIVE_ENGINE_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+_ACTIVE_STRATEGY_IDENTITY = {
+    "schema_version": "strategy_configuration_v2",
+    "strategies": [
+        {
+            "role": "decomposition",
+            "implementation_id": _ACTIVE_MECHANISM_IDS["decomposition"],
+            "version": "1",
+            "provider": "quantum_bench_host",
+            "transport": "host_control",
+            "config": {"limits_source": "numeric_policy"},
+            "implementation_type": "fixed_direct_mechanism",
+            "module_source_sha256": _ACTIVE_ENGINE_SOURCE_SHA256,
+        },
+        {
+            "role": "kernel",
+            "implementation_id": _ACTIVE_MECHANISM_IDS["kernel"],
+            "version": "1",
+            "provider": "raw_upmem_sdk_v4",
+            "transport": "application_visible_sdk_transfer",
+            "config": {"abi": "execution_plan_v4", "kernel": "dpu_gemm_tile_v4"},
+            "implementation_type": "fixed_direct_mechanism",
+            "module_source_sha256": _ACTIVE_ENGINE_SOURCE_SHA256,
+        },
+        {
+            "role": "placement",
+            "implementation_id": _ACTIVE_MECHANISM_IDS["placement"],
+            "version": "1",
+            "provider": "quantum_bench_host",
+            "transport": "host_control",
+            "config": {
+                "local_dpu_order": "compiled_plan",
+                "wave_partition": "compiled_plan",
+            },
+            "implementation_type": "fixed_direct_mechanism",
+            "module_source_sha256": _ACTIVE_ENGINE_SOURCE_SHA256,
+        },
+        {
+            "role": "reduction",
+            "implementation_id": _ACTIVE_MECHANISM_IDS["reduction"],
+            "version": "1",
+            "provider": "quantum_bench_host",
+            "transport": "host_memory",
+            "config": {
+                "accumulator": "int64_packed_or_float64_float32",
+                "location": "host",
+            },
+            "implementation_type": "fixed_direct_mechanism",
+            "module_source_sha256": _ACTIVE_ENGINE_SOURCE_SHA256,
+        },
+    ],
+}
+_ACTIVE_STRATEGY_CONFIG_HASH = hashlib.sha256(
+    json.dumps(
+        _ACTIVE_STRATEGY_IDENTITY,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("ascii")
+).hexdigest()
 
 
 class _V4SessionLike(Protocol):
@@ -167,6 +227,76 @@ def _real_float32(value: np.ndarray) -> np.ndarray:
     return result
 
 
+def _build_work_unit(
+    tile: M5Tile,
+    local_dpu_id: int,
+    left: np.ndarray,
+    right: np.ndarray,
+    *,
+    packed: bool,
+) -> V4WorkUnit:
+    """Serialize one compiled tile without changing its compiled placement."""
+
+    left_array = left if left.ndim == 3 else left.reshape((1, *left.shape))
+    right_array = right if right.ndim == 3 else right.reshape((1, *right.shape))
+    left_tile = np.ascontiguousarray(
+        left_array[
+            tile.batch_index,
+            tile.m_start : tile.m_start + tile.m_size,
+            tile.k_start : tile.k_start + tile.k_size,
+        ]
+    )
+    right_tile = np.ascontiguousarray(
+        right_array[
+            tile.batch_index,
+            tile.k_start : tile.k_start + tile.k_size,
+            tile.n_start : tile.n_start + tile.n_size,
+        ]
+    )
+    dtype = np.int8 if packed else np.dtype("<f4")
+    return V4WorkUnit(
+        local_dpu_id=local_dpu_id,
+        tile_id=int.from_bytes(
+            hashlib.sha256(tile.id.encode("utf-8")).digest()[:8], "little"
+        ),
+        batch_index=tile.batch_index,
+        m_offset=tile.m_start,
+        n_offset=tile.n_start,
+        k_offset=tile.k_start,
+        m_elements=tile.m_size,
+        n_elements=tile.n_size,
+        k_elements=tile.k_size,
+        a_payload=np.asarray(left_tile, dtype=dtype).tobytes(order="C"),
+        b_payload=np.asarray(right_tile, dtype=dtype).tobytes(order="C"),
+    )
+
+
+def _read_output(path: Path, tile: M5Tile, *, packed: bool) -> np.ndarray:
+    dtype = np.dtype("<i4") if packed else np.dtype("<f4")
+    expected_bytes = tile.output_element_count * dtype.itemsize
+    raw = path.read_bytes()
+    if len(raw) < expected_bytes:
+        raise RuntimeError(f"v4 output is truncated: {path}")
+    values = np.frombuffer(raw[:expected_bytes], dtype=dtype)
+    return np.asarray(
+        values.reshape(tile.m_size, tile.n_size),
+        dtype=np.int64 if packed else np.float64,
+    )
+
+
+def _assemble_output(
+    lowering: M5TileLowering,
+    partials: Mapping[str, np.ndarray],
+    *,
+    packed: bool,
+    scale: float,
+) -> np.ndarray:
+    canonical = lowering.assemble(partials, dtype=np.int64 if packed else np.float64)
+    if packed:
+        return np.asarray(canonical, dtype=np.float32) * np.float32(scale)
+    return np.asarray(canonical, dtype=np.float32)
+
+
 @dataclass(frozen=True)
 class _RankSession:
     index: int
@@ -250,10 +380,6 @@ class M5WholeCircuitEngine:
         tasklets_per_dpu: int = 1,
         timeout_s: float = 60.0,
         session_factory: Callable[..., _V4SessionLike] = V4Session.start,
-        decomposition_strategy: DecompositionStrategy | None = None,
-        placement_strategy: PlacementStrategy | None = None,
-        kernel_provider: KernelProvider | None = None,
-        reduction_provider: ReductionProvider | None = None,
     ) -> None:
         self.session_root = Path(session_root)
         self.host_binary = Path(host_binary)
@@ -264,31 +390,6 @@ class M5WholeCircuitEngine:
         self.tasklets_per_dpu = int(tasklets_per_dpu)
         self.timeout_s = float(timeout_s)
         self.session_factory = session_factory
-        self.decomposition_strategy = (
-            decomposition_strategy
-            if decomposition_strategy is not None
-            else M5DecompositionStrategy()
-        )
-        self.placement_strategy = (
-            placement_strategy
-            if placement_strategy is not None
-            else M5PlacementStrategy()
-        )
-        self.kernel_provider = (
-            kernel_provider if kernel_provider is not None else M5KernelProvider()
-        )
-        self.reduction_provider = (
-            reduction_provider
-            if reduction_provider is not None
-            else M5ReductionProvider()
-        )
-        self._strategy_bundle = M5StrategyBundle(
-            decomposition=self.decomposition_strategy,
-            placement=self.placement_strategy,
-            kernel=self.kernel_provider,
-            reduction=self.reduction_provider,
-        )
-        self._strategy_configuration = self._strategy_bundle.identity_configuration()
         self._binary_provenance = {
             **_validated_binary_provenance(
                 self.host_binary, label="host_binary", executable=True
@@ -319,21 +420,16 @@ class M5WholeCircuitEngine:
 
     @property
     def strategy_identity(self) -> dict[str, Any]:
-        return self._strategy_configuration.to_record()
+        return json.loads(json.dumps(_ACTIVE_STRATEGY_IDENTITY))
 
     @property
     def strategy_config_hash(self) -> str:
-        return self._strategy_configuration.sha256
+        return _ACTIVE_STRATEGY_CONFIG_HASH
 
     def open_session(
         self,
         policy: NumericPolicy,
         topology: DeviceTopology = DeviceTopology(),
-        *,
-        decomposition_strategy: DecompositionStrategy | None = None,
-        placement_strategy: PlacementStrategy | None = None,
-        kernel_provider: KernelProvider | None = None,
-        reduction_provider: ReductionProvider | None = None,
     ) -> M5WholeCircuitSession:
         if topology.backend != "upmem":
             raise ValueError("M5WholeCircuitEngine requires an upmem topology")
@@ -345,28 +441,6 @@ class M5WholeCircuitEngine:
             )
         if policy.name not in {"float32_real", "host_packed_int8_per_task_v1"}:
             raise ValueError(f"unsupported M5 numeric policy: {policy.name}")
-
-        strategy_bundle = M5StrategyBundle(
-            decomposition=(
-                decomposition_strategy
-                if decomposition_strategy is not None
-                else self.decomposition_strategy
-            ),
-            placement=(
-                placement_strategy
-                if placement_strategy is not None
-                else self.placement_strategy
-            ),
-            kernel=(
-                kernel_provider if kernel_provider is not None else self.kernel_provider
-            ),
-            reduction=(
-                reduction_provider
-                if reduction_provider is not None
-                else self.reduction_provider
-            ),
-        )
-        strategy_configuration = strategy_bundle.identity_configuration()
 
         deadline = time.monotonic() + self.timeout_s
         self.session_root.mkdir(parents=True, exist_ok=True)
@@ -414,9 +488,7 @@ class M5WholeCircuitEngine:
                     command, session_root=root, profile=profile
                 )
                 ranks.append(_RankSession(index, root, session, local_dpus))
-                _native_identity(
-                    session.startup, source=f"READY rank {index}"
-                )
+                _native_identity(session.startup, source=f"READY rank {index}")
                 if time.monotonic() >= deadline:
                     raise V4ProtocolError(
                         "kernel_timeout",
@@ -446,8 +518,6 @@ class M5WholeCircuitEngine:
             ranks=tuple(ranks),
             engine=self,
             deadline=deadline,
-            strategy_bundle=strategy_bundle,
-            strategy_configuration=strategy_configuration,
         )
 
 
@@ -461,23 +531,11 @@ class M5WholeCircuitSession:
         ranks: tuple[_RankSession, ...],
         engine: M5WholeCircuitEngine,
         deadline: float,
-        strategy_bundle: M5StrategyBundle,
-        strategy_configuration: StrategyConfiguration,
     ) -> None:
         self.policy = policy
         self.ranks = ranks
         self.engine = engine
         self._deadline = float(deadline)
-        self.strategy_bundle = strategy_bundle
-        self.decomposition_strategy = strategy_bundle.decomposition
-        self.placement_strategy = strategy_bundle.placement
-        self.kernel_provider = strategy_bundle.kernel
-        self.reduction_provider = strategy_bundle.reduction
-        self._strategy_configuration = strategy_configuration
-        self._strategy_implementation_ids = {
-            identity.role: identity.implementation_id
-            for identity in strategy_configuration.strategies
-        }
         self._closed = False
         self._failed = False
         self._failure_stage: str | None = None
@@ -500,11 +558,11 @@ class M5WholeCircuitSession:
 
     @property
     def strategy_identity(self) -> dict[str, Any]:
-        return self._strategy_configuration.to_record()
+        return json.loads(json.dumps(_ACTIVE_STRATEGY_IDENTITY))
 
     @property
     def strategy_config_hash(self) -> str:
-        return self._strategy_configuration.sha256
+        return _ACTIVE_STRATEGY_CONFIG_HASH
 
     def execute(
         self,
@@ -512,17 +570,19 @@ class M5WholeCircuitSession:
         left: np.ndarray,
         right: np.ndarray,
         *,
-        node_plan: UpmemNodePlan | None = None,
+        node_plan: UpmemNodePlan,
     ) -> EngineTaskResult:
         if self._closed:
             raise RuntimeError("M5 whole-circuit session is closed")
+        if node_plan is None or not isinstance(node_plan, UpmemNodePlan):
+            raise ValueError(
+                "M5WholeCircuitSession.execute requires a valid UpmemNodePlan"
+            )
         self._remaining_timeout()
         started = time.perf_counter()
         packed = self.policy.name == "host_packed_int8_per_task_v1"
         limits = M5TileLimits.host_packed_int8() if packed else M5TileLimits.float32()
-        lowering = self.decomposition_strategy.decompose(
-            node, left, right, limits=limits
-        )
+        lowering = lower_binary_contraction(node, left, right, limits=limits)
         canonical_left = lowering.canonical.left
         canonical_right = lowering.canonical.right
         quantization_metadata: dict[str, Any] = {}
@@ -579,20 +639,7 @@ class M5WholeCircuitSession:
         parallel_rank_waves = 0
         bulk_verified = True
         total_dpus = sum(rank.local_dpus for rank in self.ranks)
-        if node_plan is None:
-            # Temporary compatibility for direct engine tests and legacy callers.
-            # The active execution adapter always supplies the compiled plan.
-            waves = self.placement_strategy.place_waves(lowering.tiles, total_dpus)
-            planned_requests = tuple(
-                self.placement_strategy.map_wave_to_ranks(wave, self.ranks)
-                for wave in waves
-            )
-            physical_plan_consumed = False
-        else:
-            waves, planned_requests = self._requests_from_plan(
-                node, lowering, node_plan
-            )
-            physical_plan_consumed = True
+        waves, planned_requests = self._requests_from_plan(node, lowering, node_plan)
         self._validate_waves(lowering.tiles, waves, total_dpus)
         task_structure_sha256 = _task_structure_hash(node)
         numeric_transport = "host_packed_int8_mram" if packed else "float32_mram"
@@ -641,9 +688,7 @@ class M5WholeCircuitSession:
             raise
         self._remaining_timeout()
         assembly_started = time.perf_counter()
-        output = self.reduction_provider.reduce(
-            lowering, partials, packed=packed, scale=scale
-        )
+        output = _assemble_output(lowering, partials, packed=packed, scale=scale)
         host_tile_assembly_time_s = time.perf_counter() - assembly_started
         host_dequantization_time_s = host_tile_assembly_time_s if packed else 0.0
         elapsed = time.perf_counter() - started
@@ -664,21 +709,11 @@ class M5WholeCircuitSession:
                 **self.engine._provenance,
                 "strategy_identity": self.strategy_identity,
                 "strategy_config_hash": self.strategy_config_hash,
-                "decomposition_strategy": self._strategy_implementation_ids[
-                    StrategyRole.DECOMPOSITION
-                ],
-                "placement_strategy": self._strategy_implementation_ids[
-                    StrategyRole.PLACEMENT
-                ],
-                "kernel_provider": self._strategy_implementation_ids[
-                    StrategyRole.KERNEL
-                ],
-                "reduction_provider": self._strategy_implementation_ids[
-                    StrategyRole.REDUCTION
-                ],
-                "reduction_strategy": self._strategy_implementation_ids[
-                    StrategyRole.REDUCTION
-                ],
+                "decomposition_strategy": _ACTIVE_MECHANISM_IDS["decomposition"],
+                "placement_strategy": _ACTIVE_MECHANISM_IDS["placement"],
+                "kernel_provider": _ACTIVE_MECHANISM_IDS["kernel"],
+                "reduction_provider": _ACTIVE_MECHANISM_IDS["reduction"],
+                "reduction_strategy": _ACTIVE_MECHANISM_IDS["reduction"],
                 "numeric_transport": numeric_transport,
                 "packed_int8_transfer": packed,
                 "host_quantization_time_s": host_quantization_time_s,
@@ -712,7 +747,7 @@ class M5WholeCircuitSession:
                 "test_double_execution": self._test_double_execution,
                 "cpu_fallback_used": False,
                 "simulator_kernel_executed": False,
-                "physical_plan_consumed": physical_plan_consumed,
+                "physical_plan_consumed": True,
                 **quantization_metadata,
             },
         )
@@ -742,7 +777,9 @@ class M5WholeCircuitSession:
             canonical.k,
             canonical.n,
         ):
-            raise ValueError("compiled UPM canonical B/M/K/N shape differs from lowering")
+            raise ValueError(
+                "compiled UPM canonical B/M/K/N shape differs from lowering"
+            )
         tiles = {tile.id: tile for tile in lowering.tiles}
         units = node_plan.work_units
         if len(tiles) != len(lowering.tiles) or len(units) != len(tiles):
@@ -838,15 +875,22 @@ class M5WholeCircuitSession:
         prepared: list[tuple[_RankSession, list[tuple[M5Tile, int]], Any]] = []
         for rank, assignments in requests:
             units = [
-                self.kernel_provider.build_work_unit(
-                    tile, local_id, canonical_left, canonical_right, packed
+                _build_work_unit(
+                    tile,
+                    local_id,
+                    canonical_left,
+                    canonical_right,
+                    packed=packed,
                 )
                 for tile, local_id in assignments
             ]
-            artifact = self.kernel_provider.prepare_request(
+            artifact = build_v4_request(
                 rank.root,
                 profile=rank.session.profile,
-                lowering=lowering,
+                canonical_batch_count=lowering.canonical.b,
+                canonical_m=lowering.canonical.m,
+                canonical_n=lowering.canonical.n,
+                canonical_k=lowering.canonical.k,
                 work_units=units,
                 task_contract_sha256=request_contract,
                 request_sequence=self._sequence,
@@ -925,7 +969,7 @@ class M5WholeCircuitSession:
                 }
                 for tile, local_id in assignments:
                     record = records[local_id]
-                    value = self.kernel_provider.read_output(
+                    value = _read_output(
                         artifact.root / record.c_path,
                         tile,
                         packed=packed,
@@ -947,21 +991,23 @@ class M5WholeCircuitSession:
         total_dpu_count: int,
     ) -> None:
         if not isinstance(waves, tuple):
-            raise TypeError("placement strategy must return a tuple of waves")
+            raise TypeError("compiled UPMEM plan must provide a tuple of waves")
         expected = [id(tile) for tile in tiles]
         if len(expected) != len(set(expected)):
             raise ValueError("lowering contains duplicate tile objects")
         actual: list[int] = []
         for wave in waves:
             if not isinstance(wave, tuple) or not wave:
-                raise ValueError("placement strategy returned an empty or invalid wave")
+                raise ValueError(
+                    "compiled UPMEM plan contains an empty or invalid wave"
+                )
             if len(wave) > total_dpu_count:
-                raise ValueError("placement wave exceeds available DPU count")
+                raise ValueError("compiled UPMEM wave exceeds available DPU count")
             actual.extend(id(tile) for tile in wave)
         if len(actual) != len(set(actual)):
-            raise ValueError("placement strategy duplicated a tile across waves")
+            raise ValueError("compiled UPMEM plan duplicated a tile across waves")
         if set(actual) != set(expected):
-            raise ValueError("placement strategy omitted or replaced a tile")
+            raise ValueError("compiled UPMEM plan omitted or replaced a tile")
 
     def _validate_rank_assignments(
         self,
@@ -969,7 +1015,7 @@ class M5WholeCircuitSession:
         requests: list[tuple[Any, list[tuple[M5Tile, int]]]],
     ) -> None:
         if not isinstance(requests, list) or not requests:
-            raise ValueError("placement strategy returned no rank assignments")
+            raise ValueError("compiled UPMEM plan produced no rank assignments")
         expected_tiles = {id(tile) for tile in wave}
         assigned_tiles: list[int] = []
         assigned_ranks: set[int] = set()
@@ -978,13 +1024,15 @@ class M5WholeCircuitSession:
                 raise TypeError("rank assignment must be a (rank, assignments) tuple")
             rank, assignments = request
             if not any(rank is candidate for candidate in self.ranks):
-                raise ValueError("placement strategy returned a foreign rank object")
+                raise ValueError("compiled UPMEM plan referenced a foreign rank")
             rank_identity = id(rank)
             if rank_identity in assigned_ranks:
-                raise ValueError("placement strategy returned a rank more than once")
+                raise ValueError("compiled UPMEM plan repeated a rank assignment")
             assigned_ranks.add(rank_identity)
             if not isinstance(assignments, list) or not assignments:
-                raise ValueError("placement strategy returned an empty rank assignment")
+                raise ValueError(
+                    "compiled UPMEM plan contains an empty rank assignment"
+                )
             local_ids: set[int] = set()
             for assignment in assignments:
                 if not isinstance(assignment, tuple) or len(assignment) != 2:
@@ -992,20 +1040,20 @@ class M5WholeCircuitSession:
                 tile, local_id = assignment
                 if id(tile) not in expected_tiles:
                     raise ValueError(
-                        "placement strategy assigned a tile outside the wave"
+                        "compiled UPMEM plan assigned a tile outside the wave"
                     )
                 if not isinstance(local_id, int) or isinstance(local_id, bool):
                     raise TypeError("local DPU ID must be an integer")
                 if not 0 <= local_id < rank.local_dpus:
                     raise ValueError("local DPU ID is outside the assigned rank")
                 if local_id in local_ids:
-                    raise ValueError("placement strategy reused a local DPU ID")
+                    raise ValueError("compiled UPMEM plan reused a local DPU ID")
                 local_ids.add(local_id)
                 assigned_tiles.append(id(tile))
         if len(assigned_tiles) != len(set(assigned_tiles)):
-            raise ValueError("placement strategy assigned a wave tile more than once")
+            raise ValueError("compiled UPMEM plan assigned a wave tile more than once")
         if set(assigned_tiles) != expected_tiles:
-            raise ValueError("placement strategy omitted a wave tile")
+            raise ValueError("compiled UPMEM plan omitted a wave tile")
 
     @staticmethod
     def _delete_request_dir(artifact: Any) -> None:
@@ -1155,6 +1203,11 @@ class M5WholeCircuitSession:
             **self.engine._provenance,
             "strategy_identity": self.strategy_identity,
             "strategy_config_hash": self.strategy_config_hash,
+            "decomposition_strategy": _ACTIVE_MECHANISM_IDS["decomposition"],
+            "placement_strategy": _ACTIVE_MECHANISM_IDS["placement"],
+            "kernel_provider": _ACTIVE_MECHANISM_IDS["kernel"],
+            "reduction_provider": _ACTIVE_MECHANISM_IDS["reduction"],
+            "reduction_strategy": _ACTIVE_MECHANISM_IDS["reduction"],
             "target_observed": "physical_hardware" if verified else "not_verified",
             "requested_dpu_count": sum(rank.local_dpus for rank in self.ranks),
             "observed_rank_count": len(self.ranks),

@@ -32,12 +32,12 @@ final documentation set.
 |---|---|---|
 | WP0 baseline | complete | baseline tag, branch, inventory, and test result recorded |
 | WP1 research contract | complete | concise README and architecture agree on scope and claims |
-| WP2 semantic model | pending | direct DAG input validation; no active reverse TaskGraph adapter |
+| WP2 semantic model | complete | direct DAG input validation; no active reverse TaskGraph adapter |
 | WP3 planning | pending | one target-neutral planner/provenance boundary |
 | WP4 numerics | pending | host encoding/decoding and accuracy semantics are explicit |
-| WP5 mapping | pending | one deterministic `UpmemPlan` owns physical work and assignment |
-| WP6 runtime | pending | runtime consumes `UpmemPlan` without `ContractionTask` |
-| WP7 baselines | pending | same-DAG CPU timing is symmetric and external baselines are direct |
+| WP5 mapping | in progress | deterministic `UpmemPlan` owns work and assignment; active compiler still imports M5/v4 helpers |
+| WP6 runtime | in progress | runtime requires compiled node plans and has no strategy registry; M5/v4 engine/session shell remains |
+| WP7 baselines | in progress | same-DAG CPU timing is symmetric; external baseline adapters remain to simplify |
 | WP8 evidence | pending | one timing/evidence schema and compatibility policy |
 | WP9 interface | pending | stable CLI, two experiment files, at most ten Make targets |
 | WP10 cleanup | pending | historical/versioned active source is deleted |
@@ -47,10 +47,12 @@ final documentation set.
 
 | Adapter | Current location | Must be removed by |
 |---|---|---|
-| DAG node to `ContractionTask` | `execution/upmem.py` | WP6 |
+| DAG node to `ContractionTask` | removed in `7d497a2` | complete |
 | M5 engine/session wrapper | `targets/upmem/m5_whole_circuit_engine.py` | WP6 |
-| fake `TensorNetworkSpec(None, ...)` input validation | `execution/cpu.py` | WP2 |
-| M5/v4 defaults in generic contracts | `execution/contracts.py` | WP5 |
+| fake `TensorNetworkSpec(None, ...)` input validation | removed in `4907013` | complete |
+| `TensorInputs` wrapper | removed in `e66e2a3` | complete |
+| one-implementation M5 strategy registry | removed in current WP6 batch | complete |
+| M5/v4 defaults in generic contracts | `execution/contracts.py` | WP5/WP6 |
 | milestone CLI and Make targets | `bench/__main__.py`, `Makefile` | WP9 |
 
 ## Complexity Delta
@@ -59,11 +61,11 @@ Update this table after each integration batch.
 
 | Metric | Baseline | Current | Target |
 |---|---:|---:|---:|
-| Active Python modules | 138 | 138 | 12-16 |
-| Class declarations | 307 | 307 | only stable boundary types |
-| Test modules | 78 | 78 | about 10 |
+| Active Python modules | 138 | 137 | 12-16 |
+| Class declarations | 307 | 301 | only stable boundary types |
+| Test modules | 78 | 77 | about 10 |
 | Config files | 63 | 63 | 2 principal experiments |
 | Public Make targets | 78 | 78 | 10 or fewer |
-| Active contraction IRs | 2 | 2 | 1 |
+| Active contraction IRs | 2 | 1 | 1 |
 | Active UPMEM plan schemas | multiple | multiple | 1 |
 | Active native ABIs | multiple | multiple | 1 |
