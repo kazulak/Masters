@@ -886,6 +886,7 @@ def _execute_combo(
     timing_breakdown = {
         key: value
         for key, value in {
+            "preparation_time_s": result.timing.preparation_s,
             "h2d_time_s": result.timing.h2d_s,
             "kernel_time_s": result.timing.kernel_s,
             "d2h_time_s": result.timing.d2h_s,
@@ -947,6 +948,7 @@ def _execute_combo(
         "executor_config_hash": executor_hash,
         "timing": timing,
         "timing_breakdown": timing_breakdown,
+        "preparation_time_s": timing_breakdown.get("preparation_time_s"),
         "h2d_time_s": timing_breakdown.get("h2d_time_s"),
         "kernel_time_s": timing_breakdown.get("kernel_time_s"),
         "d2h_time_s": timing_breakdown.get("d2h_time_s"),
@@ -1208,6 +1210,7 @@ def _timing_metadata(result: ExecutionResult) -> dict[str, float]:
         key: value
         for key, value in {
             "total_s": timing.route_total_s,
+            "preparation_time_s": timing.preparation_s,
             "h2d_time_s": timing.h2d_s,
             "kernel_time_s": timing.kernel_s,
             "d2h_time_s": timing.d2h_s,

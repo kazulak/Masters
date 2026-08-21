@@ -641,7 +641,7 @@ def test_run_upmem_hashes_every_measured_output_and_rejects_nondeterminism(
     assert session.closed
 
 
-def test_packed_tile_assembly_is_not_double_counted_as_dequantization() -> None:
+def test_packed_tile_assembly_and_dequantization_are_separate() -> None:
     from types import SimpleNamespace
 
     import quantum_bench.execution.upmem as module
@@ -653,8 +653,9 @@ def test_packed_tile_assembly_is_not_double_counted_as_dequantization() -> None:
                 "physical_plan_consumed": True,
                 "application_visible_h2d_bytes": 8,
                 "application_visible_d2h_bytes": 4,
-                "host_dequantization_timing_overlap": True,
                 "timing": {
+                    "host_quantization_time_s": 0.25,
+                    "preparation_time_s": 0.5,
                     "host_tile_assembly_time_s": 0.25,
                     "host_dequantization_time_s": 0.25,
                 },
@@ -666,7 +667,9 @@ def test_packed_tile_assembly_is_not_double_counted_as_dequantization() -> None:
     )
 
     assert aggregate.reduction_s == pytest.approx(0.25)
-    assert aggregate.host_dequantization_s == 0.0
+    assert aggregate.host_quantization_s == pytest.approx(0.25)
+    assert aggregate.preparation_s == pytest.approx(0.5)
+    assert aggregate.host_dequantization_s == pytest.approx(0.25)
 
 
 def test_run_upmem_reduces_sliced_contracts_on_host(

@@ -36,7 +36,7 @@ final documentation set.
 | WP1 research contract | complete | concise README and architecture agree on scope and claims |
 | WP2 semantic model | complete | direct DAG input validation; no active reverse TaskGraph adapter |
 | WP3 planning | complete | active planners consume tensor metadata and emit one planner result/provenance record without TaskGraph lowering |
-| WP4 numerics | pending | host encoding/decoding and accuracy semantics are explicit |
+| WP4 numerics | complete | shared pure encode/contract/decode boundary; conversion, kernel, reduction, and decode timings are non-overlapping |
 | WP5 mapping | in progress | deterministic `UpmemPlan` owns work and assignment; active compiler still imports M5/v4 helpers |
 | WP6 runtime | in progress | runtime requires compiled node plans and has no strategy registry; M5/v4 engine/session shell remains |
 | WP7 baselines | in progress | same-DAG CPU timing is symmetric; external baseline adapters remain to simplify |

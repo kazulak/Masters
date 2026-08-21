@@ -29,6 +29,7 @@ _MAX_TIMING_ROUTE_PANELS = 8
 _TIMING_STAGE_ORDER = (
     "planning",
     "session_open",
+    "preparation",
     "host_quantization",
     "h2d",
     "kernel",
@@ -41,6 +42,7 @@ _TIMING_STAGE_ORDER = (
 _TIMING_STAGE_LABELS = {
     "planning": "Planning",
     "session_open": "Session open",
+    "preparation": "Host preparation",
     "host_quantization": "Host quantization",
     "h2d": "H2D",
     "kernel": "Kernel",
@@ -3285,6 +3287,7 @@ def _timing_rows(rows: list[JsonDict]) -> list[JsonDict]:
     leaf_stages = (
         ("planning", ("planning_time_s", "planning_s", "planning")),
         ("session_open", ("session_open_s", "session_open_time_s")),
+        ("preparation", ("preparation_time_s", "preparation_s")),
         (
             "host_quantization",
             ("host_quantization_time_s", "host_quantization_s"),
@@ -3307,6 +3310,7 @@ def _timing_rows(rows: list[JsonDict]) -> list[JsonDict]:
         "launch_time_s",
     )
     execution_stage_aliases = (
+        ("preparation_time_s", "preparation_s"),
         ("host_quantization_time_s", "host_quantization_s"),
         ("h2d_time_s", "h2d_s"),
         kernel_aliases,

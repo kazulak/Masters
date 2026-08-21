@@ -49,6 +49,7 @@ class _Aggregate:
     h2d_bytes: int = 0
     d2h_bytes: int = 0
     host_quantization_s: float = 0.0
+    preparation_s: float = 0.0
     h2d_s: float = 0.0
     kernel_s: float = 0.0
     d2h_s: float = 0.0
@@ -65,7 +66,9 @@ class _Aggregate:
         if not isinstance(timing, Mapping):
             timing = {}
         if metadata.get("physical_plan_consumed") is not True:
-            raise RuntimeError("UPMEM task result did not consume the compiled physical plan")
+            raise RuntimeError(
+                "UPMEM task result did not consume the compiled physical plan"
+            )
         self.physical_plan_consumed = True
         self.h2d_bytes += _required_byte_count(
             metadata,
@@ -78,18 +81,23 @@ class _Aggregate:
             "d2h_bytes",
         )
         self.host_quantization_s += _seconds(
-            timing.get("host_quantization_time_s", metadata.get("host_quantization_time_s", 0.0))
+            timing.get(
+                "host_quantization_time_s",
+                metadata.get("host_quantization_time_s", 0.0),
+            )
+        )
+        self.preparation_s += _seconds(
+            timing.get("preparation_time_s", metadata.get("preparation_time_s", 0.0))
         )
         self.h2d_s += _seconds(timing.get("h2d_time_s", 0.0))
         self.kernel_s += _seconds(timing.get("kernel_time_s", 0.0))
         self.d2h_s += _seconds(timing.get("d2h_time_s", 0.0))
-        if metadata.get("host_dequantization_timing_overlap") is not True:
-            self.host_dequantization_s += _seconds(
-                timing.get(
-                    "host_dequantization_time_s",
-                    metadata.get("host_dequantization_time_s", 0.0),
-                )
+        self.host_dequantization_s += _seconds(
+            timing.get(
+                "host_dequantization_time_s",
+                metadata.get("host_dequantization_time_s", 0.0),
             )
+        )
         self.reduction_s += _seconds(
             timing.get(
                 "host_tile_assembly_time_s",
@@ -212,6 +220,7 @@ def run_upmem(
         executed_node_ids=completed_node_ids,
         timing=TimingBreakdown(
             host_quantization_s=aggregate.host_quantization_s or None,
+            preparation_s=aggregate.preparation_s or None,
             h2d_s=aggregate.h2d_s or None,
             kernel_s=aggregate.kernel_s or None,
             d2h_s=aggregate.d2h_s or None,
@@ -301,7 +310,9 @@ def _execute_once(
         elif isinstance(node, ReduceNode):
             reduction_started = time.perf_counter()
             value = np.sum(
-                np.stack([_resolve_view(view, tensors) for view in node.inputs], axis=0),
+                np.stack(
+                    [_resolve_view(view, tensors) for view in node.inputs], axis=0
+                ),
                 axis=0,
             )
             if aggregate is not None:
@@ -345,7 +356,9 @@ def _validate_invocation(
     if context.target is not Target.UPMEM:
         raise ValueError("run_upmem requires an UPMEM RunContext")
     if context.warmups < 0 or context.repetitions < 1:
-        raise ValueError("warmups must be non-negative and repetitions must be positive")
+        raise ValueError(
+            "warmups must be non-negative and repetitions must be positive"
+        )
     if context.timeout_s is not None and (
         context.timeout_s <= 0 or not math.isfinite(context.timeout_s)
     ):
@@ -450,9 +463,7 @@ def _facts_from_metadata(
         dispatch_id=_observed_text(metadata, "dispatch_mode"),
         kernel_id=_observed_text(metadata, "kernel_identity"),
         execution_class=_observed_text(metadata, "execution_class"),
-        intermediate_placement=_observed_text(
-            metadata, "graph_intermediate_placement"
-        ),
+        intermediate_placement=_observed_text(metadata, "graph_intermediate_placement"),
         intermediate_placement_origin=_observed_text(
             metadata, "graph_intermediate_placement_origin"
         ),
@@ -475,7 +486,9 @@ def _facts_from_metadata(
         ),
         native_kernel_executed=bool(metadata.get("native_kernel_executed", False)),
         hardware_kernel_executed=bool(metadata.get("hardware_kernel_executed", False)),
-        simulator_kernel_executed=bool(metadata.get("simulator_kernel_executed", False)),
+        simulator_kernel_executed=bool(
+            metadata.get("simulator_kernel_executed", False)
+        ),
         cpu_fallback_used=bool(metadata.get("cpu_fallback_used", False)),
         physical_plan_consumed=bool(metadata.get("physical_plan_consumed", False)),
     )
@@ -548,7 +561,10 @@ def _required_byte_count(metadata: Mapping[str, Any], *keys: str) -> int:
     values = [metadata[key] for key in keys if key in metadata]
     if not values:
         raise RuntimeError(f"UPMEM task metadata is missing {keys[0]}")
-    if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in values):
+    if any(
+        not isinstance(value, int) or isinstance(value, bool) or value < 0
+        for value in values
+    ):
         raise RuntimeError(f"UPMEM task metadata has invalid {keys[0]}")
     parsed = [int(value) for value in values]
     if len(set(parsed)) != 1:

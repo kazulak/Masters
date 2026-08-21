@@ -22,8 +22,11 @@ from typing import Any, Callable, Mapping, Protocol
 
 import numpy as np
 
-from quantum_bench.formats.fixed_point import FixedPointSpec, quantize_fixed_point
-from quantum_bench.execution.contracts import UpmemNodePlan
+from quantum_bench.execution.contracts import NumericMode, UpmemNodePlan
+from quantum_bench.execution.numeric import (
+    decode_contraction_output,
+    encode_tensor,
+)
 from quantum_bench.tn.graph import ContractNode
 from quantum_bench.targets.upmem.execution_plan_v4 import (
     MAX_INT32_SAFE_K,
@@ -215,18 +218,6 @@ def _request_contract_hash(
     return _sha256_bytes(payload)
 
 
-def _real_float32(value: np.ndarray) -> np.ndarray:
-    array = np.asarray(value)
-    if np.iscomplexobj(array):
-        if np.any(np.imag(array) != 0):
-            raise ValueError("M5 whole-circuit engine requires real-valued tensors")
-        array = np.real(array)
-    result = np.asarray(array, dtype=np.float32)
-    if not np.all(np.isfinite(result)):
-        raise ValueError("M5 whole-circuit engine requires finite float32 values")
-    return result
-
-
 def _build_work_unit(
     tile: M5Tile,
     local_dpu_id: int,
@@ -291,10 +282,22 @@ def _assemble_output(
     packed: bool,
     scale: float,
 ) -> np.ndarray:
-    canonical = lowering.assemble(partials, dtype=np.int64 if packed else np.float64)
-    if packed:
-        return np.asarray(canonical, dtype=np.float32) * np.float32(scale)
-    return np.asarray(canonical, dtype=np.float32)
+    accumulator = _assemble_accumulator(lowering, partials, packed=packed)
+    mode = (
+        NumericMode.HOST_PACKED_INT8_PER_TASK_V1 if packed else NumericMode.FLOAT32_REAL
+    )
+    return decode_contraction_output(accumulator, mode, scale)
+
+
+def _assemble_accumulator(
+    lowering: M5TileLowering,
+    partials: Mapping[str, np.ndarray],
+    *,
+    packed: bool,
+) -> np.ndarray:
+    """Assemble tile outputs without applying numeric output decoding."""
+
+    return lowering.assemble(partials, dtype=np.int64 if packed else np.float64)
 
 
 @dataclass(frozen=True)
@@ -587,17 +590,24 @@ class M5WholeCircuitSession:
         canonical_right = lowering.canonical.right
         quantization_metadata: dict[str, Any] = {}
         left_scale = right_scale = 1.0
+        numeric_mode = (
+            NumericMode.HOST_PACKED_INT8_PER_TASK_V1
+            if packed
+            else NumericMode.FLOAT32_REAL
+        )
+        quantization_started = time.perf_counter()
+        left_payload, left_scale, left_saturation = encode_tensor(
+            canonical_left, numeric_mode
+        )
+        right_payload, right_scale, right_saturation = encode_tensor(
+            canonical_right, numeric_mode
+        )
+        preparation_time_s = time.perf_counter() - quantization_started
+        canonical_left = left_payload
+        canonical_right = right_payload
         if packed:
-            left_quantized = quantize_fixed_point(
-                canonical_left, FixedPointSpec(route_dtype="int8")
-            )
-            right_quantized = quantize_fixed_point(
-                canonical_right, FixedPointSpec(route_dtype="int8")
-            )
-            canonical_left = np.ascontiguousarray(left_quantized.array, dtype=np.int8)
-            canonical_right = np.ascontiguousarray(right_quantized.array, dtype=np.int8)
-            left_scale = float(left_quantized.record.scale)
-            right_scale = float(right_quantized.record.scale)
+            host_quantization_time_s = preparation_time_s
+            preparation_time_s = 0.0
             scale = float(left_scale * right_scale)
             if (
                 max((chunk.k_size for chunk in lowering.k_chunks), default=0)
@@ -614,23 +624,16 @@ class M5WholeCircuitSession:
                 "packed_int8_transport": True,
                 "left_scale": left_scale,
                 "right_scale": right_scale,
-                "saturation_count": int(
-                    left_quantized.record.saturation_count
-                    + right_quantized.record.saturation_count
-                ),
-                "host_quantization_time_s": float(
-                    left_quantized.record.conversion_time_s
-                    + right_quantized.record.conversion_time_s
-                ),
+                "saturation_count": int(left_saturation + right_saturation),
+                "host_quantization_time_s": float(host_quantization_time_s),
             }
         else:
-            canonical_left = np.ascontiguousarray(_real_float32(canonical_left))
-            canonical_right = np.ascontiguousarray(_real_float32(canonical_right))
             scale = 1.0
-            quantization_metadata = {"packed_int8_transport": False}
-        host_quantization_time_s = float(
-            quantization_metadata.get("host_quantization_time_s", 0.0)
-        )
+            host_quantization_time_s = 0.0
+            quantization_metadata = {
+                "packed_int8_transport": False,
+                "preparation_time_s": float(preparation_time_s),
+            }
 
         partials: dict[str, np.ndarray] = {}
         bytes_h2d = bytes_d2h = 0
@@ -688,9 +691,13 @@ class M5WholeCircuitSession:
             raise
         self._remaining_timeout()
         assembly_started = time.perf_counter()
-        output = _assemble_output(lowering, partials, packed=packed, scale=scale)
+        accumulator = _assemble_accumulator(lowering, partials, packed=packed)
         host_tile_assembly_time_s = time.perf_counter() - assembly_started
-        host_dequantization_time_s = host_tile_assembly_time_s if packed else 0.0
+        decode_started = time.perf_counter()
+        output = decode_contraction_output(accumulator, numeric_mode, scale)
+        host_dequantization_time_s = (
+            time.perf_counter() - decode_started if packed else 0.0
+        )
         elapsed = time.perf_counter() - started
         return EngineTaskResult(
             output=output,
@@ -700,6 +707,7 @@ class M5WholeCircuitSession:
                 "timing": {
                     **timing,
                     "host_quantization_time_s": host_quantization_time_s,
+                    "preparation_time_s": preparation_time_s,
                     "host_dequantization_time_s": host_dequantization_time_s,
                     "host_tile_assembly_time_s": host_tile_assembly_time_s,
                     "total_route_time_s": elapsed,
@@ -717,9 +725,9 @@ class M5WholeCircuitSession:
                 "numeric_transport": numeric_transport,
                 "packed_int8_transfer": packed,
                 "host_quantization_time_s": host_quantization_time_s,
+                "preparation_time_s": preparation_time_s,
                 "host_dequantization_time_s": host_dequantization_time_s,
                 "host_tile_assembly_time_s": host_tile_assembly_time_s,
-                "host_dequantization_timing_overlap": packed,
                 "application_visible_h2d_bytes": bytes_h2d,
                 "application_visible_d2h_bytes": bytes_d2h,
                 "application_visible_transfer_bytes": bytes_h2d + bytes_d2h,

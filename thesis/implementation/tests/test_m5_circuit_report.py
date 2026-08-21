@@ -1061,6 +1061,7 @@ def test_ratio_tables_aggregate_only_matched_repetitions_with_quartiles(
 def test_report_preserves_study_timing_field_names(tmp_path: Path) -> None:
     row = _row(engine="upmem_m5", runtime=2.0, dpu_count=1)
     row.update(
+        preparation_time_s=0.35,
         h2d_time_s=0.1,
         kernel_time_s=0.2,
         d2h_time_s=0.3,
@@ -1070,6 +1071,7 @@ def test_report_preserves_study_timing_field_names(tmp_path: Path) -> None:
         session_open_s=0.7,
         session_close_s=0.8,
         timing_breakdown={
+            "preparation_time_s": 0.35,
             "h2d_time_s": 0.1,
             "kernel_time_s": 0.2,
             "d2h_time_s": 0.3,
@@ -1084,6 +1086,7 @@ def test_report_preserves_study_timing_field_names(tmp_path: Path) -> None:
     timing = _csv(tmp_path / "report" / "tables" / "timing_breakdown.csv")
     by_stage = {item["stage"]: float(item["time_s"]) for item in timing}
     assert by_stage == {
+        "preparation": pytest.approx(0.35),
         "h2d": pytest.approx(0.1),
         "kernel": pytest.approx(0.2),
         "d2h": pytest.approx(0.3),
@@ -1213,6 +1216,7 @@ def test_timing_breakdown_uses_only_leaf_stages_without_totals(
     row.update(
         planning_time_s=0.01,
         session_open_s=0.02,
+        preparation_time_s=0.025,
         host_quantization_time_s=0.03,
         h2d_s=0.04,
         dpu_kernel_time_s=0.05,
@@ -1226,10 +1230,11 @@ def test_timing_breakdown_uses_only_leaf_stages_without_totals(
     )
     generate_report([row], tmp_path / "report")
     timing = _csv(tmp_path / "report" / "tables" / "timing_breakdown.csv")
-    assert len(timing) == 10
+    assert len(timing) == 11
     assert {row["stage"] for row in timing} == {
         "planning",
         "session_open",
+        "preparation",
         "host_quantization",
         "h2d",
         "kernel",

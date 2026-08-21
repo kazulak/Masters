@@ -178,16 +178,23 @@ class _VerifiedPhysicalEngine:
                         "application_visible_d2h_bytes": 3,
                         "application_visible_transfer_bytes": 5,
                         "timing": {
+                            "preparation_time_s": 0.04
+                            if mode is NumericMode.FLOAT32_REAL
+                            else 0.0,
                             "h2d_time_s": 0.01,
                             "kernel_time_s": 0.02,
                             "d2h_time_s": 0.03,
-                            "host_quantization_time_s": 0.04,
+                            "host_quantization_time_s": 0.04
+                            if mode is NumericMode.HOST_PACKED_INT8_PER_TASK_V1
+                            else 0.0,
                             "host_dequantization_time_s": 0.05,
                         },
                         # The physical engine currently exposes host conversion
                         # times both directly and in its nested timing object.
                         # Aggregation must count each stage once.
-                        "host_quantization_time_s": 0.04,
+                        "host_quantization_time_s": 0.04
+                        if mode is NumericMode.HOST_PACKED_INT8_PER_TASK_V1
+                        else 0.0,
                         "host_dequantization_time_s": 0.05,
                         "request_level_speedup_applicable": False,
                         "request_timing_is_bringup_only": True,
@@ -598,7 +605,8 @@ def test_physical_success_requires_native_metadata_and_sums_task_bytes(
     assert rows[0]["h2d_time_s"] == pytest.approx(0.03)
     assert rows[0]["kernel_time_s"] == pytest.approx(0.06)
     assert rows[0]["d2h_time_s"] == pytest.approx(0.09)
-    assert rows[0]["host_quantization_time_s"] == pytest.approx(0.12)
+    assert rows[0]["preparation_time_s"] == pytest.approx(0.12)
+    assert rows[0]["host_quantization_time_s"] is None
     assert rows[0]["host_dequantization_time_s"] == pytest.approx(0.15)
     assert rows[0]["timing_breakdown"]["session_open_s"] >= 0.0
     assert rows[0]["timing_breakdown"]["graph_execution_s"] >= 0.0

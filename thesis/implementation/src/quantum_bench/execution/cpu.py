@@ -11,13 +11,20 @@ import numpy as np
 from quantum_bench.execution.contracts import (
     ExecutionPlan,
     ExecutionResult,
+    NumericMode,
     RunContext,
     Target,
     TimingBreakdown,
     validate_execution_plan,
     validate_execution_result,
 )
-from quantum_bench.execution.numeric import contract_node, reduce_values
+from quantum_bench.execution.numeric import (
+    contract_encoded_node,
+    contract_node,
+    decode_contraction_output,
+    encode_tensor,
+    reduce_values,
+)
 from quantum_bench.tn.graph import (
     ContractNode,
     ContractionDAG,
@@ -49,11 +56,18 @@ def run_cpu(
 
     output: np.ndarray | None = None
     output_digest: str | None = None
-    kernel_elapsed = 0.0
+    component_times = {
+        "host_quantization_s": 0.0,
+        "preparation_s": 0.0,
+        "kernel_s": 0.0,
+        "reduction_s": 0.0,
+        "host_dequantization_s": 0.0,
+        "route_total_s": 0.0,
+    }
     for _ in range(context.repetitions):
-        kernel_start = time.perf_counter()
-        output = _execute_nodes(plan, dag, tensors)
-        kernel_elapsed += time.perf_counter() - kernel_start
+        route_started = time.perf_counter()
+        output = _execute_nodes_timed(plan, dag, tensors, component_times)
+        component_times["route_total_s"] += time.perf_counter() - route_started
         digest = _array_hash(output)
         if output_digest is None:
             output_digest = digest
@@ -69,8 +83,12 @@ def run_cpu(
         output=returned_output,
         executed_node_ids=tuple(plan.payload.node_order),
         timing=TimingBreakdown(
-            kernel_s=kernel_elapsed,
-            route_total_s=kernel_elapsed,
+            host_quantization_s=component_times["host_quantization_s"] or None,
+            preparation_s=component_times["preparation_s"] or None,
+            kernel_s=component_times["kernel_s"] or None,
+            reduction_s=component_times["reduction_s"] or None,
+            host_dequantization_s=(component_times["host_dequantization_s"] or None),
+            route_total_s=component_times["route_total_s"] or None,
         ),
         output_hash=output_digest,
     )
@@ -85,6 +103,17 @@ def _execute_nodes(
 ) -> np.ndarray:
     """Execute the plan's explicit dependency order into a local tensor map."""
 
+    return _execute_nodes_timed(plan, dag, tensors, timings=None)
+
+
+def _execute_nodes_timed(
+    plan: ExecutionPlan,
+    dag: ContractionDAG,
+    tensors: dict[str, np.ndarray],
+    timings: dict[str, float] | None,
+) -> np.ndarray:
+    """Execute nodes while keeping numeric components separate from wall time."""
+
     node_by_id = {node.node_id: node for node in dag.nodes}
     working = dict(tensors)
     remaining_uses = _tensor_consumer_counts(dag)
@@ -96,10 +125,51 @@ def _execute_nodes(
         if isinstance(node, ContractNode):
             left = _resolve_view(node.left, working)
             right = _resolve_view(node.right, working)
-            result = contract_node(node, left, right, plan.payload.numeric_mode)
+            if timings is None:
+                result = contract_node(node, left, right, plan.payload.numeric_mode)
+            else:
+                preparation_started = time.perf_counter()
+                left_payload, left_scale, _ = encode_tensor(
+                    left, plan.payload.numeric_mode
+                )
+                right_payload, right_scale, _ = encode_tensor(
+                    right, plan.payload.numeric_mode
+                )
+                preparation_elapsed = time.perf_counter() - preparation_started
+                if (
+                    plan.payload.numeric_mode
+                    is NumericMode.HOST_PACKED_INT8_PER_TASK_V1
+                ):
+                    timings["host_quantization_s"] += preparation_elapsed
+                else:
+                    timings["preparation_s"] += preparation_elapsed
+                kernel_started = time.perf_counter()
+                accumulator = contract_encoded_node(
+                    node,
+                    left_payload,
+                    right_payload,
+                    plan.payload.numeric_mode,
+                )
+                timings["kernel_s"] += time.perf_counter() - kernel_started
+                decode_started = time.perf_counter()
+                result = decode_contraction_output(
+                    accumulator,
+                    plan.payload.numeric_mode,
+                    left_scale * right_scale,
+                )
+                if (
+                    plan.payload.numeric_mode
+                    is NumericMode.HOST_PACKED_INT8_PER_TASK_V1
+                ):
+                    timings["host_dequantization_s"] += (
+                        time.perf_counter() - decode_started
+                    )
         elif isinstance(node, ReduceNode):
             values = [_resolve_view(view, working) for view in node.inputs]
+            reduction_started = time.perf_counter()
             result = reduce_values(tuple(values))
+            if timings is not None:
+                timings["reduction_s"] += time.perf_counter() - reduction_started
         else:  # pragma: no cover - GraphNode is closed by the graph contract
             raise TypeError(f"Unsupported DAG node: {type(node).__name__}")
         expected = node.output.shape
@@ -117,10 +187,7 @@ def _execute_nodes(
             if tensor_id not in evictable_tensor_ids:
                 continue
             remaining_uses[tensor_id] -= 1
-            if (
-                remaining_uses[tensor_id] == 0
-                and tensor_id != dag.output.tensor_id
-            ):
+            if remaining_uses[tensor_id] == 0 and tensor_id != dag.output.tensor_id:
                 del working[tensor_id]
 
     return _resolve_view(dag.output, working)
@@ -155,10 +222,14 @@ def _validate_cpu_invocation(
     if context.target is not Target.CPU:
         raise ValueError("run_cpu requires a CPU RunContext")
     if context.warmups < 0 or context.repetitions < 1:
-        raise ValueError("warmups must be non-negative and repetitions must be positive")
+        raise ValueError(
+            "warmups must be non-negative and repetitions must be positive"
+        )
     actual_hash = contraction_dag_hash(dag)
     if plan.contraction_dag_hash != actual_hash:
-        raise ValueError("execution plan hash does not match the supplied contraction DAG")
+        raise ValueError(
+            "execution plan hash does not match the supplied contraction DAG"
+        )
     _validate_runtime_node_order(dag, tuple(plan.payload.node_order))
 
     validate_dag_inputs(dag, inputs)
@@ -187,13 +258,17 @@ def _resolve_view(view: TensorView, tensors: dict[str, np.ndarray]) -> np.ndarra
     try:
         array = tensors[view.tensor_id]
     except KeyError as exc:
-        raise ValueError(f"Tensor {view.tensor_id} is not available for execution") from exc
+        raise ValueError(
+            f"Tensor {view.tensor_id} is not available for execution"
+        ) from exc
     if not view.slice_spec:
         return array
     indices: list[slice | int] = [slice(None)] * array.ndim
     for axis, value in view.slice_spec:
         if axis < 0 or axis >= array.ndim:
-            raise ValueError(f"Tensor view {view.tensor_id} has invalid fixed axis {axis}")
+            raise ValueError(
+                f"Tensor view {view.tensor_id} has invalid fixed axis {axis}"
+            )
         indices[axis] = int(value)
     result = array[tuple(indices)]
     if tuple(result.shape) != view.shape:

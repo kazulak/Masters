@@ -387,6 +387,8 @@ def test_float_and_packed_int8_match_reference_across_k_chunks(tmp_path: Path) -
     assert float_result.metadata["k_chunk_count"] == 2
     assert len(float_result.metadata["request_manifest_hashes"]) == 2
     assert float_result.metadata["application_visible_transfer_bytes"] == 30
+    assert float_result.metadata["host_quantization_time_s"] == 0.0
+    assert float_result.metadata["preparation_time_s"] >= 0.0
     assert (
         float_result.metadata["application_visible_transfer_bytes"]
         == float_result.metadata["application_visible_h2d_bytes"]
@@ -400,6 +402,8 @@ def test_float_and_packed_int8_match_reference_across_k_chunks(tmp_path: Path) -
     assert packed_result.metadata["packed_int8_transport"]
     assert packed_result.metadata["host_quantization_time_s"] >= 0.0
     assert packed_result.metadata["host_dequantization_time_s"] >= 0.0
+    assert packed_result.metadata["preparation_time_s"] == 0.0
+    assert "host_dequantization_timing_overlap" not in packed_result.metadata
     assert packed_result.metadata["graph_intermediate_placement"] == "host_managed"
     assert packed_result.metadata["profile"] == "m5_whole_circuit_v4_v1"
     assert packed_result.metadata["abi"] == "execution_plan_v4"
@@ -418,6 +422,36 @@ def test_float_and_packed_int8_match_reference_across_k_chunks(tmp_path: Path) -
         float_result.metadata["request_contract_sha256"]
         != packed_result.metadata["request_contract_sha256"]
     )
+
+
+def test_packed_request_contract_uses_float32_canonical_inputs(
+    tmp_path: Path,
+) -> None:
+    node = _task(k=3, m=1, n=1)
+    left64 = np.array([[1.00000006, -0.33333334, 0.12500001]], dtype=np.float64)
+    right64 = np.array([[0.75], [-0.5], [0.25000003]], dtype=np.float64)
+
+    session64 = _engine(tmp_path / "float64", dpu_count=1).open_session(
+        HostPackedInt8Policy(), _topology(1)
+    )
+    result64 = session64.execute(node, left64, right64)
+    session64.close()
+
+    session32 = _engine(tmp_path / "float32", dpu_count=1).open_session(
+        HostPackedInt8Policy(), _topology(1)
+    )
+    result32 = session32.execute(
+        node, left64.astype(np.float32), right64.astype(np.float32)
+    )
+    session32.close()
+
+    assert (
+        result64.metadata["request_contract_sha256"]
+        == result32.metadata["request_contract_sha256"]
+    )
+    assert result64.metadata["left_scale"] == result32.metadata["left_scale"]
+    assert result64.metadata["right_scale"] == result32.metadata["right_scale"]
+    np.testing.assert_array_equal(result64.output, result32.output)
 
 
 def test_compiled_work_units_reach_native_request_artifact(tmp_path: Path) -> None:

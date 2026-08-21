@@ -191,7 +191,9 @@ def test_cpu_mapping_validation_rejects_missing_extra_shape_and_dtype() -> None:
             )
 
 
-def test_cpu_hashes_outputs_after_measured_execution(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cpu_hashes_outputs_after_measured_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import quantum_bench.execution.cpu as cpu_module
 
     dag = _matrix_dag()
@@ -203,9 +205,12 @@ def test_cpu_hashes_outputs_after_measured_execution(monkeypatch: pytest.MonkeyP
         return clock[0]
 
     def execute_nodes(*args: object, **kwargs: object) -> np.ndarray:
-        del args, kwargs
+        del kwargs
         events.append("execute")
         clock[0] += 2.0
+        timings = args[3]
+        assert isinstance(timings, dict)
+        timings["kernel_s"] += 2.0
         return np.ones((2, 2), dtype=np.float32)
 
     def array_hash(array: np.ndarray) -> str:
@@ -215,12 +220,15 @@ def test_cpu_hashes_outputs_after_measured_execution(monkeypatch: pytest.MonkeyP
         return "digest"
 
     monkeypatch.setattr(cpu_module.time, "perf_counter", perf_counter)
-    monkeypatch.setattr(cpu_module, "_execute_nodes", execute_nodes)
+    monkeypatch.setattr(cpu_module, "_execute_nodes_timed", execute_nodes)
     monkeypatch.setattr(cpu_module, "_array_hash", array_hash)
     result = execute(
         plan,
         dag,
-        {"a": np.ones((2, 3), dtype=np.float64), "b": np.ones((3, 2), dtype=np.float64)},
+        {
+            "a": np.ones((2, 3), dtype=np.float64),
+            "b": np.ones((3, 2), dtype=np.float64),
+        },
         RunContext(run_id="hash-order", target=Target.CPU, repetitions=2),
     )
 
@@ -228,6 +236,55 @@ def test_cpu_hashes_outputs_after_measured_execution(monkeypatch: pytest.MonkeyP
     assert result.output_hash == "digest"
     assert result.timing.kernel_s == 4.0
     assert result.timing.route_total_s == 4.0
+
+
+def test_cpu_timing_keeps_preparation_and_kernel_regions_separate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import quantum_bench.execution.cpu as cpu_module
+
+    dag = _matrix_dag()
+    plan = _compile(dag, NumericMode.FLOAT32_REAL)
+    clock = [0.0]
+
+    def perf_counter() -> float:
+        return clock[0]
+
+    def encode(array: np.ndarray, mode: NumericMode) -> tuple[np.ndarray, float, int]:
+        del mode
+        clock[0] += 1.0
+        return np.ascontiguousarray(array, dtype=np.float32), 1.0, 0
+
+    def contract(*args: object, **kwargs: object) -> np.ndarray:
+        del args, kwargs
+        clock[0] += 2.0
+        return np.ones((2, 2), dtype=np.float32)
+
+    def decode(accumulator: np.ndarray, mode: NumericMode, scale: float) -> np.ndarray:
+        del mode, scale
+        clock[0] += 3.0
+        return accumulator
+
+    monkeypatch.setattr(cpu_module.time, "perf_counter", perf_counter)
+    monkeypatch.setattr(cpu_module, "encode_tensor", encode)
+    monkeypatch.setattr(cpu_module, "contract_encoded_node", contract)
+    monkeypatch.setattr(cpu_module, "decode_contraction_output", decode)
+
+    result = execute(
+        plan,
+        dag,
+        _inputs(
+            ("a", np.ones((2, 3), dtype=np.float64)),
+            ("b", np.ones((3, 2), dtype=np.float64)),
+        ),
+        RunContext(run_id="timing-components", target=Target.CPU),
+    )
+
+    assert result.timing.preparation_s == 2.0
+    assert result.timing.host_quantization_s is None
+    assert result.timing.kernel_s == 2.0
+    assert result.timing.host_dequantization_s is None
+    assert result.timing.route_total_s == 7.0
 
 
 def test_execution_plan_hash_changes_for_each_numeric_mode() -> None:
@@ -269,7 +326,10 @@ def test_chain_matches_einsum_and_does_not_mutate_inputs() -> None:
     assert np.array_equal(result.output, expected)
     assert result.output_hash == _hash(expected)
     assert result.executed_node_ids == ("contract_0", "contract_1")
-    assert all(np.array_equal(current, original) for current, original in zip((a, b, c), originals))
+    assert all(
+        np.array_equal(current, original)
+        for current, original in zip((a, b, c), originals)
+    )
 
 
 def test_cpu_releases_produced_intermediate_after_last_consumer(
@@ -292,14 +352,14 @@ def test_cpu_releases_produced_intermediate_after_last_consumer(
     )
     plan = _compile(dag)
     produced: list[weakref.ReferenceType[np.ndarray]] = []
-    original_contract = cpu_module.contract_node
+    original_decode = cpu_module.decode_contraction_output
 
-    def tracked_contract(*args: object, **kwargs: object) -> np.ndarray:
-        result = original_contract(*args, **kwargs)
+    def tracked_decode(*args: object, **kwargs: object) -> np.ndarray:
+        result = original_decode(*args, **kwargs)
         produced.append(weakref.ref(result))
         return result
 
-    monkeypatch.setattr(cpu_module, "contract_node", tracked_contract)
+    monkeypatch.setattr(cpu_module, "decode_contraction_output", tracked_decode)
     result = execute(
         plan,
         dag,
@@ -438,7 +498,10 @@ def test_compile_rejects_dag_hash_mismatch() -> None:
     dag = _dag(
         TensorNetworkSpec(
             None,
-            (TensorSpec("a", (0,), (2,), "dense"), TensorSpec("b", (0,), (2,), "dense")),
+            (
+                TensorSpec("a", (0,), (2,), "dense"),
+                TensorSpec("b", (0,), (2,), "dense"),
+            ),
             (),
             "a,b->",
         ),
@@ -452,7 +515,10 @@ def test_gpu_is_explicitly_unsupported() -> None:
     dag = _dag(
         TensorNetworkSpec(
             None,
-            (TensorSpec("a", (0,), (2,), "dense"), TensorSpec("b", (0,), (2,), "dense")),
+            (
+                TensorSpec("a", (0,), (2,), "dense"),
+                TensorSpec("b", (0,), (2,), "dense"),
+            ),
             (),
             "a,b->",
         ),
@@ -467,7 +533,10 @@ def test_upmem_execution_is_explicitly_unsupported_without_fallback() -> None:
     dag = _dag(
         TensorNetworkSpec(
             None,
-            (TensorSpec("a", (0,), (2,), "dense"), TensorSpec("b", (0,), (2,), "dense")),
+            (
+                TensorSpec("a", (0,), (2,), "dense"),
+                TensorSpec("b", (0,), (2,), "dense"),
+            ),
             (),
             "a,b->",
         ),
