@@ -37,7 +37,15 @@ def plan_task_graph_with_config(network: TensorNetworkValue, planner_config: dic
 
 
 def plan_task_graph_with_planner(network: TensorNetworkValue, planner: PathPlanner) -> TaskGraph:
-    planner_result = planner.plan(network)
+    return materialize_task_graph_from_planner_result(network, planner.plan(network))
+
+
+def materialize_task_graph_from_planner_result(
+    network: TensorNetworkValue,
+    planner_result: PlannerResult,
+) -> TaskGraph:
+    """Build the legacy TaskGraph from one already-selected planner result."""
+
     active = list(network.spec.tensors)
     produced_by: dict[str, str | None] = {tensor.id: tensor.produced_by for tensor in active}
     tasks: list[ContractionTask] = []

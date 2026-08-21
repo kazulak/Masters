@@ -15,7 +15,51 @@ class TensorNetworkValue:
     tensors: list[TensorValue]
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TensorInput:
+    """One numerical tensor payload, kept outside network structure."""
+
+    tensor_id: str
+    array: np.ndarray
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TensorInputs:
+    """Immutable collection boundary for execution inputs.
+
+    NumPy arrays are mutable objects, so executors must treat them as read-only.
+    The tuple prevents the pipeline itself from adding or replacing inputs.
+    """
+
+    values: tuple[TensorInput, ...]
+
+
 def build_tensor_network(circuit: CircuitSpec) -> TensorNetworkValue:
+    """Build the legacy combined structure/value view.
+
+    New execution code should use :func:`build_tensor_network_data`.  This
+    adapter remains while historical routes and evidence readers are migrated.
+    """
+
+    spec, inputs = build_tensor_network_data(circuit)
+    specs_by_id = {tensor.id: tensor for tensor in spec.tensors}
+    return TensorNetworkValue(
+        spec,
+        [
+            TensorValue(
+                specs_by_id[value.tensor_id],
+                value.array,
+            )
+            for value in inputs.values
+        ],
+    )
+
+
+def build_tensor_network_data(
+    circuit: CircuitSpec,
+) -> tuple[TensorNetworkSpec, TensorInputs]:
+    """Build immutable tensor-network structure and separate numerical inputs."""
+
     tensors: list[TensorValue] = []
     counter = 0
     wire_label: dict[int, int] = {}
@@ -53,7 +97,47 @@ def build_tensor_network(circuit: CircuitSpec) -> TensorNetworkValue:
         output_labels=output_labels,
         einsum_expression=expression,
     )
-    return TensorNetworkValue(network_spec, tensors)
+    inputs = TensorInputs(
+        values=tuple(
+            TensorInput(tensor_id=tensor.spec.id, array=np.asarray(tensor.array))
+            for tensor in tensors
+        )
+    )
+    validate_tensor_inputs(network_spec, inputs)
+    return network_spec, inputs
+
+
+def validate_tensor_inputs(network: TensorNetworkSpec, inputs: TensorInputs) -> None:
+    """Validate that execution inputs match network descriptors exactly."""
+
+    specs = {tensor.id: tensor for tensor in network.tensors}
+    if len(specs) != len(network.tensors):
+        raise ValueError("Tensor network contains duplicate tensor ids")
+    values = {value.tensor_id: value for value in inputs.values}
+    if len(values) != len(inputs.values):
+        raise ValueError("Tensor inputs contain duplicate tensor ids")
+    if set(values) != set(specs):
+        missing = sorted(set(specs) - set(values))
+        extra = sorted(set(values) - set(specs))
+        raise ValueError(f"Tensor input ids do not match network: missing={missing} extra={extra}")
+    for tensor_id, value in values.items():
+        array = np.asarray(value.array)
+        if tuple(array.shape) != specs[tensor_id].shape:
+            raise ValueError(
+                f"Tensor input {tensor_id} shape {array.shape} "
+                f"does not match descriptor {specs[tensor_id].shape}"
+            )
+        if array.dtype != np.dtype(specs[tensor_id].dtype):
+            raise ValueError(
+                f"Tensor input {tensor_id} dtype {array.dtype} "
+                f"does not match descriptor {specs[tensor_id].dtype}"
+            )
+
+
+def tensor_input_map(inputs: TensorInputs) -> dict[str, np.ndarray]:
+    """Return a fresh lookup table without copying or mutating tensor arrays."""
+
+    return {value.tensor_id: np.asarray(value.array) for value in inputs.values}
 
 
 def build_full_einsum_expression(tensors: list[TensorSpec], output_labels: tuple[int, ...]) -> str:

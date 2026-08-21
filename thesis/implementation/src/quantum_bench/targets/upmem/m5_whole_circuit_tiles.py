@@ -260,6 +260,14 @@ def canonicalize_binary_contraction(
     _validate_labels(left_labels, right_labels, output_labels)
     dimensions = _label_dimensions(left_labels, right_labels, left_array, right_array)
 
+    b, m, k, n = canonical_label_geometry(
+        left_labels,
+        tuple(left_array.shape),
+        right_labels,
+        tuple(right_array.shape),
+        output_labels,
+    )
+
     right_set = set(right_labels)
     output_set = set(output_labels)
     shared = set(left_labels) & set(right_labels)
@@ -295,10 +303,6 @@ def canonicalize_binary_contraction(
     right_reduced_array = _sum_labels(right_array, right_labels, right_reduced)
     left_order = batch + free_left + contracted
     right_order = batch + contracted + free_right
-    b = _product(tuple(dimensions[label] for label in batch))
-    m = _product(tuple(dimensions[label] for label in free_left))
-    k = _product(tuple(dimensions[label] for label in contracted))
-    n = _product(tuple(dimensions[label] for label in free_right))
     left_matrix = _as_batched_matrix(
         left_reduced_array,
         _remaining_labels(left_labels, left_reduced),
@@ -439,16 +443,89 @@ def _validate_labels(
         raise TileLoweringError("output_label_missing_from_inputs")
 
 
+def canonical_label_geometry(
+    left_labels: tuple[int, ...],
+    left_shape: tuple[int, ...],
+    right_labels: tuple[int, ...],
+    right_shape: tuple[int, ...],
+    output_labels: tuple[int, ...],
+) -> tuple[int, int, int, int]:
+    """Return native M5 canonical ``(B, M, K, N)`` label geometry.
+
+    Labels omitted from only one operand are reduced before GEMM.  Only shared
+    labels omitted from the output contribute to ``K``.  This helper has no
+    array or hardware dependency so the execution compiler can use the exact
+    same semantic rule as tile lowering.
+    """
+
+    _validate_labels(left_labels, right_labels, output_labels)
+    dimensions = _label_dimensions_from_shapes(
+        left_labels, left_shape, right_labels, right_shape
+    )
+    right_set = set(right_labels)
+    output_set = set(output_labels)
+    shared = set(left_labels) & right_set
+    batch = tuple(
+        label for label in left_labels if label in shared and label in output_set
+    )
+    contracted = tuple(
+        label for label in left_labels if label in right_set and label not in output_set
+    )
+    left_reduced = tuple(
+        label
+        for label in left_labels
+        if label not in output_set and label not in contracted
+    )
+    right_reduced = tuple(
+        label
+        for label in right_labels
+        if label not in output_set and label not in contracted
+    )
+    free_left = tuple(
+        label
+        for label in left_labels
+        if label not in left_reduced and label not in contracted and label not in batch
+    )
+    free_right = tuple(
+        label
+        for label in right_labels
+        if label not in right_reduced and label not in contracted and label not in batch
+    )
+    return (
+        _product(tuple(dimensions[label] for label in batch)),
+        _product(tuple(dimensions[label] for label in free_left)),
+        _product(tuple(dimensions[label] for label in contracted)),
+        _product(tuple(dimensions[label] for label in free_right)),
+    )
+
+
 def _label_dimensions(
     left_labels: tuple[int, ...],
     right_labels: tuple[int, ...],
     left: np.ndarray,
     right: np.ndarray,
 ) -> dict[int, int]:
+    return _label_dimensions_from_shapes(
+        left_labels, tuple(left.shape), right_labels, tuple(right.shape)
+    )
+
+
+def _label_dimensions_from_shapes(
+    left_labels: tuple[int, ...],
+    left_shape: tuple[int, ...],
+    right_labels: tuple[int, ...],
+    right_shape: tuple[int, ...],
+) -> dict[int, int]:
+    if len(left_labels) != len(left_shape) or len(right_labels) != len(right_shape):
+        raise TileLoweringError("label_shape_rank_mismatch")
     dimensions: dict[int, int] = {}
-    for labels, array in ((left_labels, left), (right_labels, right)):
-        for axis, label in enumerate(labels):
-            dimension = int(array.shape[axis])
+    for labels, shape in ((left_labels, left_shape), (right_labels, right_shape)):
+        for label, raw_dimension in zip(labels, shape, strict=True):
+            dimension = int(raw_dimension)
+            if dimension < 1:
+                raise TileLoweringError(
+                    f"label_dimension_is_not_positive:{label}:{dimension}"
+                )
             previous = dimensions.setdefault(label, dimension)
             if previous != dimension:
                 raise TileLoweringError(

@@ -10,6 +10,7 @@ from quantum_bench.targets.upmem.m5_whole_circuit_tiles import (
     M5TileLimits,
     TileLoweringError,
     assemble_output_tiles,
+    canonical_label_geometry,
     lower_binary_contraction,
 )
 
@@ -76,6 +77,18 @@ def test_label_lowering_matches_contract_with_one_sided_reductions():
     assert lowering.canonical.left.shape == (1, 2, 3)
     assert lowering.canonical.right.shape == (1, 3, 1)
     assert lowering.canonical.canonical_output_labels == (10,)
+    assert canonical_label_geometry(
+        task.left_labels,
+        task.input_shapes[0],
+        task.right_labels,
+        task.input_shapes[1],
+        task.output_labels,
+    ) == (
+        lowering.canonical.b,
+        lowering.canonical.m,
+        lowering.canonical.k,
+        lowering.canonical.n,
+    )
 
 
 def test_label_lowering_restores_permuted_output_labels():
@@ -153,14 +166,12 @@ def test_remainder_tiles_are_contiguous_and_cover_output_without_overlap():
     )
 
 
-def test_zero_and_single_dimensions_have_valid_empty_or_zero_tiles():
+def test_zero_dimensions_are_rejected_before_tile_lowering():
     task = _task((0, 1), (2, 0), (1, 2), (0, 3), (0, 2), (2, 3))
     left = np.empty((2, 0), dtype=np.float32)
     right = np.empty((0, 3), dtype=np.float32)
-    lowering = lower_binary_contraction(task, left, right)
-    assert lowering.k_chunks[0].k_size == 0
-    actual = assemble_output_tiles(lowering, _tile_partials(lowering))
-    np.testing.assert_array_equal(actual, np.zeros((2, 3), dtype=np.float32))
+    with pytest.raises(TileLoweringError, match="label_dimension_is_not_positive"):
+        lower_binary_contraction(task, left, right)
 
 
 def test_preflight_is_conservative_and_reports_chunking():
