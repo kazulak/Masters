@@ -31,7 +31,7 @@ final documentation set.
 | Package | State | Exit condition |
 |---|---|---|
 | WP0 baseline | complete | baseline tag, branch, inventory, and test result recorded |
-| WP1 research contract | pending | concise README and architecture agree on scope and claims |
+| WP1 research contract | complete | concise README and architecture agree on scope and claims |
 | WP2 semantic model | pending | direct DAG input validation; no active reverse TaskGraph adapter |
 | WP3 planning | pending | one target-neutral planner/provenance boundary |
 | WP4 numerics | pending | host encoding/decoding and accuracy semantics are explicit |
