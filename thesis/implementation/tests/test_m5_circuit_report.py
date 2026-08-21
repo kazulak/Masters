@@ -124,6 +124,7 @@ def _valid_dag_v2(row: dict[str, object], dag_hash: str) -> None:
     )
     if row.get("target_observed") == "physical_hardware":
         row["native_identity_verified"] = True
+        row["physical_plan_consumed"] = True
 
 
 def _assert_no_duplicate_plot_identities(report_dir: Path) -> None:

@@ -22,6 +22,7 @@ from typing import Any, Callable, Mapping, Protocol
 import numpy as np
 
 from quantum_bench.formats.fixed_point import FixedPointSpec, quantize_fixed_point
+from quantum_bench.execution.contracts import UpmemNodePlan
 from quantum_bench.tn.graph import ContractNode
 from quantum_bench.targets.upmem.execution_plan_v4 import (
     MAX_INT32_SAFE_K,
@@ -506,7 +507,12 @@ class M5WholeCircuitSession:
         return self._strategy_configuration.sha256
 
     def execute(
-        self, node: ContractNode, left: np.ndarray, right: np.ndarray
+        self,
+        node: ContractNode,
+        left: np.ndarray,
+        right: np.ndarray,
+        *,
+        node_plan: UpmemNodePlan | None = None,
     ) -> EngineTaskResult:
         if self._closed:
             raise RuntimeError("M5 whole-circuit session is closed")
@@ -573,7 +579,20 @@ class M5WholeCircuitSession:
         parallel_rank_waves = 0
         bulk_verified = True
         total_dpus = sum(rank.local_dpus for rank in self.ranks)
-        waves = self.placement_strategy.place_waves(lowering.tiles, total_dpus)
+        if node_plan is None:
+            # Temporary compatibility for direct engine tests and legacy callers.
+            # The active execution adapter always supplies the compiled plan.
+            waves = self.placement_strategy.place_waves(lowering.tiles, total_dpus)
+            planned_requests = tuple(
+                self.placement_strategy.map_wave_to_ranks(wave, self.ranks)
+                for wave in waves
+            )
+            physical_plan_consumed = False
+        else:
+            waves, planned_requests = self._requests_from_plan(
+                node, lowering, node_plan
+            )
+            physical_plan_consumed = True
         self._validate_waves(lowering.tiles, waves, total_dpus)
         task_structure_sha256 = _task_structure_hash(node)
         numeric_transport = "host_packed_int8_mram" if packed else "float32_mram"
@@ -587,7 +606,7 @@ class M5WholeCircuitSession:
             strategy_config_hash=self.strategy_config_hash,
         )
         try:
-            for wave in waves:
+            for wave_index, wave in enumerate(waves):
                 self._remaining_timeout()
                 outcomes, wave_metrics, wave_parallel, wave_bulk_verified = (
                     self._submit_wave(
@@ -597,6 +616,7 @@ class M5WholeCircuitSession:
                         packed=packed,
                         request_contract=request_contract,
                         wave=wave,
+                        requests=planned_requests[wave_index],
                     )
                 )
                 parallel_rank_waves += int(wave_parallel)
@@ -620,13 +640,12 @@ class M5WholeCircuitSession:
             )
             raise
         self._remaining_timeout()
-        dequantization_started = time.perf_counter()
+        assembly_started = time.perf_counter()
         output = self.reduction_provider.reduce(
             lowering, partials, packed=packed, scale=scale
         )
-        host_dequantization_time_s = (
-            time.perf_counter() - dequantization_started if packed else 0.0
-        )
+        host_tile_assembly_time_s = time.perf_counter() - assembly_started
+        host_dequantization_time_s = host_tile_assembly_time_s if packed else 0.0
         elapsed = time.perf_counter() - started
         return EngineTaskResult(
             output=output,
@@ -637,6 +656,7 @@ class M5WholeCircuitSession:
                     **timing,
                     "host_quantization_time_s": host_quantization_time_s,
                     "host_dequantization_time_s": host_dequantization_time_s,
+                    "host_tile_assembly_time_s": host_tile_assembly_time_s,
                     "total_route_time_s": elapsed,
                 },
                 **_native_identity_metadata(self._startup_native_identity),
@@ -663,6 +683,8 @@ class M5WholeCircuitSession:
                 "packed_int8_transfer": packed,
                 "host_quantization_time_s": host_quantization_time_s,
                 "host_dequantization_time_s": host_dequantization_time_s,
+                "host_tile_assembly_time_s": host_tile_assembly_time_s,
+                "host_dequantization_timing_overlap": packed,
                 "application_visible_h2d_bytes": bytes_h2d,
                 "application_visible_d2h_bytes": bytes_d2h,
                 "application_visible_transfer_bytes": bytes_h2d + bytes_d2h,
@@ -690,9 +712,116 @@ class M5WholeCircuitSession:
                 "test_double_execution": self._test_double_execution,
                 "cpu_fallback_used": False,
                 "simulator_kernel_executed": False,
+                "physical_plan_consumed": physical_plan_consumed,
                 **quantization_metadata,
             },
         )
+
+    def _requests_from_plan(
+        self,
+        node: ContractNode,
+        lowering: Any,
+        node_plan: UpmemNodePlan,
+    ) -> tuple[
+        tuple[tuple[M5Tile, ...], ...],
+        tuple[list[tuple[Any, list[tuple[M5Tile, int]]]], ...],
+    ]:
+        """Turn the compiled work units into native rank requests.
+
+        The live lowering is used only to obtain payload arrays.  It cannot
+        change the compiled geometry or placement: every work unit is checked
+        against its tile before a request is constructed.
+        """
+
+        if node_plan.node_id != node.node_id or node_plan.node_kind != "contract":
+            raise ValueError("compiled UPMEM node plan does not match contract node")
+        canonical = lowering.canonical
+        if node_plan.canonical_shape != (
+            canonical.b,
+            canonical.m,
+            canonical.k,
+            canonical.n,
+        ):
+            raise ValueError("compiled UPM canonical B/M/K/N shape differs from lowering")
+        tiles = {tile.id: tile for tile in lowering.tiles}
+        units = node_plan.work_units
+        if len(tiles) != len(lowering.tiles) or len(units) != len(tiles):
+            raise ValueError("compiled UPM work-unit count differs from lowering")
+        if {unit.stable_tile_id for unit in units} != set(tiles):
+            raise ValueError("compiled UPM tile IDs differ from lowering")
+
+        for unit in units:
+            tile = tiles.get(unit.stable_tile_id)
+            if tile is None or unit.node_id != node.node_id:
+                raise ValueError("compiled UPM work unit references an unknown tile")
+            expected = (
+                tile.batch_index,
+                1,
+                tile.m_start,
+                tile.m_size,
+                tile.n_start,
+                tile.n_size,
+                tile.k_start,
+                tile.k_size,
+                tile.left_bytes + tile.right_bytes,
+                tile.output_bytes,
+                tile.aligned_mram_bytes,
+                tile.m_size * tile.n_size * tile.k_size,
+            )
+            actual = (
+                unit.batch_start,
+                unit.batch_size,
+                unit.m_start,
+                unit.m_size,
+                unit.n_start,
+                unit.n_size,
+                unit.k_start,
+                unit.k_size,
+                unit.estimated_input_bytes,
+                unit.estimated_output_bytes,
+                unit.aligned_mram_bytes,
+                unit.estimated_arithmetic_work,
+            )
+            if actual != expected:
+                raise ValueError(
+                    f"compiled UPM tile {unit.stable_tile_id} extents differ from lowering"
+                )
+
+        wave_numbers = sorted({unit.wave for unit in units})
+        if wave_numbers != list(range(len(wave_numbers))):
+            raise ValueError("compiled UPM work-unit waves are not contiguous")
+        waves: list[tuple[M5Tile, ...]] = []
+        requests_by_wave: list[list[tuple[Any, list[tuple[M5Tile, int]]]]] = []
+        for wave_number in wave_numbers:
+            wave_units = [unit for unit in units if unit.wave == wave_number]
+            if len(wave_units) > sum(rank.local_dpus for rank in self.ranks):
+                raise ValueError("compiled UPM wave exceeds available DPUs")
+            seen_slots: set[tuple[int, int]] = set()
+            grouped: dict[int, list[tuple[M5Tile, int]]] = {}
+            wave_tiles: list[M5Tile] = []
+            for unit in wave_units:
+                slot = (unit.logical_rank, unit.logical_dpu)
+                if slot in seen_slots:
+                    raise ValueError("compiled UPM wave reuses a rank/local-DPU slot")
+                if not 0 <= unit.logical_rank < len(self.ranks):
+                    raise ValueError("compiled UPM logical rank is out of range")
+                rank = self.ranks[unit.logical_rank]
+                if not 0 <= unit.logical_dpu < rank.local_dpus:
+                    raise ValueError("compiled UPM logical DPU is out of range")
+                seen_slots.add(slot)
+                tile = tiles[unit.stable_tile_id]
+                wave_tiles.append(tile)
+                grouped.setdefault(unit.logical_rank, []).append(
+                    (tile, unit.logical_dpu)
+                )
+            waves.append(tuple(wave_tiles))
+            requests_by_wave.append(
+                [
+                    (self.ranks[rank_index], grouped[rank_index])
+                    for rank_index in sorted(grouped)
+                ]
+            )
+        return tuple(waves), tuple(requests_by_wave)
 
     def _submit_wave(
         self,
@@ -703,8 +832,8 @@ class M5WholeCircuitSession:
         packed: bool,
         request_contract: str,
         wave: tuple[M5Tile, ...],
+        requests: list[tuple[Any, list[tuple[M5Tile, int]]]],
     ) -> tuple[list[tuple[M5Tile, np.ndarray]], dict[str, Any], bool, bool]:
-        requests = self.placement_strategy.map_wave_to_ranks(wave, self.ranks)
         self._validate_rank_assignments(wave, requests)
         prepared: list[tuple[_RankSession, list[tuple[M5Tile, int]], Any]] = []
         for rank, assignments in requests:

@@ -394,6 +394,15 @@ class ClaimPolicy:
                     "DAG-v2 physical UPMEM/M5 admission requires "
                     "native_identity_verified=True"
                 )
+            if (
+                self._is_current_m5_dag_v2(row)
+                and self.execution_mode(row) is ExecutionMode.PHYSICAL_HARDWARE
+                and row.get("physical_plan_consumed") is not True
+            ):
+                reasons.append(
+                    "DAG-v2 physical UPMEM admission requires "
+                    "physical_plan_consumed=True"
+                )
             if row.get("target_observed") != "physical_hardware":
                 reasons.append("UPMEM target was not observed as physical hardware")
             if row.get("hardware_allocation_verified") is not True:

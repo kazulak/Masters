@@ -12,8 +12,20 @@ import numpy as np
 import pytest
 
 from quantum_bench.core.records import TensorSpec
+from quantum_bench.execution import (
+    ExecutionPlan,
+    NumericMode,
+    UpmemCompileRequest,
+    UpmemTopology,
+    compile_execution,
+)
 from quantum_bench.formats.fixed_point import FixedPointSpec, quantize_fixed_point
-from quantum_bench.tn.graph import ContractNode, TensorView
+from quantum_bench.tn.graph import (
+    ContractNode,
+    ContractionDAG,
+    TensorView,
+    contraction_dag_hash,
+)
 from quantum_bench.targets.upmem.m5_whole_circuit_engine import (
     M5WholeCircuitEngine,
     M5WholeCircuitSession,
@@ -54,6 +66,46 @@ def _packed_expected(
         ),
         dtype=np.float32,
     ) * np.float32(left_q.record.scale * right_q.record.scale)
+
+
+def _compiled_node_plan(node: ContractNode, dpu_count: int):
+    dag = ContractionDAG(
+        tensors=(
+            TensorSpec(
+                node.left.tensor_id,
+                node.left.labels,
+                node.left.shape,
+                "dense",
+                dtype=node.output.dtype,
+            ),
+            TensorSpec(
+                node.right.tensor_id,
+                node.right.labels,
+                node.right.shape,
+                "dense",
+                dtype=node.output.dtype,
+            ),
+        ),
+        nodes=(node,),
+        output=TensorView(
+            tensor_id=node.output.id,
+            labels=node.output.labels,
+            shape=node.output.shape,
+        ),
+    )
+    compiled = compile_execution(
+        dag,
+        UpmemCompileRequest(
+            contraction_dag_hash=contraction_dag_hash(dag),
+            numeric_mode=NumericMode.FLOAT32_REAL,
+            topology=UpmemTopology(
+                dpu_count=dpu_count,
+                tasklets_per_dpu=1,
+            ),
+        ),
+    )
+    assert isinstance(compiled, ExecutionPlan)
+    return compiled.payload.node_plans[0]
 
 
 def _binaries(root: Path) -> tuple[Path, Path, Path]:
@@ -309,6 +361,30 @@ def test_float_and_packed_int8_match_reference_across_k_chunks(tmp_path: Path) -
         float_result.metadata["request_contract_sha256"]
         != packed_result.metadata["request_contract_sha256"]
     )
+
+
+def test_compiled_work_units_reach_native_request_artifact(tmp_path: Path) -> None:
+    task = _task(k=5, m=300, n=4)
+    left = np.ones((300, 5), dtype=np.float32)
+    right = np.ones((5, 4), dtype=np.float32)
+    session = _engine(tmp_path, dpu_count=2).open_session(
+        Float32RealPolicy(), _topology(2)
+    )
+    node_plan = _compiled_node_plan(task, 2)
+
+    result = session.execute(task, left, right, node_plan=node_plan)
+
+    submissions = session.ranks[0].session.submissions
+    local_dpu_ids = [
+        record.local_dpu_id
+        for artifact in submissions
+        for record in artifact.work_units
+        if not record.flags
+    ]
+    assert local_dpu_ids == [0, 1]
+    assert result.metadata["physical_plan_consumed"] is True
+    np.testing.assert_allclose(result.output, left @ right, rtol=1e-6, atol=1e-6)
+    session.close()
 
 
 def test_node_structure_hash_binds_all_contraction_fields() -> None:

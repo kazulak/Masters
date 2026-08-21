@@ -55,6 +55,7 @@ class _Aggregate:
     host_dequantization_s: float = 0.0
     reduction_s: float = 0.0
     route_total_s: float = 0.0
+    physical_plan_consumed: bool = False
 
     def add(self, result: Any) -> None:
         metadata = getattr(result, "metadata", {})
@@ -63,6 +64,9 @@ class _Aggregate:
         timing = metadata.get("timing", {})
         if not isinstance(timing, Mapping):
             timing = {}
+        if metadata.get("physical_plan_consumed") is not True:
+            raise RuntimeError("UPMEM task result did not consume the compiled physical plan")
+        self.physical_plan_consumed = True
         self.h2d_bytes += _required_byte_count(
             metadata,
             "application_visible_h2d_bytes",
@@ -79,10 +83,17 @@ class _Aggregate:
         self.h2d_s += _seconds(timing.get("h2d_time_s", 0.0))
         self.kernel_s += _seconds(timing.get("kernel_time_s", 0.0))
         self.d2h_s += _seconds(timing.get("d2h_time_s", 0.0))
-        self.host_dequantization_s += _seconds(
+        if metadata.get("host_dequantization_timing_overlap") is not True:
+            self.host_dequantization_s += _seconds(
+                timing.get(
+                    "host_dequantization_time_s",
+                    metadata.get("host_dequantization_time_s", 0.0),
+                )
+            )
+        self.reduction_s += _seconds(
             timing.get(
-                "host_dequantization_time_s",
-                metadata.get("host_dequantization_time_s", 0.0),
+                "host_tile_assembly_time_s",
+                metadata.get("host_tile_assembly_time_s", 0.0),
             )
         )
         if metadata.get("target_observed") == "sdk_simulator" or bool(
@@ -194,6 +205,7 @@ def run_upmem(
         _facts_from_metadata(terminal_metadata),
         **resource_hashes,
         rank_binding_sha256=_rank_binding_sha256(resources.rank_paths),
+        physical_plan_consumed=aggregate.physical_plan_consumed,
     )
     result = ExecutionResult(
         contraction_dag_hash=contraction_dag_hash(dag),
@@ -283,7 +295,7 @@ def _execute_once(
         if isinstance(node, ContractNode):
             left = _resolve_view(node.left, tensors)
             right = _resolve_view(node.right, tensors)
-            task_result = session.execute(node, left, right)
+            task_result = session.execute(node, left, right, node_plan=node_plan)
             if aggregate is not None:
                 assert resources is not None
                 aggregate.add(task_result)
@@ -467,6 +479,7 @@ def _facts_from_metadata(
         hardware_kernel_executed=bool(metadata.get("hardware_kernel_executed", False)),
         simulator_kernel_executed=bool(metadata.get("simulator_kernel_executed", False)),
         cpu_fallback_used=bool(metadata.get("cpu_fallback_used", False)),
+        physical_plan_consumed=bool(metadata.get("physical_plan_consumed", False)),
     )
 
 

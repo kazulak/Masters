@@ -120,7 +120,12 @@ class _FakeSession:
         }
 
     def execute(
-        self, node: ContractNode, left: np.ndarray, right: np.ndarray
+        self,
+        node: ContractNode,
+        left: np.ndarray,
+        right: np.ndarray,
+        *,
+        node_plan: object | None = None,
     ) -> object:
         from quantum_bench.whole_circuit.core import EngineTaskResult
 
@@ -141,6 +146,7 @@ class _FakeSession:
                 "hardware_kernel_executed": True,
                 "simulator_kernel_executed": False,
                 "cpu_fallback_used": False,
+                "physical_plan_consumed": node_plan is not None,
                 "application_visible_h2d_bytes": 8,
                 "application_visible_d2h_bytes": 4,
                 "timing": {
@@ -208,6 +214,75 @@ def test_compile_upmem_assigns_static_units_in_k_wave_rank_dpu_order() -> None:
         assert [(unit.logical_rank, unit.logical_dpu) for unit in assigned] == [
             (slot // 2, slot % 2) for slot in range(len(assigned))
         ]
+
+
+def test_engine_plan_assignment_drives_rank_local_dpu_request() -> None:
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from quantum_bench.targets.upmem.m5_whole_circuit_engine import (
+        M5WholeCircuitSession,
+    )
+    from quantum_bench.targets.upmem.m5_strategies import M5DecompositionStrategy
+    from quantum_bench.targets.upmem.m5_whole_circuit_tiles import M5TileLimits
+
+    dag = _dag()
+    compiled = compile_execution(dag, _request(dag))
+    assert isinstance(compiled, ExecutionPlan)
+    node = dag.nodes[0]
+    assert isinstance(node, ContractNode)
+    lowering = M5DecompositionStrategy().decompose(
+        node,
+        np.ones((2, 3), dtype=np.float32),
+        np.ones((3, 2), dtype=np.float32),
+        limits=M5TileLimits.float32(),
+    )
+    node_plan = compiled.payload.node_plans[0]
+    unit = node_plan.work_units[0]
+    moved = replace(unit, logical_dpu=1)
+    moved_plan = replace(node_plan, work_units=(moved,))
+    session = object.__new__(M5WholeCircuitSession)
+    session.ranks = (
+        SimpleNamespace(index=0, local_dpus=2),
+    )
+
+    waves, requests = session._requests_from_plan(node, lowering, moved_plan)
+
+    assert waves[0][0].id == unit.stable_tile_id
+    assert requests[0][0][0].index == 0
+    assert requests[0][0][1] == [(waves[0][0], 1)]
+
+
+def test_engine_rejects_plan_tile_extent_tampering_before_requests() -> None:
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from quantum_bench.targets.upmem.m5_whole_circuit_engine import (
+        M5WholeCircuitSession,
+    )
+    from quantum_bench.targets.upmem.m5_strategies import M5DecompositionStrategy
+    from quantum_bench.targets.upmem.m5_whole_circuit_tiles import M5TileLimits
+
+    dag = _dag()
+    compiled = compile_execution(dag, _request(dag))
+    assert isinstance(compiled, ExecutionPlan)
+    node = dag.nodes[0]
+    assert isinstance(node, ContractNode)
+    lowering = M5DecompositionStrategy().decompose(
+        node,
+        np.ones((2, 3), dtype=np.float32),
+        np.ones((3, 2), dtype=np.float32),
+        limits=M5TileLimits.float32(),
+    )
+    node_plan = compiled.payload.node_plans[0]
+    unit = node_plan.work_units[0]
+    tampered = replace(unit, m_size=unit.m_size + 1)
+    tampered_plan = replace(node_plan, work_units=(tampered,))
+    session = object.__new__(M5WholeCircuitSession)
+    session.ranks = (SimpleNamespace(index=0, local_dpus=2),)
+
+    with pytest.raises(ValueError, match="extents"):
+        session._requests_from_plan(node, lowering, tampered_plan)
 
 
 def test_compile_rejects_unsupported_topology_and_int8_k() -> None:
@@ -566,6 +641,34 @@ def test_run_upmem_hashes_every_measured_output_and_rejects_nondeterminism(
     assert session.closed
 
 
+def test_packed_tile_assembly_is_not_double_counted_as_dequantization() -> None:
+    from types import SimpleNamespace
+
+    import quantum_bench.execution.upmem as module
+
+    aggregate = module._Aggregate()
+    aggregate.add(
+        SimpleNamespace(
+            metadata={
+                "physical_plan_consumed": True,
+                "application_visible_h2d_bytes": 8,
+                "application_visible_d2h_bytes": 4,
+                "host_dequantization_timing_overlap": True,
+                "timing": {
+                    "host_tile_assembly_time_s": 0.25,
+                    "host_dequantization_time_s": 0.25,
+                },
+                "target_observed": "physical_hardware",
+                "simulator_kernel_executed": False,
+                "cpu_fallback_used": False,
+            }
+        )
+    )
+
+    assert aggregate.reduction_s == pytest.approx(0.25)
+    assert aggregate.host_dequantization_s == 0.0
+
+
 def test_run_upmem_reduces_sliced_contracts_on_host(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -606,7 +709,12 @@ def test_run_upmem_closes_session_on_failure(
 
     class FailingSession(_FakeSession):
         def execute(
-            self, node: ContractNode, left: np.ndarray, right: np.ndarray
+            self,
+            node: ContractNode,
+            left: np.ndarray,
+            right: np.ndarray,
+            *,
+            node_plan: object | None = None,
         ) -> object:
             self.calls.append(node.node_id)
             raise RuntimeError("native failure")
@@ -807,8 +915,15 @@ def test_missing_task_transfer_bytes_are_rejected(
     import quantum_bench.execution.upmem as module
 
     class MissingBytesSession(_FakeSession):
-        def execute(self, task: object, left: np.ndarray, right: np.ndarray) -> object:
-            result = super().execute(task, left, right)
+        def execute(
+            self,
+            task: object,
+            left: np.ndarray,
+            right: np.ndarray,
+            *,
+            node_plan: object | None = None,
+        ) -> object:
+            result = super().execute(task, left, right, node_plan=node_plan)
             result.metadata.pop("application_visible_h2d_bytes")
             result.metadata.pop("application_visible_d2h_bytes")
             return result
@@ -1000,7 +1115,14 @@ def test_execution_and_close_failures_are_both_exposed(
     import quantum_bench.execution.upmem as module
 
     class DualFailingSession(_FakeSession):
-        def execute(self, task: object, left: np.ndarray, right: np.ndarray) -> object:
+        def execute(
+            self,
+            task: object,
+            left: np.ndarray,
+            right: np.ndarray,
+            *,
+            node_plan: object | None = None,
+        ) -> object:
             raise RuntimeError("native failure")
 
         def close(self) -> dict[str, object]:

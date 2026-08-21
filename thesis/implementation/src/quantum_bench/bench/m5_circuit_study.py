@@ -1003,6 +1003,9 @@ def _execute_combo(
         "native_identity_verified": bool(
             engine_metadata.get("native_identity_verified", False)
         ),
+        "physical_plan_consumed": bool(
+            engine_metadata.get("physical_plan_consumed", False)
+        ),
         "graph_intermediate_placement_origin": engine_metadata.get(
             "graph_intermediate_placement_origin"
         ),
@@ -1182,6 +1185,7 @@ def _execution_metadata(
         "hardware_kernel_executed": facts.hardware_kernel_executed,
         "simulator_kernel_executed": facts.simulator_kernel_executed,
         "cpu_fallback_used": facts.cpu_fallback_used,
+        "physical_plan_consumed": facts.physical_plan_consumed,
         "host_binary_sha256": facts.host_binary_sha256,
         "dpu_binary_sha256": facts.dpu_binary_sha256,
         "initialization_binary_sha256": facts.initialization_binary_sha256,
@@ -1798,6 +1802,7 @@ def _hardware_contract(
     )
     simulator = bool(metadata.get("simulator_kernel_executed", False))
     cpu_fallback = bool(metadata.get("cpu_fallback_used", False))
+    physical_plan = bool(metadata.get("physical_plan_consumed", False))
     verified = (
         target_observed == "physical_hardware"
         and native
@@ -1807,6 +1812,7 @@ def _hardware_contract(
         and observed_rank_count == requested_rank_count
         and observed_dpu_count == requested_dpu_count
         and observed_tasklets == requested_tasklets
+        and physical_plan
         and not simulator
         and not cpu_fallback
     )
@@ -1817,7 +1823,8 @@ def _hardware_contract(
         stage = "hardware_execution_unverified"
         reason = (
             "physical row lacks physical target, matching observed topology, "
-            "verified native allocation, hardware execution, release, or no-fallback metadata"
+            "compiled-plan consumption, verified native allocation, hardware "
+            "execution, release, or no-fallback metadata"
         )
     return {
         "verified": verified,
@@ -1825,6 +1832,7 @@ def _hardware_contract(
         "hardware_kernel_executed": hardware_kernel,
         "allocation_verified": allocation,
         "release_verified": release,
+        "physical_plan_consumed": physical_plan,
         "failure_stage": stage,
         "reason": reason,
     }

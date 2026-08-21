@@ -134,7 +134,14 @@ class _VerifiedPhysicalEngine:
 
     def open_session(self, policy: object, topology: DeviceTopology):
         class Session:
-            def execute(self, task: ContractNode, left, right):
+            def execute(
+                self,
+                task: ContractNode,
+                left,
+                right,
+                *,
+                node_plan: object | None = None,
+            ):
                 mode = (
                     NumericMode.HOST_PACKED_INT8_PER_TASK_V1
                     if policy.name == "host_packed_int8_per_task_v1"
@@ -166,6 +173,7 @@ class _VerifiedPhysicalEngine:
                         "graph_intermediate_placement": "host_managed",
                         "graph_intermediate_placement_origin": "m5_host_coordinator_v1",
                         "native_identity_verified": True,
+                        "physical_plan_consumed": node_plan is not None,
                         "application_visible_h2d_bytes": 2,
                         "application_visible_d2h_bytes": 3,
                         "application_visible_transfer_bytes": 5,
@@ -566,6 +574,7 @@ def test_physical_success_requires_native_metadata_and_sums_task_bytes(
     assert all(row["observed_tasklets_per_dpu"] == 1 for row in rows)
     assert all(row["rank_binding_sha256"] for row in rows)
     assert all(row["native_identity_verified"] is True for row in rows)
+    assert all(row["physical_plan_consumed"] is True for row in rows)
     assert all(
         row["graph_intermediate_placement_origin"] == "m5_host_coordinator_v1"
         for row in rows

@@ -176,6 +176,7 @@ class BackendFacts:
     hardware_kernel_executed: bool = False
     simulator_kernel_executed: bool = False
     cpu_fallback_used: bool = False
+    physical_plan_consumed: bool = False
     host_binary_sha256: str | None = None
     dpu_binary_sha256: str | None = None
     initialization_binary_sha256: str | None = None

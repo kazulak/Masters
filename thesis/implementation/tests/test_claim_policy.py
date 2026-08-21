@@ -73,6 +73,7 @@ def _v2(row: dict[str, object], dag_hash: str) -> dict[str, object]:
     row["host_dag_node_completion_coverage"] = True
     if "upmem" in str(row["engine_id"]):
         row["native_identity_verified"] = True
+        row["physical_plan_consumed"] = True
     return row
 
 
