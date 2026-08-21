@@ -8,6 +8,8 @@ import pytest
 
 from quantum_bench.bench.upmem_multi_dpu_assignment import run_upmem_multi_dpu_assignment
 from quantum_bench.circuits import builtin_circuit
+from quantum_bench.core.records import TensorNetworkSpec, TensorSpec, TensorValue
+from quantum_bench.routing.generic_prepare import generic_structural_feasibility_from_metadata
 from quantum_bench.targets.upmem.schedule import annotate_task_graph_with_upmem_estimates, estimate_dense_task
 from quantum_bench.targets.upmem.tile_plan import (
     REQUIRES_TILING_NOT_IMPLEMENTED,
@@ -23,6 +25,9 @@ from quantum_bench.targets.upmem.tile_plan import (
     plan_l2_tiled_execution,
 )
 from quantum_bench.tn import build_tensor_network, execute_task_sequence_np_einsum, plan_task_graph_with_config
+from quantum_bench.tn.graph import build_contraction_dag
+from quantum_bench.tn.network import TensorNetworkValue
+from quantum_bench.tn.planning import plan_contractions
 from quantum_bench.tn.planner_motifs import build_planner_motif_workload
 from quantum_bench.tn.upmem_path_cost import (
     FIXED_LOG1P_GENERIC_CAPS_V1,
@@ -37,6 +42,7 @@ from quantum_bench.tn.upmem_path_cost_v2 import (
     UPMEM_PATH_OBJECTIVE_V2,
     UpmemPathCostPolicyV2,
     model_upmem_task_cost_v2,
+    model_upmem_contract_cost_v2,
     task_numeric_execution,
     upmem_path_cost_policy_v2,
 )
@@ -117,6 +123,58 @@ def test_v2_task_cost_expands_split_complex_components() -> None:
     assert real.to_json_dict()["memory_budget_scope"] == "configured_modeled_budget_not_measured_runtime_occupancy"
 
 
+def test_v2_node_cost_matches_legacy_task_formula() -> None:
+    network = build_tensor_network(builtin_circuit("bell_2q"))
+    planner = plan_contractions(network.spec, {"engine": "opt_einsum", "optimize": "greedy"})
+    custom = plan_contractions(network.spec, _v2_config())
+    dag = build_contraction_dag(network.spec, planner.path)
+    graph = plan_task_graph_with_config(network, {"engine": "opt_einsum", "optimize": "greedy"})
+
+    assert len(dag.nodes) == len(graph.tasks)
+    for node, task in zip(dag.nodes, graph.tasks):
+        assert model_upmem_contract_cost_v2(node) == model_upmem_task_cost_v2(task)
+    assert [
+        entry["tie_break"][3]
+        for entry in custom.metadata["step_trace"]
+        if entry["selected"]
+    ] == [32, 32, 128]
+
+
+def test_v2_preserves_one_sided_local_reduction_semantics() -> None:
+    spec = TensorNetworkSpec(
+        circuit=builtin_circuit("bell_2q"),
+        tensors=(
+            TensorSpec("left", (0, 1), (2, 3), "dense"),
+            TensorSpec("right", (1, 2), (3, 4), "dense"),
+        ),
+        output_labels=(0,),
+        einsum_expression="ab,bc->a",
+    )
+    network = TensorNetworkValue(
+        spec,
+        [
+            TensorValue(spec.tensors[0], np.zeros((2, 3))),
+            TensorValue(spec.tensors[1], np.zeros((3, 4))),
+        ],
+    )
+    planner = plan_contractions(spec, {"engine": "opt_einsum", "optimize": "greedy"})
+    dag = build_contraction_dag(spec, planner.path)
+    graph = plan_task_graph_with_config(network, {"engine": "opt_einsum", "optimize": "greedy"})
+    node = dag.nodes[0]
+
+    assert node.contracted_labels == (1, 2)
+    assert node.output_labels == (0,)
+    assert generic_structural_feasibility_from_metadata(
+        input_shapes=(node.left.shape, node.right.shape),
+        output_shape=node.output.shape,
+        left_labels=node.left.labels,
+        right_labels=node.right.labels,
+        contracted_labels=(1,),
+        output_labels=node.output_labels,
+    ).feasible
+    assert model_upmem_contract_cost_v2(node) == model_upmem_task_cost_v2(graph.tasks[0])
+
+
 def test_v2_rejects_native_static_reservation_overflow() -> None:
     policy = UpmemPathCostPolicyV2(native_max_tensor_elements=2, mram_capacity_bytes=4096)
 
@@ -161,6 +219,7 @@ def test_v2_split_complex_execution_matches_exact_task_sequence() -> None:
     actual, _ = execute_task_sequence_np_einsum(custom, network)
     executions = custom.path_summary.planner_metadata["task_numeric_executions"]
 
+    assert set(executions) == {task.id for task in custom.tasks}
     assert any(entry["representation"] == "split_real_imag" for entry in executions.values())
     assert sum(entry["component_invocations"] for entry in executions.values()) > len(custom.tasks)
     np.testing.assert_allclose(actual, expected, atol=1.0e-12, rtol=1.0e-12)

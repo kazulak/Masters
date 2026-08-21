@@ -18,7 +18,7 @@ from typing import Any, Mapping
 import opt_einsum as oe
 
 from quantum_bench.core.records import TensorNetworkSpec
-from quantum_bench.tn.planners import (
+from quantum_bench.tn.planner_records import (
     PlannerIdentity,
     PlannerResult,
     canonical_planner_config_hash,

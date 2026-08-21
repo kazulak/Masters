@@ -11,7 +11,7 @@ import numpy as np
 
 from quantum_bench.routing.generic_numeric_contract import classify_numeric
 from quantum_bench.tn.network import TensorNetworkValue
-from quantum_bench.tn.planners import PlannerIdentity, PlannerResult
+from quantum_bench.tn.planner_records import PlannerIdentity, PlannerResult
 from quantum_bench.tn.upmem_path_cost_v2 import (
     DEFAULT_UPMEM_PATH_COST_NORMALIZATION_V2,
     DEFAULT_UPMEM_PATH_COST_POLICY_V2,

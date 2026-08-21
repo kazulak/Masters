@@ -33,7 +33,7 @@ final documentation set.
 | WP0 baseline | complete | baseline tag, branch, inventory, and test result recorded |
 | WP1 research contract | complete | concise README and architecture agree on scope and claims |
 | WP2 semantic model | complete | direct DAG input validation; no active reverse TaskGraph adapter |
-| WP3 planning | pending | one target-neutral planner/provenance boundary |
+| WP3 planning | complete | active planners consume tensor metadata and emit one planner result/provenance record without TaskGraph lowering |
 | WP4 numerics | pending | host encoding/decoding and accuracy semantics are explicit |
 | WP5 mapping | in progress | deterministic `UpmemPlan` owns work and assignment; active compiler still imports M5/v4 helpers |
 | WP6 runtime | in progress | runtime requires compiled node plans and has no strategy registry; M5/v4 engine/session shell remains |
@@ -52,6 +52,8 @@ final documentation set.
 | fake `TensorNetworkSpec(None, ...)` input validation | removed in `4907013` | complete |
 | `TensorInputs` wrapper | removed in `e66e2a3` | complete |
 | one-implementation M5 strategy registry | removed in current WP6 batch | complete |
+| projected-prefix planner to `ContractionTask` | removed in current WP3 batch | complete |
+| eager legacy imports from `tn/__init__.py` | `tn/__init__.py` | WP10 |
 | M5/v4 defaults in generic contracts | `execution/contracts.py` | WP5/WP6 |
 | milestone CLI and Make targets | `bench/__main__.py`, `Makefile` | WP9 |
 
@@ -61,7 +63,7 @@ Update this table after each integration batch.
 
 | Metric | Baseline | Current | Target |
 |---|---:|---:|---:|
-| Active Python modules | 138 | 137 | 12-16 |
+| Active Python modules | 138 | 138 | 12-16 |
 | Class declarations | 307 | 301 | only stable boundary types |
 | Test modules | 78 | 77 | about 10 |
 | Config files | 63 | 63 | 2 principal experiments |

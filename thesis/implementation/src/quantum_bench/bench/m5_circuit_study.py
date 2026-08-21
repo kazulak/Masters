@@ -61,7 +61,7 @@ from quantum_bench.tn import (
     plan_contractions,
 )
 from quantum_bench.tn.graph import ContractionDAG, ContractNode, ReduceNode, TensorView
-from quantum_bench.tn.planners import PlannerResult
+from quantum_bench.tn.planner_records import PlannerResult
 from quantum_bench.whole_circuit import (
     DeviceTopology,
     Float32RealPolicy,

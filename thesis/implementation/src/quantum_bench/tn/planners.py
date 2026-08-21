@@ -2,53 +2,17 @@ from __future__ import annotations
 
 import time
 import warnings
-from dataclasses import dataclass, field
-import hashlib
-import json
 import random
 from typing import Any, Protocol
 
 import opt_einsum as oe
 
 from quantum_bench.tn.network import TensorNetworkValue, interleaved_einsum_args
-
-
-@dataclass(frozen=True)
-class PlannerIdentity:
-    planner_engine: str
-    planner_id: str
-    planner_kind: str
-    optimize_mode: str
-    objective: str
-    cost_basis: str
-    target_estimate_key: str | None
-    options: dict[str, Any]
-    planner_config: dict[str, Any] = field(default_factory=dict)
-    planner_config_hash: str = ""
-
-    def __post_init__(self) -> None:
-        # Keep the old options surface while making the effective configuration explicit.
-        resolved = dict(self.planner_config or self.options)
-        config_hash = canonical_planner_config_hash(resolved)
-        options = dict(self.options)
-        options["planner_config"] = resolved
-        options["planner_config_hash"] = config_hash
-        object.__setattr__(self, "planner_config", resolved)
-        object.__setattr__(self, "planner_config_hash", config_hash)
-        object.__setattr__(self, "options", options)
-
-
-@dataclass(frozen=True)
-class PlannerResult:
-    identity: PlannerIdentity
-    path: tuple[tuple[int, ...], ...]
-    path_info_text: str
-    largest_intermediate: int | None
-    naive_flops: float | None
-    optimized_flops: float | None
-    planning_time_s: float
-    metadata: dict[str, Any] = field(default_factory=dict)
-
+from quantum_bench.tn.planner_records import (
+    PlannerIdentity,
+    PlannerResult,
+    canonical_planner_config_hash as canonical_planner_config_hash,
+)
 
 class PathPlanner(Protocol):
     identity: PlannerIdentity
@@ -277,14 +241,3 @@ def _tree_number(tree: object | None, name: str) -> object | None:
         return None
     value = getattr(tree, name, None)
     return value() if callable(value) else value
-
-
-def canonical_planner_config_hash(config: dict[str, Any]) -> str:
-    """Return the stable identity hash for a resolved planner configuration."""
-
-    encoded = json.dumps(config, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=_json_default)
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
-
-
-def _json_default(value: object) -> str:
-    return repr(value)

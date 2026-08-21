@@ -520,29 +520,57 @@ def generic_structural_feasibility(
     *,
     check_int32_accumulation: bool = True,
 ) -> GenericStructuralFeasibility:
+    """Apply the shared shape/label contract to one legacy task."""
+    return generic_structural_feasibility_from_metadata(
+        input_shapes=task.input_shapes,
+        output_shape=task.output_shape,
+        left_labels=task.left_labels,
+        right_labels=task.right_labels,
+        contracted_labels=task.contracted_labels,
+        output_labels=task.output_labels,
+        caps=caps,
+        check_int32_accumulation=check_int32_accumulation,
+    )
+
+
+def generic_structural_feasibility_from_metadata(
+    *,
+    input_shapes: tuple[tuple[int, ...], tuple[int, ...]],
+    output_shape: tuple[int, ...],
+    left_labels: tuple[int, ...],
+    right_labels: tuple[int, ...],
+    contracted_labels: tuple[int, ...],
+    output_labels: tuple[int, ...],
+    caps: GenericTaskPreparationCaps = GenericTaskPreparationCaps(),
+    check_int32_accumulation: bool = True,
+) -> GenericStructuralFeasibility:
     """Return generic-loop shape metadata without touching tensor values.
 
     The validation order and reason strings are the generic preparation contract.
     Keeping this function value-free lets planners use the same rejection rules
     without importing or executing the preparation path.
     """
-    left_shape = tuple(int(dim) for dim in task.input_shapes[0])
-    right_shape = tuple(int(dim) for dim in task.input_shapes[1])
-    output_shape = tuple(int(dim) for dim in task.output_shape)
-    if max(len(left_shape), len(right_shape), len(output_shape), len(task.contracted_labels)) > caps.max_rank:
+    left_shape = tuple(int(dim) for dim in input_shapes[0])
+    right_shape = tuple(int(dim) for dim in input_shapes[1])
+    output_shape = tuple(int(dim) for dim in output_shape)
+    left_labels = tuple(int(label) for label in left_labels)
+    right_labels = tuple(int(label) for label in right_labels)
+    contracted_labels = tuple(int(label) for label in contracted_labels)
+    output_labels = tuple(int(label) for label in output_labels)
+    if max(len(left_shape), len(right_shape), len(output_shape), len(contracted_labels)) > caps.max_rank:
         return GenericStructuralFeasibility(False, rejection_reasons=("rank_cap_exceeded",))
     if max(_shape_product(left_shape), _shape_product(right_shape), _shape_product(output_shape)) > caps.max_tensor_elements:
         return GenericStructuralFeasibility(False, rejection_reasons=("element_count_cap_exceeded",))
 
     try:
-        output_to_left_axes = tuple(task.left_labels.index(label) if label in task.left_labels else -1 for label in task.output_labels)
-        output_to_right_axes = tuple(task.right_labels.index(label) if label in task.right_labels else -1 for label in task.output_labels)
-        contracted_to_left_axes = tuple(task.left_labels.index(label) for label in task.contracted_labels)
-        contracted_to_right_axes = tuple(task.right_labels.index(label) for label in task.contracted_labels)
+        output_to_left_axes = tuple(left_labels.index(label) if label in left_labels else -1 for label in output_labels)
+        output_to_right_axes = tuple(right_labels.index(label) if label in right_labels else -1 for label in output_labels)
+        contracted_to_left_axes = tuple(left_labels.index(label) for label in contracted_labels)
+        contracted_to_right_axes = tuple(right_labels.index(label) for label in contracted_labels)
         contracted_dims = tuple(left_shape[axis] for axis in contracted_to_left_axes)
     except ValueError:
         return GenericStructuralFeasibility(False, rejection_reasons=("label_mapping_invalid",))
-    for label, left_axis, right_axis in zip(task.contracted_labels, contracted_to_left_axes, contracted_to_right_axes):
+    for label, left_axis, right_axis in zip(contracted_labels, contracted_to_left_axes, contracted_to_right_axes):
         if left_shape[left_axis] != right_shape[right_axis]:
             return GenericStructuralFeasibility(False, rejection_reasons=("label_mapping_invalid",))
     if any(left_axis < 0 and right_axis < 0 for left_axis, right_axis in zip(output_to_left_axes, output_to_right_axes)):

@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, replace
-from typing import Iterable, TypeAlias
+from typing import Iterable, Mapping, Sequence, TypeAlias
 
 from quantum_bench.core.records import TensorNetworkSpec, TensorSpec
 from quantum_bench.tn.network import TensorNetworkValue
@@ -170,52 +170,18 @@ def build_contraction_dag(
     produced_by: dict[str, str] = {}
 
     for step_index, raw_pair in enumerate(path):
-        pair = tuple(int(item) for item in raw_pair)
-        if len(pair) != 2:
-            raise ValueError(f"Only binary contraction paths are supported; got {pair}")
-        i, j = sorted(pair)
-        if i < 0 or i == j or j >= len(active):
-            raise ValueError(f"Invalid contraction pair {pair} for {len(active)} active tensors")
-
-        left = active[i]
-        right = active[j]
-        _validate_shared_dimensions(left, right)
-        remaining = [tensor for index, tensor in enumerate(active) if index not in (i, j)]
-        remaining_labels = {label for tensor in remaining for label in tensor.labels}
-        output_labels = _output_labels(left, right, remaining_labels, spec.output_labels)
-        contracted_labels = tuple(
-            dict.fromkeys(
-                label for label in left.labels + right.labels if label not in output_labels
-            )
-        )
-        output_shape = tuple(_label_dimension(label, left, right) for label in output_labels)
         node_id = f"contract_{step_index}"
-        output = TensorSpec(
-            id=f"result_{step_index}",
-            labels=output_labels,
-            shape=output_shape,
-            structure="dense",
-            dtype=_common_dtype(left, right),
-            produced_by=node_id,
-        )
-        dependencies = tuple(
-            dependency
-            for tensor in (left, right)
-            if (dependency := produced_by.get(tensor.id)) is not None
-        )
-        node = ContractNode(
+        node, next_active = build_contract_node(
+            active,
+            tuple(raw_pair),
+            spec.output_labels,
+            produced_by=produced_by,
             node_id=node_id,
-            left=_view(left),
-            right=_view(right),
-            output=output,
-            contracted_labels=contracted_labels,
-            output_labels=output_labels,
-            dependencies=dependencies,
+            output_id=f"result_{step_index}",
         )
         nodes.append(node)
-        produced_by[output.id] = node_id
-        active = [tensor for index, tensor in enumerate(active) if index not in (i, j)]
-        active.append(output)
+        produced_by[node.output.id] = node_id
+        active = list(next_active)
 
     if len(active) != 1:
         raise ValueError(f"Contraction path ended with {len(active)} active tensors; expected one")
@@ -228,6 +194,63 @@ def build_contraction_dag(
     dag = ContractionDAG(tensors=tuple(spec.tensors), nodes=tuple(nodes), output=output)
     validate_contraction_dag(dag)
     return dag
+
+
+def build_contract_node(
+    active: Sequence[TensorSpec],
+    pair: Sequence[int],
+    final_output_labels: tuple[int, ...],
+    *,
+    produced_by: Mapping[str, str | None],
+    node_id: str,
+    output_id: str,
+) -> tuple[ContractNode, tuple[TensorSpec, ...]]:
+    """Lower one dynamic pair into target-neutral semantic DAG metadata."""
+
+    normalized_pair = tuple(int(item) for item in pair)
+    if len(normalized_pair) != 2:
+        raise ValueError(f"Only binary contraction paths are supported; got {normalized_pair}")
+    i, j = sorted(normalized_pair)
+    if i < 0 or i == j or j >= len(active):
+        raise ValueError(
+            f"Invalid contraction pair {normalized_pair} for {len(active)} active tensors"
+        )
+
+    left = active[i]
+    right = active[j]
+    _validate_shared_dimensions(left, right)
+    remaining = [tensor for index, tensor in enumerate(active) if index not in (i, j)]
+    remaining_labels = {label for tensor in remaining for label in tensor.labels}
+    output_labels = _output_labels(left, right, remaining_labels, final_output_labels)
+    contracted_labels = tuple(
+        dict.fromkeys(
+            label for label in left.labels + right.labels if label not in output_labels
+        )
+    )
+    output_shape = tuple(_label_dimension(label, left, right) for label in output_labels)
+    output = TensorSpec(
+        id=output_id,
+        labels=output_labels,
+        shape=output_shape,
+        structure="dense",
+        dtype=_common_dtype(left, right),
+        produced_by=node_id,
+    )
+    dependencies = tuple(
+        dependency
+        for tensor in (left, right)
+        if (dependency := produced_by.get(tensor.id)) is not None
+    )
+    node = ContractNode(
+        node_id=node_id,
+        left=_view(left),
+        right=_view(right),
+        output=output,
+        contracted_labels=contracted_labels,
+        output_labels=output_labels,
+        dependencies=dependencies,
+    )
+    return node, tuple((*remaining, output))
 
 
 def validate_contraction_dag(dag: ContractionDAG) -> None:

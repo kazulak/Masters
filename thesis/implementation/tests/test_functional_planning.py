@@ -5,6 +5,7 @@ import pytest
 from quantum_bench.circuits import builtin_circuit
 from quantum_bench.core.records import TensorNetworkSpec, TensorSpec
 from quantum_bench.tn.network import build_tensor_network
+from quantum_bench.tn.graph import ContractionDAG, build_contract_node, build_contraction_dag, contraction_dag_hash
 from quantum_bench.tn.planning import (
     PlannerEngine,
     PlannerRequest,
@@ -142,7 +143,6 @@ def test_custom_upmem_plans_from_metadata_without_fabricated_arrays() -> None:
         _chain_network(),
         {"engine": "custom_upmem", "input_representation": "real_float32"},
     )
-
     assert result.path
     assert result.metadata["selection_scope"] == UPMEM_PATH_SELECTION_SCOPE_V2
     assert result.metadata["numeric_flags"] == {
@@ -155,6 +155,36 @@ def test_custom_upmem_plans_from_metadata_without_fabricated_arrays() -> None:
         for item in result.metadata["step_trace"]
         if item["selected"]
     )
+
+
+def test_shared_pairwise_lowering_reproduces_dag_nodes_and_hash() -> None:
+    network = _chain_network()
+    planner_result = plan_opt_einsum(network)
+    dag = build_contraction_dag(network, planner_result.path)
+
+    active = list(network.tensors)
+    produced_by: dict[str, str] = {}
+    nodes = []
+    for step_index, pair in enumerate(planner_result.path):
+        node, next_active = build_contract_node(
+            active,
+            pair,
+            network.output_labels,
+            produced_by=produced_by,
+            node_id=f"contract_{step_index}",
+            output_id=f"result_{step_index}",
+        )
+        nodes.append(node)
+        produced_by[node.output.id] = node.node_id
+        active = list(next_active)
+
+    rebuilt = ContractionDAG(
+        tensors=network.tensors,
+        nodes=tuple(nodes),
+        output=dag.output,
+    )
+    assert rebuilt.nodes == dag.nodes
+    assert contraction_dag_hash(rebuilt) == contraction_dag_hash(dag)
 
 
 def test_custom_upmem_representation_assumption_controls_numeric_model() -> None:

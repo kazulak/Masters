@@ -14,8 +14,9 @@ from typing import Any
 import numpy as np
 
 from quantum_bench.core.records import TensorNetworkSpec, TensorSpec
+from quantum_bench.tn.graph import ContractNode, build_contract_node
 from quantum_bench.tn.network import TensorNetworkValue
-from quantum_bench.tn.planners import PlannerIdentity, PlannerResult
+from quantum_bench.tn.planner_records import PlannerIdentity, PlannerResult
 from quantum_bench.tn.upmem_path_cost import (
     DEFAULT_UPMEM_PATH_COST_NORMALIZATION_ID,
     DEFAULT_UPMEM_PATH_COST_POLICY_ID,
@@ -35,7 +36,7 @@ from quantum_bench.tn.upmem_path_cost_v2 import (
     TaskNumericExecution,
     UpmemPathCostProfileV2,
     combine_path_cost_components_v2,
-    model_upmem_task_cost_v2,
+    model_upmem_contract_cost_v2,
     task_numeric_execution,
     upmem_path_cost_policy_v2,
     upmem_path_cost_profile_v2,
@@ -230,7 +231,7 @@ class UpmemAwareGreedyPlanner:
 @dataclass(frozen=True)
 class _ProjectedCandidate:
     pair: tuple[int, int]
-    task: Any
+    node: ContractNode
     output_tensor: TensorSpec
     next_active: tuple[TensorSpec, ...]
     numeric_execution: TaskNumericExecution
@@ -344,13 +345,10 @@ def plan_upmem_projected_prefix(
     planner_identity = identity or _projected_prefix_identity(active_profile, request_config or {})
     start = time.perf_counter()
 
-    # Import lazily to preserve the existing task-graph/planner import order.
-    from quantum_bench.tn.task_graph import derive_binary_contraction_step
-
     active = [tensor for tensor in network.tensors]
     produced_by: dict[str, str | None] = {tensor.id: tensor.produced_by for tensor in active}
     numeric_flags = dict(complex_by_tensor)
-    selected_tasks: list[Any] = []
+    selected_nodes: list[ContractNode] = []
     selected_components: list[PathCostComponentsV2] = []
     selected_executions: dict[str, TaskNumericExecution] = {}
     path: list[tuple[int, int]] = []
@@ -362,21 +360,21 @@ def plan_upmem_projected_prefix(
         active_tensor_ids = [tensor.id for tensor in active]
         for i in range(len(active)):
             for j in range(i + 1, len(active)):
-                step = derive_binary_contraction_step(
+                node, next_active = build_contract_node(
                     active,
                     (i, j),
                     network.output_labels,
                     produced_by=produced_by,
-                    task_id=f"task_{step_index}",
+                    node_id=f"contract_{step_index}",
                     output_id=f"result_{step_index}",
                 )
                 execution = task_numeric_execution(
-                    numeric_flags[step.task.input_tensor_ids[0]],
-                    numeric_flags[step.task.input_tensor_ids[1]],
-                    int(np.prod(step.task.output_shape, dtype=np.int64)),
+                    numeric_flags[node.left.tensor_id],
+                    numeric_flags[node.right.tensor_id],
+                    int(np.prod(node.output.shape, dtype=np.int64)),
                 )
-                components = model_upmem_task_cost_v2(
-                    step.task,
+                components = model_upmem_contract_cost_v2(
+                    node,
                     active_profile.policy,
                     numeric_execution=execution,
                 )
@@ -386,19 +384,19 @@ def plan_upmem_projected_prefix(
                     active_profile.policy,
                 )
                 projected_score = active_profile.score(projected_components)
-                output_elements = int(np.prod(step.task.output_shape, dtype=np.int64))
+                output_elements = int(np.prod(node.output.shape, dtype=np.int64))
                 tie_break = (
                     projected_score,
                     components.tile_iterations,
                     output_elements,
-                    step.task.estimated_flops,
+                    _logical_complex_flops(node),
                     (i, j),
                 )
                 candidate = _ProjectedCandidate(
                     pair=(i, j),
-                    task=step.task,
-                    output_tensor=step.output_tensor,
-                    next_active=step.next_active,
+                    node=node,
+                    output_tensor=node.output,
+                    next_active=next_active,
                     numeric_execution=execution,
                     components=components,
                     local_score=local_score,
@@ -434,10 +432,12 @@ def plan_upmem_projected_prefix(
             )
 
         path.append(selected.pair)
-        selected_tasks.append(selected.task)
+        selected_nodes.append(selected.node)
         selected_components.append(selected.components)
-        selected_executions[selected.task.id] = selected.numeric_execution
-        produced_by[selected.output_tensor.id] = selected.task.id
+        # Keep the established PlannerResult metadata keys compatible with the
+        # historical TaskGraph materializer until the evidence schema migrates.
+        selected_executions[f"task_{step_index}"] = selected.numeric_execution
+        produced_by[selected.output_tensor.id] = selected.node.node_id
         numeric_flags[selected.output_tensor.id] = (
             selected.numeric_execution.representation == "split_real_imag"
         )
@@ -463,7 +463,7 @@ def plan_upmem_projected_prefix(
             f"{active_profile.profile_id} under {active_profile.policy.policy_id}"
         ),
         largest_intermediate=max(
-            (int(np.prod(task.output_shape, dtype=np.int64)) for task in selected_tasks),
+            (int(np.prod(node.output.shape, dtype=np.int64)) for node in selected_nodes),
             default=0,
         ),
         naive_flops=None,
@@ -530,10 +530,10 @@ def _projected_trace_entry(
         "step_index": step_index,
         "active_tensor_ids": list(active_tensor_ids),
         "pair": list(candidate.pair),
-        "left_tensor_id": candidate.task.input_tensor_ids[0],
-        "right_tensor_id": candidate.task.input_tensor_ids[1],
-        "output_tensor_id": candidate.task.output_tensor_id,
-        "output_shape": list(candidate.task.output_shape),
+        "left_tensor_id": candidate.node.left.tensor_id,
+        "right_tensor_id": candidate.node.right.tensor_id,
+        "output_tensor_id": candidate.node.output.id,
+        "output_shape": list(candidate.node.output.shape),
         "numeric_execution": candidate.numeric_execution.to_json_dict(),
         "feasible": components.feasibility,
         "local_step_score": candidate.local_score if np.isfinite(candidate.local_score) else None,
@@ -546,6 +546,15 @@ def _projected_trace_entry(
         "tie_break": _jsonable_tie_break(candidate.tie_break),
         "selected": selected,
     }
+
+
+def _logical_complex_flops(node: ContractNode) -> int:
+    reduced_elements = 1
+    for label in node.contracted_labels:
+        source = node.left if label in node.left.labels else node.right
+        reduced_elements *= int(source.shape[source.labels.index(label)])
+    output_elements = int(np.prod(node.output.shape, dtype=np.int64))
+    return 8 * output_elements * max(1, reduced_elements)
 
 
 def _jsonable_tie_break(value: tuple[Any, ...]) -> list[Any]:

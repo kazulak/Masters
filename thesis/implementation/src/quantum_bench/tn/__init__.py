@@ -37,6 +37,11 @@ from quantum_bench.tn.planning import (
     PlannerRequest,
     plan_contractions,
 )
+from quantum_bench.tn.planner_records import (
+    PlannerIdentity,
+    PlannerResult,
+    canonical_planner_config_hash,
+)
 from quantum_bench.tn.exact_modeled_planner import ExactModeledPlanner
 from quantum_bench.tn.planners import CotengraPlanner, OptEinsumPlanner, planner_from_config
 from quantum_bench.tn.slice_execution import execute_task_hybrid_slice_frontier_np_einsum, execute_task_sliced_sequence_np_einsum
@@ -80,7 +85,10 @@ __all__ = [
     "materialize_task_graph_from_planner_result",
     "order_final_tensor",
     "PlannerEngine",
+    "PlannerIdentity",
     "PlannerRequest",
+    "PlannerResult",
+    "canonical_planner_config_hash",
     "plan_contractions",
     "plan_task_graph",
     "plan_task_graph_with_config",

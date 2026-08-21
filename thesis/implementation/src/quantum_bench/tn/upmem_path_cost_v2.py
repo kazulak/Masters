@@ -20,8 +20,9 @@ from quantum_bench.routing.generic_numeric_contract import classify_numeric
 from quantum_bench.routing.generic_prepare import (
     GENERIC_OUTPUT_TILE_ELEMENTS,
     GenericTaskPreparationCaps,
-    generic_structural_feasibility,
+    generic_structural_feasibility_from_metadata,
 )
+from quantum_bench.tn.graph import ContractNode
 from quantum_bench.tn.network import TensorNetworkValue
 
 
@@ -360,8 +361,40 @@ def model_upmem_task_cost_v2(
     *,
     numeric_execution: TaskNumericExecution | None = None,
 ) -> PathCostComponentsV2:
+    return _model_upmem_structural_cost_v2(
+        task.input_shapes,
+        task.output_shape,
+        task.left_labels,
+        task.right_labels,
+        task.contracted_labels,
+        task.output_labels,
+        policy,
+        numeric_execution=numeric_execution,
+    )
+
+
+def _model_upmem_structural_cost_v2(
+    input_shapes: tuple[tuple[int, ...], tuple[int, ...]],
+    output_shape: tuple[int, ...],
+    left_labels: tuple[int, ...],
+    right_labels: tuple[int, ...],
+    contracted_labels: tuple[int, ...],
+    output_labels: tuple[int, ...],
+    policy: UpmemPathCostPolicyV2 | None = None,
+    *,
+    numeric_execution: TaskNumericExecution | None = None,
+) -> PathCostComponentsV2:
     active = policy or upmem_path_cost_policy_v2()
-    structural = generic_structural_feasibility(task, active.caps, check_int32_accumulation=False)
+    structural = generic_structural_feasibility_from_metadata(
+        input_shapes=input_shapes,
+        output_shape=output_shape,
+        left_labels=left_labels,
+        right_labels=right_labels,
+        contracted_labels=contracted_labels,
+        output_labels=output_labels,
+        caps=active.caps,
+        check_int32_accumulation=False,
+    )
     if not structural.feasible:
         return PathCostComponentsV2(feasibility=False, rejection_reasons=structural.rejection_reasons)
     if active.native_static_mram_reservation_bytes > active.mram_capacity_bytes:
@@ -374,10 +407,10 @@ def model_upmem_task_cost_v2(
             feasibility=False,
             rejection_reasons=("configured_known_wram_static_bytes_exceed_budget",),
         )
-    execution = numeric_execution or task_numeric_execution(False, False, _shape_product(task.output_shape))
+    execution = numeric_execution or task_numeric_execution(False, False, _shape_product(output_shape))
     if not execution.feasible:
         return PathCostComponentsV2(feasibility=False, rejection_reasons=(execution.rejection_reason or "numeric_contract_rejected",))
-    components = _components_from_structural_v2(task, structural.metadata, active, execution)
+    components = _components_from_structural_v2(input_shapes, structural.metadata, active, execution)
     if components.task_mram_payload_bytes > active.native_static_mram_reservation_bytes:
         return replace(
             components,
@@ -391,6 +424,31 @@ def model_upmem_task_cost_v2(
             rejection_reasons=("mram_live_payload_exceeds_configured_capacity",),
         )
     return components
+
+
+def model_upmem_contract_cost_v2(
+    node: ContractNode,
+    policy: UpmemPathCostPolicyV2 | None = None,
+    *,
+    numeric_execution: TaskNumericExecution | None = None,
+) -> PathCostComponentsV2:
+    """Model a semantic DAG contraction with the established v2 formulas."""
+
+    shared_contracted_labels = tuple(
+        label
+        for label in node.contracted_labels
+        if label in node.left.labels and label in node.right.labels
+    )
+    return _model_upmem_structural_cost_v2(
+        input_shapes=(node.left.shape, node.right.shape),
+        output_shape=node.output.shape,
+        left_labels=node.left.labels,
+        right_labels=node.right.labels,
+        contracted_labels=shared_contracted_labels,
+        output_labels=node.output_labels,
+        policy=policy,
+        numeric_execution=numeric_execution,
+    )
 
 
 def model_upmem_path_cost_v2(
@@ -465,15 +523,15 @@ def combine_path_cost_components_v2(
 
 
 def _components_from_structural_v2(
-    task: ContractionTask,
+    input_shapes: tuple[tuple[int, ...], tuple[int, ...]],
     metadata: Mapping[str, object],
     policy: UpmemPathCostPolicyV2,
     execution: TaskNumericExecution,
 ) -> PathCostComponentsV2:
     output_elements = int(metadata["output_element_count"])
     contracted_count = int(metadata["contracted_combination_count"])
-    left_elements = _shape_product(task.input_shapes[0])
-    right_elements = _shape_product(task.input_shapes[1])
+    left_elements = _shape_product(input_shapes[0])
+    right_elements = _shape_product(input_shapes[1])
     component_count = int(execution.component_invocations)
     output_bytes = output_elements * policy.output_element_bytes
     left_bytes = left_elements * policy.input_element_bytes
