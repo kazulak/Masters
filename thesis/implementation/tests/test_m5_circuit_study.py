@@ -23,10 +23,9 @@ from quantum_bench.bench.m5_circuit_study import (
     run_study,
 )
 from quantum_bench.core.records import TensorSpec
-from quantum_bench.execution import NumericMode
+from quantum_bench.execution import NumericMode, UpmemTopology
 from quantum_bench.execution.numeric import contract_node
 from quantum_bench.tn.graph import ContractionDAG, ContractNode, TensorView
-from quantum_bench.whole_circuit import DeviceTopology, EngineTaskResult
 
 
 def _study(
@@ -132,7 +131,7 @@ class _VerifiedPhysicalEngine:
     initialization_binary = Path(__file__)
     rank_paths = ("/dev/dpu_rank0",)
 
-    def open_session(self, policy: object, topology: DeviceTopology):
+    def open_session(self, policy: NumericMode, topology: UpmemTopology):
         class Session:
             def execute(
                 self,
@@ -144,62 +143,59 @@ class _VerifiedPhysicalEngine:
             ):
                 mode = (
                     NumericMode.HOST_PACKED_INT8_PER_TASK_V1
-                    if policy.name == "host_packed_int8_per_task_v1"
+                    if policy is NumericMode.HOST_PACKED_INT8_PER_TASK_V1
                     else NumericMode.FLOAT32_REAL
                 )
                 output = contract_node(task, left, right, mode)
-                return EngineTaskResult(
-                    output,
-                    {
-                        "engine": "verified_physical",
-                        "device": "physical-test-dpu",
-                        "input_dtype": "int8"
-                        if mode is NumericMode.HOST_PACKED_INT8_PER_TASK_V1
-                        else "float32",
-                        "native_kernel_executed": True,
-                        "hardware_kernel_executed": True,
-                        "hardware_allocation_verified": True,
-                        "hardware_release_verified": True,
-                        "target_observed": "physical-test-dpu",
-                        "physical_profile": "m5_whole_circuit_v4_v1",
-                        "profile": "m5_whole_circuit_v4_v1",
-                        "abi": "execution_plan_v4",
-                        "abi_version": "execution_plan_v4",
-                        "numeric_transport": policy.name,
-                        "session_protocol": "persistent_rank_session_v1",
-                        "dispatch_mode": "bulk_set_synchronous_v1",
-                        "kernel_identity": "dpu_gemm_tile_v4",
-                        "execution_class": "physical_v4_output_tile",
-                        "graph_intermediate_placement": "host_managed",
-                        "graph_intermediate_placement_origin": "m5_host_coordinator_v1",
-                        "native_identity_verified": True,
-                        "physical_plan_consumed": node_plan is not None,
-                        "application_visible_h2d_bytes": 2,
-                        "application_visible_d2h_bytes": 3,
-                        "application_visible_transfer_bytes": 5,
-                        "timing": {
-                            "preparation_time_s": 0.04
-                            if mode is NumericMode.FLOAT32_REAL
-                            else 0.0,
-                            "h2d_time_s": 0.01,
-                            "kernel_time_s": 0.02,
-                            "d2h_time_s": 0.03,
-                            "host_quantization_time_s": 0.04
-                            if mode is NumericMode.HOST_PACKED_INT8_PER_TASK_V1
-                            else 0.0,
-                            "host_dequantization_time_s": 0.05,
-                        },
-                        # The physical engine currently exposes host conversion
-                        # times both directly and in its nested timing object.
-                        # Aggregation must count each stage once.
+                return output, {
+                    "engine": "verified_physical",
+                    "device": "physical-test-dpu",
+                    "input_dtype": "int8"
+                    if mode is NumericMode.HOST_PACKED_INT8_PER_TASK_V1
+                    else "float32",
+                    "native_kernel_executed": True,
+                    "hardware_kernel_executed": True,
+                    "hardware_allocation_verified": True,
+                    "hardware_release_verified": True,
+                    "target_observed": "physical-test-dpu",
+                    "physical_profile": "m5_whole_circuit_v4_v1",
+                    "profile": "m5_whole_circuit_v4_v1",
+                    "abi": "execution_plan_v4",
+                    "abi_version": "execution_plan_v4",
+                    "numeric_transport": policy.value,
+                    "session_protocol": "persistent_rank_session_v1",
+                    "dispatch_mode": "bulk_set_synchronous_v1",
+                    "kernel_identity": "dpu_gemm_tile_v4",
+                    "execution_class": "physical_v4_output_tile",
+                    "graph_intermediate_placement": "host_managed",
+                    "graph_intermediate_placement_origin": "m5_host_coordinator_v1",
+                    "native_identity_verified": True,
+                    "physical_plan_consumed": node_plan is not None,
+                    "application_visible_h2d_bytes": 2,
+                    "application_visible_d2h_bytes": 3,
+                    "application_visible_transfer_bytes": 5,
+                    "timing": {
+                        "preparation_time_s": 0.04
+                        if mode is NumericMode.FLOAT32_REAL
+                        else 0.0,
+                        "h2d_time_s": 0.01,
+                        "kernel_time_s": 0.02,
+                        "d2h_time_s": 0.03,
                         "host_quantization_time_s": 0.04
                         if mode is NumericMode.HOST_PACKED_INT8_PER_TASK_V1
                         else 0.0,
                         "host_dequantization_time_s": 0.05,
-                        "request_level_speedup_applicable": False,
-                        "request_timing_is_bringup_only": True,
                     },
-                )
+                    # The physical engine currently exposes host conversion
+                    # times both directly and in its nested timing object.
+                    # Aggregation must count each stage once.
+                    "host_quantization_time_s": 0.04
+                    if mode is NumericMode.HOST_PACKED_INT8_PER_TASK_V1
+                    else 0.0,
+                    "host_dequantization_time_s": 0.05,
+                    "request_level_speedup_applicable": False,
+                    "request_timing_is_bringup_only": True,
+                }
 
             def close(self):
                 return {
@@ -235,7 +231,7 @@ class _VerifiedPhysicalEngine:
 class _FailingEngine:
     name = "failing"
 
-    def open_session(self, policy: object, topology: DeviceTopology):
+    def open_session(self, policy: NumericMode, topology: UpmemTopology):
         raise RuntimeError("deliberate engine failure")
 
 
@@ -266,7 +262,9 @@ def test_config_plans_all_case_planner_combinations_without_engine_calls(
         == item["contraction_dag_hash"]
         for item in payload["plans"]
     )
-    assert all(item["task_count"] == item["dag_node_count"] for item in payload["plans"])
+    assert all(
+        item["task_count"] == item["dag_node_count"] for item in payload["plans"]
+    )
 
 
 def test_route_selection_filters_rows_and_rejects_unknown_or_empty_ids(
@@ -353,7 +351,10 @@ def test_physical_engine_rank_paths_must_match_suite_binding(tmp_path: Path) -> 
     )
     rows = [row for row in _records(run_dir) if row["engine_id"] == "injected"]
     assert rows and all(row["status"] == "failed" for row in rows)
-    assert all("rank_paths do not match suite-resolved topology" in row["error"] for row in rows)
+    assert all(
+        "rank_paths do not match suite-resolved topology" in row["error"]
+        for row in rows
+    )
 
 
 def test_cpu_route_rejects_non_numpy_engine_before_execution(tmp_path: Path) -> None:
@@ -366,7 +367,9 @@ def test_cpu_route_rejects_non_numpy_engine_before_execution(tmp_path: Path) -> 
     run_dir = run_study(tmp_path, study)
     rows = _records(run_dir)
     assert rows and all(row["status"] == "failed" for row in rows)
-    assert all(row["failure_stage"] == "execution_plan_compilation_failed" for row in rows)
+    assert all(
+        row["failure_stage"] == "execution_plan_compilation_failed" for row in rows
+    )
     assert all("numpy_cpu" in row["error"] for row in rows)
 
 
@@ -548,7 +551,7 @@ def test_quantized_row_keeps_policy_and_full_precision_validation_separate(
 
 def test_host_packed_runtime_name_uses_quantized_validation_tolerances() -> None:
     policy = _policy("host_packed_int8")
-    assert policy.name == "host_packed_int8_per_task_v1"
+    assert policy is NumericMode.HOST_PACKED_INT8_PER_TASK_V1
     assert _is_quantized_policy(policy) is True
     actual = np.array([1.1], dtype=np.float32)
     expected = np.array([1.0], dtype=np.float32)
@@ -787,11 +790,7 @@ def test_executor_hash_matches_numeric_ablations_but_separates_fixed_identity() 
             "kernel_identity": "contract-v1",
         },
     }
-    topology = DeviceTopology(
-        backend="upmem",
-        device_ids=("dpu:0", "dpu:1"),
-        tasklets_per_device=1,
-    )
+    topology = UpmemTopology(dpu_count=2, tasklets_per_dpu=1, rank_count=1)
     float_hash = _executor_config_hash(
         variant,
         _policy("float32_real"),
@@ -843,11 +842,7 @@ def test_executor_hash_matches_numeric_ablations_but_separates_fixed_identity() 
             "topology": {"rank_paths": ["/dev/dpu_rank1", "/dev/dpu_rank2"]},
         },
         _policy("float32_real"),
-        DeviceTopology(
-            backend="upmem",
-            device_ids=("dpu:0",),
-            tasklets_per_device=1,
-        ),
+        UpmemTopology(dpu_count=1, tasklets_per_dpu=1, rank_count=1),
         {},
     )
     engine_hash = _executor_config_hash(

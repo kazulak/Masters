@@ -204,22 +204,19 @@ def test_physical_factory_selects_explicit_tasklet_binaries(
         binary.write_bytes(b"binary")
     os.chmod(binaries[0], 0o755)
 
-    module = importlib.import_module(
-        "quantum_bench.targets.upmem.m5_whole_circuit_engine"
-    )
+    module = importlib.import_module("quantum_bench.targets.upmem.v4_executor")
     captured: dict[str, object] = {}
 
     class FakeEngine:
         def __init__(self, **kwargs: object) -> None:
             captured.update(kwargs)
 
-    monkeypatch.setattr(module, "M5WholeCircuitEngine", FakeEngine)
+    monkeypatch.setattr(module, "UpmemV4Executor", FakeEngine)
     factory = _physical_factory(tmp_path)
     engine = factory(
         topology=SimpleNamespace(
-            backend="upmem",
-            device_ids=("dpu:0", "dpu:1"),
-            tasklets_per_device=4,
+            dpu_count=2,
+            tasklets_per_dpu=4,
         ),
         engine_variant={
             "id": "upmem_test",

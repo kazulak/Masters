@@ -29,7 +29,7 @@ from quantum_bench.targets.upmem.execution_plan_v4 import (
     MAX_CONTRACTED,
     MAX_INT32_SAFE_K,
 )
-from quantum_bench.targets.upmem.m5_whole_circuit_tiles import (
+from quantum_bench.targets.upmem.v4_tiling import (
     M5Tile,
     TileLoweringError,
     canonical_label_geometry,

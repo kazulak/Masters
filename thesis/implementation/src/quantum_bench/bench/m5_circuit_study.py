@@ -64,12 +64,6 @@ from quantum_bench.tn.graph import (
 from quantum_bench.tn.network import build_tensor_network_data
 from quantum_bench.tn.planning import PlannerRequest, plan_contractions
 from quantum_bench.tn.planner_records import PlannerResult
-from quantum_bench.whole_circuit import (
-    DeviceTopology,
-    Float32RealPolicy,
-    HostPackedInt8Policy,
-)
-
 
 SCHEMA_VERSION = 2
 LEGACY_SCHEMA_VERSION = 1
@@ -352,14 +346,14 @@ def run_study(
         anchor: dict[str, Any] | None = None
         policy_anchors: dict[str, dict[str, Any]] = {}
         if planned.preflight["status"] == "supported":
-            anchor = _run_anchor(planned, config, Float32RealPolicy())
+            anchor = _run_anchor(planned, config, NumericMode.FLOAT32_REAL)
             declared_policies = {
                 str(policies_by_id[route["numeric_policy_id"]]["policy"])
                 for route in planned_routes
             }
             for policy_name, policy in (
-                ("float32_real", Float32RealPolicy()),
-                ("host_packed_int8", HostPackedInt8Policy()),
+                ("float32_real", NumericMode.FLOAT32_REAL),
+                ("host_packed_int8", NumericMode.HOST_PACKED_INT8_PER_TASK_V1),
             ):
                 if policy_name not in declared_policies:
                     continue
@@ -382,7 +376,7 @@ def run_study(
                 execution_plan = _compile_route_plan(
                     planned,
                     str(engine_variant["topology"]["backend"]),
-                    _numeric_mode_from_policy(_policy(str(policy_variant["policy"]))),
+                    _numeric_mode_from_policy(str(policy_variant["policy"])),
                     engine_variant,
                 )
                 compilation_time_s = time.perf_counter() - compilation_started
@@ -390,8 +384,14 @@ def run_study(
                 compilation_time_s = time.perf_counter() - compilation_started
                 for repeat_id in range(config["repeats"]):
                     row_base = _row_base(
-                        config, planned, engine_variant, policy_variant, route,
-                        comparison_ids, repeat_id, anchor,
+                        config,
+                        planned,
+                        engine_variant,
+                        policy_variant,
+                        route,
+                        comparison_ids,
+                        repeat_id,
+                        anchor,
                     )
                     records.append(
                         {
@@ -671,7 +671,9 @@ def _tensor_bytes(shape: tuple[int, ...], element_bytes: int) -> int:
     return int(np.prod(shape, dtype=np.int64)) * element_bytes
 
 
-def _topological_dag_nodes(dag: ContractionDAG) -> tuple[ContractNode | ReduceNode, ...]:
+def _topological_dag_nodes(
+    dag: ContractionDAG,
+) -> tuple[ContractNode | ReduceNode, ...]:
     """Return a deterministic dependency order without trusting ``dag.nodes`` order."""
 
     nodes = {node.node_id: node for node in dag.nodes}
@@ -725,10 +727,11 @@ def _preflight(resources: dict[str, Any], limits: dict[str, int]) -> dict[str, A
     }
 
 
-def _run_anchor(planned: _Plan, config: dict[str, Any], policy: Any) -> dict[str, Any]:
+def _run_anchor(
+    planned: _Plan, config: dict[str, Any], numeric_mode: NumericMode
+) -> dict[str, Any]:
     start = time.perf_counter()
     try:
-        numeric_mode = _numeric_mode_from_policy(policy)
         compiled = compile_execution(
             planned.dag,
             CpuCompileRequest(
@@ -795,11 +798,17 @@ def _execute_combo(
     adapter_validation = validate_route_adapter(
         route, planned.planner, policy_variant, engine_variant
     )
-    topology = _legacy_topology(engine_variant["topology"])
-    policy = _policy(str(policy_variant["policy"]))
     backend = str(engine_variant["topology"]["backend"])
+    topology = (
+        _upmem_topology_from_config(engine_variant["topology"])
+        if backend != "cpu"
+        else UpmemTopology(dpu_count=1, tasklets_per_dpu=1, rank_count=1)
+    )
+    numeric_mode = _policy(str(policy_variant["policy"]))
     if isinstance(execution_plan, UnsupportedExecution):
-        raise RuntimeError("unsupported execution plans must be handled before execution")
+        raise RuntimeError(
+            "unsupported execution plans must be handled before execution"
+        )
 
     resources = None
     if execution_plan.target is Target.UPMEM:
@@ -841,13 +850,13 @@ def _execute_combo(
         output,
         expected_policy,
         config["tolerances"],
-        quantized=_is_quantized_policy(policy),
+        quantized=_is_quantized_policy(numeric_mode),
     )
     full_validation = _validation(
         output,
         expected_full,
         config["tolerances"],
-        quantized=_is_quantized_policy(policy),
+        quantized=_is_quantized_policy(numeric_mode),
     )
     failed_validation = (
         full_validation["status"] == "failed" or policy_validation["status"] == "failed"
@@ -855,13 +864,11 @@ def _execute_combo(
     engine_metadata = _engine_metadata(metadata)
     hardware = _hardware_contract(engine_metadata, engine_variant["topology"])
     hardware_failure = backend != "cpu" and not hardware["verified"]
-    route_observation = admit_route_observation(
-        route, engine_metadata, backend=backend
-    )
+    route_observation = admit_route_observation(route, engine_metadata, backend=backend)
     route_observation_failure = not bool(route_observation["passed"])
     output_hash = _array_hash(output)
     executor_hash = _executor_config_hash(
-        engine_variant, policy, topology, engine_metadata
+        engine_variant, numeric_mode, topology, engine_metadata
     )
     timing = _timing_metadata(result)
     transfer = _transfer_metadata(result)
@@ -1036,18 +1043,29 @@ def _execute_combo(
 
 
 def _numeric_mode_from_policy(policy: Any) -> NumericMode:
+    if isinstance(policy, NumericMode):
+        return policy
     if _is_quantized_policy(policy):
         return NumericMode.HOST_PACKED_INT8_PER_TASK_V1
-    if str(getattr(policy, "name", "")) == "float32_real":
+    if str(policy) == "float32_real":
         return NumericMode.FLOAT32_REAL
-    raise ValueError(f"unsupported M5 numeric policy {getattr(policy, 'name', None)!r}")
+    raise ValueError(f"unsupported M5 numeric policy {policy!r}")
 
 
-def _legacy_topology(topology: Mapping[str, Any]) -> DeviceTopology:
-    return DeviceTopology(
-        backend=str(topology["backend"]),
-        device_ids=tuple(str(value) for value in topology["device_ids"]),
-        tasklets_per_device=int(topology["tasklets_per_device"]),
+def _upmem_topology_from_config(topology: Mapping[str, Any]) -> UpmemTopology:
+    dpu_count = len(topology.get("device_ids", []))
+    rank_count = len(topology.get("rank_paths", []))
+    tasklets_per_dpu = int(topology.get("tasklets_per_device", 0))
+    if dpu_count < 1:
+        raise ValueError("UPMEM topology must configure at least one DPU")
+    if tasklets_per_dpu < 1:
+        raise ValueError("UPMEM topology must configure at least one tasklet per DPU")
+    if rank_count < 1:
+        raise ValueError("UPMEM topology must configure at least one rank path")
+    return UpmemTopology(
+        dpu_count=dpu_count,
+        tasklets_per_dpu=tasklets_per_dpu,
+        rank_count=rank_count,
     )
 
 
@@ -1088,7 +1106,7 @@ def _compile_route_plan(
 
 def _upmem_runtime_resources(
     engine: Any,
-    topology: DeviceTopology,
+    topology: UpmemTopology,
     execution_plan: Any,
     *,
     expected_rank_paths: tuple[str, ...],
@@ -1123,9 +1141,7 @@ def _upmem_runtime_resources(
         )
 
     def open_session(_plan: Any, _context: RunContext) -> Any:
-        return engine.open_session(
-            _policy_for_mode(execution_plan.payload.numeric_mode), topology
-        )
+        return engine.open_session(execution_plan.payload.numeric_mode, topology)
 
     return UpmemRuntimeResources(
         session_root=str(engine.session_root),
@@ -1137,12 +1153,8 @@ def _upmem_runtime_resources(
     )
 
 
-def _policy_for_mode(mode: NumericMode) -> Any:
-    return (
-        HostPackedInt8Policy()
-        if mode is NumericMode.HOST_PACKED_INT8_PER_TASK_V1
-        else Float32RealPolicy()
-    )
+def _policy_for_mode(mode: NumericMode) -> NumericMode:
+    return mode
 
 
 def _execution_metadata(
@@ -1289,10 +1301,10 @@ def _row_base(
         "executor_config_hash": _executor_config_hash(
             engine,
             _policy(str(policy["policy"])),
-            DeviceTopology(
-                backend=topology["backend"],
-                device_ids=tuple(topology["device_ids"]),
-                tasklets_per_device=int(topology["tasklets_per_device"]),
+            (
+                _upmem_topology_from_config(topology)
+                if topology["backend"] != "cpu"
+                else UpmemTopology(dpu_count=1, tasklets_per_dpu=1, rank_count=1)
             ),
             {},
         ),
@@ -1447,7 +1459,7 @@ def _validation(
 
 def _resolve_engine(
     variant: dict[str, Any],
-    topology: DeviceTopology,
+    topology: UpmemTopology,
     factories: dict[str, Any],
     *,
     timeout_s: float,
@@ -1476,18 +1488,18 @@ def _resolve_engine(
     return factory(**kwargs) if kwargs else factory()
 
 
-def _policy(name: str) -> Any:
+def _policy(name: str) -> NumericMode:
     if name == "float32_real":
-        return Float32RealPolicy()
+        return NumericMode.FLOAT32_REAL
     if name == "host_packed_int8":
-        return HostPackedInt8Policy()
+        return NumericMode.HOST_PACKED_INT8_PER_TASK_V1
     raise ValueError(f"Unsupported numeric policy {name}")
 
 
 def _is_quantized_policy(policy: Any) -> bool:
     """Identify the host-packed int8 runtime policy independent of its ID."""
 
-    return str(getattr(policy, "name", "")) in {
+    return str(getattr(policy, "value", policy)) in {
         "host_packed_int8",
         "host_packed_int8_per_task_v1",
     }
@@ -1711,8 +1723,8 @@ def _executor_config_fields(entry: Mapping[str, Any]) -> dict[str, Any]:
 
 def _executor_config_hash(
     variant: Mapping[str, Any],
-    _policy: Any,
-    _topology: DeviceTopology,
+    _numeric_mode: NumericMode,
+    _topology: UpmemTopology,
     metadata: Mapping[str, Any],
 ) -> str:
     """Hash the stable executor contract, excluding ablation dimensions.

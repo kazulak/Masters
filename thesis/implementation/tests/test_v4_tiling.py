@@ -5,7 +5,7 @@ import pytest
 
 from quantum_bench.core.records import TensorSpec
 from quantum_bench.tn.graph import ContractNode, TensorView
-from quantum_bench.targets.upmem.m5_whole_circuit_tiles import (
+from quantum_bench.targets.upmem.v4_tiling import (
     M5TileLimits,
     TileLoweringError,
     assemble_output_tiles,

@@ -26,6 +26,7 @@ from quantum_bench.execution.contracts import (
     TimingBreakdown,
     UpmemPlan,
     UpmemRuntimeResources,
+    UpmemTopology,
     canonical_serialize,
     validate_execution_plan,
     validate_execution_result,
@@ -58,8 +59,8 @@ class _Aggregate:
     route_total_s: float = 0.0
     physical_plan_consumed: bool = False
 
-    def add(self, result: Any) -> None:
-        metadata = getattr(result, "metadata", {})
+    def add(self, result: tuple[np.ndarray, Mapping[str, Any]]) -> None:
+        _, metadata = result
         if not isinstance(metadata, Mapping):
             metadata = {}
         timing = metadata.get("timing", {})
@@ -243,14 +244,7 @@ def run_upmem(
 def _open_session(plan: ExecutionPlan, context: RunContext) -> Any:
     """Create the real M5 session; tests replace this single seam."""
 
-    from quantum_bench.targets.upmem.m5_whole_circuit_engine import (
-        M5WholeCircuitEngine,
-    )
-    from quantum_bench.whole_circuit.core import DeviceTopology
-    from quantum_bench.whole_circuit.policies import (
-        Float32RealPolicy,
-        HostPackedInt8Policy,
-    )
+    from quantum_bench.targets.upmem.v4_executor import UpmemV4Executor
 
     payload = plan.payload
     assert isinstance(payload, UpmemPlan)
@@ -259,7 +253,7 @@ def _open_session(plan: ExecutionPlan, context: RunContext) -> Any:
     if resources.session_opener is not None:
         return resources.session_opener(plan, context)
     timeout_s = 60.0 if context.timeout_s is None else context.timeout_s
-    engine = M5WholeCircuitEngine(
+    engine = UpmemV4Executor(
         session_root=Path(resources.session_root),
         host_binary=Path(resources.host_binary),
         dpu_binary=Path(resources.dpu_binary),
@@ -269,17 +263,12 @@ def _open_session(plan: ExecutionPlan, context: RunContext) -> Any:
         tasklets_per_dpu=payload.topology.tasklets_per_dpu,
         timeout_s=timeout_s,
     )
-    policy = (
-        HostPackedInt8Policy()
-        if payload.numeric_mode is NumericMode.HOST_PACKED_INT8_PER_TASK_V1
-        else Float32RealPolicy()
+    topology = UpmemTopology(
+        dpu_count=payload.topology.dpu_count,
+        tasklets_per_dpu=payload.topology.tasklets_per_dpu,
+        rank_count=payload.topology.rank_count,
     )
-    topology = DeviceTopology(
-        backend="upmem",
-        device_ids=tuple(f"dpu_{index}" for index in range(payload.topology.dpu_count)),
-        tasklets_per_device=payload.topology.tasklets_per_dpu,
-    )
-    return engine.open_session(policy, topology)
+    return engine.open_session(payload.numeric_mode, topology)
 
 
 def _execute_once(
@@ -302,11 +291,11 @@ def _execute_once(
         if isinstance(node, ContractNode):
             left = _resolve_view(node.left, tensors)
             right = _resolve_view(node.right, tensors)
-            task_result = session.execute(node, left, right, node_plan=node_plan)
+            value, metadata = session.execute(node, left, right, node_plan=node_plan)
             if aggregate is not None:
                 assert resources is not None
-                aggregate.add(task_result)
-            value = np.asarray(task_result.output)
+                aggregate.add((value, metadata))
+            value = np.asarray(value)
         elif isinstance(node, ReduceNode):
             reduction_started = time.perf_counter()
             value = np.sum(

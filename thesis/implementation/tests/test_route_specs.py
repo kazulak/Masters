@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from quantum_bench.whole_circuit import (
+from quantum_bench.bench.route_specs import (
     ComparisonSpec,
     ModuleSpec,
     PipelineParameters,

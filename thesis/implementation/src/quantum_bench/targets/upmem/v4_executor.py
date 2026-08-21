@@ -22,7 +22,7 @@ from typing import Any, Callable, Mapping, Protocol
 
 import numpy as np
 
-from quantum_bench.execution.contracts import NumericMode, UpmemNodePlan
+from quantum_bench.execution.contracts import NumericMode, UpmemNodePlan, UpmemTopology
 from quantum_bench.execution.numeric import (
     decode_contraction_output,
     encode_tensor,
@@ -39,18 +39,12 @@ from quantum_bench.targets.upmem.execution_plan_v4 import (
     V4WorkUnit,
     build_v4_request,
 )
-from quantum_bench.targets.upmem.m5_whole_circuit_tiles import (
+from quantum_bench.targets.upmem.v4_tiling import (
     M5Tile,
     M5TileLimits,
     M5TileLowering,
     lower_binary_contraction,
 )
-from quantum_bench.whole_circuit.core import (
-    DeviceTopology,
-    EngineTaskResult,
-    NumericPolicy,
-)
-
 
 _INT64_MAX = (1 << 63) - 1
 
@@ -366,7 +360,7 @@ def _close_rank_before_deadline(rank: _RankSession, deadline: float) -> Any:
     return rank.session.close(timeout_s=remaining)
 
 
-class M5WholeCircuitEngine:
+class UpmemV4Executor:
     """Physical v4 tile engine with explicit ranks and no fallback route."""
 
     name = "upmem_execution_plan_v4_whole_circuit"
@@ -431,19 +425,22 @@ class M5WholeCircuitEngine:
 
     def open_session(
         self,
-        policy: NumericPolicy,
-        topology: DeviceTopology = DeviceTopology(),
-    ) -> M5WholeCircuitSession:
-        if topology.backend != "upmem":
-            raise ValueError("M5WholeCircuitEngine requires an upmem topology")
-        if len(topology.device_ids) != self.dpu_count:
+        numeric_mode: NumericMode,
+        topology: UpmemTopology,
+    ) -> UpmemV4Session:
+        if topology.dpu_count != self.dpu_count:
             raise ValueError("topology device count must match engine dpu_count")
-        if topology.tasklets_per_device != self.tasklets_per_dpu:
+        if topology.tasklets_per_dpu != self.tasklets_per_dpu:
             raise ValueError(
                 "topology tasklet count must match engine tasklets_per_dpu"
             )
-        if policy.name not in {"float32_real", "host_packed_int8_per_task_v1"}:
-            raise ValueError(f"unsupported M5 numeric policy: {policy.name}")
+        if topology.rank_count != len(self.rank_paths):
+            raise ValueError("topology rank count must match engine rank_paths")
+        if numeric_mode not in {
+            NumericMode.FLOAT32_REAL,
+            NumericMode.HOST_PACKED_INT8_PER_TASK_V1,
+        }:
+            raise ValueError(f"unsupported M5 numeric mode: {numeric_mode}")
 
         deadline = time.monotonic() + self.timeout_s
         self.session_root.mkdir(parents=True, exist_ok=True)
@@ -464,7 +461,7 @@ class M5WholeCircuitEngine:
                     tasklets_per_dpu=self.tasklets_per_dpu,
                     numeric_mode=(
                         NUMERIC_HOST_PACKED_INT8
-                        if policy.name == "host_packed_int8_per_task_v1"
+                        if numeric_mode is NumericMode.HOST_PACKED_INT8_PER_TASK_V1
                         else NUMERIC_FLOAT32
                     ),
                     rank_path=rank_path,
@@ -516,26 +513,26 @@ class M5WholeCircuitEngine:
                         except BaseException:
                             pass
             raise
-        return M5WholeCircuitSession(
-            policy=policy,
+        return UpmemV4Session(
+            numeric_mode=numeric_mode,
             ranks=tuple(ranks),
             engine=self,
             deadline=deadline,
         )
 
 
-class M5WholeCircuitSession:
+class UpmemV4Session:
     """Persistent rank sessions used by one whole-graph measurement."""
 
     def __init__(
         self,
         *,
-        policy: NumericPolicy,
+        numeric_mode: NumericMode,
         ranks: tuple[_RankSession, ...],
-        engine: M5WholeCircuitEngine,
+        engine: UpmemV4Executor,
         deadline: float,
     ) -> None:
-        self.policy = policy
+        self.numeric_mode = numeric_mode
         self.ranks = ranks
         self.engine = engine
         self._deadline = float(deadline)
@@ -574,27 +571,21 @@ class M5WholeCircuitSession:
         right: np.ndarray,
         *,
         node_plan: UpmemNodePlan,
-    ) -> EngineTaskResult:
+    ) -> tuple[np.ndarray, Mapping[str, Any]]:
         if self._closed:
-            raise RuntimeError("M5 whole-circuit session is closed")
+            raise RuntimeError("UPMEM v4 session is closed")
         if node_plan is None or not isinstance(node_plan, UpmemNodePlan):
-            raise ValueError(
-                "M5WholeCircuitSession.execute requires a valid UpmemNodePlan"
-            )
+            raise ValueError("UpmemV4Session.execute requires a valid UpmemNodePlan")
         self._remaining_timeout()
         started = time.perf_counter()
-        packed = self.policy.name == "host_packed_int8_per_task_v1"
+        packed = self.numeric_mode is NumericMode.HOST_PACKED_INT8_PER_TASK_V1
         limits = M5TileLimits.host_packed_int8() if packed else M5TileLimits.float32()
         lowering = lower_binary_contraction(node, left, right, limits=limits)
         canonical_left = lowering.canonical.left
         canonical_right = lowering.canonical.right
         quantization_metadata: dict[str, Any] = {}
         left_scale = right_scale = 1.0
-        numeric_mode = (
-            NumericMode.HOST_PACKED_INT8_PER_TASK_V1
-            if packed
-            else NumericMode.FLOAT32_REAL
-        )
+        numeric_mode = self.numeric_mode
         quantization_started = time.perf_counter()
         left_payload, left_scale, left_saturation = encode_tensor(
             canonical_left, numeric_mode
@@ -699,66 +690,61 @@ class M5WholeCircuitSession:
             time.perf_counter() - decode_started if packed else 0.0
         )
         elapsed = time.perf_counter() - started
-        return EngineTaskResult(
-            output=output,
-            metadata={
-                "engine": self.engine.name,
-                "execution_time_s": elapsed,
-                "timing": {
-                    **timing,
-                    "host_quantization_time_s": host_quantization_time_s,
-                    "preparation_time_s": preparation_time_s,
-                    "host_dequantization_time_s": host_dequantization_time_s,
-                    "host_tile_assembly_time_s": host_tile_assembly_time_s,
-                    "total_route_time_s": elapsed,
-                },
-                **_native_identity_metadata(self._startup_native_identity),
-                **_COORDINATOR_PROVENANCE,
-                **self.engine._provenance,
-                "strategy_identity": self.strategy_identity,
-                "strategy_config_hash": self.strategy_config_hash,
-                "decomposition_strategy": _ACTIVE_MECHANISM_IDS["decomposition"],
-                "placement_strategy": _ACTIVE_MECHANISM_IDS["placement"],
-                "kernel_provider": _ACTIVE_MECHANISM_IDS["kernel"],
-                "reduction_provider": _ACTIVE_MECHANISM_IDS["reduction"],
-                "reduction_strategy": _ACTIVE_MECHANISM_IDS["reduction"],
-                "numeric_transport": numeric_transport,
-                "packed_int8_transfer": packed,
+        return np.asarray(output), {
+            "engine": self.engine.name,
+            "execution_time_s": elapsed,
+            "timing": {
+                **timing,
                 "host_quantization_time_s": host_quantization_time_s,
                 "preparation_time_s": preparation_time_s,
                 "host_dequantization_time_s": host_dequantization_time_s,
                 "host_tile_assembly_time_s": host_tile_assembly_time_s,
-                "application_visible_h2d_bytes": bytes_h2d,
-                "application_visible_d2h_bytes": bytes_d2h,
-                "application_visible_transfer_bytes": bytes_h2d + bytes_d2h,
-                "response_transfer_bytes": bytes_h2d + bytes_d2h,
-                "tile_count": len(lowering.tiles),
-                "output_tile_count": len(lowering.output_tiles),
-                "k_chunk_count": len(lowering.k_chunks),
-                "wave_count": len(waves),
-                "request_manifest_hashes": tuple(request_hashes),
-                "task_structure_sha256": task_structure_sha256,
-                "request_contract_version": "m5_request_contract_v2",
-                "request_contract_sha256": request_contract,
-                # ABI compatibility name: v4 carries the request contract.
-                "task_contract_sha256": request_contract,
-                "bulk_set_launch_verified": bulk_verified,
-                "concurrent_rank_submission": parallel_rank_waves > 0,
-                "concurrent_rank_wave_count": parallel_rank_waves,
-                "whole_graph_deadline_enforced": True,
-                "whole_graph_timeout_s": self.engine.timeout_s,
-                "target_observed": (
-                    "not_verified"
-                    if self._test_double_execution
-                    else "physical_hardware"
-                ),
-                "test_double_execution": self._test_double_execution,
-                "cpu_fallback_used": False,
-                "simulator_kernel_executed": False,
-                "physical_plan_consumed": True,
-                **quantization_metadata,
+                "total_route_time_s": elapsed,
             },
-        )
+            **_native_identity_metadata(self._startup_native_identity),
+            **_COORDINATOR_PROVENANCE,
+            **self.engine._provenance,
+            "strategy_identity": self.strategy_identity,
+            "strategy_config_hash": self.strategy_config_hash,
+            "decomposition_strategy": _ACTIVE_MECHANISM_IDS["decomposition"],
+            "placement_strategy": _ACTIVE_MECHANISM_IDS["placement"],
+            "kernel_provider": _ACTIVE_MECHANISM_IDS["kernel"],
+            "reduction_provider": _ACTIVE_MECHANISM_IDS["reduction"],
+            "reduction_strategy": _ACTIVE_MECHANISM_IDS["reduction"],
+            "numeric_transport": numeric_transport,
+            "packed_int8_transfer": packed,
+            "host_quantization_time_s": host_quantization_time_s,
+            "preparation_time_s": preparation_time_s,
+            "host_dequantization_time_s": host_dequantization_time_s,
+            "host_tile_assembly_time_s": host_tile_assembly_time_s,
+            "application_visible_h2d_bytes": bytes_h2d,
+            "application_visible_d2h_bytes": bytes_d2h,
+            "application_visible_transfer_bytes": bytes_h2d + bytes_d2h,
+            "response_transfer_bytes": bytes_h2d + bytes_d2h,
+            "tile_count": len(lowering.tiles),
+            "output_tile_count": len(lowering.output_tiles),
+            "k_chunk_count": len(lowering.k_chunks),
+            "wave_count": len(waves),
+            "request_manifest_hashes": tuple(request_hashes),
+            "task_structure_sha256": task_structure_sha256,
+            "request_contract_version": "m5_request_contract_v2",
+            "request_contract_sha256": request_contract,
+            # ABI compatibility name: v4 carries the request contract.
+            "task_contract_sha256": request_contract,
+            "bulk_set_launch_verified": bulk_verified,
+            "concurrent_rank_submission": parallel_rank_waves > 0,
+            "concurrent_rank_wave_count": parallel_rank_waves,
+            "whole_graph_deadline_enforced": True,
+            "whole_graph_timeout_s": self.engine.timeout_s,
+            "target_observed": (
+                "not_verified" if self._test_double_execution else "physical_hardware"
+            ),
+            "test_double_execution": self._test_double_execution,
+            "cpu_fallback_used": False,
+            "simulator_kernel_executed": False,
+            "physical_plan_consumed": True,
+            **quantization_metadata,
+        }
 
     def _requests_from_plan(
         self,
@@ -1311,4 +1297,4 @@ class M5WholeCircuitSession:
         }
 
 
-__all__ = ["M5WholeCircuitEngine", "M5WholeCircuitSession"]
+__all__ = ["UpmemV4Executor", "UpmemV4Session"]

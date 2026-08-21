@@ -125,8 +125,7 @@ class _FakeSession:
         right: np.ndarray,
         *,
         node_plan: object | None = None,
-    ) -> object:
-        from quantum_bench.whole_circuit.core import EngineTaskResult
+    ) -> tuple[np.ndarray, dict[str, object]]:
 
         self.calls.append(node.node_id)
         output = np.einsum(
@@ -136,26 +135,23 @@ class _FakeSession:
             list(node.right.labels),
             list(node.output_labels),
         )
-        return EngineTaskResult(
-            output=np.asarray(output),
-            metadata={
-                "backend_id": "fake_m5",
-                "target_observed": "physical_hardware",
-                "native_kernel_executed": True,
-                "hardware_kernel_executed": True,
-                "simulator_kernel_executed": False,
-                "cpu_fallback_used": False,
-                "physical_plan_consumed": node_plan is not None,
-                "application_visible_h2d_bytes": 8,
-                "application_visible_d2h_bytes": 4,
-                "timing": {
-                    "h2d_time_s": 1.0,
-                    "kernel_time_s": 2.0,
-                    "d2h_time_s": 3.0,
-                    "total_route_time_s": 6.0,
-                },
+        return np.asarray(output), {
+            "backend_id": "fake_m5",
+            "target_observed": "physical_hardware",
+            "native_kernel_executed": True,
+            "hardware_kernel_executed": True,
+            "simulator_kernel_executed": False,
+            "cpu_fallback_used": False,
+            "physical_plan_consumed": node_plan is not None,
+            "application_visible_h2d_bytes": 8,
+            "application_visible_d2h_bytes": 4,
+            "timing": {
+                "h2d_time_s": 1.0,
+                "kernel_time_s": 2.0,
+                "d2h_time_s": 3.0,
+                "total_route_time_s": 6.0,
             },
-        )
+        }
 
     def close(self) -> dict[str, object]:
         self.closed = True
@@ -217,10 +213,10 @@ def test_engine_plan_assignment_drives_rank_local_dpu_request() -> None:
     from dataclasses import replace
     from types import SimpleNamespace
 
-    from quantum_bench.targets.upmem.m5_whole_circuit_engine import (
-        M5WholeCircuitSession,
+    from quantum_bench.targets.upmem.v4_executor import (
+        UpmemV4Session,
     )
-    from quantum_bench.targets.upmem.m5_whole_circuit_tiles import (
+    from quantum_bench.targets.upmem.v4_tiling import (
         M5TileLimits,
         lower_binary_contraction,
     )
@@ -240,7 +236,7 @@ def test_engine_plan_assignment_drives_rank_local_dpu_request() -> None:
     unit = node_plan.work_units[0]
     moved = replace(unit, logical_dpu=1)
     moved_plan = replace(node_plan, work_units=(moved,))
-    session = object.__new__(M5WholeCircuitSession)
+    session = object.__new__(UpmemV4Session)
     session.ranks = (SimpleNamespace(index=0, local_dpus=2),)
 
     waves, requests = session._requests_from_plan(node, lowering, moved_plan)
@@ -254,10 +250,10 @@ def test_engine_rejects_plan_tile_extent_tampering_before_requests() -> None:
     from dataclasses import replace
     from types import SimpleNamespace
 
-    from quantum_bench.targets.upmem.m5_whole_circuit_engine import (
-        M5WholeCircuitSession,
+    from quantum_bench.targets.upmem.v4_executor import (
+        UpmemV4Session,
     )
-    from quantum_bench.targets.upmem.m5_whole_circuit_tiles import (
+    from quantum_bench.targets.upmem.v4_tiling import (
         M5TileLimits,
         lower_binary_contraction,
     )
@@ -277,7 +273,7 @@ def test_engine_rejects_plan_tile_extent_tampering_before_requests() -> None:
     unit = node_plan.work_units[0]
     tampered = replace(unit, m_size=unit.m_size + 1)
     tampered_plan = replace(node_plan, work_units=(tampered,))
-    session = object.__new__(M5WholeCircuitSession)
+    session = object.__new__(UpmemV4Session)
     session.ranks = (SimpleNamespace(index=0, local_dpus=2),)
 
     with pytest.raises(ValueError, match="extents"):
@@ -642,14 +638,13 @@ def test_run_upmem_hashes_every_measured_output_and_rejects_nondeterminism(
 
 
 def test_packed_tile_assembly_and_dequantization_are_separate() -> None:
-    from types import SimpleNamespace
-
     import quantum_bench.execution.upmem as module
 
     aggregate = module._Aggregate()
     aggregate.add(
-        SimpleNamespace(
-            metadata={
+        (
+            np.empty(0, dtype=np.float32),
+            {
                 "physical_plan_consumed": True,
                 "application_visible_h2d_bytes": 8,
                 "application_visible_d2h_bytes": 4,
@@ -662,7 +657,7 @@ def test_packed_tile_assembly_and_dequantization_are_separate() -> None:
                 "target_observed": "physical_hardware",
                 "simulator_kernel_executed": False,
                 "cpu_fallback_used": False,
-            }
+            },
         )
     )
 
@@ -925,11 +920,11 @@ def test_missing_task_transfer_bytes_are_rejected(
             right: np.ndarray,
             *,
             node_plan: object | None = None,
-        ) -> object:
-            result = super().execute(task, left, right, node_plan=node_plan)
-            result.metadata.pop("application_visible_h2d_bytes")
-            result.metadata.pop("application_visible_d2h_bytes")
-            return result
+        ) -> tuple[np.ndarray, dict[str, object]]:
+            value, metadata = super().execute(task, left, right, node_plan=node_plan)
+            metadata.pop("application_visible_h2d_bytes")
+            metadata.pop("application_visible_d2h_bytes")
+            return value, metadata
 
     dag = _dag()
     compiled = compile_execution(dag, _request(dag))

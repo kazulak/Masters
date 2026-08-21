@@ -37,8 +37,8 @@ final documentation set.
 | WP2 semantic model | complete | direct DAG input validation; no active reverse TaskGraph adapter |
 | WP3 planning | complete | active planners consume tensor metadata and emit one planner result/provenance record without TaskGraph lowering |
 | WP4 numerics | complete | shared pure encode/contract/decode boundary; conversion, kernel, reduction, and decode timings are non-overlapping |
-| WP5 mapping | in progress | deterministic `UpmemPlan` owns work and assignment; active compiler still imports M5/v4 helpers |
-| WP6 runtime | in progress | runtime requires compiled node plans and has no strategy registry; M5/v4 engine/session shell remains |
+| WP5 mapping | in progress | deterministic `UpmemPlan` owns work and assignment; active compiler still imports v4 helpers |
+| WP6 runtime | complete | active runtime uses `UpmemV4Executor`/`UpmemV4Session`, `NumericMode`, `UpmemTopology`, and tuple node results; obsolete whole-circuit package removed |
 | WP7 baselines | in progress | same-DAG CPU timing is symmetric; external baseline adapters remain to simplify |
 | WP8 evidence | pending | one timing/evidence schema and compatibility policy |
 | WP9 interface | pending | stable CLI, two experiment files, at most ten Make targets |
@@ -50,7 +50,7 @@ final documentation set.
 | Adapter | Current location | Must be removed by |
 |---|---|---|
 | DAG node to `ContractionTask` | removed in `7d497a2` | complete |
-| M5 engine/session wrapper | `targets/upmem/m5_whole_circuit_engine.py` | WP6 |
+| M5 engine/session wrapper | removed; active implementation is `targets/upmem/v4_executor.py` | complete |
 | fake `TensorNetworkSpec(None, ...)` input validation | removed in `4907013` | complete |
 | `TensorInputs` wrapper | removed in `e66e2a3` | complete |
 | one-implementation M5 strategy registry | removed in current WP6 batch | complete |
@@ -66,9 +66,9 @@ Update this table after each integration batch.
 
 | Metric | Baseline | Current | Target |
 |---|---:|---:|---:|
-| Active Python modules | 138 | 138 | 12-16 |
-| Class declarations | 307 | 301 | only stable boundary types |
-| Test modules | 78 | 77 | about 10 |
+| Active Python modules | 138 | 134 | 12-16 |
+| Class declarations | 307 | 279 | only stable boundary types |
+| Test modules | 78 | 76 | about 10 |
 | Config files | 63 | 63 | 2 principal experiments |
 | Public Make targets | 78 | 78 | 10 or fewer |
 | Active contraction IRs | 2 | 1 | 1 |

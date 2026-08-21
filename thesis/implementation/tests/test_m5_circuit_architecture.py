@@ -18,9 +18,11 @@ def test_active_imports_do_not_load_historical_taskgraph() -> None:
 import sys
 import quantum_bench.tn.graph
 import quantum_bench.execution.compiler
-import quantum_bench.targets.upmem.m5_whole_circuit_engine
+import quantum_bench.targets.upmem.v4_executor
 import quantum_bench.bench.m5_circuit_study
 assert 'quantum_bench.tn.task_graph' not in sys.modules
+assert 'quantum_bench.whole_circuit' not in sys.modules
+assert 'quantum_bench.whole_circuit.core' not in sys.modules
 """
     subprocess.run(
         [sys.executable, "-c", script],
@@ -64,4 +66,6 @@ def test_active_m5_study_plans_once_then_uses_functional_dag(
     assert "TensorNetworkValue" not in source
     assert "TensorValue" not in source
     assert "materialize_task_graph_from_planner_result" not in source
-    assert all(not hasattr(plan, "graph") and not hasattr(plan, "network") for plan in plans)
+    assert all(
+        not hasattr(plan, "graph") and not hasattr(plan, "network") for plan in plans
+    )

@@ -132,15 +132,13 @@ def prepare(
 
 
 def _physical_factory(root: Path):
-    from quantum_bench.targets.upmem.m5_whole_circuit_engine import (
-        M5WholeCircuitEngine,
-    )
+    from quantum_bench.targets.upmem.v4_executor import UpmemV4Executor
 
     native = root / "native" / "upmem" / "simplepim" / "upmem_sdk_execution_plan"
 
     def factory(*, topology: Any, engine_variant: Mapping[str, Any], timeout_s: float):
         variant_topology = engine_variant["topology"]
-        tasklets = int(topology.tasklets_per_device)
+        tasklets = int(topology.tasklets_per_dpu)
         host_binary = native / "bin" / f"host_upmem_execution_plan_v4_t{tasklets}"
         dpu_binary = native / "bin" / f"dpu_gemm_tile_v4_t{tasklets}"
         initialization_binary = native / "bin" / "dpu_simplepim_management_init"
@@ -158,13 +156,13 @@ def _physical_factory(root: Path):
             / "m5_circuit_sessions"
             / f"{engine_variant['id']}-{time.time_ns()}-{uuid.uuid4().hex[:8]}"
         )
-        return M5WholeCircuitEngine(
+        return UpmemV4Executor(
             session_root=session_root,
             host_binary=host_binary,
             dpu_binary=dpu_binary,
             initialization_binary=initialization_binary,
             rank_paths=rank_paths,
-            dpu_count=len(topology.device_ids),
+            dpu_count=topology.dpu_count,
             tasklets_per_dpu=tasklets,
             timeout_s=float(timeout_s),
         )

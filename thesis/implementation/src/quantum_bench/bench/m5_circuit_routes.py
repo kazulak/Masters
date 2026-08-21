@@ -12,7 +12,7 @@ import re
 from copy import deepcopy
 from typing import Any, Iterable, Mapping
 
-from quantum_bench.whole_circuit import (
+from quantum_bench.bench.route_specs import (
     ComparisonSpec,
     ModuleSpec,
     PipelineParameters,

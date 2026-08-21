@@ -32,7 +32,10 @@ from quantum_bench.tn.graph import (
     contraction_dag_hash,
     apply_slicing,
 )
-from quantum_bench.whole_circuit.policies import Float32RealPolicy, HostPackedInt8Policy
+from quantum_bench.execution.numeric import (
+    decode_contraction_output,
+    encode_tensor,
+)
 
 
 def _hash(array: np.ndarray) -> str:
@@ -112,8 +115,29 @@ def test_numeric_modes_match_existing_real_policy_implementations() -> None:
     right = np.array([[1.0, -2.0], [0.25, 0.5], [-1.25, 0.75]], dtype=np.float64)
     task = _matrix_task()
 
-    expected_float, _ = Float32RealPolicy().contract(task, left, right)
-    expected_int8, _ = HostPackedInt8Policy().contract(task, left, right)
+    expected_float = np.asarray(left @ right, dtype=np.float32)
+    left_payload, left_scale, _ = encode_tensor(
+        left, NumericMode.HOST_PACKED_INT8_PER_TASK_V1
+    )
+    right_payload, right_scale, _ = encode_tensor(
+        right, NumericMode.HOST_PACKED_INT8_PER_TASK_V1
+    )
+    expected_int8 = np.asarray(
+        np.einsum(
+            left_payload,
+            task.left_labels,
+            right_payload,
+            task.right_labels,
+            task.output_labels,
+            dtype=np.int32,
+        ),
+        dtype=np.int32,
+    )
+    expected_int8 = decode_contraction_output(
+        expected_int8,
+        NumericMode.HOST_PACKED_INT8_PER_TASK_V1,
+        left_scale * right_scale,
+    )
 
     actual_float = _run_matrix(NumericMode.FLOAT32_REAL, left, right)
     actual_int8 = _run_matrix(NumericMode.HOST_PACKED_INT8_PER_TASK_V1, left, right)
