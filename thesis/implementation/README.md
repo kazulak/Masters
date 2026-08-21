@@ -6,12 +6,13 @@ explicit tensor-network contraction routes while keeping circuit semantics,
 contraction plans, executors, measurements, and claim boundaries separate.
 
 ```text
-quantum circuit
-  -> tensor network
-  -> contraction planner
-  -> immutable TaskGraph
-  -> selected route modules
-  -> CPU / GPU / UPMEM executor
+CircuitSpec
+  -> build_tensor_network_data
+  -> TensorNetworkSpec + TensorInputs
+  -> plan_contractions / PlannerResult
+  -> build_contraction_dag / ContractionDAG
+  -> compile_execution / ExecutionPlan
+  -> execute / ExecutionResult
   -> normalized records
   -> tables and plots
 ```
@@ -19,10 +20,11 @@ quantum circuit
 ## What Is Active
 
 The current whole-circuit lane is **M5.5**. It lowers a circuit to a hashed
-TaskGraph, runs a NumPy same-plan CPU reference or the bounded physical UPMEM
-v4 engine, and writes normalized records. The physical route uses explicit
-ranks, bulk request launches, and host-packed int8 or float32 numeric modes.
-It keeps the plan fixed while route dimensions change.
+`ContractionDAG`, runs a NumPy same-plan CPU reference or the bounded physical
+UPMEM v4 engine, and writes normalized records. The physical route uses
+explicit ranks, bulk request launches, and host-packed int8 or float32 numeric
+modes. It keeps the contraction graph fixed while execution-plan dimensions
+change.
 
 M5.5 is the active implementation lane. It has code and documented ETH
 development observations for canonical, scaling, and large-boundary profiles,
@@ -39,17 +41,32 @@ Supported execution families are:
 | --- | --- | --- |
 | QuEST CPU/GPU full state | Serious full-state baseline | Same algorithm family; GPU requires a verified physical backend. |
 | Quimb/cotengra CPU TN | Serious external TN baseline | Cross-implementation and generally cross-plan context. |
-| Internal NumPy TaskGraph | Same-plan CPU reference | Direct reference for internal UPMEM routes. |
+| Functional CPU TN | Same-DAG CPU reference | Direct reference for internal UPMEM routes. |
 | UPMEM SDK simulator | Contract and boundary validation | Never hardware-performance evidence. |
 | Physical UPMEM M5.5 | Active bounded same-plan whole-circuit implementation lane | Development observations only; no tracked evidence claim and no fallback. |
 
-A route is selected before preparation. Its tensor-network and planner roles
-produce the immutable TaskGraph; M5 then executes that graph through one
-verified CPU or UPMEM executor profile. Numeric and topology choices are
-selected route dimensions. Kernel, partitioning, scheduling, and communication
+A route is selected before preparation. The circuit and planner produce the
+immutable `ContractionDAG`; M5 then compiles and executes that graph through
+one verified CPU or UPMEM executor profile. Numeric and topology choices are
+execution-plan dimensions. Kernel, partitioning, scheduling, and communication
 are fixed profile declarations today, verified against observed native metadata
 for physical rows; future engines may make them selectable. A numeric policy
-must not silently change the contraction plan.
+must not silently change the contraction DAG.
+
+For M5 v4, the native host emits backend, profile, ABI, session, dispatch,
+kernel, and execution-class identity in both `READY` and `RESPONSE`. The Python
+adapter admits a physical row only when those observations agree across ranks
+and `native_identity_verified=true`. `graph_intermediate_placement=host_managed`
+is separately recorded with origin `m5_host_coordinator_v1` because it is a
+host-runtime fact, not a native-kernel identity. M5 `exact_once` remains a
+legacy compatibility field for completed host DAG nodes; it is not a
+native-kernel exactly-once claim.
+
+The old `core.records.TaskGraph` remains only as a compatibility materialization
+for legacy identity and evidence records. It is not the active execution
+contract. QuEST full-state CPU/GPU execution remains a separate baseline family;
+CPU TN and UPMEM TN routes share the tensor-network, planner, DAG, compilation,
+validation, and evidence boundaries.
 
 ## Start Here
 
@@ -146,6 +163,7 @@ promoted into `thesis_results/`.
 Only compare timings when the records show compatible circuit, tensor-network,
 contraction-plan, numeric-policy, topology, timing-scope, validation, and
 hardware-admission identities. QuEST and Quimb remain serious baselines but
-are not automatically same-plan comparisons with the internal TaskGraph.
+are not automatically same-DAG comparisons with the functional internal TN
+routes.
 Simulator, modeled-planner, and unsupported rows are retained as their own
 evidence categories and must not be presented as physical speedup.

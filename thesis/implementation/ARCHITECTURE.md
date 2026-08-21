@@ -1,162 +1,151 @@
 # System Architecture
 
-This is a compact research architecture for evaluating tensor-network quantum
-simulation routes. The system is deliberately split into an immutable planning
-path and a stateful execution path so that one circuit and one contraction plan
-can be evaluated by several engines without implying that those engines are
-algorithmically identical.
+This is a small modular monolith for comparing tensor-network (TN) contraction
+routes. The active TN path is data-first: module functions transform explicit
+records, and state is confined to execution-owned maps, device sessions, and
+artifact writers.
 
-```text
+~~~text
 CircuitSpec
-  -> TensorNetworkValue
-  -> PipelineRoute planner role -> TaskGraph
-  -> remaining PipelineRoute execution roles
-  -> execution records
-  -> normalized_records.jsonl
-  -> report CSVs, plots, and manifests
-```
+  -> build_tensor_network_data
+  -> TensorNetworkSpec + TensorInputs
+  -> plan_contractions / PlannerResult
+  -> build_contraction_dag / ContractionDAG
+  -> compile_execution / ExecutionPlan
+  -> execute / ExecutionResult
+  -> normalized evidence
+  -> reports
+~~~
 
-## Ownership At A Glance
+There is no ScientificPlan abstraction in the active pipeline. TensorNetworkSpec
+describes the TN, PlannerResult records how a path was selected, and
+ContractionDAG is the target-neutral semantic contraction graph.
 
-| Stage | Main symbols/files | Input | Output | State and side effects |
+## Boundaries
+
+| Module | Input | Output | Parameters | Mutable state or side effects |
 | --- | --- | --- | --- | --- |
-| Circuit definition | `circuits/`, `CircuitSpec` | suite case/configuration | immutable operation sequence | Pure construction. |
-| TN lowering | `tn/network.py:build_tensor_network` | `CircuitSpec` | `TensorNetworkValue` | Creates tensor arrays; source arrays are read-only in the generic pipeline. |
-| Path planning | `tn/planners.py`, `tn/task_graph.py` | TN and planner config | immutable `TaskGraph` | Planner search is local computation; no hardware side effect. |
-| Plan identity | `tn/execution_bundle.py` | graph and route-independent plan data | semantic/TN/plan hashes | Pure canonical serialization and hashing. |
-| Route composition | `whole_circuit/pipeline.py` | module declarations | immutable `PipelineRoute` / `ComparisonSpec` | Pure JSON-safe specification and hashing only. |
-| Execution | `bench/m5_circuit_study.py`, `whole_circuit/core.py`, target engines | circuit, graph, selected route | output plus task/session metadata | M5 is the single public execution pipeline; owns tensor store, sessions, subprocesses, device allocation, and transfers. |
-| Evidence | `bench/*`, `core/records.py` | execution metadata | normalized records/manifests | Writes run directories. |
-| Reporting | `bench/m5_circuit_report.py`, `scripts/` | normalized records | CSVs, plots, report manifest | Writes comparison artifacts only. |
+| circuits/ | Suite case and circuit parameters | CircuitSpec | Family, qubit count, depth/repetitions, seed, gate parameters | None in the returned value; construction uses local lists. |
+| tn/network.py | CircuitSpec | TensorNetworkSpec, TensorInputs | Gate tensor definitions and output wire order | Creates NumPy input arrays. They are input payloads and must be treated read-only after construction. |
+| tn/planning.py | TensorNetworkSpec, PlannerRequest | PlannerResult | Engine, algorithm, objective, seed/repeats, UPMEM profile, normalization, numeric representation assumption | Planner-local search and external-library calls only; no device or file state. |
+| tn/graph.py | TensorNetworkSpec, planner path | ContractionDAG | Pairwise path; optional SliceSpec | None. The DAG contains descriptors and dependencies, never tensor arrays or target estimates. |
+| execution/compiler.py | ContractionDAG, CPU/UPMEM compile request | ExecutionPlan or UnsupportedExecution | Target, numeric mode, kernel/decomposition/placement/reduction IDs, logical topology, node order | None. No allocation, transfer, binary lookup, or device call. |
+| execution/cpu.py | CPU ExecutionPlan, ContractionDAG, TensorInputs, RunContext | ExecutionResult | Warmups, repetitions, numeric mode | Local tensor map and output buffer for one call. Source arrays and DAG are not mutated. |
+| execution/upmem.py | UPMEM ExecutionPlan, ContractionDAG, TensorInputs, RunContext with runtime resources | ExecutionResult; malformed/native/session failures raise | Rank bindings, binary paths, timeout, warmups/repetitions | UPMEM session, allocation, MRAM buffers, native subprocess/device state, and per-run tensor map. No fallback is allowed. |
+| execution/runner.py | Compiled plan, DAG, inputs, context | Target-specific result/failure | Target dispatch | Only the state of the selected executor is mutable. GPU returns explicit unsupported in this slice. |
+| bench/m5_circuit_study.py | Suite, circuit cases, planner/numeric/engine/topology variants | Normalized records and run artifacts | Route selection, repeats, warmups, tolerances, timeout | Study worklists, reference outputs, injected UPMEM sessions, and run-directory files. |
+| bench/reporting.py and report scripts | Normalized records and manifests | CSVs, plots, report manifests | Filters, aggregation, output directory | Writes report artifacts; does not execute a route. |
 
-The detailed symbol-level contract is in
-[docs/PIPELINE_CONTRACT.md](docs/PIPELINE_CONTRACT.md).
+The functional core is the first five rows. The stateful shell begins at
+execution and includes only the resources required to run and record a route.
+Dataclasses are used for explicit immutable boundaries; behavior is provided by
+module-level functions rather than service objects or a plugin framework.
 
-## Immutable Planning Path
+## What ContractionDAG Means
 
-`CircuitSpec` is the semantic input. `build_tensor_network()` converts it into
-gate tensors, index labels, output order, and a full einsum expression.
-`plan_task_graph_with_config()` chooses a pairwise contraction path and lowers
-it into a `TaskGraph` whose `ContractionTask` items carry dependencies, shapes,
-index expressions, and estimates.
+ContractionDAG is the semantic lowering of a selected pairwise contraction
+path. ContractNode describes one tensor contraction, ReduceNode describes an
+explicit reconstruction after global slicing, and TensorView describes a tensor
+or fixed-index view. Dependencies are explicit and validation checks shapes,
+labels, producers, ordering, and cycles.
 
-The identity boundary is intentionally before execution:
+This is not GEMM lowering. The graph says which mathematical contractions must
+occur. Target compilation later decides whether a supported contraction is
+implemented by a GEMM-like DPU kernel, NumPy einsum, tiling, or another target
+kernel. The active DAG exposes dependency parallelism, but the current CPU and
+M5 execution slice uses deterministic topological node order; it does not yet
+claim concurrent independent-node scheduling.
 
-```text
-circuit_semantics_hash
-  -> tensor_network_hash
-  -> contraction_plan_hash
-```
+The old core.records.TaskGraph contains legacy ContractionTask records. The
+function materialize_task_graph_from_planner_result creates it from an already
+computed PlannerResult for compatibility with historical identity/evidence
+readers. It is not passed as the active executor contract, and the M5 study does
+not use WholeGraphExecutor. The old whole-circuit classes remain as historical
+compatibility/native-shell code.
 
-`contraction_plan_hash` does not include executor-specific settings. Therefore
-CPU float32, UPMEM float32, and UPMEM int8 can prove that they consumed one
-selected plan while retaining distinct executor and route identities. A change
-of planner or path produces a different plan identity.
+## Planning, Slicing, and Identity
 
-## Route Modules
+plan_contractions(network, request) dispatches to the selected planner adapter:
 
-`PipelineRoute` is a frozen declaration of the complete composition. It is
-selected before preparation: its lowering and planner roles create the graph,
-then its remaining roles execute that graph. Every route contains these
-required `ModuleSpec` roles:
+- opt_einsum and cotengra provide external path baselines;
+- custom_upmem provides the deterministic modeled UPMEM greedy planner.
 
-| Role | Meaning | Current examples |
-| --- | --- | --- |
-| `tensor_network` | lowering implementation | `quantum_gate_tn_v1` |
-| `planner` | selected path algorithm and parameters | `opt_einsum`, cotengra, custom modeled planner |
-| `numeric` | numeric representation/policy | float32, host-packed int8 |
-| `executor` | engine that consumes tasks | NumPy reference, UPMEM v4 |
-| `topology` | target placement | CPU device or explicit UPMEM ranks/DPUs |
+PlannerResult.identity records the planner engine, configuration, objective,
+version, profile, normalization, and planning time. contraction_dag_hash(dag)
+identifies only the resulting semantic graph. Planner identity and DAG identity
+are therefore separate: two planners may produce the same DAG, and one planner
+configuration may produce different DAGs for different inputs.
 
-For M5.5, these are fixed declarations of the active implementation profile,
-not independently dispatchable implementations. The physical admission check
-compares the declared profile with observed native metadata. A later engine may
-make a role selectable only when it executes that selection:
+Global slicing is a semantic transformation. apply_slicing rewrites a
+ContractionDAG into partial ContractNode values and a ReduceNode; it changes the
+DAG hash because the mathematical execution graph changed. Target tiling is
+different: it is a compilation/runtime decomposition of one DAG node under
+device memory and kernel limits. It belongs in ExecutionPlan and runtime
+metadata, not in the scientific DAG.
 
-| Optional role | Intended responsibility | Current boundary |
-| --- | --- | --- |
-| `kernel` | contraction/permutation kernel profile | fixed by the current UPMEM executor profile. |
-| `partitioner` | task-to-device partition profile | fixed by the current physical route. |
-| `scheduler` | ready-work and device-wave profile | fixed by the current physical route. |
-| `communication` | transfer/reduce/broadcast profile | host-managed today; no PID-Comm claim unless execution records real use. |
-
-This makes ablations explicit: a valid `ComparisonSpec` states the two routes
-and the exact changed roles. Numeric choice, topology, and kernel selection
-must not modify the already selected `TaskGraph`.
-
-The M5 route adapter is deliberately strict rather than general: it accepts
-only the built-in verified executor profiles. Physical admission compares the
-requested profile, ABI, session, dispatch mode, kernel, execution class, and
-intermediate placement with native metadata. A mismatch is a failed row, not a
-silent fallback.
-
-## Stateful Execution Path
-
-Execution starts only after a graph and route have been prepared. The primary
-replaceable boundary is `TaskExecutionEngine.open_session(policy, topology)`.
-`WholeGraphExecutor` creates a fresh `TensorStore`, consumes input lifetimes,
-and invokes a session once per ready task.
-
-| Object | Owner | Mutable state |
-| --- | --- | --- |
-| `InMemoryTensorStore` | one `WholeGraphExecutor` run | live arrays, remaining uses, released IDs |
-| `TaskExecutionSession` | selected engine | device/session state, native process and timing state |
-| physical UPMEM engine | target module | SDK allocation, MRAM slots, transfer buffers, native subprocesses |
-| reporter | report command | output directories, tables, images, manifests |
-
-No prepared graph, route specification, or hash is mutated by normal
-execution. Output arrays and evidence files are new owned artifacts.
+The execution-plan hash includes the selected target numeric mode, kernel,
+decomposition, placement, reduction, logical topology, ABI/session/dispatch
+profile, and node work order. Physical rank paths, host/DPU binary paths, and
+machine-local session resources are excluded from that hash and recorded as
+runtime/provenance facts instead. Changing a binary or hardware binding changes
+run/executable evidence, not the mathematical DAG.
 
 ## Execution Families
 
-| Family | Purpose | Same-plan status |
+| Family | Role | Current boundary |
 | --- | --- | --- |
-| QuEST CPU/GPU full state | External serious full-state baseline | Same algorithm family, not an internal TaskGraph plan. |
-| Quimb/cotengra CPU TN | External serious TN baseline | TN comparison context; path identity is distinct unless an adapter proves otherwise. |
-| NumPy TaskGraph | Internal CPU reference | Same-plan reference for internal routes. |
-| UPMEM SDK simulator | Layout, protocol, and boundary validation | Not physical performance evidence. |
-| Physical UPMEM M5.5 | Bounded same-plan whole-circuit execution | Hardware evidence only when its admission fields pass. |
+| QuEST CPU/GPU | Full-state baseline | Separate algorithm family; not an internal TN DAG route. |
+| Quimb/cotengra CPU TN | External TN baseline | Comparison context; same-plan status requires an explicit adapter. |
+| Functional CPU TN | Same-DAG reference | Implemented through compile_execution and run_cpu. |
+| UPMEM SDK simulator | Protocol/layout validation | Implemented only as simulator evidence; never hardware speedup evidence. |
+| Physical UPMEM TN | Bounded M5.5 route | Implemented through the UPMEM compile/execute adapter and strict native admission. |
+| GPU TN target | Future/unsupported slice | compile_execution and execute return explicit unsupported results here. |
 
+M5.5 remains the current active physical whole-circuit lane and retains its
+existing status/evidence wording. It is bounded: raw SDK execution is used
+behind the verified M5 v4 shell, graph-wide DPU residency and general DAG
+scheduling are not silently implied, and PID-Comm/ATiM/SimplePIM provider
+execution is not claimed unless a record proves that provider actually ran.
 The current provider boundary is deliberately narrow. M5.5 uses a
 SimplePIM-derived initialization/management binary, but allocation, transfers,
 launch, and synchronization are performed through the raw UPMEM SDK and the
 contraction kernel is thesis-owned. PID-Comm and ATiM are not invoked by M5.5;
 they remain future provider adapters. A provider is credited only when a
-normalized record identifies its actual invocation. The raw SDK is therefore
-the explicit M5.5 execution provider, not a silent fallback.
+normalized record identifies its actual invocation. The current route uses
+host-managed graph intermediates and does not provide hardware-calibrated
+planning.
 
-## Current M5.5 Boundary
+## Evidence and Pairing
 
-M5.5 is the current active physical whole-circuit lane. It executes a selected
-TaskGraph with a NumPy CPU reference or a bounded UPMEM v4 route. The physical
-route uses explicit rank paths, a persistent bounded session, bulk request
-launches, float32 or host-packed int8 task inputs, and host-managed graph
-intermediates. It records hardware allocation, native execution, transfer,
-validation, timing scope, and no-fallback state.
+The M5 coordinator builds the separated network data, obtains one PlannerResult,
+builds one ContractionDAG, materializes a legacy TaskGraph only where
+compatibility fields require it, and sends the DAG through
+compile_execution -> execute. CPU anchors and UPMEM route runs therefore share
+the same TN inputs and DAG construction boundary.
 
-It does not yet provide graph-wide DPU-resident intermediates, general DAG
-scheduling, PID-Comm collectives, ATiM-generated kernels, multi-DIMM scaling,
-energy data, or hardware-calibrated planning. These are future route modules,
-not hidden behavior of the current executor. The next implementation boundary
-is a small set of typed strategy interfaces and adapters for decomposition,
-placement, kernel selection, reduction, and scheduling; real SimplePIM,
-PID-Comm, and ATiM providers can then be added behind those adapters without
-changing the scientific TaskGraph.
+Normalized evidence records retain planner configuration, planner hash, DAG
+hash/schema, execution-plan hash/schema, target, numeric policy, timing scope,
+validation, transfer accounting, and hardware admission fields. Report pairing
+requires matching DAG identity whenever both rows provide it. A report must not
+silently pair different semantic contraction graphs merely because circuit or
+legacy plan fields look similar.
 
-## Evidence And Claims
+Only compatible evidence supports a comparison. Physical timing is not simulator
+timing; modeled planner scores are not measured runtime; QuEST full-state and TN
+routes are not same-plan speedups. Unsupported and failed rows remain visible,
+and no executor may silently fall back to CPU or simulator execution.
 
-Every execution writes structured data first. `normalized_records.jsonl` is
-the reporting input; plots and tables are derived artifacts. A report can
-compare only rows whose recorded identities and admission fields are compatible.
-Unsupported and failed rows stay visible. Simulator, modeled, cross-algorithm,
-and physical records remain labelled as different evidence classes.
+## Current Claim Boundary
 
-`route_config_hash` identifies the requested module composition. It does not
-claim which binary ran; executor, host/DPU binary, and observed hardware
-provenance remain separate evidence fields.
+The active implementation supports a reproducible circuit-to-TN-to-DAG pipeline,
+interchangeable planner adapters, functional CPU execution, and a bounded
+physical UPMEM adapter with explicit validation and provenance. It does not yet
+establish UPMEM acceleration, energy efficiency, arbitrary tensor-shape support,
+general concurrent DAG scheduling, complete multi-DIMM scaling, PID-Comm
+communication, ATiM-generated production kernels, or a hardware-calibrated
+planner. Those are future components, not hidden capabilities of the current
+route.
 
-The benchmark choices and allowed comparisons are specified in
-[THESIS_BENCHMARK_MATRIX.md](THESIS_BENCHMARK_MATRIX.md). Evidence status is
-specified only by [docs/MILESTONES.md](docs/MILESTONES.md). The M5.5 physical
-procedure is preserved as a development record in
-[docs/upmem_m5_5_whole_circuit_runbook.md](docs/upmem_m5_5_whole_circuit_runbook.md).
+The benchmark matrix and claim rules remain authoritative in
+[THESIS_BENCHMARK_MATRIX.md](THESIS_BENCHMARK_MATRIX.md). Milestone and evidence
+status remains authoritative in [docs/MILESTONES.md](docs/MILESTONES.md).
