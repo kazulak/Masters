@@ -540,13 +540,13 @@ class UpmemPlan:
 These are the only public physical-plan types. No additional public plan type
 may be introduced without amending this contract.
 
-T4C currently emits singleton `contract_batch` stages in deterministic DAG
+T4C introduced singleton `contract_batch` stages in deterministic DAG
 topological order, selecting the lexicographically smallest ready `node_id`
-at each step. One stage contains one unsliced `ContractNode` and its work
-units. T9 will add grouped sliced
+at each step. T9 extends the same schema with grouped sliced
 `contract_batch` stages containing exactly the direct `ContractNode`
-dependencies of one `ReduceNode`, sorted lexicographically. That grouping is
-future schema generation behavior, not a T4C guarantee.
+dependencies of one `ReduceNode`, sorted lexicographically. The runtime
+executes those branch nodes sequentially in T9; the grouping records logical
+and physical-plan ownership and does not claim concurrent slice execution.
 Compatibility requires equal operation signature, B/M/K/N geometry, numeric
 policy, tile policy, tasklet count, requested topology, output dtype, and output
 layout. Within a stage, work units are sorted exactly by:
@@ -904,8 +904,8 @@ def replay_upmem_plan_once(
 Before timing, replay validates the DAG, inputs, physical plan, node/stage
 coverage, work-unit geometry, byte estimates, MRAM footprints, and complete
 non-duplicate tile/K coverage. It supports only `steady_execution_v1`, the
-current singleton `contract_batch` stages, and `host_reduce` stages. Grouped
-contract batches are deferred to T9. Unsupported scope or stage policy raises
+singleton and T9 grouped `contract_batch` stages, and `host_reduce` stages.
+Unsupported scope or stage policy raises
 `UnsupportedExecution` before timing; malformed or tampered DAG, input, or
 plan data remains `ValueError`.
 
@@ -944,7 +944,8 @@ not include tile K assembly or output reconstruction.
 The replay must validate every final work unit by tile ID, B/M/K/N extents,
 byte estimates, MRAM footprint, and complete non-duplicate coverage. Hashing
 is outside `total_wall_s`. Raw lane facts are keyed by
-`node_id/stable_tile_id/lane`, where lane is `rr`, `ii`, `ri`, or `ir`. Each
+`stable_tile_id/lane`, where the globally unique `stable_tile_id` is already
+node-qualified and lane is `rr`, `ii`, `ri`, or `ir`. Each
 fact records dtype, shape, and a hash of canonical little-endian bytes:
 `<f4` for diagnostic float data and `<i4` for exact int data. Facts also
 record encoded input-plane payload hashes, shared scales, and saturation

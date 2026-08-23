@@ -432,11 +432,10 @@ def _validate_complex_lowerings(
         or real_lowering.tiles != imag_lowering.tiles
     ):
         raise ValueError("real and imaginary canonical tile metadata differ")
-    tiles = {tile.id: tile for tile in real_lowering.tiles}
+    tiles = {f"{node.node_id}:{tile.id}": tile for tile in real_lowering.tiles}
     units = stage.work_units
-    if len(units) != len(tiles) or {unit.stable_tile_id for unit in units} != set(
-        tiles
-    ):
+    unit_ids = {unit.stable_tile_id for unit in units}
+    if len(units) != len(tiles) or unit_ids != set(tiles):
         raise ValueError("UPMEM stage tile IDs do not match live lowering")
     for unit in units:
         tile = tiles.get(unit.stable_tile_id)
@@ -1128,8 +1127,14 @@ class UpmemV4Session:
                 lane_request_hashes[lane] = tuple(request_hashes)
                 lane_partials[lane] = partials
                 for tile_id, value in partials.items():
-                    key = f"{node.node_id}/{tile_id}/{lane}"
-                    raw_lane_values[key] = (node.node_id, tile_id, lane, value)
+                    stable_tile_id = f"{node.node_id}:{tile_id}"
+                    key = f"{stable_tile_id}/{lane}"
+                    raw_lane_values[key] = (
+                        node.node_id,
+                        stable_tile_id,
+                        lane,
+                        value,
+                    )
         except BaseException as exc:
             self._failed = True
             self._failure_stage = str(
@@ -1270,10 +1275,11 @@ class UpmemV4Session:
 
         if not all(isinstance(unit, UpmemWorkUnit) for unit in units):
             raise TypeError("UPMEM stage work units must use final UpmemWorkUnit")
-        tiles = {tile.id: tile for tile in lowering.tiles}
+        tiles = {f"{node.node_id}:{tile.id}": tile for tile in lowering.tiles}
         if len(tiles) != len(lowering.tiles) or len(units) != len(tiles):
             raise ValueError("compiled UPM work-unit count differs from lowering")
-        if {unit.stable_tile_id for unit in units} != set(tiles):
+        tile_ids = {unit.stable_tile_id for unit in units}
+        if tile_ids != set(tiles):
             raise ValueError("compiled UPM tile IDs differ from lowering")
 
         for unit in units:
@@ -1861,11 +1867,14 @@ class UpmemSession:
         raw_values_all: list[tuple[str, str, str, np.ndarray]] = []
         encoded_operands: list[tuple[str, str, Any]] = []
         stage_id = "run"
+        declared_stage_id = "run"
+        branch_node_id: str | None = None
         try:
-            for stage in self._plan.stages:
+            for stage, declared_stage_id in _session_stage_nodes(self._plan, nodes):
                 stage_id = stage.stage_id
                 self._check_operation_deadline(started)
                 node = nodes[stage.node_ids[0]]
+                branch_node_id = node.node_id
                 if isinstance(node, ContractNode):
                     left = _resolve_view(node.left, working)
                     right = _resolve_view(node.right, working)
@@ -1886,6 +1895,11 @@ class UpmemSession:
                         raise ValueError(
                             "UPMEM operation returned non-mapping metadata"
                         )
+                    metadata = {
+                        **metadata,
+                        "node_id": node.node_id,
+                        "declared_stage_id": declared_stage_id,
+                    }
                     output = np.asarray(output, dtype=np.complex64)
                     if tuple(output.shape) != node.output.shape:
                         raise ValueError(
@@ -1962,8 +1976,20 @@ class UpmemSession:
             )
             output.setflags(write=False)
             self._check_operation_deadline(started)
-        except ExecutionFailed:
-            raise
+        except ExecutionFailed as exc:
+            failure_facts = dict(exc.backend_facts)
+            failure_facts.update(
+                {
+                    "plan_stage_id": declared_stage_id,
+                    "branch_stage_id": stage_id,
+                    "branch_node_id": branch_node_id,
+                }
+            )
+            raise ExecutionFailed(
+                stage=exc.stage,
+                reason=exc.reason,
+                backend_facts=failure_facts,
+            ) from exc
         except Exception as exc:
             failure_stage = getattr(exc, "failure_stage", None)
             if not isinstance(failure_stage, str) or not failure_stage:
@@ -1971,7 +1997,13 @@ class UpmemSession:
             failure_facts = dict(
                 self._failure_facts(active_rank_indices, active_dpu_ids)
             )
-            failure_facts["plan_stage_id"] = stage_id
+            failure_facts.update(
+                {
+                    "plan_stage_id": declared_stage_id,
+                    "branch_stage_id": stage_id,
+                    "branch_node_id": branch_node_id,
+                }
+            )
             raise ExecutionFailed(
                 stage=failure_stage,
                 reason=str(exc).strip() or type(exc).__name__,
@@ -2284,6 +2316,8 @@ def _derive_operation_observations(
 def _operation_summary(metadata: Mapping[str, Any]) -> Mapping[str, JsonValue]:
     fields = (
         "stage_id",
+        "declared_stage_id",
+        "node_id",
         "numeric_transport",
         "lane_pass_count",
         "active_rank_indices",
@@ -2312,6 +2346,36 @@ def _operation_summary(metadata: Mapping[str, Any]) -> Mapping[str, JsonValue]:
     if not isinstance(normalized, Mapping):  # pragma: no cover - fixed input shape.
         raise TypeError("normalized operation summary is not a mapping")
     return normalized
+
+
+def _session_stage_nodes(
+    plan: FinalUpmemPlan,
+    nodes: Mapping[str, ContractNode | ReduceNode],
+) -> tuple[tuple[UpmemStage, str], ...]:
+    records: list[tuple[UpmemStage, str]] = []
+    for declared_stage in plan.stages:
+        for node_id in declared_stage.node_ids:
+            if node_id not in nodes:  # pragma: no cover - plan validation closes this.
+                raise ValueError(f"UPMEM stage references unknown node {node_id!r}")
+            stage_id = declared_stage.stage_id
+            if len(declared_stage.node_ids) > 1:
+                stage_id = f"{declared_stage.stage_id}:node:{node_id}"
+            records.append(
+                (
+                    UpmemStage(
+                        stage_id=stage_id,
+                        kind=declared_stage.kind,
+                        node_ids=(node_id,),
+                        work_units=tuple(
+                            unit
+                            for unit in declared_stage.work_units
+                            if unit.node_id == node_id
+                        ),
+                    ),
+                    declared_stage.stage_id,
+                )
+            )
+    return tuple(records)
 
 
 def _raw_value_sort_key(

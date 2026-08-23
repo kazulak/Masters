@@ -1247,12 +1247,13 @@ def test_execute_complex_matches_physical_plan_replay(
     assert not {"h2d_s", "kernel_s", "d2h_s"} & set(metadata["timing"])
     if policy == "split_complex_float32_v1":
         expected = {
-            f"{record['node_id']}/{record['stable_tile_id']}/{record['lane']}": record
+            f"{record['stable_tile_id']}/{record['lane']}": record
             for record in replay.numeric_facts["raw_lane_records"]
         }
         actual = metadata["raw_lane_records"]
         assert set(actual) == set(expected)
         for key, record in expected.items():
+            assert actual[key]["node_id"] == record["node_id"]
             assert actual[key]["sha256"] == record["sha256"]
             assert actual[key]["dtype"] == "<f4"
             assert actual[key]["exact"] is False
@@ -1323,12 +1324,13 @@ def test_execute_complex_int8_facts_match_replay_hashes(tmp_path: Path) -> None:
         int(record["saturation_imag"]) for record in metadata["operand_records"]
     )
     expected = {
-        f"{record['node_id']}/{record['stable_tile_id']}/{record['lane']}": record
+        f"{record['stable_tile_id']}/{record['lane']}": record
         for record in replay.numeric_facts["raw_lane_records"]
     }
     actual = metadata["raw_lane_records"]
     assert set(actual) == set(expected)
     for key, record in expected.items():
+        assert actual[key]["node_id"] == record["node_id"]
         assert actual[key]["sha256"] == record["sha256"]
         assert actual[key]["dtype"] == "<i4"
         assert actual[key]["exact"] is True
@@ -1359,12 +1361,13 @@ def test_execute_complex_int8_multi_k_chunk_matches_replay(tmp_path: Path) -> No
     session.close()
     np.testing.assert_array_equal(result, replay.output)
     expected = {
-        f"{record['node_id']}/{record['stable_tile_id']}/{record['lane']}": record
+        f"{record['stable_tile_id']}/{record['lane']}": record
         for record in replay.numeric_facts["raw_lane_records"]
     }
     actual = metadata["raw_lane_records"]
     assert set(actual) == set(expected)
     for key, record in expected.items():
+        assert actual[key]["node_id"] == record["node_id"]
         assert actual[key]["sha256"] == record["sha256"]
         assert actual[key]["dtype"] == "<i4"
 

@@ -60,10 +60,10 @@ evidence that the corresponding capability is implemented.
 | WP2 semantic model | complete | direct DAG input validation; no active reverse TaskGraph adapter |
 | WP3 planning | complete (T3) | root opt_einsum/cotengra function adapters return validated pairwise paths and the frozen 14-key provenance mapping; the historical projected-prefix planner is not canonical |
 | WP4 numerics | complete (T6A pure policies) | split-complex float32 and shared-scale int8 encode/contract/decode are implemented and verified; complex UPMEM runtime execution and physical validation remain pending |
-| WP5 mapping | complete (T4C final staged mapper) | `plan_upmem`, `validate_upmem_plan`, and `physical_plan_id` implement the singleton contract-stage/host-reduce plan; this does not claim slice grouping, tasklet scheduling, residency, or physical execution |
-| WP6 runtime | in progress (T4B1 complete) | final `UpmemResources`, persistent `UpmemSession`, fail-closed terminal admission, and one-sample timing are implemented; canonical isolation from the old wrappers remains T4B2 |
-| WP7 baselines | in progress (T4A) | direct same-DAG CPU single-run execution is implemented; physical-plan replay and external baseline adapters remain |
-| WP8 evidence | pending | one timing/evidence schema and compatibility policy |
+| WP5 mapping | complete through T9 | `plan_upmem`, `validate_upmem_plan`, and `physical_plan_id` implement deterministic contract-batch/host-reduce stages, including compatible direct slice branches; grouped branches are executed sequentially and do not establish slice concurrency, residency, or physical execution |
+| WP6 runtime | complete through T9 in software | final `UpmemResources`, persistent `UpmemSession`, one-sample timing, fail-closed terminal admission, sequential slice-branch execution, and deterministic complex64 host reduction are implemented; physical qualification remains T14 |
+| WP7 baselines | in progress | direct same-DAG CPU execution and same-physical-plan replay are implemented; external Quimb/cotengra and QuEST adapters remain T10 |
+| WP8 evidence | complete through T5 in software | canonical manifest, sample, and session schemas; experiment-owned repetition lifecycle; scope pairing; and failure rows are implemented without promoting evidence |
 | WP9 interface | pending | stable CLI, one experiment schema, and bounded public command set |
 | WP10 cleanup | pending | historical/versioned active source is deleted |
 | WP11 qualification | pending | software gates pass; physical rerun requirements are explicit |
@@ -406,7 +406,10 @@ wc -l`, and `rg '^[A-Za-z0-9_.-]+:' Makefile | wc -l`.
     T12.
 19. T8: complete; implement one-pass logical multi-label slicing with
     deterministic collision-free generated IDs.
-20. T9: add deterministic slice batches and host reduction stages.
+20. T9: complete; deterministic slice batches and complex64 host reduction
+    are verified by 111 focused tests, an independent correctness audit, and
+    the 1568-test full-suite checkpoint. Slice branches remain sequential, so
+    this is not physical slice-parallel evidence.
 21. T10A: add the Quimb/cotengra direct baseline.
 22. T10B: add the QuEST CPU direct baseline.
 23. T10C: add QuEST GPU capability and runtime verification.

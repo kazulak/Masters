@@ -6,8 +6,14 @@ from types import SimpleNamespace
 import pytest
 
 from quantum_bench.execution.contracts import UpmemPlan as LegacyUpmemPlan
-from quantum_bench.lowering import contraction_dag_hash
-from quantum_bench.model import ContractNode, ContractionDAG, ReduceNode, TensorSpec, TensorView
+from quantum_bench.lowering import contraction_dag_hash, slice_contraction
+from quantum_bench.model import (
+    ContractNode,
+    ContractionDAG,
+    ReduceNode,
+    TensorSpec,
+    TensorView,
+)
 from quantum_bench.results import UnsupportedExecution
 from quantum_bench.upmem.plan import (
     PLAN_SCHEMA_VERSION,
@@ -28,7 +34,9 @@ from quantum_bench.upmem.tiling import TileLoweringError
 from quantum_bench.upmem.protocol import INT32_MAX, MAX_CONTRACTED
 
 
-def _view(tensor_id: str, labels: tuple[int, ...], shape: tuple[int, ...]) -> TensorView:
+def _view(
+    tensor_id: str, labels: tuple[int, ...], shape: tuple[int, ...]
+) -> TensorView:
     return TensorView(tensor_id=tensor_id, labels=labels, shape=shape)
 
 
@@ -135,10 +143,69 @@ def _topology(**kwargs: int) -> UpmemTopology:
     )
 
 
+def _sliced_dag(*, k_sizes: tuple[int, int, int, int] = (3, 3, 3, 3)) -> ContractionDAG:
+    tensors: list[TensorSpec] = []
+    nodes: list[ContractNode] = []
+    inputs: list[TensorView] = []
+    for index, k_size in enumerate(k_sizes):
+        left = TensorSpec(
+            f"left_{index}", (0, 1, 2), (2, 4, k_size), "dense", dtype="complex128"
+        )
+        right = TensorSpec(
+            f"right_{index}", (2, 1, 3), (k_size, 4, 2), "dense", dtype="complex128"
+        )
+        output = TensorSpec(
+            f"partial_{index}",
+            (0, 3),
+            (2, 2),
+            "dense",
+            dtype="complex128",
+            produced_by=f"branch_{index}",
+        )
+        tensors.extend((left, right))
+        nodes.append(
+            ContractNode(
+                node_id=f"branch_{index}",
+                left=TensorView(
+                    tensor_id=left.id,
+                    labels=(0, 2),
+                    shape=(2, k_size),
+                    slice_spec=((1, index),),
+                ),
+                right=TensorView(
+                    tensor_id=right.id,
+                    labels=(2, 3),
+                    shape=(k_size, 2),
+                    slice_spec=((1, index),),
+                ),
+                output=output,
+                contracted_labels=(2,),
+                output_labels=(0, 3),
+            )
+        )
+        inputs.append(TensorView(tensor_id=output.id, labels=(0, 3), shape=(2, 2)))
+    reduce = ReduceNode(
+        node_id="reduce",
+        inputs=tuple(inputs),
+        output=TensorSpec("out", (0, 3), (2, 2), "dense", dtype="complex128"),
+        reduced_labels=(1,),
+        dependencies=tuple(node.node_id for node in nodes),
+    )
+    return ContractionDAG(
+        tensors=tuple(tensors),
+        nodes=tuple(nodes) + (reduce,),
+        output=TensorView(tensor_id="out", labels=(0, 3), shape=(2, 2)),
+    )
+
+
 def test_mapping_is_deterministic_and_uses_dag_hash() -> None:
     dag = _dag()
-    first = plan_upmem(dag, numeric_policy="split_complex_float32_v1", topology=_topology())
-    second = plan_upmem(dag, numeric_policy="split_complex_float32_v1", topology=_topology())
+    first = plan_upmem(
+        dag, numeric_policy="split_complex_float32_v1", topology=_topology()
+    )
+    second = plan_upmem(
+        dag, numeric_policy="split_complex_float32_v1", topology=_topology()
+    )
 
     assert PLAN_SCHEMA_VERSION == 1
     assert first == second
@@ -146,15 +213,153 @@ def test_mapping_is_deterministic_and_uses_dag_hash() -> None:
     assert physical_plan_id(first) == physical_plan_id(second)
 
 
+def test_four_way_logical_slice_maps_to_one_sorted_batch_and_reduce() -> None:
+    dag = _sliced_dag()
+    plan = plan_upmem(
+        dag,
+        numeric_policy="split_complex_float32_v1",
+        topology=_topology(dpu_count=2),
+    )
+    assert [(stage.kind, stage.node_ids) for stage in plan.stages] == [
+        (
+            "contract_batch",
+            ("branch_0", "branch_1", "branch_2", "branch_3"),
+        ),
+        ("host_reduce", ("reduce",)),
+    ]
+    batch = plan.stages[0]
+    assert {unit.node_id for unit in batch.work_units} == set(batch.node_ids)
+    tile_ids = tuple(unit.stable_tile_id for unit in batch.work_units)
+    assert len(set(tile_ids)) == len(tile_ids)
+    assert all(
+        unit.stable_tile_id.startswith(f"{unit.node_id}:") for unit in batch.work_units
+    )
+    assert plan == plan_upmem(
+        dag,
+        numeric_policy="split_complex_float32_v1",
+        topology=_topology(dpu_count=2),
+    )
+
+
+def test_two_label_cartesian_slice_maps_to_one_batch_and_reduce() -> None:
+    left = TensorSpec("left", (0, 1, 2), (2, 2, 2), "dense", dtype="complex128")
+    right = TensorSpec("right", (1, 2, 3), (2, 2, 2), "dense", dtype="complex128")
+    node = ContractNode(
+        node_id="cartesian",
+        left=_view(left.id, left.labels, left.shape),
+        right=_view(right.id, right.labels, right.shape),
+        output=TensorSpec(
+            "out",
+            (0, 3),
+            (2, 2),
+            "dense",
+            dtype="complex128",
+            produced_by="cartesian",
+        ),
+        contracted_labels=(1, 2),
+        output_labels=(0, 3),
+    )
+    dag = slice_contraction(
+        ContractionDAG(
+            tensors=(left, right),
+            nodes=(node,),
+            output=_view("out", (0, 3), (2, 2)),
+        ),
+        node_id=node.node_id,
+        labels=(2, 1),
+    )
+
+    plan = plan_upmem(
+        dag,
+        numeric_policy="split_complex_float32_v1",
+        topology=_topology(dpu_count=1),
+    )
+    reduction = next(item for item in dag.nodes if isinstance(item, ReduceNode))
+    branch_ids = tuple(sorted(reduction.dependencies))
+
+    assert reduction.reduced_labels == (1, 2)
+    assert len(branch_ids) == 4
+    assert [(stage.kind, stage.node_ids) for stage in plan.stages] == [
+        ("contract_batch", branch_ids),
+        ("host_reduce", (reduction.node_id,)),
+    ]
+
+
+def test_incompatible_logical_slice_geometry_fails_closed() -> None:
+    with pytest.raises(UnsupportedExecution) as caught:
+        plan_upmem(
+            _sliced_dag(k_sizes=(3, 3, 3, 2)),
+            numeric_policy="split_complex_float32_v1",
+            topology=_topology(dpu_count=2),
+        )
+    assert caught.value.stage == "mapping"
+    assert caught.value.capability == "upmem_slice_batch_compatibility"
+
+
+def test_logical_slice_with_extra_fixed_label_fails_closed() -> None:
+    dag = _sliced_dag()
+    first = dag.nodes[0]
+    assert isinstance(first, ContractNode)
+    extra_left = replace(dag.tensors[0], labels=(0, 1, 2, 4), shape=(2, 4, 3, 2))
+    extra_branch = replace(
+        first,
+        left=TensorView(
+            tensor_id=extra_left.id,
+            labels=(0, 2),
+            shape=(2, 3),
+            slice_spec=((1, 0), (3, 0)),
+        ),
+    )
+    extra_dag = replace(
+        dag,
+        tensors=(extra_left, *dag.tensors[1:]),
+        nodes=(extra_branch, *dag.nodes[1:]),
+    )
+    with pytest.raises(UnsupportedExecution) as caught:
+        plan_upmem(
+            extra_dag,
+            numeric_policy="split_complex_float32_v1",
+            topology=_topology(dpu_count=2),
+        )
+    assert caught.value.stage == "mapping"
+    assert caught.value.capability == "upmem_slice_batch_compatibility"
+
+
+def test_validator_rejects_grouped_work_unit_membership_tampering() -> None:
+    dag = _sliced_dag()
+    plan = plan_upmem(
+        dag,
+        numeric_policy="split_complex_float32_v1",
+        topology=_topology(dpu_count=2),
+    )
+    batch = plan.stages[0]
+    tampered = replace(
+        plan,
+        stages=(replace(batch, work_units=batch.work_units[:-1]), *plan.stages[1:]),
+    )
+    with pytest.raises(ValueError, match="differs from pure recomputation"):
+        validate_upmem_plan(dag, tampered)
+
+
 def test_real_tile_byte_and_mac_semantics_are_explicit() -> None:
     dag = _dag()
-    float_plan = plan_upmem(dag, numeric_policy="split_complex_float32_v1", topology=_topology())
-    int_plan = plan_upmem(dag, numeric_policy="split_complex_int8_shared_scale_v1", topology=_topology())
+    float_plan = plan_upmem(
+        dag, numeric_policy="split_complex_float32_v1", topology=_topology()
+    )
+    int_plan = plan_upmem(
+        dag, numeric_policy="split_complex_int8_shared_scale_v1", topology=_topology()
+    )
 
     float_unit = float_plan.stages[0].work_units[0]
     int_unit = int_plan.stages[0].work_units[0]
-    assert (float_unit.estimated_input_bytes, float_unit.estimated_output_bytes) == (6 * 4 + 12 * 4, 8 * 4)
-    assert (int_unit.estimated_input_bytes, int_unit.estimated_output_bytes) == (6 + 12, 8 * 4)
+    assert (float_unit.estimated_input_bytes, float_unit.estimated_output_bytes) == (
+        6 * 4 + 12 * 4,
+        8 * 4,
+    )
+    assert (int_unit.estimated_input_bytes, int_unit.estimated_output_bytes) == (
+        6 + 12,
+        8 * 4,
+    )
     assert float_unit.aligned_mram_bytes == 6 * 4 + 12 * 4 + 8 * 4
     assert int_unit.aligned_mram_bytes == 8 + 16 + 32
     assert float_unit.estimated_arithmetic_work == 2 * 4 * 3
@@ -177,9 +382,11 @@ def test_real_tile_byte_and_mac_semantics_are_explicit() -> None:
 def test_remainder_tile_alignment_and_byte_sum(
     policy: str, expected: tuple[int, int, int, int]
 ) -> None:
-    unit = plan_upmem(
-        _remainder_dag(), numeric_policy=policy, topology=_topology()
-    ).stages[0].work_units[0]
+    unit = (
+        plan_upmem(_remainder_dag(), numeric_policy=policy, topology=_topology())
+        .stages[0]
+        .work_units[0]
+    )
     left, right, output, total = expected
     assert unit.aligned_mram_bytes == total
     assert unit.aligned_mram_bytes == left + right + output
@@ -203,6 +410,9 @@ def test_reduce_stage_allows_unrelated_ready_node_between_producers() -> None:
         "contract_batch:final_node",
     ]
     assert plan.stages[-2].work_units == ()
+    units = tuple(unit for stage in plan.stages for unit in stage.work_units)
+    assert len({unit.stable_tile_id for unit in units}) == len(units)
+    assert all(unit.stable_tile_id.startswith(f"{unit.node_id}:") for unit in units)
 
 
 def test_work_units_are_sorted_by_required_final_key() -> None:
@@ -214,7 +424,16 @@ def test_work_units_are_sorted_by_required_final_key() -> None:
     )
     units = plan.stages[0].work_units
     keys = [
-        (u.logical_rank, u.logical_dpu, u.wave, u.batch_start, u.m_start, u.n_start, u.k_start, u.stable_tile_id)
+        (
+            u.logical_rank,
+            u.logical_dpu,
+            u.wave,
+            u.batch_start,
+            u.m_start,
+            u.n_start,
+            u.k_start,
+            u.stable_tile_id,
+        )
         for u in units
     ]
     assert keys == sorted(keys)
@@ -222,18 +441,18 @@ def test_work_units_are_sorted_by_required_final_key() -> None:
         (unit.wave, unit.logical_rank, unit.logical_dpu, unit.stable_tile_id)
         for unit in units
     ] == [
-        (0, 0, 0, "b_0:out_0_0:k_0"),
-        (1, 0, 0, "b_0:out_0_0:k_1"),
-        (2, 0, 0, "b_0:out_0_0:k_2"),
-        (0, 0, 1, "b_0:out_0_1:k_0"),
-        (1, 0, 1, "b_0:out_0_1:k_1"),
-        (2, 0, 1, "b_0:out_0_1:k_2"),
-        (0, 1, 0, "b_0:out_1_0:k_0"),
-        (1, 1, 0, "b_0:out_1_0:k_1"),
-        (2, 1, 0, "b_0:out_1_0:k_2"),
-        (0, 1, 1, "b_0:out_1_1:k_0"),
-        (1, 1, 1, "b_0:out_1_1:k_1"),
-        (2, 1, 1, "b_0:out_1_1:k_2"),
+        (0, 0, 0, "large:b_0:out_0_0:k_0"),
+        (1, 0, 0, "large:b_0:out_0_0:k_1"),
+        (2, 0, 0, "large:b_0:out_0_0:k_2"),
+        (0, 0, 1, "large:b_0:out_0_1:k_0"),
+        (1, 0, 1, "large:b_0:out_0_1:k_1"),
+        (2, 0, 1, "large:b_0:out_0_1:k_2"),
+        (0, 1, 0, "large:b_0:out_1_0:k_0"),
+        (1, 1, 0, "large:b_0:out_1_0:k_1"),
+        (2, 1, 0, "large:b_0:out_1_0:k_2"),
+        (0, 1, 1, "large:b_0:out_1_1:k_0"),
+        (1, 1, 1, "large:b_0:out_1_1:k_1"),
+        (2, 1, 1, "large:b_0:out_1_1:k_2"),
     ]
     geometry = [
         (u.batch_start, u.m_start, u.m_size, u.n_start, u.n_size, u.k_start, u.k_size)
@@ -313,12 +532,22 @@ def _oversized_k_dag() -> ContractionDAG:
 
 def test_identity_changes_for_policy_topology_stage_and_work_order() -> None:
     dag = _dag()
-    base = plan_upmem(dag, numeric_policy="split_complex_float32_v1", topology=_topology())
-    assert physical_plan_id(base) != physical_plan_id(
-        plan_upmem(dag, numeric_policy="split_complex_int8_shared_scale_v1", topology=_topology())
+    base = plan_upmem(
+        dag, numeric_policy="split_complex_float32_v1", topology=_topology()
     )
     assert physical_plan_id(base) != physical_plan_id(
-        plan_upmem(dag, numeric_policy="split_complex_float32_v1", topology=_topology(dpu_count=4))
+        plan_upmem(
+            dag,
+            numeric_policy="split_complex_int8_shared_scale_v1",
+            topology=_topology(),
+        )
+    )
+    assert physical_plan_id(base) != physical_plan_id(
+        plan_upmem(
+            dag,
+            numeric_policy="split_complex_float32_v1",
+            topology=_topology(dpu_count=4),
+        )
     )
     changed_stage_order = replace(base.stages[0], stage_id="contract_batch:changed")
     changed_stage_plan = replace(base, stages=(changed_stage_order,))
@@ -342,14 +571,18 @@ def test_identity_changes_for_policy_topology_stage_and_work_order() -> None:
 
 def test_validator_rejects_tampering() -> None:
     dag = _dag()
-    plan = plan_upmem(dag, numeric_policy="split_complex_float32_v1", topology=_topology())
+    plan = plan_upmem(
+        dag, numeric_policy="split_complex_float32_v1", topology=_topology()
+    )
     validate_upmem_plan(dag, plan)
     tampered = replace(plan, kernel_policy="different")
     with pytest.raises(ValueError, match="differs from pure recomputation"):
         validate_upmem_plan(dag, tampered)
 
 
-@pytest.mark.parametrize("tamper", ["stage_order", "node_id", "tile", "bytes", "topology"])
+@pytest.mark.parametrize(
+    "tamper", ["stage_order", "node_id", "tile", "bytes", "topology"]
+)
 def test_validator_rejects_structurally_valid_tampering(tamper: str) -> None:
     dag = _contract_dag_with_large_tiles()
     if tamper == "stage_order":
@@ -368,7 +601,11 @@ def test_validator_rejects_structurally_valid_tampering(tamper: str) -> None:
         stage = plan.stages[0]
         changed = replace(stage.work_units[0], m_start=stage.work_units[0].m_start + 1)
         tampered = replace(
-            plan, stages=(replace(stage, work_units=(changed, *stage.work_units[1:])), *plan.stages[1:])
+            plan,
+            stages=(
+                replace(stage, work_units=(changed, *stage.work_units[1:])),
+                *plan.stages[1:],
+            ),
         )
     elif tamper == "bytes":
         stage = plan.stages[0]
@@ -377,7 +614,11 @@ def test_validator_rejects_structurally_valid_tampering(tamper: str) -> None:
             estimated_input_bytes=stage.work_units[0].estimated_input_bytes + 1,
         )
         tampered = replace(
-            plan, stages=(replace(stage, work_units=(changed, *stage.work_units[1:])), *plan.stages[1:])
+            plan,
+            stages=(
+                replace(stage, work_units=(changed, *stage.work_units[1:])),
+                *plan.stages[1:],
+            ),
         )
     else:
         tampered = replace(
@@ -390,7 +631,9 @@ def test_validator_rejects_structurally_valid_tampering(tamper: str) -> None:
 
 def test_structurally_invalid_stage_records_fail_at_construction() -> None:
     with pytest.raises(ValueError, match="host_reduce"):
-        UpmemStage(stage_id="reduce", kind="host_reduce", node_ids=("a", "b"), work_units=())
+        UpmemStage(
+            stage_id="reduce", kind="host_reduce", node_ids=("a", "b"), work_units=()
+        )
     with pytest.raises(ValueError, match="host_reduce"):
         UpmemStage(
             stage_id="reduce",
@@ -550,7 +793,8 @@ def test_final_mapper_preserves_expected_exception_boundary(
 
     monkeypatch.setattr(upmem_plan_module, "plan_tile_shapes", raise_error)
     expected_exception = (
-        ValueError if isinstance(error, ValueError) and not isinstance(error, TileLoweringError)
+        ValueError
+        if isinstance(error, ValueError) and not isinstance(error, TileLoweringError)
         else UnsupportedExecution
     )
 
@@ -569,6 +813,7 @@ def test_final_mapper_preserves_expected_exception_boundary(
 def test_resources_are_immutable_and_callback_is_not_identity() -> None:
     def callback() -> None:
         return None
+
     first = UpmemResources(
         session_root="session",
         host_binary="host",

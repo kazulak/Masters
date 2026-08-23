@@ -20,6 +20,7 @@ from quantum_bench.upmem.protocol import (
 from quantum_bench.results import UnsupportedExecution
 from quantum_bench.upmem.tiling import (
     M5Tile,
+    M5TileLimits,
     TileLoweringError,
     canonical_label_geometry,
     order_tile_waves,
@@ -183,6 +184,11 @@ class UpmemPlan:
         node_ids = tuple(node_id for stage in self.stages for node_id in stage.node_ids)
         if len(set(node_ids)) != len(node_ids):
             raise ValueError("plan node IDs must be unique")
+        tile_ids = tuple(
+            unit.stable_tile_id for stage in self.stages for unit in stage.work_units
+        )
+        if len(set(tile_ids)) != len(tile_ids):
+            raise ValueError("plan stable tile IDs must be globally unique")
         if self.intermediate_policy != "host_roundtrip_v1":
             raise ValueError("unsupported intermediate policy")
         _require_nonempty_string("kernel_policy", self.kernel_policy)
@@ -305,10 +311,43 @@ def _build_upmem_plan(
     limits = tile_limits_for_numeric_mode(tile_numeric_mode)
     order = _topological_order(dag)
     nodes = {node.node_id: node for node in dag.nodes}
+    slice_groups = _slice_batch_groups(
+        dag,
+        numeric_policy=numeric_policy,
+        topology=topology,
+        limits=limits,
+    )
+    grouped_nodes = {
+        node_id for node_ids in slice_groups.values() for node_id in node_ids
+    }
     stages: list[UpmemStage] = []
     for node_id in order:
+        if node_id in grouped_nodes:
+            continue
         node = nodes[node_id]
         if isinstance(node, ReduceNode):
+            group = slice_groups.get(node.node_id)
+            if group is not None:
+                grouped_units: list[UpmemWorkUnit] = []
+                for branch_id in group:
+                    grouped_units.extend(
+                        _map_contract_node(
+                            nodes[branch_id],
+                            numeric_policy=numeric_policy,
+                            topology=topology,
+                            limits=limits,
+                        )
+                    )
+                stages.append(
+                    UpmemStage(
+                        stage_id=f"contract_batch:{node.node_id}",
+                        kind="contract_batch",
+                        node_ids=group,
+                        work_units=tuple(
+                            sorted(grouped_units, key=_work_unit_sort_key)
+                        ),
+                    )
+                )
             stages.append(
                 UpmemStage(
                     stage_id=f"host_reduce:{node.node_id}",
@@ -318,41 +357,17 @@ def _build_upmem_plan(
                 )
             )
             continue
-        try:
-            batch, m, n, contracted_size = _validate_v4_node_geometry(node)
-            if contracted_size > MAX_CONTRACTED:
-                raise _UnsupportedUpmemNode(
-                    capability="upmem_max_contracted_elements",
-                    reason=(
-                        f"UPMEM node {node.node_id} contracted K {contracted_size} "
-                        f"exceeds v4 limit {MAX_CONTRACTED}"
-                    ),
-                )
-            tiles = plan_tile_shapes(
-                batch,
-                m,
-                contracted_size,
-                n,
-                limits=limits,
-            )
-            if numeric_policy == "split_complex_int8_shared_scale_v1":
-                _validate_final_int8_bounds(node.node_id, contracted_size, tiles)
-            waves = order_tile_waves(tiles, topology.dpu_count)
-            units = _final_work_units(node.node_id, waves, topology)
-        except _UnsupportedUpmemNode as exc:
-            raise UnsupportedExecution("mapping", exc.reason, exc.capability) from exc
-        except TileLoweringError as exc:
-            raise UnsupportedExecution(
-                "mapping",
-                f"UPMEM node {node.node_id} is not representable: {exc}",
-                "upmem_v4_geometry",
-            ) from exc
         stages.append(
             UpmemStage(
                 stage_id=f"contract_batch:{node.node_id}",
                 kind="contract_batch",
                 node_ids=(node.node_id,),
-                work_units=units,
+                work_units=_map_contract_node(
+                    node,
+                    numeric_policy=numeric_policy,
+                    topology=topology,
+                    limits=limits,
+                ),
             )
         )
     plan = UpmemPlan(
@@ -363,6 +378,188 @@ def _build_upmem_plan(
     )
     _validate_final_stage_dependencies(dag, plan)
     return plan
+
+
+def _map_contract_node(
+    node: ContractNode,
+    *,
+    numeric_policy: NumericPolicy,
+    topology: UpmemTopology,
+    limits: M5TileLimits,
+) -> tuple[UpmemWorkUnit, ...]:
+    try:
+        batch, m, n, contracted_size = _validate_v4_node_geometry(node)
+        if contracted_size > MAX_CONTRACTED:
+            raise _UnsupportedUpmemNode(
+                capability="upmem_max_contracted_elements",
+                reason=(
+                    f"UPMEM node {node.node_id} contracted K {contracted_size} "
+                    f"exceeds v4 limit {MAX_CONTRACTED}"
+                ),
+            )
+        tiles = plan_tile_shapes(batch, m, contracted_size, n, limits=limits)
+        if numeric_policy == "split_complex_int8_shared_scale_v1":
+            _validate_final_int8_bounds(node.node_id, contracted_size, tiles)
+        waves = order_tile_waves(tiles, topology.dpu_count)
+        return _final_work_units(
+            node.node_id,
+            waves,
+            topology,
+        )
+    except _UnsupportedUpmemNode as exc:
+        raise UnsupportedExecution("mapping", exc.reason, exc.capability) from exc
+    except TileLoweringError as exc:
+        raise UnsupportedExecution(
+            "mapping",
+            f"UPMEM node {node.node_id} is not representable: {exc}",
+            "upmem_v4_geometry",
+        ) from exc
+
+
+def _slice_batch_groups(
+    dag: ContractionDAG,
+    *,
+    numeric_policy: NumericPolicy,
+    topology: UpmemTopology,
+    limits: M5TileLimits,
+) -> dict[str, tuple[str, ...]]:
+    """Return deterministic, exclusively consumed logical slice groups."""
+
+    nodes = {node.node_id: node for node in dag.nodes}
+    groups: dict[str, tuple[str, ...]] = {}
+    for parent in dag.nodes:
+        if not isinstance(parent, ReduceNode) or not parent.reduced_labels:
+            continue
+        branches = tuple(sorted(parent.dependencies))
+        if not branches or not all(
+            isinstance(nodes[branch_id], ContractNode) for branch_id in branches
+        ):
+            continue
+        branch_nodes = tuple(nodes[branch_id] for branch_id in branches)
+        if not any(
+            node.left.slice_spec or node.right.slice_spec for node in branch_nodes
+        ):
+            continue
+        descriptors = {tensor.id: tensor for tensor in dag.tensors}
+        descriptors.update({node.output.id: node.output for node in dag.nodes})
+        if not all(
+            _is_logical_slice_branch(node, parent.reduced_labels, descriptors)
+            for node in branch_nodes
+        ):
+            _raise_slice_batch_incompatibility(
+                parent,
+                "direct branches do not all represent the requested logical slices",
+            )
+        for branch in branch_nodes:
+            consumers = {
+                consumer.node_id
+                for consumer in dag.nodes
+                if any(
+                    view.tensor_id == branch.output.id
+                    for view in (
+                        (consumer.left, consumer.right)
+                        if isinstance(consumer, ContractNode)
+                        else consumer.inputs
+                    )
+                )
+            }
+            if dag.output.tensor_id == branch.output.id:
+                consumers.add("<dag-output>")
+            if consumers != {parent.node_id}:
+                _raise_slice_batch_incompatibility(
+                    parent,
+                    f"branch {branch.node_id!r} has unrelated consumers",
+                )
+
+        keys = tuple(
+            _slice_compatibility_key(
+                parent,
+                branch,
+                numeric_policy=numeric_policy,
+                topology=topology,
+                limits=limits,
+            )
+            for branch in branch_nodes
+        )
+        if any(key != keys[0] for key in keys[1:]):
+            _raise_slice_batch_incompatibility(
+                parent,
+                "logical slice branches have incompatible execution signatures",
+            )
+        groups[parent.node_id] = branches
+    return groups
+
+
+def _is_logical_slice_branch(
+    node: ContractNode,
+    reduced_labels: tuple[int, ...],
+    descriptors: dict[str, object],
+) -> bool:
+    fixed_labels: set[int] = set()
+    for view in (node.left, node.right):
+        labels = getattr(descriptors[view.tensor_id], "labels")
+        fixed_labels.update(
+            labels[axis] for axis, _ in view.slice_spec if 0 <= axis < len(labels)
+        )
+    return fixed_labels == set(reduced_labels)
+
+
+def _slice_compatibility_key(
+    parent: ReduceNode,
+    node: ContractNode,
+    *,
+    numeric_policy: NumericPolicy,
+    topology: UpmemTopology,
+    limits: M5TileLimits,
+) -> tuple[object, ...]:
+    try:
+        geometry = _canonical_dimensions(node)
+    except (TileLoweringError, OverflowError) as exc:
+        _raise_slice_batch_incompatibility(parent, str(exc))
+    limit_fields = tuple(
+        getattr(limits, field)
+        for field in (
+            "numeric_mode",
+            "max_elements",
+            "max_packed_k",
+            "max_mram_bytes",
+            "alignment_bytes",
+            "max_tile_dim",
+        )
+    )
+    return (
+        parent.node_id,
+        (
+            node.left.labels,
+            node.left.shape,
+            node.right.labels,
+            node.right.shape,
+            node.contracted_labels,
+            node.output_labels,
+        ),
+        geometry,
+        numeric_policy,
+        limit_fields,
+        (
+            topology.dpu_count,
+            topology.tasklets_per_dpu,
+            topology.rank_count,
+        ),
+        (
+            node.output.dtype,
+            node.output.labels,
+            node.output.shape,
+            node.output.structure,
+        ),
+    )
+
+
+def _raise_slice_batch_incompatibility(parent: ReduceNode, reason: str) -> None:
+    raise UnsupportedExecution(
+        "mapping",
+        f"UPMEM logical slice group {parent.node_id!r} is incompatible: {reason}",
+        "upmem_slice_batch_compatibility",
+    )
 
 
 def _validate_final_topology(topology: UpmemTopology) -> None:
@@ -434,7 +631,7 @@ def _final_work_units(
             units.append(
                 UpmemWorkUnit(
                     node_id=node_id,
-                    stable_tile_id=tile.id,
+                    stable_tile_id=f"{node_id}:{tile.id}",
                     wave=wave_index,
                     logical_rank=global_slot // dpus_per_rank,
                     logical_dpu=global_slot % dpus_per_rank,
@@ -464,6 +661,7 @@ def _work_unit_sort_key(unit: UpmemWorkUnit) -> tuple[object, ...]:
         unit.m_start,
         unit.n_start,
         unit.k_start,
+        unit.node_id,
         unit.stable_tile_id,
     )
 

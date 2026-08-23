@@ -256,7 +256,7 @@ def test_engine_plan_assignment_drives_rank_local_dpu_request() -> None:
         node, lowering, moved_stage.work_units
     )
 
-    assert waves[0][0].id == unit.stable_tile_id
+    assert unit.stable_tile_id == f"{node.node_id}:{waves[0][0].id}"
     assert requests[0][0][0].index == 0
     assert requests[0][0][1] == [(waves[0][0], 1)]
 

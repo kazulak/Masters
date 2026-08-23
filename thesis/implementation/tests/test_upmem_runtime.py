@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from quantum_bench.core.records import TensorSpec
+from quantum_bench.lowering import slice_contraction
 from quantum_bench.model import ContractNode, ContractionDAG, ReduceNode, TensorView
 from quantum_bench.results import ExecutionFailed, UnsupportedExecution
 from quantum_bench.upmem.plan import (
@@ -103,6 +104,52 @@ def _inputs(node: ContractNode, *, k: int) -> dict[str, np.ndarray]:
     left = (((values % 11) - 5.0) + 1j * ((values % 7) - 3.0)).reshape(1, k)
     right = (((values % 13) - 6.0) + 1j * ((values % 5) - 2.0)).reshape(k, 1)
     return {node.left.tensor_id: left, node.right.tensor_id: right}
+
+
+def _grouped_slice_fixture() -> tuple[
+    ContractionDAG, dict[str, np.ndarray], np.ndarray
+]:
+    left = TensorSpec("slice_left", (0, 1), (2, 4), "dense", dtype="complex128")
+    right = TensorSpec("slice_right", (1, 2), (4, 2), "dense", dtype="complex128")
+    node = ContractNode(
+        node_id="sliced",
+        left=TensorView(tensor_id=left.id, labels=left.labels, shape=left.shape),
+        right=TensorView(tensor_id=right.id, labels=right.labels, shape=right.shape),
+        output=TensorSpec(
+            "slice_out",
+            (0, 2),
+            (2, 2),
+            "dense",
+            dtype="complex128",
+            produced_by="sliced",
+        ),
+        contracted_labels=(1,),
+        output_labels=(0, 2),
+    )
+    dag = slice_contraction(
+        ContractionDAG(
+            tensors=(left, right),
+            nodes=(node,),
+            output=TensorView(tensor_id="slice_out", labels=(0, 2), shape=(2, 2)),
+        ),
+        node_id="sliced",
+        labels=(1,),
+    )
+    left_value = np.array([[1, 2, 3, 4], [5, 6, 7, 8]], dtype=np.complex128)
+    right_value = np.array([[1, 2], [3, 4], [5, 6], [7, 8]], dtype=np.complex128)
+    expected_real = np.zeros((2, 2), dtype=np.float32)
+    for index in range(4):
+        branch = np.multiply(
+            np.asarray(left_value.real[:, index, None], dtype=np.float32),
+            np.asarray(right_value.real[index, None, :], dtype=np.float32),
+            dtype=np.float32,
+        )
+        expected_real = np.add(expected_real, branch, dtype=np.float32)
+    return (
+        dag,
+        {"slice_left": left_value, "slice_right": right_value},
+        np.asarray(expected_real, dtype=np.complex64),
+    )
 
 
 def test_open_preflight_rejects_dag_plan_mismatch_before_opener(tmp_path: Path) -> None:
@@ -356,6 +403,145 @@ def test_one_sided_complex_and_reduce_stage_are_deterministic(tmp_path: Path) ->
     np.testing.assert_array_equal(actual.output, expected.output)
     assert actual.output.dtype == np.dtype(np.complex64)
     assert any(stage.kind == "host_reduce" for stage in plan.stages)
+
+
+def test_grouped_sliced_session_executes_each_branch_once(tmp_path: Path) -> None:
+    dag, inputs, expected = _grouped_slice_fixture()
+    plan = plan_upmem(
+        dag,
+        numeric_policy="split_complex_float32_v1",
+        topology=FinalTopology(dpu_count=1, tasklets_per_dpu=1),
+    )
+    engine = _engine(tmp_path / "engine", dpu_count=1)
+    resources = _resources(
+        tmp_path,
+        lambda _dag, final_plan, _resources, _timeout: engine.open_session(
+            final_plan.numeric_policy, final_plan.topology
+        ),
+    )
+    session = open_upmem(dag, plan, resources)
+    actual = session.run_once(inputs)
+    _close_mock_session(session)
+    np.testing.assert_array_equal(actual.output, expected)
+    branch_ids = tuple(sorted(plan.stages[0].node_ids))
+    assert branch_ids == (
+        "sliced__slice_1_0",
+        "sliced__slice_1_1",
+        "sliced__slice_1_2",
+        "sliced__slice_1_3",
+    )
+    assert tuple(item["node_id"] for item in actual.numeric_facts["operations"]) == (
+        branch_ids
+    )
+    declared_stage_id = plan.stages[0].stage_id
+    operation_facts = actual.backend_facts["operation_facts"]
+    assert tuple(item["node_id"] for item in operation_facts) == branch_ids
+    assert (
+        tuple(item["declared_stage_id"] for item in operation_facts)
+        == (declared_stage_id,) * 4
+    )
+    assert tuple(item["stage_id"] for item in operation_facts) == tuple(
+        f"{declared_stage_id}:node:{node_id}" for node_id in branch_ids
+    )
+    raw_records = actual.numeric_facts["raw_lane_records"]
+    assert all(
+        sum(record["node_id"] == node_id for record in raw_records) == 4
+        for node_id in branch_ids
+    )
+    units = tuple(unit for stage in plan.stages for unit in stage.work_units)
+    assert len({unit.stable_tile_id for unit in units}) == len(units)
+    assert all(unit.stable_tile_id.startswith(f"{unit.node_id}:") for unit in units)
+
+
+def test_grouped_int8_preserves_per_branch_numeric_facts(tmp_path: Path) -> None:
+    dag, inputs, _ = _grouped_slice_fixture()
+    plan = plan_upmem(
+        dag,
+        numeric_policy="split_complex_int8_shared_scale_v1",
+        topology=FinalTopology(dpu_count=1, tasklets_per_dpu=1),
+    )
+    engine = _engine(tmp_path / "engine", dpu_count=1)
+    resources = _resources(
+        tmp_path,
+        lambda _dag, final_plan, _resources, _timeout: engine.open_session(
+            final_plan.numeric_policy, final_plan.topology
+        ),
+    )
+    session = open_upmem(dag, plan, resources)
+    actual = session.run_once(inputs)
+    _close_mock_session(session)
+
+    branch_ids = tuple(sorted(plan.stages[0].node_ids))
+    operations = actual.numeric_facts["operations"]
+    assert tuple(item["node_id"] for item in operations) == branch_ids
+    assert tuple(item["left_scale"] for item in operations) == pytest.approx(
+        tuple(value / 127 for value in (5, 6, 7, 8))
+    )
+    assert tuple(item["right_scale"] for item in operations) == pytest.approx(
+        tuple(value / 127 for value in (2, 4, 6, 8))
+    )
+
+    records = actual.numeric_facts["operand_records"]
+    by_branch = {
+        node_id: {
+            record["side"]: record for record in records if record["node_id"] == node_id
+        }
+        for node_id in branch_ids
+    }
+    assert all(set(items) == {"left", "right"} for items in by_branch.values())
+    for operation in operations:
+        operands = by_branch[operation["node_id"]]
+        assert operands["left"]["scale"] == operation["left_scale"]
+        assert operands["right"]["scale"] == operation["right_scale"]
+        assert operation["saturation_real"] == sum(
+            item["saturation_real"] for item in operands.values()
+        )
+        assert operation["saturation_imag"] == sum(
+            item["saturation_imag"] for item in operands.values()
+        )
+
+
+def test_grouped_branch_failure_identifies_branch_and_declared_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dag, inputs, _ = _grouped_slice_fixture()
+    plan = plan_upmem(
+        dag,
+        numeric_policy="split_complex_float32_v1",
+        topology=FinalTopology(dpu_count=1, tasklets_per_dpu=1),
+    )
+    engine = _engine(tmp_path / "engine", dpu_count=1)
+    resources = _resources(
+        tmp_path,
+        lambda _dag, final_plan, _resources, _timeout: engine.open_session(
+            final_plan.numeric_policy, final_plan.topology
+        ),
+    )
+    session = open_upmem(dag, plan, resources)
+    calls: list[tuple[str, str, tuple[str, ...]]] = []
+
+    def fail(node, _left, _right, *, stage, **_kwargs):
+        calls.append(
+            (
+                node.node_id,
+                stage.stage_id,
+                tuple(unit.node_id for unit in stage.work_units),
+            )
+        )
+        raise RuntimeError("controlled grouped branch failure")
+
+    monkeypatch.setattr(session._low_level.session, "_execute_complex_core", fail)
+    with pytest.raises(ExecutionFailed) as caught:
+        session.run_once(inputs)
+    _close_mock_session(session)
+    declared_stage_id = plan.stages[0].stage_id
+    branch_node_id = plan.stages[0].node_ids[0]
+    branch_stage_id = f"{declared_stage_id}:node:{branch_node_id}"
+    assert calls == [(branch_node_id, branch_stage_id, (branch_node_id,))]
+    assert caught.value.stage == branch_stage_id
+    assert caught.value.backend_facts["plan_stage_id"] == declared_stage_id
+    assert caught.value.backend_facts["branch_stage_id"] == branch_stage_id
+    assert caught.value.backend_facts["branch_node_id"] == branch_node_id
 
 
 @pytest.mark.parametrize(

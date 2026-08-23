@@ -7,8 +7,19 @@ import numpy as np
 import pytest
 
 import quantum_bench.cpu as cpu
-from quantum_bench.cpu import replay_upmem_plan_once, run_complex128_reference, run_cpu_once
-from quantum_bench.model import ContractNode, ContractionDAG, ReduceNode, TensorSpec, TensorView
+from quantum_bench.cpu import (
+    replay_upmem_plan_once,
+    run_complex128_reference,
+    run_cpu_once,
+)
+from quantum_bench.lowering import slice_contraction
+from quantum_bench.model import (
+    ContractNode,
+    ContractionDAG,
+    ReduceNode,
+    TensorSpec,
+    TensorView,
+)
 from quantum_bench.numerics import decode_complex_products, encode_complex_tensor
 from quantum_bench.results import (
     ExecutionFailed,
@@ -24,12 +35,18 @@ FLOAT = "split_complex_float32_v1"
 INT8 = "split_complex_int8_shared_scale_v1"
 
 
-def _contract_dag(*, scrambled: bool = False) -> tuple[ContractionDAG, dict[str, np.ndarray]]:
+def _contract_dag(
+    *, scrambled: bool = False
+) -> tuple[ContractionDAG, dict[str, np.ndarray]]:
     x = TensorSpec("x", (0, 1), (2, 2), "dense", dtype="complex128")
     y = TensorSpec("y", (1, 2), (2, 2), "dense", dtype="complex128")
     z = TensorSpec("z", (2, 3), (2, 2), "dense", dtype="complex128")
-    first_output = TensorSpec("p", (0, 2), (2, 2), "dense", dtype="complex128", produced_by="first")
-    second_output = TensorSpec("q", (0, 3), (2, 2), "dense", dtype="complex128", produced_by="second")
+    first_output = TensorSpec(
+        "p", (0, 2), (2, 2), "dense", dtype="complex128", produced_by="first"
+    )
+    second_output = TensorSpec(
+        "q", (0, 3), (2, 2), "dense", dtype="complex128", produced_by="second"
+    )
     first = ContractNode(
         node_id="first",
         left=TensorView(tensor_id="x", labels=x.labels, shape=x.shape),
@@ -40,7 +57,9 @@ def _contract_dag(*, scrambled: bool = False) -> tuple[ContractionDAG, dict[str,
     )
     second = ContractNode(
         node_id="second",
-        left=TensorView(tensor_id="p", labels=first_output.labels, shape=first_output.shape),
+        left=TensorView(
+            tensor_id="p", labels=first_output.labels, shape=first_output.shape
+        ),
         right=TensorView(tensor_id="z", labels=z.labels, shape=z.shape),
         output=second_output,
         contracted_labels=(2,),
@@ -73,13 +92,52 @@ def _slice_dag() -> tuple[ContractionDAG, dict[str, np.ndarray]]:
             slice_spec=((0, 1), (1, 2)),
         ),
     )
-    return dag, {"source": np.arange(24, dtype=np.float64).reshape(2, 3, 4).astype(np.complex128)}
+    return dag, {
+        "source": np.arange(24, dtype=np.float64).reshape(2, 3, 4).astype(np.complex128)
+    }
+
+
+def _four_way_sliced_dag() -> tuple[ContractionDAG, dict[str, np.ndarray]]:
+    left = TensorSpec("left", (0, 1), (2, 4), "dense", dtype="complex128")
+    right = TensorSpec("right", (1, 2), (4, 2), "dense", dtype="complex128")
+    node = ContractNode(
+        node_id="sliced",
+        left=TensorView(tensor_id="left", labels=left.labels, shape=left.shape),
+        right=TensorView(tensor_id="right", labels=right.labels, shape=right.shape),
+        output=TensorSpec(
+            "out", (0, 2), (2, 2), "dense", dtype="complex128", produced_by="sliced"
+        ),
+        contracted_labels=(1,),
+        output_labels=(0, 2),
+    )
+    dag = slice_contraction(
+        ContractionDAG(
+            tensors=(left, right),
+            nodes=(node,),
+            output=TensorView(tensor_id="out", labels=(0, 2), shape=(2, 2)),
+        ),
+        node_id="sliced",
+        labels=(1,),
+    )
+    inputs = {
+        "left": np.array(
+            [[1 + 2j, 20 - 1j, 3 + 4j, 400 - 2j], [2 - 1j, 40 + 3j, 5, 800 + 1j]],
+            dtype=np.complex128,
+        ),
+        "right": np.array(
+            [[3 - 1j, 4], [5 + 2j, 6], [70 - 3j, 80], [9 + 1j, 10]],
+            dtype=np.complex128,
+        ),
+    }
+    return dag, inputs
 
 
 def _reduce_dag() -> tuple[ContractionDAG, dict[str, np.ndarray]]:
     a = TensorSpec("a", (0,), (1,), "dense", dtype="complex128")
     b = TensorSpec("b", (0,), (1,), "dense", dtype="complex128")
-    out = TensorSpec("sum", (0,), (1,), "dense", dtype="complex128", produced_by="reduce")
+    out = TensorSpec(
+        "sum", (0,), (1,), "dense", dtype="complex128", produced_by="reduce"
+    )
     dag = ContractionDAG(
         tensors=(a, b),
         nodes=(
@@ -100,7 +158,9 @@ def _reduce_dag() -> tuple[ContractionDAG, dict[str, np.ndarray]]:
     }
 
 
-def _int8_reduce_dag(*, mixed_raw_input: bool) -> tuple[ContractionDAG, dict[str, np.ndarray]]:
+def _int8_reduce_dag(
+    *, mixed_raw_input: bool
+) -> tuple[ContractionDAG, dict[str, np.ndarray]]:
     a = TensorSpec("a", (0, 1), (1, 1), "dense", dtype="complex128")
     b = TensorSpec("b", (1, 2), (1, 1), "dense", dtype="complex128")
 
@@ -279,7 +339,9 @@ def test_int8_reduction_uses_producer_id_order(monkeypatch: pytest.MonkeyPatch) 
     first = contract("producer_a", "a")
     second = contract("producer_b", "b")
     third = contract("producer_c", "c")
-    reduced = TensorSpec("sum", (), (), "dense", dtype="complex128", produced_by="reduce")
+    reduced = TensorSpec(
+        "sum", (), (), "dense", dtype="complex128", produced_by="reduce"
+    )
     reduce = ReduceNode(
         node_id="reduce",
         inputs=(
@@ -321,7 +383,10 @@ def test_cpu_obeys_dependencies_and_matches_complex128_reference() -> None:
     assert sample.measurement.kernel_s is not None
     assert sample.measurement.encode_s is not None
     assert sample.measurement.decode_s is not None
-    assert sample.backend_facts == {"backend_id": "numpy_cpu_v1", "execution_class": "cpu_host"}
+    assert sample.backend_facts == {
+        "backend_id": "numpy_cpu_v1",
+        "execution_class": "cpu_host",
+    }
     assert sample.numeric_facts["numeric_policy"] == FLOAT
 
 
@@ -349,7 +414,9 @@ def test_cpu_rejects_cycles_and_nonsteady_scope() -> None:
         ("decode", "decode_complex_products"),
     ],
 )
-def test_runtime_errors_are_wrapped_by_stage(monkeypatch: pytest.MonkeyPatch, stage: str, operation: str) -> None:
+def test_runtime_errors_are_wrapped_by_stage(
+    monkeypatch: pytest.MonkeyPatch, stage: str, operation: str
+) -> None:
     dag, inputs = _contract_dag()
 
     def fail(*args: object, **kwargs: object) -> object:
@@ -359,10 +426,15 @@ def test_runtime_errors_are_wrapped_by_stage(monkeypatch: pytest.MonkeyPatch, st
     with pytest.raises(ExecutionFailed) as error:
         run_cpu_once(dag, inputs, FLOAT)
     assert error.value.stage == stage
-    assert error.value.backend_facts == {"backend_id": "numpy_cpu_v1", "execution_class": "cpu_host"}
+    assert error.value.backend_facts == {
+        "backend_id": "numpy_cpu_v1",
+        "execution_class": "cpu_host",
+    }
 
 
-def test_wrong_decode_shape_is_wrapped_as_decode(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_wrong_decode_shape_is_wrapped_as_decode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     dag, inputs = _contract_dag()
 
     def wrong_shape(*args: object, **kwargs: object) -> np.ndarray:
@@ -374,7 +446,9 @@ def test_wrong_decode_shape_is_wrapped_as_decode(monkeypatch: pytest.MonkeyPatch
     assert error.value.stage == "decode"
 
 
-def test_empty_exception_message_uses_exception_type(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_empty_exception_message_uses_exception_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     dag, inputs = _contract_dag()
 
     def fail(*args: object, **kwargs: object) -> object:
@@ -387,7 +461,9 @@ def test_empty_exception_message_uses_exception_type(monkeypatch: pytest.MonkeyP
     assert error.value.reason == "MemoryError"
 
 
-def test_reduce_and_finalize_errors_are_wrapped(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_reduce_and_finalize_errors_are_wrapped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     reduce_dag, reduce_inputs = _reduce_dag()
 
     def fail(*args: object, **kwargs: object) -> object:
@@ -432,7 +508,9 @@ def test_zero_duration_phases_are_recorded_and_topology_precedes_timer(
 def test_reduce_node_is_deterministic_and_complex64() -> None:
     a = TensorSpec("a", (0,), (2,), "dense", dtype="complex128")
     b = TensorSpec("b", (0,), (2,), "dense", dtype="complex128")
-    out = TensorSpec("sum", (0,), (2,), "dense", dtype="complex128", produced_by="reduce")
+    out = TensorSpec(
+        "sum", (0,), (2,), "dense", dtype="complex128", produced_by="reduce"
+    )
     dag = ContractionDAG(
         tensors=(a, b),
         nodes=(
@@ -447,11 +525,16 @@ def test_reduce_node_is_deterministic_and_complex64() -> None:
         ),
         output=TensorView(tensor_id="sum", labels=(0,), shape=(2,)),
     )
-    inputs = {"a": np.array([1 + 2j, 3], dtype=np.complex128), "b": np.array([4, -1j], dtype=np.complex128)}
+    inputs = {
+        "a": np.array([1 + 2j, 3], dtype=np.complex128),
+        "b": np.array([4, -1j], dtype=np.complex128),
+    }
     first = run_cpu_once(dag, inputs, FLOAT)
     second = run_cpu_once(dag, inputs, FLOAT)
     np.testing.assert_array_equal(first.output, second.output)
-    np.testing.assert_array_equal(first.output, np.array([5 + 2j, 3 - 1j], dtype=np.complex64))
+    np.testing.assert_array_equal(
+        first.output, np.array([5 + 2j, 3 - 1j], dtype=np.complex64)
+    )
     assert first.measurement.host_reduce_s is not None
     assert first.measurement.kernel_s is None
 
@@ -614,8 +697,10 @@ def test_replay_unilateral_contraction_reduces_before_encoding(policy: str) -> N
     )
     inputs = {
         "left": np.array(
-            [[1.1 + 0.2j, -0.7 + 1.4j, 0.3 - 0.9j],
-             [2.0 - 1.1j, -1.2 + 0.4j, 0.6 + 0.8j]],
+            [
+                [1.1 + 0.2j, -0.7 + 1.4j, 0.3 - 0.9j],
+                [2.0 - 1.1j, -1.2 + 0.4j, 0.6 + 0.8j],
+            ],
             dtype=np.complex128,
         ),
         "right": np.array(
@@ -631,9 +716,7 @@ def test_replay_unilateral_contraction_reduces_before_encoding(policy: str) -> N
 
     # This is the independent reference for the physical policy: lower the
     # unilateral label into a reduced operand before applying numeric policy.
-    reduced_left = TensorSpec(
-        "left_reduced", (0,), (2,), "dense", dtype="complex128"
-    )
+    reduced_left = TensorSpec("left_reduced", (0,), (2,), "dense", dtype="complex128")
     reduced_node = ContractNode(
         node_id="contract",
         left=TensorView(
@@ -753,7 +836,9 @@ def test_replay_int8_multiple_k_chunks_records_each_exact_lane(
                 )
                 accumulator = np.add(accumulator, product, dtype=np.int32)
             expected = np.asarray(accumulator, dtype="<i4")
-            record = records[(unit.stable_tile_id, ("rr", "ii", "ri", "ir")[lane_index])]
+            record = records[
+                (unit.stable_tile_id, ("rr", "ii", "ri", "ir")[lane_index])
+            ]
             assert record["dtype"] == "<i4"
             assert record["exact"] is True
             assert record["sha256"] == hashlib.sha256(expected.tobytes()).hexdigest()
@@ -807,7 +892,9 @@ def test_replay_handles_remainder_tiles_and_multiple_k_chunks(
 ) -> None:
     left = TensorSpec("left", (0, 1), (3, 5), "dense", dtype="complex128")
     right = TensorSpec("right", (1, 2), (5, 7), "dense", dtype="complex128")
-    output = TensorSpec("out", (0, 2), (3, 7), "dense", dtype="complex128", produced_by="contract")
+    output = TensorSpec(
+        "out", (0, 2), (3, 7), "dense", dtype="complex128", produced_by="contract"
+    )
     node = ContractNode(
         node_id="contract",
         left=TensorView(tensor_id="left", labels=left.labels, shape=left.shape),
@@ -826,7 +913,9 @@ def test_replay_handles_remainder_tiles_and_multiple_k_chunks(
         "right": np.arange(35, dtype=np.float64).reshape(5, 7).astype(np.complex128),
     }
     limits = M5TileLimits.float32(max_tile_dim=2, max_elements=64, max_packed_k=64)
-    monkeypatch.setattr(upmem_plan_module, "tile_limits_for_numeric_mode", lambda mode: limits)
+    monkeypatch.setattr(
+        upmem_plan_module, "tile_limits_for_numeric_mode", lambda mode: limits
+    )
     monkeypatch.setattr(cpu, "_replay_limits", lambda policy: limits)
     plan = upmem_plan_module.plan_upmem(
         dag,
@@ -845,15 +934,25 @@ def test_replay_reduces_decoded_branches_in_producer_order() -> None:
     b = TensorSpec("b", (1, 2), (1, 1), "dense", dtype="complex128")
     c = TensorSpec("c", (0, 1), (1, 1), "dense", dtype="complex128")
     d = TensorSpec("d", (1, 2), (1, 1), "dense", dtype="complex128")
-    p = TensorSpec("p", (0, 2), (1, 1), "dense", dtype="complex128", produced_by="first")
-    q = TensorSpec("q", (0, 2), (1, 1), "dense", dtype="complex128", produced_by="second")
-    summed = TensorSpec("sum", (0, 2), (1, 1), "dense", dtype="complex128", produced_by="reduce")
+    p = TensorSpec(
+        "p", (0, 2), (1, 1), "dense", dtype="complex128", produced_by="first"
+    )
+    q = TensorSpec(
+        "q", (0, 2), (1, 1), "dense", dtype="complex128", produced_by="second"
+    )
+    summed = TensorSpec(
+        "sum", (0, 2), (1, 1), "dense", dtype="complex128", produced_by="reduce"
+    )
 
-    def contract(node_id: str, left: TensorSpec, right: TensorSpec, output: TensorSpec) -> ContractNode:
+    def contract(
+        node_id: str, left: TensorSpec, right: TensorSpec, output: TensorSpec
+    ) -> ContractNode:
         return ContractNode(
             node_id=node_id,
             left=TensorView(tensor_id=left.id, labels=left.labels, shape=left.shape),
-            right=TensorView(tensor_id=right.id, labels=right.labels, shape=right.shape),
+            right=TensorView(
+                tensor_id=right.id, labels=right.labels, shape=right.shape
+            ),
             output=output,
             contracted_labels=(1,),
             output_labels=(0, 2),
@@ -902,6 +1001,33 @@ def test_replay_reduces_decoded_branches_in_producer_order() -> None:
     assert scales["first"] != scales["second"]
 
 
+def test_replay_grouped_slices_decodes_each_int8_branch_before_reduction() -> None:
+    dag, inputs = _four_way_sliced_dag()
+    plan = upmem_plan_module.plan_upmem(
+        dag,
+        numeric_policy=INT8,
+        topology=upmem_plan_module.UpmemTopology(dpu_count=1, tasklets_per_dpu=1),
+    )
+    replay = replay_upmem_plan_once(dag, plan, inputs)
+    expected = run_cpu_once(dag, inputs, INT8)
+    np.testing.assert_array_equal(replay.output, expected.output)
+    branch_ids = tuple(plan.stages[0].node_ids)
+    assert (
+        tuple(
+            item["node_id"]
+            for item in replay.numeric_facts["operand_records"]
+            if item["side"] == "left"
+        )
+        == branch_ids
+    )
+    scales = {
+        item["node_id"]: item["scale"]
+        for item in replay.numeric_facts["operand_records"]
+        if item["side"] == "left"
+    }
+    assert len(set(scales.values())) > 1
+
+
 def test_replay_supports_zero_and_pure_imaginary_inputs() -> None:
     dag, _ = _contract_dag()
     inputs = {
@@ -933,7 +1059,9 @@ def test_replay_rejects_tampered_plan_before_timing() -> None:
         stages=(
             replace(
                 plan.stages[0],
-                work_units=(replace(unit, estimated_input_bytes=unit.estimated_input_bytes + 1),),
+                work_units=(
+                    replace(unit, estimated_input_bytes=unit.estimated_input_bytes + 1),
+                ),
             ),
             *plan.stages[1:],
         ),
@@ -942,7 +1070,7 @@ def test_replay_rejects_tampered_plan_before_timing() -> None:
         replay_upmem_plan_once(dag, tampered, inputs)
 
 
-def test_replay_rejects_grouped_stage_and_nonsteady_scope() -> None:
+def test_replay_rejects_tampered_grouped_stage_and_nonsteady_scope() -> None:
     dag, inputs = _contract_dag()
     plan = upmem_plan_module.plan_upmem(
         dag,
@@ -953,7 +1081,7 @@ def test_replay_rejects_grouped_stage_and_nonsteady_scope() -> None:
         plan,
         stages=(replace(plan.stages[0], node_ids=("first", "second")),),
     )
-    with pytest.raises(UnsupportedExecution, match="singleton stages"):
+    with pytest.raises(ValueError, match="differs from pure recomputation"):
         replay_upmem_plan_once(dag, grouped, inputs)
     with pytest.raises(UnsupportedExecution, match="timing scope"):
         replay_upmem_plan_once(dag, plan, inputs, scope_id="simulation_end_to_end_v1")

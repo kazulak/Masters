@@ -24,8 +24,18 @@ from quantum_bench.results import (
     Measurement,
     UnsupportedExecution,
 )
-from quantum_bench.upmem.plan import UpmemPlan, UpmemStage, UpmemWorkUnit, physical_plan_id, validate_upmem_plan
-from quantum_bench.upmem.tiling import M5TileLowering, M5TileLimits, lower_binary_contraction
+from quantum_bench.upmem.plan import (
+    UpmemPlan,
+    UpmemStage,
+    UpmemWorkUnit,
+    physical_plan_id,
+    validate_upmem_plan,
+)
+from quantum_bench.upmem.tiling import (
+    M5TileLowering,
+    M5TileLimits,
+    lower_binary_contraction,
+)
 
 
 _SUPPORTED_POLICIES = (
@@ -102,8 +112,12 @@ def run_cpu_once(
                 left_encoded = encode_complex_tensor(left, numeric_policy)
                 right_encoded = encode_complex_tensor(right, numeric_policy)
                 encode_s += time.perf_counter() - encode_started
-                saturation_real += left_encoded.saturation_real + right_encoded.saturation_real
-                saturation_imag += left_encoded.saturation_imag + right_encoded.saturation_imag
+                saturation_real += (
+                    left_encoded.saturation_real + right_encoded.saturation_real
+                )
+                saturation_imag += (
+                    left_encoded.saturation_imag + right_encoded.saturation_imag
+                )
             except ExecutionFailed:
                 raise
             except Exception as exc:
@@ -150,7 +164,10 @@ def run_cpu_once(
             try:
                 reduce_started = time.perf_counter()
                 reduce_inputs = int8_reduce_inputs.get(node.node_id, node.inputs)
-                values = [_to_complex64(_materialize_view(view, working)) for view in reduce_inputs]
+                values = [
+                    _to_complex64(_materialize_view(view, working))
+                    for view in reduce_inputs
+                ]
                 with np.errstate(over="ignore", invalid="ignore"):
                     result = np.add.reduce(tuple(values), axis=0, dtype=np.complex64)
                 if tuple(result.shape) != node.output.shape:
@@ -235,7 +252,12 @@ def run_complex128_reference(
                 f"Node {node.node_id} produced shape {result.shape}; expected {node.output.shape}"
             )
         working[node.output.id] = result
-    output = np.array(_materialize_view(dag.output, working), dtype=np.complex128, copy=True, order="C")
+    output = np.array(
+        _materialize_view(dag.output, working),
+        dtype=np.complex128,
+        copy=True,
+        order="C",
+    )
     _require_finite_complex128(output, "final output")
     output.setflags(write=False)
     return output
@@ -279,10 +301,6 @@ def replay_upmem_plan_once(
     _validate_replay_stage_shape(dag, plan)
     validate_upmem_plan(dag, plan)
     order = _topological_order(dag)
-    if tuple(node.node_id for node in order) != tuple(
-        node_id for stage in plan.stages for node_id in stage.node_ids
-    ):
-        raise ValueError("UPMEM plan stage order does not cover the DAG order")
     if plan.numeric_policy == "split_complex_int8_shared_scale_v1":
         producer_node_ids = {node.output.id: node.node_id for node in order}
         if not _int8_output_is_derived(dag, order):
@@ -326,8 +344,7 @@ def replay_upmem_plan_once(
     host_reduce_executed = False
     started = time.perf_counter()
 
-    for stage in plan.stages:
-        node = _node_for_stage(dag, stage)
+    for stage, node in _replay_stage_nodes(dag, plan):
         if isinstance(node, ContractNode):
             preparation_executed = True
             try:
@@ -346,7 +363,7 @@ def replay_upmem_plan_once(
                     np.asarray(right.imag, dtype=np.float32),
                     limits=limits,
                 )
-                _validate_replay_lowerings(left_real, left_imag, stage)
+                _validate_replay_lowerings(left_real, left_imag, stage, node)
                 preparation_s += time.perf_counter() - preparation_started
             except ExecutionFailed:
                 raise
@@ -355,10 +372,18 @@ def replay_upmem_plan_once(
 
             try:
                 encode_started = time.perf_counter()
-                left_canonical = _combine_canonical_planes(left_real, left_imag, left=True)
-                right_canonical = _combine_canonical_planes(left_real, left_imag, left=False)
-                left_encoded = encode_complex_tensor(left_canonical, plan.numeric_policy)
-                right_encoded = encode_complex_tensor(right_canonical, plan.numeric_policy)
+                left_canonical = _combine_canonical_planes(
+                    left_real, left_imag, left=True
+                )
+                right_canonical = _combine_canonical_planes(
+                    left_real, left_imag, left=False
+                )
+                left_encoded = encode_complex_tensor(
+                    left_canonical, plan.numeric_policy
+                )
+                right_encoded = encode_complex_tensor(
+                    right_canonical, plan.numeric_policy
+                )
                 encode_s += time.perf_counter() - encode_started
                 encode_executed = True
                 encoded_operands.extend(
@@ -374,12 +399,20 @@ def replay_upmem_plan_once(
 
             try:
                 kernel_started = time.perf_counter()
-                partials: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = {}
+                partials: dict[
+                    str, tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+                ] = {}
                 for unit in stage.work_units:
-                    lanes = _replay_tile_lanes(left_encoded, right_encoded, unit, plan.numeric_policy)
-                    partials[unit.stable_tile_id] = lanes
-                    for lane, value in zip(("rr", "ii", "ri", "ir"), lanes, strict=True):
-                        raw_lanes.append((node.node_id, unit.stable_tile_id, lane, value))
+                    lanes = _replay_tile_lanes(
+                        left_encoded, right_encoded, unit, plan.numeric_policy
+                    )
+                    partials[_lowering_tile_id(unit, node)] = lanes
+                    for lane, value in zip(
+                        ("rr", "ii", "ri", "ir"), lanes, strict=True
+                    ):
+                        raw_lanes.append(
+                            (node.node_id, unit.stable_tile_id, lane, value)
+                        )
                 kernel_s += time.perf_counter() - kernel_started
                 kernel_executed = True
             except ExecutionFailed:
@@ -463,10 +496,17 @@ def replay_upmem_plan_once(
     )
     numeric_facts = {
         "numeric_policy": plan.numeric_policy,
-        "saturation_real": sum(encoded.saturation_real for _, _, encoded in encoded_operands),
-        "saturation_imag": sum(encoded.saturation_imag for _, _, encoded in encoded_operands),
+        "saturation_real": sum(
+            encoded.saturation_real for _, _, encoded in encoded_operands
+        ),
+        "saturation_imag": sum(
+            encoded.saturation_imag for _, _, encoded in encoded_operands
+        ),
         "operand_records": operand_records,
-        "raw_lane_records": tuple(_raw_lane_record(node_id, tile_id, lane, value) for node_id, tile_id, lane, value in raw_lanes),
+        "raw_lane_records": tuple(
+            _raw_lane_record(node_id, tile_id, lane, value)
+            for node_id, tile_id, lane, value in raw_lanes
+        ),
     }
     return ExecutionSample(
         output=output,
@@ -487,35 +527,66 @@ def replay_upmem_plan_once(
 def _validate_replay_stage_shape(dag: ContractionDAG, plan: UpmemPlan) -> None:
     nodes = {node.node_id: node for node in dag.nodes}
     for stage in plan.stages:
-        if len(stage.node_ids) != 1:
+        stage_nodes = [nodes.get(node_id) for node_id in stage.node_ids]
+        if any(node is None for node in stage_nodes):
+            unknown = next(
+                node_id
+                for node_id, node in zip(stage.node_ids, stage_nodes)
+                if node is None
+            )
+            raise ValueError(f"UPMEM stage references unknown node {unknown!r}")
+        if stage.kind == "contract_batch" and any(
+            not isinstance(node, ContractNode) for node in stage_nodes
+        ):
             raise UnsupportedExecution(
                 stage="preflight",
-                reason="T6B replay supports only singleton stages",
+                reason="contract_batch stage does not contain only ContractNodes",
                 capability="upmem_replay_stage_shape",
             )
-        node = nodes.get(stage.node_ids[0])
-        if node is None:
-            raise ValueError(f"UPMEM stage references unknown node {stage.node_ids[0]!r}")
-        if stage.kind == "contract_batch" and not isinstance(node, ContractNode):
+        if stage.kind == "host_reduce" and (
+            len(stage_nodes) != 1 or not isinstance(stage_nodes[0], ReduceNode)
+        ):
             raise UnsupportedExecution(
                 stage="preflight",
-                reason="contract_batch stage does not contain a ContractNode",
-                capability="upmem_replay_stage_shape",
-            )
-        if stage.kind == "host_reduce" and not isinstance(node, ReduceNode):
-            raise UnsupportedExecution(
-                stage="preflight",
-                reason="host_reduce stage does not contain a ReduceNode",
+                reason="host_reduce stage does not contain one ReduceNode",
                 capability="upmem_replay_stage_shape",
             )
 
 
-def _node_for_stage(dag: ContractionDAG, stage: UpmemStage) -> ContractNode | ReduceNode:
+def _replay_stage_nodes(
+    dag: ContractionDAG, plan: UpmemPlan
+) -> tuple[tuple[UpmemStage, ContractNode | ReduceNode], ...]:
+    nodes = {node.node_id: node for node in dag.nodes}
+    entries: list[tuple[UpmemStage, ContractNode | ReduceNode]] = []
+    for stage in plan.stages:
+        for node_id in stage.node_ids:
+            node = nodes[node_id]
+            entries.append(
+                (
+                    UpmemStage(
+                        stage_id=stage.stage_id,
+                        kind=stage.kind,
+                        node_ids=(node_id,),
+                        work_units=tuple(
+                            unit for unit in stage.work_units if unit.node_id == node_id
+                        ),
+                    ),
+                    node,
+                )
+            )
+    return tuple(entries)
+
+
+def _node_for_stage(
+    dag: ContractionDAG, stage: UpmemStage
+) -> ContractNode | ReduceNode:
     nodes = {node.node_id: node for node in dag.nodes}
     try:
         return nodes[stage.node_ids[0]]
     except KeyError as exc:
-        raise ValueError(f"UPMEM stage references unknown node {stage.node_ids[0]!r}") from exc
+        raise ValueError(
+            f"UPMEM stage references unknown node {stage.node_ids[0]!r}"
+        ) from exc
 
 
 def _replay_limits(policy: str) -> M5TileLimits:
@@ -550,6 +621,7 @@ def _validate_replay_lowerings(
     real_lowering: M5TileLowering,
     imag_lowering: M5TileLowering,
     stage: UpmemStage,
+    node: ContractNode,
 ) -> None:
     real = real_lowering.canonical
     imag = imag_lowering.canonical
@@ -569,16 +641,17 @@ def _validate_replay_lowerings(
         raise ValueError("real and imaginary K chunks differ")
     if real_lowering.tiles != imag_lowering.tiles:
         raise ValueError("real and imaginary tiles differ")
-    expected = {tile.id: tile for tile in real_lowering.tiles}
+    expected = {f"{node.node_id}:{tile.id}": tile for tile in real_lowering.tiles}
     units = stage.work_units
     if len({unit.stable_tile_id for unit in units}) != len(units):
         raise ValueError("UPMEM stage contains duplicate tile IDs")
-    if set(expected) != {unit.stable_tile_id for unit in units}:
+    unit_ids = {unit.stable_tile_id for unit in units}
+    if unit_ids != set(expected):
         raise ValueError("UPMEM stage tile IDs do not match lowered tiles")
     for unit in units:
         tile = expected[unit.stable_tile_id]
         if (
-            unit.node_id != stage.node_ids[0]
+            unit.node_id != node.node_id
             or unit.batch_start != tile.batch_index
             or unit.batch_size != 1
             or unit.m_start != tile.m_start
@@ -592,7 +665,9 @@ def _validate_replay_lowerings(
             or unit.aligned_mram_bytes != tile.aligned_mram_bytes
             or unit.estimated_arithmetic_work != tile.m_size * tile.n_size * tile.k_size
         ):
-            raise ValueError(f"UPMEM work unit {unit.stable_tile_id!r} differs from lowered tile")
+            raise ValueError(
+                f"UPMEM work unit {unit.stable_tile_id!r} differs from lowered tile"
+            )
 
 
 def _replay_tile_lanes(
@@ -662,6 +737,13 @@ def _replay_tile_lanes(
     return tuple(lanes)  # type: ignore[return-value]
 
 
+def _lowering_tile_id(unit: UpmemWorkUnit, node: ContractNode) -> str:
+    prefix = f"{node.node_id}:"
+    if not unit.stable_tile_id.startswith(prefix):
+        raise ValueError("UPMEM work unit tile ID omits node identity")
+    return unit.stable_tile_id[len(prefix) :]
+
+
 def _operand_record(
     node_id: str, side: str, encoded: EncodedComplexTensor
 ) -> dict[str, object]:
@@ -709,7 +791,9 @@ def _raise_replay_failed(
     backend_facts: Mapping[str, object],
 ) -> NoReturn:
     reason = str(error).strip() or type(error).__name__
-    raise ExecutionFailed(stage=stage, reason=reason, backend_facts=backend_facts) from error
+    raise ExecutionFailed(
+        stage=stage, reason=reason, backend_facts=backend_facts
+    ) from error
 
 
 def _topological_order(dag: ContractionDAG) -> tuple[ContractNode | ReduceNode, ...]:
@@ -751,7 +835,11 @@ def _int8_reduce_input_order(
     for node in order:
         if not isinstance(node, ReduceNode):
             continue
-        missing = [view.tensor_id for view in node.inputs if view.tensor_id not in producer_node_ids]
+        missing = [
+            view.tensor_id
+            for view in node.inputs
+            if view.tensor_id not in producer_node_ids
+        ]
         if missing:
             raise UnsupportedExecution(
                 stage="preflight",
@@ -771,11 +859,15 @@ def _int8_reduce_input_order(
     return reduced_inputs
 
 
-def _materialize_view(view: TensorView, tensors: Mapping[str, np.ndarray]) -> np.ndarray:
+def _materialize_view(
+    view: TensorView, tensors: Mapping[str, np.ndarray]
+) -> np.ndarray:
     try:
         array = tensors[view.tensor_id]
     except KeyError as exc:
-        raise ValueError(f"Tensor {view.tensor_id} is not available for execution") from exc
+        raise ValueError(
+            f"Tensor {view.tensor_id} is not available for execution"
+        ) from exc
     if not view.slice_spec:
         result = np.asarray(array)
     else:
@@ -783,9 +875,13 @@ def _materialize_view(view: TensorView, tensors: Mapping[str, np.ndarray]) -> np
         fixed_axes: set[int] = set()
         for axis, value in view.slice_spec:
             if axis in fixed_axes or axis < 0 or axis >= array.ndim:
-                raise ValueError(f"Tensor view {view.tensor_id} has invalid fixed axis {axis}")
+                raise ValueError(
+                    f"Tensor view {view.tensor_id} has invalid fixed axis {axis}"
+                )
             if value < 0 or value >= array.shape[axis]:
-                raise ValueError(f"Tensor view {view.tensor_id} has invalid fixed value {value}")
+                raise ValueError(
+                    f"Tensor view {view.tensor_id} has invalid fixed value {value}"
+                )
             fixed_axes.add(axis)
             indices[axis] = int(value)
         result = np.asarray(array[tuple(indices)])
@@ -831,7 +927,9 @@ def _raise_execution_failed(stage: str, error: Exception) -> NoReturn:
 
 
 def _einsum_indices(node: ContractNode) -> tuple[list[int], list[int], list[int]]:
-    labels = list(dict.fromkeys((*node.left.labels, *node.right.labels, *node.output_labels)))
+    labels = list(
+        dict.fromkeys((*node.left.labels, *node.right.labels, *node.output_labels))
+    )
     if len(labels) > 52:
         raise ValueError("contraction uses too many distinct labels for NumPy einsum")
     mapping = {label: index for index, label in enumerate(labels)}
