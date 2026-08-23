@@ -16,13 +16,8 @@ from quantum_bench.execution.contracts import (
     UpmemTopology,
     UpmemWorkUnit,
 )
-from quantum_bench.tn.graph import (
-    ContractNode,
-    ContractionDAG,
-    ReduceNode,
-    contraction_dag_hash,
-    validate_contraction_dag,
-)
+from quantum_bench.lowering import contraction_dag_hash, validate_contraction_dag
+from quantum_bench.model import ContractNode, ContractionDAG, ReduceNode
 from quantum_bench.upmem.protocol import (
     MAX_CONTRACTED,
     MAX_INT32_SAFE_K,

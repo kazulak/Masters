@@ -169,8 +169,9 @@ tn.graph:
   or TaskGraph types
 
 tn.network:
-  TensorNetworkValue and build_tensor_network wrappers for historical
-  consumers
+  TensorNetworkValue, build_tensor_network, and interleaved_einsum_args
+  wrappers for historical consumers. `interleaved_einsum_args` is a temporary
+  adapter required until T12.
 ```
 
 These compatibility modules must not be imported by the canonical route after
@@ -183,7 +184,7 @@ lowering ownership and migrate canonical consumers, then run the full suite.
 ```text
 model -> standard library and NumPy typing only
 circuits -> model
-lowering -> model, circuits
+lowering -> model, circuits, core.indices
 planning -> model
 numerics -> model
 results -> standard library and NumPy typing only
@@ -200,6 +201,10 @@ cli -> experiment, report
 `model.py` and `results.py` are foundational modules and import no other
 `quantum_bench` module. Planning does not import UPMEM runtime. Reporting does
 not execute experiments.
+
+`core.indices` is a pure target-neutral helper for label allocation, einsum
+symbol generation, and string-einsum capability checks. It contains no
+planner, executor, filesystem, or hardware behavior.
 
 ## Numeric Policies
 

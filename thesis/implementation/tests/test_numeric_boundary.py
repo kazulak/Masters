@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from quantum_bench.core.records import TensorSpec
+from quantum_bench.model import ContractNode, TensorView
 from quantum_bench.execution.contracts import NumericMode
 from quantum_bench.execution.numeric import (
     MAX_INT32_SAFE_K,
@@ -12,7 +13,6 @@ from quantum_bench.execution.numeric import (
     decode_contraction_output,
     encode_tensor,
 )
-from quantum_bench.tn.graph import ContractNode, TensorView
 
 
 def _matrix_node() -> ContractNode:

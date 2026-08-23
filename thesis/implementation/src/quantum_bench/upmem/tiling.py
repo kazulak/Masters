@@ -12,7 +12,7 @@ from typing import Mapping
 
 import numpy as np
 
-from quantum_bench.tn.graph import ContractNode
+from quantum_bench.model import ContractNode
 
 
 DEFAULT_MAX_ELEMENTS = 65_536

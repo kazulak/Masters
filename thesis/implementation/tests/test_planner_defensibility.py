@@ -24,7 +24,8 @@ from quantum_bench.tn.exact_modeled_planner import (
     HARD_MAX_INPUT_TENSORS,
     ExactModeledPlanner,
 )
-from quantum_bench.tn.network import TensorNetworkValue, build_full_einsum_expression
+from quantum_bench.lowering import build_full_einsum_expression
+from quantum_bench.tn.network import TensorNetworkValue
 from quantum_bench.tn.planner_motifs import build_planner_motif_workload
 from quantum_bench.tn.planners import planner_from_config
 from quantum_bench.tn.upmem_path_cost_v2 import (

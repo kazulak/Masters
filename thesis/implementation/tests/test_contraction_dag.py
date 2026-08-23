@@ -6,12 +6,8 @@ import numpy as np
 import pytest
 
 from quantum_bench.core.records import TensorNetworkSpec, TensorSpec, TensorValue
-from quantum_bench.tn.graph import (
-    ContractNode,
-    ContractionDAG,
-    ReduceNode,
-    SliceSpec,
-    TensorView,
+from quantum_bench.model import ContractNode, ContractionDAG, ReduceNode, SliceSpec, TensorView
+from quantum_bench.lowering import (
     apply_slicing,
     build_contraction_dag,
     contraction_dag_hash,
@@ -46,8 +42,8 @@ def _network(*, provenance: str | None = None) -> TensorNetworkValue:
 
 
 def test_hash_is_deterministic_and_excludes_array_payloads() -> None:
-    first = build_contraction_dag(_network(), ((0, 1),))
-    second = build_contraction_dag(_network(), ((0, 1),))
+    first = build_contraction_dag(_network().spec, ((0, 1),))
+    second = build_contraction_dag(_network().spec, ((0, 1),))
 
     assert contraction_dag_hash(first) == contraction_dag_hash(second)
     assert not hasattr(first, "network")
@@ -56,8 +52,8 @@ def test_hash_is_deterministic_and_excludes_array_payloads() -> None:
 
 
 def test_same_path_has_same_identity_without_provenance() -> None:
-    first = build_contraction_dag(_network(provenance="planner_a"), ((0, 1),))
-    second = build_contraction_dag(_network(provenance="planner_b"), ((0, 1),))
+    first = build_contraction_dag(_network(provenance="planner_a").spec, ((0, 1),))
+    second = build_contraction_dag(_network(provenance="planner_b").spec, ((0, 1),))
 
     assert contraction_dag_hash(first) == contraction_dag_hash(second)
 
@@ -157,7 +153,7 @@ def test_slicing_rewrites_downstream_dependency_but_keeps_tensor_id() -> None:
 
 
 def test_slicing_rejects_unknown_noncontract_and_invalid_labels() -> None:
-    dag = build_contraction_dag(_network(), ((0, 1),))
+    dag = build_contraction_dag(_network().spec, ((0, 1),))
     with pytest.raises(ValueError, match="Unknown slice node"):
         apply_slicing(dag, SliceSpec(node_id="missing", label=1))
 
@@ -184,7 +180,7 @@ def test_slicing_rejects_unknown_noncontract_and_invalid_labels() -> None:
 
 
 def test_fixed_view_shape_and_value_are_validated_against_descriptor() -> None:
-    dag = build_contraction_dag(_network(), ((0, 1),))
+    dag = build_contraction_dag(_network().spec, ((0, 1),))
     node = dag.nodes[0]
     assert isinstance(node, ContractNode)
     invalid = replace(

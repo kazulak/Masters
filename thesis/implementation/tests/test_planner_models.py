@@ -25,7 +25,7 @@ from quantum_bench.targets.upmem.tile_plan import (
     plan_l2_tiled_execution,
 )
 from quantum_bench.tn.execution import execute_task_sequence_np_einsum
-from quantum_bench.tn.graph import build_contraction_dag
+from quantum_bench.lowering import build_contraction_dag
 from quantum_bench.tn.network import TensorNetworkValue, build_tensor_network
 from quantum_bench.tn.planning import plan_contractions
 from quantum_bench.tn.planner_motifs import build_planner_motif_workload

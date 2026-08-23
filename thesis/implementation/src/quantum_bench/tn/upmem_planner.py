@@ -14,7 +14,8 @@ from typing import Any
 import numpy as np
 
 from quantum_bench.core.records import TensorNetworkSpec, TensorSpec
-from quantum_bench.tn.graph import ContractNode, build_contract_node
+from quantum_bench.lowering import build_contract_node
+from quantum_bench.model import ContractNode
 from quantum_bench.tn.network import TensorNetworkValue
 from quantum_bench.tn.planner_records import PlannerIdentity, PlannerResult
 from quantum_bench.tn.upmem_path_cost import (

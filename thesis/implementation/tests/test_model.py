@@ -15,6 +15,7 @@ from quantum_bench.model import (
     CircuitSpec,
     ContractionDAG,
     ContractNode,
+    GraphNode,
     ReduceNode,
     SimulationJob,
     SliceSpec,
@@ -26,6 +27,7 @@ from quantum_bench.model import (
 from quantum_bench.tn.graph import (
     ContractionDAG as GraphContractionDAG,
     ContractNode as GraphContractNode,
+    GraphNode as GraphGraphNode,
     ReduceNode as GraphReduceNode,
     SliceSpec as GraphSliceSpec,
     TensorView as GraphTensorView,
@@ -180,3 +182,14 @@ def test_compatibility_reexports_are_object_identical() -> None:
     assert GraphContractNode is ContractNode
     assert GraphReduceNode is ReduceNode
     assert GraphContractionDAG is ContractionDAG
+    assert GraphGraphNode is GraphNode
+    import quantum_bench.tn.graph as graph_module
+
+    assert graph_module.__all__ == [
+        "TensorView",
+        "SliceSpec",
+        "ContractNode",
+        "ReduceNode",
+        "GraphNode",
+        "ContractionDAG",
+    ]

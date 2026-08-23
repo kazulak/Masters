@@ -22,7 +22,7 @@ from quantum_bench.routing.generic_prepare import (
     GenericTaskPreparationCaps,
     generic_structural_feasibility_from_metadata,
 )
-from quantum_bench.tn.graph import ContractNode
+from quantum_bench.model import ContractNode
 from quantum_bench.tn.network import TensorNetworkValue
 
 

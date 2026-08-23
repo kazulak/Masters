@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from quantum_bench.core.records import ContractionTask, TensorNetworkSpec, TensorSpec
+from quantum_bench.model import ContractNode, ContractionDAG, ReduceNode, SliceSpec, TensorView
 from quantum_bench.execution.compiler import compile_cpu, compile_execution
 from quantum_bench.execution.contracts import (
     CpuCompileRequest,
@@ -22,12 +23,7 @@ from quantum_bench.execution.contracts import (
     UnsupportedExecution,
 )
 from quantum_bench.execution.runner import execute
-from quantum_bench.tn.graph import (
-    ContractNode,
-    ContractionDAG,
-    ReduceNode,
-    SliceSpec,
-    TensorView,
+from quantum_bench.lowering import (
     build_contraction_dag,
     contraction_dag_hash,
     apply_slicing,

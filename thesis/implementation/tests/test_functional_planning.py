@@ -4,8 +4,9 @@ import pytest
 
 from quantum_bench.circuits import builtin_circuit
 from quantum_bench.core.records import TensorNetworkSpec, TensorSpec
+from quantum_bench.model import ContractionDAG
 from quantum_bench.tn.network import build_tensor_network
-from quantum_bench.tn.graph import ContractionDAG, build_contract_node, build_contraction_dag, contraction_dag_hash
+from quantum_bench.lowering import build_contract_node, build_contraction_dag, contraction_dag_hash
 from quantum_bench.tn.planning import (
     PlannerEngine,
     PlannerRequest,

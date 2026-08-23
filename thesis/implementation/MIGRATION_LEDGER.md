@@ -107,20 +107,39 @@ T2B circuit ownership flattening is complete in the working tree: the sole
 owner is `src/quantum_bench/circuits.py`, direct package-submodule imports are
 gone, and the full-suite checkpoint remains deferred to the lead T2 batch.
 
+T2C lowering ownership is complete in the working tree: pure circuit lowering,
+input validation, DAG construction, single-label slicing, DAG validation, and
+DAG hashing are owned by `src/quantum_bench/lowering.py`; `tn.graph` contains
+only the six authorized model type re-exports; `tn.network` contains only the
+historical value adapter; canonical execution consumers no longer import either
+temporary module; and `test_tensor_network_data.py` was replaced by
+`test_lowering.py`. The T2C focused checkpoint passed 181 tests in 1.68s,
+Ruff was clean for all changed Python files, and `git diff --check` passed.
+
+The full T2 branch checkpoint passed `1349 passed in 185.50s` with
+`../.venv/bin/python -m pytest -q`; Ruff was clean with
+`../.venv/bin/python -m ruff check src tests scripts`; and
+`git diff --check` was clean.
+
 ## Complexity Delta
 
 Update this table after each integration batch.
 
 | Metric | Baseline | Current | Target |
 |---|---:|---:|---:|
-| Active Python modules | 138 | 119 | 12-16 |
-| Class declarations | 307 | 280 | only stable boundary types |
-| Test modules | 78 | 77 | about 10 |
+| Active Python modules | 138 | 120 | 12-16 |
+| Class declarations | 307 | 281 | only stable boundary types |
+| Test modules | 78 | 79 | about 10 |
 | Config files | 63 | 63 | 2 principal experiments |
-| Public Make targets | 78 | 78 | 10 or fewer |
+| Public Make targets | 78 | 81 | 10 or fewer |
 | Active contraction IRs | 2 | 1 | 1 |
 | Active UPMEM plan schemas | multiple | multiple | 1 |
 | Active native ABIs | multiple | multiple | 1 |
+
+The current counts use the documented commands: `find src/quantum_bench -name
+'*.py' ! -name '__init__.py' | wc -l`, the analogous `find tests` command,
+`rg '^class ' src/quantum_bench --glob '*.py' | wc -l`, `find configs -type f |
+wc -l`, and `rg '^[A-Za-z0-9_.-]+:' Makefile | wc -l`.
 
 ## Corrected Ordered Tasks
 

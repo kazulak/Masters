@@ -25,15 +25,12 @@ from quantum_bench.execution.numeric import (
     encode_tensor,
     reduce_values,
 )
-from quantum_bench.tn.graph import (
-    ContractNode,
-    ContractionDAG,
-    ReduceNode,
-    TensorView,
+from quantum_bench.lowering import (
     contraction_dag_hash,
     validate_contraction_dag,
+    validate_dag_inputs,
 )
-from quantum_bench.tn.network import validate_dag_inputs
+from quantum_bench.model import ContractNode, ContractionDAG, ReduceNode, TensorView
 
 
 def run_cpu(

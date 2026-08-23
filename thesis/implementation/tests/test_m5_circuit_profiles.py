@@ -9,7 +9,7 @@ from quantum_bench.bench.m5_circuit_study import (
     load_study_config,
     plan_study,
 )
-from quantum_bench.tn.graph import contraction_dag_hash
+from quantum_bench.lowering import contraction_dag_hash
 
 
 ROOT = Path(__file__).parents[1]

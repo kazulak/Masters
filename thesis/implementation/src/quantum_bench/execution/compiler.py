@@ -12,11 +12,8 @@ from quantum_bench.execution.contracts import (
     UnsupportedExecution,
     UpmemCompileRequest,
 )
-from quantum_bench.tn.graph import (
-    ContractionDAG,
-    contraction_dag_hash,
-    validate_contraction_dag,
-)
+from quantum_bench.lowering import contraction_dag_hash, validate_contraction_dag
+from quantum_bench.model import ContractionDAG
 
 
 def compile_cpu(dag: ContractionDAG, request: CpuCompileRequest) -> ExecutionPlan:

@@ -15,7 +15,7 @@ from quantum_bench.execution.contracts import (
 )
 from quantum_bench.execution.cpu import run_cpu
 from quantum_bench.upmem.runtime import run_upmem
-from quantum_bench.tn.graph import ContractionDAG
+from quantum_bench.model import ContractionDAG
 def execute(
     plan: ExecutionPlan,
     dag: ContractionDAG,

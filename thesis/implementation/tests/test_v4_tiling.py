@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from quantum_bench.core.records import TensorSpec
-from quantum_bench.tn.graph import ContractNode, TensorView
+from quantum_bench.model import ContractNode, TensorView
 from quantum_bench.upmem.tiling import (
     M5TileLimits,
     TileLoweringError,

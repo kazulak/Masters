@@ -85,6 +85,8 @@ bounded v4 mapping records:
 Tasklet scheduling, slice-stage scheduling, and intermediate residency are
 planned extensions. They are not implemented or claimable by the current v4
 mapping.
+The current bounded mapper does not make memory and intermediate residency
+decisions; those remain planned extensions.
 
 Machine-local rank paths, binary paths, working directories, SDK installation,
 and timeouts are runtime configuration. They do not affect DAG or physical-plan

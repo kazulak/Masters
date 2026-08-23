@@ -15,7 +15,8 @@ from typing import Any
 import numpy as np
 
 from quantum_bench.core.records import CircuitSpec, JsonDict, TensorNetworkSpec, TensorSpec, TensorValue
-from quantum_bench.tn.network import TensorNetworkValue, build_full_einsum_expression
+from quantum_bench.lowering import build_full_einsum_expression
+from quantum_bench.tn.network import TensorNetworkValue
 
 
 PLANNER_MOTIF_KIND = "planner_motif"

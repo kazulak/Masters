@@ -11,7 +11,7 @@ from quantum_bench.formats.fixed_point import FixedPointSpec, quantize_fixed_poi
 
 if TYPE_CHECKING:
     from quantum_bench.execution.contracts import NumericMode
-    from quantum_bench.tn.graph import ContractNode
+    from quantum_bench.model import ContractNode
 
 
 MAX_INT32_SAFE_K = (2**31 - 1) // (128 * 128)

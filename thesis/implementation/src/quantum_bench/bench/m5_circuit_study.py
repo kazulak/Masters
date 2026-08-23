@@ -2,7 +2,7 @@
 
 This module is intentionally a coordinator, not another execution engine.  A
 study expands explicit planner, numeric-policy, engine and topology variants,
-then sends one :class:`~quantum_bench.tn.graph.ContractionDAG` through the
+then sends one :class:`~quantum_bench.model.ContractionDAG` through the
 functional compile/execute boundary.  Physical engines are injected by the
 caller so planning and CI never open a device or silently substitute a
 simulator.
@@ -36,7 +36,14 @@ from quantum_bench.bench.m5_circuit_routes import (
 )
 from quantum_bench.circuits import load_circuit, manifest as circuit_manifest
 from quantum_bench.core.jsonio import write_json
-from quantum_bench.core.records import TensorNetworkSpec
+from quantum_bench.model import (
+    ContractionDAG,
+    ContractNode,
+    ReduceNode,
+    TensorNetwork,
+    TensorView,
+    make_simulation_job,
+)
 from quantum_bench.execution.compiler import compile_execution
 from quantum_bench.execution.contracts import (
     CpuCompileRequest,
@@ -53,15 +60,11 @@ from quantum_bench.execution.contracts import (
     execution_plan_hash,
 )
 from quantum_bench.execution.runner import execute
-from quantum_bench.tn.graph import (
-    ContractionDAG,
-    ContractNode,
-    ReduceNode,
-    TensorView,
+from quantum_bench.lowering import (
     build_contraction_dag,
     contraction_dag_hash,
+    lower_tensor_network,
 )
-from quantum_bench.tn.network import build_tensor_network_data
 from quantum_bench.tn.planning import PlannerRequest, plan_contractions
 from quantum_bench.tn.planner_records import PlannerResult
 
@@ -91,7 +94,7 @@ class _Plan:
     case: dict[str, Any]
     planner: dict[str, Any]
     circuit: Any
-    spec: TensorNetworkSpec
+    spec: TensorNetwork
     inputs: dict[str, np.ndarray]
     planner_result: PlannerResult
     dag: ContractionDAG
@@ -575,7 +578,7 @@ def _build_plans(
         }
     for case in config["cases"]:
         circuit = load_circuit(case, root)
-        spec, inputs = build_tensor_network_data(circuit)
+        spec, inputs = lower_tensor_network(make_simulation_job(circuit))
         for planner in config["planner_variants"]:
             if (
                 selected_planner_ids is not None
@@ -1600,7 +1603,7 @@ def _circuit_semantics_hash(circuit: Any) -> str:
     )
 
 
-def _tensor_network_hash(spec: TensorNetworkSpec, circuit_hash: str) -> str:
+def _tensor_network_hash(spec: TensorNetwork, circuit_hash: str) -> str:
     return _semantic_hash(
         {
             "schema": "m5_tensor_network_v2",
