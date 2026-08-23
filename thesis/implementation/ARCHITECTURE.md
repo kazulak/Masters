@@ -63,13 +63,18 @@ without changing the DAG hash.
 ## Planning
 
 Planning consumes labels and shapes, not tensor values or hardware sessions.
-The active adapters are opt_einsum, cotengra, and the experimental PIM-aware
-greedy heuristic. Planner provenance is separate from DAG identity: different
-planners can select the same graph.
+The canonical adapters are opt_einsum and cotengra. Their future root
+functions return a validated binary active-list path and a JSON-compatible
+provenance mapping. Planner provenance is separate from DAG identity:
+different planners can select the same graph.
 
-The PIM-aware score is an uncalibrated candidate estimator until physical
-measurements establish prediction quality. It is not described as globally
-optimal or as measured hardware performance.
+The PIM-aware projected-prefix greedy heuristic is historical and exploratory,
+not a canonical adapter. It remains available only for old configurations,
+tests, and evidence until T12. It is uncalibrated and cannot be described as
+globally optimal or as measured hardware performance. Hardware-calibrated
+target-aware planning is separate future work.
+
+T3-0 freezes this boundary; the canonical planner migration is pending.
 
 ## UPMEM Mapping
 

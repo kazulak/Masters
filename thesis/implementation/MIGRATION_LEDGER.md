@@ -58,7 +58,7 @@ evidence that the corresponding capability is implemented.
 | WP0 baseline | complete | reset commit, environment facts, inventory, and test result recorded |
 | WP1 research contract | complete | concise README and architecture agree on scope and claims |
 | WP2 semantic model | complete | direct DAG input validation; no active reverse TaskGraph adapter |
-| WP3 planning | complete | active planners consume tensor metadata and emit one planner result/provenance record without TaskGraph lowering |
+| WP3 planning | pending (T3-0 contract frozen) | canonical opt_einsum/cotengra function adapters and path/provenance mapping are pending; the historical projected-prefix planner is not canonical |
 | WP4 numerics | complete | shared pure encode/contract/decode boundary; conversion, kernel, reduction, and decode timings are non-overlapping |
 | WP5 mapping | complete (bounded v4 ownership) | `src/quantum_bench/upmem/plan.py` owns v4 lowering, identity, geometry, tiling and work assignment; this does not claim slice/tasklet/residency scheduling |
 | WP6 runtime | complete | active runtime uses `UpmemV4Executor`/`UpmemV4Session`, `NumericMode`, `UpmemTopology`, and tuple node results; obsolete whole-circuit package removed |
@@ -77,7 +77,7 @@ evidence that the corresponding capability is implemented.
 | fake `TensorNetworkSpec(None, ...)` input validation | removed in `4907013` | complete |
 | `TensorInputs` wrapper | removed in `e66e2a3` | complete |
 | one-implementation M5 strategy registry | removed in current WP6 batch | complete |
-| projected-prefix planner to `ContractionTask` | removed in current WP3 batch | complete |
+| projected-prefix planner to `ContractionTask` | historical implementation retained for old configurations, tests, and evidence | remove by T12; it is not part of the canonical planner dispatcher |
 | eager legacy imports from `tn/__init__.py` | removed; callers use owning modules | complete |
 | eager legacy imports from `targets/upmem/__init__.py` | removed; callers use owning modules | complete |
 | M5/v4 defaults in generic contracts | removed in `execution/contracts.py` | complete |
@@ -120,6 +120,15 @@ The full T2 branch checkpoint passed `1349 passed in 185.50s` with
 `../.venv/bin/python -m pytest -q`; Ruff was clean with
 `../.venv/bin/python -m ruff check src tests scripts`; and
 `git diff --check` was clean.
+
+## T3-0 Planner Contract
+
+T3-0 is documentation-only and frozen at `HEAD e6e97bfb`. It defines the
+future root `planning.py` API, the exact path/provenance mapping, dependency
+direction, canonical adapter set, historical status of the projected-prefix
+PIM-aware planner, and explicit unsupported behavior for non-canonical
+planner engines. T3 canonical implementation and migration remain pending;
+this entry does not claim planning completion.
 
 ## Complexity Delta
 

@@ -94,6 +94,75 @@ network, inputs = lower_tensor_network(job)
 dag = build_contraction_dag(network, path)
 ```
 
+## Planner Contract (T3-0)
+
+T3-0 freezes the canonical planner boundary. The production migration is
+pending; this section is a contract, not evidence that the future root
+`planning.py` implementation is complete.
+
+The canonical public API will contain only these adapter functions:
+
+```python
+def plan_opt_einsum(
+    network: TensorNetwork,
+    *,
+    optimize: str = "greedy",
+) -> tuple[tuple[tuple[int, int], ...], dict[str, object]]:
+    ...
+
+def plan_cotengra(
+    network: TensorNetwork,
+    *,
+    objective: str = "flops",
+    methods: str = "greedy",
+    max_repeats: int = 1,
+    seed: int = 0,
+) -> tuple[tuple[tuple[int, int], ...], dict[str, object]]:
+    ...
+```
+
+The returned path is a complete, validated binary active-list path. The
+provenance value is a JSON-compatible mapping with exactly these keys:
+
+```text
+planner_engine         selected external planner engine
+planner_id              deterministic adapter and mode identifier
+planner_kind            external optimizer/tree adapter classification
+optimize_mode           requested opt_einsum mode or cotengra method
+objective               requested planner objective
+cost_basis              engine-specific path-cost basis
+planner_config          resolved configuration used by the adapter
+planner_config_hash     SHA-256 of sorted canonical JSON configuration
+path_info_text          human-readable optimizer summary
+largest_intermediate    engine-reported largest intermediate, if available
+naive_flops             engine-reported naive FLOPs, if available
+optimized_flops         engine-reported optimized FLOPs, if available
+planning_time_s         wall time spent only inside path planning
+dependency_versions     relevant adapter dependency versions
+```
+
+`planner_config_hash` is computed from the canonical sorted JSON encoding of
+the resolved configuration actually used by the selected adapter. Unused
+UPMEM, numeric, kernel, and topology settings are excluded. Planner
+provenance does not include target execution choices.
+
+The future root `planning.py` imports the canonical model and opt_einsum; it
+imports cotengra lazily only when that adapter is selected. It imports no
+UPMEM runtime or target-planning module. The standard active adapters are
+opt_einsum and cotengra only. The canonical path exposes no `PlannerRequest`,
+`PlannerResult`, `PlannerIdentity`, `PlannerEngine`, public planner classes,
+or generic public dispatcher. A private config-to-function helper in the
+experiment or M5 coordinator is permitted.
+
+The PIM-aware projected-prefix greedy planner is historical and exploratory.
+It is uncalibrated, is not part of the canonical dispatcher, and is retained
+through T12 only for old configurations, tests, and evidence. Hardware-
+calibrated target-aware planning is separate future work.
+
+Canonical M5 circuit-study configurations use opt_einsum or cotengra.
+Unsupported planner engines fail explicitly. Historical suites are not
+silently migrated.
+
 ## Result And Failure Contracts
 
 ```text
@@ -185,7 +254,7 @@ lowering ownership and migrate canonical consumers, then run the full suite.
 model -> standard library and NumPy typing only
 circuits -> model
 lowering -> model, circuits, core.indices
-planning -> model
+planning -> model, opt_einsum; cotengra is imported lazily
 numerics -> model
 results -> standard library and NumPy typing only
 cpu -> model, numerics, results
