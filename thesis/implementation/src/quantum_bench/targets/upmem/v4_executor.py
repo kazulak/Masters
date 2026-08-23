@@ -39,7 +39,7 @@ from quantum_bench.targets.upmem.execution_plan_v4 import (
     V4WorkUnit,
     build_v4_request,
 )
-from quantum_bench.targets.upmem.v4_tiling import (
+from quantum_bench.upmem.tiling import (
     M5Tile,
     M5TileLimits,
     M5TileLowering,

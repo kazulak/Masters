@@ -1076,7 +1076,7 @@ def test_direct_compiled_plan_controls_local_ids_on_two_ranks(tmp_path: Path) ->
 
 def test_request_work_units_and_payload_bytes() -> None:
     from quantum_bench.targets.upmem.v4_executor import _build_work_unit
-    from quantum_bench.targets.upmem.v4_tiling import (
+    from quantum_bench.upmem.tiling import (
         lower_binary_contraction,
     )
 
@@ -1118,7 +1118,7 @@ def test_decoding_and_host_reduction(tmp_path: Path) -> None:
         _assemble_output,
         _read_output,
     )
-    from quantum_bench.targets.upmem.v4_tiling import (
+    from quantum_bench.upmem.tiling import (
         M5TileLimits,
         lower_binary_contraction,
     )

@@ -28,7 +28,7 @@ from quantum_bench.targets.upmem.execution_plan_v4 import (
     MAX_INT32_SAFE_K,
     NATIVE_EXECUTION_IDENTITY,
 )
-from quantum_bench.targets.upmem.v4_tiling import (
+from quantum_bench.upmem.tiling import (
     M5Tile,
     TileLoweringError,
     canonical_label_geometry,

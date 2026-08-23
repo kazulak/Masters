@@ -19,7 +19,7 @@ import sys
 import quantum_bench.tn.graph
 import quantum_bench.execution.contracts
 import quantum_bench.execution.compiler
-assert 'quantum_bench.targets.upmem.v4_tiling' not in sys.modules
+assert 'quantum_bench.upmem.tiling' not in sys.modules
 assert 'quantum_bench.targets.upmem.execution_plan_v4' not in sys.modules
 import quantum_bench.targets.upmem.v4_executor
 import quantum_bench.bench.m5_circuit_study

@@ -58,7 +58,7 @@ def compile_execution(
         case CpuCompileRequest():
             return compile_cpu(dag, request)
         case UpmemCompileRequest():
-            from quantum_bench.targets.upmem.compiler import (
+            from quantum_bench.upmem.plan import (
                 compile_upmem as compile_upmem_target,
             )
 

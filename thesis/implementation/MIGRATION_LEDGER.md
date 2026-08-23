@@ -52,7 +52,7 @@ evidence that the corresponding capability is implemented.
 | WP2 semantic model | complete | direct DAG input validation; no active reverse TaskGraph adapter |
 | WP3 planning | complete | active planners consume tensor metadata and emit one planner result/provenance record without TaskGraph lowering |
 | WP4 numerics | complete | shared pure encode/contract/decode boundary; conversion, kernel, reduction, and decode timings are non-overlapping |
-| WP5 mapping | complete (bounded v4 ownership) | `targets/upmem/compiler.py` owns v4 lowering, identity, geometry, tiling and work assignment; this does not claim slice/tasklet/residency scheduling |
+| WP5 mapping | complete (bounded v4 ownership) | `src/quantum_bench/upmem/plan.py` owns v4 lowering, identity, geometry, tiling and work assignment; this does not claim slice/tasklet/residency scheduling |
 | WP6 runtime | complete | active runtime uses `UpmemV4Executor`/`UpmemV4Session`, `NumericMode`, `UpmemTopology`, and tuple node results; obsolete whole-circuit package removed |
 | WP7 baselines | in progress | same-DAG CPU timing is symmetric; external baseline adapters remain to simplify |
 | WP8 evidence | pending | one timing/evidence schema and compatibility policy |

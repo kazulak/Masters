@@ -227,7 +227,7 @@ def test_engine_plan_assignment_drives_rank_local_dpu_request() -> None:
     from quantum_bench.targets.upmem.v4_executor import (
         UpmemV4Session,
     )
-    from quantum_bench.targets.upmem.v4_tiling import (
+    from quantum_bench.upmem.tiling import (
         M5TileLimits,
         lower_binary_contraction,
     )
@@ -264,7 +264,7 @@ def test_engine_rejects_plan_tile_extent_tampering_before_requests() -> None:
     from quantum_bench.targets.upmem.v4_executor import (
         UpmemV4Session,
     )
-    from quantum_bench.targets.upmem.v4_tiling import (
+    from quantum_bench.upmem.tiling import (
         M5TileLimits,
         lower_binary_contraction,
     )

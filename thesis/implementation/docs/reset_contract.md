@@ -215,7 +215,7 @@ At T0, the active v4 implementation remains in:
 ```text
 native/upmem/simplepim/upmem_sdk_execution_plan/
 src/quantum_bench/targets/upmem/v4_executor.py
-src/quantum_bench/targets/upmem/compiler.py
+src/quantum_bench/upmem/plan.py
 ```
 
 Its build command is:

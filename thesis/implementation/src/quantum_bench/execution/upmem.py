@@ -42,7 +42,7 @@ from quantum_bench.tn.graph import (
     validate_contraction_dag,
 )
 from quantum_bench.tn.network import validate_dag_inputs
-from quantum_bench.targets.upmem.compiler import (
+from quantum_bench.upmem.plan import (
     validate_active_upmem_plan,
     validate_upmem_plan_for_dag,
 )
