@@ -175,7 +175,29 @@ Runtime constants, ABI identifiers, and executable hashes remain provenance,
 not plan fields.
 Current WP5 and WP6 `complete` wording above refers only to the old bounded
 base; it is not completion of the final reset stage, session, or evidence
-implementation. T4A is the next implementation task.
+implementation.
+
+## T4A Results and CPU Single-Run Boundary
+
+T4A is complete on the reset base. The new results boundary defines immutable
+`Measurement` and `ExecutionSample` values, recursively immutable JSON facts,
+and explicit `UnsupportedExecution` and `ExecutionFailed` classifications.
+The direct `run_cpu_once` route executes one DAG run and returns its output with
+measurements; repetition, warmup, evidence writing, and UPMEM session policy
+remain outside this route. The independent `run_complex128_reference` path
+replays the DAG without timing, hashing, or reuse of the policy executor.
+
+The CPU route validates int8 admission from the requested output dataflow,
+preserves deterministic producer-ID reduction order, applies explicit phase
+timing, and classifies runtime failures by stage. It also preserves immutable
+outputs, finite-result checks, input immutability, and the frozen null-versus-
+zero timing semantics. Focused verification passed 43 tests and Ruff, with the
+forbidden legacy-import scan and `git diff --check` clean.
+The full-suite checkpoint passed 1385 tests in 185.58s, with Ruff clean across `src` and `tests`.
+
+This entry does not claim UPMEM execution migration, the evidence schema,
+physical validation, or implementation of T4C. The next task is T4C: implement
+the already-frozen final `UpmemStage` and `UpmemPlan` schema.
 
 ## Complexity Delta
 
@@ -209,8 +231,9 @@ wc -l`, and `rg '^[A-Za-z0-9_.-]+:' Makefile | wc -l`.
 8. T4-0: freeze the dependency correction; implementation remains pending.
 9. T6A: complete; pure split-complex float32 and shared-scale int8 numerics
    verified by 20 focused tests and Ruff.
-10. T4A: next; add results contracts and the CPU single-run API.
-11. T4C: implement the final `UpmemStage` and `UpmemPlan` schema.
+10. T4A: complete; add immutable results/failure contracts and the direct CPU
+    single-run API, independently verified by 43 focused tests and Ruff.
+11. T4C: next; implement the final `UpmemStage` and `UpmemPlan` schema.
 12. T6B: implement CPU replay of the physical UPMEM plan.
 13. T7: execute complex policies through the unchanged real-tile ABI v4.
 14. T4B1: add the UPMEM session and single-run API.

@@ -265,7 +265,8 @@ def run_complex128_reference(
 ```
 
 It returns an owned, read-only complex128 output. Complex128 is not an
-execution policy and is not part of a physical-plan identity.
+execution policy and is not part of a physical-plan identity. Reference values
+and executor outputs must be finite.
 
 ### Result and failure contracts
 
@@ -375,7 +376,7 @@ lowering -> model, circuits, core.indices
 planning -> model, opt_einsum; cotengra is imported lazily
 numerics -> model
 results -> standard library and NumPy typing only
-cpu -> model, numerics, results
+cpu -> model, lowering, numerics, results
 upmem.plan -> model, numerics
 upmem.runtime -> model, numerics, results, upmem.plan, protocol, native_session
 baselines -> model, results
@@ -540,8 +541,19 @@ def run_cpu_once(
 ) -> ExecutionSample: ...
 ```
 
-The coordinator owns `total_wall_s`. The function measures encode, kernel,
+`run_cpu_once` is the single-run route coordinator and measures its own
+authoritative `total_wall_s`. The later experiment layer owns warmup and
+repetition loops. The function measures encode, kernel,
 host-reduce, and decode phases when they are available.
+
+Preflight validates `NumericPolicy`. For requested-output dataflow, every
+`ContractNode` output is int8-policy-derived, a `ReduceNode` output is derived
+only when every input is derived, and an original input tensor is not derived.
+The `split_complex_int8_shared_scale_v1` policy is unsupported unless
+`dag.output` references a derived tensor. The `split_complex_float32_v1`
+policy may execute empty or reduce-only DAGs. After the single-run timer
+starts, executor phase failures are `ExecutionFailed` with stage `encode`,
+`kernel`, `decode`, `host_reduce`, or `finalize`.
 
 UPMEM resources are an immutable, keyword-only boundary record:
 
