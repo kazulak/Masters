@@ -10,10 +10,15 @@ import time
 
 import pytest
 
-import quantum_bench.targets.upmem.execution_plan_v4 as v4
+import quantum_bench.upmem.native_session as session_v4
+import quantum_bench.upmem.protocol as v4
 
 
 TASK_HASH = "ab" * 32
+
+
+def test_public_build_request_alias_is_preserved() -> None:
+    assert v4.build_request is v4.build_v4_request
 
 
 class FakeStream:
@@ -223,7 +228,7 @@ def _session(
     response_factory: Callable[[str], str | dict[str, object] | None],
     *,
     profile: v4.V4Profile | None = None,
-) -> tuple[v4.V4Session, FakeProcess]:
+) -> tuple[session_v4.V4Session, FakeProcess]:
     process: FakeProcess | None = None
 
     def factory(*args: object, **kwargs: object) -> FakeProcess:
@@ -232,7 +237,7 @@ def _session(
         process = FakeProcess(response_factory)
         return process
 
-    session = v4.V4Session.start(
+    session = session_v4.V4Session.start(
         ["fake-v4-host"],
         session_root=tmp_path,
         profile=profile
@@ -399,7 +404,7 @@ def test_builder_rejects_unsafe_paths_and_int8_k_overflow(tmp_path: Path) -> Non
 
 def test_physical_opt_in_and_backend_environment_guards(tmp_path: Path) -> None:
     with pytest.raises(v4.V4Error, match="hardware_opt_in_missing"):
-        v4.V4Session.start(
+        session_v4.V4Session.start(
             ["fake"],
             session_root=tmp_path,
             profile=v4.V4Profile(dpu_count=1, rank_path="/dev/dpu_rank0"),
@@ -408,7 +413,7 @@ def test_physical_opt_in_and_backend_environment_guards(tmp_path: Path) -> None:
         )
     for variable in ("DPU_BACKEND", "UPMEM_EXECUTION_MODE"):
         with pytest.raises(v4.V4Error, match=variable):
-            v4.V4Session.start(
+            session_v4.V4Session.start(
                 ["fake"],
                 session_root=tmp_path,
                 profile=v4.V4Profile(dpu_count=1, rank_path="/dev/dpu_rank0"),
@@ -487,7 +492,7 @@ def test_persistent_session_still_rejects_one_oversized_event(tmp_path: Path) ->
 
 def test_non_protocol_output_is_drained_and_retained_within_byte_limit() -> None:
     stderr = FakeStream()
-    pump = v4._OutputPump(
+    pump = session_v4._OutputPump(
         stderr,
         line_limit=16,
         retained_limit=8,
@@ -509,7 +514,7 @@ def test_non_protocol_output_is_drained_and_retained_within_byte_limit() -> None
 def test_protocol_event_queue_overflow_fails_closed_without_growing() -> None:
     stdout = FakeStream()
     events: queue.Queue[tuple[str, str | None]] = queue.Queue(maxsize=1)
-    pump = v4._OutputPump(
+    pump = session_v4._OutputPump(
         stdout,
         line_limit=64,
         retained_limit=32,
@@ -552,7 +557,7 @@ def test_oversized_stderr_invalidates_physical_release(tmp_path: Path) -> None:
 
 def test_multibyte_diagnostic_tail_respects_byte_limit() -> None:
     stream = FakeStream()
-    pump = v4._OutputPump(
+    pump = session_v4._OutputPump(
         stream,
         line_limit=64,
         retained_limit=7,

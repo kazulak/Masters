@@ -32,7 +32,7 @@ from quantum_bench.targets.upmem.v4_executor import (
     _task_structure_hash,
 )
 import quantum_bench.targets.upmem.v4_executor as engine_module
-from quantum_bench.targets.upmem.execution_plan_v4 import (
+from quantum_bench.upmem.protocol import (
     NATIVE_EXECUTION_IDENTITY,
     V4ProtocolError,
 )

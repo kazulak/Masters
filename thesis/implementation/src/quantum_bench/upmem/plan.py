@@ -23,7 +23,7 @@ from quantum_bench.tn.graph import (
     contraction_dag_hash,
     validate_contraction_dag,
 )
-from quantum_bench.targets.upmem.execution_plan_v4 import (
+from quantum_bench.upmem.protocol import (
     MAX_CONTRACTED,
     MAX_INT32_SAFE_K,
     NATIVE_EXECUTION_IDENTITY,

@@ -28,14 +28,14 @@ from quantum_bench.execution.numeric import (
     encode_tensor,
 )
 from quantum_bench.tn.graph import ContractNode
-from quantum_bench.targets.upmem.execution_plan_v4 import (
+from quantum_bench.upmem.native_session import V4Session
+from quantum_bench.upmem.protocol import (
     MAX_INT32_SAFE_K,
     NATIVE_EXECUTION_IDENTITY,
     NUMERIC_FLOAT32,
     NUMERIC_HOST_PACKED_INT8,
     V4Profile,
     V4ProtocolError,
-    V4Session,
     V4WorkUnit,
     build_v4_request,
 )

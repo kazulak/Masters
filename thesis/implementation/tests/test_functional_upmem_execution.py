@@ -27,7 +27,7 @@ from quantum_bench.tn.graph import (
     contraction_dag_hash,
     apply_slicing,
 )
-from quantum_bench.targets.upmem.execution_plan_v4 import MAX_CONTRACTED
+from quantum_bench.upmem.protocol import MAX_CONTRACTED
 
 
 def _dag() -> object:
