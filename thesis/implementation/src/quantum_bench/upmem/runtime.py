@@ -56,10 +56,20 @@ from quantum_bench.numerics import (
     decode_complex_products,
     encode_complex_tensor,
 )
-from quantum_bench.results import JsonValue
+from quantum_bench.results import (
+    ExecutionFailed,
+    ExecutionSample,
+    JsonValue,
+    Measurement,
+    UnsupportedExecution,
+)
 from quantum_bench.upmem.plan import (
     UpmemStage,
+    UpmemPlan as FinalUpmemPlan,
+    UpmemResources,
+    physical_plan_id,
     validate_active_upmem_plan,
+    validate_upmem_plan,
     validate_upmem_plan_for_dag,
 )
 from quantum_bench.upmem.native_session import V4Session
@@ -402,7 +412,7 @@ def _raw_lane_fact(node_id: str, tile_id: str, lane: str, value: np.ndarray) -> 
         "lane": lane,
         "dtype": dtype.str,
         "shape": tuple(int(item) for item in canonical.shape),
-        "sha256": _sha256_bytes(canonical.tobytes(order="C")),
+        "sha256": _payload_hash(canonical),
         "exact": bool(np.issubdtype(value.dtype, np.integer)),
     }
 
@@ -421,8 +431,8 @@ def _complex_operand_facts(
         "real_dtype": encoded.real.dtype.str,
         "imag_dtype": encoded.imag.dtype.str,
         "shape": tuple(int(value) for value in encoded.real.shape),
-        "real_sha256": _sha256_bytes(np.ascontiguousarray(encoded.real).tobytes()),
-        "imag_sha256": _sha256_bytes(np.ascontiguousarray(encoded.imag).tobytes()),
+        "real_sha256": _payload_hash(encoded.real),
+        "imag_sha256": _payload_hash(encoded.imag),
     }
 
 
@@ -903,7 +913,7 @@ class UpmemV4Session:
             **quantization_metadata,
         }
 
-    def execute_complex(
+    def _execute_complex_core(
         self,
         node: ContractNode,
         left: np.ndarray,
@@ -911,8 +921,19 @@ class UpmemV4Session:
         *,
         stage: UpmemStage,
         numeric_policy: NumericPolicy,
-    ) -> tuple[np.ndarray, Mapping[str, JsonValue]]:
-        """Execute one final-plan complex contraction through ABI v4 lanes."""
+        include_evidence: bool,
+    ) -> tuple[
+        np.ndarray,
+        Mapping[str, JsonValue],
+        Mapping[str, tuple[str, str, str, np.ndarray]],
+        tuple[Any, Any],
+    ]:
+        """Execute one final-plan complex contraction through ABI v4 lanes.
+
+        ``include_evidence`` is intentionally private.  The public low-level
+        method keeps its historical metadata behavior, while the graph session
+        can stop its execution timer before hashing raw arrays and operands.
+        """
 
         if self._closed:
             raise RuntimeError("UPMEM v4 session is closed")
@@ -1077,12 +1098,7 @@ class UpmemV4Session:
         output.setflags(write=False)
         decode_s = time.perf_counter() - decode_started
         total_wall_s = time.perf_counter() - started
-        raw_lane_records = {
-            key: _raw_lane_fact(node_id, tile_id, lane, value)
-            for key, (node_id, tile_id, lane, value) in raw_lane_values.items()
-        }
-
-        metadata: dict[str, JsonValue] = {
+        operational_metadata: dict[str, Any] = {
             "numeric_policy": numeric_policy,
             "numeric_transport": numeric_transport,
             "lane_order": lane_names,
@@ -1094,18 +1110,6 @@ class UpmemV4Session:
             ),
             "saturation_imag": int(
                 encoded_left.saturation_imag + encoded_right.saturation_imag
-            ),
-            "operand_records": (
-                _complex_operand_facts(node.node_id, "left", encoded_left),
-                _complex_operand_facts(node.node_id, "right", encoded_right),
-            ),
-            "raw_lane_records": raw_lane_records,
-            "lane_request_contract_hashes": lane_request_contract_hashes,
-            "lane_request_manifest_hashes": lane_request_hashes,
-            "request_manifest_hashes": tuple(
-                hash_value
-                for lane in lane_names
-                for hash_value in lane_request_hashes[lane]
             ),
             "active_rank_indices": tuple(sorted(active_rank_indices)),
             "active_dpu_ids": tuple(sorted(active_dpu_ids)),
@@ -1146,6 +1150,58 @@ class UpmemV4Session:
                 "decode_s": float(decode_s),
             },
         }
+        if not include_evidence:
+            return (
+                output,
+                operational_metadata,
+                raw_lane_values,
+                (encoded_left, encoded_right),
+            )
+
+        evidence_started = time.perf_counter()
+        raw_lane_records = {
+            key: _raw_lane_fact(node_id, tile_id, lane, value)
+            for key, (node_id, tile_id, lane, value) in raw_lane_values.items()
+        }
+        operand_records = (
+            _complex_operand_facts(node.node_id, "left", encoded_left),
+            _complex_operand_facts(node.node_id, "right", encoded_right),
+        )
+        evidence_hash_s = time.perf_counter() - evidence_started
+        metadata: dict[str, JsonValue] = {
+            **operational_metadata,
+            "operand_records": operand_records,
+            "raw_lane_records": raw_lane_records,
+            "evidence_hash_s": float(evidence_hash_s),
+            "lane_request_contract_hashes": lane_request_contract_hashes,
+            "lane_request_manifest_hashes": lane_request_hashes,
+            "request_manifest_hashes": tuple(
+                hash_value
+                for lane in lane_names
+                for hash_value in lane_request_hashes[lane]
+            ),
+        }
+        return output, metadata, raw_lane_values, (encoded_left, encoded_right)
+
+    def execute_complex(
+        self,
+        node: ContractNode,
+        left: np.ndarray,
+        right: np.ndarray,
+        *,
+        stage: UpmemStage,
+        numeric_policy: NumericPolicy,
+    ) -> tuple[np.ndarray, Mapping[str, JsonValue]]:
+        """Execute one final-plan complex contraction through ABI v4 lanes."""
+
+        output, metadata, _, _ = self._execute_complex_core(
+            node,
+            left,
+            right,
+            stage=stage,
+            numeric_policy=numeric_policy,
+            include_evidence=True,
+        )
         return output, metadata
 
     def _requests_from_plan(
@@ -1637,6 +1693,7 @@ class UpmemV4Session:
             "hardware_kernel_executed": native_execution,
             "simulator_kernel_executed": False,
             "cpu_fallback_used": False,
+            "test_double_execution": self._test_double_execution,
             "hardware_release_verified": confirmed,
             "hardware_release_confirmed": confirmed,
             "ready_verified": ready_verified,
@@ -1718,6 +1775,778 @@ class UpmemV4Session:
             "returncode": returncode,
             "release_confirmed": bool(getattr(release, "release_confirmed", False)),
         }
+
+
+class UpmemSession:
+    """Persistent host coordinator for one final UPMEM physical plan."""
+
+    def __init__(
+        self,
+        dag: ContractionDAG,
+        plan: FinalUpmemPlan,
+        resources: UpmemResources,
+        low_level: Any,
+        timeout_s: float,
+    ) -> None:
+        self._dag = dag
+        self._plan = plan
+        self._resources = resources
+        self._low_level = low_level
+        self._timeout_s = float(timeout_s)
+        self._closed = False
+        self._terminal_facts: Mapping[str, JsonValue] | None = None
+        self._close_failure: ExecutionFailed | None = None
+
+    def __enter__(self) -> "UpmemSession":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
+        del exc_type, traceback
+        try:
+            self.close()
+        except ExecutionFailed as close_failure:
+            if exc_value is None:
+                raise
+            _add_exception_note(
+                exc_value,
+                f"UPMEM session close also failed: {close_failure}",
+            )
+
+    def run_once(self, inputs: Mapping[str, np.ndarray]) -> ExecutionSample:
+        """Execute one complete graph sample on the already-open session."""
+
+        if self._closed:
+            raise ValueError("UPMEM session is closed")
+        validate_dag_inputs(self._dag, inputs)
+        self._renew_low_level_deadline()
+        started = time.perf_counter()
+        working = {tensor_id: np.asarray(value) for tensor_id, value in inputs.items()}
+        nodes = {node.node_id: node for node in self._dag.nodes}
+        operation_metadata: list[Mapping[str, Any]] = []
+        numeric_descriptors: list[
+            tuple[str, Mapping[str, Any], tuple[Any, ...]]
+        ] = []
+        active_rank_indices: set[int] = set()
+        active_dpu_ids: set[tuple[int, int]] = set()
+        total_h2d = 0
+        total_d2h = 0
+        preparation_s = 0.0
+        encode_s = 0.0
+        decode_s = 0.0
+        host_reduce_s = 0.0
+        host_reduce_executed = False
+        raw_values_all: list[tuple[str, str, str, np.ndarray]] = []
+        encoded_operands: list[tuple[str, str, Any]] = []
+        stage_id = "run"
+        try:
+            for stage in self._plan.stages:
+                stage_id = stage.stage_id
+                self._check_operation_deadline(started)
+                node = nodes[stage.node_ids[0]]
+                if isinstance(node, ContractNode):
+                    left = _resolve_view(node.left, working)
+                    right = _resolve_view(node.right, working)
+                    core = getattr(self._low_level, "_execute_complex_core", None)
+                    if not callable(core):
+                        raise RuntimeError(
+                            "UPMEM session lacks the no-evidence complex core"
+                        )
+                    output, metadata, raw_values, encoded = core(
+                        node,
+                        left,
+                        right,
+                        stage=stage,
+                        numeric_policy=self._plan.numeric_policy,
+                        include_evidence=False,
+                    )
+                    if not isinstance(metadata, Mapping):
+                        raise ValueError("UPMEM operation returned non-mapping metadata")
+                    output = np.asarray(output, dtype=np.complex64)
+                    if tuple(output.shape) != node.output.shape:
+                        raise ValueError(
+                            f"UPMEM node {node.node_id} produced shape {output.shape}; "
+                            f"expected {node.output.shape}"
+                        )
+                    timing = metadata.get("timing", {})
+                    if not isinstance(timing, Mapping):
+                        raise ValueError("UPMEM operation timing is not a mapping")
+                    preparation_s += _seconds(timing.get("preparation_s", 0.0))
+                    encode_s += _seconds(timing.get("encode_s", 0.0))
+                    decode_s += _seconds(timing.get("decode_s", 0.0))
+                    total_h2d += _required_byte_count(
+                        metadata,
+                        "application_visible_h2d_bytes",
+                        "h2d_bytes",
+                    )
+                    total_d2h += _required_byte_count(
+                        metadata,
+                        "application_visible_d2h_bytes",
+                        "d2h_bytes",
+                    )
+                    operation_metadata.append(metadata)
+                    raw_tuple = tuple(raw_values.values())
+                    numeric_descriptors.append((node.node_id, metadata, raw_tuple))
+                    raw_values_all.extend(raw_tuple)
+                    encoded_operands.extend(
+                        (
+                            (node.node_id, "left", encoded[0]),
+                            (node.node_id, "right", encoded[1]),
+                        )
+                    )
+                    active_rank_indices.update(
+                        int(value)
+                        for value in metadata.get("active_rank_indices", ())
+                    )
+                    active_dpu_ids.update(
+                        tuple(int(part) for part in value)
+                        for value in metadata.get("active_dpu_ids", ())
+                    )
+                    working[node.output.id] = output
+                elif isinstance(node, ReduceNode):
+                    host_reduce_executed = True
+                    reduce_started = time.perf_counter()
+                    producer_ids = {
+                        candidate.output.id: candidate.node_id
+                        for candidate in self._dag.nodes
+                    }
+                    ordered = sorted(
+                        node.inputs,
+                        key=lambda view: (
+                            producer_ids.get(view.tensor_id, ""),
+                            view.tensor_id,
+                            view.slice_spec,
+                        ),
+                    )
+                    values = [
+                        np.asarray(_resolve_view(view, working), dtype=np.complex64)
+                        for view in ordered
+                    ]
+                    result = np.array(values[0], dtype=np.complex64, copy=True)
+                    for value in values[1:]:
+                        result = np.add(result, value, dtype=np.complex64)
+                    host_reduce_s += time.perf_counter() - reduce_started
+                    working[node.output.id] = result
+                else:  # pragma: no cover - model validation closes this union.
+                    raise TypeError(f"unsupported UPMEM DAG node: {type(node).__name__}")
+            output = np.array(
+                _resolve_view(self._dag.output, working),
+                dtype=np.complex64,
+                copy=True,
+                order="C",
+            )
+            output.setflags(write=False)
+            self._check_operation_deadline(started)
+        except ExecutionFailed:
+            raise
+        except Exception as exc:
+            failure_stage = getattr(exc, "failure_stage", None)
+            if not isinstance(failure_stage, str) or not failure_stage:
+                failure_stage = stage_id
+            failure_facts = dict(
+                self._failure_facts(active_rank_indices, active_dpu_ids)
+            )
+            failure_facts["plan_stage_id"] = stage_id
+            raise ExecutionFailed(
+                stage=failure_stage,
+                reason=str(exc).strip() or type(exc).__name__,
+                backend_facts=failure_facts,
+            ) from exc
+
+        total_wall_s = time.perf_counter() - started
+        try:
+            observations = _derive_operation_observations(
+                operation_metadata,
+                self._plan,
+            )
+            operation_facts = tuple(
+                _operation_summary(metadata) for metadata in operation_metadata
+            )
+            raw_lane_records = tuple(
+                _raw_lane_fact(node_id, tile_id, lane, value)
+                for node_id, tile_id, lane, value in sorted(
+                    raw_values_all,
+                    key=_raw_value_sort_key,
+                )
+            )
+            operand_records = tuple(
+                _complex_operand_facts(node_id, side, encoded)
+                for node_id, side, encoded in sorted(
+                    encoded_operands,
+                    key=lambda item: (item[0], item[1]),
+                )
+            )
+            numeric_operations = tuple(
+                _json_safe(
+                    {
+                        "node_id": node_id,
+                        "numeric_policy": self._plan.numeric_policy,
+                        "left_scale": metadata.get("left_scale"),
+                        "right_scale": metadata.get("right_scale"),
+                        "saturation_real": metadata.get("saturation_real", 0),
+                        "saturation_imag": metadata.get("saturation_imag", 0),
+                        "raw_lane_count": len(raw_values),
+                    }
+                )
+                for node_id, metadata, raw_values in numeric_descriptors
+            )
+            backend_facts = self._backend_facts(
+                active_rank_indices=active_rank_indices,
+                active_dpu_ids=active_dpu_ids,
+                observations=observations,
+                output_hash=_array_hash(output),
+                operation_facts=operation_facts,
+            )
+            normalized_numeric_facts = _json_safe(
+                {
+                    "numeric_policy": self._plan.numeric_policy,
+                    "operations": numeric_operations,
+                    "saturation_real": sum(
+                        int(item.get("saturation_real", 0))
+                        for item in operation_metadata
+                    ),
+                    "saturation_imag": sum(
+                        int(item.get("saturation_imag", 0))
+                        for item in operation_metadata
+                    ),
+                    "operand_records": operand_records,
+                    "raw_lane_records": raw_lane_records,
+                }
+            )
+        except Exception as exc:
+            raise ExecutionFailed(
+                stage="execution_facts",
+                reason=str(exc),
+                backend_facts=self._failure_facts(
+                    active_rank_indices,
+                    active_dpu_ids,
+                ),
+            ) from exc
+
+        return ExecutionSample(
+            output=output,
+            measurement=Measurement(
+                scope_id="steady_execution_v1",
+                total_wall_s=total_wall_s,
+                preparation_s=preparation_s,
+                encode_s=encode_s,
+                host_reduce_s=host_reduce_s if host_reduce_executed else None,
+                decode_s=decode_s,
+                h2d_bytes=total_h2d,
+                d2h_bytes=total_d2h,
+            ),
+            backend_facts=backend_facts,
+            numeric_facts=normalized_numeric_facts,
+        )
+
+    def close(self) -> Mapping[str, JsonValue]:
+        """Close once and admit only fully verified physical terminal facts."""
+
+        if self._closed:
+            if self._close_failure is not None:
+                raise self._close_failure
+            assert self._terminal_facts is not None
+            return self._terminal_facts
+        self._closed = True
+        terminal_facts: Mapping[str, JsonValue] | None = None
+        try:
+            self._renew_low_level_deadline()
+            result = self._low_level.close()
+            if not isinstance(result, Mapping):
+                raise ValueError("UPMEM session close returned non-mapping facts")
+            normalized = _json_safe(dict(result))
+            if not isinstance(normalized, Mapping):  # pragma: no cover
+                raise TypeError("normalized terminal facts are not a mapping")
+            terminal_facts = normalized
+            _validate_terminal_admission(terminal_facts, self._plan)
+            self._terminal_facts = terminal_facts
+            return terminal_facts
+        except Exception as exc:
+            failure = ExecutionFailed(
+                stage="session_close",
+                reason=str(exc),
+                backend_facts=(
+                    terminal_facts
+                    if terminal_facts is not None
+                    else self._failure_facts(set(), set())
+                ),
+            )
+            self._close_failure = failure
+            raise failure from exc
+
+    def _renew_low_level_deadline(self) -> None:
+        _renew_session_deadline(self._low_level, self._timeout_s)
+
+    def _check_operation_deadline(self, started: float) -> None:
+        if time.perf_counter() - started >= self._timeout_s:
+            raise TimeoutError("UPMEM operation deadline expired")
+
+    def _failure_facts(
+        self,
+        active_rank_indices: set[int],
+        active_dpu_ids: set[tuple[int, int]],
+    ) -> Mapping[str, JsonValue]:
+        return {
+            "backend_id": "upmem_final_plan_v1",
+            "physical_plan_id": physical_plan_id(self._plan),
+            "requested_dpus": self._plan.topology.dpu_count,
+            "active_dpus": len(active_dpu_ids),
+            "active_ranks": tuple(sorted(active_rank_indices)),
+            "rank_count": self._plan.topology.rank_count,
+            "tasklets_per_dpu": self._plan.topology.tasklets_per_dpu,
+        }
+
+    def _backend_facts(
+        self,
+        *,
+        active_rank_indices: set[int],
+        active_dpu_ids: set[tuple[int, int]],
+        observations: Mapping[str, JsonValue],
+        output_hash: str,
+        operation_facts: tuple[Mapping[str, JsonValue], ...],
+    ) -> Mapping[str, JsonValue]:
+        return _json_safe(
+            {
+                "backend_id": "upmem_final_plan_v1",
+                "physical_plan_id": physical_plan_id(self._plan),
+                "logical_plan_id": self._plan.logical_plan_id,
+                "execution_class": "upmem_v4_real_tile",
+                "target_observed": observations["target_observed"],
+                "test_double_execution": observations["test_double_execution"],
+                "cpu_fallback_used": observations["cpu_fallback_used"],
+                "simulator_kernel_executed": observations[
+                    "simulator_kernel_executed"
+                ],
+                "requested_dpus": observations["requested_dpu_count"],
+                "allocated_dpus": observations["allocated_dpu_count"],
+                "active_dpus": len(active_dpu_ids),
+                "active_ranks": tuple(sorted(active_rank_indices)),
+                "rank_count": observations["rank_count"],
+                "tasklets_per_dpu": observations["tasklets_per_dpu"],
+                "intermediate_policy": self._plan.intermediate_policy,
+                "physical_plan_consumed": observations[
+                    "physical_stage_consumed"
+                ],
+                "output_hash": output_hash,
+                "operation_facts": operation_facts,
+                "release_verified": None,
+                "rank_response_timing_scope": (
+                    "sum_of_per_request_max_rank_response_counters_v1"
+                ),
+            }
+        )
+
+
+_OPERATION_BOOL_FIELDS = (
+    "test_double_execution",
+    "cpu_fallback_used",
+    "simulator_kernel_executed",
+    "physical_stage_consumed",
+    "bulk_set_launch_verified",
+)
+_OPERATION_COUNT_FIELDS = (
+    "requested_dpu_count",
+    "allocated_dpu_count",
+    "rank_count",
+    "tasklets_per_dpu",
+)
+_TERMINAL_TRUE_FIELDS = (
+    "hardware_allocation_verified",
+    "ready_verified",
+    "binary_identity_verified",
+    "native_identity_verified",
+    "physical_target_verified",
+    "native_kernel_executed",
+    "hardware_kernel_executed",
+    "hardware_release_verified",
+    "hardware_release_confirmed",
+)
+_TERMINAL_FALSE_FIELDS = (
+    "simulator_kernel_executed",
+    "cpu_fallback_used",
+    "test_double_execution",
+)
+
+
+def _derive_operation_observations(
+    operations: list[Mapping[str, Any]],
+    plan: FinalUpmemPlan,
+) -> Mapping[str, JsonValue]:
+    if not operations:
+        raise ValueError("UPMEM run produced no operation observations")
+
+    field_names = (
+        "target_observed",
+        *_OPERATION_BOOL_FIELDS,
+        *_OPERATION_COUNT_FIELDS,
+    )
+    observations: dict[str, JsonValue] = {}
+    for field in field_names:
+        values: list[object] = []
+        for index, operation in enumerate(operations):
+            if field not in operation:
+                raise ValueError(
+                    f"UPMEM operation {index} omitted required field {field!r}"
+                )
+            value = operation[field]
+            if field == "target_observed":
+                if not isinstance(value, str) or not value:
+                    raise ValueError(
+                        f"UPMEM operation {index} has invalid target_observed"
+                    )
+            elif field in _OPERATION_BOOL_FIELDS:
+                if type(value) is not bool:
+                    raise ValueError(
+                        f"UPMEM operation {index} field {field!r} must be boolean"
+                    )
+            elif type(value) is not int or int(value) <= 0:
+                raise ValueError(
+                    f"UPMEM operation {index} field {field!r} "
+                    "must be a positive integer"
+                )
+            values.append(value)
+        first = values[0]
+        if any(value != first for value in values[1:]):
+            raise ValueError(f"UPMEM operation observations disagree on {field!r}")
+        observations[field] = first  # type: ignore[assignment]
+
+    if observations["cpu_fallback_used"] is True:
+        raise ValueError("UPMEM operation reported CPU fallback")
+    if observations["simulator_kernel_executed"] is True:
+        raise ValueError("UPMEM operation reported simulator execution")
+    observed_pair = (
+        observations["target_observed"],
+        observations["test_double_execution"],
+    )
+    if observed_pair not in {
+        ("physical_hardware", False),
+        ("not_verified", True),
+    }:
+        raise ValueError(
+            "UPMEM target observation and test-double flag are inconsistent"
+        )
+    for field in ("physical_stage_consumed", "bulk_set_launch_verified"):
+        if observations[field] is not True:
+            raise ValueError(f"UPMEM operation field {field!r} must be true")
+
+    for index, operation in enumerate(operations):
+        if operation.get("lane_pass_count") != 4:
+            raise ValueError(f"UPMEM operation {index} did not execute four lanes")
+        active_ranks = operation.get("active_rank_count")
+        active_dpus = operation.get("active_dpu_count")
+        if (
+            type(active_ranks) is not int
+            or not 1 <= active_ranks <= plan.topology.rank_count
+        ):
+            raise ValueError(f"UPMEM operation {index} has invalid active rank count")
+        if (
+            type(active_dpus) is not int
+            or not 1 <= active_dpus <= plan.topology.dpu_count
+        ):
+            raise ValueError(f"UPMEM operation {index} has invalid active DPU count")
+
+    expected_counts = {
+        "requested_dpu_count": plan.topology.dpu_count,
+        "allocated_dpu_count": plan.topology.dpu_count,
+        "rank_count": plan.topology.rank_count,
+        "tasklets_per_dpu": plan.topology.tasklets_per_dpu,
+    }
+    for field, expected in expected_counts.items():
+        if observations[field] != expected:
+            raise ValueError(
+                f"UPMEM operation field {field!r} is {observations[field]!r}; "
+                f"expected {expected}"
+            )
+    return observations
+
+
+def _operation_summary(metadata: Mapping[str, Any]) -> Mapping[str, JsonValue]:
+    fields = (
+        "stage_id",
+        "numeric_transport",
+        "lane_pass_count",
+        "active_rank_indices",
+        "active_dpu_ids",
+        "active_rank_count",
+        "active_dpu_count",
+        "requested_dpu_count",
+        "allocated_dpu_count",
+        "rank_count",
+        "tasklets_per_dpu",
+        "parallel_rank_wave_count",
+        "bulk_set_launch_verified",
+        "application_visible_h2d_bytes",
+        "application_visible_d2h_bytes",
+        "application_visible_transfer_bytes",
+        "physical_stage_consumed",
+        "target_observed",
+        "test_double_execution",
+        "cpu_fallback_used",
+        "simulator_kernel_executed",
+        "timing_scope",
+        "timing",
+    )
+    summary = {field: metadata[field] for field in fields if field in metadata}
+    normalized = _json_safe(summary)
+    if not isinstance(normalized, Mapping):  # pragma: no cover - fixed input shape.
+        raise TypeError("normalized operation summary is not a mapping")
+    return normalized
+
+
+def _raw_value_sort_key(
+    value: tuple[str, str, str, np.ndarray],
+) -> tuple[str, str, int]:
+    lane_order = {"rr": 0, "ii": 1, "ri": 2, "ir": 3}
+    return value[0], value[1], lane_order.get(value[2], len(lane_order))
+
+
+def _validate_terminal_admission(
+    terminal_facts: Mapping[str, JsonValue],
+    plan: FinalUpmemPlan,
+) -> None:
+    if terminal_facts.get("target_observed") != "physical_hardware":
+        raise ValueError(
+            "terminal target_observed must be exactly 'physical_hardware'"
+        )
+    for field in _TERMINAL_TRUE_FIELDS:
+        if terminal_facts.get(field) is not True:
+            raise ValueError(f"terminal field {field!r} must be exactly true")
+    for field in _TERMINAL_FALSE_FIELDS:
+        if terminal_facts.get(field) is not False:
+            raise ValueError(f"terminal field {field!r} must be exactly false")
+
+    expected_counts = {
+        "requested_dpu_count": plan.topology.dpu_count,
+        "allocated_dpu_count": plan.topology.dpu_count,
+        "observed_rank_count": plan.topology.rank_count,
+        "observed_tasklets_per_dpu": plan.topology.tasklets_per_dpu,
+        "tasklets_per_dpu": plan.topology.tasklets_per_dpu,
+    }
+    for field, expected in expected_counts.items():
+        observed = terminal_facts.get(field)
+        if type(observed) is not int or observed != expected:
+            raise ValueError(
+                f"terminal field {field!r} is {observed!r}; expected {expected}"
+            )
+
+
+def _deadline_owner(low_level: object) -> object:
+    current = low_level
+    visited: set[int] = set()
+    while id(current) not in visited:
+        visited.add(id(current))
+        namespace = getattr(current, "__dict__", {})
+        if isinstance(namespace, Mapping) and "_deadline" in namespace:
+            return current
+        try:
+            current = object.__getattribute__(current, "session")
+        except AttributeError:
+            break
+    raise TypeError("UPMEM low-level session has no renewable deadline")
+
+
+def _renew_session_deadline(low_level: object, timeout_s: float) -> None:
+    owner = _deadline_owner(low_level)
+    setattr(owner, "_deadline", time.monotonic() + float(timeout_s))
+
+
+def _add_exception_note(error: BaseException, note: str) -> None:
+    add_note = getattr(error, "add_note", None)
+    if callable(add_note):
+        add_note(note)
+        return
+    try:  # Python 3.10 compatibility.
+        notes = list(getattr(error, "__notes__", ()))
+        notes.append(note)
+        setattr(error, "__notes__", notes)
+    except Exception:  # pragma: no cover - unusual immutable exception type.
+        pass
+
+
+def _session_contract_error(low_level: object) -> str | None:
+    if not callable(getattr(low_level, "close", None)):
+        return "UPMEM session does not provide close()"
+    if not callable(getattr(low_level, "_execute_complex_core", None)):
+        return "UPMEM session does not provide the no-evidence complex core"
+    try:
+        _deadline_owner(low_level)
+    except TypeError as exc:
+        return str(exc)
+    return None
+
+
+def _cleanup_nonconforming_session(
+    low_level: object,
+) -> Mapping[str, JsonValue]:
+    close = getattr(low_level, "close", None)
+    if not callable(close):
+        return {
+            "nonconforming_cleanup_attempted": False,
+            "nonconforming_cleanup_succeeded": False,
+        }
+    try:
+        close()
+    except Exception as exc:
+        return {
+            "nonconforming_cleanup_attempted": True,
+            "nonconforming_cleanup_succeeded": False,
+            "nonconforming_cleanup_error": str(exc) or type(exc).__name__,
+        }
+    return {
+        "nonconforming_cleanup_attempted": True,
+        "nonconforming_cleanup_succeeded": True,
+    }
+
+
+def _open_failure_facts(plan: FinalUpmemPlan) -> dict[str, JsonValue]:
+    return {
+        "backend_id": "upmem_final_plan_v1",
+        "physical_plan_id": physical_plan_id(plan),
+        "logical_plan_id": plan.logical_plan_id,
+        "requested_dpus": plan.topology.dpu_count,
+        "rank_count": plan.topology.rank_count,
+        "tasklets_per_dpu": plan.topology.tasklets_per_dpu,
+    }
+
+
+def open_upmem(
+    dag: ContractionDAG,
+    plan: FinalUpmemPlan,
+    resources: UpmemResources,
+    *,
+    timeout_s: float = 120.0,
+) -> UpmemSession:
+    """Open one persistent session for a validated final UPMEM plan."""
+
+    if not isinstance(dag, ContractionDAG):
+        raise ValueError("open_upmem requires a ContractionDAG")
+    if not isinstance(plan, FinalUpmemPlan):
+        raise ValueError("open_upmem requires the final UpmemPlan record")
+    if not isinstance(resources, UpmemResources):
+        raise ValueError("open_upmem requires the final UpmemResources record")
+    if isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float)):
+        raise ValueError("timeout_s must be finite and positive")
+    timeout_s = float(timeout_s)
+    if not math.isfinite(timeout_s) or timeout_s <= 0.0:
+        raise ValueError("timeout_s must be finite and positive")
+
+    validate_contraction_dag(dag)
+    if plan.logical_plan_id != contraction_dag_hash(dag):
+        raise ValueError("UPMEM physical plan does not match supplied DAG")
+    validate_upmem_plan(dag, plan)
+    if len(resources.rank_paths) != plan.topology.rank_count:
+        raise UnsupportedExecution(
+            stage="preflight",
+            reason="resource rank paths do not match the final topology",
+            capability="rank_topology",
+        )
+    if not resources.rank_paths:
+        raise UnsupportedExecution(
+            stage="preflight",
+            reason="explicit UPMEM rank paths are required",
+            capability="rank_paths",
+        )
+    _validate_final_resources(resources)
+
+    try:
+        if resources.session_opener is not None:
+            low_level = resources.session_opener(
+                dag,
+                plan,
+                resources,
+                timeout_s,
+            )
+        else:
+            numeric_mode = {
+                "split_complex_float32_v1": NumericMode.FLOAT32_REAL,
+                "split_complex_int8_shared_scale_v1": (
+                    NumericMode.HOST_PACKED_INT8_PER_TASK_V1
+                ),
+            }[plan.numeric_policy]
+            engine = UpmemV4Executor(
+                session_root=Path(resources.session_root),
+                host_binary=Path(resources.host_binary),
+                dpu_binary=Path(resources.dpu_binary),
+                initialization_binary=Path(resources.initialization_binary),
+                rank_paths=resources.rank_paths,
+                dpu_count=plan.topology.dpu_count,
+                tasklets_per_dpu=plan.topology.tasklets_per_dpu,
+                timeout_s=timeout_s,
+            )
+            low_level = engine.open_session(
+                numeric_mode,
+                UpmemTopology(
+                    dpu_count=plan.topology.dpu_count,
+                    tasklets_per_dpu=plan.topology.tasklets_per_dpu,
+                    rank_count=plan.topology.rank_count,
+                ),
+            )
+    except UnsupportedExecution:
+        raise
+    except Exception as exc:
+        raise ExecutionFailed(
+            stage="session_open",
+            reason=str(exc),
+            backend_facts=_open_failure_facts(plan),
+        ) from exc
+
+    contract_error = _session_contract_error(low_level)
+    if contract_error is not None:
+        facts = _open_failure_facts(plan)
+        facts.update(_cleanup_nonconforming_session(low_level))
+        failure = ExecutionFailed(
+            stage="session_open",
+            reason=contract_error,
+            backend_facts=facts,
+        )
+        raise failure
+    return UpmemSession(dag, plan, resources, low_level, timeout_s)
+
+
+def _json_safe(value: object) -> JsonValue:
+    """Convert runtime metadata to the narrow evidence JSON value contract."""
+
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, (float, np.floating)):
+        result = float(value)
+        if not math.isfinite(result):
+            raise ValueError("runtime facts must contain finite floats")
+        return result
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, Mapping):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return tuple(_json_safe(item) for item in value)
+    raise TypeError(f"runtime facts contain unsupported value {type(value).__name__}")
+
+
+def _validate_final_resources(resources: UpmemResources) -> None:
+    """Reject malformed production binary paths before opening a session.
+
+    The injected opener used by tests is still given real files.  Keeping this
+    validation outside the opener means a production run cannot create native
+    side effects before its static executable inputs are known to be usable.
+    """
+
+    paths = {
+        "host_binary": Path(resources.host_binary),
+        "dpu_binary": Path(resources.dpu_binary),
+        "initialization_binary": Path(resources.initialization_binary),
+    }
+    for name, path in paths.items():
+        if not path.is_file():
+            raise UnsupportedExecution(
+                stage="preflight",
+                reason=f"UPMEM {name} is not a regular file: {path}",
+                capability="native_binaries",
+            )
+    if not os.access(paths["host_binary"], os.X_OK):
+        raise UnsupportedExecution(
+            stage="preflight",
+            reason="UPMEM host_binary is not executable",
+            capability="native_binaries",
+        )
 
 
 @dataclass
@@ -2082,6 +2911,11 @@ def _array_hash(value: np.ndarray) -> str:
     return digest.hexdigest()
 
 
+def _payload_hash(value: np.ndarray, *, dtype: np.dtype | None = None) -> str:
+    array = np.ascontiguousarray(np.asarray(value, dtype=dtype))
+    return _sha256_bytes(array.tobytes(order="C"))
+
+
 def _validate_resources(resources: UpmemRuntimeResources) -> dict[str, str]:
     paths = {
         "host_binary": Path(resources.host_binary),
@@ -2290,4 +3124,10 @@ def _optional_int(value: Any) -> int | None:
     return result
 
 
-__all__ = ["UpmemV4Executor", "UpmemV4Session", "run_upmem"]
+__all__ = [
+    "UpmemSession",
+    "UpmemV4Executor",
+    "UpmemV4Session",
+    "open_upmem",
+    "run_upmem",
+]

@@ -33,6 +33,11 @@ is authoritative. Components are observations and need not sum to it because
 operations may overlap. `rank_work_s` is summed work, never wall time. An
 unavailable value is `null`, not zero.
 
+Capturing native counters and the small operational values required to drive
+the coordinator is runtime instrumentation and remains inside this wall
+observation. Canonical fact normalization, array hashing, validation, evidence
+serialization, and artifact writing occur after the timer stops.
+
 `preparation_s` measures encoded payload and native request assembly after
 encoding and before host-to-DPU transfer. It is `null` when that work cannot be
 observed separately.

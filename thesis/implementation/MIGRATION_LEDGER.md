@@ -61,7 +61,7 @@ evidence that the corresponding capability is implemented.
 | WP3 planning | complete (T3) | root opt_einsum/cotengra function adapters return validated pairwise paths and the frozen 14-key provenance mapping; the historical projected-prefix planner is not canonical |
 | WP4 numerics | complete (T6A pure policies) | split-complex float32 and shared-scale int8 encode/contract/decode are implemented and verified; complex UPMEM runtime execution and physical validation remain pending |
 | WP5 mapping | complete (T4C final staged mapper) | `plan_upmem`, `validate_upmem_plan`, and `physical_plan_id` implement the singleton contract-stage/host-reduce plan; this does not claim slice grouping, tasklet scheduling, residency, or physical execution |
-| WP6 runtime | complete (old bounded base ownership only) | the old bounded runtime ownership is retained as migration input; the final reset `UpmemResources`/`UpmemSession` single-run boundary remains implementation-pending in T4B1/T4B2 |
+| WP6 runtime | in progress (T4B1 complete) | final `UpmemResources`, persistent `UpmemSession`, fail-closed terminal admission, and one-sample timing are implemented; canonical isolation from the old wrappers remains T4B2 |
 | WP7 baselines | in progress (T4A) | direct same-DAG CPU single-run execution is implemented; physical-plan replay and external baseline adapters remain |
 | WP8 evidence | pending | one timing/evidence schema and compatibility policy |
 | WP9 interface | pending | stable CLI, one experiment schema, and bounded public command set |
@@ -203,7 +203,8 @@ physical validation. T4C is recorded below as complete.
 T4C is complete. The final pure UPMEM mapper implements `plan_upmem`,
 `validate_upmem_plan`, and `physical_plan_id` with `PLAN_SCHEMA_VERSION = 1`.
 The final public plan/resource records temporarily coexist with privately
-aliased legacy compiler records until T4B2 removes the old route.
+aliased legacy compiler records. T4B2 removes them from the canonical route;
+historical-only records expire with their commands at T12.
 
 The current generation emits one singleton `contract_batch` per
 `ContractNode` and one `host_reduce` stage per `ReduceNode`; T9 slice grouping
@@ -258,7 +259,30 @@ stage placement, and fail-closed submit behavior. An independent reviewer
 accepted the corrected implementation with no remaining P0/P1 findings. The
 full suite passed 1437 tests in 185.58s, Ruff was clean, and `git diff --check`
 passed. These are fake-session software tests, not SDK-simulator or physical
-UPMEM qualification. T4B1 is next.
+UPMEM qualification.
+
+## T4B1 Persistent UPMEM Session
+
+T4B1 is complete in software. `open_upmem` validates the final DAG, physical
+plan, topology, rank paths, and executable inputs before opening a persistent
+session. `UpmemSession.run_once` executes one complete DAG sample with
+host-roundtrip intermediates, deterministic complex64 reductions, one
+authoritative `steady_execution_v1` wall observation, and no executor-owned
+warmup or repetition loop.
+
+Canonical fact normalization and hashing occur after the sample timer. Native
+failure stages are preserved, while the physical-plan stage is retained as
+failure context. Operation facts must positively verify final-stage
+consumption, bulk launch, four real lanes, active resources, topology, and no
+fallback or simulator use. Session close is admitted only when allocation,
+binary/native identity, physical execution, release, and no-test-double facts
+are all positively verified.
+
+The focused gate passed 150 tests and an independent final audit found no
+remaining P0/P1 issues. The full repository suite passed 1472 tests in 202.50
+seconds, Ruff was clean, and `git diff --check` passed. These are controlled
+software tests, not SDK-simulator or physical UPMEM qualification. T4B2 is
+next.
 
 ## Complexity Delta
 
@@ -300,8 +324,12 @@ wc -l`, and `rg '^[A-Za-z0-9_.-]+:' Makefile | wc -l`.
     the 1431-test full-suite checkpoint.
 13. T7: complete in software; four-pass complex ABI-v4 execution verified by
     117 focused tests and the 1437-test full-suite checkpoint.
-14. T4B1: next; add the UPMEM session and single-run API.
-15. T4B2: remove generic execution wrappers and migrate callers.
+14. T4B1: complete; persistent single-run UPMEM sessions verified by 150
+    focused tests, independent acceptance audit, and the 1472-test full-suite
+    checkpoint. This is mock/fake-session software evidence, not physical
+    qualification.
+15. T4B2: isolate the canonical route from generic execution wrappers and
+    migrate active callers; historical compatibility records expire at T12.
 16. T5A: add evidence schemas and identity serialization.
 17. T5B: move repetition, warmup, and session lifecycle to experiments.
 18. T5C: normalize timing scopes and remove old active emitters.

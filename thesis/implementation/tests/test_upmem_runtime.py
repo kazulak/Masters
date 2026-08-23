@@ -1,0 +1,589 @@
+from __future__ import annotations
+
+import json
+from collections.abc import Mapping
+from pathlib import Path
+import time
+from dataclasses import replace
+
+import numpy as np
+import pytest
+
+from quantum_bench.core.records import TensorSpec
+from quantum_bench.execution.contracts import NumericMode, UpmemTopology
+from quantum_bench.model import ContractNode, ContractionDAG, ReduceNode, TensorView
+from quantum_bench.results import ExecutionFailed, UnsupportedExecution
+from quantum_bench.upmem.plan import UpmemResources, UpmemTopology as FinalTopology, plan_upmem
+from quantum_bench.upmem.runtime import open_upmem
+from quantum_bench.upmem.protocol import V4ProtocolError
+import quantum_bench.upmem.runtime as runtime
+from quantum_bench.cpu import replay_upmem_plan_once
+
+from tests.test_v4_executor import _binaries, _engine, _final_plan_for_node, _task
+
+
+class _ControlledTerminalSession:
+    """Small mock used only to exercise high-level close admission."""
+
+    def __init__(self, terminal: Mapping[str, object]) -> None:
+        self._deadline = time.monotonic() + 1.0
+        self._terminal = dict(terminal)
+        self.close_calls = 0
+
+    def _execute_complex_core(self, *_args, **_kwargs):
+        raise AssertionError("close-only mock must not execute work")
+
+    def close(self):
+        self.close_calls += 1
+        return dict(self._terminal)
+
+
+def _verified_terminal(plan) -> dict[str, object]:
+    return {
+        "target_observed": "physical_hardware",
+        "hardware_allocation_verified": True,
+        "ready_verified": True,
+        "binary_identity_verified": True,
+        "native_identity_verified": True,
+        "physical_target_verified": True,
+        "native_kernel_executed": True,
+        "hardware_kernel_executed": True,
+        "hardware_release_verified": True,
+        "hardware_release_confirmed": True,
+        "simulator_kernel_executed": False,
+        "cpu_fallback_used": False,
+        "test_double_execution": False,
+        "requested_dpu_count": plan.topology.dpu_count,
+        "allocated_dpu_count": plan.topology.dpu_count,
+        "observed_rank_count": plan.topology.rank_count,
+        "observed_tasklets_per_dpu": plan.topology.tasklets_per_dpu,
+        "tasklets_per_dpu": plan.topology.tasklets_per_dpu,
+    }
+
+
+def _close_mock_session(session) -> None:
+    """Release the test-native session without treating it as evidence."""
+
+    try:
+        session.close()
+    except ExecutionFailed as failure:
+        assert failure.stage == "session_close"
+
+
+def _resources(tmp_path: Path, opener) -> UpmemResources:
+    host, dpu, initialization = _binaries(tmp_path / "resources")
+    return UpmemResources(
+        session_root=str(tmp_path / "session"),
+        host_binary=str(host),
+        dpu_binary=str(dpu),
+        initialization_binary=str(initialization),
+        rank_paths=("/dev/dpu_rank0",),
+        session_opener=opener,
+    )
+
+
+def _opened(tmp_path: Path, *, policy: str, k: int = 5):
+    node = _task(k=k, m=1, n=1)
+    dag, plan = _final_plan_for_node(node, policy=policy)
+    engine = _engine(tmp_path / "engine", dpu_count=1)
+    calls: list[float] = []
+
+    def opener(_dag, final_plan, _resources, timeout_s):
+        calls.append(float(timeout_s))
+        mode = (
+            NumericMode.HOST_PACKED_INT8
+            if final_plan.numeric_policy == "split_complex_int8_shared_scale_v1"
+            else NumericMode.FLOAT32_REAL
+        )
+        return engine.open_session(
+            mode,
+            UpmemTopology(
+                dpu_count=final_plan.topology.dpu_count,
+                tasklets_per_dpu=final_plan.topology.tasklets_per_dpu,
+                rank_count=final_plan.topology.rank_count,
+            ),
+        )
+
+    return node, dag, plan, _resources(tmp_path, opener), calls, engine
+
+
+def _inputs(node: ContractNode, *, k: int) -> dict[str, np.ndarray]:
+    values = np.arange(k, dtype=np.float64)
+    left = (((values % 11) - 5.0) + 1j * ((values % 7) - 3.0)).reshape(1, k)
+    right = (((values % 13) - 6.0) + 1j * ((values % 5) - 2.0)).reshape(k, 1)
+    return {node.left.tensor_id: left, node.right.tensor_id: right}
+
+
+def test_open_preflight_rejects_dag_plan_mismatch_before_opener(tmp_path: Path) -> None:
+    node, dag, plan, resources, calls, _ = _opened(
+        tmp_path, policy="split_complex_float32_v1"
+    )
+    del node
+    other = replace(plan, logical_plan_id="0" * 64)
+    with pytest.raises(ValueError, match="does not match"):
+        open_upmem(dag, other, resources)
+    assert calls == []
+
+
+def test_open_static_resource_validation_precedes_opener(tmp_path: Path) -> None:
+    _, dag, plan, resources, calls, _ = _opened(
+        tmp_path, policy="split_complex_float32_v1"
+    )
+    invalid = replace(resources, host_binary=str(tmp_path / "missing-host"))
+    with pytest.raises(UnsupportedExecution, match="not a regular file"):
+        open_upmem(dag, plan, invalid)
+    assert calls == []
+
+
+def test_opener_unsupported_execution_is_preserved(tmp_path: Path) -> None:
+    _, dag, plan, resources, _, _ = _opened(
+        tmp_path, policy="split_complex_float32_v1"
+    )
+    expected = UnsupportedExecution("preflight", "no rank available", "rank_access")
+
+    def opener(*_args):
+        raise expected
+
+    with pytest.raises(UnsupportedExecution) as caught:
+        open_upmem(dag, plan, replace(resources, session_opener=opener))
+    assert caught.value is expected
+
+
+def test_invalid_opened_object_is_closed_once_before_failure(tmp_path: Path) -> None:
+    _, dag, plan, resources, _, _ = _opened(
+        tmp_path, policy="split_complex_float32_v1"
+    )
+
+    class InvalidOpened:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+    opened = InvalidOpened()
+    with pytest.raises(ExecutionFailed) as caught:
+        open_upmem(dag, plan, replace(resources, session_opener=lambda *_: opened))
+    assert caught.value.stage == "session_open"
+    assert opened.close_calls == 1
+    assert caught.value.backend_facts["nonconforming_cleanup_succeeded"] is True
+
+
+@pytest.mark.parametrize(
+    "policy",
+    ["split_complex_float32_v1", "split_complex_int8_shared_scale_v1"],
+)
+def test_persistent_session_matches_replay_and_renews_deadline(
+    tmp_path: Path, policy: str
+) -> None:
+    node, dag, plan, resources, calls, _ = _opened(tmp_path, policy=policy, k=257)
+    inputs = _inputs(node, k=257)
+    expected = replay_upmem_plan_once(dag, plan, inputs)
+    session = open_upmem(dag, plan, resources, timeout_s=10.0)
+    low_level = session._low_level.session
+    first = session.run_once(inputs)
+    first_renewed_deadline = getattr(low_level, "_deadline", 0.0)
+    second = session.run_once(inputs)
+    second_deadline = getattr(low_level, "_deadline", 0.0)
+    assert calls == [10.0]
+    assert first_renewed_deadline > time.monotonic()
+    assert second_deadline > first_renewed_deadline
+    np.testing.assert_array_equal(first.output, expected.output)
+    np.testing.assert_array_equal(second.output, expected.output)
+    assert first.measurement.scope_id == "steady_execution_v1"
+    assert first.measurement.h2d_s is None
+    assert first.measurement.kernel_s is None
+    assert first.measurement.d2h_s is None
+    assert first.backend_facts["physical_plan_id"]
+    assert first.backend_facts["operation_facts"][0]["timing_scope"] == (
+        "sum_of_per_request_max_rank_response_counters_v1"
+    )
+    assert first.measurement.h2d_bytes is not None
+    assert first.measurement.d2h_bytes is not None
+    _close_mock_session(session)
+
+
+@pytest.mark.parametrize(
+    "policy",
+    ["split_complex_float32_v1", "split_complex_int8_shared_scale_v1"],
+)
+def test_raw_lanes_and_operands_match_cpu_physical_plan_replay(
+    tmp_path: Path,
+    policy: str,
+) -> None:
+    node, dag, plan, resources, _, _ = _opened(tmp_path, policy=policy, k=257)
+    inputs = _inputs(node, k=257)
+    expected = replay_upmem_plan_once(dag, plan, inputs)
+    session = open_upmem(dag, plan, resources)
+    actual = session.run_once(inputs)
+    _close_mock_session(session)
+    np.testing.assert_array_equal(actual.output, expected.output)
+    assert actual.numeric_facts["raw_lane_records"] == expected.numeric_facts[
+        "raw_lane_records"
+    ]
+    assert actual.numeric_facts["operand_records"] == expected.numeric_facts[
+        "operand_records"
+    ]
+
+
+def test_output_hash_includes_dtype_and_shape() -> None:
+    assert runtime._array_hash(np.array([1], dtype=np.uint8)) != runtime._array_hash(
+        np.array([[1]], dtype=np.uint8)
+    )
+    assert runtime._array_hash(np.array([1], dtype=np.uint8)) != runtime._array_hash(
+        np.array([1], dtype=np.int8)
+    )
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("cpu_fallback_used", True),
+        ("simulator_kernel_executed", True),
+        ("test_double_execution", True),
+    ],
+)
+def test_operation_observations_reject_unadmitted_execution_facts(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    _, _, plan, _, _, _ = _opened(tmp_path, policy="split_complex_float32_v1")
+    operation = {
+        "target_observed": "physical_hardware",
+        "test_double_execution": False,
+        "cpu_fallback_used": False,
+        "simulator_kernel_executed": False,
+        "physical_stage_consumed": True,
+        "bulk_set_launch_verified": True,
+        "lane_pass_count": 4,
+        "active_rank_count": 1,
+        "active_dpu_count": 1,
+        "requested_dpu_count": plan.topology.dpu_count,
+        "allocated_dpu_count": plan.topology.dpu_count,
+        "rank_count": plan.topology.rank_count,
+        "tasklets_per_dpu": plan.topology.tasklets_per_dpu,
+    }
+    operation[field] = value
+    with pytest.raises(ValueError):
+        runtime._derive_operation_observations([operation], plan)
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("physical_stage_consumed", False),
+        ("bulk_set_launch_verified", False),
+        ("lane_pass_count", 3),
+        ("active_rank_count", 0),
+        ("active_dpu_count", 0),
+        ("target_observed", "not_verified"),
+    ],
+)
+def test_operation_observations_require_positive_stage_facts(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    _, _, plan, _, _, _ = _opened(tmp_path, policy="split_complex_float32_v1")
+    operation = {
+        "target_observed": "physical_hardware",
+        "test_double_execution": False,
+        "cpu_fallback_used": False,
+        "simulator_kernel_executed": False,
+        "physical_stage_consumed": True,
+        "bulk_set_launch_verified": True,
+        "lane_pass_count": 4,
+        "active_rank_count": 1,
+        "active_dpu_count": 1,
+        "requested_dpu_count": plan.topology.dpu_count,
+        "allocated_dpu_count": plan.topology.dpu_count,
+        "rank_count": plan.topology.rank_count,
+        "tasklets_per_dpu": plan.topology.tasklets_per_dpu,
+    }
+    operation[field] = value
+    with pytest.raises(ValueError):
+        runtime._derive_operation_observations([operation], plan)
+
+
+def test_one_sided_complex_and_reduce_stage_are_deterministic(tmp_path: Path) -> None:
+    def contract(prefix: str) -> ContractNode:
+        return ContractNode(
+            node_id=prefix,
+            left=TensorView(tensor_id=f"{prefix}_a", labels=(0, 1), shape=(1, 3)),
+            right=TensorView(tensor_id=f"{prefix}_b", labels=(1, 2), shape=(3, 1)),
+            output=TensorSpec(id=f"{prefix}_o", labels=(0, 2), shape=(1, 1), structure="dense"),
+            contracted_labels=(1,),
+            output_labels=(0, 2),
+        )
+
+    first = contract("a")
+    second = contract("b")
+    reduce = ReduceNode(
+        node_id="reduce",
+        inputs=(
+            TensorView(tensor_id="a_o", labels=(0, 2), shape=(1, 1)),
+            TensorView(tensor_id="b_o", labels=(0, 2), shape=(1, 1)),
+        ),
+        output=TensorSpec(id="out", labels=(0, 2), shape=(1, 1), structure="dense"),
+        dependencies=("a", "b"),
+    )
+    dag = ContractionDAG(
+        tensors=tuple(
+            TensorSpec(id=name, labels=labels, shape=shape, structure="dense")
+            for name, labels, shape in (
+                ("a_a", (0, 1), (1, 3)),
+                ("a_b", (1, 2), (3, 1)),
+                ("b_a", (0, 1), (1, 3)),
+                ("b_b", (1, 2), (3, 1)),
+            )
+        ),
+        nodes=(first, second, reduce),
+        output=TensorView(tensor_id="out", labels=(0, 2), shape=(1, 1)),
+    )
+    plan = plan_upmem(
+        dag,
+        numeric_policy="split_complex_float32_v1",
+        topology=FinalTopology(dpu_count=1, tasklets_per_dpu=1, rank_count=1),
+    )
+    engine = _engine(tmp_path / "engine", dpu_count=1)
+
+    def opener(_dag, final_plan, _resources, _timeout_s):
+        return engine.open_session(
+            NumericMode.FLOAT32_REAL,
+            UpmemTopology(
+                dpu_count=final_plan.topology.dpu_count,
+                tasklets_per_dpu=1,
+                rank_count=1,
+            ),
+        )
+
+    resources = _resources(tmp_path, opener)
+    inputs = {
+        "a_a": np.array([[1 + 0j, 2 + 0j, 3 + 0j]], dtype=np.complex128),
+        "a_b": np.array([[1j], [2j], [3j]], dtype=np.complex128),
+        "b_a": np.array([[2 + 0j, 1 + 0j, 0 + 0j]], dtype=np.complex128),
+        "b_b": np.array([[1j], [0j], [2j]], dtype=np.complex128),
+    }
+    expected = replay_upmem_plan_once(dag, plan, inputs)
+    session = open_upmem(dag, plan, resources)
+    actual = session.run_once(inputs)
+    _close_mock_session(session)
+    np.testing.assert_array_equal(actual.output, expected.output)
+    assert actual.output.dtype == np.dtype(np.complex64)
+    assert any(stage.kind == "host_reduce" for stage in plan.stages)
+
+
+@pytest.mark.parametrize(
+    "helper_name",
+    ["_array_hash", "_raw_lane_fact", "_complex_operand_facts", "_json_safe"],
+)
+def test_evidence_helpers_are_outside_session_timer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    helper_name: str,
+) -> None:
+    node, dag, plan, resources, _, _ = _opened(
+        tmp_path, policy="split_complex_float32_v1"
+    )
+    inputs = _inputs(node, k=5)
+    session = open_upmem(dag, plan, resources)
+    baseline = session.run_once(inputs)
+    original = getattr(runtime, helper_name)
+
+    def slow_helper(*args, **kwargs):
+        time.sleep(0.05)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(runtime, helper_name, slow_helper)
+    slowed = session.run_once(inputs)
+    _close_mock_session(session)
+    assert slowed.measurement.total_wall_s - baseline.measurement.total_wall_s < 0.03
+
+
+def test_test_double_close_is_rejected_and_mock_verified_close_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    node, dag, plan, resources, _, _ = _opened(
+        tmp_path / "good", policy="split_complex_float32_v1"
+    )
+    del node
+    test_double = open_upmem(dag, plan, resources)
+    _close_mock_session(test_double)
+
+    rejected_terminal = _verified_terminal(plan)
+    rejected_terminal["test_double_execution"] = True
+    rejected = runtime.UpmemSession(
+        dag,
+        plan,
+        resources,
+        _ControlledTerminalSession(rejected_terminal),
+        timeout_s=5.0,
+    )
+    with pytest.raises(ExecutionFailed, match="session_close"):
+        rejected.close()
+
+    low_level = _ControlledTerminalSession(_verified_terminal(plan))
+    session = runtime.UpmemSession(dag, plan, resources, low_level, timeout_s=5.0)
+    first = session.close()
+    second = session.close()
+    assert first == second
+    assert low_level.close_calls == 1
+    # This controlled terminal fixture exercises admission only; no sample is
+    # produced and it is never used as a physical-execution assertion.
+
+    def failing_opener(*_args):
+        raise RuntimeError("open failed")
+
+    failing = _resources(tmp_path / "open-fail", failing_opener)
+    with pytest.raises(ExecutionFailed, match="session_open"):
+        open_upmem(dag, plan, failing)
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("hardware_allocation_verified", None),
+        ("binary_identity_verified", False),
+        ("hardware_release_verified", False),
+        ("test_double_execution", True),
+        ("target_observed", "not_verified"),
+    ],
+)
+def test_terminal_admission_requires_all_positive_verification_facts(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    _, dag, plan, resources, _, _ = _opened(
+        tmp_path, policy="split_complex_float32_v1"
+    )
+    terminal = _verified_terminal(plan)
+    if value is None:
+        del terminal[field]
+    else:
+        terminal[field] = value
+    session = runtime.UpmemSession(
+        dag,
+        plan,
+        resources,
+        _ControlledTerminalSession(terminal),
+        timeout_s=5.0,
+    )
+    with pytest.raises(ExecutionFailed) as caught:
+        session.close()
+    assert caught.value.stage == "session_close"
+    assert caught.value.backend_facts.get(field) == value
+
+
+def test_context_body_error_is_not_masked_by_close_failure(tmp_path: Path) -> None:
+    _, dag, plan, resources, _, _ = _opened(
+        tmp_path, policy="split_complex_float32_v1"
+    )
+    terminal = _verified_terminal(plan)
+    terminal["hardware_release_verified"] = False
+    session = runtime.UpmemSession(
+        dag,
+        plan,
+        resources,
+        _ControlledTerminalSession(terminal),
+        timeout_s=5.0,
+    )
+    with pytest.raises(RuntimeError, match="body failure") as caught:
+        with session:
+            raise RuntimeError("body failure")
+    assert any("close also failed" in note for note in caught.value.__notes__)
+
+
+def test_close_failure_is_execution_failed_and_not_repeated(tmp_path: Path) -> None:
+    node, dag, plan, resources, _, engine = _opened(
+        tmp_path, policy="split_complex_float32_v1"
+    )
+    session = open_upmem(dag, plan, resources)
+    low_level = session._low_level.session
+    for rank in low_level.ranks:
+        rank.session.close = lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("close failed"))
+    with pytest.raises(ExecutionFailed, match="session_close"):
+        session.close()
+    with pytest.raises(ExecutionFailed, match="session_close"):
+        session.close()
+
+
+def test_run_failure_is_execution_failed_with_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    node, dag, plan, resources, _, _ = _opened(
+        tmp_path, policy="split_complex_float32_v1"
+    )
+    session = open_upmem(dag, plan, resources)
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("kernel failed")
+
+    monkeypatch.setattr(session._low_level.session, "_execute_complex_core", fail)
+    with pytest.raises(ExecutionFailed) as caught:
+        session.run_once(_inputs(node, k=5))
+    assert caught.value.stage == "contract_batch:fixture"
+    _close_mock_session(session)
+
+
+def test_native_failure_stage_is_preserved(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    node, dag, plan, resources, _, _ = _opened(
+        tmp_path, policy="split_complex_float32_v1"
+    )
+    session = open_upmem(dag, plan, resources)
+
+    def fail(*_args, **_kwargs):
+        raise V4ProtocolError("kernel_timeout", "deadline expired")
+
+    monkeypatch.setattr(session._low_level.session, "_execute_complex_core", fail)
+    with pytest.raises(ExecutionFailed) as caught:
+        session.run_once(_inputs(node, k=5))
+    assert caught.value.stage == "kernel_timeout"
+    assert caught.value.backend_facts["plan_stage_id"] == "contract_batch:fixture"
+    _close_mock_session(session)
+
+
+def test_run_timeout_is_renewed_and_reported_as_execution_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    node, dag, plan, resources, _, _ = _opened(
+        tmp_path, policy="split_complex_float32_v1"
+    )
+    session = open_upmem(dag, plan, resources, timeout_s=0.001)
+    native_session = session._low_level.session
+    original = native_session._execute_complex_core
+
+    def slow_core(*args, **kwargs):
+        time.sleep(0.01)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(native_session, "_execute_complex_core", slow_core)
+    with pytest.raises(ExecutionFailed) as caught:
+        session.run_once(_inputs(node, k=5))
+    assert caught.value.stage == "kernel_timeout"
+    assert caught.value.backend_facts["plan_stage_id"] == "contract_batch:fixture"
+    _close_mock_session(session)
+
+
+def test_output_and_facts_are_immutable_and_json_safe(tmp_path: Path) -> None:
+    node, dag, plan, resources, _, _ = _opened(
+        tmp_path, policy="split_complex_int8_shared_scale_v1", k=257
+    )
+    session = open_upmem(dag, plan, resources)
+    sample = session.run_once(_inputs(node, k=257))
+    _close_mock_session(session)
+    with pytest.raises(ValueError):
+        sample.output[0, 0] = 99
+    json.dumps(_plain(sample.backend_facts))
+    json.dumps(_plain(sample.numeric_facts))
+
+
+def _plain(value):
+    if isinstance(value, Mapping):
+        return {key: _plain(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_plain(item) for item in value]
+    return value

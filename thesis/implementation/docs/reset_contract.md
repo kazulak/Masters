@@ -177,7 +177,7 @@ silently migrated.
 
 This documentation-only correction freezes the dependency order for the reset
 implementation. T6A, T4A, T4C, T6B, and T7 are implemented at the current
-base; T4B1 remains the next implementation task.
+base; T4B1 is now complete and T4B2 is the next implementation task.
 
 Pure T6A numerics must be implemented before T4A results and CPU execution,
 because `run_cpu_once` consumes the final `NumericPolicy` contract. The
@@ -189,8 +189,8 @@ T6A  pure numerics
   -> T4C  final UpmemStage/UpmemPlan schema (complete)
   -> T6B  physical-plan CPU replay (complete)
   -> T7   four real-product ABI execution (complete in software)
-  -> T4B1 UPMEM session API (next)
-  -> T4B2 removal of generic wrappers
+  -> T4B1 UPMEM session API (complete)
+  -> T4B2 canonical-route isolation from generic wrappers
   -> T5   evidence and experiment lifecycle
 ```
 
@@ -585,8 +585,10 @@ machine-local settings are recorded as executable or run provenance; they do
 not become additional `UpmemPlan` fields.
 
 During migration, these final public records temporarily coexist with privately
-aliased legacy records. This is compatibility state for T4B2 only, not a
-permanent architecture.
+aliased legacy records. T4B2 removes them from the canonical reset route. The
+records that remain reachable only from still-exposed historical milestone
+commands are a bounded compatibility island and expire with those commands at
+T12; they are not part of the permanent architecture.
 
 ## CPU And UPMEM Single-Run Contracts
 
@@ -988,8 +990,8 @@ T4A   results and CPU single-run API
 T4C   final UpmemStage/UpmemPlan schema (complete)
 T6B   CPU physical-plan replay (complete)
 T7    complex UPMEM execution (complete in software)
-T4B1  UPMEM session API (next)
-T4B2  remove generic execution wrappers and migrate callers
+T4B1  UPMEM session API (complete in software)
+T4B2  isolate the canonical route from generic wrappers; migrate active callers
 T5A   evidence schemas and identities
 T5B   experiment repetition/session lifecycle
 T5C   timing normalization and old-emitter deletion
@@ -1006,3 +1008,27 @@ T12C  remove old TaskGraph and UPMEM generations
 T13   software qualification
 T14   later ETH physical qualification
 ```
+
+## T4B2 Compatibility Boundary
+
+Repository inspection found that the generic `RunContext`, `CpuPlan`, and
+`ExecutionPlan` records are still imported by public historical milestone
+commands. Deleting those records during T4B2 would silently turn the bounded
+active-route migration into the T12 removal task.
+
+T4B2 therefore has two exact outcomes:
+
+```text
+canonical reset route
+  uses run_cpu_once, plan_upmem, open_upmem, and UpmemSession.run_once
+  imports no generic dispatcher, CpuPlan, RunContext, or ExecutionPlan
+
+historical milestone compatibility island
+  may retain the old records only until its commands are removed at T12
+  must not be imported by model, lowering, planning, cpu, experiment,
+  evidence, report, or the final UPMEM plan/session API
+```
+
+No new adapter, wrapper type, or compatibility reader may be introduced for
+this containment. T12 removes the historical commands and the retained generic
+records together.

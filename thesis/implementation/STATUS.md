@@ -35,7 +35,7 @@ operator.
 | UPMEM numeric route | Split-complex float32 and shared-scale host-packed int8 policies are implemented. | CPU policy replay is software-tested; physical numerical qualification is pending. |
 | Complex UPMEM policy | Four sequential real ABI-v4 passes consume one final contract stage. | Fake-session differential tests pass; SDK-simulator and physical qualification are pending. |
 | Logical slicing | Existing historical slicing code exists, but the reset one-pass contract is absent. | Planned for reset; no reset claim. |
-| Session and timing API | The low-level v4 session executes one complex final stage and preserves rank/DPU terminal facts. | Public `open_upmem`/`run_once` and sample timing mapping remain T4B1 work. |
+| Session and timing API | Final `open_upmem` and persistent `UpmemSession.run_once` execute one DAG sample, preserve native failure stages, and admit close only with positive allocation, identity, execution, and release facts. | Software-qualified with controlled sessions; simulator and physical qualification remain pending. |
 | Evidence | Existing writers and historical capsules exist. | New manifest/sample/session schema is planned; no evidence is promoted by T0. |
 | CPU TN reference | Direct same-DAG execution, complex128 validation, and same-physical-plan replay are implemented. | Software-tested; replay is a policy oracle, not a performance baseline. |
 | Quimb/cotengra | Existing provider code exists. | Direct baseline adapter is planned. |
