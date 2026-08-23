@@ -1,7 +1,8 @@
 # Implementation Status
 
-This file separates the reset target from the implementation at commit
-`869b19c0a2581463b04a35288e9c59352fc6f3b9`.
+This file separates the reset target from the current reset-branch
+implementation. Exact tested checkpoints are recorded in
+`MIGRATION_LEDGER.md`.
 
 ## Status Vocabulary
 
@@ -28,15 +29,15 @@ operator.
 
 | Area | Base state | Qualification and claim status |
 |---|---|---|
-| Circuit and TN code | Existing circuit, TN, and DAG modules exist. | Existing behavior only; the reset model/lowering boundary is planned. |
-| Logical execution IR | `ContractionDAG` is the active target-neutral contraction IR. | Simulator-qualified through existing tests; no new reset qualification. |
-| UPMEM plan | Bounded v4 compiler, tiling, work units, and identity exist. | Historical route only; not a general slicing, tasklet, or residency plan. |
-| UPMEM numeric route | Real float32 and real host-packed int8 paths exist. | Historical simulator/physical capsules may be cited only within their own scope. |
-| Complex UPMEM policy | Not implemented. | Planned; not simulator-qualified, physically-qualified, or claimable. |
+| Circuit and TN code | Reset model, circuit, lowering, and planner boundaries are implemented. | Software-tested; physical claims do not apply to this pure boundary. |
+| Logical execution IR | `ContractionDAG` is the sole target-neutral logical execution IR. | Software-tested; slicing extensions remain pending. |
+| UPMEM plan | Final schema-v1 singleton contract/reduction stages and deterministic output/K work units are implemented. | Software-tested; not yet a general slicing, tasklet, or residency plan. |
+| UPMEM numeric route | Split-complex float32 and shared-scale host-packed int8 policies are implemented. | CPU policy replay is software-tested; physical numerical qualification is pending. |
+| Complex UPMEM policy | Four sequential real ABI-v4 passes consume one final contract stage. | Fake-session differential tests pass; SDK-simulator and physical qualification are pending. |
 | Logical slicing | Existing historical slicing code exists, but the reset one-pass contract is absent. | Planned for reset; no reset claim. |
-| Session and timing API | Existing versioned runtime/session code exists. | New single-run and timing contracts are planned. |
+| Session and timing API | The low-level v4 session executes one complex final stage and preserves rank/DPU terminal facts. | Public `open_upmem`/`run_once` and sample timing mapping remain T4B1 work. |
 | Evidence | Existing writers and historical capsules exist. | New manifest/sample/session schema is planned; no evidence is promoted by T0. |
-| CPU TN reference | Existing CPU routes exist. | Same-physical-plan replay is planned. |
+| CPU TN reference | Direct same-DAG execution, complex128 validation, and same-physical-plan replay are implemented. | Software-tested; replay is a policy oracle, not a performance baseline. |
 | Quimb/cotengra | Existing provider code exists. | Direct baseline adapter is planned. |
 | QuEST CPU/GPU | Existing full-state providers exist. | Direct baseline and GPU runtime verification are planned. |
 | SimplePIM | Pinned external sources and historical management-assisted routes exist. | SimplePIM compute integration is not active in the reset baseline. |
@@ -50,11 +51,10 @@ remains unqualified until ETH qualification.
 
 ## Claim Boundary
 
-At T0, the repository may describe the existing bounded implementation and
-historical evidence using their recorded route and evidence identities. It may
-not claim that the reset architecture supports complex TN execution, general
-slicing, physical speedup, multi-rank scaling, energy efficiency, or a
-hardware-calibrated planner.
+The repository may describe the reset branch's software implementation of
+split-complex final-stage execution and its fake-session differential tests. It
+may not claim complex physical execution, general slicing, physical speedup,
+multi-rank scaling, energy efficiency, or a hardware-calibrated planner.
 
 ## Qualification State
 

@@ -51,7 +51,14 @@ from quantum_bench.lowering import (
     validate_dag_inputs,
 )
 from quantum_bench.model import ContractNode, ContractionDAG, ReduceNode, TensorView
+from quantum_bench.numerics import (
+    NumericPolicy,
+    decode_complex_products,
+    encode_complex_tensor,
+)
+from quantum_bench.results import JsonValue
 from quantum_bench.upmem.plan import (
+    UpmemStage,
     validate_active_upmem_plan,
     validate_upmem_plan_for_dag,
 )
@@ -294,6 +301,129 @@ def _read_output(path: Path, tile: M5Tile, *, packed: bool) -> np.ndarray:
         values.reshape(tile.m_size, tile.n_size),
         dtype=np.int64 if packed else np.float64,
     )
+
+
+def _read_raw_output(path: Path, tile: M5Tile, *, packed: bool) -> np.ndarray:
+    """Read one native tile without widening its ABI representation."""
+
+    dtype = np.dtype("<i4") if packed else np.dtype("<f4")
+    expected_bytes = tile.output_element_count * dtype.itemsize
+    raw = path.read_bytes()
+    if len(raw) < expected_bytes:
+        raise RuntimeError(f"v4 output is truncated: {path}")
+    return np.frombuffer(raw[:expected_bytes], dtype=dtype).reshape(
+        tile.m_size, tile.n_size
+    ).copy()
+
+
+def _complex_canonical_planes(
+    real_lowering: M5TileLowering,
+    imag_lowering: M5TileLowering,
+    *,
+    left: bool,
+) -> np.ndarray:
+    real = real_lowering.canonical.left if left else real_lowering.canonical.right
+    imag = imag_lowering.canonical.left if left else imag_lowering.canonical.right
+    if real.shape != imag.shape:
+        raise ValueError("real and imaginary canonical planes have different shapes")
+    result = np.empty(real.shape, dtype=np.complex64)
+    result.real = np.asarray(real, dtype=np.float32)
+    result.imag = np.asarray(imag, dtype=np.float32)
+    return result
+
+
+def _validate_complex_lowerings(
+    real_lowering: M5TileLowering,
+    imag_lowering: M5TileLowering,
+    stage: UpmemStage,
+    node: ContractNode,
+) -> None:
+    real = real_lowering.canonical
+    imag = imag_lowering.canonical
+    if (
+        (real.b, real.m, real.k, real.n) != (imag.b, imag.m, imag.k, imag.n)
+        or real.batch_labels != imag.batch_labels
+        or real.free_left_labels != imag.free_left_labels
+        or real.contracted_labels != imag.contracted_labels
+        or real.free_right_labels != imag.free_right_labels
+        or real.canonical_output_labels != imag.canonical_output_labels
+        or real.label_dimensions != imag.label_dimensions
+        or real_lowering.output_tiles != imag_lowering.output_tiles
+        or real_lowering.k_chunks != imag_lowering.k_chunks
+        or real_lowering.tiles != imag_lowering.tiles
+    ):
+        raise ValueError("real and imaginary canonical tile metadata differ")
+    tiles = {tile.id: tile for tile in real_lowering.tiles}
+    units = stage.work_units
+    if len(units) != len(tiles) or {unit.stable_tile_id for unit in units} != set(tiles):
+        raise ValueError("UPMEM stage tile IDs do not match live lowering")
+    for unit in units:
+        tile = tiles.get(unit.stable_tile_id)
+        if tile is None or unit.node_id != node.node_id:
+            raise ValueError("UPMEM stage references an unknown live tile")
+        expected = (
+            tile.batch_index,
+            1,
+            tile.m_start,
+            tile.m_size,
+            tile.n_start,
+            tile.n_size,
+            tile.k_start,
+            tile.k_size,
+            tile.left_bytes + tile.right_bytes,
+            tile.output_bytes,
+            tile.aligned_mram_bytes,
+            tile.m_size * tile.n_size * tile.k_size,
+        )
+        actual = (
+            unit.batch_start,
+            unit.batch_size,
+            unit.m_start,
+            unit.m_size,
+            unit.n_start,
+            unit.n_size,
+            unit.k_start,
+            unit.k_size,
+            unit.estimated_input_bytes,
+            unit.estimated_output_bytes,
+            unit.aligned_mram_bytes,
+            unit.estimated_arithmetic_work,
+        )
+        if actual != expected:
+            raise ValueError(f"UPMEM stage work unit {unit.stable_tile_id} differs from lowering")
+
+
+def _raw_lane_fact(node_id: str, tile_id: str, lane: str, value: np.ndarray) -> dict[str, JsonValue]:
+    dtype = np.dtype("<i4") if np.issubdtype(value.dtype, np.integer) else np.dtype("<f4")
+    canonical = np.ascontiguousarray(np.asarray(value, dtype=dtype))
+    return {
+        "node_id": node_id,
+        "stable_tile_id": tile_id,
+        "lane": lane,
+        "dtype": dtype.str,
+        "shape": tuple(int(item) for item in canonical.shape),
+        "sha256": _sha256_bytes(canonical.tobytes(order="C")),
+        "exact": bool(np.issubdtype(value.dtype, np.integer)),
+    }
+
+
+def _complex_operand_facts(
+    node_id: str,
+    side: str,
+    encoded: Any,
+) -> dict[str, JsonValue]:
+    return {
+        "node_id": node_id,
+        "side": side,
+        "scale": float(encoded.scale),
+        "saturation_real": int(encoded.saturation_real),
+        "saturation_imag": int(encoded.saturation_imag),
+        "real_dtype": encoded.real.dtype.str,
+        "imag_dtype": encoded.imag.dtype.str,
+        "shape": tuple(int(value) for value in encoded.real.shape),
+        "real_sha256": _sha256_bytes(np.ascontiguousarray(encoded.real).tobytes()),
+        "imag_sha256": _sha256_bytes(np.ascontiguousarray(encoded.imag).tobytes()),
+    }
 
 
 def _assemble_output(
@@ -773,6 +903,251 @@ class UpmemV4Session:
             **quantization_metadata,
         }
 
+    def execute_complex(
+        self,
+        node: ContractNode,
+        left: np.ndarray,
+        right: np.ndarray,
+        *,
+        stage: UpmemStage,
+        numeric_policy: NumericPolicy,
+    ) -> tuple[np.ndarray, Mapping[str, JsonValue]]:
+        """Execute one final-plan complex contraction through ABI v4 lanes."""
+
+        if self._closed:
+            raise RuntimeError("UPMEM v4 session is closed")
+        if not isinstance(stage, UpmemStage) or stage.kind != "contract_batch":
+            raise ValueError("execute_complex requires a contract_batch UpmemStage")
+        if stage.node_ids != (node.node_id,):
+            raise ValueError("execute_complex stage does not match contract node")
+        expected_mode = {
+            "split_complex_float32_v1": NumericMode.FLOAT32_REAL,
+            "split_complex_int8_shared_scale_v1": NumericMode.HOST_PACKED_INT8_PER_TASK_V1,
+        }.get(numeric_policy)
+        if expected_mode is None:
+            raise ValueError(f"unsupported complex numeric policy: {numeric_policy!r}")
+        if self.numeric_mode is not expected_mode:
+            raise ValueError("UPMEM session numeric mode does not match final policy")
+
+        packed = numeric_policy == "split_complex_int8_shared_scale_v1"
+        limits = M5TileLimits.host_packed_int8() if packed else M5TileLimits.float32()
+        materialized_left = np.array(left, copy=True, order="C")
+        materialized_right = np.array(right, copy=True, order="C")
+        if materialized_left.shape != node.left.shape:
+            raise ValueError("left operand shape does not match contract node")
+        if materialized_right.shape != node.right.shape:
+            raise ValueError("right operand shape does not match contract node")
+        if not np.issubdtype(materialized_left.dtype, np.number) or not np.issubdtype(
+            materialized_right.dtype, np.number
+        ):
+            raise ValueError("complex execution requires numeric operands")
+
+        started = time.perf_counter()
+        preparation_started = time.perf_counter()
+        real_lowering = lower_binary_contraction(
+            node,
+            np.asarray(materialized_left.real, dtype=np.float32),
+            np.asarray(materialized_right.real, dtype=np.float32),
+            limits=limits,
+        )
+        imag_lowering = lower_binary_contraction(
+            node,
+            np.asarray(materialized_left.imag, dtype=np.float32),
+            np.asarray(materialized_right.imag, dtype=np.float32),
+            limits=limits,
+        )
+        _validate_complex_lowerings(real_lowering, imag_lowering, stage, node)
+        preparation_s = time.perf_counter() - preparation_started
+
+        encode_started = time.perf_counter()
+        canonical_left = _complex_canonical_planes(
+            real_lowering, imag_lowering, left=True
+        )
+        canonical_right = _complex_canonical_planes(
+            real_lowering, imag_lowering, left=False
+        )
+        encoded_left = encode_complex_tensor(canonical_left, numeric_policy)
+        encoded_right = encode_complex_tensor(canonical_right, numeric_policy)
+        encode_s = time.perf_counter() - encode_started
+
+        waves, planned_requests = self._requests_from_work_units(
+            node, real_lowering, stage.work_units
+        )
+        lane_names = ("rr", "ii", "ri", "ir")
+        lane_operands = (
+            (encoded_left.real, encoded_right.real),
+            (encoded_left.imag, encoded_right.imag),
+            (encoded_left.real, encoded_right.imag),
+            (encoded_left.imag, encoded_right.real),
+        )
+        lane_partials: dict[str, dict[str, np.ndarray]] = {}
+        lane_request_hashes: dict[str, tuple[str, ...]] = {}
+        raw_lane_values: dict[str, tuple[str, str, str, np.ndarray]] = {}
+        lane_request_contract_hashes: dict[str, str] = {}
+        h2d_bytes = 0
+        d2h_bytes = 0
+        rank_response_h2d_max_sum_s = 0.0
+        rank_response_kernel_max_sum_s = 0.0
+        rank_response_d2h_max_sum_s = 0.0
+        parallel_rank_waves = 0
+        bulk_verified = True
+        active_rank_indices: set[int] = set()
+        active_dpu_ids: set[tuple[int, int]] = set()
+        numeric_transport = (
+            "host_packed_int8_mram" if packed else "float32_mram"
+        )
+
+        try:
+            for lane, (lane_left, lane_right) in zip(
+                lane_names, lane_operands, strict=True
+            ):
+                request_contract = _request_contract_hash(
+                    _task_structure_hash(node),
+                    numeric_transport=numeric_transport,
+                    left_scale=encoded_left.scale,
+                    right_scale=encoded_right.scale,
+                    left_payload=lane_left,
+                    right_payload=lane_right,
+                    strategy_config_hash=self.strategy_config_hash,
+                )
+                lane_request_contract_hashes[lane] = request_contract
+                partials: dict[str, np.ndarray] = {}
+                request_hashes: list[str] = []
+                for wave_index, wave in enumerate(waves):
+                    self._remaining_timeout()
+                    outcomes, metrics, wave_parallel, wave_bulk_verified = (
+                        self._submit_wave(
+                            lowering=real_lowering,
+                            canonical_left=lane_left,
+                            canonical_right=lane_right,
+                            packed=packed,
+                            request_contract=request_contract,
+                            wave=wave,
+                            requests=planned_requests[wave_index],
+                            preserve_native=True,
+                        )
+                    )
+                    parallel_rank_waves += int(wave_parallel)
+                    bulk_verified = bulk_verified and wave_bulk_verified
+                    h2d_bytes += int(metrics["h2d_bytes"])
+                    d2h_bytes += int(metrics["d2h_bytes"])
+                    rank_response_h2d_max_sum_s += float(metrics["h2d_time_s"])
+                    rank_response_kernel_max_sum_s += float(
+                        metrics["kernel_time_s"]
+                    )
+                    rank_response_d2h_max_sum_s += float(metrics["d2h_time_s"])
+                    request_hashes.extend(metrics["request_manifest_hashes"])
+                    self._successful_request_count += int(
+                        metrics["successful_request_count"]
+                    )
+                    active_rank_indices.update(metrics["active_rank_indices"])
+                    active_dpu_ids.update(metrics["active_dpu_ids"])
+                    self._active_rank_indices.update(metrics["active_rank_indices"])
+                    self._active_dpu_ids.update(metrics["active_dpu_ids"])
+                    partials.update({tile.id: value for tile, value in outcomes})
+                lane_request_hashes[lane] = tuple(request_hashes)
+                lane_partials[lane] = partials
+                for tile_id, value in partials.items():
+                    key = f"{node.node_id}/{tile_id}/{lane}"
+                    raw_lane_values[key] = (node.node_id, tile_id, lane, value)
+        except BaseException as exc:
+            self._failed = True
+            self._failure_stage = str(
+                getattr(exc, "failure_stage", "hardware_task_execution_failed")
+            )
+            raise
+
+        assembly_started = time.perf_counter()
+        lane_outputs = tuple(
+            real_lowering.assemble(
+                lane_partials[lane],
+                dtype=np.int64 if packed else np.float32,
+            )
+            for lane in lane_names
+        )
+        assembled_s = time.perf_counter() - assembly_started
+        decode_started = time.perf_counter()
+        output = decode_complex_products(
+            lane_outputs,
+            encoded_left.scale,
+            encoded_right.scale,
+            numeric_policy,
+        )
+        output = np.array(output, dtype=np.complex64, copy=True, order="C")
+        output.setflags(write=False)
+        decode_s = time.perf_counter() - decode_started
+        total_wall_s = time.perf_counter() - started
+        raw_lane_records = {
+            key: _raw_lane_fact(node_id, tile_id, lane, value)
+            for key, (node_id, tile_id, lane, value) in raw_lane_values.items()
+        }
+
+        metadata: dict[str, JsonValue] = {
+            "numeric_policy": numeric_policy,
+            "numeric_transport": numeric_transport,
+            "lane_order": lane_names,
+            "lane_pass_count": 4,
+            "left_scale": float(encoded_left.scale),
+            "right_scale": float(encoded_right.scale),
+            "saturation_real": int(
+                encoded_left.saturation_real + encoded_right.saturation_real
+            ),
+            "saturation_imag": int(
+                encoded_left.saturation_imag + encoded_right.saturation_imag
+            ),
+            "operand_records": (
+                _complex_operand_facts(node.node_id, "left", encoded_left),
+                _complex_operand_facts(node.node_id, "right", encoded_right),
+            ),
+            "raw_lane_records": raw_lane_records,
+            "lane_request_contract_hashes": lane_request_contract_hashes,
+            "lane_request_manifest_hashes": lane_request_hashes,
+            "request_manifest_hashes": tuple(
+                hash_value
+                for lane in lane_names
+                for hash_value in lane_request_hashes[lane]
+            ),
+            "active_rank_indices": tuple(sorted(active_rank_indices)),
+            "active_dpu_ids": tuple(sorted(active_dpu_ids)),
+            "requested_dpu_count": sum(rank.local_dpus for rank in self.ranks),
+            "allocated_dpu_count": sum(rank.local_dpus for rank in self.ranks),
+            "active_rank_count": len(active_rank_indices),
+            "active_dpu_count": len(active_dpu_ids),
+            "rank_count": len(self.ranks),
+            "tasklets_per_dpu": self.engine.tasklets_per_dpu,
+            "parallel_rank_wave_count": parallel_rank_waves,
+            "bulk_set_launch_verified": bulk_verified,
+            "application_visible_h2d_bytes": h2d_bytes,
+            "application_visible_d2h_bytes": d2h_bytes,
+            "application_visible_transfer_bytes": h2d_bytes + d2h_bytes,
+            "physical_stage_consumed": True,
+            "stage_id": stage.stage_id,
+            "cpu_fallback_used": False,
+            "simulator_kernel_executed": False,
+            "test_double_execution": self._test_double_execution,
+            "target_observed": (
+                "not_verified" if self._test_double_execution else "physical_hardware"
+            ),
+            "timing_scope": "sum_of_per_request_max_rank_response_counters_v1",
+            "timing": {
+                "total_wall_s": float(total_wall_s),
+                "preparation_s": float(preparation_s),
+                "encode_s": float(encode_s),
+                "rank_response_h2d_max_sum_s": float(
+                    rank_response_h2d_max_sum_s
+                ),
+                "rank_response_kernel_max_sum_s": float(
+                    rank_response_kernel_max_sum_s
+                ),
+                "rank_response_d2h_max_sum_s": float(
+                    rank_response_d2h_max_sum_s
+                ),
+                "assembly_s": float(assembled_s),
+                "decode_s": float(decode_s),
+            },
+        }
+        return output, metadata
+
     def _requests_from_plan(
         self,
         node: ContractNode,
@@ -801,8 +1176,20 @@ class UpmemV4Session:
             raise ValueError(
                 "compiled UPM canonical B/M/K/N shape differs from lowering"
             )
+        return self._requests_from_work_units(node, lowering, node_plan.work_units)
+
+    def _requests_from_work_units(
+        self,
+        node: ContractNode,
+        lowering: Any,
+        units: tuple[Any, ...],
+    ) -> tuple[
+        tuple[tuple[M5Tile, ...], ...],
+        tuple[list[tuple[Any, list[tuple[M5Tile, int]]]], ...],
+    ]:
+        """Group legacy or final work units without changing placement."""
+
         tiles = {tile.id: tile for tile in lowering.tiles}
-        units = node_plan.work_units
         if len(tiles) != len(lowering.tiles) or len(units) != len(tiles):
             raise ValueError("compiled UPM work-unit count differs from lowering")
         if {unit.stable_tile_id for unit in units} != set(tiles):
@@ -891,6 +1278,7 @@ class UpmemV4Session:
         request_contract: str,
         wave: tuple[M5Tile, ...],
         requests: list[tuple[Any, list[tuple[M5Tile, int]]]],
+        preserve_native: bool = False,
     ) -> tuple[list[tuple[M5Tile, np.ndarray]], dict[str, Any], bool, bool]:
         self._validate_rank_assignments(wave, requests)
         prepared: list[tuple[_RankSession, list[tuple[M5Tile, int]], Any]] = []
@@ -990,10 +1378,18 @@ class UpmemV4Session:
                 }
                 for tile, local_id in assignments:
                     record = records[local_id]
-                    value = _read_output(
-                        artifact.root / record.c_path,
-                        tile,
-                        packed=packed,
+                    value = (
+                        _read_raw_output(
+                            artifact.root / record.c_path,
+                            tile,
+                            packed=packed,
+                        )
+                        if preserve_native
+                        else _read_output(
+                            artifact.root / record.c_path,
+                            tile,
+                            packed=packed,
+                        )
                     )
                     results.append((tile, value))
             bulk_verified = all(

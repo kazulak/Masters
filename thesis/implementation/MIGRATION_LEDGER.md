@@ -236,7 +236,29 @@ remainder tiles, exact int8 multi-K-chunk assembly, decoded branch reduction,
 and malformed-plan rejection. The focused gate passed 101 tests. An independent
 review found no implementation P0 defect; its two P1 coverage findings were
 added before acceptance. The full-suite checkpoint passed 1431 tests in
-186.81s, Ruff was clean, and `git diff --check` passed. T7 is next.
+186.81s, Ruff was clean, and `git diff --check` passed.
+
+## T7 Split-Complex ABI-v4 Execution
+
+T7 is software-complete. The low-level v4 session executes one final singleton
+contract stage as four sequential real passes in fixed `rr`, `ii`, `ri`, `ir`
+order. All passes use the stage's final placement. Complex operands are encoded
+once, int8 planes share one scale per operand, native tile outputs retain their
+`<f4` or `<i4` representation for differential hashes, and K chunks assemble in
+the frozen float32/int64 policies.
+
+The implementation keeps the native ABI and plan schema unchanged. It records
+one authoritative operation wall time; independently reported rank phase
+counters remain explicitly labelled diagnostics. Terminal metadata now retains
+the ranks and DPUs that performed successful complex work.
+
+The focused gate passed 117 tests, including both numeric policies, both operand
+streams for all four lanes, raw CPU-replay parity, int8 multi-K assembly, final
+stage placement, and fail-closed submit behavior. An independent reviewer
+accepted the corrected implementation with no remaining P0/P1 findings. The
+full suite passed 1437 tests in 185.58s, Ruff was clean, and `git diff --check`
+passed. These are fake-session software tests, not SDK-simulator or physical
+UPMEM qualification. T4B1 is next.
 
 ## Complexity Delta
 
@@ -276,8 +298,9 @@ wc -l`, and `rg '^[A-Za-z0-9_.-]+:' Makefile | wc -l`.
     145 focused tests and the corrected full-suite checkpoint.
 12. T6B: complete; CPU physical-plan replay verified by 101 focused tests and
     the 1431-test full-suite checkpoint.
-13. T7: next; execute complex policies through the unchanged real-tile ABI v4.
-14. T4B1: add the UPMEM session and single-run API.
+13. T7: complete in software; four-pass complex ABI-v4 execution verified by
+    117 focused tests and the 1437-test full-suite checkpoint.
+14. T4B1: next; add the UPMEM session and single-run API.
 15. T4B2: remove generic execution wrappers and migrate callers.
 16. T5A: add evidence schemas and identity serialization.
 17. T5B: move repetition, warmup, and session lifecycle to experiments.

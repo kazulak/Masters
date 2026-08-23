@@ -29,6 +29,9 @@ from quantum_bench.upmem.runtime import (
     UpmemV4Session,
     _task_structure_hash,
 )
+from quantum_bench.upmem.plan import UpmemTopology as FinalUpmemTopology
+from quantum_bench.upmem.plan import plan_upmem
+from quantum_bench.cpu import replay_upmem_plan_once
 import quantum_bench.upmem.runtime as engine_module
 from quantum_bench.upmem.protocol import (
     NATIVE_EXECUTION_IDENTITY,
@@ -161,6 +164,7 @@ class _FakeSession:
     returncode: int | None = 0
     closed: bool = False
     submissions: list[Any] = field(default_factory=list)
+    submitted_operand_values: list[tuple[float, float]] = field(default_factory=list)
     submitted_timeouts: list[float] = field(default_factory=list)
     barrier: Any = None
     response_identity_overrides: dict[str, object] = field(default_factory=dict)
@@ -186,6 +190,32 @@ class _FakeSession:
         self.submissions.append(artifact)
         if self.fail_submit:
             raise RuntimeError("submission failed")
+        for record in artifact.work_units:
+            if not record.flags:
+                dtype = (
+                    np.int8
+                    if self.profile.numeric_mode_name == "host_packed_int8"
+                    else np.dtype("<f4")
+                )
+                self.submitted_operand_values.append(
+                    (
+                        float(
+                            np.fromfile(
+                                artifact.root / record.a_path,
+                                dtype=dtype,
+                                count=1,
+                            )[0]
+                        ),
+                        float(
+                            np.fromfile(
+                                artifact.root / record.b_path,
+                                dtype=dtype,
+                                count=1,
+                            )[0]
+                        ),
+                    )
+                )
+                break
         if self.barrier is not None:
             self.barrier.enter()
         if timeout_s is not None and self.delay_s > timeout_s:
@@ -267,6 +297,7 @@ def _engine(
     timeout_s: float = 60.0,
     startup_delay_s: float = 0.0,
     startup_delays_s: tuple[float, ...] = (),
+    fail_submit: bool = False,
 ) -> "_PlannedEngine":
     created: list[_FakeSession] = sessions if sessions is not None else []
     host_binary, dpu_binary, initialization_binary = _binaries(tmp_path / "binaries")
@@ -286,6 +317,7 @@ def _engine(
             binary_provenance=binary_provenance,
             delay_s=delay_s,
             barrier=barrier,
+            fail_submit=fail_submit,
         )
         created.append(session)
         delay = (
@@ -312,6 +344,36 @@ def _engine(
 
 def _topology(count: int, *, rank_count: int = 1) -> UpmemTopology:
     return UpmemTopology(dpu_count=count, tasklets_per_dpu=1, rank_count=rank_count)
+
+
+def _final_plan_for_node(
+    node: ContractNode,
+    *,
+    policy: str,
+    dpu_count: int = 1,
+    rank_count: int = 1,
+) -> tuple[ContractionDAG, Any]:
+    dag = ContractionDAG(
+        tensors=(
+            TensorSpec(node.left.tensor_id, node.left.labels, node.left.shape, "dense"),
+            TensorSpec(node.right.tensor_id, node.right.labels, node.right.shape, "dense"),
+        ),
+        nodes=(node,),
+        output=TensorView(
+            tensor_id=node.output.id,
+            labels=node.output.labels,
+            shape=node.output.shape,
+        ),
+    )
+    return dag, plan_upmem(
+        dag,
+        numeric_policy=policy,
+        topology=FinalUpmemTopology(
+            dpu_count=dpu_count,
+            tasklets_per_dpu=1,
+            rank_count=rank_count,
+        ),
+    )
 
 
 @dataclass
@@ -1109,6 +1171,190 @@ def test_request_work_units_and_payload_bytes() -> None:
     assert unit_i8.a_payload == left_i8[0, : tile.m_size, : tile.k_size].tobytes()
     assert unit_i8.b_payload == right_i8[0, : tile.k_size, : tile.n_size].tobytes()
     assert unit_i8.local_dpu_id == 3
+
+
+@pytest.mark.parametrize(
+    "policy,numeric_mode",
+    [
+        ("split_complex_float32_v1", NumericMode.FLOAT32_REAL),
+        ("split_complex_int8_shared_scale_v1", NumericMode.HOST_PACKED_INT8),
+    ],
+)
+def test_execute_complex_matches_physical_plan_replay(
+    tmp_path: Path, policy: str, numeric_mode: NumericMode
+) -> None:
+    node = _task(k=3, m=1, n=1)
+    left = np.array([[1.0 + 2.0j, -0.5 + 0.25j, 0.75 - 1.5j]], dtype=np.complex128)
+    right = np.array([[0.5 - 1.0j], [1.25 + 0.5j], [-0.25 + 0.75j]], dtype=np.complex128)
+    dag, plan = _final_plan_for_node(node, policy=policy)
+    replay = replay_upmem_plan_once(
+        dag,
+        plan,
+        {"left": left, "right": right},
+    )
+    session = _engine(tmp_path, dpu_count=1).open_session(
+        numeric_mode, _topology(1)
+    )
+    result, metadata = session.execute_complex(
+        node,
+        left,
+        right,
+        stage=plan.stages[0],
+        numeric_policy=policy,
+    )
+    session.close()
+    np.testing.assert_array_equal(result, replay.output)
+    assert metadata["physical_stage_consumed"] is True
+    assert metadata["lane_order"] == ("rr", "ii", "ri", "ir")
+    assert metadata["lane_pass_count"] == 4
+    assert metadata["timing_scope"] == (
+        "sum_of_per_request_max_rank_response_counters_v1"
+    )
+    assert not {"h2d_s", "kernel_s", "d2h_s"} & set(metadata["timing"])
+    if policy == "split_complex_float32_v1":
+        expected = {
+            f"{record['node_id']}/{record['stable_tile_id']}/{record['lane']}": record
+            for record in replay.numeric_facts["raw_lane_records"]
+        }
+        actual = metadata["raw_lane_records"]
+        assert set(actual) == set(expected)
+        for key, record in expected.items():
+            assert actual[key]["sha256"] == record["sha256"]
+            assert actual[key]["dtype"] == "<f4"
+            assert actual[key]["exact"] is False
+
+
+def test_execute_complex_submits_four_lanes_in_order(tmp_path: Path) -> None:
+    node = _task(k=2, m=1, n=1)
+    left = np.array([[1.0 + 2.0j, 3.0 - 4.0j]], dtype=np.complex128)
+    right = np.array([[2.0 - 1.0j], [-1.0 + 0.5j]], dtype=np.complex128)
+    _, plan = _final_plan_for_node(
+        node,
+        policy="split_complex_float32_v1",
+    )
+    created: list[_FakeSession] = []
+    session = _engine(tmp_path, dpu_count=1, sessions=created).open_session(
+        NumericMode.FLOAT32_REAL, _topology(1)
+    )
+    session.execute_complex(
+        node,
+        left,
+        right,
+        stage=plan.stages[0],
+        numeric_policy="split_complex_float32_v1",
+    )
+    terminal = session.close()
+    assert len(created) == 1
+    assert len(created[0].submissions) == 4
+    assert created[0].submitted_operand_values == [
+        (1.0, 2.0),
+        (2.0, -1.0),
+        (1.0, -1.0),
+        (2.0, 2.0),
+    ]
+    assert terminal["active_rank_indices"] == (0,)
+    assert terminal["active_dpu_ids"] == ((0, 0),)
+
+
+def test_execute_complex_int8_facts_match_replay_hashes(tmp_path: Path) -> None:
+    policy = "split_complex_int8_shared_scale_v1"
+    node = _task(k=4, m=1, n=1)
+    left = np.array([[2.0 + 4.0j, -1.0 + 0.5j, 0.25 - 3.0j, 1.5 + 0.75j]], dtype=np.complex128)
+    right = np.array([[0.5 - 2.0j], [1.25 + 0.5j], [-0.75 + 1.0j], [2.0 - 0.25j]], dtype=np.complex128)
+    dag, plan = _final_plan_for_node(node, policy=policy)
+    replay = replay_upmem_plan_once(dag, plan, {"left": left, "right": right})
+    session = _engine(tmp_path, dpu_count=1).open_session(
+        NumericMode.HOST_PACKED_INT8, _topology(1)
+    )
+    result, metadata = session.execute_complex(
+        node,
+        left,
+        right,
+        stage=plan.stages[0],
+        numeric_policy=policy,
+    )
+    session.close()
+    np.testing.assert_array_equal(result, replay.output)
+    assert metadata["left_scale"] > 0.0
+    assert metadata["right_scale"] > 0.0
+    assert metadata["saturation_real"] == sum(
+        int(record["saturation_real"])
+        for record in metadata["operand_records"]
+    )
+    assert metadata["saturation_imag"] == sum(
+        int(record["saturation_imag"])
+        for record in metadata["operand_records"]
+    )
+    expected = {
+        f"{record['node_id']}/{record['stable_tile_id']}/{record['lane']}": record
+        for record in replay.numeric_facts["raw_lane_records"]
+    }
+    actual = metadata["raw_lane_records"]
+    assert set(actual) == set(expected)
+    for key, record in expected.items():
+        assert actual[key]["sha256"] == record["sha256"]
+        assert actual[key]["dtype"] == "<i4"
+        assert actual[key]["exact"] is True
+
+
+def test_execute_complex_int8_multi_k_chunk_matches_replay(tmp_path: Path) -> None:
+    policy = "split_complex_int8_shared_scale_v1"
+    k = 257
+    node = _task(k=k, m=1, n=1)
+    values = np.arange(k, dtype=np.float64)
+    left = (
+        ((values % 11) - 5.0) + 1j * ((values % 7) - 3.0)
+    ).reshape(1, k)
+    right = (
+        ((values % 13) - 6.0) + 1j * ((values % 5) - 2.0)
+    ).reshape(k, 1)
+    dag, plan = _final_plan_for_node(node, policy=policy)
+    stage = plan.stages[0]
+    assert len(stage.work_units) == 2
+    assert sorted(unit.k_size for unit in stage.work_units) == [1, 256]
+    replay = replay_upmem_plan_once(dag, plan, {"left": left, "right": right})
+    session = _engine(tmp_path, dpu_count=1).open_session(
+        NumericMode.HOST_PACKED_INT8, _topology(1)
+    )
+    result, metadata = session.execute_complex(
+        node,
+        left,
+        right,
+        stage=stage,
+        numeric_policy=policy,
+    )
+    session.close()
+    np.testing.assert_array_equal(result, replay.output)
+    expected = {
+        f"{record['node_id']}/{record['stable_tile_id']}/{record['lane']}": record
+        for record in replay.numeric_facts["raw_lane_records"]
+    }
+    actual = metadata["raw_lane_records"]
+    assert set(actual) == set(expected)
+    for key, record in expected.items():
+        assert actual[key]["sha256"] == record["sha256"]
+        assert actual[key]["dtype"] == "<i4"
+
+
+def test_execute_complex_submit_failure_has_no_fallback(tmp_path: Path) -> None:
+    node = _task(k=2, m=1, n=1)
+    left = np.array([[1.0 + 1.0j, 2.0 - 2.0j]], dtype=np.complex128)
+    right = np.array([[1.0 - 1.0j], [2.0 + 2.0j]], dtype=np.complex128)
+    _, plan = _final_plan_for_node(node, policy="split_complex_float32_v1")
+    session = _engine(tmp_path, dpu_count=1, fail_submit=True).open_session(
+        NumericMode.FLOAT32_REAL, _topology(1)
+    )
+    with pytest.raises(RuntimeError, match="submission failed"):
+        session.execute_complex(
+            node,
+            left,
+            right,
+            stage=plan.stages[0],
+            numeric_policy="split_complex_float32_v1",
+        )
+    assert session._failed is True
+    assert not hasattr(session, "fallback_result")
+    session.close()
 
 
 def test_decoding_and_host_reduction(tmp_path: Path) -> None:

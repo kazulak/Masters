@@ -176,8 +176,8 @@ silently migrated.
 ## T4-0/T6A Dependency Correction
 
 This documentation-only correction freezes the dependency order for the reset
-implementation. T6A, T4A, T4C, and T6B are implemented at the current base;
-T7 remains the next implementation task.
+implementation. T6A, T4A, T4C, T6B, and T7 are implemented at the current
+base; T4B1 remains the next implementation task.
 
 Pure T6A numerics must be implemented before T4A results and CPU execution,
 because `run_cpu_once` consumes the final `NumericPolicy` contract. The
@@ -188,8 +188,8 @@ T6A  pure numerics
   -> T4A  results and CPU single-run API
   -> T4C  final UpmemStage/UpmemPlan schema (complete)
   -> T6B  physical-plan CPU replay (complete)
-  -> T7   four real-product ABI execution (next)
-  -> T4B1 UPMEM session API
+  -> T7   four real-product ABI execution (complete in software)
+  -> T4B1 UPMEM session API (next)
   -> T4B2 removal of generic wrappers
   -> T5   evidence and experiment lifecycle
 ```
@@ -922,6 +922,56 @@ Expected preparation, encoding, kernel, decode, and reduction failures raise
 raw lane hashes so exact physical validation can compare the same products;
 this requirement does not change the `UpmemPlan` schema.
 
+## T7 Complex ABI-v4 Execution Contract
+
+T7 keeps ABI version 4 unchanged: one native request executes real-valued
+output/K tiles. The existing low-level `UpmemV4Session` gains one bounded
+bridge used later by T4B1:
+
+```python
+def execute_complex(
+    self,
+    node: ContractNode,
+    left: np.ndarray,
+    right: np.ndarray,
+    *,
+    stage: UpmemStage,
+    numeric_policy: NumericPolicy,
+) -> tuple[np.ndarray, Mapping[str, JsonValue]]: ...
+```
+
+The bridge accepts exactly one singleton `contract_batch` stage whose final
+`UpmemWorkUnit`s match the live lowering. The session numeric mode must match
+the requested final numeric policy. It lowers real and imaginary planes,
+performs any one-sided reductions in float32, combines canonical planes, and
+encodes each complex operand once. Float32 uses scale one. Int8 uses one shared
+scale for both planes of each operand.
+
+The unchanged real ABI executes four passes sequentially on the same compiled
+placement, in the fixed order `rr`, `ii`, `ri`, `ir`. Rank submissions within
+one wave remain concurrent; the four product passes do not overlap. Every raw
+tile result is retained in its native `<f4` or `<i4` representation until its
+canonical hash has been recorded. Float K chunks assemble in ascending order
+with float32 addition. Int8 chunks assemble in ascending order with int64 host
+addition. The four assembled lanes are combined by the frozen numeric policy
+and returned as immutable complex64.
+
+The returned metadata is JSON-safe and records the four-pass order, shared
+operand scales and saturation counts, per-tile raw lane hashes, request hashes,
+active rank/DPU facts, application-visible transfer bytes, and separate
+preparation, encoding, assembly, and decode timings. `total_wall_s` is the only
+wall-time field. Native H2D, kernel, and D2H response counters are accumulated
+as `rank_response_h2d_max_sum_s`, `rank_response_kernel_max_sum_s`, and
+`rank_response_d2h_max_sum_s` under timing scope
+`sum_of_per_request_max_rank_response_counters_v1`; they are diagnostics, not
+component wall times. The authoritative operation wall time covers the complete
+four-pass operation, while raw hashing remains outside it.
+
+T7 does not add a new public result type, physical plan schema, scheduler,
+native ABI, or fallback. Submit, response, decode, or session failures remain
+fail-closed. T4B1 subsequently owns DAG coordination, `ExecutionSample`
+construction, and the final `open_upmem`/`run_once` session API.
+
 ## Ordered Tasks
 
 ```text
@@ -937,8 +987,8 @@ T6A   pure complex encoding/decoding
 T4A   results and CPU single-run API
 T4C   final UpmemStage/UpmemPlan schema (complete)
 T6B   CPU physical-plan replay (complete)
-T7    complex UPMEM execution (next)
-T4B1  UPMEM session API
+T7    complex UPMEM execution (complete in software)
+T4B1  UPMEM session API (next)
 T4B2  remove generic execution wrappers and migrate callers
 T5A   evidence schemas and identities
 T5B   experiment repetition/session lifecycle

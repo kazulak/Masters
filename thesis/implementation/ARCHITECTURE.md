@@ -151,8 +151,9 @@ is currently implemented:
 
 Tasklet scheduling, slice-stage scheduling, and DPU-resident intermediate
 execution are planned work. The current mapping does not support claims for
-those mechanisms. Allocation alone is not parallel execution. T6B is implemented
-and provides the CPU policy reference; T7 is the next implementation task.
+those mechanisms. Allocation alone is not parallel execution. T6B provides the
+CPU policy reference and T7 implements the matching four-pass low-level ABI-v4
+execution. T4B1 is the next implementation task.
 
 ## Numerics
 
@@ -233,12 +234,14 @@ at `native/upmem/runtime/`. Historical M5/v4 Python and native modules are not
 imported by the active path. The completed T1A-D ownership migration is
 followed by the corrected task order above. T6A pure split-complex numerics,
 T4A immutable results and direct CPU single-run execution, T4C final staged
-UPMEM mapping, and T6B CPU physical-plan replay are complete and verified.
+UPMEM mapping, T6B CPU physical-plan replay, and T7 low-level split-complex
+ABI-v4 execution are complete and software-verified.
 T4C currently emits singleton
 contract stages plus host reductions; it does not claim complex physical
 execution, slice grouping, residency, tasklet scheduling, physical validation,
-speedup, scaling, or energy. The next implementation work is T7 four-real-product
-ABI execution, followed by T4B1, T4B2, and T5. Configuration,
+speedup, scaling, or energy. T7 has fake-session differential evidence only;
+SDK-simulator and physical qualification remain pending. The next implementation
+work is T4B1, followed by T4B2 and T5. Configuration,
 reporting, cleanup, software qualification, and later ETH qualification remain
 subsequent work.
 
