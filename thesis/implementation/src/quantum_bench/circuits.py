@@ -8,7 +8,7 @@ from typing import Iterable
 
 import numpy as np
 
-from quantum_bench.core.records import CircuitOperation, CircuitSpec
+from quantum_bench.model import CircuitOperation, CircuitSpec
 
 
 def load_circuit(case: dict, root_dir: Path) -> CircuitSpec:

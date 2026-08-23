@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from quantum_bench.circuits.library import builtin_circuit
+from quantum_bench.circuits import builtin_circuit
 from quantum_bench.tn.network import (
     build_tensor_network_data,
     validate_tensor_inputs,

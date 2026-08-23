@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from quantum_bench.circuits.library import gate_structure, gate_tensor
+from quantum_bench.circuits import gate_structure, gate_tensor
 from quantum_bench.core.indices import LABEL_LIST_EINSUM_SENTINEL, index_symbols, label_count, supports_string_einsum
 from quantum_bench.core.records import CircuitSpec, TensorNetworkSpec, TensorSpec, TensorValue
 

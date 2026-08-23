@@ -103,6 +103,9 @@ The temporary `tn.graph` re-export set is exactly `TensorView`, `SliceSpec`,
 planner, executor, or `TaskGraph` types.
 `ARCHITECTURE.md` was reconciled during T2-0 so its ownership, capability, and
 migration-order statements match this contract.
+T2B circuit ownership flattening is complete in the working tree: the sole
+owner is `src/quantum_bench/circuits.py`, direct package-submodule imports are
+gone, and the full-suite checkpoint remains deferred to the lead T2 batch.
 
 ## Complexity Delta
 
