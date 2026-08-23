@@ -1,19 +1,23 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import hashlib
 
 import numpy as np
 import pytest
 
 import quantum_bench.cpu as cpu
-from quantum_bench.cpu import run_complex128_reference, run_cpu_once
+from quantum_bench.cpu import replay_upmem_plan_once, run_complex128_reference, run_cpu_once
 from quantum_bench.model import ContractNode, ContractionDAG, ReduceNode, TensorSpec, TensorView
+from quantum_bench.numerics import decode_complex_products, encode_complex_tensor
 from quantum_bench.results import (
     ExecutionFailed,
     ExecutionSample,
     Measurement,
     UnsupportedExecution,
 )
+from quantum_bench.upmem import plan as upmem_plan_module
+from quantum_bench.upmem.tiling import M5TileLimits, lower_binary_contraction
 
 
 FLOAT = "split_complex_float32_v1"
@@ -525,3 +529,431 @@ def test_complex128_reference_rejects_nonfinite_output() -> None:
     inputs["source"][1, 2, 0] = np.nan + 0j
     with pytest.raises(ValueError, match="nonfinite"):
         run_complex128_reference(dag, inputs)
+
+
+@pytest.mark.parametrize("policy", [FLOAT, INT8])
+def test_replay_matches_physical_plan_reference_and_records_facts(policy: str) -> None:
+    dag, inputs = _contract_dag()
+    plan = upmem_plan_module.plan_upmem(
+        dag,
+        numeric_policy=policy,
+        topology=upmem_plan_module.UpmemTopology(dpu_count=2, tasklets_per_dpu=1),
+    )
+    before = {key: value.copy() for key, value in inputs.items()}
+    sample = replay_upmem_plan_once(dag, plan, inputs)
+    reference = run_complex128_reference(dag, inputs)
+    if policy == FLOAT:
+        np.testing.assert_allclose(sample.output, reference, rtol=1e-5, atol=1e-5)
+    else:
+        np.testing.assert_allclose(
+            sample.output,
+            run_cpu_once(dag, inputs, INT8).output,
+            rtol=1e-5,
+            atol=1e-5,
+        )
+    assert sample.backend_facts["backend_id"] == "cpu_upmem_plan_replay_v1"
+    assert sample.backend_facts["execution_class"] == "cpu_physical_plan_reference"
+    assert sample.backend_facts["physical_plan_consumed"] is True
+    assert sample.backend_facts["hardware_execution"] is False
+    assert sample.measurement.total_wall_s >= 0.0
+    assert sample.measurement.preparation_s is not None
+    assert sample.measurement.encode_s is not None
+    assert sample.measurement.kernel_s is not None
+    assert sample.measurement.decode_s is not None
+    assert sample.measurement.h2d_s is None
+    assert sample.measurement.d2h_s is None
+    assert sample.measurement.energy_j is None
+    assert sample.numeric_facts["numeric_policy"] == policy
+    assert len(sample.numeric_facts["operand_records"]) == 4
+    assert len(sample.numeric_facts["raw_lane_records"]) == 8
+    for key in inputs:
+        np.testing.assert_array_equal(inputs[key], before[key])
+    with pytest.raises((TypeError, ValueError)):
+        sample.output[0, 0] = 0
+
+
+def test_replay_int8_raw_lane_hashes_are_exact_little_endian_int32() -> None:
+    dag, inputs = _int8_reduce_dag(mixed_raw_input=False)
+    plan = upmem_plan_module.plan_upmem(
+        dag,
+        numeric_policy=INT8,
+        topology=upmem_plan_module.UpmemTopology(dpu_count=1, tasklets_per_dpu=1),
+    )
+    sample = replay_upmem_plan_once(dag, plan, inputs)
+    record = next(
+        item
+        for item in sample.numeric_facts["raw_lane_records"]
+        if item["node_id"] == "first" and item["lane"] == "rr"
+    )
+    expected = np.asarray([[127 * 127]], dtype="<i4")
+    assert record["dtype"] == "<i4"
+    assert record["exact"] is True
+    assert record["shape"] == (1, 1)
+    assert record["sha256"] == hashlib.sha256(expected.tobytes()).hexdigest()
+
+
+@pytest.mark.parametrize("policy", [FLOAT, INT8])
+def test_replay_unilateral_contraction_reduces_before_encoding(policy: str) -> None:
+    left = TensorSpec("left", (0, 1), (2, 3), "dense", dtype="complex128")
+    right = TensorSpec("right", (2,), (4,), "dense", dtype="complex128")
+    output = TensorSpec(
+        "out", (0, 2), (2, 4), "dense", dtype="complex128", produced_by="contract"
+    )
+    node = ContractNode(
+        node_id="contract",
+        left=TensorView(tensor_id="left", labels=left.labels, shape=left.shape),
+        right=TensorView(tensor_id="right", labels=right.labels, shape=right.shape),
+        output=output,
+        contracted_labels=(1,),
+        output_labels=(0, 2),
+    )
+    dag = ContractionDAG(
+        tensors=(left, right),
+        nodes=(node,),
+        output=TensorView(tensor_id="out", labels=output.labels, shape=output.shape),
+    )
+    inputs = {
+        "left": np.array(
+            [[1.1 + 0.2j, -0.7 + 1.4j, 0.3 - 0.9j],
+             [2.0 - 1.1j, -1.2 + 0.4j, 0.6 + 0.8j]],
+            dtype=np.complex128,
+        ),
+        "right": np.array(
+            [1.0 + 0.5j, -0.4 + 1.2j, 0.7 - 0.2j, 1.3 + 0.1j],
+            dtype=np.complex128,
+        ),
+    }
+    plan = upmem_plan_module.plan_upmem(
+        dag,
+        numeric_policy=policy,
+        topology=upmem_plan_module.UpmemTopology(dpu_count=1, tasklets_per_dpu=1),
+    )
+
+    # This is the independent reference for the physical policy: lower the
+    # unilateral label into a reduced operand before applying numeric policy.
+    reduced_left = TensorSpec(
+        "left_reduced", (0,), (2,), "dense", dtype="complex128"
+    )
+    reduced_node = ContractNode(
+        node_id="contract",
+        left=TensorView(
+            tensor_id="left_reduced",
+            labels=reduced_left.labels,
+            shape=reduced_left.shape,
+        ),
+        right=TensorView(tensor_id="right", labels=right.labels, shape=right.shape),
+        output=output,
+        contracted_labels=(),
+        output_labels=(0, 2),
+    )
+    reduced_dag = ContractionDAG(
+        tensors=(reduced_left, right),
+        nodes=(reduced_node,),
+        output=TensorView(tensor_id="out", labels=output.labels, shape=output.shape),
+    )
+    left_float32 = np.asarray(inputs["left"].real, dtype=np.float32) + 1j * np.asarray(
+        inputs["left"].imag, dtype=np.float32
+    )
+    reduced_inputs = {
+        "left_reduced": np.asarray(
+            left_float32.real.sum(axis=1, dtype=np.float32)
+            + 1j * left_float32.imag.sum(axis=1, dtype=np.float32),
+            dtype=np.complex128,
+        ),
+        "right": inputs["right"],
+    }
+    expected = run_cpu_once(reduced_dag, reduced_inputs, policy).output
+
+    sample = replay_upmem_plan_once(dag, plan, inputs)
+    np.testing.assert_allclose(sample.output, expected, rtol=1e-5, atol=1e-5)
+    if policy == INT8:
+        naive = run_cpu_once(dag, inputs, policy).output
+        assert not np.allclose(sample.output, naive, rtol=1e-6, atol=1e-6)
+
+
+def test_replay_int8_multiple_k_chunks_records_each_exact_lane(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    left = TensorSpec("left", (0, 1), (1, 5), "dense", dtype="complex128")
+    right = TensorSpec("right", (1, 2), (5, 1), "dense", dtype="complex128")
+    output = TensorSpec(
+        "out", (0, 2), (1, 1), "dense", dtype="complex128", produced_by="contract"
+    )
+    node = ContractNode(
+        node_id="contract",
+        left=TensorView(tensor_id="left", labels=left.labels, shape=left.shape),
+        right=TensorView(tensor_id="right", labels=right.labels, shape=right.shape),
+        output=output,
+        contracted_labels=(1,),
+        output_labels=(0, 2),
+    )
+    dag = ContractionDAG(
+        tensors=(left, right),
+        nodes=(node,),
+        output=TensorView(tensor_id="out", labels=output.labels, shape=output.shape),
+    )
+    inputs = {
+        "left": np.arange(1, 6, dtype=np.float64).reshape(1, 5).astype(np.complex128),
+        "right": np.arange(2, 7, dtype=np.float64).reshape(5, 1).astype(np.complex128),
+    }
+    limits = M5TileLimits.host_packed_int8(
+        max_tile_dim=2, max_elements=64, max_packed_k=2
+    )
+    monkeypatch.setattr(
+        upmem_plan_module, "tile_limits_for_numeric_mode", lambda mode: limits
+    )
+    monkeypatch.setattr(cpu, "_replay_limits", lambda policy: limits)
+    plan = upmem_plan_module.plan_upmem(
+        dag,
+        numeric_policy=INT8,
+        topology=upmem_plan_module.UpmemTopology(dpu_count=1, tasklets_per_dpu=1),
+    )
+    assert len({unit.k_start for unit in plan.stages[0].work_units}) == 3
+
+    sample = replay_upmem_plan_once(dag, plan, inputs)
+    lowering = lower_binary_contraction(
+        node,
+        np.asarray(inputs["left"].real, dtype=np.float32),
+        np.asarray(inputs["right"].real, dtype=np.float32),
+        limits=limits,
+    )
+    left_encoded = encode_complex_tensor(
+        np.asarray(lowering.canonical.left, dtype=np.complex64), INT8
+    )
+    right_encoded = encode_complex_tensor(
+        np.asarray(lowering.canonical.right, dtype=np.complex64), INT8
+    )
+    lane_operands = (
+        (left_encoded.real, right_encoded.real),
+        (left_encoded.imag, right_encoded.imag),
+        (left_encoded.real, right_encoded.imag),
+        (left_encoded.imag, right_encoded.real),
+    )
+    records = {
+        (item["stable_tile_id"], item["lane"]): item
+        for item in sample.numeric_facts["raw_lane_records"]
+    }
+    expected_totals = [np.zeros((1, 1), dtype=np.int64) for _ in range(4)]
+    for unit in plan.stages[0].work_units:
+        for lane_index, (left_plane, right_plane) in enumerate(lane_operands):
+            accumulator = np.zeros((unit.m_size, unit.n_size), dtype=np.int32)
+            for k_index in range(unit.k_size):
+                product = np.multiply(
+                    left_plane[
+                        unit.batch_start,
+                        unit.m_start : unit.m_start + unit.m_size,
+                        unit.k_start + k_index,
+                    ][:, None],
+                    right_plane[
+                        unit.batch_start,
+                        unit.k_start + k_index,
+                        unit.n_start : unit.n_start + unit.n_size,
+                    ][None, :],
+                    dtype=np.int32,
+                )
+                accumulator = np.add(accumulator, product, dtype=np.int32)
+            expected = np.asarray(accumulator, dtype="<i4")
+            record = records[(unit.stable_tile_id, ("rr", "ii", "ri", "ir")[lane_index])]
+            assert record["dtype"] == "<i4"
+            assert record["exact"] is True
+            assert record["sha256"] == hashlib.sha256(expected.tobytes()).hexdigest()
+            expected_totals[lane_index] = np.add(
+                expected_totals[lane_index], expected, dtype=np.int64
+            )
+
+    expected_output = decode_complex_products(
+        tuple(expected_totals), left_encoded.scale, right_encoded.scale, INT8
+    )
+    np.testing.assert_array_equal(sample.output, expected_output)
+
+
+def test_replay_canonicalizes_operands_before_encoding() -> None:
+    left = TensorSpec("left", (0, 1), (2, 3), "dense", dtype="complex128")
+    right = TensorSpec("right", (1, 2), (3, 2), "dense", dtype="complex128")
+    output = TensorSpec(
+        "out", (0, 2), (2, 2), "dense", dtype="complex128", produced_by="contract"
+    )
+    node = ContractNode(
+        node_id="contract",
+        left=TensorView(tensor_id="left", labels=left.labels, shape=left.shape),
+        right=TensorView(tensor_id="right", labels=right.labels, shape=right.shape),
+        output=output,
+        contracted_labels=(1,),
+        output_labels=(0, 2),
+    )
+    dag = ContractionDAG(
+        tensors=(left, right),
+        nodes=(node,),
+        output=TensorView(tensor_id="out", labels=output.labels, shape=output.shape),
+    )
+    inputs = {
+        "left": np.arange(6, dtype=np.float64).reshape(2, 3).astype(np.complex128),
+        "right": np.array([[1, 2], [3, 4j], [5, 6]], dtype=np.complex128),
+    }
+    plan = upmem_plan_module.plan_upmem(
+        dag,
+        numeric_policy=FLOAT,
+        topology=upmem_plan_module.UpmemTopology(dpu_count=1, tasklets_per_dpu=1),
+    )
+    replay = replay_upmem_plan_once(dag, plan, inputs)
+    np.testing.assert_allclose(
+        replay.output, run_complex128_reference(dag, inputs), rtol=1e-5, atol=1e-5
+    )
+    assert replay.numeric_facts["operand_records"][0]["shape"] == (1, 2, 3)
+
+
+def test_replay_handles_remainder_tiles_and_multiple_k_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    left = TensorSpec("left", (0, 1), (3, 5), "dense", dtype="complex128")
+    right = TensorSpec("right", (1, 2), (5, 7), "dense", dtype="complex128")
+    output = TensorSpec("out", (0, 2), (3, 7), "dense", dtype="complex128", produced_by="contract")
+    node = ContractNode(
+        node_id="contract",
+        left=TensorView(tensor_id="left", labels=left.labels, shape=left.shape),
+        right=TensorView(tensor_id="right", labels=right.labels, shape=right.shape),
+        output=output,
+        contracted_labels=(1,),
+        output_labels=(0, 2),
+    )
+    dag = ContractionDAG(
+        tensors=(left, right),
+        nodes=(node,),
+        output=TensorView(tensor_id="out", labels=output.labels, shape=output.shape),
+    )
+    inputs = {
+        "left": np.arange(15, dtype=np.float64).reshape(3, 5).astype(np.complex128),
+        "right": np.arange(35, dtype=np.float64).reshape(5, 7).astype(np.complex128),
+    }
+    limits = M5TileLimits.float32(max_tile_dim=2, max_elements=64, max_packed_k=64)
+    monkeypatch.setattr(upmem_plan_module, "tile_limits_for_numeric_mode", lambda mode: limits)
+    monkeypatch.setattr(cpu, "_replay_limits", lambda policy: limits)
+    plan = upmem_plan_module.plan_upmem(
+        dag,
+        numeric_policy=FLOAT,
+        topology=upmem_plan_module.UpmemTopology(dpu_count=1, tasklets_per_dpu=1),
+    )
+    assert len(plan.stages[0].work_units) == 24
+    sample = replay_upmem_plan_once(dag, plan, inputs)
+    np.testing.assert_allclose(
+        sample.output, run_complex128_reference(dag, inputs), rtol=1e-5, atol=1e-5
+    )
+
+
+def test_replay_reduces_decoded_branches_in_producer_order() -> None:
+    a = TensorSpec("a", (0, 1), (1, 1), "dense", dtype="complex128")
+    b = TensorSpec("b", (1, 2), (1, 1), "dense", dtype="complex128")
+    c = TensorSpec("c", (0, 1), (1, 1), "dense", dtype="complex128")
+    d = TensorSpec("d", (1, 2), (1, 1), "dense", dtype="complex128")
+    p = TensorSpec("p", (0, 2), (1, 1), "dense", dtype="complex128", produced_by="first")
+    q = TensorSpec("q", (0, 2), (1, 1), "dense", dtype="complex128", produced_by="second")
+    summed = TensorSpec("sum", (0, 2), (1, 1), "dense", dtype="complex128", produced_by="reduce")
+
+    def contract(node_id: str, left: TensorSpec, right: TensorSpec, output: TensorSpec) -> ContractNode:
+        return ContractNode(
+            node_id=node_id,
+            left=TensorView(tensor_id=left.id, labels=left.labels, shape=left.shape),
+            right=TensorView(tensor_id=right.id, labels=right.labels, shape=right.shape),
+            output=output,
+            contracted_labels=(1,),
+            output_labels=(0, 2),
+        )
+
+    first = contract("first", a, b, p)
+    second = contract("second", c, d, q)
+    reduce = ReduceNode(
+        node_id="reduce",
+        inputs=(
+            TensorView(tensor_id="q", labels=q.labels, shape=q.shape),
+            TensorView(tensor_id="p", labels=p.labels, shape=p.shape),
+        ),
+        output=summed,
+        dependencies=("first", "second"),
+    )
+    dag = ContractionDAG(
+        tensors=(a, b, c, d),
+        nodes=(second, reduce, first),
+        output=TensorView(tensor_id="sum", labels=summed.labels, shape=summed.shape),
+    )
+    inputs = {
+        "a": np.array([[2 + 1j]], dtype=np.complex128),
+        "b": np.array([[3 - 1j]], dtype=np.complex128),
+        "c": np.array([[20 + 10j]], dtype=np.complex128),
+        "d": np.array([[30 - 10j]], dtype=np.complex128),
+    }
+    plan = upmem_plan_module.plan_upmem(
+        dag,
+        numeric_policy=INT8,
+        topology=upmem_plan_module.UpmemTopology(dpu_count=1, tasklets_per_dpu=1),
+    )
+    sample = replay_upmem_plan_once(dag, plan, inputs)
+    expected = run_cpu_once(dag, inputs, INT8).output
+    np.testing.assert_allclose(sample.output, expected, rtol=1e-5, atol=1e-5)
+    assert sample.measurement.host_reduce_s is not None
+    assert {item["node_id"] for item in sample.numeric_facts["operand_records"]} == {
+        "first",
+        "second",
+    }
+    scales = {
+        item["node_id"]: item["scale"]
+        for item in sample.numeric_facts["operand_records"]
+        if item["side"] == "left"
+    }
+    assert scales["first"] != scales["second"]
+
+
+def test_replay_supports_zero_and_pure_imaginary_inputs() -> None:
+    dag, _ = _contract_dag()
+    inputs = {
+        "x": np.zeros((2, 2), dtype=np.complex128),
+        "y": 1j * np.ones((2, 2), dtype=np.complex128),
+        "z": np.zeros((2, 2), dtype=np.complex128),
+    }
+    plan = upmem_plan_module.plan_upmem(
+        dag,
+        numeric_policy=INT8,
+        topology=upmem_plan_module.UpmemTopology(dpu_count=1, tasklets_per_dpu=1),
+    )
+    sample = replay_upmem_plan_once(dag, plan, inputs)
+    np.testing.assert_array_equal(sample.output, np.zeros((2, 2), dtype=np.complex64))
+    assert sample.numeric_facts["saturation_real"] == 0
+    assert sample.numeric_facts["saturation_imag"] == 0
+
+
+def test_replay_rejects_tampered_plan_before_timing() -> None:
+    dag, inputs = _contract_dag()
+    plan = upmem_plan_module.plan_upmem(
+        dag,
+        numeric_policy=FLOAT,
+        topology=upmem_plan_module.UpmemTopology(dpu_count=1, tasklets_per_dpu=1),
+    )
+    unit = plan.stages[0].work_units[0]
+    tampered = replace(
+        plan,
+        stages=(
+            replace(
+                plan.stages[0],
+                work_units=(replace(unit, estimated_input_bytes=unit.estimated_input_bytes + 1),),
+            ),
+            *plan.stages[1:],
+        ),
+    )
+    with pytest.raises(ValueError, match="differs from pure recomputation"):
+        replay_upmem_plan_once(dag, tampered, inputs)
+
+
+def test_replay_rejects_grouped_stage_and_nonsteady_scope() -> None:
+    dag, inputs = _contract_dag()
+    plan = upmem_plan_module.plan_upmem(
+        dag,
+        numeric_policy=FLOAT,
+        topology=upmem_plan_module.UpmemTopology(dpu_count=1, tasklets_per_dpu=1),
+    )
+    grouped = replace(
+        plan,
+        stages=(replace(plan.stages[0], node_ids=("first", "second")),),
+    )
+    with pytest.raises(UnsupportedExecution, match="singleton stages"):
+        replay_upmem_plan_once(dag, grouped, inputs)
+    with pytest.raises(UnsupportedExecution, match="timing scope"):
+        replay_upmem_plan_once(dag, plan, inputs, scope_id="simulation_end_to_end_v1")

@@ -176,8 +176,8 @@ silently migrated.
 ## T4-0/T6A Dependency Correction
 
 This documentation-only correction freezes the dependency order for the reset
-implementation. It does not redesign the final architecture or claim that any
-of these contracts are implemented at the current base.
+implementation. T6A, T4A, T4C, and T6B are implemented at the current base;
+T7 remains the next implementation task.
 
 Pure T6A numerics must be implemented before T4A results and CPU execution,
 because `run_cpu_once` consumes the final `NumericPolicy` contract. The
@@ -186,9 +186,9 @@ correct dependency order is:
 ```text
 T6A  pure numerics
   -> T4A  results and CPU single-run API
-  -> T4C  implement final UpmemStage/UpmemPlan schema
-  -> T6B  physical-plan CPU replay
-  -> T7   four real-product ABI execution
+  -> T4C  final UpmemStage/UpmemPlan schema (complete)
+  -> T6B  physical-plan CPU replay (complete)
+  -> T7   four real-product ABI execution (next)
   -> T4B1 UPMEM session API
   -> T4B2 removal of generic wrappers
   -> T5   evidence and experiment lifecycle
@@ -831,6 +831,97 @@ T13 may mark the branch software-ready. T14 is required before physical
 qualification. Hardware owner: `tkazulak`. Reservation/date, rank path, and
 SDK version are pending at T0.
 
+## T6B CPU Physical-Plan Replay Contract
+
+T6B adds one CPU-only policy reference for the final physical plan. It is not
+UPMEM execution, does not open a device session, and is not a performance
+baseline. Its purpose is to reproduce the arithmetic, tile coverage, K-chunk
+order, complex reconstruction, and host reduction that T7 must implement on
+the real ABI.
+
+The exact public function is:
+
+```python
+def replay_upmem_plan_once(
+    dag: ContractionDAG,
+    plan: UpmemPlan,
+    inputs: Mapping[str, np.ndarray],
+    *,
+    scope_id: str = "steady_execution_v1",
+) -> ExecutionSample: ...
+```
+
+Before timing, replay validates the DAG, inputs, physical plan, node/stage
+coverage, work-unit geometry, byte estimates, MRAM footprints, and complete
+non-duplicate tile/K coverage. It supports only `steady_execution_v1`, the
+current singleton `contract_batch` stages, and `host_reduce` stages. Grouped
+contract batches are deferred to T9. Unsupported scope or stage policy raises
+`UnsupportedExecution` before timing; malformed or tampered DAG, input, or
+plan data remains `ValueError`.
+
+For every contract, replay materializes complex `TensorView`s, lowers the real
+and imaginary float32 planes separately using the tile limits selected by the
+numeric policy, and performs unilateral-label reductions in float32 before
+host encoding. It verifies matching canonical metadata and exact
+correspondence between lowered tiles and final `UpmemWorkUnit`s. Canonical
+planes are combined into complex64 operands, and each canonical operand is
+encoded once using its shared complex scale. This pre-reduce-before-quantize
+order matches the intended physical route and may intentionally differ from
+`run_cpu_once` for int8 unilateral reductions.
+
+Each real ABI work unit executes the four products `rr`, `ii`, `ri`, and `ir`:
+
+```text
+rr = Are * Bre
+ii = Aim * Bim
+ri = Are * Bim
+ir = Aim * Bre
+```
+
+For `split_complex_float32_v1`, products and K-chunk assembly use ascending
+K order with float32 multiply/add operations. Float results are compared by
+tolerance; raw float32 hashes are diagnostic only. For
+`split_complex_int8_shared_scale_v1`, operands are int8, every K chunk uses
+explicit int8-by-int8 to int32 products, and chunks are assembled in
+ascending `k_start` order with int64 accumulation. Raw integer values are
+validated exactly.
+
+Every branch is decoded before host reduction because branch scales can differ.
+An explicit DAG `ReduceNode` reduces decoded complex64 branches in
+producer-node-ID order. `host_reduce_s` measures only this reduction; it does
+not include tile K assembly or output reconstruction.
+
+The replay must validate every final work unit by tile ID, B/M/K/N extents,
+byte estimates, MRAM footprint, and complete non-duplicate coverage. Hashing
+is outside `total_wall_s`. Raw lane facts are keyed by
+`node_id/stable_tile_id/lane`, where lane is `rr`, `ii`, `ri`, or `ir`. Each
+fact records dtype, shape, and a hash of canonical little-endian bytes:
+`<f4` for diagnostic float data and `<i4` for exact int data. Facts also
+record encoded input-plane payload hashes, shared scales, and saturation
+counts.
+
+The authoritative measurement records `total_wall_s` plus `preparation_s`,
+`encode_s`, `kernel_s`, `decode_s`, and `host_reduce_s`. H2D, D2H, session,
+and energy fields remain null. `decode_s` includes K-chunk assembly, output
+reconstruction, and complex decoding. `host_reduce_s` includes only explicit
+DAG `ReduceNode` work.
+
+Required backend facts are:
+
+```text
+backend_id: cpu_upmem_plan_replay_v1
+execution_class: cpu_physical_plan_reference
+physical_plan_id: <the consumed plan identity>
+physical_plan_consumed: true
+topology fields: requested DPU, tasklet, and rank values
+hardware_execution: false
+```
+
+Expected preparation, encoding, kernel, decode, and reduction failures raise
+`ExecutionFailed` at their corresponding phase. T7 must emit matching int8
+raw lane hashes so exact physical validation can compare the same products;
+this requirement does not change the `UpmemPlan` schema.
+
 ## Ordered Tasks
 
 ```text
@@ -844,9 +935,9 @@ T3    planner isolation
 T4-0  dependency correction; contract frozen, implementation pending
 T6A   pure complex encoding/decoding
 T4A   results and CPU single-run API
-T4C   implement final UpmemStage/UpmemPlan schema
-T6B   CPU physical-plan replay
-T7    complex UPMEM execution
+T4C   final UpmemStage/UpmemPlan schema (complete)
+T6B   CPU physical-plan replay (complete)
+T7    complex UPMEM execution (next)
 T4B1  UPMEM session API
 T4B2  remove generic execution wrappers and migrate callers
 T5A   evidence schemas and identities

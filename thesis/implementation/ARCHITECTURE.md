@@ -117,6 +117,15 @@ preceding.
 During the migration, the final public plan records temporarily coexist with
 privately aliased legacy records until T4B2. This is not the permanent design.
 
+The implemented bounded component is `replay_upmem_plan_once` in the CPU execution
+boundary. It is a policy reference for one final `UpmemPlan`, not UPMEM
+execution or a performance baseline. It validates the exact tile and K-chunk
+coverage, uses policy-specific float32 or host-packed-int8 limits, executes
+`rr/ii/ri/ir` per real ABI work unit, decodes branches before deterministic
+producer-ID host reduction, and emits raw lane facts for T7 differential
+validation. It records only CPU policy-reference timing; device transfer,
+session, hardware, and energy fields remain unavailable.
+
 Tasklet scheduling, slice-stage scheduling, and intermediate residency are
 planned extensions. They are not implemented or claimable by the current v4
 mapping.
@@ -142,7 +151,8 @@ is currently implemented:
 
 Tasklet scheduling, slice-stage scheduling, and DPU-resident intermediate
 execution are planned work. The current mapping does not support claims for
-those mechanisms. Allocation alone is not parallel execution.
+those mechanisms. Allocation alone is not parallel execution. T6B is implemented
+and provides the CPU policy reference; T7 is the next implementation task.
 
 ## Numerics
 
@@ -222,12 +232,13 @@ The active physical adapter is
 at `native/upmem/runtime/`. Historical M5/v4 Python and native modules are not
 imported by the active path. The completed T1A-D ownership migration is
 followed by the corrected task order above. T6A pure split-complex numerics,
-T4A immutable results and direct CPU single-run execution, and T4C final
-staged UPMEM mapping are complete and verified. T4C currently emits singleton
+T4A immutable results and direct CPU single-run execution, T4C final staged
+UPMEM mapping, and T6B CPU physical-plan replay are complete and verified.
+T4C currently emits singleton
 contract stages plus host reductions; it does not claim complex physical
 execution, slice grouping, residency, tasklet scheduling, physical validation,
-speedup, scaling, or energy. The next implementation work is T6B CPU replay of
-the physical UPMEM plan, followed by T7, T4B1, T4B2, and T5. Configuration,
+speedup, scaling, or energy. The next implementation work is T7 four-real-product
+ABI execution, followed by T4B1, T4B2, and T5. Configuration,
 reporting, cleanup, software qualification, and later ETH qualification remain
 subsequent work.
 

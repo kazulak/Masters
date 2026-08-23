@@ -220,8 +220,23 @@ speedup, scaling, or energy.
 The focused final UPMEM set passed 145 tests; an independent reviewer accepted
 the implementation with no P0/P1 findings. The corrected full-suite checkpoint
 passed 1419 tests in 185.46s. Ruff was clean across `src` and `tests`, and
-`git diff --check` passed. The next task is T6B: CPU replay of the physical
-UPMEM plan.
+`git diff --check` passed.
+
+## T6B CPU Physical-Plan Replay
+
+T6B is complete. `replay_upmem_plan_once` consumes the final `UpmemPlan` and
+reproduces its real-tile geometry, K-chunk order, split-complex arithmetic, and
+decoded host reductions on the CPU. It is a policy oracle for T7 differential
+validation, not a UPMEM executor or performance baseline.
+
+The replay records canonical operand scales, saturation counts, payload hashes,
+and per-tile `rr`/`ii`/`ri`/`ir` hashes outside its timed region. Focused tests
+cover float32 and shared-scale int8, one-sided reductions before encoding,
+remainder tiles, exact int8 multi-K-chunk assembly, decoded branch reduction,
+and malformed-plan rejection. The focused gate passed 101 tests. An independent
+review found no implementation P0 defect; its two P1 coverage findings were
+added before acceptance. The full-suite checkpoint passed 1431 tests in
+186.81s, Ruff was clean, and `git diff --check` passed. T7 is next.
 
 ## Complexity Delta
 
@@ -259,8 +274,9 @@ wc -l`, and `rg '^[A-Za-z0-9_.-]+:' Makefile | wc -l`.
     single-run API, independently verified by 43 focused tests and Ruff.
 11. T4C: complete; final staged `UpmemStage`/`UpmemPlan` mapper verified by
     145 focused tests and the corrected full-suite checkpoint.
-12. T6B: next; implement CPU replay of the physical UPMEM plan.
-13. T7: execute complex policies through the unchanged real-tile ABI v4.
+12. T6B: complete; CPU physical-plan replay verified by 101 focused tests and
+    the 1431-test full-suite checkpoint.
+13. T7: next; execute complex policies through the unchanged real-tile ABI v4.
 14. T4B1: add the UPMEM session and single-run API.
 15. T4B2: remove generic execution wrappers and migrate callers.
 16. T5A: add evidence schemas and identity serialization.
