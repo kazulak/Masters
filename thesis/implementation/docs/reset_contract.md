@@ -184,7 +184,7 @@ src/quantum_bench/
   upmem/native_session.py upmem/runtime.py
 ```
 
-The reset target native tree is:
+The T1C staged, self-contained native tree is:
 
 ```text
 native/upmem/runtime/
@@ -227,27 +227,35 @@ make -C native/upmem/simplepim/upmem_sdk_execution_plan v4 NR_TASKLETS=1
 `NR_TASKLETS` may be selected in the active v4 range `1..24`. This is the
 current base command and tree, not the reset target.
 
-### T1C Target Build
+### T1C Staged Build Validation
 
-The following command is the T1C target contract and is not an active T0
-command:
+The ABI-v4 native staging tree is below. It is not the active execution path
+until T1D; the current `m5_circuit_commands` and coordinator still use the old
+mixed tree at `native/upmem/simplepim/upmem_sdk_execution_plan/` and its
+existing Python v4 executor. The following command builds only ABI v4 in the
+staged tree:
 
 ```text
 make -C native/upmem/runtime NR_TASKLETS=<1..24> all
 ```
 
-T1C must create the self-contained target tree, then T1D moves the runtime
-coordinator. T0 does not claim that `native/upmem/runtime` exists or builds.
+T1D must switch Python discovery and the coordinator to this tree, then delete
+the old v4-specific sources and old Make v4 targets in the same batch. The
+staged provider is deliberately the current raw-SDK v4 provider with explicit
+rank selection, allocation verification, management metadata construction,
+initialization-binary launch, and release.
 
 ### SimplePIM Provider Contract
 
-The future `simplepim_provider` must:
+The staged `simplepim_provider` does:
 
 1. allocate exactly the requested DPU count on an explicit rank path; it must
    not auto-select another rank or silently allocate a different count;
-2. call `table_management_init_with_profile` with the declared profile;
-3. launch the initialization binary and verify its terminal metadata before
-   exposing the allocation;
+2. construct SimplePIM management metadata after allocation; it does not call
+   `table_management_init_with_profile`;
+3. require successful SDK `dpu_load` followed by synchronous SDK
+   `dpu_launch` of the initialization binary before exposing management
+   metadata; there is no separate initialization terminal record;
 4. expose requested rank path, requested DPU count, allocated DPU count,
    observed rank/topology, initialization binary identity, and allocation
    verification;
@@ -257,18 +265,19 @@ The future `simplepim_provider` must:
 6. expose release attempted, release succeeded, and release verification.
 
 Failure to verify allocation or release is a failed run, not a successful run
-with incomplete metadata.
-
-The T1C target native build command is not active at T0:
-
-```text
-make -C native/upmem/runtime NR_TASKLETS=<1..24> all
-```
+with incomplete metadata. The copied management-profile patch is retained as
+provenance only. Its profile initializer is not an active v4 build input:
+the patch's backend syntax is incompatible with explicit `rankPath` allocation.
 
 Required SimplePIM inputs are commit
 `1d639c53532555f01e9f71d872e7712b166d6cba` and management patch SHA-256
 `5ac09fd1c0a25c234e44615540f2e1585ce162a27a2d4215e5992ddbdf549a0d`.
-These inputs do not mean SimplePIM compute is active in T0.
+These inputs do not mean SimplePIM compute is active. The v4 compute kernel is
+raw UPMEM SDK code using SimplePIM management metadata/types and the
+initialization source; it is not a SimplePIM operator. The source-string tests
+are drift tripwires for this staged source contract, not runtime or hardware
+tests. Clean local SDK builds passed for `NR_TASKLETS=1` and `24`; physical
+behavior remains unqualified until T1D activation and later ETH qualification.
 
 ## Session Evidence
 

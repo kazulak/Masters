@@ -15,6 +15,19 @@ This file separates the reset target from the implementation at commit
 
 ## Current State
 
+T1C native correction: `native/upmem/runtime/` is the staged, self-contained
+ABI-v4 native tree, not yet the active execution path. Until T1D,
+`m5_circuit_commands` and its coordinator still discover and use the old
+mixed tree at `native/upmem/simplepim/upmem_sdk_execution_plan/` together with
+the existing Python v4 executor. The staged provider preserves raw UPMEM SDK
+allocation on an explicit rank path, allocation verification, manual
+SimplePIM management metadata construction, initialization-binary launch,
+and release. It does not call `table_management_init_with_profile`; the copied
+management-profile patch is provenance only because its profile syntax is
+incompatible with explicit rank selection. The v4 compute kernel is raw SDK
+code using SimplePIM metadata and initialization types, not a SimplePIM
+operator.
+
 | Area | Base state | Qualification and claim status |
 |---|---|---|
 | Circuit and TN code | Existing circuit, TN, and DAG modules exist. | Existing behavior only; the reset model/lowering boundary is planned. |
@@ -31,6 +44,11 @@ This file separates the reset target from the implementation at commit
 | SimplePIM | Pinned external sources and historical management-assisted routes exist. | SimplePIM compute integration is not active in the reset baseline. |
 | PID-Comm, ATiM, SparseP | Repository/history references exist. | Not active in the reset baseline. |
 | Physical UPMEM | Historical bounded physical capsules exist. | Reset architecture is pending physical qualification. |
+
+T1C source-string tests are drift tripwires for the staged ABI/source
+contract; they are not runtime or hardware tests. Clean local SDK builds of
+the staged tree were performed at `NR_TASKLETS=1` and `24`. Physical behavior
+remains unqualified until the later T1D activation and ETH qualification.
 
 ## Claim Boundary
 

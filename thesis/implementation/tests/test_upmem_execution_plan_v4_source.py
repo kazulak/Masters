@@ -5,11 +5,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PLAN = ROOT / "native" / "upmem" / "simplepim" / "upmem_sdk_execution_plan"
+PLAN = ROOT / "native" / "upmem" / "runtime"
 
 
 def test_v4_abi_is_separate_and_supports_bounded_request_batches() -> None:
-    common = (PLAN / "execution_plan_v4_common.h").read_text(encoding="ascii")
+    common = (PLAN / "protocol.h").read_text(encoding="ascii")
     assert struct.calcsize("<8s10I7Q32s32s") == 168
     assert struct.calcsize("<2I5Q9I") == 84
     assert struct.calcsize("<18I") == 72
@@ -27,9 +27,9 @@ def test_v4_abi_is_separate_and_supports_bounded_request_batches() -> None:
 
 
 def test_v4_validation_is_bounded_not_global_output_claim() -> None:
-    sidecar = (PLAN / "distributed_plan_v4.c").read_text(encoding="ascii")
-    request = (PLAN / "plan_request_v4.c").read_text(encoding="ascii")
-    common = (PLAN / "execution_plan_v4_common.h").read_text(encoding="ascii")
+    sidecar = (PLAN / "plan.c").read_text(encoding="ascii")
+    request = (PLAN / "request.c").read_text(encoding="ascii")
+    common = (PLAN / "protocol.h").read_text(encoding="ascii")
     assert "covered != header->request_output_elements" in sidecar
     assert "area != header->request_output_elements" in request
     assert "global_output_elements" in sidecar
@@ -59,11 +59,11 @@ def test_v4_validation_is_bounded_not_global_output_claim() -> None:
 
 
 def test_v4_session_contract_is_physical_bulk_and_fail_closed() -> None:
-    host = (PLAN / "host_v4_session.c").read_text(encoding="ascii")
+    host = (PLAN / "host.c").read_text(encoding="ascii")
     assert "UPMEM_ALLOW_PHYSICAL_HARDWARE" in host
     assert 'getenv("DPU_BACKEND")' in host
     assert 'getenv("UPMEM_EXECUTION_MODE")' in host
-    assert "execution_plan_provider_init_on_rank" in host
+    assert "upmem_v4_provider_init_on_rank" in host
     assert "dpu_load(v4_provider.set, dpu_binary, NULL)" in host
     assert "dpu_launch(v4_provider.set, DPU_SYNCHRONOUS)" in host
     assert "task_contract_sha256" in host
@@ -82,7 +82,7 @@ def test_v4_session_contract_is_physical_bulk_and_fail_closed() -> None:
     assert 'simulator_kernel_executed\\":false' in host
     assert 'cpu_fallback_used\\":false' in host
     assert "v4_release_done" in host
-    assert "execution_plan_provider_release" in host
+    assert "upmem_v4_provider_release" in host
     assert "dpu_free_called_once = v4_provider.allocation_active" in host
     assert "request_sequence must increase" in host
     assert "release_proof" not in host
@@ -98,7 +98,7 @@ def test_v4_session_contract_is_physical_bulk_and_fail_closed() -> None:
 
 
 def test_v4_kernel_is_integer_or_float_tile_only_with_aligned_dma() -> None:
-    dpu = (PLAN / "dpu_gemm_tile_v4.c").read_text(encoding="ascii")
+    dpu = (PLAN / "dpu.c").read_text(encoding="ascii")
     assert "__mram_noinit uint8_t V4_MRAM" in dpu
     assert (
         "V4_CONTROL.numeric_mode == EXECUTION_PLAN_V4_NUMERIC_HOST_PACKED_INT8" in dpu
@@ -114,7 +114,7 @@ def test_v4_kernel_is_integer_or_float_tile_only_with_aligned_dma() -> None:
 
 
 def test_v4_output_writer_closes_each_file_once() -> None:
-    request = (PLAN / "plan_request_v4.c").read_text(encoding="ascii")
+    request = (PLAN / "request.c").read_text(encoding="ascii")
     writer = request.split("int execution_plan_v4_request_write_output", 1)[1].split(
         "void execution_plan_v4_request_free", 1
     )[0]
@@ -124,11 +124,25 @@ def test_v4_output_writer_closes_each_file_once() -> None:
 
 def test_v4_makefile_has_tasklet_keyed_binaries_without_changing_v3_rules() -> None:
     makefile = (PLAN / "Makefile").read_text(encoding="ascii")
-    assert "V4_MAX_TASKLETS := 24" in makefile
+    assert "MAX_TASKLETS := 24" in makefile
     assert "bin/host_upmem_execution_plan_v4_t%" in makefile
     assert "bin/dpu_gemm_tile_v4_t%" in makefile
     assert "NR_TASKLETS=$*" in makefile
     assert "v4 requires NR_TASKLETS in [1,24]" in makefile
-    assert "host_upmem_execution_plan_v3_t%" in makefile
-    assert "dpu_resident_v3_t%" in makefile
-    assert "v4" not in makefile.split("all:", 1)[1].split("bin:", 1)[0]
+    assert "host_upmem_execution_plan_v3" not in makefile
+    assert "dpu_resident_v3" not in makefile
+    assert "execution_plan_v4" in makefile
+
+
+def test_v4_runtime_has_no_historical_source_dependency() -> None:
+    files = tuple(PLAN.glob("*"))
+    text = "\n".join(
+        path.read_text(encoding="ascii", errors="ignore")
+        for path in files
+        if path.is_file() and path.name != "simplepim_management_profile.patch"
+    )
+    assert "upmem_sdk_execution_plan" not in text
+    assert "execution_plan_v2_common" not in text
+    assert "execution_plan_v3_common" not in text
+    assert "table_management_init_with_profile" not in text
+    assert (PLAN / "simplepim_management_profile.patch").is_file()

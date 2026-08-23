@@ -128,7 +128,23 @@ Update this table after each integration batch.
 - SimplePIM management patch SHA-256: `5ac09fd1c0a25c234e44615540f2e1585ce162a27a2d4215e5992ddbdf549a0d`
 - T0 active v4 tree: `native/upmem/simplepim/upmem_sdk_execution_plan/`
 - T0 active v4 build command: `make -C native/upmem/simplepim/upmem_sdk_execution_plan v4 NR_TASKLETS=1`
-- T1C target build command, not active at T0: `make -C native/upmem/runtime NR_TASKLETS=<1..24> all`
+- T1C staged/self-contained v4 tree: `native/upmem/runtime/`
+- T1C local build command: `make -C native/upmem/runtime NR_TASKLETS=<1..24> all`
 
-These are build inputs, not evidence that SimplePIM compute is active in the
-reset baseline.
+The T1C correction is intentional: the staged provider uses raw SDK allocation
+with an explicit `backend=hw,rankPath=...` profile, verifies the allocation,
+manually constructs SimplePIM management metadata, successfully calls SDK
+`dpu_load` and synchronous `dpu_launch` for the initialization binary, and
+releases the set. There is no separate initialization terminal record. It does
+not call `table_management_init_with_profile`; the copied management-profile
+patch is provenance only because its profile syntax is incompatible with
+explicit rank selection. The v4 compute kernel is raw SDK code, not a
+SimplePIM operator. These inputs are not evidence of SimplePIM compute
+integration.
+
+Until T1D, `m5_circuit_commands` and its coordinator still use the old mixed
+Python/native tree. T1D is one activation gate: switch Python discovery and
+the coordinator to `native/upmem/runtime/`, then delete the old v4-specific
+sources and old Make v4 targets in that same batch. The T1C source-string
+tests are drift tripwires; clean local SDK builds at tasklets 1 and 24 passed,
+but physical behavior remains unqualified.
