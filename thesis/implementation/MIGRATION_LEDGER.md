@@ -332,6 +332,26 @@ with T8.
 These artifacts are software contracts only; T5 does not promote historical
 evidence or establish simulator, physical, speedup, scaling, or energy claims.
 
+## T8 One-Pass Logical Slicing
+
+T8 is complete in software. `choose_slice_labels` deterministically selects
+contracted labels by descending dimension and ascending label until the
+requested slice count is reached. `slice_contraction` performs one Cartesian
+rewrite over those labels, preserves original-axis fixed-index metadata,
+creates exactly one reduction, and rewrites downstream dependencies once.
+The compatibility `apply_slicing` route retains its historical single-label
+IDs when no collision exists.
+
+Generated partial, output, and reduction IDs use a deterministic occupied-ID
+allocator, so valid existing DAG IDs cannot collide with the rewrite. Tests
+cover canonical label order, dimension ties, impossible requests, four-way
+slicing, remaining unsliced contraction labels, original axes, downstream
+rewrites, existing-ID collisions, exact output-view preservation, CPU parity,
+and the historical UPMEM consumer. The focused gate passed 82 tests and Ruff.
+Independent re-review found no remaining P0/P1 issue. The stable full-suite
+checkpoint passed 1559 tests in 203.13 seconds. This is local logical slicing
+only; T9 maps its branches into physical stages.
+
 ## Complexity Delta
 
 Update this table after each integration batch.
@@ -384,7 +404,8 @@ wc -l`, and `rg '^[A-Za-z0-9_.-]+:' Makefile | wc -l`.
 18. T5C: complete; normalize timing scopes and install terminal aggregate
     admission. Historical emitters remain only with historical commands until
     T12.
-19. T8: implement one-pass logical multi-label slicing.
+19. T8: complete; implement one-pass logical multi-label slicing with
+    deterministic collision-free generated IDs.
 20. T9: add deterministic slice batches and host reduction stages.
 21. T10A: add the Quimb/cotengra direct baseline.
 22. T10B: add the QuEST CPU direct baseline.

@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import replace
+from itertools import product
 from typing import Iterable, Mapping, Sequence
 
 from quantum_bench.circuits import gate_structure, gate_tensor
@@ -110,7 +111,9 @@ def validate_tensor_inputs(
     if set(inputs) != set(specs):
         missing = sorted(set(specs) - set(inputs))
         extra = sorted(set(inputs) - set(specs))
-        raise ValueError(f"Tensor input ids do not match network: missing={missing} extra={extra}")
+        raise ValueError(
+            f"Tensor input ids do not match network: missing={missing} extra={extra}"
+        )
     for tensor_id, value in inputs.items():
         array = np.asarray(value)
         if tuple(array.shape) != specs[tensor_id].shape:
@@ -139,7 +142,9 @@ def validate_dag_inputs(
     if actual_ids != expected_ids:
         missing = sorted(expected_ids - actual_ids)
         extra = sorted(actual_ids - expected_ids)
-        raise ValueError(f"Tensor input ids do not match DAG: missing={missing} extra={extra}")
+        raise ValueError(
+            f"Tensor input ids do not match DAG: missing={missing} extra={extra}"
+        )
     for tensor_id, value in inputs.items():
         array = np.asarray(value)
         descriptor = specs[tensor_id]
@@ -162,70 +167,148 @@ def build_full_einsum_expression(
     if not supports_string_einsum(label_sets, output_labels):
         return f"{LABEL_LIST_EINSUM_SENTINEL}:labels={label_count(label_sets, output_labels)}"
     symbols = index_symbols([tensor.labels for tensor in tensors], output_labels)
-    operands = ["".join(symbols[label] for label in tensor.labels) for tensor in tensors]
+    operands = [
+        "".join(symbols[label] for label in tensor.labels) for tensor in tensors
+    ]
     output = "".join(symbols[label] for label in output_labels)
     return ",".join(operands) + "->" + output
 
 
-def apply_slicing(dag: ContractionDAG, spec: SliceSpec) -> ContractionDAG:
-    """Rewrite one contraction into fixed-index partials and one reduction.
+def choose_slice_labels(
+    node: ContractNode, *, minimum_slice_count: int
+) -> tuple[int, ...]:
+    """Choose contracted labels whose Cartesian slices reach a minimum count."""
 
-    This intentionally supports exactly one contracted label.  Target-local
-    tiling remains outside the semantic graph and is not represented here.
-    """
+    if (
+        isinstance(minimum_slice_count, bool)
+        or not isinstance(minimum_slice_count, int)
+        or minimum_slice_count < 2
+    ):
+        raise ValueError("minimum_slice_count must be at least 2")
+
+    candidates = [
+        (label, _label_dimension_from_views(label, node.left, node.right))
+        for label in node.contracted_labels
+    ]
+    candidates = [candidate for candidate in candidates if candidate[1] > 1]
+    candidates.sort(key=lambda candidate: (-candidate[1], candidate[0]))
+
+    selected: list[int] = []
+    slice_count = 1
+    for label, dimension in candidates:
+        selected.append(label)
+        slice_count *= dimension
+        if slice_count >= minimum_slice_count:
+            return tuple(selected)
+    raise ValueError(
+        f"Cannot reach minimum slice count {minimum_slice_count} from contracted dimensions"
+    )
+
+
+def slice_contraction(
+    dag: ContractionDAG, *, node_id: str, labels: tuple[int, ...]
+) -> ContractionDAG:
+    """Rewrite one contraction into Cartesian fixed-index partials and a reduction."""
 
     validate_contraction_dag(dag)
     target_index = next(
-        (index for index, node in enumerate(dag.nodes) if node.node_id == spec.node_id),
+        (index for index, node in enumerate(dag.nodes) if node.node_id == node_id),
         None,
     )
     if target_index is None:
-        raise ValueError(f"Unknown slice node {spec.node_id!r}")
+        raise ValueError(f"Unknown slice node {node_id!r}")
     target = dag.nodes[target_index]
     if not isinstance(target, ContractNode):
-        raise ValueError(f"Slice node {spec.node_id!r} is not a contract node")
+        raise ValueError(f"Slice node {node_id!r} is not a contract node")
     if target.left.slice_spec or target.right.slice_spec:
         raise ValueError(
-            f"Slice node {spec.node_id!r} already has fixed input indices; "
+            f"Slice node {node_id!r} already has fixed input indices; "
             "nested slicing is unsupported"
         )
-    if spec.label not in target.contracted_labels:
+
+    if not labels:
+        raise ValueError("Slice labels must be nonempty")
+    if any(isinstance(label, bool) or not isinstance(label, int) for label in labels):
+        raise ValueError("Slice labels must be integers")
+    if len(set(labels)) != len(labels):
+        raise ValueError("Slice labels must be unique")
+    if any(label not in target.contracted_labels for label in labels):
         raise ValueError(
-            f"Label {spec.label} is not contracted by node {spec.node_id!r}"
+            f"Slice labels {labels} are not contracted by node {node_id!r}"
         )
 
-    dimension = _label_dimension_from_views(spec.label, target.left, target.right)
-    if dimension <= 1:
-        raise ValueError(f"Cannot slice contracted label {spec.label} with dimension {dimension}")
+    canonical_labels = tuple(sorted(labels))
+    dimensions = tuple(
+        _label_dimension_from_views(label, target.left, target.right)
+        for label in canonical_labels
+    )
+    if any(dimension <= 1 for dimension in dimensions):
+        invalid = next(
+            (label, dimension)
+            for label, dimension in zip(canonical_labels, dimensions)
+            if dimension <= 1
+        )
+        raise ValueError(
+            f"Cannot slice contracted label {invalid[0]} with dimension {invalid[1]}"
+        )
 
     partial_nodes: list[ContractNode] = []
     partial_views: list[TensorView] = []
-    for value in range(dimension):
-        left = _fix_view(target.left, spec.label, value)
-        right = _fix_view(target.right, spec.label, value)
-        partial_node_id = f"{target.node_id}__slice_{spec.label}_{value}"
-        partial_output_id = f"{target.output.id}__slice_{spec.label}_{value}"
-        partial_output = replace(target.output, id=partial_output_id, produced_by=partial_node_id)
+    occupied_node_ids = {node.node_id for node in dag.nodes if node is not target}
+    occupied_tensor_ids = {tensor.id for tensor in dag.tensors}
+    occupied_tensor_ids.update(
+        node.output.id for node in dag.nodes if node is not target
+    )
+    occupied_tensor_ids.add(target.output.id)
+    remaining_labels = tuple(
+        label for label in target.contracted_labels if label not in canonical_labels
+    )
+    for values in product(*(range(dimension) for dimension in dimensions)):
+        assignments = tuple(zip(canonical_labels, values))
+        if len(assignments) == 1:
+            assignment_id = f"{assignments[0][0]}_{assignments[0][1]}"
+            slice_separator = "_"
+        else:
+            assignment_id = "__".join(
+                f"label_{label}_value_{value}" for label, value in assignments
+            )
+            slice_separator = "__"
+        left = _fix_view(target.left, assignments)
+        right = _fix_view(target.right, assignments)
+        partial_node_id = _unique_generated_id(
+            f"{target.node_id}__slice{slice_separator}{assignment_id}",
+            occupied_node_ids,
+        )
+        partial_output_id = _unique_generated_id(
+            f"{target.output.id}__slice{slice_separator}{assignment_id}",
+            occupied_tensor_ids,
+        )
+        partial_output = replace(
+            target.output, id=partial_output_id, produced_by=partial_node_id
+        )
         partial_node = replace(
             target,
             node_id=partial_node_id,
             left=left,
             right=right,
             output=partial_output,
-            contracted_labels=tuple(
-                label for label in target.contracted_labels if label != spec.label
-            ),
+            contracted_labels=remaining_labels,
         )
         partial_nodes.append(partial_node)
         partial_views.append(_view(partial_output))
 
-    reduce_node_id = f"{target.node_id}__reduce_{spec.label}"
+    if len(canonical_labels) == 1:
+        reduction_base = f"{target.node_id}__reduce_{canonical_labels[0]}"
+    else:
+        reduction_id = "__".join(f"label_{label}" for label in canonical_labels)
+        reduction_base = f"{target.node_id}__reduce__{reduction_id}"
+    reduce_node_id = _unique_generated_id(reduction_base, occupied_node_ids)
     reduced_output = replace(target.output, produced_by=reduce_node_id)
     reduce_node = ReduceNode(
         node_id=reduce_node_id,
         inputs=tuple(partial_views),
         output=reduced_output,
-        reduced_labels=(spec.label,),
+        reduced_labels=canonical_labels,
         dependencies=tuple(node.node_id for node in partial_nodes),
     )
 
@@ -248,6 +331,12 @@ def apply_slicing(dag: ContractionDAG, spec: SliceSpec) -> ContractionDAG:
     rewritten = replace(dag, nodes=tuple(rewritten_nodes))
     validate_contraction_dag(rewritten)
     return rewritten
+
+
+def apply_slicing(dag: ContractionDAG, spec: SliceSpec) -> ContractionDAG:
+    """Compatibility wrapper for one-label contraction slicing."""
+
+    return slice_contraction(dag, node_id=spec.node_id, labels=(spec.label,))
 
 
 def build_contraction_dag(
@@ -280,7 +369,9 @@ def build_contraction_dag(
         active = list(next_active)
 
     if len(active) != 1:
-        raise ValueError(f"Contraction path ended with {len(active)} active tensors; expected one")
+        raise ValueError(
+            f"Contraction path ended with {len(active)} active tensors; expected one"
+        )
 
     output = _view(active[0])
     if output.labels != tuple(spec.output_labels):
@@ -305,7 +396,9 @@ def build_contract_node(
 
     normalized_pair = tuple(int(item) for item in pair)
     if len(normalized_pair) != 2:
-        raise ValueError(f"Only binary contraction paths are supported; got {normalized_pair}")
+        raise ValueError(
+            f"Only binary contraction paths are supported; got {normalized_pair}"
+        )
     i, j = sorted(normalized_pair)
     if i < 0 or i == j or j >= len(active):
         raise ValueError(
@@ -323,7 +416,9 @@ def build_contract_node(
             label for label in left.labels + right.labels if label not in output_labels
         )
     )
-    output_shape = tuple(_label_dimension(label, left, right) for label in output_labels)
+    output_shape = tuple(
+        _label_dimension(label, left, right) for label in output_labels
+    )
     output = TensorSpec(
         id=output_id,
         labels=output_labels,
@@ -370,7 +465,9 @@ def validate_contraction_dag(dag: ContractionDAG) -> None:
     for node in dag.nodes:
         for dependency in node.dependencies:
             if dependency not in nodes:
-                raise ValueError(f"Node {node.node_id} has unknown dependency {dependency}")
+                raise ValueError(
+                    f"Node {node.node_id} has unknown dependency {dependency}"
+                )
     _validate_dependencies(nodes)
 
     for node in dag.nodes:
@@ -391,16 +488,19 @@ def validate_contraction_dag(dag: ContractionDAG) -> None:
         else:
             _validate_reduce_algebra(node, descriptors)
         input_producers = {
-            produced[view.tensor_id]
-            for view in views
-            if view.tensor_id in produced
+            produced[view.tensor_id] for view in views if view.tensor_id in produced
         }
         if input_producers != set(node.dependencies):
             raise ValueError(
                 f"Node {node.node_id} dependencies do not match producers of consumed tensors"
             )
-        if isinstance(node, ContractNode) and node.left.tensor_id == node.right.tensor_id:
-            raise ValueError(f"Contract node {node.node_id} contracts a tensor with itself")
+        if (
+            isinstance(node, ContractNode)
+            and node.left.tensor_id == node.right.tensor_id
+        ):
+            raise ValueError(
+                f"Contract node {node.node_id} contracts a tensor with itself"
+            )
 
     output_ids = set(tensor_specs) | set(produced)
     if dag.output.tensor_id not in output_ids:
@@ -423,7 +523,9 @@ def contraction_dag_hash(dag: ContractionDAG) -> str:
         ),
         "output": _semantic_view_payload(dag, dag.output),
     }
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    encoded = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -438,16 +540,34 @@ def _label_dimension_from_views(label: int, left: TensorView, right: TensorView)
     raise ValueError(f"Contracted label {label} is absent from both source views")
 
 
-def _fix_view(view: TensorView, label: int, value: int) -> TensorView:
-    if label not in view.labels:
-        return view
-    axis = view.labels.index(label)
+def _fix_view(view: TensorView, assignments: tuple[tuple[int, int], ...]) -> TensorView:
+    values = dict(assignments)
+    fixed = tuple(
+        (axis, values[label])
+        for axis, label in enumerate(view.labels)
+        if label in values
+    )
+    fixed_axes = {axis for axis, _ in fixed}
     return TensorView(
         tensor_id=view.tensor_id,
-        labels=view.labels[:axis] + view.labels[axis + 1 :],
-        shape=view.shape[:axis] + view.shape[axis + 1 :],
-        slice_spec=view.slice_spec + ((axis, value),),
+        labels=tuple(
+            label for axis, label in enumerate(view.labels) if axis not in fixed_axes
+        ),
+        shape=tuple(
+            size for axis, size in enumerate(view.shape) if axis not in fixed_axes
+        ),
+        slice_spec=view.slice_spec + fixed,
     )
+
+
+def _unique_generated_id(base: str, occupied: set[str]) -> str:
+    candidate = base
+    suffix = 1
+    while candidate in occupied:
+        candidate = f"{base}__generated_{suffix}"
+        suffix += 1
+    occupied.add(candidate)
+    return candidate
 
 
 def _validate_view(
@@ -459,21 +579,31 @@ def _validate_view(
     if descriptor is None:
         raise ValueError(f"Node {owner} references unknown tensor {view.tensor_id}")
     if len(view.labels) != len(view.shape):
-        raise ValueError(f"Tensor view {view.tensor_id} has mismatched labels and shape")
+        raise ValueError(
+            f"Tensor view {view.tensor_id} has mismatched labels and shape"
+        )
     fixed_axes: set[int] = set()
     for item in view.slice_spec:
         if not isinstance(item, tuple) or len(item) != 2:
-            raise ValueError(f"Tensor view {view.tensor_id} has invalid fixed index {item!r}")
+            raise ValueError(
+                f"Tensor view {view.tensor_id} has invalid fixed index {item!r}"
+            )
         axis, value = item
         if not isinstance(axis, int) or not isinstance(value, int):
-            raise ValueError(f"Tensor view {view.tensor_id} has invalid fixed index {item!r}")
+            raise ValueError(
+                f"Tensor view {view.tensor_id} has invalid fixed index {item!r}"
+            )
         if axis in fixed_axes:
             raise ValueError(f"Tensor view {view.tensor_id} has duplicate fixed axes")
         fixed_axes.add(axis)
         if axis < 0 or axis >= len(descriptor.labels):
-            raise ValueError(f"Tensor view {view.tensor_id} has invalid fixed axis {axis}")
+            raise ValueError(
+                f"Tensor view {view.tensor_id} has invalid fixed axis {axis}"
+            )
         if value < 0 or value >= descriptor.shape[axis]:
-            raise ValueError(f"Tensor view {view.tensor_id} has invalid fixed value {value}")
+            raise ValueError(
+                f"Tensor view {view.tensor_id} has invalid fixed value {value}"
+            )
 
     remaining_labels = tuple(
         label for axis, label in enumerate(descriptor.labels) if axis not in fixed_axes
@@ -500,7 +630,9 @@ def _validate_contract_algebra(
     if len(set(node.output_labels)) != len(node.output_labels):
         raise ValueError(f"Contract node {node.node_id} has duplicate output labels")
     if len(set(node.contracted_labels)) != len(node.contracted_labels):
-        raise ValueError(f"Contract node {node.node_id} has duplicate contracted labels")
+        raise ValueError(
+            f"Contract node {node.node_id} has duplicate contracted labels"
+        )
     input_labels = set(node.left.labels) | set(node.right.labels)
     output_labels = set(node.output_labels)
     contracted_labels = set(node.contracted_labels)
@@ -514,23 +646,34 @@ def _validate_contract_algebra(
         left_dim = node.left.shape[node.left.labels.index(label)]
         right_dim = node.right.shape[node.right.labels.index(label)]
         if left_dim != right_dim:
-            raise ValueError(f"Contract node {node.node_id} has mismatched label {label} dimensions")
+            raise ValueError(
+                f"Contract node {node.node_id} has mismatched label {label} dimensions"
+            )
     expected_shape = tuple(
-        _view_label_dimension(label, node.left, node.right) for label in node.output_labels
+        _view_label_dimension(label, node.left, node.right)
+        for label in node.output_labels
     )
     if node.output.labels != node.output_labels or node.output.shape != expected_shape:
-        raise ValueError(f"Contract node {node.node_id} output does not match its inputs")
+        raise ValueError(
+            f"Contract node {node.node_id} output does not match its inputs"
+        )
     if node.output.dtype != left.dtype or node.output.dtype != right.dtype:
-        raise ValueError(f"Contract node {node.node_id} output dtype does not match its inputs")
+        raise ValueError(
+            f"Contract node {node.node_id} output dtype does not match its inputs"
+        )
 
 
-def _validate_reduce_algebra(node: ReduceNode, descriptors: dict[str, TensorSpec]) -> None:
+def _validate_reduce_algebra(
+    node: ReduceNode, descriptors: dict[str, TensorSpec]
+) -> None:
     if len(set(node.reduced_labels)) != len(node.reduced_labels):
         raise ValueError(f"Reduce node {node.node_id} has duplicate reduced labels")
     output = node.output
     for view in node.inputs:
         if (view.labels, view.shape) != (output.labels, output.shape):
-            raise ValueError(f"Reduce node {node.node_id} inputs do not match its output")
+            raise ValueError(
+                f"Reduce node {node.node_id} inputs do not match its output"
+            )
 
 
 def _view_label_dimension(label: int, left: TensorView, right: TensorView) -> int:
@@ -566,7 +709,10 @@ def _semantic_node_key(dag: ContractionDAG, node: GraphNode) -> str:
 def _semantic_node_payload(dag: ContractionDAG, node: GraphNode) -> dict[str, object]:
     if isinstance(node, ContractNode):
         operands = sorted(
-            (_semantic_view_payload(dag, node.left), _semantic_view_payload(dag, node.right)),
+            (
+                _semantic_view_payload(dag, node.left),
+                _semantic_view_payload(dag, node.right),
+            ),
             key=_canonical_json,
         )
         return {
@@ -595,7 +741,9 @@ def _descriptor_payload(tensor: TensorSpec) -> dict[str, object]:
 
 def _common_dtype(left: TensorSpec, right: TensorSpec) -> str:
     if left.dtype != right.dtype:
-        raise ValueError(f"Cannot contract tensors with different dtypes: {left.dtype!r}, {right.dtype!r}")
+        raise ValueError(
+            f"Cannot contract tensors with different dtypes: {left.dtype!r}, {right.dtype!r}"
+        )
     return left.dtype
 
 
@@ -708,6 +856,8 @@ __all__ = [
     "validate_dag_inputs",
     "build_full_einsum_expression",
     "build_contract_node",
+    "choose_slice_labels",
+    "slice_contraction",
     "apply_slicing",
     "build_contraction_dag",
     "contraction_dag_hash",

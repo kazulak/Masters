@@ -8,7 +8,13 @@ import numpy as np
 import pytest
 
 from quantum_bench.core.records import ContractionTask, TensorNetworkSpec, TensorSpec
-from quantum_bench.model import ContractNode, ContractionDAG, ReduceNode, SliceSpec, TensorView
+from quantum_bench.model import (
+    ContractNode,
+    ContractionDAG,
+    ReduceNode,
+    SliceSpec,
+    TensorView,
+)
 from quantum_bench.execution.compiler import compile_cpu, compile_execution
 from quantum_bench.execution.contracts import (
     CpuCompileRequest,
@@ -27,6 +33,7 @@ from quantum_bench.lowering import (
     build_contraction_dag,
     contraction_dag_hash,
     apply_slicing,
+    slice_contraction,
 )
 from quantum_bench.execution.numeric import (
     decode_contraction_output,
@@ -477,6 +484,40 @@ def test_sliced_dag_executes_fixed_indices_on_original_axes() -> None:
     )
 
     np.testing.assert_array_equal(result.output, left @ right)
+
+
+def test_multi_label_sliced_cpu_execution_matches_unsliced() -> None:
+    dag = _dag(
+        TensorNetworkSpec(
+            None,
+            (
+                TensorSpec("a", (0, 1, 2), (2, 2, 2), "dense", dtype="float64"),
+                TensorSpec("b", (2, 3, 1), (2, 3, 2), "dense", dtype="float64"),
+            ),
+            (0, 3),
+            "abc,cdb->ad",
+        ),
+        ((0, 1),),
+    )  # type: ignore[arg-type]
+    sliced = slice_contraction(dag, node_id="contract_0", labels=(1, 2))
+    left = np.arange(8.0).reshape(2, 2, 2)
+    right = np.arange(12.0).reshape(2, 3, 2)
+    inputs = _inputs(("a", left), ("b", right))
+
+    unsliced_result = execute(
+        _compile(dag),
+        dag,
+        inputs,
+        RunContext(run_id="unsliced-multi-label", target=Target.CPU),
+    )
+    sliced_result = execute(
+        _compile(sliced),
+        sliced,
+        inputs,
+        RunContext(run_id="sliced-multi-label", target=Target.CPU),
+    )
+
+    np.testing.assert_allclose(sliced_result.output, unsliced_result.output)
 
 
 def test_sliced_view_with_multiple_original_axes_uses_correct_indices() -> None:
