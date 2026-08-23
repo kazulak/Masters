@@ -5,13 +5,16 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 import hashlib
 import json
+from math import isfinite
 import os
 from pathlib import Path
 import time
+from types import MappingProxyType
 from typing import Any
 from uuid import UUID, uuid4
 
 import numpy as np
+import yaml
 
 from quantum_bench.evidence import (
     append_sample,
@@ -41,8 +44,6 @@ _IDENTITY_FIELDS = {
 }
 _REQUIRED_IDENTITY_FIELDS = {
     "problem_id",
-    "tensor_network_structure_id",
-    "logical_plan_id",
     "environment_id",
     "validation_policy_id",
 }
@@ -67,6 +68,385 @@ _MEASUREMENT_FIELDS = (
     "energy_j",
 )
 _TIMING_SCOPES = frozenset({"simulation_end_to_end_v1", "steady_execution_v1"})
+
+_CONFIG_SCHEMA = "tn_benchmark_v1"
+_CONFIG_FIELDS = frozenset(
+    {
+        "schema_version",
+        "experiment_id",
+        "defaults",
+        "cases",
+        "plans",
+        "routes",
+        "matrix",
+    }
+)
+_DEFAULT_FIELDS = frozenset({"warmups", "repetitions", "timeout_s"})
+_CASE_FIELDS = frozenset({"circuit"})
+_CIRCUIT_FIELDS = frozenset({"kind", "name", "path", "parameters"})
+_PLAN_FIELDS = frozenset({"planner", "slicing"})
+_PLANNER_FIELDS = frozenset({"engine", "mode", "max_repeats", "seed"})
+_SLICING_FIELDS = frozenset({"node_id", "minimum_slice_count"})
+_ROUTE_FIELDS = frozenset({"executor", "numeric_policy", "options"})
+_MATRIX_FIELDS = frozenset({"case_id", "plan_id", "route_ids"})
+_EXECUTORS = frozenset(
+    {
+        "numpy_dag",
+        "quimb",
+        "cotengra",
+        "quest_cpu",
+        "quest_gpu",
+        "upmem_sdk_simulator",
+        "upmem_physical",
+    }
+)
+_PLAN_REQUIRED_EXECUTORS = frozenset(
+    {"numpy_dag", "upmem_sdk_simulator", "upmem_physical"}
+)
+_NUMERIC_POLICIES = frozenset(
+    {"split_complex_float32_v1", "split_complex_int8_shared_scale_v1"}
+)
+_CIRCUIT_KINDS = frozenset({"builtin", "quest_compatible", "qasm_file"})
+_PLANNER_ENGINES = frozenset({"opt_einsum", "cotengra"})
+_OPT_EINSUM_MODES = frozenset({"greedy", "optimal"})
+_COTENGRA_MODES = frozenset({"greedy", "labels"})
+_ROUTE_OPTIONS = {
+    "numpy_dag": frozenset(),
+    "quimb": frozenset({"optimize"}),
+    "cotengra": frozenset({"methods", "max_repeats"}),
+    "quest_cpu": frozenset({"runner"}),
+    "quest_gpu": frozenset({"verification_path"}),
+    "upmem_sdk_simulator": frozenset(
+        {
+            "dpu_count",
+            "rank_count",
+            "tasklets_per_dpu",
+            "session_root",
+            "host_binary",
+            "dpu_binary",
+            "initialization_binary",
+        }
+    ),
+    "upmem_physical": frozenset(
+        {
+            "dpu_count",
+            "rank_count",
+            "tasklets_per_dpu",
+            "session_root",
+            "host_binary",
+            "dpu_binary",
+            "initialization_binary",
+            "rank_paths",
+        }
+    ),
+}
+_PATH_OPTIONS = {
+    "runner",
+    "verification_path",
+    "session_root",
+    "host_binary",
+    "dpu_binary",
+    "initialization_binary",
+}
+
+
+class _StrictSafeLoader(yaml.SafeLoader):
+    """Safe YAML loader that rejects duplicate mapping keys."""
+
+
+def _strict_mapping(
+    loader: _StrictSafeLoader, node: yaml.MappingNode, deep: bool = False
+):
+    if not isinstance(node, yaml.MappingNode):
+        raise ValueError("YAML mappings must use mapping nodes")
+    mapping: dict[object, object] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            raise ValueError(f"duplicate YAML key: {key!r}")
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_StrictSafeLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _strict_mapping
+)
+
+
+def _config_mapping(value: object, field: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field} must be a mapping")
+    if any(not isinstance(key, str) for key in value):
+        raise ValueError(f"{field} keys must be strings")
+    return value
+
+
+def _config_fields(
+    value: object, expected: frozenset[str], field: str
+) -> Mapping[str, object]:
+    mapping = _config_mapping(value, field)
+    actual = set(mapping)
+    if actual != expected:
+        raise ValueError(
+            f"{field} fields must be exact; missing={sorted(expected - actual)}, "
+            f"unexpected={sorted(actual - expected)}"
+        )
+    return mapping
+
+
+def _config_id(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{field} must be a nonempty string")
+    return value
+
+
+def _config_string(value: object, field: str) -> str:
+    return _config_id(value, field)
+
+
+def _config_int(value: object, field: str, *, minimum: int = 0) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise ValueError(f"{field} must be an integer >= {minimum}")
+    return value
+
+
+def _config_scalar(value: object, field: str) -> object:
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float) and isfinite(value):
+        return value
+    raise ValueError(f"{field} must contain only finite JSON scalar values")
+
+
+def _absolute_config_path(value: object, root: Path, field: str) -> str:
+    path = _config_string(value, field)
+    return str((root / path).resolve())
+
+
+def _freeze_config(value: object) -> object:
+    if isinstance(value, Mapping):
+        return MappingProxyType(
+            {str(key): _freeze_config(item) for key, item in value.items()}
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_config(item) for item in value)
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value
+    raise TypeError(
+        f"unsupported normalized configuration value: {type(value).__name__}"
+    )
+
+
+def _load_config_yaml(path: Path) -> Mapping[str, object]:
+    try:
+        with path.open("r", encoding="utf-8") as stream:
+            value = yaml.load(stream, Loader=_StrictSafeLoader)
+    except yaml.YAMLError as error:
+        raise ValueError(f"invalid YAML configuration: {error}") from error
+    if value is None:
+        raise ValueError("configuration must not be empty")
+    return _config_mapping(value, "configuration")
+
+
+def _normalize_circuit(value: object, root: Path, field: str) -> dict[str, object]:
+    circuit = dict(_config_fields(value, _CIRCUIT_FIELDS, field))
+    kind = _config_string(circuit["kind"], f"{field}.kind")
+    if kind not in _CIRCUIT_KINDS:
+        raise ValueError(f"{field}.kind has an unsupported value: {kind}")
+    name = circuit["name"]
+    path = circuit["path"]
+    if kind == "qasm_file":
+        if name is not None:
+            raise ValueError(f"{field}.name must be null for qasm_file")
+        circuit["path"] = _absolute_config_path(path, root, f"{field}.path")
+    else:
+        if path is not None:
+            raise ValueError(f"{field}.path must be null for {kind}")
+        circuit["name"] = _config_string(name, f"{field}.name")
+    parameters = _config_mapping(circuit["parameters"], f"{field}.parameters")
+    circuit["parameters"] = {
+        _config_string(key, f"{field}.parameters key"): _config_scalar(
+            item, f"{field}.parameters.{key}"
+        )
+        for key, item in parameters.items()
+    }
+    return circuit
+
+
+def _normalize_plan(value: object, field: str) -> dict[str, object]:
+    plan = dict(_config_fields(value, _PLAN_FIELDS, field))
+    planner = dict(_config_fields(plan["planner"], _PLANNER_FIELDS, f"{field}.planner"))
+    engine = _config_string(planner["engine"], f"{field}.planner.engine")
+    if engine not in _PLANNER_ENGINES:
+        raise ValueError(f"{field}.planner.engine has an unsupported value: {engine}")
+    mode = _config_string(planner["mode"], f"{field}.planner.mode")
+    allowed_modes = _OPT_EINSUM_MODES if engine == "opt_einsum" else _COTENGRA_MODES
+    if mode not in allowed_modes:
+        raise ValueError(f"{field}.planner.mode has an unsupported value: {mode}")
+    planner["max_repeats"] = _config_int(
+        planner["max_repeats"], f"{field}.planner.max_repeats", minimum=1
+    )
+    seed = planner["seed"]
+    if seed is not None:
+        planner["seed"] = _config_int(seed, f"{field}.planner.seed")
+    slicing = plan["slicing"]
+    if slicing is not None:
+        slicing_map = dict(_config_fields(slicing, _SLICING_FIELDS, f"{field}.slicing"))
+        slicing_map["node_id"] = _config_id(
+            slicing_map["node_id"], f"{field}.slicing.node_id"
+        )
+        slicing_map["minimum_slice_count"] = _config_int(
+            slicing_map["minimum_slice_count"],
+            f"{field}.slicing.minimum_slice_count",
+            minimum=2,
+        )
+        plan["slicing"] = slicing_map
+    plan["planner"] = planner
+    return plan
+
+
+def _normalize_route(value: object, root: Path, field: str) -> dict[str, object]:
+    route = dict(_config_fields(value, _ROUTE_FIELDS, field))
+    executor = _config_string(route["executor"], f"{field}.executor")
+    if executor not in _EXECUTORS:
+        raise ValueError(f"{field}.executor has an unsupported value: {executor}")
+    numeric_policy = route["numeric_policy"]
+    if executor in _PLAN_REQUIRED_EXECUTORS:
+        if numeric_policy not in _NUMERIC_POLICIES:
+            raise ValueError(f"{field}.numeric_policy is required for {executor}")
+    elif numeric_policy is not None:
+        raise ValueError(f"{field}.numeric_policy must be null for {executor}")
+    options = dict(
+        _config_fields(route["options"], _ROUTE_OPTIONS[executor], f"{field}.options")
+    )
+    for option in _PATH_OPTIONS.intersection(options):
+        options[option] = _absolute_config_path(
+            options[option], root, f"{field}.options.{option}"
+        )
+    if "rank_paths" in options:
+        paths = options["rank_paths"]
+        if not isinstance(paths, list) or not paths:
+            raise ValueError(f"{field}.options.rank_paths must be a nonempty list")
+        options["rank_paths"] = tuple(
+            _absolute_config_path(path, root, f"{field}.options.rank_paths")
+            for path in paths
+        )
+    for option in ("dpu_count", "rank_count", "tasklets_per_dpu", "max_repeats"):
+        if option in options:
+            options[option] = _config_int(
+                options[option], f"{field}.options.{option}", minimum=1
+            )
+    if "optimize" in options:
+        if options["optimize"] not in _OPT_EINSUM_MODES:
+            raise ValueError(f"{field}.options.optimize has an unsupported value")
+    if "methods" in options:
+        if options["methods"] not in _COTENGRA_MODES:
+            raise ValueError(f"{field}.options.methods has an unsupported value")
+    route["options"] = options
+    return route
+
+
+def load_experiment_config(path: str | os.PathLike[str]) -> Mapping[str, object]:
+    """Load and strictly validate one immutable ``tn_benchmark_v1`` config."""
+
+    config_path = Path(path)
+    if not config_path.exists() or not config_path.is_file():
+        raise ValueError(f"configuration path does not name a file: {config_path}")
+    root = config_path.resolve().parent
+    raw = _load_config_yaml(config_path)
+    config = dict(_config_fields(raw, _CONFIG_FIELDS, "configuration"))
+    if config["schema_version"] != _CONFIG_SCHEMA:
+        raise ValueError("configuration has an invalid schema_version")
+    experiment_id = _config_id(config["experiment_id"], "experiment_id")
+    defaults = dict(_config_fields(config["defaults"], _DEFAULT_FIELDS, "defaults"))
+    defaults["warmups"] = _config_int(defaults["warmups"], "defaults.warmups")
+    defaults["repetitions"] = _config_int(
+        defaults["repetitions"], "defaults.repetitions", minimum=1
+    )
+    timeout_s = defaults["timeout_s"]
+    if isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float)):
+        raise ValueError("defaults.timeout_s must be finite and > 0")
+    if not isfinite(float(timeout_s)) or float(timeout_s) <= 0:
+        raise ValueError("defaults.timeout_s must be finite and > 0")
+    config["experiment_id"] = experiment_id
+    config["defaults"] = defaults
+
+    cases_raw = _config_mapping(config["cases"], "cases")
+    if not cases_raw:
+        raise ValueError("cases must be nonempty")
+    cases: dict[str, object] = {}
+    for case_id, case in cases_raw.items():
+        case_key = _config_id(case_id, "case id")
+        case_map = _config_fields(case, _CASE_FIELDS, f"cases.{case_key}")
+        cases[case_key] = {
+            "circuit": _normalize_circuit(
+                case_map["circuit"], root, f"cases.{case_key}.circuit"
+            )
+        }
+    config["cases"] = cases
+
+    plans_raw = _config_mapping(config["plans"], "plans")
+    if not plans_raw:
+        raise ValueError("plans must be nonempty")
+    plans = {
+        _config_id(plan_id, "plan id"): _normalize_plan(plan, f"plans.{plan_id}")
+        for plan_id, plan in plans_raw.items()
+    }
+    config["plans"] = plans
+
+    routes_raw = _config_mapping(config["routes"], "routes")
+    if not routes_raw:
+        raise ValueError("routes must be nonempty")
+    routes = {
+        _config_id(route_id, "route id"): _normalize_route(
+            route, root, f"routes.{route_id}"
+        )
+        for route_id, route in routes_raw.items()
+    }
+    config["routes"] = routes
+
+    matrix_raw = config["matrix"]
+    if not isinstance(matrix_raw, list) or not matrix_raw:
+        raise ValueError("matrix must be a nonempty list")
+    matrix: list[dict[str, object]] = []
+    for index, item in enumerate(matrix_raw):
+        entry = dict(_config_fields(item, _MATRIX_FIELDS, f"matrix[{index}]"))
+        case_id = _config_id(entry["case_id"], f"matrix[{index}].case_id")
+        if case_id not in cases:
+            raise ValueError(f"matrix[{index}] references unknown case_id")
+        route_ids = entry["route_ids"]
+        if not isinstance(route_ids, list) or not route_ids:
+            raise ValueError(f"matrix[{index}].route_ids must be a nonempty list")
+        normalized_routes = tuple(
+            _config_id(route_id, f"matrix[{index}].route_ids") for route_id in route_ids
+        )
+        if len(set(normalized_routes)) != len(normalized_routes):
+            raise ValueError(f"matrix[{index}].route_ids must be unique")
+        if any(route_id not in routes for route_id in normalized_routes):
+            raise ValueError(f"matrix[{index}] references an unknown route_id")
+        plan_id = entry["plan_id"]
+        if plan_id is not None:
+            plan_id = _config_id(plan_id, f"matrix[{index}].plan_id")
+            if plan_id not in plans:
+                raise ValueError(f"matrix[{index}] references an unknown plan_id")
+        requires_plan = tuple(
+            routes[route_id]["executor"] in _PLAN_REQUIRED_EXECUTORS
+            for route_id in normalized_routes
+        )
+        if any(requires_plan) and not all(requires_plan):
+            raise ValueError(
+                f"matrix[{index}] cannot mix plan-required and planless routes"
+            )
+        if any(requires_plan) != (plan_id is not None):
+            raise ValueError(f"matrix[{index}].plan_id is incompatible with its routes")
+        matrix.append(
+            {"case_id": case_id, "plan_id": plan_id, "route_ids": normalized_routes}
+        )
+    config["matrix"] = matrix
+    frozen = _freeze_config(config)
+    if not isinstance(frozen, Mapping):  # pragma: no cover
+        raise TypeError("normalized configuration must be a mapping")
+    return frozen
 
 
 def run_direct_samples(
@@ -377,6 +757,16 @@ def _validate_arguments(**values: Any) -> dict[str, JsonValue]:
         raise TypeError("identities must be a mapping")
     for field in _REQUIRED_IDENTITY_FIELDS:
         _nonempty_string(normalized[field], f"identities.{field}")
+    tensor_network_id = normalized["tensor_network_structure_id"]
+    logical_plan_id = normalized["logical_plan_id"]
+    if (tensor_network_id is None) != (logical_plan_id is None):
+        raise ValueError(
+            "tensor_network_structure_id and logical_plan_id must be null together"
+        )
+    if tensor_network_id is not None:
+        _nonempty_string(tensor_network_id, "identities.tensor_network_structure_id")
+    if logical_plan_id is not None:
+        _nonempty_string(logical_plan_id, "identities.logical_plan_id")
     for field in ("physical_plan_id", "executable_id"):
         if normalized[field] is not None:
             _nonempty_string(normalized[field], f"identities.{field}")

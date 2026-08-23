@@ -15,17 +15,25 @@ from quantum_bench.evidence import (
     append_sample,
     append_session,
     canonical_json,
+    environment_id,
+    executable_id,
     finalize_artifacts,
     identity_hash,
     new_run_id,
+    problem_id,
     require_matching_scope,
     sample_id,
+    tensor_network_structure_id,
     validate_artifact_set,
     validate_manifest,
     validate_sample,
     validate_session,
+    validation_policy_id,
     write_manifest,
 )
+from quantum_bench.circuits import builtin_circuit
+from quantum_bench.experiment import run_direct_samples
+from quantum_bench.model import TensorNetwork, TensorSpec, make_simulation_job
 from quantum_bench.results import Measurement
 
 
@@ -188,6 +196,37 @@ def test_identity_domains_and_all_sample_identity_fields_are_bound() -> None:
     base = sample_id(_RUN_ID, "case-a", "route-a", "measurement", 0)
     assert base != sample_id(_RUN_ID, "case-b", "route-a", "measurement", 0)
     assert base != sample_id(_RUN_ID, "case-a", "route-b", "measurement", 0)
+
+
+def test_identity_constructors_are_domain_separated_and_order_stable() -> None:
+    job = make_simulation_job(builtin_circuit("bell_2q"))
+    network = TensorNetwork(
+        circuit=job.circuit,
+        tensors=(
+            TensorSpec("a", (0, 1), (2, 2), "dense", "complex128"),
+            TensorSpec("b", (1, 2), (2, 2), "gate", "complex128", "op"),
+        ),
+        output_labels=(0, 2),
+        einsum_expression="ab,bc->ac",
+    )
+    assert len(problem_id(job)) == 64
+    assert len(tensor_network_structure_id(network)) == 64
+    assert environment_id({"b": 2, "a": 1}) == environment_id({"a": 1, "b": 2})
+    assert validation_policy_id({"b": 2, "a": 1}) == validation_policy_id(
+        {"a": 1, "b": 2}
+    )
+    assert executable_id({"b": 2, "a": 1}) == executable_id({"a": 1, "b": 2})
+    assert environment_id({"a": 1}) != validation_policy_id({"a": 1})
+
+    reversed_network = TensorNetwork(
+        circuit=job.circuit,
+        tensors=tuple(reversed(network.tensors)),
+        output_labels=network.output_labels,
+        einsum_expression=network.einsum_expression,
+    )
+    assert tensor_network_structure_id(network) != tensor_network_structure_id(
+        reversed_network
+    )
 
 
 def test_run_ids_are_unique_canonical_uuid4_values() -> None:
@@ -376,6 +415,39 @@ def test_successful_session_requires_verified_release() -> None:
 @pytest.mark.parametrize("status", ["success", "failed", "unsupported"])
 def test_sample_status_schemas(status: str) -> None:
     validate_sample(_sample(status))
+
+
+def test_full_state_sample_allows_null_tensor_network_and_logical_plan() -> None:
+    sample = _sample()
+    sample["identities"]["tensor_network_structure_id"] = None
+    sample["identities"]["logical_plan_id"] = None
+    validate_sample(sample)
+
+
+def test_sample_rejects_half_null_tensor_network_identity_pair() -> None:
+    sample = _sample()
+    sample["identities"]["logical_plan_id"] = None
+    with pytest.raises(ValueError, match="null together"):
+        validate_sample(sample)
+
+
+def test_experiment_argument_validation_uses_same_identity_pair_rule(
+    tmp_path: Path,
+) -> None:
+    identities = _sample()["identities"]
+    identities["tensor_network_structure_id"] = None
+    with pytest.raises(ValueError, match="null together"):
+        run_direct_samples(
+            run_id=_RUN_ID,
+            experiment_id=_EXPERIMENT_ID,
+            case_id="case-1",
+            route_id="route-1",
+            identities=identities,
+            warmups=0,
+            repetitions=1,
+            run_once=lambda: None,
+            samples_path=tmp_path / "samples.jsonl",
+        )
 
 
 def test_require_matching_scope_accepts_same_scope_samples() -> None:

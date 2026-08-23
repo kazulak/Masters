@@ -16,6 +16,7 @@ import tempfile
 from typing import Any, Callable
 from uuid import UUID, uuid4
 
+from quantum_bench.model import SimulationJob, TensorNetwork
 from quantum_bench.results import Measurement as _Measurement
 
 
@@ -238,6 +239,80 @@ def identity_hash(domain: str, payload: object) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def problem_id(job: SimulationJob) -> str:
+    """Return the identity of a simulation problem, excluding execution dtype."""
+
+    if not isinstance(job, SimulationJob):
+        raise TypeError("problem_id requires a SimulationJob")
+    circuit = job.circuit
+    payload = {
+        "circuit": {
+            "name": circuit.name,
+            "n_qubits": circuit.n_qubits,
+            "operations": [
+                {
+                    "gate": operation.gate,
+                    "wires": list(operation.wires),
+                    "params": list(operation.params),
+                }
+                for operation in circuit.operations
+            ],
+            "source": circuit.source,
+        },
+        "query": job.query,
+        "parameters": [list(parameter) for parameter in job.parameters],
+        "seed": job.seed,
+    }
+    return identity_hash("quantum_bench.problem_id.v1", payload)
+
+
+def tensor_network_structure_id(network: TensorNetwork) -> str:
+    """Return a path- and value-independent tensor-network structure identity."""
+
+    if not isinstance(network, TensorNetwork):
+        raise TypeError("tensor_network_structure_id requires a TensorNetwork")
+    payload = {
+        "tensors": [
+            {
+                "id": tensor.id,
+                "labels": list(tensor.labels),
+                "shape": list(tensor.shape),
+                "structure": tensor.structure,
+                "dtype": tensor.dtype,
+                "produced_by": tensor.produced_by,
+            }
+            for tensor in network.tensors
+        ],
+        "output_labels": list(network.output_labels),
+        "einsum_expression": network.einsum_expression,
+    }
+    return identity_hash("quantum_bench.tensor_network_structure_id.v1", payload)
+
+
+def _mapping_identity(domain: str, value: Mapping[str, Any]) -> str:
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{domain} requires a mapping")
+    return identity_hash(domain, value)
+
+
+def environment_id(value: Mapping[str, Any]) -> str:
+    """Return the identity of a recorded execution environment mapping."""
+
+    return _mapping_identity("quantum_bench.environment_id.v1", value)
+
+
+def validation_policy_id(value: Mapping[str, Any]) -> str:
+    """Return the identity of a validation-policy mapping."""
+
+    return _mapping_identity("quantum_bench.validation_policy_id.v1", value)
+
+
+def executable_id(value: Mapping[str, Any]) -> str:
+    """Return the identity of an executable/provenance mapping."""
+
+    return _mapping_identity("quantum_bench.executable_id.v1", value)
+
+
 def new_run_id() -> str:
     """Return a freshly generated UUID4 string."""
 
@@ -359,12 +434,18 @@ def validate_sample(record: Mapping[str, Any]) -> None:
     _exact_fields(identities, _IDENTITY_FIELDS, "identities")
     for field in (
         "problem_id",
-        "tensor_network_structure_id",
-        "logical_plan_id",
         "environment_id",
         "validation_policy_id",
     ):
         _nonempty_string(identities[field], f"identities.{field}")
+    tensor_network_id = identities["tensor_network_structure_id"]
+    logical_plan_id = identities["logical_plan_id"]
+    if (tensor_network_id is None) != (logical_plan_id is None):
+        raise ValueError(
+            "tensor_network_structure_id and logical_plan_id must be null together"
+        )
+    _nullable_or_string(tensor_network_id, "identities.tensor_network_structure_id")
+    _nullable_or_string(logical_plan_id, "identities.logical_plan_id")
     for field in ("physical_plan_id", "executable_id"):
         _nullable_or_string(identities[field], f"identities.{field}")
 
