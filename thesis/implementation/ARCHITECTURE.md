@@ -20,9 +20,10 @@ Circuit + query
 |---|---|---|---|
 | Circuit lowering | circuit and query | tensor descriptors and arrays | gate semantics and output ordering |
 | Planning | tensor descriptors | path, slicing, provenance | contraction order only |
-| Semantic graph | descriptors and path | `ContractionDAG` | contractions, reductions, dependencies, logical identity |
+| Semantic network | tensor descriptors and requested output | `TensorNetwork` | non-executable metadata, descriptors, connectivity, and output request |
+| Logical graph | `TensorNetwork` and selected path | `ContractionDAG` | contractions, reductions, dependencies, and logical identity |
 | Numerics | arrays and numeric mode | encoded arrays and scale metadata | packing, rounding, saturation, decode, error utilities |
-| Parallel mapping | DAG, topology, numeric mode | `UpmemPlan` | tiling, work units, assignment, residency, transfers, reductions |
+| Parallel mapping | DAG, topology, numeric mode | `UpmemPlan` | bounded output-tile assignment and host-roundtrip transfer accounting |
 | CPU execution | DAG and arrays | output and timing | same-DAG NumPy replay |
 | UPMEM runtime | `UpmemPlan` and arrays | output, timing, backend facts | sessions, transfers, launches, collection, no-fallback checks |
 | Experiment | cases and route dimensions | one raw row per repetition | warmups, repetitions, references, validation |
@@ -35,8 +36,12 @@ Local return values remain local variables, tuples, or mappings.
 
 ## Canonical Graph
 
-`ContractionDAG` is the only active contraction intermediate representation.
-It contains:
+`TensorNetwork` is non-executable semantic metadata. It contains tensor
+descriptors, connectivity, and the requested output, but no contraction order,
+slicing, dependencies, target estimates, executor data, arrays, or timing.
+
+`ContractionDAG` is the sole logical execution intermediate representation. It
+contains:
 
 - input tensor descriptors;
 - binary contraction nodes;
@@ -68,37 +73,42 @@ optimal or as measured hardware performance.
 
 ## UPMEM Mapping
 
-The mapper converts one DAG into one target-specific physical plan. The plan
-records:
+The mapper converts one DAG into one target-specific physical plan. The current
+bounded v4 mapping records:
 
 - numeric representation;
-- tasklet, output-tile, and slice work units;
-- DPU and rank assignments;
-- memory and intermediate residency decisions;
-- transfer and host-reduction steps;
+- output-tile work units and their assignment;
+- requested topology, including DPU and rank assignments;
+- host-roundtrip transfer accounting;
 - kernel and native protocol identity.
+
+Tasklet scheduling, slice-stage scheduling, and intermediate residency are
+planned extensions. They are not implemented or claimable by the current v4
+mapping.
 
 Machine-local rank paths, binary paths, working directories, SDK installation,
 and timeouts are runtime configuration. They do not affect DAG or physical-plan
 identity.
 
-Parallelism is hierarchical:
+The target architecture is hierarchical, but only bounded output-tile mapping
+is currently implemented:
 
-1. tasklets divide local output work inside one DPU;
-2. DPUs divide output tiles or independent slices;
-3. independent DAG nodes may run concurrently only after the first two levels
-   are correct and measurable.
+1. tasklets may divide local output work inside one DPU;
+2. DPUs divide output tiles;
+3. slice groups and independent DAG nodes may run concurrently after their
+   scheduling stages are implemented and measured.
 
-The minimum final parallel claim requires measured tasklet and multi-DPU or
-multi-group execution. Allocation alone is not parallel execution.
+Tasklet scheduling, slice-stage scheduling, and DPU-resident intermediate
+execution are planned work. The current mapping does not support claims for
+those mechanisms. Allocation alone is not parallel execution.
 
 ## Numerics
 
 UPMEM numerical representation is a physical policy, not a planner or DAG
 choice. Initial quantization occurs once on the host. A practical integer route
 uses packed real/imaginary int8 operands, int32 local accumulation, explicit
-scale metadata, and host decode. Resident intermediates remain encoded when the
-selected mapping permits it.
+scale metadata, and host decode. Intermediate residency is a planned policy and
+is not implemented by the current host-roundtrip mapping.
 
 The evidence row records encode, transfer, kernel, reduction, download, and
 decode time separately. End-to-end speedup includes required conversion work.
@@ -150,12 +160,15 @@ The active physical adapter is
 `src/quantum_bench/upmem/runtime.py`, backed by the self-contained native tree
 at `native/upmem/runtime/`. Historical M5/v4 Python and native modules are not
 imported by the active path. The completed T1A-D ownership migration is followed
-by these remaining reset steps:
+by these remaining reset steps, in dependency order:
 
-1. collapse milestone commands, configs, reports, and compatibility tests;
-2. create the canonical model, circuit, and lowering boundaries;
-3. add direct baselines, evidence schemas, and the public verification flow;
-4. delete historical active source once parity tests pass.
+1. create the canonical model, circuit, and lowering boundaries (T2);
+2. isolate planners, add results/timing/evidence contracts, and migrate direct
+   baselines;
+3. add the configuration, reporting, and public verification workflow;
+4. collapse milestone commands, configurations, reports, and compatibility
+   tests only after the canonical workflow passes;
+5. delete historical active source once parity tests pass.
 
 Progress and temporary adapter expiry are recorded in
 [MIGRATION_LEDGER.md](MIGRATION_LEDGER.md). Historical behavior remains at the

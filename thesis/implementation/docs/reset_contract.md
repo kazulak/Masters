@@ -5,7 +5,45 @@ does not certify planned capabilities as implemented.
 
 ## Simulation Semantics
 
-`SimulationJob` contains `circuit`, `query`, `parameters`, and `seed`.
+The public query type is:
+
+```python
+SimulationQuery = Literal["pre_measurement_statevector"]
+```
+
+`SimulationJob` is a frozen, slotted record with exactly these fields, in this
+order:
+
+```python
+@dataclass(frozen=True, slots=True)
+class SimulationJob:
+    circuit: CircuitSpec
+    query: SimulationQuery = "pre_measurement_statevector"
+    parameters: tuple[tuple[str, str | int | float | bool | None], ...] = ()
+    seed: int | None = None
+```
+
+The functional construction API is:
+
+```python
+make_simulation_job(
+    circuit,
+    *,
+    query="pre_measurement_statevector",
+    parameters=(),
+    seed=None,
+) -> SimulationJob
+```
+
+Its `parameters` input is an `Iterable[tuple[str, scalar]]`, where scalar is
+`str | int | float | bool | None`. The function validates nonempty string keys,
+rejects duplicate keys, sorts entries lexicographically by key, and returns a
+`SimulationJob`. `SimulationJob.__post_init__` rejects direct instances whose
+parameters are not already strictly key-sorted and unique, whose query is
+unsupported, or whose seed is not `None` or an integer. Current built-in jobs
+use empty parameters and `seed=None`; the normalized `CircuitSpec` contains
+gate parameters and source information. Numeric execution dtype is not a
+`SimulationJob` field.
 
 The supported circuit representation is either a deterministic built-in circuit
 name plus parameter mapping or an OpenQASM 2 source file. Both normalize to a
@@ -23,6 +61,24 @@ A future random generator must require an explicit integer seed.
 Tensor axes are ordered by ascending wire number. Returned statevectors use
 QuEST little-endian basis indexing: amplitude `i` uses bit `wire` of `i`.
 Shared comparison families are `QRNG`, `BB84`, `BV`, `EDC`, `XOR`, and `HS`.
+
+`TensorNetwork` is a frozen, slotted, non-executable semantic record with
+exactly these fields:
+
+```python
+@dataclass(frozen=True, slots=True)
+class TensorNetwork:
+    circuit: CircuitSpec
+    tensors: tuple[TensorSpec, ...]
+    output_labels: tuple[int, ...]
+    einsum_expression: str
+```
+
+It contains no arrays, path, slicing, dependencies, target estimates,
+executor data, or timing. `ContractionDAG` remains the sole logical execution
+IR: it contains the selected contraction order, slicing branches, reductions,
+and dependencies. `TensorNetwork` only describes semantic metadata produced by
+lowering.
 
 TN output tensors retain axes in `(wire 0, wire 1, ..., wire n-1)` order.
 Every adapter converting a TN result to a statevector must flatten the output
@@ -65,6 +121,62 @@ ExecutionFailed(stage, reason, backend_facts)
 The experiment layer catches both exceptions and writes a sample row. Every
 attempt that returns or raises inside the experiment process produces a row;
 an externally killed process cannot guarantee evidence completion.
+
+## Public Reset Types
+
+No additional public reset type may be introduced without amending this
+contract. The following compatibility names are explicitly temporary and
+expire at T12.
+
+```text
+model.py:
+  SimulationQuery (type alias), SimulationJob, CircuitOperation, CircuitSpec,
+  TensorSpec, TensorView, TensorNetwork, SliceSpec, ContractNode, ReduceNode,
+  GraphNode (type alias), ContractionDAG
+
+results.py:
+  Measurement, ExecutionSample, UnsupportedExecution, ExecutionFailed
+
+numerics.py:
+  NumericPolicy, EncodedComplexTensor
+
+upmem/plan.py:
+  UpmemTopology, UpmemResources, UpmemWorkUnit, UpmemStage, UpmemPlan
+```
+
+## Canonical Migration Route
+
+Migration checks use only this active route:
+
+```text
+circuits -> lowering -> planning -> cpu/upmem -> experiment -> evidence/report
+```
+
+Historical providers and milestone code are not canonical and are excluded
+from canonical-route import checks.
+
+The following temporary re-exports are authorized until T12. They do not form
+a generic compatibility framework and must not duplicate type definitions:
+
+```text
+core.records:
+  CircuitOperation, CircuitSpec, TensorSpec, and TensorNetworkSpec as an
+  alias of TensorNetwork for historical consumers
+
+tn.graph:
+  exactly TensorView, SliceSpec, ContractNode, ReduceNode, GraphNode, and
+  ContractionDAG while historical functions migrate; no planner, executor,
+  or TaskGraph types
+
+tn.network:
+  TensorNetworkValue and build_tensor_network wrappers for historical
+  consumers
+```
+
+These compatibility modules must not be imported by the canonical route after
+T2. The T2 order is: model ownership and re-exports, flatten the
+`quantum_bench.circuits` package into `quantum_bench.circuits.py`, move
+lowering ownership and migrate canonical consumers, then run the full suite.
 
 ## Dependency Direction
 

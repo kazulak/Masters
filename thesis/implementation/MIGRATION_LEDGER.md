@@ -16,9 +16,17 @@ evidence that the corresponding capability is implemented.
 
 ## Non-Negotiable Invariants
 
-- `TensorNetwork` is the target-neutral semantic network and contains no
-  execution order. `ContractionDAG` is the only logical execution IR and
-  contains the selected order, slicing branches, reductions, and dependencies.
+- `SimulationQuery` is the public alias `Literal["pre_measurement_statevector"]`.
+- `SimulationJob` is frozen and slotted, with fields `circuit`, `query`,
+  `parameters`, and `seed` in that order. `make_simulation_job(...)` accepts
+  iterable scalar parameters, rejects empty or duplicate keys, sorts by key,
+  and constructs the job. Direct construction rejects unsorted or duplicate
+  parameters, unsupported queries, and invalid seeds.
+- `TensorNetwork` is frozen and slotted, with exactly `circuit`, `tensors`,
+  `output_labels`, and `einsum_expression`. It contains no arrays, path,
+  slicing, dependencies, target estimates, executor data, or timing.
+- `ContractionDAG` is the only logical execution IR and contains the selected
+  order, slicing branches, reductions, and dependencies.
 - Numeric, tiling, placement, and kernel choices do not change the DAG hash.
 - Physical UPMEM execution never falls back to simulator or CPU.
 - Unsupported and failed runs remain explicit evidence rows.
@@ -74,6 +82,27 @@ evidence that the corresponding capability is implemented.
 | eager legacy imports from `targets/upmem/__init__.py` | removed; callers use owning modules | complete |
 | M5/v4 defaults in generic contracts | removed in `execution/contracts.py` | complete |
 | milestone CLI and Make targets | `bench/__main__.py`, `Makefile` | WP9 |
+
+## T2-0 Contract Corrections
+
+These documentation-only entries freeze the T2 boundary at `HEAD 1426226`.
+They do not claim that the production implementation already satisfies them.
+
+| Decision | Required migration | Expiry or gate |
+|---|---|---|
+| Exact `SimulationQuery`, `SimulationJob`, and `make_simulation_job` forms | Implement the public alias, frozen/slotted job, strict direct-construction validation, and functional constructor in `model.py` | T2; numeric dtype is excluded from `SimulationJob` |
+| Exact semantic `TensorNetwork` form | Keep only `circuit`, `tensors`, `output_labels`, and `einsum_expression`; keep arrays and execution data outside it | T2; `ContractionDAG` remains the sole logical execution IR |
+| Flatten circuit ownership | Retain `quantum_bench/circuits.py`; do not retain both a package and module | T2 |
+| Canonical migration route | Check `circuits -> lowering -> planning -> cpu/upmem -> experiment -> evidence/report` | T2 import checks; historical providers are excluded |
+| Temporary re-exports | Permit only the `core.records`, narrowed `tn.graph`, and `tn.network` re-exports listed in `docs/reset_contract.md`; `tn.graph` exports no planner, executor, or TaskGraph types | Remove by T12; no duplicate definitions or generic compatibility framework |
+
+T2 implementation order is: model ownership/re-exports, circuits flattening,
+lowering ownership and canonical consumer migration, then the full suite.
+The temporary `tn.graph` re-export set is exactly `TensorView`, `SliceSpec`,
+`ContractNode`, `ReduceNode`, `GraphNode`, and `ContractionDAG`; it contains no
+planner, executor, or `TaskGraph` types.
+`ARCHITECTURE.md` was reconciled during T2-0 so its ownership, capability, and
+migration-order statements match this contract.
 
 ## Complexity Delta
 
