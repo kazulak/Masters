@@ -437,11 +437,16 @@ The scale is shared by its real and imaginary planes and reused for every
 output tile and K chunk in that branch. It is not recomputed per tile, chunk,
 or operand access.
 
-Int8 plans are unsupported when any of these bounds fail:
+Static int8 mapping rejects plans when either of these bounds fails:
 
 ```text
 k_chunk * 127^2 <= INT32_MAX
-total_k * 127^2 <= INT64_MAX
+2 * total_k * 127^2 <= INT64_MAX
+```
+
+Runtime execution additionally checks the observed complex accumulators:
+
+```text
 abs(rr) + abs(ii) <= INT64_MAX
 abs(ri) + abs(ir) <= INT64_MAX
 ```
@@ -459,6 +464,34 @@ Complex128 is validation-only through the `cpu.py` function
 ## Physical Plan Schema
 
 `PLAN_SCHEMA_VERSION = 1`.
+
+The final public mapper API is:
+
+```python
+PLAN_SCHEMA_VERSION = 1
+
+def plan_upmem(
+    dag: ContractionDAG,
+    *,
+    numeric_policy: NumericPolicy,
+    topology: UpmemTopology,
+) -> UpmemPlan: ...
+
+def validate_upmem_plan(
+    dag: ContractionDAG,
+    plan: UpmemPlan,
+) -> None: ...
+
+def physical_plan_id(plan: UpmemPlan) -> str: ...
+```
+
+`plan_upmem` performs only pure mapping and validation. Unsupported topology,
+geometry, or overflow raises `results.UnsupportedExecution` at stage
+`"mapping"`, before any runtime side effect.
+It also rejects a valid DAG with no `ContractNode` as
+`upmem_no_contract_work`; such a plan has no physical kernel work.
+Only `TileLoweringError` and explicit mapper capability failures are converted
+to unsupported results; generic `ValueError` and `OverflowError` propagate as defects.
 
 ```python
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -507,24 +540,53 @@ class UpmemPlan:
 These are the only public physical-plan types. No additional public plan type
 may be introduced without amending this contract.
 
-Stages are ordered first by DAG topological order and then by lexicographic
-`stage_id`. An unsliced node is one `contract_batch` with that node as its
-only node. A sliced `contract_batch` contains exactly the direct
-`ContractNode` dependencies of one `ReduceNode`, sorted lexicographically.
+T4C currently emits singleton `contract_batch` stages in deterministic DAG
+topological order, selecting the lexicographically smallest ready `node_id`
+at each step. One stage contains one unsliced `ContractNode` and its work
+units. T9 will add grouped sliced
+`contract_batch` stages containing exactly the direct `ContractNode`
+dependencies of one `ReduceNode`, sorted lexicographically. That grouping is
+future schema generation behavior, not a T4C guarantee.
 Compatibility requires equal operation signature, B/M/K/N geometry, numeric
 policy, tile policy, tasklet count, requested topology, output dtype, and output
-layout. Within a stage, work units are sorted by logical rank, logical DPU,
-wave, batch start, M/N/K tile starts, and stable tile ID.
+layout. Within a stage, work units are sorted exactly by:
+
+```text
+(logical_rank, logical_dpu, wave, batch_start, m_start, n_start, k_start,
+ stable_tile_id)
+```
 
 A `host_reduce` stage has exactly one `ReduceNode` in `node_ids`, has an empty
-`work_units` tuple, and consumes exactly the immediately preceding matching
-`contract_batch` outputs. UPMEM mapping may group existing branches but never
-introduces slicing.
+`work_units` tuple, and consumes the direct producer nodes declared by its
+`ReduceNode`. Every such producer must occur in an earlier stage; the producer
+stage need not be immediately preceding. UPMEM mapping may group existing
+branches but never introduces slicing.
+
+The byte and work fields describe one real-valued ABI-v4 tile invocation:
+
+```text
+float32: two float32 inputs and one float32 output
+int8:    two packed int8 inputs and one int32 output
+aligned_mram_bytes: aligned footprint for that one invocation
+estimated_arithmetic_work: real MACs, m_size * n_size * k_size
+```
+
+The complex route invokes each work unit four times. The plan fields are not
+silently multiplied; aggregate transfer and work are runtime evidence.
+
+`physical_plan_id` is the SHA-256 of canonical JSON containing
+`PLAN_SCHEMA_VERSION`, every `UpmemPlan` field, and every ordered nested
+stage/work-unit field. It excludes `UpmemResources`, paths, callbacks,
+binary/ABI hashes, scales, saturation counts, and runtime facts.
 
 The stage and plan fields above are the complete frozen schema for this reset.
 Runtime constants, ABI identifiers, executable hashes, binary paths, and
 machine-local settings are recorded as executable or run provenance; they do
 not become additional `UpmemPlan` fields.
+
+During migration, these final public records temporarily coexist with privately
+aliased legacy records. This is compatibility state for T4B2 only, not a
+permanent architecture.
 
 ## CPU And UPMEM Single-Run Contracts
 

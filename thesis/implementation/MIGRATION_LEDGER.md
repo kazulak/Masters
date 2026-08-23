@@ -59,10 +59,10 @@ evidence that the corresponding capability is implemented.
 | WP1 research contract | complete | concise README and architecture agree on scope and claims |
 | WP2 semantic model | complete | direct DAG input validation; no active reverse TaskGraph adapter |
 | WP3 planning | complete (T3) | root opt_einsum/cotengra function adapters return validated pairwise paths and the frozen 14-key provenance mapping; the historical projected-prefix planner is not canonical |
-| WP4 numerics | complete (old bounded base and T6A pure policies) | the final reset provides split-complex float32 and shared-scale int8 pure encode/contract/decode functions; CPU/UPMEM route migration and physical validation remain pending |
-| WP5 mapping | complete (old bounded v4 ownership only) | the old bounded base owns v4 lowering, identity, geometry, tiling and work assignment; the final reset stage/plan contract is frozen but not implemented, and this does not claim slice/tasklet/residency scheduling |
+| WP4 numerics | complete (T6A pure policies) | split-complex float32 and shared-scale int8 encode/contract/decode are implemented and verified; complex UPMEM runtime execution and physical validation remain pending |
+| WP5 mapping | complete (T4C final staged mapper) | `plan_upmem`, `validate_upmem_plan`, and `physical_plan_id` implement the singleton contract-stage/host-reduce plan; this does not claim slice grouping, tasklet scheduling, residency, or physical execution |
 | WP6 runtime | complete (old bounded base ownership only) | the old bounded runtime ownership is retained as migration input; the final reset `UpmemResources`/`UpmemSession` single-run boundary remains implementation-pending in T4B1/T4B2 |
-| WP7 baselines | in progress | same-DAG CPU timing is symmetric; external baseline adapters remain to simplify |
+| WP7 baselines | in progress (T4A) | direct same-DAG CPU single-run execution is implemented; physical-plan replay and external baseline adapters remain |
 | WP8 evidence | pending | one timing/evidence schema and compatibility policy |
 | WP9 interface | pending | stable CLI, one experiment schema, and bounded public command set |
 | WP10 cleanup | pending | historical/versioned active source is deleted |
@@ -195,9 +195,33 @@ zero timing semantics. Focused verification passed 43 tests and Ruff, with the
 forbidden legacy-import scan and `git diff --check` clean.
 The full-suite checkpoint passed 1385 tests in 185.58s, with Ruff clean across `src` and `tests`.
 
-This entry does not claim UPMEM execution migration, the evidence schema,
-physical validation, or implementation of T4C. The next task is T4C: implement
-the already-frozen final `UpmemStage` and `UpmemPlan` schema.
+This entry does not claim UPMEM execution migration, the evidence schema, or
+physical validation. T4C is recorded below as complete.
+
+## T4C Final Staged UPMEM Mapper
+
+T4C is complete. The final pure UPMEM mapper implements `plan_upmem`,
+`validate_upmem_plan`, and `physical_plan_id` with `PLAN_SCHEMA_VERSION = 1`.
+The final public plan/resource records temporarily coexist with privately
+aliased legacy compiler records until T4B2 removes the old route.
+
+The current generation emits one singleton `contract_batch` per
+`ContractNode` and one `host_reduce` stage per `ReduceNode`; T9 slice grouping
+is not implemented. Static work and byte fields describe one real ABI-v4 tile
+invocation. Runtime-measured transfers remain pending and will be recorded by
+the execution/evidence layers.
+
+Mapping fails closed for unsupported topology, numeric policy, ABI/geometry,
+int8 bounds, and no-contract work. Internal implementation defects are not
+normalized as unsupported results. T4C does not claim complex UPMEM runtime
+execution, slicing groups, residency, tasklet scheduling, physical validation,
+speedup, scaling, or energy.
+
+The focused final UPMEM set passed 145 tests; an independent reviewer accepted
+the implementation with no P0/P1 findings. The corrected full-suite checkpoint
+passed 1419 tests in 185.46s. Ruff was clean across `src` and `tests`, and
+`git diff --check` passed. The next task is T6B: CPU replay of the physical
+UPMEM plan.
 
 ## Complexity Delta
 
@@ -205,9 +229,9 @@ Update this table after each integration batch.
 
 | Metric | Baseline | Current | Target |
 |---|---:|---:|---:|
-| Active Python modules | 138 | 120 | 12-16 |
-| Class declarations | 307 | 278 | only stable boundary types |
-| Test modules | 78 | 79 | about 10 |
+| Active Python modules | 138 | 123 | 12-16 |
+| Class declarations | 307 | 288 | only stable boundary types |
+| Test modules | 78 | 80 | about 10 |
 | Config files | 63 | 63 | 2 principal experiments |
 | Public Make targets | 78 | 81 | 10 or fewer |
 | Active contraction IRs | 2 | 1 | 1 |
@@ -233,8 +257,9 @@ wc -l`, and `rg '^[A-Za-z0-9_.-]+:' Makefile | wc -l`.
    verified by 20 focused tests and Ruff.
 10. T4A: complete; add immutable results/failure contracts and the direct CPU
     single-run API, independently verified by 43 focused tests and Ruff.
-11. T4C: next; implement the final `UpmemStage` and `UpmemPlan` schema.
-12. T6B: implement CPU replay of the physical UPMEM plan.
+11. T4C: complete; final staged `UpmemStage`/`UpmemPlan` mapper verified by
+    145 focused tests and the corrected full-suite checkpoint.
+12. T6B: next; implement CPU replay of the physical UPMEM plan.
 13. T7: execute complex policies through the unchanged real-tile ABI v4.
 14. T4B1: add the UPMEM session and single-run API.
 15. T4B2: remove generic execution wrappers and migrate callers.

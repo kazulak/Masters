@@ -23,7 +23,7 @@ Circuit + query
 | Semantic network | tensor descriptors and requested output | `TensorNetwork` | non-executable metadata, descriptors, connectivity, and output request |
 | Logical graph | `TensorNetwork` and selected path | `ContractionDAG` | contractions, reductions, dependencies, and logical identity |
 | Numerics | arrays and numeric mode | encoded arrays and scale metadata | packing, rounding, saturation, decode, error utilities |
-| Parallel mapping | DAG, topology, numeric mode | `UpmemPlan` | bounded output-tile assignment and host-roundtrip transfer accounting |
+| Parallel mapping | DAG, topology, numeric mode | `UpmemPlan` | bounded output-tile assignment and static per-real-tile byte/work estimates |
 | CPU execution | DAG and arrays | output and timing | same-DAG NumPy replay |
 | UPMEM runtime | `UpmemPlan` and arrays | output, timing, backend facts | sessions, transfers, launches, collection, no-fallback checks |
 | Experiment | cases and route dimensions | one raw row per repetition | warmups, repetitions, references, validation |
@@ -82,14 +82,40 @@ remains historical.
 
 ## UPMEM Mapping
 
-The mapper converts one DAG into one target-specific physical plan. The current
-bounded v4 mapping records:
+The final mapper contract converts one DAG into one target-specific physical
+plan through these pure functions:
+
+```python
+plan_upmem(dag, *, numeric_policy, topology) -> UpmemPlan
+validate_upmem_plan(dag, plan) -> None
+physical_plan_id(plan) -> str
+```
+
+`plan_upmem` raises `UnsupportedExecution` at the `"mapping"` stage for
+unsupported topology, geometry, or overflow before runtime side effects. The
+contract is frozen in `docs/reset_contract.md`; T4C is implemented.
+
+The final bounded plan records:
 
 - numeric representation;
 - output-tile work units and their assignment;
 - requested topology, including DPU and rank assignments;
-- host-roundtrip transfer accounting;
+- static per-real-tile byte and arithmetic estimates;
 - kernel policy.
+
+Runtime transfer accounting remains future work and belongs to execution
+evidence, not these static plan estimates.
+
+Work-unit byte and arithmetic fields describe one real-valued ABI-v4 tile
+invocation. The complex route invokes that work unit four times; aggregate
+transfer and work are runtime evidence. Work-unit order is
+`(logical_rank, logical_dpu, wave, batch_start, m_start, n_start, k_start,
+stable_tile_id)`. A host-reduction stage consumes its declared direct producer
+nodes, which must occur in earlier stages but need not be immediately
+preceding.
+
+During the migration, the final public plan records temporarily coexist with
+privately aliased legacy records until T4B2. This is not the permanent design.
 
 Tasklet scheduling, slice-stage scheduling, and intermediate residency are
 planned extensions. They are not implemented or claimable by the current v4
@@ -138,7 +164,7 @@ ownership of the numeric, CPU, UPMEM, experiment, or evidence boundaries.
 ```text
 T6A pure numerics
   -> T4A results and CPU single-run API
-  -> T4C implement final UpmemStage/UpmemPlan schema
+  -> T4C final UpmemStage/UpmemPlan schema
   -> T6B physical-plan CPU replay
   -> T7 four real-product ABI execution
   -> T4B1 UPMEM session API
@@ -195,13 +221,15 @@ The active physical adapter is
 `src/quantum_bench/upmem/runtime.py`, backed by the self-contained native tree
 at `native/upmem/runtime/`. Historical M5/v4 Python and native modules are not
 imported by the active path. The completed T1A-D ownership migration is
-followed by the corrected task order above. T4-0 is contract-frozen and
-implementation-pending. The current WP4, WP5, and WP6 completion labels refer
-only to the old bounded base ownership and runtime behavior; they do not
-certify the final reset numeric, session, stage, or evidence contracts. The
-next implementation work is therefore T6A, followed by T4A, T4C, T6B, T7,
-T4B1, T4B2, and T5. Configuration, reporting, cleanup, software qualification,
-and later ETH qualification remain subsequent work.
+followed by the corrected task order above. T6A pure split-complex numerics,
+T4A immutable results and direct CPU single-run execution, and T4C final
+staged UPMEM mapping are complete and verified. T4C currently emits singleton
+contract stages plus host reductions; it does not claim complex physical
+execution, slice grouping, residency, tasklet scheduling, physical validation,
+speedup, scaling, or energy. The next implementation work is T6B CPU replay of
+the physical UPMEM plan, followed by T7, T4B1, T4B2, and T5. Configuration,
+reporting, cleanup, software qualification, and later ETH qualification remain
+subsequent work.
 
 Progress and temporary adapter expiry are recorded in
 [MIGRATION_LEDGER.md](MIGRATION_LEDGER.md). Historical behavior remains at the

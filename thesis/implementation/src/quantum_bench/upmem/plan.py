@@ -4,25 +4,32 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Iterable
+import hashlib
+import json
+import re
+from dataclasses import dataclass, field
+from typing import Callable, Literal
 
 from quantum_bench.execution.contracts import (
-    ExecutionPlan,
-    NumericMode,
-    Target,
-    UnsupportedExecution,
-    UpmemCompileRequest,
-    UpmemNodePlan,
-    UpmemPlan,
-    UpmemTopology,
-    UpmemWorkUnit,
+    ExecutionPlan as _LegacyExecutionPlan,
+    NumericMode as _LegacyNumericMode,
+    Target as _LegacyTarget,
+    UnsupportedExecution as _LegacyUnsupportedExecution,
+    UpmemCompileRequest as _LegacyUpmemCompileRequest,
+    UpmemNodePlan as _LegacyUpmemNodePlan,
+    UpmemPlan as _LegacyUpmemPlan,
+    UpmemTopology as _LegacyUpmemTopology,
+    UpmemWorkUnit as _LegacyUpmemWorkUnit,
 )
 from quantum_bench.lowering import contraction_dag_hash, validate_contraction_dag
 from quantum_bench.model import ContractNode, ContractionDAG, ReduceNode
+from quantum_bench.numerics import NumericPolicy
 from quantum_bench.upmem.protocol import (
+    INT32_MAX,
     MAX_CONTRACTED,
-    MAX_INT32_SAFE_K,
     NATIVE_EXECUTION_IDENTITY,
 )
+from quantum_bench.results import UnsupportedExecution
 from quantum_bench.upmem.tiling import (
     M5Tile,
     TileLoweringError,
@@ -47,6 +54,189 @@ UPMEM_REDUCTION_ID = "m5_tile_host_reduction"
 # builder before it serializes the native header.
 _V4_UINT64_MAX = (1 << 64) - 1
 _V4_MAX_BATCH_COUNT = (1 << 32) - 1
+PLAN_SCHEMA_VERSION = 1
+_INT8_MAX = 127
+_INT8_PRODUCT = _INT8_MAX * _INT8_MAX
+_INT64_MAX = (1 << 63) - 1
+_LEGACY_MAX_INT32_SAFE_K = INT32_MAX // (128 * 128)
+_FINAL_NUMERIC_POLICIES = {
+    "split_complex_float32_v1",
+    "split_complex_int8_shared_scale_v1",
+}
+
+
+def _require_nonempty_string(name: str, value: object) -> None:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{name} must be a nonempty string")
+
+
+def _require_tuple(name: str, value: object) -> None:
+    if not isinstance(value, tuple):
+        raise TypeError(f"{name} must be a tuple")
+
+
+def _require_int(name: str, value: object, *, positive: bool = False) -> None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{name} must be an integer")
+    minimum = 1 if positive else 0
+    if value < minimum:
+        qualifier = "positive" if positive else "nonnegative"
+        raise ValueError(f"{name} must be {qualifier}")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class UpmemTopology:
+    dpu_count: int
+    tasklets_per_dpu: int
+    rank_count: int = 1
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("dpu_count", self.dpu_count),
+            ("tasklets_per_dpu", self.tasklets_per_dpu),
+            ("rank_count", self.rank_count),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(f"{name} must be an integer")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class UpmemWorkUnit:
+    node_id: str
+    stable_tile_id: str
+    wave: int
+    logical_rank: int
+    logical_dpu: int
+    batch_start: int
+    batch_size: int
+    m_start: int
+    m_size: int
+    n_start: int
+    n_size: int
+    k_start: int
+    k_size: int
+    estimated_input_bytes: int
+    estimated_output_bytes: int
+    aligned_mram_bytes: int
+    estimated_arithmetic_work: int
+
+    def __post_init__(self) -> None:
+        _require_nonempty_string("node_id", self.node_id)
+        _require_nonempty_string("stable_tile_id", self.stable_tile_id)
+        for name in (
+            "wave",
+            "logical_rank",
+            "logical_dpu",
+            "batch_start",
+            "m_start",
+            "n_start",
+            "k_start",
+            "estimated_input_bytes",
+            "estimated_output_bytes",
+            "aligned_mram_bytes",
+        ):
+            _require_int(name, getattr(self, name))
+        for name in (
+            "batch_size",
+            "m_size",
+            "n_size",
+            "k_size",
+            "estimated_arithmetic_work",
+        ):
+            _require_int(name, getattr(self, name), positive=True)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class UpmemStage:
+    stage_id: str
+    kind: Literal["contract_batch", "host_reduce"]
+    node_ids: tuple[str, ...]
+    work_units: tuple[UpmemWorkUnit, ...]
+
+    def __post_init__(self) -> None:
+        _require_nonempty_string("stage_id", self.stage_id)
+        if self.kind not in {"contract_batch", "host_reduce"}:
+            raise ValueError(f"unsupported stage kind: {self.kind!r}")
+        _require_tuple("node_ids", self.node_ids)
+        _require_tuple("work_units", self.work_units)
+        if not self.node_ids or len(set(self.node_ids)) != len(self.node_ids):
+            raise ValueError("stage node_ids must be unique and nonempty")
+        for node_id in self.node_ids:
+            _require_nonempty_string("stage node_id", node_id)
+        for unit in self.work_units:
+            if not isinstance(unit, UpmemWorkUnit):
+                raise TypeError("stage work_units must contain UpmemWorkUnit records")
+            if unit.node_id not in self.node_ids:
+                raise ValueError("work unit node_id is not declared by its stage")
+        if self.kind == "host_reduce":
+            if len(self.node_ids) != 1 or self.work_units:
+                raise ValueError("host_reduce stages have one node and no work units")
+        elif not self.work_units:
+            raise ValueError("contract_batch stages require work units")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class UpmemPlan:
+    logical_plan_id: str
+    numeric_policy: NumericPolicy
+    topology: UpmemTopology
+    stages: tuple[UpmemStage, ...]
+    intermediate_policy: Literal["host_roundtrip_v1"] = "host_roundtrip_v1"
+    kernel_policy: str = "real_tile_four_product_v1"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.logical_plan_id, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", self.logical_plan_id
+        ):
+            raise ValueError("logical_plan_id must be a lowercase SHA-256 hex digest")
+        if self.numeric_policy not in _FINAL_NUMERIC_POLICIES:
+            raise ValueError(f"unsupported final numeric policy: {self.numeric_policy!r}")
+        if not isinstance(self.topology, UpmemTopology):
+            raise TypeError("topology must be the final UpmemTopology record")
+        _require_tuple("stages", self.stages)
+        for stage in self.stages:
+            if not isinstance(stage, UpmemStage):
+                raise TypeError("stages must contain UpmemStage records")
+        stage_ids = tuple(stage.stage_id for stage in self.stages)
+        if len(set(stage_ids)) != len(stage_ids):
+            raise ValueError("plan stage IDs must be unique")
+        node_ids = tuple(node_id for stage in self.stages for node_id in stage.node_ids)
+        if len(set(node_ids)) != len(node_ids):
+            raise ValueError("plan node IDs must be unique")
+        if self.intermediate_policy != "host_roundtrip_v1":
+            raise ValueError("unsupported intermediate policy")
+        _require_nonempty_string("kernel_policy", self.kernel_policy)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class UpmemResources:
+    session_root: str
+    host_binary: str
+    dpu_binary: str
+    initialization_binary: str
+    rank_paths: tuple[str, ...] = ()
+    session_opener: Callable[..., object] | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
+
+    def __post_init__(self) -> None:
+        for name in (
+            "session_root",
+            "host_binary",
+            "dpu_binary",
+            "initialization_binary",
+        ):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{name} must be a nonempty string")
+        if not isinstance(self.rank_paths, tuple):
+            raise TypeError("rank_paths must be a tuple")
+        if any(not isinstance(path, str) or not path for path in self.rank_paths):
+            raise ValueError("rank_paths must contain nonempty strings")
+        if self.session_opener is not None and not callable(self.session_opener):
+            raise TypeError("session_opener must be callable or None")
 
 
 class _UnsupportedUpmemNode(Exception):
@@ -56,176 +246,208 @@ class _UnsupportedUpmemNode(Exception):
         self.reason = reason
 
 
-def compile_upmem(
-    dag: ContractionDAG, request: UpmemCompileRequest
-) -> ExecutionPlan | UnsupportedExecution:
-    """Compile a semantic DAG into the bounded M5 v4 execution contract."""
-
-    if not isinstance(request, UpmemCompileRequest):
-        raise TypeError("compile_upmem requires an UpmemCompileRequest")
-    validate_contraction_dag(dag)
-    actual_hash = contraction_dag_hash(dag)
-    if request.contraction_dag_hash != actual_hash:
-        raise ValueError(
-            "UPMEM compile request hash does not match the supplied contraction DAG"
-        )
-    _validate_upmem_request(request)
-    numeric_mode = NumericMode(request.numeric_mode)
-
-    order = _topological_order(dag)
-    node_plans_list: list[UpmemNodePlan] = []
-    for node in _nodes_in_order(dag, order):
-        try:
-            node_plans_list.append(_compile_upmem_node(node, request, numeric_mode))
-        except _UnsupportedUpmemNode as exc:
-            return UnsupportedExecution(
-                target=Target.UPMEM,
-                capability=exc.capability,
-                reason=exc.reason,
-            )
-    node_plans = tuple(node_plans_list)
-
-    return ExecutionPlan(
-        contraction_dag_hash=actual_hash,
-        target=Target.UPMEM,
-        payload=UpmemPlan(
-            topology=request.topology,
-            numeric_mode=numeric_mode,
-            kernel_id=UPMEM_KERNEL_ID,
-            decomposition_id=UPMEM_DECOMPOSITION_ID,
-            placement_id=UPMEM_PLACEMENT_ID,
-            reduction_id=UPMEM_REDUCTION_ID,
-            node_plans=node_plans,
-            profile_id=UPMEM_PROFILE_ID,
-            abi_id=UPMEM_ABI_ID,
-            session_id=UPMEM_SESSION_ID,
-            dispatch_id=UPMEM_DISPATCH_ID,
-        ),
-    )
-
-
-def _validate_upmem_request(request: UpmemCompileRequest) -> None:
-    topology = request.topology
-    if topology.dpu_count < 1 or topology.rank_count < 1:
-        raise ValueError("UPMEM topology counts must be positive")
-    if topology.dpu_count % topology.rank_count:
-        raise ValueError("UPMEM dpu_count must be divisible by rank_count")
-    if topology.dpu_count // topology.rank_count > 64:
-        raise ValueError("UPMEM supports at most 64 DPUs per rank")
-    if not 1 <= topology.tasklets_per_dpu <= 24:
-        raise ValueError("UPMEM tasklets_per_dpu must be in [1, 24]")
-    if request.numeric_mode not in {
-        NumericMode.FLOAT32_REAL,
-        NumericMode.HOST_PACKED_INT8_PER_TASK_V1,
-    }:
-        raise ValueError(f"unsupported M5 UPMEM numeric mode: {request.numeric_mode!r}")
-
-
-def _compile_upmem_node(
-    node: ContractNode | ReduceNode,
-    request: UpmemCompileRequest,
-    numeric_mode: NumericMode,
-) -> UpmemNodePlan:
-    if isinstance(node, ReduceNode):
-        return UpmemNodePlan(
-            node_id=node.node_id,
-            node_kind="reduce",
-            canonical_shape=None,
-            work_units=(),
-            reduction_mode="host_sum_v1",
-            arithmetic_imbalance=0.0,
-        )
-    batch, m, n, contracted_size = _validate_v4_node_geometry(node)
-    if contracted_size > MAX_CONTRACTED:
-        raise _UnsupportedUpmemNode(
-            capability="upmem_max_contracted_elements",
-            reason=(
-                f"UPMEM node {node.node_id} contracted K {contracted_size} "
-                f"exceeds v4 limit {MAX_CONTRACTED}"
-            ),
-        )
-    if (
-        numeric_mode is NumericMode.HOST_PACKED_INT8_PER_TASK_V1
-        and contracted_size > MAX_INT32_SAFE_K
-    ):
-        raise _UnsupportedUpmemNode(
-            capability="upmem_int8_int32_accumulation_bound",
-            reason=(
-                f"UPMEM node {node.node_id} contracted K {contracted_size} "
-                f"exceeds int32 int8 safety bound {MAX_INT32_SAFE_K}"
-            ),
-        )
-    tile_numeric_mode = (
-        "host_packed_int8"
-        if numeric_mode is NumericMode.HOST_PACKED_INT8_PER_TASK_V1
-        else "float32"
-    )
-    limits = tile_limits_for_numeric_mode(tile_numeric_mode)
-    tiles = plan_tile_shapes(batch, m, contracted_size, n, limits=limits)
-    waves = order_tile_waves(tiles, request.topology.dpu_count)
-    work_units = _compile_work_units(node.node_id, waves, request)
-    return UpmemNodePlan(
-        node_id=node.node_id,
-        node_kind="contract",
-        canonical_shape=(batch, m, contracted_size, n),
-        work_units=work_units,
-        reduction_mode=UPMEM_REDUCTION_ID,
-        arithmetic_imbalance=_arithmetic_imbalance(work_units, request.topology),
-    )
-
-
-def validate_upmem_plan_for_dag(dag: ContractionDAG, plan: UpmemPlan) -> None:
-    """Recompute and require the exact static v4 node plan for ``dag``."""
+def plan_upmem(
+    dag: ContractionDAG,
+    *,
+    numeric_policy: NumericPolicy,
+    topology: UpmemTopology,
+) -> UpmemPlan:
+    """Create the pure T4C physical plan for an already lowered DAG."""
 
     validate_contraction_dag(dag)
-    order = _topological_order(dag)
-    node_ids = tuple(node_plan.node_id for node_plan in plan.node_plans)
-    if node_ids != order:
-        raise ValueError("UPMEM node plans do not match deterministic DAG order")
-    request = UpmemCompileRequest(
-        contraction_dag_hash=contraction_dag_hash(dag),
-        numeric_mode=plan.numeric_mode,
+    return _build_upmem_plan(dag, numeric_policy=numeric_policy, topology=topology)
+
+
+def validate_upmem_plan(dag: ContractionDAG, plan: UpmemPlan) -> None:
+    """Require that ``plan`` is the deterministic pure mapping for ``dag``."""
+
+    if not isinstance(plan, UpmemPlan):
+        raise TypeError("validate_upmem_plan requires the final UpmemPlan record")
+    validate_contraction_dag(dag)
+    expected = _build_upmem_plan(
+        dag,
+        numeric_policy=plan.numeric_policy,
         topology=plan.topology,
     )
-    expected: list[UpmemNodePlan] = []
-    for node in _nodes_in_order(dag, order):
+    if plan != expected:
+        raise ValueError("UPMEM physical plan differs from pure recomputation")
+
+
+def physical_plan_id(plan: UpmemPlan) -> str:
+    """Hash only the ordered, executable-independent physical plan fields."""
+
+    if not isinstance(plan, UpmemPlan):
+        raise TypeError("physical_plan_id requires the final UpmemPlan record")
+    payload = {
+        "PLAN_SCHEMA_VERSION": PLAN_SCHEMA_VERSION,
+        "logical_plan_id": plan.logical_plan_id,
+        "numeric_policy": plan.numeric_policy,
+        "topology": {
+            "dpu_count": plan.topology.dpu_count,
+            "tasklets_per_dpu": plan.topology.tasklets_per_dpu,
+            "rank_count": plan.topology.rank_count,
+        },
+        "stages": [
+            {
+                "stage_id": stage.stage_id,
+                "kind": stage.kind,
+                "node_ids": list(stage.node_ids),
+                "work_units": [_work_unit_payload(unit) for unit in stage.work_units],
+            }
+            for stage in plan.stages
+        ],
+        "intermediate_policy": plan.intermediate_policy,
+        "kernel_policy": plan.kernel_policy,
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("ascii")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _build_upmem_plan(
+    dag: ContractionDAG,
+    *,
+    numeric_policy: NumericPolicy,
+    topology: UpmemTopology,
+) -> UpmemPlan:
+    if not any(isinstance(node, ContractNode) for node in dag.nodes):
+        raise UnsupportedExecution(
+            "mapping",
+            "UPMEM physical mapping requires at least one ContractNode with kernel work",
+            "upmem_no_contract_work",
+        )
+    _validate_final_topology(topology)
+    tile_numeric_mode = _tile_numeric_mode(numeric_policy)
+    limits = tile_limits_for_numeric_mode(tile_numeric_mode)
+    order = _topological_order(dag)
+    nodes = {node.node_id: node for node in dag.nodes}
+    stages: list[UpmemStage] = []
+    for node_id in order:
+        node = nodes[node_id]
+        if isinstance(node, ReduceNode):
+            stages.append(
+                UpmemStage(
+                    stage_id=f"host_reduce:{node.node_id}",
+                    kind="host_reduce",
+                    node_ids=(node.node_id,),
+                    work_units=(),
+                )
+            )
+            continue
         try:
-            expected.append(_compile_upmem_node(node, request, plan.numeric_mode))
+            batch, m, n, contracted_size = _validate_v4_node_geometry(node)
+            if contracted_size > MAX_CONTRACTED:
+                raise _UnsupportedUpmemNode(
+                    capability="upmem_max_contracted_elements",
+                    reason=(
+                        f"UPMEM node {node.node_id} contracted K {contracted_size} "
+                        f"exceeds v4 limit {MAX_CONTRACTED}"
+                    ),
+                )
+            tiles = plan_tile_shapes(
+                batch,
+                m,
+                contracted_size,
+                n,
+                limits=limits,
+            )
+            if numeric_policy == "split_complex_int8_shared_scale_v1":
+                _validate_final_int8_bounds(node.node_id, contracted_size, tiles)
+            waves = order_tile_waves(tiles, topology.dpu_count)
+            units = _final_work_units(node.node_id, waves, topology)
         except _UnsupportedUpmemNode as exc:
-            raise ValueError(
-                f"UPMEM node {node.node_id} is not lowerable: {exc.reason}"
+            raise UnsupportedExecution("mapping", exc.reason, exc.capability) from exc
+        except TileLoweringError as exc:
+            raise UnsupportedExecution(
+                "mapping",
+                f"UPMEM node {node.node_id} is not representable: {exc}",
+                "upmem_v4_geometry",
             ) from exc
-    if plan.node_plans != tuple(expected):
-        raise ValueError("UPMEM node plans differ from pure v4 recomputation")
-
-
-def validate_active_upmem_plan(plan: UpmemPlan) -> None:
-    """Validate the identity contract owned by the active UPMEM compiler."""
-
-    expected = (
-        ("profile_id", UPMEM_PROFILE_ID),
-        ("abi_id", UPMEM_ABI_ID),
-        ("session_id", UPMEM_SESSION_ID),
-        ("dispatch_id", UPMEM_DISPATCH_ID),
-        ("kernel_id", UPMEM_KERNEL_ID),
-        ("decomposition_id", UPMEM_DECOMPOSITION_ID),
-        ("placement_id", UPMEM_PLACEMENT_ID),
-        ("reduction_id", UPMEM_REDUCTION_ID),
+        stages.append(
+            UpmemStage(
+                stage_id=f"contract_batch:{node.node_id}",
+                kind="contract_batch",
+                node_ids=(node.node_id,),
+                work_units=units,
+            )
+        )
+    plan = UpmemPlan(
+        logical_plan_id=contraction_dag_hash(dag),
+        numeric_policy=numeric_policy,
+        topology=topology,
+        stages=tuple(stages),
     )
-    for field, expected_value in expected:
-        actual_value = getattr(plan, field)
-        if actual_value != expected_value:
-            raise ValueError(f"unsupported active UPMEM {field}: {actual_value!r}")
+    _validate_final_stage_dependencies(dag, plan)
+    return plan
 
 
-def _compile_work_units(
+def _validate_final_topology(topology: UpmemTopology) -> None:
+    if not isinstance(topology, UpmemTopology):
+        raise TypeError("plan_upmem requires the final UpmemTopology record")
+    if topology.dpu_count < 1 or topology.rank_count < 1:
+        raise UnsupportedExecution(
+            "mapping", "UPMEM topology counts must be positive", "upmem_topology"
+        )
+    if topology.dpu_count % topology.rank_count:
+        raise UnsupportedExecution(
+            "mapping",
+            "UPMEM dpu_count must be divisible by rank_count",
+            "upmem_topology_divisibility",
+        )
+    if topology.dpu_count // topology.rank_count > 64:
+        raise UnsupportedExecution(
+            "mapping",
+            "UPMEM supports at most 64 DPUs per rank",
+            "upmem_dpus_per_rank",
+        )
+    if not 1 <= topology.tasklets_per_dpu <= 24:
+        raise UnsupportedExecution(
+            "mapping",
+            "UPMEM tasklets_per_dpu must be in [1, 24]",
+            "upmem_tasklets_per_dpu",
+        )
+
+
+def _tile_numeric_mode(numeric_policy: NumericPolicy) -> str:
+    if numeric_policy == "split_complex_float32_v1":
+        return "float32"
+    if numeric_policy == "split_complex_int8_shared_scale_v1":
+        return "host_packed_int8"
+    raise UnsupportedExecution(
+        "mapping",
+        f"unsupported UPMEM numeric policy: {numeric_policy!r}",
+        "upmem_numeric_policy",
+    )
+
+
+def _validate_final_int8_bounds(
+    node_id: str, contracted_size: int, tiles: tuple[M5Tile, ...]
+) -> None:
+    if 2 * contracted_size * _INT8_PRODUCT > _INT64_MAX:
+        raise UnsupportedExecution(
+            "mapping",
+            f"UPMEM node {node_id} exceeds int64 complex accumulation bound",
+            "upmem_int8_int64_accumulation_bound",
+        )
+    for tile in tiles:
+        if tile.k_size * _INT8_PRODUCT > INT32_MAX:
+            raise UnsupportedExecution(
+                "mapping",
+                f"UPMEM tile {tile.id} exceeds int32 int8 accumulation bound",
+                "upmem_int8_int32_accumulation_bound",
+            )
+
+
+def _final_work_units(
     node_id: str,
     waves: tuple[tuple[M5Tile, ...], ...],
-    request: UpmemCompileRequest,
+    topology: UpmemTopology,
 ) -> tuple[UpmemWorkUnit, ...]:
-    """Assign each shape-only v4 tile to a deterministic logical rank/DPU."""
-
-    dpus_per_rank = request.topology.dpu_count // request.topology.rank_count
+    dpus_per_rank = topology.dpu_count // topology.rank_count
     units: list[UpmemWorkUnit] = []
     for wave_index, wave in enumerate(waves):
         for global_slot, tile in enumerate(wave):
@@ -250,11 +472,262 @@ def _compile_work_units(
                     estimated_arithmetic_work=tile.m_size * tile.n_size * tile.k_size,
                 )
             )
+    return tuple(sorted(units, key=_work_unit_sort_key))
+
+
+def _work_unit_sort_key(unit: UpmemWorkUnit) -> tuple[object, ...]:
+    return (
+        unit.logical_rank,
+        unit.logical_dpu,
+        unit.wave,
+        unit.batch_start,
+        unit.m_start,
+        unit.n_start,
+        unit.k_start,
+        unit.stable_tile_id,
+    )
+
+
+def _work_unit_payload(unit: UpmemWorkUnit) -> dict[str, object]:
+    return {
+        "node_id": unit.node_id,
+        "stable_tile_id": unit.stable_tile_id,
+        "wave": unit.wave,
+        "logical_rank": unit.logical_rank,
+        "logical_dpu": unit.logical_dpu,
+        "batch_start": unit.batch_start,
+        "batch_size": unit.batch_size,
+        "m_start": unit.m_start,
+        "m_size": unit.m_size,
+        "n_start": unit.n_start,
+        "n_size": unit.n_size,
+        "k_start": unit.k_start,
+        "k_size": unit.k_size,
+        "estimated_input_bytes": unit.estimated_input_bytes,
+        "estimated_output_bytes": unit.estimated_output_bytes,
+        "aligned_mram_bytes": unit.aligned_mram_bytes,
+        "estimated_arithmetic_work": unit.estimated_arithmetic_work,
+    }
+
+
+def _validate_final_stage_dependencies(
+    dag: ContractionDAG, plan: UpmemPlan
+) -> None:
+    stage_index = {
+        node_id: index
+        for index, stage in enumerate(plan.stages)
+        for node_id in stage.node_ids
+    }
+    for node in dag.nodes:
+        current = stage_index[node.node_id]
+        for dependency in node.dependencies:
+            if dependency not in stage_index or stage_index[dependency] >= current:
+                raise ValueError(
+                    f"UPMEM stage dependency is not earlier: {node.node_id} <- {dependency}"
+                )
+
+
+def compile_upmem(
+    dag: ContractionDAG, request: _LegacyUpmemCompileRequest
+) -> _LegacyExecutionPlan | _LegacyUnsupportedExecution:
+    """Compile a semantic DAG into the bounded M5 v4 execution contract."""
+
+    if not isinstance(request, _LegacyUpmemCompileRequest):
+        raise TypeError("compile_upmem requires an UpmemCompileRequest")
+    validate_contraction_dag(dag)
+    actual_hash = contraction_dag_hash(dag)
+    if request.contraction_dag_hash != actual_hash:
+        raise ValueError(
+            "UPMEM compile request hash does not match the supplied contraction DAG"
+        )
+    _validate_upmem_request(request)
+    numeric_mode = _LegacyNumericMode(request.numeric_mode)
+
+    order = _topological_order(dag)
+    node_plans_list: list[_LegacyUpmemNodePlan] = []
+    for node in _nodes_in_order(dag, order):
+        try:
+            node_plans_list.append(_compile_upmem_node(node, request, numeric_mode))
+        except _UnsupportedUpmemNode as exc:
+            return _LegacyUnsupportedExecution(
+                target=_LegacyTarget.UPMEM,
+                capability=exc.capability,
+                reason=exc.reason,
+            )
+    node_plans = tuple(node_plans_list)
+
+    return _LegacyExecutionPlan(
+        contraction_dag_hash=actual_hash,
+        target=_LegacyTarget.UPMEM,
+        payload=_LegacyUpmemPlan(
+            topology=request.topology,
+            numeric_mode=numeric_mode,
+            kernel_id=UPMEM_KERNEL_ID,
+            decomposition_id=UPMEM_DECOMPOSITION_ID,
+            placement_id=UPMEM_PLACEMENT_ID,
+            reduction_id=UPMEM_REDUCTION_ID,
+            node_plans=node_plans,
+            profile_id=UPMEM_PROFILE_ID,
+            abi_id=UPMEM_ABI_ID,
+            session_id=UPMEM_SESSION_ID,
+            dispatch_id=UPMEM_DISPATCH_ID,
+        ),
+    )
+
+
+def _validate_upmem_request(request: _LegacyUpmemCompileRequest) -> None:
+    topology = request.topology
+    if topology.dpu_count < 1 or topology.rank_count < 1:
+        raise ValueError("UPMEM topology counts must be positive")
+    if topology.dpu_count % topology.rank_count:
+        raise ValueError("UPMEM dpu_count must be divisible by rank_count")
+    if topology.dpu_count // topology.rank_count > 64:
+        raise ValueError("UPMEM supports at most 64 DPUs per rank")
+    if not 1 <= topology.tasklets_per_dpu <= 24:
+        raise ValueError("UPMEM tasklets_per_dpu must be in [1, 24]")
+    if request.numeric_mode not in {
+        _LegacyNumericMode.FLOAT32_REAL,
+        _LegacyNumericMode.HOST_PACKED_INT8_PER_TASK_V1,
+    }:
+        raise ValueError(f"unsupported M5 UPMEM numeric mode: {request.numeric_mode!r}")
+
+
+def _compile_upmem_node(
+    node: ContractNode | ReduceNode,
+    request: _LegacyUpmemCompileRequest,
+    numeric_mode: _LegacyNumericMode,
+) -> _LegacyUpmemNodePlan:
+    if isinstance(node, ReduceNode):
+        return _LegacyUpmemNodePlan(
+            node_id=node.node_id,
+            node_kind="reduce",
+            canonical_shape=None,
+            work_units=(),
+            reduction_mode="host_sum_v1",
+            arithmetic_imbalance=0.0,
+        )
+    batch, m, n, contracted_size = _validate_v4_node_geometry(node)
+    if contracted_size > MAX_CONTRACTED:
+        raise _UnsupportedUpmemNode(
+            capability="upmem_max_contracted_elements",
+            reason=(
+                f"UPMEM node {node.node_id} contracted K {contracted_size} "
+                f"exceeds v4 limit {MAX_CONTRACTED}"
+            ),
+        )
+    if (
+        numeric_mode is _LegacyNumericMode.HOST_PACKED_INT8_PER_TASK_V1
+        and contracted_size > _LEGACY_MAX_INT32_SAFE_K
+    ):
+        raise _UnsupportedUpmemNode(
+            capability="upmem_int8_int32_accumulation_bound",
+            reason=(
+                f"UPMEM node {node.node_id} contracted K {contracted_size} "
+                f"exceeds int32 int8 safety bound {_LEGACY_MAX_INT32_SAFE_K}"
+            ),
+        )
+    tile_numeric_mode = (
+        "host_packed_int8"
+        if numeric_mode is _LegacyNumericMode.HOST_PACKED_INT8_PER_TASK_V1
+        else "float32"
+    )
+    limits = tile_limits_for_numeric_mode(tile_numeric_mode)
+    tiles = plan_tile_shapes(batch, m, contracted_size, n, limits=limits)
+    waves = order_tile_waves(tiles, request.topology.dpu_count)
+    work_units = _compile_work_units(node.node_id, waves, request)
+    return _LegacyUpmemNodePlan(
+        node_id=node.node_id,
+        node_kind="contract",
+        canonical_shape=(batch, m, contracted_size, n),
+        work_units=work_units,
+        reduction_mode=UPMEM_REDUCTION_ID,
+        arithmetic_imbalance=_arithmetic_imbalance(work_units, request.topology),
+    )
+
+
+def validate_upmem_plan_for_dag(
+    dag: ContractionDAG, plan: _LegacyUpmemPlan
+) -> None:
+    """Recompute and require the exact static v4 node plan for ``dag``."""
+
+    validate_contraction_dag(dag)
+    order = _topological_order(dag)
+    node_ids = tuple(node_plan.node_id for node_plan in plan.node_plans)
+    if node_ids != order:
+        raise ValueError("UPMEM node plans do not match deterministic DAG order")
+    request = _LegacyUpmemCompileRequest(
+        contraction_dag_hash=contraction_dag_hash(dag),
+        numeric_mode=plan.numeric_mode,
+        topology=plan.topology,
+    )
+    expected: list[_LegacyUpmemNodePlan] = []
+    for node in _nodes_in_order(dag, order):
+        try:
+            expected.append(_compile_upmem_node(node, request, plan.numeric_mode))
+        except _UnsupportedUpmemNode as exc:
+            raise ValueError(
+                f"UPMEM node {node.node_id} is not lowerable: {exc.reason}"
+            ) from exc
+    if plan.node_plans != tuple(expected):
+        raise ValueError("UPMEM node plans differ from pure v4 recomputation")
+
+
+def validate_active_upmem_plan(plan: _LegacyUpmemPlan) -> None:
+    """Validate the identity contract owned by the active UPMEM compiler."""
+
+    expected = (
+        ("profile_id", UPMEM_PROFILE_ID),
+        ("abi_id", UPMEM_ABI_ID),
+        ("session_id", UPMEM_SESSION_ID),
+        ("dispatch_id", UPMEM_DISPATCH_ID),
+        ("kernel_id", UPMEM_KERNEL_ID),
+        ("decomposition_id", UPMEM_DECOMPOSITION_ID),
+        ("placement_id", UPMEM_PLACEMENT_ID),
+        ("reduction_id", UPMEM_REDUCTION_ID),
+    )
+    for field_name, expected_value in expected:
+        actual_value = getattr(plan, field_name)
+        if actual_value != expected_value:
+            raise ValueError(f"unsupported active UPMEM {field_name}: {actual_value!r}")
+
+
+def _compile_work_units(
+    node_id: str,
+    waves: tuple[tuple[M5Tile, ...], ...],
+    request: _LegacyUpmemCompileRequest,
+) -> tuple[_LegacyUpmemWorkUnit, ...]:
+    """Assign each shape-only v4 tile to a deterministic logical rank/DPU."""
+
+    dpus_per_rank = request.topology.dpu_count // request.topology.rank_count
+    units: list[_LegacyUpmemWorkUnit] = []
+    for wave_index, wave in enumerate(waves):
+        for global_slot, tile in enumerate(wave):
+            units.append(
+                _LegacyUpmemWorkUnit(
+                    node_id=node_id,
+                    stable_tile_id=tile.id,
+                    wave=wave_index,
+                    logical_rank=global_slot // dpus_per_rank,
+                    logical_dpu=global_slot % dpus_per_rank,
+                    batch_start=tile.batch_index,
+                    batch_size=1,
+                    m_start=tile.m_start,
+                    m_size=tile.m_size,
+                    n_start=tile.n_start,
+                    n_size=tile.n_size,
+                    k_start=tile.k_start,
+                    k_size=tile.k_size,
+                    estimated_input_bytes=tile.left_bytes + tile.right_bytes,
+                    estimated_output_bytes=tile.output_bytes,
+                    aligned_mram_bytes=tile.aligned_mram_bytes,
+                    estimated_arithmetic_work=tile.m_size * tile.n_size * tile.k_size,
+                )
+            )
     return tuple(units)
 
 
 def _arithmetic_imbalance(
-    work_units: tuple[UpmemWorkUnit, ...], topology: UpmemTopology
+    work_units: tuple[_LegacyUpmemWorkUnit, ...], topology: _LegacyUpmemTopology
 ) -> float:
     total_dpu_count = topology.dpu_count
     dpus_per_rank = total_dpu_count // topology.rank_count
@@ -386,7 +859,16 @@ def _topological_order(dag: ContractionDAG) -> tuple[str, ...]:
 
 
 __all__ = [
+    "PLAN_SCHEMA_VERSION",
+    "UpmemPlan",
+    "UpmemResources",
+    "UpmemStage",
+    "UpmemTopology",
+    "UpmemWorkUnit",
     "compile_upmem",
+    "physical_plan_id",
+    "plan_upmem",
     "validate_active_upmem_plan",
+    "validate_upmem_plan",
     "validate_upmem_plan_for_dag",
 ]
