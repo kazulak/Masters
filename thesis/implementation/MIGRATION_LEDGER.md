@@ -410,7 +410,10 @@ wc -l`, and `rg '^[A-Za-z0-9_.-]+:' Makefile | wc -l`.
     are verified by 111 focused tests, an independent correctness audit, and
     the 1568-test full-suite checkpoint. Slice branches remain sequential, so
     this is not physical slice-parallel evidence.
-21. T10A: add the Quimb/cotengra direct baseline.
+21. T10A: complete; direct Quimb/cotengra baselines use canonical jobs,
+    deterministic planner policies, canonical statevector order, immutable
+    samples, and selected-path fingerprints. Verified by 21 focused tests and
+    an independent no-P0/P1 audit.
 22. T10B: add the QuEST CPU direct baseline.
 23. T10C: add QuEST GPU capability and runtime verification.
 24. T11A: add the configuration schema and public CLI.

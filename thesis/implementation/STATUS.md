@@ -39,7 +39,7 @@ operator.
 | Canonical execution boundary | Direct CPU and final UPMEM APIs consume canonical DAG/plan records; generic execution records survive only inside the historical adapter pending T12 deletion. | Software-tested; no target fallback is admitted. |
 | Evidence | Canonical `manifest.json`, `samples.jsonl`, and `sessions.jsonl` schemas plus experiment-owned repetition/session lifecycle are implemented. | Software-tested for strict serialization, failure rows, timing scopes, release admission, and terminal manifest transitions; no evidence is promoted and no physical claim follows. |
 | CPU TN reference | Direct same-DAG execution, complex128 validation, and same-physical-plan replay are implemented. | Software-tested; replay is a policy oracle, not a performance baseline. |
-| Quimb/cotengra | Existing provider code exists. | Direct baseline adapter is planned. |
+| Quimb/cotengra | Direct function-only `SimulationJob` adapters execute deterministic Quimb (`greedy`, `optimal`) and cotengra (`greedy`, `labels`) TN routes and record the selected path fingerprint. | Software-tested against canonical complex statevectors; these are CPU TN baselines, not UPMEM or GPU evidence. |
 | QuEST CPU/GPU | Existing full-state providers exist. | Direct baseline and GPU runtime verification are planned. |
 | SimplePIM | Pinned external sources and historical management-assisted routes exist. | SimplePIM compute integration is not active in the reset baseline. |
 | PID-Comm, ATiM, SparseP | Repository/history references exist. | Not active in the reset baseline. |
