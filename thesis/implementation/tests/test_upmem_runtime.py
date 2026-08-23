@@ -10,10 +10,13 @@ import numpy as np
 import pytest
 
 from quantum_bench.core.records import TensorSpec
-from quantum_bench.execution.contracts import NumericMode, UpmemTopology
 from quantum_bench.model import ContractNode, ContractionDAG, ReduceNode, TensorView
 from quantum_bench.results import ExecutionFailed, UnsupportedExecution
-from quantum_bench.upmem.plan import UpmemResources, UpmemTopology as FinalTopology, plan_upmem
+from quantum_bench.upmem.plan import (
+    UpmemResources,
+    UpmemTopology as FinalTopology,
+    plan_upmem,
+)
 from quantum_bench.upmem.runtime import open_upmem
 from quantum_bench.upmem.protocol import V4ProtocolError
 import quantum_bench.upmem.runtime as runtime
@@ -90,19 +93,7 @@ def _opened(tmp_path: Path, *, policy: str, k: int = 5):
 
     def opener(_dag, final_plan, _resources, timeout_s):
         calls.append(float(timeout_s))
-        mode = (
-            NumericMode.HOST_PACKED_INT8
-            if final_plan.numeric_policy == "split_complex_int8_shared_scale_v1"
-            else NumericMode.FLOAT32_REAL
-        )
-        return engine.open_session(
-            mode,
-            UpmemTopology(
-                dpu_count=final_plan.topology.dpu_count,
-                tasklets_per_dpu=final_plan.topology.tasklets_per_dpu,
-                rank_count=final_plan.topology.rank_count,
-            ),
-        )
+        return engine.open_session(final_plan.numeric_policy, final_plan.topology)
 
     return node, dag, plan, _resources(tmp_path, opener), calls, engine
 
@@ -136,9 +127,7 @@ def test_open_static_resource_validation_precedes_opener(tmp_path: Path) -> None
 
 
 def test_opener_unsupported_execution_is_preserved(tmp_path: Path) -> None:
-    _, dag, plan, resources, _, _ = _opened(
-        tmp_path, policy="split_complex_float32_v1"
-    )
+    _, dag, plan, resources, _, _ = _opened(tmp_path, policy="split_complex_float32_v1")
     expected = UnsupportedExecution("preflight", "no rank available", "rank_access")
 
     def opener(*_args):
@@ -150,9 +139,7 @@ def test_opener_unsupported_execution_is_preserved(tmp_path: Path) -> None:
 
 
 def test_invalid_opened_object_is_closed_once_before_failure(tmp_path: Path) -> None:
-    _, dag, plan, resources, _, _ = _opened(
-        tmp_path, policy="split_complex_float32_v1"
-    )
+    _, dag, plan, resources, _, _ = _opened(tmp_path, policy="split_complex_float32_v1")
 
     class InvalidOpened:
         def __init__(self) -> None:
@@ -218,12 +205,14 @@ def test_raw_lanes_and_operands_match_cpu_physical_plan_replay(
     actual = session.run_once(inputs)
     _close_mock_session(session)
     np.testing.assert_array_equal(actual.output, expected.output)
-    assert actual.numeric_facts["raw_lane_records"] == expected.numeric_facts[
-        "raw_lane_records"
-    ]
-    assert actual.numeric_facts["operand_records"] == expected.numeric_facts[
-        "operand_records"
-    ]
+    assert (
+        actual.numeric_facts["raw_lane_records"]
+        == expected.numeric_facts["raw_lane_records"]
+    )
+    assert (
+        actual.numeric_facts["operand_records"]
+        == expected.numeric_facts["operand_records"]
+    )
 
 
 def test_output_hash_includes_dtype_and_shape() -> None:
@@ -312,7 +301,9 @@ def test_one_sided_complex_and_reduce_stage_are_deterministic(tmp_path: Path) ->
             node_id=prefix,
             left=TensorView(tensor_id=f"{prefix}_a", labels=(0, 1), shape=(1, 3)),
             right=TensorView(tensor_id=f"{prefix}_b", labels=(1, 2), shape=(3, 1)),
-            output=TensorSpec(id=f"{prefix}_o", labels=(0, 2), shape=(1, 1), structure="dense"),
+            output=TensorSpec(
+                id=f"{prefix}_o", labels=(0, 2), shape=(1, 1), structure="dense"
+            ),
             contracted_labels=(1,),
             output_labels=(0, 2),
         )
@@ -349,14 +340,7 @@ def test_one_sided_complex_and_reduce_stage_are_deterministic(tmp_path: Path) ->
     engine = _engine(tmp_path / "engine", dpu_count=1)
 
     def opener(_dag, final_plan, _resources, _timeout_s):
-        return engine.open_session(
-            NumericMode.FLOAT32_REAL,
-            UpmemTopology(
-                dpu_count=final_plan.topology.dpu_count,
-                tasklets_per_dpu=1,
-                rank_count=1,
-            ),
-        )
+        return engine.open_session(final_plan.numeric_policy, final_plan.topology)
 
     resources = _resources(tmp_path, opener)
     inputs = {
@@ -455,9 +439,7 @@ def test_terminal_admission_requires_all_positive_verification_facts(
     field: str,
     value: object,
 ) -> None:
-    _, dag, plan, resources, _, _ = _opened(
-        tmp_path, policy="split_complex_float32_v1"
-    )
+    _, dag, plan, resources, _, _ = _opened(tmp_path, policy="split_complex_float32_v1")
     terminal = _verified_terminal(plan)
     if value is None:
         del terminal[field]
@@ -477,9 +459,7 @@ def test_terminal_admission_requires_all_positive_verification_facts(
 
 
 def test_context_body_error_is_not_masked_by_close_failure(tmp_path: Path) -> None:
-    _, dag, plan, resources, _, _ = _opened(
-        tmp_path, policy="split_complex_float32_v1"
-    )
+    _, dag, plan, resources, _, _ = _opened(tmp_path, policy="split_complex_float32_v1")
     terminal = _verified_terminal(plan)
     terminal["hardware_release_verified"] = False
     session = runtime.UpmemSession(
@@ -502,14 +482,18 @@ def test_close_failure_is_execution_failed_and_not_repeated(tmp_path: Path) -> N
     session = open_upmem(dag, plan, resources)
     low_level = session._low_level.session
     for rank in low_level.ranks:
-        rank.session.close = lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("close failed"))
+        rank.session.close = lambda **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("close failed")
+        )
     with pytest.raises(ExecutionFailed, match="session_close"):
         session.close()
     with pytest.raises(ExecutionFailed, match="session_close"):
         session.close()
 
 
-def test_run_failure_is_execution_failed_with_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_failure_is_execution_failed_with_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     node, dag, plan, resources, _, _ = _opened(
         tmp_path, policy="split_complex_float32_v1"
     )

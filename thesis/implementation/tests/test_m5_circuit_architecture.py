@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import inspect
 import os
 import subprocess
@@ -11,6 +12,38 @@ from quantum_bench.bench import m5_circuit_study
 
 
 ROOT = Path(__file__).parents[1]
+
+
+def test_canonical_modules_do_not_depend_on_historical_execution_adapters() -> None:
+    module_paths = (
+        ROOT / "src/quantum_bench/model.py",
+        ROOT / "src/quantum_bench/cpu.py",
+        ROOT / "src/quantum_bench/lowering.py",
+        ROOT / "src/quantum_bench/planning.py",
+        ROOT / "src/quantum_bench/numerics.py",
+        ROOT / "src/quantum_bench/results.py",
+        ROOT / "src/quantum_bench/upmem/plan.py",
+        ROOT / "src/quantum_bench/upmem/runtime.py",
+    )
+    for path in module_paths:
+        tree = ast.parse(path.read_text(), filename=str(path))
+        imported_modules = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported_modules.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module is not None:
+                imported_modules.append(node.module)
+        assert not any(
+            module == "quantum_bench.execution"
+            or module.startswith("quantum_bench.execution.")
+            for module in imported_modules
+        ), path
+
+    import quantum_bench.upmem.plan as upmem_plan
+    import quantum_bench.upmem.runtime as upmem_runtime
+
+    assert not hasattr(upmem_plan, "compile_upmem")
+    assert not hasattr(upmem_runtime, "run_upmem")
 
 
 def test_active_imports_do_not_load_historical_taskgraph() -> None:

@@ -10,7 +10,7 @@ DPU-resident graph intermediates.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 import hashlib
 import json
 import math
@@ -23,34 +23,13 @@ from typing import Any, Callable, Mapping, Protocol
 
 import numpy as np
 
-from quantum_bench.execution.contracts import (
-    BackendFacts,
-    ExecutionPlan,
-    ExecutionResult,
-    NumericMode,
-    RunContext,
-    Target,
-    TimingBreakdown,
-    UpmemNodePlan,
-    UpmemPlan,
-    UpmemRuntimeResources,
-    UpmemTopology,
-    canonical_serialize,
-    validate_execution_plan,
-    validate_execution_result,
-    validate_transfer_bytes,
-    validate_upmem_runtime_resources,
-)
-from quantum_bench.execution.numeric import (
-    decode_contraction_output,
-    encode_tensor,
-)
+from quantum_bench.formats.fixed_point import FixedPointSpec, quantize_fixed_point
 from quantum_bench.lowering import (
     contraction_dag_hash,
     validate_contraction_dag,
     validate_dag_inputs,
 )
-from quantum_bench.model import ContractNode, ContractionDAG, ReduceNode, TensorView
+from quantum_bench.model import ContractNode, ContractionDAG, ReduceNode
 from quantum_bench.numerics import (
     NumericPolicy,
     decode_complex_products,
@@ -67,10 +46,10 @@ from quantum_bench.upmem.plan import (
     UpmemStage,
     UpmemPlan as FinalUpmemPlan,
     UpmemResources,
+    UpmemTopology as FinalUpmemTopology,
+    UpmemWorkUnit,
     physical_plan_id,
-    validate_active_upmem_plan,
     validate_upmem_plan,
-    validate_upmem_plan_for_dag,
 )
 from quantum_bench.upmem.native_session import V4Session
 from quantum_bench.upmem.protocol import (
@@ -91,6 +70,49 @@ from quantum_bench.upmem.tiling import (
 )
 
 _INT64_MAX = (1 << 63) - 1
+
+_NUMERIC_POLICY_FLOAT32 = "split_complex_float32_v1"
+_NUMERIC_POLICY_INT8 = "split_complex_int8_shared_scale_v1"
+
+
+def _validate_numeric_policy(policy: NumericPolicy) -> NumericPolicy:
+    if policy not in {_NUMERIC_POLICY_FLOAT32, _NUMERIC_POLICY_INT8}:
+        raise ValueError(f"unsupported final UPMEM numeric policy: {policy!r}")
+    return policy
+
+
+def _is_packed_policy(policy: NumericPolicy) -> bool:
+    return _validate_numeric_policy(policy) == _NUMERIC_POLICY_INT8
+
+
+def _encode_real_plane(
+    array: np.ndarray, policy: NumericPolicy
+) -> tuple[np.ndarray, float, int]:
+    value = np.asarray(array)
+    if np.iscomplexobj(value) and np.any(np.imag(value) != 0):
+        raise ValueError("numeric policy requires real-valued tensors")
+    real = np.ascontiguousarray(np.real(value), dtype=np.float32)
+    if not np.all(np.isfinite(real)):
+        raise ValueError("numeric policy requires finite tensors")
+    if not _is_packed_policy(policy):
+        return real, 1.0, 0
+    converted = quantize_fixed_point(real, FixedPointSpec(route_dtype="int8"))
+    return (
+        np.ascontiguousarray(converted.array, dtype=np.int8),
+        float(converted.record.scale),
+        int(converted.record.saturation_count),
+    )
+
+
+def _decode_real_accumulator(
+    accumulator: np.ndarray, policy: NumericPolicy, scale: float
+) -> np.ndarray:
+    if not _is_packed_policy(policy):
+        return np.asarray(accumulator, dtype=np.float32)
+    if not math.isfinite(scale) or scale <= 0.0:
+        raise ValueError("contraction output scale must be finite and positive")
+    return np.asarray(accumulator, dtype=np.float32) * np.float32(scale)
+
 
 _EXPECTED_NATIVE_IDENTITY = dict(NATIVE_EXECUTION_IDENTITY)
 
@@ -185,6 +207,51 @@ class _V4SessionLike(Protocol):
 
 def _sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
+
+
+def _array_hash(value: np.ndarray) -> str:
+    array = np.ascontiguousarray(value)
+    digest = hashlib.sha256()
+    digest.update(str(array.dtype).encode("ascii"))
+    digest.update(repr(tuple(array.shape)).encode("ascii"))
+    digest.update(array.tobytes(order="C"))
+    return digest.hexdigest()
+
+
+def _payload_hash(value: np.ndarray, *, dtype: np.dtype | None = None) -> str:
+    array = np.ascontiguousarray(np.asarray(value, dtype=dtype))
+    return _sha256_bytes(array.tobytes(order="C"))
+
+
+def _resolve_view(view: Any, tensors: Mapping[str, np.ndarray]) -> np.ndarray:
+    if view.tensor_id not in tensors:
+        raise ValueError(f"UPMEM tensor {view.tensor_id} is not available")
+    value = tensors[view.tensor_id]
+    if not view.slice_spec:
+        return value
+    indices: list[slice | int] = [slice(None)] * value.ndim
+    for axis, index in view.slice_spec:
+        indices[axis] = index
+    sliced = value[tuple(indices)]
+    if tuple(sliced.shape) != view.shape:
+        raise ValueError(f"UPMEM sliced tensor {view.tensor_id} has wrong shape")
+    return sliced
+
+
+def _required_byte_count(metadata: Mapping[str, Any], *keys: str) -> int:
+    values = [metadata[key] for key in keys if key in metadata]
+    if not values or any(type(value) is not int or value < 0 for value in values):
+        raise RuntimeError(f"UPMEM task metadata is missing or invalid {keys[0]}")
+    if len(set(values)) != 1:
+        raise RuntimeError(f"UPMEM task metadata has conflicting {keys[0]} values")
+    return int(values[0])
+
+
+def _seconds(value: Any) -> float:
+    result = float(value or 0.0)
+    if result < 0 or not math.isfinite(result):
+        raise ValueError("UPMEM timing values must be finite and non-negative")
+    return result
 
 
 def _task_structure_hash(node: ContractNode) -> str:
@@ -321,9 +388,11 @@ def _read_raw_output(path: Path, tile: M5Tile, *, packed: bool) -> np.ndarray:
     raw = path.read_bytes()
     if len(raw) < expected_bytes:
         raise RuntimeError(f"v4 output is truncated: {path}")
-    return np.frombuffer(raw[:expected_bytes], dtype=dtype).reshape(
-        tile.m_size, tile.n_size
-    ).copy()
+    return (
+        np.frombuffer(raw[:expected_bytes], dtype=dtype)
+        .reshape(tile.m_size, tile.n_size)
+        .copy()
+    )
 
 
 def _complex_canonical_planes(
@@ -365,7 +434,9 @@ def _validate_complex_lowerings(
         raise ValueError("real and imaginary canonical tile metadata differ")
     tiles = {tile.id: tile for tile in real_lowering.tiles}
     units = stage.work_units
-    if len(units) != len(tiles) or {unit.stable_tile_id for unit in units} != set(tiles):
+    if len(units) != len(tiles) or {unit.stable_tile_id for unit in units} != set(
+        tiles
+    ):
         raise ValueError("UPMEM stage tile IDs do not match live lowering")
     for unit in units:
         tile = tiles.get(unit.stable_tile_id)
@@ -400,11 +471,17 @@ def _validate_complex_lowerings(
             unit.estimated_arithmetic_work,
         )
         if actual != expected:
-            raise ValueError(f"UPMEM stage work unit {unit.stable_tile_id} differs from lowering")
+            raise ValueError(
+                f"UPMEM stage work unit {unit.stable_tile_id} differs from lowering"
+            )
 
 
-def _raw_lane_fact(node_id: str, tile_id: str, lane: str, value: np.ndarray) -> dict[str, JsonValue]:
-    dtype = np.dtype("<i4") if np.issubdtype(value.dtype, np.integer) else np.dtype("<f4")
+def _raw_lane_fact(
+    node_id: str, tile_id: str, lane: str, value: np.ndarray
+) -> dict[str, JsonValue]:
+    dtype = (
+        np.dtype("<i4") if np.issubdtype(value.dtype, np.integer) else np.dtype("<f4")
+    )
     canonical = np.ascontiguousarray(np.asarray(value, dtype=dtype))
     return {
         "node_id": node_id,
@@ -434,20 +511,6 @@ def _complex_operand_facts(
         "real_sha256": _payload_hash(encoded.real),
         "imag_sha256": _payload_hash(encoded.imag),
     }
-
-
-def _assemble_output(
-    lowering: M5TileLowering,
-    partials: Mapping[str, np.ndarray],
-    *,
-    packed: bool,
-    scale: float,
-) -> np.ndarray:
-    accumulator = _assemble_accumulator(lowering, partials, packed=packed)
-    mode = (
-        NumericMode.HOST_PACKED_INT8_PER_TASK_V1 if packed else NumericMode.FLOAT32_REAL
-    )
-    return decode_contraction_output(accumulator, mode, scale)
 
 
 def _assemble_accumulator(
@@ -592,9 +655,12 @@ class UpmemV4Executor:
 
     def open_session(
         self,
-        numeric_mode: NumericMode,
-        topology: UpmemTopology,
+        numeric_policy: NumericPolicy,
+        topology: FinalUpmemTopology,
     ) -> UpmemV4Session:
+        policy = _validate_numeric_policy(numeric_policy)
+        if not isinstance(topology, FinalUpmemTopology):
+            raise TypeError("open_session requires the final UpmemTopology record")
         if topology.dpu_count != self.dpu_count:
             raise ValueError("topology device count must match engine dpu_count")
         if topology.tasklets_per_dpu != self.tasklets_per_dpu:
@@ -603,11 +669,6 @@ class UpmemV4Executor:
             )
         if topology.rank_count != len(self.rank_paths):
             raise ValueError("topology rank count must match engine rank_paths")
-        if numeric_mode not in {
-            NumericMode.FLOAT32_REAL,
-            NumericMode.HOST_PACKED_INT8_PER_TASK_V1,
-        }:
-            raise ValueError(f"unsupported M5 numeric mode: {numeric_mode}")
 
         deadline = time.monotonic() + self.timeout_s
         self.session_root.mkdir(parents=True, exist_ok=True)
@@ -628,7 +689,7 @@ class UpmemV4Executor:
                     tasklets_per_dpu=self.tasklets_per_dpu,
                     numeric_mode=(
                         NUMERIC_HOST_PACKED_INT8
-                        if numeric_mode is NumericMode.HOST_PACKED_INT8_PER_TASK_V1
+                        if policy == _NUMERIC_POLICY_INT8
                         else NUMERIC_FLOAT32
                     ),
                     rank_path=rank_path,
@@ -681,7 +742,7 @@ class UpmemV4Executor:
                             pass
             raise
         return UpmemV4Session(
-            numeric_mode=numeric_mode,
+            numeric_policy=policy,
             ranks=tuple(ranks),
             engine=self,
             deadline=deadline,
@@ -694,12 +755,12 @@ class UpmemV4Session:
     def __init__(
         self,
         *,
-        numeric_mode: NumericMode,
+        numeric_policy: NumericPolicy,
         ranks: tuple[_RankSession, ...],
         engine: UpmemV4Executor,
         deadline: float,
     ) -> None:
-        self.numeric_mode = numeric_mode
+        self.numeric_policy = _validate_numeric_policy(numeric_policy)
         self.ranks = ranks
         self.engine = engine
         self._deadline = float(deadline)
@@ -731,34 +792,39 @@ class UpmemV4Session:
     def strategy_config_hash(self) -> str:
         return _ACTIVE_STRATEGY_CONFIG_HASH
 
-    def execute(
+    def execute_real(
         self,
         node: ContractNode,
         left: np.ndarray,
         right: np.ndarray,
         *,
-        node_plan: UpmemNodePlan,
+        stage: UpmemStage,
+        numeric_policy: NumericPolicy,
     ) -> tuple[np.ndarray, Mapping[str, Any]]:
         if self._closed:
             raise RuntimeError("UPMEM v4 session is closed")
-        if node_plan is None or not isinstance(node_plan, UpmemNodePlan):
-            raise ValueError("UpmemV4Session.execute requires a valid UpmemNodePlan")
+        policy = _validate_numeric_policy(numeric_policy)
+        if self.numeric_policy != policy:
+            raise ValueError("UPMEM session numeric policy does not match execution")
+        if not isinstance(stage, UpmemStage) or stage.kind != "contract_batch":
+            raise ValueError("execute_real requires a contract_batch UpmemStage")
+        if stage.node_ids != (node.node_id,):
+            raise ValueError("execute_real stage does not match contract node")
         self._remaining_timeout()
         started = time.perf_counter()
-        packed = self.numeric_mode is NumericMode.HOST_PACKED_INT8_PER_TASK_V1
+        packed = _is_packed_policy(policy)
         limits = M5TileLimits.host_packed_int8() if packed else M5TileLimits.float32()
         lowering = lower_binary_contraction(node, left, right, limits=limits)
         canonical_left = lowering.canonical.left
         canonical_right = lowering.canonical.right
         quantization_metadata: dict[str, Any] = {}
         left_scale = right_scale = 1.0
-        numeric_mode = self.numeric_mode
         quantization_started = time.perf_counter()
-        left_payload, left_scale, left_saturation = encode_tensor(
-            canonical_left, numeric_mode
+        left_payload, left_scale, left_saturation = _encode_real_plane(
+            canonical_left, policy
         )
-        right_payload, right_scale, right_saturation = encode_tensor(
-            canonical_right, numeric_mode
+        right_payload, right_scale, right_saturation = _encode_real_plane(
+            canonical_right, policy
         )
         preparation_time_s = time.perf_counter() - quantization_started
         canonical_left = left_payload
@@ -800,7 +866,9 @@ class UpmemV4Session:
         parallel_rank_waves = 0
         bulk_verified = True
         total_dpus = sum(rank.local_dpus for rank in self.ranks)
-        waves, planned_requests = self._requests_from_plan(node, lowering, node_plan)
+        waves, planned_requests = self._requests_from_work_units(
+            node, lowering, stage.work_units
+        )
         self._validate_waves(lowering.tiles, waves, total_dpus)
         task_structure_sha256 = _task_structure_hash(node)
         numeric_transport = "host_packed_int8_mram" if packed else "float32_mram"
@@ -852,7 +920,7 @@ class UpmemV4Session:
         accumulator = _assemble_accumulator(lowering, partials, packed=packed)
         host_tile_assembly_time_s = time.perf_counter() - assembly_started
         decode_started = time.perf_counter()
-        output = decode_contraction_output(accumulator, numeric_mode, scale)
+        output = _decode_real_accumulator(accumulator, policy, scale)
         host_dequantization_time_s = (
             time.perf_counter() - decode_started if packed else 0.0
         )
@@ -941,16 +1009,11 @@ class UpmemV4Session:
             raise ValueError("execute_complex requires a contract_batch UpmemStage")
         if stage.node_ids != (node.node_id,):
             raise ValueError("execute_complex stage does not match contract node")
-        expected_mode = {
-            "split_complex_float32_v1": NumericMode.FLOAT32_REAL,
-            "split_complex_int8_shared_scale_v1": NumericMode.HOST_PACKED_INT8_PER_TASK_V1,
-        }.get(numeric_policy)
-        if expected_mode is None:
-            raise ValueError(f"unsupported complex numeric policy: {numeric_policy!r}")
-        if self.numeric_mode is not expected_mode:
+        policy = _validate_numeric_policy(numeric_policy)
+        if self.numeric_policy != policy:
             raise ValueError("UPMEM session numeric mode does not match final policy")
 
-        packed = numeric_policy == "split_complex_int8_shared_scale_v1"
+        packed = policy == _NUMERIC_POLICY_INT8
         limits = M5TileLimits.host_packed_int8() if packed else M5TileLimits.float32()
         materialized_left = np.array(left, copy=True, order="C")
         materialized_right = np.array(right, copy=True, order="C")
@@ -1014,9 +1077,7 @@ class UpmemV4Session:
         bulk_verified = True
         active_rank_indices: set[int] = set()
         active_dpu_ids: set[tuple[int, int]] = set()
-        numeric_transport = (
-            "host_packed_int8_mram" if packed else "float32_mram"
-        )
+        numeric_transport = "host_packed_int8_mram" if packed else "float32_mram"
 
         try:
             for lane, (lane_left, lane_right) in zip(
@@ -1053,9 +1114,7 @@ class UpmemV4Session:
                     h2d_bytes += int(metrics["h2d_bytes"])
                     d2h_bytes += int(metrics["d2h_bytes"])
                     rank_response_h2d_max_sum_s += float(metrics["h2d_time_s"])
-                    rank_response_kernel_max_sum_s += float(
-                        metrics["kernel_time_s"]
-                    )
+                    rank_response_kernel_max_sum_s += float(metrics["kernel_time_s"])
                     rank_response_d2h_max_sum_s += float(metrics["d2h_time_s"])
                     request_hashes.extend(metrics["request_manifest_hashes"])
                     self._successful_request_count += int(
@@ -1137,15 +1196,9 @@ class UpmemV4Session:
                 "total_wall_s": float(total_wall_s),
                 "preparation_s": float(preparation_s),
                 "encode_s": float(encode_s),
-                "rank_response_h2d_max_sum_s": float(
-                    rank_response_h2d_max_sum_s
-                ),
-                "rank_response_kernel_max_sum_s": float(
-                    rank_response_kernel_max_sum_s
-                ),
-                "rank_response_d2h_max_sum_s": float(
-                    rank_response_d2h_max_sum_s
-                ),
+                "rank_response_h2d_max_sum_s": float(rank_response_h2d_max_sum_s),
+                "rank_response_kernel_max_sum_s": float(rank_response_kernel_max_sum_s),
+                "rank_response_d2h_max_sum_s": float(rank_response_d2h_max_sum_s),
                 "assembly_s": float(assembled_s),
                 "decode_s": float(decode_s),
             },
@@ -1204,47 +1257,19 @@ class UpmemV4Session:
         )
         return output, metadata
 
-    def _requests_from_plan(
-        self,
-        node: ContractNode,
-        lowering: Any,
-        node_plan: UpmemNodePlan,
-    ) -> tuple[
-        tuple[tuple[M5Tile, ...], ...],
-        tuple[list[tuple[Any, list[tuple[M5Tile, int]]]], ...],
-    ]:
-        """Turn the compiled work units into native rank requests.
-
-        The live lowering is used only to obtain payload arrays.  It cannot
-        change the compiled geometry or placement: every work unit is checked
-        against its tile before a request is constructed.
-        """
-
-        if node_plan.node_id != node.node_id or node_plan.node_kind != "contract":
-            raise ValueError("compiled UPMEM node plan does not match contract node")
-        canonical = lowering.canonical
-        if node_plan.canonical_shape != (
-            canonical.b,
-            canonical.m,
-            canonical.k,
-            canonical.n,
-        ):
-            raise ValueError(
-                "compiled UPM canonical B/M/K/N shape differs from lowering"
-            )
-        return self._requests_from_work_units(node, lowering, node_plan.work_units)
-
     def _requests_from_work_units(
         self,
         node: ContractNode,
         lowering: Any,
-        units: tuple[Any, ...],
+        units: tuple[UpmemWorkUnit, ...],
     ) -> tuple[
         tuple[tuple[M5Tile, ...], ...],
         tuple[list[tuple[Any, list[tuple[M5Tile, int]]]], ...],
     ]:
-        """Group legacy or final work units without changing placement."""
+        """Group final work units without changing compiled placement."""
 
+        if not all(isinstance(unit, UpmemWorkUnit) for unit in units):
+            raise TypeError("UPMEM stage work units must use final UpmemWorkUnit")
         tiles = {tile.id: tile for tile in lowering.tiles}
         if len(tiles) != len(lowering.tiles) or len(units) != len(tiles):
             raise ValueError("compiled UPM work-unit count differs from lowering")
@@ -1823,9 +1848,7 @@ class UpmemSession:
         working = {tensor_id: np.asarray(value) for tensor_id, value in inputs.items()}
         nodes = {node.node_id: node for node in self._dag.nodes}
         operation_metadata: list[Mapping[str, Any]] = []
-        numeric_descriptors: list[
-            tuple[str, Mapping[str, Any], tuple[Any, ...]]
-        ] = []
+        numeric_descriptors: list[tuple[str, Mapping[str, Any], tuple[Any, ...]]] = []
         active_rank_indices: set[int] = set()
         active_dpu_ids: set[tuple[int, int]] = set()
         total_h2d = 0
@@ -1860,7 +1883,9 @@ class UpmemSession:
                         include_evidence=False,
                     )
                     if not isinstance(metadata, Mapping):
-                        raise ValueError("UPMEM operation returned non-mapping metadata")
+                        raise ValueError(
+                            "UPMEM operation returned non-mapping metadata"
+                        )
                     output = np.asarray(output, dtype=np.complex64)
                     if tuple(output.shape) != node.output.shape:
                         raise ValueError(
@@ -1894,8 +1919,7 @@ class UpmemSession:
                         )
                     )
                     active_rank_indices.update(
-                        int(value)
-                        for value in metadata.get("active_rank_indices", ())
+                        int(value) for value in metadata.get("active_rank_indices", ())
                     )
                     active_dpu_ids.update(
                         tuple(int(part) for part in value)
@@ -1927,7 +1951,9 @@ class UpmemSession:
                     host_reduce_s += time.perf_counter() - reduce_started
                     working[node.output.id] = result
                 else:  # pragma: no cover - model validation closes this union.
-                    raise TypeError(f"unsupported UPMEM DAG node: {type(node).__name__}")
+                    raise TypeError(
+                        f"unsupported UPMEM DAG node: {type(node).__name__}"
+                    )
             output = np.array(
                 _resolve_view(self._dag.output, working),
                 dtype=np.complex64,
@@ -2113,9 +2139,7 @@ class UpmemSession:
                 "target_observed": observations["target_observed"],
                 "test_double_execution": observations["test_double_execution"],
                 "cpu_fallback_used": observations["cpu_fallback_used"],
-                "simulator_kernel_executed": observations[
-                    "simulator_kernel_executed"
-                ],
+                "simulator_kernel_executed": observations["simulator_kernel_executed"],
                 "requested_dpus": observations["requested_dpu_count"],
                 "allocated_dpus": observations["allocated_dpu_count"],
                 "active_dpus": len(active_dpu_ids),
@@ -2123,9 +2147,7 @@ class UpmemSession:
                 "rank_count": observations["rank_count"],
                 "tasklets_per_dpu": observations["tasklets_per_dpu"],
                 "intermediate_policy": self._plan.intermediate_policy,
-                "physical_plan_consumed": observations[
-                    "physical_stage_consumed"
-                ],
+                "physical_plan_consumed": observations["physical_stage_consumed"],
                 "output_hash": output_hash,
                 "operation_facts": operation_facts,
                 "release_verified": None,
@@ -2304,9 +2326,7 @@ def _validate_terminal_admission(
     plan: FinalUpmemPlan,
 ) -> None:
     if terminal_facts.get("target_observed") != "physical_hardware":
-        raise ValueError(
-            "terminal target_observed must be exactly 'physical_hardware'"
-        )
+        raise ValueError("terminal target_observed must be exactly 'physical_hardware'")
     for field in _TERMINAL_TRUE_FIELDS:
         if terminal_facts.get(field) is not True:
             raise ValueError(f"terminal field {field!r} must be exactly true")
@@ -2456,12 +2476,6 @@ def open_upmem(
                 timeout_s,
             )
         else:
-            numeric_mode = {
-                "split_complex_float32_v1": NumericMode.FLOAT32_REAL,
-                "split_complex_int8_shared_scale_v1": (
-                    NumericMode.HOST_PACKED_INT8_PER_TASK_V1
-                ),
-            }[plan.numeric_policy]
             engine = UpmemV4Executor(
                 session_root=Path(resources.session_root),
                 host_binary=Path(resources.host_binary),
@@ -2473,12 +2487,8 @@ def open_upmem(
                 timeout_s=timeout_s,
             )
             low_level = engine.open_session(
-                numeric_mode,
-                UpmemTopology(
-                    dpu_count=plan.topology.dpu_count,
-                    tasklets_per_dpu=plan.topology.tasklets_per_dpu,
-                    rank_count=plan.topology.rank_count,
-                ),
+                plan.numeric_policy,
+                plan.topology,
             )
     except UnsupportedExecution:
         raise
@@ -2549,585 +2559,9 @@ def _validate_final_resources(resources: UpmemResources) -> None:
         )
 
 
-@dataclass
-class _Aggregate:
-    h2d_bytes: int = 0
-    d2h_bytes: int = 0
-    host_quantization_s: float = 0.0
-    preparation_s: float = 0.0
-    h2d_s: float = 0.0
-    kernel_s: float = 0.0
-    d2h_s: float = 0.0
-    host_dequantization_s: float = 0.0
-    reduction_s: float = 0.0
-    route_total_s: float = 0.0
-    physical_plan_consumed: bool = False
-
-    def add(self, result: tuple[np.ndarray, Mapping[str, Any]]) -> None:
-        _, metadata = result
-        if not isinstance(metadata, Mapping):
-            metadata = {}
-        timing = metadata.get("timing", {})
-        if not isinstance(timing, Mapping):
-            timing = {}
-        if metadata.get("physical_plan_consumed") is not True:
-            raise RuntimeError(
-                "UPMEM task result did not consume the compiled physical plan"
-            )
-        self.physical_plan_consumed = True
-        self.h2d_bytes += _required_byte_count(
-            metadata,
-            "application_visible_h2d_bytes",
-            "h2d_bytes",
-        )
-        self.d2h_bytes += _required_byte_count(
-            metadata,
-            "application_visible_d2h_bytes",
-            "d2h_bytes",
-        )
-        self.host_quantization_s += _seconds(
-            timing.get(
-                "host_quantization_time_s",
-                metadata.get("host_quantization_time_s", 0.0),
-            )
-        )
-        self.preparation_s += _seconds(
-            timing.get("preparation_time_s", metadata.get("preparation_time_s", 0.0))
-        )
-        self.h2d_s += _seconds(timing.get("h2d_time_s", 0.0))
-        self.kernel_s += _seconds(timing.get("kernel_time_s", 0.0))
-        self.d2h_s += _seconds(timing.get("d2h_time_s", 0.0))
-        self.host_dequantization_s += _seconds(
-            timing.get(
-                "host_dequantization_time_s",
-                metadata.get("host_dequantization_time_s", 0.0),
-            )
-        )
-        self.reduction_s += _seconds(
-            timing.get(
-                "host_tile_assembly_time_s",
-                metadata.get("host_tile_assembly_time_s", 0.0),
-            )
-        )
-        if metadata.get("target_observed") == "sdk_simulator" or bool(
-            metadata.get("simulator_kernel_executed", False)
-        ):
-            raise RuntimeError("UPMEM adapter refuses simulator execution")
-        if bool(metadata.get("cpu_fallback_used", False)):
-            raise RuntimeError("UPMEM adapter refuses CPU fallback execution")
-
-
-def run_upmem(
-    plan: ExecutionPlan,
-    dag: ContractionDAG,
-    inputs: Mapping[str, np.ndarray],
-    context: RunContext,
-) -> ExecutionResult:
-    """Execute a compiled M5 plan with one persistent session and no fallback.
-
-    Deterministic unsupported dispatch is represented by ``ExecutionFailure``
-    at the public dispatcher. Malformed inputs and native/session failures
-    raise so their original failure stage remains available to the experiment
-    orchestrator.
-    """
-
-    tensors = {tensor_id: np.asarray(array) for tensor_id, array in inputs.items()}
-    _validate_invocation(plan, dag, tensors, context)
-    upmem_plan = plan.payload
-    assert isinstance(upmem_plan, UpmemPlan)
-    resources = context.target_resources
-    assert resources is not None
-    resource_hashes = _validate_resources(resources)
-    validate_upmem_runtime_resources(resources, upmem_plan.topology)
-    aggregate = _Aggregate()
-    output: np.ndarray | None = None
-    output_digest: str | None = None
-    session: Any | None = None
-    terminal_metadata: Mapping[str, Any] | None = None
-    completed_node_ids: tuple[str, ...] = ()
-    execution_error: BaseException | None = None
-    close_error: BaseException | None = None
-    session_open_s = 0.0
-    session_close_s = 0.0
-    try:
-        open_started = time.perf_counter()
-        session = _open_session(plan, context)
-        session_open_s = time.perf_counter() - open_started
-        # Warmups run on the persistent session but are deliberately outside
-        # route_total_s.  The measured route is the sum of session lifecycle
-        # and measured repetitions, including host DAG and reduction work.
-        aggregate.route_total_s += session_open_s
-        for _ in range(context.warmups):
-            _execute_once(
-                session,
-                dag,
-                tensors,
-                upmem_plan,
-                resources=None,
-                aggregate=None,
-            )
-        for _ in range(context.repetitions):
-            route_started = time.perf_counter()
-            output, completed_node_ids = _execute_once(
-                session,
-                dag,
-                tensors,
-                upmem_plan,
-                resources=resources,
-                aggregate=aggregate,
-            )
-            aggregate.route_total_s += time.perf_counter() - route_started
-            # This reproducibility check is intentionally outside route timing.
-            digest = _array_hash(output)
-            if output_digest is None:
-                output_digest = digest
-            elif digest != output_digest:
-                raise RuntimeError("UPMEM execution produced non-deterministic output")
-    except BaseException as exc:
-        execution_error = exc
-    finally:
-        if session is not None:
-            close_started = time.perf_counter()
-            try:
-                terminal_metadata = session.close()
-            except BaseException as exc:
-                close_error = exc
-            session_close_s = time.perf_counter() - close_started
-            aggregate.route_total_s += session_close_s
-
-    if execution_error is not None and close_error is not None:
-        raise RuntimeError(
-            f"UPMEM execution failed: {execution_error}; "
-            f"session close failed: {close_error}"
-        ) from execution_error
-    if execution_error is not None:
-        raise execution_error
-    if close_error is not None:
-        raise RuntimeError("UPMEM session close failed") from close_error
-    _validate_terminal_metadata(terminal_metadata, upmem_plan)
-
-    if output is None or output_digest is None:
-        raise RuntimeError("UPMEM execution did not produce an output")
-    h2d = aggregate.h2d_bytes
-    d2h = aggregate.d2h_bytes
-    transfer = h2d + d2h
-    validate_transfer_bytes(h2d, d2h, transfer)
-    facts = replace(
-        _facts_from_metadata(terminal_metadata),
-        **resource_hashes,
-        rank_binding_sha256=_rank_binding_sha256(resources.rank_paths),
-        physical_plan_consumed=aggregate.physical_plan_consumed,
-    )
-    result = ExecutionResult(
-        contraction_dag_hash=contraction_dag_hash(dag),
-        target=Target.UPMEM,
-        output=np.array(output, copy=True),
-        executed_node_ids=completed_node_ids,
-        timing=TimingBreakdown(
-            host_quantization_s=aggregate.host_quantization_s or None,
-            preparation_s=aggregate.preparation_s or None,
-            h2d_s=aggregate.h2d_s or None,
-            kernel_s=aggregate.kernel_s or None,
-            d2h_s=aggregate.d2h_s or None,
-            host_dequantization_s=aggregate.host_dequantization_s or None,
-            reduction_s=aggregate.reduction_s or None,
-            session_open_s=session_open_s or None,
-            session_close_s=session_close_s or None,
-            route_total_s=aggregate.route_total_s or None,
-        ),
-        h2d_bytes=h2d,
-        d2h_bytes=d2h,
-        transfer_bytes=transfer,
-        output_hash=output_digest,
-        backend_facts=facts,
-    )
-    validate_execution_result(result)
-    return result
-
-
-def _open_session(plan: ExecutionPlan, context: RunContext) -> Any:
-    """Create the real M5 session; tests replace this single seam."""
-
-    payload = plan.payload
-    assert isinstance(payload, UpmemPlan)
-    resources = context.target_resources
-    assert resources is not None
-    if resources.session_opener is not None:
-        return resources.session_opener(plan, context)
-    timeout_s = 60.0 if context.timeout_s is None else context.timeout_s
-    engine = UpmemV4Executor(
-        session_root=Path(resources.session_root),
-        host_binary=Path(resources.host_binary),
-        dpu_binary=Path(resources.dpu_binary),
-        initialization_binary=Path(resources.initialization_binary),
-        rank_paths=resources.rank_paths,
-        dpu_count=payload.topology.dpu_count,
-        tasklets_per_dpu=payload.topology.tasklets_per_dpu,
-        timeout_s=timeout_s,
-    )
-    topology = UpmemTopology(
-        dpu_count=payload.topology.dpu_count,
-        tasklets_per_dpu=payload.topology.tasklets_per_dpu,
-        rank_count=payload.topology.rank_count,
-    )
-    return engine.open_session(payload.numeric_mode, topology)
-
-
-def _execute_once(
-    session: Any,
-    dag: ContractionDAG,
-    inputs: Mapping[str, np.ndarray],
-    plan: UpmemPlan,
-    *,
-    resources: UpmemRuntimeResources | None,
-    aggregate: _Aggregate | None,
-) -> tuple[np.ndarray, tuple[str, ...]]:
-    tensors = dict(inputs)
-    nodes = {node.node_id: node for node in dag.nodes}
-    remaining_consumers = _remaining_consumers(dag)
-    produced_tensor_ids = {node.output.id for node in dag.nodes}
-    completed_node_ids: list[str] = []
-    for node_plan in plan.node_plans:
-        node_id = node_plan.node_id
-        node = nodes[node_id]
-        if isinstance(node, ContractNode):
-            left = _resolve_view(node.left, tensors)
-            right = _resolve_view(node.right, tensors)
-            value, metadata = session.execute(node, left, right, node_plan=node_plan)
-            if aggregate is not None:
-                assert resources is not None
-                aggregate.add((value, metadata))
-            value = np.asarray(value)
-        elif isinstance(node, ReduceNode):
-            reduction_started = time.perf_counter()
-            value = np.sum(
-                np.stack(
-                    [_resolve_view(view, tensors) for view in node.inputs], axis=0
-                ),
-                axis=0,
-            )
-            if aggregate is not None:
-                aggregate.reduction_s += time.perf_counter() - reduction_started
-        else:  # pragma: no cover - graph validation closes this union
-            raise TypeError(f"unsupported UPMEM DAG node: {type(node).__name__}")
-        if tuple(value.shape) != node.output.shape:
-            raise ValueError(
-                f"UPMEM node {node_id} produced shape {value.shape}; expected {node.output.shape}"
-            )
-        tensors[node.output.id] = value
-        if (
-            remaining_consumers.get(node.output.id, 0) == 0
-            and node.output.id != dag.output.tensor_id
-        ):
-            tensors.pop(node.output.id, None)
-        for tensor_id in _node_input_tensor_ids(node):
-            remaining_consumers[tensor_id] -= 1
-            if (
-                remaining_consumers[tensor_id] == 0
-                and tensor_id in produced_tensor_ids
-                and tensor_id != dag.output.tensor_id
-            ):
-                tensors.pop(tensor_id, None)
-        # The host coordinator has validated and published this node output
-        # for its dependants. This does not claim native-kernel exactly once.
-        completed_node_ids.append(node_id)
-    return _resolve_view(dag.output, tensors), tuple(completed_node_ids)
-
-
-def _validate_invocation(
-    plan: ExecutionPlan,
-    dag: ContractionDAG,
-    inputs: Mapping[str, np.ndarray],
-    context: RunContext,
-) -> None:
-    validate_contraction_dag(dag)
-    validate_execution_plan(plan)
-    if plan.target is not Target.UPMEM or not isinstance(plan.payload, UpmemPlan):
-        raise ValueError("run_upmem requires an UPMEM execution plan")
-    if context.target is not Target.UPMEM:
-        raise ValueError("run_upmem requires an UPMEM RunContext")
-    if context.warmups < 0 or context.repetitions < 1:
-        raise ValueError(
-            "warmups must be non-negative and repetitions must be positive"
-        )
-    if context.timeout_s is not None and (
-        context.timeout_s <= 0 or not math.isfinite(context.timeout_s)
-    ):
-        raise ValueError("timeout_s must be finite and positive when provided")
-    actual_hash = contraction_dag_hash(dag)
-    if plan.contraction_dag_hash != actual_hash:
-        raise ValueError("execution plan hash does not match supplied DAG")
-    if plan.payload.numeric_mode in {
-        NumericMode.FLOAT32_REAL,
-        NumericMode.HOST_PACKED_INT8_PER_TASK_V1,
-    }:
-        for value in inputs.values():
-            array = np.asarray(value)
-            if np.iscomplexobj(array) and np.any(np.imag(array) != 0):
-                raise ValueError(
-                    "M5 real-valued UPMEM numeric modes reject nonzero imaginary inputs"
-                )
-    validate_dag_inputs(dag, inputs)
-    validate_upmem_plan_for_dag(dag, plan.payload)
-    validate_active_upmem_plan(plan.payload)
-    if context.target_resources is None:
-        raise ValueError("UPMEM runtime resources are required")
-    _validate_upmem_resources(plan.payload, context.target_resources)
-
-
-def _validate_upmem_resources(
-    plan: UpmemPlan, resources: UpmemRuntimeResources | None
-) -> None:
-    topology = plan.topology
-    if resources is None:
-        raise ValueError("UPMEM runtime resources are required")
-    validate_upmem_runtime_resources(resources, topology)
-    if topology.dpu_count // topology.rank_count > 64:
-        raise ValueError("UPMEM plan exceeds 64 DPUs per rank")
-    if not 1 <= topology.tasklets_per_dpu <= 24:
-        raise ValueError("UPMEM plan tasklets_per_dpu must be in [1, 24]")
-
-
-def _node_input_tensor_ids(node: ContractNode | ReduceNode) -> tuple[str, ...]:
-    if isinstance(node, ContractNode):
-        return (node.left.tensor_id, node.right.tensor_id)
-    return tuple(view.tensor_id for view in node.inputs)
-
-
-def _remaining_consumers(dag: ContractionDAG) -> dict[str, int]:
-    remaining: dict[str, int] = {}
-    for node in dag.nodes:
-        for tensor_id in _node_input_tensor_ids(node):
-            remaining[tensor_id] = remaining.get(tensor_id, 0) + 1
-    return remaining
-
-
-def _array_hash(value: np.ndarray) -> str:
-    array = np.ascontiguousarray(value)
-    digest = hashlib.sha256()
-    digest.update(str(array.dtype).encode("ascii"))
-    digest.update(repr(tuple(array.shape)).encode("ascii"))
-    digest.update(array.tobytes(order="C"))
-    return digest.hexdigest()
-
-
-def _payload_hash(value: np.ndarray, *, dtype: np.dtype | None = None) -> str:
-    array = np.ascontiguousarray(np.asarray(value, dtype=dtype))
-    return _sha256_bytes(array.tobytes(order="C"))
-
-
-def _validate_resources(resources: UpmemRuntimeResources) -> dict[str, str]:
-    paths = {
-        "host_binary": Path(resources.host_binary),
-        "dpu_binary": Path(resources.dpu_binary),
-        "initialization_binary": Path(resources.initialization_binary),
-    }
-    if not resources.session_root:
-        raise ValueError("UPMEM session_root must be non-empty")
-    for label, path in paths.items():
-        if not path.is_file():
-            raise ValueError(f"UPMEM {label} is not a regular file: {path}")
-        if label == "host_binary" and not os.access(path, os.X_OK):
-            raise ValueError("UPMEM host_binary is not executable")
-    return {
-        "host_binary_sha256": _file_sha256(paths["host_binary"]),
-        "dpu_binary_sha256": _file_sha256(paths["dpu_binary"]),
-        "initialization_binary_sha256": _file_sha256(paths["initialization_binary"]),
-    }
-
-
-def _facts_from_metadata(
-    metadata: Mapping[str, Any],
-) -> BackendFacts:
-    return BackendFacts(
-        backend_id=_observed_text(metadata, "backend_id"),
-        profile_id=_observed_text(metadata, "profile", "physical_profile"),
-        abi_id=_observed_text(metadata, "abi", "abi_version"),
-        session_id=_observed_text(metadata, "session_protocol"),
-        dispatch_id=_observed_text(metadata, "dispatch_mode"),
-        kernel_id=_observed_text(metadata, "kernel_identity"),
-        execution_class=_observed_text(metadata, "execution_class"),
-        intermediate_placement=_observed_text(metadata, "graph_intermediate_placement"),
-        intermediate_placement_origin=_observed_text(
-            metadata, "graph_intermediate_placement_origin"
-        ),
-        native_identity_verified=bool(metadata.get("native_identity_verified", False)),
-        target_observed=metadata.get("target_observed"),
-        hardware_allocation_verified=bool(
-            metadata.get("hardware_allocation_verified", False)
-        ),
-        hardware_release_verified=bool(
-            metadata.get("hardware_release_verified", False)
-        ),
-        hardware_release_confirmed=bool(
-            metadata.get("hardware_release_confirmed", False)
-        ),
-        requested_dpu_count=_optional_int(metadata.get("requested_dpu_count")),
-        allocated_dpu_count=_optional_int(metadata.get("allocated_dpu_count")),
-        observed_rank_count=_optional_int(metadata.get("observed_rank_count")),
-        tasklets_per_dpu=_optional_int(
-            metadata.get("observed_tasklets_per_dpu", metadata.get("tasklets_per_dpu"))
-        ),
-        native_kernel_executed=bool(metadata.get("native_kernel_executed", False)),
-        hardware_kernel_executed=bool(metadata.get("hardware_kernel_executed", False)),
-        simulator_kernel_executed=bool(
-            metadata.get("simulator_kernel_executed", False)
-        ),
-        cpu_fallback_used=bool(metadata.get("cpu_fallback_used", False)),
-        physical_plan_consumed=bool(metadata.get("physical_plan_consumed", False)),
-    )
-
-
-def _validate_terminal_metadata(
-    metadata: Mapping[str, Any] | None, plan: UpmemPlan
-) -> None:
-    """Admit a result only when the terminal M5 close contract is complete."""
-
-    if not isinstance(metadata, Mapping):
-        raise RuntimeError("UPMEM session close returned no terminal metadata")
-    required = {
-        "target_observed": "physical_hardware",
-        "hardware_allocation_verified": True,
-        "native_kernel_executed": True,
-        "hardware_kernel_executed": True,
-        "simulator_kernel_executed": False,
-        "cpu_fallback_used": False,
-        "hardware_release_verified": True,
-        "hardware_release_confirmed": True,
-        "native_identity_verified": True,
-        "failure_stage": None,
-        "requested_dpu_count": plan.topology.dpu_count,
-        "allocated_dpu_count": plan.topology.dpu_count,
-        "observed_rank_count": plan.topology.rank_count,
-        "observed_tasklets_per_dpu": plan.topology.tasklets_per_dpu,
-        "session_protocol": plan.session_id,
-        "dispatch_mode": plan.dispatch_id,
-        "kernel_identity": plan.kernel_id,
-        "execution_class": "physical_v4_output_tile",
-        "graph_intermediate_placement": "host_managed",
-        "graph_intermediate_placement_origin": "m5_host_coordinator_v1",
-    }
-    for key, expected in required.items():
-        if metadata.get(key) != expected:
-            raise RuntimeError(
-                f"UPMEM terminal metadata is not physically verified: "
-                f"{key}={metadata.get(key)!r}"
-            )
-
-    aliases = {
-        "profile": ("physical_profile",),
-        "abi": ("abi_version",),
-    }
-    for canonical, alternatives in aliases.items():
-        observed = _observed_text(metadata, canonical, *alternatives)
-        expected = plan.profile_id if canonical == "profile" else plan.abi_id
-        if observed != expected:
-            raise RuntimeError(
-                "UPMEM terminal metadata is not physically verified: "
-                f"{canonical}={observed!r}"
-            )
-
-
-def _observed_text(metadata: Mapping[str, Any], *keys: str) -> str:
-    """Read one observed terminal value, rejecting absent or conflicting aliases."""
-
-    values = [str(metadata[key]) for key in keys if metadata.get(key) is not None]
-    if not values:
-        raise RuntimeError(f"UPMEM terminal metadata is missing {keys[0]}")
-    if len(set(values)) != 1:
-        raise RuntimeError(f"UPMEM terminal metadata has conflicting {keys[0]} values")
-    return values[0]
-
-
-def _required_byte_count(metadata: Mapping[str, Any], *keys: str) -> int:
-    """Return an observed application-visible byte count, never a guessed zero."""
-
-    values = [metadata[key] for key in keys if key in metadata]
-    if not values:
-        raise RuntimeError(f"UPMEM task metadata is missing {keys[0]}")
-    if any(
-        not isinstance(value, int) or isinstance(value, bool) or value < 0
-        for value in values
-    ):
-        raise RuntimeError(f"UPMEM task metadata has invalid {keys[0]}")
-    parsed = [int(value) for value in values]
-    if len(set(parsed)) != 1:
-        raise RuntimeError(f"UPMEM task metadata has conflicting {keys[0]} values")
-    return parsed[0]
-
-
-def _rank_binding_sha256(rank_paths: tuple[str, ...]) -> str:
-    """Hash ordered runtime rank bindings without exposing their raw paths."""
-
-    return hashlib.sha256(
-        canonical_serialize(tuple(rank_paths)).encode("utf-8")
-    ).hexdigest()
-
-
-def _resolve_view(view: TensorView, tensors: Mapping[str, np.ndarray]) -> np.ndarray:
-    if view.tensor_id not in tensors:
-        raise ValueError(f"UPMEM tensor {view.tensor_id} is not available")
-    value = tensors[view.tensor_id]
-    if not view.slice_spec:
-        return value
-    indices: list[slice | int] = [slice(None)] * value.ndim
-    for axis, index in view.slice_spec:
-        indices[axis] = index
-    sliced = value[tuple(indices)]
-    if tuple(sliced.shape) != view.shape:
-        raise ValueError(f"UPMEM sliced tensor {view.tensor_id} has wrong shape")
-    return sliced
-
-
-def _topological_order(dag: ContractionDAG) -> tuple[str, ...]:
-    nodes = {node.node_id: node for node in dag.nodes}
-    remaining = {node_id: len(node.dependencies) for node_id, node in nodes.items()}
-    dependents: dict[str, list[str]] = {node_id: [] for node_id in nodes}
-    for node in dag.nodes:
-        for dependency in node.dependencies:
-            dependents[dependency].append(node.node_id)
-    ready = sorted(node_id for node_id, count in remaining.items() if count == 0)
-    order: list[str] = []
-    while ready:
-        node_id = ready.pop(0)
-        order.append(node_id)
-        for dependent in sorted(dependents[node_id]):
-            remaining[dependent] -= 1
-            if remaining[dependent] == 0:
-                ready.append(dependent)
-        ready.sort()
-    if len(order) != len(nodes):
-        raise ValueError("UPMEM DAG cannot be topologically ordered")
-    return tuple(order)
-
-
-def _seconds(value: Any) -> float:
-    result = float(value or 0.0)
-    if result < 0 or not math.isfinite(result):
-        raise ValueError("UPMEM timing values must be finite and non-negative")
-    return result
-
-
-def _nonnegative_int(value: Any) -> int:
-    result = int(value or 0)
-    if result < 0:
-        raise ValueError("UPMEM byte values must be non-negative")
-    return result
-
-
-def _optional_int(value: Any) -> int | None:
-    if value is None:
-        return None
-    result = int(value)
-    if result < 0:
-        raise ValueError("UPMEM count values must be non-negative")
-    return result
-
-
 __all__ = [
     "UpmemSession",
     "UpmemV4Executor",
     "UpmemV4Session",
     "open_upmem",
-    "run_upmem",
 ]

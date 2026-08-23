@@ -1,134 +1,120 @@
 # Pipeline Contract
 
-This document describes the active tensor-network path as small, explicit data
-transformations. It deliberately does not introduce a ScientificPlan layer.
+The active tensor-network path is a sequence of direct functions. It has one
+logical execution IR, `ContractionDAG`, and one UPMEM physical-plan schema,
+`UpmemPlan` schema version 1.
 
-~~~text
-CircuitSpec
-  -> build_tensor_network_data
-  -> TensorNetworkSpec + Mapping[str, ndarray]
-  -> plan_contractions / PlannerResult
-  -> build_contraction_dag / ContractionDAG
-  -> compile_execution / ExecutionPlan
-  -> execute / ExecutionResult
-  -> normalized_records.jsonl
-  -> reports
-~~~
+```text
+SimulationJob
+  -> lower_tensor_network
+  -> TensorNetwork + Mapping[str, ndarray]
+  -> plan_opt_einsum | plan_cotengra
+  -> pairwise contraction path
+  -> build_contraction_dag
+  -> ContractionDAG
+  -> run_cpu_once
+       or
+     plan_upmem -> UpmemPlan -> open_upmem -> UpmemSession.run_once
+  -> ExecutionSample
+  -> experiment evidence
+  -> report
+```
 
-## Stage Contracts
+There is no `ScientificPlan`, provider registry, or generic target dispatcher
+in this canonical path.
 
-| Stage and symbol | Input | Output | Parameters | Mutable state/side effects |
-| --- | --- | --- | --- | --- |
-| Circuit factories in circuits/ | Suite case/config | CircuitSpec | Family, qubits, depth/repetitions, seed, gate parameters | Local construction only; returned operations are immutable. |
-| build_tensor_network_data in tn/network.py | CircuitSpec | (TensorNetworkSpec, Mapping[str, ndarray]) | Gate tensor definitions and output ordering | Allocates a plain tensor-id lookup and NumPy arrays. Callers and executors treat the arrays as read-only. |
-| plan_contractions in tn/planning.py | TensorNetworkSpec, PlannerRequest or config mapping | PlannerResult | Engine, algorithm, objective, seed/repeats, UPMEM profile, normalization, representation assumption | Planner-local memory and external planner state only; no device I/O. |
-| build_contraction_dag in tn/graph.py | TensorNetworkSpec, PlannerResult.path | ContractionDAG | Pairwise dynamic active-list path | None; no arrays are inspected. |
-| apply_slicing in tn/graph.py | ContractionDAG, SliceSpec | New ContractionDAG | One supported global contracted-label slice | None; original DAG is not mutated. |
-| compile_execution in execution/compiler.py | ContractionDAG, CpuCompileRequest or UpmemCompileRequest | ExecutionPlan or UnsupportedExecution | Target, numeric mode, logical topology, kernel/decomposition/placement/reduction and profile IDs | None; it does not allocate devices, access binaries, or transfer data. |
-| execute in execution/runner.py | ExecutionPlan, DAG, Mapping[str, ndarray], RunContext | ExecutionResult or deterministic dispatch ExecutionFailure | Run ID, target, warmups/repetitions, timeout, target runtime resources | Dispatches exactly one target. Malformed inputs and native/session failures raise unchanged so experiment orchestration can retain their failure stage. |
-| run_cpu in execution/cpu.py | CPU plan, DAG, inputs, context | ExecutionResult | Numeric mode, node order, repetitions | Fresh local tensor map and output buffer per call; no source mutation. |
-| run_upmem in execution/upmem.py | UPMEM plan, DAG, inputs, context with UpmemRuntimeResources | ExecutionResult; malformed/native/session failures raise | Logical topology in plan; rank paths/binaries/session opener in runtime resources; timeout and repetitions | UPMEM allocation/session, MRAM buffers, subprocess/device state, and local graph values. No CPU/simulator fallback. |
-| m5_circuit_study.run_study | Suite config and injected engine factories | Run directory and normalized records | Route variants, tolerances, warmups/repeats, timeout | Study worklist, reference arrays, injected sessions, and files under ignored runs/. |
-| Report generator | Normalized records and manifests | CSVs, plots, report manifest | Selection and aggregation settings | Writes report artifacts only; never executes a route. |
+## Boundaries
 
-The current execution/ package implements CPU and UPMEM dispatch. GPU is an
-explicit unsupported target in this slice, not a CPU fallback.
+| Function | Input | Output | Side effects |
+| --- | --- | --- | --- |
+| `lower_tensor_network` | `SimulationJob` | `TensorNetwork`, tensor-value mapping | Allocates NumPy arrays only |
+| `plan_opt_einsum` / `plan_cotengra` | `TensorNetwork` and planner parameters | Pairwise path and planner facts | Planner-local work only |
+| `build_contraction_dag` | `TensorNetwork` and path | `ContractionDAG` | None |
+| `run_cpu_once` | DAG, inputs, `NumericPolicy` | `ExecutionSample` | CPU-local arrays only |
+| `plan_upmem` | DAG, `NumericPolicy`, `UpmemTopology` | `UpmemPlan` or `UnsupportedExecution` | None; no device access |
+| `replay_upmem_plan_once` | DAG, physical plan, inputs | `ExecutionSample` | CPU-local policy replay only |
+| `open_upmem` | DAG, physical plan, resources and timeout | `UpmemSession` | Opens physical native sessions |
+| `UpmemSession.run_once` | Tensor-value mapping | `ExecutionSample` | Transfers, kernels, host reconstruction |
+| `UpmemSession.close` | Open session | Terminal facts | Releases physical resources |
 
-## Data Records
+`TensorNetwork` describes target-neutral tensors and connectivity but no
+execution order. `ContractionDAG` is the sole logical execution IR: it owns the
+selected contraction order, explicit slicing branches, reductions, and
+dependencies. `UpmemPlan` records only physical choices such as numeric policy,
+tiling, placement, topology, tasklets, stages, and the current
+`host_roundtrip_v1` intermediate policy.
 
-TensorNetworkSpec contains circuit identity, tensor descriptors, output labels,
-and the einsum expression. A plain mapping contains tensor-id-to-array values
-with exact ID, shape, and dtype validation. The separation allows a planner to
-operate on metadata while an executor receives numerical payloads without a
-wrapper type.
+## Numerical Boundary
 
-PlannerResult contains the selected pairwise path, planner identity, path
-summary, planning time, and planner metadata. It is planning output, not an
-execution plan. PlannerResult.identity includes the planner engine and full
-resolved configuration hash.
+The execution policies are:
 
-ContractionDAG contains TensorView, ContractNode, ReduceNode, and the final
-output view. It contains labels, shapes, producers, and dependencies but no
-arrays, planner configuration, target estimates, rank paths, or binaries.
+- `split_complex_float32_v1`;
+- `split_complex_int8_shared_scale_v1`.
 
-The legacy core.records.TaskGraph contains ContractionTask records. The
-compatibility function materialize_task_graph_from_planner_result creates it
-from the same already-selected PlannerResult; it must not re-plan. Existing
-legacy identity/evidence readers can use it, but active execution consumes the
-ContractionDAG. WholeGraphExecutor and old whole-circuit classes remain
-historical compatibility/native-shell code; the active M5 study does not use
-WholeGraphExecutor.
+Complex contraction uses four real products in fixed `rr`, `ii`, `ri`, `ir`
+order. The int8 policy uses one shared scale for the real and imaginary planes
+of each operand. Complex128 is a validation reference, not an execution mode.
+The same-physical-plan CPU replay is the policy oracle for UPMEM execution.
 
-## Slicing Versus Tiling
+## Parallel Boundary
 
-Global slicing changes the semantic calculation. apply_slicing fixes one
-contracted label, creates partial DAG contract nodes, and adds an explicit
-reduction node. It therefore changes the ContractionDAG and its hash.
+The current mapper assigns output and K tiles to deterministic rank/DPU waves.
+The coordinator can submit different ranks concurrently. Graph intermediates
+remain host-managed, reductions remain on the host, and each current contract
+stage contains one logical contraction. Multi-label logical slicing and
+slice-batch stages are T8/T9 work; they are not implemented merely because the
+schema can represent more than one node.
 
-Target tiling changes how one DAG contract is represented for a target memory
-hierarchy. UPMEM tile sizes, buffers, DPU assignment, and tile counts are
-execution/compiler concerns. They belong in ExecutionPlan work plans and
-runtime evidence; they do not change the DAG hash unless the mathematical graph
-itself is changed.
+## Timing Boundary
 
-## Identity Rules
+Executors perform one run. Warmups, repetitions, validation, hashing, and
+evidence writing belong to the experiment layer. `Measurement.total_wall_s`
+is authoritative. Independently reported rank durations are work diagnostics,
+not inferred wall time. Exact timing scopes are defined in `docs/timing.md`.
 
-The active identities are intentionally separate:
+## Identity Boundary
 
-~~~text
-PlannerResult.identity.planner_config_hash  = how the path was selected
-contraction_dag_hash(dag)                   = what contractions the graph means
-execution_plan_hash(plan)                   = how a target will execute that graph
-backend/executable facts                    = what binary and machine actually ran
-run/evidence identity                       = when and where it ran
-~~~
+The identities are independent:
 
-Changing a planner configuration can change the planner identity without
-necessarily changing the DAG. Changing the path changes the DAG hash. Changing
-numeric mode, kernel, decomposition, placement, reduction, logical topology, or
-ABI/session/dispatch profile changes the execution plan. Physical rank paths,
-host/DPU binary paths, and local session resources are excluded from the plan
-hash and are recorded as runtime provenance instead.
+```text
+problem_id
+tensor_network_structure_id
+logical_plan_id
+physical_plan_id
+executable_id
+environment_id
+experiment_id
+run_id
+analysis identity
+```
 
-Report pairing requires compatible circuit/network/plan and route evidence. When
-both rows have DAG v2 fields, the DAG hash and schema must match. A legacy row
-without DAG identity cannot be silently treated as same-DAG evidence.
+Changing the contraction path changes `logical_plan_id`. Changing numeric
+policy, tiling, placement, topology, or tasklets changes `physical_plan_id`.
+Changing native binaries or compiler flags changes `executable_id`. Exact
+definitions are in `docs/identities.md`.
 
-## Runtime Ownership
+## Mutable State
 
-The functional core does not mutate its input records. Mutable state is limited
-to:
+Mutable state is restricted to:
 
-- NumPy arrays created by TN lowering and passed as read-only source payloads;
-- per-call CPU tensor maps and output buffers;
-- UPMEM sessions, allocations, MRAM/transfer buffers, and native subprocesses;
-- M5 study worklists and reference outputs;
-- JSONL, manifest, CSV, and plot files created by evidence/report stages.
+- NumPy arrays created for one lowering or execution;
+- UPMEM subprocesses, allocations, rank sessions, transfers, and native
+  buffers inside `UpmemSession`;
+- experiment-owned manifest and JSONL files;
+- report artifacts created from normalized evidence.
 
-RunContext.target_resources carries machine-local UPMEM paths and the session
-opener. Those resources are required at runtime but are excluded from the
-logical ExecutionPlan identity.
+The DAG and physical-plan records are immutable. The runtime must not silently
+re-plan, fall back to CPU, or accept simulator execution as physical evidence.
 
-For the M5 v4 physical route, `READY` and `RESPONSE` carry the native host's
-compiled backend/profile/ABI/session/dispatch/kernel/execution-class contract.
-The M5 terminal record derives those fields only from agreeing native events
-across ranks and requires `native_identity_verified=true`. The coordinator
-records `graph_intermediate_placement=host_managed` with origin
-`m5_host_coordinator_v1`: it rehydrates DAG intermediates on the host between
-contractions. `executed_node_ids` records completed host DAG nodes only; it is
-not native-kernel exactly-once evidence.
+## Historical Compatibility
 
-## Functional Process Boundary
+`quantum_bench.execution.compiler` and `quantum_bench.execution.runner` retain
+the old `ExecutionPlan`/`RunContext` public commands until T12 deletes their
+callers. They adapt old numeric, topology, and node-plan records at that
+historical boundary. Canonical `quantum_bench.upmem.plan` and
+`quantum_bench.upmem.runtime` neither import nor expose those legacy records.
 
-The current implementation is in-process, but the contracts are suitable for a
-later process/container boundary:
-
-~~~text
-request:  CircuitSpec/config + planner request + execution request + inputs
-response: PlannerResult + ContractionDAG + ExecutionPlan + result/failure + facts
-report:   normalized_records.jsonl -> tables/plots/manifest
-~~~
-
-No RPC or container framework is part of the active slice. The important rule is
-that each function has explicit records in and out, while device/session state
-stays in the execution shell.
+Historical milestone runners, provider registries, TaskGraph code, and old
+native lanes are not architectural extension points. They remain only to keep
+the branch testable while their direct replacements are installed and are
+deleted in the same ownership batches as those replacements.

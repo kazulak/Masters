@@ -20,13 +20,14 @@ from quantum_bench.execution.contracts import (
     execution_plan_hash,
     UnsupportedExecution,
 )
-from quantum_bench.upmem.runtime import run_upmem
+from quantum_bench.execution.runner import run_upmem
 from quantum_bench.lowering import (
     build_contraction_dag,
     contraction_dag_hash,
     apply_slicing,
 )
 from quantum_bench.upmem.protocol import MAX_CONTRACTED
+from quantum_bench.upmem.plan import UpmemTopology as FinalUpmemTopology, plan_upmem
 
 
 def _dag() -> object:
@@ -232,8 +233,6 @@ def test_engine_plan_assignment_drives_rank_local_dpu_request() -> None:
     )
 
     dag = _dag()
-    compiled = compile_execution(dag, _request(dag))
-    assert isinstance(compiled, ExecutionPlan)
     node = dag.nodes[0]
     assert isinstance(node, ContractNode)
     lowering = lower_binary_contraction(
@@ -242,14 +241,20 @@ def test_engine_plan_assignment_drives_rank_local_dpu_request() -> None:
         np.ones((3, 2), dtype=np.float32),
         limits=M5TileLimits.float32(),
     )
-    node_plan = compiled.payload.node_plans[0]
-    unit = node_plan.work_units[0]
+    stage = plan_upmem(
+        dag,
+        numeric_policy="split_complex_float32_v1",
+        topology=FinalUpmemTopology(dpu_count=2, tasklets_per_dpu=1),
+    ).stages[0]
+    unit = stage.work_units[0]
     moved = replace(unit, logical_dpu=1)
-    moved_plan = replace(node_plan, work_units=(moved,))
+    moved_stage = replace(stage, work_units=(moved,))
     session = object.__new__(UpmemV4Session)
     session.ranks = (SimpleNamespace(index=0, local_dpus=2),)
 
-    waves, requests = session._requests_from_plan(node, lowering, moved_plan)
+    waves, requests = session._requests_from_work_units(
+        node, lowering, moved_stage.work_units
+    )
 
     assert waves[0][0].id == unit.stable_tile_id
     assert requests[0][0][0].index == 0
@@ -269,8 +274,6 @@ def test_engine_rejects_plan_tile_extent_tampering_before_requests() -> None:
     )
 
     dag = _dag()
-    compiled = compile_execution(dag, _request(dag))
-    assert isinstance(compiled, ExecutionPlan)
     node = dag.nodes[0]
     assert isinstance(node, ContractNode)
     lowering = lower_binary_contraction(
@@ -279,15 +282,19 @@ def test_engine_rejects_plan_tile_extent_tampering_before_requests() -> None:
         np.ones((3, 2), dtype=np.float32),
         limits=M5TileLimits.float32(),
     )
-    node_plan = compiled.payload.node_plans[0]
-    unit = node_plan.work_units[0]
+    stage = plan_upmem(
+        dag,
+        numeric_policy="split_complex_float32_v1",
+        topology=FinalUpmemTopology(dpu_count=2, tasklets_per_dpu=1),
+    ).stages[0]
+    unit = stage.work_units[0]
     tampered = replace(unit, m_size=unit.m_size + 1)
-    tampered_plan = replace(node_plan, work_units=(tampered,))
+    tampered_stage = replace(stage, work_units=(tampered,))
     session = object.__new__(UpmemV4Session)
     session.ranks = (SimpleNamespace(index=0, local_dpus=2),)
 
     with pytest.raises(ValueError, match="extents"):
-        session._requests_from_plan(node, lowering, tampered_plan)
+        session._requests_from_work_units(node, lowering, tampered_stage.work_units)
 
 
 def test_compile_rejects_unsupported_topology_and_int8_k() -> None:
@@ -449,7 +456,7 @@ def test_compile_accepts_large_rank_and_logical_tensors_when_tiling_can_lower_th
 def test_run_upmem_uses_one_session_in_plan_order_and_aggregates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import quantum_bench.upmem.runtime as module
+    import quantum_bench.execution.runner as module
 
     dag = _chain_dag()
     compiled = compile_execution(dag, _request(dag))
@@ -498,10 +505,128 @@ def test_run_upmem_uses_one_session_in_plan_order_and_aggregates(
     np.testing.assert_array_equal(result.output, expected)
 
 
+def test_historical_runner_adapts_legacy_plan_for_final_v4_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import quantum_bench.execution.runner as module
+    from quantum_bench.upmem.plan import (
+        UpmemStage,
+        UpmemTopology as FinalTopology,
+        UpmemWorkUnit,
+    )
+    from quantum_bench.upmem.runtime import UpmemV4Session
+
+    dag = _dag()
+    compiled = compile_execution(dag, _request(dag))
+    assert isinstance(compiled, ExecutionPlan)
+    observed: dict[str, object] = {}
+    session = object.__new__(UpmemV4Session)
+
+    def execute_real(
+        node: ContractNode,
+        left: np.ndarray,
+        right: np.ndarray,
+        *,
+        stage: UpmemStage,
+        numeric_policy: str,
+    ) -> tuple[np.ndarray, dict[str, object]]:
+        observed["stage"] = stage
+        observed["numeric_policy"] = numeric_policy
+        return left @ right, {
+            "physical_plan_consumed": True,
+            "application_visible_h2d_bytes": 8,
+            "application_visible_d2h_bytes": 4,
+            "timing": {},
+            "target_observed": "physical_hardware",
+            "simulator_kernel_executed": False,
+            "cpu_fallback_used": False,
+        }
+
+    session.execute_real = execute_real  # type: ignore[method-assign]
+    session.close = lambda: _FakeSession().terminal_metadata  # type: ignore[method-assign]
+
+    class CapturingExecutor:
+        def __init__(self, **kwargs: object) -> None:
+            observed["engine_kwargs"] = kwargs
+
+        def open_session(
+            self, numeric_policy: str, topology: FinalTopology
+        ) -> UpmemV4Session:
+            observed["open_numeric_policy"] = numeric_policy
+            observed["topology"] = topology
+            return session
+
+    monkeypatch.setattr(module, "UpmemV4Executor", CapturingExecutor)
+    result = run_upmem(
+        compiled,
+        dag,
+        _inputs(("a", np.ones((2, 3))), ("b", np.ones((3, 2)))),
+        RunContext(
+            run_id="final-adaptation",
+            target=Target.UPMEM,
+            target_resources=_resources(tmp_path),
+        ),
+    )
+
+    assert result.target is Target.UPMEM
+    assert observed["open_numeric_policy"] == "split_complex_float32_v1"
+    assert observed["numeric_policy"] == "split_complex_float32_v1"
+    topology = observed["topology"]
+    assert isinstance(topology, FinalTopology)
+    assert (topology.dpu_count, topology.tasklets_per_dpu, topology.rank_count) == (
+        2,
+        1,
+        1,
+    )
+    stage = observed["stage"]
+    assert isinstance(stage, UpmemStage)
+    assert stage.kind == "contract_batch"
+    assert stage.node_ids == ("contract_0",)
+    assert all(isinstance(unit, UpmemWorkUnit) for unit in stage.work_units)
+    legacy_unit = compiled.payload.node_plans[0].work_units[0]
+    final_unit = stage.work_units[0]
+    assert (
+        final_unit.stable_tile_id,
+        final_unit.logical_rank,
+        final_unit.logical_dpu,
+        final_unit.k_size,
+    ) == (
+        legacy_unit.stable_tile_id,
+        legacy_unit.logical_rank,
+        legacy_unit.logical_dpu,
+        legacy_unit.k_size,
+    )
+
+
+def test_legacy_recomputation_translates_unsupported_node_to_value_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import quantum_bench.execution.compiler as compiler
+    from quantum_bench.upmem.plan import _UnsupportedUpmemNode
+
+    dag = _dag()
+    compiled = compile_execution(dag, _request(dag))
+    assert isinstance(compiled, ExecutionPlan)
+
+    def unsupported(*_args: object, **_kwargs: object) -> object:
+        raise _UnsupportedUpmemNode(
+            capability="test_unsupported_node",
+            reason="test node is no longer lowerable",
+        )
+
+    monkeypatch.setattr(compiler, "_compile_upmem_node", unsupported)
+    with pytest.raises(
+        ValueError,
+        match="contract_0 is not lowerable: test node is no longer lowerable",
+    ) as caught:
+        compiler.validate_upmem_plan_for_dag(dag, compiled.payload)
+    assert type(caught.value) is ValueError
+
+
 def test_run_upmem_reports_completed_host_nodes_not_planned_node_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import quantum_bench.upmem.runtime as module
+    import quantum_bench.execution.runner as module
 
     dag = _dag()
     compiled = compile_execution(dag, _request(dag))
@@ -530,7 +655,7 @@ def test_run_upmem_reports_completed_host_nodes_not_planned_node_order(
 def test_run_upmem_rejects_static_plan_tampering_before_session_open(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import quantum_bench.upmem.runtime as module
+    import quantum_bench.execution.runner as module
 
     dag = _dag()
     compiled = compile_execution(dag, _request(dag))
@@ -574,7 +699,7 @@ def test_run_upmem_rejects_static_plan_tampering_before_session_open(
 def test_execute_once_evicts_only_produced_intermediates_after_last_consumer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import quantum_bench.upmem.runtime as module
+    import quantum_bench.execution.runner as module
 
     dag = _chain_dag()
     compiled = compile_execution(dag, _request(dag))
@@ -609,7 +734,7 @@ def test_execute_once_evicts_only_produced_intermediates_after_last_consumer(
 def test_run_upmem_hashes_every_measured_output_and_rejects_nondeterminism(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import quantum_bench.upmem.runtime as module
+    import quantum_bench.execution.runner as module
 
     dag = _dag()
     compiled = compile_execution(dag, _request(dag))
@@ -648,7 +773,7 @@ def test_run_upmem_hashes_every_measured_output_and_rejects_nondeterminism(
 
 
 def test_packed_tile_assembly_and_dequantization_are_separate() -> None:
-    import quantum_bench.upmem.runtime as module
+    import quantum_bench.execution.runner as module
 
     aggregate = module._Aggregate()
     aggregate.add(
@@ -680,7 +805,7 @@ def test_packed_tile_assembly_and_dequantization_are_separate() -> None:
 def test_run_upmem_reduces_sliced_contracts_on_host(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import quantum_bench.upmem.runtime as module
+    import quantum_bench.execution.runner as module
 
     dag = apply_slicing(_dag(), SliceSpec(node_id="contract_0", label=1))
     compiled = compile_execution(dag, _request(dag))
@@ -713,7 +838,7 @@ def test_run_upmem_reduces_sliced_contracts_on_host(
 def test_run_upmem_closes_session_on_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import quantum_bench.upmem.runtime as module
+    import quantum_bench.execution.runner as module
 
     class FailingSession(_FakeSession):
         def execute(
@@ -750,7 +875,7 @@ def test_run_upmem_closes_session_on_failure(
 def test_terminal_physical_facts_are_required(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import quantum_bench.upmem.runtime as module
+    import quantum_bench.execution.runner as module
 
     dag = _dag()
     compiled = compile_execution(dag, _request(dag))
@@ -790,7 +915,7 @@ def test_terminal_observed_execution_identity_must_match_compiled_plan(
     field: str,
     value: str,
 ) -> None:
-    import quantum_bench.upmem.runtime as module
+    import quantum_bench.execution.runner as module
 
     dag = _dag()
     compiled = compile_execution(dag, _request(dag))
@@ -828,7 +953,7 @@ def test_terminal_accepts_documented_identity_aliases(
     alias: str,
     expected: str,
 ) -> None:
-    import quantum_bench.upmem.runtime as module
+    import quantum_bench.execution.runner as module
 
     dag = _dag()
     compiled = compile_execution(dag, _request(dag))
@@ -857,7 +982,7 @@ def test_terminal_accepts_documented_identity_aliases(
 def test_terminal_requires_observed_backend_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import quantum_bench.upmem.runtime as module
+    import quantum_bench.execution.runner as module
 
     dag = _dag()
     compiled = compile_execution(dag, _request(dag))
@@ -887,7 +1012,7 @@ def test_terminal_requires_observed_backend_id(
 def test_nonzero_imaginary_inputs_are_rejected_before_session_open(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: NumericMode
 ) -> None:
-    import quantum_bench.upmem.runtime as module
+    import quantum_bench.execution.runner as module
 
     dag = _dag()
     compiled = compile_execution(dag, _request(dag, mode))
@@ -920,7 +1045,7 @@ def test_nonzero_imaginary_inputs_are_rejected_before_session_open(
 def test_missing_task_transfer_bytes_are_rejected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import quantum_bench.upmem.runtime as module
+    import quantum_bench.execution.runner as module
 
     class MissingBytesSession(_FakeSession):
         def execute(
@@ -958,7 +1083,7 @@ def test_missing_task_transfer_bytes_are_rejected(
 def test_terminal_release_failure_is_rejected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import quantum_bench.upmem.runtime as module
+    import quantum_bench.execution.runner as module
 
     dag = _dag()
     compiled = compile_execution(dag, _request(dag))
@@ -992,7 +1117,7 @@ def test_terminal_release_failure_is_rejected(
 def test_simulator_terminal_fact_is_rejected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import quantum_bench.upmem.runtime as module
+    import quantum_bench.execution.runner as module
 
     dag = _dag()
     compiled = compile_execution(dag, _request(dag))
@@ -1017,7 +1142,7 @@ def test_simulator_terminal_fact_is_rejected(
 def test_session_close_failure_is_not_reported_as_success(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import quantum_bench.upmem.runtime as module
+    import quantum_bench.execution.runner as module
 
     class CloseFailingSession(_FakeSession):
         def close(self) -> dict[str, object]:
@@ -1057,7 +1182,7 @@ def test_terminal_allocation_must_match_compiled_topology(
     field: str,
     value: int,
 ) -> None:
-    import quantum_bench.upmem.runtime as module
+    import quantum_bench.execution.runner as module
 
     dag = _dag()
     compiled = compile_execution(dag, _request(dag))
@@ -1083,7 +1208,7 @@ def test_terminal_allocation_must_match_compiled_topology(
 def test_invalid_explicit_timeout_is_rejected_before_session_open(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import quantum_bench.upmem.runtime as module
+    import quantum_bench.execution.runner as module
 
     dag = _dag()
     compiled = compile_execution(dag, _request(dag))
@@ -1120,7 +1245,7 @@ def test_invalid_explicit_timeout_is_rejected_before_session_open(
 def test_execution_and_close_failures_are_both_exposed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import quantum_bench.upmem.runtime as module
+    import quantum_bench.execution.runner as module
 
     class DualFailingSession(_FakeSession):
         def execute(
@@ -1159,7 +1284,7 @@ def test_execution_and_close_failures_are_both_exposed(
 def test_binary_hashes_are_computed_once_outside_task_aggregation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import quantum_bench.upmem.runtime as module
+    import quantum_bench.execution.runner as module
 
     calls: list[Path] = []
 

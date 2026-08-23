@@ -13,23 +13,14 @@ import pytest
 
 from quantum_bench.core.records import TensorSpec
 from quantum_bench.model import ContractNode, ContractionDAG, TensorView
-from quantum_bench.execution.compiler import compile_execution
-from quantum_bench.execution.contracts import (
-    ExecutionPlan,
-    NumericMode,
-    UpmemCompileRequest,
-    UpmemTopology,
-)
+from quantum_bench.execution.contracts import NumericMode
 from quantum_bench.formats.fixed_point import FixedPointSpec, quantize_fixed_point
-from quantum_bench.lowering import (
-    contraction_dag_hash,
-)
 from quantum_bench.upmem.runtime import (
     UpmemV4Executor,
     UpmemV4Session,
     _task_structure_hash,
 )
-from quantum_bench.upmem.plan import UpmemTopology as FinalUpmemTopology
+from quantum_bench.upmem.plan import UpmemStage, UpmemTopology as FinalUpmemTopology
 from quantum_bench.upmem.plan import plan_upmem
 from quantum_bench.cpu import replay_upmem_plan_once
 import quantum_bench.upmem.runtime as engine_module
@@ -76,12 +67,23 @@ def _packed_expected(
     ) * np.float32(left_q.record.scale * right_q.record.scale)
 
 
-def _compiled_node_plan(
+def _final_numeric_policy(mode: NumericMode | str) -> str:
+    if mode in {NumericMode.FLOAT32_REAL, "split_complex_float32_v1"}:
+        return "split_complex_float32_v1"
+    if mode in {
+        NumericMode.HOST_PACKED_INT8_PER_TASK_V1,
+        "split_complex_int8_shared_scale_v1",
+    }:
+        return "split_complex_int8_shared_scale_v1"
+    raise ValueError(f"unsupported test numeric policy: {mode!r}")
+
+
+def _compiled_stage(
     node: ContractNode,
     dpu_count: int,
     rank_count: int = 1,
     numeric_mode: NumericMode = NumericMode.FLOAT32_REAL,
-) -> Any:
+) -> UpmemStage:
     dag = ContractionDAG(
         tensors=(
             TensorSpec(
@@ -106,20 +108,16 @@ def _compiled_node_plan(
             shape=node.output.shape,
         ),
     )
-    compiled = compile_execution(
+    compiled = plan_upmem(
         dag,
-        UpmemCompileRequest(
-            contraction_dag_hash=contraction_dag_hash(dag),
-            numeric_mode=numeric_mode,
-            topology=UpmemTopology(
-                dpu_count=dpu_count,
-                tasklets_per_dpu=1,
-                rank_count=rank_count,
-            ),
+        numeric_policy=_final_numeric_policy(numeric_mode),
+        topology=FinalUpmemTopology(
+            dpu_count=dpu_count,
+            tasklets_per_dpu=1,
+            rank_count=rank_count,
         ),
     )
-    assert isinstance(compiled, ExecutionPlan)
-    return compiled.payload.node_plans[0]
+    return compiled.stages[0]
 
 
 def _binaries(root: Path) -> tuple[Path, Path, Path]:
@@ -342,8 +340,12 @@ def _engine(
     )
 
 
-def _topology(count: int, *, rank_count: int = 1) -> UpmemTopology:
-    return UpmemTopology(dpu_count=count, tasklets_per_dpu=1, rank_count=rank_count)
+def _topology(count: int, *, rank_count: int = 1) -> FinalUpmemTopology:
+    return FinalUpmemTopology(
+        dpu_count=count,
+        tasklets_per_dpu=1,
+        rank_count=rank_count,
+    )
 
 
 def _final_plan_for_node(
@@ -356,7 +358,9 @@ def _final_plan_for_node(
     dag = ContractionDAG(
         tensors=(
             TensorSpec(node.left.tensor_id, node.left.labels, node.left.shape, "dense"),
-            TensorSpec(node.right.tensor_id, node.right.labels, node.right.shape, "dense"),
+            TensorSpec(
+                node.right.tensor_id, node.right.labels, node.right.shape, "dense"
+            ),
         ),
         nodes=(node,),
         output=TensorView(
@@ -394,7 +398,7 @@ class _SubmissionBarrier:
 
 @dataclass(frozen=True)
 class _PlannedSession:
-    """Test helper that supplies a compiled placement to the real session."""
+    """Test helper that supplies a final compiled stage to the real session."""
 
     session: UpmemV4Session
 
@@ -404,25 +408,21 @@ class _PlannedSession:
         left: np.ndarray,
         right: np.ndarray,
         *,
-        node_plan: Any = None,
+        stage: UpmemStage | None = None,
     ) -> Any:
-        if node_plan is None:
-            mode = (
-                NumericMode.HOST_PACKED_INT8
-                if self.session.numeric_mode is NumericMode.HOST_PACKED_INT8_PER_TASK_V1
-                else NumericMode.FLOAT32_REAL
-            )
-            node_plan = _compiled_node_plan(
+        if stage is None:
+            stage = _compiled_stage(
                 node,
                 sum(rank.local_dpus for rank in self.session.ranks),
                 len(self.session.ranks),
-                numeric_mode=mode,
+                numeric_mode=self.session.numeric_policy,
             )
-        return self.session.execute(
+        return self.session.execute_real(
             node,
             left,
             right,
-            node_plan=node_plan,
+            stage=stage,
+            numeric_policy=self.session.numeric_policy,
         )
 
     def __getattr__(self, name: str) -> Any:
@@ -433,8 +433,12 @@ class _PlannedSession:
 class _PlannedEngine:
     engine: UpmemV4Executor
 
-    def open_session(self, *args: Any, **kwargs: Any) -> _PlannedSession:
-        return _PlannedSession(self.engine.open_session(*args, **kwargs))
+    def open_session(
+        self, numeric_policy: NumericMode | str, topology: FinalUpmemTopology
+    ) -> _PlannedSession:
+        return _PlannedSession(
+            self.engine.open_session(_final_numeric_policy(numeric_policy), topology)
+        )
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.engine, name)
@@ -529,9 +533,9 @@ def test_compiled_work_units_reach_native_request_artifact(tmp_path: Path) -> No
     session = _engine(tmp_path, dpu_count=2).open_session(
         NumericMode.FLOAT32_REAL, _topology(2)
     )
-    node_plan = _compiled_node_plan(task, 2)
+    stage = _compiled_stage(task, 2)
 
-    result = session.execute(task, left, right, node_plan=node_plan)
+    result = session.execute(task, left, right, stage=stage)
 
     submissions = session.ranks[0].session.submissions
     local_dpu_ids = [
@@ -626,7 +630,7 @@ def test_request_contract_is_deterministic_and_binds_int8_data(tmp_path: Path) -
 
 def test_binary_hashes_and_roots_are_provenance_only(tmp_path: Path) -> None:
     engine = _engine(tmp_path, dpu_count=1)
-    session = engine.open_session(NumericMode.FLOAT32_REAL, _topology(1))
+    session = engine.open_session("split_complex_float32_v1", _topology(1))
     result = session.execute(
         _task(), np.ones((3, 5), dtype=np.float32), np.ones((5, 4), dtype=np.float32)
     )
@@ -794,7 +798,7 @@ def test_topology_and_startup_failures_are_closed(tmp_path: Path) -> None:
         session_factory=factory,
     )
     with pytest.raises(RuntimeError, match="second rank"):
-        failing.open_session(NumericMode.FLOAT32_REAL, _topology(2, rank_count=2))
+        failing.open_session("split_complex_float32_v1", _topology(2, rank_count=2))
     assert closed[0].closed
 
 
@@ -839,7 +843,7 @@ def test_session_uses_one_deadline_across_multiple_task_requests(
         delay_s=0.03,
         timeout_s=0.05,
     )
-    session = engine.open_session(NumericMode.FLOAT32_REAL, _topology(1))
+    session = engine.open_session("split_complex_float32_v1", _topology(1))
     left = np.ones((3, 5), dtype=np.float32)
     right = np.ones((5, 4), dtype=np.float32)
     session.execute(_task(), left, right)
@@ -944,7 +948,7 @@ def test_conflicting_native_ready_identity_fails_before_execution(
         session_factory=factory,
     )
     with pytest.raises(RuntimeError, match="native identity kernel_identity"):
-        engine.open_session(NumericMode.FLOAT32_REAL, _topology(2, rank_count=2))
+        engine.open_session("split_complex_float32_v1", _topology(2, rank_count=2))
 
 
 def test_conflicting_native_response_identity_fails_closed(tmp_path: Path) -> None:
@@ -1018,7 +1022,9 @@ def test_engine_supports_batched_permuted_output_labels(tmp_path: Path) -> None:
     np.testing.assert_allclose(_output(result), expected, rtol=1e-6, atol=1e-6)
 
 
-def test_missing_node_plan_rejected(tmp_path: Path) -> None:
+def test_execute_real_requires_final_stage_and_open_rejects_legacy_contracts(
+    tmp_path: Path,
+) -> None:
     host_binary, dpu_binary, initialization_binary = _binaries(tmp_path / "binaries")
     engine = UpmemV4Executor(
         session_root=tmp_path / "session",
@@ -1031,28 +1037,42 @@ def test_missing_node_plan_rejected(tmp_path: Path) -> None:
             profile=profile
         ),
     )
-    session = engine.open_session(NumericMode.FLOAT32_REAL, _topology(1))
+    session = engine.open_session("split_complex_float32_v1", _topology(1))
     task = _task()
     left = np.ones((3, 5), dtype=np.float32)
     right = np.ones((5, 4), dtype=np.float32)
 
     with pytest.raises(TypeError):
-        session.execute(task, left, right)  # type: ignore[call-arg]
+        session.execute_real(task, left, right)  # type: ignore[call-arg]
 
-    with pytest.raises(ValueError, match="requires a valid UpmemNodePlan"):
-        session.execute(task, left, right, node_plan=None)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="requires a contract_batch"):
+        session.execute_real(
+            task,
+            left,
+            right,
+            stage=None,  # type: ignore[arg-type]
+            numeric_policy="split_complex_float32_v1",
+        )
 
-    with pytest.raises(ValueError, match="requires a valid UpmemNodePlan"):
-        session.execute(task, left, right, node_plan="not_a_plan")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="requires a contract_batch"):
+        session.execute_real(
+            task,
+            left,
+            right,
+            stage=object(),  # type: ignore[arg-type]
+            numeric_policy="split_complex_float32_v1",
+        )
 
-    plan = _compiled_node_plan(task, 1)
-    wrong_id_plan = replace(plan, node_id="other_node")
-    with pytest.raises(ValueError, match="does not match contract node"):
-        session.execute(task, left, right, node_plan=wrong_id_plan)
+    with pytest.raises(ValueError, match="unsupported final UPMEM numeric policy"):
+        engine.open_session(NumericMode.FLOAT32_REAL, _topology(1))
 
-    wrong_shape_plan = replace(plan, canonical_shape=(1, 999, 5, 4))
-    with pytest.raises(ValueError, match="canonical B/M/K/N shape differs"):
-        session.execute(task, left, right, node_plan=wrong_shape_plan)
+    from quantum_bench.execution.contracts import UpmemTopology as LegacyTopology
+
+    with pytest.raises(TypeError, match="final UpmemTopology"):
+        engine.open_session(
+            "split_complex_float32_v1",
+            LegacyTopology(dpu_count=1, tasklets_per_dpu=1),
+        )
 
     session.close()
 
@@ -1062,21 +1082,27 @@ def test_no_regenerated_placement_and_direct_plan_consumption(tmp_path: Path) ->
     left = np.ones((300, 5), dtype=np.float32)
     right = np.ones((5, 4), dtype=np.float32)
 
-    plan = _compiled_node_plan(task, 4)
-    assert len(plan.work_units) > 1
+    stage = _compiled_stage(task, 4)
+    assert len(stage.work_units) > 1
 
-    first_unit = plan.work_units[0]
+    first_unit = stage.work_units[0]
     modified_unit = replace(first_unit, logical_dpu=3)
-    modified_units = (modified_unit, *plan.work_units[1:])
-    custom_plan = replace(plan, work_units=modified_units)
+    modified_units = (modified_unit, *stage.work_units[1:])
+    custom_stage = replace(stage, work_units=modified_units)
 
     created_sessions: list[_FakeSession] = []
     engine_wrapper = _engine(tmp_path, dpu_count=4, sessions=created_sessions)
     real_session = engine_wrapper.engine.open_session(
-        NumericMode.FLOAT32_REAL, _topology(4)
+        "split_complex_float32_v1", _topology(4)
     )
 
-    result = real_session.execute(task, left, right, node_plan=custom_plan)
+    result = real_session.execute_real(
+        task,
+        left,
+        right,
+        stage=custom_stage,
+        numeric_policy="split_complex_float32_v1",
+    )
     assert _metadata(result)["physical_plan_consumed"] is True
     np.testing.assert_allclose(_output(result), left @ right, rtol=1e-5)
 
@@ -1092,20 +1118,20 @@ def test_direct_compiled_plan_controls_local_ids_on_two_ranks(tmp_path: Path) ->
     task = _task(k=5, m=600, n=4)
     left = np.ones((600, 5), dtype=np.float32)
     right = np.ones((5, 4), dtype=np.float32)
-    compiled_plan = _compiled_node_plan(task, dpu_count=4, rank_count=2)
-    assert {unit.logical_rank for unit in compiled_plan.work_units} == {0, 1}
+    stage = _compiled_stage(task, dpu_count=4, rank_count=2)
+    assert {unit.logical_rank for unit in stage.work_units} == {0, 1}
 
     # Keep the compiled geometry and wave intact, but select a different valid
     # local slot on rank 1 so a regenerated default placement would be visible.
     explicit_units = tuple(
         replace(unit, logical_dpu=1) if unit.logical_rank == 1 else unit
-        for unit in compiled_plan.work_units
+        for unit in stage.work_units
     )
-    explicit_plan = replace(compiled_plan, work_units=explicit_units)
+    explicit_stage = replace(stage, work_units=explicit_units)
     expected_by_rank = {
         rank: [
             unit.logical_dpu
-            for unit in explicit_plan.work_units
+            for unit in explicit_stage.work_units
             if unit.logical_rank == rank
         ]
         for rank in (0, 1)
@@ -1118,8 +1144,16 @@ def test_direct_compiled_plan_controls_local_ids_on_two_ranks(tmp_path: Path) ->
         dpu_count=4,
         sessions=sessions,
     ).engine
-    session = engine.open_session(NumericMode.FLOAT32_REAL, _topology(4, rank_count=2))
-    result = session.execute(task, left, right, node_plan=explicit_plan)
+    session = engine.open_session(
+        "split_complex_float32_v1", _topology(4, rank_count=2)
+    )
+    result = session.execute_real(
+        task,
+        left,
+        right,
+        stage=explicit_stage,
+        numeric_policy="split_complex_float32_v1",
+    )
 
     assert _metadata(result)["physical_plan_consumed"] is True
     for rank_index, native in enumerate(sessions):
@@ -1185,16 +1219,16 @@ def test_execute_complex_matches_physical_plan_replay(
 ) -> None:
     node = _task(k=3, m=1, n=1)
     left = np.array([[1.0 + 2.0j, -0.5 + 0.25j, 0.75 - 1.5j]], dtype=np.complex128)
-    right = np.array([[0.5 - 1.0j], [1.25 + 0.5j], [-0.25 + 0.75j]], dtype=np.complex128)
+    right = np.array(
+        [[0.5 - 1.0j], [1.25 + 0.5j], [-0.25 + 0.75j]], dtype=np.complex128
+    )
     dag, plan = _final_plan_for_node(node, policy=policy)
     replay = replay_upmem_plan_once(
         dag,
         plan,
         {"left": left, "right": right},
     )
-    session = _engine(tmp_path, dpu_count=1).open_session(
-        numeric_mode, _topology(1)
-    )
+    session = _engine(tmp_path, dpu_count=1).open_session(numeric_mode, _topology(1))
     result, metadata = session.execute_complex(
         node,
         left,
@@ -1259,8 +1293,13 @@ def test_execute_complex_submits_four_lanes_in_order(tmp_path: Path) -> None:
 def test_execute_complex_int8_facts_match_replay_hashes(tmp_path: Path) -> None:
     policy = "split_complex_int8_shared_scale_v1"
     node = _task(k=4, m=1, n=1)
-    left = np.array([[2.0 + 4.0j, -1.0 + 0.5j, 0.25 - 3.0j, 1.5 + 0.75j]], dtype=np.complex128)
-    right = np.array([[0.5 - 2.0j], [1.25 + 0.5j], [-0.75 + 1.0j], [2.0 - 0.25j]], dtype=np.complex128)
+    left = np.array(
+        [[2.0 + 4.0j, -1.0 + 0.5j, 0.25 - 3.0j, 1.5 + 0.75j]], dtype=np.complex128
+    )
+    right = np.array(
+        [[0.5 - 2.0j], [1.25 + 0.5j], [-0.75 + 1.0j], [2.0 - 0.25j]],
+        dtype=np.complex128,
+    )
     dag, plan = _final_plan_for_node(node, policy=policy)
     replay = replay_upmem_plan_once(dag, plan, {"left": left, "right": right})
     session = _engine(tmp_path, dpu_count=1).open_session(
@@ -1278,12 +1317,10 @@ def test_execute_complex_int8_facts_match_replay_hashes(tmp_path: Path) -> None:
     assert metadata["left_scale"] > 0.0
     assert metadata["right_scale"] > 0.0
     assert metadata["saturation_real"] == sum(
-        int(record["saturation_real"])
-        for record in metadata["operand_records"]
+        int(record["saturation_real"]) for record in metadata["operand_records"]
     )
     assert metadata["saturation_imag"] == sum(
-        int(record["saturation_imag"])
-        for record in metadata["operand_records"]
+        int(record["saturation_imag"]) for record in metadata["operand_records"]
     )
     expected = {
         f"{record['node_id']}/{record['stable_tile_id']}/{record['lane']}": record
@@ -1302,12 +1339,8 @@ def test_execute_complex_int8_multi_k_chunk_matches_replay(tmp_path: Path) -> No
     k = 257
     node = _task(k=k, m=1, n=1)
     values = np.arange(k, dtype=np.float64)
-    left = (
-        ((values % 11) - 5.0) + 1j * ((values % 7) - 3.0)
-    ).reshape(1, k)
-    right = (
-        ((values % 13) - 6.0) + 1j * ((values % 5) - 2.0)
-    ).reshape(k, 1)
+    left = (((values % 11) - 5.0) + 1j * ((values % 7) - 3.0)).reshape(1, k)
+    right = (((values % 13) - 6.0) + 1j * ((values % 5) - 2.0)).reshape(k, 1)
     dag, plan = _final_plan_for_node(node, policy=policy)
     stage = plan.stages[0]
     assert len(stage.work_units) == 2
@@ -1358,10 +1391,7 @@ def test_execute_complex_submit_failure_has_no_fallback(tmp_path: Path) -> None:
 
 
 def test_decoding_and_host_reduction(tmp_path: Path) -> None:
-    from quantum_bench.upmem.runtime import (
-        _assemble_output,
-        _read_output,
-    )
+    from quantum_bench.upmem.runtime import _assemble_accumulator, _read_output
     from quantum_bench.upmem.tiling import (
         M5TileLimits,
         lower_binary_contraction,
@@ -1403,9 +1433,9 @@ def test_decoding_and_host_reduction(tmp_path: Path) -> None:
         partials[t.id] = left_sub @ right_sub
 
     expected_f32 = left @ right
-    res_f32 = _assemble_output(lowering, partials, packed=False, scale=1.0)
+    res_f32 = _assemble_accumulator(lowering, partials, packed=False)
     np.testing.assert_allclose(res_f32, expected_f32, rtol=1e-5)
 
     scale = 0.125
-    res_packed = _assemble_output(lowering, partials, packed=True, scale=scale)
+    res_packed = _assemble_accumulator(lowering, partials, packed=True) * scale
     np.testing.assert_allclose(res_packed, expected_f32 * scale, rtol=1e-5)

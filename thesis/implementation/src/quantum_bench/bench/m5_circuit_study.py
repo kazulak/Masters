@@ -66,6 +66,7 @@ from quantum_bench.lowering import (
     lower_tensor_network,
 )
 from quantum_bench.planning import plan_cotengra, plan_opt_einsum
+from quantum_bench.upmem.runtime import UpmemV4Executor
 
 SCHEMA_VERSION = 2
 LEGACY_SCHEMA_VERSION = 1
@@ -621,12 +622,18 @@ def _plan_with_config(
     if engine == "opt_einsum":
         unsupported = sorted(set(config) - {"engine", "optimize"})
         if unsupported:
-            raise ValueError(f"Unsupported opt_einsum planner option(s): {', '.join(unsupported)}")
+            raise ValueError(
+                f"Unsupported opt_einsum planner option(s): {', '.join(unsupported)}"
+            )
         return plan_opt_einsum(network, optimize=str(config.get("optimize", "greedy")))
     if engine == "cotengra":
-        unsupported = sorted(set(config) - {"engine", "objective", "methods", "max_repeats", "seed"})
+        unsupported = sorted(
+            set(config) - {"engine", "objective", "methods", "max_repeats", "seed"}
+        )
         if unsupported:
-            raise ValueError(f"Unsupported cotengra planner option(s): {', '.join(unsupported)}")
+            raise ValueError(
+                f"Unsupported cotengra planner option(s): {', '.join(unsupported)}"
+            )
         return plan_cotengra(
             network,
             objective=str(config.get("objective", "flops")),
@@ -1168,8 +1175,13 @@ def _upmem_runtime_resources(
             "injected M5 engine rank_paths do not match suite-resolved topology"
         )
 
-    def open_session(_plan: Any, _context: RunContext) -> Any:
-        return engine.open_session(execution_plan.payload.numeric_mode, topology)
+    session_opener = None
+    if not isinstance(engine, UpmemV4Executor):
+
+        def open_session(_plan: Any, _context: RunContext) -> Any:
+            return engine.open_session(execution_plan.payload.numeric_mode, topology)
+
+        session_opener = open_session
 
     return UpmemRuntimeResources(
         session_root=str(engine.session_root),
@@ -1177,7 +1189,7 @@ def _upmem_runtime_resources(
         dpu_binary=str(engine.dpu_binary),
         initialization_binary=str(engine.initialization_binary),
         rank_paths=actual_rank_paths,
-        session_opener=open_session,
+        session_opener=session_opener,
     )
 
 

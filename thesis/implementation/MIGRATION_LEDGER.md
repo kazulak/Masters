@@ -284,6 +284,29 @@ seconds, Ruff was clean, and `git diff --check` passed. These are controlled
 software tests, not SDK-simulator or physical UPMEM qualification. T4B2 is
 next.
 
+## T4B2 Canonical Execution Isolation
+
+T4B2 is complete in software. `quantum_bench.upmem.plan` now owns only the
+final schema-v1 mapper and `quantum_bench.upmem.runtime` accepts only final
+`NumericPolicy`, `UpmemTopology`, `UpmemStage`, and `UpmemWorkUnit` values.
+Neither canonical module imports the historical generic execution package, and
+they no longer expose `compile_upmem` or `run_upmem` compatibility entrypoints.
+
+The old `ExecutionPlan`/`RunContext` commands remain temporarily in
+`quantum_bench.execution.compiler` and `quantum_bench.execution.runner` until
+T12 deletes their callers. That historical boundary alone converts legacy
+numeric, topology, node-plan, and work-unit records to final records. The M5
+command bridge leaves real `UpmemV4Executor` sessions to that adapter; injected
+historical test engines retain their existing seam.
+
+The final corrective gate passed 147 focused execution, study, architecture,
+and runtime tests. It directly verifies strict final-type admission, historical
+adapter conversion, and conversion of unsupported legacy recomputation to a
+public `ValueError`. The preceding full-worktree checkpoint passed 1483 tests
+in 202.89 seconds. Ruff was clean across `src` and `tests`, formatting checks
+passed for every changed file, and `git diff --check` passed. These are
+software tests only; no simulator or physical-hardware claim is made.
+
 ## Complexity Delta
 
 Update this table after each integration batch.
