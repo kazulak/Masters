@@ -89,7 +89,7 @@ bounded v4 mapping records:
 - output-tile work units and their assignment;
 - requested topology, including DPU and rank assignments;
 - host-roundtrip transfer accounting;
-- kernel and native protocol identity.
+- kernel policy.
 
 Tasklet scheduling, slice-stage scheduling, and intermediate residency are
 planned extensions. They are not implemented or claimable by the current v4
@@ -97,9 +97,14 @@ mapping.
 The current bounded mapper does not make memory and intermediate residency
 decisions; those remain planned extensions.
 
+The only public physical-plan records are `UpmemTopology`, `UpmemWorkUnit`,
+`UpmemStage`, and `UpmemPlan`; `UpmemResources` is runtime configuration. Their
+exact frozen field contracts are defined in `docs/reset_contract.md`.
+
 Machine-local rank paths, binary paths, working directories, SDK installation,
-and timeouts are runtime configuration. They do not affect DAG or physical-plan
-identity.
+timeouts, ABI identifiers, and executable hashes are runtime or executable
+provenance. They are not additional `UpmemPlan` fields and do not affect DAG or
+physical-plan identity.
 
 The target architecture is hierarchical, but only bounded output-tile mapping
 is currently implemented:
@@ -124,6 +129,24 @@ is not implemented by the current host-roundtrip mapping.
 The evidence row records encode, transfer, kernel, reduction, download, and
 decode time separately. End-to-end speedup includes required conversion work.
 
+The reset implementation order is dependency-driven: pure split-complex
+numerics are implemented before the CPU single-run result contract because the
+CPU boundary consumes the final `NumericPolicy` type. This is an implementation
+ordering correction only; it does not change the final architecture or the
+ownership of the numeric, CPU, UPMEM, experiment, or evidence boundaries.
+
+```text
+T6A pure numerics
+  -> T4A results and CPU single-run API
+  -> T4C implement final UpmemStage/UpmemPlan schema
+  -> T6B physical-plan CPU replay
+  -> T7 four real-product ABI execution
+  -> T4B1 UPMEM session API
+  -> T4B2 wrapper removal
+  -> T5 evidence and experiment lifecycle
+  -> T8+ unchanged later work
+```
+
 ## State and Mutation
 
 The functional core returns new values. Mutable state is confined to:
@@ -141,14 +164,15 @@ does not silently replan it.
 Stable timing components are:
 
 ```text
-planning, mapping, encode, prepare, h2d, kernel, host_reduce,
-d2h, decode, validation, session_open, session_close,
+planning, mapping, encode, preparation, h2d, kernel, host_reduce,
+d2h, decode, validation, session_open,
 steady_state, end_to_end
 ```
 
 Hashing and validation are outside kernel time. Null is used when a component
 cannot be measured honestly. CPU and UPMEM comparisons declare the timing scope
-they pair.
+they pair. Session close exists only in session evidence; it is not a
+per-sample measurement or part of either total scope.
 
 Physical execution fails closed. A physical row is admitted only when observed
 native identity, allocation, kernel execution, release, and validation agree.
@@ -170,14 +194,14 @@ retained.
 The active physical adapter is
 `src/quantum_bench/upmem/runtime.py`, backed by the self-contained native tree
 at `native/upmem/runtime/`. Historical M5/v4 Python and native modules are not
-imported by the active path. The completed T1A-D ownership migration is followed
-by these remaining reset steps, in dependency order:
-
-1. add results/timing/evidence contracts and migrate direct baselines (T4-T10);
-2. add the configuration, reporting, and public verification workflow;
-3. collapse milestone commands, configurations, reports, and compatibility
-   tests only after the canonical workflow passes;
-4. delete historical active source once parity tests pass.
+imported by the active path. The completed T1A-D ownership migration is
+followed by the corrected task order above. T4-0 is contract-frozen and
+implementation-pending. The current WP4, WP5, and WP6 completion labels refer
+only to the old bounded base ownership and runtime behavior; they do not
+certify the final reset numeric, session, stage, or evidence contracts. The
+next implementation work is therefore T6A, followed by T4A, T4C, T6B, T7,
+T4B1, T4B2, and T5. Configuration, reporting, cleanup, software qualification,
+and later ETH qualification remain subsequent work.
 
 Progress and temporary adapter expiry are recorded in
 [MIGRATION_LEDGER.md](MIGRATION_LEDGER.md). Historical behavior remains at the

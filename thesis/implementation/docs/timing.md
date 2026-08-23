@@ -16,6 +16,7 @@ class Measurement:
     mapping_s: float | None = None
     session_open_s: float | None = None
     encode_s: float | None = None
+    preparation_s: float | None = None
     h2d_s: float | None = None
     kernel_s: float | None = None
     host_reduce_s: float | None = None
@@ -32,6 +33,14 @@ is authoritative. Components are observations and need not sum to it because
 operations may overlap. `rank_work_s` is summed work, never wall time. An
 unavailable value is `null`, not zero.
 
+`preparation_s` measures encoded payload and native request assembly after
+encoding and before host-to-DPU transfer. It is `null` when that work cannot be
+observed separately.
+
+`session_close_s` is not a per-sample `Measurement` field and does not enter
+either total timing scope. Session close is recorded only in `sessions.jsonl`
+or its equivalent session manifest.
+
 ## Scopes
 
 ### `simulation_end_to_end_v1`
@@ -46,7 +55,7 @@ is available.
 
 Exclude configuration parsing, native compilation, environment setup, the
 reference calculation, validation, hashing, evidence writing, and session
-close. Session close is recorded separately.
+close. Session close is recorded only in the session evidence.
 
 ### `steady_execution_v1`
 

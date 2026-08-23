@@ -173,20 +173,123 @@ Canonical M5 circuit-study configurations use opt_einsum or cotengra.
 Unsupported planner engines fail explicitly. Historical suites are not
 silently migrated.
 
-## Result And Failure Contracts
+## T4-0/T6A Dependency Correction
+
+This documentation-only correction freezes the dependency order for the reset
+implementation. It does not redesign the final architecture or claim that any
+of these contracts are implemented at the current base.
+
+Pure T6A numerics must be implemented before T4A results and CPU execution,
+because `run_cpu_once` consumes the final `NumericPolicy` contract. The
+correct dependency order is:
 
 ```text
-JsonScalar = str | int | float | bool | None
-JsonValue = JsonScalar | list[JsonValue] | dict[str, JsonValue]
-
-ExecutionSample:
-  output: copied, read-only NumPy array
-  measurement: Measurement
-  backend_facts: mapping[str, JsonValue]
-  numeric_facts: mapping[str, JsonValue]
+T6A  pure numerics
+  -> T4A  results and CPU single-run API
+  -> T4C  implement final UpmemStage/UpmemPlan schema
+  -> T6B  physical-plan CPU replay
+  -> T7   four real-product ABI execution
+  -> T4B1 UPMEM session API
+  -> T4B2 removal of generic wrappers
+  -> T5   evidence and experiment lifecycle
 ```
 
-`Measurement` has the exact fields listed in `docs/timing.md`.
+T8 and all later tasks retain their existing order. T4-0 is contract-frozen
+and implementation-pending.
+
+### Numeric contract
+
+`NumericPolicy` is a public type alias, not a class:
+
+```python
+NumericPolicy = Literal[
+    "split_complex_float32_v1",
+    "split_complex_int8_shared_scale_v1",
+]
+```
+
+The public encoded value is:
+
+```python
+@dataclass(frozen=True, slots=True)
+class EncodedComplexTensor:
+    real: np.ndarray
+    imag: np.ndarray
+    scale: float
+    saturation_real: int
+    saturation_imag: int
+```
+
+`real` and `imag` have the same shape, are owned C-contiguous copies, and are
+read-only. Encoding is pure, never mutates the input, and rejects non-finite
+values and unsupported policies. The public pure functions are:
+
+```python
+def encode_complex_tensor(
+    value: np.ndarray,
+    policy: NumericPolicy,
+) -> EncodedComplexTensor: ...
+
+def contract_complex_products(
+    node: ContractNode,
+    left: EncodedComplexTensor,
+    right: EncodedComplexTensor,
+    policy: NumericPolicy,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return rr, ii, ri, and ir in that order."""
+
+def decode_complex_products(
+    products: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    left_scale: float,
+    right_scale: float,
+    policy: NumericPolicy,
+) -> np.ndarray: ...
+```
+
+`contract_complex_products` requires the left and right real/imaginary planes
+to match `node.left.shape` and `node.right.shape`, respectively. Plane dtypes
+must be float32 for `split_complex_float32_v1` and int8 for
+`split_complex_int8_shared_scale_v1`. It returns four same-shape, owned product
+arrays in `rr`, `ii`, `ri`, `ir` order. `decode_complex_products` requires four
+same-shape product arrays and finite, strictly positive scales. It preserves
+the product-axis order established for `node.output_labels` and returns an
+owned, read-only array.
+
+The validation-only complex128 reference is owned by `cpu.py`:
+
+```python
+def run_complex128_reference(
+    dag: ContractionDAG,
+    inputs: Mapping[str, np.ndarray],
+) -> np.ndarray: ...
+```
+
+It returns an owned, read-only complex128 output. Complex128 is not an
+execution policy and is not part of a physical-plan identity.
+
+### Result and failure contracts
+
+```python
+JsonScalar = str | int | float | bool | None
+JsonValue = (
+    JsonScalar
+    | tuple["JsonValue", ...]
+    | Mapping[str, "JsonValue"]
+)
+
+@dataclass(frozen=True, slots=True)
+class ExecutionSample:
+    output: np.ndarray
+    measurement: Measurement
+    backend_facts: Mapping[str, JsonValue]
+    numeric_facts: Mapping[str, JsonValue]
+```
+
+The sample owns a copied, read-only output array. Both fact mappings and every
+nested container are recursively copied and frozen. Canonical evidence
+serialization converts immutable tuples and mappings to JSON arrays and
+objects. `Measurement` has the exact fields listed in `docs/timing.md`;
+`total_wall_s` is the coordinator's authoritative wall observation.
 
 ```text
 UnsupportedExecution(stage, reason, capability)
@@ -197,9 +300,11 @@ ExecutionFailed(stage, reason, backend_facts)
   encoding, transfer, kernel execution, decoding, or finalization
 ```
 
-The experiment layer catches both exceptions and writes a sample row. Every
-attempt that returns or raises inside the experiment process produces a row;
-an externally killed process cannot guarantee evidence completion.
+`UnsupportedExecution` and `ExecutionFailed` are exceptions with the named
+fields. The experiment layer catches either exception and writes a sample row.
+
+Every attempt that returns or raises inside the experiment process produces a
+row; an externally killed process cannot guarantee evidence completion.
 
 ## Public Reset Types
 
@@ -221,6 +326,9 @@ numerics.py:
 
 upmem/plan.py:
   UpmemTopology, UpmemResources, UpmemWorkUnit, UpmemStage, UpmemPlan
+
+upmem/runtime.py:
+  UpmemSession
 ```
 
 ## Canonical Migration Route
@@ -287,18 +395,13 @@ planner, executor, filesystem, or hardware behavior.
 
 ## Numeric Policies
 
-Execution policies are:
+The execution policy is the public `NumericPolicy` alias frozen in the T4-0
+section. Its only values are:
 
 ```text
 split_complex_float32_v1
 split_complex_int8_shared_scale_v1
 ```
-
-Float32 uses float32 input planes, product and K accumulation, float32 host
-combination, and complex64 output. Int8 uses one shared scale per complex
-operand, nearest-even rounding, range `[-127, 127]`, scale `1.0` for an
-all-zero tensor, DPU int32 products, and host int64 accumulation and
-combination.
 
 Each complex contraction computes four real products:
 
@@ -307,21 +410,33 @@ rr = Are * Bre
 ii = Aim * Bim
 ri = Are * Bim
 ir = Aim * Bre
-real = int64(rr) - int64(ii)
-imag = int64(ri) + int64(ir)
 ```
 
-Different slice branches may use different scales. Each branch is decoded with
-`scale_a * scale_b`, then decoded partials are reduced in deterministic
-node-ID order. Raw integer equality is checked per branch and product; final
-decoded results are compared numerically.
+The float32 policy combines those products in float32 and returns complex64:
+
+```text
+real_float32 = float32(rr - ii)
+imag_float32 = float32(ri + ir)
+```
+
+Only the int8 policy widens products for host combination:
+
+```text
+real_int64 = int64(rr) - int64(ii)
+imag_int64 = int64(ri) + int64(ir)
+```
+
+For int8, different slice branches may use different scales. Each branch is
+decoded with `scale_a * scale_b`, then decoded partials are reduced in
+deterministic node-ID order. Raw integer equality is checked per branch and
+product; final decoded results are compared numerically.
 
 For int8, each logical input `TensorView` receives one scale per slice branch.
 The scale is shared by its real and imaginary planes and reused for every
 output tile and K chunk in that branch. It is not recomputed per tile, chunk,
 or operand access.
 
-Plans are unsupported when any of these bounds fail:
+Int8 plans are unsupported when any of these bounds fail:
 
 ```text
 k_chunk * 127^2 <= INT32_MAX
@@ -330,30 +445,66 @@ abs(rr) + abs(ii) <= INT64_MAX
 abs(ri) + abs(ir) <= INT64_MAX
 ```
 
-Complex128 is validation-only through `run_complex128_reference`; it is not an
-execution numeric policy or part of `physical_plan_id`.
+The float32 policy uses float32 input planes, product and K accumulation, and
+host combination. The int8 policy uses host encoding, one shared scale per
+complex operand, nearest-even rounding, range `[-127, 127]`, scale `1.0` for an
+all-zero tensor, DPU int32 products, and host int64 accumulation and
+combination.
+
+Complex128 is validation-only through the `cpu.py` function
+`run_complex128_reference`; it is not an execution numeric policy or part of
+`physical_plan_id`.
 
 ## Physical Plan Schema
 
 `PLAN_SCHEMA_VERSION = 1`.
 
-```text
-UpmemPlan:
-  logical_plan_id
-  numeric_policy
-  topology
-  stages
-  intermediate_policy = host_roundtrip_v1
-  kernel_policy
+```python
+@dataclass(frozen=True, slots=True, kw_only=True)
+class UpmemTopology:
+    dpu_count: int
+    tasklets_per_dpu: int
+    rank_count: int = 1
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class UpmemWorkUnit:
+    node_id: str
+    stable_tile_id: str
+    wave: int
+    logical_rank: int
+    logical_dpu: int
+    batch_start: int
+    batch_size: int
+    m_start: int
+    m_size: int
+    n_start: int
+    n_size: int
+    k_start: int
+    k_size: int
+    estimated_input_bytes: int
+    estimated_output_bytes: int
+    aligned_mram_bytes: int
+    estimated_arithmetic_work: int
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class UpmemStage:
+    stage_id: str
+    kind: Literal["contract_batch", "host_reduce"]
+    node_ids: tuple[str, ...]
+    work_units: tuple[UpmemWorkUnit, ...]
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class UpmemPlan:
+    logical_plan_id: str
+    numeric_policy: NumericPolicy
+    topology: UpmemTopology
+    stages: tuple[UpmemStage, ...]
+    intermediate_policy: Literal["host_roundtrip_v1"] = "host_roundtrip_v1"
+    kernel_policy: str = "real_tile_four_product_v1"
 ```
 
-```text
-UpmemStage:
-  stage_id
-  kind = contract_batch | host_reduce
-  node_ids
-  work_units
-```
+These are the only public physical-plan types. No additional public plan type
+may be introduced without amending this contract.
 
 Stages are ordered first by DAG topological order and then by lexicographic
 `stage_id`. An unsliced node is one `contract_batch` with that node as its
@@ -361,12 +512,81 @@ only node. A sliced `contract_batch` contains exactly the direct
 `ContractNode` dependencies of one `ReduceNode`, sorted lexicographically.
 Compatibility requires equal operation signature, B/M/K/N geometry, numeric
 policy, tile policy, tasklet count, requested topology, output dtype, and output
-layout. Work units are sorted by stage, rank, DPU, wave, and tile coordinates.
+layout. Within a stage, work units are sorted by logical rank, logical DPU,
+wave, batch start, M/N/K tile starts, and stable tile ID.
 
 A `host_reduce` stage has exactly one `ReduceNode` in `node_ids`, has an empty
 `work_units` tuple, and consumes exactly the immediately preceding matching
 `contract_batch` outputs. UPMEM mapping may group existing branches but never
 introduces slicing.
+
+The stage and plan fields above are the complete frozen schema for this reset.
+Runtime constants, ABI identifiers, executable hashes, binary paths, and
+machine-local settings are recorded as executable or run provenance; they do
+not become additional `UpmemPlan` fields.
+
+## CPU And UPMEM Single-Run Contracts
+
+The CPU route is a single-pass function. It does not own warmups,
+repetitions, hashing, reference calculation, validation, or evidence writing:
+
+```python
+def run_cpu_once(
+    dag: ContractionDAG,
+    inputs: Mapping[str, np.ndarray],
+    numeric_policy: NumericPolicy,
+    *,
+    scope_id: str = "steady_execution_v1",
+) -> ExecutionSample: ...
+```
+
+The coordinator owns `total_wall_s`. The function measures encode, kernel,
+host-reduce, and decode phases when they are available.
+
+UPMEM resources are an immutable, keyword-only boundary record:
+
+```python
+@dataclass(frozen=True, slots=True, kw_only=True)
+class UpmemResources:
+    session_root: str
+    host_binary: str
+    dpu_binary: str
+    initialization_binary: str
+    rank_paths: tuple[str, ...] = ()
+    session_opener: Callable[..., object] | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
+```
+
+`session_opener` is a private test/injection seam. It is excluded from plan
+identity and evidence. The exact session boundary is:
+
+```python
+def open_upmem(
+    dag: ContractionDAG,
+    plan: UpmemPlan,
+    resources: UpmemResources,
+    *,
+    timeout_s: float = 120.0,
+) -> UpmemSession: ...
+
+class UpmemSession:
+    def run_once(
+        self,
+        inputs: Mapping[str, np.ndarray],
+    ) -> ExecutionSample: ...
+
+    def close(self) -> Mapping[str, JsonValue]: ...
+
+    def __enter__(self) -> "UpmemSession": ...
+    def __exit__(self, exc_type, exc_value, traceback) -> None: ...
+```
+
+`open_upmem` validates DAG/plan compatibility before runtime side effects.
+`close` is idempotent. A session opening or finalization attempt is a runtime
+attempt and therefore reports `ExecutionFailed` on failure.
 
 ## Target Trees
 
@@ -472,7 +692,7 @@ session:
 session_instance_id
 session_protocol_id
 open_s
-close_s
+session_close_s
 status
 terminal_backend_facts
 release_attempted
@@ -482,6 +702,8 @@ release_verified
 
 `release_verified` must be true for a successful session. A failed release
 remains visible in the session record and causes the associated run to fail.
+`session_close_s` exists only in this session record or an equivalent session
+manifest; it is not part of per-sample `Measurement` or either total scope.
 
 ## Qualification Fixture
 
@@ -545,16 +767,17 @@ T1C   self-contained native runtime
 T1D   runtime coordinator move
 T2    core model, circuits, lowering
 T3    planner isolation
+T4-0  dependency correction; contract frozen, implementation pending
+T6A   pure complex encoding/decoding
 T4A   results and CPU single-run API
+T4C   implement final UpmemStage/UpmemPlan schema
+T6B   CPU physical-plan replay
+T7    complex UPMEM execution
 T4B1  UPMEM session API
 T4B2  remove generic execution wrappers and migrate callers
-T4C   final UpmemStage/UpmemPlan schema
 T5A   evidence schemas and identities
 T5B   experiment repetition/session lifecycle
 T5C   timing normalization and old-emitter deletion
-T6A   pure complex encoding/decoding
-T6B   CPU physical-plan replay
-T7    complex UPMEM execution
 T8    logical multi-label slicing
 T9    slice batches and host reduction
 T10A  Quimb/cotengra baseline
