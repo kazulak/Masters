@@ -17,8 +17,8 @@ one hash or reused for a different scope.
 | `run_id` | Unique identifier for one actual invocation | Deterministic configuration identity |
 | `validation_policy_id` | Reference dtype, tolerances, metrics, and fixture-specific bounds | Physical execution choice |
 | `session_protocol_id` | Serialized ABI and protocol version | A particular opened session |
-| `session_instance_id` | One opened runtime session within a run | Protocol identity |
-| `sample_id` | `run_id`, sample kind, and sample index | Other samples or sessions |
+| `session_instance_id` | One opened runtime session for a case and route within a run | Protocol identity |
+| `sample_id` | `run_id`, `case_id`, `route_id`, sample kind, and sample index | Other samples or sessions |
 
 Reordering canonical JSON keys does not change an identity. Changing a path
 changes `logical_plan_id`. Changing numeric policy, tiling, placement, or

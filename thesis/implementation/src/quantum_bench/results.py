@@ -96,7 +96,9 @@ class UnsupportedExecution(RuntimeError):
     __slots__ = ("stage", "reason", "capability")
 
     def __init__(self, stage: str, reason: str, capability: str) -> None:
-        if not all(isinstance(value, str) and value for value in (stage, reason, capability)):
+        if not all(
+            isinstance(value, str) and value for value in (stage, reason, capability)
+        ):
             raise ValueError("stage, reason, and capability must be nonempty strings")
         self.stage = stage
         self.reason = reason
@@ -149,6 +151,8 @@ def _freeze_value(value: object) -> JsonValue:
 
 
 __all__ = [
+    "JsonScalar",
+    "JsonValue",
     "Measurement",
     "ExecutionSample",
     "UnsupportedExecution",

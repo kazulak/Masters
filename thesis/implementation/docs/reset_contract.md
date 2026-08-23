@@ -759,12 +759,44 @@ are drift tripwires for this active source contract, not runtime or hardware
 tests. Clean local SDK builds passed for `NR_TASKLETS=1` and `24`; physical
 behavior remains unqualified until ETH qualification.
 
-## Session Evidence
+## Canonical Evidence
 
-`sessions.jsonl` contains at least these fields for every opened or attempted
+One canonical run directory contains exactly these primary records:
+
+```text
+manifest.json
+samples.jsonl
+sessions.jsonl
+```
+
+`manifest.json` contains the run, experiment, environment, validation-policy,
+source-commit, configuration, expected-count, file-name, and run-status fields
+defined by `evidence_manifest_v1`. `expected_counts` has exactly `warmup`,
+`measurement`, and `sessions`. A manifest starts as `running`. It may become
+`completed` only after aggregate validation proves exact counts, unique sample
+and session IDs, matching run context, successful samples, and verified release
+for every session. A failed run may contain fewer records than planned but may
+not contain more.
+
+`samples.jsonl` contains one `evidence_sample_v1` row for every warmup or
+measurement attempt that returns or raises inside the experiment process. A
+row binds the run, experiment, case, route, sample kind/index, session instance,
+problem, tensor-network structure, logical plan, physical plan, executable,
+environment, and validation policy. Successful rows contain every
+`Measurement` field, an output hash, backend facts, and numeric facts. Failed
+or unsupported rows contain no fabricated output or measurement. Later
+attempts not started after a fatal persistent-session failure do not receive
+fabricated rows.
+
+`sessions.jsonl` contains exactly these fields for every opened or attempted
 session:
 
 ```text
+schema_version
+run_id
+experiment_id
+case_id
+route_id
 session_instance_id
 session_protocol_id
 open_s
@@ -774,12 +806,28 @@ terminal_backend_facts
 release_attempted
 release_succeeded
 release_verified
+failure
 ```
 
-`release_verified` must be true for a successful session. A failed release
-remains visible in the session record and causes the associated run to fail.
+`sample_id` is derived from `run_id`, `case_id`, `route_id`, `sample_kind`,
+and `sample_index`. The case and route fields are mandatory because one run
+may execute several cases and routes with the same sample indices.
+
+Release facts obey `release_verified => release_succeeded =>
+release_attempted`. `release_verified` must be true for a successful session.
+A failed release remains visible in the session record and causes the
+associated run to fail.
 `session_close_s` exists only in this session record or an equivalent session
 manifest; it is not part of per-sample `Measurement` or either total scope.
+
+These files have one writer. Manifest replacement and JSONL record appends are
+atomic whole-file replacements with a file `fsync` before replacement and a
+directory `fsync` after replacement. A terminal manifest rejects later record
+appends. The simple single-writer rule is deliberate; no lock, journal,
+database, or evidence migration framework is part of the reset. If local
+evidence persistence itself fails after an execution attempt, orchestration
+aborts and the artifact cannot finalize; no software can guarantee a durable
+row when its evidence store is unavailable.
 
 ## Qualification Fixture
 

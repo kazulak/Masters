@@ -307,15 +307,40 @@ in 202.89 seconds. Ruff was clean across `src` and `tests`, formatting checks
 passed for every changed file, and `git diff --check` passed. These are
 software tests only; no simulator or physical-hardware claim is made.
 
+## T5 Canonical Evidence and Experiment Lifecycle
+
+T5A-T5C are complete in software. The reset path now writes exactly three
+canonical artifacts: `manifest.json`, `samples.jsonl`, and `sessions.jsonl`.
+Schemas reject unknown fields, non-finite or non-JSON values, duplicate
+identities, invalid lifecycle transitions, mismatched experiment context, and
+completed runs with missing samples, failed samples, or unverified releases.
+The manifest may move only from `running` to one terminal state through
+aggregate validation.
+
+The experiment layer owns warmup and repetition loops. It emits one row for
+each attempt that returns or raises inside the process, keeps one persistent
+UPMEM session across steady-state samples, stops after a session-route failure,
+and never invents rows for attempts that did not occur. Output hashing and
+fact normalization happen outside executor timing. `total_wall_s` remains the
+authoritative observation; unavailable components are null and rank work is
+never relabelled as wall time.
+
+The corrected focused gate passed 76 tests and Ruff. Independent re-review
+found no remaining P0/P1 issue in serialization, identity, failure, release,
+or timing admission. The next stable full-suite checkpoint covers this batch
+with T8.
+These artifacts are software contracts only; T5 does not promote historical
+evidence or establish simulator, physical, speedup, scaling, or energy claims.
+
 ## Complexity Delta
 
 Update this table after each integration batch.
 
 | Metric | Baseline | Current | Target |
 |---|---:|---:|---:|
-| Active Python modules | 138 | 123 | 12-16 |
-| Class declarations | 307 | 288 | only stable boundary types |
-| Test modules | 78 | 80 | about 10 |
+| Active Python modules | 138 | 125 | 12-16 |
+| Class declarations | 307 | 289 | only stable boundary types |
+| Test modules | 78 | 83 | about 10 |
 | Config files | 63 | 63 | 2 principal experiments |
 | Public Make targets | 78 | 81 | 10 or fewer |
 | Active contraction IRs | 2 | 1 | 1 |
@@ -351,11 +376,14 @@ wc -l`, and `rg '^[A-Za-z0-9_.-]+:' Makefile | wc -l`.
     focused tests, independent acceptance audit, and the 1472-test full-suite
     checkpoint. This is mock/fake-session software evidence, not physical
     qualification.
-15. T4B2: isolate the canonical route from generic execution wrappers and
-    migrate active callers; historical compatibility records expire at T12.
-16. T5A: add evidence schemas and identity serialization.
-17. T5B: move repetition, warmup, and session lifecycle to experiments.
-18. T5C: normalize timing scopes and remove old active emitters.
+15. T4B2: complete; canonical execution modules accept only final reset
+    contracts, while the isolated historical adapter expires at T12.
+16. T5A: complete; add strict evidence schemas and identity serialization.
+17. T5B: complete; move repetition, warmup, and session lifecycle to
+    experiments.
+18. T5C: complete; normalize timing scopes and install terminal aggregate
+    admission. Historical emitters remain only with historical commands until
+    T12.
 19. T8: implement one-pass logical multi-label slicing.
 20. T9: add deterministic slice batches and host reduction stages.
 21. T10A: add the Quimb/cotengra direct baseline.

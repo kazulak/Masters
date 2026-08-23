@@ -37,7 +37,7 @@ operator.
 | Logical slicing | Existing historical slicing code exists, but the reset one-pass contract is absent. | Planned for reset; no reset claim. |
 | Session and timing API | Final `open_upmem` and persistent `UpmemSession.run_once` execute one DAG sample, preserve native failure stages, and admit close only with positive allocation, identity, execution, and release facts. | Software-qualified with controlled sessions; simulator and physical qualification remain pending. |
 | Canonical execution boundary | Direct CPU and final UPMEM APIs consume canonical DAG/plan records; generic execution records survive only inside the historical adapter pending T12 deletion. | Software-tested; no target fallback is admitted. |
-| Evidence | Existing writers and historical capsules exist. | New manifest/sample/session schema is planned; no evidence is promoted by T0. |
+| Evidence | Canonical `manifest.json`, `samples.jsonl`, and `sessions.jsonl` schemas plus experiment-owned repetition/session lifecycle are implemented. | Software-tested for strict serialization, failure rows, timing scopes, release admission, and terminal manifest transitions; no evidence is promoted and no physical claim follows. |
 | CPU TN reference | Direct same-DAG execution, complex128 validation, and same-physical-plan replay are implemented. | Software-tested; replay is a policy oracle, not a performance baseline. |
 | Quimb/cotengra | Existing provider code exists. | Direct baseline adapter is planned. |
 | QuEST CPU/GPU | Existing full-state providers exist. | Direct baseline and GPU runtime verification are planned. |
