@@ -26,12 +26,12 @@ from quantum_bench.tn.graph import (
     TensorView,
     contraction_dag_hash,
 )
-from quantum_bench.targets.upmem.v4_executor import (
+from quantum_bench.upmem.runtime import (
     UpmemV4Executor,
     UpmemV4Session,
     _task_structure_hash,
 )
-import quantum_bench.targets.upmem.v4_executor as engine_module
+import quantum_bench.upmem.runtime as engine_module
 from quantum_bench.upmem.protocol import (
     NATIVE_EXECUTION_IDENTITY,
     V4ProtocolError,
@@ -1075,7 +1075,7 @@ def test_direct_compiled_plan_controls_local_ids_on_two_ranks(tmp_path: Path) ->
 
 
 def test_request_work_units_and_payload_bytes() -> None:
-    from quantum_bench.targets.upmem.v4_executor import _build_work_unit
+    from quantum_bench.upmem.runtime import _build_work_unit
     from quantum_bench.upmem.tiling import (
         lower_binary_contraction,
     )
@@ -1114,7 +1114,7 @@ def test_request_work_units_and_payload_bytes() -> None:
 
 
 def test_decoding_and_host_reduction(tmp_path: Path) -> None:
-    from quantum_bench.targets.upmem.v4_executor import (
+    from quantum_bench.upmem.runtime import (
         _assemble_output,
         _read_output,
     )

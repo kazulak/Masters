@@ -184,7 +184,7 @@ src/quantum_bench/
   upmem/native_session.py upmem/runtime.py
 ```
 
-The T1C staged, self-contained native tree is:
+The T1D active, self-contained native tree is:
 
 ```text
 native/upmem/runtime/
@@ -208,42 +208,30 @@ of these focused modules. Obsolete class-shape tests do not need replacement.
 
 ## Native And External Build Contract
 
-### T0 Active v4 Truth
+### T1D Active v4 Truth
 
-At T0, the active v4 implementation remains in:
+The active v4 implementation is now split by responsibility between:
 
 ```text
-native/upmem/simplepim/upmem_sdk_execution_plan/
-src/quantum_bench/targets/upmem/v4_executor.py
+native/upmem/runtime/
+src/quantum_bench/upmem/runtime.py
 src/quantum_bench/upmem/plan.py
 ```
 
 Its build command is:
 
 ```text
-make -C native/upmem/simplepim/upmem_sdk_execution_plan v4 NR_TASKLETS=1
+make -C native/upmem/runtime NR_TASKLETS=1 all
 ```
 
 `NR_TASKLETS` may be selected in the active v4 range `1..24`. This is the
-current base command and tree, not the reset target.
+active reset command and tree.
 
-### T1C Staged Build Validation
-
-The ABI-v4 native staging tree is below. It is not the active execution path
-until T1D; the current `m5_circuit_commands` and coordinator still use the old
-mixed tree at `native/upmem/simplepim/upmem_sdk_execution_plan/` and its
-existing Python v4 executor. The following command builds only ABI v4 in the
-staged tree:
-
-```text
-make -C native/upmem/runtime NR_TASKLETS=<1..24> all
-```
-
-T1D must switch Python discovery and the coordinator to this tree, then delete
-the old v4-specific sources and old Make v4 targets in the same batch. The
-staged provider is deliberately the current raw-SDK v4 provider with explicit
-rank selection, allocation verification, management metadata construction,
-initialization-binary launch, and release.
+The active tree is self-contained for ABI-v4. The Python coordinator discovers
+its binaries below `native/upmem/runtime/`, and the old mixed-tree ABI-v4
+sources and Make target have been removed. The active provider preserves raw
+SDK explicit-rank allocation, allocation verification, management metadata
+construction, initialization-binary launch, and release.
 
 ### SimplePIM Provider Contract
 
@@ -275,9 +263,9 @@ Required SimplePIM inputs are commit
 These inputs do not mean SimplePIM compute is active. The v4 compute kernel is
 raw UPMEM SDK code using SimplePIM management metadata/types and the
 initialization source; it is not a SimplePIM operator. The source-string tests
-are drift tripwires for this staged source contract, not runtime or hardware
+are drift tripwires for this active source contract, not runtime or hardware
 tests. Clean local SDK builds passed for `NR_TASKLETS=1` and `24`; physical
-behavior remains unqualified until T1D activation and later ETH qualification.
+behavior remains unqualified until ETH qualification.
 
 ## Session Evidence
 

@@ -2,7 +2,7 @@
 
 This module deliberately contains no tensor-network or benchmark policy.  It
 keeps the v4 binary layout, request construction, and validation accepted by
-``host_v4_session``.  Process and session lifecycle live in
+the ABI-v4 native host.  Process and session lifecycle live in
 ``quantum_bench.upmem.native_session``.  Higher layers own tiling decisions,
 K-chunk assembly, quantization scales, and graph scheduling.
 """
@@ -23,7 +23,7 @@ VERSION = 4
 PROFILE = "upmem_execution_plan_v4_tile_session"
 RESPONSE_SCHEMA = "upmem_execution_plan_native_v4"
 
-# These values are compiled into host_v4_session.c.  They are protocol
+# These values are compiled into native/upmem/runtime/host.c.  They are protocol
 # expectations, not Python observations: READY and RESPONSE must report them.
 NATIVE_EXECUTION_IDENTITY = {
     "backend_id": "upmem_sdk_hardware_v4_tile_session",

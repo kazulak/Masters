@@ -21,7 +21,7 @@ import quantum_bench.execution.contracts
 import quantum_bench.execution.compiler
 assert 'quantum_bench.upmem.tiling' not in sys.modules
 assert 'quantum_bench.upmem.protocol' not in sys.modules
-import quantum_bench.targets.upmem.v4_executor
+import quantum_bench.upmem.runtime
 import quantum_bench.bench.m5_circuit_study
 assert 'quantum_bench.tn.task_graph' not in sys.modules
 assert 'quantum_bench.whole_circuit' not in sys.modules

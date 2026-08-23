@@ -65,7 +65,7 @@ evidence that the corresponding capability is implemented.
 | Adapter | Current location | Must be removed by |
 |---|---|---|
 | DAG node to `ContractionTask` | removed in `7d497a2` | complete |
-| M5 engine/session wrapper | removed; active implementation is `targets/upmem/v4_executor.py` | complete |
+| M5 engine/session wrapper | removed; active implementation is `upmem/runtime.py` | complete |
 | fake `TensorNetworkSpec(None, ...)` input validation | removed in `4907013` | complete |
 | `TensorInputs` wrapper | removed in `e66e2a3` | complete |
 | one-implementation M5 strategy registry | removed in current WP6 batch | complete |
@@ -126,10 +126,9 @@ Update this table after each integration batch.
 
 - SimplePIM commit: `1d639c53532555f01e9f71d872e7712b166d6cba`
 - SimplePIM management patch SHA-256: `5ac09fd1c0a25c234e44615540f2e1585ce162a27a2d4215e5992ddbdf549a0d`
-- T0 active v4 tree: `native/upmem/simplepim/upmem_sdk_execution_plan/`
-- T0 active v4 build command: `make -C native/upmem/simplepim/upmem_sdk_execution_plan v4 NR_TASKLETS=1`
-- T1C staged/self-contained v4 tree: `native/upmem/runtime/`
-- T1C local build command: `make -C native/upmem/runtime NR_TASKLETS=<1..24> all`
+- T1D active/self-contained v4 tree: `native/upmem/runtime/`
+- T1D active Python runtime: `src/quantum_bench/upmem/runtime.py`
+- T1D build command: `make -C native/upmem/runtime NR_TASKLETS=<1..24> all`
 
 The T1C correction is intentional: the staged provider uses raw SDK allocation
 with an explicit `backend=hw,rankPath=...` profile, verifies the allocation,
@@ -142,9 +141,8 @@ explicit rank selection. The v4 compute kernel is raw SDK code, not a
 SimplePIM operator. These inputs are not evidence of SimplePIM compute
 integration.
 
-Until T1D, `m5_circuit_commands` and its coordinator still use the old mixed
-Python/native tree. T1D is one activation gate: switch Python discovery and
-the coordinator to `native/upmem/runtime/`, then delete the old v4-specific
-sources and old Make v4 targets in that same batch. The T1C source-string
-tests are drift tripwires; clean local SDK builds at tasklets 1 and 24 passed,
-but physical behavior remains unqualified.
+T1D is now the activation gate: Python discovery and the coordinator use
+`native/upmem/runtime/`, while the old v4-specific sources and Make v4 target
+are deleted. The T1C/T1D source-string tests are drift tripwires; clean local
+SDK builds at tasklets 1 and 24 passed, but physical behavior remains
+unqualified.

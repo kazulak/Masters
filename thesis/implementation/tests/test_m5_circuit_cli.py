@@ -193,18 +193,18 @@ def test_rank_path_environment_fallback_is_supported(
 def test_physical_factory_selects_explicit_tasklet_binaries(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    native = tmp_path / "native/upmem/simplepim/upmem_sdk_execution_plan/bin"
+    native = tmp_path / "native/upmem/runtime/bin"
     native.mkdir(parents=True)
     binaries = (
         native / "host_upmem_execution_plan_v4_t4",
         native / "dpu_gemm_tile_v4_t4",
-        native / "dpu_simplepim_management_init",
+        native / "dpu_simplepim_management_init_t4",
     )
     for binary in binaries:
         binary.write_bytes(b"binary")
     os.chmod(binaries[0], 0o755)
 
-    module = importlib.import_module("quantum_bench.targets.upmem.v4_executor")
+    module = importlib.import_module("quantum_bench.upmem.runtime")
     captured: dict[str, object] = {}
 
     class FakeEngine:

@@ -146,15 +146,16 @@ retained.
 
 ## Migration Status
 
-The reset is in progress. The current physical adapter still reaches the latest
-native implementation through historical M5/v4 modules. The required order is:
+The active physical adapter is
+`src/quantum_bench/upmem/runtime.py`, backed by the self-contained native tree
+at `native/upmem/runtime/`. Historical M5/v4 Python and native modules are not
+imported by the active path. The completed T1A-D ownership migration is followed
+by these remaining reset steps:
 
-1. validate inputs directly against the DAG;
-2. remove DAG-node conversion to legacy `ContractionTask`;
-3. make one `UpmemPlan` own physical decomposition and assignment;
-4. retain one native ABI and runtime;
-5. collapse milestone commands, configs, reports, and compatibility tests;
-6. delete historical active source once parity tests pass.
+1. collapse milestone commands, configs, reports, and compatibility tests;
+2. create the canonical model, circuit, and lowering boundaries;
+3. add direct baselines, evidence schemas, and the public verification flow;
+4. delete historical active source once parity tests pass.
 
 Progress and temporary adapter expiry are recorded in
 [MIGRATION_LEDGER.md](MIGRATION_LEDGER.md). Historical behavior remains at the

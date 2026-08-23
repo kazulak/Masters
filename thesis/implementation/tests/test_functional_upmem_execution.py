@@ -19,7 +19,7 @@ from quantum_bench.execution.contracts import (
     execution_plan_hash,
     UnsupportedExecution,
 )
-from quantum_bench.execution.upmem import run_upmem
+from quantum_bench.upmem.runtime import run_upmem
 from quantum_bench.tn.graph import (
     ContractNode,
     SliceSpec,
@@ -224,7 +224,7 @@ def test_engine_plan_assignment_drives_rank_local_dpu_request() -> None:
     from dataclasses import replace
     from types import SimpleNamespace
 
-    from quantum_bench.targets.upmem.v4_executor import (
+    from quantum_bench.upmem.runtime import (
         UpmemV4Session,
     )
     from quantum_bench.upmem.tiling import (
@@ -261,7 +261,7 @@ def test_engine_rejects_plan_tile_extent_tampering_before_requests() -> None:
     from dataclasses import replace
     from types import SimpleNamespace
 
-    from quantum_bench.targets.upmem.v4_executor import (
+    from quantum_bench.upmem.runtime import (
         UpmemV4Session,
     )
     from quantum_bench.upmem.tiling import (
@@ -450,7 +450,7 @@ def test_compile_accepts_large_rank_and_logical_tensors_when_tiling_can_lower_th
 def test_run_upmem_uses_one_session_in_plan_order_and_aggregates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import quantum_bench.execution.upmem as module
+    import quantum_bench.upmem.runtime as module
 
     dag = _chain_dag()
     compiled = compile_execution(dag, _request(dag))
@@ -502,7 +502,7 @@ def test_run_upmem_uses_one_session_in_plan_order_and_aggregates(
 def test_run_upmem_reports_completed_host_nodes_not_planned_node_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import quantum_bench.execution.upmem as module
+    import quantum_bench.upmem.runtime as module
 
     dag = _dag()
     compiled = compile_execution(dag, _request(dag))
@@ -531,7 +531,7 @@ def test_run_upmem_reports_completed_host_nodes_not_planned_node_order(
 def test_run_upmem_rejects_static_plan_tampering_before_session_open(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import quantum_bench.execution.upmem as module
+    import quantum_bench.upmem.runtime as module
 
     dag = _dag()
     compiled = compile_execution(dag, _request(dag))
@@ -575,7 +575,7 @@ def test_run_upmem_rejects_static_plan_tampering_before_session_open(
 def test_execute_once_evicts_only_produced_intermediates_after_last_consumer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import quantum_bench.execution.upmem as module
+    import quantum_bench.upmem.runtime as module
 
     dag = _chain_dag()
     compiled = compile_execution(dag, _request(dag))
@@ -610,7 +610,7 @@ def test_execute_once_evicts_only_produced_intermediates_after_last_consumer(
 def test_run_upmem_hashes_every_measured_output_and_rejects_nondeterminism(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import quantum_bench.execution.upmem as module
+    import quantum_bench.upmem.runtime as module
 
     dag = _dag()
     compiled = compile_execution(dag, _request(dag))
@@ -649,7 +649,7 @@ def test_run_upmem_hashes_every_measured_output_and_rejects_nondeterminism(
 
 
 def test_packed_tile_assembly_and_dequantization_are_separate() -> None:
-    import quantum_bench.execution.upmem as module
+    import quantum_bench.upmem.runtime as module
 
     aggregate = module._Aggregate()
     aggregate.add(
@@ -681,7 +681,7 @@ def test_packed_tile_assembly_and_dequantization_are_separate() -> None:
 def test_run_upmem_reduces_sliced_contracts_on_host(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import quantum_bench.execution.upmem as module
+    import quantum_bench.upmem.runtime as module
 
     dag = apply_slicing(_dag(), SliceSpec(node_id="contract_0", label=1))
     compiled = compile_execution(dag, _request(dag))
@@ -714,7 +714,7 @@ def test_run_upmem_reduces_sliced_contracts_on_host(
 def test_run_upmem_closes_session_on_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import quantum_bench.execution.upmem as module
+    import quantum_bench.upmem.runtime as module
 
     class FailingSession(_FakeSession):
         def execute(
@@ -751,7 +751,7 @@ def test_run_upmem_closes_session_on_failure(
 def test_terminal_physical_facts_are_required(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import quantum_bench.execution.upmem as module
+    import quantum_bench.upmem.runtime as module
 
     dag = _dag()
     compiled = compile_execution(dag, _request(dag))
@@ -791,7 +791,7 @@ def test_terminal_observed_execution_identity_must_match_compiled_plan(
     field: str,
     value: str,
 ) -> None:
-    import quantum_bench.execution.upmem as module
+    import quantum_bench.upmem.runtime as module
 
     dag = _dag()
     compiled = compile_execution(dag, _request(dag))
@@ -829,7 +829,7 @@ def test_terminal_accepts_documented_identity_aliases(
     alias: str,
     expected: str,
 ) -> None:
-    import quantum_bench.execution.upmem as module
+    import quantum_bench.upmem.runtime as module
 
     dag = _dag()
     compiled = compile_execution(dag, _request(dag))
@@ -858,7 +858,7 @@ def test_terminal_accepts_documented_identity_aliases(
 def test_terminal_requires_observed_backend_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import quantum_bench.execution.upmem as module
+    import quantum_bench.upmem.runtime as module
 
     dag = _dag()
     compiled = compile_execution(dag, _request(dag))
@@ -888,7 +888,7 @@ def test_terminal_requires_observed_backend_id(
 def test_nonzero_imaginary_inputs_are_rejected_before_session_open(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: NumericMode
 ) -> None:
-    import quantum_bench.execution.upmem as module
+    import quantum_bench.upmem.runtime as module
 
     dag = _dag()
     compiled = compile_execution(dag, _request(dag, mode))
@@ -921,7 +921,7 @@ def test_nonzero_imaginary_inputs_are_rejected_before_session_open(
 def test_missing_task_transfer_bytes_are_rejected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import quantum_bench.execution.upmem as module
+    import quantum_bench.upmem.runtime as module
 
     class MissingBytesSession(_FakeSession):
         def execute(
@@ -959,7 +959,7 @@ def test_missing_task_transfer_bytes_are_rejected(
 def test_terminal_release_failure_is_rejected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import quantum_bench.execution.upmem as module
+    import quantum_bench.upmem.runtime as module
 
     dag = _dag()
     compiled = compile_execution(dag, _request(dag))
@@ -993,7 +993,7 @@ def test_terminal_release_failure_is_rejected(
 def test_simulator_terminal_fact_is_rejected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import quantum_bench.execution.upmem as module
+    import quantum_bench.upmem.runtime as module
 
     dag = _dag()
     compiled = compile_execution(dag, _request(dag))
@@ -1018,7 +1018,7 @@ def test_simulator_terminal_fact_is_rejected(
 def test_session_close_failure_is_not_reported_as_success(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import quantum_bench.execution.upmem as module
+    import quantum_bench.upmem.runtime as module
 
     class CloseFailingSession(_FakeSession):
         def close(self) -> dict[str, object]:
@@ -1058,7 +1058,7 @@ def test_terminal_allocation_must_match_compiled_topology(
     field: str,
     value: int,
 ) -> None:
-    import quantum_bench.execution.upmem as module
+    import quantum_bench.upmem.runtime as module
 
     dag = _dag()
     compiled = compile_execution(dag, _request(dag))
@@ -1084,7 +1084,7 @@ def test_terminal_allocation_must_match_compiled_topology(
 def test_invalid_explicit_timeout_is_rejected_before_session_open(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import quantum_bench.execution.upmem as module
+    import quantum_bench.upmem.runtime as module
 
     dag = _dag()
     compiled = compile_execution(dag, _request(dag))
@@ -1121,7 +1121,7 @@ def test_invalid_explicit_timeout_is_rejected_before_session_open(
 def test_execution_and_close_failures_are_both_exposed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import quantum_bench.execution.upmem as module
+    import quantum_bench.upmem.runtime as module
 
     class DualFailingSession(_FakeSession):
         def execute(
@@ -1160,7 +1160,7 @@ def test_execution_and_close_failures_are_both_exposed(
 def test_binary_hashes_are_computed_once_outside_task_aggregation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import quantum_bench.execution.upmem as module
+    import quantum_bench.upmem.runtime as module
 
     calls: list[Path] = []
 
