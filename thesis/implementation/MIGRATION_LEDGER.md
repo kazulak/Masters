@@ -414,7 +414,12 @@ wc -l`, and `rg '^[A-Za-z0-9_.-]+:' Makefile | wc -l`.
     deterministic planner policies, canonical statevector order, immutable
     samples, and selected-path fingerprints. Verified by 21 focused tests and
     an independent no-P0/P1 audit.
-22. T10B: add the QuEST CPU direct baseline.
+22. T10B: complete in software; the direct QuEST CPU baseline admits only six
+    structurally verified `quest_compatible` families, validates native and
+    state-dump contracts, separates compute-only native timing/energy from
+    end-to-end wall time, and records the runner hash. Verified by 64 focused
+    tests and an independent no-P0/P1 audit; a real runner check remains T13
+    or environment qualification.
 23. T10C: add QuEST GPU capability and runtime verification.
 24. T11A: add the configuration schema and public CLI.
 25. T11B: add evidence verification and reporting.
