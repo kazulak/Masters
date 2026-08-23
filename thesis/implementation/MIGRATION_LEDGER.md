@@ -59,7 +59,7 @@ evidence that the corresponding capability is implemented.
 | WP1 research contract | complete | concise README and architecture agree on scope and claims |
 | WP2 semantic model | complete | direct DAG input validation; no active reverse TaskGraph adapter |
 | WP3 planning | complete (T3) | root opt_einsum/cotengra function adapters return validated pairwise paths and the frozen 14-key provenance mapping; the historical projected-prefix planner is not canonical |
-| WP4 numerics | complete (old bounded base only) | the old bounded base has a shared encode/contract/decode boundary; the final reset `NumericPolicy` and split-complex pure functions remain implementation-pending in T6A |
+| WP4 numerics | complete (old bounded base and T6A pure policies) | the final reset provides split-complex float32 and shared-scale int8 pure encode/contract/decode functions; CPU/UPMEM route migration and physical validation remain pending |
 | WP5 mapping | complete (old bounded v4 ownership only) | the old bounded base owns v4 lowering, identity, geometry, tiling and work assignment; the final reset stage/plan contract is frozen but not implemented, and this does not claim slice/tasklet/residency scheduling |
 | WP6 runtime | complete (old bounded base ownership only) | the old bounded runtime ownership is retained as migration input; the final reset `UpmemResources`/`UpmemSession` single-run boundary remains implementation-pending in T4B1/T4B2 |
 | WP7 baselines | in progress | same-DAG CPU timing is symmetric; external baseline adapters remain to simplify |
@@ -148,14 +148,16 @@ commands below.
 
 ## T4-0/T6A Dependency Correction
 
-T4-0 is contract-frozen and implementation-pending. It corrects only the
-implementation dependency order; it does not redesign the final architecture.
-The frozen pure numeric contract is implemented first so that the T4A
-`run_cpu_once` API consumes the final `NumericPolicy` without a throwaway
-adapter. `NumericPolicy` is a public `Literal` alias, `EncodedComplexTensor`
-is the frozen/slotted encoded value, and the pure encode, four-product contract,
-and decode functions are specified in `docs/reset_contract.md`. The existing
-shared-scale, rounding, range, dtype, and overflow semantics remain unchanged.
+T4-0 is contract-frozen and T6A is complete. T4-0 corrected only the
+implementation dependency order; it did not redesign the final architecture.
+T6A implements the pure split-complex numeric contract needed by the T4A
+`run_cpu_once` API: float32 and shared-scale int8 policies, immutable real and
+imaginary planes, four-product arithmetic (`rr`, `ii`, `ri`, `ir`), unilateral
+contractions, and fail-closed finiteness and overflow checks. The int8 policy
+uses one shared scale per complex operand, nearest-even rounding, and bounded
+int8 payloads. Focused verification passed 20 tests and Ruff. This completes
+the pure numeric module only; CPU/UPMEM execution migration and physical
+validation are not claimed.
 T4-0 also freezes the recursively immutable result facts, the exact
 `Measurement` fields including `preparation_s`, the exact five public UPMEM
 plan/resource records, and the `UpmemSession` boundary. The authoritative field
@@ -171,9 +173,9 @@ T6A -> T4A -> T4C -> T6B -> T7 -> T4B1 -> T4B2 -> T5 -> T8+
 `T4C` implements the already-frozen final `UpmemStage`/`UpmemPlan` schema.
 Runtime constants, ABI identifiers, and executable hashes remain provenance,
 not plan fields.
-Current WP4, WP5, and WP6 `complete` wording above refers only to the old
-bounded base; it is not completion of the final reset numeric, stage, session,
-or evidence implementation.
+Current WP5 and WP6 `complete` wording above refers only to the old bounded
+base; it is not completion of the final reset stage, session, or evidence
+implementation. T4A is the next implementation task.
 
 ## Complexity Delta
 
@@ -205,8 +207,9 @@ wc -l`, and `rg '^[A-Za-z0-9_.-]+:' Makefile | wc -l`.
 6. T2: create the core model, circuit model, and lowering modules.
 7. T3: isolate opt_einsum and cotengra planning adapters.
 8. T4-0: freeze the dependency correction; implementation remains pending.
-9. T6A: implement pure split-complex float32 and shared-scale int8 numerics.
-10. T4A: add results contracts and the CPU single-run API.
+9. T6A: complete; pure split-complex float32 and shared-scale int8 numerics
+   verified by 20 focused tests and Ruff.
+10. T4A: next; add results contracts and the CPU single-run API.
 11. T4C: implement the final `UpmemStage` and `UpmemPlan` schema.
 12. T6B: implement CPU replay of the physical UPMEM plan.
 13. T7: execute complex policies through the unchanged real-tile ABI v4.
