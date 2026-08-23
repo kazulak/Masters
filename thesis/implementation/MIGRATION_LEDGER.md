@@ -58,7 +58,7 @@ evidence that the corresponding capability is implemented.
 | WP0 baseline | complete | reset commit, environment facts, inventory, and test result recorded |
 | WP1 research contract | complete | concise README and architecture agree on scope and claims |
 | WP2 semantic model | complete | direct DAG input validation; no active reverse TaskGraph adapter |
-| WP3 planning | pending (T3-0 contract frozen) | canonical opt_einsum/cotengra function adapters and path/provenance mapping are pending; the historical projected-prefix planner is not canonical |
+| WP3 planning | complete (T3) | root opt_einsum/cotengra function adapters return validated pairwise paths and the frozen 14-key provenance mapping; the historical projected-prefix planner is not canonical |
 | WP4 numerics | complete | shared pure encode/contract/decode boundary; conversion, kernel, reduction, and decode timings are non-overlapping |
 | WP5 mapping | complete (bounded v4 ownership) | `src/quantum_bench/upmem/plan.py` owns v4 lowering, identity, geometry, tiling and work assignment; this does not claim slice/tasklet/residency scheduling |
 | WP6 runtime | complete | active runtime uses `UpmemV4Executor`/`UpmemV4Session`, `NumericMode`, `UpmemTopology`, and tuple node results; obsolete whole-circuit package removed |
@@ -123,12 +123,28 @@ The full T2 branch checkpoint passed `1349 passed in 185.50s` with
 
 ## T3-0 Planner Contract
 
-T3-0 is documentation-only and frozen at `HEAD e6e97bfb`. It defines the
-future root `planning.py` API, the exact path/provenance mapping, dependency
-direction, canonical adapter set, historical status of the projected-prefix
-PIM-aware planner, and explicit unsupported behavior for non-canonical
-planner engines. T3 canonical implementation and migration remain pending;
-this entry does not claim planning completion.
+T3-0 is documentation-only and frozen at `HEAD e6e97bfb`. It defines the root
+`planning.py` API, the exact path/provenance mapping, dependency direction,
+canonical adapter set, historical status of the projected-prefix PIM-aware
+planner, and explicit unsupported behavior for non-canonical planner engines.
+The active implementation status is recorded in the entry below.
+
+## T3 Canonical Planner Migration
+
+T3 is implemented on the reset base `d868151` under the corrected planner
+contract. `src/quantum_bench/planning.py` is the only active planner module and
+exports only `plan_opt_einsum` and `plan_cotengra`. The M5 circuit study uses a
+private engine-to-function helper and stores path/provenance as plain values.
+`src/quantum_bench/tn/planning.py` was deleted; historical planner records and
+projected-prefix modules remain until T12.
+
+The T3 full-suite checkpoint is green: `1342 passed in 186.46s`. The earlier
+focused checkpoint passed 83 tests across the functional planner, planner
+models, M5 architecture/study/profile, and lowering tests. Ruff and
+`git diff --check` passed for the changed files. Structural counts at this
+checkpoint are 120 active Python modules, 278 class declarations, 79 test
+modules, 63 configuration files, and 81 public Make targets using the
+commands below.
 
 ## Complexity Delta
 
@@ -137,7 +153,7 @@ Update this table after each integration batch.
 | Metric | Baseline | Current | Target |
 |---|---:|---:|---:|
 | Active Python modules | 138 | 120 | 12-16 |
-| Class declarations | 307 | 281 | only stable boundary types |
+| Class declarations | 307 | 278 | only stable boundary types |
 | Test modules | 78 | 79 | about 10 |
 | Config files | 63 | 63 | 2 principal experiments |
 | Public Make targets | 78 | 81 | 10 or fewer |

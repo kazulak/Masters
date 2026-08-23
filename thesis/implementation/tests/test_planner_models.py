@@ -27,9 +27,10 @@ from quantum_bench.targets.upmem.tile_plan import (
 from quantum_bench.tn.execution import execute_task_sequence_np_einsum
 from quantum_bench.lowering import build_contraction_dag
 from quantum_bench.tn.network import TensorNetworkValue, build_tensor_network
-from quantum_bench.tn.planning import plan_contractions
+from quantum_bench.planning import plan_opt_einsum
 from quantum_bench.tn.planner_motifs import build_planner_motif_workload
 from quantum_bench.tn.task_graph import plan_task_graph_with_config
+from quantum_bench.tn.upmem_planner import plan_upmem_projected_prefix
 from quantum_bench.tn.upmem_path_cost import (
     FIXED_LOG1P_GENERIC_CAPS_V1,
     PathCostComponents,
@@ -46,6 +47,7 @@ from quantum_bench.tn.upmem_path_cost_v2 import (
     model_upmem_contract_cost_v2,
     task_numeric_execution,
     upmem_path_cost_policy_v2,
+    upmem_path_cost_profile_v2,
 )
 from quantum_bench.targets.upmem.hardware_taskgraph_resident import (
     ResidentCapacityError,
@@ -88,6 +90,21 @@ def _motif_network(name: str = "grid"):
     ).network
 
 
+def _custom_plan(network, config):
+    policy = upmem_path_cost_policy_v2(config["execution_policy"])
+    profile = upmem_path_cost_profile_v2(config["weight_profile"], policy=policy)
+    complex_by_tensor = {
+        tensor.id: config.get("input_representation", "split_real_imag") == "split_real_imag"
+        for tensor in network.tensors
+    }
+    return plan_upmem_projected_prefix(
+        network,
+        complex_by_tensor,
+        profile=profile,
+        request_config=config,
+    )
+
+
 def _assignment_suite(path: Path) -> Path:
     path.write_text(
         "\n".join(
@@ -126,9 +143,9 @@ def test_v2_task_cost_expands_split_complex_components() -> None:
 
 def test_v2_node_cost_matches_legacy_task_formula() -> None:
     network = build_tensor_network(builtin_circuit("bell_2q"))
-    planner = plan_contractions(network.spec, {"engine": "opt_einsum", "optimize": "greedy"})
-    custom = plan_contractions(network.spec, _v2_config())
-    dag = build_contraction_dag(network.spec, planner.path)
+    planner_path, _ = plan_opt_einsum(network.spec)
+    custom = _custom_plan(network.spec, _v2_config())
+    dag = build_contraction_dag(network.spec, planner_path)
     graph = plan_task_graph_with_config(network, {"engine": "opt_einsum", "optimize": "greedy"})
 
     assert len(dag.nodes) == len(graph.tasks)
@@ -158,8 +175,8 @@ def test_v2_preserves_one_sided_local_reduction_semantics() -> None:
             TensorValue(spec.tensors[1], np.zeros((3, 4))),
         ],
     )
-    planner = plan_contractions(spec, {"engine": "opt_einsum", "optimize": "greedy"})
-    dag = build_contraction_dag(spec, planner.path)
+    planner_path, _ = plan_opt_einsum(spec)
+    dag = build_contraction_dag(spec, planner_path)
     graph = plan_task_graph_with_config(network, {"engine": "opt_einsum", "optimize": "greedy"})
     node = dag.nodes[0]
 

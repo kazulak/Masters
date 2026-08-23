@@ -44,14 +44,14 @@ def test_active_m5_study_plans_once_then_uses_functional_dag(
         ROOT / "configs/suites/m5_circuit_smoke.yml"
     )
     calls = 0
-    original = m5_circuit_study.plan_contractions
+    original = m5_circuit_study._plan_with_config
 
     def counted(*args, **kwargs):
         nonlocal calls
         calls += 1
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(m5_circuit_study, "plan_contractions", counted)
+    monkeypatch.setattr(m5_circuit_study, "_plan_with_config", counted)
     plans = m5_circuit_study._build_plans(ROOT, config)
 
     assert calls == len(plans)

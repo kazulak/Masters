@@ -65,8 +65,7 @@ from quantum_bench.lowering import (
     contraction_dag_hash,
     lower_tensor_network,
 )
-from quantum_bench.tn.planning import PlannerRequest, plan_contractions
-from quantum_bench.tn.planner_records import PlannerResult
+from quantum_bench.planning import plan_cotengra, plan_opt_einsum
 
 SCHEMA_VERSION = 2
 LEGACY_SCHEMA_VERSION = 1
@@ -96,7 +95,7 @@ class _Plan:
     circuit: Any
     spec: TensorNetwork
     inputs: dict[str, np.ndarray]
-    planner_result: PlannerResult
+    planner_provenance: dict[str, object]
     dag: ContractionDAG
     dag_hash: str
     circuit_semantics_hash: str
@@ -585,9 +584,8 @@ def _build_plans(
                 and planner["id"] not in selected_planner_ids
             ):
                 continue
-            request = PlannerRequest.from_config(planner["planner"])
-            planner_result = plan_contractions(spec, request)
-            dag = build_contraction_dag(spec, planner_result.path)
+            path, planner_provenance = _plan_with_config(spec, planner["planner"])
+            dag = build_contraction_dag(spec, path)
             dag_hash = contraction_dag_hash(dag)
             circuit_hash = _circuit_semantics_hash(circuit)
             network_hash = _tensor_network_hash(spec, circuit_hash)
@@ -600,7 +598,7 @@ def _build_plans(
                     circuit,
                     spec,
                     inputs,
-                    planner_result,
+                    planner_provenance,
                     dag,
                     dag_hash,
                     circuit_hash,
@@ -610,6 +608,33 @@ def _build_plans(
                 )
             )
     return plans
+
+
+def _plan_with_config(
+    network: TensorNetwork,
+    planner_config: Mapping[str, Any],
+) -> tuple[tuple[tuple[int, int], ...], dict[str, object]]:
+    """Select one canonical planner without recreating a generic dispatcher."""
+
+    config = dict(planner_config)
+    engine = str(config.get("engine", "opt_einsum"))
+    if engine == "opt_einsum":
+        unsupported = sorted(set(config) - {"engine", "optimize"})
+        if unsupported:
+            raise ValueError(f"Unsupported opt_einsum planner option(s): {', '.join(unsupported)}")
+        return plan_opt_einsum(network, optimize=str(config.get("optimize", "greedy")))
+    if engine == "cotengra":
+        unsupported = sorted(set(config) - {"engine", "objective", "methods", "max_repeats", "seed"})
+        if unsupported:
+            raise ValueError(f"Unsupported cotengra planner option(s): {', '.join(unsupported)}")
+        return plan_cotengra(
+            network,
+            objective=str(config.get("objective", "flops")),
+            methods=str(config.get("methods", "greedy")),
+            max_repeats=int(config.get("max_repeats", 1)),
+            seed=int(config.get("seed", 0)),
+        )
+    raise ValueError(f"Unsupported planner engine: {engine!r}")
 
 
 def _estimate_resources(dag: ContractionDAG, limits: dict[str, int]) -> dict[str, Any]:
@@ -945,7 +970,7 @@ def _execute_combo(
             if failed_validation
             else None
         ),
-        "planning_time_s": planned.planner_result.planning_time_s,
+        "planning_time_s": planned.planner_provenance["planning_time_s"],
         "compilation_time_s": compilation_time_s,
         "whole_route_including_session_lifecycle_s": result.timing.route_total_s,
         "graph_execution_s": timing_breakdown.get("graph_execution_s"),
@@ -1041,7 +1066,7 @@ def _execute_combo(
         "execution_target": execution_plan.target.value,
         "contraction_dag_hash": planned.dag_hash,
         "contraction_dag_schema_version": "contraction_dag_v2",
-        "planner_config_hash": planned.planner_result.identity.planner_config_hash,
+        "planner_config_hash": planned.planner_provenance["planner_config_hash"],
     }
 
 
@@ -1291,8 +1316,8 @@ def _row_base(
         ),
         "planner_id": planned.planner["id"],
         "planner_config": planned.planner["planner"],
-        "planner_config_hash": planned.planner_result.identity.planner_config_hash,
-        "planner_hash": planned.planner_result.identity.planner_config_hash,
+        "planner_config_hash": planned.planner_provenance["planner_config_hash"],
+        "planner_hash": planned.planner_provenance["planner_config_hash"],
         "route_id": route["route_id"],
         "route_label": route["label"],
         "route_config_hash": route["route_config_hash"],
@@ -1341,7 +1366,7 @@ def _row_base(
         "dag_node_count": len(planned.dag.nodes),
         # Compatibility alias for report consumers; this is a DAG-node count.
         "complete_task_count": len(planned.dag.nodes),
-        "planning_time_s": planned.planner_result.planning_time_s,
+        "planning_time_s": planned.planner_provenance["planning_time_s"],
         "preflight": planned.preflight,
         "anchor_status": "available"
         if anchor and anchor.get("output") is not None
@@ -1353,7 +1378,7 @@ def _row_base(
         "anchor_match_key": {
             "case_id": planned.case["case_id"],
             "circuit_semantics_hash": planned.circuit_semantics_hash,
-            "planner_hash": planned.planner_result.identity.planner_config_hash,
+            "planner_hash": planned.planner_provenance["planner_config_hash"],
         },
         "repeat_id": repeat_id,
         "exact_once": None,
@@ -1942,7 +1967,7 @@ def _plan_manifest(
                 "family": plan.case.get("family"),
                 "planner_id": plan.planner["id"],
                 "planner_config": plan.planner["planner"],
-                "planner_config_hash": plan.planner_result.identity.planner_config_hash,
+                "planner_config_hash": plan.planner_provenance["planner_config_hash"],
                 "circuit": circuit_manifest(plan.circuit),
                 "circuit_semantics_hash": plan.circuit_semantics_hash,
                 "tensor_network_hash": plan.tensor_network_hash,
@@ -1956,7 +1981,7 @@ def _plan_manifest(
                 "dag_node_count": len(plan.dag.nodes),
                 # Compatibility alias for report consumers; this is a DAG-node count.
                 "task_count": len(plan.dag.nodes),
-                "planning_time_s": plan.planner_result.planning_time_s,
+                "planning_time_s": plan.planner_provenance["planning_time_s"],
                 "resources": plan.resources,
                 "preflight": plan.preflight,
             }

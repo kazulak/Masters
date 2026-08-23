@@ -63,18 +63,22 @@ without changing the DAG hash.
 ## Planning
 
 Planning consumes labels and shapes, not tensor values or hardware sessions.
-The canonical adapters are opt_einsum and cotengra. Their future root
-functions return a validated binary active-list path and a JSON-compatible
-provenance mapping. Planner provenance is separate from DAG identity:
-different planners can select the same graph.
+The canonical adapters are opt_einsum and cotengra. The root functions in
+`src/quantum_bench/planning.py` return a validated binary active-list path and
+a JSON-compatible provenance mapping. Planner provenance is separate from DAG
+identity: different planners can select the same graph.
 
 The PIM-aware projected-prefix greedy heuristic is historical and exploratory,
 not a canonical adapter. It remains available only for old configurations,
-tests, and evidence until T12. It is uncalibrated and cannot be described as
-globally optimal or as measured hardware performance. Hardware-calibrated
+tests, and evidence until T12. It is an uncalibrated candidate estimator and
+cannot be described as globally optimal or as measured hardware performance.
+Hardware-calibrated
 target-aware planning is separate future work.
 
-T3-0 freezes this boundary; the canonical planner migration is pending.
+T3-0 froze this boundary and T3 implemented it. The active route has no
+generic planner dispatcher; the M5 coordinator selects exactly opt_einsum or
+cotengra through a private configuration helper. The projected-prefix planner
+remains historical.
 
 ## UPMEM Mapping
 
@@ -169,13 +173,11 @@ at `native/upmem/runtime/`. Historical M5/v4 Python and native modules are not
 imported by the active path. The completed T1A-D ownership migration is followed
 by these remaining reset steps, in dependency order:
 
-1. create the canonical model, circuit, and lowering boundaries (T2);
-2. isolate planners, add results/timing/evidence contracts, and migrate direct
-   baselines;
-3. add the configuration, reporting, and public verification workflow;
-4. collapse milestone commands, configurations, reports, and compatibility
+1. add results/timing/evidence contracts and migrate direct baselines (T4-T10);
+2. add the configuration, reporting, and public verification workflow;
+3. collapse milestone commands, configurations, reports, and compatibility
    tests only after the canonical workflow passes;
-5. delete historical active source once parity tests pass.
+4. delete historical active source once parity tests pass.
 
 Progress and temporary adapter expiry are recorded in
 [MIGRATION_LEDGER.md](MIGRATION_LEDGER.md). Historical behavior remains at the
