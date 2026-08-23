@@ -110,9 +110,9 @@ Update this table after each integration batch.
 
 | Metric | Baseline | Current | Target |
 |---|---:|---:|---:|
-| Active Python modules | 138 | 135 | 12-16 |
-| Class declarations | 307 | 279 | only stable boundary types |
-| Test modules | 78 | 76 | about 10 |
+| Active Python modules | 138 | 119 | 12-16 |
+| Class declarations | 307 | 280 | only stable boundary types |
+| Test modules | 78 | 77 | about 10 |
 | Config files | 63 | 63 | 2 principal experiments |
 | Public Make targets | 78 | 78 | 10 or fewer |
 | Active contraction IRs | 2 | 1 | 1 |

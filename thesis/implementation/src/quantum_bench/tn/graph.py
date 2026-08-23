@@ -10,65 +10,20 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, replace
-from typing import Iterable, Mapping, Sequence, TypeAlias
+from dataclasses import replace
+from typing import Iterable, Mapping, Sequence
 
-from quantum_bench.core.records import TensorNetworkSpec, TensorSpec
+from quantum_bench.model import (
+    ContractionDAG,
+    ContractNode,
+    GraphNode,
+    ReduceNode,
+    SliceSpec,
+    TensorNetwork as _TensorNetwork,
+    TensorSpec as _TensorSpec,
+    TensorView,
+)
 from quantum_bench.tn.network import TensorNetworkValue
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class TensorView:
-    """A semantic tensor reference with optional fixed indices."""
-
-    tensor_id: str
-    labels: tuple[int, ...]
-    shape: tuple[int, ...]
-    slice_spec: tuple[tuple[int, int], ...] = ()
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class SliceSpec:
-    """One bounded semantic slice of one contraction label."""
-
-    node_id: str
-    label: int
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class ContractNode:
-    """One binary tensor contraction in the semantic graph."""
-
-    node_id: str
-    left: TensorView
-    right: TensorView
-    output: TensorSpec
-    contracted_labels: tuple[int, ...]
-    output_labels: tuple[int, ...]
-    dependencies: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class ReduceNode:
-    """Explicit sum reconstruction for sliced partial results."""
-
-    node_id: str
-    inputs: tuple[TensorView, ...]
-    output: TensorSpec
-    reduced_labels: tuple[int, ...] = ()
-    dependencies: tuple[str, ...] = ()
-
-
-GraphNode: TypeAlias = ContractNode | ReduceNode
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class ContractionDAG:
-    """Planner-independent semantic contraction graph."""
-
-    tensors: tuple[TensorSpec, ...]
-    nodes: tuple[GraphNode, ...]
-    output: TensorView
 
 
 def apply_slicing(dag: ContractionDAG, spec: SliceSpec) -> ContractionDAG:
@@ -155,7 +110,7 @@ def apply_slicing(dag: ContractionDAG, spec: SliceSpec) -> ContractionDAG:
 
 
 def build_contraction_dag(
-    network: TensorNetworkSpec | TensorNetworkValue,
+    network: _TensorNetwork | TensorNetworkValue,
     path: Iterable[Iterable[int]],
 ) -> ContractionDAG:
     """Materialize a semantic DAG from a tensor network and dynamic path.
@@ -197,14 +152,14 @@ def build_contraction_dag(
 
 
 def build_contract_node(
-    active: Sequence[TensorSpec],
+    active: Sequence[_TensorSpec],
     pair: Sequence[int],
     final_output_labels: tuple[int, ...],
     *,
     produced_by: Mapping[str, str | None],
     node_id: str,
     output_id: str,
-) -> tuple[ContractNode, tuple[TensorSpec, ...]]:
+) -> tuple[ContractNode, tuple[_TensorSpec, ...]]:
     """Lower one dynamic pair into target-neutral semantic DAG metadata."""
 
     normalized_pair = tuple(int(item) for item in pair)
@@ -228,7 +183,7 @@ def build_contract_node(
         )
     )
     output_shape = tuple(_label_dimension(label, left, right) for label in output_labels)
-    output = TensorSpec(
+    output = _TensorSpec(
         id=output_id,
         labels=output_labels,
         shape=output_shape,
@@ -331,7 +286,7 @@ def contraction_dag_hash(dag: ContractionDAG) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _view(spec: TensorSpec) -> TensorView:
+def _view(spec: _TensorSpec) -> TensorView:
     return TensorView(tensor_id=spec.id, labels=spec.labels, shape=spec.shape)
 
 
@@ -356,7 +311,7 @@ def _fix_view(view: TensorView, label: int, value: int) -> TensorView:
 
 def _validate_view(
     view: TensorView,
-    descriptors: dict[str, TensorSpec],
+    descriptors: dict[str, _TensorSpec],
     owner: str,
 ) -> None:
     descriptor = descriptors.get(view.tensor_id)
@@ -393,7 +348,7 @@ def _validate_view(
 
 def _validate_contract_algebra(
     node: ContractNode,
-    descriptors: dict[str, TensorSpec],
+    descriptors: dict[str, _TensorSpec],
 ) -> None:
     left = descriptors[node.left.tensor_id]
     right = descriptors[node.right.tensor_id]
@@ -428,7 +383,7 @@ def _validate_contract_algebra(
         raise ValueError(f"Contract node {node.node_id} output dtype does not match its inputs")
 
 
-def _validate_reduce_algebra(node: ReduceNode, descriptors: dict[str, TensorSpec]) -> None:
+def _validate_reduce_algebra(node: ReduceNode, descriptors: dict[str, _TensorSpec]) -> None:
     if len(set(node.reduced_labels)) != len(node.reduced_labels):
         raise ValueError(f"Reduce node {node.node_id} has duplicate reduced labels")
     output = node.output
@@ -488,7 +443,7 @@ def _semantic_node_payload(dag: ContractionDAG, node: GraphNode) -> dict[str, ob
     }
 
 
-def _descriptor_payload(tensor: TensorSpec) -> dict[str, object]:
+def _descriptor_payload(tensor: _TensorSpec) -> dict[str, object]:
     return {
         "labels": tensor.labels,
         "shape": tensor.shape,
@@ -497,13 +452,13 @@ def _descriptor_payload(tensor: TensorSpec) -> dict[str, object]:
     }
 
 
-def _common_dtype(left: TensorSpec, right: TensorSpec) -> str:
+def _common_dtype(left: _TensorSpec, right: _TensorSpec) -> str:
     if left.dtype != right.dtype:
         raise ValueError(f"Cannot contract tensors with different dtypes: {left.dtype!r}, {right.dtype!r}")
     return left.dtype
 
 
-def _validate_shared_dimensions(left: TensorSpec, right: TensorSpec) -> None:
+def _validate_shared_dimensions(left: _TensorSpec, right: _TensorSpec) -> None:
     for label in set(left.labels) & set(right.labels):
         left_dim = left.shape[left.labels.index(label)]
         right_dim = right.shape[right.labels.index(label)]
@@ -511,15 +466,15 @@ def _validate_shared_dimensions(left: TensorSpec, right: TensorSpec) -> None:
             raise ValueError(f"Label {label} has dimensions {left_dim} and {right_dim}")
 
 
-def _label_dimension(label: int, left: TensorSpec, right: TensorSpec) -> int:
+def _label_dimension(label: int, left: _TensorSpec, right: _TensorSpec) -> int:
     if label in left.labels:
         return left.shape[left.labels.index(label)]
     return right.shape[right.labels.index(label)]
 
 
 def _output_labels(
-    left: TensorSpec,
-    right: TensorSpec,
+    left: _TensorSpec,
+    right: _TensorSpec,
     remaining_labels: set[int],
     final_output_labels: tuple[int, ...],
 ) -> tuple[int, ...]:
@@ -553,7 +508,7 @@ def _validate_dependencies(nodes: dict[str, GraphNode]) -> None:
         visit(node_id)
 
 
-def _tensor_payload(tensor: TensorSpec) -> dict[str, object]:
+def _tensor_payload(tensor: _TensorSpec) -> dict[str, object]:
     return {
         "id": tensor.id,
         "labels": tensor.labels,

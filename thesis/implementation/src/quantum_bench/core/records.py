@@ -2,37 +2,20 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, is_dataclass
 from enum import Enum
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+
+from quantum_bench.model import (
+    CircuitOperation as CircuitOperation,
+    CircuitSpec as CircuitSpec,
+    TensorNetwork as _TensorNetwork,
+    TensorSpec as TensorSpec,
+)
 
 
 JsonDict = dict[str, Any]
 TIMING_SCHEMA_VERSION = 2
-
-
-@dataclass(frozen=True)
-class CircuitOperation:
-    gate: str
-    wires: tuple[int, ...]
-    params: tuple[float, ...] = ()
-
-
-@dataclass(frozen=True)
-class CircuitSpec:
-    name: str
-    n_qubits: int
-    operations: tuple[CircuitOperation, ...]
-    source: JsonDict
-
-
-@dataclass(frozen=True)
-class TensorSpec:
-    id: str
-    labels: tuple[int, ...]
-    shape: tuple[int, ...]
-    structure: str
-    dtype: str = "complex128"
-    produced_by: str | None = None
 
 
 @dataclass
@@ -41,12 +24,7 @@ class TensorValue:
     array: Any
 
 
-@dataclass(frozen=True)
-class TensorNetworkSpec:
-    circuit: CircuitSpec
-    tensors: tuple[TensorSpec, ...]
-    output_labels: tuple[int, ...]
-    einsum_expression: str
+TensorNetworkSpec = _TensorNetwork
 
 
 @dataclass(frozen=True)
@@ -346,7 +324,7 @@ def to_jsonable(value: Any) -> Any:
         return [to_jsonable(item) for item in value]
     if isinstance(value, list):
         return [to_jsonable(item) for item in value]
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return {str(key): to_jsonable(item) for key, item in value.items()}
     if hasattr(value, "item"):
         return value.item()
