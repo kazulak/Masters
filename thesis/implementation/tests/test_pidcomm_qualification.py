@@ -218,9 +218,7 @@ def test_pidcomm_source_and_build_contracts_are_isolated() -> None:
     assert "-Werror=implicit-function-declaration" in makefile
     assert "dpu-pkg-config" in makefile
     assert "LD_LIBRARY_PATH" not in makefile
-    assert "upmem-pidcomm-plan" in top_makefile
-    assert "upmem-pidcomm-run" in top_makefile
-    assert "upmem-pidcomm-compatibility" in top_makefile
+    assert "pidcomm-check" in top_makefile
     assert "M4.6" not in str(ROOT / "native/upmem/pidcomm_qualification")
     assert "UPMEM_ALLOW_PHYSICAL_HARDWARE" in top_makefile
 

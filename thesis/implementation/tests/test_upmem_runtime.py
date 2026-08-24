@@ -22,7 +22,7 @@ from quantum_bench.upmem.protocol import V4ProtocolError
 import quantum_bench.upmem.runtime as runtime
 from quantum_bench.cpu import replay_upmem_plan_once
 
-from tests.test_v4_executor import _binaries, _engine, _final_plan_for_node, _task
+from tests.upmem_runtime_fixtures import _binaries, _engine, _final_plan_for_node, _task
 
 
 class _ControlledTerminalSession:
