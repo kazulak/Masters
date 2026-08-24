@@ -289,20 +289,13 @@ def _validation(
         if full_applicable
         else None
     )
-    scientific_passed = all(
-        value is True
-        for applicable, value in (
-            (policy_applicable, policy_passed),
-            (full_applicable, full_passed),
-        )
-        if applicable
-    )
+    accuracy_qualified = full_applicable and full_passed is True
     return {
         "policy_reference_applicable": policy_applicable,
         "policy_reference_passed": policy_passed,
         "full_precision_threshold_applicable": full_applicable,
         "full_precision_passed": full_passed,
-        "scientific_validation_passed": scientific_passed,
+        "accuracy_qualified": accuracy_qualified,
         "max_abs_error": max_abs,
         "relative_l2_error": relative_l2,
     }

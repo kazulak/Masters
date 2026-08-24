@@ -75,7 +75,7 @@ _VALIDATION_FIELDS = frozenset(
         "policy_reference_passed",
         "full_precision_threshold_applicable",
         "full_precision_passed",
-        "scientific_validation_passed",
+        "accuracy_qualified",
         "max_abs_error",
         "relative_l2_error",
     }
@@ -888,7 +888,7 @@ def _run_sample(
     validate: Callable[[ExecutionSample], Mapping[str, JsonValue]] | None = None,
 ) -> Mapping[str, JsonValue]:
     base: dict[str, JsonValue] = {
-        "schema_version": "evidence_sample_v1",
+        "schema_version": "evidence_sample_v2",
         "sample_id": sample_id(
             run_id,
             case_id,
@@ -959,20 +959,6 @@ def _run_sample(
                         "reason": _validation_failure_reason(exc),
                     },
                 }
-            if validation["scientific_validation_passed"] is not True:
-                return {
-                    **base,
-                    "status": "failed",
-                    "measurement": None,
-                    "backend_facts": backend_facts,
-                    "numeric_facts": numeric_facts,
-                    "output_sha256": None,
-                    "validation": validation,
-                    "failure": {
-                        "stage": "validation",
-                        "reason": "scientific validation failed",
-                    },
-                }
         return {
             **base,
             "status": "success",
@@ -1037,7 +1023,7 @@ def _validation_mapping(
     for field in (
         "policy_reference_applicable",
         "full_precision_threshold_applicable",
-        "scientific_validation_passed",
+        "accuracy_qualified",
     ):
         if not isinstance(normalized[field], bool):
             raise TypeError(f"validation.{field} must be a boolean")
@@ -1057,17 +1043,13 @@ def _validation_mapping(
         or normalized["full_precision_threshold_applicable"]
     ):
         raise ValueError("validation must include at least one applicable comparison")
-    expected_scientific = all(
-        normalized[field] is True
-        for applicable, field in (
-            ("policy_reference_applicable", "policy_reference_passed"),
-            ("full_precision_threshold_applicable", "full_precision_passed"),
-        )
-        if normalized[applicable]
+    expected_accuracy = (
+        normalized["full_precision_threshold_applicable"]
+        and normalized["full_precision_passed"] is True
     )
-    if normalized["scientific_validation_passed"] != expected_scientific:
+    if normalized["accuracy_qualified"] != expected_accuracy:
         raise ValueError(
-            "validation.scientific_validation_passed must equal applicable comparisons"
+            "validation.accuracy_qualified must equal full-precision qualification"
         )
     for field in ("max_abs_error", "relative_l2_error"):
         error = normalized[field]

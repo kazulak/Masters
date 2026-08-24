@@ -118,7 +118,7 @@ def report_artifacts(
         for aggregate in aggregates
     )
     report = {
-        "schema_version": "evidence_report_v1",
+        "schema_version": "evidence_report_v2",
         "status": "completed",
         "run_id": manifest["run_id"],
         "experiment_id": manifest["experiment_id"],
@@ -210,12 +210,40 @@ def _verification_summary(
             if sample["status"] == "success" and sample["measurement"] is not None
         }
     )
-    validation_pass_count = sum(
-        1
+    validated_rows = [
+        sample["validation"]
         for sample in sample_rows
         if isinstance(sample["validation"], Mapping)
-        and sample["validation"].get("scientific_validation_passed") is True
+    ]
+    successful_measurements = [
+        sample
+        for sample in sample_rows
+        if sample["sample_kind"] == "measurement"
+        and sample["status"] == "success"
+    ]
+    applicable_policy_validations = [
+        validation
+        for validation in validated_rows
+        if validation["policy_reference_applicable"]
+    ]
+    qualified_count = sum(
+        validation["accuracy_qualified"] is True
+        for validation in validated_rows
     )
+    unqualified_count = sum(
+        validation["accuracy_qualified"] is False
+        for validation in validated_rows
+    )
+    policy_failure_count = sum(
+        validation["policy_reference_passed"] is not True
+        for validation in applicable_policy_validations
+    )
+    measured_policy_validations = [
+        sample["validation"]
+        for sample in successful_measurements
+        if isinstance(sample["validation"], Mapping)
+        and sample["validation"]["policy_reference_applicable"]
+    ]
     return {
         "status": manifest["status"],
         "run_id": manifest["run_id"],
@@ -226,7 +254,28 @@ def _verification_summary(
         "failed_count": statuses["failed"],
         "unsupported_count": statuses["unsupported"],
         "timing_scopes": scopes,
-        "validation_pass_count": validation_pass_count,
+        "policy_reference_applicable_count": len(applicable_policy_validations),
+        "policy_reference_failure_count": policy_failure_count,
+        "policy_reference_qualified": (
+            None
+            if not measured_policy_validations
+            else all(
+                isinstance(sample["validation"], Mapping)
+                and (
+                    not sample["validation"]["policy_reference_applicable"]
+                    or sample["validation"]["policy_reference_passed"] is True
+                )
+                for sample in successful_measurements
+            )
+        ),
+        "accuracy_qualified_count": qualified_count,
+        "accuracy_unqualified_count": unqualified_count,
+        "accuracy_qualified": bool(successful_measurements)
+        and all(
+            isinstance(sample["validation"], Mapping)
+            and sample["validation"]["accuracy_qualified"] is True
+            for sample in successful_measurements
+        ),
     }
 
 
@@ -445,9 +494,9 @@ def _speedup_rejection(
         return "simulator_execution"
     if candidate["sample_count"] < 2:
         return "candidate_has_fewer_than_two_measurements"
-    if not _all_validation_passed(candidate):
+    if not _all_policy_references_applicable_and_passed(candidate):
         return "candidate_validation_failed"
-    if not _all_full_precision_thresholds_passed(candidate):
+    if not _all_accuracy_qualified(candidate):
         return "full_precision_threshold_not_passed"
     if _any_terminal_fact_conflict(candidate):
         return "terminal_fact_conflict"
@@ -506,8 +555,8 @@ def _matching_baseline(
 def _baseline_is_eligible(aggregate: Mapping[str, object]) -> bool:
     return (
         aggregate["sample_count"] >= 2
-        and _all_validation_passed(aggregate)
-        and _all_full_precision_thresholds_passed(aggregate)
+        and _all_policy_references_passed(aggregate)
+        and _all_accuracy_qualified(aggregate)
     )
 
 
@@ -528,20 +577,23 @@ def _same_speedup_dimensions(
     )
 
 
-def _all_validation_passed(aggregate: Mapping[str, object]) -> bool:
+def _all_policy_references_passed(aggregate: Mapping[str, object]) -> bool:
     samples = aggregate["_samples"]
     return (
         isinstance(samples, list)
         and bool(samples)
         and all(
             isinstance(sample["validation"], Mapping)
-            and sample["validation"].get("scientific_validation_passed") is True
+            and (
+                not sample["validation"].get("policy_reference_applicable")
+                or sample["validation"].get("policy_reference_passed") is True
+            )
             for sample in samples
         )
     )
 
 
-def _all_full_precision_thresholds_passed(
+def _all_policy_references_applicable_and_passed(
     aggregate: Mapping[str, object],
 ) -> bool:
     samples = aggregate["_samples"]
@@ -550,8 +602,21 @@ def _all_full_precision_thresholds_passed(
         and bool(samples)
         and all(
             isinstance(sample["validation"], Mapping)
-            and sample["validation"].get("full_precision_threshold_applicable") is True
-            and sample["validation"].get("full_precision_passed") is True
+            and sample["validation"].get("policy_reference_applicable") is True
+            and sample["validation"].get("policy_reference_passed") is True
+            for sample in samples
+        )
+    )
+
+
+def _all_accuracy_qualified(aggregate: Mapping[str, object]) -> bool:
+    samples = aggregate["_samples"]
+    return (
+        isinstance(samples, list)
+        and bool(samples)
+        and all(
+            isinstance(sample["validation"], Mapping)
+            and sample["validation"].get("accuracy_qualified") is True
             for sample in samples
         )
     )

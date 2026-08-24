@@ -69,7 +69,7 @@ def _validation(*, passed: bool = True) -> dict[str, object]:
         "policy_reference_passed": passed,
         "full_precision_threshold_applicable": False,
         "full_precision_passed": None,
-        "scientific_validation_passed": passed,
+        "accuracy_qualified": False,
         "max_abs_error": 0.0,
         "relative_l2_error": 0.0,
     }
@@ -136,7 +136,7 @@ def _sample(
     validation_policy_id: str = _POLICY_ID,
 ) -> dict[str, object]:
     record: dict[str, object] = {
-        "schema_version": "evidence_sample_v1",
+        "schema_version": "evidence_sample_v2",
         "sample_id": sample_id(run_id, case_id, route_id, kind, index, plan_id=plan_id),
         "run_id": run_id,
         "experiment_id": experiment_id,
@@ -253,8 +253,8 @@ def _execution_validation(
         "policy_reference_passed": policy_passed,
         "full_precision_threshold_applicable": full_precision_applicable,
         "full_precision_passed": full_precision_passed,
-        "scientific_validation_passed": policy_passed
-        and (not full_precision_applicable or full_precision_passed is True),
+        "accuracy_qualified": full_precision_applicable
+        and full_precision_passed is True,
         "max_abs_error": 0.0,
         "relative_l2_error": 0.0,
     }
@@ -415,7 +415,7 @@ def test_explicit_opaque_json_mappings_remain_extensible() -> None:
     [
         "policy_reference_applicable",
         "full_precision_threshold_applicable",
-        "scientific_validation_passed",
+        "accuracy_qualified",
     ],
 )
 def test_validation_schema_requires_boolean_control_fields(field: str) -> None:
@@ -435,9 +435,9 @@ def test_validation_schema_requires_applicable_pass_fields_and_conjunction() -> 
         validate_sample(sample)
 
     report = _validation()
-    report["scientific_validation_passed"] = False
+    report["accuracy_qualified"] = True
     sample["validation"] = report
-    with pytest.raises(ValueError, match="scientific_validation_passed"):
+    with pytest.raises(ValueError, match="accuracy_qualified"):
         validate_sample(sample)
 
     report = _validation()
@@ -450,17 +450,19 @@ def test_validation_schema_requires_applicable_pass_fields_and_conjunction() -> 
         validate_sample(sample)
 
 
-def test_completed_artifact_rejects_successful_failed_validation() -> None:
+def test_completed_artifact_accepts_successful_unqualified_validation() -> None:
     sample = _sample()
     sample["validation"] = _validation(passed=False)
     validate_sample(sample)
 
-    with pytest.raises(ValueError, match="failed scientific validation"):
-        validate_artifact_set(
-            _manifest(status="completed"),
-            [sample],
-            [_session()],
-        )
+    validate_artifact_set(_manifest(status="completed"), [sample], [_session()])
+
+
+def test_sample_v1_is_rejected() -> None:
+    sample = _sample()
+    sample["schema_version"] = "evidence_sample_v1"
+    with pytest.raises(ValueError, match="invalid schema_version"):
+        validate_sample(sample)
 
 
 def test_measurement_requires_every_measurement_field() -> None:
@@ -1172,15 +1174,14 @@ def test_direct_validation_failures_are_bounded_and_preserve_facts(
         samples_path=tmp_path / "failed.jsonl",
         validate=lambda sample: _execution_validation(policy_passed=False),
     )[0]
-    assert failed["status"] == "failed"
-    assert failed["measurement"] is None
-    assert failed["output_sha256"] is None
+    assert failed["status"] == "success"
+    assert failed["measurement"]["total_wall_s"] == 1.0
+    assert failed["output_sha256"] is not None
     assert failed["backend_facts"] == {"backend": "test", "nested": [1, True]}
     assert failed["numeric_facts"] == {"value": 1}
-    assert failed["failure"] == {
-        "stage": "validation",
-        "reason": "scientific validation failed",
-    }
+    assert failed["validation"]["policy_reference_passed"] is False
+    assert failed["validation"]["accuracy_qualified"] is False
+    assert failed["failure"] is None
 
     def invalid_validator(sample: ExecutionSample) -> dict[str, object]:
         raise RuntimeError("bad\n" + ("x" * 1000))

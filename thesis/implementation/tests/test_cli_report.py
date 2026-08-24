@@ -792,7 +792,7 @@ def _validation() -> dict[str, object]:
         "policy_reference_passed": True,
         "full_precision_threshold_applicable": True,
         "full_precision_passed": True,
-        "scientific_validation_passed": True,
+        "accuracy_qualified": True,
         "max_abs_error": 0.01,
         "relative_l2_error": 0.02,
     }
@@ -813,14 +813,15 @@ def _sample(
     facts: dict[str, object] | None = None,
     session_instance_id: str | None = None,
     status: str = "success",
+    sample_kind: str = "measurement",
 ) -> dict[str, object]:
     sample: dict[str, object] = {
-        "schema_version": "evidence_sample_v1",
+        "schema_version": "evidence_sample_v2",
         "sample_id": sample_id(
             run_id,
             case_id,
             route_id,
-            "measurement",
+            sample_kind,
             index,
             plan_id=plan_id,
         ),
@@ -829,7 +830,7 @@ def _sample(
         "case_id": case_id,
         "plan_id": plan_id,
         "route_id": route_id,
-        "sample_kind": "measurement",
+        "sample_kind": sample_kind,
         "sample_index": index,
         "session_instance_id": session_instance_id,
         "status": status,
@@ -952,8 +953,10 @@ def _artifact(
             ],
         },
         "expected_counts": {
-            "warmup": 0,
-            "measurement": len(samples),
+            "warmup": sum(sample["sample_kind"] == "warmup" for sample in samples),
+            "measurement": sum(
+                sample["sample_kind"] == "measurement" for sample in samples
+            ),
             "sessions": len(sessions),
         },
         "files": {
@@ -1069,6 +1072,7 @@ def test_verify_and_report_aggregate_duplicate_measurements_once(
     report = report_artifacts(artifact, tmp_path / "report")
 
     assert report["status"] == "completed"
+    assert report["schema_version"] == "evidence_report_v2"
     assert report["aggregate_count"] == 1
     rows = (
         (tmp_path / "report" / "aggregate.csv").read_text(encoding="utf-8").splitlines()
@@ -1297,6 +1301,7 @@ def test_report_rejects_speedup_without_full_precision_threshold(
             **_validation(),
             "full_precision_threshold_applicable": False,
             "full_precision_passed": None,
+            "accuracy_qualified": False,
         }
 
     report = report_artifacts(
@@ -1318,6 +1323,131 @@ def test_report_rejects_speedup_without_full_precision_threshold(
 
     assert report["speedup_count"] == 0
     assert report["speedup_rejections"]["full_precision_threshold_not_passed"] == 1
+
+
+def test_report_rejects_speedup_without_applicable_policy_reference(
+    tmp_path: Path,
+) -> None:
+    run_id, experiment_id, environment_id_value, policy_id = _ids()
+    instance = "physical-session"
+    samples = [
+        _sample(
+            run_id=run_id,
+            experiment_id=experiment_id,
+            environment_id=environment_id_value,
+            validation_policy_id=policy_id,
+            case_id="bell",
+            route_id=route,
+            index=index,
+            total_wall_s=2.0 if route == "cpu" else 1.0,
+            facts=(
+                {"backend_id": "numpy_cpu_v1"}
+                if route == "cpu"
+                else {"backend_id": "upmem_sdk_hardware_v4"}
+            ),
+            session_instance_id=instance if route == "upmem" else None,
+        )
+        for route in ("cpu", "upmem")
+        for index in range(2)
+    ]
+    for sample in samples:
+        if sample["route_id"] == "upmem":
+            sample["validation"] = {
+                **_validation(),
+                "policy_reference_applicable": False,
+                "policy_reference_passed": None,
+            }
+
+    report = report_artifacts(
+        _artifact(
+            tmp_path / "evidence",
+            samples,
+            [
+                _session(
+                    run_id=run_id,
+                    experiment_id=experiment_id,
+                    case_id="bell",
+                    route_id="upmem",
+                    instance=instance,
+                )
+            ],
+        ),
+        tmp_path / "report",
+    )
+
+    assert report["speedup_count"] == 0
+    assert report["speedup_rejections"]["candidate_validation_failed"] == 1
+
+
+def test_verify_counts_warmup_validation_but_claims_use_measurements(
+    tmp_path: Path,
+) -> None:
+    run_id, experiment_id, environment_id_value, policy_id = _ids()
+    warmup = _sample(
+        run_id=run_id,
+        experiment_id=experiment_id,
+        environment_id=environment_id_value,
+        validation_policy_id=policy_id,
+        case_id="bell",
+        route_id="cpu",
+        index=0,
+        total_wall_s=1.0,
+        sample_kind="warmup",
+    )
+    warmup["validation"] = {
+        **_validation(),
+        "policy_reference_passed": False,
+        "full_precision_passed": False,
+        "accuracy_qualified": False,
+    }
+    measurement = _sample(
+        run_id=run_id,
+        experiment_id=experiment_id,
+        environment_id=environment_id_value,
+        validation_policy_id=policy_id,
+        case_id="bell",
+        route_id="cpu",
+        index=0,
+        total_wall_s=1.0,
+    )
+    artifact = _artifact(tmp_path / "evidence", [warmup, measurement])
+
+    verification = verify_artifacts(artifact)
+
+    assert verification["policy_reference_applicable_count"] == 2
+    assert verification["policy_reference_failure_count"] == 1
+    assert verification["accuracy_qualified_count"] == 1
+    assert verification["accuracy_unqualified_count"] == 1
+    assert verification["policy_reference_qualified"] is True
+    assert verification["accuracy_qualified"] is True
+
+
+def test_verify_unvalidated_measurement_prevents_qualification(tmp_path: Path) -> None:
+    run_id, experiment_id, environment_id_value, policy_id = _ids()
+    samples = [
+        _sample(
+            run_id=run_id,
+            experiment_id=experiment_id,
+            environment_id=environment_id_value,
+            validation_policy_id=policy_id,
+            case_id="bell",
+            route_id="cpu",
+            index=index,
+            total_wall_s=1.0,
+        )
+        for index in range(2)
+    ]
+    samples[1]["validation"] = None
+    artifact = _artifact(tmp_path / "evidence", samples)
+
+    verification = verify_artifacts(artifact)
+
+    assert verification["policy_reference_applicable_count"] == 1
+    assert verification["policy_reference_failure_count"] == 0
+    assert verification["accuracy_qualified_count"] == 1
+    assert verification["accuracy_unqualified_count"] == 0
+    assert verification["policy_reference_qualified"] is False
+    assert verification["accuracy_qualified"] is False
 
 
 def test_report_rejects_claims_from_failed_or_dirty_artifacts(tmp_path: Path) -> None:

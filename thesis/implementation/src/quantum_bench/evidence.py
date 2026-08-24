@@ -21,7 +21,7 @@ from quantum_bench.results import Measurement as _Measurement
 
 
 _MANIFEST_SCHEMA = "evidence_manifest_v1"
-_SAMPLE_SCHEMA = "evidence_sample_v1"
+_SAMPLE_SCHEMA = "evidence_sample_v2"
 _SESSION_SCHEMA = "evidence_session_v1"
 _SAMPLE_KINDS = frozenset({"warmup", "measurement"})
 _SAMPLE_STATUSES = frozenset({"success", "unsupported", "failed"})
@@ -111,7 +111,7 @@ _VALIDATION_FIELDS = frozenset(
         "policy_reference_passed",
         "full_precision_threshold_applicable",
         "full_precision_passed",
-        "scientific_validation_passed",
+        "accuracy_qualified",
         "max_abs_error",
         "relative_l2_error",
     }
@@ -568,7 +568,7 @@ def _validate_validation(value: object) -> None:
     for field in (
         "policy_reference_applicable",
         "full_precision_threshold_applicable",
-        "scientific_validation_passed",
+        "accuracy_qualified",
     ):
         if not isinstance(validation[field], bool):
             raise TypeError(f"validation.{field} must be a boolean")
@@ -588,17 +588,13 @@ def _validate_validation(value: object) -> None:
         or validation["full_precision_threshold_applicable"]
     ):
         raise ValueError("validation must include at least one applicable comparison")
-    expected_scientific = all(
-        validation[passed] is True
-        for applicable, passed in (
-            ("policy_reference_applicable", "policy_reference_passed"),
-            ("full_precision_threshold_applicable", "full_precision_passed"),
-        )
-        if validation[applicable]
+    expected_accuracy = (
+        validation["full_precision_threshold_applicable"]
+        and validation["full_precision_passed"] is True
     )
-    if validation["scientific_validation_passed"] != expected_scientific:
+    if validation["accuracy_qualified"] != expected_accuracy:
         raise ValueError(
-            "validation.scientific_validation_passed must equal applicable comparisons"
+            "validation.accuracy_qualified must equal full-precision qualification"
         )
     for field in ("max_abs_error", "relative_l2_error"):
         _finite_nonnegative(validation[field], f"validation.{field}")
@@ -874,14 +870,6 @@ def validate_artifact_set(
             )
         if any(sample["status"] != "success" for sample in sample_rows):
             raise ValueError("completed artifacts require every sample to succeed")
-        if any(
-            sample["validation"] is not None
-            and sample["validation"]["scientific_validation_passed"] is False
-            for sample in sample_rows
-        ):
-            raise ValueError(
-                "completed artifacts cannot contain failed scientific validation"
-            )
         if any(
             session["status"] != "success" or not session["release_verified"]
             for session in session_rows
