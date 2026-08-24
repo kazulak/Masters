@@ -1,812 +1,355 @@
 from __future__ import annotations
 
-import json
-from dataclasses import replace
+import hashlib
 from pathlib import Path
+import struct
+from typing import Any
 
-import numpy as np
 import pytest
 
-import scripts.research_benchmark_pack as report_pack_module
-import quantum_bench.bench.upmem_hardware_taskgraph_resident as resident_runner
-from quantum_bench.bench.generic_task_bridge import run_generic_task_bridge
-from quantum_bench.bench.upmem_hardware_taskgraph_resident import (
-    prepare_upmem_hardware_taskgraph_resident,
-)
-from quantum_bench.core.records import TensorSpec, TensorValue
-from quantum_bench.formats import FixedPointSpec
-from quantum_bench.routing import (
-    GenericTaskPreparationCaps,
-    GenericTaskPreparationInput,
-    generic_loop_reference_float32,
-    prepare_generic_task,
-)
-from quantum_bench.routing.generic_numeric_contract import classify_numeric
-from quantum_bench.routing.generic_prepare import generic_structural_feasibility
-from quantum_bench.targets.upmem.generic_boundary import (
-    GENERIC_BOUNDARY_CASE_ID,
-    build_generic_boundary_workload,
-)
-from quantum_bench.targets.upmem.generic_bridge import (
-    execute_generic_bridge,
-    read_generic_bridge_output_manifest,
-    write_generic_bridge_input_manifest,
-)
-from quantum_bench.targets.upmem.hardware_session import (
-    HardwareSessionBuild,
-    ResidentGraphSessionExecution,
-    hardware_environment_metadata,
-    sanitised_hardware_environment,
-    _resident_response_valid,
-)
-from quantum_bench.targets.upmem.runtime_checks import (
-    strict_upmem_runtime_assertions,
-    upmem_sdk_simulator_preflight_payload,
-)
-from quantum_bench.targets.upmem.runtime_evidence import transfer_accounting
-from quantum_bench.targets.upmem.taskgraph_runtime import (
-    execute_upmem_taskgraph_runtime,
-)
-from quantum_bench.tn.execution import execute_task_sequence_np_einsum
-
-from .support import (
-    contraction_task,
-    record_with_updates,
-    resident_package_fixture,
-    valid_resident_response,
-)
+import quantum_bench.upmem.native_session as native_session
+import quantum_bench.upmem.protocol as protocol
 
 
-def test_rank_selector_absent_preserves_default_profile_behavior() -> None:
-    environment = {
-        "DPU_PROFILE": "simulator",
-        "SIMPLEPIM_BACKEND": "simulator",
-        "UPMEM_BACKEND": "simulator",
-        "UPMEM_MODE": "simulator",
-        "UPMEM_TARGET": "simulator",
-        "UPMEM_EXECUTION_MODE": "simulator",
-        "UPMEM_PROFILE": "backend=simulator",
-        "UPMEM_PROFILE_BASE": "simulator",
-        "DPU_BACKEND": "simulator",
-    }
-
-    child = sanitised_hardware_environment(environment)
-
-    assert "UPMEM_PROFILE" not in child
-    assert "UPMEM_PROFILE_BASE" not in child
-    assert "DPU_BACKEND" not in child
-    for name in (
-        "DPU_PROFILE",
-        "SIMPLEPIM_BACKEND",
-        "UPMEM_BACKEND",
-        "UPMEM_MODE",
-        "UPMEM_TARGET",
-        "UPMEM_EXECUTION_MODE",
-    ):
-        assert name not in child
-    assert hardware_environment_metadata(environment) == {
-        "upmem_rank_path_requested": None,
-        "upmem_sdk_profile_effective": None,
-    }
+ROOT = Path(__file__).resolve().parents[1]
+NATIVE = ROOT / "native" / "upmem" / "runtime"
+TASK_HASH = "ab" * 32
 
 
-def test_rank_selector_sets_only_the_project_controlled_sdk_profile() -> None:
-    environment = {
-        "UPMEM_HW_RANK_PATH": "/dev/dpu_rank20",
-        "DPU_PROFILE": "simulator",
-        "SIMPLEPIM_BACKEND": "simulator",
-        "UPMEM_BACKEND": "simulator",
-        "UPMEM_MODE": "simulator",
-        "UPMEM_TARGET": "simulator",
-        "UPMEM_EXECUTION_MODE": "simulator",
-        "UPMEM_PROFILE": "backend=simulator",
-        "UPMEM_PROFILE_BASE": "simulator",
-        "DPU_BACKEND": "simulator",
-    }
-
-    child = sanitised_hardware_environment(environment)
-
-    assert child["UPMEM_PROFILE"] == (
-        "backend=hw,rankPath=/dev/dpu_rank20,ignoreVpd=true"
-    )
-    assert "UPMEM_HW_RANK_PATH" not in child
-    assert "UPMEM_PROFILE_BASE" not in child
-    assert "DPU_BACKEND" not in child
-    for name in (
-        "DPU_PROFILE",
-        "SIMPLEPIM_BACKEND",
-        "UPMEM_BACKEND",
-        "UPMEM_MODE",
-        "UPMEM_TARGET",
-        "UPMEM_EXECUTION_MODE",
-    ):
-        assert name not in child
-    assert hardware_environment_metadata(environment) == {
-        "upmem_rank_path_requested": "/dev/dpu_rank20",
-        "upmem_sdk_profile_effective": child["UPMEM_PROFILE"],
-    }
+def _payload(count: int, numeric_mode: str) -> bytes:
+    if numeric_mode == protocol.NUMERIC_FLOAT32:
+        return struct.pack("<" + "f" * count, *range(1, count + 1))
+    return bytes((index % 127 for index in range(1, count + 1)))
 
 
-@pytest.mark.parametrize(
-    "rank_path",
-    ("", "/dev/dpu_rank", "/dev/dpu_rank-1", "/dev/dpu_rank1/", "/tmp/dpu_rank1"),
-)
-def test_rank_selector_rejects_invalid_values_before_native_execution(
-    rank_path: str,
-) -> None:
-    with pytest.raises(
-        ValueError, match="hardware_profile_violation: UPMEM_HW_RANK_PATH"
-    ):
-        sanitised_hardware_environment({"UPMEM_HW_RANK_PATH": rank_path})
-
-
-def _prepared_input(
-    *, quantization_mode: str = "per_task_input_quantize"
-) -> GenericTaskPreparationInput:
-    task = contraction_task("generic", shape=(2, 3, 2))
-    left = np.array([[0.1, -0.2, 0.3], [0.4, -0.5, 0.6]], dtype=np.float64)
-    right = np.array([[0.2, 0.3], [-0.4, 0.5], [0.6, -0.7]], dtype=np.float64)
-    return GenericTaskPreparationInput(
-        task=task,
-        left_tensor=TensorValue(
-            TensorSpec(
-                "generic_left", task.left_labels, left.shape, "dense", dtype="float64"
-            ),
-            left,
-        ),
-        right_tensor=TensorValue(
-            TensorSpec(
-                "generic_right",
-                task.right_labels,
-                right.shape,
-                "dense",
-                dtype="float64",
-            ),
-            right,
-        ),
-        quantization_mode=quantization_mode,
-    )
-
-
-@pytest.mark.parametrize(
-    ("value", "kind"),
-    [
-        (np.array([1, 2], dtype=np.int64), "real"),
-        (np.array([1.0 + 0.0j], dtype=np.complex128), "complex_zero_imag"),
-        (np.array([1.0 + 2.0j], dtype=np.complex128), "complex_nonzero"),
-        (np.array([np.nan], dtype=np.float64), "nonfinite"),
-    ],
-)
-def test_numeric_contract_classifies_without_discarding_complexity(
-    value: np.ndarray, kind: str
-) -> None:
-    result = classify_numeric(value)
-
-    assert result.kind == kind
-    assert result.has_nonfinite is (kind == "nonfinite")
-    assert result.is_complex is (kind in {"complex_zero_imag", "complex_nonzero"})
-
-
-def test_transfer_accounting_requires_directional_total_and_marks_bus_unobserved() -> (
-    None
-):
-    result = transfer_accounting(
-        64,
-        24,
-        declared_total_bytes=88,
-        prepared_h2d_bytes=48,
-        prepared_d2h_bytes=16,
-        control_bytes=16,
-        alignment_padding_bytes=8,
-    )
-
-    assert (
-        result["actual_transfer_bytes"]
-        == result["actual_h2d_bytes"] + result["actual_d2h_bytes"]
-    )
-    assert result["actual_transfer_bytes_invariant"] == "passed"
-    assert result["physical_bus_bytes_available"] is False
-    assert result["transfer_components"]["control_structure_bytes"] == 16
-
-    with pytest.raises(ValueError, match="invariant failed"):
-        transfer_accounting(64, 24, declared_total_bytes=87)
-
-
-@pytest.mark.parametrize(
-    ("task", "caps", "reason"),
-    [
-        (
-            replace(
-                contraction_task("rank"),
-                input_shapes=((1,) * 17, (1, 1)),
-                output_shape=(1,),
-            ),
-            GenericTaskPreparationCaps(),
-            "rank_cap_exceeded",
-        ),
-        (
-            replace(
-                contraction_task("elements"),
-                input_shapes=((257, 257), (257, 1)),
-                output_shape=(257, 1),
-            ),
-            GenericTaskPreparationCaps(),
-            "element_count_cap_exceeded",
-        ),
-        (
-            contraction_task("contracted", shape=(1, 5000, 1)),
-            GenericTaskPreparationCaps(max_contracted_combinations=4096),
-            "contracted_combination_cap_exceeded",
-        ),
-        (
-            contraction_task("overflow", shape=(1, 150000, 1)),
-            GenericTaskPreparationCaps(
-                max_tensor_elements=200000, max_contracted_combinations=200000
-            ),
-            "int32_accumulation_overflow_risk",
-        ),
-        (
-            replace(contraction_task("labels"), contracted_labels=(9,)),
-            GenericTaskPreparationCaps(),
-            "label_mapping_invalid",
-        ),
-    ],
-)
-def test_generic_structural_feasibility_has_stable_rejection_boundaries(
-    task, caps, reason: str
-) -> None:
-    result = generic_structural_feasibility(task, caps)
-
-    assert result.feasible is False
-    assert result.reason == reason
-
-
-def test_generic_preparation_is_json_safe_and_matches_float32_loop() -> None:
-    result = prepare_generic_task(_prepared_input(quantization_mode="none"))
-
-    assert result.status == "prepared"
-    assert result.metadata["input_dtype_on_dpu"] == "float32"
-    assert result.metadata["accumulator_dtype_on_dpu"] == "float32"
-    assert result.metadata["scaling_applied"] is False
-    assert result.validation_metrics["max_abs_error"] == 0.0
-    assert json.dumps(result.to_json_dict())
-
-    operands = result.prepared_operands
-    assert operands is not None
-    expected = generic_loop_reference_float32(
-        operands.left_operand,
-        operands.right_operand,
-        output_shape=result.output_shape,
-        left_strides=result.left_strides,
-        right_strides=result.right_strides,
-        output_strides=result.output_strides,
-        output_to_left_axes=result.output_to_left_axes,
-        output_to_right_axes=result.output_to_right_axes,
-        contracted_to_left_axes=result.contracted_to_left_axes,
-        contracted_to_right_axes=result.contracted_to_right_axes,
-        contracted_dims=result.contracted_dims,
-    )
-    np.testing.assert_array_equal(operands.expected_reference_output, expected)
-
-
-def test_generic_preparation_rejects_nonfinite_complex_and_wrong_dtype() -> None:
-    prepared = _prepared_input()
-    complex_left = np.ones(prepared.left_tensor.array.shape, dtype=np.complex128)
-    complex_left[0, 0] += 1.0j
-    complex_input = replace(
-        prepared,
-        left_tensor=TensorValue(prepared.left_tensor.spec, complex_left),
-    )
-    assert (
-        prepare_generic_task(complex_input).reason
-        == "complex_generic_loop_not_implemented"
-    )
-
-    nonfinite_input = replace(
-        prepared,
-        left_tensor=TensorValue(
-            prepared.left_tensor.spec, np.full(prepared.left_tensor.array.shape, np.nan)
-        ),
-    )
-    assert (
-        prepare_generic_task(nonfinite_input).reason == "nonfinite_values_not_supported"
-    )
-
-    bad_dtype = replace(prepared, fixed_point_spec=FixedPointSpec(route_dtype="int16"))
-    assert prepare_generic_task(bad_dtype).reason == "unsupported_dtype"
-
-
-def test_generic_boundary_reference_is_non_gemm_and_exact() -> None:
-    workload = build_generic_boundary_workload()
-    reference = execute_task_sequence_np_einsum(workload.graph, workload.network)[0]
-
-    assert workload.case_id == GENERIC_BOUNDARY_CASE_ID
-    assert workload.graph.tasks[0].structure == "generic_boundary"
-    np.testing.assert_allclose(
-        reference,
-        np.einsum(
-            "abc,cde->abde",
-            workload.network.tensors[0].array,
-            workload.network.tensors[1].array,
-        ),
-    )
-    assert workload.manifest["input_ranks"] == (3, 3)
-
-
-def test_generic_bridge_rejects_path_escape_and_never_claims_disabled_execution(
+def _request(
     tmp_path: Path,
-) -> None:
-    preparation = prepare_generic_task(_prepared_input())
-    write_generic_bridge_input_manifest(preparation, tmp_path)
-    payload = json.loads((tmp_path / "input_manifest.json").read_text(encoding="utf-8"))
-    payload["operands"]["left"]["relative_path"] = "../escape.npy"
-    (tmp_path / "input_manifest.json").write_text(json.dumps(payload), encoding="utf-8")
-
-    rejected = execute_generic_bridge(
-        tmp_path / "input_manifest.json", execute_external=False
-    )
-    assert rejected.execution_status == "failed"
-    assert rejected.reason == "input_manifest_invalid"
-    assert rejected.external_command_executed is False
-    assert (
-        read_generic_bridge_output_manifest(tmp_path / "output_manifest.json").status
-        == "failed"
-    )
-
-    preparation_dir = tmp_path / "disabled"
-    preparation_dir.mkdir()
-    write_generic_bridge_input_manifest(preparation, preparation_dir)
-    disabled = execute_generic_bridge(
-        preparation_dir / "input_manifest.json", execute_external=False
-    )
-    assert disabled.execution_status == "not_implemented"
-    assert disabled.execution_implemented is False
-    assert disabled.external_command_executed is False
-
-
-def test_generic_task_bridge_public_harness_is_skipped_without_external_execution(
-    tmp_path: Path,
-) -> None:
-    result = run_generic_task_bridge(tmp_path, case="bell_2q", execute_external=False)
-
-    assert result.status == "skipped"
-    assert result.reason == "generic_external_execution_disabled"
-    assert result.external_command_executed is False
-    assert result.summary["cpu_fallback_used"] is False
-    assert result.summary["dpu_program_invocations"] == 0
-
-
-@pytest.mark.parametrize(
-    "kwargs",
-    [
-        {"policy": "unsupported-policy"},
-        {"quantization_mode": "unsupported-mode"},
-        {"schedule_mode": "frontier"},
-        {"dpu_group_count": 0},
-    ],
-)
-def test_taskgraph_runtime_rejects_unsupported_modes_without_cpu_fallback(
-    minimal_graph, tmp_path: Path, kwargs: dict[str, object]
-) -> None:
-    result = execute_upmem_taskgraph_runtime(
-        graph=minimal_graph.graph,
-        network=minimal_graph.network,
-        case_id="fixture",
-        policy=kwargs.pop("policy", "generic-only"),
-        quantization_mode=kwargs.pop("quantization_mode", "per_task_input_quantize"),
-        bridge_root=tmp_path,
-        execute_external=False,
-        **kwargs,
-    )
-
-    assert result.status == "unsupported"
-    assert result.summary["cpu_fallback_used"] is False
-    assert result.output is None
-
-
-def test_taskgraph_runtime_requires_external_sdk_execution(
-    minimal_graph, tmp_path: Path
-) -> None:
-    result = execute_upmem_taskgraph_runtime(
-        graph=minimal_graph.graph,
-        network=minimal_graph.network,
-        case_id="fixture",
-        policy="generic-only",
-        quantization_mode="per_task_input_quantize",
-        bridge_root=tmp_path,
-        execute_external=False,
-    )
-
-    assert result.reason == "external_execution_required"
-    assert result.summary["upmem_execution_mode"] == "sdk_simulator"
-    assert result.summary["hardware_speedup_applicable"] is False
-
-
-def test_strict_runtime_assertions_and_preflight_expose_failure_stage() -> None:
-    passing = strict_upmem_runtime_assertions(
-        {
-            "total_tasks": 3,
-            "dpu_program_executed_task_count": 3,
-            "dpu_program_executed_all_tasks": True,
-            "cpu_fallback_used": False,
-            "native_sdk_control_path": True,
-            "simplepim_api_used": False,
-        }
-    )
-    failing = strict_upmem_runtime_assertions(
-        {
-            "total_tasks": 3,
-            "dpu_program_executed_task_count": 2,
-            "cpu_fallback_used": True,
-        }
-    )
-
-    assert passing["status"] == "passed"
-    assert failing["status"] == "failed"
-    assert "cpu_fallback_task_count_zero" in failing["reason"]
-    assert (
-        upmem_sdk_simulator_preflight_payload("skipped", "sdk_missing")[
-            "required_conditions"
-        ]["upmem_sdk_present"]
-        is False
-    )
-
-
-@pytest.mark.parametrize(
-    "updates",
-    [
-        {"simulator_kernel_executed": True},
-        {"cpu_fallback_used": True},
-        {"release_confirmed": False},
-        {"hardware_release_verified": False},
-        {"actual_transfer_bytes": 1},
-        {"failure_stage": "release_failed"},
-        {"tasklets": 2},
-    ],
-)
-def test_resident_response_validator_rejects_unsafe_evidence(
-    minimal_graph, resident_hardware_suite, tmp_path: Path, updates: dict[str, object]
-) -> None:
-    _, manifest = resident_package_fixture(minimal_graph, tmp_path)
-    response = valid_resident_response(manifest)
-    assert _resident_response_valid(response, manifest, resident_hardware_suite.profile)
-    assert not _resident_response_valid(
-        record_with_updates(response, **updates),
-        manifest,
-        resident_hardware_suite.profile,
-    )
-
-
-def test_resident_variant_fake_native_session_enforces_opt_in_and_projects_contract(
-    minimal_graph, resident_hardware_suite, monkeypatch, tmp_path: Path
-) -> None:
-    reference, _ = execute_task_sequence_np_einsum(
-        minimal_graph.graph, minimal_graph.network
-    )
-    session_root = tmp_path / "native_session"
-    session_root.mkdir()
-    dpu_binary = session_root / "dpu_resident"
-    dpu_binary.write_bytes(b"fake-dpu")
-    native_build = HardwareSessionBuild(
-        session_root=session_root,
-        source_snapshot=session_root,
-        build_dir=session_root,
-        host_binary=session_root / "host",
-        dpu_binary=dpu_binary,
-        source_tree_hash="source",
-        host_binary_hash="host",
-        dpu_binary_hash="dpu",
-        build_time_s=0.0,
-        build_command=("fake-build",),
-        sdk_tools={"fake": "fixture"},
-    )
-    mismatch = False
-    captured_manifests: list[dict[str, object]] = []
-
-    def fake_native_session(
-        build, *, manifest_path, response_path, profile, environment
-    ):
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        captured_manifests.append(manifest)
-        output = np.asarray(reference).copy()
-        if mismatch:
-            output.flat[0] += 1.0
-        for item in manifest["final_outputs"]:
-            component = str(item["component"])
-            values = output.imag if component == "imag" else output.real
-            np.asarray(values, dtype="<f4").ravel().tofile(
-                build.session_root / str(item["output_path"])
+    *,
+    numeric_mode: str = protocol.NUMERIC_FLOAT32,
+    dpu_count: int = 2,
+    sequence: int = 0,
+) -> protocol.V4RequestArtifact:
+    profile = protocol.V4Profile(dpu_count=dpu_count, numeric_mode=numeric_mode)
+    payload = _payload(3, numeric_mode)
+    return protocol.build_v4_request(
+        tmp_path,
+        profile=profile,
+        canonical_batch_count=1,
+        canonical_m=1,
+        canonical_n=1,
+        canonical_k=3,
+        work_units=[
+            protocol.V4WorkUnit(
+                local_dpu_id=0,
+                tile_id=1,
+                batch_index=0,
+                m_offset=0,
+                n_offset=0,
+                k_offset=0,
+                m_elements=1,
+                n_elements=1,
+                k_elements=3,
+                a_payload=payload,
+                b_payload=payload,
             )
-        response = valid_resident_response(
-            manifest, steady_state_graph_execution_s=0.001
-        )
-        response_path.write_text(json.dumps(response), encoding="utf-8")
-        return ResidentGraphSessionExecution(
-            status="completed",
-            failure_stage=None,
-            response_path=response_path,
-            response=response,
-            process_time_s=0.0,
-            command=("fake-native",),
-            stdout_snippet="",
-            stderr_snippet="",
-        )
-
-    monkeypatch.setattr(
-        resident_runner, "execute_resident_graph_session", fake_native_session
+        ],
+        task_contract_sha256=TASK_HASH,
+        request_sequence=sequence,
     )
-    kwargs = {
-        "root_dir": tmp_path,
-        "run_dir": tmp_path / "run",
-        "native_build": native_build,
-        "profile": resident_hardware_suite.profile,
-        "suite_id": "fixture_resident",
-        "case_id": "fixture",
-        "variant_id": "fixture_variant",
-        "graph": minimal_graph.graph,
-        "network": minimal_graph.network,
-        "reference_output": reference,
-        "quantization_mode": "none",
-        "environment": {"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1"},
+
+
+def _response(
+    artifact: protocol.V4RequestArtifact,
+    profile: protocol.V4Profile,
+) -> dict[str, Any]:
+    simulator = profile.execution_target == protocol.EXECUTION_TARGET_SIMULATOR
+    per_dpu: list[dict[str, int]] = []
+    h2d_bytes = 0
+    d2h_bytes = 0
+    for work_unit in artifact.work_units:
+        unit_h2d = (
+            work_unit.a_transfer_bytes
+            + work_unit.b_transfer_bytes
+            + protocol.CONTROL_BYTES
+        )
+        unit_d2h = work_unit.c_transfer_bytes + protocol.COMPLETION_BYTES
+        h2d_bytes += unit_h2d
+        d2h_bytes += unit_d2h
+        per_dpu.append(
+            {
+                "dpu_id": work_unit.local_dpu_id,
+                "tile_id": work_unit.tile_id,
+                "completion_status": protocol.STATUS_COMPLETED,
+                "processed_elements": (
+                    0
+                    if work_unit.flags & protocol.FLAG_ZERO_WORK
+                    else work_unit.m_elements * work_unit.n_elements
+                ),
+                "h2d_bytes": unit_h2d,
+                "d2h_bytes": unit_d2h,
+            }
+        )
+    return {
+        "event": "RESPONSE",
+        "status": "completed",
+        "target_requested": "simulator" if simulator else "hardware",
+        "target_observed": "sdk_simulator" if simulator else "physical_hardware",
+        "rank_path": None if simulator else profile.rank_path,
+        "request_sequence": artifact.request_sequence,
+        "request_output_elements": artifact.request_output_elements,
+        "global_output_elements": artifact.global_output_elements,
+        "global_completeness": False,
+        "task_contract_sha256": artifact.task_contract_sha256,
+        "request_sha256": artifact.manifest_sha256,
+        "request_manifest_sha256": artifact.manifest_sha256,
+        "sidecar_sha256": artifact.sidecar_sha256,
+        "dispatch_mode": "bulk_set_synchronous_v1",
+        "bulk_set_launch_verified": True,
+        "requested_dpu_count": profile.dpu_count,
+        "allocated_dpu_count": profile.dpu_count,
+        "tasklets_per_dpu": profile.tasklets_per_dpu,
+        "hardware_allocation_verified": not simulator,
+        "allocation_verified": True,
+        "native_kernel_executed": True,
+        "hardware_kernel_executed": not simulator,
+        "simulator_kernel_executed": simulator,
+        "cpu_fallback_used": False,
+        "hardware_functionality_evidence": not simulator,
+        "simulator_functionality_evidence": simulator,
+        **protocol.native_execution_identity(profile.execution_target),
+        "transfer": {
+            "h2d_bytes": h2d_bytes,
+            "d2h_bytes": d2h_bytes,
+            "total_bytes": h2d_bytes + d2h_bytes,
+        },
+        "per_dpu": per_dpu,
     }
 
-    with pytest.raises(ValueError, match="UPMEM_ALLOW_PHYSICAL_HARDWARE=1"):
-        resident_runner.execute_resident_variant(
-            **{**kwargs, "request_id": "missing-opt-in", "environment": {}}
-        )
-    assert captured_manifests == []
 
-    execution = resident_runner.execute_resident_variant(
-        **{**kwargs, "request_id": "valid-request"}
-    )
+def _response_validator(profile: protocol.V4Profile) -> native_session.V4Session:
+    """Create only the object state used by response validation, not a session."""
 
-    assert execution.status == "completed"
-    assert execution.summary["policy_reference_validation"]["passed"] is True
-    assert execution.summary["full_precision_accuracy"]["passed"] is True
-    assert execution.summary["release_confirmed"] is True
-    assert execution.summary["physical_dependency_chain_verified"] is True
+    validator = object.__new__(native_session.V4Session)
+    validator.profile = profile
+    return validator
+
+
+def test_v4_struct_layout_and_field_order_match_native_header() -> None:
+    header = (NATIVE / "protocol.h").read_text(encoding="ascii")
+
+    assert protocol.VERSION == 4
+    assert protocol.HEADER_FORMAT == "<8s10I7Q32s32s"
+    assert protocol.WORK_UNIT_FORMAT == "<2I5Q9I"
+    assert protocol.CONTROL_FORMAT == "<18I"
+    assert protocol.COMPLETION_FORMAT == "<4I3Q"
     assert (
-        execution.summary["execution_plan_hash"]
-        == execution.summary["execution_plan"]["execution_plan_hash"]
-    )
-    assert execution.summary["provider_id"] == "upmem_resident_hardware"
-    assert (
-        execution.summary["provider_metadata"]["backend_id"]
-        == resident_hardware_suite.profile.backend_id
-    )
-    assert execution.summary["execution_plan_provenance"] == "host_declared"
-    assert (
-        execution.summary["execution_plan_native_package_binding"]
-        == "not_native_package_bound"
-    )
-    assert execution.summary["resource_context"]["allocation_status"] == "verified"
-    assert execution.summary["resource_context"]["allocated_dpu_count"] == 1
-    assert execution.summary["resource_context"]["allocated_tasklets_per_dpu"] == 1
-    assert execution.summary["execution_contract_status"] == "passed"
-    assert execution.summary["policy_reference_status"] == "passed"
-    assert execution.summary["full_precision_accuracy_status"] == "passed"
-    assert execution.summary["scientific_validation_status"] == "passed"
-    assert (
-        execution.summary["execution_plan"]["validation"][
-            "scientific_validation_status"
-        ]
-        == "passed"
-    )
-    manifest = captured_manifests[0]
-    expected_h2d = (
-        int(manifest["initial_h2d_bytes"])
-        + int(manifest["descriptor_h2d_bytes"])
-        + int(manifest["control_h2d_bytes"])
-    )
-    expected_d2h = int(manifest["final_d2h_bytes"])
-    assert execution.summary["actual_h2d_bytes"] == expected_h2d
-    assert execution.summary["actual_d2h_bytes"] == expected_d2h
-    assert execution.summary["actual_transfer_bytes"] == expected_h2d + expected_d2h
-    assert execution.summary["actual_transfer_bytes_invariant"] == "passed"
+        protocol.HEADER_BYTES,
+        protocol.WORK_UNIT_BYTES,
+        protocol.CONTROL_BYTES,
+        protocol.COMPLETION_BYTES,
+    ) == (168, 84, 72, 40)
 
-    quantized_plan, quantized_resources = resident_runner._resident_execution_plan(
-        minimal_graph.graph,
-        resident_hardware_suite.profile,
-        quantization_mode="per_task_resident_requantize",
+    for declaration in (
+        "char magic[8];",
+        "uint32_t version;",
+        "uint32_t work_unit_count;",
+        "uint64_t canonical_k;",
+        "uint64_t request_sequence;",
+        "unsigned char task_contract_sha256[32];",
+        "unsigned char request_sha256[32];",
+    ):
+        assert declaration in header
+    assert header.index("char magic[8];") < header.index("uint32_t version;")
+    assert header.index("uint64_t canonical_k;") < header.index(
+        "uint64_t request_sequence;"
     )
-    assert quantized_plan.numeric.input_dtype == "int8"
-    assert quantized_plan.numeric.accumulator_dtype == "int32"
-    assert quantized_resources.allocation_status == "not_run"
-
-    normalized = resident_runner._normalized_record(
-        {"case_id": "fixture"},
-        resident_hardware_suite,
-        "fixture_variant",
-        "none",
-        0,
-        0,
-        execution,
-        tmp_path / "run",
-    )
-    assert normalized["suite_id"] == resident_hardware_suite.suite["suite_id"]
-    assert normalized["persistent_session_reused"] is False
-    assert normalized["execution_plan_provenance"] == "host_declared"
-    assert (
-        normalized["execution_plan_native_package_binding"]
-        == "not_native_package_bound"
-    )
-    assert report_pack_module._is_valid_one_dpu_record(normalized)
-    run_resources = resident_runner._resident_run_resource_context(
-        resident_hardware_suite.profile, [normalized]
-    )
-    assert run_resources.allocation_status == "verified"
-    assert run_resources.requested_dpu_count == 1
-    assert run_resources.allocated_dpu_count == 1
-    assert run_resources.requested_tasklets_per_dpu == 1
-    assert run_resources.allocated_tasklets_per_dpu == 1
-    failed_record = resident_runner._failure_record(
-        resident_hardware_suite,
-        "native_build_failed",
-        {"case_id": "fixture"},
-        environment={"UPMEM_HW_RANK_PATH": "/dev/dpu_rank20"},
-    )
-    assert failed_record["suite_id"] == resident_hardware_suite.suite["suite_id"]
-    assert failed_record["upmem_rank_path_requested"] == "/dev/dpu_rank20"
-    assert failed_record["upmem_sdk_profile_effective"] == (
-        "backend=hw,rankPath=/dev/dpu_rank20,ignoreVpd=true"
-    )
-
-    inaccurate_reference = np.asarray(reference).copy()
-    inaccurate_reference.flat[0] += 1.0
-    accuracy_failed = resident_runner.execute_resident_variant(
-        **{
-            **kwargs,
-            "request_id": "full-precision-mismatch-request",
-            "reference_output": inaccurate_reference,
-        }
-    )
-    assert accuracy_failed.status == "completed"
-    assert accuracy_failed.summary["policy_reference_status"] == "passed"
-    assert accuracy_failed.summary["full_precision_accuracy_status"] == "failed"
-    assert accuracy_failed.summary["scientific_validation_status"] == "failed"
-    assert (
-        accuracy_failed.summary["execution_plan"]["validation"][
-            "scientific_validation_status"
-        ]
-        == "failed"
-    )
-    # This field deliberately retains its historical policy-reference/transfer meaning.
-    assert accuracy_failed.summary["validation_status"] == "passed"
-
-    mismatch = True
-    failed = resident_runner.execute_resident_variant(
-        **{**kwargs, "request_id": "mismatch-request"}
-    )
-    assert failed.status == "failed"
-    assert failed.summary["policy_reference_validation"]["passed"] is False
+    assert "_Static_assert(sizeof(execution_plan_v4_header_t) == 168u" in header
+    assert "_Static_assert(sizeof(execution_plan_v4_work_unit_t) == 84u" in header
+    assert "_Static_assert(sizeof(execution_plan_v4_control_t) == 72u" in header
+    assert "_Static_assert(sizeof(execution_plan_v4_completion_t) == 40u" in header
 
 
-def test_resident_prepare_only_has_one_dpu_profile_and_no_allocation(
+def test_v4_request_is_deterministic_and_binds_contract_and_manifest_hash(
     tmp_path: Path,
 ) -> None:
-    from .support import RESIDENT_SUITE_PATH
+    first = _request(tmp_path / "first", sequence=7)
+    second = _request(tmp_path / "second", sequence=7)
 
-    result = prepare_upmem_hardware_taskgraph_resident(
-        tmp_path,
-        suite_path=RESIDENT_SUITE_PATH,
-        build=False,
-        environment={},
+    assert first.manifest_path.read_bytes() == second.manifest_path.read_bytes()
+    assert first.sidecar_path.read_bytes() == second.sidecar_path.read_bytes()
+    assert first.manifest_sha256 == second.manifest_sha256
+    assert first.sidecar_sha256 == second.sidecar_sha256
+    assert first.task_contract_sha256 == TASK_HASH
+    assert first.header.task_contract_sha256 == bytes.fromhex(TASK_HASH)
+    assert first.header.request_sha256 == bytes.fromhex(first.manifest_sha256)
+    assert hashlib.sha256(first.manifest_path.read_bytes()).hexdigest() == (
+        first.manifest_sha256
     )
-    summary = json.loads(result.summary_path.read_text(encoding="utf-8"))
-
-    assert result.status == "prepared"
-    assert summary["profile"]["requested_dpu_count"] == 1
-    assert summary["profile"]["tasklets_per_dpu"] == 1
-    assert summary["dpu_allocation_attempted"] is False
-    assert summary["dpu_launch_attempted"] is False
-    assert summary["provider_id"] == "upmem_resident_hardware"
-    assert summary["prepared_cases"][0]["path_variants"][0]["execution_plan_hash"]
-    assert (
-        summary["prepared_cases"][0]["path_variants"][0]["execution_plan_provenance"]
-        == "host_declared"
+    assert hashlib.sha256(first.sidecar_path.read_bytes()).hexdigest() == (
+        first.sidecar_sha256
     )
-    assert (
-        summary["prepared_cases"][0]["path_variants"][0][
-            "execution_plan_native_package_binding"
-        ]
-        == "not_native_package_bound"
+    assert protocol.unpack_v4_header(first.sidecar_path.read_bytes()[: protocol.HEADER_BYTES]) == (
+        first.header
     )
-    assert summary["resource_context"]["allocation_status"] == "not_run"
-    assert summary["resource_context"]["allocated_dpu_count"] is None
-    assert summary["resource_context"]["allocated_tasklets_per_dpu"] is None
-    resource_context = summary["prepared_cases"][0]["path_variants"][0][
-        "resource_context"
-    ]
-    assert resource_context["allocation_status"] == "not_run"
-    assert resource_context["requested_dpu_count"] == 1
-    assert resource_context["requested_tasklets_per_dpu"] == 1
-    assert resource_context["allocated_dpu_count"] is None
-    assert resource_context["allocated_tasklets_per_dpu"] is None
 
 
-def test_completed_resident_suite_summary_uses_verified_row_allocation(
-    resident_hardware_suite, monkeypatch, tmp_path: Path
+@pytest.mark.parametrize(
+    ("numeric_mode", "expected_operand_bytes"),
+    [
+        (protocol.NUMERIC_FLOAT32, 16),
+        (protocol.NUMERIC_HOST_PACKED_INT8, 8),
+    ],
+)
+def test_v4_payloads_are_padded_and_mram_aligned(
+    tmp_path: Path,
+    numeric_mode: str,
+    expected_operand_bytes: int,
 ) -> None:
-    run_dir = tmp_path / "run"
-    (run_dir / "config").mkdir(parents=True)
-    session_root = tmp_path / "native_session"
-    session_root.mkdir()
-    native_build = HardwareSessionBuild(
-        session_root=session_root,
-        source_snapshot=session_root,
-        build_dir=session_root,
-        host_binary=session_root / "host",
-        dpu_binary=session_root / "dpu_resident",
-        source_tree_hash="source",
-        host_binary_hash="host",
-        dpu_binary_hash="dpu",
-        build_time_s=0.0,
-        build_command=("fake-build",),
-        sdk_tools={"fake": "fixture"},
-    )
-    suite = replace(
-        resident_hardware_suite,
-        suite={
-            **resident_hardware_suite.suite,
-            "cases": [{"case_id": "fixture"}],
-        },
-    )
-    record = {
-        "status": "completed",
-        "execution_plan_hash": "plan",
-        "resource_context": {
-            "requested_dpu_count": 1,
-            "allocated_dpu_count": 1,
-            "requested_tasklets_per_dpu": 1,
-            "allocated_tasklets_per_dpu": 1,
-            "allocation_status": "verified",
-        },
-    }
+    artifact = _request(tmp_path, numeric_mode=numeric_mode)
+    active, zero = artifact.work_units
 
-    monkeypatch.setattr(
-        resident_runner,
-        "build_resident_hardware_session",
-        lambda *args, **kwargs: native_build,
+    assert active.a_transfer_bytes == expected_operand_bytes
+    assert active.b_transfer_bytes == expected_operand_bytes
+    assert active.c_transfer_bytes == 8
+    assert all(
+        value % protocol.MRAM_ALIGNMENT == 0
+        for value in (
+            active.a_transfer_bytes,
+            active.b_transfer_bytes,
+            active.c_transfer_bytes,
+            active.a_offset_bytes,
+            active.b_offset_bytes,
+            active.c_offset_bytes,
+        )
     )
-    monkeypatch.setattr(
-        resident_runner, "prepare_resident_case", lambda *args, **kwargs: {}
+    assert len((artifact.root / active.a_path).read_bytes()) == expected_operand_bytes
+    assert len((artifact.root / active.b_path).read_bytes()) == expected_operand_bytes
+    assert (artifact.root / active.a_path).read_bytes()[-1] == 0
+    assert zero.flags == protocol.FLAG_ZERO_WORK
+    assert (zero.a_transfer_bytes, zero.b_transfer_bytes, zero.c_transfer_bytes) == (
+        0,
+        0,
+        0,
     )
-    monkeypatch.setattr(
-        resident_runner,
-        "_run_resident_case",
-        lambda **kwargs: (
-            [record],
-            [],
-            {"case_id": "fixture", "status": "passed"},
+
+
+def test_v4_builder_rejects_unsafe_paths_and_k_bounds(tmp_path: Path) -> None:
+    for path in ("../escape", "/absolute", "nested\\escape"):
+        with pytest.raises(ValueError, match="unsafe"):
+            protocol._safe_relative(path)
+
+    with pytest.raises(ValueError, match="canonical dimensions exceed native bounds"):
+        protocol.build_v4_request(
+            tmp_path,
+            profile=protocol.V4Profile(
+                dpu_count=1,
+                numeric_mode=protocol.NUMERIC_HOST_PACKED_INT8,
+            ),
+            canonical_batch_count=1,
+            canonical_m=1,
+            canonical_n=1,
+            canonical_k=protocol.MAX_CONTRACTED + 1,
+            work_units=[
+                protocol.V4WorkUnit(
+                    0,
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    1,
+                    1,
+                    protocol.MAX_CONTRACTED + 1,
+                    b"x",
+                    b"x",
+                )
+            ],
+            task_contract_sha256=TASK_HASH,
+            request_sequence=0,
+        )
+
+    header = (NATIVE / "protocol.h").read_text(encoding="ascii")
+    assert protocol.MAX_CONTRACTED * 128 * 128 <= 2**31 - 1
+    assert "EXECUTION_PLAN_V4_MAX_CONTRACTED * 128u * 128u <= 2147483647u" in header
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda event: event.__setitem__("request_sha256", "00" * 32),
+            "request_sha256",
         ),
-    )
-    monkeypatch.setattr(
-        resident_runner, "write_normalized_records", lambda *args, **kwargs: None
-    )
-    monkeypatch.setattr(resident_runner, "capture_environment", lambda *args: {})
-
-    result = resident_runner.run_resident_suite(
-        tmp_path,
-        run_dir,
-        suite,
-        environment={"UPMEM_HW_RANK_PATH": "/dev/dpu_rank20"},
-    )
-    summary = json.loads(result.summary_path.read_text(encoding="utf-8"))
-    environment_artifact = json.loads(
-        (run_dir / "environment.json").read_text(encoding="utf-8")
-    )
-    manifest = json.loads((run_dir / "run_manifest.json").read_text(encoding="utf-8"))
-
-    assert result.status == "completed"
-    assert summary["resource_context"] == record["resource_context"]
-    expected_environment_metadata = {
-        "upmem_rank_path_requested": "/dev/dpu_rank20",
-        "upmem_sdk_profile_effective": (
-            "backend=hw,rankPath=/dev/dpu_rank20,ignoreVpd=true"
+        (
+            lambda event: event.__setitem__("per_dpu", "not-a-list"),
+            "lacks one result",
         ),
-    }
-    assert (
-        environment_artifact["hardware_environment_metadata"]
-        == expected_environment_metadata
+        (
+            lambda event: event["transfer"].__setitem__("total_bytes", 1),
+            "transfer total",
+        ),
+    ],
+)
+def test_v4_response_validator_rejects_tampered_or_malformed_evidence(
+    tmp_path: Path,
+    mutate: Any,
+    message: str,
+) -> None:
+    profile = protocol.V4Profile(dpu_count=2, rank_path="/dev/dpu_rank0")
+    artifact = _request(tmp_path)
+    response = _response(artifact, profile)
+    mutate(response)
+
+    with pytest.raises(protocol.V4ProtocolError, match=message):
+        _response_validator(profile)._validate_response(response, artifact)
+
+
+def test_v4_target_identities_keep_simulator_and_physical_facts_distinct(
+    tmp_path: Path,
+) -> None:
+    physical = protocol.V4Profile(dpu_count=1, rank_path="/dev/dpu_rank0")
+    simulator = protocol.V4Profile(
+        dpu_count=1,
+        execution_target=protocol.EXECUTION_TARGET_SIMULATOR,
     )
-    assert manifest["hardware_environment_metadata"] == expected_environment_metadata
+    artifact = _request(tmp_path, dpu_count=1)
+
+    assert protocol.native_execution_identity(physical.execution_target)[
+        "execution_class"
+    ] == "physical_v4_output_tile"
+    assert protocol.native_execution_identity(simulator.execution_target)[
+        "execution_class"
+    ] == "sdk_simulator_v4_output_tile"
+    _response_validator(physical)._validate_response(_response(artifact, physical), artifact)
+    _response_validator(simulator)._validate_response(
+        _response(artifact, simulator), artifact
+    )
+    with pytest.raises(ValueError, match="exactly one DPU"):
+        protocol.V4Profile(
+            dpu_count=2,
+            execution_target=protocol.EXECUTION_TARGET_SIMULATOR,
+        )
+
+
+def test_v4_native_sources_preserve_the_abi_and_build_contract() -> None:
+    protocol_header = (NATIVE / "protocol.h").read_text(encoding="ascii")
+    host = (NATIVE / "host.c").read_text(encoding="ascii")
+    dpu = (NATIVE / "dpu.c").read_text(encoding="ascii")
+    makefile = (NATIVE / "Makefile").read_text(encoding="ascii")
+
+    assert '#define EXECUTION_PLAN_V4_MAGIC "UPXDPV4"' in protocol_header
+    assert "#define EXECUTION_PLAN_V4_VERSION 4u" in protocol_header
+    assert "EXECUTION_PLAN_V4_MAX_TASKLETS 24u" in protocol_header
+    assert "UPMEM_ALLOW_PHYSICAL_HARDWARE" in host
+    assert "--target hardware|simulator" in host
+    assert "dpu_launch(v4_provider.set, DPU_SYNCHRONOUS)" in host
+    assert "request_manifest_sha256" in host
+    assert "cpu_fallback_used\\\":false" in host
+    assert "__mram_noinit uint8_t V4_MRAM" in dpu
+    assert "__dma_aligned uint8_t v4_input_window" in dpu
+    assert "mram_read" in dpu and "mram_write" in dpu
+    assert "v4 requires NR_TASKLETS in [1,24]" in dpu
+    assert "MAX_TASKLETS := 24" in makefile
+    assert "bin/host_upmem_execution_plan_v4_t%" in makefile
+    assert "bin/dpu_gemm_tile_v4_t%" in makefile
+    assert "NR_TASKLETS=$*" in makefile
