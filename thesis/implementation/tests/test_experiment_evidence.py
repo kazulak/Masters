@@ -10,7 +10,7 @@ from uuid import UUID
 import numpy as np
 import pytest
 
-import quantum_bench.evidence.canonical as canonical
+import quantum_bench.evidence as canonical
 from quantum_bench.evidence import (
     append_sample,
     append_session,
@@ -32,14 +32,20 @@ from quantum_bench.evidence import (
     write_manifest,
 )
 from quantum_bench.circuits import builtin_circuit
-from quantum_bench.experiment import run_direct_samples
+import quantum_bench.experiment as experiment
+from quantum_bench.experiment import run_direct_samples, run_session_samples
 from quantum_bench.model import (
     CircuitSpec,
     TensorNetwork,
     TensorSpec,
     make_simulation_job,
 )
-from quantum_bench.results import Measurement
+from quantum_bench.results import (
+    ExecutionFailed,
+    ExecutionSample,
+    Measurement,
+    UnsupportedExecution,
+)
 
 
 _RUN_ID = new_run_id()
@@ -48,6 +54,7 @@ _EXPERIMENT_ID = "e" * 64
 _ENVIRONMENT_ID = "d" * 64
 _POLICY_ID = "c" * 64
 _SESSION_ID = "session-1"
+_LIFECYCLE_RUN_ID = "12345678-1234-4234-8234-1234567890ab"
 
 
 def _measurement() -> dict[str, object]:
@@ -202,6 +209,42 @@ def _write_artifact_files(
             append_session(sessions_path, session)
     else:
         sessions_path.write_text("", encoding="utf-8")
+
+
+def _execution_sample(
+    *,
+    output: np.ndarray | None = None,
+    measurement: Measurement | None = None,
+) -> ExecutionSample:
+    return ExecutionSample(
+        output=np.array([1, 2] if output is None else output),
+        measurement=measurement
+        or Measurement(scope_id="steady_execution_v1", total_wall_s=1.0),
+        backend_facts={"backend": "test", "nested": (1, True)},
+        numeric_facts={"value": 1},
+    )
+
+
+def _execution_validation(
+    *,
+    policy_passed: bool = True,
+    full_precision_applicable: bool = False,
+    full_precision_passed: bool | None = None,
+) -> dict[str, object]:
+    return {
+        "policy_reference_applicable": True,
+        "policy_reference_passed": policy_passed,
+        "full_precision_threshold_applicable": full_precision_applicable,
+        "full_precision_passed": full_precision_passed,
+        "scientific_validation_passed": policy_passed
+        and (not full_precision_applicable or full_precision_passed is True),
+        "max_abs_error": 0.0,
+        "relative_l2_error": 0.0,
+    }
+
+
+def _read_jsonl(path: Path) -> list[dict[str, object]]:
+    return [json.loads(line) for line in path.read_text().splitlines()]
 
 
 def test_canonical_json_is_deterministic_and_rejects_non_json_values() -> None:
@@ -887,3 +930,597 @@ def test_finalizer_strictly_rejects_invalid_json_lines_without_rewrite(
         finalize_artifacts(directory, status="failed")
 
     assert manifest_path.read_bytes() == original
+
+
+def test_direct_lifecycle_orders_samples_and_validates_each_attempt(
+    tmp_path: Path,
+) -> None:
+    calls = 0
+    validated: list[ExecutionSample] = []
+
+    def run_once() -> ExecutionSample:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise ExecutionFailed("kernel", "no result", {"rank": 1})
+        return _execution_sample()
+
+    def validate(sample: ExecutionSample) -> dict[str, object]:
+        validated.append(sample)
+        return _execution_validation()
+
+    rows = run_direct_samples(
+        run_id=_LIFECYCLE_RUN_ID,
+        experiment_id=_EXPERIMENT_ID,
+        case_id="case",
+        route_id="route",
+        identities=_sample()["identities"],
+        warmups=1,
+        repetitions=2,
+        run_once=run_once,
+        samples_path=tmp_path / "samples.jsonl",
+        validate=validate,
+    )
+
+    assert [(row["sample_kind"], row["sample_index"]) for row in rows] == [
+        ("warmup", 0),
+        ("measurement", 0),
+        ("measurement", 1),
+    ]
+    assert len(validated) == 2
+    assert rows[0]["status"] == "success"
+    assert rows[1]["status"] == "failed"
+    assert rows[1]["failure"] == {"stage": "kernel", "reason": "no result"}
+    assert rows[2]["status"] == "success"
+    assert rows[0]["measurement"]["session_open_s"] is None
+    assert all(
+        value is None
+        for key, value in rows[0]["measurement"].items()
+        if key not in {"scope_id", "total_wall_s"}
+    )
+
+
+def test_direct_validation_failures_are_bounded_and_preserve_facts(
+    tmp_path: Path,
+) -> None:
+    failed = run_direct_samples(
+        run_id=_LIFECYCLE_RUN_ID,
+        experiment_id=_EXPERIMENT_ID,
+        case_id="failed-validation",
+        route_id="route",
+        identities=_sample()["identities"],
+        warmups=0,
+        repetitions=1,
+        run_once=_execution_sample,
+        samples_path=tmp_path / "failed.jsonl",
+        validate=lambda sample: _execution_validation(policy_passed=False),
+    )[0]
+    assert failed["status"] == "failed"
+    assert failed["measurement"] is None
+    assert failed["output_sha256"] is None
+    assert failed["backend_facts"] == {"backend": "test", "nested": [1, True]}
+    assert failed["numeric_facts"] == {"value": 1}
+    assert failed["failure"] == {
+        "stage": "validation",
+        "reason": "scientific validation failed",
+    }
+
+    def invalid_validator(sample: ExecutionSample) -> dict[str, object]:
+        raise RuntimeError("bad\n" + ("x" * 1000))
+
+    bounded = run_direct_samples(
+        run_id="22345678-1234-4234-8234-1234567890ab",
+        experiment_id=_EXPERIMENT_ID,
+        case_id="validator-error",
+        route_id="route",
+        identities=_sample()["identities"],
+        warmups=0,
+        repetitions=1,
+        run_once=_execution_sample,
+        samples_path=tmp_path / "validator.jsonl",
+        validate=invalid_validator,
+    )[0]
+    assert bounded["status"] == "failed"
+    assert bounded["validation"] is None
+    assert "traceback" not in bounded["failure"]["reason"].lower()
+    assert len(bounded["failure"]["reason"]) <= 256
+
+
+def test_direct_timing_scope_errors_produce_failure_rows(tmp_path: Path) -> None:
+    rows = run_direct_samples(
+        run_id=_LIFECYCLE_RUN_ID,
+        experiment_id=_EXPERIMENT_ID,
+        case_id="case",
+        route_id="route",
+        identities=_sample()["identities"],
+        warmups=0,
+        repetitions=1,
+        run_once=lambda: _execution_sample(
+            measurement=Measurement(scope_id="invalid_scope", total_wall_s=1.0)
+        ),
+        samples_path=tmp_path / "samples.jsonl",
+    )
+    assert rows[0]["status"] == "failed"
+    assert rows[0]["failure"] == {
+        "stage": "timing_contract",
+        "reason": "samples require a frozen timing scope",
+    }
+    assert rows[0]["measurement"] is rows[0]["output_sha256"] is None
+
+
+def test_output_hash_is_shape_dtype_and_endianness_stable(tmp_path: Path) -> None:
+    native = np.array([1.5, 2.5], dtype=np.float32)
+    big_endian = native.astype(">f4")
+    rows = [
+        run_direct_samples(
+            run_id=f"{index + 3}2345678-1234-4234-8234-1234567890ab",
+            experiment_id=_EXPERIMENT_ID,
+            case_id="case",
+            route_id="route",
+            identities=_sample()["identities"],
+            warmups=0,
+            repetitions=1,
+            run_once=lambda output=output: _execution_sample(output=output),
+            samples_path=tmp_path / f"samples-{index}.jsonl",
+        )[0]
+        for index, output in enumerate(
+            (
+                native,
+                big_endian,
+                np.array([[1.5, 2.5]], dtype=np.float32),
+                np.array([1.5, 2.5], dtype=np.float64),
+            )
+        )
+    ]
+    assert rows[0]["output_sha256"] == rows[1]["output_sha256"]
+    assert len({row["output_sha256"] for row in rows}) == 3
+
+    for index, output in enumerate(
+        (
+            np.array([object()], dtype=object),
+            np.array(["text"], dtype="U4"),
+            np.array([(1,)], dtype=[("value", "i4")]),
+            np.array([np.nan], dtype=np.float64),
+        )
+    ):
+        row = run_direct_samples(
+            run_id=f"{index + 6}2345678-1234-4234-8234-1234567890ab",
+            experiment_id=_EXPERIMENT_ID,
+            case_id="invalid-output",
+            route_id="route",
+            identities=_sample()["identities"],
+            warmups=0,
+            repetitions=1,
+            run_once=lambda output=output: _execution_sample(output=output),
+            samples_path=tmp_path / f"invalid-{index}.jsonl",
+        )[0]
+        assert row["status"] == "failed"
+        assert row["failure"]["stage"] == "execution"
+
+
+def test_persistent_session_validates_each_sample_and_closes_once(
+    tmp_path: Path,
+) -> None:
+    class Session:
+        def __init__(self) -> None:
+            self.runs = 0
+            self.closes = 0
+
+        def run_once(self, inputs: object) -> ExecutionSample:
+            assert inputs == {"input": "value"}
+            self.runs += 1
+            return _execution_sample()
+
+        def close(self) -> dict[str, object]:
+            self.closes += 1
+            return {
+                "hardware_release_attempted": True,
+                "hardware_release_succeeded": True,
+                "hardware_release_verified": True,
+            }
+
+    session = Session()
+    validated: list[ExecutionSample] = []
+    rows, session_row = run_session_samples(
+        run_id=_LIFECYCLE_RUN_ID,
+        experiment_id=_EXPERIMENT_ID,
+        case_id="case",
+        route_id="route",
+        identities=_sample()["identities"],
+        warmups=1,
+        repetitions=1,
+        session_protocol_id="protocol",
+        open_session=lambda: session,
+        inputs={"input": "value"},
+        samples_path=tmp_path / "samples.jsonl",
+        sessions_path=tmp_path / "sessions.jsonl",
+        validate=lambda sample: validated.append(sample) or _execution_validation(),
+    )
+    assert len(rows) == len(validated) == session.runs == 2
+    assert session.closes == 1
+    assert session_row["status"] == "success"
+    assert rows[0]["measurement"]["session_open_s"] is None
+    assert session_row["open_s"] is not None
+    assert session_row["session_close_s"] is not None
+
+
+def test_session_open_and_run_failures_stop_later_attempts(tmp_path: Path) -> None:
+    calls = 0
+
+    class Session:
+        def run_once(self, inputs: object) -> ExecutionSample:
+            nonlocal calls
+            calls += 1
+            raise UnsupportedExecution("preflight", "unsupported route", "device")
+
+        def close(self) -> dict[str, object]:
+            return {
+                "hardware_release_attempted": True,
+                "hardware_release_succeeded": True,
+                "hardware_release_verified": True,
+            }
+
+    samples_path = tmp_path / "samples.jsonl"
+    sessions_path = tmp_path / "sessions.jsonl"
+    rows, session_row = run_session_samples(
+        run_id=_LIFECYCLE_RUN_ID,
+        experiment_id=_EXPERIMENT_ID,
+        case_id="unsupported",
+        route_id="route",
+        identities=_sample()["identities"],
+        warmups=2,
+        repetitions=2,
+        session_protocol_id="protocol",
+        open_session=Session,
+        inputs={},
+        samples_path=samples_path,
+        sessions_path=sessions_path,
+    )
+    assert len(rows) == calls == 1
+    assert session_row["failure"] == {
+        "stage": "preflight",
+        "reason": "unsupported route",
+    }
+
+    _, open_row = run_session_samples(
+        run_id="32345678-1234-4234-8234-1234567890ab",
+        experiment_id=_EXPERIMENT_ID,
+        case_id="open-failure",
+        route_id="route",
+        identities=_sample()["identities"],
+        warmups=1,
+        repetitions=1,
+        session_protocol_id="protocol",
+        open_session=lambda: (_ for _ in ()).throw(
+            ExecutionFailed("connect", "refused", {"host": "x"})
+        ),
+        inputs={},
+        samples_path=samples_path,
+        sessions_path=sessions_path,
+    )
+    assert open_row["failure"] == {"stage": "connect", "reason": "refused"}
+    assert len(_read_jsonl(samples_path)) == 1
+
+
+def test_session_timing_and_execution_failures_stop_the_session(
+    tmp_path: Path,
+) -> None:
+    class TimingSession:
+        calls = 0
+
+        def run_once(self, inputs: object) -> ExecutionSample:
+            self.calls += 1
+            return _execution_sample(
+                measurement=Measurement(
+                    scope_id="steady_execution_v1", total_wall_s=1.0, mapping_s=0.1
+                )
+            )
+
+        def close(self) -> dict[str, object]:
+            return {
+                "hardware_release_attempted": True,
+                "hardware_release_succeeded": True,
+                "hardware_release_verified": True,
+            }
+
+    timing_session = TimingSession()
+    rows, session_row = run_session_samples(
+        run_id=_LIFECYCLE_RUN_ID,
+        experiment_id=_EXPERIMENT_ID,
+        case_id="timing",
+        route_id="route",
+        identities=_sample()["identities"],
+        warmups=2,
+        repetitions=1,
+        session_protocol_id="protocol",
+        open_session=lambda: timing_session,
+        inputs={},
+        samples_path=tmp_path / "timing-samples.jsonl",
+        sessions_path=tmp_path / "timing-sessions.jsonl",
+    )
+    assert timing_session.calls == len(rows) == 1
+    assert rows[0]["failure"]["stage"] == "timing_contract"
+    assert session_row["failure"]["stage"] == "timing_contract"
+
+    class FailedSession:
+        def __init__(self, outcome: Exception) -> None:
+            self.outcome = outcome
+            self.calls = 0
+
+        def run_once(self, inputs: object) -> ExecutionSample:
+            self.calls += 1
+            raise self.outcome
+
+        def close(self) -> dict[str, object]:
+            return {
+                "hardware_release_attempted": True,
+                "hardware_release_succeeded": True,
+                "hardware_release_verified": True,
+            }
+
+    for index, outcome, failure in (
+        (
+            0,
+            ExecutionFailed("kernel", "failed", {"rank": 1}),
+            {"stage": "kernel", "reason": "failed"},
+        ),
+        (
+            1,
+            RuntimeError("boom"),
+            {"stage": "execution", "reason": "RuntimeError: boom"},
+        ),
+    ):
+        failed_session = FailedSession(outcome)
+        rows, session_row = run_session_samples(
+            run_id=f"{index + 4}2345678-1234-4234-8234-1234567890ab",
+            experiment_id=_EXPERIMENT_ID,
+            case_id=f"failure-{index}",
+            route_id="route",
+            identities=_sample()["identities"],
+            warmups=1,
+            repetitions=1,
+            session_protocol_id="protocol",
+            open_session=lambda failed_session=failed_session: failed_session,
+            inputs={},
+            samples_path=tmp_path / f"failure-{index}-samples.jsonl",
+            sessions_path=tmp_path / f"failure-{index}-sessions.jsonl",
+        )
+        assert failed_session.calls == len(rows) == 1
+        assert rows[0]["failure"] == session_row["failure"] == failure
+
+
+def test_invalid_ids_and_collisions_are_rejected_before_side_effects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    direct_calls = 0
+    open_calls = 0
+    samples_path = tmp_path / "samples.jsonl"
+    sessions_path = tmp_path / "sessions.jsonl"
+    identities = _sample()["identities"]
+
+    with pytest.raises(ValueError, match="canonical UUID4"):
+        run_direct_samples(
+            run_id="not-a-uuid",
+            experiment_id=_EXPERIMENT_ID,
+            case_id="case",
+            route_id="route",
+            identities=identities,
+            warmups=0,
+            repetitions=1,
+            run_once=lambda: (_ for _ in ()).throw(AssertionError()),
+            samples_path=samples_path,
+        )
+
+    def run_once() -> ExecutionSample:
+        nonlocal direct_calls
+        direct_calls += 1
+        return _execution_sample()
+
+    direct_kwargs = {
+        "run_id": _LIFECYCLE_RUN_ID,
+        "experiment_id": _EXPERIMENT_ID,
+        "case_id": "case",
+        "route_id": "route",
+        "identities": identities,
+        "warmups": 0,
+        "repetitions": 1,
+        "run_once": run_once,
+        "samples_path": samples_path,
+    }
+    run_direct_samples(**direct_kwargs)
+    original = samples_path.read_bytes()
+    with pytest.raises(ValueError, match="planned sample IDs"):
+        run_direct_samples(**direct_kwargs)
+    assert direct_calls == 1
+    assert samples_path.read_bytes() == original
+
+    class Session:
+        def run_once(self, inputs: object) -> ExecutionSample:
+            return _execution_sample()
+
+        def close(self) -> dict[str, object]:
+            return {
+                "hardware_release_attempted": True,
+                "hardware_release_succeeded": True,
+                "hardware_release_verified": True,
+            }
+
+    def open_session() -> Session:
+        nonlocal open_calls
+        open_calls += 1
+        return Session()
+
+    session_kwargs = {
+        "run_id": _LIFECYCLE_RUN_ID,
+        "experiment_id": _EXPERIMENT_ID,
+        "case_id": "session-case",
+        "route_id": "route",
+        "identities": identities,
+        "warmups": 0,
+        "repetitions": 1,
+        "session_protocol_id": "protocol",
+        "open_session": open_session,
+        "inputs": {},
+        "samples_path": samples_path,
+        "sessions_path": sessions_path,
+    }
+    run_session_samples(**session_kwargs)
+    original_sessions = sessions_path.read_bytes()
+    with pytest.raises(ValueError, match="planned sample IDs"):
+        run_session_samples(**session_kwargs)
+    assert open_calls == 1
+    assert sessions_path.read_bytes() == original_sessions
+
+    _, first_session = run_session_samples(
+        **{**session_kwargs, "case_id": "first", "route_id": "first"}
+    )
+    monkeypatch.setattr(
+        experiment, "uuid4", lambda: first_session["session_instance_id"]
+    )
+    with pytest.raises(ValueError, match="session_instance_id already exists"):
+        run_session_samples(
+            **{**session_kwargs, "case_id": "second", "route_id": "second"}
+        )
+
+
+def test_direct_unsupported_and_unexpected_failures_are_distinguished(
+    tmp_path: Path,
+) -> None:
+    outcomes = iter(
+        (
+            UnsupportedExecution("preflight", "missing device", "accelerator"),
+            RuntimeError("boom"),
+        )
+    )
+
+    def run_once() -> ExecutionSample:
+        raise next(outcomes)
+
+    rows = run_direct_samples(
+        run_id=_LIFECYCLE_RUN_ID,
+        experiment_id=_EXPERIMENT_ID,
+        case_id="case",
+        route_id="route",
+        identities=_sample()["identities"],
+        warmups=0,
+        repetitions=2,
+        run_once=run_once,
+        samples_path=tmp_path / "samples.jsonl",
+    )
+    assert rows[0]["status"] == "unsupported"
+    assert rows[0]["failure"] == {
+        "stage": "preflight",
+        "reason": "missing device",
+        "capability": "accelerator",
+    }
+    assert rows[1]["status"] == "failed"
+    assert rows[1]["failure"] == {
+        "stage": "execution",
+        "reason": "RuntimeError: boom",
+    }
+    assert rows[0]["backend_facts"] == rows[0]["numeric_facts"] == {}
+    assert rows[1]["backend_facts"] == rows[1]["numeric_facts"] == {}
+
+
+def test_session_release_failures_and_contradictions_are_normalized(
+    tmp_path: Path,
+) -> None:
+    class CloseFailure:
+        def run_once(self, inputs: object) -> ExecutionSample:
+            return _execution_sample()
+
+        def close(self) -> dict[str, object]:
+            raise ExecutionFailed(
+                "release", "release failed", {"hardware_release_attempted": True}
+            )
+
+    _, close_row = run_session_samples(
+        run_id=_LIFECYCLE_RUN_ID,
+        experiment_id=_EXPERIMENT_ID,
+        case_id="close-failure",
+        route_id="route",
+        identities=_sample()["identities"],
+        warmups=0,
+        repetitions=1,
+        session_protocol_id="protocol",
+        open_session=CloseFailure,
+        inputs={},
+        samples_path=tmp_path / "close-samples.jsonl",
+        sessions_path=tmp_path / "close-sessions.jsonl",
+    )
+    assert close_row["failure"] == {"stage": "release", "reason": "release failed"}
+    assert close_row["release_attempted"] is True
+    assert close_row["release_succeeded"] is False
+    assert close_row["release_verified"] is False
+
+    class BadRelease:
+        def run_once(self, inputs: object) -> ExecutionSample:
+            return _execution_sample()
+
+        def close(self) -> dict[str, object]:
+            return {
+                "hardware_release_attempted": True,
+                "hardware_release_succeeded": False,
+                "hardware_release_verified": False,
+            }
+
+    _, release_row = run_session_samples(
+        run_id="32345678-1234-4234-8234-1234567890ab",
+        experiment_id=_EXPERIMENT_ID,
+        case_id="release-failure",
+        route_id="route",
+        identities=_sample()["identities"],
+        warmups=0,
+        repetitions=1,
+        session_protocol_id="protocol",
+        open_session=BadRelease,
+        inputs={},
+        samples_path=tmp_path / "release-samples.jsonl",
+        sessions_path=tmp_path / "release-sessions.jsonl",
+    )
+    assert release_row["failure"] == {
+        "stage": "session_close",
+        "reason": "hardware release was not fully verified",
+    }
+
+    class ContradictoryRelease:
+        def run_once(self, inputs: object) -> ExecutionSample:
+            return _execution_sample()
+
+        def close(self) -> dict[str, object]:
+            return {
+                "hardware_release_attempted": False,
+                "hardware_release_succeeded": True,
+                "hardware_release_verified": True,
+            }
+
+    sessions_path = tmp_path / "contradictory-sessions.jsonl"
+    _, contradictory = run_session_samples(
+        run_id="42345678-1234-4234-8234-1234567890ab",
+        experiment_id=_EXPERIMENT_ID,
+        case_id="contradictory",
+        route_id="route",
+        identities=_sample()["identities"],
+        warmups=0,
+        repetitions=1,
+        session_protocol_id="protocol",
+        open_session=ContradictoryRelease,
+        inputs={},
+        samples_path=tmp_path / "contradictory-samples.jsonl",
+        sessions_path=sessions_path,
+    )
+    assert contradictory["failure"] == {
+        "stage": "session_close",
+        "reason": "hardware release facts are inconsistent",
+    }
+    assert contradictory["terminal_backend_facts"] == {
+        "hardware_release_attempted": False,
+        "hardware_release_succeeded": True,
+        "hardware_release_verified": True,
+    }
+    assert (
+        contradictory["release_attempted"],
+        contradictory["release_succeeded"],
+        contradictory["release_verified"],
+    ) == (False, False, False)
+    assert _read_jsonl(sessions_path) == [contradictory]
