@@ -202,14 +202,3 @@ def test_invalid_or_incomplete_paths_are_rejected() -> None:
         _validate_pairwise_path(((0, 1, 2),), 2)
     with pytest.raises(ValueError, match="incomplete"):
         _validate_pairwise_path(((0, 1),), 4)
-
-
-def test_m5_planner_boundary_rejects_noncanonical_engines_and_options() -> None:
-    from quantum_bench.bench.m5_circuit_study import _plan_with_config
-
-    with pytest.raises(ValueError, match="custom_upmem"):
-        _plan_with_config(_chain_network(), {"engine": "custom_upmem"})
-    with pytest.raises(ValueError, match="unknown"):
-        _plan_with_config(_chain_network(), {"engine": "unknown"})
-    with pytest.raises(ValueError, match="Unsupported opt_einsum planner option"):
-        _plan_with_config(_chain_network(), {"engine": "opt_einsum", "unknown": 1})

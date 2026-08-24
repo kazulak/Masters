@@ -5,7 +5,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from quantum_bench.execution.contracts import UpmemPlan as LegacyUpmemPlan
 from quantum_bench.lowering import contraction_dag_hash, slice_contraction
 from quantum_bench.model import (
     ContractNode,
@@ -17,7 +16,6 @@ from quantum_bench.model import (
 from quantum_bench.results import UnsupportedExecution
 from quantum_bench.upmem.plan import (
     PLAN_SCHEMA_VERSION,
-    UpmemPlan,
     UpmemResources,
     UpmemStage,
     UpmemTopology,
@@ -835,7 +833,3 @@ def test_resources_are_immutable_and_callback_is_not_identity() -> None:
             initialization_binary="init",
             rank_paths=["rank0"],  # type: ignore[arg-type]
         )
-
-
-def test_final_records_are_distinct_from_legacy_records() -> None:
-    assert UpmemPlan is not LegacyUpmemPlan

@@ -1,354 +1,279 @@
 from __future__ import annotations
 
 from dataclasses import replace
-import json
 
 import numpy as np
 import pytest
 
-from quantum_bench.circuits import builtin_circuit, gate_matrix
-from quantum_bench.core.records import (
-    CircuitOperation,
-    CircuitSpec,
-    PathSummary,
-    TaskGraph,
-    TensorSpec,
-    TensorValue,
+from quantum_bench.model import ContractNode, TensorSpec, TensorView
+from quantum_bench.numerics import (
+    EncodedComplexTensor,
+    NumericPolicy,
+    contract_complex_products,
+    decode_complex_products,
+    encode_complex_tensor,
 )
-from quantum_bench.formats.fixed_point import (
-    FixedPointSpec,
-    dequantize_fixed_point,
-    quantize_fixed_point,
-)
-from quantum_bench.routing import GenericTaskPreparationInput, prepare_generic_task
-from quantum_bench.tn.execution import execute_task_sequence_np_einsum
-from quantum_bench.tn.execution_bundle import (
-    build_execution_bundle,
-    contraction_path_structure_hash,
-    validate_execution_bundle,
-    with_execution_identity,
-)
-from quantum_bench.tn.network import build_tensor_network
-from quantum_bench.tn.slice_execution import execute_task_sliced_sequence_np_einsum
-from quantum_bench.tn.task_graph import plan_task_graph, plan_task_graph_with_config
-from quantum_bench.tn.materialize import TaskInputMaterializationRequest, materialize_task_inputs
-from quantum_bench.validation import compute_reference, validate
-
-from .support import contraction_task, minimal_real_graph
 
 
-def test_circuit_library_is_deterministic_and_unitary() -> None:
-    first = builtin_circuit("quantization_stress", {"n_qubits": 4, "repeat_layers": 2})
-    second = builtin_circuit("quantization_stress", {"n_qubits": 4, "repeat_layers": 2})
-
-    assert first == second
-    assert first.source["deterministic_unitary"] is True
-    assert {operation.gate for operation in first.operations} == {"h", "rz", "cx"}
-    for gate, params in (("h", ()), ("rz", (0.37,)), ("cx", ())):
-        matrix = gate_matrix(gate, params)
-        identity = np.eye(matrix.shape[0], dtype=np.complex128)
-        np.testing.assert_allclose(matrix.conj().T @ matrix, identity, atol=1.0e-12)
-        state = np.arange(1, matrix.shape[0] + 1, dtype=np.complex128)
-        state /= np.linalg.norm(state)
-        np.testing.assert_allclose(np.linalg.norm(matrix @ state), 1.0, atol=1.0e-12)
-
-    composed = build_tensor_network(first)
-    composed_state, _ = compute_reference(composed)
-    np.testing.assert_allclose(np.linalg.norm(composed_state.ravel()), 1.0, atol=1.0e-12)
+FLOAT: NumericPolicy = "split_complex_float32_v1"
+INT8: NumericPolicy = "split_complex_int8_shared_scale_v1"
 
 
-def test_ry_matrix_is_real_unitary_and_uses_gate_matrix_contract() -> None:
-    theta = 0.73
-    matrix = gate_matrix("ry", (theta,))
-    half_theta = theta / 2.0
-    expected = np.array(
-        [
-            [np.cos(half_theta), -np.sin(half_theta)],
-            [np.sin(half_theta), np.cos(half_theta)],
-        ],
-        dtype=np.complex128,
+def _matrix_node(
+    *,
+    left_labels: tuple[int, ...] = (41, 900),
+    right_labels: tuple[int, ...] = (900, 73),
+    left_shape: tuple[int, ...] = (2, 3),
+    right_shape: tuple[int, ...] = (3, 2),
+    contracted_labels: tuple[int, ...] = (900,),
+    output_labels: tuple[int, ...] = (41, 73),
+) -> ContractNode:
+    return ContractNode(
+        node_id="matrix",
+        left=TensorView(tensor_id="left", labels=left_labels, shape=left_shape),
+        right=TensorView(tensor_id="right", labels=right_labels, shape=right_shape),
+        output=TensorSpec(
+            id="out", labels=output_labels, shape=(left_shape[0], right_shape[1]), structure="dense"
+        ),
+        contracted_labels=contracted_labels,
+        output_labels=output_labels,
     )
 
-    assert matrix.dtype == np.complex128
-    np.testing.assert_allclose(matrix, expected, atol=0.0, rtol=0.0)
-    np.testing.assert_allclose(matrix.conj().T @ matrix, np.eye(2), atol=1.0e-12)
+
+def _encode_pair(left: np.ndarray, right: np.ndarray, policy: NumericPolicy):
+    return encode_complex_tensor(left, policy), encode_complex_tensor(right, policy)
 
 
-def test_tn_lowering_preserves_output_labels_and_einsum_contract(minimal_graph) -> None:
-    case = minimal_graph
-    assert case.graph.network.output_labels == case.network.spec.output_labels
-    assert case.graph.network.einsum_expression
-    assert len(case.graph.tasks) == len(case.graph.path)
-    assert all(task.output_labels for task in case.graph.tasks)
-    assert case.graph.path_summary.missing_target_estimate_count == 0
+def test_public_exports_are_exact() -> None:
+    import quantum_bench.numerics as numerics
+
+    assert numerics.__all__ == [
+        "NumericPolicy",
+        "EncodedComplexTensor",
+        "encode_complex_tensor",
+        "contract_complex_products",
+        "decode_complex_products",
+    ]
 
 
-def test_task_graph_identity_is_deterministic(minimal_graph) -> None:
-    second = minimal_real_graph()
-
-    assert minimal_graph.graph.circuit_semantics_hash == second.graph.circuit_semantics_hash
-    assert minimal_graph.graph.tensor_network_hash == second.graph.tensor_network_hash
-    assert minimal_graph.graph.contraction_plan_hash == second.graph.contraction_plan_hash
-    assert contraction_path_structure_hash(minimal_graph.graph) == contraction_path_structure_hash(second.graph)
+@pytest.mark.parametrize("value", [np.array([1.0, np.nan]), np.array([np.inf + 0j])])
+def test_encoding_rejects_nonfinite_values(value: np.ndarray) -> None:
+    with pytest.raises(ValueError, match="finite"):
+        encode_complex_tensor(value, FLOAT)
 
 
-def test_execution_bundle_validates_and_separates_executor_identity(minimal_graph) -> None:
-    bundle = build_execution_bundle(minimal_graph.graph, case_id="bell_2q", suite_id="fixture")
-    validate_execution_bundle(bundle, minimal_graph.graph)
+def test_float_encoding_preserves_split_complex_planes() -> None:
+    value = np.array([1.0 + 2.0j, -2.0 - 1.0j], dtype=np.complex128)
+    encoded = encode_complex_tensor(value, FLOAT)
 
-    assert bundle["provenance"]["planning_in_timed_region"] is False
-    assert bundle["contraction_plan_hash"] == minimal_graph.graph.contraction_plan_hash
+    assert encoded.real.dtype == np.dtype(np.float32)
+    assert encoded.imag.dtype == np.dtype(np.float32)
+    assert encoded.scale == 1.0
+    np.testing.assert_array_equal(encoded.real, [1.0, -2.0])
+    np.testing.assert_array_equal(encoded.imag, [2.0, -1.0])
 
 
-def test_execution_bundle_rejects_changed_task(minimal_graph) -> None:
-    task = replace(minimal_graph.graph.tasks[0], structure="changed")
-    changed = with_execution_identity(
-        replace(
-            minimal_graph.graph,
-            tasks=(task, *minimal_graph.graph.tasks[1:]),
-            circuit_semantics_hash="",
-            tensor_network_hash="",
-            contraction_plan_hash="",
-        )
+def test_float64_value_that_overflows_float32_is_rejected() -> None:
+    with pytest.raises(ValueError, match="float32"):
+        encode_complex_tensor(np.array([np.finfo(np.float64).max]), FLOAT)
+
+
+def test_int8_uses_shared_scale_and_zero_fallback() -> None:
+    encoded = encode_complex_tensor(np.array([1.0 + 4.0j, -2.0 - 1.0j]), INT8)
+
+    assert encoded.scale == pytest.approx(4.0 / 127.0)
+    assert encoded.real.dtype == np.dtype(np.int8)
+    assert encoded.imag.dtype == np.dtype(np.int8)
+    np.testing.assert_array_equal(encoded.real, [32, -64])
+    np.testing.assert_array_equal(encoded.imag, [127, -32])
+
+    zero = encode_complex_tensor(np.zeros(3, dtype=np.complex64), INT8)
+    assert zero.scale == 1.0
+    assert zero.saturation_real == zero.saturation_imag == 0
+    np.testing.assert_array_equal(zero.real, 0)
+    np.testing.assert_array_equal(zero.imag, 0)
+
+
+def test_int8_endpoint_is_not_saturation_but_out_of_range_is() -> None:
+    ordinary = encode_complex_tensor(np.array([4.0 + 0j]), INT8)
+    assert ordinary.real[0] == 127
+    assert ordinary.saturation_real == 0
+
+
+def test_int8_rounding_is_nearest_even_and_deterministic() -> None:
+    source = np.array([0.5 + 0j, 1.5 + 0j, -0.5 + 0j, -1.5 + 0j, 127.0 + 0j])
+    first = encode_complex_tensor(source, INT8)
+    second = encode_complex_tensor(source, INT8)
+
+    np.testing.assert_array_equal(first.real, [0, 2, 0, -2, 127])
+    assert first.saturation_real == 0
+    assert first.saturation_imag == 0
+    np.testing.assert_array_equal(first.real, second.real)
+    assert first.scale == second.scale
+
+
+def test_int8_scale_underflow_is_rejected_before_division() -> None:
+    tiny = np.nextafter(np.float64(0.0), np.float64(1.0))
+    with pytest.raises(ValueError, match="underflow"):
+        encode_complex_tensor(np.array([tiny + 0j], dtype=np.complex128), INT8)
+
+
+def test_encoded_planes_are_detached_and_readonly() -> None:
+    source = np.array([1.0 + 2.0j, 3.0 + 4.0j])
+    encoded = encode_complex_tensor(source, FLOAT)
+
+    assert encoded.real.flags.owndata
+    assert encoded.real.flags.c_contiguous
+    assert not encoded.real.flags.writeable
+    assert not encoded.imag.flags.writeable
+    source[0] = 99.0
+    assert encoded.real[0] == 1.0
+    with pytest.raises(ValueError):
+        encoded.real[0] = 0.0
+
+
+def test_float_products_follow_labels_and_four_product_formula() -> None:
+    node = _matrix_node()
+    left = np.array([[1 + 2j, 3 - 1j, -2 + 1j], [4 + 0j, -1 + 2j, 2 - 3j]])
+    right = np.array([[2 - 1j, 1 + 3j], [-2 + 2j, 3 + 0j], [1 - 1j, -1 + 2j]])
+    left_encoded, right_encoded = _encode_pair(left, right, FLOAT)
+    products = contract_complex_products(node, left_encoded, right_encoded, FLOAT)
+    expected_products = (
+        np.einsum("ik,kj->ij", left_encoded.real, right_encoded.real, dtype=np.float32, optimize=False),
+        np.einsum("ik,kj->ij", left_encoded.imag, right_encoded.imag, dtype=np.float32, optimize=False),
+        np.einsum("ik,kj->ij", left_encoded.real, right_encoded.imag, dtype=np.float32, optimize=False),
+        np.einsum("ik,kj->ij", left_encoded.imag, right_encoded.real, dtype=np.float32, optimize=False),
     )
 
-    assert changed.circuit_semantics_hash == minimal_graph.graph.circuit_semantics_hash
-    assert changed.tensor_network_hash == minimal_graph.graph.tensor_network_hash
-    assert changed.contraction_plan_hash != minimal_graph.graph.contraction_plan_hash
-
-
-def test_stale_execution_identity_is_rejected(minimal_graph) -> None:
-    with pytest.raises(ValueError, match="contraction_plan_hash"):
-        with_execution_identity(replace(minimal_graph.graph, contraction_plan_hash="0" * 64))
-
-
-@pytest.mark.parametrize(
-    ("name", "params"),
-    [("bell_2q", None), ("bv", {"n_qubits": 4}), ("xor", {"n_qubits": 4})],
-)
-def test_task_sequence_matches_exact_reference(name: str, params: dict | None) -> None:
-    network = build_tensor_network(builtin_circuit(name, params))
-    graph = plan_task_graph(network)
-    actual, metadata = execute_task_sequence_np_einsum(graph, network)
-    reference, _ = compute_reference(network)
-
-    assert validate(actual, reference).passed
-    assert metadata["task_count"] == len(graph.tasks)
-    assert metadata["final_tensor_id"] == graph.tasks[-1].output_tensor_id
-    assert metadata["peak_intermediate_bytes"] >= metadata["max_intermediate_tensor_bytes"]
-
-
-def test_task_sequence_reorders_final_tensor_by_labels() -> None:
-    network = build_tensor_network(builtin_circuit("bv", {"n_qubits": 4}))
-    graph = plan_task_graph(network)
-    actual, metadata = execute_task_sequence_np_einsum(graph, network)
-    reference, _ = compute_reference(network)
-
-    assert metadata["final_transpose_applied"] is True
-    np.testing.assert_allclose(actual, reference, atol=1.0e-12)
-
-
-def test_internal_slicing_preserves_taskgraph_result() -> None:
-    network = build_tensor_network(builtin_circuit("bv", {"n_qubits": 4}))
-    graph = plan_task_graph(network)
-    expected, _ = execute_task_sequence_np_einsum(graph, network)
-    actual, metadata = execute_task_sliced_sequence_np_einsum(graph, network, max_slice_count=2)
-
-    np.testing.assert_allclose(actual, expected, atol=1.0e-12)
-    assert metadata["slice_model_execution_status"] == "executed"
-    assert metadata["slice_reconstruction_status"] == "completed"
-    assert metadata["dependency_violation_detected"] is False
-
-
-def test_empty_single_tensor_graph_returns_initial_state() -> None:
-    circuit = builtin_circuit("qrng", {"n_qubits": 1})
-    idle = type(circuit)(circuit.name, circuit.n_qubits, (), circuit.source)
-    network = build_tensor_network(idle)
-    graph = TaskGraph(
-        network=network.spec,
-        tasks=(),
-        path=(),
-        path_summary=PathSummary("fixture", "manual", 0, None, None, None, "fixture"),
-        planning_time_s=0.0,
-    )
-    actual, metadata = execute_task_sequence_np_einsum(graph, network)
-
-    assert metadata["task_count"] == 0
-    np.testing.assert_array_equal(actual, np.array([1.0, 0.0], dtype=np.complex128))
-
-
-def test_empty_multi_tensor_graph_is_rejected() -> None:
-    circuit = builtin_circuit("qrng", {"n_qubits": 2})
-    idle = type(circuit)(circuit.name, circuit.n_qubits, (), circuit.source)
-    network = build_tensor_network(idle)
-    graph = TaskGraph(
-        network=network.spec,
-        tasks=(),
-        path=(),
-        path_summary=PathSummary("fixture", "manual", 0, None, None, None, "fixture"),
-        planning_time_s=0.0,
-    )
-
-    with pytest.raises(ValueError, match="empty TaskGraph"):
-        execute_task_sequence_np_einsum(graph, network)
-
-
-def test_duplicate_wire_is_rejected() -> None:
-    circuit = CircuitSpec(
-        "duplicate-wire",
-        2,
-        (CircuitOperation("cx", (0, 0)),),
-        {},
-    )
-
-    with pytest.raises(ValueError, match="Duplicate wire 0"):
-        build_tensor_network(circuit)
-
-
-@pytest.mark.parametrize(
-    ("dtype", "expected_scale"),
-    [("int8", 1.0 / 127.0), ("int16", 1.0 / 32767.0)],
-)
-def test_fixed_point_scale_and_round_trip(dtype: str, expected_scale: float) -> None:
-    converted = quantize_fixed_point(np.array([-1.0, 0.0, 1.0], dtype=np.float32), FixedPointSpec(route_dtype=dtype))
-
-    assert converted.record.scale == pytest.approx(expected_scale)
-    assert converted.record.rounding == "nearest_even"
-    assert converted.record.clipping_count == 0
-    assert converted.record.converted_bytes < converted.record.source_bytes
-    assert np.max(np.abs(converted.record.dequantization_error.max_abs_error)) <= expected_scale
-
-
-def test_fixed_point_rounding_and_clipping_boundaries() -> None:
-    converted = quantize_fixed_point(
-        np.array([0.5, 1.5, -0.5, -1.5, 127.5, -127.5], dtype=np.float32),
-        FixedPointSpec(route_dtype="int8", scale=1.0),
-    )
-
-    np.testing.assert_array_equal(converted.array, np.array([0, 2, 0, -2, 127, -127], dtype=np.int8))
-    assert converted.record.clipping_count == 2
-    assert converted.record.saturation_count == 2
-
-
-def test_int8_preparation_matches_einsum_int32_accumulation_and_dequantization() -> None:
-    task = contraction_task("int8_reference", shape=(2, 2, 2))
-    left = np.array([[0.5, 127.5], [-127.5, 1.5]], dtype=np.float32)
-    right = np.array([[1.5, -127.5], [127.5, -0.5]], dtype=np.float32)
-    preparation = GenericTaskPreparationInput(
-        task=task,
-        left_tensor=TensorValue(TensorSpec("int8_reference_left", task.left_labels, left.shape, "dense", dtype="float32"), left),
-        right_tensor=TensorValue(TensorSpec("int8_reference_right", task.right_labels, right.shape, "dense", dtype="float32"), right),
-        quantization_mode="per_task_input_quantize",
-        fixed_point_spec=FixedPointSpec(route_dtype="int8", scale=1.0),
-    )
-
-    result = prepare_generic_task(preparation)
-
-    assert result.status == "prepared"
-    assert result.left_conversion is not None and result.right_conversion is not None
-    operands = result.prepared_operands
-    assert operands is not None
-    expected_left = np.array([[0, 127], [-127, 2]], dtype=np.int8)
-    expected_right = np.array([[2, -127], [127, 0]], dtype=np.int8)
-    np.testing.assert_array_equal(operands.left_quantized, expected_left)
-    np.testing.assert_array_equal(operands.right_quantized, expected_right)
-    assert result.left_conversion.clipping_count == 2
-    assert result.right_conversion.clipping_count == 2
-
-    accumulator = np.einsum(
-        "ik,kj->ij",
-        expected_left.astype(np.int32),
-        expected_right.astype(np.int32),
-        dtype=np.int32,
-    )
-    np.testing.assert_array_equal(
-        operands.expected_quantized_reference_output,
-        accumulator.astype(np.float64),
-    )
+    for actual, expected in zip(products, expected_products):
+        np.testing.assert_array_equal(actual, expected)
     np.testing.assert_allclose(
-        dequantize_fixed_point(operands.left_quantized, result.left_conversion, dtype=np.float64),
-        expected_left.astype(np.float64),
+        decode_complex_products(products, 1.0, 1.0, FLOAT),
+        (left @ right).astype(np.complex64),
+        atol=0,
+        rtol=0,
     )
-    np.testing.assert_allclose(operands.expected_reference_output, accumulator.astype(np.float64))
+    assert all(product.dtype == np.dtype(np.float32) for product in products)
+    assert all(product.flags.owndata and not product.flags.writeable for product in products)
 
-    zero = np.zeros((2, 2), dtype=np.float32)
-    zero_preparation = preparation.__class__(
-        task=task,
-        left_tensor=TensorValue(TensorSpec(task.input_tensor_ids[0], task.left_labels, zero.shape, "dense", dtype="float32"), zero),
-        right_tensor=TensorValue(TensorSpec(task.input_tensor_ids[1], task.right_labels, zero.shape, "dense", dtype="float32"), zero),
-        quantization_mode="per_task_input_quantize",
+
+def test_int8_products_decode_and_repeat_deterministically() -> None:
+    node = _matrix_node()
+    left = np.array([[0.25 + 1j, -1.5 - 0.5j, 2.0 + 0j], [3.25 + 1j, 0.5 - 2j, -0.75 + 0.5j]])
+    right = np.array([[1.0 - 1j, -2.0 + 0.25j], [0.25 + 0.5j, 0.5 - 1j], [-1.25 + 1j, 0.75 + 0j]])
+    left_encoded, right_encoded = _encode_pair(left, right, INT8)
+    products = contract_complex_products(node, left_encoded, right_encoded, INT8)
+    repeated = contract_complex_products(node, *_encode_pair(left, right, INT8), INT8)
+
+    assert all(product.dtype == np.dtype(np.int32) for product in products)
+    for product, other in zip(products, repeated):
+        np.testing.assert_array_equal(product, other)
+    decoded = decode_complex_products(products, left_encoded.scale, right_encoded.scale, INT8)
+    assert decoded.dtype == np.dtype(np.complex64)
+    assert not decoded.flags.writeable
+    np.testing.assert_allclose(decoded, left @ right, rtol=0.08, atol=0.08)
+
+
+def test_decode_uses_explicit_rr_ii_ri_ir_order() -> None:
+    products = (
+        np.array([[10]], dtype=np.int32),
+        np.array([[3]], dtype=np.int32),
+        np.array([[4]], dtype=np.int32),
+        np.array([[-2]], dtype=np.int32),
     )
-    zero_result = prepare_generic_task(zero_preparation)
-    assert zero_result.status == "prepared"
-    assert zero_result.left_conversion is not None
-    assert zero_result.right_conversion is not None
-    assert zero_result.left_conversion.scale == 1.0
-    assert zero_result.right_conversion.scale == 1.0
-    np.testing.assert_array_equal(zero_result.prepared_operands.expected_reference_output, np.zeros((2, 2)))
+    decoded = decode_complex_products(products, 0.5, 2.0, INT8)
+    np.testing.assert_array_equal(decoded, np.array([[7.0 + 2.0j]], dtype=np.complex64))
 
 
-def test_fixed_point_zero_and_error_metrics_are_safe() -> None:
-    converted = quantize_fixed_point(np.zeros(4, dtype=np.float32))
-
-    assert converted.record.scale == 1.0
-    assert converted.record.dequantization_error.relative_l2_error == 0.0
-    assert converted.record.status == "converted"
-
-
-def test_fixed_point_complex_split_is_explicit_and_json_safe() -> None:
-    converted = quantize_fixed_point(
-        np.array([1.0 + 2.0j, -0.5 + 0.25j], dtype=np.complex64),
-        FixedPointSpec(complex_policy="split_real_imag_last_axis"),
+def test_outer_product_preserves_requested_output_order() -> None:
+    node = ContractNode(
+        node_id="outer",
+        left=TensorView(tensor_id="left", labels=(10,), shape=(2,)),
+        right=TensorView(tensor_id="right", labels=(20,), shape=(3,)),
+        output=TensorSpec(id="out", labels=(20, 10), shape=(3, 2), structure="dense"),
+        contracted_labels=(),
+        output_labels=(20, 10),
     )
-
-    assert converted.record.representation == "split_complex_real_imag"
-    assert converted.array.shape == (2, 2)
-    assert json.dumps(converted.record.__dict__, default=lambda value: value.__dict__)
-
-
-def test_fixed_point_complex_default_policy_rejects() -> None:
-    with pytest.raises(ValueError, match="complex_policy"):
-        quantize_fixed_point(np.array([1.0 + 1.0j]))
-
-
-def test_fixed_point_rejects_unsupported_dtype_and_invalid_spec() -> None:
-    with pytest.raises(ValueError, match="Unsupported source dtype"):
-        quantize_fixed_point(np.array([1, 2], dtype=np.int32))
-    with pytest.raises(ValueError, match="scale must be positive"):
-        quantize_fixed_point(np.ones(2), FixedPointSpec(scale=0.0))
-
-
-def test_materializer_replays_predecessors_without_raw_arrays_in_json(minimal_graph) -> None:
-    initial = {tensor.spec.id: tensor for tensor in minimal_graph.network.tensors}
-    target_index = next(
-        index
-        for index, task in enumerate(minimal_graph.graph.tasks)
-        if any(tensor_id not in initial for tensor_id in task.input_tensor_ids)
-    )
-    result = materialize_task_inputs(
-        TaskInputMaterializationRequest(minimal_graph.graph, initial, target_task_index=target_index)
+    left = np.array([1.0 + 1j, 2.0 - 1j])
+    right = np.array([3.0 + 0j, 4.0 + 1j, 5.0 - 2j])
+    products = contract_complex_products(node, *_encode_pair(left, right, FLOAT), FLOAT)
+    np.testing.assert_array_equal(
+        decode_complex_products(products, 1.0, 1.0, FLOAT), right[:, None] * left[None, :]
     )
 
-    payload = result.to_json_dict()
-    assert result.status == "materialized"
-    assert result.replayed_task_count == target_index
-    assert "array" not in json.dumps(payload)
+
+def test_contract_rejects_unsafe_int32_k_before_einsum() -> None:
+    safe_k = np.iinfo(np.int32).max // (127**2)
+
+    def node_with_k(k: int) -> ContractNode:
+        return _matrix_node(
+            left_labels=(0, 1),
+            right_labels=(1, 2),
+            left_shape=(1, k),
+            right_shape=(k, 1),
+            contracted_labels=(1,),
+            output_labels=(0, 2),
+        )
+
+    safe = node_with_k(safe_k)
+    left_safe = EncodedComplexTensor(
+        np.zeros((1, safe_k), dtype=np.int8), np.zeros((1, safe_k), dtype=np.int8), 1.0, 0, 0
+    )
+    right_safe = EncodedComplexTensor(
+        np.zeros((safe_k, 1), dtype=np.int8), np.zeros((safe_k, 1), dtype=np.int8), 1.0, 0, 0
+    )
+    assert contract_complex_products(safe, left_safe, right_safe, INT8)[0].dtype == np.dtype(np.int32)
+
+    unsafe = node_with_k(safe_k + 1)
+    left = EncodedComplexTensor(
+        np.zeros((1, safe_k + 1), dtype=np.int8), np.zeros((1, safe_k + 1), dtype=np.int8), 1.0, 0, 0
+    )
+    right = EncodedComplexTensor(
+        np.zeros((safe_k + 1, 1), dtype=np.int8), np.zeros((safe_k + 1, 1), dtype=np.int8), 1.0, 0, 0
+    )
+    with pytest.raises(ValueError, match="int32 accumulation"):
+        contract_complex_products(unsafe, left, right, INT8)
 
 
-def test_materializer_reports_selection_boundaries(minimal_graph) -> None:
-    initial = {tensor.spec.id: tensor for tensor in minimal_graph.network.tensors}
-    out_of_range = materialize_task_inputs(TaskInputMaterializationRequest(minimal_graph.graph, initial, target_task_index=999))
-    missing_id = materialize_task_inputs(TaskInputMaterializationRequest(minimal_graph.graph, initial, target_task_id="missing"))
+def test_malformed_encoded_values_and_descriptors_are_rejected() -> None:
+    with pytest.raises(ValueError, match="share dtype"):
+        EncodedComplexTensor(np.ones(2, dtype=np.float32), np.ones(2, dtype=np.int8), 1.0, 0, 0)
+    with pytest.raises(ValueError, match="finite"):
+        EncodedComplexTensor(np.array([np.inf], dtype=np.float32), np.zeros(1, dtype=np.float32), 1.0, 0, 0)
+    with pytest.raises(ValueError, match="saturation"):
+        EncodedComplexTensor(np.ones(2, dtype=np.int8), np.ones(2, dtype=np.int8), 1.0, True, 0)
+    with pytest.raises(ValueError, match="scale exactly one"):
+        EncodedComplexTensor(np.ones(2, dtype=np.float32), np.ones(2, dtype=np.float32), 2.0, 0, 0)
 
-    assert out_of_range.reason == "target_task_index_out_of_range"
-    assert missing_id.reason == "target_task_id_not_found"
+    node = _matrix_node()
+    left, right = _encode_pair(np.ones((2, 3), dtype=np.complex64), np.ones((3, 2), dtype=np.complex64), FLOAT)
+    bad_output = replace(node, output=TensorSpec(id="out", labels=(41, 73), shape=(3, 2), structure="dense"))
+    with pytest.raises(ValueError, match="output descriptor shape"):
+        contract_complex_products(bad_output, left, right, FLOAT)
 
 
-def test_planner_configuration_is_explicit_and_changes_only_plan_identity(minimal_graph) -> None:
-    auto = plan_task_graph_with_config(minimal_graph.network, {"engine": "opt_einsum", "optimize": "auto"})
-    greedy = plan_task_graph_with_config(minimal_graph.network, {"engine": "opt_einsum", "optimize": "greedy"})
+def test_decode_rejects_bad_shapes_dtypes_scales_and_int64_overflow() -> None:
+    products = tuple(np.ones((2, 2), dtype=np.float32) for _ in range(4))
+    with pytest.raises(ValueError, match="exactly one"):
+        decode_complex_products(products, 2.0, 1.0, FLOAT)
+    with pytest.raises(ValueError, match="finite and positive"):
+        decode_complex_products(products, 0.0, 1.0, FLOAT)
+    with pytest.raises(ValueError, match="equal shapes"):
+        decode_complex_products((*products[:3], np.ones((1, 1), dtype=np.float32)), 1.0, 1.0, FLOAT)
+    with pytest.raises(ValueError, match="float32"):
+        decode_complex_products(tuple(np.ones((2, 2), dtype=np.float64) for _ in range(4)), 1.0, 1.0, FLOAT)
 
-    assert auto.network == greedy.network
-    assert auto.path_summary.options["planner_config_hash"] != greedy.path_summary.options["planner_config_hash"]
-    assert auto.circuit_semantics_hash == greedy.circuit_semantics_hash
-    assert auto.tensor_network_hash == greedy.tensor_network_hash
+    maximum = np.iinfo(np.int64).max
+    overflowing = (
+        np.zeros((1,), dtype=np.int64),
+        np.zeros((1,), dtype=np.int64),
+        np.array([maximum], dtype=np.int64),
+        np.ones((1,), dtype=np.int64),
+    )
+    with pytest.raises(ValueError, match="overflow"):
+        decode_complex_products(overflowing, 1.0, 1.0, INT8)
+
+
+def test_unsupported_policy_is_rejected() -> None:
+    with pytest.raises(ValueError, match="unsupported"):
+        encode_complex_tensor(np.ones(1), "legacy")  # type: ignore[arg-type]

@@ -9,9 +9,8 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from quantum_bench.core.records import TensorSpec
 from quantum_bench.lowering import slice_contraction
-from quantum_bench.model import ContractNode, ContractionDAG, ReduceNode, TensorView
+from quantum_bench.model import ContractNode, ContractionDAG, ReduceNode, TensorSpec, TensorView
 from quantum_bench.results import ExecutionFailed, UnsupportedExecution
 from quantum_bench.upmem.plan import (
     UpmemResources,

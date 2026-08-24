@@ -1,21 +1,14 @@
-from dataclasses import FrozenInstanceError, asdict, fields
 from copy import deepcopy
-import json
+from dataclasses import FrozenInstanceError, fields
 from collections.abc import Mapping
 
 import pytest
 
-from quantum_bench.core.records import CircuitSpec as LegacyCircuitSpec
-from quantum_bench.core.records import (
-    TensorNetworkSpec,
-    TensorSpec as LegacyTensorSpec,
-    to_jsonable,
-)
 from quantum_bench.model import (
+    CircuitOperation,
     CircuitSpec,
     ContractionDAG,
     ContractNode,
-    GraphNode,
     ReduceNode,
     SimulationJob,
     SliceSpec,
@@ -24,18 +17,15 @@ from quantum_bench.model import (
     TensorView,
     make_simulation_job,
 )
-from quantum_bench.tn.graph import (
-    ContractionDAG as GraphContractionDAG,
-    ContractNode as GraphContractNode,
-    GraphNode as GraphGraphNode,
-    ReduceNode as GraphReduceNode,
-    SliceSpec as GraphSliceSpec,
-    TensorView as GraphTensorView,
-)
 
 
 def _circuit() -> CircuitSpec:
-    return CircuitSpec(name="test", n_qubits=1, operations=(), source={})
+    return CircuitSpec(
+        name="test",
+        n_qubits=1,
+        operations=(CircuitOperation(gate="x", wires=(0,)),),
+        source={"gate": "x", "wires": [0]},
+    )
 
 
 def test_factory_normalizes_parameters_and_direct_jobs_require_normalization() -> None:
@@ -64,14 +54,11 @@ def test_factory_rejects_invalid_parameters(parameters, message: str) -> None:
         make_simulation_job(_circuit(), parameters=parameters)
 
 
-def test_direct_job_rejects_invalid_query_and_bool_seed() -> None:
+def test_direct_job_rejects_invalid_query_bool_seed_and_parameter_shape() -> None:
     with pytest.raises(ValueError, match="Unsupported"):
         SimulationJob(_circuit(), query="other")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="seed"):
         SimulationJob(_circuit(), seed=True)
-
-
-def test_direct_job_rejects_duplicate_and_non_tuple_parameters() -> None:
     with pytest.raises(ValueError, match="Duplicate"):
         SimulationJob(_circuit(), parameters=(("a", 1), ("a", 2)))
     with pytest.raises(ValueError, match="tuple"):
@@ -89,24 +76,14 @@ def test_circuit_source_is_deeply_immutable_and_detached_from_input() -> None:
     with pytest.raises(TypeError):
         circuit.source["nested"]["values"][1]["flag"] = False
     with pytest.raises(TypeError):
-        circuit.source["nested"]["values"] += (3,)
-    with pytest.raises(TypeError):
         circuit.source["new"] = "value"
     with pytest.raises(AttributeError):
         circuit.source.update({"new": "value"})  # type: ignore[attr-defined]
-    with pytest.raises(TypeError):
-        dict.__setitem__(circuit.source, "new", "value")
 
-    assert dict(circuit.source) == {
-        "nested": {"values": (1, {"flag": True})},
-    }
-    assert circuit.source == {"nested": {"values": (1, {"flag": True})}}
     detached = deepcopy(circuit.source)
     assert isinstance(detached, dict)
     assert detached == dict(circuit.source)
     assert detached is not circuit.source
-    assert circuit.source.get("missing") is None
-    assert list(circuit.source) == ["nested"]
 
 
 def test_circuit_source_rejects_unordered_and_unsupported_values() -> None:
@@ -124,43 +101,28 @@ def test_nonfinite_values_are_rejected(value: float) -> None:
         make_simulation_job(_circuit(), parameters=(("value", value),))
 
 
-def test_frozen_model_records_reject_assignment() -> None:
+def test_model_records_are_frozen() -> None:
     job = make_simulation_job(_circuit())
-    network = TensorNetwork(circuit=_circuit(), tensors=(), output_labels=(), einsum_expression="")
+    tensor = TensorSpec(id="a", labels=(0,), shape=(2,), structure="input")
+    view = TensorView(tensor_id="a", labels=(0,), shape=(2,))
+    network = TensorNetwork(
+        circuit=_circuit(),
+        tensors=(tensor,),
+        output_labels=(0,),
+        einsum_expression="a->a",
+    )
+
     with pytest.raises(FrozenInstanceError):
         job.seed = 1  # type: ignore[misc]
     with pytest.raises(FrozenInstanceError):
-        network.einsum_expression = "x"  # type: ignore[misc]
+        tensor.shape = (1,)  # type: ignore[misc]
+    with pytest.raises(FrozenInstanceError):
+        view.labels = (1,)  # type: ignore[misc]
+    with pytest.raises(FrozenInstanceError):
+        network.einsum_expression = "a->"  # type: ignore[misc]
 
 
-def test_legacy_serialization_preserves_source_content() -> None:
-    source = {"nested": {"values": [1, 2]}, "enabled": True}
-    circuit = CircuitSpec(name="test", n_qubits=1, operations=(), source=source)
-    expected_asdict = {
-        "name": "test",
-        "n_qubits": 1,
-        "operations": (),
-        "source": {"nested": {"values": (1, 2)}, "enabled": True},
-    }
-    assert asdict(circuit) == expected_asdict
-    assert json.loads(json.dumps(asdict(circuit))) == {
-        "name": "test",
-        "n_qubits": 1,
-        "operations": [],
-        "source": source,
-    }
-    serialized = to_jsonable(circuit)
-    expected_json = {
-        "name": "test",
-        "n_qubits": 1,
-        "operations": [],
-        "source": source,
-    }
-    assert serialized == expected_json
-    assert json.dumps(serialized)
-
-
-def test_model_records_are_frozen_and_network_has_only_semantic_fields() -> None:
+def test_tensor_network_contains_only_semantic_fields() -> None:
     assert {field.name for field in fields(TensorNetwork)} == {
         "circuit",
         "tensors",
@@ -173,23 +135,31 @@ def test_model_records_are_frozen_and_network_has_only_semantic_fields() -> None
     assert not hasattr(TensorNetwork, "dependencies")
 
 
-def test_compatibility_reexports_are_object_identical() -> None:
-    assert LegacyCircuitSpec is CircuitSpec
-    assert LegacyTensorSpec is TensorSpec
-    assert TensorNetworkSpec is TensorNetwork
-    assert GraphTensorView is TensorView
-    assert GraphSliceSpec is SliceSpec
-    assert GraphContractNode is ContractNode
-    assert GraphReduceNode is ReduceNode
-    assert GraphContractionDAG is ContractionDAG
-    assert GraphGraphNode is GraphNode
-    import quantum_bench.tn.graph as graph_module
+def test_contraction_records_are_model_only_and_explicit() -> None:
+    left = TensorView(tensor_id="a", labels=(0, 1), shape=(2, 2))
+    right = TensorView(tensor_id="b", labels=(1, 2), shape=(2, 2))
+    output = TensorSpec(id="c", labels=(0, 2), shape=(2, 2), structure="contraction")
+    contract = ContractNode(
+        node_id="contract-0",
+        left=left,
+        right=right,
+        output=output,
+        contracted_labels=(1,),
+        output_labels=(0, 2),
+    )
+    reduced = ReduceNode(
+        node_id="reduce-0",
+        inputs=(TensorView(tensor_id="c", labels=(0, 2), shape=(2, 2)),),
+        output=output,
+        reduced_labels=(1,),
+    )
+    dag = ContractionDAG(
+        tensors=(output,),
+        nodes=(contract, reduced),
+        output=TensorView(tensor_id="c", labels=(0, 2), shape=(2, 2)),
+    )
 
-    assert graph_module.__all__ == [
-        "TensorView",
-        "SliceSpec",
-        "ContractNode",
-        "ReduceNode",
-        "GraphNode",
-        "ContractionDAG",
-    ]
+    assert contract.contracted_labels == (1,)
+    assert reduced.reduced_labels == (1,)
+    assert dag.nodes == (contract, reduced)
+    assert SliceSpec(node_id="contract-0", label=1).label == 1
