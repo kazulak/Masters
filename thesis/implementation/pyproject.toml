@@ -18,7 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest", "ruff==0.15.21"]
-dev = ["pytest", "ruff==0.15.21", "cmake>=3.21,<4"]
+dev = ["pytest", "ruff==0.15.21", "cmake>=3.21,<4", "build>=1.2,<2"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
