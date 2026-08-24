@@ -788,6 +788,26 @@ or unsupported rows contain no fabricated output or measurement. Later
 attempts not started after a fatal persistent-session failure do not receive
 fabricated rows.
 
+When a route supplies validation, its mapping has exactly:
+
+```text
+policy_reference_applicable: bool
+policy_reference_passed: bool | null
+full_precision_threshold_applicable: bool
+full_precision_passed: bool | null
+scientific_validation_passed: bool
+max_abs_error: finite nonnegative float
+relative_l2_error: finite nonnegative float
+```
+
+A comparison result is boolean exactly when its corresponding applicability
+field is true and null otherwise. At least one comparison is applicable.
+`scientific_validation_passed` is the conjunction of all applicable results.
+Validation executes after the route returns and outside every executor timing
+scope. A failed validation produces a failed sample row while preserving the
+route and numeric facts; it does not retain a successful measurement or output
+hash.
+
 `sessions.jsonl` contains exactly these fields for every opened or attempted
 session:
 

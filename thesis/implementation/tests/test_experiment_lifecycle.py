@@ -43,6 +43,24 @@ def _sample(
     )
 
 
+def _validation(
+    *,
+    policy_passed: bool = True,
+    full_precision_applicable: bool = False,
+    full_precision_passed: bool | None = None,
+) -> dict[str, object]:
+    return {
+        "policy_reference_applicable": True,
+        "policy_reference_passed": policy_passed,
+        "full_precision_threshold_applicable": full_precision_applicable,
+        "full_precision_passed": full_precision_passed,
+        "scientific_validation_passed": policy_passed
+        and (not full_precision_applicable or full_precision_passed is True),
+        "max_abs_error": 0.0,
+        "relative_l2_error": 0.0,
+    }
+
+
 def _read(path: Path) -> list[dict[str, object]]:
     return [json.loads(line) for line in path.read_text().splitlines()]
 
@@ -123,6 +141,126 @@ def test_direct_order_continuation_and_measurement_nulls(tmp_path: Path) -> None
         for key, value in rows[0]["measurement"].items()
         if key != "scope_id" and key != "total_wall_s"
     )
+
+
+def test_validation_runs_for_warmups_and_measurements_after_execution(
+    tmp_path: Path,
+) -> None:
+    seen: list[ExecutionSample] = []
+
+    def validate(sample: ExecutionSample) -> dict[str, object]:
+        seen.append(sample)
+        return _validation()
+
+    rows = run_direct_samples(
+        run_id=RUN_ID,
+        experiment_id=EXPERIMENT_ID,
+        case_id="case",
+        route_id="route",
+        identities=IDENTITIES,
+        warmups=1,
+        repetitions=1,
+        run_once=_sample,
+        samples_path=tmp_path / "samples.jsonl",
+        validate=validate,
+    )
+
+    assert len(seen) == 2
+    assert [row["status"] for row in rows] == ["success", "success"]
+    assert all(row["validation"] == _validation() for row in rows)
+
+
+def test_failed_validation_keeps_facts_but_not_measurement_or_output(
+    tmp_path: Path,
+) -> None:
+    rows = run_direct_samples(
+        run_id=RUN_ID,
+        experiment_id=EXPERIMENT_ID,
+        case_id="case",
+        route_id="route",
+        identities=IDENTITIES,
+        warmups=0,
+        repetitions=1,
+        run_once=_sample,
+        samples_path=tmp_path / "samples.jsonl",
+        validate=lambda sample: _validation(policy_passed=False),
+    )
+
+    row = rows[0]
+    assert row["status"] == "failed"
+    assert row["measurement"] is None
+    assert row["output_sha256"] is None
+    assert row["backend_facts"] == {"backend": "test", "nested": [1, True]}
+    assert row["numeric_facts"] == {"value": 1}
+    assert row["validation"] == _validation(policy_passed=False)
+    assert row["failure"] == {
+        "stage": "validation",
+        "reason": "scientific validation failed",
+    }
+
+
+def test_validator_exception_is_bounded_and_has_no_traceback(tmp_path: Path) -> None:
+    def validate(sample: ExecutionSample) -> dict[str, object]:
+        raise RuntimeError("bad\n" + ("x" * 1000))
+
+    row = run_direct_samples(
+        run_id=RUN_ID,
+        experiment_id=EXPERIMENT_ID,
+        case_id="case",
+        route_id="route",
+        identities=IDENTITIES,
+        warmups=0,
+        repetitions=1,
+        run_once=_sample,
+        samples_path=tmp_path / "samples.jsonl",
+        validate=validate,
+    )[0]
+
+    assert row["status"] == "failed"
+    assert row["validation"] is None
+    assert row["failure"]["stage"] == "validation"
+    assert "traceback" not in row["failure"]["reason"].lower()
+    assert len(row["failure"]["reason"]) <= 256
+
+
+def test_session_validation_uses_the_same_hook_for_each_attempt(
+    tmp_path: Path,
+) -> None:
+    seen: list[ExecutionSample] = []
+
+    class Session:
+        def run_once(self, inputs: object) -> ExecutionSample:
+            return _sample()
+
+        def close(self) -> dict[str, object]:
+            return {
+                "hardware_release_attempted": True,
+                "hardware_release_succeeded": True,
+                "hardware_release_verified": True,
+            }
+
+    def validate(sample: ExecutionSample) -> dict[str, object]:
+        seen.append(sample)
+        return _validation()
+
+    rows, _ = run_session_samples(
+        run_id=RUN_ID,
+        experiment_id=EXPERIMENT_ID,
+        case_id="case",
+        route_id="route",
+        identities=IDENTITIES,
+        warmups=1,
+        repetitions=1,
+        session_protocol_id="protocol",
+        open_session=Session,
+        inputs={},
+        samples_path=tmp_path / "samples.jsonl",
+        sessions_path=tmp_path / "sessions.jsonl",
+        validate=validate,
+    )
+
+    assert len(seen) == 2
+    assert [row["status"] for row in rows] == ["success", "success"]
 
 
 def test_direct_invalid_timing_scope_is_recorded_as_failure(tmp_path: Path) -> None:

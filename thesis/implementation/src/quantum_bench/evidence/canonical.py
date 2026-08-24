@@ -95,6 +95,17 @@ _IDENTITY_FIELDS = frozenset(
     }
 )
 _MEASUREMENT_FIELDS = frozenset(field.name for field in fields(_Measurement))
+_VALIDATION_FIELDS = frozenset(
+    {
+        "policy_reference_applicable",
+        "policy_reference_passed",
+        "full_precision_threshold_applicable",
+        "full_precision_passed",
+        "scientific_validation_passed",
+        "max_abs_error",
+        "relative_l2_error",
+    }
+)
 _EXPECTED_COUNT_FIELDS = frozenset({"warmup", "measurement", "sessions"})
 _FAILED_FIELDS = frozenset({"stage", "reason"})
 _UNSUPPORTED_FIELDS = frozenset({"stage", "reason", "capability"})
@@ -412,6 +423,48 @@ def _validate_measurement(value: object) -> None:
         raise ValueError(f"invalid measurement: {error}") from error
 
 
+def _validate_validation(value: object) -> None:
+    validation = _mapping(value, "validation")
+    _exact_fields(validation, _VALIDATION_FIELDS, "validation")
+    for field in (
+        "policy_reference_applicable",
+        "full_precision_threshold_applicable",
+        "scientific_validation_passed",
+    ):
+        if not isinstance(validation[field], bool):
+            raise TypeError(f"validation.{field} must be a boolean")
+    for applicable, passed in (
+        ("policy_reference_applicable", "policy_reference_passed"),
+        ("full_precision_threshold_applicable", "full_precision_passed"),
+    ):
+        if validation[applicable]:
+            if not isinstance(validation[passed], bool):
+                raise TypeError(
+                    f"validation.{passed} must be a boolean when applicable"
+                )
+        elif validation[passed] is not None:
+            raise ValueError(f"validation.{passed} must be null when not applicable")
+    if not (
+        validation["policy_reference_applicable"]
+        or validation["full_precision_threshold_applicable"]
+    ):
+        raise ValueError("validation must include at least one applicable comparison")
+    expected_scientific = all(
+        validation[passed] is True
+        for applicable, passed in (
+            ("policy_reference_applicable", "policy_reference_passed"),
+            ("full_precision_threshold_applicable", "full_precision_passed"),
+        )
+        if validation[applicable]
+    )
+    if validation["scientific_validation_passed"] != expected_scientific:
+        raise ValueError(
+            "validation.scientific_validation_passed must equal applicable comparisons"
+        )
+    for field in ("max_abs_error", "relative_l2_error"):
+        _finite_nonnegative(validation[field], f"validation.{field}")
+
+
 def _validate_failure(value: object, status: str) -> None:
     failure = _mapping(value, "failure")
     expected = _UNSUPPORTED_FIELDS if status == "unsupported" else _FAILED_FIELDS
@@ -476,7 +529,7 @@ def validate_sample(record: Mapping[str, Any]) -> None:
     _mapping(record["backend_facts"], "backend_facts")
     _mapping(record["numeric_facts"], "numeric_facts")
     if record["validation"] is not None:
-        _mapping(record["validation"], "validation")
+        _validate_validation(record["validation"])
 
     status = record["status"]
     if status == "success":
@@ -672,6 +725,14 @@ def validate_artifact_set(
         if any(sample["status"] != "success" for sample in sample_rows):
             raise ValueError("completed artifacts require every sample to succeed")
         if any(
+            sample["validation"] is not None
+            and sample["validation"]["scientific_validation_passed"] is False
+            for sample in sample_rows
+        ):
+            raise ValueError(
+                "completed artifacts cannot contain failed scientific validation"
+            )
+        if any(
             session["status"] != "success" or not session["release_verified"]
             for session in session_rows
         ):
@@ -815,6 +876,71 @@ def _load_json_lines(path: Path, field: str) -> tuple[Mapping[str, Any], ...]:
     )
 
 
+def _read_canonical_json_mapping(path: Path, field: str) -> Mapping[str, Any]:
+    """Read one canonical JSON object, including its required final newline."""
+
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raise ValueError(f"missing required evidence file: {path.name}") from None
+    except UnicodeDecodeError as error:
+        raise ValueError(f"{field} must be UTF-8") from error
+    if not text.endswith("\n"):
+        raise ValueError(f"{field} must end with exactly one canonical newline")
+    payload = text[:-1]
+    if "\n" in payload:
+        raise ValueError(f"{field} must contain exactly one JSON record")
+    record = _mapping(_strict_json(payload, field), field)
+    if text != canonical_json(record) + "\n":
+        raise ValueError(f"{field} is not canonically encoded")
+    return record
+
+
+def _read_canonical_json_lines(
+    path: Path, field: str
+) -> tuple[Mapping[str, Any], ...]:
+    """Read newline-terminated canonical JSONL records without rewriting them."""
+
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raise ValueError(f"missing required evidence file: {path.name}") from None
+    except UnicodeDecodeError as error:
+        raise ValueError(f"{field} must be UTF-8") from error
+    if not text:
+        return ()
+    if not text.endswith("\n"):
+        raise ValueError(f"{field} must be newline-terminated")
+    records: list[Mapping[str, Any]] = []
+    for index, line in enumerate(text[:-1].split("\n"), start=1):
+        if not line:
+            raise ValueError(f"{field} must not contain blank lines")
+        record = _mapping(_strict_json(line, f"{field} line {index}"), f"{field} line {index}")
+        if line != canonical_json(record):
+            raise ValueError(f"{field} line {index} is not canonically encoded")
+        records.append(record)
+    return tuple(records)
+
+
+def load_artifacts(
+    directory: str | os.PathLike[str],
+) -> tuple[Mapping[str, Any], tuple[Mapping[str, Any], ...], tuple[Mapping[str, Any], ...]]:
+    """Load and validate one finalized canonical evidence artifact directory.
+
+    The reader is deliberately strict: each primary file must exist, parse without
+    duplicate keys, and be byte-for-byte canonical. It never rewrites artifacts.
+    """
+
+    root = Path(directory)
+    if not root.is_dir():
+        raise ValueError(f"artifact directory does not exist: {root}")
+    manifest = _read_canonical_json_mapping(root / _FILES["manifest"], "manifest")
+    samples = _read_canonical_json_lines(root / _FILES["samples"], "samples")
+    sessions = _read_canonical_json_lines(root / _FILES["sessions"], "sessions")
+    validate_artifact_set(manifest, samples, sessions)
+    return manifest, samples, sessions
+
+
 def finalize_artifacts(directory: str | os.PathLike[str], *, status: str) -> None:
     """Validate an artifact directory and atomically finalize its manifest."""
 
@@ -844,6 +970,7 @@ __all__ = [
     "canonical_json",
     "finalize_artifacts",
     "identity_hash",
+    "load_artifacts",
     "new_run_id",
     "require_matching_scope",
     "sample_id",

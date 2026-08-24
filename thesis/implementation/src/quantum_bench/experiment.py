@@ -69,6 +69,17 @@ _MEASUREMENT_FIELDS = (
     "energy_j",
 )
 _TIMING_SCOPES = frozenset({"simulation_end_to_end_v1", "steady_execution_v1"})
+_VALIDATION_FIELDS = frozenset(
+    {
+        "policy_reference_applicable",
+        "policy_reference_passed",
+        "full_precision_threshold_applicable",
+        "full_precision_passed",
+        "scientific_validation_passed",
+        "max_abs_error",
+        "relative_l2_error",
+    }
+)
 _DEFAULT_VALIDATION_POLICY = {
     "policy": "complex128_reference_metrics_v1",
     "reference_dtype": "complex128",
@@ -529,6 +540,7 @@ def run_direct_samples(
     repetitions: int,
     run_once: Callable[[], ExecutionSample],
     samples_path: str | os.PathLike[str],
+    validate: Callable[[ExecutionSample], Mapping[str, JsonValue]] | None = None,
 ) -> tuple[Mapping[str, JsonValue], ...]:
     """Run and append all warmup and measurement samples for a direct route."""
 
@@ -561,6 +573,7 @@ def run_direct_samples(
                 sample_index=sample_index,
                 session_instance_id=None,
                 invoke=lambda: run_once(),
+                validate=validate,
             )
             append_sample(samples_path, row)
             rows.append(row)
@@ -581,6 +594,7 @@ def run_session_samples(
     inputs: Mapping[str, Any],
     samples_path: str | os.PathLike[str],
     sessions_path: str | os.PathLike[str],
+    validate: Callable[[ExecutionSample], Mapping[str, JsonValue]] | None = None,
 ) -> tuple[tuple[Mapping[str, JsonValue], ...], Mapping[str, JsonValue]]:
     """Run samples on one persistent session and append its lifecycle record."""
 
@@ -709,6 +723,7 @@ def run_session_samples(
                         session_instance_id=session_instance_id,
                         invoke=lambda: run_method(inputs),
                         persistent_session=True,
+                        validate=validate,
                     )
                     append_sample(samples_path, row)
                     rows.append(row)
@@ -855,6 +870,7 @@ def _run_sample(
     session_instance_id: str | None,
     invoke: Callable[[], Any],
     persistent_session: bool = False,
+    validate: Callable[[ExecutionSample], Mapping[str, JsonValue]] | None = None,
 ) -> Mapping[str, JsonValue]:
     base: dict[str, JsonValue] = {
         "schema_version": "evidence_sample_v1",
@@ -899,13 +915,49 @@ def _run_sample(
                     "reason": "persistent session samples require steady_execution_v1 timing",
                 },
             }
+        measurement = _measurement_mapping(sample.measurement)
+        backend_facts = _plain_json(sample.backend_facts)
+        numeric_facts = _plain_json(sample.numeric_facts)
+        output_sha256 = _output_hash(sample.output)
+        validation: Mapping[str, JsonValue] | None = None
+        if validate is not None:
+            try:
+                validation = _validation_mapping(validate(sample))
+            except Exception as exc:
+                return {
+                    **base,
+                    "status": "failed",
+                    "measurement": None,
+                    "backend_facts": backend_facts,
+                    "numeric_facts": numeric_facts,
+                    "output_sha256": None,
+                    "failure": {
+                        "stage": "validation",
+                        "reason": _validation_failure_reason(exc),
+                    },
+                }
+            if validation["scientific_validation_passed"] is not True:
+                return {
+                    **base,
+                    "status": "failed",
+                    "measurement": None,
+                    "backend_facts": backend_facts,
+                    "numeric_facts": numeric_facts,
+                    "output_sha256": None,
+                    "validation": validation,
+                    "failure": {
+                        "stage": "validation",
+                        "reason": "scientific validation failed",
+                    },
+                }
         return {
             **base,
             "status": "success",
-            "measurement": _measurement_mapping(sample.measurement),
-            "backend_facts": _plain_json(sample.backend_facts),
-            "numeric_facts": _plain_json(sample.numeric_facts),
-            "output_sha256": _output_hash(sample.output),
+            "measurement": measurement,
+            "backend_facts": backend_facts,
+            "numeric_facts": numeric_facts,
+            "output_sha256": output_sha256,
+            "validation": validation,
             "failure": None,
         }
     except UnsupportedExecution as exc:
@@ -946,6 +998,70 @@ def _run_sample(
 
 def _measurement_mapping(measurement: Measurement) -> Mapping[str, JsonValue]:
     return {field: getattr(measurement, field) for field in _MEASUREMENT_FIELDS}
+
+
+def _validation_mapping(
+    value: Mapping[str, JsonValue],
+) -> Mapping[str, JsonValue]:
+    if not isinstance(value, Mapping):
+        raise TypeError("validation must be a mapping")
+    if set(value) != _VALIDATION_FIELDS:
+        raise ValueError("validation fields must match the validation schema exactly")
+
+    normalized = _plain_json(value)
+    if not isinstance(normalized, dict):  # pragma: no cover - guarded above
+        raise TypeError("validation must be a mapping")
+    for field in (
+        "policy_reference_applicable",
+        "full_precision_threshold_applicable",
+        "scientific_validation_passed",
+    ):
+        if not isinstance(normalized[field], bool):
+            raise TypeError(f"validation.{field} must be a boolean")
+    for applicable, passed in (
+        ("policy_reference_applicable", "policy_reference_passed"),
+        ("full_precision_threshold_applicable", "full_precision_passed"),
+    ):
+        if normalized[applicable]:
+            if not isinstance(normalized[passed], bool):
+                raise TypeError(
+                    f"validation.{passed} must be a boolean when applicable"
+                )
+        elif normalized[passed] is not None:
+            raise ValueError(f"validation.{passed} must be null when not applicable")
+    if not (
+        normalized["policy_reference_applicable"]
+        or normalized["full_precision_threshold_applicable"]
+    ):
+        raise ValueError("validation must include at least one applicable comparison")
+    expected_scientific = all(
+        normalized[field] is True
+        for applicable, field in (
+            ("policy_reference_applicable", "policy_reference_passed"),
+            ("full_precision_threshold_applicable", "full_precision_passed"),
+        )
+        if normalized[applicable]
+    )
+    if normalized["scientific_validation_passed"] != expected_scientific:
+        raise ValueError(
+            "validation.scientific_validation_passed must equal applicable comparisons"
+        )
+    for field in ("max_abs_error", "relative_l2_error"):
+        error = normalized[field]
+        if isinstance(error, bool) or not isinstance(error, (int, float)):
+            raise TypeError(f"validation.{field} must be a finite non-negative number")
+        if not isfinite(float(error)) or float(error) < 0.0:
+            raise ValueError(f"validation.{field} must be a finite non-negative number")
+        normalized[field] = float(error)
+    return normalized
+
+
+def _validation_failure_reason(exc: Exception) -> str:
+    message = " ".join(str(exc).split())
+    reason = f"validator error: {type(exc).__name__}"
+    if message:
+        reason = f"{reason}: {message}"
+    return reason[:256]
 
 
 def _has_steady_session_timing(measurement: Measurement) -> bool:

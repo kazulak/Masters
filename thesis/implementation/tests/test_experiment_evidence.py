@@ -56,6 +56,18 @@ def _measurement() -> dict[str, object]:
     return value
 
 
+def _validation(*, passed: bool = True) -> dict[str, object]:
+    return {
+        "policy_reference_applicable": True,
+        "policy_reference_passed": passed,
+        "full_precision_threshold_applicable": False,
+        "full_precision_passed": None,
+        "scientific_validation_passed": passed,
+        "max_abs_error": 0.0,
+        "relative_l2_error": 0.0,
+    }
+
+
 def _manifest(
     *,
     run_id: str = _RUN_ID,
@@ -319,12 +331,65 @@ def test_explicit_opaque_json_mappings_remain_extensible() -> None:
     sample = _sample()
     sample["backend_facts"]["future"] = {"nested": [1, 2]}
     sample["numeric_facts"]["future"] = {"nested": True}
-    sample["validation"] = {"future_validation_field": "allowed"}
+    sample["validation"] = _validation()
     validate_sample(sample)
 
     session = _session()
     session["terminal_backend_facts"]["future"] = {"nested": None}
     validate_session(session)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "policy_reference_applicable",
+        "full_precision_threshold_applicable",
+        "scientific_validation_passed",
+    ],
+)
+def test_validation_schema_requires_boolean_control_fields(field: str) -> None:
+    sample = _sample()
+    sample["validation"] = _validation()
+    sample["validation"][field] = "true"
+    with pytest.raises((TypeError, ValueError), match="validation"):
+        validate_sample(sample)
+
+
+def test_validation_schema_requires_applicable_pass_fields_and_conjunction() -> None:
+    sample = _sample()
+    report = _validation()
+    report["policy_reference_passed"] = None
+    sample["validation"] = report
+    with pytest.raises((TypeError, ValueError), match="validation"):
+        validate_sample(sample)
+
+    report = _validation()
+    report["scientific_validation_passed"] = False
+    sample["validation"] = report
+    with pytest.raises(ValueError, match="scientific_validation_passed"):
+        validate_sample(sample)
+
+    report = _validation()
+    report["policy_reference_applicable"] = False
+    report["policy_reference_passed"] = None
+    report["full_precision_threshold_applicable"] = False
+    report["full_precision_passed"] = None
+    sample["validation"] = report
+    with pytest.raises(ValueError, match="at least one"):
+        validate_sample(sample)
+
+
+def test_completed_artifact_rejects_successful_failed_validation() -> None:
+    sample = _sample()
+    sample["validation"] = _validation(passed=False)
+    validate_sample(sample)
+
+    with pytest.raises(ValueError, match="failed scientific validation"):
+        validate_artifact_set(
+            _manifest(status="completed"),
+            [sample],
+            [_session()],
+        )
 
 
 def test_measurement_requires_every_measurement_field() -> None:
