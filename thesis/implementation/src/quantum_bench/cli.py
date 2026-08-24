@@ -400,6 +400,23 @@ def _identities(
     }
 
 
+def _identity_binding(
+    *,
+    case_id: str,
+    plan_id: str | None,
+    route_id: str,
+    identities: Mapping[str, JsonValue],
+) -> dict[str, JsonValue]:
+    """Build the manifest declaration for one selected experiment route."""
+
+    return {
+        "case_id": case_id,
+        "plan_id": plan_id,
+        "route_id": route_id,
+        **dict(identities),
+    }
+
+
 def _stage_summary(plan: UpmemPlan) -> list[dict[str, object]]:
     return [
         {
@@ -620,6 +637,7 @@ def _run_config(
             "experiment": _plain(config),
             "environment": env_facts,
             "validation_policy": _plain(default_validation_policy()),
+            "identity_bindings": [],
         },
         "expected_counts": _expected_counts(config),
         "files": {
@@ -639,6 +657,28 @@ def _run_config(
         tuple[str, str], tuple[object, Mapping[str, np.ndarray], object]
     ] = {}
     references: dict[str, np.ndarray] = {}
+    identity_bindings: dict[
+        tuple[str, str | None, str], dict[str, JsonValue]
+    ] = {}
+
+    def bind_route(
+        *,
+        case_id: str,
+        plan_id: str | None,
+        route_id: str,
+        identities: Mapping[str, JsonValue],
+    ) -> None:
+        key = (case_id, plan_id, route_id)
+        binding = _identity_binding(
+            case_id=case_id,
+            plan_id=plan_id,
+            route_id=route_id,
+            identities=identities,
+        )
+        previous = identity_bindings.setdefault(key, binding)
+        if previous != binding:
+            raise ValueError(f"selected route has conflicting identities: {key}")
+
     try:
         for matrix_item, route_id, route in selected:
             case_id = matrix_item["case_id"]
@@ -678,6 +718,12 @@ def _run_config(
                         route=route,
                         environment=env_id,
                     )
+                    bind_route(
+                        case_id=case_id,
+                        plan_id=plan_id,
+                        route_id=route_id,
+                        identities=identities,
+                    )
 
                     def unsupported(
                         failure: UnsupportedExecution = exc,
@@ -708,6 +754,12 @@ def _run_config(
                 upmem_plan=upmem_plan,
                 route=route,
                 environment=env_id,
+            )
+            bind_route(
+                case_id=case_id,
+                plan_id=plan_id,
+                route_id=route_id,
+                identities=identities,
             )
 
             if route["executor"] in _UPMEM_EXECUTORS:
@@ -819,6 +871,15 @@ def _run_config(
         except Exception:
             pass
         raise
+
+    manifest["configuration"]["identity_bindings"] = [
+        identity_bindings[key]
+        for key in sorted(
+            identity_bindings,
+            key=lambda key: (key[0], "" if key[1] is None else key[1], key[2]),
+        )
+    ]
+    write_manifest(target / "manifest.json", manifest)
 
     try:
         finalize_artifacts(target, status="completed")

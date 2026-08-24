@@ -75,9 +75,11 @@ retain the source commit and environment facts recorded by the run.
 
 ## Verification and Reporting
 
-`verify` checks schemas, IDs, sample/session links, expected counts, scopes,
-statuses, output/validation fields, session release and terminal manifest
-state. `report` reads an already verified run; it never executes workloads.
+`verify` checks schemas, IDs, exact matrix-route identity bindings,
+sample/session links, expected counts, scopes, statuses, output/validation
+fields, session release and terminal manifest state. A completed artifact may
+neither omit a configured route nor introduce an undeclared route. `report`
+reads an already verified run; it never executes workloads.
 Derived reports belong under `runs/comparisons/` and must be regenerated from
 the canonical JSONL records. Plots must facet by route, plan, numeric policy,
 topology and timing scope where those dimensions differ, and must reject

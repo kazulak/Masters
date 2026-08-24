@@ -427,6 +427,15 @@ def test_run_direct_dispatch_writes_exact_evidence_files(tmp_path: Path) -> None
         ("measurement", 1),
     ]
     assert {row["plan_id"] for row in samples} == {"greedy"}
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    bindings = manifest["configuration"]["identity_bindings"]
+    assert [
+        (binding["case_id"], binding["plan_id"], binding["route_id"])
+        for binding in bindings
+    ] == [("bell", "greedy", "numpy")]
+    assert samples[0]["identities"] == {
+        field: bindings[0][field] for field in samples[0]["identities"]
+    }
 
 
 def test_run_keeps_same_case_route_samples_separate_by_plan_id(tmp_path: Path) -> None:
@@ -896,6 +905,19 @@ def _artifact(
     experiment_id = str(samples[0]["experiment_id"])
     environment_id_value = str(samples[0]["identities"]["environment_id"])
     policy_id = str(samples[0]["identities"]["validation_policy_id"])
+    bindings = {
+        (
+            str(sample["case_id"]),
+            sample["plan_id"],
+            str(sample["route_id"]),
+        ): {
+            "case_id": sample["case_id"],
+            "plan_id": sample["plan_id"],
+            "route_id": sample["route_id"],
+            **sample["identities"],
+        }
+        for sample in samples
+    }
     manifest = {
         "schema_version": "evidence_manifest_v1",
         "run_id": run_id,
@@ -909,6 +931,17 @@ def _artifact(
             "experiment": {"experiment_id": experiment_id},
             "environment": _ENVIRONMENT,
             "validation_policy": _VALIDATION_POLICY,
+            "identity_bindings": [
+                bindings[key]
+                for key in sorted(
+                    bindings,
+                    key=lambda key: (
+                        key[0],
+                        "" if key[1] is None else str(key[1]),
+                        key[2],
+                    ),
+                )
+            ],
         },
         "expected_counts": {
             "warmup": 0,

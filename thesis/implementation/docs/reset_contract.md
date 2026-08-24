@@ -191,11 +191,13 @@ contract.
 
 Every run has `manifest.json`, `samples.jsonl`, and `sessions.jsonl`. The
 manifest binds source commit, dirty-tree state, experiment, environment,
-validation policy, expected counts, and file names. Samples bind case, route,
-plan, identities, sample kind/index, timing, facts, validation, and failure.
+validation policy, expected counts, file names, and one canonical identity
+binding for every selected `(case_id, plan_id, route_id)`. Samples bind case,
+route, plan, identities, sample kind/index, timing, facts, validation, and failure.
 Sessions bind protocol/runtime identity, open/close state, terminal facts, and
 resource release. Canonical validation rejects missing links, duplicate IDs,
-wrong counts, invalid scopes, failed release, or identity mismatches.
+wrong counts, routes outside or missing from the experiment matrix, invalid
+scopes, failed release, or identity mismatches.
 
 Claim admission is explicit. Functional correctness requires a valid sample and
 passed applicable validation. Physical execution requires physical UPMEM facts;

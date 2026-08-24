@@ -93,7 +93,24 @@ def _manifest(
         "created_at_utc": created_at_utc,
         "source_commit": "a" * 40,
         "source_worktree_dirty": False,
-        "configuration": {"b": 2, "a": [True, None]},
+        "configuration": {
+            "b": 2,
+            "a": [True, None],
+            "identity_bindings": [
+                {
+                    "case_id": "case-1",
+                    "plan_id": "plan-1",
+                    "route_id": "route-1",
+                    "problem_id": "1" * 64,
+                    "tensor_network_structure_id": "2" * 64,
+                    "logical_plan_id": "3" * 64,
+                    "physical_plan_id": None,
+                    "executable_id": None,
+                    "environment_id": _ENVIRONMENT_ID,
+                    "validation_policy_id": _POLICY_ID,
+                }
+            ],
+        },
         "expected_counts": expected_counts,
         "files": {
             "manifest": "manifest.json",
@@ -713,6 +730,130 @@ def test_artifact_set_accepts_valid_completed_records() -> None:
         [_sample()],
         [_session()],
     )
+
+
+def test_completed_artifact_rejects_undeclared_route_or_identity_tampering() -> None:
+    manifest = _manifest(
+        status="completed",
+        expected_counts={"warmup": 0, "measurement": 1, "sessions": 0},
+    )
+    undeclared = _sample(route_id="route-2", session_instance_id=None)
+    with pytest.raises(ValueError, match="not declared by identity_bindings"):
+        validate_artifact_set(manifest, [undeclared], [])
+
+    session_manifest = _manifest(
+        status="completed",
+        expected_counts={"warmup": 0, "measurement": 1, "sessions": 1},
+    )
+    with pytest.raises(ValueError, match="session route is not declared"):
+        validate_artifact_set(
+            session_manifest,
+            [_sample()],
+            [_session(route_id="route-2")],
+        )
+
+    for field, value in (
+        ("logical_plan_id", "4" * 64),
+        ("physical_plan_id", "5" * 64),
+        ("executable_id", "6" * 64),
+    ):
+        binding = manifest["configuration"]["identity_bindings"][0]
+        original = binding[field]
+        binding[field] = value
+        sample = _sample(session_instance_id=None)
+        sample["identities"][field] = value
+        sample["identities"][field] = "7" * 64
+        with pytest.raises(ValueError, match=f"identities.{field}"):
+            validate_artifact_set(manifest, [sample], [])
+        binding[field] = original
+
+
+def test_completed_artifact_rejects_duplicate_or_missing_identity_bindings() -> None:
+    manifest = _manifest(
+        status="completed",
+        expected_counts={"warmup": 0, "measurement": 1, "sessions": 0},
+    )
+    binding = deepcopy(manifest["configuration"]["identity_bindings"][0])
+    manifest["configuration"]["identity_bindings"].append(binding)
+    with pytest.raises(ValueError, match="duplicate identity_binding"):
+        validate_artifact_set(manifest, [_sample(session_instance_id=None)], [])
+
+    manifest = _manifest(
+        status="completed",
+        expected_counts={"warmup": 0, "measurement": 1, "sessions": 0},
+    )
+    manifest["configuration"]["identity_bindings"] = []
+    with pytest.raises(ValueError, match="not declared by identity_bindings"):
+        validate_artifact_set(manifest, [_sample(session_instance_id=None)], [])
+
+
+def test_completed_artifact_requires_every_configured_matrix_route() -> None:
+    manifest = _manifest(
+        status="completed",
+        expected_counts={"warmup": 0, "measurement": 1, "sessions": 0},
+    )
+    manifest["configuration"]["experiment"] = {
+        "matrix": [
+            {
+                "case_id": "case-1",
+                "plan_id": "plan-1",
+                "route_ids": ["route-1", "route-2"],
+            }
+        ]
+    }
+
+    with pytest.raises(ValueError, match="cover exactly declared routes"):
+        validate_artifact_set(manifest, [_sample(session_instance_id=None)], [])
+
+
+def test_completed_artifact_binds_mixed_direct_and_session_routes() -> None:
+    direct = _sample(session_instance_id=None)
+    session = _session(
+        case_id="case-2",
+        plan_id="plan-2",
+        route_id="route-2",
+        session_instance_id="session-2",
+    )
+    upmem = _sample(
+        case_id="case-2",
+        plan_id="plan-2",
+        route_id="route-2",
+        session_instance_id="session-2",
+    )
+    upmem["identities"]["physical_plan_id"] = "4" * 64
+    upmem["identities"]["executable_id"] = "5" * 64
+    manifest = _manifest(
+        status="completed",
+        expected_counts={"warmup": 0, "measurement": 2, "sessions": 1},
+    )
+    manifest["configuration"]["identity_bindings"].append(
+        {
+            "case_id": "case-2",
+            "plan_id": "plan-2",
+            "route_id": "route-2",
+            **upmem["identities"],
+        }
+    )
+    validate_artifact_set(manifest, [direct, upmem], [session])
+
+
+def test_completed_artifact_accepts_planless_direct_route_binding() -> None:
+    direct = _sample(plan_id=None, session_instance_id=None)
+    direct["identities"]["tensor_network_structure_id"] = None
+    direct["identities"]["logical_plan_id"] = None
+    manifest = _manifest(
+        status="completed",
+        expected_counts={"warmup": 0, "measurement": 1, "sessions": 0},
+    )
+    manifest["configuration"]["identity_bindings"] = [
+        {
+            "case_id": direct["case_id"],
+            "plan_id": None,
+            "route_id": direct["route_id"],
+            **direct["identities"],
+        }
+    ]
+    validate_artifact_set(manifest, [direct], [])
 
 
 def test_completed_artifact_rejects_mixed_route_timing_scopes() -> None:

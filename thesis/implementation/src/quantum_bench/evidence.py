@@ -96,6 +96,14 @@ _IDENTITY_FIELDS = frozenset(
         "validation_policy_id",
     }
 )
+_IDENTITY_BINDING_FIELDS = frozenset(
+    {
+        "case_id",
+        "plan_id",
+        "route_id",
+        *_IDENTITY_FIELDS,
+    }
+)
 _MEASUREMENT_FIELDS = frozenset(field.name for field in fields(_Measurement))
 _VALIDATION_FIELDS = frozenset(
     {
@@ -215,6 +223,24 @@ def _nonnegative_int(value: object, field: str) -> None:
 def _nullable_or_string(value: object, field: str) -> None:
     if value is not None:
         _nonempty_string(value, field)
+
+
+def _route_key(record: Mapping[str, Any]) -> tuple[str, str | None, str]:
+    """Return the stable experiment-matrix key for a route record."""
+
+    case_id = _nonempty_string(record["case_id"], "case_id")
+    plan_id = record["plan_id"]
+    _nullable_or_string(plan_id, "plan_id")
+    route_id = _nonempty_string(record["route_id"], "route_id")
+    return case_id, plan_id, route_id
+
+
+def _route_sort_key(
+    key: tuple[str, str | None, str],
+) -> tuple[str, str, str]:
+    """Sort planless and planned routes without comparing ``None`` to strings."""
+
+    return key[0], "" if key[1] is None else key[1], key[2]
 
 
 def _sha256(value: object, field: str) -> None:
@@ -411,6 +437,113 @@ def validate_manifest(record: Mapping[str, Any]) -> None:
         raise ValueError("manifest status must be running, completed, or failed")
 
 
+def _validate_identities(value: object, field: str) -> Mapping[str, Any]:
+    identities = _mapping(value, field)
+    _exact_fields(identities, _IDENTITY_FIELDS, field)
+    for identity_field in (
+        "problem_id",
+        "environment_id",
+        "validation_policy_id",
+    ):
+        _sha256(identities[identity_field], f"{field}.{identity_field}")
+    tensor_network_id = identities["tensor_network_structure_id"]
+    logical_plan_id = identities["logical_plan_id"]
+    if (tensor_network_id is None) != (logical_plan_id is None):
+        raise ValueError(
+            "tensor_network_structure_id and logical_plan_id must be null together"
+        )
+    if tensor_network_id is not None:
+        _sha256(tensor_network_id, f"{field}.tensor_network_structure_id")
+    if logical_plan_id is not None:
+        _sha256(logical_plan_id, f"{field}.logical_plan_id")
+    for identity_field in ("physical_plan_id", "executable_id"):
+        if identities[identity_field] is not None:
+            _sha256(identities[identity_field], f"{field}.{identity_field}")
+    return identities
+
+
+def _identity_binding_key(binding: Mapping[str, Any]) -> tuple[str, str | None, str]:
+    return _route_key(binding)
+
+
+def _identity_bindings(
+    manifest: Mapping[str, Any], *, required: bool
+) -> dict[tuple[str, str | None, str], Mapping[str, Any]]:
+    """Validate canonical route bindings declared by a manifest configuration."""
+
+    configuration = _mapping(manifest["configuration"], "configuration")
+    value = configuration.get("identity_bindings")
+    if value is None:
+        if required:
+            raise ValueError("completed artifacts require configuration.identity_bindings")
+        return {}
+    if not isinstance(value, list):
+        raise TypeError("configuration.identity_bindings must be a list")
+
+    bindings: dict[tuple[str, str | None, str], Mapping[str, Any]] = {}
+    ordered_keys: list[tuple[str, str | None, str]] = []
+    for index, value_item in enumerate(value):
+        binding = _mapping(value_item, f"configuration.identity_bindings[{index}]")
+        _exact_fields(
+            binding,
+            _IDENTITY_BINDING_FIELDS,
+            f"configuration.identity_bindings[{index}]",
+        )
+        key = _identity_binding_key(binding)
+        _validate_identities(
+            {name: binding[name] for name in _IDENTITY_FIELDS},
+            f"configuration.identity_bindings[{index}]",
+        )
+        if key in bindings:
+            raise ValueError(f"duplicate identity_binding for route: {key}")
+        bindings[key] = binding
+        ordered_keys.append(key)
+
+    if ordered_keys != sorted(ordered_keys, key=_route_sort_key):
+        raise ValueError("configuration.identity_bindings must be unique and sorted")
+    return bindings
+
+
+def _declared_matrix_routes(
+    manifest: Mapping[str, Any],
+) -> set[tuple[str, str | None, str]] | None:
+    """Return selected routes from a persisted benchmark configuration, if present."""
+
+    configuration = _mapping(manifest["configuration"], "configuration")
+    experiment_value = configuration.get("experiment")
+    if not isinstance(experiment_value, Mapping):
+        return None
+    experiment = _mapping(experiment_value, "configuration.experiment")
+    matrix = experiment.get("matrix")
+    if matrix is None:
+        return None
+    if not isinstance(matrix, list):
+        raise TypeError("configuration.experiment.matrix must be a list")
+
+    routes: set[tuple[str, str | None, str]] = set()
+    for index, item_value in enumerate(matrix):
+        item = _mapping(
+            item_value, f"configuration.experiment.configuration.matrix[{index}]"
+        )
+        _exact_fields(
+            item,
+            frozenset({"case_id", "plan_id", "route_ids"}),
+            f"configuration.experiment.configuration.matrix[{index}]",
+        )
+        case_id = _nonempty_string(item["case_id"], "matrix case_id")
+        plan_id = item["plan_id"]
+        _nullable_or_string(plan_id, "matrix plan_id")
+        route_ids = item["route_ids"]
+        if not isinstance(route_ids, list):
+            raise TypeError("matrix route_ids must be a list")
+        for route_id in route_ids:
+            key = (case_id, plan_id, _nonempty_string(route_id, "matrix route_id"))
+            if key in routes:
+                raise ValueError(f"duplicate route in experiment matrix: {key}")
+            routes.add(key)
+    return routes
+
+
 def _validate_measurement(value: object) -> None:
     measurement = _mapping(value, "measurement")
     _exact_fields(measurement, _MEASUREMENT_FIELDS, "measurement")
@@ -502,27 +635,7 @@ def validate_sample(record: Mapping[str, Any]) -> None:
     if record["status"] not in _SAMPLE_STATUSES:
         raise ValueError("sample status must be success, unsupported, or failed")
 
-    identities = _mapping(record["identities"], "identities")
-    _exact_fields(identities, _IDENTITY_FIELDS, "identities")
-    for field in (
-        "problem_id",
-        "environment_id",
-        "validation_policy_id",
-    ):
-        _sha256(identities[field], f"identities.{field}")
-    tensor_network_id = identities["tensor_network_structure_id"]
-    logical_plan_id = identities["logical_plan_id"]
-    if (tensor_network_id is None) != (logical_plan_id is None):
-        raise ValueError(
-            "tensor_network_structure_id and logical_plan_id must be null together"
-        )
-    if tensor_network_id is not None:
-        _sha256(tensor_network_id, "identities.tensor_network_structure_id")
-    if logical_plan_id is not None:
-        _sha256(logical_plan_id, "identities.logical_plan_id")
-    for field in ("physical_plan_id", "executable_id"):
-        if identities[field] is not None:
-            _sha256(identities[field], f"identities.{field}")
+    _validate_identities(record["identities"], "identities")
 
     expected_id = sample_id(
         record["run_id"],
@@ -677,6 +790,9 @@ def validate_artifact_set(
     session_rows = _record_rows(sessions, "sessions")
     manifest_run_id = manifest["run_id"]
     manifest_experiment_id = manifest["experiment_id"]
+    strict_bindings = manifest["status"] == "completed"
+    bindings = _identity_bindings(manifest, required=strict_bindings)
+    observed_routes: set[tuple[str, str | None, str]] = set()
 
     sessions_by_id: dict[str, Mapping[str, Any]] = {}
     for session in session_rows:
@@ -688,6 +804,10 @@ def validate_artifact_set(
         session_instance_id = session["session_instance_id"]
         if session_instance_id in sessions_by_id:
             raise ValueError(f"duplicate session_instance_id: {session_instance_id}")
+        route_key = _route_key(session)
+        observed_routes.add(route_key)
+        if strict_bindings and route_key not in bindings:
+            raise ValueError(f"session route is not declared by identity_bindings: {route_key}")
         sessions_by_id[session_instance_id] = session
 
     sample_ids: set[str] = set()
@@ -704,6 +824,19 @@ def validate_artifact_set(
             raise ValueError("sample environment_id does not match manifest")
         if identities["validation_policy_id"] != manifest["validation_policy_id"]:
             raise ValueError("sample validation_policy_id does not match manifest")
+        route_key = _route_key(sample)
+        observed_routes.add(route_key)
+        if strict_bindings:
+            binding = bindings.get(route_key)
+            if binding is None:
+                raise ValueError(
+                    f"sample route is not declared by identity_bindings: {route_key}"
+                )
+            for field in _IDENTITY_FIELDS:
+                if identities[field] != binding[field]:
+                    raise ValueError(
+                        f"sample identities.{field} does not match identity_binding"
+                    )
 
         current_sample_id = sample["sample_id"]
         if current_sample_id in sample_ids:
@@ -753,6 +886,22 @@ def validate_artifact_set(
         ):
             raise ValueError(
                 "completed artifacts require successful sessions with verified release"
+            )
+        expected_routes = _declared_matrix_routes(manifest)
+        declared_routes = expected_routes if expected_routes is not None else observed_routes
+        if set(bindings) != declared_routes:
+            missing = sorted(declared_routes - set(bindings), key=_route_sort_key)
+            undeclared = sorted(set(bindings) - declared_routes, key=_route_sort_key)
+            raise ValueError(
+                "completed identity_bindings must cover exactly declared routes: "
+                f"missing={missing}, undeclared={undeclared}"
+            )
+        if observed_routes != declared_routes:
+            missing = sorted(declared_routes - observed_routes, key=_route_sort_key)
+            undeclared = sorted(observed_routes - declared_routes, key=_route_sort_key)
+            raise ValueError(
+                "completed identity_bindings must cover exactly observed routes: "
+                f"missing={missing}, undeclared={undeclared}"
             )
         if any(len(scopes) != 1 for scopes in successful_scopes.values()):
             raise ValueError(
@@ -964,12 +1113,21 @@ def _validate_manifest_identity_payloads(manifest: Mapping[str, Any]) -> None:
     """Bind manifest identity hashes to the persisted configuration payloads."""
 
     configuration = _mapping(manifest["configuration"], "configuration")
-    expected = {"experiment", "environment", "validation_policy"}
-    if set(configuration) != expected:
+    expected = {
+        "experiment",
+        "environment",
+        "validation_policy",
+        "identity_bindings",
+    }
+    legacy_expected = expected - {"identity_bindings"}
+    if set(configuration) != expected and set(configuration) != legacy_expected:
         raise ValueError(
-            "manifest configuration must contain experiment, environment, and "
-            "validation_policy exactly"
+            "manifest configuration must contain experiment, environment, validation_policy, "
+            "and optional identity_bindings exactly"
         )
+    _identity_bindings(
+        manifest, required=manifest["status"] == "completed"
+    )
     normalized_config = _mapping(
         configuration["experiment"], "configuration.experiment"
     )
