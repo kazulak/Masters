@@ -1,0 +1,44 @@
+schema_version: tn_benchmark_v1
+experiment_id: reset-smoke
+defaults:
+  warmups: 1
+  repetitions: 3
+  timeout_s: 120.0
+cases:
+  bell:
+    circuit:
+      kind: builtin
+      name: bell_2q
+      path: null
+      parameters: {}
+plans:
+  greedy:
+    planner:
+      engine: opt_einsum
+      mode: greedy
+      max_repeats: 1
+      seed: 0
+    slicing: null
+routes:
+  numpy_float32:
+    executor: numpy_dag
+    numeric_policy: split_complex_float32_v1
+    options: {}
+  quimb:
+    executor: quimb
+    numeric_policy: null
+    options:
+      optimize: greedy
+  cotengra:
+    executor: cotengra
+    numeric_policy: null
+    options:
+      methods: greedy
+      max_repeats: 1
+matrix:
+  - case_id: bell
+    plan_id: greedy
+    route_ids: [numpy_float32]
+  - case_id: bell
+    plan_id: null
+    route_ids: [quimb, cotengra]
