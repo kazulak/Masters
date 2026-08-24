@@ -154,6 +154,9 @@ The native ABI is a real-valued output-tile contraction ABI. Complex execution
 uses four real-product launches on the assigned work. The current plan is
 bounded and host-roundtrip; it does not imply graph-wide DPU residency,
 arbitrary slicing, multi-rank scaling, speedup, or energy efficiency.
+The requested tasklet count must match both the host and DPU binaries'
+compile-time `NR_TASKLETS`; either side rejects a mismatch before accepting
+kernel results.
 
 ## Execution and Failure
 

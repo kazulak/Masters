@@ -108,6 +108,7 @@ int main(void) {
         V4_COMPLETION.checksum_fnv1a64 = 0u;
         if (V4_CONTROL.magic != EXECUTION_PLAN_V4_CONTROL_MAGIC ||
             V4_CONTROL.version != EXECUTION_PLAN_V4_VERSION ||
+            V4_CONTROL.reserved0 != (uint32_t)NR_TASKLETS ||
             (V4_CONTROL.numeric_mode != EXECUTION_PLAN_V4_NUMERIC_FLOAT32 &&
              V4_CONTROL.numeric_mode != EXECUTION_PLAN_V4_NUMERIC_HOST_PACKED_INT8) ||
             ((V4_CONTROL.flags & EXECUTION_PLAN_V4_FLAG_ZERO_WORK) == 0u &&

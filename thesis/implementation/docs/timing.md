@@ -53,6 +53,10 @@ extraction. Stop when the decoded requested result is available.
 Exclude configuration parsing, native compilation, environment setup, reference
 calculation, validation, hashing, evidence writing and session close.
 
+Current support is limited to direct Quimb/cotengra and QuEST routes. NumPy
+same-DAG and UPMEM routes do not emit this scope because logical or physical
+preparation currently happens before their repetition loops.
+
 ### `steady_execution_v1`
 
 Requires a reusable prepared context. A session is opened before warmups and
@@ -62,11 +66,18 @@ reduction and decode. Exclude planning, mapping, session open/close, validation,
 hashing and evidence writing. A route unable to provide this lifecycle is
 unsupported for this scope.
 
+Current NumPy same-DAG and UPMEM session routes emit this scope. Reports reject
+pairing it with `simulation_end_to_end_v1`.
+
 ## Concurrency and Comparisons
 
 The coordinator measures global wall time. It must not use the maximum of
 independent rank phase timings as wall time unless a global phase was measured.
 Per-rank values belong in backend facts; `rank_work_s` remains summed work.
+For a one-rank UPMEM session, `h2d_s`, `kernel_s`, and `d2h_s` are the sums of
+the native per-operation phase counters. For multi-rank sessions those fields
+remain `null`; independently timed rank phases are not inferred to be global
+wall-clock phases.
 
 Direct ratios are defined only for matching scopes and compatible identities:
 

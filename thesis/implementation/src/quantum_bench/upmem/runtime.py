@@ -2094,6 +2094,23 @@ class UpmemSession:
             ) from exc
 
         total_wall_s = time.perf_counter() - started
+        if self._plan.topology.rank_count == 1:
+            def phase_sum(field: str) -> float:
+                total = 0.0
+                for metadata in operation_metadata:
+                    timing = metadata.get("timing")
+                    if not isinstance(timing, Mapping):
+                        raise ValueError("UPMEM operation timing is not a mapping")
+                    total += _seconds(timing.get(field, 0.0))
+                return total
+
+            h2d_s = phase_sum("rank_response_h2d_max_sum_s")
+            kernel_s = phase_sum("rank_response_kernel_max_sum_s")
+            d2h_s = phase_sum("rank_response_d2h_max_sum_s")
+        else:
+            h2d_s = None
+            kernel_s = None
+            d2h_s = None
         try:
             observations = _derive_operation_observations(
                 operation_metadata,
@@ -2170,7 +2187,10 @@ class UpmemSession:
                 total_wall_s=total_wall_s,
                 preparation_s=preparation_s,
                 encode_s=encode_s,
+                h2d_s=h2d_s,
+                kernel_s=kernel_s,
                 host_reduce_s=host_reduce_s if host_reduce_executed else None,
+                d2h_s=d2h_s,
                 decode_s=decode_s,
                 h2d_bytes=total_h2d,
                 d2h_bytes=total_d2h,

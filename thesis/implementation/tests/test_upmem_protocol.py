@@ -343,12 +343,16 @@ def test_v4_native_sources_preserve_the_abi_and_build_contract() -> None:
     assert "UPMEM_ALLOW_PHYSICAL_HARDWARE" in host
     assert "--target hardware|simulator" in host
     assert "dpu_launch(v4_provider.set, DPU_SYNCHRONOUS)" in host
+    assert "tasklets != (uint32_t)NR_TASKLETS" in host
+    assert "tasklet_binary_mismatch" in host
+    assert "control.reserved0 = tasklets;" in host
     assert "request_manifest_sha256" in host
     assert "cpu_fallback_used\\\":false" in host
     assert "__mram_noinit uint8_t V4_MRAM" in dpu
     assert "__dma_aligned uint8_t v4_input_window" in dpu
     assert "mram_read" in dpu and "mram_write" in dpu
     assert "v4 requires NR_TASKLETS in [1,24]" in dpu
+    assert "V4_CONTROL.reserved0 != (uint32_t)NR_TASKLETS" in dpu
     assert "MAX_TASKLETS := 24" in makefile
     assert "bin/host_upmem_execution_plan_v4_t%" in makefile
     assert "bin/dpu_gemm_tile_v4_t%" in makefile

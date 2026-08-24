@@ -15,6 +15,10 @@
 
 #include "plan.h"
 #include "simplepim_provider.h"
+
+#ifndef NR_TASKLETS
+#define NR_TASKLETS 1
+#endif
 #include "protocol.h"
 #include "request.h"
 
@@ -200,6 +204,7 @@ static void v4_emit_ready(
 static int copy_request_to_dpus(
     const execution_plan_v4_request_t *request,
     struct dpu_set_t set,
+    uint32_t tasklets,
     v4_request_metrics_t *metrics,
     char **error_message
 ) {
@@ -232,6 +237,7 @@ static int copy_request_to_dpus(
         control.b_offset_bytes = unit->b_offset_bytes;
         control.c_offset_bytes = unit->c_offset_bytes;
         control.k_offset = (uint32_t)unit->k_offset;
+        control.reserved0 = tasklets;
         error = dpu_copy_to(dpu, "V4_CONTROL", 0u, &control, sizeof(control));
         metrics->h2d_bytes += sizeof(control);
         if (error == DPU_OK && (unit->flags & EXECUTION_PLAN_V4_FLAG_ZERO_WORK) == 0u) {
@@ -426,7 +432,7 @@ static int execute_request(
         execution_plan_v4_request_free(&request);
         return 1;
     }
-    if (copy_request_to_dpus(&request, v4_provider.set, &metrics, &error_message) != 0) {
+    if (copy_request_to_dpus(&request, v4_provider.set, tasklets, &metrics, &error_message) != 0) {
         failure_stage = "argument_transfer_failed";
         metrics.total_route_time_s = now_s() - route_started;
         v4_emit_response(&request, &metrics, results, failure_stage, error_message, 0, 0);
@@ -500,6 +506,11 @@ int main(int argc, char **argv) {
         v4_emit_startup_failure("hardware_profile_violation", "invalid session arguments or paths");
         v4_emit_release();
         return 2;
+    }
+    if (tasklets != (uint32_t)NR_TASKLETS) {
+        v4_emit_startup_failure("tasklet_binary_mismatch", "--tasklets must match host binary NR_TASKLETS");
+        v4_emit_release();
+        return 1;
     }
     if (strcmp(target, "hardware") == 0) {
         if (rank_path == NULL || getenv("UPMEM_ALLOW_PHYSICAL_HARDWARE") == NULL ||

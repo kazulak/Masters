@@ -180,6 +180,7 @@ def _engine(
     root: Path,
     *,
     dpu_count: int = 1,
+    rank_count: int = 1,
     execution_target: str = "physical_hardware",
     delay_s: float = 0.0,
 ) -> _Engine:
@@ -207,7 +208,7 @@ def _engine(
             rank_paths=(
                 ()
                 if execution_target == EXECUTION_TARGET_SIMULATOR
-                else ("/dev/dpu_rank0",)
+                else tuple(f"/dev/dpu_rank{index}" for index in range(rank_count))
             ),
             dpu_count=dpu_count,
             timeout_s=60.0,
@@ -299,14 +300,14 @@ def _close_mock_session(session) -> None:
         assert failure.stage == "session_close"
 
 
-def _resources(tmp_path: Path, opener) -> UpmemResources:
+def _resources(tmp_path: Path, opener, *, rank_count: int = 1) -> UpmemResources:
     host, dpu, initialization = _binaries(tmp_path / "resources")
     return UpmemResources(
         session_root=str(tmp_path / "session"),
         host_binary=str(host),
         dpu_binary=str(dpu),
         initialization_binary=str(initialization),
-        rank_paths=("/dev/dpu_rank0",),
+        rank_paths=tuple(f"/dev/dpu_rank{index}" for index in range(rank_count)),
         session_opener=opener,
     )
 
@@ -462,15 +463,42 @@ def test_persistent_session_matches_replay_and_renews_deadline(
     np.testing.assert_array_equal(first.output, expected.output)
     np.testing.assert_array_equal(second.output, expected.output)
     assert first.measurement.scope_id == "steady_execution_v1"
-    assert first.measurement.h2d_s is None
-    assert first.measurement.kernel_s is None
-    assert first.measurement.d2h_s is None
+    assert first.measurement.h2d_s == pytest.approx(0.08)
+    assert first.measurement.kernel_s == pytest.approx(0.16)
+    assert first.measurement.d2h_s == pytest.approx(0.08)
     assert first.backend_facts["physical_plan_id"]
     assert first.backend_facts["operation_facts"][0]["timing_scope"] == (
         "sum_of_per_request_max_rank_response_counters_v1"
     )
     assert first.measurement.h2d_bytes is not None
     assert first.measurement.d2h_bytes is not None
+    _close_mock_session(session)
+
+
+def test_multi_rank_plan_does_not_infer_global_phase_timings(tmp_path: Path) -> None:
+    node = _task(k=17, m=1, n=1)
+    dag, plan = _final_plan_for_node(
+        node,
+        policy="split_complex_float32_v1",
+        dpu_count=2,
+        rank_count=2,
+    )
+    engine = _engine(tmp_path / "engine", dpu_count=2, rank_count=2)
+
+    def opener(_dag, final_plan, _resources, _timeout_s):
+        return engine.open_session(final_plan.numeric_policy, final_plan.topology)
+
+    session = open_upmem(
+        dag,
+        plan,
+        _resources(tmp_path, opener, rank_count=2),
+        timeout_s=10.0,
+    )
+    sample = session.run_once(_inputs(node, k=17))
+
+    assert sample.measurement.h2d_s is None
+    assert sample.measurement.kernel_s is None
+    assert sample.measurement.d2h_s is None
     _close_mock_session(session)
 
 
