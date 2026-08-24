@@ -19,15 +19,16 @@ from quantum_bench.results import (
 
 
 IDENTITIES = {
-    "problem_id": "problem",
-    "tensor_network_structure_id": "tn",
-    "logical_plan_id": "logical",
+    "problem_id": "1" * 64,
+    "tensor_network_structure_id": "2" * 64,
+    "logical_plan_id": "3" * 64,
     "physical_plan_id": None,
     "executable_id": None,
-    "environment_id": "environment",
-    "validation_policy_id": "policy",
+    "environment_id": "4" * 64,
+    "validation_policy_id": "5" * 64,
 }
 RUN_ID = "12345678-1234-4234-8234-1234567890ab"
+EXPERIMENT_ID = "6" * 64
 
 
 def _sample(
@@ -80,7 +81,7 @@ def test_direct_order_continuation_and_measurement_nulls(tmp_path: Path) -> None
     path = tmp_path / "samples.jsonl"
     rows = run_direct_samples(
         run_id=RUN_ID,
-        experiment_id="experiment",
+        experiment_id=EXPERIMENT_ID,
         case_id="case",
         route_id="route",
         identities=IDENTITIES,
@@ -128,7 +129,7 @@ def test_direct_invalid_timing_scope_is_recorded_as_failure(tmp_path: Path) -> N
     path = tmp_path / "samples.jsonl"
     rows = run_direct_samples(
         run_id=RUN_ID,
-        experiment_id="experiment",
+        experiment_id=EXPERIMENT_ID,
         case_id="case",
         route_id="route",
         identities=IDENTITIES,
@@ -160,7 +161,7 @@ def test_output_hash_binds_dtype_and_shape(tmp_path: Path) -> None:
         rows.extend(
             run_direct_samples(
                 run_id=f"12345678-1234-4234-8234-1234567890a{index}",
-                experiment_id="experiment",
+                experiment_id=EXPERIMENT_ID,
                 case_id="case",
                 route_id="route",
                 identities=IDENTITIES,
@@ -183,7 +184,7 @@ def test_output_hash_normalizes_byte_order_and_rejects_invalid_outputs(
     big_endian = native.astype(">f4")
     native_row = run_direct_samples(
         run_id="42345678-1234-4234-8234-1234567890ab",
-        experiment_id="experiment",
+        experiment_id=EXPERIMENT_ID,
         case_id="case",
         route_id="route",
         identities=IDENTITIES,
@@ -194,7 +195,7 @@ def test_output_hash_normalizes_byte_order_and_rejects_invalid_outputs(
     )[0]
     big_endian_row = run_direct_samples(
         run_id="52345678-1234-4234-8234-1234567890ab",
-        experiment_id="experiment",
+        experiment_id=EXPERIMENT_ID,
         case_id="case",
         route_id="route",
         identities=IDENTITIES,
@@ -215,7 +216,7 @@ def test_output_hash_normalizes_byte_order_and_rejects_invalid_outputs(
     ):
         row = run_direct_samples(
             run_id=f"62345678-1234-4234-8234-1234567890a{index}",
-            experiment_id="experiment",
+            experiment_id=EXPERIMENT_ID,
             case_id="case",
             route_id="route",
             identities=IDENTITIES,
@@ -252,7 +253,7 @@ def test_session_is_persistent_and_close_is_outside_measurements(
     session = Session()
     rows, session_row = run_session_samples(
         run_id=RUN_ID,
-        experiment_id="experiment",
+        experiment_id=EXPERIMENT_ID,
         case_id="case",
         route_id="route",
         identities=IDENTITIES,
@@ -295,7 +296,7 @@ def test_session_stops_after_failure_and_open_failure_is_recorded(
     sessions_path = tmp_path / "sessions.jsonl"
     rows, session_row = run_session_samples(
         run_id=RUN_ID,
-        experiment_id="experiment",
+        experiment_id=EXPERIMENT_ID,
         case_id="case",
         route_id="route",
         identities=IDENTITIES,
@@ -317,7 +318,7 @@ def test_session_stops_after_failure_and_open_failure_is_recorded(
 
     _, open_row = run_session_samples(
         run_id="22345678-1234-4234-8234-1234567890ab",
-        experiment_id="experiment",
+        experiment_id=EXPERIMENT_ID,
         case_id="case",
         route_id="route",
         identities=IDENTITIES,
@@ -356,7 +357,7 @@ def test_invalid_uuid_rejects_before_direct_or_session_side_effects(
     with pytest.raises(ValueError, match="canonical UUID4"):
         run_direct_samples(
             run_id="not-a-uuid",
-            experiment_id="experiment",
+            experiment_id=EXPERIMENT_ID,
             case_id="case",
             route_id="route",
             identities=IDENTITIES,
@@ -368,7 +369,7 @@ def test_invalid_uuid_rejects_before_direct_or_session_side_effects(
     with pytest.raises(ValueError, match="canonical UUID4"):
         run_session_samples(
             run_id="not-a-uuid",
-            experiment_id="experiment",
+            experiment_id=EXPERIMENT_ID,
             case_id="case",
             route_id="route",
             identities=IDENTITIES,
@@ -400,7 +401,7 @@ def test_invalid_opened_session_is_closed_once_and_recorded(tmp_path: Path) -> N
     session = InvalidSession()
     rows, session_row = run_session_samples(
         run_id=RUN_ID,
-        experiment_id="experiment",
+        experiment_id=EXPERIMENT_ID,
         case_id="case",
         route_id="route",
         identities=IDENTITIES,
@@ -441,7 +442,7 @@ def test_session_timing_contract_failure_stops_later_attempts(tmp_path: Path) ->
     session = Session()
     rows, session_row = run_session_samples(
         run_id=RUN_ID,
-        experiment_id="experiment",
+        experiment_id=EXPERIMENT_ID,
         case_id="case",
         route_id="route",
         identities=IDENTITIES,
@@ -494,7 +495,7 @@ def test_session_execution_failures_stop_and_propagate(
     session = Session()
     rows, session_row = run_session_samples(
         run_id=RUN_ID,
-        experiment_id="experiment",
+        experiment_id=EXPERIMENT_ID,
         case_id="case",
         route_id="route",
         identities=IDENTITIES,
@@ -517,7 +518,7 @@ def test_argument_errors_do_not_write(tmp_path: Path) -> None:
     with pytest.raises((TypeError, ValueError)):
         run_direct_samples(
             run_id="",
-            experiment_id="experiment",
+            experiment_id=EXPERIMENT_ID,
             case_id="case",
             route_id="route",
             identities=IDENTITIES,
@@ -529,7 +530,7 @@ def test_argument_errors_do_not_write(tmp_path: Path) -> None:
     with pytest.raises((TypeError, ValueError)):
         run_direct_samples(
             run_id=RUN_ID,
-            experiment_id="experiment",
+            experiment_id=EXPERIMENT_ID,
             case_id="case",
             route_id="route",
             identities={**IDENTITIES, "extra": "bad"},
@@ -544,7 +545,7 @@ def test_argument_errors_do_not_write(tmp_path: Path) -> None:
 def test_sample_ids_use_canonical_identity_fields(tmp_path: Path) -> None:
     rows = run_direct_samples(
         run_id=RUN_ID,
-        experiment_id="experiment",
+        experiment_id=EXPERIMENT_ID,
         case_id="case",
         route_id="route",
         identities=IDENTITIES,
@@ -567,7 +568,7 @@ def test_direct_sample_id_collision_rejects_before_execution(tmp_path: Path) -> 
 
     kwargs = {
         "run_id": RUN_ID,
-        "experiment_id": "experiment",
+        "experiment_id": EXPERIMENT_ID,
         "case_id": "case",
         "route_id": "route",
         "identities": IDENTITIES,
@@ -612,7 +613,7 @@ def test_session_sample_id_collision_rejects_before_opening(tmp_path: Path) -> N
 
     kwargs = {
         "run_id": RUN_ID,
-        "experiment_id": "experiment",
+        "experiment_id": EXPERIMENT_ID,
         "case_id": "case",
         "route_id": "route",
         "identities": IDENTITIES,
@@ -664,7 +665,7 @@ def test_session_instance_collision_rejects_before_opening(
 
     kwargs = {
         "run_id": RUN_ID,
-        "experiment_id": "experiment",
+        "experiment_id": EXPERIMENT_ID,
         "case_id": "case",
         "route_id": "route",
         "identities": IDENTITIES,
@@ -706,7 +707,7 @@ def test_direct_unsupported_and_unexpected_rows(tmp_path: Path) -> None:
 
     rows = run_direct_samples(
         run_id=RUN_ID,
-        experiment_id="experiment",
+        experiment_id=EXPERIMENT_ID,
         case_id="case",
         route_id="route",
         identities=IDENTITIES,
@@ -739,7 +740,7 @@ def test_session_close_and_release_failures_are_recorded(tmp_path: Path) -> None
 
     _, close_row = run_session_samples(
         run_id=RUN_ID,
-        experiment_id="experiment",
+        experiment_id=EXPERIMENT_ID,
         case_id="case",
         route_id="route",
         identities=IDENTITIES,
@@ -771,7 +772,7 @@ def test_session_close_and_release_failures_are_recorded(tmp_path: Path) -> None
 
     _, release_row = run_session_samples(
         run_id="32345678-1234-4234-8234-1234567890ab",
-        experiment_id="experiment",
+        experiment_id=EXPERIMENT_ID,
         case_id="case",
         route_id="route",
         identities=IDENTITIES,
@@ -810,7 +811,7 @@ def test_contradictory_release_facts_are_preserved_and_normalized(
     sessions_path = tmp_path / "sessions.jsonl"
     _, session_row = run_session_samples(
         run_id=RUN_ID,
-        experiment_id="experiment",
+        experiment_id=EXPERIMENT_ID,
         case_id="case",
         route_id="route",
         identities=IDENTITIES,

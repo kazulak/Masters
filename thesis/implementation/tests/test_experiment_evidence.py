@@ -33,15 +33,20 @@ from quantum_bench.evidence import (
 )
 from quantum_bench.circuits import builtin_circuit
 from quantum_bench.experiment import run_direct_samples
-from quantum_bench.model import TensorNetwork, TensorSpec, make_simulation_job
+from quantum_bench.model import (
+    CircuitSpec,
+    TensorNetwork,
+    TensorSpec,
+    make_simulation_job,
+)
 from quantum_bench.results import Measurement
 
 
 _RUN_ID = new_run_id()
 _OTHER_RUN_ID = new_run_id()
-_EXPERIMENT_ID = "experiment-1"
-_ENVIRONMENT_ID = "environment-1"
-_POLICY_ID = "policy-1"
+_EXPERIMENT_ID = "e" * 64
+_ENVIRONMENT_ID = "d" * 64
+_POLICY_ID = "c" * 64
 _SESSION_ID = "session-1"
 
 
@@ -105,9 +110,9 @@ def _sample(
         "session_instance_id": session_instance_id,
         "status": status,
         "identities": {
-            "problem_id": "problem-1",
-            "tensor_network_structure_id": "tn-1",
-            "logical_plan_id": "logical-1",
+            "problem_id": "1" * 64,
+            "tensor_network_structure_id": "2" * 64,
+            "logical_plan_id": "3" * 64,
             "physical_plan_id": None,
             "executable_id": None,
             "environment_id": environment_id,
@@ -224,8 +229,25 @@ def test_identity_constructors_are_domain_separated_and_order_stable() -> None:
         output_labels=network.output_labels,
         einsum_expression=network.einsum_expression,
     )
-    assert tensor_network_structure_id(network) != tensor_network_structure_id(
+    assert tensor_network_structure_id(network) == tensor_network_structure_id(
         reversed_network
+    )
+
+
+def test_problem_identity_uses_circuit_semantics_not_name_or_source() -> None:
+    circuit = builtin_circuit("bell_2q")
+    renamed = CircuitSpec(
+        "different-display-name",
+        circuit.n_qubits,
+        circuit.operations,
+        {"origin": "different-provenance"},
+    )
+
+    assert problem_id(make_simulation_job(circuit)) == problem_id(
+        make_simulation_job(renamed)
+    )
+    assert problem_id(make_simulation_job(circuit, seed=1)) != problem_id(
+        make_simulation_job(circuit, seed=2)
     )
 
 
@@ -248,6 +270,18 @@ def test_fixed_records_reject_unknown_root_fields(validator, record) -> None:
     record["unexpected"] = True
     with pytest.raises(ValueError):
         validator(record)
+
+
+def test_evidence_rejects_non_hash_identity_fields() -> None:
+    manifest = _manifest()
+    manifest["environment_id"] = "environment-label"
+    with pytest.raises(ValueError, match="SHA-256"):
+        validate_manifest(manifest)
+
+    sample = _sample()
+    sample["identities"]["logical_plan_id"] = "logical-label"
+    with pytest.raises(ValueError, match="SHA-256"):
+        validate_sample(sample)
 
 
 def test_identities_and_failure_records_have_exact_fields() -> None:
@@ -607,9 +641,9 @@ def test_artifact_set_rejects_duplicate_or_conflicting_ids() -> None:
     "sample",
     [
         _sample(run_id=_OTHER_RUN_ID, session_instance_id=None),
-        _sample(experiment_id="other-experiment", session_instance_id=None),
-        _sample(environment_id="other-environment", session_instance_id=None),
-        _sample(validation_policy_id="other-policy", session_instance_id=None),
+        _sample(experiment_id="f" * 64, session_instance_id=None),
+        _sample(environment_id="a" * 64, session_instance_id=None),
+        _sample(validation_policy_id="b" * 64, session_instance_id=None),
     ],
 )
 def test_artifact_set_rejects_sample_context_mismatch(sample) -> None:

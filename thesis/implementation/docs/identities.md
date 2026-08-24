@@ -47,7 +47,6 @@ values:
 ```json
 {
   "schema_version": "tensor_network_structure_v1",
-  "circuit_semantics_hash": "...",
   "tensors": [
     {
       "id": "...",

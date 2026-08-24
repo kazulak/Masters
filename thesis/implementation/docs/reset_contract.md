@@ -1023,6 +1023,129 @@ native ABI, or fallback. Submit, response, decode, or session failures remain
 fail-closed. T4B1 subsequently owns DAG coordination, `ExecutionSample`
 construction, and the final `open_upmem`/`run_once` session API.
 
+## T10D Simulator Boundary
+
+The SDK simulator reuses ABI version 4, the real-tile DPU kernel, request
+serialization, `UpmemPlan`, tiling, and four-product complex execution. It is
+selected explicitly through `open_upmem_simulator(...)`; `open_upmem(...)`
+remains physical-only. Version 1 simulator execution is limited to one DPU,
+one logical rank, and `host_roundtrip_v1` intermediates.
+
+Successful simulator facts use:
+
+```text
+execution_class: sdk_simulator
+target_observed: sdk_simulator
+native_kernel_executed: true
+simulator_kernel_executed: true
+hardware_kernel_executed: false
+physical_target_verified: false
+cpu_fallback_used: false
+timing_claim_applicable: false
+scaling_claim_applicable: false
+speedup_claim_applicable: false
+energy_claim_applicable: false
+```
+
+Simulator timing is diagnostic only. T10D can support ABI, mapping, numeric,
+and reconstruction correctness claims after comparison with
+`replay_upmem_plan_once`; it cannot support physical timing, speedup, scaling,
+or energy claims. Fake-process tests establish only software contract behavior.
+
+## T11 Public Experiment Interface
+
+The reset has one YAML schema, `tn_benchmark_v1`. Its top-level fields are
+exactly:
+
+```text
+schema_version
+experiment_id
+defaults
+cases
+plans
+routes
+matrix
+```
+
+`defaults` has exactly `warmups`, `repetitions`, and `timeout_s`. A case value
+has exactly one `circuit` mapping. A circuit mapping has `kind`, `name`,
+`path`, and `parameters`; exactly one of `name` and `path` is non-null.
+`parameters` contains only JSON scalar values. `experiment_id` in YAML is a
+human-readable nonempty label; the normalized configuration replaces it with
+a deterministic SHA-256 over that label, the complete relative-path
+configuration, and the frozen validation policy. Supported kinds are `builtin`,
+`quest_compatible`, and `qasm_file`.
+
+A plan value has exactly `planner` and `slicing`. `planner` has `engine`,
+`mode`, `max_repeats`, and `seed`; engines are `opt_einsum` and `cotengra`.
+`slicing` is null or has exactly `node_id` and `minimum_slice_count`, using the
+implemented `local_contraction_slicing_v1` policy.
+
+A route value has exactly `executor`, `numeric_policy`, and `options`.
+`numeric_policy` is required for NumPy and UPMEM and null for other routes.
+`options` has executor-specific exact fields:
+
+```text
+numpy_dag:             {}
+quimb:                 {optimize}
+cotengra:              {methods, max_repeats}
+quest_cpu:             {runner}
+quest_gpu:             {verification_path}
+upmem_sdk_simulator:   {dpu_count, rank_count, tasklets_per_dpu,
+                        session_root, host_binary, dpu_binary,
+                        initialization_binary}
+upmem_physical:        {dpu_count, rank_count, tasklets_per_dpu,
+                        session_root, host_binary, dpu_binary,
+                        initialization_binary, rank_paths}
+```
+
+Paths are resolved relative to the configuration file. A matrix item has
+exactly `case_id`, `plan_id`, and `route_ids`; `plan_id` is null only for
+Quimb, cotengra, and QuEST routes. Unknown fields, duplicate YAML keys or IDs,
+empty selections, incompatible route/plan combinations, and implicit defaults
+are rejected before execution.
+
+Direct executor identifiers are exactly:
+
+```text
+numpy_dag
+quimb
+cotengra
+quest_cpu
+quest_gpu
+upmem_sdk_simulator
+upmem_physical
+```
+
+`numpy_dag`, `upmem_sdk_simulator`, and `upmem_physical` require a named
+logical plan. Quimb, cotengra, and QuEST are same-problem baselines and do not
+pretend to consume that logical plan. QuEST rows therefore require
+`problem_id` but use null tensor-network and logical-plan identities.
+
+The public command set is exactly:
+
+```text
+python -m quantum_bench.cli plan --config CONFIG --output DIR
+python -m quantum_bench.cli run --config CONFIG --output DIR [--allow-physical]
+python -m quantum_bench.cli report --input DIR --output DIR
+python -m quantum_bench.cli verify --input DIR
+python -m quantum_bench.cli qualify --config CONFIG --output DIR --allow-physical
+```
+
+`plan` lowers and validates configured jobs, paths, slicing, and physical
+plans without opening an accelerator session. `run` owns repetitions and
+emits canonical evidence. Physical UPMEM requires both `--allow-physical` and
+`UPMEM_ALLOW_PHYSICAL_HARDWARE=1`; neither flag is inferred. `report` reads
+only finalized canonical evidence and never executes a workload. `verify`
+performs schema, identity, count, link, and scope checks without rewriting
+evidence. `qualify` executes only routes explicitly marked for physical
+qualification and has the same two-part physical opt-in.
+
+Reports preserve timing scopes. A plot rejects duplicate
+`(figure_id, facet_id, series_id, x_value)` keys. Ratios are defined as
+baseline median wall time divided by candidate median wall time, and are
+reported only after the relevant identity and claim-policy checks pass.
+
 ## Ordered Tasks
 
 ```text
@@ -1049,6 +1172,7 @@ T9    slice batches and host reduction
 T10A  Quimb/cotengra baseline
 T10B  QuEST CPU baseline
 T10C  QuEST GPU verification
+T10D  active ABI-v4 SDK-simulator correctness route
 T11A  configuration and CLI
 T11B  verification and reporting
 T12A  remove providers/routing

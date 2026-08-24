@@ -244,21 +244,8 @@ def problem_id(job: SimulationJob) -> str:
 
     if not isinstance(job, SimulationJob):
         raise TypeError("problem_id requires a SimulationJob")
-    circuit = job.circuit
     payload = {
-        "circuit": {
-            "name": circuit.name,
-            "n_qubits": circuit.n_qubits,
-            "operations": [
-                {
-                    "gate": operation.gate,
-                    "wires": list(operation.wires),
-                    "params": list(operation.params),
-                }
-                for operation in circuit.operations
-            ],
-            "source": circuit.source,
-        },
+        "circuit": _circuit_semantics(job.circuit),
         "query": job.query,
         "parameters": [list(parameter) for parameter in job.parameters],
         "seed": job.seed,
@@ -271,22 +258,46 @@ def tensor_network_structure_id(network: TensorNetwork) -> str:
 
     if not isinstance(network, TensorNetwork):
         raise TypeError("tensor_network_structure_id requires a TensorNetwork")
+    descriptors = [
+        {
+            "id": tensor.id,
+            "labels": list(tensor.labels),
+            "shape": list(tensor.shape),
+            "structure": tensor.structure,
+            "dtype": tensor.dtype,
+            "produced_by": tensor.produced_by,
+        }
+        for tensor in network.tensors
+    ]
+    descriptors.sort(key=canonical_json)
     payload = {
-        "tensors": [
-            {
-                "id": tensor.id,
-                "labels": list(tensor.labels),
-                "shape": list(tensor.shape),
-                "structure": tensor.structure,
-                "dtype": tensor.dtype,
-                "produced_by": tensor.produced_by,
-            }
-            for tensor in network.tensors
-        ],
+        "schema_version": "tensor_network_structure_v1",
+        "tensors": descriptors,
         "output_labels": list(network.output_labels),
         "einsum_expression": network.einsum_expression,
     }
     return identity_hash("quantum_bench.tensor_network_structure_id.v1", payload)
+
+
+def _circuit_semantics(circuit: object) -> dict[str, object]:
+    """Canonical gate semantics, excluding names and source provenance."""
+
+    try:
+        n_qubits = circuit.n_qubits
+        operations = circuit.operations
+    except AttributeError as error:  # pragma: no cover - guarded by public callers
+        raise TypeError("circuit semantics require a CircuitSpec") from error
+    return {
+        "n_qubits": n_qubits,
+        "operations": [
+            {
+                "gate": operation.gate,
+                "wires": list(operation.wires),
+                "params": list(operation.params),
+            }
+            for operation in operations
+        ],
+    }
 
 
 def _mapping_identity(domain: str, value: Mapping[str, Any]) -> str:
@@ -359,7 +370,7 @@ def validate_manifest(record: Mapping[str, Any]) -> None:
         raise ValueError("manifest has an invalid schema_version")
     _uuid4(record["run_id"], "run_id")
     for field in ("experiment_id", "environment_id", "validation_policy_id"):
-        _nonempty_string(record[field], field)
+        _sha256(record[field], field)
     _created_at_utc(record["created_at_utc"])
     if not isinstance(record["source_commit"], str):
         raise TypeError("source_commit must be a string")
@@ -419,7 +430,8 @@ def validate_sample(record: Mapping[str, Any]) -> None:
     if record["schema_version"] != _SAMPLE_SCHEMA:
         raise ValueError("sample has an invalid schema_version")
     _uuid4(record["run_id"], "run_id")
-    for field in ("experiment_id", "case_id", "route_id"):
+    _sha256(record["experiment_id"], "experiment_id")
+    for field in ("case_id", "route_id"):
         _nonempty_string(record[field], field)
     _nonempty_string(record["sample_id"], "sample_id")
     _nonempty_string(record["sample_kind"], "sample_kind")
@@ -437,17 +449,20 @@ def validate_sample(record: Mapping[str, Any]) -> None:
         "environment_id",
         "validation_policy_id",
     ):
-        _nonempty_string(identities[field], f"identities.{field}")
+        _sha256(identities[field], f"identities.{field}")
     tensor_network_id = identities["tensor_network_structure_id"]
     logical_plan_id = identities["logical_plan_id"]
     if (tensor_network_id is None) != (logical_plan_id is None):
         raise ValueError(
             "tensor_network_structure_id and logical_plan_id must be null together"
         )
-    _nullable_or_string(tensor_network_id, "identities.tensor_network_structure_id")
-    _nullable_or_string(logical_plan_id, "identities.logical_plan_id")
+    if tensor_network_id is not None:
+        _sha256(tensor_network_id, "identities.tensor_network_structure_id")
+    if logical_plan_id is not None:
+        _sha256(logical_plan_id, "identities.logical_plan_id")
     for field in ("physical_plan_id", "executable_id"):
-        _nullable_or_string(identities[field], f"identities.{field}")
+        if identities[field] is not None:
+            _sha256(identities[field], f"identities.{field}")
 
     expected_id = sample_id(
         record["run_id"],
@@ -537,8 +552,8 @@ def validate_session(record: Mapping[str, Any]) -> None:
     if record["schema_version"] != _SESSION_SCHEMA:
         raise ValueError("session has an invalid schema_version")
     _uuid4(record["run_id"], "run_id")
+    _sha256(record["experiment_id"], "experiment_id")
     for field in (
-        "experiment_id",
         "case_id",
         "route_id",
         "session_instance_id",

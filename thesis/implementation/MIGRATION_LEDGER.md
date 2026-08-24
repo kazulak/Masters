@@ -62,9 +62,9 @@ evidence that the corresponding capability is implemented.
 | WP4 numerics | complete (T6A pure policies) | split-complex float32 and shared-scale int8 encode/contract/decode are implemented and verified; complex UPMEM runtime execution and physical validation remain pending |
 | WP5 mapping | complete through T9 | `plan_upmem`, `validate_upmem_plan`, and `physical_plan_id` implement deterministic contract-batch/host-reduce stages, including compatible direct slice branches; grouped branches are executed sequentially and do not establish slice concurrency, residency, or physical execution |
 | WP6 runtime | complete through T9 in software | final `UpmemResources`, persistent `UpmemSession`, one-sample timing, fail-closed terminal admission, sequential slice-branch execution, and deterministic complex64 host reduction are implemented; physical qualification remains T14 |
-| WP7 baselines | in progress | direct same-DAG CPU execution and same-physical-plan replay are implemented; external Quimb/cotengra and QuEST adapters remain T10 |
+| WP7 baselines | complete through T10 | direct NumPy, Quimb/cotengra, QuEST CPU/GPU-verification, and active ABI-v4 simulator routes are implemented; real GPU and physical UPMEM qualification remain explicit external gates |
 | WP8 evidence | complete through T5 in software | canonical manifest, sample, and session schemas; experiment-owned repetition lifecycle; scope pairing; and failure rows are implemented without promoting evidence |
-| WP9 interface | pending | stable CLI, one experiment schema, and bounded public command set |
+| WP9 interface | in progress | strict identities and the immutable `tn_benchmark_v1` configuration loader are implemented; public commands and reports remain T11 |
 | WP10 cleanup | pending | historical/versioned active source is deleted |
 | WP11 qualification | pending | software gates pass; physical rerun requirements are explicit |
 
@@ -352,6 +352,59 @@ Independent re-review found no remaining P0/P1 issue. The stable full-suite
 checkpoint passed 1559 tests in 203.13 seconds. This is local logical slicing
 only; T9 maps its branches into physical stages.
 
+## T10C QuEST GPU Verification Boundary
+
+T10C is software-complete. The direct GPU adapter accepts only a qualification
+artifact whose QuEST runner and HIP smoke executable still occupy the recorded
+paths and match their recorded SHA-256 values. It then performs a fresh,
+synchronized HIP device probe on the current machine before invoking QuEST.
+The probe and artifact checks are outside `simulation_end_to_end_v1`; the
+timed route covers circuit translation through decoded statevector output.
+
+Failed or unsupported probes do not claim GPU observation, runner invocation,
+or accelerator timing. CUDA remains explicitly unsupported until an equivalent
+runtime-observation contract exists. Controlled-process tests cover artifact
+tampering, path substitution, pre/post executable mutation, device mismatch,
+synchronization, bounded diagnostics, and native-run failure. No compatible
+GPU was executed locally, so this establishes a fail-closed software boundary,
+not GPU benchmark evidence.
+
+## T10D Active ABI-v4 SDK Simulator
+
+T10D is software-complete. `open_upmem_simulator` reuses the final `UpmemPlan`,
+ABI version 4, request serialization, real-tile DPU kernel, and four-product
+complex reconstruction. The target is explicit end to end; it allows exactly
+one DPU and one rank, forbids rank paths and injected openers, sets
+`DPU_BACKEND=simulator`, and records simulator-specific allocation, kernel,
+and release facts. Invalid READY metadata closes the native process before the
+original protocol error is re-raised.
+
+The actual local SDK simulator built from `native/upmem/runtime` and matched
+`replay_upmem_plan_once` for both `split_complex_float32_v1` and
+`split_complex_int8_shared_scale_v1`. This check establishes bounded ABI,
+mapping, numeric, reconstruction, and release correctness only. Simulator facts
+explicitly prohibit physical timing, scaling, speedup, and energy claims.
+
+The integrated focused checkpoint passed 339 tests. After canonical identity
+fixtures were updated, the full repository checkpoint passed 1705 tests in
+205.25 seconds. Ruff checks and formatting checks for every changed file, the
+self-contained native build, and `git diff --check` passed.
+
+## T11 Identity and Configuration Foundation
+
+The first T11 batch implements domain-separated problem, tensor-network
+structure, environment, validation-policy, executable, and experiment
+identities. Evidence admits canonical SHA-256 identities rather than arbitrary
+labels. Tensor descriptors are sorted before structure hashing, while circuit
+names and source provenance are excluded from problem semantics.
+
+`load_experiment_config` rejects duplicate YAML keys, unknown fields, ambiguous
+route unions, duplicate case/route selections, invalid topology, nonexistent
+QASM input files, and incompatible plan/numeric combinations. It returns a
+recursively immutable mapping and derives `experiment_id` from the complete
+relative-path configuration plus the frozen validation policy. CLI execution
+and evidence-only reporting remain the next T11 batches.
+
 ## Complexity Delta
 
 Update this table after each integration batch.
@@ -420,14 +473,18 @@ wc -l`, and `rg '^[A-Za-z0-9_.-]+:' Makefile | wc -l`.
     end-to-end wall time, and records the runner hash. Verified by 64 focused
     tests and an independent no-P0/P1 audit; a real runner check remains T13
     or environment qualification.
-23. T10C: add QuEST GPU capability and runtime verification.
-24. T11A: add the configuration schema and public CLI.
-25. T11B: add evidence verification and reporting.
-26. T12A: remove providers and routing replaced by direct routes.
-27. T12B: remove replaced milestone workflows and configurations.
-28. T12C: remove the old TaskGraph and UPMEM plan generations.
-29. T13: run software qualification and mark the branch software-ready.
-30. T14: perform later ETH physical qualification and create a qualification tag.
+23. T10C: complete in software; add hash-bound QuEST GPU capability and fresh
+    synchronized runtime verification without claiming local GPU execution.
+24. T10D: complete in software; add the bounded active ABI-v4 SDK-simulator
+    correctness route without admitting simulator performance claims.
+25. T11A: in progress; strict identities and configuration loading are complete,
+    while public execution commands remain pending.
+26. T11B: add evidence verification and reporting.
+27. T12A: remove providers and routing replaced by direct routes.
+28. T12B: remove replaced milestone workflows and configurations.
+29. T12C: remove the old TaskGraph and UPMEM plan generations.
+30. T13: run software qualification and mark the branch software-ready.
+31. T14: perform later ETH physical qualification and create a qualification tag.
 
 ## External Build Inputs
 

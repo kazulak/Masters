@@ -20,6 +20,7 @@ from quantum_bench.evidence import (
     append_sample,
     append_session,
     canonical_json,
+    identity_hash,
     sample_id,
     validate_sample,
     validate_session,
@@ -68,6 +69,17 @@ _MEASUREMENT_FIELDS = (
     "energy_j",
 )
 _TIMING_SCOPES = frozenset({"simulation_end_to_end_v1", "steady_execution_v1"})
+_DEFAULT_VALIDATION_POLICY = {
+    "policy": "complex128_reference_metrics_v1",
+    "reference_dtype": "complex128",
+    "float32_atol": 1.0e-5,
+    "float32_rtol": 1.0e-5,
+    "int8_policy_reference": "exact_raw_lane_records_v1",
+    "int8_full_precision_rule": "report_error_without_universal_threshold_v1",
+}
+_DEFAULT_VALIDATION_POLICY_ID = identity_hash(
+    "quantum_bench.validation_policy_id.v1", _DEFAULT_VALIDATION_POLICY
+)
 
 _CONFIG_SCHEMA = "tn_benchmark_v1"
 _CONFIG_FIELDS = frozenset(
@@ -223,6 +235,13 @@ def _absolute_config_path(value: object, root: Path, field: str) -> str:
     return str((root / path).resolve())
 
 
+def _existing_config_file(value: object, root: Path, field: str) -> str:
+    path = Path(_absolute_config_path(value, root, field))
+    if not path.is_file():
+        raise ValueError(f"{field} does not name an existing file: {path}")
+    return str(path)
+
+
 def _freeze_config(value: object) -> object:
     if isinstance(value, Mapping):
         return MappingProxyType(
@@ -258,7 +277,7 @@ def _normalize_circuit(value: object, root: Path, field: str) -> dict[str, objec
     if kind == "qasm_file":
         if name is not None:
             raise ValueError(f"{field}.name must be null for qasm_file")
-        circuit["path"] = _absolute_config_path(path, root, f"{field}.path")
+        circuit["path"] = _existing_config_file(path, root, f"{field}.path")
     else:
         if path is not None:
             raise ValueError(f"{field}.path must be null for {kind}")
@@ -342,6 +361,28 @@ def _normalize_route(value: object, root: Path, field: str) -> dict[str, object]
     if "methods" in options:
         if options["methods"] not in _COTENGRA_MODES:
             raise ValueError(f"{field}.options.methods has an unsupported value")
+    if executor in {"upmem_sdk_simulator", "upmem_physical"}:
+        dpu_count = int(options["dpu_count"])
+        rank_count = int(options["rank_count"])
+        tasklets = int(options["tasklets_per_dpu"])
+        if tasklets > 24:
+            raise ValueError(f"{field}.options.tasklets_per_dpu must be <= 24")
+        if executor == "upmem_sdk_simulator":
+            if dpu_count != 1 or rank_count != 1:
+                raise ValueError(
+                    f"{field} simulator topology requires one DPU and one rank"
+                )
+        else:
+            if dpu_count % rank_count:
+                raise ValueError(
+                    f"{field}.options.dpu_count must be divisible by rank_count"
+                )
+            if dpu_count // rank_count > 64:
+                raise ValueError(f"{field} supports at most 64 DPUs per rank")
+            if len(options["rank_paths"]) != rank_count:
+                raise ValueError(
+                    f"{field}.options.rank_paths count must equal rank_count"
+                )
     route["options"] = options
     return route
 
@@ -357,7 +398,7 @@ def load_experiment_config(path: str | os.PathLike[str]) -> Mapping[str, object]
     config = dict(_config_fields(raw, _CONFIG_FIELDS, "configuration"))
     if config["schema_version"] != _CONFIG_SCHEMA:
         raise ValueError("configuration has an invalid schema_version")
-    experiment_id = _config_id(config["experiment_id"], "experiment_id")
+    experiment_label = _config_id(config["experiment_id"], "experiment_id")
     defaults = dict(_config_fields(config["defaults"], _DEFAULT_FIELDS, "defaults"))
     defaults["warmups"] = _config_int(defaults["warmups"], "defaults.warmups")
     defaults["repetitions"] = _config_int(
@@ -368,7 +409,6 @@ def load_experiment_config(path: str | os.PathLike[str]) -> Mapping[str, object]
         raise ValueError("defaults.timeout_s must be finite and > 0")
     if not isfinite(float(timeout_s)) or float(timeout_s) <= 0:
         raise ValueError("defaults.timeout_s must be finite and > 0")
-    config["experiment_id"] = experiment_id
     config["defaults"] = defaults
 
     cases_raw = _config_mapping(config["cases"], "cases")
@@ -386,8 +426,6 @@ def load_experiment_config(path: str | os.PathLike[str]) -> Mapping[str, object]
     config["cases"] = cases
 
     plans_raw = _config_mapping(config["plans"], "plans")
-    if not plans_raw:
-        raise ValueError("plans must be nonempty")
     plans = {
         _config_id(plan_id, "plan id"): _normalize_plan(plan, f"plans.{plan_id}")
         for plan_id, plan in plans_raw.items()
@@ -409,6 +447,7 @@ def load_experiment_config(path: str | os.PathLike[str]) -> Mapping[str, object]
     if not isinstance(matrix_raw, list) or not matrix_raw:
         raise ValueError("matrix must be a nonempty list")
     matrix: list[dict[str, object]] = []
+    selected_case_routes: set[tuple[str, str]] = set()
     for index, item in enumerate(matrix_raw):
         entry = dict(_config_fields(item, _MATRIX_FIELDS, f"matrix[{index}]"))
         case_id = _config_id(entry["case_id"], f"matrix[{index}].case_id")
@@ -439,14 +478,44 @@ def load_experiment_config(path: str | os.PathLike[str]) -> Mapping[str, object]
             )
         if any(requires_plan) != (plan_id is not None):
             raise ValueError(f"matrix[{index}].plan_id is incompatible with its routes")
+        for route_id in normalized_routes:
+            key = (case_id, route_id)
+            if key in selected_case_routes:
+                raise ValueError(
+                    "matrix entries must select each case_id and route_id pair once"
+                )
+            selected_case_routes.add(key)
         matrix.append(
             {"case_id": case_id, "plan_id": plan_id, "route_ids": normalized_routes}
         )
     config["matrix"] = matrix
+    config["experiment_id"] = identity_hash(
+        "quantum_bench.experiment_id.v1",
+        {
+            "label": experiment_label,
+            "configuration": raw,
+            "validation_policy_id": _DEFAULT_VALIDATION_POLICY_ID,
+        },
+    )
     frozen = _freeze_config(config)
     if not isinstance(frozen, Mapping):  # pragma: no cover
         raise TypeError("normalized configuration must be a mapping")
     return frozen
+
+
+def default_validation_policy() -> Mapping[str, JsonValue]:
+    """Return the one immutable validation policy used by reset experiments."""
+
+    frozen = _freeze_config(_DEFAULT_VALIDATION_POLICY)
+    if not isinstance(frozen, Mapping):  # pragma: no cover - constant is a mapping.
+        raise TypeError("default validation policy must be a mapping")
+    return frozen
+
+
+def default_validation_policy_id() -> str:
+    """Return the canonical identity of the reset validation policy."""
+
+    return _DEFAULT_VALIDATION_POLICY_ID
 
 
 def run_direct_samples(
@@ -728,7 +797,8 @@ def run_session_samples(
 
 def _validate_arguments(**values: Any) -> dict[str, JsonValue]:
     _canonical_uuid4(values["run_id"], "run_id")
-    for field in ("experiment_id", "case_id", "route_id"):
+    _sha256_string(values["experiment_id"], "experiment_id")
+    for field in ("case_id", "route_id"):
         _nonempty_string(values[field], field)
     if "session_protocol_id" in values:
         _nonempty_string(values["session_protocol_id"], "session_protocol_id")
@@ -756,7 +826,7 @@ def _validate_arguments(**values: Any) -> dict[str, JsonValue]:
     if not isinstance(normalized, dict):  # pragma: no cover - guarded above
         raise TypeError("identities must be a mapping")
     for field in _REQUIRED_IDENTITY_FIELDS:
-        _nonempty_string(normalized[field], f"identities.{field}")
+        _sha256_string(normalized[field], f"identities.{field}")
     tensor_network_id = normalized["tensor_network_structure_id"]
     logical_plan_id = normalized["logical_plan_id"]
     if (tensor_network_id is None) != (logical_plan_id is None):
@@ -764,12 +834,12 @@ def _validate_arguments(**values: Any) -> dict[str, JsonValue]:
             "tensor_network_structure_id and logical_plan_id must be null together"
         )
     if tensor_network_id is not None:
-        _nonempty_string(tensor_network_id, "identities.tensor_network_structure_id")
+        _sha256_string(tensor_network_id, "identities.tensor_network_structure_id")
     if logical_plan_id is not None:
-        _nonempty_string(logical_plan_id, "identities.logical_plan_id")
+        _sha256_string(logical_plan_id, "identities.logical_plan_id")
     for field in ("physical_plan_id", "executable_id"):
         if normalized[field] is not None:
-            _nonempty_string(normalized[field], f"identities.{field}")
+            _sha256_string(normalized[field], f"identities.{field}")
     return normalized
 
 
@@ -1063,6 +1133,14 @@ def _nonempty_string(value: object, field: str) -> None:
         raise ValueError(f"{field} must be nonempty")
 
 
+def _sha256_string(value: object, field: str) -> None:
+    _nonempty_string(value, field)
+    if not isinstance(value, str) or len(value) != 64:
+        raise ValueError(f"{field} must be a lowercase SHA-256 hex digest")
+    if any(character not in "0123456789abcdef" for character in value):
+        raise ValueError(f"{field} must be a lowercase SHA-256 hex digest")
+
+
 def _canonical_uuid4(value: object, field: str) -> None:
     _nonempty_string(value, field)
     try:
@@ -1078,4 +1156,10 @@ def _unexpected_reason(exc: Exception) -> str:
     return f"{type(exc).__name__}: {message}" if message else type(exc).__name__
 
 
-__all__ = ["run_direct_samples", "run_session_samples"]
+__all__ = [
+    "default_validation_policy",
+    "default_validation_policy_id",
+    "load_experiment_config",
+    "run_direct_samples",
+    "run_session_samples",
+]
