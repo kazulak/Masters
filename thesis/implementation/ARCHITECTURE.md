@@ -1,254 +1,134 @@
 # Architecture
 
 The implementation is a modular monolith with a functional core and a small
-stateful shell. Its purpose is one end-to-end experiment, not a general plugin
-platform.
+stateful execution shell. It benchmarks a fixed quantum-simulation problem
+through comparable TN and full-state routes.
 
 ```text
-Circuit + query
-  -> Tensor network + inputs
-  -> Planner
+SimulationJob
+  -> TensorNetwork
+  -> path planner
   -> ContractionDAG
-  -> CPU executor ---------------------> result
-  -> UPMEM mapper -> UpmemPlan -> runtime -> result
-  -> validation -> evidence -> report
+  -> NumPy / Quimb / cotengra / QuEST
+     or UpmemPlan -> ABI-v4 runtime
+  -> canonical evidence -> report
 ```
 
-## Boundaries
+## Core Concepts
 
-| Boundary | Input | Output | Owns |
+`SimulationJob` defines one requested quantum-simulation problem: circuit,
+query, parameters, seed, and canonical output ordering.
+
+`TensorNetwork` is a target-neutral semantic network produced by circuit
+lowering. It describes tensor descriptors, labels, connectivity, input names,
+and requested output. It is not executable and has no contraction order,
+slicing, dependencies, target estimates, timing, arrays, or hardware state.
+
+`ContractionDAG` is the sole logical execution IR. A path planner selects an
+order, then lowering creates binary contraction nodes, explicit dependencies,
+local slice branches, and reduction nodes. Its identity is the logical-plan
+identity. The DAG is not GEMM lowering: tiles, layouts, kernels, and GEMM-like
+canonicalization belong to the UPMEM mapping.
+
+`UpmemPlan` is a physical plan derived from a DAG. It records numeric policy,
+topology, ordered `contract_batch` and `host_reduce` stages, real-tile work
+units, and kernel policy. The current intermediate policy is host round-trip.
+
+## Ownership Boundaries
+
+| Module | Input | Output | Responsibility |
 |---|---|---|---|
-| Circuit lowering | circuit and query | tensor descriptors and arrays | gate semantics and output ordering |
-| Planning | tensor descriptors | path, slicing, provenance | contraction order only |
-| Semantic network | tensor descriptors and requested output | `TensorNetwork` | non-executable metadata, descriptors, connectivity, and output request |
-| Logical graph | `TensorNetwork` and selected path | `ContractionDAG` | contractions, reductions, dependencies, and logical identity |
-| Numerics | arrays and numeric mode | encoded arrays and scale metadata | packing, rounding, saturation, decode, error utilities |
-| Parallel mapping | DAG, topology, numeric mode | `UpmemPlan` | bounded output-tile assignment and static per-real-tile byte/work estimates |
-| CPU execution | DAG and arrays | output and timing | same-DAG NumPy replay |
-| UPMEM runtime | `UpmemPlan` and arrays | output, timing, backend facts | sessions, transfers, launches, collection, no-fallback checks |
-| Experiment | cases and route dimensions | one raw row per repetition | warmups, repetitions, references, validation |
-| Evidence | raw execution facts | normalized rows and claim decisions | hashes, compatibility, provenance |
-| Reporting | normalized rows | tables and plots | aggregation and presentation only |
+| `model.py` | values | immutable records | circuit/TN/DAG data and invariants |
+| `circuits.py` | job description | circuit | supported circuit construction |
+| `lowering.py` | job, network, path | network, inputs, DAG | circuit-to-TN and path-to-DAG lowering |
+| `planning.py` | network structure | path, provenance | opt_einsum/cotengra planning only |
+| `numerics.py` | complex arrays, policy | encoded/decoded arrays, facts | split-complex float32/int8 policy |
+| `results.py` | output and observations | immutable execution sample | target-neutral measurement/failure contract |
+| `cpu.py` | DAG or UPMEM plan, inputs | execution sample | same-DAG execution and plan replay |
+| `baselines.py` | job | execution sample | direct Quimb/cotengra/QuEST adapters |
+| `upmem/plan.py` | DAG, policy, topology | `UpmemPlan` | deterministic physical mapping |
+| `upmem/runtime.py` | plan, inputs | execution sample | session, transfer, launch, collection |
+| `experiment.py` | config and routes | evidence artifacts | warmups, repetitions, references |
+| `evidence.py` | raw facts | canonical records | identity, validation, integrity |
+| `report.py` | canonical evidence | tables and figures | analysis only |
+| `cli.py` | command line | command result | plan/run/report/verify/qualify |
 
-Each boundary is a module with plain functions. A structured immutable type is
-used only when it crosses boundaries and owns validation or identity semantics.
-Local return values remain local variables, tuples, or mappings.
+The core modules do not import runtime, subprocess, filesystem, or reporting
+code. Planning does not open devices. Mapping does not allocate devices. The
+runtime does not search paths or silently replan. Reporting never runs a
+benchmark.
 
-## Canonical Graph
+## Numeric and Parallel Execution
 
-`TensorNetwork` is non-executable semantic metadata. It contains tensor
-descriptors, connectivity, and the requested output, but no contraction order,
-slicing, dependencies, target estimates, executor data, arrays, or timing.
+The active numeric policies are `split_complex_float32_v1` and
+`split_complex_int8_shared_scale_v1`. Complex values use separate real and
+imaginary planes. Int8 uses one shared scale per complex operand, packed host
+inputs, int32 tile accumulation, and deterministic host decoding/reduction.
 
-`ContractionDAG` is the sole logical execution intermediate representation. It
-contains:
+ABI-v4 is one real-valued output-tile contraction ABI. A complex contraction
+launches `rr`, `ii`, `ri`, and `ir` sequentially on the assigned DPU set, then
+forms `(rr - ii) + i(ri + ir)`. The CPU physical-plan replay is a correctness
+oracle for this exact tile and accumulation order, not a performance baseline.
 
-- input tensor descriptors;
-- binary contraction nodes;
-- explicit sliced-result reductions;
-- tensor views and fixed semantic slices;
-- dependencies and final output view.
+Current physical mapping partitions output/K tiles across assigned DPUs. It
+does not yet implement resident DAG intermediates, execution of slice groups
+in parallel, tasklet scheduling policy, active PID-Comm communication, or a
+hardware-calibrated path score.
 
-It does not contain arrays, planner timing, target estimates, DPU placement,
-numeric scales, kernel IDs, or machine paths.
+## Identity and Evidence
 
-The DAG is the lowering of a selected contraction path into executable
-mathematical dependencies. It is not the lowering of a contraction into GEMM.
-GEMM-like canonicalization, tiles, and kernels are UPMEM mapping decisions.
-
-Slicing changes the mathematical graph and therefore changes its hash. Tiling
-only divides one graph node for a target and therefore changes the physical plan
-without changing the DAG hash.
-
-## Planning
-
-Planning consumes labels and shapes, not tensor values or hardware sessions.
-The canonical adapters are opt_einsum and cotengra. The root functions in
-`src/quantum_bench/planning.py` return a validated binary active-list path and
-a JSON-compatible provenance mapping. Planner provenance is separate from DAG
-identity: different planners can select the same graph.
-
-The PIM-aware projected-prefix greedy heuristic is historical and exploratory,
-not a canonical adapter. It remains available only for old configurations,
-tests, and evidence until T12. It is an uncalibrated candidate estimator and
-cannot be described as globally optimal or as measured hardware performance.
-Hardware-calibrated
-target-aware planning is separate future work.
-
-T3-0 froze this boundary and T3 implemented it. The active route has no
-generic planner dispatcher; the M5 coordinator selects exactly opt_einsum or
-cotengra through a private configuration helper. The projected-prefix planner
-remains historical.
-
-## UPMEM Mapping
-
-The final mapper contract converts one DAG into one target-specific physical
-plan through these pure functions:
-
-```python
-plan_upmem(dag, *, numeric_policy, topology) -> UpmemPlan
-validate_upmem_plan(dag, plan) -> None
-physical_plan_id(plan) -> str
-```
-
-`plan_upmem` raises `UnsupportedExecution` at the `"mapping"` stage for
-unsupported topology, geometry, or overflow before runtime side effects. The
-contract is frozen in `docs/reset_contract.md`; T4C is implemented.
-
-The final bounded plan records:
-
-- numeric representation;
-- output-tile work units and their assignment;
-- requested topology, including DPU and rank assignments;
-- static per-real-tile byte and arithmetic estimates;
-- kernel policy.
-
-Runtime transfer accounting remains future work and belongs to execution
-evidence, not these static plan estimates.
-
-Work-unit byte and arithmetic fields describe one real-valued ABI-v4 tile
-invocation. The complex route invokes that work unit four times; aggregate
-transfer and work are runtime evidence. Work-unit order is
-`(logical_rank, logical_dpu, wave, batch_start, m_start, n_start, k_start,
-stable_tile_id)`. A host-reduction stage consumes its declared direct producer
-nodes, which must occur in earlier stages but need not be immediately
-preceding.
-
-During the migration, the final public plan records temporarily coexist with
-privately aliased legacy records. T4B2 removes them from the canonical route;
-records reachable only from historical commands expire with those commands at
-T12. This is not the permanent design.
-
-The implemented bounded component is `replay_upmem_plan_once` in the CPU execution
-boundary. It is a policy reference for one final `UpmemPlan`, not UPMEM
-execution or a performance baseline. It validates the exact tile and K-chunk
-coverage, uses policy-specific float32 or host-packed-int8 limits, executes
-`rr/ii/ri/ir` per real ABI work unit, decodes branches before deterministic
-producer-ID host reduction, and emits raw lane facts for T7 differential
-validation. It records only CPU policy-reference timing; device transfer,
-session, hardware, and energy fields remain unavailable.
-
-Tasklet scheduling, slice-stage scheduling, and intermediate residency are
-planned extensions. They are not implemented or claimable by the current v4
-mapping.
-The current bounded mapper does not make memory and intermediate residency
-decisions; those remain planned extensions.
-
-The only public physical-plan records are `UpmemTopology`, `UpmemWorkUnit`,
-`UpmemStage`, and `UpmemPlan`; `UpmemResources` is runtime configuration. Their
-exact frozen field contracts are defined in `docs/reset_contract.md`.
-
-Machine-local rank paths, binary paths, working directories, SDK installation,
-timeouts, ABI identifiers, and executable hashes are runtime or executable
-provenance. They are not additional `UpmemPlan` fields and do not affect DAG or
-physical-plan identity.
-
-The target architecture is hierarchical, but only bounded output-tile mapping
-is currently implemented:
-
-1. tasklets may divide local output work inside one DPU;
-2. DPUs divide output tiles;
-3. slice groups and independent DAG nodes may run concurrently after their
-   scheduling stages are implemented and measured.
-
-Tasklet scheduling, slice-stage scheduling, and DPU-resident intermediate
-execution are planned work. The current mapping does not support claims for
-those mechanisms. Allocation alone is not parallel execution. T6B provides the
-CPU policy reference, T7 implements the matching four-pass low-level ABI-v4
-execution, and T4B1 coordinates a complete DAG sample through a persistent
-session. T4B2 canonical-route isolation is the next implementation task.
-
-## Numerics
-
-UPMEM numerical representation is a physical policy, not a planner or DAG
-choice. Initial quantization occurs once on the host. A practical integer route
-uses packed real/imaginary int8 operands, int32 local accumulation, explicit
-scale metadata, and host decode. Intermediate residency is a planned policy and
-is not implemented by the current host-roundtrip mapping.
-
-The evidence row records encode, transfer, kernel, reduction, download, and
-decode time separately. End-to-end speedup includes required conversion work.
-
-The reset implementation order is dependency-driven: pure split-complex
-numerics are implemented before the CPU single-run result contract because the
-CPU boundary consumes the final `NumericPolicy` type. This is an implementation
-ordering correction only; it does not change the final architecture or the
-ownership of the numeric, CPU, UPMEM, experiment, or evidence boundaries.
+The evidence layer records distinct identities:
 
 ```text
-T6A pure numerics
-  -> T4A results and CPU single-run API
-  -> T4C final UpmemStage/UpmemPlan schema
-  -> T6B physical-plan CPU replay
-  -> T7 four real-product ABI execution
-  -> T4B1 UPMEM session API
-  -> T4B2 canonical-route wrapper isolation
-  -> T5 evidence and experiment lifecycle
-  -> T8+ unchanged later work
+problem_id                    circuit, query, parameters, seed
+tensor_network_structure_id   network structure only
+logical_plan_id               path, slicing, reductions, dependencies
+physical_plan_id              numeric policy, tiles, placement, topology, stages
+executable_id                 ABI, binary hashes, compiler/SDK facts
+environment_id                host and hardware environment
+experiment_id                 configuration and repetition policy
+run_id                        one invocation
+session_instance_id           one opened runtime session
+sample_id                     one warmup or measurement attempt
 ```
 
-## State and Mutation
+An execution sample contains its output, authoritative wall time, nullable
+component measurements, backend facts, and numeric facts. Concurrent rank
+work is recorded as work, not inferred wall time. Missing measurements are
+null, not zero.
 
-The functional core returns new values. Mutable state is confined to:
+`simulation_end_to_end_v1` starts immediately before route-specific
+preparation of an already-created job and stops at decoded output. TN routes
+include lowering, planning, slicing, DAG construction, mapping, and execution.
+QuEST routes include circuit translation, state setup, execution, and query
+extraction. `steady_execution_v1` measures a reusable open execution context
+from input encoding to decoded output.
 
-- NumPy buffers owned by one execution call;
-- UPMEM sessions and native subprocesses;
-- run-directory and report writers.
+Physical routes fail closed: no simulator or CPU fallback can satisfy a
+physical request. Simulator evidence is never admitted as physical timing,
+speedup, scaling, or energy evidence.
 
-Inputs are treated as read-only. Planning and mapping never mutate the circuit,
-tensor descriptors, arrays, or DAG. The runtime executes an existing plan and
-does not silently replan it.
+## Native Boundary
 
-## Timing and Evidence
+`native/upmem/runtime/` is the only active UPMEM native build. It owns the
+ABI-v4 host program, DPU program, protocol headers, and build rules. Python
+serializes plan work units through `upmem/protocol.py` and manages native
+process lifecycle through `upmem/native_session.py`.
 
-Stable timing components are:
+The native runtime uses pinned SimplePIM management types and its initialization
+kernel around raw-SDK allocation and dispatch. This does not make SimplePIM an
+active high-level scheduler or compute runtime. The retained PID-Comm harness
+is a separate compatibility check, not a runtime provider. ATiM is not
+integrated.
 
-```text
-planning, mapping, encode, preparation, h2d, kernel, host_reduce,
-d2h, decode, validation, session_open,
-steady_state, end_to_end
-```
+## Current Limits
 
-Hashing and validation are outside kernel time. Null is used when a component
-cannot be measured honestly. CPU and UPMEM comparisons declare the timing scope
-they pair. Session close exists only in session evidence; it is not a
-per-sample measurement or part of either total scope.
+The reset architecture is software- and SDK-simulator-validated. Its physical
+UPMEM route is not yet ETH-qualified. Consequently, current code supports no
+claim of physical speedup, energy efficiency, multi-rank scaling, or general
+UPMEM TN execution. Physical qualification is a separate run using the exact
+source, native binaries, topology, and configuration recorded in evidence.
 
-Physical execution fails closed. A physical row is admitted only when observed
-native identity, allocation, kernel execution, release, and validation agree.
-Simulator rows cannot support physical speedup. Unsupported and failed rows are
-retained.
-
-## Dependency Rules
-
-- the semantic graph imports no executor, filesystem, subprocess, or UPMEM ID;
-- planning imports no native runtime;
-- mapping opens no hardware session;
-- the runtime performs no path search;
-- reporting never executes a benchmark;
-- baselines do not use a provider registry;
-- historical milestone code is not imported by the active path.
-
-## Migration Status
-
-The active physical adapter is
-`src/quantum_bench/upmem/runtime.py`, backed by the self-contained native tree
-at `native/upmem/runtime/`. Historical M5/v4 Python and native modules are not
-imported by the active path. The completed T1A-D ownership migration is
-followed by the corrected task order above. T6A pure split-complex numerics,
-T4A immutable results and direct CPU single-run execution, T4C final staged
-UPMEM mapping, T6B CPU physical-plan replay, T7 low-level split-complex
-ABI-v4 execution, and the T4B1 persistent single-run UPMEM session boundary
-are complete and software-verified.
-T4C currently emits singleton
-contract stages plus host reductions; it does not claim complex physical
-execution, slice grouping, residency, tasklet scheduling, physical validation,
-speedup, scaling, or energy. T4B1 has controlled-session differential evidence
-only; SDK-simulator and physical qualification remain pending. The next
-implementation work is T4B2 canonical-route isolation, followed by T5. Configuration,
-reporting, cleanup, software qualification, and later ETH qualification remain
-subsequent work.
-
-Progress and temporary adapter expiry are recorded in
-[MIGRATION_LEDGER.md](MIGRATION_LEDGER.md). Historical behavior remains at the
-baseline tag rather than as permanent active architecture.
+The next measured upgrade should be driven by physical one-DPU qualification,
+then tasklet/DPU scaling, slice scheduling, residency, communication, and
+calibrated planning only where evidence justifies the extra mechanism.

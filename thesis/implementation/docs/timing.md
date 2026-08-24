@@ -1,9 +1,9 @@
 # Timing Contract
 
-Timing records observations; it does not infer overlapping phases from
+Timing records observations. It does not infer overlapping phases from
 independent component values.
 
-## Measurement Fields
+## Measurement
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -29,58 +29,46 @@ class Measurement:
 ```
 
 `total_wall_s` is measured once around the declared coordinator operation and
-is authoritative. Components are observations and need not sum to it because
-operations may overlap. `rank_work_s` is summed work, never wall time. An
-unavailable value is `null`, not zero.
+is authoritative. Components need not sum to it because work may overlap.
+`rank_work_s` is the sum of rank durations and is never wall time. Unavailable
+values are `null`, not zero. Bytes are non-negative integers; times and energy
+are finite non-negative values.
 
-Capturing native counters and the small operational values required to drive
-the coordinator is runtime instrumentation and remains inside this wall
-observation. Canonical fact normalization, array hashing, validation, evidence
-serialization, and artifact writing occur after the timer stops.
-
-`preparation_s` measures encoded payload and native request assembly after
-encoding and before host-to-DPU transfer. It is `null` when that work cannot be
-observed separately.
-
-`session_close_s` is not a per-sample `Measurement` field and does not enter
-either total timing scope. Session close is recorded only in `sessions.jsonl`
-or its equivalent session manifest.
+Native counter capture needed by the coordinator is inside the timer. Canonical
+fact normalization, output hashing, validation, evidence serialization and
+artifact writing are after the timer. `session_close_s` is session evidence,
+not a per-sample measurement field.
 
 ## Scopes
 
 ### `simulation_end_to_end_v1`
 
-Start immediately before route-specific preparation of an already-created
-`SimulationJob`. For TN routes include lowering, planning, slicing, DAG
-construction, physical mapping, session opening, encoding, preparation,
-transfers, kernels, host reductions, download, and decoding. For QuEST routes
-include circuit translation, state allocation and initialization, circuit
-execution, and query extraction. Stop when the requested decoded query result
-is available.
+Start immediately before route-specific preparation of an existing
+`SimulationJob`. TN routes include lowering, path planning, slicing, DAG
+construction, UPMEM mapping, session opening, encoding, preparation, transfers,
+kernels, host reduction, download and decoding. QuEST routes include circuit
+translation, state allocation/initialization, circuit execution and query
+extraction. Stop when the decoded requested result is available.
 
-Exclude configuration parsing, native compilation, environment setup, the
-reference calculation, validation, hashing, evidence writing, and session
-close. Session close is recorded only in the session evidence.
+Exclude configuration parsing, native compilation, environment setup, reference
+calculation, validation, hashing, evidence writing and session close.
 
 ### `steady_execution_v1`
 
-Requires a reusable prepared context. The session is opened before warmups and
-remains open for all warmups and measured samples. Start immediately before
-input encoding and stop when the decoded result is available. Exclude planning,
-mapping, session opening, session close, validation, hashing, and evidence
-writing. A route that cannot provide this lifecycle returns unsupported rather
-than measuring a different scope.
+Requires a reusable prepared context. A session is opened before warmups and
+remains open through measured samples. Start before input encoding and stop
+after decoded output. Include encode, preparation, transfers, kernels, host
+reduction and decode. Exclude planning, mapping, session open/close, validation,
+hashing and evidence writing. A route unable to provide this lifecycle is
+unsupported for this scope.
 
-## Concurrent Ranks
+## Concurrency and Comparisons
 
-The coordinator measures global wall time. It must not calculate a wall phase as
-the maximum of independently reported rank phases unless a global phase was
-explicitly measured around all ranks. Per-rank timings belong in backend facts;
-`rank_work_s` is the sum of their elapsed durations.
+The coordinator measures global wall time. It must not use the maximum of
+independent rank phase timings as wall time unless a global phase was measured.
+Per-rank values belong in backend facts; `rank_work_s` remains summed work.
 
-## Comparison Rules
-
-Only matching scope IDs may be compared directly. Ratios are defined as:
+Direct ratios are defined only for matching scopes and compatible identities:
 
 ```text
 float32/int8 speedup = float32 time / int8 time
@@ -89,6 +77,7 @@ parallel speedup = one-active-DPU time / n-active-DPU time
 tasklet speedup = one-tasklet time / n-tasklet time
 ```
 
-Planning, native compilation, validation, hashing, and report generation must
-not enter kernel timing. Energy remains `None` unless a declared measurement
-boundary and sensor source provide it.
+Planning, native compilation, validation, hashing and report generation never
+enter kernel timing. `energy_j` stays null unless a declared sensor source,
+measurement boundary and interval provide a measured value. Timing evidence
+does not by itself establish physical qualification or speedup.

@@ -1,105 +1,103 @@
-# ETH Evidence Workflow
+# Evidence Workflow
 
-This project has three distinct artifact locations. Keeping them separate
-prevents raw hardware output from appearing as source changes and prevents
-unreviewed output from becoming thesis evidence.
+Generated runs are local artifacts. They are not source changes and are not
+automatically thesis evidence.
+
+## Locations
 
 | Location | Git status | Purpose |
-| --- | --- | --- |
-| `runs/inbox/eth/<experiment-id>/` | Ignored | Raw archives copied from ETH. Preserve these unchanged. |
-| `runs/evidence/<suite>/<route>/<timestamp>/` | Ignored | Exact unpacked benchmark run consumed by report commands. |
-| `runs/comparisons/<label>/<timestamp>/` | Ignored | Derived CSVs, plots, and benchmark summary regenerated from normalized records. |
-| `thesis_results/<snapshot-name>/` | Tracked after review | Compact, checksum-verified evidence selected for the thesis. |
+|---|---|---|
+| `runs/inbox/eth/<id>/` | ignored | Untouched archives copied from ETH |
+| `runs/evidence/<id>/` | ignored | Extracted canonical run consumed by verification/reporting |
+| `runs/comparisons/<id>/` | ignored | Derived tables, plots and summaries |
+| `thesis_results/<id>/` | tracked only after review | Deliberately promoted compact evidence |
 
-The inbox is intentionally not created by Git. Create it after every fresh
-clone:
-
-```bash
-make evidence-inbox
-```
-
-## Copy a Physical Run
-
-On ETH, archive the *completed evidence run directory*, not a source checkout.
-For the active physical resident TaskGraph route, the source directory is normally:
+Create ignored directories as needed:
 
 ```bash
-RUN=$(readlink -f ~/work/Masters/thesis/implementation/runs/evidence/upmem_hardware_taskgraph_resident_path_quantization/upmem_hw_taskgraph_resident/latest)
-tar -C "$(dirname "$RUN")" -czf ~/upmem_taskgraph_$(date -u +%Y-%m-%d_%H-%M-%S).tar.gz "$(basename "$RUN")"
+mkdir -p runs/inbox/eth runs/evidence runs/comparisons
 ```
 
-On the local machine, from `thesis/implementation`:
+## Run Locally
+
+The active interface is:
 
 ```bash
-make evidence-inbox
-scp safari-baguette1:~/upmem_taskgraph_<timestamp>.tar.gz runs/inbox/eth/
-tar -tzf runs/inbox/eth/upmem_taskgraph_<timestamp>.tar.gz | head
-
-mkdir -p runs/evidence/upmem_hardware_taskgraph_resident_path_quantization/upmem_hw_taskgraph_resident
-tar -xzf runs/inbox/eth/upmem_taskgraph_<timestamp>.tar.gz \
-  -C runs/evidence/upmem_hardware_taskgraph_resident_path_quantization/upmem_hw_taskgraph_resident
+make plan CONFIG=configs/tn_benchmark_reset.yml OUTPUT=runs/plan
+make run  CONFIG=configs/tn_benchmark_reset.yml OUTPUT=runs/evidence/local-run
+make verify INPUT=runs/evidence/local-run
+make report INPUT=runs/evidence/local-run REPORT_OUTPUT=runs/comparisons/local-run
 ```
 
-The archive must unpack to one timestamped run directory containing at least:
+The CLI creates exactly three canonical files in the run directory:
 
 ```text
-run_manifest.json
-environment.json
-normalized_records.jsonl
+manifest.json
+samples.jsonl
+sessions.jsonl
 ```
 
-For an existing raw tree accidentally copied outside `implementation`, move it
-without deleting data. For example, from `thesis/implementation`:
+`manifest.json` binds schema, run/experiment/environment/validation identities,
+source commit and dirty-tree state, configuration, expected counts, file names,
+and terminal status. `samples.jsonl` has one row per warmup or measurement
+attempt. Each row contains case/route/plan identity, sample kind/index, status,
+measurement, backend facts, numeric facts, validation, output hash, and failure
+when applicable. `sessions.jsonl` records opened or attempted sessions,
+protocol identity, terminal facts, close time, release attempts and release
+verification.
+
+An unsupported row is a preflight capability rejection. A failed row records a
+runtime attempt and failure stage. Fatal external termination may leave an
+incomplete artifact; verification must reject it as incomplete.
+
+## Copy ETH Results
+
+On ETH, archive the completed run directory without changing its contents:
 
 ```bash
-make evidence-inbox
-mv ../upmem-investigation "runs/inbox/eth/physical-mvp-raw-2026-07-16"
+RUN=$(readlink -f ~/work/Masters/thesis/implementation/runs/evidence/<run-id>)
+tar -C "$(dirname "$RUN")" -czf ~/qbench_$(date -u +%Y-%m-%d_%H-%M-%S).tar.gz "$(basename "$RUN")"
 ```
 
-Do this only after checking that the source directory is the copied raw
-evidence you intend to keep. Git will then stop reporting it as an untracked
-repository change.
-
-## Audit and Report
-
-Report from the exact extracted run. Do not rerun the hardware benchmark just
-to make plots:
+On the local machine:
 
 ```bash
-RUN=runs/evidence/upmem_hardware_taskgraph_resident_path_quantization/upmem_hw_taskgraph_resident/<timestamp>
-make upmem-hw-taskgraph-resident-report UPMEM_HW_TASKGRAPH_RESIDENT_RUN="$RUN"
+mkdir -p runs/inbox/eth runs/evidence
+scp safari-baguette1:~/qbench_<timestamp>.tar.gz runs/inbox/eth/
+tar -tzf runs/inbox/eth/qbench_<timestamp>.tar.gz | head
+tar -xzf runs/inbox/eth/qbench_<timestamp>.tar.gz -C runs/evidence
+make verify INPUT=runs/evidence/<timestamped-run>
 ```
 
-The command prints a generated comparison directory under
-`runs/comparisons/research_pack/upmem_hw_taskgraph_resident/<timestamp>/`. Inspect its
-`benchmark_summary.md`, `plot_manifest.json`, `tables/`, and `plots/`.
+Keep the original archive. Do not copy raw results into tracked source
+directories. The extracted run must contain the three canonical files and must
+retain the source commit and environment facts recorded by the run.
 
-For the first physical TaskGraph route, the transfer, error, and validation
-plots are evidence. The runtime plot remains a TODO unless the record states a
-non-bring-up timing scope. It must not be used as a speedup figure.
+## Verification and Reporting
 
-## Promote a Reviewed Snapshot
+`verify` checks schemas, IDs, sample/session links, expected counts, scopes,
+statuses, output/validation fields, session release and terminal manifest
+state. `report` reads an already verified run; it never executes workloads.
+Derived reports belong under `runs/comparisons/` and must be regenerated from
+the canonical JSONL records. Plots must facet by route, plan, numeric policy,
+topology and timing scope where those dimensions differ, and must reject
+duplicate series/x-value keys.
 
-Promotion is deliberately manual. Before it, the local `thesis/implementation`
-source must be at the same clean commit recorded by the ETH run. Commit and
-push implementation changes before running ETH; do not use `--allow-dirty` for
-thesis results.
+## Promotion and Claims
 
-```bash
-PACK=runs/comparisons/research_pack/upmem_hw_taskgraph_resident/<timestamp>
-../.venv/bin/python scripts/thesis_snapshot.py promote \
-  --pack "$PACK" \
-  --out thesis_results/physical_hardware_taskgraph_v1
-../.venv/bin/python scripts/thesis_snapshot.py verify \
-  --snapshot thesis_results/physical_hardware_taskgraph_v1
-```
+Promotion to `thesis_results/` is a deliberate review action: copy only the
+selected manifest, records, checksums, tables and plots, then verify the
+promoted tree before tracking it. Never add `runs/`, inbox archives, build
+outputs or unreviewed reports to Git.
 
-Review the staged snapshot, then add only that named `thesis_results/` tree to
-Git. Do not add `runs/`, `build/`, or `runs/inbox/`.
+Claim guards are mandatory. Model and SDK-simulator rows support diagnostic
+correctness/protocol checks only, not physical timing, scaling, speedup or
+energy. Physical execution requires physical backend facts and validated
+release. Speedup additionally requires a validated CPU same-plan baseline,
+matching plan and timing identities, repeated measured samples, clean linked
+artifacts, and a non-bring-up scope. Energy requires measured energy with
+boundary, sensor/counter identity, interval and provenance. A rejected claim
+must be reported with its reasons.
 
-## Cleanup
-
-`make thesis-clean` considers `runs/evidence/` and `runs/comparisons/`; it does
-not delete the inbox. Keep the original archive until its extracted evidence,
-report, and any promoted snapshot have been verified. Use `archive-evidence`
-only for an explicit generated run you no longer need inside the repository.
+This workflow records capability and evidence; it does not claim that any
+physical UPMEM qualification has been completed.

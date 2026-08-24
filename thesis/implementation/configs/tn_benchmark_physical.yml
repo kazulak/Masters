@@ -1,10 +1,16 @@
 schema_version: tn_benchmark_v1
-experiment_id: one-dpu-complex-qualification
+experiment_id: one-dpu-reset-qualification
 defaults:
   warmups: 1
   repetitions: 5
   timeout_s: 120.0
 cases:
+  bell_2q:
+    circuit:
+      kind: builtin
+      name: bell_2q
+      path: null
+      parameters: {}
   complex_2q:
     circuit:
       kind: builtin
@@ -47,6 +53,9 @@ routes:
       initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t1
       rank_paths: [/dev/dpu_rank0]
 matrix:
+  - case_id: bell_2q
+    plan_id: greedy
+    route_ids: [upmem_float32_1dpu, upmem_int8_1dpu]
   - case_id: complex_2q
     plan_id: greedy
     route_ids: [upmem_float32_1dpu, upmem_int8_1dpu]

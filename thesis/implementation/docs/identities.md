@@ -1,97 +1,64 @@
-# Identity Contracts
+# Identity Contract
 
-These identifiers describe different objects. They must not be collapsed into
-one hash or reused for a different scope.
+Identities are deterministic hashes unless explicitly stated otherwise. They
+are serialized from canonical JSON with sorted keys, compact separators, and
+SHA-256. Reordering keys does not change an identity.
 
-## Identity Taxonomy
+## Domains
 
 | Identity | Includes | Excludes |
 |---|---|---|
-| `problem_id` | Canonical circuit, canonical query parameters, gate parameters, and generator seed | Numeric representation, path, executor, machine |
-| `tensor_network_structure_id` | Target-neutral tensor descriptors, labels, dimensions, connectivity, and requested output structure | Contraction order, slicing decisions, target details |
-| `logical_plan_id` | Tensor-network structure, selected contraction order, slicing branches, reductions, and dependencies | Numeric policy, tiling, placement, topology, executable |
-| `physical_plan_id` | Logical plan, numeric policy, stages, tiling, placement, topology, tasklets, intermediate policy, and kernel policy | Host timestamp, report formatting |
-| `executable_id` | ABI, host/DPU binary hashes, compiler, flags, SDK, and required build-input hashes | Circuit data and report settings |
-| `environment_id` | Host, OS, CPU, SDK, rank inventory, affinity, and environment facts | Invocation uniqueness |
-| `experiment_id` | Configuration, route, warmups, repetitions, timeout, and validation policy | Individual invocation timestamp |
-| `run_id` | Unique identifier for one actual invocation | Deterministic configuration identity |
-| `validation_policy_id` | Reference dtype, tolerances, metrics, and fixture-specific bounds | Physical execution choice |
-| `session_protocol_id` | Serialized ABI and protocol version | A particular opened session |
-| `session_instance_id` | One opened runtime session for a case and route within a run | Protocol identity |
-| `sample_id` | `run_id`, `case_id`, `route_id`, sample kind, and sample index | Other samples or sessions |
+| `problem_id` | Circuit semantics, query, parameters, generator seed | Numeric mode, path, executor, machine |
+| `tensor_network_structure_id` | Tensor descriptors, labels, shapes, connectivity, output structure | Path, slicing, target details, tensor values |
+| `logical_plan_id` | TN structure, contraction order, explicit slice branches, reductions, dependencies | Numeric mode, tiling, placement, topology, executable |
+| `physical_plan_id` | Logical plan, numeric policy, stages, tiles, placement, topology, tasklets, intermediate/kernel policy | Timestamp, report formatting |
+| `executable_id` | ABI, host/DPU binary hashes, compiler, flags, SDK and build-input hashes | Circuit, report settings |
+| `environment_id` | Host/OS/CPU, SDK, rank inventory, affinity and environment facts | Invocation uniqueness |
+| `experiment_id` | Configuration, routes, warmups, repetitions, timeout, validation policy | One invocation timestamp |
+| `run_id` | Fresh UUID4 for one invocation | Deterministic configuration identity |
+| `validation_policy_id` | Reference dtype, metrics, tolerances, fixture bounds | Execution choice |
+| `session_protocol_id` | ABI and serialized protocol version | Open-session instance |
+| `session_instance_id` | One opened runtime session within a run | Protocol identity |
+| `sample_id` | Run, case, plan, route, sample kind and index | Other samples |
 
-Reordering canonical JSON keys does not change an identity. Changing a path
-changes `logical_plan_id`. Changing numeric policy, tiling, placement, or
-tasklets changes `physical_plan_id`. Changing compiler flags changes
-`executable_id`. Changing host affinity changes `environment_id`.
+`problem_id` describes the simulated problem, not its representation. Numeric
+precision is an intervention and is therefore outside `problem_id`. The
+structure ID hashes descriptors, not input array contents. `ContractionDAG`
+hashes are logical-plan identities because the DAG contains a selected path.
 
-## Semantic Objects
+## Required Invariants
 
-`TensorNetwork` is a target-neutral semantic network. It owns tensor input
-descriptors, indices, connectivity, and the requested result; numerical arrays
-are separate execution inputs. It does not select an execution order.
+Changing a path changes `logical_plan_id`. Changing numeric policy, tiling,
+placement, topology, tasklet count, or kernel/intermediate policy changes
+`physical_plan_id` but not the logical plan. Changing compiler flags or ABI
+changes `executable_id`. Changing host affinity changes `environment_id`.
+Changing report styling changes none of these execution identities.
 
-`ContractionDAG` is the sole logical execution IR. It describes the selected
-contraction path, explicit slicing branches, reductions, and dependencies. Its
-hash is therefore a logical-plan identity, not a path-independent problem
-identity.
+`sample_id` is derived from `run_id`, `case_id`, `plan_id`, `route_id`,
+`sample_kind`, and `sample_index`; it is not a replacement for the unique
+`run_id`.
 
-UPMEM mapping produces `UpmemPlan` from the DAG. It must not mutate the DAG or
-silently introduce slicing.
+## Structure Payload
 
-## Tensor-Network Structure Hash Payload
+Version 1 of `tensor_network_structure_id` hashes the tensor descriptor list,
+output labels, and einsum expression. Descriptors include tensor ID, labels,
+shape, structure, dtype, and producer. Descriptors are canonically sorted.
+Input values, path order, slicing, numeric policy, placement, and runtime facts
+are excluded.
 
-`tensor_network_structure_id` version 1 hashes this JSON payload and no tensor
-values:
+## Comparison Meaning
 
-```json
-{
-  "schema_version": "tensor_network_structure_v1",
-  "tensors": [
-    {
-      "id": "...",
-      "labels": [0],
-      "shape": [2],
-      "structure": "dense",
-      "dtype": "complex128",
-      "produced_by": null
-    }
-  ],
-  "output_labels": [0, 1],
-  "einsum_expression": "..."
-}
-```
+`same problem` means matching `problem_id`. `same TN structure` means matching
+`tensor_network_structure_id`. `same logical plan` requires matching structure
+and `logical_plan_id`. `same physical route` additionally requires matching
+`physical_plan_id`, executable facts, environment requirements, timing scope,
+and validation policy appropriate to the comparison. A report must not label
+two rows “same plan” from a circuit name alone.
 
-The `tensors` list is sorted by the canonical JSON representation of each
-descriptor. The payload is serialized with sorted object keys, compact
-separators `(',', ':')`, and `ensure_ascii=True`, then hashed with SHA-256.
-Input array contents, numeric policy, contraction path, slicing, placement,
-and runtime details are excluded.
+## Evidence Binding
 
-## Public-Type Allowlist
-
-The reset allows these public types only:
-
-```text
-model.py:
-  GateOperation, Circuit, SimulationQuery, SimulationJob,
-  TensorSpec, TensorView, TensorNetwork,
-  ContractNode, ReduceNode, ContractionDAG
-
-  results.py:
-  JsonScalar, JsonValue, Measurement, ExecutionSample,
-  UnsupportedExecution, ExecutionFailed
-
-numerics.py:
-  NumericPolicy, EncodedComplexTensor
-
-  upmem/plan.py:
-  UpmemTopology, UpmemResources, UpmemWorkUnit,
-  UpmemStage, UpmemPlan
-
-upmem/runtime.py:
-  UpmemSession
-```
-
-Private module-local helpers are allowed. A new public type requires an
-explicit contract update before implementation.
+The manifest stores `run_id`, `experiment_id`, `environment_id`, and
+`validation_policy_id`. Each sample stores the problem, TN, logical, physical,
+and executable identities as applicable. Sessions repeat run, case, plan,
+route, protocol, and instance identity. Canonical verification recomputes
+sample IDs and rejects mismatched or missing linked identities.

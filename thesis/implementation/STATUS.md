@@ -1,68 +1,76 @@
 # Implementation Status
 
-This file separates the reset target from the current reset-branch
-implementation. Exact tested checkpoints are recorded in
-`MIGRATION_LEDGER.md`.
+This status applies to the active post-reset code only. It is not a summary of
+historical experiments or a performance claim.
 
-## Status Vocabulary
+| Capability | Implemented | Software/simulator validation | Physical evidence | Claimable now |
+|---|---|---|---|---|
+| Circuit to TN lowering | Yes | Yes | Not applicable | Correct lowering within supported circuit/query scope |
+| Target-neutral semantic network | Yes | Yes | Not applicable | `TensorNetwork` is non-executable semantic data |
+| Logical path/DAG lowering | Yes | Yes | Not applicable | One `ContractionDAG` is the sole logical execution IR |
+| Direct NumPy same-DAG replay | Yes | Yes | Not applicable | CPU logical-plan correctness reference |
+| Quimb/cotengra adapters | Yes | Yes | Not applicable | CPU TN baseline routes for declared scopes |
+| QuEST CPU adapter | Yes | Controlled software tests | No current reset run | Adapter availability, not CPU performance |
+| QuEST GPU adapter | Yes | Controlled software tests | No compatible GPU run | Capability detection and explicit unsupported result |
+| UPMEM physical mapping | Yes, bounded output/K tiles | Yes | Reset route pending | Plan construction only |
+| ABI-v4 UPMEM runtime | Yes | SDK simulator and controlled sessions | Reset route pending | Simulator correctness only |
+| Split-complex float32 | Yes | CPU replay and simulator | Reset route pending | Software/simulator correctness |
+| Split-complex packed int8 | Yes | CPU replay and simulator | Reset route pending | Software/simulator correctness and numeric facts |
+| Local contraction slicing | Yes | Yes | Reset route pending | Logical slicing correctness only |
+| Host reduction | Yes | Yes | Reset route pending | Bounded host-round-trip correctness |
+| DPU-resident intermediates | No | No | No | No claim |
+| Tasklet scheduling/scaling | No | No | No | No claim |
+| Slice-group parallel execution | No | No | No | No claim |
+| Multi-rank execution/scaling | No | No | No | No claim |
+| PID-Comm provider | No | Standalone harness only | No | No communication claim |
+| ATiM kernel provider | No | No | No | No claim |
+| Energy measurement | No | Evidence schema supports null field | No | No energy claim |
+| Hardware-calibrated planner | No | No | No | No planner-performance claim |
 
-- **Implemented at base**: code exists on the reset base.
-- **Planned**: part of the reset charter; not implemented at base.
-- **Simulator-qualified**: tested through the SDK simulator or software tests;
-  this is not physical-hardware evidence.
-- **Physically-qualified**: supported by a retained physical run for the exact
-  route and contract named.
-- **Claimable**: permitted by evidence and claim policy for the stated scope.
+## What Is Valid Today
 
-## Current State
+The active implementation can be described as a software-validated,
+simulator-checked pipeline from `SimulationJob` through a target-neutral
+`TensorNetwork`, selected path, `ContractionDAG`, direct CPU/TN execution or a
+bounded `UpmemPlan`, canonical evidence, and reports.
 
-T1D activation: `native/upmem/runtime/` is the active, self-contained ABI-v4
-native tree and `src/quantum_bench/upmem/runtime.py` is the active Python
-runtime. The active provider preserves raw UPMEM SDK
-allocation on an explicit rank path, allocation verification, manual
-SimplePIM management metadata construction, initialization-binary launch,
-and release. It does not call `table_management_init_with_profile`; the copied
-management-profile patch is provenance only because its profile syntax is
-incompatible with explicit rank selection. The v4 compute kernel is raw SDK
-code using SimplePIM metadata and initialization types, not a SimplePIM
-operator.
+The local SDK simulator has exercised the active one-rank, one-DPU ABI-v4
+route for split-complex float32 and shared-scale packed int8 against the CPU
+physical-plan replay. Simulator timing is not physical performance evidence.
 
-| Area | Base state | Qualification and claim status |
-|---|---|---|
-| Circuit and TN code | Reset model, circuit, lowering, and planner boundaries are implemented. | Software-tested; physical claims do not apply to this pure boundary. |
-| Logical execution IR | `ContractionDAG` is the sole target-neutral logical execution IR. | Software-tested, including bounded local multi-label slicing. |
-| UPMEM plan | Final schema-v1 contract-batch/reduction stages and deterministic output/K work units are implemented. Compatible direct slice branches are grouped under their parent reduction. | Software-tested; branches execute sequentially, so this is not slice concurrency, tasklet scheduling, residency, or physical evidence. |
-| UPMEM numeric route | Split-complex float32 and shared-scale host-packed int8 policies are implemented. | CPU policy replay is software-tested; physical numerical qualification is pending. |
-| Complex UPMEM policy | Four sequential real ABI-v4 passes consume one final contract stage. | Fake-session differential tests pass. The active ABI-v4 SDK simulator matched CPU physical-plan replay for both numeric policies; physical qualification remains pending. |
-| Logical slicing | Deterministic local-contraction slicing selects enough contracted labels, creates their Cartesian partials in one pass, and inserts one explicit reduction. | Software-tested through logical planning, physical mapping, CPU replay, and controlled UPMEM sessions; this is bounded local slicing with sequential branch execution, not global slicing or physical parallel evidence. |
-| Session and timing API | Final `open_upmem` and persistent `UpmemSession.run_once` execute one DAG sample, preserve native failure stages, and admit close only with positive allocation, identity, execution, and release facts. `open_upmem_simulator` reuses the same ABI with an explicit simulator target. | Software-qualified with controlled sessions and an actual local SDK-simulator run; physical qualification remains pending. |
-| Canonical execution boundary | Direct CPU and final UPMEM APIs consume canonical DAG/plan records; generic execution records survive only inside the historical adapter pending T12 deletion. | Software-tested; no target fallback is admitted. |
-| Evidence | Canonical `manifest.json`, `samples.jsonl`, and `sessions.jsonl` schemas plus experiment-owned repetition/session lifecycle are implemented. | Software-tested for strict serialization, failure rows, timing scopes, release admission, and terminal manifest transitions; no evidence is promoted and no physical claim follows. |
-| CPU TN reference | Direct same-DAG execution, complex128 validation, and same-physical-plan replay are implemented. | Software-tested; replay is a policy oracle, not a performance baseline. |
-| Quimb/cotengra | Direct function-only `SimulationJob` adapters execute deterministic Quimb (`greedy`, `optimal`) and cotengra (`greedy`, `labels`) TN routes and record the selected path fingerprint. | Software-tested against canonical complex statevectors; these are CPU TN baselines, not UPMEM or GPU evidence. |
-| QuEST CPU/GPU | Direct CPU and GPU adapters validate the native state-dump contract. The GPU adapter additionally binds an exact runner and HIP smoke executable by hash and requires a fresh synchronized runtime-device probe. CUDA remains explicitly unsupported. | Both adapters are software-tested with controlled processes. No compatible local QuEST runner/GPU was available, so real CPU/GPU execution remains unqualified. |
-| SDK simulator | The active real-tile ABI-v4 route supports exactly one simulator DPU and one rank, with target-specific allocation, execution, and release facts. | Local SDK execution matched CPU physical-plan replay for float32 and packed int8. This supports correctness only, never physical timing, scaling, speedup, or energy claims. |
-| SimplePIM | Pinned external sources and historical management-assisted routes exist. | SimplePIM compute integration is not active in the reset baseline. |
-| PID-Comm, ATiM, SparseP | Repository/history references exist. | Not active in the reset baseline. |
-| Physical UPMEM | Historical bounded physical capsules exist. | Reset architecture is pending physical qualification. |
+## Physical Qualification State
 
-T1C/T1D source-string tests are drift tripwires for the ABI/source
-contract; they are not runtime or hardware tests. Clean local SDK builds of
-the staged tree were performed at `NR_TASKLETS=1` and `24`. Physical behavior
-remains unqualified until ETH qualification.
+The post-reset physical route is **not ETH-qualified**. Before it can support
+even a one-DPU physical execution claim, run:
 
-## Claim Boundary
+```bash
+make build-upmem-runtime UPMEM_TASKLETS=1
+UPMEM_ALLOW_PHYSICAL_HARDWARE=1 \
+  make qualify PHYSICAL_CONFIG=configs/tn_benchmark_physical.yml \
+  OUTPUT=runs/physical-qualification
+make verify INPUT=runs/physical-qualification
+make report INPUT=runs/physical-qualification \
+  REPORT_OUTPUT=runs/physical-qualification-report
+```
 
-The repository may describe the reset branch's software implementation of
-split-complex final-stage execution, its fake-session differential tests, and
-the bounded active-ABI simulator correctness check. It may not claim complex
-physical execution, general slicing, physical speedup, multi-rank scaling,
-energy efficiency, or a hardware-calibrated planner.
+The physical configuration must contain the target's real rank path and paths
+to matching ABI-v4 binaries. Qualification evidence must record allocation,
+launch, release, observed physical backend facts, output validation, and the
+source/binary/environment identities.
 
-## Qualification State
+Until that run succeeds, do not claim physical speedup, energy efficiency,
+parallel scaling, multi-rank operation, graph-wide residency, or general
+UPMEM TN acceleration.
 
-- Software merge state: `pending` until T13 passes.
-- Physical qualification state: `pending`; owner `tkazulak`.
-- Hardware reservation/date: `pending`.
-- Hardware rank path: `pending`.
-- UPMEM SDK version: `pending`.
+## Retained External Components
+
+- **SimplePIM:** pinned management types and its initialization kernel are used
+  around raw-SDK allocation/dispatch. No high-level scheduling route is yet
+  qualified.
+- **PID-Comm:** `make pidcomm-check` runs a standalone compatibility harness.
+  It is not integrated as a communication provider.
+- **ATiM:** not integrated.
+
+The next measured upgrade should follow physical one-DPU qualification: first
+tasklet/DPU scaling, then slice scheduling or residency only when transfer and
+runtime evidence identifies a clear bottleneck.
