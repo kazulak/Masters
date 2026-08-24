@@ -16,6 +16,7 @@ import numpy as np
 import pytest
 
 from quantum_bench import baselines
+from quantum_bench.bench import simulation_backend_probe
 from quantum_bench.circuits import builtin_circuit, quest_compatible_circuit
 from quantum_bench.model import CircuitOperation, CircuitSpec, make_simulation_job
 from quantum_bench.results import ExecutionFailed, ExecutionSample, UnsupportedExecution
@@ -64,17 +65,40 @@ def _fake_runner(tmp_path: Path) -> Path:
     return runner
 
 
-def _fake_quest_process(monkeypatch, job, *, payload_updates=None, dump_updates=None):
+def _fake_quest_process(
+    monkeypatch,
+    job,
+    *,
+    payload_updates=None,
+    dump_updates=None,
+    probe_updates=None,
+    probe_returncode=0,
+):
     calls = []
     payload_updates = payload_updates or {}
     dump_updates = dump_updates or {}
+    probe_updates = probe_updates or {}
 
     def fake_run(command, **kwargs):
         calls.append((command, kwargs))
-        assert kwargs["cwd"] == Path(command[0]).parent.parent
         assert kwargs["capture_output"] is True
         assert kwargs["text"] is True
         assert kwargs["check"] is False
+        if Path(command[0]).name == "hip_smoke":
+            assert kwargs["cwd"] == Path(command[0]).parent
+            probe_payload = {
+                "status": "ok",
+                "gpu_program_executed": True,
+                "gpu_backend_verified": True,
+                "gpu_synchronized": True,
+                "device_count": 1,
+                "gpu_device_name": "Test GPU",
+            }
+            probe_payload.update(probe_updates)
+            return subprocess.CompletedProcess(
+                command, probe_returncode, json.dumps(probe_payload), ""
+            )
+        assert kwargs["cwd"] == Path(command[0]).parent.parent
         dump_path = Path(command[command.index("--dump-state-json") + 1])
         algorithm = command[command.index("--algo") + 1]
         if algorithm == "HS":
@@ -122,6 +146,571 @@ def _fake_quest_process(monkeypatch, job, *, payload_updates=None, dump_updates=
 
     monkeypatch.setattr(baselines.subprocess, "run", fake_run)
     return calls
+
+
+def _gpu_verification_artifact(
+    tmp_path: Path, runner: Path, *, accelerator: str = "amd_gpu", **updates
+) -> Path:
+    runner_root = runner.parent.parent
+    probe = tmp_path / "gpu" / "hip_smoke"
+    probe.parent.mkdir(parents=True, exist_ok=True)
+    probe.write_text("hip-smoke-test\n", encoding="utf-8")
+    probe.chmod(0o755)
+    payload = {
+        "schema_version": "quest_gpu_verification_v1",
+        "status": "verified",
+        "gpu_backend_verified": True,
+        "gpu_program_executed": True,
+        "cpu_fallback_used": False,
+        "gpu_synchronized": True,
+        "accelerator_kind": accelerator,
+        "verification_backend": "quest-hip"
+        if accelerator == "amd_gpu"
+        else "quest-cuda",
+        "gpu_device_name": "Test GPU",
+        "gpu_device_count": 1,
+        "gpu_runtime_stack": "amd_rocm",
+        "runner_path": str(runner.relative_to(tmp_path)),
+        "runner_root": str(runner_root.relative_to(tmp_path)),
+        "runner_sha256": hashlib.sha256(runner.read_bytes()).hexdigest(),
+        "runner_sha256_before": hashlib.sha256(runner.read_bytes()).hexdigest(),
+        "runner_sha256_after": hashlib.sha256(runner.read_bytes()).hexdigest(),
+        "runtime_probe_path": str(probe.relative_to(tmp_path)),
+        "runtime_probe_sha256": hashlib.sha256(probe.read_bytes()).hexdigest(),
+        "runtime_probe_sha256_before": hashlib.sha256(probe.read_bytes()).hexdigest(),
+        "runtime_probe_sha256_after": hashlib.sha256(probe.read_bytes()).hexdigest(),
+        "runtime_probe_protocol": "hip_smoke_v1",
+    }
+    payload.update(updates)
+    path = tmp_path / "quest_gpu_full_state_exact.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_default_gpu_verification_path_is_under_implementation_build():
+    path = baselines._default_gpu_verification()
+    assert path.name == "quest_gpu_full_state_exact.json"
+    assert path.parent.name == "gpu_verification"
+    assert path.parent.parent.name == "build"
+
+
+def test_quest_gpu_accepts_verified_amd_hip(monkeypatch, tmp_path):
+    job = _quest_job("qrng", n_qubits=2)
+    runner = _fake_runner(tmp_path)
+    artifact = _gpu_verification_artifact(tmp_path, runner)
+    calls = _fake_quest_process(monkeypatch, job)
+
+    sample = baselines.run_quest_gpu(job, verification_path=artifact, runner=runner)
+
+    expected = np.zeros(1 << job.circuit.n_qubits, dtype=np.complex128)
+    expected[0] = 1
+    np.testing.assert_array_equal(sample.output, expected)
+    facts = sample.backend_facts
+    assert facts["backend_id"] == "quest_gpu_full_state_v1"
+    assert facts["execution_class"] == "external_process_gpu"
+    assert facts["hardware_execution"] is True
+    assert facts["physical_upmem_execution"] is False
+    assert facts["target_observed"] == "gpu"
+    assert facts["accelerator"] == "amd_gpu"
+    assert facts["verification_backend"] == "quest-hip"
+    assert facts["gpu_execution_basis"] == (
+        "current_runtime_probe_plus_verified_quest_binary_v1"
+    )
+    assert facts["gpu_runtime_probe_executed"] is True
+    assert facts["gpu_runtime_probe_program_executed"] is True
+    assert facts["gpu_runtime_probe_protocol"] == "hip_smoke_v1"
+    assert facts["gpu_runtime_probe_protocol_source"] == "hip_smoke_v1"
+    assert facts["gpu_runtime_probe_device"] == "Test GPU"
+    assert facts["gpu_runtime_probe_device_count"] == 1
+    assert facts["quest_gpu_binary_verified"] is True
+    assert facts["quest_gpu_binary_invoked"] is True
+    assert facts["gpu_synchronization_source"] == "hip_smoke_v1"
+    assert len(calls) == 2
+    assert Path(calls[0][0][0]).name == "hip_smoke"
+    assert Path(calls[1][0][0]).name == "quest_runner"
+    assert facts["verification_path"] == str(artifact.resolve())
+    assert (
+        facts["verification_sha256"]
+        == hashlib.sha256(artifact.read_bytes()).hexdigest()
+    )
+    assert facts["runner_sha256"] == hashlib.sha256(runner.read_bytes()).hexdigest()
+    assert facts["native_energy_is_gpu"] is False
+    assert sample.measurement.energy_j is None
+
+
+def test_quest_gpu_failed_run_does_not_claim_gpu_execution(monkeypatch, tmp_path):
+    job = _quest_job("qrng", n_qubits=2)
+    runner = _fake_runner(tmp_path)
+    artifact = _gpu_verification_artifact(tmp_path, runner)
+
+    def fail_quest(command, **kwargs):
+        assert Path(command[0]).name == "quest_runner"
+        return subprocess.CompletedProcess(command, 1, "{}", "QuEST error")
+
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if Path(command[0]).name == "hip_smoke":
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "status": "ok",
+                        "gpu_program_executed": True,
+                        "gpu_backend_verified": True,
+                        "gpu_synchronized": True,
+                        "device_count": 1,
+                        "gpu_device_name": "Test GPU",
+                    }
+                ),
+                "",
+            )
+        return fail_quest(command, **kwargs)
+
+    monkeypatch.setattr(baselines.subprocess, "run", fake_run)
+    with pytest.raises(ExecutionFailed) as error:
+        baselines.run_quest_gpu(job, verification_path=artifact, runner=runner)
+
+    facts = error.value.backend_facts
+    assert facts["requested_target"] == "gpu"
+    assert facts["gpu_runtime_probe_observed"] is True
+    assert facts["quest_gpu_binary_verified"] is True
+    assert facts["quest_gpu_binary_invoked"] is False
+    assert facts["hardware_execution"] is False
+    assert "target_observed" not in facts
+
+
+def test_quest_gpu_success_claims_gpu_only_after_binary_succeeds(monkeypatch, tmp_path):
+    job = _quest_job("qrng", n_qubits=2)
+    runner = _fake_runner(tmp_path)
+    artifact = _gpu_verification_artifact(tmp_path, runner)
+    _fake_quest_process(monkeypatch, job)
+
+    sample = baselines.run_quest_gpu(job, verification_path=artifact, runner=runner)
+
+    facts = sample.backend_facts
+    assert facts["requested_target"] == "gpu"
+    assert facts["gpu_runtime_probe_observed"] is True
+    assert facts["quest_gpu_binary_verified"] is True
+    assert facts["quest_gpu_binary_invoked"] is True
+    assert facts["target_observed"] == "gpu"
+    assert facts["hardware_execution"] is True
+
+
+def test_hip_smoke_device_name_is_preferred_for_verification_artifact(
+    monkeypatch, tmp_path
+):
+    root = tmp_path
+    binary_dir = root / "build" / "native" / "quest_gpu" / "hip" / "bin"
+    binary_dir.mkdir(parents=True)
+    runner = binary_dir / "quest_gpu_runner"
+    smoke = binary_dir / "hip_smoke"
+    runner.write_text("runner\n", encoding="utf-8")
+    smoke.write_text("smoke\n", encoding="utf-8")
+
+    results = iter(
+        [
+            {"returncode": 0, "stdout": "", "stderr": ""},
+            {"returncode": 0, "stdout": "", "stderr": ""},
+            {
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "status": "ok",
+                        "gpu_program_executed": True,
+                        "gpu_device_name": "HIP Smoke GPU",
+                        "gpu_backend_verified": True,
+                        "gpu_synchronized": True,
+                        "device_count": 1,
+                        "gcn_arch_name": "gfx1032",
+                    }
+                ),
+                "stderr": "",
+            },
+            {"returncode": 0, "stdout": '{"status":"ok"}', "stderr": ""},
+        ]
+    )
+
+    def fake_command(command, *, cwd, timeout_s):
+        result = next(results)
+        if Path(command[0]).name == "quest_gpu_runner":
+            dump_path = Path(command[command.index("--dump-state-json") + 1])
+            dump_path.parent.mkdir(parents=True, exist_ok=True)
+            dump_path.write_text("{}", encoding="utf-8")
+        return {"command": command, "cwd": str(cwd), **result}
+
+    monkeypatch.setattr(
+        simulation_backend_probe,
+        "_quest_gpu_prerequisites",
+        lambda selected_backend, hardware: {"missing": [], "dependencies": {}},
+    )
+    monkeypatch.setattr(simulation_backend_probe, "_run_command", fake_command)
+    monkeypatch.setattr(
+        simulation_backend_probe,
+        "_gpu_device_name",
+        lambda selected_backend: "Generic GPU",
+    )
+
+    artifact = simulation_backend_probe._verify_gpu_backend(
+        root, "quest-hip", {"amd_gpu_pci_detected": True}
+    )
+
+    assert artifact["gpu_device_name"] == "HIP Smoke GPU (gfx1032)"
+
+
+def test_gpu_verification_builds_smoke_after_clean_all(monkeypatch, tmp_path):
+    root = tmp_path
+    binary_dir = root / "build" / "native" / "quest_gpu" / "hip" / "bin"
+    binary_dir.mkdir(parents=True)
+    runner = binary_dir / "quest_gpu_runner"
+    smoke = binary_dir / "hip_smoke"
+    smoke.write_text("stale-smoke\n", encoding="utf-8")
+    order = []
+
+    def fake_command(command, *, cwd, timeout_s):
+        if "clean-all" in command:
+            order.append("runner_build")
+            smoke.unlink(missing_ok=True)
+            runner.write_text("qualified-runner\n", encoding="utf-8")
+            return {"returncode": 0, "stdout": "", "stderr": ""}
+        if "hip-smoke" in command:
+            order.append("smoke_build")
+            smoke.write_text("qualified-smoke\n", encoding="utf-8")
+            return {"returncode": 0, "stdout": "", "stderr": ""}
+        if Path(command[0]).name == "hip_smoke":
+            order.append("smoke_run")
+            assert smoke.exists()
+            return {
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "status": "ok",
+                        "gpu_program_executed": True,
+                        "gpu_backend_verified": True,
+                        "gpu_synchronized": True,
+                        "device_count": 1,
+                        "gpu_device_name": "Test GPU",
+                        "gcn_arch_name": "gfx1032",
+                    }
+                ),
+                "stderr": "",
+            }
+        order.append("runner_run")
+        assert runner.exists()
+        assert smoke.exists()
+        dump_path = Path(command[command.index("--dump-state-json") + 1])
+        dump_path.parent.mkdir(parents=True, exist_ok=True)
+        dump_path.write_text("{}", encoding="utf-8")
+        return {"returncode": 0, "stdout": '{"status":"ok"}', "stderr": ""}
+
+    monkeypatch.setattr(
+        simulation_backend_probe,
+        "_quest_gpu_prerequisites",
+        lambda selected_backend, hardware: {"missing": [], "dependencies": {}},
+    )
+    monkeypatch.setattr(simulation_backend_probe, "_run_command", fake_command)
+
+    artifact = simulation_backend_probe._verify_gpu_backend(
+        root, "quest-hip", {"amd_gpu_pci_detected": True}
+    )
+
+    assert order == ["runner_build", "smoke_build", "smoke_run", "runner_run"]
+    assert artifact["status"] == "verified"
+    runner_hash = hashlib.sha256(runner.read_bytes()).hexdigest()
+    smoke_hash = hashlib.sha256(smoke.read_bytes()).hexdigest()
+    assert artifact["runner_sha256_before"] == runner_hash
+    assert artifact["runner_sha256_after"] == runner_hash
+    assert artifact["runner_sha256_final"] == runner_hash
+    assert artifact["runtime_probe_sha256_before"] == smoke_hash
+    assert artifact["runtime_probe_sha256_after"] == smoke_hash
+    assert artifact["runtime_probe_sha256_final"] == smoke_hash
+
+
+def test_quest_gpu_rejects_cuda_without_current_runtime_probe(tmp_path):
+    runner = _fake_runner(tmp_path)
+    artifact = _gpu_verification_artifact(
+        tmp_path, runner, accelerator="nvidia_gpu", gpu_runtime_stack="cuda"
+    )
+    with pytest.raises(UnsupportedExecution) as error:
+        baselines.run_quest_gpu(
+            _quest_job("qrng", n_qubits=2), verification_path=artifact, runner=runner
+        )
+    assert error.value.capability == "quest_gpu_runtime_probe"
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"schema_version": "wrong"},
+        {"status": "unverified"},
+        {"gpu_backend_verified": False},
+        {"gpu_synchronized": False},
+        {"gpu_program_executed": False},
+        {"cpu_fallback_used": True},
+        {"gpu_synchronized": False},
+        {"accelerator_kind": "cpu"},
+        {"verification_backend": "quest-cuda"},
+        {"gpu_device_name": ""},
+        {"gpu_runtime_stack": None},
+        {"runner_path": ""},
+        {"runner_sha256": "ABC"},
+        {"runner_root": ""},
+        {"runtime_probe_path": ""},
+        {"runtime_probe_sha256": "ABC"},
+        {"runtime_probe_protocol": "other"},
+    ],
+)
+def test_quest_gpu_rejects_invalid_verification_artifact(tmp_path, updates):
+    runner = _fake_runner(tmp_path)
+    artifact = _gpu_verification_artifact(tmp_path, runner, **updates)
+    with pytest.raises(UnsupportedExecution) as error:
+        baselines.run_quest_gpu(
+            _quest_job("qrng", n_qubits=2), verification_path=artifact, runner=runner
+        )
+    assert error.value.stage == "preflight"
+    expected_capability = (
+        "quest_gpu_runtime_probe"
+        if set(updates)
+        & {
+            "verification_backend",
+            "gpu_runtime_stack",
+            "runtime_probe_sha256",
+            "runtime_probe_protocol",
+        }
+        else "quest_gpu_verification"
+    )
+    assert error.value.capability == expected_capability
+
+
+def test_quest_gpu_rejects_missing_or_malformed_verification(tmp_path):
+    runner = _fake_runner(tmp_path)
+    missing = tmp_path / "missing.json"
+    with pytest.raises(UnsupportedExecution) as missing_error:
+        baselines.run_quest_gpu(
+            _quest_job("qrng", n_qubits=2), verification_path=missing, runner=runner
+        )
+    assert missing_error.value.capability == "quest_gpu_verification"
+
+    malformed = tmp_path / "malformed.json"
+    malformed.write_text("not-json", encoding="utf-8")
+    with pytest.raises(UnsupportedExecution) as malformed_error:
+        baselines.run_quest_gpu(
+            _quest_job("qrng", n_qubits=2),
+            verification_path=malformed,
+            runner=runner,
+        )
+    assert malformed_error.value.capability == "quest_gpu_verification"
+
+
+def test_quest_gpu_rejects_cpu_only_artifact(tmp_path):
+    runner = _fake_runner(tmp_path)
+    artifact = _gpu_verification_artifact(
+        tmp_path, runner, gpu_program_executed=False, accelerator_kind="cpu"
+    )
+    with pytest.raises(UnsupportedExecution) as error:
+        baselines.run_quest_gpu(
+            _quest_job("qrng", n_qubits=2), verification_path=artifact, runner=runner
+        )
+    assert error.value.capability == "quest_gpu_verification"
+
+
+def test_quest_gpu_rejects_runner_hash_mismatch(tmp_path):
+    runner = _fake_runner(tmp_path)
+    artifact = _gpu_verification_artifact(tmp_path, runner, runner_sha256="0" * 64)
+    with pytest.raises(UnsupportedExecution) as error:
+        baselines.run_quest_gpu(
+            _quest_job("qrng", n_qubits=2), verification_path=artifact, runner=runner
+        )
+    assert error.value.capability == "quest_gpu_runner"
+
+
+def test_quest_gpu_rejects_explicit_runner_mismatch(tmp_path):
+    verified_runner = _fake_runner(tmp_path)
+    selected_runner = tmp_path / "other" / "quest_runner"
+    selected_runner.parent.mkdir()
+    selected_runner.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    selected_runner.chmod(0o755)
+    artifact = _gpu_verification_artifact(tmp_path, verified_runner)
+    with pytest.raises(UnsupportedExecution) as error:
+        baselines.run_quest_gpu(
+            _quest_job("qrng", n_qubits=2),
+            verification_path=artifact,
+            runner=selected_runner,
+        )
+    assert error.value.capability == "quest_gpu_runner"
+
+
+def test_quest_gpu_rejects_unsupported_job_before_any_subprocess(monkeypatch, tmp_path):
+    def unexpected_subprocess(*args, **kwargs):
+        raise AssertionError("unsupported GPU job must not invoke a subprocess")
+
+    monkeypatch.setattr(baselines.subprocess, "run", unexpected_subprocess)
+    with pytest.raises(UnsupportedExecution) as error:
+        baselines.run_quest_gpu(
+            _job(),
+            verification_path=tmp_path / "missing-verification.json",
+        )
+    assert error.value.capability == "circuit_source"
+
+
+def test_quest_gpu_rejects_runner_outside_artifact_root(tmp_path):
+    runner = _fake_runner(tmp_path)
+    root = tmp_path / "other-root"
+    root.mkdir()
+    artifact = _gpu_verification_artifact(tmp_path, runner, runner_root="other-root")
+    with pytest.raises(UnsupportedExecution) as error:
+        baselines.run_quest_gpu(
+            _quest_job("qrng", n_qubits=2),
+            verification_path=artifact,
+            runner=runner,
+        )
+    assert error.value.capability == "quest_gpu_runner"
+
+
+def test_gpu_probe_failure_facts_include_bounded_stderr(monkeypatch, tmp_path):
+    stderr = "x" * 5000
+
+    def fail(command, **kwargs):
+        return subprocess.CompletedProcess(command, 7, "{}", stderr)
+
+    monkeypatch.setattr(baselines.subprocess, "run", fail)
+    with pytest.raises(ExecutionFailed) as error:
+        baselines._run_gpu_runtime_probe(
+            probe_path=tmp_path / "hip_smoke",
+            probe_sha256="0" * 64,
+            protocol="hip_smoke_v1",
+            expected_device="Test GPU",
+            timeout_s=10.0,
+        )
+    facts = error.value.backend_facts
+    assert facts["gpu_runtime_probe_returncode"] == 7
+    assert len(facts["gpu_runtime_probe_stderr"]) == 4000
+
+
+def test_gpu_verification_rejects_runner_hash_change(monkeypatch, tmp_path):
+    root = tmp_path
+    binary_dir = root / "build" / "native" / "quest_gpu" / "hip" / "bin"
+    binary_dir.mkdir(parents=True)
+    runner = binary_dir / "quest_gpu_runner"
+    smoke = binary_dir / "hip_smoke"
+    runner.write_text("runner\n", encoding="utf-8")
+    smoke.write_text("smoke\n", encoding="utf-8")
+    results = iter(
+        [
+            {"returncode": 0, "stdout": "", "stderr": ""},
+            {"returncode": 0, "stdout": "", "stderr": ""},
+            {
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "status": "ok",
+                        "gpu_program_executed": True,
+                        "gpu_backend_verified": True,
+                        "gpu_synchronized": True,
+                        "device_count": 1,
+                        "gpu_device_name": "Test GPU",
+                    }
+                ),
+                "stderr": "",
+            },
+            {"returncode": 0, "stdout": '{"status":"ok"}', "stderr": ""},
+        ]
+    )
+
+    def fake_command(command, *, cwd, timeout_s):
+        result = next(results)
+        if Path(command[0]).name == "quest_gpu_runner":
+            dump_path = Path(command[command.index("--dump-state-json") + 1])
+            dump_path.parent.mkdir(parents=True, exist_ok=True)
+            dump_path.write_text("{}", encoding="utf-8")
+            runner.write_text("changed\n", encoding="utf-8")
+        return {"command": command, "cwd": str(cwd), **result}
+
+    monkeypatch.setattr(
+        simulation_backend_probe,
+        "_quest_gpu_prerequisites",
+        lambda selected_backend, hardware: {"missing": [], "dependencies": {}},
+    )
+    monkeypatch.setattr(simulation_backend_probe, "_run_command", fake_command)
+
+    artifact = simulation_backend_probe._verify_gpu_backend(
+        root, "quest-hip", {"amd_gpu_pci_detected": True}
+    )
+    assert artifact["status"] == "failed"
+    assert artifact["runner_sha256_before"] != artifact["runner_sha256_after"]
+
+
+def test_hip_smoke_contract_declares_successful_synchronization():
+    source = (
+        Path(__file__).parents[1] / "native" / "quest_gpu" / "src" / "hip_smoke.cpp"
+    ).read_text(encoding="utf-8")
+    assert '\\"gpu_synchronized\\":true' in source
+
+
+def test_quest_gpu_runtime_failure_is_execution_failure(monkeypatch, tmp_path):
+    job = _quest_job("qrng", n_qubits=2)
+    runner = _fake_runner(tmp_path)
+    artifact = _gpu_verification_artifact(tmp_path, runner)
+
+    def fail(command, **kwargs):
+        return subprocess.CompletedProcess(command, 2, "{}", "GPU error")
+
+    monkeypatch.setattr(baselines.subprocess, "run", fail)
+    with pytest.raises(ExecutionFailed) as error:
+        baselines.run_quest_gpu(job, verification_path=artifact, runner=runner)
+    assert error.value.stage == "gpu_runtime_probe"
+    assert "target_observed" not in error.value.backend_facts
+    assert "gpu_program_executed" not in error.value.backend_facts
+
+
+@pytest.mark.parametrize(
+    "probe_updates",
+    [
+        {"status": "failed"},
+        {"gpu_program_executed": False},
+        {"gpu_backend_verified": False},
+        {"gpu_device_name": "Other GPU"},
+        {"device_count": 0},
+        {"device_count": True},
+    ],
+)
+def test_quest_gpu_probe_validation_failures(monkeypatch, tmp_path, probe_updates):
+    job = _quest_job("qrng", n_qubits=2)
+    runner = _fake_runner(tmp_path)
+    artifact = _gpu_verification_artifact(tmp_path, runner)
+    _fake_quest_process(monkeypatch, job, probe_updates=probe_updates)
+    with pytest.raises(ExecutionFailed) as error:
+        baselines.run_quest_gpu(job, verification_path=artifact, runner=runner)
+    assert error.value.stage == "gpu_runtime_probe"
+    assert "target_observed" not in error.value.backend_facts
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"runtime_probe_path": "missing/hip_smoke"},
+        {"runtime_probe_sha256": "0" * 64},
+    ],
+)
+def test_quest_gpu_rejects_probe_static_mismatch(tmp_path, updates):
+    runner = _fake_runner(tmp_path)
+    artifact = _gpu_verification_artifact(tmp_path, runner, **updates)
+    with pytest.raises(UnsupportedExecution) as error:
+        baselines.run_quest_gpu(
+            _quest_job("qrng", n_qubits=2), verification_path=artifact, runner=runner
+        )
+    assert error.value.capability == "quest_gpu_runtime_probe"
+
+
+def test_public_baseline_api_is_function_only_and_includes_gpu():
+    assert set(baselines.__all__) == {
+        "run_quimb",
+        "run_cotengra",
+        "run_quest_cpu",
+        "run_quest_gpu",
+    }
 
 
 @pytest.mark.parametrize(
@@ -667,7 +1256,12 @@ def test_import_boundary_is_canonical_and_public_api_is_function_only():
         node.module or "" for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
     ]
     assert all(not any(item in module for item in forbidden) for module in imports)
-    assert set(baselines.__all__) == {"run_quimb", "run_cotengra", "run_quest_cpu"}
+    assert set(baselines.__all__) == {
+        "run_quimb",
+        "run_cotengra",
+        "run_quest_cpu",
+        "run_quest_gpu",
+    }
     assert all(callable(getattr(baselines, name)) for name in baselines.__all__)
 
 

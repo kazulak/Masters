@@ -8,6 +8,7 @@ import json
 import math
 import os
 import random
+import re
 import subprocess
 import tempfile
 import time
@@ -51,6 +52,7 @@ _QUEST_ALIASES = {
 }
 _QUEST_STATE_SCHEMA = "quest_state_dump_v1"
 _QUEST_BASIS_ORDER = "quest_little_endian_integer_index"
+_GPU_VERIFICATION_SCHEMA = "quest_gpu_verification_v1"
 
 
 def run_quimb(job: SimulationJob, *, optimize: str = "greedy") -> ExecutionSample:
@@ -85,6 +87,127 @@ def run_quest_cpu(
     """Run a structurally validated canonical job through the QuEST CPU binary."""
 
     runner_path, runner_sha256 = _preflight_quest_runner(runner)
+    backend_facts: dict[str, JsonValue] = {
+        "backend_id": "quest_cpu_full_state_v1",
+        "backend_family": "quest",
+        "execution_class": "external_process_cpu",
+        "hardware_execution": False,
+        "physical_upmem_execution": False,
+        "requested_target": "cpu",
+        "runner": str(runner_path),
+        "runner_sha256": runner_sha256,
+        "native_timing_scope": "quest_compute_only",
+        "native_compute_energy_j": None,
+        "energy_source": "unavailable",
+    }
+    return _run_quest_external(
+        job,
+        runner_path=runner_path,
+        timeout_s=timeout_s,
+        max_output_amplitudes=max_output_amplitudes,
+        backend_facts=backend_facts,
+    )
+
+
+def run_quest_gpu(
+    job: SimulationJob,
+    *,
+    verification_path: Path | None = None,
+    runner: Path | None = None,
+    timeout_s: float = 120.0,
+    max_output_amplitudes: int = 1 << 12,
+) -> ExecutionSample:
+    """Run QuEST through a binary previously verified on a GPU."""
+
+    # Validate before touching the verification artifact or running its probe.
+    _validate_quest_cpu_request(
+        job,
+        timeout_s=timeout_s,
+        max_output_amplitudes=max_output_amplitudes,
+    )
+
+    artifact_path = (
+        (
+            _default_gpu_verification()
+            if verification_path is None
+            else Path(verification_path)
+        )
+        .expanduser()
+        .resolve()
+    )
+    artifact, artifact_sha256 = _preflight_gpu_verification(artifact_path)
+    runner_path, runner_sha256, runner_root = _preflight_quest_gpu_runner(
+        runner, artifact_path=artifact_path, artifact=artifact
+    )
+    probe_path, probe_sha256 = _preflight_gpu_runtime_probe(
+        artifact_path=artifact_path, artifact=artifact
+    )
+    probe_facts = _run_gpu_runtime_probe(
+        probe_path=probe_path,
+        probe_sha256=probe_sha256,
+        protocol=artifact["runtime_probe_protocol"],
+        expected_device=artifact["gpu_device_name"],
+        timeout_s=timeout_s,
+    )
+    accelerator = artifact["accelerator_kind"]
+    backend_facts: dict[str, JsonValue] = {
+        "backend_id": "quest_gpu_full_state_v1",
+        "backend_family": "quest",
+        "execution_class": "external_process_gpu",
+        "hardware_execution": False,
+        "physical_upmem_execution": False,
+        "requested_target": "gpu",
+        "gpu_runtime_probe_observed": True,
+        "gpu_backend_verified": True,
+        "gpu_runtime_probe_executed": True,
+        "gpu_runtime_probe_program_executed": True,
+        "gpu_runtime_probe_protocol": artifact["runtime_probe_protocol"],
+        "gpu_runtime_probe_protocol_source": "hip_smoke_v1",
+        "gpu_runtime_probe_sha256": probe_sha256,
+        "gpu_runtime_probe_device": probe_facts["gpu_runtime_probe_device"],
+        "gpu_runtime_probe_device_count": probe_facts["gpu_runtime_probe_device_count"],
+        "gpu_runtime_probe_wall_s": probe_facts["gpu_runtime_probe_wall_s"],
+        "cpu_fallback_used": False,
+        "gpu_synchronized": True,
+        "gpu_synchronization_source": "hip_smoke_v1",
+        "qualified_gpu_device": artifact["gpu_device_name"],
+        "stack": artifact["gpu_runtime_stack"],
+        "accelerator": accelerator,
+        "verification_backend": artifact["verification_backend"],
+        "verification_path": str(artifact_path.resolve()),
+        "verification_sha256": artifact_sha256,
+        "runner": str(runner_path),
+        "runner_sha256": runner_sha256,
+        "quest_gpu_binary_verified": True,
+        "quest_gpu_binary_invoked": False,
+        "gpu_execution_basis": "current_runtime_probe_plus_verified_quest_binary_v1",
+        "energy_semantics": (
+            "native RAPL is host CPU package energy during GPU execution; "
+            "it is not GPU energy"
+        ),
+        "native_energy_is_gpu": False,
+        "native_timing_scope": "quest_compute_only",
+        "energy_source": "unavailable",
+    }
+    return _run_quest_external(
+        job,
+        runner_path=runner_path,
+        run_cwd=runner_root,
+        timeout_s=timeout_s,
+        max_output_amplitudes=max_output_amplitudes,
+        backend_facts=backend_facts,
+    )
+
+
+def _run_quest_external(
+    job: SimulationJob,
+    *,
+    runner_path: Path,
+    timeout_s: float,
+    max_output_amplitudes: int,
+    backend_facts: dict[str, JsonValue],
+    run_cwd: Path | None = None,
+) -> ExecutionSample:
     started = time.perf_counter()
     canonical, algorithm, repeat_layers, input_qubits, allocated_qubits = (
         _validate_quest_cpu_request(
@@ -93,40 +216,17 @@ def run_quest_cpu(
             max_output_amplitudes=max_output_amplitudes,
         )
     )
-    command = [
-        str(runner_path),
-        "--algo",
-        algorithm,
-        "--json",
-        "--max-output-amplitudes",
-        str(max_output_amplitudes),
-        "--dump-state-json",
-        "<state_dump.json>",
-        "--repeat-layers",
-        str(repeat_layers),
-    ]
-    if algorithm == "HS":
-        command.extend(["--logical-qubits", str(input_qubits)])
-    else:
-        command.extend(["--qubits", str(input_qubits)])
-
-    backend_facts: dict[str, JsonValue] = {
-        "backend_id": "quest_cpu_full_state_v1",
-        "backend_family": "quest",
-        "execution_class": "external_process_cpu",
-        "hardware_execution": True,
-        "physical_upmem_execution": False,
-        "target_observed": "cpu",
-        "runner": str(runner_path),
-        "runner_sha256": runner_sha256,
-        "command": tuple(command),
-        "query": job.query,
-        "basis_order": _QUEST_BASIS_ORDER,
-        "source_family": algorithm,
-        "native_timing_scope": "quest_compute_only",
-        "native_compute_energy_j": None,
-        "energy_source": "unavailable",
-    }
+    command = _quest_command(
+        runner_path,
+        algorithm=algorithm,
+        input_qubits=input_qubits,
+        repeat_layers=repeat_layers,
+        max_output_amplitudes=max_output_amplitudes,
+    )
+    backend_facts["command"] = tuple(command)
+    backend_facts["query"] = job.query
+    backend_facts["basis_order"] = _QUEST_BASIS_ORDER
+    backend_facts["source_family"] = algorithm
 
     try:
         with tempfile.TemporaryDirectory(prefix="qbench-quest-") as temp_dir:
@@ -137,7 +237,7 @@ def run_quest_cpu(
             ]
             result = subprocess.run(
                 command_with_dump,
-                cwd=runner_path.parent.parent,
+                cwd=runner_path.parent.parent if run_cwd is None else run_cwd,
                 capture_output=True,
                 text=True,
                 check=False,
@@ -187,6 +287,13 @@ def run_quest_cpu(
         raise ExecutionFailed("decode", str(exc), backend_facts) from exc
 
     backend_facts["state_dump_requested"] = True
+    if backend_facts.get("execution_class") == "external_process_gpu":
+        backend_facts["quest_gpu_binary_invoked"] = True
+        backend_facts["target_observed"] = "gpu"
+        backend_facts["hardware_execution"] = True
+    elif backend_facts.get("execution_class") == "external_process_cpu":
+        backend_facts["target_observed"] = "cpu"
+        backend_facts["hardware_execution"] = True
     backend_facts["native_state_dump_time_s"] = native["native_state_dump_time_s"]
     backend_facts["quest_version"] = native["quest_version"]
     return ExecutionSample(
@@ -206,6 +313,41 @@ def run_quest_cpu(
     )
 
 
+def _quest_command(
+    runner_path: Path,
+    *,
+    algorithm: str,
+    input_qubits: int,
+    repeat_layers: int,
+    max_output_amplitudes: int,
+) -> list[str]:
+    command = [
+        str(runner_path),
+        "--algo",
+        algorithm,
+        "--json",
+        "--max-output-amplitudes",
+        str(max_output_amplitudes),
+        "--dump-state-json",
+        "<state_dump.json>",
+        "--repeat-layers",
+        str(repeat_layers),
+    ]
+    if algorithm == "HS":
+        command.extend(["--logical-qubits", str(input_qubits)])
+    else:
+        command.extend(["--qubits", str(input_qubits)])
+    return command
+
+
+def _bounded_probe_text(value: str | bytes | None, limit: int = 4000) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    return value[:limit]
+
+
 class _QuestRuntimeError(RuntimeError):
     def __init__(self, stage: str, reason: str) -> None:
         self.stage = stage
@@ -221,6 +363,370 @@ def _default_quest_runner() -> Path:
         / "bin"
         / "quest_runner"
     )
+
+
+def _default_gpu_verification() -> Path:
+    return (
+        Path(__file__).resolve().parents[2]
+        / "build"
+        / "gpu_verification"
+        / "quest_gpu_full_state_exact.json"
+    )
+
+
+def _preflight_gpu_verification(
+    path: Path,
+) -> tuple[dict[str, Any], str]:
+    try:
+        verification_path = path.expanduser().resolve()
+        raw = verification_path.read_bytes()
+        payload = json.loads(raw)
+    except (
+        OSError,
+        RuntimeError,
+        TypeError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+    ) as exc:
+        raise UnsupportedExecution(
+            "preflight",
+            f"GPU verification artifact is unreadable: {exc}",
+            "quest_gpu_verification",
+        ) from exc
+    if not isinstance(payload, dict):
+        raise UnsupportedExecution(
+            "preflight",
+            "GPU verification artifact is not an object",
+            "quest_gpu_verification",
+        )
+    if payload.get("schema_version") != _GPU_VERIFICATION_SCHEMA:
+        raise UnsupportedExecution(
+            "preflight", "GPU verification schema is invalid", "quest_gpu_verification"
+        )
+    if payload.get("status") != "verified":
+        raise UnsupportedExecution(
+            "preflight",
+            "GPU verification status is not verified",
+            "quest_gpu_verification",
+        )
+    for key in (
+        "gpu_backend_verified",
+        "gpu_program_executed",
+        "gpu_synchronized",
+    ):
+        if payload.get(key) is not True:
+            raise UnsupportedExecution(
+                "preflight",
+                f"GPU verification flag {key} is not true",
+                "quest_gpu_verification",
+            )
+    if payload.get("cpu_fallback_used") is not False:
+        raise UnsupportedExecution(
+            "preflight",
+            "GPU verification reports CPU fallback",
+            "quest_gpu_verification",
+        )
+    accelerator = payload.get("accelerator_kind")
+    backend = payload.get("verification_backend")
+    if accelerator not in {"amd_gpu", "nvidia_gpu"}:
+        raise UnsupportedExecution(
+            "preflight", "GPU accelerator kind is invalid", "quest_gpu_verification"
+        )
+    if accelerator != "amd_gpu" or backend != "quest-hip":
+        raise UnsupportedExecution(
+            "preflight",
+            "only the AMD HIP runtime probe is currently supported",
+            "quest_gpu_runtime_probe",
+        )
+    expected_backend = "quest-hip"
+    if backend != expected_backend:
+        raise UnsupportedExecution(
+            "preflight",
+            "GPU verification backend does not match accelerator",
+            "quest_gpu_verification",
+        )
+    if payload.get("gpu_runtime_stack") != "amd_rocm":
+        raise UnsupportedExecution(
+            "preflight",
+            "GPU verification does not identify the supported AMD ROCm stack",
+            "quest_gpu_runtime_probe",
+        )
+    for key in (
+        "gpu_device_name",
+        "gpu_runtime_stack",
+        "runner_path",
+        "runner_root",
+        "runtime_probe_path",
+        "runtime_probe_protocol",
+    ):
+        if not isinstance(payload.get(key), str) or not payload[key].strip():
+            raise UnsupportedExecution(
+                "preflight",
+                f"GPU verification field {key} is missing",
+                "quest_gpu_verification",
+            )
+    for key in (
+        "runner_sha256",
+        "runner_sha256_before",
+        "runner_sha256_after",
+        "runtime_probe_sha256",
+        "runtime_probe_sha256_before",
+        "runtime_probe_sha256_after",
+    ):
+        if not isinstance(payload.get(key), str) or not re.fullmatch(
+            r"[0-9a-f]{64}", payload[key]
+        ):
+            raise UnsupportedExecution(
+                "preflight",
+                f"GPU verification field {key} is invalid",
+                (
+                    "quest_gpu_runtime_probe"
+                    if key.startswith("runtime_probe_")
+                    else "quest_gpu_verification"
+                ),
+            )
+    if not (
+        payload["runner_sha256"]
+        == payload["runner_sha256_before"]
+        == payload["runner_sha256_after"]
+        and payload["runtime_probe_sha256"]
+        == payload["runtime_probe_sha256_before"]
+        == payload["runtime_probe_sha256_after"]
+    ):
+        raise UnsupportedExecution(
+            "preflight",
+            "GPU verification binary hashes are not stable",
+            (
+                "quest_gpu_runner"
+                if not (
+                    payload["runner_sha256"]
+                    == payload["runner_sha256_before"]
+                    == payload["runner_sha256_after"]
+                )
+                else "quest_gpu_runtime_probe"
+            ),
+        )
+    if payload["runtime_probe_protocol"] != "hip_smoke_v1":
+        raise UnsupportedExecution(
+            "preflight",
+            "GPU runtime probe protocol is unsupported",
+            "quest_gpu_runtime_probe",
+        )
+    device_count = payload.get("gpu_device_count")
+    if (
+        isinstance(device_count, bool)
+        or not isinstance(device_count, int)
+        or device_count <= 0
+    ):
+        raise UnsupportedExecution(
+            "preflight",
+            "GPU verification device count is invalid",
+            "quest_gpu_runtime_probe",
+        )
+    return payload, hashlib.sha256(raw).hexdigest()
+
+
+def _preflight_quest_gpu_runner(
+    runner: Path | None,
+    *,
+    artifact_path: Path,
+    artifact: Mapping[str, Any],
+) -> tuple[Path, str, Path]:
+    artifact_runner = Path(str(artifact["runner_path"])).expanduser()
+    if not artifact_runner.is_absolute():
+        artifact_runner = artifact_path.parent / artifact_runner
+    try:
+        artifact_runner = artifact_runner.resolve()
+        runner_root = Path(str(artifact["runner_root"])).expanduser()
+        if not runner_root.is_absolute():
+            runner_root = artifact_path.parent / runner_root
+        runner_root = runner_root.resolve()
+        selected = (
+            artifact_runner if runner is None else Path(runner).expanduser().resolve()
+        )
+    except (OSError, RuntimeError, TypeError) as exc:
+        raise UnsupportedExecution(
+            "preflight", f"GPU runner path is invalid: {exc}", "quest_gpu_runner"
+        ) from exc
+    if runner is not None and selected != artifact_runner:
+        raise UnsupportedExecution(
+            "preflight",
+            "explicit GPU runner is not the artifact-bound runner",
+            "quest_gpu_runner",
+        )
+    try:
+        selected.relative_to(runner_root)
+    except ValueError as exc:
+        raise UnsupportedExecution(
+            "preflight",
+            "GPU runner is outside the artifact runner root",
+            "quest_gpu_runner",
+        ) from exc
+    if not selected.is_file() or not os.access(selected, os.X_OK):
+        raise UnsupportedExecution(
+            "preflight",
+            "GPU runner is not an executable regular file",
+            "quest_gpu_runner",
+        )
+    try:
+        digest = hashlib.sha256(selected.read_bytes()).hexdigest()
+    except OSError as exc:
+        raise UnsupportedExecution(
+            "preflight", f"GPU runner cannot be read: {exc}", "quest_gpu_runner"
+        ) from exc
+    if digest != artifact["runner_sha256"]:
+        raise UnsupportedExecution(
+            "preflight",
+            "GPU runner hash does not match verification",
+            "quest_gpu_runner",
+        )
+    if not runner_root.is_dir():
+        raise UnsupportedExecution(
+            "preflight",
+            "GPU runner root is not an existing directory",
+            "quest_gpu_runner",
+        )
+    return selected, digest, runner_root
+
+
+def _preflight_gpu_runtime_probe(
+    *, artifact_path: Path, artifact: Mapping[str, Any]
+) -> tuple[Path, str]:
+    probe = Path(str(artifact["runtime_probe_path"])).expanduser()
+    if not probe.is_absolute():
+        probe = artifact_path.parent / probe
+    try:
+        probe = probe.resolve()
+    except (OSError, RuntimeError, TypeError) as exc:
+        raise UnsupportedExecution(
+            "preflight",
+            f"GPU runtime probe path is invalid: {exc}",
+            "quest_gpu_runtime_probe",
+        ) from exc
+    if not probe.is_file() or not os.access(probe, os.X_OK):
+        raise UnsupportedExecution(
+            "preflight",
+            "GPU runtime probe is not an executable regular file",
+            "quest_gpu_runtime_probe",
+        )
+    try:
+        digest = hashlib.sha256(probe.read_bytes()).hexdigest()
+    except OSError as exc:
+        raise UnsupportedExecution(
+            "preflight",
+            f"GPU runtime probe cannot be read: {exc}",
+            "quest_gpu_runtime_probe",
+        ) from exc
+    if digest != artifact["runtime_probe_sha256"]:
+        raise UnsupportedExecution(
+            "preflight",
+            "GPU runtime probe hash does not match verification",
+            "quest_gpu_runtime_probe",
+        )
+    return probe, digest
+
+
+def _run_gpu_runtime_probe(
+    *,
+    probe_path: Path,
+    probe_sha256: str,
+    protocol: str,
+    expected_device: str,
+    timeout_s: float,
+) -> dict[str, JsonValue]:
+    started = time.perf_counter()
+    facts: dict[str, JsonValue] = {
+        "gpu_runtime_probe_path": str(probe_path),
+        "gpu_runtime_probe_sha256": probe_sha256,
+        "gpu_runtime_probe_protocol": protocol,
+        "gpu_runtime_probe_returncode": None,
+        "gpu_runtime_probe_stderr": "",
+    }
+    try:
+        result = subprocess.run(
+            [str(probe_path)],
+            cwd=probe_path.parent,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=min(timeout_s, 30.0),
+        )
+    except subprocess.TimeoutExpired as exc:
+        facts["gpu_runtime_probe_stderr"] = _bounded_probe_text(exc.stderr)
+        raise ExecutionFailed(
+            "gpu_runtime_probe", "GPU runtime probe timed out", facts
+        ) from exc
+    except OSError as exc:
+        facts["gpu_runtime_probe_stderr"] = _bounded_probe_text(str(exc))
+        raise ExecutionFailed("gpu_runtime_probe", str(exc), facts) from exc
+    facts["gpu_runtime_probe_wall_s"] = time.perf_counter() - started
+    facts["gpu_runtime_probe_returncode"] = result.returncode
+    facts["gpu_runtime_probe_stderr"] = _bounded_probe_text(result.stderr)
+    if result.returncode != 0:
+        raise ExecutionFailed(
+            "gpu_runtime_probe", "GPU runtime probe returned nonzero status", facts
+        )
+    try:
+        payload = json.loads(result.stdout)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise ExecutionFailed(
+            "gpu_runtime_probe", "GPU runtime probe stdout is not valid JSON", facts
+        ) from exc
+    if not isinstance(payload, dict):
+        raise ExecutionFailed(
+            "gpu_runtime_probe", "GPU runtime probe JSON is not an object", facts
+        )
+    if payload.get("status") != "ok":
+        raise ExecutionFailed(
+            "gpu_runtime_probe", "GPU runtime probe status is not ok", facts
+        )
+    if payload.get("gpu_program_executed") is not True:
+        raise ExecutionFailed(
+            "gpu_runtime_probe",
+            "GPU runtime probe did not execute a GPU program",
+            facts,
+        )
+    if payload.get("gpu_backend_verified") is not True:
+        raise ExecutionFailed(
+            "gpu_runtime_probe",
+            "GPU runtime probe did not verify the GPU backend",
+            facts,
+        )
+    if payload.get("gpu_synchronized") is not True:
+        raise ExecutionFailed(
+            "gpu_runtime_probe",
+            "GPU runtime probe did not report successful synchronization",
+            facts,
+        )
+    device = payload.get("gpu_device_name")
+    architecture = payload.get("gcn_arch_name")
+    observed_device = device
+    if isinstance(architecture, str) and architecture.strip():
+        observed_device = f"{device} ({architecture})"
+    if (
+        not isinstance(device, str)
+        or not device.strip()
+        or not isinstance(expected_device, str)
+        or not expected_device.strip()
+        or observed_device != expected_device
+    ):
+        raise ExecutionFailed(
+            "gpu_runtime_probe",
+            "GPU runtime probe device does not match the artifact",
+            facts,
+        )
+    device_count = payload.get("device_count")
+    if (
+        isinstance(device_count, bool)
+        or not isinstance(device_count, int)
+        or device_count <= 0
+    ):
+        raise ExecutionFailed(
+            "gpu_runtime_probe", "GPU runtime probe device count is invalid", facts
+        )
+    facts["gpu_runtime_probe_device"] = observed_device
+    facts["gpu_runtime_probe_device_count"] = device_count
+    return facts
 
 
 def _preflight_quest_runner(runner: Path | None) -> tuple[Path, str]:
@@ -727,4 +1233,4 @@ def _tensor_to_quest_statevector(tensor: np.ndarray) -> np.ndarray:
     return output
 
 
-__all__ = ["run_quimb", "run_cotengra", "run_quest_cpu"]
+__all__ = ["run_quimb", "run_cotengra", "run_quest_cpu", "run_quest_gpu"]

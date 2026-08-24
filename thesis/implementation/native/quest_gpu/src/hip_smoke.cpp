@@ -82,7 +82,7 @@ int main() {
         return fail_json("kernel_result_mismatch");
     }
 
-    std::printf("{\"status\":\"ok\",\"gpu_program_executed\":true,\"gpu_backend_verified\":true,\"device_count\":%d,", device_count);
+    std::printf("{\"status\":\"ok\",\"gpu_program_executed\":true,\"gpu_backend_verified\":true,\"gpu_synchronized\":true,\"device_count\":%d,", device_count);
     std::printf("\"gpu_device_name\":");
     print_json_string(props.name);
     std::printf(",\"gcn_arch_name\":");
