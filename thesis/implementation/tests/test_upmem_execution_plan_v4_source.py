@@ -97,6 +97,24 @@ def test_v4_session_contract_is_physical_bulk_and_fail_closed() -> None:
     assert "dpu_sync(" not in host
 
 
+def test_v4_session_reuses_the_abi_for_an_explicit_sdk_simulator_target() -> None:
+    host = (PLAN / "host.c").read_text(encoding="ascii")
+    provider = (PLAN / "simplepim_provider.c").read_text(encoding="ascii")
+    header = (PLAN / "protocol.h").read_text(encoding="ascii")
+
+    assert "--target hardware|simulator" in host
+    assert 'strcmp(target, "simulator")' in host
+    assert 'strcmp(getenv("DPU_BACKEND"), "simulator")' in host
+    assert "upmem_v4_provider_init_simulator" in host
+    assert "dpu_alloc(requested_dpus, NULL, &provider->set)" in provider
+    assert "EXECUTION_PLAN_V4_NATIVE_SIMULATOR_BACKEND_ID" in header
+    assert "EXECUTION_PLAN_V4_NATIVE_SIMULATOR_EXECUTION_CLASS" in header
+    assert "timing_claim_applicable" in host
+    assert "scaling_claim_applicable" in host
+    assert "speedup_claim_applicable" in host
+    assert "energy_claim_applicable" in host
+
+
 def test_v4_kernel_is_integer_or_float_tile_only_with_aligned_dma() -> None:
     dpu = (PLAN / "dpu.c").read_text(encoding="ascii")
     assert "__mram_noinit uint8_t V4_MRAM" in dpu

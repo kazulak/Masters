@@ -81,6 +81,49 @@ dpu_error_t upmem_v4_provider_init_on_rank(
     return DPU_OK;
 }
 
+dpu_error_t upmem_v4_provider_init_simulator(
+    upmem_v4_provider_t *provider,
+    uint32_t requested_dpus,
+    const char *initialization_binary
+) {
+    dpu_error_t error = DPU_OK;
+    uint32_t sdk_rank_count = 0u;
+    if (provider == NULL || requested_dpus < 1u ||
+        requested_dpus > EXECUTION_PLAN_V4_MAX_DPUS ||
+        initialization_binary == NULL || initialization_binary[0] == '\0') {
+        return DPU_ERR_INVALID_PROFILE;
+    }
+    *provider = (upmem_v4_provider_t){0};
+    provider->requested_dpus = requested_dpus;
+    provider->allocation_attempted = 1;
+    error = dpu_alloc(requested_dpus, NULL, &provider->set);
+    if (error != DPU_OK) return error;
+    provider->allocation_used = 1;
+    provider->allocation_active = 1;
+    error = dpu_get_nr_dpus(provider->set, &provider->observed_dpus);
+    if (error == DPU_OK) error = dpu_get_nr_ranks(provider->set, &sdk_rank_count);
+    if (error == DPU_OK) {
+        struct dpu_set_t rank;
+        uint32_t rank_index;
+        DPU_RANK_FOREACH(provider->set, rank, rank_index) {
+            (void)rank;
+            (void)rank_index;
+            provider->observed_ranks++;
+        }
+    }
+    if (error != DPU_OK || provider->observed_dpus != requested_dpus ||
+        sdk_rank_count != 1u || provider->observed_ranks != sdk_rank_count) {
+        return error == DPU_OK ? DPU_ERR_INVALID_PROFILE : error;
+    }
+    error = dpu_load(provider->set, initialization_binary, NULL);
+    if (error == DPU_OK) error = dpu_launch(provider->set, DPU_SYNCHRONOUS);
+    if (error != DPU_OK) return error;
+    provider->management = execution_plan_management_from_set(provider->set, requested_dpus);
+    if (provider->management == NULL) return DPU_ERR_ALLOCATION;
+    provider->initialization_completed = 1;
+    return DPU_OK;
+}
+
 dpu_error_t upmem_v4_provider_release(upmem_v4_provider_t *provider) {
     dpu_error_t error = DPU_OK;
     if (provider == NULL) return DPU_ERR_INVALID_PROFILE;

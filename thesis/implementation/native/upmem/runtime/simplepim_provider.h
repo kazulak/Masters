@@ -31,6 +31,12 @@ dpu_error_t upmem_v4_provider_init_on_rank(
     const char *initialization_binary
 );
 
+dpu_error_t upmem_v4_provider_init_simulator(
+    upmem_v4_provider_t *provider,
+    uint32_t requested_dpus,
+    const char *initialization_binary
+);
+
 dpu_error_t upmem_v4_provider_release(upmem_v4_provider_t *provider);
 
 #endif

@@ -18,8 +18,10 @@ from typing import Any, Callable, Mapping, Sequence
 from quantum_bench.upmem.protocol import (
     COMPLETION_BYTES,
     CONTROL_BYTES,
+    EXECUTION_TARGET_PHYSICAL,
+    EXECUTION_TARGET_SIMULATOR,
     FLAG_ZERO_WORK,
-    NATIVE_EXECUTION_IDENTITY,
+    native_execution_identity,
     STATUS_COMPLETED,
     V4Error,
     V4Profile,
@@ -194,24 +196,51 @@ class V4Session:
                 "hardware_profile_violation",
                 "session_root must be an existing directory",
             )
-        if profile.rank_path is None or not _RANK_PATH.fullmatch(profile.rank_path):
-            raise V4Error(
-                "hardware_profile_violation", "an explicit /dev/dpu_rankN is required"
-            )
         env = dict(os.environ if environment is None else environment)
-        if env.get("UPMEM_ALLOW_PHYSICAL_HARDWARE") != "1":
-            raise V4Error(
-                "hardware_opt_in_missing", "UPMEM_ALLOW_PHYSICAL_HARDWARE=1 is required"
+        if profile.execution_target == EXECUTION_TARGET_PHYSICAL:
+            if profile.rank_path is None or not _RANK_PATH.fullmatch(profile.rank_path):
+                raise V4Error(
+                    "hardware_profile_violation",
+                    "an explicit /dev/dpu_rankN is required",
+                )
+            if env.get("UPMEM_ALLOW_PHYSICAL_HARDWARE") != "1":
+                raise V4Error(
+                    "hardware_opt_in_missing",
+                    "UPMEM_ALLOW_PHYSICAL_HARDWARE=1 is required",
+                )
+            forbidden = next(
+                (
+                    name
+                    for name in ("DPU_BACKEND", "UPMEM_EXECUTION_MODE")
+                    if name in env
+                ),
+                None,
             )
-        forbidden = next(
-            (name for name in ("DPU_BACKEND", "UPMEM_EXECUTION_MODE") if name in env),
-            None,
-        )
-        if forbidden is not None:
-            raise V4Error(
-                "hardware_profile_violation",
-                f"{forbidden} must be unset for physical v4",
-            )
+            if forbidden is not None:
+                raise V4Error(
+                    "hardware_profile_violation",
+                    f"{forbidden} must be unset for physical v4",
+                )
+        elif profile.execution_target == EXECUTION_TARGET_SIMULATOR:
+            if profile.rank_path is not None:
+                raise V4Error(
+                    "simulator_profile_violation",
+                    "v4 simulator sessions forbid rank_path",
+                )
+            backend = env.get("DPU_BACKEND")
+            if backend not in {None, "simulator"}:
+                raise V4Error(
+                    "simulator_profile_violation",
+                    "DPU_BACKEND must be unset or simulator for v4 simulator execution",
+                )
+            if "UPMEM_EXECUTION_MODE" in env:
+                raise V4Error(
+                    "simulator_profile_violation",
+                    "UPMEM_EXECUTION_MODE must be unset for v4 simulator execution",
+                )
+            env["DPU_BACKEND"] = "simulator"
+        else:  # pragma: no cover - V4Profile validates this contract.
+            raise V4Error("simulator_profile_violation", "unsupported v4 target")
         argv = tuple(str(value) for value in command)
         if not argv:
             raise V4Error("hardware_profile_violation", "v4 command cannot be empty")
@@ -260,7 +289,19 @@ class V4Session:
                 str(event.get("failure_stage") or "hardware_allocation_failed"),
                 str(event.get("error") or "v4 native process did not become ready"),
             )
-        session._validate_ready(event)
+        try:
+            session._validate_ready(event)
+        except BaseException:
+            # READY has already crossed the native allocation boundary.  A
+            # malformed identity or allocation record must not leak the
+            # process or the SDK allocation while preserving the original
+            # validation failure for the caller.
+            session._poisoned = True
+            try:
+                session.close()
+            except BaseException:
+                session._terminate()
+            raise
         session.startup = dict(event)
         return session
 
@@ -345,15 +386,18 @@ class V4Session:
             return event
 
     def _validate_ready(self, event: Mapping[str, Any]) -> None:
+        simulator = self.profile.execution_target == EXECUTION_TARGET_SIMULATOR
         required = {
-            "target_observed": "physical_hardware",
+            "target_requested": "simulator" if simulator else "hardware",
+            "target_observed": "sdk_simulator" if simulator else "physical_hardware",
             "requested_dpu_count": self.profile.dpu_count,
             "allocated_dpu_count": self.profile.dpu_count,
             "tasklets_per_dpu": self.profile.tasklets_per_dpu,
-            "hardware_allocation_verified": True,
+            "allocation_verified": True,
+            "hardware_allocation_verified": not simulator,
             "simulator_kernel_executed": False,
             "cpu_fallback_used": False,
-            "rank_path": self.profile.rank_path,
+            "rank_path": None if simulator else self.profile.rank_path,
         }
         for field, expected in required.items():
             if event.get(field) != expected:
@@ -363,13 +407,14 @@ class V4Session:
                 )
         self._validate_native_identity(event, event_name="READY")
 
-    @staticmethod
     def _validate_native_identity(
-        event: Mapping[str, Any], *, event_name: str
+        self, event: Mapping[str, Any], *, event_name: str
     ) -> None:
         """Require the identity compiled into the native host protocol."""
 
-        for field, expected in NATIVE_EXECUTION_IDENTITY.items():
+        for field, expected in native_execution_identity(
+            self.profile.execution_target
+        ).items():
             if event.get(field) != expected:
                 raise V4ProtocolError(
                     "protocol_error",
@@ -487,26 +532,29 @@ class V4Session:
                 str(event.get("failure_stage") or "kernel_launch_failed"),
                 str(event.get("error") or "v4 request failed"),
             )
+        simulator = self.profile.execution_target == EXECUTION_TARGET_SIMULATOR
         required = {
-            "target_requested": "hardware",
-            "target_observed": "physical_hardware",
+            "target_requested": "simulator" if simulator else "hardware",
+            "target_observed": "sdk_simulator" if simulator else "physical_hardware",
             "global_completeness": False,
             "task_contract_sha256": artifact.task_contract_sha256,
             "request_sha256": artifact.manifest_sha256,
             "request_manifest_sha256": artifact.manifest_sha256,
             "sidecar_sha256": artifact.sidecar_sha256,
-            "rank_path": self.profile.rank_path,
+            "rank_path": None if simulator else self.profile.rank_path,
             "dispatch_mode": "bulk_set_synchronous_v1",
             "bulk_set_launch_verified": True,
             "requested_dpu_count": self.profile.dpu_count,
             "allocated_dpu_count": self.profile.dpu_count,
             "tasklets_per_dpu": self.profile.tasklets_per_dpu,
-            "hardware_allocation_verified": True,
+            "allocation_verified": True,
+            "hardware_allocation_verified": not simulator,
             "native_kernel_executed": True,
-            "hardware_kernel_executed": True,
-            "simulator_kernel_executed": False,
+            "hardware_kernel_executed": not simulator,
+            "simulator_kernel_executed": simulator,
             "cpu_fallback_used": False,
-            "hardware_functionality_evidence": True,
+            "hardware_functionality_evidence": not simulator,
+            "simulator_functionality_evidence": simulator,
         }
         if event.get("global_output_elements") != artifact.global_output_elements:
             raise V4ProtocolError(

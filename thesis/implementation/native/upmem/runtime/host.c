@@ -49,8 +49,29 @@ static int v4_provider_initialized = 0;
 static int v4_release_done = 0;
 static int v4_release_succeeded = 0;
 static const char *v4_session_rank_path = NULL;
+static int v4_simulator_target = 0;
 static uint64_t v4_last_request_sequence = 0u;
 static int v4_have_request_sequence = 0;
+
+static const char *v4_target_requested(void) {
+    return v4_simulator_target ? "simulator" : "hardware";
+}
+
+static const char *v4_target_observed(void) {
+    return v4_simulator_target ? "sdk_simulator" : "physical_hardware";
+}
+
+static const char *v4_backend_id(void) {
+    return v4_simulator_target
+        ? EXECUTION_PLAN_V4_NATIVE_SIMULATOR_BACKEND_ID
+        : EXECUTION_PLAN_V4_NATIVE_BACKEND_ID;
+}
+
+static const char *v4_execution_class(void) {
+    return v4_simulator_target
+        ? EXECUTION_PLAN_V4_NATIVE_SIMULATOR_EXECUTION_CLASS
+        : EXECUTION_PLAN_V4_NATIVE_EXECUTION_CLASS;
+}
 
 static void v4_signal_handler(int signal_number) {
     (void)signal_number;
@@ -143,7 +164,7 @@ static void v4_emit_ready(
     (void)execution_plan_sha256_file(dpu_binary, dpu_hash);
     (void)execution_plan_sha256_file(initialization_binary, init_hash);
     printf("{\"event\":\"READY\",\"status\":\"ready\",\"backend_id\":\"");
-    fputs(EXECUTION_PLAN_V4_NATIVE_BACKEND_ID, stdout);
+    fputs(v4_backend_id(), stdout);
     fputs("\",\"backend_family\":\"", stdout);
     fputs(EXECUTION_PLAN_V4_NATIVE_BACKEND_FAMILY, stdout);
     fputs("\",\"profile\":\"", stdout);
@@ -157,10 +178,18 @@ static void v4_emit_ready(
     fputs("\",\"kernel_identity\":\"", stdout);
     fputs(EXECUTION_PLAN_V4_NATIVE_KERNEL, stdout);
     fputs("\",\"execution_class\":\"", stdout);
-    fputs(EXECUTION_PLAN_V4_NATIVE_EXECUTION_CLASS, stdout);
-    fputs("\",\"target_observed\":\"physical_hardware\",\"rank_path\":", stdout);
+    fputs(v4_execution_class(), stdout);
+    fputs("\",\"target_requested\":\"", stdout);
+    fputs(v4_target_requested(), stdout);
+    fputs("\",\"target_observed\":\"", stdout);
+    fputs(v4_target_observed(), stdout);
+    fputs("\",\"rank_path\":", stdout);
     json_string(stdout, rank_path);
-    printf(",\"requested_dpu_count\":%u,\"allocated_dpu_count\":%u,\"tasklets_per_dpu\":%u,\"hardware_allocation_verified\":true,\"native_kernel_executed\":false,\"simulator_kernel_executed\":false,\"cpu_fallback_used\":false,\"dpu_binary_sha256\":", dpus, dpus, tasklets);
+    printf(",\"requested_dpu_count\":%u,\"allocated_dpu_count\":%u,\"tasklets_per_dpu\":%u,\"allocation_verified\":true,\"hardware_allocation_verified\":%s,\"native_kernel_executed\":false,\"hardware_kernel_executed\":false,\"simulator_kernel_executed\":false,\"cpu_fallback_used\":false,\"hardware_functionality_evidence\":%s,\"simulator_functionality_evidence\":%s%s,\"dpu_binary_sha256\":", dpus, dpus, tasklets,
+        v4_simulator_target ? "false" : "true",
+        v4_simulator_target ? "false" : "true",
+        v4_simulator_target ? "true" : "false",
+        v4_simulator_target ? ",\"timing_claim_applicable\":false,\"scaling_claim_applicable\":false,\"speedup_claim_applicable\":false,\"energy_claim_applicable\":false" : "");
     json_string(stdout, dpu_hash);
     fputs(",\"initialization_binary_sha256\":", stdout);
     json_string(stdout, init_hash);
@@ -284,7 +313,7 @@ static void v4_emit_response(
     fputs(",\"error\":", stdout);
     json_string(stdout, error_message);
     fputs(",\"backend_id\":\"", stdout);
-    fputs(EXECUTION_PLAN_V4_NATIVE_BACKEND_ID, stdout);
+    fputs(v4_backend_id(), stdout);
     fputs("\",\"backend_family\":\"", stdout);
     fputs(EXECUTION_PLAN_V4_NATIVE_BACKEND_FAMILY, stdout);
     fputs("\",\"profile\":\"", stdout);
@@ -297,11 +326,15 @@ static void v4_emit_response(
     fputs(EXECUTION_PLAN_V4_NATIVE_DISPATCH, stdout);
     fputs("\",\"kernel_identity\":\"", stdout);
     fputs(EXECUTION_PLAN_V4_NATIVE_KERNEL, stdout);
-    fputs("\",\"target_requested\":\"hardware\",\"target_observed\":\"physical_hardware\",\"execution_class\":\"", stdout);
-    fputs(EXECUTION_PLAN_V4_NATIVE_EXECUTION_CLASS, stdout);
+    fputs("\",\"target_requested\":\"", stdout);
+    fputs(v4_target_requested(), stdout);
+    fputs("\",\"target_observed\":\"", stdout);
+    fputs(v4_target_observed(), stdout);
+    fputs("\",\"execution_class\":\"", stdout);
+    fputs(v4_execution_class(), stdout);
     fputs("\",\"rank_path\":", stdout);
     json_string(stdout, v4_session_rank_path);
-    printf(",\"request_sequence\":%llu,\"request_output_elements\":%llu,\"global_output_elements\":%llu,\"global_completeness\":false,\"task_contract_sha256\":\"%s\",\"request_sha256\":\"%s\",\"request_manifest_sha256\":\"%s\",\"sidecar_sha256\":\"%s\",\"bulk_set_launch_verified\":%s,\"requested_dpu_count\":%u,\"allocated_dpu_count\":%u,\"tasklets_per_dpu\":%u,\"hardware_allocation_verified\":true,\"native_kernel_executed\":%s,\"simulator_kernel_executed\":false,\"hardware_kernel_executed\":%s,\"cpu_fallback_used\":false,\"session_release_pending\":true,\"timing_scope\":\"one_bulk_request_in_persistent_session\",\"request_timing_is_bringup_only\":true,\"request_level_speedup_applicable\":false,\"hardware_functionality_evidence\":%s,\"timing\":{\"h2d_time_s\":%.9f,\"launch_time_s\":%.9f,\"d2h_time_s\":%.9f,\"output_time_s\":%.9f,\"total_route_time_s\":%.9f},\"transfer\":{\"h2d_bytes\":%llu,\"d2h_bytes\":%llu,\"total_bytes\":%llu},\"per_dpu\":[",
+    printf(",\"request_sequence\":%llu,\"request_output_elements\":%llu,\"global_output_elements\":%llu,\"global_completeness\":false,\"task_contract_sha256\":\"%s\",\"request_sha256\":\"%s\",\"request_manifest_sha256\":\"%s\",\"sidecar_sha256\":\"%s\",\"bulk_set_launch_verified\":%s,\"requested_dpu_count\":%u,\"allocated_dpu_count\":%u,\"tasklets_per_dpu\":%u,\"allocation_verified\":true,\"hardware_allocation_verified\":%s,\"native_kernel_executed\":%s,\"simulator_kernel_executed\":%s,\"hardware_kernel_executed\":%s,\"cpu_fallback_used\":false,\"session_release_pending\":true,\"timing_scope\":\"one_bulk_request_in_persistent_session\",\"request_timing_is_bringup_only\":true,\"request_level_speedup_applicable\":false,\"hardware_functionality_evidence\":%s,\"simulator_functionality_evidence\":%s%s,\"timing\":{\"h2d_time_s\":%.9f,\"launch_time_s\":%.9f,\"d2h_time_s\":%.9f,\"output_time_s\":%.9f,\"total_route_time_s\":%.9f},\"transfer\":{\"h2d_bytes\":%llu,\"d2h_bytes\":%llu,\"total_bytes\":%llu},\"per_dpu\":[",
         request == NULL ? 0ull : (unsigned long long)request->header.request_sequence,
         request == NULL ? 0ull : (unsigned long long)request->header.request_output_elements,
         request == NULL ? 0ull : (unsigned long long)request->header.global_output_elements,
@@ -313,9 +346,13 @@ static void v4_emit_response(
         request == NULL ? 0u : request->header.dpu_count,
         v4_provider.observed_dpus,
         request == NULL ? 0u : request->header.tasklets_per_dpu,
+        v4_simulator_target ? "false" : "true",
         native_kernel_executed ? "true" : "false",
-        native_kernel_executed ? "true" : "false",
-        native_kernel_executed && failure_stage == NULL ? "true" : "false",
+        v4_simulator_target && native_kernel_executed ? "true" : "false",
+        !v4_simulator_target && native_kernel_executed ? "true" : "false",
+        !v4_simulator_target && native_kernel_executed && failure_stage == NULL ? "true" : "false",
+        v4_simulator_target && native_kernel_executed && failure_stage == NULL ? "true" : "false",
+        v4_simulator_target ? ",\"timing_claim_applicable\":false,\"scaling_claim_applicable\":false,\"speedup_claim_applicable\":false,\"energy_claim_applicable\":false" : "",
         metrics == NULL ? 0.0 : metrics->h2d_time_s,
         metrics == NULL ? 0.0 : metrics->launch_time_s,
         metrics == NULL ? 0.0 : metrics->d2h_time_s,
@@ -428,12 +465,13 @@ static int execute_request(
 }
 
 static void v4_usage(const char *program) {
-    fprintf(stderr, "usage: %s --session-root DIR --rank-path /dev/dpu_rankN --dpus N --tasklets N --initialization-binary PATH --dpu-binary PATH [--timeout-s N]\n", program);
+    fprintf(stderr, "usage: %s --target hardware|simulator --session-root DIR [--rank-path /dev/dpu_rankN] --dpus N --tasklets N --initialization-binary PATH --dpu-binary PATH [--timeout-s N]\n", program);
 }
 
 int main(int argc, char **argv) {
     const char *session_root = NULL;
     const char *rank_path = NULL;
+    const char *target = NULL;
     const char *initialization_binary = NULL;
     const char *dpu_binary = NULL;
     uint32_t dpus = 0u, tasklets = 0u, timeout_s = 60u;
@@ -442,7 +480,8 @@ int main(int argc, char **argv) {
     dpu_error_t error;
     int rc = 1;
     for (int index = 1; index < argc; index++) {
-        if (strcmp(argv[index], "--session-root") == 0 && index + 1 < argc) session_root = argv[++index];
+        if (strcmp(argv[index], "--target") == 0 && index + 1 < argc) target = argv[++index];
+        else if (strcmp(argv[index], "--session-root") == 0 && index + 1 < argc) session_root = argv[++index];
         else if (strcmp(argv[index], "--rank-path") == 0 && index + 1 < argc) rank_path = argv[++index];
         else if (strcmp(argv[index], "--dpus") == 0 && index + 1 < argc) { if (parse_u32(argv[++index], &dpus) != 0) return 2; }
         else if (strcmp(argv[index], "--tasklets") == 0 && index + 1 < argc) { if (parse_u32(argv[++index], &tasklets) != 0) return 2; }
@@ -454,7 +493,7 @@ int main(int argc, char **argv) {
     (void)signal(SIGINT, v4_signal_handler);
     (void)signal(SIGTERM, v4_signal_handler);
     (void)signal(SIGALRM, v4_signal_handler);
-    if (session_root == NULL || rank_path == NULL || initialization_binary == NULL || dpu_binary == NULL ||
+    if (target == NULL || session_root == NULL || initialization_binary == NULL || dpu_binary == NULL ||
         dpus == 0u || dpus > EXECUTION_PLAN_V4_MAX_DPUS || tasklets == 0u || tasklets > EXECUTION_PLAN_V4_MAX_TASKLETS ||
         timeout_s == 0u || realpath(session_root, root_real) == NULL || stat(root_real, &root_stat) != 0 ||
         !S_ISDIR(root_stat.st_mode) || !path_exists(initialization_binary) || !path_exists(dpu_binary)) {
@@ -462,25 +501,37 @@ int main(int argc, char **argv) {
         v4_emit_release();
         return 2;
     }
-    if (getenv("UPMEM_ALLOW_PHYSICAL_HARDWARE") == NULL ||
-        strcmp(getenv("UPMEM_ALLOW_PHYSICAL_HARDWARE"), "1") != 0) {
-        v4_emit_startup_failure("hardware_opt_in_missing", "UPMEM_ALLOW_PHYSICAL_HARDWARE=1 is required");
+    if (strcmp(target, "hardware") == 0) {
+        if (rank_path == NULL || getenv("UPMEM_ALLOW_PHYSICAL_HARDWARE") == NULL ||
+            strcmp(getenv("UPMEM_ALLOW_PHYSICAL_HARDWARE"), "1") != 0) {
+            v4_emit_startup_failure("hardware_opt_in_missing", "hardware v4 requires rank path and UPMEM_ALLOW_PHYSICAL_HARDWARE=1");
+            v4_emit_release();
+            return 1;
+        }
+        if (getenv("DPU_BACKEND") != NULL || getenv("UPMEM_EXECUTION_MODE") != NULL) {
+            v4_emit_startup_failure("hardware_profile_violation", "hardware v4 forbids backend selectors");
+            v4_emit_release();
+            return 1;
+        }
+    } else if (strcmp(target, "simulator") == 0) {
+        v4_simulator_target = 1;
+        if (rank_path != NULL || getenv("DPU_BACKEND") == NULL ||
+            strcmp(getenv("DPU_BACKEND"), "simulator") != 0 ||
+            getenv("UPMEM_EXECUTION_MODE") != NULL) {
+            v4_emit_startup_failure("simulator_profile_violation", "simulator v4 requires DPU_BACKEND=simulator and no rank path or execution selector");
+            v4_emit_release();
+            return 1;
+        }
+    } else {
+        v4_emit_startup_failure("hardware_profile_violation", "--target must be hardware or simulator");
         v4_emit_release();
-        return 1;
+        return 2;
     }
-    if (getenv("DPU_BACKEND") != NULL) {
-        v4_emit_startup_failure("hardware_profile_violation", "DPU_BACKEND must be unset for v4 physical execution");
-        v4_emit_release();
-        return 1;
-    }
-    if (getenv("UPMEM_EXECUTION_MODE") != NULL) {
-        v4_emit_startup_failure("hardware_profile_violation", "UPMEM_EXECUTION_MODE must be unset for v4 physical execution");
-        v4_emit_release();
-        return 1;
-    }
-    v4_session_rank_path = rank_path;
+    v4_session_rank_path = v4_simulator_target ? NULL : rank_path;
     v4_provider_initialized = 1;
-    error = upmem_v4_provider_init_on_rank(&v4_provider, dpus, rank_path, initialization_binary);
+    error = v4_simulator_target
+        ? upmem_v4_provider_init_simulator(&v4_provider, dpus, initialization_binary)
+        : upmem_v4_provider_init_on_rank(&v4_provider, dpus, rank_path, initialization_binary);
     if (error != DPU_OK || v4_provider.observed_dpus != dpus || v4_provider.observed_ranks != 1u) {
         v4_emit_startup_failure("hardware_allocation_failed", "v4 rank allocation did not match the requested DPU set");
         v4_emit_release();

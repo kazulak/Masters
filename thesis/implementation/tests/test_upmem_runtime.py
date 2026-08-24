@@ -18,7 +18,7 @@ from quantum_bench.upmem.plan import (
     UpmemTopology as FinalTopology,
     plan_upmem,
 )
-from quantum_bench.upmem.runtime import open_upmem
+from quantum_bench.upmem.runtime import open_upmem, open_upmem_simulator
 from quantum_bench.upmem.protocol import V4ProtocolError
 import quantum_bench.upmem.runtime as runtime
 from quantum_bench.cpu import replay_upmem_plan_once
@@ -45,6 +45,7 @@ class _ControlledTerminalSession:
 def _verified_terminal(plan) -> dict[str, object]:
     return {
         "target_observed": "physical_hardware",
+        "allocation_verified": True,
         "hardware_allocation_verified": True,
         "ready_verified": True,
         "binary_identity_verified": True,
@@ -82,6 +83,18 @@ def _resources(tmp_path: Path, opener) -> UpmemResources:
         dpu_binary=str(dpu),
         initialization_binary=str(initialization),
         rank_paths=("/dev/dpu_rank0",),
+        session_opener=opener,
+    )
+
+
+def _simulator_resources(tmp_path: Path, opener=None) -> UpmemResources:
+    host, dpu, initialization = _binaries(tmp_path / "simulator-resources")
+    return UpmemResources(
+        session_root=str(tmp_path / "simulator-session"),
+        host_binary=str(host),
+        dpu_binary=str(dpu),
+        initialization_binary=str(initialization),
+        rank_paths=(),
         session_opener=opener,
     )
 
@@ -241,6 +254,57 @@ def test_persistent_session_matches_replay_and_renews_deadline(
     "policy",
     ["split_complex_float32_v1", "split_complex_int8_shared_scale_v1"],
 )
+def test_open_upmem_simulator_matches_replay_and_rejects_physical_claims(
+    tmp_path: Path, policy: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    node = _task(k=17, m=1, n=1)
+    dag, plan = _final_plan_for_node(node, policy=policy)
+    engine = _engine(
+        tmp_path / "simulator-engine",
+        dpu_count=1,
+        execution_target="sdk_simulator",
+    )
+    monkeypatch.setattr(runtime, "UpmemV4Executor", lambda **_kwargs: engine.engine)
+    resources = _simulator_resources(tmp_path)
+    inputs = _inputs(node, k=17)
+    expected = replay_upmem_plan_once(dag, plan, inputs)
+    with open_upmem_simulator(dag, plan, resources, timeout_s=10.0) as session:
+        sample = session.run_once(inputs)
+        terminal = session.close()
+    np.testing.assert_array_equal(sample.output, expected.output)
+    assert sample.backend_facts["target_observed"] == "sdk_simulator"
+    assert sample.backend_facts["physical_target_verified"] is False
+    assert sample.backend_facts["hardware_kernel_executed"] is False
+    assert sample.backend_facts["simulator_kernel_executed"] is True
+    assert terminal["target_observed"] == "sdk_simulator"
+    assert terminal["physical_target_verified"] is False
+    assert terminal["hardware_kernel_executed"] is False
+    assert terminal["simulator_kernel_executed"] is True
+    assert terminal["hardware_allocation_verified"] is False
+    for key in (
+        "timing_claim_applicable",
+        "scaling_claim_applicable",
+        "speedup_claim_applicable",
+        "energy_claim_applicable",
+    ):
+        assert terminal[key] is False
+
+
+def test_open_upmem_simulator_rejects_injected_session_opener(
+    tmp_path: Path,
+) -> None:
+    node = _task(k=5, m=1, n=1)
+    dag, plan = _final_plan_for_node(node, policy="split_complex_float32_v1")
+    resources = _simulator_resources(tmp_path, lambda *_args: object())
+
+    with pytest.raises(UnsupportedExecution, match="injected session openers"):
+        open_upmem_simulator(dag, plan, resources)
+
+
+@pytest.mark.parametrize(
+    "policy",
+    ["split_complex_float32_v1", "split_complex_int8_shared_scale_v1"],
+)
 def test_raw_lanes_and_operands_match_cpu_physical_plan_replay(
     tmp_path: Path,
     policy: str,
@@ -275,6 +339,7 @@ def test_output_hash_includes_dtype_and_shape() -> None:
     "field, value",
     [
         ("cpu_fallback_used", True),
+        ("hardware_kernel_executed", False),
         ("simulator_kernel_executed", True),
         ("test_double_execution", True),
     ],
@@ -289,6 +354,7 @@ def test_operation_observations_reject_unadmitted_execution_facts(
         "target_observed": "physical_hardware",
         "test_double_execution": False,
         "cpu_fallback_used": False,
+        "hardware_kernel_executed": True,
         "simulator_kernel_executed": False,
         "physical_stage_consumed": True,
         "bulk_set_launch_verified": True,
@@ -326,6 +392,7 @@ def test_operation_observations_require_positive_stage_facts(
         "target_observed": "physical_hardware",
         "test_double_execution": False,
         "cpu_fallback_used": False,
+        "hardware_kernel_executed": True,
         "simulator_kernel_executed": False,
         "physical_stage_consumed": True,
         "bulk_set_launch_verified": True,

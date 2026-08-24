@@ -25,6 +25,9 @@ RESPONSE_SCHEMA = "upmem_execution_plan_native_v4"
 
 # These values are compiled into native/upmem/runtime/host.c.  They are protocol
 # expectations, not Python observations: READY and RESPONSE must report them.
+EXECUTION_TARGET_PHYSICAL = "physical_hardware"
+EXECUTION_TARGET_SIMULATOR = "sdk_simulator"
+
 NATIVE_EXECUTION_IDENTITY = {
     "backend_id": "upmem_sdk_hardware_v4_tile_session",
     "backend_family": "upmem_sdk",
@@ -35,6 +38,21 @@ NATIVE_EXECUTION_IDENTITY = {
     "kernel_identity": "dpu_gemm_tile_v4",
     "execution_class": "physical_v4_output_tile",
 }
+
+
+def native_execution_identity(execution_target: str) -> dict[str, str]:
+    """Return the target-specific identity emitted by the unchanged v4 ABI."""
+
+    if execution_target == EXECUTION_TARGET_PHYSICAL:
+        return dict(NATIVE_EXECUTION_IDENTITY)
+    if execution_target == EXECUTION_TARGET_SIMULATOR:
+        return {
+            **NATIVE_EXECUTION_IDENTITY,
+            "backend_id": "upmem_sdk_simulator_v4_tile_session",
+            "execution_class": "sdk_simulator_v4_output_tile",
+        }
+    raise ValueError(f"unsupported v4 execution target: {execution_target!r}")
+
 
 MAX_DPUS = 64
 MAX_TASKLETS = 24
@@ -178,12 +196,13 @@ def _numeric_code(value: str | int) -> int:
 
 @dataclass(frozen=True)
 class V4Profile:
-    """Bounded physical v4 session configuration."""
+    """Bounded v4 session configuration for one physical or simulator target."""
 
     dpu_count: int
     tasklets_per_dpu: int = 1
     numeric_mode: str | int = NUMERIC_FLOAT32
     rank_path: str | None = None
+    execution_target: str = EXECUTION_TARGET_PHYSICAL
     timeout_s: float = 60.0
     # stdout is the line-delimited protocol: bound each event independently.
     max_stdout_bytes: int = 256 * 1024
@@ -198,8 +217,20 @@ class V4Profile:
         if not 1 <= self.tasklets_per_dpu <= MAX_TASKLETS:
             raise ValueError("v4 tasklets_per_dpu must be in [1, 24]")
         _numeric_code(self.numeric_mode)
+        if self.execution_target not in {
+            EXECUTION_TARGET_PHYSICAL,
+            EXECUTION_TARGET_SIMULATOR,
+        }:
+            raise ValueError("unsupported v4 execution_target")
+        if self.execution_target == EXECUTION_TARGET_SIMULATOR and self.dpu_count != 1:
+            raise ValueError("v4 simulator requires exactly one DPU")
         if self.rank_path is not None and not _RANK_PATH.fullmatch(self.rank_path):
             raise ValueError("v4 rank_path must be an explicit /dev/dpu_rankN path")
+        if (
+            self.execution_target == EXECUTION_TARGET_SIMULATOR
+            and self.rank_path is not None
+        ):
+            raise ValueError("simulator v4 sessions forbid rank_path")
         if self.timeout_s <= 0:
             raise ValueError("v4 timeout_s must be positive")
         if self.max_stdout_bytes <= 0 or self.max_stderr_bytes <= 0:
@@ -878,6 +909,9 @@ __all__ = [
     "MRAM_ALIGNMENT",
     "MRAM_POOL_BYTES",
     "NATIVE_EXECUTION_IDENTITY",
+    "EXECUTION_TARGET_PHYSICAL",
+    "EXECUTION_TARGET_SIMULATOR",
+    "native_execution_identity",
     "NUMERIC_FLOAT32",
     "NUMERIC_HOST_PACKED_INT8",
     "NUMERIC_MODE_FLOAT32",

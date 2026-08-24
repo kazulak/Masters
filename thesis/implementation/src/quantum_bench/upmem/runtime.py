@@ -53,14 +53,16 @@ from quantum_bench.upmem.plan import (
 )
 from quantum_bench.upmem.native_session import V4Session
 from quantum_bench.upmem.protocol import (
+    EXECUTION_TARGET_PHYSICAL,
+    EXECUTION_TARGET_SIMULATOR,
     MAX_INT32_SAFE_K,
-    NATIVE_EXECUTION_IDENTITY,
     NUMERIC_FLOAT32,
     NUMERIC_HOST_PACKED_INT8,
     V4Profile,
     V4ProtocolError,
     V4WorkUnit,
     build_v4_request,
+    native_execution_identity,
 )
 from quantum_bench.upmem.tiling import (
     M5Tile,
@@ -113,8 +115,6 @@ def _decode_real_accumulator(
         raise ValueError("contraction output scale must be finite and positive")
     return np.asarray(accumulator, dtype=np.float32) * np.float32(scale)
 
-
-_EXPECTED_NATIVE_IDENTITY = dict(NATIVE_EXECUTION_IDENTITY)
 
 _COORDINATOR_PROVENANCE = {
     "transfer_accounting_scope": "application_visible_sdk_recorded",
@@ -531,11 +531,13 @@ class _RankSession:
     local_dpus: int
 
 
-def _native_identity(event: Mapping[str, Any], *, source: str) -> dict[str, str]:
+def _native_identity(
+    event: Mapping[str, Any], *, source: str, execution_target: str
+) -> dict[str, str]:
     """Read the identity emitted by native v4 code, never Python provenance."""
 
     observed: dict[str, str] = {}
-    for field, expected in _EXPECTED_NATIVE_IDENTITY.items():
+    for field, expected in native_execution_identity(execution_target).items():
         value = event.get(field)
         if not isinstance(value, str) or not value:
             raise RuntimeError(f"{source} is missing native identity {field}")
@@ -550,13 +552,16 @@ def _native_identity(event: Mapping[str, Any], *, source: str) -> dict[str, str]
 
 def _agreed_native_identity(
     observations: tuple[tuple[str, Mapping[str, Any]], ...],
+    *,
+    execution_target: str,
 ) -> dict[str, str]:
     """Return one identity only when every rank/event reported the same contract."""
 
     if not observations:
         raise RuntimeError("no native identity observations were recorded")
     identities = [
-        _native_identity(event, source=source) for source, event in observations
+        _native_identity(event, source=source, execution_target=execution_target)
+        for source, event in observations
     ]
     first = identities[0]
     if any(identity != first for identity in identities[1:]):
@@ -590,7 +595,7 @@ def _close_rank_before_deadline(rank: _RankSession, deadline: float) -> Any:
 
 
 class UpmemV4Executor:
-    """Physical v4 tile engine with explicit ranks and no fallback route."""
+    """One v4 tile engine for an explicit physical or SDK-simulator target."""
 
     name = "upmem_execution_plan_v4_whole_circuit"
 
@@ -605,6 +610,7 @@ class UpmemV4Executor:
         dpu_count: int,
         tasklets_per_dpu: int = 1,
         timeout_s: float = 60.0,
+        execution_target: str = EXECUTION_TARGET_PHYSICAL,
         session_factory: Callable[..., _V4SessionLike] = V4Session.start,
     ) -> None:
         self.session_root = Path(session_root)
@@ -615,6 +621,7 @@ class UpmemV4Executor:
         self.dpu_count = int(dpu_count)
         self.tasklets_per_dpu = int(tasklets_per_dpu)
         self.timeout_s = float(timeout_s)
+        self.execution_target = execution_target
         self.session_factory = session_factory
         self._binary_provenance = {
             **_validated_binary_provenance(
@@ -635,13 +642,26 @@ class UpmemV4Executor:
             "session_root": str(self.session_root.resolve()),
             **self._binary_provenance,
         }
-        if not self.rank_paths:
-            raise ValueError("M5 whole-circuit engine requires explicit rank_paths")
-        if self.dpu_count < 1 or self.dpu_count % len(self.rank_paths):
-            raise ValueError("dpu_count must be positive and divisible by rank count")
+        if self.execution_target not in {
+            EXECUTION_TARGET_PHYSICAL,
+            EXECUTION_TARGET_SIMULATOR,
+        }:
+            raise ValueError("unsupported v4 execution target")
+        if self.execution_target == EXECUTION_TARGET_PHYSICAL:
+            if not self.rank_paths:
+                raise ValueError("physical v4 engine requires explicit rank_paths")
+            if self.dpu_count < 1 or self.dpu_count % len(self.rank_paths):
+                raise ValueError(
+                    "dpu_count must be positive and divisible by rank count"
+                )
+        elif self.rank_paths or self.dpu_count != 1:
+            raise ValueError(
+                "v4 simulator engine requires exactly one DPU and no rank paths"
+            )
         if self.tasklets_per_dpu < 1 or self.timeout_s <= 0:
             raise ValueError("tasklets_per_dpu and timeout_s must be positive")
-        if self.dpu_count // len(self.rank_paths) > 64:
+        session_count = len(self.rank_paths) if self.rank_paths else 1
+        if self.dpu_count // session_count > 64:
             raise ValueError("v4 supports at most 64 local DPUs per rank")
 
     @property
@@ -666,15 +686,19 @@ class UpmemV4Executor:
             raise ValueError(
                 "topology tasklet count must match engine tasklets_per_dpu"
             )
-        if topology.rank_count != len(self.rank_paths):
-            raise ValueError("topology rank count must match engine rank_paths")
+        if self.execution_target == EXECUTION_TARGET_PHYSICAL:
+            if topology.rank_count != len(self.rank_paths):
+                raise ValueError("topology rank count must match engine rank_paths")
+        elif topology.dpu_count != 1 or topology.rank_count != 1:
+            raise ValueError("v4 simulator requires exactly one DPU and one rank")
 
         deadline = time.monotonic() + self.timeout_s
         self.session_root.mkdir(parents=True, exist_ok=True)
-        local_dpus = self.dpu_count // len(self.rank_paths)
+        rank_paths = self.rank_paths or (None,)
+        local_dpus = self.dpu_count // len(rank_paths)
         ranks: list[_RankSession] = []
         try:
-            for index, rank_path in enumerate(self.rank_paths):
+            for index, rank_path in enumerate(rank_paths):
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise V4ProtocolError(
@@ -692,14 +716,17 @@ class UpmemV4Executor:
                         else NUMERIC_FLOAT32
                     ),
                     rank_path=rank_path,
+                    execution_target=self.execution_target,
                     timeout_s=remaining,
                 )
-                command = (
+                command_parts: list[str] = [
                     str(self.host_binary),
+                    "--target",
+                    "simulator"
+                    if self.execution_target == EXECUTION_TARGET_SIMULATOR
+                    else "hardware",
                     "--session-root",
                     str(root.resolve()),
-                    "--rank-path",
-                    rank_path,
                     "--dpus",
                     str(local_dpus),
                     "--tasklets",
@@ -710,12 +737,19 @@ class UpmemV4Executor:
                     str(self.dpu_binary.resolve()),
                     "--timeout-s",
                     str(max(1, int(remaining))),
-                )
+                ]
+                if rank_path is not None:
+                    command_parts[5:5] = ["--rank-path", rank_path]
+                command = tuple(command_parts)
                 session = self.session_factory(
                     command, session_root=root, profile=profile
                 )
                 ranks.append(_RankSession(index, root, session, local_dpus))
-                _native_identity(session.startup, source=f"READY rank {index}")
+                _native_identity(
+                    session.startup,
+                    source=f"READY rank {index}",
+                    execution_target=self.execution_target,
+                )
                 if time.monotonic() >= deadline:
                     raise V4ProtocolError(
                         "kernel_timeout",
@@ -774,7 +808,8 @@ class UpmemV4Session:
             tuple(
                 (f"READY rank {rank.index}", rank.session.startup)
                 for rank in self.ranks
-            )
+            ),
+            execution_target=self.engine.execution_target,
         )
         self._response_native_identity_events: list[tuple[str, Mapping[str, Any]]] = []
         self._test_double_execution = any(
@@ -971,11 +1006,19 @@ class UpmemV4Session:
             "whole_graph_deadline_enforced": True,
             "whole_graph_timeout_s": self.engine.timeout_s,
             "target_observed": (
-                "not_verified" if self._test_double_execution else "physical_hardware"
+                "not_verified"
+                if self._test_double_execution
+                else (
+                    "sdk_simulator"
+                    if self.engine.execution_target == EXECUTION_TARGET_SIMULATOR
+                    else "physical_hardware"
+                )
             ),
             "test_double_execution": self._test_double_execution,
             "cpu_fallback_used": False,
-            "simulator_kernel_executed": False,
+            "simulator_kernel_executed": (
+                self.engine.execution_target == EXECUTION_TARGET_SIMULATOR
+            ),
             "physical_plan_consumed": True,
             **quantization_metadata,
         }
@@ -1191,10 +1234,21 @@ class UpmemV4Session:
             "physical_stage_consumed": True,
             "stage_id": stage.stage_id,
             "cpu_fallback_used": False,
-            "simulator_kernel_executed": False,
+            "hardware_kernel_executed": (
+                self.engine.execution_target == EXECUTION_TARGET_PHYSICAL
+            ),
+            "simulator_kernel_executed": (
+                self.engine.execution_target == EXECUTION_TARGET_SIMULATOR
+            ),
             "test_double_execution": self._test_double_execution,
             "target_observed": (
-                "not_verified" if self._test_double_execution else "physical_hardware"
+                "not_verified"
+                if self._test_double_execution
+                else (
+                    "sdk_simulator"
+                    if self.engine.execution_target == EXECUTION_TARGET_SIMULATOR
+                    else "physical_hardware"
+                )
             ),
             "timing_scope": "sum_of_per_request_max_rank_response_counters_v1",
             "timing": {
@@ -1588,15 +1642,17 @@ class UpmemV4Session:
     def _validate_successful_response(
         self, response: Mapping[str, Any], rank: _RankSession, artifact: Any
     ) -> None:
+        simulator = self.engine.execution_target == EXECUTION_TARGET_SIMULATOR
         expected = {
             "status": "completed",
-            "target_observed": "physical_hardware",
+            "target_observed": "sdk_simulator" if simulator else "physical_hardware",
             "bulk_set_launch_verified": True,
             "native_kernel_executed": True,
-            "hardware_kernel_executed": True,
-            "simulator_kernel_executed": False,
+            "hardware_kernel_executed": not simulator,
+            "simulator_kernel_executed": simulator,
             "cpu_fallback_used": False,
-            "hardware_allocation_verified": True,
+            "allocation_verified": True,
+            "hardware_allocation_verified": not simulator,
             "allocated_dpu_count": rank.local_dpus,
             "requested_dpu_count": rank.local_dpus,
             "tasklets_per_dpu": rank.session.profile.tasklets_per_dpu,
@@ -1608,10 +1664,14 @@ class UpmemV4Session:
                     f"unverified v4 response field {key}: {response.get(key)!r}"
                 )
         startup_identity = _native_identity(
-            rank.session.startup, source=f"READY rank {rank.index}"
+            rank.session.startup,
+            source=f"READY rank {rank.index}",
+            execution_target=self.engine.execution_target,
         )
         response_identity = _native_identity(
-            response, source=f"RESPONSE rank {rank.index}"
+            response,
+            source=f"RESPONSE rank {rank.index}",
+            execution_target=self.engine.execution_target,
         )
         if response_identity != startup_identity:
             raise RuntimeError(
@@ -1654,7 +1714,8 @@ class UpmemV4Session:
                     (f"READY rank {rank.index}", rank.session.startup)
                     for rank in self.ranks
                 )
-                + tuple(self._response_native_identity_events)
+                + tuple(self._response_native_identity_events),
+                execution_target=self.engine.execution_target,
             )
         except RuntimeError as exc:
             observed_native_identity = None
@@ -1663,14 +1724,19 @@ class UpmemV4Session:
         confirmed = len(diagnostics) == len(self.ranks) and all(
             diagnostic["release_confirmed"] for diagnostic in diagnostics
         )
-        physical_target_verified = not self._test_double_execution and all(
+        simulator = self.engine.execution_target == EXECUTION_TARGET_SIMULATOR
+        target_verified = not self._test_double_execution and all(
             rank.session.startup.get("target_observed") == "physical_hardware"
+            if not simulator
+            else rank.session.startup.get("target_observed") == "sdk_simulator"
             for rank in self.ranks
         )
         allocation_verified = all(
             rank.session.startup.get("event") == "READY"
             and rank.session.startup.get("status") == "ready"
-            and rank.session.startup.get("hardware_allocation_verified") is True
+            and rank.session.startup.get("allocation_verified") is True
+            and rank.session.startup.get("hardware_allocation_verified")
+            is (not simulator)
             and rank.session.startup.get("requested_dpu_count") == rank.local_dpus
             and rank.session.startup.get("allocated_dpu_count") == rank.local_dpus
             and rank.session.startup.get("tasklets_per_dpu")
@@ -1689,7 +1755,7 @@ class UpmemV4Session:
             self._successful_request_count > 0 and not self._test_double_execution
         )
         verified = (
-            physical_target_verified
+            target_verified
             and allocation_verified
             and binary_identity_verified
             and observed_native_identity is not None
@@ -1712,23 +1778,29 @@ class UpmemV4Session:
             "kernel_provider": _ACTIVE_MECHANISM_IDS["kernel"],
             "reduction_provider": _ACTIVE_MECHANISM_IDS["reduction"],
             "reduction_strategy": _ACTIVE_MECHANISM_IDS["reduction"],
-            "target_observed": "physical_hardware" if verified else "not_verified",
+            "target_observed": (
+                ("sdk_simulator" if simulator else "physical_hardware")
+                if verified
+                else "not_verified"
+            ),
             "requested_dpu_count": sum(rank.local_dpus for rank in self.ranks),
             "observed_rank_count": len(self.ranks),
             "allocated_dpu_count": sum(rank.local_dpus for rank in self.ranks),
             "observed_dpu_count": sum(rank.local_dpus for rank in self.ranks),
             "observed_tasklets_per_dpu": self.engine.tasklets_per_dpu,
             "tasklets_per_dpu": self.engine.tasklets_per_dpu,
-            "hardware_allocation_verified": allocation_verified,
+            "hardware_allocation_verified": allocation_verified and not simulator,
+            "allocation_verified": allocation_verified,
             "native_kernel_executed": native_execution,
-            "hardware_kernel_executed": native_execution,
-            "simulator_kernel_executed": False,
+            "hardware_kernel_executed": native_execution and not simulator,
+            "simulator_kernel_executed": native_execution and simulator,
             "cpu_fallback_used": False,
             "test_double_execution": self._test_double_execution,
             "hardware_release_verified": confirmed,
             "hardware_release_confirmed": confirmed,
             "ready_verified": ready_verified,
-            "physical_target_verified": physical_target_verified,
+            "physical_target_verified": target_verified and not simulator,
+            "simulator_target_verified": target_verified and simulator,
             "binary_identity_verified": binary_identity_verified,
             "native_identity_verified": observed_native_identity is not None,
             "native_identity_failure": native_identity_error,
@@ -1744,6 +1816,16 @@ class UpmemV4Session:
             ),
             "failure_stage": self._failure_stage
             or ("hardware_release_failed" if not confirmed else None),
+            **(
+                {
+                    "timing_claim_applicable": False,
+                    "scaling_claim_applicable": False,
+                    "speedup_claim_applicable": False,
+                    "energy_claim_applicable": False,
+                }
+                if simulator
+                else {}
+            ),
         }
         return self._terminal_metadata
 
@@ -2162,12 +2244,15 @@ class UpmemSession:
         output_hash: str,
         operation_facts: tuple[Mapping[str, JsonValue], ...],
     ) -> Mapping[str, JsonValue]:
+        simulator = observations["target_observed"] == "sdk_simulator"
         return _json_safe(
             {
                 "backend_id": "upmem_final_plan_v1",
                 "physical_plan_id": physical_plan_id(self._plan),
                 "logical_plan_id": self._plan.logical_plan_id,
-                "execution_class": "upmem_v4_real_tile",
+                "execution_class": (
+                    "sdk_simulator" if simulator else "upmem_v4_real_tile"
+                ),
                 "target_observed": observations["target_observed"],
                 "test_double_execution": observations["test_double_execution"],
                 "cpu_fallback_used": observations["cpu_fallback_used"],
@@ -2183,6 +2268,18 @@ class UpmemSession:
                 "output_hash": output_hash,
                 "operation_facts": operation_facts,
                 "release_verified": None,
+                **(
+                    {
+                        "physical_target_verified": False,
+                        "hardware_kernel_executed": False,
+                        "timing_claim_applicable": False,
+                        "scaling_claim_applicable": False,
+                        "speedup_claim_applicable": False,
+                        "energy_claim_applicable": False,
+                    }
+                    if simulator
+                    else {}
+                ),
                 "rank_response_timing_scope": (
                     "sum_of_per_request_max_rank_response_counters_v1"
                 ),
@@ -2193,6 +2290,7 @@ class UpmemSession:
 _OPERATION_BOOL_FIELDS = (
     "test_double_execution",
     "cpu_fallback_used",
+    "hardware_kernel_executed",
     "simulator_kernel_executed",
     "physical_stage_consumed",
     "bulk_set_launch_verified",
@@ -2265,19 +2363,22 @@ def _derive_operation_observations(
 
     if observations["cpu_fallback_used"] is True:
         raise ValueError("UPMEM operation reported CPU fallback")
-    if observations["simulator_kernel_executed"] is True:
-        raise ValueError("UPMEM operation reported simulator execution")
     observed_pair = (
         observations["target_observed"],
         observations["test_double_execution"],
+        observations["simulator_kernel_executed"],
     )
     if observed_pair not in {
-        ("physical_hardware", False),
-        ("not_verified", True),
+        ("physical_hardware", False, False),
+        ("sdk_simulator", False, True),
+        ("not_verified", True, False),
     }:
         raise ValueError(
             "UPMEM target observation and test-double flag are inconsistent"
         )
+    expected_hardware_kernel = observations["target_observed"] == "physical_hardware"
+    if observations["hardware_kernel_executed"] is not expected_hardware_kernel:
+        raise ValueError("UPMEM operation kernel target label is inconsistent")
     for field in ("physical_stage_consumed", "bulk_set_launch_verified"):
         if observations[field] is not True:
             raise ValueError(f"UPMEM operation field {field!r} must be true")
@@ -2337,6 +2438,7 @@ def _operation_summary(metadata: Mapping[str, Any]) -> Mapping[str, JsonValue]:
         "target_observed",
         "test_double_execution",
         "cpu_fallback_used",
+        "hardware_kernel_executed",
         "simulator_kernel_executed",
         "timing_scope",
         "timing",
@@ -2389,12 +2491,56 @@ def _validate_terminal_admission(
     terminal_facts: Mapping[str, JsonValue],
     plan: FinalUpmemPlan,
 ) -> None:
-    if terminal_facts.get("target_observed") != "physical_hardware":
-        raise ValueError("terminal target_observed must be exactly 'physical_hardware'")
-    for field in _TERMINAL_TRUE_FIELDS:
+    simulator = terminal_facts.get("target_observed") == "sdk_simulator"
+    if terminal_facts.get("target_observed") not in {
+        "physical_hardware",
+        "sdk_simulator",
+    }:
+        raise ValueError("terminal target_observed is not a supported v4 target")
+    true_fields = _TERMINAL_TRUE_FIELDS
+    false_fields = _TERMINAL_FALSE_FIELDS
+    if simulator:
+        true_fields = tuple(
+            field
+            for field in _TERMINAL_TRUE_FIELDS
+            if field
+            not in {
+                "hardware_allocation_verified",
+                "physical_target_verified",
+                "hardware_kernel_executed",
+            }
+        )
+        false_fields = tuple(
+            field
+            for field in _TERMINAL_FALSE_FIELDS
+            if field != "simulator_kernel_executed"
+        )
+        if terminal_facts.get("simulator_target_verified") is not True:
+            raise ValueError(
+                "simulator terminal facts require simulator_target_verified"
+            )
+        if terminal_facts.get("simulator_kernel_executed") is not True:
+            raise ValueError("simulator terminal facts require simulator execution")
+        if terminal_facts.get("hardware_allocation_verified") is not False:
+            raise ValueError(
+                "simulator terminal facts cannot verify hardware allocation"
+            )
+        if terminal_facts.get("physical_target_verified") is not False:
+            raise ValueError("simulator terminal facts cannot verify physical target")
+        if terminal_facts.get("hardware_kernel_executed") is not False:
+            raise ValueError("simulator terminal facts cannot verify hardware kernel")
+        for field in (
+            "timing_claim_applicable",
+            "scaling_claim_applicable",
+            "speedup_claim_applicable",
+            "energy_claim_applicable",
+        ):
+            if terminal_facts.get(field) is not False:
+                raise ValueError(f"simulator terminal field {field!r} must be false")
+    for field in true_fields:
         if terminal_facts.get(field) is not True:
             raise ValueError(f"terminal field {field!r} must be exactly true")
-    for field in _TERMINAL_FALSE_FIELDS:
+    for field in false_fields:
         if terminal_facts.get(field) is not False:
             raise ValueError(f"terminal field {field!r} must be exactly false")
 
@@ -2576,6 +2722,89 @@ def open_upmem(
     return UpmemSession(dag, plan, resources, low_level, timeout_s)
 
 
+def open_upmem_simulator(
+    dag: ContractionDAG,
+    plan: FinalUpmemPlan,
+    resources: UpmemResources,
+    *,
+    timeout_s: float = 120.0,
+) -> UpmemSession:
+    """Open the active ABI-v4 route through the SDK simulator only.
+
+    This path is limited to one logical DPU/rank and is admitted solely for
+    protocol and numerical correctness.  It deliberately has no physical
+    opt-in or rank-path requirement.
+    """
+
+    if not isinstance(dag, ContractionDAG):
+        raise ValueError("open_upmem_simulator requires a ContractionDAG")
+    if not isinstance(plan, FinalUpmemPlan):
+        raise ValueError("open_upmem_simulator requires the final UpmemPlan record")
+    if not isinstance(resources, UpmemResources):
+        raise ValueError(
+            "open_upmem_simulator requires the final UpmemResources record"
+        )
+    if isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float)):
+        raise ValueError("timeout_s must be finite and positive")
+    timeout_s = float(timeout_s)
+    if not math.isfinite(timeout_s) or timeout_s <= 0.0:
+        raise ValueError("timeout_s must be finite and positive")
+    validate_contraction_dag(dag)
+    if plan.logical_plan_id != contraction_dag_hash(dag):
+        raise ValueError("UPMEM physical plan does not match supplied DAG")
+    validate_upmem_plan(dag, plan)
+    if plan.topology.dpu_count != 1 or plan.topology.rank_count != 1:
+        raise UnsupportedExecution(
+            stage="preflight",
+            reason="SDK simulator v4 route requires exactly one DPU and one rank",
+            capability="simulator_topology",
+        )
+    if resources.rank_paths:
+        raise UnsupportedExecution(
+            stage="preflight",
+            reason="SDK simulator v4 route forbids physical rank paths",
+            capability="simulator_rank_paths",
+        )
+    if resources.session_opener is not None:
+        raise UnsupportedExecution(
+            stage="preflight",
+            reason="SDK simulator v4 route does not accept injected session openers",
+            capability="simulator_target_boundary",
+        )
+    _validate_final_resources(resources)
+    try:
+        engine = UpmemV4Executor(
+            session_root=Path(resources.session_root),
+            host_binary=Path(resources.host_binary),
+            dpu_binary=Path(resources.dpu_binary),
+            initialization_binary=Path(resources.initialization_binary),
+            rank_paths=(),
+            dpu_count=1,
+            tasklets_per_dpu=plan.topology.tasklets_per_dpu,
+            timeout_s=timeout_s,
+            execution_target=EXECUTION_TARGET_SIMULATOR,
+        )
+        low_level = engine.open_session(plan.numeric_policy, plan.topology)
+    except UnsupportedExecution:
+        raise
+    except Exception as exc:
+        raise ExecutionFailed(
+            stage="session_open",
+            reason=str(exc),
+            backend_facts=_open_failure_facts(plan),
+        ) from exc
+    contract_error = _session_contract_error(low_level)
+    if contract_error is not None:
+        facts = _open_failure_facts(plan)
+        facts.update(_cleanup_nonconforming_session(low_level))
+        raise ExecutionFailed(
+            stage="session_open",
+            reason=contract_error,
+            backend_facts=facts,
+        )
+    return UpmemSession(dag, plan, resources, low_level, timeout_s)
+
+
 def _json_safe(value: object) -> JsonValue:
     """Convert runtime metadata to the narrow evidence JSON value contract."""
 
@@ -2628,4 +2857,5 @@ __all__ = [
     "UpmemV4Executor",
     "UpmemV4Session",
     "open_upmem",
+    "open_upmem_simulator",
 ]

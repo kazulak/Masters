@@ -25,8 +25,9 @@ from quantum_bench.upmem.plan import plan_upmem
 from quantum_bench.cpu import replay_upmem_plan_once
 import quantum_bench.upmem.runtime as engine_module
 from quantum_bench.upmem.protocol import (
-    NATIVE_EXECUTION_IDENTITY,
+    EXECUTION_TARGET_SIMULATOR,
     V4ProtocolError,
+    native_execution_identity,
 )
 
 
@@ -168,21 +169,26 @@ class _FakeSession:
     response_identity_overrides: dict[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        simulator = self.profile.execution_target == EXECUTION_TARGET_SIMULATOR
         self.startup = {
             "event": "READY",
             "status": "ready",
-            "target_observed": "physical_hardware",
+            "target_requested": "simulator" if simulator else "hardware",
+            "target_observed": "sdk_simulator" if simulator else "physical_hardware",
             "requested_dpu_count": self.profile.dpu_count,
             "allocated_dpu_count": self.profile.dpu_count,
             "tasklets_per_dpu": self.profile.tasklets_per_dpu,
-            "hardware_allocation_verified": True,
-            **NATIVE_EXECUTION_IDENTITY,
+            "rank_path": None if simulator else self.profile.rank_path,
+            "hardware_allocation_verified": not simulator,
+            "allocation_verified": True,
+            **native_execution_identity(self.profile.execution_target),
             **self.binary_provenance,
         }
 
     def submit(
         self, artifact: Any, *, timeout_s: float | None = None
     ) -> dict[str, Any]:
+        simulator = self.profile.execution_target == EXECUTION_TARGET_SIMULATOR
         if timeout_s is not None:
             self.submitted_timeouts.append(float(timeout_s))
         self.submissions.append(artifact)
@@ -250,18 +256,20 @@ class _FakeSession:
             )
         return {
             "status": "completed",
-            "target_observed": "physical_hardware",
+            "target_requested": "simulator" if simulator else "hardware",
+            "target_observed": "sdk_simulator" if simulator else "physical_hardware",
             "native_kernel_executed": True,
-            "hardware_kernel_executed": True,
-            "simulator_kernel_executed": False,
+            "hardware_kernel_executed": not simulator,
+            "simulator_kernel_executed": simulator,
             "cpu_fallback_used": False,
-            "hardware_allocation_verified": True,
+            "hardware_allocation_verified": not simulator,
+            "allocation_verified": True,
             "allocated_dpu_count": self.profile.dpu_count,
             "requested_dpu_count": self.profile.dpu_count,
             "tasklets_per_dpu": self.profile.tasklets_per_dpu,
             "request_sequence": artifact.request_sequence,
             "bulk_set_launch_verified": True,
-            **NATIVE_EXECUTION_IDENTITY,
+            **native_execution_identity(self.profile.execution_target),
             **self.response_identity_overrides,
             "transfer": {"h2d_bytes": 10, "d2h_bytes": 5, "total_bytes": 15},
             "timing": {"h2d_time_s": 0.01, "launch_time_s": 0.02, "d2h_time_s": 0.01},
@@ -296,6 +304,7 @@ def _engine(
     startup_delay_s: float = 0.0,
     startup_delays_s: tuple[float, ...] = (),
     fail_submit: bool = False,
+    execution_target: str = "physical_hardware",
 ) -> "_PlannedEngine":
     created: list[_FakeSession] = sessions if sessions is not None else []
     host_binary, dpu_binary, initialization_binary = _binaries(tmp_path / "binaries")
@@ -332,9 +341,14 @@ def _engine(
             host_binary=host_binary,
             dpu_binary=dpu_binary,
             initialization_binary=initialization_binary,
-            rank_paths=tuple(f"/dev/dpu_rank{i}" for i in range(ranks)),
+            rank_paths=(
+                ()
+                if execution_target == EXECUTION_TARGET_SIMULATOR
+                else tuple(f"/dev/dpu_rank{i}" for i in range(ranks))
+            ),
             dpu_count=dpu_count,
             timeout_s=timeout_s,
+            execution_target=execution_target,
             session_factory=factory,
         )
     )
@@ -1289,6 +1303,49 @@ def test_execute_complex_submits_four_lanes_in_order(tmp_path: Path) -> None:
     ]
     assert terminal["active_rank_indices"] == (0,)
     assert terminal["active_dpu_ids"] == ((0, 0),)
+
+
+@pytest.mark.parametrize(
+    ("policy", "numeric_mode"),
+    [
+        ("split_complex_float32_v1", NumericMode.FLOAT32_REAL),
+        ("split_complex_int8_shared_scale_v1", NumericMode.HOST_PACKED_INT8),
+    ],
+)
+def test_simulator_session_matches_replay_through_four_complex_lanes(
+    tmp_path: Path, policy: str, numeric_mode: NumericMode
+) -> None:
+    node = _task(k=3, m=1, n=1)
+    left = np.array([[1 + 2j, -0.5 + 0.25j, 0.75 - 1.5j]], dtype=np.complex128)
+    right = np.array([[0.5 - 1j], [1.25 + 0.5j], [-0.25 + 0.75j]], dtype=np.complex128)
+    dag, plan = _final_plan_for_node(node, policy=policy)
+    expected = replay_upmem_plan_once(dag, plan, {"left": left, "right": right})
+    created: list[_FakeSession] = []
+    session = _engine(
+        tmp_path,
+        dpu_count=1,
+        ranks=1,
+        sessions=created,
+        execution_target=EXECUTION_TARGET_SIMULATOR,
+    ).open_session(numeric_mode, _topology(1))
+    output, metadata = session.execute_complex(
+        node,
+        left,
+        right,
+        stage=plan.stages[0],
+        numeric_policy=policy,
+    )
+    terminal = session.close()
+    np.testing.assert_array_equal(output, expected.output)
+    assert metadata["target_observed"] == "sdk_simulator"
+    assert metadata["simulator_kernel_executed"] is True
+    assert len(created) == 1
+    assert len(created[0].submissions) == 4
+    assert terminal["target_observed"] == "sdk_simulator"
+    assert terminal["physical_target_verified"] is False
+    assert terminal["hardware_kernel_executed"] is False
+    assert terminal["simulator_kernel_executed"] is True
+    assert terminal["hardware_allocation_verified"] is False
 
 
 def test_execute_complex_int8_facts_match_replay_hashes(tmp_path: Path) -> None:

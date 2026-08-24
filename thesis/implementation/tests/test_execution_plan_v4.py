@@ -53,31 +53,41 @@ class FakeStdin:
 
 class FakeProcess:
     def __init__(
-        self, response_factory: Callable[[str], str | dict[str, object] | None]
+        self,
+        response_factory: Callable[[str], str | dict[str, object] | None],
+        *,
+        profile: v4.V4Profile | None = None,
+        ready_overrides: dict[str, object] | None = None,
     ) -> None:
+        profile = profile or v4.V4Profile(
+            dpu_count=2,
+            rank_path="/dev/dpu_rank0",
+        )
+        simulator = profile.execution_target == v4.EXECUTION_TARGET_SIMULATOR
         self.stdout = FakeStream()
         self.stderr = FakeStream()
         self._returncode: int | None = None
+        self.terminate_calls = 0
+        self.kill_calls = 0
         self.response_factory = response_factory
         self.stdin = FakeStdin(self._handle, self)
-        self.stdout.emit(
-            json.dumps(
-                {
-                    "event": "READY",
-                    "status": "ready",
-                    "target_observed": "physical_hardware",
-                    "rank_path": "/dev/dpu_rank0",
-                    "requested_dpu_count": 2,
-                    "allocated_dpu_count": 2,
-                    "tasklets_per_dpu": 1,
-                    "hardware_allocation_verified": True,
-                    "simulator_kernel_executed": False,
-                    "cpu_fallback_used": False,
-                    **v4.NATIVE_EXECUTION_IDENTITY,
-                }
-            )
-            + "\n"
-        )
+        ready = {
+            "event": "READY",
+            "status": "ready",
+            "target_requested": "simulator" if simulator else "hardware",
+            "target_observed": ("sdk_simulator" if simulator else "physical_hardware"),
+            "rank_path": None if simulator else profile.rank_path,
+            "requested_dpu_count": profile.dpu_count,
+            "allocated_dpu_count": profile.dpu_count,
+            "tasklets_per_dpu": profile.tasklets_per_dpu,
+            "hardware_allocation_verified": not simulator,
+            "allocation_verified": True,
+            "simulator_kernel_executed": False,
+            "cpu_fallback_used": False,
+            **v4.native_execution_identity(profile.execution_target),
+        }
+        ready.update(ready_overrides or {})
+        self.stdout.emit(json.dumps(ready) + "\n")
 
     def _handle(self, value: str) -> None:
         command = value.strip()
@@ -108,11 +118,13 @@ class FakeProcess:
         return self._returncode
 
     def terminate(self) -> None:
+        self.terminate_calls += 1
         self._returncode = -15
         self.stdout.emit("")
         self.stderr.emit("")
 
     def kill(self) -> None:
+        self.kill_calls += 1
         self._returncode = -9
         self.stdout.emit("")
         self.stderr.emit("")
@@ -137,8 +149,9 @@ def _artifact(
     *,
     numeric_mode: str = v4.NUMERIC_FLOAT32,
     request_sequence: int = 0,
+    dpu_count: int = 2,
 ) -> v4.V4RequestArtifact:
-    profile = v4.V4Profile(dpu_count=2, numeric_mode=numeric_mode)
+    profile = v4.V4Profile(dpu_count=dpu_count, numeric_mode=numeric_mode)
     element_bytes = 4 if numeric_mode == v4.NUMERIC_FLOAT32 else 1
     payload = _float_payload(4) if element_bytes == 4 else _int8_payload(4)
     return v4.build_v4_request(
@@ -168,7 +181,16 @@ def _artifact(
     )
 
 
-def _valid_response(artifact: v4.V4RequestArtifact) -> dict[str, object]:
+def _valid_response(
+    artifact: v4.V4RequestArtifact,
+    *,
+    profile: v4.V4Profile | None = None,
+) -> dict[str, object]:
+    profile = profile or v4.V4Profile(
+        dpu_count=2,
+        rank_path="/dev/dpu_rank0",
+    )
+    simulator = profile.execution_target == v4.EXECUTION_TARGET_SIMULATOR
     per_dpu: list[dict[str, int]] = []
     h2d = 0
     d2h = 0
@@ -194,9 +216,9 @@ def _valid_response(artifact: v4.V4RequestArtifact) -> dict[str, object]:
     return {
         "event": "RESPONSE",
         "status": "completed",
-        "target_requested": "hardware",
-        "target_observed": "physical_hardware",
-        "rank_path": "/dev/dpu_rank0",
+        "target_requested": "simulator" if simulator else "hardware",
+        "target_observed": "sdk_simulator" if simulator else "physical_hardware",
+        "rank_path": None if simulator else profile.rank_path,
         "request_sequence": artifact.request_sequence,
         "request_output_elements": artifact.request_output_elements,
         "global_output_elements": artifact.global_output_elements,
@@ -207,16 +229,18 @@ def _valid_response(artifact: v4.V4RequestArtifact) -> dict[str, object]:
         "sidecar_sha256": artifact.sidecar_sha256,
         "dispatch_mode": "bulk_set_synchronous_v1",
         "bulk_set_launch_verified": True,
-        "requested_dpu_count": 2,
-        "allocated_dpu_count": 2,
-        "tasklets_per_dpu": 1,
-        "hardware_allocation_verified": True,
+        "requested_dpu_count": profile.dpu_count,
+        "allocated_dpu_count": profile.dpu_count,
+        "tasklets_per_dpu": profile.tasklets_per_dpu,
+        "hardware_allocation_verified": not simulator,
+        "allocation_verified": True,
         "native_kernel_executed": True,
-        "hardware_kernel_executed": True,
-        "simulator_kernel_executed": False,
+        "hardware_kernel_executed": not simulator,
+        "simulator_kernel_executed": simulator,
         "cpu_fallback_used": False,
-        "hardware_functionality_evidence": True,
-        **v4.NATIVE_EXECUTION_IDENTITY,
+        "hardware_functionality_evidence": not simulator,
+        "simulator_functionality_evidence": simulator,
+        **v4.native_execution_identity(profile.execution_target),
         "transfer": {"h2d_bytes": h2d, "d2h_bytes": d2h, "total_bytes": h2d + d2h},
         "per_dpu": per_dpu,
     }
@@ -230,19 +254,27 @@ def _session(
     profile: v4.V4Profile | None = None,
 ) -> tuple[session_v4.V4Session, FakeProcess]:
     process: FakeProcess | None = None
+    selected_profile = profile or v4.V4Profile(
+        dpu_count=2,
+        rank_path="/dev/dpu_rank0",
+        timeout_s=0.2,
+    )
 
     def factory(*args: object, **kwargs: object) -> FakeProcess:
         del args, kwargs
         nonlocal process
-        process = FakeProcess(response_factory)
+        process = FakeProcess(response_factory, profile=selected_profile)
         return process
 
     session = session_v4.V4Session.start(
         ["fake-v4-host"],
         session_root=tmp_path,
-        profile=profile
-        or v4.V4Profile(dpu_count=2, rank_path="/dev/dpu_rank0", timeout_s=0.2),
-        environment={"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1"},
+        profile=selected_profile,
+        environment=(
+            {"DPU_BACKEND": "simulator"}
+            if selected_profile.execution_target == v4.EXECUTION_TARGET_SIMULATOR
+            else {"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1"}
+        ),
         popen_factory=factory,
     )
     assert process is not None
@@ -265,7 +297,9 @@ def test_session_rejects_conflicting_native_response_identity(tmp_path: Path) ->
     response = _valid_response(artifact)
     response["kernel_identity"] = "wrong-native-kernel"
     session, _ = _session(tmp_path, artifact, lambda command: response)
-    with pytest.raises(v4.V4ProtocolError, match="native identity field 'kernel_identity'"):
+    with pytest.raises(
+        v4.V4ProtocolError, match="native identity field 'kernel_identity'"
+    ):
         session.submit(artifact)
 
     header = v4.V4Header(
@@ -423,6 +457,145 @@ def test_physical_opt_in_and_backend_environment_guards(tmp_path: Path) -> None:
                 },
                 popen_factory=FakeProcess,
             )
+
+
+def test_simulator_profile_environment_ready_and_response_contract(
+    tmp_path: Path,
+) -> None:
+    profile = v4.V4Profile(
+        dpu_count=1,
+        execution_target=v4.EXECUTION_TARGET_SIMULATOR,
+        timeout_s=0.2,
+    )
+    artifact = _artifact(tmp_path, dpu_count=1)
+    session, process = _session(
+        tmp_path,
+        artifact,
+        lambda _command: _valid_response(artifact, profile=profile),
+        profile=profile,
+    )
+    assert process.stdin.commands == []
+    assert session.startup["target_requested"] == "simulator"
+    assert session.startup["target_observed"] == "sdk_simulator"
+    assert session.startup["rank_path"] is None
+    assert session.startup["hardware_allocation_verified"] is False
+    response = session.submit(artifact)
+    assert response["simulator_kernel_executed"] is True
+    assert response["hardware_kernel_executed"] is False
+    assert response["hardware_functionality_evidence"] is False
+    assert response["simulator_functionality_evidence"] is True
+    assert session.close().release_confirmed is True
+
+
+def test_simulator_profile_rejects_crossed_target_labels(tmp_path: Path) -> None:
+    profile = v4.V4Profile(
+        dpu_count=1,
+        execution_target=v4.EXECUTION_TARGET_SIMULATOR,
+        timeout_s=0.2,
+    )
+    artifact = _artifact(tmp_path)
+    session, _ = _session(
+        tmp_path,
+        artifact,
+        lambda _command: _valid_response(artifact),
+        profile=profile,
+    )
+    with pytest.raises(v4.V4ProtocolError, match="native identity"):
+        session.submit(artifact)
+
+
+def test_simulator_profile_rejects_crossed_ready_target_label(tmp_path: Path) -> None:
+    simulator_profile = v4.V4Profile(
+        dpu_count=1,
+        execution_target=v4.EXECUTION_TARGET_SIMULATOR,
+        timeout_s=0.2,
+    )
+    physical_profile = v4.V4Profile(
+        dpu_count=1,
+        rank_path="/dev/dpu_rank0",
+        timeout_s=0.2,
+    )
+
+    with pytest.raises(v4.V4ProtocolError, match="READY field 'target_requested'"):
+        session_v4.V4Session.start(
+            ["fake"],
+            session_root=tmp_path,
+            profile=simulator_profile,
+            environment={"DPU_BACKEND": "simulator"},
+            popen_factory=lambda *_args, **_kwargs: FakeProcess(
+                lambda _: None,
+                profile=physical_profile,
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    "environment",
+    [
+        {"DPU_BACKEND": "hardware"},
+        {"DPU_BACKEND": "simulator", "UPMEM_EXECUTION_MODE": "simulator"},
+    ],
+)
+def test_simulator_profile_rejects_conflicting_backend_environment(
+    tmp_path: Path, environment: dict[str, str]
+) -> None:
+    with pytest.raises(v4.V4Error, match="simulator_profile_violation"):
+        session_v4.V4Session.start(
+            ["fake"],
+            session_root=tmp_path,
+            profile=v4.V4Profile(
+                dpu_count=1,
+                execution_target=v4.EXECUTION_TARGET_SIMULATOR,
+            ),
+            environment=environment,
+            popen_factory=lambda *_args, **_kwargs: FakeProcess(lambda _: None),
+        )
+
+
+def test_simulator_profile_forbids_rank_path() -> None:
+    with pytest.raises(ValueError, match="forbid rank_path"):
+        v4.V4Profile(
+            dpu_count=1,
+            execution_target=v4.EXECUTION_TARGET_SIMULATOR,
+            rank_path="/dev/dpu_rank0",
+        )
+
+
+def test_simulator_profile_rejects_multiple_dpus() -> None:
+    with pytest.raises(ValueError, match="exactly one DPU"):
+        v4.V4Profile(
+            dpu_count=2,
+            execution_target=v4.EXECUTION_TARGET_SIMULATOR,
+        )
+
+
+def test_ready_validation_failure_terminates_native_process(tmp_path: Path) -> None:
+    profile = v4.V4Profile(
+        dpu_count=1,
+        rank_path="/dev/dpu_rank0",
+        timeout_s=0.2,
+    )
+    process: FakeProcess | None = None
+
+    def factory(*_args: object, **_kwargs: object) -> FakeProcess:
+        nonlocal process
+        process = FakeProcess(
+            lambda _command: None,
+            profile=profile,
+            ready_overrides={"allocation_verified": False},
+        )
+        return process
+
+    with pytest.raises(v4.V4ProtocolError, match="READY field"):
+        session_v4.V4Session.start(
+            ["fake-v4-host"],
+            session_root=tmp_path,
+            profile=profile,
+            environment={"UPMEM_ALLOW_PHYSICAL_HARDWARE": "1"},
+            popen_factory=factory,
+        )
+    assert process is not None
+    assert process.poll() is not None
 
 
 def test_successful_submit_and_release(tmp_path: Path) -> None:
