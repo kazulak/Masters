@@ -30,9 +30,11 @@ class Measurement:
 
 `total_wall_s` is measured once around the declared coordinator operation and
 is authoritative. Components need not sum to it because work may overlap.
-`rank_work_s` is the sum of rank durations and is never wall time. Unavailable
-values are `null`, not zero. Bytes are non-negative integers; times and energy
-are finite non-negative values.
+`rank_work_s` is the sum of rank durations and is never wall time. The current
+runtime leaves `rank_work_s` null unless it directly measures the declared
+quantity; it must never be inferred from per-rank values. Unavailable values
+are `null`, not zero. Bytes are non-negative integers; times and energy are
+finite non-negative values.
 
 Native counter capture needed by the coordinator is inside the timer. Canonical
 fact normalization, output hashing, validation, evidence serialization and

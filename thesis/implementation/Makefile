@@ -18,7 +18,7 @@ PUBLIC_TARGETS := \
 	help setup doctor test \
 	build-quest-cpu build-upmem-runtime \
 	plan run report verify qualify \
-	pidcomm-check clean-generated
+	clean-generated
 
 .PHONY: $(PUBLIC_TARGETS)
 
@@ -72,9 +72,6 @@ verify:
 qualify:
 	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1' >&2; exit 2; }
 	$(CLI) qualify --config $(PHYSICAL_CONFIG) --output $(OUTPUT) --allow-physical
-
-pidcomm-check:
-	$(PY_ENV) $(PYTHON) native/upmem/pidcomm_qualification/pidcomm_qualification_runner.py --compatibility-only --workdir .
 
 clean-generated:
 	rm -rf build .pytest_cache native/quest_cpu/bin native/quest_gpu/bin native/quest_gpu/build

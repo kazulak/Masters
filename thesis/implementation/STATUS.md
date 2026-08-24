@@ -3,23 +3,12 @@
 This status applies to the active post-reset code only. It is not a summary of
 historical experiments or a performance claim.
 
-## Software Qualification Checkpoint
+## Software Qualification State
 
-Source under test: `8122c75145d00526c4ad9ad2e03c7ce49d628d0e` on Python
-3.10.12 with a clean worktree. Constraint-file SHA-256:
-`269ae0c52099a299743ca765e5251f24edfc1347f4dbcd9927a7a7a4530b981e`.
-
-- `make test`: 449 passed in 23.17 s.
-- `ruff check src tests`: clean.
-- wheel and source distribution: built with `python -m build --no-isolation`.
-- QuEST CPU runner and ABI-v4 host/DPU binaries: clean builds passed.
-- default CPU/TN workflow: 12/12 samples passed verification.
-- SDK-simulator workflow: 6/6 samples and 2/2 sessions passed verification.
-- physical configuration preparation: 4 route entries planned without device
-  allocation.
-
-This checkpoint is software and simulator qualification. It is not physical
-UPMEM evidence.
+The authoritative M6 exact-head record is the annotated tag
+`thesis-m6-software-ready-v1` and its archived release bundle. Until that tag
+and release bundle exist, `software_merge_ready` is not established. The
+pending M6.4 qualification run must not be pre-claimed here.
 
 | Capability | Implemented | Software/simulator validation | Physical evidence | Claimable now |
 |---|---|---|---|---|
@@ -31,9 +20,9 @@ UPMEM evidence.
 | QuEST CPU adapter | Yes | Controlled software tests | No current reset run | Adapter availability, not CPU performance |
 | QuEST GPU adapter | Yes | Controlled software tests | No compatible GPU run | Capability detection and explicit unsupported result |
 | UPMEM physical mapping | Yes, bounded output/K tiles | Yes | Reset route pending | Plan construction only |
-| ABI-v4 UPMEM runtime | Yes | SDK simulator and controlled sessions | Reset route pending | Simulator correctness only |
-| Split-complex float32 | Yes | CPU replay and simulator | Reset route pending | Software/simulator correctness |
-| Split-complex packed int8 | Yes | CPU replay and simulator | Reset route pending | Software/simulator correctness and numeric facts |
+| ABI-v4 UPMEM runtime | Yes | Controlled simulator tests; M6.4 pending | Reset route pending | Controlled-test correctness only |
+| Split-complex float32 | Yes | Controlled CPU replay/simulator tests; M6.4 pending | Reset route pending | Controlled-test correctness only |
+| Split-complex packed int8 | Yes | Controlled CPU replay/simulator tests; M6.4 pending | Reset route pending | Controlled-test correctness and numeric facts |
 | Local contraction slicing | Yes | Yes | Reset route pending | Logical slicing correctness only |
 | Host reduction | Yes | Yes | Reset route pending | Bounded host-round-trip correctness |
 | DPU-resident intermediates | No | No | No | No claim |
@@ -48,14 +37,17 @@ UPMEM evidence.
 
 ## What Is Valid Today
 
-The active implementation can be described as a software-validated,
-simulator-checked pipeline from `SimulationJob` through a target-neutral
-`TensorNetwork`, selected path, `ContractionDAG`, direct CPU/TN execution or a
-bounded `UpmemPlan`, canonical evidence, and reports.
+Controlled tests cover the active pipeline from `SimulationJob` through a
+target-neutral `TensorNetwork`, selected path, `ContractionDAG`, direct CPU/TN
+execution or a bounded `UpmemPlan`, canonical evidence, and reports. These
+coverage results do not establish exact-head M6.4 qualification.
 
-The local SDK simulator has exercised the active one-rank, one-DPU ABI-v4
-route for split-complex float32 and shared-scale packed int8 against the CPU
-physical-plan replay. Simulator timing is not physical performance evidence.
+The active M6.4 simulator configuration is deterministic sliced complex
+4-qubit `quantization_stress`: four partial branches, one host reduction, and
+split-complex float32 plus shared-scale packed int8 routes on one rank, one DPU
+and one tasklet. When executed and verified during M6.4, it produces
+simulator-only correctness evidence. It has not yet established exact-head
+qualification, and its timing is never physical performance evidence.
 
 ## Physical Qualification State
 
@@ -86,8 +78,9 @@ UPMEM TN acceleration.
 - **SimplePIM:** pinned management types and its initialization kernel are used
   around raw-SDK allocation/dispatch. No high-level scheduling route is yet
   qualified.
-- **PID-Comm:** `make pidcomm-check` runs a standalone compatibility harness.
-  It is not integrated as a communication provider.
+- **PID-Comm:** the retained `native/upmem/pidcomm_qualification/` source is a
+  standalone future compatibility harness. It is not an active communication
+  provider or public command.
 - **ATiM:** not integrated.
 
 The next measured upgrade should follow physical one-DPU qualification: first

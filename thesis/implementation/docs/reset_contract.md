@@ -143,8 +143,10 @@ class UpmemStage:
     work_units: tuple[UpmemWorkUnit, ...]
 ```
 
-`contract_batch` contains work units. `host_reduce` names one reduction node
-and contains no work units. Stage and node IDs are unique; work-unit IDs are
+`contract_batch` contains work units and is a deterministic logical grouping
+whose work units execute sequentially today. It is not a concurrent batch or
+slice-group execution mechanism. `host_reduce` names one reduction node and
+contains no work units. Stage and node IDs are unique; work-unit IDs are
 globally unique; work units reference a declared stage node. Work-unit fields
 record rank/DPU/wave, tile coordinates and sizes, aligned MRAM bytes, and
 estimated arithmetic work. These estimates are plan metadata, not measured
@@ -199,12 +201,16 @@ resource release. Canonical validation rejects missing links, duplicate IDs,
 wrong counts, routes outside or missing from the experiment matrix, invalid
 scopes, failed release, or identity mismatches.
 
-Claim admission is explicit. Functional correctness requires a valid sample and
-passed applicable validation. Physical execution requires physical UPMEM facts;
-simulator and model routes are excluded. Timing rejects model/simulator rows
-and requires measured timing facts. Speedup requires a physical UPMEM candidate,
-a validated CPU same-plan baseline, matching semantic/TN/logical/physical-plan
-identities, matching timing scope, clean linked artifacts, repetitions, and
-non-bring-up timing. Scaling requires a matched physical pair. Energy requires
-positive measured energy, sensor/counter identity, interval, boundary and
-provenance. A rejected claim must remain visible with reasons.
+Claim admission is explicit. Execution/policy correctness requires a successful
+sample and an applicable, passed policy reference. Full-precision accuracy
+qualification additionally requires `accuracy_qualified=true`. Physical
+execution requires physical UPMEM facts; simulator and model routes are
+excluded. Timing rejects model/simulator rows and requires measured timing
+facts. A speedup candidate must have an applicable and passed policy reference,
+`accuracy_qualified=true`, qualified physical
+provenance, and matching scope and identities. Its matching CPU same-plan
+baseline must have `accuracy_qualified=true` and pass its policy reference when
+applicable. Clean linked artifacts, repeated measurements, and a non-bring-up
+timing scope remain required. Scaling requires a matched physical pair. Energy
+requires positive measured energy, sensor/counter identity, interval, boundary
+and provenance. A rejected claim must remain visible with reasons.

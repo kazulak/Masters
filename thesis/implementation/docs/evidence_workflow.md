@@ -50,6 +50,14 @@ An unsupported row is a preflight capability rejection. A failed row records a
 runtime attempt and failure stage. Fatal external termination may leave an
 incomplete artifact; verification must reject it as incomplete.
 
+Samples use `evidence_sample_v2`; reports use `evidence_report_v2`. Manifests
+and sessions remain v1, and sample v1 evidence is unsupported. Sample `status`
+describes whether the complete attempt finished: a validator exception creates
+a failed sample, while a policy-reference mismatch or accuracy qualification
+miss remains a successful sample with its measurement, output hash, and facts
+retained. Policy-reference correctness is reported separately from
+`accuracy_qualified`.
+
 ## Copy ETH Results
 
 On ETH, archive the completed run directory without changing its contents:
@@ -97,12 +105,14 @@ outputs or unreviewed reports to Git.
 
 Claim guards are mandatory. Model and SDK-simulator rows support diagnostic
 correctness/protocol checks only, not physical timing, scaling, speedup or
-energy. Physical execution requires physical backend facts and validated
-release. Speedup additionally requires a validated CPU same-plan baseline,
-matching plan and timing identities, repeated measured samples, clean linked
-artifacts, and a non-bring-up scope. Energy requires measured energy with
-boundary, sensor/counter identity, interval and provenance. A rejected claim
-must be reported with its reasons.
+energy. A speedup candidate must have an applicable and passed policy reference,
+`accuracy_qualified=true`, qualified physical provenance, and matching scope
+and identities. Its matching CPU same-plan baseline must have
+`accuracy_qualified=true` and pass its policy reference when applicable.
+Repeated measured samples, clean linked artifacts, and a non-bring-up scope
+remain required. Energy requires measured energy with boundary, sensor/counter
+identity, interval and provenance. A rejected claim must be reported with its
+reasons.
 
 This workflow records capability and evidence; it does not claim that any
 physical UPMEM qualification has been completed.

@@ -32,7 +32,10 @@ canonicalization belong to the UPMEM mapping.
 
 `UpmemPlan` is a physical plan derived from a DAG. It records numeric policy,
 topology, ordered `contract_batch` and `host_reduce` stages, real-tile work
-units, and kernel policy. The current intermediate policy is host round-trip.
+units, and kernel policy. `contract_batch` is a deterministic logical grouping
+whose work units execute sequentially today; it is not a concurrent batch or
+slice-group execution mechanism. The current intermediate policy is host
+round-trip.
 
 ## Ownership Boundaries
 
@@ -129,11 +132,15 @@ integrated.
 
 ## Current Limits
 
-The reset architecture is software- and SDK-simulator-validated. Its physical
-UPMEM route is not yet ETH-qualified. Consequently, current code supports no
-claim of physical speedup, energy efficiency, multi-rank scaling, or general
-UPMEM TN execution. Physical qualification is a separate run using the exact
-source, native binaries, topology, and configuration recorded in evidence.
+Controlled tests cover the reset software and SDK-simulator boundaries,
+including prior ABI-v4 complex float32/int8 checks. The deterministic sliced
+complex simulator workflow is configured for M6.4, but exact-head software
+qualification remains pending until its annotated tag and release bundle
+exist. The physical UPMEM route is not yet ETH-qualified. Consequently,
+current code supports no claim of physical speedup, energy efficiency,
+multi-rank scaling, or general UPMEM TN execution. Physical qualification is a
+separate run using the exact source, native binaries, topology, and
+configuration recorded in evidence.
 
 The next measured upgrade should be driven by physical one-DPU qualification,
 then tasklet/DPU scaling, slice scheduling, residency, communication, and

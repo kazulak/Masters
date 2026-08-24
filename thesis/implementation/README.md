@@ -52,8 +52,6 @@ UPMEM_ALLOW_PHYSICAL_HARDWARE=1 \
   make qualify PHYSICAL_CONFIG=configs/tn_benchmark_physical.yml \
   OUTPUT=runs/physical-run
 
-# Standalone future PID-Comm compatibility harness.
-make pidcomm-check
 ```
 
 `configs/tn_benchmark_reset.yml` is the default CPU/TN software smoke suite.
@@ -64,6 +62,13 @@ the target machine and build the matching tasklet-count binaries.
 `plan` writes a deterministic experiment plan without execution. `run` writes
 canonical evidence. `verify` checks evidence identities and integrity.
 `report` only reads existing evidence and produces tables and plots.
+
+Samples use `evidence_sample_v2`; reports use `evidence_report_v2`. Manifests
+and sessions remain v1. Sample v1 evidence is unsupported. Sample `status`
+describes whether the complete attempt finished: a validator exception produces
+a failed sample, while a policy-reference or accuracy qualification miss
+remains a successful sample with its measurement and facts retained.
+Policy-reference correctness is reported separately from `accuracy_qualified`.
 
 ## Evidence and Comparison Rules
 
@@ -83,16 +88,21 @@ SDK-simulator runs are correctness evidence only.
 
 ## Current Capability Boundary
 
-The reset architecture is software- and SDK-simulator-validated. The reset
-physical UPMEM route has **not** yet been qualified on ETH hardware. The
-repository therefore makes no reset-route claim of speedup, energy efficiency,
-multi-rank scaling, broad graph residency, or hardware-calibrated planning.
+Controlled software tests cover the active CPU/TN and SDK-simulator paths,
+including prior ABI-v4 float32/int8 simulator checks against CPU replay. The
+deterministic sliced complex workflow is configured for M6.4, but exact-head
+software qualification remains pending until
+`thesis-m6-software-ready-v1` and its release bundle exist. The reset physical
+UPMEM route has **not** yet been qualified on ETH hardware. The repository
+therefore makes no reset-route claim of speedup, energy efficiency, multi-rank
+scaling, broad graph residency, or hardware-calibrated planning.
 
 The active native runtime uses pinned SimplePIM management types and its
 initialization kernel around raw-SDK allocation and dispatch. It is not yet a
-qualified high-level SimplePIM scheduler or compute route. The PID-Comm
-qualification harness is retained, but PID-Comm is not an active communication
-provider. ATiM is not integrated.
+qualified high-level SimplePIM scheduler or compute route. The retained
+`native/upmem/pidcomm_qualification/` source is standalone future source;
+PID-Comm is not an active communication provider or public command. ATiM is
+not integrated.
 
 ## Repository Layout
 

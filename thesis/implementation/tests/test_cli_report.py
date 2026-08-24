@@ -49,6 +49,38 @@ def _command(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def test_make_public_targets_are_exact_and_pidcomm_is_private() -> None:
+    help_result = _command("make", "help")
+    assert help_result.returncode == 0
+    assert "pidcomm" not in help_result.stdout.lower()
+    assert "make setup" in help_result.stdout
+    assert "make verify" in help_result.stdout
+
+    dry_run = _command("make", "-n", "pidcomm-check")
+    assert dry_run.returncode != 0
+
+    database = _command("make", "-pn", "help")
+    assert database.returncode == 0
+    public_line = next(
+        line for line in database.stdout.splitlines()
+        if line.startswith("PUBLIC_TARGETS := ")
+    )
+    assert public_line.removeprefix("PUBLIC_TARGETS := ").split() == [
+        "help",
+        "setup",
+        "doctor",
+        "test",
+        "build-quest-cpu",
+        "build-upmem-runtime",
+        "plan",
+        "run",
+        "report",
+        "verify",
+        "qualify",
+        "clean-generated",
+    ]
+
+
 def _config() -> str:
     return """\
 schema_version: tn_benchmark_v1
