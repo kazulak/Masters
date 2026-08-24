@@ -2,8 +2,13 @@ import numpy as np
 import pytest
 
 from quantum_bench.circuits import builtin_circuit
-from quantum_bench.lowering import lower_tensor_network, validate_tensor_inputs
+from quantum_bench.lowering import (
+    build_full_einsum_expression,
+    lower_tensor_network,
+    validate_tensor_inputs,
+)
 from quantum_bench.model import make_simulation_job
+from quantum_bench.model import TensorSpec
 
 
 def test_network_structure_and_values_are_separate():
@@ -61,3 +66,19 @@ def test_tensor_input_validation_rejects_dtype_mismatch():
 
     with pytest.raises(ValueError, match="dtype"):
         validate_tensor_inputs(network, wrong)
+
+
+def test_full_einsum_expression_uses_numpy_letters_at_exact_limit():
+    tensors = [TensorSpec(f"tensor_{label}", (label,), (2,), "dense") for label in range(52)]
+
+    expression = build_full_einsum_expression(tensors, (0,))
+
+    assert not expression.startswith("__label_list_einsum_required__")
+
+
+def test_full_einsum_expression_uses_label_list_sentinel_above_numpy_limit():
+    tensors = [TensorSpec(f"tensor_{label}", (label,), (2,), "dense") for label in range(53)]
+
+    expression = build_full_einsum_expression(tensors, (0,))
+
+    assert expression == "__label_list_einsum_required__:labels=53"

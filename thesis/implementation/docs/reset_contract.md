@@ -222,7 +222,9 @@ class EncodedComplexTensor:
 
 `real` and `imag` have the same shape, are owned C-contiguous copies, and are
 read-only. Encoding is pure, never mutates the input, and rejects non-finite
-values and unsupported policies. The public pure functions are:
+values and unsupported policies. `saturation_real` and `saturation_imag` count
+rounded values outside `[-127, 127]` before clipping; values that legitimately
+land on an endpoint are not counted. The public pure functions are:
 
 ```python
 def encode_complex_tensor(

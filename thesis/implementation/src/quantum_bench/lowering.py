@@ -15,12 +15,6 @@ from itertools import product
 from typing import Iterable, Mapping, Sequence
 
 from quantum_bench.circuits import gate_structure, gate_tensor
-from quantum_bench.core.indices import (
-    LABEL_LIST_EINSUM_SENTINEL,
-    index_symbols,
-    label_count,
-    supports_string_einsum,
-)
 from quantum_bench.model import (
     ContractionDAG,
     ContractNode,
@@ -34,6 +28,33 @@ from quantum_bench.model import (
 )
 
 import numpy as np
+
+
+_EINSUM_SYMBOLS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+LABEL_LIST_EINSUM_SENTINEL = "__label_list_einsum_required__"
+
+
+def _index_symbols(
+    label_sets: list[tuple[int, ...]], output_labels: tuple[int, ...]
+) -> dict[int, str]:
+    labels = sorted(
+        {label for labels in label_sets for label in labels} | set(output_labels)
+    )
+    if len(labels) > len(_EINSUM_SYMBOLS):
+        raise ValueError("Too many tensor indices for NumPy einsum symbol set")
+    return {label: _EINSUM_SYMBOLS[index] for index, label in enumerate(labels)}
+
+
+def _label_count(
+    label_sets: list[tuple[int, ...]], output_labels: tuple[int, ...]
+) -> int:
+    return len({label for labels in label_sets for label in labels} | set(output_labels))
+
+
+def _supports_string_einsum(
+    label_sets: list[tuple[int, ...]], output_labels: tuple[int, ...]
+) -> bool:
+    return _label_count(label_sets, output_labels) <= len(_EINSUM_SYMBOLS)
 
 
 def lower_tensor_network(
@@ -164,9 +185,9 @@ def build_full_einsum_expression(
     tensors: list[TensorSpec], output_labels: tuple[int, ...]
 ) -> str:
     label_sets = [tensor.labels for tensor in tensors]
-    if not supports_string_einsum(label_sets, output_labels):
-        return f"{LABEL_LIST_EINSUM_SENTINEL}:labels={label_count(label_sets, output_labels)}"
-    symbols = index_symbols([tensor.labels for tensor in tensors], output_labels)
+    if not _supports_string_einsum(label_sets, output_labels):
+        return f"{LABEL_LIST_EINSUM_SENTINEL}:labels={_label_count(label_sets, output_labels)}"
+    symbols = _index_symbols([tensor.labels for tensor in tensors], output_labels)
     operands = [
         "".join(symbols[label] for label in tensor.labels) for tensor in tensors
     ]

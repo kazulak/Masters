@@ -23,7 +23,6 @@ from typing import Any, Callable, Mapping, Protocol
 
 import numpy as np
 
-from quantum_bench.formats.fixed_point import FixedPointSpec, quantize_fixed_point
 from quantum_bench.lowering import (
     contraction_dag_hash,
     validate_contraction_dag,
@@ -98,11 +97,11 @@ def _encode_real_plane(
         raise ValueError("numeric policy requires finite tensors")
     if not _is_packed_policy(policy):
         return real, 1.0, 0
-    converted = quantize_fixed_point(real, FixedPointSpec(route_dtype="int8"))
+    converted = encode_complex_tensor(real, _NUMERIC_POLICY_INT8)
     return (
-        np.ascontiguousarray(converted.array, dtype=np.int8),
-        float(converted.record.scale),
-        int(converted.record.saturation_count),
+        np.ascontiguousarray(converted.real, dtype=np.int8),
+        float(converted.scale),
+        int(converted.saturation_real),
     )
 
 
