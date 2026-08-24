@@ -3,6 +3,24 @@
 This status applies to the active post-reset code only. It is not a summary of
 historical experiments or a performance claim.
 
+## Software Qualification Checkpoint
+
+Source under test: `8122c75145d00526c4ad9ad2e03c7ce49d628d0e` on Python
+3.10.12 with a clean worktree. Constraint-file SHA-256:
+`269ae0c52099a299743ca765e5251f24edfc1347f4dbcd9927a7a7a4530b981e`.
+
+- `make test`: 449 passed in 23.17 s.
+- `ruff check src tests`: clean.
+- wheel and source distribution: built with `python -m build --no-isolation`.
+- QuEST CPU runner and ABI-v4 host/DPU binaries: clean builds passed.
+- default CPU/TN workflow: 12/12 samples passed verification.
+- SDK-simulator workflow: 6/6 samples and 2/2 sessions passed verification.
+- physical configuration preparation: 4 route entries planned without device
+  allocation.
+
+This checkpoint is software and simulator qualification. It is not physical
+UPMEM evidence.
+
 | Capability | Implemented | Software/simulator validation | Physical evidence | Claimable now |
 |---|---|---|---|---|
 | Circuit to TN lowering | Yes | Yes | Not applicable | Correct lowering within supported circuit/query scope |
