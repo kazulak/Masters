@@ -5,13 +5,13 @@ defaults:
   repetitions: 2
   timeout_s: 120.0
 cases:
-  complex_2q:
+  complex_sliced_4q:
     circuit:
       kind: builtin
       name: quantization_stress
       path: null
       parameters:
-        n_qubits: 2
+        n_qubits: 4
         repeat_layers: 2
 plans:
   greedy:
@@ -20,7 +20,9 @@ plans:
       mode: greedy
       max_repeats: 1
       seed: 0
-    slicing: null
+    slicing:
+      node_id: contract_24
+      minimum_slice_count: 4
 routes:
   simulator_float32:
     executor: upmem_sdk_simulator
@@ -45,6 +47,6 @@ routes:
       dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t1
       initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t1
 matrix:
-  - case_id: complex_2q
+  - case_id: complex_sliced_4q
     plan_id: greedy
     route_ids: [simulator_float32, simulator_int8]

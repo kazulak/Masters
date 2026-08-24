@@ -403,6 +403,69 @@ def test_plan_never_opens_a_session_and_writes_deterministic_document(
     assert document["schema_version"] == "tn_benchmark_plan_v1"
 
 
+def test_simulator_plan_freezes_complex_sliced_qualification_fixture(
+    tmp_path: Path,
+) -> None:
+    result = cli.plan_command(
+        str(ROOT / "configs" / "tn_benchmark_simulator.yml"),
+        str(tmp_path / "simulator-plan"),
+    )
+
+    assert result["status"] == "planned"
+    document = json.loads(
+        (tmp_path / "simulator-plan" / "plan.json").read_text(encoding="utf-8")
+    )
+    entries = {entry["route_id"]: entry for entry in document["entries"]}
+    assert set(entries) == {"simulator_float32", "simulator_int8"}
+
+    float_entry = entries["simulator_float32"]
+    int8_entry = entries["simulator_int8"]
+    assert float_entry["problem_id"] == (
+        "42b85161b341872ea93285b649d9fbb9d146de3f378228309826722a071d925d"
+    )
+    assert float_entry["tensor_network_structure_id"] == (
+        "21aca2c497034eea383263931b6bdf6f1f8f03c791a587e721b92b584d38a856"
+    )
+    assert int8_entry["problem_id"] == float_entry["problem_id"]
+    assert (
+        int8_entry["tensor_network_structure_id"]
+        == float_entry["tensor_network_structure_id"]
+    )
+    assert float_entry["logical_plan_id"] == (
+        "fd59ad9414b06631f0dc068b36bf8f2b8b7e0cd72000fdf20045f35cd32ed902"
+    )
+    assert int8_entry["logical_plan_id"] == float_entry["logical_plan_id"]
+    assert float_entry["upmem"]["physical_plan_id"] == (
+        "cd614d6c5054abe98df1f4b2b3439560c2c982bcfd62ff09657f6b35be998260"
+    )
+    assert int8_entry["upmem"]["physical_plan_id"] == (
+        "d97900ec5598c3ada4935752f2f6f38a04b076cdc9c476cfb1d2c23c1c659952"
+    )
+    assert (
+        float_entry["upmem"]["physical_plan_id"]
+        != int8_entry["upmem"]["physical_plan_id"]
+    )
+
+    branches = [
+        "contract_24__slice__label_12_value_0__label_14_value_0",
+        "contract_24__slice__label_12_value_0__label_14_value_1",
+        "contract_24__slice__label_12_value_1__label_14_value_0",
+        "contract_24__slice__label_12_value_1__label_14_value_1",
+    ]
+    reduction = "contract_24__reduce__label_12__label_14"
+    relevant_node_ids = {*branches, reduction}
+    for entry in (float_entry, int8_entry):
+        relevant_stages = [
+            (stage["kind"], stage["node_ids"])
+            for stage in entry["upmem"]["stages"]
+            if any(node_id in relevant_node_ids for node_id in stage["node_ids"])
+        ]
+        assert relevant_stages == [
+            ("contract_batch", branches),
+            ("host_reduce", [reduction]),
+        ]
+
+
 def test_run_direct_dispatch_writes_exact_evidence_files(tmp_path: Path) -> None:
     config = tmp_path / "config.yml"
     _write_config(config, _numpy_config(warmups=1, repetitions=2))
