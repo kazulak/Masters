@@ -104,6 +104,12 @@ QuEST routes include circuit translation, state setup, execution, and query
 extraction. `steady_execution_v1` measures a reusable open execution context
 from input encoding to decoded output.
 
+The scope definition is broader than current route support. Direct
+Quimb/cotengra and QuEST routes emit `simulation_end_to_end_v1`. NumPy
+same-DAG and UPMEM routes emit `steady_execution_v1` because their DAG or
+session is prepared before repetitions. A matched end-to-end
+NumPy-versus-UPMEM comparison is not yet available.
+
 Physical routes fail closed: no simulator or CPU fallback can satisfy a
 physical request. Simulator evidence is never admitted as physical timing,
 speedup, scaling, or energy evidence.

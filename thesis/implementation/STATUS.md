@@ -26,6 +26,7 @@ historical experiments or a performance claim.
 | ATiM kernel provider | No | No | No | No claim |
 | Energy measurement | No | Evidence schema supports null field | No | No energy claim |
 | Hardware-calibrated planner | No | No | No | No planner-performance claim |
+| Matched NumPy/UPMEM end-to-end scope | No | Scope mismatch is rejected | No | No end-to-end speedup claim |
 
 ## What Is Valid Today
 
