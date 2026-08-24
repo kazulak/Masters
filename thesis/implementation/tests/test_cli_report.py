@@ -1075,6 +1075,43 @@ def test_report_excludes_sdk_simulator_speedup(tmp_path: Path) -> None:
 
     assert report["speedup_count"] == 0
     assert report["speedup_rejections"]["simulator_execution"] == 1
+    assert report["simulator_timing"]["present"] is True
+
+
+def test_report_ignores_non_upmem_routes_for_speedup(tmp_path: Path) -> None:
+    run_id, experiment_id, environment_id_value, policy_id = _ids()
+    samples = [
+        _sample(
+            run_id=run_id,
+            experiment_id=experiment_id,
+            environment_id=environment_id_value,
+            validation_policy_id=policy_id,
+            case_id="bell",
+            route_id=route,
+            index=index,
+            total_wall_s=2.0 if route == "cpu" else 1.0,
+            facts=(
+                {"backend_id": "numpy_cpu_v1"}
+                if route == "cpu"
+                else {
+                    "backend_id": "quimb_tn_v1",
+                    "backend_family": "quimb",
+                    "hardware_execution": False,
+                }
+            ),
+        )
+        for route in ("cpu", "quimb")
+        for index in range(2)
+    ]
+
+    report = report_artifacts(
+        _artifact(tmp_path / "evidence", samples),
+        tmp_path / "report",
+    )
+
+    assert report["speedup_count"] == 0
+    assert report["speedup_rejections"] == {}
+    assert report["simulator_timing"]["present"] is False
 
 
 def test_report_admits_physical_speedup_from_terminal_session_facts(

@@ -112,6 +112,11 @@ def report_artifacts(
     else:
         speedups, rejections = _admit_speedups(aggregates)
     verification = _verification_summary(manifest, samples, sessions)
+    simulator_present = any(
+        _all_fact_values(aggregate, "target_observed", "sdk_simulator")
+        or _any_fact_true(aggregate, "simulator_kernel_executed")
+        for aggregate in aggregates
+    )
     report = {
         "schema_version": "evidence_report_v1",
         "status": "completed",
@@ -126,8 +131,13 @@ def report_artifacts(
         "unsupported_count": verification["unsupported_count"],
         "session_count": len(sessions),
         "simulator_timing": {
-            "diagnostic_only": True,
-            "prohibited_claims": ["timing", "scaling", "speedup", "energy"],
+            "present": simulator_present,
+            "diagnostic_only": simulator_present,
+            "prohibited_claims": (
+                ["timing", "scaling", "speedup", "energy"]
+                if simulator_present
+                else []
+            ),
         },
         "energy": {
             "measurement_count": sum(
@@ -378,6 +388,8 @@ def _admit_speedups(
     for candidate in rows:
         if _all_fact_values(candidate, "backend_id", "numpy_cpu_v1"):
             continue
+        if not _is_upmem_candidate(candidate):
+            continue
         reason = _speedup_rejection(candidate, baselines)
         if reason is not None:
             rejections[reason] += 1
@@ -407,6 +419,21 @@ def _admit_speedups(
     return sorted(
         speedups, key=lambda row: tuple(str(row[key]) for key in _SPEEDUP_COLUMNS)
     ), rejections
+
+
+def _is_upmem_candidate(aggregate: Mapping[str, object]) -> bool:
+    facts = aggregate["_joined_backend_facts"]
+    return isinstance(facts, list) and bool(facts) and all(
+        isinstance(sample_facts, Mapping)
+        and (
+            str(sample_facts.get("backend_id") or "").startswith("upmem_")
+            or sample_facts.get("execution_class")
+            in {"sdk_simulator", "physical_hardware"}
+            or sample_facts.get("target_observed")
+            in {"sdk_simulator", "physical_hardware"}
+        )
+        for sample_facts in facts
+    )
 
 
 def _speedup_rejection(
