@@ -1,0 +1,52 @@
+schema_version: tn_benchmark_v1
+experiment_id: one-dpu-complex-qualification
+defaults:
+  warmups: 1
+  repetitions: 5
+  timeout_s: 120.0
+cases:
+  complex_2q:
+    circuit:
+      kind: builtin
+      name: quantization_stress
+      path: null
+      parameters:
+        n_qubits: 2
+        repeat_layers: 2
+plans:
+  greedy:
+    planner:
+      engine: opt_einsum
+      mode: greedy
+      max_repeats: 1
+      seed: 0
+    slicing: null
+routes:
+  upmem_float32_1dpu:
+    executor: upmem_physical
+    numeric_policy: split_complex_float32_v1
+    options:
+      dpu_count: 1
+      rank_count: 1
+      tasklets_per_dpu: 1
+      session_root: ../runs/upmem_sessions/physical_float32
+      host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t1
+      dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t1
+      initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t1
+      rank_paths: [/dev/dpu_rank0]
+  upmem_int8_1dpu:
+    executor: upmem_physical
+    numeric_policy: split_complex_int8_shared_scale_v1
+    options:
+      dpu_count: 1
+      rank_count: 1
+      tasklets_per_dpu: 1
+      session_root: ../runs/upmem_sessions/physical_int8
+      host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t1
+      dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t1
+      initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t1
+      rank_paths: [/dev/dpu_rank0]
+matrix:
+  - case_id: complex_2q
+    plan_id: greedy
+    route_ids: [upmem_float32_1dpu, upmem_int8_1dpu]
