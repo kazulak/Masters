@@ -675,6 +675,25 @@ def test_replay_int8_raw_lane_hashes_are_exact_little_endian_int32() -> None:
     assert record["sha256"] == hashlib.sha256(expected.tobytes()).hexdigest()
 
 
+def test_raw_lane_evidence_uses_runtime_canonical_order() -> None:
+    value = np.zeros((1, 1), dtype=np.int32)
+    unordered = (
+        ("contract_2", "tile", "ir", value),
+        ("contract_10", "tile", "ri", value),
+        ("contract_10", "tile", "rr", value),
+        ("contract_2", "tile", "ii", value),
+    )
+
+    ordered = sorted(unordered, key=cpu._raw_lane_sort_key)
+
+    assert [(item[0], item[2]) for item in ordered] == [
+        ("contract_10", "rr"),
+        ("contract_10", "ri"),
+        ("contract_2", "ii"),
+        ("contract_2", "ir"),
+    ]
+
+
 @pytest.mark.parametrize("policy", [FLOAT, INT8])
 def test_replay_unilateral_contraction_reduces_before_encoding(policy: str) -> None:
     left = TensorSpec("left", (0, 1), (2, 3), "dense", dtype="complex128")

@@ -492,7 +492,9 @@ def replay_upmem_plan_once(
     total_wall_s = time.perf_counter() - started
     operand_records = tuple(
         _operand_record(node_id, side, encoded)
-        for node_id, side, encoded in encoded_operands
+        for node_id, side, encoded in sorted(
+            encoded_operands, key=lambda item: (item[0], item[1])
+        )
     )
     numeric_facts = {
         "numeric_policy": plan.numeric_policy,
@@ -505,7 +507,9 @@ def replay_upmem_plan_once(
         "operand_records": operand_records,
         "raw_lane_records": tuple(
             _raw_lane_record(node_id, tile_id, lane, value)
-            for node_id, tile_id, lane, value in raw_lanes
+            for node_id, tile_id, lane, value in sorted(
+                raw_lanes, key=_raw_lane_sort_key
+            )
         ),
     }
     return ExecutionSample(
@@ -778,6 +782,13 @@ def _raw_lane_record(
         "sha256": _payload_sha256(value, dtype=dtype),
         "exact": integer,
     }
+
+
+def _raw_lane_sort_key(
+    value: tuple[str, str, str, np.ndarray],
+) -> tuple[str, str, int]:
+    lane_order = {"rr": 0, "ii": 1, "ri": 2, "ir": 3}
+    return value[0], value[1], lane_order.get(value[2], len(lane_order))
 
 
 def _payload_sha256(value: np.ndarray, *, dtype: np.dtype | None = None) -> str:

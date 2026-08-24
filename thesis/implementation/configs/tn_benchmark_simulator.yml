@@ -1,0 +1,50 @@
+schema_version: tn_benchmark_v1
+experiment_id: abi-v4-complex-simulator
+defaults:
+  warmups: 1
+  repetitions: 2
+  timeout_s: 120.0
+cases:
+  complex_2q:
+    circuit:
+      kind: builtin
+      name: quantization_stress
+      path: null
+      parameters:
+        n_qubits: 2
+        repeat_layers: 2
+plans:
+  greedy:
+    planner:
+      engine: opt_einsum
+      mode: greedy
+      max_repeats: 1
+      seed: 0
+    slicing: null
+routes:
+  simulator_float32:
+    executor: upmem_sdk_simulator
+    numeric_policy: split_complex_float32_v1
+    options:
+      dpu_count: 1
+      rank_count: 1
+      tasklets_per_dpu: 1
+      session_root: ../runs/upmem_sessions/simulator_float32
+      host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t1
+      dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t1
+      initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t1
+  simulator_int8:
+    executor: upmem_sdk_simulator
+    numeric_policy: split_complex_int8_shared_scale_v1
+    options:
+      dpu_count: 1
+      rank_count: 1
+      tasklets_per_dpu: 1
+      session_root: ../runs/upmem_sessions/simulator_int8
+      host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t1
+      dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t1
+      initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t1
+matrix:
+  - case_id: complex_2q
+    plan_id: greedy
+    route_ids: [simulator_float32, simulator_int8]
