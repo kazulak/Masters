@@ -1,66 +1,24 @@
-"""Public Make, CLI, and active-suite behavior."""
+"""Small tests for the active Makefile and CLI workflow."""
 
 from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 
-import quantum_bench.routing as routing
-import scripts.research_benchmark_pack as benchmark_pack
-from quantum_bench.bench.config import load_suite
+import quantum_bench.cli as cli
 
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON = sys.executable
-PUBLIC_TARGETS = (
-    "help",
-    "help-all",
-    "test",
-    "setup",
-    "build-quest-cpu",
-    "doctor",
-    "bench-cpu",
-    "bench-gpu",
-    "bench-upmem-sim",
-    "upmem-hw-taskgraph-resident-plan",
-    "upmem-hw-taskgraph-resident",
-    "upmem-hw-taskgraph-resident-report",
-    "upmem-hw-m5-1-plan",
-    "upmem-hw-m5-1",
-    "upmem-hw-m5-1-report",
-    "upmem-hw-m5-2-plan",
-    "evidence-inbox",
-    "research-plan",
-    "planner-evidence",
-    "planner-report",
-    "thesis-run",
-    "thesis-promote",
-    "thesis-promote-historical",
-    "thesis-verify",
-    "thesis-report",
-    "list-runs",
-    "thesis-clean",
-    "archive-evidence",
-    "thesis-release",
-    "clean-generated",
-)
 
 
-def _command(
-    *args: str,
-    extra_env: dict[str, str] | None = None,
-    clear_env: tuple[str, ...] = (),
-) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
-    env.update({"PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": "src"})
-    for name in clear_env:
-        env.pop(name, None)
-    env.update(extra_env or {})
+def _command(*args: str) -> subprocess.CompletedProcess[str]:
+    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": "src"}
     return subprocess.run(
         list(args),
         cwd=ROOT,
@@ -71,94 +29,205 @@ def _command(
     )
 
 
-@pytest.mark.parametrize("target", PUBLIC_TARGETS)
-def test_public_make_target_has_a_dry_run(target: str) -> None:
-    result = _command("make", "-n", f"PYTHON={PYTHON}", target)
+def _numpy_config() -> str:
+    return """\
+schema_version: tn_benchmark_v1
+experiment_id: public-workflow
+defaults:
+  warmups: 0
+  repetitions: 1
+  timeout_s: 5.0
+cases:
+  bell:
+    circuit:
+      kind: builtin
+      name: bell_2q
+      path: null
+      parameters: {}
+plans:
+  greedy:
+    planner:
+      engine: opt_einsum
+      mode: greedy
+      max_repeats: 1
+      seed: 0
+    slicing: null
+routes:
+  numpy:
+    executor: numpy_dag
+    numeric_policy: split_complex_float32_v1
+    options: {}
+matrix:
+  - case_id: bell
+    plan_id: greedy
+    route_ids: [numpy]
+"""
+
+
+def _physical_config() -> str:
+    return _numpy_config().replace(
+        "  numpy:\n    executor: numpy_dag\n    numeric_policy: split_complex_float32_v1\n    options: {}",
+        "  physical:\n"
+        "    executor: upmem_physical\n"
+        "    numeric_policy: split_complex_float32_v1\n"
+        "    options:\n"
+        "      dpu_count: 1\n"
+        "      rank_count: 1\n"
+        "      tasklets_per_dpu: 1\n"
+        "      session_root: native/upmem/runtime\n"
+        "      host_binary: native/upmem/runtime/bin/host_upmem_execution_plan_v4_t1\n"
+        "      dpu_binary: native/upmem/runtime/bin/dpu_gemm_tile_v4_t1\n"
+        "      initialization_binary: native/upmem/runtime/bin/dpu_simplepim_management_init_t1\n"
+        "      rank_paths: [/dev/dpu_rank0]",
+    ).replace("route_ids: [numpy]", "route_ids: [physical]")
+
+
+def test_make_help_lists_only_active_workflow() -> None:
+    result = _command("make", "help")
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip()
+    for target in (
+        "make plan",
+        "make run",
+        "make report",
+        "make verify",
+        "make build-upmem-runtime",
+        "make qualify",
+    ):
+        assert target in result.stdout
+    for obsolete in ("bench-cpu", "thesis-run", "upmem-hw-m5", "research-plan"):
+        assert obsolete not in result.stdout
 
 
-def test_upmem_simulator_suite_is_generic_only() -> None:
-    suite = load_suite(ROOT / "configs" / "suites" / "upmem_sim_evidence.yml")
-    route = next(
-        config
-        for config in suite["_route_configs"]
-        if config["id"] == "upmem_tn_sdk_simulator_quantized"
-    )
-
-    assert route["options"]["policy"] == "generic-only"
-
-
-def test_research_registry_cannot_select_deleted_suite() -> None:
-    assert "internal_parallelism" not in benchmark_pack.RESEARCH_SUITES
-    assert "internal_parallelism" not in benchmark_pack.SUITE_COMMAND_ORDER
-    with pytest.raises(ValueError, match="unknown research suite group"):
-        benchmark_pack._selected_suites(["internal_parallelism"])
-
-
-def test_routing_public_exports_have_no_retired_shadow_policy() -> None:
-    assert "evaluate_shadow_route_policy" not in routing.__all__
-
-
-def test_public_cli_help_and_research_plan() -> None:
-    help_result = _command(PYTHON, "-m", "quantum_bench.bench", "--help")
-    plan_result = _command(PYTHON, "scripts/research_benchmark_pack.py", "plan")
-
-    assert help_result.returncode == 0
-    assert "upmem-hardware-taskgraph-resident" in help_result.stdout
-    assert plan_result.returncode == 0, plan_result.stderr
-    assert "internal_parallelism" not in plan_result.stdout
-
-
-def test_public_cpu_smoke_executes_end_to_end() -> None:
-    result = _command(
-        PYTHON,
-        "-m",
-        "quantum_bench.bench",
-        "run",
-        "--suite",
-        "configs/suites/smoke.yml",
-    )
+@pytest.mark.parametrize(
+    ("target", "arguments", "fragment"),
+    (
+        ("plan", ("CONFIG=config.yml", "OUTPUT=/tmp/plan"), "quantum_bench.cli plan"),
+        ("run", ("CONFIG=config.yml", "OUTPUT=/tmp/run"), "quantum_bench.cli run"),
+        (
+            "report",
+            ("INPUT=/tmp/run", "REPORT_OUTPUT=/tmp/report"),
+            "quantum_bench.cli report",
+        ),
+        ("verify", ("INPUT=/tmp/run",), "quantum_bench.cli verify"),
+        (
+            "qualify",
+            ("CONFIG=config.yml", "OUTPUT=/tmp/qualify"),
+            "quantum_bench.cli qualify",
+        ),
+    ),
+)
+def test_make_dry_run_constructs_active_cli_command(
+    target: str, arguments: tuple[str, ...], fragment: str
+) -> None:
+    result = _command("make", "-n", target, *arguments)
 
     assert result.returncode == 0, result.stderr
-    payload = json.loads(result.stdout)
-    run_dir = Path(payload["run_dir"])
-    assert run_dir.is_dir()
-    summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
-    assert summary["record_count"] == 4
-    assert all(row["status"] == "passed" for row in summary["rows"])
+    assert fragment in result.stdout
 
 
-def test_public_make_test_executes_a_safe_active_subset() -> None:
-    result = _command(
-        "make",
-        f"PYTHON={PYTHON}",
-        "test",
-        extra_env={
-            "PYTEST_ADDOPTS": "tests/test_public_workflow.py::test_public_cpu_smoke_executes_end_to_end",
-        },
-    )
+def test_make_dry_run_build_passes_tasklet_count() -> None:
+    result = _command("make", "-n", "build-upmem-runtime", "UPMEM_TASKLETS=8")
 
     assert result.returncode == 0, result.stderr
-    assert "passed" in result.stdout
+    assert "NR_TASKLETS=8" in result.stdout
 
 
-def test_public_make_research_plan_executes_without_benchmarking() -> None:
-    result = _command("make", f"PYTHON={PYTHON}", "research-plan")
-
-    assert result.returncode == 0, result.stderr
-    assert "Research benchmark pack plan" in result.stdout
-    assert "internal_parallelism" not in result.stdout
-
-
-def test_public_resident_execute_rejects_missing_physical_opt_in() -> None:
-    result = _command(
-        "make",
-        f"PYTHON={PYTHON}",
-        "upmem-hw-taskgraph-resident",
-        clear_env=("UPMEM_ALLOW_PHYSICAL_HARDWARE", "DPU_BACKEND"),
-    )
+@pytest.mark.parametrize("target", ("bench-cpu", "thesis-run", "research-plan"))
+def test_obsolete_make_targets_are_absent(target: str) -> None:
+    result = _command("make", "-n", target)
 
     assert result.returncode != 0
-    assert "UPMEM_ALLOW_PHYSICAL_HARDWARE=1" in result.stderr
+
+
+def test_numpy_plan_run_verify_report_lifecycle(tmp_path: Path) -> None:
+    config = tmp_path / "benchmark.yml"
+    config.write_text(_numpy_config(), encoding="utf-8")
+    plan_dir = tmp_path / "plan"
+    run_dir = tmp_path / "run"
+    report_dir = tmp_path / "report"
+
+    plan = _command(
+        PYTHON,
+        "-m",
+        "quantum_bench.cli",
+        "plan",
+        "--config",
+        str(config),
+        "--output",
+        str(plan_dir),
+    )
+    run = _command(
+        PYTHON,
+        "-m",
+        "quantum_bench.cli",
+        "run",
+        "--config",
+        str(config),
+        "--output",
+        str(run_dir),
+    )
+    verify = _command(
+        PYTHON,
+        "-m",
+        "quantum_bench.cli",
+        "verify",
+        "--input",
+        str(run_dir),
+    )
+    report = _command(
+        PYTHON,
+        "-m",
+        "quantum_bench.cli",
+        "report",
+        "--input",
+        str(run_dir),
+        "--output",
+        str(report_dir),
+    )
+
+    assert plan.returncode == 0, plan.stderr
+    assert json.loads(plan.stdout)["status"] == "planned"
+    assert run.returncode == 0, run.stderr
+    assert json.loads(run.stdout)["status"] == "completed"
+    assert verify.returncode == 0, verify.stderr
+    assert json.loads(verify.stdout)["status"] == "completed"
+    assert report.returncode == 0, report.stderr
+    assert json.loads(report.stdout)["status"] == "completed"
+    assert (plan_dir / "plan.json").is_file()
+    assert (run_dir / "manifest.json").is_file()
+    assert (run_dir / "samples.jsonl").read_text(encoding="utf-8").count("\n") == 1
+    assert (report_dir / "report.json").is_file()
+
+
+def test_qualify_is_physical_only_and_cli_level_opt_in_is_explicit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = tmp_path / "physical.yml"
+    config.write_text(_physical_config(), encoding="utf-8")
+    observed: dict[str, object] = {}
+
+    def fake_qualify(
+        config_path: str, output: str, *, allow_physical: bool
+    ) -> dict[str, object]:
+        observed.update(
+            config_path=config_path, output=output, allow_physical=allow_physical
+        )
+        return {"status": "completed"}
+
+    monkeypatch.setattr(cli, "qualify_command", fake_qualify)
+    assert (
+        cli.main(
+            [
+                "qualify",
+                "--config",
+                str(config),
+                "--output",
+                str(tmp_path / "qualify"),
+                "--allow-physical",
+            ]
+        )
+        == 0
+    )
+    assert observed["allow_physical"] is True
+    assert "physical" in str(observed["config_path"])

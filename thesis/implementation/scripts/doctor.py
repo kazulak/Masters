@@ -10,9 +10,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-from quantum_bench.environment.capture import read_cpu_affinity, read_cpu_frequency_governor, read_physical_cpu_count
-
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -58,10 +55,10 @@ def _check_quest_cpu() -> None:
 
 
 def _check_cpu_benchmark_profile() -> None:
-    physical = read_physical_cpu_count()
+    physical = _read_physical_cpu_count()
     logical = os.cpu_count()
-    affinity = read_cpu_affinity()
-    governor = read_cpu_frequency_governor()
+    affinity = _read_cpu_affinity()
+    governor = _read_cpu_frequency_governor()
     configured = os.environ.get("BENCH_CPU_THREADS")
     details = (
         f"physical={physical or 'unknown'}; logical={logical or 'unknown'}; "
@@ -70,7 +67,7 @@ def _check_cpu_benchmark_profile() -> None:
     )
     _line("PASS" if configured else "WARN", "cpu_benchmark_profile", details)
     if physical:
-        _line("PASS", "recommended_thesis_run", f"BENCH_CPU_THREADS={physical} make thesis-run")
+        _line("PASS", "recommended_thesis_run", "make run CONFIG=configs/tn_benchmark_reset.yml")
 
 
 def _check_rocm() -> None:
@@ -124,6 +121,45 @@ def _check_upmem_sdk() -> None:
 
 def _line(status: str, name: str, details: str) -> None:
     print(f"{status} {name}: {details}")
+
+
+def _read_cpu_affinity() -> list[int] | None:
+    if not hasattr(os, "sched_getaffinity"):
+        return None
+    try:
+        return sorted(os.sched_getaffinity(0))
+    except OSError:
+        return None
+
+
+def _read_cpu_frequency_governor() -> str | None:
+    path = Path("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor")
+    try:
+        return path.read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
+def _read_physical_cpu_count() -> int | None:
+    cpuinfo = Path("/proc/cpuinfo")
+    if not cpuinfo.exists():
+        return None
+    packages_and_cores: set[tuple[str, str]] = set()
+    current: dict[str, str] = {}
+    try:
+        lines = cpuinfo.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return None
+    for line in [*lines, ""]:
+        if not line.strip():
+            if "physical id" in current and "core id" in current:
+                packages_and_cores.add((current["physical id"], current["core id"]))
+            current = {}
+            continue
+        if ":" in line:
+            key, value = line.split(":", 1)
+            current[key.strip()] = value.strip()
+    return len(packages_and_cores) if packages_and_cores else os.cpu_count()
 
 
 if __name__ == "__main__":

@@ -39,19 +39,30 @@ jobs:
         run: |
           cd thesis/implementation
           python -m ruff check src tests scripts
-      - name: Check thesis shortcut commands
+      - name: Check active Makefile commands
         run: |
           cd thesis/implementation
-          make PYTHON=python -n bench-cpu
-          make PYTHON=python -n bench-gpu
-          make PYTHON=python -n bench-upmem-sim
-          make PYTHON=python -n research-plan
-          make PYTHON=python -n thesis-run
-          make PYTHON=python -n thesis-report
-          make PYTHON=python -n thesis-verify
-      - name: Verify milestone ledger and tracked thesis snapshot
-        run: make -C thesis/implementation PYTHON=python thesis-verify
-      - name: Run smoke
+          make PYTHON=python -n plan CONFIG=configs/tn_benchmark_reset.yml OUTPUT="$RUNNER_TEMP/qbench-plan"
+          make PYTHON=python -n run CONFIG=configs/tn_benchmark_reset.yml OUTPUT="$RUNNER_TEMP/qbench-run"
+          make PYTHON=python -n report INPUT="$RUNNER_TEMP/qbench-run" REPORT_OUTPUT="$RUNNER_TEMP/qbench-report"
+          make PYTHON=python -n verify INPUT="$RUNNER_TEMP/qbench-run"
+          make PYTHON=python -n qualify CONFIG=configs/tn_benchmark_reset.yml OUTPUT="$RUNNER_TEMP/qbench-qualify" UPMEM_ALLOW_PHYSICAL_HARDWARE=1
+          make PYTHON=python -n build-upmem-runtime UPMEM_TASKLETS=1
+      - name: Run active plan, benchmark, verification, and report smoke
         run: |
           cd thesis/implementation
-          PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m quantum_bench.bench run --suite configs/suites/smoke.yml
+          RUN_ROOT="$RUNNER_TEMP/qbench-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          PLAN_DIR="$RUN_ROOT/plan"
+          RUN_DIR="$RUN_ROOT/run"
+          REPORT_DIR="$RUN_ROOT/report"
+          mkdir -p "$RUN_ROOT"
+          make PYTHON=python plan \
+            CONFIG=configs/tn_benchmark_reset.yml \
+            OUTPUT="$PLAN_DIR"
+          make PYTHON=python run \
+            CONFIG=configs/tn_benchmark_reset.yml \
+            OUTPUT="$RUN_DIR"
+          make PYTHON=python verify INPUT="$RUN_DIR"
+          make PYTHON=python report \
+            INPUT="$RUN_DIR" \
+            REPORT_OUTPUT="$REPORT_DIR"
