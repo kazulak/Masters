@@ -281,6 +281,9 @@ def test_open_upmem_simulator_matches_replay_and_rejects_physical_claims(
     assert terminal["hardware_kernel_executed"] is False
     assert terminal["simulator_kernel_executed"] is True
     assert terminal["hardware_allocation_verified"] is False
+    assert terminal["hardware_release_attempted"] is True
+    assert terminal["hardware_release_succeeded"] is True
+    assert terminal["hardware_release_verified"] is True
     for key in (
         "timing_claim_applicable",
         "scaling_claim_applicable",

@@ -1796,6 +1796,8 @@ class UpmemV4Session:
             "simulator_kernel_executed": native_execution and simulator,
             "cpu_fallback_used": False,
             "test_double_execution": self._test_double_execution,
+            "hardware_release_attempted": bool(self.ranks),
+            "hardware_release_succeeded": confirmed,
             "hardware_release_verified": confirmed,
             "hardware_release_confirmed": confirmed,
             "ready_verified": ready_verified,
