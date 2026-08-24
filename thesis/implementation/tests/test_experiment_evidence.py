@@ -103,6 +103,7 @@ def _sample(
     run_id: str = _RUN_ID,
     experiment_id: str = _EXPERIMENT_ID,
     case_id: str = "case-1",
+    plan_id: str | None = "plan-1",
     route_id: str = "route-1",
     kind: str = "measurement",
     index: int = 0,
@@ -112,10 +113,11 @@ def _sample(
 ) -> dict[str, object]:
     record: dict[str, object] = {
         "schema_version": "evidence_sample_v1",
-        "sample_id": sample_id(run_id, case_id, route_id, kind, index),
+        "sample_id": sample_id(run_id, case_id, route_id, kind, index, plan_id=plan_id),
         "run_id": run_id,
         "experiment_id": experiment_id,
         "case_id": case_id,
+        "plan_id": plan_id,
         "route_id": route_id,
         "sample_kind": kind,
         "sample_index": index,
@@ -152,6 +154,7 @@ def _session(
     run_id: str = _RUN_ID,
     experiment_id: str = _EXPERIMENT_ID,
     case_id: str = "case-1",
+    plan_id: str | None = "plan-1",
     route_id: str = "route-1",
     session_instance_id: str = _SESSION_ID,
     release_attempted: bool = True,
@@ -163,6 +166,7 @@ def _session(
         "run_id": run_id,
         "experiment_id": experiment_id,
         "case_id": case_id,
+        "plan_id": plan_id,
         "route_id": route_id,
         "session_instance_id": session_instance_id,
         "session_protocol_id": "protocol-1",
@@ -210,9 +214,16 @@ def test_canonical_json_is_deterministic_and_rejects_non_json_values() -> None:
 
 def test_identity_domains_and_all_sample_identity_fields_are_bound() -> None:
     assert identity_hash("a", {"x": 1}) != identity_hash("b", {"x": 1})
-    base = sample_id(_RUN_ID, "case-a", "route-a", "measurement", 0)
-    assert base != sample_id(_RUN_ID, "case-b", "route-a", "measurement", 0)
-    assert base != sample_id(_RUN_ID, "case-a", "route-b", "measurement", 0)
+    base = sample_id(_RUN_ID, "case-a", "route-a", "measurement", 0, plan_id="plan-a")
+    assert base != sample_id(
+        _RUN_ID, "case-b", "route-a", "measurement", 0, plan_id="plan-a"
+    )
+    assert base != sample_id(
+        _RUN_ID, "case-a", "route-b", "measurement", 0, plan_id="plan-a"
+    )
+    assert base != sample_id(
+        _RUN_ID, "case-a", "route-a", "measurement", 0, plan_id="plan-b"
+    )
 
 
 def test_identity_constructors_are_domain_separated_and_order_stable() -> None:
@@ -517,7 +528,7 @@ def test_sample_status_schemas(status: str) -> None:
 
 
 def test_full_state_sample_allows_null_tensor_network_and_logical_plan() -> None:
-    sample = _sample()
+    sample = _sample(plan_id=None)
     sample["identities"]["tensor_network_structure_id"] = None
     sample["identities"]["logical_plan_id"] = None
     validate_sample(sample)
@@ -729,6 +740,13 @@ def test_artifact_set_rejects_session_context_and_linkage_mismatches() -> None:
             _manifest(status="failed"),
             [_sample()],
             [_session(route_id="route-2")],
+        )
+
+    with pytest.raises(ValueError, match="linked session plan_id"):
+        validate_artifact_set(
+            _manifest(status="failed"),
+            [_sample(plan_id="plan-a")],
+            [_session(plan_id="plan-b")],
         )
 
     with pytest.raises(ValueError, match="no matching session"):

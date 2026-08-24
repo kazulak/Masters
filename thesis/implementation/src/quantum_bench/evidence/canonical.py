@@ -50,6 +50,7 @@ _SAMPLE_FIELDS = frozenset(
         "run_id",
         "experiment_id",
         "case_id",
+        "plan_id",
         "route_id",
         "sample_kind",
         "sample_index",
@@ -70,6 +71,7 @@ _SESSION_FIELDS = frozenset(
         "run_id",
         "experiment_id",
         "case_id",
+        "plan_id",
         "route_id",
         "session_instance_id",
         "session_protocol_id",
@@ -347,6 +349,8 @@ def sample_id(
     route_id: str,
     sample_kind: str,
     sample_index: int,
+    *,
+    plan_id: str | None = None,
 ) -> str:
     """Return the stable identity of one warmup or measurement sample."""
 
@@ -359,12 +363,14 @@ def sample_id(
         _nonempty_string(value, field)
     if sample_kind not in _SAMPLE_KINDS:
         raise ValueError("sample_kind must be warmup or measurement")
+    _nullable_or_string(plan_id, "plan_id")
     _nonnegative_int(sample_index, "sample_index")
     return identity_hash(
         _SAMPLE_SCHEMA,
         {
             "run_id": run_id,
             "case_id": case_id,
+            "plan_id": plan_id,
             "route_id": route_id,
             "sample_kind": sample_kind,
             "sample_index": sample_index,
@@ -486,6 +492,7 @@ def validate_sample(record: Mapping[str, Any]) -> None:
     _sha256(record["experiment_id"], "experiment_id")
     for field in ("case_id", "route_id"):
         _nonempty_string(record[field], field)
+    _nullable_or_string(record["plan_id"], "plan_id")
     _nonempty_string(record["sample_id"], "sample_id")
     _nonempty_string(record["sample_kind"], "sample_kind")
     if record["sample_kind"] not in _SAMPLE_KINDS:
@@ -523,6 +530,7 @@ def validate_sample(record: Mapping[str, Any]) -> None:
         record["route_id"],
         record["sample_kind"],
         record["sample_index"],
+        plan_id=record["plan_id"],
     )
     if record["sample_id"] != expected_id:
         raise ValueError("sample_id does not match the sample identity fields")
@@ -613,6 +621,7 @@ def validate_session(record: Mapping[str, Any]) -> None:
         "session_protocol_id",
     ):
         _nonempty_string(record[field], field)
+    _nullable_or_string(record["plan_id"], "plan_id")
     _nullable_finite_nonnegative(record["open_s"], "open_s")
     _nullable_finite_nonnegative(record["session_close_s"], "session_close_s")
     if record["status"] not in {"success", "failed"}:
@@ -682,7 +691,7 @@ def validate_artifact_set(
         sessions_by_id[session_instance_id] = session
 
     sample_ids: set[str] = set()
-    successful_scopes: dict[tuple[str, str], set[str]] = {}
+    successful_scopes: dict[tuple[str, str | None, str], set[str]] = {}
     actual_counts = {"warmup": 0, "measurement": 0, "sessions": len(session_rows)}
     for sample in sample_rows:
         validate_sample(sample)
@@ -704,7 +713,7 @@ def validate_artifact_set(
         if sample["status"] == "success":
             measurement = sample["measurement"]
             assert measurement is not None
-            key = (sample["case_id"], sample["route_id"])
+            key = (sample["case_id"], sample["plan_id"], sample["route_id"])
             successful_scopes.setdefault(key, set()).add(measurement["scope_id"])
 
         session_instance_id = sample["session_instance_id"]
@@ -712,7 +721,13 @@ def validate_artifact_set(
             session = sessions_by_id.get(session_instance_id)
             if session is None:
                 raise ValueError("sample session_instance_id has no matching session")
-            for field in ("run_id", "experiment_id", "case_id", "route_id"):
+            for field in (
+                "run_id",
+                "experiment_id",
+                "case_id",
+                "plan_id",
+                "route_id",
+            ):
                 if sample[field] != session[field]:
                     raise ValueError(f"sample and linked session {field} do not match")
 
@@ -896,9 +911,7 @@ def _read_canonical_json_mapping(path: Path, field: str) -> Mapping[str, Any]:
     return record
 
 
-def _read_canonical_json_lines(
-    path: Path, field: str
-) -> tuple[Mapping[str, Any], ...]:
+def _read_canonical_json_lines(path: Path, field: str) -> tuple[Mapping[str, Any], ...]:
     """Read newline-terminated canonical JSONL records without rewriting them."""
 
     try:
@@ -915,7 +928,9 @@ def _read_canonical_json_lines(
     for index, line in enumerate(text[:-1].split("\n"), start=1):
         if not line:
             raise ValueError(f"{field} must not contain blank lines")
-        record = _mapping(_strict_json(line, f"{field} line {index}"), f"{field} line {index}")
+        record = _mapping(
+            _strict_json(line, f"{field} line {index}"), f"{field} line {index}"
+        )
         if line != canonical_json(record):
             raise ValueError(f"{field} line {index} is not canonically encoded")
         records.append(record)
@@ -924,7 +939,9 @@ def _read_canonical_json_lines(
 
 def load_artifacts(
     directory: str | os.PathLike[str],
-) -> tuple[Mapping[str, Any], tuple[Mapping[str, Any], ...], tuple[Mapping[str, Any], ...]]:
+) -> tuple[
+    Mapping[str, Any], tuple[Mapping[str, Any], ...], tuple[Mapping[str, Any], ...]
+]:
     """Load and validate one finalized canonical evidence artifact directory.
 
     The reader is deliberately strict: each primary file must exist, parse without
@@ -935,10 +952,66 @@ def load_artifacts(
     if not root.is_dir():
         raise ValueError(f"artifact directory does not exist: {root}")
     manifest = _read_canonical_json_mapping(root / _FILES["manifest"], "manifest")
+    validate_manifest(manifest)
+    _validate_manifest_identity_payloads(manifest)
     samples = _read_canonical_json_lines(root / _FILES["samples"], "samples")
     sessions = _read_canonical_json_lines(root / _FILES["sessions"], "sessions")
     validate_artifact_set(manifest, samples, sessions)
     return manifest, samples, sessions
+
+
+def _validate_manifest_identity_payloads(manifest: Mapping[str, Any]) -> None:
+    """Bind manifest identity hashes to the persisted configuration payloads."""
+
+    configuration = _mapping(manifest["configuration"], "configuration")
+    expected = {"experiment", "environment", "validation_policy"}
+    if set(configuration) != expected:
+        raise ValueError(
+            "manifest configuration must contain experiment, environment, and "
+            "validation_policy exactly"
+        )
+    normalized_config = _mapping(
+        configuration["experiment"], "configuration.experiment"
+    )
+    environment = _mapping(configuration["environment"], "configuration.environment")
+    validation_policy = _mapping(
+        configuration["validation_policy"], "configuration.validation_policy"
+    )
+    if normalized_config.get("experiment_id") != manifest["experiment_id"]:
+        raise ValueError(
+            "manifest experiment_id does not match configuration.experiment"
+        )
+    if normalized_config.get("schema_version") == "tn_benchmark_v1":
+        payload = _mapping(
+            normalized_config.get("experiment_identity_payload"),
+            "configuration.experiment.experiment_identity_payload",
+        )
+        _exact_fields(
+            payload,
+            {"label", "configuration", "validation_policy_id"},
+            "configuration.experiment.experiment_identity_payload",
+        )
+        _nonempty_string(payload["label"], "experiment identity payload label")
+        _mapping(payload["configuration"], "experiment identity payload configuration")
+        _sha256(
+            payload["validation_policy_id"],
+            "experiment identity payload validation_policy_id",
+        )
+        expected_experiment_id = identity_hash(
+            "quantum_bench.experiment_id.v1", payload
+        )
+        if expected_experiment_id != manifest["experiment_id"]:
+            raise ValueError(
+                "manifest experiment_id does not match experiment identity payload"
+            )
+    if environment_id(environment) != manifest["environment_id"]:
+        raise ValueError(
+            "manifest environment_id does not match configuration.environment"
+        )
+    if validation_policy_id(validation_policy) != manifest["validation_policy_id"]:
+        raise ValueError(
+            "manifest validation_policy_id does not match configuration.validation_policy"
+        )
 
 
 def finalize_artifacts(directory: str | os.PathLike[str], *, status: str) -> None:

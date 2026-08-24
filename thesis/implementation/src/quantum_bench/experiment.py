@@ -458,7 +458,7 @@ def load_experiment_config(path: str | os.PathLike[str]) -> Mapping[str, object]
     if not isinstance(matrix_raw, list) or not matrix_raw:
         raise ValueError("matrix must be a nonempty list")
     matrix: list[dict[str, object]] = []
-    selected_case_routes: set[tuple[str, str]] = set()
+    selected_case_plan_routes: set[tuple[str, str | None, str]] = set()
     for index, item in enumerate(matrix_raw):
         entry = dict(_config_fields(item, _MATRIX_FIELDS, f"matrix[{index}]"))
         case_id = _config_id(entry["case_id"], f"matrix[{index}].case_id")
@@ -490,23 +490,25 @@ def load_experiment_config(path: str | os.PathLike[str]) -> Mapping[str, object]
         if any(requires_plan) != (plan_id is not None):
             raise ValueError(f"matrix[{index}].plan_id is incompatible with its routes")
         for route_id in normalized_routes:
-            key = (case_id, route_id)
-            if key in selected_case_routes:
+            key = (case_id, plan_id, route_id)
+            if key in selected_case_plan_routes:
                 raise ValueError(
-                    "matrix entries must select each case_id and route_id pair once"
+                    "matrix entries must select each case_id, plan_id, and route_id "
+                    "combination once"
                 )
-            selected_case_routes.add(key)
+            selected_case_plan_routes.add(key)
         matrix.append(
             {"case_id": case_id, "plan_id": plan_id, "route_ids": normalized_routes}
         )
     config["matrix"] = matrix
+    experiment_identity_payload = {
+        "label": experiment_label,
+        "configuration": raw,
+        "validation_policy_id": _DEFAULT_VALIDATION_POLICY_ID,
+    }
+    config["experiment_identity_payload"] = experiment_identity_payload
     config["experiment_id"] = identity_hash(
-        "quantum_bench.experiment_id.v1",
-        {
-            "label": experiment_label,
-            "configuration": raw,
-            "validation_policy_id": _DEFAULT_VALIDATION_POLICY_ID,
-        },
+        "quantum_bench.experiment_id.v1", experiment_identity_payload
     )
     frozen = _freeze_config(config)
     if not isinstance(frozen, Mapping):  # pragma: no cover
@@ -535,6 +537,7 @@ def run_direct_samples(
     experiment_id: str,
     case_id: str,
     route_id: str,
+    plan_id: str | None = None,
     identities: Mapping[str, JsonValue],
     warmups: int,
     repetitions: int,
@@ -549,6 +552,7 @@ def run_direct_samples(
         experiment_id=experiment_id,
         case_id=case_id,
         route_id=route_id,
+        plan_id=plan_id,
         identities=identities,
         warmups=warmups,
         repetitions=repetitions,
@@ -557,7 +561,7 @@ def run_direct_samples(
     )
     _reject_planned_sample_id_collisions(
         samples_path,
-        _planned_sample_ids(run_id, case_id, route_id, warmups, repetitions),
+        _planned_sample_ids(run_id, case_id, route_id, warmups, repetitions, plan_id),
     )
 
     rows: list[Mapping[str, JsonValue]] = []
@@ -568,6 +572,7 @@ def run_direct_samples(
                 experiment_id=experiment_id,
                 case_id=case_id,
                 route_id=route_id,
+                plan_id=plan_id,
                 identities=normalized_identities,
                 sample_kind=sample_kind,
                 sample_index=sample_index,
@@ -586,6 +591,7 @@ def run_session_samples(
     experiment_id: str,
     case_id: str,
     route_id: str,
+    plan_id: str | None = None,
     identities: Mapping[str, JsonValue],
     warmups: int,
     repetitions: int,
@@ -603,6 +609,7 @@ def run_session_samples(
         experiment_id=experiment_id,
         case_id=case_id,
         route_id=route_id,
+        plan_id=plan_id,
         identities=identities,
         warmups=warmups,
         repetitions=repetitions,
@@ -614,7 +621,7 @@ def run_session_samples(
     )
     _reject_planned_sample_id_collisions(
         samples_path,
-        _planned_sample_ids(run_id, case_id, route_id, warmups, repetitions),
+        _planned_sample_ids(run_id, case_id, route_id, warmups, repetitions, plan_id),
     )
 
     session_instance_id = str(uuid4())
@@ -632,6 +639,7 @@ def run_session_samples(
             experiment_id=experiment_id,
             case_id=case_id,
             route_id=route_id,
+            plan_id=plan_id,
             session_instance_id=session_instance_id,
             session_protocol_id=session_protocol_id,
             open_s=open_s,
@@ -648,6 +656,7 @@ def run_session_samples(
             experiment_id=experiment_id,
             case_id=case_id,
             route_id=route_id,
+            plan_id=plan_id,
             session_instance_id=session_instance_id,
             session_protocol_id=session_protocol_id,
             open_s=open_s,
@@ -664,6 +673,7 @@ def run_session_samples(
             experiment_id=experiment_id,
             case_id=case_id,
             route_id=route_id,
+            plan_id=plan_id,
             session_instance_id=session_instance_id,
             session_protocol_id=session_protocol_id,
             open_s=open_s,
@@ -717,6 +727,7 @@ def run_session_samples(
                         experiment_id=experiment_id,
                         case_id=case_id,
                         route_id=route_id,
+                        plan_id=plan_id,
                         identities=normalized_identities,
                         sample_kind=sample_kind,
                         sample_index=sample_index,
@@ -795,6 +806,7 @@ def run_session_samples(
             experiment_id=experiment_id,
             case_id=case_id,
             route_id=route_id,
+            plan_id=plan_id,
             session_instance_id=session_instance_id,
             session_protocol_id=session_protocol_id,
             open_s=open_s,
@@ -815,6 +827,8 @@ def _validate_arguments(**values: Any) -> dict[str, JsonValue]:
     _sha256_string(values["experiment_id"], "experiment_id")
     for field in ("case_id", "route_id"):
         _nonempty_string(values[field], field)
+    if "plan_id" in values and values["plan_id"] is not None:
+        _nonempty_string(values["plan_id"], "plan_id")
     if "session_protocol_id" in values:
         _nonempty_string(values["session_protocol_id"], "session_protocol_id")
     for field in ("warmups", "repetitions"):
@@ -864,6 +878,7 @@ def _run_sample(
     experiment_id: str,
     case_id: str,
     route_id: str,
+    plan_id: str | None,
     identities: Mapping[str, JsonValue],
     sample_kind: str,
     sample_index: int,
@@ -874,10 +889,18 @@ def _run_sample(
 ) -> Mapping[str, JsonValue]:
     base: dict[str, JsonValue] = {
         "schema_version": "evidence_sample_v1",
-        "sample_id": sample_id(run_id, case_id, route_id, sample_kind, sample_index),
+        "sample_id": sample_id(
+            run_id,
+            case_id,
+            route_id,
+            sample_kind,
+            sample_index,
+            plan_id=plan_id,
+        ),
         "run_id": run_id,
         "experiment_id": experiment_id,
         "case_id": case_id,
+        "plan_id": plan_id,
         "route_id": route_id,
         "sample_kind": sample_kind,
         "sample_index": sample_index,
@@ -1083,9 +1106,17 @@ def _planned_sample_ids(
     route_id: str,
     warmups: int,
     repetitions: int,
+    plan_id: str | None,
 ) -> frozenset[str]:
     return frozenset(
-        sample_id(run_id, case_id, route_id, sample_kind, sample_index)
+        sample_id(
+            run_id,
+            case_id,
+            route_id,
+            sample_kind,
+            sample_index,
+            plan_id=plan_id,
+        )
         for sample_kind, count in (("warmup", warmups), ("measurement", repetitions))
         for sample_index in range(count)
     )
@@ -1169,6 +1200,7 @@ def _session_row(
     experiment_id: str,
     case_id: str,
     route_id: str,
+    plan_id: str | None,
     session_instance_id: str,
     session_protocol_id: str,
     open_s: float | None,
@@ -1184,6 +1216,7 @@ def _session_row(
         "run_id": run_id,
         "experiment_id": experiment_id,
         "case_id": case_id,
+        "plan_id": plan_id,
         "route_id": route_id,
         "session_instance_id": session_instance_id,
         "session_protocol_id": session_protocol_id,

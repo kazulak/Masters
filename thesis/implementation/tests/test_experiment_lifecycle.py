@@ -692,7 +692,73 @@ def test_sample_ids_use_canonical_identity_fields(tmp_path: Path) -> None:
         run_once=lambda: _sample(),
         samples_path=tmp_path / "samples.jsonl",
     )
-    assert rows[0]["sample_id"] == sample_id(RUN_ID, "case", "route", "measurement", 0)
+    assert rows[0]["plan_id"] is None
+    assert rows[0]["sample_id"] == sample_id(
+        RUN_ID, "case", "route", "measurement", 0, plan_id=None
+    )
+
+
+def test_one_case_route_accepts_distinct_plan_sample_ids(tmp_path: Path) -> None:
+    path = tmp_path / "samples.jsonl"
+    first = run_direct_samples(
+        run_id=RUN_ID,
+        experiment_id=EXPERIMENT_ID,
+        case_id="case",
+        route_id="route",
+        plan_id="path-a",
+        identities=IDENTITIES,
+        warmups=0,
+        repetitions=1,
+        run_once=_sample,
+        samples_path=path,
+    )
+    second = run_direct_samples(
+        run_id=RUN_ID,
+        experiment_id=EXPERIMENT_ID,
+        case_id="case",
+        route_id="route",
+        plan_id="path-b",
+        identities=IDENTITIES,
+        warmups=0,
+        repetitions=1,
+        run_once=_sample,
+        samples_path=path,
+    )
+
+    assert first[0]["plan_id"] == "path-a"
+    assert second[0]["plan_id"] == "path-b"
+    assert first[0]["sample_id"] != second[0]["sample_id"]
+
+
+def test_session_samples_bind_plan_id_to_the_session(tmp_path: Path) -> None:
+    class Session:
+        def run_once(self, inputs: object) -> ExecutionSample:
+            return _sample()
+
+        def close(self) -> dict[str, object]:
+            return {
+                "hardware_release_attempted": True,
+                "hardware_release_succeeded": True,
+                "hardware_release_verified": True,
+            }
+
+    rows, session = run_session_samples(
+        run_id=RUN_ID,
+        experiment_id=EXPERIMENT_ID,
+        case_id="case",
+        route_id="route",
+        plan_id="path-a",
+        identities=IDENTITIES,
+        warmups=0,
+        repetitions=1,
+        session_protocol_id="protocol",
+        open_session=Session,
+        inputs={},
+        samples_path=tmp_path / "samples.jsonl",
+        sessions_path=tmp_path / "sessions.jsonl",
+    )
+
+    assert rows[0]["plan_id"] == session["plan_id"] == "path-a"
 
 
 def test_direct_sample_id_collision_rejects_before_execution(tmp_path: Path) -> None:
