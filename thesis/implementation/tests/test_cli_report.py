@@ -525,6 +525,14 @@ def test_unsupported_upmem_mapping_is_retained_as_sample(
         "stage": "mapping",
     }
     assert (tmp_path / "run" / "sessions.jsonl").read_text() == ""
+    manifest, loaded_samples, loaded_sessions = load_artifacts(tmp_path / "run")
+    assert manifest["status"] == "failed"
+    assert len(manifest["configuration"]["identity_bindings"]) == 1
+    assert manifest["configuration"]["identity_bindings"][0][
+        "physical_plan_id"
+    ] is None
+    assert loaded_samples == tuple(samples)
+    assert loaded_sessions == ()
 
 
 def test_physical_dual_opt_in_and_qualify_route_selection(

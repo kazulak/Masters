@@ -679,6 +679,20 @@ def _run_config(
         if previous != binding:
             raise ValueError(f"selected route has conflicting identities: {key}")
 
+    def persist_identity_bindings() -> None:
+        manifest["configuration"]["identity_bindings"] = [
+            identity_bindings[key]
+            for key in sorted(
+                identity_bindings,
+                key=lambda key: (
+                    key[0],
+                    "" if key[1] is None else key[1],
+                    key[2],
+                ),
+            )
+        ]
+        write_manifest(target / "manifest.json", manifest)
+
     try:
         for matrix_item, route_id, route in selected:
             case_id = matrix_item["case_id"]
@@ -867,19 +881,13 @@ def _run_config(
             )
     except Exception:
         try:
+            persist_identity_bindings()
             finalize_artifacts(target, status="failed")
         except Exception:
             pass
         raise
 
-    manifest["configuration"]["identity_bindings"] = [
-        identity_bindings[key]
-        for key in sorted(
-            identity_bindings,
-            key=lambda key: (key[0], "" if key[1] is None else key[1], key[2]),
-        )
-    ]
-    write_manifest(target / "manifest.json", manifest)
+    persist_identity_bindings()
 
     try:
         finalize_artifacts(target, status="completed")

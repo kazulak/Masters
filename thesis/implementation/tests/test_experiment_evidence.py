@@ -806,6 +806,33 @@ def test_completed_artifact_requires_every_configured_matrix_route() -> None:
         validate_artifact_set(manifest, [_sample(session_instance_id=None)], [])
 
 
+def test_failed_artifact_binds_observed_subset_without_requiring_unattempted_routes() -> None:
+    manifest = _manifest(
+        status="failed",
+        expected_counts={"warmup": 0, "measurement": 2, "sessions": 0},
+    )
+    manifest["configuration"]["experiment"] = {
+        "matrix": [
+            {
+                "case_id": "case-1",
+                "plan_id": "plan-1",
+                "route_ids": ["route-1", "route-2"],
+            }
+        ]
+    }
+    sample = _sample(session_instance_id=None)
+    validate_artifact_set(manifest, [sample], [])
+
+    tampered = deepcopy(sample)
+    tampered["identities"]["logical_plan_id"] = "7" * 64
+    with pytest.raises(ValueError, match="identities.logical_plan_id"):
+        validate_artifact_set(manifest, [tampered], [])
+
+    undeclared = _sample(route_id="route-3", session_instance_id=None)
+    with pytest.raises(ValueError, match="not declared by identity_bindings"):
+        validate_artifact_set(manifest, [undeclared], [])
+
+
 def test_completed_artifact_binds_mixed_direct_and_session_routes() -> None:
     direct = _sample(session_instance_id=None)
     session = _session(
@@ -919,16 +946,25 @@ def test_artifact_set_rejects_session_context_and_linkage_mismatches() -> None:
             [_session(run_id=_OTHER_RUN_ID)],
         )
 
+    route_manifest = _manifest(status="failed")
+    route_binding = deepcopy(route_manifest["configuration"]["identity_bindings"][0])
+    route_binding["route_id"] = "route-2"
+    route_manifest["configuration"]["identity_bindings"].append(route_binding)
     with pytest.raises(ValueError, match="linked session route_id"):
         validate_artifact_set(
-            _manifest(status="failed"),
+            route_manifest,
             [_sample()],
             [_session(route_id="route-2")],
         )
 
+    plan_manifest = _manifest(status="failed")
+    plan_manifest["configuration"]["identity_bindings"][0]["plan_id"] = "plan-a"
+    plan_binding = deepcopy(plan_manifest["configuration"]["identity_bindings"][0])
+    plan_binding["plan_id"] = "plan-b"
+    plan_manifest["configuration"]["identity_bindings"].append(plan_binding)
     with pytest.raises(ValueError, match="linked session plan_id"):
         validate_artifact_set(
-            _manifest(status="failed"),
+            plan_manifest,
             [_sample(plan_id="plan-a")],
             [_session(plan_id="plan-b")],
         )

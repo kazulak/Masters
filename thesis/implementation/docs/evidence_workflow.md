@@ -80,6 +80,9 @@ sample/session links, expected counts, scopes, statuses, output/validation
 fields, session release and terminal manifest state. A completed artifact may
 neither omit a configured route nor introduce an undeclared route. `report`
 reads an already verified run; it never executes workloads.
+Failed artifacts may omit routes that were never attempted, but every observed
+sample or session must still match a persisted identity binding and a route in
+the configured matrix.
 Derived reports belong under `runs/comparisons/` and must be regenerated from
 the canonical JSONL records. Plots must facet by route, plan, numeric policy,
 topology and timing scope where those dimensions differ, and must reject

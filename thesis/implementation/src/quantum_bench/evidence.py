@@ -791,6 +791,8 @@ def validate_artifact_set(
     manifest_run_id = manifest["run_id"]
     manifest_experiment_id = manifest["experiment_id"]
     strict_bindings = manifest["status"] == "completed"
+    configuration = _mapping(manifest["configuration"], "configuration")
+    binding_contract_present = "identity_bindings" in configuration
     bindings = _identity_bindings(manifest, required=strict_bindings)
     observed_routes: set[tuple[str, str | None, str]] = set()
 
@@ -806,7 +808,7 @@ def validate_artifact_set(
             raise ValueError(f"duplicate session_instance_id: {session_instance_id}")
         route_key = _route_key(session)
         observed_routes.add(route_key)
-        if strict_bindings and route_key not in bindings:
+        if binding_contract_present and route_key not in bindings:
             raise ValueError(f"session route is not declared by identity_bindings: {route_key}")
         sessions_by_id[session_instance_id] = session
 
@@ -826,7 +828,7 @@ def validate_artifact_set(
             raise ValueError("sample validation_policy_id does not match manifest")
         route_key = _route_key(sample)
         observed_routes.add(route_key)
-        if strict_bindings:
+        if binding_contract_present:
             binding = bindings.get(route_key)
             if binding is None:
                 raise ValueError(
@@ -908,6 +910,17 @@ def validate_artifact_set(
                 "completed artifacts require one timing scope per case and route"
             )
         return
+
+    expected_routes = _declared_matrix_routes(manifest)
+    if binding_contract_present and expected_routes is not None:
+        undeclared_bindings = set(bindings) - expected_routes
+        undeclared_observations = observed_routes - expected_routes
+        if undeclared_bindings or undeclared_observations:
+            raise ValueError(
+                "failed artifact contains routes outside the experiment matrix: "
+                f"bindings={sorted(undeclared_bindings, key=_route_sort_key)}, "
+                f"observed={sorted(undeclared_observations, key=_route_sort_key)}"
+            )
 
     for field, actual in actual_counts.items():
         if actual > expected_counts[field]:
