@@ -573,6 +573,7 @@ def test_validator_rejects_tampering() -> None:
         dag, numeric_policy="split_complex_float32_v1", topology=_topology()
     )
     validate_upmem_plan(dag, plan)
+    assert plan.kernel_policy == "dpu_real_tile_v4_wram_panel_v1"
     tampered = replace(plan, kernel_policy="different")
     with pytest.raises(ValueError, match="differs from pure recomputation"):
         validate_upmem_plan(dag, tampered)

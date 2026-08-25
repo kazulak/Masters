@@ -12,7 +12,7 @@
 #define EXECUTION_PLAN_V4_NATIVE_ABI "execution_plan_v4"
 #define EXECUTION_PLAN_V4_NATIVE_SESSION "persistent_rank_session_v1"
 #define EXECUTION_PLAN_V4_NATIVE_DISPATCH "bulk_set_synchronous_v1"
-#define EXECUTION_PLAN_V4_NATIVE_KERNEL "dpu_gemm_tile_v4"
+#define EXECUTION_PLAN_V4_NATIVE_KERNEL "dpu_real_tile_v4_wram_panel_v1"
 #define EXECUTION_PLAN_V4_NATIVE_EXECUTION_CLASS "physical_v4_output_tile"
 #define EXECUTION_PLAN_V4_NATIVE_SIMULATOR_EXECUTION_CLASS "sdk_simulator_v4_output_tile"
 #define EXECUTION_PLAN_V4_MAGIC "UPXDPV4"

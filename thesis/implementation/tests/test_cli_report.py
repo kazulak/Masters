@@ -468,10 +468,10 @@ def test_simulator_plan_freezes_complex_sliced_qualification_fixture(
     )
     assert int8_entry["logical_plan_id"] == float_entry["logical_plan_id"]
     assert float_entry["upmem"]["physical_plan_id"] == (
-        "cd614d6c5054abe98df1f4b2b3439560c2c982bcfd62ff09657f6b35be998260"
+        "4ff5cad04ff84fbe1ebf3cdd2bd1b8226913426dacbdc95d54fb9898cbb806c5"
     )
     assert int8_entry["upmem"]["physical_plan_id"] == (
-        "d97900ec5598c3ada4935752f2f6f38a04b076cdc9c476cfb1d2c23c1c659952"
+        "644c1f556fa8665b950e445b865bcd52e014a25a0698c49d623c3377430a30c2"
     )
     assert (
         float_entry["upmem"]["physical_plan_id"]

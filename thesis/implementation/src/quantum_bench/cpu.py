@@ -45,7 +45,7 @@ _SUPPORTED_POLICIES = (
 _BACKEND_FACTS = {"backend_id": "numpy_cpu_v1", "execution_class": "cpu_host"}
 _REPLAY_BACKEND_ID = "cpu_upmem_plan_replay_v1"
 _REPLAY_EXECUTION_CLASS = "cpu_physical_plan_reference"
-_REPLAY_KERNEL_POLICY = "real_tile_four_product_v1"
+_REPLAY_KERNEL_POLICY = "dpu_real_tile_v4_wram_panel_v1"
 _REPLAY_INTERMEDIATE_POLICY = "host_roundtrip_v1"
 
 

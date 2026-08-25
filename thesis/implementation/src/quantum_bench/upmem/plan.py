@@ -162,7 +162,7 @@ class UpmemPlan:
     topology: UpmemTopology
     stages: tuple[UpmemStage, ...]
     intermediate_policy: Literal["host_roundtrip_v1"] = "host_roundtrip_v1"
-    kernel_policy: str = "real_tile_four_product_v1"
+    kernel_policy: str = "dpu_real_tile_v4_wram_panel_v1"
 
     def __post_init__(self) -> None:
         if not isinstance(self.logical_plan_id, str) or not re.fullmatch(

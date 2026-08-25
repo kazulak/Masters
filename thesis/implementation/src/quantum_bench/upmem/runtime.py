@@ -130,7 +130,7 @@ _COORDINATOR_PROVENANCE = {
 _ACTIVE_MECHANISM_IDS = {
     "decomposition": "m5_v4_tile_decomposition",
     "placement": "m5_rank_wave_placement",
-    "kernel": "upmem_sdk_hardware_v4_tile_kernel",
+    "kernel": "upmem_sdk_hardware_v4_wram_panel_kernel",
     "reduction": "m5_tile_host_reduction",
 }
 _ACTIVE_ENGINE_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
@@ -153,7 +153,10 @@ _ACTIVE_STRATEGY_IDENTITY = {
             "version": "1",
             "provider": "raw_upmem_sdk_v4",
             "transport": "application_visible_sdk_transfer",
-            "config": {"abi": "execution_plan_v4", "kernel": "dpu_gemm_tile_v4"},
+            "config": {
+                "abi": "execution_plan_v4",
+                "kernel": "dpu_real_tile_v4_wram_panel_v1",
+            },
             "implementation_type": "fixed_direct_mechanism",
             "module_source_sha256": _ACTIVE_ENGINE_SOURCE_SHA256,
         },

@@ -6,7 +6,7 @@ NR_TASKLETS ?= 1
 MAX_TASKLETS := 24
 MAX_DPUS := 64
 
-V4_GOAL := $(filter all v4 bin/host_upmem_execution_plan_v4_t% bin/dpu_gemm_tile_v4_t% bin/dpu_gemm_tile_v4_wram_panel_internal_t% bin/dpu_simplepim_management_init_t%,$(MAKECMDGOALS))
+V4_GOAL := $(filter all v4 bin/host_upmem_execution_plan_v4_t% bin/dpu_gemm_tile_v4_t% bin/dpu_simplepim_management_init_t%,$(MAKECMDGOALS))
 ifneq ($(V4_GOAL),)
 ifneq ($(shell test "$(NR_TASKLETS)" -ge 1 2>/dev/null && test "$(NR_TASKLETS)" -le $(MAX_TASKLETS) 2>/dev/null && echo yes),yes)
 $(error v4 requires NR_TASKLETS in [1,24])
@@ -27,10 +27,6 @@ bin:
 bin/dpu_gemm_tile_v4_t%: dpu.c protocol.h | bin
 	@test "$*" -ge 1 -a "$*" -le $(MAX_TASKLETS) || { echo "v4 DPU binary requires tasklets in [1,24]" >&2; exit 1; }
 	$(DPU_CC) -O2 -DNR_TASKLETS=$* -o $@ dpu.c
-
-bin/dpu_gemm_tile_v4_wram_panel_internal_t%: dpu_wram_panel_internal.c protocol.h | bin
-	@test "$*" -ge 1 -a "$*" -le $(MAX_TASKLETS) || { echo "v4 WRAM-panel DPU binary requires tasklets in [1,24]" >&2; exit 1; }
-	$(DPU_CC) -O2 -DNR_TASKLETS=$* -o $@ dpu_wram_panel_internal.c
 
 bin/dpu_simplepim_management_init_t%: $(SIMPLEPIM_ROOT)/lib/management/SmallTableInit_dpu.c | bin
 	@test "$*" -ge 1 -a "$*" -le $(MAX_TASKLETS) || { echo "v4 initialization binary requires tasklets in [1,24]" >&2; exit 1; }

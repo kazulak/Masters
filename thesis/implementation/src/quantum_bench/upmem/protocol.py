@@ -36,7 +36,7 @@ NATIVE_EXECUTION_IDENTITY = {
     "abi": "execution_plan_v4",
     "session_protocol": "persistent_rank_session_v1",
     "dispatch_mode": "bulk_set_synchronous_v1",
-    "kernel_identity": "dpu_gemm_tile_v4",
+    "kernel_identity": "dpu_real_tile_v4_wram_panel_v1",
     "execution_class": "physical_v4_output_tile",
 }
 

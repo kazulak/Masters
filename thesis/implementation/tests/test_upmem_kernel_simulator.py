@@ -9,19 +9,20 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 NATIVE = ROOT / "native" / "upmem" / "runtime"
-SOURCE = NATIVE / "dpu_wram_panel_internal.c"
+SOURCE = NATIVE / "dpu.c"
 MAKEFILE = NATIVE / "Makefile"
 
 
-def test_private_wram_panel_target_is_not_active_v4_binary() -> None:
+def test_active_wram_panel_target_uses_the_v4_binary() -> None:
     makefile = MAKEFILE.read_text(encoding="ascii")
 
-    assert "bin/dpu_gemm_tile_v4_wram_panel_internal_t%" in makefile
     active_v4_rule = makefile.split("v4:", 1)[1].split("bin:", 1)[0]
-    assert "dpu_gemm_tile_v4_wram_panel_internal" not in active_v4_rule
+    assert "bin/dpu_gemm_tile_v4_t$(NR_TASKLETS)" in active_v4_rule
+    assert "dpu_gemm_tile_v4_wram_panel_internal" not in makefile
+    assert not (NATIVE / "dpu_wram_panel_internal.c").exists()
 
 
-def test_private_wram_panel_source_uses_global_staging_and_bounded_dma() -> None:
+def test_active_wram_panel_source_uses_global_staging_and_bounded_dma() -> None:
     source = SOURCE.read_text(encoding="ascii")
 
     assert "#define KC 64u" in source
@@ -54,7 +55,7 @@ def test_private_wram_panel_source_uses_global_staging_and_bounded_dma() -> None
 
 
 @pytest.mark.parametrize("tasklets", [1, 8, 24])
-def test_private_wram_panel_binary_builds_when_sdk_compiler_is_available(tasklets: int) -> None:
+def test_active_wram_panel_binary_builds_when_sdk_compiler_is_available(tasklets: int) -> None:
     if shutil.which("dpu-upmem-dpurte-clang") is None:
         pytest.skip("UPMEM DPU compiler is unavailable")
 
@@ -63,7 +64,7 @@ def test_private_wram_panel_binary_builds_when_sdk_compiler_is_available(tasklet
             "make",
             "-C",
             str(NATIVE),
-            f"bin/dpu_gemm_tile_v4_wram_panel_internal_t{tasklets}",
+            f"bin/dpu_gemm_tile_v4_t{tasklets}",
         ],
         check=False,
         text=True,
@@ -71,4 +72,4 @@ def test_private_wram_panel_binary_builds_when_sdk_compiler_is_available(tasklet
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert (NATIVE / "bin" / f"dpu_gemm_tile_v4_wram_panel_internal_t{tasklets}").is_file()
+    assert (NATIVE / "bin" / f"dpu_gemm_tile_v4_t{tasklets}").is_file()

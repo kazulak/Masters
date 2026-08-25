@@ -364,11 +364,14 @@ def test_v4_native_sources_preserve_the_abi_and_build_contract() -> None:
     assert "request_manifest_sha256" in host
     assert "cpu_fallback_used\\\":false" in host
     assert "__mram_noinit uint8_t V4_MRAM" in dpu
-    assert "__dma_aligned uint8_t v4_input_window" in dpu
+    assert "__dma_aligned uint8_t shared_b_panel" in dpu
+    assert "__dma_aligned uint8_t tasklet_a_buffer" in dpu
+    assert "__dma_aligned v4_output_slot_t tasklet_output_buffer" in dpu
     assert "mram_read" in dpu and "mram_write" in dpu
     assert "v4 requires NR_TASKLETS in [1,24]" in dpu
     assert "V4_CONTROL.reserved0 != (uint32_t)NR_TASKLETS" in dpu
     assert "#define EXECUTION_PLAN_V4_INT8_MAX_ABS 127u" in protocol_header
+    assert "#define EXECUTION_PLAN_V4_NATIVE_KERNEL \"dpu_real_tile_v4_wram_panel_v1\"" in protocol_header
     assert "EXECUTION_PLAN_V4_INT8_MAX_ABS" in dpu
     assert "MAX_TASKLETS := 24" in makefile
     assert "bin/host_upmem_execution_plan_v4_t%" in makefile
