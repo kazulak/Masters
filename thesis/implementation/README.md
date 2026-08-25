@@ -63,12 +63,20 @@ the target machine and build the matching tasklet-count binaries.
 canonical evidence. `verify` checks evidence identities and integrity.
 `report` only reads existing evidence and produces tables and plots.
 
-Samples use `evidence_sample_v2`; reports use `evidence_report_v2`. Manifests
-and sessions remain v1. Sample v1 evidence is unsupported. Sample `status`
+Manifests use `evidence_manifest_v2`, samples use `evidence_sample_v3`,
+sessions use `evidence_session_v1`, and reports use `evidence_report_v3`.
+Earlier sample evidence is unsupported. Sample `status`
 describes whether the complete attempt finished: a validator exception produces
 a failed sample, while a policy-reference or accuracy qualification miss
 remains a successful sample with its measurement and facts retained.
 Policy-reference correctness is reported separately from `accuracy_qualified`.
+
+The collection policy records deterministic warmup and measurement blocks,
+their execution order, and fresh-session lifecycle. Reports retain attempted,
+successful, failed, and unsupported measurement counts; summarize successful
+measurements with median, raw MAD, and a deterministic percentile-bootstrap
+interval; and reserve block-paired speedup intervals for admissible physical
+comparisons. SDK-simulator reports remain diagnostic-only.
 
 ## Evidence and Comparison Rules
 
@@ -89,12 +97,17 @@ SDK-simulator runs are correctness evidence only.
 ## Current Capability Boundary
 
 Controlled software tests cover the active CPU/TN and SDK-simulator paths,
-including prior ABI-v4 float32/int8 simulator checks against CPU replay. Tag
+including ABI-v4 WRAM-panel float32/int8 simulator checks against CPU replay. Tag
 `thesis-m6-software-ready-v1` and its GitHub release bundle exist, establishing
 completed M6 software qualification. The reset physical UPMEM route remains
 pending and has **not** yet been qualified on ETH hardware. The repository
 therefore makes no reset-route claim of speedup, energy efficiency, multi-rank
 scaling, broad graph residency, or hardware-calibrated planning.
+
+The active native kernel is `dpu_real_tile_v4_wram_panel_v1`: a bounded dense
+real-tile kernel with global shared B panels and tasklet-indexed A/output WRAM
+buffers. It is software/simulator-qualified only. Its use does not establish a
+physical timing, scaling, energy, or kernel-competitiveness result.
 
 The active native runtime uses pinned SimplePIM management types and its
 initialization kernel around raw-SDK allocation and dispatch. It is not yet a

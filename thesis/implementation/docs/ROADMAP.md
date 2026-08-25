@@ -27,14 +27,15 @@ Implemented and software-tested:
 - path selection, same-DAG CPU execution, complex128 reference, and replay;
 - split-complex float32 and host-packed int8 with shared operand scales;
 - local contracted-axis slicing and explicit host reduction;
-- ABI-v4 output/K-tile mapping and four-pass complex simulator execution;
+- ABI-v4 output/K-tile mapping, WRAM-panel dense real-tile execution, and
+  four-pass complex simulator execution;
 - strict manifests, per-sample/session evidence, and claim guards;
 - one-DPU, one-rank SDK-simulator correctness execution.
 
 Not implemented or not qualified in the reset baseline:
 - physical reset qualification and tasklet, DPU, rank, DIMM, or slice scaling;
 - a high-level SimplePIM scheduler, PID-Comm provider, or ATiM kernel route;
-- graph-wide residency, general WRAM-aware tiling, or calibrated planning;
+- graph-wide residency, graph-level memory scheduling, or calibrated planning;
 - measured energy and final CPU/GPU/UPMEM benchmark evidence.
 
 The native runtime currently uses pinned SimplePIM management types and its
@@ -61,7 +62,8 @@ whole-circuit TN fixture on real UPMEM with no fallback.
 **Work.** Build the native runtime from a clean checkout and run one DPU,
 one tasklet, both numeric policies, with raw logs and normalized evidence.
 **Definition of done.** One ETH run contains at least 2 circuits, 2 numeric
-policies, 3 measured repetitions, and complete session facts. Every sample has
+policies, 2 warmup blocks, 30 planned measurement blocks, and complete session
+facts. Every sample has
 `target_observed=physical_hardware`, exact allocation/release confirmation,
 matching physical-plan replay, bounded error against complex128, and no
 simulator/CPU marker. A report verifies the capsule without rerunning hardware.
@@ -162,9 +164,10 @@ tile geometry fixed.
 **Claim.** The measured kernel experiment only. ATiM is not the default engine
 until it passes the same correctness and capability checks.
 
-## Increment 8: Residency and WRAM-aware tiling
+## Increment 8: Residency and graph-level memory mapping
 **Goal.** Move selected intermediate tensors and larger contractions through a
-bounded memory plan without changing the logical DAG.
+bounded memory plan without changing the logical DAG. The active dense kernel's
+local WRAM panel reuse is retained as the lower-level control.
 
 **Work.** Add a lifetime map, MRAM slots, and tiling for one contraction larger
 than one WRAM tile. Start with `host_roundtrip`; add `resident_same_group` only

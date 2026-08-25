@@ -61,12 +61,19 @@ preparation currently happens before their repetition loops.
 
 ### `steady_execution_v1`
 
-Requires a reusable prepared context. A session is opened before warmups and
-remains open through measured samples. Start before input encoding and stop
-after decoded output. Include encode, preparation, transfers, kernels, host
-reduction and decode. Exclude planning, mapping, session open/close, validation,
-hashing and evidence writing. A route unable to provide this lifecycle is
-unsupported for this scope.
+Requires a reusable prepared context. A session is opened before an attempt and
+remains open through that attempt. Start before input encoding and stop after
+decoded output. Include encode, preparation, transfers, kernels, host reduction
+and decode. Exclude planning, mapping, session open/close, validation, hashing
+and evidence writing. A route unable to provide this lifecycle is unsupported
+for this scope.
+
+The active collection policy is `fresh_session_per_attempt_v1`: each UPMEM
+attempt opens its session before this scope, executes exactly one warmup or
+measurement attempt, then closes after this scope. Warmup blocks warm the
+machine and software path, not a persistent session reused by later
+measurements. A persistent-session campaign is a different collection policy
+and cannot be pooled with these samples.
 
 Current NumPy same-DAG and UPMEM session routes emit this scope. Reports reject
 pairing it with `simulation_end_to_end_v1`.
@@ -94,3 +101,10 @@ Planning, native compilation, validation, hashing and report generation never
 enter kernel timing. `energy_j` stays null unless a declared sensor source,
 measurement boundary and interval provide a measured value. Timing evidence
 does not by itself establish physical qualification or speedup.
+
+For the physical campaign configuration, two deterministic warmup blocks are
+excluded from statistics and thirty measured blocks are planned per route. The
+report retains all attempted outcomes, uses successful measurements for the
+median and raw MAD, and reports a 95% percentile-bootstrap interval. It makes
+no post-hoc outlier exclusion. A speedup interval uses block-paired bootstrap
+resampling only after every planned measurement and provenance gate passes.

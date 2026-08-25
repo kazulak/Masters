@@ -14,12 +14,12 @@ SHA-256. Reordering keys does not change an identity.
 | `physical_plan_id` | Logical plan, numeric policy, stages, tiles, placement, topology, tasklets, intermediate/kernel policy | Timestamp, report formatting |
 | `executable_id` | ABI, host/DPU binary hashes, compiler, flags, SDK and build-input hashes | Circuit, report settings |
 | `environment_id` | Host/OS/CPU, SDK, rank inventory, affinity and environment facts | Invocation uniqueness |
-| `experiment_id` | Configuration, routes, warmups, repetitions, timeout, validation policy | One invocation timestamp |
+| `experiment_id` | Configuration, routes, collection blocks/order policy, timeout, validation policy | One invocation timestamp |
 | `run_id` | Fresh UUID4 for one invocation | Deterministic configuration identity |
 | `validation_policy_id` | Reference dtype, metrics, tolerances, fixture bounds | Execution choice |
 | `session_protocol_id` | ABI and serialized protocol version | Open-session instance |
 | `session_instance_id` | One opened runtime session within a run | Protocol identity |
-| `sample_id` | Run, case, plan, route, sample kind and index | Other samples |
+| `sample_id` | Run, case, plan, route, attempt kind/index, block and order | Other samples |
 
 `problem_id` describes the simulated problem, not its representation. Numeric
 precision is an intervention and is therefore outside `problem_id`. The
@@ -35,8 +35,8 @@ changes `executable_id`. Changing host affinity changes `environment_id`.
 Changing report styling changes none of these execution identities.
 
 `sample_id` is derived from `run_id`, `case_id`, `plan_id`, `route_id`,
-`sample_kind`, and `sample_index`; it is not a replacement for the unique
-`run_id`.
+`attempt_kind`, `sample_index`, `block_id`, and `order_index`; it is not a
+replacement for the unique `run_id`.
 
 ## Structure Payload
 

@@ -131,8 +131,9 @@ it is not an execution policy or physical-plan identity.
 
 `UpmemPlan` is target-specific and contains `logical_plan_id`, numeric policy,
 topology, ordered stages, intermediate policy and kernel policy. The active
-intermediate policy is `host_roundtrip_v1`. The active kernel policy is the
-real-tile four-product ABI route.
+intermediate policy is `host_roundtrip_v1`. The active kernel policy is
+`dpu_real_tile_v4_wram_panel_v1`. The split-complex numeric policies normatively
+use sequential `rr`, `ii`, `ri`, and `ir` real-product orchestration.
 
 ```python
 @dataclass(frozen=True)
@@ -156,6 +157,12 @@ The native ABI is a real-valued output-tile contraction ABI. Complex execution
 uses four real-product launches on the assigned work. The current plan is
 bounded and host-roundtrip; it does not imply graph-wide DPU residency,
 arbitrary slicing, multi-rank scaling, speedup, or energy efficiency.
+
+The active kernel stages a fixed `KC=64`, `NC=32` B panel in global WRAM and
+uses tasklet-indexed A/output buffers. Full panels use aligned MRAM transfers;
+the ABI's bounded unaligned helper is for tails only. Its exact source-level
+movement and barrier formulas are plan/runtime facts, not hardware counters or
+a calibrated cost model.
 The requested tasklet count must match both the host and DPU binaries'
 compile-time `NR_TASKLETS`; either side rejects a mismatch before accepting
 kernel results.
@@ -164,9 +171,9 @@ kernel results.
 
 `run_cpu_once`, `replay_upmem_plan_once`, and an opened UPMEM session return an
 `ExecutionSample` containing output, `Measurement`, backend facts, and numeric
-facts. The experiment layer owns warmups, repetitions, evidence rows, and
-validation. A reusable UPMEM session exposes `run_once` and records session
-open/close separately.
+facts. The experiment layer owns warmup/measurement blocks, evidence rows, and
+validation. The active collection policy opens one UPMEM session per attempt;
+session open/close remain separate from `steady_execution_v1` timing.
 
 `UnsupportedExecution(stage, reason, capability)` means preflight rejected the
 request before runtime side effects. `ExecutionFailed(stage, reason,
@@ -195,11 +202,14 @@ Every run has `manifest.json`, `samples.jsonl`, and `sessions.jsonl`. The
 manifest binds source commit, dirty-tree state, experiment, environment,
 validation policy, expected counts, file names, and one canonical identity
 binding for every selected `(case_id, plan_id, route_id)`. Samples bind case,
-route, plan, identities, sample kind/index, timing, facts, validation, and failure.
+route, plan, identities, attempt kind/index, block/order, timing, facts,
+validation, and failure.
 Sessions bind protocol/runtime identity, open/close state, terminal facts, and
-resource release. Canonical validation rejects missing links, duplicate IDs,
-wrong counts, routes outside or missing from the experiment matrix, invalid
-scopes, failed release, or identity mismatches.
+resource release. Samples record attempt kind/index plus deterministic block
+and order. Canonical validation rejects missing links, duplicate IDs, wrong
+counts, routes outside or missing from the experiment matrix, invalid scopes,
+failed release, or identity mismatches. The active schemas are manifest v2,
+sample v3, session v1, and report v3.
 
 Claim admission is explicit. Execution/policy correctness requires a successful
 sample and an applicable, passed policy reference. Full-precision accuracy
@@ -210,7 +220,8 @@ facts. A speedup candidate must have an applicable and passed policy reference,
 `accuracy_qualified=true`, qualified physical
 provenance, and matching scope and identities. Its matching CPU same-plan
 baseline must have `accuracy_qualified=true` and pass its policy reference when
-applicable. Clean linked artifacts, repeated measurements, and a non-bring-up
-timing scope remain required. Scaling requires a matched physical pair. Energy
+applicable. Complete planned measurements, clean linked artifacts, and a
+non-bring-up timing scope remain required. Scaling requires a matched physical
+pair. Energy
 requires positive measured energy, sensor/counter identity, interval, boundary
 and provenance. A rejected claim must remain visible with reasons.

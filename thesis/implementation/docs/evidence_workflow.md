@@ -40,9 +40,10 @@ sessions.jsonl
 `manifest.json` binds schema, run/experiment/environment/validation identities,
 source commit and dirty-tree state, configuration, expected counts, file names,
 and terminal status. `samples.jsonl` has one row per warmup or measurement
-attempt. Each row contains case/route/plan identity, sample kind/index, status,
-measurement, backend facts, numeric facts, validation, output hash, and failure
-when applicable. `sessions.jsonl` records opened or attempted sessions,
+attempt. Each row contains case/route/plan identity, attempt kind/index, block
+and deterministic order, status, measurement, backend facts, numeric facts,
+validation, output hash, and failure when applicable. `sessions.jsonl` records
+opened or attempted sessions,
 protocol identity, terminal facts, close time, release attempts and release
 verification.
 
@@ -50,8 +51,9 @@ An unsupported row is a preflight capability rejection. A failed row records a
 runtime attempt and failure stage. Fatal external termination may leave an
 incomplete artifact; verification must reject it as incomplete.
 
-Samples use `evidence_sample_v2`; reports use `evidence_report_v2`. Manifests
-and sessions remain v1, and sample v1 evidence is unsupported. Sample `status`
+Manifests use `evidence_manifest_v2`, samples use `evidence_sample_v3`,
+sessions use `evidence_session_v1`, and reports use `evidence_report_v3`.
+Earlier sample evidence is unsupported. Sample `status`
 describes whether the complete attempt finished: a validator exception creates
 a failed sample, while a policy-reference mismatch or accuracy qualification
 miss remains a successful sample with its measurement, output hash, and facts
@@ -96,6 +98,14 @@ the canonical JSONL records. Plots must facet by route, plan, numeric policy,
 topology and timing scope where those dimensions differ, and must reject
 duplicate series/x-value keys.
 
+The manifest's collection policy fixes deterministic warmup/measurement block
+order and lifecycle. Reports retain attempted, successful, failed, and
+unsupported measurement counts; calculate median, raw MAD, and deterministic
+percentile-bootstrap intervals from successful measurements; and visibly label
+accuracy-unqualified series. No post-hoc outlier exclusion or replacement
+attempt is performed. Block-paired bootstrap speedup intervals are available
+only after the physical provenance and complete-measurement claim gates pass.
+
 ## Promotion and Claims
 
 Promotion to `thesis_results/` is a deliberate review action: copy only the
@@ -109,8 +119,9 @@ energy. A speedup candidate must have an applicable and passed policy reference,
 `accuracy_qualified=true`, qualified physical provenance, and matching scope
 and identities. Its matching CPU same-plan baseline must have
 `accuracy_qualified=true` and pass its policy reference when applicable.
-Repeated measured samples, clean linked artifacts, and a non-bring-up scope
-remain required. Energy requires measured energy with boundary, sensor/counter
+All planned measurement attempts must complete successfully, clean linked
+artifacts and a non-bring-up scope remain required. Energy requires measured
+energy with boundary, sensor/counter
 identity, interval and provenance. A rejected claim must be reported with its
 reasons.
 

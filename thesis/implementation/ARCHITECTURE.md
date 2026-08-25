@@ -78,6 +78,14 @@ does not yet implement resident DAG intermediates, execution of slice groups
 in parallel, tasklet scheduling policy, active PID-Comm communication, or a
 hardware-calibrated path score.
 
+The active real-tile kernel policy is `dpu_real_tile_v4_wram_panel_v1`. It
+uses fixed `KC=64` and `NC=32` panel geometry, a global shared B panel, and
+tasklet-indexed A/output buffers in WRAM. Full panels use aligned transfers;
+tail geometry uses the ABI's bounded unaligned helper path. This is local
+operand staging and reuse inside one dense real-tile operation. It is not
+graph-wide residency, a general memory scheduler, a tasklet-scaling result, or
+a physical performance result.
+
 ## Identity and Evidence
 
 The evidence layer records distinct identities:
@@ -116,6 +124,19 @@ NumPy-versus-UPMEM comparison is not yet available.
 Physical routes fail closed: no simulator or CPU fallback can satisfy a
 physical request. Simulator evidence is never admitted as physical timing,
 speedup, scaling, or energy evidence.
+
+## Cost-Model Feature Status
+
+The implementation exposes deterministic features for future calibration; it
+does not instantiate or validate a PIM-aware cost model. `B_host-DPU` is
+represented by application-visible H2D/D2H byte fields, not a hardware DMA
+counter. `B_MRAM-WRAM` is represented by exact source-level helper-call and
+requested-payload formulas plus an aligned-transfer-byte estimate, not measured
+MRAM traffic. `I_DPU` is an exact real-MAC formula, `N_sync` is an exact barrier
+event/tasklet-call formula, `E_num` is numeric-policy, scale, and saturation
+evidence without a calibrated coefficient, and `P_WRAM` is an allocated/active
+WRAM formula plus executable section facts. No coefficient, prediction error,
+or path-ranking claim is currently calibrated.
 
 ## Native Boundary
 
