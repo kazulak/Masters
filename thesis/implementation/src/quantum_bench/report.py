@@ -168,7 +168,7 @@ def _aggregate_measurements(
         tuple[object, ...], list[tuple[Mapping[str, Any], Mapping[str, Any]]]
     ] = {}
     for sample in samples:
-        if sample["status"] != "success" or sample["sample_kind"] != "measurement":
+        if sample["status"] != "success" or sample["attempt_kind"] != "measurement":
             continue
         measurement = sample["measurement"]
         if not isinstance(measurement, Mapping):  # validated by load_artifacts
@@ -218,7 +218,7 @@ def _verification_summary(
     successful_measurements = [
         sample
         for sample in sample_rows
-        if sample["sample_kind"] == "measurement"
+        if sample["attempt_kind"] == "measurement"
         and sample["status"] == "success"
     ]
     applicable_policy_validations = [

@@ -15,6 +15,7 @@ from quantum_bench.evidence import (
     append_sample,
     append_session,
     canonical_json,
+    collection_policy_id,
     environment_id,
     finalize_artifacts,
     load_artifacts,
@@ -31,6 +32,12 @@ from quantum_bench.report import (
     verify_artifacts,
 )
 from quantum_bench.results import Measurement
+from quantum_bench.upmem.plan import (
+    UpmemPlan,
+    UpmemStage,
+    UpmemTopology,
+    UpmemWorkUnit,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -83,12 +90,22 @@ def test_make_public_targets_are_exact_and_pidcomm_is_private() -> None:
 
 def _config() -> str:
     return """\
-schema_version: tn_benchmark_v1
+schema_version: tn_benchmark_v2
 experiment_id: focused
 defaults:
-  warmups: 0
-  repetitions: 1
   timeout_s: 2.5
+collection:
+  base_seed: 7
+  warmup_blocks: 0
+  measurement_blocks: 1
+  session_policy: fresh_session_per_attempt_v1
+  cooldown_s: 0.0
+  machine_policy:
+    machine_exclusivity: observed_v1
+    cpu_governor: observed_v1
+    affinity: observed_v1
+    numa_policy: observed_v1
+    background_load: observed_v1
 cases:
   qasm_case:
     circuit:
@@ -293,7 +310,9 @@ def test_experiment_identity_changes_with_repetition_policy(tmp_path: Path) -> N
     first = tmp_path / "first.yml"
     second = tmp_path / "second.yml"
     _write_config(first, _config())
-    _write_config(second, _config().replace("repetitions: 1", "repetitions: 2"))
+    _write_config(
+        second, _config().replace("measurement_blocks: 1", "measurement_blocks: 2")
+    )
 
     assert (
         load_experiment_config(first)["experiment_id"]
@@ -328,12 +347,22 @@ def test_loader_rejects_invalid_simulator_topology(tmp_path: Path) -> None:
 
 def _numpy_config(*, warmups: int = 0, repetitions: int = 1) -> str:
     return f"""\
-schema_version: tn_benchmark_v1
+schema_version: tn_benchmark_v2
 experiment_id: cli-focused
 defaults:
-  warmups: {warmups}
-  repetitions: {repetitions}
   timeout_s: 2.5
+collection:
+  base_seed: 7
+  warmup_blocks: {warmups}
+  measurement_blocks: {repetitions}
+  session_policy: fresh_session_per_attempt_v1
+  cooldown_s: 0.0
+  machine_policy:
+    machine_exclusivity: observed_v1
+    cpu_governor: observed_v1
+    affinity: observed_v1
+    numa_policy: observed_v1
+    background_load: observed_v1
 cases:
   bell:
     circuit:
@@ -448,10 +477,15 @@ def test_simulator_plan_freezes_complex_sliced_qualification_fixture(
         (tmp_path / "simulator-plan" / "plan.json").read_text(encoding="utf-8")
     )
     entries = {entry["route_id"]: entry for entry in document["entries"]}
-    assert set(entries) == {"simulator_float32", "simulator_int8"}
+    assert set(entries) == {
+        "simulator_float32_t1",
+        "simulator_float32_t8",
+        "simulator_int8_t1",
+        "simulator_int8_t8",
+    }
 
-    float_entry = entries["simulator_float32"]
-    int8_entry = entries["simulator_int8"]
+    float_entry = entries["simulator_float32_t1"]
+    int8_entry = entries["simulator_int8_t1"]
     assert float_entry["problem_id"] == (
         "42b85161b341872ea93285b649d9fbb9d146de3f378228309826722a071d925d"
     )
@@ -479,6 +513,27 @@ def test_simulator_plan_freezes_complex_sliced_qualification_fixture(
         float_entry["upmem"]["physical_plan_id"]
         != int8_entry["upmem"]["physical_plan_id"]
     )
+    assert entries["simulator_float32_t8"]["upmem"]["physical_plan_id"] == (
+        "eb1a228c8d24ff214298d1da6dec155cc8c109ffffbffe829940b74f7fae6171"
+    )
+    assert entries["simulator_int8_t8"]["upmem"]["physical_plan_id"] == (
+        "a7431e780bb523e4470aecbc436bf723cef476c48bd37a349011eab4d77796c1"
+    )
+    assert {
+        route_id: entry["upmem"]["topology"]["tasklets_per_dpu"]
+        for route_id, entry in entries.items()
+    } == {
+        "simulator_float32_t1": 1,
+        "simulator_float32_t8": 8,
+        "simulator_int8_t1": 1,
+        "simulator_int8_t8": 8,
+    }
+    assert {
+        entry["logical_plan_id"] for entry in entries.values()
+    } == {float_entry["logical_plan_id"]}
+    assert {
+        entry["upmem"]["kernel_policy"] for entry in entries.values()
+    } == {"dpu_real_tile_v4_wram_panel_v1"}
 
     branches = [
         "contract_24__slice__label_12_value_0__label_14_value_0",
@@ -488,7 +543,7 @@ def test_simulator_plan_freezes_complex_sliced_qualification_fixture(
     ]
     reduction = "contract_24__reduce__label_12__label_14"
     relevant_node_ids = {*branches, reduction}
-    for entry in (float_entry, int8_entry):
+    for entry in entries.values():
         relevant_stages = [
             (stage["kind"], stage["node_ids"])
             for stage in entry["upmem"]["stages"]
@@ -518,7 +573,7 @@ def test_run_direct_dispatch_writes_exact_evidence_files(tmp_path: Path) -> None
         json.loads(line)
         for line in (run_dir / "samples.jsonl").read_text().splitlines()
     ]
-    assert [(row["sample_kind"], row["sample_index"]) for row in samples] == [
+    assert [(row["attempt_kind"], row["sample_index"]) for row in samples] == [
         ("warmup", 0),
         ("measurement", 0),
         ("measurement", 1),
@@ -555,6 +610,85 @@ def test_run_keeps_same_case_route_samples_separate_by_plan_id(tmp_path: Path) -
     assert samples[0]["sample_id"] != samples[1]["sample_id"]
 
 
+def test_collection_schedule_is_deterministic_and_records_block_order(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "two-plans.yml"
+    _write_config(config_path, _two_plan_numpy_config())
+    config = load_experiment_config(config_path)
+    selected = [
+        (item, route_id, config["routes"][route_id])
+        for item in config["matrix"]
+        for route_id in item["route_ids"]
+    ]
+
+    first = cli._scheduled_attempts(config, selected)
+    second = cli._scheduled_attempts(config, selected)
+
+    assert first == second
+    assert [(attempt[0], attempt[2], attempt[3]) for *_, attempt in first] == [
+        ("measurement", 0, 0),
+        ("measurement", 0, 1),
+    ]
+
+
+def test_physical_collection_admission_requires_useful_dpu_and_tasklet_work() -> None:
+    def work_unit(*, dpu: int, m_size: int = 8) -> UpmemWorkUnit:
+        return UpmemWorkUnit(
+            node_id="contract",
+            stable_tile_id=f"contract:{dpu}",
+            wave=0,
+            logical_rank=0,
+            logical_dpu=dpu,
+            batch_start=0,
+            batch_size=1,
+            m_start=dpu * m_size,
+            m_size=m_size,
+            n_start=0,
+            n_size=1,
+            k_start=0,
+            k_size=1,
+            estimated_input_bytes=8,
+            estimated_output_bytes=8,
+            aligned_mram_bytes=24,
+            estimated_arithmetic_work=m_size,
+        )
+
+    def plan(*, dpus: int, tasklets: int, units: tuple[UpmemWorkUnit, ...]) -> UpmemPlan:
+        return UpmemPlan(
+            logical_plan_id="a" * 64,
+            numeric_policy="split_complex_float32_v1",
+            topology=UpmemTopology(
+                dpu_count=dpus, rank_count=1, tasklets_per_dpu=tasklets
+            ),
+            stages=(
+                UpmemStage(
+                    stage_id="contract_batch:contract",
+                    kind="contract_batch",
+                    node_ids=("contract",),
+                    work_units=units,
+                ),
+            ),
+        )
+
+    with pytest.raises(cli.UnsupportedExecution, match="fully populated"):
+        cli._require_collection_resource_admission(
+            plan(dpus=2, tasklets=1, units=(work_unit(dpu=0),)),
+            physical_campaign=True,
+        )
+
+    cli._require_collection_resource_admission(
+        plan(dpus=2, tasklets=1, units=(work_unit(dpu=0), work_unit(dpu=1))),
+        physical_campaign=True,
+    )
+
+    with pytest.raises(cli.UnsupportedExecution, match="one output row per tasklet"):
+        cli._require_collection_resource_admission(
+            plan(dpus=1, tasklets=8, units=(work_unit(dpu=0, m_size=4),)),
+            physical_campaign=True,
+        )
+
+
 def test_load_rejects_tampered_experiment_identity_payload(tmp_path: Path) -> None:
     config = tmp_path / "config.yml"
     _write_config(config, _numpy_config())
@@ -568,6 +702,31 @@ def test_load_rejects_tampered_experiment_identity_payload(tmp_path: Path) -> No
     manifest_path.write_text(canonical_json(manifest) + "\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="experiment identity payload"):
+        load_artifacts(run_dir)
+
+
+def test_load_rejects_tampered_declared_collection_order(tmp_path: Path) -> None:
+    config = tmp_path / "config.yml"
+    _write_config(config, _numpy_config())
+    run_dir = tmp_path / "run"
+    cli.run_command(str(config), str(run_dir), allow_physical=False)
+
+    samples_path = run_dir / "samples.jsonl"
+    sample = json.loads(samples_path.read_text(encoding="utf-8"))
+    sample["order_index"] = 1
+    sample["sample_id"] = sample_id(
+        sample["run_id"],
+        sample["case_id"],
+        sample["route_id"],
+        sample["attempt_kind"],
+        sample["sample_index"],
+        plan_id=sample["plan_id"],
+        block_id=sample["block_id"],
+        order_index=sample["order_index"],
+    )
+    samples_path.write_text(canonical_json(sample) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="declared collection schedule"):
         load_artifacts(run_dir)
 
 
@@ -913,7 +1072,7 @@ def _sample(
     sample_kind: str = "measurement",
 ) -> dict[str, object]:
     sample: dict[str, object] = {
-        "schema_version": "evidence_sample_v2",
+        "schema_version": "evidence_sample_v3",
         "sample_id": sample_id(
             run_id,
             case_id,
@@ -921,14 +1080,19 @@ def _sample(
             sample_kind,
             index,
             plan_id=plan_id,
+            block_id=index,
         ),
         "run_id": run_id,
         "experiment_id": experiment_id,
         "case_id": case_id,
         "plan_id": plan_id,
         "route_id": route_id,
-        "sample_kind": sample_kind,
+        "attempt_kind": sample_kind,
         "sample_index": index,
+        "block_id": index,
+        "order_index": 0,
+        "observed_affinity": [0],
+        "background_load_1m": 0.0,
         "session_instance_id": session_instance_id,
         "status": status,
         "identities": {
@@ -996,6 +1160,7 @@ def _session(
 
 _ENVIRONMENT = {"host": "test-host", "os": "test-os"}
 _VALIDATION_POLICY = {"reference_dtype": "complex128", "atol": 1.0e-5}
+_COLLECTION_POLICY = {"base_seed": 7, "session_policy": "test"}
 
 
 def _artifact(
@@ -1025,9 +1190,10 @@ def _artifact(
         for sample in samples
     }
     manifest = {
-        "schema_version": "evidence_manifest_v1",
+        "schema_version": "evidence_manifest_v2",
         "run_id": run_id,
         "experiment_id": experiment_id,
+        "collection_policy_id": collection_policy_id(_COLLECTION_POLICY),
         "environment_id": environment_id_value,
         "validation_policy_id": policy_id,
         "created_at_utc": "2026-08-24T12:00:00Z",
@@ -1050,9 +1216,9 @@ def _artifact(
             ],
         },
         "expected_counts": {
-            "warmup": sum(sample["sample_kind"] == "warmup" for sample in samples),
+            "warmup": sum(sample["attempt_kind"] == "warmup" for sample in samples),
             "measurement": sum(
-                sample["sample_kind"] == "measurement" for sample in samples
+                sample["attempt_kind"] == "measurement" for sample in samples
             ),
             "sessions": len(sessions),
         },

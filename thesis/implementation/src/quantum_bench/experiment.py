@@ -20,6 +20,7 @@ from quantum_bench.evidence import (
     append_sample,
     append_session,
     canonical_json,
+    collection_policy_id,
     identity_hash,
     sample_id,
     validate_sample,
@@ -92,19 +93,41 @@ _DEFAULT_VALIDATION_POLICY_ID = identity_hash(
     "quantum_bench.validation_policy_id.v1", _DEFAULT_VALIDATION_POLICY
 )
 
-_CONFIG_SCHEMA = "tn_benchmark_v1"
+_CONFIG_SCHEMA = "tn_benchmark_v2"
 _CONFIG_FIELDS = frozenset(
     {
         "schema_version",
         "experiment_id",
         "defaults",
+        "collection",
         "cases",
         "plans",
         "routes",
         "matrix",
     }
 )
-_DEFAULT_FIELDS = frozenset({"warmups", "repetitions", "timeout_s"})
+_DEFAULT_FIELDS = frozenset({"timeout_s"})
+_COLLECTION_FIELDS = frozenset(
+    {
+        "base_seed",
+        "warmup_blocks",
+        "measurement_blocks",
+        "session_policy",
+        "cooldown_s",
+        "machine_policy",
+    }
+)
+_MACHINE_POLICY_FIELDS = frozenset(
+    {
+        "machine_exclusivity",
+        "cpu_governor",
+        "affinity",
+        "numa_policy",
+        "background_load",
+    }
+)
+_SESSION_POLICIES = frozenset({"fresh_session_per_attempt_v1"})
+_OBSERVATION_POLICIES = frozenset({"observed_v1"})
 _CASE_FIELDS = frozenset({"circuit"})
 _CIRCUIT_FIELDS = frozenset({"kind", "name", "path", "parameters"})
 _PLAN_FIELDS = frozenset({"planner", "slicing"})
@@ -399,7 +422,7 @@ def _normalize_route(value: object, root: Path, field: str) -> dict[str, object]
 
 
 def load_experiment_config(path: str | os.PathLike[str]) -> Mapping[str, object]:
-    """Load and strictly validate one immutable ``tn_benchmark_v1`` config."""
+    """Load and strictly validate one immutable ``tn_benchmark_v2`` config."""
 
     config_path = Path(path)
     if not config_path.exists() or not config_path.is_file():
@@ -411,16 +434,56 @@ def load_experiment_config(path: str | os.PathLike[str]) -> Mapping[str, object]
         raise ValueError("configuration has an invalid schema_version")
     experiment_label = _config_id(config["experiment_id"], "experiment_id")
     defaults = dict(_config_fields(config["defaults"], _DEFAULT_FIELDS, "defaults"))
-    defaults["warmups"] = _config_int(defaults["warmups"], "defaults.warmups")
-    defaults["repetitions"] = _config_int(
-        defaults["repetitions"], "defaults.repetitions", minimum=1
-    )
     timeout_s = defaults["timeout_s"]
     if isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float)):
         raise ValueError("defaults.timeout_s must be finite and > 0")
     if not isfinite(float(timeout_s)) or float(timeout_s) <= 0:
         raise ValueError("defaults.timeout_s must be finite and > 0")
     config["defaults"] = defaults
+
+    collection = dict(
+        _config_fields(config["collection"], _COLLECTION_FIELDS, "collection")
+    )
+    collection["base_seed"] = _config_int(
+        collection["base_seed"], "collection.base_seed"
+    )
+    collection["warmup_blocks"] = _config_int(
+        collection["warmup_blocks"], "collection.warmup_blocks"
+    )
+    collection["measurement_blocks"] = _config_int(
+        collection["measurement_blocks"],
+        "collection.measurement_blocks",
+        minimum=1,
+    )
+    collection["session_policy"] = _config_string(
+        collection["session_policy"], "collection.session_policy"
+    )
+    if collection["session_policy"] not in _SESSION_POLICIES:
+        raise ValueError("collection.session_policy has an unsupported value")
+    cooldown_s = collection["cooldown_s"]
+    if isinstance(cooldown_s, bool) or not isinstance(cooldown_s, (int, float)):
+        raise ValueError("collection.cooldown_s must be finite and >= 0")
+    if not isfinite(float(cooldown_s)) or float(cooldown_s) < 0:
+        raise ValueError("collection.cooldown_s must be finite and >= 0")
+    collection["cooldown_s"] = float(cooldown_s)
+    machine_policy = dict(
+        _config_fields(
+            collection["machine_policy"],
+            _MACHINE_POLICY_FIELDS,
+            "collection.machine_policy",
+        )
+    )
+    for field, value in machine_policy.items():
+        machine_policy[field] = _config_string(
+            value, f"collection.machine_policy.{field}"
+        )
+        if machine_policy[field] not in _OBSERVATION_POLICIES:
+            raise ValueError(
+                f"collection.machine_policy.{field} has an unsupported value"
+            )
+    collection["machine_policy"] = machine_policy
+    config["collection"] = collection
+    config["collection_policy_id"] = collection_policy_id(collection)
 
     cases_raw = _config_mapping(config["cases"], "cases")
     if not cases_raw:
@@ -508,7 +571,7 @@ def load_experiment_config(path: str | os.PathLike[str]) -> Mapping[str, object]
     }
     config["experiment_identity_payload"] = experiment_identity_payload
     config["experiment_id"] = identity_hash(
-        "quantum_bench.experiment_id.v1", experiment_identity_payload
+        "quantum_bench.experiment_id.v2", experiment_identity_payload
     )
     frozen = _freeze_config(config)
     if not isinstance(frozen, Mapping):  # pragma: no cover
@@ -531,6 +594,46 @@ def default_validation_policy_id() -> str:
     return _DEFAULT_VALIDATION_POLICY_ID
 
 
+def _attempt_schedule(
+    *,
+    warmups: int,
+    repetitions: int,
+    attempts: tuple[tuple[str, int, int, int], ...] | None,
+) -> tuple[tuple[str, int, int, int], ...]:
+    """Normalize ``(kind, index, block, order)`` attempt tuples."""
+
+    if attempts is None:
+        attempts = tuple(
+            (kind, index, block_id, 0)
+            for kind, count, block_offset in (
+                ("warmup", warmups, 0),
+                ("measurement", repetitions, warmups),
+            )
+            for index in range(count)
+            for block_id in (block_offset + index,)
+        )
+    if not isinstance(attempts, tuple):
+        raise TypeError("attempts must be a tuple of attempt tuples or None")
+    normalized: list[tuple[str, int, int, int]] = []
+    for attempt in attempts:
+        if not isinstance(attempt, tuple) or len(attempt) != 4:
+            raise TypeError("attempts must contain (kind, index, block, order) tuples")
+        kind, sample_index, block_id, order_index = attempt
+        if kind not in {"warmup", "measurement"}:
+            raise ValueError("attempt kind must be warmup or measurement")
+        for value, field in (
+            (sample_index, "attempt sample index"),
+            (block_id, "attempt block ID"),
+            (order_index, "attempt order index"),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{field} must be a non-negative integer")
+        normalized.append((kind, sample_index, block_id, order_index))
+    if len(set(normalized)) != len(normalized):
+        raise ValueError("attempts must not contain duplicate attempt tuples")
+    return tuple(normalized)
+
+
 def run_direct_samples(
     *,
     run_id: str,
@@ -544,6 +647,7 @@ def run_direct_samples(
     run_once: Callable[[], ExecutionSample],
     samples_path: str | os.PathLike[str],
     validate: Callable[[ExecutionSample], Mapping[str, JsonValue]] | None = None,
+    attempts: tuple[tuple[str, int, int, int], ...] | None = None,
 ) -> tuple[Mapping[str, JsonValue], ...]:
     """Run and append all warmup and measurement samples for a direct route."""
 
@@ -559,29 +663,32 @@ def run_direct_samples(
         samples_path=samples_path,
         run_once=run_once,
     )
+    schedule = _attempt_schedule(
+        warmups=warmups, repetitions=repetitions, attempts=attempts
+    )
     _reject_planned_sample_id_collisions(
-        samples_path,
-        _planned_sample_ids(run_id, case_id, route_id, warmups, repetitions, plan_id),
+        samples_path, _planned_sample_ids(run_id, case_id, route_id, plan_id, schedule)
     )
 
     rows: list[Mapping[str, JsonValue]] = []
-    for sample_kind, count in (("warmup", warmups), ("measurement", repetitions)):
-        for sample_index in range(count):
-            row = _run_sample(
-                run_id=run_id,
-                experiment_id=experiment_id,
-                case_id=case_id,
-                route_id=route_id,
-                plan_id=plan_id,
-                identities=normalized_identities,
-                sample_kind=sample_kind,
-                sample_index=sample_index,
-                session_instance_id=None,
-                invoke=lambda: run_once(),
-                validate=validate,
-            )
-            append_sample(samples_path, row)
-            rows.append(row)
+    for attempt_kind, sample_index, block_id, order_index in schedule:
+        row = _run_sample(
+            run_id=run_id,
+            experiment_id=experiment_id,
+            case_id=case_id,
+            route_id=route_id,
+            plan_id=plan_id,
+            identities=normalized_identities,
+            attempt_kind=attempt_kind,
+            sample_index=sample_index,
+            block_id=block_id,
+            order_index=order_index,
+            session_instance_id=None,
+            invoke=lambda: run_once(),
+            validate=validate,
+        )
+        append_sample(samples_path, row)
+        rows.append(row)
     return tuple(rows)
 
 
@@ -601,6 +708,7 @@ def run_session_samples(
     samples_path: str | os.PathLike[str],
     sessions_path: str | os.PathLike[str],
     validate: Callable[[ExecutionSample], Mapping[str, JsonValue]] | None = None,
+    attempts: tuple[tuple[str, int, int, int], ...] | None = None,
 ) -> tuple[tuple[Mapping[str, JsonValue], ...], Mapping[str, JsonValue]]:
     """Run samples on one persistent session and append its lifecycle record."""
 
@@ -619,9 +727,11 @@ def run_session_samples(
         open_session=open_session,
         inputs=inputs,
     )
+    schedule = _attempt_schedule(
+        warmups=warmups, repetitions=repetitions, attempts=attempts
+    )
     _reject_planned_sample_id_collisions(
-        samples_path,
-        _planned_sample_ids(run_id, case_id, route_id, warmups, repetitions, plan_id),
+        samples_path, _planned_sample_ids(run_id, case_id, route_id, plan_id, schedule)
     )
 
     session_instance_id = str(uuid4())
@@ -648,7 +758,18 @@ def run_session_samples(
             failure={"stage": exc.stage, "reason": exc.reason},
         )
         append_session(sessions_path, session_row)
-        return (), session_row
+        return _session_open_failure_rows(
+            run_id=run_id,
+            experiment_id=experiment_id,
+            case_id=case_id,
+            route_id=route_id,
+            plan_id=plan_id,
+            identities=normalized_identities,
+            session_instance_id=session_instance_id,
+            failure=exc,
+            schedule=schedule,
+            samples_path=samples_path,
+        ), session_row
     except ExecutionFailed as exc:
         open_s = time.perf_counter() - open_started
         session_row = _session_row(
@@ -665,7 +786,18 @@ def run_session_samples(
             failure={"stage": exc.stage, "reason": exc.reason},
         )
         append_session(sessions_path, session_row)
-        return (), session_row
+        return _session_open_failure_rows(
+            run_id=run_id,
+            experiment_id=experiment_id,
+            case_id=case_id,
+            route_id=route_id,
+            plan_id=plan_id,
+            identities=normalized_identities,
+            session_instance_id=session_instance_id,
+            failure=exc,
+            schedule=schedule,
+            samples_path=samples_path,
+        ), session_row
     except Exception as exc:
         open_s = time.perf_counter() - open_started
         session_row = _session_row(
@@ -682,7 +814,18 @@ def run_session_samples(
             failure={"stage": "session_open", "reason": _unexpected_reason(exc)},
         )
         append_session(sessions_path, session_row)
-        return (), session_row
+        return _session_open_failure_rows(
+            run_id=run_id,
+            experiment_id=experiment_id,
+            case_id=case_id,
+            route_id=route_id,
+            plan_id=plan_id,
+            identities=normalized_identities,
+            session_instance_id=session_instance_id,
+            failure=ExecutionFailed("session_open", _unexpected_reason(exc), {}),
+            schedule=schedule,
+            samples_path=samples_path,
+        ), session_row
 
     open_s = time.perf_counter() - open_started
     rows: list[Mapping[str, JsonValue]] = []
@@ -717,37 +860,33 @@ def run_session_samples(
 
     try:
         if interface_failure is None:
-            for sample_kind, count in (
-                ("warmup", warmups),
-                ("measurement", repetitions),
-            ):
-                for sample_index in range(count):
-                    row = _run_sample(
-                        run_id=run_id,
-                        experiment_id=experiment_id,
-                        case_id=case_id,
-                        route_id=route_id,
-                        plan_id=plan_id,
-                        identities=normalized_identities,
-                        sample_kind=sample_kind,
-                        sample_index=sample_index,
-                        session_instance_id=session_instance_id,
-                        invoke=lambda: run_method(inputs),
-                        persistent_session=True,
-                        validate=validate,
-                    )
-                    append_sample(samples_path, row)
-                    rows.append(row)
-                    if row["status"] != "success":
-                        failure = row["failure"]
-                        if not isinstance(failure, Mapping):  # pragma: no cover
-                            raise TypeError("failed sample has no failure mapping")
-                        sample_failure = {
-                            "stage": failure["stage"],
-                            "reason": failure["reason"],
-                        }
-                        break
-                if sample_failure is not None:
+            for attempt_kind, sample_index, block_id, order_index in schedule:
+                row = _run_sample(
+                    run_id=run_id,
+                    experiment_id=experiment_id,
+                    case_id=case_id,
+                    route_id=route_id,
+                    plan_id=plan_id,
+                    identities=normalized_identities,
+                    attempt_kind=attempt_kind,
+                    sample_index=sample_index,
+                    block_id=block_id,
+                    order_index=order_index,
+                    session_instance_id=session_instance_id,
+                    invoke=lambda: run_method(inputs),
+                    persistent_session=True,
+                    validate=validate,
+                )
+                append_sample(samples_path, row)
+                rows.append(row)
+                if row["status"] != "success":
+                    failure = row["failure"]
+                    if not isinstance(failure, Mapping):  # pragma: no cover
+                        raise TypeError("failed sample has no failure mapping")
+                    sample_failure = {
+                        "stage": failure["stage"],
+                        "reason": failure["reason"],
+                    }
                     break
     finally:
         close_failure: Mapping[str, JsonValue] | None = None
@@ -822,6 +961,46 @@ def run_session_samples(
     return tuple(rows), session_row
 
 
+def _session_open_failure_rows(
+    *,
+    run_id: str,
+    experiment_id: str,
+    case_id: str,
+    route_id: str,
+    plan_id: str | None,
+    identities: Mapping[str, JsonValue],
+    session_instance_id: str,
+    failure: UnsupportedExecution | ExecutionFailed,
+    schedule: tuple[tuple[str, int, int, int], ...],
+    samples_path: str | os.PathLike[str],
+) -> tuple[Mapping[str, JsonValue], ...]:
+    """Emit one failed row when a fresh session cannot open for an attempt."""
+
+    if not schedule:
+        return ()
+    attempt_kind, sample_index, block_id, order_index = schedule[0]
+
+    def raise_failure() -> ExecutionSample:
+        raise failure
+
+    row = _run_sample(
+        run_id=run_id,
+        experiment_id=experiment_id,
+        case_id=case_id,
+        route_id=route_id,
+        plan_id=plan_id,
+        identities=identities,
+        attempt_kind=attempt_kind,
+        sample_index=sample_index,
+        block_id=block_id,
+        order_index=order_index,
+        session_instance_id=session_instance_id,
+        invoke=raise_failure,
+    )
+    append_sample(samples_path, row)
+    return (row,)
+
+
 def _validate_arguments(**values: Any) -> dict[str, JsonValue]:
     _canonical_uuid4(values["run_id"], "run_id")
     _sha256_string(values["experiment_id"], "experiment_id")
@@ -880,30 +1059,38 @@ def _run_sample(
     route_id: str,
     plan_id: str | None,
     identities: Mapping[str, JsonValue],
-    sample_kind: str,
+    attempt_kind: str,
     sample_index: int,
+    block_id: int,
+    order_index: int,
     session_instance_id: str | None,
     invoke: Callable[[], Any],
     persistent_session: bool = False,
     validate: Callable[[ExecutionSample], Mapping[str, JsonValue]] | None = None,
 ) -> Mapping[str, JsonValue]:
     base: dict[str, JsonValue] = {
-        "schema_version": "evidence_sample_v2",
+        "schema_version": "evidence_sample_v3",
         "sample_id": sample_id(
             run_id,
             case_id,
             route_id,
-            sample_kind,
+            attempt_kind,
             sample_index,
             plan_id=plan_id,
+            block_id=block_id,
+            order_index=order_index,
         ),
         "run_id": run_id,
         "experiment_id": experiment_id,
         "case_id": case_id,
         "plan_id": plan_id,
         "route_id": route_id,
-        "sample_kind": sample_kind,
+        "attempt_kind": attempt_kind,
         "sample_index": sample_index,
+        "block_id": block_id,
+        "order_index": order_index,
+        "observed_affinity": _observed_affinity(),
+        "background_load_1m": _background_load_1m(),
         "session_instance_id": session_instance_id,
         "identities": identities,
         "validation": None,
@@ -1005,6 +1192,23 @@ def _run_sample(
         }
 
 
+def _observed_affinity() -> list[int] | None:
+    if not hasattr(os, "sched_getaffinity"):
+        return None
+    try:
+        return sorted(os.sched_getaffinity(0))
+    except OSError:
+        return None
+
+
+def _background_load_1m() -> float | None:
+    try:
+        value = float(os.getloadavg()[0])
+    except (AttributeError, OSError):
+        return None
+    return value if isfinite(value) and value >= 0.0 else None
+
+
 def _measurement_mapping(measurement: Measurement) -> Mapping[str, JsonValue]:
     return {field: getattr(measurement, field) for field in _MEASUREMENT_FIELDS}
 
@@ -1086,21 +1290,21 @@ def _planned_sample_ids(
     run_id: str,
     case_id: str,
     route_id: str,
-    warmups: int,
-    repetitions: int,
     plan_id: str | None,
+    attempts: tuple[tuple[str, int, int, int], ...],
 ) -> frozenset[str]:
     return frozenset(
         sample_id(
             run_id,
             case_id,
             route_id,
-            sample_kind,
+            attempt_kind,
             sample_index,
             plan_id=plan_id,
+            block_id=block_id,
+            order_index=order_index,
         )
-        for sample_kind, count in (("warmup", warmups), ("measurement", repetitions))
-        for sample_index in range(count)
+        for attempt_kind, sample_index, block_id, order_index in attempts
     )
 
 

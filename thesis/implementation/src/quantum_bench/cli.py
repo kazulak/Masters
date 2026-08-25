@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import platform
 import subprocess
+import time
 from typing import Any
 
 import numpy as np
@@ -30,9 +31,11 @@ from quantum_bench.cpu import (
 )
 from quantum_bench.evidence import (
     canonical_json,
+    collection_policy_id,
     environment_id,
     executable_id,
     finalize_artifacts,
+    identity_hash,
     new_run_id,
     problem_id,
     tensor_network_structure_id,
@@ -143,8 +146,46 @@ def _environment(config: Mapping[str, object]) -> tuple[str, Mapping[str, JsonVa
         "affinity": affinity,
         "requested_rank_paths": sorted(set(rank_paths)),
         "upmem_sdk_version": _tool_version(("dpu-pkg-config", "--version")),
+        "collection_machine_policy": config["collection"]["machine_policy"],
+        "initial_background_load_1m": _background_load_1m(),
+        "observed_cpu_governors": _cpu_governors(),
+        "observed_numa_nodes": _numa_nodes(),
     }
     return environment_id(facts), facts
+
+
+def _background_load_1m() -> float | None:
+    try:
+        value = float(os.getloadavg()[0])
+    except (AttributeError, OSError):
+        return None
+    return value if np.isfinite(value) and value >= 0.0 else None
+
+
+def _cpu_governors() -> list[str]:
+    governors: set[str] = set()
+    root = Path("/sys/devices/system/cpu")
+    try:
+        paths = root.glob("cpu*/cpufreq/scaling_governor")
+        for path in paths:
+            value = path.read_text(encoding="utf-8").strip()
+            if value:
+                governors.add(value)
+    except OSError:
+        return []
+    return sorted(governors)
+
+
+def _numa_nodes() -> list[str]:
+    root = Path("/sys/devices/system/node")
+    try:
+        return sorted(
+            path.name
+            for path in root.iterdir()
+            if path.is_dir() and path.name.startswith("node") and path.name[4:].isdigit()
+        )
+    except OSError:
+        return []
 
 
 def _tool_version(command: tuple[str, ...]) -> str | None:
@@ -539,16 +580,148 @@ def _prepare_output(output: str) -> Path:
 
 def _expected_counts(config: Mapping[str, object]) -> Mapping[str, int]:
     selected_routes = sum(len(item["route_ids"]) for item in config["matrix"])
+    collection = config["collection"]
+    attempt_count = collection["warmup_blocks"] + collection["measurement_blocks"]
     return {
-        "warmup": selected_routes * config["defaults"]["warmups"],
-        "measurement": selected_routes * config["defaults"]["repetitions"],
+        "warmup": selected_routes * collection["warmup_blocks"],
+        "measurement": selected_routes * collection["measurement_blocks"],
         "sessions": sum(
             route_id in config["routes"]
             and config["routes"][route_id]["executor"] in _UPMEM_EXECUTORS
             for item in config["matrix"]
             for route_id in item["route_ids"]
-        ),
+        )
+        * attempt_count,
     }
+
+
+def _collection_configuration_id(
+    matrix_item: Mapping[str, object], route_id: str
+) -> str:
+    return identity_hash(
+        "quantum_bench.collection_configuration_id.v1",
+        {
+            "case_id": matrix_item["case_id"],
+            "plan_id": matrix_item["plan_id"],
+            "route_id": route_id,
+        },
+    )
+
+
+def _collection_order_key(
+    *,
+    base_seed: int,
+    experiment_id: str,
+    block_id: int,
+    configuration_id: str,
+) -> bytes:
+    return hashlib.sha256(
+        b"quantum_bench.collection_order.v1\0"
+        + str(base_seed).encode("ascii")
+        + b"\0"
+        + experiment_id.encode("ascii")
+        + b"\0"
+        + str(block_id).encode("ascii")
+        + b"\0"
+        + configuration_id.encode("ascii")
+    ).digest()
+
+
+def _scheduled_attempts(
+    config: Mapping[str, object],
+    selected: list[tuple[Mapping[str, object], str, Mapping[str, object]]],
+) -> tuple[
+    tuple[Mapping[str, object], str, Mapping[str, object], tuple[str, int, int, int]],
+    ...,
+]:
+    """Return deterministic warmup/measurement blocks for every selected route."""
+
+    collection = config["collection"]
+    base_seed = collection["base_seed"]
+    if not isinstance(base_seed, int):  # guarded by config validation
+        raise TypeError("collection.base_seed must be an integer")
+    blocks = (
+        ("warmup", collection["warmup_blocks"], 0),
+        (
+            "measurement",
+            collection["measurement_blocks"],
+            collection["warmup_blocks"],
+        ),
+    )
+    schedule: list[
+        tuple[Mapping[str, object], str, Mapping[str, object], tuple[str, int, int, int]]
+    ] = []
+    for attempt_kind, block_count, block_offset in blocks:
+        if not isinstance(block_count, int) or not isinstance(block_offset, int):
+            raise TypeError("collection block counts must be integers")
+        for sample_index in range(block_count):
+            block_id = block_offset + sample_index
+            ordered = sorted(
+                selected,
+                key=lambda entry: (
+                    _collection_order_key(
+                        base_seed=base_seed,
+                        experiment_id=config["experiment_id"],
+                        block_id=block_id,
+                        configuration_id=_collection_configuration_id(
+                            entry[0], entry[1]
+                        ),
+                    ),
+                    _collection_configuration_id(entry[0], entry[1]),
+                ),
+            )
+            schedule.extend(
+                (item, route_id, route, (attempt_kind, sample_index, block_id, order))
+                for order, (item, route_id, route) in enumerate(ordered)
+            )
+    return tuple(schedule)
+
+
+def _require_collection_resource_admission(
+    plan: UpmemPlan, *, physical_campaign: bool
+) -> None:
+    """Reject requested scaling with no fully populated dominant wave."""
+
+    if not physical_campaign:
+        return
+    topology = plan.topology
+    units_by_stage = [
+        stage.work_units for stage in plan.stages if stage.kind == "contract_batch"
+    ]
+    if topology.tasklets_per_dpu > 1:
+        if any(
+            unit.m_size < topology.tasklets_per_dpu
+            for units in units_by_stage
+            for unit in units
+        ):
+            raise UnsupportedExecution(
+                "collection_admission",
+                "tasklet scaling requires every work unit to provide one output row per tasklet",
+                "upmem_tasklet_work_unit_rows",
+            )
+    if topology.dpu_count <= 1:
+        return
+    if not units_by_stage:
+        raise UnsupportedExecution(
+            "collection_admission",
+            "DPU scaling requires contraction work units",
+            "upmem_dpu_work_units",
+        )
+    dominant = max(
+        units_by_stage,
+        key=lambda units: sum(unit.estimated_arithmetic_work for unit in units),
+    )
+    fully_populated = any(
+        len({(unit.logical_rank, unit.logical_dpu) for unit in dominant if unit.wave == wave})
+        == topology.dpu_count
+        for wave in {unit.wave for unit in dominant}
+    )
+    if not fully_populated:
+        raise UnsupportedExecution(
+            "collection_admission",
+            "DPU scaling requires a fully populated dominant work-unit wave",
+            "upmem_dpu_wave_utilization",
+        )
 
 
 def _require_physical_opt_in(*, allow_physical: bool) -> None:
@@ -556,6 +729,14 @@ def _require_physical_opt_in(*, allow_physical: bool) -> None:
         raise ValueError("physical UPMEM requires --allow-physical")
     if os.environ.get("UPMEM_ALLOW_PHYSICAL_HARDWARE") != "1":
         raise ValueError("physical UPMEM requires UPMEM_ALLOW_PHYSICAL_HARDWARE=1")
+
+
+def _collection_cooldown(config: Mapping[str, object]) -> None:
+    cooldown_s = config["collection"]["cooldown_s"]
+    if not isinstance(cooldown_s, float):  # guarded by config validation
+        raise TypeError("collection.cooldown_s must be a float")
+    if cooldown_s:
+        time.sleep(cooldown_s)
 
 
 def _direct_runner(
@@ -604,6 +785,7 @@ def _run_config(
         for item in config["matrix"]
         for route_id in item["route_ids"]
     ]
+    scheduled = _scheduled_attempts(config, selected)
     if qualification_only:
         if any(route["executor"] != "upmem_physical" for _, _, route in selected):
             raise ValueError("qualify accepts only upmem_physical routes")
@@ -617,9 +799,10 @@ def _run_config(
     env_id, env_facts = _environment(config)
     run_id = new_run_id()
     manifest = {
-        "schema_version": "evidence_manifest_v1",
+        "schema_version": "evidence_manifest_v2",
         "run_id": run_id,
         "experiment_id": config["experiment_id"],
+        "collection_policy_id": collection_policy_id(config["collection"]),
         "environment_id": env_id,
         "validation_policy_id": default_validation_policy_id(),
         "created_at_utc": datetime.now(timezone.utc)
@@ -688,7 +871,7 @@ def _run_config(
         write_manifest(target / "manifest.json", manifest)
 
     try:
-        for matrix_item, route_id, route in selected:
+        for matrix_item, route_id, route, attempt in scheduled:
             case_id = matrix_item["case_id"]
             job = jobs.setdefault(case_id, _job(config["cases"][case_id]))
             plan_id = matrix_item["plan_id"]
@@ -716,6 +899,10 @@ def _run_config(
                         dag,
                         numeric_policy=route["numeric_policy"],
                         topology=_topology(route),
+                    )
+                    _require_collection_resource_admission(
+                        upmem_plan,
+                        physical_campaign=route["executor"] == "upmem_physical",
                     )
                 except UnsupportedExecution as exc:
                     identities = _identities(
@@ -749,11 +936,13 @@ def _run_config(
                         route_id=route_id,
                         plan_id=plan_id,
                         identities=identities,
-                        warmups=config["defaults"]["warmups"],
-                        repetitions=config["defaults"]["repetitions"],
+                        warmups=0,
+                        repetitions=0,
                         run_once=unsupported,
                         samples_path=target / "samples.jsonl",
+                        attempts=(attempt,),
                     )
+                    _collection_cooldown(config)
                     continue
             identities = _identities(
                 job=job,
@@ -815,15 +1004,17 @@ def _run_config(
                     route_id=route_id,
                     plan_id=plan_id,
                     identities=identities,
-                    warmups=config["defaults"]["warmups"],
-                    repetitions=config["defaults"]["repetitions"],
+                    warmups=0,
+                    repetitions=0,
                     session_protocol_id=_SESSION_PROTOCOL_ID,
                     open_session=opener,
                     inputs=inputs,
                     samples_path=target / "samples.jsonl",
                     sessions_path=target / "sessions.jsonl",
                     validate=validate,
+                    attempts=(attempt,),
                 )
+                _collection_cooldown(config)
                 continue
 
             if route["executor"] == "numpy_dag":
@@ -865,14 +1056,16 @@ def _run_config(
                 route_id=route_id,
                 plan_id=plan_id,
                 identities=identities,
-                warmups=config["defaults"]["warmups"],
-                repetitions=config["defaults"]["repetitions"],
+                warmups=0,
+                repetitions=0,
                 run_once=_direct_runner(
                     route, job, dag, inputs, config["defaults"]["timeout_s"]
                 ),
                 samples_path=target / "samples.jsonl",
                 validate=validate,
+                attempts=(attempt,),
             )
+            _collection_cooldown(config)
     except Exception:
         try:
             persist_identity_bindings()

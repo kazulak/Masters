@@ -21,8 +21,8 @@ from quantum_bench.model import SimulationJob, TensorNetwork
 from quantum_bench.results import Measurement as _Measurement
 
 
-_MANIFEST_SCHEMA = "evidence_manifest_v1"
-_SAMPLE_SCHEMA = "evidence_sample_v2"
+_MANIFEST_SCHEMA = "evidence_manifest_v2"
+_SAMPLE_SCHEMA = "evidence_sample_v3"
 _SESSION_SCHEMA = "evidence_session_v1"
 _SAMPLE_KINDS = frozenset({"warmup", "measurement"})
 _SAMPLE_STATUSES = frozenset({"success", "unsupported", "failed"})
@@ -33,6 +33,7 @@ _MANIFEST_FIELDS = frozenset(
         "schema_version",
         "run_id",
         "experiment_id",
+        "collection_policy_id",
         "environment_id",
         "validation_policy_id",
         "created_at_utc",
@@ -53,8 +54,12 @@ _SAMPLE_FIELDS = frozenset(
         "case_id",
         "plan_id",
         "route_id",
-        "sample_kind",
+        "attempt_kind",
         "sample_index",
+        "block_id",
+        "order_index",
+        "observed_affinity",
+        "background_load_1m",
         "session_instance_id",
         "status",
         "identities",
@@ -254,6 +259,90 @@ def _route_sort_key(
     return key[0], "" if key[1] is None else key[1], key[2]
 
 
+def _collection_configuration_id(
+    route: tuple[str, str | None, str],
+) -> str:
+    case_id, plan_id, route_id = route
+    return identity_hash(
+        "quantum_bench.collection_configuration_id.v1",
+        {"case_id": case_id, "plan_id": plan_id, "route_id": route_id},
+    )
+
+
+def _collection_order_key(
+    *, base_seed: int, experiment_id: str, block_id: int, configuration_id: str
+) -> bytes:
+    return hashlib.sha256(
+        b"quantum_bench.collection_order.v1\0"
+        + str(base_seed).encode("ascii")
+        + b"\0"
+        + experiment_id.encode("ascii")
+        + b"\0"
+        + str(block_id).encode("ascii")
+        + b"\0"
+        + configuration_id.encode("ascii")
+    ).digest()
+
+
+def _declared_collection_attempts(
+    manifest: Mapping[str, Any],
+) -> set[tuple[str, str | None, str, str, int, int, int]] | None:
+    """Return the exact v2 schedule or ``None`` for non-experiment fixtures."""
+
+    configuration = _mapping(manifest["configuration"], "configuration")
+    experiment = configuration.get("experiment")
+    if not isinstance(experiment, Mapping) or experiment.get("schema_version") != "tn_benchmark_v2":
+        return None
+    collection = _mapping(experiment.get("collection"), "configuration.experiment.collection")
+    base_seed = collection.get("base_seed")
+    warmup_blocks = collection.get("warmup_blocks")
+    measurement_blocks = collection.get("measurement_blocks")
+    for value, field in (
+        (base_seed, "collection.base_seed"),
+        (warmup_blocks, "collection.warmup_blocks"),
+        (measurement_blocks, "collection.measurement_blocks"),
+    ):
+        _nonnegative_int(value, field)
+    assert isinstance(base_seed, int)
+    assert isinstance(warmup_blocks, int)
+    assert isinstance(measurement_blocks, int)
+    routes = _declared_matrix_routes(manifest)
+    if routes is None:
+        raise ValueError("v2 collection schedule requires an experiment matrix")
+    attempts: set[tuple[str, str | None, str, str, int, int, int]] = set()
+    for attempt_kind, count, offset in (
+        ("warmup", warmup_blocks, 0),
+        ("measurement", measurement_blocks, warmup_blocks),
+    ):
+        for sample_index in range(count):
+            block_id = offset + sample_index
+            ordered = sorted(
+                routes,
+                key=lambda route: (
+                    _collection_order_key(
+                        base_seed=base_seed,
+                        experiment_id=manifest["experiment_id"],
+                        block_id=block_id,
+                        configuration_id=_collection_configuration_id(route),
+                    ),
+                    _collection_configuration_id(route),
+                ),
+            )
+            attempts.update(
+                (
+                    case_id,
+                    plan_id,
+                    route_id,
+                    attempt_kind,
+                    sample_index,
+                    block_id,
+                    order_index,
+                )
+                for order_index, (case_id, plan_id, route_id) in enumerate(ordered)
+            )
+    return attempts
+
+
 def _sha256(value: object, field: str) -> None:
     if not isinstance(value, str):
         raise TypeError(f"{field} must be a lowercase SHA-256 hex string")
@@ -368,6 +457,12 @@ def validation_policy_id(value: Mapping[str, Any]) -> str:
     return _mapping_identity("quantum_bench.validation_policy_id.v1", value)
 
 
+def collection_policy_id(value: Mapping[str, Any]) -> str:
+    """Return the identity of a frozen collection-policy mapping."""
+
+    return _mapping_identity("quantum_bench.collection_policy_id.v1", value)
+
+
 def executable_id(value: Mapping[str, Any]) -> str:
     """Return the identity of an executable/provenance mapping."""
 
@@ -384,10 +479,12 @@ def sample_id(
     run_id: str,
     case_id: str,
     route_id: str,
-    sample_kind: str,
+    attempt_kind: str,
     sample_index: int,
     *,
     plan_id: str | None = None,
+    block_id: int = 0,
+    order_index: int = 0,
 ) -> str:
     """Return the stable identity of one warmup or measurement sample."""
 
@@ -395,13 +492,15 @@ def sample_id(
         (run_id, "run_id"),
         (case_id, "case_id"),
         (route_id, "route_id"),
-        (sample_kind, "sample_kind"),
+        (attempt_kind, "attempt_kind"),
     ):
         _nonempty_string(value, field)
-    if sample_kind not in _SAMPLE_KINDS:
-        raise ValueError("sample_kind must be warmup or measurement")
+    if attempt_kind not in _SAMPLE_KINDS:
+        raise ValueError("attempt_kind must be warmup or measurement")
     _nullable_or_string(plan_id, "plan_id")
     _nonnegative_int(sample_index, "sample_index")
+    _nonnegative_int(block_id, "block_id")
+    _nonnegative_int(order_index, "order_index")
     return identity_hash(
         _SAMPLE_SCHEMA,
         {
@@ -409,8 +508,10 @@ def sample_id(
             "case_id": case_id,
             "plan_id": plan_id,
             "route_id": route_id,
-            "sample_kind": sample_kind,
+            "attempt_kind": attempt_kind,
             "sample_index": sample_index,
+            "block_id": block_id,
+            "order_index": order_index,
         },
     )
 
@@ -423,7 +524,12 @@ def validate_manifest(record: Mapping[str, Any]) -> None:
     if record["schema_version"] != _MANIFEST_SCHEMA:
         raise ValueError("manifest has an invalid schema_version")
     _uuid4(record["run_id"], "run_id")
-    for field in ("experiment_id", "environment_id", "validation_policy_id"):
+    for field in (
+        "experiment_id",
+        "collection_policy_id",
+        "environment_id",
+        "validation_policy_id",
+    ):
         _sha256(record[field], field)
     _created_at_utc(record["created_at_utc"])
     if not isinstance(record["source_commit"], str):
@@ -634,10 +740,19 @@ def validate_sample(record: Mapping[str, Any]) -> None:
         _nonempty_string(record[field], field)
     _nullable_or_string(record["plan_id"], "plan_id")
     _nonempty_string(record["sample_id"], "sample_id")
-    _nonempty_string(record["sample_kind"], "sample_kind")
-    if record["sample_kind"] not in _SAMPLE_KINDS:
-        raise ValueError("sample_kind must be warmup or measurement")
+    _nonempty_string(record["attempt_kind"], "attempt_kind")
+    if record["attempt_kind"] not in _SAMPLE_KINDS:
+        raise ValueError("attempt_kind must be warmup or measurement")
     _nonnegative_int(record["sample_index"], "sample_index")
+    _nonnegative_int(record["block_id"], "block_id")
+    _nonnegative_int(record["order_index"], "order_index")
+    affinity = record["observed_affinity"]
+    if affinity is not None:
+        if not isinstance(affinity, list) or not affinity:
+            raise ValueError("observed_affinity must be a nonempty list or null")
+        for cpu in affinity:
+            _nonnegative_int(cpu, "observed_affinity item")
+    _nullable_finite_nonnegative(record["background_load_1m"], "background_load_1m")
     _nullable_or_string(record["session_instance_id"], "session_instance_id")
     if record["status"] not in _SAMPLE_STATUSES:
         raise ValueError("sample status must be success, unsupported, or failed")
@@ -648,9 +763,11 @@ def validate_sample(record: Mapping[str, Any]) -> None:
         record["run_id"],
         record["case_id"],
         record["route_id"],
-        record["sample_kind"],
+        record["attempt_kind"],
         record["sample_index"],
         plan_id=record["plan_id"],
+        block_id=record["block_id"],
+        order_index=record["order_index"],
     )
     if record["sample_id"] != expected_id:
         raise ValueError("sample_id does not match the sample identity fields")
@@ -706,7 +823,7 @@ def require_matching_scope(
         validate_sample(sample)
         if sample["status"] != "success":
             raise ValueError("scope admission requires successful samples")
-        if sample["sample_kind"] != "measurement":
+        if sample["attempt_kind"] != "measurement":
             raise ValueError("scope admission requires measurement samples")
         if sample["measurement"] is None:
             raise ValueError("scope admission requires non-null measurements")
@@ -821,6 +938,9 @@ def validate_artifact_set(
 
     sample_ids: set[str] = set()
     successful_scopes: dict[tuple[str, str | None, str], set[str]] = {}
+    observed_collection_attempts: set[
+        tuple[str, str | None, str, str, int, int, int]
+    ] = set()
     actual_counts = {"warmup": 0, "measurement": 0, "sessions": len(session_rows)}
     for sample in sample_rows:
         validate_sample(sample)
@@ -851,7 +971,18 @@ def validate_artifact_set(
         if current_sample_id in sample_ids:
             raise ValueError(f"duplicate sample_id: {current_sample_id}")
         sample_ids.add(current_sample_id)
-        actual_counts[sample["sample_kind"]] += 1
+        actual_counts[sample["attempt_kind"]] += 1
+        observed_collection_attempts.add(
+            (
+                sample["case_id"],
+                sample["plan_id"],
+                sample["route_id"],
+                sample["attempt_kind"],
+                sample["sample_index"],
+                sample["block_id"],
+                sample["order_index"],
+            )
+        )
         if sample["status"] == "success":
             measurement = sample["measurement"]
             assert measurement is not None
@@ -875,6 +1006,14 @@ def validate_artifact_set(
 
     expected_counts = manifest["expected_counts"]
     if manifest["status"] == "completed":
+        declared_collection_attempts = _declared_collection_attempts(manifest)
+        if (
+            declared_collection_attempts is not None
+            and observed_collection_attempts != declared_collection_attempts
+        ):
+            raise ValueError(
+                "completed artifact samples do not match the declared collection schedule"
+            )
         if actual_counts != dict(expected_counts):
             raise ValueError(
                 f"completed artifact counts do not match expected_counts: {actual_counts}"
@@ -1169,7 +1308,7 @@ def _validate_manifest_identity_payloads(manifest: Mapping[str, Any]) -> None:
         raise ValueError(
             "manifest experiment_id does not match configuration.experiment"
         )
-    if normalized_config.get("schema_version") == "tn_benchmark_v1":
+    if normalized_config.get("schema_version") == "tn_benchmark_v2":
         payload = _mapping(
             normalized_config.get("experiment_identity_payload"),
             "configuration.experiment.experiment_identity_payload",
@@ -1186,11 +1325,18 @@ def _validate_manifest_identity_payloads(manifest: Mapping[str, Any]) -> None:
             "experiment identity payload validation_policy_id",
         )
         expected_experiment_id = identity_hash(
-            "quantum_bench.experiment_id.v1", payload
+            "quantum_bench.experiment_id.v2", payload
         )
         if expected_experiment_id != manifest["experiment_id"]:
             raise ValueError(
                 "manifest experiment_id does not match experiment identity payload"
+            )
+        collection = _mapping(
+            normalized_config.get("collection"), "configuration.experiment.collection"
+        )
+        if collection_policy_id(collection) != manifest["collection_policy_id"]:
+            raise ValueError(
+                "manifest collection_policy_id does not match collection policy"
             )
     if environment_id(environment) != manifest["environment_id"]:
         raise ValueError(
@@ -1229,6 +1375,7 @@ __all__ = [
     "append_sample",
     "append_session",
     "canonical_json",
+    "collection_policy_id",
     "finalize_artifacts",
     "identity_hash",
     "load_artifacts",

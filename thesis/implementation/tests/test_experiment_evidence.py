@@ -16,6 +16,7 @@ from quantum_bench.evidence import (
     append_sample,
     append_session,
     canonical_json,
+    collection_policy_id,
     environment_id,
     executable_id,
     finalize_artifacts,
@@ -54,6 +55,7 @@ _OTHER_RUN_ID = new_run_id()
 _EXPERIMENT_ID = "e" * 64
 _ENVIRONMENT_ID = "d" * 64
 _POLICY_ID = "c" * 64
+_COLLECTION_POLICY_ID = collection_policy_id({"policy": "test"})
 _SESSION_ID = "session-1"
 _LIFECYCLE_RUN_ID = "12345678-1234-4234-8234-1234567890ab"
 
@@ -86,9 +88,10 @@ def _manifest(
     if expected_counts is None:
         expected_counts = {"warmup": 0, "measurement": 1, "sessions": 1}
     return {
-        "schema_version": "evidence_manifest_v1",
+        "schema_version": "evidence_manifest_v2",
         "run_id": run_id,
         "experiment_id": _EXPERIMENT_ID,
+        "collection_policy_id": _COLLECTION_POLICY_ID,
         "environment_id": _ENVIRONMENT_ID,
         "validation_policy_id": _POLICY_ID,
         "created_at_utc": created_at_utc,
@@ -137,15 +140,27 @@ def _sample(
     validation_policy_id: str = _POLICY_ID,
 ) -> dict[str, object]:
     record: dict[str, object] = {
-        "schema_version": "evidence_sample_v2",
-        "sample_id": sample_id(run_id, case_id, route_id, kind, index, plan_id=plan_id),
+        "schema_version": "evidence_sample_v3",
+        "sample_id": sample_id(
+            run_id,
+            case_id,
+            route_id,
+            kind,
+            index,
+            plan_id=plan_id,
+            block_id=index,
+        ),
         "run_id": run_id,
         "experiment_id": experiment_id,
         "case_id": case_id,
         "plan_id": plan_id,
         "route_id": route_id,
-        "sample_kind": kind,
+        "attempt_kind": kind,
         "sample_index": index,
+        "block_id": index,
+        "order_index": 0,
+        "observed_affinity": [0],
+        "background_load_1m": 0.0,
         "session_instance_id": session_instance_id,
         "status": status,
         "identities": {
@@ -1233,7 +1248,7 @@ def test_direct_lifecycle_orders_samples_and_validates_each_attempt(
         validate=validate,
     )
 
-    assert [(row["sample_kind"], row["sample_index"]) for row in rows] == [
+    assert [(row["attempt_kind"], row["sample_index"]) for row in rows] == [
         ("warmup", 0),
         ("measurement", 0),
         ("measurement", 1),
@@ -1452,7 +1467,7 @@ def test_session_open_and_run_failures_stop_later_attempts(tmp_path: Path) -> No
         "reason": "unsupported route",
     }
 
-    _, open_row = run_session_samples(
+    open_rows, open_row = run_session_samples(
         run_id="32345678-1234-4234-8234-1234567890ab",
         experiment_id=_EXPERIMENT_ID,
         case_id="open-failure",
@@ -1469,7 +1484,10 @@ def test_session_open_and_run_failures_stop_later_attempts(tmp_path: Path) -> No
         sessions_path=sessions_path,
     )
     assert open_row["failure"] == {"stage": "connect", "reason": "refused"}
-    assert len(_read_jsonl(samples_path)) == 1
+    assert len(open_rows) == 1
+    assert open_rows[0]["status"] == "failed"
+    assert open_rows[0]["failure"] == {"stage": "connect", "reason": "refused"}
+    assert len(_read_jsonl(samples_path)) == 2
 
 
 def test_session_timing_and_execution_failures_stop_the_session(

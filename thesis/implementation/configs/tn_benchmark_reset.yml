@@ -1,9 +1,19 @@
-schema_version: tn_benchmark_v1
+schema_version: tn_benchmark_v2
 experiment_id: reset-smoke
 defaults:
-  warmups: 1
-  repetitions: 3
   timeout_s: 120.0
+collection:
+  base_seed: 20260825
+  warmup_blocks: 1
+  measurement_blocks: 3
+  session_policy: fresh_session_per_attempt_v1
+  cooldown_s: 0.0
+  machine_policy:
+    machine_exclusivity: observed_v1
+    cpu_governor: observed_v1
+    affinity: observed_v1
+    numa_policy: observed_v1
+    background_load: observed_v1
 cases:
   bell:
     circuit:
