@@ -19,3 +19,4 @@ __pycache__/
 build/
 dist/
 *.egg-info/
+M7_EXECUTION_STATE.md

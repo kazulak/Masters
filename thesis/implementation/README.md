@@ -89,11 +89,10 @@ SDK-simulator runs are correctness evidence only.
 ## Current Capability Boundary
 
 Controlled software tests cover the active CPU/TN and SDK-simulator paths,
-including prior ABI-v4 float32/int8 simulator checks against CPU replay. The
-deterministic sliced complex workflow is configured for M6.4, but exact-head
-software qualification remains pending until
-`thesis-m6-software-ready-v1` and its release bundle exist. The reset physical
-UPMEM route has **not** yet been qualified on ETH hardware. The repository
+including prior ABI-v4 float32/int8 simulator checks against CPU replay. Tag
+`thesis-m6-software-ready-v1` and its GitHub release bundle exist, establishing
+completed M6 software qualification. The reset physical UPMEM route remains
+pending and has **not** yet been qualified on ETH hardware. The repository
 therefore makes no reset-route claim of speedup, energy efficiency, multi-rank
 scaling, broad graph residency, or hardware-calibrated planning.
 

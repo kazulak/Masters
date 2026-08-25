@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "quantum-bench"
 version = "0.1.0"
-description = "Route-aware quantum simulation benchmark framework for thesis evaluation"
+description = "End-to-end tensor-network quantum-circuit simulation benchmark framework"
 requires-python = ">=3.10"
 dependencies = [
   "numpy",

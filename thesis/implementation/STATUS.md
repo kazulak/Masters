@@ -6,9 +6,9 @@ historical experiments or a performance claim.
 ## Software Qualification State
 
 The authoritative M6 exact-head record is the annotated tag
-`thesis-m6-software-ready-v1` and its archived release bundle. Until that tag
-and release bundle exist, `software_merge_ready` is not established. The
-pending M6.4 qualification run must not be pre-claimed here.
+`thesis-m6-software-ready-v1` and its published GitHub release bundle. M6
+software qualification is complete and `software_merge_ready` is established.
+Physical UPMEM qualification remains pending.
 
 | Capability | Implemented | Software/simulator validation | Physical evidence | Claimable now |
 |---|---|---|---|---|
@@ -20,9 +20,9 @@ pending M6.4 qualification run must not be pre-claimed here.
 | QuEST CPU adapter | Yes | Controlled software tests | No current reset run | Adapter availability, not CPU performance |
 | QuEST GPU adapter | Yes | Controlled software tests | No compatible GPU run | Capability detection and explicit unsupported result |
 | UPMEM physical mapping | Yes, bounded output/K tiles | Yes | Reset route pending | Plan construction only |
-| ABI-v4 UPMEM runtime | Yes | Controlled simulator tests; M6.4 pending | Reset route pending | Controlled-test correctness only |
-| Split-complex float32 | Yes | Controlled CPU replay/simulator tests; M6.4 pending | Reset route pending | Controlled-test correctness only |
-| Split-complex packed int8 | Yes | Controlled CPU replay/simulator tests; M6.4 pending | Reset route pending | Controlled-test correctness and numeric facts |
+| ABI-v4 UPMEM runtime | Yes | Controlled simulator tests; M6 software qualification complete | Reset route pending | Controlled-test correctness only |
+| Split-complex float32 | Yes | Controlled CPU replay/simulator tests; M6 software qualification complete | Reset route pending | Controlled-test correctness only |
+| Split-complex packed int8 | Yes | Controlled CPU replay/simulator tests; M6 software qualification complete | Reset route pending | Controlled-test correctness and numeric facts |
 | Local contraction slicing | Yes | Yes | Reset route pending | Logical slicing correctness only |
 | Host reduction | Yes | Yes | Reset route pending | Bounded host-round-trip correctness |
 | DPU-resident intermediates | No | No | No | No claim |
@@ -39,15 +39,15 @@ pending M6.4 qualification run must not be pre-claimed here.
 
 Controlled tests cover the active pipeline from `SimulationJob` through a
 target-neutral `TensorNetwork`, selected path, `ContractionDAG`, direct CPU/TN
-execution or a bounded `UpmemPlan`, canonical evidence, and reports. These
-coverage results do not establish exact-head M6.4 qualification.
+execution or a bounded `UpmemPlan`, canonical evidence, and reports.
 
-The active M6.4 simulator configuration is deterministic sliced complex
-4-qubit `quantization_stress`: four partial branches, one host reduction, and
-split-complex float32 plus shared-scale packed int8 routes on one rank, one DPU
-and one tasklet. When executed and verified during M6.4, it produces
-simulator-only correctness evidence. It has not yet established exact-head
-qualification, and its timing is never physical performance evidence.
+M6 software qualification is complete at tag `thesis-m6-software-ready-v1` and
+its release bundle. The qualification run uses the deterministic sliced complex
+4-qubit `quantization_stress` suite (four partial branches, one host reduction,
+and split-complex float32 plus shared-scale packed int8 routes on one rank, one
+DPU and one tasklet). This produces simulator-only correctness evidence.
+Simulator timing is never physical performance evidence, and physical UPMEM
+qualification remains pending with no physical speedup, scaling, or energy claim.
 
 ## Physical Qualification State
 
