@@ -473,6 +473,8 @@ def test_simulator_plan_freezes_complex_sliced_qualification_fixture(
     assert int8_entry["upmem"]["physical_plan_id"] == (
         "644c1f556fa8665b950e445b865bcd52e014a25a0698c49d623c3377430a30c2"
     )
+    assert float_entry["upmem"]["kernel_policy"] == "dpu_real_tile_v4_wram_panel_v1"
+    assert int8_entry["upmem"]["kernel_policy"] == "dpu_real_tile_v4_wram_panel_v1"
     assert (
         float_entry["upmem"]["physical_plan_id"]
         != int8_entry["upmem"]["physical_plan_id"]

@@ -1,5 +1,5 @@
 schema_version: tn_benchmark_v1
-experiment_id: abi-v4-complex-simulator
+experiment_id: m7a-wram-panel-simulator
 defaults:
   warmups: 1
   repetitions: 2

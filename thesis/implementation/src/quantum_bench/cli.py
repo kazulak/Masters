@@ -477,6 +477,7 @@ def _plan_document(config: Mapping[str, object]) -> Mapping[str, object]:
                         "route_id": route_id,
                         "upmem": {
                             "physical_plan_id": physical_plan_id(compiled),
+                            "kernel_policy": compiled.kernel_policy,
                             "topology": {
                                 "dpu_count": compiled.topology.dpu_count,
                                 "rank_count": compiled.topology.rank_count,
