@@ -61,6 +61,10 @@ from quantum_bench.upmem.protocol import (
     V4Profile,
     V4ProtocolError,
     V4WorkUnit,
+    WRAM_PANEL_DMA_BYTES,
+    WRAM_PANEL_KC,
+    WRAM_PANEL_NC,
+    WRAM_PANEL_UNALIGNED_SCRATCH_BYTES,
     build_v4_request,
     native_execution_identity,
 )
@@ -75,6 +79,16 @@ _INT64_MAX = (1 << 63) - 1
 
 _NUMERIC_POLICY_FLOAT32 = "split_complex_float32_v1"
 _NUMERIC_POLICY_INT8 = "split_complex_int8_shared_scale_v1"
+_WRAM_PANEL_LANE_COUNT = 4
+_WRAM_PANEL_OUTPUT_BYTES_PER_ELEMENT = 4
+_WRAM_PANEL_A_BUFFER_BYTES = WRAM_PANEL_KC * 4
+_WRAM_PANEL_OUTPUT_BUFFER_BYTES = WRAM_PANEL_NC * _WRAM_PANEL_OUTPUT_BYTES_PER_ELEMENT
+_WRAM_PANEL_SHARED_BUFFER_BYTES = WRAM_PANEL_KC * WRAM_PANEL_NC * 4
+_WRAM_PANEL_PRIVATE_BYTES_PER_TASKLET = (
+    _WRAM_PANEL_A_BUFFER_BYTES
+    + _WRAM_PANEL_OUTPUT_BUFFER_BYTES
+    + WRAM_PANEL_UNALIGNED_SCRATCH_BYTES
+)
 
 
 def _validate_numeric_policy(policy: NumericPolicy) -> NumericPolicy:
@@ -85,6 +99,125 @@ def _validate_numeric_policy(policy: NumericPolicy) -> NumericPolicy:
 
 def _is_packed_policy(policy: NumericPolicy) -> bool:
     return _validate_numeric_policy(policy) == _NUMERIC_POLICY_INT8
+
+
+def _align8(value: int) -> int:
+    return (value + 7) & ~7
+
+
+def _aligned_transfer_span(offset: int, payload_bytes: int) -> int:
+    """Return the aligned MRAM span implied by one source-level helper call."""
+
+    return _align8((offset & 7) + payload_bytes)
+
+
+def _wram_panel_operation_facts(
+    work_units: tuple[UpmemWorkUnit, ...],
+    *,
+    numeric_policy: NumericPolicy,
+    tasklets_per_dpu: int,
+) -> dict[str, int | str]:
+    """Derive source-level movement facts for four sequential real products.
+
+    The values count calls made by the frozen WRAM-panel algorithm. They are
+    not device counters: unaligned SDK helpers may issue additional internal
+    transactions, so their aligned byte total is deliberately an estimate.
+    """
+
+    packed = _is_packed_policy(numeric_policy)
+    input_bytes = 1 if packed else 4
+    b_read_calls = 0
+    a_read_calls = 0
+    output_partial_read_calls = 0
+    output_write_calls = 0
+    requested_bytes = 0
+    aligned_bytes = 0
+    barrier_events = 0
+    real_macs = 0
+
+    for unit in work_units:
+        m_size = unit.m_size
+        n_size = unit.n_size
+        k_size = unit.k_size
+        a_bytes = _align8(m_size * k_size * input_bytes)
+        b_offset = a_bytes
+        b_bytes = _align8(k_size * n_size * input_bytes)
+        c_offset = b_offset + b_bytes
+        n_panel_count = (n_size + WRAM_PANEL_NC - 1) // WRAM_PANEL_NC
+        k_panel_count = (k_size + WRAM_PANEL_KC - 1) // WRAM_PANEL_KC
+        barrier_events += 4 + 2 * n_panel_count * k_panel_count
+        real_macs += m_size * n_size * k_size
+
+        for n_start in range(0, n_size, WRAM_PANEL_NC):
+            actual_n = min(WRAM_PANEL_NC, n_size - n_start)
+            for k_start in range(0, k_size, WRAM_PANEL_KC):
+                actual_k = min(WRAM_PANEL_KC, k_size - k_start)
+                b_panel_bytes = actual_k * actual_n * input_bytes
+                full_b_panel = (
+                    actual_k == WRAM_PANEL_KC
+                    and actual_n == WRAM_PANEL_NC
+                    and n_size == WRAM_PANEL_NC
+                )
+                if full_b_panel:
+                    calls = (
+                        b_panel_bytes + WRAM_PANEL_DMA_BYTES - 1
+                    ) // WRAM_PANEL_DMA_BYTES
+                    b_read_calls += calls
+                    requested_bytes += b_panel_bytes
+                    aligned_bytes += b_panel_bytes
+                else:
+                    for k_index in range(actual_k):
+                        offset = b_offset + (
+                            (k_start + k_index) * n_size + n_start
+                        ) * input_bytes
+                        b_read_calls += 1
+                        requested_bytes += actual_n * input_bytes
+                        aligned_bytes += _aligned_transfer_span(
+                            offset, actual_n * input_bytes
+                        )
+
+                for row in range(m_size):
+                    a_offset = (row * k_size + k_start) * input_bytes
+                    a_payload = actual_k * input_bytes
+                    a_read_calls += 1
+                    requested_bytes += a_payload
+                    aligned_bytes += _aligned_transfer_span(a_offset, a_payload)
+
+                    c_row_offset = c_offset + (
+                        row * n_size + n_start
+                    ) * _WRAM_PANEL_OUTPUT_BYTES_PER_ELEMENT
+                    c_payload = actual_n * _WRAM_PANEL_OUTPUT_BYTES_PER_ELEMENT
+                    if k_start:
+                        output_partial_read_calls += 1
+                        requested_bytes += c_payload
+                        aligned_bytes += _aligned_transfer_span(
+                            c_row_offset, c_payload
+                        )
+                    output_write_calls += 1
+                    requested_bytes += c_payload
+                    aligned_bytes += _aligned_transfer_span(c_row_offset, c_payload)
+
+    lane_count = _WRAM_PANEL_LANE_COUNT
+    return {
+        "origin": "wram_panel_algorithm_v1",
+        "lane_count": lane_count,
+        "operand_read_helper_calls_exact": lane_count * (a_read_calls + b_read_calls),
+        "output_partial_read_helper_calls_exact": lane_count * output_partial_read_calls,
+        "output_write_helper_calls_exact": lane_count * output_write_calls,
+        "mram_requested_payload_bytes_exact": lane_count * requested_bytes,
+        "mram_aligned_transfer_bytes_estimate": lane_count * aligned_bytes,
+        "barrier_events_exact": lane_count * barrier_events,
+        "barrier_tasklet_calls_exact": lane_count * barrier_events * tasklets_per_dpu,
+        "real_mac_count_exact": lane_count * real_macs,
+        "wram_shared_bytes_exact": _WRAM_PANEL_SHARED_BUFFER_BYTES,
+        "wram_private_bytes_per_tasklet_exact": _WRAM_PANEL_PRIVATE_BYTES_PER_TASKLET,
+        "wram_active_bytes_exact": (
+            _WRAM_PANEL_SHARED_BUFFER_BYTES
+            + tasklets_per_dpu * _WRAM_PANEL_PRIVATE_BYTES_PER_TASKLET
+        ),
+        "mram_helper_count_scope": "source_level_helper_calls",
+        "mram_aligned_bytes_scope": "geometric_aligned_span_estimate",
+    }
 
 
 def _encode_real_plane(
@@ -1234,6 +1367,11 @@ class UpmemV4Session:
             "application_visible_h2d_bytes": h2d_bytes,
             "application_visible_d2h_bytes": d2h_bytes,
             "application_visible_transfer_bytes": h2d_bytes + d2h_bytes,
+            "wram_panel_facts": _wram_panel_operation_facts(
+                stage.work_units,
+                numeric_policy=numeric_policy,
+                tasklets_per_dpu=self.engine.tasklets_per_dpu,
+            ),
             "physical_stage_consumed": True,
             "stage_id": stage.stage_id,
             "cpu_fallback_used": False,
@@ -2459,6 +2597,7 @@ def _operation_summary(metadata: Mapping[str, Any]) -> Mapping[str, JsonValue]:
         "application_visible_h2d_bytes",
         "application_visible_d2h_bytes",
         "application_visible_transfer_bytes",
+        "wram_panel_facts",
         "physical_stage_consumed",
         "target_observed",
         "test_double_execution",

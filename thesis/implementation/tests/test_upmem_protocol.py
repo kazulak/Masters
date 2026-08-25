@@ -372,6 +372,12 @@ def test_v4_native_sources_preserve_the_abi_and_build_contract() -> None:
     assert "V4_CONTROL.reserved0 != (uint32_t)NR_TASKLETS" in dpu
     assert "#define EXECUTION_PLAN_V4_INT8_MAX_ABS 127u" in protocol_header
     assert "#define EXECUTION_PLAN_V4_NATIVE_KERNEL \"dpu_real_tile_v4_wram_panel_v1\"" in protocol_header
+    assert "#define EXECUTION_PLAN_V4_WRAM_PANEL_KC 64u" in protocol_header
+    assert "#define EXECUTION_PLAN_V4_WRAM_PANEL_NC 32u" in protocol_header
+    assert protocol.WRAM_PANEL_KC == 64
+    assert protocol.WRAM_PANEL_NC == 32
+    assert protocol.WRAM_PANEL_DMA_BYTES == 2048
+    assert protocol.WRAM_PANEL_UNALIGNED_SCRATCH_BYTES == 288
     assert "EXECUTION_PLAN_V4_INT8_MAX_ABS" in dpu
     assert "MAX_TASKLETS := 24" in makefile
     assert "bin/host_upmem_execution_plan_v4_t%" in makefile
