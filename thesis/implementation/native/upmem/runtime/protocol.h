@@ -27,6 +27,7 @@
 #define EXECUTION_PLAN_V4_PARTITION_OUTPUT_TILE 1u
 #define EXECUTION_PLAN_V4_NUMERIC_FLOAT32 0u
 #define EXECUTION_PLAN_V4_NUMERIC_HOST_PACKED_INT8 1u
+#define EXECUTION_PLAN_V4_INT8_MAX_ABS 127u
 #define EXECUTION_PLAN_V4_FLAG_ZERO_WORK 0x00000001u
 #define EXECUTION_PLAN_V4_CONTROL_MAGIC 0x34564354u
 #define EXECUTION_PLAN_V4_COMPLETION_MAGIC 0x34564350u
@@ -115,7 +116,9 @@ _Static_assert(sizeof(execution_plan_v4_control_t) == 72u,
     "distributed v4 control ABI drifted");
 _Static_assert(sizeof(execution_plan_v4_completion_t) == 40u,
     "distributed v4 completion ABI drifted");
-_Static_assert((uint64_t)EXECUTION_PLAN_V4_MAX_CONTRACTED * 128u * 128u <= 2147483647u,
+_Static_assert((uint64_t)EXECUTION_PLAN_V4_MAX_CONTRACTED *
+        (uint64_t)EXECUTION_PLAN_V4_INT8_MAX_ABS *
+        (uint64_t)EXECUTION_PLAN_V4_INT8_MAX_ABS <= 2147483647u,
     "v4 int32 accumulation bound is unsafe");
 
 #endif

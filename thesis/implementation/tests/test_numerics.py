@@ -7,6 +7,7 @@ import pytest
 
 from quantum_bench.model import ContractNode, TensorSpec, TensorView
 from quantum_bench.numerics import (
+    INT8_QUANTIZED_MAX_ABS,
     EncodedComplexTensor,
     NumericPolicy,
     contract_complex_products,
@@ -48,12 +49,14 @@ def test_public_exports_are_exact() -> None:
     import quantum_bench.numerics as numerics
 
     assert numerics.__all__ == [
+        "INT8_QUANTIZED_MAX_ABS",
         "NumericPolicy",
         "EncodedComplexTensor",
         "encode_complex_tensor",
         "contract_complex_products",
         "decode_complex_products",
     ]
+    assert numerics.INT8_QUANTIZED_MAX_ABS == 127
 
 
 @pytest.mark.parametrize("value", [np.array([1.0, np.nan]), np.array([np.inf + 0j])])
@@ -96,8 +99,23 @@ def test_int8_uses_shared_scale_and_zero_fallback() -> None:
 
 def test_int8_endpoint_is_not_saturation_but_out_of_range_is() -> None:
     ordinary = encode_complex_tensor(np.array([4.0 + 0j]), INT8)
-    assert ordinary.real[0] == 127
+    assert ordinary.real[0] == INT8_QUANTIZED_MAX_ABS
     assert ordinary.saturation_real == 0
+
+
+def test_int8_quantization_emits_only_within_bounded_magnitude() -> None:
+    values = np.linspace(-1000.0, 1000.0, 500) + 1j * np.linspace(-500.0, 500.0, 500)
+    encoded = encode_complex_tensor(values, INT8)
+    assert np.all(encoded.real >= -INT8_QUANTIZED_MAX_ABS)
+    assert np.all(encoded.real <= INT8_QUANTIZED_MAX_ABS)
+    assert np.all(encoded.imag >= -INT8_QUANTIZED_MAX_ABS)
+    assert np.all(encoded.imag <= INT8_QUANTIZED_MAX_ABS)
+    assert int(np.min(encoded.real)) >= -127
+    assert int(np.max(encoded.real)) <= 127
+    assert int(np.min(encoded.imag)) >= -127
+    assert int(np.max(encoded.imag)) <= 127
+    assert -128 not in encoded.real
+    assert -128 not in encoded.imag
 
 
 def test_int8_rounding_is_nearest_even_and_deterministic() -> None:
@@ -203,7 +221,7 @@ def test_outer_product_preserves_requested_output_order() -> None:
 
 
 def test_contract_rejects_unsafe_int32_k_before_einsum() -> None:
-    safe_k = np.iinfo(np.int32).max // (127**2)
+    safe_k = np.iinfo(np.int32).max // (INT8_QUANTIZED_MAX_ABS**2)
 
     def node_with_k(k: int) -> ContractNode:
         return _matrix_node(

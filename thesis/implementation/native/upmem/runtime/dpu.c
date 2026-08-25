@@ -114,7 +114,9 @@ int main(void) {
             ((V4_CONTROL.flags & EXECUTION_PLAN_V4_FLAG_ZERO_WORK) == 0u &&
                 (V4_CONTROL.m_elements == 0u || V4_CONTROL.n_elements == 0u ||
                  V4_CONTROL.k_elements == 0u || V4_CONTROL.k_elements > EXECUTION_PLAN_V4_MAX_CONTRACTED ||
-                 (uint64_t)V4_CONTROL.k_elements * 128u * 128u > 2147483647u ||
+                 (uint64_t)V4_CONTROL.k_elements *
+                     (uint64_t)EXECUTION_PLAN_V4_INT8_MAX_ABS *
+                     (uint64_t)EXECUTION_PLAN_V4_INT8_MAX_ABS > 2147483647u ||
                  (uint64_t)V4_CONTROL.m_elements * V4_CONTROL.n_elements > UINT32_MAX)) ||
             ((V4_CONTROL.flags & EXECUTION_PLAN_V4_FLAG_ZERO_WORK) != 0u &&
                 (V4_CONTROL.m_elements != 0u || V4_CONTROL.n_elements != 0u || V4_CONTROL.k_elements != 0u))) {

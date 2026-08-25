@@ -13,6 +13,10 @@ from typing import Mapping
 import numpy as np
 
 from quantum_bench.model import ContractNode
+from quantum_bench.upmem.protocol import (
+    INT32_MAX,
+    INT8_MAX_PRODUCT,
+)
 
 
 DEFAULT_MAX_ELEMENTS = 65_536
@@ -23,8 +27,6 @@ DEFAULT_MAX_TILE_DIM = 256
 NUMERIC_MODE_FLOAT32 = "float32"
 NUMERIC_MODE_HOST_PACKED_INT8 = "host_packed_int8"
 _NUMERIC_MODES = {NUMERIC_MODE_FLOAT32, NUMERIC_MODE_HOST_PACKED_INT8}
-_INT32_MAX = (1 << 31) - 1
-_MAX_INT8_PRODUCT = 128 * 128
 
 
 class TileLoweringError(ValueError):
@@ -776,7 +778,7 @@ def _preflight(
             else None
         ),
         int32_full_k_safe=(
-            canonical.k * _MAX_INT8_PRODUCT <= _INT32_MAX
+            canonical.k * INT8_MAX_PRODUCT <= INT32_MAX
             if limits.packed_int8
             else None
         ),

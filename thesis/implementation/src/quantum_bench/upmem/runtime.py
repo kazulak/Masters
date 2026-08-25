@@ -54,6 +54,7 @@ from quantum_bench.upmem.native_session import V4Session
 from quantum_bench.upmem.protocol import (
     EXECUTION_TARGET_PHYSICAL,
     EXECUTION_TARGET_SIMULATOR,
+    INT8_MAX_PRODUCT,
     MAX_INT32_SAFE_K,
     NUMERIC_FLOAT32,
     NUMERIC_HOST_PACKED_INT8,
@@ -873,7 +874,7 @@ class UpmemV4Session:
                 raise ValueError(
                     "packed int8 K chunk exceeds int32 accumulation safety bound"
                 )
-            if lowering.canonical.k * 128 * 128 > _INT64_MAX:
+            if lowering.canonical.k * INT8_MAX_PRODUCT > _INT64_MAX:
                 raise ValueError(
                     "packed int8 aggregate exceeds int64 accumulation safety bound"
                 )

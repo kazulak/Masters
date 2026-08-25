@@ -12,9 +12,10 @@ from typing import Callable, Literal
 
 from quantum_bench.lowering import contraction_dag_hash, validate_contraction_dag
 from quantum_bench.model import ContractNode, ContractionDAG, ReduceNode
-from quantum_bench.numerics import NumericPolicy
+from quantum_bench.numerics import INT8_QUANTIZED_MAX_ABS, NumericPolicy
 from quantum_bench.upmem.protocol import (
     INT32_MAX,
+    INT8_MAX_PRODUCT,
     MAX_CONTRACTED,
 )
 from quantum_bench.results import UnsupportedExecution
@@ -35,8 +36,8 @@ from quantum_bench.upmem.tiling import (
 _V4_UINT64_MAX = (1 << 64) - 1
 _V4_MAX_BATCH_COUNT = (1 << 32) - 1
 PLAN_SCHEMA_VERSION = 1
-_INT8_MAX = 127
-_INT8_PRODUCT = _INT8_MAX * _INT8_MAX
+_INT8_MAX = INT8_QUANTIZED_MAX_ABS
+_INT8_PRODUCT = INT8_MAX_PRODUCT
 _INT64_MAX = (1 << 63) - 1
 _FINAL_NUMERIC_POLICIES = {
     "split_complex_float32_v1",

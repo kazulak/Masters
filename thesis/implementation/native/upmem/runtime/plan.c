@@ -97,7 +97,9 @@ int execution_plan_distributed_v4_validate(
             !extent_inside(unit->k_offset, unit->k_elements, header->canonical_k) ||
             !extent_inside(unit->m_offset, unit->m_elements, header->canonical_m) ||
             !extent_inside(unit->n_offset, unit->n_elements, header->canonical_n) ||
-            (uint64_t)unit->k_elements * 128u * 128u > 2147483647u) {
+            (uint64_t)unit->k_elements *
+                (uint64_t)EXECUTION_PLAN_V4_INT8_MAX_ABS *
+                (uint64_t)EXECUTION_PLAN_V4_INT8_MAX_ABS > 2147483647u) {
             v4_error(error_message, "hardware_profile_violation: v4 tile extents are invalid");
             return 1;
         }

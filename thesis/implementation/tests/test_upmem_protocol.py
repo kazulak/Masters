@@ -269,8 +269,13 @@ def test_v4_builder_rejects_unsafe_paths_and_k_bounds(tmp_path: Path) -> None:
         )
 
     header = (NATIVE / "protocol.h").read_text(encoding="ascii")
-    assert protocol.MAX_CONTRACTED * 128 * 128 <= 2**31 - 1
-    assert "EXECUTION_PLAN_V4_MAX_CONTRACTED * 128u * 128u <= 2147483647u" in header
+    assert protocol.MAX_CONTRACTED * protocol.INT8_MAX_PRODUCT <= 2**31 - 1
+    assert "#define EXECUTION_PLAN_V4_INT8_MAX_ABS 127u" in header
+    assert (
+        "(uint64_t)EXECUTION_PLAN_V4_MAX_CONTRACTED *\n"
+        "        (uint64_t)EXECUTION_PLAN_V4_INT8_MAX_ABS *\n"
+        "        (uint64_t)EXECUTION_PLAN_V4_INT8_MAX_ABS <= 2147483647u"
+    ) in header
 
 
 @pytest.mark.parametrize(
@@ -353,7 +358,50 @@ def test_v4_native_sources_preserve_the_abi_and_build_contract() -> None:
     assert "mram_read" in dpu and "mram_write" in dpu
     assert "v4 requires NR_TASKLETS in [1,24]" in dpu
     assert "V4_CONTROL.reserved0 != (uint32_t)NR_TASKLETS" in dpu
+    assert "#define EXECUTION_PLAN_V4_INT8_MAX_ABS 127u" in protocol_header
+    assert "EXECUTION_PLAN_V4_INT8_MAX_ABS" in dpu
     assert "MAX_TASKLETS := 24" in makefile
     assert "bin/host_upmem_execution_plan_v4_t%" in makefile
     assert "bin/dpu_gemm_tile_v4_t%" in makefile
     assert "NR_TASKLETS=$*" in makefile
+
+
+def test_v4_host_and_native_int8_accumulation_boundary_equality() -> None:
+    assert protocol.INT8_MAX_PRODUCT == 127 * 127
+    last_accepted_k = protocol.INT32_MAX // protocol.INT8_MAX_PRODUCT
+    first_rejected_k = last_accepted_k + 1
+
+    assert last_accepted_k == 133144
+    assert last_accepted_k * protocol.INT8_MAX_PRODUCT <= protocol.INT32_MAX
+    assert first_rejected_k * protocol.INT8_MAX_PRODUCT > protocol.INT32_MAX
+    assert protocol.MAX_INT32_SAFE_K == last_accepted_k
+
+    # Test work geometry validation with maximum valid contracted dimension within MAX_CONTRACTED
+    max_k = protocol.MAX_CONTRACTED
+    unit_accepted = protocol.V4WorkUnit(
+        local_dpu_id=0,
+        tile_id=0,
+        batch_index=0,
+        m_offset=0,
+        n_offset=0,
+        k_offset=0,
+        m_elements=1,
+        n_elements=1,
+        k_elements=max_k,
+        a_payload=b"\0" * max_k,
+        b_payload=b"\0" * max_k,
+    )
+    protocol._validate_work_geometry(
+        unit_accepted,
+        batch_count=1,
+        m=1,
+        n=1,
+        k=max_k,
+        mode=protocol.NUMERIC_MODE_HOST_PACKED_INT8,
+    )
+
+    int64_max = (1 << 63) - 1
+    last_accepted_int64_k = int64_max // (2 * protocol.INT8_MAX_PRODUCT)
+    first_rejected_int64_k = last_accepted_int64_k + 1
+    assert 2 * last_accepted_int64_k * protocol.INT8_MAX_PRODUCT <= int64_max
+    assert 2 * first_rejected_int64_k * protocol.INT8_MAX_PRODUCT > int64_max

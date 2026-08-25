@@ -735,6 +735,8 @@ def test_mapping_rejects_abi_max_contracted_shape_only() -> None:
 def test_final_int8_int32_boundary(
     contracted_size: int, tile_k: int, should_fail: bool
 ) -> None:
+    assert _INT8_PRODUCT == 127 * 127
+    assert INT32_MAX // _INT8_PRODUCT == 133144
     tile = SimpleNamespace(id="tile", k_size=tile_k)
     if should_fail:
         with pytest.raises(UnsupportedExecution, match="int32"):
@@ -744,6 +746,7 @@ def test_final_int8_int32_boundary(
 
 
 def test_final_int8_int64_boundary() -> None:
+    assert _INT8_PRODUCT == 127 * 127
     boundary = _INT64_MAX // (2 * _INT8_PRODUCT)
     _validate_final_int8_bounds("node", boundary, ())
     with pytest.raises(UnsupportedExecution, match="int64"):

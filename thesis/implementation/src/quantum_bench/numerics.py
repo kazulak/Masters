@@ -10,6 +10,8 @@ import numpy as np
 from quantum_bench.model import ContractNode
 
 
+INT8_QUANTIZED_MAX_ABS = 127
+
 NumericPolicy = Literal[
     "split_complex_float32_v1",
     "split_complex_int8_shared_scale_v1",
@@ -94,7 +96,7 @@ def encode_complex_tensor(
     if not np.all(np.isfinite(real)) or not np.all(np.isfinite(imag)):
         raise ValueError("int8 quantization requires finite float64 planes")
     max_abs = max(float(np.max(np.abs(real), initial=0.0)), float(np.max(np.abs(imag), initial=0.0)))
-    scale = max_abs / 127.0 if max_abs > 0.0 else 1.0
+    scale = max_abs / float(INT8_QUANTIZED_MAX_ABS) if max_abs > 0.0 else 1.0
     if not np.isfinite(scale) or scale <= 0.0:
         raise ValueError("int8 quantization scale underflowed or is nonfinite")
     quantized_real, saturation_real = _quantize_plane(real, scale)
@@ -128,7 +130,7 @@ def contract_complex_products(
         else:
             contracted_k *= node.right.shape[node.right.labels.index(label)]
     if policy == "split_complex_int8_shared_scale_v1":
-        if contracted_k * (127**2) > np.iinfo(np.int32).max:
+        if contracted_k * (INT8_QUANTIZED_MAX_ABS**2) > np.iinfo(np.int32).max:
             raise ValueError("int8 contraction exceeds int32 accumulation safety bound")
         dtype = np.dtype(np.int32)
     else:
@@ -231,8 +233,14 @@ def _valid_saturation_count(value: object, plane_size: int) -> bool:
 
 def _quantize_plane(value: np.ndarray, scale: float) -> tuple[np.ndarray, int]:
     rounded = np.rint(value / scale)
-    saturation = int(np.count_nonzero((rounded < -127) | (rounded > 127)))
-    clipped = np.clip(rounded, -127, 127).astype(np.int8)
+    saturation = int(
+        np.count_nonzero(
+            (rounded < -INT8_QUANTIZED_MAX_ABS) | (rounded > INT8_QUANTIZED_MAX_ABS)
+        )
+    )
+    clipped = np.clip(rounded, -INT8_QUANTIZED_MAX_ABS, INT8_QUANTIZED_MAX_ABS).astype(
+        np.int8
+    )
     return clipped, saturation
 
 
@@ -353,6 +361,7 @@ def _complex64_result(real: np.ndarray, imag: np.ndarray) -> np.ndarray:
 
 
 __all__ = [
+    "INT8_QUANTIZED_MAX_ABS",
     "NumericPolicy",
     "EncodedComplexTensor",
     "encode_complex_tensor",
