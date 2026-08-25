@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import fields
+import csv
 import os
 from pathlib import Path
 import json
@@ -86,6 +87,26 @@ def test_make_public_targets_are_exact_and_pidcomm_is_private() -> None:
         "qualify",
         "clean-generated",
     ]
+
+
+def test_physical_configuration_freezes_thesis_collection_policy() -> None:
+    config = load_experiment_config(ROOT / "configs" / "tn_benchmark_physical.yml")
+
+    assert config["schema_version"] == "tn_benchmark_v2"
+    assert config["collection"] == {
+        "base_seed": 20260825,
+        "warmup_blocks": 2,
+        "measurement_blocks": 30,
+        "session_policy": "fresh_session_per_attempt_v1",
+        "cooldown_s": 0.0,
+        "machine_policy": {
+            "machine_exclusivity": "observed_v1",
+            "cpu_governor": "observed_v1",
+            "affinity": "observed_v1",
+            "numa_policy": "observed_v1",
+            "background_load": "observed_v1",
+        },
+    }
 
 
 def _config() -> str:
@@ -1335,8 +1356,16 @@ def test_verify_and_report_aggregate_duplicate_measurements_once(
     report = report_artifacts(artifact, tmp_path / "report")
 
     assert report["status"] == "completed"
-    assert report["schema_version"] == "evidence_report_v2"
+    assert report["schema_version"] == "evidence_report_v3"
     assert report["aggregate_count"] == 1
+    assert report["statistics"] == {
+        "summary": "median_raw_mad_v1",
+        "confidence_interval": "percentile_bootstrap_95_v1",
+        "confidence_level": 0.95,
+        "resample_count": 10_000,
+        "speedup_method": "block_paired_median_ratio_bootstrap_v1",
+        "outlier_policy": "no_post_hoc_exclusion_v1",
+    }
     rows = (
         (tmp_path / "report" / "aggregate.csv").read_text(encoding="utf-8").splitlines()
     )
@@ -1473,9 +1502,83 @@ def test_report_admits_physical_speedup_from_terminal_session_facts(
     )
 
     assert report["speedup_count"] == 1
-    speedup = (tmp_path / "report" / "speedups.csv").read_text(encoding="utf-8")
-    assert ",3.0\n" in speedup
+    with (tmp_path / "report" / "speedups.csv").open(newline="", encoding="utf-8") as stream:
+        speedup_rows = list(csv.DictReader(stream))
+    assert len(speedup_rows) == 1
+    assert speedup_rows[0]["speedup"] == "3.0"
+    assert speedup_rows[0]["complete_pair_count"] == "2"
+    assert speedup_rows[0]["bootstrap_method"] == "block_paired_median_ratio_bootstrap_v1"
+    assert float(speedup_rows[0]["speedup_ci_low"]) <= 3.0
+    assert float(speedup_rows[0]["speedup_ci_high"]) >= 3.0
     assert (tmp_path / "report" / "plots" / "physical_speedup_by_case.png").is_file()
+
+
+def test_report_emits_mad_intervals_and_unqualified_labels(tmp_path: Path) -> None:
+    run_id, experiment_id, environment_id_value, policy_id = _ids()
+    samples = [
+        _sample(
+            run_id=run_id,
+            experiment_id=experiment_id,
+            environment_id=environment_id_value,
+            validation_policy_id=policy_id,
+            case_id="bell",
+            route_id="cpu_float32",
+            index=index,
+            total_wall_s=value,
+        )
+        for index, value in enumerate((1.0, 3.0, 5.0))
+    ]
+    samples.extend(
+        _sample(
+            run_id=run_id,
+            experiment_id=experiment_id,
+            environment_id=environment_id_value,
+            validation_policy_id=policy_id,
+            case_id="bell",
+            route_id="cpu_int8",
+            index=index,
+            total_wall_s=value,
+        )
+        for index, value in enumerate((2.0, 4.0, 6.0))
+    )
+    for sample in samples:
+        if sample["route_id"] != "cpu_int8":
+            continue
+        sample["numeric_facts"] = {
+            "numeric_policy": "split_complex_int8_shared_scale_v1"
+        }
+        sample["validation"] = {
+            **_validation(),
+            "full_precision_threshold_applicable": False,
+            "full_precision_passed": None,
+            "accuracy_qualified": False,
+        }
+
+    report = report_artifacts(
+        _artifact(tmp_path / "evidence", samples), tmp_path / "report"
+    )
+
+    with (tmp_path / "report" / "aggregate.csv").open(
+        newline="", encoding="utf-8"
+    ) as stream:
+        rows = {row["route_id"]: row for row in csv.DictReader(stream)}
+    float32 = rows["cpu_float32"]
+    int8 = rows["cpu_int8"]
+    assert float32["median_total_wall_s"] == "3.0"
+    assert float32["mad_total_wall_s"] == "2.0"
+    assert float(float32["median_total_wall_ci_low_s"]) <= 3.0
+    assert float(float32["median_total_wall_ci_high_s"]) >= 3.0
+    assert float32["accuracy_qualified"] == "True"
+    assert float32["claim_eligible"] == "True"
+    assert int8["accuracy_qualified"] == "False"
+    assert int8["claim_eligible"] == "False"
+    assert int8["claim_ineligibility_reason"] == "accuracy_unqualified"
+    assert report["qualification"] == {
+        "accuracy_qualified_aggregate_count": 1,
+        "accuracy_unqualified_aggregate_count": 1,
+        "claim_eligible_aggregate_count": 1,
+    }
+    assert (tmp_path / "report" / "plots" / "runtime_steady_execution_v1.png").is_file()
 
 
 def test_report_rejects_scope_mismatch(tmp_path: Path) -> None:
@@ -1585,7 +1688,7 @@ def test_report_rejects_speedup_without_full_precision_threshold(
     )
 
     assert report["speedup_count"] == 0
-    assert report["speedup_rejections"]["full_precision_threshold_not_passed"] == 1
+    assert report["speedup_rejections"]["candidate_accuracy_unqualified"] == 1
 
 
 def test_report_rejects_speedup_without_applicable_policy_reference(

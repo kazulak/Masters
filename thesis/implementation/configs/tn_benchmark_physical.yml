@@ -4,8 +4,8 @@ defaults:
   timeout_s: 120.0
 collection:
   base_seed: 20260825
-  warmup_blocks: 1
-  measurement_blocks: 5
+  warmup_blocks: 2
+  measurement_blocks: 30
   session_policy: fresh_session_per_attempt_v1
   cooldown_s: 0.0
   machine_policy:

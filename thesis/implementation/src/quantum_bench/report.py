@@ -5,8 +5,10 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable, Mapping
 import csv
+import hashlib
 import os
 from pathlib import Path
+import random
 from statistics import median
 import tempfile
 from typing import Any
@@ -37,6 +39,8 @@ _RESOURCE_FACTS = (
     "rank_count",
     "tasklets_per_dpu",
 )
+_BOOTSTRAP_RESAMPLES = 10_000
+_BOOTSTRAP_CONFIDENCE_LEVEL = 0.95
 _TERMINAL_AUTHORITY_FIELDS = frozenset(
     {
         "target_observed",
@@ -60,7 +64,19 @@ _AGGREGATE_COLUMNS = (
     "physical_plan_id",
     "numeric_policy",
     "sample_count",
+    "planned_measurement_count",
+    "successful_measurement_count",
+    "failed_measurement_count",
+    "unsupported_measurement_count",
+    "complete_measurement_count",
+    "policy_reference_qualified",
+    "accuracy_qualified",
+    "claim_eligible",
+    "claim_ineligibility_reason",
     "median_total_wall_s",
+    "mad_total_wall_s",
+    "median_total_wall_ci_low_s",
+    "median_total_wall_ci_high_s",
     "min_total_wall_s",
     "max_total_wall_s",
     *tuple(f"median_{field}" for field in _COMPONENT_FIELDS),
@@ -82,7 +98,12 @@ _SPEEDUP_COLUMNS = (
     "numeric_policy",
     "baseline_median_total_wall_s",
     "candidate_median_total_wall_s",
+    "complete_pair_count",
+    "bootstrap_method",
+    "bootstrap_seed",
     "speedup",
+    "speedup_ci_low",
+    "speedup_ci_high",
 )
 
 
@@ -104,13 +125,15 @@ def report_artifacts(
         raise ValueError("report output directory must be absent or empty")
     output.mkdir(parents=True, exist_ok=True)
 
-    aggregates = _aggregate_measurements(samples, sessions)
+    aggregates = _aggregate_measurements(manifest, samples, sessions)
     if manifest["status"] != "completed":
         speedups, rejections = [], Counter({"artifact_not_completed": 1})
     elif manifest["source_worktree_dirty"] is True:
         speedups, rejections = [], Counter({"source_worktree_dirty": 1})
     else:
-        speedups, rejections = _admit_speedups(aggregates)
+        speedups, rejections = _admit_speedups(
+            aggregates, _collection_base_seed(manifest)
+        )
     verification = _verification_summary(manifest, samples, sessions)
     simulator_present = any(
         _all_fact_values(aggregate, "target_observed", "sdk_simulator")
@@ -118,7 +141,7 @@ def report_artifacts(
         for aggregate in aggregates
     )
     report = {
-        "schema_version": "evidence_report_v2",
+        "schema_version": "evidence_report_v3",
         "status": "completed",
         "run_id": manifest["run_id"],
         "experiment_id": manifest["experiment_id"],
@@ -130,6 +153,25 @@ def report_artifacts(
         "failed_count": verification["failed_count"],
         "unsupported_count": verification["unsupported_count"],
         "session_count": len(sessions),
+        "statistics": {
+            "summary": "median_raw_mad_v1",
+            "confidence_interval": "percentile_bootstrap_95_v1",
+            "confidence_level": _BOOTSTRAP_CONFIDENCE_LEVEL,
+            "resample_count": _BOOTSTRAP_RESAMPLES,
+            "speedup_method": "block_paired_median_ratio_bootstrap_v1",
+            "outlier_policy": "no_post_hoc_exclusion_v1",
+        },
+        "qualification": {
+            "accuracy_qualified_aggregate_count": sum(
+                aggregate["accuracy_qualified"] is True for aggregate in aggregates
+            ),
+            "accuracy_unqualified_aggregate_count": sum(
+                aggregate["accuracy_qualified"] is False for aggregate in aggregates
+            ),
+            "claim_eligible_aggregate_count": sum(
+                aggregate["claim_eligible"] is True for aggregate in aggregates
+            ),
+        },
         "simulator_timing": {
             "present": simulator_present,
             "diagnostic_only": simulator_present,
@@ -156,6 +198,7 @@ def report_artifacts(
 
 
 def _aggregate_measurements(
+    manifest: Mapping[str, Any],
     samples: Iterable[Mapping[str, Any]],
     sessions: Iterable[Mapping[str, Any]],
 ) -> list[dict[str, object]]:
@@ -164,10 +207,19 @@ def _aggregate_measurements(
         for session in sessions
         if isinstance(session["terminal_backend_facts"], Mapping)
     }
+    sample_rows = tuple(samples)
+    attempts_by_route: dict[
+        tuple[object, ...], list[Mapping[str, Any]]
+    ] = {}
+    for sample in sample_rows:
+        if sample["attempt_kind"] != "measurement":
+            continue
+        attempts_by_route.setdefault(_attempt_route_key(sample), []).append(sample)
+
     grouped: dict[
         tuple[object, ...], list[tuple[Mapping[str, Any], Mapping[str, Any]]]
     ] = {}
-    for sample in samples:
+    for sample in sample_rows:
         if sample["status"] != "success" or sample["attempt_kind"] != "measurement":
             continue
         measurement = sample["measurement"]
@@ -191,8 +243,67 @@ def _aggregate_measurements(
             (sample, _joined_backend_facts(sample, terminal_facts_by_session))
         )
 
-    aggregates = [_make_aggregate(key, rows) for key, rows in grouped.items()]
+    planned_measurements = _planned_measurements_per_route(manifest)
+    bootstrap_base_seed = _collection_base_seed(manifest)
+    aggregates = [
+        _make_aggregate(
+            key,
+            rows,
+            attempts_by_route.get(_attempt_route_key(rows[0][0]), ()),
+            planned_measurements,
+            bootstrap_base_seed,
+        )
+        for key, rows in grouped.items()
+    ]
     return sorted(aggregates, key=_aggregate_sort_key)
+
+
+def _attempt_route_key(sample: Mapping[str, Any]) -> tuple[object, ...]:
+    identities = sample["identities"]
+    if not isinstance(identities, Mapping):  # validated by load_artifacts
+        raise ValueError("sample lacks identity mapping")
+    return (
+        sample["case_id"],
+        sample["plan_id"],
+        sample["route_id"],
+        identities["problem_id"],
+        identities["tensor_network_structure_id"],
+        identities["logical_plan_id"],
+        identities["physical_plan_id"],
+        _numeric_policy(sample),
+    )
+
+
+def _planned_measurements_per_route(manifest: Mapping[str, Any]) -> int | None:
+    configuration = manifest["configuration"]
+    if not isinstance(configuration, Mapping):  # validated by load_artifacts
+        raise ValueError("manifest configuration must be a mapping")
+    experiment = configuration.get("experiment")
+    if not isinstance(experiment, Mapping):
+        return None
+    collection = experiment.get("collection")
+    if not isinstance(collection, Mapping):
+        return None
+    count = collection.get("measurement_blocks")
+    if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+        return count
+    return None
+
+
+def _collection_base_seed(manifest: Mapping[str, Any]) -> int:
+    configuration = manifest["configuration"]
+    if not isinstance(configuration, Mapping):  # validated by load_artifacts
+        raise ValueError("manifest configuration must be a mapping")
+    experiment = configuration.get("experiment")
+    if not isinstance(experiment, Mapping):
+        return 0
+    collection = experiment.get("collection")
+    if not isinstance(collection, Mapping):
+        return 0
+    seed = collection.get("base_seed")
+    if isinstance(seed, int) and not isinstance(seed, bool):
+        return seed
+    return 0
 
 
 def _verification_summary(
@@ -282,6 +393,9 @@ def _verification_summary(
 def _make_aggregate(
     key: tuple[object, ...],
     rows_with_facts: list[tuple[Mapping[str, Any], Mapping[str, Any]]],
+    attempted_rows: Iterable[Mapping[str, Any]],
+    planned_measurements: int | None,
+    bootstrap_base_seed: int,
 ) -> dict[str, object]:
     (
         case_id,
@@ -301,7 +415,30 @@ def _make_aggregate(
     typed_measurements = [
         measurement for measurement in measurements if isinstance(measurement, Mapping)
     ]
-    totals = [float(measurement["total_wall_s"]) for measurement in typed_measurements]
+    totals = sorted(
+        float(measurement["total_wall_s"]) for measurement in typed_measurements
+    )
+    attempted = tuple(attempted_rows)
+    statuses = Counter(str(row["status"]) for row in attempted)
+    successful_count = statuses["success"]
+    expected_count = (
+        planned_measurements if planned_measurements is not None else len(attempted)
+    )
+    policy_qualified = _policy_reference_qualified(rows)
+    accuracy_qualified = _all_accuracy_qualified_from_rows(rows)
+    claim_eligible, ineligibility_reason = _aggregate_claim_eligibility(
+        rows=rows,
+        planned_measurements=expected_count,
+        successful_count=successful_count,
+        failed_count=statuses["failed"],
+        unsupported_count=statuses["unsupported"],
+        policy_reference_qualified=policy_qualified,
+        accuracy_qualified=accuracy_qualified,
+    )
+    interval = _median_bootstrap_interval(
+        totals,
+        _statistics_seed(bootstrap_base_seed, "aggregate", key),
+    )
     aggregate: dict[str, object] = {
         "case_id": case_id,
         "plan_id": plan_id,
@@ -313,7 +450,19 @@ def _make_aggregate(
         "physical_plan_id": physical_plan_id,
         "numeric_policy": numeric_policy,
         "sample_count": len(rows),
+        "planned_measurement_count": expected_count,
+        "successful_measurement_count": successful_count,
+        "failed_measurement_count": statuses["failed"],
+        "unsupported_measurement_count": statuses["unsupported"],
+        "complete_measurement_count": successful_count,
+        "policy_reference_qualified": policy_qualified,
+        "accuracy_qualified": accuracy_qualified,
+        "claim_eligible": claim_eligible,
+        "claim_ineligibility_reason": ineligibility_reason,
         "median_total_wall_s": median(totals),
+        "mad_total_wall_s": _raw_mad(totals),
+        "median_total_wall_ci_low_s": interval[0],
+        "median_total_wall_ci_high_s": interval[1],
         "min_total_wall_s": min(totals),
         "max_total_wall_s": max(totals),
         "_samples": rows,
@@ -335,6 +484,95 @@ def _make_aggregate(
         values = _resource_values(rows_with_facts, field)
         aggregate[f"median_{field}"] = median(values) if values else None
     return aggregate
+
+
+def _raw_mad(values: Iterable[float]) -> float:
+    ordered = sorted(float(value) for value in values)
+    center = median(ordered)
+    return float(median(abs(value - center) for value in ordered))
+
+
+def _statistics_seed(base_seed: int, kind: str, key: object) -> int:
+    payload = canonical_json({"kind": kind, "key": key})
+    digest = hashlib.sha256(
+        b"quantum_bench.bootstrap_seed.v1\0"
+        + str(base_seed).encode("ascii")
+        + b"\0"
+        + payload.encode("ascii")
+    ).digest()
+    return int.from_bytes(digest[:8], "big", signed=False)
+
+
+def _percentile(values: Iterable[float], quantile: float) -> float:
+    ordered = sorted(float(value) for value in values)
+    if not ordered:
+        raise ValueError("cannot calculate a percentile from no values")
+    index = int(quantile * (len(ordered) - 1))
+    return ordered[index]
+
+
+def _median_bootstrap_interval(values: Iterable[float], seed: int) -> tuple[float, float]:
+    observations = sorted(float(value) for value in values)
+    if not observations:
+        raise ValueError("cannot bootstrap no observations")
+    generator = random.Random(seed)
+    population_size = len(observations)
+    medians = sorted(
+        float(
+            median(
+                observations[generator.randrange(population_size)]
+                for _ in range(population_size)
+            )
+        )
+        for _ in range(_BOOTSTRAP_RESAMPLES)
+    )
+    tail = (1.0 - _BOOTSTRAP_CONFIDENCE_LEVEL) / 2.0
+    return _percentile(medians, tail), _percentile(medians, 1.0 - tail)
+
+
+def _policy_reference_qualified(rows: Iterable[Mapping[str, Any]]) -> bool | None:
+    validations = [
+        row["validation"]
+        for row in rows
+        if isinstance(row["validation"], Mapping)
+        and row["validation"].get("policy_reference_applicable") is True
+    ]
+    if not validations:
+        return None
+    return all(validation.get("policy_reference_passed") is True for validation in validations)
+
+
+def _all_accuracy_qualified_from_rows(rows: Iterable[Mapping[str, Any]]) -> bool:
+    row_values = tuple(rows)
+    return bool(row_values) and all(
+        isinstance(row["validation"], Mapping)
+        and row["validation"].get("accuracy_qualified") is True
+        for row in row_values
+    )
+
+
+def _aggregate_claim_eligibility(
+    *,
+    rows: Iterable[Mapping[str, Any]],
+    planned_measurements: int,
+    successful_count: int,
+    failed_count: int,
+    unsupported_count: int,
+    policy_reference_qualified: bool | None,
+    accuracy_qualified: bool,
+) -> tuple[bool, str | None]:
+    row_values = tuple(rows)
+    if successful_count != planned_measurements:
+        return False, "incomplete_measurements"
+    if failed_count or unsupported_count:
+        return False, "non_successful_measurement"
+    if not row_values:
+        return False, "no_successful_measurements"
+    if policy_reference_qualified is False:
+        return False, "policy_reference_failed"
+    if not accuracy_qualified:
+        return False, "accuracy_unqualified"
+    return True, None
 
 
 def _non_null_measurements(
@@ -426,7 +664,7 @@ def _aggregate_sort_key(aggregate: Mapping[str, object]) -> tuple[str, ...]:
 
 
 def _admit_speedups(
-    aggregates: Iterable[Mapping[str, object]],
+    aggregates: Iterable[Mapping[str, object]], bootstrap_base_seed: int
 ) -> tuple[list[dict[str, object]], Counter[str]]:
     rows = list(aggregates)
     baselines = [
@@ -449,6 +687,24 @@ def _admit_speedups(
             continue
         baseline_time = float(baseline["median_total_wall_s"])
         candidate_time = float(candidate["median_total_wall_s"])
+        pairs = _paired_measurements(baseline, candidate)
+        if pairs is None:
+            rejections["incomplete_paired_blocks"] += 1
+            continue
+        comparison_key = {
+            "case_id": candidate["case_id"],
+            "plan_id": candidate["plan_id"],
+            "baseline_route_id": baseline["route_id"],
+            "candidate_route_id": candidate["route_id"],
+            "scope_id": candidate["scope_id"],
+            "numeric_policy": candidate["numeric_policy"],
+        }
+        bootstrap_seed = _statistics_seed(
+            bootstrap_base_seed, "block_paired_speedup", comparison_key
+        )
+        speedup_ci_low, speedup_ci_high = _paired_speedup_bootstrap_interval(
+            pairs, bootstrap_seed
+        )
         speedups.append(
             {
                 "case_id": candidate["case_id"],
@@ -462,7 +718,12 @@ def _admit_speedups(
                 "numeric_policy": candidate["numeric_policy"],
                 "baseline_median_total_wall_s": baseline_time,
                 "candidate_median_total_wall_s": candidate_time,
+                "complete_pair_count": len(pairs),
+                "bootstrap_method": "block_paired_median_ratio_bootstrap_v1",
+                "bootstrap_seed": bootstrap_seed,
                 "speedup": baseline_time / candidate_time,
+                "speedup_ci_low": speedup_ci_low,
+                "speedup_ci_high": speedup_ci_high,
             }
         )
     return sorted(
@@ -492,8 +753,9 @@ def _speedup_rejection(
         candidate, "target_observed", "sdk_simulator"
     ) or _any_fact_true(candidate, "simulator_kernel_executed"):
         return "simulator_execution"
-    if candidate["sample_count"] < 2:
-        return "candidate_has_fewer_than_two_measurements"
+    if candidate["claim_eligible"] is not True:
+        reason = candidate.get("claim_ineligibility_reason")
+        return f"candidate_{reason}" if isinstance(reason, str) else "candidate_not_eligible"
     if not _all_policy_references_applicable_and_passed(candidate):
         return "candidate_validation_failed"
     if not _all_accuracy_qualified(candidate):
@@ -554,10 +816,82 @@ def _matching_baseline(
 
 def _baseline_is_eligible(aggregate: Mapping[str, object]) -> bool:
     return (
-        aggregate["sample_count"] >= 2
+        aggregate["claim_eligible"] is True
         and _all_policy_references_passed(aggregate)
         and _all_accuracy_qualified(aggregate)
     )
+
+
+def _all_measurements_completed(aggregate: Mapping[str, object]) -> bool:
+    return (
+        aggregate.get("successful_measurement_count")
+        == aggregate.get("planned_measurement_count")
+        and aggregate.get("failed_measurement_count") == 0
+        and aggregate.get("unsupported_measurement_count") == 0
+    )
+
+
+def _paired_measurements(
+    baseline: Mapping[str, object], candidate: Mapping[str, object]
+) -> list[tuple[float, float]] | None:
+    if not _all_measurements_completed(baseline) or not _all_measurements_completed(
+        candidate
+    ):
+        return None
+    baseline_rows = baseline["_samples"]
+    candidate_rows = candidate["_samples"]
+    if not isinstance(baseline_rows, list) or not isinstance(candidate_rows, list):
+        return None
+    baseline_by_block = _measurement_by_block(baseline_rows)
+    candidate_by_block = _measurement_by_block(candidate_rows)
+    if baseline_by_block is None or candidate_by_block is None:
+        return None
+    if set(baseline_by_block) != set(candidate_by_block):
+        return None
+    return [
+        (baseline_by_block[block_id], candidate_by_block[block_id])
+        for block_id in sorted(baseline_by_block)
+    ]
+
+
+def _measurement_by_block(
+    rows: Iterable[Mapping[str, Any]],
+) -> dict[int, float] | None:
+    values: dict[int, float] = {}
+    for row in rows:
+        block_id = row.get("block_id")
+        measurement = row.get("measurement")
+        if (
+            isinstance(block_id, bool)
+            or not isinstance(block_id, int)
+            or not isinstance(measurement, Mapping)
+            or block_id in values
+        ):
+            return None
+        values[block_id] = float(measurement["total_wall_s"])
+    return values
+
+
+def _paired_speedup_bootstrap_interval(
+    pairs: Iterable[tuple[float, float]], seed: int
+) -> tuple[float, float]:
+    observations = sorted((float(base), float(candidate)) for base, candidate in pairs)
+    if not observations or any(candidate <= 0.0 for _, candidate in observations):
+        raise ValueError("paired speedup observations must be nonempty and positive")
+    generator = random.Random(seed)
+    population_size = len(observations)
+    ratios = sorted(
+        float(
+            median(sample[0] for sample in selected)
+            / median(sample[1] for sample in selected)
+        )
+        for selected in (
+            [observations[generator.randrange(population_size)] for _ in range(population_size)]
+            for _ in range(_BOOTSTRAP_RESAMPLES)
+        )
+    )
+    tail = (1.0 - _BOOTSTRAP_CONFIDENCE_LEVEL) / 2.0
+    return _percentile(ratios, tail), _percentile(ratios, 1.0 - tail)
 
 
 def _same_speedup_dimensions(
@@ -678,6 +1012,8 @@ def _write_plots(
                 facet_id=scope_id,
                 row=row,
                 value=float(row["median_total_wall_s"]),
+                ci_low=_nullable_float(row["median_total_wall_ci_low_s"]),
+                ci_high=_nullable_float(row["median_total_wall_ci_high_s"]),
             )
             for row in rows
             if row["scope_id"] == scope_id
@@ -693,8 +1029,8 @@ def _write_plots(
         _point(
             figure_id="numeric_error_by_case",
             facet_id="all",
-            row=row,
-            value=float(row["median_max_abs_error"]),
+                row=row,
+                value=float(row["median_max_abs_error"]),
         )
         for row in rows
         if row["median_max_abs_error"] is not None
@@ -751,6 +1087,9 @@ def _write_plots(
                 "x_value": str(row["case_id"]),
                 "x_label": _humanize(str(row["case_id"])),
                 "value": float(row["speedup"]),
+                "ci_low": float(row["speedup_ci_low"]),
+                "ci_high": float(row["speedup_ci_high"]),
+                "accuracy_qualified": True,
             }
             for row in speedup_rows
         ]
@@ -764,22 +1103,33 @@ def _write_plots(
 
 
 def _point(
-    *, figure_id: str, facet_id: str, row: Mapping[str, object], value: float
+    *,
+    figure_id: str,
+    facet_id: str,
+    row: Mapping[str, object],
+    value: float,
+    ci_low: float | None = None,
+    ci_high: float | None = None,
 ) -> dict[str, object]:
     # A series identifies the route intervention. Plan hashes vary by case and
     # must not manufacture a separate legend entry for every x-axis value.
+    qualified = row.get("accuracy_qualified") is True
+    qualification_label = "accuracy-qualified" if qualified else "accuracy-unqualified"
     series_id = "|".join(
         "" if row[field] is None else str(row[field])
         for field in ("plan_id", "route_id", "numeric_policy")
-    )
+    ) + "|" + qualification_label
     return {
         "figure_id": figure_id,
         "facet_id": facet_id,
         "series_id": series_id,
-        "series_label": _series_label(row),
+        "series_label": _series_label(row) + " | " + qualification_label,
         "x_value": str(row["case_id"]),
         "x_label": _humanize(str(row["case_id"])),
         "value": value,
+        "ci_low": ci_low,
+        "ci_high": ci_high,
+        "accuracy_qualified": qualified,
     }
 
 
@@ -807,6 +1157,19 @@ def _plot_grouped_bars(
         (str(point["x_value"]), str(point["series_id"])): float(point["value"])
         for point in points
     }
+    intervals = {
+        (str(point["x_value"]), str(point["series_id"])): (
+            _nullable_float(point.get("ci_low")),
+            _nullable_float(point.get("ci_high")),
+        )
+        for point in points
+    }
+    qualified = {
+        (str(point["x_value"]), str(point["series_id"])): point.get(
+            "accuracy_qualified"
+        ) is True
+        for point in points
+    }
     figure, axis = plt.subplots(figsize=(max(6.0, 1.4 * len(x_values)), 4.8))
     width = 0.8 / max(1, len(series_ids))
     centers = list(range(len(x_values)))
@@ -815,7 +1178,23 @@ def _plot_grouped_bars(
         heights = [
             values.get((x_value, series_id), float("nan")) for x_value in x_values
         ]
-        axis.bar(positions, heights, width=width, label=series_labels[series_id])
+        yerr_low: list[float] = []
+        yerr_high: list[float] = []
+        for x_value, height in zip(x_values, heights, strict=True):
+            lower, upper = intervals.get((x_value, series_id), (None, None))
+            yerr_low.append(max(0.0, height - lower) if lower is not None else 0.0)
+            yerr_high.append(max(0.0, upper - height) if upper is not None else 0.0)
+        bars = axis.bar(
+            positions,
+            heights,
+            width=width,
+            label=series_labels[series_id],
+            yerr=[yerr_low, yerr_high],
+            capsize=3.0 if any(yerr_low) or any(yerr_high) else 0.0,
+        )
+        for bar, x_value in zip(bars, x_values, strict=True):
+            if not qualified.get((x_value, series_id), False):
+                bar.set_hatch("//")
     axis.set_xticks(centers, [x_labels[value] for value in x_values])
     axis.set_title(title)
     axis.set_ylabel(ylabel)
@@ -862,6 +1241,12 @@ def _humanize(value: str) -> str:
         "steady_execution_v1": "Steady execution",
     }
     return known.get(value, value.replace("_", " ").replace("-", " ").title())
+
+
+def _nullable_float(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
 
 
 def _humanize_nullable(value: object) -> str:
