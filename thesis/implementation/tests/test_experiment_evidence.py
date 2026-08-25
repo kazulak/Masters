@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import fields
+import errno
 import json
 import math
 from pathlib import Path
@@ -724,6 +725,97 @@ def test_jsonl_append_failures_and_partial_files_leave_original_unchanged(
     with pytest.raises(ValueError, match="newline-terminated"):
         append_sample(partial_path, _sample())
     assert partial_path.read_bytes() == partial
+
+
+def test_directory_fsync_is_skipped_on_non_posix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(canonical.os, "name", "nt")
+
+    def fail_open(*args: object, **kwargs: object) -> int:
+        raise AssertionError("non-POSIX directory fsync must not open a directory")
+
+    monkeypatch.setattr(canonical.os, "open", fail_open)
+    canonical._fsync_parent_directory(tmp_path)
+
+
+def test_directory_fsync_uses_directory_descriptor_when_supported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, int]] = []
+    monkeypatch.setattr(canonical.os, "name", "posix")
+
+    def fake_open(path: object, flags: int) -> int:
+        assert path == tmp_path
+        calls.append(("open", flags))
+        return 41
+
+    monkeypatch.setattr(canonical.os, "open", fake_open)
+    monkeypatch.setattr(canonical.os, "fsync", lambda descriptor: calls.append(("fsync", descriptor)))
+    monkeypatch.setattr(canonical.os, "close", lambda descriptor: calls.append(("close", descriptor)))
+
+    canonical._fsync_parent_directory(tmp_path)
+
+    assert calls == [
+        ("open", canonical.os.O_RDONLY | getattr(canonical.os, "O_DIRECTORY", 0)),
+        ("fsync", 41),
+        ("close", 41),
+    ]
+
+
+@pytest.mark.parametrize(
+    "unsupported_errno", sorted(canonical._DIRECTORY_FSYNC_UNSUPPORTED_ERRNOS)
+)
+def test_directory_fsync_suppresses_only_supported_filesystem_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, unsupported_errno: int
+) -> None:
+    monkeypatch.setattr(canonical.os, "name", "posix")
+
+    def fail_open(*args: object, **kwargs: object) -> int:
+        raise OSError(unsupported_errno, "unsupported directory sync")
+
+    monkeypatch.setattr(canonical.os, "open", fail_open)
+    canonical._fsync_parent_directory(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "unsupported_errno", sorted(canonical._DIRECTORY_FSYNC_UNSUPPORTED_ERRNOS)
+)
+def test_directory_fsync_suppresses_supported_sync_errors_and_closes_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, unsupported_errno: int
+) -> None:
+    closed: list[int] = []
+    monkeypatch.setattr(canonical.os, "name", "posix")
+    monkeypatch.setattr(canonical.os, "open", lambda path, flags: 47)
+
+    def fail_fsync(descriptor: int) -> None:
+        raise OSError(unsupported_errno, "unsupported directory sync")
+
+    monkeypatch.setattr(canonical.os, "fsync", fail_fsync)
+    monkeypatch.setattr(canonical.os, "close", closed.append)
+
+    canonical._fsync_parent_directory(tmp_path)
+
+    assert closed == [47]
+
+
+def test_directory_fsync_propagates_unrelated_errors_and_closes_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    closed: list[int] = []
+    monkeypatch.setattr(canonical.os, "name", "posix")
+    monkeypatch.setattr(canonical.os, "open", lambda path, flags: 43)
+
+    def fail_fsync(descriptor: int) -> None:
+        raise OSError(errno.EBADF, "bad descriptor")
+
+    monkeypatch.setattr(canonical.os, "fsync", fail_fsync)
+    monkeypatch.setattr(canonical.os, "close", closed.append)
+
+    with pytest.raises(OSError) as error:
+        canonical._fsync_parent_directory(tmp_path)
+    assert error.value.errno == errno.EBADF
+    assert closed == [43]
 
 
 def test_artifact_set_accepts_valid_completed_records() -> None:

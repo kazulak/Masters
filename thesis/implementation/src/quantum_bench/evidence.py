@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import fields
 from datetime import datetime
+import errno
 from enum import Enum as _Enum
 import hashlib
 import json
@@ -129,6 +130,16 @@ _COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 _RFC3339_UTC_RE = re.compile(
     r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
     r"(?:\.[0-9]+)?Z$"
+)
+_DIRECTORY_FSYNC_UNSUPPORTED_ERRNOS = frozenset(
+    error
+    for error in (
+        errno.EINVAL,
+        getattr(errno, "ENOTSUP", None),
+        getattr(errno, "EOPNOTSUPP", None),
+        getattr(errno, "ENOSYS", None),
+    )
+    if error is not None
 )
 
 
@@ -948,17 +959,35 @@ def _atomic_write_bytes(target: Path, payload: bytes) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, target)
-        directory_fd = os.open(target.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        _fsync_parent_directory(target.parent)
     except BaseException:
         try:
             os.unlink(temporary)
         except FileNotFoundError:
             pass
         raise
+
+
+def _fsync_parent_directory(directory: Path) -> None:
+    """Persist an atomic replacement on POSIX filesystems when supported."""
+
+    if os.name != "posix":
+        return
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    try:
+        directory_fd = os.open(directory, flags)
+    except OSError as exc:
+        if exc.errno in _DIRECTORY_FSYNC_UNSUPPORTED_ERRNOS:
+            return
+        raise
+    try:
+        try:
+            os.fsync(directory_fd)
+        except OSError as exc:
+            if exc.errno not in _DIRECTORY_FSYNC_UNSUPPORTED_ERRNOS:
+                raise
+    finally:
+        os.close(directory_fd)
 
 
 def _append_record(

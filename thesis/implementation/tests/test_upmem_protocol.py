@@ -234,7 +234,17 @@ def test_v4_payloads_are_padded_and_mram_aligned(
 
 
 def test_v4_builder_rejects_unsafe_paths_and_k_bounds(tmp_path: Path) -> None:
-    for path in ("../escape", "/absolute", "nested\\escape"):
+    for path in (
+        "",
+        ".",
+        "..",
+        "../escape",
+        "/absolute",
+        "nested//escape",
+        "nested/./escape",
+        "nested/../escape",
+        "nested\\escape",
+    ):
         with pytest.raises(ValueError, match="unsafe"):
             protocol._safe_relative(path)
 

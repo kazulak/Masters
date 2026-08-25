@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import hashlib
-import os
 from pathlib import Path, PurePosixPath
 import re
 import struct
@@ -153,11 +152,14 @@ def _payload_bytes(value: bytes | bytearray | memoryview | Any) -> bytes:
 
 
 def _safe_relative(value: str | Path) -> str:
-    text = str(value).replace(os.sep, "/")
-    if not text or text.startswith(("/", "\\")) or "\\" in text:
+    raw = str(value)
+    if not raw or "\\" in raw:
         raise ValueError(f"unsafe v4 relative path: {value!s}")
-    parsed = PurePosixPath(text)
-    if parsed.is_absolute() or any(part in {"", ".", ".."} for part in parsed.parts):
+    parts = raw.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        raise ValueError(f"unsafe v4 relative path: {value!s}")
+    parsed = PurePosixPath(raw)
+    if parsed.is_absolute():
         raise ValueError(f"unsafe v4 relative path: {value!s}")
     return parsed.as_posix()
 

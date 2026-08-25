@@ -413,12 +413,19 @@ def test_builder_supports_batch_and_k_chunk_coverage(tmp_path: Path) -> None:
 
 
 def test_builder_rejects_unsafe_paths_and_int8_k_overflow(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="unsafe"):
-        v4._safe_relative("../outside.bin")
-    with pytest.raises(ValueError, match="unsafe"):
-        v4._safe_relative("/absolute.bin")
-    with pytest.raises(ValueError, match="unsafe"):
-        v4._safe_relative("nested\\outside.bin")
+    for path in (
+        "",
+        ".",
+        "..",
+        "../outside.bin",
+        "/absolute.bin",
+        "nested//outside.bin",
+        "nested/./outside.bin",
+        "nested/../outside.bin",
+        "nested\\outside.bin",
+    ):
+        with pytest.raises(ValueError, match="unsafe"):
+            v4._safe_relative(path)
     profile = v4.V4Profile(dpu_count=1, numeric_mode=v4.NUMERIC_HOST_PACKED_INT8)
     with pytest.raises(ValueError, match="canonical dimensions exceed native bounds"):
         v4.build_v4_request(
