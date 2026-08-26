@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 from pathlib import Path
 import tarfile
 
@@ -52,3 +53,23 @@ def test_qualifier_extracts_regular_relative_archive(tmp_path: Path) -> None:
     assert (tmp_path / "output" / "evidence" / "manifest.json").read_text(
         encoding="utf-8"
     ) == "payload\n"
+
+
+def test_qualifier_verifies_bundled_hashes_and_records_external_provenance(
+    tmp_path: Path,
+) -> None:
+    bundle = tmp_path / "m7a-bundle"
+    evidence = bundle / "cpu-run" / "manifest.json"
+    evidence.parent.mkdir(parents=True)
+    evidence.write_text("evidence\n", encoding="utf-8")
+    digest = hashlib.sha256(evidence.read_bytes()).hexdigest()
+    (bundle / "SHA256SUMS").write_text(
+        f"{digest}  runs/{bundle.name}/cpu-run/manifest.json\n"
+        + "0" * 64
+        + "  native/upmem/runtime/bin/dpu\n",
+        encoding="utf-8",
+    )
+
+    external = _qualifier()._verify_internal_hashes(tmp_path)
+
+    assert external == ("native/upmem/runtime/bin/dpu",)

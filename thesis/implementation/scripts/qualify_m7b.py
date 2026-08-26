@@ -121,19 +121,28 @@ def _release_assets(destination: Path) -> tuple[Path, Path]:
     return archive, checksum
 
 
-def _verify_internal_hashes(root: Path) -> None:
+def _verify_internal_hashes(root: Path) -> tuple[str, ...]:
+    """Verify hashes for bundled evidence and list declared external provenance."""
+
     checksum_files = list(root.rglob("SHA256SUMS"))
     if len(checksum_files) != 1:
         raise ValueError("M7A archive must contain exactly one internal SHA256SUMS")
     checksum_file = checksum_files[0]
+    bundle_root = checksum_file.parent
+    bundle_prefix = f"runs/{bundle_root.name}/"
+    external: list[str] = []
     for line in checksum_file.read_text(encoding="utf-8").splitlines():
         fields = line.split(maxsplit=1)
         if len(fields) != 2:
             continue
         expected, name = fields[0], fields[1].lstrip("*")
-        artifact = checksum_file.parent / name
+        if not name.startswith(bundle_prefix):
+            external.append(name)
+            continue
+        artifact = bundle_root / name.removeprefix(bundle_prefix)
         if not artifact.is_file() or _sha256(artifact) != expected:
             raise ValueError(f"internal M7A checksum mismatch: {name}")
+    return tuple(sorted(external))
 
 
 def _json_output(command: list[str], env: dict[str, str]) -> dict[str, Any]:
@@ -201,7 +210,7 @@ def qualify(output: Path) -> Path:
     archive, outer_checksums = _release_assets(release_dir)
     extracted = release_dir / "extracted"
     _safe_extract_tar(archive, extracted)
-    _verify_internal_hashes(extracted)
+    m7a_external_provenance = _verify_internal_hashes(extracted)
     m7a_manifests = sorted(extracted.rglob("manifest.json"))
     if not m7a_manifests:
         raise ValueError("M7A archive contains no evidence manifest")
@@ -293,6 +302,7 @@ def qualify(output: Path) -> Path:
         "simulator_verification": simulator_summary,
         "direct_sdk_cases": direct,
         "m7a_release_verified": True,
+        "m7a_unbundled_provenance_hashes": list(m7a_external_provenance),
     }
     (output / "qualification.json").write_text(
         json.dumps(qualification, sort_keys=True, indent=2) + "\n", encoding="utf-8"
