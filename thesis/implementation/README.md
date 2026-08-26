@@ -64,7 +64,7 @@ canonical evidence. `verify` checks evidence identities and integrity.
 `report` only reads existing evidence and produces tables and plots.
 
 Manifests use `evidence_manifest_v2`, samples use `evidence_sample_v3`,
-sessions use `evidence_session_v1`, and reports use `evidence_report_v3`.
+sessions use `evidence_session_v1`, and reports use `evidence_report_v4`.
 Earlier sample evidence is unsupported. Sample `status`
 describes whether the complete attempt finished: a validator exception produces
 a failed sample, while a policy-reference or accuracy qualification miss
@@ -76,7 +76,8 @@ their execution order, and fresh-session lifecycle. Reports retain attempted,
 successful, failed, and unsupported measurement counts; summarize successful
 measurements with median, raw MAD, and a deterministic percentile-bootstrap
 interval; and reserve block-paired speedup intervals for admissible physical
-comparisons. SDK-simulator reports remain diagnostic-only.
+comparisons. Topology scaling is emitted separately in `scaling.csv`, never in
+CPU-versus-UPMEM `speedups.csv`. SDK-simulator reports remain diagnostic-only.
 
 ## Evidence and Comparison Rules
 

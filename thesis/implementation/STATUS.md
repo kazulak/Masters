@@ -91,9 +91,10 @@ UPMEM TN acceleration.
   provider or public command.
 - **ATiM:** not integrated.
 
-M7A exact-head software qualification is complete. M7B pre-physical hardening
-must still freeze direct boundary coverage, resource admission, collection
-conditions, and claim reporting before a bounded physical one-DPU qualification
-using the active WRAM-panel kernel. Tasklet/DPU scaling, slice scheduling, and
-residency remain later experiments and require measured evidence before they
-become claims.
+M7A exact-head software qualification is complete. M7B now adds deterministic
+direct SDK boundary coverage, persisted startup/execution resource admission,
+physical-campaign collection policy, and a claim-gated `scaling.csv`. The
+committed `scripts/qualify_m7b.py` still needs to qualify the final exact M7B
+head on the designated SDK machine before a bounded physical one-DPU
+qualification. Tasklet/DPU scaling, slice scheduling, and residency remain
+later experiments and require measured evidence before they become claims.
