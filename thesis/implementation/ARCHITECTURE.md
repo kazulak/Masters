@@ -163,8 +163,10 @@ confirm exact-head software qualification for their respective sources. The
 physical UPMEM route remains pending and is not yet ETH-qualified. M7B
 pre-physical software qualification is recorded by
 `thesis-m7b-prephysical-software-ready-v1`; that tag is not physical evidence.
-Consequently, current code supports no claim of physical speedup, energy
-efficiency, multi-rank scaling, or general UPMEM TN execution. Physical
+M7C adds source-only workload selection and physical preparation scripts, but
+their exact-head software/SDK qualification and every physical run remain
+pending. Consequently, current code supports no claim of physical speedup,
+energy efficiency, multi-rank scaling, or general UPMEM TN execution. Physical
 qualification is a separate run using the exact source, native binaries,
 topology, and configuration recorded in evidence.
 

@@ -59,17 +59,25 @@ qualification remains pending with no physical speedup, scaling, or energy claim
 
 ## Physical Qualification State
 
-The post-reset physical route is **not ETH-qualified**. Before it can support
-even a one-DPU physical execution claim, run:
+The post-reset physical route is **not ETH-qualified**. M7C preparation is
+implemented on the active source but still requires its exact-head
+software/SDK qualification before an ETH command. Before it can support even a
+one-DPU physical execution claim, generate an ignored machine-specific copy and
+run the physical-only qualification command:
 
 ```bash
-make build-upmem-runtime UPMEM_TASKLETS=1
-UPMEM_ALLOW_PHYSICAL_HARDWARE=1 \
-  make qualify PHYSICAL_CONFIG=configs/tn_benchmark_physical_smoke.yml \
-  OUTPUT=runs/physical-qualification
-make verify INPUT=runs/physical-qualification
-make report INPUT=runs/physical-qualification \
-  REPORT_OUTPUT=runs/physical-qualification-report
+PYTHONPATH=src ../.venv/bin/python scripts/qualify_m7c_physical.py prepare \
+  --template configs/tn_benchmark_physical_smoke.yml \
+  --output runs/configs/eth/one-dpu-float32.yml \
+  --mode float32-smoke --rank-path /dev/dpu_rank0 \
+  --session-root runs/upmem_sessions/eth-one-dpu --expected-cpus 0
+UPMEM_ALLOW_PHYSICAL_HARDWARE=1 ../.venv/bin/python -m quantum_bench.cli qualify \
+  --config runs/configs/eth/one-dpu-float32.yml \
+  --output runs/evidence/eth-one-dpu-float32 --allow-physical
+PYTHONPATH=src ../.venv/bin/python scripts/qualify_m7c_physical.py inspect \
+  --input runs/evidence/eth-one-dpu-float32 \
+  --expected-samples 6 --expected-sessions 6 \
+  --numeric-policy split_complex_float32_v1
 ```
 
 The tracked smoke configuration is a template. Generate an ignored ETH copy
@@ -98,5 +106,7 @@ pre-physical qualification is complete at
 SDK-simulator, direct native-boundary, provenance, and evidence checks.
 Physical UPMEM qualification remains pending. The next stage is a bounded
 one-DPU physical smoke followed by separately preregistered scaling work.
-Tasklet/DPU scaling, slice scheduling, and residency require measured
-evidence before they become claims.
+The tracked M7C source selection chooses stress18 for controlled primary
+scaling and GHZ18 for structural confirmation; it uses no timing evidence.
+Tasklet/DPU scaling, slice scheduling, and residency require measured evidence
+before they become claims.
