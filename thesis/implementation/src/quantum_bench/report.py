@@ -38,6 +38,10 @@ _RESOURCE_FACTS = (
     "active_dpus",
     "rank_count",
     "tasklets_per_dpu",
+    "dominant_wave_useful_slots",
+    "dominant_wave_allocated_slots",
+    "dominant_wave_utilization",
+    "fully_populated_wave_count",
 )
 _BOOTSTRAP_RESAMPLES = 10_000
 _BOOTSTRAP_CONFIDENCE_LEVEL = 0.95
@@ -54,6 +58,9 @@ _TERMINAL_AUTHORITY_FIELDS = frozenset(
     }
 )
 _AGGREGATE_COLUMNS = (
+    "experiment_id",
+    "collection_policy_id",
+    "claim_policy",
     "case_id",
     "plan_id",
     "route_id",
@@ -62,6 +69,8 @@ _AGGREGATE_COLUMNS = (
     "tensor_network_structure_id",
     "logical_plan_id",
     "physical_plan_id",
+    "validation_policy_id",
+    "kernel_policy",
     "numeric_policy",
     "sample_count",
     "planned_measurement_count",
@@ -69,6 +78,10 @@ _AGGREGATE_COLUMNS = (
     "failed_measurement_count",
     "unsupported_measurement_count",
     "complete_measurement_count",
+    "planned_warmup_count",
+    "successful_warmup_count",
+    "failed_warmup_count",
+    "unsupported_warmup_count",
     "policy_reference_qualified",
     "accuracy_qualified",
     "claim_eligible",
@@ -87,6 +100,8 @@ _AGGREGATE_COLUMNS = (
     *tuple(f"median_{field}" for field in _RESOURCE_FACTS),
 )
 _SPEEDUP_COLUMNS = (
+    "experiment_id",
+    "collection_policy_id",
     "case_id",
     "plan_id",
     "baseline_route_id",
@@ -104,6 +119,34 @@ _SPEEDUP_COLUMNS = (
     "speedup",
     "speedup_ci_low",
     "speedup_ci_high",
+)
+_SCALING_COLUMNS = (
+    "experiment_id",
+    "collection_policy_id",
+    "comparison_kind",
+    "baseline_route_id",
+    "candidate_route_id",
+    "baseline_dpu_count",
+    "candidate_dpu_count",
+    "baseline_tasklet_count",
+    "candidate_tasklet_count",
+    "resource_ratio",
+    "planned_pair_count",
+    "complete_pair_count",
+    "speedup",
+    "speedup_ci_low",
+    "speedup_ci_high",
+    "parallel_efficiency",
+    "claim_eligible",
+    "claim_ineligibility_reason",
+    "baseline_physical_plan_id",
+    "candidate_physical_plan_id",
+    "dominant_wave_useful_slots",
+    "dominant_wave_allocated_slots",
+    "dominant_wave_utilization",
+    "fully_populated_wave_count",
+    "bootstrap_method",
+    "bootstrap_seed",
 )
 
 
@@ -134,6 +177,9 @@ def report_artifacts(
         speedups, rejections = _admit_speedups(
             aggregates, _collection_base_seed(manifest)
         )
+        scaling = _admit_scaling(aggregates, _collection_base_seed(manifest))
+    if manifest["status"] != "completed" or manifest["source_worktree_dirty"] is True:
+        scaling = []
     verification = _verification_summary(manifest, samples, sessions)
     simulator_present = any(
         _all_fact_values(aggregate, "target_observed", "sdk_simulator")
@@ -141,7 +187,7 @@ def report_artifacts(
         for aggregate in aggregates
     )
     report = {
-        "schema_version": "evidence_report_v3",
+        "schema_version": "evidence_report_v4",
         "status": "completed",
         "run_id": manifest["run_id"],
         "experiment_id": manifest["experiment_id"],
@@ -149,6 +195,7 @@ def report_artifacts(
         "verification": verification,
         "aggregate_count": len(aggregates),
         "speedup_count": len(speedups),
+        "scaling_count": len(scaling),
         "speedup_rejections": dict(sorted(rejections.items())),
         "failed_count": verification["failed_count"],
         "unsupported_count": verification["unsupported_count"],
@@ -193,6 +240,7 @@ def report_artifacts(
     _write_json(output / "report.json", report)
     _write_csv(output / "aggregate.csv", _AGGREGATE_COLUMNS, aggregates)
     _write_csv(output / "speedups.csv", _SPEEDUP_COLUMNS, speedups)
+    _write_csv(output / "scaling.csv", _SCALING_COLUMNS, scaling)
     _write_plots(output / "plots", aggregates, speedups)
     return report
 
@@ -212,8 +260,6 @@ def _aggregate_measurements(
         tuple[object, ...], list[Mapping[str, Any]]
     ] = {}
     for sample in sample_rows:
-        if sample["attempt_kind"] != "measurement":
-            continue
         attempts_by_route.setdefault(_attempt_route_key(sample), []).append(sample)
 
     grouped: dict[
@@ -244,14 +290,21 @@ def _aggregate_measurements(
         )
 
     planned_measurements = _planned_measurements_per_route(manifest)
+    planned_warmups = _planned_warmups_per_route(manifest)
     bootstrap_base_seed = _collection_base_seed(manifest)
+    claim_policy = _claim_policy(manifest)
+    machine_preflight_passed = _machine_preflight_passed(manifest)
     aggregates = [
         _make_aggregate(
             key,
             rows,
             attempts_by_route.get(_attempt_route_key(rows[0][0]), ()),
             planned_measurements,
+            planned_warmups,
             bootstrap_base_seed,
+            manifest,
+            claim_policy,
+            machine_preflight_passed,
         )
         for key, rows in grouped.items()
     ]
@@ -290,15 +343,51 @@ def _planned_measurements_per_route(manifest: Mapping[str, Any]) -> int | None:
     return None
 
 
-def _collection_base_seed(manifest: Mapping[str, Any]) -> int:
+def _planned_warmups_per_route(manifest: Mapping[str, Any]) -> int | None:
+    collection = _manifest_collection(manifest)
+    if collection is None:
+        return None
+    count = collection.get("warmup_blocks")
+    if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+        return count
+    return None
+
+
+def _manifest_collection(manifest: Mapping[str, Any]) -> Mapping[str, Any] | None:
     configuration = manifest["configuration"]
     if not isinstance(configuration, Mapping):  # validated by load_artifacts
         raise ValueError("manifest configuration must be a mapping")
     experiment = configuration.get("experiment")
     if not isinstance(experiment, Mapping):
-        return 0
+        return None
     collection = experiment.get("collection")
-    if not isinstance(collection, Mapping):
+    return collection if isinstance(collection, Mapping) else None
+
+
+def _claim_policy(manifest: Mapping[str, Any]) -> str:
+    collection = _manifest_collection(manifest)
+    if collection is None:
+        return "diagnostic_v1"
+    policy = collection.get("claim_policy")
+    return policy if isinstance(policy, str) else "diagnostic_v1"
+
+
+def _machine_preflight_passed(manifest: Mapping[str, Any]) -> bool:
+    configuration = manifest["configuration"]
+    if not isinstance(configuration, Mapping):  # validated by load_artifacts
+        return False
+    environment = configuration.get("environment")
+    if not isinstance(environment, Mapping):
+        return False
+    preflight = environment.get("machine_preflight")
+    return isinstance(preflight, Mapping) and preflight.get(
+        "machine_preflight_passed"
+    ) is True
+
+
+def _collection_base_seed(manifest: Mapping[str, Any]) -> int:
+    collection = _manifest_collection(manifest)
+    if collection is None:
         return 0
     seed = collection.get("base_seed")
     if isinstance(seed, int) and not isinstance(seed, bool):
@@ -395,7 +484,11 @@ def _make_aggregate(
     rows_with_facts: list[tuple[Mapping[str, Any], Mapping[str, Any]]],
     attempted_rows: Iterable[Mapping[str, Any]],
     planned_measurements: int | None,
+    planned_warmups: int | None,
     bootstrap_base_seed: int,
+    manifest: Mapping[str, Any],
+    claim_policy: str,
+    machine_preflight_passed: bool,
 ) -> dict[str, object]:
     (
         case_id,
@@ -419,7 +512,14 @@ def _make_aggregate(
         float(measurement["total_wall_s"]) for measurement in typed_measurements
     )
     attempted = tuple(attempted_rows)
-    statuses = Counter(str(row["status"]) for row in attempted)
+    measured_attempts = tuple(
+        row for row in attempted if row["attempt_kind"] == "measurement"
+    )
+    warmup_attempts = tuple(
+        row for row in attempted if row["attempt_kind"] == "warmup"
+    )
+    statuses = Counter(str(row["status"]) for row in measured_attempts)
+    warmup_statuses = Counter(str(row["status"]) for row in warmup_attempts)
     successful_count = statuses["success"]
     expected_count = (
         planned_measurements if planned_measurements is not None else len(attempted)
@@ -432,14 +532,27 @@ def _make_aggregate(
         successful_count=successful_count,
         failed_count=statuses["failed"],
         unsupported_count=statuses["unsupported"],
+        planned_warmups=planned_warmups,
+        successful_warmup_count=warmup_statuses["success"],
+        failed_warmup_count=warmup_statuses["failed"],
+        unsupported_warmup_count=warmup_statuses["unsupported"],
         policy_reference_qualified=policy_qualified,
         accuracy_qualified=accuracy_qualified,
+        claim_policy=claim_policy,
+        machine_preflight_passed=machine_preflight_passed,
     )
+    first_sample = rows[0]
+    first_identities = first_sample["identities"]
+    if not isinstance(first_identities, Mapping):  # validated by load_artifacts
+        raise ValueError("aggregate sample lacks identities")
     interval = _median_bootstrap_interval(
         totals,
         _statistics_seed(bootstrap_base_seed, "aggregate", key),
     )
     aggregate: dict[str, object] = {
+        "experiment_id": manifest["experiment_id"],
+        "collection_policy_id": manifest["collection_policy_id"],
+        "claim_policy": claim_policy,
         "case_id": case_id,
         "plan_id": plan_id,
         "route_id": route_id,
@@ -448,6 +561,10 @@ def _make_aggregate(
         "tensor_network_structure_id": tensor_network_structure_id,
         "logical_plan_id": logical_plan_id,
         "physical_plan_id": physical_plan_id,
+        "validation_policy_id": first_identities["validation_policy_id"],
+        "kernel_policy": _common_fact_value(
+            [facts for _, facts in rows_with_facts], "kernel_policy"
+        ),
         "numeric_policy": numeric_policy,
         "sample_count": len(rows),
         "planned_measurement_count": expected_count,
@@ -455,6 +572,10 @@ def _make_aggregate(
         "failed_measurement_count": statuses["failed"],
         "unsupported_measurement_count": statuses["unsupported"],
         "complete_measurement_count": successful_count,
+        "planned_warmup_count": planned_warmups,
+        "successful_warmup_count": warmup_statuses["success"],
+        "failed_warmup_count": warmup_statuses["failed"],
+        "unsupported_warmup_count": warmup_statuses["unsupported"],
         "policy_reference_qualified": policy_qualified,
         "accuracy_qualified": accuracy_qualified,
         "claim_eligible": claim_eligible,
@@ -558,14 +679,32 @@ def _aggregate_claim_eligibility(
     successful_count: int,
     failed_count: int,
     unsupported_count: int,
+    planned_warmups: int | None,
+    successful_warmup_count: int,
+    failed_warmup_count: int,
+    unsupported_warmup_count: int,
     policy_reference_qualified: bool | None,
     accuracy_qualified: bool,
+    claim_policy: str,
+    machine_preflight_passed: bool,
 ) -> tuple[bool, str | None]:
     row_values = tuple(rows)
+    if claim_policy != "physical_performance_v1":
+        return False, "diagnostic_claim_policy"
+    if planned_measurements != 30:
+        return False, "physical_campaign_requires_30_measurements"
+    if planned_warmups != 2:
+        return False, "physical_campaign_requires_2_warmups"
+    if not machine_preflight_passed:
+        return False, "machine_preflight_failed"
     if successful_count != planned_measurements:
         return False, "incomplete_measurements"
     if failed_count or unsupported_count:
         return False, "non_successful_measurement"
+    if successful_warmup_count != planned_warmups:
+        return False, "incomplete_warmups"
+    if failed_warmup_count or unsupported_warmup_count:
+        return False, "non_successful_warmup"
     if not row_values:
         return False, "no_successful_measurements"
     if policy_reference_qualified is False:
@@ -610,6 +749,16 @@ def _resource_values(
     return values
 
 
+def _common_fact_value(
+    facts: Iterable[Mapping[str, Any]], field: str
+) -> object | None:
+    values = [facts_row.get(field) for facts_row in facts]
+    if not values or any(value is None for value in values):
+        return None
+    first = values[0]
+    return first if all(value == first for value in values[1:]) else None
+
+
 def _joined_backend_facts(
     sample: Mapping[str, Any],
     terminal_facts_by_session: Mapping[str, Mapping[str, Any]],
@@ -650,6 +799,8 @@ def _aggregate_sort_key(aggregate: Mapping[str, object]) -> tuple[str, ...]:
     return tuple(
         "" if aggregate[field] is None else str(aggregate[field])
         for field in (
+            "experiment_id",
+            "collection_policy_id",
             "case_id",
             "plan_id",
             "route_id",
@@ -692,6 +843,8 @@ def _admit_speedups(
             rejections["incomplete_paired_blocks"] += 1
             continue
         comparison_key = {
+            "experiment_id": candidate["experiment_id"],
+            "collection_policy_id": candidate["collection_policy_id"],
             "case_id": candidate["case_id"],
             "plan_id": candidate["plan_id"],
             "baseline_route_id": baseline["route_id"],
@@ -707,6 +860,8 @@ def _admit_speedups(
         )
         speedups.append(
             {
+                "experiment_id": candidate["experiment_id"],
+                "collection_policy_id": candidate["collection_policy_id"],
                 "case_id": candidate["case_id"],
                 "plan_id": candidate["plan_id"],
                 "baseline_route_id": baseline["route_id"],
@@ -729,6 +884,217 @@ def _admit_speedups(
     return sorted(
         speedups, key=lambda row: tuple(str(row[key]) for key in _SPEEDUP_COLUMNS)
     ), rejections
+
+
+def _admit_scaling(
+    aggregates: Iterable[Mapping[str, object]], bootstrap_base_seed: int
+) -> list[dict[str, object]]:
+    """Compare physical UPMEM topology variants without using CPU speedup rows."""
+
+    physical_rows = [
+        row
+        for row in aggregates
+        if _is_upmem_candidate(row)
+        and _all_fact_values(row, "target_observed", "physical_hardware")
+    ]
+    rows: list[dict[str, object]] = []
+    for baseline in physical_rows:
+        for candidate in physical_rows:
+            kind = _scaling_kind(baseline, candidate)
+            if kind is None or not _same_scaling_dimensions(baseline, candidate):
+                continue
+            baseline_dpus = _common_nonnegative_int_fact(baseline, "requested_dpus")
+            candidate_dpus = _common_nonnegative_int_fact(candidate, "requested_dpus")
+            baseline_tasklets = _common_nonnegative_int_fact(
+                baseline, "tasklets_per_dpu"
+            )
+            candidate_tasklets = _common_nonnegative_int_fact(
+                candidate, "tasklets_per_dpu"
+            )
+            if (
+                baseline_dpus is None
+                or candidate_dpus is None
+                or baseline_tasklets is None
+                or candidate_tasklets is None
+            ):
+                continue
+            resource_ratio = (
+                candidate_dpus / baseline_dpus
+                if kind == "dpu_scaling"
+                else candidate_tasklets / baseline_tasklets
+            )
+            pairs = _paired_measurements(baseline, candidate)
+            rejection = _scaling_rejection(baseline, candidate, pairs)
+            row: dict[str, object] = {
+                "experiment_id": candidate["experiment_id"],
+                "collection_policy_id": candidate["collection_policy_id"],
+                "comparison_kind": kind,
+                "baseline_route_id": baseline["route_id"],
+                "candidate_route_id": candidate["route_id"],
+                "baseline_dpu_count": baseline_dpus,
+                "candidate_dpu_count": candidate_dpus,
+                "baseline_tasklet_count": baseline_tasklets,
+                "candidate_tasklet_count": candidate_tasklets,
+                "resource_ratio": resource_ratio,
+                "planned_pair_count": baseline["planned_measurement_count"],
+                "complete_pair_count": 0 if pairs is None else len(pairs),
+                "speedup": None,
+                "speedup_ci_low": None,
+                "speedup_ci_high": None,
+                "parallel_efficiency": None,
+                "claim_eligible": rejection is None,
+                "claim_ineligibility_reason": rejection,
+                "baseline_physical_plan_id": baseline["physical_plan_id"],
+                "candidate_physical_plan_id": candidate["physical_plan_id"],
+                "dominant_wave_useful_slots": _common_nonnegative_int_fact(
+                    candidate, "dominant_wave_useful_slots"
+                ),
+                "dominant_wave_allocated_slots": _common_nonnegative_int_fact(
+                    candidate, "dominant_wave_allocated_slots"
+                ),
+                "dominant_wave_utilization": _common_nonnegative_number_fact(
+                    candidate, "dominant_wave_utilization"
+                ),
+                "fully_populated_wave_count": _common_nonnegative_int_fact(
+                    candidate, "fully_populated_wave_count"
+                ),
+                "bootstrap_method": "block_paired_median_ratio_bootstrap_v1",
+                "bootstrap_seed": None,
+            }
+            if pairs is not None and rejection is None:
+                comparison_key = {
+                    "experiment_id": candidate["experiment_id"],
+                    "comparison_kind": kind,
+                    "baseline_route_id": baseline["route_id"],
+                    "candidate_route_id": candidate["route_id"],
+                    "scope_id": candidate["scope_id"],
+                    "numeric_policy": candidate["numeric_policy"],
+                }
+                bootstrap_seed = _statistics_seed(
+                    bootstrap_base_seed, "block_paired_scaling", comparison_key
+                )
+                speedup = float(baseline["median_total_wall_s"]) / float(
+                    candidate["median_total_wall_s"]
+                )
+                low, high = _paired_speedup_bootstrap_interval(pairs, bootstrap_seed)
+                row.update(
+                    {
+                        "speedup": speedup,
+                        "speedup_ci_low": low,
+                        "speedup_ci_high": high,
+                        "parallel_efficiency": speedup / resource_ratio,
+                        "bootstrap_seed": bootstrap_seed,
+                    }
+                )
+            rows.append(row)
+    return sorted(
+        rows,
+        key=lambda row: tuple(str(row[field]) for field in _SCALING_COLUMNS),
+    )
+
+
+def _scaling_kind(
+    baseline: Mapping[str, object], candidate: Mapping[str, object]
+) -> str | None:
+    baseline_dpus = _common_nonnegative_int_fact(baseline, "requested_dpus")
+    candidate_dpus = _common_nonnegative_int_fact(candidate, "requested_dpus")
+    baseline_tasklets = _common_nonnegative_int_fact(
+        baseline, "tasklets_per_dpu"
+    )
+    candidate_tasklets = _common_nonnegative_int_fact(
+        candidate, "tasklets_per_dpu"
+    )
+    if None in {
+        baseline_dpus,
+        candidate_dpus,
+        baseline_tasklets,
+        candidate_tasklets,
+    }:
+        return None
+    if baseline_dpus == candidate_dpus and baseline_tasklets < candidate_tasklets:
+        return "tasklet_scaling"
+    if baseline_tasklets == candidate_tasklets and baseline_dpus < candidate_dpus:
+        return "dpu_scaling"
+    return None
+
+
+def _same_scaling_dimensions(
+    left: Mapping[str, object], right: Mapping[str, object]
+) -> bool:
+    return all(
+        left[field] == right[field]
+        for field in (
+            "experiment_id",
+            "collection_policy_id",
+            "case_id",
+            "plan_id",
+            "scope_id",
+            "problem_id",
+            "tensor_network_structure_id",
+            "logical_plan_id",
+            "numeric_policy",
+            "kernel_policy",
+            "validation_policy_id",
+        )
+    )
+
+
+def _scaling_rejection(
+    baseline: Mapping[str, object],
+    candidate: Mapping[str, object],
+    pairs: list[tuple[float, float]] | None,
+) -> str | None:
+    if baseline["claim_eligible"] is not True:
+        return "baseline_" + str(
+            baseline.get("claim_ineligibility_reason") or "not_eligible"
+        )
+    if candidate["claim_eligible"] is not True:
+        return "candidate_" + str(
+            candidate.get("claim_ineligibility_reason") or "not_eligible"
+        )
+    for role, aggregate in (("baseline", baseline), ("candidate", candidate)):
+        if not _all_fact_values(aggregate, "physical_target_verified", True):
+            return f"{role}_physical_target_not_verified"
+        if not _all_fact_values(aggregate, "cpu_fallback_used", False):
+            return f"{role}_cpu_fallback_used"
+        if not _all_fact_values(aggregate, "simulator_kernel_executed", False):
+            return f"{role}_simulator_kernel_executed"
+        if not _all_fact_values(aggregate, "startup_resource_admission_passed", True):
+            return f"{role}_startup_resource_admission_failed"
+        if not _all_fact_values(aggregate, "execution_resource_admission_passed", True):
+            return f"{role}_execution_resource_admission_failed"
+    if baseline["physical_plan_id"] == candidate["physical_plan_id"]:
+        return "physical_plan_not_distinct"
+    if pairs is None:
+        return "incomplete_paired_blocks"
+    return None
+
+
+def _common_nonnegative_int_fact(
+    aggregate: Mapping[str, object], field: str
+) -> int | None:
+    value = _common_fact_value_from_aggregate(aggregate, field)
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def _common_nonnegative_number_fact(
+    aggregate: Mapping[str, object], field: str
+) -> float | None:
+    value = _common_fact_value_from_aggregate(aggregate, field)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        return None
+    return float(value)
+
+
+def _common_fact_value_from_aggregate(
+    aggregate: Mapping[str, object], field: str
+) -> object | None:
+    facts = aggregate.get("_joined_backend_facts")
+    if not isinstance(facts, list) or not all(isinstance(row, Mapping) for row in facts):
+        return None
+    return _common_fact_value(
+        [row for row in facts if isinstance(row, Mapping)], field
+    )
 
 
 def _is_upmem_candidate(aggregate: Mapping[str, object]) -> bool:
@@ -772,6 +1138,10 @@ def _speedup_rejection(
         return "cpu_fallback_used"
     if not _all_fact_values(candidate, "simulator_kernel_executed", False):
         return "simulator_kernel_executed"
+    if not _all_fact_values(candidate, "startup_resource_admission_passed", True):
+        return "startup_resource_admission_failed"
+    if not _all_fact_values(candidate, "execution_resource_admission_passed", True):
+        return "execution_resource_admission_failed"
     if not any(
         _same_speedup_dimensions(candidate, baseline)
         and _baseline_is_eligible(baseline)
@@ -907,6 +1277,7 @@ def _same_speedup_dimensions(
             "tensor_network_structure_id",
             "logical_plan_id",
             "numeric_policy",
+            "validation_policy_id",
         )
     )
 

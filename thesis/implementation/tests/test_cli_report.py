@@ -1265,6 +1265,52 @@ def _session(
 _ENVIRONMENT = {"host": "test-host", "os": "test-os"}
 _VALIDATION_POLICY = {"reference_dtype": "complex128", "atol": 1.0e-5}
 _COLLECTION_POLICY = {"base_seed": 7, "session_policy": "test"}
+_PHYSICAL_COLLECTION_POLICY = {
+    "claim_policy": "physical_performance_v1",
+    "base_seed": 7,
+    "warmup_blocks": 2,
+    "measurement_blocks": 30,
+    "session_policy": "fresh_session_per_attempt_v1",
+    "block_cooldown_s": 0.0,
+    "machine_policy": {},
+}
+
+
+def _physical_attempts(
+    *,
+    run_id: str,
+    experiment_id: str,
+    environment_id: str,
+    validation_policy_id: str,
+    case_id: str,
+    route_id: str,
+    total_wall_s: float,
+    facts: dict[str, object] | None = None,
+    session_instance_id: str | None = None,
+    scope_id: str = "steady_execution_v1",
+) -> list[dict[str, object]]:
+    route_facts = dict(facts or {})
+    if session_instance_id is not None:
+        route_facts.setdefault("startup_resource_admission_passed", True)
+        route_facts.setdefault("execution_resource_admission_passed", True)
+    return [
+        _sample(
+            run_id=run_id,
+            experiment_id=experiment_id,
+            environment_id=environment_id,
+            validation_policy_id=validation_policy_id,
+            case_id=case_id,
+            route_id=route_id,
+            index=index,
+            total_wall_s=total_wall_s,
+            facts=route_facts,
+            session_instance_id=session_instance_id,
+            sample_kind=attempt_kind,
+            scope_id=scope_id,
+        )
+        for attempt_kind, count in (("warmup", 2), ("measurement", 30))
+        for index in range(count)
+    ]
 
 
 def _artifact(
@@ -1274,11 +1320,29 @@ def _artifact(
     *,
     status: str = "completed",
     source_worktree_dirty: bool = False,
+    collection_policy: dict[str, object] | None = None,
+    machine_preflight_passed: bool = False,
 ) -> Path:
     sessions = sessions or []
+    environment = {
+        **_ENVIRONMENT,
+        **(
+            {
+                "machine_preflight": {
+                    "machine_preflight_passed": machine_preflight_passed
+                }
+            }
+            if collection_policy is not None
+            else {}
+        ),
+    }
+    environment_id_value = environment_id(environment)
+    for sample in samples:
+        identities = sample["identities"]
+        if isinstance(identities, dict):
+            identities["environment_id"] = environment_id_value
     run_id = str(samples[0]["run_id"])
     experiment_id = str(samples[0]["experiment_id"])
-    environment_id_value = str(samples[0]["identities"]["environment_id"])
     policy_id = str(samples[0]["identities"]["validation_policy_id"])
     bindings = {
         (
@@ -1297,15 +1361,24 @@ def _artifact(
         "schema_version": "evidence_manifest_v2",
         "run_id": run_id,
         "experiment_id": experiment_id,
-        "collection_policy_id": collection_policy_id(_COLLECTION_POLICY),
+        "collection_policy_id": collection_policy_id(
+            collection_policy or _COLLECTION_POLICY
+        ),
         "environment_id": environment_id_value,
         "validation_policy_id": policy_id,
         "created_at_utc": "2026-08-24T12:00:00Z",
         "source_commit": "a" * 40,
         "source_worktree_dirty": source_worktree_dirty,
         "configuration": {
-            "experiment": {"experiment_id": experiment_id},
-            "environment": _ENVIRONMENT,
+            "experiment": {
+                "experiment_id": experiment_id,
+                **(
+                    {"collection": collection_policy}
+                    if collection_policy is not None
+                    else {}
+                ),
+            },
+            "environment": environment,
             "validation_policy": _VALIDATION_POLICY,
             "identity_bindings": [
                 bindings[key]
@@ -1439,7 +1512,7 @@ def test_verify_and_report_aggregate_duplicate_measurements_once(
     report = report_artifacts(artifact, tmp_path / "report")
 
     assert report["status"] == "completed"
-    assert report["schema_version"] == "evidence_report_v3"
+    assert report["schema_version"] == "evidence_report_v4"
     assert report["aggregate_count"] == 1
     assert report["statistics"] == {
         "summary": "median_raw_mad_v1",
@@ -1539,33 +1612,27 @@ def test_report_admits_physical_speedup_from_terminal_session_facts(
 ) -> None:
     run_id, experiment_id, environment_id_value, policy_id = _ids()
     session_instance_id = "physical-session"
-    samples = [
-        _sample(
-            run_id=run_id,
-            experiment_id=experiment_id,
-            environment_id=environment_id_value,
-            validation_policy_id=policy_id,
-            case_id="bell",
-            route_id="cpu",
-            index=index,
-            total_wall_s=3.0,
-        )
-        for index in range(2)
-    ]
+    samples = _physical_attempts(
+        run_id=run_id,
+        experiment_id=experiment_id,
+        environment_id=environment_id_value,
+        validation_policy_id=policy_id,
+        case_id="bell",
+        route_id="cpu",
+        total_wall_s=3.0,
+    )
     samples.extend(
-        _sample(
+        _physical_attempts(
             run_id=run_id,
             experiment_id=experiment_id,
             environment_id=environment_id_value,
             validation_policy_id=policy_id,
             case_id="bell",
             route_id="upmem",
-            index=index,
             total_wall_s=1.0,
             facts={"backend_id": "upmem_sdk_hardware_v4"},
             session_instance_id=session_instance_id,
         )
-        for index in range(2)
     )
     report = report_artifacts(
         _artifact(
@@ -1580,6 +1647,8 @@ def test_report_admits_physical_speedup_from_terminal_session_facts(
                     instance=session_instance_id,
                 )
             ],
+            collection_policy=_PHYSICAL_COLLECTION_POLICY,
+            machine_preflight_passed=True,
         ),
         tmp_path / "report",
     )
@@ -1589,11 +1658,104 @@ def test_report_admits_physical_speedup_from_terminal_session_facts(
         speedup_rows = list(csv.DictReader(stream))
     assert len(speedup_rows) == 1
     assert speedup_rows[0]["speedup"] == "3.0"
-    assert speedup_rows[0]["complete_pair_count"] == "2"
+    assert speedup_rows[0]["complete_pair_count"] == "30"
     assert speedup_rows[0]["bootstrap_method"] == "block_paired_median_ratio_bootstrap_v1"
     assert float(speedup_rows[0]["speedup_ci_low"]) <= 3.0
     assert float(speedup_rows[0]["speedup_ci_high"]) >= 3.0
     assert (tmp_path / "report" / "plots" / "physical_speedup_by_case.png").is_file()
+
+
+def test_report_emits_claim_gated_tasklet_scaling_csv(tmp_path: Path) -> None:
+    run_id, experiment_id, environment_id_value, policy_id = _ids()
+    baseline_instance = "physical-t1"
+    candidate_instance = "physical-t8"
+    common_facts = {
+        "backend_id": "upmem_sdk_hardware_v4",
+        "kernel_policy": "dpu_real_tile_v4_wram_panel_v1",
+        "requested_dpus": 1,
+        "allocated_dpus": 1,
+        "active_dpus": 1,
+        "dominant_wave_useful_slots": 1,
+        "dominant_wave_allocated_slots": 1,
+        "dominant_wave_utilization": 1.0,
+        "fully_populated_wave_count": 1,
+    }
+    baseline = _physical_attempts(
+        run_id=run_id,
+        experiment_id=experiment_id,
+        environment_id=environment_id_value,
+        validation_policy_id=policy_id,
+        case_id="bell",
+        route_id="upmem_t1",
+        total_wall_s=8.0,
+        facts={**common_facts, "tasklets_per_dpu": 1},
+        session_instance_id=baseline_instance,
+    )
+    candidate = _physical_attempts(
+        run_id=run_id,
+        experiment_id=experiment_id,
+        environment_id=environment_id_value,
+        validation_policy_id=policy_id,
+        case_id="bell",
+        route_id="upmem_t8",
+        total_wall_s=2.0,
+        facts={**common_facts, "tasklets_per_dpu": 8},
+        session_instance_id=candidate_instance,
+    )
+    for sample in baseline:
+        sample["identities"]["physical_plan_id"] = "4" * 64
+        sample["identities"]["executable_id"] = "5" * 64
+    for sample in candidate:
+        sample["identities"]["physical_plan_id"] = "6" * 64
+        sample["identities"]["executable_id"] = "7" * 64
+
+    report = report_artifacts(
+        _artifact(
+            tmp_path / "evidence",
+            [*baseline, *candidate],
+            [
+                _session(
+                    run_id=run_id,
+                    experiment_id=experiment_id,
+                    case_id="bell",
+                    route_id="upmem_t1",
+                    instance=baseline_instance,
+                ),
+                _session(
+                    run_id=run_id,
+                    experiment_id=experiment_id,
+                    case_id="bell",
+                    route_id="upmem_t8",
+                    instance=candidate_instance,
+                ),
+            ],
+            collection_policy=_PHYSICAL_COLLECTION_POLICY,
+            machine_preflight_passed=True,
+        ),
+        tmp_path / "report",
+    )
+
+    assert report["schema_version"] == "evidence_report_v4"
+    assert report["scaling_count"] == 1
+    with (tmp_path / "report" / "scaling.csv").open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["experiment_id"] == experiment_id
+    assert row["comparison_kind"] == "tasklet_scaling"
+    assert row["baseline_route_id"] == "upmem_t1"
+    assert row["candidate_route_id"] == "upmem_t8"
+    assert row["baseline_tasklet_count"] == "1"
+    assert row["candidate_tasklet_count"] == "8"
+    assert row["resource_ratio"] == "8.0"
+    assert row["planned_pair_count"] == "30"
+    assert row["complete_pair_count"] == "30"
+    assert row["speedup"] == "4.0"
+    assert row["parallel_efficiency"] == "0.5"
+    assert row["claim_eligible"] == "True"
+    assert row["claim_ineligibility_reason"] == ""
+    assert row["dominant_wave_utilization"] == "1.0"
+    assert row["fully_populated_wave_count"] == "1"
 
 
 def test_report_emits_mad_intervals_and_unqualified_labels(tmp_path: Path) -> None:
@@ -1652,14 +1814,14 @@ def test_report_emits_mad_intervals_and_unqualified_labels(tmp_path: Path) -> No
     assert float(float32["median_total_wall_ci_low_s"]) <= 3.0
     assert float(float32["median_total_wall_ci_high_s"]) >= 3.0
     assert float32["accuracy_qualified"] == "True"
-    assert float32["claim_eligible"] == "True"
+    assert float32["claim_eligible"] == "False"
     assert int8["accuracy_qualified"] == "False"
     assert int8["claim_eligible"] == "False"
-    assert int8["claim_ineligibility_reason"] == "accuracy_unqualified"
+    assert int8["claim_ineligibility_reason"] == "diagnostic_claim_policy"
     assert report["qualification"] == {
         "accuracy_qualified_aggregate_count": 1,
         "accuracy_unqualified_aggregate_count": 1,
-        "claim_eligible_aggregate_count": 1,
+        "claim_eligible_aggregate_count": 0,
     }
     assert (tmp_path / "report" / "plots" / "runtime_steady_execution_v1.png").is_file()
 
@@ -1667,34 +1829,28 @@ def test_report_emits_mad_intervals_and_unqualified_labels(tmp_path: Path) -> No
 def test_report_rejects_scope_mismatch(tmp_path: Path) -> None:
     run_id, experiment_id, environment_id_value, policy_id = _ids()
     session_instance_id = "physical-session"
-    samples = [
-        _sample(
-            run_id=run_id,
-            experiment_id=experiment_id,
-            environment_id=environment_id_value,
-            validation_policy_id=policy_id,
-            case_id="bell",
-            route_id="cpu",
-            index=index,
-            total_wall_s=2.0,
-        )
-        for index in range(2)
-    ]
+    samples = _physical_attempts(
+        run_id=run_id,
+        experiment_id=experiment_id,
+        environment_id=environment_id_value,
+        validation_policy_id=policy_id,
+        case_id="bell",
+        route_id="cpu",
+        total_wall_s=2.0,
+    )
     samples.extend(
-        _sample(
+        _physical_attempts(
             run_id=run_id,
             experiment_id=experiment_id,
             environment_id=environment_id_value,
             validation_policy_id=policy_id,
             case_id="bell",
             route_id="upmem",
-            index=index,
             total_wall_s=1.0,
             scope_id="simulation_end_to_end_v1",
             facts={"backend_id": "upmem_sdk_hardware_v4"},
             session_instance_id=session_instance_id,
         )
-        for index in range(2)
     )
     report = report_artifacts(
         _artifact(
@@ -1709,6 +1865,8 @@ def test_report_rejects_scope_mismatch(tmp_path: Path) -> None:
                     instance=session_instance_id,
                 )
             ],
+            collection_policy=_PHYSICAL_COLLECTION_POLICY,
+            machine_preflight_passed=True,
         ),
         tmp_path / "report",
     )
@@ -1722,26 +1880,29 @@ def test_report_rejects_speedup_without_full_precision_threshold(
 ) -> None:
     run_id, experiment_id, environment_id_value, policy_id = _ids()
     instance = "physical-session"
-    samples = [
-        _sample(
+    samples = _physical_attempts(
+        run_id=run_id,
+        experiment_id=experiment_id,
+        environment_id=environment_id_value,
+        validation_policy_id=policy_id,
+        case_id="bell",
+        route_id="cpu",
+        total_wall_s=2.0,
+        facts={"backend_id": "numpy_cpu_v1"},
+    )
+    samples.extend(
+        _physical_attempts(
             run_id=run_id,
             experiment_id=experiment_id,
             environment_id=environment_id_value,
             validation_policy_id=policy_id,
             case_id="bell",
-            route_id=route,
-            index=index,
-            total_wall_s=2.0 if route == "cpu" else 1.0,
-            facts=(
-                {"backend_id": "numpy_cpu_v1"}
-                if route == "cpu"
-                else {"backend_id": "upmem_sdk_hardware_v4"}
-            ),
-            session_instance_id=instance if route == "upmem" else None,
+            route_id="upmem",
+            total_wall_s=1.0,
+            facts={"backend_id": "upmem_sdk_hardware_v4"},
+            session_instance_id=instance,
         )
-        for route in ("cpu", "upmem")
-        for index in range(2)
-    ]
+    )
     for sample in samples:
         sample["numeric_facts"] = {
             "numeric_policy": "split_complex_int8_shared_scale_v1"
@@ -1766,6 +1927,8 @@ def test_report_rejects_speedup_without_full_precision_threshold(
                     instance=instance,
                 )
             ],
+            collection_policy=_PHYSICAL_COLLECTION_POLICY,
+            machine_preflight_passed=True,
         ),
         tmp_path / "report",
     )
@@ -1779,26 +1942,29 @@ def test_report_rejects_speedup_without_applicable_policy_reference(
 ) -> None:
     run_id, experiment_id, environment_id_value, policy_id = _ids()
     instance = "physical-session"
-    samples = [
-        _sample(
+    samples = _physical_attempts(
+        run_id=run_id,
+        experiment_id=experiment_id,
+        environment_id=environment_id_value,
+        validation_policy_id=policy_id,
+        case_id="bell",
+        route_id="cpu",
+        total_wall_s=2.0,
+        facts={"backend_id": "numpy_cpu_v1"},
+    )
+    samples.extend(
+        _physical_attempts(
             run_id=run_id,
             experiment_id=experiment_id,
             environment_id=environment_id_value,
             validation_policy_id=policy_id,
             case_id="bell",
-            route_id=route,
-            index=index,
-            total_wall_s=2.0 if route == "cpu" else 1.0,
-            facts=(
-                {"backend_id": "numpy_cpu_v1"}
-                if route == "cpu"
-                else {"backend_id": "upmem_sdk_hardware_v4"}
-            ),
-            session_instance_id=instance if route == "upmem" else None,
+            route_id="upmem",
+            total_wall_s=1.0,
+            facts={"backend_id": "upmem_sdk_hardware_v4"},
+            session_instance_id=instance,
         )
-        for route in ("cpu", "upmem")
-        for index in range(2)
-    ]
+    )
     for sample in samples:
         if sample["route_id"] == "upmem":
             sample["validation"] = {
@@ -1820,6 +1986,8 @@ def test_report_rejects_speedup_without_applicable_policy_reference(
                     instance=instance,
                 )
             ],
+            collection_policy=_PHYSICAL_COLLECTION_POLICY,
+            machine_preflight_passed=True,
         ),
         tmp_path / "report",
     )
@@ -1935,28 +2103,23 @@ def test_report_rejects_claims_from_failed_or_dirty_artifacts(tmp_path: Path) ->
 def test_report_rejects_conflicting_terminal_physical_facts(tmp_path: Path) -> None:
     run_id, experiment_id, environment_id_value, policy_id = _ids()
     instance = "physical-session"
-    samples = [
-        _sample(
-            run_id=run_id,
-            experiment_id=experiment_id,
-            environment_id=environment_id_value,
-            validation_policy_id=policy_id,
-            case_id="bell",
-            route_id="cpu",
-            index=index,
-            total_wall_s=2.0,
-        )
-        for index in range(2)
-    ]
+    samples = _physical_attempts(
+        run_id=run_id,
+        experiment_id=experiment_id,
+        environment_id=environment_id_value,
+        validation_policy_id=policy_id,
+        case_id="bell",
+        route_id="cpu",
+        total_wall_s=2.0,
+    )
     samples.extend(
-        _sample(
+        _physical_attempts(
             run_id=run_id,
             experiment_id=experiment_id,
             environment_id=environment_id_value,
             validation_policy_id=policy_id,
             case_id="bell",
             route_id="upmem",
-            index=index,
             total_wall_s=1.0,
             facts={
                 "backend_id": "upmem_sdk_hardware_v4",
@@ -1964,7 +2127,6 @@ def test_report_rejects_conflicting_terminal_physical_facts(tmp_path: Path) -> N
             },
             session_instance_id=instance,
         )
-        for index in range(2)
     )
     session = _session(
         run_id=run_id,
@@ -1976,7 +2138,13 @@ def test_report_rejects_conflicting_terminal_physical_facts(tmp_path: Path) -> N
     session["terminal_backend_facts"]["target_observed"] = "sdk_simulator"
 
     report = report_artifacts(
-        _artifact(tmp_path / "evidence", samples, [session]),
+        _artifact(
+            tmp_path / "evidence",
+            samples,
+            [session],
+            collection_policy=_PHYSICAL_COLLECTION_POLICY,
+            machine_preflight_passed=True,
+        ),
         tmp_path / "report",
     )
 
