@@ -47,10 +47,22 @@ make report INPUT=runs/reset-run REPORT_OUTPUT=runs/reset-report
 # Build the active UPMEM ABI-v4 host and DPU binaries.
 make build-upmem-runtime UPMEM_TASKLETS=1
 
-# Physical execution is opt-in and uses the safe smoke template by default.
-UPMEM_ALLOW_PHYSICAL_HARDWARE=1 \
-  make qualify PHYSICAL_CONFIG=configs/tn_benchmark_physical_smoke.yml \
-  OUTPUT=runs/physical-run
+# Physical execution is opt-in. Prepare an ignored target-specific copy first.
+PYTHONPATH=src ../.venv/bin/python scripts/qualify_m7c_physical.py prepare \
+  --template configs/tn_benchmark_physical_smoke.yml \
+  --output runs/configs/eth/one-dpu-float32.yml \
+  --mode float32-smoke \
+  --rank-path /dev/dpu_rank0 \
+  --session-root runs/upmem_sessions/eth-one-dpu \
+  --expected-cpus 0
+UPMEM_ALLOW_PHYSICAL_HARDWARE=1 ../.venv/bin/python -m quantum_bench.cli qualify \
+  --config runs/configs/eth/one-dpu-float32.yml \
+  --output runs/evidence/eth-one-dpu-float32 \
+  --allow-physical
+PYTHONPATH=src ../.venv/bin/python scripts/qualify_m7c_physical.py inspect \
+  --input runs/evidence/eth-one-dpu-float32 \
+  --expected-samples 6 --expected-sessions 6 \
+  --numeric-policy split_complex_float32_v1
 
 ```
 
@@ -58,8 +70,10 @@ UPMEM_ALLOW_PHYSICAL_HARDWARE=1 \
 `configs/tn_benchmark_physical_smoke.yml` is the one-DPU physical float32
 smoke template. Do not edit it for a target machine. The M7C physical
 preparation script creates an ignored copy below `runs/configs/eth/`, resolving
-the template paths before it writes target-specific binary, session, and rank
-paths. Supply the later scaling configuration explicitly.
+the template paths before it writes target-specific binary, session, affinity,
+and rank paths. The probe mode emits one float32 measurement; float32 smoke
+emits one warmup plus five measurements; int8 smoke is descriptive only.
+Supply the later scaling configuration explicitly.
 
 `plan` writes a deterministic experiment plan without execution. `run` writes
 canonical evidence. `verify` checks evidence identities and integrity.

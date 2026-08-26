@@ -156,3 +156,28 @@ ignored configuration below `runs/configs/eth/` through the committed M7C
 physical preparation script. Do not edit tracked rank paths, affinity, session
 roots, or binary paths; target-specific values belong only in the ignored copy
 and the manifest embedded in canonical evidence.
+
+For the bounded one-DPU float32 smoke, prepare the copy, invoke the
+physical-only `qualify` command with `--allow-physical`, then inspect the six
+fresh-session attempts before continuing:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python scripts/qualify_m7c_physical.py prepare \
+  --template configs/tn_benchmark_physical_smoke.yml \
+  --output runs/configs/eth/one-dpu-float32.yml \
+  --mode float32-smoke --rank-path /dev/dpu_rank0 \
+  --session-root runs/upmem_sessions/eth-one-dpu --expected-cpus 0
+UPMEM_ALLOW_PHYSICAL_HARDWARE=1 ../.venv/bin/python -m quantum_bench.cli qualify \
+  --config runs/configs/eth/one-dpu-float32.yml \
+  --output runs/evidence/eth-one-dpu-float32 --allow-physical
+PYTHONPATH=src ../.venv/bin/python scripts/qualify_m7c_physical.py inspect \
+  --input runs/evidence/eth-one-dpu-float32 \
+  --expected-samples 6 --expected-sessions 6 \
+  --numeric-policy split_complex_float32_v1
+```
+
+`inspect` requires physical target provenance, no simulator or CPU fallback,
+one requested/allocated/active DPU and tasklet, verified release and binary
+identity, startup/execution resource admission, output hashes, policy replay,
+and float32 accuracy qualification. Archive a successful run with the same
+script before creating the later physical-qualification tag and release.

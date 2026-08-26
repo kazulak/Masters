@@ -7,17 +7,28 @@ import tarfile
 
 import pytest
 
+from quantum_bench.experiment import load_experiment_config
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "qualify_m7b.py"
+PHYSICAL_SCRIPT = ROOT / "scripts" / "qualify_m7c_physical.py"
 
 
-def _qualifier():
-    specification = importlib.util.spec_from_file_location("qualify_m7b", SCRIPT)
+def _load_script(path: Path, name: str):
+    specification = importlib.util.spec_from_file_location(name, path)
     assert specification is not None and specification.loader is not None
     module = importlib.util.module_from_spec(specification)
     specification.loader.exec_module(module)
     return module
+
+
+def _qualifier():
+    return _load_script(SCRIPT, "qualify_m7b")
+
+
+def _physical_qualifier():
+    return _load_script(PHYSICAL_SCRIPT, "qualify_m7c_physical")
 
 
 def _archive(path: Path, member_name: str, *, kind: str = "file") -> None:
@@ -73,3 +84,49 @@ def test_qualifier_verifies_bundled_hashes_and_records_external_provenance(
     external = _qualifier()._verify_internal_hashes(tmp_path)
 
     assert external == ("native/upmem/runtime/bin/dpu",)
+
+
+def test_physical_preparation_preserves_template_resolved_paths(tmp_path: Path) -> None:
+    template = ROOT / "configs" / "tn_benchmark_physical_smoke.yml"
+    output = tmp_path / "runs" / "configs" / "eth" / "smoke.yml"
+    prepared = _physical_qualifier().prepare_config(
+        template=template,
+        output=output,
+        mode="float32-smoke",
+        rank_path="/dev/dpu_rank42",
+        session_root=str(tmp_path / "sessions"),
+        expected_cpus=[2, 4],
+    )
+
+    assert prepared == output
+    source = load_experiment_config(template)
+    copied = load_experiment_config(output)
+    source_options = source["routes"]["upmem_float32_1dpu"]["options"]
+    copied_options = copied["routes"]["upmem_float32_1dpu"]["options"]
+    for field in ("host_binary", "dpu_binary", "initialization_binary"):
+        assert copied_options[field] == source_options[field]
+    assert copied_options["session_root"] == str((tmp_path / "sessions").resolve())
+    assert copied_options["rank_paths"] == ("/dev/dpu_rank42",)
+    assert copied["collection"]["machine_policy"]["affinity"] == {
+        "mode": "exact_required_v1",
+        "expected_cpus": (2, 4),
+    }
+
+
+def test_physical_preparation_probe_has_one_measurement(tmp_path: Path) -> None:
+    output = tmp_path / "nested" / "probe.yml"
+    _physical_qualifier().prepare_config(
+        template=ROOT / "configs" / "tn_benchmark_physical_smoke.yml",
+        output=output,
+        mode="probe",
+        rank_path="/dev/dpu_rank0",
+        session_root=str(tmp_path / "sessions"),
+        expected_cpus=[0],
+    )
+
+    config = load_experiment_config(output)
+    assert config["collection"]["warmup_blocks"] == 0
+    assert config["collection"]["measurement_blocks"] == 1
+    assert config["routes"]["upmem_float32_1dpu"]["numeric_policy"] == (
+        "split_complex_float32_v1"
+    )
