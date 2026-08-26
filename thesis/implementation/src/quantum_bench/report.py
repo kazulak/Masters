@@ -123,9 +123,24 @@ _SPEEDUP_COLUMNS = (
 _SCALING_COLUMNS = (
     "experiment_id",
     "collection_policy_id",
+    "claim_policy",
     "comparison_kind",
+    "comparison_role",
+    "case_id",
+    "plan_id",
+    "scope_id",
+    "problem_id",
+    "tensor_network_structure_id",
+    "logical_plan_id",
+    "numeric_policy",
+    "kernel_policy",
+    "validation_policy_id",
     "baseline_route_id",
     "candidate_route_id",
+    "baseline_physical_plan_id",
+    "candidate_physical_plan_id",
+    "baseline_executable_id",
+    "candidate_executable_id",
     "baseline_dpu_count",
     "candidate_dpu_count",
     "baseline_tasklet_count",
@@ -139,12 +154,22 @@ _SCALING_COLUMNS = (
     "parallel_efficiency",
     "claim_eligible",
     "claim_ineligibility_reason",
-    "baseline_physical_plan_id",
-    "candidate_physical_plan_id",
-    "dominant_wave_useful_slots",
-    "dominant_wave_allocated_slots",
-    "dominant_wave_utilization",
-    "fully_populated_wave_count",
+    "baseline_dominant_work_wave",
+    "candidate_dominant_work_wave",
+    "baseline_dominant_work_wave_arithmetic_work",
+    "candidate_dominant_work_wave_arithmetic_work",
+    "baseline_dominant_work_wave_populated_dpu_slots",
+    "candidate_dominant_work_wave_populated_dpu_slots",
+    "baseline_dominant_work_wave_allocated_dpu_slots",
+    "candidate_dominant_work_wave_allocated_dpu_slots",
+    "baseline_dominant_work_wave_utilization",
+    "candidate_dominant_work_wave_utilization",
+    "baseline_arithmetic_weighted_dpu_slot_utilization",
+    "candidate_arithmetic_weighted_dpu_slot_utilization",
+    "baseline_arithmetic_weighted_tasklet_utilization",
+    "candidate_arithmetic_weighted_tasklet_utilization",
+    "baseline_fully_populated_wave_count",
+    "candidate_fully_populated_wave_count",
     "bootstrap_method",
     "bootstrap_seed",
 )
@@ -187,7 +212,7 @@ def report_artifacts(
         for aggregate in aggregates
     )
     report = {
-        "schema_version": "evidence_report_v4",
+        "schema_version": "evidence_report_v5",
         "status": "completed",
         "run_id": manifest["run_id"],
         "experiment_id": manifest["experiment_id"],
@@ -561,6 +586,7 @@ def _make_aggregate(
         "tensor_network_structure_id": tensor_network_structure_id,
         "logical_plan_id": logical_plan_id,
         "physical_plan_id": physical_plan_id,
+        "executable_id": first_identities["executable_id"],
         "validation_policy_id": first_identities["validation_policy_id"],
         "kernel_policy": _common_fact_value(
             [facts for _, facts in rows_with_facts], "kernel_policy"
@@ -923,14 +949,36 @@ def _admit_scaling(
                 if kind == "dpu_scaling"
                 else candidate_tasklets / baseline_tasklets
             )
+            comparison_role = _scaling_comparison_role(
+                kind,
+                baseline_dpus,
+                baseline_tasklets,
+            )
             pairs = _paired_measurements(baseline, candidate)
             rejection = _scaling_rejection(baseline, candidate, pairs)
             row: dict[str, object] = {
                 "experiment_id": candidate["experiment_id"],
                 "collection_policy_id": candidate["collection_policy_id"],
+                "claim_policy": candidate["claim_policy"],
                 "comparison_kind": kind,
+                "comparison_role": comparison_role,
+                "case_id": candidate["case_id"],
+                "plan_id": candidate["plan_id"],
+                "scope_id": candidate["scope_id"],
+                "problem_id": candidate["problem_id"],
+                "tensor_network_structure_id": candidate[
+                    "tensor_network_structure_id"
+                ],
+                "logical_plan_id": candidate["logical_plan_id"],
+                "numeric_policy": candidate["numeric_policy"],
+                "kernel_policy": candidate["kernel_policy"],
+                "validation_policy_id": candidate["validation_policy_id"],
                 "baseline_route_id": baseline["route_id"],
                 "candidate_route_id": candidate["route_id"],
+                "baseline_physical_plan_id": baseline["physical_plan_id"],
+                "candidate_physical_plan_id": candidate["physical_plan_id"],
+                "baseline_executable_id": baseline["executable_id"],
+                "candidate_executable_id": candidate["executable_id"],
                 "baseline_dpu_count": baseline_dpus,
                 "candidate_dpu_count": candidate_dpus,
                 "baseline_tasklet_count": baseline_tasklets,
@@ -944,18 +992,52 @@ def _admit_scaling(
                 "parallel_efficiency": None,
                 "claim_eligible": rejection is None,
                 "claim_ineligibility_reason": rejection,
-                "baseline_physical_plan_id": baseline["physical_plan_id"],
-                "candidate_physical_plan_id": candidate["physical_plan_id"],
-                "dominant_wave_useful_slots": _common_nonnegative_int_fact(
-                    candidate, "dominant_wave_useful_slots"
+                "baseline_dominant_work_wave": _common_nonnegative_int_fact(
+                    baseline, "dominant_work_wave"
                 ),
-                "dominant_wave_allocated_slots": _common_nonnegative_int_fact(
-                    candidate, "dominant_wave_allocated_slots"
+                "candidate_dominant_work_wave": _common_nonnegative_int_fact(
+                    candidate, "dominant_work_wave"
                 ),
-                "dominant_wave_utilization": _common_nonnegative_number_fact(
-                    candidate, "dominant_wave_utilization"
+                "baseline_dominant_work_wave_arithmetic_work": _common_nonnegative_int_fact(
+                    baseline, "dominant_work_wave_arithmetic_work"
                 ),
-                "fully_populated_wave_count": _common_nonnegative_int_fact(
+                "candidate_dominant_work_wave_arithmetic_work": _common_nonnegative_int_fact(
+                    candidate, "dominant_work_wave_arithmetic_work"
+                ),
+                "baseline_dominant_work_wave_populated_dpu_slots": _common_nonnegative_int_fact(
+                    baseline, "dominant_work_wave_populated_dpu_slots"
+                ),
+                "candidate_dominant_work_wave_populated_dpu_slots": _common_nonnegative_int_fact(
+                    candidate, "dominant_work_wave_populated_dpu_slots"
+                ),
+                "baseline_dominant_work_wave_allocated_dpu_slots": _common_nonnegative_int_fact(
+                    baseline, "dominant_work_wave_allocated_dpu_slots"
+                ),
+                "candidate_dominant_work_wave_allocated_dpu_slots": _common_nonnegative_int_fact(
+                    candidate, "dominant_work_wave_allocated_dpu_slots"
+                ),
+                "baseline_dominant_work_wave_utilization": _common_nonnegative_number_fact(
+                    baseline, "dominant_work_wave_utilization"
+                ),
+                "candidate_dominant_work_wave_utilization": _common_nonnegative_number_fact(
+                    candidate, "dominant_work_wave_utilization"
+                ),
+                "baseline_arithmetic_weighted_dpu_slot_utilization": _common_nonnegative_number_fact(
+                    baseline, "arithmetic_weighted_dpu_slot_utilization"
+                ),
+                "candidate_arithmetic_weighted_dpu_slot_utilization": _common_nonnegative_number_fact(
+                    candidate, "arithmetic_weighted_dpu_slot_utilization"
+                ),
+                "baseline_arithmetic_weighted_tasklet_utilization": _common_nonnegative_number_fact(
+                    baseline, "arithmetic_weighted_tasklet_utilization"
+                ),
+                "candidate_arithmetic_weighted_tasklet_utilization": _common_nonnegative_number_fact(
+                    candidate, "arithmetic_weighted_tasklet_utilization"
+                ),
+                "baseline_fully_populated_wave_count": _common_nonnegative_int_fact(
+                    baseline, "fully_populated_wave_count"
+                ),
+                "candidate_fully_populated_wave_count": _common_nonnegative_int_fact(
                     candidate, "fully_populated_wave_count"
                 ),
                 "bootstrap_method": "block_paired_median_ratio_bootstrap_v1",
@@ -991,6 +1073,20 @@ def _admit_scaling(
         rows,
         key=lambda row: tuple(str(row[field]) for field in _SCALING_COLUMNS),
     )
+
+
+def _scaling_comparison_role(
+    kind: str,
+    baseline_dpus: int,
+    baseline_tasklets: int,
+) -> str:
+    """Label only one-resource baselines as primary scaling comparisons."""
+
+    if kind == "tasklet_scaling" and baseline_tasklets == 1:
+        return "primary"
+    if kind == "dpu_scaling" and baseline_dpus == 1:
+        return "primary"
+    return "secondary"
 
 
 def _scaling_kind(
@@ -1035,6 +1131,7 @@ def _same_scaling_dimensions(
             "numeric_policy",
             "kernel_policy",
             "validation_policy_id",
+            "claim_policy",
         )
     )
 

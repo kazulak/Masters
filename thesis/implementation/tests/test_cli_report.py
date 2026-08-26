@@ -1591,7 +1591,7 @@ def test_verify_and_report_aggregate_duplicate_measurements_once(
     report = report_artifacts(artifact, tmp_path / "report")
 
     assert report["status"] == "completed"
-    assert report["schema_version"] == "evidence_report_v4"
+    assert report["schema_version"] == "evidence_report_v5"
     assert report["aggregate_count"] == 1
     assert report["statistics"] == {
         "summary": "median_raw_mad_v1",
@@ -1754,9 +1754,13 @@ def test_report_emits_claim_gated_tasklet_scaling_csv(tmp_path: Path) -> None:
         "requested_dpus": 1,
         "allocated_dpus": 1,
         "active_dpus": 1,
-        "dominant_wave_useful_slots": 1,
-        "dominant_wave_allocated_slots": 1,
-        "dominant_wave_utilization": 1.0,
+        "dominant_work_wave": 0,
+        "dominant_work_wave_arithmetic_work": 4096,
+        "dominant_work_wave_populated_dpu_slots": 1,
+        "dominant_work_wave_allocated_dpu_slots": 1,
+        "dominant_work_wave_utilization": 1.0,
+        "arithmetic_weighted_dpu_slot_utilization": 1.0,
+        "arithmetic_weighted_tasklet_utilization": 1.0,
         "fully_populated_wave_count": 1,
     }
     baseline = _physical_attempts(
@@ -1814,7 +1818,7 @@ def test_report_emits_claim_gated_tasklet_scaling_csv(tmp_path: Path) -> None:
         tmp_path / "report",
     )
 
-    assert report["schema_version"] == "evidence_report_v4"
+    assert report["schema_version"] == "evidence_report_v5"
     assert report["scaling_count"] == 1
     with (tmp_path / "report" / "scaling.csv").open(newline="", encoding="utf-8") as stream:
         rows = list(csv.DictReader(stream))
@@ -1822,8 +1826,22 @@ def test_report_emits_claim_gated_tasklet_scaling_csv(tmp_path: Path) -> None:
     row = rows[0]
     assert row["experiment_id"] == experiment_id
     assert row["comparison_kind"] == "tasklet_scaling"
+    assert row["comparison_role"] == "primary"
+    assert row["case_id"] == "bell"
+    assert row["plan_id"] == ""
+    assert row["scope_id"] == "steady_execution_v1"
+    assert row["problem_id"] == "1" * 64
+    assert row["tensor_network_structure_id"] == "2" * 64
+    assert row["logical_plan_id"] == "3" * 64
+    assert row["numeric_policy"] == "split_complex_float32_v1"
+    assert row["kernel_policy"] == "dpu_real_tile_v4_wram_panel_v1"
+    assert row["validation_policy_id"] == policy_id
     assert row["baseline_route_id"] == "upmem_t1"
     assert row["candidate_route_id"] == "upmem_t8"
+    assert row["baseline_physical_plan_id"] == "4" * 64
+    assert row["candidate_physical_plan_id"] == "6" * 64
+    assert row["baseline_executable_id"] == "5" * 64
+    assert row["candidate_executable_id"] == "7" * 64
     assert row["baseline_tasklet_count"] == "1"
     assert row["candidate_tasklet_count"] == "8"
     assert row["resource_ratio"] == "8.0"
@@ -1833,8 +1851,13 @@ def test_report_emits_claim_gated_tasklet_scaling_csv(tmp_path: Path) -> None:
     assert row["parallel_efficiency"] == "0.5"
     assert row["claim_eligible"] == "True"
     assert row["claim_ineligibility_reason"] == ""
-    assert row["dominant_wave_utilization"] == "1.0"
-    assert row["fully_populated_wave_count"] == "1"
+    assert row["baseline_dominant_work_wave"] == "0"
+    assert row["candidate_dominant_work_wave"] == "0"
+    assert row["candidate_dominant_work_wave_arithmetic_work"] == "4096"
+    assert row["candidate_dominant_work_wave_utilization"] == "1.0"
+    assert row["candidate_arithmetic_weighted_dpu_slot_utilization"] == "1.0"
+    assert row["candidate_arithmetic_weighted_tasklet_utilization"] == "1.0"
+    assert row["candidate_fully_populated_wave_count"] == "1"
 
 
 def test_report_emits_mad_intervals_and_unqualified_labels(tmp_path: Path) -> None:

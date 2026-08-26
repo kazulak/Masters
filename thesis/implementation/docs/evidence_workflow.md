@@ -52,7 +52,7 @@ runtime attempt and failure stage. Fatal external termination may leave an
 incomplete artifact; verification must reject it as incomplete.
 
 Manifests use `evidence_manifest_v2`, samples use `evidence_sample_v3`,
-sessions use `evidence_session_v1`, and reports use `evidence_report_v4`.
+sessions use `evidence_session_v1`, and reports use `evidence_report_v5`.
 Earlier sample evidence is unsupported by the active verifier unless the
 generation is listed below. Sample `status`
 describes whether the complete attempt finished: a validator exception creates
@@ -71,6 +71,7 @@ active implementation does not carry a generic migration framework.
 | M6 software qualification | `v1` / `v2` / `v1` / `v2` | `thesis-m6-software-ready-v1` release | No | Use the M6 tag/release toolchain: `make verify INPUT=<run>` |
 | M7A WRAM-kernel qualification | `v2` / `v3` / `v1` / `v3` | `thesis-m7a-wram-kernel-software-ready-v1` release | Yes | `make verify INPUT=<run>` |
 | M7B pre-physical evidence | `v2` / `v3` / `v1` / `v4` | `thesis-m7b-prephysical-software-ready-v1` release | Yes | `make verify INPUT=<run>` |
+| M7C report evidence | `v2` / `v3` / `v1` / `v5` | M7C source/release after qualification | Yes | `make verify INPUT=<run>` |
 
 The M6 release exists; it is tag-pinned rather than unsupported because of a
 missing release. M7A evidence remains readable by the active verifier so that
@@ -112,8 +113,13 @@ the configured matrix.
 Derived reports belong under `runs/comparisons/` and must be regenerated from
 the canonical JSONL records. `speedups.csv` is reserved for matched NumPy
 versus physical-UPMEM comparisons; `scaling.csv` holds matched UPMEM tasklet
-and DPU comparisons. Both require the persisted campaign admission facts,
-not geometry recomputed by the report. Plots must facet by route, plan, numeric
+and DPU comparisons. Scaling rows persist experiment, semantic/logical,
+numeric, kernel, validation, collection, route, physical-plan, executable,
+resource, and dominant-work admission identities. `comparison_role=primary`
+means the baseline uses one DPU or one tasklet for its comparison kind; other
+increasing-resource pairs are retained as `secondary` diagnostics. Both tables
+require persisted campaign admission facts, not geometry recomputed by the
+report. Plots must facet by route, plan, numeric
 policy, topology and timing scope where those dimensions differ, and must
 reject duplicate series/x-value keys.
 
