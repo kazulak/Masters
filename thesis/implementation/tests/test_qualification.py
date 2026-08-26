@@ -193,6 +193,7 @@ def test_m7c_workload_selection_is_deterministic_and_preregistered(
         selector.PLANNER_CONFIG
     )
     assert "constraints_hash" not in first
+    assert "python_version" not in first
     primary = next(
         candidate
         for candidate in first["candidates"]
@@ -241,6 +242,7 @@ def test_m7c_workload_selection_rejects_route_matrix_drift(tmp_path: Path) -> No
 def test_m7c_committed_selection_matches_scaling_config() -> None:
     selector = _selector()
     selection = ROOT / "configs" / "m7c_workload_selection.json"
+    assert "python_version" not in json.loads(selection.read_text(encoding="utf-8"))
     for config in (
         "tn_benchmark_physical_scaling_diagnostic.yml",
         "tn_benchmark_physical_scaling.yml",

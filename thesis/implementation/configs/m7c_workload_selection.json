@@ -3448,7 +3448,6 @@
     "seed": 0
   },
   "planner_configuration_sha256": "e0589ae9d6c6b8504948f759b81953a98b1b13cb3b02523aa609989127c4e9cc",
-  "python_version": "3.10.12",
   "schema_version": "m7c_workload_selection_v2",
   "selected_primary": "quantization_stress_18q_l2",
   "selected_secondary": "ghz_chain_18q",
@@ -3470,5 +3469,5 @@
     "secondary_candidate_id": "ghz_chain_18q",
     "timing_selection_rule": "no_physical_or_simulator_timing_is_used"
   },
-  "source_commit": "ec00850a4d800a7106fa23352c952dc7b566544b"
+  "source_commit": "a4db329e86bb2d336f33a0661a57a1c09053f5ce"
 }

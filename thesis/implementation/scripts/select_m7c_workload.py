@@ -16,7 +16,6 @@ import json
 from math import prod
 from pathlib import Path
 import subprocess
-import sys
 from typing import Any, Mapping
 
 from quantum_bench.circuits import builtin_circuit
@@ -343,7 +342,6 @@ def build_selection() -> dict[str, object]:
     return {
         **selection_basis,
         "source_commit": _source_commit(),
-        "python_version": sys.version.split()[0],
         "dependency_versions": {"opt_einsum": _dependency_version("opt_einsum")},
         "selection_basis_sha256": _hash(selection_basis),
         "dependency_constraints_sha256": _file_sha256(
