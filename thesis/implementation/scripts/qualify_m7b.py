@@ -111,14 +111,14 @@ def _safe_extract_tar(archive: Path, destination: Path) -> None:
 
 def _release_assets(destination: Path) -> tuple[Path, Path]:
     _run(["gh", "release", "download", M7A_TAG, "--dir", str(destination)])
-    archives = sorted(destination.glob("*.tar.gz"))
-    checksums = sorted(
-        path for path in destination.iterdir() if path.name in {"SHA256SUMS", "sha256sums.txt"}
-    )
-    if len(archives) != 1 or len(checksums) != 1:
-        raise ValueError("M7A release must provide exactly one archive and SHA256SUMS")
-    _verify_checksum_file(checksums[0], archives[0])
-    return archives[0], checksums[0]
+    archive = destination / f"{M7A_TAG}.tar.gz"
+    checksum = destination / f"{M7A_TAG}.tar.gz.sha256"
+    if not archive.is_file() or not checksum.is_file():
+        raise ValueError(
+            "M7A release must provide the archive and a distinct outer .tar.gz.sha256 asset"
+        )
+    _verify_checksum_file(checksum, archive)
+    return archive, checksum
 
 
 def _verify_internal_hashes(root: Path) -> None:
