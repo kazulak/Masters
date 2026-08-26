@@ -5,6 +5,7 @@ import csv
 import os
 from pathlib import Path
 import json
+import shutil
 import subprocess
 import sys
 from uuid import uuid4
@@ -57,7 +58,13 @@ def _command(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _require_make() -> None:
+    if shutil.which("make") is None:
+        pytest.skip("make is unavailable")
+
+
 def test_make_public_targets_are_exact_and_pidcomm_is_private() -> None:
+    _require_make()
     help_result = _command("make", "help")
     assert help_result.returncode == 0
     assert "pidcomm" not in help_result.stdout.lower()
@@ -755,8 +762,12 @@ def test_physical_machine_preflight_records_static_admission(
     monkeypatch.setattr(cli, "_observed_affinity", lambda: [0])
     monkeypatch.setattr(cli, "_cpu_governors", lambda: ["performance"])
     monkeypatch.setattr(cli, "_numa_nodes", lambda: ["node0"])
+    normalized_rank_paths = ("normalized-rank-path",)
     monkeypatch.setattr(
-        cli, "_rank_paths_accessible", lambda paths: paths == ("/dev/dpu_rank0",)
+        cli, "_physical_rank_paths", lambda _config: normalized_rank_paths
+    )
+    monkeypatch.setattr(
+        cli, "_rank_paths_accessible", lambda paths: paths == normalized_rank_paths
     )
     monkeypatch.setattr(cli, "_tool_version", lambda command: "2023.1")
     monkeypatch.setattr(cli, "_background_load_1m", lambda: 1.0)
@@ -1097,6 +1108,7 @@ def test_plan_and_run_reject_nonempty_output_directories(tmp_path: Path) -> None
 
 
 def test_make_help_lists_active_workflow() -> None:
+    _require_make()
     result = _command("make", "help")
 
     assert result.returncode == 0, result.stderr
@@ -1132,6 +1144,7 @@ def test_make_help_lists_active_workflow() -> None:
 def test_make_forwards_active_cli_commands(
     target: str, arguments: tuple[str, ...], fragment: str
 ) -> None:
+    _require_make()
     result = _command("make", "-n", target, *arguments)
 
     assert result.returncode == 0, result.stderr
@@ -1139,6 +1152,7 @@ def test_make_forwards_active_cli_commands(
 
 
 def test_make_build_forwards_tasklet_count() -> None:
+    _require_make()
     result = _command("make", "-n", "build-upmem-runtime", "UPMEM_TASKLETS=8")
 
     assert result.returncode == 0, result.stderr

@@ -121,6 +121,15 @@ def _require_sdk_simulator(case_id: str) -> None:
     pytest.skip(reason)
 
 
+def _require_native_build_tool(command: str, label: str) -> None:
+    if shutil.which(command) is not None:
+        return
+    reason = f"native build prerequisite unavailable: {label}"
+    if os.environ.get("UPMEM_REQUIRE_SDK_SIMULATOR") == "1":
+        pytest.fail(reason)
+    pytest.skip(reason)
+
+
 @lru_cache(maxsize=None)
 def _sdk_binaries(tasklets: int) -> tuple[Path, Path, Path]:
     result = subprocess.run(
@@ -399,8 +408,8 @@ def test_wram_panel_facts_account_for_tail_helpers_and_tasklets() -> None:
 
 @pytest.mark.parametrize("tasklets", [1, 8, 24])
 def test_active_wram_panel_binary_builds_when_sdk_compiler_is_available(tasklets: int) -> None:
-    if shutil.which("dpu-upmem-dpurte-clang") is None:
-        pytest.skip("UPMEM DPU compiler is unavailable")
+    _require_native_build_tool("make", "make")
+    _require_native_build_tool("dpu-upmem-dpurte-clang", "dpu-upmem-dpurte-clang")
 
     result = subprocess.run(
         [
