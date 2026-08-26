@@ -295,6 +295,57 @@ def physical_plan_id(plan: UpmemPlan) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def collection_resource_admission(plan: UpmemPlan) -> dict[str, int | float | bool]:
+    """Derive one pure tasklet/DPU admission summary from a physical plan."""
+
+    if not isinstance(plan, UpmemPlan):
+        raise TypeError("collection_resource_admission requires the final UpmemPlan")
+    topology = plan.topology
+    contract_units = tuple(
+        unit
+        for stage in plan.stages
+        if stage.kind == "contract_batch"
+        for unit in stage.work_units
+    )
+    tasklet_rows_ok = all(
+        unit.m_size >= topology.tasklets_per_dpu for unit in contract_units
+    )
+    stages = tuple(
+        stage for stage in plan.stages if stage.kind == "contract_batch"
+    )
+    dominant = max(
+        stages,
+        key=lambda stage: sum(unit.estimated_arithmetic_work for unit in stage.work_units),
+        default=None,
+    )
+    populated_slots_by_wave: tuple[int, ...] = ()
+    if dominant is not None:
+        populated_slots_by_wave = tuple(
+            len(
+                {
+                    (unit.logical_rank, unit.logical_dpu)
+                    for unit in dominant.work_units
+                    if unit.wave == wave
+                }
+            )
+            for wave in sorted({unit.wave for unit in dominant.work_units})
+        )
+    useful_slots = max(populated_slots_by_wave, default=0)
+    fully_populated_wave_count = sum(
+        slots == topology.dpu_count for slots in populated_slots_by_wave
+    )
+    dpu_wave_ok = topology.dpu_count == 1 or fully_populated_wave_count > 0
+    return {
+        "tasklet_row_sufficiency_passed": tasklet_rows_ok,
+        "dominant_wave_dpu_slots": useful_slots,
+        "dominant_wave_useful_slots": useful_slots,
+        "dominant_wave_allocated_slots": topology.dpu_count,
+        "dominant_wave_utilization": useful_slots / topology.dpu_count,
+        "fully_populated_wave_count": fully_populated_wave_count,
+        "collection_resource_admission_passed": tasklet_rows_ok and dpu_wave_ok,
+    }
+
+
 def _build_upmem_plan(
     dag: ContractionDAG,
     *,
@@ -821,6 +872,7 @@ __all__ = [
     "UpmemStage",
     "UpmemTopology",
     "UpmemWorkUnit",
+    "collection_resource_admission",
     "physical_plan_id",
     "plan_upmem",
     "validate_upmem_plan",

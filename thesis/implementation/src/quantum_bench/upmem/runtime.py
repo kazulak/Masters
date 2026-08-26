@@ -47,6 +47,7 @@ from quantum_bench.upmem.plan import (
     UpmemResources,
     UpmemTopology as FinalUpmemTopology,
     UpmemWorkUnit,
+    collection_resource_admission,
     physical_plan_id,
     validate_upmem_plan,
 )
@@ -2072,12 +2073,16 @@ class UpmemSession:
         resources: UpmemResources,
         low_level: Any,
         timeout_s: float,
+        startup_resource_admission: Mapping[str, JsonValue] | None = None,
     ) -> None:
         self._dag = dag
         self._plan = plan
         self._resources = resources
         self._low_level = low_level
         self._timeout_s = float(timeout_s)
+        self._startup_resource_admission = (
+            {} if startup_resource_admission is None else startup_resource_admission
+        )
         self._closed = False
         self._terminal_facts: Mapping[str, JsonValue] | None = None
         self._close_failure: ExecutionFailed | None = None
@@ -2390,8 +2395,11 @@ class UpmemSession:
                 raise TypeError("normalized terminal facts are not a mapping")
             terminal_facts = normalized
             _validate_terminal_admission(terminal_facts, self._plan)
-            self._terminal_facts = terminal_facts
-            return terminal_facts
+            self._terminal_facts = {
+                **terminal_facts,
+                **self._startup_resource_admission,
+            }
+            return self._terminal_facts
         except Exception as exc:
             failure = ExecutionFailed(
                 stage="session_close",
@@ -2425,6 +2433,7 @@ class UpmemSession:
             "active_ranks": tuple(sorted(active_rank_indices)),
             "rank_count": self._plan.topology.rank_count,
             "tasklets_per_dpu": self._plan.topology.tasklets_per_dpu,
+            **self._startup_resource_admission,
         }
 
     def _backend_facts(
@@ -2437,6 +2446,11 @@ class UpmemSession:
         operation_facts: tuple[Mapping[str, JsonValue], ...],
     ) -> Mapping[str, JsonValue]:
         simulator = observations["target_observed"] == "sdk_simulator"
+        execution_admission = _execution_resource_admission(
+            self._plan,
+            active_rank_indices=active_rank_indices,
+            active_dpu_ids=active_dpu_ids,
+        )
         return _json_safe(
             {
                 "backend_id": "upmem_final_plan_v1",
@@ -2459,6 +2473,8 @@ class UpmemSession:
                 "physical_plan_consumed": observations["physical_stage_consumed"],
                 "output_hash": output_hash,
                 "operation_facts": operation_facts,
+                **self._startup_resource_admission,
+                **execution_admission,
                 "release_verified": None,
                 **(
                     {
@@ -2831,6 +2847,103 @@ def _open_failure_facts(plan: FinalUpmemPlan) -> dict[str, JsonValue]:
     }
 
 
+def _startup_resource_admission(
+    low_level: object,
+    plan: FinalUpmemPlan,
+    *,
+    expected_target: str,
+) -> Mapping[str, JsonValue]:
+    """Check READY facts after opening and before the first timed operation."""
+
+    ranks = getattr(low_level, "ranks", None)
+    engine = getattr(low_level, "engine", None)
+    if not isinstance(ranks, (list, tuple)) or engine is None:
+        return {
+            "startup_resource_admission_passed": True,
+            "startup_resource_admission_reasons": (),
+            "startup_resource_admission_source": "injected_session",
+        }
+    reasons: list[str] = []
+    expected_target_observed = (
+        "sdk_simulator" if expected_target == EXECUTION_TARGET_SIMULATOR else "physical_hardware"
+    )
+    if len(ranks) != plan.topology.rank_count:
+        reasons.append("rank_count_mismatch")
+    allocated_dpus = 0
+    ready_records: list[Mapping[str, JsonValue]] = []
+    provenance = getattr(engine, "_binary_provenance", {})
+    for rank in ranks:
+        startup = getattr(getattr(rank, "session", None), "startup", {})
+        local_dpus = getattr(rank, "local_dpus", None)
+        if not isinstance(startup, Mapping) or type(local_dpus) is not int:
+            reasons.append("ready_facts_missing")
+            continue
+        allocated = startup.get("allocated_dpu_count")
+        requested = startup.get("requested_dpu_count")
+        tasklets = startup.get("tasklets_per_dpu")
+        if requested != local_dpus or allocated != local_dpus:
+            reasons.append("ready_dpu_count_mismatch")
+        if tasklets != plan.topology.tasklets_per_dpu:
+            reasons.append("ready_tasklet_count_mismatch")
+        if startup.get("target_observed") != expected_target_observed:
+            reasons.append("ready_target_mismatch")
+        for key in ("dpu_binary_sha256", "initialization_binary_sha256"):
+            if startup.get(key) != provenance.get(key):
+                reasons.append("ready_binary_identity_mismatch")
+                break
+        if type(allocated) is int:
+            allocated_dpus += allocated
+        ready_records.append(
+            {
+                "rank_index": int(getattr(rank, "index", -1)),
+                "requested_dpu_count": requested if type(requested) is int else None,
+                "allocated_dpu_count": allocated if type(allocated) is int else None,
+                "tasklets_per_dpu": tasklets if type(tasklets) is int else None,
+                "target_observed": (
+                    startup.get("target_observed")
+                    if isinstance(startup.get("target_observed"), str)
+                    else None
+                ),
+            }
+        )
+    if allocated_dpus != plan.topology.dpu_count:
+        reasons.append("allocated_dpu_total_mismatch")
+    return {
+        "startup_resource_admission_passed": not reasons,
+        "startup_resource_admission_reasons": tuple(sorted(set(reasons))),
+        "startup_resource_admission_source": "native_ready",
+        "startup_ready_records": tuple(ready_records),
+        "startup_requested_dpu_count": plan.topology.dpu_count,
+        "startup_allocated_dpu_count": allocated_dpus,
+        "startup_requested_tasklets_per_dpu": plan.topology.tasklets_per_dpu,
+    }
+
+
+def _execution_resource_admission(
+    plan: FinalUpmemPlan,
+    *,
+    active_rank_indices: set[int],
+    active_dpu_ids: set[tuple[int, int]],
+) -> Mapping[str, JsonValue]:
+    """Persist post-execution resource facts without inferring concurrent timing."""
+
+    planned = collection_resource_admission(plan)
+    reasons: list[str] = []
+    if not planned["collection_resource_admission_passed"]:
+        reasons.append("plan_wave_or_tasklet_admission_failed")
+    if len(active_dpu_ids) != plan.topology.dpu_count:
+        reasons.append("active_dpu_count_mismatch")
+    if len(active_rank_indices) != plan.topology.rank_count:
+        reasons.append("active_rank_count_mismatch")
+    return {
+        **planned,
+        "execution_resource_admission_passed": not reasons,
+        "execution_resource_admission_reasons": tuple(reasons),
+        "execution_active_dpu_count": len(active_dpu_ids),
+        "execution_active_rank_count": len(active_rank_indices),
+    }
+
+
 def open_upmem(
     dag: ContractionDAG,
     plan: FinalUpmemPlan,
@@ -2912,7 +3025,23 @@ def open_upmem(
             backend_facts=facts,
         )
         raise failure
-    return UpmemSession(dag, plan, resources, low_level, timeout_s)
+    startup_admission = _startup_resource_admission(
+        low_level,
+        plan,
+        expected_target=EXECUTION_TARGET_PHYSICAL,
+    )
+    if startup_admission["startup_resource_admission_passed"] is False:
+        facts = _open_failure_facts(plan)
+        facts.update(startup_admission)
+        facts.update(_cleanup_nonconforming_session(low_level))
+        raise ExecutionFailed(
+            stage="resource_admission",
+            reason="native READY facts did not satisfy resource admission",
+            backend_facts=facts,
+        )
+    return UpmemSession(
+        dag, plan, resources, low_level, timeout_s, startup_admission
+    )
 
 
 def open_upmem_simulator(
@@ -2995,7 +3124,23 @@ def open_upmem_simulator(
             reason=contract_error,
             backend_facts=facts,
         )
-    return UpmemSession(dag, plan, resources, low_level, timeout_s)
+    startup_admission = _startup_resource_admission(
+        low_level,
+        plan,
+        expected_target=EXECUTION_TARGET_SIMULATOR,
+    )
+    if startup_admission["startup_resource_admission_passed"] is False:
+        facts = _open_failure_facts(plan)
+        facts.update(startup_admission)
+        facts.update(_cleanup_nonconforming_session(low_level))
+        raise ExecutionFailed(
+            stage="resource_admission",
+            reason="native READY facts did not satisfy resource admission",
+            backend_facts=facts,
+        )
+    return UpmemSession(
+        dag, plan, resources, low_level, timeout_s, startup_admission
+    )
 
 
 def _json_safe(value: object) -> JsonValue:

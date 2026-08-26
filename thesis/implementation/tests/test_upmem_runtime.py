@@ -467,6 +467,9 @@ def test_persistent_session_matches_replay_and_renews_deadline(
     assert first.measurement.kernel_s == pytest.approx(0.16)
     assert first.measurement.d2h_s == pytest.approx(0.08)
     assert first.backend_facts["physical_plan_id"]
+    assert first.backend_facts["startup_resource_admission_passed"] is True
+    assert first.backend_facts["execution_resource_admission_passed"] is True
+    assert first.backend_facts["execution_active_dpu_count"] == 1
     assert first.backend_facts["operation_facts"][0]["timing_scope"] == (
         "sum_of_per_request_max_rank_response_counters_v1"
     )
@@ -536,6 +539,7 @@ def test_open_upmem_simulator_matches_replay_and_rejects_physical_claims(
     assert terminal["hardware_release_attempted"] is True
     assert terminal["hardware_release_succeeded"] is True
     assert terminal["hardware_release_verified"] is True
+    assert terminal["startup_resource_admission_passed"] is True
     for key in (
         "timing_claim_applicable",
         "scaling_claim_applicable",
@@ -543,6 +547,26 @@ def test_open_upmem_simulator_matches_replay_and_rejects_physical_claims(
         "energy_claim_applicable",
     ):
         assert terminal[key] is False
+
+
+def test_open_rejects_ready_resource_admission_mismatch(tmp_path: Path) -> None:
+    _, dag, plan, resources, _, engine = _opened(
+        tmp_path, policy="split_complex_float32_v1"
+    )
+
+    def opener(_dag, final_plan, _resources, _timeout_s):
+        opened = engine.open_session(final_plan.numeric_policy, final_plan.topology)
+        opened.ranks[0].session.startup["tasklets_per_dpu"] = 2
+        return opened
+
+    with pytest.raises(ExecutionFailed) as caught:
+        open_upmem(dag, plan, replace(resources, session_opener=opener))
+
+    assert caught.value.stage == "resource_admission"
+    assert caught.value.backend_facts["startup_resource_admission_passed"] is False
+    assert "ready_tasklet_count_mismatch" in caught.value.backend_facts[
+        "startup_resource_admission_reasons"
+    ]
 
 
 def test_open_upmem_simulator_rejects_injected_session_opener(

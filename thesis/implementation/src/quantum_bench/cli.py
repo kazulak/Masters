@@ -61,6 +61,7 @@ from quantum_bench.upmem.plan import (
     UpmemPlan,
     UpmemResources,
     UpmemTopology,
+    collection_resource_admission,
     physical_plan_id,
     plan_upmem,
 )
@@ -808,39 +809,16 @@ def _require_collection_resource_admission(
 
     if not physical_campaign:
         return
-    topology = plan.topology
-    units_by_stage = [
-        stage.work_units for stage in plan.stages if stage.kind == "contract_batch"
-    ]
-    if topology.tasklets_per_dpu > 1:
-        if any(
-            unit.m_size < topology.tasklets_per_dpu
-            for units in units_by_stage
-            for unit in units
-        ):
-            raise UnsupportedExecution(
-                "collection_admission",
-                "tasklet scaling requires every work unit to provide one output row per tasklet",
-                "upmem_tasklet_work_unit_rows",
-            )
-    if topology.dpu_count <= 1:
-        return
-    if not units_by_stage:
+    admission = collection_resource_admission(plan)
+    if not admission["tasklet_row_sufficiency_passed"]:
         raise UnsupportedExecution(
             "collection_admission",
-            "DPU scaling requires contraction work units",
-            "upmem_dpu_work_units",
+            "tasklet scaling requires every work unit to provide one output row per tasklet",
+            "upmem_tasklet_work_unit_rows",
         )
-    dominant = max(
-        units_by_stage,
-        key=lambda units: sum(unit.estimated_arithmetic_work for unit in units),
-    )
-    fully_populated = any(
-        len({(unit.logical_rank, unit.logical_dpu) for unit in dominant if unit.wave == wave})
-        == topology.dpu_count
-        for wave in {unit.wave for unit in dominant}
-    )
-    if not fully_populated:
+    if plan.topology.dpu_count > 1 and not admission[
+        "collection_resource_admission_passed"
+    ]:
         raise UnsupportedExecution(
             "collection_admission",
             "DPU scaling requires a fully populated dominant work-unit wave",
