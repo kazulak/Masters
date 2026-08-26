@@ -208,7 +208,8 @@ PYTHONPATH=src ../.venv/bin/python scripts/run_m7c_scaling_campaign.py prepare \
   --rank-path /dev/dpu_rank0 \
   --session-root runs/upmem_sessions/eth-scaling-diagnostic \
   --expected-cpus 0
-PYTHONPATH=src ../.venv/bin/python scripts/run_m7c_scaling_campaign.py run \
+UPMEM_ALLOW_PHYSICAL_HARDWARE=1 PYTHONPATH=src \
+  ../.venv/bin/python scripts/run_m7c_scaling_campaign.py run \
   --selection configs/m7c_workload_selection.json \
   --config runs/configs/eth/scaling-diagnostic.yml \
   --output runs/evidence/eth-scaling-diagnostic \
