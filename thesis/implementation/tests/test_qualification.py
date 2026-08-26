@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import importlib.util
 import hashlib
+import json
 from pathlib import Path
 import sys
 import tarfile
 
 import pytest
+import yaml
 
 from quantum_bench.experiment import load_experiment_config
 
@@ -170,6 +172,27 @@ def test_m7c_workload_selection_is_deterministic_and_preregistered(
     assert first == second
     assert first["selected_primary"] == "quantization_stress_18q_l2"
     assert first["selected_secondary"] == "ghz_chain_18q"
+    assert first["schema_version"] == "m7c_workload_selection_v2"
+    assert first["dependency_constraints_sha256"] == hashlib.sha256(
+        (ROOT / "ci" / "constraints.txt").read_bytes()
+    ).hexdigest()
+    assert first["selection_basis_sha256"] == selector._hash(
+        {
+            key: first[key]
+            for key in (
+                "schema_version",
+                "planner_configuration",
+                "selection_rule",
+                "candidates",
+                "selected_primary",
+                "selected_secondary",
+            )
+        }
+    )
+    assert first["planner_configuration_sha256"] == selector._hash(
+        selector.PLANNER_CONFIG
+    )
+    assert "constraints_hash" not in first
     primary = next(
         candidate
         for candidate in first["candidates"]
@@ -185,6 +208,34 @@ def test_m7c_workload_selection_is_deterministic_and_preregistered(
     path = tmp_path / "selection.json"
     selector.write_selection(path)
     selector.check_selection(path)
+
+
+def test_m7c_workload_selection_rejects_nonancestor_source(tmp_path: Path) -> None:
+    selector = _selector()
+    selection = selector.build_selection()
+    selection["source_commit"] = "0" * 40
+    path = tmp_path / "selection.json"
+    path.write_text(json.dumps(selection), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="not an ancestor"):
+        selector.check_selection(path)
+
+
+def test_m7c_workload_selection_rejects_route_matrix_drift(tmp_path: Path) -> None:
+    selector = _selector()
+    config = yaml.safe_load(
+        (ROOT / "configs" / "tn_benchmark_physical_scaling_diagnostic.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    config["routes"]["upmem_float32_2dpu_t8"]["options"]["dpu_count"] = 3
+    drifted = tmp_path / "drifted.yml"
+    drifted.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="topology drift"):
+        selector.check_selection(
+            ROOT / "configs" / "m7c_workload_selection.json", drifted
+        )
 
 
 def test_m7c_committed_selection_matches_scaling_config() -> None:

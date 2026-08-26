@@ -36,7 +36,7 @@ from quantum_bench.upmem.runtime import _wram_panel_operation_facts
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SELECTION_SCHEMA = "m7c_workload_selection_v1"
+SELECTION_SCHEMA = "m7c_workload_selection_v2"
 NUMERIC_POLICY = "split_complex_float32_v1"
 PLANNER_CONFIG = {
     "engine": "opt_einsum",
@@ -93,6 +93,41 @@ _SELECTION_RULE = {
     },
     "timing_selection_rule": "no_physical_or_simulator_timing_is_used",
 }
+_PRIMARY_SCALING_ROUTE_IDS = (
+    "numpy_same_dag",
+    "upmem_float32_1dpu_t1",
+    "upmem_float32_1dpu_t8",
+    "upmem_float32_2dpu_t8",
+    "upmem_float32_4dpu_t8",
+)
+_SECONDARY_SCALING_ROUTE_IDS = _PRIMARY_SCALING_ROUTE_IDS[1:]
+_REQUIRED_SCALING_ROUTES = {
+    "numpy_same_dag": {
+        "executor": "numpy_dag",
+        "numeric_policy": NUMERIC_POLICY,
+        "topology": None,
+    },
+    "upmem_float32_1dpu_t1": {
+        "executor": "upmem_physical",
+        "numeric_policy": NUMERIC_POLICY,
+        "topology": (1, 1, 1),
+    },
+    "upmem_float32_1dpu_t8": {
+        "executor": "upmem_physical",
+        "numeric_policy": NUMERIC_POLICY,
+        "topology": (1, 1, 8),
+    },
+    "upmem_float32_2dpu_t8": {
+        "executor": "upmem_physical",
+        "numeric_policy": NUMERIC_POLICY,
+        "topology": (2, 1, 8),
+    },
+    "upmem_float32_4dpu_t8": {
+        "executor": "upmem_physical",
+        "numeric_policy": NUMERIC_POLICY,
+        "topology": (4, 1, 8),
+    },
+}
 
 
 def _source_commit() -> str:
@@ -122,6 +157,25 @@ def _plain(value: object) -> Any:
 
 def _hash(value: object) -> str:
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _file_sha256(path: Path) -> str:
+    if not path.is_file():
+        raise ValueError(f"required selection input is missing: {path}")
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _source_is_ancestor(source_commit: str) -> bool:
+    if len(source_commit) != 40:
+        return False
+    result = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", source_commit, "HEAD"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.returncode == 0
 
 
 def _plan_candidate(candidate: Candidate) -> dict[str, object]:
@@ -291,7 +345,11 @@ def build_selection() -> dict[str, object]:
         "source_commit": _source_commit(),
         "python_version": sys.version.split()[0],
         "dependency_versions": {"opt_einsum": _dependency_version("opt_einsum")},
-        "constraints_hash": _hash(selection_basis),
+        "selection_basis_sha256": _hash(selection_basis),
+        "dependency_constraints_sha256": _file_sha256(
+            ROOT / "ci" / "constraints.txt"
+        ),
+        "planner_configuration_sha256": _hash(PLANNER_CONFIG),
         "selection_audit_hash": _hash(
             {
                 "primary": primary,
@@ -315,39 +373,96 @@ def write_selection(output: Path) -> Path:
 
 def check_selection(selection_path: Path, config_path: Path | None = None) -> None:
     persisted = json.loads(selection_path.read_text(encoding="utf-8"))
+    if not isinstance(persisted, dict) or persisted.get("schema_version") != SELECTION_SCHEMA:
+        raise ValueError(f"persisted M7C selection must use {SELECTION_SCHEMA}")
     current = build_selection()
     recorded_source = persisted.pop("source_commit", None)
     current.pop("source_commit", None)
     if not isinstance(recorded_source, str) or len(recorded_source) != 40:
         raise ValueError("persisted M7C selection has no generator source commit")
+    if not _source_is_ancestor(recorded_source):
+        raise ValueError("persisted M7C selection source commit is not an ancestor of HEAD")
     if persisted != current:
         raise ValueError("persisted M7C selection differs from deterministic recomputation")
     if config_path is None:
         return
     config = load_experiment_config(config_path)
-    selected_case = config["cases"].get("scaling_primary")
-    selected_id = persisted["selected_primary"]
-    if selected_case is None:
-        selected_case = config["cases"].get("scaling_secondary")
+    cases = config["cases"]
+    if set(cases) == {"scaling_primary"}:
+        selected_case_id = "scaling_primary"
+        selected_id = persisted["selected_primary"]
+    elif set(cases) == {"scaling_secondary"}:
+        selected_case_id = "scaling_secondary"
         selected_id = persisted["selected_secondary"]
-    selected_plan = config["plans"].get("greedy")
-    if selected_case is None or selected_plan is None:
-        raise ValueError(
-            "M7C scaling config must select scaling_primary or scaling_secondary and greedy"
-        )
+    else:
+        raise ValueError("M7C scaling config must select exactly one preregistered case")
+    selected_case = cases[selected_case_id]
+    if set(config["plans"]) != {"greedy"}:
+        raise ValueError("M7C scaling config must select only the greedy plan")
+    selected_plan = config["plans"]["greedy"]
     circuit_config = selected_case["circuit"]
-    primary = next(
+    selected_candidate = next(
         entry
         for entry in persisted["candidates"]
         if entry["candidate_id"] == selected_id
     )
-    if dict(circuit_config["parameters"]) != primary["circuit"]["parameters"]:
-        raise ValueError("M7C scaling config parameters drift from selected primary")
-    if circuit_config["name"] != primary["circuit"]["name"]:
-        raise ValueError("M7C scaling config circuit drift from selected primary")
+    if dict(circuit_config["parameters"]) != selected_candidate["circuit"]["parameters"]:
+        raise ValueError("M7C scaling config parameters drift from selected candidate")
+    if circuit_config["name"] != selected_candidate["circuit"]["name"]:
+        raise ValueError("M7C scaling config circuit drift from selected candidate")
+    if circuit_config["kind"] != selected_candidate["circuit"]["kind"]:
+        raise ValueError("M7C scaling config circuit kind drift from selected candidate")
     planner = selected_plan["planner"]
-    if planner["engine"] != PLANNER_CONFIG["engine"] or planner["mode"] != PLANNER_CONFIG["mode"]:
+    if dict(planner) != PLANNER_CONFIG or selected_plan["slicing"] is not None:
         raise ValueError("M7C scaling config planner drift from selection")
+    required_route_ids = (
+        _PRIMARY_SCALING_ROUTE_IDS
+        if selected_case_id == "scaling_primary"
+        else _SECONDARY_SCALING_ROUTE_IDS
+    )
+    if tuple(config["routes"]) != required_route_ids:
+        raise ValueError("M7C scaling config route IDs drift from the preregistered matrix")
+    for route_id in required_route_ids:
+        required = _REQUIRED_SCALING_ROUTES[route_id]
+        route = config["routes"][route_id]
+        if route["executor"] != required["executor"]:
+            raise ValueError(f"M7C scaling config executor drift for {route_id}")
+        if route["numeric_policy"] != required["numeric_policy"]:
+            raise ValueError(f"M7C scaling config numeric policy drift for {route_id}")
+        topology = required["topology"]
+        if topology is None:
+            if route["options"]:
+                raise ValueError(f"M7C scaling config options drift for {route_id}")
+            continue
+        options = route["options"]
+        observed_topology = (
+            options["dpu_count"],
+            options["rank_count"],
+            options["tasklets_per_dpu"],
+        )
+        if observed_topology != topology:
+            raise ValueError(f"M7C scaling config topology drift for {route_id}")
+    expected_matrix = (
+        {
+            "case_id": selected_case_id,
+            "plan_id": "greedy",
+            "route_ids": required_route_ids,
+        },
+    )
+    if tuple(config["matrix"]) != expected_matrix:
+        raise ValueError("M7C scaling config matrix drift from the preregistered routes")
+    primary = next(
+        entry
+        for entry in persisted["candidates"]
+        if entry["candidate_id"] == persisted["selected_primary"]
+    )
+    secondary = next(
+        entry
+        for entry in persisted["candidates"]
+        if entry["candidate_id"] == persisted["selected_secondary"]
+    )
+    if primary["tensor_network_structure_id"] == secondary["tensor_network_structure_id"]:
+        raise ValueError("M7C selected circuits must have distinct tensor-network structures")
 
 
 def main(argv: list[str] | None = None) -> int:
