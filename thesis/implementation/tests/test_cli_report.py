@@ -1121,6 +1121,15 @@ def test_make_help_lists_active_workflow() -> None:
         "make qualify",
     ):
         assert target in result.stdout
+    assert "PHYSICAL_CONFIG=<prepared-yaml>" in result.stdout
+
+
+def test_make_qualify_requires_an_explicit_physical_config() -> None:
+    _require_make()
+    result = _command("make", "-s", "qualify", "UPMEM_ALLOW_PHYSICAL_HARDWARE=1")
+
+    assert result.returncode == 2
+    assert "Set PHYSICAL_CONFIG=<prepared ignored config>" in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -1136,7 +1145,7 @@ def test_make_help_lists_active_workflow() -> None:
         ("verify", ("INPUT=/tmp/run",), "quantum_bench.cli verify"),
         (
             "qualify",
-            ("CONFIG=config.yml", "OUTPUT=/tmp/qualify"),
+            ("PHYSICAL_CONFIG=config.yml", "OUTPUT=/tmp/qualify"),
             "quantum_bench.cli qualify",
         ),
     ),

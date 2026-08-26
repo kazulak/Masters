@@ -71,9 +71,9 @@ PYTHONPATH=src ../.venv/bin/python scripts/qualify_m7c_physical.py prepare \
   --output runs/configs/eth/one-dpu-float32.yml \
   --mode float32-smoke --rank-path /dev/dpu_rank0 \
   --session-root runs/upmem_sessions/eth-one-dpu --expected-cpus 0
-UPMEM_ALLOW_PHYSICAL_HARDWARE=1 ../.venv/bin/python -m quantum_bench.cli qualify \
-  --config runs/configs/eth/one-dpu-float32.yml \
-  --output runs/evidence/eth-one-dpu-float32 --allow-physical
+UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make qualify \
+  PHYSICAL_CONFIG=runs/configs/eth/one-dpu-float32.yml \
+  OUTPUT=runs/evidence/eth-one-dpu-float32
 PYTHONPATH=src ../.venv/bin/python scripts/qualify_m7c_physical.py inspect \
   --input runs/evidence/eth-one-dpu-float32 \
   --expected-samples 6 --expected-sessions 6 \

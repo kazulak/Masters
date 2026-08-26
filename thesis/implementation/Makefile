@@ -7,7 +7,7 @@ CLI := $(PY_ENV) $(PYTHON) -m quantum_bench.cli
 RUN_STAMP := $(shell date +%Y-%m-%d_%H-%M-%S)
 
 CONFIG ?= configs/tn_benchmark_reset.yml
-PHYSICAL_CONFIG ?= configs/tn_benchmark_physical_smoke.yml
+PHYSICAL_CONFIG ?=
 OUTPUT ?= runs/reset/$(RUN_STAMP)
 INPUT ?=
 REPORT_OUTPUT ?= runs/reports/$(RUN_STAMP)
@@ -32,8 +32,8 @@ help:
 		'  make report INPUT=<evidence-dir>    Generate tables and plots without executing workloads' \
 		'  make verify INPUT=<evidence-dir>    Verify canonical evidence and identities' \
 		'  make build-upmem-runtime             Build the active ABI-v4 host and DPU binaries' \
-		'  UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make qualify' \
-		'                                      Run only explicit physical routes from a clean worktree' \
+		'  UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make qualify PHYSICAL_CONFIG=<prepared-yaml>' \
+		'                                      Run only an explicit prepared physical config from a clean worktree' \
 		'' \
 		'Overrides: OUTPUT=<dir>, REPORT_OUTPUT=<dir>, PHYSICAL_CONFIG=<yaml>, UPMEM_TASKLETS=<n>, PYTHON=<path>'
 
@@ -70,6 +70,7 @@ verify:
 	$(CLI) verify --input $(INPUT)
 
 qualify:
+	@test -n "$(strip $(PHYSICAL_CONFIG))" || { echo 'Set PHYSICAL_CONFIG=<prepared ignored config>' >&2; exit 2; }
 	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1' >&2; exit 2; }
 	$(CLI) qualify --config $(PHYSICAL_CONFIG) --output $(OUTPUT) --allow-physical
 
