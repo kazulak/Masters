@@ -803,17 +803,17 @@ def _scheduled_attempts(
 
 
 def _require_collection_resource_admission(
-    plan: UpmemPlan, *, physical_campaign: bool
+    plan: UpmemPlan, *, physical_performance_campaign: bool
 ) -> None:
-    """Reject requested scaling with no fully populated dominant wave."""
+    """Reject physical-performance scaling without dominant-work resources."""
 
-    if not physical_campaign:
+    if not physical_performance_campaign:
         return
     admission = collection_resource_admission(plan)
     if not admission["tasklet_row_sufficiency_passed"]:
         raise UnsupportedExecution(
             "collection_admission",
-            "tasklet scaling requires every work unit to provide one output row per tasklet",
+            "tasklet scaling requires each dominant-work unit to provide one output row per tasklet",
             "upmem_tasklet_work_unit_rows",
         )
     if plan.topology.dpu_count > 1 and not admission[
@@ -1032,7 +1032,11 @@ def _run_config(
                     )
                     _require_collection_resource_admission(
                         upmem_plan,
-                        physical_campaign=route["executor"] == "upmem_physical",
+                        physical_performance_campaign=(
+                            route["executor"] == "upmem_physical"
+                            and config["collection"]["claim_policy"]
+                            == "physical_performance_v1"
+                        ),
                     )
                 except UnsupportedExecution as exc:
                     identities = _identities(

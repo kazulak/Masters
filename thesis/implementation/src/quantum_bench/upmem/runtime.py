@@ -2929,8 +2929,6 @@ def _execution_resource_admission(
 
     planned = collection_resource_admission(plan)
     reasons: list[str] = []
-    if not planned["collection_resource_admission_passed"]:
-        reasons.append("plan_wave_or_tasklet_admission_failed")
     if len(active_dpu_ids) != plan.topology.dpu_count:
         reasons.append("active_dpu_count_mismatch")
     if len(active_rank_indices) != plan.topology.rank_count:

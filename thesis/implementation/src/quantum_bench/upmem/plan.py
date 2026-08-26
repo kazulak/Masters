@@ -295,52 +295,92 @@ def physical_plan_id(plan: UpmemPlan) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def collection_resource_admission(plan: UpmemPlan) -> dict[str, int | float | bool]:
-    """Derive one pure tasklet/DPU admission summary from a physical plan."""
+def collection_resource_admission(
+    plan: UpmemPlan,
+) -> dict[str, int | float | str | bool | None]:
+    """Derive deterministic tasklet/DPU scaling facts from a physical plan.
+
+    Correctness permits idle tasklets for small setup work. Scaling admission is
+    instead tied to the one arithmetic-dominant wave that will represent the
+    selected workload, while utilization accounts for every contract wave.
+    """
 
     if not isinstance(plan, UpmemPlan):
         raise TypeError("collection_resource_admission requires the final UpmemPlan")
     topology = plan.topology
-    contract_units = tuple(
-        unit
-        for stage in plan.stages
-        if stage.kind == "contract_batch"
-        for unit in stage.work_units
-    )
-    tasklet_rows_ok = all(
-        unit.m_size >= topology.tasklets_per_dpu for unit in contract_units
-    )
-    stages = tuple(
-        stage for stage in plan.stages if stage.kind == "contract_batch"
-    )
-    dominant = max(
-        stages,
-        key=lambda stage: sum(unit.estimated_arithmetic_work for unit in stage.work_units),
-        default=None,
-    )
-    populated_slots_by_wave: tuple[int, ...] = ()
-    if dominant is not None:
-        populated_slots_by_wave = tuple(
-            len(
+    waves: list[tuple[str, int, tuple[UpmemWorkUnit, ...], int, int]] = []
+    for stage in plan.stages:
+        if stage.kind != "contract_batch":
+            continue
+        for wave in sorted({unit.wave for unit in stage.work_units}):
+            units = tuple(unit for unit in stage.work_units if unit.wave == wave)
+            arithmetic_work = sum(unit.estimated_arithmetic_work for unit in units)
+            useful_slots = len(
                 {
                     (unit.logical_rank, unit.logical_dpu)
-                    for unit in dominant.work_units
-                    if unit.wave == wave
+                    for unit in units
+                    if unit.estimated_arithmetic_work > 0
                 }
             )
-            for wave in sorted({unit.wave for unit in dominant.work_units})
-        )
-    useful_slots = max(populated_slots_by_wave, default=0)
-    fully_populated_wave_count = sum(
-        slots == topology.dpu_count for slots in populated_slots_by_wave
+            waves.append((stage.stage_id, wave, units, arithmetic_work, useful_slots))
+
+    total_work = sum(arithmetic_work for _, _, _, arithmetic_work, _ in waves)
+    dominant: tuple[str, int, tuple[UpmemWorkUnit, ...], int, int] | None = (
+        min(waves, key=lambda item: (-item[3], item[0], item[1]), default=None)
     )
-    dpu_wave_ok = topology.dpu_count == 1 or fully_populated_wave_count > 0
+    if dominant is None:
+        dominant_stage_id: str | None = None
+        dominant_wave: int | None = None
+        dominant_units: tuple[UpmemWorkUnit, ...] = ()
+        dominant_work = dominant_slots = 0
+    else:
+        dominant_stage_id, dominant_wave, dominant_units, dominant_work, dominant_slots = dominant
+
+    tasklet_rows_ok = bool(dominant_units) and all(
+        unit.m_size >= topology.tasklets_per_dpu for unit in dominant_units
+    )
+    fully_populated_wave_count = sum(
+        useful_slots == topology.dpu_count
+        for _, _, _, _, useful_slots in waves
+    )
+    weighted_dpu_utilization = (
+        sum(
+            arithmetic_work * useful_slots / topology.dpu_count
+            for _, _, _, arithmetic_work, useful_slots in waves
+        )
+        / total_work
+        if total_work
+        else 0.0
+    )
+    weighted_tasklet_utilization = (
+        sum(
+            unit.estimated_arithmetic_work
+            * min(unit.m_size, topology.tasklets_per_dpu)
+            / topology.tasklets_per_dpu
+            for _, _, units, _, _ in waves
+            for unit in units
+        )
+        / total_work
+        if total_work
+        else 0.0
+    )
+    dpu_wave_ok = topology.dpu_count == 1 or dominant_slots == topology.dpu_count
     return {
         "tasklet_row_sufficiency_passed": tasklet_rows_ok,
-        "dominant_wave_dpu_slots": useful_slots,
-        "dominant_wave_useful_slots": useful_slots,
+        "dominant_work_stage_id": dominant_stage_id,
+        "dominant_work_wave": dominant_wave,
+        "dominant_work_wave_arithmetic_work": dominant_work,
+        "dominant_work_wave_populated_dpu_slots": dominant_slots,
+        "dominant_work_wave_tasklet_row_sufficiency_passed": tasklet_rows_ok,
+        "dominant_work_wave_allocated_dpu_slots": topology.dpu_count,
+        "dominant_work_wave_utilization": dominant_slots / topology.dpu_count,
+        "arithmetic_weighted_dpu_slot_utilization": weighted_dpu_utilization,
+        "arithmetic_weighted_tasklet_utilization": weighted_tasklet_utilization,
+        "total_wave_count": len(waves),
+        "dominant_wave_dpu_slots": dominant_slots,
+        "dominant_wave_useful_slots": dominant_slots,
         "dominant_wave_allocated_slots": topology.dpu_count,
-        "dominant_wave_utilization": useful_slots / topology.dpu_count,
+        "dominant_wave_utilization": dominant_slots / topology.dpu_count,
         "fully_populated_wave_count": fully_populated_wave_count,
         "collection_resource_admission_passed": tasklet_rows_ok and dpu_wave_ok,
     }

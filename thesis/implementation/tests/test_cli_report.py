@@ -854,18 +854,18 @@ def test_physical_collection_admission_requires_useful_dpu_and_tasklet_work() ->
     with pytest.raises(cli.UnsupportedExecution, match="fully populated"):
         cli._require_collection_resource_admission(
             plan(dpus=2, tasklets=1, units=(work_unit(dpu=0),)),
-            physical_campaign=True,
+            physical_performance_campaign=True,
         )
 
     cli._require_collection_resource_admission(
         plan(dpus=2, tasklets=1, units=(work_unit(dpu=0), work_unit(dpu=1))),
-        physical_campaign=True,
+        physical_performance_campaign=True,
     )
 
-    with pytest.raises(cli.UnsupportedExecution, match="one output row per tasklet"):
+    with pytest.raises(cli.UnsupportedExecution, match="dominant-work unit"):
         cli._require_collection_resource_admission(
             plan(dpus=1, tasklets=8, units=(work_unit(dpu=0, m_size=4),)),
-            physical_campaign=True,
+            physical_performance_campaign=True,
         )
 
 

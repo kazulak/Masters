@@ -16,6 +16,7 @@ from quantum_bench.model import (
 from quantum_bench.results import UnsupportedExecution
 from quantum_bench.upmem.plan import (
     PLAN_SCHEMA_VERSION,
+    UpmemPlan,
     UpmemResources,
     UpmemStage,
     UpmemTopology,
@@ -23,6 +24,7 @@ from quantum_bench.upmem.plan import (
     _INT8_PRODUCT,
     _INT64_MAX,
     _validate_final_int8_bounds,
+    collection_resource_admission,
     physical_plan_id,
     plan_upmem,
     validate_upmem_plan,
@@ -209,6 +211,69 @@ def test_mapping_is_deterministic_and_uses_dag_hash() -> None:
     assert first == second
     assert first.logical_plan_id == contraction_dag_hash(dag)
     assert physical_plan_id(first) == physical_plan_id(second)
+
+
+def test_collection_admission_uses_one_arithmetic_dominant_wave() -> None:
+    def unit(
+        *, stage: str, wave: int, dpu: int, m_size: int, work: int
+    ) -> UpmemWorkUnit:
+        return UpmemWorkUnit(
+            node_id=stage,
+            stable_tile_id=f"{stage}:{wave}:{dpu}",
+            wave=wave,
+            logical_rank=0,
+            logical_dpu=dpu,
+            batch_start=0,
+            batch_size=1,
+            m_start=dpu * m_size,
+            m_size=m_size,
+            n_start=0,
+            n_size=1,
+            k_start=0,
+            k_size=1,
+            estimated_input_bytes=8,
+            estimated_output_bytes=8,
+            aligned_mram_bytes=24,
+            estimated_arithmetic_work=work,
+        )
+
+    plan = UpmemPlan(
+        logical_plan_id="a" * 64,
+        numeric_policy="split_complex_float32_v1",
+        topology=UpmemTopology(dpu_count=2, rank_count=1, tasklets_per_dpu=8),
+        stages=(
+            UpmemStage(
+                stage_id="contract_batch:full-but-small",
+                kind="contract_batch",
+                node_ids=("full-but-small",),
+                work_units=(
+                    unit(stage="full-but-small", wave=0, dpu=0, m_size=8, work=4),
+                    unit(stage="full-but-small", wave=0, dpu=1, m_size=8, work=4),
+                ),
+            ),
+            UpmemStage(
+                stage_id="contract_batch:dominant",
+                kind="contract_batch",
+                node_ids=("dominant",),
+                work_units=(
+                    unit(stage="dominant", wave=0, dpu=0, m_size=4, work=16),
+                ),
+            ),
+        ),
+    )
+
+    facts = collection_resource_admission(plan)
+
+    assert facts["dominant_work_stage_id"] == "contract_batch:dominant"
+    assert facts["dominant_work_wave"] == 0
+    assert facts["dominant_work_wave_arithmetic_work"] == 16
+    assert facts["dominant_work_wave_populated_dpu_slots"] == 1
+    assert facts["dominant_work_wave_tasklet_row_sufficiency_passed"] is False
+    assert facts["fully_populated_wave_count"] == 1
+    assert facts["total_wave_count"] == 2
+    assert facts["arithmetic_weighted_dpu_slot_utilization"] == pytest.approx(2 / 3)
+    assert facts["arithmetic_weighted_tasklet_utilization"] == pytest.approx(2 / 3)
+    assert facts["collection_resource_admission_passed"] is False
 
 
 def test_four_way_logical_slice_maps_to_one_sorted_batch_and_reduce() -> None:
