@@ -126,29 +126,44 @@ def _sha256_file(path: str) -> str | None:
         return None
 
 
-def _environment(config: Mapping[str, object]) -> tuple[str, Mapping[str, JsonValue]]:
+def _observed_affinity() -> list[int] | None:
+    if not hasattr(os, "sched_getaffinity"):
+        return None
+    try:
+        return sorted(os.sched_getaffinity(0))
+    except OSError:
+        return None
+
+
+def _online_logical_cpu_count() -> int | None:
+    try:
+        value = int(os.sysconf("SC_NPROCESSORS_ONLN"))
+    except (AttributeError, OSError, ValueError):
+        value = os.cpu_count() or 0
+    return value if value > 0 else None
+
+
+def _environment(
+    config: Mapping[str, object],
+    machine_preflight: Mapping[str, JsonValue],
+) -> tuple[str, Mapping[str, JsonValue]]:
     rank_paths: list[str] = []
     for route in config["routes"].values():
         options = route["options"]
         if route["executor"] == "upmem_physical":
             rank_paths.extend(options["rank_paths"])
-    affinity: list[int] | None = None
-    if hasattr(os, "sched_getaffinity"):
-        try:
-            affinity = sorted(os.sched_getaffinity(0))
-        except OSError:
-            affinity = None
     facts: Mapping[str, JsonValue] = {
         "host": platform.node(),
         "python": platform.python_version(),
         "platform": platform.platform(),
-        "affinity": affinity,
+        "affinity": _observed_affinity(),
         "requested_rank_paths": sorted(set(rank_paths)),
         "upmem_sdk_version": _tool_version(("dpu-pkg-config", "--version")),
         "collection_machine_policy": config["collection"]["machine_policy"],
         "initial_background_load_1m": _background_load_1m(),
         "observed_cpu_governors": _cpu_governors(),
         "observed_numa_nodes": _numa_nodes(),
+        "machine_preflight": machine_preflight,
     }
     return environment_id(facts), facts
 
@@ -185,6 +200,116 @@ def _numa_nodes() -> list[str]:
         )
     except OSError:
         return []
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace(
+        "+00:00", "Z"
+    )
+
+
+def _physical_rank_paths(config: Mapping[str, object]) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            {
+                path
+                for route in config["routes"].values()
+                if route["executor"] == "upmem_physical"
+                for path in route["options"]["rank_paths"]
+            }
+        )
+    )
+
+
+def _rank_paths_accessible(rank_paths: tuple[str, ...]) -> bool:
+    return all(
+        Path(path).exists() and os.access(path, os.R_OK | os.W_OK)
+        for path in rank_paths
+    )
+
+
+def _machine_preflight(config: Mapping[str, object]) -> Mapping[str, JsonValue]:
+    """Observe static machine conditions before a physical-performance schedule."""
+
+    collection = config["collection"]
+    machine_policy = collection["machine_policy"]
+    physical_performance = collection.get("claim_policy") == "physical_performance_v1"
+    checked_at = _utc_now()
+    affinity = _observed_affinity()
+    governors = _cpu_governors()
+    numa_nodes = _numa_nodes()
+    rank_paths = _physical_rank_paths(config)
+    rank_paths_accessible = _rank_paths_accessible(rank_paths)
+    sdk_version = _tool_version(("dpu-pkg-config", "--version"))
+    initial_load1 = _background_load_1m()
+    online_cpu_count = _online_logical_cpu_count()
+    initial_load_per_cpu = (
+        initial_load1 / online_cpu_count
+        if initial_load1 is not None and online_cpu_count is not None
+        else None
+    )
+    exclusivity_attested = os.environ.get("QUANTUM_BENCH_EXCLUSIVITY_ATTESTED") == "1"
+    numa_attested = os.environ.get("QUANTUM_BENCH_NUMA_ATTESTED") == "1"
+    reasons: list[str] = []
+
+    if physical_performance:
+        if not exclusivity_attested:
+            reasons.append("machine_exclusivity_not_attested")
+        if not numa_attested:
+            reasons.append("numa_policy_not_attested")
+        if governors != ["performance"]:
+            reasons.append("cpu_governor_not_performance")
+        expected_affinity = machine_policy["affinity"]["expected_cpus"]
+        if affinity is None or tuple(affinity) != tuple(expected_affinity):
+            reasons.append("process_affinity_mismatch")
+        if not rank_paths_accessible:
+            reasons.append("rank_paths_inaccessible")
+        if sdk_version is None:
+            reasons.append("upmem_sdk_unavailable")
+        threshold = machine_policy["background_load"]["max_load1_per_online_cpu"]
+        if initial_load_per_cpu is None or initial_load_per_cpu > threshold:
+            reasons.append("initial_background_load_exceeds_threshold")
+
+    return {
+        "machine_preflight_passed": not reasons,
+        "machine_preflight_reasons": tuple(reasons),
+        "checked_at_utc": checked_at,
+        "operator_exclusivity_attested": exclusivity_attested,
+        "exclusivity_attestation_mode": machine_policy["machine_exclusivity"]["mode"]
+        if isinstance(machine_policy["machine_exclusivity"], Mapping)
+        else machine_policy["machine_exclusivity"],
+        "exclusivity_attestation_recorded_at_utc": (
+            checked_at if exclusivity_attested else None
+        ),
+        "numa_attested": numa_attested,
+        "numa_attestation_mode": machine_policy["numa_policy"]["mode"]
+        if isinstance(machine_policy["numa_policy"], Mapping)
+        else machine_policy["numa_policy"],
+        "numa_attestation_recorded_at_utc": checked_at if numa_attested else None,
+        "governor_verified": governors == ["performance"],
+        "observed_cpu_governors": governors,
+        "affinity_verified": (
+            tuple(affinity) == tuple(machine_policy["affinity"]["expected_cpus"])
+            if isinstance(machine_policy["affinity"], Mapping)
+            and machine_policy["affinity"]["expected_cpus"] is not None
+            and affinity is not None
+            else False
+        ),
+        "observed_affinity": affinity,
+        "observed_numa_nodes": numa_nodes,
+        "rank_paths_accessible": rank_paths_accessible,
+        "requested_rank_paths": rank_paths,
+        "sdk_version": sdk_version,
+        "initial_load1": initial_load1,
+        "online_logical_cpu_count": online_cpu_count,
+        "initial_load1_per_online_cpu": initial_load_per_cpu,
+        "background_load_preflight_passed": (
+            initial_load_per_cpu
+            <= machine_policy["background_load"]["max_load1_per_online_cpu"]
+            if physical_performance and initial_load_per_cpu is not None
+            else not physical_performance
+        ),
+    }
 
 
 def _tool_version(command: tuple[str, ...]) -> str | None:
@@ -814,7 +939,8 @@ def _run_config(
         _require_physical_opt_in(allow_physical=allow_physical)
 
     target = _prepare_output(output)
-    env_id, env_facts = _environment(config)
+    machine_preflight = _machine_preflight(config)
+    env_id, env_facts = _environment(config, machine_preflight)
     run_id = new_run_id()
     manifest = {
         "schema_version": "evidence_manifest_v2",
@@ -846,6 +972,14 @@ def _run_config(
     # Direct-only campaigns still need the complete three-file artifact set.
     (target / "samples.jsonl").touch()
     (target / "sessions.jsonl").touch()
+
+    if machine_preflight["machine_preflight_passed"] is False:
+        finalize_artifacts(target, status="failed")
+        return {
+            "status": "failed",
+            "artifact": str(target / "manifest.json"),
+            "run_id": run_id,
+        }
 
     jobs: dict[str, SimulationJob] = {}
     named_plans: dict[

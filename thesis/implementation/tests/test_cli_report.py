@@ -681,6 +681,61 @@ def test_block_cooldown_occurs_once_after_each_nonfinal_block(
     assert calls == [0.25]
 
 
+def test_physical_machine_preflight_records_static_admission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = load_experiment_config(ROOT / "configs" / "tn_benchmark_physical.yml")
+    monkeypatch.setenv("QUANTUM_BENCH_EXCLUSIVITY_ATTESTED", "1")
+    monkeypatch.setenv("QUANTUM_BENCH_NUMA_ATTESTED", "1")
+    monkeypatch.setattr(cli, "_observed_affinity", lambda: [0])
+    monkeypatch.setattr(cli, "_cpu_governors", lambda: ["performance"])
+    monkeypatch.setattr(cli, "_numa_nodes", lambda: ["node0"])
+    monkeypatch.setattr(
+        cli, "_rank_paths_accessible", lambda paths: paths == ("/dev/dpu_rank0",)
+    )
+    monkeypatch.setattr(cli, "_tool_version", lambda command: "2023.1")
+    monkeypatch.setattr(cli, "_background_load_1m", lambda: 1.0)
+    monkeypatch.setattr(cli, "_online_logical_cpu_count", lambda: 8)
+    monkeypatch.setattr(cli, "_utc_now", lambda: "2026-08-26T12:00:00Z")
+
+    facts = cli._machine_preflight(config)
+
+    assert facts["machine_preflight_passed"] is True
+    assert facts["machine_preflight_reasons"] == ()
+    assert facts["initial_load1_per_online_cpu"] == 0.125
+    assert facts["exclusivity_attestation_recorded_at_utc"] == "2026-08-26T12:00:00Z"
+
+
+def test_physical_machine_preflight_failure_finalizes_without_attempts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UPMEM_ALLOW_PHYSICAL_HARDWARE", "1")
+    monkeypatch.setattr(
+        cli,
+        "_machine_preflight",
+        lambda config: {
+            "machine_preflight_passed": False,
+            "machine_preflight_reasons": ("rank_paths_inaccessible",),
+        },
+    )
+
+    result = cli.run_command(
+        str(ROOT / "configs" / "tn_benchmark_physical.yml"),
+        str(tmp_path / "preflight-failure"),
+        allow_physical=True,
+    )
+
+    assert result["status"] == "failed"
+    root = tmp_path / "preflight-failure"
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "failed"
+    assert manifest["configuration"]["environment"]["machine_preflight"][
+        "machine_preflight_reasons"
+    ] == ["rank_paths_inaccessible"]
+    assert (root / "samples.jsonl").read_text(encoding="utf-8") == ""
+    assert (root / "sessions.jsonl").read_text(encoding="utf-8") == ""
+
+
 def test_physical_collection_admission_requires_useful_dpu_and_tasklet_work() -> None:
     def work_unit(*, dpu: int, m_size: int = 8) -> UpmemWorkUnit:
         return UpmemWorkUnit(
