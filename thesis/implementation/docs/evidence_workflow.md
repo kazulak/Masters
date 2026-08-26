@@ -181,3 +181,18 @@ one requested/allocated/active DPU and tasklet, verified release and binary
 identity, startup/execution resource admission, output hashes, policy replay,
 and float32 accuracy qualification. Archive a successful run with the same
 script before creating the later physical-qualification tag and release.
+
+The later mixed scaling diagnostic must first pass the committed source-only
+selection check. `configs/m7c_workload_selection.json` records the candidate
+circuits, exact greedy paths, semantic/logical identities, topology-specific
+physical plans, dominant-work admission, transfer estimates, and WRAM-panel
+movement formulas. It selects `quantization_stress` at 18 qubits and two
+layers as the primary controlled workload and `ghz_chain` at 18 qubits as a
+structurally different confirmation. The record is generated without opening a
+session and must agree with the selected diagnostic config:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python scripts/select_m7c_workload.py --check \
+  configs/m7c_workload_selection.json \
+  --config configs/tn_benchmark_physical_scaling_diagnostic.yml
+```

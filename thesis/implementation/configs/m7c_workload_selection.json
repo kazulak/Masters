@@ -1,0 +1,3472 @@
+{
+  "candidates": [
+    {
+      "candidate_id": "quantization_stress_16q_l2",
+      "candidate_role": "reserve",
+      "circuit": {
+        "kind": "builtin",
+        "name": "quantization_stress",
+        "parameters": {
+          "n_qubits": 16,
+          "repeat_layers": 2
+        },
+        "query": "pre_measurement_statevector"
+      },
+      "final_output_elements": 65536,
+      "host_reduce_input_count": 0,
+      "host_reduce_node_count": 0,
+      "logical_plan_id": "d489edba75d22a96543ee1960bb4b800922f3240de64b4b60327ebd5eae70e12",
+      "peak_intermediate_estimate": 65536,
+      "planner": {
+        "configuration": {
+          "engine": "opt_einsum",
+          "max_repeats": 1,
+          "mode": "greedy",
+          "seed": 0
+        },
+        "path_pairs": [
+          [
+            0,
+            16
+          ],
+          [
+            0,
+            15
+          ],
+          [
+            0,
+            14
+          ],
+          [
+            0,
+            13
+          ],
+          [
+            0,
+            12
+          ],
+          [
+            0,
+            11
+          ],
+          [
+            0,
+            10
+          ],
+          [
+            0,
+            9
+          ],
+          [
+            0,
+            8
+          ],
+          [
+            0,
+            7
+          ],
+          [
+            0,
+            6
+          ],
+          [
+            0,
+            5
+          ],
+          [
+            0,
+            4
+          ],
+          [
+            0,
+            3
+          ],
+          [
+            0,
+            2
+          ],
+          [
+            0,
+            1
+          ],
+          [
+            0,
+            16
+          ],
+          [
+            92,
+            108
+          ],
+          [
+            1,
+            15
+          ],
+          [
+            91,
+            106
+          ],
+          [
+            1,
+            14
+          ],
+          [
+            89,
+            104
+          ],
+          [
+            1,
+            13
+          ],
+          [
+            87,
+            102
+          ],
+          [
+            1,
+            12
+          ],
+          [
+            85,
+            100
+          ],
+          [
+            1,
+            11
+          ],
+          [
+            83,
+            98
+          ],
+          [
+            1,
+            10
+          ],
+          [
+            81,
+            96
+          ],
+          [
+            1,
+            9
+          ],
+          [
+            79,
+            94
+          ],
+          [
+            1,
+            8
+          ],
+          [
+            77,
+            92
+          ],
+          [
+            1,
+            7
+          ],
+          [
+            75,
+            90
+          ],
+          [
+            1,
+            6
+          ],
+          [
+            73,
+            88
+          ],
+          [
+            1,
+            5
+          ],
+          [
+            71,
+            86
+          ],
+          [
+            1,
+            4
+          ],
+          [
+            69,
+            84
+          ],
+          [
+            1,
+            3
+          ],
+          [
+            67,
+            82
+          ],
+          [
+            1,
+            2
+          ],
+          [
+            65,
+            80
+          ],
+          [
+            1,
+            17
+          ],
+          [
+            1,
+            16
+          ],
+          [
+            1,
+            15
+          ],
+          [
+            1,
+            14
+          ],
+          [
+            1,
+            13
+          ],
+          [
+            1,
+            12
+          ],
+          [
+            1,
+            11
+          ],
+          [
+            1,
+            10
+          ],
+          [
+            1,
+            9
+          ],
+          [
+            1,
+            8
+          ],
+          [
+            1,
+            7
+          ],
+          [
+            1,
+            6
+          ],
+          [
+            1,
+            5
+          ],
+          [
+            1,
+            4
+          ],
+          [
+            1,
+            3
+          ],
+          [
+            1,
+            2
+          ],
+          [
+            1,
+            16
+          ],
+          [
+            1,
+            15
+          ],
+          [
+            1,
+            14
+          ],
+          [
+            1,
+            13
+          ],
+          [
+            1,
+            12
+          ],
+          [
+            1,
+            11
+          ],
+          [
+            1,
+            10
+          ],
+          [
+            1,
+            9
+          ],
+          [
+            1,
+            8
+          ],
+          [
+            1,
+            7
+          ],
+          [
+            1,
+            6
+          ],
+          [
+            1,
+            5
+          ],
+          [
+            1,
+            4
+          ],
+          [
+            1,
+            3
+          ],
+          [
+            1,
+            2
+          ],
+          [
+            0,
+            2
+          ],
+          [
+            1,
+            47
+          ],
+          [
+            15,
+            31
+          ],
+          [
+            16,
+            30
+          ],
+          [
+            16,
+            29
+          ],
+          [
+            16,
+            28
+          ],
+          [
+            16,
+            27
+          ],
+          [
+            16,
+            26
+          ],
+          [
+            16,
+            25
+          ],
+          [
+            16,
+            24
+          ],
+          [
+            16,
+            23
+          ],
+          [
+            16,
+            22
+          ],
+          [
+            16,
+            21
+          ],
+          [
+            16,
+            20
+          ],
+          [
+            16,
+            19
+          ],
+          [
+            16,
+            18
+          ],
+          [
+            0,
+            17
+          ],
+          [
+            0,
+            16
+          ],
+          [
+            13,
+            15
+          ],
+          [
+            28,
+            29
+          ],
+          [
+            13,
+            27
+          ],
+          [
+            0,
+            26
+          ],
+          [
+            12,
+            26
+          ],
+          [
+            0,
+            12
+          ],
+          [
+            23,
+            24
+          ],
+          [
+            0,
+            11
+          ],
+          [
+            21,
+            22
+          ],
+          [
+            0,
+            10
+          ],
+          [
+            0,
+            9
+          ],
+          [
+            18,
+            19
+          ],
+          [
+            0,
+            8
+          ],
+          [
+            0,
+            7
+          ],
+          [
+            15,
+            16
+          ],
+          [
+            0,
+            6
+          ],
+          [
+            0,
+            5
+          ],
+          [
+            12,
+            13
+          ],
+          [
+            0,
+            4
+          ],
+          [
+            0,
+            3
+          ],
+          [
+            9,
+            10
+          ],
+          [
+            0,
+            2
+          ],
+          [
+            0,
+            1
+          ],
+          [
+            0,
+            7
+          ],
+          [
+            5,
+            6
+          ],
+          [
+            4,
+            5
+          ],
+          [
+            3,
+            4
+          ],
+          [
+            2,
+            3
+          ],
+          [
+            1,
+            2
+          ],
+          [
+            0,
+            1
+          ]
+        ],
+        "provenance": {
+          "cost_basis": "opt_einsum_internal",
+          "dependency_versions": {
+            "opt_einsum": "3.4.0"
+          },
+          "largest_intermediate": 65536,
+          "naive_flops": 1.150932539398086e+49,
+          "objective": "opt_einsum_contract_path",
+          "optimize_mode": "greedy",
+          "optimized_flops": 707672.0,
+          "planner_config": {
+            "engine": "opt_einsum",
+            "optimize": "greedy"
+          },
+          "planner_config_hash": "3e9c4883303310615c4413bf2fc51ccbc0e161f61c00cf5911d50ae2188182d1",
+          "planner_engine": "opt_einsum",
+          "planner_id": "opt_einsum.greedy",
+          "planner_kind": "external_path_optimizer"
+        }
+      },
+      "problem_id": "b8d414e98cb2e26e8db41ab4bb0d76c0867b7976c05d7b28c7f8d85d2dd400e4",
+      "selection_eligible": true,
+      "selection_rejection_reason": null,
+      "tensor_network_structure_id": "4dafee644f6d5425b94a4566a21fad311bf48b54ac22e5257831a18f6821987e",
+      "topologies": {
+        "dpu1_tasklet1": {
+          "collection_resource_admission_passed": true,
+          "estimated_host_d2h_bytes_four_real_products": 1426400,
+          "estimated_host_h2d_bytes_four_real_products": 409568,
+          "k_size_distribution": [
+            {
+              "count": 110,
+              "value": 2
+            },
+            {
+              "count": 33,
+              "value": 4
+            }
+          ],
+          "m_size_distribution": [
+            {
+              "count": 31,
+              "value": 1
+            },
+            {
+              "count": 50,
+              "value": 2
+            },
+            {
+              "count": 18,
+              "value": 4
+            },
+            {
+              "count": 21,
+              "value": 8
+            },
+            {
+              "count": 23,
+              "value": 16
+            }
+          ],
+          "n_size_distribution": [
+            {
+              "count": 2,
+              "value": 1
+            },
+            {
+              "count": 48,
+              "value": 2
+            },
+            {
+              "count": 3,
+              "value": 4
+            },
+            {
+              "count": 67,
+              "value": 8
+            },
+            {
+              "count": 1,
+              "value": 16
+            },
+            {
+              "count": 1,
+              "value": 64
+            },
+            {
+              "count": 21,
+              "value": 256
+            }
+          ],
+          "physical_plan_id": "887b537318b498a02ed0bf0d1082e4eef8b37d7fb6e60662cdc2c2e0c52ec35a",
+          "resource_admission": {
+            "arithmetic_weighted_dpu_slot_utilization": 1.0,
+            "arithmetic_weighted_tasklet_utilization": 1.0,
+            "collection_resource_admission_passed": true,
+            "dominant_wave_allocated_slots": 1,
+            "dominant_wave_dpu_slots": 1,
+            "dominant_wave_useful_slots": 1,
+            "dominant_wave_utilization": 1.0,
+            "dominant_work_stage_id": "contract_batch:contract_122",
+            "dominant_work_wave": 0,
+            "dominant_work_wave_allocated_dpu_slots": 1,
+            "dominant_work_wave_arithmetic_work": 16384,
+            "dominant_work_wave_populated_dpu_slots": 1,
+            "dominant_work_wave_tasklet_row_sufficiency_passed": true,
+            "dominant_work_wave_utilization": 1.0,
+            "fully_populated_wave_count": 143,
+            "tasklet_row_sufficiency_passed": true,
+            "total_wave_count": 143
+          },
+          "topology": {
+            "dpu_count": 1,
+            "rank_count": 1,
+            "tasklets_per_dpu": 1
+          },
+          "wave_arithmetic_work_distribution": [
+            {
+              "arithmetic_work": 4,
+              "count": 17,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 8,
+              "count": 17,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 16,
+              "count": 16,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 32,
+              "count": 49,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 64,
+              "count": 13,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 128,
+              "count": 2,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 256,
+              "count": 6,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 1024,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 4096,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 16384,
+              "count": 21,
+              "useful_dpu_slots": 1
+            }
+          ],
+          "wave_arithmetic_work_sha256": "6c7c3b235141bfd3f90ec56c1748a65de7322d8f909d35f359725f99f050b37d",
+          "wave_count": 143,
+          "work_unit_count": 143,
+          "wram_panel_algorithm_facts": {
+            "a_read_aligned_span_bytes_estimate": 188960,
+            "a_read_helper_calls_exact": 12428,
+            "a_read_payload_bytes_exact": 188960,
+            "b_read_aligned_span_bytes_estimate": 372224,
+            "b_read_helper_calls_exact": 3776,
+            "b_read_payload_bytes_exact": 372160,
+            "barrier_events_exact": 4616,
+            "barrier_tasklet_calls_exact": 4616,
+            "c_write_aligned_span_bytes_estimate": 1426496,
+            "c_write_helper_calls_exact": 12428,
+            "c_write_payload_bytes_exact": 1426400,
+            "lane_count": 4,
+            "mram_aligned_bytes_scope": "geometric_aligned_span_estimate",
+            "mram_aligned_transfer_bytes_estimate": 1987680,
+            "mram_helper_count_scope": "source_level_helper_calls",
+            "mram_requested_payload_bytes_exact": 1987520,
+            "operand_read_helper_calls_exact": 16204,
+            "origin": "wram_panel_algorithm_v1",
+            "output_partial_read_helper_calls_exact": 0,
+            "output_write_helper_calls_exact": 12428,
+            "partial_c_read_aligned_span_bytes_estimate": 0,
+            "partial_c_read_helper_calls_exact": 0,
+            "partial_c_read_payload_bytes_exact": 0,
+            "real_mac_count_exact": 1415344,
+            "wram_kernel_buffers_allocated_bytes_exact": 8864,
+            "wram_private_bytes_per_tasklet_exact": 672,
+            "wram_shared_bytes_exact": 8192
+          }
+        },
+        "dpu1_tasklet8": {
+          "collection_resource_admission_passed": true,
+          "estimated_host_d2h_bytes_four_real_products": 1426400,
+          "estimated_host_h2d_bytes_four_real_products": 409568,
+          "k_size_distribution": [
+            {
+              "count": 110,
+              "value": 2
+            },
+            {
+              "count": 33,
+              "value": 4
+            }
+          ],
+          "m_size_distribution": [
+            {
+              "count": 31,
+              "value": 1
+            },
+            {
+              "count": 50,
+              "value": 2
+            },
+            {
+              "count": 18,
+              "value": 4
+            },
+            {
+              "count": 21,
+              "value": 8
+            },
+            {
+              "count": 23,
+              "value": 16
+            }
+          ],
+          "n_size_distribution": [
+            {
+              "count": 2,
+              "value": 1
+            },
+            {
+              "count": 48,
+              "value": 2
+            },
+            {
+              "count": 3,
+              "value": 4
+            },
+            {
+              "count": 67,
+              "value": 8
+            },
+            {
+              "count": 1,
+              "value": 16
+            },
+            {
+              "count": 1,
+              "value": 64
+            },
+            {
+              "count": 21,
+              "value": 256
+            }
+          ],
+          "physical_plan_id": "90b181769e4c2c061f2b44e7fa5f61df39ac0a9354b86ad38f6b0db65c4bb3df",
+          "resource_admission": {
+            "arithmetic_weighted_dpu_slot_utilization": 1.0,
+            "arithmetic_weighted_tasklet_utilization": 0.9951135554324603,
+            "collection_resource_admission_passed": true,
+            "dominant_wave_allocated_slots": 1,
+            "dominant_wave_dpu_slots": 1,
+            "dominant_wave_useful_slots": 1,
+            "dominant_wave_utilization": 1.0,
+            "dominant_work_stage_id": "contract_batch:contract_122",
+            "dominant_work_wave": 0,
+            "dominant_work_wave_allocated_dpu_slots": 1,
+            "dominant_work_wave_arithmetic_work": 16384,
+            "dominant_work_wave_populated_dpu_slots": 1,
+            "dominant_work_wave_tasklet_row_sufficiency_passed": true,
+            "dominant_work_wave_utilization": 1.0,
+            "fully_populated_wave_count": 143,
+            "tasklet_row_sufficiency_passed": true,
+            "total_wave_count": 143
+          },
+          "topology": {
+            "dpu_count": 1,
+            "rank_count": 1,
+            "tasklets_per_dpu": 8
+          },
+          "wave_arithmetic_work_distribution": [
+            {
+              "arithmetic_work": 4,
+              "count": 17,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 8,
+              "count": 17,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 16,
+              "count": 16,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 32,
+              "count": 49,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 64,
+              "count": 13,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 128,
+              "count": 2,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 256,
+              "count": 6,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 1024,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 4096,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 16384,
+              "count": 21,
+              "useful_dpu_slots": 1
+            }
+          ],
+          "wave_arithmetic_work_sha256": "6c7c3b235141bfd3f90ec56c1748a65de7322d8f909d35f359725f99f050b37d",
+          "wave_count": 143,
+          "work_unit_count": 143,
+          "wram_panel_algorithm_facts": {
+            "a_read_aligned_span_bytes_estimate": 188960,
+            "a_read_helper_calls_exact": 12428,
+            "a_read_payload_bytes_exact": 188960,
+            "b_read_aligned_span_bytes_estimate": 372224,
+            "b_read_helper_calls_exact": 3776,
+            "b_read_payload_bytes_exact": 372160,
+            "barrier_events_exact": 4616,
+            "barrier_tasklet_calls_exact": 36928,
+            "c_write_aligned_span_bytes_estimate": 1426496,
+            "c_write_helper_calls_exact": 12428,
+            "c_write_payload_bytes_exact": 1426400,
+            "lane_count": 4,
+            "mram_aligned_bytes_scope": "geometric_aligned_span_estimate",
+            "mram_aligned_transfer_bytes_estimate": 1987680,
+            "mram_helper_count_scope": "source_level_helper_calls",
+            "mram_requested_payload_bytes_exact": 1987520,
+            "operand_read_helper_calls_exact": 16204,
+            "origin": "wram_panel_algorithm_v1",
+            "output_partial_read_helper_calls_exact": 0,
+            "output_write_helper_calls_exact": 12428,
+            "partial_c_read_aligned_span_bytes_estimate": 0,
+            "partial_c_read_helper_calls_exact": 0,
+            "partial_c_read_payload_bytes_exact": 0,
+            "real_mac_count_exact": 1415344,
+            "wram_kernel_buffers_allocated_bytes_exact": 13568,
+            "wram_private_bytes_per_tasklet_exact": 672,
+            "wram_shared_bytes_exact": 8192
+          }
+        },
+        "dpu2_tasklet8": {
+          "collection_resource_admission_passed": true,
+          "estimated_host_d2h_bytes_four_real_products": 1426400,
+          "estimated_host_h2d_bytes_four_real_products": 409568,
+          "k_size_distribution": [
+            {
+              "count": 110,
+              "value": 2
+            },
+            {
+              "count": 33,
+              "value": 4
+            }
+          ],
+          "m_size_distribution": [
+            {
+              "count": 31,
+              "value": 1
+            },
+            {
+              "count": 50,
+              "value": 2
+            },
+            {
+              "count": 18,
+              "value": 4
+            },
+            {
+              "count": 21,
+              "value": 8
+            },
+            {
+              "count": 23,
+              "value": 16
+            }
+          ],
+          "n_size_distribution": [
+            {
+              "count": 2,
+              "value": 1
+            },
+            {
+              "count": 48,
+              "value": 2
+            },
+            {
+              "count": 3,
+              "value": 4
+            },
+            {
+              "count": 67,
+              "value": 8
+            },
+            {
+              "count": 1,
+              "value": 16
+            },
+            {
+              "count": 1,
+              "value": 64
+            },
+            {
+              "count": 21,
+              "value": 256
+            }
+          ],
+          "physical_plan_id": "a51e8269d9cd064d14f8c7540ea899eb12b65e1cceca3007da1677ae40fcc6b4",
+          "resource_admission": {
+            "arithmetic_weighted_dpu_slot_utilization": 0.9630393741733458,
+            "arithmetic_weighted_tasklet_utilization": 0.9951135554324603,
+            "collection_resource_admission_passed": true,
+            "dominant_wave_allocated_slots": 2,
+            "dominant_wave_dpu_slots": 2,
+            "dominant_wave_useful_slots": 2,
+            "dominant_wave_utilization": 1.0,
+            "dominant_work_stage_id": "contract_batch:contract_123",
+            "dominant_work_wave": 0,
+            "dominant_work_wave_allocated_dpu_slots": 2,
+            "dominant_work_wave_arithmetic_work": 32768,
+            "dominant_work_wave_populated_dpu_slots": 2,
+            "dominant_work_wave_tasklet_row_sufficiency_passed": true,
+            "dominant_work_wave_utilization": 1.0,
+            "fully_populated_wave_count": 10,
+            "tasklet_row_sufficiency_passed": true,
+            "total_wave_count": 133
+          },
+          "topology": {
+            "dpu_count": 2,
+            "rank_count": 1,
+            "tasklets_per_dpu": 8
+          },
+          "wave_arithmetic_work_distribution": [
+            {
+              "arithmetic_work": 4,
+              "count": 17,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 8,
+              "count": 17,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 16,
+              "count": 16,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 32,
+              "count": 49,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 64,
+              "count": 13,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 128,
+              "count": 2,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 256,
+              "count": 6,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 1024,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 4096,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 16384,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 32768,
+              "count": 10,
+              "useful_dpu_slots": 2
+            }
+          ],
+          "wave_arithmetic_work_sha256": "591d0392a5cabbb1ad98f3ce60ffb23eab63c010ffcd1efe3402468a119a8f05",
+          "wave_count": 133,
+          "work_unit_count": 143,
+          "wram_panel_algorithm_facts": {
+            "a_read_aligned_span_bytes_estimate": 188960,
+            "a_read_helper_calls_exact": 12428,
+            "a_read_payload_bytes_exact": 188960,
+            "b_read_aligned_span_bytes_estimate": 372224,
+            "b_read_helper_calls_exact": 3776,
+            "b_read_payload_bytes_exact": 372160,
+            "barrier_events_exact": 4616,
+            "barrier_tasklet_calls_exact": 36928,
+            "c_write_aligned_span_bytes_estimate": 1426496,
+            "c_write_helper_calls_exact": 12428,
+            "c_write_payload_bytes_exact": 1426400,
+            "lane_count": 4,
+            "mram_aligned_bytes_scope": "geometric_aligned_span_estimate",
+            "mram_aligned_transfer_bytes_estimate": 1987680,
+            "mram_helper_count_scope": "source_level_helper_calls",
+            "mram_requested_payload_bytes_exact": 1987520,
+            "operand_read_helper_calls_exact": 16204,
+            "origin": "wram_panel_algorithm_v1",
+            "output_partial_read_helper_calls_exact": 0,
+            "output_write_helper_calls_exact": 12428,
+            "partial_c_read_aligned_span_bytes_estimate": 0,
+            "partial_c_read_helper_calls_exact": 0,
+            "partial_c_read_payload_bytes_exact": 0,
+            "real_mac_count_exact": 1415344,
+            "wram_kernel_buffers_allocated_bytes_exact": 13568,
+            "wram_private_bytes_per_tasklet_exact": 672,
+            "wram_shared_bytes_exact": 8192
+          }
+        },
+        "dpu4_tasklet8": {
+          "collection_resource_admission_passed": true,
+          "estimated_host_d2h_bytes_four_real_products": 1426400,
+          "estimated_host_h2d_bytes_four_real_products": 409568,
+          "k_size_distribution": [
+            {
+              "count": 110,
+              "value": 2
+            },
+            {
+              "count": 33,
+              "value": 4
+            }
+          ],
+          "m_size_distribution": [
+            {
+              "count": 31,
+              "value": 1
+            },
+            {
+              "count": 50,
+              "value": 2
+            },
+            {
+              "count": 18,
+              "value": 4
+            },
+            {
+              "count": 21,
+              "value": 8
+            },
+            {
+              "count": 23,
+              "value": 16
+            }
+          ],
+          "n_size_distribution": [
+            {
+              "count": 2,
+              "value": 1
+            },
+            {
+              "count": 48,
+              "value": 2
+            },
+            {
+              "count": 3,
+              "value": 4
+            },
+            {
+              "count": 67,
+              "value": 8
+            },
+            {
+              "count": 1,
+              "value": 16
+            },
+            {
+              "count": 1,
+              "value": 64
+            },
+            {
+              "count": 21,
+              "value": 256
+            }
+          ],
+          "physical_plan_id": "97127a116de314d294458b0892be5ae4f7bce7a46ae690cc13d55260e9414497",
+          "resource_admission": {
+            "arithmetic_weighted_dpu_slot_utilization": 0.9445590612600188,
+            "arithmetic_weighted_tasklet_utilization": 0.9951135554324603,
+            "collection_resource_admission_passed": true,
+            "dominant_wave_allocated_slots": 4,
+            "dominant_wave_dpu_slots": 4,
+            "dominant_wave_useful_slots": 4,
+            "dominant_wave_utilization": 1.0,
+            "dominant_work_stage_id": "contract_batch:contract_123",
+            "dominant_work_wave": 0,
+            "dominant_work_wave_allocated_dpu_slots": 4,
+            "dominant_work_wave_arithmetic_work": 65536,
+            "dominant_work_wave_populated_dpu_slots": 4,
+            "dominant_work_wave_tasklet_row_sufficiency_passed": true,
+            "dominant_work_wave_utilization": 1.0,
+            "fully_populated_wave_count": 5,
+            "tasklet_row_sufficiency_passed": true,
+            "total_wave_count": 128
+          },
+          "topology": {
+            "dpu_count": 4,
+            "rank_count": 1,
+            "tasklets_per_dpu": 8
+          },
+          "wave_arithmetic_work_distribution": [
+            {
+              "arithmetic_work": 4,
+              "count": 17,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 8,
+              "count": 17,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 16,
+              "count": 16,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 32,
+              "count": 49,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 64,
+              "count": 13,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 128,
+              "count": 2,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 256,
+              "count": 6,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 1024,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 4096,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 16384,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 65536,
+              "count": 5,
+              "useful_dpu_slots": 4
+            }
+          ],
+          "wave_arithmetic_work_sha256": "c85ba994749ec352e631cd030b18f752eda5862e403659ceb5e83fa8afe863c2",
+          "wave_count": 128,
+          "work_unit_count": 143,
+          "wram_panel_algorithm_facts": {
+            "a_read_aligned_span_bytes_estimate": 188960,
+            "a_read_helper_calls_exact": 12428,
+            "a_read_payload_bytes_exact": 188960,
+            "b_read_aligned_span_bytes_estimate": 372224,
+            "b_read_helper_calls_exact": 3776,
+            "b_read_payload_bytes_exact": 372160,
+            "barrier_events_exact": 4616,
+            "barrier_tasklet_calls_exact": 36928,
+            "c_write_aligned_span_bytes_estimate": 1426496,
+            "c_write_helper_calls_exact": 12428,
+            "c_write_payload_bytes_exact": 1426400,
+            "lane_count": 4,
+            "mram_aligned_bytes_scope": "geometric_aligned_span_estimate",
+            "mram_aligned_transfer_bytes_estimate": 1987680,
+            "mram_helper_count_scope": "source_level_helper_calls",
+            "mram_requested_payload_bytes_exact": 1987520,
+            "operand_read_helper_calls_exact": 16204,
+            "origin": "wram_panel_algorithm_v1",
+            "output_partial_read_helper_calls_exact": 0,
+            "output_write_helper_calls_exact": 12428,
+            "partial_c_read_aligned_span_bytes_estimate": 0,
+            "partial_c_read_helper_calls_exact": 0,
+            "partial_c_read_payload_bytes_exact": 0,
+            "real_mac_count_exact": 1415344,
+            "wram_kernel_buffers_allocated_bytes_exact": 13568,
+            "wram_private_bytes_per_tasklet_exact": 672,
+            "wram_shared_bytes_exact": 8192
+          }
+        }
+      }
+    },
+    {
+      "candidate_id": "quantization_stress_18q_l2",
+      "candidate_role": "primary_candidate",
+      "circuit": {
+        "kind": "builtin",
+        "name": "quantization_stress",
+        "parameters": {
+          "n_qubits": 18,
+          "repeat_layers": 2
+        },
+        "query": "pre_measurement_statevector"
+      },
+      "final_output_elements": 262144,
+      "host_reduce_input_count": 0,
+      "host_reduce_node_count": 0,
+      "logical_plan_id": "d504919e20d95bac608dd906d46abb122f9680873679710b0584e71981648fb5",
+      "peak_intermediate_estimate": 262144,
+      "planner": {
+        "configuration": {
+          "engine": "opt_einsum",
+          "max_repeats": 1,
+          "mode": "greedy",
+          "seed": 0
+        },
+        "path_pairs": [
+          [
+            0,
+            18
+          ],
+          [
+            0,
+            17
+          ],
+          [
+            0,
+            16
+          ],
+          [
+            0,
+            15
+          ],
+          [
+            0,
+            14
+          ],
+          [
+            0,
+            13
+          ],
+          [
+            0,
+            12
+          ],
+          [
+            0,
+            11
+          ],
+          [
+            0,
+            10
+          ],
+          [
+            0,
+            9
+          ],
+          [
+            0,
+            8
+          ],
+          [
+            0,
+            7
+          ],
+          [
+            0,
+            6
+          ],
+          [
+            0,
+            5
+          ],
+          [
+            0,
+            4
+          ],
+          [
+            0,
+            3
+          ],
+          [
+            0,
+            2
+          ],
+          [
+            0,
+            1
+          ],
+          [
+            0,
+            18
+          ],
+          [
+            104,
+            122
+          ],
+          [
+            1,
+            17
+          ],
+          [
+            103,
+            120
+          ],
+          [
+            1,
+            16
+          ],
+          [
+            101,
+            118
+          ],
+          [
+            1,
+            15
+          ],
+          [
+            99,
+            116
+          ],
+          [
+            1,
+            14
+          ],
+          [
+            97,
+            114
+          ],
+          [
+            1,
+            13
+          ],
+          [
+            95,
+            112
+          ],
+          [
+            1,
+            12
+          ],
+          [
+            93,
+            110
+          ],
+          [
+            1,
+            11
+          ],
+          [
+            91,
+            108
+          ],
+          [
+            1,
+            10
+          ],
+          [
+            89,
+            106
+          ],
+          [
+            1,
+            9
+          ],
+          [
+            87,
+            104
+          ],
+          [
+            1,
+            8
+          ],
+          [
+            85,
+            102
+          ],
+          [
+            1,
+            7
+          ],
+          [
+            83,
+            100
+          ],
+          [
+            1,
+            6
+          ],
+          [
+            81,
+            98
+          ],
+          [
+            1,
+            5
+          ],
+          [
+            79,
+            96
+          ],
+          [
+            1,
+            4
+          ],
+          [
+            77,
+            94
+          ],
+          [
+            1,
+            3
+          ],
+          [
+            75,
+            92
+          ],
+          [
+            1,
+            2
+          ],
+          [
+            73,
+            90
+          ],
+          [
+            1,
+            19
+          ],
+          [
+            1,
+            18
+          ],
+          [
+            1,
+            17
+          ],
+          [
+            1,
+            16
+          ],
+          [
+            1,
+            15
+          ],
+          [
+            1,
+            14
+          ],
+          [
+            1,
+            13
+          ],
+          [
+            1,
+            12
+          ],
+          [
+            1,
+            11
+          ],
+          [
+            1,
+            10
+          ],
+          [
+            1,
+            9
+          ],
+          [
+            1,
+            8
+          ],
+          [
+            1,
+            7
+          ],
+          [
+            1,
+            6
+          ],
+          [
+            1,
+            5
+          ],
+          [
+            1,
+            4
+          ],
+          [
+            1,
+            3
+          ],
+          [
+            1,
+            2
+          ],
+          [
+            1,
+            18
+          ],
+          [
+            1,
+            17
+          ],
+          [
+            1,
+            16
+          ],
+          [
+            1,
+            15
+          ],
+          [
+            1,
+            14
+          ],
+          [
+            1,
+            13
+          ],
+          [
+            1,
+            12
+          ],
+          [
+            1,
+            11
+          ],
+          [
+            1,
+            10
+          ],
+          [
+            1,
+            9
+          ],
+          [
+            1,
+            8
+          ],
+          [
+            1,
+            7
+          ],
+          [
+            1,
+            6
+          ],
+          [
+            1,
+            5
+          ],
+          [
+            1,
+            4
+          ],
+          [
+            1,
+            3
+          ],
+          [
+            1,
+            2
+          ],
+          [
+            0,
+            2
+          ],
+          [
+            1,
+            53
+          ],
+          [
+            17,
+            35
+          ],
+          [
+            18,
+            34
+          ],
+          [
+            18,
+            33
+          ],
+          [
+            18,
+            32
+          ],
+          [
+            18,
+            31
+          ],
+          [
+            18,
+            30
+          ],
+          [
+            18,
+            29
+          ],
+          [
+            18,
+            28
+          ],
+          [
+            18,
+            27
+          ],
+          [
+            18,
+            26
+          ],
+          [
+            18,
+            25
+          ],
+          [
+            18,
+            24
+          ],
+          [
+            18,
+            23
+          ],
+          [
+            18,
+            22
+          ],
+          [
+            18,
+            21
+          ],
+          [
+            18,
+            20
+          ],
+          [
+            0,
+            19
+          ],
+          [
+            0,
+            18
+          ],
+          [
+            15,
+            17
+          ],
+          [
+            32,
+            33
+          ],
+          [
+            15,
+            31
+          ],
+          [
+            0,
+            30
+          ],
+          [
+            14,
+            30
+          ],
+          [
+            0,
+            14
+          ],
+          [
+            27,
+            28
+          ],
+          [
+            0,
+            13
+          ],
+          [
+            25,
+            26
+          ],
+          [
+            0,
+            12
+          ],
+          [
+            0,
+            11
+          ],
+          [
+            22,
+            23
+          ],
+          [
+            0,
+            10
+          ],
+          [
+            0,
+            9
+          ],
+          [
+            19,
+            20
+          ],
+          [
+            0,
+            8
+          ],
+          [
+            0,
+            7
+          ],
+          [
+            16,
+            17
+          ],
+          [
+            0,
+            6
+          ],
+          [
+            0,
+            5
+          ],
+          [
+            13,
+            14
+          ],
+          [
+            0,
+            4
+          ],
+          [
+            0,
+            3
+          ],
+          [
+            10,
+            11
+          ],
+          [
+            0,
+            2
+          ],
+          [
+            0,
+            1
+          ],
+          [
+            0,
+            8
+          ],
+          [
+            6,
+            7
+          ],
+          [
+            5,
+            6
+          ],
+          [
+            4,
+            5
+          ],
+          [
+            3,
+            4
+          ],
+          [
+            2,
+            3
+          ],
+          [
+            1,
+            2
+          ],
+          [
+            0,
+            1
+          ]
+        ],
+        "provenance": {
+          "cost_basis": "opt_einsum_internal",
+          "dependency_versions": {
+            "opt_einsum": "3.4.0"
+          },
+          "largest_intermediate": 262144,
+          "naive_flops": 1.3600897925184764e+55,
+          "objective": "opt_einsum_contract_path",
+          "optimize_mode": "greedy",
+          "optimized_flops": 2806088.0,
+          "planner_config": {
+            "engine": "opt_einsum",
+            "optimize": "greedy"
+          },
+          "planner_config_hash": "3e9c4883303310615c4413bf2fc51ccbc0e161f61c00cf5911d50ae2188182d1",
+          "planner_engine": "opt_einsum",
+          "planner_id": "opt_einsum.greedy",
+          "planner_kind": "external_path_optimizer"
+        }
+      },
+      "problem_id": "d816fc52d21316c43ebbad0fed5385f66efef152952edc10bbd8b6036e40f36e",
+      "selection_eligible": true,
+      "selection_rejection_reason": null,
+      "tensor_network_structure_id": "d3ead09e35217f5c7018de48f15145dd08d8aeb9f89812a0028c03c12a39ac15",
+      "topologies": {
+        "dpu1_tasklet1": {
+          "collection_resource_admission_passed": true,
+          "estimated_host_d2h_bytes_four_real_products": 5624736,
+          "estimated_host_h2d_bytes_four_real_products": 1528416,
+          "k_size_distribution": [
+            {
+              "count": 124,
+              "value": 2
+            },
+            {
+              "count": 98,
+              "value": 4
+            }
+          ],
+          "m_size_distribution": [
+            {
+              "count": 35,
+              "value": 1
+            },
+            {
+              "count": 56,
+              "value": 2
+            },
+            {
+              "count": 20,
+              "value": 4
+            },
+            {
+              "count": 24,
+              "value": 8
+            },
+            {
+              "count": 87,
+              "value": 16
+            }
+          ],
+          "n_size_distribution": [
+            {
+              "count": 2,
+              "value": 1
+            },
+            {
+              "count": 54,
+              "value": 2
+            },
+            {
+              "count": 3,
+              "value": 4
+            },
+            {
+              "count": 76,
+              "value": 8
+            },
+            {
+              "count": 1,
+              "value": 16
+            },
+            {
+              "count": 1,
+              "value": 64
+            },
+            {
+              "count": 85,
+              "value": 256
+            }
+          ],
+          "physical_plan_id": "574438fa030a2cacb7c1434a50bfb9897adecee4ff316808977d69ba34af8c43",
+          "resource_admission": {
+            "arithmetic_weighted_dpu_slot_utilization": 1.0,
+            "arithmetic_weighted_tasklet_utilization": 1.0,
+            "collection_resource_admission_passed": true,
+            "dominant_wave_allocated_slots": 1,
+            "dominant_wave_dpu_slots": 1,
+            "dominant_wave_useful_slots": 1,
+            "dominant_wave_utilization": 1.0,
+            "dominant_work_stage_id": "contract_batch:contract_137",
+            "dominant_work_wave": 0,
+            "dominant_work_wave_allocated_dpu_slots": 1,
+            "dominant_work_wave_arithmetic_work": 16384,
+            "dominant_work_wave_populated_dpu_slots": 1,
+            "dominant_work_wave_tasklet_row_sufficiency_passed": true,
+            "dominant_work_wave_utilization": 1.0,
+            "fully_populated_wave_count": 222,
+            "tasklet_row_sufficiency_passed": true,
+            "total_wave_count": 222
+          },
+          "topology": {
+            "dpu_count": 1,
+            "rank_count": 1,
+            "tasklets_per_dpu": 1
+          },
+          "wave_arithmetic_work_distribution": [
+            {
+              "arithmetic_work": 4,
+              "count": 19,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 8,
+              "count": 19,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 16,
+              "count": 18,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 32,
+              "count": 55,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 64,
+              "count": 15,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 128,
+              "count": 2,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 256,
+              "count": 7,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 1024,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 4096,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 16384,
+              "count": 85,
+              "useful_dpu_slots": 1
+            }
+          ],
+          "wave_arithmetic_work_sha256": "bd6e09146d3c632ee1e73cf1f9594fe3d563f89352271451746562a9204f89df",
+          "wave_count": 222,
+          "work_unit_count": 222,
+          "wram_panel_algorithm_facts": {
+            "a_read_aligned_span_bytes_estimate": 715040,
+            "a_read_helper_calls_exact": 45388,
+            "a_read_payload_bytes_exact": 715040,
+            "b_read_aligned_span_bytes_estimate": 1423744,
+            "b_read_helper_calls_exact": 12096,
+            "b_read_payload_bytes_exact": 1423680,
+            "barrier_events_exact": 10096,
+            "barrier_tasklet_calls_exact": 10096,
+            "c_write_aligned_span_bytes_estimate": 5624832,
+            "c_write_helper_calls_exact": 45388,
+            "c_write_payload_bytes_exact": 5624736,
+            "lane_count": 4,
+            "mram_aligned_bytes_scope": "geometric_aligned_span_estimate",
+            "mram_aligned_transfer_bytes_estimate": 7763616,
+            "mram_helper_count_scope": "source_level_helper_calls",
+            "mram_requested_payload_bytes_exact": 7763456,
+            "operand_read_helper_calls_exact": 57484,
+            "origin": "wram_panel_algorithm_v1",
+            "output_partial_read_helper_calls_exact": 0,
+            "output_write_helper_calls_exact": 45388,
+            "partial_c_read_aligned_span_bytes_estimate": 0,
+            "partial_c_read_helper_calls_exact": 0,
+            "partial_c_read_payload_bytes_exact": 0,
+            "real_mac_count_exact": 5612176,
+            "wram_kernel_buffers_allocated_bytes_exact": 8864,
+            "wram_private_bytes_per_tasklet_exact": 672,
+            "wram_shared_bytes_exact": 8192
+          }
+        },
+        "dpu1_tasklet8": {
+          "collection_resource_admission_passed": true,
+          "estimated_host_d2h_bytes_four_real_products": 5624736,
+          "estimated_host_h2d_bytes_four_real_products": 1528416,
+          "k_size_distribution": [
+            {
+              "count": 124,
+              "value": 2
+            },
+            {
+              "count": 98,
+              "value": 4
+            }
+          ],
+          "m_size_distribution": [
+            {
+              "count": 35,
+              "value": 1
+            },
+            {
+              "count": 56,
+              "value": 2
+            },
+            {
+              "count": 20,
+              "value": 4
+            },
+            {
+              "count": 24,
+              "value": 8
+            },
+            {
+              "count": 87,
+              "value": 16
+            }
+          ],
+          "n_size_distribution": [
+            {
+              "count": 2,
+              "value": 1
+            },
+            {
+              "count": 54,
+              "value": 2
+            },
+            {
+              "count": 3,
+              "value": 4
+            },
+            {
+              "count": 76,
+              "value": 8
+            },
+            {
+              "count": 1,
+              "value": 16
+            },
+            {
+              "count": 1,
+              "value": 64
+            },
+            {
+              "count": 85,
+              "value": 256
+            }
+          ],
+          "physical_plan_id": "d8cc3207a594c610fad9da180b8ab8c68068a72779783d8b04040446003e64ed",
+          "resource_admission": {
+            "arithmetic_weighted_dpu_slot_utilization": 1.0,
+            "arithmetic_weighted_tasklet_utilization": 0.9986201430603744,
+            "collection_resource_admission_passed": true,
+            "dominant_wave_allocated_slots": 1,
+            "dominant_wave_dpu_slots": 1,
+            "dominant_wave_useful_slots": 1,
+            "dominant_wave_utilization": 1.0,
+            "dominant_work_stage_id": "contract_batch:contract_137",
+            "dominant_work_wave": 0,
+            "dominant_work_wave_allocated_dpu_slots": 1,
+            "dominant_work_wave_arithmetic_work": 16384,
+            "dominant_work_wave_populated_dpu_slots": 1,
+            "dominant_work_wave_tasklet_row_sufficiency_passed": true,
+            "dominant_work_wave_utilization": 1.0,
+            "fully_populated_wave_count": 222,
+            "tasklet_row_sufficiency_passed": true,
+            "total_wave_count": 222
+          },
+          "topology": {
+            "dpu_count": 1,
+            "rank_count": 1,
+            "tasklets_per_dpu": 8
+          },
+          "wave_arithmetic_work_distribution": [
+            {
+              "arithmetic_work": 4,
+              "count": 19,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 8,
+              "count": 19,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 16,
+              "count": 18,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 32,
+              "count": 55,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 64,
+              "count": 15,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 128,
+              "count": 2,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 256,
+              "count": 7,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 1024,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 4096,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 16384,
+              "count": 85,
+              "useful_dpu_slots": 1
+            }
+          ],
+          "wave_arithmetic_work_sha256": "bd6e09146d3c632ee1e73cf1f9594fe3d563f89352271451746562a9204f89df",
+          "wave_count": 222,
+          "work_unit_count": 222,
+          "wram_panel_algorithm_facts": {
+            "a_read_aligned_span_bytes_estimate": 715040,
+            "a_read_helper_calls_exact": 45388,
+            "a_read_payload_bytes_exact": 715040,
+            "b_read_aligned_span_bytes_estimate": 1423744,
+            "b_read_helper_calls_exact": 12096,
+            "b_read_payload_bytes_exact": 1423680,
+            "barrier_events_exact": 10096,
+            "barrier_tasklet_calls_exact": 80768,
+            "c_write_aligned_span_bytes_estimate": 5624832,
+            "c_write_helper_calls_exact": 45388,
+            "c_write_payload_bytes_exact": 5624736,
+            "lane_count": 4,
+            "mram_aligned_bytes_scope": "geometric_aligned_span_estimate",
+            "mram_aligned_transfer_bytes_estimate": 7763616,
+            "mram_helper_count_scope": "source_level_helper_calls",
+            "mram_requested_payload_bytes_exact": 7763456,
+            "operand_read_helper_calls_exact": 57484,
+            "origin": "wram_panel_algorithm_v1",
+            "output_partial_read_helper_calls_exact": 0,
+            "output_write_helper_calls_exact": 45388,
+            "partial_c_read_aligned_span_bytes_estimate": 0,
+            "partial_c_read_helper_calls_exact": 0,
+            "partial_c_read_payload_bytes_exact": 0,
+            "real_mac_count_exact": 5612176,
+            "wram_kernel_buffers_allocated_bytes_exact": 13568,
+            "wram_private_bytes_per_tasklet_exact": 672,
+            "wram_shared_bytes_exact": 8192
+          }
+        },
+        "dpu2_tasklet8": {
+          "collection_resource_admission_passed": true,
+          "estimated_host_d2h_bytes_four_real_products": 5624736,
+          "estimated_host_h2d_bytes_four_real_products": 1528416,
+          "k_size_distribution": [
+            {
+              "count": 124,
+              "value": 2
+            },
+            {
+              "count": 98,
+              "value": 4
+            }
+          ],
+          "m_size_distribution": [
+            {
+              "count": 35,
+              "value": 1
+            },
+            {
+              "count": 56,
+              "value": 2
+            },
+            {
+              "count": 20,
+              "value": 4
+            },
+            {
+              "count": 24,
+              "value": 8
+            },
+            {
+              "count": 87,
+              "value": 16
+            }
+          ],
+          "n_size_distribution": [
+            {
+              "count": 2,
+              "value": 1
+            },
+            {
+              "count": 54,
+              "value": 2
+            },
+            {
+              "count": 3,
+              "value": 4
+            },
+            {
+              "count": 76,
+              "value": 8
+            },
+            {
+              "count": 1,
+              "value": 16
+            },
+            {
+              "count": 1,
+              "value": 64
+            },
+            {
+              "count": 85,
+              "value": 256
+            }
+          ],
+          "physical_plan_id": "2fb546d01c0d426962609122becef710d5a3ad68cc73bb3280a0a7da26a54c9b",
+          "resource_admission": {
+            "arithmetic_weighted_dpu_slot_utilization": 0.9904536137141815,
+            "arithmetic_weighted_tasklet_utilization": 0.9986201430603744,
+            "collection_resource_admission_passed": true,
+            "dominant_wave_allocated_slots": 2,
+            "dominant_wave_dpu_slots": 2,
+            "dominant_wave_useful_slots": 2,
+            "dominant_wave_utilization": 1.0,
+            "dominant_work_stage_id": "contract_batch:contract_138",
+            "dominant_work_wave": 0,
+            "dominant_work_wave_allocated_dpu_slots": 2,
+            "dominant_work_wave_arithmetic_work": 32768,
+            "dominant_work_wave_populated_dpu_slots": 2,
+            "dominant_work_wave_tasklet_row_sufficiency_passed": true,
+            "dominant_work_wave_utilization": 1.0,
+            "fully_populated_wave_count": 42,
+            "tasklet_row_sufficiency_passed": true,
+            "total_wave_count": 180
+          },
+          "topology": {
+            "dpu_count": 2,
+            "rank_count": 1,
+            "tasklets_per_dpu": 8
+          },
+          "wave_arithmetic_work_distribution": [
+            {
+              "arithmetic_work": 4,
+              "count": 19,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 8,
+              "count": 19,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 16,
+              "count": 18,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 32,
+              "count": 55,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 64,
+              "count": 15,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 128,
+              "count": 2,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 256,
+              "count": 7,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 1024,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 4096,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 16384,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 32768,
+              "count": 42,
+              "useful_dpu_slots": 2
+            }
+          ],
+          "wave_arithmetic_work_sha256": "4bad6a084006f0aacc26eee9f9292c1c27021aa773d540fd7080426947d67440",
+          "wave_count": 180,
+          "work_unit_count": 222,
+          "wram_panel_algorithm_facts": {
+            "a_read_aligned_span_bytes_estimate": 715040,
+            "a_read_helper_calls_exact": 45388,
+            "a_read_payload_bytes_exact": 715040,
+            "b_read_aligned_span_bytes_estimate": 1423744,
+            "b_read_helper_calls_exact": 12096,
+            "b_read_payload_bytes_exact": 1423680,
+            "barrier_events_exact": 10096,
+            "barrier_tasklet_calls_exact": 80768,
+            "c_write_aligned_span_bytes_estimate": 5624832,
+            "c_write_helper_calls_exact": 45388,
+            "c_write_payload_bytes_exact": 5624736,
+            "lane_count": 4,
+            "mram_aligned_bytes_scope": "geometric_aligned_span_estimate",
+            "mram_aligned_transfer_bytes_estimate": 7763616,
+            "mram_helper_count_scope": "source_level_helper_calls",
+            "mram_requested_payload_bytes_exact": 7763456,
+            "operand_read_helper_calls_exact": 57484,
+            "origin": "wram_panel_algorithm_v1",
+            "output_partial_read_helper_calls_exact": 0,
+            "output_write_helper_calls_exact": 45388,
+            "partial_c_read_aligned_span_bytes_estimate": 0,
+            "partial_c_read_helper_calls_exact": 0,
+            "partial_c_read_payload_bytes_exact": 0,
+            "real_mac_count_exact": 5612176,
+            "wram_kernel_buffers_allocated_bytes_exact": 13568,
+            "wram_private_bytes_per_tasklet_exact": 672,
+            "wram_shared_bytes_exact": 8192
+          }
+        },
+        "dpu4_tasklet8": {
+          "collection_resource_admission_passed": true,
+          "estimated_host_d2h_bytes_four_real_products": 5624736,
+          "estimated_host_h2d_bytes_four_real_products": 1528416,
+          "k_size_distribution": [
+            {
+              "count": 124,
+              "value": 2
+            },
+            {
+              "count": 98,
+              "value": 4
+            }
+          ],
+          "m_size_distribution": [
+            {
+              "count": 35,
+              "value": 1
+            },
+            {
+              "count": 56,
+              "value": 2
+            },
+            {
+              "count": 20,
+              "value": 4
+            },
+            {
+              "count": 24,
+              "value": 8
+            },
+            {
+              "count": 87,
+              "value": 16
+            }
+          ],
+          "n_size_distribution": [
+            {
+              "count": 2,
+              "value": 1
+            },
+            {
+              "count": 54,
+              "value": 2
+            },
+            {
+              "count": 3,
+              "value": 4
+            },
+            {
+              "count": 76,
+              "value": 8
+            },
+            {
+              "count": 1,
+              "value": 16
+            },
+            {
+              "count": 1,
+              "value": 64
+            },
+            {
+              "count": 85,
+              "value": 256
+            }
+          ],
+          "physical_plan_id": "a2d4c9a0de41337d4e19212efc4acfdc8b2524f4bc71d8eb53702aa5bcce76d7",
+          "resource_admission": {
+            "arithmetic_weighted_dpu_slot_utilization": 0.9856804205712721,
+            "arithmetic_weighted_tasklet_utilization": 0.9986201430603744,
+            "collection_resource_admission_passed": true,
+            "dominant_wave_allocated_slots": 4,
+            "dominant_wave_dpu_slots": 4,
+            "dominant_wave_useful_slots": 4,
+            "dominant_wave_utilization": 1.0,
+            "dominant_work_stage_id": "contract_batch:contract_138",
+            "dominant_work_wave": 0,
+            "dominant_work_wave_allocated_dpu_slots": 4,
+            "dominant_work_wave_arithmetic_work": 65536,
+            "dominant_work_wave_populated_dpu_slots": 4,
+            "dominant_work_wave_tasklet_row_sufficiency_passed": true,
+            "dominant_work_wave_utilization": 1.0,
+            "fully_populated_wave_count": 21,
+            "tasklet_row_sufficiency_passed": true,
+            "total_wave_count": 159
+          },
+          "topology": {
+            "dpu_count": 4,
+            "rank_count": 1,
+            "tasklets_per_dpu": 8
+          },
+          "wave_arithmetic_work_distribution": [
+            {
+              "arithmetic_work": 4,
+              "count": 19,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 8,
+              "count": 19,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 16,
+              "count": 18,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 32,
+              "count": 55,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 64,
+              "count": 15,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 128,
+              "count": 2,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 256,
+              "count": 7,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 1024,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 4096,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 16384,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 65536,
+              "count": 21,
+              "useful_dpu_slots": 4
+            }
+          ],
+          "wave_arithmetic_work_sha256": "a8d40b2638ce5480b4cecca30bb63e1b2ef916c9c6649314fc9278ebb1cd7882",
+          "wave_count": 159,
+          "work_unit_count": 222,
+          "wram_panel_algorithm_facts": {
+            "a_read_aligned_span_bytes_estimate": 715040,
+            "a_read_helper_calls_exact": 45388,
+            "a_read_payload_bytes_exact": 715040,
+            "b_read_aligned_span_bytes_estimate": 1423744,
+            "b_read_helper_calls_exact": 12096,
+            "b_read_payload_bytes_exact": 1423680,
+            "barrier_events_exact": 10096,
+            "barrier_tasklet_calls_exact": 80768,
+            "c_write_aligned_span_bytes_estimate": 5624832,
+            "c_write_helper_calls_exact": 45388,
+            "c_write_payload_bytes_exact": 5624736,
+            "lane_count": 4,
+            "mram_aligned_bytes_scope": "geometric_aligned_span_estimate",
+            "mram_aligned_transfer_bytes_estimate": 7763616,
+            "mram_helper_count_scope": "source_level_helper_calls",
+            "mram_requested_payload_bytes_exact": 7763456,
+            "operand_read_helper_calls_exact": 57484,
+            "origin": "wram_panel_algorithm_v1",
+            "output_partial_read_helper_calls_exact": 0,
+            "output_write_helper_calls_exact": 45388,
+            "partial_c_read_aligned_span_bytes_estimate": 0,
+            "partial_c_read_helper_calls_exact": 0,
+            "partial_c_read_payload_bytes_exact": 0,
+            "real_mac_count_exact": 5612176,
+            "wram_kernel_buffers_allocated_bytes_exact": 13568,
+            "wram_private_bytes_per_tasklet_exact": 672,
+            "wram_shared_bytes_exact": 8192
+          }
+        }
+      }
+    },
+    {
+      "candidate_id": "ghz_chain_18q",
+      "candidate_role": "secondary_candidate",
+      "circuit": {
+        "kind": "builtin",
+        "name": "ghz_chain",
+        "parameters": {
+          "n_qubits": 18
+        },
+        "query": "pre_measurement_statevector"
+      },
+      "final_output_elements": 262144,
+      "host_reduce_input_count": 0,
+      "host_reduce_node_count": 0,
+      "logical_plan_id": "83da361a1f41fb6ad1126a28e4912204d26ee08f2cf5d1f2f3e6a45afa680193",
+      "peak_intermediate_estimate": 262144,
+      "planner": {
+        "configuration": {
+          "engine": "opt_einsum",
+          "max_repeats": 1,
+          "mode": "greedy",
+          "seed": 0
+        },
+        "path_pairs": [
+          [
+            1,
+            19
+          ],
+          [
+            1,
+            18
+          ],
+          [
+            1,
+            17
+          ],
+          [
+            1,
+            16
+          ],
+          [
+            1,
+            15
+          ],
+          [
+            1,
+            14
+          ],
+          [
+            1,
+            13
+          ],
+          [
+            1,
+            12
+          ],
+          [
+            1,
+            11
+          ],
+          [
+            1,
+            10
+          ],
+          [
+            1,
+            9
+          ],
+          [
+            1,
+            8
+          ],
+          [
+            1,
+            7
+          ],
+          [
+            1,
+            6
+          ],
+          [
+            1,
+            5
+          ],
+          [
+            1,
+            4
+          ],
+          [
+            1,
+            3
+          ],
+          [
+            0,
+            1
+          ],
+          [
+            0,
+            17
+          ],
+          [
+            0,
+            16
+          ],
+          [
+            0,
+            1
+          ],
+          [
+            0,
+            1
+          ],
+          [
+            0,
+            1
+          ],
+          [
+            0,
+            1
+          ],
+          [
+            0,
+            1
+          ],
+          [
+            0,
+            1
+          ],
+          [
+            0,
+            1
+          ],
+          [
+            0,
+            8
+          ],
+          [
+            6,
+            7
+          ],
+          [
+            5,
+            6
+          ],
+          [
+            4,
+            5
+          ],
+          [
+            3,
+            4
+          ],
+          [
+            2,
+            3
+          ],
+          [
+            1,
+            2
+          ],
+          [
+            0,
+            1
+          ]
+        ],
+        "provenance": {
+          "cost_basis": "opt_einsum_internal",
+          "dependency_versions": {
+            "opt_einsum": "3.4.0"
+          },
+          "largest_intermediate": 262144,
+          "naive_flops": 3.242591731706757e+17,
+          "objective": "opt_einsum_contract_path",
+          "optimize_mode": "greedy",
+          "optimized_flops": 1748632.0,
+          "planner_config": {
+            "engine": "opt_einsum",
+            "optimize": "greedy"
+          },
+          "planner_config_hash": "3e9c4883303310615c4413bf2fc51ccbc0e161f61c00cf5911d50ae2188182d1",
+          "planner_engine": "opt_einsum",
+          "planner_id": "opt_einsum.greedy",
+          "planner_kind": "external_path_optimizer"
+        }
+      },
+      "problem_id": "3991981dd57dd352828debc445aac58a2ffa9111277b1a91939c2ea91d489f59",
+      "selection_eligible": true,
+      "selection_rejection_reason": null,
+      "tensor_network_structure_id": "54e9741ad70140f854674404fb85fd72270eb01fa1578e73ac17316a2cacb7d0",
+      "topologies": {
+        "dpu1_tasklet1": {
+          "collection_resource_admission_passed": true,
+          "estimated_host_d2h_bytes_four_real_products": 6994528,
+          "estimated_host_h2d_bytes_four_real_products": 2858592,
+          "k_size_distribution": [
+            {
+              "count": 371,
+              "value": 2
+            }
+          ],
+          "m_size_distribution": [
+            {
+              "count": 18,
+              "value": 1
+            },
+            {
+              "count": 266,
+              "value": 4
+            },
+            {
+              "count": 87,
+              "value": 8
+            }
+          ],
+          "n_size_distribution": [
+            {
+              "count": 1,
+              "value": 1
+            },
+            {
+              "count": 2,
+              "value": 2
+            },
+            {
+              "count": 7,
+              "value": 4
+            },
+            {
+              "count": 18,
+              "value": 8
+            },
+            {
+              "count": 1,
+              "value": 16
+            },
+            {
+              "count": 1,
+              "value": 64
+            },
+            {
+              "count": 341,
+              "value": 256
+            }
+          ],
+          "physical_plan_id": "5cfd1a93cb0be87bf2abd41bfa877391a53be7773c8e61673f8e39ae98d2c307",
+          "resource_admission": {
+            "arithmetic_weighted_dpu_slot_utilization": 1.0,
+            "arithmetic_weighted_tasklet_utilization": 1.0,
+            "collection_resource_admission_passed": true,
+            "dominant_wave_allocated_slots": 1,
+            "dominant_wave_dpu_slots": 1,
+            "dominant_wave_useful_slots": 1,
+            "dominant_wave_utilization": 1.0,
+            "dominant_work_stage_id": "contract_batch:contract_30",
+            "dominant_work_wave": 0,
+            "dominant_work_wave_allocated_dpu_slots": 1,
+            "dominant_work_wave_arithmetic_work": 4096,
+            "dominant_work_wave_populated_dpu_slots": 1,
+            "dominant_work_wave_tasklet_row_sufficiency_passed": true,
+            "dominant_work_wave_utilization": 1.0,
+            "fully_populated_wave_count": 371,
+            "tasklet_row_sufficiency_passed": true,
+            "total_wave_count": 371
+          },
+          "topology": {
+            "dpu_count": 1,
+            "rank_count": 1,
+            "tasklets_per_dpu": 1
+          },
+          "wave_arithmetic_work_distribution": [
+            {
+              "arithmetic_work": 4,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 8,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 16,
+              "count": 18,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 32,
+              "count": 7,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 64,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 256,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 1024,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 2048,
+              "count": 256,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 4096,
+              "count": 85,
+              "useful_dpu_slots": 1
+            }
+          ],
+          "wave_arithmetic_work_sha256": "cac76631ad0f814de660c8e73923c9d3976f5b69606a7b35de6610a64396237e",
+          "wave_count": 371,
+          "work_unit_count": 371,
+          "wram_panel_algorithm_facts": {
+            "a_read_aligned_span_bytes_estimate": 438848,
+            "a_read_helper_calls_exact": 54856,
+            "a_read_payload_bytes_exact": 438848,
+            "b_read_aligned_span_bytes_estimate": 2801728,
+            "b_read_helper_calls_exact": 22072,
+            "b_read_payload_bytes_exact": 2801696,
+            "barrier_events_exact": 28008,
+            "barrier_tasklet_calls_exact": 28008,
+            "c_write_aligned_span_bytes_estimate": 6994592,
+            "c_write_helper_calls_exact": 54856,
+            "c_write_payload_bytes_exact": 6994528,
+            "lane_count": 4,
+            "mram_aligned_bytes_scope": "geometric_aligned_span_estimate",
+            "mram_aligned_transfer_bytes_estimate": 10235168,
+            "mram_helper_count_scope": "source_level_helper_calls",
+            "mram_requested_payload_bytes_exact": 10235072,
+            "operand_read_helper_calls_exact": 76928,
+            "origin": "wram_panel_algorithm_v1",
+            "output_partial_read_helper_calls_exact": 0,
+            "output_write_helper_calls_exact": 54856,
+            "partial_c_read_aligned_span_bytes_estimate": 0,
+            "partial_c_read_helper_calls_exact": 0,
+            "partial_c_read_payload_bytes_exact": 0,
+            "real_mac_count_exact": 3497264,
+            "wram_kernel_buffers_allocated_bytes_exact": 8864,
+            "wram_private_bytes_per_tasklet_exact": 672,
+            "wram_shared_bytes_exact": 8192
+          }
+        },
+        "dpu1_tasklet8": {
+          "collection_resource_admission_passed": true,
+          "estimated_host_d2h_bytes_four_real_products": 6994528,
+          "estimated_host_h2d_bytes_four_real_products": 2858592,
+          "k_size_distribution": [
+            {
+              "count": 371,
+              "value": 2
+            }
+          ],
+          "m_size_distribution": [
+            {
+              "count": 18,
+              "value": 1
+            },
+            {
+              "count": 266,
+              "value": 4
+            },
+            {
+              "count": 87,
+              "value": 8
+            }
+          ],
+          "n_size_distribution": [
+            {
+              "count": 1,
+              "value": 1
+            },
+            {
+              "count": 2,
+              "value": 2
+            },
+            {
+              "count": 7,
+              "value": 4
+            },
+            {
+              "count": 18,
+              "value": 8
+            },
+            {
+              "count": 1,
+              "value": 16
+            },
+            {
+              "count": 1,
+              "value": 64
+            },
+            {
+              "count": 341,
+              "value": 256
+            }
+          ],
+          "physical_plan_id": "b339554c1c011147606fa6826481e80e704ba99b1984a3bb23ffb298eb0033ac",
+          "resource_admission": {
+            "arithmetic_weighted_dpu_slot_utilization": 1.0,
+            "arithmetic_weighted_tasklet_utilization": 0.6997178365716743,
+            "collection_resource_admission_passed": true,
+            "dominant_wave_allocated_slots": 1,
+            "dominant_wave_dpu_slots": 1,
+            "dominant_wave_useful_slots": 1,
+            "dominant_wave_utilization": 1.0,
+            "dominant_work_stage_id": "contract_batch:contract_30",
+            "dominant_work_wave": 0,
+            "dominant_work_wave_allocated_dpu_slots": 1,
+            "dominant_work_wave_arithmetic_work": 4096,
+            "dominant_work_wave_populated_dpu_slots": 1,
+            "dominant_work_wave_tasklet_row_sufficiency_passed": true,
+            "dominant_work_wave_utilization": 1.0,
+            "fully_populated_wave_count": 371,
+            "tasklet_row_sufficiency_passed": true,
+            "total_wave_count": 371
+          },
+          "topology": {
+            "dpu_count": 1,
+            "rank_count": 1,
+            "tasklets_per_dpu": 8
+          },
+          "wave_arithmetic_work_distribution": [
+            {
+              "arithmetic_work": 4,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 8,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 16,
+              "count": 18,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 32,
+              "count": 7,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 64,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 256,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 1024,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 2048,
+              "count": 256,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 4096,
+              "count": 85,
+              "useful_dpu_slots": 1
+            }
+          ],
+          "wave_arithmetic_work_sha256": "cac76631ad0f814de660c8e73923c9d3976f5b69606a7b35de6610a64396237e",
+          "wave_count": 371,
+          "work_unit_count": 371,
+          "wram_panel_algorithm_facts": {
+            "a_read_aligned_span_bytes_estimate": 438848,
+            "a_read_helper_calls_exact": 54856,
+            "a_read_payload_bytes_exact": 438848,
+            "b_read_aligned_span_bytes_estimate": 2801728,
+            "b_read_helper_calls_exact": 22072,
+            "b_read_payload_bytes_exact": 2801696,
+            "barrier_events_exact": 28008,
+            "barrier_tasklet_calls_exact": 224064,
+            "c_write_aligned_span_bytes_estimate": 6994592,
+            "c_write_helper_calls_exact": 54856,
+            "c_write_payload_bytes_exact": 6994528,
+            "lane_count": 4,
+            "mram_aligned_bytes_scope": "geometric_aligned_span_estimate",
+            "mram_aligned_transfer_bytes_estimate": 10235168,
+            "mram_helper_count_scope": "source_level_helper_calls",
+            "mram_requested_payload_bytes_exact": 10235072,
+            "operand_read_helper_calls_exact": 76928,
+            "origin": "wram_panel_algorithm_v1",
+            "output_partial_read_helper_calls_exact": 0,
+            "output_write_helper_calls_exact": 54856,
+            "partial_c_read_aligned_span_bytes_estimate": 0,
+            "partial_c_read_helper_calls_exact": 0,
+            "partial_c_read_payload_bytes_exact": 0,
+            "real_mac_count_exact": 3497264,
+            "wram_kernel_buffers_allocated_bytes_exact": 13568,
+            "wram_private_bytes_per_tasklet_exact": 672,
+            "wram_shared_bytes_exact": 8192
+          }
+        },
+        "dpu2_tasklet8": {
+          "collection_resource_admission_passed": true,
+          "estimated_host_d2h_bytes_four_real_products": 6994528,
+          "estimated_host_h2d_bytes_four_real_products": 2858592,
+          "k_size_distribution": [
+            {
+              "count": 371,
+              "value": 2
+            }
+          ],
+          "m_size_distribution": [
+            {
+              "count": 18,
+              "value": 1
+            },
+            {
+              "count": 266,
+              "value": 4
+            },
+            {
+              "count": 87,
+              "value": 8
+            }
+          ],
+          "n_size_distribution": [
+            {
+              "count": 1,
+              "value": 1
+            },
+            {
+              "count": 2,
+              "value": 2
+            },
+            {
+              "count": 7,
+              "value": 4
+            },
+            {
+              "count": 18,
+              "value": 8
+            },
+            {
+              "count": 1,
+              "value": 16
+            },
+            {
+              "count": 1,
+              "value": 64
+            },
+            {
+              "count": 341,
+              "value": 256
+            }
+          ],
+          "physical_plan_id": "6fa93af435bda875226acb52709e82d103eb870109882aaf9944c9d99a1bf958",
+          "resource_admission": {
+            "arithmetic_weighted_dpu_slot_utilization": 0.9965893338335339,
+            "arithmetic_weighted_tasklet_utilization": 0.6997178365716743,
+            "collection_resource_admission_passed": true,
+            "dominant_wave_allocated_slots": 2,
+            "dominant_wave_dpu_slots": 2,
+            "dominant_wave_useful_slots": 2,
+            "dominant_wave_utilization": 1.0,
+            "dominant_work_stage_id": "contract_batch:contract_31",
+            "dominant_work_wave": 0,
+            "dominant_work_wave_allocated_dpu_slots": 2,
+            "dominant_work_wave_arithmetic_work": 8192,
+            "dominant_work_wave_populated_dpu_slots": 2,
+            "dominant_work_wave_tasklet_row_sufficiency_passed": true,
+            "dominant_work_wave_utilization": 1.0,
+            "fully_populated_wave_count": 170,
+            "tasklet_row_sufficiency_passed": true,
+            "total_wave_count": 201
+          },
+          "topology": {
+            "dpu_count": 2,
+            "rank_count": 1,
+            "tasklets_per_dpu": 8
+          },
+          "wave_arithmetic_work_distribution": [
+            {
+              "arithmetic_work": 4,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 8,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 16,
+              "count": 18,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 32,
+              "count": 7,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 64,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 256,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 1024,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 4096,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 4096,
+              "count": 128,
+              "useful_dpu_slots": 2
+            },
+            {
+              "arithmetic_work": 8192,
+              "count": 42,
+              "useful_dpu_slots": 2
+            }
+          ],
+          "wave_arithmetic_work_sha256": "eed9aebed2d1137f839936fcfd30d3a1e4f0574b52a206aa475e25bf59e678b4",
+          "wave_count": 201,
+          "work_unit_count": 371,
+          "wram_panel_algorithm_facts": {
+            "a_read_aligned_span_bytes_estimate": 438848,
+            "a_read_helper_calls_exact": 54856,
+            "a_read_payload_bytes_exact": 438848,
+            "b_read_aligned_span_bytes_estimate": 2801728,
+            "b_read_helper_calls_exact": 22072,
+            "b_read_payload_bytes_exact": 2801696,
+            "barrier_events_exact": 28008,
+            "barrier_tasklet_calls_exact": 224064,
+            "c_write_aligned_span_bytes_estimate": 6994592,
+            "c_write_helper_calls_exact": 54856,
+            "c_write_payload_bytes_exact": 6994528,
+            "lane_count": 4,
+            "mram_aligned_bytes_scope": "geometric_aligned_span_estimate",
+            "mram_aligned_transfer_bytes_estimate": 10235168,
+            "mram_helper_count_scope": "source_level_helper_calls",
+            "mram_requested_payload_bytes_exact": 10235072,
+            "operand_read_helper_calls_exact": 76928,
+            "origin": "wram_panel_algorithm_v1",
+            "output_partial_read_helper_calls_exact": 0,
+            "output_write_helper_calls_exact": 54856,
+            "partial_c_read_aligned_span_bytes_estimate": 0,
+            "partial_c_read_helper_calls_exact": 0,
+            "partial_c_read_payload_bytes_exact": 0,
+            "real_mac_count_exact": 3497264,
+            "wram_kernel_buffers_allocated_bytes_exact": 13568,
+            "wram_private_bytes_per_tasklet_exact": 672,
+            "wram_shared_bytes_exact": 8192
+          }
+        },
+        "dpu4_tasklet8": {
+          "collection_resource_admission_passed": true,
+          "estimated_host_d2h_bytes_four_real_products": 6994528,
+          "estimated_host_h2d_bytes_four_real_products": 2858592,
+          "k_size_distribution": [
+            {
+              "count": 371,
+              "value": 2
+            }
+          ],
+          "m_size_distribution": [
+            {
+              "count": 18,
+              "value": 1
+            },
+            {
+              "count": 266,
+              "value": 4
+            },
+            {
+              "count": 87,
+              "value": 8
+            }
+          ],
+          "n_size_distribution": [
+            {
+              "count": 1,
+              "value": 1
+            },
+            {
+              "count": 2,
+              "value": 2
+            },
+            {
+              "count": 7,
+              "value": 4
+            },
+            {
+              "count": 18,
+              "value": 8
+            },
+            {
+              "count": 1,
+              "value": 16
+            },
+            {
+              "count": 1,
+              "value": 64
+            },
+            {
+              "count": 341,
+              "value": 256
+            }
+          ],
+          "physical_plan_id": "53a7f2e2dc3972d65f5391809fc5be2d5164ece53c7d4ce16f42df6e3220370d",
+          "resource_admission": {
+            "arithmetic_weighted_dpu_slot_utilization": 0.9948840007503008,
+            "arithmetic_weighted_tasklet_utilization": 0.6997178365716743,
+            "collection_resource_admission_passed": true,
+            "dominant_wave_allocated_slots": 4,
+            "dominant_wave_dpu_slots": 4,
+            "dominant_wave_useful_slots": 4,
+            "dominant_wave_utilization": 1.0,
+            "dominant_work_stage_id": "contract_batch:contract_31",
+            "dominant_work_wave": 0,
+            "dominant_work_wave_allocated_dpu_slots": 4,
+            "dominant_work_wave_arithmetic_work": 16384,
+            "dominant_work_wave_populated_dpu_slots": 4,
+            "dominant_work_wave_tasklet_row_sufficiency_passed": true,
+            "dominant_work_wave_utilization": 1.0,
+            "fully_populated_wave_count": 85,
+            "tasklet_row_sufficiency_passed": true,
+            "total_wave_count": 116
+          },
+          "topology": {
+            "dpu_count": 4,
+            "rank_count": 1,
+            "tasklets_per_dpu": 8
+          },
+          "wave_arithmetic_work_distribution": [
+            {
+              "arithmetic_work": 4,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 8,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 16,
+              "count": 18,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 32,
+              "count": 7,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 64,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 256,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 1024,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 4096,
+              "count": 1,
+              "useful_dpu_slots": 1
+            },
+            {
+              "arithmetic_work": 8192,
+              "count": 64,
+              "useful_dpu_slots": 4
+            },
+            {
+              "arithmetic_work": 16384,
+              "count": 21,
+              "useful_dpu_slots": 4
+            }
+          ],
+          "wave_arithmetic_work_sha256": "8fbf100bd48fea941d9d5f3b4fd6f0ed6b6bad71b688aa5f883d618e7a306e39",
+          "wave_count": 116,
+          "work_unit_count": 371,
+          "wram_panel_algorithm_facts": {
+            "a_read_aligned_span_bytes_estimate": 438848,
+            "a_read_helper_calls_exact": 54856,
+            "a_read_payload_bytes_exact": 438848,
+            "b_read_aligned_span_bytes_estimate": 2801728,
+            "b_read_helper_calls_exact": 22072,
+            "b_read_payload_bytes_exact": 2801696,
+            "barrier_events_exact": 28008,
+            "barrier_tasklet_calls_exact": 224064,
+            "c_write_aligned_span_bytes_estimate": 6994592,
+            "c_write_helper_calls_exact": 54856,
+            "c_write_payload_bytes_exact": 6994528,
+            "lane_count": 4,
+            "mram_aligned_bytes_scope": "geometric_aligned_span_estimate",
+            "mram_aligned_transfer_bytes_estimate": 10235168,
+            "mram_helper_count_scope": "source_level_helper_calls",
+            "mram_requested_payload_bytes_exact": 10235072,
+            "operand_read_helper_calls_exact": 76928,
+            "origin": "wram_panel_algorithm_v1",
+            "output_partial_read_helper_calls_exact": 0,
+            "output_write_helper_calls_exact": 54856,
+            "partial_c_read_aligned_span_bytes_estimate": 0,
+            "partial_c_read_helper_calls_exact": 0,
+            "partial_c_read_payload_bytes_exact": 0,
+            "real_mac_count_exact": 3497264,
+            "wram_kernel_buffers_allocated_bytes_exact": 13568,
+            "wram_private_bytes_per_tasklet_exact": 672,
+            "wram_shared_bytes_exact": 8192
+          }
+        }
+      }
+    }
+  ],
+  "constraints_hash": "416f821016dda86e45ce2e9c4ac3da4bfcc6430fd1e65edbfb5552115ab4f2b8",
+  "dependency_versions": {
+    "opt_einsum": "3.4.0"
+  },
+  "planner_configuration": {
+    "engine": "opt_einsum",
+    "max_repeats": 1,
+    "mode": "greedy",
+    "seed": 0
+  },
+  "python_version": "3.10.12",
+  "schema_version": "m7c_workload_selection_v1",
+  "selected_primary": "quantization_stress_18q_l2",
+  "selected_secondary": "ghz_chain_18q",
+  "selection_audit_hash": "4684ff779c6ec4ad706c020286523f3d5ffc931811bcf98a7721dc0d620c2af5",
+  "selection_rule": {
+    "policy": "predeclared_circuit_structure_and_resource_admission_v1",
+    "primary_candidate_id": "quantization_stress_18q_l2",
+    "requirements": {
+      "all_required_routes_must_pass_collection_resource_admission": true,
+      "dpu_routes": [
+        "dpu2_tasklet8",
+        "dpu4_tasklet8"
+      ],
+      "numeric_policy": "split_complex_float32_v1",
+      "secondary_must_use_a_structurally_distinct_builtin_circuit": true,
+      "tasklet_route": "dpu1_tasklet8"
+    },
+    "secondary_candidate_id": "ghz_chain_18q",
+    "timing_selection_rule": "no_physical_or_simulator_timing_is_used"
+  },
+  "source_commit": "523e46570011724696bbe33fd90d05f14b4de9b7"
+}

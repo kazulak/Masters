@@ -316,6 +316,10 @@ def write_selection(output: Path) -> Path:
 def check_selection(selection_path: Path, config_path: Path | None = None) -> None:
     persisted = json.loads(selection_path.read_text(encoding="utf-8"))
     current = build_selection()
+    recorded_source = persisted.pop("source_commit", None)
+    current.pop("source_commit", None)
+    if not isinstance(recorded_source, str) or len(recorded_source) != 40:
+        raise ValueError("persisted M7C selection has no generator source commit")
     if persisted != current:
         raise ValueError("persisted M7C selection differs from deterministic recomputation")
     if config_path is None:

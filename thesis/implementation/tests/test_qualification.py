@@ -164,3 +164,10 @@ def test_m7c_workload_selection_is_deterministic_and_preregistered(
     path = tmp_path / "selection.json"
     selector.write_selection(path)
     selector.check_selection(path)
+
+
+def test_m7c_committed_selection_matches_scaling_config() -> None:
+    _selector().check_selection(
+        ROOT / "configs" / "m7c_workload_selection.json",
+        ROOT / "configs" / "tn_benchmark_physical_scaling_diagnostic.yml",
+    )

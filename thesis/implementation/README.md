@@ -73,7 +73,18 @@ preparation script creates an ignored copy below `runs/configs/eth/`, resolving
 the template paths before it writes target-specific binary, session, affinity,
 and rank paths. The probe mode emits one float32 measurement; float32 smoke
 emits one warmup plus five measurements; int8 smoke is descriptive only.
-Supply the later scaling configuration explicitly.
+`configs/m7c_workload_selection.json` preregisters the source-only candidate
+selection for the later scaling diagnostic. It selects the deterministic
+18-qubit quantization-stress circuit as the primary kernel-scaling workload and
+the structurally different 18-qubit GHZ chain as confirmatory evidence; neither
+choice used simulator or physical timing. Supply the later scaling configuration
+explicitly and check it before an ETH run:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python scripts/select_m7c_workload.py --check \
+  configs/m7c_workload_selection.json \
+  --config configs/tn_benchmark_physical_scaling_diagnostic.yml
+```
 
 `plan` writes a deterministic experiment plan without execution. `run` writes
 canonical evidence. `verify` checks evidence identities and integrity.
@@ -151,6 +162,7 @@ native/upmem/runtime/       active ABI-v4 host/DPU build
 native/upmem/pidcomm_qualification/  standalone compatibility harness
 configs/tn_benchmark_reset.yml       software benchmark suite
 configs/tn_benchmark_physical_smoke.yml  one-DPU physical smoke template
+configs/m7c_workload_selection.json  preregistered M7C workload selection
 ```
 
 Generated evidence is written below `runs/` and is ignored by Git. Reviewed
