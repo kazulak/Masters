@@ -134,6 +134,9 @@ def _plan_candidate(candidate: Candidate) -> dict[str, object]:
     # Planner elapsed time is an observation, not a deterministic selection
     # constraint. Persisting it would make the preregistration unreplayable.
     stable_provenance.pop("planning_time_s", None)
+    # The optimizer's explanatory text is a human diagnostic; exact path pairs
+    # are the reproducible plan record and keep the tracked manifest compact.
+    stable_provenance.pop("path_info_text", None)
     topology_records = {
         topology_id: _topology_record(dag, topology)
         for topology_id, topology in _TOPOLOGIES
