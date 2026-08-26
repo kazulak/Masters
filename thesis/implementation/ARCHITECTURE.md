@@ -134,8 +134,10 @@ counter. `B_MRAM-WRAM` is represented by exact source-level helper-call and
 requested-payload formulas plus an aligned-transfer-byte estimate, not measured
 MRAM traffic. `I_DPU` is an exact real-MAC formula, `N_sync` is an exact barrier
 event/tasklet-call formula, `E_num` is numeric-policy, scale, and saturation
-evidence without a calibrated coefficient, and `P_WRAM` is an allocated/active
-WRAM formula plus executable section facts. No coefficient, prediction error,
+evidence without a calibrated coefficient, and `P_WRAM` is a kernel-buffer
+allocation formula plus executable section facts. Directional A/B/partial-C/C
+movement facts are exact source-level helper and payload formulas; aligned span
+bytes are estimates, not hardware counters. No coefficient, prediction error,
 or path-ranking claim is currently calibrated.
 
 ## Native Boundary

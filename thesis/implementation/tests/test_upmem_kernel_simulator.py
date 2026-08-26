@@ -89,6 +89,18 @@ def test_wram_panel_facts_count_four_real_products_for_a_full_panel() -> None:
     assert facts == {
         "origin": "wram_panel_algorithm_v1",
         "lane_count": 4,
+        "a_read_helper_calls_exact": 8,
+        "b_read_helper_calls_exact": 16,
+        "partial_c_read_helper_calls_exact": 0,
+        "c_write_helper_calls_exact": 8,
+        "a_read_payload_bytes_exact": 2_048,
+        "b_read_payload_bytes_exact": 32_768,
+        "partial_c_read_payload_bytes_exact": 0,
+        "c_write_payload_bytes_exact": 1_024,
+        "a_read_aligned_span_bytes_estimate": 2_048,
+        "b_read_aligned_span_bytes_estimate": 32_768,
+        "partial_c_read_aligned_span_bytes_estimate": 0,
+        "c_write_aligned_span_bytes_estimate": 1_024,
         "operand_read_helper_calls_exact": 24,
         "output_partial_read_helper_calls_exact": 0,
         "output_write_helper_calls_exact": 8,
@@ -99,7 +111,7 @@ def test_wram_panel_facts_count_four_real_products_for_a_full_panel() -> None:
         "real_mac_count_exact": 16_384,
         "wram_shared_bytes_exact": 8_192,
         "wram_private_bytes_per_tasklet_exact": 672,
-        "wram_active_bytes_exact": 8_864,
+        "wram_kernel_buffers_allocated_bytes_exact": 8_864,
         "mram_helper_count_scope": "source_level_helper_calls",
         "mram_aligned_bytes_scope": "geometric_aligned_span_estimate",
     }
@@ -119,7 +131,19 @@ def test_wram_panel_facts_account_for_tail_helpers_and_tasklets() -> None:
     ]
     assert facts["barrier_tasklet_calls_exact"] == 8 * facts["barrier_events_exact"]
     assert facts["real_mac_count_exact"] == 4 * 3 * 35 * 65
-    assert facts["wram_active_bytes_exact"] == 8_192 + 8 * 672
+    assert facts["wram_kernel_buffers_allocated_bytes_exact"] == 8_192 + 8 * 672
+    assert facts["operand_read_helper_calls_exact"] == (
+        facts["a_read_helper_calls_exact"] + facts["b_read_helper_calls_exact"]
+    )
+    assert facts["mram_requested_payload_bytes_exact"] == sum(
+        facts[field]
+        for field in (
+            "a_read_payload_bytes_exact",
+            "b_read_payload_bytes_exact",
+            "partial_c_read_payload_bytes_exact",
+            "c_write_payload_bytes_exact",
+        )
+    )
 
 
 @pytest.mark.parametrize("tasklets", [1, 8, 24])

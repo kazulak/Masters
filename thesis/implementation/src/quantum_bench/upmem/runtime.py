@@ -126,12 +126,10 @@ def _wram_panel_operation_facts(
 
     packed = _is_packed_policy(numeric_policy)
     input_bytes = 1 if packed else 4
-    b_read_calls = 0
-    a_read_calls = 0
-    output_partial_read_calls = 0
-    output_write_calls = 0
-    requested_bytes = 0
-    aligned_bytes = 0
+    b_read_calls = b_read_payload_bytes = b_read_aligned_bytes = 0
+    a_read_calls = a_read_payload_bytes = a_read_aligned_bytes = 0
+    partial_c_read_calls = partial_c_read_payload_bytes = partial_c_read_aligned_bytes = 0
+    c_write_calls = c_write_payload_bytes = c_write_aligned_bytes = 0
     barrier_events = 0
     real_macs = 0
 
@@ -163,16 +161,16 @@ def _wram_panel_operation_facts(
                         b_panel_bytes + WRAM_PANEL_DMA_BYTES - 1
                     ) // WRAM_PANEL_DMA_BYTES
                     b_read_calls += calls
-                    requested_bytes += b_panel_bytes
-                    aligned_bytes += b_panel_bytes
+                    b_read_payload_bytes += b_panel_bytes
+                    b_read_aligned_bytes += b_panel_bytes
                 else:
                     for k_index in range(actual_k):
                         offset = b_offset + (
                             (k_start + k_index) * n_size + n_start
                         ) * input_bytes
                         b_read_calls += 1
-                        requested_bytes += actual_n * input_bytes
-                        aligned_bytes += _aligned_transfer_span(
+                        b_read_payload_bytes += actual_n * input_bytes
+                        b_read_aligned_bytes += _aligned_transfer_span(
                             offset, actual_n * input_bytes
                         )
 
@@ -180,38 +178,69 @@ def _wram_panel_operation_facts(
                     a_offset = (row * k_size + k_start) * input_bytes
                     a_payload = actual_k * input_bytes
                     a_read_calls += 1
-                    requested_bytes += a_payload
-                    aligned_bytes += _aligned_transfer_span(a_offset, a_payload)
+                    a_read_payload_bytes += a_payload
+                    a_read_aligned_bytes += _aligned_transfer_span(a_offset, a_payload)
 
                     c_row_offset = c_offset + (
                         row * n_size + n_start
                     ) * _WRAM_PANEL_OUTPUT_BYTES_PER_ELEMENT
                     c_payload = actual_n * _WRAM_PANEL_OUTPUT_BYTES_PER_ELEMENT
                     if k_start:
-                        output_partial_read_calls += 1
-                        requested_bytes += c_payload
-                        aligned_bytes += _aligned_transfer_span(
+                        partial_c_read_calls += 1
+                        partial_c_read_payload_bytes += c_payload
+                        partial_c_read_aligned_bytes += _aligned_transfer_span(
                             c_row_offset, c_payload
                         )
-                    output_write_calls += 1
-                    requested_bytes += c_payload
-                    aligned_bytes += _aligned_transfer_span(c_row_offset, c_payload)
+                    c_write_calls += 1
+                    c_write_payload_bytes += c_payload
+                    c_write_aligned_bytes += _aligned_transfer_span(c_row_offset, c_payload)
 
     lane_count = _WRAM_PANEL_LANE_COUNT
+    a_read_helper_calls = lane_count * a_read_calls
+    b_read_helper_calls = lane_count * b_read_calls
+    partial_c_read_helper_calls = lane_count * partial_c_read_calls
+    c_write_helper_calls = lane_count * c_write_calls
+    a_read_payload = lane_count * a_read_payload_bytes
+    b_read_payload = lane_count * b_read_payload_bytes
+    partial_c_read_payload = lane_count * partial_c_read_payload_bytes
+    c_write_payload = lane_count * c_write_payload_bytes
+    a_read_aligned = lane_count * a_read_aligned_bytes
+    b_read_aligned = lane_count * b_read_aligned_bytes
+    partial_c_read_aligned = lane_count * partial_c_read_aligned_bytes
+    c_write_aligned = lane_count * c_write_aligned_bytes
     return {
         "origin": "wram_panel_algorithm_v1",
         "lane_count": lane_count,
-        "operand_read_helper_calls_exact": lane_count * (a_read_calls + b_read_calls),
-        "output_partial_read_helper_calls_exact": lane_count * output_partial_read_calls,
-        "output_write_helper_calls_exact": lane_count * output_write_calls,
-        "mram_requested_payload_bytes_exact": lane_count * requested_bytes,
-        "mram_aligned_transfer_bytes_estimate": lane_count * aligned_bytes,
+        "a_read_helper_calls_exact": a_read_helper_calls,
+        "b_read_helper_calls_exact": b_read_helper_calls,
+        "partial_c_read_helper_calls_exact": partial_c_read_helper_calls,
+        "c_write_helper_calls_exact": c_write_helper_calls,
+        "a_read_payload_bytes_exact": a_read_payload,
+        "b_read_payload_bytes_exact": b_read_payload,
+        "partial_c_read_payload_bytes_exact": partial_c_read_payload,
+        "c_write_payload_bytes_exact": c_write_payload,
+        "a_read_aligned_span_bytes_estimate": a_read_aligned,
+        "b_read_aligned_span_bytes_estimate": b_read_aligned,
+        "partial_c_read_aligned_span_bytes_estimate": partial_c_read_aligned,
+        "c_write_aligned_span_bytes_estimate": c_write_aligned,
+        "operand_read_helper_calls_exact": a_read_helper_calls + b_read_helper_calls,
+        "output_partial_read_helper_calls_exact": partial_c_read_helper_calls,
+        "output_write_helper_calls_exact": c_write_helper_calls,
+        "mram_requested_payload_bytes_exact": (
+            a_read_payload + b_read_payload + partial_c_read_payload + c_write_payload
+        ),
+        "mram_aligned_transfer_bytes_estimate": (
+            a_read_aligned
+            + b_read_aligned
+            + partial_c_read_aligned
+            + c_write_aligned
+        ),
         "barrier_events_exact": lane_count * barrier_events,
         "barrier_tasklet_calls_exact": lane_count * barrier_events * tasklets_per_dpu,
         "real_mac_count_exact": lane_count * real_macs,
         "wram_shared_bytes_exact": _WRAM_PANEL_SHARED_BUFFER_BYTES,
         "wram_private_bytes_per_tasklet_exact": _WRAM_PANEL_PRIVATE_BYTES_PER_TASKLET,
-        "wram_active_bytes_exact": (
+        "wram_kernel_buffers_allocated_bytes_exact": (
             _WRAM_PANEL_SHARED_BUFFER_BYTES
             + tasklets_per_dpu * _WRAM_PANEL_PRIVATE_BYTES_PER_TASKLET
         ),
