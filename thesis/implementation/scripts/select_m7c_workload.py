@@ -191,7 +191,7 @@ def _topology_record(dag: object, topology: UpmemTopology) -> dict[str, object]:
         numeric_policy=NUMERIC_POLICY,
         tasklets_per_dpu=topology.tasklets_per_dpu,
     )
-    wave_work = _wave_work(plan)
+    wave_summary = _wave_summary(plan)
     return {
         "physical_plan_id": physical_plan_id(plan),
         "topology": {
@@ -203,8 +203,9 @@ def _topology_record(dag: object, topology: UpmemTopology) -> dict[str, object]:
         "m_size_distribution": _distribution(unit.m_size for unit in units),
         "n_size_distribution": _distribution(unit.n_size for unit in units),
         "k_size_distribution": _distribution(unit.k_size for unit in units),
-        "wave_count": len(wave_work),
-        "wave_arithmetic_work": wave_work,
+        "wave_count": wave_summary["wave_count"],
+        "wave_arithmetic_work_distribution": wave_summary["distribution"],
+        "wave_arithmetic_work_sha256": wave_summary["ordered_wave_hash"],
         "estimated_host_h2d_bytes_four_real_products": 4
         * sum(unit.estimated_input_bytes for unit in units),
         "estimated_host_d2h_bytes_four_real_products": 4
@@ -222,7 +223,7 @@ def _distribution(values: object) -> list[dict[str, int]]:
     return [{"value": value, "count": counts[value]} for value in sorted(counts)]
 
 
-def _wave_work(plan: UpmemPlan) -> list[dict[str, object]]:
+def _wave_summary(plan: UpmemPlan) -> dict[str, object]:
     rows: list[dict[str, object]] = []
     for stage in plan.stages:
         if stage.kind != "contract_batch":
@@ -245,7 +246,22 @@ def _wave_work(plan: UpmemPlan) -> list[dict[str, object]]:
                     ),
                 }
             )
-    return rows
+    distribution = Counter(
+        (int(row["arithmetic_work"]), int(row["useful_dpu_slots"]))
+        for row in rows
+    )
+    return {
+        "wave_count": len(rows),
+        "distribution": [
+            {
+                "arithmetic_work": arithmetic_work,
+                "useful_dpu_slots": useful_slots,
+                "count": distribution[(arithmetic_work, useful_slots)],
+            }
+            for arithmetic_work, useful_slots in sorted(distribution)
+        ],
+        "ordered_wave_hash": _hash(rows),
+    }
 
 
 def build_selection() -> dict[str, object]:
