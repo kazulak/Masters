@@ -16,6 +16,7 @@ SCRIPT = ROOT / "scripts" / "qualify_m7b.py"
 PHYSICAL_SCRIPT = ROOT / "scripts" / "qualify_m7c_physical.py"
 SELECTION_SCRIPT = ROOT / "scripts" / "select_m7c_workload.py"
 SCALING_SCRIPT = ROOT / "scripts" / "run_m7c_scaling_campaign.py"
+M7C_QUALIFIER_SCRIPT = ROOT / "scripts" / "qualify_m7c.py"
 
 
 def _load_script(path: Path, name: str):
@@ -41,6 +42,10 @@ def _selector():
 
 def _scaling_campaign():
     return _load_script(SCALING_SCRIPT, "run_m7c_scaling_campaign")
+
+
+def _m7c_qualifier():
+    return _load_script(M7C_QUALIFIER_SCRIPT, "qualify_m7c")
 
 
 def _archive(path: Path, member_name: str, *, kind: str = "file") -> None:
@@ -76,6 +81,17 @@ def test_qualifier_extracts_regular_relative_archive(tmp_path: Path) -> None:
     assert (tmp_path / "output" / "evidence" / "manifest.json").read_text(
         encoding="utf-8"
     ) == "payload\n"
+
+
+@pytest.mark.parametrize("member_name,kind", [("../escape", "file"), ("link", "link")])
+def test_m7c_qualifier_rejects_unsafe_release_archive(
+    tmp_path: Path, member_name: str, kind: str
+) -> None:
+    archive = tmp_path / "bundle.tar.gz"
+    _archive(archive, member_name, kind=kind)
+
+    with pytest.raises(ValueError, match="unsafe archive member"):
+        _m7c_qualifier()._safe_extract_tar(archive, tmp_path / "output")
 
 
 def test_qualifier_verifies_bundled_hashes_and_records_external_provenance(

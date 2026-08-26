@@ -220,3 +220,19 @@ The diagnostic has no speedup claim. The conditional
 blocks under `physical_performance_v1`; its inspection requires the three
 primary tasklet/DPU scaling rows to pass their claim gates. The smaller GHZ18
 confirmation template remains diagnostic-only.
+
+Before any ETH command, the exact M7C source must be software-qualified on the
+designated SDK machine. The committed qualifier verifies the M7B release,
+cleans and rebuilds QuEST plus ABI-v4 tasklet binaries, runs the full suite and
+direct SDK matrix, regenerates CPU/simulator evidence, and plans every M7C
+physical template without opening hardware:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python scripts/qualify_m7c.py \
+  --output runs/m7c-software-qualification/<source-sha>
+```
+
+Archive the emitted evidence, `SHA256SUMS`, `qualification.json`, and
+`qualification.txt` with the later software-preparation tag. This is still a
+software/SDK record; a successful float32 one-DPU ETH smoke needs its own
+physical-evidence archive and annotated qualification tag.
