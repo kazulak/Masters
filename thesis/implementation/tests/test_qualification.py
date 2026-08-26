@@ -279,3 +279,181 @@ def test_m7c_scaling_preparation_preserves_all_resolved_route_paths(
         "mode": "exact_required_v1",
         "expected_cpus": (1, 3),
     }
+
+
+def _complete_m7c_diagnostic(script: object) -> tuple[dict[str, object], tuple[dict[str, object], ...], tuple[dict[str, object], ...]]:
+    config = load_experiment_config(
+        ROOT / "configs" / "tn_benchmark_physical_scaling_diagnostic.yml"
+    )
+    manifest = {
+        "source_commit": script._source_commit(),
+        "configuration": {"experiment": config},
+    }
+    samples: list[dict[str, object]] = []
+    sessions: list[dict[str, object]] = []
+    binary_hashes = {
+        "host_binary_sha256": "1" * 64,
+        "dpu_binary_sha256": "2" * 64,
+        "initialization_binary_sha256": "3" * 64,
+    }
+    physical_routes = set(script._DIAGNOSTIC_PHYSICAL_ROUTE_IDS)
+    for block_id in range(6):
+        attempt_kind = "warmup" if block_id == 0 else "measurement"
+        sample_index = 0 if block_id == 0 else block_id - 1
+        for route_id in script._DIAGNOSTIC_ROUTE_IDS:
+            physical = route_id in physical_routes
+            session_id = f"{route_id}-{block_id}" if physical else None
+            samples.append(
+                {
+                    "case_id": "scaling_primary",
+                    "plan_id": "greedy",
+                    "route_id": route_id,
+                    "attempt_kind": attempt_kind,
+                    "sample_index": sample_index,
+                    "block_id": block_id,
+                    "status": "success",
+                    "session_instance_id": session_id,
+                    "measurement": {"total_wall_s": 0.020},
+                    "backend_facts": (
+                        {
+                            "target_observed": "physical_hardware",
+                            "physical_target_verified": True,
+                            "hardware_kernel_executed": True,
+                            "simulator_kernel_executed": False,
+                            "cpu_fallback_used": False,
+                            "startup_resource_admission_passed": True,
+                            "execution_resource_admission_passed": True,
+                        }
+                        if physical
+                        else {}
+                    ),
+                    "validation": {
+                        "accuracy_qualified": True,
+                        "policy_reference_applicable": physical,
+                        "policy_reference_passed": True if physical else None,
+                    },
+                }
+            )
+            if physical:
+                sessions.append(
+                    {
+                        "route_id": route_id,
+                        "session_instance_id": session_id,
+                        "status": "success",
+                        "release_verified": True,
+                        "terminal_backend_facts": {
+                            "target_observed": "physical_hardware",
+                            **binary_hashes,
+                        },
+                    }
+                )
+    return manifest, tuple(samples), tuple(sessions)
+
+
+def test_m7c_diagnostic_summary_requires_complete_literal_matrix() -> None:
+    script = _scaling_campaign()
+    manifest, samples, sessions = _complete_m7c_diagnostic(script)
+    report = {"schema_version": "evidence_report_v5"}
+
+    complete = script._diagnostic_summary(
+        manifest=manifest,
+        samples=samples,
+        sessions=sessions,
+        report=report,
+        selection_sha256="4" * 64,
+    )
+    assert complete["gate_passed"] is True
+    assert complete["expected_route_ids"] == list(script._DIAGNOSTIC_ROUTE_IDS)
+    assert complete["expected_block_ids"] == [0, 1, 2, 3, 4, 5]
+    assert all(not warnings for warnings in complete["measurement_warnings"].values())
+
+    short_samples = [dict(sample) for sample in samples]
+    for sample in short_samples:
+        if sample["route_id"] == "numpy_same_dag" and sample["attempt_kind"] == "measurement":
+            sample["measurement"] = {"total_wall_s": 0.001}
+    short = script._diagnostic_summary(
+        manifest=manifest,
+        samples=tuple(short_samples),
+        sessions=sessions,
+        report=report,
+        selection_sha256="4" * 64,
+    )
+    assert short["gate_passed"] is True
+    assert short["measurement_warnings"]["numpy_same_dag"] == ["median_below_10ms"]
+
+    incomplete = script._diagnostic_summary(
+        manifest=manifest,
+        samples=samples[:-1],
+        sessions=sessions,
+        report=report,
+        selection_sha256="4" * 64,
+    )
+    assert incomplete["gate_passed"] is False
+    assert "diagnostic_block_matrix_incomplete" in incomplete["gate_reasons"]
+
+
+def test_m7c_performance_run_requires_diagnostic_summary_before_outputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    script = _scaling_campaign()
+    monkeypatch.setattr(script, "_clean_worktree", lambda: None)
+    monkeypatch.setattr(script, "_selector_check", lambda *args: None)
+    output = tmp_path / "evidence"
+    report_output = tmp_path / "report"
+
+    with pytest.raises(ValueError, match="requires --diagnostic-summary"):
+        script.run_campaign(
+            selection=ROOT / "configs" / "m7c_workload_selection.json",
+            config=ROOT / "configs" / "tn_benchmark_physical_scaling.yml",
+            output=output,
+            report_output=report_output,
+        )
+
+    assert not output.exists()
+    assert not report_output.exists()
+
+
+def test_m7c_campaign_binding_ignores_collection_lifecycle(tmp_path: Path) -> None:
+    script = _scaling_campaign()
+    diagnostic = script._plain(
+        load_experiment_config(ROOT / "configs" / "tn_benchmark_physical_scaling_diagnostic.yml")
+    )
+    performance = script._plain(
+        load_experiment_config(ROOT / "configs" / "tn_benchmark_physical_scaling.yml")
+    )
+    binaries = {
+        "host_binary": tmp_path / "host",
+        "dpu_binary": tmp_path / "dpu",
+        "initialization_binary": tmp_path / "initialization",
+    }
+    for path in binaries.values():
+        path.write_bytes(b"m7c")
+    for configuration in (diagnostic, performance):
+        configuration["collection"]["machine_policy"]["affinity"] = {
+            "mode": "exact_required_v1",
+            "expected_cpus": [1, 3],
+        }
+        for route in configuration["routes"].values():
+            if route["executor"] != "upmem_physical":
+                continue
+            route["options"]["rank_paths"] = ["/dev/dpu_rank19"]
+            route["options"]["session_root"] = str(tmp_path / route["options"]["session_root"])
+            for field, path in binaries.items():
+                route["options"][field] = str(path)
+    source_commit = script._source_commit()
+    selection_sha256 = "5" * 64
+    diagnostic_binding = script._campaign_binding_sha256(
+        diagnostic,
+        source_commit=source_commit,
+        selection_sha256=selection_sha256,
+        binary_hashes=script._route_binary_hashes_from_config(diagnostic),
+    )
+    performance_binding = script._campaign_binding_sha256(
+        performance,
+        source_commit=source_commit,
+        selection_sha256=selection_sha256,
+        binary_hashes=script._route_binary_hashes_from_config(performance),
+    )
+
+    assert diagnostic_binding == performance_binding
+    assert performance["collection"]["block_cooldown_s"] == 0.0

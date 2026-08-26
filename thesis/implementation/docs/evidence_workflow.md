@@ -216,17 +216,29 @@ UPMEM_ALLOW_PHYSICAL_HARDWARE=1 PYTHONPATH=src \
   --report-output runs/comparisons/eth-scaling-diagnostic
 ```
 
-The diagnostic has no speedup claim. The conditional
+The diagnostic run writes its derived receipt to
+`runs/comparisons/eth-scaling-diagnostic/diagnostic_summary.json`; canonical
+evidence remains limited to `manifest.json`, `samples.jsonl`, and
+`sessions.jsonl`. The diagnostic requires the literal five-route matrix, all
+six blocks, successful float32 validation, resource admission, physical
+provenance, and complete NumPy/UPMEM measurement pairs. Median runtime and
+relative MAD use measurement attempts only and are advisory warnings, not
+speedup gates.
+
+The conditional
 `tn_benchmark_physical_scaling.yml` campaign has two warmup and 30 measurement
-blocks under `physical_performance_v1`; its inspection requires the three
+blocks under `physical_performance_v1`. Its committed campaign command requires
+the passed diagnostic summary before it creates outputs or invokes hardware;
+the summary must match source, selection, circuit/plan, route topology, binary
+hashes, rank paths, and expected CPU set. Its inspection requires the three
 primary tasklet/DPU scaling rows to pass their claim gates. The smaller GHZ18
 confirmation template remains diagnostic-only.
 
-Before any ETH command, the exact M7C source must be software-qualified on the
-designated SDK machine. The committed qualifier verifies the M7B release,
-cleans and rebuilds QuEST plus ABI-v4 tasklet binaries, runs the full suite and
-direct SDK matrix, regenerates CPU/simulator evidence, and plans every M7C
-physical template without opening hardware:
+Before an ETH probe, use a clean accepted commit, the full test suite, Ruff,
+the strict SDK simulator matrix, and hashes for the binaries used by the probe.
+The committed exact-head qualifier remains the release-oriented software/SDK
+record; it is useful before publication but does not replace or delay the
+bounded physical probe:
 
 ```bash
 PYTHONPATH=src ../.venv/bin/python scripts/qualify_m7c.py \
