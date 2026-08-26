@@ -326,14 +326,20 @@ def check_selection(selection_path: Path, config_path: Path | None = None) -> No
         return
     config = load_experiment_config(config_path)
     selected_case = config["cases"].get("scaling_primary")
+    selected_id = persisted["selected_primary"]
+    if selected_case is None:
+        selected_case = config["cases"].get("scaling_secondary")
+        selected_id = persisted["selected_secondary"]
     selected_plan = config["plans"].get("greedy")
     if selected_case is None or selected_plan is None:
-        raise ValueError("M7C scaling config must select scaling_primary and greedy")
+        raise ValueError(
+            "M7C scaling config must select scaling_primary or scaling_secondary and greedy"
+        )
     circuit_config = selected_case["circuit"]
     primary = next(
         entry
         for entry in persisted["candidates"]
-        if entry["candidate_id"] == persisted["selected_primary"]
+        if entry["candidate_id"] == selected_id
     )
     if dict(circuit_config["parameters"]) != primary["circuit"]["parameters"]:
         raise ValueError("M7C scaling config parameters drift from selected primary")

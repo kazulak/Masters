@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "qualify_m7b.py"
 PHYSICAL_SCRIPT = ROOT / "scripts" / "qualify_m7c_physical.py"
 SELECTION_SCRIPT = ROOT / "scripts" / "select_m7c_workload.py"
+SCALING_SCRIPT = ROOT / "scripts" / "run_m7c_scaling_campaign.py"
 
 
 def _load_script(path: Path, name: str):
@@ -36,6 +37,10 @@ def _physical_qualifier():
 
 def _selector():
     return _load_script(SELECTION_SCRIPT, "select_m7c_workload")
+
+
+def _scaling_campaign():
+    return _load_script(SCALING_SCRIPT, "run_m7c_scaling_campaign")
 
 
 def _archive(path: Path, member_name: str, *, kind: str = "file") -> None:
@@ -167,7 +172,42 @@ def test_m7c_workload_selection_is_deterministic_and_preregistered(
 
 
 def test_m7c_committed_selection_matches_scaling_config() -> None:
-    _selector().check_selection(
-        ROOT / "configs" / "m7c_workload_selection.json",
-        ROOT / "configs" / "tn_benchmark_physical_scaling_diagnostic.yml",
+    selector = _selector()
+    selection = ROOT / "configs" / "m7c_workload_selection.json"
+    for config in (
+        "tn_benchmark_physical_scaling_diagnostic.yml",
+        "tn_benchmark_physical_scaling_confirmation.yml",
+    ):
+        selector.check_selection(selection, ROOT / "configs" / config)
+
+
+def test_m7c_scaling_preparation_preserves_all_resolved_route_paths(
+    tmp_path: Path,
+) -> None:
+    template = ROOT / "configs" / "tn_benchmark_physical_scaling_diagnostic.yml"
+    output = tmp_path / "runs" / "configs" / "eth" / "diagnostic.yml"
+    _scaling_campaign().prepare_config(
+        template=template,
+        output=output,
+        rank_paths=["/dev/dpu_rank19"],
+        session_root=str(tmp_path / "sessions"),
+        expected_cpus=[1, 3],
     )
+
+    source = load_experiment_config(template)
+    copied = load_experiment_config(output)
+    for route_id, route in source["routes"].items():
+        if route["executor"] != "upmem_physical":
+            continue
+        source_options = route["options"]
+        copied_options = copied["routes"][route_id]["options"]
+        for field in ("host_binary", "dpu_binary", "initialization_binary"):
+            assert copied_options[field] == source_options[field]
+        assert copied_options["rank_paths"] == ("/dev/dpu_rank19",)
+        assert copied_options["session_root"] == str(
+            (tmp_path / "sessions" / route_id).resolve()
+        )
+    assert copied["collection"]["machine_policy"]["affinity"] == {
+        "mode": "exact_required_v1",
+        "expected_cpus": (1, 3),
+    }

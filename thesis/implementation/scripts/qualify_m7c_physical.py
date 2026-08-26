@@ -170,6 +170,23 @@ def _require_integer(facts: Mapping[str, Any], field: str, expected: int) -> Non
         raise ValueError(f"physical evidence requires {field}={expected}")
 
 
+def _joined_sample_facts(
+    sample: Mapping[str, Any], sessions_by_id: Mapping[str, Mapping[str, Any]]
+) -> Mapping[str, Any]:
+    facts = sample.get("backend_facts")
+    if not isinstance(facts, Mapping):
+        raise ValueError("physical sample lacks backend facts")
+    joined = dict(facts)
+    session_id = sample.get("session_instance_id")
+    if isinstance(session_id, str):
+        session = sessions_by_id.get(session_id)
+        terminal = session.get("terminal_backend_facts") if session else None
+        if isinstance(terminal, Mapping):
+            for field, value in terminal.items():
+                joined.setdefault(field, value)
+    return joined
+
+
 def inspect_physical_artifacts(
     *,
     input_dir: Path,
@@ -227,12 +244,12 @@ def inspect_physical_artifacts(
         if sample.get("output_sha256") is None:
             raise ValueError("physical qualification sample lacks an output hash")
         numeric = sample.get("numeric_facts")
-        facts = sample.get("backend_facts")
+        facts = _joined_sample_facts(sample, sessions_by_id)
         validation = sample.get("validation")
         if not isinstance(numeric, Mapping) or numeric.get("numeric_policy") != numeric_policy:
             raise ValueError("physical sample has an unexpected numeric policy")
-        if not isinstance(facts, Mapping) or not isinstance(validation, Mapping):
-            raise ValueError("physical sample lacks backend or validation facts")
+        if not isinstance(validation, Mapping):
+            raise ValueError("physical sample lacks validation facts")
         for field, expected in (
             ("requested_dpus", 1),
             ("allocated_dpus", 1),
