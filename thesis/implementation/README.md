@@ -106,8 +106,10 @@ scaling, broad graph residency, or hardware-calibrated planning.
 
 The active native kernel is `dpu_real_tile_v4_wram_panel_v1`: a bounded dense
 real-tile kernel with global shared B panels and tasklet-indexed A/output WRAM
-buffers. It is software/simulator-qualified only. Its use does not establish a
-physical timing, scaling, energy, or kernel-competitiveness result.
+buffers. Tag `thesis-m7a-wram-kernel-software-ready-v1` and its release bundle
+record exact-head SDK-simulator qualification for this kernel. That evidence is
+software/simulator-qualified only and does not establish a physical timing,
+scaling, energy, or kernel-competitiveness result.
 
 The active native runtime uses pinned SimplePIM management types and its
 initialization kernel around raw-SDK allocation and dispatch. It is not yet a

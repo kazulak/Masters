@@ -53,12 +53,28 @@ incomplete artifact; verification must reject it as incomplete.
 
 Manifests use `evidence_manifest_v2`, samples use `evidence_sample_v3`,
 sessions use `evidence_session_v1`, and reports use `evidence_report_v3`.
-Earlier sample evidence is unsupported. Sample `status`
+Earlier sample evidence is unsupported by the active verifier unless the
+generation is listed below. Sample `status`
 describes whether the complete attempt finished: a validator exception creates
 a failed sample, while a policy-reference mismatch or accuracy qualification
 miss remains a successful sample with its measurement, output hash, and facts
 retained. Policy-reference correctness is reported separately from
 `accuracy_qualified`.
+
+## Artifact Compatibility
+
+Evidence is verified with the toolchain that owns its schema generation. The
+active implementation does not carry a generic migration framework.
+
+| Artifact generation | Manifest / sample / session / report schemas | Source tag or release | Active verifier support | Reviewer command |
+|---|---|---|---|---|
+| M6 software qualification | `v1` / `v2` / `v1` / `v2` | `thesis-m6-software-ready-v1` release | No | Use the M6 tag/release toolchain: `make verify INPUT=<run>` |
+| M7A WRAM-kernel qualification | `v2` / `v3` / `v1` / `v3` | `thesis-m7a-wram-kernel-software-ready-v1` release | Yes | `make verify INPUT=<run>` |
+| Later M7B pre-physical evidence | `v2` / `v3` / `v1` / later report schema | M7B qualified tag when created | Defined by that tag | Use the matching qualified tag's `make verify` command |
+
+The M6 release exists; it is tag-pinned rather than unsupported because of a
+missing release. M7A evidence remains readable by the active verifier so that
+later qualification can re-check its immutable bundle.
 
 ## Copy ETH Results
 

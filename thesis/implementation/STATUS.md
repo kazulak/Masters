@@ -10,9 +10,11 @@ The authoritative M6 exact-head record is the annotated tag
 software qualification is complete and `software_merge_ready` is established.
 Physical UPMEM qualification remains pending.
 
-M7A activates a bounded WRAM-panel dense real-tile kernel in source. Its final
-exact-head software qualification and every physical measurement remain
-pending; no M7A performance or scaling result exists.
+M7A activates the bounded WRAM-panel dense real-tile kernel
+`dpu_real_tile_v4_wram_panel_v1`. Its exact-head software qualification is
+complete at `thesis-m7a-wram-kernel-software-ready-v1`; the published release
+bundle records SDK-simulator execution only. Every physical measurement remains
+pending, and no M7A performance or scaling result exists.
 
 | Capability | Implemented | Software/simulator validation | Physical evidence | Claimable now |
 |---|---|---|---|---|
@@ -24,10 +26,10 @@ pending; no M7A performance or scaling result exists.
 | QuEST CPU adapter | Yes | Controlled software tests | No current reset run | Adapter availability, not CPU performance |
 | QuEST GPU adapter | Yes | Controlled software tests | No compatible GPU run | Capability detection and explicit unsupported result |
 | UPMEM physical mapping | Yes, bounded output/K tiles | Yes | Reset route pending | Plan construction only |
-| ABI-v4 UPMEM runtime | Yes | Controlled simulator tests; M6 software qualification complete | Reset route pending | Controlled-test correctness only |
-| WRAM-panel dense real-tile kernel | Yes, `KC=64`, `NC=32` | Source, ABI, CPU replay, and SDK-simulator tests | No | Bounded kernel correctness and deterministic movement facts only |
-| Split-complex float32 | Yes | Controlled CPU replay/simulator tests; M6 software qualification complete | Reset route pending | Controlled-test correctness only |
-| Split-complex packed int8 | Yes | Controlled CPU replay/simulator tests; M6 software qualification complete | Reset route pending | Controlled-test correctness and numeric facts |
+| ABI-v4 UPMEM runtime | Yes | M6/M7A controlled SDK-simulator qualification complete | Reset route pending | Controlled-test correctness only |
+| WRAM-panel dense real-tile kernel | Yes, `KC=64`, `NC=32` | M7A source, ABI, CPU replay, and SDK-simulator qualification complete | No | Bounded kernel correctness and deterministic movement facts only |
+| Split-complex float32 | Yes | M6/M7A controlled CPU replay and simulator qualification complete | Reset route pending | Controlled-test correctness only |
+| Split-complex packed int8 | Yes | M6/M7A controlled CPU replay and simulator qualification complete | Reset route pending | Controlled-test correctness and numeric facts |
 | Local contraction slicing | Yes | Yes | Reset route pending | Logical slicing correctness only |
 | Host reduction | Yes | Yes | Reset route pending | Bounded host-round-trip correctness |
 | DPU-resident intermediates | No | No | No | No claim |
@@ -89,7 +91,9 @@ UPMEM TN acceleration.
   provider or public command.
 - **ATiM:** not integrated.
 
-After M7A exact-head software qualification, the next allowed hardware work is
-a bounded physical one-DPU qualification using the active WRAM-panel kernel.
-Tasklet/DPU scaling, slice scheduling, and residency remain later experiments
-and require measured evidence before they become claims.
+M7A exact-head software qualification is complete. M7B pre-physical hardening
+must still freeze direct boundary coverage, resource admission, collection
+conditions, and claim reporting before a bounded physical one-DPU qualification
+using the active WRAM-panel kernel. Tasklet/DPU scaling, slice scheduling, and
+residency remain later experiments and require measured evidence before they
+become claims.

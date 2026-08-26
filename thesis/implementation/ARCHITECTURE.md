@@ -154,11 +154,13 @@ integrated.
 ## Current Limits
 
 Controlled tests cover the reset software and SDK-simulator boundaries,
-including prior ABI-v4 complex float32/int8 checks. Tag
-`thesis-m6-software-ready-v1` and its release bundle exist, confirming complete
-M6 software qualification. The physical UPMEM route remains pending and is not yet
-ETH-qualified. Consequently, current code supports no claim of physical speedup,
-energy efficiency, multi-rank scaling, or general UPMEM TN execution. Physical
+including ABI-v4 WRAM-panel complex float32/int8 checks. Tags
+`thesis-m6-software-ready-v1` and
+`thesis-m7a-wram-kernel-software-ready-v1`, with their release bundles,
+confirm exact-head software qualification for their respective sources. The
+physical UPMEM route remains pending and is not yet ETH-qualified.
+Consequently, current code supports no claim of physical speedup, energy
+efficiency, multi-rank scaling, or general UPMEM TN execution. Physical
 qualification is a separate run using the exact source, native binaries,
 topology, and configuration recorded in evidence.
 
