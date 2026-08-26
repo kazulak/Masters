@@ -10,6 +10,7 @@ explicitly requested.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 from pathlib import Path
@@ -286,8 +287,38 @@ def inspect_campaign(*, input_dir: Path, report_dir: Path | None = None) -> Mapp
     }
     if report_dir is not None:
         report = json.loads((report_dir / "report.json").read_text(encoding="utf-8"))
+        if report.get("schema_version") != "evidence_report_v5":
+            raise ValueError("M7C scaling report must use evidence_report_v5")
         result["report_schema_version"] = report.get("schema_version")
         result["scaling_count"] = report.get("scaling_count")
+        if configuration["collection"]["claim_policy"] == "physical_performance_v1":
+            with (report_dir / "scaling.csv").open(newline="", encoding="utf-8") as stream:
+                scaling_rows = list(csv.DictReader(stream))
+            primary = [
+                row for row in scaling_rows if row.get("comparison_role") == "primary"
+            ]
+            required_primary = {
+                ("tasklet_scaling", "1", "8"),
+                ("dpu_scaling", "1", "2"),
+                ("dpu_scaling", "1", "4"),
+            }
+            observed_primary = {
+                (
+                    row.get("comparison_kind"),
+                    row.get("baseline_tasklet_count")
+                    if row.get("comparison_kind") == "tasklet_scaling"
+                    else row.get("baseline_dpu_count"),
+                    row.get("candidate_tasklet_count")
+                    if row.get("comparison_kind") == "tasklet_scaling"
+                    else row.get("candidate_dpu_count"),
+                )
+                for row in primary
+            }
+            if observed_primary != required_primary or any(
+                row.get("claim_eligible") != "True" for row in primary
+            ):
+                raise ValueError("physical performance scaling report failed its claim gate")
+            result["primary_scaling_claims_eligible"] = True
     return result
 
 

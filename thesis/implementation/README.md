@@ -86,6 +86,21 @@ PYTHONPATH=src ../.venv/bin/python scripts/select_m7c_workload.py --check \
   --config configs/tn_benchmark_physical_scaling_diagnostic.yml
 ```
 
+The tracked scaling templates have distinct roles:
+
+- `tn_benchmark_physical_scaling_diagnostic.yml`: one warmup and five measured
+  complete blocks for the selected stress18 diagnostic, using NumPy plus 1 DPU
+  x 1 tasklet, 1 DPU x 8 tasklets, 2 DPUs x 8 tasklets, and 4 DPUs x 8 tasklets.
+- `tn_benchmark_physical_scaling.yml`: the conditional stress18 thesis campaign
+  with two warmup and 30 measured blocks under `physical_performance_v1`.
+- `tn_benchmark_physical_scaling_confirmation.yml`: a smaller GHZ18 diagnostic
+  that tests whether the controlled scaling observation generalizes across a
+  different circuit structure.
+
+Prepare an ignored mixed-campaign copy and invoke the committed campaign script
+only on the designated ETH machine. It runs `quantum_bench.cli run
+--allow-physical`, never weakens the physical-only `qualify` command.
+
 `plan` writes a deterministic experiment plan without execution. `run` writes
 canonical evidence. `verify` checks evidence identities and integrity.
 `report` only reads existing evidence and produces tables and plots.
@@ -163,6 +178,7 @@ native/upmem/pidcomm_qualification/  standalone compatibility harness
 configs/tn_benchmark_reset.yml       software benchmark suite
 configs/tn_benchmark_physical_smoke.yml  one-DPU physical smoke template
 configs/m7c_workload_selection.json  preregistered M7C workload selection
+configs/tn_benchmark_physical_scaling.yml  conditional 30-block campaign
 ```
 
 Generated evidence is written below `runs/` and is ignored by Git. Reviewed

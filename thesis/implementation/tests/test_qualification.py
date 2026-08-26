@@ -176,6 +176,7 @@ def test_m7c_committed_selection_matches_scaling_config() -> None:
     selection = ROOT / "configs" / "m7c_workload_selection.json"
     for config in (
         "tn_benchmark_physical_scaling_diagnostic.yml",
+        "tn_benchmark_physical_scaling.yml",
         "tn_benchmark_physical_scaling_confirmation.yml",
     ):
         selector.check_selection(selection, ROOT / "configs" / config)

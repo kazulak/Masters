@@ -196,3 +196,27 @@ PYTHONPATH=src ../.venv/bin/python scripts/select_m7c_workload.py --check \
   configs/m7c_workload_selection.json \
   --config configs/tn_benchmark_physical_scaling_diagnostic.yml
 ```
+
+For a mixed NumPy/physical diagnostic, use the committed campaign tool rather
+than `qualify`, which intentionally remains physical-only. The tool checks the
+selection, requires a clean worktree, and then invokes `run --allow-physical`:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python scripts/run_m7c_scaling_campaign.py prepare \
+  --template configs/tn_benchmark_physical_scaling_diagnostic.yml \
+  --output runs/configs/eth/scaling-diagnostic.yml \
+  --rank-path /dev/dpu_rank0 \
+  --session-root runs/upmem_sessions/eth-scaling-diagnostic \
+  --expected-cpus 0
+PYTHONPATH=src ../.venv/bin/python scripts/run_m7c_scaling_campaign.py run \
+  --selection configs/m7c_workload_selection.json \
+  --config runs/configs/eth/scaling-diagnostic.yml \
+  --output runs/evidence/eth-scaling-diagnostic \
+  --report-output runs/comparisons/eth-scaling-diagnostic
+```
+
+The diagnostic has no speedup claim. The conditional
+`tn_benchmark_physical_scaling.yml` campaign has two warmup and 30 measurement
+blocks under `physical_performance_v1`; its inspection requires the three
+primary tasklet/DPU scaling rows to pass their claim gates. The smaller GHZ18
+confirmation template remains diagnostic-only.
