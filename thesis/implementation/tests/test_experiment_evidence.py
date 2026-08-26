@@ -605,6 +605,15 @@ def test_sample_status_schemas(status: str) -> None:
     validate_sample(_sample(status))
 
 
+@pytest.mark.parametrize("status", ["failed", "unsupported"])
+def test_non_successful_samples_reject_validation(status: str) -> None:
+    sample = _sample(status)
+    sample["validation"] = _validation()
+
+    with pytest.raises(ValueError, match="must have null validation"):
+        validate_sample(sample)
+
+
 def test_full_state_sample_allows_null_tensor_network_and_logical_plan() -> None:
     sample = _sample(plan_id=None)
     sample["identities"]["tensor_network_structure_id"] = None

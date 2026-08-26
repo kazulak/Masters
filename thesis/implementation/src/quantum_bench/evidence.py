@@ -773,9 +773,6 @@ def validate_sample(record: Mapping[str, Any]) -> None:
         raise ValueError("sample_id does not match the sample identity fields")
     _mapping(record["backend_facts"], "backend_facts")
     _mapping(record["numeric_facts"], "numeric_facts")
-    if record["validation"] is not None:
-        _validate_validation(record["validation"])
-
     status = record["status"]
     if status == "success":
         if record["measurement"] is None:
@@ -786,12 +783,16 @@ def validate_sample(record: Mapping[str, Any]) -> None:
         _sha256(record["output_sha256"], "output_sha256")
         if record["failure"] is not None:
             raise ValueError("successful samples must have null failure")
+        if record["validation"] is not None:
+            _validate_validation(record["validation"])
         return
 
     if record["measurement"] is not None:
         raise ValueError("unsupported and failed samples must have null measurement")
     if record["output_sha256"] is not None:
         raise ValueError("unsupported and failed samples must have null output_sha256")
+    if record["validation"] is not None:
+        raise ValueError("unsupported and failed samples must have null validation")
     if record["failure"] is None:
         raise ValueError("unsupported and failed samples require failure")
     _validate_failure(record["failure"], status)
