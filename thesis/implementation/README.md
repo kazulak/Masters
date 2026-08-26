@@ -47,17 +47,19 @@ make report INPUT=runs/reset-run REPORT_OUTPUT=runs/reset-report
 # Build the active UPMEM ABI-v4 host and DPU binaries.
 make build-upmem-runtime UPMEM_TASKLETS=1
 
-# Physical execution is opt-in and uses the dedicated physical configuration.
+# Physical execution is opt-in and uses the safe smoke template by default.
 UPMEM_ALLOW_PHYSICAL_HARDWARE=1 \
-  make qualify PHYSICAL_CONFIG=configs/tn_benchmark_physical.yml \
+  make qualify PHYSICAL_CONFIG=configs/tn_benchmark_physical_smoke.yml \
   OUTPUT=runs/physical-run
 
 ```
 
 `configs/tn_benchmark_reset.yml` is the default CPU/TN software smoke suite.
-`configs/tn_benchmark_physical.yml` is the one-DPU physical qualification
-suite. Before physical execution, set its `rank_paths` and binary paths for
-the target machine and build the matching tasklet-count binaries.
+`configs/tn_benchmark_physical_smoke.yml` is the one-DPU physical float32
+smoke template. Do not edit it for a target machine. The M7C physical
+preparation script creates an ignored copy below `runs/configs/eth/`, resolving
+the template paths before it writes target-specific binary, session, and rank
+paths. Supply the later scaling configuration explicitly.
 
 `plan` writes a deterministic experiment plan without execution. `run` writes
 canonical evidence. `verify` checks evidence identities and integrity.
@@ -130,7 +132,7 @@ src/quantum_bench/
 native/upmem/runtime/       active ABI-v4 host/DPU build
 native/upmem/pidcomm_qualification/  standalone compatibility harness
 configs/tn_benchmark_reset.yml       software benchmark suite
-configs/tn_benchmark_physical.yml    physical qualification suite
+configs/tn_benchmark_physical_smoke.yml  one-DPU physical smoke template
 ```
 
 Generated evidence is written below `runs/` and is ignored by Git. Reviewed

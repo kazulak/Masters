@@ -89,25 +89,27 @@ def test_make_public_targets_are_exact_and_pidcomm_is_private() -> None:
     ]
 
 
-def test_physical_configuration_freezes_thesis_collection_policy() -> None:
-    config = load_experiment_config(ROOT / "configs" / "tn_benchmark_physical.yml")
+def test_physical_smoke_configuration_is_the_safe_default() -> None:
+    config = load_experiment_config(
+        ROOT / "configs" / "tn_benchmark_physical_smoke.yml"
+    )
 
     assert config["schema_version"] == "tn_benchmark_v3"
     assert config["collection"] == {
-        "claim_policy": "physical_performance_v1",
-        "base_seed": 20260825,
-        "warmup_blocks": 2,
-        "measurement_blocks": 30,
+        "claim_policy": "diagnostic_v1",
+        "base_seed": 20260826,
+        "warmup_blocks": 1,
+        "measurement_blocks": 5,
         "session_policy": "fresh_session_per_attempt_v1",
         "block_cooldown_s": 0.0,
         "machine_policy": {
-            "machine_exclusivity": {"mode": "operator_attested_v1"},
-            "cpu_governor": {"mode": "performance_required_v1"},
-            "affinity": {"mode": "exact_required_v1", "expected_cpus": (0,)},
-            "numa_policy": {"mode": "operator_attested_v1"},
+            "machine_exclusivity": {"mode": "observed_v1"},
+            "cpu_governor": {"mode": "observed_v1"},
+            "affinity": {"mode": "observed_v1", "expected_cpus": None},
+            "numa_policy": {"mode": "observed_v1"},
             "background_load": {
                 "mode": "observed_v1",
-                "max_load1_per_online_cpu": 0.25,
+                "max_load1_per_online_cpu": None,
             },
         },
     }
@@ -115,22 +117,30 @@ def test_physical_configuration_freezes_thesis_collection_policy() -> None:
 
 def _config() -> str:
     return """\
-schema_version: tn_benchmark_v2
+schema_version: tn_benchmark_v3
 experiment_id: focused
 defaults:
   timeout_s: 2.5
 collection:
+  claim_policy: diagnostic_v1
   base_seed: 7
   warmup_blocks: 0
   measurement_blocks: 1
   session_policy: fresh_session_per_attempt_v1
-  cooldown_s: 0.0
+  block_cooldown_s: 0.0
   machine_policy:
-    machine_exclusivity: observed_v1
-    cpu_governor: observed_v1
-    affinity: observed_v1
-    numa_policy: observed_v1
-    background_load: observed_v1
+    machine_exclusivity:
+      mode: observed_v1
+    cpu_governor:
+      mode: observed_v1
+    affinity:
+      mode: observed_v1
+      expected_cpus: null
+    numa_policy:
+      mode: observed_v1
+    background_load:
+      mode: observed_v1
+      max_load1_per_online_cpu: null
 cases:
   qasm_case:
     circuit:
@@ -372,22 +382,30 @@ def test_loader_rejects_invalid_simulator_topology(tmp_path: Path) -> None:
 
 def _numpy_config(*, warmups: int = 0, repetitions: int = 1) -> str:
     return f"""\
-schema_version: tn_benchmark_v2
+schema_version: tn_benchmark_v3
 experiment_id: cli-focused
 defaults:
   timeout_s: 2.5
 collection:
+  claim_policy: diagnostic_v1
   base_seed: 7
   warmup_blocks: {warmups}
   measurement_blocks: {repetitions}
   session_policy: fresh_session_per_attempt_v1
-  cooldown_s: 0.0
+  block_cooldown_s: 0.0
   machine_policy:
-    machine_exclusivity: observed_v1
-    cpu_governor: observed_v1
-    affinity: observed_v1
-    numa_policy: observed_v1
-    background_load: observed_v1
+    machine_exclusivity:
+      mode: observed_v1
+    cpu_governor:
+      mode: observed_v1
+    affinity:
+      mode: observed_v1
+      expected_cpus: null
+    numa_policy:
+      mode: observed_v1
+    background_load:
+      mode: observed_v1
+      max_load1_per_online_cpu: null
 cases:
   bell:
     circuit:
@@ -447,6 +465,49 @@ def _physical_config() -> str:
             "      rank_paths: [/dev/dpu_rank0]",
         )
         .replace("route_ids: [numpy]", "route_ids: [physical]")
+    )
+
+
+def _physical_performance_config() -> str:
+    return _physical_config().replace(
+        "  claim_policy: diagnostic_v1\n"
+        "  base_seed: 7\n"
+        "  warmup_blocks: 0\n"
+        "  measurement_blocks: 1\n"
+        "  session_policy: fresh_session_per_attempt_v1\n"
+        "  block_cooldown_s: 0.0\n"
+        "  machine_policy:\n"
+        "    machine_exclusivity:\n"
+        "      mode: observed_v1\n"
+        "    cpu_governor:\n"
+        "      mode: observed_v1\n"
+        "    affinity:\n"
+        "      mode: observed_v1\n"
+        "      expected_cpus: null\n"
+        "    numa_policy:\n"
+        "      mode: observed_v1\n"
+        "    background_load:\n"
+        "      mode: observed_v1\n"
+        "      max_load1_per_online_cpu: null",
+        "  claim_policy: physical_performance_v1\n"
+        "  base_seed: 7\n"
+        "  warmup_blocks: 2\n"
+        "  measurement_blocks: 30\n"
+        "  session_policy: fresh_session_per_attempt_v1\n"
+        "  block_cooldown_s: 0.0\n"
+        "  machine_policy:\n"
+        "    machine_exclusivity:\n"
+        "      mode: operator_attested_v1\n"
+        "    cpu_governor:\n"
+        "      mode: performance_required_v1\n"
+        "    affinity:\n"
+        "      mode: exact_required_v1\n"
+        "      expected_cpus: [0]\n"
+        "    numa_policy:\n"
+        "      mode: operator_attested_v1\n"
+        "    background_load:\n"
+        "      mode: observed_v1\n"
+        "      max_load1_per_online_cpu: 0.25",
     )
 
 
@@ -663,7 +724,9 @@ def test_block_cooldown_occurs_once_after_each_nonfinal_block(
     config_path = tmp_path / "cooldown.yml"
     _write_config(
         config_path,
-        _numpy_config(repetitions=2).replace("cooldown_s: 0.0", "cooldown_s: 0.25"),
+        _numpy_config(repetitions=2).replace(
+            "block_cooldown_s: 0.0", "block_cooldown_s: 0.25"
+        ),
     )
     config = load_experiment_config(config_path)
     selected = [
@@ -682,9 +745,11 @@ def test_block_cooldown_occurs_once_after_each_nonfinal_block(
 
 
 def test_physical_machine_preflight_records_static_admission(
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = load_experiment_config(ROOT / "configs" / "tn_benchmark_physical.yml")
+    config_path = tmp_path / "physical-performance.yml"
+    _write_config(config_path, _physical_performance_config())
+    config = load_experiment_config(config_path)
     monkeypatch.setenv("QUANTUM_BENCH_EXCLUSIVITY_ATTESTED", "1")
     monkeypatch.setenv("QUANTUM_BENCH_NUMA_ATTESTED", "1")
     monkeypatch.setattr(cli, "_observed_affinity", lambda: [0])
@@ -719,10 +784,10 @@ def test_physical_machine_preflight_failure_finalizes_without_attempts(
         },
     )
 
+    config_path = tmp_path / "physical-performance.yml"
+    _write_config(config_path, _physical_performance_config())
     result = cli.run_command(
-        str(ROOT / "configs" / "tn_benchmark_physical.yml"),
-        str(tmp_path / "preflight-failure"),
-        allow_physical=True,
+        str(config_path), str(tmp_path / "preflight-failure"), allow_physical=True
     )
 
     assert result["status"] == "failed"

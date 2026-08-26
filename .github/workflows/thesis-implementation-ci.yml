@@ -46,7 +46,7 @@ jobs:
           make PYTHON=python -n run CONFIG=configs/tn_benchmark_reset.yml OUTPUT="$RUNNER_TEMP/qbench-run"
           make PYTHON=python -n report INPUT="$RUNNER_TEMP/qbench-run" REPORT_OUTPUT="$RUNNER_TEMP/qbench-report"
           make PYTHON=python -n verify INPUT="$RUNNER_TEMP/qbench-run"
-          make PYTHON=python -n qualify PHYSICAL_CONFIG=configs/tn_benchmark_physical.yml OUTPUT="$RUNNER_TEMP/qbench-qualify" UPMEM_ALLOW_PHYSICAL_HARDWARE=1
+          make PYTHON=python -n qualify PHYSICAL_CONFIG=configs/tn_benchmark_physical_smoke.yml OUTPUT="$RUNNER_TEMP/qbench-qualify" UPMEM_ALLOW_PHYSICAL_HARDWARE=1
           make PYTHON=python -n build-upmem-runtime UPMEM_TASKLETS=1
       - name: Run active plan, benchmark, verification, and report smoke
         run: |

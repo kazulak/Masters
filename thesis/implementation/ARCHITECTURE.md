@@ -160,7 +160,9 @@ including ABI-v4 WRAM-panel complex float32/int8 checks. Tags
 `thesis-m6-software-ready-v1` and
 `thesis-m7a-wram-kernel-software-ready-v1`, with their release bundles,
 confirm exact-head software qualification for their respective sources. The
-physical UPMEM route remains pending and is not yet ETH-qualified.
+physical UPMEM route remains pending and is not yet ETH-qualified. M7B
+pre-physical software qualification is recorded by
+`thesis-m7b-prephysical-software-ready-v1`; that tag is not physical evidence.
 Consequently, current code supports no claim of physical speedup, energy
 efficiency, multi-rank scaling, or general UPMEM TN execution. Physical
 qualification is a separate run using the exact source, native binaries,

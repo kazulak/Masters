@@ -7,7 +7,7 @@ CLI := $(PY_ENV) $(PYTHON) -m quantum_bench.cli
 RUN_STAMP := $(shell date +%Y-%m-%d_%H-%M-%S)
 
 CONFIG ?= configs/tn_benchmark_reset.yml
-PHYSICAL_CONFIG ?= configs/tn_benchmark_physical.yml
+PHYSICAL_CONFIG ?= configs/tn_benchmark_physical_smoke.yml
 OUTPUT ?= runs/reset/$(RUN_STAMP)
 INPUT ?=
 REPORT_OUTPUT ?= runs/reports/$(RUN_STAMP)

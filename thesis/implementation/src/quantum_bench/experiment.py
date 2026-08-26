@@ -93,7 +93,9 @@ _DEFAULT_VALIDATION_POLICY_ID = identity_hash(
     "quantum_bench.validation_policy_id.v1", _DEFAULT_VALIDATION_POLICY
 )
 
-_CONFIG_SCHEMAS = frozenset({"tn_benchmark_v2", "tn_benchmark_v3"})
+# New experiment runs use the final collection and identity contract. The
+# evidence verifier owns the narrow v2 compatibility path for retained runs.
+_CONFIG_SCHEMAS = frozenset({"tn_benchmark_v3"})
 _CONFIG_FIELDS = frozenset(
     {
         "schema_version",
@@ -527,7 +529,7 @@ def _experiment_id_v3(payload: Mapping[str, object]) -> str:
 
 
 def load_experiment_config(path: str | os.PathLike[str]) -> Mapping[str, object]:
-    """Load and strictly validate one immutable v2 or v3 benchmark config."""
+    """Load and strictly validate one immutable v3 benchmark config."""
 
     config_path = Path(path)
     if not config_path.exists() or not config_path.is_file():

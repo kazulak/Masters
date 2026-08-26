@@ -65,17 +65,18 @@ even a one-DPU physical execution claim, run:
 ```bash
 make build-upmem-runtime UPMEM_TASKLETS=1
 UPMEM_ALLOW_PHYSICAL_HARDWARE=1 \
-  make qualify PHYSICAL_CONFIG=configs/tn_benchmark_physical.yml \
+  make qualify PHYSICAL_CONFIG=configs/tn_benchmark_physical_smoke.yml \
   OUTPUT=runs/physical-qualification
 make verify INPUT=runs/physical-qualification
 make report INPUT=runs/physical-qualification \
   REPORT_OUTPUT=runs/physical-qualification-report
 ```
 
-The physical configuration must contain the target's real rank path and paths
-to matching ABI-v4 binaries. Qualification evidence must record allocation,
-launch, release, observed physical backend facts, output validation, and the
-source/binary/environment identities.
+The tracked smoke configuration is a template. Generate an ignored ETH copy
+through the M7C physical preparation script, which resolves target-specific
+rank, session, and executable paths before writing it. Qualification evidence
+must record allocation, launch, release, observed physical backend facts,
+output validation, and source/binary/environment identities.
 
 Until that run succeeds, do not claim physical speedup, energy efficiency,
 parallel scaling, multi-rank operation, graph-wide residency, or general
@@ -91,10 +92,11 @@ UPMEM TN acceleration.
   provider or public command.
 - **ATiM:** not integrated.
 
-M7A exact-head software qualification is complete. M7B now adds deterministic
-direct SDK boundary coverage, persisted startup/execution resource admission,
-physical-campaign collection policy, and a claim-gated `scaling.csv`. The
-committed `scripts/qualify_m7b.py` still needs to qualify the final exact M7B
-head on the designated SDK machine before a bounded physical one-DPU
-qualification. Tasklet/DPU scaling, slice scheduling, and residency remain
-later experiments and require measured evidence before they become claims.
+M7A exact-head software qualification is complete. M7B exact-head
+pre-physical qualification is complete at
+`thesis-m7b-prephysical-software-ready-v1`; its release records CPU,
+SDK-simulator, direct native-boundary, provenance, and evidence checks.
+Physical UPMEM qualification remains pending. The next stage is a bounded
+one-DPU physical smoke followed by separately preregistered scaling work.
+Tasklet/DPU scaling, slice scheduling, and residency require measured
+evidence before they become claims.

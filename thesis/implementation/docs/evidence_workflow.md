@@ -70,7 +70,7 @@ active implementation does not carry a generic migration framework.
 |---|---|---|---|---|
 | M6 software qualification | `v1` / `v2` / `v1` / `v2` | `thesis-m6-software-ready-v1` release | No | Use the M6 tag/release toolchain: `make verify INPUT=<run>` |
 | M7A WRAM-kernel qualification | `v2` / `v3` / `v1` / `v3` | `thesis-m7a-wram-kernel-software-ready-v1` release | Yes | `make verify INPUT=<run>` |
-| M7B pre-physical evidence | `v2` / `v3` / `v1` / `v4` | M7B qualified tag when created | Defined by that tag | Use the matching qualified tag's `make verify` command |
+| M7B pre-physical evidence | `v2` / `v3` / `v1` / `v4` | `thesis-m7b-prephysical-software-ready-v1` release | Yes | `make verify INPUT=<run>` |
 
 The M6 release exists; it is tag-pinned rather than unsupported because of a
 missing release. M7A evidence remains readable by the active verifier so that
@@ -145,4 +145,8 @@ identity, interval and provenance. A rejected claim must be reported with its
 reasons.
 
 This workflow records capability and evidence; it does not claim that any
-physical UPMEM qualification has been completed.
+physical UPMEM qualification has been completed. For ETH use, generate an
+ignored configuration below `runs/configs/eth/` through the committed M7C
+physical preparation script. Do not edit tracked rank paths, affinity, session
+roots, or binary paths; target-specific values belong only in the ignored copy
+and the manifest embedded in canonical evidence.
