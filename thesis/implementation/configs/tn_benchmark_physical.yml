@@ -1,19 +1,27 @@
-schema_version: tn_benchmark_v2
+schema_version: tn_benchmark_v3
 experiment_id: one-dpu-reset-qualification
 defaults:
   timeout_s: 120.0
 collection:
+  claim_policy: physical_performance_v1
   base_seed: 20260825
   warmup_blocks: 2
   measurement_blocks: 30
   session_policy: fresh_session_per_attempt_v1
-  cooldown_s: 0.0
+  block_cooldown_s: 0.0
   machine_policy:
-    machine_exclusivity: observed_v1
-    cpu_governor: observed_v1
-    affinity: observed_v1
-    numa_policy: observed_v1
-    background_load: observed_v1
+    machine_exclusivity:
+      mode: operator_attested_v1
+    cpu_governor:
+      mode: performance_required_v1
+    affinity:
+      mode: exact_required_v1
+      expected_cpus: [0]
+    numa_policy:
+      mode: operator_attested_v1
+    background_load:
+      mode: observed_v1
+      max_load1_per_online_cpu: 0.25
 cases:
   bell_2q:
     circuit:

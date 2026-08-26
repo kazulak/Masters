@@ -93,7 +93,7 @@ _DEFAULT_VALIDATION_POLICY_ID = identity_hash(
     "quantum_bench.validation_policy_id.v1", _DEFAULT_VALIDATION_POLICY
 )
 
-_CONFIG_SCHEMA = "tn_benchmark_v2"
+_CONFIG_SCHEMAS = frozenset({"tn_benchmark_v2", "tn_benchmark_v3"})
 _CONFIG_FIELDS = frozenset(
     {
         "schema_version",
@@ -107,13 +107,24 @@ _CONFIG_FIELDS = frozenset(
     }
 )
 _DEFAULT_FIELDS = frozenset({"timeout_s"})
-_COLLECTION_FIELDS = frozenset(
+_COLLECTION_V2_FIELDS = frozenset(
     {
         "base_seed",
         "warmup_blocks",
         "measurement_blocks",
         "session_policy",
         "cooldown_s",
+        "machine_policy",
+    }
+)
+_COLLECTION_V3_FIELDS = frozenset(
+    {
+        "claim_policy",
+        "base_seed",
+        "warmup_blocks",
+        "measurement_blocks",
+        "session_policy",
+        "block_cooldown_s",
         "machine_policy",
     }
 )
@@ -128,6 +139,19 @@ _MACHINE_POLICY_FIELDS = frozenset(
 )
 _SESSION_POLICIES = frozenset({"fresh_session_per_attempt_v1"})
 _OBSERVATION_POLICIES = frozenset({"observed_v1"})
+_CLAIM_POLICIES = frozenset({"diagnostic_v1", "physical_performance_v1"})
+_MACHINE_POLICY_MODE_FIELDS = frozenset({"mode"})
+_AFFINITY_POLICY_FIELDS = frozenset({"mode", "expected_cpus"})
+_BACKGROUND_LOAD_POLICY_FIELDS = frozenset(
+    {"mode", "max_load1_per_online_cpu"}
+)
+_MACHINE_POLICY_MODES = {
+    "machine_exclusivity": frozenset({"observed_v1", "operator_attested_v1"}),
+    "cpu_governor": frozenset({"observed_v1", "performance_required_v1"}),
+    "affinity": frozenset({"observed_v1", "exact_required_v1"}),
+    "numa_policy": frozenset({"observed_v1", "operator_attested_v1"}),
+    "background_load": frozenset({"observed_v1"}),
+}
 _CASE_FIELDS = frozenset({"circuit"})
 _CIRCUIT_FIELDS = frozenset({"kind", "name", "path", "parameters"})
 _PLAN_FIELDS = frozenset({"planner", "slicing"})
@@ -421,8 +445,89 @@ def _normalize_route(value: object, root: Path, field: str) -> dict[str, object]
     return route
 
 
+def _normalize_v3_machine_policy(value: object) -> dict[str, object]:
+    policy = dict(_config_fields(value, _MACHINE_POLICY_FIELDS, "collection.machine_policy"))
+    normalized: dict[str, object] = {}
+    for field in ("machine_exclusivity", "cpu_governor", "numa_policy"):
+        entry = dict(
+            _config_fields(
+                policy[field], _MACHINE_POLICY_MODE_FIELDS, f"collection.machine_policy.{field}"
+            )
+        )
+        mode = _config_string(entry["mode"], f"collection.machine_policy.{field}.mode")
+        if mode not in _MACHINE_POLICY_MODES[field]:
+            raise ValueError(f"collection.machine_policy.{field}.mode has an unsupported value")
+        normalized[field] = {"mode": mode}
+
+    affinity = dict(
+        _config_fields(
+            policy["affinity"], _AFFINITY_POLICY_FIELDS, "collection.machine_policy.affinity"
+        )
+    )
+    affinity_mode = _config_string(affinity["mode"], "collection.machine_policy.affinity.mode")
+    if affinity_mode not in _MACHINE_POLICY_MODES["affinity"]:
+        raise ValueError("collection.machine_policy.affinity.mode has an unsupported value")
+    expected_cpus = affinity["expected_cpus"]
+    if expected_cpus is not None:
+        if not isinstance(expected_cpus, list) or not expected_cpus:
+            raise ValueError("collection.machine_policy.affinity.expected_cpus must be a nonempty list or null")
+        normalized_cpus = tuple(
+            _config_int(cpu, "collection.machine_policy.affinity.expected_cpus", minimum=0)
+            for cpu in expected_cpus
+        )
+        if len(set(normalized_cpus)) != len(normalized_cpus):
+            raise ValueError("collection.machine_policy.affinity.expected_cpus must be unique")
+        expected_cpus = normalized_cpus
+    if affinity_mode == "observed_v1" and expected_cpus is not None:
+        raise ValueError("observed affinity policy requires null expected_cpus")
+    if affinity_mode == "exact_required_v1" and expected_cpus is None:
+        raise ValueError("exact affinity policy requires expected_cpus")
+    normalized["affinity"] = {"mode": affinity_mode, "expected_cpus": expected_cpus}
+
+    background = dict(
+        _config_fields(
+            policy["background_load"],
+            _BACKGROUND_LOAD_POLICY_FIELDS,
+            "collection.machine_policy.background_load",
+        )
+    )
+    background_mode = _config_string(
+        background["mode"], "collection.machine_policy.background_load.mode"
+    )
+    if background_mode not in _MACHINE_POLICY_MODES["background_load"]:
+        raise ValueError("collection.machine_policy.background_load.mode has an unsupported value")
+    threshold = background["max_load1_per_online_cpu"]
+    if threshold is not None:
+        if isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
+            raise ValueError("collection.machine_policy.background_load.max_load1_per_online_cpu must be finite and >= 0")
+        if not isfinite(float(threshold)) or float(threshold) < 0:
+            raise ValueError("collection.machine_policy.background_load.max_load1_per_online_cpu must be finite and >= 0")
+        threshold = float(threshold)
+    normalized["background_load"] = {
+        "mode": background_mode,
+        "max_load1_per_online_cpu": threshold,
+    }
+    return normalized
+
+
+def _collection_policy_id_v1(collection: Mapping[str, object]) -> str:
+    return collection_policy_id(collection, configuration_schema="tn_benchmark_v2")
+
+
+def _collection_policy_id_v2(collection: Mapping[str, object]) -> str:
+    return collection_policy_id(collection, configuration_schema="tn_benchmark_v3")
+
+
+def _experiment_id_v2(payload: Mapping[str, object]) -> str:
+    return identity_hash("quantum_bench.experiment_id.v2", payload)
+
+
+def _experiment_id_v3(payload: Mapping[str, object]) -> str:
+    return identity_hash("quantum_bench.experiment_id.v3", payload)
+
+
 def load_experiment_config(path: str | os.PathLike[str]) -> Mapping[str, object]:
-    """Load and strictly validate one immutable ``tn_benchmark_v2`` config."""
+    """Load and strictly validate one immutable v2 or v3 benchmark config."""
 
     config_path = Path(path)
     if not config_path.exists() or not config_path.is_file():
@@ -430,7 +535,8 @@ def load_experiment_config(path: str | os.PathLike[str]) -> Mapping[str, object]
     root = config_path.resolve().parent
     raw = _load_config_yaml(config_path)
     config = dict(_config_fields(raw, _CONFIG_FIELDS, "configuration"))
-    if config["schema_version"] != _CONFIG_SCHEMA:
+    schema_version = config["schema_version"]
+    if schema_version not in _CONFIG_SCHEMAS:
         raise ValueError("configuration has an invalid schema_version")
     experiment_label = _config_id(config["experiment_id"], "experiment_id")
     defaults = dict(_config_fields(config["defaults"], _DEFAULT_FIELDS, "defaults"))
@@ -442,7 +548,11 @@ def load_experiment_config(path: str | os.PathLike[str]) -> Mapping[str, object]
     config["defaults"] = defaults
 
     collection = dict(
-        _config_fields(config["collection"], _COLLECTION_FIELDS, "collection")
+        _config_fields(
+            config["collection"],
+            _COLLECTION_V2_FIELDS if schema_version == "tn_benchmark_v2" else _COLLECTION_V3_FIELDS,
+            "collection",
+        )
     )
     collection["base_seed"] = _config_int(
         collection["base_seed"], "collection.base_seed"
@@ -460,30 +570,59 @@ def load_experiment_config(path: str | os.PathLike[str]) -> Mapping[str, object]
     )
     if collection["session_policy"] not in _SESSION_POLICIES:
         raise ValueError("collection.session_policy has an unsupported value")
-    cooldown_s = collection["cooldown_s"]
+    cooldown_field = "cooldown_s" if schema_version == "tn_benchmark_v2" else "block_cooldown_s"
+    cooldown_s = collection[cooldown_field]
     if isinstance(cooldown_s, bool) or not isinstance(cooldown_s, (int, float)):
-        raise ValueError("collection.cooldown_s must be finite and >= 0")
+        raise ValueError(f"collection.{cooldown_field} must be finite and >= 0")
     if not isfinite(float(cooldown_s)) or float(cooldown_s) < 0:
-        raise ValueError("collection.cooldown_s must be finite and >= 0")
-    collection["cooldown_s"] = float(cooldown_s)
-    machine_policy = dict(
-        _config_fields(
-            collection["machine_policy"],
-            _MACHINE_POLICY_FIELDS,
-            "collection.machine_policy",
-        )
-    )
-    for field, value in machine_policy.items():
-        machine_policy[field] = _config_string(
-            value, f"collection.machine_policy.{field}"
-        )
-        if machine_policy[field] not in _OBSERVATION_POLICIES:
-            raise ValueError(
-                f"collection.machine_policy.{field} has an unsupported value"
+        raise ValueError(f"collection.{cooldown_field} must be finite and >= 0")
+    collection[cooldown_field] = float(cooldown_s)
+    if schema_version == "tn_benchmark_v2":
+        machine_policy = dict(
+            _config_fields(
+                collection["machine_policy"],
+                _MACHINE_POLICY_FIELDS,
+                "collection.machine_policy",
             )
-    collection["machine_policy"] = machine_policy
+        )
+        for field, value in machine_policy.items():
+            machine_policy[field] = _config_string(
+                value, f"collection.machine_policy.{field}"
+            )
+            if machine_policy[field] not in _OBSERVATION_POLICIES:
+                raise ValueError(
+                    f"collection.machine_policy.{field} has an unsupported value"
+                )
+        collection["machine_policy"] = machine_policy
+    else:
+        collection["claim_policy"] = _config_string(
+            collection["claim_policy"], "collection.claim_policy"
+        )
+        if collection["claim_policy"] not in _CLAIM_POLICIES:
+            raise ValueError("collection.claim_policy has an unsupported value")
+        collection["machine_policy"] = _normalize_v3_machine_policy(
+            collection["machine_policy"]
+        )
+        if collection["claim_policy"] == "physical_performance_v1":
+            machine_policy = collection["machine_policy"]
+            if collection["warmup_blocks"] != 2 or collection["measurement_blocks"] != 30:
+                raise ValueError("physical_performance_v1 requires two warmup and 30 measurement blocks")
+            if machine_policy["machine_exclusivity"]["mode"] != "operator_attested_v1":
+                raise ValueError("physical_performance_v1 requires operator-attested exclusivity")
+            if machine_policy["cpu_governor"]["mode"] != "performance_required_v1":
+                raise ValueError("physical_performance_v1 requires the performance CPU governor")
+            if machine_policy["affinity"]["mode"] != "exact_required_v1":
+                raise ValueError("physical_performance_v1 requires exact affinity")
+            if machine_policy["numa_policy"]["mode"] != "operator_attested_v1":
+                raise ValueError("physical_performance_v1 requires operator-attested NUMA policy")
+            if machine_policy["background_load"]["max_load1_per_online_cpu"] is None:
+                raise ValueError("physical_performance_v1 requires a background-load threshold")
     config["collection"] = collection
-    config["collection_policy_id"] = collection_policy_id(collection)
+    config["collection_policy_id"] = (
+        _collection_policy_id_v1(collection)
+        if schema_version == "tn_benchmark_v2"
+        else _collection_policy_id_v2(collection)
+    )
 
     cases_raw = _config_mapping(config["cases"], "cases")
     if not cases_raw:
@@ -570,8 +709,10 @@ def load_experiment_config(path: str | os.PathLike[str]) -> Mapping[str, object]
         "validation_policy_id": _DEFAULT_VALIDATION_POLICY_ID,
     }
     config["experiment_identity_payload"] = experiment_identity_payload
-    config["experiment_id"] = identity_hash(
-        "quantum_bench.experiment_id.v2", experiment_identity_payload
+    config["experiment_id"] = (
+        _experiment_id_v2(experiment_identity_payload)
+        if schema_version == "tn_benchmark_v2"
+        else _experiment_id_v3(experiment_identity_payload)
     )
     frozen = _freeze_config(config)
     if not isinstance(frozen, Mapping):  # pragma: no cover

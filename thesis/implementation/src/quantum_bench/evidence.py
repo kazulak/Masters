@@ -284,15 +284,15 @@ def _collection_order_key(
     ).digest()
 
 
-def _declared_collection_attempts(
-    manifest: Mapping[str, Any],
-) -> set[tuple[str, str | None, str, str, int, int, int]] | None:
-    """Return the exact v2 schedule or ``None`` for non-experiment fixtures."""
+def _declared_collection_attempts_for_schema(
+    manifest: Mapping[str, Any], *, schema_version: str
+) -> set[tuple[str, str | None, str, str, int, int, int]]:
+    """Return the exact schedule for one frozen benchmark configuration schema."""
 
     configuration = _mapping(manifest["configuration"], "configuration")
-    experiment = configuration.get("experiment")
-    if not isinstance(experiment, Mapping) or experiment.get("schema_version") != "tn_benchmark_v2":
-        return None
+    experiment = _mapping(configuration.get("experiment"), "configuration.experiment")
+    if experiment.get("schema_version") != schema_version:
+        raise ValueError(f"expected {schema_version} experiment configuration")
     collection = _mapping(experiment.get("collection"), "configuration.experiment.collection")
     base_seed = collection.get("base_seed")
     warmup_blocks = collection.get("warmup_blocks")
@@ -308,7 +308,7 @@ def _declared_collection_attempts(
     assert isinstance(measurement_blocks, int)
     routes = _declared_matrix_routes(manifest)
     if routes is None:
-        raise ValueError("v2 collection schedule requires an experiment matrix")
+        raise ValueError(f"{schema_version} collection schedule requires an experiment matrix")
     attempts: set[tuple[str, str | None, str, str, int, int, int]] = set()
     for attempt_kind, count, offset in (
         ("warmup", warmup_blocks, 0),
@@ -341,6 +341,39 @@ def _declared_collection_attempts(
                 for order_index, (case_id, plan_id, route_id) in enumerate(ordered)
             )
     return attempts
+
+
+def _declared_collection_attempts_v2(
+    manifest: Mapping[str, Any],
+) -> set[tuple[str, str | None, str, str, int, int, int]]:
+    return _declared_collection_attempts_for_schema(
+        manifest, schema_version="tn_benchmark_v2"
+    )
+
+
+def _declared_collection_attempts_v3(
+    manifest: Mapping[str, Any],
+) -> set[tuple[str, str | None, str, str, int, int, int]]:
+    return _declared_collection_attempts_for_schema(
+        manifest, schema_version="tn_benchmark_v3"
+    )
+
+
+def _declared_collection_attempts(
+    manifest: Mapping[str, Any],
+) -> set[tuple[str, str | None, str, str, int, int, int]] | None:
+    """Return the persisted v2 or v3 schedule, or ``None`` for fixtures."""
+
+    configuration = _mapping(manifest["configuration"], "configuration")
+    experiment = configuration.get("experiment")
+    if not isinstance(experiment, Mapping):
+        return None
+    schema_version = experiment.get("schema_version")
+    if schema_version == "tn_benchmark_v2":
+        return _declared_collection_attempts_v2(manifest)
+    if schema_version == "tn_benchmark_v3":
+        return _declared_collection_attempts_v3(manifest)
+    return None
 
 
 def _sha256(value: object, field: str) -> None:
@@ -457,10 +490,24 @@ def validation_policy_id(value: Mapping[str, Any]) -> str:
     return _mapping_identity("quantum_bench.validation_policy_id.v1", value)
 
 
-def collection_policy_id(value: Mapping[str, Any]) -> str:
-    """Return the identity of a frozen collection-policy mapping."""
-
+def _collection_policy_id_v1(value: Mapping[str, Any]) -> str:
     return _mapping_identity("quantum_bench.collection_policy_id.v1", value)
+
+
+def _collection_policy_id_v2(value: Mapping[str, Any]) -> str:
+    return _mapping_identity("quantum_bench.collection_policy_id.v2", value)
+
+
+def collection_policy_id(
+    value: Mapping[str, Any], *, configuration_schema: str = "tn_benchmark_v2"
+) -> str:
+    """Return the identity for the declared frozen collection-policy schema."""
+
+    if configuration_schema == "tn_benchmark_v2":
+        return _collection_policy_id_v1(value)
+    if configuration_schema == "tn_benchmark_v3":
+        return _collection_policy_id_v2(value)
+    raise ValueError("collection policy has an unsupported configuration schema")
 
 
 def executable_id(value: Mapping[str, Any]) -> str:
@@ -1309,7 +1356,8 @@ def _validate_manifest_identity_payloads(manifest: Mapping[str, Any]) -> None:
         raise ValueError(
             "manifest experiment_id does not match configuration.experiment"
         )
-    if normalized_config.get("schema_version") == "tn_benchmark_v2":
+    schema_version = normalized_config.get("schema_version")
+    if schema_version in {"tn_benchmark_v2", "tn_benchmark_v3"}:
         payload = _mapping(
             normalized_config.get("experiment_identity_payload"),
             "configuration.experiment.experiment_identity_payload",
@@ -1326,7 +1374,10 @@ def _validate_manifest_identity_payloads(manifest: Mapping[str, Any]) -> None:
             "experiment identity payload validation_policy_id",
         )
         expected_experiment_id = identity_hash(
-            "quantum_bench.experiment_id.v2", payload
+            "quantum_bench.experiment_id.v2"
+            if schema_version == "tn_benchmark_v2"
+            else "quantum_bench.experiment_id.v3",
+            payload,
         )
         if expected_experiment_id != manifest["experiment_id"]:
             raise ValueError(
@@ -1335,7 +1386,12 @@ def _validate_manifest_identity_payloads(manifest: Mapping[str, Any]) -> None:
         collection = _mapping(
             normalized_config.get("collection"), "configuration.experiment.collection"
         )
-        if collection_policy_id(collection) != manifest["collection_policy_id"]:
+        if (
+            collection_policy_id(
+                collection, configuration_schema=str(schema_version)
+            )
+            != manifest["collection_policy_id"]
+        ):
             raise ValueError(
                 "manifest collection_policy_id does not match collection policy"
             )

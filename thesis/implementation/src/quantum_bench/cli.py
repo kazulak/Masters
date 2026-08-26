@@ -31,7 +31,6 @@ from quantum_bench.cpu import (
 )
 from quantum_bench.evidence import (
     canonical_json,
-    collection_policy_id,
     environment_id,
     executable_id,
     finalize_artifacts,
@@ -732,11 +731,30 @@ def _require_physical_opt_in(*, allow_physical: bool) -> None:
 
 
 def _collection_cooldown(config: Mapping[str, object]) -> None:
-    cooldown_s = config["collection"]["cooldown_s"]
+    collection = config["collection"]
+    cooldown_s = collection.get("block_cooldown_s", collection.get("cooldown_s"))
     if not isinstance(cooldown_s, float):  # guarded by config validation
-        raise TypeError("collection.cooldown_s must be a float")
+        raise TypeError("collection cooldown must be a float")
     if cooldown_s:
         time.sleep(cooldown_s)
+
+
+def _complete_collection_block(
+    config: Mapping[str, object],
+    scheduled: tuple[
+        tuple[Mapping[str, object], str, Mapping[str, object], tuple[str, int, int, int]],
+        ...,
+    ],
+    schedule_index: int,
+) -> None:
+    """Apply cooldown once after a complete non-final collection block."""
+
+    if schedule_index + 1 >= len(scheduled):
+        return
+    current_block = scheduled[schedule_index][3][2]
+    next_block = scheduled[schedule_index + 1][3][2]
+    if current_block != next_block:
+        _collection_cooldown(config)
 
 
 def _direct_runner(
@@ -802,7 +820,7 @@ def _run_config(
         "schema_version": "evidence_manifest_v2",
         "run_id": run_id,
         "experiment_id": config["experiment_id"],
-        "collection_policy_id": collection_policy_id(config["collection"]),
+        "collection_policy_id": config["collection_policy_id"],
         "environment_id": env_id,
         "validation_policy_id": default_validation_policy_id(),
         "created_at_utc": datetime.now(timezone.utc)
@@ -871,7 +889,7 @@ def _run_config(
         write_manifest(target / "manifest.json", manifest)
 
     try:
-        for matrix_item, route_id, route, attempt in scheduled:
+        for schedule_index, (matrix_item, route_id, route, attempt) in enumerate(scheduled):
             case_id = matrix_item["case_id"]
             job = jobs.setdefault(case_id, _job(config["cases"][case_id]))
             plan_id = matrix_item["plan_id"]
@@ -942,7 +960,7 @@ def _run_config(
                         samples_path=target / "samples.jsonl",
                         attempts=(attempt,),
                     )
-                    _collection_cooldown(config)
+                    _complete_collection_block(config, scheduled, schedule_index)
                     continue
             identities = _identities(
                 job=job,
@@ -1014,7 +1032,7 @@ def _run_config(
                     validate=validate,
                     attempts=(attempt,),
                 )
-                _collection_cooldown(config)
+                _complete_collection_block(config, scheduled, schedule_index)
                 continue
 
             if route["executor"] == "numpy_dag":
@@ -1065,7 +1083,7 @@ def _run_config(
                 validate=validate,
                 attempts=(attempt,),
             )
-            _collection_cooldown(config)
+            _complete_collection_block(config, scheduled, schedule_index)
     except Exception:
         try:
             persist_identity_bindings()

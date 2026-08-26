@@ -92,19 +92,23 @@ def test_make_public_targets_are_exact_and_pidcomm_is_private() -> None:
 def test_physical_configuration_freezes_thesis_collection_policy() -> None:
     config = load_experiment_config(ROOT / "configs" / "tn_benchmark_physical.yml")
 
-    assert config["schema_version"] == "tn_benchmark_v2"
+    assert config["schema_version"] == "tn_benchmark_v3"
     assert config["collection"] == {
+        "claim_policy": "physical_performance_v1",
         "base_seed": 20260825,
         "warmup_blocks": 2,
         "measurement_blocks": 30,
         "session_policy": "fresh_session_per_attempt_v1",
-        "cooldown_s": 0.0,
+        "block_cooldown_s": 0.0,
         "machine_policy": {
-            "machine_exclusivity": "observed_v1",
-            "cpu_governor": "observed_v1",
-            "affinity": "observed_v1",
-            "numa_policy": "observed_v1",
-            "background_load": "observed_v1",
+            "machine_exclusivity": {"mode": "operator_attested_v1"},
+            "cpu_governor": {"mode": "performance_required_v1"},
+            "affinity": {"mode": "exact_required_v1", "expected_cpus": (0,)},
+            "numa_policy": {"mode": "operator_attested_v1"},
+            "background_load": {
+                "mode": "observed_v1",
+                "max_load1_per_online_cpu": 0.25,
+            },
         },
     }
 
@@ -651,6 +655,30 @@ def test_collection_schedule_is_deterministic_and_records_block_order(
         ("measurement", 0, 0),
         ("measurement", 0, 1),
     ]
+
+
+def test_block_cooldown_occurs_once_after_each_nonfinal_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "cooldown.yml"
+    _write_config(
+        config_path,
+        _numpy_config(repetitions=2).replace("cooldown_s: 0.0", "cooldown_s: 0.25"),
+    )
+    config = load_experiment_config(config_path)
+    selected = [
+        (item, route_id, config["routes"][route_id])
+        for item in config["matrix"]
+        for route_id in item["route_ids"]
+    ]
+    scheduled = cli._scheduled_attempts(config, selected)
+    calls: list[float] = []
+    monkeypatch.setattr(cli.time, "sleep", calls.append)
+
+    for index in range(len(scheduled)):
+        cli._complete_collection_block(config, scheduled, index)
+
+    assert calls == [0.25]
 
 
 def test_physical_collection_admission_requires_useful_dpu_and_tasklet_work() -> None:
