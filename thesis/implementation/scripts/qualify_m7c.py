@@ -297,6 +297,11 @@ def qualify(output: Path) -> Path:
         archive,
         outer_checksum,
         direct_summary_path,
+        ROOT / "configs/m7c_workload_selection.json",
+        ROOT / "configs/tn_benchmark_physical_smoke.yml",
+        ROOT / "configs/tn_benchmark_physical_scaling_diagnostic.yml",
+        ROOT / "configs/tn_benchmark_physical_scaling.yml",
+        ROOT / "configs/tn_benchmark_physical_scaling_confirmation.yml",
         cpu_plan / "plan.json",
         cpu_run / "manifest.json",
         cpu_run / "samples.jsonl",
@@ -314,7 +319,6 @@ def qualify(output: Path) -> Path:
         )),
         *(output / "dist").glob("*"),
     ]
-    _write_hashes(output, artifact_paths)
     qualification = {
         "branch": branch,
         "source_commit": source_commit,
@@ -343,6 +347,10 @@ def qualify(output: Path) -> Path:
         )
         + "\n",
         encoding="utf-8",
+    )
+    _write_hashes(
+        output,
+        [*artifact_paths, output / "qualification.json", output / "qualification.txt"],
     )
     if _git_output("status", "--porcelain"):
         raise ValueError("qualification changed the Git worktree")
