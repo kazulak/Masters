@@ -244,9 +244,22 @@ def qualify(output: Path) -> Path:
         },
     )
     direct = json.loads(direct_summary.read_text(encoding="utf-8"))
+    required_case_ids = direct.get("required_case_ids")
+    executed_case_ids = direct.get("executed_case_ids")
+    passed_case_ids = direct.get("passed_case_ids")
+    if not all(
+        isinstance(case_ids, list)
+        and all(isinstance(case_id, str) for case_id in case_ids)
+        for case_ids in (required_case_ids, executed_case_ids, passed_case_ids)
+    ):
+        raise ValueError("direct SDK case summary has invalid case IDs")
+    required_cases = set(required_case_ids)
     if (
-        direct.get("required_case_ids") != direct.get("executed_case_ids")
-        or direct.get("required_case_ids") != direct.get("passed_case_ids")
+        len(required_cases) != len(required_case_ids)
+        or set(executed_case_ids) != required_cases
+        or set(passed_case_ids) != required_cases
+        or len(executed_case_ids) != len(required_cases)
+        or len(passed_case_ids) != len(required_cases)
         or direct.get("failed_case_ids") != []
         or direct.get("skipped_case_ids") != []
     ):
