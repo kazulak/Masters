@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import hashlib
 from pathlib import Path
+import sys
 import tarfile
 
 import pytest
@@ -13,12 +14,14 @@ from quantum_bench.experiment import load_experiment_config
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "qualify_m7b.py"
 PHYSICAL_SCRIPT = ROOT / "scripts" / "qualify_m7c_physical.py"
+SELECTION_SCRIPT = ROOT / "scripts" / "select_m7c_workload.py"
 
 
 def _load_script(path: Path, name: str):
     specification = importlib.util.spec_from_file_location(name, path)
     assert specification is not None and specification.loader is not None
     module = importlib.util.module_from_spec(specification)
+    sys.modules[name] = module
     specification.loader.exec_module(module)
     return module
 
@@ -29,6 +32,10 @@ def _qualifier():
 
 def _physical_qualifier():
     return _load_script(PHYSICAL_SCRIPT, "qualify_m7c_physical")
+
+
+def _selector():
+    return _load_script(SELECTION_SCRIPT, "select_m7c_workload")
 
 
 def _archive(path: Path, member_name: str, *, kind: str = "file") -> None:
@@ -130,3 +137,30 @@ def test_physical_preparation_probe_has_one_measurement(tmp_path: Path) -> None:
     assert config["routes"]["upmem_float32_1dpu"]["numeric_policy"] == (
         "split_complex_float32_v1"
     )
+
+
+def test_m7c_workload_selection_is_deterministic_and_preregistered(
+    tmp_path: Path,
+) -> None:
+    selector = _selector()
+    first = selector.build_selection()
+    second = selector.build_selection()
+
+    assert first == second
+    assert first["selected_primary"] == "quantization_stress_18q_l2"
+    assert first["selected_secondary"] == "ghz_chain_18q"
+    primary = next(
+        candidate
+        for candidate in first["candidates"]
+        if candidate["candidate_id"] == first["selected_primary"]
+    )
+    assert primary["logical_plan_id"] == (
+        "d504919e20d95bac608dd906d46abb122f9680873679710b0584e71981648fb5"
+    )
+    assert primary["topologies"]["dpu4_tasklet8"][
+        "collection_resource_admission_passed"
+    ] is True
+
+    path = tmp_path / "selection.json"
+    selector.write_selection(path)
+    selector.check_selection(path)
