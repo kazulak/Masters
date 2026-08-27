@@ -88,6 +88,16 @@ the native per-operation phase counters. For multi-rank sessions those fields
 remain `null`; independently timed rank phases are not inferred to be global
 wall-clock phases.
 
+UPMEM operation backend facts retain two additional request-lifecycle values.
+`request_wave_wall_sum_s` is the sum of coordinator wall-clock durations around
+each sequential request wave. `rank_response_total_route_max_sum_s` is the sum
+of the maximum native `total_route_time_s` reported by the ranks in each wave.
+Both values are nested and inclusive: the native route value includes its H2D,
+kernel, and D2H counters, while the coordinator wave value includes the native
+route value. They are not `Measurement` phases and must not be added directly
+to the named phase counters. Attribution analysis derives disjoint host and
+native request overhead from these values.
+
 Direct ratios are defined only for matching scopes and compatible identities:
 
 ```text

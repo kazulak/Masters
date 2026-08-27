@@ -1281,6 +1281,8 @@ class UpmemV4Session:
         rank_response_h2d_max_sum_s = 0.0
         rank_response_kernel_max_sum_s = 0.0
         rank_response_d2h_max_sum_s = 0.0
+        rank_response_total_route_max_sum_s = 0.0
+        request_wave_wall_sum_s = 0.0
         parallel_rank_waves = 0
         bulk_verified = True
         active_rank_indices: set[int] = set()
@@ -1305,6 +1307,7 @@ class UpmemV4Session:
                 request_hashes: list[str] = []
                 for wave_index, wave in enumerate(waves):
                     self._remaining_timeout()
+                    wave_started = time.perf_counter()
                     outcomes, metrics, wave_parallel, wave_bulk_verified = (
                         self._submit_wave(
                             lowering=real_lowering,
@@ -1317,6 +1320,7 @@ class UpmemV4Session:
                             preserve_native=True,
                         )
                     )
+                    request_wave_wall_sum_s += time.perf_counter() - wave_started
                     parallel_rank_waves += int(wave_parallel)
                     bulk_verified = bulk_verified and wave_bulk_verified
                     h2d_bytes += int(metrics["h2d_bytes"])
@@ -1324,6 +1328,9 @@ class UpmemV4Session:
                     rank_response_h2d_max_sum_s += float(metrics["h2d_time_s"])
                     rank_response_kernel_max_sum_s += float(metrics["kernel_time_s"])
                     rank_response_d2h_max_sum_s += float(metrics["d2h_time_s"])
+                    rank_response_total_route_max_sum_s += float(
+                        metrics["total_route_time_s"]
+                    )
                     request_hashes.extend(metrics["request_manifest_hashes"])
                     self._successful_request_count += int(
                         metrics["successful_request_count"]
@@ -1429,6 +1436,10 @@ class UpmemV4Session:
                 "rank_response_h2d_max_sum_s": float(rank_response_h2d_max_sum_s),
                 "rank_response_kernel_max_sum_s": float(rank_response_kernel_max_sum_s),
                 "rank_response_d2h_max_sum_s": float(rank_response_d2h_max_sum_s),
+                "rank_response_total_route_max_sum_s": float(
+                    rank_response_total_route_max_sum_s
+                ),
+                "request_wave_wall_sum_s": float(request_wave_wall_sum_s),
                 "assembly_s": float(assembled_s),
                 "decode_s": float(decode_s),
             },
@@ -1634,6 +1645,7 @@ class UpmemV4Session:
                 "h2d_time_s": 0.0,
                 "kernel_time_s": 0.0,
                 "d2h_time_s": 0.0,
+                "total_route_time_s": 0.0,
                 "request_manifest_hashes": tuple(
                     artifact.manifest_sha256 for _, _, artifact in prepared
                 ),
@@ -1658,6 +1670,13 @@ class UpmemV4Session:
                         "v4 response transfer total does not equal H2D plus D2H"
                     )
                 response_timing = response.get("timing", {})
+                if not isinstance(response_timing, Mapping):
+                    raise RuntimeError("v4 response timing is not a mapping")
+                total_route_time_s = response_timing.get("total_route_time_s")
+                if type(total_route_time_s) not in (int, float):
+                    raise RuntimeError(
+                        "v4 response is missing a finite total_route_time_s"
+                    )
                 request_metrics["h2d_bytes"] += h2d_bytes
                 request_metrics["d2h_bytes"] += d2h_bytes
                 request_metrics["response_transfer_bytes"] += total_bytes
@@ -1670,6 +1689,10 @@ class UpmemV4Session:
                         request_metrics[metric],
                         float(response_timing.get(response_key, 0.0)),
                     )
+                request_metrics["total_route_time_s"] = max(
+                    request_metrics["total_route_time_s"],
+                    _seconds(total_route_time_s),
+                )
                 active_rank_indices.add(rank.index)
                 active_dpu_ids.update(
                     (rank.index, record.local_dpu_id)

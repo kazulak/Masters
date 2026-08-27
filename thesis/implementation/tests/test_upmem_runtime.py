@@ -149,6 +149,7 @@ class _FakeSession:
                 "h2d_time_s": 0.01,
                 "launch_time_s": 0.02,
                 "d2h_time_s": 0.01,
+                "total_route_time_s": 0.04,
             },
         }
 
@@ -466,6 +467,10 @@ def test_persistent_session_matches_replay_and_renews_deadline(
     assert first.measurement.h2d_s == pytest.approx(0.08)
     assert first.measurement.kernel_s == pytest.approx(0.16)
     assert first.measurement.d2h_s == pytest.approx(0.08)
+    timing = first.backend_facts["operation_facts"][0]["timing"]
+    assert timing["rank_response_total_route_max_sum_s"] == pytest.approx(0.32)
+    assert timing["request_wave_wall_sum_s"] >= 0.0
+    assert timing["total_wall_s"] >= timing["request_wave_wall_sum_s"]
     assert first.backend_facts["physical_plan_id"]
     assert first.backend_facts["startup_resource_admission_passed"] is True
     assert first.backend_facts["execution_resource_admission_passed"] is True
@@ -502,6 +507,27 @@ def test_multi_rank_plan_does_not_infer_global_phase_timings(tmp_path: Path) -> 
     assert sample.measurement.h2d_s is None
     assert sample.measurement.kernel_s is None
     assert sample.measurement.d2h_s is None
+    _close_mock_session(session)
+
+
+def test_request_response_requires_total_route_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    node, dag, plan, resources, _, _ = _opened(
+        tmp_path, policy="split_complex_float32_v1"
+    )
+    session = open_upmem(dag, plan, resources)
+    rank_session = session._low_level.session.ranks[0].session
+    original_submit = rank_session.submit
+
+    def missing_total_route_time(*args, **kwargs):
+        response = original_submit(*args, **kwargs)
+        del response["timing"]["total_route_time_s"]
+        return response
+
+    monkeypatch.setattr(rank_session, "submit", missing_total_route_time)
+    with pytest.raises(ExecutionFailed, match="total_route_time_s"):
+        session.run_once(_inputs(node, k=5))
     _close_mock_session(session)
 
 
