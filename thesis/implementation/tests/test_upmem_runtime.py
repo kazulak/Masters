@@ -151,6 +151,13 @@ class _FakeSession:
                 "d2h_time_s": 0.01,
                 "total_route_time_s": 0.04,
             },
+            "host_submit_timing": {
+                "artifact_validation_s": 0.005,
+                "protocol_write_s": 0.005,
+                "response_wait_s": 0.025,
+                "response_validation_s": 0.005,
+                "total_submit_s": 0.04,
+            },
         }
 
     def close(self, *, timeout_s: float | None = None) -> _Release:
@@ -471,6 +478,14 @@ def test_persistent_session_matches_replay_and_renews_deadline(
     assert timing["rank_response_total_route_max_sum_s"] == pytest.approx(0.32)
     assert timing["request_wave_wall_sum_s"] >= 0.0
     assert timing["total_wall_s"] >= timing["request_wave_wall_sum_s"]
+    assert timing["request_build_sum_s"] >= 0.0
+    assert timing["rank_submit_parallel_wall_sum_s"] >= 0.0
+    assert timing["rank_submit_total_max_sum_s"] == pytest.approx(0.32)
+    assert timing["rank_submit_artifact_validation_max_sum_s"] == pytest.approx(0.04)
+    assert timing["rank_submit_protocol_write_max_sum_s"] == pytest.approx(0.04)
+    assert timing["rank_submit_response_wait_max_sum_s"] == pytest.approx(0.2)
+    assert timing["rank_submit_response_validation_max_sum_s"] == pytest.approx(0.04)
+    assert timing["coordinator_response_processing_sum_s"] >= 0.0
     assert first.backend_facts["physical_plan_id"]
     assert first.backend_facts["startup_resource_admission_passed"] is True
     assert first.backend_facts["execution_resource_admission_passed"] is True
@@ -527,6 +542,27 @@ def test_request_response_requires_total_route_time(
 
     monkeypatch.setattr(rank_session, "submit", missing_total_route_time)
     with pytest.raises(ExecutionFailed, match="total_route_time_s"):
+        session.run_once(_inputs(node, k=5))
+    _close_mock_session(session)
+
+
+def test_request_response_requires_host_submit_timing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    node, dag, plan, resources, _, _ = _opened(
+        tmp_path, policy="split_complex_float32_v1"
+    )
+    session = open_upmem(dag, plan, resources)
+    rank_session = session._low_level.session.ranks[0].session
+    original_submit = rank_session.submit
+
+    def missing_host_submit_timing(*args, **kwargs):
+        response = original_submit(*args, **kwargs)
+        del response["host_submit_timing"]
+        return response
+
+    monkeypatch.setattr(rank_session, "submit", missing_host_submit_timing)
+    with pytest.raises(ExecutionFailed, match="host_submit_timing"):
         session.run_once(_inputs(node, k=5))
     _close_mock_session(session)
 

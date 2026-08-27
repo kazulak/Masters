@@ -98,6 +98,19 @@ route value. They are not `Measurement` phases and must not be added directly
 to the named phase counters. Attribution analysis derives disjoint host and
 native request overhead from these values.
 
+For one-rank M7F attribution, operation facts additionally retain coarse host
+request-wave boundaries. `request_build_sum_s` covers coordinator validation and
+request-artifact construction, including staged payload and manifest writes.
+`rank_submit_parallel_wall_sum_s` surrounds the parallel rank-client submit phase.
+The `rank_submit_*_max_sum_s` fields retain the maximum per-rank client durations
+for artifact validation, protocol write, response wait/JSON parse, response
+validation, and their total. `coordinator_response_processing_sum_s` covers
+response accounting and output-file reads after rank submits complete. These are
+backend facts, not `Measurement` phases. One-rank attribution subtracts the nested
+native route time from response wait before adding native H2D, kernel, and D2H
+components, so the resulting components remain disjoint. Session startup remains
+outside `steady_execution_v1` and is not measured by this split.
+
 Direct ratios are defined only for matching scopes and compatible identities:
 
 ```text

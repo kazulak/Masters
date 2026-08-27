@@ -1283,6 +1283,14 @@ class UpmemV4Session:
         rank_response_d2h_max_sum_s = 0.0
         rank_response_total_route_max_sum_s = 0.0
         request_wave_wall_sum_s = 0.0
+        request_build_sum_s = 0.0
+        rank_submit_parallel_wall_sum_s = 0.0
+        rank_submit_total_max_sum_s = 0.0
+        rank_submit_artifact_validation_max_sum_s = 0.0
+        rank_submit_protocol_write_max_sum_s = 0.0
+        rank_submit_response_wait_max_sum_s = 0.0
+        rank_submit_response_validation_max_sum_s = 0.0
+        coordinator_response_processing_sum_s = 0.0
         parallel_rank_waves = 0
         bulk_verified = True
         active_rank_indices: set[int] = set()
@@ -1330,6 +1338,28 @@ class UpmemV4Session:
                     rank_response_d2h_max_sum_s += float(metrics["d2h_time_s"])
                     rank_response_total_route_max_sum_s += float(
                         metrics["total_route_time_s"]
+                    )
+                    request_build_sum_s += float(metrics["request_build_s"])
+                    rank_submit_parallel_wall_sum_s += float(
+                        metrics["rank_submit_parallel_wall_s"]
+                    )
+                    rank_submit_total_max_sum_s += float(
+                        metrics["rank_submit_total_max_s"]
+                    )
+                    rank_submit_artifact_validation_max_sum_s += float(
+                        metrics["rank_submit_artifact_validation_max_s"]
+                    )
+                    rank_submit_protocol_write_max_sum_s += float(
+                        metrics["rank_submit_protocol_write_max_s"]
+                    )
+                    rank_submit_response_wait_max_sum_s += float(
+                        metrics["rank_submit_response_wait_max_s"]
+                    )
+                    rank_submit_response_validation_max_sum_s += float(
+                        metrics["rank_submit_response_validation_max_s"]
+                    )
+                    coordinator_response_processing_sum_s += float(
+                        metrics["coordinator_response_processing_s"]
                     )
                     request_hashes.extend(metrics["request_manifest_hashes"])
                     self._successful_request_count += int(
@@ -1440,6 +1470,26 @@ class UpmemV4Session:
                     rank_response_total_route_max_sum_s
                 ),
                 "request_wave_wall_sum_s": float(request_wave_wall_sum_s),
+                "request_build_sum_s": float(request_build_sum_s),
+                "rank_submit_parallel_wall_sum_s": float(
+                    rank_submit_parallel_wall_sum_s
+                ),
+                "rank_submit_total_max_sum_s": float(rank_submit_total_max_sum_s),
+                "rank_submit_artifact_validation_max_sum_s": float(
+                    rank_submit_artifact_validation_max_sum_s
+                ),
+                "rank_submit_protocol_write_max_sum_s": float(
+                    rank_submit_protocol_write_max_sum_s
+                ),
+                "rank_submit_response_wait_max_sum_s": float(
+                    rank_submit_response_wait_max_sum_s
+                ),
+                "rank_submit_response_validation_max_sum_s": float(
+                    rank_submit_response_validation_max_sum_s
+                ),
+                "coordinator_response_processing_sum_s": float(
+                    coordinator_response_processing_sum_s
+                ),
                 "assembly_s": float(assembled_s),
                 "decode_s": float(decode_s),
             },
@@ -1603,6 +1653,7 @@ class UpmemV4Session:
         requests: list[tuple[Any, list[tuple[M5Tile, int]]]],
         preserve_native: bool = False,
     ) -> tuple[list[tuple[M5Tile, np.ndarray]], dict[str, Any], bool, bool]:
+        request_build_started = time.perf_counter()
         self._validate_rank_assignments(wave, requests)
         prepared: list[tuple[_RankSession, list[tuple[M5Tile, int]], Any]] = []
         for rank, assignments in requests:
@@ -1628,9 +1679,11 @@ class UpmemV4Session:
                 request_sequence=self._sequence,
             )
             prepared.append((rank, assignments, artifact))
+        request_build_s = time.perf_counter() - request_build_started
         self._sequence += 1
         responses: dict[int, Mapping[str, Any]] = {}
         try:
+            rank_submit_started = time.perf_counter()
             with ThreadPoolExecutor(max_workers=len(prepared)) as pool:
                 future_to_rank = {
                     pool.submit(self._submit_with_deadline, rank, artifact): rank.index
@@ -1638,6 +1691,8 @@ class UpmemV4Session:
                 }
                 for future in as_completed(future_to_rank):
                     responses[future_to_rank[future]] = future.result()
+            rank_submit_parallel_wall_s = time.perf_counter() - rank_submit_started
+            response_processing_started = time.perf_counter()
             request_metrics: dict[str, Any] = {
                 "h2d_bytes": 0,
                 "d2h_bytes": 0,
@@ -1646,6 +1701,14 @@ class UpmemV4Session:
                 "kernel_time_s": 0.0,
                 "d2h_time_s": 0.0,
                 "total_route_time_s": 0.0,
+                "request_build_s": request_build_s,
+                "rank_submit_parallel_wall_s": rank_submit_parallel_wall_s,
+                "rank_submit_total_max_s": 0.0,
+                "rank_submit_artifact_validation_max_s": 0.0,
+                "rank_submit_protocol_write_max_s": 0.0,
+                "rank_submit_response_wait_max_s": 0.0,
+                "rank_submit_response_validation_max_s": 0.0,
+                "coordinator_response_processing_s": 0.0,
                 "request_manifest_hashes": tuple(
                     artifact.manifest_sha256 for _, _, artifact in prepared
                 ),
@@ -1677,6 +1740,23 @@ class UpmemV4Session:
                     raise RuntimeError(
                         "v4 response is missing a finite total_route_time_s"
                     )
+                submit_timing = response.get("host_submit_timing")
+                if not isinstance(submit_timing, Mapping):
+                    raise RuntimeError("v4 response is missing host_submit_timing")
+                submit_values: dict[str, float] = {}
+                for field in (
+                    "artifact_validation_s",
+                    "protocol_write_s",
+                    "response_wait_s",
+                    "response_validation_s",
+                    "total_submit_s",
+                ):
+                    value = submit_timing.get(field)
+                    if type(value) not in (int, float):
+                        raise RuntimeError(
+                            f"v4 response is missing a finite host_submit_timing.{field}"
+                        )
+                    submit_values[field] = _seconds(value)
                 request_metrics["h2d_bytes"] += h2d_bytes
                 request_metrics["d2h_bytes"] += d2h_bytes
                 request_metrics["response_transfer_bytes"] += total_bytes
@@ -1693,6 +1773,19 @@ class UpmemV4Session:
                     request_metrics["total_route_time_s"],
                     _seconds(total_route_time_s),
                 )
+                request_metrics["rank_submit_total_max_s"] = max(
+                    request_metrics["rank_submit_total_max_s"],
+                    submit_values["total_submit_s"],
+                )
+                for metric, field in (
+                    ("rank_submit_artifact_validation_max_s", "artifact_validation_s"),
+                    ("rank_submit_protocol_write_max_s", "protocol_write_s"),
+                    ("rank_submit_response_wait_max_s", "response_wait_s"),
+                    ("rank_submit_response_validation_max_s", "response_validation_s"),
+                ):
+                    request_metrics[metric] = max(
+                        request_metrics[metric], submit_values[field]
+                    )
                 active_rank_indices.add(rank.index)
                 active_dpu_ids.update(
                     (rank.index, record.local_dpu_id)
@@ -1730,6 +1823,9 @@ class UpmemV4Session:
             bulk_verified = all(
                 response.get("bulk_set_launch_verified") is True
                 for response in responses.values()
+            )
+            request_metrics["coordinator_response_processing_s"] = (
+                time.perf_counter() - response_processing_started
             )
             return results, request_metrics, len(prepared) > 1, bulk_verified
         finally:

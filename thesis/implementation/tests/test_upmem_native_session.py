@@ -612,6 +612,18 @@ def test_successful_submit_and_release(tmp_path: Path) -> None:
     )
     response = session.submit(artifact)
     assert response["global_completeness"] is False
+    submit_timing = response["host_submit_timing"]
+    assert set(submit_timing) == {
+        "artifact_validation_s",
+        "protocol_write_s",
+        "response_wait_s",
+        "response_validation_s",
+        "total_submit_s",
+    }
+    assert all(value >= 0.0 for value in submit_timing.values())
+    assert submit_timing["total_submit_s"] >= sum(
+        value for field, value in submit_timing.items() if field != "total_submit_s"
+    )
     assert process.stdin.commands == [
         f"SUBMIT requests/0000000000000000/manifest.txt {artifact.manifest_sha256}\n"
     ]

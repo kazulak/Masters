@@ -459,6 +459,8 @@ class V4Session:
             raise V4Error(
                 "hardware_profile_violation", "v4 request sequence must increase"
             )
+        submit_started = time.perf_counter()
+        artifact_validation_started = time.perf_counter()
         manifest_rel = _relative_to(
             self.session_root, artifact.manifest_path, must_exist=True
         )
@@ -476,22 +478,37 @@ class V4Session:
                 "sidecar_validation_failed", "request sidecar hash mismatch"
             )
         self._validate_artifact_payloads(artifact)
+        artifact_validation_s = time.perf_counter() - artifact_validation_started
         self._last_sequence = sequence
+        protocol_write_started = time.perf_counter()
         self._write(f"SUBMIT {manifest_rel} {artifact.manifest_sha256}\n")
+        protocol_write_s = time.perf_counter() - protocol_write_started
+        response_wait_started = time.perf_counter()
         event = self._next_event(timeout_s or self.profile.timeout_s)
+        response_wait_s = time.perf_counter() - response_wait_started
         if event.get("event") != "RESPONSE":
             self._poisoned = True
             self.close()
             raise V4ProtocolError(
                 "protocol_error", "v4 response event has the wrong type"
             )
+        response_validation_started = time.perf_counter()
         try:
             self._validate_response(event, artifact)
         except V4Error:
             self._poisoned = True
             self.close()
             raise
-        return event
+        response_validation_s = time.perf_counter() - response_validation_started
+        response = dict(event)
+        response["host_submit_timing"] = {
+            "artifact_validation_s": float(artifact_validation_s),
+            "protocol_write_s": float(protocol_write_s),
+            "response_wait_s": float(response_wait_s),
+            "response_validation_s": float(response_validation_s),
+            "total_submit_s": float(time.perf_counter() - submit_started),
+        }
+        return response
 
     def _validate_artifact_payloads(self, artifact: V4RequestArtifact) -> None:
         """Reject changed staged operands before the native process can use them."""

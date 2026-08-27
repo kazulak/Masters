@@ -15,7 +15,7 @@ from quantum_bench.evidence import load_artifacts
 from quantum_bench.report import verify_artifacts
 
 
-_ANALYSIS_VERSION = "m7d_request_attribution_v1"
+_ANALYSIS_VERSION = "m7f_host_request_attribution_v1"
 _EPSILON_S = 1e-6
 _OPERATION_TIMING_FIELDS = (
     "total_wall_s",
@@ -26,17 +26,33 @@ _OPERATION_TIMING_FIELDS = (
     "rank_response_d2h_max_sum_s",
     "rank_response_total_route_max_sum_s",
     "request_wave_wall_sum_s",
+    "request_build_sum_s",
+    "rank_submit_parallel_wall_sum_s",
+    "rank_submit_total_max_sum_s",
+    "rank_submit_artifact_validation_max_sum_s",
+    "rank_submit_protocol_write_max_sum_s",
+    "rank_submit_response_wait_max_sum_s",
+    "rank_submit_response_validation_max_sum_s",
+    "coordinator_response_processing_sum_s",
     "assembly_s",
     "decode_s",
 )
 _COMPONENT_FIELDS = (
     "preparation_s",
     "encode_s",
-    "host_request_overhead_s",
+    "request_build_s",
+    "rank_submit_artifact_validation_s",
+    "rank_submit_protocol_write_s",
+    "host_response_wait_overhead_s",
+    "rank_submit_response_validation_s",
+    "rank_submit_internal_residual_s",
+    "rank_submit_parallel_residual_s",
     "native_request_overhead_s",
     "h2d_s",
     "kernel_s",
     "d2h_s",
+    "coordinator_response_processing_s",
+    "request_wave_residual_s",
     "assembly_s",
     "decode_s",
     "operation_other_s",
@@ -67,6 +83,8 @@ def _difference(value: float, *, field: str) -> float:
 
 
 def _operation_components(operation: Mapping[str, Any]) -> dict[str, float]:
+    if operation.get("rank_count") != 1:
+        raise ValueError("M7F host request attribution requires one rank")
     timing = _mapping(operation.get("timing"), field="operation timing")
     missing = [field for field in _OPERATION_TIMING_FIELDS if field not in timing]
     if missing:
@@ -82,10 +100,30 @@ def _operation_components(operation: Mapping[str, Any]) -> dict[str, float]:
         - values["rank_response_d2h_max_sum_s"],
         field="native request overhead",
     )
-    host_request_overhead_s = _difference(
-        values["request_wave_wall_sum_s"]
+    host_response_wait_overhead_s = _difference(
+        values["rank_submit_response_wait_max_sum_s"]
         - values["rank_response_total_route_max_sum_s"],
-        field="host request overhead",
+        field="host response wait overhead",
+    )
+    rank_submit_internal_residual_s = _difference(
+        values["rank_submit_total_max_sum_s"]
+        - values["rank_submit_artifact_validation_max_sum_s"]
+        - values["rank_submit_protocol_write_max_sum_s"]
+        - values["rank_submit_response_wait_max_sum_s"]
+        - values["rank_submit_response_validation_max_sum_s"],
+        field="rank submit internal residual",
+    )
+    rank_submit_parallel_residual_s = _difference(
+        values["rank_submit_parallel_wall_sum_s"]
+        - values["rank_submit_total_max_sum_s"],
+        field="rank submit parallel residual",
+    )
+    request_wave_residual_s = _difference(
+        values["request_wave_wall_sum_s"]
+        - values["request_build_sum_s"]
+        - values["rank_submit_parallel_wall_sum_s"]
+        - values["coordinator_response_processing_sum_s"],
+        field="request wave residual",
     )
     operation_other_s = _difference(
         values["total_wall_s"]
@@ -99,11 +137,27 @@ def _operation_components(operation: Mapping[str, Any]) -> dict[str, float]:
     components = {
         "preparation_s": values["preparation_s"],
         "encode_s": values["encode_s"],
-        "host_request_overhead_s": host_request_overhead_s,
+        "request_build_s": values["request_build_sum_s"],
+        "rank_submit_artifact_validation_s": values[
+            "rank_submit_artifact_validation_max_sum_s"
+        ],
+        "rank_submit_protocol_write_s": values[
+            "rank_submit_protocol_write_max_sum_s"
+        ],
+        "host_response_wait_overhead_s": host_response_wait_overhead_s,
+        "rank_submit_response_validation_s": values[
+            "rank_submit_response_validation_max_sum_s"
+        ],
+        "rank_submit_internal_residual_s": rank_submit_internal_residual_s,
+        "rank_submit_parallel_residual_s": rank_submit_parallel_residual_s,
         "native_request_overhead_s": native_request_overhead_s,
         "h2d_s": values["rank_response_h2d_max_sum_s"],
         "kernel_s": values["rank_response_kernel_max_sum_s"],
         "d2h_s": values["rank_response_d2h_max_sum_s"],
+        "coordinator_response_processing_s": values[
+            "coordinator_response_processing_sum_s"
+        ],
+        "request_wave_residual_s": request_wave_residual_s,
         "assembly_s": values["assembly_s"],
         "decode_s": values["decode_s"],
         "operation_other_s": operation_other_s,
@@ -169,6 +223,15 @@ def _sample_components(sample: Mapping[str, Any]) -> dict[str, float] | None:
         )
         for operation in operations
     )
+    result["rank_submit_response_wait_max_sum_s"] = sum(
+        _seconds(
+            _mapping(operation.get("timing"), field="operation timing")[
+                "rank_submit_response_wait_max_sum_s"
+            ],
+            field="rank_submit_response_wait_max_sum_s",
+        )
+        for operation in operations
+    )
     result["accounting_residual_s"] = _difference(
         total_wall_s - sum(result[field] for field in _COMPONENT_FIELDS),
         field="sample accounting residual",
@@ -208,6 +271,11 @@ def _route_summary(values: Sequence[Mapping[str, float]]) -> dict[str, object]:
             "rank_response_total_route_max_sum_s": float(
                 median(
                     value["rank_response_total_route_max_sum_s"] for value in values
+                )
+            ),
+            "rank_submit_response_wait_max_sum_s": float(
+                median(
+                    value["rank_submit_response_wait_max_sum_s"] for value in values
                 )
             ),
         },

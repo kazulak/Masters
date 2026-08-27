@@ -261,10 +261,11 @@ def _attribution_sample(operation_timing: dict[str, float]) -> dict[str, object]
         "status": "success",
         "attempt_kind": "measurement",
         "route_id": "upmem_float32_4dpu_t8",
-        "measurement": {"total_wall_s": 1.5, "host_reduce_s": 0.05},
+        "measurement": {"total_wall_s": 2.0, "host_reduce_s": 0.05},
         "backend_facts": {
             "operation_facts": [
                 {
+                    "rank_count": 1,
                     "timing": operation_timing,
                 }
             ]
@@ -274,20 +275,28 @@ def _attribution_sample(operation_timing: dict[str, float]) -> dict[str, object]
 
 def _attribution_operation_timing() -> dict[str, float]:
     return {
-        "total_wall_s": 1.3,
+        "total_wall_s": 1.8,
         "preparation_s": 0.1,
         "encode_s": 0.1,
         "rank_response_h2d_max_sum_s": 0.1,
         "rank_response_kernel_max_sum_s": 0.2,
         "rank_response_d2h_max_sum_s": 0.1,
         "rank_response_total_route_max_sum_s": 0.6,
-        "request_wave_wall_sum_s": 0.8,
+        "request_wave_wall_sum_s": 1.2,
+        "request_build_sum_s": 0.1,
+        "rank_submit_parallel_wall_sum_s": 0.95,
+        "rank_submit_total_max_sum_s": 0.9,
+        "rank_submit_artifact_validation_max_sum_s": 0.1,
+        "rank_submit_protocol_write_max_sum_s": 0.1,
+        "rank_submit_response_wait_max_sum_s": 0.65,
+        "rank_submit_response_validation_max_sum_s": 0.02,
+        "coordinator_response_processing_sum_s": 0.1,
         "assembly_s": 0.1,
         "decode_s": 0.1,
     }
 
 
-def test_m7d_attribution_derives_disjoint_request_lifecycle_components() -> None:
+def test_m7f_attribution_derives_disjoint_request_lifecycle_components() -> None:
     attribution = _attribution()
     manifest = {"source_commit": "a" * 40}
     sample = _attribution_sample(_attribution_operation_timing())
@@ -298,13 +307,21 @@ def test_m7d_attribution_derives_disjoint_request_lifecycle_components() -> None
     assert first == second
     route = first["routes"]["upmem_float32_4dpu_t8"]
     assert route["measurement_count"] == 1
-    assert route["median_total_wall_s"] == pytest.approx(1.5)
+    assert route["median_total_wall_s"] == pytest.approx(2.0)
     components = route["components"]
-    assert components["host_request_overhead_s"]["median_s"] == pytest.approx(0.2)
+    assert components["request_build_s"]["median_s"] == pytest.approx(0.1)
+    assert components["rank_submit_artifact_validation_s"]["median_s"] == pytest.approx(0.1)
+    assert components["rank_submit_protocol_write_s"]["median_s"] == pytest.approx(0.1)
+    assert components["host_response_wait_overhead_s"]["median_s"] == pytest.approx(0.05)
+    assert components["rank_submit_response_validation_s"]["median_s"] == pytest.approx(0.02)
+    assert components["rank_submit_internal_residual_s"]["median_s"] == pytest.approx(0.03)
+    assert components["rank_submit_parallel_residual_s"]["median_s"] == pytest.approx(0.05)
+    assert components["coordinator_response_processing_s"]["median_s"] == pytest.approx(0.1)
+    assert components["request_wave_residual_s"]["median_s"] == pytest.approx(0.05)
     assert components["native_request_overhead_s"]["median_s"] == pytest.approx(0.2)
-    assert components["operation_other_s"]["median_s"] == pytest.approx(0.1)
+    assert components["operation_other_s"]["median_s"] == pytest.approx(0.2)
     assert components["coordinator_other_s"]["median_s"] == pytest.approx(0.15)
-    assert route["median_unresolved_boundary_s"] == pytest.approx(0.25)
+    assert route["median_unresolved_boundary_s"] == pytest.approx(0.35)
     assert route["median_accounting_residual_s"] == pytest.approx(0.0)
 
 
@@ -313,9 +330,14 @@ def test_m7d_attribution_derives_disjoint_request_lifecycle_components() -> None
     [
         ("request_wave_wall_sum_s", None, "missing request_wave_wall_sum_s"),
         ("rank_response_total_route_max_sum_s", 0.3, "native request overhead"),
+        (
+            "rank_submit_response_wait_max_sum_s",
+            0.3,
+            "host response wait overhead",
+        ),
     ],
 )
-def test_m7d_attribution_rejects_missing_or_inconsistent_timing(
+def test_m7f_attribution_rejects_missing_or_inconsistent_timing(
     field: str, value: float | None, message: str
 ) -> None:
     attribution = _attribution()
