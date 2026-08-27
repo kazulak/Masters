@@ -273,8 +273,10 @@ def _attribution_sample(operation_timing: dict[str, float]) -> dict[str, object]
     }
 
 
-def _attribution_operation_timing() -> dict[str, float]:
-    return {
+def _attribution_operation_timing(
+    *, request_build_breakdown: bool = True
+) -> dict[str, float]:
+    timing = {
         "total_wall_s": 1.8,
         "preparation_s": 0.1,
         "encode_s": 0.1,
@@ -288,15 +290,25 @@ def _attribution_operation_timing() -> dict[str, float]:
         "rank_submit_total_max_sum_s": 0.9,
         "rank_submit_artifact_validation_max_sum_s": 0.1,
         "rank_submit_protocol_write_max_sum_s": 0.1,
-        "rank_submit_response_wait_max_sum_s": 0.65,
+        "rank_submit_response_wait_max_sum_s": 0.3,
         "rank_submit_response_validation_max_sum_s": 0.02,
         "coordinator_response_processing_sum_s": 0.1,
         "assembly_s": 0.1,
         "decode_s": 0.1,
     }
+    if request_build_breakdown:
+        timing.update(
+            {
+                "request_work_unit_materialization_sum_s": 0.02,
+                "request_artifact_build_sum_s": 0.06,
+                "request_payload_record_staging_sum_s": 0.03,
+                "request_manifest_sidecar_staging_sum_s": 0.02,
+            }
+        )
+    return timing
 
 
-def test_m7f_attribution_derives_disjoint_request_lifecycle_components() -> None:
+def test_m7g_attribution_derives_disjoint_request_build_components() -> None:
     attribution = _attribution()
     manifest = {"source_commit": "a" * 40}
     sample = _attribution_sample(_attribution_operation_timing())
@@ -309,20 +321,24 @@ def test_m7f_attribution_derives_disjoint_request_lifecycle_components() -> None
     assert route["measurement_count"] == 1
     assert route["median_total_wall_s"] == pytest.approx(2.0)
     components = route["components"]
-    assert components["request_build_s"]["median_s"] == pytest.approx(0.1)
-    assert components["rank_submit_artifact_validation_s"]["median_s"] == pytest.approx(0.1)
-    assert components["rank_submit_protocol_write_s"]["median_s"] == pytest.approx(0.1)
-    assert components["host_response_wait_overhead_s"]["median_s"] == pytest.approx(0.05)
-    assert components["rank_submit_response_validation_s"]["median_s"] == pytest.approx(0.02)
-    assert components["rank_submit_internal_residual_s"]["median_s"] == pytest.approx(0.03)
-    assert components["rank_submit_parallel_residual_s"]["median_s"] == pytest.approx(0.05)
-    assert components["coordinator_response_processing_s"]["median_s"] == pytest.approx(0.1)
-    assert components["request_wave_residual_s"]["median_s"] == pytest.approx(0.05)
+    assert components["host_request_overhead_s"]["median_s"] == pytest.approx(0.6)
     assert components["native_request_overhead_s"]["median_s"] == pytest.approx(0.2)
     assert components["operation_other_s"]["median_s"] == pytest.approx(0.2)
     assert components["coordinator_other_s"]["median_s"] == pytest.approx(0.15)
     assert route["median_unresolved_boundary_s"] == pytest.approx(0.35)
     assert route["median_accounting_residual_s"] == pytest.approx(0.0)
+    assert route["nested_request_timing_medians_s"][
+        "rank_submit_response_wait_max_sum_s"
+    ] == pytest.approx(0.3)
+    request_build = route["request_build_breakdown"]
+    assert request_build is not None
+    assert request_build["median_parent_s"] == pytest.approx(0.1)
+    children = request_build["children"]
+    assert children["work_unit_materialization_s"]["median_s"] == pytest.approx(0.02)
+    assert children["payload_record_staging_s"]["median_s"] == pytest.approx(0.03)
+    assert children["manifest_sidecar_staging_s"]["median_s"] == pytest.approx(0.02)
+    assert children["artifact_build_residual_s"]["median_s"] == pytest.approx(0.01)
+    assert children["request_build_residual_s"]["median_s"] == pytest.approx(0.02)
 
 
 @pytest.mark.parametrize(
@@ -331,13 +347,13 @@ def test_m7f_attribution_derives_disjoint_request_lifecycle_components() -> None
         ("request_wave_wall_sum_s", None, "missing request_wave_wall_sum_s"),
         ("rank_response_total_route_max_sum_s", 0.3, "native request overhead"),
         (
-            "rank_submit_response_wait_max_sum_s",
-            0.3,
-            "host response wait overhead",
+            "request_payload_record_staging_sum_s",
+            0.07,
+            "request artifact build residual",
         ),
     ],
 )
-def test_m7f_attribution_rejects_missing_or_inconsistent_timing(
+def test_m7g_attribution_rejects_missing_or_inconsistent_timing(
     field: str, value: float | None, message: str
 ) -> None:
     attribution = _attribution()
@@ -348,6 +364,34 @@ def test_m7f_attribution_rejects_missing_or_inconsistent_timing(
         timing[field] = value
 
     with pytest.raises(ValueError, match=message):
+        attribution.derive_attribution(
+            {"source_commit": "a" * 40},
+            (_attribution_sample(timing),),
+        )
+
+
+def test_m7g_attribution_accepts_m7f_response_wait_and_omits_build_breakdown() -> None:
+    attribution = _attribution()
+    timing = _attribution_operation_timing(request_build_breakdown=False)
+
+    result = attribution.derive_attribution(
+        {"source_commit": "a" * 40},
+        (_attribution_sample(timing),),
+    )
+
+    route = result["routes"]["upmem_float32_4dpu_t8"]
+    assert route["request_build_breakdown"] is None
+    assert route["components"]["host_request_overhead_s"]["median_s"] == pytest.approx(
+        0.6
+    )
+
+
+def test_m7g_attribution_rejects_partial_request_build_timing() -> None:
+    attribution = _attribution()
+    timing = _attribution_operation_timing()
+    del timing["request_manifest_sidecar_staging_sum_s"]
+
+    with pytest.raises(ValueError, match="request-build timing is missing"):
         attribution.derive_attribution(
             {"source_commit": "a" * 40},
             (_attribution_sample(timing),),

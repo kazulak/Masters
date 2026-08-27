@@ -100,15 +100,37 @@ native request overhead from these values.
 
 For one-rank M7F attribution, operation facts additionally retain coarse host
 request-wave boundaries. `request_build_sum_s` covers coordinator validation and
-request-artifact construction, including staged payload and manifest writes.
-`rank_submit_parallel_wall_sum_s` surrounds the parallel rank-client submit phase.
-The `rank_submit_*_max_sum_s` fields retain the maximum per-rank client durations
-for artifact validation, protocol write, response wait/JSON parse, response
-validation, and their total. `coordinator_response_processing_sum_s` covers
-response accounting and output-file reads after rank submits complete. These are
-backend facts, not `Measurement` phases. One-rank attribution subtracts the nested
-native route time from response wait before adding native H2D, kernel, and D2H
-components, so the resulting components remain disjoint. Session startup remains
+request-artifact construction. `rank_submit_parallel_wall_sum_s` surrounds the
+parallel rank-client submit phase. The `rank_submit_*_max_sum_s` fields retain
+maximum per-rank client durations for artifact validation, protocol write,
+response wait/JSON parse, response validation, and their total.
+`coordinator_response_processing_sum_s` covers response accounting and output-file
+reads after rank submits complete. The rank-client response wait and native route
+counters use different boundaries, so they are overlapping diagnostics and are never
+subtracted or summed as disjoint phases.
+
+M7G preserves `request_build_sum_s` and adds an additive child breakdown for each
+operation: `request_work_unit_materialization_sum_s` covers tensor slicing,
+contiguous copies, and payload-byte construction; `request_artifact_build_sum_s`
+covers `build_v4_request`. Within that artifact build,
+`request_payload_record_staging_sum_s` covers the complete payload/record loop,
+including staging and payload digests, while
+`request_manifest_sidecar_staging_sum_s` covers record validation plus manifest and
+sidecar construction, writes, and the sidecar digest. The derived residuals are:
+
+```text
+request_build_residual_s =
+    request_build_sum_s
+    - request_work_unit_materialization_sum_s
+    - request_artifact_build_sum_s
+
+request_artifact_build_residual_s =
+    request_artifact_build_sum_s
+    - request_payload_record_staging_sum_s
+    - request_manifest_sidecar_staging_sum_s
+```
+
+These remain backend facts, not `Measurement` phases. Session startup remains
 outside `steady_execution_v1` and is not measured by this split.
 
 Direct ratios are defined only for matching scopes and compatible identities:

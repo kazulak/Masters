@@ -15,7 +15,7 @@ from quantum_bench.evidence import load_artifacts
 from quantum_bench.report import verify_artifacts
 
 
-_ANALYSIS_VERSION = "m7f_host_request_attribution_v1"
+_ANALYSIS_VERSION = "m7g_request_build_attribution_v1"
 _EPSILON_S = 1e-6
 _OPERATION_TIMING_FIELDS = (
     "total_wall_s",
@@ -40,24 +40,29 @@ _OPERATION_TIMING_FIELDS = (
 _COMPONENT_FIELDS = (
     "preparation_s",
     "encode_s",
-    "request_build_s",
-    "rank_submit_artifact_validation_s",
-    "rank_submit_protocol_write_s",
-    "host_response_wait_overhead_s",
-    "rank_submit_response_validation_s",
-    "rank_submit_internal_residual_s",
-    "rank_submit_parallel_residual_s",
+    "host_request_overhead_s",
     "native_request_overhead_s",
     "h2d_s",
     "kernel_s",
     "d2h_s",
-    "coordinator_response_processing_s",
-    "request_wave_residual_s",
     "assembly_s",
     "decode_s",
     "operation_other_s",
     "host_reduce_s",
     "coordinator_other_s",
+)
+_REQUEST_BUILD_TIMING_FIELDS = (
+    "request_work_unit_materialization_sum_s",
+    "request_artifact_build_sum_s",
+    "request_payload_record_staging_sum_s",
+    "request_manifest_sidecar_staging_sum_s",
+)
+_REQUEST_BUILD_CHILD_FIELDS = (
+    "work_unit_materialization_s",
+    "payload_record_staging_s",
+    "manifest_sidecar_staging_s",
+    "artifact_build_residual_s",
+    "request_build_residual_s",
 )
 
 
@@ -82,7 +87,53 @@ def _difference(value: float, *, field: str) -> float:
     return max(0.0, value)
 
 
-def _operation_components(operation: Mapping[str, Any]) -> dict[str, float]:
+def _request_build_details(
+    timing: Mapping[str, Any], values: Mapping[str, float]
+) -> dict[str, float] | None:
+    present = [field in timing for field in _REQUEST_BUILD_TIMING_FIELDS]
+    if not any(present):
+        return None
+    if not all(present):
+        missing = next(
+            field
+            for field in _REQUEST_BUILD_TIMING_FIELDS
+            if field not in timing
+        )
+        raise ValueError(f"request-build timing is missing {missing}")
+    request_values = {
+        field: _seconds(timing[field], field=f"operation timing {field}")
+        for field in _REQUEST_BUILD_TIMING_FIELDS
+    }
+    artifact_build_residual_s = _difference(
+        request_values["request_artifact_build_sum_s"]
+        - request_values["request_payload_record_staging_sum_s"]
+        - request_values["request_manifest_sidecar_staging_sum_s"],
+        field="request artifact build residual",
+    )
+    request_build_residual_s = _difference(
+        values["request_build_sum_s"]
+        - request_values["request_work_unit_materialization_sum_s"]
+        - request_values["request_artifact_build_sum_s"],
+        field="request build residual",
+    )
+    return {
+        "work_unit_materialization_s": request_values[
+            "request_work_unit_materialization_sum_s"
+        ],
+        "payload_record_staging_s": request_values[
+            "request_payload_record_staging_sum_s"
+        ],
+        "manifest_sidecar_staging_s": request_values[
+            "request_manifest_sidecar_staging_sum_s"
+        ],
+        "artifact_build_residual_s": artifact_build_residual_s,
+        "request_build_residual_s": request_build_residual_s,
+    }
+
+
+def _operation_components(
+    operation: Mapping[str, Any],
+) -> tuple[dict[str, float], dict[str, float] | None, dict[str, float]]:
     if operation.get("rank_count") != 1:
         raise ValueError("M7F host request attribution requires one rank")
     timing = _mapping(operation.get("timing"), field="operation timing")
@@ -100,10 +151,10 @@ def _operation_components(operation: Mapping[str, Any]) -> dict[str, float]:
         - values["rank_response_d2h_max_sum_s"],
         field="native request overhead",
     )
-    host_response_wait_overhead_s = _difference(
-        values["rank_submit_response_wait_max_sum_s"]
+    host_request_overhead_s = _difference(
+        values["request_wave_wall_sum_s"]
         - values["rank_response_total_route_max_sum_s"],
-        field="host response wait overhead",
+        field="host request overhead",
     )
     rank_submit_internal_residual_s = _difference(
         values["rank_submit_total_max_sum_s"]
@@ -137,27 +188,11 @@ def _operation_components(operation: Mapping[str, Any]) -> dict[str, float]:
     components = {
         "preparation_s": values["preparation_s"],
         "encode_s": values["encode_s"],
-        "request_build_s": values["request_build_sum_s"],
-        "rank_submit_artifact_validation_s": values[
-            "rank_submit_artifact_validation_max_sum_s"
-        ],
-        "rank_submit_protocol_write_s": values[
-            "rank_submit_protocol_write_max_sum_s"
-        ],
-        "host_response_wait_overhead_s": host_response_wait_overhead_s,
-        "rank_submit_response_validation_s": values[
-            "rank_submit_response_validation_max_sum_s"
-        ],
-        "rank_submit_internal_residual_s": rank_submit_internal_residual_s,
-        "rank_submit_parallel_residual_s": rank_submit_parallel_residual_s,
+        "host_request_overhead_s": host_request_overhead_s,
         "native_request_overhead_s": native_request_overhead_s,
         "h2d_s": values["rank_response_h2d_max_sum_s"],
         "kernel_s": values["rank_response_kernel_max_sum_s"],
         "d2h_s": values["rank_response_d2h_max_sum_s"],
-        "coordinator_response_processing_s": values[
-            "coordinator_response_processing_sum_s"
-        ],
-        "request_wave_residual_s": request_wave_residual_s,
         "assembly_s": values["assembly_s"],
         "decode_s": values["decode_s"],
         "operation_other_s": operation_other_s,
@@ -166,7 +201,36 @@ def _operation_components(operation: Mapping[str, Any]) -> dict[str, float]:
         values["total_wall_s"] - sum(components.values()),
         field="operation accounting residual",
     )
-    return components
+    nested = {
+        "request_wave_wall_sum_s": values["request_wave_wall_sum_s"],
+        "rank_response_total_route_max_sum_s": values[
+            "rank_response_total_route_max_sum_s"
+        ],
+        "rank_submit_parallel_wall_sum_s": values[
+            "rank_submit_parallel_wall_sum_s"
+        ],
+        "rank_submit_total_max_sum_s": values["rank_submit_total_max_sum_s"],
+        "rank_submit_artifact_validation_max_sum_s": values[
+            "rank_submit_artifact_validation_max_sum_s"
+        ],
+        "rank_submit_protocol_write_max_sum_s": values[
+            "rank_submit_protocol_write_max_sum_s"
+        ],
+        "rank_submit_response_wait_max_sum_s": values[
+            "rank_submit_response_wait_max_sum_s"
+        ],
+        "rank_submit_response_validation_max_sum_s": values[
+            "rank_submit_response_validation_max_sum_s"
+        ],
+        "rank_submit_internal_residual_s": rank_submit_internal_residual_s,
+        "rank_submit_parallel_residual_s": rank_submit_parallel_residual_s,
+        "coordinator_response_processing_sum_s": values[
+            "coordinator_response_processing_sum_s"
+        ],
+        "request_wave_residual_s": request_wave_residual_s,
+        "request_build_parent_s": values["request_build_sum_s"],
+    }
+    return components, _request_build_details(timing, values), nested
 
 
 def _sample_components(sample: Mapping[str, Any]) -> dict[str, float] | None:
@@ -187,9 +251,26 @@ def _sample_components(sample: Mapping[str, Any]) -> dict[str, float] | None:
         else _seconds(host_reduce_value, field="host_reduce_s")
     )
     result = {field: 0.0 for field in _COMPONENT_FIELDS}
+    nested = {
+        "request_wave_wall_sum_s": 0.0,
+        "rank_response_total_route_max_sum_s": 0.0,
+        "rank_submit_parallel_wall_sum_s": 0.0,
+        "rank_submit_total_max_sum_s": 0.0,
+        "rank_submit_artifact_validation_max_sum_s": 0.0,
+        "rank_submit_protocol_write_max_sum_s": 0.0,
+        "rank_submit_response_wait_max_sum_s": 0.0,
+        "rank_submit_response_validation_max_sum_s": 0.0,
+        "rank_submit_internal_residual_s": 0.0,
+        "rank_submit_parallel_residual_s": 0.0,
+        "coordinator_response_processing_sum_s": 0.0,
+        "request_wave_residual_s": 0.0,
+        "request_build_parent_s": 0.0,
+    }
+    request_build_children = {field: 0.0 for field in _REQUEST_BUILD_CHILD_FIELDS}
+    request_build_available: bool | None = None
     operation_total_s = 0.0
     for index, operation in enumerate(operations):
-        components = _operation_components(
+        components, request_build_details, operation_nested = _operation_components(
             _mapping(operation, field=f"operation_facts[{index}]")
         )
         operation_total_s += _seconds(
@@ -199,39 +280,25 @@ def _sample_components(sample: Mapping[str, Any]) -> dict[str, float] | None:
         for field in _COMPONENT_FIELDS:
             if field in components:
                 result[field] += components[field]
+        for field, value in operation_nested.items():
+            nested[field] += value
+        available = request_build_details is not None
+        if request_build_available is None:
+            request_build_available = available
+        elif request_build_available != available:
+            raise ValueError("request-build timing must be present for every operation")
+        if request_build_details is not None:
+            for field, value in request_build_details.items():
+                request_build_children[field] += value
     result["host_reduce_s"] = host_reduce_s
     result["coordinator_other_s"] = _difference(
         total_wall_s - operation_total_s - host_reduce_s,
         field="coordinator other",
     )
     result["total_wall_s"] = total_wall_s
-    result["request_wave_wall_sum_s"] = sum(
-        _seconds(
-            _mapping(operation.get("timing"), field="operation timing")[
-                "request_wave_wall_sum_s"
-            ],
-            field="request_wave_wall_sum_s",
-        )
-        for operation in operations
-    )
-    result["rank_response_total_route_max_sum_s"] = sum(
-        _seconds(
-            _mapping(operation.get("timing"), field="operation timing")[
-                "rank_response_total_route_max_sum_s"
-            ],
-            field="rank_response_total_route_max_sum_s",
-        )
-        for operation in operations
-    )
-    result["rank_submit_response_wait_max_sum_s"] = sum(
-        _seconds(
-            _mapping(operation.get("timing"), field="operation timing")[
-                "rank_submit_response_wait_max_sum_s"
-            ],
-            field="rank_submit_response_wait_max_sum_s",
-        )
-        for operation in operations
-    )
+    result.update(nested)
+    result.update(request_build_children)
+    result["request_build_breakdown_available"] = bool(request_build_available)
     result["accounting_residual_s"] = _difference(
         total_wall_s - sum(result[field] for field in _COMPONENT_FIELDS),
         field="sample accounting residual",
@@ -247,7 +314,7 @@ def _raw_mad(values: Sequence[float]) -> float:
     return float(median(abs(value - center) for value in values))
 
 
-def _route_summary(values: Sequence[Mapping[str, float]]) -> dict[str, object]:
+def _route_summary(values: Sequence[Mapping[str, Any]]) -> dict[str, object]:
     totals = [value["total_wall_s"] for value in values]
     median_total = float(median(totals))
     components = {
@@ -259,26 +326,57 @@ def _route_summary(values: Sequence[Mapping[str, float]]) -> dict[str, object]:
         }
         for field in _COMPONENT_FIELDS
     }
+    request_build_breakdown: dict[str, object] | None = None
+    if all(value["request_build_breakdown_available"] for value in values):
+        request_build_breakdown = {
+            "median_parent_s": float(
+                median(value["request_build_parent_s"] for value in values)
+            ),
+            "median_parent_share": float(
+                median(
+                    value["request_build_parent_s"] / value["total_wall_s"]
+                    for value in values
+                )
+            ),
+            "children": {
+                field: {
+                    "median_s": float(median(value[field] for value in values)),
+                    "median_parent_share": float(
+                        median(
+                            value[field] / value["request_build_parent_s"]
+                            for value in values
+                        )
+                    ),
+                    "median_total_share": float(
+                        median(value[field] / value["total_wall_s"] for value in values)
+                    ),
+                }
+                for field in _REQUEST_BUILD_CHILD_FIELDS
+            },
+        }
     return {
         "measurement_count": len(values),
         "median_total_wall_s": median_total,
         "raw_mad_total_wall_s": _raw_mad(totals),
         "components": components,
         "nested_request_timing_medians_s": {
-            "request_wave_wall_sum_s": float(
-                median(value["request_wave_wall_sum_s"] for value in values)
-            ),
-            "rank_response_total_route_max_sum_s": float(
-                median(
-                    value["rank_response_total_route_max_sum_s"] for value in values
-                )
-            ),
-            "rank_submit_response_wait_max_sum_s": float(
-                median(
-                    value["rank_submit_response_wait_max_sum_s"] for value in values
-                )
-            ),
+            field: float(median(value[field] for value in values))
+            for field in (
+                "request_wave_wall_sum_s",
+                "rank_response_total_route_max_sum_s",
+                "rank_submit_parallel_wall_sum_s",
+                "rank_submit_total_max_sum_s",
+                "rank_submit_artifact_validation_max_sum_s",
+                "rank_submit_protocol_write_max_sum_s",
+                "rank_submit_response_wait_max_sum_s",
+                "rank_submit_response_validation_max_sum_s",
+                "rank_submit_internal_residual_s",
+                "rank_submit_parallel_residual_s",
+                "coordinator_response_processing_sum_s",
+                "request_wave_residual_s",
+            )
         },
+        "request_build_breakdown": request_build_breakdown,
         "median_unresolved_boundary_s": float(
             median(value["unresolved_boundary_s"] for value in values)
         ),
