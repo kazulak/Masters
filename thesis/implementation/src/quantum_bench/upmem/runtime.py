@@ -1284,6 +1284,10 @@ class UpmemV4Session:
         rank_response_total_route_max_sum_s = 0.0
         request_wave_wall_sum_s = 0.0
         request_build_sum_s = 0.0
+        request_work_unit_materialization_sum_s = 0.0
+        request_artifact_build_sum_s = 0.0
+        request_payload_record_staging_sum_s = 0.0
+        request_manifest_sidecar_staging_sum_s = 0.0
         rank_submit_parallel_wall_sum_s = 0.0
         rank_submit_total_max_sum_s = 0.0
         rank_submit_artifact_validation_max_sum_s = 0.0
@@ -1340,6 +1344,18 @@ class UpmemV4Session:
                         metrics["total_route_time_s"]
                     )
                     request_build_sum_s += float(metrics["request_build_s"])
+                    request_work_unit_materialization_sum_s += float(
+                        metrics["request_work_unit_materialization_s"]
+                    )
+                    request_artifact_build_sum_s += float(
+                        metrics["request_artifact_build_s"]
+                    )
+                    request_payload_record_staging_sum_s += float(
+                        metrics["request_payload_record_staging_s"]
+                    )
+                    request_manifest_sidecar_staging_sum_s += float(
+                        metrics["request_manifest_sidecar_staging_s"]
+                    )
                     rank_submit_parallel_wall_sum_s += float(
                         metrics["rank_submit_parallel_wall_s"]
                     )
@@ -1471,6 +1487,16 @@ class UpmemV4Session:
                 ),
                 "request_wave_wall_sum_s": float(request_wave_wall_sum_s),
                 "request_build_sum_s": float(request_build_sum_s),
+                "request_work_unit_materialization_sum_s": float(
+                    request_work_unit_materialization_sum_s
+                ),
+                "request_artifact_build_sum_s": float(request_artifact_build_sum_s),
+                "request_payload_record_staging_sum_s": float(
+                    request_payload_record_staging_sum_s
+                ),
+                "request_manifest_sidecar_staging_sum_s": float(
+                    request_manifest_sidecar_staging_sum_s
+                ),
                 "rank_submit_parallel_wall_sum_s": float(
                     rank_submit_parallel_wall_sum_s
                 ),
@@ -1656,7 +1682,12 @@ class UpmemV4Session:
         request_build_started = time.perf_counter()
         self._validate_rank_assignments(wave, requests)
         prepared: list[tuple[_RankSession, list[tuple[M5Tile, int]], Any]] = []
+        request_work_unit_materialization_s = 0.0
+        request_artifact_build_s = 0.0
+        request_payload_record_staging_s = 0.0
+        request_manifest_sidecar_staging_s = 0.0
         for rank, assignments in requests:
+            work_unit_materialization_started = time.perf_counter()
             units = [
                 _build_work_unit(
                     tile,
@@ -1667,6 +1698,10 @@ class UpmemV4Session:
                 )
                 for tile, local_id in assignments
             ]
+            request_work_unit_materialization_s += (
+                time.perf_counter() - work_unit_materialization_started
+            )
+            artifact_build_started = time.perf_counter()
             artifact = build_v4_request(
                 rank.root,
                 profile=rank.session.profile,
@@ -1678,6 +1713,9 @@ class UpmemV4Session:
                 task_contract_sha256=request_contract,
                 request_sequence=self._sequence,
             )
+            request_artifact_build_s += time.perf_counter() - artifact_build_started
+            request_payload_record_staging_s += artifact.payload_record_staging_s
+            request_manifest_sidecar_staging_s += artifact.manifest_sidecar_staging_s
             prepared.append((rank, assignments, artifact))
         request_build_s = time.perf_counter() - request_build_started
         self._sequence += 1
@@ -1702,6 +1740,16 @@ class UpmemV4Session:
                 "d2h_time_s": 0.0,
                 "total_route_time_s": 0.0,
                 "request_build_s": request_build_s,
+                "request_work_unit_materialization_s": (
+                    request_work_unit_materialization_s
+                ),
+                "request_artifact_build_s": request_artifact_build_s,
+                "request_payload_record_staging_s": (
+                    request_payload_record_staging_s
+                ),
+                "request_manifest_sidecar_staging_s": (
+                    request_manifest_sidecar_staging_s
+                ),
                 "rank_submit_parallel_wall_s": rank_submit_parallel_wall_s,
                 "rank_submit_total_max_s": 0.0,
                 "rank_submit_artifact_validation_max_s": 0.0,

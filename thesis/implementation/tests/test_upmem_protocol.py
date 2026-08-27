@@ -191,6 +191,10 @@ def test_v4_request_is_deterministic_and_binds_contract_and_manifest_hash(
     assert protocol.unpack_v4_header(first.sidecar_path.read_bytes()[: protocol.HEADER_BYTES]) == (
         first.header
     )
+    assert first.payload_record_staging_s >= 0.0
+    assert first.manifest_sidecar_staging_s >= 0.0
+    assert "payload_record_staging_s" not in first.to_dict()
+    assert "manifest_sidecar_staging_s" not in first.to_dict()
 
 
 @pytest.mark.parametrize(

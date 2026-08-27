@@ -14,6 +14,7 @@ import hashlib
 from pathlib import Path, PurePosixPath
 import re
 import struct
+import time
 from typing import Any, Iterable, Sequence
 
 from quantum_bench.numerics import INT8_QUANTIZED_MAX_ABS
@@ -469,6 +470,8 @@ class V4RequestArtifact:
     manifest_sha256: str
     sidecar_sha256: str
     output_paths: tuple[Path, ...]
+    payload_record_staging_s: float
+    manifest_sidecar_staging_s: float
 
     @property
     def request_sequence(self) -> int:
@@ -724,6 +727,7 @@ def build_v4_request(
     output_dir.mkdir()
     records: list[V4WorkUnitRecord] = []
     output_paths: list[Path] = []
+    payload_record_staging_started = time.perf_counter()
     for dpu_id in range(profile.dpu_count):
         unit = by_id.get(
             dpu_id,
@@ -789,6 +793,8 @@ def build_v4_request(
                 b_sha256=_file_sha256(b_path),
             )
         )
+    payload_record_staging_s = time.perf_counter() - payload_record_staging_started
+    manifest_sidecar_staging_started = time.perf_counter()
     _validate_record_storage(records, profile=profile, canonical_k=canonical_k)
     manifest_path = request_dir / "manifest.txt"
     sidecar_path = request_dir / "sidecar.bin"
@@ -833,6 +839,8 @@ def build_v4_request(
         raise ValueError("v4 sidecar exceeds native request limit")
     manifest_path.write_bytes(manifest_bytes)
     sidecar_path.write_bytes(sidecar_bytes)
+    sidecar_sha256 = _file_sha256(sidecar_path)
+    manifest_sidecar_staging_s = time.perf_counter() - manifest_sidecar_staging_started
     return V4RequestArtifact(
         root=root,
         request_dir=request_dir,
@@ -842,8 +850,10 @@ def build_v4_request(
         work_units=tuple(records),
         task_contract_sha256=contract_digest.hex(),
         manifest_sha256=manifest_sha256,
-        sidecar_sha256=_file_sha256(sidecar_path),
+        sidecar_sha256=sidecar_sha256,
         output_paths=tuple(output_paths),
+        payload_record_staging_s=float(payload_record_staging_s),
+        manifest_sidecar_staging_s=float(manifest_sidecar_staging_s),
     )
 
 

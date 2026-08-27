@@ -479,6 +479,18 @@ def test_persistent_session_matches_replay_and_renews_deadline(
     assert timing["request_wave_wall_sum_s"] >= 0.0
     assert timing["total_wall_s"] >= timing["request_wave_wall_sum_s"]
     assert timing["request_build_sum_s"] >= 0.0
+    assert timing["request_work_unit_materialization_sum_s"] >= 0.0
+    assert timing["request_artifact_build_sum_s"] >= 0.0
+    assert timing["request_payload_record_staging_sum_s"] >= 0.0
+    assert timing["request_manifest_sidecar_staging_sum_s"] >= 0.0
+    assert timing["request_build_sum_s"] >= (
+        timing["request_work_unit_materialization_sum_s"]
+        + timing["request_artifact_build_sum_s"]
+    )
+    assert timing["request_artifact_build_sum_s"] >= (
+        timing["request_payload_record_staging_sum_s"]
+        + timing["request_manifest_sidecar_staging_sum_s"]
+    )
     assert timing["rank_submit_parallel_wall_sum_s"] >= 0.0
     assert timing["rank_submit_total_max_sum_s"] == pytest.approx(0.32)
     assert timing["rank_submit_artifact_validation_max_sum_s"] == pytest.approx(0.04)
