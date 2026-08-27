@@ -19,6 +19,7 @@ PHYSICAL_SCRIPT = ROOT / "scripts" / "qualify_m7c_physical.py"
 SELECTION_SCRIPT = ROOT / "scripts" / "select_m7c_workload.py"
 SCALING_SCRIPT = ROOT / "scripts" / "run_m7c_scaling_campaign.py"
 M7C_QUALIFIER_SCRIPT = ROOT / "scripts" / "qualify_m7c.py"
+ATTRIBUTION_SCRIPT = ROOT / "scripts" / "analyze_m7d_attribution.py"
 
 
 def _load_script(path: Path, name: str):
@@ -48,6 +49,10 @@ def _scaling_campaign():
 
 def _m7c_qualifier():
     return _load_script(M7C_QUALIFIER_SCRIPT, "qualify_m7c")
+
+
+def _attribution():
+    return _load_script(ATTRIBUTION_SCRIPT, "analyze_m7d_attribution")
 
 
 def _archive(path: Path, member_name: str, *, kind: str = "file") -> None:
@@ -249,6 +254,82 @@ def test_m7c_committed_selection_matches_scaling_config() -> None:
         "tn_benchmark_physical_scaling_confirmation.yml",
     ):
         selector.check_selection(selection, ROOT / "configs" / config)
+
+
+def _attribution_sample(operation_timing: dict[str, float]) -> dict[str, object]:
+    return {
+        "status": "success",
+        "attempt_kind": "measurement",
+        "route_id": "upmem_float32_4dpu_t8",
+        "measurement": {"total_wall_s": 1.5, "host_reduce_s": 0.05},
+        "backend_facts": {
+            "operation_facts": [
+                {
+                    "timing": operation_timing,
+                }
+            ]
+        },
+    }
+
+
+def _attribution_operation_timing() -> dict[str, float]:
+    return {
+        "total_wall_s": 1.3,
+        "preparation_s": 0.1,
+        "encode_s": 0.1,
+        "rank_response_h2d_max_sum_s": 0.1,
+        "rank_response_kernel_max_sum_s": 0.2,
+        "rank_response_d2h_max_sum_s": 0.1,
+        "rank_response_total_route_max_sum_s": 0.6,
+        "request_wave_wall_sum_s": 0.8,
+        "assembly_s": 0.1,
+        "decode_s": 0.1,
+    }
+
+
+def test_m7d_attribution_derives_disjoint_request_lifecycle_components() -> None:
+    attribution = _attribution()
+    manifest = {"source_commit": "a" * 40}
+    sample = _attribution_sample(_attribution_operation_timing())
+
+    first = attribution.derive_attribution(manifest, (sample,))
+    second = attribution.derive_attribution(manifest, (sample,))
+
+    assert first == second
+    route = first["routes"]["upmem_float32_4dpu_t8"]
+    assert route["measurement_count"] == 1
+    assert route["median_total_wall_s"] == pytest.approx(1.5)
+    components = route["components"]
+    assert components["host_request_overhead_s"]["median_s"] == pytest.approx(0.2)
+    assert components["native_request_overhead_s"]["median_s"] == pytest.approx(0.2)
+    assert components["operation_other_s"]["median_s"] == pytest.approx(0.1)
+    assert components["coordinator_other_s"]["median_s"] == pytest.approx(0.15)
+    assert route["median_unresolved_boundary_s"] == pytest.approx(0.25)
+    assert route["median_accounting_residual_s"] == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize(
+    "field, value, message",
+    [
+        ("request_wave_wall_sum_s", None, "missing request_wave_wall_sum_s"),
+        ("rank_response_total_route_max_sum_s", 0.3, "native request overhead"),
+    ],
+)
+def test_m7d_attribution_rejects_missing_or_inconsistent_timing(
+    field: str, value: float | None, message: str
+) -> None:
+    attribution = _attribution()
+    timing = _attribution_operation_timing()
+    if value is None:
+        del timing[field]
+    else:
+        timing[field] = value
+
+    with pytest.raises(ValueError, match=message):
+        attribution.derive_attribution(
+            {"source_commit": "a" * 40},
+            (_attribution_sample(timing),),
+        )
 
 
 def test_m7c_scaling_preparation_preserves_all_resolved_route_paths(
