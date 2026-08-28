@@ -2595,6 +2595,8 @@ class UpmemSession:
         return {
             "backend_id": "upmem_final_plan_v1",
             "physical_plan_id": physical_plan_id(self._plan),
+            "kernel_policy": self._plan.kernel_policy,
+            "kernel_implementation_id": _ACTIVE_MECHANISM_IDS["kernel"],
             "requested_dpus": self._plan.topology.dpu_count,
             "active_dpus": len(active_dpu_ids),
             "active_ranks": tuple(sorted(active_rank_indices)),
@@ -2623,6 +2625,8 @@ class UpmemSession:
                 "backend_id": "upmem_final_plan_v1",
                 "physical_plan_id": physical_plan_id(self._plan),
                 "logical_plan_id": self._plan.logical_plan_id,
+                "kernel_policy": self._plan.kernel_policy,
+                "kernel_implementation_id": _ACTIVE_MECHANISM_IDS["kernel"],
                 "execution_class": (
                     "sdk_simulator" if simulator else "upmem_v4_real_tile"
                 ),
@@ -3008,6 +3012,8 @@ def _open_failure_facts(plan: FinalUpmemPlan) -> dict[str, JsonValue]:
         "backend_id": "upmem_final_plan_v1",
         "physical_plan_id": physical_plan_id(plan),
         "logical_plan_id": plan.logical_plan_id,
+        "kernel_policy": plan.kernel_policy,
+        "kernel_implementation_id": _ACTIVE_MECHANISM_IDS["kernel"],
         "requested_dpus": plan.topology.dpu_count,
         "rank_count": plan.topology.rank_count,
         "tasklets_per_dpu": plan.topology.tasklets_per_dpu,

@@ -510,6 +510,21 @@ def test_persistent_session_matches_replay_and_renews_deadline(
     _close_mock_session(session)
 
 
+def test_upmem_backend_kernel_provenance(tmp_path: Path) -> None:
+    node, dag, plan, resources, _, _ = _opened(
+        tmp_path, policy="split_complex_float32_v1", k=257
+    )
+    session = open_upmem(dag, plan, resources)
+
+    sample = session.run_once(_inputs(node, k=257))
+
+    assert sample.backend_facts["kernel_policy"] == plan.kernel_policy
+    assert sample.backend_facts["kernel_implementation_id"] == (
+        "upmem_sdk_hardware_v4_wram_panel_kernel"
+    )
+    _close_mock_session(session)
+
+
 def test_multi_rank_plan_does_not_infer_global_phase_timings(tmp_path: Path) -> None:
     node = _task(k=17, m=1, n=1)
     dag, plan = _final_plan_for_node(

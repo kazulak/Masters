@@ -743,9 +743,10 @@ def test_run_keeps_same_case_route_samples_separate_by_plan_id(tmp_path: Path) -
         json.loads(line)
         for line in (tmp_path / "run" / "samples.jsonl").read_text().splitlines()
     ]
-    assert [
-        (sample["case_id"], sample["plan_id"], sample["route_id"]) for sample in samples
-    ] == [
+    assert sorted(
+        (sample["case_id"], sample["plan_id"], sample["route_id"])
+        for sample in samples
+    ) == [
         ("bell", "greedy", "numpy"),
         ("bell", "optimal", "numpy"),
     ]
@@ -809,7 +810,9 @@ def test_physical_machine_preflight_records_static_admission(
     monkeypatch.setenv("QUANTUM_BENCH_EXCLUSIVITY_ATTESTED", "1")
     monkeypatch.setenv("QUANTUM_BENCH_NUMA_ATTESTED", "1")
     monkeypatch.setattr(cli, "_observed_affinity", lambda: [0])
-    monkeypatch.setattr(cli, "_cpu_governors", lambda: ["performance"])
+    monkeypatch.setattr(
+        cli, "_cpu_governors", lambda _cpu_ids: {"0": "performance"}
+    )
     monkeypatch.setattr(cli, "_numa_nodes", lambda: ["node0"])
     normalized_rank_paths = ("normalized-rank-path",)
     monkeypatch.setattr(
@@ -827,8 +830,73 @@ def test_physical_machine_preflight_records_static_admission(
 
     assert facts["machine_preflight_passed"] is True
     assert facts["machine_preflight_reasons"] == ()
+    assert facts["selected_cpu_ids"] == (0,)
+    assert facts["observed_affinity"] == [0]
+    assert facts["observed_cpu_governors"] == {"0": "performance"}
     assert facts["initial_load1_per_online_cpu"] == 0.125
     assert facts["exclusivity_attestation_recorded_at_utc"] == "2026-08-26T12:00:00Z"
+
+
+def test_environment_provenance_is_compact_and_thread_distinguishable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "environment.yml"
+    _write_config(config_path, _numpy_config())
+    config = load_experiment_config(config_path)
+    preflight = {
+        "observed_affinity": [2, 3],
+        "selected_cpu_ids": [2, 3],
+        "observed_cpu_governors": {"2": "schedutil", "3": "schedutil"},
+    }
+    monkeypatch.setattr(
+        cli.np,
+        "show_config",
+        lambda **_kwargs: {
+            "Build Dependencies": {
+                "blas": {
+                    "found": True,
+                    "name": " scipy-openblas ",
+                    "version": " 0.3.29 ",
+                    "include directory": "/irrelevant/build/include",
+                    "lib directory": "/irrelevant/build/lib",
+                }
+            },
+            "Python Information": {"path": "/irrelevant/build/python"},
+        },
+    )
+    monkeypatch.setattr(cli, "_tool_version", lambda _command: None)
+    monkeypatch.setattr(cli, "_background_load_1m", lambda: None)
+    monkeypatch.setattr(cli, "_numa_nodes", lambda: [])
+    for name in (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("OMP_NUM_THREADS", "1")
+
+    first_id, first = cli._environment(config, preflight)
+    monkeypatch.setenv("OMP_NUM_THREADS", "2")
+    second_id, second = cli._environment(config, preflight)
+
+    assert first["numpy_version"] == np.__version__
+    assert first["blas"] == {"name": "scipy-openblas", "version": "0.3.29"}
+    assert "/irrelevant/build" not in canonical_json(first)
+    assert first["thread_environment"] == {
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": None,
+        "MKL_NUM_THREADS": None,
+        "NUMEXPR_NUM_THREADS": None,
+    }
+    assert first["affinity"] == [2, 3]
+    assert first["selected_cpu_ids"] == [2, 3]
+    assert first["observed_cpu_governors"] == {
+        "2": "schedutil",
+        "3": "schedutil",
+    }
+    assert second["thread_environment"]["OMP_NUM_THREADS"] == "2"
+    assert first_id != second_id
 
 
 def test_physical_machine_preflight_failure_finalizes_without_attempts(

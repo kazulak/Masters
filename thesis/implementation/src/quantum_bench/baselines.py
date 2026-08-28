@@ -883,6 +883,11 @@ def _validate_quest_stdout(
     quest_version = payload.get("quest_version")
     if not isinstance(quest_version, str) or not quest_version:
         raise _QuestRuntimeError("stdout", "QuEST version is missing")
+    threads = payload.get("threads")
+    if threads is not None and (
+        isinstance(threads, bool) or not isinstance(threads, int) or threads < 1
+    ):
+        raise _QuestRuntimeError("stdout", "QuEST thread count is invalid")
     native_time = payload.get("time_s")
     dump_time = payload.get("state_dump_time_s")
     if not _finite_nonnegative(native_time) or not _finite_nonnegative(dump_time):
@@ -896,6 +901,7 @@ def _validate_quest_stdout(
         raise _QuestRuntimeError("stdout", "QuEST energy metadata pair is invalid")
     return {
         "quest_version": quest_version,
+        "threads": threads,
         "native_depth": 0,
         "native_compute_time_s": float(native_time),
         "native_state_dump_time_s": float(dump_time),
@@ -992,6 +998,12 @@ def _run(
         else:
             import cotengra as ctg
 
+            cotengra_version = getattr(ctg, "__version__", None)
+            backend_facts["cotengra_version"] = (
+                cotengra_version.strip()
+                if isinstance(cotengra_version, str) and cotengra_version.strip()
+                else None
+            )
             optimizer = _make_cotengra_optimizer(
                 ctg, methods=methods, max_repeats=max_repeats
             )
@@ -1128,6 +1140,7 @@ def _backend_facts(
         "backend_id": "cotengra_tn_v1",
         "backend_family": "cotengra",
         "hardware_execution": False,
+        "cotengra_version": None,
         "optimizer": "cotengra.HyperOptimizer",
         "methods": methods,
         "max_repeats": max_repeats,

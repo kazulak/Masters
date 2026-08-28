@@ -72,6 +72,12 @@ _PLAN_SCHEMA = "tn_benchmark_plan_v1"
 _SESSION_PROTOCOL_ID = "upmem_real_tile_abi_v4"
 _UPMEM_EXECUTORS = frozenset({"upmem_sdk_simulator", "upmem_physical"})
 _PLAN_EXECUTORS = frozenset({"numpy_dag", *_UPMEM_EXECUTORS})
+_THREAD_ENVIRONMENT_VARIABLES = (
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+)
 
 
 def _plain(value: object) -> Any:
@@ -153,20 +159,49 @@ def _environment(
         options = route["options"]
         if route["executor"] == "upmem_physical":
             rank_paths.extend(options["rank_paths"])
+    observed_affinity = machine_preflight.get("observed_affinity")
+    observed_governors = machine_preflight.get("observed_cpu_governors")
     facts: Mapping[str, JsonValue] = {
         "host": platform.node(),
         "python": platform.python_version(),
         "platform": platform.platform(),
-        "affinity": _observed_affinity(),
+        "numpy_version": np.__version__,
+        "blas": _numpy_blas_identity(),
+        "thread_environment": {
+            name: os.environ.get(name) for name in _THREAD_ENVIRONMENT_VARIABLES
+        },
+        "affinity": observed_affinity,
+        "selected_cpu_ids": machine_preflight.get("selected_cpu_ids"),
         "requested_rank_paths": sorted(set(rank_paths)),
         "upmem_sdk_version": _tool_version(("dpu-pkg-config", "--version")),
         "collection_machine_policy": config["collection"]["machine_policy"],
         "initial_background_load_1m": _background_load_1m(),
-        "observed_cpu_governors": _cpu_governors(),
+        "observed_cpu_governors": observed_governors,
         "observed_numa_nodes": _numa_nodes(),
         "machine_preflight": machine_preflight,
     }
     return environment_id(facts), facts
+
+
+def _numpy_blas_identity() -> Mapping[str, JsonValue]:
+    identity: dict[str, JsonValue] = {"name": None, "version": None}
+    try:
+        configuration = np.show_config(mode="dicts")
+    except (AttributeError, TypeError):
+        return identity
+    if not isinstance(configuration, Mapping):
+        return identity
+    dependencies = configuration.get("Build Dependencies")
+    if not isinstance(dependencies, Mapping):
+        return identity
+    blas = dependencies.get("blas")
+    if not isinstance(blas, Mapping) or blas.get("found") is False:
+        return identity
+    for field in ("name", "version"):
+        value = blas.get(field)
+        if isinstance(value, str) and value.strip():
+            identity[field] = value.strip()
+    return identity
 
 
 def _background_load_1m() -> float | None:
@@ -177,18 +212,19 @@ def _background_load_1m() -> float | None:
     return value if np.isfinite(value) and value >= 0.0 else None
 
 
-def _cpu_governors() -> list[str]:
-    governors: set[str] = set()
+def _cpu_governors(cpu_ids: list[int] | None) -> Mapping[str, JsonValue]:
+    if cpu_ids is None:
+        return {}
+    governors: dict[str, JsonValue] = {}
     root = Path("/sys/devices/system/cpu")
-    try:
-        paths = root.glob("cpu*/cpufreq/scaling_governor")
-        for path in paths:
+    for cpu_id in cpu_ids:
+        path = root / f"cpu{cpu_id}" / "cpufreq" / "scaling_governor"
+        try:
             value = path.read_text(encoding="utf-8").strip()
-            if value:
-                governors.add(value)
-    except OSError:
-        return []
-    return sorted(governors)
+        except OSError:
+            value = ""
+        governors[str(cpu_id)] = value or None
+    return governors
 
 
 def _numa_nodes() -> list[str]:
@@ -237,7 +273,9 @@ def _machine_preflight(config: Mapping[str, object]) -> Mapping[str, JsonValue]:
     physical_performance = collection.get("claim_policy") == "physical_performance_v1"
     checked_at = _utc_now()
     affinity = _observed_affinity()
-    governors = _cpu_governors()
+    governors = _cpu_governors(affinity)
+    expected_affinity = machine_policy["affinity"]["expected_cpus"]
+    selected_cpu_ids = expected_affinity if expected_affinity is not None else affinity
     numa_nodes = _numa_nodes()
     rank_paths = _physical_rank_paths(config)
     rank_paths_accessible = _rank_paths_accessible(rank_paths)
@@ -258,9 +296,8 @@ def _machine_preflight(config: Mapping[str, object]) -> Mapping[str, JsonValue]:
             reasons.append("machine_exclusivity_not_attested")
         if not numa_attested:
             reasons.append("numa_policy_not_attested")
-        if governors != ["performance"]:
+        if not governors or set(governors.values()) != {"performance"}:
             reasons.append("cpu_governor_not_performance")
-        expected_affinity = machine_policy["affinity"]["expected_cpus"]
         if affinity is None or tuple(affinity) != tuple(expected_affinity):
             reasons.append("process_affinity_mismatch")
         if not rank_paths_accessible:
@@ -287,8 +324,10 @@ def _machine_preflight(config: Mapping[str, object]) -> Mapping[str, JsonValue]:
         if isinstance(machine_policy["numa_policy"], Mapping)
         else machine_policy["numa_policy"],
         "numa_attestation_recorded_at_utc": checked_at if numa_attested else None,
-        "governor_verified": governors == ["performance"],
+        "governor_verified": bool(governors)
+        and set(governors.values()) == {"performance"},
         "observed_cpu_governors": governors,
+        "selected_cpu_ids": selected_cpu_ids,
         "affinity_verified": (
             tuple(affinity) == tuple(machine_policy["affinity"]["expected_cpus"])
             if isinstance(machine_policy["affinity"], Mapping)

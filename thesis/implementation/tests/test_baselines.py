@@ -126,6 +126,7 @@ def _fake_quest_process(
             "time_s": 1.25,
             "state_dump_time_s": 0.015,
             "quest_version": "QuEST-test",
+            "threads": 6,
             "energy_joules": None,
             "energy_source": "unavailable",
         }
@@ -640,6 +641,7 @@ def test_quest_cpu_runs_all_canonical_aliases(
     assert facts["physical_upmem_execution"] is False
     assert facts["target_observed"] == "cpu"
     assert facts["native_depth"] == 0
+    assert facts["threads"] == 6
     assert re.fullmatch(r"[0-9a-f]{64}", facts["runner_sha256"])
     assert facts["runner_sha256"] == hashlib.sha256(runner.read_bytes()).hexdigest()
     provenance_command = facts["command"]
@@ -678,6 +680,15 @@ def test_quest_cpu_repeats_gate_counts_and_preserves_job(monkeypatch, tmp_path):
     assert command[command.index("--repeat-layers") + 1] == "3"
     assert sample.backend_facts["native_compute_time_s"] == 1.25
     assert job == original
+
+
+def test_quest_backend_provenance_records_threads(monkeypatch, tmp_path):
+    job = _quest_job("qrng", n_qubits=2)
+    _fake_quest_process(monkeypatch, job)
+
+    sample = baselines.run_quest_cpu(job, runner=_fake_runner(tmp_path))
+
+    assert sample.backend_facts["threads"] == 6
 
 
 @pytest.mark.parametrize(
@@ -986,6 +997,7 @@ def test_timing_facts_and_result_are_immutable():
     assert sample.backend_facts["methods"] == "greedy"
     assert sample.backend_facts["max_repeats"] == 1
     assert sample.backend_facts["hardware_execution"] is False
+    assert sample.backend_facts["cotengra_version"]
     assert sample.backend_facts["deterministic_planning_seed"] == 0
     assert sample.backend_facts["deterministic_planning_rngs"] == (
         "python_random",
@@ -1003,6 +1015,14 @@ def test_timing_facts_and_result_are_immutable():
         sample.output[0] = 0
     with pytest.raises(TypeError):
         sample.backend_facts["backend_id"] = "changed"
+
+
+def test_cotengra_backend_provenance_records_version():
+    import cotengra
+
+    sample = baselines.run_cotengra(_job(), methods="greedy", max_repeats=1)
+
+    assert sample.backend_facts["cotengra_version"] == cotengra.__version__
 
 
 @pytest.mark.parametrize(
