@@ -34,6 +34,91 @@ class CircuitSpec:
         object.__setattr__(self, "source", frozen)
 
 
+_GATE_SIGNATURES = {
+    "i": (1, 0),
+    "h": (1, 0),
+    "x": (1, 0),
+    "y": (1, 0),
+    "z": (1, 0),
+    "s": (1, 0),
+    "t": (1, 0),
+    "ry": (1, 1),
+    "rz": (1, 1),
+    "cx": (2, 0),
+    "cnot": (2, 0),
+    "cz": (2, 0),
+    "swap": (2, 0),
+}
+
+
+def validate_circuit_spec(circuit: CircuitSpec) -> None:
+    """Validate the complete semantics of one active circuit specification."""
+
+    if not isinstance(circuit, CircuitSpec):
+        raise TypeError("circuit must be a CircuitSpec")
+    if (
+        isinstance(circuit.n_qubits, bool)
+        or not isinstance(circuit.n_qubits, int)
+        or circuit.n_qubits < 1
+    ):
+        raise ValueError("CircuitSpec.n_qubits must be a positive non-bool integer")
+    if not isinstance(circuit.operations, tuple):
+        raise ValueError("CircuitSpec.operations must be a tuple")
+
+    for index, operation in enumerate(circuit.operations):
+        if not isinstance(operation, CircuitOperation):
+            raise ValueError(
+                f"CircuitSpec operation {index} must be a CircuitOperation"
+            )
+        if not isinstance(operation.gate, str) or operation.gate not in _GATE_SIGNATURES:
+            raise ValueError(
+                f"CircuitSpec operation {index} has unsupported gate: {operation.gate!r}"
+            )
+        if not isinstance(operation.wires, tuple):
+            raise ValueError(f"CircuitSpec operation {index} wires must be a tuple")
+        if not isinstance(operation.params, tuple):
+            raise ValueError(f"CircuitSpec operation {index} params must be a tuple")
+
+        expected_wires, expected_params = _GATE_SIGNATURES[operation.gate]
+        if len(operation.wires) != expected_wires:
+            raise ValueError(
+                f"CircuitSpec operation {index} gate {operation.gate!r} requires "
+                f"exactly {expected_wires} wire(s)"
+            )
+        if len(operation.params) != expected_params:
+            raise ValueError(
+                f"CircuitSpec operation {index} gate {operation.gate!r} requires "
+                f"exactly {expected_params} parameter(s)"
+            )
+
+        seen_wires: set[int] = set()
+        for wire in operation.wires:
+            if isinstance(wire, bool) or not isinstance(wire, int):
+                raise ValueError(
+                    f"CircuitSpec operation {index} wires must be non-bool integers"
+                )
+            if wire < 0 or wire >= circuit.n_qubits:
+                raise ValueError(
+                    f"CircuitSpec operation {index} wire {wire} is outside "
+                    f"[0, {circuit.n_qubits})"
+                )
+            if wire in seen_wires:
+                raise ValueError(
+                    f"CircuitSpec operation {index} wires must be unique"
+                )
+            seen_wires.add(wire)
+
+        for parameter in operation.params:
+            if isinstance(parameter, bool) or not isinstance(parameter, (int, float)):
+                raise ValueError(
+                    f"CircuitSpec operation {index} angle parameters must be numeric"
+                )
+            if isinstance(parameter, float) and not math.isfinite(parameter):
+                raise ValueError(
+                    f"CircuitSpec operation {index} angle parameters must be finite"
+                )
+
+
 @dataclass(frozen=True)
 class TensorSpec:
     id: str
@@ -80,6 +165,7 @@ def make_simulation_job(
 ) -> SimulationJob:
     """Validate and normalize simulation-job construction."""
 
+    validate_circuit_spec(circuit)
     normalized: list[tuple[str, _Scalar]] = []
     seen: set[str] = set()
     for item in parameters:
@@ -243,4 +329,5 @@ __all__ = [
     "TensorSpec",
     "TensorView",
     "make_simulation_job",
+    "validate_circuit_spec",
 ]

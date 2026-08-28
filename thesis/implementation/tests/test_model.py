@@ -16,6 +16,7 @@ from quantum_bench.model import (
     TensorSpec,
     TensorView,
     make_simulation_job,
+    validate_circuit_spec,
 )
 
 
@@ -99,6 +100,74 @@ def test_nonfinite_values_are_rejected(value: float) -> None:
         CircuitSpec(name="test", n_qubits=1, operations=(), source={"value": value})
     with pytest.raises(ValueError, match="finite"):
         make_simulation_job(_circuit(), parameters=(("value", value),))
+
+
+@pytest.mark.parametrize("n_qubits", [True, False, 0, -1, 1.0, "1"])
+def test_circuit_validator_rejects_invalid_qubit_counts(n_qubits: object) -> None:
+    circuit = CircuitSpec("invalid", n_qubits, (), {})  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="positive non-bool integer"):
+        make_simulation_job(circuit)
+
+
+@pytest.mark.parametrize(
+    ("gate", "wires", "params"),
+    [
+        ("i", (0,), ()),
+        ("h", (0,), ()),
+        ("x", (0,), ()),
+        ("y", (0,), ()),
+        ("z", (0,), ()),
+        ("s", (0,), ()),
+        ("t", (0,), ()),
+        ("ry", (0,), (0.5,)),
+        ("rz", (0,), (-0.5,)),
+        ("cx", (0, 1), ()),
+        ("cnot", (0, 1), ()),
+        ("cz", (0, 1), ()),
+        ("swap", (0, 1), ()),
+    ],
+)
+def test_circuit_validator_accepts_the_exact_active_gate_set(
+    gate: str, wires: tuple[int, ...], params: tuple[float, ...]
+) -> None:
+    circuit = CircuitSpec("valid", 2, (CircuitOperation(gate, wires, params),), {})
+
+    assert validate_circuit_spec(circuit) is None
+
+
+@pytest.mark.parametrize(
+    ("operation", "message"),
+    [
+        (CircuitOperation("H", (0,)), "unsupported gate"),
+        (CircuitOperation("measure", (0,)), "unsupported gate"),
+        (CircuitOperation("h", (0, 1)), "exactly 1 wire"),
+        (CircuitOperation("cx", (0,)), "exactly 2 wire"),
+        (CircuitOperation("h", (0,), (0.5,)), "exactly 0 parameter"),
+        (CircuitOperation("ry", (0,)), "exactly 1 parameter"),
+        (CircuitOperation("cx", (0, 0)), "unique"),
+        (CircuitOperation("x", (True,)), "non-bool integers"),
+        (CircuitOperation("x", (2,)), "outside"),
+        (CircuitOperation("x", (-1,)), "outside"),
+        (CircuitOperation("ry", (0,), (True,)), "numeric"),
+        (CircuitOperation("ry", (0,), (float("nan"),)), "finite"),
+        (CircuitOperation("rz", (0,), (float("inf"),)), "finite"),
+    ],
+)
+def test_make_simulation_job_rejects_malformed_circuits(
+    operation: CircuitOperation, message: str
+) -> None:
+    circuit = CircuitSpec("invalid", 2, (operation,), {})
+
+    with pytest.raises(ValueError, match=message):
+        make_simulation_job(circuit)
+
+
+def test_circuit_validator_requires_circuit_operations() -> None:
+    circuit = CircuitSpec("invalid", 1, ("x",), {})  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="CircuitOperation"):
+        make_simulation_job(circuit)
 
 
 def test_model_records_are_frozen() -> None:
