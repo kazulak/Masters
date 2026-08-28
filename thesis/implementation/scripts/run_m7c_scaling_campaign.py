@@ -362,7 +362,7 @@ def _diagnostic_contract_reasons(configuration: Mapping[str, object]) -> tuple[s
         plan = configuration["plans"]["greedy"]
         if (
             dict(plan["planner"])
-            != {"engine": "opt_einsum", "mode": "greedy", "max_repeats": 1, "seed": 0}
+            != {"engine": "opt_einsum", "mode": "greedy"}
             or plan["slicing"] is not None
         ):
             reasons.append("diagnostic_planner_mismatch")
