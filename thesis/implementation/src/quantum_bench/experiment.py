@@ -79,13 +79,19 @@ _VALIDATION_FIELDS = frozenset(
         "accuracy_qualified",
         "max_abs_error",
         "relative_l2_error",
+        "norm_drift",
+        "phase_aligned_max_abs_error",
     }
 )
 _DEFAULT_VALIDATION_POLICY = {
-    "policy": "complex128_reference_metrics_v1",
+    "policy": "complex128_reference_metrics_v2",
     "reference_dtype": "complex128",
     "float32_atol": 1.0e-5,
     "float32_rtol": 1.0e-5,
+    "float32_relative_l2_max": 1.0e-5,
+    "float32_norm_drift_max": 2.0e-5,
+    "phase_policy": "raw_phase_sensitive_v1",
+    "phase_aligned_metric": "diagnostic_only_v1",
     "int8_policy_reference": "exact_raw_lane_records_v1",
     "int8_full_precision_rule": "report_error_without_universal_threshold_v1",
 }
@@ -1212,7 +1218,7 @@ def _run_sample(
     validate: Callable[[ExecutionSample], Mapping[str, JsonValue]] | None = None,
 ) -> Mapping[str, JsonValue]:
     base: dict[str, JsonValue] = {
-        "schema_version": "evidence_sample_v3",
+        "schema_version": "evidence_sample_v4",
         "sample_id": sample_id(
             run_id,
             case_id,
@@ -1398,7 +1404,12 @@ def _validation_mapping(
         raise ValueError(
             "validation.accuracy_qualified must equal full-precision qualification"
         )
-    for field in ("max_abs_error", "relative_l2_error"):
+    for field in (
+        "max_abs_error",
+        "relative_l2_error",
+        "norm_drift",
+        "phase_aligned_max_abs_error",
+    ):
         error = normalized[field]
         if isinstance(error, bool) or not isinstance(error, (int, float)):
             raise TypeError(f"validation.{field} must be a finite non-negative number")

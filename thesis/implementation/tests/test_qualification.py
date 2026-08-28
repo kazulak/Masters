@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import tarfile
 
+import numpy as np
 import pytest
 import yaml
 
@@ -20,6 +21,7 @@ SELECTION_SCRIPT = ROOT / "scripts" / "select_m7c_workload.py"
 SCALING_SCRIPT = ROOT / "scripts" / "run_m7c_scaling_campaign.py"
 M7C_QUALIFIER_SCRIPT = ROOT / "scripts" / "qualify_m7c.py"
 ATTRIBUTION_SCRIPT = ROOT / "scripts" / "analyze_m7d_attribution.py"
+CONFORMANCE_SCRIPT = ROOT / "scripts" / "check_sequential_conformance.py"
 
 
 def _load_script(path: Path, name: str):
@@ -53,6 +55,68 @@ def _m7c_qualifier():
 
 def _attribution():
     return _load_script(ATTRIBUTION_SCRIPT, "analyze_m7d_attribution")
+
+
+def _conformance():
+    return _load_script(CONFORMANCE_SCRIPT, "check_sequential_conformance")
+
+
+def test_sequential_conformance_covers_exact_fixtures_and_oracle_boundaries() -> None:
+    artifact = _conformance().run_conformance()
+
+    assert artifact["passed"] is True
+    assert [fixture["fixture_id"] for fixture in artifact["fixtures"]] == [
+        "basis_order_2q",
+        "Bell2",
+        "complex_orientation_3q",
+        "GHZ5",
+        "QuEST-compatible QRNG3",
+        "QuEST-compatible BV5",
+        "Stress18",
+        "sliced Stress4",
+    ]
+    quest_fixtures = {
+        fixture["fixture_id"]
+        for fixture in artifact["fixtures"]
+        if "quest_cpu" in fixture["oracles"]
+    }
+    assert quest_fixtures == {"QuEST-compatible QRNG3", "QuEST-compatible BV5"}
+    assert all(
+        "direct_quimb_circuit" in fixture["oracles"]
+        and "thesis_dag_complex128" in fixture["oracles"]
+        for fixture in artifact["fixtures"]
+    )
+
+
+def test_sequential_conformance_direct_quimb_does_not_use_thesis_lowering(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conformance = _conformance()
+    monkeypatch.setattr(
+        conformance,
+        "lower_tensor_network",
+        lambda *_args, **_kwargs: pytest.fail("thesis lowering was called"),
+    )
+
+    state = conformance._direct_quimb_state(conformance._basis_order_2q())
+
+    np.testing.assert_array_equal(state, np.array([0.0, 1.0, 0.0, 0.0]))
+
+
+def test_sequential_conformance_phase_aligned_metric_is_diagnostic_only() -> None:
+    conformance = _conformance()
+    expected = np.array([1.0, 0.0], dtype=np.complex128)
+
+    comparison = conformance._comparison(
+        "global_phase",
+        1j * expected,
+        expected,
+        policy="complex128_1e-12",
+    )
+
+    assert comparison["phase_aligned_max_abs_error"] <= 1.0e-12
+    assert comparison["raw_phase_sensitive_allclose"] is False
+    assert comparison["passed"] is False
 
 
 def _archive(path: Path, member_name: str, *, kind: str = "file") -> None:

@@ -389,19 +389,28 @@ def _statevector(value: np.ndarray) -> np.ndarray:
     return np.asarray(value, dtype=np.complex128).reshape(-1, order="F")
 
 
-def _error_metrics(actual: np.ndarray, expected: np.ndarray) -> tuple[float, float]:
+def _error_metrics(
+    actual: np.ndarray, expected: np.ndarray
+) -> tuple[float, float, float, float]:
     actual_state = _statevector(actual)
     expected_state = _statevector(expected)
     _require_matching_shape(actual_state, expected_state)
     difference = actual_state - expected_state
     max_abs = float(np.max(np.abs(difference), initial=0.0))
-    denominator = float(np.linalg.norm(_statevector(expected)))
+    actual_norm = float(np.linalg.norm(actual_state))
+    denominator = float(np.linalg.norm(expected_state))
     relative_l2 = (
         float(np.linalg.norm(difference) / denominator)
         if denominator
         else float(np.linalg.norm(difference))
     )
-    return max_abs, relative_l2
+    norm_drift = abs(actual_norm - denominator)
+    overlap = np.vdot(expected_state, actual_state)
+    phase = np.exp(-1j * np.angle(overlap)) if overlap != 0.0 else 1.0
+    phase_aligned_max_abs = float(
+        np.max(np.abs(actual_state * phase - expected_state), initial=0.0)
+    )
+    return max_abs, relative_l2, norm_drift, phase_aligned_max_abs
 
 
 def _require_matching_shape(actual: np.ndarray, expected: np.ndarray) -> None:
@@ -419,7 +428,14 @@ def _validation(
     numeric_policy: str | None,
     require_raw_lanes: bool,
 ) -> Mapping[str, JsonValue]:
-    max_abs, relative_l2 = _error_metrics(sample.output, full_reference)
+    validation_policy = default_validation_policy()
+    atol = float(validation_policy["float32_atol"])
+    rtol = float(validation_policy["float32_rtol"])
+    relative_l2_max = float(validation_policy["float32_relative_l2_max"])
+    norm_drift_max = float(validation_policy["float32_norm_drift_max"])
+    max_abs, relative_l2, norm_drift, phase_aligned_max_abs = _error_metrics(
+        sample.output, full_reference
+    )
     policy_applicable = policy_reference is not None
     policy_passed: bool | None = None
     if policy_reference is not None:
@@ -437,10 +453,18 @@ def _validation(
                 raw_lanes_match and output_match if require_raw_lanes else output_match
             )
         else:
+            _, policy_relative_l2, policy_norm_drift, _ = _error_metrics(
+                sample.output, policy_reference.output
+            )
             policy_passed = bool(
                 np.allclose(
-                    sample.output, policy_reference.output, atol=1.0e-5, rtol=1.0e-5
+                    sample.output,
+                    policy_reference.output,
+                    atol=atol,
+                    rtol=rtol,
                 )
+                and policy_relative_l2 <= relative_l2_max
+                and policy_norm_drift <= norm_drift_max
             )
     full_applicable = numeric_policy != "split_complex_int8_shared_scale_v1"
     full_passed = (
@@ -448,9 +472,11 @@ def _validation(
             np.allclose(
                 _statevector(sample.output),
                 _statevector(full_reference),
-                atol=1.0e-5,
-                rtol=1.0e-5,
+                atol=atol,
+                rtol=rtol,
             )
+            and relative_l2 <= relative_l2_max
+            and norm_drift <= norm_drift_max
         )
         if full_applicable
         else None
@@ -464,6 +490,8 @@ def _validation(
         "accuracy_qualified": accuracy_qualified,
         "max_abs_error": max_abs,
         "relative_l2_error": relative_l2,
+        "norm_drift": norm_drift,
+        "phase_aligned_max_abs_error": phase_aligned_max_abs,
     }
 
 

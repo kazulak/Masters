@@ -75,6 +75,8 @@ def _validation(*, passed: bool = True) -> dict[str, object]:
         "accuracy_qualified": False,
         "max_abs_error": 0.0,
         "relative_l2_error": 0.0,
+        "norm_drift": 0.0,
+        "phase_aligned_max_abs_error": 0.0,
     }
 
 
@@ -140,7 +142,7 @@ def _sample(
     validation_policy_id: str = _POLICY_ID,
 ) -> dict[str, object]:
     record: dict[str, object] = {
-        "schema_version": "evidence_sample_v3",
+        "schema_version": "evidence_sample_v4",
         "sample_id": sample_id(
             run_id,
             case_id,
@@ -273,6 +275,8 @@ def _execution_validation(
         and full_precision_passed is True,
         "max_abs_error": 0.0,
         "relative_l2_error": 0.0,
+        "norm_drift": 0.0,
+        "phase_aligned_max_abs_error": 0.0,
     }
 
 
@@ -474,9 +478,9 @@ def test_completed_artifact_accepts_successful_unqualified_validation() -> None:
     validate_artifact_set(_manifest(status="completed"), [sample], [_session()])
 
 
-def test_sample_v1_is_rejected() -> None:
+def test_validation_sample_v3_is_rejected_without_compatibility_reader() -> None:
     sample = _sample()
-    sample["schema_version"] = "evidence_sample_v1"
+    sample["schema_version"] = "evidence_sample_v3"
     with pytest.raises(ValueError, match="invalid schema_version"):
         validate_sample(sample)
 

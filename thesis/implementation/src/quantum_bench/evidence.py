@@ -22,7 +22,7 @@ from quantum_bench.results import Measurement as _Measurement
 
 
 _MANIFEST_SCHEMA = "evidence_manifest_v2"
-_SAMPLE_SCHEMA = "evidence_sample_v3"
+_SAMPLE_SCHEMA = "evidence_sample_v4"
 _SESSION_SCHEMA = "evidence_session_v1"
 _SAMPLE_KINDS = frozenset({"warmup", "measurement"})
 _SAMPLE_STATUSES = frozenset({"success", "unsupported", "failed"})
@@ -120,6 +120,8 @@ _VALIDATION_FIELDS = frozenset(
         "accuracy_qualified",
         "max_abs_error",
         "relative_l2_error",
+        "norm_drift",
+        "phase_aligned_max_abs_error",
     }
 )
 _EXPECTED_COUNT_FIELDS = frozenset({"warmup", "measurement", "sessions"})
@@ -760,7 +762,12 @@ def _validate_validation(value: object) -> None:
         raise ValueError(
             "validation.accuracy_qualified must equal full-precision qualification"
         )
-    for field in ("max_abs_error", "relative_l2_error"):
+    for field in (
+        "max_abs_error",
+        "relative_l2_error",
+        "norm_drift",
+        "phase_aligned_max_abs_error",
+    ):
         _finite_nonnegative(validation[field], f"validation.{field}")
 
 

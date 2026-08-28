@@ -97,6 +97,8 @@ _AGGREGATE_COLUMNS = (
     "median_d2h_bytes",
     "median_max_abs_error",
     "median_relative_l2_error",
+    "median_norm_drift",
+    "median_phase_aligned_max_abs_error",
     *tuple(f"median_{field}" for field in _RESOURCE_FACTS),
 )
 _SPEEDUP_COLUMNS = (
@@ -624,7 +626,12 @@ def _make_aggregate(
     for field in ("h2d_bytes", "d2h_bytes"):
         values = _non_null_measurements(typed_measurements, field)
         aggregate[f"median_{field}"] = median(values) if values else None
-    for field in ("max_abs_error", "relative_l2_error"):
+    for field in (
+        "max_abs_error",
+        "relative_l2_error",
+        "norm_drift",
+        "phase_aligned_max_abs_error",
+    ):
         values = _validation_values(rows, field)
         aggregate[f"median_{field}"] = median(values) if values else None
     for field in _RESOURCE_FACTS:

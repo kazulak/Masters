@@ -10,6 +10,7 @@ import subprocess
 import sys
 from uuid import uuid4
 
+import numpy as np
 import pytest
 
 import quantum_bench.cli as cli
@@ -33,7 +34,7 @@ from quantum_bench.report import (
     report_artifacts,
     verify_artifacts,
 )
-from quantum_bench.results import Measurement
+from quantum_bench.results import ExecutionSample, Measurement
 from quantum_bench.upmem.plan import (
     UpmemPlan,
     UpmemStage,
@@ -557,7 +558,7 @@ def test_plan_never_opens_a_session_and_writes_deterministic_document(
     assert document["schema_version"] == "tn_benchmark_plan_v1"
 
 
-def test_simulator_plan_freezes_complex_sliced_qualification_fixture(
+def test_sliced_conformance_retains_strict_sdk_simulator_coverage(
     tmp_path: Path,
 ) -> None:
     result = cli.plan_command(
@@ -646,6 +647,54 @@ def test_simulator_plan_freezes_complex_sliced_qualification_fixture(
             ("contract_batch", branches),
             ("host_reduce", [reduction]),
         ]
+
+
+def test_validation_phase_alignment_cannot_qualify_raw_failure() -> None:
+    expected = np.array([1.0, 0.0], dtype=np.complex128)
+    sample = ExecutionSample(
+        output=1j * expected,
+        measurement=Measurement(scope_id="steady_execution_v1", total_wall_s=1.0),
+        backend_facts={},
+        numeric_facts={},
+    )
+
+    validation = cli._validation(
+        sample=sample,
+        policy_reference=None,
+        full_reference=expected,
+        numeric_policy="split_complex_float32_v1",
+        require_raw_lanes=False,
+    )
+
+    assert validation["phase_aligned_max_abs_error"] <= 1.0e-12
+    assert validation["max_abs_error"] > 1.0
+    assert validation["relative_l2_error"] > 1.0
+    assert validation["norm_drift"] == 0.0
+    assert validation["full_precision_passed"] is False
+    assert validation["accuracy_qualified"] is False
+
+
+def test_validation_gates_relative_l2_in_addition_to_raw_allclose() -> None:
+    expected = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.complex128)
+    actual = expected + np.array([0.0, 9.0e-6, 9.0e-6, 9.0e-6])
+    assert np.allclose(actual, expected, atol=1.0e-5, rtol=1.0e-5)
+    sample = ExecutionSample(
+        output=actual,
+        measurement=Measurement(scope_id="steady_execution_v1", total_wall_s=1.0),
+        backend_facts={},
+        numeric_facts={},
+    )
+
+    validation = cli._validation(
+        sample=sample,
+        policy_reference=None,
+        full_reference=expected,
+        numeric_policy="split_complex_float32_v1",
+        require_raw_lanes=False,
+    )
+
+    assert validation["relative_l2_error"] > 1.0e-5
+    assert validation["full_precision_passed"] is False
 
 
 def test_run_direct_dispatch_writes_exact_evidence_files(tmp_path: Path) -> None:
@@ -1243,6 +1292,8 @@ def _validation() -> dict[str, object]:
         "accuracy_qualified": True,
         "max_abs_error": 0.01,
         "relative_l2_error": 0.02,
+        "norm_drift": 0.001,
+        "phase_aligned_max_abs_error": 0.01,
     }
 
 
@@ -1264,7 +1315,7 @@ def _sample(
     sample_kind: str = "measurement",
 ) -> dict[str, object]:
     sample: dict[str, object] = {
-        "schema_version": "evidence_sample_v3",
+        "schema_version": "evidence_sample_v4",
         "sample_id": sample_id(
             run_id,
             case_id,
@@ -1869,7 +1920,9 @@ def test_report_emits_claim_gated_tasklet_scaling_csv(tmp_path: Path) -> None:
     assert row["candidate_fully_populated_wave_count"] == "1"
 
 
-def test_report_emits_mad_intervals_and_unqualified_labels(tmp_path: Path) -> None:
+def test_report_emits_validation_metrics_mad_and_unqualified_labels(
+    tmp_path: Path,
+) -> None:
     run_id, experiment_id, environment_id_value, policy_id = _ids()
     samples = [
         _sample(
@@ -1922,6 +1975,10 @@ def test_report_emits_mad_intervals_and_unqualified_labels(tmp_path: Path) -> No
     int8 = rows["cpu_int8"]
     assert float32["median_total_wall_s"] == "3.0"
     assert float32["mad_total_wall_s"] == "2.0"
+    assert float32["median_max_abs_error"] == "0.01"
+    assert float32["median_relative_l2_error"] == "0.02"
+    assert float32["median_norm_drift"] == "0.001"
+    assert float32["median_phase_aligned_max_abs_error"] == "0.01"
     assert float(float32["median_total_wall_ci_low_s"]) <= 3.0
     assert float(float32["median_total_wall_ci_high_s"]) >= 3.0
     assert float32["accuracy_qualified"] == "True"
