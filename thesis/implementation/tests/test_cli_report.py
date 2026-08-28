@@ -94,6 +94,8 @@ def test_make_public_targets_are_exact_and_pidcomm_is_private() -> None:
         "report",
         "verify",
         "qualify",
+        "sequential-conformance",
+        "sequential-baseline",
         "clean-generated",
     ]
 
@@ -1461,6 +1463,25 @@ def test_make_build_forwards_tasklet_count() -> None:
 
     assert result.returncode == 0, result.stderr
     assert "NR_TASKLETS=8" in result.stdout
+
+
+def test_sequential_baseline_makefile_and_docs_commands_are_consistent() -> None:
+    _require_make()
+    help_result = _command("make", "help")
+    conformance = _command("make", "-n", "sequential-conformance")
+    qualifier = _command("make", "-n", "sequential-baseline")
+    document = (ROOT / "docs" / "sequential_upmem_baseline.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "make sequential-conformance" in help_result.stdout
+    assert "make sequential-baseline" in help_result.stdout
+    assert "check_sequential_conformance.py --output" in conformance.stdout
+    assert "qualify_sequential_baseline.py --help" in qualifier.stdout
+    assert "make sequential-conformance" in document
+    assert "make sequential-baseline" in document
+    assert "PHYSICAL_CONFIG=" in document
+    assert "--allow-physical" in document
 
 
 def test_numpy_plan_run_verify_report_lifecycle(tmp_path: Path) -> None:

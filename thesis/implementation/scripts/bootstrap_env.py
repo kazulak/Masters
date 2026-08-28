@@ -10,6 +10,13 @@ ROOT = Path(__file__).resolve().parents[1]
 VENV = ROOT.parent / ".venv"
 
 
+def repository_root(root: Path = ROOT) -> Path:
+    for candidate in (root, *root.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    return root
+
+
 def requested_python(root: Path = ROOT) -> Optional[str]:
     version_file = root / ".python-version"
     if not version_file.exists():
@@ -44,12 +51,14 @@ def bootstrap(*, dry_run: bool = False, root: Path = ROOT, venv: Path = VENV) ->
         commands.append(command)
     install_python = str(python)
     commands.append([uv, "pip", "install", "--python", install_python, "--constraint", str(root / "ci" / "constraints.txt"), "-e", ".[dev]"])
-    if (root / ".gitmodules").exists():
+    repo_root = repository_root(root)
+    if (repo_root / ".gitmodules").exists():
         commands.append(["git", "submodule", "update", "--init", "--recursive"])
     for command in commands:
         print("PLAN " + " ".join(command) if dry_run else "RUN " + " ".join(command))
         if not dry_run:
-            subprocess.run(command, cwd=root, check=True)
+            cwd = repo_root if command[:2] == ["git", "submodule"] else root
+            subprocess.run(command, cwd=cwd, check=True)
     return 0
 
 

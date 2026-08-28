@@ -37,6 +37,8 @@ All commands run from `thesis/implementation`.
 make setup
 make doctor
 make test
+make sequential-conformance
+make sequential-baseline
 
 # Default software benchmark configuration.
 make plan CONFIG=configs/tn_benchmark_reset.yml OUTPUT=runs/reset-plan
@@ -64,6 +66,12 @@ PYTHONPATH=src ../.venv/bin/python scripts/qualify_m7c_physical.py inspect \
   --numeric-policy split_complex_float32_v1
 
 ```
+
+The frozen sequential one-rank/one-DPU/one-tasklet reference contract, operator
+workflow, external baseline roles, and claim limits are documented in
+[docs/sequential_upmem_baseline.md](docs/sequential_upmem_baseline.md). Its
+qualifier prepares ignored configs and inspects or bundles existing artifacts;
+it never runs hardware, tags a commit, or publishes a release.
 
 `configs/tn_benchmark_reset.yml` is the default CPU/TN software smoke suite.
 `configs/tn_benchmark_physical_smoke.yml` is the one-DPU physical float32

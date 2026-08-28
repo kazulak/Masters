@@ -11,6 +11,7 @@ PHYSICAL_CONFIG ?=
 OUTPUT ?= runs/reset/$(RUN_STAMP)
 INPUT ?=
 REPORT_OUTPUT ?= runs/reports/$(RUN_STAMP)
+CONFORMANCE_OUTPUT ?= runs/sequential-baseline/conformance.json
 UPMEM_TASKLETS ?= 1
 CLEAN_RUNS ?= 0
 
@@ -18,6 +19,7 @@ PUBLIC_TARGETS := \
 	help setup doctor test \
 	build-quest-cpu build-upmem-runtime \
 	plan run report verify qualify \
+	sequential-conformance sequential-baseline \
 	clean-generated
 
 .PHONY: $(PUBLIC_TARGETS)
@@ -31,6 +33,8 @@ help:
 		'  make run CONFIG=<yaml>              Run CPU/TN/simulator routes into a new evidence directory' \
 		'  make report INPUT=<evidence-dir>    Generate tables and plots without executing workloads' \
 		'  make verify INPUT=<evidence-dir>    Verify canonical evidence and identities' \
+		'  make sequential-conformance          Run the software-only sequential reference checks' \
+		'  make sequential-baseline             Show prepare/inspect/bundle operator commands' \
 		'  make build-upmem-runtime             Build the active ABI-v4 host and DPU binaries' \
 		'  UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make qualify PHYSICAL_CONFIG=<prepared-yaml>' \
 		'                                      Run only an explicit prepared physical config from a clean worktree' \
@@ -73,6 +77,13 @@ qualify:
 	@test -n "$(strip $(PHYSICAL_CONFIG))" || { echo 'Set PHYSICAL_CONFIG=<prepared ignored config>' >&2; exit 2; }
 	@test "$(UPMEM_ALLOW_PHYSICAL_HARDWARE)" = "1" || { echo 'Set UPMEM_ALLOW_PHYSICAL_HARDWARE=1' >&2; exit 2; }
 	$(CLI) qualify --config $(PHYSICAL_CONFIG) --output $(OUTPUT) --allow-physical
+
+sequential-conformance:
+	@mkdir -p $(dir $(CONFORMANCE_OUTPUT))
+	$(PY_ENV) $(PYTHON) scripts/check_sequential_conformance.py --output $(CONFORMANCE_OUTPUT)
+
+sequential-baseline:
+	$(PY_ENV) $(PYTHON) scripts/qualify_sequential_baseline.py --help
 
 clean-generated:
 	rm -rf build .pytest_cache native/quest_cpu/bin native/quest_gpu/bin native/quest_gpu/build

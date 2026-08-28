@@ -5,6 +5,12 @@ historical experiments or a performance claim.
 
 ## Software Qualification State
 
+Sequential UPMEM baseline v1 now has software conformance plus exact-head
+`prepare`, `inspect`, and `bundle` operator tooling. Physical correctness and
+performance evidence are still pending and no new hardware claim is established.
+See [docs/sequential_upmem_baseline.md](docs/sequential_upmem_baseline.md) and run
+`make sequential-conformance` or `make sequential-baseline` for the safe entries.
+
 The authoritative M6 exact-head record is the annotated tag
 `thesis-m6-software-ready-v1` and its published GitHub release bundle. M6
 software qualification is complete and `software_merge_ready` is established.

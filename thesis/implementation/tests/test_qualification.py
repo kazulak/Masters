@@ -4,6 +4,7 @@ import importlib.util
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import sys
 import tarfile
 
@@ -22,6 +23,8 @@ SCALING_SCRIPT = ROOT / "scripts" / "run_m7c_scaling_campaign.py"
 M7C_QUALIFIER_SCRIPT = ROOT / "scripts" / "qualify_m7c.py"
 ATTRIBUTION_SCRIPT = ROOT / "scripts" / "analyze_m7d_attribution.py"
 CONFORMANCE_SCRIPT = ROOT / "scripts" / "check_sequential_conformance.py"
+SEQUENTIAL_BASELINE_SCRIPT = ROOT / "scripts" / "qualify_sequential_baseline.py"
+BOOTSTRAP_SCRIPT = ROOT / "scripts" / "bootstrap_env.py"
 
 
 def _load_script(path: Path, name: str):
@@ -59,6 +62,14 @@ def _attribution():
 
 def _conformance():
     return _load_script(CONFORMANCE_SCRIPT, "check_sequential_conformance")
+
+
+def _sequential_baseline():
+    return _load_script(SEQUENTIAL_BASELINE_SCRIPT, "qualify_sequential_baseline")
+
+
+def _bootstrap():
+    return _load_script(BOOTSTRAP_SCRIPT, "bootstrap_env")
 
 
 def test_sequential_conformance_covers_exact_fixtures_and_oracle_boundaries() -> None:
@@ -117,6 +128,483 @@ def test_sequential_conformance_phase_aligned_metric_is_diagnostic_only() -> Non
     assert comparison["phase_aligned_max_abs_error"] <= 1.0e-12
     assert comparison["raw_phase_sensitive_allclose"] is False
     assert comparison["passed"] is False
+
+
+def test_sequential_baseline_prepare_rewrites_only_machine_paths(tmp_path: Path) -> None:
+    qualifier = _sequential_baseline()
+    binaries = {}
+    for name in ("host", "dpu", "init"):
+        path = tmp_path / "bin" / name
+        path.parent.mkdir(exist_ok=True)
+        path.write_bytes(name.encode("ascii"))
+        binaries[name] = path
+
+    result = qualifier.prepare_configs(
+        output_dir=tmp_path / "runs" / "configs",
+        rank_path="/dev/dpu_rank7",
+        correctness_session_root=str(tmp_path / "correctness-sessions"),
+        performance_session_root=str(tmp_path / "performance-sessions"),
+        expected_cpus=[2, 5],
+        host_binary=str(binaries["host"]),
+        dpu_binary=str(binaries["dpu"]),
+        initialization_binary=str(binaries["init"]),
+    )
+
+    correctness = load_experiment_config(Path(result["correctness_config"]))
+    performance = load_experiment_config(Path(result["performance_config"]))
+    for config, session_name in (
+        (correctness, "correctness-sessions"),
+        (performance, "performance-sessions"),
+    ):
+        route = config["routes"]["upmem_float32_1dpu_t1"]
+        assert route["options"]["rank_paths"] == ("/dev/dpu_rank7",)
+        assert route["options"]["session_root"] == str((tmp_path / session_name).resolve())
+        assert route["options"]["host_binary"] == str(binaries["host"].resolve())
+        assert config["collection"]["machine_policy"]["affinity"] == {
+            "mode": "exact_required_v1",
+            "expected_cpus": (2, 5),
+        }
+    assert correctness["collection"]["measurement_blocks"] == 1
+    assert performance["collection"]["measurement_blocks"] == 30
+
+
+def _sequential_validation() -> dict[str, object]:
+    return {
+        "policy_reference_applicable": True,
+        "policy_reference_passed": True,
+        "full_precision_threshold_applicable": True,
+        "full_precision_passed": True,
+        "accuracy_qualified": True,
+    }
+
+
+def _sequential_physical_facts() -> dict[str, object]:
+    return {
+        "target_observed": "physical_hardware",
+        "hardware_kernel_executed": True,
+        "simulator_kernel_executed": False,
+        "cpu_fallback_used": False,
+        "physical_target_verified": True,
+        "hardware_release_verified": True,
+        "binary_identity_verified": True,
+        "native_identity_verified": True,
+        "startup_resource_admission_passed": True,
+        "execution_resource_admission_passed": True,
+        "rank_count": 1,
+        "observed_rank_count": 1,
+        "requested_dpus": 1,
+        "allocated_dpus": 1,
+        "active_dpus": 1,
+        "tasklets_per_dpu": 1,
+    }
+
+
+def _sequential_sample(
+    *,
+    case_id: str,
+    plan_id: str | None,
+    route_id: str,
+    block_id: int,
+    attempt_kind: str,
+    scope: str,
+    session_id: str | None = None,
+) -> dict[str, object]:
+    return {
+        "case_id": case_id,
+        "plan_id": plan_id,
+        "route_id": route_id,
+        "block_id": block_id,
+        "attempt_kind": attempt_kind,
+        "measurement": {"scope_id": scope},
+        "session_instance_id": session_id,
+        "backend_facts": _sequential_physical_facts() if session_id else {"backend_id": route_id},
+        "numeric_facts": {"numeric_policy": "split_complex_float32_v1"},
+        "identities": {
+            "problem_id": "1",
+            "tensor_network_structure_id": "2" if plan_id is not None else None,
+            "logical_plan_id": "3" if plan_id is not None else None,
+            "physical_plan_id": "4" if session_id else None,
+            "executable_id": "5" if session_id else None,
+            "environment_id": "6",
+            "validation_policy_id": "7",
+        },
+        "output_sha256": "8",
+        "validation": _sequential_validation(),
+    }
+
+
+def _sequential_session(instance: str) -> dict[str, object]:
+    return {
+        "session_instance_id": instance,
+        "release_attempted": True,
+        "release_succeeded": True,
+        "release_verified": True,
+        "terminal_backend_facts": _sequential_physical_facts(),
+    }
+
+
+def _sequential_artifacts(qualifier: object, commit: str) -> dict[str, tuple[object, ...]]:
+    def manifest(template: Path, *, preflight: bool = False) -> dict[str, object]:
+        config = qualifier._template_configuration(template)
+        if template != qualifier.EXTERNAL_TEMPLATE:
+            affinity = config["collection"]["machine_policy"]["affinity"]
+            affinity.update({"mode": "exact_required_v1", "expected_cpus": [0]})
+            for route in config["routes"].values():
+                if route["executor"] == "upmem_physical":
+                    route["options"].update(
+                        {
+                            "session_root": "/tmp/sessions",
+                            "host_binary": "/tmp/host",
+                            "dpu_binary": "/tmp/dpu",
+                            "initialization_binary": "/tmp/init",
+                            "rank_paths": ["/dev/dpu_rank0"],
+                        }
+                    )
+        return {
+            "run_id": template.stem,
+            "experiment_id": template.stem + "-identity",
+            "validation_policy_id": "validation-policy",
+            "source_commit": commit,
+            "source_worktree_dirty": False,
+            "configuration": {
+                "experiment": {
+                    "experiment_identity_payload": {
+                        "configuration": config,
+                        "validation_policy_id": "validation-policy",
+                    }
+                },
+                "environment": {
+                    "machine_preflight": {"machine_preflight_passed": preflight}
+                },
+            },
+        }
+
+    correct_routes = (
+        ("bell2", "unsliced"),
+        ("stress4", "unsliced"),
+        ("stress4", "sliced"),
+    )
+    correct_samples = tuple(
+        _sequential_sample(
+            case_id=case,
+            plan_id=plan,
+            route_id="upmem_float32_1dpu_t1",
+            block_id=index,
+            attempt_kind="measurement",
+            scope="steady_execution_v1",
+            session_id=f"correct-{index}",
+        )
+        for index, (case, plan) in enumerate(correct_routes)
+    )
+    correct_sessions = tuple(_sequential_session(f"correct-{index}") for index in range(3))
+    performance_samples = []
+    performance_sessions = []
+    for block in range(32):
+        kind = "warmup" if block < 2 else "measurement"
+        performance_samples.append(
+            _sequential_sample(
+                case_id="stress18",
+                plan_id="greedy",
+                route_id="numpy_same_dag",
+                block_id=block,
+                attempt_kind=kind,
+                scope="steady_execution_v1",
+            )
+        )
+        performance_samples.append(
+            _sequential_sample(
+                case_id="stress18",
+                plan_id="greedy",
+                route_id="upmem_float32_1dpu_t1",
+                block_id=block,
+                attempt_kind=kind,
+                scope="steady_execution_v1",
+                session_id=f"performance-{block}",
+            )
+        )
+        performance_sessions.append(_sequential_session(f"performance-{block}"))
+    external_samples = tuple(
+        _sequential_sample(
+            case_id="stress18",
+            plan_id=None,
+            route_id=route,
+            block_id=block,
+            attempt_kind="warmup" if block == 0 else "measurement",
+            scope="simulation_end_to_end_v1",
+        )
+        for block in range(6)
+        for route in ("quimb_greedy", "quimb_cotengra_path")
+    )
+    return {
+        "correctness": (
+            manifest(qualifier.CORRECTNESS_TEMPLATE),
+            correct_samples,
+            correct_sessions,
+            {
+                "status": "completed",
+                "sample_count": 3,
+                "session_count": 3,
+                "success_count": 3,
+                "failed_count": 0,
+                "unsupported_count": 0,
+                "timing_scopes": ["steady_execution_v1"],
+            },
+        ),
+        "performance": (
+            manifest(qualifier.PERFORMANCE_TEMPLATE, preflight=True),
+            tuple(performance_samples),
+            tuple(performance_sessions),
+            {
+                "status": "completed",
+                "sample_count": 64,
+                "session_count": 32,
+                "success_count": 64,
+                "failed_count": 0,
+                "unsupported_count": 0,
+                "timing_scopes": ["steady_execution_v1"],
+            },
+        ),
+        "external": (
+            manifest(qualifier.EXTERNAL_TEMPLATE),
+            external_samples,
+            (),
+            {
+                "status": "completed",
+                "sample_count": 12,
+                "session_count": 0,
+                "success_count": 12,
+                "failed_count": 0,
+                "unsupported_count": 0,
+                "timing_scopes": ["simulation_end_to_end_v1"],
+            },
+        ),
+    }
+
+
+def _install_sequential_artifacts(
+    qualifier: object,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    artifacts: dict[str, tuple[object, ...]],
+    commit: str,
+) -> tuple[Path, Path, Path, Path]:
+    paths = tuple(tmp_path / name for name in ("correctness", "performance", "external"))
+    for path in paths:
+        path.mkdir()
+        (path / "manifest.json").write_text("{}\n", encoding="ascii")
+    conformance = tmp_path / "conformance.json"
+    conformance.write_text(
+        json.dumps(
+            {
+                "schema_version": qualifier.CONFORMANCE_SCHEMA,
+                "passed": True,
+                "fixtures": [
+                    {"fixture_id": fixture_id, "passed": True}
+                    for fixture_id in sorted(qualifier.REQUIRED_FIXTURES)
+                ],
+            }
+        ),
+        encoding="ascii",
+    )
+    by_path = dict(zip(paths, (artifacts["correctness"], artifacts["performance"], artifacts["external"])))
+    monkeypatch.setattr(qualifier, "_require_clean_source", lambda: commit)
+    monkeypatch.setattr(qualifier, "load_artifacts", lambda path: by_path[Path(path)][:3])
+    monkeypatch.setattr(qualifier, "verify_artifacts", lambda path: by_path[Path(path)][3])
+    return conformance, *paths
+
+
+def test_sequential_baseline_inspects_exact_four_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    qualifier = _sequential_baseline()
+    commit = "a" * 40
+    artifacts = _sequential_artifacts(qualifier, commit)
+    conformance, correctness, performance, external = _install_sequential_artifacts(
+        qualifier, monkeypatch, tmp_path, artifacts, commit
+    )
+
+    summary = qualifier.inspect_baseline(
+        conformance=conformance,
+        correctness=correctness,
+        performance=performance,
+        external_context=external,
+    )
+
+    assert summary["schema_version"] == qualifier.SUMMARY_SCHEMA
+    assert summary["source_commit"] == commit
+    assert set(summary["inputs"]) == {
+        "conformance",
+        "physical_correctness",
+        "physical_performance",
+        "external_tn_context",
+    }
+    assert summary["artifact_statistics"] == "separate_no_cross_artifact_statistics_v1"
+
+
+@pytest.mark.parametrize("drift", ("count", "route", "source", "scope", "provenance"))
+def test_sequential_baseline_rejects_contract_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, drift: str
+) -> None:
+    qualifier = _sequential_baseline()
+    commit = "a" * 40
+    artifacts = _sequential_artifacts(qualifier, commit)
+    if drift == "count":
+        artifacts["performance"][3]["sample_count"] = 63
+    elif drift == "route":
+        artifacts["external"][1][0]["route_id"] = "unexpected"
+    elif drift == "source":
+        artifacts["correctness"][0]["source_commit"] = "b" * 40
+    elif drift == "scope":
+        artifacts["performance"][3]["timing_scopes"] = ["simulation_end_to_end_v1"]
+    else:
+        artifacts["correctness"][1][0]["backend_facts"]["cpu_fallback_used"] = True
+    conformance, correctness, performance, external = _install_sequential_artifacts(
+        qualifier, monkeypatch, tmp_path, artifacts, commit
+    )
+
+    with pytest.raises(ValueError):
+        qualifier.inspect_baseline(
+            conformance=conformance,
+            correctness=correctness,
+            performance=performance,
+            external_context=external,
+        )
+
+
+def test_sequential_baseline_bundle_is_closed_and_self_contained(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    qualifier = _sequential_baseline()
+    binaries = {}
+    for name in ("host", "dpu", "init"):
+        path = tmp_path / "bin" / name
+        path.parent.mkdir(exist_ok=True)
+        path.write_bytes(name.encode("ascii"))
+        binaries[name] = path
+    prepared = qualifier.prepare_configs(
+        output_dir=tmp_path / "configs",
+        rank_path="/dev/dpu_rank0",
+        correctness_session_root=str(tmp_path / "correctness-sessions"),
+        performance_session_root=str(tmp_path / "performance-sessions"),
+        expected_cpus=[0],
+        host_binary=str(binaries["host"]),
+        dpu_binary=str(binaries["dpu"]),
+        initialization_binary=str(binaries["init"]),
+    )
+    correctness_config = Path(prepared["correctness_config"])
+    performance_config = Path(prepared["performance_config"])
+    summary = {
+        "schema_version": qualifier.SUMMARY_SCHEMA,
+        "status": "qualified",
+        "source_commit": "a" * 40,
+        "inputs": {
+            "conformance": {"sha256": "1" * 64},
+            "physical_correctness": {
+                "artifact_sha256": "2" * 64,
+                "run_id": "correct-run",
+                "experiment_id": load_experiment_config(correctness_config)["experiment_id"],
+            },
+            "physical_performance": {
+                "artifact_sha256": "3" * 64,
+                "run_id": "perf-run",
+                "experiment_id": load_experiment_config(performance_config)["experiment_id"],
+            },
+            "external_tn_context": {
+                "artifact_sha256": "4" * 64,
+                "run_id": "external-run",
+                "experiment_id": "external-experiment",
+            },
+        },
+    }
+    summary_path = tmp_path / "summary.json"
+    summary_path.write_text(json.dumps(summary), encoding="ascii")
+    monkeypatch.setattr(qualifier, "inspect_baseline", lambda **_kwargs: summary)
+    evidence = {}
+    reports = {}
+    for label, record in (
+        ("correctness", summary["inputs"]["physical_correctness"]),
+        ("performance", summary["inputs"]["physical_performance"]),
+        ("external", summary["inputs"]["external_tn_context"]),
+    ):
+        evidence[label] = tmp_path / "evidence" / label
+        evidence[label].mkdir(parents=True)
+        for filename in ("manifest.json", "samples.jsonl", "sessions.jsonl"):
+            (evidence[label] / filename).write_text(filename + "\n", encoding="ascii")
+        reports[label] = tmp_path / "reports" / label
+        reports[label].mkdir(parents=True)
+        (reports[label] / "report.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "evidence_report_v5",
+                    "status": "completed",
+                    "run_id": record["run_id"],
+                    "experiment_id": record["experiment_id"],
+                }
+            ),
+            encoding="ascii",
+        )
+    conformance = tmp_path / "conformance.json"
+    conformance.write_text("{}\n", encoding="ascii")
+    output = tmp_path / "sequential-baseline-v1"
+
+    result = qualifier.bundle_baseline(
+        summary_path=summary_path,
+        conformance=conformance,
+        correctness=evidence["correctness"],
+        performance=evidence["performance"],
+        external_context=evidence["external"],
+        correctness_config=correctness_config,
+        performance_config=performance_config,
+        correctness_report=reports["correctness"],
+        performance_report=reports["performance"],
+        external_context_report=reports["external"],
+        output=output,
+    )
+
+    qualifier.verify_internal_hashes(output)
+    assert Path(result["archive"]).is_file()
+    assert Path(result["outer_checksum"]).read_text(encoding="ascii").split()[0] == qualifier._sha256(Path(result["archive"]))
+    checksummed = {
+        line.split(maxsplit=1)[1]
+        for line in (output / "SHA256SUMS").read_text(encoding="ascii").splitlines()
+    }
+    actual = {
+        path.relative_to(output).as_posix()
+        for path in output.rglob("*")
+        if path.is_file() and path.name != "SHA256SUMS"
+    }
+    assert checksummed == actual
+    assert not any(path.name in {"host", "dpu", "init"} for path in output.rglob("*"))
+    with tarfile.open(result["archive"], "r:gz") as archive:
+        assert all(member.name == output.name or member.name.startswith(output.name + "/") for member in archive.getmembers())
+
+
+def test_bootstrap_detects_repository_root_gitmodules(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bootstrap = _bootstrap()
+    repository = tmp_path / "repository"
+    implementation = repository / "thesis" / "implementation"
+    venv = repository / "thesis" / ".venv"
+    (repository / ".git").mkdir(parents=True)
+    (repository / ".gitmodules").write_text("[submodule \"x\"]\n", encoding="ascii")
+    (implementation / "ci").mkdir(parents=True)
+    python = venv / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.touch()
+    calls = []
+    monkeypatch.setattr(bootstrap.shutil, "which", lambda _name: "/usr/bin/uv")
+    monkeypatch.setattr(bootstrap, "_python_version", lambda _python: (3, 10))
+    monkeypatch.setattr(
+        bootstrap.subprocess,
+        "run",
+        lambda command, **kwargs: calls.append((command, kwargs["cwd"])) or SimpleNamespace(returncode=0),
+    )
+
+    bootstrap.bootstrap(root=implementation, venv=venv)
+
+    assert calls[-1] == (["git", "submodule", "update", "--init", "--recursive"], repository)
+    assert calls[0][1] == implementation
 
 
 def _archive(path: Path, member_name: str, *, kind: str = "file") -> None:
