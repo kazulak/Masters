@@ -40,8 +40,6 @@ NUMERIC_POLICY = "split_complex_float32_v1"
 PLANNER_CONFIG = {
     "engine": "opt_einsum",
     "mode": "greedy",
-    "max_repeats": 1,
-    "seed": 0,
 }
 
 

@@ -20,9 +20,7 @@
       "planner": {
         "configuration": {
           "engine": "opt_einsum",
-          "max_repeats": 1,
-          "mode": "greedy",
-          "seed": 0
+          "mode": "greedy"
         },
         "path_pairs": [
           [
@@ -1287,9 +1285,7 @@
       "planner": {
         "configuration": {
           "engine": "opt_einsum",
-          "max_repeats": 1,
-          "mode": "greedy",
-          "seed": 0
+          "mode": "greedy"
         },
         "path_pairs": [
           [
@@ -2617,9 +2613,7 @@
       "planner": {
         "configuration": {
           "engine": "opt_einsum",
-          "max_repeats": 1,
-          "mode": "greedy",
-          "seed": 0
+          "mode": "greedy"
         },
         "path_pairs": [
           [
@@ -3443,16 +3437,14 @@
   },
   "planner_configuration": {
     "engine": "opt_einsum",
-    "max_repeats": 1,
-    "mode": "greedy",
-    "seed": 0
+    "mode": "greedy"
   },
-  "planner_configuration_sha256": "e0589ae9d6c6b8504948f759b81953a98b1b13cb3b02523aa609989127c4e9cc",
+  "planner_configuration_sha256": "79aac2c2bbaa90b9fddc71f50170d380d788ccb7d23fbd1a3a1cf4ebee200771",
   "schema_version": "m7c_workload_selection_v2",
   "selected_primary": "quantization_stress_18q_l2",
   "selected_secondary": "ghz_chain_18q",
-  "selection_audit_hash": "4684ff779c6ec4ad706c020286523f3d5ffc931811bcf98a7721dc0d620c2af5",
-  "selection_basis_sha256": "019e02ee1f8ae34bed2dabdecd15b35d8795e9bb7af2c58bf1c327fa07d0a2f2",
+  "selection_audit_hash": "c6da178f700a2a782cc23225a1850751ee3380281a31170c5796e85d7e14e769",
+  "selection_basis_sha256": "56de7eb7c328fa7a74b6ef5edd08bd8404490cb5a827915898bf07dd0f0c403c",
   "selection_rule": {
     "policy": "predeclared_circuit_structure_and_resource_admission_v1",
     "primary_candidate_id": "quantization_stress_18q_l2",
@@ -3469,5 +3461,5 @@
     "secondary_candidate_id": "ghz_chain_18q",
     "timing_selection_rule": "no_physical_or_simulator_timing_is_used"
   },
-  "source_commit": "a4db329e86bb2d336f33a0661a57a1c09053f5ce"
+  "source_commit": "c86b589d971ef241c5f42d0da33fc772dd9c2107"
 }

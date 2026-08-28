@@ -13,6 +13,7 @@ from uuid import uuid4
 import numpy as np
 import pytest
 
+import quantum_bench.baselines as baselines
 import quantum_bench.cli as cli
 from quantum_bench.evidence import (
     append_sample,
@@ -167,8 +168,6 @@ plans:
     planner:
       engine: opt_einsum
       mode: greedy
-      max_repeats: 1
-      seed: 0
     slicing: null
 routes:
   numpy:
@@ -198,6 +197,189 @@ def _write_config(path: Path, text: str) -> None:
         'OPENQASM 2.0;\ninclude "qelib1.inc";\nqreg q[1];\n', encoding="utf-8"
     )
     path.write_text(text, encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("max_repeats", "1"), ("seed", "0"), ("extra", "true")),
+)
+def test_planner_opt_einsum_rejects_inert_and_extra_fields(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    path = tmp_path / f"opt-einsum-{field}.yml"
+    text = _config().replace(
+        "      mode: greedy\n    slicing: null",
+        f"      mode: greedy\n      {field}: {value}\n    slicing: null",
+        1,
+    )
+    _write_config(path, text)
+
+    with pytest.raises(ValueError, match="fields must be exact"):
+        load_experiment_config(path)
+
+
+def test_planner_cotengra_preserves_consumed_fields(tmp_path: Path) -> None:
+    path = tmp_path / "cotengra.yml"
+    text = _config().replace(
+        "      engine: opt_einsum\n      mode: greedy",
+        "      engine: cotengra\n      mode: labels\n"
+        "      max_repeats: 7\n      seed: 19",
+        1,
+    )
+    _write_config(path, text)
+
+    config = load_experiment_config(path)
+
+    assert dict(config["plans"]["p1"]["planner"]) == {
+        "engine": "cotengra",
+        "mode": "labels",
+        "max_repeats": 7,
+        "seed": 19,
+    }
+
+
+def _selected_configurations(
+    config: object,
+) -> list[tuple[object, str, object]]:
+    return [
+        (item, route_id, config["routes"][route_id])
+        for item in config["matrix"]
+        for route_id in item["route_ids"]
+    ]
+
+
+def test_sequential_upmem_correctness_config_contract() -> None:
+    config = load_experiment_config(
+        ROOT / "configs" / "tn_benchmark_sequential_upmem_correctness.yml"
+    )
+
+    assert config["collection"]["claim_policy"] == "diagnostic_v1"
+    assert config["collection"]["warmup_blocks"] == 0
+    assert config["collection"]["measurement_blocks"] == 1
+    assert set(config["cases"]) == {"bell2", "stress4"}
+    assert config["cases"]["bell2"]["circuit"]["name"] == "bell_2q"
+    assert dict(config["cases"]["stress4"]["circuit"]["parameters"]) == {
+        "n_qubits": 4,
+        "repeat_layers": 2,
+    }
+    assert config["plans"]["unsliced"]["slicing"] is None
+    assert dict(config["plans"]["sliced"]["slicing"]) == {
+        "node_id": "contract_24",
+        "minimum_slice_count": 4,
+    }
+    assert set(config["routes"]) == {"upmem_float32_1dpu_t1"}
+    route = config["routes"]["upmem_float32_1dpu_t1"]
+    assert route["executor"] == "upmem_physical"
+    assert route["numeric_policy"] == "split_complex_float32_v1"
+    assert tuple(
+        route["options"][field]
+        for field in ("rank_count", "dpu_count", "tasklets_per_dpu")
+    ) == (1, 1, 1)
+    assert [
+        (item["case_id"], item["plan_id"], tuple(item["route_ids"]))
+        for item in config["matrix"]
+    ] == [
+        ("bell2", "unsliced", ("upmem_float32_1dpu_t1",)),
+        ("stress4", "unsliced", ("upmem_float32_1dpu_t1",)),
+        ("stress4", "sliced", ("upmem_float32_1dpu_t1",)),
+    ]
+    assert dict(cli._expected_counts(config)) == {
+        "warmup": 0,
+        "measurement": 3,
+        "sessions": 3,
+    }
+
+
+def test_sequential_upmem_performance_config_uses_complete_randomized_blocks() -> None:
+    config = load_experiment_config(
+        ROOT / "configs" / "tn_benchmark_sequential_upmem_performance.yml"
+    )
+
+    assert set(config["cases"]) == {"stress18"}
+    assert dict(config["cases"]["stress18"]["circuit"]["parameters"]) == {
+        "n_qubits": 18,
+        "repeat_layers": 2,
+    }
+    assert config["collection"]["claim_policy"] == "physical_performance_v1"
+    assert config["collection"]["warmup_blocks"] == 2
+    assert config["collection"]["measurement_blocks"] == 30
+    assert config["collection"]["machine_policy"]["affinity"] == {
+        "mode": "exact_required_v1",
+        "expected_cpus": (0,),
+    }
+    assert tuple(config["routes"]) == (
+        "numpy_same_dag",
+        "upmem_float32_1dpu_t1",
+    )
+    assert {
+        route_id: config["routes"][route_id]["executor"]
+        for route_id in config["routes"]
+    } == {
+        "numpy_same_dag": "numpy_dag",
+        "upmem_float32_1dpu_t1": "upmem_physical",
+    }
+    assert all(
+        route["numeric_policy"] == "split_complex_float32_v1"
+        for route in config["routes"].values()
+    )
+    physical = config["routes"]["upmem_float32_1dpu_t1"]
+    assert tuple(
+        physical["options"][field]
+        for field in ("rank_count", "dpu_count", "tasklets_per_dpu")
+    ) == (1, 1, 1)
+    assert dict(cli._expected_counts(config)) == {
+        "warmup": 4,
+        "measurement": 60,
+        "sessions": 32,
+    }
+
+    schedule = cli._scheduled_attempts(config, _selected_configurations(config))
+    block_orders = {
+        block_id: tuple(
+            route_id
+            for _, route_id, _, attempt in schedule
+            if attempt[2] == block_id
+        )
+        for block_id in range(32)
+    }
+    expected_routes = {"numpy_same_dag", "upmem_float32_1dpu_t1"}
+    assert len(schedule) == 64
+    assert all(set(order) == expected_routes and len(order) == 2 for order in block_orders.values())
+    assert len(set(block_orders.values())) == 2
+
+
+def test_external_tn_context_config_is_two_quimb_execution_routes() -> None:
+    config = load_experiment_config(
+        ROOT / "configs" / "tn_benchmark_external_tn_context.yml"
+    )
+
+    assert set(config["cases"]) == {"stress18"}
+    assert dict(config["cases"]["stress18"]["circuit"]["parameters"]) == {
+        "n_qubits": 18,
+        "repeat_layers": 2,
+    }
+    assert config["collection"]["claim_policy"] == "diagnostic_v1"
+    assert config["collection"]["warmup_blocks"] == 1
+    assert config["collection"]["measurement_blocks"] == 5
+    assert dict(config["plans"]) == {}
+    assert tuple(config["routes"]) == ("quimb_greedy", "quimb_cotengra_path")
+    assert config["routes"]["quimb_greedy"] == {
+        "executor": "quimb",
+        "numeric_policy": None,
+        "options": {"optimize": "greedy"},
+    }
+    assert config["routes"]["quimb_cotengra_path"] == {
+        "executor": "cotengra",
+        "numeric_policy": None,
+        "options": {"methods": "greedy", "max_repeats": 1},
+    }
+    assert all(item["plan_id"] is None for item in config["matrix"])
+    assert baselines._SCOPE == "simulation_end_to_end_v1"
+    assert dict(cli._expected_counts(config)) == {
+        "warmup": 2,
+        "measurement": 10,
+        "sessions": 0,
+    }
 
 
 def test_loader_normalizes_paths_and_returns_recursive_immutable_values(
@@ -305,7 +487,7 @@ def test_loader_allows_distinct_plan_occurrences_but_rejects_exact_duplicates(
         .replace(
             "    slicing: null\nroutes:",
             "    slicing: null\n  p2:\n    planner:\n      engine: opt_einsum\n"
-            "      mode: optimal\n      max_repeats: 1\n      seed: 0\n"
+            "      mode: optimal\n"
             "    slicing: null\nroutes:",
         )
         .replace(
@@ -334,7 +516,7 @@ def test_loader_allows_planless_baseline_only_configuration(tmp_path: Path) -> N
     path = tmp_path / "baseline.yml"
     text = _config().replace(
         "plans:\n  p1:\n    planner:\n      engine: opt_einsum\n"
-        "      mode: greedy\n      max_repeats: 1\n      seed: 0\n"
+        "      mode: greedy\n"
         "    slicing: null",
         "plans: {}",
     )
@@ -426,8 +608,6 @@ plans:
     planner:
       engine: opt_einsum
       mode: greedy
-      max_repeats: 1
-      seed: 0
     slicing: null
 routes:
   numpy:
@@ -447,7 +627,7 @@ def _two_plan_numpy_config() -> str:
         .replace(
             "    slicing: null\nroutes:",
             "    slicing: null\n  optimal:\n    planner:\n      engine: opt_einsum\n"
-            "      mode: optimal\n      max_repeats: 1\n      seed: 0\n"
+            "      mode: optimal\n"
             "    slicing: null\nroutes:",
         )
         .replace(
@@ -1176,8 +1356,6 @@ def test_slicing_is_selected_by_named_plan(monkeypatch: pytest.MonkeyPatch) -> N
         "planner": {
             "engine": "opt_einsum",
             "mode": "greedy",
-            "max_repeats": 1,
-            "seed": 0,
         },
         "slicing": None,
     }

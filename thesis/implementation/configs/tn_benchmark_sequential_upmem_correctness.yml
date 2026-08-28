@@ -1,12 +1,12 @@
 schema_version: tn_benchmark_v3
-experiment_id: m7c-one-dpu-physical-smoke
+experiment_id: sequential-upmem-correctness
 defaults:
   timeout_s: 120.0
 collection:
   claim_policy: diagnostic_v1
-  base_seed: 20260826
-  warmup_blocks: 1
-  measurement_blocks: 5
+  base_seed: 20260828
+  warmup_blocks: 0
+  measurement_blocks: 1
   session_policy: fresh_session_per_attempt_v1
   block_cooldown_s: 0.0
   machine_policy:
@@ -23,7 +23,13 @@ collection:
       mode: observed_v1
       max_load1_per_online_cpu: null
 cases:
-  complex_sliced_4q:
+  bell2:
+    circuit:
+      kind: builtin
+      name: bell_2q
+      path: null
+      parameters: {}
+  stress4:
     circuit:
       kind: builtin
       name: quantization_stress
@@ -32,7 +38,12 @@ cases:
         n_qubits: 4
         repeat_layers: 2
 plans:
-  greedy:
+  unsliced:
+    planner:
+      engine: opt_einsum
+      mode: greedy
+    slicing: null
+  sliced:
     planner:
       engine: opt_einsum
       mode: greedy
@@ -40,19 +51,25 @@ plans:
       node_id: contract_24
       minimum_slice_count: 4
 routes:
-  upmem_float32_1dpu:
+  upmem_float32_1dpu_t1:
     executor: upmem_physical
     numeric_policy: split_complex_float32_v1
     options:
       dpu_count: 1
       rank_count: 1
       tasklets_per_dpu: 1
-      session_root: ../runs/upmem_sessions/physical_smoke_float32
+      session_root: ../runs/upmem_sessions/sequential_correctness_t1
       host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t1
       dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t1
       initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t1
       rank_paths: [/dev/dpu_rank0]
 matrix:
-  - case_id: complex_sliced_4q
-    plan_id: greedy
-    route_ids: [upmem_float32_1dpu]
+  - case_id: bell2
+    plan_id: unsliced
+    route_ids: [upmem_float32_1dpu_t1]
+  - case_id: stress4
+    plan_id: unsliced
+    route_ids: [upmem_float32_1dpu_t1]
+  - case_id: stress4
+    plan_id: sliced
+    route_ids: [upmem_float32_1dpu_t1]

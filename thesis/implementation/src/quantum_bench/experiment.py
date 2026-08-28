@@ -163,7 +163,10 @@ _MACHINE_POLICY_MODES = {
 _CASE_FIELDS = frozenset({"circuit"})
 _CIRCUIT_FIELDS = frozenset({"kind", "name", "path", "parameters"})
 _PLAN_FIELDS = frozenset({"planner", "slicing"})
-_PLANNER_FIELDS = frozenset({"engine", "mode", "max_repeats", "seed"})
+_PLANNER_FIELDS = {
+    "opt_einsum": frozenset({"engine", "mode"}),
+    "cotengra": frozenset({"engine", "mode", "max_repeats", "seed"}),
+}
 _SLICING_FIELDS = frozenset({"node_id", "minimum_slice_count"})
 _ROUTE_FIELDS = frozenset({"executor", "numeric_policy", "options"})
 _MATRIX_FIELDS = frozenset({"case_id", "plan_id", "route_ids"})
@@ -360,20 +363,22 @@ def _normalize_circuit(value: object, root: Path, field: str) -> dict[str, objec
 
 def _normalize_plan(value: object, field: str) -> dict[str, object]:
     plan = dict(_config_fields(value, _PLAN_FIELDS, field))
-    planner = dict(_config_fields(plan["planner"], _PLANNER_FIELDS, f"{field}.planner"))
-    engine = _config_string(planner["engine"], f"{field}.planner.engine")
+    planner_value = _config_mapping(plan["planner"], f"{field}.planner")
+    engine = _config_string(planner_value.get("engine"), f"{field}.planner.engine")
     if engine not in _PLANNER_ENGINES:
         raise ValueError(f"{field}.planner.engine has an unsupported value: {engine}")
+    planner = dict(
+        _config_fields(planner_value, _PLANNER_FIELDS[engine], f"{field}.planner")
+    )
     mode = _config_string(planner["mode"], f"{field}.planner.mode")
     allowed_modes = _OPT_EINSUM_MODES if engine == "opt_einsum" else _COTENGRA_MODES
     if mode not in allowed_modes:
         raise ValueError(f"{field}.planner.mode has an unsupported value: {mode}")
-    planner["max_repeats"] = _config_int(
-        planner["max_repeats"], f"{field}.planner.max_repeats", minimum=1
-    )
-    seed = planner["seed"]
-    if seed is not None:
-        planner["seed"] = _config_int(seed, f"{field}.planner.seed")
+    if engine == "cotengra":
+        planner["max_repeats"] = _config_int(
+            planner["max_repeats"], f"{field}.planner.max_repeats", minimum=1
+        )
+        planner["seed"] = _config_int(planner["seed"], f"{field}.planner.seed")
     slicing = plan["slicing"]
     if slicing is not None:
         slicing_map = dict(_config_fields(slicing, _SLICING_FIELDS, f"{field}.slicing"))

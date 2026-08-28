@@ -36,8 +36,6 @@ plans:
     planner:
       engine: opt_einsum
       mode: greedy
-      max_repeats: 1
-      seed: 0
     slicing: null
 routes:
   numpy_same_dag:

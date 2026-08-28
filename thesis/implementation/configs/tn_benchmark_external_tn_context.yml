@@ -1,12 +1,12 @@
 schema_version: tn_benchmark_v3
-experiment_id: reset-smoke
+experiment_id: external-tn-context-stress18
 defaults:
   timeout_s: 120.0
 collection:
   claim_policy: diagnostic_v1
-  base_seed: 20260825
+  base_seed: 20260828
   warmup_blocks: 1
-  measurement_blocks: 3
+  measurement_blocks: 5
   session_policy: fresh_session_per_attempt_v1
   block_cooldown_s: 0.0
   machine_policy:
@@ -23,38 +23,28 @@ collection:
       mode: observed_v1
       max_load1_per_online_cpu: null
 cases:
-  bell:
+  stress18:
     circuit:
       kind: builtin
-      name: bell_2q
+      name: quantization_stress
       path: null
-      parameters: {}
-plans:
-  greedy:
-    planner:
-      engine: opt_einsum
-      mode: greedy
-    slicing: null
+      parameters:
+        n_qubits: 18
+        repeat_layers: 2
+plans: {}
 routes:
-  numpy_float32:
-    executor: numpy_dag
-    numeric_policy: split_complex_float32_v1
-    options: {}
-  quimb:
+  quimb_greedy:
     executor: quimb
     numeric_policy: null
     options:
       optimize: greedy
-  cotengra:
+  quimb_cotengra_path:
     executor: cotengra
     numeric_policy: null
     options:
       methods: greedy
       max_repeats: 1
 matrix:
-  - case_id: bell
-    plan_id: greedy
-    route_ids: [numpy_float32]
-  - case_id: bell
+  - case_id: stress18
     plan_id: null
-    route_ids: [quimb, cotengra]
+    route_ids: [quimb_greedy, quimb_cotengra_path]

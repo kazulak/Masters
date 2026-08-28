@@ -36,8 +36,6 @@ plans:
     planner:
       engine: opt_einsum
       mode: greedy
-      max_repeats: 1
-      seed: 0
     slicing:
       node_id: contract_24
       minimum_slice_count: 4
