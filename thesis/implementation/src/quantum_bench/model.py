@@ -137,6 +137,7 @@ class SimulationJob:
     seed: int | None = None
 
     def __post_init__(self) -> None:
+        validate_circuit_spec(self.circuit)
         if self.query != "pre_measurement_statevector":
             raise ValueError(f"Unsupported simulation query: {self.query!r}")
         if not isinstance(self.parameters, tuple):
@@ -165,7 +166,6 @@ def make_simulation_job(
 ) -> SimulationJob:
     """Validate and normalize simulation-job construction."""
 
-    validate_circuit_spec(circuit)
     normalized: list[tuple[str, _Scalar]] = []
     seen: set[str] = set()
     for item in parameters:

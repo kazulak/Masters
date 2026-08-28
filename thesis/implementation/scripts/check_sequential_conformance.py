@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import subprocess
 from typing import Any
 
 import numpy as np
@@ -30,10 +31,28 @@ QUEST_RUNNER = ROOT / "native" / "quest_cpu" / "bin" / "quest_runner"
 COMPLEX128_LIMIT = 1.0e-12
 FLOAT32_ATOL = 1.0e-5
 FLOAT32_RTOL = 1.0e-5
+FLOAT32_MAX_ABS_ERROR_LIMIT = 1.0e-5
 FLOAT32_RELATIVE_L2_LIMIT = 1.0e-5
 FLOAT32_NORM_DRIFT_LIMIT = 2.0e-5
 SLICED_NODE_ID = "contract_24"
 SLICED_MINIMUM_COUNT = 4
+
+
+def _git_output(*arguments: str) -> str:
+    result = subprocess.run(
+        ["git", *arguments],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def _source_state() -> tuple[str, bool]:
+    return _git_output("rev-parse", "HEAD"), bool(
+        _git_output("status", "--porcelain")
+    )
 
 
 def _complex_orientation_3q() -> CircuitSpec:
@@ -194,6 +213,7 @@ def _comparison(
         )
         passed = (
             raw_allclose
+            and metrics["max_abs_error"] <= FLOAT32_MAX_ABS_ERROR_LIMIT
             and metrics["relative_l2_error"] <= FLOAT32_RELATIVE_L2_LIMIT
             and metrics["norm_drift"] <= FLOAT32_NORM_DRIFT_LIMIT
         )
@@ -228,6 +248,7 @@ def _circuit_record(circuit: CircuitSpec) -> dict[str, Any]:
 
 
 def run_conformance() -> dict[str, Any]:
+    source_commit, source_worktree_dirty = _source_state()
     fixture_records: list[dict[str, Any]] = []
     for fixture in _fixture_specs():
         fixture_id = fixture["fixture_id"]
@@ -317,6 +338,8 @@ def run_conformance() -> dict[str, Any]:
         fixture_records.append(record)
     return {
         "schema_version": "sequential_statevector_conformance_v1",
+        "source_commit": source_commit,
+        "source_worktree_dirty": source_worktree_dirty,
         "execution_class": "software_only",
         "phase_aligned_metric_is_diagnostic_only": True,
         "policies": {
@@ -330,6 +353,7 @@ def run_conformance() -> dict[str, Any]:
             "float32_1e-5": {
                 "raw_allclose_atol": FLOAT32_ATOL,
                 "raw_allclose_rtol": FLOAT32_RTOL,
+                "max_abs_error_max": FLOAT32_MAX_ABS_ERROR_LIMIT,
                 "relative_l2_error_max": FLOAT32_RELATIVE_L2_LIMIT,
                 "norm_drift_max": FLOAT32_NORM_DRIFT_LIMIT,
             },

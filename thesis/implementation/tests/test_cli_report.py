@@ -1484,6 +1484,13 @@ def test_sequential_baseline_makefile_and_docs_commands_are_consistent() -> None
     assert "--allow-physical" in document
 
 
+def test_active_docs_declare_evidence_sample_v4_only() -> None:
+    for path in (ROOT / "README.md", ROOT / "docs" / "evidence_workflow.md"):
+        document = path.read_text(encoding="utf-8")
+        assert "evidence_sample_v4" in document
+        assert "evidence_sample_v3" not in document
+
+
 def test_numpy_plan_run_verify_report_lifecycle(tmp_path: Path) -> None:
     config = tmp_path / "benchmark.yml"
     _write_config(config, _numpy_config())

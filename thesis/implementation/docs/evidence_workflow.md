@@ -51,7 +51,7 @@ An unsupported row is a preflight capability rejection. A failed row records a
 runtime attempt and failure stage. Fatal external termination may leave an
 incomplete artifact; verification must reject it as incomplete.
 
-Manifests use `evidence_manifest_v2`, samples use `evidence_sample_v3`,
+Manifests use `evidence_manifest_v2`, samples use `evidence_sample_v4`,
 sessions use `evidence_session_v1`, and reports use `evidence_report_v5`.
 Earlier sample evidence is unsupported by the active verifier unless the
 generation is listed below. Sample `status`

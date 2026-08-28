@@ -113,7 +113,7 @@ only on the designated ETH machine. It runs `quantum_bench.cli run
 canonical evidence. `verify` checks evidence identities and integrity.
 `report` only reads existing evidence and produces tables and plots.
 
-Manifests use `evidence_manifest_v2`, samples use `evidence_sample_v3`,
+Manifests use `evidence_manifest_v2`, samples use `evidence_sample_v4`,
 sessions use `evidence_session_v1`, and reports use `evidence_report_v5`.
 Earlier sample evidence is unsupported. Sample `status`
 describes whether the complete attempt finished: a validator exception produces

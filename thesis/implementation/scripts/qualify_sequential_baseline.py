@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import importlib.metadata
 import json
+import math
 from pathlib import Path
 import platform
 import shutil
@@ -41,7 +42,28 @@ REQUIRED_FIXTURES = frozenset(
         "sliced Stress4",
     }
 )
+CONFORMANCE_POLICIES = {
+    "complex128_1e-12": {
+        "raw_allclose_atol": 1.0e-12,
+        "raw_allclose_rtol": 1.0e-12,
+        "max_abs_error_max": 1.0e-12,
+        "relative_l2_error_max": 1.0e-12,
+        "norm_drift_max": 1.0e-12,
+    },
+    "float32_1e-5": {
+        "raw_allclose_atol": 1.0e-5,
+        "raw_allclose_rtol": 1.0e-5,
+        "max_abs_error_max": 1.0e-5,
+        "relative_l2_error_max": 1.0e-5,
+        "norm_drift_max": 2.0e-5,
+    },
+}
 _BINARY_FIELDS = ("host_binary", "dpu_binary", "initialization_binary")
+_BINARY_HASH_FIELDS = {
+    "host_binary": "host_binary_sha256",
+    "dpu_binary": "dpu_binary_sha256",
+    "initialization_binary": "initialization_binary_sha256",
+}
 _MACHINE_PATH_FIELDS = ("session_root", *_BINARY_FIELDS)
 _PHYSICAL_FACTS = {
     "target_observed": "physical_hardware",
@@ -328,16 +350,31 @@ def _joined_facts(
 
 def _require_physical_samples(
     samples: Sequence[Mapping[str, Any]], sessions: Sequence[Mapping[str, Any]], label: str
-) -> None:
+) -> Mapping[str, str]:
     sessions_by_id = {str(session["session_instance_id"]): session for session in sessions}
     if len(sessions_by_id) != len(sessions):
         raise ValueError(f"{label} physical session IDs must be unique")
+    binary_hashes: set[tuple[str, ...]] = set()
     for session in sessions:
         if any(
             session.get(field) is not True
             for field in ("release_attempted", "release_succeeded", "release_verified")
         ):
             raise ValueError(f"{label} physical session was not fully released")
+        terminal = session.get("terminal_backend_facts")
+        if not isinstance(terminal, Mapping):
+            raise ValueError(f"{label} physical session lacks terminal backend facts")
+        values = tuple(terminal.get(field) for field in _BINARY_HASH_FIELDS.values())
+        if any(
+            not isinstance(value, str)
+            or len(value) != 64
+            or any(character not in "0123456789abcdef" for character in value)
+            for value in values
+        ):
+            raise ValueError(f"{label} physical session lacks valid T1 binary hashes")
+        binary_hashes.add(values)
+    if len(binary_hashes) != 1:
+        raise ValueError(f"{label} physical sessions require one consistent T1 binary triple")
     for sample in samples:
         _require_validation(sample, label)
         numeric = sample.get("numeric_facts")
@@ -353,6 +390,8 @@ def _require_physical_samples(
         for field, expected in _PHYSICAL_FACTS.items():
             if facts.get(field) != expected:
                 raise ValueError(f"{label} physical sample requires {field}={expected!r}")
+    values = next(iter(binary_hashes))
+    return dict(zip(_BINARY_HASH_FIELDS.values(), values, strict=True))
 
 
 def _load_evidence(
@@ -366,20 +405,137 @@ def _load_evidence(
     return manifest, samples, sessions, summary
 
 
-def _inspect_conformance(path: Path) -> Mapping[str, Any]:
+def _expected_conformance_fixture(
+    fixture_id: str,
+) -> tuple[set[str], dict[str, str], Mapping[str, Any] | None]:
+    oracles = {"direct_quimb_circuit", "thesis_dag_complex128"}
+    comparisons = {
+        "thesis_dag_complex128_vs_direct_quimb": "complex128_1e-12"
+    }
+    if fixture_id in {
+        "basis_order_2q",
+        "Bell2",
+        "GHZ5",
+        "QuEST-compatible QRNG3",
+        "QuEST-compatible BV5",
+    }:
+        oracles.add("analytic")
+        comparisons.update(
+            {
+                "direct_quimb_vs_analytic": "complex128_1e-12",
+                "thesis_dag_complex128_vs_analytic": "complex128_1e-12",
+            }
+        )
+    if fixture_id in {"QuEST-compatible QRNG3", "QuEST-compatible BV5"}:
+        oracles.add("quest_cpu")
+        comparisons.update(
+            {
+                "quest_cpu_vs_direct_quimb": "complex128_1e-12",
+                "quest_cpu_vs_thesis_dag_complex128": "complex128_1e-12",
+            }
+        )
+    if fixture_id in {"Stress18", "sliced Stress4"}:
+        oracles.add("thesis_dag_float32")
+        comparisons["thesis_dag_float32_vs_direct_quimb"] = "float32_1e-5"
+    slicing = None
+    if fixture_id == "sliced Stress4":
+        slicing = {
+            "node_id": "contract_24",
+            "minimum_slice_count": 4,
+            "sdk_simulator_coverage": (
+                "tests/test_cli_report.py::"
+                "test_sliced_conformance_retains_strict_sdk_simulator_coverage"
+            ),
+        }
+    return oracles, comparisons, slicing
+
+
+def _require_conformance_metric(
+    comparison: Mapping[str, Any], field: str, maximum: float | None
+) -> None:
+    value = comparison.get(field)
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value < 0.0
+    ):
+        raise ValueError(f"sequential conformance {field} must be finite and nonnegative")
+    if maximum is not None and value > maximum:
+        raise ValueError(f"sequential conformance {field} exceeds its policy gate")
+
+
+def _inspect_conformance(path: Path, *, commit: str) -> Mapping[str, Any]:
     artifact = _read_json(path)
     fixtures = artifact.get("fixtures")
     if artifact.get("schema_version") != CONFORMANCE_SCHEMA or artifact.get("passed") is not True:
         raise ValueError("sequential conformance requires passed schema v1 evidence")
+    if (
+        artifact.get("source_commit") != commit
+        or artifact.get("source_worktree_dirty") is not False
+    ):
+        raise ValueError(f"sequential conformance must bind to exact current clean source {commit}")
+    if (
+        artifact.get("execution_class") != "software_only"
+        or artifact.get("phase_aligned_metric_is_diagnostic_only") is not True
+        or artifact.get("policies") != CONFORMANCE_POLICIES
+    ):
+        raise ValueError("sequential conformance top-level policy contract drift")
     if not isinstance(fixtures, list) or len(fixtures) != 8:
         raise ValueError("sequential conformance requires exactly eight fixtures")
     ids = [fixture.get("fixture_id") for fixture in fixtures if isinstance(fixture, Mapping)]
     if len(ids) != 8 or set(ids) != REQUIRED_FIXTURES or len(set(ids)) != 8:
         raise ValueError("sequential conformance fixture identity drift")
-    if any(fixture.get("passed") is not True for fixture in fixtures):
-        raise ValueError("every sequential conformance fixture must pass")
+    for fixture in fixtures:
+        if fixture.get("passed") is not True:
+            raise ValueError("every sequential conformance fixture must pass")
+        fixture_id = fixture["fixture_id"]
+        expected_oracles, expected_comparisons, expected_slicing = (
+            _expected_conformance_fixture(fixture_id)
+        )
+        oracles = fixture.get("oracles")
+        if (
+            not isinstance(oracles, list)
+            or len(oracles) != len(expected_oracles)
+            or set(oracles) != expected_oracles
+        ):
+            raise ValueError(f"sequential conformance oracle drift for {fixture_id}")
+        if fixture.get("slicing") != expected_slicing:
+            raise ValueError(f"sequential conformance slicing drift for {fixture_id}")
+        comparisons = fixture.get("comparisons")
+        if not isinstance(comparisons, list) or len(comparisons) != len(
+            expected_comparisons
+        ):
+            raise ValueError(f"sequential conformance comparison drift for {fixture_id}")
+        observed: dict[str, Mapping[str, Any]] = {}
+        for comparison in comparisons:
+            if not isinstance(comparison, Mapping):
+                raise ValueError(f"sequential conformance comparison drift for {fixture_id}")
+            name = comparison.get("comparison")
+            if not isinstance(name, str) or name in observed:
+                raise ValueError(f"sequential conformance comparison drift for {fixture_id}")
+            observed[name] = comparison
+        if set(observed) != set(expected_comparisons):
+            raise ValueError(f"sequential conformance comparison drift for {fixture_id}")
+        for name, comparison in observed.items():
+            policy = expected_comparisons[name]
+            if (
+                comparison.get("policy") != policy
+                or comparison.get("raw_phase_sensitive_allclose") is not True
+                or comparison.get("passed") is not True
+            ):
+                raise ValueError(f"sequential conformance comparison failed for {fixture_id}")
+            limits = CONFORMANCE_POLICIES[policy]
+            for field in ("max_abs_error", "relative_l2_error", "norm_drift"):
+                _require_conformance_metric(
+                    comparison, field, limits[f"{field}_max"]
+                )
+            _require_conformance_metric(
+                comparison, "phase_aligned_max_abs_error", None
+            )
     return {
         "schema_version": CONFORMANCE_SCHEMA,
+        "source_commit": commit,
         "fixture_count": 8,
         "passed": True,
         "sha256": _sha256(path),
@@ -403,7 +559,7 @@ def inspect_baseline(
     *, conformance: Path, correctness: Path, performance: Path, external_context: Path
 ) -> Mapping[str, Any]:
     commit = _require_clean_source()
-    conformance_record = _inspect_conformance(conformance)
+    conformance_record = _inspect_conformance(conformance, commit=commit)
     correct_manifest, correct_samples, correct_sessions, correct_summary = _load_evidence(
         correctness, commit=commit, template=CORRECTNESS_TEMPLATE, physical=True, label="correctness"
     )
@@ -419,7 +575,9 @@ def inspect_baseline(
     }
     if {(s["case_id"], s["plan_id"], s["route_id"]) for s in correct_samples} != expected_correct_routes:
         raise ValueError("correctness evidence requires Bell2 unsliced and Stress4 unsliced/sliced")
-    _require_physical_samples(correct_samples, correct_sessions, "correctness")
+    correct_binary_hashes = _require_physical_samples(
+        correct_samples, correct_sessions, "correctness"
+    )
 
     perf_manifest, perf_samples, perf_sessions, perf_summary = _load_evidence(
         performance, commit=commit, template=PERFORMANCE_TEMPLATE, physical=True, label="performance"
@@ -448,7 +606,11 @@ def inspect_baseline(
     ) != 60:
         raise ValueError("performance evidence requires two warmup and 30 measured paired blocks")
     physical_samples = [row for row in perf_samples if row["route_id"] == "upmem_float32_1dpu_t1"]
-    _require_physical_samples(physical_samples, perf_sessions, "performance")
+    perf_binary_hashes = _require_physical_samples(
+        physical_samples, perf_sessions, "performance"
+    )
+    if perf_binary_hashes != correct_binary_hashes:
+        raise ValueError("correctness and performance evidence used different T1 binaries")
     environment = perf_manifest["configuration"]["environment"]
     preflight = environment.get("machine_preflight") if isinstance(environment, Mapping) else None
     if not isinstance(preflight, Mapping) or preflight.get("machine_preflight_passed") is not True:
@@ -468,6 +630,7 @@ def inspect_baseline(
         "schema_version": SUMMARY_SCHEMA,
         "status": "qualified",
         "source_commit": commit,
+        "t1_binary_hashes": correct_binary_hashes,
         "artifact_statistics": "separate_no_cross_artifact_statistics_v1",
         "inputs": {
             "conformance": conformance_record,
@@ -613,11 +776,18 @@ def bundle_baseline(
     input_records = inspected["inputs"]
     correct_binaries = _config_binaries(correctness_config, input_records["physical_correctness"]["experiment_id"])
     perf_binaries = _config_binaries(performance_config, input_records["physical_performance"]["experiment_id"])
-    if correct_binaries != perf_binaries:
-        raise ValueError("correctness and performance configs must use the same T1 binaries")
-    for field, path in correct_binaries.items():
-        if not path.is_file():
-            raise ValueError(f"T1 {field} is unavailable: {path}")
+    recorded_binary_hashes = inspected["t1_binary_hashes"]
+    for label, binaries in (
+        ("correctness", correct_binaries),
+        ("performance", perf_binaries),
+    ):
+        for field, path in binaries.items():
+            if not path.is_file():
+                raise ValueError(f"T1 {field} is unavailable: {path}")
+            if _sha256(path) != recorded_binary_hashes[_BINARY_HASH_FIELDS[field]]:
+                raise ValueError(
+                    f"{label} T1 {field} does not match its execution-time hash"
+                )
     reports = {
         "physical-correctness": (correctness_report, input_records["physical_correctness"]),
         "physical-performance": (performance_report, input_records["physical_performance"]),
@@ -659,7 +829,7 @@ def bundle_baseline(
     )
     _write_json(
         provenance / "t1-binary-hashes.json",
-        {field: {"name": path.name, "sha256": _sha256(path)} for field, path in sorted(correct_binaries.items())},
+        recorded_binary_hashes,
     )
     _write_json(
         provenance / "input-hashes.json",

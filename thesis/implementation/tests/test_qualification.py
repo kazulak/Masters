@@ -72,8 +72,13 @@ def _bootstrap():
     return _load_script(BOOTSTRAP_SCRIPT, "bootstrap_env")
 
 
-def test_sequential_conformance_covers_exact_fixtures_and_oracle_boundaries() -> None:
-    artifact = _conformance().run_conformance()
+def test_sequential_conformance_covers_exact_fixtures_and_oracle_boundaries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conformance = _conformance()
+    commit = conformance._git_output("rev-parse", "HEAD")
+    monkeypatch.setattr(conformance, "_source_state", lambda: (commit, False))
+    artifact = conformance.run_conformance()
 
     assert artifact["passed"] is True
     assert [fixture["fixture_id"] for fixture in artifact["fixtures"]] == [
@@ -97,6 +102,11 @@ def test_sequential_conformance_covers_exact_fixtures_and_oracle_boundaries() ->
         and "thesis_dag_complex128" in fixture["oracles"]
         for fixture in artifact["fixtures"]
     )
+    assert artifact["source_commit"] == commit
+    assert artifact["source_worktree_dirty"] is False
+    path = tmp_path / "current-conformance.json"
+    path.write_text(json.dumps(artifact), encoding="ascii")
+    assert _sequential_baseline()._inspect_conformance(path, commit=commit)["passed"]
 
 
 def test_sequential_conformance_direct_quimb_does_not_use_thesis_lowering(
@@ -196,6 +206,9 @@ def _sequential_physical_facts() -> dict[str, object]:
         "allocated_dpus": 1,
         "active_dpus": 1,
         "tasklets_per_dpu": 1,
+        "host_binary_sha256": "1" * 64,
+        "dpu_binary_sha256": "2" * 64,
+        "initialization_binary_sha256": "3" * 64,
     }
 
 
@@ -394,16 +407,7 @@ def _install_sequential_artifacts(
         (path / "manifest.json").write_text("{}\n", encoding="ascii")
     conformance = tmp_path / "conformance.json"
     conformance.write_text(
-        json.dumps(
-            {
-                "schema_version": qualifier.CONFORMANCE_SCHEMA,
-                "passed": True,
-                "fixtures": [
-                    {"fixture_id": fixture_id, "passed": True}
-                    for fixture_id in sorted(qualifier.REQUIRED_FIXTURES)
-                ],
-            }
-        ),
+        json.dumps(_sequential_conformance_artifact(qualifier, commit)),
         encoding="ascii",
     )
     by_path = dict(zip(paths, (artifacts["correctness"], artifacts["performance"], artifacts["external"])))
@@ -411,6 +415,163 @@ def _install_sequential_artifacts(
     monkeypatch.setattr(qualifier, "load_artifacts", lambda path: by_path[Path(path)][:3])
     monkeypatch.setattr(qualifier, "verify_artifacts", lambda path: by_path[Path(path)][3])
     return conformance, *paths
+
+
+def _sequential_conformance_artifact(
+    qualifier: object, commit: str
+) -> dict[str, object]:
+    analytic = {
+        "basis_order_2q",
+        "Bell2",
+        "GHZ5",
+        "QuEST-compatible QRNG3",
+        "QuEST-compatible BV5",
+    }
+    quest = {"QuEST-compatible QRNG3", "QuEST-compatible BV5"}
+    float32 = {"Stress18", "sliced Stress4"}
+    fixtures = []
+    for fixture_id in sorted(qualifier.REQUIRED_FIXTURES):
+        oracles = ["direct_quimb_circuit", "thesis_dag_complex128"]
+        comparisons = [
+            ("thesis_dag_complex128_vs_direct_quimb", "complex128_1e-12")
+        ]
+        if fixture_id in analytic:
+            oracles.append("analytic")
+            comparisons.extend(
+                [
+                    ("direct_quimb_vs_analytic", "complex128_1e-12"),
+                    ("thesis_dag_complex128_vs_analytic", "complex128_1e-12"),
+                ]
+            )
+        if fixture_id in quest:
+            oracles.append("quest_cpu")
+            comparisons.extend(
+                [
+                    ("quest_cpu_vs_direct_quimb", "complex128_1e-12"),
+                    ("quest_cpu_vs_thesis_dag_complex128", "complex128_1e-12"),
+                ]
+            )
+        if fixture_id in float32:
+            oracles.append("thesis_dag_float32")
+            comparisons.append(
+                ("thesis_dag_float32_vs_direct_quimb", "float32_1e-5")
+            )
+        fixture: dict[str, object] = {
+            "fixture_id": fixture_id,
+            "oracles": oracles,
+            "comparisons": [
+                {
+                    "comparison": name,
+                    "policy": policy,
+                    "raw_phase_sensitive_allclose": True,
+                    "max_abs_error": 0.0,
+                    "relative_l2_error": 0.0,
+                    "norm_drift": 0.0,
+                    "phase_aligned_max_abs_error": 0.0,
+                    "passed": True,
+                }
+                for name, policy in comparisons
+            ],
+            "passed": True,
+        }
+        if fixture_id == "sliced Stress4":
+            fixture["slicing"] = {
+                "node_id": "contract_24",
+                "minimum_slice_count": 4,
+                "sdk_simulator_coverage": (
+                    "tests/test_cli_report.py::"
+                    "test_sliced_conformance_retains_strict_sdk_simulator_coverage"
+                ),
+            }
+        fixtures.append(fixture)
+    return {
+        "schema_version": qualifier.CONFORMANCE_SCHEMA,
+        "source_commit": commit,
+        "source_worktree_dirty": False,
+        "execution_class": "software_only",
+        "phase_aligned_metric_is_diagnostic_only": True,
+        "policies": json.loads(json.dumps(qualifier.CONFORMANCE_POLICIES)),
+        "fixtures": fixtures,
+        "passed": True,
+    }
+
+
+@pytest.mark.parametrize(
+    "drift",
+    (
+        "wrong_commit",
+        "dirty_source",
+        "changed_policy",
+        "changed_phase_contract",
+        "missing_oracle",
+        "added_quest_oracle",
+        "changed_comparison",
+        "changed_comparison_policy",
+        "raw_false_passed_true",
+        "max_abs_error",
+        "relative_l2_error",
+        "norm_drift",
+        "slicing",
+    ),
+)
+def test_sequential_conformance_inspector_rejects_contract_drift(
+    tmp_path: Path, drift: str
+) -> None:
+    qualifier = _sequential_baseline()
+    commit = "a" * 40
+    artifact = _sequential_conformance_artifact(qualifier, commit)
+    fixtures = artifact["fixtures"]
+    basis = next(row for row in fixtures if row["fixture_id"] == "basis_order_2q")
+    stress = next(row for row in fixtures if row["fixture_id"] == "Stress18")
+    sliced = next(row for row in fixtures if row["fixture_id"] == "sliced Stress4")
+    float_comparison = next(
+        row for row in stress["comparisons"] if row["policy"] == "float32_1e-5"
+    )
+    if drift == "wrong_commit":
+        artifact["source_commit"] = "b" * 40
+    elif drift == "dirty_source":
+        artifact["source_worktree_dirty"] = True
+    elif drift == "changed_policy":
+        artifact["policies"]["float32_1e-5"]["norm_drift_max"] = 3.0e-5
+    elif drift == "changed_phase_contract":
+        artifact["phase_aligned_metric_is_diagnostic_only"] = False
+    elif drift == "missing_oracle":
+        basis["oracles"].pop()
+    elif drift == "added_quest_oracle":
+        basis["oracles"].append("quest_cpu")
+    elif drift == "changed_comparison":
+        basis["comparisons"][0]["comparison"] = "renamed"
+    elif drift == "changed_comparison_policy":
+        basis["comparisons"][0]["policy"] = "float32_1e-5"
+    elif drift == "raw_false_passed_true":
+        basis["comparisons"][0]["raw_phase_sensitive_allclose"] = False
+        basis["comparisons"][0]["passed"] = True
+    elif drift in {"max_abs_error", "relative_l2_error"}:
+        float_comparison[drift] = 2.0e-5
+    elif drift == "norm_drift":
+        float_comparison[drift] = 3.0e-5
+    else:
+        sliced["slicing"]["minimum_slice_count"] = 8
+    path = tmp_path / f"conformance-{drift}.json"
+    path.write_text(json.dumps(artifact), encoding="ascii")
+
+    with pytest.raises(ValueError):
+        qualifier._inspect_conformance(path, commit=commit)
+
+
+def test_sequential_conformance_phase_aligned_metric_remains_diagnostic(
+    tmp_path: Path,
+) -> None:
+    qualifier = _sequential_baseline()
+    commit = "a" * 40
+    artifact = _sequential_conformance_artifact(qualifier, commit)
+    artifact["fixtures"][0]["comparisons"][0][
+        "phase_aligned_max_abs_error"
+    ] = 99.0
+    path = tmp_path / "conformance-phase-diagnostic.json"
+    path.write_text(json.dumps(artifact), encoding="ascii")
+
+    assert qualifier._inspect_conformance(path, commit=commit)["passed"] is True
 
 
 def test_sequential_baseline_inspects_exact_four_artifacts(
@@ -432,6 +593,11 @@ def test_sequential_baseline_inspects_exact_four_artifacts(
 
     assert summary["schema_version"] == qualifier.SUMMARY_SCHEMA
     assert summary["source_commit"] == commit
+    assert summary["t1_binary_hashes"] == {
+        "host_binary_sha256": "1" * 64,
+        "dpu_binary_sha256": "2" * 64,
+        "initialization_binary_sha256": "3" * 64,
+    }
     assert set(summary["inputs"]) == {
         "conformance",
         "physical_correctness",
@@ -471,6 +637,49 @@ def test_sequential_baseline_rejects_contract_drift(
         )
 
 
+def test_sequential_baseline_rejects_one_mutated_session_binary_hash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    qualifier = _sequential_baseline()
+    commit = "a" * 40
+    artifacts = _sequential_artifacts(qualifier, commit)
+    artifacts["correctness"][2][0]["terminal_backend_facts"][
+        "host_binary_sha256"
+    ] = "f" * 64
+    conformance, correctness, performance, external = _install_sequential_artifacts(
+        qualifier, monkeypatch, tmp_path, artifacts, commit
+    )
+
+    with pytest.raises(ValueError, match="consistent T1 binary triple"):
+        qualifier.inspect_baseline(
+            conformance=conformance,
+            correctness=correctness,
+            performance=performance,
+            external_context=external,
+        )
+
+
+def test_sequential_baseline_rejects_binary_hashes_different_across_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    qualifier = _sequential_baseline()
+    commit = "a" * 40
+    artifacts = _sequential_artifacts(qualifier, commit)
+    for session in artifacts["performance"][2]:
+        session["terminal_backend_facts"]["host_binary_sha256"] = "f" * 64
+    conformance, correctness, performance, external = _install_sequential_artifacts(
+        qualifier, monkeypatch, tmp_path, artifacts, commit
+    )
+
+    with pytest.raises(ValueError, match="different T1 binaries"):
+        qualifier.inspect_baseline(
+            conformance=conformance,
+            correctness=correctness,
+            performance=performance,
+            external_context=external,
+        )
+
+
 def test_sequential_baseline_bundle_is_closed_and_self_contained(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -493,10 +702,32 @@ def test_sequential_baseline_bundle_is_closed_and_self_contained(
     )
     correctness_config = Path(prepared["correctness_config"])
     performance_config = Path(prepared["performance_config"])
+    performance_document = yaml.safe_load(performance_config.read_text(encoding="utf-8"))
+    performance_options = performance_document["routes"]["upmem_float32_1dpu_t1"][
+        "options"
+    ]
+    for field, name in (
+        ("host_binary", "host"),
+        ("dpu_binary", "dpu"),
+        ("initialization_binary", "init"),
+    ):
+        path = tmp_path / "performance-bin" / name
+        path.parent.mkdir(exist_ok=True)
+        path.write_bytes(binaries[name].read_bytes())
+        performance_options[field] = str(path)
+    performance_config.write_text(
+        yaml.safe_dump(performance_document, sort_keys=False), encoding="utf-8"
+    )
+    binary_hashes = {
+        "host_binary_sha256": qualifier._sha256(binaries["host"]),
+        "dpu_binary_sha256": qualifier._sha256(binaries["dpu"]),
+        "initialization_binary_sha256": qualifier._sha256(binaries["init"]),
+    }
     summary = {
         "schema_version": qualifier.SUMMARY_SCHEMA,
         "status": "qualified",
         "source_commit": "a" * 40,
+        "t1_binary_hashes": binary_hashes,
         "inputs": {
             "conformance": {"sha256": "1" * 64},
             "physical_correctness": {
@@ -575,8 +806,85 @@ def test_sequential_baseline_bundle_is_closed_and_self_contained(
     }
     assert checksummed == actual
     assert not any(path.name in {"host", "dpu", "init"} for path in output.rglob("*"))
+    assert json.loads(
+        (output / "provenance" / "t1-binary-hashes.json").read_text(
+            encoding="ascii"
+        )
+    ) == binary_hashes
+    correct_paths = qualifier._config_binaries(
+        correctness_config, summary["inputs"]["physical_correctness"]["experiment_id"]
+    )
+    performance_paths = qualifier._config_binaries(
+        performance_config, summary["inputs"]["physical_performance"]["experiment_id"]
+    )
+    assert correct_paths != performance_paths
     with tarfile.open(result["archive"], "r:gz") as archive:
         assert all(member.name == output.name or member.name.startswith(output.name + "/") for member in archive.getmembers())
+
+
+def test_sequential_baseline_bundle_rejects_replaced_configured_binary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    qualifier = _sequential_baseline()
+    binaries = {}
+    for name in ("host", "dpu", "init"):
+        path = tmp_path / "bin" / name
+        path.parent.mkdir(exist_ok=True)
+        path.write_bytes(name.encode("ascii"))
+        binaries[name] = path
+    prepared = qualifier.prepare_configs(
+        output_dir=tmp_path / "configs",
+        rank_path="/dev/dpu_rank0",
+        correctness_session_root=str(tmp_path / "correctness-sessions"),
+        performance_session_root=str(tmp_path / "performance-sessions"),
+        expected_cpus=[0],
+        host_binary=str(binaries["host"]),
+        dpu_binary=str(binaries["dpu"]),
+        initialization_binary=str(binaries["init"]),
+    )
+    correctness_config = Path(prepared["correctness_config"])
+    performance_config = Path(prepared["performance_config"])
+    summary = {
+        "schema_version": qualifier.SUMMARY_SCHEMA,
+        "status": "qualified",
+        "source_commit": "a" * 40,
+        "t1_binary_hashes": {
+            "host_binary_sha256": qualifier._sha256(binaries["host"]),
+            "dpu_binary_sha256": qualifier._sha256(binaries["dpu"]),
+            "initialization_binary_sha256": qualifier._sha256(binaries["init"]),
+        },
+        "inputs": {
+            "physical_correctness": {
+                "experiment_id": load_experiment_config(correctness_config)[
+                    "experiment_id"
+                ]
+            },
+            "physical_performance": {
+                "experiment_id": load_experiment_config(performance_config)[
+                    "experiment_id"
+                ]
+            },
+        },
+    }
+    summary_path = tmp_path / "summary.json"
+    summary_path.write_text(json.dumps(summary), encoding="ascii")
+    monkeypatch.setattr(qualifier, "inspect_baseline", lambda **_kwargs: summary)
+    binaries["host"].write_bytes(b"replaced-after-collection")
+
+    with pytest.raises(ValueError, match="execution-time hash"):
+        qualifier.bundle_baseline(
+            summary_path=summary_path,
+            conformance=tmp_path / "conformance.json",
+            correctness=tmp_path / "correctness",
+            performance=tmp_path / "performance",
+            external_context=tmp_path / "external",
+            correctness_config=correctness_config,
+            performance_config=performance_config,
+            correctness_report=tmp_path / "correctness-report",
+            performance_report=tmp_path / "performance-report",
+            external_context_report=tmp_path / "external-report",
+            output=tmp_path / "bundle",
+        )
 
 
 def test_bootstrap_detects_repository_root_gitmodules(

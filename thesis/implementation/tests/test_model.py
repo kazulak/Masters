@@ -154,20 +154,20 @@ def test_circuit_validator_accepts_the_exact_active_gate_set(
         (CircuitOperation("rz", (0,), (float("inf"),)), "finite"),
     ],
 )
-def test_make_simulation_job_rejects_malformed_circuits(
+def test_direct_simulation_job_rejects_malformed_circuits(
     operation: CircuitOperation, message: str
 ) -> None:
     circuit = CircuitSpec("invalid", 2, (operation,), {})
 
     with pytest.raises(ValueError, match=message):
-        make_simulation_job(circuit)
+        SimulationJob(circuit)
 
 
 def test_circuit_validator_requires_circuit_operations() -> None:
     circuit = CircuitSpec("invalid", 1, ("x",), {})  # type: ignore[arg-type]
 
     with pytest.raises(ValueError, match="CircuitOperation"):
-        make_simulation_job(circuit)
+        SimulationJob(circuit)
 
 
 def test_model_records_are_frozen() -> None:
