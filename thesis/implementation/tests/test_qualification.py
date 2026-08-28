@@ -185,6 +185,9 @@ def _sequential_validation() -> dict[str, object]:
         "full_precision_threshold_applicable": True,
         "full_precision_passed": True,
         "accuracy_qualified": True,
+        "max_abs_error": 1.0e-7,
+        "relative_l2_error": 2.0e-7,
+        "norm_drift": 3.0e-7,
     }
 
 
@@ -228,7 +231,14 @@ def _sequential_sample(
         "route_id": route_id,
         "block_id": block_id,
         "attempt_kind": attempt_kind,
-        "measurement": {"scope_id": scope},
+        "measurement": {
+            "scope_id": scope,
+            "total_wall_s": (
+                1.0 + 0.01 * block_id
+                if route_id == "numpy_same_dag"
+                else 2.0 + 0.02 * block_id
+            ),
+        },
         "session_instance_id": session_id,
         "backend_facts": _sequential_physical_facts() if session_id else {"backend_id": route_id},
         "numeric_facts": {"numeric_policy": "split_complex_float32_v1"},
@@ -242,6 +252,7 @@ def _sequential_sample(
             "validation_policy_id": "7",
         },
         "output_sha256": "8",
+        "observed_affinity": [0],
         "validation": _sequential_validation(),
     }
 
@@ -287,7 +298,21 @@ def _sequential_artifacts(qualifier: object, commit: str) -> dict[str, tuple[obj
                     }
                 },
                 "environment": {
-                    "machine_preflight": {"machine_preflight_passed": preflight}
+                    "affinity": [0],
+                    "selected_cpu_ids": [0],
+                    "observed_cpu_governors": {"0": "powersave"},
+                    "thread_environment": {
+                        "OMP_NUM_THREADS": "1",
+                        "OPENBLAS_NUM_THREADS": "1",
+                        "MKL_NUM_THREADS": "1",
+                        "NUMEXPR_NUM_THREADS": "1",
+                    },
+                    "machine_preflight": {
+                        "machine_preflight_passed": preflight,
+                        "observed_affinity": [0],
+                        "selected_cpu_ids": [0],
+                        "observed_cpu_governors": {"0": "powersave"},
+                    },
                 },
             },
         }
@@ -364,7 +389,7 @@ def _sequential_artifacts(qualifier: object, commit: str) -> dict[str, tuple[obj
             },
         ),
         "performance": (
-            manifest(qualifier.PERFORMANCE_TEMPLATE, preflight=True),
+            manifest(qualifier.PERFORMANCE_TEMPLATE),
             tuple(performance_samples),
             tuple(performance_sessions),
             {
@@ -605,6 +630,98 @@ def test_sequential_baseline_inspects_exact_four_artifacts(
         "external_tn_context",
     }
     assert summary["artifact_statistics"] == "separate_no_cross_artifact_statistics_v1"
+    assert summary["claim_eligible"] is False
+    assert summary["claim_ineligibility_reason"] == "powersave_conditioned_diagnostic_v1"
+    diagnostic = summary["powersave_diagnostic_statistics"]
+    assert diagnostic["measurement_only"] is True
+    assert diagnostic["resample_count"] == 10_000
+    assert diagnostic["routes"]["numpy_same_dag"] == {
+        "measurement_count": 30,
+        "median_total_wall_s": pytest.approx(1.165),
+        "raw_mad_total_wall_s": pytest.approx(0.075),
+    }
+    assert diagnostic["routes"]["upmem_float32_1dpu_t1"] == {
+        "measurement_count": 30,
+        "median_total_wall_s": pytest.approx(2.33),
+        "raw_mad_total_wall_s": pytest.approx(0.15),
+    }
+    assert diagnostic["numpy_to_upmem_control_ratio"]["point_estimate"] == pytest.approx(0.5)
+    assert len(diagnostic["numpy_to_upmem_control_ratio"]["confidence_interval_95"]) == 2
+
+
+def test_sequential_baseline_diagnostic_statistics_are_deterministic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    qualifier = _sequential_baseline()
+    commit = "a" * 40
+    artifacts = _sequential_artifacts(qualifier, commit)
+    conformance, correctness, performance, external = _install_sequential_artifacts(
+        qualifier, monkeypatch, tmp_path, artifacts, commit
+    )
+
+    first = qualifier.inspect_baseline(
+        conformance=conformance,
+        correctness=correctness,
+        performance=performance,
+        external_context=external,
+    )
+    second = qualifier.inspect_baseline(
+        conformance=conformance,
+        correctness=correctness,
+        performance=performance,
+        external_context=external,
+    )
+
+    assert first["powersave_diagnostic_statistics"] == second["powersave_diagnostic_statistics"]
+
+
+@pytest.mark.parametrize(
+    "drift",
+    (
+        "policy",
+        "governor",
+        "affinity",
+        "sample_affinity",
+        "thread",
+        "relative_l2",
+        "norm_drift",
+    ),
+)
+def test_sequential_baseline_rejects_powersave_environment_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, drift: str
+) -> None:
+    qualifier = _sequential_baseline()
+    commit = "a" * 40
+    artifacts = _sequential_artifacts(qualifier, commit)
+    performance_manifest = artifacts["performance"][0]
+    environment = performance_manifest["configuration"]["environment"]
+    if drift == "policy":
+        performance_manifest["configuration"]["experiment"]["experiment_identity_payload"][
+            "configuration"
+        ]["collection"]["claim_policy"] = "physical_performance_v1"
+    elif drift == "governor":
+        environment["machine_preflight"]["observed_cpu_governors"] = {"0": "performance"}
+    elif drift == "affinity":
+        environment["machine_preflight"]["observed_affinity"] = [1]
+    elif drift == "sample_affinity":
+        artifacts["performance"][1][0]["observed_affinity"] = [1]
+    elif drift == "relative_l2":
+        artifacts["performance"][1][0]["validation"]["relative_l2_error"] = 2.0e-5
+    elif drift == "norm_drift":
+        artifacts["performance"][1][0]["validation"]["norm_drift"] = 3.0e-5
+    else:
+        environment["thread_environment"]["MKL_NUM_THREADS"] = "2"
+    conformance, correctness, performance, external = _install_sequential_artifacts(
+        qualifier, monkeypatch, tmp_path, artifacts, commit
+    )
+
+    with pytest.raises(ValueError):
+        qualifier.inspect_baseline(
+            conformance=conformance,
+            correctness=correctness,
+            performance=performance,
+            external_context=external,
+        )
 
 
 @pytest.mark.parametrize("drift", ("count", "route", "source", "scope", "provenance"))

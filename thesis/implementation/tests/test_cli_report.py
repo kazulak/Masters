@@ -302,12 +302,15 @@ def test_sequential_upmem_performance_config_uses_complete_randomized_blocks() -
         "n_qubits": 18,
         "repeat_layers": 2,
     }
-    assert config["collection"]["claim_policy"] == "physical_performance_v1"
+    assert config["collection"]["claim_policy"] == "diagnostic_v1"
     assert config["collection"]["warmup_blocks"] == 2
     assert config["collection"]["measurement_blocks"] == 30
     assert config["collection"]["machine_policy"]["affinity"] == {
         "mode": "exact_required_v1",
         "expected_cpus": (0,),
+    }
+    assert config["collection"]["machine_policy"]["cpu_governor"] == {
+        "mode": "observed_v1"
     }
     assert tuple(config["routes"]) == (
         "numpy_same_dag",

@@ -11,7 +11,7 @@ Unsupported scope includes sampling or mid-circuit measurement, noise, approxima
 or truncated TN methods, distributed or multi-rank execution, DPU-resident graph
 execution, parallel slice scheduling, energy claims, hardware-calibrated planning,
 and general quantum-SDK compatibility. Slicing is secondary correctness evidence
-only. It is not part of the primary Stress18 performance comparison.
+only. It is not part of the primary Stress18 diagnostic characterization.
 
 ## Ownership And Roles
 
@@ -31,7 +31,7 @@ reports. External components have narrow roles:
 The sequential UPMEM route uses one rank, one DPU, one tasklet, float32, fresh
 physical sessions, and sequential real-product dispatch. Correctness contains
 Bell2 unsliced plus Stress4 unsliced and sliced, with three successful and fully
-released physical sessions. Primary performance contains only Stress18 and pairs
+released physical sessions. The primary powersave-conditioned diagnostic characterization contains only Stress18 and pairs
 `numpy_same_dag` with `upmem_float32_1dpu_t1` in two warmup and 30 measured
 complete randomized blocks. The external TN context contains only Stress18 with
 `quimb_greedy` and `quimb_cotengra_path`, one warmup and five measurements each.
@@ -40,15 +40,16 @@ The four qualification inputs remain separate:
 
 1. Software conformance establishes eight exact fixtures and oracle boundaries.
 2. Physical correctness establishes UPMEM output, accuracy, release, and no-fallback provenance.
-3. Same-DAG physical performance compares NumPy and UPMEM only within complete paired blocks.
+3. Same-DAG diagnostic characterization compares NumPy and UPMEM only within complete paired blocks.
 4. External TN context reports Quimb routes separately and is not mixed statistically with same-DAG timing.
 
 `steady_execution_v1` excludes planning and session lifecycle for NumPy/UPMEM.
 `simulation_end_to_end_v1` covers route preparation through output extraction for
 the external routes. Validation, reference calculation, hashing, and reporting are
-outside both scopes. Performance collection requires exact CPU affinity, the
-performance governor, operator-attested machine exclusivity and NUMA policy, and
-the recorded thread/environment facts. Every evidence manifest must bind to the
+outside both scopes. The powersave-conditioned diagnostic characterization requires
+exact CPU affinity, the observed CPU 0 `powersave` governor, and the recorded
+single-thread environment facts. It is claim-ineligible for optimized performance
+or speedup claims. Every evidence manifest must bind to the
 same exact clean source commit; bundle provenance records versions, input hashes,
 and the three T1 binary hashes.
 
@@ -67,7 +68,7 @@ PYTHONPATH=src ../.venv/bin/python scripts/qualify_sequential_baseline.py prepar
   --expected-cpus 0
 ```
 
-Correctness remains physical-only qualification. Performance is deliberately a
+Correctness remains physical-only qualification. The powersave diagnostic is deliberately a
 mixed generic run because it pairs NumPy and physical UPMEM:
 
 ```bash
@@ -128,10 +129,11 @@ release.
 
 Allowed claims are deterministic exact/untruncated pre-measurement statevector
 correctness within the declared fixtures, physical float32 correctness when the
-qualified artifact exists, and same-DAG paired timing for the exact Stress18
-campaign. External TN timings are context only.
+qualified artifact exists, and descriptive same-DAG paired control ratios for the
+exact powersave Stress18 diagnostic. External TN timings are context only.
 
-Prohibited claims include general UPMEM acceleration, optimized TN performance,
+Prohibited claims include optimized performance or speedup claims from the
+powersave diagnostic, general UPMEM acceleration, optimized TN performance,
 end-to-end speedup across mismatched timing scopes, energy efficiency, scaling,
 parallelism, approximate-TN quality, or broader circuit support. Any later
 parallel branch must recollect the T1 control contemporaneously on the same

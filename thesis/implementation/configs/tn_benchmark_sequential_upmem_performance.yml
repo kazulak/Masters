@@ -3,7 +3,7 @@ experiment_id: sequential-upmem-performance-stress18
 defaults:
   timeout_s: 120.0
 collection:
-  claim_policy: physical_performance_v1
+  claim_policy: diagnostic_v1
   base_seed: 20260828
   warmup_blocks: 2
   measurement_blocks: 30
@@ -11,14 +11,14 @@ collection:
   block_cooldown_s: 0.0
   machine_policy:
     machine_exclusivity:
-      mode: operator_attested_v1
+      mode: observed_v1
     cpu_governor:
-      mode: performance_required_v1
+      mode: observed_v1
     affinity:
       mode: exact_required_v1
       expected_cpus: [0]
     numa_policy:
-      mode: operator_attested_v1
+      mode: observed_v1
     background_load:
       mode: observed_v1
       max_load1_per_online_cpu: 0.25

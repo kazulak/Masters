@@ -10,7 +10,9 @@ import json
 import math
 from pathlib import Path
 import platform
+import random
 import shutil
+from statistics import median
 import subprocess
 import tarfile
 from typing import Any, Mapping, Sequence
@@ -83,6 +85,16 @@ _PHYSICAL_FACTS = {
     "active_dpus": 1,
     "tasklets_per_dpu": 1,
 }
+_POWERSAVE_AFFINITY = [0]
+_POWERSAVE_GOVERNORS = {"0": "powersave"}
+_THREAD_ENVIRONMENT = {
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "NUMEXPR_NUM_THREADS": "1",
+}
+_BASELINE_BOOTSTRAP_RESAMPLES = 10_000
+_BASELINE_BOOTSTRAP_CONFIDENCE_LEVEL = 0.95
 
 
 def _plain(value: object) -> Any:
@@ -328,6 +340,24 @@ def _require_validation(sample: Mapping[str, Any], label: str) -> None:
     ):
         if validation.get(field) is not True:
             raise ValueError(f"{label} sample requires validation.{field}=true")
+    limits = CONFORMANCE_POLICIES["float32_1e-5"]
+    for field, limit_field in (
+        ("max_abs_error", "max_abs_error_max"),
+        ("relative_l2_error", "relative_l2_error_max"),
+        ("norm_drift", "norm_drift_max"),
+    ):
+        value = validation.get(field)
+        limit = limits[limit_field]
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value < 0.0
+            or value > limit
+        ):
+            raise ValueError(
+                f"{label} sample requires validation.{field} <= {limit}"
+            )
     if not sample.get("output_sha256"):
         raise ValueError(f"{label} sample lacks an output hash")
 
@@ -392,6 +422,127 @@ def _require_physical_samples(
                 raise ValueError(f"{label} physical sample requires {field}={expected!r}")
     values = next(iter(binary_hashes))
     return dict(zip(_BINARY_HASH_FIELDS.values(), values, strict=True))
+
+
+def _require_powersave_environment(
+    manifest: Mapping[str, Any], samples: Sequence[Mapping[str, Any]]
+) -> None:
+    configuration = manifest.get("configuration")
+    environment = configuration.get("environment") if isinstance(configuration, Mapping) else None
+    if not isinstance(environment, Mapping):
+        raise ValueError("baseline diagnostic evidence lacks environment provenance")
+    preflight = environment.get("machine_preflight")
+    if not isinstance(preflight, Mapping):
+        raise ValueError("baseline diagnostic evidence requires machine preflight facts")
+    for label, facts, affinity_field in (
+        ("environment", environment, "affinity"),
+        ("machine preflight", preflight, "observed_affinity"),
+    ):
+        if facts.get(affinity_field) != _POWERSAVE_AFFINITY:
+            raise ValueError(f"baseline diagnostic requires {label} affinity [0]")
+        if facts.get("selected_cpu_ids") != _POWERSAVE_AFFINITY:
+            raise ValueError(f"baseline diagnostic requires {label} selected CPU [0]")
+        if facts.get("observed_cpu_governors") != _POWERSAVE_GOVERNORS:
+            raise ValueError(f"baseline diagnostic requires {label} CPU 0 governor powersave")
+    if environment.get("thread_environment") != _THREAD_ENVIRONMENT:
+        raise ValueError("baseline diagnostic requires single-thread CPU environment")
+    if any(sample.get("observed_affinity") != _POWERSAVE_AFFINITY for sample in samples):
+        raise ValueError("baseline diagnostic requires observed affinity [0] for every sample")
+
+
+def _raw_mad(values: Sequence[float]) -> float:
+    center = float(median(values))
+    return float(median(abs(value - center) for value in values))
+
+
+def _percentile(values: Sequence[float], quantile: float) -> float:
+    if not values:
+        raise ValueError("cannot calculate a percentile from no values")
+    return sorted(values)[int(quantile * (len(values) - 1))]
+
+
+def _paired_ratio_bootstrap(
+    pairs: Sequence[tuple[float, float]], *, seed: int
+) -> tuple[float, float]:
+    if not pairs or any(numpy_s <= 0.0 or upmem_s <= 0.0 for numpy_s, upmem_s in pairs):
+        raise ValueError("baseline diagnostic requires positive paired route timings")
+    generator = random.Random(seed)
+    population_size = len(pairs)
+    ratios = sorted(
+        float(median(pair[0] for pair in selected) / median(pair[1] for pair in selected))
+        for selected in (
+            [pairs[generator.randrange(population_size)] for _ in range(population_size)]
+            for _ in range(_BASELINE_BOOTSTRAP_RESAMPLES)
+        )
+    )
+    tail = (1.0 - _BASELINE_BOOTSTRAP_CONFIDENCE_LEVEL) / 2.0
+    return _percentile(ratios, tail), _percentile(ratios, 1.0 - tail)
+
+
+def _diagnostic_statistics(
+    samples: Sequence[Mapping[str, Any]], manifest: Mapping[str, Any]
+) -> Mapping[str, Any]:
+    measurements = [sample for sample in samples if sample["attempt_kind"] == "measurement"]
+    route_values: dict[str, list[float]] = {"numpy_same_dag": [], "upmem_float32_1dpu_t1": []}
+    pairs: dict[int, dict[str, float]] = {}
+    for sample in measurements:
+        route_id = sample["route_id"]
+        measurement = sample.get("measurement")
+        if route_id not in route_values or not isinstance(measurement, Mapping):
+            raise ValueError("baseline diagnostic measurement route contract drift")
+        value = measurement.get("total_wall_s")
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0.0:
+            raise ValueError("baseline diagnostic requires positive finite total-wall timings")
+        route_values[route_id].append(float(value))
+        block_id = sample.get("block_id")
+        if isinstance(block_id, bool) or not isinstance(block_id, int):
+            raise ValueError("baseline diagnostic measurement block identity is invalid")
+        pairs.setdefault(block_id, {})[route_id] = float(value)
+    if set(pairs) != set(range(2, 32)) or any(set(pair) != set(route_values) for pair in pairs.values()):
+        raise ValueError("baseline diagnostic requires complete paired measurement blocks")
+    if any(len(values) != 30 for values in route_values.values()):
+        raise ValueError("baseline diagnostic requires 30 measurements per route")
+    route_statistics = {
+        route_id: {
+            "measurement_count": len(values),
+            "median_total_wall_s": float(median(values)),
+            "raw_mad_total_wall_s": _raw_mad(values),
+        }
+        for route_id, values in route_values.items()
+    }
+    paired = [
+        (pairs[block_id]["numpy_same_dag"], pairs[block_id]["upmem_float32_1dpu_t1"])
+        for block_id in sorted(pairs)
+    ]
+    payload = {
+        "base_seed": _experiment_configuration(manifest)["collection"]["base_seed"],
+        "block_ids": sorted(pairs),
+        "comparison": "same_dag_numpy_to_sequential_upmem_ratio_control_v1",
+    }
+    seed = int.from_bytes(
+        hashlib.sha256(
+            b"quantum_bench.sequential_baseline_diagnostic_bootstrap.v1\0"
+            + canonical_json(payload).encode("ascii")
+        ).digest()[:8],
+        "big",
+    )
+    interval = _paired_ratio_bootstrap(paired, seed=seed)
+    return {
+        "measurement_only": True,
+        "summary": "median_raw_mad_v1",
+        "paired_ratio_method": "block_paired_median_numpy_to_upmem_ratio_bootstrap_v1",
+        "confidence_interval": "percentile_bootstrap_95_v1",
+        "confidence_level": _BASELINE_BOOTSTRAP_CONFIDENCE_LEVEL,
+        "resample_count": _BASELINE_BOOTSTRAP_RESAMPLES,
+        "routes": route_statistics,
+        "numpy_to_upmem_control_ratio": {
+            "point_estimate": float(
+                route_statistics["numpy_same_dag"]["median_total_wall_s"]
+                / route_statistics["upmem_float32_1dpu_t1"]["median_total_wall_s"]
+            ),
+            "confidence_interval_95": list(interval),
+        },
+    }
 
 
 def _load_evidence(
@@ -611,10 +762,10 @@ def inspect_baseline(
     )
     if perf_binary_hashes != correct_binary_hashes:
         raise ValueError("correctness and performance evidence used different T1 binaries")
-    environment = perf_manifest["configuration"]["environment"]
-    preflight = environment.get("machine_preflight") if isinstance(environment, Mapping) else None
-    if not isinstance(preflight, Mapping) or preflight.get("machine_preflight_passed") is not True:
-        raise ValueError("performance evidence requires a passed physical machine preflight")
+    if _experiment_configuration(perf_manifest)["collection"]["claim_policy"] != "diagnostic_v1":
+        raise ValueError("baseline characterization requires diagnostic_v1")
+    _require_powersave_environment(perf_manifest, perf_samples)
+    diagnostic_statistics = _diagnostic_statistics(perf_samples, perf_manifest)
 
     external_manifest, external_samples, external_sessions, external_summary = _load_evidence(
         external_context, commit=commit, template=EXTERNAL_TEMPLATE, physical=False, label="external context"
@@ -632,6 +783,9 @@ def inspect_baseline(
         "source_commit": commit,
         "t1_binary_hashes": correct_binary_hashes,
         "artifact_statistics": "separate_no_cross_artifact_statistics_v1",
+        "claim_eligible": False,
+        "claim_ineligibility_reason": "powersave_conditioned_diagnostic_v1",
+        "powersave_diagnostic_statistics": diagnostic_statistics,
         "inputs": {
             "conformance": conformance_record,
             "physical_correctness": _evidence_record(correctness, correct_manifest, correct_summary),
