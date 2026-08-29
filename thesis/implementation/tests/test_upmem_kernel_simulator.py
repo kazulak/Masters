@@ -42,6 +42,10 @@ MAKEFILE = NATIVE / "Makefile"
 _SDK_CASES = (
     ("scalar_1x1x1", "float32", 1, 1, 1, 1),
     ("tail_m3_n35_k65", "float32", 1, 3, 35, 65),
+    ("tasklet_t1_m17_n32_k65", "float32", 1, 17, 32, 65),
+    ("tasklet_t2_m17_n32_k65", "float32", 2, 17, 32, 65),
+    ("tasklet_t4_m17_n32_k65", "float32", 4, 17, 32, 65),
+    ("tasklet_t8_m17_n32_k65", "float32", 8, 17, 32, 65),
     ("t8_k65", "float32", 8, 8, 32, 65),
     ("t8_k130", "float32", 8, 8, 32, 130),
     ("direct_k257", "float32", 8, 8, 32, 257),
@@ -406,7 +410,7 @@ def test_wram_panel_facts_account_for_tail_helpers_and_tasklets() -> None:
     )
 
 
-@pytest.mark.parametrize("tasklets", [1, 8, 24])
+@pytest.mark.parametrize("tasklets", [1, 2, 4, 8, 24])
 def test_active_wram_panel_binary_builds_when_sdk_compiler_is_available(tasklets: int) -> None:
     _require_native_build_tool("make", "make")
     _require_native_build_tool("dpu-upmem-dpurte-clang", "dpu-upmem-dpurte-clang")
