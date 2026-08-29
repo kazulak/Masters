@@ -524,6 +524,83 @@ def test_work_units_are_sorted_by_required_final_key() -> None:
     assert len(geometry) == len(set(geometry)) == 12
 
 
+@pytest.mark.parametrize("dpu_count", (1, 2, 4))
+def test_one_rank_t8_dispatch_is_deterministic_and_fully_occupied(
+    dpu_count: int,
+) -> None:
+    dag = _one_rank_t8_dag()
+    topology = UpmemTopology(
+        dpu_count=dpu_count,
+        tasklets_per_dpu=8,
+        rank_count=1,
+    )
+    first = plan_upmem(
+        dag,
+        numeric_policy="split_complex_float32_v1",
+        topology=topology,
+    )
+    second = plan_upmem(
+        dag,
+        numeric_policy="split_complex_float32_v1",
+        topology=topology,
+    )
+    units = first.stages[0].work_units
+    wave_ids = tuple(sorted({unit.wave for unit in units}))
+    slots = {(unit.wave, unit.logical_rank, unit.logical_dpu) for unit in units}
+    facts = collection_resource_admission(first)
+
+    assert first == second
+    assert wave_ids == tuple(range(len(units) // dpu_count))
+    assert all(unit.logical_rank == 0 for unit in units)
+    assert len(slots) == len(units)
+    assert all(
+        sum(unit.wave == wave for unit in units) <= dpu_count for wave in wave_ids
+    )
+    assert len(
+        {
+            physical_plan_id(
+                plan_upmem(
+                    dag,
+                    numeric_policy="split_complex_float32_v1",
+                    topology=UpmemTopology(
+                        dpu_count=count,
+                        tasklets_per_dpu=8,
+                        rank_count=1,
+                    ),
+                )
+            )
+            for count in (1, 2, 4)
+        }
+    ) == 3
+    assert facts["dominant_work_wave_populated_dpu_slots"] == dpu_count
+    assert facts["fully_populated_wave_count"] == len(wave_ids)
+    assert facts["arithmetic_weighted_dpu_slot_utilization"] == pytest.approx(1.0)
+    assert facts["collection_resource_admission_passed"] is True
+
+
+def _one_rank_t8_dag() -> ContractionDAG:
+    node = _contract(
+        "one_rank_t8",
+        "left",
+        "right",
+        "out",
+        (0, 1),
+        (300, 8),
+        (1, 2),
+        (8, 300),
+        (0, 2),
+        (300, 300),
+    )
+    return ContractionDAG(
+        tensors=(
+            TensorSpec("left", (0, 1), (300, 8), "dense"),
+            TensorSpec("right", (1, 2), (8, 300), "dense"),
+        ),
+        nodes=(node,),
+        output=_view("out", (0, 2), (300, 300)),
+    )
+
+
 def _contract_dag_with_large_tiles() -> ContractionDAG:
     node = _contract(
         "large",

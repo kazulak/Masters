@@ -189,6 +189,7 @@ def _engine(
     *,
     dpu_count: int = 1,
     rank_count: int = 1,
+    tasklets_per_dpu: int = 1,
     execution_target: str = "physical_hardware",
     delay_s: float = 0.0,
 ) -> _Engine:
@@ -219,6 +220,7 @@ def _engine(
                 else tuple(f"/dev/dpu_rank{index}" for index in range(rank_count))
             ),
             dpu_count=dpu_count,
+            tasklets_per_dpu=tasklets_per_dpu,
             timeout_s=60.0,
             execution_target=execution_target,
             session_factory=factory,
@@ -232,6 +234,7 @@ def _final_plan_for_node(
     policy: str,
     dpu_count: int = 1,
     rank_count: int = 1,
+    tasklets_per_dpu: int = 1,
 ) -> tuple[ContractionDAG, UpmemPlan]:
     dag = ContractionDAG(
         tensors=(
@@ -250,7 +253,7 @@ def _final_plan_for_node(
         numeric_policy=policy,
         topology=FinalTopology(
             dpu_count=dpu_count,
-            tasklets_per_dpu=1,
+            tasklets_per_dpu=tasklets_per_dpu,
             rank_count=rank_count,
         ),
     )
@@ -345,10 +348,17 @@ def _opened(tmp_path: Path, *, policy: str, k: int = 5):
     return node, dag, plan, _resources(tmp_path, opener), calls, engine
 
 
-def _inputs(node: ContractNode, *, k: int) -> dict[str, np.ndarray]:
-    values = np.arange(k, dtype=np.float64)
-    left = (((values % 11) - 5.0) + 1j * ((values % 7) - 3.0)).reshape(1, k)
-    right = (((values % 13) - 6.0) + 1j * ((values % 5) - 2.0)).reshape(k, 1)
+def _inputs(
+    node: ContractNode, *, k: int, m: int = 1, n: int = 1
+) -> dict[str, np.ndarray]:
+    left_values = np.arange(m * k, dtype=np.float64)
+    right_values = np.arange(k * n, dtype=np.float64)
+    left = (
+        ((left_values % 11) - 5.0) + 1j * ((left_values % 7) - 3.0)
+    ).reshape(m, k)
+    right = (
+        ((right_values % 13) - 6.0) + 1j * ((right_values % 5) - 2.0)
+    ).reshape(k, n)
     return {node.left.tensor_id: left, node.right.tensor_id: right}
 
 
@@ -508,6 +518,48 @@ def test_persistent_session_matches_replay_and_renews_deadline(
     assert first.measurement.h2d_bytes is not None
     assert first.measurement.d2h_bytes is not None
     _close_mock_session(session)
+
+
+@pytest.mark.parametrize("dpu_count", (1, 2, 4))
+def test_one_rank_t8_dispatch_replays_on_every_requested_dpu(
+    tmp_path: Path, dpu_count: int
+) -> None:
+    node = _task(k=8, m=300, n=300)
+    dag, plan = _final_plan_for_node(
+        node,
+        policy="split_complex_float32_v1",
+        dpu_count=dpu_count,
+        tasklets_per_dpu=8,
+    )
+    engine = _engine(
+        tmp_path / "engine",
+        dpu_count=dpu_count,
+        tasklets_per_dpu=8,
+    )
+
+    def opener(_dag, final_plan, _resources, _timeout_s):
+        return engine.open_session(final_plan.numeric_policy, final_plan.topology)
+
+    inputs = _inputs(node, k=8, m=300, n=300)
+    expected = replay_upmem_plan_once(dag, plan, inputs)
+    session = open_upmem(dag, plan, _resources(tmp_path, opener), timeout_s=10.0)
+    actual = session.run_once(inputs)
+    terminal = session.close()
+
+    np.testing.assert_array_equal(actual.output, expected.output)
+    assert actual.backend_facts["physical_plan_id"] == runtime.physical_plan_id(plan)
+    assert actual.backend_facts["physical_plan_consumed"] is True
+    assert actual.backend_facts["requested_dpus"] == dpu_count
+    assert actual.backend_facts["allocated_dpus"] == dpu_count
+    assert actual.backend_facts["active_dpus"] == dpu_count
+    assert actual.backend_facts["execution_active_dpu_count"] == dpu_count
+    assert actual.backend_facts["rank_count"] == 1
+    assert actual.backend_facts["execution_active_rank_count"] == 1
+    assert actual.backend_facts["tasklets_per_dpu"] == 8
+    assert terminal["requested_dpu_count"] == dpu_count
+    assert terminal["allocated_dpu_count"] == dpu_count
+    assert terminal["observed_rank_count"] == 1
+    assert terminal["observed_tasklets_per_dpu"] == 8
 
 
 def test_upmem_backend_kernel_provenance(tmp_path: Path) -> None:
