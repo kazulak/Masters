@@ -1452,42 +1452,6 @@ def test_parallel_scaling_config_freezes_physical_route_matrix_and_paths(
         assert Path(options["initialization_binary"]).is_absolute()
 
 
-def _parallel_scaling_rows() -> tuple[dict[str, str], ...]:
-    comparisons = (
-        ("tasklet_scaling", "primary", "1", "2", "1", "1"),
-        ("tasklet_scaling", "primary", "1", "4", "1", "1"),
-        ("tasklet_scaling", "primary", "1", "8", "1", "1"),
-        ("tasklet_scaling", "secondary", "2", "4", "1", "1"),
-        ("tasklet_scaling", "secondary", "2", "8", "1", "1"),
-        ("tasklet_scaling", "secondary", "4", "8", "1", "1"),
-        ("dpu_scaling", "primary", "8", "8", "1", "2"),
-        ("dpu_scaling", "primary", "8", "8", "1", "4"),
-        ("dpu_scaling", "secondary", "8", "8", "2", "4"),
-    )
-    return tuple(
-        {
-            "comparison_kind": kind,
-            "comparison_role": role,
-            "baseline_tasklet_count": baseline_tasklets,
-            "candidate_tasklet_count": candidate_tasklets,
-            "baseline_dpu_count": baseline_dpus,
-            "candidate_dpu_count": candidate_dpus,
-            "planned_pair_count": "5",
-            "complete_pair_count": "5",
-            "claim_eligible": "False",
-            "claim_ineligibility_reason": "baseline_diagnostic_claim_policy",
-        }
-        for (
-            kind,
-            role,
-            baseline_tasklets,
-            candidate_tasklets,
-            baseline_dpus,
-            candidate_dpus,
-        ) in comparisons
-    )
-
-
 def _complete_parallel_diagnostic(
     script: object,
 ) -> tuple[
@@ -1622,13 +1586,10 @@ def _complete_parallel_diagnostic(
 def test_parallel_scaling_summary_requires_complete_exact_resources() -> None:
     script = _parallel_scaling()
     manifest, samples, sessions = _complete_parallel_diagnostic(script)
-    rows = _parallel_scaling_rows()
     summary = script.derive_summary(
         manifest=manifest,
         samples=samples,
         sessions=sessions,
-        report={"schema_version": "evidence_report_v5", "scaling_count": 9},
-        scaling_rows=rows,
         expected_source_commit="a" * 40,
     )
     assert summary["gate_passed"] is True
@@ -1649,9 +1610,44 @@ def test_parallel_scaling_summary_requires_complete_exact_resources() -> None:
             manifest=manifest,
             samples=tuple(drifted_samples),
             sessions=sessions,
-            report={"schema_version": "evidence_report_v5", "scaling_count": 9},
-            scaling_rows=rows,
             expected_source_commit="a" * 40,
+        )
+
+
+def test_parallel_scaling_public_inspector_uses_verified_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    script = _parallel_scaling()
+    manifest, samples, sessions = _complete_parallel_diagnostic(script)
+    monkeypatch.setattr(
+        script, "verify_artifacts", lambda _path: {"status": "completed"}
+    )
+    monkeypatch.setattr(
+        script, "load_artifacts", lambda _path: (manifest, samples, sessions)
+    )
+    monkeypatch.setattr(script, "_source_commit", lambda: "a" * 40)
+    output = tmp_path / "analysis" / "parallel_diagnostic_summary.json"
+
+    summary = script.inspect_artifacts(
+        input_dir=tmp_path / "canonical-evidence",
+        summary_output=output,
+    )
+
+    assert summary["gate_passed"] is True
+    assert json.loads(output.read_text(encoding="utf-8")) == summary
+
+
+def test_parallel_scaling_public_inspector_rejects_noncanonical_evidence(
+    tmp_path: Path,
+) -> None:
+    script = _parallel_scaling()
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+
+    with pytest.raises(ValueError, match="missing required evidence file"):
+        script.inspect_artifacts(
+            input_dir=evidence,
+            summary_output=tmp_path / "summary.json",
         )
 
 

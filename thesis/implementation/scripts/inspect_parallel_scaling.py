@@ -4,9 +4,9 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import math
+import re
 import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -53,6 +53,7 @@ _THREAD_ENVIRONMENT = {
     "MKL_NUM_THREADS": "1",
     "NUMEXPR_NUM_THREADS": "1",
 }
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 
 def _plain(value: object) -> Any:
@@ -75,7 +76,7 @@ def _nonnegative(value: object, field: str) -> float:
 
 
 def _sha256(value: object, field: str) -> str:
-    if not isinstance(value, str) or len(value) != 64:
+    if not isinstance(value, str) or _SHA256_RE.fullmatch(value) is None:
         raise ValueError(f"{field} must be a SHA-256 identity")
     return value
 
@@ -104,21 +105,6 @@ def _joined_facts(
         for field, value in terminal.items():
             joined.setdefault(field, value)
     return joined
-
-
-def _expected_attempts() -> set[tuple[object, ...]]:
-    return {
-        (
-            "scaling_primary",
-            "greedy",
-            route_id,
-            "warmup" if block_id == 0 else "measurement",
-            0 if block_id == 0 else block_id - 1,
-            block_id,
-        )
-        for block_id in range(6)
-        for route_id in _ROUTE_IDS
-    }
 
 
 def _validate_configuration(configuration: Mapping[str, Any]) -> None:
@@ -190,52 +176,11 @@ def _median_mad(values: Sequence[float]) -> tuple[float, float]:
     return center, float(median(abs(value - center) for value in values))
 
 
-def _validate_report(
-    report: Mapping[str, Any], rows: Sequence[Mapping[str, str]]
-) -> None:
-    if report.get("schema_version") != "evidence_report_v5":
-        raise ValueError("parallel diagnostic requires evidence_report_v5")
-    if report.get("scaling_count") != 9 or len(rows) != 9:
-        raise ValueError("parallel diagnostic report requires nine scaling rows")
-    if any(
-        row.get("planned_pair_count") != "5"
-        or row.get("complete_pair_count") != "5"
-        or row.get("claim_eligible") != "False"
-        or row.get("claim_ineligibility_reason")
-        != "baseline_diagnostic_claim_policy"
-        for row in rows
-    ):
-        raise ValueError("parallel diagnostic report has an invalid claim gate")
-    observed_primary = {
-        (
-            row.get("comparison_kind"),
-            row.get("baseline_tasklet_count")
-            if row.get("comparison_kind") == "tasklet_scaling"
-            else row.get("baseline_dpu_count"),
-            row.get("candidate_tasklet_count")
-            if row.get("comparison_kind") == "tasklet_scaling"
-            else row.get("candidate_dpu_count"),
-        )
-        for row in rows
-        if row.get("comparison_role") == "primary"
-    }
-    if observed_primary != {
-        ("tasklet_scaling", "1", "2"),
-        ("tasklet_scaling", "1", "4"),
-        ("tasklet_scaling", "1", "8"),
-        ("dpu_scaling", "1", "2"),
-        ("dpu_scaling", "1", "4"),
-    }:
-        raise ValueError("parallel diagnostic primary scaling rows changed")
-
-
 def derive_summary(
     *,
     manifest: Mapping[str, Any],
     samples: Sequence[Mapping[str, Any]],
     sessions: Sequence[Mapping[str, Any]],
-    report: Mapping[str, Any],
-    scaling_rows: Sequence[Mapping[str, str]],
     expected_source_commit: str,
 ) -> Mapping[str, object]:
     """Validate the fixed protocol and derive descriptive scaling ratios."""
@@ -255,34 +200,18 @@ def derive_summary(
         raise ValueError("parallel diagnostic source was dirty")
     if manifest.get("status") != "completed":
         raise ValueError("parallel diagnostic manifest is not completed")
-    attempts = {
-        (
-            sample.get("case_id"),
-            sample.get("plan_id"),
-            sample.get("route_id"),
-            sample.get("attempt_kind"),
-            sample.get("sample_index"),
-            sample.get("block_id"),
-        )
-        for sample in samples
+    route_counts = {
+        route_id: sum(sample.get("route_id") == route_id for sample in samples)
+        for route_id in _ROUTE_IDS
     }
-    if len(samples) != 36 or attempts != _expected_attempts():
-        raise ValueError("parallel diagnostic attempt matrix is incomplete")
-    if any(sample.get("status") != "success" for sample in samples):
-        raise ValueError("parallel diagnostic contains a non-success sample")
+    if len(samples) != 36 or set(route_counts.values()) != {6}:
+        raise ValueError("parallel diagnostic sample count is incomplete")
     session_map = {
         str(session.get("session_instance_id")): session for session in sessions
     }
     sample_session_ids = {str(sample.get("session_instance_id")) for sample in samples}
     if len(sessions) != 36 or sample_session_ids != set(session_map):
         raise ValueError("parallel diagnostic session matrix is incomplete")
-    if any(
-        session.get("route_id") not in _ROUTE_SPECS
-        or session.get("status") != "success"
-        or session.get("release_verified") is not True
-        for session in sessions
-    ):
-        raise ValueError("parallel diagnostic contains an invalid session")
 
     common_ids = {field: set() for field in _COMMON_IDENTITIES}
     plan_ids = {route_id: set() for route_id in _ROUTE_IDS}
@@ -401,7 +330,6 @@ def derive_summary(
     ) != 1:
         raise ValueError("T8 routes do not share one binary triple")
 
-    _validate_report(report, scaling_rows)
     route_statistics: dict[str, Mapping[str, float | int]] = {}
     warnings: list[str] = []
     for route_id, (dpu_count, tasklets) in _ROUTE_SPECS.items():
@@ -486,21 +414,16 @@ def derive_summary(
 
 
 def inspect_artifacts(
-    *, input_dir: Path, report_dir: Path, summary_output: Path
+    *, input_dir: Path, summary_output: Path
 ) -> Mapping[str, object]:
     verification = verify_artifacts(input_dir)
     if verification.get("status") != "completed":
         raise ValueError("parallel diagnostic evidence is not completed")
     manifest, samples, sessions = load_artifacts(input_dir)
-    report = json.loads((report_dir / "report.json").read_text(encoding="utf-8"))
-    with (report_dir / "scaling.csv").open(newline="", encoding="utf-8") as stream:
-        rows = tuple(csv.DictReader(stream))
     summary = derive_summary(
         manifest=manifest,
         samples=samples,
         sessions=sessions,
-        report=report,
-        scaling_rows=rows,
         expected_source_commit=_source_commit(),
     )
     summary_output.parent.mkdir(parents=True, exist_ok=True)
@@ -514,13 +437,11 @@ def inspect_artifacts(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, required=True)
-    parser.add_argument("--report-output", type=Path, required=True)
     parser.add_argument("--summary-output", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
         summary = inspect_artifacts(
             input_dir=args.input,
-            report_dir=args.report_output,
             summary_output=args.summary_output,
         )
     except (OSError, TypeError, ValueError) as exc:

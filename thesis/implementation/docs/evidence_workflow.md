@@ -257,7 +257,6 @@ PYTHONPATH=src ../.venv/bin/python -m quantum_bench.cli report \
   --output runs/comparisons/parallel-scaling-diagnostic
 PYTHONPATH=src ../.venv/bin/python scripts/inspect_parallel_scaling.py \
   --input runs/evidence/parallel-scaling-diagnostic \
-  --report-output runs/comparisons/parallel-scaling-diagnostic \
   --summary-output \
     runs/comparisons/parallel-scaling-diagnostic/parallel_diagnostic_summary.json
 ```
