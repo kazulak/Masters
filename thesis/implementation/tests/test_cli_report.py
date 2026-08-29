@@ -2197,6 +2197,110 @@ def test_report_emits_claim_gated_tasklet_scaling_csv(tmp_path: Path) -> None:
     assert row["candidate_fully_populated_wave_count"] == "1"
 
 
+def test_report_emits_claim_gated_dpu_scaling_csv(tmp_path: Path) -> None:
+    run_id, experiment_id, environment_id_value, policy_id = _ids()
+    baseline_instance = "physical-1dpu-t8"
+    candidate_instance = "physical-4dpu-t8"
+    common_facts = {
+        "backend_id": "upmem_sdk_hardware_v4",
+        "kernel_policy": "dpu_real_tile_v4_wram_panel_v1",
+        "tasklets_per_dpu": 8,
+        "dominant_work_wave": 0,
+        "dominant_work_wave_arithmetic_work": 4096,
+        "dominant_work_wave_utilization": 1.0,
+        "arithmetic_weighted_tasklet_utilization": 1.0,
+        "fully_populated_wave_count": 1,
+    }
+    baseline = _physical_attempts(
+        run_id=run_id,
+        experiment_id=experiment_id,
+        environment_id=environment_id_value,
+        validation_policy_id=policy_id,
+        case_id="bell",
+        route_id="upmem_1dpu_t8",
+        total_wall_s=8.0,
+        facts={
+            **common_facts,
+            "requested_dpus": 1,
+            "allocated_dpus": 1,
+            "active_dpus": 1,
+            "dominant_work_wave_populated_dpu_slots": 1,
+            "dominant_work_wave_allocated_dpu_slots": 1,
+            "arithmetic_weighted_dpu_slot_utilization": 1.0,
+        },
+        session_instance_id=baseline_instance,
+    )
+    candidate = _physical_attempts(
+        run_id=run_id,
+        experiment_id=experiment_id,
+        environment_id=environment_id_value,
+        validation_policy_id=policy_id,
+        case_id="bell",
+        route_id="upmem_4dpu_t8",
+        total_wall_s=4.0,
+        facts={
+            **common_facts,
+            "requested_dpus": 4,
+            "allocated_dpus": 4,
+            "active_dpus": 4,
+            "dominant_work_wave_populated_dpu_slots": 4,
+            "dominant_work_wave_allocated_dpu_slots": 4,
+            "arithmetic_weighted_dpu_slot_utilization": 0.98,
+        },
+        session_instance_id=candidate_instance,
+    )
+    for sample in baseline:
+        sample["identities"]["physical_plan_id"] = "4" * 64
+        sample["identities"]["executable_id"] = "5" * 64
+    for sample in candidate:
+        sample["identities"]["physical_plan_id"] = "6" * 64
+        sample["identities"]["executable_id"] = "5" * 64
+
+    report = report_artifacts(
+        _artifact(
+            tmp_path / "evidence",
+            [*baseline, *candidate],
+            [
+                _session(
+                    run_id=run_id,
+                    experiment_id=experiment_id,
+                    case_id="bell",
+                    route_id="upmem_1dpu_t8",
+                    instance=baseline_instance,
+                ),
+                _session(
+                    run_id=run_id,
+                    experiment_id=experiment_id,
+                    case_id="bell",
+                    route_id="upmem_4dpu_t8",
+                    instance=candidate_instance,
+                ),
+            ],
+            collection_policy=_PHYSICAL_COLLECTION_POLICY,
+            machine_preflight_passed=True,
+        ),
+        tmp_path / "report",
+    )
+
+    assert report["scaling_count"] == 1
+    with (tmp_path / "report" / "scaling.csv").open(
+        newline="", encoding="utf-8"
+    ) as stream:
+        row = next(csv.DictReader(stream))
+    assert row["comparison_kind"] == "dpu_scaling"
+    assert row["comparison_role"] == "primary"
+    assert row["baseline_dpu_count"] == "1"
+    assert row["candidate_dpu_count"] == "4"
+    assert row["baseline_tasklet_count"] == "8"
+    assert row["candidate_tasklet_count"] == "8"
+    assert row["baseline_executable_id"] == row["candidate_executable_id"]
+    assert row["resource_ratio"] == "4.0"
+    assert row["speedup"] == "2.0"
+    assert row["parallel_efficiency"] == "0.5"
+    assert row["claim_eligible"] == "True"
+    assert row["candidate_arithmetic_weighted_dpu_slot_utilization"] == "0.98"
+
+
 def test_report_emits_validation_metrics_mad_and_unqualified_labels(
     tmp_path: Path,
 ) -> None:

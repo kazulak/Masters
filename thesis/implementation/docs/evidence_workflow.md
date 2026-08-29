@@ -234,6 +234,41 @@ hashes, rank paths, and expected CPU set. Its inspection requires the three
 primary tasklet/DPU scaling rows to pass their claim gates. The smaller GHZ18
 confirmation template remains diagnostic-only.
 
+The first hierarchical-parallel diagnostic is physical-only and keeps the
+Stress18 logical workload fixed while varying tasklets on one DPU and DPU count
+at T8. It uses the generic physical `qualify` path; the historical mixed M7C
+runner is used only to prepare canonical machine paths:
+
+```bash
+PYTHONPATH=src ../.venv/bin/python scripts/run_m7c_scaling_campaign.py prepare \
+  --template configs/tn_benchmark_parallel_scaling_diagnostic.yml \
+  --output runs/configs/eth/parallel-scaling-diagnostic.yml \
+  --rank-path /dev/dpu_rank0 \
+  --session-root runs/upmem_sessions/parallel-scaling-diagnostic \
+  --expected-cpus 0
+taskset -c 0 env UPMEM_ALLOW_PHYSICAL_HARDWARE=1 \
+  OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+  NUMEXPR_NUM_THREADS=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src \
+  ../.venv/bin/python -m quantum_bench.cli qualify \
+  --config runs/configs/eth/parallel-scaling-diagnostic.yml \
+  --output runs/evidence/parallel-scaling-diagnostic --allow-physical
+PYTHONPATH=src ../.venv/bin/python -m quantum_bench.cli report \
+  --input runs/evidence/parallel-scaling-diagnostic \
+  --output runs/comparisons/parallel-scaling-diagnostic
+PYTHONPATH=src ../.venv/bin/python scripts/inspect_parallel_scaling.py \
+  --input runs/evidence/parallel-scaling-diagnostic \
+  --report-output runs/comparisons/parallel-scaling-diagnostic \
+  --summary-output \
+    runs/comparisons/parallel-scaling-diagnostic/parallel_diagnostic_summary.json
+```
+
+The inspector requires the literal six-route, six-block matrix: 36 successful
+physical samples and sessions with exact resources, identities, provenance,
+replay, and float32 validation. Its kernel and total-wall ratios are
+descriptive powersave-conditioned diagnostics, not performance claims. Apply
+`analyze_m7d_attribution.py` unchanged to the same evidence for host request
+staging; do not optimize staging before this parallel diagnostic is analyzed.
+
 Before an ETH probe, use a clean accepted commit, the full test suite, Ruff,
 the strict SDK simulator matrix, and hashes for the binaries used by the probe.
 The committed exact-head qualifier remains the release-oriented software/SDK

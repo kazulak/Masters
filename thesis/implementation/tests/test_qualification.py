@@ -20,6 +20,7 @@ SCRIPT = ROOT / "scripts" / "qualify_m7b.py"
 PHYSICAL_SCRIPT = ROOT / "scripts" / "qualify_m7c_physical.py"
 SELECTION_SCRIPT = ROOT / "scripts" / "select_m7c_workload.py"
 SCALING_SCRIPT = ROOT / "scripts" / "run_m7c_scaling_campaign.py"
+PARALLEL_SCALING_SCRIPT = ROOT / "scripts" / "inspect_parallel_scaling.py"
 M7C_QUALIFIER_SCRIPT = ROOT / "scripts" / "qualify_m7c.py"
 ATTRIBUTION_SCRIPT = ROOT / "scripts" / "analyze_m7d_attribution.py"
 CONFORMANCE_SCRIPT = ROOT / "scripts" / "check_sequential_conformance.py"
@@ -50,6 +51,10 @@ def _selector():
 
 def _scaling_campaign():
     return _load_script(SCALING_SCRIPT, "run_m7c_scaling_campaign")
+
+
+def _parallel_scaling():
+    return _load_script(PARALLEL_SCALING_SCRIPT, "inspect_parallel_scaling")
 
 
 def _m7c_qualifier():
@@ -1405,6 +1410,249 @@ def test_m7c_scaling_preparation_preserves_all_resolved_route_paths(
         "mode": "exact_required_v1",
         "expected_cpus": (1, 3),
     }
+
+
+def test_parallel_scaling_config_freezes_physical_route_matrix_and_paths(
+    tmp_path: Path,
+) -> None:
+    template = ROOT / "configs" / "tn_benchmark_parallel_scaling_diagnostic.yml"
+    expected_routes = (
+        "upmem_float32_1dpu_t1",
+        "upmem_float32_1dpu_t2",
+        "upmem_float32_1dpu_t4",
+        "upmem_float32_1dpu_t8",
+        "upmem_float32_2dpu_t8",
+        "upmem_float32_4dpu_t8",
+    )
+    config = load_experiment_config(template)
+    assert tuple(config["routes"]) == expected_routes
+    assert tuple(config["matrix"][0]["route_ids"]) == expected_routes
+    assert config["collection"]["claim_policy"] == "diagnostic_v1"
+    assert config["collection"]["warmup_blocks"] == 1
+    assert config["collection"]["measurement_blocks"] == 5
+    assert all(route["executor"] == "upmem_physical" for route in config["routes"].values())
+
+    output = tmp_path / "runs" / "configs" / "eth" / "parallel.yml"
+    _scaling_campaign().prepare_config(
+        template=template,
+        output=output,
+        rank_paths=["/dev/dpu_rank19"],
+        session_root=str(tmp_path / "sessions"),
+        expected_cpus=[2],
+    )
+    prepared = load_experiment_config(output)
+    for route_id, route in prepared["routes"].items():
+        options = route["options"]
+        assert options["rank_paths"] == ("/dev/dpu_rank19",)
+        assert options["session_root"] == str(
+            (tmp_path / "sessions" / route_id).resolve()
+        )
+        assert Path(options["host_binary"]).is_absolute()
+        assert Path(options["dpu_binary"]).is_absolute()
+        assert Path(options["initialization_binary"]).is_absolute()
+
+
+def _parallel_scaling_rows() -> tuple[dict[str, str], ...]:
+    comparisons = (
+        ("tasklet_scaling", "primary", "1", "2", "1", "1"),
+        ("tasklet_scaling", "primary", "1", "4", "1", "1"),
+        ("tasklet_scaling", "primary", "1", "8", "1", "1"),
+        ("tasklet_scaling", "secondary", "2", "4", "1", "1"),
+        ("tasklet_scaling", "secondary", "2", "8", "1", "1"),
+        ("tasklet_scaling", "secondary", "4", "8", "1", "1"),
+        ("dpu_scaling", "primary", "8", "8", "1", "2"),
+        ("dpu_scaling", "primary", "8", "8", "1", "4"),
+        ("dpu_scaling", "secondary", "8", "8", "2", "4"),
+    )
+    return tuple(
+        {
+            "comparison_kind": kind,
+            "comparison_role": role,
+            "baseline_tasklet_count": baseline_tasklets,
+            "candidate_tasklet_count": candidate_tasklets,
+            "baseline_dpu_count": baseline_dpus,
+            "candidate_dpu_count": candidate_dpus,
+            "planned_pair_count": "5",
+            "complete_pair_count": "5",
+            "claim_eligible": "False",
+            "claim_ineligibility_reason": "baseline_diagnostic_claim_policy",
+        }
+        for (
+            kind,
+            role,
+            baseline_tasklets,
+            candidate_tasklets,
+            baseline_dpus,
+            candidate_dpus,
+        ) in comparisons
+    )
+
+
+def _complete_parallel_diagnostic(
+    script: object,
+) -> tuple[
+    dict[str, object],
+    tuple[dict[str, object], ...],
+    tuple[dict[str, object], ...],
+]:
+    config = load_experiment_config(
+        ROOT / "configs" / "tn_benchmark_parallel_scaling_diagnostic.yml"
+    )
+    commit = "a" * 40
+    manifest: dict[str, object] = {
+        "source_commit": commit,
+        "source_worktree_dirty": False,
+        "status": "completed",
+        "experiment_id": config["experiment_id"],
+        "run_id": "00000000-0000-4000-8000-000000000001",
+        "configuration": {
+            "experiment": config,
+            "environment": {
+                "affinity": (0,),
+                "observed_cpu_governors": {"0": "powersave"},
+                "thread_environment": {
+                    "OMP_NUM_THREADS": "1",
+                    "OPENBLAS_NUM_THREADS": "1",
+                    "MKL_NUM_THREADS": "1",
+                    "NUMEXPR_NUM_THREADS": "1",
+                },
+            },
+        },
+    }
+    times = {
+        "upmem_float32_1dpu_t1": (32.0, 24.0),
+        "upmem_float32_1dpu_t2": (20.0, 12.0),
+        "upmem_float32_1dpu_t4": (13.0, 6.0),
+        "upmem_float32_1dpu_t8": (10.0, 3.0),
+        "upmem_float32_2dpu_t8": (8.0, 1.6),
+        "upmem_float32_4dpu_t8": (7.0, 0.9),
+    }
+    utilization = {
+        "upmem_float32_1dpu_t1": (1.0, 1.0),
+        "upmem_float32_1dpu_t2": (0.9998, 1.0),
+        "upmem_float32_1dpu_t4": (0.9993, 1.0),
+        "upmem_float32_1dpu_t8": (0.9986, 1.0),
+        "upmem_float32_2dpu_t8": (0.9986, 0.9904),
+        "upmem_float32_4dpu_t8": (0.9986, 0.9856),
+    }
+    samples: list[dict[str, object]] = []
+    sessions: list[dict[str, object]] = []
+    for block_id in range(6):
+        attempt_kind = "warmup" if block_id == 0 else "measurement"
+        sample_index = 0 if block_id == 0 else block_id - 1
+        for route_index, (route_id, (dpu_count, tasklets)) in enumerate(
+            script._ROUTE_SPECS.items(), start=1
+        ):
+            session_id = f"{route_id}-{block_id}"
+            executable_key = 4 if tasklets == 8 else {1: 1, 2: 2, 4: 3}[tasklets]
+            tasklet_utilization, dpu_utilization = utilization[route_id]
+            total_wall_s, kernel_s = times[route_id]
+            samples.append(
+                {
+                    "case_id": "scaling_primary",
+                    "plan_id": "greedy",
+                    "route_id": route_id,
+                    "attempt_kind": attempt_kind,
+                    "sample_index": sample_index,
+                    "block_id": block_id,
+                    "status": "success",
+                    "session_instance_id": session_id,
+                    "identities": {
+                        "environment_id": "1" * 64,
+                        "problem_id": "2" * 64,
+                        "tensor_network_structure_id": "3" * 64,
+                        "logical_plan_id": "4" * 64,
+                        "validation_policy_id": "5" * 64,
+                        "physical_plan_id": f"{route_index:x}" * 64,
+                        "executable_id": f"{executable_key:x}" * 64,
+                    },
+                    "measurement": {
+                        "total_wall_s": total_wall_s * (1.0 + block_id * 0.001),
+                        "kernel_s": kernel_s * (1.0 + block_id * 0.001),
+                    },
+                    "backend_facts": {
+                        "target_observed": "physical_hardware",
+                        "physical_target_verified": True,
+                        "hardware_kernel_executed": True,
+                        "simulator_kernel_executed": False,
+                        "cpu_fallback_used": False,
+                        "startup_resource_admission_passed": True,
+                        "execution_resource_admission_passed": True,
+                        "requested_dpus": dpu_count,
+                        "allocated_dpus": dpu_count,
+                        "active_dpus": dpu_count,
+                        "execution_active_dpu_count": dpu_count,
+                        "execution_active_rank_count": 1,
+                        "tasklets_per_dpu": tasklets,
+                        "dominant_work_wave_populated_dpu_slots": dpu_count,
+                        "dominant_work_wave_allocated_dpu_slots": dpu_count,
+                        "dominant_work_wave_tasklet_row_sufficiency_passed": True,
+                        "dominant_work_wave_utilization": 1.0,
+                        "arithmetic_weighted_tasklet_utilization": tasklet_utilization,
+                        "arithmetic_weighted_dpu_slot_utilization": dpu_utilization,
+                        "output_hash": "f" * 64,
+                    },
+                    "validation": {
+                        "accuracy_qualified": True,
+                        "policy_reference_passed": True,
+                        "full_precision_passed": True,
+                        "relative_l2_error": 1e-6,
+                        "norm_drift": 1e-6,
+                    },
+                }
+            )
+            binary_key = f"{executable_key:x}" * 64
+            sessions.append(
+                {
+                    "route_id": route_id,
+                    "session_instance_id": session_id,
+                    "status": "success",
+                    "release_verified": True,
+                    "terminal_backend_facts": {
+                        "observed_tasklets_per_dpu": tasklets,
+                        "host_binary_sha256": binary_key,
+                        "dpu_binary_sha256": binary_key,
+                        "initialization_binary_sha256": binary_key,
+                    },
+                }
+            )
+    return manifest, tuple(samples), tuple(sessions)
+
+
+def test_parallel_scaling_summary_requires_complete_exact_resources() -> None:
+    script = _parallel_scaling()
+    manifest, samples, sessions = _complete_parallel_diagnostic(script)
+    rows = _parallel_scaling_rows()
+    summary = script.derive_summary(
+        manifest=manifest,
+        samples=samples,
+        sessions=sessions,
+        report={"schema_version": "evidence_report_v5", "scaling_count": 9},
+        scaling_rows=rows,
+        expected_source_commit="a" * 40,
+    )
+    assert summary["gate_passed"] is True
+    assert summary["sample_count"] == 36
+    assert summary["session_count"] == 36
+    assert len(summary["primary_comparisons"]) == 5
+    assert summary["primary_comparisons"][2]["kernel_speedup"] == pytest.approx(8.0)
+
+    drifted_samples = [dict(sample) for sample in samples]
+    target = next(
+        sample
+        for sample in drifted_samples
+        if sample["route_id"] == "upmem_float32_4dpu_t8"
+    )
+    target["backend_facts"] = {**target["backend_facts"], "active_dpus": 3}
+    with pytest.raises(ValueError, match="resource or provenance mismatch"):
+        script.derive_summary(
+            manifest=manifest,
+            samples=tuple(drifted_samples),
+            sessions=sessions,
+            report={"schema_version": "evidence_report_v5", "scaling_count": 9},
+            scaling_rows=rows,
+            expected_source_commit="a" * 40,
+        )
 
 
 def _complete_m7c_diagnostic(script: object) -> tuple[dict[str, object], tuple[dict[str, object], ...], tuple[dict[str, object], ...]]:
