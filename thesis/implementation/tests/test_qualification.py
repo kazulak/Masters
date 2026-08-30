@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import csv
 import hashlib
 import json
 from pathlib import Path
@@ -1635,6 +1636,72 @@ def test_parallel_scaling_public_inspector_uses_verified_artifacts(
 
     assert summary["gate_passed"] is True
     assert json.loads(output.read_text(encoding="utf-8")) == summary
+
+
+def test_parallel_scaling_outputs_are_deterministic_and_descriptive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    script = _parallel_scaling()
+    manifest, samples, sessions = _complete_parallel_diagnostic(script)
+    monkeypatch.setattr(
+        script, "verify_artifacts", lambda _path: {"status": "completed"}
+    )
+    monkeypatch.setattr(
+        script, "load_artifacts", lambda _path: (manifest, samples, sessions)
+    )
+    monkeypatch.setattr(script, "_source_commit", lambda: "a" * 40)
+    output = tmp_path / "analysis"
+
+    summary = script.inspect_artifacts(
+        input_dir=tmp_path / "canonical-evidence",
+        summary_output=output / "parallel_scaling_summary.json",
+        output_dir=output,
+    )
+
+    assert summary["claim_eligible"] is False
+    assert summary["claim_ineligibility_reason"] == "diagnostic_claim_policy"
+    assert summary["measurement_count_per_route"]["upmem_float32_4dpu_t8"] == 5
+    assert [
+        row["route"]
+        for row in csv.DictReader(
+            (output / "route_statistics.csv").open(
+                newline="", encoding="utf-8"
+            )
+        )
+    ] == list(script._ROUTE_IDS)
+    assert [
+        row["candidate_route"]
+        for row in csv.DictReader(
+            (output / "parallel_comparisons_descriptive.csv").open(
+                newline="", encoding="utf-8"
+            )
+        )
+    ] == [
+        "upmem_float32_1dpu_t2",
+        "upmem_float32_1dpu_t4",
+        "upmem_float32_1dpu_t8",
+        "upmem_float32_2dpu_t8",
+        "upmem_float32_4dpu_t8",
+    ]
+    assert all(
+        row["diagnostic_only"] == "True"
+        for row in csv.DictReader(
+            (output / "parallel_comparisons_descriptive.csv").open(
+                newline="", encoding="utf-8"
+            )
+        )
+    )
+    assert all(
+        (output / name).is_file()
+        for name in (
+            "tasklet_runtime.png",
+            "tasklet_speedup.png",
+            "dpu_runtime.png",
+            "dpu_speedup.png",
+            "transfer_by_route.png",
+            "accuracy_summary.csv",
+        )
+    )
 
 
 def test_parallel_scaling_public_inspector_rejects_noncanonical_evidence(

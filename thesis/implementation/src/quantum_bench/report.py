@@ -6,6 +6,7 @@ from collections import Counter
 from collections.abc import Iterable, Mapping
 import csv
 import hashlib
+import math
 import os
 from pathlib import Path
 import random
@@ -769,15 +770,23 @@ def _validation_values(rows: Iterable[Mapping[str, Any]], field: str) -> list[fl
 
 def _resource_values(
     rows: Iterable[tuple[Mapping[str, Any], Mapping[str, Any]]], field: str
-) -> list[int]:
-    values: list[int] = []
+) -> list[int | float]:
+    """Collect resource facts, including floating-point utilization facts."""
+
+    values: list[int | float] = []
     for _, facts in rows:
         value = facts.get(field)
+        if field == "dominant_wave_utilization" and value is None:
+            value = facts.get("dominant_work_wave_utilization")
         if value is None:
             allocation = facts.get("allocation")
             if isinstance(allocation, Mapping):
                 value = allocation.get(field)
-        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        if (
+            type(value) in (int, float)
+            and math.isfinite(float(value))
+            and value >= 0
+        ):
             values.append(value)
     return values
 

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import re
@@ -54,6 +55,51 @@ _THREAD_ENVIRONMENT = {
     "NUMEXPR_NUM_THREADS": "1",
 }
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
+_PLOT_LABELS = {
+    "upmem_float32_1dpu_t1": "T1",
+    "upmem_float32_1dpu_t2": "T2",
+    "upmem_float32_1dpu_t4": "T4",
+    "upmem_float32_1dpu_t8": "T8",
+    "upmem_float32_2dpu_t8": "2D-T8",
+    "upmem_float32_4dpu_t8": "4D-T8",
+}
+_ROUTE_STAT_COLUMNS = (
+    "route",
+    "dpus",
+    "tasklets",
+    "median_total_wall_s",
+    "raw_mad_total_wall_s",
+    "median_kernel_s",
+    "raw_mad_kernel_s",
+    "median_h2d_bytes",
+    "median_d2h_bytes",
+    "max_abs_error",
+    "relative_l2_error",
+    "norm_drift",
+    "tasklet_utilization",
+    "dpu_utilization",
+    "dominant_wave_utilization",
+)
+_COMPARISON_COLUMNS = (
+    "comparison_kind",
+    "baseline_route",
+    "candidate_route",
+    "resource_ratio",
+    "kernel_speedup",
+    "total_wall_speedup",
+    "kernel_parallel_efficiency",
+    "total_wall_parallel_efficiency",
+    "diagnostic_only",
+)
+_ACCURACY_COLUMNS = (
+    "route",
+    "max_abs_error",
+    "relative_l2_error",
+    "norm_drift",
+    "float32_atol",
+    "float32_relative_l2_max",
+    "float32_norm_drift_max",
+)
 
 
 def _plain(value: object) -> Any:
@@ -73,6 +119,14 @@ def _nonnegative(value: object, field: str) -> float:
     if not math.isfinite(result) or result < 0.0:
         raise ValueError(f"{field} must be a finite non-negative number")
     return result
+
+
+def _optional_nonnegative(
+    values: list[float], source: Mapping[str, Any], field: str
+) -> None:
+    value = source.get(field)
+    if value is not None:
+        values.append(_nonnegative(value, field))
 
 
 def _sha256(value: object, field: str) -> str:
@@ -182,6 +236,7 @@ def derive_summary(
     samples: Sequence[Mapping[str, Any]],
     sessions: Sequence[Mapping[str, Any]],
     expected_source_commit: str,
+    reporting_tool_source_commit: str | None = None,
 ) -> Mapping[str, object]:
     """Validate the fixed protocol and derive descriptive scaling ratios."""
 
@@ -221,6 +276,11 @@ def derive_summary(
         route_id: {
             "total_wall_s": [],
             "kernel_s": [],
+            "h2d_bytes": [],
+            "d2h_bytes": [],
+            "max_abs_error": [],
+            "relative_l2_error": [],
+            "norm_drift": [],
             "tasklet_utilization": set(),
             "dpu_utilization": set(),
             "dominant_wave_utilization": set(),
@@ -288,6 +348,10 @@ def derive_summary(
             route_values[route_id]["kernel_s"].append(
                 _nonnegative(measurement.get("kernel_s"), "kernel_s")
             )
+            for field in ("h2d_bytes", "d2h_bytes"):
+                _optional_nonnegative(route_values[route_id][field], measurement, field)
+            for field in ("max_abs_error", "relative_l2_error", "norm_drift"):
+                _optional_nonnegative(route_values[route_id][field], validation, field)
         for source, target in (
             ("arithmetic_weighted_tasklet_utilization", "tasklet_utilization"),
             ("arithmetic_weighted_dpu_slot_utilization", "dpu_utilization"),
@@ -352,6 +416,21 @@ def derive_summary(
             "mad_total_wall_s": total_mad,
             "median_kernel_s": kernel_median,
             "mad_kernel_s": kernel_mad,
+            "median_h2d_bytes": (
+                float(median(values["h2d_bytes"])) if values["h2d_bytes"] else None
+            ),
+            "median_d2h_bytes": (
+                float(median(values["d2h_bytes"])) if values["d2h_bytes"] else None
+            ),
+            "max_abs_error": max(values["max_abs_error"])
+            if values["max_abs_error"]
+            else None,
+            "relative_l2_error": max(values["relative_l2_error"])
+            if values["relative_l2_error"]
+            else None,
+            "norm_drift": max(values["norm_drift"])
+            if values["norm_drift"]
+            else None,
             "arithmetic_weighted_tasklet_utilization": next(
                 iter(values["tasklet_utilization"])
             ),
@@ -397,15 +476,40 @@ def derive_summary(
                 "kernel_parallel_efficiency": kernel_speedup / resource_ratio,
             }
         )
+    experiment = _mapping(configuration.get("experiment"), "experiment")
+    collection = _mapping(experiment.get("collection"), "collection")
+    environment = _mapping(configuration.get("environment"), "environment")
+    route_config = _mapping(experiment.get("routes"), "routes")
+    rank_paths = sorted(
+        {
+            str(path)
+            for route_id in _ROUTE_IDS
+            for path in _mapping(
+                _mapping(route_config[route_id], route_id).get("options"),
+                f"{route_id} options",
+            ).get("rank_paths", ())
+        }
+    )
     return {
         "analysis_version": _ANALYSIS_VERSION,
         "source_commit": manifest["source_commit"],
+        "physical_execution_source_commit": manifest["source_commit"],
+        "reporting_tool_source_commit": reporting_tool_source_commit
+        or _source_commit(),
         "experiment_id": manifest["experiment_id"],
         "run_id": manifest["run_id"],
         "expected_route_ids": list(_ROUTE_IDS),
         "expected_block_ids": list(range(6)),
         "sample_count": 36,
         "session_count": 36,
+        "measurement_count_per_route": {route_id: 5 for route_id in _ROUTE_IDS},
+        "rank_paths": rank_paths,
+        "cpu_affinity": list(environment.get("affinity", ())),
+        "observed_governor": environment.get("observed_cpu_governors", {}),
+        "sdk_version": environment.get("upmem_sdk_version"),
+        "claim_policy": collection.get("claim_policy"),
+        "claim_eligible": False,
+        "claim_ineligibility_reason": "diagnostic_claim_policy",
         "route_statistics": route_statistics,
         "primary_comparisons": comparisons,
         "measurement_warnings": warnings,
@@ -414,7 +518,11 @@ def derive_summary(
 
 
 def inspect_artifacts(
-    *, input_dir: Path, summary_output: Path
+    *,
+    input_dir: Path,
+    summary_output: Path,
+    output_dir: Path | None = None,
+    expected_source_commit: str | None = None,
 ) -> Mapping[str, object]:
     verification = verify_artifacts(input_dir)
     if verification.get("status") != "completed":
@@ -424,25 +532,308 @@ def inspect_artifacts(
         manifest=manifest,
         samples=samples,
         sessions=sessions,
-        expected_source_commit=_source_commit(),
+        expected_source_commit=expected_source_commit or _source_commit(),
+        reporting_tool_source_commit=_source_commit(),
     )
     summary_output.parent.mkdir(parents=True, exist_ok=True)
     summary_output.write_text(
         json.dumps(_plain(summary), sort_keys=True, indent=2) + "\n",
         encoding="utf-8",
     )
+    if output_dir is not None:
+        _write_parallel_outputs(
+            output_dir=output_dir,
+            summary=summary,
+            manifest=manifest,
+            samples=samples,
+        )
     return summary
+
+
+def _measurement_rows(
+    samples: Sequence[Mapping[str, Any]], route_id: str
+) -> list[Mapping[str, Any]]:
+    rows = [
+        sample
+        for sample in samples
+        if sample.get("route_id") == route_id
+        and sample.get("attempt_kind") == "measurement"
+        and sample.get("status") == "success"
+    ]
+    return sorted(rows, key=lambda row: int(row.get("block_id", 0)))
+
+
+def _csv_value(value: object) -> object:
+    if value is None:
+        return ""
+    return value
+
+
+def _write_csv(path: Path, columns: Sequence[str], rows: Sequence[Mapping[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=columns, extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({column: _csv_value(row.get(column)) for column in columns})
+
+
+def _route_table_rows(summary: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    rows = []
+    statistics = _mapping(summary.get("route_statistics"), "route_statistics")
+    for route_id in _ROUTE_IDS:
+        values = _mapping(statistics[route_id], route_id)
+        rows.append(
+            {
+                "route": route_id,
+                "dpus": values.get("dpu_count"),
+                "tasklets": values.get("tasklets_per_dpu"),
+                "median_total_wall_s": values.get("median_total_wall_s"),
+                "raw_mad_total_wall_s": values.get("mad_total_wall_s"),
+                "median_kernel_s": values.get("median_kernel_s"),
+                "raw_mad_kernel_s": values.get("mad_kernel_s"),
+                "median_h2d_bytes": values.get("median_h2d_bytes"),
+                "median_d2h_bytes": values.get("median_d2h_bytes"),
+                "max_abs_error": values.get("max_abs_error"),
+                "relative_l2_error": values.get("relative_l2_error"),
+                "norm_drift": values.get("norm_drift"),
+                "tasklet_utilization": values.get(
+                    "arithmetic_weighted_tasklet_utilization"
+                ),
+                "dpu_utilization": values.get(
+                    "arithmetic_weighted_dpu_slot_utilization"
+                ),
+                "dominant_wave_utilization": values.get(
+                    "dominant_work_wave_utilization"
+                ),
+            }
+        )
+    return rows
+
+
+def _comparison_table_rows(summary: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    comparisons = summary.get("primary_comparisons")
+    if not isinstance(comparisons, Sequence):
+        raise ValueError("primary_comparisons must be a sequence")
+    return [
+        {
+            "comparison_kind": comparison.get("comparison_kind"),
+            "baseline_route": comparison.get("baseline_route_id"),
+            "candidate_route": comparison.get("candidate_route_id"),
+            "resource_ratio": comparison.get("resource_ratio"),
+            "kernel_speedup": comparison.get("kernel_speedup"),
+            "total_wall_speedup": comparison.get("total_wall_speedup"),
+            "kernel_parallel_efficiency": comparison.get(
+                "kernel_parallel_efficiency"
+            ),
+            "total_wall_parallel_efficiency": comparison.get(
+                "total_wall_parallel_efficiency"
+            ),
+            "diagnostic_only": True,
+        }
+        for comparison in comparisons
+    ]
+
+
+def _accuracy_table_rows(
+    summary: Mapping[str, Any], manifest: Mapping[str, Any]
+) -> list[Mapping[str, Any]]:
+    statistics = _mapping(summary.get("route_statistics"), "route_statistics")
+    configuration = _mapping(manifest.get("configuration"), "configuration")
+    policy_value = configuration.get("validation_policy", {})
+    policy = (
+        _mapping(policy_value, "validation_policy")
+        if policy_value
+        else {}
+    )
+    return [
+        {
+            "route": route_id,
+            "max_abs_error": _mapping(statistics[route_id], route_id).get(
+                "max_abs_error"
+            ),
+            "relative_l2_error": _mapping(statistics[route_id], route_id).get(
+                "relative_l2_error"
+            ),
+            "norm_drift": _mapping(statistics[route_id], route_id).get("norm_drift"),
+            "float32_atol": policy.get("float32_atol"),
+            "float32_relative_l2_max": policy.get("float32_relative_l2_max"),
+            "float32_norm_drift_max": policy.get("float32_norm_drift_max"),
+        }
+        for route_id in _ROUTE_IDS
+    ]
+
+
+def _plot_metadata(summary: Mapping[str, Any]) -> str:
+    rank_paths = summary.get("rank_paths", ())
+    rank = "rank1" if any("rank1" in str(path) for path in rank_paths) else "rank"
+    return f"diagnostic_v1 | powersave | Stress18 | n=5 | {rank} | descriptive only"
+
+
+def _plot_imports() -> tuple[Any, Any]:
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
+    from matplotlib import pyplot as plt
+
+    return matplotlib, plt
+
+
+def _finish_plot(figure: Any, path: Path, metadata: str) -> None:
+    from matplotlib import pyplot as plt
+
+    figure.text(0.01, 0.01, metadata, fontsize=8)
+    figure.tight_layout(rect=(0, 0.04, 1, 1))
+    figure.savefig(path, dpi=140, metadata={"Description": metadata})
+    plt.close(figure)
+
+
+def _runtime_plot(
+    *,
+    output: Path,
+    summary: Mapping[str, Any],
+    samples: Sequence[Mapping[str, Any]],
+    route_ids: Sequence[str],
+    filename: str,
+) -> None:
+    _, plt = _plot_imports()
+    statistics = _mapping(summary.get("route_statistics"), "route_statistics")
+    figure, axis = plt.subplots(figsize=(7.0, 4.4))
+    positions = list(range(len(route_ids)))
+    for offset, (field, label, color) in enumerate(
+        (("total_wall_s", "total wall", "#1565c0"), ("kernel_s", "kernel", "#ef6c00"))
+    ):
+        xs = [position + (offset - 0.5) * 0.16 for position in positions]
+        for x, route_id in zip(xs, route_ids):
+            values = [
+                float(_mapping(row.get("measurement"), "measurement")[field])
+                for row in _measurement_rows(samples, route_id)
+            ]
+            axis.scatter([x] * len(values), values, color=color, alpha=0.45, s=16)
+            route_stats = _mapping(statistics[route_id], route_id)
+            median_value = float(route_stats[f"median_{field}"])
+            mad_value = float(route_stats[f"mad_{field}"])
+            axis.errorbar(
+                [x],
+                [median_value],
+                yerr=[mad_value],
+                fmt="o",
+                color=color,
+                capsize=3,
+                label=label if x == xs[0] else None,
+            )
+    axis.set_xticks(positions, [_PLOT_LABELS[route_id] for route_id in route_ids])
+    axis.set_xlabel("tasklets per DPU" if "tasklet" in filename else "DPUs at T8")
+    axis.set_ylabel("seconds")
+    axis.set_title("Steady execution runtime")
+    axis.legend()
+    _finish_plot(figure, output / filename, _plot_metadata(summary))
+
+
+def _speedup_plot(
+    *, output: Path, summary: Mapping[str, Any], kind: str, filename: str
+) -> None:
+    _, plt = _plot_imports()
+    comparisons = [
+        comparison
+        for comparison in summary["primary_comparisons"]
+        if comparison["comparison_kind"] == kind
+    ]
+    resource = [1.0] + [float(row["resource_ratio"]) for row in comparisons]
+    total = [1.0] + [float(row["total_wall_speedup"]) for row in comparisons]
+    kernel = [1.0] + [float(row["kernel_speedup"]) for row in comparisons]
+    figure, axis = plt.subplots(figsize=(7.0, 4.4))
+    axis.plot(resource, total, "o-", label="total wall", color="#1565c0")
+    axis.plot(resource, kernel, "o-", label="kernel", color="#ef6c00")
+    axis.plot(resource, resource, "--", label="ideal linear", color="#616161")
+    axis.set_xlabel("tasklets per DPU" if kind == "tasklet_scaling" else "DPUs")
+    axis.set_ylabel("descriptive speedup")
+    axis.set_title("Parallel speedup")
+    axis.legend()
+    _finish_plot(figure, output / filename, _plot_metadata(summary))
+
+
+def _transfer_plot(
+    *, output: Path, summary: Mapping[str, Any]
+) -> None:
+    _, plt = _plot_imports()
+    statistics = _mapping(summary.get("route_statistics"), "route_statistics")
+    labels = [_PLOT_LABELS[route_id] for route_id in _ROUTE_IDS]
+    h2d = [statistics[route_id].get("median_h2d_bytes") or 0 for route_id in _ROUTE_IDS]
+    d2h = [statistics[route_id].get("median_d2h_bytes") or 0 for route_id in _ROUTE_IDS]
+    figure, axis = plt.subplots(figsize=(7.0, 4.4))
+    positions = list(range(len(labels)))
+    axis.bar(positions, h2d, label="H2D", color="#00897b")
+    axis.bar(positions, d2h, bottom=h2d, label="D2H", color="#8e24aa")
+    axis.set_xticks(positions, labels)
+    axis.set_xlabel("route")
+    axis.set_ylabel("bytes")
+    axis.set_title("Transfer volume")
+    axis.legend()
+    _finish_plot(figure, output / "transfer_by_route.png", _plot_metadata(summary))
+
+
+def _write_parallel_outputs(
+    *,
+    output_dir: Path,
+    summary: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+    samples: Sequence[Mapping[str, Any]],
+) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    _write_csv(output_dir / "route_statistics.csv", _ROUTE_STAT_COLUMNS, _route_table_rows(summary))
+    _write_csv(
+        output_dir / "parallel_comparisons_descriptive.csv",
+        _COMPARISON_COLUMNS,
+        _comparison_table_rows(summary),
+    )
+    _write_csv(
+        output_dir / "accuracy_summary.csv",
+        _ACCURACY_COLUMNS,
+        _accuracy_table_rows(summary, manifest),
+    )
+    _runtime_plot(
+        output=output_dir,
+        summary=summary,
+        samples=samples,
+        route_ids=_ROUTE_IDS[:4],
+        filename="tasklet_runtime.png",
+    )
+    _speedup_plot(
+        output=output_dir,
+        summary=summary,
+        kind="tasklet_scaling",
+        filename="tasklet_speedup.png",
+    )
+    _runtime_plot(
+        output=output_dir,
+        summary=summary,
+        samples=samples,
+        route_ids=(_ROUTE_IDS[3], _ROUTE_IDS[4], _ROUTE_IDS[5]),
+        filename="dpu_runtime.png",
+    )
+    _speedup_plot(
+        output=output_dir,
+        summary=summary,
+        kind="dpu_scaling",
+        filename="dpu_speedup.png",
+    )
+    _transfer_plot(output=output_dir, summary=summary)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--summary-output", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--expected-source-commit")
     args = parser.parse_args(argv)
     try:
         summary = inspect_artifacts(
             input_dir=args.input,
             summary_output=args.summary_output,
+            output_dir=args.output_dir,
+            expected_source_commit=args.expected_source_commit,
         )
     except (OSError, TypeError, ValueError) as exc:
         print(json.dumps({"status": "failed", "error": str(exc)}, sort_keys=True))

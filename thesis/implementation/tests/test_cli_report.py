@@ -2156,6 +2156,11 @@ def test_report_emits_claim_gated_tasklet_scaling_csv(tmp_path: Path) -> None:
     )
 
     assert report["schema_version"] == "evidence_report_v5"
+    with (tmp_path / "report" / "aggregate.csv").open(
+        newline="", encoding="utf-8"
+    ) as stream:
+        aggregates = {row["route_id"]: row for row in csv.DictReader(stream)}
+    assert aggregates["upmem_t8"]["median_dominant_wave_utilization"] == "1.0"
     assert report["scaling_count"] == 1
     with (tmp_path / "report" / "scaling.csv").open(newline="", encoding="utf-8") as stream:
         rows = list(csv.DictReader(stream))

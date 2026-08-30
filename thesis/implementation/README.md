@@ -73,6 +73,13 @@ workflow, external baseline roles, and claim limits are documented in
 qualifier prepares ignored configs and inspects or bundles existing artifacts;
 it never runs hardware, tags a commit, or publishes a release.
 
+The physically validated hierarchical diagnostic is documented in
+[docs/hierarchical_parallel_diagnostic.md](docs/hierarchical_parallel_diagnostic.md)
+and frozen at tag `thesis-upmem-hierarchical-parallel-diagnostic-v1`. It covers
+the six Stress18 tasklet/DPU routes on one rank under `diagnostic_v1` and
+`powersave`; its speedups are descriptive and not `physical_performance_v1`
+claims.
+
 `configs/tn_benchmark_reset.yml` is the default CPU/TN software smoke suite.
 `configs/tn_benchmark_physical_smoke.yml` is the one-DPU physical float32
 smoke template. Do not edit it for a target machine or rely on it as a Make

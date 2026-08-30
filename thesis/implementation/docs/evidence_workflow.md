@@ -268,6 +268,13 @@ descriptive powersave-conditioned diagnostics, not performance claims. Apply
 `analyze_m7d_attribution.py` unchanged to the same evidence for host request
 staging; do not optimize staging before this parallel diagnostic is analyzed.
 
+The recovered six-route result is frozen at
+`thesis-upmem-hierarchical-parallel-diagnostic-v1` and documented in
+[hierarchical_parallel_diagnostic.md](hierarchical_parallel_diagnostic.md).
+Its 36 samples and 36 physical sessions are a powersave-conditioned diagnostic
+only. Earlier overlapping-access artifacts remain excluded incident evidence;
+do not combine them with the recovered run.
+
 Before an ETH probe, use a clean accepted commit, the full test suite, Ruff,
 the strict SDK simulator matrix, and hashes for the binaries used by the probe.
 The committed exact-head qualifier remains the release-oriented software/SDK
