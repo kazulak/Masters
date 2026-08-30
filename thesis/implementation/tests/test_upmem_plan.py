@@ -753,21 +753,65 @@ def test_general_one_rank_waves_cover_every_requested_work_count_exactly_once() 
 
 
 @pytest.mark.parametrize(
-    ("dpu_count", "tasklets_per_dpu"),
-    [(1, 4), (3, 2), (10, 3), (17, 4)],
+    ("work_count", "dpu_count", "expected_slots"),
+    [
+        (1, 4, ((0, 0),)),
+        (3, 2, ((0, 0), (0, 1), (1, 0))),
+        (
+            10,
+            3,
+            (
+                (0, 0),
+                (0, 1),
+                (0, 2),
+                (1, 0),
+                (1, 1),
+                (1, 2),
+                (2, 0),
+                (2, 1),
+                (2, 2),
+                (3, 0),
+            ),
+        ),
+        (
+            17,
+            4,
+            (
+                (0, 0),
+                (0, 1),
+                (0, 2),
+                (0, 3),
+                (1, 0),
+                (1, 1),
+                (1, 2),
+                (1, 3),
+                (2, 0),
+                (2, 1),
+                (2, 2),
+                (2, 3),
+                (3, 0),
+                (3, 1),
+                (3, 2),
+                (3, 3),
+                (4, 0),
+            ),
+        ),
+    ],
 )
-def test_general_resource_pairs_retain_deterministic_tail_mapping(
-    dpu_count: int, tasklets_per_dpu: int
+def test_general_resource_adversarial_work_dpu_pairs_retain_exact_wave_slots(
+    work_count: int, dpu_count: int, expected_slots: tuple[tuple[int, int], ...]
 ) -> None:
     units = _general_work_units(
         dpu_count=dpu_count,
-        tasklets_per_dpu=tasklets_per_dpu,
-        work_count=dpu_count + 1,
+        tasklets_per_dpu=1,
+        work_count=work_count,
     )
 
-    tail = [unit for unit in units if unit.wave == 1]
-    assert len(tail) == 1
-    assert (tail[0].logical_rank, tail[0].logical_dpu) == (0, 0)
+    flattened = tuple(sorted(units, key=lambda unit: (unit.wave, unit.logical_dpu)))
+    assert tuple((unit.wave, unit.logical_dpu) for unit in flattened) == expected_slots
+    assert [unit.m_start for unit in flattened] == list(range(0, 256 * work_count, 256))
+    tail_wave, tail_dpu = expected_slots[-1]
+    assert (flattened[-1].wave, flattened[-1].logical_dpu) == (tail_wave, tail_dpu)
 
 
 def _contract_dag_with_large_tiles() -> ContractionDAG:

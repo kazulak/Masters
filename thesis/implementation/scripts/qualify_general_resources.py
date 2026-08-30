@@ -48,8 +48,12 @@ _IDENTITY_FIELDS = (
     "logical_plan_id",
 )
 _SECTION = re.compile(
-    r"^\s*\[\s*\d+\]\s+(\S+)\s+(\S+)\s+\S+\s+\S+\s+([0-9A-Fa-f]+)\s+\S+\s+([A-Z]*)\s"
+    r"^\s*\[\s*\d+\]\s+(\S+)\s+(\S+)\s+([0-9A-Fa-f]+)\s+\S+\s+([0-9A-Fa-f]+)\s+\S+\s+([A-Z]*)\s"
 )
+_SHA256 = re.compile(r"[0-9a-f]{40}")
+_IRAM_START = 0x80000000
+_IRAM_LIMIT_BYTES = 24 * 1024
+_WRAM_LIMIT_BYTES = 64 * 1024
 
 
 def _plain(value: object) -> Any:
@@ -66,6 +70,19 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _git_output(*arguments: str) -> str:
+    result = subprocess.run(
+        ["git", *arguments], cwd=ROOT, check=True, capture_output=True, text=True
+    )
+    return result.stdout.strip()
+
+
+def _require_clean_source() -> str:
+    if _git_output("status", "--porcelain"):
+        raise ValueError("general-resource inspection requires a clean Git worktree")
+    return _git_output("rev-parse", "HEAD")
 
 
 def _absolute(value: str, *, relative_to: Path | None = None) -> str:
@@ -165,22 +182,33 @@ def _binary_paths(tasklets: int) -> dict[str, Path]:
     }
 
 
+def _parse_readelf_sections(output: str) -> tuple[dict[str, Any], ...]:
+    sections: list[dict[str, Any]] = []
+    for line in output.splitlines():
+        match = _SECTION.match(line)
+        if match is None:
+            continue
+        name, kind, address, size, flags = match.groups()
+        sections.append(
+            {
+                "name": name,
+                "type": kind,
+                "address": int(address, 16),
+                "size_bytes": int(size, 16),
+                "flags": flags,
+            }
+        )
+    return tuple(sections)
+
+
 def _readelf_sections(path: Path) -> tuple[dict[str, Any], ...]:
     result = subprocess.run(
         ["readelf", "-SW", str(path)], check=True, capture_output=True, text=True
     )
-    sections: list[dict[str, Any]] = []
-    for line in result.stdout.splitlines():
-        match = _SECTION.match(line)
-        if match is None:
-            continue
-        name, kind, size, flags = match.groups()
-        sections.append(
-            {"name": name, "type": kind, "size_bytes": int(size, 16), "flags": flags}
-        )
+    sections = _parse_readelf_sections(result.stdout)
     if not sections:
         raise ValueError(f"readelf returned no section rows for {path}")
-    return tuple(sections)
+    return sections
 
 
 def _dpu_memory_facts(path: Path) -> Mapping[str, Any]:
@@ -188,24 +216,34 @@ def _dpu_memory_facts(path: Path) -> Mapping[str, Any]:
     text_sections = [section for section in sections if section["name"] == ".text"]
     if len(text_sections) != 1:
         raise ValueError("DPU ELF must contain exactly one .text section")
-    text_bytes = text_sections[0]["size_bytes"]
-    wram_bytes = sum(
-        section["size_bytes"]
+    text = text_sections[0]
+    text_bytes = text["size_bytes"]
+    text_end = text["address"] + text_bytes
+    if text["address"] != _IRAM_START or text_end > _IRAM_START + _IRAM_LIMIT_BYTES:
+        raise ValueError("DPU .text exceeds the 24 KiB IRAM address range")
+    wram_sections = [
+        section
         for section in sections
         if "A" in section["flags"]
         and section["name"] != ".text"
         and not section["name"].startswith(".mram")
         and section["name"] != ".atomic"
-    )
-    if text_bytes > 24 * 1024:
-        raise ValueError("DPU .text exceeds 24 KiB IRAM")
-    if wram_bytes > 64 * 1024:
+    ]
+    for section in wram_sections:
+        end = section["address"] + section["size_bytes"]
+        if section["address"] < 0 or end > _WRAM_LIMIT_BYTES:
+            raise ValueError("DPU allocated WRAM section exceeds the 64 KiB address range")
+    wram_bytes = sum(section["size_bytes"] for section in wram_sections)
+    if wram_bytes > _WRAM_LIMIT_BYTES:
         raise ValueError("DPU allocated WRAM data/stacks exceed 64 KiB")
     return {
+        "text_address": text["address"],
         "text_bytes": text_bytes,
-        "text_limit_bytes": 24 * 1024,
+        "text_end_address": text_end,
+        "text_limit_bytes": _IRAM_LIMIT_BYTES,
         "allocated_wram_data_and_stacks_bytes": wram_bytes,
-        "wram_limit_bytes": 64 * 1024,
+        "wram_limit_bytes": _WRAM_LIMIT_BYTES,
+        "wram_sections": wram_sections,
         "sections": sections,
     }
 
@@ -287,7 +325,11 @@ def build(*, output: Path) -> Mapping[str, Any]:
                     }
                     for field, path in paths.items()
                 },
-                "dpu_memory": _dpu_memory_facts(paths["dpu_binary"]),
+                "target_link_verified": True,
+                "dpu_memory": {
+                    "contraction": _dpu_memory_facts(paths["dpu_binary"]),
+                    "initialization": _dpu_memory_facts(paths["initialization_binary"]),
+                },
                 "host_argument_probe": _host_argument_probe(
                     paths, tasklets, output.parent / f"host-probe-t{tasklets}"
                 ),
@@ -366,6 +408,12 @@ def inspect(*, input_dir: Path, output: Path) -> Mapping[str, Any]:
     _require_absent_ignored_output(output, SUMMARY_OUTPUT_NAME)
     manifest, samples, sessions = load_artifacts(input_dir)
     verification = verify_artifacts(input_dir)
+    source_commit = manifest.get("source_commit")
+    if not isinstance(source_commit, str) or _SHA256.fullmatch(source_commit) is None:
+        raise ValueError("physical evidence source_commit must be a 40-hex SHA")
+    current_commit = _require_clean_source()
+    if source_commit != current_commit:
+        raise ValueError("physical evidence source_commit does not match current HEAD")
     expected_counts = {
         "status": "completed",
         "sample_count": 5,
@@ -396,8 +444,16 @@ def inspect(*, input_dir: Path, output: Path) -> Mapping[str, Any]:
         route_id = sample.get("route_id")
         if route_id not in _ROUTE_SPECS or route_id in route_rows or sample.get("status") != "success":
             raise ValueError("physical evidence does not contain one successful sample per route")
-        if sample.get("attempt_kind") != "measurement" or sample.get("output_sha256") is None:
+        if (
+            sample.get("attempt_kind") != "measurement"
+            or sample.get("sample_index") != 0
+            or sample.get("block_id") != 0
+            or not isinstance(sample.get("output_sha256"), str)
+        ):
             raise ValueError("physical qualification requires one measured output hash per route")
+        measurement = sample.get("measurement")
+        if not isinstance(measurement, Mapping) or measurement.get("scope_id") != "steady_execution_v1":
+            raise ValueError("physical qualification requires steady_execution_v1 timing scope")
         sample_identities = sample.get("identities")
         validation = sample.get("validation")
         numeric = sample.get("numeric_facts")
@@ -416,7 +472,16 @@ def inspect(*, input_dir: Path, output: Path) -> Mapping[str, Any]:
         if numeric.get("numeric_policy") != "split_complex_float32_v1":
             raise ValueError("physical sample has an unexpected numeric policy")
         numeric_policies.add(str(numeric["numeric_policy"]))
-        if not all(validation.get(field) is True for field in ("policy_reference_passed", "full_precision_passed", "accuracy_qualified")):
+        if not all(
+            validation.get(field) is True
+            for field in (
+                "policy_reference_applicable",
+                "policy_reference_passed",
+                "full_precision_threshold_applicable",
+                "full_precision_passed",
+                "accuracy_qualified",
+            )
+        ):
             raise ValueError("physical sample did not pass replay and float32 validation")
         facts = _joined_facts(sample, sessions_by_id)
         for field, values in (
@@ -436,12 +501,23 @@ def inspect(*, input_dir: Path, output: Path) -> Mapping[str, Any]:
             ("hardware_kernel_executed", True),
             ("simulator_kernel_executed", False),
             ("cpu_fallback_used", False),
+            ("physical_target_verified", True),
+            ("startup_resource_admission_passed", True),
+            ("execution_resource_admission_passed", True),
         ):
             if facts.get(field) != expected:
                 raise ValueError(f"physical evidence requires {field}={expected!r} for {route_id}")
         active = facts.get("active_dpus")
         populated = facts.get("dominant_work_wave_populated_dpu_slots")
-        if type(active) is not int or not 1 <= active <= dpus or type(populated) is not int or not 1 <= populated <= dpus:
+        useful = facts.get("dominant_wave_useful_slots")
+        if (
+            type(active) is not int
+            or not 1 <= active <= dpus
+            or type(populated) is not int
+            or not 1 <= populated <= dpus
+            or type(useful) is not int
+            or not 1 <= useful <= dpus
+        ):
             raise ValueError(f"physical evidence lacks active/populated DPU facts for {route_id}")
         session = sessions_by_id.get(str(sample.get("session_instance_id")))
         terminal = session.get("terminal_backend_facts") if session else None
@@ -454,6 +530,7 @@ def inspect(*, input_dir: Path, output: Path) -> Mapping[str, Any]:
             ("hardware_kernel_executed", True),
             ("simulator_kernel_executed", False),
             ("cpu_fallback_used", False),
+            ("physical_target_verified", True),
         ):
             if terminal.get(field) != expected:
                 raise ValueError(f"physical session requires {field}={expected!r} for {route_id}")
@@ -465,8 +542,21 @@ def inspect(*, input_dir: Path, output: Path) -> Mapping[str, Any]:
             "observed_tasklets_per_dpu": tasklets,
             "active_dpus": active,
             "populated_dpu_slots": populated,
-            "useful_dpu_slots": facts.get("dominant_wave_useful_slots", populated),
-            "zero_work_dpu_slots": dpus - active,
+            "useful_dpu_slots": useful,
+            "zero_work_dpu_slots": dpus - populated,
+            "dominant_wave_zero_work_dpu_slots": dpus - populated,
+            "collection_resource_facts": {
+                field: facts[field]
+                for field in (
+                    "tasklet_row_sufficiency_passed",
+                    "dominant_work_wave_tasklet_row_sufficiency_passed",
+                    "dominant_work_wave_utilization",
+                    "arithmetic_weighted_dpu_slot_utilization",
+                    "arithmetic_weighted_tasklet_utilization",
+                    "collection_resource_admission_passed",
+                )
+                if field in facts
+            },
             "output_sha256": sample["output_sha256"],
             "physical_plan_id": physical_ids[route_id],
             "executable_id": executable_ids[route_id],
@@ -484,7 +574,7 @@ def inspect(*, input_dir: Path, output: Path) -> Mapping[str, Any]:
     t24 = _t24_plan_facts()
     payload = {
         "schema_version": "resource_general_summary_v1",
-        "source": {"commit": manifest.get("source_commit"), "worktree_dirty": False},
+        "source": {"commit": source_commit, "worktree_dirty": False},
         "routes": route_summary,
         "requested_observed_resources": route_summary,
         "idle_partial_facts": {"t24": t24},
@@ -493,7 +583,8 @@ def inspect(*, input_dir: Path, output: Path) -> Mapping[str, Any]:
             "identities": {field: next(iter(values)) for field, values in identities.items()},
             "kernel_policy": next(iter(kernel_policies)),
             "numeric_policy": next(iter(numeric_policies)),
-            "timing_scope": next(iter(timing_scopes)),
+            "measurement_scope": "steady_execution_v1",
+            "rank_response_timing_scope": next(iter(timing_scopes)),
         },
         "claim_ineligibility": {
             "performance_claim_eligible": False,

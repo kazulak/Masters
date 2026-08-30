@@ -146,7 +146,11 @@ def test_general_resource_build_records_all_tasklet_triplets_without_hash_unique
     monkeypatch.setattr(
         qualifier,
         "_dpu_memory_facts",
-        lambda _path: {"text_bytes": 1, "allocated_wram_data_and_stacks_bytes": 1},
+        lambda _path: {
+            "text_address": 0x80000000,
+            "text_bytes": 1,
+            "allocated_wram_data_and_stacks_bytes": 1,
+        },
     )
     monkeypatch.setattr(
         qualifier,
@@ -163,8 +167,36 @@ def test_general_resource_build_records_all_tasklet_triplets_without_hash_unique
 
     assert len(payload["builds"]) == 24
     assert all(record["host_argument_probe"]["nonallocating"] is True for record in payload["builds"])
+    assert all(record["target_link_verified"] is True for record in payload["builds"])
+    assert all(set(record["dpu_memory"]) == {"contraction", "initialization"} for record in payload["builds"])
     assert len({record["binaries"]["dpu_binary"]["sha256"] for record in payload["builds"]}) == 1
     assert json.loads(output.read_text(encoding="ascii")) == payload
+
+
+def test_general_resource_readelf_memory_ranges_reject_overflow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    qualifier = _general_resource_qualifier()
+    parsed = qualifier._parse_readelf_sections(
+        "  [ 1] .text PROGBITS 80000000 001000 002000 00 AX 0 0 1\n"
+        "  [ 2] .data NOBITS 00000000 003000 000100 00 WA 0 0 1\n"
+    )
+    assert parsed[0]["address"] == 0x80000000
+    assert parsed[1]["size_bytes"] == 0x100
+
+    monkeypatch.setattr(qualifier, "_readelf_sections", lambda _path: parsed)
+    facts = qualifier._dpu_memory_facts(Path("unused"))
+    assert facts["text_end_address"] == 0x80002000
+
+    overflowing_text = ({**parsed[0], "size_bytes": 24 * 1024 + 1}, parsed[1])
+    monkeypatch.setattr(qualifier, "_readelf_sections", lambda _path: overflowing_text)
+    with pytest.raises(ValueError, match="IRAM"):
+        qualifier._dpu_memory_facts(Path("unused"))
+
+    overflowing_wram = (parsed[0], {**parsed[1], "address": 64 * 1024, "size_bytes": 1})
+    monkeypatch.setattr(qualifier, "_readelf_sections", lambda _path: overflowing_wram)
+    with pytest.raises(ValueError, match="WRAM"):
+        qualifier._dpu_memory_facts(Path("unused"))
 
 
 def _general_resource_artifacts(qualifier: object):
@@ -179,14 +211,18 @@ def _general_resource_artifacts(qualifier: object):
         qualifier._ROUTE_SPECS.items(), start=1
     ):
         session_id = f"session-{index}"
-        active = 1 if dpus == 3 else dpus
+        active = dpus
+        populated = 1 if dpus == 3 else dpus
         samples.append(
             {
                 "route_id": route_id,
                 "status": "success",
                 "attempt_kind": "measurement",
+                "sample_index": 0,
+                "block_id": 0,
                 "session_instance_id": session_id,
                 "output_sha256": f"{index:x}" * 64,
+                "measurement": {"scope_id": "steady_execution_v1"},
                 "identities": {
                     "problem_id": "1" * 64,
                     "tensor_network_structure_id": "2" * 64,
@@ -196,7 +232,9 @@ def _general_resource_artifacts(qualifier: object):
                 },
                 "numeric_facts": {"numeric_policy": "split_complex_float32_v1"},
                 "validation": {
+                    "policy_reference_applicable": True,
                     "policy_reference_passed": True,
+                    "full_precision_threshold_applicable": True,
                     "full_precision_passed": True,
                     "accuracy_qualified": True,
                 },
@@ -205,14 +243,18 @@ def _general_resource_artifacts(qualifier: object):
                     "allocated_dpus": dpus,
                     "tasklets_per_dpu": tasklets,
                     "active_dpus": active,
-                    "dominant_work_wave_populated_dpu_slots": active,
-                    "dominant_wave_useful_slots": active,
+                    "dominant_work_wave_populated_dpu_slots": populated,
+                    "dominant_wave_useful_slots": populated,
                     "target_observed": "physical_hardware",
+                    "physical_target_verified": True,
                     "hardware_kernel_executed": True,
                     "simulator_kernel_executed": False,
                     "cpu_fallback_used": False,
+                    "startup_resource_admission_passed": True,
+                    "execution_resource_admission_passed": True,
                     "kernel_policy": "upmem_v4_wram_panel_v1",
                     "rank_response_timing_scope": "sum_of_per_request_max_rank_response_counters_v1",
+                    "collection_resource_admission_passed": tasklets != 24,
                 },
             }
         )
@@ -225,6 +267,7 @@ def _general_resource_artifacts(qualifier: object):
                     "observed_tasklets_per_dpu": tasklets,
                     "allocated_dpu_count": dpus,
                     "target_observed": "physical_hardware",
+                    "physical_target_verified": True,
                     "hardware_kernel_executed": True,
                     "simulator_kernel_executed": False,
                     "cpu_fallback_used": False,
@@ -252,16 +295,62 @@ def test_general_resource_inspect_requires_canonical_physical_evidence(
         },
     )
     monkeypatch.setattr(qualifier, "load_artifacts", lambda _path: (manifest, samples, sessions))
+    monkeypatch.setattr(qualifier, "_require_clean_source", lambda: "a" * 40)
     output = tmp_path / "resource_general_summary.json"
 
     payload = qualifier.inspect(input_dir=tmp_path / "evidence", output=output)
 
     assert payload["overall_pass"] is True
-    assert payload["routes"]["upmem_float32_3dpu_t8"]["active_dpus"] == 1
+    assert payload["routes"]["upmem_float32_3dpu_t8"]["active_dpus"] == 3
+    assert payload["routes"]["upmem_float32_3dpu_t8"]["populated_dpu_slots"] == 1
     assert payload["routes"]["upmem_float32_3dpu_t8"]["zero_work_dpu_slots"] == 2
     assert payload["idle_partial_facts"]["t24"]["max_relevant_local_m"] < 24
     assert payload["claim_ineligibility"]["performance_claim_eligible"] is False
     assert json.loads(output.read_text(encoding="ascii")) == payload
+
+
+@pytest.mark.parametrize("failure", ("scope", "source", "admission"))
+def test_general_resource_inspect_rejects_tightened_evidence_contracts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    qualifier = _general_resource_qualifier()
+    manifest, samples, sessions = _general_resource_artifacts(qualifier)
+    samples = list(samples)
+    if failure == "scope":
+        samples[0] = {**samples[0], "measurement": {"scope_id": "bringup_v1"}}
+        expected = "steady_execution"
+    elif failure == "source":
+        manifest = {**manifest, "source_commit": "b" * 40}
+        expected = "current HEAD"
+    else:
+        samples[0] = {
+            **samples[0],
+            "backend_facts": {
+                **samples[0]["backend_facts"],
+                "startup_resource_admission_passed": False,
+            },
+        }
+        expected = "startup_resource_admission_passed"
+    monkeypatch.setattr(
+        qualifier,
+        "verify_artifacts",
+        lambda _path: {
+            "status": "completed",
+            "sample_count": 5,
+            "session_count": 5,
+            "success_count": 5,
+            "failed_count": 0,
+            "unsupported_count": 0,
+        },
+    )
+    monkeypatch.setattr(qualifier, "load_artifacts", lambda _path: (manifest, tuple(samples), sessions))
+    monkeypatch.setattr(qualifier, "_require_clean_source", lambda: "a" * 40)
+
+    with pytest.raises(ValueError, match=expected):
+        qualifier.inspect(
+            input_dir=tmp_path / "evidence",
+            output=tmp_path / "resource_general_summary.json",
+        )
 
 
 def test_sequential_conformance_covers_exact_fixtures_and_oracle_boundaries(
