@@ -41,6 +41,12 @@ The earlier 125/126 allocation incident is retained as excluded incident
 evidence. It is not part of this 126-sample result and does not establish a
 scaling claim.
 
+The original post-run inspector invocation also recorded a nonzero exit
+because it compared canonical mapping-key insertion order. The reporting
+descendant fixes that order-only defect and independently re-inspects the
+unchanged raw artifact successfully; this is a reporting-tool recovery, not a
+change to the physical execution evidence.
+
 ## Supported claims
 
 This result supports physical correctness, exact source and binary
