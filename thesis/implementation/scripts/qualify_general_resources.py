@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+from math import isfinite
 from pathlib import Path
 import re
 import subprocess
@@ -19,12 +20,20 @@ from typing import Any, Mapping, Sequence
 import yaml
 
 from quantum_bench.cli import _job, _plan_dag
-from quantum_bench.evidence import canonical_json, load_artifacts
+from quantum_bench.evidence import (
+    canonical_json,
+    identity_hash,
+    load_artifacts,
+    problem_id,
+    tensor_network_structure_id,
+)
 from quantum_bench.experiment import load_experiment_config
+from quantum_bench.lowering import contraction_dag_hash
 from quantum_bench.report import verify_artifacts
 from quantum_bench.upmem.plan import (
     UpmemTopology,
     collection_resource_admission,
+    physical_plan_id,
     plan_upmem,
 )
 
@@ -42,15 +51,11 @@ _ROUTE_SPECS = {
     "upmem_float32_3dpu_t8": (3, 8),
 }
 _BINARY_FIELDS = ("host_binary", "dpu_binary", "initialization_binary")
-_IDENTITY_FIELDS = (
-    "problem_id",
-    "tensor_network_structure_id",
-    "logical_plan_id",
-)
 _SECTION = re.compile(
     r"^\s*\[\s*\d+\]\s+(\S+)\s+(\S+)\s+([0-9A-Fa-f]+)\s+\S+\s+([0-9A-Fa-f]+)\s+\S+\s+([A-Z]*)\s"
 )
 _SHA256 = re.compile(r"[0-9a-f]{40}")
+_CANONICAL_ID = re.compile(r"[0-9a-f]{64}")
 _IRAM_START = 0x80000000
 _IRAM_LIMIT_BYTES = 24 * 1024
 _WRAM_LIMIT_BYTES = 64 * 1024
@@ -172,6 +177,54 @@ def _validate_template(config: Mapping[str, Any]) -> None:
         }
     ]:
         raise ValueError("resource-general qualification matrix is not exact")
+
+
+def _embedded_semantic_configuration(manifest: Mapping[str, Any]) -> Mapping[str, Any]:
+    experiment_id = manifest.get("experiment_id")
+    if not isinstance(experiment_id, str) or _CANONICAL_ID.fullmatch(experiment_id) is None:
+        raise ValueError("manifest experiment_id must be a canonical 64-hex ID")
+    configuration = manifest.get("configuration")
+    experiment = configuration.get("experiment") if isinstance(configuration, Mapping) else None
+    if not isinstance(experiment, Mapping) or experiment.get("experiment_id") != experiment_id:
+        raise ValueError("manifest experiment_id does not match configuration.experiment")
+    payload = experiment.get("experiment_identity_payload")
+    semantic = payload.get("configuration") if isinstance(payload, Mapping) else None
+    if not isinstance(semantic, Mapping):
+        raise ValueError("embedded experiment lacks its semantic identity configuration")
+    if experiment.get("schema_version") != "tn_benchmark_v3":
+        raise ValueError("resource-general evidence requires tn_benchmark_v3")
+    if identity_hash("quantum_bench.experiment_id.v3", payload) != experiment_id:
+        raise ValueError("manifest experiment_id does not match its canonical identity payload")
+    _validate_template(semantic)
+    return semantic
+
+
+def _expected_execution_contract(config: Mapping[str, Any]) -> Mapping[str, Any]:
+    job = _job(config["cases"]["quantization_stress_18q"])
+    network, _, dag, _ = _plan_dag(job, config["plans"]["greedy"])
+    routes: dict[str, Any] = {}
+    for route_id, (dpus, tasklets) in _ROUTE_SPECS.items():
+        route = config["routes"][route_id]
+        plan = plan_upmem(
+            dag,
+            numeric_policy=route["numeric_policy"],
+            topology=UpmemTopology(
+                dpu_count=dpus,
+                rank_count=1,
+                tasklets_per_dpu=tasklets,
+            ),
+        )
+        routes[route_id] = {
+            "plan": plan,
+            "physical_plan_id": physical_plan_id(plan),
+            "kernel_policy": plan.kernel_policy,
+        }
+    return {
+        "problem_id": problem_id(job),
+        "tensor_network_structure_id": tensor_network_structure_id(network),
+        "logical_plan_id": contraction_dag_hash(dag),
+        "routes": routes,
+    }
 
 
 def _binary_paths(tasklets: int) -> dict[str, Path]:
@@ -382,15 +435,7 @@ def _joined_facts(sample: Mapping[str, Any], sessions: Mapping[str, Mapping[str,
     return result
 
 
-def _t24_plan_facts() -> Mapping[str, Any]:
-    config = _template_configuration()
-    _validate_template(config)
-    _, _, dag, _ = _plan_dag(_job(config["cases"]["quantization_stress_18q"]), config["plans"]["greedy"])
-    plan = plan_upmem(
-        dag,
-        numeric_policy="split_complex_float32_v1",
-        topology=UpmemTopology(dpu_count=1, rank_count=1, tasklets_per_dpu=24),
-    )
+def _t24_plan_facts(plan: Any) -> Mapping[str, Any]:
     local_m = [unit.m_size for stage in plan.stages for unit in stage.work_units]
     maximum = max(local_m)
     if maximum >= 24:
@@ -427,15 +472,12 @@ def inspect(*, input_dir: Path, output: Path) -> Mapping[str, Any]:
             raise ValueError(f"canonical evidence has unexpected {field}: {verification.get(field)!r}")
     if manifest.get("source_worktree_dirty") is not False:
         raise ValueError("physical evidence must bind to a clean source worktree")
-    if manifest.get("experiment_id") != "resource-general-correctness-stress18":
-        raise ValueError("physical evidence has the wrong experiment")
+    semantic_config = _embedded_semantic_configuration(manifest)
+    expected_contract = _expected_execution_contract(semantic_config)
     sessions_by_id = {str(session.get("session_instance_id")): session for session in sessions}
     if len(sessions_by_id) != 5:
         raise ValueError("physical evidence must contain five unique sessions")
     route_rows: dict[str, Mapping[str, Any]] = {}
-    identities: dict[str, set[str]] = {field: set() for field in _IDENTITY_FIELDS}
-    kernel_policies: set[str] = set()
-    numeric_policies: set[str] = set()
     timing_scopes: set[str] = set()
     physical_ids: dict[str, str] = {}
     executable_ids: dict[str, str] = {}
@@ -444,6 +486,11 @@ def inspect(*, input_dir: Path, output: Path) -> Mapping[str, Any]:
         route_id = sample.get("route_id")
         if route_id not in _ROUTE_SPECS or route_id in route_rows or sample.get("status") != "success":
             raise ValueError("physical evidence does not contain one successful sample per route")
+        if (
+            sample.get("case_id") != "quantization_stress_18q"
+            or sample.get("plan_id") != "greedy"
+        ):
+            raise ValueError("physical evidence requires quantization_stress_18q with greedy")
         if (
             sample.get("attempt_kind") != "measurement"
             or sample.get("sample_index") != 0
@@ -459,19 +506,23 @@ def inspect(*, input_dir: Path, output: Path) -> Mapping[str, Any]:
         numeric = sample.get("numeric_facts")
         if not isinstance(sample_identities, Mapping) or not isinstance(validation, Mapping) or not isinstance(numeric, Mapping):
             raise ValueError("physical sample lacks identity, validation, or numeric facts")
-        for field in _IDENTITY_FIELDS:
-            value = sample_identities.get(field)
-            if not isinstance(value, str) or not value:
-                raise ValueError(f"physical sample lacks {field}")
-            identities[field].add(value)
+        for field in (
+            "problem_id",
+            "tensor_network_structure_id",
+            "logical_plan_id",
+        ):
+            if sample_identities.get(field) != expected_contract[field]:
+                raise ValueError(f"physical sample has an unexpected {field}")
         for field in ("physical_plan_id", "executable_id"):
             value = sample_identities.get(field)
             if not isinstance(value, str) or not value:
                 raise ValueError(f"physical sample lacks {field}")
             (physical_ids if field == "physical_plan_id" else executable_ids)[route_id] = value
+        expected_route = expected_contract["routes"][route_id]
+        if physical_ids[route_id] != expected_route["physical_plan_id"]:
+            raise ValueError(f"physical sample has an unexpected physical_plan_id for {route_id}")
         if numeric.get("numeric_policy") != "split_complex_float32_v1":
             raise ValueError("physical sample has an unexpected numeric policy")
-        numeric_policies.add(str(numeric["numeric_policy"]))
         if not all(
             validation.get(field) is True
             for field in (
@@ -484,14 +535,13 @@ def inspect(*, input_dir: Path, output: Path) -> Mapping[str, Any]:
         ):
             raise ValueError("physical sample did not pass replay and float32 validation")
         facts = _joined_facts(sample, sessions_by_id)
-        for field, values in (
-            ("kernel_policy", kernel_policies),
-            ("rank_response_timing_scope", timing_scopes),
-        ):
+        for field, values in (("rank_response_timing_scope", timing_scopes),):
             value = facts.get(field)
             if not isinstance(value, str) or not value:
                 raise ValueError(f"physical sample lacks {field}")
             values.add(value)
+        if facts.get("kernel_policy") != expected_route["kernel_policy"]:
+            raise ValueError(f"physical sample has an unexpected kernel_policy for {route_id}")
         dpus, tasklets = _ROUTE_SPECS[route_id]
         for field, expected in (
             ("requested_dpus", dpus),
@@ -519,6 +569,29 @@ def inspect(*, input_dir: Path, output: Path) -> Mapping[str, Any]:
             or not 1 <= useful <= dpus
         ):
             raise ValueError(f"physical evidence lacks active/populated DPU facts for {route_id}")
+        if useful != populated or active < populated or active > dpus:
+            raise ValueError(f"physical evidence has incoherent active/populated DPU facts for {route_id}")
+        collection_bools = (
+            "tasklet_row_sufficiency_passed",
+            "dominant_work_wave_tasklet_row_sufficiency_passed",
+            "collection_resource_admission_passed",
+        )
+        collection_ratios = (
+            "dominant_work_wave_utilization",
+            "arithmetic_weighted_dpu_slot_utilization",
+            "arithmetic_weighted_tasklet_utilization",
+        )
+        for field in collection_bools:
+            if type(facts.get(field)) is not bool:
+                raise ValueError(f"physical sample lacks boolean collection resource fact {field}")
+        for field in collection_ratios:
+            value = facts.get(field)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(float(value)) or not 0.0 <= float(value) <= 1.0:
+                raise ValueError(f"physical sample lacks finite collection resource fact {field}")
+        expected_admission = collection_resource_admission(expected_route["plan"])
+        for field in collection_bools:
+            if facts[field] != expected_admission[field]:
+                raise ValueError(f"physical sample has an unexpected {field} for {route_id}")
         session = sessions_by_id.get(str(sample.get("session_instance_id")))
         terminal = session.get("terminal_backend_facts") if session else None
         if not isinstance(session, Mapping) or session.get("status") != "success" or session.get("release_verified") is not True or not isinstance(terminal, Mapping):
@@ -543,7 +616,6 @@ def inspect(*, input_dir: Path, output: Path) -> Mapping[str, Any]:
             "active_dpus": active,
             "populated_dpu_slots": populated,
             "useful_dpu_slots": useful,
-            "zero_work_dpu_slots": dpus - populated,
             "dominant_wave_zero_work_dpu_slots": dpus - populated,
             "collection_resource_facts": {
                 field: facts[field]
@@ -563,26 +635,30 @@ def inspect(*, input_dir: Path, output: Path) -> Mapping[str, Any]:
         }
     if (
         set(route_rows) != set(_ROUTE_SPECS)
-        or any(len(values) != 1 for values in identities.values())
-        or len(kernel_policies) != 1
-        or len(numeric_policies) != 1
         or len(timing_scopes) != 1
     ):
         raise ValueError("physical evidence does not bind one problem, plan, and policy")
     if len(set(physical_ids.values())) != 5 or len(set(executable_ids.values())) != 5:
         raise ValueError("route physical plans or tasklet executables are not distinct as required")
-    t24 = _t24_plan_facts()
+    t24 = _t24_plan_facts(expected_contract["routes"]["upmem_float32_1dpu_t24"]["plan"])
     payload = {
         "schema_version": "resource_general_summary_v1",
         "source": {"commit": source_commit, "worktree_dirty": False},
         "routes": route_summary,
-        "requested_observed_resources": route_summary,
         "idle_partial_facts": {"t24": t24},
         "validation": {"replay_and_float32_passed": True, "output_hashes_present": True},
         "provenance": {
-            "identities": {field: next(iter(values)) for field, values in identities.items()},
-            "kernel_policy": next(iter(kernel_policies)),
-            "numeric_policy": next(iter(numeric_policies)),
+            "experiment_id": manifest["experiment_id"],
+            "identities": {
+                field: expected_contract[field]
+                for field in (
+                    "problem_id",
+                    "tensor_network_structure_id",
+                    "logical_plan_id",
+                )
+            },
+            "kernel_policy": expected_contract["routes"]["upmem_float32_1dpu_t3"]["kernel_policy"],
+            "numeric_policy": "split_complex_float32_v1",
             "measurement_scope": "steady_execution_v1",
             "rank_response_timing_scope": next(iter(timing_scopes)),
         },

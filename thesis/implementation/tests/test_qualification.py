@@ -200,10 +200,14 @@ def test_general_resource_readelf_memory_ranges_reject_overflow(
 
 
 def _general_resource_artifacts(qualifier: object):
+    experiment = qualifier._plain(qualifier.load_experiment_config(qualifier.TEMPLATE))
+    semantic = experiment["experiment_identity_payload"]["configuration"]
+    contract = qualifier._expected_execution_contract(semantic)
     manifest = {
         "source_commit": "a" * 40,
         "source_worktree_dirty": False,
-        "experiment_id": "resource-general-correctness-stress18",
+        "experiment_id": experiment["experiment_id"],
+        "configuration": {"experiment": experiment},
     }
     samples = []
     sessions = []
@@ -211,10 +215,13 @@ def _general_resource_artifacts(qualifier: object):
         qualifier._ROUTE_SPECS.items(), start=1
     ):
         session_id = f"session-{index}"
-        active = dpus
-        populated = 1 if dpus == 3 else dpus
+        expected_route = contract["routes"][route_id]
+        admission = qualifier.collection_resource_admission(expected_route["plan"])
+        populated = admission["dominant_work_wave_populated_dpu_slots"]
         samples.append(
             {
+                "case_id": "quantization_stress_18q",
+                "plan_id": "greedy",
                 "route_id": route_id,
                 "status": "success",
                 "attempt_kind": "measurement",
@@ -224,10 +231,10 @@ def _general_resource_artifacts(qualifier: object):
                 "output_sha256": f"{index:x}" * 64,
                 "measurement": {"scope_id": "steady_execution_v1"},
                 "identities": {
-                    "problem_id": "1" * 64,
-                    "tensor_network_structure_id": "2" * 64,
-                    "logical_plan_id": "3" * 64,
-                    "physical_plan_id": f"{index + 3:x}" * 64,
+                    "problem_id": contract["problem_id"],
+                    "tensor_network_structure_id": contract["tensor_network_structure_id"],
+                    "logical_plan_id": contract["logical_plan_id"],
+                    "physical_plan_id": expected_route["physical_plan_id"],
                     "executable_id": f"{index + 8:x}" * 64,
                 },
                 "numeric_facts": {"numeric_policy": "split_complex_float32_v1"},
@@ -242,7 +249,7 @@ def _general_resource_artifacts(qualifier: object):
                     "requested_dpus": dpus,
                     "allocated_dpus": dpus,
                     "tasklets_per_dpu": tasklets,
-                    "active_dpus": active,
+                    "active_dpus": dpus,
                     "dominant_work_wave_populated_dpu_slots": populated,
                     "dominant_wave_useful_slots": populated,
                     "target_observed": "physical_hardware",
@@ -252,9 +259,24 @@ def _general_resource_artifacts(qualifier: object):
                     "cpu_fallback_used": False,
                     "startup_resource_admission_passed": True,
                     "execution_resource_admission_passed": True,
-                    "kernel_policy": "upmem_v4_wram_panel_v1",
+                    "kernel_policy": expected_route["kernel_policy"],
                     "rank_response_timing_scope": "sum_of_per_request_max_rank_response_counters_v1",
-                    "collection_resource_admission_passed": tasklets != 24,
+                    "tasklet_row_sufficiency_passed": admission["tasklet_row_sufficiency_passed"],
+                    "dominant_work_wave_tasklet_row_sufficiency_passed": admission[
+                        "dominant_work_wave_tasklet_row_sufficiency_passed"
+                    ],
+                    "dominant_work_wave_utilization": admission[
+                        "dominant_work_wave_utilization"
+                    ],
+                    "arithmetic_weighted_dpu_slot_utilization": admission[
+                        "arithmetic_weighted_dpu_slot_utilization"
+                    ],
+                    "arithmetic_weighted_tasklet_utilization": admission[
+                        "arithmetic_weighted_tasklet_utilization"
+                    ],
+                    "collection_resource_admission_passed": admission[
+                        "collection_resource_admission_passed"
+                    ],
                 },
             }
         )
@@ -302,27 +324,40 @@ def test_general_resource_inspect_requires_canonical_physical_evidence(
 
     assert payload["overall_pass"] is True
     assert payload["routes"]["upmem_float32_3dpu_t8"]["active_dpus"] == 3
-    assert payload["routes"]["upmem_float32_3dpu_t8"]["populated_dpu_slots"] == 1
-    assert payload["routes"]["upmem_float32_3dpu_t8"]["zero_work_dpu_slots"] == 2
+    assert payload["routes"]["upmem_float32_3dpu_t8"]["populated_dpu_slots"] == 3
+    assert payload["routes"]["upmem_float32_3dpu_t8"]["dominant_wave_zero_work_dpu_slots"] == 0
+    assert "zero_work_dpu_slots" not in payload["routes"]["upmem_float32_3dpu_t8"]
+    assert "requested_observed_resources" not in payload
     assert payload["idle_partial_facts"]["t24"]["max_relevant_local_m"] < 24
     assert payload["claim_ineligibility"]["performance_claim_eligible"] is False
     assert json.loads(output.read_text(encoding="ascii")) == payload
 
 
-@pytest.mark.parametrize("failure", ("scope", "source", "admission"))
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    (
+        ("scope", "steady_execution"),
+        ("source", "current HEAD"),
+        ("admission", "startup_resource_admission_passed"),
+        ("embedded_config", "zero warmups"),
+        ("physical_plan", "physical_plan_id"),
+        ("resource_coherence", "incoherent active/populated"),
+        ("missing_collection", "collection resource fact"),
+        ("incorrect_collection", "collection_resource_admission_passed"),
+    ),
+)
 def test_general_resource_inspect_rejects_tightened_evidence_contracts(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str, expected: str
 ) -> None:
     qualifier = _general_resource_qualifier()
     manifest, samples, sessions = _general_resource_artifacts(qualifier)
+    manifest = qualifier._plain(manifest)
     samples = list(samples)
     if failure == "scope":
         samples[0] = {**samples[0], "measurement": {"scope_id": "bringup_v1"}}
-        expected = "steady_execution"
     elif failure == "source":
         manifest = {**manifest, "source_commit": "b" * 40}
-        expected = "current HEAD"
-    else:
+    elif failure == "admission":
         samples[0] = {
             **samples[0],
             "backend_facts": {
@@ -330,7 +365,46 @@ def test_general_resource_inspect_rejects_tightened_evidence_contracts(
                 "startup_resource_admission_passed": False,
             },
         }
-        expected = "startup_resource_admission_passed"
+    elif failure == "embedded_config":
+        identity = manifest["configuration"]["experiment"]
+        identity["experiment_identity_payload"]["configuration"]["collection"]["warmup_blocks"] = 1
+        manifest["experiment_id"] = qualifier.identity_hash(
+            "quantum_bench.experiment_id.v3",
+            identity["experiment_identity_payload"],
+        )
+        identity["experiment_id"] = manifest["experiment_id"]
+    elif failure == "physical_plan":
+        samples[0] = {
+            **samples[0],
+            "identities": {**samples[0]["identities"], "physical_plan_id": "0" * 64},
+        }
+    elif failure == "resource_coherence":
+        index = next(
+            index
+            for index, sample in enumerate(samples)
+            if sample["route_id"] == "upmem_float32_3dpu_t8"
+        )
+        samples[index] = {
+            **samples[index],
+            "backend_facts": {
+                **samples[index]["backend_facts"],
+                "active_dpus": 1,
+                "dominant_work_wave_populated_dpu_slots": 3,
+                "dominant_wave_useful_slots": 2,
+            },
+        }
+    elif failure == "missing_collection":
+        facts = dict(samples[0]["backend_facts"])
+        del facts["arithmetic_weighted_tasklet_utilization"]
+        samples[0] = {**samples[0], "backend_facts": facts}
+    else:
+        samples[0] = {
+            **samples[0],
+            "backend_facts": {
+                **samples[0]["backend_facts"],
+                "collection_resource_admission_passed": False,
+            },
+        }
     monkeypatch.setattr(
         qualifier,
         "verify_artifacts",
