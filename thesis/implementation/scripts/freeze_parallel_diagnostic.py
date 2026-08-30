@@ -73,11 +73,15 @@ def _copy(source: Path, staging: Path, relative: str) -> None:
 
 
 def _check_descendant_paths(source_sha: str, reporting_sha: str) -> None:
-    changed = {
-        path
-        for path in _git("diff", "--name-only", f"{source_sha}..{reporting_sha}").splitlines()
-        if path
-    }
+    implementation_prefix = "thesis/implementation/"
+    changed = set()
+    for path in _git(
+        "diff", "--name-only", f"{source_sha}..{reporting_sha}"
+    ).splitlines():
+        if path.startswith(implementation_prefix):
+            path = path.removeprefix(implementation_prefix)
+        if path:
+            changed.add(path)
     unexpected = sorted(changed - ALLOWED_DESCENDANT_PATHS)
     if unexpected:
         raise ValueError(
