@@ -1,0 +1,252 @@
+{
+  "anchor_case_id": "quantization_stress_18q_l2",
+  "candidates": [
+    {
+      "candidate_id": "quantization_stress_18q_l2",
+      "circuit": {
+        "descriptors": {
+          "gate_count": 124,
+          "gate_counts": {
+            "cx": 34,
+            "h": 36,
+            "rz": 54
+          },
+          "interaction_graph": {
+            "density": 0.1111111111111111,
+            "edge_count": 17,
+            "max_degree": 2
+          },
+          "n_qubits": 18,
+          "true_deterministic_depth": 24
+        },
+        "kind": "builtin",
+        "name": "quantization_stress",
+        "parameters": {
+          "n_qubits": 18,
+          "repeat_layers": 2
+        }
+      },
+      "distances": {
+        "bv_18q": 2.056109482822927,
+        "ghz_chain_18q": 1.4528968124122124,
+        "hs_18q_d1": 2.0690365473874106
+      },
+      "problem_id": "d816fc52d21316c43ebbad0fed5385f66efef152952edc10bbd8b6036e40f36e",
+      "selection_descriptors": {
+        "d4t8_dpu_utilization": 0.9856804205712721,
+        "interaction_density": 0.1111111111111111,
+        "log2_non_final_peak_elements": 16.0,
+        "log2_optimized_flops": 21.420128822463337,
+        "log2_t8_work_unit_count": 7.794415866350106,
+        "normalized_max_degree": 0.11764705882352941,
+        "t8_tasklet_utilization": 0.9986201430603744
+      },
+      "tensor_network": {
+        "contraction_count": 141,
+        "final_output_elements": 262144,
+        "index_count": 176,
+        "largest_non_final_intermediate_bytes_complex128": 1048576,
+        "largest_non_final_intermediate_elements": 65536,
+        "logical_plan_id": "d504919e20d95bac608dd906d46abb122f9680873679710b0584e71981648fb5",
+        "max_intermediate_rank": 18,
+        "planner_flops_estimate": 2806088.0,
+        "planner_peak_elements_including_final_output_estimate": 262144,
+        "tensor_count": 142
+      }
+    },
+    {
+      "candidate_id": "ghz_chain_18q",
+      "circuit": {
+        "descriptors": {
+          "gate_count": 18,
+          "gate_counts": {
+            "cx": 17,
+            "h": 1
+          },
+          "interaction_graph": {
+            "density": 0.1111111111111111,
+            "edge_count": 17,
+            "max_degree": 2
+          },
+          "n_qubits": 18,
+          "true_deterministic_depth": 18
+        },
+        "kind": "builtin",
+        "name": "ghz_chain",
+        "parameters": {
+          "n_qubits": 18
+        }
+      },
+      "distances": {
+        "bv_18q": 2.327987870020999,
+        "hs_18q_d1": 2.157642564214008,
+        "quantization_stress_18q_l2": 1.4528968124122124
+      },
+      "problem_id": "3991981dd57dd352828debc445aac58a2ffa9111277b1a91939c2ea91d489f59",
+      "selection_descriptors": {
+        "d4t8_dpu_utilization": 0.9948840007503008,
+        "interaction_density": 0.1111111111111111,
+        "log2_non_final_peak_elements": 17.0,
+        "log2_optimized_flops": 20.73779527502949,
+        "log2_t8_work_unit_count": 8.535275376620802,
+        "normalized_max_degree": 0.11764705882352941,
+        "t8_tasklet_utilization": 0.6997178365716743
+      },
+      "tensor_network": {
+        "contraction_count": 35,
+        "final_output_elements": 262144,
+        "index_count": 53,
+        "largest_non_final_intermediate_bytes_complex128": 2097152,
+        "largest_non_final_intermediate_elements": 131072,
+        "logical_plan_id": "83da361a1f41fb6ad1126a28e4912204d26ee08f2cf5d1f2f3e6a45afa680193",
+        "max_intermediate_rank": 18,
+        "planner_flops_estimate": 1748632.0,
+        "planner_peak_elements_including_final_output_estimate": 262144,
+        "tensor_count": 36
+      }
+    },
+    {
+      "candidate_id": "bv_18q",
+      "circuit": {
+        "descriptors": {
+          "gate_count": 45,
+          "gate_counts": {
+            "cx": 9,
+            "h": 35,
+            "x": 1
+          },
+          "interaction_graph": {
+            "density": 0.058823529411764705,
+            "edge_count": 9,
+            "max_degree": 9
+          },
+          "n_qubits": 18,
+          "true_deterministic_depth": 12
+        },
+        "kind": "builtin",
+        "name": "bv",
+        "parameters": {
+          "n_qubits": 18
+        }
+      },
+      "distances": {
+        "ghz_chain_18q": 2.327987870020999,
+        "hs_18q_d1": 1.093835887956484,
+        "quantization_stress_18q_l2": 2.056109482822927
+      },
+      "problem_id": "6698ee3a4d99358d450b4b7f82ab0765ea85ed9cadf03422abe57e8be12dd19c",
+      "selection_descriptors": {
+        "d4t8_dpu_utilization": 0.9909216298105187,
+        "interaction_density": 0.058823529411764705,
+        "log2_non_final_peak_elements": 10.0,
+        "log2_optimized_flops": 18.03329393788284,
+        "log2_t8_work_unit_count": 6.022367813028454,
+        "normalized_max_degree": 0.5294117647058824,
+        "t8_tasklet_utilization": 0.9982815538371094
+      },
+      "tensor_network": {
+        "contraction_count": 62,
+        "final_output_elements": 262144,
+        "index_count": 72,
+        "largest_non_final_intermediate_bytes_complex128": 16384,
+        "largest_non_final_intermediate_elements": 1024,
+        "logical_plan_id": "9c0add015d4ea784c624cf5dfa32867b1937303e4361b30d1c1e0467a83560cb",
+        "max_intermediate_rank": 18,
+        "planner_flops_estimate": 268264.0,
+        "planner_peak_elements_including_final_output_estimate": 262144,
+        "tensor_count": 63
+      }
+    },
+    {
+      "candidate_id": "hs_18q_d1",
+      "circuit": {
+        "descriptors": {
+          "gate_count": 36,
+          "gate_counts": {
+            "cz": 9,
+            "h": 18,
+            "x": 9
+          },
+          "interaction_graph": {
+            "density": 0.058823529411764705,
+            "edge_count": 9,
+            "max_degree": 1
+          },
+          "n_qubits": 18,
+          "true_deterministic_depth": 3
+        },
+        "kind": "builtin",
+        "name": "hs",
+        "parameters": {
+          "depth": 1,
+          "n_qubits": 18
+        }
+      },
+      "distances": {
+        "bv_18q": 1.093835887956484,
+        "ghz_chain_18q": 2.157642564214008,
+        "quantization_stress_18q_l2": 2.0690365473874106
+      },
+      "problem_id": "3041c3f6b10c61f860b9191479ab8426d3139ce17a9839fe77b2fbe5492ee655",
+      "selection_descriptors": {
+        "d4t8_dpu_utilization": 0.9949755979265816,
+        "interaction_density": 0.058823529411764705,
+        "log2_non_final_peak_elements": 10.0,
+        "log2_optimized_flops": 18.011664051890573,
+        "log2_t8_work_unit_count": 5.807354922057604,
+        "normalized_max_degree": 0.058823529411764705,
+        "t8_tasklet_utilization": 0.9991777562217709
+      },
+      "tensor_network": {
+        "contraction_count": 53,
+        "final_output_elements": 262144,
+        "index_count": 63,
+        "largest_non_final_intermediate_bytes_complex128": 16384,
+        "largest_non_final_intermediate_elements": 1024,
+        "logical_plan_id": "dd46d96263bc04008e7800fc0c50b8bd6824badb435b2878a38398ab3d6a8bef",
+        "max_intermediate_rank": 18,
+        "planner_flops_estimate": 264272.0,
+        "planner_peak_elements_including_final_output_estimate": 262144,
+        "tensor_count": 54
+      }
+    }
+  ],
+  "characterization_sha256": "71b162d72956cec8a3c716a5e334aa13c0b5cc5a886b6c505c93cd440c79c549",
+  "dependency_identity": {
+    "opt_einsum": "3.4.0"
+  },
+  "distinct_case_id": "ghz_chain_18q",
+  "low_case_id": "hs_18q_d1",
+  "planner_identity": {
+    "engine": "opt_einsum",
+    "mode": "greedy"
+  },
+  "schema_version": "circuit_resource_sensitivity_selection_v1",
+  "selected_case_ids": [
+    "quantization_stress_18q_l2",
+    "hs_18q_d1",
+    "ghz_chain_18q"
+  ],
+  "selection_basis_sha256": "36ba2c47a66f753132edc660ef9593950f7e688fc6bb8fbcc37b0c77e465809c",
+  "selection_rule": {
+    "anchor_case_id": "quantization_stress_18q_l2",
+    "distance_fields": [
+      "interaction_density",
+      "normalized_max_degree",
+      "log2_optimized_flops",
+      "log2_non_final_peak_elements",
+      "log2_t8_work_unit_count",
+      "t8_tasklet_utilization",
+      "d4t8_dpu_utilization"
+    ],
+    "distinct_case_rule": "maximize_minimum_normalized_euclidean_distance_from_anchor_and_low_case",
+    "low_case_rule": [
+      "largest_non_final_intermediate_elements",
+      "planner_flops_estimate",
+      "candidate_id"
+    ],
+    "normalization": "min_max_over_all_four_candidates_constant_fields_zero",
+    "timing_used": false
+  },
+  "source_sha": "c80ef7e1efcb260cc380163ad4fedaed7d958ac6"
+}
