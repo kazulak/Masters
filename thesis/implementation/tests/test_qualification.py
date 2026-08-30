@@ -27,6 +27,7 @@ ATTRIBUTION_SCRIPT = ROOT / "scripts" / "analyze_m7d_attribution.py"
 CONFORMANCE_SCRIPT = ROOT / "scripts" / "check_sequential_conformance.py"
 SEQUENTIAL_BASELINE_SCRIPT = ROOT / "scripts" / "qualify_sequential_baseline.py"
 BOOTSTRAP_SCRIPT = ROOT / "scripts" / "bootstrap_env.py"
+GENERAL_RESOURCE_SCRIPT = ROOT / "scripts" / "qualify_general_resources.py"
 
 
 def _load_script(path: Path, name: str):
@@ -76,6 +77,191 @@ def _sequential_baseline():
 
 def _bootstrap():
     return _load_script(BOOTSTRAP_SCRIPT, "bootstrap_env")
+
+
+def _general_resource_qualifier():
+    return _load_script(GENERAL_RESOURCE_SCRIPT, "qualify_general_resources")
+
+
+def test_general_resource_template_has_the_exact_diagnostic_contract() -> None:
+    qualifier = _general_resource_qualifier()
+    config = qualifier._template_configuration()
+
+    qualifier._validate_template(config)
+    assert config["collection"]["warmup_blocks"] == 0
+    assert config["collection"]["measurement_blocks"] == 1
+    assert config["collection"]["session_policy"] == "fresh_session_per_attempt_v1"
+    assert config["collection"]["claim_policy"] == "diagnostic_v1"
+    assert config["matrix"][0]["route_ids"] == list(qualifier._ROUTE_SPECS)
+
+
+def test_general_resource_prepare_keeps_template_and_injects_machine_paths(
+    tmp_path: Path,
+) -> None:
+    qualifier = _general_resource_qualifier()
+    template_before = qualifier.TEMPLATE.read_bytes()
+    output = tmp_path / "resource_general_prepared.yml"
+
+    result = qualifier.prepare(
+        output=output,
+        rank_path="/dev/dpu_rank7",
+        session_root=str(tmp_path / "sessions"),
+        expected_cpus=[2, 5],
+    )
+    prepared = load_experiment_config(output)
+
+    assert result["status"] == "prepared"
+    assert qualifier.TEMPLATE.read_bytes() == template_before
+    assert prepared["collection"]["machine_policy"]["affinity"] == {
+        "mode": "exact_required_v1",
+        "expected_cpus": (2, 5),
+    }
+    for route_id in qualifier._ROUTE_SPECS:
+        options = prepared["routes"][route_id]["options"]
+        assert options["rank_paths"] == ("/dev/dpu_rank7",)
+        assert options["session_root"] == str((tmp_path / "sessions" / route_id).resolve())
+        for field in qualifier._BINARY_FIELDS:
+            assert Path(options[field]).is_absolute()
+
+
+def test_general_resource_build_records_all_tasklet_triplets_without_hash_uniqueness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    qualifier = _general_resource_qualifier()
+    binaries: dict[int, dict[str, Path]] = {}
+    for tasklets in range(1, 25):
+        paths = {}
+        for field, stem in (
+            ("host_binary", "host"),
+            ("dpu_binary", "dpu"),
+            ("initialization_binary", "init"),
+        ):
+            path = tmp_path / "bin" / f"{stem}-t{tasklets}"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"identical binary content")
+            paths[field] = path
+        binaries[tasklets] = paths
+
+    monkeypatch.setattr(qualifier, "_binary_paths", lambda tasklets: binaries[tasklets])
+    monkeypatch.setattr(
+        qualifier,
+        "_dpu_memory_facts",
+        lambda _path: {"text_bytes": 1, "allocated_wram_data_and_stacks_bytes": 1},
+    )
+    monkeypatch.setattr(
+        qualifier,
+        "_host_argument_probe",
+        lambda _paths, tasklets, _root: {"matching_tasklets": tasklets, "nonallocating": True},
+    )
+
+    def fake_run(command, **_kwargs):
+        return SimpleNamespace(returncode=0, stdout=f"-DNR_TASKLETS={command[-1].split('=')[1]}\n", stderr="")
+
+    monkeypatch.setattr(qualifier.subprocess, "run", fake_run)
+    output = tmp_path / "resource_general_builds.json"
+    payload = qualifier.build(output=output)
+
+    assert len(payload["builds"]) == 24
+    assert all(record["host_argument_probe"]["nonallocating"] is True for record in payload["builds"])
+    assert len({record["binaries"]["dpu_binary"]["sha256"] for record in payload["builds"]}) == 1
+    assert json.loads(output.read_text(encoding="ascii")) == payload
+
+
+def _general_resource_artifacts(qualifier: object):
+    manifest = {
+        "source_commit": "a" * 40,
+        "source_worktree_dirty": False,
+        "experiment_id": "resource-general-correctness-stress18",
+    }
+    samples = []
+    sessions = []
+    for index, (route_id, (dpus, tasklets)) in enumerate(
+        qualifier._ROUTE_SPECS.items(), start=1
+    ):
+        session_id = f"session-{index}"
+        active = 1 if dpus == 3 else dpus
+        samples.append(
+            {
+                "route_id": route_id,
+                "status": "success",
+                "attempt_kind": "measurement",
+                "session_instance_id": session_id,
+                "output_sha256": f"{index:x}" * 64,
+                "identities": {
+                    "problem_id": "1" * 64,
+                    "tensor_network_structure_id": "2" * 64,
+                    "logical_plan_id": "3" * 64,
+                    "physical_plan_id": f"{index + 3:x}" * 64,
+                    "executable_id": f"{index + 8:x}" * 64,
+                },
+                "numeric_facts": {"numeric_policy": "split_complex_float32_v1"},
+                "validation": {
+                    "policy_reference_passed": True,
+                    "full_precision_passed": True,
+                    "accuracy_qualified": True,
+                },
+                "backend_facts": {
+                    "requested_dpus": dpus,
+                    "allocated_dpus": dpus,
+                    "tasklets_per_dpu": tasklets,
+                    "active_dpus": active,
+                    "dominant_work_wave_populated_dpu_slots": active,
+                    "dominant_wave_useful_slots": active,
+                    "target_observed": "physical_hardware",
+                    "hardware_kernel_executed": True,
+                    "simulator_kernel_executed": False,
+                    "cpu_fallback_used": False,
+                    "kernel_policy": "upmem_v4_wram_panel_v1",
+                    "rank_response_timing_scope": "sum_of_per_request_max_rank_response_counters_v1",
+                },
+            }
+        )
+        sessions.append(
+            {
+                "session_instance_id": session_id,
+                "status": "success",
+                "release_verified": True,
+                "terminal_backend_facts": {
+                    "observed_tasklets_per_dpu": tasklets,
+                    "allocated_dpu_count": dpus,
+                    "target_observed": "physical_hardware",
+                    "hardware_kernel_executed": True,
+                    "simulator_kernel_executed": False,
+                    "cpu_fallback_used": False,
+                },
+            }
+        )
+    return manifest, tuple(samples), tuple(sessions)
+
+
+def test_general_resource_inspect_requires_canonical_physical_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    qualifier = _general_resource_qualifier()
+    manifest, samples, sessions = _general_resource_artifacts(qualifier)
+    monkeypatch.setattr(
+        qualifier,
+        "verify_artifacts",
+        lambda _path: {
+            "status": "completed",
+            "sample_count": 5,
+            "session_count": 5,
+            "success_count": 5,
+            "failed_count": 0,
+            "unsupported_count": 0,
+        },
+    )
+    monkeypatch.setattr(qualifier, "load_artifacts", lambda _path: (manifest, samples, sessions))
+    output = tmp_path / "resource_general_summary.json"
+
+    payload = qualifier.inspect(input_dir=tmp_path / "evidence", output=output)
+
+    assert payload["overall_pass"] is True
+    assert payload["routes"]["upmem_float32_3dpu_t8"]["active_dpus"] == 1
+    assert payload["routes"]["upmem_float32_3dpu_t8"]["zero_work_dpu_slots"] == 2
+    assert payload["idle_partial_facts"]["t24"]["max_relevant_local_m"] < 24
+    assert payload["claim_ineligibility"]["performance_claim_eligible"] is False
+    assert json.loads(output.read_text(encoding="ascii")) == payload
 
 
 def test_sequential_conformance_covers_exact_fixtures_and_oracle_boundaries(
