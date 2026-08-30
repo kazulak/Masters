@@ -39,7 +39,7 @@ NATIVE = ROOT / "native" / "upmem" / "runtime"
 SOURCE = NATIVE / "dpu.c"
 MAKEFILE = NATIVE / "Makefile"
 
-_SDK_CASES = (
+_LEGACY_SDK_CASES = (
     ("scalar_1x1x1", "float32", 1, 1, 1, 1),
     ("tail_m3_n35_k65", "float32", 1, 3, 35, 65),
     ("tasklet_t1_m17_n32_k65", "float32", 1, 17, 32, 65),
@@ -53,7 +53,17 @@ _SDK_CASES = (
     ("int8_tail", "int8", 8, 8, 35, 130),
     ("t24_functional", "float32", 24, 24, 32, 65),
 )
+_RESOURCE_GENERAL_SDK_CASES = (
+    ("resource_general_t3_m2", "float32", 3, 2, 32, 65),
+    ("resource_general_t5_m5", "float32", 5, 5, 32, 65),
+    ("resource_general_t7_m8", "float32", 7, 8, 32, 65),
+    ("resource_general_t12_m17", "float32", 12, 17, 32, 65),
+    ("resource_general_t16_m33", "float32", 16, 33, 32, 65),
+    ("resource_general_t24_m16", "float32", 24, 16, 32, 65),
+)
+_SDK_CASES = _LEGACY_SDK_CASES + _RESOURCE_GENERAL_SDK_CASES
 _SDK_CASE_IDS = tuple(case[0] for case in _SDK_CASES)
+_LEGACY_SDK_CASE_IDS = tuple(case[0] for case in _LEGACY_SDK_CASES)
 _SDK_CASE_RESULTS: dict[str, str] = {}
 
 
@@ -67,20 +77,26 @@ def _write_sdk_case_summary_at_session_end() -> None:
         return
     path = Path(destination)
     path.parent.mkdir(parents=True, exist_ok=True)
-    required = list(_SDK_CASE_IDS)
+    required = list(_LEGACY_SDK_CASE_IDS)
     executed = sorted(
         case_id
         for case_id, result in _SDK_CASE_RESULTS.items()
-        if result in {"passed", "failed"}
+        if case_id in _LEGACY_SDK_CASE_IDS and result in {"passed", "failed"}
     )
     passed = sorted(
-        case_id for case_id, result in _SDK_CASE_RESULTS.items() if result == "passed"
+        case_id
+        for case_id, result in _SDK_CASE_RESULTS.items()
+        if case_id in _LEGACY_SDK_CASE_IDS and result == "passed"
     )
     failed = sorted(
-        case_id for case_id, result in _SDK_CASE_RESULTS.items() if result == "failed"
+        case_id
+        for case_id, result in _SDK_CASE_RESULTS.items()
+        if case_id in _LEGACY_SDK_CASE_IDS and result == "failed"
     )
     skipped = sorted(
-        case_id for case_id, result in _SDK_CASE_RESULTS.items() if result == "skipped"
+        case_id
+        for case_id, result in _SDK_CASE_RESULTS.items()
+        if case_id in _LEGACY_SDK_CASE_IDS and result == "skipped"
     )
     path.write_text(
         json.dumps(

@@ -601,6 +601,175 @@ def _one_rank_t8_dag() -> ContractionDAG:
     )
 
 
+def _general_work_dag(work_count: int) -> ContractionDAG:
+    """Create exactly ``work_count`` output tiles for pure mapping tests."""
+
+    node = _contract(
+        f"general_work_{work_count}",
+        "left",
+        "right",
+        "out",
+        (0, 1),
+        (256 * work_count, 8),
+        (1, 2),
+        (8, 8),
+        (0, 2),
+        (256 * work_count, 8),
+    )
+    return ContractionDAG(
+        tensors=(
+            TensorSpec("left", (0, 1), (256 * work_count, 8), "dense"),
+            TensorSpec("right", (1, 2), (8, 8), "dense"),
+        ),
+        nodes=(node,),
+        output=_view("out", (0, 2), (256 * work_count, 8)),
+    )
+
+
+def _general_work_units(
+    *, dpu_count: int, tasklets_per_dpu: int, work_count: int
+) -> tuple[UpmemWorkUnit, ...]:
+    plan = plan_upmem(
+        _general_work_dag(work_count),
+        numeric_policy="split_complex_float32_v1",
+        topology=UpmemTopology(
+            dpu_count=dpu_count,
+            rank_count=1,
+            tasklets_per_dpu=tasklets_per_dpu,
+        ),
+    )
+    return plan.stages[0].work_units
+
+
+@pytest.mark.parametrize("tasklets_per_dpu", range(1, 25))
+def test_pure_mapping_accepts_every_supported_tasklet_count(
+    tasklets_per_dpu: int,
+) -> None:
+    units = _general_work_units(
+        dpu_count=1, tasklets_per_dpu=tasklets_per_dpu, work_count=1
+    )
+
+    assert len(units) == 1
+
+
+@pytest.mark.parametrize(
+    ("tasklets_per_dpu", "error"),
+    [
+        (0, UnsupportedExecution),
+        (25, UnsupportedExecution),
+        (True, TypeError),
+        (False, TypeError),
+        (1.0, TypeError),
+        ("3", TypeError),
+    ],
+)
+def test_pure_mapping_rejects_invalid_tasklet_counts(
+    tasklets_per_dpu: object, error: type[Exception]
+) -> None:
+    with pytest.raises(error):
+        _general_work_units(
+            dpu_count=1,
+            tasklets_per_dpu=tasklets_per_dpu,  # type: ignore[arg-type]
+            work_count=1,
+        )
+
+
+@pytest.mark.parametrize("dpu_count", range(1, 65))
+def test_pure_mapping_accepts_every_one_rank_dpu_count(dpu_count: int) -> None:
+    units = _general_work_units(
+        dpu_count=dpu_count, tasklets_per_dpu=1, work_count=dpu_count
+    )
+
+    assert len(units) == dpu_count
+    assert {(unit.logical_rank, unit.logical_dpu) for unit in units} == {
+        (0, index) for index in range(dpu_count)
+    }
+
+
+@pytest.mark.parametrize(
+    ("dpu_count", "error"),
+    [
+        (0, UnsupportedExecution),
+        (65, UnsupportedExecution),
+        (True, TypeError),
+        (False, TypeError),
+        (1.0, TypeError),
+        ("3", TypeError),
+    ],
+)
+def test_pure_mapping_rejects_invalid_one_rank_dpu_counts(
+    dpu_count: object, error: type[Exception]
+) -> None:
+    with pytest.raises(error):
+        _general_work_units(
+            dpu_count=dpu_count,  # type: ignore[arg-type]
+            tasklets_per_dpu=1,
+            work_count=1,
+        )
+
+
+def test_general_one_rank_waves_cover_every_requested_work_count_exactly_once() -> None:
+    for dpu_count in range(1, 65):
+        for work_count in (
+            1,
+            max(1, dpu_count - 1),
+            dpu_count,
+            dpu_count + 1,
+            2 * dpu_count + 1,
+        ):
+            dag = _general_work_dag(work_count)
+            topology = UpmemTopology(
+                dpu_count=dpu_count, rank_count=1, tasklets_per_dpu=1
+            )
+            first = plan_upmem(
+                dag, numeric_policy="split_complex_float32_v1", topology=topology
+            )
+            second = plan_upmem(
+                dag, numeric_policy="split_complex_float32_v1", topology=topology
+            )
+            units = first.stages[0].work_units
+            flattened = tuple(
+                sorted(
+                    units,
+                    key=lambda unit: (unit.wave, unit.logical_rank, unit.logical_dpu),
+                )
+            )
+
+            assert first == second
+            validate_upmem_plan(dag, first)
+            assert len(units) == work_count
+            assert [unit.m_start for unit in flattened] == list(
+                range(0, 256 * work_count, 256)
+            )
+            assert [
+                (unit.wave, unit.logical_rank, unit.logical_dpu) for unit in flattened
+            ] == [(index // dpu_count, 0, index % dpu_count) for index in range(work_count)]
+            assert len(
+                {(unit.wave, unit.logical_rank, unit.logical_dpu) for unit in units}
+            ) == work_count
+            assert tuple(sorted({unit.wave for unit in units})) == tuple(
+                range((work_count + dpu_count - 1) // dpu_count)
+            )
+
+
+@pytest.mark.parametrize(
+    ("dpu_count", "tasklets_per_dpu"),
+    [(1, 4), (3, 2), (10, 3), (17, 4)],
+)
+def test_general_resource_pairs_retain_deterministic_tail_mapping(
+    dpu_count: int, tasklets_per_dpu: int
+) -> None:
+    units = _general_work_units(
+        dpu_count=dpu_count,
+        tasklets_per_dpu=tasklets_per_dpu,
+        work_count=dpu_count + 1,
+    )
+
+    tail = [unit for unit in units if unit.wave == 1]
+    assert len(tail) == 1
+    assert (tail[0].logical_rank, tail[0].logical_dpu) == (0, 0)
+
+
 def _contract_dag_with_large_tiles() -> ContractionDAG:
     node = _contract(
         "large",
