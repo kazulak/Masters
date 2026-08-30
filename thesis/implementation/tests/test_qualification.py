@@ -218,6 +218,12 @@ def _general_resource_artifacts(qualifier: object):
         expected_route = contract["routes"][route_id]
         admission = qualifier.collection_resource_admission(expected_route["plan"])
         populated = admission["dominant_work_wave_populated_dpu_slots"]
+        binary_hashes = {
+            "host_binary_sha256": f"{index + 1:x}" * 64,
+            "dpu_binary_sha256": f"{index + 2:x}" * 64,
+            "initialization_binary_sha256": f"{index + 3:x}" * 64,
+        }
+        expected_executable = qualifier._expected_executable_id(binary_hashes)
         samples.append(
             {
                 "case_id": "quantization_stress_18q",
@@ -235,7 +241,7 @@ def _general_resource_artifacts(qualifier: object):
                     "tensor_network_structure_id": contract["tensor_network_structure_id"],
                     "logical_plan_id": contract["logical_plan_id"],
                     "physical_plan_id": expected_route["physical_plan_id"],
-                    "executable_id": f"{index + 8:x}" * 64,
+                    "executable_id": expected_executable,
                 },
                 "numeric_facts": {"numeric_policy": "split_complex_float32_v1"},
                 "validation": {
@@ -251,9 +257,13 @@ def _general_resource_artifacts(qualifier: object):
                     "tasklets_per_dpu": tasklets,
                     "active_dpus": dpus,
                     "dominant_work_wave_populated_dpu_slots": populated,
+                    "dominant_work_wave_allocated_dpu_slots": dpus,
                     "dominant_wave_useful_slots": populated,
                     "target_observed": "physical_hardware",
                     "physical_target_verified": True,
+                    "hardware_release_verified": True,
+                    "binary_identity_verified": True,
+                    "native_identity_verified": True,
                     "hardware_kernel_executed": True,
                     "simulator_kernel_executed": False,
                     "cpu_fallback_used": False,
@@ -277,6 +287,7 @@ def _general_resource_artifacts(qualifier: object):
                     "collection_resource_admission_passed": admission[
                         "collection_resource_admission_passed"
                     ],
+                    **binary_hashes,
                 },
             }
         )
@@ -293,6 +304,7 @@ def _general_resource_artifacts(qualifier: object):
                     "hardware_kernel_executed": True,
                     "simulator_kernel_executed": False,
                     "cpu_fallback_used": False,
+                    **binary_hashes,
                 },
             }
         )
@@ -341,9 +353,12 @@ def test_general_resource_inspect_requires_canonical_physical_evidence(
         ("admission", "startup_resource_admission_passed"),
         ("embedded_config", "zero warmups"),
         ("physical_plan", "physical_plan_id"),
-        ("resource_coherence", "incoherent active/populated"),
+        ("resource_coherence", "active_dpus"),
         ("missing_collection", "collection resource fact"),
         ("incorrect_collection", "collection_resource_admission_passed"),
+        ("executable", "executable_id"),
+        ("occupancy", "populated_dpu_slots"),
+        ("utilization", "arithmetic_weighted_tasklet_utilization"),
     ),
 )
 def test_general_resource_inspect_rejects_tightened_evidence_contracts(
@@ -397,12 +412,40 @@ def test_general_resource_inspect_rejects_tightened_evidence_contracts(
         facts = dict(samples[0]["backend_facts"])
         del facts["arithmetic_weighted_tasklet_utilization"]
         samples[0] = {**samples[0], "backend_facts": facts}
-    else:
+    elif failure == "incorrect_collection":
         samples[0] = {
             **samples[0],
             "backend_facts": {
                 **samples[0]["backend_facts"],
                 "collection_resource_admission_passed": False,
+            },
+        }
+    elif failure == "executable":
+        samples[0] = {
+            **samples[0],
+            "identities": {**samples[0]["identities"], "executable_id": "0" * 64},
+        }
+    elif failure == "occupancy":
+        index = next(
+            index
+            for index, sample in enumerate(samples)
+            if sample["route_id"] == "upmem_float32_3dpu_t8"
+        )
+        samples[index] = {
+            **samples[index],
+            "backend_facts": {
+                **samples[index]["backend_facts"],
+                "active_dpus": 3,
+                "dominant_work_wave_populated_dpu_slots": 1,
+                "dominant_wave_useful_slots": 1,
+            },
+        }
+    else:
+        samples[0] = {
+            **samples[0],
+            "backend_facts": {
+                **samples[0]["backend_facts"],
+                "arithmetic_weighted_tasklet_utilization": 0.5,
             },
         }
     monkeypatch.setattr(

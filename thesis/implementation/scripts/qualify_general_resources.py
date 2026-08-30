@@ -22,6 +22,7 @@ import yaml
 from quantum_bench.cli import _job, _plan_dag
 from quantum_bench.evidence import (
     canonical_json,
+    executable_id,
     identity_hash,
     load_artifacts,
     problem_id,
@@ -51,6 +52,11 @@ _ROUTE_SPECS = {
     "upmem_float32_3dpu_t8": (3, 8),
 }
 _BINARY_FIELDS = ("host_binary", "dpu_binary", "initialization_binary")
+_BINARY_HASH_FIELDS = {
+    "host_binary": "host_binary_sha256",
+    "dpu_binary": "dpu_binary_sha256",
+    "initialization_binary": "initialization_binary_sha256",
+}
 _SECTION = re.compile(
     r"^\s*\[\s*\d+\]\s+(\S+)\s+(\S+)\s+([0-9A-Fa-f]+)\s+\S+\s+([0-9A-Fa-f]+)\s+\S+\s+([A-Z]*)\s"
 )
@@ -435,6 +441,24 @@ def _joined_facts(sample: Mapping[str, Any], sessions: Mapping[str, Mapping[str,
     return result
 
 
+def _expected_executable_id(facts: Mapping[str, Any]) -> str:
+    files: dict[str, str] = {}
+    for binary_field, fact_field in _BINARY_HASH_FIELDS.items():
+        value = facts.get(fact_field)
+        if not isinstance(value, str) or _CANONICAL_ID.fullmatch(value) is None:
+            raise ValueError(f"physical evidence lacks canonical {fact_field}")
+        files[binary_field] = value
+    return executable_id(
+        {
+            "executor": "upmem_physical",
+            "abi_version": 4,
+            "static_file_sha256": files,
+            "source_commit": None,
+            "dependency_versions": {},
+        }
+    )
+
+
 def _t24_plan_facts(plan: Any) -> Mapping[str, Any]:
     local_m = [unit.m_size for stage in plan.stages for unit in stage.work_units]
     maximum = max(local_m)
@@ -496,6 +520,7 @@ def inspect(*, input_dir: Path, output: Path) -> Mapping[str, Any]:
             or sample.get("sample_index") != 0
             or sample.get("block_id") != 0
             or not isinstance(sample.get("output_sha256"), str)
+            or _CANONICAL_ID.fullmatch(sample["output_sha256"]) is None
         ):
             raise ValueError("physical qualification requires one measured output hash per route")
         measurement = sample.get("measurement")
@@ -552,25 +577,33 @@ def inspect(*, input_dir: Path, output: Path) -> Mapping[str, Any]:
             ("simulator_kernel_executed", False),
             ("cpu_fallback_used", False),
             ("physical_target_verified", True),
+            ("hardware_release_verified", True),
+            ("binary_identity_verified", True),
+            ("native_identity_verified", True),
             ("startup_resource_admission_passed", True),
             ("execution_resource_admission_passed", True),
         ):
             if facts.get(field) != expected:
                 raise ValueError(f"physical evidence requires {field}={expected!r} for {route_id}")
-        active = facts.get("active_dpus")
-        populated = facts.get("dominant_work_wave_populated_dpu_slots")
-        useful = facts.get("dominant_wave_useful_slots")
-        if (
-            type(active) is not int
-            or not 1 <= active <= dpus
-            or type(populated) is not int
-            or not 1 <= populated <= dpus
-            or type(useful) is not int
-            or not 1 <= useful <= dpus
-        ):
-            raise ValueError(f"physical evidence lacks active/populated DPU facts for {route_id}")
-        if useful != populated or active < populated or active > dpus:
-            raise ValueError(f"physical evidence has incoherent active/populated DPU facts for {route_id}")
+        expected_admission = collection_resource_admission(expected_route["plan"])
+        expected_resource_facts = {
+            "active_dpus": dpus,
+            "dominant_work_wave_populated_dpu_slots": expected_admission[
+                "dominant_work_wave_populated_dpu_slots"
+            ],
+            "dominant_wave_useful_slots": expected_admission["dominant_wave_useful_slots"],
+            "dominant_work_wave_allocated_dpu_slots": expected_admission[
+                "dominant_work_wave_allocated_dpu_slots"
+            ],
+        }
+        for field, expected in expected_resource_facts.items():
+            if facts.get(field) != expected:
+                raise ValueError(
+                    f"physical sample has an unexpected {field} for {route_id}"
+                )
+        active = facts["active_dpus"]
+        populated = facts["dominant_work_wave_populated_dpu_slots"]
+        useful = facts["dominant_wave_useful_slots"]
         collection_bools = (
             "tasklet_row_sufficiency_passed",
             "dominant_work_wave_tasklet_row_sufficiency_passed",
@@ -588,10 +621,12 @@ def inspect(*, input_dir: Path, output: Path) -> Mapping[str, Any]:
             value = facts.get(field)
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(float(value)) or not 0.0 <= float(value) <= 1.0:
                 raise ValueError(f"physical sample lacks finite collection resource fact {field}")
-        expected_admission = collection_resource_admission(expected_route["plan"])
-        for field in collection_bools:
+        for field in (*collection_bools, *collection_ratios):
             if facts[field] != expected_admission[field]:
                 raise ValueError(f"physical sample has an unexpected {field} for {route_id}")
+        expected_executable = _expected_executable_id(facts)
+        if executable_ids[route_id] != expected_executable:
+            raise ValueError(f"physical sample has an unexpected executable_id for {route_id}")
         session = sessions_by_id.get(str(sample.get("session_instance_id")))
         terminal = session.get("terminal_backend_facts") if session else None
         if not isinstance(session, Mapping) or session.get("status") != "success" or session.get("release_verified") is not True or not isinstance(terminal, Mapping):
