@@ -36,6 +36,15 @@ def test_configuration_matches_preregistered_matrix() -> None:
     inspector._validate_configuration(config, selection)
 
 
+def test_configuration_validation_accepts_canonical_json_round_trip() -> None:
+    config = load_experiment_config(ROOT / "configs" / "tn_benchmark_circuit_resource_sensitivity_diagnostic.yml")
+    selection = json.loads((ROOT / "configs" / "circuit_resource_sensitivity_selection.json").read_text(encoding="utf-8"))
+    round_tripped_config = json.loads(inspector.canonical_json(config))
+    round_tripped_selection = json.loads(inspector.canonical_json(selection))
+
+    inspector._validate_configuration(round_tripped_config, round_tripped_selection)
+
+
 def test_comparisons_are_within_circuit_and_separate_axes() -> None:
     stats = {
         "upmem_float32_1dpu_t1": _stats(30.0, 24.0, dpus=1, tasklets=1),

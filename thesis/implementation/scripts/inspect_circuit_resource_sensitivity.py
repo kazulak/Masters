@@ -133,14 +133,15 @@ def _validate_configuration(config: Mapping[str, Any], selection: Mapping[str, A
         if collection.get(field) != value:
             raise ValueError(f"collection.{field} changed")
     selected = tuple(selection["selected_case_ids"])
-    if tuple(config.get("cases", {})) != selected:
+    cases = _mapping(config.get("cases"), "cases")
+    if set(cases) != set(selected):
         raise ValueError("case order or selection changed")
     plans = _mapping(config.get("plans"), "plans")
     greedy = _mapping(plans.get("greedy"), "plans.greedy")
     if tuple(plans) != ("greedy",) or greedy.get("planner") != {"engine": "opt_einsum", "mode": "greedy"} or greedy.get("slicing") is not None:
         raise ValueError("planner or slicing policy changed")
     routes = _mapping(config.get("routes"), "routes")
-    if tuple(routes) != ROUTE_IDS:
+    if set(routes) != set(ROUTE_IDS):
         raise ValueError("route order changed")
     for route_id, (dpus, tasklets) in ROUTE_SPECS.items():
         route = _mapping(routes[route_id], route_id)
@@ -172,7 +173,7 @@ def _validate_configuration(config: Mapping[str, Any], selection: Mapping[str, A
     if set(candidates) != set(selected):
         raise ValueError("selection is missing a selected candidate")
     for case_id in selected:
-        circuit = _mapping(config["cases"][case_id], f"cases.{case_id}")["circuit"]
+        circuit = _mapping(cases[case_id], f"cases.{case_id}")["circuit"]
         chosen = _mapping(candidates[case_id]["circuit"], f"selection.{case_id}.circuit")
         if (circuit.get("kind"), circuit.get("name"), dict(circuit.get("parameters", {}))) != (
             chosen.get("kind"), chosen.get("name"), dict(chosen.get("parameters", {}))
