@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from collections import Counter
 from collections.abc import Mapping, Sequence
 import json
 import math
@@ -17,7 +18,7 @@ from typing import Any
 from quantum_bench.cli import _job, _plan_dag
 from quantum_bench.evidence import canonical_json, load_artifacts, problem_id, tensor_network_structure_id
 from quantum_bench.lowering import contraction_dag_hash
-from quantum_bench.report import verify_artifacts
+from quantum_bench.report import _TERMINAL_AUTHORITY_FIELDS, verify_artifacts
 from quantum_bench.upmem.plan import UpmemTopology, collection_resource_admission, physical_plan_id, plan_upmem
 
 try:
@@ -49,6 +50,9 @@ THREAD_ENVIRONMENT = {
     "MKL_NUM_THREADS": "1",
     "NUMEXPR_NUM_THREADS": "1",
 }
+EXPECTED_HOST = "safari-baguette1"
+EXPECTED_RANK_PATH = "/dev/dpu_rank1"
+DISJOINT_COMPONENT_FIELDS = ("preparation_s", "encode_s", "host_request_overhead_s", "native_request_overhead_s", "h2d_s", "kernel_s", "d2h_s", "assembly_s", "decode_s", "operation_other_s", "host_reduce_s", "coordinator_other_s", "accounting_residual_s")
 HEX40 = re.compile(r"[0-9a-f]{40}")
 HEX64 = re.compile(r"[0-9a-f]{64}")
 
@@ -92,7 +96,7 @@ def _raw_mad(values: Sequence[float]) -> float:
     return float(median(abs(value - center) for value in values))
 
 
-def _load_selection(path: Path) -> Mapping[str, Any]:
+def _load_selection(path: Path, expected_source: str) -> Mapping[str, Any]:
     selection = json.loads(path.read_text(encoding="utf-8"))
     if selection.get("schema_version") != "circuit_resource_sensitivity_selection_v1":
         raise ValueError("selection schema is not recognized")
@@ -101,7 +105,18 @@ def _load_selection(path: Path) -> Mapping[str, Any]:
         raise ValueError("selection is not the preregistered three-case matrix")
     if selection.get("selection_rule", {}).get("timing_used") is not False:
         raise ValueError("physical selection must not depend on timing")
-    _sha(selection.get("source_sha"), "selection source SHA", HEX40)
+    selection_source = _sha(selection.get("source_sha"), "selection source SHA", HEX40)
+    lineage = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", selection_source, expected_source],
+        cwd=ROOT,
+        capture_output=True,
+        check=False,
+    )
+    if lineage.returncode:
+        raise ValueError("selection source is not an ancestor of the evidence source")
+    for candidate in selection.get("candidates", ()):
+        if candidate.get("candidate_id") in selected:
+            _sha(candidate.get("tensor_network_structure_id"), "selection tensor-network structure ID", HEX64)
     return selection
 
 
@@ -134,7 +149,7 @@ def _validate_configuration(config: Mapping[str, Any], selection: Mapping[str, A
             raise ValueError(f"{route_id} is not the expected physical route")
         if (options.get("rank_count"), options.get("dpu_count"), options.get("tasklets_per_dpu")) != (1, dpus, tasklets):
             raise ValueError(f"{route_id} topology changed")
-        if not isinstance(options.get("rank_paths"), Sequence) or len(options["rank_paths"]) != 1:
+        if tuple(str(path) for path in options.get("rank_paths", ())) != (EXPECTED_RANK_PATH,):
             raise ValueError(f"{route_id} must have one rank path")
     expected_matrix = tuple(
         (case_id, "greedy", tuple(ROUTE_IDS)) for case_id in selected
@@ -197,9 +212,61 @@ def _joined_facts(sample: Mapping[str, Any], sessions: Mapping[str, Mapping[str,
     session = sessions.get(str(sample.get("session_instance_id")))
     terminal = session.get("terminal_backend_facts") if session else None
     if isinstance(terminal, Mapping):
+        conflicts = sorted(
+            field
+            for field in _TERMINAL_AUTHORITY_FIELDS
+            if field in facts and field in terminal and facts[field] != terminal[field]
+        )
+        if conflicts:
+            raise ValueError(f"terminal physical facts conflict for {', '.join(conflicts)}")
         for field, value in terminal.items():
             facts.setdefault(field, value)
     return facts
+
+
+def _validate_terminal_facts(
+    session: Mapping[str, Any], dpus: int, tasklets: int
+) -> None:
+    terminal = _mapping(session.get("terminal_backend_facts"), "terminal backend facts")
+    expected = {
+        "target_observed": "physical_hardware",
+        "physical_target_verified": True,
+        "hardware_kernel_executed": True,
+        "simulator_kernel_executed": False,
+        "cpu_fallback_used": False,
+        "requested_dpu_count": dpus,
+        "allocated_dpu_count": dpus,
+        "observed_dpu_count": dpus,
+        "observed_tasklets_per_dpu": tasklets,
+        "startup_requested_dpu_count": dpus,
+        "startup_allocated_dpu_count": dpus,
+        "startup_requested_tasklets_per_dpu": tasklets,
+        "allocation_verified": True,
+        "hardware_allocation_verified": True,
+        "binary_identity_verified": True,
+        "native_identity_verified": True,
+        "hardware_release_verified": True,
+    }
+    for field, value in expected.items():
+        if terminal.get(field) != value:
+            raise ValueError(f"terminal {field} does not match the physical contract")
+
+
+def _validate_session_bijection(
+    samples: Sequence[Mapping[str, Any]],
+    sessions_by_id: Mapping[str, Mapping[str, Any]],
+    expected_count: int,
+) -> None:
+    sample_session_ids = [sample.get("session_instance_id") for sample in samples]
+    if len(sample_session_ids) != expected_count or any(not isinstance(session_id, str) for session_id in sample_session_ids):
+        raise ValueError("every sample must reference a session")
+    counts = Counter(sample_session_ids)
+    if set(counts) != set(sessions_by_id) or any(count != 1 for count in counts.values()):
+        raise ValueError("sample/session references are not a bijection")
+    for sample in samples:
+        session = sessions_by_id[sample["session_instance_id"]]
+        if session.get("case_id") != sample.get("case_id") or session.get("route_id") != sample.get("route_id"):
+            raise ValueError("sample/session case or route identity differs")
 
 
 def _require_true(facts: Mapping[str, Any], field: str) -> None:
@@ -221,6 +288,8 @@ def _validate_sample(
     session_id = sample.get("session_instance_id")
     if not isinstance(session_id, str) or session_id not in sessions:
         raise ValueError("sample session is missing")
+    if list(sample.get("observed_affinity", ())) != [0]:
+        raise ValueError("sample observed affinity is not [0]")
     measurement = _mapping(sample.get("measurement"), "sample measurement")
     if measurement.get("scope_id") != TIMING_SCOPE:
         raise ValueError("sample timing scope changed")
@@ -241,6 +310,7 @@ def _validate_sample(
     if facts.get("kernel_policy") != expected["routes"][route_id]["kernel_policy"]:
         raise ValueError("sample kernel policy changed")
     dpus, tasklets = ROUTE_SPECS[route_id]
+    _validate_terminal_facts(sessions[session_id], dpus, tasklets)
     for field, value in (("requested_dpus", dpus), ("allocated_dpus", dpus), ("active_dpus", dpus), ("execution_active_dpu_count", dpus), ("tasklets_per_dpu", tasklets), ("startup_requested_dpu_count", dpus), ("startup_allocated_dpu_count", dpus), ("startup_requested_tasklets_per_dpu", tasklets), ("rank_count", 1)):
         if facts.get(field) != value:
             raise ValueError(f"sample {field} does not match {route_id}")
@@ -265,7 +335,16 @@ def _validate_sample(
 def _route_statistics(
     samples: Sequence[Mapping[str, Any]], facts: Sequence[Mapping[str, Any]], components: Sequence[Mapping[str, float]]
 ) -> dict[str, Any]:
-    measurements = [sample for sample in samples if sample["attempt_kind"] == "measurement"]
+    measurement_rows = [
+        (sample, fact, component)
+        for sample, fact, component in zip(samples, facts, components)
+        if sample["attempt_kind"] == "measurement"
+    ]
+    if not measurement_rows:
+        raise ValueError("route has no measurement samples")
+    measurements = [row[0] for row in measurement_rows]
+    measurement_facts = [row[1] for row in measurement_rows]
+    measurement_components = [row[2] for row in measurement_rows]
     measurements_data = [_mapping(sample["measurement"], "measurement") for sample in measurements]
     totals = [_number(row["total_wall_s"], "total_wall_s") for row in measurements_data]
     kernels = [_number(row["kernel_s"], "kernel_s") for row in measurements_data]
@@ -273,8 +352,8 @@ def _route_statistics(
     def med(values: Sequence[float]) -> float:
         return float(median(values))
 
-    component_medians = {field: med([row[field] for row in components]) for field in components[0] if field.endswith("_s")}
-    component_shares = {field: med([row[field] / row["total_wall_s"] for row in components]) for field in component_medians}
+    component_medians = {field: med([row[field] for row in measurement_components]) for field in DISJOINT_COMPONENT_FIELDS}
+    component_shares = {field: med([row[field] / row["total_wall_s"] for row in measurement_components]) for field in component_medians}
     return {
         "measurement_count": len(measurements),
         "median_total_wall_s": med(totals),
@@ -285,18 +364,18 @@ def _route_statistics(
         "median_d2h_s": med([_number(row["d2h_s"], "d2h_s") for row in measurements_data]),
         "median_h2d_bytes": int(med([_number(row["h2d_bytes"], "h2d_bytes") for row in measurements_data])),
         "median_d2h_bytes": int(med([_number(row["d2h_bytes"], "d2h_bytes") for row in measurements_data])),
-        "max_abs_error": max(_number(sample["validation"]["max_abs_error"], "max_abs_error") for sample in samples),
-        "max_relative_l2_error": max(_number(sample["validation"]["relative_l2_error"], "relative_l2_error") for sample in samples),
-        "max_norm_drift": max(_number(sample["validation"]["norm_drift"], "norm_drift") for sample in samples),
-        "tasklet_utilization": med([_number(f["arithmetic_weighted_tasklet_utilization"], "tasklet utilization") for f in facts]),
-        "dpu_utilization": med([_number(f["arithmetic_weighted_dpu_slot_utilization"], "DPU utilization") for f in facts]),
-        "dominant_wave_utilization": med([_number(f["dominant_work_wave_utilization"], "wave utilization") for f in facts]),
-        "underfilled_diagnostic_count": sum(f.get("collection_resource_admission_passed") is False or f.get("dominant_work_wave_tasklet_row_sufficiency_passed") is False for f in facts),
+        "max_abs_error": max(_number(sample["validation"]["max_abs_error"], "max_abs_error") for sample in measurements),
+        "max_relative_l2_error": max(_number(sample["validation"]["relative_l2_error"], "relative_l2_error") for sample in measurements),
+        "max_norm_drift": max(_number(sample["validation"]["norm_drift"], "norm_drift") for sample in measurements),
+        "tasklet_utilization": med([_number(f["arithmetic_weighted_tasklet_utilization"], "tasklet utilization") for f in measurement_facts]),
+        "dpu_utilization": med([_number(f["arithmetic_weighted_dpu_slot_utilization"], "DPU utilization") for f in measurement_facts]),
+        "dominant_wave_utilization": med([_number(f["dominant_work_wave_utilization"], "wave utilization") for f in measurement_facts]),
+        "underfilled_diagnostic_count": sum(f.get("collection_resource_admission_passed") is False or f.get("dominant_work_wave_tasklet_row_sufficiency_passed") is False for f in measurement_facts),
         "component_medians_s": component_medians,
         "component_median_shares": component_shares,
-        "request_build_medians_s": {field: med([row[field] for row in components]) for field in ("work_unit_materialization_s", "payload_record_staging_s", "manifest_sidecar_staging_s", "artifact_build_residual_s", "request_build_residual_s")},
-        "request_build_parent_median_s": med([row["request_build_parent_s"] for row in components]),
-        "request_build_parent_share": med([row["request_build_parent_s"] / row["total_wall_s"] for row in components]),
+        "request_build_medians_s": {field: med([row[field] for row in measurement_components]) for field in ("work_unit_materialization_s", "payload_record_staging_s", "manifest_sidecar_staging_s", "artifact_build_residual_s", "request_build_residual_s")},
+        "request_build_parent_median_s": med([row["request_build_parent_s"] for row in measurement_components]),
+        "request_build_parent_share": med([row["request_build_parent_s"] / row["total_wall_s"] for row in measurement_components]),
     }
 
 
@@ -319,11 +398,16 @@ def _environment(manifest: Mapping[str, Any]) -> dict[str, Any]:
     if list(environment.get("affinity", ())) != [0] or list(environment.get("selected_cpu_ids", ())) != [0]:
         raise ValueError("diagnostic CPU affinity is not [0]")
     governors = _mapping(environment.get("observed_cpu_governors"), "observed governors")
-    if "0" not in governors:
+    if environment.get("host") != EXPECTED_HOST:
+        raise ValueError("diagnostic host changed")
+    if "0" not in governors or not isinstance(governors["0"], str) or not governors["0"]:
         raise ValueError("CPU 0 governor was not recorded")
+    rank_paths = tuple(str(path) for path in environment.get("requested_rank_paths", ()))
+    if rank_paths != (EXPECTED_RANK_PATH,):
+        raise ValueError("diagnostic rank path changed")
     if dict(environment.get("thread_environment", {})) != THREAD_ENVIRONMENT:
         raise ValueError("BLAS/OpenMP environment is not single-threaded")
-    return {"host": environment.get("host"), "affinity": [0], "observed_cpu_governors": dict(governors), "upmem_sdk_version": environment.get("upmem_sdk_version"), "numpy_version": environment.get("numpy_version"), "blas": environment.get("blas"), "thread_environment": dict(environment["thread_environment"]), "rank_paths": list(environment.get("requested_rank_paths", ())) }
+    return {"host": environment["host"], "affinity": [0], "observed_cpu_governors": dict(governors), "upmem_sdk_version": environment.get("upmem_sdk_version"), "numpy_version": environment.get("numpy_version"), "blas": environment.get("blas"), "thread_environment": dict(environment["thread_environment"]), "rank_paths": list(rank_paths) }
 
 
 def _descriptor_rows(selection: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -350,7 +434,7 @@ def _plots(output_dir: Path, summary: Mapping[str, Any]) -> None:
     matplotlib.use("Agg", force=True)
     from matplotlib import pyplot as plt
     cases = list(summary["selected_case_ids"])
-    metadata = "diagnostic_v1 | recorded governor | n=5 | descriptive only"
+    metadata = "diagnostic_v1 | powersave/recorded governor | n=5 | descriptive only"
     for filename, routes, field, title in (("tasklet_scaling_by_circuit.png", TASKLET_ROUTES, "tasklets_per_dpu", "Tasklet scaling by circuit"), ("dpu_scaling_by_circuit.png", DPU_ROUTES, "dpu_count", "DPU scaling by circuit")):
         figure, axes = plt.subplots(len(cases), 1, figsize=(7.2, 2.2 * len(cases)), squeeze=False)
         for axis, case_id in zip(axes[:, 0], cases):
@@ -373,8 +457,8 @@ def _plots(output_dir: Path, summary: Mapping[str, Any]) -> None:
         figure.savefig(output_dir / filename, dpi=140, metadata={"Description": metadata})
         plt.close(figure)
     figure, axes = plt.subplots(len(cases), 1, figsize=(8, 2.5 * len(cases)), squeeze=False)
-    components = ("kernel_s", "h2d_s", "d2h_s", "host_request_overhead_s", "native_request_overhead_s", "operation_other_s", "accounting_residual_s")
-    labels = {"kernel_s": "kernel", "h2d_s": "H2D", "d2h_s": "D2H", "host_request_overhead_s": "host request", "native_request_overhead_s": "native request", "operation_other_s": "other", "accounting_residual_s": "residual"}
+    components = DISJOINT_COMPONENT_FIELDS
+    labels = {"preparation_s": "preparation", "encode_s": "encode", "host_request_overhead_s": "host request", "native_request_overhead_s": "native request", "h2d_s": "H2D", "kernel_s": "kernel", "d2h_s": "D2H", "assembly_s": "assembly", "decode_s": "decode", "operation_other_s": "operation other", "host_reduce_s": "host reduce", "coordinator_other_s": "coordinator other", "accounting_residual_s": "residual"}
     for axis, case_id in zip(axes[:, 0], cases):
         stats = summary["cases"][case_id]["route_statistics"]
         bottom = [0.0] * len(ROUTE_IDS)
@@ -409,18 +493,18 @@ def inspect(*, input_dir: Path, output_dir: Path, selection_path: Path, expected
     if output_dir.exists() and any(output_dir.iterdir()):
         raise ValueError("analysis output directory must be absent or empty")
     output_dir.mkdir(parents=True, exist_ok=True)
-    selection = _load_selection(selection_path)
     verification = verify_artifacts(input_dir)
+    manifest, samples, sessions = load_artifacts(input_dir)
+    source_commit = _sha(manifest.get("source_commit"), "evidence source SHA", HEX40)
+    expected_source = expected_source_commit or _source_sha()
+    _sha(expected_source, "expected source SHA", HEX40)
+    selection = _load_selection(selection_path, expected_source)
     expected_count = len(selection["selected_case_ids"]) * len(ROUTE_IDS) * 6
     if verification.get("status") != "completed":
         raise ValueError("evidence is not completed")
     for field, value in {"sample_count": expected_count, "session_count": expected_count, "success_count": expected_count, "failed_count": 0, "unsupported_count": 0}.items():
         if verification.get(field) != value:
             raise ValueError(f"evidence {field} is {verification.get(field)!r}, expected {value}")
-    manifest, samples, sessions = load_artifacts(input_dir)
-    source_commit = _sha(manifest.get("source_commit"), "evidence source SHA", HEX40)
-    expected_source = expected_source_commit or _source_sha()
-    _sha(expected_source, "expected source SHA", HEX40)
     if source_commit != expected_source:
         raise ValueError("evidence source does not match expected source")
     if manifest.get("source_worktree_dirty") is not False:
@@ -433,6 +517,7 @@ def inspect(*, input_dir: Path, output_dir: Path, selection_path: Path, expected
     sessions_by_id = {str(session.get("session_instance_id")): session for session in sessions}
     if len(sessions_by_id) != expected_count:
         raise ValueError("fresh-session evidence does not have one unique session per sample")
+    _validate_session_bijection(samples, sessions_by_id, expected_count)
     expected_keys = {
         (case_id, route_id, kind, block)
         for case_id in selection["selected_case_ids"]

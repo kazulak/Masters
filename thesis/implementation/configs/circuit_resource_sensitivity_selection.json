@@ -52,7 +52,8 @@
         "planner_flops_estimate": 2806088.0,
         "planner_peak_elements_including_final_output_estimate": 262144,
         "tensor_count": 142
-      }
+      },
+      "tensor_network_structure_id": "d3ead09e35217f5c7018de48f15145dd08d8aeb9f89812a0028c03c12a39ac15"
     },
     {
       "candidate_id": "ghz_chain_18q",
@@ -103,7 +104,8 @@
         "planner_flops_estimate": 1748632.0,
         "planner_peak_elements_including_final_output_estimate": 262144,
         "tensor_count": 36
-      }
+      },
+      "tensor_network_structure_id": "54e9741ad70140f854674404fb85fd72270eb01fa1578e73ac17316a2cacb7d0"
     },
     {
       "candidate_id": "bv_18q",
@@ -155,7 +157,8 @@
         "planner_flops_estimate": 268264.0,
         "planner_peak_elements_including_final_output_estimate": 262144,
         "tensor_count": 63
-      }
+      },
+      "tensor_network_structure_id": "7ea5c59138d2326231705420afb7c9e832fbb9a58c0fdfdbfd31c6c6ddd15f3f"
     },
     {
       "candidate_id": "hs_18q_d1",
@@ -208,7 +211,8 @@
         "planner_flops_estimate": 264272.0,
         "planner_peak_elements_including_final_output_estimate": 262144,
         "tensor_count": 54
-      }
+      },
+      "tensor_network_structure_id": "4cc946feedba2fd8517c36679932644f2fd129a5bd767a9db9ddaaa0e210f7b1"
     }
   ],
   "characterization_sha256": "71b162d72956cec8a3c716a5e334aa13c0b5cc5a886b6c505c93cd440c79c549",
@@ -227,7 +231,7 @@
     "hs_18q_d1",
     "ghz_chain_18q"
   ],
-  "selection_basis_sha256": "36ba2c47a66f753132edc660ef9593950f7e688fc6bb8fbcc37b0c77e465809c",
+  "selection_basis_sha256": "f4a64624ba9fb7ba10624abea572554db90cb122db866bb21aad0b13f92d4500",
   "selection_rule": {
     "anchor_case_id": "quantization_stress_18q_l2",
     "distance_fields": [
@@ -241,12 +245,12 @@
     ],
     "distinct_case_rule": "maximize_minimum_normalized_euclidean_distance_from_anchor_and_low_case",
     "low_case_rule": [
-      "largest_non_final_intermediate_elements",
+      "smallest_largest_non_final_intermediate_elements",
       "planner_flops_estimate",
       "candidate_id"
     ],
     "normalization": "min_max_over_all_four_candidates_constant_fields_zero",
     "timing_used": false
   },
-  "source_sha": "c80ef7e1efcb260cc380163ad4fedaed7d958ac6"
+  "source_sha": "68e8c0e3e5789aa15331b88d3c568a40579a8107"
 }
