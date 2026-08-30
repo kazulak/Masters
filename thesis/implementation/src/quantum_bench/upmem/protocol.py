@@ -623,7 +623,7 @@ def _validate_work_geometry(
         raise ValueError("v4 operand payload length does not match tile geometry")
 
 
-def _stage_payload(path: Path, payload: bytes, expected_bytes: int) -> None:
+def _stage_payload(path: Path, payload: bytes, expected_bytes: int) -> str:
     if len(payload) == expected_bytes:
         padded = payload
     else:
@@ -631,6 +631,7 @@ def _stage_payload(path: Path, payload: bytes, expected_bytes: int) -> None:
             raise ValueError("v4 payload has invalid padding")
         padded = payload + b"\0" * (expected_bytes - len(payload))
     path.write_bytes(padded)
+    return _digest_hex(padded)
 
 
 def _validate_output_overlaps(units: Sequence[V4WorkUnit]) -> None:
@@ -765,8 +766,8 @@ def build_v4_request(
         a_path = payload_dir / f"dpu_{dpu_id:03d}_a.bin"
         b_path = payload_dir / f"dpu_{dpu_id:03d}_b.bin"
         c_path = output_dir / f"dpu_{dpu_id:03d}_c.bin"
-        _stage_payload(a_path, a_payload, a_bytes)
-        _stage_payload(b_path, b_payload, b_bytes)
+        a_sha256 = _stage_payload(a_path, a_payload, a_bytes)
+        b_sha256 = _stage_payload(b_path, b_payload, b_bytes)
         output_paths.append(c_path)
         records.append(
             V4WorkUnitRecord(
@@ -789,8 +790,8 @@ def build_v4_request(
                 a_path=_relative_to(root, a_path, must_exist=True),
                 b_path=_relative_to(root, b_path, must_exist=True),
                 c_path=_relative_to(root, c_path),
-                a_sha256=_file_sha256(a_path),
-                b_sha256=_file_sha256(b_path),
+                a_sha256=a_sha256,
+                b_sha256=b_sha256,
             )
         )
     payload_record_staging_s = time.perf_counter() - payload_record_staging_started

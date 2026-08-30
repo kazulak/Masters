@@ -197,6 +197,25 @@ def test_v4_request_is_deterministic_and_binds_contract_and_manifest_hash(
     assert "manifest_sidecar_staging_s" not in first.to_dict()
 
 
+def test_v4_payload_staging_does_not_reread_payloads_but_hashes_sidecar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hashed_paths: list[Path] = []
+    file_sha256 = protocol._file_sha256
+
+    def track_hash(path: Path) -> str:
+        hashed_paths.append(path)
+        return file_sha256(path)
+
+    monkeypatch.setattr(protocol, "_file_sha256", track_hash)
+    artifact = _request(tmp_path)
+
+    assert hashed_paths == [artifact.sidecar_path]
+    assert artifact.sidecar_sha256 == hashlib.sha256(
+        artifact.sidecar_path.read_bytes()
+    ).hexdigest()
+
+
 @pytest.mark.parametrize(
     ("numeric_mode", "expected_operand_bytes"),
     [
@@ -228,7 +247,15 @@ def test_v4_payloads_are_padded_and_mram_aligned(
     )
     assert len((artifact.root / active.a_path).read_bytes()) == expected_operand_bytes
     assert len((artifact.root / active.b_path).read_bytes()) == expected_operand_bytes
-    assert (artifact.root / active.a_path).read_bytes()[-1] == 0
+    expected_payload = _payload(3, numeric_mode) + b"\0" * (
+        expected_operand_bytes - len(_payload(3, numeric_mode))
+    )
+    staged_a = (artifact.root / active.a_path).read_bytes()
+    staged_b = (artifact.root / active.b_path).read_bytes()
+    assert staged_a == expected_payload
+    assert staged_b == expected_payload
+    assert active.a_sha256 == hashlib.sha256(staged_a).hexdigest()
+    assert active.b_sha256 == hashlib.sha256(staged_b).hexdigest()
     assert zero.flags == protocol.FLAG_ZERO_WORK
     assert (zero.a_transfer_bytes, zero.b_transfer_bytes, zero.c_transfer_bytes) == (
         0,
