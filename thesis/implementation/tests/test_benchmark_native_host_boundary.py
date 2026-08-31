@@ -37,4 +37,3 @@ def test_python_arm_matches_canonical_hash() -> None:
 def test_invalid_iteration_count_is_rejected_by_cli_parser() -> None:
     with pytest.raises(ValueError):
         benchmark.run(Path("/does/not/exist"), Path("/tmp/native-host-test"), 0)
-

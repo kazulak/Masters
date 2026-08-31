@@ -4,8 +4,9 @@
 
 The current checkpoint is a **no-go for a C-only record-construction
 migration**. The host-only prototype produced byte-equivalent output and
-canonical SHA-256 values, but the C serializer was slower than the Python
-reference for every tested fixture. It also removed no process, pipe,
+canonical SHA-256 values, but the C prepared-stage probe's repeated
+copy-and-hash loop was slower than the Python fixture assembly for every
+tested fixture. It also removed no process, pipe,
 filesystem, SDK, or request boundary. A production native executor is
 therefore not justified by this evidence.
 
