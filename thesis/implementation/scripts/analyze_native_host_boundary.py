@@ -254,6 +254,25 @@ def _sample_attribution(
     sample: Mapping[str, Any], session: Mapping[str, Any] | None = None
 ) -> dict[str, Any] | None:
     facts = _mapping(sample.get("backend_facts"), "sample backend_facts")
+    measurement = _mapping(sample.get("measurement"), "sample measurement")
+    if measurement.get("scope_id") != "steady_execution_v1":
+        raise ValueError("native host attribution requires steady_execution_v1")
+    if facts.get("target_observed") != "physical_hardware":
+        raise ValueError("native host attribution requires physical_hardware")
+    hardware_kernel_executed = facts.get("hardware_kernel_executed")
+    if hardware_kernel_executed is None:
+        if facts.get("physical_plan_consumed") is not True or not facts.get(
+            "kernel_implementation_id"
+        ):
+            raise ValueError("native host attribution requires hardware kernel execution")
+    elif hardware_kernel_executed is not True:
+        raise ValueError("native host attribution requires hardware kernel execution")
+    if facts.get("simulator_kernel_executed") is not False:
+        raise ValueError("native host attribution rejects simulator execution")
+    if facts.get("cpu_fallback_used") is not False:
+        raise ValueError("native host attribution rejects CPU fallback")
+    if facts.get("test_double_execution", False) is not False:
+        raise ValueError("native host attribution rejects test-double execution")
     raw_operations = facts.get("operation_facts")
     if raw_operations is None:
         return None
@@ -263,7 +282,6 @@ def _sample_attribution(
         raise ValueError("operation_facts must be a sequence")
     if not raw_operations:
         raise ValueError("operation_facts must not be empty")
-    measurement = _mapping(sample.get("measurement"), "sample measurement")
     total_wall_s = _seconds(measurement.get("total_wall_s"), "total_wall_s")
 
     operation_results = [

@@ -105,6 +105,8 @@ def _run_c(binary: Path, fixture: dict[str, Any], iterations: int, root: Path) -
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "prepared-stage probe failed")
     facts = json.loads(result.stdout)
+    if facts.get("packet_sha256") != fixture["packet_sha256"]:
+        raise ValueError(f"C packet hash mismatch: {fixture['name']}")
     facts["process_s"] = process_s
     facts["output_sha256"] = hashlib.sha256(output_path.read_bytes()).hexdigest()
     return facts

@@ -53,8 +53,17 @@ def _sample(scale: float = 1.0) -> dict[str, object]:
         "case_id": "stress",
         "route_id": "route",
         "plan_id": "greedy",
-        "measurement": {"total_wall_s": 11.0 * scale},
+        "measurement": {
+            "scope_id": "steady_execution_v1",
+            "total_wall_s": 11.0 * scale,
+        },
         "backend_facts": {
+            "target_observed": "physical_hardware",
+            "hardware_kernel_executed": True,
+            "physical_plan_consumed": True,
+            "kernel_implementation_id": "upmem_sdk_hardware_v4_wram_panel_kernel",
+            "simulator_kernel_executed": False,
+            "cpu_fallback_used": False,
             "total_wave_count": 2,
             "operation_facts": [
                 {
@@ -93,6 +102,24 @@ def test_sample_includes_session_attempt_and_request_counts() -> None:
     assert value is not None
     assert value["costs"]["attempt_elapsed_s"] == pytest.approx(14.0)
     assert value["counters"]["request_count"] == 8
+
+
+def test_sample_rejects_nonphysical_or_nonsteady_evidence() -> None:
+    sample = _sample()
+    sample["backend_facts"]["target_observed"] = "sdk_simulator"
+    with pytest.raises(ValueError, match="physical_hardware"):
+        analyzer._sample_attribution(sample)
+
+    sample = _sample()
+    sample["measurement"]["scope_id"] = "simulation_end_to_end_v1"
+    with pytest.raises(ValueError, match="steady_execution_v1"):
+        analyzer._sample_attribution(sample)
+
+
+def test_sample_accepts_legacy_physical_provenance() -> None:
+    sample = _sample()
+    del sample["backend_facts"]["hardware_kernel_executed"]
+    assert analyzer._sample_attribution(sample) is not None
 
 
 def test_summary_does_not_add_nested_timers() -> None:
