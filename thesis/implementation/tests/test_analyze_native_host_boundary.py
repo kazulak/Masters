@@ -116,6 +116,18 @@ def test_sample_rejects_nonphysical_or_nonsteady_evidence() -> None:
         analyzer._sample_attribution(sample)
 
 
+def test_sample_rejects_fallback_and_test_double_evidence() -> None:
+    sample = _sample()
+    sample["backend_facts"]["cpu_fallback_used"] = True
+    with pytest.raises(ValueError, match="CPU fallback"):
+        analyzer._sample_attribution(sample)
+
+    sample = _sample()
+    sample["backend_facts"]["test_double_execution"] = True
+    with pytest.raises(ValueError, match="test-double"):
+        analyzer._sample_attribution(sample)
+
+
 def test_sample_accepts_legacy_physical_provenance() -> None:
     sample = _sample()
     del sample["backend_facts"]["hardware_kernel_executed"]

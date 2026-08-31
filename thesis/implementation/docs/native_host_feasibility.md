@@ -19,7 +19,7 @@ prototype that measures eliminated crossings and file operations.
 ```text
 accepted source: c4efb3f17e29672e91a0a844881ead53ccf9f2c7
 F1 analyzer:     558dcc25dc3f7e9d5751a397d982f5e75d268c1a
-F2 probe:        c57043a
+F2 probe:        c57043a7762db0a079653d9130cc659827df60e4
 scope:           host-only; no UPMEM SDK or DPU allocation
 iterations:      30
 ```
@@ -31,10 +31,13 @@ runtime dispatch.
 
 ## Equivalence
 
-The Python and C arms generated identical canonical bytes and SHA-256 values
-for every fixture. Record order, payload bytes, packet bytes and output bytes
-were deterministic. The probe reports setup separately from repeated steady
-construction and includes process-inclusive elapsed time.
+The Python arm assembled the deterministic fixture records and packet. The C
+probe then copied the packet's record and payload regions, hashed the packet and
+canonical output, and wrote the canonical bytes. Those C-produced packet,
+canonical and output hashes matched the Python fixture hashes for every
+fixture. Record order, payload bytes, packet bytes and output bytes were
+deterministic. The probe reports setup separately from repeated steady copying
+and hashing and includes process-inclusive elapsed time.
 
 ## Host-only observations
 
@@ -80,10 +83,10 @@ not weakened or skipped.
 
 This checkpoint supports only the following statement:
 
-> A standalone C record serializer was shown to be byte-equivalent to the
-> Python reference, but it did not provide a host-only speed advantage in the
-> tested fixtures. The result does not justify replacing the production
-> Python control path.
+> A standalone C prepared-stage copy and hashing probe was shown to preserve
+> the deterministic fixture bytes, but it did not provide a host-only speed
+> advantage in the tested fixtures. The result does not justify replacing the
+> production Python control path.
 
 It does not support claims about full simulation speed, physical UPMEM
 performance, C/ Python crossing reduction, persistent sessions, or general
