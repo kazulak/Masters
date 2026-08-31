@@ -205,7 +205,7 @@ def test_v4_request_is_deterministic_and_binds_contract_and_manifest_hash(
 
 
 def test_v4_record_template_preserves_complete_request_artifact(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     profile = protocol.V4Profile(dpu_count=2, numeric_mode=protocol.NUMERIC_FLOAT32)
     payload = _payload(3, protocol.NUMERIC_FLOAT32)
@@ -235,16 +235,34 @@ def test_v4_record_template_preserves_complete_request_artifact(
         "request_sequence": 0,
     }
     baseline = protocol.build_v4_request(tmp_path / "baseline", **kwargs)
+    zero_unit = protocol.V4WorkUnit(
+        local_dpu_id=1,
+        tile_id=(1 << 63) + 1,
+        batch_index=0,
+        m_offset=0,
+        n_offset=0,
+        k_offset=0,
+        m_elements=0,
+        n_elements=0,
+        k_elements=0,
+        flags=protocol.FLAG_ZERO_WORK,
+    )
     templates = {
-        0: protocol._record_abi_fields(
-            units[0],
+        unit.local_dpu_id: protocol._record_abi_fields(
+            unit,
             profile=profile,
             canonical_batch_count=1,
             canonical_m=1,
             canonical_n=1,
             canonical_k=3,
         )
+        for unit in (units[0], zero_unit)
     }
+
+    def unexpected_rebuild(*args: object, **kwargs: object) -> object:
+        raise AssertionError("cached record fields were rebuilt")
+
+    monkeypatch.setattr(protocol, "_record_abi_fields", unexpected_rebuild)
     templated = protocol.build_v4_request(
         tmp_path / "templated", record_templates=templates, **kwargs
     )

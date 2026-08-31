@@ -707,6 +707,60 @@ def _record_abi_fields(
     )
 
 
+def _validated_record_template(
+    template: tuple[int, ...],
+    unit: V4WorkUnit,
+    *,
+    profile: V4Profile,
+) -> tuple[int, ...]:
+    """Validate and return a cached numeric record skeleton.
+
+    The live work unit is validated by ``build_v4_request`` before this
+    helper is called.  Rechecking its geometry here keeps the private
+    session-local reuse boundary fail-closed without rebuilding the numeric
+    record tuple on every complex lane.
+    """
+
+    if len(template) != 16 or any(
+        isinstance(value, bool) or not isinstance(value, int) for value in template
+    ):
+        raise ValueError("v4 record template must contain 16 integer fields")
+    common = (
+        unit.local_dpu_id,
+        unit.flags,
+        unit.tile_id,
+        unit.batch_index,
+        unit.m_offset,
+        unit.n_offset,
+        unit.k_offset,
+        unit.m_elements,
+        unit.n_elements,
+        unit.k_elements,
+    )
+    if tuple(template[:10]) != common:
+        raise ValueError(
+            f"v4 record template does not match local DPU {unit.local_dpu_id}"
+        )
+    if unit.flags & FLAG_ZERO_WORK:
+        expected_sizes = (0, 0, 0, 0, 0, 0)
+    else:
+        element_bytes = 4 if profile.numeric_mode_code == NUMERIC_MODE_FLOAT32 else 1
+        a_bytes = _aligned8(unit.m_elements * unit.k_elements * element_bytes)
+        b_bytes = _aligned8(unit.k_elements * unit.n_elements * element_bytes)
+        c_bytes = _aligned8(unit.m_elements * unit.n_elements * 4)
+        a_offset = 0
+        b_offset = _aligned8(a_bytes)
+        c_offset = _aligned8(b_offset + b_bytes)
+        if c_offset + c_bytes > profile.mram_pool_bytes:
+            raise ValueError("v4 tile operands and output exceed MRAM pool")
+        expected_sizes = (a_bytes, b_bytes, c_bytes, a_offset, b_offset, c_offset)
+    if tuple(template[10:]) != expected_sizes:
+        raise ValueError(
+            f"v4 record template does not match local DPU {unit.local_dpu_id}"
+        )
+    return template
+
+
 def _stage_payload(path: Path, payload: bytes, expected_bytes: int) -> None:
     if len(payload) == expected_bytes:
         padded = payload
@@ -847,22 +901,19 @@ def build_v4_request(
         template = (
             record_templates.get(dpu_id) if record_templates is not None else None
         )
-        expected = _record_abi_fields(
-            unit,
-            profile=profile,
-            canonical_batch_count=canonical_batch_count,
-            canonical_m=canonical_m,
-            canonical_n=canonical_n,
-            canonical_k=canonical_k,
-            validate_payload=False,
-            validate_geometry=False,
-        )
         if template is not None:
-            if tuple(template) != expected:
-                raise ValueError(
-                    f"v4 record template does not match local DPU {dpu_id}"
-                )
-        record_fields = expected
+            record_fields = _validated_record_template(template, unit, profile=profile)
+        else:
+            record_fields = _record_abi_fields(
+                unit,
+                profile=profile,
+                canonical_batch_count=canonical_batch_count,
+                canonical_m=canonical_m,
+                canonical_k=canonical_k,
+                canonical_n=canonical_n,
+                validate_payload=False,
+                validate_geometry=False,
+            )
         a_bytes, b_bytes, c_bytes, a_offset, b_offset, c_offset = record_fields[10:]
         if unit.flags & FLAG_ZERO_WORK:
             a_payload = b_payload = b""
