@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 from pathlib import Path
 import struct
 import sys
@@ -97,3 +98,23 @@ def test_benchmark_is_explicit_and_does_not_run_on_import(tmp_path: Path) -> Non
     assert probe.main(["benchmark", "--output-dir", str(output_dir), "--repeats", "2"]) == 0
     summary = (output_dir / "summary.json").read_text(encoding="utf-8")
     assert '"schema":"upoenv1_benchmark_v1"' in summary
+
+
+def test_boundary_benchmark_cli_writes_measurement_tables(tmp_path: Path) -> None:
+    output_dir = tmp_path / "boundary-benchmark"
+    assert probe.main(
+        [
+            "boundary-benchmark",
+            "--output-dir",
+            str(output_dir),
+            "--warmups",
+            "0",
+            "--repeats",
+            "1",
+        ]
+    ) == 0
+    result = json.loads(
+        (output_dir / "host_boundary_benchmark.json").read_text(encoding="utf-8")
+    )
+    assert len(result["cells"]) == 6
+    assert (output_dir / "host_boundary_benchmark.csv").exists()

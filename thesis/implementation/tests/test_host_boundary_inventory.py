@@ -79,17 +79,18 @@ def test_inventory_has_deterministic_six_cell_counts(tmp_path: Path) -> None:
             row["contraction_operation_count"],
             row["wave_request_count"],
             row["embedded_request_count"],
+            row["active_work_unit_count"],
             row["request_record_count"],
             row["packed_operation_submit_estimate"],
         )
         for row in first["cells"]
     ] == [
-        (141, 222, 888, 888, 141),
-        (141, 159, 636, 2544, 141),
-        (53, 56, 224, 224, 53),
-        (53, 53, 212, 848, 53),
-        (35, 371, 1484, 1484, 35),
-        (35, 116, 464, 1856, 35),
+        (141, 222, 888, 222, 888, 141),
+        (141, 159, 636, 222, 2544, 141),
+        (53, 56, 224, 56, 224, 53),
+        (53, 53, 212, 56, 848, 53),
+        (35, 371, 1484, 371, 1484, 35),
+        (35, 116, 464, 371, 1856, 35),
     ]
     stress_4 = first["cells"][1]
     assert stress_4["contraction_operation_count"] == 141
