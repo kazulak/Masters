@@ -179,6 +179,8 @@ def _cell(
         "embedded_request_count": embedded_count,
         "python_submit_count": embedded_count,
         "python_submit_callsite_count": submit_callsite_count,
+        # This is the unique logical tile count before the four split-complex
+        # lane passes and before dense ABI records are emitted.
         "active_work_unit_count": work_units,
         "request_record_count": record_count,
         "request_directory_count": embedded_count,
@@ -199,9 +201,10 @@ def build_inventory(
 ) -> dict[str, Any]:
     """Return the deterministic inventory; this function has no file outputs."""
 
-    facts = _candidate_index(
+    characterization_record = (
         _build_characterization() if characterization is None else characterization
     )
+    facts = _candidate_index(characterization_record)
     submit_callsite_count = _python_submit_callsite_count(source_root)
     cells = [
         _cell(
@@ -216,9 +219,9 @@ def build_inventory(
     return {
         "schema_version": SCHEMA_VERSION,
         "accepted_source_commit": ACCEPTED_SOURCE,
-        "characterization_source_commit": characterization.get("source_sha")
-        if characterization is not None
-        else ACCEPTED_SOURCE,
+        "characterization_source_commit": characterization_record.get(
+            "source_sha", ACCEPTED_SOURCE
+        ),
         "execution": {
             "kind": "read_only_source_analysis",
             "hardware_executed": False,
@@ -229,7 +232,7 @@ def build_inventory(
             "characterization": "characterize_circuit_resources.py source-only physical plans",
             "embedded_request": "four complex real-lane passes per active rank wave",
             "python_submit": "one V4Session.submit call per embedded request at one rank",
-        "records": "one dense v4 record per DPU in each embedded request; active work units are reported separately",
+            "records": "one dense v4 record per DPU in each embedded request; active work units are reported separately as unique logical tiles before four lane passes",
             "request_files": "two payload files per record plus manifest.txt and sidecar.bin per request",
             "processes": "one persistent native process for the one-rank session",
             "packed_operation_submit": "estimate only: one proposed packed submit per contraction operation",
@@ -273,7 +276,7 @@ def _markdown(inventory: Mapping[str, Any]) -> str:
             "",
             "- Embedded requests are four complex lane passes for each active rank wave.",
             "- Python `SUBMIT` count is one `V4Session.submit` invocation per embedded request.",
-        "- Records are dense: each embedded request carries one record per configured DPU; active logical work units are reported separately.",
+            "- Records are dense: each embedded request carries one record per configured DPU; active logical work units are reported separately as unique logical tiles before four lane passes.",
             "- Request files include two payload files per record, one manifest, and one sidecar per request.",
             "- Process count is one persistent native process for the single rank.",
             "- Packed submits estimate one future packed submit per contraction operation.",

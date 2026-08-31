@@ -122,6 +122,7 @@ def test_outputs_have_expected_shape_and_import_is_read_only(tmp_path: Path) -> 
     assert before == {path for path in tmp_path.iterdir() if path.name != "out"}
     record = json.loads(json_path.read_text(encoding="utf-8"))
     assert record["schema_version"] == inventory.SCHEMA_VERSION
+    assert record["characterization_source_commit"] == inventory.ACCEPTED_SOURCE
     assert record["execution"]["packed_envelope_implemented"] is False
     assert len(record["cells"]) == 6
     with csv_path.open(newline="", encoding="utf-8") as stream:

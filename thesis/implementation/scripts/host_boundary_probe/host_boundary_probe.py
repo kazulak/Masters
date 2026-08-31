@@ -208,7 +208,7 @@ def build_synthetic_artifacts(
     if not 1 <= request_count <= MAX_REQUESTS:
         raise ValueError("request_count must be in [1, 64]")
     if not 1 <= dpu_count <= 4:
-        raise ValueError("dpu_count must be one of the frozen one- or four-DPU cells")
+        raise ValueError("dpu_count must be in the host-only probe range [1, 4]")
     profile = V4Profile(
         dpu_count=dpu_count,
         tasklets_per_dpu=8,
@@ -601,21 +601,23 @@ def benchmark_boundary(
                     current_artifacts = build_synthetic_artifacts(
                         Path(current_directory), request_count, dpu_count=dpu_count
                     )
-                    current_file_paths = [
-                        path
+                    current_files = request_count * (2 * dpu_count + 2)
+                    current_bytes = sum(
+                        path.stat().st_size
                         for artifact in current_artifacts
-                        for path in artifact.request_dir.rglob("*")
-                        if path.is_file()
-                    ]
-                    current_files = len(current_file_paths)
-                    current_bytes = sum(path.stat().st_size for path in current_file_paths)
-                    current_digest = _sha256(
-                        b"".join(
-                            artifact.sidecar_path.read_bytes()
-                            for artifact in current_artifacts
+                        for path in (
+                            artifact.manifest_path,
+                            artifact.sidecar_path,
+                            *(
+                                path
+                                for record in artifact.work_units
+                                for path in (
+                                    artifact.root / record.a_path,
+                                    artifact.root / record.b_path,
+                                )
+                            ),
                         )
                     )
-                    (Path(current_directory) / "current.digest").write_bytes(current_digest)
                     current_elapsed = (time.perf_counter_ns() - current_started) / 1e9
                 packed_started = time.perf_counter_ns()
                 candidate = direct_prepared_requests(request_count, dpu_count)

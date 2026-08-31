@@ -9,7 +9,7 @@ the production execution path.
 The prototype preserves ABI-v4 sidecar bytes, payload bytes, request order and
 work-unit order while representing one contraction operation as one validated
 `UPOENV1` envelope. Across the six modeled cells, the probe reduced the
-synthetic preparation/transport time by 3.36x to 10.86x. The measured
+synthetic preparation/transport time by 2.75x to 9.20x. The measured
 operation boundary changed as follows:
 
 ```text
@@ -110,12 +110,12 @@ timed arms were host-only preparation and transport probes, not
 
 | Circuit | DPUs | Current median (s) | Packed median (s) | Boundary speedup | Current files | Packed files | Current bytes | Packed bytes |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Stress18 | 1 | 0.004792 | 0.001102 | 4.35x | 28 | 1 | 4431 | 3260 |
-| Stress18 | 4 | 0.006277 | 0.001320 | 4.76x | 50 | 1 | 9450 | 4336 |
-| HS18 | 1 | 0.003433 | 0.001023 | 3.36x | 20 | 1 | 3165 | 2356 |
-| HS18 | 4 | 0.005043 | 0.001232 | 4.09x | 40 | 1 | 7560 | 3488 |
-| GHZ18 | 1 | 0.028495 | 0.002624 | 10.86x | 172 | 1 | 27219 | 19532 |
-| GHZ18 | 4 | 0.017220 | 0.002213 | 7.78x | 140 | 1 | 26460 | 11968 |
+| Stress18 | 1 | 0.003974 | 0.001102 | 3.61x | 28 | 1 | 4431 | 3260 |
+| Stress18 | 4 | 0.005463 | 0.001349 | 4.05x | 50 | 1 | 9450 | 4336 |
+| HS18 | 1 | 0.002805 | 0.001021 | 2.75x | 20 | 1 | 3165 | 2356 |
+| HS18 | 4 | 0.004370 | 0.001227 | 3.56x | 40 | 1 | 7560 | 3488 |
+| GHZ18 | 1 | 0.023603 | 0.002566 | 9.20x | 172 | 1 | 27219 | 19532 |
+| GHZ18 | 4 | 0.015301 | 0.002273 | 6.73x | 140 | 1 | 26460 | 11968 |
 
 These values are descriptive results from the local host-only run. They are
 not whole-route UPMEM timings. The packed arm includes one subprocess
