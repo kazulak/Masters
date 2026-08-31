@@ -1288,6 +1288,14 @@ class UpmemV4Session:
         request_artifact_build_sum_s = 0.0
         request_payload_record_staging_sum_s = 0.0
         request_manifest_sidecar_staging_sum_s = 0.0
+        request_payload_materialization_sum_s = 0.0
+        request_payload_file_write_sum_s = 0.0
+        request_payload_hashing_sum_s = 0.0
+        request_payload_record_construction_sum_s = 0.0
+        request_payload_record_count = 0
+        request_payload_files_created = 0
+        request_payload_bytes_staged = 0
+        request_payload_bytes_hashed = 0
         rank_submit_parallel_wall_sum_s = 0.0
         rank_submit_total_max_sum_s = 0.0
         rank_submit_artifact_validation_max_sum_s = 0.0
@@ -1355,6 +1363,30 @@ class UpmemV4Session:
                     )
                     request_manifest_sidecar_staging_sum_s += float(
                         metrics["request_manifest_sidecar_staging_s"]
+                    )
+                    request_payload_materialization_sum_s += float(
+                        metrics["request_payload_materialization_sum_s"]
+                    )
+                    request_payload_file_write_sum_s += float(
+                        metrics["request_payload_file_write_sum_s"]
+                    )
+                    request_payload_hashing_sum_s += float(
+                        metrics["request_payload_hashing_sum_s"]
+                    )
+                    request_payload_record_construction_sum_s += float(
+                        metrics["request_payload_record_construction_sum_s"]
+                    )
+                    request_payload_record_count += int(
+                        metrics["request_payload_record_count"]
+                    )
+                    request_payload_files_created += int(
+                        metrics["request_payload_files_created"]
+                    )
+                    request_payload_bytes_staged += int(
+                        metrics["request_payload_bytes_staged"]
+                    )
+                    request_payload_bytes_hashed += int(
+                        metrics["request_payload_bytes_hashed"]
                     )
                     rank_submit_parallel_wall_sum_s += float(
                         metrics["rank_submit_parallel_wall_s"]
@@ -1497,6 +1529,22 @@ class UpmemV4Session:
                 "request_manifest_sidecar_staging_sum_s": float(
                     request_manifest_sidecar_staging_sum_s
                 ),
+                "request_payload_materialization_sum_s": float(
+                    request_payload_materialization_sum_s
+                ),
+                "request_payload_file_write_sum_s": float(
+                    request_payload_file_write_sum_s
+                ),
+                "request_payload_hashing_sum_s": float(
+                    request_payload_hashing_sum_s
+                ),
+                "request_payload_record_construction_sum_s": float(
+                    request_payload_record_construction_sum_s
+                ),
+                "request_payload_record_count": request_payload_record_count,
+                "request_payload_files_created": request_payload_files_created,
+                "request_payload_bytes_staged": request_payload_bytes_staged,
+                "request_payload_bytes_hashed": request_payload_bytes_hashed,
                 "rank_submit_parallel_wall_sum_s": float(
                     rank_submit_parallel_wall_sum_s
                 ),
@@ -1686,6 +1734,14 @@ class UpmemV4Session:
         request_artifact_build_s = 0.0
         request_payload_record_staging_s = 0.0
         request_manifest_sidecar_staging_s = 0.0
+        request_payload_materialization_sum_s = 0.0
+        request_payload_file_write_sum_s = 0.0
+        request_payload_hashing_sum_s = 0.0
+        request_payload_record_construction_sum_s = 0.0
+        request_payload_record_count = 0
+        request_payload_files_created = 0
+        request_payload_bytes_staged = 0
+        request_payload_bytes_hashed = 0
         for rank, assignments in requests:
             work_unit_materialization_started = time.perf_counter()
             units = [
@@ -1716,6 +1772,16 @@ class UpmemV4Session:
             request_artifact_build_s += time.perf_counter() - artifact_build_started
             request_payload_record_staging_s += artifact.payload_record_staging_s
             request_manifest_sidecar_staging_s += artifact.manifest_sidecar_staging_s
+            request_payload_materialization_sum_s += artifact.payload_materialization_s
+            request_payload_file_write_sum_s += artifact.payload_file_write_s
+            request_payload_hashing_sum_s += artifact.payload_hashing_s
+            request_payload_record_construction_sum_s += (
+                artifact.payload_record_construction_s
+            )
+            request_payload_record_count += artifact.payload_record_count
+            request_payload_files_created += artifact.payload_files_created
+            request_payload_bytes_staged += artifact.payload_bytes_staged
+            request_payload_bytes_hashed += artifact.payload_bytes_hashed
             prepared.append((rank, assignments, artifact))
         request_build_s = time.perf_counter() - request_build_started
         self._sequence += 1
@@ -1750,6 +1816,18 @@ class UpmemV4Session:
                 "request_manifest_sidecar_staging_s": (
                     request_manifest_sidecar_staging_s
                 ),
+                "request_payload_materialization_sum_s": (
+                    request_payload_materialization_sum_s
+                ),
+                "request_payload_file_write_sum_s": request_payload_file_write_sum_s,
+                "request_payload_hashing_sum_s": request_payload_hashing_sum_s,
+                "request_payload_record_construction_sum_s": (
+                    request_payload_record_construction_sum_s
+                ),
+                "request_payload_record_count": request_payload_record_count,
+                "request_payload_files_created": request_payload_files_created,
+                "request_payload_bytes_staged": request_payload_bytes_staged,
+                "request_payload_bytes_hashed": request_payload_bytes_hashed,
                 "rank_submit_parallel_wall_s": rank_submit_parallel_wall_s,
                 "rank_submit_total_max_s": 0.0,
                 "rank_submit_artifact_validation_max_s": 0.0,

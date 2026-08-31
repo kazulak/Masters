@@ -133,6 +133,17 @@ request_artifact_build_residual_s =
 These remain backend facts, not `Measurement` phases. Session startup remains
 outside `steady_execution_v1` and is not measured by this split.
 
+Request-construction attribution retains the existing
+`request_payload_record_staging_s` parent and records four sequential child
+intervals: `request_payload_materialization_sum_s`,
+`request_payload_file_write_sum_s`, `request_payload_hashing_sum_s`, and
+`request_payload_record_construction_sum_s`. The children cover distinct
+operations inside the parent and are summed only by the pure attribution
+analyzer; `request_payload_residual_s` is the parent minus those children.
+The associated record, file, staged-byte, and hashed-byte counts are source
+facts, not hardware counters. No child timer runs inside a tensor-element or
+per-byte loop.
+
 Direct ratios are defined only for matching scopes and compatible identities:
 
 ```text

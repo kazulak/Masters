@@ -472,6 +472,14 @@ class V4RequestArtifact:
     output_paths: tuple[Path, ...]
     payload_record_staging_s: float
     manifest_sidecar_staging_s: float
+    payload_materialization_s: float
+    payload_file_write_s: float
+    payload_hashing_s: float
+    payload_record_construction_s: float
+    payload_record_count: int
+    payload_files_created: int
+    payload_bytes_staged: int
+    payload_bytes_hashed: int
 
     @property
     def request_sequence(self) -> int:
@@ -727,8 +735,19 @@ def build_v4_request(
     output_dir.mkdir()
     records: list[V4WorkUnitRecord] = []
     output_paths: list[Path] = []
+    payload_materialization_s = 0.0
+    payload_file_write_s = 0.0
+    payload_hashing_s = 0.0
+    payload_record_construction_s = 0.0
+    payload_record_count = 0
+    payload_files_created = 0
+    payload_bytes_staged = 0
+    payload_bytes_hashed = 0
+    # These intervals are sequential subregions of the existing parent timer;
+    # the analyzer derives any uncovered residual without adding a runtime timer.
     payload_record_staging_started = time.perf_counter()
     for dpu_id in range(profile.dpu_count):
+        materialization_started = time.perf_counter()
         unit = by_id.get(
             dpu_id,
             V4WorkUnit(
@@ -765,8 +784,19 @@ def build_v4_request(
         a_path = payload_dir / f"dpu_{dpu_id:03d}_a.bin"
         b_path = payload_dir / f"dpu_{dpu_id:03d}_b.bin"
         c_path = output_dir / f"dpu_{dpu_id:03d}_c.bin"
+        payload_materialization_s += time.perf_counter() - materialization_started
+        file_write_started = time.perf_counter()
         _stage_payload(a_path, a_payload, a_bytes)
         _stage_payload(b_path, b_payload, b_bytes)
+        payload_file_write_s += time.perf_counter() - file_write_started
+        payload_files_created += 2
+        payload_bytes_staged += a_bytes + b_bytes
+        hashing_started = time.perf_counter()
+        a_sha256 = _file_sha256(a_path)
+        b_sha256 = _file_sha256(b_path)
+        payload_hashing_s += time.perf_counter() - hashing_started
+        payload_bytes_hashed += a_bytes + b_bytes
+        record_construction_started = time.perf_counter()
         output_paths.append(c_path)
         records.append(
             V4WorkUnitRecord(
@@ -789,10 +819,14 @@ def build_v4_request(
                 a_path=_relative_to(root, a_path, must_exist=True),
                 b_path=_relative_to(root, b_path, must_exist=True),
                 c_path=_relative_to(root, c_path),
-                a_sha256=_file_sha256(a_path),
-                b_sha256=_file_sha256(b_path),
+                a_sha256=a_sha256,
+                b_sha256=b_sha256,
             )
         )
+        payload_record_construction_s += (
+            time.perf_counter() - record_construction_started
+        )
+        payload_record_count += 1
     payload_record_staging_s = time.perf_counter() - payload_record_staging_started
     manifest_sidecar_staging_started = time.perf_counter()
     _validate_record_storage(records, profile=profile, canonical_k=canonical_k)
@@ -854,6 +888,14 @@ def build_v4_request(
         output_paths=tuple(output_paths),
         payload_record_staging_s=float(payload_record_staging_s),
         manifest_sidecar_staging_s=float(manifest_sidecar_staging_s),
+        payload_materialization_s=float(payload_materialization_s),
+        payload_file_write_s=float(payload_file_write_s),
+        payload_hashing_s=float(payload_hashing_s),
+        payload_record_construction_s=float(payload_record_construction_s),
+        payload_record_count=payload_record_count,
+        payload_files_created=payload_files_created,
+        payload_bytes_staged=payload_bytes_staged,
+        payload_bytes_hashed=payload_bytes_hashed,
     )
 
 

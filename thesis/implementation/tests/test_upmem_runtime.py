@@ -493,6 +493,13 @@ def test_persistent_session_matches_replay_and_renews_deadline(
     assert timing["request_artifact_build_sum_s"] >= 0.0
     assert timing["request_payload_record_staging_sum_s"] >= 0.0
     assert timing["request_manifest_sidecar_staging_sum_s"] >= 0.0
+    assert timing["request_payload_materialization_sum_s"] >= 0.0
+    assert timing["request_payload_file_write_sum_s"] >= 0.0
+    assert timing["request_payload_hashing_sum_s"] >= 0.0
+    assert timing["request_payload_record_construction_sum_s"] >= 0.0
+    assert timing["request_payload_record_count"] == 8
+    assert timing["request_payload_files_created"] == 16
+    assert timing["request_payload_bytes_staged"] == timing["request_payload_bytes_hashed"]
     assert timing["request_build_sum_s"] >= (
         timing["request_work_unit_materialization_sum_s"]
         + timing["request_artifact_build_sum_s"]

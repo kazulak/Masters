@@ -193,6 +193,13 @@ def test_v4_request_is_deterministic_and_binds_contract_and_manifest_hash(
     )
     assert first.payload_record_staging_s >= 0.0
     assert first.manifest_sidecar_staging_s >= 0.0
+    assert first.payload_materialization_s >= 0.0
+    assert first.payload_file_write_s >= 0.0
+    assert first.payload_hashing_s >= 0.0
+    assert first.payload_record_construction_s >= 0.0
+    assert first.payload_record_count == 2
+    assert first.payload_files_created == 4
+    assert first.payload_bytes_staged == first.payload_bytes_hashed
     assert "payload_record_staging_s" not in first.to_dict()
     assert "manifest_sidecar_staging_s" not in first.to_dict()
 
