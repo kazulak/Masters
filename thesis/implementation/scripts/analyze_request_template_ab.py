@@ -29,7 +29,6 @@ EXPECTED_ROUTES = (
 )
 MEASUREMENT_BLOCKS = (1, 2, 3, 4, 5)
 COMPLEX_LANE_COUNT = 4
-WORK_UNIT_BYTES = 84
 ACCOUNTING_EPSILON_S = 1e-6
 COMPONENTS = (
     "total_wall_s",
@@ -60,6 +59,34 @@ RECONCILIATION_COMPONENTS = (
     "session_open_s",
     "session_close_s",
     "attempt_elapsed_s",
+)
+IDENTITY_FIELDS = (
+    "problem_id",
+    "tensor_network_structure_id",
+    "logical_plan_id",
+    "physical_plan_id",
+    "executable_id",
+    "validation_policy_id",
+)
+BINARY_HASH_FIELDS = (
+    "host_binary_sha256",
+    "dpu_binary_sha256",
+    "initialization_binary_sha256",
+)
+ENVIRONMENT_FIELDS = (
+    "host",
+    "platform",
+    "python",
+    "numpy_version",
+    "upmem_sdk_version",
+    "affinity",
+    "selected_cpu_ids",
+    "observed_cpu_governors",
+    "observed_numa_nodes",
+    "requested_rank_paths",
+    "blas",
+    "thread_environment",
+    "collection_machine_policy",
 )
 
 
@@ -95,6 +122,154 @@ def _integer(value: Any, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValueError(f"{field} must be a nonnegative integer")
     return value
+
+
+def _mapping(value: Any, field: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field} must be a mapping")
+    return value
+
+
+def _required_string(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{field} must be a non-empty string")
+    return value
+
+
+def _binary_identity(session: Mapping[str, Any]) -> dict[str, str]:
+    facts = _mapping(session.get("terminal_backend_facts"), "terminal backend facts")
+    identity: dict[str, str] = {}
+    for field in BINARY_HASH_FIELDS:
+        value = _required_string(facts.get(field), f"terminal_backend_facts.{field}")
+        if len(value) != 64:
+            raise ValueError(f"terminal_backend_facts.{field} must be SHA-256")
+        identity[field] = value
+    return identity
+
+
+def _sample_identity(
+    sample: Mapping[str, Any], facts: Mapping[str, Any]
+) -> dict[str, Any]:
+    identities = _mapping(sample.get("identities"), "sample identities")
+    numeric_facts = _mapping(sample.get("numeric_facts"), "sample numeric_facts")
+    identity = {
+        field: _required_string(identities.get(field), f"identities.{field}")
+        for field in IDENTITY_FIELDS
+    }
+    identity["plan_id"] = _required_string(sample.get("plan_id"), "sample.plan_id")
+    identity.update(
+        {
+            "numeric_policy": _required_string(
+                numeric_facts.get("numeric_policy"), "numeric_facts.numeric_policy"
+            ),
+            "kernel_implementation_id": _required_string(
+                facts.get("kernel_implementation_id"),
+                "backend_facts.kernel_implementation_id",
+            ),
+            "kernel_policy": _required_string(
+                facts.get("kernel_policy"), "backend_facts.kernel_policy"
+            ),
+            "intermediate_policy": _required_string(
+                facts.get("intermediate_policy"),
+                "backend_facts.intermediate_policy",
+            ),
+            "rank_count": facts.get("rank_count"),
+            "requested_dpus": facts.get("requested_dpus"),
+            "allocated_dpus": facts.get("allocated_dpus"),
+            "active_dpus": facts.get("active_dpus"),
+            "tasklets_per_dpu": facts.get("tasklets_per_dpu"),
+        }
+    )
+    for field in (
+        "rank_count",
+        "requested_dpus",
+        "allocated_dpus",
+        "active_dpus",
+        "tasklets_per_dpu",
+    ):
+        value = identity[field]
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"backend_facts.{field} must be a positive integer")
+    return identity
+
+
+def _environment_identity(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    configuration = _mapping(manifest.get("configuration"), "manifest.configuration")
+    environment = _mapping(
+        configuration.get("environment"), "manifest.configuration.environment"
+    )
+    missing = [field for field in ENVIRONMENT_FIELDS if field not in environment]
+    if missing:
+        raise ValueError(f"environment is missing {missing[0]}")
+    return {field: environment[field] for field in ENVIRONMENT_FIELDS}
+
+
+def _experiment_contract(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    configuration = _mapping(manifest.get("configuration"), "manifest.configuration")
+    experiment = _mapping(
+        configuration.get("experiment"), "manifest.configuration.experiment"
+    )
+    collection = _mapping(experiment.get("collection"), "experiment.collection")
+    cases = experiment.get("cases")
+    matrix = experiment.get("matrix")
+    plans = experiment.get("plans")
+    routes = _mapping(experiment.get("routes"), "experiment.routes")
+    if not isinstance(cases, Mapping) or not isinstance(matrix, list):
+        raise ValueError("experiment contract is missing cases or matrix")
+    normalized_routes: dict[str, Any] = {}
+    for route_id, raw_route in routes.items():
+        route = _mapping(raw_route, f"experiment.routes.{route_id}")
+        options = _mapping(route.get("options"), f"experiment.routes.{route_id}.options")
+        normalized_routes[str(route_id)] = {
+            "executor": route.get("executor"),
+            "numeric_policy": route.get("numeric_policy"),
+            "dpu_count": options.get("dpu_count"),
+            "rank_count": options.get("rank_count"),
+            "tasklets_per_dpu": options.get("tasklets_per_dpu"),
+            "rank_paths": options.get("rank_paths"),
+        }
+    return {
+        "cases": cases,
+        "matrix": matrix,
+        "plans": plans,
+        "routes": normalized_routes,
+        "collection": {
+            field: collection.get(field)
+            for field in (
+                "base_seed",
+                "claim_policy",
+                "measurement_blocks",
+                "warmup_blocks",
+                "session_policy",
+            )
+        },
+    }
+
+
+def _validate_diagnostic_report(root: Path, manifest: Mapping[str, Any]) -> None:
+    configuration = _mapping(manifest.get("configuration"), "manifest.configuration")
+    experiment = _mapping(
+        configuration.get("experiment"), "manifest.configuration.experiment"
+    )
+    collection = _mapping(experiment.get("collection"), "experiment.collection")
+    if collection.get("claim_policy") != "diagnostic_v1":
+        raise ValueError("A/B evidence must use diagnostic_v1")
+    report = _json(root / "report" / "report.json")
+    if report.get("status") != "completed" or report.get("artifact_status") != "completed":
+        raise ValueError("A/B report is not completed")
+    if report.get("experiment_id") != manifest.get("experiment_id"):
+        raise ValueError("A/B report experiment ID does not match the manifest")
+    if report.get("run_id") != manifest.get("run_id"):
+        raise ValueError("A/B report run ID does not match the manifest")
+    qualification = _mapping(report.get("qualification"), "report.qualification")
+    if qualification.get("claim_eligible_aggregate_count") != 0:
+        raise ValueError("diagnostic report contains claim-eligible aggregates")
+    if report.get("speedup_count") != 0:
+        raise ValueError("diagnostic report contains generic speedups")
+    rejections = _mapping(report.get("speedup_rejections"), "report.speedup_rejections")
+    reason_count = rejections.get("candidate_diagnostic_claim_policy")
+    if isinstance(reason_count, bool) or not isinstance(reason_count, int) or reason_count <= 0:
+        raise ValueError("diagnostic report lacks an explicit claim-ineligibility reason")
 
 
 def _operation_facts(
@@ -170,8 +345,12 @@ def _validate_physical_sample(sample: Mapping[str, Any]) -> None:
 def _load_arm(root: Path) -> dict[str, Any]:
     evidence = root / "evidence"
     manifest = _json(evidence / "manifest.json")
+    _validate_diagnostic_report(root, manifest)
     samples = _jsonl(evidence / "samples.jsonl")
     sessions = _jsonl(evidence / "sessions.jsonl")
+    source_commit = _required_string(manifest.get("source_commit"), "source_commit")
+    if len(source_commit) != 40:
+        raise ValueError("source_commit must be a full commit SHA")
     if manifest.get("status") != "completed":
         raise ValueError(f"evidence is not completed: {root}")
     if manifest.get("source_worktree_dirty") is not False:
@@ -186,6 +365,8 @@ def _load_arm(root: Path) -> dict[str, Any]:
             raise ValueError("A/B evidence contains an unsuccessful physical session")
 
     measurements: dict[tuple[str, str, int], dict[str, Any]] = {}
+    identities: dict[tuple[str, str], dict[str, Any]] = {}
+    binary_identities: dict[tuple[str, str], dict[str, str]] = {}
     warmups: set[tuple[str, str, int]] = set()
     sample_session_ids: set[str] = set()
     counts = {"warmup": 0, "measurement": 0}
@@ -203,10 +384,33 @@ def _load_arm(root: Path) -> dict[str, Any]:
         session = sessions_by_id.get(session_id)
         if session is None:
             raise ValueError("sample does not have a corresponding session")
+        if sample.get("experiment_id") != manifest.get("experiment_id"):
+            raise ValueError("sample experiment ID does not match the manifest")
+        if sample.get("run_id") != manifest.get("run_id"):
+            raise ValueError("sample run ID does not match the manifest")
+        if session.get("experiment_id") != manifest.get("experiment_id"):
+            raise ValueError("session experiment ID does not match the manifest")
+        if session.get("run_id") != manifest.get("run_id"):
+            raise ValueError("session run ID does not match the manifest")
+        if session.get("case_id") != case_id or session.get("route_id") != route_id:
+            raise ValueError("session does not match sample case and route")
         sample_session_ids.add(session_id)
         if case_id not in EXPECTED_CASES or route_id not in EXPECTED_ROUTES:
             raise ValueError("unexpected A/B case or route")
         _validate_physical_sample(sample)
+        sample_identity = _sample_identity(sample, _operation_facts(sample)[0])
+        binary_identity = _binary_identity(session)
+        cell = (case_id, route_id)
+        if cell in identities and identities[cell] != sample_identity:
+            raise ValueError("sample identity changes within an A/B cell")
+        if cell in binary_identities and binary_identities[cell] != binary_identity:
+            raise ValueError("binary identity changes within an A/B cell")
+        identities[cell] = sample_identity
+        binary_identities[cell] = binary_identity
+        validation = _mapping(sample.get("validation"), "sample.validation")
+        for field in ("accuracy_qualified", "full_precision_passed", "policy_reference_passed"):
+            if validation.get(field) is not True:
+                raise ValueError(f"sample validation did not pass: {field}")
         if kind == "warmup":
             key = (case_id, route_id, block_id)
             if block_id != 0 or key in warmups:
@@ -224,6 +428,11 @@ def _load_arm(root: Path) -> dict[str, Any]:
         if not isinstance(measurement, Mapping):
             raise ValueError("sample is missing measurement")
         _, operations, operation_timings = _operation_facts(sample)
+        if any(
+            operation.get("lane_pass_count") != COMPLEX_LANE_COUNT
+            for operation in operations
+        ):
+            raise ValueError("request-template evidence must record four complex lanes")
 
         def sum_timing(field: str) -> float:
             return sum(
@@ -236,35 +445,6 @@ def _load_arm(root: Path) -> dict[str, Any]:
             )
 
         payload_record_count = sum_counter("request_payload_record_count")
-        template_count = 0
-        maximum_retained_template_count = 0
-        for operation, timing in zip(operations, operation_timings, strict=True):
-            if operation.get("lane_pass_count") != COMPLEX_LANE_COUNT:
-                raise ValueError(
-                    "request-template evidence must record four complex lanes"
-                )
-            dpu_count = operation.get("allocated_dpu_count")
-            if (
-                isinstance(dpu_count, bool)
-                or not isinstance(dpu_count, int)
-                or dpu_count <= 0
-            ):
-                raise ValueError("operation has an invalid allocated DPU count")
-            record_count = _integer(
-                timing.get("request_payload_record_count"),
-                "request_payload_record_count",
-            )
-            if record_count % COMPLEX_LANE_COUNT:
-                raise ValueError(
-                    "request record count is not divisible by the complex lane count"
-                )
-            operation_template_count = record_count // COMPLEX_LANE_COUNT
-            template_count += operation_template_count
-            maximum_retained_template_count = max(
-                maximum_retained_template_count,
-                operation_template_count,
-            )
-
         payload_record_staging_s = sum_timing(
             "request_payload_record_staging_sum_s"
         )
@@ -312,17 +492,6 @@ def _load_arm(root: Path) -> dict[str, Any]:
             "payload_files_created": sum_counter("request_payload_files_created"),
             "payload_bytes_staged": sum_counter("request_payload_bytes_staged"),
             "payload_bytes_hashed": sum_counter("request_payload_bytes_hashed"),
-            "template_record_count": template_count,
-            "template_reuse_count": payload_record_count - template_count,
-            "template_reuse_ratio": (
-                payload_record_count / template_count
-                if template_count
-                else 0.0
-            ),
-            "maximum_retained_template_count": maximum_retained_template_count,
-            "maximum_retained_template_abi_equivalent_bytes": (
-                maximum_retained_template_count * WORK_UNIT_BYTES
-            ),
         }
         measurements[key] = values
     if counts != {"warmup": 6, "measurement": 30}:
@@ -334,9 +503,13 @@ def _load_arm(root: Path) -> dict[str, Any]:
     if sample_session_ids != set(sessions_by_id):
         raise ValueError("A/B sample/session mapping is not bijective")
     return {
-        "source_commit": manifest.get("source_commit"),
+        "source_commit": source_commit,
         "experiment_id": manifest.get("experiment_id"),
         "run_id": manifest.get("run_id"),
+        "environment_identity": _environment_identity(manifest),
+        "experiment_contract": _experiment_contract(manifest),
+        "identities": identities,
+        "binary_identities": binary_identities,
         "measurements": measurements,
     }
 
@@ -479,44 +652,21 @@ def _reconciliation_rows(
                 saved_attempt / saved_record if saved_record > 0 else None
             )
 
-            optimized_measurements = optimized_values
-            template_record_counts = [
-                int(value["template_record_count"]) for value in optimized_measurements
-            ]
-            template_reuse_counts = [
-                int(value["template_reuse_count"])
-                for value in optimized_measurements
-            ]
-            template_reuse_ratios = [
-                float(value["template_reuse_ratio"])
-                for value in optimized_measurements
-            ]
-            retained_counts = [
-                int(value["maximum_retained_template_count"])
-                for value in optimized_measurements
-            ]
-            retained_bytes = [
-                int(value["maximum_retained_template_abi_equivalent_bytes"])
-                for value in optimized_measurements
-            ]
-            for name, values in (
-                ("optimized_template_record_count", template_record_counts),
-                ("optimized_template_reuse_count", template_reuse_counts),
-                ("optimized_template_reuse_ratio", template_reuse_ratios),
-                ("optimized_maximum_retained_template_count", retained_counts),
-                (
-                    "optimized_maximum_retained_template_abi_equivalent_bytes",
-                    retained_bytes,
-                ),
-            ):
-                stats = _stats([float(value) for value in values])
-                row[f"{name}_median"] = stats["median"]
-                row[f"{name}_raw_mad"] = stats["raw_mad"]
-            row["optimized_template_lifetime"] = (
-                "one_operation_inside_steady_execution_v1"
-            )
             rows.append(row)
     return rows
+
+
+def _validate_shared_identity(
+    baseline: Mapping[str, Any], optimized: Mapping[str, Any]
+) -> None:
+    if baseline["environment_identity"] != optimized["environment_identity"]:
+        raise ValueError("A/B arms do not share the controlled environment")
+    if baseline["experiment_contract"] != optimized["experiment_contract"]:
+        raise ValueError("A/B arms do not share the experiment contract")
+    if baseline["identities"] != optimized["identities"]:
+        raise ValueError("A/B arms do not share logical or physical identities")
+    if baseline["binary_identities"] != optimized["binary_identities"]:
+        raise ValueError("A/B arms do not share binary identities")
 
 
 def analyze(baseline_root: Path, optimized_root: Path) -> dict[str, Any]:
@@ -524,6 +674,7 @@ def analyze(baseline_root: Path, optimized_root: Path) -> dict[str, Any]:
     optimized = _load_arm(optimized_root)
     if baseline["source_commit"] == optimized["source_commit"]:
         raise ValueError("A/B arms must bind different source commits")
+    _validate_shared_identity(baseline, optimized)
     rows: list[dict[str, Any]] = []
     for case_id in EXPECTED_CASES:
         for route_id in EXPECTED_ROUTES:
@@ -671,17 +822,13 @@ def _reconciliation_document(result: Mapping[str, Any]) -> dict[str, Any]:
             ),
         },
         "template_semantics": {
-            "lifetime": "one operation inside steady_execution_v1",
-            "template_record_count": (
-                "one numeric record skeleton per active work unit, "
-                "derived from four complex lane passes"
+            "lifetime": (
+                "operation-local inside steady_execution_v1; discarded after "
+                "the operation"
             ),
-            "template_reuse_count": (
-                "payload record instances minus first-pass skeleton count"
-            ),
-            "template_bytes": (
-                "ABI-equivalent 84-byte numeric record fields; not Python "
-                "heap memory"
+            "cardinality": (
+                "not inferred: dense ABI record counts include zero-work "
+                "records and do not identify cached templates"
             ),
         },
         "accounting_semantics": {

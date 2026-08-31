@@ -34,13 +34,6 @@ def _arm(source: str, scale: float) -> dict[str, object]:
                         "payload_bytes_hashed": case_index * 8,
                         "payload_record_staging_residual_s": 0.0,
                         "attempt_elapsed_s": scale * 3 * (case_index + route_index + block),
-                        "template_record_count": case_index,
-                        "template_reuse_count": case_index * 3,
-                        "template_reuse_ratio": 4.0,
-                        "maximum_retained_template_count": case_index,
-                        "maximum_retained_template_abi_equivalent_bytes": (
-                            case_index * analyzer.WORK_UNIT_BYTES
-                        ),
                     }
                 )
                 measurements[(case_id, route_id, block)] = values
@@ -48,6 +41,10 @@ def _arm(source: str, scale: float) -> dict[str, object]:
         "source_commit": source,
         "experiment_id": f"experiment-{source}",
         "run_id": f"run-{source}",
+        "environment_identity": {},
+        "experiment_contract": {},
+        "identities": {},
+        "binary_identities": {},
         "measurements": measurements,
     }
 
@@ -77,21 +74,39 @@ def _physical_sample(session_id: str, *, hardware_kernel_executed: bool = True) 
         "route_id": analyzer.EXPECTED_ROUTES[0],
         "block_id": 0,
         "session_instance_id": session_id,
+        "plan_id": "greedy",
+        "experiment_id": "experiment",
+        "run_id": "run",
+        "identities": {
+            field: f"{field}-value" for field in analyzer.IDENTITY_FIELDS
+        },
+        "numeric_facts": {"numeric_policy": "split_complex_float32_v1"},
+        "validation": {
+            "accuracy_qualified": True,
+            "full_precision_passed": True,
+            "policy_reference_passed": True,
+        },
         "measurement": {"scope_id": "steady_execution_v1"},
         "backend_facts": {
             "target_observed": "physical_hardware",
             "simulator_kernel_executed": False,
             "cpu_fallback_used": False,
             "hardware_kernel_executed": hardware_kernel_executed,
+            "kernel_implementation_id": "kernel",
+            "kernel_policy": "kernel-policy",
+            "intermediate_policy": "host-roundtrip",
             "requested_dpus": 1,
             "allocated_dpus": 1,
             "active_dpus": 1,
+            "rank_count": 1,
+            "tasklets_per_dpu": 1,
             "operation_facts": [
                 {
                     "target_observed": "physical_hardware",
                     "simulator_kernel_executed": False,
                     "cpu_fallback_used": False,
                     "hardware_kernel_executed": True,
+                    "lane_pass_count": 4,
                     "timing": {},
                 }
             ],
@@ -119,12 +134,52 @@ def test_load_arm_requires_a_bijective_sample_session_mapping(
     sessions = [
         {
             "session_instance_id": f"session-{index}",
+            "experiment_id": "experiment",
+            "run_id": "run",
+            "case_id": analyzer.EXPECTED_CASES[0],
+            "route_id": analyzer.EXPECTED_ROUTES[0],
             "status": "success",
             "release_verified": True,
+            "terminal_backend_facts": {
+                field: "a" * 64 for field in analyzer.BINARY_HASH_FIELDS
+            },
         }
         for index in range(36)
     ]
-    monkeypatch.setattr(analyzer, "_json", lambda _path: {"status": "completed", "source_worktree_dirty": False})
+    manifest = {
+        "status": "completed",
+        "source_worktree_dirty": False,
+        "source_commit": "a" * 40,
+        "experiment_id": "experiment",
+        "run_id": "run",
+        "configuration": {
+            "environment": {
+                field: {} if field in {"blas", "thread_environment"} else []
+                for field in analyzer.ENVIRONMENT_FIELDS
+            },
+            "experiment": {
+                "cases": {},
+                "matrix": [],
+                "plans": [],
+                "routes": {},
+                "collection": {"claim_policy": "diagnostic_v1"},
+            },
+        },
+    }
+    report = {
+        "status": "completed",
+        "artifact_status": "completed",
+        "experiment_id": "experiment",
+        "run_id": "run",
+        "qualification": {"claim_eligible_aggregate_count": 0},
+        "speedup_count": 0,
+        "speedup_rejections": {"candidate_diagnostic_claim_policy": 6},
+    }
+
+    def fake_json(path: Path) -> dict[str, object]:
+        return report if path.name == "report.json" else manifest
+
+    monkeypatch.setattr(analyzer, "_json", fake_json)
     monkeypatch.setattr(
         analyzer,
         "_jsonl",
@@ -166,12 +221,7 @@ def test_analysis_pairs_each_cell_and_component_without_pooling(monkeypatch) -> 
     assert reconciliation["median_session_inclusive_time_saved_s"] == pytest.approx(
         15.0
     )
-    assert reconciliation["optimized_template_reuse_ratio_median"] == pytest.approx(
-        4.0
-    )
-    assert reconciliation["optimized_template_lifetime"] == (
-        "one_operation_inside_steady_execution_v1"
-    )
+    assert not any(key.startswith("optimized_template") for key in reconciliation)
 
 
 def test_reconciliation_document_and_csv_are_self_contained(
@@ -193,4 +243,30 @@ def test_reconciliation_document_and_csv_are_self_contained(
     loaded = json.loads(json_path.read_text(encoding="utf-8"))
     assert loaded["rows"] == result["reconciliation_rows"]
     assert "measurement.total_wall_s" in loaded["timing_semantics"]["attempt_elapsed_s"]
+    assert loaded["template_semantics"]["cardinality"].startswith("not inferred")
     assert csv_path.read_text(encoding="utf-8").count("\n") == 7
+
+
+def test_shared_identity_rejects_different_controlled_environment(monkeypatch) -> None:
+    arms = {
+        "baseline": _arm("baseline", 2.0),
+        "optimized": _arm("optimized", 1.0),
+    }
+    arms["optimized"]["environment_identity"] = {"governor": "performance"}
+    monkeypatch.setattr(analyzer, "_load_arm", lambda path: arms[path.name])
+
+    with pytest.raises(ValueError, match="controlled environment"):
+        analyzer.analyze(Path("baseline"), Path("optimized"))
+
+
+def test_paired_delta_uses_same_block_not_difference_of_medians() -> None:
+    result = analyzer._paired_delta_summary(
+        [1.0, 2.0, 3.0, 4.0, 100.0],
+        [1.0, 100.0, 100.0, 100.0, 100.0],
+    )
+
+    assert result["median"] == pytest.approx(96.0)
+    assert result["median"] != pytest.approx(
+        analyzer.median([1.0, 100.0, 100.0, 100.0, 100.0])
+        - analyzer.median([1.0, 2.0, 3.0, 4.0, 100.0])
+    )
