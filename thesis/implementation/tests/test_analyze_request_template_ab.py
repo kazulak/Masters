@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 import sys
 
@@ -27,10 +28,19 @@ def _arm(source: str, scale: float) -> dict[str, object]:
                 }
                 values.update(
                     {
-                        "payload_record_count": case_index,
+                        "payload_record_count": case_index * 4,
                         "payload_files_created": case_index * 2,
                         "payload_bytes_staged": case_index * 8,
                         "payload_bytes_hashed": case_index * 8,
+                        "payload_record_staging_residual_s": 0.0,
+                        "attempt_elapsed_s": scale * 3 * (case_index + route_index + block),
+                        "template_record_count": case_index,
+                        "template_reuse_count": case_index * 3,
+                        "template_reuse_ratio": 4.0,
+                        "maximum_retained_template_count": case_index,
+                        "maximum_retained_template_abi_equivalent_bytes": (
+                            case_index * analyzer.WORK_UNIT_BYTES
+                        ),
                     }
                 )
                 measurements[(case_id, route_id, block)] = values
@@ -147,3 +157,40 @@ def test_analysis_pairs_each_cell_and_component_without_pooling(monkeypatch) -> 
     )
     assert total["descriptive_speedup"] == pytest.approx(2.0)
     assert total["diagnostic_only"] is True
+
+    assert len(result["reconciliation_rows"]) == 6
+    reconciliation = result["reconciliation_rows"][0]
+    assert reconciliation["baseline_total_wall_s_median"] == pytest.approx(10.0)
+    assert reconciliation["optimized_total_wall_s_median"] == pytest.approx(5.0)
+    assert reconciliation["median_steady_total_time_saved_s"] == pytest.approx(5.0)
+    assert reconciliation["median_session_inclusive_time_saved_s"] == pytest.approx(
+        15.0
+    )
+    assert reconciliation["optimized_template_reuse_ratio_median"] == pytest.approx(
+        4.0
+    )
+    assert reconciliation["optimized_template_lifetime"] == (
+        "one_operation_inside_steady_execution_v1"
+    )
+
+
+def test_reconciliation_document_and_csv_are_self_contained(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    arms = {
+        "baseline": _arm("baseline", 2.0),
+        "optimized": _arm("optimized", 1.0),
+    }
+    monkeypatch.setattr(analyzer, "_load_arm", lambda path: arms[path.name])
+
+    result = analyzer.analyze(Path("baseline"), Path("optimized"))
+    document = analyzer._reconciliation_document(result)
+    json_path = tmp_path / "request_template_ab_reconciliation.json"
+    csv_path = tmp_path / "request_template_ab_reconciliation.csv"
+    json_path.write_text(json.dumps(document), encoding="utf-8")
+    analyzer._write_reconciliation_csv(csv_path, document["rows"])
+
+    loaded = json.loads(json_path.read_text(encoding="utf-8"))
+    assert loaded["rows"] == result["reconciliation_rows"]
+    assert "measurement.total_wall_s" in loaded["timing_semantics"]["attempt_elapsed_s"]
+    assert csv_path.read_text(encoding="utf-8").count("\n") == 7

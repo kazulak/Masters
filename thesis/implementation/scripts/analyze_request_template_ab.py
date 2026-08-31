@@ -28,6 +28,9 @@ EXPECTED_ROUTES = (
     "upmem_float32_4dpu_t8",
 )
 MEASUREMENT_BLOCKS = (1, 2, 3, 4, 5)
+COMPLEX_LANE_COUNT = 4
+WORK_UNIT_BYTES = 84
+ACCOUNTING_EPSILON_S = 1e-6
 COMPONENTS = (
     "total_wall_s",
     "kernel_s",
@@ -47,6 +50,16 @@ COUNTERS = (
     "payload_files_created",
     "payload_bytes_staged",
     "payload_bytes_hashed",
+)
+RECONCILIATION_COMPONENTS = (
+    "payload_record_staging_residual_s",
+    "payload_record_construction_s",
+    "request_build_s",
+    "request_wave_wall_s",
+    "total_wall_s",
+    "session_open_s",
+    "session_close_s",
+    "attempt_elapsed_s",
 )
 
 
@@ -210,7 +223,7 @@ def _load_arm(root: Path) -> dict[str, Any]:
         measurement = sample.get("measurement")
         if not isinstance(measurement, Mapping):
             raise ValueError("sample is missing measurement")
-        _, _, operation_timings = _operation_facts(sample)
+        _, operations, operation_timings = _operation_facts(sample)
 
         def sum_timing(field: str) -> float:
             return sum(
@@ -222,14 +235,59 @@ def _load_arm(root: Path) -> dict[str, Any]:
                 _integer(timing.get(field), field) for timing in operation_timings
             )
 
+        payload_record_count = sum_counter("request_payload_record_count")
+        template_count = 0
+        maximum_retained_template_count = 0
+        for operation, timing in zip(operations, operation_timings, strict=True):
+            if operation.get("lane_pass_count") != COMPLEX_LANE_COUNT:
+                raise ValueError(
+                    "request-template evidence must record four complex lanes"
+                )
+            dpu_count = operation.get("allocated_dpu_count")
+            if (
+                isinstance(dpu_count, bool)
+                or not isinstance(dpu_count, int)
+                or dpu_count <= 0
+            ):
+                raise ValueError("operation has an invalid allocated DPU count")
+            record_count = _integer(
+                timing.get("request_payload_record_count"),
+                "request_payload_record_count",
+            )
+            if record_count % COMPLEX_LANE_COUNT:
+                raise ValueError(
+                    "request record count is not divisible by the complex lane count"
+                )
+            operation_template_count = record_count // COMPLEX_LANE_COUNT
+            template_count += operation_template_count
+            maximum_retained_template_count = max(
+                maximum_retained_template_count,
+                operation_template_count,
+            )
+
+        payload_record_staging_s = sum_timing(
+            "request_payload_record_staging_sum_s"
+        )
+        payload_children_s = sum(
+            sum_timing(field)
+            for field in (
+                "request_payload_materialization_sum_s",
+                "request_payload_file_write_sum_s",
+                "request_payload_hashing_sum_s",
+                "request_payload_record_construction_sum_s",
+            )
+        )
+        payload_residual_s = payload_record_staging_s - payload_children_s
+        if payload_residual_s < -ACCOUNTING_EPSILON_S:
+            raise ValueError("payload record staging accounting is materially negative")
+
         values = {
             "total_wall_s": _number(measurement.get("total_wall_s"), "total_wall_s"),
             "kernel_s": _number(measurement.get("kernel_s"), "kernel_s"),
             "request_wave_wall_s": sum_timing("request_wave_wall_sum_s"),
             "request_build_s": sum_timing("request_build_sum_s"),
-            "payload_record_staging_s": sum_timing(
-                "request_payload_record_staging_sum_s"
-            ),
+            "payload_record_staging_s": payload_record_staging_s,
+            "payload_record_staging_residual_s": max(0.0, payload_residual_s),
             "payload_record_construction_s": sum_timing(
                 "request_payload_record_construction_sum_s"
             ),
@@ -245,10 +303,26 @@ def _load_arm(root: Path) -> dict[str, Any]:
             "session_close_s": _number(
                 session.get("session_close_s"), "session.session_close_s"
             ),
-            "payload_record_count": sum_counter("request_payload_record_count"),
+            "attempt_elapsed_s": (
+                _number(session.get("open_s"), "session.open_s")
+                + _number(measurement.get("total_wall_s"), "total_wall_s")
+                + _number(session.get("session_close_s"), "session.session_close_s")
+            ),
+            "payload_record_count": payload_record_count,
             "payload_files_created": sum_counter("request_payload_files_created"),
             "payload_bytes_staged": sum_counter("request_payload_bytes_staged"),
             "payload_bytes_hashed": sum_counter("request_payload_bytes_hashed"),
+            "template_record_count": template_count,
+            "template_reuse_count": payload_record_count - template_count,
+            "template_reuse_ratio": (
+                payload_record_count / template_count
+                if template_count
+                else 0.0
+            ),
+            "maximum_retained_template_count": maximum_retained_template_count,
+            "maximum_retained_template_abi_equivalent_bytes": (
+                maximum_retained_template_count * WORK_UNIT_BYTES
+            ),
         }
         measurements[key] = values
     if counts != {"warmup": 6, "measurement": 30}:
@@ -314,6 +388,135 @@ def _paired_summary(
         "bootstrap_resamples": len(bootstrap),
         "diagnostic_only": True,
     }
+
+
+def _paired_delta_summary(
+    baseline: Sequence[float], optimized: Sequence[float]
+) -> dict[str, float | int]:
+    """Summarize optimized-minus-baseline deltas for matched block IDs."""
+
+    if len(baseline) != len(optimized) or not baseline:
+        raise ValueError("paired A/B values must have equal non-zero length")
+    return _stats(
+        [optimized_value - baseline_value for baseline_value, optimized_value in zip(
+            baseline, optimized, strict=True
+        )]
+    )
+
+
+def _reconciliation_rows(
+    baseline: Mapping[str, Any], optimized: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for case_id in EXPECTED_CASES:
+        for route_id in EXPECTED_ROUTES:
+            keys = [(case_id, route_id, block) for block in MEASUREMENT_BLOCKS]
+            base_values = [baseline["measurements"][key] for key in keys]
+            optimized_values = [optimized["measurements"][key] for key in keys]
+            row: dict[str, Any] = {
+                "case_id": case_id,
+                "route_id": route_id,
+                "diagnostic_only": True,
+            }
+            for component in RECONCILIATION_COMPONENTS:
+                base_stats = _stats(
+                    [float(value[component]) for value in base_values]
+                )
+                optimized_stats = _stats(
+                    [float(value[component]) for value in optimized_values]
+                )
+                delta = _paired_delta_summary(
+                    [float(value[component]) for value in base_values],
+                    [float(value[component]) for value in optimized_values],
+                )
+                row[f"baseline_{component}_median"] = base_stats["median"]
+                row[f"baseline_{component}_raw_mad"] = base_stats["raw_mad"]
+                row[f"optimized_{component}_median"] = optimized_stats["median"]
+                row[f"optimized_{component}_raw_mad"] = optimized_stats["raw_mad"]
+                row[f"delta_{component}_median"] = delta["median"]
+                row[f"delta_{component}_raw_mad"] = delta["raw_mad"]
+
+            baseline_record = [
+                float(value["payload_record_construction_s"])
+                for value in base_values
+            ]
+            optimized_record = [
+                float(value["payload_record_construction_s"])
+                for value in optimized_values
+            ]
+            baseline_steady = [float(value["total_wall_s"]) for value in base_values]
+            optimized_steady = [
+                float(value["total_wall_s"]) for value in optimized_values
+            ]
+            baseline_attempt = [
+                float(value["attempt_elapsed_s"]) for value in base_values
+            ]
+            optimized_attempt = [
+                float(value["attempt_elapsed_s"]) for value in optimized_values
+            ]
+            saved_record = _stats(
+                [base - candidate for base, candidate in zip(
+                    baseline_record, optimized_record, strict=True
+                )]
+            )["median"]
+            saved_steady = _stats(
+                [base - candidate for base, candidate in zip(
+                    baseline_steady, optimized_steady, strict=True
+                )]
+            )["median"]
+            saved_attempt = _stats(
+                [base - candidate for base, candidate in zip(
+                    baseline_attempt, optimized_attempt, strict=True
+                )]
+            )["median"]
+            row["median_record_time_saved_s"] = saved_record
+            row["median_steady_total_time_saved_s"] = saved_steady
+            row["median_session_inclusive_time_saved_s"] = saved_attempt
+            row["steady_propagation_ratio"] = (
+                saved_steady / saved_record if saved_record > 0 else None
+            )
+            row["session_inclusive_propagation_ratio"] = (
+                saved_attempt / saved_record if saved_record > 0 else None
+            )
+
+            optimized_measurements = optimized_values
+            template_record_counts = [
+                int(value["template_record_count"]) for value in optimized_measurements
+            ]
+            template_reuse_counts = [
+                int(value["template_reuse_count"])
+                for value in optimized_measurements
+            ]
+            template_reuse_ratios = [
+                float(value["template_reuse_ratio"])
+                for value in optimized_measurements
+            ]
+            retained_counts = [
+                int(value["maximum_retained_template_count"])
+                for value in optimized_measurements
+            ]
+            retained_bytes = [
+                int(value["maximum_retained_template_abi_equivalent_bytes"])
+                for value in optimized_measurements
+            ]
+            for name, values in (
+                ("optimized_template_record_count", template_record_counts),
+                ("optimized_template_reuse_count", template_reuse_counts),
+                ("optimized_template_reuse_ratio", template_reuse_ratios),
+                ("optimized_maximum_retained_template_count", retained_counts),
+                (
+                    "optimized_maximum_retained_template_abi_equivalent_bytes",
+                    retained_bytes,
+                ),
+            ):
+                stats = _stats([float(value) for value in values])
+                row[f"{name}_median"] = stats["median"]
+                row[f"{name}_raw_mad"] = stats["raw_mad"]
+            row["optimized_template_lifetime"] = (
+                "one_operation_inside_steady_execution_v1"
+            )
+            rows.append(row)
+    return rows
 
 
 def analyze(baseline_root: Path, optimized_root: Path) -> dict[str, Any]:
@@ -401,6 +604,7 @@ def analyze(baseline_root: Path, optimized_root: Path) -> dict[str, Any]:
         "routes": list(EXPECTED_ROUTES),
         "measurement_blocks": list(MEASUREMENT_BLOCKS),
         "rows": rows,
+        "reconciliation_rows": _reconciliation_rows(baseline, optimized),
         "claim_boundary": "diagnostic_only_no_optimized_performance_claim",
     }
 
@@ -429,6 +633,66 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         writer = csv.DictWriter(stream, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _write_reconciliation_csv(
+    path: Path, rows: Sequence[Mapping[str, Any]]
+) -> None:
+    if not rows:
+        raise ValueError("cannot write an empty reconciliation")
+    fields = tuple(rows[0])
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fields, extrasaction="raise")
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def _reconciliation_document(result: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "analysis_version": result["analysis_version"],
+        "baseline": result["baseline"],
+        "optimized": result["optimized"],
+        "cases": result["cases"],
+        "routes": result["routes"],
+        "measurement_blocks": result["measurement_blocks"],
+        "rows": result["reconciliation_rows"],
+        "timing_semantics": {
+            "steady_total_wall_s": (
+                "measurement.total_wall_s under steady_execution_v1"
+            ),
+            "attempt_elapsed_s": (
+                "session.open_s + measurement.total_wall_s "
+                "+ session.session_close_s"
+            ),
+            "paired_delta": "optimized minus baseline for the same block ID",
+            "propagation_ratio": (
+                "saved steady or session-inclusive time divided by saved "
+                "payload record construction time"
+            ),
+        },
+        "template_semantics": {
+            "lifetime": "one operation inside steady_execution_v1",
+            "template_record_count": (
+                "one numeric record skeleton per active work unit, "
+                "derived from four complex lane passes"
+            ),
+            "template_reuse_count": (
+                "payload record instances minus first-pass skeleton count"
+            ),
+            "template_bytes": (
+                "ABI-equivalent 84-byte numeric record fields; not Python "
+                "heap memory"
+            ),
+        },
+        "accounting_semantics": {
+            "payload_record_staging_residual_s": (
+                "payload_record_staging_s minus materialization, file-write, "
+                "hashing, and record-construction children, computed per sample"
+            ),
+            "negative_residual_tolerance_s": ACCOUNTING_EPSILON_S,
+        },
+        "claim_boundary": result["claim_boundary"],
+    }
 
 
 def _write_markdown(path: Path, result: Mapping[str, Any]) -> None:
@@ -477,6 +741,15 @@ def main() -> int:
         json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     _write_csv(args.output_dir / "request_template_ab_analysis.csv", result["rows"])
+    reconciliation = _reconciliation_document(result)
+    (args.output_dir / "request_template_ab_reconciliation.json").write_text(
+        json.dumps(reconciliation, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    _write_reconciliation_csv(
+        args.output_dir / "request_template_ab_reconciliation.csv",
+        reconciliation["rows"],
+    )
     _write_markdown(args.output_dir / "request_template_ab_analysis.md", result)
     print(json.dumps(result, sort_keys=True))
     return 0
