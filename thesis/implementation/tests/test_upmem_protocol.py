@@ -204,6 +204,119 @@ def test_v4_request_is_deterministic_and_binds_contract_and_manifest_hash(
     assert "manifest_sidecar_staging_s" not in first.to_dict()
 
 
+def test_v4_record_template_preserves_complete_request_artifact(
+    tmp_path: Path,
+) -> None:
+    profile = protocol.V4Profile(dpu_count=2, numeric_mode=protocol.NUMERIC_FLOAT32)
+    payload = _payload(3, protocol.NUMERIC_FLOAT32)
+    units = [
+        protocol.V4WorkUnit(
+            local_dpu_id=0,
+            tile_id=17,
+            batch_index=0,
+            m_offset=0,
+            n_offset=0,
+            k_offset=0,
+            m_elements=1,
+            n_elements=1,
+            k_elements=3,
+            a_payload=payload,
+            b_payload=payload,
+        )
+    ]
+    kwargs = {
+        "profile": profile,
+        "canonical_batch_count": 1,
+        "canonical_m": 1,
+        "canonical_n": 1,
+        "canonical_k": 3,
+        "work_units": units,
+        "task_contract_sha256": TASK_HASH,
+        "request_sequence": 0,
+    }
+    baseline = protocol.build_v4_request(tmp_path / "baseline", **kwargs)
+    templates = {
+        0: protocol._record_abi_fields(
+            units[0],
+            profile=profile,
+            canonical_batch_count=1,
+            canonical_m=1,
+            canonical_n=1,
+            canonical_k=3,
+        )
+    }
+    templated = protocol.build_v4_request(
+        tmp_path / "templated", record_templates=templates, **kwargs
+    )
+
+    def files(artifact: protocol.V4RequestArtifact) -> dict[str, bytes]:
+        return {
+            path.relative_to(artifact.request_dir).as_posix(): path.read_bytes()
+            for path in sorted(artifact.request_dir.rglob("*"))
+            if path.is_file()
+        }
+
+    assert files(templated) == files(baseline)
+    assert templated.work_units == baseline.work_units
+    assert templated.manifest_sha256 == baseline.manifest_sha256
+    assert templated.sidecar_sha256 == baseline.sidecar_sha256
+
+
+def test_v4_record_template_rejects_stale_geometry(tmp_path: Path) -> None:
+    stale = tuple(
+        value + 1 if index == 7 else value
+        for index, value in enumerate(
+            protocol._record_abi_fields(
+                protocol.V4WorkUnit(
+                    local_dpu_id=0,
+                    tile_id=1,
+                    batch_index=0,
+                    m_offset=0,
+                    n_offset=0,
+                    k_offset=0,
+                    m_elements=1,
+                    n_elements=1,
+                    k_elements=3,
+                    a_payload=_payload(3, protocol.NUMERIC_FLOAT32),
+                    b_payload=_payload(3, protocol.NUMERIC_FLOAT32),
+                ),
+                profile=protocol.V4Profile(dpu_count=2),
+                canonical_batch_count=1,
+                canonical_m=1,
+                canonical_n=1,
+                canonical_k=3,
+            )
+        )
+    )
+    with pytest.raises(ValueError, match="record template"):
+        protocol.build_v4_request(
+            tmp_path / "stale-template",
+            profile=protocol.V4Profile(dpu_count=2),
+            canonical_batch_count=1,
+            canonical_m=1,
+            canonical_n=1,
+            canonical_k=3,
+            work_units=[
+                protocol.V4WorkUnit(
+                    local_dpu_id=0,
+                    tile_id=1,
+                    batch_index=0,
+                    m_offset=0,
+                    n_offset=0,
+                    k_offset=0,
+                    m_elements=1,
+                    n_elements=1,
+                    k_elements=3,
+                    a_payload=_payload(3, protocol.NUMERIC_FLOAT32),
+                    b_payload=_payload(3, protocol.NUMERIC_FLOAT32),
+                )
+            ],
+            task_contract_sha256=TASK_HASH,
+            request_sequence=0,
+            record_templates={0: stale},
+        )
+
+
 @pytest.mark.parametrize(
     ("numeric_mode", "expected_operand_bytes"),
     [

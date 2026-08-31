@@ -144,6 +144,16 @@ The associated record, file, staged-byte, and hashed-byte counts are source
 facts, not hardware counters. No child timer runs inside a tensor-element or
 per-byte loop.
 
+The complex UPMEM path may reuse a numeric record skeleton across the four
+real-product lanes of one operation in one open session. The skeleton is
+derived after the first lane has built and validated its request, and is
+discarded at the end of the operation. It contains only ABI geometry and
+placement fields. Payloads, paths, hashes, manifests, sidecars, request
+sequences, and output ownership remain request-specific and are rebuilt for
+every lane. Skeleton preparation remains inside request-build time; it is not
+moved into or hidden by session startup. The ABI and evidence schema are
+unchanged.
+
 Direct ratios are defined only for matching scopes and compatible identities:
 
 ```text

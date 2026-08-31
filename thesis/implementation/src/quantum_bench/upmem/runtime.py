@@ -66,6 +66,7 @@ from quantum_bench.upmem.protocol import (
     WRAM_PANEL_KC,
     WRAM_PANEL_NC,
     WRAM_PANEL_UNALIGNED_SCRATCH_BYTES,
+    _record_abi_fields,
     build_v4_request,
     native_execution_identity,
 )
@@ -1084,7 +1085,13 @@ class UpmemV4Session:
         try:
             for wave_index, wave in enumerate(waves):
                 self._remaining_timeout()
-                outcomes, wave_metrics, wave_parallel, wave_bulk_verified = (
+                (
+                    outcomes,
+                    wave_metrics,
+                    wave_parallel,
+                    wave_bulk_verified,
+                    _record_templates,
+                ) = (
                     self._submit_wave(
                         lowering=lowering,
                         canonical_left=canonical_left,
@@ -1308,6 +1315,9 @@ class UpmemV4Session:
         active_rank_indices: set[int] = set()
         active_dpu_ids: set[tuple[int, int]] = set()
         numeric_transport = "host_packed_int8_mram" if packed else "float32_mram"
+        record_templates_by_wave: dict[
+            int, Mapping[tuple[int, int], tuple[int, ...]]
+        ] = {}
 
         try:
             for lane, (lane_left, lane_right) in zip(
@@ -1328,7 +1338,13 @@ class UpmemV4Session:
                 for wave_index, wave in enumerate(waves):
                     self._remaining_timeout()
                     wave_started = time.perf_counter()
-                    outcomes, metrics, wave_parallel, wave_bulk_verified = (
+                    (
+                        outcomes,
+                        metrics,
+                        wave_parallel,
+                        wave_bulk_verified,
+                        record_templates,
+                    ) = (
                         self._submit_wave(
                             lowering=real_lowering,
                             canonical_left=lane_left,
@@ -1338,8 +1354,11 @@ class UpmemV4Session:
                             wave=wave,
                             requests=planned_requests[wave_index],
                             preserve_native=True,
+                            record_templates=record_templates_by_wave.get(wave_index),
                         )
                     )
+                    if wave_index not in record_templates_by_wave:
+                        record_templates_by_wave[wave_index] = record_templates
                     request_wave_wall_sum_s += time.perf_counter() - wave_started
                     parallel_rank_waves += int(wave_parallel)
                     bulk_verified = bulk_verified and wave_bulk_verified
@@ -1726,10 +1745,18 @@ class UpmemV4Session:
         wave: tuple[M5Tile, ...],
         requests: list[tuple[Any, list[tuple[M5Tile, int]]]],
         preserve_native: bool = False,
-    ) -> tuple[list[tuple[M5Tile, np.ndarray]], dict[str, Any], bool, bool]:
+        record_templates: Mapping[tuple[int, int], tuple[int, ...]] | None = None,
+    ) -> tuple[
+        list[tuple[M5Tile, np.ndarray]],
+        dict[str, Any],
+        bool,
+        bool,
+        dict[tuple[int, int], tuple[int, ...]],
+    ]:
         request_build_started = time.perf_counter()
         self._validate_rank_assignments(wave, requests)
         prepared: list[tuple[_RankSession, list[tuple[M5Tile, int]], Any]] = []
+        built_record_templates: dict[tuple[int, int], tuple[int, ...]] = {}
         request_work_unit_materialization_s = 0.0
         request_artifact_build_s = 0.0
         request_payload_record_staging_s = 0.0
@@ -1768,6 +1795,14 @@ class UpmemV4Session:
                 work_units=units,
                 task_contract_sha256=request_contract,
                 request_sequence=self._sequence,
+                record_templates=(
+                    None
+                    if record_templates is None
+                    else {
+                        local_id: record_templates[(rank.index, local_id)]
+                        for _, local_id in assignments
+                    }
+                ),
             )
             request_artifact_build_s += time.perf_counter() - artifact_build_started
             request_payload_record_staging_s += artifact.payload_record_staging_s
@@ -1782,6 +1817,20 @@ class UpmemV4Session:
             request_payload_files_created += artifact.payload_files_created
             request_payload_bytes_staged += artifact.payload_bytes_staged
             request_payload_bytes_hashed += artifact.payload_bytes_hashed
+            if record_templates is None:
+                for unit in units:
+                    built_record_templates[(rank.index, unit.local_dpu_id)] = (
+                        _record_abi_fields(
+                            unit,
+                            profile=rank.session.profile,
+                            canonical_batch_count=lowering.canonical.b,
+                            canonical_m=lowering.canonical.m,
+                            canonical_n=lowering.canonical.n,
+                            canonical_k=lowering.canonical.k,
+                            validate_payload=False,
+                            validate_geometry=False,
+                        )
+                    )
             prepared.append((rank, assignments, artifact))
         request_build_s = time.perf_counter() - request_build_started
         self._sequence += 1
@@ -1953,7 +2002,15 @@ class UpmemV4Session:
             request_metrics["coordinator_response_processing_s"] = (
                 time.perf_counter() - response_processing_started
             )
-            return results, request_metrics, len(prepared) > 1, bulk_verified
+            return (
+                results,
+                request_metrics,
+                len(prepared) > 1,
+                bulk_verified,
+                built_record_templates
+                if record_templates is None
+                else dict(record_templates),
+            )
         finally:
             for _, _, artifact in prepared:
                 self._delete_request_dir(artifact)

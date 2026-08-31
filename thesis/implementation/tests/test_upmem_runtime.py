@@ -527,6 +527,36 @@ def test_persistent_session_matches_replay_and_renews_deadline(
     _close_mock_session(session)
 
 
+def test_complex_lanes_reuse_only_the_session_record_template(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    node, dag, plan, resources, _, _ = _opened(
+        tmp_path, policy="split_complex_float32_v1", k=17
+    )
+    observed: list[object] = []
+    original = runtime.build_v4_request
+
+    def wrapped(*args: object, **kwargs: object) -> object:
+        observed.append(kwargs.get("record_templates"))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(runtime, "build_v4_request", wrapped)
+    session = open_upmem(dag, plan, resources, timeout_s=10.0)
+    expected = replay_upmem_plan_once(dag, plan, _inputs(node, k=17))
+    actual = session.run_once(_inputs(node, k=17))
+    first_run_count = len(observed)
+    second = session.run_once(_inputs(node, k=17))
+
+    np.testing.assert_array_equal(actual.output, expected.output)
+    np.testing.assert_array_equal(second.output, expected.output)
+    assert observed
+    assert observed[0] is None
+    assert observed[first_run_count] is None
+    assert any(isinstance(value, Mapping) for value in observed[:first_run_count])
+    assert any(isinstance(value, Mapping) for value in observed[first_run_count:])
+    _close_mock_session(session)
+
+
 @pytest.mark.parametrize("dpu_count", (1, 2, 4))
 def test_one_rank_t8_dispatch_replays_on_every_requested_dpu(
     tmp_path: Path, dpu_count: int

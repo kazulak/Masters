@@ -9,6 +9,7 @@ K-chunk assembly, quantization scales, and graph scheduling.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 import hashlib
 from pathlib import Path, PurePosixPath
@@ -579,7 +580,14 @@ def _validate_shape(header: V4Header, profile: V4Profile) -> None:
 
 
 def _validate_work_geometry(
-    unit: V4WorkUnit, *, batch_count: int, m: int, n: int, k: int, mode: int
+    unit: V4WorkUnit,
+    *,
+    batch_count: int,
+    m: int,
+    n: int,
+    k: int,
+    mode: int,
+    validate_payload: bool = True,
 ) -> None:
     for name, value in (
         ("local_dpu_id", unit.local_dpu_id),
@@ -621,14 +629,82 @@ def _validate_work_geometry(
     element_bytes = 4 if mode == NUMERIC_MODE_FLOAT32 else 1
     expected_a = _aligned8(unit.m_elements * unit.k_elements * element_bytes)
     expected_b = _aligned8(unit.k_elements * unit.n_elements * element_bytes)
-    if len(_payload_bytes(unit.a_payload)) not in {
-        unit.m_elements * unit.k_elements * element_bytes,
-        expected_a,
-    } or len(_payload_bytes(unit.b_payload)) not in {
-        unit.k_elements * unit.n_elements * element_bytes,
-        expected_b,
-    }:
+    if validate_payload and (
+        len(_payload_bytes(unit.a_payload))
+        not in {
+            unit.m_elements * unit.k_elements * element_bytes,
+            expected_a,
+        }
+        or len(_payload_bytes(unit.b_payload))
+        not in {
+            unit.k_elements * unit.n_elements * element_bytes,
+            expected_b,
+        }
+    ):
         raise ValueError("v4 operand payload length does not match tile geometry")
+
+
+def _record_abi_fields(
+    unit: V4WorkUnit,
+    *,
+    profile: V4Profile,
+    canonical_batch_count: int,
+    canonical_m: int,
+    canonical_n: int,
+    canonical_k: int,
+    validate_payload: bool = True,
+    validate_geometry: bool = True,
+) -> tuple[int, ...]:
+    """Return numeric record fields without paths or payload commitments.
+
+    ``validate_payload=False`` is used only for a previously validated,
+    session-local skeleton.  Payload lengths are still checked on the normal
+    builder path before any skeleton can be reused. ``validate_geometry=False``
+    is reserved for that builder after its upfront validation.
+    """
+
+    if validate_geometry:
+        _validate_work_geometry(
+            unit,
+            batch_count=canonical_batch_count,
+            m=canonical_m,
+            n=canonical_n,
+            k=canonical_k,
+            mode=profile.numeric_mode_code,
+            validate_payload=validate_payload,
+        )
+    common = (
+        unit.local_dpu_id,
+        unit.flags,
+        unit.tile_id,
+        unit.batch_index,
+        unit.m_offset,
+        unit.n_offset,
+        unit.k_offset,
+        unit.m_elements,
+        unit.n_elements,
+        unit.k_elements,
+    )
+    if unit.flags & FLAG_ZERO_WORK:
+        return common + (0, 0, 0, 0, 0, 0)
+
+    element_bytes = 4 if profile.numeric_mode_code == NUMERIC_MODE_FLOAT32 else 1
+    a_bytes = _aligned8(unit.m_elements * unit.k_elements * element_bytes)
+    b_bytes = _aligned8(unit.k_elements * unit.n_elements * element_bytes)
+    c_bytes = _aligned8(unit.m_elements * unit.n_elements * 4)
+    a_offset = 0
+    b_offset = _aligned8(a_bytes)
+    c_offset = _aligned8(b_offset + b_bytes)
+    if c_offset + c_bytes > profile.mram_pool_bytes:
+        raise ValueError("v4 tile operands and output exceed MRAM pool")
+    return common + (
+        a_bytes,
+        b_bytes,
+        c_bytes,
+        a_offset,
+        b_offset,
+        c_offset,
+    )
 
 
 def _stage_payload(path: Path, payload: bytes, expected_bytes: int) -> None:
@@ -670,6 +746,7 @@ def build_v4_request(
     work_units: Iterable[V4WorkUnit],
     task_contract_sha256: str | bytes | bytearray,
     request_sequence: int,
+    record_templates: Mapping[int, tuple[int, ...]] | None = None,
 ) -> V4RequestArtifact:
     """Build one deterministic, native-compatible v4 request.
 
@@ -677,7 +754,9 @@ def build_v4_request(
     are filled with zero-work records because the native parser requires a
     dense ``0..dpu_count-1`` manifest.  K chunks are separate requests and
     must be assembled by the caller; a request never claims global
-    completeness.
+    completeness.  ``record_templates`` contains only numeric fields from a
+    previously validated operation.  Paths, payloads, hashes, manifests,
+    sidecars, and request sequences are always rebuilt for this request.
     """
 
     root = Path(root).resolve()
@@ -720,6 +799,8 @@ def build_v4_request(
     active = [unit for unit in supplied if not (unit.flags & FLAG_ZERO_WORK)]
     if not active:
         raise ValueError("v4 request cannot contain only zero-work records")
+    if record_templates is not None and not isinstance(record_templates, Mapping):
+        raise TypeError("record_templates must be a mapping when supplied")
     _validate_output_overlaps(active)
     request_output_elements = sum(unit.m_elements * unit.n_elements for unit in active)
     global_output_elements = canonical_batch_count * canonical_m * canonical_n
@@ -763,22 +844,29 @@ def build_v4_request(
                 flags=FLAG_ZERO_WORK,
             ),
         )
+        template = (
+            record_templates.get(dpu_id) if record_templates is not None else None
+        )
+        expected = _record_abi_fields(
+            unit,
+            profile=profile,
+            canonical_batch_count=canonical_batch_count,
+            canonical_m=canonical_m,
+            canonical_n=canonical_n,
+            canonical_k=canonical_k,
+            validate_payload=False,
+            validate_geometry=False,
+        )
+        if template is not None:
+            if tuple(template) != expected:
+                raise ValueError(
+                    f"v4 record template does not match local DPU {dpu_id}"
+                )
+        record_fields = expected
+        a_bytes, b_bytes, c_bytes, a_offset, b_offset, c_offset = record_fields[10:]
         if unit.flags & FLAG_ZERO_WORK:
-            a_bytes = b_bytes = c_bytes = 0
-            a_offset = b_offset = c_offset = 0
             a_payload = b_payload = b""
         else:
-            element_bytes = (
-                4 if profile.numeric_mode_code == NUMERIC_MODE_FLOAT32 else 1
-            )
-            a_bytes = _aligned8(unit.m_elements * unit.k_elements * element_bytes)
-            b_bytes = _aligned8(unit.k_elements * unit.n_elements * element_bytes)
-            c_bytes = _aligned8(unit.m_elements * unit.n_elements * 4)
-            a_offset = 0
-            b_offset = _aligned8(a_bytes)
-            c_offset = _aligned8(b_offset + b_bytes)
-            if c_offset + c_bytes > profile.mram_pool_bytes:
-                raise ValueError("v4 tile operands and output exceed MRAM pool")
             a_payload = _payload_bytes(unit.a_payload)
             b_payload = _payload_bytes(unit.b_payload)
         a_path = payload_dir / f"dpu_{dpu_id:03d}_a.bin"
@@ -800,25 +888,10 @@ def build_v4_request(
         output_paths.append(c_path)
         records.append(
             V4WorkUnitRecord(
-                local_dpu_id=dpu_id,
-                flags=unit.flags,
-                tile_id=unit.tile_id,
-                batch_index=unit.batch_index,
-                m_offset=unit.m_offset,
-                n_offset=unit.n_offset,
-                k_offset=unit.k_offset,
-                m_elements=unit.m_elements,
-                n_elements=unit.n_elements,
-                k_elements=unit.k_elements,
-                a_transfer_bytes=a_bytes,
-                b_transfer_bytes=b_bytes,
-                c_transfer_bytes=c_bytes,
-                a_offset_bytes=a_offset,
-                b_offset_bytes=b_offset,
-                c_offset_bytes=c_offset,
-                a_path=_relative_to(root, a_path, must_exist=True),
-                b_path=_relative_to(root, b_path, must_exist=True),
-                c_path=_relative_to(root, c_path),
+                *record_fields,
+                a_path=_safe_relative(a_path.relative_to(root).as_posix()),
+                b_path=_safe_relative(b_path.relative_to(root).as_posix()),
+                c_path=_safe_relative(c_path.relative_to(root).as_posix()),
                 a_sha256=a_sha256,
                 b_sha256=b_sha256,
             )
