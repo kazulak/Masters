@@ -33,6 +33,10 @@ def test_scientific_configuration_ignores_only_run_specific_paths() -> None:
         "configuration": {
             "experiment": {
                 "experiment_id": "run-specific",
+                "label": "run-specific",
+                "experiment_identity_payload": {
+                    "configuration": {"experiment_id": "run-specific", "path": "/tmp/a"}
+                },
                 "routes": {
                     "route": {
                         "options": {
@@ -49,4 +53,27 @@ def test_scientific_configuration_ignores_only_run_specific_paths() -> None:
     }
     normalized = module._scientific_configuration(manifest)
     assert "experiment_id" not in normalized
+    assert "label" not in normalized
+    assert "experiment_identity_payload" not in normalized
     assert normalized["routes"]["route"]["options"] == {"dpu_count": 1}
+
+
+def test_joined_facts_uses_bound_terminal_physical_facts() -> None:
+    sample = {
+        "backend_facts": {"cpu_fallback_used": False},
+        "session_instance_id": "session-1",
+    }
+    sessions = {
+        "session-1": {
+            "terminal_backend_facts": {
+                "physical_target_verified": True,
+                "hardware_kernel_executed": True,
+            }
+        }
+    }
+
+    assert module._joined_facts(sample, sessions) == {
+        "cpu_fallback_used": False,
+        "physical_target_verified": True,
+        "hardware_kernel_executed": True,
+    }

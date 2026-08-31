@@ -8,10 +8,10 @@ import csv
 import json
 from pathlib import Path
 from statistics import median
-from typing import Any
+from typing import Any, Mapping
 
 from quantum_bench.evidence import load_artifacts
-from quantum_bench.report import verify_artifacts
+from quantum_bench.report import _TERMINAL_AUTHORITY_FIELDS, verify_artifacts
 
 try:
     from analyze_m7d_attribution import _sample_components
@@ -38,6 +38,27 @@ COMPONENTS = (
 def _mad(values: list[float]) -> float:
     center = median(values)
     return float(median(abs(value - center) for value in values))
+
+
+def _joined_facts(
+    sample: Mapping[str, Any], sessions: Mapping[str, Mapping[str, Any]]
+) -> dict[str, Any]:
+    facts = dict(sample.get("backend_facts", {}))
+    session = sessions.get(str(sample.get("session_instance_id")))
+    terminal = session.get("terminal_backend_facts") if session else None
+    if isinstance(terminal, Mapping):
+        conflicts = sorted(
+            field
+            for field in _TERMINAL_AUTHORITY_FIELDS
+            if field in facts and field in terminal and facts[field] != terminal[field]
+        )
+        if conflicts:
+            raise ValueError(
+                "terminal physical facts conflict for " + ", ".join(conflicts)
+            )
+        for field, value in terminal.items():
+            facts.setdefault(field, value)
+    return facts
 
 
 def _load(path: Path, expected_source: str) -> tuple[dict[str, Any], dict[tuple[str, str, str, int], dict[str, Any]]]:
@@ -74,7 +95,7 @@ def _load(path: Path, expected_source: str) -> tuple[dict[str, Any], dict[tuple[
             raise ValueError(f"{path}: unexpected or duplicate sample {key}")
         if sample.get("status") != "success" or sample.get("session_instance_id") not in by_id:
             raise ValueError(f"{path}: unsuccessful or unbound sample {key}")
-        facts = sample.get("backend_facts", {})
+        facts = _joined_facts(sample, by_id)
         for field, value in (
             ("physical_target_verified", True),
             ("hardware_kernel_executed", True),
@@ -101,6 +122,8 @@ def _load(path: Path, expected_source: str) -> tuple[dict[str, Any], dict[tuple[
 def _scientific_configuration(manifest: dict[str, Any]) -> dict[str, Any]:
     experiment = json.loads(json.dumps(manifest["configuration"]["experiment"]))
     experiment.pop("experiment_id", None)
+    experiment.pop("label", None)
+    experiment.pop("experiment_identity_payload", None)
     for route in experiment.get("routes", {}).values():
         options = route.get("options", {})
         for field in ("session_root", "host_binary", "dpu_binary", "initialization_binary"):
