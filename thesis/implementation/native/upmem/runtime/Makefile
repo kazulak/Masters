@@ -13,13 +13,15 @@ $(error v4 requires NR_TASKLETS in [1,24])
 endif
 endif
 
-.PHONY: all v4 clean
+.PHONY: all v4 prepared-stage-probe clean
 
 all: v4
 
 v4: bin/host_upmem_execution_plan_v4_t$(NR_TASKLETS) \
     bin/dpu_gemm_tile_v4_t$(NR_TASKLETS) \
     bin/dpu_simplepim_management_init_t$(NR_TASKLETS)
+
+prepared-stage-probe: bin/prepared_stage_probe
 
 bin:
 	mkdir -p $@
@@ -31,6 +33,9 @@ bin/dpu_gemm_tile_v4_t%: dpu.c protocol.h | bin
 bin/dpu_simplepim_management_init_t%: $(SIMPLEPIM_ROOT)/lib/management/SmallTableInit_dpu.c | bin
 	@test "$*" -ge 1 -a "$*" -le $(MAX_TASKLETS) || { echo "v4 initialization binary requires tasklets in [1,24]" >&2; exit 1; }
 	$(DPU_CC) -O2 -DNR_TASKLETS=$* -o $@ $<
+
+bin/prepared_stage_probe: prepared_stage_probe.c plan.c plan.h protocol.h | bin
+	$(HOST_CC) -std=c99 -O2 -Wall -Wextra -D_POSIX_C_SOURCE=200809L -o $@ prepared_stage_probe.c plan.c
 
 bin/host_upmem_execution_plan_v4_t%: host.c dpu.c protocol.h request.c request.h plan.c plan.h simplepim_provider.c simplepim_provider.h | bin
 	@test "$*" -ge 1 -a "$*" -le $(MAX_TASKLETS) || { echo "v4 host binary requires tasklets in [1,24]" >&2; exit 1; }
