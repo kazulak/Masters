@@ -75,10 +75,10 @@ production runtime:     unchanged
 ```
 
 The pinned hosted qualification at the accepted source remains the software
-authority. A local full-suite attempt outside that environment reported
-`810 passed, 37 failed`; the failures were caused by unavailable Quimb/
-cotengra packages and missing local SimplePIM/UPMEM build headers. Tests were
-not weakened or skipped.
+authority. A local full-suite attempt on this branch outside that environment
+reported `816 passed, 37 failed`; the failures were caused by unavailable
+Quimb/cotengra packages and missing local SimplePIM/UPMEM build headers. Tests
+were not weakened or skipped.
 
 ## Claim boundary
 
