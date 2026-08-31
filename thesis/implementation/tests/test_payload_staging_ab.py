@@ -77,3 +77,17 @@ def test_joined_facts_uses_bound_terminal_physical_facts() -> None:
         "physical_target_verified": True,
         "hardware_kernel_executed": True,
     }
+
+
+def test_main_fails_closed_when_ab_gate_fails(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(module, "inspect", lambda **_: {"gate_passed": False})
+
+    assert module.main(
+        [
+            "--baseline", str(tmp_path / "baseline"),
+            "--candidate", str(tmp_path / "candidate"),
+            "--baseline-source", "a" * 40,
+            "--candidate-source", "b" * 40,
+            "--output-dir", str(tmp_path / "output"),
+        ]
+    ) == 1

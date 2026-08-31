@@ -238,7 +238,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"status": "failed", "error": str(exc)}, sort_keys=True))
         return 2
     print(json.dumps({"status": "inspected", "gate_passed": summary["gate_passed"]}, sort_keys=True))
-    return 0
+    return 0 if summary["gate_passed"] else 1
 
 
 if __name__ == "__main__":
