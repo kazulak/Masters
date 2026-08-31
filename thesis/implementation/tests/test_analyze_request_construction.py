@@ -46,6 +46,8 @@ def _sample(
     attempt_kind: str = "measurement",
     session_id: str | None = None,
     timing: dict[str, float | int] | None = None,
+    dpu_count: int = 1,
+    tasklets: int = 8,
 ) -> dict[str, object]:
     return {
         "status": "success",
@@ -57,8 +59,8 @@ def _sample(
         "backend_facts": {
             "operation_facts": [
                 {
-                    "requested_dpu_count": 1,
-                    "tasklets_per_dpu": 8,
+                    "requested_dpu_count": dpu_count,
+                    "tasklets_per_dpu": tasklets,
                     "timing": _timing() if timing is None else timing,
                 }
             ]
@@ -145,6 +147,9 @@ def test_attempt_time_is_joined_from_session_evidence() -> None:
     sample = _sample(10.0, session_id="session-1")
     session = {
         "session_instance_id": "session-1",
+        "case_id": "stress18",
+        "route_id": "upmem_float32_1dpu_t8",
+        "status": "success",
         "open_s": 2.0,
         "session_close_s": 3.0,
     }
@@ -159,6 +164,14 @@ def test_attempt_time_is_joined_from_session_evidence() -> None:
     assert row["median_session_open_s"] == pytest.approx(2.0)
     assert row["median_session_close_s"] == pytest.approx(3.0)
     assert row["median_attempt_elapsed_s"] == pytest.approx(15.0)
+
+
+def test_topology_drift_across_measurements_is_rejected() -> None:
+    with pytest.raises(ValueError, match="topology changed across measurements"):
+        analyzer.derive_attribution(
+            {"source_commit": "a" * 40, "experiment_id": "example"},
+            (_sample(10.0), _sample(10.0, dpu_count=4)),
+        )
 
 
 def test_attribution_config_has_only_two_physical_routes() -> None:

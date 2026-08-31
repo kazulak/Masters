@@ -196,6 +196,10 @@ def _sample_attribution(
         "total_wall_s": _seconds(measurement.get("total_wall_s"), "total_wall_s"),
     }
     if session is not None:
+        if session.get("status") != "success":
+            raise ValueError("measurement session is not successful")
+        if session.get("case_id") != result["case_id"] or session.get("route_id") != result["route_id"]:
+            raise ValueError("measurement session does not match sample route")
         open_s = session.get("open_s")
         close_s = session.get("session_close_s")
         if open_s is None or close_s is None:
@@ -237,6 +241,11 @@ def _sample_attribution(
 
 
 def _summary(values: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    topologies = {
+        (value["dpu_count"], value["tasklets_per_dpu"]) for value in values
+    }
+    if len(topologies) != 1:
+        raise ValueError("request construction topology changed across measurements")
     total_values = [float(value["total_wall_s"]) for value in values]
     parent_values = [float(value["parent_s"]) for value in values]
     timing_stats: dict[str, dict[str, float]] = {
