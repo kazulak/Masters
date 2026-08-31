@@ -53,6 +53,79 @@ def test_paired_summary_is_deterministic_and_descriptive() -> None:
     assert first["bootstrap_resamples"] == 10_000
 
 
+def test_number_rejects_nonfinite_values() -> None:
+    for value in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(ValueError, match="finite"):
+            analyzer._number(value, "duration")
+
+
+def _physical_sample(session_id: str, *, hardware_kernel_executed: bool = True) -> dict[str, object]:
+    return {
+        "status": "success",
+        "attempt_kind": "warmup",
+        "case_id": analyzer.EXPECTED_CASES[0],
+        "route_id": analyzer.EXPECTED_ROUTES[0],
+        "block_id": 0,
+        "session_instance_id": session_id,
+        "measurement": {"scope_id": "steady_execution_v1"},
+        "backend_facts": {
+            "target_observed": "physical_hardware",
+            "simulator_kernel_executed": False,
+            "cpu_fallback_used": False,
+            "hardware_kernel_executed": hardware_kernel_executed,
+            "requested_dpus": 1,
+            "allocated_dpus": 1,
+            "active_dpus": 1,
+            "operation_facts": [
+                {
+                    "target_observed": "physical_hardware",
+                    "simulator_kernel_executed": False,
+                    "cpu_fallback_used": False,
+                    "hardware_kernel_executed": True,
+                    "timing": {},
+                }
+            ],
+        },
+    }
+
+
+def test_physical_validation_requires_top_level_hardware_execution() -> None:
+    with pytest.raises(ValueError, match="hardware_kernel_executed"):
+        analyzer._validate_physical_sample(
+            _physical_sample("session", hardware_kernel_executed=False)
+        )
+
+
+def test_physical_validation_uses_operation_fact_when_top_level_is_absent() -> None:
+    sample = _physical_sample("session")
+    del sample["backend_facts"]["hardware_kernel_executed"]
+    analyzer._validate_physical_sample(sample)
+
+
+def test_load_arm_requires_a_bijective_sample_session_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    samples = [_physical_sample(f"session-{index}") for index in range(36)]
+    sessions = [
+        {
+            "session_instance_id": f"session-{index}",
+            "status": "success",
+            "release_verified": True,
+        }
+        for index in range(36)
+    ]
+    monkeypatch.setattr(analyzer, "_json", lambda _path: {"status": "completed", "source_worktree_dirty": False})
+    monkeypatch.setattr(
+        analyzer,
+        "_jsonl",
+        lambda path: sessions if path.name == "sessions.jsonl" else samples,
+    )
+    samples[0]["session_instance_id"] = samples[1]["session_instance_id"]
+
+    with pytest.raises(ValueError, match="unique and present"):
+        analyzer._load_arm(Path("arm"))
+
+
 def test_analysis_pairs_each_cell_and_component_without_pooling(monkeypatch) -> None:
     arms = {
         "baseline": _arm("baseline", 2.0),

@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 from pathlib import Path
 import random
 from statistics import median
@@ -72,8 +73,8 @@ def _number(value: Any, field: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{field} must be numeric")
     result = float(value)
-    if result < 0:
-        raise ValueError(f"{field} must be nonnegative")
+    if not math.isfinite(result) or result < 0:
+        raise ValueError(f"{field} must be finite and nonnegative")
     return result
 
 
@@ -115,7 +116,6 @@ def _validate_physical_sample(sample: Mapping[str, Any]) -> None:
         "target_observed": "physical_hardware",
         "simulator_kernel_executed": False,
         "cpu_fallback_used": False,
-        "hardware_kernel_executed": True,
         "requested_dpus": facts.get("allocated_dpus"),
         "allocated_dpus": facts.get("active_dpus"),
     }
@@ -123,9 +123,14 @@ def _validate_physical_sample(sample: Mapping[str, Any]) -> None:
         raise ValueError("physical sample lacks resource or target facts")
     if facts.get("target_observed") != required["target_observed"]:
         raise ValueError("sample did not execute on physical hardware")
-    for field in ("simulator_kernel_executed", "cpu_fallback_used"):
+    for field in (
+        "simulator_kernel_executed",
+        "cpu_fallback_used",
+    ):
         if facts.get(field) is not required[field]:
             raise ValueError(f"sample has invalid {field}")
+    if facts.get("hardware_kernel_executed") is False:
+        raise ValueError("sample has invalid hardware_kernel_executed")
     for operation in operations:
         if operation.get("target_observed") != "physical_hardware":
             raise ValueError("an operation did not execute on physical hardware")
@@ -169,6 +174,7 @@ def _load_arm(root: Path) -> dict[str, Any]:
 
     measurements: dict[tuple[str, str, int], dict[str, Any]] = {}
     warmups: set[tuple[str, str, int]] = set()
+    sample_session_ids: set[str] = set()
     counts = {"warmup": 0, "measurement": 0}
     for sample in samples:
         kind = sample.get("attempt_kind")
@@ -178,6 +184,13 @@ def _load_arm(root: Path) -> dict[str, Any]:
         case_id = sample.get("case_id")
         route_id = sample.get("route_id")
         block_id = sample.get("block_id")
+        session_id = str(sample.get("session_instance_id"))
+        if session_id == "None" or session_id in sample_session_ids:
+            raise ValueError("sample session IDs must be unique and present")
+        session = sessions_by_id.get(session_id)
+        if session is None:
+            raise ValueError("sample does not have a corresponding session")
+        sample_session_ids.add(session_id)
         if case_id not in EXPECTED_CASES or route_id not in EXPECTED_ROUTES:
             raise ValueError("unexpected A/B case or route")
         _validate_physical_sample(sample)
@@ -192,10 +205,8 @@ def _load_arm(root: Path) -> dict[str, Any]:
         key = (case_id, route_id, block_id)
         if key in measurements:
             raise ValueError(f"duplicate measurement key: {key}")
-        session_id = str(sample.get("session_instance_id"))
-        session = sessions_by_id.get(session_id)
-        if session is None or session.get("status") != "success":
-            raise ValueError("measurement does not have a successful session")
+        if session.get("status") != "success":
+            raise ValueError("sample does not have a successful session")
         measurement = sample.get("measurement")
         if not isinstance(measurement, Mapping):
             raise ValueError("sample is missing measurement")
@@ -246,6 +257,8 @@ def _load_arm(root: Path) -> dict[str, Any]:
         raise ValueError("A/B arm does not contain one warmup per cell")
     if len(measurements) != 30:
         raise ValueError("A/B arm does not contain one measurement per cell/block")
+    if sample_session_ids != set(sessions_by_id):
+        raise ValueError("A/B sample/session mapping is not bijective")
     return {
         "source_commit": manifest.get("source_commit"),
         "experiment_id": manifest.get("experiment_id"),
