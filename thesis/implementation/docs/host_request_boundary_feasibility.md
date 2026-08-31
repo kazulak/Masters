@@ -33,6 +33,11 @@ The probe is intentionally an executable boundary test rather than a new
 runtime. Its packed format is private to the probe until a production
 implementation is separately approved.
 
+The six-cell probe fixture uses source-derived aggregate contraction, wave and
+request counts. It does not replay every real contraction node's exact tile
+distribution. The fixture therefore establishes boundary mechanics and
+operation-count sensitivity, not a physical workload prediction.
+
 ## Current boundary inventory
 
 The current Python route prepares four sequential real-product passes per
@@ -145,6 +150,14 @@ resource-general cases remain valid
 malformed envelopes fail closed
 the implementation does not change ABI-v4 or the DPU kernel
 ```
+
+Three boundary choices were considered. Extending the existing persistent C
+host process is the preferred production direction because it preserves SDK
+ownership and process isolation. A shared-library FFI is deferred because it
+adds pointer-lifetime, failure-isolation and build concerns before the actual
+boundary benefit is measured. Keeping the current boundary remains the
+fallback if a real host integration cannot preserve outputs and lifecycle
+semantics. No alternative is implemented by this feasibility commit.
 
 For a prior measured affected fraction `p` and host-only speedup `s`, the
 whole-route upper bound is:
