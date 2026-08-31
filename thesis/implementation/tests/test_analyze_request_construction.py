@@ -19,13 +19,20 @@ sys.modules[SPEC.name] = analyzer
 SPEC.loader.exec_module(analyzer)
 
 
-def _timing(*, parent: float = 1.0, materialization: float = 0.1) -> dict[str, float | int]:
+def _timing(
+    *,
+    parent: float = 1.0,
+    materialization: float = 0.1,
+    file_write: float = 0.2,
+    hashing: float = 0.3,
+    record_construction: float = 0.1,
+) -> dict[str, float | int]:
     return {
         "request_payload_record_staging_sum_s": parent,
         "request_payload_materialization_sum_s": materialization,
-        "request_payload_file_write_sum_s": 0.2,
-        "request_payload_hashing_sum_s": 0.3,
-        "request_payload_record_construction_sum_s": 0.1,
+        "request_payload_file_write_sum_s": file_write,
+        "request_payload_hashing_sum_s": hashing,
+        "request_payload_record_construction_sum_s": record_construction,
         "request_payload_record_count": 2,
         "request_payload_files_created": 4,
         "request_payload_bytes_staged": 128,
@@ -33,19 +40,26 @@ def _timing(*, parent: float = 1.0, materialization: float = 0.1) -> dict[str, f
     }
 
 
-def _sample(total: float, *, attempt_kind: str = "measurement") -> dict[str, object]:
+def _sample(
+    total: float,
+    *,
+    attempt_kind: str = "measurement",
+    session_id: str | None = None,
+    timing: dict[str, float | int] | None = None,
+) -> dict[str, object]:
     return {
         "status": "success",
         "attempt_kind": attempt_kind,
         "case_id": "stress18",
         "route_id": "upmem_float32_1dpu_t8",
+        "session_instance_id": session_id,
         "measurement": {"total_wall_s": total},
         "backend_facts": {
             "operation_facts": [
                 {
                     "requested_dpu_count": 1,
                     "tasklets_per_dpu": 8,
-                    "timing": _timing(),
+                    "timing": _timing() if timing is None else timing,
                 }
             ]
         },
@@ -78,6 +92,73 @@ def test_derive_ignores_warmup_and_reports_dominant_child() -> None:
     assert row["median_total_wall_s"] == pytest.approx(11.0)
     assert row["dominant_child"] == "payload_hashing_s"
     assert row["median_payload_residual_s"] == pytest.approx(0.3)
+
+
+def test_summary_uses_sample_paired_residuals_and_share_ratios() -> None:
+    samples = (
+        _sample(
+            10.0,
+            timing=_timing(
+                parent=1.0,
+                materialization=0.1,
+                file_write=0.1,
+                hashing=0.1,
+                record_construction=0.1,
+            ),
+        ),
+        _sample(
+            20.0,
+            timing=_timing(
+                parent=2.0,
+                materialization=0.4,
+                file_write=0.1,
+                hashing=0.1,
+                record_construction=0.1,
+            ),
+        ),
+        _sample(
+            1000.0,
+            timing=_timing(
+                parent=100.0,
+                materialization=0.9,
+                file_write=0.1,
+                hashing=0.1,
+                record_construction=0.1,
+            ),
+        ),
+    )
+
+    result = analyzer.derive_attribution(
+        {"source_commit": "a" * 40, "experiment_id": "example"}, samples
+    )
+    summary = result["measurement_cells"][0]["summary"]
+
+    assert summary["residual"]["median_s"] == pytest.approx(1.3)
+    assert summary["children"]["payload_materialization_s"]["median_parent_share"] == pytest.approx(0.1)
+    assert summary["children"]["payload_materialization_s"]["median_s"] / summary["median_parent_s"] == pytest.approx(0.2)
+    assert summary["children"]["payload_materialization_s"]["median_parent_share"] != pytest.approx(
+        summary["children"]["payload_materialization_s"]["median_s"] / summary["median_parent_s"]
+    )
+
+
+def test_attempt_time_is_joined_from_session_evidence() -> None:
+    sample = _sample(10.0, session_id="session-1")
+    session = {
+        "session_instance_id": "session-1",
+        "open_s": 2.0,
+        "session_close_s": 3.0,
+    }
+
+    result = analyzer.derive_attribution(
+        {"source_commit": "a" * 40, "experiment_id": "example"},
+        (sample,),
+        (session,),
+    )
+    row = result["measurement_cells"][0]
+
+    assert row["median_session_open_s"] == pytest.approx(2.0)
+    assert row["median_session_close_s"] == pytest.approx(3.0)
+    assert row["median_attempt_elapsed_s"] == pytest.approx(15.0)
 
 
 def test_attribution_config_has_only_two_physical_routes() -> None:

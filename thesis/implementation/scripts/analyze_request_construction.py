@@ -49,19 +49,45 @@ CSV_FIELDS = (
     "measurement_count",
     "median_total_wall_s",
     "raw_mad_total_wall_s",
+    "min_total_wall_s",
+    "max_total_wall_s",
+    "median_attempt_elapsed_s",
+    "raw_mad_attempt_elapsed_s",
+    "min_attempt_elapsed_s",
+    "max_attempt_elapsed_s",
+    "median_session_open_s",
+    "raw_mad_session_open_s",
+    "min_session_open_s",
+    "max_session_open_s",
+    "median_session_close_s",
+    "raw_mad_session_close_s",
+    "min_session_close_s",
+    "max_session_close_s",
     "median_payload_record_staging_s",
     "raw_mad_payload_record_staging_s",
+    "min_payload_record_staging_s",
+    "max_payload_record_staging_s",
     "payload_parent_share",
     "median_payload_materialization_s",
     "raw_mad_payload_materialization_s",
+    "min_payload_materialization_s",
+    "max_payload_materialization_s",
     "median_payload_file_write_s",
     "raw_mad_payload_file_write_s",
+    "min_payload_file_write_s",
+    "max_payload_file_write_s",
     "median_payload_hashing_s",
     "raw_mad_payload_hashing_s",
+    "min_payload_hashing_s",
+    "max_payload_hashing_s",
     "median_payload_record_construction_s",
     "raw_mad_payload_record_construction_s",
+    "min_payload_record_construction_s",
+    "max_payload_record_construction_s",
     "median_payload_residual_s",
     "raw_mad_payload_residual_s",
+    "min_payload_residual_s",
+    "max_payload_residual_s",
     "median_record_count",
     "median_files_created",
     "median_bytes_staged",
@@ -104,6 +130,18 @@ def _raw_mad(values: Sequence[float]) -> float:
     return float(median(abs(value - center) for value in values))
 
 
+def _stats(values: Sequence[float]) -> dict[str, float]:
+    if not values:
+        raise ValueError("cannot summarize no values")
+    numeric = [float(value) for value in values]
+    return {
+        "median_s": float(median(numeric)),
+        "raw_mad_s": _raw_mad(numeric),
+        "min_s": min(numeric),
+        "max_s": max(numeric),
+    }
+
+
 def _operation_attribution(operation: Mapping[str, Any]) -> dict[str, float | int]:
     timing = _mapping(operation.get("timing"), "operation timing")
     missing = [field for field in TIMING_FIELDS if field not in timing]
@@ -141,7 +179,9 @@ def _operation_attribution(operation: Mapping[str, Any]) -> dict[str, float | in
     }
 
 
-def _sample_attribution(sample: Mapping[str, Any]) -> dict[str, Any]:
+def _sample_attribution(
+    sample: Mapping[str, Any], session: Mapping[str, Any] | None = None
+) -> dict[str, Any]:
     facts = _mapping(sample.get("backend_facts"), "sample backend_facts")
     operations = facts.get("operation_facts")
     if not isinstance(operations, Sequence) or isinstance(operations, (str, bytes)):
@@ -155,6 +195,18 @@ def _sample_attribution(sample: Mapping[str, Any]) -> dict[str, Any]:
         "block_id": sample.get("block_id"),
         "total_wall_s": _seconds(measurement.get("total_wall_s"), "total_wall_s"),
     }
+    if session is not None:
+        open_s = session.get("open_s")
+        close_s = session.get("session_close_s")
+        if open_s is None or close_s is None:
+            raise ValueError("successful measurement session lacks open/close timing")
+        result["session_open_s"] = _seconds(open_s, "session open_s")
+        result["session_close_s"] = _seconds(close_s, "session_close_s")
+        result["attempt_elapsed_s"] = (
+            result["session_open_s"]
+            + result["total_wall_s"]
+            + result["session_close_s"]
+        )
     totals: dict[str, float | int] = {
         "parent_s": 0.0,
         **{name: 0.0 for name in CHILDREN},
@@ -187,12 +239,19 @@ def _sample_attribution(sample: Mapping[str, Any]) -> dict[str, Any]:
 def _summary(values: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     total_values = [float(value["total_wall_s"]) for value in values]
     parent_values = [float(value["parent_s"]) for value in values]
+    timing_stats: dict[str, dict[str, float]] = {
+        "total_wall_s": _stats(total_values),
+        "parent_s": _stats(parent_values),
+    }
+    for field in ("session_open_s", "session_close_s", "attempt_elapsed_s"):
+        if all(field in value for value in values):
+            timing_stats[field] = _stats([float(value[field]) for value in values])
     child_stats: dict[str, dict[str, float]] = {}
     for child in CHILDREN:
         child_values = [float(value[child]) for value in values]
-        child_stats[child] = {
-            "median_s": float(median(child_values)),
-            "raw_mad_s": _raw_mad(child_values),
+        stats = _stats(child_values)
+        stats.update(
+            {
             "median_parent_share": float(
                 median(
                     value[child] / value["parent_s"] if value["parent_s"] else 0.0
@@ -207,14 +266,36 @@ def _summary(values: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
                     for value in values
                 )
             ),
-        }
+            "raw_mad_parent_share": _raw_mad(
+                [
+                    value[child] / value["parent_s"]
+                    if value["parent_s"]
+                    else 0.0
+                    for value in values
+                ]
+            ),
+            "raw_mad_total_share": _raw_mad(
+                [
+                    value[child] / value["total_wall_s"]
+                    if value["total_wall_s"]
+                    else 0.0
+                    for value in values
+                ]
+            ),
+            }
+        )
+        child_stats[child] = stats
     dominant = max(CHILDREN, key=lambda child: child_stats[child]["median_s"])
     return {
         "measurement_count": len(values),
-        "median_total_wall_s": float(median(total_values)),
-        "raw_mad_total_wall_s": _raw_mad(total_values),
-        "median_parent_s": float(median(parent_values)),
-        "raw_mad_parent_s": _raw_mad(parent_values),
+        "median_total_wall_s": timing_stats["total_wall_s"]["median_s"],
+        "raw_mad_total_wall_s": timing_stats["total_wall_s"]["raw_mad_s"],
+        "min_total_wall_s": timing_stats["total_wall_s"]["min_s"],
+        "max_total_wall_s": timing_stats["total_wall_s"]["max_s"],
+        "median_parent_s": timing_stats["parent_s"]["median_s"],
+        "raw_mad_parent_s": timing_stats["parent_s"]["raw_mad_s"],
+        "min_parent_s": timing_stats["parent_s"]["min_s"],
+        "max_parent_s": timing_stats["parent_s"]["max_s"],
         "parent_share": float(
             median(
                 value["parent_s"] / value["total_wall_s"]
@@ -225,8 +306,7 @@ def _summary(values: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         ),
         "children": child_stats,
         "residual": {
-            "median_s": float(median(value["residual_s"] for value in values)),
-            "raw_mad_s": _raw_mad([float(value["residual_s"]) for value in values]),
+            **_stats([float(value["residual_s"]) for value in values]),
         },
         "counters": {
             field: {
@@ -236,6 +316,7 @@ def _summary(values: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             for field in COUNTER_FIELDS
         },
         "dominant_child": dominant,
+        "timing": timing_stats,
     }
 
 
@@ -243,16 +324,25 @@ def _row(case_id: str, route_id: str, values: Sequence[Mapping[str, Any]]) -> di
     summary = _summary(values)
     children = summary["children"]
     dominant = summary["dominant_child"]
-    return {
+    timing = summary["timing"]
+
+    def timing_columns(name: str, prefix: str) -> dict[str, float]:
+        stats = timing[name]
+        return {
+            f"median_{prefix}_s": stats["median_s"],
+            f"raw_mad_{prefix}_s": stats["raw_mad_s"],
+            f"min_{prefix}_s": stats["min_s"],
+            f"max_{prefix}_s": stats["max_s"],
+        }
+
+    row: dict[str, Any] = {
         "case_id": case_id,
         "route_id": route_id,
         "dpu_count": values[0]["dpu_count"],
         "tasklets_per_dpu": values[0]["tasklets_per_dpu"],
         "measurement_count": summary["measurement_count"],
-        "median_total_wall_s": summary["median_total_wall_s"],
-        "raw_mad_total_wall_s": summary["raw_mad_total_wall_s"],
-        "median_payload_record_staging_s": summary["median_parent_s"],
-        "raw_mad_payload_record_staging_s": summary["raw_mad_parent_s"],
+        **timing_columns("total_wall_s", "total_wall"),
+        **timing_columns("parent_s", "payload_record_staging"),
         "payload_parent_share": summary["parent_share"],
         **{
             key: children[child][field]
@@ -260,10 +350,14 @@ def _row(case_id: str, route_id: str, values: Sequence[Mapping[str, Any]]) -> di
             for key, field in (
                 (f"median_{child}", "median_s"),
                 (f"raw_mad_{child}", "raw_mad_s"),
+                (f"min_{child}", "min_s"),
+                (f"max_{child}", "max_s"),
             )
         },
         "median_payload_residual_s": summary["residual"]["median_s"],
         "raw_mad_payload_residual_s": summary["residual"]["raw_mad_s"],
+        "min_payload_residual_s": summary["residual"]["min_s"],
+        "max_payload_residual_s": summary["residual"]["max_s"],
         "median_record_count": summary["counters"]["request_payload_record_count"]["median"],
         "median_files_created": summary["counters"]["request_payload_files_created"]["median"],
         "median_bytes_staged": summary["counters"]["request_payload_bytes_staged"]["median"],
@@ -273,10 +367,20 @@ def _row(case_id: str, route_id: str, values: Sequence[Mapping[str, Any]]) -> di
         "dominant_child_parent_share": children[dominant]["median_parent_share"],
         "summary": summary,
     }
+    for name, prefix in (
+        ("session_open_s", "session_open"),
+        ("session_close_s", "session_close"),
+        ("attempt_elapsed_s", "attempt_elapsed"),
+    ):
+        if name in timing:
+            row.update(timing_columns(name, prefix))
+    return row
 
 
 def derive_attribution(
-    manifest: Mapping[str, Any], samples: Sequence[Mapping[str, Any]]
+    manifest: Mapping[str, Any],
+    samples: Sequence[Mapping[str, Any]],
+    sessions: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Derive request-construction facts from successful measurement samples."""
 
@@ -286,11 +390,26 @@ def derive_attribution(
     experiment_id = manifest.get("experiment_id")
     if not isinstance(experiment_id, str) or not experiment_id:
         raise ValueError("manifest experiment_id is invalid")
+    sessions_by_id: dict[str, Mapping[str, Any]] = {}
+    for session in sessions or ():
+        session_id = session.get("session_instance_id")
+        if not isinstance(session_id, str) or not session_id:
+            raise ValueError("session_instance_id is required for session timing")
+        if session_id in sessions_by_id:
+            raise ValueError(f"duplicate session_instance_id: {session_id}")
+        sessions_by_id[session_id] = session
+
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for sample in samples:
         if sample.get("status") != "success" or sample.get("attempt_kind") != "measurement":
             continue
-        attribution = _sample_attribution(sample)
+        session: Mapping[str, Any] | None = None
+        if sessions is not None:
+            session_id = sample.get("session_instance_id")
+            if not isinstance(session_id, str) or session_id not in sessions_by_id:
+                raise ValueError("measurement has no matching session")
+            session = sessions_by_id[session_id]
+        attribution = _sample_attribution(sample, session)
         key = (str(attribution["case_id"]), str(attribution["route_id"]))
         grouped.setdefault(key, []).append(attribution)
     if not grouped:
@@ -299,11 +418,10 @@ def derive_attribution(
         _row(case_id, route_id, grouped[(case_id, route_id)])
         for case_id, route_id in sorted(grouped)
     ]
-    dominant_children = {row["dominant_child"] for row in rows}
-    if len(dominant_children) == 1:
-        next_action = f"Bounded optimization of {next(iter(dominant_children))}."
-    else:
-        next_action = "No stable dominant child; do not optimize yet."
+    next_action = (
+        "Run the static/dynamic request-record audit and host-only benefit gate "
+        "before implementing an optimization."
+    )
     return {
         "analysis_version": ANALYSIS_VERSION,
         "source_commit": source_commit,
@@ -328,17 +446,22 @@ def _write_markdown(path: Path, result: Mapping[str, Any]) -> None:
         f"Source: `{result['source_commit']}`  ",
         f"Experiment: `{result['experiment_id']}`  ",
         "Measurements only; warmups are excluded. Children are disjoint "
-        "subregions of `request_payload_record_staging_s`.",
+        "subregions of `request_payload_record_staging_s`; attempt time includes "
+        "session open and close when session evidence is available.",
         "",
-        "| Circuit | Route | Total wall (s) | Payload parent (s) | Parent share | Dominant child | Child (s) | Child share | Residual (s) |",
-        "| --- | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: |",
+        "| Circuit | Route | Steady (s) | Attempt (s) | Payload parent (s) | Parent share | Dominant child | Child (s) | Child share | Residual (s) |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for row in rows:
+        attempt = row.get("median_attempt_elapsed_s")
+        attempt_text = "n/a" if attempt is None else f"{attempt:.6f}"
         lines.append(
             "| {case_id} | {route_id} | {median_total_wall_s:.6f} | "
+            "{attempt_text} | "
             "{median_payload_record_staging_s:.6f} | {payload_parent_share:.1%} | "
             "{dominant_child} | {dominant_child_median_s:.6f} | "
             "{dominant_child_parent_share:.1%} | {median_payload_residual_s:.6f} |".format(
+                attempt_text=attempt_text,
                 **row
             )
         )
@@ -363,8 +486,8 @@ def analyze(input_dir: Path, output_dir: Path) -> dict[str, Any]:
     if output_dir.exists() and any(output_dir.iterdir()):
         raise ValueError(f"analysis output directory must be empty: {output_dir}")
     verification = verify_artifacts(input_dir)
-    manifest, samples, _ = load_artifacts(input_dir)
-    result = derive_attribution(manifest, samples)
+    manifest, samples, sessions = load_artifacts(input_dir)
+    result = derive_attribution(manifest, samples, sessions)
     result["verification"] = verification
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "request_construction_attribution.json").write_text(
