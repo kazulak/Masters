@@ -495,7 +495,11 @@ def inspect(
     source_commit = manifest.get("source_commit")
     if not isinstance(source_commit, str) or _SHA256.fullmatch(source_commit) is None:
         raise ValueError("physical evidence source_commit must be a 40-hex SHA")
-    current_commit = _require_clean_source(expected_source_commit)
+    current_commit = (
+        _require_clean_source()
+        if expected_source_commit is None
+        else _require_clean_source(expected_source_commit)
+    )
     if source_commit != current_commit:
         raise ValueError("physical evidence source_commit does not match current HEAD")
     expected_counts = {
