@@ -90,10 +90,22 @@ def _git_output(*arguments: str) -> str:
     return result.stdout.strip()
 
 
-def _require_clean_source() -> str:
+def _require_clean_source(expected_source: str | None = None) -> str:
     if _git_output("status", "--porcelain"):
         raise ValueError("general-resource inspection requires a clean Git worktree")
-    return _git_output("rev-parse", "HEAD")
+    current = _git_output("rev-parse", "HEAD")
+    if expected_source is None:
+        return current
+    if not _SHA256.fullmatch(expected_source):
+        raise ValueError("expected source commit must be a 40-hex SHA")
+    result = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", expected_source, current],
+        cwd=ROOT,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise ValueError("expected source commit is not an ancestor of current HEAD")
+    return expected_source
 
 
 def _absolute(value: str, *, relative_to: Path | None = None) -> str:
@@ -474,14 +486,16 @@ def _t24_plan_facts(plan: Any) -> Mapping[str, Any]:
     }
 
 
-def inspect(*, input_dir: Path, output: Path) -> Mapping[str, Any]:
+def inspect(
+    *, input_dir: Path, output: Path, expected_source_commit: str | None = None
+) -> Mapping[str, Any]:
     _require_absent_ignored_output(output, SUMMARY_OUTPUT_NAME)
     manifest, samples, sessions = load_artifacts(input_dir)
     verification = verify_artifacts(input_dir)
     source_commit = manifest.get("source_commit")
     if not isinstance(source_commit, str) or _SHA256.fullmatch(source_commit) is None:
         raise ValueError("physical evidence source_commit must be a 40-hex SHA")
-    current_commit = _require_clean_source()
+    current_commit = _require_clean_source(expected_source_commit)
     if source_commit != current_commit:
         raise ValueError("physical evidence source_commit does not match current HEAD")
     expected_counts = {
@@ -722,6 +736,7 @@ def main(argv: list[str] | None = None) -> int:
     inspect_parser = commands.add_parser("inspect")
     inspect_parser.add_argument("--input", type=Path, required=True)
     inspect_parser.add_argument("--output", type=Path, required=True)
+    inspect_parser.add_argument("--expected-source-commit")
     args = parser.parse_args(argv)
     try:
         if args.command == "build":
@@ -734,7 +749,11 @@ def main(argv: list[str] | None = None) -> int:
                 expected_cpus=_parse_cpus(args.expected_cpus),
             )
         else:
-            payload = inspect(input_dir=args.input.resolve(), output=args.output.resolve())
+            payload = inspect(
+                input_dir=args.input.resolve(),
+                output=args.output.resolve(),
+                expected_source_commit=args.expected_source_commit,
+            )
     except (OSError, ValueError, yaml.YAMLError, subprocess.CalledProcessError) as exc:
         print(json.dumps({"status": "failed", "error": str(exc)}, sort_keys=True))
         return 2
