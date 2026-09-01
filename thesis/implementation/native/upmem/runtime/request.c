@@ -323,6 +323,524 @@ static int validate_work_units(
     return 0;
 }
 
+static uint32_t read_le32(const unsigned char *data) {
+    return (uint32_t)data[0] |
+        ((uint32_t)data[1] << 8u) |
+        ((uint32_t)data[2] << 16u) |
+        ((uint32_t)data[3] << 24u);
+}
+
+static uint64_t read_le64(const unsigned char *data) {
+    uint64_t value = 0u;
+    for (uint32_t index = 0u; index < 8u; index++) {
+        value |= (uint64_t)data[index] << (index * 8u);
+    }
+    return value;
+}
+
+static int checked_add_u64(uint64_t left, uint64_t right, uint64_t *result) {
+    if (left > UINT64_MAX - right) return 1;
+    *result = left + right;
+    return 0;
+}
+
+static int checked_mul_u64(uint64_t left, uint64_t right, uint64_t *result) {
+    if (left != 0u && right > UINT64_MAX / left) return 1;
+    *result = left * right;
+    return 0;
+}
+
+static void digest_hex(const unsigned char digest[32], char output[65]) {
+    for (uint32_t index = 0u; index < 32u; index++) {
+        (void)snprintf(output + index * 2u, 3u, "%02x", digest[index]);
+    }
+    output[64] = '\0';
+}
+
+static void free_manifest_items(
+    execution_plan_v4_request_item_t items[EXECUTION_PLAN_V4_MAX_DPUS]
+) {
+    for (uint32_t index = 0u; index < EXECUTION_PLAN_V4_MAX_DPUS; index++) {
+        free(items[index].a_path);
+        free(items[index].b_path);
+        free(items[index].c_path);
+        items[index].a_path = NULL;
+        items[index].b_path = NULL;
+        items[index].c_path = NULL;
+    }
+}
+
+static int parse_embedded_manifest(
+    const unsigned char *contents,
+    size_t length,
+    execution_plan_v4_request_item_t items[EXECUTION_PLAN_V4_MAX_DPUS],
+    uint32_t *item_count,
+    char sidecar_relative[PATH_MAX],
+    char **error_message
+) {
+    char *copy;
+    char *save = NULL;
+    char *line;
+    if (contents == NULL || length == SIZE_MAX ||
+        memchr(contents, '\0', length) != NULL) {
+        v4_error(error_message, "request_manifest_failed: embedded manifest is not valid text");
+        return 1;
+    }
+    copy = (char *)malloc(length + 1u);
+    if (copy == NULL) {
+        v4_error(error_message, "request_manifest_failed: embedded manifest allocation failed");
+        return 1;
+    }
+    memcpy(copy, contents, length);
+    copy[length] = '\0';
+    *item_count = 0u;
+    sidecar_relative[0] = '\0';
+    for (line = strtok_r(copy, "\n", &save); line != NULL; line = strtok_r(NULL, "\n", &save)) {
+        char *value = trim(line);
+        unsigned int dpu_id;
+        unsigned long long tile_id;
+        char a_path[PATH_MAX], b_path[PATH_MAX], c_path[PATH_MAX];
+        char a_sha256[65], b_sha256[65], extra[2];
+        unsigned char digest[32];
+        if (*value == '\0' || *value == '#') continue;
+        if (strncmp(value, "sidecar", 7u) == 0 &&
+            (value[7] == ' ' || value[7] == '\t' || value[7] == '=')) {
+            char *sidecar = trim(value + 7u);
+            if (*sidecar == '=') sidecar = trim(sidecar + 1u);
+            if (sidecar_relative[0] != '\0' || !relative_path_is_safe(sidecar) ||
+                snprintf(sidecar_relative, PATH_MAX, "%s", sidecar) >= PATH_MAX) {
+                v4_error(error_message, "request_manifest_failed: embedded sidecar path is unsafe or duplicated");
+                free(copy);
+                free_manifest_items(items);
+                return 1;
+            }
+            continue;
+        }
+        if (strncmp(value, "dpu", 3u) != 0 ||
+            (value[3] != ' ' && value[3] != '\t') ||
+            *item_count >= EXECUTION_PLAN_V4_MAX_DPUS ||
+            sscanf(value + 3u, "%u %llu %4095s %4095s %4095s %64s %64s %1s",
+                &dpu_id, &tile_id, a_path, b_path, c_path, a_sha256, b_sha256, extra) != 7 ||
+            dpu_id != *item_count || dpu_id >= EXECUTION_PLAN_V4_MAX_DPUS ||
+            digest_text(a_sha256, digest) != 0 || digest_text(b_sha256, digest) != 0 ||
+            !relative_path_is_safe(a_path) || !relative_path_is_safe(b_path) ||
+            !relative_path_is_safe(c_path)) {
+            v4_error(error_message, "request_manifest_failed: invalid embedded DPU record or ordering");
+            free(copy);
+            free_manifest_items(items);
+            return 1;
+        }
+        items[dpu_id].work_unit.local_dpu_id = dpu_id;
+        items[dpu_id].work_unit.tile_id = (uint64_t)tile_id;
+        items[dpu_id].a_path = strdup(a_path);
+        items[dpu_id].b_path = strdup(b_path);
+        items[dpu_id].c_path = strdup(c_path);
+        if (items[dpu_id].a_path == NULL || items[dpu_id].b_path == NULL ||
+            items[dpu_id].c_path == NULL) {
+            v4_error(error_message, "request_manifest_failed: embedded payload path allocation failed");
+            free(copy);
+            free_manifest_items(items);
+            return 1;
+        }
+        memcpy(items[dpu_id].a_sha256, a_sha256, sizeof(items[dpu_id].a_sha256));
+        memcpy(items[dpu_id].b_sha256, b_sha256, sizeof(items[dpu_id].b_sha256));
+        (*item_count)++;
+    }
+    free(copy);
+    if (sidecar_relative[0] == '\0' || *item_count == 0u) {
+        v4_error(error_message, "request_manifest_failed: embedded manifest has no sidecar or DPU records");
+        free_manifest_items(items);
+        return 1;
+    }
+    return 0;
+}
+
+static int parse_embedded_sidecar(
+    const unsigned char *contents,
+    size_t length,
+    const unsigned char manifest_sha256[32],
+    uint32_t expected_dpus,
+    uint32_t expected_tasklets,
+    uint64_t expected_request_sequence,
+    uint64_t expected_output_elements,
+    uint32_t expected_work_unit_count,
+    execution_plan_v4_header_t *header,
+    execution_plan_v4_work_unit_t **work_units,
+    char **error_message
+) {
+    uint64_t records_bytes;
+    uint64_t expected_length;
+    if (contents == NULL || header == NULL || work_units == NULL || length < sizeof(*header) ||
+        expected_dpus == 0u || expected_dpus > EXECUTION_PLAN_V4_MAX_DPUS ||
+        expected_work_unit_count != expected_dpus) {
+        v4_error(error_message, "sidecar_validation_failed: embedded v4 sidecar is truncated or has invalid counts");
+        return 1;
+    }
+    memset(header, 0, sizeof(*header));
+    memcpy(header->magic, contents, sizeof(header->magic));
+    header->version = read_le32(contents + 8u);
+    header->header_bytes = read_le32(contents + 12u);
+    header->work_unit_count = read_le32(contents + 16u);
+    header->dpu_count = read_le32(contents + 20u);
+    header->tasklets_per_dpu = read_le32(contents + 24u);
+    header->numeric_mode = read_le32(contents + 28u);
+    header->partition_mode = read_le32(contents + 32u);
+    header->record_bytes = read_le32(contents + 36u);
+    header->reserved0 = read_le32(contents + 40u);
+    header->reserved1 = read_le32(contents + 44u);
+    header->canonical_batch_count = read_le64(contents + 48u);
+    header->canonical_m = read_le64(contents + 56u);
+    header->canonical_n = read_le64(contents + 64u);
+    header->canonical_k = read_le64(contents + 72u);
+    header->global_output_elements = read_le64(contents + 80u);
+    header->request_output_elements = read_le64(contents + 88u);
+    header->request_sequence = read_le64(contents + 96u);
+    memcpy(header->task_contract_sha256, contents + 104u, sizeof(header->task_contract_sha256));
+    memcpy(header->request_sha256, contents + 136u, sizeof(header->request_sha256));
+    if (header->work_unit_count == 0u || header->work_unit_count != expected_dpus ||
+        header->dpu_count != expected_dpus || header->tasklets_per_dpu != expected_tasklets ||
+        header->request_sequence != expected_request_sequence ||
+        header->request_output_elements != expected_output_elements ||
+        memcmp(header->request_sha256, manifest_sha256, 32u) != 0 ||
+        checked_mul_u64(header->work_unit_count, sizeof(execution_plan_v4_work_unit_t), &records_bytes) != 0 ||
+        checked_add_u64(sizeof(*header), records_bytes, &expected_length) != 0 ||
+        expected_length != length) {
+        v4_error(error_message, "sidecar_validation_failed: embedded v4 header or length is invalid");
+        return 1;
+    }
+    *work_units = (execution_plan_v4_work_unit_t *)calloc(
+        header->work_unit_count, sizeof(**work_units));
+    if (*work_units == NULL) {
+        v4_error(error_message, "sidecar_validation_failed: embedded v4 work-unit allocation failed");
+        return 1;
+    }
+    for (uint32_t index = 0u; index < header->work_unit_count; index++) {
+        const unsigned char *record = contents + sizeof(*header) +
+            (size_t)index * sizeof(execution_plan_v4_work_unit_t);
+        execution_plan_v4_work_unit_t *unit = &(*work_units)[index];
+        unit->local_dpu_id = read_le32(record);
+        unit->flags = read_le32(record + 4u);
+        unit->tile_id = read_le64(record + 8u);
+        unit->batch_index = read_le64(record + 16u);
+        unit->m_offset = read_le64(record + 24u);
+        unit->n_offset = read_le64(record + 32u);
+        unit->k_offset = read_le64(record + 40u);
+        unit->m_elements = read_le32(record + 48u);
+        unit->n_elements = read_le32(record + 52u);
+        unit->k_elements = read_le32(record + 56u);
+        unit->a_transfer_bytes = read_le32(record + 60u);
+        unit->b_transfer_bytes = read_le32(record + 64u);
+        unit->c_transfer_bytes = read_le32(record + 68u);
+        unit->a_offset_bytes = read_le32(record + 72u);
+        unit->b_offset_bytes = read_le32(record + 76u);
+        unit->c_offset_bytes = read_le32(record + 80u);
+    }
+    if (execution_plan_distributed_v4_validate(
+            header, *work_units, expected_dpus, expected_tasklets, error_message) != 0 ||
+        validate_work_units(header, *work_units, error_message) != 0) {
+        free(*work_units);
+        *work_units = NULL;
+        v4_error(error_message, "sidecar_validation_failed: embedded v4 work-unit validation failed");
+        return 1;
+    }
+    return 0;
+}
+
+static int ensure_output_directory_tree(
+    const char *root,
+    const char *parent,
+    char **error_message
+) {
+    char current[PATH_MAX];
+    char resolved[PATH_MAX];
+    struct stat info;
+    const size_t root_length = strlen(root);
+    const char *cursor;
+    if (snprintf(current, sizeof(current), "%s", root) >= (int)sizeof(current) ||
+        strncmp(parent, root, root_length) != 0 ||
+        (parent[root_length] != '\0' && parent[root_length] != '/')) {
+        v4_error(error_message, "output_manifest_failed: output parent is outside session root");
+        return 1;
+    }
+    cursor = parent + root_length;
+    while (*cursor == '/') cursor++;
+    while (*cursor != '\0') {
+        const char *end = cursor;
+        size_t component_length;
+        while (*end != '\0' && *end != '/') end++;
+        component_length = (size_t)(end - cursor);
+        if (component_length != 1u || cursor[0] != '.') {
+            if (snprintf(current + strlen(current), sizeof(current) - strlen(current), "/%.*s",
+                    (int)component_length, cursor) >= (int)(sizeof(current) - strlen(current)) ||
+                (mkdir(current, 0777) != 0 && errno != EEXIST) ||
+                stat(current, &info) != 0 || !S_ISDIR(info.st_mode) ||
+                realpath(current, resolved) == NULL || !path_inside_root(root, resolved)) {
+                v4_error(error_message, "output_manifest_failed: output parent directory is unsafe or unavailable");
+                return 1;
+            }
+        }
+        cursor = end;
+        while (*cursor == '/') cursor++;
+    }
+    return 0;
+}
+
+static int prepare_embedded_output_path(
+    const char *root,
+    const char *relative,
+    char output[PATH_MAX],
+    char **error_message
+) {
+    char joined[PATH_MAX];
+    char parent[PATH_MAX];
+    char *slash;
+    struct stat info;
+    if (!relative_path_is_safe(relative) ||
+        snprintf(joined, sizeof(joined), "%s/%s", root, relative) >= (int)sizeof(joined) ||
+        snprintf(parent, sizeof(parent), "%s", joined) >= (int)sizeof(parent) ||
+        (slash = strrchr(parent, '/')) == NULL) {
+        v4_error(error_message, "output_manifest_failed: embedded C output path is unsafe");
+        return 1;
+    }
+    *slash = '\0';
+    if (ensure_output_directory_tree(root, parent, error_message) != 0 ||
+        resolve_path(root, relative, 0, output) != 0 ||
+        (lstat(output, &info) != 0 && errno != ENOENT) ||
+        (lstat(output, &info) == 0 && S_ISLNK(info.st_mode))) {
+        v4_error(error_message, "output_manifest_failed: embedded C output path is unsafe or unavailable");
+        return 1;
+    }
+    return 0;
+}
+
+static int embedded_payload_matches(
+    const unsigned char *payload,
+    size_t payload_bytes,
+    size_t *cursor,
+    uint32_t expected_bytes,
+    const char expected_sha256[65],
+    char **error_message
+) {
+    char actual_sha256[65];
+    if (*cursor > payload_bytes || expected_bytes > payload_bytes - *cursor ||
+        execution_plan_sha256_bytes(payload + *cursor, expected_bytes, actual_sha256) != 0 ||
+        strcmp(actual_sha256, expected_sha256) != 0) {
+        v4_error(error_message, "payload_validation_failed: embedded A or B payload SHA-256 mismatch");
+        return 1;
+    }
+    *cursor += expected_bytes;
+    return 0;
+}
+
+static int embedded_digest_matches(
+    const unsigned char *data,
+    size_t length,
+    const unsigned char expected[32]
+) {
+    char actual_hex[65];
+    unsigned char actual[32];
+    return execution_plan_sha256_bytes(data, length, actual_hex) == 0 &&
+        digest_text(actual_hex, actual) == 0 &&
+        memcmp(actual, expected, sizeof(actual)) == 0;
+}
+
+static int load_embedded_internal(
+    const char *session_root,
+    const execution_plan_v4_embedded_request_t *embedded,
+    uint32_t expected_dpus,
+    uint32_t expected_tasklets,
+    execution_plan_v4_request_t *request,
+    int materialize,
+    char **error_message
+) {
+    execution_plan_v4_request_item_t manifest_items[EXECUTION_PLAN_V4_MAX_DPUS] = {0};
+    execution_plan_v4_header_t header = {0};
+    execution_plan_v4_work_unit_t *work_units = NULL;
+    uint32_t manifest_item_count = 0u;
+    char sidecar_relative[PATH_MAX];
+    uint64_t payload_total = 0u;
+    if (request != NULL) memset(request, 0, sizeof(*request));
+    if (session_root == NULL || embedded == NULL || embedded->manifest == NULL ||
+        embedded->sidecar == NULL || embedded->payload == NULL ||
+        embedded->manifest_bytes == 0u || embedded->sidecar_bytes == 0u ||
+        embedded->payload_bytes == 0u || expected_dpus == 0u ||
+        expected_dpus > EXECUTION_PLAN_V4_MAX_DPUS || expected_tasklets == 0u ||
+        expected_tasklets > EXECUTION_PLAN_V4_MAX_TASKLETS ||
+        (request == NULL && materialize != 0)) {
+        v4_error(error_message, "request_manifest_failed: invalid embedded request arguments");
+        return 1;
+    }
+    if (!embedded_digest_matches(
+            embedded->manifest, embedded->manifest_bytes, embedded->manifest_sha256)) {
+        v4_error(error_message, "request_manifest_failed: embedded manifest SHA-256 mismatch");
+        return 1;
+    }
+    if (!embedded_digest_matches(
+            embedded->sidecar, embedded->sidecar_bytes, embedded->sidecar_sha256)) {
+        v4_error(error_message, "sidecar_validation_failed: embedded sidecar SHA-256 mismatch");
+        return 1;
+    }
+    if (!embedded_digest_matches(
+            embedded->payload, embedded->payload_bytes, embedded->payload_sha256)) {
+        v4_error(error_message, "payload_validation_failed: embedded payload SHA-256 mismatch");
+        return 1;
+    }
+    if (parse_embedded_manifest(embedded->manifest, embedded->manifest_bytes,
+            manifest_items, &manifest_item_count, sidecar_relative, error_message) != 0 ||
+        manifest_item_count != expected_dpus ||
+        parse_embedded_sidecar(embedded->sidecar, embedded->sidecar_bytes,
+            embedded->manifest_sha256, expected_dpus, expected_tasklets,
+            embedded->request_sequence, embedded->request_output_elements,
+            embedded->work_unit_count, &header, &work_units, error_message) != 0) {
+        free_manifest_items(manifest_items);
+        free(work_units);
+        v4_error(error_message, "request_manifest_failed: embedded request resources are invalid");
+        return 1;
+    }
+    (void)sidecar_relative;
+    for (uint32_t index = 0u; index < expected_dpus; index++) {
+        if (manifest_items[index].work_unit.tile_id != work_units[index].tile_id) {
+            v4_error(error_message, "request_manifest_failed: embedded manifest tile identity differs from sidecar");
+            free_manifest_items(manifest_items);
+            free(work_units);
+            return 1;
+        }
+        if (checked_add_u64(payload_total,
+                (uint64_t)work_units[index].a_transfer_bytes + work_units[index].b_transfer_bytes,
+                &payload_total) != 0) {
+            v4_error(error_message, "payload_validation_failed: embedded payload byte count overflow");
+            free_manifest_items(manifest_items);
+            free(work_units);
+            return 1;
+        }
+    }
+    if (payload_total != (uint64_t)embedded->payload_bytes) {
+        v4_error(error_message, "payload_validation_failed: embedded payload byte count differs from work units");
+        free_manifest_items(manifest_items);
+        free(work_units);
+        return 1;
+    }
+    {
+        size_t payload_cursor = 0u;
+        for (uint32_t index = 0u; index < expected_dpus; index++) {
+            const execution_plan_v4_work_unit_t *unit = &work_units[index];
+            if (embedded_payload_matches(embedded->payload, embedded->payload_bytes, &payload_cursor,
+                    unit->a_transfer_bytes, manifest_items[index].a_sha256, error_message) != 0 ||
+                embedded_payload_matches(embedded->payload, embedded->payload_bytes, &payload_cursor,
+                    unit->b_transfer_bytes, manifest_items[index].b_sha256, error_message) != 0) {
+                free_manifest_items(manifest_items);
+                free(work_units);
+                return 1;
+            }
+        }
+        if (payload_cursor != embedded->payload_bytes) {
+            v4_error(error_message, "payload_validation_failed: embedded payload has trailing bytes");
+            free_manifest_items(manifest_items);
+            free(work_units);
+            return 1;
+        }
+    }
+    if (!materialize) {
+        free_manifest_items(manifest_items);
+        free(work_units);
+        return 0;
+    }
+    memcpy(request->root_path, session_root, strlen(session_root) + 1u);
+    request->header = header;
+    request->work_units = work_units;
+    request->items = (execution_plan_v4_request_item_t *)calloc(expected_dpus, sizeof(*request->items));
+    if (request->items == NULL) {
+        v4_error(error_message, "request_manifest_failed: embedded request item allocation failed");
+        free_manifest_items(manifest_items);
+        execution_plan_v4_request_free(request);
+        return 1;
+    }
+    request->item_count = expected_dpus;
+    for (uint32_t index = 0u; index < expected_dpus; index++) {
+        char output_path[PATH_MAX];
+        request->items[index] = manifest_items[index];
+        memset(&manifest_items[index], 0, sizeof(manifest_items[index]));
+        if (prepare_embedded_output_path(session_root, request->items[index].c_path,
+                output_path, error_message) != 0) {
+            execution_plan_v4_request_free(request);
+            free_manifest_items(manifest_items);
+            return 1;
+        }
+        free(request->items[index].c_path);
+        request->items[index].c_path = strdup(output_path);
+        if (request->items[index].c_path == NULL) {
+            v4_error(error_message, "output_manifest_failed: embedded C output path allocation failed");
+            execution_plan_v4_request_free(request);
+            free_manifest_items(manifest_items);
+            return 1;
+        }
+    }
+    digest_hex(embedded->manifest_sha256, request->manifest_sha256);
+    digest_hex(embedded->sidecar_sha256, request->sidecar_sha256);
+    {
+        size_t payload_cursor = 0u;
+        for (uint32_t index = 0u; index < expected_dpus; index++) {
+            execution_plan_v4_request_item_t *item = &request->items[index];
+            const execution_plan_v4_work_unit_t *unit = &work_units[index];
+            item->work_unit = work_units[index];
+            if (unit->a_transfer_bytes != 0u) {
+                if (posix_memalign((void **)&item->a_payload, 8u, unit->a_transfer_bytes) != 0) {
+                    v4_error(error_message, "payload_validation_failed: embedded A allocation failed");
+                    execution_plan_v4_request_free(request);
+                    free_manifest_items(manifest_items);
+                    return 1;
+                }
+                memcpy(item->a_payload, embedded->payload + payload_cursor, unit->a_transfer_bytes);
+            }
+            payload_cursor += unit->a_transfer_bytes;
+            if (unit->b_transfer_bytes != 0u) {
+                if (posix_memalign((void **)&item->b_payload, 8u, unit->b_transfer_bytes) != 0) {
+                    v4_error(error_message, "payload_validation_failed: embedded B allocation failed");
+                    execution_plan_v4_request_free(request);
+                    free_manifest_items(manifest_items);
+                    return 1;
+                }
+                memcpy(item->b_payload, embedded->payload + payload_cursor, unit->b_transfer_bytes);
+            }
+            payload_cursor += unit->b_transfer_bytes;
+            if (unit->c_transfer_bytes != 0u) {
+                if (posix_memalign((void **)&item->c_payload, 8u, unit->c_transfer_bytes) != 0) {
+                    v4_error(error_message, "payload_validation_failed: embedded C allocation failed");
+                    execution_plan_v4_request_free(request);
+                    free_manifest_items(manifest_items);
+                    return 1;
+                }
+                memset(item->c_payload, 0, unit->c_transfer_bytes);
+            }
+        }
+    }
+    free_manifest_items(manifest_items);
+    return 0;
+}
+
+int execution_plan_v4_request_validate_embedded(
+    const char *session_root,
+    const execution_plan_v4_embedded_request_t *embedded,
+    uint32_t expected_dpus,
+    uint32_t expected_tasklets,
+    char **error_message
+) {
+    return load_embedded_internal(session_root, embedded, expected_dpus, expected_tasklets,
+        NULL, 0, error_message);
+}
+
+int execution_plan_v4_request_load_embedded(
+    const char *session_root,
+    const execution_plan_v4_embedded_request_t *embedded,
+    uint32_t expected_dpus,
+    uint32_t expected_tasklets,
+    execution_plan_v4_request_t *request,
+    char **error_message
+) {
+    return load_embedded_internal(session_root, embedded, expected_dpus, expected_tasklets,
+        request, 1, error_message);
+}
+
 int execution_plan_v4_request_load(
     const char *session_root,
     const char *manifest_relative_path,

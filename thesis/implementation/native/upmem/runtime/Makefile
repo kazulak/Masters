@@ -32,9 +32,9 @@ bin/dpu_simplepim_management_init_t%: $(SIMPLEPIM_ROOT)/lib/management/SmallTabl
 	@test "$*" -ge 1 -a "$*" -le $(MAX_TASKLETS) || { echo "v4 initialization binary requires tasklets in [1,24]" >&2; exit 1; }
 	$(DPU_CC) -O2 -DNR_TASKLETS=$* -o $@ $<
 
-bin/host_upmem_execution_plan_v4_t%: host.c dpu.c protocol.h request.c request.h plan.c plan.h simplepim_provider.c simplepim_provider.h | bin
+bin/host_upmem_execution_plan_v4_t%: host.c dpu.c protocol.h request.c request.h operation_envelope.c operation_envelope.h plan.c plan.h simplepim_provider.c simplepim_provider.h | bin
 	@test "$*" -ge 1 -a "$*" -le $(MAX_TASKLETS) || { echo "v4 host binary requires tasklets in [1,24]" >&2; exit 1; }
-	$(HOST_CC) -std=c99 -O2 -Wall -Wextra -D_POSIX_C_SOURCE=200809L -DNR_TASKLETS=$* -I$(SIMPLEPIM_ROOT)/lib/management -o $@ host.c request.c plan.c simplepim_provider.c $$(dpu-pkg-config --cflags --libs dpu) -ldl
+	$(HOST_CC) -std=c99 -O2 -Wall -Wextra -D_POSIX_C_SOURCE=200809L -DNR_TASKLETS=$* -I$(SIMPLEPIM_ROOT)/lib/management -o $@ host.c request.c operation_envelope.c plan.c simplepim_provider.c $$(dpu-pkg-config --cflags --libs dpu) -ldl
 
 clean:
 	rm -rf bin

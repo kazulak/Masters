@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+from typing import Any
 
 import numpy as np
 import pytest
@@ -26,6 +27,10 @@ from quantum_bench.upmem.protocol import (
     V4Profile,
     V4WorkUnit,
     build_v4_request,
+)
+from quantum_bench.upmem.packed_operation import (
+    build_packed_v4_request,
+    pack_operation,
 )
 from quantum_bench.upmem.runtime import (
     UpmemV4Executor,
@@ -269,6 +274,88 @@ def _run_direct_sdk_case(
         session.close()
 
 
+def test_packed_operation_sdk_simulator_case(tmp_path: Path) -> None:
+    """Exercise the native UPOENV2 dispatch without physical hardware."""
+
+    case_id = "packed_operation_v2"
+    _require_sdk_simulator(case_id)
+    host, dpu, initialization = _sdk_binaries(8)
+    left, right, expected, _numeric_mode = _direct_values(
+        m_size=3, n_size=35, k_size=65, numeric="float32"
+    )
+    engine = UpmemV4Executor(
+        session_root=tmp_path / "session",
+        host_binary=host,
+        dpu_binary=dpu,
+        initialization_binary=initialization,
+        rank_paths=(),
+        dpu_count=1,
+        tasklets_per_dpu=8,
+        timeout_s=120.0,
+        execution_target=EXECUTION_TARGET_SIMULATOR,
+        request_transport="packed_operation_v1",
+    )
+    topology = UpmemTopology(dpu_count=1, rank_count=1, tasklets_per_dpu=8)
+    session = engine.open_session("split_complex_float32_v1", topology)
+    try:
+        rank = session.ranks[0]
+        def make_request(sequence: int, tile_id: int) -> Any:
+            return build_packed_v4_request(
+                rank.root,
+                profile=rank.session.profile,
+                canonical_batch_count=1,
+                canonical_m=3,
+                canonical_n=35,
+                canonical_k=65,
+                work_units=(
+                    V4WorkUnit(
+                        local_dpu_id=0,
+                        tile_id=tile_id,
+                        batch_index=0,
+                        m_offset=0,
+                        n_offset=0,
+                        k_offset=0,
+                        m_elements=3,
+                        n_elements=35,
+                        k_elements=65,
+                        a_payload=np.ascontiguousarray(left).tobytes(),
+                        b_payload=np.ascontiguousarray(right).tobytes(),
+                    ),
+                ),
+                task_contract_sha256="ab" * 32,
+                request_sequence=sequence,
+            )
+
+        request = make_request(1, 1)
+        second_request = make_request(2, 2)
+        operation = pack_operation(
+            rank.root,
+            requests=(request, second_request),
+            operation_sequence=1,
+            filename="packed/operation_0000000000000001.bin",
+        )
+        operation.path.parent.mkdir(parents=True, exist_ok=True)
+        operation.path.write_bytes(operation.data)
+        response = rank.session.submit_packed(operation, timeout_s=120.0)
+        assert response["event"] == "OPERATION_RESPONSE"
+        assert response["status"] == "completed"
+        assert response["response_count"] == 2
+        assert response["responses"][0]["target_observed"] == "sdk_simulator"
+        assert response["responses"][1]["target_observed"] == "sdk_simulator"
+        for packed_request in (request, second_request):
+            output = packed_request.root / packed_request.work_units[0].c_path
+            actual = np.fromfile(
+                output, dtype=np.dtype("<f4"), count=3 * 35
+            ).reshape(3, 35)
+            np.testing.assert_array_equal(actual, expected)
+    except Exception:
+        _SDK_CASE_RESULTS[case_id] = "failed"
+        raise
+    finally:
+        session.close()
+    _SDK_CASE_RESULTS[case_id] = "passed"
+
+
 def _planned_k257_node() -> tuple[ContractionDAG, ContractNode, dict[str, np.ndarray]]:
     left = TensorSpec("left", (0, 1), (8, 257), "dense", dtype="complex128")
     right = TensorSpec("right", (1, 2), (257, 32), "dense", dtype="complex128")
@@ -495,6 +582,30 @@ def test_direct_sdk_simulator_case_matrix(
             ) as session:
                 actual = session.run_once(inputs)
             np.testing.assert_allclose(actual.output, expected.output, atol=1.0e-5, rtol=1.0e-5)
+
+            packed_root = tmp_path / "packed-planned-session"
+            packed_resources = UpmemResources(
+                session_root=str(packed_root),
+                host_binary=str(host),
+                dpu_binary=str(dpu),
+                initialization_binary=str(initialization),
+                request_transport="packed_operation_v1",
+            )
+            with open_upmem_simulator(
+                dag, plan, packed_resources, timeout_s=120.0
+            ) as packed_session:
+                packed_actual = packed_session.run_once(inputs)
+            np.testing.assert_allclose(
+                packed_actual.output, expected.output, atol=1.0e-5, rtol=1.0e-5
+            )
+            assert packed_actual.backend_facts["request_transport"] == (
+                "packed_operation_v1"
+            )
+            assert packed_actual.backend_facts["packed_operation_count"] > 0
+            assert packed_actual.backend_facts["packed_operation_request_count"] > 0
+            for directory_name in ("requests", "results", "packed"):
+                directory = packed_root / "rank_00" / directory_name
+                assert not directory.exists() or not any(directory.iterdir())
         else:
             _run_direct_sdk_case(
                 tmp_path,

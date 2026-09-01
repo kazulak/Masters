@@ -202,6 +202,7 @@ class UpmemResources:
     dpu_binary: str
     initialization_binary: str
     rank_paths: tuple[str, ...] = ()
+    request_transport: str = "directory_v1"
     session_opener: Callable[..., object] | None = field(
         default=None,
         repr=False,
@@ -222,6 +223,8 @@ class UpmemResources:
             raise TypeError("rank_paths must be a tuple")
         if any(not isinstance(path, str) or not path for path in self.rank_paths):
             raise ValueError("rank_paths must contain nonempty strings")
+        if self.request_transport not in {"directory_v1", "packed_operation_v1"}:
+            raise ValueError("request_transport must be directory_v1 or packed_operation_v1")
         if self.session_opener is not None and not callable(self.session_opener):
             raise TypeError("session_opener must be callable or None")
 

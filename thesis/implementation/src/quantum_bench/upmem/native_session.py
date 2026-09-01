@@ -22,12 +22,15 @@ from quantum_bench.upmem.protocol import (
     EXECUTION_TARGET_SIMULATOR,
     FLAG_ZERO_WORK,
     native_execution_identity,
+    REQUEST_TRANSPORT_DIRECTORY,
+    REQUEST_TRANSPORT_PACKED_OPERATION,
     STATUS_COMPLETED,
     V4Error,
     V4Profile,
     V4ProtocolError,
     V4RequestArtifact,
 )
+from quantum_bench.upmem.packed_operation import PackedOperation
 
 
 _RANK_PATH = re.compile(r"^/dev/dpu_rank[0-9]+$")
@@ -408,6 +411,18 @@ class V4Session:
                     "hardware_allocation_failed",
                     f"READY field {field!r} is not verified",
                 )
+        observed_transport = event.get("request_transport")
+        if self.profile.request_transport == REQUEST_TRANSPORT_PACKED_OPERATION:
+            if observed_transport != REQUEST_TRANSPORT_PACKED_OPERATION:
+                raise V4ProtocolError(
+                    "hardware_allocation_failed",
+                    "READY request transport is not packed_operation_v1",
+                )
+        elif observed_transport is not None and observed_transport != REQUEST_TRANSPORT_DIRECTORY:
+            raise V4ProtocolError(
+                "hardware_allocation_failed",
+                "READY request transport is not directory_v1",
+            )
         self._validate_native_identity(event, event_name="READY")
 
     def _validate_native_identity(
@@ -509,6 +524,156 @@ class V4Session:
             "total_submit_s": float(time.perf_counter() - submit_started),
         }
         return response
+
+    def submit_packed(
+        self, operation: PackedOperation, *, timeout_s: float | None = None
+    ) -> Mapping[str, Any]:
+        """Submit one variable-length operation envelope to the native host.
+
+        The native host returns a small operation event and a JSONL response
+        file containing the unchanged per-request ABI-v4 response records.
+        Keeping those records intact lets the existing response validator and
+        runtime accounting remain the single correctness boundary.
+        """
+
+        if self._closed or self._poisoned:
+            raise V4Error("session_closed", "v4 session is closed or poisoned")
+        if not isinstance(operation, PackedOperation):
+            raise TypeError("packed submission requires a PackedOperation")
+        if operation.root.resolve() != self.session_root:
+            raise V4Error(
+                "request_manifest_failed",
+                "packed operation root differs from session root",
+            )
+        if self.profile.request_transport != REQUEST_TRANSPORT_PACKED_OPERATION:
+            raise V4Error(
+                "hardware_profile_violation",
+                "packed submission requires packed_operation_v1 profile",
+            )
+        sequences = tuple(request.request_sequence for request in operation.requests)
+        if not sequences or any(
+            right <= left for left, right in zip(sequences, sequences[1:])
+        ):
+            raise V4Error(
+                "hardware_profile_violation",
+                "packed request sequences must increase",
+            )
+        if sequences[0] <= self._last_sequence:
+            raise V4Error(
+                "hardware_profile_violation", "v4 request sequence must increase"
+            )
+        operation_path = _relative_to(
+            self.session_root, operation.path, must_exist=True
+        )
+        actual_hash = _file_sha256(operation.path)
+        if actual_hash != operation.sha256:
+            self._poisoned = True
+            self._terminate()
+            raise V4ProtocolError(
+                "request_manifest_failed", "packed operation hash mismatch"
+            )
+        submit_started = time.perf_counter()
+        protocol_write_started = time.perf_counter()
+        self._write(
+            f"SUBMIT_PACKED_OPERATION {operation_path} {operation.sha256}\n"
+        )
+        protocol_write_s = time.perf_counter() - protocol_write_started
+        response_wait_started = time.perf_counter()
+        event = self._next_event(timeout_s or self.profile.timeout_s)
+        response_wait_s = time.perf_counter() - response_wait_started
+        if event.get("event") != "OPERATION_RESPONSE":
+            self._poisoned = True
+            self.close()
+            raise V4ProtocolError(
+                "protocol_error", "packed response event has the wrong type"
+            )
+        # Operation events use the protocol's JSON status string.  The
+        # numeric STATUS_COMPLETED constant is reserved for DPU results.
+        if event.get("status") != "completed":
+            self._poisoned = True
+            self.close()
+            raise V4ProtocolError(
+                str(event.get("failure_stage") or "request_execution_failed"),
+                str(event.get("error") or "packed operation failed"),
+            )
+        if event.get("operation_sequence") != operation.operation_sequence:
+            self._poisoned = True
+            self.close()
+            raise V4ProtocolError(
+                "protocol_error", "packed response operation sequence mismatch"
+            )
+        if event.get("response_count") != len(operation.requests):
+            self._poisoned = True
+            self.close()
+            raise V4ProtocolError(
+                "response_validation_failed",
+                "packed response count does not match the operation",
+            )
+        response_rel = event.get("response_path")
+        response_digest = event.get("response_sha256")
+        if not isinstance(response_rel, str) or not isinstance(response_digest, str):
+            self._poisoned = True
+            self.close()
+            raise V4ProtocolError(
+                "protocol_error", "packed response file identity is missing"
+            )
+        try:
+            response_path = self.session_root / _safe_relative(response_rel)
+            response_path.resolve().relative_to(self.session_root)
+            actual_response_digest = _file_sha256(response_path)
+        except (OSError, ValueError) as exc:
+            self._poisoned = True
+            self.close()
+            raise V4ProtocolError(
+                "response_validation_failed", "packed response file is invalid"
+            ) from exc
+        if actual_response_digest != response_digest:
+            self._poisoned = True
+            self.close()
+            raise V4ProtocolError(
+                "response_validation_failed", "packed response hash mismatch"
+            )
+        try:
+            lines = response_path.read_text(encoding="utf-8").splitlines()
+            responses: list[Mapping[str, Any]] = []
+            for line in lines:
+                value = json.loads(line)
+                if not isinstance(value, Mapping):
+                    raise ValueError("packed response record is not an object")
+                responses.append(value)
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+            self._poisoned = True
+            self.close()
+            raise V4ProtocolError(
+                "response_validation_failed", "packed response JSONL is invalid"
+            ) from exc
+        if len(responses) != len(operation.requests):
+            self._poisoned = True
+            self.close()
+            raise V4ProtocolError(
+                "response_validation_failed",
+                "packed response count does not match the operation",
+            )
+        response_validation_started = time.perf_counter()
+        try:
+            for response, request in zip(responses, operation.requests, strict=True):
+                self._validate_response(response, request)
+        except V4Error:
+            self._poisoned = True
+            self.close()
+            raise
+        response_validation_s = time.perf_counter() - response_validation_started
+        self._last_sequence = sequences[-1]
+        result = dict(event)
+        result["responses"] = tuple(dict(response) for response in responses)
+        result["host_submit_timing"] = {
+            "artifact_validation_s": 0.0,
+            "protocol_write_s": float(protocol_write_s),
+            "response_wait_s": float(response_wait_s),
+            "response_validation_s": float(response_validation_s),
+            "total_submit_s": float(time.perf_counter() - submit_started),
+        }
+        return result
 
     def _validate_artifact_payloads(self, artifact: V4RequestArtifact) -> None:
         """Reject changed staged operands before the native process can use them."""

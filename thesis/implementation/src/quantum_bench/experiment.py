@@ -184,6 +184,7 @@ _EXECUTORS = frozenset(
 _PLAN_REQUIRED_EXECUTORS = frozenset(
     {"numpy_dag", "upmem_sdk_simulator", "upmem_physical"}
 )
+_UPMEM_EXECUTORS = frozenset({"upmem_sdk_simulator", "upmem_physical"})
 _NUMERIC_POLICIES = frozenset(
     {"split_complex_float32_v1", "split_complex_int8_shared_scale_v1"}
 )
@@ -406,8 +407,12 @@ def _normalize_route(value: object, root: Path, field: str) -> dict[str, object]
             raise ValueError(f"{field}.numeric_policy is required for {executor}")
     elif numeric_policy is not None:
         raise ValueError(f"{field}.numeric_policy must be null for {executor}")
+    raw_options = _config_mapping(route["options"], f"{field}.options")
+    expected_options = _ROUTE_OPTIONS[executor]
+    if executor in _UPMEM_EXECUTORS and "request_transport" in raw_options:
+        expected_options = frozenset((*expected_options, "request_transport"))
     options = dict(
-        _config_fields(route["options"], _ROUTE_OPTIONS[executor], f"{field}.options")
+        _config_fields(raw_options, expected_options, f"{field}.options")
     )
     for option in _PATH_OPTIONS.intersection(options):
         options[option] = _absolute_config_path(
@@ -432,6 +437,13 @@ def _normalize_route(value: object, root: Path, field: str) -> dict[str, object]
     if "methods" in options:
         if options["methods"] not in _COTENGRA_MODES:
             raise ValueError(f"{field}.options.methods has an unsupported value")
+    if "request_transport" in options and options["request_transport"] not in {
+        "directory_v1",
+        "packed_operation_v1",
+    }:
+        raise ValueError(
+            f"{field}.options.request_transport has an unsupported value"
+        )
     if executor in {"upmem_sdk_simulator", "upmem_physical"}:
         dpu_count = int(options["dpu_count"])
         rank_count = int(options["rank_count"])

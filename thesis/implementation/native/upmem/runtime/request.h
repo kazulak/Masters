@@ -34,6 +34,21 @@ typedef struct {
     char root_path[PATH_MAX];
 } execution_plan_v4_request_t;
 
+typedef struct {
+    const unsigned char *manifest;
+    size_t manifest_bytes;
+    const unsigned char *sidecar;
+    size_t sidecar_bytes;
+    const unsigned char *payload;
+    size_t payload_bytes;
+    uint64_t request_sequence;
+    uint64_t request_output_elements;
+    uint32_t work_unit_count;
+    unsigned char manifest_sha256[32];
+    unsigned char sidecar_sha256[32];
+    unsigned char payload_sha256[32];
+} execution_plan_v4_embedded_request_t;
+
 int execution_plan_v4_request_load(
     const char *session_root,
     const char *manifest_relative_path,
@@ -45,6 +60,23 @@ int execution_plan_v4_request_load(
 );
 
 int execution_plan_v4_request_load_payloads(
+    execution_plan_v4_request_t *request,
+    char **error_message
+);
+
+int execution_plan_v4_request_validate_embedded(
+    const char *session_root,
+    const execution_plan_v4_embedded_request_t *embedded,
+    uint32_t expected_dpus,
+    uint32_t expected_tasklets,
+    char **error_message
+);
+
+int execution_plan_v4_request_load_embedded(
+    const char *session_root,
+    const execution_plan_v4_embedded_request_t *embedded,
+    uint32_t expected_dpus,
+    uint32_t expected_tasklets,
     execution_plan_v4_request_t *request,
     char **error_message
 );

@@ -30,6 +30,8 @@ RESPONSE_SCHEMA = "upmem_execution_plan_native_v4"
 # expectations, not Python observations: READY and RESPONSE must report them.
 EXECUTION_TARGET_PHYSICAL = "physical_hardware"
 EXECUTION_TARGET_SIMULATOR = "sdk_simulator"
+REQUEST_TRANSPORT_DIRECTORY = "directory_v1"
+REQUEST_TRANSPORT_PACKED_OPERATION = "packed_operation_v1"
 
 NATIVE_EXECUTION_IDENTITY = {
     "backend_id": "upmem_sdk_hardware_v4_tile_session",
@@ -214,6 +216,7 @@ class V4Profile:
     numeric_mode: str | int = NUMERIC_FLOAT32
     rank_path: str | None = None
     execution_target: str = EXECUTION_TARGET_PHYSICAL
+    request_transport: str = REQUEST_TRANSPORT_DIRECTORY
     timeout_s: float = 60.0
     # stdout is the line-delimited protocol: bound each event independently.
     max_stdout_bytes: int = 256 * 1024
@@ -233,6 +236,11 @@ class V4Profile:
             EXECUTION_TARGET_SIMULATOR,
         }:
             raise ValueError("unsupported v4 execution_target")
+        if self.request_transport not in {
+            REQUEST_TRANSPORT_DIRECTORY,
+            REQUEST_TRANSPORT_PACKED_OPERATION,
+        }:
+            raise ValueError("unsupported v4 request_transport")
         if self.execution_target == EXECUTION_TARGET_SIMULATOR and self.dpu_count != 1:
             raise ValueError("v4 simulator requires exactly one DPU")
         if self.rank_path is not None and not _RANK_PATH.fullmatch(self.rank_path):
@@ -1099,6 +1107,8 @@ __all__ = [
     "NATIVE_EXECUTION_IDENTITY",
     "EXECUTION_TARGET_PHYSICAL",
     "EXECUTION_TARGET_SIMULATOR",
+    "REQUEST_TRANSPORT_DIRECTORY",
+    "REQUEST_TRANSPORT_PACKED_OPERATION",
     "native_execution_identity",
     "NUMERIC_FLOAT32",
     "NUMERIC_HOST_PACKED_INT8",

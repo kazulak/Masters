@@ -52,6 +52,12 @@ from quantum_bench.upmem.plan import (
     validate_upmem_plan,
 )
 from quantum_bench.upmem.native_session import V4Session
+from quantum_bench.upmem.packed_operation import (
+    PACKED_OPERATION_TRANSPORT,
+    PackedOperation,
+    build_packed_v4_request,
+    pack_operation,
+)
 from quantum_bench.upmem.protocol import (
     EXECUTION_TARGET_PHYSICAL,
     EXECUTION_TARGET_SIMULATOR,
@@ -62,6 +68,7 @@ from quantum_bench.upmem.protocol import (
     V4Profile,
     V4ProtocolError,
     V4WorkUnit,
+    REQUEST_TRANSPORT_DIRECTORY,
     WRAM_PANEL_DMA_BYTES,
     WRAM_PANEL_KC,
     WRAM_PANEL_NC,
@@ -367,6 +374,10 @@ class _V4SessionLike(Protocol):
 
     def submit(
         self, artifact: Any, *, timeout_s: float | None = None
+    ) -> Mapping[str, Any]: ...
+
+    def submit_packed(
+        self, operation: PackedOperation, *, timeout_s: float | None = None
     ) -> Mapping[str, Any]: ...
 
     def close(self, *, timeout_s: float | None = None) -> Any: ...
@@ -778,6 +789,7 @@ class UpmemV4Executor:
         tasklets_per_dpu: int = 1,
         timeout_s: float = 60.0,
         execution_target: str = EXECUTION_TARGET_PHYSICAL,
+        request_transport: str = REQUEST_TRANSPORT_DIRECTORY,
         session_factory: Callable[..., _V4SessionLike] = V4Session.start,
     ) -> None:
         self.session_root = Path(session_root)
@@ -789,6 +801,7 @@ class UpmemV4Executor:
         self.tasklets_per_dpu = int(tasklets_per_dpu)
         self.timeout_s = float(timeout_s)
         self.execution_target = execution_target
+        self.request_transport = request_transport
         self.session_factory = session_factory
         self._binary_provenance = {
             **_validated_binary_provenance(
@@ -807,6 +820,7 @@ class UpmemV4Executor:
         self._provenance = {
             "source_root": self._source_root,
             "session_root": str(self.session_root.resolve()),
+            "request_transport": self.request_transport,
             **self._binary_provenance,
         }
         if self.execution_target not in {
@@ -814,6 +828,11 @@ class UpmemV4Executor:
             EXECUTION_TARGET_SIMULATOR,
         }:
             raise ValueError("unsupported v4 execution target")
+        if self.request_transport not in {
+            REQUEST_TRANSPORT_DIRECTORY,
+            PACKED_OPERATION_TRANSPORT,
+        }:
+            raise ValueError("unsupported v4 request transport")
         if self.execution_target == EXECUTION_TARGET_PHYSICAL:
             if not self.rank_paths:
                 raise ValueError("physical v4 engine requires explicit rank_paths")
@@ -821,6 +840,8 @@ class UpmemV4Executor:
                 raise ValueError(
                     "dpu_count must be positive and divisible by rank count"
                 )
+            if self.request_transport == PACKED_OPERATION_TRANSPORT and len(self.rank_paths) != 1:
+                raise ValueError("packed operation transport currently requires one rank")
         elif self.rank_paths or self.dpu_count != 1:
             raise ValueError(
                 "v4 simulator engine requires exactly one DPU and no rank paths"
@@ -884,6 +905,7 @@ class UpmemV4Executor:
                     ),
                     rank_path=rank_path,
                     execution_target=self.execution_target,
+                    request_transport=self.request_transport,
                     timeout_s=remaining,
                 )
                 command_parts: list[str] = [
@@ -904,6 +926,8 @@ class UpmemV4Executor:
                     str(self.dpu_binary.resolve()),
                     "--timeout-s",
                     str(max(1, int(remaining))),
+                    "--request-transport",
+                    self.request_transport,
                 ]
                 if rank_path is not None:
                     command_parts[5:5] = ["--rank-path", rank_path]
@@ -1066,6 +1090,9 @@ class UpmemV4Session:
         request_hashes: list[str] = []
         parallel_rank_waves = 0
         bulk_verified = True
+        packed_operation_count = 0
+        packed_operation_bytes = 0
+        packed_operation_request_count = 0
         total_dpus = sum(rank.local_dpus for rank in self.ranks)
         waves, planned_requests = self._requests_from_work_units(
             node, lowering, stage.work_units
@@ -1083,7 +1110,47 @@ class UpmemV4Session:
             strategy_config_hash=self.strategy_config_hash,
         )
         try:
-            for wave_index, wave in enumerate(waves):
+            if self.engine.request_transport == PACKED_OPERATION_TRANSPORT:
+                (
+                    outcomes,
+                    wave_metrics,
+                    wave_parallel,
+                    wave_bulk_verified,
+                    _record_templates,
+                ) = self._submit_packed_operation(
+                    lowering=lowering,
+                    canonical_left=canonical_left,
+                    canonical_right=canonical_right,
+                    packed=packed,
+                    request_contract=request_contract,
+                    waves=waves,
+                    requests_by_wave=planned_requests,
+                )
+                parallel_rank_waves += int(wave_parallel)
+                bulk_verified = bulk_verified and wave_bulk_verified
+                bytes_h2d += int(wave_metrics["h2d_bytes"])
+                bytes_d2h += int(wave_metrics["d2h_bytes"])
+                for key in timing:
+                    timing[key] += float(wave_metrics[key])
+                request_hashes.extend(wave_metrics["request_manifest_hashes"])
+                packed_operation_count += int(wave_metrics.get("packed_operation_count", 0))
+                packed_operation_bytes += int(wave_metrics.get("packed_operation_bytes", 0))
+                packed_operation_request_count += int(
+                    wave_metrics.get("packed_operation_request_count", 0)
+                )
+                self._successful_request_count += int(
+                    wave_metrics["successful_request_count"]
+                )
+                self._active_rank_indices.update(wave_metrics["active_rank_indices"])
+                self._active_dpu_ids.update(wave_metrics["active_dpu_ids"])
+                for tile, value in outcomes:
+                    partials[tile.id] = value
+            for wave_index in (
+                ()
+                if self.engine.request_transport == PACKED_OPERATION_TRANSPORT
+                else range(len(waves))
+            ):
+                wave = waves[wave_index]
                 self._remaining_timeout()
                 (
                     outcomes,
@@ -1168,6 +1235,10 @@ class UpmemV4Session:
             "k_chunk_count": len(lowering.k_chunks),
             "wave_count": len(waves),
             "request_manifest_hashes": tuple(request_hashes),
+            "request_transport": self.engine.request_transport,
+            "packed_operation_count": packed_operation_count,
+            "packed_operation_bytes": packed_operation_bytes,
+            "packed_operation_request_count": packed_operation_request_count,
             "task_structure_sha256": task_structure_sha256,
             "request_contract_version": "m5_request_contract_v2",
             "request_contract_sha256": request_contract,
@@ -1312,6 +1383,9 @@ class UpmemV4Session:
         coordinator_response_processing_sum_s = 0.0
         parallel_rank_waves = 0
         bulk_verified = True
+        packed_operation_count = 0
+        packed_operation_bytes = 0
+        packed_operation_request_count = 0
         active_rank_indices: set[int] = set()
         active_dpu_ids: set[tuple[int, int]] = set()
         numeric_transport = "host_packed_int8_mram" if packed else "float32_mram"
@@ -1335,7 +1409,122 @@ class UpmemV4Session:
                 lane_request_contract_hashes[lane] = request_contract
                 partials: dict[str, np.ndarray] = {}
                 request_hashes: list[str] = []
-                for wave_index, wave in enumerate(waves):
+                if self.engine.request_transport == PACKED_OPERATION_TRANSPORT:
+                    self._remaining_timeout()
+                    operation_started = time.perf_counter()
+                    (
+                        outcomes,
+                        metrics,
+                        wave_parallel,
+                        wave_bulk_verified,
+                        packed_templates,
+                    ) = self._submit_packed_operation(
+                        lowering=real_lowering,
+                        canonical_left=lane_left,
+                        canonical_right=lane_right,
+                        packed=packed,
+                        request_contract=request_contract,
+                        waves=waves,
+                        requests_by_wave=planned_requests,
+                        preserve_native=True,
+                        record_templates=(
+                            record_templates_by_wave or None
+                        ),
+                    )
+                    record_templates_by_wave = packed_templates
+                    request_wave_wall_sum_s += time.perf_counter() - operation_started
+                    parallel_rank_waves += int(wave_parallel)
+                    bulk_verified = bulk_verified and wave_bulk_verified
+                    h2d_bytes += int(metrics["h2d_bytes"])
+                    d2h_bytes += int(metrics["d2h_bytes"])
+                    rank_response_h2d_max_sum_s += float(metrics["h2d_time_s"])
+                    rank_response_kernel_max_sum_s += float(metrics["kernel_time_s"])
+                    rank_response_d2h_max_sum_s += float(metrics["d2h_time_s"])
+                    rank_response_total_route_max_sum_s += float(
+                        metrics["total_route_time_s"]
+                    )
+                    request_build_sum_s += float(metrics["request_build_s"])
+                    request_work_unit_materialization_sum_s += float(
+                        metrics["request_work_unit_materialization_s"]
+                    )
+                    request_artifact_build_sum_s += float(
+                        metrics["request_artifact_build_s"]
+                    )
+                    request_payload_record_staging_sum_s += float(
+                        metrics["request_payload_record_staging_s"]
+                    )
+                    request_manifest_sidecar_staging_sum_s += float(
+                        metrics["request_manifest_sidecar_staging_s"]
+                    )
+                    request_payload_materialization_sum_s += float(
+                        metrics["request_payload_materialization_sum_s"]
+                    )
+                    request_payload_file_write_sum_s += float(
+                        metrics["request_payload_file_write_sum_s"]
+                    )
+                    request_payload_hashing_sum_s += float(
+                        metrics["request_payload_hashing_sum_s"]
+                    )
+                    request_payload_record_construction_sum_s += float(
+                        metrics["request_payload_record_construction_sum_s"]
+                    )
+                    request_payload_record_count += int(
+                        metrics["request_payload_record_count"]
+                    )
+                    request_payload_files_created += int(
+                        metrics["request_payload_files_created"]
+                    )
+                    request_payload_bytes_staged += int(
+                        metrics["request_payload_bytes_staged"]
+                    )
+                    request_payload_bytes_hashed += int(
+                        metrics["request_payload_bytes_hashed"]
+                    )
+                    rank_submit_parallel_wall_sum_s += float(
+                        metrics["rank_submit_parallel_wall_s"]
+                    )
+                    rank_submit_total_max_sum_s += float(
+                        metrics["rank_submit_total_max_s"]
+                    )
+                    rank_submit_artifact_validation_max_sum_s += float(
+                        metrics["rank_submit_artifact_validation_max_s"]
+                    )
+                    rank_submit_protocol_write_max_sum_s += float(
+                        metrics["rank_submit_protocol_write_max_s"]
+                    )
+                    rank_submit_response_wait_max_sum_s += float(
+                        metrics["rank_submit_response_wait_max_s"]
+                    )
+                    rank_submit_response_validation_max_sum_s += float(
+                        metrics["rank_submit_response_validation_max_s"]
+                    )
+                    coordinator_response_processing_sum_s += float(
+                        metrics["coordinator_response_processing_s"]
+                    )
+                    request_hashes.extend(metrics["request_manifest_hashes"])
+                    packed_operation_count += int(
+                        metrics.get("packed_operation_count", 0)
+                    )
+                    packed_operation_bytes += int(
+                        metrics.get("packed_operation_bytes", 0)
+                    )
+                    packed_operation_request_count += int(
+                        metrics.get("packed_operation_request_count", 0)
+                    )
+                    self._successful_request_count += int(
+                        metrics["successful_request_count"]
+                    )
+                    active_rank_indices.update(metrics["active_rank_indices"])
+                    active_dpu_ids.update(metrics["active_dpu_ids"])
+                    self._active_rank_indices.update(metrics["active_rank_indices"])
+                    self._active_dpu_ids.update(metrics["active_dpu_ids"])
+                    partials.update({tile.id: value for tile, value in outcomes})
+                for wave_index in (
+                    ()
+                    if self.engine.request_transport == PACKED_OPERATION_TRANSPORT
+                    else range(len(waves))
+                ):
+                    wave = waves[wave_index]
                     self._remaining_timeout()
                     wave_started = time.perf_counter()
                     (
@@ -1496,6 +1685,10 @@ class UpmemV4Session:
             "active_dpu_count": len(active_dpu_ids),
             "rank_count": len(self.ranks),
             "tasklets_per_dpu": self.engine.tasklets_per_dpu,
+            "request_transport": self.engine.request_transport,
+            "packed_operation_count": packed_operation_count,
+            "packed_operation_bytes": packed_operation_bytes,
+            "packed_operation_request_count": packed_operation_request_count,
             "parallel_rank_wave_count": parallel_rank_waves,
             "bulk_set_launch_verified": bulk_verified,
             "application_visible_h2d_bytes": h2d_bytes,
@@ -1733,6 +1926,338 @@ class UpmemV4Session:
                 ]
             )
         return tuple(waves), tuple(requests_by_wave)
+
+    def _submit_packed_operation(
+        self,
+        *,
+        lowering: Any,
+        canonical_left: np.ndarray,
+        canonical_right: np.ndarray,
+        packed: bool,
+        request_contract: str,
+        waves: tuple[tuple[M5Tile, ...], ...],
+        requests_by_wave: tuple[list[tuple[Any, list[tuple[M5Tile, int]]]], ...],
+        preserve_native: bool = False,
+        record_templates: Mapping[
+            int, Mapping[tuple[int, int], tuple[int, ...]]
+        ] | None = None,
+    ) -> tuple[
+        list[tuple[M5Tile, np.ndarray]],
+        dict[str, Any],
+        bool,
+        bool,
+        dict[int, Mapping[tuple[int, int], tuple[int, ...]]],
+    ]:
+        """Submit all waves for one real lane in one packed operation."""
+
+        if len(self.ranks) != 1:
+            raise UnsupportedExecution(
+                stage="request_transport",
+                reason="packed operation transport currently supports one rank",
+                capability="packed_operation_one_rank",
+            )
+        if not callable(getattr(self.ranks[0].session, "submit_packed", None)):
+            raise RuntimeError("packed v4 session lacks submit_packed")
+
+        request_build_started = time.perf_counter()
+        prepared: list[tuple[_RankSession, list[tuple[M5Tile, int]], Any]] = []
+        built_record_templates: dict[
+            int, dict[tuple[int, int], tuple[int, ...]]
+        ] = {}
+        request_work_unit_materialization_s = 0.0
+        request_artifact_build_s = 0.0
+        request_payload_record_staging_s = 0.0
+        request_manifest_sidecar_staging_s = 0.0
+        request_payload_materialization_sum_s = 0.0
+        request_payload_file_write_sum_s = 0.0
+        request_payload_hashing_sum_s = 0.0
+        request_payload_record_construction_sum_s = 0.0
+        request_payload_record_count = 0
+        request_payload_files_created = 0
+        request_payload_bytes_staged = 0
+        request_payload_bytes_hashed = 0
+        for wave_index, (wave, requests) in enumerate(
+            zip(waves, requests_by_wave, strict=True)
+        ):
+            self._validate_rank_assignments(wave, requests)
+            if len(requests) != 1:
+                raise UnsupportedExecution(
+                    stage="request_transport",
+                    reason="packed operation transport requires one rank per wave",
+                    capability="packed_operation_one_rank",
+                )
+            rank, assignments = requests[0]
+            materialization_started = time.perf_counter()
+            units = [
+                _build_work_unit(
+                    tile,
+                    local_id,
+                    canonical_left,
+                    canonical_right,
+                    packed=packed,
+                )
+                for tile, local_id in assignments
+            ]
+            request_work_unit_materialization_s += (
+                time.perf_counter() - materialization_started
+            )
+            artifact_build_started = time.perf_counter()
+            artifact = build_packed_v4_request(
+                rank.root,
+                profile=rank.session.profile,
+                canonical_batch_count=lowering.canonical.b,
+                canonical_m=lowering.canonical.m,
+                canonical_n=lowering.canonical.n,
+                canonical_k=lowering.canonical.k,
+                work_units=units,
+                task_contract_sha256=request_contract,
+                request_sequence=self._sequence,
+                record_templates=(
+                    None
+                    if record_templates is None
+                    else {
+                        local_id: record_templates[wave_index][(rank.index, local_id)]
+                        for _, local_id in assignments
+                    }
+                ),
+            )
+            request_artifact_build_s += time.perf_counter() - artifact_build_started
+            request_payload_record_staging_s += artifact.payload_record_staging_s
+            request_manifest_sidecar_staging_s += artifact.manifest_sidecar_staging_s
+            request_payload_materialization_sum_s += artifact.payload_materialization_s
+            request_payload_file_write_sum_s += artifact.payload_file_write_s
+            request_payload_hashing_sum_s += artifact.payload_hashing_s
+            request_payload_record_construction_sum_s += (
+                artifact.payload_record_construction_s
+            )
+            request_payload_record_count += artifact.payload_record_count
+            request_payload_files_created += artifact.payload_files_created
+            request_payload_bytes_staged += artifact.payload_bytes_staged
+            request_payload_bytes_hashed += artifact.payload_bytes_hashed
+            if record_templates is None:
+                wave_templates: dict[tuple[int, int], tuple[int, ...]] = {}
+                for unit in units:
+                    wave_templates[(rank.index, unit.local_dpu_id)] = (
+                        _record_abi_fields(
+                            unit,
+                            profile=rank.session.profile,
+                            canonical_batch_count=lowering.canonical.b,
+                            canonical_m=lowering.canonical.m,
+                            canonical_n=lowering.canonical.n,
+                            canonical_k=lowering.canonical.k,
+                            validate_payload=False,
+                            validate_geometry=False,
+                        )
+                    )
+                built_record_templates[wave_index] = wave_templates
+            prepared.append((rank, assignments, artifact))
+            self._sequence += 1
+
+        operation_sequence = prepared[0][2].request_sequence
+        operation = pack_operation(
+            self.ranks[0].root,
+            requests=tuple(artifact for _, _, artifact in prepared),
+            operation_sequence=operation_sequence,
+            filename=f"packed/operation_{operation_sequence:016d}.bin",
+        )
+        response_path: Path | None = (
+            self.ranks[0].root
+            / "results"
+            / f"operation_{operation_sequence:016x}.jsonl"
+        )
+
+        def cleanup_operation() -> None:
+            try:
+                operation.path.unlink()
+            except FileNotFoundError:
+                pass
+            if response_path is not None:
+                try:
+                    response_path.unlink()
+                except FileNotFoundError:
+                    pass
+            for _, _, artifact in prepared:
+                self._delete_packed_request_dir(artifact)
+
+        try:
+            operation.path.parent.mkdir(parents=True, exist_ok=True)
+            operation.path.write_bytes(operation.data)
+        except BaseException:
+            cleanup_operation()
+            raise
+        request_build_s = time.perf_counter() - request_build_started
+        try:
+            responses = self._submit_with_deadline_packed(self.ranks[0], operation)
+        except BaseException:
+            cleanup_operation()
+            raise
+        reported_response_path = self._packed_response_path(
+            self.ranks[0].root, responses.get("response_path")
+        )
+        if reported_response_path is not None:
+            response_path = reported_response_path
+        response_records = responses.get("responses")
+        if not isinstance(response_records, (list, tuple)):
+            cleanup_operation()
+            raise RuntimeError("packed response is missing per-request records")
+        if len(response_records) != len(prepared):
+            cleanup_operation()
+            raise RuntimeError("packed response count does not match requests")
+        response_processing_started = time.perf_counter()
+        request_metrics: dict[str, Any] = {
+            "h2d_bytes": 0,
+            "d2h_bytes": 0,
+            "response_transfer_bytes": 0,
+            "h2d_time_s": 0.0,
+            "kernel_time_s": 0.0,
+            "d2h_time_s": 0.0,
+            "total_route_time_s": 0.0,
+            "request_build_s": request_build_s,
+            "request_work_unit_materialization_s": request_work_unit_materialization_s,
+            "request_artifact_build_s": request_artifact_build_s,
+            "request_payload_record_staging_s": request_payload_record_staging_s,
+            "request_manifest_sidecar_staging_s": request_manifest_sidecar_staging_s,
+            "request_payload_materialization_sum_s": request_payload_materialization_sum_s,
+            "request_payload_file_write_sum_s": request_payload_file_write_sum_s,
+            "request_payload_hashing_sum_s": request_payload_hashing_sum_s,
+            "request_payload_record_construction_sum_s": request_payload_record_construction_sum_s,
+            "request_payload_record_count": request_payload_record_count,
+            "request_payload_files_created": request_payload_files_created,
+            "request_payload_bytes_staged": request_payload_bytes_staged,
+            "request_payload_bytes_hashed": request_payload_bytes_hashed,
+            "request_manifest_hashes": tuple(
+                artifact.manifest_sha256 for _, _, artifact in prepared
+            ),
+            "successful_request_count": 0,
+            "active_rank_indices": (0,),
+            "active_dpu_ids": tuple(),
+            "packed_operation_count": 1,
+            "packed_operation_bytes": len(operation.data),
+            "packed_operation_request_count": len(prepared),
+            "rank_submit_parallel_wall_s": 0.0,
+            "rank_submit_total_max_s": 0.0,
+            "rank_submit_artifact_validation_max_s": 0.0,
+            "rank_submit_protocol_write_max_s": 0.0,
+            "rank_submit_response_wait_max_s": 0.0,
+            "rank_submit_response_validation_max_s": 0.0,
+            "coordinator_response_processing_s": 0.0,
+        }
+        submit_timing = responses.get("host_submit_timing")
+        if not isinstance(submit_timing, Mapping):
+            cleanup_operation()
+            raise RuntimeError("packed response is missing host_submit_timing")
+        try:
+            submit_values: dict[str, float] = {}
+            for field in (
+                "artifact_validation_s",
+                "protocol_write_s",
+                "response_wait_s",
+                "response_validation_s",
+                "total_submit_s",
+            ):
+                value = submit_timing.get(field)
+                if type(value) not in (int, float):
+                    raise RuntimeError(
+                        f"packed response is missing host_submit_timing.{field}"
+                    )
+                submit_values[field] = _seconds(value)
+        except BaseException:
+            cleanup_operation()
+            raise
+        request_metrics["rank_submit_parallel_wall_s"] = submit_values["total_submit_s"]
+        request_metrics["rank_submit_total_max_s"] = submit_values["total_submit_s"]
+        request_metrics["rank_submit_artifact_validation_max_s"] = submit_values[
+            "artifact_validation_s"
+        ]
+        request_metrics["rank_submit_protocol_write_max_s"] = submit_values[
+            "protocol_write_s"
+        ]
+        request_metrics["rank_submit_response_wait_max_s"] = submit_values[
+            "response_wait_s"
+        ]
+        request_metrics["rank_submit_response_validation_max_s"] = submit_values[
+            "response_validation_s"
+        ]
+        results: list[tuple[M5Tile, np.ndarray]] = []
+        active_dpu_ids: set[tuple[int, int]] = set()
+        try:
+            for response, (rank, assignments, artifact) in zip(
+                response_records, prepared, strict=True
+            ):
+                self._validate_successful_response(response, rank, artifact)
+                self._response_native_identity_events.append(
+                    (f"RESPONSE rank {rank.index}", response)
+                )
+                transfer = response.get("transfer", {})
+                h2d_bytes = int(transfer.get("h2d_bytes", 0))
+                d2h_bytes = int(transfer.get("d2h_bytes", 0))
+                total_bytes = int(transfer.get("total_bytes", -1))
+                if total_bytes != h2d_bytes + d2h_bytes:
+                    raise RuntimeError(
+                        "packed response transfer total does not equal H2D plus D2H"
+                    )
+                response_timing = response.get("timing", {})
+                if not isinstance(response_timing, Mapping):
+                    raise RuntimeError("packed response timing is not a mapping")
+                request_metrics["h2d_bytes"] += h2d_bytes
+                request_metrics["d2h_bytes"] += d2h_bytes
+                request_metrics["response_transfer_bytes"] += total_bytes
+                request_metrics["h2d_time_s"] += _seconds(
+                    response_timing.get("h2d_time_s", 0.0)
+                )
+                request_metrics["kernel_time_s"] += _seconds(
+                    response_timing.get("launch_time_s", 0.0)
+                )
+                request_metrics["d2h_time_s"] += _seconds(
+                    response_timing.get("d2h_time_s", 0.0)
+                )
+                request_metrics["total_route_time_s"] += _seconds(
+                    response_timing.get("total_route_time_s", 0.0)
+                )
+                active_dpu_ids.update(
+                    (rank.index, record.local_dpu_id)
+                    for record in artifact.work_units
+                    if not record.flags
+                )
+                records = {
+                    record.local_dpu_id: record for record in artifact.work_units
+                }
+                for tile, local_id in assignments:
+                    record = records[local_id]
+                    output_path = artifact.root / record.c_path
+                    value = (
+                        _read_raw_output(output_path, tile, packed=packed)
+                        if preserve_native
+                        else _read_output(output_path, tile, packed=packed)
+                    )
+                    results.append((tile, value))
+            request_metrics["successful_request_count"] = len(prepared)
+            request_metrics["active_dpu_ids"] = tuple(sorted(active_dpu_ids))
+            request_metrics["coordinator_response_processing_s"] = (
+                time.perf_counter() - response_processing_started
+            )
+            return (
+                results,
+                request_metrics,
+                False,
+                all(
+                    response.get("bulk_set_launch_verified") is True
+                    for response in response_records
+                ),
+                built_record_templates
+                if record_templates is None
+                else dict(record_templates),
+            )
+        finally:
+            cleanup_operation()
+
+    def _submit_with_deadline_packed(
+        self, rank: _RankSession, operation: PackedOperation
+    ) -> Mapping[str, Any]:
+        submit_packed = getattr(rank.session, "submit_packed", None)
+        if not callable(submit_packed):
+            raise RuntimeError("packed v4 session lacks submit_packed")
+        return submit_packed(operation, timeout_s=self._remaining_timeout())
 
     def _submit_wave(
         self,
@@ -2111,6 +2636,54 @@ class UpmemV4Session:
                 "refusing to delete an artifact outside its request directory"
             )
         shutil.rmtree(request_dir)
+
+    @staticmethod
+    def _delete_packed_request_dir(artifact: Any) -> None:
+        """Remove only the generated request directory for one packed request."""
+
+        request_dir = Path(artifact.request_dir).resolve()
+        root = Path(artifact.root).resolve()
+        requests_root = (root / "requests").resolve()
+        try:
+            request_dir.relative_to(requests_root)
+        except ValueError as exc:
+            raise RuntimeError(
+                "refusing to delete a non-packed-request directory"
+            ) from exc
+        if request_dir == requests_root or request_dir.parent != requests_root:
+            raise RuntimeError(
+                "refusing to delete the packed requests root or nested directory"
+            )
+        if not request_dir.name.isdigit():
+            raise RuntimeError(
+                "refusing to delete a directory not created as a packed request"
+            )
+        if request_dir.is_dir():
+            shutil.rmtree(request_dir)
+
+    @staticmethod
+    def _packed_response_path(root: Path, relative: Any) -> Path | None:
+        """Return a deletable native response path, or None for malformed data."""
+
+        if not isinstance(relative, str):
+            return None
+        candidate = Path(relative)
+        if (
+            candidate.is_absolute()
+            or len(candidate.parts) != 2
+            or candidate.parts[0] != "results"
+            or any(part in {"", ".", ".."} for part in candidate.parts)
+        ):
+            return None
+        resolved_root = Path(root).resolve()
+        resolved = (resolved_root / candidate).resolve()
+        try:
+            resolved.relative_to(resolved_root)
+        except ValueError:
+            return None
+        if resolved.parent != (resolved_root / "results").resolve():
+            return None
+        return resolved
 
     def _validate_successful_response(
         self, response: Mapping[str, Any], rank: _RankSession, artifact: Any
@@ -2765,6 +3338,7 @@ class UpmemSession:
                 "execution_class": (
                     "sdk_simulator" if simulator else "upmem_v4_real_tile"
                 ),
+                "request_transport": self._resources.request_transport,
                 "target_observed": observations["target_observed"],
                 "test_double_execution": observations["test_double_execution"],
                 "cpu_fallback_used": observations["cpu_fallback_used"],
@@ -2778,6 +3352,18 @@ class UpmemSession:
                 "intermediate_policy": self._plan.intermediate_policy,
                 "physical_plan_consumed": observations["physical_stage_consumed"],
                 "output_hash": output_hash,
+                "packed_operation_count": sum(
+                    int(fact.get("packed_operation_count", 0))
+                    for fact in operation_facts
+                ),
+                "packed_operation_bytes": sum(
+                    int(fact.get("packed_operation_bytes", 0))
+                    for fact in operation_facts
+                ),
+                "packed_operation_request_count": sum(
+                    int(fact.get("packed_operation_request_count", 0))
+                    for fact in operation_facts
+                ),
                 "operation_facts": operation_facts,
                 **self._startup_resource_admission,
                 **execution_admission,
@@ -2933,6 +3519,7 @@ def _operation_summary(metadata: Mapping[str, Any]) -> Mapping[str, JsonValue]:
         "stage_id",
         "declared_stage_id",
         "node_id",
+        "request_transport",
         "numeric_transport",
         "lane_pass_count",
         "active_rank_indices",
@@ -2956,6 +3543,9 @@ def _operation_summary(metadata: Mapping[str, Any]) -> Mapping[str, JsonValue]:
         "hardware_kernel_executed",
         "simulator_kernel_executed",
         "timing_scope",
+        "packed_operation_count",
+        "packed_operation_bytes",
+        "packed_operation_request_count",
         "timing",
     )
     summary = {field: metadata[field] for field in fields if field in metadata}
@@ -3307,6 +3897,7 @@ def open_upmem(
                 dpu_count=plan.topology.dpu_count,
                 tasklets_per_dpu=plan.topology.tasklets_per_dpu,
                 timeout_s=timeout_s,
+                request_transport=resources.request_transport,
             )
             low_level = engine.open_session(
                 plan.numeric_policy,
@@ -3411,6 +4002,7 @@ def open_upmem_simulator(
             tasklets_per_dpu=plan.topology.tasklets_per_dpu,
             timeout_s=timeout_s,
             execution_target=EXECUTION_TARGET_SIMULATOR,
+            request_transport=resources.request_transport,
         )
         low_level = engine.open_session(plan.numeric_policy, plan.topology)
     except UnsupportedExecution:
