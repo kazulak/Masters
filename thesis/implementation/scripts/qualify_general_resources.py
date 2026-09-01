@@ -453,6 +453,7 @@ def _expected_executable_id(facts: Mapping[str, Any]) -> str:
             "executor": "upmem_physical",
             "abi_version": 4,
             "static_file_sha256": files,
+            "request_transport": "packed_operation_v1",
             "source_commit": None,
             "dependency_versions": {},
         }
