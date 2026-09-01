@@ -9,11 +9,20 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "inspect_packed_operation_transport.py"
+FREEZE_SCRIPT = ROOT / "scripts" / "freeze_packed_operation_transport.py"
+sys.path.insert(0, str(ROOT / "scripts"))
 SPEC = importlib.util.spec_from_file_location("inspect_packed_operation_transport", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 inspector = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = inspector
 SPEC.loader.exec_module(inspector)
+FREEZE_SPEC = importlib.util.spec_from_file_location(
+    "freeze_packed_operation_transport", FREEZE_SCRIPT
+)
+assert FREEZE_SPEC is not None and FREEZE_SPEC.loader is not None
+freezer = importlib.util.module_from_spec(FREEZE_SPEC)
+sys.modules[FREEZE_SPEC.name] = freezer
+FREEZE_SPEC.loader.exec_module(freezer)
 
 
 def _sample(*, transport: str = "packed_operation_v1") -> tuple[dict[str, object], dict[str, object]]:
@@ -52,3 +61,17 @@ def test_missing_packed_counter_is_rejected() -> None:
     del sample["backend_facts"]["packed_operation_max_bytes"]
     with pytest.raises(ValueError, match="packed_operation_max_bytes"):
         inspector.validate_packed_transport([sample], [session])
+
+
+def test_bundle_checksum_inventory_rejects_unlisted_files(tmp_path: Path) -> None:
+    payload = tmp_path / "payload.txt"
+    payload.write_bytes(b"payload\n")
+    digest = freezer._sha256(payload)
+    (tmp_path / "SHA256SUMS").write_text(
+        f"{digest}  payload.txt\n", encoding="ascii"
+    )
+    freezer._verify_checksums(tmp_path)
+
+    (tmp_path / "unlisted.txt").write_bytes(b"unlisted\n")
+    with pytest.raises(ValueError, match="unlisted files"):
+        freezer._verify_checksums(tmp_path)

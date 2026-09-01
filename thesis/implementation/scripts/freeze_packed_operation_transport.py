@@ -96,6 +96,31 @@ def _copy_binaries(diagnostic_stage: Path, destination: Path) -> list[str]:
     return names
 
 
+def _copy_submodule_provenance(destination: Path) -> list[str]:
+    repository_root = Path(_git("rev-parse", "--show-toplevel"))
+    gitmodules = repository_root / ".gitmodules"
+    if gitmodules.is_file():
+        _copy_required(gitmodules, destination / ".gitmodules")
+    result = subprocess.run(
+        ["git", "submodule", "status", "--recursive"],
+        cwd=repository_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise ValueError(
+            "current source submodule status is unavailable: "
+            + (result.stderr.strip() or "unknown error")
+        )
+    status = result.stdout.strip()
+    (destination / "submodule-status.txt").parent.mkdir(parents=True, exist_ok=True)
+    (destination / "submodule-status.txt").write_text(
+        (status + "\n") if status else "", encoding="ascii"
+    )
+    return status.splitlines()
+
+
 def _json(path: Path) -> Mapping[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, Mapping):
@@ -127,6 +152,12 @@ def _verify_source(reporting_source: str) -> None:
         raise ValueError("execution tag does not resolve to the packed source")
     if _git("rev-parse", "HEAD") != reporting_source:
         raise ValueError("reporting source does not match current HEAD")
+    try:
+        _git("merge-base", "--is-ancestor", EXPECTED_SOURCE, reporting_source)
+    except subprocess.CalledProcessError as exc:
+        raise ValueError(
+            "reporting source is not a descendant of the physical execution source"
+        ) from exc
     if _git("status", "--porcelain"):
         raise ValueError("bundle requires a clean reporting worktree")
     changed = {
@@ -160,19 +191,25 @@ def _verify_diagnostic(stage: Path, reporting_source: str) -> Mapping[str, Any]:
             raise ValueError(
                 f"packed diagnostic {field} is {verification.get(field)!r}"
             )
-    summary_path = stage / "report" / "packed_operation_transport_summary.json"
+    report_dir = _report(stage)
+    summary_path = report_dir / "packed_operation_transport_summary.json"
     if not summary_path.is_file():
         summary_path = stage / "packed_operation_transport_summary.json"
     if not summary_path.is_file():
         raise ValueError("packed diagnostic summary is missing")
-    report_path = _report(stage) / "report.json"
-    summary = inspect_packed(
-        input_dir=evidence,
-        summary_output=summary_path,
-        output_dir=None,
-        expected_source_commit=EXPECTED_SOURCE,
-        report_path=report_path if report_path.is_file() else None,
-    )
+    report_path = report_dir / "report.json"
+    if not report_path.is_file():
+        raise ValueError("packed diagnostic generic report is missing")
+    # Reinspect into a disposable path so bundle verification never mutates
+    # the retrieved evidence or its adjacent checksum inventory.
+    with tempfile.TemporaryDirectory(prefix="packed-transport-inspect-") as directory:
+        summary = inspect_packed(
+            input_dir=evidence,
+            summary_output=Path(directory) / "summary.json",
+            output_dir=None,
+            expected_source_commit=EXPECTED_SOURCE,
+            report_path=report_path,
+        )
     if summary.get("gate_passed") is not True:
         raise ValueError("packed diagnostic gate did not pass")
     if summary.get("claim_eligible") is not False:
@@ -220,7 +257,8 @@ def _verify_general(stage: Path) -> Mapping[str, Any]:
 
 
 def _verify_ab(stage: Path) -> Mapping[str, Any]:
-    verification = verify_artifacts(_evidence(stage))
+    evidence = _evidence(stage)
+    verification = verify_artifacts(evidence)
     required = {
         "status": "completed",
         "sample_count": 72,
@@ -234,6 +272,14 @@ def _verify_ab(stage: Path) -> Mapping[str, Any]:
             raise ValueError(
                 f"A/B evidence {field} is {verification.get(field)!r}"
             )
+    report_path = _report(stage) / "report.json"
+    if not report_path.is_file():
+        raise ValueError("A/B generic report is missing")
+    report = _json(report_path)
+    if report.get("status") != "completed":
+        raise ValueError("A/B generic report is not completed")
+    if report.get("speedup_count") != 0:
+        raise ValueError("A/B generic report emitted claim-eligible speedup rows")
     return verification
 
 
@@ -246,11 +292,32 @@ def _write_checksums(root: Path) -> None:
 
 
 def _verify_checksums(root: Path) -> None:
+    listed: set[str] = set()
     for line in (root / "SHA256SUMS").read_text(encoding="ascii").splitlines():
         digest, relative = line.split("  ", 1)
-        path = root / relative
+        relative_path = Path(relative)
+        if relative_path.is_absolute() or ".." in relative_path.parts:
+            raise ValueError(f"unsafe bundle checksum path: {relative}")
+        normalized = relative_path.as_posix()
+        if normalized in listed or normalized == "SHA256SUMS":
+            raise ValueError(f"duplicate bundle checksum path: {relative}")
+        listed.add(normalized)
+        path = root / relative_path
         if not path.is_file() or _sha256(path) != digest:
             raise ValueError(f"bundle checksum mismatch: {relative}")
+    actual = {
+        path.relative_to(root).as_posix()
+        for path in root.rglob("*")
+        if path.is_file() and path.name != "SHA256SUMS"
+    }
+    if actual != listed:
+        missing = sorted(actual - listed)
+        extra = sorted(listed - actual)
+        raise ValueError(
+            "bundle checksum inventory mismatch"
+            + (f"; unlisted files: {', '.join(missing)}" if missing else "")
+            + (f"; missing files: {', '.join(extra)}" if extra else "")
+        )
 
 
 def _safe_extract(archive: Path, destination: Path) -> Path:
@@ -348,6 +415,7 @@ def build_bundle(
             "tests/test_inspect_packed_operation_transport.py",
         ):
             _copy_required(ROOT / relative, staging / "source" / relative)
+        submodule_status = _copy_submodule_provenance(staging / "source")
         binary_names = _copy_binaries(diagnostic_stage, staging / "binaries")
         doc = ROOT / "docs" / "packed_operation_transport_adoption.md"
         if doc.is_file():
@@ -358,6 +426,7 @@ def build_bundle(
             "execution_tag": EXPECTED_TAG,
             "transport": EXPECTED_TRANSPORT,
             "binary_names": binary_names,
+            "submodule_status": submodule_status,
             "diagnostic_experiment_id": diagnostic_summary["experiment_id"],
             "diagnostic_run_id": diagnostic_summary["run_id"],
             "diagnostic_sample_count": 36,

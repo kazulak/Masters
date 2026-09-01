@@ -58,9 +58,12 @@ released physical sessions:
 | 1 DPU x T24 | pass | 8 idle tasklets in the relevant local work |
 | 3 DPUs x T8 | pass | non-power DPU count |
 
-All routes passed physical provenance, resource admission, replay, float32
-validation, output hashing, and packed-transport checks. The T24 route is a
-correctness result; its idle-tasklet condition is not a performance claim.
+All routes passed physical provenance, replay, float32 validation, output
+hashing, and packed-transport checks. Resource admission and tasklet-row
+sufficiency passed for T3, T7, T12, and 3 DPUs x T8. T24 is an intentional
+idle-tasklet correctness result: its collection admission and row-sufficiency
+facts are false because eight compiled tasklets have no useful row, and it is
+not a performance claim.
 
 The packed six-route diagnostic used experiment
 `a809d28bf3242440a6e6e249fb1836c78f86ac9a24c081030c3accea3638dba3`, run
