@@ -587,81 +587,56 @@ class V4Session:
             raise V4ProtocolError(
                 "protocol_error", "packed response event has the wrong type"
             )
+        responses: list[Mapping[str, Any]] = []
+        try:
+            response_count, completed_request_count, failed_request_index = (
+                self._validate_packed_operation_metadata(
+                    event,
+                    expected_count=len(operation.requests),
+                    expected_operation_sequence=operation.operation_sequence,
+                )
+            )
+            responses = self._read_packed_operation_responses(
+                event, response_count=response_count
+            )
+            if event.get("status") == "completed":
+                response_validation_started = time.perf_counter()
+                for response, request in zip(
+                    responses, operation.requests, strict=True
+                ):
+                    self._validate_response(response, request)
+                response_validation_s = time.perf_counter() - response_validation_started
+            else:
+                response_validation_started = time.perf_counter()
+                if failed_request_index is not None:
+                    for response, request in zip(
+                        responses[:completed_request_count],
+                        operation.requests[:completed_request_count],
+                        strict=True,
+                    ):
+                        self._validate_response(response, request)
+                    self._validate_partial_response(
+                        responses[completed_request_count],
+                        operation.requests[failed_request_index],
+                    )
+                else:
+                    for response, request in zip(
+                        responses, operation.requests
+                    ):
+                        self._validate_response(response, request)
+                response_validation_s = time.perf_counter() - response_validation_started
+        except V4Error as exc:
+            self._raise_packed_operation_failure(
+                event, exc, responses=responses
+            )
         # Operation events use the protocol's JSON status string.  The
         # numeric STATUS_COMPLETED constant is reserved for DPU results.
         if event.get("status") != "completed":
-            self._poisoned = True
-            self.close()
-            raise V4ProtocolError(
+            failure = V4ProtocolError(
                 str(event.get("failure_stage") or "request_execution_failed"),
                 str(event.get("error") or "packed operation failed"),
             )
-        if event.get("operation_sequence") != operation.operation_sequence:
-            self._poisoned = True
-            self.close()
-            raise V4ProtocolError(
-                "protocol_error", "packed response operation sequence mismatch"
-            )
-        if event.get("response_count") != len(operation.requests):
-            self._poisoned = True
-            self.close()
-            raise V4ProtocolError(
-                "response_validation_failed",
-                "packed response count does not match the operation",
-            )
-        response_rel = event.get("response_path")
-        response_digest = event.get("response_sha256")
-        if not isinstance(response_rel, str) or not isinstance(response_digest, str):
-            self._poisoned = True
-            self.close()
-            raise V4ProtocolError(
-                "protocol_error", "packed response file identity is missing"
-            )
-        try:
-            response_path = self.session_root / _safe_relative(response_rel)
-            response_path.resolve().relative_to(self.session_root)
-            actual_response_digest = _file_sha256(response_path)
-        except (OSError, ValueError) as exc:
-            self._poisoned = True
-            self.close()
-            raise V4ProtocolError(
-                "response_validation_failed", "packed response file is invalid"
-            ) from exc
-        if actual_response_digest != response_digest:
-            self._poisoned = True
-            self.close()
-            raise V4ProtocolError(
-                "response_validation_failed", "packed response hash mismatch"
-            )
-        try:
-            lines = response_path.read_text(encoding="utf-8").splitlines()
-            responses: list[Mapping[str, Any]] = []
-            for line in lines:
-                value = json.loads(line)
-                if not isinstance(value, Mapping):
-                    raise ValueError("packed response record is not an object")
-                responses.append(value)
-        except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
-            self._poisoned = True
-            self.close()
-            raise V4ProtocolError(
-                "response_validation_failed", "packed response JSONL is invalid"
-            ) from exc
-        if len(responses) != len(operation.requests):
-            self._poisoned = True
-            self.close()
-            raise V4ProtocolError(
-                "response_validation_failed",
-                "packed response count does not match the operation",
-            )
-        response_validation_started = time.perf_counter()
-        try:
-            for response, request in zip(responses, operation.requests, strict=True):
-                self._validate_response(response, request)
-        except V4Error:
-            self._poisoned = True
-            self.close()
-            raise
+            self._raise_packed_operation_failure(event, failure, responses=responses)
         response_validation_s = time.perf_counter() - response_validation_started
         self._last_sequence = sequences[-1]
         result = dict(event)
@@ -674,6 +649,183 @@ class V4Session:
             "total_submit_s": float(time.perf_counter() - submit_started),
         }
         return result
+
+    def _raise_packed_operation_failure(
+        self,
+        event: Mapping[str, Any],
+        error: V4Error,
+        *,
+        responses: Sequence[Mapping[str, Any]] = (),
+    ) -> None:
+        """Preserve native partial-result metadata before poisoning the session."""
+
+        operation_response = dict(event)
+        partial_responses = tuple(dict(response) for response in responses)
+        facts = {
+            "operation_sequence": event.get("operation_sequence"),
+            "response_path": event.get("response_path"),
+            "response_sha256": event.get("response_sha256"),
+            "response_count": event.get("response_count"),
+            "completed_request_count": event.get("completed_request_count"),
+            "failed_request_index": event.get("failed_request_index"),
+        }
+        # V4Error predates packed-operation partial responses and intentionally
+        # remains unchanged here.  Attach the private protocol facts directly
+        # to this exception so callers can retain the response file and hash.
+        error.operation_response = operation_response  # type: ignore[attr-defined]
+        error.partial_responses = partial_responses  # type: ignore[attr-defined]
+        error.backend_facts = facts  # type: ignore[attr-defined]
+        error.response_path = event.get("response_path")  # type: ignore[attr-defined]
+        error.response_sha256 = event.get("response_sha256")  # type: ignore[attr-defined]
+        error.response_count = event.get("response_count")  # type: ignore[attr-defined]
+        error.completed_request_count = event.get(  # type: ignore[attr-defined]
+            "completed_request_count"
+        )
+        error.failed_request_index = event.get(  # type: ignore[attr-defined]
+            "failed_request_index"
+        )
+        self._poisoned = True
+        self.close()
+        raise error
+
+    def _validate_packed_operation_metadata(
+        self,
+        event: Mapping[str, Any],
+        *,
+        expected_count: int,
+        expected_operation_sequence: int,
+    ) -> tuple[int, int, int | None]:
+        response_count = self._nonnegative_int(
+            event.get("response_count"), "response_count"
+        )
+        completed_request_count = self._nonnegative_int(
+            event.get("completed_request_count"), "completed_request_count"
+        )
+        if response_count > expected_count:
+            raise V4ProtocolError(
+                "response_validation_failed",
+                "packed response count exceeds the operation descriptor count",
+            )
+        if completed_request_count > response_count:
+            raise V4ProtocolError(
+                "response_validation_failed",
+                "packed completed request count exceeds response count",
+            )
+        failed_raw = event.get("failed_request_index")
+        failed_request_index = (
+            None
+            if failed_raw is None
+            else self._nonnegative_int(failed_raw, "failed_request_index")
+        )
+        if failed_request_index is not None:
+            if failed_request_index >= expected_count:
+                raise V4ProtocolError(
+                    "response_validation_failed",
+                    "packed failed request index exceeds the operation descriptor count",
+                )
+            if completed_request_count != failed_request_index:
+                raise V4ProtocolError(
+                    "response_validation_failed",
+                    "packed completed count does not precede the failed request",
+                )
+            if response_count != completed_request_count + 1:
+                raise V4ProtocolError(
+                    "response_validation_failed",
+                    "packed partial response count is inconsistent with the failed request",
+                )
+        if event.get("operation_sequence") != expected_operation_sequence and not (
+            event.get("status") != "completed"
+            and event.get("operation_sequence") == 0
+            and response_count == 0
+            and completed_request_count == 0
+            and failed_request_index is None
+        ):
+            raise V4ProtocolError(
+                "protocol_error", "packed response operation sequence mismatch"
+            )
+        if event.get("status") == "completed":
+            if (
+                response_count != expected_count
+                or completed_request_count != expected_count
+                or failed_request_index is not None
+            ):
+                raise V4ProtocolError(
+                    "response_validation_failed",
+                    "completed packed response metadata is inconsistent",
+                )
+        return response_count, completed_request_count, failed_request_index
+
+    def _read_packed_operation_responses(
+        self, event: Mapping[str, Any], *, response_count: int
+    ) -> list[Mapping[str, Any]]:
+        response_rel = event.get("response_path")
+        response_digest = event.get("response_sha256")
+        if response_count == 0 and response_rel is None and response_digest is None:
+            return []
+        if not isinstance(response_rel, str) or not isinstance(response_digest, str):
+            raise V4ProtocolError(
+                "protocol_error", "packed response file identity is missing"
+            )
+        if not _HEX_SHA256.fullmatch(response_digest):
+            raise V4ProtocolError(
+                "response_validation_failed", "packed response hash is malformed"
+            )
+        try:
+            response_path = self.session_root / _safe_relative(response_rel)
+            response_path.resolve().relative_to(self.session_root)
+            actual_response_digest = _file_sha256(response_path)
+            lines = response_path.read_text(encoding="utf-8").splitlines()
+            responses: list[Mapping[str, Any]] = []
+            for line in lines:
+                value = json.loads(line)
+                if not isinstance(value, Mapping):
+                    raise ValueError("packed response record is not an object")
+                responses.append(value)
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+            raise V4ProtocolError(
+                "response_validation_failed", "packed response JSONL is invalid"
+            ) from exc
+        if actual_response_digest != response_digest:
+            raise V4ProtocolError(
+                "response_validation_failed", "packed response hash mismatch"
+            )
+        if len(responses) != response_count:
+            raise V4ProtocolError(
+                "response_validation_failed",
+                "packed response count does not match the operation metadata",
+            )
+        return responses
+
+    def _validate_partial_response(
+        self, response: Mapping[str, Any], artifact: Any
+    ) -> None:
+        if response.get("event") != "RESPONSE":
+            raise V4ProtocolError(
+                "response_validation_failed",
+                "packed partial response has the wrong event type",
+            )
+        if response.get("status") != "failed":
+            raise V4ProtocolError(
+                "response_validation_failed",
+                "packed failed request record is not marked failed",
+            )
+        failure_stage = response.get("failure_stage")
+        if not isinstance(failure_stage, str) or not failure_stage:
+            raise V4ProtocolError(
+                "response_validation_failed",
+                "packed failed request record lacks a failure stage",
+            )
+        if response.get("error") in (None, ""):
+            raise V4ProtocolError(
+                "response_validation_failed",
+                "packed failed request record lacks an error",
+            )
+        self._validate_native_identity(response, event_name="PARTIAL_RESPONSE")
+        if response.get("request_sequence") not in (0, artifact.request_sequence):
+            raise V4ProtocolError(
+                "response_validation_failed",
+                "packed failed request sequence does not match the descriptor",
+            )
 
     def _validate_artifact_payloads(self, artifact: V4RequestArtifact) -> None:
         """Reject changed staged operands before the native process can use them."""

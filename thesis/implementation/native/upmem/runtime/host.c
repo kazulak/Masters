@@ -563,6 +563,9 @@ static void v4_emit_operation_response(
     const char *error_message,
     const char *result_path,
     uint64_t response_count,
+    uint64_t completed_request_count,
+    int failed_request_index_present,
+    uint64_t failed_request_index,
     const char *result_sha256
 ) {
     printf("{\"event\":\"OPERATION_RESPONSE\",\"status\":\"%s\",\"failure_stage\":",
@@ -573,8 +576,15 @@ static void v4_emit_operation_response(
     printf(",\"operation_sequence\":%llu,\"response_path\":",
         (unsigned long long)operation_sequence);
     json_string(stdout, result_path);
-    printf(",\"response_count\":%llu,\"response_sha256\":",
-        (unsigned long long)response_count);
+    printf(",\"response_count\":%llu,\"completed_request_count\":%llu,\"failed_request_index\":",
+        (unsigned long long)response_count,
+        (unsigned long long)completed_request_count);
+    if (failed_request_index_present) {
+        printf("%llu", (unsigned long long)failed_request_index);
+    } else {
+        fputs("null", stdout);
+    }
+    fputs(",\"response_sha256\":", stdout);
     json_string(stdout, result_sha256);
     fputs("}\n", stdout);
     fflush(stdout);
@@ -596,20 +606,24 @@ static int execute_packed_operation(
     char result_sha256[65] = {0};
     const char *failure_stage = NULL;
     uint64_t response_count = 0u;
+    uint64_t completed_request_count = 0u;
+    uint64_t failed_request_index = 0u;
+    int failed_request_index_present = 0;
     int result_file_close_status = 0;
     int result_hash_status = 1;
     int rc = 1;
     if (execution_plan_v4_operation_open(session_root, relative_path, envelope_sha256,
             dpus, tasklets, &operation, &error_message) != 0) {
         v4_emit_operation_response(0u, "operation_envelope_failed", error_message,
-            NULL, 0u, NULL);
+            NULL, 0u, 0u, 0, 0u, NULL);
         free(error_message);
         execution_plan_v4_operation_close(&operation);
         return 1;
     }
     if (v4_have_operation_sequence && operation.operation_sequence <= v4_last_operation_sequence) {
         v4_emit_operation_response(operation.operation_sequence, "hardware_profile_violation",
-            "v4 operation_sequence must increase for each packed operation", NULL, 0u, NULL);
+            "v4 operation_sequence must increase for each packed operation", NULL,
+            0u, 0u, 0, 0u, NULL);
         execution_plan_v4_operation_close(&operation);
         return 1;
     }
@@ -618,7 +632,7 @@ static int execute_packed_operation(
     if (open_operation_result_file(session_root, operation.operation_sequence,
             result_relative_path, result_absolute_path, &result_file, &error_message) != 0) {
         v4_emit_operation_response(operation.operation_sequence, "output_manifest_failed",
-            error_message, NULL, 0u, NULL);
+            error_message, NULL, 0u, 0u, 0, 0u, NULL);
         free(error_message);
         execution_plan_v4_operation_close(&operation);
         return 1;
@@ -631,6 +645,8 @@ static int execute_packed_operation(
         if (execution_plan_v4_operation_descriptor(&operation, index, &embedded, &request_error) != 0 ||
             execution_plan_v4_request_load_embedded(session_root, &embedded, dpus, tasklets,
                 &request, &request_error) != 0) {
+            failed_request_index = index;
+            failed_request_index_present = 1;
             v4_emit_response_to(result_file, &request, NULL,
                 (const v4_dpu_result_t[EXECUTION_PLAN_V4_MAX_DPUS]){0},
                 "request_manifest_failed", request_error, 0, 0);
@@ -650,6 +666,8 @@ static int execute_packed_operation(
         request_status = execute_loaded_request(&request, tasklets, timeout_s, result_file);
         response_count++;
         if (ferror(result_file) != 0) {
+            failed_request_index = index;
+            failed_request_index_present = 1;
             failure_stage = "output_manifest_failed";
             v4_error(&error_message, "operation result JSONL write failed");
             execution_plan_v4_request_free(&request);
@@ -657,10 +675,13 @@ static int execute_packed_operation(
         }
         execution_plan_v4_request_free(&request);
         if (request_status != 0) {
+            failed_request_index = index;
+            failed_request_index_present = 1;
             failure_stage = "request_execution_failed";
             v4_error(&error_message, "embedded request execution failed; operation stopped");
             break;
         }
+        completed_request_count++;
     }
     result_file_close_status = fclose(result_file);
     result_file = NULL;
@@ -679,7 +700,9 @@ static int execute_packed_operation(
         v4_error(&error_message, "packed operation did not execute every descriptor");
     }
     v4_emit_operation_response(operation.operation_sequence, failure_stage, error_message,
-        result_relative_path, response_count, result_hash_status == 0 ? result_sha256 : NULL);
+        result_relative_path, response_count, completed_request_count,
+        failed_request_index_present, failed_request_index,
+        result_hash_status == 0 ? result_sha256 : NULL);
     free(error_message);
     execution_plan_v4_operation_close(&operation);
     rc = failure_stage == NULL ? 0 : 1;

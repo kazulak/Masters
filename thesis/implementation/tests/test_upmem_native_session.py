@@ -12,6 +12,12 @@ import pytest
 
 import quantum_bench.upmem.native_session as session_v4
 import quantum_bench.upmem.protocol as v4
+from quantum_bench.upmem.packed_operation import (
+    PackedOperation,
+    PackedV4Request,
+    build_packed_v4_request,
+    pack_operation,
+)
 
 
 TASK_HASH = "ab" * 32
@@ -84,6 +90,7 @@ class FakeProcess:
             "allocation_verified": True,
             "simulator_kernel_executed": False,
             "cpu_fallback_used": False,
+            "request_transport": profile.request_transport,
             **v4.native_execution_identity(profile.execution_target),
         }
         ready.update(ready_overrides or {})
@@ -91,7 +98,7 @@ class FakeProcess:
 
     def _handle(self, value: str) -> None:
         command = value.strip()
-        if command.startswith("SUBMIT "):
+        if command.startswith(("SUBMIT ", "SUBMIT_PACKED_OPERATION ")):
             response = self.response_factory(command)
             if response is not None:
                 self.stdout.emit(
@@ -181,8 +188,56 @@ def _artifact(
     )
 
 
+def _packed_operation(
+    tmp_path: Path, *, count: int = 3
+) -> tuple[PackedOperation, tuple[PackedV4Request, ...], v4.V4Profile]:
+    profile = v4.V4Profile(
+        dpu_count=1,
+        rank_path="/dev/dpu_rank0",
+        request_transport=v4.REQUEST_TRANSPORT_PACKED_OPERATION,
+        timeout_s=0.2,
+    )
+    requests = tuple(
+        build_packed_v4_request(
+            tmp_path,
+            profile=profile,
+            canonical_batch_count=1,
+            canonical_m=2,
+            canonical_n=2,
+            canonical_k=2,
+            work_units=[
+                v4.V4WorkUnit(
+                    local_dpu_id=0,
+                    tile_id=sequence + 7,
+                    batch_index=0,
+                    m_offset=0,
+                    n_offset=0,
+                    k_offset=0,
+                    m_elements=2,
+                    n_elements=2,
+                    k_elements=2,
+                    a_payload=_float_payload(4),
+                    b_payload=_float_payload(4),
+                )
+            ],
+            task_contract_sha256=TASK_HASH,
+            request_sequence=sequence,
+        )
+        for sequence in range(count)
+    )
+    operation = pack_operation(
+        tmp_path,
+        requests=requests,
+        operation_sequence=0,
+        filename="packed/operation.bin",
+    )
+    operation.path.parent.mkdir(parents=True, exist_ok=True)
+    operation.path.write_bytes(operation.data)
+    return operation, requests, profile
+
+
 def _valid_response(
-    artifact: v4.V4RequestArtifact,
+    artifact: v4.V4RequestArtifact | PackedV4Request,
     *,
     profile: v4.V4Profile | None = None,
 ) -> dict[str, object]:
@@ -243,6 +298,39 @@ def _valid_response(
         **v4.native_execution_identity(profile.execution_target),
         "transfer": {"h2d_bytes": h2d, "d2h_bytes": d2h, "total_bytes": h2d + d2h},
         "per_dpu": per_dpu,
+    }
+
+
+def _packed_failure_event(
+    tmp_path: Path,
+    operation: PackedOperation,
+    requests: tuple[PackedV4Request, ...],
+    profile: v4.V4Profile,
+    failed_index: int,
+) -> dict[str, object]:
+    records = [
+        _valid_response(request, profile=profile) for request in requests[: failed_index + 1]
+    ]
+    records[-1]["status"] = "failed"
+    records[-1]["failure_stage"] = "request_execution_failed"
+    records[-1]["error"] = "injected embedded request failure"
+    response_path = tmp_path / "results" / "operation_0000000000000000.jsonl"
+    response_path.parent.mkdir(parents=True, exist_ok=True)
+    response_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+    return {
+        "event": "OPERATION_RESPONSE",
+        "status": "failed",
+        "failure_stage": "request_execution_failed",
+        "error": "embedded request execution failed; operation stopped",
+        "operation_sequence": operation.operation_sequence,
+        "response_path": "results/operation_0000000000000000.jsonl",
+        "response_count": failed_index + 1,
+        "completed_request_count": failed_index,
+        "failed_request_index": failed_index,
+        "response_sha256": hashlib.sha256(response_path.read_bytes()).hexdigest(),
     }
 
 
@@ -631,6 +719,45 @@ def test_successful_submit_and_release(tmp_path: Path) -> None:
     assert release.release_confirmed is True
     assert release.event["event"] == "RELEASE"
     assert process.stdin.commands[-1] == "CLOSE\n"
+
+
+@pytest.mark.parametrize("failed_index", [0, 1])
+def test_packed_failure_preserves_and_validates_partial_response(
+    tmp_path: Path, failed_index: int
+) -> None:
+    operation, requests, profile = _packed_operation(tmp_path)
+    response = _packed_failure_event(
+        tmp_path, operation, requests, profile, failed_index
+    )
+    session, process = _session(
+        tmp_path,
+        requests[0],
+        lambda _command: response,
+        profile=profile,
+    )
+
+    with pytest.raises(v4.V4ProtocolError) as exc_info:
+        session.submit_packed(operation)
+
+    error = exc_info.value
+    assert error.failure_stage == "request_execution_failed"
+    assert error.operation_response == response
+    assert error.response_path == response["response_path"]
+    assert error.response_sha256 == response["response_sha256"]
+    assert error.completed_request_count == failed_index
+    assert error.failed_request_index == failed_index
+    assert len(error.partial_responses) == failed_index + 1
+    assert error.partial_responses[-1]["status"] == "failed"
+    response_path = tmp_path / str(response["response_path"])
+    assert response_path.is_file()
+    assert hashlib.sha256(response_path.read_bytes()).hexdigest() == response[
+        "response_sha256"
+    ]
+    assert process.stdin.commands == [
+        f"SUBMIT_PACKED_OPERATION packed/operation.bin {operation.sha256}\n",
+        "CLOSE\n",
+    ]
+    assert session.close().release_confirmed is True
 
 
 def test_persistent_session_bounds_each_event_not_cumulative_stdout(
