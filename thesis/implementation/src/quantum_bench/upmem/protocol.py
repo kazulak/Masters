@@ -472,6 +472,14 @@ class V4RequestArtifact:
     output_paths: tuple[Path, ...]
     payload_record_staging_s: float
     manifest_sidecar_staging_s: float
+    payload_materialization_s: float = 0.0
+    payload_file_write_s: float = 0.0
+    payload_hashing_s: float = 0.0
+    payload_record_construction_s: float = 0.0
+    payload_record_count: int = 0
+    payload_files_created: int = 0
+    payload_bytes_staged: int = 0
+    payload_bytes_hashed: int = 0
 
     @property
     def request_sequence(self) -> int:
@@ -624,13 +632,15 @@ def _validate_work_geometry(
 
 
 def _stage_payload(path: Path, payload: bytes, expected_bytes: int) -> None:
+    path.write_bytes(_materialize_payload(payload, expected_bytes))
+
+
+def _materialize_payload(payload: bytes, expected_bytes: int) -> bytes:
     if len(payload) == expected_bytes:
-        padded = payload
-    else:
-        if len(payload) > expected_bytes or any(payload[expected_bytes:]):
-            raise ValueError("v4 payload has invalid padding")
-        padded = payload + b"\0" * (expected_bytes - len(payload))
-    path.write_bytes(padded)
+        return payload
+    if len(payload) > expected_bytes or any(payload[expected_bytes:]):
+        raise ValueError("v4 payload has invalid padding")
+    return payload + b"\0" * (expected_bytes - len(payload))
 
 
 def _validate_output_overlaps(units: Sequence[V4WorkUnit]) -> None:
@@ -728,6 +738,14 @@ def build_v4_request(
     records: list[V4WorkUnitRecord] = []
     output_paths: list[Path] = []
     payload_record_staging_started = time.perf_counter()
+    payload_materialization_s = 0.0
+    payload_file_write_s = 0.0
+    payload_hashing_s = 0.0
+    payload_record_construction_s = 0.0
+    payload_record_count = 0
+    payload_files_created = 0
+    payload_bytes_staged = 0
+    payload_bytes_hashed = 0
     for dpu_id in range(profile.dpu_count):
         unit = by_id.get(
             dpu_id,
@@ -760,39 +778,59 @@ def build_v4_request(
             c_offset = _aligned8(b_offset + b_bytes)
             if c_offset + c_bytes > profile.mram_pool_bytes:
                 raise ValueError("v4 tile operands and output exceed MRAM pool")
+        payload_materialization_started = time.perf_counter()
+        if not (unit.flags & FLAG_ZERO_WORK):
             a_payload = _payload_bytes(unit.a_payload)
             b_payload = _payload_bytes(unit.b_payload)
+        a_payload = _materialize_payload(a_payload, a_bytes)
+        b_payload = _materialize_payload(b_payload, b_bytes)
+        payload_materialization_s += (
+            time.perf_counter() - payload_materialization_started
+        )
         a_path = payload_dir / f"dpu_{dpu_id:03d}_a.bin"
         b_path = payload_dir / f"dpu_{dpu_id:03d}_b.bin"
         c_path = output_dir / f"dpu_{dpu_id:03d}_c.bin"
-        _stage_payload(a_path, a_payload, a_bytes)
-        _stage_payload(b_path, b_payload, b_bytes)
+        payload_file_write_started = time.perf_counter()
+        a_path.write_bytes(a_payload)
+        b_path.write_bytes(b_payload)
+        payload_file_write_s += time.perf_counter() - payload_file_write_started
+        payload_files_created += 2
+        payload_bytes_staged += len(a_payload) + len(b_payload)
         output_paths.append(c_path)
-        records.append(
-            V4WorkUnitRecord(
-                local_dpu_id=dpu_id,
-                flags=unit.flags,
-                tile_id=unit.tile_id,
-                batch_index=unit.batch_index,
-                m_offset=unit.m_offset,
-                n_offset=unit.n_offset,
-                k_offset=unit.k_offset,
-                m_elements=unit.m_elements,
-                n_elements=unit.n_elements,
-                k_elements=unit.k_elements,
-                a_transfer_bytes=a_bytes,
-                b_transfer_bytes=b_bytes,
-                c_transfer_bytes=c_bytes,
-                a_offset_bytes=a_offset,
-                b_offset_bytes=b_offset,
-                c_offset_bytes=c_offset,
-                a_path=_relative_to(root, a_path, must_exist=True),
-                b_path=_relative_to(root, b_path, must_exist=True),
-                c_path=_relative_to(root, c_path),
-                a_sha256=_file_sha256(a_path),
-                b_sha256=_file_sha256(b_path),
-            )
+        payload_hashing_started = time.perf_counter()
+        a_sha256 = _file_sha256(a_path)
+        b_sha256 = _file_sha256(b_path)
+        payload_hashing_s += time.perf_counter() - payload_hashing_started
+        payload_bytes_hashed += len(a_payload) + len(b_payload)
+        payload_record_construction_started = time.perf_counter()
+        record = V4WorkUnitRecord(
+            local_dpu_id=dpu_id,
+            flags=unit.flags,
+            tile_id=unit.tile_id,
+            batch_index=unit.batch_index,
+            m_offset=unit.m_offset,
+            n_offset=unit.n_offset,
+            k_offset=unit.k_offset,
+            m_elements=unit.m_elements,
+            n_elements=unit.n_elements,
+            k_elements=unit.k_elements,
+            a_transfer_bytes=a_bytes,
+            b_transfer_bytes=b_bytes,
+            c_transfer_bytes=c_bytes,
+            a_offset_bytes=a_offset,
+            b_offset_bytes=b_offset,
+            c_offset_bytes=c_offset,
+            a_path=_relative_to(root, a_path, must_exist=True),
+            b_path=_relative_to(root, b_path, must_exist=True),
+            c_path=_relative_to(root, c_path),
+            a_sha256=a_sha256,
+            b_sha256=b_sha256,
         )
+        records.append(record)
+        payload_record_construction_s += (
+            time.perf_counter() - payload_record_construction_started
+        )
+        payload_record_count += 1
     payload_record_staging_s = time.perf_counter() - payload_record_staging_started
     manifest_sidecar_staging_started = time.perf_counter()
     _validate_record_storage(records, profile=profile, canonical_k=canonical_k)
@@ -854,6 +892,14 @@ def build_v4_request(
         output_paths=tuple(output_paths),
         payload_record_staging_s=float(payload_record_staging_s),
         manifest_sidecar_staging_s=float(manifest_sidecar_staging_s),
+        payload_materialization_s=float(payload_materialization_s),
+        payload_file_write_s=float(payload_file_write_s),
+        payload_hashing_s=float(payload_hashing_s),
+        payload_record_construction_s=float(payload_record_construction_s),
+        payload_record_count=payload_record_count,
+        payload_files_created=payload_files_created,
+        payload_bytes_staged=payload_bytes_staged,
+        payload_bytes_hashed=payload_bytes_hashed,
     )
 
 
