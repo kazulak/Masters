@@ -27,7 +27,11 @@ from quantum_bench.upmem.runtime import (
     open_upmem_simulator,
 )
 from quantum_bench.upmem.protocol import (
+    COMPLETION_BYTES,
+    CONTROL_BYTES,
     EXECUTION_TARGET_SIMULATOR,
+    FLAG_ZERO_WORK,
+    STATUS_COMPLETED,
     V4ProtocolError,
     native_execution_identity,
 )
@@ -107,26 +111,77 @@ class _FakeSession:
         time.sleep(self.delay_s)
         packed = self.profile.numeric_mode_name == "host_packed_int8"
         dtype = np.int8 if packed else np.dtype("<f4")
+        payload_cursor = 0
+        per_dpu: list[dict[str, Any]] = []
+        total_h2d = 0
+        total_d2h = 0
         for record in artifact.work_units:
-            if record.flags:
-                continue
-            left = np.fromfile(
-                artifact.root / record.a_path,
-                dtype=dtype,
-                count=record.m_elements * record.k_elements,
-            ).reshape(record.m_elements, record.k_elements)
-            right = np.fromfile(
-                artifact.root / record.b_path,
-                dtype=dtype,
-                count=record.k_elements * record.n_elements,
-            ).reshape(record.k_elements, record.n_elements)
-            output = (
-                left.astype(np.int64) @ right.astype(np.int64)
-                if packed
-                else left @ right
-            )
-            (artifact.root / record.c_path).write_bytes(
-                np.asarray(output, dtype="<i4" if packed else "<f4").tobytes()
+            if hasattr(artifact, "payload_bytes") and isinstance(
+                artifact.payload_bytes, bytes
+            ):
+                a_payload = artifact.payload_bytes[
+                    payload_cursor : payload_cursor + record.a_transfer_bytes
+                ]
+                payload_cursor += record.a_transfer_bytes
+                b_payload = artifact.payload_bytes[
+                    payload_cursor : payload_cursor + record.b_transfer_bytes
+                ]
+                payload_cursor += record.b_transfer_bytes
+                if not record.flags:
+                    left = np.frombuffer(
+                        a_payload, dtype=dtype, count=record.m_elements * record.k_elements
+                    ).reshape(record.m_elements, record.k_elements)
+                    right = np.frombuffer(
+                        b_payload, dtype=dtype, count=record.k_elements * record.n_elements
+                    ).reshape(record.k_elements, record.n_elements)
+                    output = (
+                        left.astype(np.int64) @ right.astype(np.int64)
+                        if packed
+                        else left @ right
+                    )
+                    output_path = artifact.root / record.c_path
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    output_path.write_bytes(
+                        np.asarray(output, dtype="<i4" if packed else "<f4").tobytes()
+                    )
+            else:
+                if not record.flags:
+                    left = np.fromfile(
+                        artifact.root / record.a_path,
+                        dtype=dtype,
+                        count=record.m_elements * record.k_elements,
+                    ).reshape(record.m_elements, record.k_elements)
+                    right = np.fromfile(
+                        artifact.root / record.b_path,
+                        dtype=dtype,
+                        count=record.k_elements * record.n_elements,
+                    ).reshape(record.k_elements, record.n_elements)
+                    output = (
+                        left.astype(np.int64) @ right.astype(np.int64)
+                        if packed
+                        else left @ right
+                    )
+                    (artifact.root / record.c_path).write_bytes(
+                        np.asarray(output, dtype="<i4" if packed else "<f4").tobytes()
+                    )
+            h2d = record.a_transfer_bytes + record.b_transfer_bytes + CONTROL_BYTES
+            d2h = record.c_transfer_bytes + COMPLETION_BYTES
+            total_h2d += h2d
+            total_d2h += d2h
+            per_dpu.append(
+                {
+                    "dpu_id": record.local_dpu_id,
+                    "tile_id": record.tile_id,
+                    "completion_status": STATUS_COMPLETED,
+                    "processed_elements": (
+                        0
+                        if record.flags & FLAG_ZERO_WORK
+                        else record.m_elements * record.n_elements
+                    ),
+                    "h2d_bytes": h2d,
+                    "d2h_bytes": d2h,
+                    "cycles": 1,
+                }
             )
         return {
             "status": "completed",
@@ -144,7 +199,12 @@ class _FakeSession:
             "request_sequence": artifact.request_sequence,
             "bulk_set_launch_verified": True,
             **native_execution_identity(self.profile.execution_target),
-            "transfer": {"h2d_bytes": 10, "d2h_bytes": 5, "total_bytes": 15},
+            "transfer": {
+                "h2d_bytes": total_h2d,
+                "d2h_bytes": total_d2h,
+                "total_bytes": total_h2d + total_d2h,
+            },
+            "per_dpu": per_dpu,
             "timing": {
                 "h2d_time_s": 0.01,
                 "launch_time_s": 0.02,
@@ -157,6 +217,30 @@ class _FakeSession:
                 "response_wait_s": 0.025,
                 "response_validation_s": 0.005,
                 "total_submit_s": 0.04,
+            },
+        }
+
+    def submit_packed(
+        self, operation: Any, *, timeout_s: float | None = None
+    ) -> dict[str, Any]:
+        started = time.perf_counter()
+        responses = tuple(
+            self.submit(request, timeout_s=timeout_s)
+            for request in operation.requests
+        )
+        elapsed = time.perf_counter() - started
+        return {
+            "event": "OPERATION_RESPONSE",
+            "status": "completed",
+            "operation_sequence": operation.operation_sequence,
+            "response_count": len(responses),
+            "responses": responses,
+            "host_submit_timing": {
+                "artifact_validation_s": 0.0,
+                "protocol_write_s": 0.0,
+                "response_wait_s": elapsed,
+                "response_validation_s": 0.0,
+                "total_submit_s": elapsed,
             },
         }
 

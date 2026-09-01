@@ -1078,6 +1078,9 @@ class UpmemV4Session:
         packed_operation_count = 0
         packed_operation_bytes = 0
         packed_operation_request_count = 0
+        packed_operation_max_descriptor_count = 0
+        packed_operation_max_bytes = 0
+        packed_operation_max_payload_bytes = 0
         total_dpus = sum(rank.local_dpus for rank in self.ranks)
         waves, planned_requests = self._requests_from_work_units(
             node, lowering, stage.work_units
@@ -1121,6 +1124,18 @@ class UpmemV4Session:
             packed_operation_bytes += int(wave_metrics.get("packed_operation_bytes", 0))
             packed_operation_request_count += int(
                 wave_metrics.get("packed_operation_request_count", 0)
+            )
+            packed_operation_max_descriptor_count = max(
+                packed_operation_max_descriptor_count,
+                int(wave_metrics.get("packed_operation_max_descriptor_count", 0)),
+            )
+            packed_operation_max_bytes = max(
+                packed_operation_max_bytes,
+                int(wave_metrics.get("packed_operation_max_bytes", 0)),
+            )
+            packed_operation_max_payload_bytes = max(
+                packed_operation_max_payload_bytes,
+                int(wave_metrics.get("packed_operation_max_payload_bytes", 0)),
             )
             self._successful_request_count += int(wave_metrics["successful_request_count"])
             self._active_rank_indices.update(wave_metrics["active_rank_indices"])
@@ -1183,6 +1198,9 @@ class UpmemV4Session:
             "packed_operation_count": packed_operation_count,
             "packed_operation_bytes": packed_operation_bytes,
             "packed_operation_request_count": packed_operation_request_count,
+            "packed_operation_max_descriptor_count": packed_operation_max_descriptor_count,
+            "packed_operation_max_bytes": packed_operation_max_bytes,
+            "packed_operation_max_payload_bytes": packed_operation_max_payload_bytes,
             "task_structure_sha256": task_structure_sha256,
             "request_contract_version": "m5_request_contract_v2",
             "request_contract_sha256": request_contract,
@@ -1330,6 +1348,9 @@ class UpmemV4Session:
         packed_operation_count = 0
         packed_operation_bytes = 0
         packed_operation_request_count = 0
+        packed_operation_max_descriptor_count = 0
+        packed_operation_max_bytes = 0
+        packed_operation_max_payload_bytes = 0
         active_rank_indices: set[int] = set()
         active_dpu_ids: set[tuple[int, int]] = set()
         numeric_transport = "host_packed_int8_mram" if packed else "float32_mram"
@@ -1454,6 +1475,18 @@ class UpmemV4Session:
                     )
                     packed_operation_request_count += int(
                         metrics.get("packed_operation_request_count", 0)
+                    )
+                    packed_operation_max_descriptor_count = max(
+                        packed_operation_max_descriptor_count,
+                        int(metrics.get("packed_operation_max_descriptor_count", 0)),
+                    )
+                    packed_operation_max_bytes = max(
+                        packed_operation_max_bytes,
+                        int(metrics.get("packed_operation_max_bytes", 0)),
+                    )
+                    packed_operation_max_payload_bytes = max(
+                        packed_operation_max_payload_bytes,
+                        int(metrics.get("packed_operation_max_payload_bytes", 0)),
                     )
                     self._successful_request_count += int(
                         metrics["successful_request_count"]
@@ -1633,6 +1666,9 @@ class UpmemV4Session:
             "packed_operation_count": packed_operation_count,
             "packed_operation_bytes": packed_operation_bytes,
             "packed_operation_request_count": packed_operation_request_count,
+            "packed_operation_max_descriptor_count": packed_operation_max_descriptor_count,
+            "packed_operation_max_bytes": packed_operation_max_bytes,
+            "packed_operation_max_payload_bytes": packed_operation_max_payload_bytes,
             "parallel_rank_wave_count": parallel_rank_waves,
             "bulk_set_launch_verified": bulk_verified,
             "application_visible_h2d_bytes": h2d_bytes,
@@ -2078,6 +2114,9 @@ class UpmemV4Session:
             "packed_operation_count": 1,
             "packed_operation_bytes": len(operation.data),
             "packed_operation_request_count": len(prepared),
+            "packed_operation_max_descriptor_count": len(operation.requests),
+            "packed_operation_max_bytes": len(operation.data),
+            "packed_operation_max_payload_bytes": operation.payload_bytes,
             "rank_submit_parallel_wall_s": 0.0,
             "rank_submit_total_max_s": 0.0,
             "rank_submit_artifact_validation_max_s": 0.0,
@@ -3282,7 +3321,7 @@ class UpmemSession:
                 "execution_class": (
                     "sdk_simulator" if simulator else "upmem_v4_real_tile"
                 ),
-                "request_transport": self._resources.request_transport,
+                "request_transport": PACKED_OPERATION_TRANSPORT,
                 "target_observed": observations["target_observed"],
                 "test_double_execution": observations["test_double_execution"],
                 "cpu_fallback_used": observations["cpu_fallback_used"],
@@ -3306,6 +3345,18 @@ class UpmemSession:
                 ),
                 "packed_operation_request_count": sum(
                     int(fact.get("packed_operation_request_count", 0))
+                    for fact in operation_facts
+                ),
+                "packed_operation_max_descriptor_count": max(
+                    int(fact.get("packed_operation_max_descriptor_count", 0))
+                    for fact in operation_facts
+                ),
+                "packed_operation_max_bytes": max(
+                    int(fact.get("packed_operation_max_bytes", 0))
+                    for fact in operation_facts
+                ),
+                "packed_operation_max_payload_bytes": max(
+                    int(fact.get("packed_operation_max_payload_bytes", 0))
                     for fact in operation_facts
                 ),
                 "operation_facts": operation_facts,
@@ -3490,6 +3541,9 @@ def _operation_summary(metadata: Mapping[str, Any]) -> Mapping[str, JsonValue]:
         "packed_operation_count",
         "packed_operation_bytes",
         "packed_operation_request_count",
+        "packed_operation_max_descriptor_count",
+        "packed_operation_max_bytes",
+        "packed_operation_max_payload_bytes",
         "timing",
     )
     summary = {field: metadata[field] for field in fields if field in metadata}
@@ -3841,7 +3895,6 @@ def open_upmem(
                 dpu_count=plan.topology.dpu_count,
                 tasklets_per_dpu=plan.topology.tasklets_per_dpu,
                 timeout_s=timeout_s,
-                request_transport=resources.request_transport,
             )
             low_level = engine.open_session(
                 plan.numeric_policy,
@@ -3946,7 +3999,6 @@ def open_upmem_simulator(
             tasklets_per_dpu=plan.topology.tasklets_per_dpu,
             timeout_s=timeout_s,
             execution_target=EXECUTION_TARGET_SIMULATOR,
-            request_transport=resources.request_transport,
         )
         low_level = engine.open_session(plan.numeric_policy, plan.topology)
     except UnsupportedExecution:
