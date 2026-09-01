@@ -107,9 +107,16 @@ _HEX_SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 class V4Error(RuntimeError):
     """Base error carrying a machine-readable failure stage."""
 
-    def __init__(self, failure_stage: str, message: str) -> None:
+    def __init__(
+        self,
+        failure_stage: str,
+        message: str,
+        *,
+        backend_facts: Mapping[str, Any] | None = None,
+    ) -> None:
         super().__init__(f"{failure_stage}: {message}")
         self.failure_stage = failure_stage
+        self.backend_facts = dict(backend_facts or {})
 
 
 class V4ProtocolError(V4Error):
@@ -216,7 +223,7 @@ class V4Profile:
     numeric_mode: str | int = NUMERIC_FLOAT32
     rank_path: str | None = None
     execution_target: str = EXECUTION_TARGET_PHYSICAL
-    request_transport: str = REQUEST_TRANSPORT_DIRECTORY
+    request_transport: str = REQUEST_TRANSPORT_PACKED_OPERATION
     timeout_s: float = 60.0
     # stdout is the line-delimited protocol: bound each event independently.
     max_stdout_bytes: int = 256 * 1024
@@ -236,11 +243,8 @@ class V4Profile:
             EXECUTION_TARGET_SIMULATOR,
         }:
             raise ValueError("unsupported v4 execution_target")
-        if self.request_transport not in {
-            REQUEST_TRANSPORT_DIRECTORY,
-            REQUEST_TRANSPORT_PACKED_OPERATION,
-        }:
-            raise ValueError("unsupported v4 request_transport")
+        if self.request_transport != REQUEST_TRANSPORT_PACKED_OPERATION:
+            raise ValueError("v4 sessions require packed_operation_v1")
         if self.execution_target == EXECUTION_TARGET_SIMULATOR and self.dpu_count != 1:
             raise ValueError("v4 simulator requires exactly one DPU")
         if self.rank_path is not None and not _RANK_PATH.fullmatch(self.rank_path):

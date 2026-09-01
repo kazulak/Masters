@@ -68,13 +68,11 @@ from quantum_bench.upmem.protocol import (
     V4Profile,
     V4ProtocolError,
     V4WorkUnit,
-    REQUEST_TRANSPORT_DIRECTORY,
     WRAM_PANEL_DMA_BYTES,
     WRAM_PANEL_KC,
     WRAM_PANEL_NC,
     WRAM_PANEL_UNALIGNED_SCRATCH_BYTES,
     _record_abi_fields,
-    build_v4_request,
     native_execution_identity,
 )
 from quantum_bench.upmem.tiling import (
@@ -371,10 +369,6 @@ _ACTIVE_STRATEGY_CONFIG_HASH = hashlib.sha256(
 
 class _V4SessionLike(Protocol):
     startup: Mapping[str, Any]
-
-    def submit(
-        self, artifact: Any, *, timeout_s: float | None = None
-    ) -> Mapping[str, Any]: ...
 
     def submit_packed(
         self, operation: PackedOperation, *, timeout_s: float | None = None
@@ -789,7 +783,6 @@ class UpmemV4Executor:
         tasklets_per_dpu: int = 1,
         timeout_s: float = 60.0,
         execution_target: str = EXECUTION_TARGET_PHYSICAL,
-        request_transport: str = REQUEST_TRANSPORT_DIRECTORY,
         session_factory: Callable[..., _V4SessionLike] = V4Session.start,
     ) -> None:
         self.session_root = Path(session_root)
@@ -801,7 +794,7 @@ class UpmemV4Executor:
         self.tasklets_per_dpu = int(tasklets_per_dpu)
         self.timeout_s = float(timeout_s)
         self.execution_target = execution_target
-        self.request_transport = request_transport
+        self.request_transport = PACKED_OPERATION_TRANSPORT
         self.session_factory = session_factory
         self._binary_provenance = {
             **_validated_binary_provenance(
@@ -828,11 +821,6 @@ class UpmemV4Executor:
             EXECUTION_TARGET_SIMULATOR,
         }:
             raise ValueError("unsupported v4 execution target")
-        if self.request_transport not in {
-            REQUEST_TRANSPORT_DIRECTORY,
-            PACKED_OPERATION_TRANSPORT,
-        }:
-            raise ValueError("unsupported v4 request transport")
         if self.execution_target == EXECUTION_TARGET_PHYSICAL:
             if not self.rank_paths:
                 raise ValueError("physical v4 engine requires explicit rank_paths")
@@ -905,7 +893,6 @@ class UpmemV4Executor:
                     ),
                     rank_path=rank_path,
                     execution_target=self.execution_target,
-                    request_transport=self.request_transport,
                     timeout_s=remaining,
                 )
                 command_parts: list[str] = [
@@ -926,8 +913,6 @@ class UpmemV4Executor:
                     str(self.dpu_binary.resolve()),
                     "--timeout-s",
                     str(max(1, int(remaining))),
-                    "--request-transport",
-                    self.request_transport,
                 ]
                 if rank_path is not None:
                     command_parts[5:5] = ["--rank-path", rank_path]
@@ -1110,79 +1095,38 @@ class UpmemV4Session:
             strategy_config_hash=self.strategy_config_hash,
         )
         try:
-            if self.engine.request_transport == PACKED_OPERATION_TRANSPORT:
-                (
-                    outcomes,
-                    wave_metrics,
-                    wave_parallel,
-                    wave_bulk_verified,
-                    _record_templates,
-                ) = self._submit_packed_operation(
-                    lowering=lowering,
-                    canonical_left=canonical_left,
-                    canonical_right=canonical_right,
-                    packed=packed,
-                    request_contract=request_contract,
-                    waves=waves,
-                    requests_by_wave=planned_requests,
-                )
-                parallel_rank_waves += int(wave_parallel)
-                bulk_verified = bulk_verified and wave_bulk_verified
-                bytes_h2d += int(wave_metrics["h2d_bytes"])
-                bytes_d2h += int(wave_metrics["d2h_bytes"])
-                for key in timing:
-                    timing[key] += float(wave_metrics[key])
-                request_hashes.extend(wave_metrics["request_manifest_hashes"])
-                packed_operation_count += int(wave_metrics.get("packed_operation_count", 0))
-                packed_operation_bytes += int(wave_metrics.get("packed_operation_bytes", 0))
-                packed_operation_request_count += int(
-                    wave_metrics.get("packed_operation_request_count", 0)
-                )
-                self._successful_request_count += int(
-                    wave_metrics["successful_request_count"]
-                )
-                self._active_rank_indices.update(wave_metrics["active_rank_indices"])
-                self._active_dpu_ids.update(wave_metrics["active_dpu_ids"])
-                for tile, value in outcomes:
-                    partials[tile.id] = value
-            for wave_index in (
-                ()
-                if self.engine.request_transport == PACKED_OPERATION_TRANSPORT
-                else range(len(waves))
-            ):
-                wave = waves[wave_index]
-                self._remaining_timeout()
-                (
-                    outcomes,
-                    wave_metrics,
-                    wave_parallel,
-                    wave_bulk_verified,
-                    _record_templates,
-                ) = (
-                    self._submit_wave(
-                        lowering=lowering,
-                        canonical_left=canonical_left,
-                        canonical_right=canonical_right,
-                        packed=packed,
-                        request_contract=request_contract,
-                        wave=wave,
-                        requests=planned_requests[wave_index],
-                    )
-                )
-                parallel_rank_waves += int(wave_parallel)
-                bulk_verified = bulk_verified and wave_bulk_verified
-                bytes_h2d += int(wave_metrics["h2d_bytes"])
-                bytes_d2h += int(wave_metrics["d2h_bytes"])
-                for key in timing:
-                    timing[key] += float(wave_metrics[key])
-                request_hashes.extend(wave_metrics["request_manifest_hashes"])
-                self._successful_request_count += int(
-                    wave_metrics["successful_request_count"]
-                )
-                self._active_rank_indices.update(wave_metrics["active_rank_indices"])
-                self._active_dpu_ids.update(wave_metrics["active_dpu_ids"])
-                for tile, value in outcomes:
-                    partials[tile.id] = value
+            (
+                outcomes,
+                wave_metrics,
+                wave_parallel,
+                wave_bulk_verified,
+                _record_templates,
+            ) = self._submit_packed_operation(
+                lowering=lowering,
+                canonical_left=canonical_left,
+                canonical_right=canonical_right,
+                packed=packed,
+                request_contract=request_contract,
+                waves=waves,
+                requests_by_wave=planned_requests,
+            )
+            parallel_rank_waves += int(wave_parallel)
+            bulk_verified = bulk_verified and wave_bulk_verified
+            bytes_h2d += int(wave_metrics["h2d_bytes"])
+            bytes_d2h += int(wave_metrics["d2h_bytes"])
+            for key in timing:
+                timing[key] += float(wave_metrics[key])
+            request_hashes.extend(wave_metrics["request_manifest_hashes"])
+            packed_operation_count += int(wave_metrics.get("packed_operation_count", 0))
+            packed_operation_bytes += int(wave_metrics.get("packed_operation_bytes", 0))
+            packed_operation_request_count += int(
+                wave_metrics.get("packed_operation_request_count", 0)
+            )
+            self._successful_request_count += int(wave_metrics["successful_request_count"])
+            self._active_rank_indices.update(wave_metrics["active_rank_indices"])
+            self._active_dpu_ids.update(wave_metrics["active_dpu_ids"])
+            for tile, value in outcomes:
+                partials[tile.id] = value
         except BaseException as exc:
             self._failed = True
             self._failure_stage = str(
