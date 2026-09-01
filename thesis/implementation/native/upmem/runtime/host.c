@@ -165,8 +165,7 @@ static void v4_emit_ready(
     const char *dpu_binary,
     const char *initialization_binary,
     uint32_t dpus,
-    uint32_t tasklets,
-    const char *request_transport
+    uint32_t tasklets
 ) {
     char dpu_hash[65] = {0};
     char init_hash[65] = {0};
@@ -183,7 +182,7 @@ static void v4_emit_ready(
     fputs("\",\"session_protocol\":\"", stdout);
     fputs(EXECUTION_PLAN_V4_NATIVE_SESSION, stdout);
     fputs("\",\"request_transport\":\"", stdout);
-    fputs(request_transport, stdout);
+    fputs("packed_operation_v1", stdout);
     fputs("\",\"dispatch_mode\":\"", stdout);
     fputs(EXECUTION_PLAN_V4_NATIVE_DISPATCH, stdout);
     fputs("\",\"kernel_identity\":\"", stdout);
@@ -390,19 +389,6 @@ static void v4_emit_response_to(
     fflush(output);
 }
 
-static void v4_emit_response(
-    const execution_plan_v4_request_t *request,
-    const v4_request_metrics_t *metrics,
-    const v4_dpu_result_t results[EXECUTION_PLAN_V4_MAX_DPUS],
-    const char *failure_stage,
-    const char *error_message,
-    int native_kernel_executed,
-    int bulk_set_launch_verified
-) {
-    v4_emit_response_to(stdout, request, metrics, results, failure_stage, error_message,
-        native_kernel_executed, bulk_set_launch_verified);
-}
-
 static int execute_loaded_request(
     execution_plan_v4_request_t *request,
     uint32_t tasklets,
@@ -473,39 +459,6 @@ static int execute_loaded_request(
         native_kernel_executed, 1);
     result = failure_stage == NULL ? 0 : 1;
     free(error_message);
-    return result;
-}
-
-static int execute_request(
-    const char *session_root,
-    const char *manifest_path,
-    const char *manifest_sha256,
-    uint32_t dpus,
-    uint32_t tasklets,
-    uint32_t timeout_s
-) {
-    execution_plan_v4_request_t request = {0};
-    char *error_message = NULL;
-    if (execution_plan_v4_request_load(session_root, manifest_path, manifest_sha256,
-        dpus, tasklets, &request, &error_message) != 0) {
-        v4_request_metrics_t metrics = {0};
-        v4_dpu_result_t results[EXECUTION_PLAN_V4_MAX_DPUS] = {0};
-        v4_emit_response(&request, &metrics, results, "request_manifest_failed", error_message, 0, 0);
-        free(error_message);
-        execution_plan_v4_request_free(&request);
-        return 1;
-    }
-    if (execution_plan_v4_request_load_payloads(&request, &error_message) != 0) {
-        v4_request_metrics_t metrics = {0};
-        v4_dpu_result_t results[EXECUTION_PLAN_V4_MAX_DPUS] = {0};
-        v4_emit_response(&request, &metrics, results, "payload_validation_failed", error_message, 0, 0);
-        free(error_message);
-        execution_plan_v4_request_free(&request);
-        return 1;
-    }
-    int result = execute_loaded_request(&request, tasklets, timeout_s, NULL);
-    free(error_message);
-    execution_plan_v4_request_free(&request);
     return result;
 }
 
@@ -710,14 +663,13 @@ static int execute_packed_operation(
 }
 
 static void v4_usage(const char *program) {
-    fprintf(stderr, "usage: %s --target hardware|simulator --request-transport directory_v1|packed_operation_v1 --session-root DIR [--rank-path /dev/dpu_rankN] --dpus N --tasklets N --initialization-binary PATH --dpu-binary PATH [--timeout-s N]\n", program);
+    fprintf(stderr, "usage: %s --target hardware|simulator --session-root DIR [--rank-path /dev/dpu_rankN] --dpus N --tasklets N --initialization-binary PATH --dpu-binary PATH [--timeout-s N]\n", program);
 }
 
 int main(int argc, char **argv) {
     const char *session_root = NULL;
     const char *rank_path = NULL;
     const char *target = NULL;
-    const char *request_transport = NULL;
     const char *initialization_binary = NULL;
     const char *dpu_binary = NULL;
     uint32_t dpus = 0u, tasklets = 0u, timeout_s = 60u;
@@ -727,7 +679,6 @@ int main(int argc, char **argv) {
     int rc = 1;
     for (int index = 1; index < argc; index++) {
         if (strcmp(argv[index], "--target") == 0 && index + 1 < argc) target = argv[++index];
-        else if (strcmp(argv[index], "--request-transport") == 0 && index + 1 < argc) request_transport = argv[++index];
         else if (strcmp(argv[index], "--session-root") == 0 && index + 1 < argc) session_root = argv[++index];
         else if (strcmp(argv[index], "--rank-path") == 0 && index + 1 < argc) rank_path = argv[++index];
         else if (strcmp(argv[index], "--dpus") == 0 && index + 1 < argc) { if (parse_u32(argv[++index], &dpus) != 0) return 2; }
@@ -740,10 +691,7 @@ int main(int argc, char **argv) {
     (void)signal(SIGINT, v4_signal_handler);
     (void)signal(SIGTERM, v4_signal_handler);
     (void)signal(SIGALRM, v4_signal_handler);
-    if (target == NULL || request_transport == NULL ||
-        (strcmp(request_transport, "directory_v1") != 0 &&
-         strcmp(request_transport, "packed_operation_v1") != 0) ||
-        session_root == NULL || initialization_binary == NULL || dpu_binary == NULL ||
+    if (target == NULL || session_root == NULL || initialization_binary == NULL || dpu_binary == NULL ||
         dpus == 0u || dpus > EXECUTION_PLAN_V4_MAX_DPUS || tasklets == 0u || tasklets > EXECUTION_PLAN_V4_MAX_TASKLETS ||
         timeout_s == 0u || realpath(session_root, root_real) == NULL || stat(root_real, &root_stat) != 0 ||
         !S_ISDIR(root_stat.st_mode) || !path_exists(initialization_binary) || !path_exists(dpu_binary)) {
@@ -798,7 +746,7 @@ int main(int argc, char **argv) {
         v4_emit_release();
         return 1;
     }
-    v4_emit_ready(rank_path, dpu_binary, initialization_binary, dpus, tasklets, request_transport);
+    v4_emit_ready(rank_path, dpu_binary, initialization_binary, dpus, tasklets);
     rc = 0;
     while (!v4_interrupted) {
         char line[PATH_MAX * 2u];
@@ -808,20 +756,13 @@ int main(int argc, char **argv) {
         fields = sscanf(line, "%31s %4095s %64s %7s", command, path, digest, extra);
         if (fields == 1 &&
             strcmp(command, "CLOSE") == 0) break;
-        if (fields != 3 ||
-            (strcmp(request_transport, "directory_v1") == 0 && strcmp(command, "SUBMIT") != 0) ||
-            (strcmp(request_transport, "packed_operation_v1") == 0 &&
-             strcmp(command, "SUBMIT_PACKED_OPERATION") != 0)) {
+        if (fields != 3 || strcmp(command, "SUBMIT_PACKED_OPERATION") != 0) {
             v4_emit_startup_failure("request_manifest_failed",
-                strcmp(request_transport, "directory_v1") == 0
-                    ? "expected SUBMIT <safe-relative-manifest> <sha256> or CLOSE"
-                    : "expected SUBMIT_PACKED_OPERATION <safe-relative-envelope> <sha256> or CLOSE");
+                "expected SUBMIT_PACKED_OPERATION <safe-relative-envelope> <sha256> or CLOSE");
             rc = 1;
             continue;
         }
-        if (strcmp(request_transport, "directory_v1") == 0) {
-            if (execute_request(root_real, path, digest, dpus, tasklets, timeout_s) != 0) rc = 1;
-        } else if (execute_packed_operation(root_real, path, digest, dpus, tasklets, timeout_s) != 0) {
+        if (execute_packed_operation(root_real, path, digest, dpus, tasklets, timeout_s) != 0) {
             rc = 1;
         }
     }

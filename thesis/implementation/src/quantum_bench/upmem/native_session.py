@@ -22,7 +22,6 @@ from quantum_bench.upmem.protocol import (
     EXECUTION_TARGET_SIMULATOR,
     FLAG_ZERO_WORK,
     native_execution_identity,
-    REQUEST_TRANSPORT_DIRECTORY,
     REQUEST_TRANSPORT_PACKED_OPERATION,
     STATUS_COMPLETED,
     V4Error,
@@ -412,16 +411,10 @@ class V4Session:
                     f"READY field {field!r} is not verified",
                 )
         observed_transport = event.get("request_transport")
-        if self.profile.request_transport == REQUEST_TRANSPORT_PACKED_OPERATION:
-            if observed_transport != REQUEST_TRANSPORT_PACKED_OPERATION:
-                raise V4ProtocolError(
-                    "hardware_allocation_failed",
-                    "READY request transport is not packed_operation_v1",
-                )
-        elif observed_transport is not None and observed_transport != REQUEST_TRANSPORT_DIRECTORY:
+        if observed_transport != REQUEST_TRANSPORT_PACKED_OPERATION:
             raise V4ProtocolError(
                 "hardware_allocation_failed",
-                "READY request transport is not directory_v1",
+                "READY request transport is not packed_operation_v1",
             )
         self._validate_native_identity(event, event_name="READY")
 

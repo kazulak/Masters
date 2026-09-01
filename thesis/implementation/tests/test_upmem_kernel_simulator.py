@@ -229,7 +229,7 @@ def _run_direct_sdk_case(
     )
     try:
         rank = session.ranks[0]
-        artifact = build_v4_request(
+        request = build_packed_v4_request(
             rank.root,
             profile=rank.session.profile,
             canonical_batch_count=1,
@@ -254,23 +254,32 @@ def _run_direct_sdk_case(
             task_contract_sha256="ab" * 32,
             request_sequence=1,
         )
-        response = rank.session.submit(artifact, timeout_s=120.0)
-        assert response["target_observed"] == "sdk_simulator"
-        assert response["simulator_kernel_executed"] is True
-        assert response["cpu_fallback_used"] is False
+        operation = pack_operation(
+            rank.root,
+            requests=(request,),
+            operation_sequence=1,
+            filename="packed/operation_0000000000000001.bin",
+        )
+        operation.path.parent.mkdir(parents=True, exist_ok=True)
+        operation.path.write_bytes(operation.data)
+        response = rank.session.submit_packed(operation, timeout_s=120.0)
+        assert response["responses"][0]["target_observed"] == "sdk_simulator"
+        assert response["responses"][0]["simulator_kernel_executed"] is True
+        assert response["responses"][0]["cpu_fallback_used"] is False
         dtype = (
             np.dtype("<i4")
             if numeric_mode == NUMERIC_HOST_PACKED_INT8
             else np.dtype("<f4")
         )
         actual = np.fromfile(
-            artifact.output_paths[0], dtype=dtype, count=m_size * n_size
+            request.output_paths[0], dtype=dtype, count=m_size * n_size
         ).reshape(m_size, n_size)
         if numeric == "int8":
             np.testing.assert_array_equal(actual.astype(np.int64), expected)
         else:
             np.testing.assert_array_equal(actual, expected)
     finally:
+        operation.path.unlink(missing_ok=True)
         session.close()
 
 
@@ -293,7 +302,6 @@ def test_packed_operation_sdk_simulator_case(tmp_path: Path) -> None:
         tasklets_per_dpu=8,
         timeout_s=120.0,
         execution_target=EXECUTION_TARGET_SIMULATOR,
-        request_transport="packed_operation_v1",
     )
     topology = UpmemTopology(dpu_count=1, rank_count=1, tasklets_per_dpu=8)
     session = engine.open_session("split_complex_float32_v1", topology)

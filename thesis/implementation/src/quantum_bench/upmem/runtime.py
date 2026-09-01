@@ -2182,21 +2182,28 @@ class UpmemV4Session:
                 response_timing = response.get("timing", {})
                 if not isinstance(response_timing, Mapping):
                     raise RuntimeError("packed response timing is not a mapping")
+                response_times: dict[str, float] = {}
+                for field in (
+                    "h2d_time_s",
+                    "launch_time_s",
+                    "d2h_time_s",
+                    "total_route_time_s",
+                ):
+                    value = response_timing.get(field)
+                    if type(value) not in (int, float):
+                        raise RuntimeError(
+                            f"packed response is missing timing.{field}"
+                        )
+                    response_times[field] = _seconds(value)
                 request_metrics["h2d_bytes"] += h2d_bytes
                 request_metrics["d2h_bytes"] += d2h_bytes
                 request_metrics["response_transfer_bytes"] += total_bytes
-                request_metrics["h2d_time_s"] += _seconds(
-                    response_timing.get("h2d_time_s", 0.0)
-                )
-                request_metrics["kernel_time_s"] += _seconds(
-                    response_timing.get("launch_time_s", 0.0)
-                )
-                request_metrics["d2h_time_s"] += _seconds(
-                    response_timing.get("d2h_time_s", 0.0)
-                )
-                request_metrics["total_route_time_s"] += _seconds(
-                    response_timing.get("total_route_time_s", 0.0)
-                )
+                request_metrics["h2d_time_s"] += response_times["h2d_time_s"]
+                request_metrics["kernel_time_s"] += response_times["launch_time_s"]
+                request_metrics["d2h_time_s"] += response_times["d2h_time_s"]
+                request_metrics["total_route_time_s"] += response_times[
+                    "total_route_time_s"
+                ]
                 active_dpu_ids.update(
                     (rank.index, record.local_dpu_id)
                     for record in artifact.work_units
@@ -3114,6 +3121,9 @@ class UpmemSession:
             failure_facts = dict(
                 self._failure_facts(active_rank_indices, active_dpu_ids)
             )
+            backend_facts = getattr(exc, "backend_facts", None)
+            if isinstance(backend_facts, Mapping):
+                failure_facts.update(backend_facts)
             failure_facts.update(
                 {
                     "plan_stage_id": declared_stage_id,

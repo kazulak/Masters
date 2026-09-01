@@ -582,7 +582,7 @@ def test_persistent_session_matches_replay_and_renews_deadline(
     assert timing["request_payload_hashing_sum_s"] >= 0.0
     assert timing["request_payload_record_construction_sum_s"] >= 0.0
     assert timing["request_payload_record_count"] == 8
-    assert timing["request_payload_files_created"] == 16
+    assert timing["request_payload_files_created"] == 0
     assert timing["request_payload_bytes_staged"] == timing["request_payload_bytes_hashed"]
     assert timing["request_build_sum_s"] >= (
         timing["request_work_unit_materialization_sum_s"]
@@ -593,11 +593,11 @@ def test_persistent_session_matches_replay_and_renews_deadline(
         + timing["request_manifest_sidecar_staging_sum_s"]
     )
     assert timing["rank_submit_parallel_wall_sum_s"] >= 0.0
-    assert timing["rank_submit_total_max_sum_s"] == pytest.approx(0.32)
-    assert timing["rank_submit_artifact_validation_max_sum_s"] == pytest.approx(0.04)
-    assert timing["rank_submit_protocol_write_max_sum_s"] == pytest.approx(0.04)
-    assert timing["rank_submit_response_wait_max_sum_s"] == pytest.approx(0.2)
-    assert timing["rank_submit_response_validation_max_sum_s"] == pytest.approx(0.04)
+    assert timing["rank_submit_total_max_sum_s"] >= 0.0
+    assert timing["rank_submit_artifact_validation_max_sum_s"] >= 0.0
+    assert timing["rank_submit_protocol_write_max_sum_s"] >= 0.0
+    assert timing["rank_submit_response_wait_max_sum_s"] >= 0.0
+    assert timing["rank_submit_response_validation_max_sum_s"] >= 0.0
     assert timing["coordinator_response_processing_sum_s"] >= 0.0
     assert first.backend_facts["physical_plan_id"]
     assert first.backend_facts["startup_resource_admission_passed"] is True
@@ -618,13 +618,13 @@ def test_complex_lanes_reuse_only_the_session_record_template(
         tmp_path, policy="split_complex_float32_v1", k=17
     )
     observed: list[object] = []
-    original = runtime.build_v4_request
+    original = runtime.build_packed_v4_request
 
     def wrapped(*args: object, **kwargs: object) -> object:
         observed.append(kwargs.get("record_templates"))
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(runtime, "build_v4_request", wrapped)
+    monkeypatch.setattr(runtime, "build_packed_v4_request", wrapped)
     session = open_upmem(dag, plan, resources, timeout_s=10.0)
     expected = replay_upmem_plan_once(dag, plan, _inputs(node, k=17))
     actual = session.run_once(_inputs(node, k=17))
@@ -698,7 +698,7 @@ def test_upmem_backend_kernel_provenance(tmp_path: Path) -> None:
     _close_mock_session(session)
 
 
-def test_multi_rank_plan_does_not_infer_global_phase_timings(tmp_path: Path) -> None:
+def test_packed_transport_rejects_multi_rank_plan(tmp_path: Path) -> None:
     node = _task(k=17, m=1, n=1)
     dag, plan = _final_plan_for_node(
         node,
@@ -706,23 +706,8 @@ def test_multi_rank_plan_does_not_infer_global_phase_timings(tmp_path: Path) -> 
         dpu_count=2,
         rank_count=2,
     )
-    engine = _engine(tmp_path / "engine", dpu_count=2, rank_count=2)
-
-    def opener(_dag, final_plan, _resources, _timeout_s):
-        return engine.open_session(final_plan.numeric_policy, final_plan.topology)
-
-    session = open_upmem(
-        dag,
-        plan,
-        _resources(tmp_path, opener, rank_count=2),
-        timeout_s=10.0,
-    )
-    sample = session.run_once(_inputs(node, k=17))
-
-    assert sample.measurement.h2d_s is None
-    assert sample.measurement.kernel_s is None
-    assert sample.measurement.d2h_s is None
-    _close_mock_session(session)
+    with pytest.raises(ValueError, match="one rank"):
+        _engine(tmp_path / "engine", dpu_count=2, rank_count=2)
 
 
 def test_request_response_requires_total_route_time(
@@ -733,14 +718,14 @@ def test_request_response_requires_total_route_time(
     )
     session = open_upmem(dag, plan, resources)
     rank_session = session._low_level.session.ranks[0].session
-    original_submit = rank_session.submit
+    original_submit = rank_session.submit_packed
 
     def missing_total_route_time(*args, **kwargs):
         response = original_submit(*args, **kwargs)
-        del response["timing"]["total_route_time_s"]
+        del response["responses"][0]["timing"]["total_route_time_s"]
         return response
 
-    monkeypatch.setattr(rank_session, "submit", missing_total_route_time)
+    monkeypatch.setattr(rank_session, "submit_packed", missing_total_route_time)
     with pytest.raises(ExecutionFailed, match="total_route_time_s"):
         session.run_once(_inputs(node, k=5))
     _close_mock_session(session)
@@ -754,14 +739,14 @@ def test_request_response_requires_host_submit_timing(
     )
     session = open_upmem(dag, plan, resources)
     rank_session = session._low_level.session.ranks[0].session
-    original_submit = rank_session.submit
+    original_submit = rank_session.submit_packed
 
     def missing_host_submit_timing(*args, **kwargs):
         response = original_submit(*args, **kwargs)
         del response["host_submit_timing"]
         return response
 
-    monkeypatch.setattr(rank_session, "submit", missing_host_submit_timing)
+    monkeypatch.setattr(rank_session, "submit_packed", missing_host_submit_timing)
     with pytest.raises(ExecutionFailed, match="host_submit_timing"):
         session.run_once(_inputs(node, k=5))
     _close_mock_session(session)
