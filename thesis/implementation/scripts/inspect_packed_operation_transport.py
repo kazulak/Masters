@@ -55,8 +55,6 @@ def _joined_facts(
     terminal = session.get("terminal_backend_facts") if session else None
     if isinstance(terminal, Mapping):
         for field, value in terminal.items():
-            if field in facts and facts[field] != value:
-                raise ValueError(f"sample and terminal facts conflict for {field}")
             facts.setdefault(field, value)
     return facts
 

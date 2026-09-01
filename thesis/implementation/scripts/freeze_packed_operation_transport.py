@@ -74,6 +74,28 @@ def _copy_required(source: Path, destination: Path) -> None:
     shutil.copy2(source, destination)
 
 
+def _copy_binaries(diagnostic_stage: Path, destination: Path) -> list[str]:
+    source = (
+        diagnostic_stage.parent
+        / "source"
+        / "thesis"
+        / "implementation"
+        / "native"
+        / "upmem"
+        / "runtime"
+        / "bin"
+    )
+    binaries = sorted(path for path in source.glob("*") if path.is_file())
+    if not binaries:
+        raise ValueError(f"built binary inventory is missing: {source}")
+    names = []
+    for path in binaries:
+        target = destination / path.name
+        _copy_required(path, target)
+        names.append(path.name)
+    return names
+
+
 def _json(path: Path) -> Mapping[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, Mapping):
@@ -175,6 +197,17 @@ def _verify_general(stage: Path) -> Mapping[str, Any]:
             raise ValueError(
                 f"general-resource {field} is {verification.get(field)!r}"
             )
+    _, samples, sessions = load_artifacts(evidence)
+    session_map = {str(session["session_instance_id"]): session for session in sessions}
+    for sample in samples:
+        facts = sample.get("backend_facts", {})
+        if facts.get("request_transport") != EXPECTED_TRANSPORT:
+            raise ValueError("general-resource evidence does not prove packed transport")
+        terminal = session_map[str(sample["session_instance_id"])].get(
+            "terminal_backend_facts", {}
+        )
+        if terminal.get("request_transport") != EXPECTED_TRANSPORT:
+            raise ValueError("general-resource terminal facts do not prove packed transport")
     summary = stage / "provenance" / "resource_general_summary.json"
     if not summary.is_file():
         summary = stage / "resource_general_summary.json"
@@ -315,6 +348,7 @@ def build_bundle(
             "tests/test_inspect_packed_operation_transport.py",
         ):
             _copy_required(ROOT / relative, staging / "source" / relative)
+        binary_names = _copy_binaries(diagnostic_stage, staging / "binaries")
         doc = ROOT / "docs" / "packed_operation_transport_adoption.md"
         if doc.is_file():
             _copy_required(doc, staging / "docs" / doc.name)
@@ -323,6 +357,7 @@ def build_bundle(
             "reporting_tool_source_commit": reporting_source,
             "execution_tag": EXPECTED_TAG,
             "transport": EXPECTED_TRANSPORT,
+            "binary_names": binary_names,
             "diagnostic_experiment_id": diagnostic_summary["experiment_id"],
             "diagnostic_run_id": diagnostic_summary["run_id"],
             "diagnostic_sample_count": 36,
