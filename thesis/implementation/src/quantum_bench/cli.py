@@ -551,7 +551,6 @@ def _resources(route: Mapping[str, object]) -> UpmemResources:
         dpu_binary=options["dpu_binary"],
         initialization_binary=options["initialization_binary"],
         rank_paths=tuple(options.get("rank_paths", ())),
-        request_transport=str(options.get("request_transport", "directory_v1")),
     )
 
 
@@ -585,9 +584,7 @@ def _executable_identity(route: Mapping[str, object]) -> str | None:
         "abi_version": 4 if executor in _UPMEM_EXECUTORS else None,
         "static_file_sha256": files,
         "request_transport": (
-            options.get("request_transport", "directory_v1")
-            if executor in _UPMEM_EXECUTORS
-            else None
+            "packed_operation_v1" if executor in _UPMEM_EXECUTORS else None
         ),
         "source_commit": _source_commit()
         if executor in {"numpy_dag", "quimb", "cotengra"}

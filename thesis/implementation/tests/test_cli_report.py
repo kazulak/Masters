@@ -483,6 +483,50 @@ def test_loader_enforces_circuit_name_path_union_and_exact_route_options(
         load_experiment_config(bad_options)
 
 
+def test_upmem_transport_is_fixed_and_public_override_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "config.yml"
+    _write_config(config_path, _physical_config())
+    config = load_experiment_config(config_path)
+    route = config["routes"]["physical"]
+    resources = cli._resources(route)
+    assert resources.request_transport == "packed_operation_v1"
+
+    legacy_path = tmp_path / "legacy.yml"
+    _write_config(
+        legacy_path,
+        _physical_config().replace(
+            "      rank_paths: [/dev/dpu_rank0]",
+            "      request_transport: directory_v1\n"
+            "      rank_paths: [/dev/dpu_rank0]",
+        ),
+    )
+    with pytest.raises(ValueError, match="fields must be exact"):
+        load_experiment_config(legacy_path)
+
+    monkeypatch.setattr(cli, "_sha256_file", lambda _path: "a" * 64)
+    identity_route = {
+        "executor": "upmem_physical",
+        "numeric_policy": "split_complex_float32_v1",
+        "options": {
+            "host_binary": "host",
+            "dpu_binary": "dpu",
+            "initialization_binary": "init",
+        },
+    }
+    legacy_identity_route = {
+        **identity_route,
+        "options": {
+            **identity_route["options"],
+            "request_transport": "directory_v1",
+        },
+    }
+    assert cli._executable_identity(identity_route) == cli._executable_identity(
+        legacy_identity_route
+    )
+
+
 def test_loader_allows_distinct_plan_occurrences_but_rejects_exact_duplicates(
     tmp_path: Path,
 ) -> None:
