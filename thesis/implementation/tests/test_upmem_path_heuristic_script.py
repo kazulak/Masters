@@ -173,6 +173,43 @@ def test_physical_lowering_timeout_is_an_explicit_infeasible_candidate() -> None
     )
 
 
+def test_deterministic_admission_precedes_process_isolation(monkeypatch) -> None:
+    config = script.load_config()
+    definition = {"name": "bell_2q", "parameters": {}}
+    circuit = script.builtin_circuit(definition["name"], definition["parameters"])
+    network, _ = script.lower_tensor_network(script.make_simulation_job(circuit))
+    path, provenance = script.plan_opt_einsum(network, optimize="greedy")
+    item = {
+        "candidate_path_id": script.path_id(path, circuit_id="fixture"),
+        "path": path,
+        "source_kind": "opt_einsum_greedy",
+        "source_seed": None,
+        "planner_config_hash": provenance["planner_config_hash"],
+        "is_greedy": True,
+    }
+    monkeypatch.setattr(
+        script,
+        "_estimated_work_unit_count",
+        lambda dag: config["candidate_generation"]["maximum_planned_work_units"] + 1,
+    )
+    monkeypatch.setattr(
+        script.multiprocessing,
+        "get_context",
+        lambda method: (_ for _ in ()).throw(AssertionError("worker was started")),
+    )
+    record, _, candidate = script._isolated_serialized_candidate(
+        circuit_id="fixture",
+        split="training",
+        definition=definition,
+        item=item,
+        config=config,
+    )
+    assert candidate is None
+    assert record["topologies"][0]["infeasibility_reason"] == (
+        "estimated_work_unit_count_exceeds_preregistered_bound"
+    )
+
+
 def test_frozen_profile_selects_validation_paths_without_timing(tmp_path: Path) -> None:
     greedy = "a" * 64
     candidate = "b" * 64

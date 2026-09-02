@@ -431,6 +431,42 @@ def _isolated_serialized_candidate(
     item: dict[str, Any],
     config: dict[str, Any],
 ) -> tuple[dict[str, Any], list[dict[str, Any]], PathCandidate | None]:
+    # Perform deterministic, target-neutral admission before entering native
+    # planning in a child. This avoids paying or timing out physical lowering
+    # for paths already known to violate the frozen campaign bounds.
+    circuit = builtin_circuit(str(definition["name"]), dict(definition["parameters"]))
+    network, inputs = lower_tensor_network(make_simulation_job(circuit))
+    dag = build_contraction_dag(network, item["path"])
+    conventional = extract_conventional_features(dag)
+    logical_id = contraction_dag_hash(dag)
+    memory_estimate = _host_memory_estimate(inputs, dag)
+    estimated_work_units = _estimated_work_unit_count(dag)
+    work_unit_limit = int(config["candidate_generation"]["maximum_planned_work_units"])
+    memory_limit = int(config["host_memory_admission_bytes"])
+    if estimated_work_units > work_unit_limit:
+        return _infeasible_candidate_record(
+            circuit_id=circuit_id,
+            split=split,
+            item=item,
+            config=config,
+            reason="estimated_work_unit_count_exceeds_preregistered_bound",
+            conventional=conventional,
+            logical_plan_id=logical_id,
+            host_memory_estimate_bytes=memory_estimate,
+            estimated_work_unit_count=estimated_work_units,
+        )
+    if memory_estimate > memory_limit:
+        return _infeasible_candidate_record(
+            circuit_id=circuit_id,
+            split=split,
+            item=item,
+            config=config,
+            reason="host_memory_estimate_exceeds_preregistered_bound",
+            conventional=conventional,
+            logical_plan_id=logical_id,
+            host_memory_estimate_bytes=memory_estimate,
+            estimated_work_unit_count=estimated_work_units,
+        )
     # Candidate lowering calls NumPy/BLAS after cotengra has initialized native
     # worker state in the parent. Forking at that point can inherit locked
     # runtime state and deadlock before deterministic admission is emitted.
