@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import sys
 
+import pytest
 import yaml
 
 
@@ -24,6 +25,9 @@ def _candidate(identifier: str, *, greedy: bool, seed: int | None, host: int) ->
                 "topology_id": topology,
                 "feasible": True,
                 "physical_plan_id": f"physical-{topology}-{identifier}",
+                "resource_admission": {
+                    "collection_resource_admission_passed": True,
+                },
                 "features": {
                     "B_host_dpu": host,
                     "B_mram_wram": 20,
@@ -52,6 +56,168 @@ def _candidate(identifier: str, *, greedy: bool, seed: int | None, host: int) ->
         },
         "topologies": topologies,
     }
+
+
+def _evaluation_fixture(
+    tmp_path: Path, *, split: str = "validation"
+) -> tuple[Path, Path, str, str]:
+    greedy = "a" * 64
+    candidate = "b" * 64
+    dataset = {
+        "source_sha": "1" * 40,
+        "preregistration_sha256": "2" * 64,
+        "circuits": [
+            {
+                "circuit_id": "held-out",
+                "split": split,
+                "circuit": {
+                    "kind": "builtin",
+                    "name": "bell_2q",
+                    "parameters": {},
+                },
+                "candidates": [
+                    _candidate(greedy, greedy=True, seed=None, host=100),
+                    _candidate(candidate, greedy=False, seed=20260903, host=50),
+                ],
+            }
+        ],
+    }
+    selection = {
+        "schema_version": "upmem_path_frozen_selection_v1",
+        "source_sha": dataset["source_sha"],
+        "candidate_set_sha256": qualify._candidate_set_sha256(dataset),
+        "split": split,
+        "timing_used_for_selection": False,
+        "selections": [
+            {
+                "circuit_id": "held-out",
+                "split": split,
+                "topology_id": topology,
+                "greedy_path_id": greedy,
+                "minimum_flops_path_id": candidate,
+                "upmem_selected_path_id": candidate,
+            }
+            for topology in ("1dpu_t8", "4dpu_t8")
+        ],
+    }
+    dataset_path = tmp_path / "dataset.json"
+    selection_path = tmp_path / "selection.json"
+    dataset_path.write_bytes(qualify._canonical_bytes(dataset))
+    selection_path.write_bytes(qualify._canonical_bytes(selection))
+    return dataset_path, selection_path, greedy, candidate
+
+
+@pytest.mark.parametrize("split", ("validation", "test"))
+def test_prepare_evaluation_config_uses_frozen_selection_once_per_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, split: str
+) -> None:
+    dataset_path, selection_path, greedy, candidate = _evaluation_fixture(
+        tmp_path, split=split
+    )
+
+    def fail_if_consulted(_path: Path) -> dict[tuple[str, str], str]:
+        raise AssertionError("evaluation mode consulted timing/ranking input")
+
+    monkeypatch.setattr(qualify, "_ranking_best", fail_if_consulted)
+    monkeypatch.setattr(qualify, "_regenerate", lambda circuit, selected: (object(), {}))
+    output = tmp_path / "validation.yml"
+    config = qualify.prepare_config(
+        dataset_path=dataset_path,
+        selection_path=selection_path,
+        output_path=output,
+        mode="evaluation",
+        split=split,
+    )
+
+    assert config["experiment_id"] == f"upmem-path-heuristic-evaluation-{split}-v1"
+    assert config["collection"]["warmup_blocks"] == 1
+    assert config["collection"]["measurement_blocks"] == 5
+    assert set(config["routes"]) == {"1dpu_t8", "4dpu_t8"}
+    assert all(route["executor"] == "upmem_physical" for route in config["routes"].values())
+    assert len(config["plans"]) == 2
+    assert set(config["plans"]) == {f"path_{greedy}", f"path_{candidate}"}
+    assert config["matrix"] == [
+        {
+            "case_id": "held-out",
+            "plan_id": f"path_{greedy}",
+            "route_ids": ["1dpu_t8", "4dpu_t8"],
+        },
+        {
+            "case_id": "held-out",
+            "plan_id": f"path_{candidate}",
+            "route_ids": ["1dpu_t8", "4dpu_t8"],
+        },
+    ]
+    provenance = json.loads(
+        output.with_suffix(".yml.provenance.json").read_text(encoding="utf-8")
+    )
+    assert provenance["selection_split"] == split
+    assert len(provenance["selected"]) == 4
+    assert provenance["candidate_set_sha256"] == qualify._candidate_set_sha256(
+        json.loads(dataset_path.read_text(encoding="utf-8"))
+    )
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        (lambda selection: selection.update({"candidate_set_sha256": "f" * 64}), "candidate-set identity"),
+        (lambda selection: selection.update({"split": "test"}), "selection split"),
+        (
+            lambda selection: selection.update({"timing_used_for_selection": True}),
+            "timing-independent",
+        ),
+        (
+            lambda selection: selection["selections"][0].update(
+                {"greedy_path_id": "b" * 64}
+            ),
+            "not deterministic",
+        ),
+    ],
+)
+def test_prepare_evaluation_rejects_frozen_selection_contract_violations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    change,
+    message: str,
+) -> None:
+    dataset_path, selection_path, _, _ = _evaluation_fixture(tmp_path)
+    selection = json.loads(selection_path.read_text(encoding="utf-8"))
+    change(selection)
+    selection_path.write_bytes(qualify._canonical_bytes(selection))
+    monkeypatch.setattr(qualify, "_regenerate", lambda circuit, selected: (object(), {}))
+    with pytest.raises(ValueError, match=message):
+        qualify.prepare_config(
+            dataset_path=dataset_path,
+            selection_path=selection_path,
+            output_path=tmp_path / "validation.yml",
+            mode="evaluation",
+            split="validation",
+        )
+
+
+def test_prepare_evaluation_rejects_candidate_without_resource_admission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset_path, selection_path, _, _ = _evaluation_fixture(tmp_path)
+    dataset = json.loads(dataset_path.read_text(encoding="utf-8"))
+    dataset["circuits"][0]["candidates"][1]["topologies"][1]["resource_admission"][
+        "collection_resource_admission_passed"
+    ] = False
+    dataset_path.write_bytes(qualify._canonical_bytes(dataset))
+    selection = json.loads(selection_path.read_text(encoding="utf-8"))
+    selection["candidate_set_sha256"] = qualify._candidate_set_sha256(dataset)
+    selection["selections"][1]["minimum_flops_path_id"] = "a" * 64
+    selection_path.write_bytes(qualify._canonical_bytes(selection))
+    monkeypatch.setattr(qualify, "_regenerate", lambda circuit, selected: (object(), {}))
+    with pytest.raises(ValueError, match="resource admission"):
+        qualify.prepare_config(
+            dataset_path=dataset_path,
+            selection_path=selection_path,
+            output_path=tmp_path / "validation.yml",
+            mode="evaluation",
+            split="validation",
+        )
 
 
 def test_prepare_calibration_config_preserves_candidate_seed_and_collection(tmp_path: Path, monkeypatch) -> None:

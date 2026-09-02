@@ -259,21 +259,200 @@ def _route(topology_id: str, *, simulator: bool) -> dict[str, Any]:
     }
 
 
+_EVALUATION_TOPOLOGIES = ("1dpu_t8", "4dpu_t8")
+
+
+def _topology_record(candidate: dict[str, Any], topology_id: str) -> dict[str, Any]:
+    matches = [
+        item
+        for item in candidate.get("topologies", [])
+        if item.get("topology_id") == topology_id
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            f"candidate {candidate.get('candidate_path_id')} must have exactly "
+            f"one {topology_id} topology record"
+        )
+    return matches[0]
+
+
+def _require_evaluation_candidate(
+    candidate: dict[str, Any], circuit_id: str, topology_id: str
+) -> dict[str, Any]:
+    topology = _topology_record(candidate, topology_id)
+    if topology.get("feasible") is not True:
+        raise ValueError(
+            f"evaluation candidate is infeasible for {circuit_id}/{topology_id}/"
+            f"{candidate.get('candidate_path_id')}"
+        )
+    admission = topology.get("resource_admission")
+    if not isinstance(admission, dict) or admission.get(
+        "collection_resource_admission_passed"
+    ) is not True:
+        raise ValueError(
+            f"evaluation candidate lacks passed resource admission for "
+            f"{circuit_id}/{topology_id}/{candidate.get('candidate_path_id')}"
+        )
+    if not isinstance(topology.get("physical_plan_id"), str) or not topology[
+        "physical_plan_id"
+    ]:
+        raise ValueError(
+            f"evaluation candidate lacks physical-plan identity for "
+            f"{circuit_id}/{topology_id}/{candidate.get('candidate_path_id')}"
+        )
+    return topology
+
+
+def _evaluation_selection(
+    *,
+    dataset: dict[str, Any],
+    dataset_hash: str,
+    candidate_map: dict[tuple[str, str], dict[str, Any]],
+    circuit_map: dict[str, dict[str, Any]],
+    selection_path: Path,
+    split: str,
+) -> tuple[list[tuple[str, str, str]], dict[tuple[str, str, str], tuple[str, ...]]]:
+    if split not in {"validation", "test"}:
+        raise ValueError("evaluation split must be validation or test")
+    selection = _load(selection_path)
+    if selection.get("schema_version") != "upmem_path_frozen_selection_v1":
+        raise ValueError("evaluation selection has an invalid schema")
+    if selection.get("candidate_set_sha256") != dataset_hash:
+        raise ValueError("evaluation candidate-set identity does not match dataset")
+    if selection.get("source_sha") != dataset.get("source_sha"):
+        raise ValueError("evaluation source identity does not match dataset")
+    if selection.get("split") != split:
+        raise ValueError("evaluation selection split does not match requested split")
+    if selection.get("timing_used_for_selection") is not False:
+        raise ValueError("evaluation selection must be timing-independent")
+    rows = selection.get("selections")
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("evaluation selection must contain selections")
+
+    expected_circuits = {
+        circuit_id
+        for circuit_id, circuit in circuit_map.items()
+        if circuit.get("split") == split
+    }
+    if not expected_circuits:
+        raise ValueError(f"candidate dataset contains no {split} circuits")
+    expected_keys = {
+        (circuit_id, topology_id)
+        for circuit_id in expected_circuits
+        for topology_id in _EVALUATION_TOPOLOGIES
+    }
+    rows_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("evaluation selection rows must be objects")
+        if row.get("split") != split:
+            raise ValueError("evaluation selection contains another split")
+        circuit_id = row.get("circuit_id")
+        topology_id = row.get("topology_id")
+        if not isinstance(circuit_id, str) or not isinstance(topology_id, str):
+            raise ValueError("evaluation selection cell identities must be strings")
+        key = (circuit_id, topology_id)
+        if key in rows_by_key:
+            raise ValueError(
+                f"evaluation selection contains duplicate cell {circuit_id}/{topology_id}"
+            )
+        if key not in expected_keys:
+            raise ValueError(
+                f"evaluation selection contains an unexpected cell {circuit_id}/{topology_id}"
+            )
+        rows_by_key[key] = row
+    if set(rows_by_key) != expected_keys:
+        missing = sorted(expected_keys - set(rows_by_key))
+        raise ValueError(f"evaluation selection is missing cells: {missing}")
+
+    selected: set[tuple[str, str, str]] = set()
+    roles: dict[tuple[str, str, str], set[str]] = {}
+    for (circuit_id, topology_id), row in sorted(rows_by_key.items()):
+        circuit_candidates = [
+            candidate
+            for (candidate_circuit_id, _), candidate in candidate_map.items()
+            if candidate_circuit_id == circuit_id
+        ]
+        feasible = []
+        for candidate in circuit_candidates:
+            topology = _topology_record(candidate, topology_id)
+            admission = topology.get("resource_admission")
+            if (
+                topology.get("feasible") is True
+                and isinstance(admission, dict)
+                and admission.get("collection_resource_admission_passed") is True
+            ):
+                feasible.append(candidate)
+        if not feasible:
+            raise ValueError(f"no admitted candidates for {circuit_id}/{topology_id}")
+        greedy_candidates = [
+            candidate for candidate in feasible if candidate.get("is_greedy") is True
+        ]
+        if len(greedy_candidates) != 1:
+            raise ValueError(
+                f"evaluation requires exactly one feasible greedy candidate for "
+                f"{circuit_id}/{topology_id}"
+            )
+        expected_greedy = greedy_candidates[0]["candidate_path_id"]
+        expected_flops = min(
+            feasible,
+            key=lambda candidate: (
+                candidate["conventional_features"]["flops"],
+                candidate["candidate_path_id"],
+            ),
+        )["candidate_path_id"]
+        expected_roles = {
+            "greedy_path_id": expected_greedy,
+            "minimum_flops_path_id": expected_flops,
+        }
+        for field, expected in expected_roles.items():
+            if row.get(field) != expected:
+                raise ValueError(
+                    f"evaluation {field} is not deterministic for "
+                    f"{circuit_id}/{topology_id}"
+                )
+        upmem_selected = row.get("upmem_selected_path_id")
+        if not isinstance(upmem_selected, str) or not upmem_selected:
+            raise ValueError(
+                f"evaluation selection has no UPMEM-selected path for "
+                f"{circuit_id}/{topology_id}"
+            )
+        role_values = (*expected_roles.items(), ("upmem_selected_path_id", upmem_selected))
+        for field, candidate_id in role_values:
+            candidate = candidate_map.get((circuit_id, candidate_id))
+            if candidate is None:
+                raise ValueError(
+                    f"evaluation selection references unknown candidate "
+                    f"{circuit_id}/{candidate_id}"
+                )
+            _require_evaluation_candidate(candidate, circuit_id, topology_id)
+            selected_key = (circuit_id, topology_id, candidate_id)
+            selected.add(selected_key)
+            roles.setdefault(selected_key, set()).add(field.removesuffix("_path_id"))
+    return sorted(selected), {
+        key: tuple(sorted(value)) for key, value in roles.items()
+    }
+
+
 def prepare_config(
     *,
     dataset_path: Path,
-    calibration_path: Path,
-    rankings_path: Path,
     output_path: Path,
     mode: str,
+    calibration_path: Path | None = None,
+    rankings_path: Path | None = None,
+    selection_path: Path | None = None,
+    split: str | None = None,
 ) -> dict[str, Any]:
     dataset = _load(dataset_path)
     dataset_hash = _candidate_set_sha256(dataset)
     candidate_map = _candidate_map(dataset)
     circuit_map = _circuit_map(dataset)
-    rankings = _ranking_best(rankings_path)
     selected: list[tuple[str, str, str]] = []
+    selection_roles: dict[tuple[str, str, str], tuple[str, ...]] = {}
     if mode == "calibration":
+        if calibration_path is None:
+            raise ValueError("calibration mode requires a calibration set")
         calibration = _load(calibration_path)
         if calibration.get("candidate_set_sha256") != dataset_hash:
             raise ValueError("calibration candidate-set identity does not match dataset")
@@ -285,6 +464,9 @@ def prepare_config(
         warmups, measurements, seed, simulator = 1, 3, 20260910, False
         topology_ids = ("1dpu_t8", "4dpu_t8")
     elif mode == "sdk":
+        if rankings_path is None:
+            raise ValueError("sdk mode requires rankings")
+        rankings = _ranking_best(rankings_path)
         topology_ids = ("1dpu_t8",)
         for circuit in dataset["circuits"]:
             for topology_id in topology_ids:
@@ -293,8 +475,23 @@ def prepare_config(
                 )
                 selected.extend((circuit["circuit_id"], topology_id, path) for path in ids)
         warmups, measurements, seed, simulator = 0, 1, 20260909, True
+    elif mode == "evaluation":
+        if selection_path is None:
+            raise ValueError("evaluation mode requires a frozen selection")
+        if split is None:
+            raise ValueError("evaluation mode requires validation or test split")
+        topology_ids = _EVALUATION_TOPOLOGIES
+        selected, selection_roles = _evaluation_selection(
+            dataset=dataset,
+            dataset_hash=dataset_hash,
+            candidate_map=candidate_map,
+            circuit_map=circuit_map,
+            selection_path=selection_path,
+            split=split,
+        )
+        warmups, measurements, seed, simulator = 1, 5, 20260911, False
     else:
-        raise ValueError("mode must be sdk or calibration")
+        raise ValueError("mode must be sdk, calibration, or evaluation")
     selected = sorted(set(selected))
     cases = {
         circuit_id: {"circuit": {**circuit_map[circuit_id]["circuit"], "path": None}}
@@ -304,10 +501,7 @@ def prepare_config(
     matrix = []
     for circuit_id, topology_id, candidate_id in selected:
         candidate = candidate_map[(circuit_id, candidate_id)]
-        topology = next(
-            item for item in candidate["topologies"]
-            if item["topology_id"] == topology_id
-        )
+        topology = _topology_record(candidate, topology_id)
         if topology.get("feasible") is not True:
             raise ValueError(
                 f"selected candidate is infeasible for {circuit_id}/{topology_id}/{candidate_id}"
@@ -322,9 +516,30 @@ def prepare_config(
                 "route_ids": [f"upmem_{topology_id}"],
             }
         )
+    if mode == "evaluation":
+        grouped: dict[tuple[str, str], set[str]] = {}
+        for circuit_id, topology_id, candidate_id in selected:
+            grouped.setdefault((circuit_id, candidate_id), set()).add(topology_id)
+        topology_order = {
+            topology_id: index for index, topology_id in enumerate(topology_ids)
+        }
+        matrix = [
+            {
+                "case_id": circuit_id,
+                "plan_id": f"path_{candidate_id}",
+                "route_ids": sorted(
+                    route_ids, key=lambda route_id: topology_order[route_id]
+                ),
+            }
+            for (circuit_id, candidate_id), route_ids in sorted(grouped.items())
+        ]
     config = {
         "schema_version": "tn_benchmark_v3",
-        "experiment_id": f"upmem-path-heuristic-{mode}-v1",
+        "experiment_id": (
+            f"upmem-path-heuristic-evaluation-{split}-v1"
+            if mode == "evaluation"
+            else f"upmem-path-heuristic-{mode}-v1"
+        ),
         "defaults": {"timeout_s": 120.0},
         "collection": _collection(warmups=warmups, measurements=measurements, seed=seed),
         "cases": cases,
@@ -337,7 +552,9 @@ def prepare_config(
     }
     # Matrix route names use the canonical mapping keys above.
     for item in config["matrix"]:
-        item["route_ids"] = [item["route_ids"][0].removeprefix("upmem_")]
+        item["route_ids"] = [
+            route_id.removeprefix("upmem_") for route_id in item["route_ids"]
+        ]
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
         yaml.safe_dump(config, sort_keys=False, allow_unicode=False), encoding="utf-8"
@@ -348,6 +565,25 @@ def prepare_config(
         "candidate_set_sha256": dataset_hash,
         "preregistration_sha256": dataset["preregistration_sha256"],
         "mode": mode,
+        **(
+            {
+                "selection_split": split,
+                "selection_path": str(selection_path),
+                "selection_roles": [
+                    {
+                        "circuit_id": circuit_id,
+                        "topology_id": topology_id,
+                        "candidate_path_id": candidate_id,
+                        "roles": list(
+                            selection_roles[(circuit_id, topology_id, candidate_id)]
+                        ),
+                    }
+                    for circuit_id, topology_id, candidate_id in selected
+                ],
+            }
+            if mode == "evaluation"
+            else {}
+        ),
         "selected": [
             {
                 "circuit_id": circuit_id,
@@ -378,9 +614,13 @@ def main() -> None:
     cpu.add_argument("--output", type=Path, required=True)
     prepare = subparsers.add_parser("prepare")
     prepare.add_argument("--candidate-paths", type=Path, required=True)
-    prepare.add_argument("--calibration-set", type=Path, required=True)
-    prepare.add_argument("--rankings", type=Path, required=True)
-    prepare.add_argument("--mode", choices=("sdk", "calibration"), required=True)
+    prepare.add_argument("--calibration-set", type=Path)
+    prepare.add_argument("--selection", "--selection-artifact", dest="selection", type=Path)
+    prepare.add_argument("--rankings", type=Path)
+    prepare.add_argument(
+        "--mode", choices=("sdk", "calibration", "evaluation"), required=True
+    )
+    prepare.add_argument("--split", choices=("validation", "test"))
     prepare.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "cpu":
@@ -389,10 +629,12 @@ def main() -> None:
     else:
         config = prepare_config(
             dataset_path=args.candidate_paths,
-            calibration_path=args.calibration_set,
-            rankings_path=args.rankings,
             output_path=args.output,
             mode=args.mode,
+            calibration_path=args.calibration_set,
+            rankings_path=args.rankings,
+            selection_path=args.selection,
+            split=args.split,
         )
         print(json.dumps({"matrix_count": len(config["matrix"])}))
 
