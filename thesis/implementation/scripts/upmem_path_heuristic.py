@@ -583,7 +583,11 @@ def _infeasible_candidate_record(
     )
 
 
-def build_dataset(config: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], dict[str, float]]:
+def build_dataset(
+    config: dict[str, Any],
+    *,
+    candidate_partition: tuple[int, int] | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], dict[str, float]]:
     source_sha = _source_sha()
     circuit_records = []
     feature_rows: list[dict[str, Any]] = []
@@ -605,6 +609,13 @@ def build_dataset(config: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str
             isolate_trials=True,
             circuit_definition=definition,
         )
+        if candidate_partition is not None:
+            partition_index, partition_count = candidate_partition
+            raw_candidates = [raw_candidates[0]] + [
+                item
+                for index, item in enumerate(raw_candidates[1:])
+                if index % partition_count == partition_index
+            ]
         total_generation_s += timing["candidate_generation_s"]
         candidate_records = []
         path_candidates = []
@@ -726,6 +737,7 @@ def generate(
     *,
     check: bool = False,
     circuit_ids: tuple[str, ...] = (),
+    candidate_partition: tuple[int, int] | None = None,
 ) -> dict[str, float]:
     full_config = load_config(config_path)
     config = full_config
@@ -741,7 +753,9 @@ def generate(
                 if item["circuit_id"] in requested
             ],
         }
-    dataset, features, rankings, calibration, timings = build_dataset(config)
+    dataset, features, rankings, calibration, timings = build_dataset(
+        config, candidate_partition=candidate_partition
+    )
     preregistration_sha = _sha256_bytes(_canonical_bytes(full_config))
     dataset["preregistration_sha256"] = preregistration_sha
     calibration["candidate_set_sha256"] = _sha256_bytes(_canonical_bytes(dataset))
@@ -803,7 +817,7 @@ def merge_shards(
     base = {key: value for key, value in datasets[0].items() if key != "circuits"}
     if base["preregistration_sha256"] != expected_preregistration:
         raise ValueError("candidate shard does not match preregistration")
-    circuits: dict[str, dict[str, Any]] = {}
+    circuit_parts: dict[str, list[dict[str, Any]]] = {}
     feature_rows: list[dict[str, Any]] = []
     ranking_rows: list[dict[str, Any]] = []
     calibration_cells: list[dict[str, Any]] = []
@@ -821,9 +835,7 @@ def merge_shards(
             raise ValueError("candidate shard checksum mismatch")
         for circuit in dataset["circuits"]:
             circuit_id = str(circuit["circuit_id"])
-            if circuit_id in circuits:
-                raise ValueError(f"duplicate circuit shard: {circuit_id}")
-            circuits[circuit_id] = circuit
+            circuit_parts.setdefault(circuit_id, []).append(circuit)
         with (shard_dir / "candidate_features.csv").open(
             newline="", encoding="utf-8"
         ) as stream:
@@ -832,12 +844,41 @@ def merge_shards(
             newline="", encoding="utf-8"
         ) as stream:
             ranking_rows.extend(csv.DictReader(stream))
-        calibration_cells.extend(calibration["cells"])
         shard_timing = json.loads((shard_dir / "planning_timing.json").read_text())
         for key in timings:
             timings[key] += float(shard_timing[key])
-    if set(circuits) != set(expected_order):
+    if set(circuit_parts) != set(expected_order):
         raise ValueError("candidate shards do not cover the frozen circuit set exactly")
+    circuits: dict[str, dict[str, Any]] = {}
+    for circuit_id, parts in circuit_parts.items():
+        identity = {
+            key: value for key, value in parts[0].items()
+            if key not in {"candidates", "unique_candidate_count", "duplicate_count"}
+        }
+        candidates: dict[str, dict[str, Any]] = {}
+        for part in parts:
+            if {
+                key: value for key, value in part.items()
+                if key not in {"candidates", "unique_candidate_count", "duplicate_count"}
+            } != identity:
+                raise ValueError(f"mixed circuit shard identity: {circuit_id}")
+            for candidate in part["candidates"]:
+                candidate_id = candidate["candidate_path_id"]
+                if candidate_id in candidates and candidates[candidate_id] != candidate:
+                    raise ValueError(f"mixed duplicate candidate: {candidate_id}")
+                candidates[candidate_id] = candidate
+        ordered = sorted(
+            candidates.values(),
+            key=lambda item: (not item["is_greedy"], item["candidate_path_id"]),
+        )
+        circuits[circuit_id] = {
+            **identity,
+            "unique_candidate_count": len(ordered),
+            "duplicate_count": 1
+            + int(identity["requested_cotengra_trials"])
+            - len(ordered),
+            "candidates": ordered,
+        }
     dataset = {**base, "circuits": [circuits[item] for item in expected_order]}
     circuit_order = {value: index for index, value in enumerate(expected_order)}
     topology_order = {
@@ -849,6 +890,11 @@ def merge_shards(
         for circuit_id, circuit in circuits.items()
         for index, candidate in enumerate(circuit["candidates"])
     }
+    feature_by_key = {
+        (row["circuit_id"], row["candidate_path_id"], row["topology_id"]): row
+        for row in feature_rows
+    }
+    feature_rows = list(feature_by_key.values())
     feature_rows.sort(
         key=lambda row: (
             circuit_order[row["circuit_id"]],
@@ -856,19 +902,58 @@ def merge_shards(
             topology_order[row["topology_id"]],
         )
     )
-    ranking_rows.sort(
-        key=lambda row: (
-            circuit_order[row["circuit_id"]],
-            topology_order[row["topology_id"]],
-            int(row["equal_weight_rank"]),
-        )
-    )
-    calibration_cells.sort(
-        key=lambda item: (
-            circuit_order[item["circuit_id"]],
-            topology_order[item["topology_id"]],
-        )
-    )
+    ranking_rows = []
+    calibration_cells = []
+    for circuit in dataset["circuits"]:
+        candidates = tuple(_candidate_from_record(item) for item in circuit["candidates"])
+        for topology_id in topology_order:
+            feasible = tuple(item for item in candidates if item.feasible_for(topology_id))
+            greedy = next(item for item in feasible if item.is_greedy)
+            normalized = tuple(
+                normalize_features(item.raw_for(topology_id), greedy.raw_for(topology_id))
+                for item in feasible
+            )
+            model = choose_feature_model(normalized)
+            weights = equal_model_weights(model)
+            ordered = sorted(
+                feasible,
+                key=lambda item: (
+                    score_features(
+                        item.raw_for(topology_id), greedy.raw_for(topology_id),
+                        weights, model=model,
+                    ),
+                    item.path_id,
+                ),
+            )
+            for rank, candidate in enumerate(ordered, start=1):
+                ranking_rows.append({
+                    "circuit_id": circuit["circuit_id"],
+                    "split": circuit["split"],
+                    "topology_id": topology_id,
+                    "candidate_path_id": candidate.path_id,
+                    "equal_weight_rank": rank,
+                    "equal_weight_score": score_features(
+                        candidate.raw_for(topology_id), greedy.raw_for(topology_id),
+                        weights, model=model,
+                    ),
+                    "feature_model": model.mode,
+                })
+            if circuit["split"] == "training":
+                selected = select_calibration_candidates(
+                    feasible,
+                    topology_id,
+                    limit=int(config["calibration"]["candidates_per_cell_maximum"]),
+                    model=model,
+                    greedy_path_id=greedy.path_id,
+                )
+                calibration_cells.append({
+                    "cell_id": f"{circuit['circuit_id']}:{topology_id}",
+                    "circuit_id": circuit["circuit_id"],
+                    "topology_id": topology_id,
+                    "greedy_path_id": greedy.path_id,
+                    "feature_model": asdict(model),
+                    "candidate_path_ids": [item.path_id for item in selected],
+                })
     calibration = {
         "schema_version": "upmem_path_calibration_candidate_set_v1",
         "source_sha": dataset["source_sha"],
@@ -1148,6 +1233,8 @@ def main() -> None:
     generate_parser.add_argument("--output-dir", type=Path, required=True)
     generate_parser.add_argument("--check", action="store_true")
     generate_parser.add_argument("--circuit-id", action="append", default=[])
+    generate_parser.add_argument("--candidate-part-index", type=int)
+    generate_parser.add_argument("--candidate-part-count", type=int)
     merge_parser = subparsers.add_parser("merge")
     merge_parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     merge_parser.add_argument("--shard-dir", type=Path, action="append", required=True)
@@ -1166,11 +1253,19 @@ def main() -> None:
     evaluate_parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "generate":
+        partition = None
+        if args.candidate_part_index is not None or args.candidate_part_count is not None:
+            if args.candidate_part_index is None or args.candidate_part_count is None:
+                raise ValueError("candidate partition requires both index and count")
+            if not 0 <= args.candidate_part_index < args.candidate_part_count:
+                raise ValueError("candidate partition index is outside its count")
+            partition = (args.candidate_part_index, args.candidate_part_count)
         timings = generate(
             args.config,
             args.output_dir,
             check=args.check,
             circuit_ids=tuple(args.circuit_id),
+            candidate_partition=partition,
         )
         print(json.dumps(timings, sort_keys=True))
     elif args.command == "merge":
