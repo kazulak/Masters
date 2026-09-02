@@ -1,0 +1,51 @@
+{
+  "policy_id": "complex_int8_shared_scale_v1",
+  "vectors": [
+    {
+      "id": "zero_tensor",
+      "input": [
+        {"real": 0.0, "imag": 0.0},
+        {"real": 0.0, "imag": 0.0}
+      ],
+      "scale": 1.0,
+      "q_real": [0, 0],
+      "q_imag": [0, 0],
+      "dequantized": [
+        {"real": 0.0, "imag": 0.0},
+        {"real": 0.0, "imag": 0.0}
+      ]
+    },
+    {
+      "id": "ties_with_shared_unit_scale",
+      "input": [
+        {"real": 0.5, "imag": -0.5},
+        {"real": 1.5, "imag": -1.5},
+        {"real": 2.5, "imag": -2.5},
+        {"real": 127.0, "imag": -127.0}
+      ],
+      "scale": 1.0,
+      "q_real": [0, 2, 2, 127],
+      "q_imag": [0, -2, -2, -127],
+      "dequantized": [
+        {"real": 0.0, "imag": 0.0},
+        {"real": 2.0, "imag": -2.0},
+        {"real": 2.0, "imag": -2.0},
+        {"real": 127.0, "imag": -127.0}
+      ]
+    },
+    {
+      "id": "shared_real_imag_scale",
+      "input": [
+        {"real": 127.0, "imag": 63.5},
+        {"real": -63.5, "imag": -127.0}
+      ],
+      "scale": 1.0,
+      "q_real": [127, -64],
+      "q_imag": [64, -127],
+      "dequantized": [
+        {"real": 127.0, "imag": 64.0},
+        {"real": -64.0, "imag": -127.0}
+      ]
+    }
+  ]
+}
