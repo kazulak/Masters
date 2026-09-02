@@ -1,0 +1,28 @@
+{
+  "measurement_method": "deterministic single-circuit candidate regeneration followed by ten warm-cache frozen-profile evaluations; scoring values are medians and include candidate-file loading, hashing, selection and result serialization",
+  "schema_version": "upmem_path_planning_overhead_v1",
+  "source_sha": "16704f8221a4aec3fe694668b6bd1383b68fa4fc",
+  "splits": {
+    "test": {
+      "break_even_executions": {
+        "1dpu_t8": null,
+        "4dpu_t8": null
+      },
+      "candidate_generation_s": 2.0482840629993007,
+      "circuit_id": "bv_18q",
+      "feature_extraction_s": 5.841641592000087,
+      "median_scoring_and_selection_s": 0.09151714900144725,
+      "reason": "No finite break-even exists because the frozen selected path did not improve primary steady execution on the held-out circuit."
+    },
+    "validation": {
+      "break_even_executions": {
+        "1dpu_t8": 5.003507436471021,
+        "4dpu_t8": 10.350707085755218
+      },
+      "candidate_generation_s": 2.042417821001436,
+      "circuit_id": "edc_16q",
+      "feature_extraction_s": 3.844497471000068,
+      "median_scoring_and_selection_s": 0.0912802364982781
+    }
+  }
+}

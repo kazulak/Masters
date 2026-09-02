@@ -112,3 +112,89 @@ UPMEM-aware candidate-path heuristic and diagnostic held-out results for the
 frozen circuit instances. It cannot claim global path optimality, universal
 circuit generality, optimal resource selection, final thesis performance, or
 CPU/GPU competitiveness. A negative held-out result is a valid outcome.
+
+## Frozen Dataset And Qualification
+
+The frozen dataset contains 390 complete candidate paths: 65 candidates for
+each of Stress18, HS18, GHZ18, EDC18, EDC16, and BV18. After exact DAG and
+physical-plan lowering, the numbers with at least one feasible topology were
+20, 65, 28, 29, 32, and 26 respectively. The calibration set contains 48
+candidate/topology cells representing 25 distinct paths.
+
+The accepted calibration campaign used execution source
+`d452106e697890439cfc94fdabfb6a80fb0fccc2` and produced 192/192 successful
+samples and physical sessions. Experiment
+`424886cb45ecf2f43b304da76c7333b4720fb882066e04025593821f1eba1e04`, run
+`8b6ebfbd-1c06-4fb1-b4bf-4d072212375d`, had no failed, unsupported, fallback,
+resource-admission, or numerical-validation result. An earlier complete
+campaign at `f2e21a0...` is excluded because 24 BV16/4-DPU attempts had an
+underfilled dominant wave and failed collection resource admission. No sample
+was spliced or retried.
+
+The strict SDK gate then executed four unique validation candidates and two
+unique test candidates successfully. The physical validation and test source
+was `16704f8221a4aec3fe694668b6bd1383b68fa4fc`. Validation produced 30/30
+successful samples and sessions; held-out test produced 24/24. Both used one
+warmup and five measured blocks, rank1, CPU affinity 0, powersave, SDK 0.29.1,
+packed-operation transport, and diagnostic claim policy.
+
+## Fitted Profile
+
+The six conceptual features were not independently identifiable: `E_num` and
+`P_wram` had zero discriminating range, and movement terms were correlated.
+The preregistered grouped projection was therefore used. The fitted underlying
+weights are:
+
+| Feature | Weight |
+| --- | ---: |
+| `B_host_dpu` | 0.2707370926 |
+| `B_mram_wram` | 0.2707370926 |
+| `I_dpu` | 0.4523235890 |
+| `N_sync` | 0.0062022258 |
+| `E_num` | 0 |
+| `P_wram` | 0 |
+
+Across eight training cells, the geometric-mean descriptive speedup was
+2.2314x, the worst-cell speedup was 1.0x, seven cells improved, and one was
+unchanged. These are fitted calibration results, not held-out evidence.
+
+## Validation And Held-Out Result
+
+Primary comparisons use median `steady_execution_v1` total wall time within
+the same circuit and topology. They do not pool circuit runtimes.
+
+| Split | Circuit | Topology | Greedy (s) | FLOP-best (s) | UPMEM-selected (s) | vs greedy | vs FLOP-best |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| validation | EDC16 | 1 DPU/T8 | 1.857156 | 0.662355 | 0.662355 | 2.8039x | 1.0000x |
+| validation | EDC16 | 4 DPU/T8 | 1.231882 | 0.663494 | 0.654318 | 1.8827x | 1.0140x |
+| test | BV18 | 1 DPU/T8 | 1.343369 | 1.350928 | 1.350928 | 0.9944x | 1.0000x |
+| test | BV18 | 4 DPU/T8 | 1.276361 | 1.278622 | 1.278622 | 0.9982x | 1.0000x |
+
+Validation geometric-mean speedup was 2.2976x. The fully held-out BV18
+geometric mean was 0.9963x: both cells regressed slightly in steady execution.
+The selected BV18 path was also the minimum-FLOP candidate and differed only
+minutely from greedy in the normalized features. This is a negative held-out
+result and the weights were not changed after observing it.
+
+EDC16 selected different paths at one and four DPUs. In training, HS18 also
+selected topology-dependent paths; the other three training circuits did not.
+BV18 selected the same path at both topologies.
+
+## Planning Cost
+
+Deterministic single-circuit replay measured EDC16 candidate generation at
+2.0424 s and feature extraction at 3.8445 s. Frozen scoring/selection,
+including artifact loading and serialization, had a 0.0913 s median. The
+steady-time break-even is approximately 5 executions at one DPU and 11 at four
+DPUs. BV18 required 2.0483 s generation, 5.8416 s extraction, and 0.0915 s
+scoring, but has no finite primary break-even because its held-out steady time
+did not improve.
+
+## Interpretation
+
+The heuristic demonstrates that physical-plan movement and work descriptors
+can identify substantially better paths for calibration and validation
+structures, and that topology can change the selected path. It does not
+generalize positively to the held-out BV18 instance. The result supports the
+methodology and exposes a generalization limitation; it does not support a
+universal UPMEM path-speedup claim or production replacement of greedy.
