@@ -53,7 +53,9 @@ the existing tensor views, independently quantized, contracted with explicit
 int64 four-product accumulation, and dequantized to the historical `complex64`
 intermediate. A produced intermediate is quantized again whenever a later
 contraction consumes it. Explicit DAG reductions remain deterministic
-host-side `complex64` reductions.
+host-side `complex64` reductions. Original complex128 tensor inputs retain
+their source precision until their first int8 quantization; only produced
+intermediates follow the dequantized complex64 storage policy.
 
 The analysis records two different node errors:
 
@@ -93,7 +95,9 @@ The node diagnostic applies the conservative matrixized bound
 
 The observed value paired with this bound is the pre-`complex64` Frobenius
 error. Phase-sensitive post-cast max-absolute, relative-L2, and norm-drift
-metrics remain separate.
+metrics remain separate. If a valid DAG contraction sums a label present in
+only one operand, the implementation includes the corresponding broadcast
+replication factor in the matrixized Frobenius bound.
 
 ## Logical cost facts
 

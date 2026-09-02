@@ -369,11 +369,68 @@ def test_quantized_replay_preserves_order_shape_and_requantizes_chain() -> None:
     np.testing.assert_array_equal(replay.float32_output, run_cpu_once(dag, inputs, HISTORICAL_FLOAT32).output)
 
 
+def test_cumulative_replay_quantizes_original_inputs_before_complex64_rounding() -> None:
+    node = _contract_node(
+        left_shape=(1, 2),
+        right_shape=(2, 1),
+        output_shape=(1, 1),
+    )
+    left = TensorSpec("left", (0, 1), (1, 2), "dense", dtype="complex128")
+    right = TensorSpec("right", (1, 2), (2, 1), "dense", dtype="complex128")
+    dag = ContractionDAG(
+        tensors=(left, right),
+        nodes=(node,),
+        output=TensorView(tensor_id="output", labels=(0, 2), shape=(1, 1)),
+    )
+    inputs = {
+        "left": np.array([[0.50000001, 127.0]], dtype=np.complex128),
+        "right": np.array([[127.0], [0.0]], dtype=np.complex128),
+    }
+    replay = qc.replay_quantized_dag(dag, inputs)
+    historical = run_cpu_once(dag, inputs, HISTORICAL_INT8).output
+    np.testing.assert_array_equal(replay.output, historical)
+    assert replay.output[0, 0] == 127.0
+    assert replay.traces[0].local_max_abs_error_vs_same_node_float32 == 63.5
+    assert replay.traces[0].cumulative_max_abs_error_vs_same_node_float32 == 63.5
+
+
+def test_local_bound_covers_unilateral_contracted_label_matrixization() -> None:
+    count = 100
+    node = _contract_node(
+        left_labels=(0,),
+        right_labels=(),
+        left_shape=(count,),
+        right_shape=(),
+        output_labels=(),
+        output_shape=(),
+        contracted_labels=(0,),
+    )
+    left = TensorSpec("left", (0,), (count,), "dense", dtype="complex128")
+    right = TensorSpec("right", (), (), "dense", dtype="complex128")
+    dag = ContractionDAG(
+        tensors=(left, right),
+        nodes=(node,),
+        output=TensorView(tensor_id="output", labels=(), shape=()),
+    )
+    values = np.full(count, 0.5, dtype=np.complex128)
+    values[-1] = 127.0
+    replay = qc.replay_quantized_dag(
+        dag,
+        {
+            "left": values,
+            "right": np.array(127.0, dtype=np.complex128),
+        },
+    )
+    trace = replay.traces[0]
+    assert trace.theoretical_local_error_bound >= trace.observed_local_error
+
+
 def test_local_and_cumulative_error_are_separate_records() -> None:
     dag, inputs = _chain_dag()
     replay = qc.replay_quantized_dag(dag, inputs)
     first, second = replay.traces
-    assert first.local_max_abs_error_vs_same_node_float32 == first.cumulative_max_abs_error_vs_same_node_float32
+    assert first.local_max_abs_error_vs_same_node_float32 >= 0.0
+    assert first.cumulative_max_abs_error_vs_same_node_float32 >= 0.0
     assert second.local_max_abs_error_vs_same_node_float32 != second.cumulative_max_abs_error_vs_same_node_float32
     assert second.observed_local_error >= second.ideal_local_max_abs_error
     assert second.ideal_local_max_abs_error >= 0.0

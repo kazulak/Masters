@@ -584,7 +584,7 @@ def replay_quantized_dag(
         tensor_id: _to_complex64(np.asarray(value)) for tensor_id, value in inputs.items()
     }
     cumulative_working = {
-        tensor_id: _to_complex64(np.asarray(value)) for tensor_id, value in inputs.items()
+        tensor_id: np.asarray(value) for tensor_id, value in inputs.items()
     }
     float32_intermediates: dict[str, np.ndarray] = {}
     quantized_intermediates: dict[str, np.ndarray] = {}
@@ -1094,6 +1094,7 @@ def _make_trace(
     local_metrics = _error_metrics(local_result, float_result)
     cumulative_metrics = _error_metrics(cumulative_result, float_result)
     bound, rounding_bound_applicable = _theoretical_local_error_bound(
+        node,
         float_left,
         float_right,
         local_left,
@@ -1183,6 +1184,7 @@ def _make_trace(
 
 
 def _theoretical_local_error_bound(
+    node: ContractNode,
     left: np.ndarray,
     right: np.ndarray,
     left_encoded: QuantizedComplexTensor,
@@ -1207,6 +1209,12 @@ def _theoretical_local_error_bound(
     bound = left_error_bound * float(np.linalg.norm(right64)) + float(
         np.linalg.norm(left_hat)
     ) * right_error_bound
+    unilateral_extent = _product(
+        _label_dimensions(node)[label]
+        for label in node.contracted_labels
+        if (label in node.left.labels) != (label in node.right.labels)
+    )
+    bound *= np.sqrt(unilateral_extent)
     return float(bound), not clipping
 
 
