@@ -168,19 +168,25 @@ def _isolated_cotengra_trial(
         args=(circuit_name, circuit_parameters, objective, methods, seed, queue),
     )
     process.start()
-    process.join(timeout=300.0)
-    if process.is_alive():
-        process.kill()
-        process.join()
-        raise RuntimeError(f"isolated cotengra trial {seed} timed out")
-    try:
-        path, config_hash, error = queue.get(timeout=1.0)
-    except queue_module.Empty as exc:
-        raise RuntimeError(
-            f"isolated cotengra trial {seed} returned no result: {process.exitcode}"
-        ) from exc
-    finally:
-        queue.close()
+    deadline = time.monotonic() + 300.0
+    result = None
+    while result is None:
+        try:
+            result = queue.get_nowait()
+        except queue_module.Empty:
+            if not process.is_alive():
+                process.join()
+                raise RuntimeError(
+                    f"isolated cotengra trial {seed} returned no result: {process.exitcode}"
+                )
+            if time.monotonic() >= deadline:
+                process.kill()
+                process.join()
+                raise RuntimeError(f"isolated cotengra trial {seed} timed out")
+            time.sleep(0.01)
+    path, config_hash, error = result
+    process.join()
+    queue.close()
     if process.exitcode != 0 or error is not None:
         raise RuntimeError(
             f"isolated cotengra trial {seed} failed: {error or process.exitcode}"
