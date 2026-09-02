@@ -29,7 +29,6 @@ import numpy as np
 from quantum_bench.lowering import validate_contraction_dag, validate_dag_inputs
 from quantum_bench.model import ContractNode, ContractionDAG, ReduceNode, TensorView
 from quantum_bench.numerics import (
-    EncodedComplexTensor,
     contract_complex_products,
     decode_complex_products,
     encode_complex_tensor,
@@ -590,7 +589,7 @@ def replay_quantized_dag(
     float32_intermediates: dict[str, np.ndarray] = {}
     quantized_intermediates: dict[str, np.ndarray] = {}
     traces: list[ContractionTrace] = []
-    producer_kind = {node.output.id: isinstance(node, ContractNode) for node in order}
+    produced_tensors = {node.output.id for node in order}
 
     for node in order:
         if isinstance(node, ContractNode):
@@ -632,7 +631,7 @@ def replay_quantized_dag(
                     cumulative_left,
                     cumulative_right,
                     cumulative_result,
-                    producer_kind,
+                    produced_tensors,
                 )
             )
         elif isinstance(node, ReduceNode):
@@ -710,10 +709,12 @@ def policy_facts(
         "accumulator_requirement": "2*K*127^2",
         "four_real_product_count": 4,
         "scale_computations_per_contraction": 2,
+        "scale_reduction_count": 2 * contractions,
         "quantization_events_per_contraction": 2,
         "requantization_policy": "per_contraction_per_operand",
         "quantization_event_count": 2 * contractions,
-        "requantization_event_count": 2 * max(contractions - 1, 0),
+        "requantization_event_count_requires_dag_trace": True,
+        "dequantized_output_elements_per_contraction": geometry.output_elements,
         "int32_theoretical_accumulator_bound": bounds.component_bound,
         "int32_accumulator_safe": bounds.int32_safe,
         "int64_theoretical_accumulator_bound": bounds.component_bound,
@@ -1082,7 +1083,7 @@ def _make_trace(
     cumulative_left: QuantizedComplexTensor,
     cumulative_right: QuantizedComplexTensor,
     cumulative_result: np.ndarray,
-    producer_kind: Mapping[str, bool],
+    produced_tensors: set[str],
 ) -> ContractionTrace:
     geometry = contraction_geometry(node)
     bounds = accumulator_bounds(geometry.K)
@@ -1099,9 +1100,14 @@ def _make_trace(
         local_right,
     )
     local_ideal_error = _error_metrics(local_ideal, local_reference).max_abs_error
+    observed_local_error = float(
+        np.linalg.norm(
+            np.asarray(local_ideal, dtype=np.complex128)
+            - np.asarray(local_reference, dtype=np.complex128)
+        )
+    )
     cumulative_requantizations = sum(
-        int(producer_kind.get(view.tensor_id, False))
-        for view in (node.left, node.right)
+        int(view.tensor_id in produced_tensors) for view in (node.left, node.right)
     )
     encoded_elements = local_left.encoded_element_count + local_right.encoded_element_count
     logical_encoded_bytes = 2 * encoded_elements + 2 * SCALE_METADATA_BYTES
@@ -1159,7 +1165,7 @@ def _make_trace(
         cumulative_norm_drift_vs_same_node_float32=cumulative_metrics.norm_drift,
         theoretical_local_error_bound=bound,
         ideal_local_max_abs_error=local_ideal_error,
-        observed_local_error=local_ideal_error,
+        observed_local_error=observed_local_error,
         rounding_bound_applicable=rounding_bound_applicable,
         scale_computation_count=2,
         quantization_event_count=2,

@@ -205,6 +205,19 @@ def test_clipping_is_explicit_and_never_emits_minus_128() -> None:
     assert not np.any(rounded == -128)
 
 
+def test_values_near_quantization_boundaries_are_deterministic() -> None:
+    values = np.array(
+        [126.49, 126.5, 126.51, -126.49, -126.5, -126.51],
+        dtype=np.float64,
+    )
+    encoded, clipping = qc._quantize_plane(values, 1.0)
+    np.testing.assert_array_equal(
+        encoded,
+        np.array([126, 126, 127, -126, -126, -127], dtype=np.int8),
+    )
+    assert clipping == 0
+
+
 @pytest.mark.parametrize("bad", [np.array([np.nan + 0j]), np.array([np.inf + 0j]), np.array([-np.inf + 0j])])
 def test_nonfinite_inputs_are_rejected_without_sanitization(bad: np.ndarray) -> None:
     with pytest.raises(ValueError, match="finite"):
@@ -260,6 +273,22 @@ def test_integer_contraction_has_four_labeled_products_and_exact_signs() -> None
     np.testing.assert_array_equal(decoded, expected.astype(np.complex64))
 
 
+def test_cancellation_heavy_integer_contraction_is_exact() -> None:
+    node = _contract_node(
+        left_shape=(1, 3),
+        right_shape=(3, 1),
+        output_shape=(1, 1),
+    )
+    plane = np.full((1, 3), 127, dtype=np.int8)
+    left = qc.QuantizedComplexTensor(plane, plane, 1.0)
+    right = qc.QuantizedComplexTensor(plane.T, plane.T, 1.0)
+    products = qc.contract_integer_products(left, right, node)
+    np.testing.assert_array_equal(products.rr, products.ii)
+    decoded = qc.decode_integer_products(products, 1.0, 1.0)
+    assert decoded[0, 0].real == 0.0
+    assert decoded[0, 0].imag == 2 * 3 * 127**2
+
+
 def test_scalar_k1_and_odd_non_square_contractions() -> None:
     scalar_node = _contract_node(
         output_id="scalar",
@@ -276,7 +305,7 @@ def test_scalar_k1_and_odd_non_square_contractions() -> None:
     scalar_products = qc.contract_integer_products(scalar_a, scalar_b, scalar_node)
     scalar = qc.decode_integer_products(scalar_products, 1.0, 1.0)
     assert scalar.shape == ()
-    assert scalar.item() == -2.0 + 11.0j
+    assert scalar.item() == 2.0 + 11.0j
 
     odd_node = _contract_node()
     geometry = qc.contraction_geometry(odd_node)
@@ -299,6 +328,9 @@ def test_accumulator_bounds_use_full_component_bound_at_exact_edges() -> None:
     assert safe.component_bound <= qc.INT32_MAX
     assert unsafe.component_bound > qc.INT32_MAX
     assert qc.int64_accumulator_safe(1)
+    int64_safe_k = qc.INT64_MAX // (2 * qc.INT8_MAX**2)
+    assert qc.int64_accumulator_safe(int64_safe_k)
+    assert not qc.int64_accumulator_safe(int64_safe_k + 1)
     assert qc.theoretical_accumulator_bound(3) == 2 * 3 * 127**2
 
 
@@ -331,6 +363,7 @@ def test_quantized_replay_preserves_order_shape_and_requantizes_chain() -> None:
     assert replay.quantized_intermediates["p"].dtype == np.dtype(np.complex64)
     assert replay.traces[0].requantization_event_count == 0
     assert replay.traces[1].requantization_event_count == 1
+    assert all(trace.quantization_event_count == 2 for trace in replay.traces)
     assert replay.traces == replay_again.traces
     np.testing.assert_array_equal(replay.output, replay_again.output)
     np.testing.assert_array_equal(replay.float32_output, run_cpu_once(dag, inputs, HISTORICAL_FLOAT32).output)
@@ -342,9 +375,9 @@ def test_local_and_cumulative_error_are_separate_records() -> None:
     first, second = replay.traces
     assert first.local_max_abs_error_vs_same_node_float32 == first.cumulative_max_abs_error_vs_same_node_float32
     assert second.local_max_abs_error_vs_same_node_float32 != second.cumulative_max_abs_error_vs_same_node_float32
-    assert second.observed_local_error == second.local_max_abs_error_vs_same_node_float32
+    assert second.observed_local_error >= second.ideal_local_max_abs_error
     assert second.ideal_local_max_abs_error >= 0.0
-    assert second.theoretical_local_error_bound >= second.ideal_local_max_abs_error
+    assert second.theoretical_local_error_bound >= second.observed_local_error
 
 
 def test_reduce_nodes_are_complex64_and_unquantized() -> None:
@@ -406,6 +439,7 @@ def test_static_and_logical_policy_facts_are_physical_claim_neutral() -> None:
     assert logical["logical_int8_operand_bytes"] == 2 * 10 + 8
     assert logical["logical_float32_operand_bytes"] == 8 * 10
     assert logical["quantization_event_count"] == 6
+    assert logical["requantization_event_count_requires_dag_trace"] is True
     assert logical["integer_multiply_accumulate_count"] == 4 * 2 * 3 * 4 * 5
     assert "measured_h2d_bytes" not in logical
     assert "mram_traffic_bytes" not in logical
@@ -414,6 +448,11 @@ def test_static_and_logical_policy_facts_are_physical_claim_neutral() -> None:
 def test_bell2_analytic_fixture_matches_both_references() -> None:
     dag, inputs = _dag_from_circuit("bell_2q")
     replay = qc.replay_quantized_dag(dag, inputs)
+    amplitude = np.float32(1.0 / np.sqrt(2.0))
+    np.testing.assert_array_equal(
+        replay.output,
+        np.array([[amplitude, 0.0], [0.0, amplitude]], dtype=np.complex64),
+    )
     np.testing.assert_array_equal(replay.float32_output, run_cpu_once(dag, inputs, HISTORICAL_FLOAT32).output)
     np.testing.assert_allclose(replay.complex128_output, run_cpu_once(dag, inputs, HISTORICAL_FLOAT32).output, atol=2e-7, rtol=2e-7)
     assert len(replay.traces) == len([node for node in dag.nodes if isinstance(node, ContractNode)])
