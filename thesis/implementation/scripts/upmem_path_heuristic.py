@@ -12,7 +12,6 @@ import json
 import multiprocessing
 from pathlib import Path
 import queue as queue_module
-import resource
 import subprocess
 import time
 from typing import Any
@@ -400,41 +399,7 @@ def _serialize_candidate(
     return record, rows, candidate
 
 
-def _serialize_candidate_worker(
-    circuit_id: str,
-    split: str,
-    definition: dict[str, Any],
-    item: dict[str, Any],
-    config: dict[str, Any],
-    connection: Any,
-) -> None:
-    try:
-        worker_limit = int(
-            config["candidate_generation"][
-                "physical_lowering_worker_address_space_bytes"
-            ]
-        )
-        resource.setrlimit(resource.RLIMIT_AS, (worker_limit, worker_limit))
-        circuit = builtin_circuit(str(definition["name"]), dict(definition["parameters"]))
-        network, inputs = lower_tensor_network(make_simulation_job(circuit))
-        record, rows, candidate = _serialize_candidate(
-            circuit_id=circuit_id,
-            split=split,
-            network=network,
-            inputs=inputs,
-            item=item,
-            config=config,
-        )
-        result = (record, rows, candidate, None)
-    except BaseException as exc:
-        result = (None, None, None, f"{type(exc).__name__}:{exc}")
-    try:
-        connection.send(result)
-    finally:
-        connection.close()
-
-
-def _isolated_serialized_candidate(
+def _serialized_candidate_with_admission(
     *,
     circuit_id: str,
     split: str,
@@ -478,50 +443,24 @@ def _isolated_serialized_candidate(
             host_memory_estimate_bytes=memory_estimate,
             estimated_work_unit_count=estimated_work_units,
         )
-    # Candidate lowering calls NumPy/BLAS after cotengra has initialized native
-    # worker state in the parent. Forking at that point can inherit locked
-    # runtime state and deadlock before deterministic admission is emitted.
-    context = multiprocessing.get_context("spawn")
-    receive, send = context.Pipe(duplex=False)
-    process = context.Process(
-        target=_serialize_candidate_worker,
-        args=(circuit_id, split, definition, item, config, send),
+    started = time.perf_counter()
+    result = _serialize_candidate(
+        circuit_id=circuit_id,
+        split=split,
+        network=network,
+        inputs=inputs,
+        item=item,
+        config=config,
     )
-    process.start()
-    send.close()
     timeout_s = float(config["candidate_generation"]["physical_lowering_timeout_s"])
-    deadline = time.monotonic() + timeout_s
-    result = None
-    while result is None:
-        if receive.poll():
-            result = receive.recv()
-        else:
-            if not process.is_alive():
-                process.join()
-                receive.close()
-                raise RuntimeError(
-                    f"candidate lowering {item['candidate_path_id']} returned no result: "
-                    f"{process.exitcode}"
-                )
-            if time.monotonic() >= deadline:
-                process.kill()
-                process.join()
-                receive.close()
-                raise RuntimeError(
-                    "candidate lowering exceeded the generation guard; "
-                    "candidate membership was not changed: "
-                    f"{item['candidate_path_id']} ({timeout_s:g}s)"
-                )
-            time.sleep(0.01)
-    record, rows, candidate, error = result
-    process.join()
-    receive.close()
-    if process.exitcode != 0 or error is not None:
+    elapsed = time.perf_counter() - started
+    if elapsed > timeout_s:
         raise RuntimeError(
-            f"candidate lowering {item['candidate_path_id']} failed: "
-            f"{error or process.exitcode}"
+            "candidate lowering exceeded the generation guard; candidate "
+            f"membership was not changed: {item['candidate_path_id']} "
+            f"({elapsed:.3f}s > {timeout_s:g}s)"
         )
-    return record, rows, candidate
+    return result
 
 
 def _infeasible_candidate_record(
@@ -621,7 +560,7 @@ def build_dataset(
         path_candidates = []
         feature_started = time.perf_counter()
         for item in raw_candidates:
-            record, rows, candidate = _isolated_serialized_candidate(
+            record, rows, candidate = _serialized_candidate_with_admission(
                 circuit_id=circuit_id,
                 split=split,
                 definition=definition,

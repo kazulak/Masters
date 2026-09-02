@@ -39,13 +39,12 @@ Candidate physical lowering has a 60-second generation guard. Exceeding that
 guard aborts the complete generation run; elapsed machine load therefore
 cannot silently change candidate-pool membership. Only deterministic resource
 admission failures are retained as explicit infeasibility facts.
-The isolated lowering worker also has a 2 GiB address-space safety guard. A
-worker resource failure aborts generation and does not reclassify the path.
 
 Before materializing tiles, the generator derives their exact count from the
 canonical B/M/N/K geometry and fixed tile limits. Candidates requiring more
-than 500 planned work units are retained as explicitly infeasible. This is
-approximately 2.25 times the 222-unit accepted Stress18 greedy plan while
+than 400 planned work units are retained as explicitly infeasible. This keeps
+the 371-unit GHZ18 greedy anchor feasible and is approximately 1.8 times the
+222-unit accepted Stress18 greedy plan while
 bounding the finite calibration
 campaign. The time bound is therefore a failure guard rather than the primary admission
 rule.

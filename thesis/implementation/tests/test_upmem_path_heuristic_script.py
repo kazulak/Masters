@@ -197,7 +197,7 @@ def test_deterministic_admission_precedes_process_isolation(monkeypatch) -> None
         "get_context",
         lambda method: (_ for _ in ()).throw(AssertionError("worker was started")),
     )
-    record, _, candidate = script._isolated_serialized_candidate(
+    record, _, candidate = script._serialized_candidate_with_admission(
         circuit_id="fixture",
         split="training",
         definition=definition,

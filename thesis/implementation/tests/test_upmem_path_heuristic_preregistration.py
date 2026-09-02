@@ -15,11 +15,10 @@ def test_preregistration_freezes_splits_topologies_and_search() -> None:
         "cotengra_method": "greedy",
         "cotengra_objective": "flops",
         "master_seed": 20260902,
-        "maximum_planned_work_units": 500,
+        "maximum_planned_work_units": 400,
         "one_trial_searches": 64,
         "opt_einsum_reference": "greedy",
         "physical_lowering_timeout_s": 60.0,
-        "physical_lowering_worker_address_space_bytes": 2147483648,
     }
     splits = {
         item["circuit_id"]: item["split"]
