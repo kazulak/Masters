@@ -1,0 +1,90 @@
+{
+  "candidate_set_sha256": "5269bfea2a1777b041e10edf9618ba613d44021ce89b3ff0d95093a81c095b65",
+  "execution_target": "physical",
+  "mode": "evaluation",
+  "preregistration_sha256": "b9490e705961ba7d4091a9f2cfc321a9e9228a317551155a99a34c80f984385d",
+  "schema_version": "upmem_path_experiment_provenance_v1",
+  "selected": [
+    {
+      "candidate_path_id": "5b2de560595ee5ccd20c18c1d7e911104f48e90be704e247d836ea548977d70b",
+      "circuit_id": "edc_16q",
+      "logical_plan_id": "6da35cbc5d525c1aeecec9686241f8424fef46cf9de83c9b5e0c3c5d22657e02",
+      "physical_plan_id": "bf7aecfecfac7dcef5e18bf2b4ccfd224e62444c24fb511f17fbf44c73cc217e",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_id": "741df3dd13fd2a00c006fed035ec5d341ca333f00f0db5c6627be618a6652a29",
+      "circuit_id": "edc_16q",
+      "logical_plan_id": "10fed67e60c5d993a9a3734f22f1a2d0aed0354d57f0d7080985cbd17ace82dd",
+      "physical_plan_id": "a724fe410b7ae36ae3ab01f19fa06043c1092e902383cd202296dd8b9eb87a76",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_id": "184da471cc76cd1d48b06de75f26181a64ce963b01bacc55eacda830c14c49f8",
+      "circuit_id": "edc_16q",
+      "logical_plan_id": "a32832056086b3e70f67b03dac8ae1b53ddd56b42ac5669b5a1406daf2e8c9ff",
+      "physical_plan_id": "ddda4784ea5f20a78dcbd69f3f669e693880bd2bd403d0a185a0b81fbd761c6f",
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_id": "5b2de560595ee5ccd20c18c1d7e911104f48e90be704e247d836ea548977d70b",
+      "circuit_id": "edc_16q",
+      "logical_plan_id": "6da35cbc5d525c1aeecec9686241f8424fef46cf9de83c9b5e0c3c5d22657e02",
+      "physical_plan_id": "fb41dfc254e069e303a8a733872cd6ae8d3ba81595cd78a93b3c270743581633",
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_id": "e0b81bb8ba585d4d2d4e82612fa63a0455a71ca2c12524a7caf991f1794d5ceb",
+      "circuit_id": "edc_16q",
+      "logical_plan_id": "cff9ef176252f61f4f86ac9fe57009c6d743eb7157797d0ebc07d8315f7b438f",
+      "physical_plan_id": "151aefccd607ed0a6b3c6f52c37585c34129a915840347903b756b62536a9fed",
+      "topology_id": "4dpu_t8"
+    }
+  ],
+  "selection_path": "thesis_results/upmem_path_heuristic_v1/evaluation/validation_selection.json",
+  "selection_roles": [
+    {
+      "candidate_path_id": "5b2de560595ee5ccd20c18c1d7e911104f48e90be704e247d836ea548977d70b",
+      "circuit_id": "edc_16q",
+      "roles": [
+        "greedy"
+      ],
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_id": "741df3dd13fd2a00c006fed035ec5d341ca333f00f0db5c6627be618a6652a29",
+      "circuit_id": "edc_16q",
+      "roles": [
+        "minimum_flops",
+        "upmem_selected"
+      ],
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_id": "184da471cc76cd1d48b06de75f26181a64ce963b01bacc55eacda830c14c49f8",
+      "circuit_id": "edc_16q",
+      "roles": [
+        "minimum_flops"
+      ],
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_id": "5b2de560595ee5ccd20c18c1d7e911104f48e90be704e247d836ea548977d70b",
+      "circuit_id": "edc_16q",
+      "roles": [
+        "greedy"
+      ],
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_id": "e0b81bb8ba585d4d2d4e82612fa63a0455a71ca2c12524a7caf991f1794d5ceb",
+      "circuit_id": "edc_16q",
+      "roles": [
+        "upmem_selected"
+      ],
+      "topology_id": "4dpu_t8"
+    }
+  ],
+  "selection_split": "validation",
+  "source_sha": "68bde98e0696765cd5def2f8b41b686c6a2ffcb0"
+}

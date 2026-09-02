@@ -1,0 +1,79 @@
+{
+  "candidate_generation_source_sha": "68bde98e0696765cd5def2f8b41b686c6a2ffcb0",
+  "candidate_set_sha256": "5269bfea2a1777b041e10edf9618ba613d44021ce89b3ff0d95093a81c095b65",
+  "cell_speedups": {
+    "edc_18q:1dpu_t8": 4.853237200389322,
+    "edc_18q:4dpu_t8": 3.7564615198791804,
+    "ghz_chain_18q:1dpu_t8": 4.882695811694989,
+    "ghz_chain_18q:4dpu_t8": 3.7126364784630326,
+    "hs_18q_d1:1dpu_t8": 1.0,
+    "hs_18q_d1:4dpu_t8": 1.0163179096347865,
+    "quantization_stress_18q_l2:1dpu_t8": 1.407420923468769,
+    "quantization_stress_18q_l2:4dpu_t8": 1.3003276365928957
+  },
+  "evaluated_weight_vectors": 100004,
+  "feature_model": {
+    "active_features": [
+      "movement",
+      "compute",
+      "coordination"
+    ],
+    "correlated_pairs": [
+      [
+        "B_host_dpu",
+        "B_mram_wram"
+      ]
+    ],
+    "matrix_rank": 4,
+    "mode": "grouped",
+    "rank_tolerance": 1.4520078502139952e-13,
+    "reason": "independent six-term fit rejected by rank deficiency or high correlation; using movement/compute/coordination projection",
+    "zero_range_features": [
+      "E_num",
+      "P_wram"
+    ]
+  },
+  "geometric_mean_speedup": 2.2314253713261905,
+  "improved_cell_count": 7,
+  "minimum_cell_speedup": 1.0,
+  "normalization": "log((candidate+1)/(greedy+1))",
+  "physical_execution_source_sha": "d452106e697890439cfc94fdabfb6a80fb0fccc2",
+  "primary_objective": "geometric_mean_greedy_relative_speedup",
+  "random_weight_samples": 100000,
+  "reporting_tool_source_sha": "998979abe13940a975269c1d915812102b5b1c64",
+  "schema_version": "physical_speedup_fit_v1",
+  "score_id": "upmem_slr_cost_v1",
+  "selected_path_ids": {
+    "edc_18q:1dpu_t8": "cf23b184355b080f3bead1d9d754a3c2c295746793109413aedfff30da27b94e",
+    "edc_18q:4dpu_t8": "cf23b184355b080f3bead1d9d754a3c2c295746793109413aedfff30da27b94e",
+    "ghz_chain_18q:1dpu_t8": "9f9e62a16e205e4bd5eb1d1b8f62cade3177ef00fa9bd4dc15c899a41b00d3d0",
+    "ghz_chain_18q:4dpu_t8": "9f9e62a16e205e4bd5eb1d1b8f62cade3177ef00fa9bd4dc15c899a41b00d3d0",
+    "hs_18q_d1:1dpu_t8": "bf83ea123bc85b30f3c7f1f8a0de47c8366352fc37c099890eab75c8cba62cb8",
+    "hs_18q_d1:4dpu_t8": "0f172b4535a71fb59dd5d4f406df828c33333cda1113d1c71db08b5d0e989d1e",
+    "quantization_stress_18q_l2:1dpu_t8": "e56fd025e7fdf900c75302bb6e7212f78d89deef09b236732a001e9f5c5001c1",
+    "quantization_stress_18q_l2:4dpu_t8": "e56fd025e7fdf900c75302bb6e7212f78d89deef09b236732a001e9f5c5001c1"
+  },
+  "source_sha": "68bde98e0696765cd5def2f8b41b686c6a2ffcb0",
+  "source_sha_semantics": "candidate_generation_source_sha",
+  "training_cell_ids": [
+    "quantization_stress_18q_l2:1dpu_t8",
+    "quantization_stress_18q_l2:4dpu_t8",
+    "hs_18q_d1:1dpu_t8",
+    "hs_18q_d1:4dpu_t8",
+    "ghz_chain_18q:1dpu_t8",
+    "ghz_chain_18q:4dpu_t8",
+    "edc_18q:1dpu_t8",
+    "edc_18q:4dpu_t8"
+  ],
+  "weight_search_candidate_rows": 11,
+  "weight_search_candidates_semantics": "best_lexicographic_weight_vector_per_distinct_training_path_selection",
+  "weight_search_seed": 20260903,
+  "weights": {
+    "B_host_dpu": 0.27073709259981954,
+    "B_mram_wram": 0.27073709259981954,
+    "E_num": 0.0,
+    "I_dpu": 0.45232358896253566,
+    "N_sync": 0.006202225837825213,
+    "P_wram": 0.0
+  }
+}
