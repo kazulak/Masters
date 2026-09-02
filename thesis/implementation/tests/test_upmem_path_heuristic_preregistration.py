@@ -17,6 +17,7 @@ def test_preregistration_freezes_splits_topologies_and_search() -> None:
         "master_seed": 20260902,
         "one_trial_searches": 64,
         "opt_einsum_reference": "greedy",
+        "physical_lowering_timeout_s": 60.0,
     }
     splits = {
         item["circuit_id"]: item["split"]

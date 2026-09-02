@@ -35,6 +35,11 @@ z_i = log((x_i + 1) / (x_i_greedy + 1))
 
 Weights are non-negative and sum to one. Lower scores are preferred.
 
+Candidate physical lowering is bounded to 60 seconds per complete path. A
+path exceeding that preregistered software-planning bound is retained in the
+candidate pool with explicit infeasibility facts and is never submitted to
+the SDK simulator or physical hardware.
+
 - `B_host_dpu` is planned H2D plus D2H traffic. The components are retained.
 - `B_mram_wram` is the existing aligned-transfer estimate derived from tile
   geometry. It is not a hardware counter.

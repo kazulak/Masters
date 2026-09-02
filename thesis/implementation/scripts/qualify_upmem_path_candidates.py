@@ -95,7 +95,12 @@ def _ranking_best(rankings_path: Path) -> dict[tuple[str, str], str]:
 def _representative_ids(
     circuit: dict[str, Any], rankings: dict[tuple[str, str], str]
 ) -> tuple[str, ...]:
-    candidates = tuple(circuit["candidates"])
+    candidates = tuple(
+        candidate
+        for candidate in circuit["candidates"]
+        if candidate.get("conventional_features") is not None
+        and any(item.get("feasible") is True for item in candidate["topologies"])
+    )
     greedy = next(candidate for candidate in candidates if candidate["is_greedy"])
     selected = {
         greedy["candidate_path_id"],

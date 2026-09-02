@@ -150,3 +150,30 @@ def test_offline_fit_uses_only_training_measurements_and_writes_every_evaluation
     with (output / "weight_search_candidates.csv").open(newline="", encoding="utf-8") as stream:
         rows = list(csv.DictReader(stream))
     assert len(rows) == result.evaluated_weight_vectors
+
+
+def test_physical_lowering_timeout_is_an_explicit_infeasible_candidate() -> None:
+    config = script.load_config()
+    item = {
+        "candidate_path_id": "e" * 64,
+        "path": ((0, 1),),
+        "source_kind": "cotengra_one_trial",
+        "source_seed": 20260902,
+        "planner_config_hash": "f" * 64,
+        "is_greedy": False,
+    }
+    record, rows, candidate = script._infeasible_candidate_record(
+        circuit_id="fixture",
+        split="training",
+        item=item,
+        config=config,
+        reason="physical_lowering_timeout_60s",
+    )
+    assert candidate is None
+    assert record["conventional_features"] is None
+    assert len(rows) == 2
+    assert all(row["feasible"] is False for row in rows)
+    assert all(
+        topology["infeasibility_reason"] == "physical_lowering_timeout_60s"
+        for topology in record["topologies"]
+    )

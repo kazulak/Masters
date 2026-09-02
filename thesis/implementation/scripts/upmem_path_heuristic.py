@@ -386,7 +386,7 @@ def _isolated_serialized_candidate(
     definition: dict[str, Any],
     item: dict[str, Any],
     config: dict[str, Any],
-) -> tuple[dict[str, Any], list[dict[str, Any]], PathCandidate]:
+) -> tuple[dict[str, Any], list[dict[str, Any]], PathCandidate | None]:
     context = multiprocessing.get_context("fork")
     queue = context.Queue(maxsize=1)
     process = context.Process(
@@ -394,7 +394,8 @@ def _isolated_serialized_candidate(
         args=(circuit_id, split, definition, item, config, queue),
     )
     process.start()
-    deadline = time.monotonic() + 300.0
+    timeout_s = float(config["candidate_generation"]["physical_lowering_timeout_s"])
+    deadline = time.monotonic() + timeout_s
     result = None
     while result is None:
         try:
@@ -409,8 +410,14 @@ def _isolated_serialized_candidate(
             if time.monotonic() >= deadline:
                 process.kill()
                 process.join()
-                raise RuntimeError(
-                    f"candidate lowering {item['candidate_path_id']} timed out"
+                queue.close()
+                reason = f"physical_lowering_timeout_{timeout_s:g}s"
+                return _infeasible_candidate_record(
+                    circuit_id=circuit_id,
+                    split=split,
+                    item=item,
+                    config=config,
+                    reason=reason,
                 )
             time.sleep(0.01)
     record, rows, candidate, error = result
@@ -422,6 +429,58 @@ def _isolated_serialized_candidate(
             f"{error or process.exitcode}"
         )
     return record, rows, candidate
+
+
+def _infeasible_candidate_record(
+    *,
+    circuit_id: str,
+    split: str,
+    item: dict[str, Any],
+    config: dict[str, Any],
+    reason: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]], None]:
+    topology_records = []
+    rows = []
+    for topology_id, topology in _topologies(config):
+        topology_records.append(
+            {
+                "topology_id": topology_id,
+                "topology": asdict(topology),
+                "feasible": False,
+                "infeasibility_reason": reason,
+                "physical_plan_id": None,
+                "resource_admission": None,
+                "features": {},
+                "host_memory_estimate_bytes": None,
+            }
+        )
+        row = {
+            "circuit_id": circuit_id,
+            "split": split,
+            "candidate_path_id": item["candidate_path_id"],
+            "source_kind": item["source_kind"],
+            "source_seed": item["source_seed"],
+            "is_greedy": item["is_greedy"],
+            "topology_id": topology_id,
+            "feasible": False,
+            "infeasibility_reason": reason,
+        }
+        rows.append({column: row.get(column, "") for column in FEATURE_COLUMNS})
+    return (
+        {
+            "candidate_path_id": item["candidate_path_id"],
+            "path": [list(step) for step in item["path"]],
+            "source_kind": item["source_kind"],
+            "source_seed": item["source_seed"],
+            "planner_config_hash": item["planner_config_hash"],
+            "is_greedy": item["is_greedy"],
+            "logical_plan_id": None,
+            "conventional_features": None,
+            "topologies": topology_records,
+        },
+        rows,
+        None,
+    )
 
 
 def build_dataset(config: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], dict[str, float]]:
@@ -460,7 +519,8 @@ def build_dataset(config: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str
             )
             candidate_records.append(record)
             feature_rows.extend(rows)
-            path_candidates.append(candidate)
+            if candidate is not None:
+                path_candidates.append(candidate)
         total_feature_s += time.perf_counter() - feature_started
         for topology_id, _ in _topologies(config):
             feasible = [candidate for candidate in path_candidates if candidate.feasible_for(topology_id)]
