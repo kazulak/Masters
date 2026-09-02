@@ -35,10 +35,10 @@ z_i = log((x_i + 1) / (x_i_greedy + 1))
 
 Weights are non-negative and sum to one. Lower scores are preferred.
 
-Candidate physical lowering is bounded to 60 seconds per complete path. A
-path exceeding that preregistered software-planning bound is retained in the
-candidate pool with explicit infeasibility facts and is never submitted to
-the SDK simulator or physical hardware.
+Candidate physical lowering has a 60-second generation guard. Exceeding that
+guard aborts the complete generation run; elapsed machine load therefore
+cannot silently change candidate-pool membership. Only deterministic resource
+admission failures are retained as explicit infeasibility facts.
 
 Before materializing tiles, the generator derives their exact count from the
 canonical B/M/N/K geometry and fixed tile limits. Candidates requiring more
@@ -53,8 +53,9 @@ rule.
   geometry. It is not a hardware counter.
 - `I_dpu` is exact real-MAC work for the four real products used by the
   split-complex float32 route.
-- `N_sync` exposes packed operations, waves, launches, host reductions, and
-  modeled barrier events before applying one documented aggregate.
+- `N_sync` exposes waves, launches, host reductions, and modeled barrier
+  events. One packed operation is currently an alias for one wave and is not
+  counted a second time.
 - `E_num` is inactive in v1 when float32 representation overhead is already
   represented by movement and arithmetic terms.
 - WRAM admission is a hard feasibility condition. `P_wram` records only
@@ -64,6 +65,10 @@ rule.
 Transfer savings are not also credited to `E_num`; four-real-product work is
 not counted twice; and movement caused by WRAM tiling is not automatically
 penalized again through `P_wram`.
+
+Conventional intermediate metrics exclude the final output. Contraction-pair
+indices are canonicalized because their left/right ordering is not semantic;
+the sequence of contraction steps remains identity-bearing.
 
 ## Data Separation
 
@@ -79,7 +84,9 @@ runtime observations.
 
 Weights are fitted offline only against measured calibration paths. Validation
 does not authorize retuning. The held-out test is evaluated only after the
-weight profile and all model decisions are frozen.
+weight profile and all model decisions are frozen. The frozen-profile selector
+rejects training instances and records that no timing was used for held-out
+selection.
 
 ## Physical Scope
 

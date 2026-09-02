@@ -36,7 +36,7 @@ def test_candidate_generation_is_seeded_deduplicated_and_greedy_is_retained(monk
 
     monkeypatch.setattr(script, "plan_cotengra", fake_cotengra)
     candidates, timings = script._candidate_paths(object(), "circuit", config)
-    assert [item["source_seed"] for item in candidates] == [None, 20260903]
+    assert [item["source_seed"] for item in candidates] == [None]
     assert candidates[0]["is_greedy"] is True
     assert seen == [
         ("flops", "greedy", 1, seed)
@@ -71,6 +71,7 @@ def _candidate_record(path_id: str, host_bytes: float, *, greedy: bool) -> dict[
             {
                 "topology_id": "1dpu_t8",
                 "feasible": True,
+                "physical_plan_id": f"physical-{path_id}",
                 "features": features,
             }
         ],
@@ -93,7 +94,8 @@ def test_offline_fit_uses_only_training_measurements_and_writes_every_evaluation
         ],
     }
     calibration = {
-        "candidate_set_sha256": "d" * 64,
+        "source_sha": dataset["source_sha"],
+        "candidate_set_sha256": script._sha256_bytes(script._canonical_bytes(dataset)),
         "cells": [
             {
                 "cell_id": "train:1dpu_t8",
@@ -114,31 +116,23 @@ def test_offline_fit_uses_only_training_measurements_and_writes_every_evaluation
             stream,
             fieldnames=(
                 "split", "attempt_type", "cell_id", "candidate_path_id",
-                "total_wall_s",
+                "total_wall_s", "source_sha", "timing_scope", "status",
+                "validation", "fallback", "physical_plan_id", "block",
             ),
         )
         writer.writeheader()
-        writer.writerow(
-            {
-                "split": "training", "attempt_type": "measurement",
-                "cell_id": "train:1dpu_t8", "candidate_path_id": greedy,
-                "total_wall_s": 10.0,
-            }
-        )
-        writer.writerow(
-            {
-                "split": "training", "attempt_type": "measurement",
-                "cell_id": "train:1dpu_t8", "candidate_path_id": candidate,
-                "total_wall_s": 5.0,
-            }
-        )
-        writer.writerow(
-            {
-                "split": "test", "attempt_type": "measurement",
-                "cell_id": "train:1dpu_t8", "candidate_path_id": greedy,
-                "total_wall_s": 0.01,
-            }
-        )
+        for block in (1, 2, 3):
+            for candidate_id, runtime in ((greedy, 10.0), (candidate, 5.0)):
+                writer.writerow(
+                    {
+                        "split": "training", "attempt_type": "measurement",
+                        "cell_id": "train:1dpu_t8", "candidate_path_id": candidate_id,
+                        "total_wall_s": runtime, "source_sha": dataset["source_sha"],
+                        "timing_scope": "steady_execution_v1", "status": "success",
+                        "validation": "passed", "fallback": "false",
+                        "physical_plan_id": f"physical-{candidate_id}", "block": block,
+                    }
+                )
     output = tmp_path / "fit"
     result = script.fit(
         candidates_path, calibration_path, runtimes_path, output,
@@ -177,3 +171,61 @@ def test_physical_lowering_timeout_is_an_explicit_infeasible_candidate() -> None
         topology["infeasibility_reason"] == "physical_lowering_timeout_60s"
         for topology in record["topologies"]
     )
+
+
+def test_frozen_profile_selects_validation_paths_without_timing(tmp_path: Path) -> None:
+    greedy = "a" * 64
+    candidate = "b" * 64
+    records = [
+        _candidate_record(greedy, 100.0, greedy=True),
+        _candidate_record(candidate, 50.0, greedy=False),
+    ]
+    for record in records:
+        second = dict(record["topologies"][0])
+        second["topology_id"] = "4dpu_t8"
+        second["physical_plan_id"] = f"physical-4d-{record['candidate_path_id']}"
+        record["topologies"].append(second)
+    dataset = {
+        "source_sha": "c" * 40,
+        "circuits": [{
+            "circuit_id": "held-out",
+            "split": "validation",
+            "candidates": records,
+        }],
+    }
+    dataset_path = tmp_path / "candidate_paths.json"
+    dataset_path.write_bytes(script._canonical_bytes(dataset))
+    profile = {
+        "source_sha": dataset["source_sha"],
+        "candidate_set_sha256": script._sha256_bytes(script._canonical_bytes(dataset)),
+        "weights": {
+            "B_host_dpu": 1.0,
+            "B_mram_wram": 0.0,
+            "I_dpu": 0.0,
+            "N_sync": 0.0,
+            "E_num": 0.0,
+            "P_wram": 0.0,
+        },
+        "feature_model": {
+            "mode": "six_term",
+            "active_features": [
+                "B_host_dpu", "B_mram_wram", "I_dpu", "N_sync", "E_num", "P_wram"
+            ],
+            "zero_range_features": [],
+            "correlated_pairs": [],
+            "matrix_rank": 6,
+            "rank_tolerance": 1.0e-12,
+            "reason": "fixture",
+        },
+    }
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_bytes(script._canonical_bytes(profile))
+    output = tmp_path / "validation.json"
+    result = script.evaluate_frozen_profile(
+        dataset_path, profile_path, output, split="validation"
+    )
+    assert result["timing_used_for_selection"] is False
+    assert {row["upmem_selected_path_id"] for row in result["selections"]} == {
+        candidate
+    }
+    assert len(result["selections"]) == 2

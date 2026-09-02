@@ -36,6 +36,10 @@ def _load(path: Path) -> dict[str, Any]:
     return value
 
 
+def _candidate_set_sha256(dataset: dict[str, Any]) -> str:
+    return hashlib.sha256(_canonical_bytes(dataset)).hexdigest()
+
+
 def _candidate_map(dataset: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
     return {
         (circuit["circuit_id"], candidate["candidate_path_id"]): candidate
@@ -67,9 +71,9 @@ def _regenerate(circuit: dict[str, Any], candidate: dict[str, Any]) -> tuple[Any
     network, inputs = lower_tensor_network(make_simulation_job(spec))
     planner = _planner_config(candidate)
     if planner["engine"] == "opt_einsum":
-        path, _ = plan_opt_einsum(network, optimize="greedy")
+        path, provenance = plan_opt_einsum(network, optimize="greedy")
     else:
-        path, _ = plan_cotengra(
+        path, provenance = plan_cotengra(
             network,
             methods="greedy",
             max_repeats=1,
@@ -80,7 +84,16 @@ def _regenerate(circuit: dict[str, Any], candidate: dict[str, Any]) -> tuple[Any
         raise ValueError(
             f"candidate regeneration mismatch for {circuit['circuit_id']}/{candidate['candidate_path_id']}"
         )
-    return build_contraction_dag(network, path), inputs
+    if provenance["planner_config_hash"] != candidate["planner_config_hash"]:
+        raise ValueError(
+            f"planner provenance mismatch for {circuit['circuit_id']}/{identifier}"
+        )
+    dag = build_contraction_dag(network, path)
+    if contraction_dag_hash(dag) != candidate["logical_plan_id"]:
+        raise ValueError(
+            f"logical-plan mismatch for {circuit['circuit_id']}/{identifier}"
+        )
+    return dag, inputs
 
 
 def _ranking_best(rankings_path: Path) -> dict[tuple[str, str], str]:
@@ -92,14 +105,17 @@ def _ranking_best(rankings_path: Path) -> dict[tuple[str, str], str]:
     return result
 
 
-def _representative_ids(
-    circuit: dict[str, Any], rankings: dict[tuple[str, str], str]
+def _representative_ids_for_topology(
+    circuit: dict[str, Any], rankings: dict[tuple[str, str], str], topology_id: str
 ) -> tuple[str, ...]:
     candidates = tuple(
         candidate
         for candidate in circuit["candidates"]
         if candidate.get("conventional_features") is not None
-        and any(item.get("feasible") is True for item in candidate["topologies"])
+        and next(
+            item for item in candidate["topologies"]
+            if item["topology_id"] == topology_id
+        ).get("feasible") is True
     )
     greedy = next(candidate for candidate in candidates if candidate["is_greedy"])
     selected = {
@@ -111,23 +127,32 @@ def _representative_ids(
             ),
         )["candidate_path_id"],
     }
-    for topology_id in ("1dpu_t8", "4dpu_t8"):
-        selected.add(rankings[(circuit["circuit_id"], topology_id)])
-        feasible = [
-            candidate
-            for candidate in candidates
-            if next(item for item in candidate["topologies"] if item["topology_id"] == topology_id)["feasible"]
-        ]
-        selected.add(
-            min(
-                feasible,
-                key=lambda candidate: (
-                    next(item for item in candidate["topologies"] if item["topology_id"] == topology_id)["features"]["B_host_dpu"],
-                    candidate["candidate_path_id"],
-                ),
-            )["candidate_path_id"]
-        )
+    selected.add(rankings[(circuit["circuit_id"], topology_id)])
+    selected.add(
+        min(
+            candidates,
+            key=lambda candidate: (
+                next(
+                    item for item in candidate["topologies"]
+                    if item["topology_id"] == topology_id
+                )["features"]["B_host_dpu"],
+                candidate["candidate_path_id"],
+            ),
+        )["candidate_path_id"]
+    )
     return tuple(sorted(selected))
+
+
+def _representative_ids(
+    circuit: dict[str, Any], rankings: dict[tuple[str, str], str]
+) -> tuple[str, ...]:
+    return tuple(sorted({
+        candidate_id
+        for topology_id in ("1dpu_t8", "4dpu_t8")
+        for candidate_id in _representative_ids_for_topology(
+            circuit, rankings, topology_id
+        )
+    }))
 
 
 def qualify_cpu(
@@ -182,7 +207,7 @@ def qualify_cpu(
     record = {
         "schema_version": "upmem_path_cpu_candidate_qualification_v1",
         "source_sha": dataset["source_sha"],
-        "candidate_set_sha256": hashlib.sha256(dataset_path.read_bytes()).hexdigest(),
+        "candidate_set_sha256": _candidate_set_sha256(dataset),
         "numeric_policy": FLOAT32,
         "qualified_candidate_count": len(rows),
         "all_passed": True,
@@ -243,20 +268,27 @@ def prepare_config(
     mode: str,
 ) -> dict[str, Any]:
     dataset = _load(dataset_path)
+    dataset_hash = _candidate_set_sha256(dataset)
     candidate_map = _candidate_map(dataset)
     circuit_map = _circuit_map(dataset)
     rankings = _ranking_best(rankings_path)
     selected: list[tuple[str, str, str]] = []
     if mode == "calibration":
         calibration = _load(calibration_path)
+        if calibration.get("candidate_set_sha256") != dataset_hash:
+            raise ValueError("calibration candidate-set identity does not match dataset")
+        if calibration.get("source_sha") != dataset.get("source_sha"):
+            raise ValueError("calibration source identity does not match dataset")
         for cell in calibration["cells"]:
             for candidate_id in cell["candidate_path_ids"]:
                 selected.append((cell["circuit_id"], cell["topology_id"], candidate_id))
         warmups, measurements, seed, simulator = 1, 3, 20260910, False
     elif mode == "sdk":
         for circuit in dataset["circuits"]:
-            ids = _representative_ids(circuit, rankings)
             for topology_id in ("1dpu_t8", "4dpu_t8"):
+                ids = _representative_ids_for_topology(
+                    circuit, rankings, topology_id
+                )
                 selected.extend((circuit["circuit_id"], topology_id, path) for path in ids)
         warmups, measurements, seed, simulator = 0, 1, 20260909, True
     else:
@@ -270,6 +302,14 @@ def prepare_config(
     matrix = []
     for circuit_id, topology_id, candidate_id in selected:
         candidate = candidate_map[(circuit_id, candidate_id)]
+        topology = next(
+            item for item in candidate["topologies"]
+            if item["topology_id"] == topology_id
+        )
+        if topology.get("feasible") is not True:
+            raise ValueError(
+                f"selected candidate is infeasible for {circuit_id}/{topology_id}/{candidate_id}"
+            )
         _regenerate(circuit_map[circuit_id], candidate)
         plan_id = f"path_{candidate_id}"
         plans[plan_id] = {"planner": _planner_config(candidate), "slicing": None}
@@ -299,6 +339,30 @@ def prepare_config(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
         yaml.safe_dump(config, sort_keys=False, allow_unicode=False), encoding="utf-8"
+    )
+    provenance = {
+        "schema_version": "upmem_path_experiment_provenance_v1",
+        "source_sha": dataset["source_sha"],
+        "candidate_set_sha256": dataset_hash,
+        "preregistration_sha256": dataset["preregistration_sha256"],
+        "mode": mode,
+        "selected": [
+            {
+                "circuit_id": circuit_id,
+                "topology_id": topology_id,
+                "candidate_path_id": candidate_id,
+                "logical_plan_id": candidate_map[(circuit_id, candidate_id)]["logical_plan_id"],
+                "physical_plan_id": next(
+                    item["physical_plan_id"]
+                    for item in candidate_map[(circuit_id, candidate_id)]["topologies"]
+                    if item["topology_id"] == topology_id
+                ),
+            }
+            for circuit_id, topology_id, candidate_id in selected
+        ],
+    }
+    output_path.with_suffix(output_path.suffix + ".provenance.json").write_bytes(
+        _canonical_bytes(provenance)
     )
     return config
 

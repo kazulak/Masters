@@ -24,13 +24,16 @@ from quantum_bench.planning import plan_cotengra, plan_opt_einsum
 from quantum_bench.upmem.path_heuristic import (
     COST_MODEL_ID,
     ConventionalPathFeatures,
+    FeatureModelDecision,
     PathCandidate,
     RawFeatureVector,
     RuntimeMeasurement,
     TrainingCell,
     WeightFitResult,
+    WeightVector,
     choose_feature_model,
     equal_model_weights,
+    explain_score,
     extract_conventional_features,
     extract_plan_features,
     feature_dependency_metadata,
@@ -39,6 +42,7 @@ from quantum_bench.upmem.path_heuristic import (
     path_id,
     score_features,
     select_calibration_candidates,
+    select_best_candidate,
 )
 from quantum_bench.upmem.plan import (
     UpmemTopology,
@@ -117,9 +121,14 @@ def _topologies(config: dict[str, Any]) -> tuple[tuple[str, UpmemTopology], ...]
 
 
 def _host_memory_estimate(inputs: dict[str, Any], dag: Any) -> int:
-    input_bytes = sum(int(value.size) * 8 for value in inputs.values())
-    outputs = [int(_product(node.output.shape)) * 8 for node in dag.nodes]
-    return input_bytes + sum(outputs) + 2 * max(outputs, default=0)
+    input_bytes = sum(int(value.nbytes) for value in inputs.values())
+    # Logical intermediates are complex128 before the physical float32 lowering.
+    outputs = [int(_product(node.output.shape)) * 16 for node in dag.nodes]
+    # Bound one packed float32 transport copy and one native input copy in
+    # addition to the logical tensors retained by the host execution shell.
+    packed_transport_bytes = input_bytes // 2 + sum(outputs) // 2
+    native_copy_bytes = packed_transport_bytes
+    return input_bytes + sum(outputs) + packed_transport_bytes + native_copy_bytes
 
 
 def _estimated_work_unit_count(dag: Any) -> int:
@@ -446,13 +455,10 @@ def _isolated_serialized_candidate(
                 process.kill()
                 process.join()
                 queue.close()
-                reason = f"physical_lowering_timeout_{timeout_s:g}s"
-                return _infeasible_candidate_record(
-                    circuit_id=circuit_id,
-                    split=split,
-                    item=item,
-                    config=config,
-                    reason=reason,
+                raise RuntimeError(
+                    "candidate lowering exceeded the generation guard; "
+                    "candidate membership was not changed: "
+                    f"{item['candidate_path_id']} ({timeout_s:g}s)"
                 )
             time.sleep(0.01)
     record, rows, candidate, error = result
@@ -724,6 +730,11 @@ def _candidate_from_record(record: dict[str, Any]) -> PathCandidate:
 def fit(candidate_path: Path, calibration_path: Path, runtime_path: Path, output_dir: Path, *, samples: int, seed: int) -> WeightFitResult:
     dataset = json.loads(candidate_path.read_text(encoding="utf-8"))
     calibration = json.loads(calibration_path.read_text(encoding="utf-8"))
+    candidate_set_sha = _sha256_bytes(_canonical_bytes(dataset))
+    if calibration.get("candidate_set_sha256") != candidate_set_sha:
+        raise ValueError("calibration candidate-set identity does not match dataset")
+    if calibration.get("source_sha") != dataset.get("source_sha"):
+        raise ValueError("calibration source identity does not match dataset")
     by_circuit = {
         circuit["circuit_id"]: {
             candidate["candidate_path_id"]: _candidate_from_record(candidate)
@@ -743,16 +754,60 @@ def fit(candidate_path: Path, calibration_path: Path, runtime_path: Path, output
             )
         )
     measurements = []
+    expected_cells = {cell.cell_id: cell for cell in cells}
+    expected_physical_plans = {
+        (item["cell_id"], candidate_id): next(
+            topology["physical_plan_id"]
+            for topology in next(
+                candidate
+                for candidate in next(
+                    circuit for circuit in dataset["circuits"]
+                    if circuit["circuit_id"] == item["circuit_id"]
+                )["candidates"]
+                if candidate["candidate_path_id"] == candidate_id
+            )["topologies"]
+            if topology["topology_id"] == item["topology_id"]
+        )
+        for item in calibration["cells"]
+        for candidate_id in item["candidate_path_ids"]
+    }
     with runtime_path.open(newline="", encoding="utf-8") as stream:
         for row in csv.DictReader(stream):
-            if row.get("split") != "training" or row.get("attempt_type") != "measurement":
+            if row.get("split") != "training":
+                raise ValueError("calibration runtime table contains a non-training row")
+            if row.get("attempt_type") not in {"warmup", "measurement"}:
+                raise ValueError("calibration runtime table has an invalid attempt type")
+            if row.get("source_sha") != dataset["source_sha"]:
+                raise ValueError("calibration runtime source does not match candidate dataset")
+            if row.get("timing_scope") != "steady_execution_v1":
+                raise ValueError("calibration runtime table has an invalid timing scope")
+            if row.get("status") != "success":
+                raise ValueError("calibration runtime table contains a failed attempt")
+            if row.get("validation") not in {"true", "passed", "1"}:
+                raise ValueError("calibration runtime table contains an invalid output")
+            if row.get("fallback") not in {"false", "0"}:
+                raise ValueError("calibration runtime table contains fallback execution")
+            cell = expected_cells.get(str(row.get("cell_id")))
+            if cell is None:
+                raise ValueError("calibration runtime table references an unknown cell")
+            key = (cell.cell_id, str(row.get("candidate_path_id")))
+            if row.get("physical_plan_id") != expected_physical_plans.get(key):
+                raise ValueError("calibration runtime physical-plan identity mismatch")
+            if row["attempt_type"] == "warmup":
                 continue
+            block = int(row["block"])
+            if block not in {1, 2, 3}:
+                raise ValueError("calibration measurement block must be 1, 2, or 3")
             measurements.append(
                 RuntimeMeasurement(
                     cell_id=str(row["cell_id"]),
                     candidate_id=str(row["candidate_path_id"]),
                     runtime_s=float(row["total_wall_s"]),
                     split="train",
+                    source_sha=str(row["source_sha"]),
+                    timing_scope=str(row["timing_scope"]),
+                    status=str(row["status"]),
+                    observation_id=str(block),
                 )
             )
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -785,7 +840,7 @@ def fit(candidate_path: Path, calibration_path: Path, runtime_path: Path, output
         "schema_version": "physical_speedup_fit_v1",
         "score_id": COST_MODEL_ID,
         "source_sha": dataset["source_sha"],
-        "candidate_set_sha256": calibration["candidate_set_sha256"],
+        "candidate_set_sha256": candidate_set_sha,
         "weights": result.weights.as_mapping(),
         "feature_model": asdict(result.model),
         "training_cell_ids": [cell.cell_id for cell in cells],
@@ -804,6 +859,102 @@ def fit(candidate_path: Path, calibration_path: Path, runtime_path: Path, output
     return result
 
 
+def _model_from_profile(profile: dict[str, Any]) -> FeatureModelDecision:
+    value = profile["feature_model"]
+    return FeatureModelDecision(
+        mode=value["mode"],
+        active_features=tuple(value["active_features"]),
+        zero_range_features=tuple(value["zero_range_features"]),
+        correlated_pairs=tuple(tuple(pair) for pair in value["correlated_pairs"]),
+        matrix_rank=int(value["matrix_rank"]),
+        rank_tolerance=float(value["rank_tolerance"]),
+        reason=str(value["reason"]),
+    )
+
+
+def evaluate_frozen_profile(
+    candidate_path: Path,
+    profile_path: Path,
+    output_path: Path,
+    *,
+    split: str,
+) -> dict[str, Any]:
+    """Select held-out paths without consulting physical timing."""
+
+    if split not in {"validation", "test"}:
+        raise ValueError("frozen-profile evaluation is limited to validation or test")
+    dataset = json.loads(candidate_path.read_text(encoding="utf-8"))
+    profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    candidate_sha = _sha256_bytes(_canonical_bytes(dataset))
+    if profile["candidate_set_sha256"] != candidate_sha:
+        raise ValueError("fitted profile does not match candidate dataset")
+    if profile["source_sha"] != dataset["source_sha"]:
+        raise ValueError("fitted profile source does not match candidate dataset")
+    weights = WeightVector.from_values(profile["weights"])
+    model = _model_from_profile(profile)
+    selections = []
+    for circuit in dataset["circuits"]:
+        if circuit["split"] != split:
+            continue
+        candidates = tuple(_candidate_from_record(item) for item in circuit["candidates"])
+        for topology_id, _ in _topologies(load_config()):
+            feasible = tuple(item for item in candidates if item.feasible_for(topology_id))
+            greedy = next(item for item in feasible if item.is_greedy)
+            flop_best = min(
+                feasible,
+                key=lambda item: (item.conventional.flops, item.path_id),
+            )
+            selected = select_best_candidate(
+                feasible,
+                topology_id,
+                weights,
+                model=model,
+                greedy_path_id=greedy.path_id,
+            )
+            selections.append(
+                {
+                    "circuit_id": circuit["circuit_id"],
+                    "split": split,
+                    "topology_id": topology_id,
+                    "greedy_path_id": greedy.path_id,
+                    "minimum_flops_path_id": flop_best.path_id,
+                    "upmem_selected_path_id": selected.path_id,
+                    "upmem_score": score_features(
+                        selected.raw_for(topology_id),
+                        greedy.raw_for(topology_id),
+                        weights,
+                        model=model,
+                    ),
+                    "explanation": [
+                        row.as_mapping()
+                        for row in explain_score(
+                            selected.raw_for(topology_id),
+                            greedy.raw_for(topology_id),
+                            weights,
+                            model=model,
+                        )
+                    ],
+                }
+            )
+    if not selections:
+        raise ValueError(f"candidate dataset contains no {split} circuits")
+    result = {
+        "schema_version": "upmem_path_frozen_selection_v1",
+        "score_id": COST_MODEL_ID,
+        "source_sha": dataset["source_sha"],
+        "candidate_set_sha256": candidate_sha,
+        "fitted_profile_sha256": _sha256_bytes(_canonical_bytes(profile)),
+        "split": split,
+        "timing_used_for_selection": False,
+        "weights": weights.as_mapping(),
+        "feature_model": asdict(model),
+        "selections": selections,
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(_canonical_bytes(result))
+    return result
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -818,16 +969,29 @@ def main() -> None:
     fit_parser.add_argument("--output-dir", type=Path, required=True)
     fit_parser.add_argument("--samples", type=int, default=100_000)
     fit_parser.add_argument("--seed", type=int, default=20260903)
+    evaluate_parser = subparsers.add_parser("evaluate")
+    evaluate_parser.add_argument("--candidate-paths", type=Path, required=True)
+    evaluate_parser.add_argument("--profile", type=Path, required=True)
+    evaluate_parser.add_argument("--split", choices=("validation", "test"), required=True)
+    evaluate_parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "generate":
         timings = generate(args.config, args.output_dir, check=args.check)
         print(json.dumps(timings, sort_keys=True))
-    else:
+    elif args.command == "fit":
         result = fit(
             args.candidate_paths, args.calibration_set, args.runtime_table,
             args.output_dir, samples=args.samples, seed=args.seed,
         )
         print(json.dumps({"weights": result.weights.as_mapping(), "geometric_mean_speedup": result.geometric_mean_speedup}, sort_keys=True))
+    else:
+        result = evaluate_frozen_profile(
+            args.candidate_paths,
+            args.profile,
+            args.output,
+            split=args.split,
+        )
+        print(json.dumps({"selection_count": len(result["selections"])}))
 
 
 if __name__ == "__main__":

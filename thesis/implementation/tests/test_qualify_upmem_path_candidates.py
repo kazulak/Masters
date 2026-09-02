@@ -23,6 +23,7 @@ def _candidate(identifier: str, *, greedy: bool, seed: int | None, host: int) ->
             {
                 "topology_id": topology,
                 "feasible": True,
+                "physical_plan_id": f"physical-{topology}-{identifier}",
                 "features": {
                     "B_host_dpu": host,
                     "B_mram_wram": 20,
@@ -38,6 +39,8 @@ def _candidate(identifier: str, *, greedy: bool, seed: int | None, host: int) ->
         "is_greedy": greedy,
         "source_kind": "opt_einsum_greedy" if greedy else "cotengra_one_trial",
         "source_seed": seed,
+        "planner_config_hash": f"planner-{identifier}",
+        "logical_plan_id": f"logical-{identifier}",
         "conventional_features": {
             "flops": 10 if greedy else 9,
             "macs": 5,
@@ -55,6 +58,8 @@ def test_prepare_calibration_config_preserves_candidate_seed_and_collection(tmp_
     greedy = "a" * 64
     candidate = "b" * 64
     dataset = {
+        "source_sha": "1" * 40,
+        "preregistration_sha256": "2" * 64,
         "circuits": [
             {
                 "circuit_id": "train",
@@ -68,6 +73,8 @@ def test_prepare_calibration_config_preserves_candidate_seed_and_collection(tmp_
         ]
     }
     calibration = {
+        "source_sha": dataset["source_sha"],
+        "candidate_set_sha256": qualify._candidate_set_sha256(dataset),
         "cells": [
             {
                 "cell_id": "train:1dpu_t8",
@@ -110,6 +117,60 @@ def test_prepare_calibration_config_preserves_candidate_seed_and_collection(tmp_
     assert loaded["routes"]["1dpu_t8"]["options"]["rank_paths"] == [
         "/dev/dpu_rank1"
     ]
+    provenance = json.loads(
+        output.with_suffix(".yml.provenance.json").read_text(encoding="utf-8")
+    )
+    assert provenance["candidate_set_sha256"] == qualify._candidate_set_sha256(dataset)
+
+
+def test_prepare_rejects_candidate_infeasible_for_selected_topology(
+    tmp_path: Path, monkeypatch
+) -> None:
+    identifier = "a" * 64
+    candidate = _candidate(identifier, greedy=True, seed=None, host=100)
+    candidate["topologies"][1]["feasible"] = False
+    dataset = {
+        "source_sha": "1" * 40,
+        "preregistration_sha256": "2" * 64,
+        "circuits": [{
+            "circuit_id": "train",
+            "split": "training",
+            "circuit": {"kind": "builtin", "name": "bell_2q", "parameters": {}},
+            "candidates": [candidate],
+        }],
+    }
+    calibration = {
+        "source_sha": dataset["source_sha"],
+        "candidate_set_sha256": qualify._candidate_set_sha256(dataset),
+        "cells": [{
+            "cell_id": "train:4dpu_t8",
+            "circuit_id": "train",
+            "topology_id": "4dpu_t8",
+            "candidate_path_ids": [identifier],
+        }],
+    }
+    dataset_path = tmp_path / "dataset.json"
+    calibration_path = tmp_path / "calibration.json"
+    rankings = tmp_path / "rankings.csv"
+    dataset_path.write_text(json.dumps(dataset), encoding="utf-8")
+    calibration_path.write_text(json.dumps(calibration), encoding="utf-8")
+    rankings.write_text(
+        "circuit_id,topology_id,equal_weight_rank,candidate_path_id\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(qualify, "_regenerate", lambda circuit, selected: (object(), {}))
+    try:
+        qualify.prepare_config(
+            dataset_path=dataset_path,
+            calibration_path=calibration_path,
+            rankings_path=rankings,
+            output_path=tmp_path / "campaign.yml",
+            mode="calibration",
+        )
+    except ValueError as exc:
+        assert "infeasible" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("infeasible topology candidate was accepted")
 
 
 def test_planner_config_rejects_unknown_candidate_source() -> None:
