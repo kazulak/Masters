@@ -6,6 +6,7 @@
   },
   "candidate_generation": {
     "physical_lowering_timeout_s": 60.0,
+    "physical_lowering_worker_address_space_bytes": 2147483648,
     "cotengra_method": "greedy",
     "cotengra_objective": "flops",
     "master_seed": 20260902,

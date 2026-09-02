@@ -12,6 +12,7 @@ import json
 import multiprocessing
 from pathlib import Path
 import queue as queue_module
+import resource
 import subprocess
 import time
 from typing import Any
@@ -408,6 +409,12 @@ def _serialize_candidate_worker(
     queue: Any,
 ) -> None:
     try:
+        worker_limit = int(
+            config["candidate_generation"][
+                "physical_lowering_worker_address_space_bytes"
+            ]
+        )
+        resource.setrlimit(resource.RLIMIT_AS, (worker_limit, worker_limit))
         circuit = builtin_circuit(str(definition["name"]), dict(definition["parameters"]))
         network, inputs = lower_tensor_network(make_simulation_job(circuit))
         record, rows, candidate = _serialize_candidate(
@@ -486,6 +493,7 @@ def _isolated_serialized_candidate(
         except queue_module.Empty:
             if not process.is_alive():
                 process.join()
+                queue.close()
                 raise RuntimeError(
                     f"candidate lowering {item['candidate_path_id']} returned no result: "
                     f"{process.exitcode}"
