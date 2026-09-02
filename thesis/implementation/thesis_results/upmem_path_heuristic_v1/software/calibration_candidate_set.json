@@ -1,0 +1,336 @@
+{
+  "candidate_set_sha256": "71fd5a6db22278c74afc1781192477664d5d4519328676e89e81fb4662c37f39",
+  "cells": [
+    {
+      "candidate_path_ids": [
+        "b9ba7e7f9f7faa942ecf55bc10c6f9a9488b0e3dcf87233bed822bea2416c816",
+        "9d1e1ae9a325d84cef97b0fd9beffa9d4b3d783f00a4e38f6fce3a17114d3abb",
+        "348d3fb5c4d401742575f7e9ce41a5ff1fb8415c2010311fb6b13a9bb52d2de8",
+        "e56fd025e7fdf900c75302bb6e7212f78d89deef09b236732a001e9f5c5001c1",
+        "2eb807e063945083b04ae8fe3a72afca4e2a2b97d37dc739805c462caa388747",
+        "e7f2ad3aef247ff4d7f2b7374966596ab24e96aa1fabd13234cbaebecab85d65"
+      ],
+      "cell_id": "quantization_stress_18q_l2:1dpu_t8",
+      "circuit_id": "quantization_stress_18q_l2",
+      "feature_model": {
+        "active_features": [
+          "movement",
+          "compute",
+          "coordination"
+        ],
+        "correlated_pairs": [
+          [
+            "B_host_dpu",
+            "N_sync"
+          ]
+        ],
+        "matrix_rank": 4,
+        "mode": "grouped",
+        "rank_tolerance": 2.195346578351126e-14,
+        "reason": "independent six-term fit rejected by rank deficiency or high correlation; using movement/compute/coordination projection",
+        "zero_range_features": [
+          "E_num",
+          "P_wram"
+        ]
+      },
+      "greedy_path_id": "b9ba7e7f9f7faa942ecf55bc10c6f9a9488b0e3dcf87233bed822bea2416c816",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_ids": [
+        "b9ba7e7f9f7faa942ecf55bc10c6f9a9488b0e3dcf87233bed822bea2416c816",
+        "9d1e1ae9a325d84cef97b0fd9beffa9d4b3d783f00a4e38f6fce3a17114d3abb",
+        "348d3fb5c4d401742575f7e9ce41a5ff1fb8415c2010311fb6b13a9bb52d2de8",
+        "e56fd025e7fdf900c75302bb6e7212f78d89deef09b236732a001e9f5c5001c1",
+        "2eb807e063945083b04ae8fe3a72afca4e2a2b97d37dc739805c462caa388747",
+        "e7f2ad3aef247ff4d7f2b7374966596ab24e96aa1fabd13234cbaebecab85d65"
+      ],
+      "cell_id": "quantization_stress_18q_l2:4dpu_t8",
+      "circuit_id": "quantization_stress_18q_l2",
+      "feature_model": {
+        "active_features": [
+          "movement",
+          "compute",
+          "coordination"
+        ],
+        "correlated_pairs": [
+          [
+            "B_host_dpu",
+            "N_sync"
+          ]
+        ],
+        "matrix_rank": 4,
+        "mode": "grouped",
+        "rank_tolerance": 2.1574727776064298e-14,
+        "reason": "independent six-term fit rejected by rank deficiency or high correlation; using movement/compute/coordination projection",
+        "zero_range_features": [
+          "E_num",
+          "P_wram"
+        ]
+      },
+      "greedy_path_id": "b9ba7e7f9f7faa942ecf55bc10c6f9a9488b0e3dcf87233bed822bea2416c816",
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_ids": [
+        "bf83ea123bc85b30f3c7f1f8a0de47c8366352fc37c099890eab75c8cba62cb8",
+        "0f172b4535a71fb59dd5d4f406df828c33333cda1113d1c71db08b5d0e989d1e",
+        "002f633fd11c9c8ac95008a9452a63ccea24651ab38167fe6e6b762d00c2806d",
+        "e03d5d65a6118ee597f1200afdcd941cdf4e83d0e1447b7b3a199207a7853314",
+        "e69f53f17fabdfaba58d664f1e370a4216829bde473cd84608353c345fb2b4fa",
+        "93535be1f45b148a1b3d81d74e0185ffb0339853e6877aa2080426e1339bf13c"
+      ],
+      "cell_id": "hs_18q_d1:1dpu_t8",
+      "circuit_id": "hs_18q_d1",
+      "feature_model": {
+        "active_features": [
+          "movement",
+          "compute",
+          "coordination"
+        ],
+        "correlated_pairs": [
+          [
+            "B_host_dpu",
+            "B_mram_wram"
+          ],
+          [
+            "B_host_dpu",
+            "I_dpu"
+          ],
+          [
+            "B_mram_wram",
+            "I_dpu"
+          ]
+        ],
+        "matrix_rank": 4,
+        "mode": "grouped",
+        "rank_tolerance": 6.032508028299474e-16,
+        "reason": "independent six-term fit rejected by rank deficiency or high correlation; using movement/compute/coordination projection",
+        "zero_range_features": [
+          "E_num",
+          "P_wram"
+        ]
+      },
+      "greedy_path_id": "bf83ea123bc85b30f3c7f1f8a0de47c8366352fc37c099890eab75c8cba62cb8",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_ids": [
+        "bf83ea123bc85b30f3c7f1f8a0de47c8366352fc37c099890eab75c8cba62cb8",
+        "0f172b4535a71fb59dd5d4f406df828c33333cda1113d1c71db08b5d0e989d1e",
+        "002f633fd11c9c8ac95008a9452a63ccea24651ab38167fe6e6b762d00c2806d",
+        "e03d5d65a6118ee597f1200afdcd941cdf4e83d0e1447b7b3a199207a7853314",
+        "e69f53f17fabdfaba58d664f1e370a4216829bde473cd84608353c345fb2b4fa",
+        "93535be1f45b148a1b3d81d74e0185ffb0339853e6877aa2080426e1339bf13c"
+      ],
+      "cell_id": "hs_18q_d1:4dpu_t8",
+      "circuit_id": "hs_18q_d1",
+      "feature_model": {
+        "active_features": [
+          "movement",
+          "compute",
+          "coordination"
+        ],
+        "correlated_pairs": [
+          [
+            "B_host_dpu",
+            "B_mram_wram"
+          ],
+          [
+            "B_host_dpu",
+            "I_dpu"
+          ],
+          [
+            "B_mram_wram",
+            "I_dpu"
+          ]
+        ],
+        "matrix_rank": 4,
+        "mode": "grouped",
+        "rank_tolerance": 6.065224497954489e-16,
+        "reason": "independent six-term fit rejected by rank deficiency or high correlation; using movement/compute/coordination projection",
+        "zero_range_features": [
+          "E_num",
+          "P_wram"
+        ]
+      },
+      "greedy_path_id": "bf83ea123bc85b30f3c7f1f8a0de47c8366352fc37c099890eab75c8cba62cb8",
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_ids": [
+        "0f1afe2ce698cbfcd1496d867ba787cb5cdd487ef3b05e9bb140d58eee826743",
+        "9f9e62a16e205e4bd5eb1d1b8f62cade3177ef00fa9bd4dc15c899a41b00d3d0",
+        "8a53a83c45b1a831a0d3d09f8b5393cd82dbadedaf2a239bc0a4da1843a470a4",
+        "b7a92f1a28cbacfef1575a0b571b79cdc92dded09222a5581a765ab352fd9637",
+        "a0f7fec9778137270204333fdde142b735188034c201a7c229136e14b6f96692",
+        "70e093aa7774e13885fc1dd7ad3acb7d0a2b9bea8a067289a654fbe18566a8c5"
+      ],
+      "cell_id": "ghz_chain_18q:1dpu_t8",
+      "circuit_id": "ghz_chain_18q",
+      "feature_model": {
+        "active_features": [
+          "movement",
+          "compute",
+          "coordination"
+        ],
+        "correlated_pairs": [
+          [
+            "B_host_dpu",
+            "B_mram_wram"
+          ],
+          [
+            "B_host_dpu",
+            "I_dpu"
+          ],
+          [
+            "B_mram_wram",
+            "I_dpu"
+          ]
+        ],
+        "matrix_rank": 4,
+        "mode": "grouped",
+        "rank_tolerance": 1.0385538416159997e-13,
+        "reason": "independent six-term fit rejected by rank deficiency or high correlation; using movement/compute/coordination projection",
+        "zero_range_features": [
+          "E_num",
+          "P_wram"
+        ]
+      },
+      "greedy_path_id": "0f1afe2ce698cbfcd1496d867ba787cb5cdd487ef3b05e9bb140d58eee826743",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_ids": [
+        "0f1afe2ce698cbfcd1496d867ba787cb5cdd487ef3b05e9bb140d58eee826743",
+        "9f9e62a16e205e4bd5eb1d1b8f62cade3177ef00fa9bd4dc15c899a41b00d3d0",
+        "8a53a83c45b1a831a0d3d09f8b5393cd82dbadedaf2a239bc0a4da1843a470a4",
+        "b7a92f1a28cbacfef1575a0b571b79cdc92dded09222a5581a765ab352fd9637",
+        "a0f7fec9778137270204333fdde142b735188034c201a7c229136e14b6f96692",
+        "70e093aa7774e13885fc1dd7ad3acb7d0a2b9bea8a067289a654fbe18566a8c5"
+      ],
+      "cell_id": "ghz_chain_18q:4dpu_t8",
+      "circuit_id": "ghz_chain_18q",
+      "feature_model": {
+        "active_features": [
+          "movement",
+          "compute",
+          "coordination"
+        ],
+        "correlated_pairs": [
+          [
+            "B_host_dpu",
+            "B_mram_wram"
+          ],
+          [
+            "B_host_dpu",
+            "I_dpu"
+          ],
+          [
+            "B_mram_wram",
+            "I_dpu"
+          ]
+        ],
+        "matrix_rank": 4,
+        "mode": "grouped",
+        "rank_tolerance": 1.0320902107824256e-13,
+        "reason": "independent six-term fit rejected by rank deficiency or high correlation; using movement/compute/coordination projection",
+        "zero_range_features": [
+          "E_num",
+          "P_wram"
+        ]
+      },
+      "greedy_path_id": "0f1afe2ce698cbfcd1496d867ba787cb5cdd487ef3b05e9bb140d58eee826743",
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_ids": [
+        "c6dc626edbb821ce0649537c900dd7bdf25a735ac338fc9a5b23393bd72f7474",
+        "20a930bc7a6c9ed9301657998ae079d3d94974e635317ea86be897639f3d16d5",
+        "08cee53b6ade1ef254898c862a8a7cbe8637510cbb5e5d01a0012039735f45ac",
+        "e9962a81b737e14c0739aea719fe635ce5a494605e31036b3a8315375fbec137",
+        "eddd6fb83dfcb2646b67a6b2d4ead4f7cdd33d0a1017ef92865eb4f78b4968c3",
+        "cacbb1ea6e7ef1b11414156469ba0664f63f98b51ac966545ae5ccd20bb69cb2"
+      ],
+      "cell_id": "bv_16q:1dpu_t8",
+      "circuit_id": "bv_16q",
+      "feature_model": {
+        "active_features": [
+          "movement",
+          "compute",
+          "coordination"
+        ],
+        "correlated_pairs": [
+          [
+            "B_host_dpu",
+            "B_mram_wram"
+          ],
+          [
+            "B_host_dpu",
+            "I_dpu"
+          ],
+          [
+            "B_mram_wram",
+            "I_dpu"
+          ]
+        ],
+        "matrix_rank": 4,
+        "mode": "grouped",
+        "rank_tolerance": 2.573741240076935e-15,
+        "reason": "independent six-term fit rejected by rank deficiency or high correlation; using movement/compute/coordination projection",
+        "zero_range_features": [
+          "E_num",
+          "P_wram"
+        ]
+      },
+      "greedy_path_id": "c6dc626edbb821ce0649537c900dd7bdf25a735ac338fc9a5b23393bd72f7474",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_ids": [
+        "c6dc626edbb821ce0649537c900dd7bdf25a735ac338fc9a5b23393bd72f7474",
+        "20a930bc7a6c9ed9301657998ae079d3d94974e635317ea86be897639f3d16d5",
+        "08cee53b6ade1ef254898c862a8a7cbe8637510cbb5e5d01a0012039735f45ac",
+        "e9962a81b737e14c0739aea719fe635ce5a494605e31036b3a8315375fbec137",
+        "eddd6fb83dfcb2646b67a6b2d4ead4f7cdd33d0a1017ef92865eb4f78b4968c3",
+        "cacbb1ea6e7ef1b11414156469ba0664f63f98b51ac966545ae5ccd20bb69cb2"
+      ],
+      "cell_id": "bv_16q:4dpu_t8",
+      "circuit_id": "bv_16q",
+      "feature_model": {
+        "active_features": [
+          "movement",
+          "compute",
+          "coordination"
+        ],
+        "correlated_pairs": [
+          [
+            "B_host_dpu",
+            "B_mram_wram"
+          ],
+          [
+            "B_host_dpu",
+            "I_dpu"
+          ],
+          [
+            "B_mram_wram",
+            "I_dpu"
+          ]
+        ],
+        "matrix_rank": 4,
+        "mode": "grouped",
+        "rank_tolerance": 2.5491287996770083e-15,
+        "reason": "independent six-term fit rejected by rank deficiency or high correlation; using movement/compute/coordination projection",
+        "zero_range_features": [
+          "E_num",
+          "P_wram"
+        ]
+      },
+      "greedy_path_id": "c6dc626edbb821ce0649537c900dd7bdf25a735ac338fc9a5b23393bd72f7474",
+      "topology_id": "4dpu_t8"
+    }
+  ],
+  "schema_version": "upmem_path_calibration_candidate_set_v1",
+  "source_sha": "8bb7e38d5304b36df00c37f11fe3f8d08af00bbf",
+  "timing_used_for_selection": false
+}

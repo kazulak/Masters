@@ -1,0 +1,345 @@
+{
+  "candidate_set_sha256": "71fd5a6db22278c74afc1781192477664d5d4519328676e89e81fb4662c37f39",
+  "mode": "calibration",
+  "preregistration_sha256": "e14525cb45dfdf455f5739a4d11f589ba4d82ebc52e1ab29a9d82fd8df1b6c17",
+  "schema_version": "upmem_path_experiment_provenance_v1",
+  "selected": [
+    {
+      "candidate_path_id": "08cee53b6ade1ef254898c862a8a7cbe8637510cbb5e5d01a0012039735f45ac",
+      "circuit_id": "bv_16q",
+      "logical_plan_id": "3ec41a814359c00c3d40f6813e26b09c21f6ee54a8c1a18b393d7cb521edf963",
+      "physical_plan_id": "9a24532e916eee7cedbb092814be0cf07eb4f26263181891c58496e7de2064fe",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_id": "20a930bc7a6c9ed9301657998ae079d3d94974e635317ea86be897639f3d16d5",
+      "circuit_id": "bv_16q",
+      "logical_plan_id": "05cfe4aed452a944d1ee40a9a292f4bd464de33a1d72026cfea57ba55412293f",
+      "physical_plan_id": "8198793e698dc44338826fbed36b1f3c6c81bb82386d2a334628a2f4ea64047f",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_id": "c6dc626edbb821ce0649537c900dd7bdf25a735ac338fc9a5b23393bd72f7474",
+      "circuit_id": "bv_16q",
+      "logical_plan_id": "2004d3f7c06a30d7cd408612f7cae3bf6f05b460f5270061a1b6781e81d7cb24",
+      "physical_plan_id": "718e96f81993f48b3fab8002c8b0df6b197421aa3ed56164104dd873ab3b78ec",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_id": "cacbb1ea6e7ef1b11414156469ba0664f63f98b51ac966545ae5ccd20bb69cb2",
+      "circuit_id": "bv_16q",
+      "logical_plan_id": "bc270bde433e6527d46045d88eda3d284f085974eb833026b0ca47703014f9d0",
+      "physical_plan_id": "69f345a453f681bffc52feeedfae01618366e4810e66f86ad35de82134b8f239",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_id": "e9962a81b737e14c0739aea719fe635ce5a494605e31036b3a8315375fbec137",
+      "circuit_id": "bv_16q",
+      "logical_plan_id": "2878e0d71cbe2492ca9050071efe4de9f1accbfa13e23a1e3877aacd9d85dc47",
+      "physical_plan_id": "5c00fc8a8b133e8e060d4376d3ecafef4c545919a4e9523adebf8691a95ff5e4",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_id": "eddd6fb83dfcb2646b67a6b2d4ead4f7cdd33d0a1017ef92865eb4f78b4968c3",
+      "circuit_id": "bv_16q",
+      "logical_plan_id": "7ee29d0676d423cb819d8c5522ee223124b2c69d077c9d4f14c70e4e74113e20",
+      "physical_plan_id": "54e887a2c6affe4bc9156cfa69934d4c5a452b53de6ed9522db89c048d42a66c",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_id": "08cee53b6ade1ef254898c862a8a7cbe8637510cbb5e5d01a0012039735f45ac",
+      "circuit_id": "bv_16q",
+      "logical_plan_id": "3ec41a814359c00c3d40f6813e26b09c21f6ee54a8c1a18b393d7cb521edf963",
+      "physical_plan_id": "a75996344042c2adcbf1b3c6487dd6ed5eb74803b52a993486934a9818b4ef7a",
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_id": "20a930bc7a6c9ed9301657998ae079d3d94974e635317ea86be897639f3d16d5",
+      "circuit_id": "bv_16q",
+      "logical_plan_id": "05cfe4aed452a944d1ee40a9a292f4bd464de33a1d72026cfea57ba55412293f",
+      "physical_plan_id": "362c87c6b5aeb017ee28f7dff577ce03c381e925ba61cb929dbc933c610ddb52",
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_id": "c6dc626edbb821ce0649537c900dd7bdf25a735ac338fc9a5b23393bd72f7474",
+      "circuit_id": "bv_16q",
+      "logical_plan_id": "2004d3f7c06a30d7cd408612f7cae3bf6f05b460f5270061a1b6781e81d7cb24",
+      "physical_plan_id": "dffd673b095dfd9616ba747acf379d0af9dec5eb801640436fb5e13564842f2b",
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_id": "cacbb1ea6e7ef1b11414156469ba0664f63f98b51ac966545ae5ccd20bb69cb2",
+      "circuit_id": "bv_16q",
+      "logical_plan_id": "bc270bde433e6527d46045d88eda3d284f085974eb833026b0ca47703014f9d0",
+      "physical_plan_id": "112211dd07eac141645bc45acb08754db2ea17a5d912403bf4cd9573fc0fe20f",
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_id": "e9962a81b737e14c0739aea719fe635ce5a494605e31036b3a8315375fbec137",
+      "circuit_id": "bv_16q",
+      "logical_plan_id": "2878e0d71cbe2492ca9050071efe4de9f1accbfa13e23a1e3877aacd9d85dc47",
+      "physical_plan_id": "9a5c40c861dd722c657975bfbb95166a1a7ad62322ab03ba5c0266cb3aad81cc",
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_id": "eddd6fb83dfcb2646b67a6b2d4ead4f7cdd33d0a1017ef92865eb4f78b4968c3",
+      "circuit_id": "bv_16q",
+      "logical_plan_id": "7ee29d0676d423cb819d8c5522ee223124b2c69d077c9d4f14c70e4e74113e20",
+      "physical_plan_id": "01ff76f90283ce5d46e8330b611773deee6a3fb4feef530799ce531ff54efd41",
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_id": "0f1afe2ce698cbfcd1496d867ba787cb5cdd487ef3b05e9bb140d58eee826743",
+      "circuit_id": "ghz_chain_18q",
+      "logical_plan_id": "83da361a1f41fb6ad1126a28e4912204d26ee08f2cf5d1f2f3e6a45afa680193",
+      "physical_plan_id": "b339554c1c011147606fa6826481e80e704ba99b1984a3bb23ffb298eb0033ac",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_id": "70e093aa7774e13885fc1dd7ad3acb7d0a2b9bea8a067289a654fbe18566a8c5",
+      "circuit_id": "ghz_chain_18q",
+      "logical_plan_id": "941594304206db74838787c5a2ceaaa34f6813500e6be58b1f9db48355c4a229",
+      "physical_plan_id": "f5ba50978adbdfbabd5197a61352b90417ffca05a0ac142fc9993afaf44340ef",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_id": "8a53a83c45b1a831a0d3d09f8b5393cd82dbadedaf2a239bc0a4da1843a470a4",
+      "circuit_id": "ghz_chain_18q",
+      "logical_plan_id": "103bb82686d73369c17011eb6fb0d51edca4593ec3ec167682975f34a8229d8d",
+      "physical_plan_id": "30cb9ab8264481cd409fd2b63dd12aa75d41c6d0fcb4b2983f0b70899ca528a0",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_id": "9f9e62a16e205e4bd5eb1d1b8f62cade3177ef00fa9bd4dc15c899a41b00d3d0",
+      "circuit_id": "ghz_chain_18q",
+      "logical_plan_id": "7a022b3b8a3a20b1ac8adbf6f85f0f31651b3fd3e808b1a61d500e1b5baffeee",
+      "physical_plan_id": "047b0a3e78678d915ee926bf3f3ca04237bfea62f65501172857af5314a96589",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_id": "a0f7fec9778137270204333fdde142b735188034c201a7c229136e14b6f96692",
+      "circuit_id": "ghz_chain_18q",
+      "logical_plan_id": "0d6b534c4363a2c66515e1eae5e80b16ee219d623eb88e311e985a90c651f2a9",
+      "physical_plan_id": "8ee0971fdd28352e810eb3bb587474d7fbc8ee718c9abf2d9ec116aad135a0fa",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_id": "b7a92f1a28cbacfef1575a0b571b79cdc92dded09222a5581a765ab352fd9637",
+      "circuit_id": "ghz_chain_18q",
+      "logical_plan_id": "fea783930a1538137982196eca3e38c365a6d934c93ca9df8d6188db3dce6f75",
+      "physical_plan_id": "d3d657aa6f64a4499e91b79a9e592ef6367c96dedb3aa617a21e147d54acc367",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_id": "0f1afe2ce698cbfcd1496d867ba787cb5cdd487ef3b05e9bb140d58eee826743",
+      "circuit_id": "ghz_chain_18q",
+      "logical_plan_id": "83da361a1f41fb6ad1126a28e4912204d26ee08f2cf5d1f2f3e6a45afa680193",
+      "physical_plan_id": "53a7f2e2dc3972d65f5391809fc5be2d5164ece53c7d4ce16f42df6e3220370d",
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_id": "70e093aa7774e13885fc1dd7ad3acb7d0a2b9bea8a067289a654fbe18566a8c5",
+      "circuit_id": "ghz_chain_18q",
+      "logical_plan_id": "941594304206db74838787c5a2ceaaa34f6813500e6be58b1f9db48355c4a229",
+      "physical_plan_id": "fd5d528697e74c6824c2873ed82a5ef455e65960c883b202ad9649d57748bae7",
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_id": "8a53a83c45b1a831a0d3d09f8b5393cd82dbadedaf2a239bc0a4da1843a470a4",
+      "circuit_id": "ghz_chain_18q",
+      "logical_plan_id": "103bb82686d73369c17011eb6fb0d51edca4593ec3ec167682975f34a8229d8d",
+      "physical_plan_id": "99091067dd40916ea80689ed42f3aa84fae3db28bddb19d8ceaf1fe6bc113fb5",
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_id": "9f9e62a16e205e4bd5eb1d1b8f62cade3177ef00fa9bd4dc15c899a41b00d3d0",
+      "circuit_id": "ghz_chain_18q",
+      "logical_plan_id": "7a022b3b8a3a20b1ac8adbf6f85f0f31651b3fd3e808b1a61d500e1b5baffeee",
+      "physical_plan_id": "37929df4cf5eb6820276677358cfa26fa99b7f591cb05407da39e6bfb45b3b73",
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_id": "a0f7fec9778137270204333fdde142b735188034c201a7c229136e14b6f96692",
+      "circuit_id": "ghz_chain_18q",
+      "logical_plan_id": "0d6b534c4363a2c66515e1eae5e80b16ee219d623eb88e311e985a90c651f2a9",
+      "physical_plan_id": "4cecf443c5e56e624fa2eaf83de02689f5c1b17dfd7cc83c192c2305242aedb7",
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_id": "b7a92f1a28cbacfef1575a0b571b79cdc92dded09222a5581a765ab352fd9637",
+      "circuit_id": "ghz_chain_18q",
+      "logical_plan_id": "fea783930a1538137982196eca3e38c365a6d934c93ca9df8d6188db3dce6f75",
+      "physical_plan_id": "412ba1a3486ef18d1a5cbccd92d974884195c140008c88ccd82b179257b580c8",
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_id": "002f633fd11c9c8ac95008a9452a63ccea24651ab38167fe6e6b762d00c2806d",
+      "circuit_id": "hs_18q_d1",
+      "logical_plan_id": "2591087611c7a36eed9aaadd068fb912954354c19b384af36527612c5aa7ebaa",
+      "physical_plan_id": "3ede110d6e0d5d50330d6d56e2b9fe452b122cfd84191435ecb7ee4bd2535b88",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_id": "0f172b4535a71fb59dd5d4f406df828c33333cda1113d1c71db08b5d0e989d1e",
+      "circuit_id": "hs_18q_d1",
+      "logical_plan_id": "effb17e9fd24b9768105686a1c2df64c7143760bcef663f80c1381664f5c5360",
+      "physical_plan_id": "fbe175c5e7d7ea76d48501ecb6294237406bf4534484cb0a052a87814a72c241",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_id": "93535be1f45b148a1b3d81d74e0185ffb0339853e6877aa2080426e1339bf13c",
+      "circuit_id": "hs_18q_d1",
+      "logical_plan_id": "a0bd81b835848d8c75d3f9a1c796bb5a879b5adcdbea30497c509deb308b290d",
+      "physical_plan_id": "6a2b2c56a95133c3246d402d7b8392673b8c80da6275665de530bd2bdb6cd970",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_id": "bf83ea123bc85b30f3c7f1f8a0de47c8366352fc37c099890eab75c8cba62cb8",
+      "circuit_id": "hs_18q_d1",
+      "logical_plan_id": "dd46d96263bc04008e7800fc0c50b8bd6824badb435b2878a38398ab3d6a8bef",
+      "physical_plan_id": "843c9972542cce4f0d7aece9d563595e6fa7ce5c41ba9d56028114bbe652ed28",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_id": "e03d5d65a6118ee597f1200afdcd941cdf4e83d0e1447b7b3a199207a7853314",
+      "circuit_id": "hs_18q_d1",
+      "logical_plan_id": "5fa6c6b138a97b54bccda6f343186d78f302df45ae706af31d476683ca9cf363",
+      "physical_plan_id": "dd297307147d4f0318b7a15ccc0f7192e1dfbb617fc0b03084e2c5cd303c7537",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_id": "e69f53f17fabdfaba58d664f1e370a4216829bde473cd84608353c345fb2b4fa",
+      "circuit_id": "hs_18q_d1",
+      "logical_plan_id": "84de5af9132ad1b88de0ec5f5b7b655a96879f96c703dced9b65683d89223514",
+      "physical_plan_id": "0aeea0c25f9e84d8a92bd78263dcc8f65a4a5aea6c11a606c54ea456a7870f5a",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_id": "002f633fd11c9c8ac95008a9452a63ccea24651ab38167fe6e6b762d00c2806d",
+      "circuit_id": "hs_18q_d1",
+      "logical_plan_id": "2591087611c7a36eed9aaadd068fb912954354c19b384af36527612c5aa7ebaa",
+      "physical_plan_id": "25eac8f5fa140e280f646a8804add523161deefda00a95ab6ca4bd8f2645115e",
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_id": "0f172b4535a71fb59dd5d4f406df828c33333cda1113d1c71db08b5d0e989d1e",
+      "circuit_id": "hs_18q_d1",
+      "logical_plan_id": "effb17e9fd24b9768105686a1c2df64c7143760bcef663f80c1381664f5c5360",
+      "physical_plan_id": "561bda76136a7b41a5e57fe3eb0106594a012fe3e35d61776a0da23b1e2b5850",
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_id": "93535be1f45b148a1b3d81d74e0185ffb0339853e6877aa2080426e1339bf13c",
+      "circuit_id": "hs_18q_d1",
+      "logical_plan_id": "a0bd81b835848d8c75d3f9a1c796bb5a879b5adcdbea30497c509deb308b290d",
+      "physical_plan_id": "3e5b2782cf89abcff7112ed8bdf551644e662392676f0027ff3fd90f861b1369",
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_id": "bf83ea123bc85b30f3c7f1f8a0de47c8366352fc37c099890eab75c8cba62cb8",
+      "circuit_id": "hs_18q_d1",
+      "logical_plan_id": "dd46d96263bc04008e7800fc0c50b8bd6824badb435b2878a38398ab3d6a8bef",
+      "physical_plan_id": "dae3fe1116e570fdbfb2665618f682d9226669e0e32c65e7c4b9df308ae0654c",
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_id": "e03d5d65a6118ee597f1200afdcd941cdf4e83d0e1447b7b3a199207a7853314",
+      "circuit_id": "hs_18q_d1",
+      "logical_plan_id": "5fa6c6b138a97b54bccda6f343186d78f302df45ae706af31d476683ca9cf363",
+      "physical_plan_id": "ee5e1558f4b225a7e6cf19d54fce773699ad3c2fbcd300023795d3612b87b604",
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_id": "e69f53f17fabdfaba58d664f1e370a4216829bde473cd84608353c345fb2b4fa",
+      "circuit_id": "hs_18q_d1",
+      "logical_plan_id": "84de5af9132ad1b88de0ec5f5b7b655a96879f96c703dced9b65683d89223514",
+      "physical_plan_id": "fbdeb8ec8834bdf745e3b8446829172d285ac5f4ed7c871cbad34c8d7bf215e6",
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_id": "2eb807e063945083b04ae8fe3a72afca4e2a2b97d37dc739805c462caa388747",
+      "circuit_id": "quantization_stress_18q_l2",
+      "logical_plan_id": "c6a00b964c6ee0153b7c9419483267c078693159d70eda491ecd6f0075c093f4",
+      "physical_plan_id": "a6ee8a52b9c89db9ef2b891ab0b8ef788f8198ab1b8afba7fbd8cc13b3f6cf61",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_id": "348d3fb5c4d401742575f7e9ce41a5ff1fb8415c2010311fb6b13a9bb52d2de8",
+      "circuit_id": "quantization_stress_18q_l2",
+      "logical_plan_id": "f4cc316f399f6dd00f2b78e55943492235e3cb8760463e2065d8c4900a5f5fe3",
+      "physical_plan_id": "fba11248bf5ef571848a733fd8b50e70830bf2d3cdea35fadf459feee5b69fb8",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_id": "9d1e1ae9a325d84cef97b0fd9beffa9d4b3d783f00a4e38f6fce3a17114d3abb",
+      "circuit_id": "quantization_stress_18q_l2",
+      "logical_plan_id": "070ab06a1a0108c764e55b9e42b7df0c1f5c8868071fa444958ddaaf38fd46b6",
+      "physical_plan_id": "e8df7bae62c8613da0647768cbb41b3e79725ef88880ce56c3750918a906b64c",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_id": "b9ba7e7f9f7faa942ecf55bc10c6f9a9488b0e3dcf87233bed822bea2416c816",
+      "circuit_id": "quantization_stress_18q_l2",
+      "logical_plan_id": "d504919e20d95bac608dd906d46abb122f9680873679710b0584e71981648fb5",
+      "physical_plan_id": "d8cc3207a594c610fad9da180b8ab8c68068a72779783d8b04040446003e64ed",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_id": "e56fd025e7fdf900c75302bb6e7212f78d89deef09b236732a001e9f5c5001c1",
+      "circuit_id": "quantization_stress_18q_l2",
+      "logical_plan_id": "824f32c53990b77d7f4041db2611708959be6ab40b644d36ac1c3ec53d5fd28b",
+      "physical_plan_id": "78b4b26b2e3f5ee55ce329b3bbffae8f2406e2e60165a6d06ba64522d7e4efec",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_id": "e7f2ad3aef247ff4d7f2b7374966596ab24e96aa1fabd13234cbaebecab85d65",
+      "circuit_id": "quantization_stress_18q_l2",
+      "logical_plan_id": "82f6fbd5fe5eed78fa0c1dffb4e2c564daf76ae33889abb5725b2c92199b7520",
+      "physical_plan_id": "4055b85622d2bafba3e53069478d257d7ecb5d571c226a48d0fd15c4c98b0f8c",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_id": "2eb807e063945083b04ae8fe3a72afca4e2a2b97d37dc739805c462caa388747",
+      "circuit_id": "quantization_stress_18q_l2",
+      "logical_plan_id": "c6a00b964c6ee0153b7c9419483267c078693159d70eda491ecd6f0075c093f4",
+      "physical_plan_id": "159880a52fe99a74381b4699d992929a0991479b555372421165509edd58383c",
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_id": "348d3fb5c4d401742575f7e9ce41a5ff1fb8415c2010311fb6b13a9bb52d2de8",
+      "circuit_id": "quantization_stress_18q_l2",
+      "logical_plan_id": "f4cc316f399f6dd00f2b78e55943492235e3cb8760463e2065d8c4900a5f5fe3",
+      "physical_plan_id": "1c48047aef310015d3ea14a25fa186f9a1ad3b54ec63825d4b15378e7055130d",
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_id": "9d1e1ae9a325d84cef97b0fd9beffa9d4b3d783f00a4e38f6fce3a17114d3abb",
+      "circuit_id": "quantization_stress_18q_l2",
+      "logical_plan_id": "070ab06a1a0108c764e55b9e42b7df0c1f5c8868071fa444958ddaaf38fd46b6",
+      "physical_plan_id": "06fa7f5b1b3f674adef4567189891c74a7dee05304c1505de0976964fc2275e1",
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_id": "b9ba7e7f9f7faa942ecf55bc10c6f9a9488b0e3dcf87233bed822bea2416c816",
+      "circuit_id": "quantization_stress_18q_l2",
+      "logical_plan_id": "d504919e20d95bac608dd906d46abb122f9680873679710b0584e71981648fb5",
+      "physical_plan_id": "a2d4c9a0de41337d4e19212efc4acfdc8b2524f4bc71d8eb53702aa5bcce76d7",
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_id": "e56fd025e7fdf900c75302bb6e7212f78d89deef09b236732a001e9f5c5001c1",
+      "circuit_id": "quantization_stress_18q_l2",
+      "logical_plan_id": "824f32c53990b77d7f4041db2611708959be6ab40b644d36ac1c3ec53d5fd28b",
+      "physical_plan_id": "539de505b156b9b358469242b093fcee513f6d8c2bd4385818dd586433cfd07d",
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_id": "e7f2ad3aef247ff4d7f2b7374966596ab24e96aa1fabd13234cbaebecab85d65",
+      "circuit_id": "quantization_stress_18q_l2",
+      "logical_plan_id": "82f6fbd5fe5eed78fa0c1dffb4e2c564daf76ae33889abb5725b2c92199b7520",
+      "physical_plan_id": "0d138b1615cac85dee41d9207bb7f8871e118a748aad51df746bb105f8b69cb4",
+      "topology_id": "4dpu_t8"
+    }
+  ],
+  "source_sha": "8bb7e38d5304b36df00c37f11fe3f8d08af00bbf"
+}
