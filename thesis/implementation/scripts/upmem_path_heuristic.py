@@ -6,9 +6,11 @@ from __future__ import annotations
 import argparse
 import csv
 from dataclasses import asdict
+from collections.abc import Mapping
 import hashlib
 from importlib import metadata
 import json
+import math
 import multiprocessing
 from pathlib import Path
 import queue as queue_module
@@ -17,7 +19,7 @@ import time
 from typing import Any
 
 from quantum_bench.circuits import builtin_circuit
-from quantum_bench.evidence import problem_id, tensor_network_structure_id
+from quantum_bench.evidence import load_artifacts, problem_id, tensor_network_structure_id
 from quantum_bench.lowering import build_contraction_dag, contraction_dag_hash, lower_tensor_network
 from quantum_bench.model import ContractNode, make_simulation_job
 from quantum_bench.planning import plan_cotengra, plan_opt_einsum
@@ -71,6 +73,38 @@ FEATURE_COLUMNS = (
     "tasklet_utilization", "dpu_utilization", "host_memory_estimate_bytes",
     "semantic_identity_expansion_units",
 )
+CALIBRATION_COLUMNS = (
+    "split", "attempt_type", "cell_id", "circuit_id", "topology_id",
+    "candidate_path_id", "plan_id", "route_id", "block", "sample_index",
+    "order_index", "sample_id", "session_instance_id", "experiment_id", "run_id",
+    "source_sha", "candidate_generation_source_sha", "physical_execution_source_sha",
+    "candidate_set_sha256", "calibration_set_sha256", "problem_id",
+    "tensor_network_structure_id", "logical_plan_id", "physical_plan_id",
+    "executable_id", "validation_policy_id", "status", "validation", "fallback",
+    "timing_scope", "total_wall_s", "session_open_s", "session_close_s",
+    "session_inclusive_s", "kernel_s", "h2d_s", "d2h_s", "h2d_bytes", "d2h_bytes",
+    "preparation_s", "planning_s", "lowering_s", "mapping_s", "slicing_s",
+    "host_reduce_s", "rank_work_s", "request_build_s", "request_wave_s",
+    "request_artifact_build_s", "payload_record_staging_s",
+    "request_work_unit_materialization_s", "request_payload_materialization_s",
+    "request_payload_hashing_s", "request_payload_file_write_s",
+    "request_manifest_sidecar_staging_s", "request_build_residual_s",
+    "request_payload_record_count", "request_payload_bytes_staged",
+    "request_payload_bytes_hashed", "request_payload_files_created",
+    "requested_dpus", "allocated_dpus", "active_dpus", "tasklets_per_dpu",
+    "rank_count", "active_rank_count", "target_observed", "request_transport",
+    "collection_resource_admission_passed", "execution_resource_admission_passed",
+    "startup_resource_admission_passed", "physical_target_verified",
+    "hardware_kernel_executed", "simulator_kernel_executed", "cpu_fallback_used",
+    "binary_identity_verified", "native_identity_verified", "hardware_release_verified",
+    "tasklet_utilization", "dpu_utilization", "dominant_wave_utilization",
+    "total_wave_count", "fully_populated_wave_count", "active_dpu_ids_json",
+    "active_rank_indices_json", "requested_rank_paths_json", "operation_facts_json",
+    "backend_facts_json", "terminal_backend_facts_json", "validation_json",
+)
+CALIBRATION_SCHEMA_VERSION = "upmem_path_runtime_calibration_v1"
+CALIBRATION_TIMING_SCOPE = "steady_execution_v1"
+CALIBRATION_TRANSPORT = "packed_operation_v1"
 
 
 def _canonical_bytes(value: object) -> bytes:
@@ -714,6 +748,623 @@ def _write_csv(path: Path, rows: list[dict[str, Any]], columns: tuple[str, ...])
         writer.writerows(rows)
 
 
+def _mapping(value: object, field: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field} must be an object")
+    return value
+
+
+def _required_sha(value: object, field: str, length: int = 40) -> str:
+    if not isinstance(value, str) or len(value) != length:
+        raise ValueError(f"{field} must be a {length}-character SHA-256 value")
+    try:
+        int(value, 16)
+    except ValueError:
+        raise ValueError(f"{field} must be hexadecimal") from None
+    return value
+
+
+def _finite_nonnegative(value: object, field: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field} must be numeric")
+    result = float(value)
+    if not math.isfinite(result) or result < 0.0:
+        raise ValueError(f"{field} must be finite and nonnegative")
+    return result
+
+
+def _json_text(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _file_sha256(path: Path) -> str:
+    return _sha256_bytes(path.read_bytes())
+
+
+def _operation_timing_total(
+    sample: Mapping[str, Any], field: str
+) -> float | None:
+    facts = _mapping(sample.get("backend_facts"), "sample backend_facts")
+    operations = facts.get("operation_facts")
+    if not isinstance(operations, list):
+        return None
+    values: list[float] = []
+    for index, operation in enumerate(operations):
+        operation_mapping = _mapping(operation, f"operation_facts[{index}]")
+        timing = _mapping(
+            operation_mapping.get("timing"), f"operation_facts[{index}].timing"
+        )
+        value = timing.get(field)
+        if value is None:
+            return None
+        values.append(_finite_nonnegative(value, f"operation timing {field}"))
+    return sum(values)
+
+
+def _calibration_candidate_index(
+    dataset: Mapping[str, Any], calibration: Mapping[str, Any]
+) -> tuple[
+    dict[tuple[str, str, str], dict[str, Any]],
+    dict[str, dict[str, Any]],
+    str,
+    str,
+]:
+    if dataset.get("schema_version") != SCHEMA_VERSION:
+        raise ValueError("candidate dataset has an invalid schema version")
+    if calibration.get("schema_version") != "upmem_path_calibration_candidate_set_v1":
+        raise ValueError("calibration candidate set has an invalid schema version")
+    candidate_source = _required_sha(dataset.get("source_sha"), "candidate source_sha")
+    if calibration.get("source_sha") != candidate_source:
+        raise ValueError("calibration source_sha does not match candidate dataset")
+    candidate_set_sha = _sha256_bytes(_canonical_bytes(dict(dataset)))
+    if calibration.get("candidate_set_sha256") != candidate_set_sha:
+        raise ValueError("calibration candidate-set identity does not match dataset")
+    if calibration.get("timing_used_for_selection") is not False:
+        raise ValueError("calibration candidate selection must not use timing")
+
+    circuit_map: dict[str, dict[str, Any]] = {}
+    candidate_map: dict[tuple[str, str], dict[str, Any]] = {}
+    circuits = dataset.get("circuits")
+    if not isinstance(circuits, list) or not circuits:
+        raise ValueError("candidate dataset must contain circuits")
+    for circuit in circuits:
+        circuit_mapping = dict(_mapping(circuit, "candidate circuit"))
+        circuit_id = str(circuit_mapping.get("circuit_id", ""))
+        if not circuit_id or circuit_id in circuit_map:
+            raise ValueError("candidate dataset has duplicate or empty circuit IDs")
+        if circuit_mapping.get("split") != "training":
+            continue
+        circuit_map[circuit_id] = circuit_mapping
+        candidates = circuit_mapping.get("candidates")
+        if not isinstance(candidates, list):
+            raise ValueError(f"candidate list is missing for {circuit_id}")
+        for candidate in candidates:
+            candidate_mapping = dict(_mapping(candidate, "candidate"))
+            candidate_id = str(candidate_mapping.get("candidate_path_id", ""))
+            key = (circuit_id, candidate_id)
+            if not candidate_id or key in candidate_map:
+                raise ValueError("candidate dataset has duplicate or empty path IDs")
+            candidate_map[key] = candidate_mapping
+
+    cells = calibration.get("cells")
+    if not isinstance(cells, list) or not cells:
+        raise ValueError("calibration candidate set must contain cells")
+    expected: dict[tuple[str, str, str], dict[str, Any]] = {}
+    cell_map: dict[str, dict[str, Any]] = {}
+    cell_topology_keys: set[tuple[str, str]] = set()
+    for cell in cells:
+        cell_mapping = dict(_mapping(cell, "calibration cell"))
+        cell_id = str(cell_mapping.get("cell_id", ""))
+        circuit_id = str(cell_mapping.get("circuit_id", ""))
+        topology_id = str(cell_mapping.get("topology_id", ""))
+        if not cell_id or cell_id in cell_map:
+            raise ValueError("calibration cells must have unique nonempty IDs")
+        if circuit_id not in circuit_map:
+            raise ValueError(f"calibration cell references unknown training circuit: {circuit_id}")
+        if (circuit_id, topology_id) in cell_topology_keys:
+            raise ValueError("calibration cells must have unique circuit/topology pairs")
+        cell_topology_keys.add((circuit_id, topology_id))
+        path_ids = cell_mapping.get("candidate_path_ids")
+        if not isinstance(path_ids, list) or not path_ids:
+            raise ValueError(f"calibration cell has no candidate paths: {cell_id}")
+        if len(set(path_ids)) != len(path_ids):
+            raise ValueError(f"calibration cell repeats a candidate path: {cell_id}")
+        greedy_id = cell_mapping.get("greedy_path_id")
+        if greedy_id not in path_ids:
+            raise ValueError(f"calibration cell greedy path is not selected: {cell_id}")
+        cell_map[cell_id] = cell_mapping
+        for candidate_id in path_ids:
+            candidate = candidate_map.get((circuit_id, str(candidate_id)))
+            if candidate is None:
+                raise ValueError(
+                    f"calibration cell references unknown candidate: {cell_id}/{candidate_id}"
+                )
+            topologies = candidate.get("topologies")
+            if not isinstance(topologies, list):
+                raise ValueError(f"candidate lacks topology records: {candidate_id}")
+            topology = next(
+                (item for item in topologies if item.get("topology_id") == topology_id),
+                None,
+            )
+            if not isinstance(topology, Mapping):
+                raise ValueError(f"candidate lacks topology {topology_id}: {candidate_id}")
+            if topology.get("feasible") is not True:
+                raise ValueError(
+                    f"calibration candidate is infeasible: {cell_id}/{candidate_id}"
+                )
+            admission = _mapping(
+                topology.get("resource_admission"),
+                f"candidate resource admission {cell_id}/{candidate_id}",
+            )
+            if admission.get("collection_resource_admission_passed") is not True:
+                raise ValueError(
+                    f"calibration candidate lacks resource admission: {cell_id}/{candidate_id}"
+                )
+            physical_plan_id_value = topology.get("physical_plan_id")
+            _required_sha(
+                physical_plan_id_value,
+                f"candidate physical_plan_id {cell_id}/{candidate_id}",
+                64,
+            )
+            expected[(circuit_id, topology_id, str(candidate_id))] = {
+                "cell_id": cell_id,
+                "circuit": circuit_map[circuit_id],
+                "candidate": candidate,
+                "topology": dict(topology),
+                "greedy_path_id": str(greedy_id),
+            }
+    return expected, cell_map, candidate_set_sha, candidate_source
+
+
+def _manifest_calibration_contract(
+    manifest: Mapping[str, Any],
+    expected: Mapping[tuple[str, str, str], Mapping[str, Any]],
+) -> tuple[str, str, dict[str, Any]]:
+    if manifest.get("status") != "completed":
+        raise ValueError("raw evidence manifest must be completed")
+    if manifest.get("source_worktree_dirty") is not False:
+        raise ValueError("physical execution source must be clean")
+    physical_source = _required_sha(
+        manifest.get("source_commit"), "physical execution source_commit"
+    )
+    experiment_id = _required_sha(manifest.get("experiment_id"), "experiment_id", 64)
+    run_id = manifest.get("run_id")
+    if not isinstance(run_id, str) or not run_id:
+        raise ValueError("manifest run_id must be nonempty")
+    configuration = _mapping(manifest.get("configuration"), "manifest configuration")
+    experiment = _mapping(configuration.get("experiment"), "manifest experiment")
+    collection = _mapping(experiment.get("collection"), "experiment collection")
+    if collection.get("claim_policy") != "diagnostic_v1":
+        raise ValueError("calibration evidence must use diagnostic_v1")
+    if collection.get("warmup_blocks") != 1 or collection.get("measurement_blocks") != 3:
+        raise ValueError("calibration evidence must use one warmup and three measurements")
+    if collection.get("session_policy") != "fresh_session_per_attempt_v1":
+        raise ValueError("calibration evidence must use fresh sessions")
+    if experiment.get("experiment_id") != experiment_id:
+        raise ValueError("manifest experiment identity is inconsistent")
+
+    expected_matrix = {
+        (circuit_id, f"path_{candidate_id}", topology_id)
+        for circuit_id, topology_id, candidate_id in expected
+    }
+    actual_matrix: list[tuple[str, str, str]] = []
+    matrix = experiment.get("matrix")
+    if not isinstance(matrix, list):
+        raise ValueError("manifest experiment matrix is missing")
+    for item in matrix:
+        matrix_item = _mapping(item, "experiment matrix item")
+        case_id = matrix_item.get("case_id")
+        plan_id = matrix_item.get("plan_id")
+        route_ids = matrix_item.get("route_ids")
+        if not isinstance(case_id, str) or not isinstance(plan_id, str):
+            raise ValueError("experiment matrix identity is invalid")
+        if not isinstance(route_ids, list) or not route_ids:
+            raise ValueError("experiment matrix route list is invalid")
+        for route_id in route_ids:
+            if not isinstance(route_id, str):
+                raise ValueError("experiment matrix route ID is invalid")
+            actual_matrix.append((case_id, plan_id, route_id))
+    if len(actual_matrix) != len(set(actual_matrix)) or set(actual_matrix) != expected_matrix:
+        raise ValueError("manifest matrix does not match calibration cell/path set exactly")
+    return physical_source, run_id, {
+        "experiment_id": experiment_id,
+        "collection": dict(collection),
+        "environment": dict(_mapping(configuration.get("environment"), "environment")),
+    }
+
+
+def _joined_backend_facts(
+    sample: Mapping[str, Any], session: Mapping[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    sample_facts = dict(_mapping(sample.get("backend_facts"), "sample backend_facts"))
+    terminal = dict(
+        _mapping(session.get("terminal_backend_facts"), "terminal backend facts")
+    )
+    for field in set(sample_facts) & set(terminal):
+        if sample_facts[field] != terminal[field]:
+            raise ValueError(f"sample/session backend fact conflict: {field}")
+    joined = dict(sample_facts)
+    for field, value in terminal.items():
+        joined.setdefault(field, value)
+    return joined, terminal
+
+
+def _require_backend_contract(
+    sample: Mapping[str, Any],
+    session: Mapping[str, Any],
+    facts: Mapping[str, Any],
+    topology: Mapping[str, Any],
+) -> None:
+    if session.get("status") != "success":
+        raise ValueError("calibration contains a non-success session")
+    for field in ("release_attempted", "release_succeeded", "release_verified"):
+        if session.get(field) is not True:
+            raise ValueError(f"session {field} must be true")
+    expected_terminal = {
+        "target_observed": "physical_hardware",
+        "physical_target_verified": True,
+        "hardware_kernel_executed": True,
+        "simulator_kernel_executed": False,
+        "cpu_fallback_used": False,
+        "allocation_verified": True,
+        "hardware_allocation_verified": True,
+        "binary_identity_verified": True,
+        "native_identity_verified": True,
+        "hardware_release_verified": True,
+        "startup_resource_admission_passed": True,
+    }
+    terminal = _mapping(session.get("terminal_backend_facts"), "terminal backend facts")
+    for field, value in expected_terminal.items():
+        if terminal.get(field) != value:
+            raise ValueError(f"terminal physical fact {field} is not qualified")
+    expected_topology = _mapping(topology.get("topology"), "candidate topology")
+    dpu_count = int(expected_topology["dpu_count"])
+    rank_count = int(expected_topology["rank_count"])
+    tasklets = int(expected_topology["tasklets_per_dpu"])
+    expected_facts = {
+        "target_observed": "physical_hardware",
+        "physical_target_verified": True,
+        "hardware_kernel_executed": True,
+        "simulator_kernel_executed": False,
+        "cpu_fallback_used": False,
+        "collection_resource_admission_passed": True,
+        "execution_resource_admission_passed": True,
+        "startup_resource_admission_passed": True,
+        "requested_dpus": dpu_count,
+        "allocated_dpus": dpu_count,
+        "active_dpus": dpu_count,
+        "tasklets_per_dpu": tasklets,
+        "rank_count": rank_count,
+        "request_transport": CALIBRATION_TRANSPORT,
+    }
+    for field, value in expected_facts.items():
+        if facts.get(field) != value:
+            raise ValueError(f"sample physical fact {field} is not qualified")
+    for field, value in {
+        "requested_dpu_count": dpu_count,
+        "allocated_dpu_count": dpu_count,
+        "observed_dpu_count": dpu_count,
+        "observed_tasklets_per_dpu": tasklets,
+        "startup_requested_dpu_count": dpu_count,
+        "startup_allocated_dpu_count": dpu_count,
+        "startup_requested_tasklets_per_dpu": tasklets,
+    }.items():
+        if terminal.get(field) != value:
+            raise ValueError(f"terminal resource fact {field} is not qualified")
+    if sample.get("validation", {}).get("accuracy_qualified") is not True:
+        raise ValueError("calibration sample accuracy is not qualified")
+    validation = _mapping(sample.get("validation"), "sample validation")
+    for applicable, passed in (
+        ("full_precision_threshold_applicable", "full_precision_passed"),
+        ("policy_reference_applicable", "policy_reference_passed"),
+    ):
+        if validation.get(applicable) is True and validation.get(passed) is not True:
+            raise ValueError(f"calibration sample validation {passed} is not true")
+    if not isinstance(sample.get("output_sha256"), str):
+        raise ValueError("calibration sample lacks output hash")
+
+
+def _calibration_row(
+    *,
+    sample: Mapping[str, Any],
+    session: Mapping[str, Any],
+    facts: Mapping[str, Any],
+    terminal: Mapping[str, Any],
+    expected_item: Mapping[str, Any],
+    physical_source: str,
+    candidate_source: str,
+    candidate_set_sha: str,
+    calibration_set_sha: str,
+    raw_hashes: Mapping[str, Any],
+) -> dict[str, Any]:
+    measurement = _mapping(sample.get("measurement"), "sample measurement")
+    if measurement.get("scope_id") != CALIBRATION_TIMING_SCOPE:
+        raise ValueError("calibration sample timing scope is not steady_execution_v1")
+    total_wall = _finite_nonnegative(measurement.get("total_wall_s"), "total_wall_s")
+    open_s = _finite_nonnegative(session.get("open_s"), "session open_s")
+    close_s = _finite_nonnegative(session.get("session_close_s"), "session_close_s")
+    row: dict[str, Any] = {
+        "split": "training",
+        "attempt_type": sample["attempt_kind"],
+        "cell_id": expected_item["cell_id"],
+        "circuit_id": sample["case_id"],
+        "topology_id": sample["route_id"],
+        "candidate_path_id": str(sample["plan_id"])[len("path_"):],
+        "plan_id": sample["plan_id"],
+        "route_id": sample["route_id"],
+        "block": sample["block_id"],
+        "sample_index": sample["sample_index"],
+        "order_index": sample["order_index"],
+        "sample_id": sample["sample_id"],
+        "session_instance_id": sample["session_instance_id"],
+        "experiment_id": sample["experiment_id"],
+        "run_id": sample["run_id"],
+        "source_sha": candidate_source,
+        "candidate_generation_source_sha": candidate_source,
+        "physical_execution_source_sha": physical_source,
+        "candidate_set_sha256": candidate_set_sha,
+        "calibration_set_sha256": calibration_set_sha,
+        "problem_id": sample["identities"]["problem_id"],
+        "tensor_network_structure_id": sample["identities"]["tensor_network_structure_id"],
+        "logical_plan_id": sample["identities"]["logical_plan_id"],
+        "physical_plan_id": sample["identities"]["physical_plan_id"],
+        "executable_id": sample["identities"]["executable_id"],
+        "validation_policy_id": sample["identities"]["validation_policy_id"],
+        "status": sample["status"],
+        "validation": "passed",
+        "fallback": "false",
+        "timing_scope": measurement["scope_id"],
+        "total_wall_s": total_wall,
+        "session_open_s": open_s,
+        "session_close_s": close_s,
+        "session_inclusive_s": open_s + total_wall + close_s,
+        "kernel_s": measurement.get("kernel_s"),
+        "h2d_s": measurement.get("h2d_s"),
+        "d2h_s": measurement.get("d2h_s"),
+        "h2d_bytes": measurement.get("h2d_bytes"),
+        "d2h_bytes": measurement.get("d2h_bytes"),
+        "preparation_s": measurement.get("preparation_s"),
+        "planning_s": measurement.get("planning_s"),
+        "lowering_s": measurement.get("lowering_s"),
+        "mapping_s": measurement.get("mapping_s"),
+        "slicing_s": measurement.get("slicing_s"),
+        "host_reduce_s": measurement.get("host_reduce_s"),
+        "rank_work_s": measurement.get("rank_work_s"),
+        "request_build_s": _operation_timing_total(sample, "request_build_sum_s"),
+        "request_wave_s": _operation_timing_total(sample, "request_wave_wall_sum_s"),
+        "request_artifact_build_s": _operation_timing_total(sample, "request_artifact_build_sum_s"),
+        "payload_record_staging_s": _operation_timing_total(sample, "request_payload_record_staging_sum_s"),
+        "request_work_unit_materialization_s": _operation_timing_total(sample, "request_work_unit_materialization_sum_s"),
+        "request_payload_materialization_s": _operation_timing_total(sample, "request_payload_materialization_sum_s"),
+        "request_payload_hashing_s": _operation_timing_total(sample, "request_payload_hashing_sum_s"),
+        "request_payload_file_write_s": _operation_timing_total(sample, "request_payload_file_write_sum_s"),
+        "request_manifest_sidecar_staging_s": _operation_timing_total(sample, "request_manifest_sidecar_staging_sum_s"),
+        "request_build_residual_s": _operation_timing_total(sample, "request_build_residual_sum_s"),
+        "request_payload_record_count": facts.get("request_payload_record_count"),
+        "request_payload_bytes_staged": facts.get("request_payload_bytes_staged"),
+        "request_payload_bytes_hashed": facts.get("request_payload_bytes_hashed"),
+        "request_payload_files_created": facts.get("request_payload_files_created"),
+        "requested_dpus": facts["requested_dpus"],
+        "allocated_dpus": facts["allocated_dpus"],
+        "active_dpus": facts["active_dpus"],
+        "tasklets_per_dpu": facts["tasklets_per_dpu"],
+        "rank_count": facts["rank_count"],
+        "active_rank_count": facts.get("execution_active_rank_count"),
+        "target_observed": facts["target_observed"],
+        "request_transport": facts["request_transport"],
+        "collection_resource_admission_passed": facts["collection_resource_admission_passed"],
+        "execution_resource_admission_passed": facts["execution_resource_admission_passed"],
+        "startup_resource_admission_passed": facts["startup_resource_admission_passed"],
+        "physical_target_verified": facts["physical_target_verified"],
+        "hardware_kernel_executed": facts["hardware_kernel_executed"],
+        "simulator_kernel_executed": facts["simulator_kernel_executed"],
+        "cpu_fallback_used": facts["cpu_fallback_used"],
+        "binary_identity_verified": facts.get("binary_identity_verified"),
+        "native_identity_verified": facts.get("native_identity_verified"),
+        "hardware_release_verified": terminal["hardware_release_verified"],
+        "tasklet_utilization": facts.get("arithmetic_weighted_tasklet_utilization"),
+        "dpu_utilization": facts.get("arithmetic_weighted_dpu_slot_utilization"),
+        "dominant_wave_utilization": facts.get("dominant_work_wave_utilization"),
+        "total_wave_count": facts.get("total_wave_count"),
+        "fully_populated_wave_count": facts.get("fully_populated_wave_count"),
+        "active_dpu_ids_json": _json_text(facts.get("active_dpu_ids")),
+        "active_rank_indices_json": _json_text(facts.get("active_rank_indices")),
+        "requested_rank_paths_json": _json_text(raw_hashes["rank_paths"]),
+        "operation_facts_json": _json_text(facts.get("operation_facts")),
+        "backend_facts_json": _json_text(dict(_mapping(sample["backend_facts"], "sample backend_facts"))),
+        "terminal_backend_facts_json": _json_text(dict(terminal)),
+        "validation_json": _json_text(dict(_mapping(sample["validation"], "sample validation"))),
+    }
+    for field in (
+        "kernel_s", "h2d_s", "d2h_s", "preparation_s", "planning_s", "lowering_s",
+        "mapping_s", "slicing_s", "host_reduce_s", "rank_work_s",
+    ):
+        if row[field] is not None:
+            row[field] = _finite_nonnegative(row[field], field)
+    for field in (
+        "h2d_bytes", "d2h_bytes", "request_payload_record_count",
+        "request_payload_bytes_staged", "request_payload_bytes_hashed",
+        "request_payload_files_created", "requested_dpus", "allocated_dpus",
+        "active_dpus", "tasklets_per_dpu", "rank_count", "active_rank_count",
+        "total_wave_count", "fully_populated_wave_count",
+    ):
+        if row[field] is not None and (
+            isinstance(row[field], bool) or not isinstance(row[field], int)
+        ):
+            raise ValueError(f"{field} must be an integer when present")
+    return row
+
+
+def extract_calibration(
+    raw_dir: Path,
+    candidate_path: Path,
+    calibration_path: Path,
+    output_dir: Path,
+) -> dict[str, Any]:
+    """Extract a strict physical calibration table from canonical evidence."""
+
+    dataset = _mapping(
+        json.loads(candidate_path.read_text(encoding="utf-8")), "candidate dataset"
+    )
+    calibration = _mapping(
+        json.loads(calibration_path.read_text(encoding="utf-8")),
+        "calibration candidate set",
+    )
+    expected, cells, candidate_set_sha, candidate_source = _calibration_candidate_index(
+        dataset, calibration
+    )
+    manifest, samples, sessions = load_artifacts(raw_dir)
+    physical_source, run_id, manifest_contract = _manifest_calibration_contract(
+        manifest, expected
+    )
+    experiment_id = manifest_contract["experiment_id"]
+    sessions_by_id: dict[str, Mapping[str, Any]] = {}
+    for session in sessions:
+        session_id = session.get("session_instance_id")
+        if not isinstance(session_id, str) or session_id in sessions_by_id:
+            raise ValueError("sessions must have unique session_instance_id values")
+        sessions_by_id[session_id] = session
+    expected_observations = len(expected) * 4
+    if len(samples) != expected_observations or len(sessions) != expected_observations:
+        raise ValueError(
+            "canonical evidence count does not match calibration set and block schedule"
+        )
+    calibration_set_sha = _sha256_bytes(_canonical_bytes(dict(calibration)))
+    raw_root = Path(raw_dir)
+    raw_hashes = {
+        "manifest": _file_sha256(raw_root / "manifest.json"),
+        "samples": _file_sha256(raw_root / "samples.jsonl"),
+        "sessions": _file_sha256(raw_root / "sessions.jsonl"),
+        "rank_paths": manifest_contract["environment"].get("requested_rank_paths", []),
+    }
+    seen: set[tuple[str, str, int, str]] = set()
+    rows: list[dict[str, Any]] = []
+    observations: list[dict[str, Any]] = []
+    for sample in samples:
+        if sample.get("experiment_id") != experiment_id or sample.get("run_id") != run_id:
+            raise ValueError("sample experiment/run identity does not match manifest")
+        case_id = sample.get("case_id")
+        route_id = sample.get("route_id")
+        plan_id = sample.get("plan_id")
+        if not isinstance(case_id, str) or not isinstance(route_id, str):
+            raise ValueError("sample case/route identity is invalid")
+        if not isinstance(plan_id, str) or not plan_id.startswith("path_"):
+            raise ValueError("sample plan_id is not a candidate path plan")
+        candidate_id = plan_id.removeprefix("path_")
+        expected_item = expected.get((case_id, route_id, candidate_id))
+        if expected_item is None:
+            raise ValueError(f"sample is outside the exact calibration set: {plan_id}")
+        attempt_kind = sample.get("attempt_kind")
+        block_id = sample.get("block_id")
+        if (attempt_kind, block_id) not in {
+            ("warmup", 0), ("measurement", 1), ("measurement", 2), ("measurement", 3)
+        }:
+            raise ValueError("sample is outside blocks 0..3 with one warmup")
+        key = (
+            str(expected_item["cell_id"]),
+            candidate_id,
+            int(block_id),
+            str(attempt_kind),
+        )
+        if key in seen:
+            raise ValueError(f"duplicate calibration observation: {key}")
+        seen.add(key)
+        if sample.get("status") != "success":
+            raise ValueError("calibration contains a non-success sample")
+        session_id = sample.get("session_instance_id")
+        if not isinstance(session_id, str) or session_id not in sessions_by_id:
+            raise ValueError("sample references a missing session")
+        session = sessions_by_id[session_id]
+        for field in ("experiment_id", "run_id", "case_id", "plan_id", "route_id"):
+            if session.get(field) != sample.get(field):
+                raise ValueError(f"sample/session {field} identity mismatch")
+        facts, terminal = _joined_backend_facts(sample, session)
+        _require_backend_contract(sample, session, facts, expected_item["topology"])
+        identities = _mapping(sample.get("identities"), "sample identities")
+        circuit = _mapping(expected_item["circuit"], "candidate circuit")
+        candidate = _mapping(expected_item["candidate"], "candidate")
+        topology = _mapping(expected_item["topology"], "candidate topology")
+        identity_expected = {
+            "problem_id": circuit["problem_id"],
+            "tensor_network_structure_id": circuit["tensor_network_structure_id"],
+            "logical_plan_id": candidate["logical_plan_id"],
+            "physical_plan_id": topology["physical_plan_id"],
+        }
+        for field, value in identity_expected.items():
+            if identities.get(field) != value:
+                raise ValueError(f"sample identity {field} does not match candidate")
+        row = _calibration_row(
+            sample=sample,
+            session=session,
+            facts=facts,
+            terminal=terminal,
+            expected_item=expected_item,
+            physical_source=physical_source,
+            candidate_source=candidate_source,
+            candidate_set_sha=candidate_set_sha,
+            calibration_set_sha=calibration_set_sha,
+            raw_hashes=raw_hashes,
+        )
+        rows.append(row)
+        observations.append({**row, "raw_sample": dict(sample), "raw_session": dict(session)})
+    expected_keys = {
+        (str(item["cell_id"]), candidate_id, block, attempt)
+        for (_case_id, _topology_id, candidate_id), item in expected.items()
+        for block, attempt in (
+            (0, "warmup"), (1, "measurement"), (2, "measurement"), (3, "measurement")
+        )
+    }
+    if seen != expected_keys:
+        missing = sorted(expected_keys - seen)
+        extra = sorted(seen - expected_keys)
+        raise ValueError(f"calibration observations are not exact (missing={missing}, extra={extra})")
+    if set(sessions_by_id) != {str(sample["session_instance_id"]) for sample in samples}:
+        raise ValueError("sessions are not in a one-to-one relation with samples")
+    rows.sort(key=lambda row: (row["cell_id"], row["candidate_path_id"], row["block"]))
+    observations.sort(key=lambda row: (row["cell_id"], row["candidate_path_id"], row["block"]))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    _write_csv(output_dir / "path_runtime_calibration.csv", rows, CALIBRATION_COLUMNS)
+    result = {
+        "schema_version": CALIBRATION_SCHEMA_VERSION,
+        "source_sha": candidate_source,
+        "source_sha_semantics": "candidate_generation_source_sha",
+        "candidate_generation_source_sha": candidate_source,
+        "physical_execution_source_sha": physical_source,
+        "candidate_set_sha256": candidate_set_sha,
+        "calibration_set_sha256": calibration_set_sha,
+        "experiment_id": experiment_id,
+        "run_id": run_id,
+        "claim_policy": "diagnostic_v1",
+        "timing_scope": CALIBRATION_TIMING_SCOPE,
+        "numeric_policy": "split_complex_float32_v1",
+        "request_transport": CALIBRATION_TRANSPORT,
+        "collection": {
+            "warmup_blocks": 1,
+            "measurement_blocks": 3,
+            "blocks": [0, 1, 2, 3],
+            "attempts_per_candidate_cell": 4,
+        },
+        "expected_cell_count": len(cells),
+        "expected_candidate_cell_count": len(expected),
+        "sample_count": len(samples),
+        "session_count": len(sessions),
+        "all_successful_physical_sessions": True,
+        "all_resource_admission_passed": True,
+        "all_accuracy_qualified": True,
+        "fallback_used": False,
+        "raw_artifact_sha256": {
+            "manifest.json": raw_hashes["manifest"],
+            "samples.jsonl": raw_hashes["samples"],
+            "sessions.jsonl": raw_hashes["sessions"],
+        },
+        "environment": manifest_contract["environment"],
+        "cells": [dict(value) for _, value in sorted(cells.items())],
+        "observations": observations,
+    }
+    (output_dir / "path_runtime_calibration.json").write_bytes(_canonical_bytes(result))
+    return result
+
+
 def generate(
     config_path: Path,
     output_dir: Path,
@@ -1229,6 +1880,13 @@ def main() -> None:
     fit_parser.add_argument("--output-dir", type=Path, required=True)
     fit_parser.add_argument("--samples", type=int, default=100_000)
     fit_parser.add_argument("--seed", type=int, default=20260903)
+    extract_parser = subparsers.add_parser(
+        "extract-calibration", aliases=("extract",)
+    )
+    extract_parser.add_argument("--raw-dir", type=Path, required=True)
+    extract_parser.add_argument("--candidate-paths", type=Path, required=True)
+    extract_parser.add_argument("--calibration-set", type=Path, required=True)
+    extract_parser.add_argument("--output-dir", type=Path, required=True)
     evaluate_parser = subparsers.add_parser("evaluate")
     evaluate_parser.add_argument("--candidate-paths", type=Path, required=True)
     evaluate_parser.add_argument("--profile", type=Path, required=True)
@@ -1262,6 +1920,14 @@ def main() -> None:
             args.output_dir, samples=args.samples, seed=args.seed,
         )
         print(json.dumps({"weights": result.weights.as_mapping(), "geometric_mean_speedup": result.geometric_mean_speedup}, sort_keys=True))
+    elif args.command in {"extract-calibration", "extract"}:
+        result = extract_calibration(
+            args.raw_dir,
+            args.candidate_paths,
+            args.calibration_set,
+            args.output_dir,
+        )
+        print(json.dumps({"observation_count": result["sample_count"]}, sort_keys=True))
     else:
         result = evaluate_frozen_profile(
             args.candidate_paths,

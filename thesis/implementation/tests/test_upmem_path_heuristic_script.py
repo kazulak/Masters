@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 import sys
 
+import pytest
+
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "upmem_path_heuristic.py"
 SPEC = importlib.util.spec_from_file_location("upmem_path_heuristic_script", SCRIPT)
@@ -266,3 +268,263 @@ def test_frozen_profile_selects_validation_paths_without_timing(tmp_path: Path) 
         candidate
     }
     assert len(result["selections"]) == 2
+
+
+def _calibration_fixture(tmp_path: Path) -> tuple[Path, Path, Path, dict, tuple[dict, ...], tuple[dict, ...]]:
+    candidate_id = "a" * 64
+    logical_plan_id = "b" * 64
+    physical_plan_id = "c" * 64
+    problem = "d" * 64
+    tensor_structure = "e" * 64
+    candidate_source = "f" * 40
+    physical_source = "1" * 40
+    experiment_id = "2" * 64
+    run_id = "run-fixture"
+    dataset = {
+        "schema_version": script.SCHEMA_VERSION,
+        "source_sha": candidate_source,
+        "circuits": [{
+            "circuit_id": "fixture",
+            "split": "training",
+            "problem_id": problem,
+            "tensor_network_structure_id": tensor_structure,
+            "candidates": [{
+                "candidate_path_id": candidate_id,
+                "source_kind": "fixture",
+                "is_greedy": True,
+                "logical_plan_id": logical_plan_id,
+                "conventional_features": {
+                    "flops": 1.0,
+                    "macs": 1.0,
+                    "peak_intermediate_elements": 1.0,
+                    "peak_intermediate_bytes": 16.0,
+                    "total_intermediate_writes": 1.0,
+                    "maximum_intermediate_rank": 1,
+                    "contraction_count": 1,
+                },
+                "topologies": [{
+                    "topology_id": "1dpu_t8",
+                    "feasible": True,
+                    "physical_plan_id": physical_plan_id,
+                    "topology": {
+                        "dpu_count": 1,
+                        "rank_count": 1,
+                        "tasklets_per_dpu": 8,
+                    },
+                    "resource_admission": {
+                        "collection_resource_admission_passed": True,
+                    },
+                }],
+            }],
+        }],
+    }
+    calibration = {
+        "schema_version": "upmem_path_calibration_candidate_set_v1",
+        "source_sha": candidate_source,
+        "candidate_set_sha256": script._sha256_bytes(script._canonical_bytes(dataset)),
+        "timing_used_for_selection": False,
+        "cells": [{
+            "cell_id": "fixture:1dpu_t8",
+            "circuit_id": "fixture",
+            "topology_id": "1dpu_t8",
+            "greedy_path_id": candidate_id,
+            "candidate_path_ids": [candidate_id],
+        }],
+    }
+    manifest = {
+        "status": "completed",
+        "source_worktree_dirty": False,
+        "source_commit": physical_source,
+        "experiment_id": experiment_id,
+        "run_id": run_id,
+        "configuration": {
+            "experiment": {
+                "experiment_id": experiment_id,
+                "collection": {
+                    "claim_policy": "diagnostic_v1",
+                    "warmup_blocks": 1,
+                    "measurement_blocks": 3,
+                    "session_policy": "fresh_session_per_attempt_v1",
+                },
+                "matrix": [{
+                    "case_id": "fixture",
+                    "plan_id": f"path_{candidate_id}",
+                    "route_ids": ["1dpu_t8"],
+                }],
+            },
+            "environment": {
+                "host": "fixture-host",
+                "requested_rank_paths": ["/dev/dpu_rank1"],
+            },
+        },
+    }
+    base_backend = {
+        "target_observed": "physical_hardware",
+        "physical_target_verified": True,
+        "hardware_kernel_executed": True,
+        "simulator_kernel_executed": False,
+        "cpu_fallback_used": False,
+        "collection_resource_admission_passed": True,
+        "execution_resource_admission_passed": True,
+        "startup_resource_admission_passed": True,
+        "requested_dpus": 1,
+        "allocated_dpus": 1,
+        "active_dpus": 1,
+        "tasklets_per_dpu": 8,
+        "rank_count": 1,
+        "request_transport": script.CALIBRATION_TRANSPORT,
+        "arithmetic_weighted_tasklet_utilization": 1.0,
+        "arithmetic_weighted_dpu_slot_utilization": 1.0,
+        "dominant_work_wave_utilization": 1.0,
+        "total_wave_count": 1,
+        "fully_populated_wave_count": 1,
+        "active_dpu_ids": [[0, 0]],
+        "active_rank_indices": [0],
+        "operation_facts": [],
+    }
+    terminal = {
+        "target_observed": "physical_hardware",
+        "physical_target_verified": True,
+        "hardware_kernel_executed": True,
+        "simulator_kernel_executed": False,
+        "cpu_fallback_used": False,
+        "allocation_verified": True,
+        "hardware_allocation_verified": True,
+        "binary_identity_verified": True,
+        "native_identity_verified": True,
+        "hardware_release_verified": True,
+        "startup_resource_admission_passed": True,
+        "requested_dpu_count": 1,
+        "allocated_dpu_count": 1,
+        "observed_dpu_count": 1,
+        "observed_tasklets_per_dpu": 8,
+        "startup_requested_dpu_count": 1,
+        "startup_allocated_dpu_count": 1,
+        "startup_requested_tasklets_per_dpu": 8,
+    }
+    validation = {
+        "accuracy_qualified": True,
+        "full_precision_threshold_applicable": True,
+        "full_precision_passed": True,
+        "policy_reference_applicable": True,
+        "policy_reference_passed": True,
+        "max_abs_error": 0.0,
+        "relative_l2_error": 0.0,
+        "norm_drift": 0.0,
+        "phase_aligned_max_abs_error": 0.0,
+    }
+    samples = []
+    sessions = []
+    for block, attempt_kind in ((0, "warmup"), (1, "measurement"), (2, "measurement"), (3, "measurement")):
+        session_id = f"session-{block}"
+        samples.append({
+            "experiment_id": experiment_id,
+            "run_id": run_id,
+            "case_id": "fixture",
+            "plan_id": f"path_{candidate_id}",
+            "route_id": "1dpu_t8",
+            "block_id": block,
+            "attempt_kind": attempt_kind,
+            "status": "success",
+            "sample_id": f"sample-{block}",
+            "sample_index": block,
+            "order_index": block,
+            "session_instance_id": session_id,
+            "observed_affinity": [0],
+            "output_sha256": "3" * 64,
+            "identities": {
+                "problem_id": problem,
+                "tensor_network_structure_id": tensor_structure,
+                "logical_plan_id": logical_plan_id,
+                "physical_plan_id": physical_plan_id,
+                "executable_id": "4" * 64,
+                "validation_policy_id": "5" * 64,
+            },
+            "validation": validation,
+            "measurement": {
+                "scope_id": "steady_execution_v1",
+                "total_wall_s": 10.0 + block,
+                "kernel_s": 2.0,
+                "h2d_s": 0.1,
+                "d2h_s": 0.1,
+                "h2d_bytes": 100,
+                "d2h_bytes": 200,
+                "preparation_s": 0.2,
+            },
+            "backend_facts": base_backend,
+        })
+        sessions.append({
+            "experiment_id": experiment_id,
+            "run_id": run_id,
+            "case_id": "fixture",
+            "plan_id": f"path_{candidate_id}",
+            "route_id": "1dpu_t8",
+            "status": "success",
+            "session_instance_id": session_id,
+            "open_s": 0.5,
+            "session_close_s": 0.25,
+            "release_attempted": True,
+            "release_succeeded": True,
+            "release_verified": True,
+            "terminal_backend_facts": terminal,
+        })
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    (raw_dir / "manifest.json").write_text("manifest\n", encoding="utf-8")
+    (raw_dir / "samples.jsonl").write_text("samples\n", encoding="utf-8")
+    (raw_dir / "sessions.jsonl").write_text("sessions\n", encoding="utf-8")
+    candidate_path = tmp_path / "candidate_paths.json"
+    calibration_path = tmp_path / "calibration_candidate_set.json"
+    candidate_path.write_bytes(script._canonical_bytes(dataset))
+    calibration_path.write_bytes(script._canonical_bytes(calibration))
+    return raw_dir, candidate_path, calibration_path, manifest, tuple(samples), tuple(sessions)
+
+
+def test_extract_calibration_emits_raw_rows_and_separates_source_commits(
+    tmp_path: Path, monkeypatch
+) -> None:
+    raw_dir, candidate_path, calibration_path, manifest, samples, sessions = _calibration_fixture(tmp_path)
+    monkeypatch.setattr(script, "load_artifacts", lambda path: (manifest, samples, sessions))
+    output_dir = tmp_path / "calibration"
+    result = script.extract_calibration(raw_dir, candidate_path, calibration_path, output_dir)
+    assert result["sample_count"] == 4
+    assert result["session_count"] == 4
+    assert result["candidate_generation_source_sha"] == "f" * 40
+    assert result["physical_execution_source_sha"] == "1" * 40
+    assert len(result["observations"]) == 4
+    assert {row["block"] for row in result["observations"]} == {0, 1, 2, 3}
+    assert (output_dir / "path_runtime_calibration.csv").exists()
+    table = list(csv.DictReader((output_dir / "path_runtime_calibration.csv").open(encoding="utf-8")))
+    assert len(table) == 4
+    assert table[0]["source_sha"] == "f" * 40
+    assert table[0]["candidate_generation_source_sha"] == "f" * 40
+    assert table[0]["physical_execution_source_sha"] == "1" * 40
+    assert table[0]["timing_scope"] == "steady_execution_v1"
+    assert table[0]["fallback"] == "false"
+    assert json.loads(table[0]["backend_facts_json"])["request_transport"] == "packed_operation_v1"
+    emitted = json.loads((output_dir / "path_runtime_calibration.json").read_text(encoding="utf-8"))
+    assert emitted["observations"][0]["raw_sample"]["sample_id"] == "sample-0"
+    assert emitted["observations"][0]["raw_session"]["session_instance_id"] == "session-0"
+
+
+def test_extract_calibration_rejects_incomplete_block_set(tmp_path: Path, monkeypatch) -> None:
+    raw_dir, candidate_path, calibration_path, manifest, samples, sessions = _calibration_fixture(tmp_path)
+    monkeypatch.setattr(script, "load_artifacts", lambda path: (manifest, samples[:-1], sessions[:-1]))
+    with pytest.raises(ValueError, match="canonical evidence count"):
+        script.extract_calibration(raw_dir, candidate_path, calibration_path, tmp_path / "out")
+
+
+def test_extract_calibration_cli_alias_invokes_strict_extractor(tmp_path: Path, monkeypatch, capsys) -> None:
+    raw_dir, candidate_path, calibration_path, manifest, samples, sessions = _calibration_fixture(tmp_path)
+    monkeypatch.setattr(script, "load_artifacts", lambda path: (manifest, samples, sessions))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "upmem_path_heuristic.py", "extract", "--raw-dir", str(raw_dir),
+            "--candidate-paths", str(candidate_path), "--calibration-set",
+            str(calibration_path), "--output-dir", str(tmp_path / "cli-out"),
+        ],
+    )
+    script.main()
+    assert json.loads(capsys.readouterr().out)["observation_count"] == 4
