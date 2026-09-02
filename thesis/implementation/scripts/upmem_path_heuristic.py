@@ -19,7 +19,7 @@ from typing import Any
 from quantum_bench.circuits import builtin_circuit
 from quantum_bench.evidence import problem_id, tensor_network_structure_id
 from quantum_bench.lowering import build_contraction_dag, contraction_dag_hash, lower_tensor_network
-from quantum_bench.model import make_simulation_job
+from quantum_bench.model import ContractNode, make_simulation_job
 from quantum_bench.planning import plan_cotengra, plan_opt_einsum
 from quantum_bench.upmem.path_heuristic import (
     COST_MODEL_ID,
@@ -45,7 +45,9 @@ from quantum_bench.upmem.plan import (
     collection_resource_admission,
     physical_plan_id,
     plan_upmem,
+    _canonical_dimensions,
 )
+from quantum_bench.upmem.tiling import _choose_tile_shape, tile_limits_for_numeric_mode
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -118,6 +120,25 @@ def _host_memory_estimate(inputs: dict[str, Any], dag: Any) -> int:
     input_bytes = sum(int(value.size) * 8 for value in inputs.values())
     outputs = [int(_product(node.output.shape)) * 8 for node in dag.nodes]
     return input_bytes + sum(outputs) + 2 * max(outputs, default=0)
+
+
+def _estimated_work_unit_count(dag: Any) -> int:
+    limits = tile_limits_for_numeric_mode("float32")
+    result = 0
+    for node in dag.nodes:
+        if not isinstance(node, ContractNode):
+            continue
+        batch, m_size, n_size, k_size = _canonical_dimensions(node)
+        tile_m, tile_k, tile_n = _choose_tile_shape(
+            m_size, k_size, n_size, limits
+        )
+        result += (
+            batch
+            * ((m_size + tile_m - 1) // tile_m)
+            * ((n_size + tile_n - 1) // tile_n)
+            * ((k_size + tile_k - 1) // tile_k)
+        )
+    return result
 
 
 def _product(values: Any) -> int:
@@ -272,12 +293,26 @@ def _serialize_candidate(
     inputs: dict[str, Any],
     item: dict[str, Any],
     config: dict[str, Any],
-) -> tuple[dict[str, Any], list[dict[str, Any]], PathCandidate]:
+) -> tuple[dict[str, Any], list[dict[str, Any]], PathCandidate | None]:
     dag = build_contraction_dag(network, item["path"])
     conventional = extract_conventional_features(dag)
     logical_id = contraction_dag_hash(dag)
     memory_estimate = _host_memory_estimate(inputs, dag)
     memory_limit = int(config["host_memory_admission_bytes"])
+    estimated_work_units = _estimated_work_unit_count(dag)
+    work_unit_limit = int(config["candidate_generation"]["maximum_planned_work_units"])
+    if estimated_work_units > work_unit_limit:
+        return _infeasible_candidate_record(
+            circuit_id=circuit_id,
+            split=split,
+            item=item,
+            config=config,
+            reason="estimated_work_unit_count_exceeds_preregistered_bound",
+            conventional=conventional,
+            logical_plan_id=logical_id,
+            host_memory_estimate_bytes=memory_estimate,
+            estimated_work_unit_count=estimated_work_units,
+        )
     feature_pairs: list[tuple[str, RawFeatureVector]] = []
     feasible_topologies: list[str] = []
     topology_records: list[dict[str, Any]] = []
@@ -438,6 +473,10 @@ def _infeasible_candidate_record(
     item: dict[str, Any],
     config: dict[str, Any],
     reason: str,
+    conventional: ConventionalPathFeatures | None = None,
+    logical_plan_id: str | None = None,
+    host_memory_estimate_bytes: int | None = None,
+    estimated_work_unit_count: int | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], None]:
     topology_records = []
     rows = []
@@ -451,7 +490,8 @@ def _infeasible_candidate_record(
                 "physical_plan_id": None,
                 "resource_admission": None,
                 "features": {},
-                "host_memory_estimate_bytes": None,
+                "host_memory_estimate_bytes": host_memory_estimate_bytes,
+                "estimated_work_unit_count": estimated_work_unit_count,
             }
         )
         row = {
@@ -474,8 +514,10 @@ def _infeasible_candidate_record(
             "source_seed": item["source_seed"],
             "planner_config_hash": item["planner_config_hash"],
             "is_greedy": item["is_greedy"],
-            "logical_plan_id": None,
-            "conventional_features": None,
+            "logical_plan_id": logical_plan_id,
+            "conventional_features": (
+                conventional.as_mapping() if conventional is not None else None
+            ),
             "topologies": topology_records,
         },
         rows,

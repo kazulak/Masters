@@ -9,6 +9,7 @@
     "cotengra_method": "greedy",
     "cotengra_objective": "flops",
     "master_seed": 20260902,
+    "maximum_planned_work_units": 100000,
     "one_trial_searches": 64,
     "opt_einsum_reference": "greedy"
   },

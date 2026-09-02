@@ -40,6 +40,12 @@ path exceeding that preregistered software-planning bound is retained in the
 candidate pool with explicit infeasibility facts and is never submitted to
 the SDK simulator or physical hardware.
 
+Before materializing tiles, the generator derives their exact count from the
+canonical B/M/N/K geometry and fixed tile limits. Candidates requiring more
+than 100,000 planned work units are retained as explicitly infeasible. The
+time bound is therefore a failure guard rather than the primary admission
+rule.
+
 - `B_host_dpu` is planned H2D plus D2H traffic. The components are retained.
 - `B_mram_wram` is the existing aligned-transfer estimate derived from tile
   geometry. It is not a hardware counter.
