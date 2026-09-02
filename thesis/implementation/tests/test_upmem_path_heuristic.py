@@ -9,6 +9,7 @@ import pytest
 from quantum_bench.upmem.path_heuristic import (
     COST_MODEL_ID,
     FEATURE_NAMES,
+    canonicalize_path,
     ConventionalPathFeatures,
     NormalizedFeatureVector,
     PathCandidate,
@@ -18,15 +19,18 @@ from quantum_bench.upmem.path_heuristic import (
     WeightVector,
     choose_feature_model,
     equal_model_weights,
+    extract_conventional_features,
     extract_plan_features,
     explain_score,
     fit_weights,
     geometric_mean,
     normalize_features,
+    path_id,
     score_features,
     select_best_candidate,
     select_calibration_candidates,
 )
+from quantum_bench.model import ContractNode, ContractionDAG, TensorSpec, TensorView
 from quantum_bench.upmem.plan import (
     UpmemPlan,
     UpmemStage,
@@ -115,6 +119,20 @@ def test_greedy_relative_log_normalization_uses_unit_epsilons() -> None:
     assert COST_MODEL_ID == "upmem_slr_cost_v1"
 
 
+def test_path_pair_order_is_canonical_but_step_order_is_preserved() -> None:
+    forward = ((2, 0), (3, 1))
+    swapped_pairs = ((0, 2), (1, 3))
+    swapped_steps = ((3, 1), (2, 0))
+
+    assert canonicalize_path(forward) == ((0, 2), (1, 3))
+    assert canonicalize_path(forward) == canonicalize_path(swapped_pairs)
+    assert canonicalize_path(forward) != canonicalize_path(swapped_steps)
+    assert path_id(forward, circuit_id="fixture") == path_id(
+        swapped_pairs,
+        circuit_id="fixture",
+    )
+
+
 def test_feature_dependencies_and_inactive_numeric_terms_are_explicit() -> None:
     from quantum_bench.upmem.path_heuristic import feature_dependency_metadata
 
@@ -123,6 +141,9 @@ def test_feature_dependencies_and_inactive_numeric_terms_are_explicit() -> None:
     numeric = next(item for item in metadata if item.feature == "E_num")
     assert numeric.independently_identifiable is False
     assert "four-real-product arithmetic" in numeric.excludes
+    sync = next(item for item in metadata if item.feature == "N_sync")
+    assert "one event per wave (also the packed-operation alias)" in sync.includes
+    assert "packed-operation count as a second wave event" in sync.excludes
 
 
 def test_movement_heavy_score_can_choose_higher_flop_path() -> None:
@@ -288,6 +309,78 @@ def test_plan_feature_extraction_uses_existing_four_lane_facts() -> None:
     assert facts.raw.numeric_overhead == 0.0
     assert facts.wave_count == facts.packed_operation_count == 1
     assert facts.dpu_launch_count == 4
+    assert facts.raw.sync_events == pytest.approx(
+        facts.wave_count
+        + facts.dpu_launch_count
+        + facts.host_reduce_count
+        + facts.barrier_events
+    )
+
+
+def test_conventional_intermediate_features_exclude_final_output() -> None:
+    first_left = TensorSpec(
+        id="a",
+        labels=(0, 1),
+        shape=(2, 2),
+        structure="input",
+    )
+    first_right = TensorSpec(
+        id="b",
+        labels=(1, 2),
+        shape=(2, 2),
+        structure="input",
+    )
+    final_right = TensorSpec(
+        id="c",
+        labels=(2, 3),
+        shape=(2, 3),
+        structure="input",
+    )
+    intermediate = TensorSpec(
+        id="intermediate",
+        labels=(0, 2),
+        shape=(2, 2),
+        structure="contraction",
+        produced_by="contract-0",
+    )
+    final = TensorSpec(
+        id="final",
+        labels=(0, 3),
+        shape=(2, 3),
+        structure="contraction",
+        produced_by="contract-1",
+    )
+    first = ContractNode(
+        node_id="contract-0",
+        left=TensorView(tensor_id="a", labels=(0, 1), shape=(2, 2)),
+        right=TensorView(tensor_id="b", labels=(1, 2), shape=(2, 2)),
+        output=intermediate,
+        contracted_labels=(1,),
+        output_labels=(0, 2),
+    )
+    second = ContractNode(
+        node_id="contract-1",
+        left=TensorView(tensor_id="intermediate", labels=(0, 2), shape=(2, 2)),
+        right=TensorView(tensor_id="c", labels=(2, 3), shape=(2, 3)),
+        output=final,
+        contracted_labels=(2,),
+        output_labels=(0, 3),
+        dependencies=("contract-0",),
+    )
+    dag = ContractionDAG(
+        tensors=(first_left, first_right, final_right),
+        nodes=(first, second),
+        output=TensorView(tensor_id="final", labels=(0, 3), shape=(2, 3)),
+    )
+
+    features = extract_conventional_features(dag)
+
+    assert features.flops == pytest.approx(40.0)
+    assert features.contraction_count == 2
+    assert features.peak_intermediate_elements == pytest.approx(4.0)
+    assert features.peak_intermediate_bytes == pytest.approx(64.0)
+    assert features.total_intermediate_writes == pytest.approx(4.0)
+    assert features.maximum_intermediate_rank == 2
 
 
 def test_explanation_contains_raw_normalized_weight_and_contribution_rows() -> None:
@@ -301,10 +394,10 @@ def test_explanation_contains_raw_normalized_weight_and_contribution_rows() -> N
     assert rows[0].contribution == pytest.approx(rows[0].normalized * rows[0].weight)
 
 
-def test_fit_uses_training_rows_only_and_returns_geometric_mean_objective() -> None:
+def test_fit_requires_complete_candidate_sets_and_returns_geometric_mean_objective() -> None:
     greedy = _candidate("greedy", _raw(100.0), greedy=True)
     measured_but_slower = _candidate("measured", _raw(90.0))
-    unmeasured_better = _candidate("unmeasured", _raw(1.0))
+    unmeasured_better = _candidate("unmeasured", _raw(200.0))
     cell = TrainingCell(
         cell_id="train-1d",
         topology="topology",
@@ -318,7 +411,17 @@ def test_fit_uses_training_rows_only_and_returns_geometric_mean_objective() -> N
             runtime_s=9.0,
         ),
     )
-    result = fit_weights((cell,), rows, seed=7, random_sample_count=16)
+    with pytest.raises(ValueError, match="exact measured candidate set"):
+        fit_weights((cell,), rows, seed=7, random_sample_count=16)
+
+    complete_rows = rows + (
+        RuntimeMeasurement(
+            cell_id="train-1d",
+            candidate_id=unmeasured_better.path_id,
+            runtime_s=20.0,
+        ),
+    )
+    result = fit_weights((cell,), complete_rows, seed=7, random_sample_count=16)
     assert result.selected_path_ids == (("train-1d", measured_but_slower.path_id),)
     assert result.geometric_mean_speedup == pytest.approx(10.0 / 9.0)
     assert result.minimum_cell_speedup == pytest.approx(10.0 / 9.0)
@@ -329,7 +432,7 @@ def test_fit_uses_training_rows_only_and_returns_geometric_mean_objective() -> N
     with pytest.raises(ValueError, match="training rows only"):
         fit_weights(
             (cell,),
-            rows
+            complete_rows
             + (
                 RuntimeMeasurement(
                     cell_id="train-1d",
@@ -339,6 +442,88 @@ def test_fit_uses_training_rows_only_and_returns_geometric_mean_objective() -> N
                 ),
             ),
             seed=7,
+            random_sample_count=2,
+        )
+
+
+def test_fit_rejects_duplicate_failed_and_mixed_runtime_evidence() -> None:
+    greedy = _candidate("greedy-evidence", _raw(100.0), greedy=True)
+    candidate = _candidate("candidate-evidence", _raw(90.0))
+    cell = TrainingCell(
+        cell_id="train-evidence",
+        topology="topology",
+        candidates=(greedy, candidate),
+    )
+    common = {
+        "split": "train",
+        "source_sha": "a" * 40,
+        "timing_scope": "steady_execution_v1",
+    }
+    rows = (
+        RuntimeMeasurement(
+            cell_id=cell.cell_id,
+            candidate_id=greedy.path_id,
+            runtime_s=10.0,
+            observation_id="block-0",
+            **common,
+        ),
+        RuntimeMeasurement(
+            cell_id=cell.cell_id,
+            candidate_id=candidate.path_id,
+            runtime_s=9.0,
+            observation_id="block-0",
+            **common,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="duplicate runtime evidence"):
+        fit_weights((cell,), rows + (rows[0],), random_sample_count=2)
+    with pytest.raises(ValueError, match="failed or unsupported"):
+        fit_weights(
+            (cell,),
+            (
+                rows[0],
+                RuntimeMeasurement(
+                    cell_id=cell.cell_id,
+                    candidate_id=candidate.path_id,
+                    runtime_s=9.0,
+                    status="failed",
+                    observation_id="block-0",
+                    **common,
+                ),
+            ),
+            random_sample_count=2,
+        )
+    with pytest.raises(ValueError, match="mixed source_sha"):
+        fit_weights(
+            (cell,),
+            rows
+            + (
+                RuntimeMeasurement(
+                    cell_id=cell.cell_id,
+                    candidate_id=candidate.path_id,
+                    runtime_s=9.1,
+                    source_sha="b" * 40,
+                    timing_scope="steady_execution_v1",
+                    observation_id="block-1",
+                ),
+            ),
+            random_sample_count=2,
+        )
+    with pytest.raises(ValueError, match="mixed timing_scope"):
+        fit_weights(
+            (cell,),
+            rows
+            + (
+                RuntimeMeasurement(
+                    cell_id=cell.cell_id,
+                    candidate_id=candidate.path_id,
+                    runtime_s=9.1,
+                    source_sha="a" * 40,
+                    timing_scope="session_inclusive_v1",
+                    observation_id="block-1",
+                ),
+            ),
             random_sample_count=2,
         )
 

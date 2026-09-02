@@ -44,6 +44,7 @@ _WEIGHT_FIELDS = (
 )
 _EPSILONS = MappingProxyType({name: 1.0 for name in FEATURE_NAMES})
 _VALID_SPLITS = frozenset({"train", "validation", "test"})
+_VALID_MEASUREMENT_STATUSES = frozenset({"success", "failed", "unsupported"})
 _PATH_HASH_PREFIX = b"quantum-bench-upmem-path-v1\0"
 
 
@@ -272,9 +273,18 @@ FEATURE_DEPENDENCY_METADATA = (
     ),
     FeatureDependency(
         feature="N_sync",
-        source="explicit plan event counts",
-        includes=("packed operations", "waves", "DPU launches", "reductions", "barriers"),
-        excludes=("arithmetic work", "transfer bytes"),
+        source="explicit non-overlapping plan coordination event counts",
+        includes=(
+            "one event per wave (also the packed-operation alias)",
+            "DPU launches",
+            "host reductions",
+            "tasklet barriers",
+        ),
+        excludes=(
+            "packed-operation count as a second wave event",
+            "arithmetic work",
+            "transfer bytes",
+        ),
         independently_identifiable=True,
     ),
     FeatureDependency(
@@ -400,13 +410,9 @@ def extract_plan_features(plan: UpmemPlan) -> PlanFeatureFacts:
     from quantum_bench.upmem.plan import collection_resource_admission
 
     admission = collection_resource_admission(plan)
-    sync_events = (
-        packed_operation_count
-        + wave_count
-        + dpu_launch_count
-        + host_reduce_count
-        + barrier_events
-    )
+    # ``packed_operation_count`` and ``wave_count`` are aliases for this plan;
+    # count the coordination event once through ``wave_count``.
+    sync_events = wave_count + dpu_launch_count + host_reduce_count + barrier_events
     raw = RawFeatureVector(
         host_dpu_bytes=h2d_bytes + d2h_bytes,
         mram_wram_bytes=mram_wram_bytes,
@@ -488,13 +494,14 @@ def extract_conventional_features(dag: ContractionDAG) -> ConventionalPathFeatur
         raise TypeError("extract_conventional_features requires a ContractionDAG")
     validate_contraction_dag(dag)
     macs = 0
-    output_sizes: list[int] = []
+    intermediate_sizes: list[int] = []
     maximum_rank = 0
     contraction_count = 0
     for node in dag.nodes:
         output_elements = _shape_size(node.output.shape)
-        output_sizes.append(output_elements)
-        maximum_rank = max(maximum_rank, len(node.output.labels))
+        if node.output.id != dag.output.tensor_id:
+            intermediate_sizes.append(output_elements)
+            maximum_rank = max(maximum_rank, len(node.output.labels))
         if isinstance(node, ContractNode):
             contraction_count += 1
             contracted_size = 1
@@ -507,13 +514,13 @@ def extract_conventional_features(dag: ContractionDAG) -> ConventionalPathFeatur
             macs += output_elements * contracted_size
         elif not isinstance(node, ReduceNode):  # pragma: no cover
             raise TypeError(f"unsupported DAG node: {type(node).__name__}")
-    peak_elements = max(output_sizes, default=0)
+    peak_elements = max(intermediate_sizes, default=0)
     return ConventionalPathFeatures(
         flops=float(2 * macs),
         macs=float(macs),
         peak_intermediate_elements=float(peak_elements),
         peak_intermediate_bytes=float(16 * peak_elements),
-        total_intermediate_writes=float(sum(output_sizes)),
+        total_intermediate_writes=float(sum(intermediate_sizes)),
         maximum_intermediate_rank=maximum_rank,
         contraction_count=contraction_count,
     )
@@ -531,7 +538,8 @@ def canonicalize_path(path: Iterable[Iterable[int]]) -> tuple[tuple[int, int], .
             raise TypeError("contraction path indices must be integers")
         if values[0] < 0 or values[1] < 0 or values[0] == values[1]:
             raise ValueError("contraction path indices must be distinct and nonnegative")
-        canonical.append((values[0], values[1]))
+        # Pair order is not semantic; the sequence of contraction steps is.
+        canonical.append(tuple(sorted(values)))
     return tuple(canonical)
 
 
@@ -1002,6 +1010,10 @@ class RuntimeMeasurement:
     candidate_id: str
     runtime_s: float
     split: str = "train"
+    source_sha: str | None = None
+    timing_scope: str | None = None
+    status: str = "success"
+    observation_id: str | None = None
 
     def __post_init__(self) -> None:
         _require_nonempty_string("cell_id", self.cell_id)
@@ -1009,6 +1021,15 @@ class RuntimeMeasurement:
         _require_positive_finite("runtime_s", self.runtime_s)
         if self.split not in _VALID_SPLITS:
             raise ValueError(f"unsupported data split: {self.split!r}")
+        if self.status not in _VALID_MEASUREMENT_STATUSES:
+            raise ValueError(f"unsupported runtime measurement status: {self.status!r}")
+        for name, value in (
+            ("source_sha", self.source_sha),
+            ("timing_scope", self.timing_scope),
+            ("observation_id", self.observation_id),
+        ):
+            if value is not None:
+                _require_nonempty_string(name, value)
 
 
 MeasuredRuntime = RuntimeMeasurement
@@ -1044,6 +1065,10 @@ def _coerce_measurement(row: RuntimeMeasurement | Mapping[str, object]) -> Runti
             candidate_id=str(row["candidate_id"]),
             runtime_s=float(row["runtime_s"]),
             split=str(row.get("split", "train")),
+            source_sha=row.get("source_sha"),
+            timing_scope=row.get("timing_scope"),
+            status=str(row.get("status", "success")),
+            observation_id=row.get("observation_id"),
         )
     raise TypeError("runtime rows must be RuntimeMeasurement records or mappings")
 
@@ -1082,9 +1107,19 @@ def fit_weights(
         raise ValueError("at least one measured runtime row is required")
     if any(row.split != "train" for row in rows):
         raise ValueError("weight fitting accepts training rows only")
+    if any(row.status != "success" for row in rows):
+        raise ValueError("runtime evidence contains failed or unsupported rows")
+
+    for name in ("source_sha", "timing_scope"):
+        values = {getattr(row, name) for row in rows}
+        if len(values) > 1:
+            raise ValueError(f"runtime evidence has mixed {name} values")
 
     cells_by_id = {cell.cell_id: cell for cell in cells}
     raw_rows: dict[tuple[str, str], list[float]] = {}
+    observation_ids: dict[tuple[str, str], list[str | None]] = {}
+    observed_candidates: dict[str, set[str]] = {}
+    seen_rows: set[tuple[object, ...]] = set()
     for row in rows:
         cell = cells_by_id.get(row.cell_id)
         if cell is None:
@@ -1093,7 +1128,68 @@ def fit_weights(
             raise ValueError(
                 f"runtime row references unknown candidate {row.candidate_id!r}"
             )
+        identity = (
+            row.cell_id,
+            row.candidate_id,
+            row.observation_id
+            if row.observation_id is not None
+            else ("runtime_s", row.runtime_s),
+        )
+        if identity in seen_rows:
+            raise ValueError("duplicate runtime evidence row")
+        seen_rows.add(identity)
         raw_rows.setdefault((row.cell_id, row.candidate_id), []).append(row.runtime_s)
+        observation_ids.setdefault((row.cell_id, row.candidate_id), []).append(
+            row.observation_id
+        )
+        observed_candidates.setdefault(row.cell_id, set()).add(row.candidate_id)
+
+    for cell in cells:
+        infeasible = tuple(
+            candidate.path_id
+            for candidate in cell.candidates
+            if not candidate.feasible_for(cell.topology)
+        )
+        if infeasible:
+            raise ValueError(
+                f"calibration cell {cell.cell_id!r} contains infeasible candidates: "
+                f"{infeasible!r}"
+            )
+        expected = {candidate.path_id for candidate in cell.candidates}
+        observed = observed_candidates.get(cell.cell_id, set())
+        if observed != expected:
+            missing = sorted(expected - observed)
+            extra = sorted(observed - expected)
+            raise ValueError(
+                f"calibration cell {cell.cell_id!r} requires the exact measured "
+                f"candidate set (missing={missing!r}, extra={extra!r})"
+            )
+        counts = {
+            candidate_id: len(raw_rows[(cell.cell_id, candidate_id)])
+            for candidate_id in expected
+        }
+        if len(set(counts.values())) != 1:
+            raise ValueError(
+                f"calibration cell {cell.cell_id!r} has incomplete timing rows: "
+                f"observation counts={counts!r}"
+            )
+        identifiers = {
+            tuple(observation_ids[(cell.cell_id, candidate_id)])
+            for candidate_id in expected
+        }
+        if any(value is None for ids in identifiers for value in ids) and any(
+            value is not None for ids in identifiers for value in ids
+        ):
+            raise ValueError(
+                f"calibration cell {cell.cell_id!r} mixes identified and "
+                "unidentified timing rows"
+            )
+        if all(
+            value is not None for ids in identifiers for value in ids
+        ) and len({frozenset(ids) for ids in identifiers}) != 1:
+            raise ValueError(
+                f"calibration cell {cell.cell_id!r} has incomplete observation IDs"
+            )
     medians = {
         key: float(np.median(values)) for key, values in raw_rows.items()
     }
