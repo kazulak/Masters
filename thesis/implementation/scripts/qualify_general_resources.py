@@ -51,11 +51,10 @@ _ROUTE_SPECS = {
     "upmem_float32_1dpu_t24": (1, 24),
     "upmem_float32_3dpu_t8": (3, 8),
 }
-_BINARY_FIELDS = ("host_binary", "dpu_binary", "initialization_binary")
+_BINARY_FIELDS = ("host_binary", "dpu_binary")
 _BINARY_HASH_FIELDS = {
     "host_binary": "host_binary_sha256",
     "dpu_binary": "dpu_binary_sha256",
-    "initialization_binary": "initialization_binary_sha256",
 }
 _SECTION = re.compile(
     r"^\s*\[\s*\d+\]\s+(\S+)\s+(\S+)\s+([0-9A-Fa-f]+)\s+\S+\s+([0-9A-Fa-f]+)\s+\S+\s+([A-Z]*)\s"
@@ -249,7 +248,6 @@ def _binary_paths(tasklets: int) -> dict[str, Path]:
     return {
         "host_binary": NATIVE / "bin" / f"host_upmem_execution_plan_v4_t{tasklets}",
         "dpu_binary": NATIVE / "bin" / f"dpu_gemm_tile_v4_t{tasklets}",
-        "initialization_binary": NATIVE / "bin" / f"dpu_simplepim_management_init_t{tasklets}",
     }
 
 
@@ -342,7 +340,6 @@ def _host_argument_probe(paths: Mapping[str, Path], tasklets: int, root: Path) -
                 "--session-root", str(root),
                 "--dpus", "1",
                 "--tasklets", str(observed_tasklets),
-                "--initialization-binary", str(paths["initialization_binary"]),
                 "--dpu-binary", str(paths["dpu_binary"]),
             ],
             check=False,
@@ -399,7 +396,6 @@ def build(*, output: Path) -> Mapping[str, Any]:
                 "target_link_verified": True,
                 "dpu_memory": {
                     "contraction": _dpu_memory_facts(paths["dpu_binary"]),
-                    "initialization": _dpu_memory_facts(paths["initialization_binary"]),
                 },
                 "host_argument_probe": _host_argument_probe(
                     paths, tasklets, output.parent / f"host-probe-t{tasklets}"

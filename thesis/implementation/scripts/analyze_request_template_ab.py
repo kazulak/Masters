@@ -71,7 +71,6 @@ IDENTITY_FIELDS = (
 BINARY_HASH_FIELDS = (
     "host_binary_sha256",
     "dpu_binary_sha256",
-    "initialization_binary_sha256",
 )
 ENVIRONMENT_FIELDS = (
     "host",

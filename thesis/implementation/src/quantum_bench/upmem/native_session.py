@@ -183,7 +183,15 @@ class V4Session:
         self._closed = False
         self._poisoned = False
         self._release: V4Release | None = None
+        self._operation_lock = threading.Lock()
         self.startup: Mapping[str, Any] = {}
+
+    def _enter_operation(self) -> None:
+        if not self._operation_lock.acquire(blocking=False):
+            raise V4Error("session_busy", "v4 session already has an active operation")
+
+    def _leave_operation(self) -> None:
+        self._operation_lock.release()
 
     @classmethod
     def start(
@@ -286,21 +294,18 @@ class V4Session:
             stderr_pump=stderr_pump,
             events=events,
         )
-        event = session._next_event(profile.timeout_s)
-        if event.get("event") != "READY" or event.get("status") != "ready":
-            session._poisoned = True
-            session.close()
-            raise V4ProtocolError(
-                str(event.get("failure_stage") or "hardware_allocation_failed"),
-                str(event.get("error") or "v4 native process did not become ready"),
-            )
         try:
+            event = session._next_event(profile.timeout_s)
+            if event.get("event") != "READY" or event.get("status") != "ready":
+                raise V4ProtocolError(
+                    str(event.get("failure_stage") or "hardware_allocation_failed"),
+                    str(event.get("error") or "v4 native process did not become ready"),
+                )
             session._validate_ready(event)
         except BaseException:
-            # READY has already crossed the native allocation boundary.  A
-            # malformed identity or allocation record must not leak the
-            # process or the SDK allocation while preserving the original
-            # validation failure for the caller.
+            # A failure before or during READY validation may already own an
+            # SDK allocation. Preserve the original error while closing or
+            # terminating every startup resource.
             session._poisoned = True
             try:
                 session.close()
@@ -455,6 +460,15 @@ class V4Session:
     def submit(
         self, artifact: V4RequestArtifact, *, timeout_s: float | None = None
     ) -> Mapping[str, Any]:
+        self._enter_operation()
+        try:
+            return self._submit_unlocked(artifact, timeout_s=timeout_s)
+        finally:
+            self._leave_operation()
+
+    def _submit_unlocked(
+        self, artifact: V4RequestArtifact, *, timeout_s: float | None = None
+    ) -> Mapping[str, Any]:
         if self._closed or self._poisoned:
             raise V4Error("session_closed", "v4 session is closed or poisoned")
         if artifact.root.resolve() != self.session_root:
@@ -496,7 +510,7 @@ class V4Session:
         response_wait_s = time.perf_counter() - response_wait_started
         if event.get("event") != "RESPONSE":
             self._poisoned = True
-            self.close()
+            self._close_unlocked()
             raise V4ProtocolError(
                 "protocol_error", "v4 response event has the wrong type"
             )
@@ -505,7 +519,7 @@ class V4Session:
             self._validate_response(event, artifact)
         except V4Error:
             self._poisoned = True
-            self.close()
+            self._close_unlocked()
             raise
         response_validation_s = time.perf_counter() - response_validation_started
         response = dict(event)
@@ -519,6 +533,15 @@ class V4Session:
         return response
 
     def submit_packed(
+        self, operation: PackedOperation, *, timeout_s: float | None = None
+    ) -> Mapping[str, Any]:
+        self._enter_operation()
+        try:
+            return self._submit_packed_unlocked(operation, timeout_s=timeout_s)
+        finally:
+            self._leave_operation()
+
+    def _submit_packed_unlocked(
         self, operation: PackedOperation, *, timeout_s: float | None = None
     ) -> Mapping[str, Any]:
         """Submit one variable-length operation envelope to the native host.
@@ -576,7 +599,7 @@ class V4Session:
         response_wait_s = time.perf_counter() - response_wait_started
         if event.get("event") != "OPERATION_RESPONSE":
             self._poisoned = True
-            self.close()
+            self._close_unlocked()
             raise V4ProtocolError(
                 "protocol_error", "packed response event has the wrong type"
             )
@@ -678,7 +701,7 @@ class V4Session:
             "failed_request_index"
         )
         self._poisoned = True
-        self.close()
+        self._close_unlocked()
         raise error
 
     def _validate_packed_operation_metadata(
@@ -993,6 +1016,13 @@ class V4Session:
         return value
 
     def close(self, *, timeout_s: float | None = None) -> V4Release:
+        self._enter_operation()
+        try:
+            return self._close_unlocked(timeout_s=timeout_s)
+        finally:
+            self._leave_operation()
+
+    def _close_unlocked(self, *, timeout_s: float | None = None) -> V4Release:
         if self._release is not None:
             return self._release
         if self._closed:

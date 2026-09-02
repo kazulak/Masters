@@ -48,7 +48,6 @@ routes:
       session_root: ../runs/upmem_sessions/resource_general_1d_t3
       host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t3
       dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t3
-      initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t3
       rank_paths: [/dev/dpu_rank0]
   upmem_float32_1dpu_t7:
     executor: upmem_physical
@@ -60,7 +59,6 @@ routes:
       session_root: ../runs/upmem_sessions/resource_general_1d_t7
       host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t7
       dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t7
-      initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t7
       rank_paths: [/dev/dpu_rank0]
   upmem_float32_1dpu_t12:
     executor: upmem_physical
@@ -72,7 +70,6 @@ routes:
       session_root: ../runs/upmem_sessions/resource_general_1d_t12
       host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t12
       dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t12
-      initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t12
       rank_paths: [/dev/dpu_rank0]
   upmem_float32_1dpu_t24:
     executor: upmem_physical
@@ -84,7 +81,6 @@ routes:
       session_root: ../runs/upmem_sessions/resource_general_1d_t24
       host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t24
       dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t24
-      initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t24
       rank_paths: [/dev/dpu_rank0]
   upmem_float32_3dpu_t8:
     executor: upmem_physical
@@ -96,7 +92,6 @@ routes:
       session_root: ../runs/upmem_sessions/resource_general_3d_t8
       host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t8
       dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t8
-      initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t8
       rank_paths: [/dev/dpu_rank0]
 matrix:
   - case_id: quantization_stress_18q

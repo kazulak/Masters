@@ -38,11 +38,10 @@ Not implemented or not qualified in the reset baseline:
 - graph-wide residency, graph-level memory scheduling, or calibrated planning;
 - measured energy and final CPU/GPU/UPMEM benchmark evidence.
 
-The native runtime currently uses pinned SimplePIM management types and its
-initialization kernel around raw-SDK allocation and dispatch. This is a bounded
-source-level dependency, not a qualified SimplePIM scheduling route. PID-Comm
-and ATiM become active only when a benchmark trace proves that their provider
-or kernel executed.
+The native runtime currently uses direct UPMEM SDK allocation and dispatch.
+SimplePIM remains pinned as external research source but is not linked or
+launched by the active route. PID-Comm and ATiM become active only when a
+benchmark trace proves that their provider or kernel executed.
 
 ## Invariants for every increment
 1. The same `SimulationJob`, TN, path, and DAG can be sent to multiple routes.
@@ -115,8 +114,8 @@ retained. Missing hardware produces explicit unsupported rows.
 multi-rank scaling until this gate passes.
 
 ## Increment 5: SimplePIM active scheduling
-**Goal.** Extend the bounded SimplePIM initialization dependency into the
-active management and scheduling provider for one known-good multi-DPU route.
+**Goal.** Qualify SimplePIM as an active management and scheduling provider for
+one known-good multi-DPU route only when a measured use case justifies it.
 
 **Work.** Integrate the pinned SimplePIM management/initialization interface
 behind the executor contract. Keep raw SDK as a differential reference and

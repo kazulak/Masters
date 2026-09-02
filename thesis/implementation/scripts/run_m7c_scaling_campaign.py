@@ -31,7 +31,6 @@ ROOT = Path(__file__).resolve().parents[1]
 _PATH_FIELDS = (
     "host_binary",
     "dpu_binary",
-    "initialization_binary",
 )
 _DIAGNOSTIC_SUMMARY_SCHEMA = "m7c_diagnostic_summary_v1"
 _DIAGNOSTIC_ROUTE_IDS = (

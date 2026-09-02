@@ -124,7 +124,7 @@ def test_general_resource_prepare_keeps_template_and_injects_machine_paths(
             assert Path(options[field]).is_absolute()
 
 
-def test_general_resource_build_records_all_tasklet_triplets_without_hash_uniqueness(
+def test_general_resource_build_records_all_tasklet_binary_pairs_without_hash_uniqueness(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     qualifier = _general_resource_qualifier()
@@ -134,7 +134,6 @@ def test_general_resource_build_records_all_tasklet_triplets_without_hash_unique
         for field, stem in (
             ("host_binary", "host"),
             ("dpu_binary", "dpu"),
-            ("initialization_binary", "init"),
         ):
             path = tmp_path / "bin" / f"{stem}-t{tasklets}"
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -168,7 +167,10 @@ def test_general_resource_build_records_all_tasklet_triplets_without_hash_unique
     assert len(payload["builds"]) == 24
     assert all(record["host_argument_probe"]["nonallocating"] is True for record in payload["builds"])
     assert all(record["target_link_verified"] is True for record in payload["builds"])
-    assert all(set(record["dpu_memory"]) == {"contraction", "initialization"} for record in payload["builds"])
+    assert all(
+        set(record["dpu_memory"]) == {"contraction"}
+        for record in payload["builds"]
+    )
     assert len({record["binaries"]["dpu_binary"]["sha256"] for record in payload["builds"]}) == 1
     assert json.loads(output.read_text(encoding="ascii")) == payload
 
@@ -221,7 +223,6 @@ def _general_resource_artifacts(qualifier: object):
         binary_hashes = {
             "host_binary_sha256": f"{index + 1:x}" * 64,
             "dpu_binary_sha256": f"{index + 2:x}" * 64,
-            "initialization_binary_sha256": f"{index + 3:x}" * 64,
         }
         expected_executable = qualifier._expected_executable_id(binary_hashes)
         samples.append(
@@ -541,7 +542,7 @@ def test_sequential_conformance_phase_aligned_metric_is_diagnostic_only() -> Non
 def test_sequential_baseline_prepare_rewrites_only_machine_paths(tmp_path: Path) -> None:
     qualifier = _sequential_baseline()
     binaries = {}
-    for name in ("host", "dpu", "init"):
+    for name in ("host", "dpu"):
         path = tmp_path / "bin" / name
         path.parent.mkdir(exist_ok=True)
         path.write_bytes(name.encode("ascii"))
@@ -555,7 +556,6 @@ def test_sequential_baseline_prepare_rewrites_only_machine_paths(tmp_path: Path)
         expected_cpus=[2, 5],
         host_binary=str(binaries["host"]),
         dpu_binary=str(binaries["dpu"]),
-        initialization_binary=str(binaries["init"]),
     )
 
     correctness = load_experiment_config(Path(result["correctness_config"]))
@@ -609,7 +609,6 @@ def _sequential_physical_facts() -> dict[str, object]:
         "tasklets_per_dpu": 1,
         "host_binary_sha256": "1" * 64,
         "dpu_binary_sha256": "2" * 64,
-        "initialization_binary_sha256": "3" * 64,
     }
 
 
@@ -678,7 +677,6 @@ def _sequential_artifacts(qualifier: object, commit: str) -> dict[str, tuple[obj
                             "session_root": "/tmp/sessions",
                             "host_binary": "/tmp/host",
                             "dpu_binary": "/tmp/dpu",
-                            "initialization_binary": "/tmp/init",
                             "rank_paths": ["/dev/dpu_rank0"],
                         }
                     )
@@ -1019,7 +1017,6 @@ def test_sequential_baseline_inspects_exact_four_artifacts(
     assert summary["t1_binary_hashes"] == {
         "host_binary_sha256": "1" * 64,
         "dpu_binary_sha256": "2" * 64,
-        "initialization_binary_sha256": "3" * 64,
     }
     assert set(summary["inputs"]) == {
         "conformance",
@@ -1200,7 +1197,7 @@ def test_sequential_baseline_bundle_is_closed_and_self_contained(
 ) -> None:
     qualifier = _sequential_baseline()
     binaries = {}
-    for name in ("host", "dpu", "init"):
+    for name in ("host", "dpu"):
         path = tmp_path / "bin" / name
         path.parent.mkdir(exist_ok=True)
         path.write_bytes(name.encode("ascii"))
@@ -1213,7 +1210,6 @@ def test_sequential_baseline_bundle_is_closed_and_self_contained(
         expected_cpus=[0],
         host_binary=str(binaries["host"]),
         dpu_binary=str(binaries["dpu"]),
-        initialization_binary=str(binaries["init"]),
     )
     correctness_config = Path(prepared["correctness_config"])
     performance_config = Path(prepared["performance_config"])
@@ -1224,7 +1220,6 @@ def test_sequential_baseline_bundle_is_closed_and_self_contained(
     for field, name in (
         ("host_binary", "host"),
         ("dpu_binary", "dpu"),
-        ("initialization_binary", "init"),
     ):
         path = tmp_path / "performance-bin" / name
         path.parent.mkdir(exist_ok=True)
@@ -1236,7 +1231,6 @@ def test_sequential_baseline_bundle_is_closed_and_self_contained(
     binary_hashes = {
         "host_binary_sha256": qualifier._sha256(binaries["host"]),
         "dpu_binary_sha256": qualifier._sha256(binaries["dpu"]),
-        "initialization_binary_sha256": qualifier._sha256(binaries["init"]),
     }
     summary = {
         "schema_version": qualifier.SUMMARY_SCHEMA,
@@ -1342,7 +1336,7 @@ def test_sequential_baseline_bundle_rejects_replaced_configured_binary(
 ) -> None:
     qualifier = _sequential_baseline()
     binaries = {}
-    for name in ("host", "dpu", "init"):
+    for name in ("host", "dpu"):
         path = tmp_path / "bin" / name
         path.parent.mkdir(exist_ok=True)
         path.write_bytes(name.encode("ascii"))
@@ -1355,7 +1349,6 @@ def test_sequential_baseline_bundle_rejects_replaced_configured_binary(
         expected_cpus=[0],
         host_binary=str(binaries["host"]),
         dpu_binary=str(binaries["dpu"]),
-        initialization_binary=str(binaries["init"]),
     )
     correctness_config = Path(prepared["correctness_config"])
     performance_config = Path(prepared["performance_config"])
@@ -1366,7 +1359,6 @@ def test_sequential_baseline_bundle_rejects_replaced_configured_binary(
         "t1_binary_hashes": {
             "host_binary_sha256": qualifier._sha256(binaries["host"]),
             "dpu_binary_sha256": qualifier._sha256(binaries["dpu"]),
-            "initialization_binary_sha256": qualifier._sha256(binaries["init"]),
         },
         "inputs": {
             "physical_correctness": {
@@ -1513,7 +1505,7 @@ def test_physical_preparation_preserves_template_resolved_paths(tmp_path: Path) 
     copied = load_experiment_config(output)
     source_options = source["routes"]["upmem_float32_1dpu"]["options"]
     copied_options = copied["routes"]["upmem_float32_1dpu"]["options"]
-    for field in ("host_binary", "dpu_binary", "initialization_binary"):
+    for field in ("host_binary", "dpu_binary"):
         assert copied_options[field] == source_options[field]
     assert copied_options["session_root"] == str((tmp_path / "sessions").resolve())
     assert copied_options["rank_paths"] == ("/dev/dpu_rank42",)
@@ -1793,7 +1785,7 @@ def test_m7c_scaling_preparation_preserves_all_resolved_route_paths(
             continue
         source_options = route["options"]
         copied_options = copied["routes"][route_id]["options"]
-        for field in ("host_binary", "dpu_binary", "initialization_binary"):
+        for field in ("host_binary", "dpu_binary"):
             assert copied_options[field] == source_options[field]
         assert copied_options["rank_paths"] == ("/dev/dpu_rank19",)
         assert copied_options["session_root"] == str(
@@ -1842,7 +1834,6 @@ def test_parallel_scaling_config_freezes_physical_route_matrix_and_paths(
         )
         assert Path(options["host_binary"]).is_absolute()
         assert Path(options["dpu_binary"]).is_absolute()
-        assert Path(options["initialization_binary"]).is_absolute()
 
 
 def _complete_parallel_diagnostic(
@@ -1969,7 +1960,6 @@ def _complete_parallel_diagnostic(
                         "observed_tasklets_per_dpu": tasklets,
                         "host_binary_sha256": binary_key,
                         "dpu_binary_sha256": binary_key,
-                        "initialization_binary_sha256": binary_key,
                     },
                 }
             )
@@ -2123,7 +2113,6 @@ def _complete_m7c_diagnostic(script: object) -> tuple[dict[str, object], tuple[d
     binary_hashes = {
         "host_binary_sha256": "1" * 64,
         "dpu_binary_sha256": "2" * 64,
-        "initialization_binary_sha256": "3" * 64,
     }
     physical_routes = set(script._DIAGNOSTIC_PHYSICAL_ROUTE_IDS)
     for block_id in range(6):
@@ -2253,7 +2242,6 @@ def test_m7c_campaign_binding_ignores_collection_lifecycle(tmp_path: Path) -> No
     binaries = {
         "host_binary": tmp_path / "host",
         "dpu_binary": tmp_path / "dpu",
-        "initialization_binary": tmp_path / "initialization",
     }
     for path in binaries.values():
         path.write_bytes(b"m7c")

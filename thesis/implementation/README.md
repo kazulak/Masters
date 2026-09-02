@@ -173,9 +173,11 @@ record exact-head SDK-simulator qualification for this kernel. That evidence is
 software/simulator-qualified only and does not establish a physical timing,
 scaling, energy, or kernel-competitiveness result.
 
-The active native runtime uses pinned SimplePIM management types and its
-initialization kernel around raw-SDK allocation and dispatch. It is not yet a
-qualified high-level SimplePIM scheduler or compute route. The retained
+The active native runtime allocates and dispatches directly through the UPMEM
+SDK. The former SimplePIM-derived initialization kernel was removed because it
+mutated shared allocator state from every tasklet and the contraction kernel
+does not consume that state. SimplePIM remains pinned only as external research
+source; it is not an active scheduler or compute route. The retained
 `native/upmem/pidcomm_qualification/` source is standalone future source;
 PID-Comm is not an active communication provider or public command. ATiM is
 not integrated.

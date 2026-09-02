@@ -110,8 +110,9 @@ the tagged diagnostic environment.
 
 ## Retained External Components
 
-- **SimplePIM:** pinned management types and its initialization kernel are used
-  around raw-SDK allocation/dispatch. No high-level scheduling route is yet
+- **SimplePIM:** retained as pinned external research source only. The active
+  runtime uses direct SDK allocation/dispatch and does not launch the former
+  allocator-reset initialization kernel. No high-level scheduling route is
   qualified.
 - **PID-Comm:** the retained `native/upmem/pidcomm_qualification/` source is a
   standalone future compatibility harness. It is not an active communication

@@ -60,11 +60,10 @@ CONFORMANCE_POLICIES = {
         "norm_drift_max": 2.0e-5,
     },
 }
-_BINARY_FIELDS = ("host_binary", "dpu_binary", "initialization_binary")
+_BINARY_FIELDS = ("host_binary", "dpu_binary")
 _BINARY_HASH_FIELDS = {
     "host_binary": "host_binary_sha256",
     "dpu_binary": "dpu_binary_sha256",
-    "initialization_binary": "initialization_binary_sha256",
 }
 _MACHINE_PATH_FIELDS = ("session_root", *_BINARY_FIELDS)
 _PHYSICAL_FACTS = {
@@ -230,7 +229,6 @@ def prepare_configs(
     expected_cpus: Sequence[int],
     host_binary: str | None = None,
     dpu_binary: str | None = None,
-    initialization_binary: str | None = None,
 ) -> Mapping[str, Any]:
     resolved_output = output_dir.resolve()
     if resolved_output.is_relative_to(ROOT) and subprocess.run(
@@ -242,7 +240,6 @@ def prepare_configs(
     binaries = {
         "host_binary": host_binary,
         "dpu_binary": dpu_binary,
-        "initialization_binary": initialization_binary,
     }
     correctness = _prepare_configuration(
         template=CORRECTNESS_TEMPLATE,
@@ -1025,7 +1022,6 @@ def main(argv: list[str] | None = None) -> int:
     prepare.add_argument("--expected-cpus", required=True)
     prepare.add_argument("--host-binary")
     prepare.add_argument("--dpu-binary")
-    prepare.add_argument("--initialization-binary")
     inspect = commands.add_parser("inspect")
     _add_inspection_inputs(inspect)
     inspect.add_argument("--output", type=Path, required=True)
@@ -1049,7 +1045,6 @@ def main(argv: list[str] | None = None) -> int:
                 expected_cpus=_parse_cpus(args.expected_cpus),
                 host_binary=args.host_binary,
                 dpu_binary=args.dpu_binary,
-                initialization_binary=args.initialization_binary,
             )
         elif args.command == "inspect":
             result = inspect_to_file(

@@ -46,7 +46,6 @@ _COMMON_IDENTITIES = (
 _BINARY_HASHES = (
     "host_binary_sha256",
     "dpu_binary_sha256",
-    "initialization_binary_sha256",
 )
 _THREAD_ENVIRONMENT = {
     "OMP_NUM_THREADS": "1",

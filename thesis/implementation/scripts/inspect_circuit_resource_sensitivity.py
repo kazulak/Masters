@@ -328,7 +328,7 @@ def _validate_sample(
     components = _sample_components(sample)
     if components is None:
         raise ValueError("sample lacks operation timing attribution")
-    for field in ("host_binary_sha256", "dpu_binary_sha256", "initialization_binary_sha256"):
+    for field in ("host_binary_sha256", "dpu_binary_sha256"):
         _sha(facts.get(field), field, HEX64)
     return facts, components
 
@@ -546,7 +546,7 @@ def inspect(*, input_dir: Path, output_dir: Path, selection_path: Path, expected
         components_by_route.setdefault((case_id, route_id), []).append(components)
         kernel_policies.add(str(facts["kernel_policy"]))
         tasklets = ROUTE_SPECS[route_id][1]
-        hashes = tuple(facts[field] for field in ("host_binary_sha256", "dpu_binary_sha256", "initialization_binary_sha256"))
+        hashes = tuple(facts[field] for field in ("host_binary_sha256", "dpu_binary_sha256"))
         if tasklets in binaries and binaries[tasklets] != hashes:
             raise ValueError(f"binary identity drift for T{tasklets}")
         binaries[tasklets] = hashes

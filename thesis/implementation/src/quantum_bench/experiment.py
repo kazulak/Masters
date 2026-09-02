@@ -206,7 +206,6 @@ _ROUTE_OPTIONS = {
             "session_root",
             "host_binary",
             "dpu_binary",
-            "initialization_binary",
         }
     ),
     "upmem_physical": frozenset(
@@ -217,7 +216,6 @@ _ROUTE_OPTIONS = {
             "session_root",
             "host_binary",
             "dpu_binary",
-            "initialization_binary",
             "rank_paths",
         }
     ),
@@ -228,7 +226,6 @@ _PATH_OPTIONS = {
     "session_root",
     "host_binary",
     "dpu_binary",
-    "initialization_binary",
 }
 
 

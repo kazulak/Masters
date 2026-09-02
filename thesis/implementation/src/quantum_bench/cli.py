@@ -549,7 +549,6 @@ def _resources(route: Mapping[str, object]) -> UpmemResources:
         session_root=options["session_root"],
         host_binary=options["host_binary"],
         dpu_binary=options["dpu_binary"],
-        initialization_binary=options["initialization_binary"],
         rank_paths=tuple(options.get("rank_paths", ())),
     )
 
@@ -573,7 +572,7 @@ def _executable_identity(route: Mapping[str, object]) -> str | None:
     elif executor == "quest_gpu":
         files["verification"] = _sha256_file(options["verification_path"])
     elif executor in _UPMEM_EXECUTORS:
-        for name in ("host_binary", "dpu_binary", "initialization_binary"):
+        for name in ("host_binary", "dpu_binary"):
             files[name] = _sha256_file(options[name])
     if executor in {"quest_cpu", "quest_gpu", *_UPMEM_EXECUTORS} and any(
         digest is None for digest in files.values()

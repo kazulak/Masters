@@ -52,7 +52,6 @@ routes:
       session_root: ../runs/upmem_sessions/sequential_performance_t1
       host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t1
       dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t1
-      initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t1
       rank_paths: [/dev/dpu_rank0]
 matrix:
   - case_id: stress18

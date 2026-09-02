@@ -48,7 +48,6 @@ routes:
       session_root: ../runs/upmem_sessions/parallel_diagnostic_t1
       host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t1
       dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t1
-      initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t1
       rank_paths: [/dev/dpu_rank0]
   upmem_float32_1dpu_t2:
     executor: upmem_physical
@@ -60,7 +59,6 @@ routes:
       session_root: ../runs/upmem_sessions/parallel_diagnostic_t2
       host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t2
       dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t2
-      initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t2
       rank_paths: [/dev/dpu_rank0]
   upmem_float32_1dpu_t4:
     executor: upmem_physical
@@ -72,7 +70,6 @@ routes:
       session_root: ../runs/upmem_sessions/parallel_diagnostic_t4
       host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t4
       dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t4
-      initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t4
       rank_paths: [/dev/dpu_rank0]
   upmem_float32_1dpu_t8:
     executor: upmem_physical
@@ -84,7 +81,6 @@ routes:
       session_root: ../runs/upmem_sessions/parallel_diagnostic_t8_1dpu
       host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t8
       dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t8
-      initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t8
       rank_paths: [/dev/dpu_rank0]
   upmem_float32_2dpu_t8:
     executor: upmem_physical
@@ -96,7 +92,6 @@ routes:
       session_root: ../runs/upmem_sessions/parallel_diagnostic_t8_2dpu
       host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t8
       dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t8
-      initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t8
       rank_paths: [/dev/dpu_rank0]
   upmem_float32_4dpu_t8:
     executor: upmem_physical
@@ -108,7 +103,6 @@ routes:
       session_root: ../runs/upmem_sessions/parallel_diagnostic_t8_4dpu
       host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t8
       dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t8
-      initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t8
       rank_paths: [/dev/dpu_rank0]
 matrix:
   - case_id: scaling_primary

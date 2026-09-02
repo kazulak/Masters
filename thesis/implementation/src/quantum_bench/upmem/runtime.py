@@ -9,7 +9,6 @@ DPU-resident graph intermediates.
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 import hashlib
 import json
@@ -18,6 +17,7 @@ import os
 from pathlib import Path
 import shutil
 import struct
+import threading
 import time
 from typing import Any, Callable, Mapping, Protocol
 
@@ -65,6 +65,7 @@ from quantum_bench.upmem.protocol import (
     MAX_INT32_SAFE_K,
     NUMERIC_FLOAT32,
     NUMERIC_HOST_PACKED_INT8,
+    V4Error,
     V4Profile,
     V4ProtocolError,
     V4WorkUnit,
@@ -150,7 +151,7 @@ def _wram_panel_operation_facts(
         c_offset = b_offset + b_bytes
         n_panel_count = (n_size + WRAM_PANEL_NC - 1) // WRAM_PANEL_NC
         k_panel_count = (k_size + WRAM_PANEL_KC - 1) // WRAM_PANEL_KC
-        barrier_events += 4 + 2 * n_panel_count * k_panel_count
+        barrier_events += 2 + 2 * n_panel_count * k_panel_count
         real_macs += m_size * n_size * k_size
 
         for n_start in range(0, n_size, WRAM_PANEL_NC):
@@ -777,7 +778,6 @@ class UpmemV4Executor:
         session_root: Path,
         host_binary: Path,
         dpu_binary: Path,
-        initialization_binary: Path,
         rank_paths: tuple[str, ...],
         dpu_count: int,
         tasklets_per_dpu: int = 1,
@@ -788,7 +788,6 @@ class UpmemV4Executor:
         self.session_root = Path(session_root)
         self.host_binary = Path(host_binary)
         self.dpu_binary = Path(dpu_binary)
-        self.initialization_binary = Path(initialization_binary)
         self.rank_paths = tuple(rank_paths)
         self.dpu_count = int(dpu_count)
         self.tasklets_per_dpu = int(tasklets_per_dpu)
@@ -796,17 +795,13 @@ class UpmemV4Executor:
         self.execution_target = execution_target
         self.request_transport = PACKED_OPERATION_TRANSPORT
         self.session_factory = session_factory
+        self._session_lock = threading.Lock()
         self._binary_provenance = {
             **_validated_binary_provenance(
                 self.host_binary, label="host_binary", executable=True
             ),
             **_validated_binary_provenance(
                 self.dpu_binary, label="dpu_binary", executable=False
-            ),
-            **_validated_binary_provenance(
-                self.initialization_binary,
-                label="initialization_binary",
-                executable=False,
             ),
         }
         self._source_root = str(Path(__file__).resolve().parents[3])
@@ -849,6 +844,21 @@ class UpmemV4Executor:
         return _ACTIVE_STRATEGY_CONFIG_HASH
 
     def open_session(
+        self,
+        numeric_policy: NumericPolicy,
+        topology: FinalUpmemTopology,
+    ) -> UpmemV4Session:
+        if not self._session_lock.acquire(blocking=False):
+            raise V4Error(
+                "session_busy", "UPMEM executor already owns an active session"
+            )
+        try:
+            return self._open_session_unlocked(numeric_policy, topology)
+        except BaseException:
+            self._session_lock.release()
+            raise
+
+    def _open_session_unlocked(
         self,
         numeric_policy: NumericPolicy,
         topology: FinalUpmemTopology,
@@ -907,8 +917,6 @@ class UpmemV4Executor:
                     str(local_dpus),
                     "--tasklets",
                     str(self.tasklets_per_dpu),
-                    "--initialization-binary",
-                    str(self.initialization_binary.resolve()),
                     "--dpu-binary",
                     str(self.dpu_binary.resolve()),
                     "--timeout-s",
@@ -939,16 +947,11 @@ class UpmemV4Executor:
                     if remaining > 0
                     else time.monotonic() + min(1.0, self.timeout_s)
                 )
-                with ThreadPoolExecutor(max_workers=len(ranks)) as pool:
-                    futures = [
-                        pool.submit(_close_rank_before_deadline, rank, cleanup_deadline)
-                        for rank in ranks
-                    ]
-                    for future in futures:
-                        try:
-                            future.result()
-                        except BaseException:
-                            pass
+                for rank in ranks:
+                    try:
+                        _close_rank_before_deadline(rank, cleanup_deadline)
+                    except BaseException:
+                        pass
             raise
         return UpmemV4Session(
             numeric_policy=policy,
@@ -956,6 +959,9 @@ class UpmemV4Executor:
             engine=self,
             deadline=deadline,
         )
+
+    def _release_session_slot(self) -> None:
+        self._session_lock.release()
 
 
 class UpmemV4Session:
@@ -988,11 +994,22 @@ class UpmemV4Session:
             execution_target=self.engine.execution_target,
         )
         self._response_native_identity_events: list[tuple[str, Mapping[str, Any]]] = []
+        self._operation_lock = threading.Lock()
+        self._engine_slot_released = False
         self._test_double_execution = any(
             rank.session.startup.get("test_double_execution") is True
             for rank in self.ranks
         )
         self._terminal_metadata: dict[str, Any] = {}
+
+    def _enter_operation(self) -> None:
+        if not self._operation_lock.acquire(blocking=False):
+            raise V4Error(
+                "session_busy", "UPMEM v4 session already has an active operation"
+            )
+
+    def _leave_operation(self) -> None:
+        self._operation_lock.release()
 
     @property
     def strategy_identity(self) -> dict[str, Any]:
@@ -1011,8 +1028,34 @@ class UpmemV4Session:
         stage: UpmemStage,
         numeric_policy: NumericPolicy,
     ) -> tuple[np.ndarray, Mapping[str, Any]]:
+        self._enter_operation()
+        try:
+            return self._execute_real_unlocked(
+                node,
+                left,
+                right,
+                stage=stage,
+                numeric_policy=numeric_policy,
+            )
+        finally:
+            self._leave_operation()
+
+    def _execute_real_unlocked(
+        self,
+        node: ContractNode,
+        left: np.ndarray,
+        right: np.ndarray,
+        *,
+        stage: UpmemStage,
+        numeric_policy: NumericPolicy,
+    ) -> tuple[np.ndarray, Mapping[str, Any]]:
         if self._closed:
             raise RuntimeError("UPMEM v4 session is closed")
+        if self._failed:
+            raise V4Error(
+                self._failure_stage or "session_failed",
+                "UPMEM v4 session cannot execute after a failed operation",
+            )
         policy = _validate_numeric_policy(numeric_policy)
         if self.numeric_policy != policy:
             raise ValueError("UPMEM session numeric policy does not match execution")
@@ -1244,6 +1287,34 @@ class UpmemV4Session:
         Mapping[str, tuple[str, str, str, np.ndarray]],
         tuple[Any, Any],
     ]:
+        self._enter_operation()
+        try:
+            return self._execute_complex_core_unlocked(
+                node,
+                left,
+                right,
+                stage=stage,
+                numeric_policy=numeric_policy,
+                include_evidence=include_evidence,
+            )
+        finally:
+            self._leave_operation()
+
+    def _execute_complex_core_unlocked(
+        self,
+        node: ContractNode,
+        left: np.ndarray,
+        right: np.ndarray,
+        *,
+        stage: UpmemStage,
+        numeric_policy: NumericPolicy,
+        include_evidence: bool,
+    ) -> tuple[
+        np.ndarray,
+        Mapping[str, JsonValue],
+        Mapping[str, tuple[str, str, str, np.ndarray]],
+        tuple[Any, Any],
+    ]:
         """Execute one final-plan complex contraction through ABI v4 lanes.
 
         ``include_evidence`` is intentionally private.  The public low-level
@@ -1253,6 +1324,11 @@ class UpmemV4Session:
 
         if self._closed:
             raise RuntimeError("UPMEM v4 session is closed")
+        if self._failed:
+            raise V4Error(
+                self._failure_stage or "session_failed",
+                "UPMEM v4 session cannot execute after a failed operation",
+            )
         if not isinstance(stage, UpmemStage) or stage.kind != "contract_batch":
             raise ValueError("execute_complex requires a contract_batch UpmemStage")
         if stage.node_ids != (node.node_id,):
@@ -2301,6 +2377,16 @@ class UpmemV4Session:
             )
 
     def close(self) -> dict[str, Any]:
+        self._enter_operation()
+        try:
+            return self._close_unlocked()
+        finally:
+            if self._closed and not getattr(self, "_engine_slot_released", False):
+                self._engine_slot_released = True
+                self.engine._release_session_slot()
+            self._leave_operation()
+
+    def _close_unlocked(self) -> dict[str, Any]:
         if self._closed:
             return self._terminal_metadata
         self._closed = True
@@ -2312,18 +2398,12 @@ class UpmemV4Session:
             else time.monotonic() + min(1.0, self.engine.timeout_s)
         )
         releases: dict[int, Any] = {}
-        with ThreadPoolExecutor(max_workers=len(self.ranks)) as pool:
-            future_to_rank = {
-                pool.submit(self._close_rank, rank, cleanup_deadline): rank
-                for rank in self.ranks
-            }
-            for future in as_completed(future_to_rank):
-                rank = future_to_rank[future]
-                try:
-                    releases[rank.index] = future.result()
-                except BaseException:
-                    release_failed = True
-                    releases[rank.index] = None
+        for rank in self.ranks:
+            try:
+                releases[rank.index] = self._close_rank(rank, cleanup_deadline)
+            except BaseException:
+                release_failed = True
+                releases[rank.index] = None
         diagnostics = [
             self._rank_diagnostics(rank, releases.get(rank.index))
             for rank in self.ranks
@@ -2368,8 +2448,6 @@ class UpmemV4Session:
         binary_identity_verified = all(
             rank.session.startup.get("dpu_binary_sha256")
             == self.engine._binary_provenance["dpu_binary_sha256"]
-            and rank.session.startup.get("initialization_binary_sha256")
-            == self.engine._binary_provenance["initialization_binary_sha256"]
             for rank in self.ranks
         )
         ready_verified = allocation_verified and binary_identity_verified
@@ -2529,6 +2607,18 @@ class UpmemSession:
         self._closed = False
         self._terminal_facts: Mapping[str, JsonValue] | None = None
         self._close_failure: ExecutionFailed | None = None
+        self._operation_lock = threading.Lock()
+
+    def _enter_operation(self) -> None:
+        if not self._operation_lock.acquire(blocking=False):
+            raise ExecutionFailed(
+                stage="session_busy",
+                reason="UPMEM session already has an active operation",
+                backend_facts={},
+            )
+
+    def _leave_operation(self) -> None:
+        self._operation_lock.release()
 
     def __enter__(self) -> "UpmemSession":
         return self
@@ -2546,6 +2636,15 @@ class UpmemSession:
             )
 
     def run_once(self, inputs: Mapping[str, np.ndarray]) -> ExecutionSample:
+        self._enter_operation()
+        try:
+            return self._run_once_unlocked(inputs)
+        finally:
+            self._leave_operation()
+
+    def _run_once_unlocked(
+        self, inputs: Mapping[str, np.ndarray]
+    ) -> ExecutionSample:
         """Execute one complete graph sample on the already-open session."""
 
         if self._closed:
@@ -2822,6 +2921,13 @@ class UpmemSession:
         )
 
     def close(self) -> Mapping[str, JsonValue]:
+        self._enter_operation()
+        try:
+            return self._close_unlocked()
+        finally:
+            self._leave_operation()
+
+    def _close_unlocked(self) -> Mapping[str, JsonValue]:
         """Close once and admit only fully verified physical terminal facts."""
 
         if self._closed:
@@ -3371,7 +3477,7 @@ def _startup_resource_admission(
             reasons.append("ready_tasklet_count_mismatch")
         if startup.get("target_observed") != expected_target_observed:
             reasons.append("ready_target_mismatch")
-        for key in ("dpu_binary_sha256", "initialization_binary_sha256"):
+        for key in ("dpu_binary_sha256",):
             if startup.get(key) != provenance.get(key):
                 reasons.append("ready_binary_identity_mismatch")
                 break
@@ -3478,7 +3584,6 @@ def open_upmem(
                 session_root=Path(resources.session_root),
                 host_binary=Path(resources.host_binary),
                 dpu_binary=Path(resources.dpu_binary),
-                initialization_binary=Path(resources.initialization_binary),
                 rank_paths=resources.rank_paths,
                 dpu_count=plan.topology.dpu_count,
                 tasklets_per_dpu=plan.topology.tasklets_per_dpu,
@@ -3581,7 +3686,6 @@ def open_upmem_simulator(
             session_root=Path(resources.session_root),
             host_binary=Path(resources.host_binary),
             dpu_binary=Path(resources.dpu_binary),
-            initialization_binary=Path(resources.initialization_binary),
             rank_paths=(),
             dpu_count=1,
             tasklets_per_dpu=plan.topology.tasklets_per_dpu,
@@ -3655,7 +3759,6 @@ def _validate_final_resources(resources: UpmemResources) -> None:
     paths = {
         "host_binary": Path(resources.host_binary),
         "dpu_binary": Path(resources.dpu_binary),
-        "initialization_binary": Path(resources.initialization_binary),
     }
     for name, path in paths.items():
         if not path.is_file():

@@ -5,6 +5,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from pathlib import Path
+import threading
 import time
 from typing import Any
 
@@ -53,9 +54,9 @@ def _task(k: int = 5, *, m: int = 3, n: int = 4) -> ContractNode:
     )
 
 
-def _binaries(root: Path) -> tuple[Path, Path, Path]:
+def _binaries(root: Path) -> tuple[Path, Path]:
     root.mkdir(parents=True, exist_ok=True)
-    paths = tuple(root / name for name in ("host", "dpu", "init"))
+    paths = tuple(root / name for name in ("host", "dpu"))
     for path in paths:
         path.write_bytes(path.name.encode("ascii"))
     paths[0].chmod(paths[0].stat().st_mode | 0o100)
@@ -277,11 +278,10 @@ def _engine(
     execution_target: str = "physical_hardware",
     delay_s: float = 0.0,
 ) -> _Engine:
-    host, dpu, initialization = _binaries(root / "binaries")
+    host, dpu = _binaries(root / "binaries")
     provenance = {
         "host_binary_sha256": hashlib.sha256(host.read_bytes()).hexdigest(),
         "dpu_binary_sha256": hashlib.sha256(dpu.read_bytes()).hexdigest(),
-        "initialization_binary_sha256": hashlib.sha256(initialization.read_bytes()).hexdigest(),
     }
 
     def factory(_command: Any, *, session_root: Path, profile: Any) -> _FakeSession:
@@ -297,7 +297,6 @@ def _engine(
             session_root=root,
             host_binary=host,
             dpu_binary=dpu,
-            initialization_binary=initialization,
             rank_paths=(
                 ()
                 if execution_target == EXECUTION_TARGET_SIMULATOR
@@ -396,24 +395,22 @@ def _close_mock_session(session) -> None:
 
 
 def _resources(tmp_path: Path, opener, *, rank_count: int = 1) -> UpmemResources:
-    host, dpu, initialization = _binaries(tmp_path / "resources")
+    host, dpu = _binaries(tmp_path / "resources")
     return UpmemResources(
         session_root=str(tmp_path / "session"),
         host_binary=str(host),
         dpu_binary=str(dpu),
-        initialization_binary=str(initialization),
         rank_paths=tuple(f"/dev/dpu_rank{index}" for index in range(rank_count)),
         session_opener=opener,
     )
 
 
 def _simulator_resources(tmp_path: Path, opener=None) -> UpmemResources:
-    host, dpu, initialization = _binaries(tmp_path / "simulator-resources")
+    host, dpu = _binaries(tmp_path / "simulator-resources")
     return UpmemResources(
         session_root=str(tmp_path / "simulator-session"),
         host_binary=str(host),
         dpu_binary=str(dpu),
-        initialization_binary=str(initialization),
         rank_paths=(),
         session_opener=opener,
     )
@@ -1277,14 +1274,30 @@ def test_run_failure_is_execution_failed_with_stage(
         tmp_path, policy="split_complex_float32_v1"
     )
     session = open_upmem(dag, plan, resources)
+    original_core = session._low_level.session._execute_complex_core
+
+    calls = 0
 
     def fail(*_args, **_kwargs):
-        raise RuntimeError("kernel failed")
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("kernel failed")
+        raise AssertionError("failed session attempted a second execution")
 
     monkeypatch.setattr(session._low_level.session, "_execute_complex_core", fail)
     with pytest.raises(ExecutionFailed) as caught:
         session.run_once(_inputs(node, k=5))
     assert caught.value.stage == "contract_batch:fixture"
+    monkeypatch.setattr(
+        session._low_level.session, "_execute_complex_core", original_core
+    )
+    session._low_level.session._failed = True
+    session._low_level.session._failure_stage = "hardware_task_execution_failed"
+    with pytest.raises(ExecutionFailed, match="cannot execute after") as retry:
+        session.run_once(_inputs(node, k=5))
+    assert retry.value.stage == "hardware_task_execution_failed"
+    assert calls == 1
     _close_mock_session(session)
 
 
@@ -1342,6 +1355,68 @@ def test_output_and_facts_are_immutable_and_json_safe(tmp_path: Path) -> None:
         sample.output[0, 0] = 99
     json.dumps(_plain(sample.backend_facts))
     json.dumps(_plain(sample.numeric_facts))
+
+
+def test_session_rejects_concurrent_run_and_close(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    node, dag, plan, resources, _, _ = _opened(
+        tmp_path, policy="split_complex_float32_v1"
+    )
+    session = open_upmem(dag, plan, resources)
+    run_started = threading.Event()
+    allow_run = threading.Event()
+    original = session._run_once_unlocked
+
+    def delayed_run(inputs):
+        run_started.set()
+        assert allow_run.wait(timeout=1.0)
+        return original(inputs)
+
+    monkeypatch.setattr(session, "_run_once_unlocked", delayed_run)
+    result: list[object] = []
+
+    def run() -> None:
+        try:
+            result.append(session.run_once(_inputs(node, k=5)))
+        except BaseException as exc:  # pragma: no cover - asserted below.
+            result.append(exc)
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    assert run_started.wait(timeout=1.0)
+    with pytest.raises(ExecutionFailed, match="active operation") as run_error:
+        session.run_once(_inputs(node, k=5))
+    assert run_error.value.stage == "session_busy"
+    with pytest.raises(ExecutionFailed, match="active operation") as close_error:
+        session.close()
+    assert close_error.value.stage == "session_busy"
+    assert session._closed is False
+
+    allow_run.set()
+    worker.join(timeout=1.0)
+    assert not worker.is_alive()
+    assert len(result) == 1
+    assert not isinstance(result[0], BaseException)
+    _close_mock_session(session)
+
+
+def test_executor_rejects_overlapping_sessions_and_reopens_after_close(
+    tmp_path: Path,
+) -> None:
+    _, dag, plan, resources, _, _ = _opened(
+        tmp_path, policy="split_complex_float32_v1"
+    )
+    session = open_upmem(dag, plan, resources)
+    engine = session._low_level.session.engine
+    with pytest.raises(runtime.V4Error, match="active session") as busy:
+        engine.open_session(plan.numeric_policy, plan.topology)
+    assert busy.value.failure_stage == "session_busy"
+
+    _close_mock_session(session)
+    reopened = engine.open_session(plan.numeric_policy, plan.topology)
+    assert reopened.close()["hardware_release_verified"] is True
 
 
 def _plain(value):

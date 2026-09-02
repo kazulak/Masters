@@ -17,6 +17,8 @@ typedef struct {
     char *c_path;
     char a_sha256[65];
     char b_sha256[65];
+    const unsigned char *a_source;
+    const unsigned char *b_source;
     unsigned char *a_payload;
     unsigned char *b_payload;
     unsigned char *c_payload;
@@ -70,6 +72,25 @@ int execution_plan_v4_request_validate_embedded(
     uint32_t expected_dpus,
     uint32_t expected_tasklets,
     char **error_message
+);
+
+/* Request outputs must be zero-initialized or returned by request_free(). */
+int execution_plan_v4_request_prepare_embedded(
+    const char *session_root,
+    const execution_plan_v4_embedded_request_t *embedded,
+    uint32_t expected_dpus,
+    uint32_t expected_tasklets,
+    execution_plan_v4_request_t *request,
+    char **error_message
+);
+
+int execution_plan_v4_request_materialize_prepared(
+    execution_plan_v4_request_t *request,
+    char **error_message
+);
+
+void execution_plan_v4_request_release_payloads(
+    execution_plan_v4_request_t *request
 );
 
 int execution_plan_v4_request_load_embedded(

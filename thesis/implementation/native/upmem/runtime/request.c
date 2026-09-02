@@ -644,13 +644,18 @@ static int embedded_digest_matches(
         memcmp(actual, expected, sizeof(actual)) == 0;
 }
 
-static int load_embedded_internal(
+static int request_is_empty(const execution_plan_v4_request_t *request) {
+    return request != NULL && request->items == NULL &&
+        request->work_units == NULL && request->item_count == 0u &&
+        request->root_path[0] == '\0';
+}
+
+int execution_plan_v4_request_prepare_embedded(
     const char *session_root,
     const execution_plan_v4_embedded_request_t *embedded,
     uint32_t expected_dpus,
     uint32_t expected_tasklets,
     execution_plan_v4_request_t *request,
-    int materialize,
     char **error_message
 ) {
     execution_plan_v4_request_item_t manifest_items[EXECUTION_PLAN_V4_MAX_DPUS] = {0};
@@ -659,15 +664,17 @@ static int load_embedded_internal(
     uint32_t manifest_item_count = 0u;
     char sidecar_relative[PATH_MAX];
     uint64_t payload_total = 0u;
-    if (request != NULL) memset(request, 0, sizeof(*request));
     if (session_root == NULL || embedded == NULL || embedded->manifest == NULL ||
         embedded->sidecar == NULL || embedded->payload == NULL ||
         embedded->manifest_bytes == 0u || embedded->sidecar_bytes == 0u ||
         embedded->payload_bytes == 0u || expected_dpus == 0u ||
         expected_dpus > EXECUTION_PLAN_V4_MAX_DPUS || expected_tasklets == 0u ||
-        expected_tasklets > EXECUTION_PLAN_V4_MAX_TASKLETS ||
-        (request == NULL && materialize != 0)) {
+        expected_tasklets > EXECUTION_PLAN_V4_MAX_TASKLETS || request == NULL) {
         v4_error(error_message, "request_manifest_failed: invalid embedded request arguments");
+        return 1;
+    }
+    if (!request_is_empty(request)) {
+        v4_error(error_message, "request_manifest_failed: request output must be zeroed");
         return 1;
     }
     if (!embedded_digest_matches(
@@ -740,11 +747,6 @@ static int load_embedded_internal(
             return 1;
         }
     }
-    if (!materialize) {
-        free_manifest_items(manifest_items);
-        free(work_units);
-        return 0;
-    }
     memcpy(request->root_path, session_root, strlen(session_root) + 1u);
     request->header = header;
     request->work_units = work_units;
@@ -783,38 +785,59 @@ static int load_embedded_internal(
             execution_plan_v4_request_item_t *item = &request->items[index];
             const execution_plan_v4_work_unit_t *unit = &work_units[index];
             item->work_unit = work_units[index];
-            if (unit->a_transfer_bytes != 0u) {
-                if (posix_memalign((void **)&item->a_payload, 8u, unit->a_transfer_bytes) != 0) {
-                    v4_error(error_message, "payload_validation_failed: embedded A allocation failed");
-                    execution_plan_v4_request_free(request);
-                    free_manifest_items(manifest_items);
-                    return 1;
-                }
-                memcpy(item->a_payload, embedded->payload + payload_cursor, unit->a_transfer_bytes);
-            }
+            item->a_source = embedded->payload + payload_cursor;
             payload_cursor += unit->a_transfer_bytes;
-            if (unit->b_transfer_bytes != 0u) {
-                if (posix_memalign((void **)&item->b_payload, 8u, unit->b_transfer_bytes) != 0) {
-                    v4_error(error_message, "payload_validation_failed: embedded B allocation failed");
-                    execution_plan_v4_request_free(request);
-                    free_manifest_items(manifest_items);
-                    return 1;
-                }
-                memcpy(item->b_payload, embedded->payload + payload_cursor, unit->b_transfer_bytes);
-            }
+            item->b_source = embedded->payload + payload_cursor;
             payload_cursor += unit->b_transfer_bytes;
-            if (unit->c_transfer_bytes != 0u) {
-                if (posix_memalign((void **)&item->c_payload, 8u, unit->c_transfer_bytes) != 0) {
-                    v4_error(error_message, "payload_validation_failed: embedded C allocation failed");
-                    execution_plan_v4_request_free(request);
-                    free_manifest_items(manifest_items);
-                    return 1;
-                }
-                memset(item->c_payload, 0, unit->c_transfer_bytes);
-            }
         }
     }
     free_manifest_items(manifest_items);
+    return 0;
+}
+
+int execution_plan_v4_request_materialize_prepared(
+    execution_plan_v4_request_t *request,
+    char **error_message
+) {
+    if (request == NULL || request->items == NULL || request->work_units == NULL) {
+        v4_error(error_message, "payload_validation_failed: missing prepared request");
+        return 1;
+    }
+    for (uint32_t index = 0u; index < request->item_count; index++) {
+        execution_plan_v4_request_item_t *item = &request->items[index];
+        const execution_plan_v4_work_unit_t *unit = &request->work_units[index];
+        if (item->a_payload != NULL || item->b_payload != NULL || item->c_payload != NULL) {
+            v4_error(error_message, "payload_validation_failed: prepared request is already materialized");
+            execution_plan_v4_request_release_payloads(request);
+            return 1;
+        }
+        if (unit->a_transfer_bytes != 0u) {
+            if (item->a_source == NULL ||
+                posix_memalign((void **)&item->a_payload, 8u, unit->a_transfer_bytes) != 0) {
+                v4_error(error_message, "payload_validation_failed: embedded A allocation failed");
+                execution_plan_v4_request_release_payloads(request);
+                return 1;
+            }
+            memcpy(item->a_payload, item->a_source, unit->a_transfer_bytes);
+        }
+        if (unit->b_transfer_bytes != 0u) {
+            if (item->b_source == NULL ||
+                posix_memalign((void **)&item->b_payload, 8u, unit->b_transfer_bytes) != 0) {
+                v4_error(error_message, "payload_validation_failed: embedded B allocation failed");
+                execution_plan_v4_request_release_payloads(request);
+                return 1;
+            }
+            memcpy(item->b_payload, item->b_source, unit->b_transfer_bytes);
+        }
+        if (unit->c_transfer_bytes != 0u) {
+            if (posix_memalign((void **)&item->c_payload, 8u, unit->c_transfer_bytes) != 0) {
+                v4_error(error_message, "payload_validation_failed: embedded C allocation failed");
+                execution_plan_v4_request_release_payloads(request);
+                return 1;
+            }
+            memset(item->c_payload, 0, unit->c_transfer_bytes);
+        }
+    }
     return 0;
 }
 
@@ -825,8 +848,11 @@ int execution_plan_v4_request_validate_embedded(
     uint32_t expected_tasklets,
     char **error_message
 ) {
-    return load_embedded_internal(session_root, embedded, expected_dpus, expected_tasklets,
-        NULL, 0, error_message);
+    execution_plan_v4_request_t request = {0};
+    int status = execution_plan_v4_request_prepare_embedded(
+        session_root, embedded, expected_dpus, expected_tasklets, &request, error_message);
+    execution_plan_v4_request_free(&request);
+    return status;
 }
 
 int execution_plan_v4_request_load_embedded(
@@ -837,8 +863,14 @@ int execution_plan_v4_request_load_embedded(
     execution_plan_v4_request_t *request,
     char **error_message
 ) {
-    return load_embedded_internal(session_root, embedded, expected_dpus, expected_tasklets,
-        request, 1, error_message);
+    if (execution_plan_v4_request_prepare_embedded(
+            session_root, embedded, expected_dpus, expected_tasklets,
+            request, error_message) != 0) return 1;
+    if (execution_plan_v4_request_materialize_prepared(request, error_message) != 0) {
+        execution_plan_v4_request_free(request);
+        return 1;
+    }
+    return 0;
 }
 
 int execution_plan_v4_request_load(
@@ -861,7 +893,10 @@ int execution_plan_v4_request_load(
         v4_error(error_message, "request_manifest_failed: invalid request arguments");
         return 1;
     }
-    memset(request, 0, sizeof(*request));
+    if (!request_is_empty(request)) {
+        v4_error(error_message, "request_manifest_failed: request output must be zeroed");
+        return 1;
+    }
     if (realpath(session_root, root) == NULL ||
         stat(root, &(struct stat){0}) != 0 ||
         resolve_path(root, manifest_relative_path, 1, manifest_path) != 0 ||
@@ -1069,15 +1104,27 @@ int execution_plan_v4_request_write_output(
     return 0;
 }
 
+void execution_plan_v4_request_release_payloads(
+    execution_plan_v4_request_t *request
+) {
+    if (request == NULL || request->items == NULL) return;
+    for (uint32_t index = 0u; index < request->item_count; index++) {
+        free(request->items[index].a_payload);
+        free(request->items[index].b_payload);
+        free(request->items[index].c_payload);
+        request->items[index].a_payload = NULL;
+        request->items[index].b_payload = NULL;
+        request->items[index].c_payload = NULL;
+    }
+}
+
 void execution_plan_v4_request_free(execution_plan_v4_request_t *request) {
     if (request == NULL) return;
+    execution_plan_v4_request_release_payloads(request);
     for (uint32_t index = 0u; index < request->item_count; index++) {
         free(request->items[index].a_path);
         free(request->items[index].b_path);
         free(request->items[index].c_path);
-        free(request->items[index].a_payload);
-        free(request->items[index].b_payload);
-        free(request->items[index].c_payload);
     }
     free(request->items);
     free(request->work_units);

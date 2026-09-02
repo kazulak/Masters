@@ -28,7 +28,6 @@ _PATH_FIELDS = (
     "session_root",
     "host_binary",
     "dpu_binary",
-    "initialization_binary",
 )
 _NUMERIC_POLICIES = frozenset(
     {"split_complex_float32_v1", "split_complex_int8_shared_scale_v1"}
@@ -90,7 +89,6 @@ def prepare_config(
     expected_cpus: list[int],
     host_binary: str | None = None,
     dpu_binary: str | None = None,
-    initialization_binary: str | None = None,
 ) -> Path:
     """Resolve tracked paths once, then write a portable ignored ETH config."""
 
@@ -123,7 +121,6 @@ def prepare_config(
     for field, override in (
         ("host_binary", host_binary),
         ("dpu_binary", dpu_binary),
-        ("initialization_binary", initialization_binary),
     ):
         options[field] = _absolute_path(override) if override is not None else options[field]
     options["session_root"] = _absolute_path(session_root)
@@ -311,7 +308,6 @@ def main(argv: list[str] | None = None) -> int:
     prepare.add_argument("--expected-cpus", required=True)
     prepare.add_argument("--host-binary")
     prepare.add_argument("--dpu-binary")
-    prepare.add_argument("--initialization-binary")
     inspect = commands.add_parser("inspect")
     inspect.add_argument("--input", type=Path, required=True)
     inspect.add_argument("--expected-samples", type=int, required=True)
@@ -332,7 +328,6 @@ def main(argv: list[str] | None = None) -> int:
                 expected_cpus=_parse_cpus(args.expected_cpus),
                 host_binary=args.host_binary,
                 dpu_binary=args.dpu_binary,
-                initialization_binary=args.initialization_binary,
             )
             payload: Mapping[str, Any] = {"status": "prepared", "output": str(output)}
         elif args.command == "inspect":

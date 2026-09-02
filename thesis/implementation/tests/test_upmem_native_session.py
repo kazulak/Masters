@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import queue
 import struct
+import threading
 import time
 
 import pytest
@@ -693,6 +694,46 @@ def test_ready_validation_failure_terminates_native_process(tmp_path: Path) -> N
     assert process.poll() is not None
 
 
+@pytest.mark.parametrize(
+    ("startup_line", "message"),
+    [
+        (None, "timed out"),
+        ("", "stdout closed"),
+        ("not-json\n", "malformed JSON"),
+    ],
+)
+def test_startup_event_failure_terminates_native_process(
+    tmp_path: Path,
+    startup_line: str | None,
+    message: str,
+) -> None:
+    profile = v4.V4Profile(
+        dpu_count=1,
+        execution_target=v4.EXECUTION_TARGET_SIMULATOR,
+        timeout_s=0.03,
+    )
+    process: FakeProcess | None = None
+
+    def factory(*_args: object, **_kwargs: object) -> FakeProcess:
+        nonlocal process
+        process = FakeProcess(lambda _command: None, profile=profile)
+        process.stdout = FakeStream()
+        if startup_line is not None:
+            process.stdout.emit(startup_line)
+        return process
+
+    with pytest.raises(v4.V4ProtocolError, match=message):
+        session_v4.V4Session.start(
+            ["fake-v4-host"],
+            session_root=tmp_path,
+            profile=profile,
+            environment={},
+            popen_factory=factory,
+        )
+    assert process is not None
+    assert process.poll() is not None
+
+
 def test_successful_submit_and_release(tmp_path: Path) -> None:
     artifact = _artifact(tmp_path)
     session, process = _session(
@@ -1012,3 +1053,41 @@ def test_timeout_does_not_fabricate_release(tmp_path: Path) -> None:
     assert time.monotonic() - started < 1.0
     assert process.poll() is not None
     assert session.close().release_confirmed is False
+
+
+def test_session_rejects_concurrent_submit_and_close(tmp_path: Path) -> None:
+    artifact = _artifact(tmp_path)
+    submit_started = threading.Event()
+    allow_response = threading.Event()
+
+    def delayed_response(_command: str) -> dict[str, object]:
+        submit_started.set()
+        assert allow_response.wait(timeout=1.0)
+        return _valid_response(artifact)
+
+    session, _ = _session(tmp_path, artifact, delayed_response)
+    result: list[object] = []
+
+    def submit() -> None:
+        try:
+            result.append(session.submit(artifact))
+        except BaseException as exc:  # pragma: no cover - asserted below.
+            result.append(exc)
+
+    worker = threading.Thread(target=submit)
+    worker.start()
+    assert submit_started.wait(timeout=1.0)
+    with pytest.raises(v4.V4Error, match="session_busy") as submit_error:
+        session.submit(artifact)
+    assert submit_error.value.failure_stage == "session_busy"
+    with pytest.raises(v4.V4Error, match="session_busy") as close_error:
+        session.close()
+    assert close_error.value.failure_stage == "session_busy"
+    assert session._closed is False
+
+    allow_response.set()
+    worker.join(timeout=1.0)
+    assert not worker.is_alive()
+    assert len(result) == 1
+    assert isinstance(result[0], dict)
+    assert session.close().release_confirmed is True

@@ -330,6 +330,12 @@ static int validate_envelope(
     operation->descriptor_count = descriptor_count;
     operation->operation_sequence = operation_sequence;
     memcpy(operation->digest, data + 64u, sizeof(operation->digest));
+    operation->requests = (execution_plan_v4_request_t *)calloc(
+        descriptor_count, sizeof(*operation->requests));
+    if (operation->requests == NULL) {
+        v4_error(error_message, "operation_envelope_failed: prepared request allocation failed");
+        return 1;
+    }
     cursor = body_offset;
     for (uint32_t index = 0u; index < descriptor_count; index++) {
         const unsigned char *raw_descriptor;
@@ -398,17 +404,9 @@ static int validate_envelope(
         memcpy(embedded.manifest_sha256, raw_descriptor + 72u, 32u);
         memcpy(embedded.sidecar_sha256, raw_descriptor + 104u, 32u);
         memcpy(embedded.payload_sha256, raw_descriptor + 136u, 32u);
-        if (!digest_bytes_matches(
-                embedded.manifest, embedded.manifest_bytes, embedded.manifest_sha256) ||
-            !digest_bytes_matches(
-                embedded.sidecar, embedded.sidecar_bytes, embedded.sidecar_sha256) ||
-            !digest_bytes_matches(
-                embedded.payload, embedded.payload_bytes, embedded.payload_sha256)) {
-            v4_error(error_message, "operation_envelope_failed: body region SHA-256 mismatch");
-            return 1;
-        }
-        if (execution_plan_v4_request_validate_embedded(
-                session_root, &embedded, expected_dpus, expected_tasklets, error_message) != 0) return 1;
+        if (execution_plan_v4_request_prepare_embedded(
+                session_root, &embedded, expected_dpus, expected_tasklets,
+                &operation->requests[index], error_message) != 0) return 1;
         cursor = next_cursor;
     }
     if (cursor != file_size) {
@@ -509,6 +507,12 @@ void execution_plan_v4_operation_close(
     execution_plan_v4_operation_envelope_t *operation
 ) {
     if (operation == NULL) return;
+    if (operation->requests != NULL) {
+        for (uint32_t index = 0u; index < operation->descriptor_count; index++) {
+            execution_plan_v4_request_free(&operation->requests[index]);
+        }
+    }
+    free(operation->requests);
     if (operation->mapping != NULL && operation->file_size != 0u) {
         (void)munmap((void *)operation->mapping, operation->file_size);
     }

@@ -112,14 +112,11 @@ int main(void) {
                 (V4_CONTROL.m_elements != 0u || V4_CONTROL.n_elements != 0u || V4_CONTROL.k_elements != 0u))) {
             v4_status = 1;
         }
+        perfcounter_config(COUNT_CYCLES, true);
+        v4_start_cycles = perfcounter_get();
     }
     barrier_wait(&v4_barrier);
     if (v4_status == 0) {
-        if (tid == 0u) {
-            perfcounter_config(COUNT_CYCLES, true);
-            v4_start_cycles = perfcounter_get();
-        }
-        barrier_wait(&v4_barrier);
         if ((V4_CONTROL.flags & EXECUTION_PLAN_V4_FLAG_ZERO_WORK) == 0u) {
             const uint32_t M = V4_CONTROL.m_elements;
             const uint32_t N = V4_CONTROL.n_elements;
@@ -237,7 +234,6 @@ int main(void) {
                 }
             }
         }
-        barrier_wait(&v4_barrier);
         if (tid == 0u) {
             V4_COMPLETION.status = EXECUTION_PLAN_V4_STATUS_COMPLETED;
             V4_COMPLETION.cycles = (uint64_t)(perfcounter_get() - v4_start_cycles);

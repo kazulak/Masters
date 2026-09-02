@@ -200,7 +200,6 @@ class UpmemResources:
     session_root: str
     host_binary: str
     dpu_binary: str
-    initialization_binary: str
     rank_paths: tuple[str, ...] = ()
     request_transport: Literal["packed_operation_v1"] = "packed_operation_v1"
     session_opener: Callable[..., object] | None = field(
@@ -214,7 +213,6 @@ class UpmemResources:
             "session_root",
             "host_binary",
             "dpu_binary",
-            "initialization_binary",
         ):
             value = getattr(self, name)
             if not isinstance(value, str) or not value:

@@ -512,7 +512,6 @@ def test_upmem_transport_is_fixed_and_public_override_is_rejected(
         "options": {
             "host_binary": "host",
             "dpu_binary": "dpu",
-            "initialization_binary": "init",
         },
     }
     legacy_identity_route = {
@@ -605,8 +604,7 @@ def test_loader_rejects_invalid_simulator_topology(tmp_path: Path) -> None:
             "    numeric_policy: split_complex_float32_v1\n"
             "    options:\n      dpu_count: 2\n      rank_count: 1\n"
             "      tasklets_per_dpu: 1\n      session_root: native\n"
-            "      host_binary: native/host\n      dpu_binary: native/dpu\n"
-            "      initialization_binary: native/init",
+            "      host_binary: native/host\n      dpu_binary: native/dpu",
         )
         .replace(
             "plan_id: null\n    route_ids: [quest]",
@@ -698,7 +696,7 @@ def _physical_config() -> str:
             "    options:\n"
             "      dpu_count: 1\n      rank_count: 1\n      tasklets_per_dpu: 1\n"
             "      session_root: native\n      host_binary: native/host\n"
-            "      dpu_binary: native/dpu\n      initialization_binary: native/init\n"
+            "      dpu_binary: native/dpu\n"
             "      rank_paths: [/dev/dpu_rank0]",
         )
         .replace("route_ids: [numpy]", "route_ids: [physical]")
@@ -758,7 +756,7 @@ def _simulator_config() -> str:
             "    options:\n"
             "      dpu_count: 1\n      rank_count: 1\n      tasklets_per_dpu: 1\n"
             "      session_root: native\n      host_binary: native/host\n"
-            "      dpu_binary: native/dpu\n      initialization_binary: native/init",
+            "      dpu_binary: native/dpu",
         )
         .replace("route_ids: [numpy]", "route_ids: [simulator]")
     )

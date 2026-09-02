@@ -156,7 +156,7 @@ def _require_native_build_tool(command: str, label: str) -> None:
 
 
 @lru_cache(maxsize=None)
-def _sdk_binaries(tasklets: int) -> tuple[Path, Path, Path]:
+def _sdk_binaries(tasklets: int) -> tuple[Path, Path]:
     result = subprocess.run(
         ["make", "-C", str(NATIVE), "v4", f"NR_TASKLETS={tasklets}"],
         check=False,
@@ -167,7 +167,6 @@ def _sdk_binaries(tasklets: int) -> tuple[Path, Path, Path]:
     paths = (
         NATIVE / "bin" / f"host_upmem_execution_plan_v4_t{tasklets}",
         NATIVE / "bin" / f"dpu_gemm_tile_v4_t{tasklets}",
-        NATIVE / "bin" / f"dpu_simplepim_management_init_t{tasklets}",
     )
     assert all(path.is_file() for path in paths)
     return paths
@@ -205,7 +204,7 @@ def _run_direct_sdk_case(
     k_size: int,
 ) -> None:
     _require_sdk_simulator(case_id)
-    host, dpu, initialization = _sdk_binaries(tasklets)
+    host, dpu = _sdk_binaries(tasklets)
     left, right, expected, numeric_mode = _direct_values(
         m_size=m_size, n_size=n_size, k_size=k_size, numeric=numeric
     )
@@ -213,7 +212,6 @@ def _run_direct_sdk_case(
         session_root=tmp_path / "session",
         host_binary=host,
         dpu_binary=dpu,
-        initialization_binary=initialization,
         rank_paths=(),
         dpu_count=1,
         tasklets_per_dpu=tasklets,
@@ -288,7 +286,7 @@ def test_packed_operation_sdk_simulator_case(tmp_path: Path) -> None:
 
     case_id = "packed_operation_v2"
     _require_sdk_simulator(case_id)
-    host, dpu, initialization = _sdk_binaries(8)
+    host, dpu = _sdk_binaries(8)
     left, right, expected, _numeric_mode = _direct_values(
         m_size=3, n_size=35, k_size=65, numeric="float32"
     )
@@ -296,7 +294,6 @@ def test_packed_operation_sdk_simulator_case(tmp_path: Path) -> None:
         session_root=tmp_path / "session",
         host_binary=host,
         dpu_binary=dpu,
-        initialization_binary=initialization,
         rank_paths=(),
         dpu_count=1,
         tasklets_per_dpu=8,
@@ -481,8 +478,8 @@ def test_wram_panel_facts_count_four_real_products_for_a_full_panel() -> None:
         "output_write_helper_calls_exact": 8,
         "mram_requested_payload_bytes_exact": 35_840,
         "mram_aligned_transfer_bytes_estimate": 35_840,
-        "barrier_events_exact": 24,
-        "barrier_tasklet_calls_exact": 24,
+        "barrier_events_exact": 16,
+        "barrier_tasklet_calls_exact": 16,
         "real_mac_count_exact": 16_384,
         "wram_shared_bytes_exact": 8_192,
         "wram_private_bytes_per_tasklet_exact": 672,
@@ -561,7 +558,7 @@ def test_direct_sdk_simulator_case_matrix(
     try:
         if case_id == "planned_k257":
             _require_sdk_simulator(case_id)
-            host, dpu, initialization = _sdk_binaries(tasklets)
+            host, dpu = _sdk_binaries(tasklets)
             dag, _, inputs = _planned_k257_node()
             plan = plan_upmem(
                 dag,
@@ -582,7 +579,6 @@ def test_direct_sdk_simulator_case_matrix(
                 session_root=str(tmp_path / "planned-session"),
                 host_binary=str(host),
                 dpu_binary=str(dpu),
-                initialization_binary=str(initialization),
             )
             expected = replay_upmem_plan_once(dag, plan, inputs)
             with open_upmem_simulator(
@@ -596,7 +592,6 @@ def test_direct_sdk_simulator_case_matrix(
                 session_root=str(packed_root),
                 host_binary=str(host),
                 dpu_binary=str(dpu),
-                initialization_binary=str(initialization),
                 request_transport="packed_operation_v1",
             )
             with open_upmem_simulator(

@@ -1175,7 +1175,6 @@ def test_resources_are_immutable_and_callback_is_not_identity() -> None:
         session_root="session",
         host_binary="host",
         dpu_binary="dpu",
-        initialization_binary="init",
         rank_paths=("rank0",),
         session_opener=callback,
     )
@@ -1189,7 +1188,6 @@ def test_resources_are_immutable_and_callback_is_not_identity() -> None:
             session_root="session",
             host_binary="host",
             dpu_binary="dpu",
-            initialization_binary="init",
             rank_paths=["rank0"],  # type: ignore[arg-type]
         )
 
@@ -1199,7 +1197,6 @@ def test_resources_fix_request_transport_to_packed_operation() -> None:
         session_root="session",
         host_binary="host",
         dpu_binary="dpu",
-        initialization_binary="init",
     )
     assert resources.request_transport == "packed_operation_v1"
 
@@ -1208,6 +1205,5 @@ def test_resources_fix_request_transport_to_packed_operation() -> None:
             session_root="session",
             host_binary="host",
             dpu_binary="dpu",
-            initialization_binary="init",
             request_transport="directory_v1",  # type: ignore[arg-type]
         )

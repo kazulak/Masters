@@ -16,7 +16,7 @@
 
 #include "plan.h"
 #include "operation_envelope.h"
-#include "simplepim_provider.h"
+#include "provider.h"
 
 #ifndef NR_TASKLETS
 #define NR_TASKLETS 1
@@ -163,14 +163,11 @@ static void v4_emit_startup_failure(const char *stage, const char *message) {
 static void v4_emit_ready(
     const char *rank_path,
     const char *dpu_binary,
-    const char *initialization_binary,
     uint32_t dpus,
     uint32_t tasklets
 ) {
     char dpu_hash[65] = {0};
-    char init_hash[65] = {0};
     (void)execution_plan_sha256_file(dpu_binary, dpu_hash);
-    (void)execution_plan_sha256_file(initialization_binary, init_hash);
     printf("{\"event\":\"READY\",\"status\":\"ready\",\"backend_id\":\"");
     fputs(v4_backend_id(), stdout);
     fputs("\",\"backend_family\":\"", stdout);
@@ -201,8 +198,6 @@ static void v4_emit_ready(
         v4_simulator_target ? "true" : "false",
         v4_simulator_target ? ",\"timing_claim_applicable\":false,\"scaling_claim_applicable\":false,\"speedup_claim_applicable\":false,\"energy_claim_applicable\":false" : "");
     json_string(stdout, dpu_hash);
-    fputs(",\"initialization_binary_sha256\":", stdout);
-    json_string(stdout, init_hash);
     fputs(",\"session_release_pending\":true}\n", stdout);
     fflush(stdout);
 }
@@ -591,16 +586,14 @@ static int execute_packed_operation(
         return 1;
     }
     for (uint32_t index = 0u; index < operation.descriptor_count; index++) {
-        execution_plan_v4_embedded_request_t embedded = {0};
-        execution_plan_v4_request_t request = {0};
+        execution_plan_v4_request_t *request = &operation.requests[index];
         char *request_error = NULL;
         int request_status;
-        if (execution_plan_v4_operation_descriptor(&operation, index, &embedded, &request_error) != 0 ||
-            execution_plan_v4_request_load_embedded(session_root, &embedded, dpus, tasklets,
-                &request, &request_error) != 0) {
+        if (execution_plan_v4_request_materialize_prepared(
+                request, &request_error) != 0) {
             failed_request_index = index;
             failed_request_index_present = 1;
-            v4_emit_response_to(result_file, &request, NULL,
+            v4_emit_response_to(result_file, request, NULL,
                 (const v4_dpu_result_t[EXECUTION_PLAN_V4_MAX_DPUS]){0},
                 "request_manifest_failed", request_error, 0, 0);
             response_count++;
@@ -613,20 +606,20 @@ static int execute_packed_operation(
                     ? "embedded request could not be loaded" : request_error);
             }
             free(request_error);
-            execution_plan_v4_request_free(&request);
+            execution_plan_v4_request_release_payloads(request);
             break;
         }
-        request_status = execute_loaded_request(&request, tasklets, timeout_s, result_file);
+        request_status = execute_loaded_request(request, tasklets, timeout_s, result_file);
         response_count++;
         if (ferror(result_file) != 0) {
             failed_request_index = index;
             failed_request_index_present = 1;
             failure_stage = "output_manifest_failed";
             v4_error(&error_message, "operation result JSONL write failed");
-            execution_plan_v4_request_free(&request);
+            execution_plan_v4_request_release_payloads(request);
             break;
         }
-        execution_plan_v4_request_free(&request);
+        execution_plan_v4_request_release_payloads(request);
         if (request_status != 0) {
             failed_request_index = index;
             failed_request_index_present = 1;
@@ -663,14 +656,13 @@ static int execute_packed_operation(
 }
 
 static void v4_usage(const char *program) {
-    fprintf(stderr, "usage: %s --target hardware|simulator --session-root DIR [--rank-path /dev/dpu_rankN] --dpus N --tasklets N --initialization-binary PATH --dpu-binary PATH [--timeout-s N]\n", program);
+    fprintf(stderr, "usage: %s --target hardware|simulator --session-root DIR [--rank-path /dev/dpu_rankN] --dpus N --tasklets N --dpu-binary PATH [--timeout-s N]\n", program);
 }
 
 int main(int argc, char **argv) {
     const char *session_root = NULL;
     const char *rank_path = NULL;
     const char *target = NULL;
-    const char *initialization_binary = NULL;
     const char *dpu_binary = NULL;
     uint32_t dpus = 0u, tasklets = 0u, timeout_s = 60u;
     char root_real[PATH_MAX];
@@ -683,7 +675,6 @@ int main(int argc, char **argv) {
         else if (strcmp(argv[index], "--rank-path") == 0 && index + 1 < argc) rank_path = argv[++index];
         else if (strcmp(argv[index], "--dpus") == 0 && index + 1 < argc) { if (parse_u32(argv[++index], &dpus) != 0) return 2; }
         else if (strcmp(argv[index], "--tasklets") == 0 && index + 1 < argc) { if (parse_u32(argv[++index], &tasklets) != 0) return 2; }
-        else if (strcmp(argv[index], "--initialization-binary") == 0 && index + 1 < argc) initialization_binary = argv[++index];
         else if (strcmp(argv[index], "--dpu-binary") == 0 && index + 1 < argc) dpu_binary = argv[++index];
         else if (strcmp(argv[index], "--timeout-s") == 0 && index + 1 < argc) { if (parse_u32(argv[++index], &timeout_s) != 0) return 2; }
         else { v4_usage(argv[0]); return 2; }
@@ -691,10 +682,10 @@ int main(int argc, char **argv) {
     (void)signal(SIGINT, v4_signal_handler);
     (void)signal(SIGTERM, v4_signal_handler);
     (void)signal(SIGALRM, v4_signal_handler);
-    if (target == NULL || session_root == NULL || initialization_binary == NULL || dpu_binary == NULL ||
+    if (target == NULL || session_root == NULL || dpu_binary == NULL ||
         dpus == 0u || dpus > EXECUTION_PLAN_V4_MAX_DPUS || tasklets == 0u || tasklets > EXECUTION_PLAN_V4_MAX_TASKLETS ||
         timeout_s == 0u || realpath(session_root, root_real) == NULL || stat(root_real, &root_stat) != 0 ||
-        !S_ISDIR(root_stat.st_mode) || !path_exists(initialization_binary) || !path_exists(dpu_binary)) {
+        !S_ISDIR(root_stat.st_mode) || !path_exists(dpu_binary)) {
         v4_emit_startup_failure("hardware_profile_violation", "invalid session arguments or paths");
         v4_emit_release();
         return 2;
@@ -733,8 +724,8 @@ int main(int argc, char **argv) {
     v4_session_rank_path = v4_simulator_target ? NULL : rank_path;
     v4_provider_initialized = 1;
     error = v4_simulator_target
-        ? upmem_v4_provider_init_simulator(&v4_provider, dpus, initialization_binary)
-        : upmem_v4_provider_init_on_rank(&v4_provider, dpus, rank_path, initialization_binary);
+        ? upmem_v4_provider_init_simulator(&v4_provider, dpus)
+        : upmem_v4_provider_init_on_rank(&v4_provider, dpus, rank_path);
     if (error != DPU_OK || v4_provider.observed_dpus != dpus || v4_provider.observed_ranks != 1u) {
         v4_emit_startup_failure("hardware_allocation_failed", "v4 rank allocation did not match the requested DPU set");
         v4_emit_release();
@@ -746,7 +737,7 @@ int main(int argc, char **argv) {
         v4_emit_release();
         return 1;
     }
-    v4_emit_ready(rank_path, dpu_binary, initialization_binary, dpus, tasklets);
+    v4_emit_ready(rank_path, dpu_binary, dpus, tasklets);
     rc = 0;
     while (!v4_interrupted) {
         char line[PATH_MAX * 2u];

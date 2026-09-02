@@ -18,6 +18,7 @@ typedef struct {
     uint32_t descriptor_count;
     uint64_t operation_sequence;
     unsigned char digest[32];
+    execution_plan_v4_request_t *requests;
 } execution_plan_v4_operation_envelope_t;
 
 int execution_plan_v4_operation_open(
