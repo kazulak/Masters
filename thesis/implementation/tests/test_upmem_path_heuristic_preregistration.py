@@ -29,7 +29,7 @@ def test_preregistration_freezes_splits_topologies_and_search() -> None:
         "quantization_stress_18q_l2": "training",
         "hs_18q_d1": "training",
         "ghz_chain_18q": "training",
-        "bv_16q": "training",
+        "edc_18q": "training",
         "edc_16q": "validation",
         "bv_18q": "test",
     }

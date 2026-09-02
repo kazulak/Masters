@@ -53,12 +53,12 @@
     {
       "circuit": {
         "kind": "builtin",
-        "name": "bv",
+        "name": "edc",
         "parameters": {
-          "n_qubits": 16
+          "n_qubits": 18
         }
       },
-      "circuit_id": "bv_16q",
+      "circuit_id": "edc_18q",
       "split": "training"
     },
     {

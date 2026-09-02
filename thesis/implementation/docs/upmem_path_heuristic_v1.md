@@ -78,7 +78,7 @@ the sequence of contraction steps remains identity-bearing.
 
 ## Data Separation
 
-Training uses Stress18, HS18, GHZ18, and BV16. EDC16 is validation-only and
+Training uses Stress18, HS18, GHZ18, and EDC18. EDC16 is validation-only and
 BV18 is held out for the final test. Both resource topologies for one circuit
 remain in the same split.
 

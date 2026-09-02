@@ -352,17 +352,22 @@ def _serialize_candidate(
                 plan = plan_upmem(dag, numeric_policy=NUMERIC_POLICY, topology=topology)
                 admission = collection_resource_admission(plan)
                 facts = extract_plan_features(plan)
+                if not admission["collection_resource_admission_passed"]:
+                    feasible = False
+                    reasons = admission["collection_resource_admission_reasons"]
+                    reason = "collection_resource_admission_failed:" + ",".join(reasons)
         except Exception as exc:
             feasible = False
             reason = f"{type(exc).__name__}:{exc}"
-        if feasible and plan is not None and facts is not None:
-            feature_pairs.append((topology_id, facts.raw))
-            feasible_topologies.append(topology_id)
+        if plan is not None and facts is not None:
             physical_id = physical_plan_id(plan)
             fact_values = facts.as_mapping()
         else:
             physical_id = None
             fact_values = {}
+        if feasible and plan is not None and facts is not None:
+            feature_pairs.append((topology_id, facts.raw))
+            feasible_topologies.append(topology_id)
         topology_records.append(
             {
                 "topology_id": topology_id,
