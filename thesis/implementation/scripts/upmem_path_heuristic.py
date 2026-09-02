@@ -355,6 +355,75 @@ def _serialize_candidate(
     return record, rows, candidate
 
 
+def _serialize_candidate_worker(
+    circuit_id: str,
+    split: str,
+    definition: dict[str, Any],
+    item: dict[str, Any],
+    config: dict[str, Any],
+    queue: Any,
+) -> None:
+    try:
+        circuit = builtin_circuit(str(definition["name"]), dict(definition["parameters"]))
+        network, inputs = lower_tensor_network(make_simulation_job(circuit))
+        record, rows, candidate = _serialize_candidate(
+            circuit_id=circuit_id,
+            split=split,
+            network=network,
+            inputs=inputs,
+            item=item,
+            config=config,
+        )
+        queue.put((record, rows, candidate, None))
+    except BaseException as exc:
+        queue.put((None, None, None, f"{type(exc).__name__}:{exc}"))
+
+
+def _isolated_serialized_candidate(
+    *,
+    circuit_id: str,
+    split: str,
+    definition: dict[str, Any],
+    item: dict[str, Any],
+    config: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]], PathCandidate]:
+    context = multiprocessing.get_context("fork")
+    queue = context.Queue(maxsize=1)
+    process = context.Process(
+        target=_serialize_candidate_worker,
+        args=(circuit_id, split, definition, item, config, queue),
+    )
+    process.start()
+    deadline = time.monotonic() + 300.0
+    result = None
+    while result is None:
+        try:
+            result = queue.get_nowait()
+        except queue_module.Empty:
+            if not process.is_alive():
+                process.join()
+                raise RuntimeError(
+                    f"candidate lowering {item['candidate_path_id']} returned no result: "
+                    f"{process.exitcode}"
+                )
+            if time.monotonic() >= deadline:
+                process.kill()
+                process.join()
+                raise RuntimeError(
+                    f"candidate lowering {item['candidate_path_id']} timed out"
+                )
+            time.sleep(0.01)
+    record, rows, candidate, error = result
+    process.join()
+    queue.close()
+    if process.exitcode != 0 or error is not None:
+        raise RuntimeError(
+            f"candidate lowering {item['candidate_path_id']} failed: "
+            f"{error or process.exitcode}"
+        )
+    return record, rows, candidate
+
+
 def build_dataset(config: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], dict[str, float]]:
     source_sha = _source_sha()
     circuit_records = []
@@ -369,7 +438,7 @@ def build_dataset(config: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str
         definition = circuit_spec["circuit"]
         circuit = builtin_circuit(str(definition["name"]), dict(definition["parameters"]))
         job = make_simulation_job(circuit)
-        network, inputs = lower_tensor_network(job)
+        network, _ = lower_tensor_network(job)
         raw_candidates, timing = _candidate_paths(
             network,
             circuit_id,
@@ -382,11 +451,10 @@ def build_dataset(config: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str
         path_candidates = []
         feature_started = time.perf_counter()
         for item in raw_candidates:
-            record, rows, candidate = _serialize_candidate(
+            record, rows, candidate = _isolated_serialized_candidate(
                 circuit_id=circuit_id,
                 split=split,
-                network=network,
-                inputs=inputs,
+                definition=definition,
                 item=item,
                 config=config,
             )
