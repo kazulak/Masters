@@ -505,6 +505,7 @@ def test_v4_native_sources_preserve_the_abi_and_build_contract() -> None:
     assert "UPMEM_ALLOW_PHYSICAL_HARDWARE" in host
     assert "--target hardware|simulator" in host
     assert "dpu_launch(v4_provider.set, DPU_SYNCHRONOUS)" in host
+    assert "v4_simulator_target ? v4_provider.observed_ranks < 1u" in host
     assert "tasklets != (uint32_t)NR_TASKLETS" in host
     assert "tasklet_binary_mismatch" in host
     assert "control.reserved0 = tasklets;" in host

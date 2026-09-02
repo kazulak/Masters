@@ -111,8 +111,11 @@ dpu_error_t upmem_v4_provider_init_simulator(
             provider->observed_ranks++;
         }
     }
+    /* The SDK simulator models each requested DPU as a virtual rank.  Keep the
+     * physical provider's exact one-rank check above, but accept any non-empty
+     * simulator rank layout when the requested DPU count is exact. */
     if (error != DPU_OK || provider->observed_dpus != requested_dpus ||
-        sdk_rank_count != 1u || provider->observed_ranks != sdk_rank_count) {
+        sdk_rank_count < 1u || provider->observed_ranks != sdk_rank_count) {
         return error == DPU_OK ? DPU_ERR_INVALID_PROFILE : error;
     }
     error = dpu_load(provider->set, initialization_binary, NULL);
