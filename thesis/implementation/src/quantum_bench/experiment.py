@@ -186,7 +186,7 @@ _PLAN_REQUIRED_EXECUTORS = frozenset(
 )
 _UPMEM_EXECUTORS = frozenset({"upmem_sdk_simulator", "upmem_physical"})
 _NUMERIC_POLICIES = frozenset(
-    {"split_complex_float32_v1", "split_complex_int8_shared_scale_v1"}
+    {"split_complex_float32_v1", "complex_int8_shared_scale_v1"}
 )
 _CIRCUIT_KINDS = frozenset({"builtin", "quest_compatible", "qasm_file"})
 _PLANNER_ENGINES = frozenset({"opt_einsum", "cotengra"})
@@ -442,9 +442,9 @@ def _normalize_route(value: object, root: Path, field: str) -> dict[str, object]
         if tasklets > 24:
             raise ValueError(f"{field}.options.tasklets_per_dpu must be <= 24")
         if executor == "upmem_sdk_simulator":
-            if dpu_count != 1 or rank_count != 1:
+            if dpu_count > 64 or rank_count != 1:
                 raise ValueError(
-                    f"{field} simulator topology requires one DPU and one rank"
+                    f"{field} simulator topology requires one rank and 1..64 DPUs"
                 )
         else:
             if dpu_count % rank_count:

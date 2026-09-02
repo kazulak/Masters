@@ -22,7 +22,7 @@ from quantum_bench.planning import plan_opt_einsum
 
 
 HISTORICAL_FLOAT32 = "split_complex_float32_v1"
-HISTORICAL_INT8 = "split_complex_int8_shared_scale_v1"
+ACTIVE_INT8 = "complex_int8_shared_scale_v1"
 DATA_PATH = Path(__file__).parent / "data" / "complex_int8_shared_scale_v1.json"
 
 
@@ -347,7 +347,7 @@ def test_historical_cpu_int8_is_equal_to_the_new_int64_reference_when_safe() -> 
         "left": np.array([[1 + 2j, -3 + 4j, 2 - 1j], [4 - 2j, 1 + 3j, -2 - 5j]], dtype=np.complex128),
         "right": np.array([[2 - 1j, 1 + 2j, -3 + 1j, 4], [1 + 3j, -2 + 1j, 5 - 2j, 2 + 4j], [3, -1 - 2j, 1 + 1j, -4 + 2j]], dtype=np.complex128),
     }
-    historical = run_cpu_once(dag, inputs, HISTORICAL_INT8).output
+    historical = run_cpu_once(dag, inputs, ACTIVE_INT8).output
     ours, _ = qc.contract_complex_int8_reference(inputs["left"], inputs["right"], node)
     np.testing.assert_array_equal(ours, historical)
 
@@ -387,7 +387,7 @@ def test_cumulative_replay_quantizes_original_inputs_before_complex64_rounding()
         "right": np.array([[127.0], [0.0]], dtype=np.complex128),
     }
     replay = qc.replay_quantized_dag(dag, inputs)
-    historical = run_cpu_once(dag, inputs, HISTORICAL_INT8).output
+    historical = run_cpu_once(dag, inputs, ACTIVE_INT8).output
     np.testing.assert_array_equal(replay.output, historical)
     assert replay.output[0, 0] == 127.0
     assert replay.traces[0].local_max_abs_error_vs_same_node_float32 == 63.5

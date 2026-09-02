@@ -222,7 +222,7 @@ def _run_direct_sdk_case(
     )
     topology = UpmemTopology(dpu_count=1, rank_count=1, tasklets_per_dpu=tasklets)
     session = engine.open_session(
-        "split_complex_int8_shared_scale_v1"
+        "complex_int8_shared_scale_v1"
         if numeric == "int8"
         else "split_complex_float32_v1",
         topology,
@@ -495,7 +495,7 @@ def test_wram_panel_facts_count_four_real_products_for_a_full_panel() -> None:
 def test_wram_panel_facts_account_for_tail_helpers_and_tasklets() -> None:
     facts = _wram_panel_operation_facts(
         (_work_unit(m_size=3, n_size=35, k_size=65),),
-        numeric_policy="split_complex_int8_shared_scale_v1",
+        numeric_policy="complex_int8_shared_scale_v1",
         tasklets_per_dpu=8,
     )
 

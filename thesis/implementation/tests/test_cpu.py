@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 import quantum_bench.cpu as cpu
+import quantum_bench.quantized_contraction as quantized_contraction
 from quantum_bench.cpu import (
     replay_upmem_plan_once,
     run_complex128_reference,
@@ -32,7 +33,7 @@ from quantum_bench.upmem.tiling import M5TileLimits, lower_binary_contraction
 
 
 FLOAT = "split_complex_float32_v1"
-INT8 = "split_complex_int8_shared_scale_v1"
+INT8 = "complex_int8_shared_scale_v1"
 
 
 def _contract_dag(
@@ -753,13 +754,14 @@ def test_replay_unilateral_contraction_reduces_before_encoding(policy: str) -> N
         nodes=(reduced_node,),
         output=TensorView(tensor_id="out", labels=output.labels, shape=output.shape),
     )
-    left_float32 = np.asarray(inputs["left"].real, dtype=np.float32) + 1j * np.asarray(
-        inputs["left"].imag, dtype=np.float32
-    )
+    component_dtype = np.float64 if policy == INT8 else np.float32
+    left_components = np.asarray(
+        inputs["left"].real, dtype=component_dtype
+    ) + 1j * np.asarray(inputs["left"].imag, dtype=component_dtype)
     reduced_inputs = {
         "left_reduced": np.asarray(
-            left_float32.real.sum(axis=1, dtype=np.float32)
-            + 1j * left_float32.imag.sum(axis=1, dtype=np.float32),
+            left_components.real.sum(axis=1, dtype=component_dtype)
+            + 1j * left_components.imag.sum(axis=1, dtype=component_dtype),
             dtype=np.complex128,
         ),
         "right": inputs["right"],
@@ -904,6 +906,39 @@ def test_replay_canonicalizes_operands_before_encoding() -> None:
         replay.output, run_complex128_reference(dag, inputs), rtol=1e-5, atol=1e-5
     )
     assert replay.numeric_facts["operand_records"][0]["shape"] == (1, 2, 3)
+
+
+def test_int8_plan_replay_does_not_float32_round_before_quantization() -> None:
+    left = TensorSpec("left", (0, 1), (1, 2), "dense", dtype="complex128")
+    right = TensorSpec("right", (1, 2), (2, 1), "dense", dtype="complex128")
+    node = ContractNode(
+        node_id="contract",
+        left=TensorView(tensor_id="left", labels=left.labels, shape=left.shape),
+        right=TensorView(tensor_id="right", labels=right.labels, shape=right.shape),
+        output=TensorSpec(
+            "out", (0, 2), (1, 1), "dense", dtype="complex128", produced_by="contract"
+        ),
+        contracted_labels=(1,),
+        output_labels=(0, 2),
+    )
+    dag = ContractionDAG(
+        tensors=(left, right),
+        nodes=(node,),
+        output=TensorView(tensor_id="out", labels=(0, 2), shape=(1, 1)),
+    )
+    inputs = {
+        "left": np.array([[0.50000001, 127.0]], dtype=np.complex128),
+        "right": np.array([[127.0], [0.0]], dtype=np.complex128),
+    }
+    plan = upmem_plan_module.plan_upmem(
+        dag,
+        numeric_policy=INT8,
+        topology=upmem_plan_module.UpmemTopology(dpu_count=1, tasklets_per_dpu=1),
+    )
+    replay = replay_upmem_plan_once(dag, plan, inputs)
+    frozen = quantized_contraction.replay_quantized_dag(dag, inputs)
+    np.testing.assert_array_equal(replay.output, frozen.output)
+    assert replay.output[0, 0] == np.complex64(127.0)
 
 
 def test_replay_handles_remainder_tiles_and_multiple_k_chunks(

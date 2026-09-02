@@ -101,7 +101,7 @@ The executable policies are exactly:
 
 ```text
 split_complex_float32_v1
-split_complex_int8_shared_scale_v1
+complex_int8_shared_scale_v1
 ```
 
 `EncodedComplexTensor` contains real and imaginary planes, one shared operand

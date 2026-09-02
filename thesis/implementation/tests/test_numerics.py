@@ -8,6 +8,8 @@ import pytest
 from quantum_bench.model import ContractNode, TensorSpec, TensorView
 from quantum_bench.numerics import (
     INT8_QUANTIZED_MAX_ABS,
+    int32_accumulator_safe,
+    theoretical_int32_accumulator_bound,
     EncodedComplexTensor,
     NumericPolicy,
     contract_complex_products,
@@ -17,7 +19,7 @@ from quantum_bench.numerics import (
 
 
 FLOAT: NumericPolicy = "split_complex_float32_v1"
-INT8: NumericPolicy = "split_complex_int8_shared_scale_v1"
+INT8: NumericPolicy = "complex_int8_shared_scale_v1"
 
 
 def _matrix_node(
@@ -50,11 +52,15 @@ def test_public_exports_are_exact() -> None:
 
     assert numerics.__all__ == [
         "INT8_QUANTIZED_MAX_ABS",
+        "INT8_MAX_PRODUCT",
+        "INT8_COMPONENT_PRODUCT",
         "NumericPolicy",
         "EncodedComplexTensor",
         "encode_complex_tensor",
         "contract_complex_products",
         "decode_complex_products",
+        "theoretical_int32_accumulator_bound",
+        "int32_accumulator_safe",
     ]
     assert numerics.INT8_QUANTIZED_MAX_ABS == 127
 
@@ -221,7 +227,7 @@ def test_outer_product_preserves_requested_output_order() -> None:
 
 
 def test_contract_rejects_unsafe_int32_k_before_einsum() -> None:
-    safe_k = np.iinfo(np.int32).max // (INT8_QUANTIZED_MAX_ABS**2)
+    safe_k = np.iinfo(np.int32).max // (2 * INT8_QUANTIZED_MAX_ABS**2)
 
     def node_with_k(k: int) -> ContractNode:
         return _matrix_node(
@@ -251,6 +257,14 @@ def test_contract_rejects_unsafe_int32_k_before_einsum() -> None:
     )
     with pytest.raises(ValueError, match="int32 accumulation"):
         contract_complex_products(unsafe, left, right, INT8)
+
+
+def test_full_component_int32_bound_is_explicit() -> None:
+    safe_k = np.iinfo(np.int32).max // (2 * INT8_QUANTIZED_MAX_ABS**2)
+    assert theoretical_int32_accumulator_bound(safe_k) <= np.iinfo(np.int32).max
+    assert int32_accumulator_safe(safe_k)
+    assert not int32_accumulator_safe(safe_k + 1)
+    assert theoretical_int32_accumulator_bound(3) == 2 * 3 * 127**2
 
 
 def test_malformed_encoded_values_and_descriptors_are_rejected() -> None:

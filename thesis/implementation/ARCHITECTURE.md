@@ -64,7 +64,7 @@ benchmark.
 ## Numeric and Parallel Execution
 
 The active numeric policies are `split_complex_float32_v1` and
-`split_complex_int8_shared_scale_v1`. Complex values use separate real and
+`complex_int8_shared_scale_v1`. Complex values use separate real and
 imaginary planes. Int8 uses one shared scale per complex operand, packed host
 inputs, int32 tile accumulation, and deterministic host decoding/reduction.
 

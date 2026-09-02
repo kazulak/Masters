@@ -410,7 +410,7 @@ def test_real_tile_byte_and_mac_semantics_are_explicit() -> None:
         dag, numeric_policy="split_complex_float32_v1", topology=_topology()
     )
     int_plan = plan_upmem(
-        dag, numeric_policy="split_complex_int8_shared_scale_v1", topology=_topology()
+        dag, numeric_policy="complex_int8_shared_scale_v1", topology=_topology()
     )
 
     float_unit = float_plan.stages[0].work_units[0]
@@ -437,7 +437,7 @@ def test_real_tile_byte_and_mac_semantics_are_explicit() -> None:
             (64, 144, 88, 296),
         ),
         (
-            "split_complex_int8_shared_scale_v1",
+            "complex_int8_shared_scale_v1",
             (16, 40, 88, 144),
         ),
     ],
@@ -891,7 +891,7 @@ def test_identity_changes_for_policy_topology_stage_and_work_order() -> None:
     assert physical_plan_id(base) != physical_plan_id(
         plan_upmem(
             dag,
-            numeric_policy="split_complex_int8_shared_scale_v1",
+            numeric_policy="complex_int8_shared_scale_v1",
             topology=_topology(),
         )
     )
@@ -1084,15 +1084,15 @@ def test_mapping_rejects_abi_max_contracted_shape_only() -> None:
 @pytest.mark.parametrize(
     ("contracted_size", "tile_k", "should_fail"),
     [
-        (INT32_MAX // _INT8_PRODUCT, INT32_MAX // _INT8_PRODUCT, False),
-        (INT32_MAX // _INT8_PRODUCT, INT32_MAX // _INT8_PRODUCT + 1, True),
+        (INT32_MAX // (2 * _INT8_PRODUCT), INT32_MAX // (2 * _INT8_PRODUCT), False),
+        (INT32_MAX // (2 * _INT8_PRODUCT), INT32_MAX // (2 * _INT8_PRODUCT) + 1, True),
     ],
 )
 def test_final_int8_int32_boundary(
     contracted_size: int, tile_k: int, should_fail: bool
 ) -> None:
     assert _INT8_PRODUCT == 127 * 127
-    assert INT32_MAX // _INT8_PRODUCT == 133144
+    assert INT32_MAX // (2 * _INT8_PRODUCT) == 66572
     tile = SimpleNamespace(id="tile", k_size=tile_k)
     if should_fail:
         with pytest.raises(UnsupportedExecution, match="int32"):

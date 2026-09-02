@@ -72,7 +72,11 @@ WRAM_PANEL_UNALIGNED_SCRATCH_BYTES = 288
 INT32_MAX = 2**31 - 1
 EXECUTION_PLAN_V4_INT8_MAX_ABS = INT8_QUANTIZED_MAX_ABS
 INT8_MAX_PRODUCT = INT8_QUANTIZED_MAX_ABS * INT8_QUANTIZED_MAX_ABS
-MAX_INT32_SAFE_K = INT32_MAX // INT8_MAX_PRODUCT
+# A DPU lane accumulates one real product stream.  The conservative native
+# preflight bound reserves room for the two same-sign lanes later combined by
+# the host into one complex real/imaginary component.
+INT8_COMPONENT_PRODUCT = 2 * INT8_MAX_PRODUCT
+MAX_INT32_SAFE_K = INT32_MAX // INT8_COMPONENT_PRODUCT
 
 NUMERIC_FLOAT32 = "float32"
 NUMERIC_HOST_PACKED_INT8 = "host_packed_int8"
@@ -245,8 +249,6 @@ class V4Profile:
             raise ValueError("unsupported v4 execution_target")
         if self.request_transport != REQUEST_TRANSPORT_PACKED_OPERATION:
             raise ValueError("v4 sessions require packed_operation_v1")
-        if self.execution_target == EXECUTION_TARGET_SIMULATOR and self.dpu_count != 1:
-            raise ValueError("v4 simulator requires exactly one DPU")
         if self.rank_path is not None and not _RANK_PATH.fullmatch(self.rank_path):
             raise ValueError("v4 rank_path must be an explicit /dev/dpu_rankN path")
         if (
@@ -636,7 +638,7 @@ def _validate_work_geometry(
         raise ValueError("v4 K chunk is outside canonical K bounds")
     if unit.m_elements * unit.n_elements > 0xFFFFFFFF:
         raise ValueError("v4 output tile exceeds native uint32 element bound")
-    if unit.k_elements * INT8_MAX_PRODUCT > INT32_MAX:
+    if unit.k_elements * INT8_COMPONENT_PRODUCT > INT32_MAX:
         raise ValueError("v4 K chunk is unsafe for int32 int8 accumulation")
     element_bytes = 4 if mode == NUMERIC_MODE_FLOAT32 else 1
     expected_a = _aligned8(unit.m_elements * unit.k_elements * element_bytes)
@@ -1102,6 +1104,7 @@ __all__ = [
     "HEADER_FORMAT",
     "INT32_MAX",
     "INT8_MAX_PRODUCT",
+    "INT8_COMPONENT_PRODUCT",
     "MAX_CONTRACTED",
     "MAX_DPUS",
     "MAX_INT32_SAFE_K",

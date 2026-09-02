@@ -268,8 +268,7 @@ static int validate_work_units(
             !extent_inside(unit->n_offset, unit->n_elements, header->canonical_n) ||
             unit->k_elements > EXECUTION_PLAN_V4_MAX_CONTRACTED ||
             (uint64_t)unit->k_elements *
-                (uint64_t)EXECUTION_PLAN_V4_INT8_MAX_ABS *
-                (uint64_t)EXECUTION_PLAN_V4_INT8_MAX_ABS > 2147483647u) {
+                (uint64_t)EXECUTION_PLAN_V4_INT8_COMPONENT_PRODUCT > 2147483647u) {
             v4_error(error_message, "hardware_profile_violation: v4 tile extents are outside the profile");
             return 1;
         }
