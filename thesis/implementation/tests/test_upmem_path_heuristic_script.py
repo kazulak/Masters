@@ -364,6 +364,8 @@ def _calibration_fixture(tmp_path: Path) -> tuple[Path, Path, Path, dict, tuple[
         },
     }
     base_backend = {
+        "backend_id": "upmem_final_plan_v1",
+        "execution_class": "upmem_v4_real_tile",
         "target_observed": "physical_hardware",
         "physical_target_verified": True,
         "hardware_kernel_executed": True,
@@ -388,6 +390,8 @@ def _calibration_fixture(tmp_path: Path) -> tuple[Path, Path, Path, dict, tuple[
         "operation_facts": [],
     }
     terminal = {
+        "backend_id": "upmem_sdk_hardware_v4_tile_session",
+        "execution_class": "physical_v4_output_tile",
         "target_observed": "physical_hardware",
         "physical_target_verified": True,
         "hardware_kernel_executed": True,
@@ -506,10 +510,11 @@ def test_extract_calibration_emits_raw_rows_and_separates_source_commits(
     assert table[0]["physical_execution_source_sha"] == "1" * 40
     assert table[0]["timing_scope"] == "steady_execution_v1"
     assert table[0]["fallback"] == "false"
-    assert json.loads(table[0]["backend_facts_json"])["request_transport"] == "packed_operation_v1"
+    assert table[0]["request_transport"] == "packed_operation_v1"
+    assert table[0]["output_sha256"] == "3" * 64
     emitted = json.loads((output_dir / "path_runtime_calibration.json").read_text(encoding="utf-8"))
-    assert emitted["observations"][0]["raw_sample"]["sample_id"] == "sample-0"
-    assert emitted["observations"][0]["raw_session"]["session_instance_id"] == "session-0"
+    assert emitted["observations"][0]["sample_id"] == "sample-0"
+    assert emitted["observations"][0]["session_instance_id"] == "session-0"
 
 
 def test_extract_calibration_rejects_incomplete_block_set(tmp_path: Path, monkeypatch) -> None:

@@ -1,0 +1,17 @@
+{
+  "affected_attempt_count": 24,
+  "affected_cell": {
+    "circuit_id": "bv_16q",
+    "topology_id": "4dpu_t8"
+  },
+  "artifact_disposition": "excluded_from_fitting_and_all_scientific_results",
+  "artifact_sha256": "acb561b48cc9c7e7c35bee8f7f457277eb213ec7753cf9b64f9ac3bdd81d7807",
+  "experiment_id": "1975ce88993b876382c20c7004675418daa7a45a475c460019811cd36dacd456",
+  "reason": "The preregistered BV16 four-DPU cell was physically underfilled. Twenty-four successful attempts had collection_resource_admission_passed=false, so the complete campaign was design-invalid for calibration even though execution and numerical validation succeeded.",
+  "replacement_policy": "No samples were spliced or retried. The candidate set was corrected before timing by replacing the inadmissible training instance with EDC18, and a complete new 192-session campaign was collected under a descendant source.",
+  "run_id": "c88fcd7e-fb0d-4c13-8420-d6da9d51414d",
+  "sample_count": 192,
+  "schema_version": "upmem_path_calibration_incident_v1",
+  "session_count": 192,
+  "source_commit": "f2e21a09453b240f8fb9b1e6d202ce7002845d5a"
+}

@@ -80,7 +80,10 @@ CALIBRATION_COLUMNS = (
     "source_sha", "candidate_generation_source_sha", "physical_execution_source_sha",
     "candidate_set_sha256", "calibration_set_sha256", "problem_id",
     "tensor_network_structure_id", "logical_plan_id", "physical_plan_id",
-    "executable_id", "validation_policy_id", "status", "validation", "fallback",
+    "executable_id", "validation_policy_id", "output_sha256", "status",
+    "validation", "fallback", "max_abs_error", "relative_l2_error",
+    "norm_drift", "phase_aligned_max_abs_error", "full_precision_passed",
+    "policy_reference_passed",
     "timing_scope", "total_wall_s", "session_open_s", "session_close_s",
     "session_inclusive_s", "kernel_s", "h2d_s", "d2h_s", "h2d_bytes", "d2h_bytes",
     "preparation_s", "planning_s", "lowering_s", "mapping_s", "slicing_s",
@@ -99,8 +102,7 @@ CALIBRATION_COLUMNS = (
     "binary_identity_verified", "native_identity_verified", "hardware_release_verified",
     "tasklet_utilization", "dpu_utilization", "dominant_wave_utilization",
     "total_wave_count", "fully_populated_wave_count", "active_dpu_ids_json",
-    "active_rank_indices_json", "requested_rank_paths_json", "operation_facts_json",
-    "backend_facts_json", "terminal_backend_facts_json", "validation_json",
+    "active_rank_indices_json", "requested_rank_paths_json",
 )
 CALIBRATION_SCHEMA_VERSION = "upmem_path_runtime_calibration_v1"
 CALIBRATION_TIMING_SCOPE = "steady_execution_v1"
@@ -980,7 +982,10 @@ def _joined_backend_facts(
     terminal = dict(
         _mapping(session.get("terminal_backend_facts"), "terminal backend facts")
     )
-    for field in set(sample_facts) & set(terminal):
+    # These identify different evidence scopes: the aggregate physical plan and
+    # the native rank session. They are both retained in their original records.
+    scope_specific_fields = {"backend_id", "execution_class"}
+    for field in (set(sample_facts) & set(terminal)) - scope_specific_fields:
         if sample_facts[field] != terminal[field]:
             raise ValueError(f"sample/session backend fact conflict: {field}")
     joined = dict(sample_facts)
@@ -1110,9 +1115,20 @@ def _calibration_row(
         "physical_plan_id": sample["identities"]["physical_plan_id"],
         "executable_id": sample["identities"]["executable_id"],
         "validation_policy_id": sample["identities"]["validation_policy_id"],
+        "output_sha256": sample["output_sha256"],
         "status": sample["status"],
         "validation": "passed",
         "fallback": "false",
+        "max_abs_error": sample["validation"].get("max_abs_error"),
+        "relative_l2_error": sample["validation"].get("relative_l2_error"),
+        "norm_drift": sample["validation"].get("norm_drift"),
+        "phase_aligned_max_abs_error": sample["validation"].get(
+            "phase_aligned_max_abs_error"
+        ),
+        "full_precision_passed": sample["validation"].get("full_precision_passed"),
+        "policy_reference_passed": sample["validation"].get(
+            "policy_reference_passed"
+        ),
         "timing_scope": measurement["scope_id"],
         "total_wall_s": total_wall,
         "session_open_s": open_s,
@@ -1170,14 +1186,12 @@ def _calibration_row(
         "active_dpu_ids_json": _json_text(facts.get("active_dpu_ids")),
         "active_rank_indices_json": _json_text(facts.get("active_rank_indices")),
         "requested_rank_paths_json": _json_text(raw_hashes["rank_paths"]),
-        "operation_facts_json": _json_text(facts.get("operation_facts")),
-        "backend_facts_json": _json_text(dict(_mapping(sample["backend_facts"], "sample backend_facts"))),
-        "terminal_backend_facts_json": _json_text(dict(terminal)),
-        "validation_json": _json_text(dict(_mapping(sample["validation"], "sample validation"))),
     }
     for field in (
         "kernel_s", "h2d_s", "d2h_s", "preparation_s", "planning_s", "lowering_s",
         "mapping_s", "slicing_s", "host_reduce_s", "rank_work_s",
+        "max_abs_error", "relative_l2_error", "norm_drift",
+        "phase_aligned_max_abs_error",
     ):
         if row[field] is not None:
             row[field] = _finite_nonnegative(row[field], field)
@@ -1306,7 +1320,7 @@ def extract_calibration(
             raw_hashes=raw_hashes,
         )
         rows.append(row)
-        observations.append({**row, "raw_sample": dict(sample), "raw_session": dict(session)})
+        observations.append(dict(row))
     expected_keys = {
         (str(item["cell_id"]), candidate_id, block, attempt)
         for (_case_id, _topology_id, candidate_id), item in expected.items()
