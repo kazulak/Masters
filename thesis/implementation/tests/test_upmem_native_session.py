@@ -656,10 +656,15 @@ def test_simulator_profile_forbids_rank_path() -> None:
         )
 
 
-def test_simulator_profile_rejects_multiple_dpus() -> None:
-    with pytest.raises(ValueError, match="exactly one DPU"):
+def test_simulator_profile_accepts_one_rank_multiple_dpus_with_native_limit() -> None:
+    profile = v4.V4Profile(
+        dpu_count=64,
+        execution_target=v4.EXECUTION_TARGET_SIMULATOR,
+    )
+    assert profile.dpu_count == 64
+    with pytest.raises(ValueError, match=r"\[1, 64\]"):
         v4.V4Profile(
-            dpu_count=2,
+            dpu_count=65,
             execution_target=v4.EXECUTION_TARGET_SIMULATOR,
         )
 

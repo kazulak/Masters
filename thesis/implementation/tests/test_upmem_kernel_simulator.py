@@ -56,6 +56,10 @@ _LEGACY_SDK_CASES = (
     ("direct_k257", "float32", 8, 8, 32, 257),
     ("planned_k257", "planned", 8, 8, 32, 257),
     ("int8_tail", "int8", 8, 8, 35, 130),
+    ("int8_zero_k1_idle_t8", "int8", 8, 2, 3, 1),
+    ("int8_limits_cancellation_odd_k", "int8", 8, 3, 5, 3),
+    ("int8_partial_multpanel_odd_k", "int8", 8, 3, 35, 65),
+    ("planned_int8_k257", "planned_int8", 8, 8, 32, 257),
     ("t24_functional", "float32", 24, 24, 32, 65),
 )
 _RESOURCE_GENERAL_SDK_CASES = (
@@ -174,15 +178,28 @@ def _sdk_binaries(tasklets: int) -> tuple[Path, Path, Path]:
 
 
 def _direct_values(
-    *, m_size: int, n_size: int, k_size: int, numeric: str
+    *,
+    m_size: int,
+    n_size: int,
+    k_size: int,
+    numeric: str,
+    case_id: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, str]:
     if numeric == "int8":
-        left = ((np.arange(m_size * k_size) % 17) - 8).astype(np.int8).reshape(
-            m_size, k_size
-        )
-        right = ((np.arange(k_size * n_size) % 19) - 9).astype(np.int8).reshape(
-            k_size, n_size
-        )
+        if case_id == "int8_zero_k1_idle_t8":
+            left = np.zeros((m_size, k_size), dtype=np.int8)
+            right = np.zeros((k_size, n_size), dtype=np.int8)
+        elif case_id == "int8_limits_cancellation_odd_k":
+            limits = np.array([-127, 127, -127, 127, 127, -127], dtype=np.int8)
+            left = np.resize(limits, m_size * k_size).reshape(m_size, k_size)
+            right = np.resize(limits[::-1], k_size * n_size).reshape(k_size, n_size)
+        else:
+            left = ((np.arange(m_size * k_size) % 17) - 8).astype(np.int8).reshape(
+                m_size, k_size
+            )
+            right = ((np.arange(k_size * n_size) % 19) - 9).astype(
+                np.int8
+            ).reshape(k_size, n_size)
         expected = left.astype(np.int64) @ right.astype(np.int64)
         return left, right, expected, NUMERIC_HOST_PACKED_INT8
     left = ((np.arange(m_size * k_size) % 17) - 8).astype(np.float32).reshape(
@@ -207,7 +224,11 @@ def _run_direct_sdk_case(
     _require_sdk_simulator(case_id)
     host, dpu, initialization = _sdk_binaries(tasklets)
     left, right, expected, numeric_mode = _direct_values(
-        m_size=m_size, n_size=n_size, k_size=k_size, numeric=numeric
+        m_size=m_size,
+        n_size=n_size,
+        k_size=k_size,
+        numeric=numeric,
+        case_id=case_id,
     )
     engine = UpmemV4Executor(
         session_root=tmp_path / "session",
@@ -559,13 +580,18 @@ def test_direct_sdk_simulator_case_matrix(
     """Execute the exact M7B direct ABI and planned-K boundary matrix."""
 
     try:
-        if case_id == "planned_k257":
+        if numeric in {"planned", "planned_int8"}:
             _require_sdk_simulator(case_id)
             host, dpu, initialization = _sdk_binaries(tasklets)
             dag, _, inputs = _planned_k257_node()
+            numeric_policy = (
+                "complex_int8_shared_scale_v1"
+                if numeric == "planned_int8"
+                else "split_complex_float32_v1"
+            )
             plan = plan_upmem(
                 dag,
-                numeric_policy="split_complex_float32_v1",
+                numeric_policy=numeric_policy,
                 topology=UpmemTopology(
                     dpu_count=1, rank_count=1, tasklets_per_dpu=tasklets
                 ),
@@ -589,7 +615,12 @@ def test_direct_sdk_simulator_case_matrix(
                 dag, plan, resources, timeout_s=120.0
             ) as session:
                 actual = session.run_once(inputs)
-            np.testing.assert_allclose(actual.output, expected.output, atol=1.0e-5, rtol=1.0e-5)
+            if numeric == "planned_int8":
+                np.testing.assert_array_equal(actual.output, expected.output)
+            else:
+                np.testing.assert_allclose(
+                    actual.output, expected.output, atol=1.0e-5, rtol=1.0e-5
+                )
 
             packed_root = tmp_path / "packed-planned-session"
             packed_resources = UpmemResources(
@@ -603,9 +634,12 @@ def test_direct_sdk_simulator_case_matrix(
                 dag, plan, packed_resources, timeout_s=120.0
             ) as packed_session:
                 packed_actual = packed_session.run_once(inputs)
-            np.testing.assert_allclose(
-                packed_actual.output, expected.output, atol=1.0e-5, rtol=1.0e-5
-            )
+            if numeric == "planned_int8":
+                np.testing.assert_array_equal(packed_actual.output, expected.output)
+            else:
+                np.testing.assert_allclose(
+                    packed_actual.output, expected.output, atol=1.0e-5, rtol=1.0e-5
+                )
             assert packed_actual.backend_facts["request_transport"] == (
                 "packed_operation_v1"
             )
