@@ -431,7 +431,10 @@ def _isolated_serialized_candidate(
     item: dict[str, Any],
     config: dict[str, Any],
 ) -> tuple[dict[str, Any], list[dict[str, Any]], PathCandidate | None]:
-    context = multiprocessing.get_context("fork")
+    # Candidate lowering calls NumPy/BLAS after cotengra has initialized native
+    # worker state in the parent. Forking at that point can inherit locked
+    # runtime state and deadlock before deterministic admission is emitted.
+    context = multiprocessing.get_context("spawn")
     queue = context.Queue(maxsize=1)
     process = context.Process(
         target=_serialize_candidate_worker,
