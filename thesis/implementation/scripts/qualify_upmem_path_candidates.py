@@ -283,9 +283,11 @@ def prepare_config(
             for candidate_id in cell["candidate_path_ids"]:
                 selected.append((cell["circuit_id"], cell["topology_id"], candidate_id))
         warmups, measurements, seed, simulator = 1, 3, 20260910, False
+        topology_ids = ("1dpu_t8", "4dpu_t8")
     elif mode == "sdk":
+        topology_ids = ("1dpu_t8",)
         for circuit in dataset["circuits"]:
-            for topology_id in ("1dpu_t8", "4dpu_t8"):
+            for topology_id in topology_ids:
                 ids = _representative_ids_for_topology(
                     circuit, rankings, topology_id
                 )
@@ -329,7 +331,7 @@ def prepare_config(
         "plans": plans,
         "routes": {
             topology_id: _route(topology_id, simulator=simulator)
-            for topology_id in ("1dpu_t8", "4dpu_t8")
+            for topology_id in topology_ids
         },
         "matrix": matrix,
     }
