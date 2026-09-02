@@ -155,6 +155,155 @@ def _representative_ids(
     }))
 
 
+def _array_sha256(value: np.ndarray) -> str:
+    return hashlib.sha256(np.ascontiguousarray(value).tobytes()).hexdigest()
+
+
+def _cpu_reference_errors(
+    actual: np.ndarray, reference: np.ndarray
+) -> tuple[float | None, float | None, float | None, bool]:
+    if actual.shape != reference.shape:
+        return None, None, None, False
+    difference = np.asarray(actual, dtype=np.complex128) - reference
+    maximum = float(np.max(np.abs(difference))) if difference.size else 0.0
+    denominator = float(np.linalg.norm(reference.reshape(-1)))
+    relative_l2 = (
+        float(np.linalg.norm(difference.reshape(-1))) / denominator
+        if denominator
+        else float(np.linalg.norm(difference.reshape(-1)))
+    )
+    norm_drift = abs(
+        float(np.linalg.norm(np.asarray(actual, dtype=np.complex128).reshape(-1)))
+        - denominator
+    )
+    passed = bool(
+        np.allclose(actual, reference, rtol=1.0e-5, atol=1.0e-5)
+    )
+    return maximum, relative_l2, norm_drift, passed
+
+
+def qualify_frozen_selection(
+    dataset_path: Path,
+    selection_path: Path,
+    output_path: Path,
+    *,
+    split: str,
+) -> dict[str, Any]:
+    """CPU-qualify every unique candidate named by a frozen selection artifact."""
+
+    dataset = _load(dataset_path)
+    selection = _load(selection_path)
+    dataset_hash = _candidate_set_sha256(dataset)
+    candidates = _candidate_map(dataset)
+    circuits = _circuit_map(dataset)
+    selected, selection_roles = _evaluation_selection(
+        dataset=dataset,
+        dataset_hash=dataset_hash,
+        candidate_map=candidates,
+        circuit_map=circuits,
+        selection_path=selection_path,
+        split=split,
+    )
+
+    unique: dict[tuple[str, str], dict[str, set[str]]] = {}
+    for circuit_id, topology_id, candidate_id in selected:
+        entry = unique.setdefault(
+            (circuit_id, candidate_id),
+            {"topology_ids": set(), "roles": set()},
+        )
+        entry["topology_ids"].add(topology_id)
+        entry["roles"].update(
+            selection_roles[(circuit_id, topology_id, candidate_id)]
+        )
+
+    rows: list[dict[str, Any]] = []
+    references: dict[str, tuple[np.ndarray, str]] = {}
+    for circuit_id, candidate_id in sorted(unique):
+        circuit = circuits[circuit_id]
+        candidate = candidates[(circuit_id, candidate_id)]
+        if circuit_id not in references:
+            definition = circuit["circuit"]
+            spec = builtin_circuit(definition["name"], dict(definition["parameters"]))
+            network, reference_inputs = lower_tensor_network(make_simulation_job(spec))
+            greedy_path, _ = plan_opt_einsum(network, optimize="greedy")
+            reference = np.asarray(
+                run_complex128_reference(
+                    build_contraction_dag(network, greedy_path), reference_inputs
+                ),
+                dtype=np.complex128,
+            )
+            references[circuit_id] = (reference, _array_sha256(reference))
+        reference, reference_hash = references[circuit_id]
+        row: dict[str, Any] = {
+            "circuit_id": circuit_id,
+            "split": split,
+            "candidate_path_id": candidate_id,
+            "roles": sorted(unique[(circuit_id, candidate_id)]["roles"]),
+            "topology_ids": sorted(
+                unique[(circuit_id, candidate_id)]["topology_ids"]
+            ),
+            "logical_plan_id": candidate["logical_plan_id"],
+            "reference_output_sha256": reference_hash,
+            "output_sha256": None,
+            "max_absolute_error": None,
+            "relative_l2_error": None,
+            "norm_drift": None,
+            "errors": {
+                "max_absolute_error": None,
+                "relative_l2_error": None,
+                "norm_drift": None,
+            },
+            "error": None,
+            "passed": False,
+        }
+        try:
+            dag, inputs = _regenerate(circuit, candidate)
+            actual = np.asarray(run_cpu_once(dag, inputs, FLOAT32).output)
+            row["output_sha256"] = _array_sha256(actual)
+            maximum, relative_l2, norm_drift, passed = _cpu_reference_errors(
+                actual, reference
+            )
+            row["max_absolute_error"] = maximum
+            row["relative_l2_error"] = relative_l2
+            row["norm_drift"] = norm_drift
+            row["errors"] = {
+                "max_absolute_error": maximum,
+                "relative_l2_error": relative_l2,
+                "norm_drift": norm_drift,
+            }
+            row["passed"] = passed
+            if actual.shape != reference.shape:
+                row["error"] = (
+                    f"output shape mismatch: {actual.shape!r} != {reference.shape!r}"
+                )
+        except Exception as exc:
+            row["error"] = f"{type(exc).__name__}: {exc}"
+        rows.append(row)
+
+    result = {
+        "schema_version": "upmem_path_frozen_selection_cpu_qualification_v1",
+        "source_sha": dataset["source_sha"],
+        "candidate_set_sha256": dataset_hash,
+        "selection_sha256": hashlib.sha256(_canonical_bytes(selection)).hexdigest(),
+        "selection_schema_version": selection["schema_version"],
+        "split": split,
+        "numeric_policy": FLOAT32,
+        "reference_numeric_policy": "complex128",
+        "rtol": 1.0e-5,
+        "atol": 1.0e-5,
+        "selection_contract_passed": True,
+        "selected_cell_count": len(
+            {(circuit, topology) for circuit, topology, _ in selected}
+        ),
+        "qualified_candidate_count": len(rows),
+        "all_passed": bool(rows) and all(row["passed"] for row in rows),
+        "candidates": rows,
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(_canonical_bytes(result))
+    return result
+
+
 def qualify_cpu(
     dataset_path: Path,
     rankings_path: Path,
@@ -176,17 +325,10 @@ def qualify_cpu(
             candidate = candidates[(circuit["circuit_id"], candidate_id)]
             dag, inputs = _regenerate(circuit, candidate)
             actual = run_cpu_once(dag, inputs, FLOAT32)
-            difference = np.asarray(actual.output, dtype=np.complex128) - np.asarray(
-                reference, dtype=np.complex128
+            actual_output = np.asarray(actual.output)
+            maximum, relative_l2, _, passed = _cpu_reference_errors(
+                actual_output, np.asarray(reference, dtype=np.complex128)
             )
-            maximum = float(np.max(np.abs(difference))) if difference.size else 0.0
-            denominator = float(np.linalg.norm(reference.reshape(-1)))
-            relative_l2 = (
-                float(np.linalg.norm(difference.reshape(-1))) / denominator
-                if denominator
-                else float(np.linalg.norm(difference.reshape(-1)))
-            )
-            passed = bool(np.allclose(actual.output, reference, rtol=1.0e-5, atol=1.0e-5))
             if not passed:
                 raise ValueError(
                     f"CPU candidate validation failed for {circuit['circuit_id']}/{candidate_id}"
@@ -443,7 +585,10 @@ def prepare_config(
     rankings_path: Path | None = None,
     selection_path: Path | None = None,
     split: str | None = None,
+    execution_target: str = "physical",
 ) -> dict[str, Any]:
+    if execution_target not in {"physical", "sdk"}:
+        raise ValueError("execution target must be physical or sdk")
     dataset = _load(dataset_path)
     dataset_hash = _candidate_set_sha256(dataset)
     candidate_map = _candidate_map(dataset)
@@ -489,9 +634,16 @@ def prepare_config(
             selection_path=selection_path,
             split=split,
         )
-        warmups, measurements, seed, simulator = 1, 5, 20260911, False
+        if execution_target == "sdk":
+            warmups, measurements, seed, simulator = 0, 1, 20260912, True
+        else:
+            warmups, measurements, seed, simulator = 1, 5, 20260911, False
     else:
         raise ValueError("mode must be sdk, calibration, or evaluation")
+    if mode != "evaluation" and execution_target != "physical":
+        raise ValueError(
+            "execution target is only configurable for evaluation mode"
+        )
     selected = sorted(set(selected))
     cases = {
         circuit_id: {"circuit": {**circuit_map[circuit_id]["circuit"], "path": None}}
@@ -536,7 +688,8 @@ def prepare_config(
     config = {
         "schema_version": "tn_benchmark_v3",
         "experiment_id": (
-            f"upmem-path-heuristic-evaluation-{split}-v1"
+            f"upmem-path-heuristic-evaluation-{split}"
+            f"{'-sdk' if execution_target == 'sdk' else ''}-v1"
             if mode == "evaluation"
             else f"upmem-path-heuristic-{mode}-v1"
         ),
@@ -568,6 +721,7 @@ def prepare_config(
         **(
             {
                 "selection_split": split,
+                "execution_target": execution_target,
                 "selection_path": str(selection_path),
                 "selection_roles": [
                     {
@@ -612,6 +766,21 @@ def main() -> None:
     cpu.add_argument("--candidate-paths", type=Path, required=True)
     cpu.add_argument("--rankings", type=Path, required=True)
     cpu.add_argument("--output", type=Path, required=True)
+    frozen_cpu = subparsers.add_parser(
+        "qualify-frozen-selection",
+        aliases=(
+            "cpu-selection",
+            "evaluation-cpu",
+            "cpu-evaluate",
+            "qualify-evaluation",
+        ),
+    )
+    frozen_cpu.add_argument("--candidate-paths", type=Path, required=True)
+    frozen_cpu.add_argument(
+        "--selection", "--selection-artifact", dest="selection", type=Path, required=True
+    )
+    frozen_cpu.add_argument("--split", choices=("validation", "test"), required=True)
+    frozen_cpu.add_argument("--output", type=Path, required=True)
     prepare = subparsers.add_parser("prepare")
     prepare.add_argument("--candidate-paths", type=Path, required=True)
     prepare.add_argument("--calibration-set", type=Path)
@@ -621,11 +790,43 @@ def main() -> None:
         "--mode", choices=("sdk", "calibration", "evaluation"), required=True
     )
     prepare.add_argument("--split", choices=("validation", "test"))
+    prepare.add_argument(
+        "--execution-target",
+        "--evaluation-target",
+        "--target",
+        dest="execution_target",
+        choices=("physical", "sdk"),
+        default="physical",
+    )
     prepare.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "cpu":
         record = qualify_cpu(args.candidate_paths, args.rankings, args.output)
         print(json.dumps({"qualified_candidate_count": record["qualified_candidate_count"]}))
+    elif args.command in {
+        "qualify-frozen-selection",
+        "cpu-selection",
+        "evaluation-cpu",
+        "cpu-evaluate",
+        "qualify-evaluation",
+    }:
+        record = qualify_frozen_selection(
+            args.candidate_paths,
+            args.selection,
+            args.output,
+            split=args.split,
+        )
+        print(
+            json.dumps(
+                {
+                    "all_passed": record["all_passed"],
+                    "qualified_candidate_count": record[
+                        "qualified_candidate_count"
+                    ],
+                },
+                sort_keys=True,
+            )
+        )
     else:
         config = prepare_config(
             dataset_path=args.candidate_paths,
@@ -635,6 +836,7 @@ def main() -> None:
             rankings_path=args.rankings,
             selection_path=args.selection,
             split=args.split,
+            execution_target=args.execution_target,
         )
         print(json.dumps({"matrix_count": len(config["matrix"])}))
 

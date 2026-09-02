@@ -4,7 +4,9 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
+import numpy as np
 import pytest
 import yaml
 
@@ -156,6 +158,163 @@ def test_prepare_evaluation_config_uses_frozen_selection_once_per_path(
     assert provenance["candidate_set_sha256"] == qualify._candidate_set_sha256(
         json.loads(dataset_path.read_text(encoding="utf-8"))
     )
+
+
+def test_prepare_evaluation_config_can_target_strict_sdk_simulator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset_path, selection_path, greedy, candidate = _evaluation_fixture(tmp_path)
+    monkeypatch.setattr(qualify, "_regenerate", lambda circuit, selected: (object(), {}))
+    output = tmp_path / "sdk.yml"
+    config = qualify.prepare_config(
+        dataset_path=dataset_path,
+        selection_path=selection_path,
+        output_path=output,
+        mode="evaluation",
+        split="validation",
+        execution_target="sdk",
+    )
+
+    assert config["experiment_id"] == "upmem-path-heuristic-evaluation-validation-sdk-v1"
+    assert config["collection"]["warmup_blocks"] == 0
+    assert config["collection"]["measurement_blocks"] == 1
+    assert all(
+        route["executor"] == "upmem_sdk_simulator"
+        for route in config["routes"].values()
+    )
+    assert all("rank_paths" not in route["options"] for route in config["routes"].values())
+    assert set(config["plans"]) == {f"path_{greedy}", f"path_{candidate}"}
+    provenance = json.loads(
+        output.with_suffix(".yml.provenance.json").read_text(encoding="utf-8")
+    )
+    assert provenance["execution_target"] == "sdk"
+
+
+def test_qualify_frozen_selection_replays_each_unique_candidate_deterministically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset_path, selection_path, greedy, candidate = _evaluation_fixture(tmp_path)
+    calls: list[str] = []
+    reference = np.asarray([1.0 + 2.0j, 3.0 + 4.0j], dtype=np.complex128)
+    actual = np.asarray([1.0 + 2.0j, 3.0 + 4.0j], dtype=np.complex64)
+    monkeypatch.setattr(qualify, "builtin_circuit", lambda name, params: object())
+    monkeypatch.setattr(
+        qualify, "make_simulation_job", lambda spec: spec
+    )
+    monkeypatch.setattr(
+        qualify, "lower_tensor_network", lambda job: (object(), {"input": actual})
+    )
+    monkeypatch.setattr(
+        qualify,
+        "plan_opt_einsum",
+        lambda network, optimize: ("reference-path", {}),
+    )
+    monkeypatch.setattr(
+        qualify, "build_contraction_dag", lambda network, path: "reference-dag"
+    )
+    monkeypatch.setattr(
+        qualify, "run_complex128_reference", lambda dag, inputs: reference
+    )
+    monkeypatch.setattr(
+        qualify,
+        "_regenerate",
+        lambda circuit, selected: (
+            calls.append(selected["candidate_path_id"])
+            or (f"logical-{selected['candidate_path_id']}", {})
+        ),
+    )
+    monkeypatch.setattr(
+        qualify,
+        "contraction_dag_hash",
+        lambda dag: dag,
+    )
+    monkeypatch.setattr(
+        qualify,
+        "run_cpu_once",
+        lambda dag, inputs, numeric_policy: SimpleNamespace(output=actual),
+    )
+    first_output = tmp_path / "first.json"
+    first = qualify.qualify_frozen_selection(
+        dataset_path,
+        selection_path,
+        first_output,
+        split="validation",
+    )
+    second_output = tmp_path / "second.json"
+    second = qualify.qualify_frozen_selection(
+        dataset_path,
+        selection_path,
+        second_output,
+        split="validation",
+    )
+
+    assert first == second
+    assert first["selection_contract_passed"] is True
+    assert first["qualified_candidate_count"] == 2
+    assert first["all_passed"] is True
+    assert calls == [greedy, candidate, greedy, candidate]
+    assert [row["candidate_path_id"] for row in first["candidates"]] == [
+        greedy,
+        candidate,
+    ]
+    assert first["candidates"][0]["roles"] == ["greedy"]
+    assert first["candidates"][1]["roles"] == [
+        "minimum_flops",
+        "upmem_selected",
+    ]
+    assert first["candidates"][0]["topology_ids"] == ["1dpu_t8", "4dpu_t8"]
+    assert first["candidates"][0]["errors"]["max_absolute_error"] == 0.0
+    assert len(first["candidates"][0]["output_sha256"]) == 64
+    assert len(first["candidates"][0]["reference_output_sha256"]) == 64
+    assert first_output.read_bytes() == second_output.read_bytes()
+
+
+def test_qualify_frozen_selection_records_cpu_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset_path, selection_path, _, candidate = _evaluation_fixture(tmp_path)
+    reference = np.asarray([1.0 + 0.0j], dtype=np.complex128)
+    monkeypatch.setattr(qualify, "builtin_circuit", lambda name, params: object())
+    monkeypatch.setattr(qualify, "make_simulation_job", lambda spec: spec)
+    monkeypatch.setattr(
+        qualify, "lower_tensor_network", lambda job: (object(), {"input": reference})
+    )
+    monkeypatch.setattr(
+        qualify, "plan_opt_einsum", lambda network, optimize: ("path", {})
+    )
+    monkeypatch.setattr(
+        qualify, "build_contraction_dag", lambda network, path: "dag"
+    )
+    monkeypatch.setattr(
+        qualify, "run_complex128_reference", lambda dag, inputs: reference
+    )
+    monkeypatch.setattr(
+        qualify,
+        "_regenerate",
+        lambda circuit, selected: (selected["candidate_path_id"], {}),
+    )
+    monkeypatch.setattr(qualify, "contraction_dag_hash", lambda dag: dag)
+    monkeypatch.setattr(
+        qualify,
+        "run_cpu_once",
+        lambda dag, inputs, numeric_policy: SimpleNamespace(
+            output=np.asarray([9.0 + 0.0j], dtype=np.complex64)
+        ),
+    )
+
+    output = tmp_path / "failure.json"
+    result = qualify.qualify_frozen_selection(
+        dataset_path,
+        selection_path,
+        output,
+        split="validation",
+    )
+
+    assert result["all_passed"] is False
+    assert all(not row["passed"] for row in result["candidates"])
+    assert all(row["error"] is None for row in result["candidates"])
+    assert result["candidates"][0]["max_absolute_error"] == 8.0
+    assert json.loads(output.read_text(encoding="utf-8")) == result
 
 
 @pytest.mark.parametrize(
