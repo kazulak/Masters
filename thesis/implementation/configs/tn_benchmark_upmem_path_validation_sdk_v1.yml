@@ -32,6 +32,13 @@ cases:
         n_qubits: 16
       path: null
 plans:
+  path_184da471cc76cd1d48b06de75f26181a64ce963b01bacc55eacda830c14c49f8:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260931
+    slicing: null
   path_5b2de560595ee5ccd20c18c1d7e911104f48e90be704e247d836ea548977d70b:
     planner:
       engine: opt_einsum
@@ -43,13 +50,6 @@ plans:
       mode: greedy
       max_repeats: 1
       seed: 20260925
-    slicing: null
-  path_184da471cc76cd1d48b06de75f26181a64ce963b01bacc55eacda830c14c49f8:
-    planner:
-      engine: cotengra
-      mode: greedy
-      max_repeats: 1
-      seed: 20260931
     slicing: null
   path_e0b81bb8ba585d4d2d4e82612fa63a0455a71ca2c12524a7caf991f1794d5ceb:
     planner:
@@ -70,27 +70,15 @@ routes:
       host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t8
       dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t8
       initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t8
-  4dpu_t8:
-    executor: upmem_sdk_simulator
-    numeric_policy: split_complex_float32_v1
-    options:
-      dpu_count: 4
-      rank_count: 1
-      tasklets_per_dpu: 8
-      session_root: ../runs/upmem_sessions/path_heuristic_sdk_4dpu_t8
-      host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t8
-      dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t8
-      initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t8
 matrix:
 - case_id: edc_16q
   plan_id: path_184da471cc76cd1d48b06de75f26181a64ce963b01bacc55eacda830c14c49f8
   route_ids:
-  - 4dpu_t8
+  - 1dpu_t8
 - case_id: edc_16q
   plan_id: path_5b2de560595ee5ccd20c18c1d7e911104f48e90be704e247d836ea548977d70b
   route_ids:
   - 1dpu_t8
-  - 4dpu_t8
 - case_id: edc_16q
   plan_id: path_741df3dd13fd2a00c006fed035ec5d341ca333f00f0db5c6627be618a6652a29
   route_ids:
@@ -98,4 +86,4 @@ matrix:
 - case_id: edc_16q
   plan_id: path_e0b81bb8ba585d4d2d4e82612fa63a0455a71ca2c12524a7caf991f1794d5ceb
   route_ids:
-  - 4dpu_t8
+  - 1dpu_t8

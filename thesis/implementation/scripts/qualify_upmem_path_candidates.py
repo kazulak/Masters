@@ -595,6 +595,7 @@ def prepare_config(
     circuit_map = _circuit_map(dataset)
     selected: list[tuple[str, str, str]] = []
     selection_roles: dict[tuple[str, str, str], tuple[str, ...]] = {}
+    selection_provenance: list[tuple[str, str, str]] = []
     if mode == "calibration":
         if calibration_path is None:
             raise ValueError("calibration mode requires a calibration set")
@@ -634,7 +635,13 @@ def prepare_config(
             selection_path=selection_path,
             split=split,
         )
+        selection_provenance = list(selected)
         if execution_target == "sdk":
+            selected = sorted({
+                (circuit_id, "1dpu_t8", candidate_id)
+                for circuit_id, _topology_id, candidate_id in selected
+            })
+            topology_ids = ("1dpu_t8",)
             warmups, measurements, seed, simulator = 0, 1, 20260912, True
         else:
             warmups, measurements, seed, simulator = 1, 5, 20260911, False
@@ -732,7 +739,7 @@ def prepare_config(
                             selection_roles[(circuit_id, topology_id, candidate_id)]
                         ),
                     }
-                    for circuit_id, topology_id, candidate_id in selected
+                    for circuit_id, topology_id, candidate_id in selection_provenance
                 ],
             }
             if mode == "evaluation"

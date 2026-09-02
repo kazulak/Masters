@@ -6,6 +6,13 @@
   "schema_version": "upmem_path_experiment_provenance_v1",
   "selected": [
     {
+      "candidate_path_id": "184da471cc76cd1d48b06de75f26181a64ce963b01bacc55eacda830c14c49f8",
+      "circuit_id": "edc_16q",
+      "logical_plan_id": "a32832056086b3e70f67b03dac8ae1b53ddd56b42ac5669b5a1406daf2e8c9ff",
+      "physical_plan_id": "57dab0d8377066f5db306119f24652edbcfa65548cb9aa4e26d3f6696c1f8ef3",
+      "topology_id": "1dpu_t8"
+    },
+    {
       "candidate_path_id": "5b2de560595ee5ccd20c18c1d7e911104f48e90be704e247d836ea548977d70b",
       "circuit_id": "edc_16q",
       "logical_plan_id": "6da35cbc5d525c1aeecec9686241f8424fef46cf9de83c9b5e0c3c5d22657e02",
@@ -20,25 +27,11 @@
       "topology_id": "1dpu_t8"
     },
     {
-      "candidate_path_id": "184da471cc76cd1d48b06de75f26181a64ce963b01bacc55eacda830c14c49f8",
-      "circuit_id": "edc_16q",
-      "logical_plan_id": "a32832056086b3e70f67b03dac8ae1b53ddd56b42ac5669b5a1406daf2e8c9ff",
-      "physical_plan_id": "ddda4784ea5f20a78dcbd69f3f669e693880bd2bd403d0a185a0b81fbd761c6f",
-      "topology_id": "4dpu_t8"
-    },
-    {
-      "candidate_path_id": "5b2de560595ee5ccd20c18c1d7e911104f48e90be704e247d836ea548977d70b",
-      "circuit_id": "edc_16q",
-      "logical_plan_id": "6da35cbc5d525c1aeecec9686241f8424fef46cf9de83c9b5e0c3c5d22657e02",
-      "physical_plan_id": "fb41dfc254e069e303a8a733872cd6ae8d3ba81595cd78a93b3c270743581633",
-      "topology_id": "4dpu_t8"
-    },
-    {
       "candidate_path_id": "e0b81bb8ba585d4d2d4e82612fa63a0455a71ca2c12524a7caf991f1794d5ceb",
       "circuit_id": "edc_16q",
       "logical_plan_id": "cff9ef176252f61f4f86ac9fe57009c6d743eb7157797d0ebc07d8315f7b438f",
-      "physical_plan_id": "151aefccd607ed0a6b3c6f52c37585c34129a915840347903b756b62536a9fed",
-      "topology_id": "4dpu_t8"
+      "physical_plan_id": "161aa1c35be0d2801c43d6cddd5b9592a6c6ccebf3ca22803c0550a5d5da81ad",
+      "topology_id": "1dpu_t8"
     }
   ],
   "selection_path": "thesis_results/upmem_path_heuristic_v1/evaluation/validation_selection.json",

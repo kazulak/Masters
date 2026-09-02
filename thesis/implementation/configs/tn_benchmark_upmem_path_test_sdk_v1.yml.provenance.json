@@ -18,20 +18,6 @@
       "logical_plan_id": "9c0add015d4ea784c624cf5dfa32867b1937303e4361b30d1c1e0467a83560cb",
       "physical_plan_id": "d8db31d6937023dc33525cad6370a2fb716d830ac8ef9514dd1787ebb79f91b1",
       "topology_id": "1dpu_t8"
-    },
-    {
-      "candidate_path_id": "0237c30aa5ad972e5d11791a887617024a5a7d06451372f08b6202c089984990",
-      "circuit_id": "bv_18q",
-      "logical_plan_id": "136530f12e7ade6ead483a6fb5be06464990f7c8ac7fcf6dc036e0cce2a40d02",
-      "physical_plan_id": "8bebce9b51e7d05c92d8693d8cc14f5424da38dff1c86ba395132784e65d58cb",
-      "topology_id": "4dpu_t8"
-    },
-    {
-      "candidate_path_id": "1e1c2d68f9fdc734674877fae7a19373cdf42a2429093a07c779331b665fe646",
-      "circuit_id": "bv_18q",
-      "logical_plan_id": "9c0add015d4ea784c624cf5dfa32867b1937303e4361b30d1c1e0467a83560cb",
-      "physical_plan_id": "433fd35800947ae37f7ce9ae38fb05638e3cf32b00f7486b317d4b23a323aa30",
-      "topology_id": "4dpu_t8"
     }
   ],
   "selection_path": "thesis_results/upmem_path_heuristic_v1/evaluation/test_selection.json",

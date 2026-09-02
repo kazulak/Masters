@@ -178,6 +178,8 @@ def test_prepare_evaluation_config_can_target_strict_sdk_simulator(
     assert config["experiment_id"] == "upmem-path-heuristic-evaluation-validation-sdk-v1"
     assert config["collection"]["warmup_blocks"] == 0
     assert config["collection"]["measurement_blocks"] == 1
+    assert set(config["routes"]) == {"1dpu_t8"}
+    assert all(item["route_ids"] == ["1dpu_t8"] for item in config["matrix"])
     assert all(
         route["executor"] == "upmem_sdk_simulator"
         for route in config["routes"].values()
@@ -188,6 +190,10 @@ def test_prepare_evaluation_config_can_target_strict_sdk_simulator(
         output.with_suffix(".yml.provenance.json").read_text(encoding="utf-8")
     )
     assert provenance["execution_target"] == "sdk"
+    assert {row["topology_id"] for row in provenance["selection_roles"]} == {
+        "1dpu_t8",
+        "4dpu_t8",
+    }
 
 
 def test_qualify_frozen_selection_replays_each_unique_candidate_deterministically(

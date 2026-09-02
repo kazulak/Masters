@@ -56,25 +56,12 @@ routes:
       host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t8
       dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t8
       initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t8
-  4dpu_t8:
-    executor: upmem_sdk_simulator
-    numeric_policy: split_complex_float32_v1
-    options:
-      dpu_count: 4
-      rank_count: 1
-      tasklets_per_dpu: 8
-      session_root: ../runs/upmem_sessions/path_heuristic_sdk_4dpu_t8
-      host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t8
-      dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t8
-      initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t8
 matrix:
 - case_id: bv_18q
   plan_id: path_0237c30aa5ad972e5d11791a887617024a5a7d06451372f08b6202c089984990
   route_ids:
   - 1dpu_t8
-  - 4dpu_t8
 - case_id: bv_18q
   plan_id: path_1e1c2d68f9fdc734674877fae7a19373cdf42a2429093a07c779331b665fe646
   route_ids:
   - 1dpu_t8
-  - 4dpu_t8
