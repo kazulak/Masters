@@ -24,13 +24,6 @@ collection:
       mode: observed_v1
       max_load1_per_online_cpu: null
 cases:
-  bv_16q:
-    circuit:
-      kind: builtin
-      name: bv
-      parameters:
-        n_qubits: 16
-      path: null
   bv_18q:
     circuit:
       kind: builtin
@@ -44,6 +37,13 @@ cases:
       name: edc
       parameters:
         n_qubits: 16
+      path: null
+  edc_18q:
+    circuit:
+      kind: builtin
+      name: edc
+      parameters:
+        n_qubits: 18
       path: null
   ghz_chain_18q:
     circuit:
@@ -69,18 +69,6 @@ cases:
         repeat_layers: 2
       path: null
 plans:
-  path_20a930bc7a6c9ed9301657998ae079d3d94974e635317ea86be897639f3d16d5:
-    planner:
-      engine: cotengra
-      mode: greedy
-      max_repeats: 1
-      seed: 20260933
-    slicing: null
-  path_c6dc626edbb821ce0649537c900dd7bdf25a735ac338fc9a5b23393bd72f7474:
-    planner:
-      engine: opt_einsum
-      mode: greedy
-    slicing: null
   path_0237c30aa5ad972e5d11791a887617024a5a7d06451372f08b6202c089984990:
     planner:
       engine: cotengra
@@ -104,6 +92,18 @@ plans:
       mode: greedy
       max_repeats: 1
       seed: 20260925
+    slicing: null
+  path_b0785992b23ca97113b8ab448921ffe2b5e832f50994281719e731d54a839f9a:
+    planner:
+      engine: opt_einsum
+      mode: greedy
+    slicing: null
+  path_cf23b184355b080f3bead1d9d754a3c2c295746793109413aedfff30da27b94e:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260908
     slicing: null
   path_0f1afe2ce698cbfcd1496d867ba787cb5cdd487ef3b05e9bb140d58eee826743:
     planner:
@@ -168,14 +168,6 @@ routes:
       dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t8
       initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t8
 matrix:
-- case_id: bv_16q
-  plan_id: path_20a930bc7a6c9ed9301657998ae079d3d94974e635317ea86be897639f3d16d5
-  route_ids:
-  - 1dpu_t8
-- case_id: bv_16q
-  plan_id: path_c6dc626edbb821ce0649537c900dd7bdf25a735ac338fc9a5b23393bd72f7474
-  route_ids:
-  - 1dpu_t8
 - case_id: bv_18q
   plan_id: path_0237c30aa5ad972e5d11791a887617024a5a7d06451372f08b6202c089984990
   route_ids:
@@ -190,6 +182,14 @@ matrix:
   - 1dpu_t8
 - case_id: edc_16q
   plan_id: path_741df3dd13fd2a00c006fed035ec5d341ca333f00f0db5c6627be618a6652a29
+  route_ids:
+  - 1dpu_t8
+- case_id: edc_18q
+  plan_id: path_b0785992b23ca97113b8ab448921ffe2b5e832f50994281719e731d54a839f9a
+  route_ids:
+  - 1dpu_t8
+- case_id: edc_18q
+  plan_id: path_cf23b184355b080f3bead1d9d754a3c2c295746793109413aedfff30da27b94e
   route_ids:
   - 1dpu_t8
 - case_id: ghz_chain_18q

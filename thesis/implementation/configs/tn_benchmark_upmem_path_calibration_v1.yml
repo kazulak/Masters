@@ -24,12 +24,12 @@ collection:
       mode: observed_v1
       max_load1_per_online_cpu: null
 cases:
-  bv_16q:
+  edc_18q:
     circuit:
       kind: builtin
-      name: bv
+      name: edc
       parameters:
-        n_qubits: 16
+        n_qubits: 18
       path: null
   ghz_chain_18q:
     circuit:
@@ -55,40 +55,47 @@ cases:
         repeat_layers: 2
       path: null
 plans:
-  path_08cee53b6ade1ef254898c862a8a7cbe8637510cbb5e5d01a0012039735f45ac:
+  path_09eba679eeaacde57b3d14e532a34cfb89b93de888eb607ea84d8a211c4d2e29:
     planner:
       engine: cotengra
       mode: greedy
       max_repeats: 1
-      seed: 20260936
+      seed: 20260945
     slicing: null
-  path_20a930bc7a6c9ed9301657998ae079d3d94974e635317ea86be897639f3d16d5:
+  path_35308513a5e2881780ad0f4c9f36ff58b8f7e9e1ac95b1c3b567dbad46fa26bd:
     planner:
       engine: cotengra
       mode: greedy
       max_repeats: 1
-      seed: 20260933
+      seed: 20260962
     slicing: null
-  path_c6dc626edbb821ce0649537c900dd7bdf25a735ac338fc9a5b23393bd72f7474:
+  path_8e7637420b811e01ff5b5f6a53cc2a05e9c066f7de21cf7a9b24566ed936594c:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260927
+    slicing: null
+  path_b0785992b23ca97113b8ab448921ffe2b5e832f50994281719e731d54a839f9a:
     planner:
       engine: opt_einsum
       mode: greedy
     slicing: null
-  path_cacbb1ea6e7ef1b11414156469ba0664f63f98b51ac966545ae5ccd20bb69cb2:
+  path_cf23b184355b080f3bead1d9d754a3c2c295746793109413aedfff30da27b94e:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260908
+    slicing: null
+  path_e82337947450ef2121b8b01092f1af3f7c1db1bc7e831a0116fa010050257ae9:
     planner:
       engine: cotengra
       mode: greedy
       max_repeats: 1
       seed: 20260924
     slicing: null
-  path_e9962a81b737e14c0739aea719fe635ce5a494605e31036b3a8315375fbec137:
-    planner:
-      engine: cotengra
-      mode: greedy
-      max_repeats: 1
-      seed: 20260955
-    slicing: null
-  path_eddd6fb83dfcb2646b67a6b2d4ead4f7cdd33d0a1017ef92865eb4f78b4968c3:
+  path_eac9804cb5170ee98914be6544759ae4f7f6db14b31bb57fda7a9e7c5ef02951:
     planner:
       engine: cotengra
       mode: greedy
@@ -243,52 +250,52 @@ routes:
       rank_paths:
       - /dev/dpu_rank1
 matrix:
-- case_id: bv_16q
-  plan_id: path_08cee53b6ade1ef254898c862a8a7cbe8637510cbb5e5d01a0012039735f45ac
+- case_id: edc_18q
+  plan_id: path_09eba679eeaacde57b3d14e532a34cfb89b93de888eb607ea84d8a211c4d2e29
   route_ids:
   - 1dpu_t8
-- case_id: bv_16q
-  plan_id: path_20a930bc7a6c9ed9301657998ae079d3d94974e635317ea86be897639f3d16d5
+- case_id: edc_18q
+  plan_id: path_35308513a5e2881780ad0f4c9f36ff58b8f7e9e1ac95b1c3b567dbad46fa26bd
   route_ids:
   - 1dpu_t8
-- case_id: bv_16q
-  plan_id: path_c6dc626edbb821ce0649537c900dd7bdf25a735ac338fc9a5b23393bd72f7474
+- case_id: edc_18q
+  plan_id: path_8e7637420b811e01ff5b5f6a53cc2a05e9c066f7de21cf7a9b24566ed936594c
   route_ids:
   - 1dpu_t8
-- case_id: bv_16q
-  plan_id: path_cacbb1ea6e7ef1b11414156469ba0664f63f98b51ac966545ae5ccd20bb69cb2
+- case_id: edc_18q
+  plan_id: path_b0785992b23ca97113b8ab448921ffe2b5e832f50994281719e731d54a839f9a
   route_ids:
   - 1dpu_t8
-- case_id: bv_16q
-  plan_id: path_e9962a81b737e14c0739aea719fe635ce5a494605e31036b3a8315375fbec137
+- case_id: edc_18q
+  plan_id: path_cf23b184355b080f3bead1d9d754a3c2c295746793109413aedfff30da27b94e
   route_ids:
   - 1dpu_t8
-- case_id: bv_16q
-  plan_id: path_eddd6fb83dfcb2646b67a6b2d4ead4f7cdd33d0a1017ef92865eb4f78b4968c3
+- case_id: edc_18q
+  plan_id: path_e82337947450ef2121b8b01092f1af3f7c1db1bc7e831a0116fa010050257ae9
   route_ids:
   - 1dpu_t8
-- case_id: bv_16q
-  plan_id: path_08cee53b6ade1ef254898c862a8a7cbe8637510cbb5e5d01a0012039735f45ac
+- case_id: edc_18q
+  plan_id: path_09eba679eeaacde57b3d14e532a34cfb89b93de888eb607ea84d8a211c4d2e29
   route_ids:
   - 4dpu_t8
-- case_id: bv_16q
-  plan_id: path_20a930bc7a6c9ed9301657998ae079d3d94974e635317ea86be897639f3d16d5
+- case_id: edc_18q
+  plan_id: path_35308513a5e2881780ad0f4c9f36ff58b8f7e9e1ac95b1c3b567dbad46fa26bd
   route_ids:
   - 4dpu_t8
-- case_id: bv_16q
-  plan_id: path_c6dc626edbb821ce0649537c900dd7bdf25a735ac338fc9a5b23393bd72f7474
+- case_id: edc_18q
+  plan_id: path_8e7637420b811e01ff5b5f6a53cc2a05e9c066f7de21cf7a9b24566ed936594c
   route_ids:
   - 4dpu_t8
-- case_id: bv_16q
-  plan_id: path_cacbb1ea6e7ef1b11414156469ba0664f63f98b51ac966545ae5ccd20bb69cb2
+- case_id: edc_18q
+  plan_id: path_b0785992b23ca97113b8ab448921ffe2b5e832f50994281719e731d54a839f9a
   route_ids:
   - 4dpu_t8
-- case_id: bv_16q
-  plan_id: path_e9962a81b737e14c0739aea719fe635ce5a494605e31036b3a8315375fbec137
+- case_id: edc_18q
+  plan_id: path_cf23b184355b080f3bead1d9d754a3c2c295746793109413aedfff30da27b94e
   route_ids:
   - 4dpu_t8
-- case_id: bv_16q
-  plan_id: path_eddd6fb83dfcb2646b67a6b2d4ead4f7cdd33d0a1017ef92865eb4f78b4968c3
+- case_id: edc_18q
+  plan_id: path_eac9804cb5170ee98914be6544759ae4f7f6db14b31bb57fda7a9e7c5ef02951
   route_ids:
   - 4dpu_t8
 - case_id: ghz_chain_18q

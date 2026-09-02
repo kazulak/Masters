@@ -1,23 +1,9 @@
 {
-  "candidate_set_sha256": "71fd5a6db22278c74afc1781192477664d5d4519328676e89e81fb4662c37f39",
+  "candidate_set_sha256": "5269bfea2a1777b041e10edf9618ba613d44021ce89b3ff0d95093a81c095b65",
   "mode": "sdk",
-  "preregistration_sha256": "e14525cb45dfdf455f5739a4d11f589ba4d82ebc52e1ab29a9d82fd8df1b6c17",
+  "preregistration_sha256": "b9490e705961ba7d4091a9f2cfc321a9e9228a317551155a99a34c80f984385d",
   "schema_version": "upmem_path_experiment_provenance_v1",
   "selected": [
-    {
-      "candidate_path_id": "20a930bc7a6c9ed9301657998ae079d3d94974e635317ea86be897639f3d16d5",
-      "circuit_id": "bv_16q",
-      "logical_plan_id": "05cfe4aed452a944d1ee40a9a292f4bd464de33a1d72026cfea57ba55412293f",
-      "physical_plan_id": "8198793e698dc44338826fbed36b1f3c6c81bb82386d2a334628a2f4ea64047f",
-      "topology_id": "1dpu_t8"
-    },
-    {
-      "candidate_path_id": "c6dc626edbb821ce0649537c900dd7bdf25a735ac338fc9a5b23393bd72f7474",
-      "circuit_id": "bv_16q",
-      "logical_plan_id": "2004d3f7c06a30d7cd408612f7cae3bf6f05b460f5270061a1b6781e81d7cb24",
-      "physical_plan_id": "718e96f81993f48b3fab8002c8b0df6b197421aa3ed56164104dd873ab3b78ec",
-      "topology_id": "1dpu_t8"
-    },
     {
       "candidate_path_id": "0237c30aa5ad972e5d11791a887617024a5a7d06451372f08b6202c089984990",
       "circuit_id": "bv_18q",
@@ -44,6 +30,20 @@
       "circuit_id": "edc_16q",
       "logical_plan_id": "10fed67e60c5d993a9a3734f22f1a2d0aed0354d57f0d7080985cbd17ace82dd",
       "physical_plan_id": "a724fe410b7ae36ae3ab01f19fa06043c1092e902383cd202296dd8b9eb87a76",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_id": "b0785992b23ca97113b8ab448921ffe2b5e832f50994281719e731d54a839f9a",
+      "circuit_id": "edc_18q",
+      "logical_plan_id": "7aa3ee4feb85f18bddb28fb0f5997e70f4fa267625746d1fedd783e0d356e1d5",
+      "physical_plan_id": "b3d150949c265226194d2348856b4e4121e558f942c09cff7c735dad054be8e7",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_id": "cf23b184355b080f3bead1d9d754a3c2c295746793109413aedfff30da27b94e",
+      "circuit_id": "edc_18q",
+      "logical_plan_id": "f82cb76f0830c2a23e03fc79866725179feafe43d3b125e1c3e10dc331409c7f",
+      "physical_plan_id": "9a19de8e4168e7c73e316a0f01b9c9d268d89171554aea94482389c8503ad3d4",
       "topology_id": "1dpu_t8"
     },
     {
@@ -103,5 +103,5 @@
       "topology_id": "1dpu_t8"
     }
   ],
-  "source_sha": "8bb7e38d5304b36df00c37f11fe3f8d08af00bbf"
+  "source_sha": "68bde98e0696765cd5def2f8b41b686c6a2ffcb0"
 }
