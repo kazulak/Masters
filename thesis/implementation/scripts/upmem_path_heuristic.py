@@ -720,9 +720,31 @@ def _write_csv(path: Path, rows: list[dict[str, Any]], columns: tuple[str, ...])
         writer.writerows(rows)
 
 
-def generate(config_path: Path, output_dir: Path, *, check: bool = False) -> dict[str, float]:
-    config = load_config(config_path)
+def generate(
+    config_path: Path,
+    output_dir: Path,
+    *,
+    check: bool = False,
+    circuit_ids: tuple[str, ...] = (),
+) -> dict[str, float]:
+    full_config = load_config(config_path)
+    config = full_config
+    if circuit_ids:
+        requested = set(circuit_ids)
+        known = {str(item["circuit_id"]) for item in full_config["circuits"]}
+        if not requested <= known:
+            raise ValueError(f"unknown circuit shard IDs: {sorted(requested - known)!r}")
+        config = {
+            **full_config,
+            "circuits": [
+                item for item in full_config["circuits"]
+                if item["circuit_id"] in requested
+            ],
+        }
     dataset, features, rankings, calibration, timings = build_dataset(config)
+    preregistration_sha = _sha256_bytes(_canonical_bytes(full_config))
+    dataset["preregistration_sha256"] = preregistration_sha
+    calibration["candidate_set_sha256"] = _sha256_bytes(_canonical_bytes(dataset))
     outputs: dict[str, bytes] = {
         "candidate_paths.json": _canonical_bytes(dataset),
         "calibration_candidate_set.json": _canonical_bytes(calibration),
@@ -758,6 +780,117 @@ def generate(config_path: Path, output_dir: Path, *, check: bool = False) -> dic
         _write_csv(feature_path, features, FEATURE_COLUMNS)
         _write_csv(ranking_path, rankings, ranking_columns)
         (output_dir / "planning_timing.json").write_bytes(_canonical_bytes(timings))
+    return timings
+
+
+def merge_shards(
+    config_path: Path,
+    shard_dirs: tuple[Path, ...],
+    output_dir: Path,
+) -> dict[str, float]:
+    """Merge exact-source circuit shards into one canonical frozen dataset."""
+
+    if not shard_dirs:
+        raise ValueError("at least one candidate shard is required")
+    config = load_config(config_path)
+    expected_order = [str(item["circuit_id"]) for item in config["circuits"]]
+    expected_preregistration = _sha256_bytes(_canonical_bytes(config))
+    datasets = [json.loads((path / "candidate_paths.json").read_text()) for path in shard_dirs]
+    calibrations = [
+        json.loads((path / "calibration_candidate_set.json").read_text())
+        for path in shard_dirs
+    ]
+    base = {key: value for key, value in datasets[0].items() if key != "circuits"}
+    if base["preregistration_sha256"] != expected_preregistration:
+        raise ValueError("candidate shard does not match preregistration")
+    circuits: dict[str, dict[str, Any]] = {}
+    feature_rows: list[dict[str, Any]] = []
+    ranking_rows: list[dict[str, Any]] = []
+    calibration_cells: list[dict[str, Any]] = []
+    timings = {"candidate_generation_s": 0.0, "feature_extraction_s": 0.0}
+    for shard_dir, dataset, calibration in zip(
+        shard_dirs, datasets, calibrations, strict=True
+    ):
+        if {key: value for key, value in dataset.items() if key != "circuits"} != base:
+            raise ValueError("candidate shards have mixed source or dependency provenance")
+        if calibration["source_sha"] != dataset["source_sha"]:
+            raise ValueError("candidate shard calibration source mismatch")
+        if calibration["candidate_set_sha256"] != _sha256_bytes(
+            _canonical_bytes(dataset)
+        ):
+            raise ValueError("candidate shard checksum mismatch")
+        for circuit in dataset["circuits"]:
+            circuit_id = str(circuit["circuit_id"])
+            if circuit_id in circuits:
+                raise ValueError(f"duplicate circuit shard: {circuit_id}")
+            circuits[circuit_id] = circuit
+        with (shard_dir / "candidate_features.csv").open(
+            newline="", encoding="utf-8"
+        ) as stream:
+            feature_rows.extend(csv.DictReader(stream))
+        with (shard_dir / "candidate_rankings.csv").open(
+            newline="", encoding="utf-8"
+        ) as stream:
+            ranking_rows.extend(csv.DictReader(stream))
+        calibration_cells.extend(calibration["cells"])
+        shard_timing = json.loads((shard_dir / "planning_timing.json").read_text())
+        for key in timings:
+            timings[key] += float(shard_timing[key])
+    if set(circuits) != set(expected_order):
+        raise ValueError("candidate shards do not cover the frozen circuit set exactly")
+    dataset = {**base, "circuits": [circuits[item] for item in expected_order]}
+    circuit_order = {value: index for index, value in enumerate(expected_order)}
+    topology_order = {
+        str(item["topology_id"]): index
+        for index, item in enumerate(config["topologies"])
+    }
+    candidate_order = {
+        (circuit_id, candidate["candidate_path_id"]): index
+        for circuit_id, circuit in circuits.items()
+        for index, candidate in enumerate(circuit["candidates"])
+    }
+    feature_rows.sort(
+        key=lambda row: (
+            circuit_order[row["circuit_id"]],
+            candidate_order[(row["circuit_id"], row["candidate_path_id"])],
+            topology_order[row["topology_id"]],
+        )
+    )
+    ranking_rows.sort(
+        key=lambda row: (
+            circuit_order[row["circuit_id"]],
+            topology_order[row["topology_id"]],
+            int(row["equal_weight_rank"]),
+        )
+    )
+    calibration_cells.sort(
+        key=lambda item: (
+            circuit_order[item["circuit_id"]],
+            topology_order[item["topology_id"]],
+        )
+    )
+    calibration = {
+        "schema_version": "upmem_path_calibration_candidate_set_v1",
+        "source_sha": dataset["source_sha"],
+        "candidate_set_sha256": _sha256_bytes(_canonical_bytes(dataset)),
+        "timing_used_for_selection": False,
+        "cells": calibration_cells,
+    }
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "candidate_paths.json").write_bytes(_canonical_bytes(dataset))
+    (output_dir / "calibration_candidate_set.json").write_bytes(
+        _canonical_bytes(calibration)
+    )
+    _write_csv(output_dir / "candidate_features.csv", feature_rows, FEATURE_COLUMNS)
+    _write_csv(
+        output_dir / "candidate_rankings.csv",
+        ranking_rows,
+        (
+            "circuit_id", "split", "topology_id", "candidate_path_id",
+            "equal_weight_rank", "equal_weight_score", "feature_model",
+        ),
+    )
+    (output_dir / "planning_timing.json").write_bytes(_canonical_bytes(timings))
     return timings
 
 
@@ -1014,6 +1147,11 @@ def main() -> None:
     generate_parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     generate_parser.add_argument("--output-dir", type=Path, required=True)
     generate_parser.add_argument("--check", action="store_true")
+    generate_parser.add_argument("--circuit-id", action="append", default=[])
+    merge_parser = subparsers.add_parser("merge")
+    merge_parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    merge_parser.add_argument("--shard-dir", type=Path, action="append", required=True)
+    merge_parser.add_argument("--output-dir", type=Path, required=True)
     fit_parser = subparsers.add_parser("fit")
     fit_parser.add_argument("--candidate-paths", type=Path, required=True)
     fit_parser.add_argument("--calibration-set", type=Path, required=True)
@@ -1028,7 +1166,17 @@ def main() -> None:
     evaluate_parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "generate":
-        timings = generate(args.config, args.output_dir, check=args.check)
+        timings = generate(
+            args.config,
+            args.output_dir,
+            check=args.check,
+            circuit_ids=tuple(args.circuit_id),
+        )
+        print(json.dumps(timings, sort_keys=True))
+    elif args.command == "merge":
+        timings = merge_shards(
+            args.config, tuple(args.shard_dir), args.output_dir
+        )
         print(json.dumps(timings, sort_keys=True))
     elif args.command == "fit":
         result = fit(
