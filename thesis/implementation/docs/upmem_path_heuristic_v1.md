@@ -49,6 +49,11 @@ bounding the finite calibration
 campaign. The time bound is therefore a failure guard rather than the primary admission
 rule.
 
+The existing canonical DAG identity recursively embeds escaped semantic
+subtrees. Candidate generation therefore rejects paths whose deterministic
+semantic-identity expansion estimate exceeds 1,000,000 units before hashing.
+This is a software representability bound, not a UPMEM hardware limit.
+
 - `B_host_dpu` is planned H2D plus D2H traffic. The components are retained.
 - `B_mram_wram` is the existing aligned-transfer estimate derived from tile
   geometry. It is not a hardware counter.

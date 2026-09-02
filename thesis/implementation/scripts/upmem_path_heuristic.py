@@ -69,6 +69,7 @@ FEATURE_COLUMNS = (
     "wave_count", "packed_operation_count", "dpu_launch_count",
     "host_reduce_count", "barrier_events", "partial_wave_count",
     "tasklet_utilization", "dpu_utilization", "host_memory_estimate_bytes",
+    "semantic_identity_expansion_units",
 )
 
 
@@ -148,6 +149,20 @@ def _estimated_work_unit_count(dag: Any) -> int:
             * ((k_size + tile_k - 1) // tile_k)
         )
     return result
+
+
+def _semantic_identity_expansion_units(dag: Any, *, stop_after: int) -> int:
+    """Bound recursive escaped-subtree expansion in the frozen DAG identity."""
+
+    depths: dict[str, int] = {}
+    total = 0
+    for node in dag.nodes:
+        depth = 1 + max((depths[item] for item in node.dependencies), default=0)
+        depths[node.node_id] = depth
+        total += 1 << depth
+        if total > stop_after:
+            return total
+    return total
 
 
 def _product(values: Any) -> int:
@@ -418,6 +433,12 @@ def _serialized_candidate_with_admission(
     estimated_work_units = _estimated_work_unit_count(dag)
     work_unit_limit = int(config["candidate_generation"]["maximum_planned_work_units"])
     memory_limit = int(config["host_memory_admission_bytes"])
+    identity_limit = int(
+        config["candidate_generation"]["maximum_semantic_identity_expansion_units"]
+    )
+    identity_expansion = _semantic_identity_expansion_units(
+        dag, stop_after=identity_limit
+    )
     if estimated_work_units > work_unit_limit:
         return _infeasible_candidate_record(
             circuit_id=circuit_id,
@@ -440,6 +461,18 @@ def _serialized_candidate_with_admission(
             host_memory_estimate_bytes=memory_estimate,
             estimated_work_unit_count=estimated_work_units,
         )
+    if identity_expansion > identity_limit:
+        return _infeasible_candidate_record(
+            circuit_id=circuit_id,
+            split=split,
+            item=item,
+            config=config,
+            reason="semantic_identity_expansion_exceeds_preregistered_bound",
+            conventional=conventional,
+            host_memory_estimate_bytes=memory_estimate,
+            estimated_work_unit_count=estimated_work_units,
+            semantic_identity_expansion_units=identity_expansion,
+        )
     started = time.perf_counter()
     result = _serialize_candidate(
         circuit_id=circuit_id,
@@ -449,6 +482,12 @@ def _serialized_candidate_with_admission(
         item=item,
         config=config,
     )
+    record, rows, candidate = result
+    record["semantic_identity_expansion_units"] = identity_expansion
+    for topology in record["topologies"]:
+        topology["semantic_identity_expansion_units"] = identity_expansion
+    for row in rows:
+        row["semantic_identity_expansion_units"] = identity_expansion
     timeout_s = float(config["candidate_generation"]["physical_lowering_timeout_s"])
     elapsed = time.perf_counter() - started
     if elapsed > timeout_s:
@@ -457,7 +496,7 @@ def _serialized_candidate_with_admission(
             f"membership was not changed: {item['candidate_path_id']} "
             f"({elapsed:.3f}s > {timeout_s:g}s)"
         )
-    return result
+    return record, rows, candidate
 
 
 def _infeasible_candidate_record(
@@ -471,6 +510,7 @@ def _infeasible_candidate_record(
     logical_plan_id: str | None = None,
     host_memory_estimate_bytes: int | None = None,
     estimated_work_unit_count: int | None = None,
+    semantic_identity_expansion_units: int | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], None]:
     topology_records = []
     rows = []
@@ -486,6 +526,7 @@ def _infeasible_candidate_record(
                 "features": {},
                 "host_memory_estimate_bytes": host_memory_estimate_bytes,
                 "estimated_work_unit_count": estimated_work_unit_count,
+                "semantic_identity_expansion_units": semantic_identity_expansion_units,
             }
         )
         row = {
@@ -512,6 +553,7 @@ def _infeasible_candidate_record(
             "conventional_features": (
                 conventional.as_mapping() if conventional is not None else None
             ),
+            "semantic_identity_expansion_units": semantic_identity_expansion_units,
             "topologies": topology_records,
         },
         rows,
