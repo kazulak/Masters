@@ -120,6 +120,7 @@ def test_offline_fit_uses_only_training_measurements_and_writes_every_evaluation
                 "split", "attempt_type", "cell_id", "candidate_path_id",
                 "total_wall_s", "source_sha", "timing_scope", "status",
                 "validation", "fallback", "physical_plan_id", "block",
+                "candidate_generation_source_sha", "physical_execution_source_sha",
             ),
         )
         writer.writeheader()
@@ -130,6 +131,8 @@ def test_offline_fit_uses_only_training_measurements_and_writes_every_evaluation
                         "split": "training", "attempt_type": "measurement",
                         "cell_id": "train:1dpu_t8", "candidate_path_id": candidate_id,
                         "total_wall_s": runtime, "source_sha": dataset["source_sha"],
+                        "candidate_generation_source_sha": dataset["source_sha"],
+                        "physical_execution_source_sha": "d" * 40,
                         "timing_scope": "steady_execution_v1", "status": "success",
                         "validation": "passed", "fallback": "false",
                         "physical_plan_id": f"physical-{candidate_id}", "block": block,
@@ -143,6 +146,8 @@ def test_offline_fit_uses_only_training_measurements_and_writes_every_evaluation
     assert result.geometric_mean_speedup == 2.0
     profile = json.loads((output / "physical_speedup_fit_v1.json").read_text(encoding="utf-8"))
     assert profile["selected_path_ids"] == {"train:1dpu_t8": candidate}
+    assert profile["candidate_generation_source_sha"] == "c" * 40
+    assert profile["physical_execution_source_sha"] == "d" * 40
     with (output / "weight_search_candidates.csv").open(newline="", encoding="utf-8") as stream:
         rows = list(csv.DictReader(stream))
     assert len(rows) == result.evaluated_weight_vectors

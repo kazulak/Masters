@@ -1658,6 +1658,7 @@ def fit(candidate_path: Path, calibration_path: Path, runtime_path: Path, output
             )
         )
     measurements = []
+    physical_execution_sources: set[str] = set()
     expected_cells = {cell.cell_id: cell for cell in cells}
     expected_physical_plans = {
         (item["cell_id"], candidate_id): next(
@@ -1681,8 +1682,16 @@ def fit(candidate_path: Path, calibration_path: Path, runtime_path: Path, output
                 raise ValueError("calibration runtime table contains a non-training row")
             if row.get("attempt_type") not in {"warmup", "measurement"}:
                 raise ValueError("calibration runtime table has an invalid attempt type")
-            if row.get("source_sha") != dataset["source_sha"]:
-                raise ValueError("calibration runtime source does not match candidate dataset")
+            if row.get("candidate_generation_source_sha") != dataset["source_sha"]:
+                raise ValueError(
+                    "calibration runtime candidate source does not match candidate dataset"
+                )
+            physical_source = str(row.get("physical_execution_source_sha", ""))
+            if len(physical_source) != 40 or any(
+                character not in "0123456789abcdef" for character in physical_source
+            ):
+                raise ValueError("calibration runtime physical source is not a full SHA")
+            physical_execution_sources.add(physical_source)
             if row.get("timing_scope") != "steady_execution_v1":
                 raise ValueError("calibration runtime table has an invalid timing scope")
             if row.get("status") != "success":
@@ -1708,12 +1717,15 @@ def fit(candidate_path: Path, calibration_path: Path, runtime_path: Path, output
                     candidate_id=str(row["candidate_path_id"]),
                     runtime_s=float(row["total_wall_s"]),
                     split="train",
-                    source_sha=str(row["source_sha"]),
+                    source_sha=physical_source,
                     timing_scope=str(row["timing_scope"]),
                     status=str(row["status"]),
                     observation_id=str(block),
                 )
             )
+    if len(physical_execution_sources) != 1:
+        raise ValueError("calibration runtime table has mixed physical execution sources")
+    physical_execution_source = next(iter(physical_execution_sources))
     output_dir.mkdir(parents=True, exist_ok=True)
     search_path = output_dir / "weight_search_candidates.csv"
     columns = (
@@ -1744,6 +1756,10 @@ def fit(candidate_path: Path, calibration_path: Path, runtime_path: Path, output
         "schema_version": "physical_speedup_fit_v1",
         "score_id": COST_MODEL_ID,
         "source_sha": dataset["source_sha"],
+        "source_sha_semantics": "candidate_generation_source_sha",
+        "candidate_generation_source_sha": dataset["source_sha"],
+        "physical_execution_source_sha": physical_execution_source,
+        "reporting_tool_source_sha": _source_sha(),
         "candidate_set_sha256": candidate_set_sha,
         "weights": result.weights.as_mapping(),
         "feature_model": asdict(result.model),
