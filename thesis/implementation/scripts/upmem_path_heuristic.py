@@ -414,7 +414,6 @@ def _serialized_candidate_with_admission(
     network, inputs = lower_tensor_network(make_simulation_job(circuit))
     dag = build_contraction_dag(network, item["path"])
     conventional = extract_conventional_features(dag)
-    logical_id = contraction_dag_hash(dag)
     memory_estimate = _host_memory_estimate(inputs, dag)
     estimated_work_units = _estimated_work_unit_count(dag)
     work_unit_limit = int(config["candidate_generation"]["maximum_planned_work_units"])
@@ -427,7 +426,6 @@ def _serialized_candidate_with_admission(
             config=config,
             reason="estimated_work_unit_count_exceeds_preregistered_bound",
             conventional=conventional,
-            logical_plan_id=logical_id,
             host_memory_estimate_bytes=memory_estimate,
             estimated_work_unit_count=estimated_work_units,
         )
@@ -439,7 +437,6 @@ def _serialized_candidate_with_admission(
             config=config,
             reason="host_memory_estimate_exceeds_preregistered_bound",
             conventional=conventional,
-            logical_plan_id=logical_id,
             host_memory_estimate_bytes=memory_estimate,
             estimated_work_unit_count=estimated_work_units,
         )
