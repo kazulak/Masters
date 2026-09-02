@@ -406,7 +406,7 @@ def _serialize_candidate_worker(
     definition: dict[str, Any],
     item: dict[str, Any],
     config: dict[str, Any],
-    queue: Any,
+    connection: Any,
 ) -> None:
     try:
         worker_limit = int(
@@ -425,9 +425,13 @@ def _serialize_candidate_worker(
             item=item,
             config=config,
         )
-        queue.put((record, rows, candidate, None))
+        result = (record, rows, candidate, None)
     except BaseException as exc:
-        queue.put((None, None, None, f"{type(exc).__name__}:{exc}"))
+        result = (None, None, None, f"{type(exc).__name__}:{exc}")
+    try:
+        connection.send(result)
+    finally:
+        connection.close()
 
 
 def _isolated_serialized_candidate(
@@ -478,22 +482,23 @@ def _isolated_serialized_candidate(
     # worker state in the parent. Forking at that point can inherit locked
     # runtime state and deadlock before deterministic admission is emitted.
     context = multiprocessing.get_context("spawn")
-    queue = context.Queue(maxsize=1)
+    receive, send = context.Pipe(duplex=False)
     process = context.Process(
         target=_serialize_candidate_worker,
-        args=(circuit_id, split, definition, item, config, queue),
+        args=(circuit_id, split, definition, item, config, send),
     )
     process.start()
+    send.close()
     timeout_s = float(config["candidate_generation"]["physical_lowering_timeout_s"])
     deadline = time.monotonic() + timeout_s
     result = None
     while result is None:
-        try:
-            result = queue.get_nowait()
-        except queue_module.Empty:
+        if receive.poll():
+            result = receive.recv()
+        else:
             if not process.is_alive():
                 process.join()
-                queue.close()
+                receive.close()
                 raise RuntimeError(
                     f"candidate lowering {item['candidate_path_id']} returned no result: "
                     f"{process.exitcode}"
@@ -501,7 +506,7 @@ def _isolated_serialized_candidate(
             if time.monotonic() >= deadline:
                 process.kill()
                 process.join()
-                queue.close()
+                receive.close()
                 raise RuntimeError(
                     "candidate lowering exceeded the generation guard; "
                     "candidate membership was not changed: "
@@ -510,7 +515,7 @@ def _isolated_serialized_candidate(
             time.sleep(0.01)
     record, rows, candidate, error = result
     process.join()
-    queue.close()
+    receive.close()
     if process.exitcode != 0 or error is not None:
         raise RuntimeError(
             f"candidate lowering {item['candidate_path_id']} failed: "
