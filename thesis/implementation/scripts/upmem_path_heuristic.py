@@ -1745,27 +1745,52 @@ def fit(candidate_path: Path, calibration_path: Path, runtime_path: Path, output
     columns = (
         "weights_json", "selected_path_ids_json", "cell_speedups_json",
         "geometric_mean_speedup", "minimum_cell_speedup", "improved_cell_count",
+        "equivalent_weight_vector_count",
+    )
+    representatives: dict[tuple[tuple[str, str], ...], WeightFitResult] = {}
+    outcome_counts: dict[tuple[tuple[str, str], ...], int] = {}
+
+    def result_order(item: WeightFitResult) -> tuple[float, float, int, tuple[float, ...]]:
+        return (
+            round(item.geometric_mean_speedup, 12),
+            round(item.minimum_cell_speedup, 12),
+            item.improved_cell_count,
+            tuple(-value for value in item.weights.as_tuple()),
+        )
+
+    def record(item: WeightFitResult) -> None:
+        key = item.selected_path_ids
+        outcome_counts[key] = outcome_counts.get(key, 0) + 1
+        current = representatives.get(key)
+        if current is None or result_order(item) > result_order(current):
+            representatives[key] = item
+
+    result = fit_weights(
+        tuple(cells), tuple(measurements), seed=seed,
+        random_sample_count=samples, evaluation_callback=record,
+    )
+    ordered_representatives = sorted(
+        representatives.values(),
+        key=lambda item: (
+            tuple(item.selected_path_ids),
+            tuple(item.weights.as_tuple()),
+        ),
     )
     with search_path.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=columns, lineterminator="\n")
         writer.writeheader()
-
-        def record(result: WeightFitResult) -> None:
+        for item in ordered_representatives:
             writer.writerow(
                 {
-                    "weights_json": json.dumps(result.weights.as_mapping(), sort_keys=True, separators=(",", ":")),
-                    "selected_path_ids_json": json.dumps(dict(result.selected_path_ids), sort_keys=True, separators=(",", ":")),
-                    "cell_speedups_json": json.dumps(dict(result.cell_speedups), sort_keys=True, separators=(",", ":")),
-                    "geometric_mean_speedup": result.geometric_mean_speedup,
-                    "minimum_cell_speedup": result.minimum_cell_speedup,
-                    "improved_cell_count": result.improved_cell_count,
+                    "weights_json": json.dumps(item.weights.as_mapping(), sort_keys=True, separators=(",", ":")),
+                    "selected_path_ids_json": json.dumps(dict(item.selected_path_ids), sort_keys=True, separators=(",", ":")),
+                    "cell_speedups_json": json.dumps(dict(item.cell_speedups), sort_keys=True, separators=(",", ":")),
+                    "geometric_mean_speedup": item.geometric_mean_speedup,
+                    "minimum_cell_speedup": item.minimum_cell_speedup,
+                    "improved_cell_count": item.improved_cell_count,
+                    "equivalent_weight_vector_count": outcome_counts[item.selected_path_ids],
                 }
             )
-
-        result = fit_weights(
-            tuple(cells), tuple(measurements), seed=seed,
-            random_sample_count=samples, evaluation_callback=record,
-        )
     profile = {
         "schema_version": "physical_speedup_fit_v1",
         "score_id": COST_MODEL_ID,
@@ -1785,6 +1810,11 @@ def fit(candidate_path: Path, calibration_path: Path, runtime_path: Path, output
         "improved_cell_count": result.improved_cell_count,
         "weight_search_seed": seed,
         "random_weight_samples": samples,
+        "evaluated_weight_vectors": result.evaluated_weight_vectors,
+        "weight_search_candidate_rows": len(ordered_representatives),
+        "weight_search_candidates_semantics": (
+            "best_lexicographic_weight_vector_per_distinct_training_path_selection"
+        ),
         "normalization": "log((candidate+1)/(greedy+1))",
         "primary_objective": "geometric_mean_greedy_relative_speedup",
     }

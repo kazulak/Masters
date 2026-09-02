@@ -150,7 +150,11 @@ def test_offline_fit_uses_only_training_measurements_and_writes_every_evaluation
     assert profile["physical_execution_source_sha"] == "d" * 40
     with (output / "weight_search_candidates.csv").open(newline="", encoding="utf-8") as stream:
         rows = list(csv.DictReader(stream))
-    assert len(rows) == result.evaluated_weight_vectors
+    assert 1 <= len(rows) <= result.evaluated_weight_vectors
+    assert sum(int(row["equivalent_weight_vector_count"]) for row in rows) == (
+        result.evaluated_weight_vectors
+    )
+    assert profile["weight_search_candidate_rows"] == len(rows)
 
 
 def test_physical_lowering_timeout_is_an_explicit_infeasible_candidate() -> None:
