@@ -1,5 +1,12 @@
 # UPMEM-Aware Contraction-Path Heuristic v1
 
+> **Evidence-retention notice:** the two original raw physical archives were
+> lost before durable archival. The implementation and compact derived
+> artifacts remain available, but the physical results below are historical
+> pilot results rather than canonical final thesis evidence. No raw
+> observations were reconstructed. The incident is recorded in
+> `thesis_results/upmem_path_heuristic_generalization_v1/pilot_evidence_loss.json`.
+
 ## Purpose
 
 This milestone tests whether an SLR-derived UPMEM-aware candidate-path score
@@ -100,10 +107,11 @@ Physical v1 uses one rank, packed-operation transport, split-complex float32,
 and two explicit resource topologies: one DPU with eight tasklets and four
 DPUs with eight tasklets each. Simulator timings are never used for fitting.
 
-Calibration uses one warmup and three measurements. Validation and test use
+Calibration used one warmup and three measurements. Validation and test used
 one warmup and five measurements for each unique greedy, minimum-FLOP, and
-UPMEM-selected path. Raw observations are retained. Paths are never replaced
-or automatically retried after a failed physical attempt.
+UPMEM-selected path. Compact calibration observations survive, but the
+original raw calibration and validation/test archives do not. Paths were
+never replaced or automatically retried after a failed physical attempt.
 
 ## Claim Boundary
 
