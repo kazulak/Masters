@@ -198,3 +198,13 @@ structures, and that topology can change the selected path. It does not
 generalize positively to the held-out BV18 instance. The result supports the
 methodology and exposes a generalization limitation; it does not support a
 universal UPMEM path-speedup claim or production replacement of greedy.
+
+## Independent Audit
+
+An independent read-only audit of source `fcfb9d22688c71234e78b8f5db4be72dad37e6f2`
+found no scientific/correctness blocker, calibration leakage, or physical
+integration blocker. It verified training-only measured-candidate fitting,
+the geometric-mean then worst-cell objective ordering, timing-independent
+hash-bound validation/test selection, and consistency between the reported
+positive validation and negative held-out result. The compact audit record is
+stored with the milestone results.
