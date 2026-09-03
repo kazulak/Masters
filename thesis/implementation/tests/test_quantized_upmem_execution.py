@@ -103,6 +103,39 @@ def test_prepare_preserves_label_and_resolves_machine_paths(tmp_path: Path) -> N
         )
 
 
+def _synthetic_operation_timing() -> dict[str, float]:
+    """One internally consistent operation with nested raw envelopes."""
+
+    return {
+        "total_wall_s": 0.1,
+        "preparation_s": 0.005,
+        "encode_s": 0.005,
+        "rank_response_h2d_max_sum_s": 0.01,
+        "rank_response_kernel_max_sum_s": 0.02,
+        "rank_response_d2h_max_sum_s": 0.01,
+        "rank_response_total_route_max_sum_s": 0.05,
+        "request_wave_wall_sum_s": 0.08,
+        "request_build_sum_s": 0.01,
+        "request_work_unit_materialization_sum_s": 0.002,
+        "request_artifact_build_sum_s": 0.008,
+        "request_payload_record_staging_sum_s": 0.004,
+        "request_manifest_sidecar_staging_sum_s": 0.002,
+        "request_payload_materialization_sum_s": 0.001,
+        "request_payload_file_write_sum_s": 0.001,
+        "request_payload_hashing_sum_s": 0.001,
+        "request_payload_record_construction_sum_s": 0.001,
+        "rank_submit_parallel_wall_sum_s": 0.05,
+        "rank_submit_total_max_sum_s": 0.04,
+        "rank_submit_artifact_validation_max_sum_s": 0.001,
+        "rank_submit_protocol_write_max_sum_s": 0.01,
+        "rank_submit_response_wait_max_sum_s": 0.025,
+        "rank_submit_response_validation_max_sum_s": 0.004,
+        "coordinator_response_processing_sum_s": 0.01,
+        "assembly_s": 0.002,
+        "decode_s": 0.003,
+    }
+
+
 def _synthetic_evidence() -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     config = json.loads(
         json.dumps(
@@ -134,7 +167,7 @@ def _synthetic_evidence() -> tuple[dict[str, Any], list[dict[str, Any]], list[di
                     }
                 )
                 total = policy_factor * resource_factor + block_id * 0.001
-                timing = {field: 0.001 for field in ANALYZE.OPERATION_FIELDS}
+                timing = _synthetic_operation_timing()
                 samples.append(
                     {
                         "case_id": matrix["case_id"],
@@ -156,7 +189,7 @@ def _synthetic_evidence() -> tuple[dict[str, Any], list[dict[str, Any]], list[di
                             "d2h_bytes": 80,
                         },
                         "backend_facts": {
-                            "operation_facts": ({"timing": timing},),
+                            "operation_facts": ({"rank_count": 1, "timing": timing},),
                             "arithmetic_weighted_tasklet_utilization": 1.0,
                             "arithmetic_weighted_dpu_slot_utilization": 1.0,
                             "dominant_work_wave_utilization": 1.0,
@@ -205,6 +238,22 @@ def test_analysis_is_complete_deterministic_and_computes_ratios(
     assert len(first["routes"]) == 30
     assert len(first["error_runtime"]) == 15
     assert len(first["optima"]) == 6
+    assert first["summary"]["schema_version"] == (
+        "quantized_upmem_execution_analysis_v2"
+    )
+    assert len(first["sample_components"]) == 150
+    assert len(first["timing_envelopes"]) == 30
+    assert len(first["fixed_route_comparisons"]) == 15
+    assert len(first["summary"]["best_observed_comparisons"]) == 3
+    assert all(
+        row["grid_route_count"] == 5
+        for row in first["summary"]["best_observed_comparisons"]
+    )
+    assert all(
+        row["selection_scope"] == "best_observed_within_tested_route_grid"
+        for row in first["optima"]
+    )
+    assert all("raw_mad_total_wall_s" in row for row in first["optima"])
     int8 = next(
         row
         for row in first["routes"]
@@ -213,10 +262,168 @@ def test_analysis_is_complete_deterministic_and_computes_ratios(
     assert int8["float32_over_int8_kernel_s"] == pytest.approx(2.0)
     assert int8["actual_h2d_byte_reduction_ratio"] == pytest.approx(4.0)
     assert int8["nominal_logical_compression_ratio"] == pytest.approx(240 / 76)
-    ANALYZE.write_outputs(first, tmp_path)
-    assert tuple(sorted(path.name for path in tmp_path.iterdir())) == tuple(
+    assert int8["dominant_host_component"] == "coordinator_other_s"
+    assert "optimal" not in ANALYZE._markdown(first).lower()
+    output_a = tmp_path / "first"
+    output_b = tmp_path / "second"
+    ANALYZE.write_outputs(first, output_a)
+    ANALYZE.write_outputs(second, output_b)
+    assert tuple(sorted(path.name for path in output_a.iterdir())) == tuple(
         sorted(ANALYZE.OUTPUTS)
     )
+    for name in ANALYZE.OUTPUTS:
+        assert (output_a / name).read_bytes() == (output_b / name).read_bytes()
+
+
+def test_operation_attribution_is_disjoint_and_keeps_nested_envelopes() -> None:
+    values, components = ANALYZE._operation_attribution(
+        {"rank_count": 1, "timing": _synthetic_operation_timing()}, index=0
+    )
+    assert components == pytest.approx({
+        "preparation_s": 0.005,
+        "encode_s": 0.005,
+        "host_request_overhead_s": 0.03,
+        "native_request_overhead_s": 0.01,
+        "h2d_s": 0.01,
+        "kernel_s": 0.02,
+        "d2h_s": 0.01,
+        "assembly_s": 0.002,
+        "decode_s": 0.003,
+        "operation_other_s": 0.005,
+    })
+    assert sum(components.values()) == pytest.approx(values["total_wall_s"])
+    assert values["rank_submit_response_wait_max_sum_s"] == 0.025
+    assert "rank_submit_response_wait_max_sum_s" not in components
+
+
+def test_sample_attribution_closes_and_uses_known_no_reduce_policy() -> None:
+    manifest, samples, sessions = _synthetic_evidence()
+    config = manifest["configuration"]["experiment"]
+    sample = samples[0]
+    session = sessions[0]
+    row = ANALYZE._sample_row(sample, session, config["routes"][sample["route_id"]])
+    disjoint = sum(
+        row[f"component_{field}"]
+        for field in ANALYZE.DISJOINT_COMPONENT_FIELDS
+    )
+    assert disjoint == pytest.approx(row["total_wall_s"])
+    assert row["accounting_residual_s"] == pytest.approx(0.0)
+    assert row["component_host_reduce_s"] == pytest.approx(0.01)
+    assert row["component_coordinator_other_s"] == pytest.approx(1.89)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        (
+            "rank_response_total_route_max_sum_s",
+            0.039,
+            "native request overhead is materially negative",
+        ),
+        ("request_wave_wall_sum_s", 0.049, "host request overhead is materially negative"),
+        ("total_wall_s", 0.09, "operation other is materially negative"),
+    ],
+)
+def test_attribution_rejects_materially_negative_residuals(
+    field: str, value: float, message: str
+) -> None:
+    timing = _synthetic_operation_timing()
+    timing[field] = value
+    with pytest.raises(ValueError, match=message):
+        ANALYZE._operation_attribution(
+            {"rank_count": 1, "timing": timing}, index=0
+        )
+
+
+def test_attribution_rejects_missing_fields_and_missing_host_reduce() -> None:
+    timing = _synthetic_operation_timing()
+    timing.pop("rank_submit_response_wait_max_sum_s")
+    with pytest.raises(ValueError, match="timing is missing rank_submit_response_wait"):
+        ANALYZE._operation_attribution(
+            {"rank_count": 1, "timing": timing}, index=0
+        )
+
+    manifest, samples, sessions = _synthetic_evidence()
+    config = manifest["configuration"]["experiment"]
+    sample = json.loads(json.dumps(samples[0]))
+    sample["measurement"].pop("host_reduce_s")
+    with pytest.raises(ValueError, match="measurement is missing host_reduce_s"):
+        ANALYZE._sample_row(
+            sample, sessions[0], config["routes"][sample["route_id"]]
+        )
+
+
+def test_tiny_negative_residual_is_clamped_to_zero() -> None:
+    timing = _synthetic_operation_timing()
+    timing["rank_response_total_route_max_sum_s"] = 0.04 - 0.5e-6
+    _, components = ANALYZE._operation_attribution(
+        {"rank_count": 1, "timing": timing}, index=0
+    )
+    assert components["native_request_overhead_s"] == 0.0
+
+
+def test_residuals_are_paired_before_median() -> None:
+    base = _synthetic_operation_timing()
+    timings = []
+    for preparation_s, request_wave_s in ((0.0, 0.0), (0.09, 0.0), (0.0, 0.09)):
+        timing = dict(base)
+        timing["preparation_s"] = preparation_s
+        timing["request_wave_wall_sum_s"] = request_wave_s
+        timing["total_wall_s"] = 0.1
+        for field in (
+            "rank_response_h2d_max_sum_s",
+            "rank_response_kernel_max_sum_s",
+            "rank_response_d2h_max_sum_s",
+            "rank_response_total_route_max_sum_s",
+        ):
+            timing[field] = 0.0
+        timings.append(timing)
+    attributed = [
+        ANALYZE._operation_attribution(
+            {"rank_count": 1, "timing": timing}, index=index
+        )
+        for index, timing in enumerate(timings)
+    ]
+    observed = float(
+        __import__("statistics").median(
+            components["operation_other_s"]
+            for _, components in attributed
+        )
+    )
+    median_of_children = float(
+        __import__("statistics").median(timing["total_wall_s"] for timing in timings)
+        - __import__("statistics").median(timing["preparation_s"] for timing in timings)
+        - __import__("statistics").median(timing["encode_s"] for timing in timings)
+        - __import__("statistics").median(timing["request_wave_wall_sum_s"] for timing in timings)
+        - __import__("statistics").median(timing["assembly_s"] for timing in timings)
+        - __import__("statistics").median(timing["decode_s"] for timing in timings)
+    )
+    assert observed == pytest.approx(0.0)
+    assert median_of_children == pytest.approx(0.09)
+    assert observed != pytest.approx(median_of_children)
+
+
+def test_envelopes_are_separate_from_disjoint_component_table(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(ANALYZE, "_software_metrics", lambda case_id: {
+        "int8_max_abs_error_vs_float32_same_dag": 0.0,
+        "int8_relative_l2_vs_float32_same_dag": 0.0,
+        "int8_norm_drift_vs_float32_same_dag": 0.0,
+        "int8_max_abs_error_vs_complex128": 0.0,
+        "int8_relative_l2_vs_complex128": 0.0,
+        "int8_norm_drift_vs_complex128": 0.0,
+        "float32_max_abs_error_vs_complex128": 0.0,
+        "float32_relative_l2_vs_complex128": 0.0,
+        "float32_norm_drift_vs_complex128": 0.0,
+    })
+    manifest, samples, sessions = _synthetic_evidence()
+    result = ANALYZE.derive(manifest, samples, sessions)
+    component = result["components"][0]
+    envelope = result["timing_envelopes"][0]
+    assert "median_request_wave_wall_sum_s" not in component
+    assert "median_rank_submit_response_wait_max_sum_s" in envelope
+    assert envelope["envelope_semantics"] == "inclusive_non_additive"
 
 
 def test_analysis_rejects_incomplete_or_mixed_diagnostic(
