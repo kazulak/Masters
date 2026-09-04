@@ -64,7 +64,7 @@ routes:
       initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t8
   simulator_int8_t1:
     executor: upmem_sdk_simulator
-    numeric_policy: split_complex_int8_shared_scale_v1
+    numeric_policy: complex_int8_shared_scale_v1
     options:
       dpu_count: 1
       rank_count: 1
@@ -75,7 +75,7 @@ routes:
       initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t1
   simulator_int8_t8:
     executor: upmem_sdk_simulator
-    numeric_policy: split_complex_int8_shared_scale_v1
+    numeric_policy: complex_int8_shared_scale_v1
     options:
       dpu_count: 1
       rank_count: 1

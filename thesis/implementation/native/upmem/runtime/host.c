@@ -735,7 +735,8 @@ int main(int argc, char **argv) {
     error = v4_simulator_target
         ? upmem_v4_provider_init_simulator(&v4_provider, dpus, initialization_binary)
         : upmem_v4_provider_init_on_rank(&v4_provider, dpus, rank_path, initialization_binary);
-    if (error != DPU_OK || v4_provider.observed_dpus != dpus || v4_provider.observed_ranks != 1u) {
+    if (error != DPU_OK || v4_provider.observed_dpus != dpus ||
+        (v4_simulator_target ? v4_provider.observed_ranks < 1u : v4_provider.observed_ranks != 1u)) {
         v4_emit_startup_failure("hardware_allocation_failed", "v4 rank allocation did not match the requested DPU set");
         v4_emit_release();
         return 1;

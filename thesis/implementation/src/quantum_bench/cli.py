@@ -479,7 +479,7 @@ def _validation(
     policy_passed: bool | None = None
     if policy_reference is not None:
         _require_matching_shape(sample.output, policy_reference.output)
-        if numeric_policy == "split_complex_int8_shared_scale_v1":
+        if numeric_policy == "complex_int8_shared_scale_v1":
             actual_lanes = sample.numeric_facts.get("raw_lane_records")
             expected_lanes = policy_reference.numeric_facts.get("raw_lane_records")
             raw_lanes_match = (
@@ -505,7 +505,7 @@ def _validation(
                 and policy_relative_l2 <= relative_l2_max
                 and policy_norm_drift <= norm_drift_max
             )
-    full_applicable = numeric_policy != "split_complex_int8_shared_scale_v1"
+    full_applicable = numeric_policy != "complex_int8_shared_scale_v1"
     full_passed = (
         bool(
             np.allclose(

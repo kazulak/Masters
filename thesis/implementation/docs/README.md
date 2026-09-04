@@ -14,6 +14,7 @@ architecture and roadmap below.
 | [identities.md](identities.md) | Problem, TN, logical-plan, physical-plan, executable, and run identities. |
 | [timing.md](timing.md) | Timing scopes, fields, concurrency rules, and valid ratios. |
 | [evidence_workflow.md](evidence_workflow.md) | Local/ETH run handling, verification, reporting, and promotion rules. |
+| [quantized_contraction_policy_v1.md](quantized_contraction_policy_v1.md) | CPU-only shared-scale complex-int8 mathematics, replay semantics, logical cost facts, and claim boundary. |
 
 Prior milestone documents remain under `docs/archive/` and in Git history.
 They are not active workflow instructions.

@@ -14,9 +14,9 @@ from quantum_bench.lowering import contraction_dag_hash, validate_contraction_da
 from quantum_bench.model import ContractNode, ContractionDAG, ReduceNode
 from quantum_bench.numerics import INT8_QUANTIZED_MAX_ABS, NumericPolicy
 from quantum_bench.upmem.protocol import (
-    INT32_MAX,
     INT8_MAX_PRODUCT,
     MAX_CONTRACTED,
+    MAX_INT32_SAFE_K,
 )
 from quantum_bench.results import UnsupportedExecution
 from quantum_bench.upmem.tiling import (
@@ -41,7 +41,7 @@ _INT8_PRODUCT = INT8_MAX_PRODUCT
 _INT64_MAX = (1 << 63) - 1
 _FINAL_NUMERIC_POLICIES = {
     "split_complex_float32_v1",
-    "split_complex_int8_shared_scale_v1",
+    "complex_int8_shared_scale_v1",
 }
 
 
@@ -493,7 +493,7 @@ def _map_contract_node(
                 ),
             )
         tiles = plan_tile_shapes(batch, m, contracted_size, n, limits=limits)
-        if numeric_policy == "split_complex_int8_shared_scale_v1":
+        if numeric_policy == "complex_int8_shared_scale_v1":
             _validate_final_int8_bounds(node.node_id, contracted_size, tiles)
         waves = order_tile_waves(tiles, topology.dpu_count)
         return _final_work_units(
@@ -687,7 +687,7 @@ def _validate_final_topology(topology: UpmemTopology) -> None:
 def _tile_numeric_mode(numeric_policy: NumericPolicy) -> str:
     if numeric_policy == "split_complex_float32_v1":
         return "float32"
-    if numeric_policy == "split_complex_int8_shared_scale_v1":
+    if numeric_policy == "complex_int8_shared_scale_v1":
         return "host_packed_int8"
     raise UnsupportedExecution(
         "mapping",
@@ -706,10 +706,10 @@ def _validate_final_int8_bounds(
             "upmem_int8_int64_accumulation_bound",
         )
     for tile in tiles:
-        if tile.k_size * _INT8_PRODUCT > INT32_MAX:
+        if tile.k_size > MAX_INT32_SAFE_K:
             raise UnsupportedExecution(
                 "mapping",
-                f"UPMEM tile {tile.id} exceeds int32 int8 accumulation bound",
+                f"UPMEM tile {tile.id} exceeds full-component int32 int8 accumulation bound",
                 "upmem_int8_int32_accumulation_bound",
             )
 

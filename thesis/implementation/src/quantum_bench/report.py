@@ -1720,7 +1720,7 @@ def _humanize(value: str) -> str:
     known = {
         "numpy_cpu_v1": "NumPy CPU",
         "split_complex_float32_v1": "Complex float32",
-        "split_complex_int8_shared_scale_v1": "Complex int8 shared-scale",
+        "complex_int8_shared_scale_v1": "Complex int8 shared-scale",
         "simulation_end_to_end_v1": "Simulation end-to-end",
         "steady_execution_v1": "Steady execution",
     }
@@ -1761,7 +1761,7 @@ def _plan_label(value: object) -> str:
 def _numeric_label(value: object) -> str:
     known = {
         "split_complex_float32_v1": "float32",
-        "split_complex_int8_shared_scale_v1": "int8 shared-scale",
+        "complex_int8_shared_scale_v1": "int8 shared-scale",
     }
     return known.get(value, _humanize_nullable(value))
 

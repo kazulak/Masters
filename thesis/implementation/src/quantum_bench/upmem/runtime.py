@@ -85,7 +85,7 @@ from quantum_bench.upmem.tiling import (
 _INT64_MAX = (1 << 63) - 1
 
 _NUMERIC_POLICY_FLOAT32 = "split_complex_float32_v1"
-_NUMERIC_POLICY_INT8 = "split_complex_int8_shared_scale_v1"
+_NUMERIC_POLICY_INT8 = "complex_int8_shared_scale_v1"
 _WRAM_PANEL_LANE_COUNT = 4
 _WRAM_PANEL_OUTPUT_BYTES_PER_ELEMENT = 4
 _WRAM_PANEL_A_BUFFER_BYTES = WRAM_PANEL_KC * 4
@@ -262,7 +262,9 @@ def _encode_real_plane(
     value = np.asarray(array)
     if np.iscomplexobj(value) and np.any(np.imag(value) != 0):
         raise ValueError("numeric policy requires real-valued tensors")
-    real = np.ascontiguousarray(np.real(value), dtype=np.float32)
+    real = np.ascontiguousarray(
+        np.real(value), dtype=np.float64 if _is_packed_policy(policy) else np.float32
+    )
     if not np.all(np.isfinite(real)):
         raise ValueError("numeric policy requires finite tensors")
     if not _is_packed_policy(policy):
@@ -282,7 +284,7 @@ def _decode_real_accumulator(
         return np.asarray(accumulator, dtype=np.float32)
     if not math.isfinite(scale) or scale <= 0.0:
         raise ValueError("contraction output scale must be finite and positive")
-    return np.asarray(accumulator, dtype=np.float32) * np.float32(scale)
+    return np.asarray(accumulator, dtype=np.float64) * float(scale)
 
 
 _COORDINATOR_PROVENANCE = {
@@ -572,14 +574,16 @@ def _complex_canonical_planes(
     imag_lowering: M5TileLowering,
     *,
     left: bool,
+    dtype: np.dtype | type = np.complex64,
 ) -> np.ndarray:
     real = real_lowering.canonical.left if left else real_lowering.canonical.right
     imag = imag_lowering.canonical.left if left else imag_lowering.canonical.right
     if real.shape != imag.shape:
         raise ValueError("real and imaginary canonical planes have different shapes")
-    result = np.empty(real.shape, dtype=np.complex64)
-    result.real = np.asarray(real, dtype=np.float32)
-    result.imag = np.asarray(imag, dtype=np.float32)
+    result = np.empty(real.shape, dtype=dtype)
+    component_dtype = np.float64 if np.dtype(dtype) == np.dtype(np.complex128) else np.float32
+    result.real = np.asarray(real, dtype=component_dtype)
+    result.imag = np.asarray(imag, dtype=component_dtype)
     return result
 
 
@@ -830,9 +834,9 @@ class UpmemV4Executor:
                 )
             if self.request_transport == PACKED_OPERATION_TRANSPORT and len(self.rank_paths) != 1:
                 raise ValueError("packed operation transport currently requires one rank")
-        elif self.rank_paths or self.dpu_count != 1:
+        elif self.rank_paths or not 1 <= self.dpu_count <= 64:
             raise ValueError(
-                "v4 simulator engine requires exactly one DPU and no rank paths"
+                "v4 simulator engine requires 1..64 DPUs and no rank paths"
             )
         if self.tasklets_per_dpu < 1 or self.timeout_s <= 0:
             raise ValueError("tasklets_per_dpu and timeout_s must be positive")
@@ -865,8 +869,8 @@ class UpmemV4Executor:
         if self.execution_target == EXECUTION_TARGET_PHYSICAL:
             if topology.rank_count != len(self.rank_paths):
                 raise ValueError("topology rank count must match engine rank_paths")
-        elif topology.dpu_count != 1 or topology.rank_count != 1:
-            raise ValueError("v4 simulator requires exactly one DPU and one rank")
+        elif topology.rank_count != 1:
+            raise ValueError("v4 simulator requires one rank and 1..64 DPUs")
 
         deadline = time.monotonic() + self.timeout_s
         self.session_root.mkdir(parents=True, exist_ok=True)
@@ -1278,14 +1282,26 @@ class UpmemV4Session:
         preparation_started = time.perf_counter()
         real_lowering = lower_binary_contraction(
             node,
-            np.asarray(materialized_left.real, dtype=np.float32),
-            np.asarray(materialized_right.real, dtype=np.float32),
+            np.asarray(
+                materialized_left.real,
+                dtype=np.float64 if packed else np.float32,
+            ),
+            np.asarray(
+                materialized_right.real,
+                dtype=np.float64 if packed else np.float32,
+            ),
             limits=limits,
         )
         imag_lowering = lower_binary_contraction(
             node,
-            np.asarray(materialized_left.imag, dtype=np.float32),
-            np.asarray(materialized_right.imag, dtype=np.float32),
+            np.asarray(
+                materialized_left.imag,
+                dtype=np.float64 if packed else np.float32,
+            ),
+            np.asarray(
+                materialized_right.imag,
+                dtype=np.float64 if packed else np.float32,
+            ),
             limits=limits,
         )
         _validate_complex_lowerings(real_lowering, imag_lowering, stage, node)
@@ -1293,13 +1309,29 @@ class UpmemV4Session:
 
         encode_started = time.perf_counter()
         canonical_left = _complex_canonical_planes(
-            real_lowering, imag_lowering, left=True
+            real_lowering,
+            imag_lowering,
+            left=True,
+            dtype=np.complex128 if packed else np.complex64,
         )
         canonical_right = _complex_canonical_planes(
-            real_lowering, imag_lowering, left=False
+            real_lowering,
+            imag_lowering,
+            left=False,
+            dtype=np.complex128 if packed else np.complex64,
         )
         encoded_left = encode_complex_tensor(canonical_left, numeric_policy)
         encoded_right = encode_complex_tensor(canonical_right, numeric_policy)
+        if packed:
+            max_chunk = max((chunk.k_size for chunk in real_lowering.k_chunks), default=0)
+            if max_chunk > MAX_INT32_SAFE_K:
+                raise ValueError(
+                    "packed int8 K chunk exceeds full-component int32 accumulation safety bound"
+                )
+            if 2 * real_lowering.canonical.k * INT8_MAX_PRODUCT > _INT64_MAX:
+                raise ValueError(
+                    "packed int8 aggregate exceeds int64 full-component accumulation safety bound"
+                )
         encode_s = time.perf_counter() - encode_started
 
         waves, planned_requests = self._requests_from_work_units(
@@ -3535,9 +3567,9 @@ def open_upmem_simulator(
 ) -> UpmemSession:
     """Open the active ABI-v4 route through the SDK simulator only.
 
-    This path is limited to one logical DPU/rank and is admitted solely for
-    protocol and numerical correctness.  It deliberately has no physical
-    opt-in or rank-path requirement.
+    This path is limited to one simulated rank with 1..64 DPUs and is
+    admitted solely for protocol and numerical correctness.  It deliberately
+    has no physical opt-in or rank-path requirement.
     """
 
     if not isinstance(dag, ContractionDAG):
@@ -3557,10 +3589,10 @@ def open_upmem_simulator(
     if plan.logical_plan_id != contraction_dag_hash(dag):
         raise ValueError("UPMEM physical plan does not match supplied DAG")
     validate_upmem_plan(dag, plan)
-    if plan.topology.dpu_count != 1 or plan.topology.rank_count != 1:
+    if not 1 <= plan.topology.dpu_count <= 64 or plan.topology.rank_count != 1:
         raise UnsupportedExecution(
             stage="preflight",
-            reason="SDK simulator v4 route requires exactly one DPU and one rank",
+            reason="SDK simulator v4 route requires one rank and 1..64 DPUs",
             capability="simulator_topology",
         )
     if resources.rank_paths:
@@ -3583,7 +3615,7 @@ def open_upmem_simulator(
             dpu_binary=Path(resources.dpu_binary),
             initialization_binary=Path(resources.initialization_binary),
             rank_paths=(),
-            dpu_count=1,
+            dpu_count=plan.topology.dpu_count,
             tasklets_per_dpu=plan.topology.tasklets_per_dpu,
             timeout_s=timeout_s,
             execution_target=EXECUTION_TARGET_SIMULATOR,

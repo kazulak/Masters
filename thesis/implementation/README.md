@@ -73,6 +73,13 @@ workflow, external baseline roles, and claim limits are documented in
 qualifier prepares ignored configs and inspects or bundles existing artifacts;
 it never runs hardware, tags a commit, or publishes a release.
 
+The analysis-only
+[`complex_int8_shared_scale_v1`](docs/quantized_contraction_policy_v1.md)
+policy replays every binary contraction with per-operand shared-scale int8 and
+an explicit int64 software reference. Its tracked characterization is
+numerical and logical-size evidence only; it does not execute or predict DPU
+performance and does not alter the accepted float32 route.
+
 The physically validated hierarchical diagnostic is documented in
 [docs/hierarchical_parallel_diagnostic.md](docs/hierarchical_parallel_diagnostic.md)
 and frozen at tag `thesis-upmem-hierarchical-parallel-diagnostic-v1`. It covers

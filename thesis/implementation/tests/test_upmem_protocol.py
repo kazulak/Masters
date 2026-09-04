@@ -421,12 +421,12 @@ def test_v4_builder_rejects_unsafe_paths_and_k_bounds(tmp_path: Path) -> None:
         )
 
     header = (NATIVE / "protocol.h").read_text(encoding="ascii")
-    assert protocol.MAX_CONTRACTED * protocol.INT8_MAX_PRODUCT <= 2**31 - 1
+    assert protocol.MAX_CONTRACTED * protocol.INT8_COMPONENT_PRODUCT <= 2**31 - 1
     assert "#define EXECUTION_PLAN_V4_INT8_MAX_ABS 127u" in header
+    assert "#define EXECUTION_PLAN_V4_INT8_COMPONENT_PRODUCT" in header
     assert (
         "(uint64_t)EXECUTION_PLAN_V4_MAX_CONTRACTED *\n"
-        "        (uint64_t)EXECUTION_PLAN_V4_INT8_MAX_ABS *\n"
-        "        (uint64_t)EXECUTION_PLAN_V4_INT8_MAX_ABS <= 2147483647u"
+        "        (uint64_t)EXECUTION_PLAN_V4_INT8_COMPONENT_PRODUCT <= 2147483647u"
     ) in header
 
 
@@ -481,9 +481,14 @@ def test_v4_target_identities_keep_simulator_and_physical_facts_distinct(
     _response_validator(simulator)._validate_response(
         _response(artifact, simulator), artifact
     )
-    with pytest.raises(ValueError, match="exactly one DPU"):
+    multi_dpu = protocol.V4Profile(
+        dpu_count=2,
+        execution_target=protocol.EXECUTION_TARGET_SIMULATOR,
+    )
+    assert multi_dpu.dpu_count == 2
+    with pytest.raises(ValueError, match=r"\[1, 64\]"):
         protocol.V4Profile(
-            dpu_count=2,
+            dpu_count=65,
             execution_target=protocol.EXECUTION_TARGET_SIMULATOR,
         )
 
@@ -500,6 +505,7 @@ def test_v4_native_sources_preserve_the_abi_and_build_contract() -> None:
     assert "UPMEM_ALLOW_PHYSICAL_HARDWARE" in host
     assert "--target hardware|simulator" in host
     assert "dpu_launch(v4_provider.set, DPU_SYNCHRONOUS)" in host
+    assert "v4_simulator_target ? v4_provider.observed_ranks < 1u" in host
     assert "tasklets != (uint32_t)NR_TASKLETS" in host
     assert "tasklet_binary_mismatch" in host
     assert "control.reserved0 = tasklets;" in host
@@ -520,7 +526,8 @@ def test_v4_native_sources_preserve_the_abi_and_build_contract() -> None:
     assert protocol.WRAM_PANEL_NC == 32
     assert protocol.WRAM_PANEL_DMA_BYTES == 2048
     assert protocol.WRAM_PANEL_UNALIGNED_SCRATCH_BYTES == 288
-    assert "EXECUTION_PLAN_V4_INT8_MAX_ABS" in dpu
+    assert "EXECUTION_PLAN_V4_INT8_COMPONENT_PRODUCT" in dpu
+    assert "EXECUTION_PLAN_V4_INT8_COMPONENT_PRODUCT" in dpu
     assert "MAX_TASKLETS := 24" in makefile
     assert "bin/host_upmem_execution_plan_v4_t%" in makefile
     assert "bin/dpu_gemm_tile_v4_t%" in makefile
@@ -529,12 +536,12 @@ def test_v4_native_sources_preserve_the_abi_and_build_contract() -> None:
 
 def test_v4_host_and_native_int8_accumulation_boundary_equality() -> None:
     assert protocol.INT8_MAX_PRODUCT == 127 * 127
-    last_accepted_k = protocol.INT32_MAX // protocol.INT8_MAX_PRODUCT
+    last_accepted_k = protocol.INT32_MAX // protocol.INT8_COMPONENT_PRODUCT
     first_rejected_k = last_accepted_k + 1
 
-    assert last_accepted_k == 133144
-    assert last_accepted_k * protocol.INT8_MAX_PRODUCT <= protocol.INT32_MAX
-    assert first_rejected_k * protocol.INT8_MAX_PRODUCT > protocol.INT32_MAX
+    assert last_accepted_k == 66572
+    assert last_accepted_k * protocol.INT8_COMPONENT_PRODUCT <= protocol.INT32_MAX
+    assert first_rejected_k * protocol.INT8_COMPONENT_PRODUCT > protocol.INT32_MAX
     assert protocol.MAX_INT32_SAFE_K == last_accepted_k
 
     # Test work geometry validation with maximum valid contracted dimension within MAX_CONTRACTED

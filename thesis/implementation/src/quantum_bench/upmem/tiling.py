@@ -14,8 +14,7 @@ import numpy as np
 
 from quantum_bench.model import ContractNode
 from quantum_bench.upmem.protocol import (
-    INT32_MAX,
-    INT8_MAX_PRODUCT,
+    MAX_INT32_SAFE_K,
 )
 
 
@@ -223,7 +222,7 @@ def lower_binary_contraction(
 ) -> M5TileLowering:
     """Lower a real binary contract node into deterministic bounded matrix tiles."""
 
-    canonical = canonicalize_binary_contraction(node, left, right)
+    canonical = canonicalize_binary_contraction(node, left, right, limits=limits)
     tile_m, tile_k, tile_n = _choose_tile_shape(
         canonical.m, canonical.k, canonical.n, limits
     )
@@ -291,11 +290,19 @@ def canonicalize_binary_contraction(
     node: ContractNode,
     left: np.ndarray,
     right: np.ndarray,
+    *,
+    limits: M5TileLimits = M5TileLimits(),
 ) -> CanonicalContraction:
-    """Apply the same label semantics as ``contract_binary_task`` before GEMM."""
+    """Apply label semantics while retaining int8 pre-quantization precision.
 
-    left_array = _real_float32(left, "left")
-    right_array = _real_float32(right, "right")
+    The float32 route keeps its historical float32 canonicalization.  The
+    packed-int8 route canonicalizes components as float64 so a value exactly
+    near a round-to-even tie is not changed by an undocumented float32
+    conversion before the frozen quantizer sees it.
+    """
+
+    left_array = _real_float32(left, "left", preserve_precision=limits.packed_int8)
+    right_array = _real_float32(right, "right", preserve_precision=limits.packed_int8)
     if tuple(left_array.shape) != tuple(node.left.shape):
         raise TileLoweringError(
             f"left_shape_mismatch:{left_array.shape}!={node.left.shape}"
@@ -591,7 +598,7 @@ def _sum_labels(
     if not reduced:
         return array
     axes = tuple(labels.index(label) for label in reduced)
-    return np.asarray(np.sum(array, axis=axes), dtype=np.float32)
+    return np.asarray(np.sum(array, axis=axes), dtype=array.dtype)
 
 
 def _remaining_labels(
@@ -721,6 +728,7 @@ def _make_tile(
         or right_elements > limits.max_elements
         or output_elements > limits.max_elements
         or (limits.packed_int8 and k_chunk.k_size > limits.max_packed_k)
+        or (limits.packed_int8 and k_chunk.k_size > MAX_INT32_SAFE_K)
         or aligned_mram_bytes > limits.max_mram_bytes
     ):
         raise TileLoweringError(f"tile_exceeds_m5_limits:{output_tile.id}:{k_chunk.id}")
@@ -778,7 +786,7 @@ def _preflight(
             else None
         ),
         int32_full_k_safe=(
-            canonical.k * INT8_MAX_PRODUCT <= INT32_MAX
+            max((chunk.k_size for chunk in k_chunks), default=0) <= MAX_INT32_SAFE_K
             if limits.packed_int8
             else None
         ),
@@ -806,7 +814,9 @@ def _aligned(elements: int, element_bytes: int, limits: M5TileLimits) -> int:
     return ((value + alignment - 1) // alignment) * alignment
 
 
-def _real_float32(value: np.ndarray, side: str) -> np.ndarray:
+def _real_float32(
+    value: np.ndarray, side: str, *, preserve_precision: bool = False
+) -> np.ndarray:
     array = np.asarray(value)
     try:
         finite = np.isfinite(array)
@@ -818,7 +828,9 @@ def _real_float32(value: np.ndarray, side: str) -> np.ndarray:
         if np.any(np.imag(array) != 0):
             raise TileLoweringError(f"{side}_contains_nonzero_imaginary_values")
         array = np.real(array)
-    result = np.asarray(array, dtype=np.float32)
+    result = np.asarray(array, dtype=np.float64 if preserve_precision else np.float32)
     if not np.all(np.isfinite(result)):
-        raise TileLoweringError(f"{side}_overflows_float32")
+        raise TileLoweringError(
+            f"{side}_overflows_float64" if preserve_precision else f"{side}_overflows_float32"
+        )
     return result

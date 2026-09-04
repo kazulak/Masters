@@ -31,7 +31,7 @@ _PATH_FIELDS = (
     "initialization_binary",
 )
 _NUMERIC_POLICIES = frozenset(
-    {"split_complex_float32_v1", "split_complex_int8_shared_scale_v1"}
+    {"split_complex_float32_v1", "complex_int8_shared_scale_v1"}
 )
 
 
@@ -115,7 +115,7 @@ def prepare_config(
     if mode not in {"probe", "float32-smoke", "int8-smoke"}:
         raise ValueError(f"unsupported M7C physical mode: {mode}")
     numeric_policy = (
-        "split_complex_int8_shared_scale_v1"
+        "complex_int8_shared_scale_v1"
         if mode == "int8-smoke"
         else "split_complex_float32_v1"
     )
@@ -130,7 +130,7 @@ def prepare_config(
     options["rank_paths"] = [_absolute_path(rank_path)]
 
     new_route_id = (
-        "upmem_int8_1dpu" if numeric_policy == "split_complex_int8_shared_scale_v1" else "upmem_float32_1dpu"
+        "upmem_int8_1dpu" if numeric_policy == "complex_int8_shared_scale_v1" else "upmem_float32_1dpu"
     )
     _replace_route_id(normalized, old_route_id=old_route_id, new_route_id=new_route_id)
     normalized["experiment_id"] = f"m7c-one-dpu-{mode}"

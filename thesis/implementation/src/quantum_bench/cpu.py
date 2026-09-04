@@ -17,6 +17,7 @@ from quantum_bench.numerics import (
     contract_complex_products,
     decode_complex_products,
     encode_complex_tensor,
+    int32_accumulator_safe,
 )
 from quantum_bench.results import (
     ExecutionFailed,
@@ -40,7 +41,7 @@ from quantum_bench.upmem.tiling import (
 
 _SUPPORTED_POLICIES = (
     "split_complex_float32_v1",
-    "split_complex_int8_shared_scale_v1",
+    "complex_int8_shared_scale_v1",
 )
 _BACKEND_FACTS = {"backend_id": "numpy_cpu_v1", "execution_class": "cpu_host"}
 _REPLAY_BACKEND_ID = "cpu_upmem_plan_replay_v1"
@@ -68,7 +69,7 @@ def run_cpu_once(
         )
     order = _topological_order(dag)
     if (
-        numeric_policy == "split_complex_int8_shared_scale_v1"
+        numeric_policy == "complex_int8_shared_scale_v1"
         and not _int8_output_is_derived(dag, order)
     ):
         raise UnsupportedExecution(
@@ -86,7 +87,7 @@ def run_cpu_once(
     producer_node_ids = {node.output.id: node.node_id for node in order}
     int8_reduce_inputs = (
         _int8_reduce_input_order(order, producer_node_ids)
-        if numeric_policy == "split_complex_int8_shared_scale_v1"
+        if numeric_policy == "complex_int8_shared_scale_v1"
         else {}
     )
     working = {tensor_id: np.asarray(array) for tensor_id, array in inputs.items()}
@@ -301,7 +302,7 @@ def replay_upmem_plan_once(
     _validate_replay_stage_shape(dag, plan)
     validate_upmem_plan(dag, plan)
     order = _topological_order(dag)
-    if plan.numeric_policy == "split_complex_int8_shared_scale_v1":
+    if plan.numeric_policy == "complex_int8_shared_scale_v1":
         producer_node_ids = {node.output.id: node.node_id for node in order}
         if not _int8_output_is_derived(dag, order):
             raise UnsupportedExecution(
@@ -353,14 +354,34 @@ def replay_upmem_plan_once(
                 right = _materialize_view(node.right, working)
                 left_real = lower_binary_contraction(
                     node,
-                    np.asarray(left.real, dtype=np.float32),
-                    np.asarray(right.real, dtype=np.float32),
+                    np.asarray(
+                        left.real,
+                        dtype=np.float64
+                        if plan.numeric_policy == "complex_int8_shared_scale_v1"
+                        else np.float32,
+                    ),
+                    np.asarray(
+                        right.real,
+                        dtype=np.float64
+                        if plan.numeric_policy == "complex_int8_shared_scale_v1"
+                        else np.float32,
+                    ),
                     limits=limits,
                 )
                 left_imag = lower_binary_contraction(
                     node,
-                    np.asarray(left.imag, dtype=np.float32),
-                    np.asarray(right.imag, dtype=np.float32),
+                    np.asarray(
+                        left.imag,
+                        dtype=np.float64
+                        if plan.numeric_policy == "complex_int8_shared_scale_v1"
+                        else np.float32,
+                    ),
+                    np.asarray(
+                        right.imag,
+                        dtype=np.float64
+                        if plan.numeric_policy == "complex_int8_shared_scale_v1"
+                        else np.float32,
+                    ),
                     limits=limits,
                 )
                 _validate_replay_lowerings(left_real, left_imag, stage, node)
@@ -373,10 +394,24 @@ def replay_upmem_plan_once(
             try:
                 encode_started = time.perf_counter()
                 left_canonical = _combine_canonical_planes(
-                    left_real, left_imag, left=True
+                    left_real,
+                    left_imag,
+                    left=True,
+                    dtype=(
+                        np.complex128
+                        if plan.numeric_policy == "complex_int8_shared_scale_v1"
+                        else np.complex64
+                    ),
                 )
                 right_canonical = _combine_canonical_planes(
-                    left_real, left_imag, left=False
+                    left_real,
+                    left_imag,
+                    left=False,
+                    dtype=(
+                        np.complex128
+                        if plan.numeric_policy == "complex_int8_shared_scale_v1"
+                        else np.complex64
+                    ),
                 )
                 left_encoded = encode_complex_tensor(
                     left_canonical, plan.numeric_policy
@@ -596,7 +631,7 @@ def _node_for_stage(
 def _replay_limits(policy: str) -> M5TileLimits:
     if policy == "split_complex_float32_v1":
         return M5TileLimits.float32()
-    if policy == "split_complex_int8_shared_scale_v1":
+    if policy == "complex_int8_shared_scale_v1":
         return M5TileLimits.host_packed_int8()
     raise UnsupportedExecution(
         stage="preflight",
@@ -610,14 +645,16 @@ def _combine_canonical_planes(
     imag_lowering: M5TileLowering,
     *,
     left: bool,
+    dtype: np.dtype | type = np.complex64,
 ) -> np.ndarray:
     real = real_lowering.canonical.left if left else real_lowering.canonical.right
     imag = imag_lowering.canonical.left if left else imag_lowering.canonical.right
     if real.shape != imag.shape:
         raise ValueError("real and imaginary canonical planes have different shapes")
-    result = np.empty(real.shape, dtype=np.complex64)
-    result.real = np.asarray(real, dtype=np.float32)
-    result.imag = np.asarray(imag, dtype=np.float32)
+    result = np.empty(real.shape, dtype=dtype)
+    component_dtype = np.float64 if np.dtype(dtype) == np.dtype(np.complex128) else np.float32
+    result.real = np.asarray(real, dtype=component_dtype)
+    result.imag = np.asarray(imag, dtype=component_dtype)
     return result
 
 
@@ -720,6 +757,10 @@ def _replay_tile_lanes(
             lanes.append(accumulator)
         return tuple(lanes)  # type: ignore[return-value]
 
+    if not int32_accumulator_safe(unit.k_size):
+        raise ValueError(
+            "int8 tile exceeds full-component int32 accumulation safety bound"
+        )
     lanes = []
     for left_plane, right_plane in (
         (left_real, right_real),

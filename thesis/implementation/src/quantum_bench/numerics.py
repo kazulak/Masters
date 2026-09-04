@@ -11,10 +11,12 @@ from quantum_bench.model import ContractNode
 
 
 INT8_QUANTIZED_MAX_ABS = 127
+INT8_MAX_PRODUCT = INT8_QUANTIZED_MAX_ABS**2
+INT8_COMPONENT_PRODUCT = 2 * INT8_MAX_PRODUCT
 
 NumericPolicy = Literal[
     "split_complex_float32_v1",
-    "split_complex_int8_shared_scale_v1",
+    "complex_int8_shared_scale_v1",
 ]
 
 
@@ -129,8 +131,8 @@ def contract_complex_products(
             contracted_k *= node.left.shape[node.left.labels.index(label)]
         else:
             contracted_k *= node.right.shape[node.right.labels.index(label)]
-    if policy == "split_complex_int8_shared_scale_v1":
-        if contracted_k * (INT8_QUANTIZED_MAX_ABS**2) > np.iinfo(np.int32).max:
+    if policy == "complex_int8_shared_scale_v1":
+        if not int32_accumulator_safe(contracted_k):
             raise ValueError("int8 contraction exceeds int32 accumulation safety bound")
         dtype = np.dtype(np.int32)
     else:
@@ -212,9 +214,31 @@ def decode_complex_products(
 def _validate_policy(policy: str) -> None:
     if policy not in {
         "split_complex_float32_v1",
-        "split_complex_int8_shared_scale_v1",
+        "complex_int8_shared_scale_v1",
     }:
         raise ValueError(f"unsupported numeric policy: {policy!r}")
+
+
+def theoretical_int32_accumulator_bound(k: int) -> int:
+    """Return the conservative full-complex bound ``2*K*127**2``.
+
+    Each DPU lane accumulates one real product stream, whose magnitude is at
+    most ``K*127**2``.  The host combines two same-sign lanes for each complex
+    output component, so physical preflight uses the conservative factor two.
+    The software reference itself uses int64 when it combines lanes.
+    """
+
+    if isinstance(k, (bool, np.bool_)) or not isinstance(k, (int, np.integer)):
+        raise ValueError("K must be a positive integer")
+    if int(k) < 1:
+        raise ValueError("K must be a positive integer")
+    return int(k) * INT8_COMPONENT_PRODUCT
+
+
+def int32_accumulator_safe(k: int) -> bool:
+    """Return whether ``2*K*127**2`` fits in a signed int32."""
+
+    return theoretical_int32_accumulator_bound(k) <= np.iinfo(np.int32).max
 
 
 def _readonly_copy(value: np.ndarray) -> np.ndarray:
@@ -362,9 +386,13 @@ def _complex64_result(real: np.ndarray, imag: np.ndarray) -> np.ndarray:
 
 __all__ = [
     "INT8_QUANTIZED_MAX_ABS",
+    "INT8_MAX_PRODUCT",
+    "INT8_COMPONENT_PRODUCT",
     "NumericPolicy",
     "EncodedComplexTensor",
     "encode_complex_tensor",
     "contract_complex_products",
     "decode_complex_products",
+    "theoretical_int32_accumulator_bound",
+    "int32_accumulator_safe",
 ]

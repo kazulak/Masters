@@ -603,7 +603,7 @@ def test_loader_rejects_invalid_simulator_topology(tmp_path: Path) -> None:
             "    options:\n      runner: bin/quest_runner",
             "  quest:\n    executor: upmem_sdk_simulator\n"
             "    numeric_policy: split_complex_float32_v1\n"
-            "    options:\n      dpu_count: 2\n      rank_count: 1\n"
+            "    options:\n      dpu_count: 2\n      rank_count: 2\n"
             "      tasklets_per_dpu: 1\n      session_root: native\n"
             "      host_binary: native/host\n      dpu_binary: native/dpu\n"
             "      initialization_binary: native/init",
@@ -615,7 +615,7 @@ def test_loader_rejects_invalid_simulator_topology(tmp_path: Path) -> None:
     )
     _write_config(path, text)
 
-    with pytest.raises(ValueError, match="one DPU and one rank"):
+    with pytest.raises(ValueError, match="one rank and 1..64 DPUs"):
         load_experiment_config(path)
 
 
@@ -764,6 +764,18 @@ def _simulator_config() -> str:
     )
 
 
+def test_loader_accepts_simulator_one_rank_with_three_dpus(tmp_path: Path) -> None:
+    path = tmp_path / "simulator-3dpus.yml"
+    _write_config(
+        path, _simulator_config().replace("dpu_count: 1", "dpu_count: 3", 1)
+    )
+
+    config = load_experiment_config(path)
+
+    assert config["routes"]["simulator"]["options"]["dpu_count"] == 3
+    assert config["routes"]["simulator"]["options"]["rank_count"] == 1
+
+
 def test_plan_never_opens_a_session_and_writes_deterministic_document(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -828,7 +840,7 @@ def test_sliced_conformance_retains_strict_sdk_simulator_coverage(
         "4ff5cad04ff84fbe1ebf3cdd2bd1b8226913426dacbdc95d54fb9898cbb806c5"
     )
     assert int8_entry["upmem"]["physical_plan_id"] == (
-        "644c1f556fa8665b950e445b865bcd52e014a25a0698c49d623c3377430a30c2"
+        "ffd90c2ebc9a6901105271996f27f2cf11c107a0187bc922ee014eae4d2e7855"
     )
     assert float_entry["upmem"]["kernel_policy"] == "dpu_real_tile_v4_wram_panel_v1"
     assert int8_entry["upmem"]["kernel_policy"] == "dpu_real_tile_v4_wram_panel_v1"
@@ -840,7 +852,7 @@ def test_sliced_conformance_retains_strict_sdk_simulator_coverage(
         "eb1a228c8d24ff214298d1da6dec155cc8c109ffffbffe829940b74f7fae6171"
     )
     assert entries["simulator_int8_t8"]["upmem"]["physical_plan_id"] == (
-        "a7431e780bb523e4470aecbc436bf723cef476c48bd37a349011eab4d77796c1"
+        "117ad2ef1d36109739f10e01563e8bf48895d2c219ac49e2bfba7fa53c3b487e"
     )
     assert {
         route_id: entry["upmem"]["topology"]["tasklets_per_dpu"]
@@ -1354,7 +1366,7 @@ def test_executable_identity_excludes_route_and_numeric_policy() -> None:
     }
     int8_route = {
         **float_route,
-        "numeric_policy": "split_complex_int8_shared_scale_v1",
+        "numeric_policy": "complex_int8_shared_scale_v1",
     }
 
     assert cli._executable_identity(float_route) == cli._executable_identity(int8_route)
@@ -2384,7 +2396,7 @@ def test_report_emits_validation_metrics_mad_and_unqualified_labels(
         if sample["route_id"] != "cpu_int8":
             continue
         sample["numeric_facts"] = {
-            "numeric_policy": "split_complex_int8_shared_scale_v1"
+            "numeric_policy": "complex_int8_shared_scale_v1"
         }
         sample["validation"] = {
             **_validation(),
@@ -2503,7 +2515,7 @@ def test_report_rejects_speedup_without_full_precision_threshold(
     )
     for sample in samples:
         sample["numeric_facts"] = {
-            "numeric_policy": "split_complex_int8_shared_scale_v1"
+            "numeric_policy": "complex_int8_shared_scale_v1"
         }
         sample["validation"] = {
             **_validation(),

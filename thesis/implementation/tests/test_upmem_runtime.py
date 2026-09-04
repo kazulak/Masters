@@ -545,7 +545,7 @@ def test_invalid_opened_object_is_closed_once_before_failure(tmp_path: Path) -> 
 
 @pytest.mark.parametrize(
     "policy",
-    ["split_complex_float32_v1", "split_complex_int8_shared_scale_v1"],
+    ["split_complex_float32_v1", "complex_int8_shared_scale_v1"],
 )
 def test_persistent_session_matches_replay_and_renews_deadline(
     tmp_path: Path, policy: str
@@ -754,7 +754,7 @@ def test_request_response_requires_host_submit_timing(
 
 @pytest.mark.parametrize(
     "policy",
-    ["split_complex_float32_v1", "split_complex_int8_shared_scale_v1"],
+    ["split_complex_float32_v1", "complex_int8_shared_scale_v1"],
 )
 def test_open_upmem_simulator_matches_replay_and_rejects_physical_claims(
     tmp_path: Path, policy: str, monkeypatch: pytest.MonkeyPatch
@@ -796,6 +796,28 @@ def test_open_upmem_simulator_matches_replay_and_rejects_physical_claims(
         assert terminal[key] is False
 
 
+def test_open_upmem_simulator_allows_one_rank_with_three_dpus(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    node = _task(k=5, m=1, n=1)
+    dag, plan = _final_plan_for_node(
+        node, policy="split_complex_float32_v1", dpu_count=3
+    )
+    engine = _engine(
+        tmp_path / "simulator-engine-3dpus",
+        dpu_count=3,
+        execution_target="sdk_simulator",
+    )
+    monkeypatch.setattr(runtime, "UpmemV4Executor", lambda **_kwargs: engine.engine)
+    resources = _simulator_resources(tmp_path)
+    session = open_upmem_simulator(dag, plan, resources)
+    assert engine.engine.dpu_count == 3
+    assert len(session._low_level.ranks) == 1
+    assert session._low_level.ranks[0].local_dpus == 3
+    # The fake session does not own a subprocess; avoid a non-executing close.
+    session._closed = True
+
+
 def test_open_rejects_ready_resource_admission_mismatch(tmp_path: Path) -> None:
     _, dag, plan, resources, _, engine = _opened(
         tmp_path, policy="split_complex_float32_v1"
@@ -829,7 +851,7 @@ def test_open_upmem_simulator_rejects_injected_session_opener(
 
 @pytest.mark.parametrize(
     "policy",
-    ["split_complex_float32_v1", "split_complex_int8_shared_scale_v1"],
+    ["split_complex_float32_v1", "complex_int8_shared_scale_v1"],
 )
 def test_raw_lanes_and_operands_match_cpu_physical_plan_replay(
     tmp_path: Path,
@@ -1050,7 +1072,7 @@ def test_grouped_int8_preserves_per_branch_numeric_facts(tmp_path: Path) -> None
     dag, inputs, _ = _grouped_slice_fixture()
     plan = plan_upmem(
         dag,
-        numeric_policy="split_complex_int8_shared_scale_v1",
+        numeric_policy="complex_int8_shared_scale_v1",
         topology=FinalTopology(dpu_count=1, tasklets_per_dpu=1),
     )
     engine = _engine(tmp_path / "engine", dpu_count=1)
@@ -1333,7 +1355,7 @@ def test_run_timeout_is_renewed_and_reported_as_execution_failure(
 
 def test_output_and_facts_are_immutable_and_json_safe(tmp_path: Path) -> None:
     node, dag, plan, resources, _, _ = _opened(
-        tmp_path, policy="split_complex_int8_shared_scale_v1", k=257
+        tmp_path, policy="complex_int8_shared_scale_v1", k=257
     )
     session = open_upmem(dag, plan, resources)
     sample = session.run_once(_inputs(node, k=257))
