@@ -157,6 +157,16 @@ def _topologies(config: dict[str, Any]) -> tuple[tuple[str, UpmemTopology], ...]
     )
 
 
+def _calibration_splits(config: Mapping[str, Any]) -> frozenset[str]:
+    calibration = _mapping(config.get("calibration"), "calibration config")
+    result = frozenset(
+        str(value) for value in calibration.get("splits", ("training",))
+    )
+    if not result or not result <= {"training", "validation"}:
+        raise ValueError("calibration splits must be training and/or validation")
+    return result
+
+
 def _host_memory_estimate(inputs: dict[str, Any], dag: Any) -> int:
     input_bytes = sum(int(value.nbytes) for value in inputs.values())
     # Logical intermediates are complex128 before the physical float32 lowering.
@@ -166,6 +176,18 @@ def _host_memory_estimate(inputs: dict[str, Any], dag: Any) -> int:
     packed_transport_bytes = input_bytes // 2 + sum(outputs) // 2
     native_copy_bytes = packed_transport_bytes
     return input_bytes + sum(outputs) + packed_transport_bytes + native_copy_bytes
+
+
+def _collection_admission_reasons(admission: Mapping[str, Any]) -> tuple[str, ...]:
+    reasons = []
+    if admission.get("tasklet_row_sufficiency_passed") is not True:
+        reasons.append("tasklet_row_sufficiency")
+    if (
+        admission.get("dominant_work_wave_allocated_dpu_slots")
+        != admission.get("dominant_work_wave_populated_dpu_slots")
+    ):
+        reasons.append("dominant_work_wave_underfilled")
+    return tuple(reasons or ("unspecified",))
 
 
 def _estimated_work_unit_count(dag: Any) -> int:
@@ -390,7 +412,7 @@ def _serialize_candidate(
                 facts = extract_plan_features(plan)
                 if not admission["collection_resource_admission_passed"]:
                     feasible = False
-                    reasons = admission["collection_resource_admission_reasons"]
+                    reasons = _collection_admission_reasons(admission)
                     reason = "collection_resource_admission_failed:" + ",".join(reasons)
         except Exception as exc:
             feasible = False
@@ -614,6 +636,7 @@ def build_dataset(
     calibration_cells = []
     total_generation_s = 0.0
     total_feature_s = 0.0
+    calibration_splits = _calibration_splits(config)
     for circuit_spec in config["circuits"]:
         circuit_id = str(circuit_spec["circuit_id"])
         split = str(circuit_spec["split"])
@@ -684,7 +707,7 @@ def build_dataset(
                         "feature_model": model.mode,
                     }
                 )
-            if split == "training":
+            if split in calibration_splits:
                 selected = select_calibration_candidates(
                     feasible,
                     topology_id,
@@ -834,8 +857,6 @@ def _calibration_candidate_index(
         circuit_id = str(circuit_mapping.get("circuit_id", ""))
         if not circuit_id or circuit_id in circuit_map:
             raise ValueError("candidate dataset has duplicate or empty circuit IDs")
-        if circuit_mapping.get("split") != "training":
-            continue
         circuit_map[circuit_id] = circuit_mapping
         candidates = circuit_mapping.get("candidates")
         if not isinstance(candidates, list):
@@ -862,7 +883,11 @@ def _calibration_candidate_index(
         if not cell_id or cell_id in cell_map:
             raise ValueError("calibration cells must have unique nonempty IDs")
         if circuit_id not in circuit_map:
-            raise ValueError(f"calibration cell references unknown training circuit: {circuit_id}")
+            raise ValueError(f"calibration cell references unknown circuit: {circuit_id}")
+        if circuit_map[circuit_id].get("split") not in {"training", "validation"}:
+            raise ValueError(
+                f"calibration cell references a non-calibration split: {circuit_id}"
+            )
         if (circuit_id, topology_id) in cell_topology_keys:
             raise ValueError("calibration cells must have unique circuit/topology pairs")
         cell_topology_keys.add((circuit_id, topology_id))
@@ -1089,7 +1114,7 @@ def _calibration_row(
     open_s = _finite_nonnegative(session.get("open_s"), "session open_s")
     close_s = _finite_nonnegative(session.get("session_close_s"), "session_close_s")
     row: dict[str, Any] = {
-        "split": "training",
+        "split": expected_item["circuit"]["split"],
         "attempt_type": sample["attempt_kind"],
         "cell_id": expected_item["cell_id"],
         "circuit_id": sample["case_id"],
@@ -1552,6 +1577,7 @@ def merge_shards(
     )
     ranking_rows = []
     calibration_cells = []
+    calibration_splits = _calibration_splits(config)
     for circuit in dataset["circuits"]:
         candidates = tuple(_candidate_from_record(item) for item in circuit["candidates"])
         for topology_id in topology_order:
@@ -1586,7 +1612,7 @@ def merge_shards(
                     ),
                     "feature_model": model.mode,
                 })
-            if circuit["split"] == "training":
+            if circuit["split"] in calibration_splits:
                 selected = select_calibration_candidates(
                     feasible,
                     topology_id,

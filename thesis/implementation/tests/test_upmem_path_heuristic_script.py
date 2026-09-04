@@ -17,6 +17,36 @@ sys.modules[SPEC.name] = script
 SPEC.loader.exec_module(script)
 
 
+def test_calibration_splits_default_to_training_and_accept_validation() -> None:
+    assert script._calibration_splits({"calibration": {}}) == {"training"}
+    assert script._calibration_splits(
+        {"calibration": {"splits": ["training", "validation"]}}
+    ) == {"training", "validation"}
+
+
+@pytest.mark.parametrize("splits", [[], ["test"], ["training", "test"]])
+def test_calibration_splits_reject_non_calibration_partitions(splits: list[str]) -> None:
+    with pytest.raises(ValueError, match="calibration splits"):
+        script._calibration_splits({"calibration": {"splits": splits}})
+
+
+def test_collection_admission_reasons_are_derived_from_existing_facts() -> None:
+    assert script._collection_admission_reasons(
+        {
+            "tasklet_row_sufficiency_passed": True,
+            "dominant_work_wave_allocated_dpu_slots": 4,
+            "dominant_work_wave_populated_dpu_slots": 2,
+        }
+    ) == ("dominant_work_wave_underfilled",)
+    assert script._collection_admission_reasons(
+        {
+            "tasklet_row_sufficiency_passed": False,
+            "dominant_work_wave_allocated_dpu_slots": 1,
+            "dominant_work_wave_populated_dpu_slots": 1,
+        }
+    ) == ("tasklet_row_sufficiency",)
+
+
 def test_candidate_generation_is_seeded_deduplicated_and_greedy_is_retained(monkeypatch) -> None:
     config = script.load_config()
     config["candidate_generation"]["one_trial_searches"] = 4
@@ -279,7 +309,9 @@ def test_frozen_profile_selects_validation_paths_without_timing(tmp_path: Path) 
     assert len(result["selections"]) == 2
 
 
-def _calibration_fixture(tmp_path: Path) -> tuple[Path, Path, Path, dict, tuple[dict, ...], tuple[dict, ...]]:
+def _calibration_fixture(
+    tmp_path: Path, *, split: str = "training"
+) -> tuple[Path, Path, Path, dict, tuple[dict, ...], tuple[dict, ...]]:
     candidate_id = "a" * 64
     logical_plan_id = "b" * 64
     physical_plan_id = "c" * 64
@@ -294,7 +326,7 @@ def _calibration_fixture(tmp_path: Path) -> tuple[Path, Path, Path, dict, tuple[
         "source_sha": candidate_source,
         "circuits": [{
             "circuit_id": "fixture",
-            "split": "training",
+            "split": split,
             "problem_id": problem,
             "tensor_network_structure_id": tensor_structure,
             "candidates": [{
@@ -519,6 +551,23 @@ def test_extract_calibration_emits_raw_rows_and_separates_source_commits(
     emitted = json.loads((output_dir / "path_runtime_calibration.json").read_text(encoding="utf-8"))
     assert emitted["observations"][0]["sample_id"] == "sample-0"
     assert emitted["observations"][0]["session_instance_id"] == "session-0"
+
+
+def test_extract_calibration_preserves_validation_split(
+    tmp_path: Path, monkeypatch
+) -> None:
+    raw_dir, candidate_path, calibration_path, manifest, samples, sessions = (
+        _calibration_fixture(tmp_path, split="validation")
+    )
+    monkeypatch.setattr(script, "load_artifacts", lambda path: (manifest, samples, sessions))
+    output_dir = tmp_path / "calibration"
+    script.extract_calibration(raw_dir, candidate_path, calibration_path, output_dir)
+    table = list(
+        csv.DictReader(
+            (output_dir / "path_runtime_calibration.csv").open(encoding="utf-8")
+        )
+    )
+    assert {row["split"] for row in table} == {"validation"}
 
 
 def test_extract_calibration_rejects_incomplete_block_set(tmp_path: Path, monkeypatch) -> None:

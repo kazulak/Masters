@@ -1,0 +1,272 @@
+{
+  "calibration": {
+    "candidates_per_cell_maximum": 6,
+    "measurement_blocks": 3,
+    "splits": [
+      "training",
+      "validation"
+    ],
+    "warmup_blocks": 1
+  },
+  "candidate_generation": {
+    "cotengra_method": "greedy",
+    "cotengra_objective": "flops",
+    "master_seed": 20260902,
+    "maximum_planned_work_units": 400,
+    "maximum_semantic_identity_expansion_units": 1000000,
+    "one_trial_searches": 64,
+    "opt_einsum_reference": "greedy",
+    "physical_lowering_timeout_s": 60.0
+  },
+  "circuits": [
+    {
+      "circuit": {
+        "kind": "builtin",
+        "name": "quantization_stress",
+        "parameters": {
+          "n_qubits": 16,
+          "repeat_layers": 2
+        }
+      },
+      "circuit_id": "quantization_stress_16q_l2",
+      "split": "training"
+    },
+    {
+      "circuit": {
+        "kind": "builtin",
+        "name": "hs",
+        "parameters": {
+          "depth": 1,
+          "n_qubits": 20
+        }
+      },
+      "circuit_id": "hs_20q_d1",
+      "split": "training"
+    },
+    {
+      "circuit": {
+        "kind": "builtin",
+        "name": "edc",
+        "parameters": {
+          "n_qubits": 14
+        }
+      },
+      "circuit_id": "edc_14q",
+      "split": "training"
+    },
+    {
+      "circuit": {
+        "kind": "builtin",
+        "name": "ghz_chain",
+        "parameters": {
+          "n_qubits": 16
+        }
+      },
+      "circuit_id": "ghz_chain_16q",
+      "split": "validation"
+    },
+    {
+      "circuit": {
+        "kind": "builtin",
+        "name": "ghz_chain",
+        "parameters": {
+          "n_qubits": 14
+        }
+      },
+      "circuit_id": "ghz_chain_14q",
+      "split": "test"
+    },
+    {
+      "circuit": {
+        "kind": "builtin",
+        "name": "xor",
+        "parameters": {
+          "n_qubits": 18
+        }
+      },
+      "circuit_id": "xor_18q",
+      "split": "test"
+    }
+  ],
+  "declared_workload": [
+    {
+      "candidate_source": "upmem_path_heuristic_v1",
+      "circuit_id": "quantization_stress_18q_l2",
+      "classification": "heuristic_eligible",
+      "family": "quantization_stress",
+      "historical_physical_status": "pilot_observed",
+      "split": "pilot_development"
+    },
+    {
+      "candidate_source": "upmem_path_heuristic_v1",
+      "circuit_id": "hs_18q_d1",
+      "classification": "heuristic_eligible",
+      "family": "hs",
+      "historical_physical_status": "pilot_observed",
+      "split": "pilot_development"
+    },
+    {
+      "candidate_source": "upmem_path_heuristic_v1",
+      "circuit_id": "ghz_chain_18q",
+      "classification": "heuristic_eligible",
+      "family": "ghz_chain",
+      "historical_physical_status": "pilot_observed",
+      "split": "pilot_development"
+    },
+    {
+      "candidate_source": "upmem_path_heuristic_v1",
+      "circuit_id": "edc_18q",
+      "classification": "heuristic_eligible",
+      "family": "edc",
+      "historical_physical_status": "pilot_observed",
+      "split": "pilot_development"
+    },
+    {
+      "candidate_source": "upmem_path_heuristic_v1",
+      "circuit_id": "edc_16q",
+      "classification": "heuristic_eligible",
+      "family": "edc",
+      "historical_physical_status": "pilot_observed",
+      "split": "pilot_development"
+    },
+    {
+      "candidate_source": "upmem_path_heuristic_v1",
+      "circuit_id": "bv_18q",
+      "classification": "heuristic_eligible",
+      "family": "bv",
+      "historical_physical_status": "pilot_observed",
+      "split": "pilot_development"
+    },
+    {
+      "candidate_source": "generalization_v1",
+      "circuit_id": "quantization_stress_16q_l2",
+      "classification": "heuristic_eligible",
+      "family": "quantization_stress",
+      "historical_physical_status": "unobserved_for_path_selection",
+      "split": "training"
+    },
+    {
+      "candidate_source": "generalization_v1",
+      "circuit_id": "hs_20q_d1",
+      "classification": "heuristic_eligible",
+      "family": "hs",
+      "historical_physical_status": "unobserved_for_path_selection",
+      "split": "training"
+    },
+    {
+      "candidate_source": "generalization_v1",
+      "circuit_id": "edc_14q",
+      "classification": "heuristic_eligible",
+      "family": "edc",
+      "historical_physical_status": "unobserved_for_path_selection",
+      "split": "training"
+    },
+    {
+      "candidate_source": "generalization_v1",
+      "circuit_id": "ghz_chain_16q",
+      "classification": "heuristic_eligible",
+      "family": "ghz_chain",
+      "historical_physical_status": "unobserved_for_path_selection",
+      "split": "validation"
+    },
+    {
+      "candidate_source": "generalization_v1",
+      "circuit_id": "ghz_chain_14q",
+      "classification": "heuristic_eligible",
+      "family": "ghz_chain",
+      "historical_physical_status": "unobserved_for_path_selection",
+      "split": "test"
+    },
+    {
+      "candidate_source": "generalization_v1",
+      "circuit_id": "xor_18q",
+      "classification": "heuristic_eligible",
+      "family": "xor",
+      "historical_physical_status": "unobserved_for_path_selection",
+      "split": "test"
+    },
+    {
+      "candidate_source": null,
+      "circuit_id": "bell_2q",
+      "classification": "correctness_only",
+      "exclusion_reason": "path_space_too_trivial_for_selection",
+      "family": "bell",
+      "split": "none"
+    },
+    {
+      "candidate_source": null,
+      "circuit_id": "qrng_18q",
+      "classification": "correctness_only",
+      "exclusion_reason": "product_state_path_space_not_representative",
+      "family": "qrng",
+      "split": "none"
+    },
+    {
+      "candidate_source": null,
+      "circuit_id": "bb84_18q",
+      "classification": "correctness_only",
+      "exclusion_reason": "product_state_path_space_not_representative",
+      "family": "bb84",
+      "split": "none"
+    }
+  ],
+  "final_test_policy": {
+    "candidate_roles": [
+      "greedy",
+      "minimum_flops",
+      "frozen_heuristic_selected"
+    ],
+    "measurement_blocks": 5,
+    "timing_may_change_candidates_or_model": false,
+    "warmup_blocks": 1
+  },
+  "host_memory_admission_bytes": 536870912,
+  "model_forms": [
+    "six_term",
+    "grouped"
+  ],
+  "numeric_policy": "split_complex_float32_v1",
+  "physical_environment": {
+    "affinity": [
+      0
+    ],
+    "host": "safari-baguette1",
+    "rank_path": "/dev/dpu_rank1",
+    "transport": "packed_operation_v1"
+  },
+  "pilot_evidence_policy": {
+    "canonical_final_evidence": false,
+    "mix_into_new_statistical_fit": false,
+    "permitted_uses": [
+      "workload_design",
+      "analysis_code_fixture",
+      "historical_comparison"
+    ]
+  },
+  "schema_version": "upmem_path_heuristic_preregistration_v1",
+  "score": {
+    "bootstrap_refits": 1000,
+    "bootstrap_seed": 20260914,
+    "correlation_rejection_threshold": 0.98,
+    "normalization_epsilon_natural_units": 1,
+    "semantic_id": "upmem_slr_cost_v1",
+    "weight_search_samples": 100000,
+    "weight_search_seed": 20260903
+  },
+  "software_baseline_sha": "70ba5e3899368942b62d682f1526d031d4b04100",
+  "study_id": "upmem_path_heuristic_generalization_v1",
+  "topologies": [
+    {
+      "dpu_count": 1,
+      "rank_count": 1,
+      "topology_id": "1dpu_t8",
+      "tasklets_per_dpu": 8
+    },
+    {
+      "dpu_count": 4,
+      "rank_count": 1,
+      "topology_id": "4dpu_t8",
+      "tasklets_per_dpu": 8
+    }
+  ]
+}
