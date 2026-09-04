@@ -1,0 +1,237 @@
+schema_version: tn_benchmark_v3
+experiment_id: upmem-path-heuristic-generalization-sdk-v1
+defaults:
+  timeout_s: 120.0
+collection:
+  claim_policy: diagnostic_v1
+  base_seed: 20260909
+  warmup_blocks: 0
+  measurement_blocks: 1
+  session_policy: fresh_session_per_attempt_v1
+  block_cooldown_s: 0.0
+  machine_policy:
+    machine_exclusivity:
+      mode: observed_v1
+    cpu_governor:
+      mode: observed_v1
+    affinity:
+      mode: exact_required_v1
+      expected_cpus:
+      - 0
+    numa_policy:
+      mode: observed_v1
+    background_load:
+      mode: observed_v1
+      max_load1_per_online_cpu: null
+cases:
+  edc_14q:
+    circuit:
+      kind: builtin
+      name: edc
+      parameters:
+        n_qubits: 14
+      path: null
+  ghz_chain_14q:
+    circuit:
+      kind: builtin
+      name: ghz_chain
+      parameters:
+        n_qubits: 14
+      path: null
+  ghz_chain_16q:
+    circuit:
+      kind: builtin
+      name: ghz_chain
+      parameters:
+        n_qubits: 16
+      path: null
+  hs_20q_d1:
+    circuit:
+      kind: builtin
+      name: hs
+      parameters:
+        depth: 1
+        n_qubits: 20
+      path: null
+  quantization_stress_16q_l2:
+    circuit:
+      kind: builtin
+      name: quantization_stress
+      parameters:
+        n_qubits: 16
+        repeat_layers: 2
+      path: null
+  xor_18q:
+    circuit:
+      kind: builtin
+      name: xor
+      parameters:
+        n_qubits: 18
+      path: null
+plans:
+  path_73c23017ab47bc0e2ce8e66241c16e982f1de978b7b1b1cf0b3191bd414a19a3:
+    planner:
+      engine: opt_einsum
+      mode: greedy
+    slicing: null
+  path_c9bd5f382e4c40d5fe851ed8719d6d9c92de44e58d4c7266f39eb5aad0008c4c:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260931
+    slicing: null
+  path_dd10879e8d92fd2f8069e56c7ee3b86ec2c57c9ddb1671626e41763c24ad3363:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260936
+    slicing: null
+  path_3a6ccc74670b3c1c8340cb283ec81ee1ae90bbd39ef1b2e442d72b9e38205574:
+    planner:
+      engine: opt_einsum
+      mode: greedy
+    slicing: null
+  path_484fe717dc359a7223cdc40cce7987d272a4bc2ba6cd0a7dc52def7a707ad30e:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260921
+    slicing: null
+  path_70519128c75b9887bdc7564547b0a2f43ce45a4566af922609198a8cbb1059d9:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260936
+    slicing: null
+  path_5927f2fb30d2260742e7f2eda8e48fa1fc373b7da91309c4c73118d0b69b5e01:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260921
+    slicing: null
+  path_7a2d5b8bb4078c0cb1ba73bb3125b03f5e40c0fee62db67519e97a85cab23a5e:
+    planner:
+      engine: opt_einsum
+      mode: greedy
+    slicing: null
+  path_01fce85004f811b2bf3286ba03073d81166c948e4cb75e280c8685079db5a7ed:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260940
+    slicing: null
+  path_be2aca7b90cf22bd437f2aafda4194cc5dba5afea7a4dc514fc29232a92e6658:
+    planner:
+      engine: opt_einsum
+      mode: greedy
+    slicing: null
+  path_31a9997e87f38005e081aad56952a30bd31277dafe425c44de78613365a45e02:
+    planner:
+      engine: opt_einsum
+      mode: greedy
+    slicing: null
+  path_3792589f35002d6f126675076dd5913416ccf76a8166e51d23d505fcaed57c83:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260933
+    slicing: null
+  path_03cf5673145a0f006ade75d2d440790c5dc8e05fcb32b004e8f4f16e65eb9323:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260936
+    slicing: null
+  path_7413dadeffa7f60e5c88adf1c2c47b59b09367117b21cdf40f1dc4bb808c84a1:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260906
+    slicing: null
+  path_c710a921a416f4cdb59f086693fd3c85461ca78229c6bf36cf00cf62c395f3d1:
+    planner:
+      engine: opt_einsum
+      mode: greedy
+    slicing: null
+routes:
+  1dpu_t8:
+    executor: upmem_sdk_simulator
+    numeric_policy: split_complex_float32_v1
+    options:
+      dpu_count: 1
+      rank_count: 1
+      tasklets_per_dpu: 8
+      session_root: ../runs/upmem_sessions/path_heuristic_sdk_1dpu_t8
+      host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t8
+      dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t8
+      initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t8
+matrix:
+- case_id: edc_14q
+  plan_id: path_73c23017ab47bc0e2ce8e66241c16e982f1de978b7b1b1cf0b3191bd414a19a3
+  route_ids:
+  - 1dpu_t8
+- case_id: edc_14q
+  plan_id: path_c9bd5f382e4c40d5fe851ed8719d6d9c92de44e58d4c7266f39eb5aad0008c4c
+  route_ids:
+  - 1dpu_t8
+- case_id: edc_14q
+  plan_id: path_dd10879e8d92fd2f8069e56c7ee3b86ec2c57c9ddb1671626e41763c24ad3363
+  route_ids:
+  - 1dpu_t8
+- case_id: ghz_chain_14q
+  plan_id: path_3a6ccc74670b3c1c8340cb283ec81ee1ae90bbd39ef1b2e442d72b9e38205574
+  route_ids:
+  - 1dpu_t8
+- case_id: ghz_chain_14q
+  plan_id: path_484fe717dc359a7223cdc40cce7987d272a4bc2ba6cd0a7dc52def7a707ad30e
+  route_ids:
+  - 1dpu_t8
+- case_id: ghz_chain_14q
+  plan_id: path_70519128c75b9887bdc7564547b0a2f43ce45a4566af922609198a8cbb1059d9
+  route_ids:
+  - 1dpu_t8
+- case_id: ghz_chain_16q
+  plan_id: path_5927f2fb30d2260742e7f2eda8e48fa1fc373b7da91309c4c73118d0b69b5e01
+  route_ids:
+  - 1dpu_t8
+- case_id: ghz_chain_16q
+  plan_id: path_7a2d5b8bb4078c0cb1ba73bb3125b03f5e40c0fee62db67519e97a85cab23a5e
+  route_ids:
+  - 1dpu_t8
+- case_id: hs_20q_d1
+  plan_id: path_01fce85004f811b2bf3286ba03073d81166c948e4cb75e280c8685079db5a7ed
+  route_ids:
+  - 1dpu_t8
+- case_id: hs_20q_d1
+  plan_id: path_be2aca7b90cf22bd437f2aafda4194cc5dba5afea7a4dc514fc29232a92e6658
+  route_ids:
+  - 1dpu_t8
+- case_id: quantization_stress_16q_l2
+  plan_id: path_31a9997e87f38005e081aad56952a30bd31277dafe425c44de78613365a45e02
+  route_ids:
+  - 1dpu_t8
+- case_id: quantization_stress_16q_l2
+  plan_id: path_3792589f35002d6f126675076dd5913416ccf76a8166e51d23d505fcaed57c83
+  route_ids:
+  - 1dpu_t8
+- case_id: xor_18q
+  plan_id: path_03cf5673145a0f006ade75d2d440790c5dc8e05fcb32b004e8f4f16e65eb9323
+  route_ids:
+  - 1dpu_t8
+- case_id: xor_18q
+  plan_id: path_7413dadeffa7f60e5c88adf1c2c47b59b09367117b21cdf40f1dc4bb808c84a1
+  route_ids:
+  - 1dpu_t8
+- case_id: xor_18q
+  plan_id: path_c710a921a416f4cdb59f086693fd3c85461ca78229c6bf36cf00cf62c395f3d1
+  route_ids:
+  - 1dpu_t8

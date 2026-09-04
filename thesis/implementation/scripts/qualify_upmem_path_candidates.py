@@ -586,6 +586,7 @@ def prepare_config(
     selection_path: Path | None = None,
     split: str | None = None,
     execution_target: str = "physical",
+    experiment_id: str | None = None,
 ) -> dict[str, Any]:
     if execution_target not in {"physical", "sdk"}:
         raise ValueError("execution target must be physical or sdk")
@@ -692,14 +693,17 @@ def prepare_config(
             }
             for (circuit_id, candidate_id), route_ids in sorted(grouped.items())
         ]
+    default_experiment_id = (
+        f"upmem-path-heuristic-evaluation-{split}"
+        f"{'-sdk' if execution_target == 'sdk' else ''}-v1"
+        if mode == "evaluation"
+        else f"upmem-path-heuristic-{mode}-v1"
+    )
+    if experiment_id is not None and not experiment_id.strip():
+        raise ValueError("experiment_id must be nonempty when provided")
     config = {
         "schema_version": "tn_benchmark_v3",
-        "experiment_id": (
-            f"upmem-path-heuristic-evaluation-{split}"
-            f"{'-sdk' if execution_target == 'sdk' else ''}-v1"
-            if mode == "evaluation"
-            else f"upmem-path-heuristic-{mode}-v1"
-        ),
+        "experiment_id": experiment_id or default_experiment_id,
         "defaults": {"timeout_s": 120.0},
         "collection": _collection(warmups=warmups, measurements=measurements, seed=seed),
         "cases": cases,
@@ -806,6 +810,7 @@ def main() -> None:
         default="physical",
     )
     prepare.add_argument("--output", type=Path, required=True)
+    prepare.add_argument("--experiment-id")
     args = parser.parse_args()
     if args.command == "cpu":
         record = qualify_cpu(args.candidate_paths, args.rankings, args.output)
@@ -844,6 +849,7 @@ def main() -> None:
             selection_path=args.selection,
             split=args.split,
             execution_target=args.execution_target,
+            experiment_id=args.experiment_id,
         )
         print(json.dumps({"matrix_count": len(config["matrix"])}))
 

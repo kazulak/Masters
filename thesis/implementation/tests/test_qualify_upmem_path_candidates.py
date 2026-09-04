@@ -196,6 +196,34 @@ def test_prepare_evaluation_config_can_target_strict_sdk_simulator(
     }
 
 
+def test_prepare_config_accepts_explicit_replacement_experiment_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset_path, selection_path, _, _ = _evaluation_fixture(tmp_path)
+    monkeypatch.setattr(qualify, "_regenerate", lambda circuit, selected: (object(), {}))
+    config = qualify.prepare_config(
+        dataset_path=dataset_path,
+        selection_path=selection_path,
+        output_path=tmp_path / "replacement.yml",
+        mode="evaluation",
+        split="validation",
+        experiment_id="upmem-path-heuristic-generalization-validation-v1",
+    )
+    assert config["experiment_id"] == (
+        "upmem-path-heuristic-generalization-validation-v1"
+    )
+
+    with pytest.raises(ValueError, match="experiment_id"):
+        qualify.prepare_config(
+            dataset_path=dataset_path,
+            selection_path=selection_path,
+            output_path=tmp_path / "invalid.yml",
+            mode="evaluation",
+            split="validation",
+            experiment_id="",
+        )
+
+
 def test_qualify_frozen_selection_replays_each_unique_candidate_deterministically(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
