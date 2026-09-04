@@ -1,0 +1,118 @@
+schema_version: tn_benchmark_v3
+experiment_id: upmem-execution-integration-physical-v1
+defaults:
+  timeout_s: 120.0
+collection:
+  claim_policy: diagnostic_v1
+  base_seed: 20260905
+  warmup_blocks: 0
+  measurement_blocks: 1
+  session_policy: fresh_session_per_attempt_v1
+  block_cooldown_s: 0.0
+  machine_policy:
+    machine_exclusivity: {mode: observed_v1}
+    cpu_governor: {mode: observed_v1}
+    affinity: {mode: exact_required_v1, expected_cpus: [0]}
+    numa_policy: {mode: observed_v1}
+    background_load: {mode: observed_v1, max_load1_per_online_cpu: null}
+cases:
+  bell2:
+    circuit: {kind: builtin, name: bell_2q, path: null, parameters: {}}
+  stress4:
+    circuit:
+      kind: builtin
+      name: quantization_stress
+      path: null
+      parameters: {n_qubits: 4, repeat_layers: 2}
+plans:
+  greedy:
+    planner: {engine: opt_einsum, mode: greedy}
+    slicing: null
+routes:
+  float32_1dpu_t1:
+    executor: upmem_physical
+    numeric_policy: split_complex_float32_v1
+    options:
+      dpu_count: 1
+      rank_count: 1
+      tasklets_per_dpu: 1
+      session_root: ../runs/upmem_sessions/integration_physical_t1
+      host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t1
+      dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t1
+      initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t1
+      rank_paths: [/dev/dpu_rank1]
+  int8_1dpu_t1:
+    executor: upmem_physical
+    numeric_policy: complex_int8_shared_scale_v1
+    options:
+      dpu_count: 1
+      rank_count: 1
+      tasklets_per_dpu: 1
+      session_root: ../runs/upmem_sessions/integration_physical_t1_int8
+      host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t1
+      dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t1
+      initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t1
+      rank_paths: [/dev/dpu_rank1]
+  float32_1dpu_t8:
+    executor: upmem_physical
+    numeric_policy: split_complex_float32_v1
+    options:
+      dpu_count: 1
+      rank_count: 1
+      tasklets_per_dpu: 8
+      session_root: ../runs/upmem_sessions/integration_physical_t8
+      host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t8
+      dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t8
+      initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t8
+      rank_paths: [/dev/dpu_rank1]
+  int8_1dpu_t8:
+    executor: upmem_physical
+    numeric_policy: complex_int8_shared_scale_v1
+    options:
+      dpu_count: 1
+      rank_count: 1
+      tasklets_per_dpu: 8
+      session_root: ../runs/upmem_sessions/integration_physical_t8_int8
+      host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t8
+      dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t8
+      initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t8
+      rank_paths: [/dev/dpu_rank1]
+  float32_4dpu_t8:
+    executor: upmem_physical
+    numeric_policy: split_complex_float32_v1
+    options:
+      dpu_count: 4
+      rank_count: 1
+      tasklets_per_dpu: 8
+      session_root: ../runs/upmem_sessions/integration_physical_4d_t8
+      host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t8
+      dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t8
+      initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t8
+      rank_paths: [/dev/dpu_rank1]
+  int8_3dpu_t8:
+    executor: upmem_physical
+    numeric_policy: complex_int8_shared_scale_v1
+    options:
+      dpu_count: 3
+      rank_count: 1
+      tasklets_per_dpu: 8
+      session_root: ../runs/upmem_sessions/integration_physical_3d_t8
+      host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t8
+      dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t8
+      initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t8
+      rank_paths: [/dev/dpu_rank1]
+  int8_4dpu_t8:
+    executor: upmem_physical
+    numeric_policy: complex_int8_shared_scale_v1
+    options:
+      dpu_count: 4
+      rank_count: 1
+      tasklets_per_dpu: 8
+      session_root: ../runs/upmem_sessions/integration_physical_4d_t8_int8
+      host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t8
+      dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t8
+      initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t8
+      rank_paths: [/dev/dpu_rank1]
+matrix:
+  - {case_id: bell2, plan_id: greedy, route_ids: [float32_1dpu_t1, int8_1dpu_t1]}
+  - {case_id: stress4, plan_id: greedy, route_ids: [float32_1dpu_t8, int8_1dpu_t8, float32_4dpu_t8, int8_3dpu_t8, int8_4dpu_t8]}

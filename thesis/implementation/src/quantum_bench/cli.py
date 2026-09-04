@@ -1200,6 +1200,8 @@ def _run_config(
                         samples_path=target / "samples.jsonl",
                         attempts=(attempt,),
                     )
+                    if route["executor"] == "upmem_physical":
+                        raise
                     _complete_collection_block(config, scheduled, schedule_index)
                     continue
             identities = _identities(
@@ -1219,7 +1221,34 @@ def _run_config(
 
             if route["executor"] in _UPMEM_EXECUTORS:
                 assert dag is not None and inputs is not None and upmem_plan is not None
-                policy_reference = replay_upmem_plan_once(dag, upmem_plan, inputs)
+                try:
+                    policy_reference = replay_upmem_plan_once(dag, upmem_plan, inputs)
+                except Exception as exc:
+                    if route["executor"] != "upmem_physical":
+                        raise
+
+                    def reference_failure(failure: Exception = exc) -> ExecutionSample:
+                        raise ExecutionFailed(
+                            "policy_reference",
+                            f"{type(failure).__name__}: {failure}",
+                            {},
+                        ) from failure
+
+                    # No hardware session exists yet; retain only the failed attempt.
+                    run_direct_samples(
+                        run_id=run_id,
+                        experiment_id=config["experiment_id"],
+                        case_id=case_id,
+                        route_id=route_id,
+                        plan_id=plan_id,
+                        identities=identities,
+                        warmups=0,
+                        repetitions=0,
+                        run_once=reference_failure,
+                        samples_path=target / "samples.jsonl",
+                        attempts=(attempt,),
+                    )
+                    raise
 
                 def validate(
                     sample: ExecutionSample,

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import queue
 import struct
+import threading
 import time
 
 import pytest
@@ -724,6 +725,93 @@ def test_successful_submit_and_release(tmp_path: Path) -> None:
     assert release.release_confirmed is True
     assert release.event["event"] == "RELEASE"
     assert process.stdin.commands[-1] == "CLOSE\n"
+
+
+def test_session_rejects_overlapping_submit_packed_submit_and_close(
+    tmp_path: Path,
+) -> None:
+    operation, requests, profile = _packed_operation(tmp_path)
+    artifact = _artifact(tmp_path, dpu_count=1)
+    response_path = tmp_path / "results" / "operation_0000000000000000.jsonl"
+    response_path.parent.mkdir(parents=True, exist_ok=True)
+    response_path.write_text(
+        "".join(
+            json.dumps(_valid_response(request, profile=profile)) + "\n"
+            for request in requests
+        ),
+        encoding="utf-8",
+    )
+    packed_response = {
+        "event": "OPERATION_RESPONSE",
+        "status": "completed",
+        "operation_sequence": operation.operation_sequence,
+        "response_path": "results/operation_0000000000000000.jsonl",
+        "response_count": len(requests),
+        "completed_request_count": len(requests),
+        "failed_request_index": None,
+        "response_sha256": hashlib.sha256(response_path.read_bytes()).hexdigest(),
+    }
+    submit_started = threading.Event()
+    allow_response = threading.Event()
+    reentrant_errors: list[v4.V4Error] = []
+
+    def delayed_response(_command: str) -> dict[str, object]:
+        for operation_call in (
+            lambda: session.submit(artifact),
+            lambda: session.submit_packed(operation),
+            session.close,
+        ):
+            try:
+                operation_call()
+            except v4.V4Error as error:
+                reentrant_errors.append(error)
+            else:  # pragma: no cover - the guard must reject this call.
+                raise AssertionError("reentrant operation unexpectedly executed")
+        submit_started.set()
+        assert allow_response.wait(timeout=1.0)
+        return packed_response
+
+    session, process = _session(
+        tmp_path, requests[0], delayed_response, profile=profile
+    )
+    result: list[object] = []
+
+    def submit() -> None:
+        try:
+            result.append(session.submit_packed(operation))
+        except BaseException as exc:  # pragma: no cover - asserted below.
+            result.append(exc)
+
+    worker = threading.Thread(target=submit)
+    worker.start()
+    assert submit_started.wait(timeout=1.0)
+    with pytest.raises(v4.V4Error, match="session_busy") as submit_error:
+        session.submit(artifact)
+    assert submit_error.value.failure_stage == "session_busy"
+    with pytest.raises(v4.V4Error, match="session_busy") as packed_error:
+        session.submit_packed(operation)
+    assert packed_error.value.failure_stage == "session_busy"
+    with pytest.raises(v4.V4Error, match="session_busy") as close_error:
+        session.close()
+    assert close_error.value.failure_stage == "session_busy"
+    assert session._closed is False
+    assert [error.failure_stage for error in reentrant_errors] == [
+        "session_busy",
+        "session_busy",
+        "session_busy",
+    ]
+    assert process.stdin.commands == [
+        f"SUBMIT_PACKED_OPERATION packed/operation.bin {operation.sha256}\n"
+    ]
+
+    allow_response.set()
+    worker.join(timeout=1.0)
+    assert not worker.is_alive()
+    assert len(result) == 1
+    assert isinstance(result[0], dict)
+    release = session.close()
+    assert release.release_confirmed is True
+    assert session.close() is release
 
 
 @pytest.mark.parametrize("failed_index", [0, 1])

@@ -5,6 +5,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from pathlib import Path
+import threading
 import time
 from typing import Any
 
@@ -1257,6 +1258,109 @@ def test_terminal_admission_requires_all_positive_verification_facts(
         session.close()
     assert caught.value.stage == "session_close"
     assert caught.value.backend_facts.get(field) == value
+
+
+def test_session_rejects_reentrant_and_concurrent_run_and_close(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    node, dag, plan, resources, _, _ = _opened(
+        tmp_path, policy="split_complex_float32_v1"
+    )
+    session = open_upmem(dag, plan, resources)
+    run_started = threading.Event()
+    allow_run = threading.Event()
+    reentrant_errors: list[ExecutionFailed] = []
+    original = session._run_once_unlocked
+
+    def delayed_run(inputs):
+        try:
+            session.run_once(inputs)
+        except ExecutionFailed as error:
+            reentrant_errors.append(error)
+        else:  # pragma: no cover - the guard must reject this call.
+            raise AssertionError("reentrant run_once unexpectedly executed")
+        try:
+            session.close()
+        except ExecutionFailed as error:
+            reentrant_errors.append(error)
+        else:  # pragma: no cover - the guard must reject this call.
+            raise AssertionError("reentrant close unexpectedly executed")
+        run_started.set()
+        assert allow_run.wait(timeout=1.0)
+        return original(inputs)
+
+    monkeypatch.setattr(session, "_run_once_unlocked", delayed_run)
+    result: list[object] = []
+
+    def run() -> None:
+        try:
+            result.append(session.run_once(_inputs(node, k=5)))
+        except BaseException as exc:  # pragma: no cover - asserted below.
+            result.append(exc)
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    assert run_started.wait(timeout=1.0)
+    with pytest.raises(ExecutionFailed, match="active operation") as run_error:
+        session.run_once(_inputs(node, k=5))
+    assert run_error.value.stage == "session_busy"
+    with pytest.raises(ExecutionFailed, match="active operation") as close_error:
+        session.close()
+    assert close_error.value.stage == "session_busy"
+    assert session._closed is False
+    assert [error.stage for error in reentrant_errors] == [
+        "session_busy",
+        "session_busy",
+    ]
+
+    allow_run.set()
+    worker.join(timeout=1.0)
+    assert not worker.is_alive()
+    assert len(result) == 1
+    assert not isinstance(result[0], BaseException)
+    _close_mock_session(session)
+
+
+def test_session_operation_guard_is_per_instance(tmp_path: Path, monkeypatch) -> None:
+    first_node, first_dag, first_plan, first_resources, _, _ = _opened(
+        tmp_path / "first", policy="split_complex_float32_v1"
+    )
+    second_node, second_dag, second_plan, second_resources, _, _ = _opened(
+        tmp_path / "second", policy="split_complex_float32_v1"
+    )
+    first = open_upmem(first_dag, first_plan, first_resources)
+    second = open_upmem(second_dag, second_plan, second_resources)
+    run_started = threading.Event()
+    allow_run = threading.Event()
+    original = first._run_once_unlocked
+
+    def delayed_run(inputs):
+        run_started.set()
+        assert allow_run.wait(timeout=1.0)
+        return original(inputs)
+
+    monkeypatch.setattr(first, "_run_once_unlocked", delayed_run)
+    result: list[object] = []
+
+    def run() -> None:
+        try:
+            result.append(first.run_once(_inputs(first_node, k=5)))
+        except BaseException as exc:  # pragma: no cover - asserted below.
+            result.append(exc)
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    assert run_started.wait(timeout=1.0)
+    independent_sample = second.run_once(_inputs(second_node, k=5))
+    assert independent_sample.output.shape == (1, 1)
+    allow_run.set()
+    worker.join(timeout=1.0)
+    assert not worker.is_alive()
+    assert len(result) == 1
+    assert not isinstance(result[0], BaseException)
+    _close_mock_session(first)
+    _close_mock_session(second)
 
 
 def test_context_body_error_is_not_masked_by_close_failure(tmp_path: Path) -> None:

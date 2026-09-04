@@ -18,6 +18,7 @@ import os
 from pathlib import Path
 import shutil
 import struct
+import threading
 import time
 from typing import Any, Callable, Mapping, Protocol
 
@@ -65,6 +66,7 @@ from quantum_bench.upmem.protocol import (
     MAX_INT32_SAFE_K,
     NUMERIC_FLOAT32,
     NUMERIC_HOST_PACKED_INT8,
+    V4Error,
     V4Profile,
     V4ProtocolError,
     V4WorkUnit,
@@ -997,6 +999,16 @@ class UpmemV4Session:
             for rank in self.ranks
         )
         self._terminal_metadata: dict[str, Any] = {}
+        self._operation_lock = threading.Lock()
+
+    def _enter_operation(self) -> None:
+        if not self._operation_lock.acquire(blocking=False):
+            raise V4Error(
+                "session_busy", "UPMEM v4 session already has an active operation"
+            )
+
+    def _leave_operation(self) -> None:
+        self._operation_lock.release()
 
     @property
     def strategy_identity(self) -> dict[str, Any]:
@@ -1007,6 +1019,27 @@ class UpmemV4Session:
         return _ACTIVE_STRATEGY_CONFIG_HASH
 
     def execute_real(
+        self,
+        node: ContractNode,
+        left: np.ndarray,
+        right: np.ndarray,
+        *,
+        stage: UpmemStage,
+        numeric_policy: NumericPolicy,
+    ) -> tuple[np.ndarray, Mapping[str, Any]]:
+        self._enter_operation()
+        try:
+            return self._execute_real_unlocked(
+                node,
+                left,
+                right,
+                stage=stage,
+                numeric_policy=numeric_policy,
+            )
+        finally:
+            self._leave_operation()
+
+    def _execute_real_unlocked(
         self,
         node: ContractNode,
         left: np.ndarray,
@@ -1234,6 +1267,34 @@ class UpmemV4Session:
         }
 
     def _execute_complex_core(
+        self,
+        node: ContractNode,
+        left: np.ndarray,
+        right: np.ndarray,
+        *,
+        stage: UpmemStage,
+        numeric_policy: NumericPolicy,
+        include_evidence: bool,
+    ) -> tuple[
+        np.ndarray,
+        Mapping[str, JsonValue],
+        Mapping[str, tuple[str, str, str, np.ndarray]],
+        tuple[Any, Any],
+    ]:
+        self._enter_operation()
+        try:
+            return self._execute_complex_core_unlocked(
+                node,
+                left,
+                right,
+                stage=stage,
+                numeric_policy=numeric_policy,
+                include_evidence=include_evidence,
+            )
+        finally:
+            self._leave_operation()
+
+    def _execute_complex_core_unlocked(
         self,
         node: ContractNode,
         left: np.ndarray,
@@ -2333,6 +2394,13 @@ class UpmemV4Session:
             )
 
     def close(self) -> dict[str, Any]:
+        self._enter_operation()
+        try:
+            return self._close_unlocked()
+        finally:
+            self._leave_operation()
+
+    def _close_unlocked(self) -> dict[str, Any]:
         if self._closed:
             return self._terminal_metadata
         self._closed = True
@@ -2561,6 +2629,18 @@ class UpmemSession:
         self._closed = False
         self._terminal_facts: Mapping[str, JsonValue] | None = None
         self._close_failure: ExecutionFailed | None = None
+        self._operation_lock = threading.Lock()
+
+    def _enter_operation(self) -> None:
+        if not self._operation_lock.acquire(blocking=False):
+            raise ExecutionFailed(
+                stage="session_busy",
+                reason="UPMEM session already has an active operation",
+                backend_facts={},
+            )
+
+    def _leave_operation(self) -> None:
+        self._operation_lock.release()
 
     def __enter__(self) -> "UpmemSession":
         return self
@@ -2578,6 +2658,17 @@ class UpmemSession:
             )
 
     def run_once(self, inputs: Mapping[str, np.ndarray]) -> ExecutionSample:
+        """Execute one complete graph sample on the already-open session."""
+
+        self._enter_operation()
+        try:
+            return self._run_once_unlocked(inputs)
+        finally:
+            self._leave_operation()
+
+    def _run_once_unlocked(
+        self, inputs: Mapping[str, np.ndarray]
+    ) -> ExecutionSample:
         """Execute one complete graph sample on the already-open session."""
 
         if self._closed:
@@ -2854,6 +2945,13 @@ class UpmemSession:
         )
 
     def close(self) -> Mapping[str, JsonValue]:
+        self._enter_operation()
+        try:
+            return self._close_unlocked()
+        finally:
+            self._leave_operation()
+
+    def _close_unlocked(self) -> Mapping[str, JsonValue]:
         """Close once and admit only fully verified physical terminal facts."""
 
         if self._closed:

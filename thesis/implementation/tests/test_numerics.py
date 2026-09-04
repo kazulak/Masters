@@ -124,6 +124,25 @@ def test_int8_quantization_emits_only_within_bounded_magnitude() -> None:
     assert -128 not in encoded.imag
 
 
+@pytest.mark.parametrize("plane", ["real", "imag"])
+def test_encoded_int8_constructor_rejects_minus_128(plane: str) -> None:
+    planes = {"real": np.array([-127, 0, 127], dtype=np.int8),
+              "imag": np.array([127, 0, -127], dtype=np.int8)}
+    planes[plane][0] = -128
+    with pytest.raises(ValueError, match=r"\[-127, 127\]"):
+        EncodedComplexTensor(**planes, scale=1.0, saturation_real=0, saturation_imag=0)
+
+
+def test_encoded_constructor_preserves_policy_specific_endpoints() -> None:
+    for dtype, endpoint in ((np.int8, 127), (np.float32, 128)):
+        real = np.array([-endpoint, 0, endpoint], dtype=dtype)
+        imag = -real
+        encoded = EncodedComplexTensor(real, imag, 1.0, 0, 0)
+        np.testing.assert_array_equal(encoded.real, real)
+        np.testing.assert_array_equal(encoded.imag, imag)
+        assert not encoded.real.flags.writeable
+
+
 def test_int8_rounding_is_nearest_even_and_deterministic() -> None:
     source = np.array([0.5 + 0j, 1.5 + 0j, -0.5 + 0j, -1.5 + 0j, 127.0 + 0j])
     first = encode_complex_tensor(source, INT8)

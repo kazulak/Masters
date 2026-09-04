@@ -1,0 +1,25 @@
+{
+  "decision": "supersede_unexecuted_calibration_preserve_preregistration",
+  "date": "2026-09-05",
+  "governing_plan": "thesis/upmem-system-and-path-optimization-plan.md",
+  "previous_execution_source": "e225947a84f937629ed46003dad7d8edff160a8f",
+  "previous_study": "upmem-path-heuristic-generalization-calibration-v1",
+  "previous_protocol": {
+    "candidate_topology_cells": 48,
+    "warmups_per_cell": 1,
+    "measurements_per_cell": 3,
+    "total_attempts": 192,
+    "numeric_policy": "split_complex_float32_v1"
+  },
+  "preserved_file_sha256": {
+    "configs/tn_benchmark_upmem_path_generalization_calibration_v1.yml": "ba5b0c4ea0c78fb303c41fded282e96eeccbaae04d54f34596e4b6a5df4b72cf",
+    "thesis_results/upmem_path_heuristic_generalization_v1/software/candidate_paths.json": "d95150ddf89f6aafa861000b0db2d8447d64456a035c5404463a878c3a319049",
+    "thesis_results/upmem_path_heuristic_generalization_v1/software/calibration_candidate_set.json": "9be4f054764508a771ad77310de0d8184da694181fb6037297a2ef109d4b9c90"
+  },
+  "reason": "Freeze the integrated numerical and kernel-dispatch system before final architecture-aware path training.",
+  "replacement": "New final-system study identity and budget, only after execution-system qualification and freeze.",
+  "historical_files_modified": false,
+  "old_weights_qualify_integrated_int8_or_future_dispatch": false,
+  "old_lost_raw_pilot_observations_reconstructed": false,
+  "new_physical_path_calibration_authorized_by_this_record": false
+}

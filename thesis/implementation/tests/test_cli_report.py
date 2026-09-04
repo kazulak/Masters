@@ -1521,6 +1521,45 @@ def test_physical_session_close_failure_stops_before_next_session_and_preserves_
     load_artifacts(run_dir)
 
 
+@pytest.mark.parametrize("command", [cli.run_command, cli.qualify_command])
+@pytest.mark.parametrize("stage", ["mapping", "policy_reference"])
+def test_physical_pre_session_failure_is_recorded_and_stops(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, command, stage: str
+) -> None:
+    _stub_physical_cli_dependencies(monkeypatch)
+    config = tmp_path / "physical.yml"
+    _write_config(
+        config,
+        _physical_config().replace("measurement_blocks: 1", "measurement_blocks: 2"),
+    )
+    calls = []
+
+    def reject(*_args, **_kwargs):
+        calls.append(stage)
+        if stage == "mapping":
+            raise cli.UnsupportedExecution("mapping", "shape rejected", "tile_shape")
+        raise ValueError("reference rejected")
+
+    monkeypatch.setattr(
+        cli, "plan_upmem" if stage == "mapping" else "replay_upmem_plan_once", reject
+    )
+    monkeypatch.setattr(
+        cli, "open_upmem", lambda *_args, **_kwargs: pytest.fail("hardware opened")
+    )
+    run_dir = tmp_path / "run"
+    expected_error = cli.UnsupportedExecution if stage == "mapping" else ValueError
+    with pytest.raises(expected_error):
+        command(str(config), str(run_dir), allow_physical=True)
+    manifest, samples, sessions = load_artifacts(run_dir)
+    assert calls == [stage]
+    assert manifest["status"] == "failed"
+    assert len(samples) == 1
+    assert samples[0]["status"] == ("unsupported" if stage == "mapping" else "failed")
+    assert samples[0]["failure"]["stage"] == stage
+    assert samples[0]["session_instance_id"] is None
+    assert sessions == ()
+
+
 def test_unsupported_upmem_mapping_is_retained_as_sample(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

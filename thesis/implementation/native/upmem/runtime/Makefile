@@ -28,9 +28,9 @@ bin/dpu_gemm_tile_v4_t%: dpu.c protocol.h | bin
 	@test "$*" -ge 1 -a "$*" -le $(MAX_TASKLETS) || { echo "v4 DPU binary requires tasklets in [1,24]" >&2; exit 1; }
 	$(DPU_CC) -O2 -DNR_TASKLETS=$* -o $@ dpu.c
 
-bin/dpu_simplepim_management_init_t%: $(SIMPLEPIM_ROOT)/lib/management/SmallTableInit_dpu.c | bin
+bin/dpu_simplepim_management_init_t%: management_init.c $(SIMPLEPIM_ROOT)/lib/management/SmallTableInit_dpu.c | bin
 	@test "$*" -ge 1 -a "$*" -le $(MAX_TASKLETS) || { echo "v4 initialization binary requires tasklets in [1,24]" >&2; exit 1; }
-	$(DPU_CC) -O2 -DNR_TASKLETS=$* -o $@ $<
+	$(DPU_CC) -O2 -DNR_TASKLETS=$* -I$(SIMPLEPIM_ROOT)/lib/management -o $@ $<
 
 bin/host_upmem_execution_plan_v4_t%: host.c dpu.c protocol.h request.c request.h operation_envelope.c operation_envelope.h plan.c plan.h simplepim_provider.c simplepim_provider.h | bin
 	@test "$*" -ge 1 -a "$*" -le $(MAX_TASKLETS) || { echo "v4 host binary requires tasklets in [1,24]" >&2; exit 1; }

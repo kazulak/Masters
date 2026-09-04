@@ -35,6 +35,11 @@ class EncodedComplexTensor:
             raise ValueError("real and imaginary planes must have the same shape")
         if real.dtype != imag.dtype or real.dtype not in (np.dtype(np.float32), np.dtype(np.int8)):
             raise ValueError("encoded planes must share dtype float32 or int8")
+        if real.dtype == np.dtype(np.int8) and (
+            np.any(real < -INT8_QUANTIZED_MAX_ABS)
+            or np.any(imag < -INT8_QUANTIZED_MAX_ABS)
+        ):
+            raise ValueError("encoded int8 planes must lie within [-127, 127]")
         if real.dtype == np.dtype(np.float32) and (
             not np.all(np.isfinite(real)) or not np.all(np.isfinite(imag))
         ):
