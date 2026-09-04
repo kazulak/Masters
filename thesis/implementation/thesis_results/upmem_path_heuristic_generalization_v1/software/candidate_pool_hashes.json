@@ -1,0 +1,38 @@
+{
+  "candidate_set_sha256": "d95150ddf89f6aafa861000b0db2d8447d64456a035c5404463a878c3a319049",
+  "circuits": [
+    {
+      "candidate_count": 65,
+      "candidate_pool_sha256": "f0dc74235ce3bde76c8f0307a1429330879726530b6d012b5a92228dafa860c3",
+      "circuit_id": "quantization_stress_16q_l2"
+    },
+    {
+      "candidate_count": 65,
+      "candidate_pool_sha256": "7535a383bcd2ae14cd64af581915b5e8686f54b02f281be2158e082bc59dacc3",
+      "circuit_id": "hs_20q_d1"
+    },
+    {
+      "candidate_count": 65,
+      "candidate_pool_sha256": "73ee67a9d38a7ee49f85a384b116bde4ee0013cfa7634127b1d7db3ab96dd5af",
+      "circuit_id": "edc_14q"
+    },
+    {
+      "candidate_count": 65,
+      "candidate_pool_sha256": "296cf7e415fb3b7e8c935105fc631ee4a77a4bbc1eeb3ffe9fbc948a01fc104d",
+      "circuit_id": "ghz_chain_16q"
+    },
+    {
+      "candidate_count": 65,
+      "candidate_pool_sha256": "33e4a68ff0fd1224ec1b6ecfaceb2cf2cfb687e814be85f228623a9e1a040079",
+      "circuit_id": "ghz_chain_14q"
+    },
+    {
+      "candidate_count": 65,
+      "candidate_pool_sha256": "387e70d0c1d28232188d0df18a31e1ab172407e0a46813a595b8ba19f2356c24",
+      "circuit_id": "xor_18q"
+    }
+  ],
+  "schema_version": "upmem_path_candidate_pool_hashes_v1",
+  "source_sha": "de27ced63d601b58c5905d8f95739a626afcea42",
+  "workload_manifest_sha256": "ecd16999ae99cd7595c85e9fa89672abbc1fd43ebb2083bce062bbaef8938bfd"
+}

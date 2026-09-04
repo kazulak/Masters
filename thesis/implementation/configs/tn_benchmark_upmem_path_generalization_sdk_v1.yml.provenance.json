@@ -1,7 +1,7 @@
 {
-  "candidate_set_sha256": "bebd24aa762aedeaa4c6f0cdc1c3243d8508ddcd1bf638d59806520cdf20a99b",
+  "candidate_set_sha256": "d95150ddf89f6aafa861000b0db2d8447d64456a035c5404463a878c3a319049",
   "mode": "sdk",
-  "preregistration_sha256": "6314f8be994dc1b37b5560a9a2b95eee74ba4723c306060e6353be1a994d7ab7",
+  "preregistration_sha256": "dfe1bbd21bd2cc0ddb7120016e35bb7fe032d0842428cf5bad369b5b53dc2579",
   "schema_version": "upmem_path_experiment_provenance_v1",
   "selected": [
     {
@@ -110,5 +110,5 @@
       "topology_id": "1dpu_t8"
     }
   ],
-  "source_sha": "eec45a28c909780569f1046a1ebaa7e12dae4dbe"
+  "source_sha": "de27ced63d601b58c5905d8f95739a626afcea42"
 }

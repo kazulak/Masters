@@ -117438,8 +117438,9 @@
       "source": "modeled WRAM buffer allocation facts"
     }
   ],
-  "preregistration_sha256": "6314f8be994dc1b37b5560a9a2b95eee74ba4723c306060e6353be1a994d7ab7",
+  "preregistration_sha256": "dfe1bbd21bd2cc0ddb7120016e35bb7fe032d0842428cf5bad369b5b53dc2579",
   "schema_version": "upmem_path_candidate_dataset_v1",
   "score_id": "upmem_slr_cost_v1",
-  "source_sha": "eec45a28c909780569f1046a1ebaa7e12dae4dbe"
+  "source_sha": "de27ced63d601b58c5905d8f95739a626afcea42",
+  "workload_manifest_sha256": "ecd16999ae99cd7595c85e9fa89672abbc1fd43ebb2083bce062bbaef8938bfd"
 }

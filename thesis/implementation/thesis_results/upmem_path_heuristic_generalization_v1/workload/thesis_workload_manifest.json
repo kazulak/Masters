@@ -1,7 +1,28 @@
 {
   "circuits_sha256": "9092807e727911689a4e261a6929eb73d38fd00f374c113deec57404850a036e",
-  "config_sha256": "21fd136fc45cd4173bfb0fae03c0fe24108872424b5bf2a7a3aeda585ed43aa0",
+  "config_sha256": "d85cebd866034669ec51247b84f7564ff9cc0f59c9971215ef3fdd0c4158ca0f",
   "contract": {
+    "calibration": {
+      "candidate_roles": [
+        "greedy",
+        "minimum_flops",
+        "minimum_peak_intermediate",
+        "minimum_writes",
+        "frozen_v1_selected",
+        "feature_diverse"
+      ],
+      "candidates_per_cell_maximum": 6,
+      "frozen_v1_profile": {
+        "path": "thesis_results/upmem_path_heuristic_v1/fit/physical_speedup_fit_v1.json",
+        "sha256": "cc1e3deb6b5a227b4efe9c84e43679d385cb9b65da76e293ad0d074889cb868a"
+      },
+      "measurement_blocks": 3,
+      "splits": [
+        "training",
+        "validation"
+      ],
+      "warmup_blocks": 1
+    },
     "numeric_policy": "split_complex_float32_v1",
     "physical_execution": false,
     "rank_count": 1,
@@ -31,11 +52,11 @@
     "quimb": "1.11.2"
   },
   "descriptor_source_sha256": "afebe6419fe9eca02e4d19d23f17821c245eac4c7cf6b2ed7139412981239428",
-  "generator_source_sha256": "2600433b944467cbdb7981aa57df337a17daccf746df4951d7b210b59983c33d",
+  "generator_source_sha256": "7570a15227f216b4e693789314bf7ee5c1dab98401defb7428a3b7d3273a6aaf",
   "pilot_config_sha256": "bfa44de7287820ffbd29031102bedbf08d349531dbee81bbc142a23531316a87",
   "schema_version": "upmem_path_thesis_workload_manifest_v1",
   "software_baseline_sha": "70ba5e3899368942b62d682f1526d031d4b04100",
-  "source_sha": "eec45a28c909780569f1046a1ebaa7e12dae4dbe",
+  "source_sha": "de27ced63d601b58c5905d8f95739a626afcea42",
   "study_id": "upmem_path_heuristic_generalization_v1",
   "summary": {
     "correctness_only_count": 3,

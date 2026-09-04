@@ -1,6 +1,6 @@
 {
   "all_passed": true,
-  "candidate_set_sha256": "bebd24aa762aedeaa4c6f0cdc1c3243d8508ddcd1bf638d59806520cdf20a99b",
+  "candidate_set_sha256": "d95150ddf89f6aafa861000b0db2d8447d64456a035c5404463a878c3a319049",
   "candidates": [
     {
       "candidate_path_id": "08f7269cb0d72abc3ea1c49129cb2ed79fe6bce42c7ebbe992be73f9b3ad2f86",
@@ -206,5 +206,5 @@
   "numeric_policy": "split_complex_float32_v1",
   "qualified_candidate_count": 20,
   "schema_version": "upmem_path_cpu_candidate_qualification_v1",
-  "source_sha": "eec45a28c909780569f1046a1ebaa7e12dae4dbe"
+  "source_sha": "de27ced63d601b58c5905d8f95739a626afcea42"
 }
