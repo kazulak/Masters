@@ -96,7 +96,7 @@ dpu_error_t upmem_v4_provider_init_simulator(
     *provider = (upmem_v4_provider_t){0};
     provider->requested_dpus = requested_dpus;
     provider->allocation_attempted = 1;
-    error = dpu_alloc(requested_dpus, NULL, &provider->set);
+    error = dpu_alloc(requested_dpus, "backend=simulator", &provider->set);
     if (error != DPU_OK) return error;
     provider->allocation_used = 1;
     provider->allocation_active = 1;

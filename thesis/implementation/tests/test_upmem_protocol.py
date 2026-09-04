@@ -492,6 +492,7 @@ def test_v4_native_sources_preserve_the_abi_and_build_contract() -> None:
     protocol_header = (NATIVE / "protocol.h").read_text(encoding="ascii")
     host = (NATIVE / "host.c").read_text(encoding="ascii")
     dpu = (NATIVE / "dpu.c").read_text(encoding="ascii")
+    provider = (NATIVE / "simplepim_provider.c").read_text(encoding="ascii")
     makefile = (NATIVE / "Makefile").read_text(encoding="ascii")
 
     assert '#define EXECUTION_PLAN_V4_MAGIC "UPXDPV4"' in protocol_header
@@ -502,6 +503,7 @@ def test_v4_native_sources_preserve_the_abi_and_build_contract() -> None:
     assert "dpu_launch(v4_provider.set, DPU_SYNCHRONOUS)" in host
     assert "tasklets != (uint32_t)NR_TASKLETS" in host
     assert "tasklet_binary_mismatch" in host
+    assert 'dpu_alloc(requested_dpus, "backend=simulator", &provider->set)' in provider
     assert "control.reserved0 = tasklets;" in host
     assert "request_manifest_sha256" in host
     assert "cpu_fallback_used\\\":false" in host
